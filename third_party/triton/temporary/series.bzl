@@ -15,4 +15,5 @@ those to this list.
 
 temporary_patch_list = [
     "//third_party/triton/temporary:visibility.patch",
+    "//third_party/triton/temporary:amd_pr7.patch",
 ]
