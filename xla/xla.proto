@@ -840,6 +840,10 @@ message DebugOptions {
   bool xla_gpu_temp_buffer_use_separate_color = 312;
 
   // Next id: 314
+  // Relative precision for comparing different GEMM solutions 
+  float xla_gpu_autotune_gemm_rtol = 311;
+
+  // Next id: 312
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
