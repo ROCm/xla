@@ -34,7 +34,7 @@ class BufferComparator {
   BufferComparator(const BufferComparator&) = delete;
   BufferComparator(BufferComparator&&) = default;
 
-  BufferComparator(const Shape& shape, double tolerance = 0.1,
+  explicit BufferComparator(const Shape& shape, double tolerance = 0.1,
                    bool verbose = true);
 
   // Returns true if the two buffers compare equal. The definition of "equal"
