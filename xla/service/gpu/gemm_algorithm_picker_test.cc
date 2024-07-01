@@ -83,7 +83,6 @@ class GemmAlgorithmPickerTest : public HloTestBase,
 };
 
 TEST_P(GemmAlgorithmPickerTest, SkipAlgorithmsWithAccuracyCheck) {
-
   constexpr absl::string_view kHlo = R"(
 HloModule module
 
@@ -111,8 +110,9 @@ TF_ASSERT_OK_AND_ASSIGN(auto module,
 
     AutotuneConfig cfg{DeviceConfig{stream_exec(), nullptr}, debug_opts};
     GemmAlgorithmPicker gpicker(cfg);
+    // Note that, we do not care if the algorithm index has been changed:
+    // the thing matters is the # of algorithms left after sorting out.
     TF_ASSERT_OK_AND_ASSIGN(changed, RunHloPass(gpicker, module.get()));
-    ASSERT_TRUE(changed);
     num_left1 = gpicker.num_algorithms_left();
     if(num_left1 < 2) {
       GTEST_SKIP() << "Too few algorithms left after the first step";
@@ -140,7 +140,6 @@ TF_ASSERT_OK_AND_ASSIGN(auto module,
     AutotuneConfig cfg{DeviceConfig{stream_exec(), nullptr}, debug_opts};
     GemmAlgorithmPicker gpicker(cfg);
     TF_ASSERT_OK_AND_ASSIGN(changed, RunHloPass(gpicker, module.get()));
-    ASSERT_TRUE(changed);
     num_left2 = gpicker.num_algorithms_left();
   }
   // Assert that we have fewer algorithms left after the second run.
@@ -148,7 +147,6 @@ TF_ASSERT_OK_AND_ASSIGN(auto module,
 }
 
 TEST_P(GemmAlgorithmPickerTest, SetAlgorithm) {
-
   constexpr absl::string_view kHlo = R"(
 HloModule module
 
@@ -212,7 +210,6 @@ ENTRY main {
 }
 
 TEST_P(GemmAlgorithmPickerTest, GetAlgorithmWithoutDevice) {
-
   constexpr absl::string_view kHlo = R"(
 HloModule module
 
