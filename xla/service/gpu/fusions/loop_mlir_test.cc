@@ -418,6 +418,7 @@ TEST_F(MlirLoopFusionTest, TupleBitcast) {
 }
 
 TEST_F(MlirLoopFusionTest, DynamicSliceWith64BitInput) {
+   GTEST_SKIP() << "This MLIR Dialect is not supported on ROCm";
   // Lowering this kernel with 32 bit indices causes an underflow of `c`,
   // resulting in slicing the last four elements instead of the first four.
   constexpr auto kHloString = R"(
