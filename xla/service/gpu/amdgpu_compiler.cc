@@ -276,5 +276,16 @@ AMDGPUCompiler::CompileTargetBinary(const HloModuleConfig& module_config,
   return BackendCompileResult{"", std::move(hsaco)};
 }
 
+int32_t AMDGPUCompiler::GetToolkitVersion() const { return TF_ROCM_VERSION; }
+
+absl::Status AMDGPUCompiler::AddGemmFusionAutotuningPasses(
+    HloPassPipeline* pipeline, HloModule* hlo_module,
+    AutotuneConfig& autotune_config, tsl::thread::ThreadPool* thread_pool,
+    const MultiProcessKeyValueStore& key_value_store) {
+  pipeline->AddPass<GemmFusionAutotuner>(autotune_config, GetToolkitVersion(),
+                                         thread_pool, key_value_store);
+  return absl::OkStatus();
+}
+
 }  // namespace gpu
 }  // namespace xla
