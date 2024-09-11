@@ -35,6 +35,7 @@ limitations under the License.
 #include "xla/service/gpu/autotuning/autotuner_util.h"
 #include "xla/service/gpu/autotuning/conv_algorithm_picker.h"
 #include "xla/service/gpu/autotuning/gemm_algorithm_picker.h"
+#include "xla/service/gpu/autotuning/gemm_fusion_autotuner.h"
 #include "xla/service/gpu/cublas_padding_requirements.h"
 #include "xla/service/gpu/gpu_compiler.h"
 #include "xla/service/gpu/llvm_gpu_backend/gpu_backend_lib.h"
@@ -275,8 +276,6 @@ AMDGPUCompiler::CompileTargetBinary(const HloModuleConfig& module_config,
 
   return BackendCompileResult{"", std::move(hsaco)};
 }
-
-int32_t AMDGPUCompiler::GetToolkitVersion() const { return TF_ROCM_VERSION; }
 
 absl::Status AMDGPUCompiler::AddGemmFusionAutotuningPasses(
     HloPassPipeline* pipeline, HloModule* hlo_module,

@@ -31,7 +31,6 @@ cc_library(
     hdrs = ["gemm_fusion_autotuner.h"],
     tags = [
         "gpu",
-        "no_rocm",
     ],
     deps = [
         ":autotuner_compile_util",

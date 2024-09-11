@@ -40,7 +40,11 @@ limitations under the License.
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 #include "absl/types/span.h"
+#ifdef GOOGLE_CUDA
 #include "third_party/gpus/cuda/include/cublas_v2.h"
+#else
+#include "xla/stream_executor/rocm/rocm_blas.h"
+#endif // GOOGLE_CUDA
 #include "xla/autotuning.pb.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -68,7 +72,9 @@ limitations under the License.
 #include "xla/service/gpu/model/gpu_hlo_cost_analysis.h"
 #include "xla/service/gpu/split_k_gemm_rewriter.h"
 #include "xla/service/gpu/stream_executor_util.h"
+#ifdef GOOGLE_CUDA
 #include "xla/service/gpu/transforms/cudnn_fusion_compiler.h"
+#endif
 #include "xla/service/gpu/transforms/fusion_wrapper.h"
 #include "xla/service/gpu/transforms/gemm_rewriter.h"
 #include "xla/service/gpu/transforms/instruction_fusion.h"
@@ -456,6 +462,7 @@ bool IsFusionKind(const HloInstruction& hlo, absl::string_view kind) {
   return gpu_config->fusion_backend_config().kind() == kind;
 }
 
+#ifdef GOOGLE_CUDA
 int GetCuDnnPlanCount(const HloInstruction& hlo,
                       const AutotuneConfig& autotune_config) {
   if (auto gpu_config = hlo.backend_config<GpuBackendConfig>();
@@ -466,11 +473,16 @@ int GetCuDnnPlanCount(const HloInstruction& hlo,
   return CuDnnFusionCompiler::GetAvailablePlanCount(
       *autotune_config.GetExecutor(), *DynCast<HloFusionInstruction>(&hlo));
 }
+#endif GOOGLE_CUDA
 
 AutotuneResult FromConfig(const Config& config) {
   AutotuneResult res;
   if (std::holds_alternative<GemmFusionAutotunerImpl::CuBlasConfig>(config)) {
+#ifdef GOOGLE_CUDA
     res.mutable_gemm()->set_algorithm(CUBLAS_GEMM_DEFAULT);
+#else
+  res.mutable_gemm()->set_algorithm(HIPBLAS_GEMM_DEFAULT);
+#endif
   } else if (std::holds_alternative<GemmFusionAutotunerImpl::CuDnnConfig>(
                  config)) {
     res.mutable_algorithm()->set_algo_id(
@@ -612,12 +624,14 @@ absl::StatusOr<std::vector<Config>> GemmFusionAutotunerImpl::GenerateConfigs(
     configs.push_back(CuBlasConfig{});
   }
 
+#ifdef GOOGLE_CUDA
   // Add cuDNN plans, if available.
   bool is_hopper =
       !config_.IsDeviceless() && GetComputeCapability().IsAtLeastHopper();
   bool is_cudnn_enabled =
       debug_options_.xla_gpu_cudnn_gemm_fusion_level() > 0 && is_hopper &&
       GetDnnVersionInfoOrDefault(config_.GetExecutor()).major_version() >= 9;
+
   if ((IsFusionKind(fusion, kCuDnnFusionKind) && IsAutotuningEnabled()) ||
       (IsFusionKind(fusion, kTritonGemmFusionKind) && is_cudnn_enabled &&
        algorithm_util::IsSupportedByCudnn(
@@ -634,6 +648,7 @@ absl::StatusOr<std::vector<Config>> GemmFusionAutotunerImpl::GenerateConfigs(
     }
     return configs;
   }
+#endif // GOOGLE_CUDA 
 
   // Add triton configs.
   TF_ASSIGN_OR_RETURN(std::vector<TritonGemmConfig> triton_configs,
@@ -695,8 +710,10 @@ GemmFusionAutotunerImpl::GenerateTritonConfigs(const HloDotInstruction& dot) {
 
   // Triton configurations are adjusted and deduplicated.
   absl::flat_hash_set<TritonGemmConfig> added;
+#ifdef GOOGLE_CUDA
   bool is_hopper =
       !config_.IsDeviceless() && GetComputeCapability().IsAtLeastHopper();
+#endif // GOOGLE_CUDA
   for (TritonGemmConfig& config : triton_configs) {
     config.block_m = std::min(config.block_m, limits.block_m);
     config.block_n = std::min(config.block_n, limits.block_n);
@@ -719,10 +736,12 @@ GemmFusionAutotunerImpl::GenerateTritonConfigs(const HloDotInstruction& dot) {
     // Sparse meta should have at least one element per thread.
     // Note: only 2:4 structured sparsity is currently supported.
     if (dot.sparse_operands()) {
+#ifdef GOOGLE_CUDA
       if (is_hopper) {
         config.block_m = std::max(config.block_m, 64);
         config.num_warps = std::max(config.num_warps, 4);
       }
+#endif // GOOGLE_CUDA
       config.block_k = std::max(
           config.block_k,
           2 * std::max(kMinTileSize, kLdmatrixGranularity / minBitWidth));
@@ -994,8 +1013,10 @@ std::vector<TritonGemmConfig>
 GemmFusionAutotunerImpl::GetExhaustiveTritonConfigs() const {
   std::vector<TritonGemmConfig> configs;
   se::CudaComputeCapability cc = GetComputeCapability();
+#ifdef GOOGLE_CUDA
   bool tune_ctas =
-      debug_options_.xla_gpu_enable_triton_hopper() && cc.IsAtLeastHopper();
+      debug_options_.xla_gpu_enable_`triton_hopper() && cc.IsAtLeastHopper();
+#endif // GOOGLE_CUDA
 
   for (int num_stages : kNumStages) {
     // Volta doesn't support num_stages > 2.
@@ -1018,6 +1039,7 @@ GemmFusionAutotunerImpl::GetExhaustiveTritonConfigs() const {
                   split_k > 1) {
                 break;
               }
+#ifdef GOOGLE_CUDA
               for (int num_ctas : kNumCtas) {
                 // Clusters are only supported on Hopper.
                 // Autotuning this parameter is enabled by a flag.
@@ -1031,6 +1053,7 @@ GemmFusionAutotunerImpl::GetExhaustiveTritonConfigs() const {
                                                    split_k, num_stages,
                                                    num_warps, num_ctas));
               }
+#endif // GOOGLE_CUDA
             }
           }
         }
@@ -1050,6 +1073,7 @@ std::vector<TritonGemmConfig> GemmFusionAutotunerImpl::GetDefaultTritonConfigs()
       Config(16, 64, 128, 1, 1, 4), Config(16, 128, 32, 8, 1, 4),
       Config(16, 16, 512, 1, 1, 4), Config(32, 16, 512, 1, 1, 4),
       Config(64, 32, 64, 1, 2, 8)};
+#ifdef GOOGLE_CUDA
   if (GetComputeCapability().IsAtLeastAmpere()) {
     absl::c_copy(
         std::vector<Config>{
@@ -1075,6 +1099,7 @@ std::vector<TritonGemmConfig> GemmFusionAutotunerImpl::GetDefaultTritonConfigs()
         },
         std::back_inserter(configs));
   }
+#endif // GOOGLE_CUDA
   return configs;
 }
 
