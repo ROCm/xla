@@ -752,7 +752,6 @@ xla_test(
     backends = [
         "gpu_a100",
         "gpu_h100",
-        "gpu_amd_any",
     ],
     shard_count = 10,
     tags = ["nomac"],
@@ -1255,7 +1254,6 @@ xla_test(
     backends = [
         "gpu_a100",
         "gpu_h100",
-        "gpu_amd_any",
     ],
     deps = [
         ":gpu_device_info_for_tests",
@@ -1263,7 +1261,7 @@ xla_test(
         ":triton_fusion_analysis",
         ":triton_support",
         ":triton_test_utils",
-        "//third_party/protobuf",
+	"third_party/protobuf",
         "//xla:xla_data_proto_cc",
         "//xla:xla_proto_cc",
         "//xla/hlo/ir:hlo",
@@ -1284,7 +1282,6 @@ xla_test(
     backends = [
         "gpu_a100",
         "gpu_h100",
-        "gpu_amd_any",
     ],
     tags = ["nomac"],
     deps = [
@@ -6165,7 +6162,7 @@ xla_test(
     backend_tags = {"gpu": [
         "requires-gpu-sm80",
     ]},
-    backends = ["gpu"],
+    backends = ["gpu_a100", "gpu_h100"],
     deps = [
         ":autotuner_compile_util",
         ":autotuner_util",

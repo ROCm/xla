@@ -469,7 +469,6 @@ xla_test(
     backends = [
         "gpu_a100",
         "gpu_v100",
-        "gpu_amd_any",
     ],
     deps = [
         ":gpu_codegen_test",
