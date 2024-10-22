@@ -39,6 +39,7 @@ class DeterminismTest : public GpuCodegenTest {
  public:
   DeterminismTest() : debug_options_(HloTestBase::GetDebugOptionsForTest()) {
     debug_options_.set_xla_gpu_exclude_nondeterministic_ops(true);
+    debug_options_.set_xla_gpu_deterministic_ops(true);
     // Randomize timer durations to better test autotuning does not introduce
     // nondeterminism.
     se::gpu::GpuTimer::ReturnRandomDurationsForTesting();
@@ -97,6 +98,7 @@ ENTRY e {
   if (!rocm.has_hipblaslt()) {
     GTEST_SKIP() << "No hipblas-lt support on this architecture!";
   }
+  debug_options_.set_xla_gpu_enable_triton_gemm(false) ;
 #endif  // TENSORFLOW_USE_ROCM
 
   debug_options_.set_xla_gpu_triton_fusion_level(0);
