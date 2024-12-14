@@ -3803,6 +3803,7 @@ cc_library(
         ":cudnn_fused_conv_rewriter",
         ":cusolver_rewriter",
         ":gemm_algorithm_picker",
+        ":gemm_fusion_autotuner",
         ":gpu_algebraic_simplifier",
         ":gpu_compiler",
         ":gpu_conv_padding_legalization",
