@@ -35,6 +35,8 @@ limitations under the License.
 #include "xla/service/gpu/autotuner_util.h"
 #include "xla/service/gpu/conv_algorithm_picker.h"
 #include "xla/service/gpu/cublas_pad_for_gemms.h"
+#include "xla/service/gpu/gemm_algorithm_picker.h"
+#include "xla/service/gpu/gemm_fusion_autotuner.h"
 #include "xla/service/gpu/cublas_padding_requirements.h"
 #include "xla/service/gpu/cudnn_fused_conv_rewriter.h"
 #include "xla/service/gpu/cusolver_rewriter.h"
@@ -275,6 +277,15 @@ AMDGPUCompiler::CompileTargetBinary(const HloModuleConfig& module_config,
   }
 
   return BackendCompileResult{"", std::move(hsaco)};
+}
+
+absl::Status AMDGPUCompiler::AddGemmFusionAutotuningPasses(
+    HloPassPipeline* pipeline, HloModule* hlo_module,
+    AutotuneConfig& autotune_config, tsl::thread::ThreadPool* thread_pool,
+    const MultiProcessKeyValueStore& key_value_store) {
+  pipeline->AddPass<GemmFusionAutotuner>(autotune_config, GetToolkitVersion(),
+                                         thread_pool, key_value_store);
+  return absl::OkStatus();
 }
 
 }  // namespace gpu
