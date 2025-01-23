@@ -194,7 +194,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(Values(PC::ALG_DOT_ANY_F8_ANY_F8_F32,
                    PC::ALG_DOT_ANY_F8_ANY_F8_F32_FAST_ACCUM),
             Values(F8E5M2), Values(F8E5M2, F16, BF16, F32), Values(CC(8, 9)),
-            Values(60300), Values(BackendRestriction::kNoRestriction),
+            Values(60400), Values(BackendRestriction::kNoRestriction),
             Values(Sizes{32, 32}, Sizes{16, 2})),
     TestParamsToString);
 
@@ -203,7 +203,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(Values(PC::ALG_DOT_ANY_F8_ANY_F8_F32,
                    PC::ALG_DOT_ANY_F8_ANY_F8_F32_FAST_ACCUM),
             Values(F8E4M3FN), Values(F8E4M3FN, F16, BF16, F32),
-            Values(CC(8, 9)), Values(60300),
+            Values(CC(8, 9)), Values(60400),
             Values(BackendRestriction::kNoRestriction),
             Values(Sizes{32, 32}, Sizes{16, 2})),
     TestParamsToString);
