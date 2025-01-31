@@ -508,6 +508,17 @@ struct HipToNativeT<HIP_R_8F_E5M2_FNUZ> {
 };
 #endif  // TF_ROCM_VERSION >= 60000
 
+#if TF_ROCM_VERSION >= 60300
+template <>
+struct HipToNativeT<HIP_R_8F_E4M3> {
+  using type = tsl::float8_e4m3fn;
+};
+template <>
+struct HipToNativeT<HIP_R_8F_E5M2> {
+  using type = tsl::float8_e5m2;
+};
+#endif  // TF_ROCM_VERSION >= 60300
+
 template <>
 struct HipToNativeT<HIP_R_16BF> {
   using type = Eigen::bfloat16;
@@ -549,6 +560,10 @@ absl::Status BlasLt::MatmulPlan::ExecuteOnStream(
 
   std::tuple operand_types{a_desc_.type(), b_desc_.type(), c_desc_.type(),
                            d_desc_.type()};
+  LOG(INFO) << "ATYPE: " << a_desc_.type();
+  LOG(INFO) << "BTYPE: " << b_desc_.type();
+  LOG(INFO) << "CTYPE: " << c_desc_.type();
+  LOG(INFO) << "DTYPE: " << d_desc_.type();
 
 #define TYPED_MATMUL(SCALENTYPE, ATYPE, BTYPE, CTYPE, DTYPE)               \
   if (operand_types == std::tuple{ATYPE, BTYPE, CTYPE, DTYPE}) {           \
@@ -592,6 +607,30 @@ absl::Status BlasLt::MatmulPlan::ExecuteOnStream(
                HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E5M2_FNUZ)
   TYPED_MATMUL(float, HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E4M3_FNUZ,
                HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E5M2_FNUZ)
+#endif
+
+#if TF_ROCM_VERSION >= 60300
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_16BF, HIP_R_16BF)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_16BF, HIP_R_8F_E4M3)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_16F, HIP_R_8F_E4M3)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_16F, HIP_R_16F)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_32F, HIP_R_32F)
+
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_16BF, HIP_R_16BF)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_16BF, HIP_R_8F_E4M3)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_16BF, HIP_R_8F_E5M2)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_16F, HIP_R_8F_E4M3)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_16F, HIP_R_8F_E5M2)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_16F, HIP_R_16F)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_32F, HIP_R_32F)
+
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_16BF, HIP_R_16BF)
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_16BF, HIP_R_8F_E4M3)
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_16BF, HIP_R_8F_E5M2)
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_16F, HIP_R_8F_E4M3)
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_16F, HIP_R_8F_E5M2)
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_16F, HIP_R_16F)
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_32F, HIP_R_32F)
 #endif
 
   // Other data types:
