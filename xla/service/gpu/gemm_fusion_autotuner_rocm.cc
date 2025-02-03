@@ -18,7 +18,7 @@ limitations under the License.
 
 #include "rocm/include/hipblas/hipblas.h"
 #include "xla/hlo/ir/hlo_instructions.h"
-#include "xla/service/gpu/autotuning/gemm_fusion_autotuner.h"
+#include "xla/service/gpu/gemm_fusion_autotuner.h"
 #include "xla/service/gpu/matmul_utils.h"
 
 namespace xla {
@@ -28,7 +28,7 @@ const int64_t GemmFusionAutotunerImpl::BLAS_GEMM_DEFAULT = HIPBLAS_GEMM_DEFAULT;
 
 bool GemmFusionAutotunerImpl::AddLibConfigs(
     const HloFusionInstruction& fusion, const HloDotInstruction* dot,
-    std::vector<BackendConfig>& configs) {
+    std::vector<Config>& configs) {
   return false;
 }
 

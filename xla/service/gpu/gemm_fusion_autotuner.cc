@@ -61,7 +61,7 @@ limitations under the License.
 #include "xla/service/gpu/autotuner_util.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/buffer_comparator.h"
-#include "xla/service/gpu/cudnn_fusion_compiler.h"
+//#include "xla/service/gpu/cudnn_fusion_compiler.h"
 #include "xla/service/gpu/fusion_wrapper.h"
 #include "xla/service/gpu/gemm_rewriter.h"
 #include "xla/service/gpu/gpu_float_support.h"
@@ -438,16 +438,11 @@ absl::StatusOr<std::unique_ptr<HloModule>> CuDnnFusionExtractor(
   return module;
 }
 
-AutotuneResult FromConfig(const BackendConfig& config) {
+AutotuneResult FromConfig(const Config& config) {
   AutotuneResult res;
   if (std::holds_alternative<GemmFusionAutotunerImpl::CuBlasConfig>(config)) {
     res.mutable_gemm()->set_algorithm(
         GemmFusionAutotunerImpl::BLAS_GEMM_DEFAULT);
-  } else if (std::holds_alternative<
-                 GemmFusionAutotunerImpl::CustomKernelFusionConfig>(config)) {
-    res.mutable_custom_kernel_fusion()->set_kernel_index(
-        std::get<GemmFusionAutotunerImpl::CustomKernelFusionConfig>(config)
-            .kernel_index);
   } else if (std::holds_alternative<GemmFusionAutotunerImpl::CuDnnConfig>(
                  config)) {
     res.mutable_algorithm()->set_algo_id(
@@ -536,7 +531,7 @@ std::string Serialize(const Config& config) {
 }
 
 }  // anonymous namespace
-
+/*
 absl::Status RewriteGemmFusionToCall(HloInstruction* fusion_instr) {
   // Falling back to cuBLAS: Converting the fusion to a Call, so that it
   // can be inlined back again.
@@ -547,7 +542,8 @@ absl::Status RewriteGemmFusionToCall(HloInstruction* fusion_instr) {
           fusion_instr->fused_instructions_computation()));
   return computation->ReplaceInstruction(fusion_instr, call);
 }
-
+*/
+/*
 absl::Status RewriteGemmFusionToCustomKernelFusion(
     HloInstruction* fusion_instr, se::DeviceDescription device_description,
     int64_t kernel_index) {
@@ -567,7 +563,8 @@ absl::Status RewriteGemmFusionToCustomKernelFusion(
   HloModule* hlo_module = call->GetModule();
   return pipeline.Run(hlo_module).status();
 }
-
+*/
+/*
 absl::Status HandleTritonGemm(HloInstruction* fusion_instr,
                               FusionBackendConfig& fusion_backend_config) {
   TF_ASSIGN_OR_RETURN(
@@ -659,6 +656,7 @@ absl::Status GemmFusionAutotunerRewriterVisitor::HandleFusion(
   MarkAsChanged();
   return absl::OkStatus();
 }
+*/
 
 bool GemmFusionAutotunerImpl::IsFusionKind(const HloInstruction& hlo,
                                            absl::string_view kind) {
@@ -703,34 +701,17 @@ absl::StatusOr<std::vector<Config>> GemmFusionAutotunerImpl::GenerateConfigs(
       Cast<HloDotInstruction>(hlo_query::GetFirstInstructionWithOpcode(
           *fusion.called_computations().at(0), HloOpcode::kDot));
 
-  if (!debug_options_.xla_gpu_experimental_disable_binary_libraries()) {
     // Add cuBLAS reference config, if available.
+    std::vector<Config> configs;
     if (algorithm_util::IsSupportedByCublasOrCublasLt(
-            dot->precision_config().algorithm(), GetComputeCapability()) &&
+            dot->precision_config().algorithm()) &&
         !dot->sparse_operands() && IsAutotuningEnabled()) {
       configs.push_back(CuBlasConfig{});
     }
 
     // Add lib (e.g. cuDNN) plans, if available.
     if (AddLibConfigs(fusion, dot, configs)) return configs;
-  }
 
-  // Add cuDNN plans, if available.
-  bool is_hopper =
-      !config_.IsDeviceless() && GetComputeCapability().IsAtLeastHopper();
-  bool is_cudnn_enabled =
-      debug_options_.xla_gpu_cudnn_gemm_fusion_level() > 0 && is_hopper &&
-      GetDnnVersionInfoOrDefault(config_.GetExecutor()).major_version() >= 9;
-  if ((IsFusionKind(fusion, kCuDnnFusionKind) && IsAutotuningEnabled()) ||
-      (IsFusionKind(fusion, kTritonGemmFusionKind) && is_cudnn_enabled &&
-       algorithm_util::IsSupportedByCudnn(
-           dot->precision_config().algorithm()) &&
-       !dot->sparse_operands() && IsAutotuningEnabled())) {
-    const int plan_count = GetCuDnnPlanCount(fusion, config_);
-    for (int plan_id = 0; plan_id < plan_count; ++plan_id) {
-      configs.push_back(CuDnnConfig{plan_id});
-    }
-  }
   if (IsFusionKind(fusion, kCuDnnFusionKind)) {
     if (!IsAutotuningEnabled()) {
       configs.push_back(CuDnnConfig{-1});
@@ -1100,10 +1081,6 @@ GemmFusionAutotunerImpl::GetExhaustiveTritonConfigs() const {
   }
 
   for (int num_stages : kNumStages) {
-    // Volta doesn't support num_stages > 2.
-    if (!cc.IsAtLeastAmpere() && num_stages > 2) {
-      break;
-    }
     for (int tile_m : kBlockSizes) {
       for (int tile_n : kBlockSizes) {
         for (int tile_k : kBlockSizes) {
