@@ -74,6 +74,7 @@ namespace {
 namespace m = ::xla::match;
 
 using HloExtractionTest = HloTestBase;
+//using Config = GemmFusionAutotunerImpl::Config;
 
 TEST_F(HloExtractionTest, InstructionExtractionIsCorrect) {
   std::unique_ptr<VerifiedHloModule> module = ParseAndReturnVerifiedModule(R"(
@@ -176,30 +177,17 @@ class StatelessAutotunerTest : public HloTestBase {
     AutotunerUtil::ClearAutotuneResults();
     HloTestBase::TearDown();
   }
+};
 
-  absl::StatusOr<std::vector<TritonGemmConfig>>
-  GetPossibleMatmulAutotuneConfigs(
-      const HloModule& module,
-      const se::GpuComputeCapability& compute_capability,
-      const int32_t toolkit_version,
-      const DebugOptions& debug_options) {
-    const HloFusionInstruction& fusion = *Cast<HloFusionInstruction>(
-        module.entry_computation()->root_instruction());
-    if (!isRocm()) {
-      auto cu_compute_capability =
-          std::get<se::CudaComputeCapability>(compute_capability);
-      se::GpuDeviceInfoProto deviceless_proto;
-      auto ccc = deviceless_proto.mutable_cuda_compute_capability();
-      ccc->set_major(cu_compute_capability.major);
-      ccc->set_minor(cu_compute_capability.minor);
-    }
-
-    DeviceConfig test_config{backend().default_stream_executor(),
-                             backend().memory_allocator()};
-    AutotuneConfig autotune_config{test_config, debug_options};
-    GemmFusionAutotunerImpl autotuner(autotune_config, toolkit_version,
-                                      debug_options, nullptr);
-    return autotuner.GenerateConfigs(fusion);
+class GemmFusionAutotunerTest : public StatelessAutotunerTest {
+ public:
+  DebugOptions GetDebugOptionsForTest() override {
+    DebugOptions debug_options =
+        StatelessAutotunerTest::GetDebugOptionsForTest();
+    debug_options.set_xla_gpu_enable_triton_gemm(true);
+    debug_options.set_xla_gpu_cublas_fallback(false);
+    debug_options.set_xla_gpu_cudnn_gemm_fusion_level(0);
+    return debug_options;
   }
 
   se::CudaComputeCapability GetCudaComputeCapability() {
@@ -225,31 +213,6 @@ class StatelessAutotunerTest : public HloTestBase {
 
   bool isRocm() {
     return std::holds_alternative<se::RocmComputeCapability>(GpuComputeComp());
-  }
-
-  // Returns the config for the current device.
-  absl::StatusOr<std::vector<TritonGemmConfig>>
-  GetPossibleMatmulAutotuneConfigs(const HloModule& module) {
-    DeviceConfig device_config{backend().default_stream_executor(),
-                               backend().memory_allocator()};
-    AutotuneConfig autotune_config{device_config, GetDebugOptionsForTest()};
-    GemmFusionAutotunerImpl autotuner(autotune_config, GetToolkitVersion(),
-                                      GetDebugOptionsForTest(), nullptr);
-    const HloFusionInstruction& fusion = *Cast<HloFusionInstruction>(
-        module.entry_computation()->root_instruction());
-    return autotuner.GenerateConfigs(fusion);
-  }
-};
-
-class GemmFusionAutotunerTest : public StatelessAutotunerTest {
- public:
-  DebugOptions GetDebugOptionsForTest() override {
-    DebugOptions debug_options =
-        StatelessAutotunerTest::GetDebugOptionsForTest();
-    debug_options.set_xla_gpu_enable_triton_gemm(true);
-    debug_options.set_xla_gpu_cublas_fallback(false);
-    debug_options.set_xla_gpu_cudnn_gemm_fusion_level(0);
-    return debug_options;
   }
 
   stream_executor::GpuComputeCapability CudaAmpereOrRocm() {
@@ -328,6 +291,7 @@ absl::StatusOr<std::vector<TritonGemmConfig>> GetPossibleMatmulAutotuneConfigs(
                                     debug_options, nullptr);
   return autotuner.GenerateTritonConfigs(dot);
 }
+
 
 TEST_F(GemmFusionAutotunerTest, AmpereUsesMoreThanTwoStages) {
   if (isRocm()) {
