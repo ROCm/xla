@@ -27,7 +27,6 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
-//#include "third_party/gpus/cuda/include/cuda.h"
 #include "xla/autotuning.pb.h"
 #include "xla/error_spec.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -74,7 +73,6 @@ namespace {
 namespace m = ::xla::match;
 
 using HloExtractionTest = HloTestBase;
-//using Config = GemmFusionAutotunerImpl::Config;
 
 TEST_F(HloExtractionTest, InstructionExtractionIsCorrect) {
   std::unique_ptr<VerifiedHloModule> module = ParseAndReturnVerifiedModule(R"(
