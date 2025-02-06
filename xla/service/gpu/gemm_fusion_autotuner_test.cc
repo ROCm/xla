@@ -27,7 +27,6 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
-#include "third_party/gpus/cuda/include/cuda.h"
 #include "xla/autotuning.pb.h"
 #include "xla/error_spec.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -158,7 +157,14 @@ class StatelessAutotunerTest : public HloTestBase {
       : HloTestBase(/*verifier_layout_sensitive=*/true,
                     /*allow_mixed_precision_in_hlo_verifier=*/false) {}
 
-  int32_t GetToolkitVersion() const { return CUDA_VERSION; }
+  int32_t GetToolkitVersion() const {
+#if GOOGLE_CUDA
+    return CUDA_VERSION;
+#elif TENSORFLOW_USE_ROCM
+    return TF_ROCM_VERSION;
+#endif
+    return 0;
+  }
 
   void SetUp() override {
     AutotunerUtil::ClearAutotuneResults();
@@ -189,13 +195,41 @@ class GemmFusionAutotunerTest : public StatelessAutotunerTest {
         .cuda_compute_capability();
   }
 
+  se::RocmComputeCapability GetRocmComputeCapability() {
+    return backend()
+        .default_stream_executor()
+        ->GetDeviceDescription()
+        .rocm_compute_capability();
+  }
+
+  const stream_executor::GpuComputeCapability& GpuComputeComp() {
+    return backend()
+        .default_stream_executor()
+        ->GetDeviceDescription()
+        .gpu_compute_capability();
+  }
+
+  bool isRocm() {
+    return std::holds_alternative<se::RocmComputeCapability>(GpuComputeComp());
+  }
+
+  stream_executor::GpuComputeCapability CudaAmpereOrRocm() {
+    if (isRocm()) {
+      return GetRocmComputeCapability();
+    } else {
+      return stream_executor::GpuComputeCapability{
+          stream_executor::CudaComputeCapability{
+              stream_executor::CudaComputeCapability::AMPERE, 0}};
+    }
+  }
+
   void CheckTritonAutotuning(absl::string_view hlo,
                              absl::string_view expected) {
     HloPassPipeline pipeline("gemm_rewrite");
     pipeline.AddPass<GemmFusion>(backend()
                                      .default_stream_executor()
                                      ->GetDeviceDescription()
-                                     .cuda_compute_capability());
+                                     .gpu_compute_capability());
     tsl::thread::ThreadPool thread_pool(tsl::Env::Default(), "",
                                         tsl::port::MaxParallelism());
     DebugOptions opts;
@@ -256,7 +290,11 @@ absl::StatusOr<std::vector<TritonGemmConfig>> GetPossibleMatmulAutotuneConfigs(
   return autotuner.GenerateTritonConfigs(dot);
 }
 
+
 TEST_F(GemmFusionAutotunerTest, AmpereUsesMoreThanTwoStages) {
+  if (isRocm()) {
+    GTEST_SKIP() << "Not supported on ROCm.";
+  }
   std::unique_ptr<VerifiedHloModule> module = ParseAndReturnVerifiedModule(R"(
 ENTRY e {
   p0 = f32[1024,1024] parameter(0)
@@ -323,6 +361,9 @@ ENTRY e {
 }
 
 TEST_F(GemmFusionAutotunerTest, Int8FusedGemm) {
+  if (isRocm()) {
+    GTEST_SKIP() << "On ROCm kernel with split_k > 1 is selected.";
+  }
   const std::string hlo = R"(
 HloModule module
 
@@ -346,6 +387,9 @@ ENTRY e {
 }
 
 TEST_F(GemmFusionAutotunerTest, Int8FusedGemm256) {
+  if (isRocm()) {
+    GTEST_SKIP() << "On ROCm kernel with split_k > 1 is selected.";
+  }
   const std::string hlo = R"(
 HloModule module
 
@@ -447,6 +491,9 @@ ENTRY e {
 // Modify block_k back to 16 once b/337839570 is fixed.
 // TODO(b/344770374): Make this test not fragile.
 TEST_F(GemmFusionAutotunerTest, DoNotRunAutotuningKernelSpillingRegisters) {
+  if (isRocm()) {
+    GTEST_SKIP() << "Not supported on ROCm.";
+  }
   const std::string kHloText = R"(
 HloModule m
 
@@ -638,6 +685,9 @@ ENTRY main {
 }
 
 TEST_F(GemmFusionAutotunerDumpTest, DumpingWorks) {
+  if (isRocm()) {
+    GTEST_SKIP() << "cuBLAS not selected on ROCM.";
+  }
   HloModuleConfig config;
   DebugOptions options = GetDebugOptionsForTest();
   options.set_xla_gpu_cublas_fallback(true);
@@ -703,6 +753,9 @@ CHECK: cublas
 }
 
 TEST_F(GemmFusionAutotunerTest, AutotuneCuDnnFusion) {
+  if (isRocm()) {
+    GTEST_SKIP() << "No CuDnnFusion on ROCM.";
+  }
   const std::string kHlo = R"(
 fusion1 {
   p0 = f32[3,28,32] parameter(0)
@@ -775,7 +828,7 @@ ENTRY e {
   pipeline.AddPass<GemmFusion>(backend()
                                    .default_stream_executor()
                                    ->GetDeviceDescription()
-                                   .cuda_compute_capability());
+                                   .gpu_compute_capability());
   tsl::thread::ThreadPool thread_pool(tsl::Env::Default(), "",
                                       tsl::port::MaxParallelism());
   DebugOptions opts;

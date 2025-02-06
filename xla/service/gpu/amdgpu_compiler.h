@@ -66,6 +66,11 @@ class AMDGPUCompiler : public GpuCompiler {
       se::GpuComputeCapability gpu_version, bool relocatable,
       const HloModule* debug_module, const CompileOptions& options) override;
 
+  absl::Status AddGemmFusionAutotuningPasses(
+      HloPassPipeline* pipeline, HloModule* hlo_module,
+      AutotuneConfig& autotune_config, tsl::thread::ThreadPool* thread_pool,
+      const MultiProcessKeyValueStore& key_value_store) override;
+
  private:
   AMDGPUCompiler(const AMDGPUCompiler&) = delete;
   AMDGPUCompiler& operator=(const AMDGPUCompiler&) = delete;
