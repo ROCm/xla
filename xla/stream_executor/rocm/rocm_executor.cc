@@ -608,10 +608,10 @@ absl::Status RocmExecutor::Init() {
                       RocmContext::Create(device_ordinal(), device_));
   set_context(rocm_context_);
   TF_ASSIGN_OR_RETURN(version_, GetGpuISAVersion(device_));
-  // We initialize BLAS interfaces early here since otherwise it might create 
+  // We initialize BLAS interfaces early here since otherwise it might create
   // us problems during hipBlasLt initialization under graph capture.
-  // There is no real advantage of explicitly using 'lazy initialization' on 
-  // ROCM platform because rocBLAS/hipBlasLt already use 'lazy initialization' 
+  // There is no real advantage of explicitly using 'lazy initialization' on
+  // ROCM platform because rocBLAS/hipBlasLt already use 'lazy initialization'
   // internally
   return InitBlas();
 }
@@ -776,6 +776,35 @@ bool RocmExecutor::SynchronizeAllActivity() {
   return rocm_context_->Synchronize().ok();
 }
 
+bool RocmExecutor::HostMemoryRegister(void* location, uint64_t size) {
+  VLOG(1) << "Called StreamExecutor::HostMemoryRegister(data=" << location
+          << ")";
+
+  std::unique_ptr<ActivateContext> activation = Activate();
+  // "Portable" memory is visible to all CUDA contexts. Safe for our use model.
+  auto status = ToStatus(
+        hipHostRegister(location, size, hipHostRegisterPortable));
+  if (!status.ok()) {
+    LOG(ERROR) << "error registering host memory at " << location << ": "
+               << status;
+    return false;
+  }
+  return true;
+}
+
+bool RocmExecutor::HostMemoryUnregister(void* location) {
+  VLOG(1) << "Called StreamExecutor::HostUnregister(data=" << location << ")";
+
+  std::unique_ptr<ActivateContext> activation = Activate();
+  auto status = ToStatus(hipHostUnregister(location));
+  if (!status.ok()) {
+    LOG(ERROR) << "error unregistering host memory at " << location << ": "
+               << status;
+    return false;
+  }
+  return true;
+}
+
 absl::Status RocmExecutor::SynchronousMemZero(DeviceMemoryBase* location,
                                               uint64_t size) {
   std::unique_ptr<ActivateContext> activation = Activate();
@@ -833,7 +862,7 @@ void RocmExecutor::DeallocateStream(Stream* stream) {
 
 absl::Status RocmExecutor::InitBlas() {
   PluginRegistry* registry = PluginRegistry::Instance();
-  TF_ASSIGN_OR_RETURN(auto factory, 
+  TF_ASSIGN_OR_RETURN(auto factory,
       registry->GetFactory<PluginRegistry::BlasFactory>(rocm::kROCmPlatformId));
   blas_.reset(factory(this));
   return absl::OkStatus();
