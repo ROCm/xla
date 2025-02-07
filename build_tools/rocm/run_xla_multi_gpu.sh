@@ -86,6 +86,7 @@ bazel \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     --action_env=NCCL_MAX_NCHANNELS=1 \
     -- //xla/tests:collective_ops_test_gpu_amd_any \
+       //xla/tests:collective_ops_e2e_test_gpu_amd_any \
        //xla/tests:replicated_io_feed_test_gpu_amd_any \
        //xla/tools/multihost_hlo_runner:functional_hlo_runner_test_gpu_amd_any \
        //xla/pjrt/distributed:topology_util_test \
