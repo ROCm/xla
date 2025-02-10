@@ -180,7 +180,8 @@ class TritonSupportTest : public TritonSupportTestBase {
   void RunSupportTest(TestedInstruction ti,
                       std::vector<int64_t> output_tile_sizes,
                       se::GpuComputeCapability cc,
-                      bool skip_failure_branch_to_avoid_crash = false) {
+                      bool skip_failure_branch_to_avoid_crash = false,
+                      bool not_genuinely_supported_by_triton = false) {
     BlockLevelParameters block_level_parameters =
         FromOutputTileSizes(std::move(output_tile_sizes));
     const se::DeviceDescription dev_info =
@@ -193,7 +194,8 @@ class TritonSupportTest : public TritonSupportTestBase {
                            mlir_context_);
     };
 
-    if (IsTritonSupportedInstruction(ti.Instruction(), cc)) {
+    if (IsTritonSupportedInstruction(ti.Instruction(), cc) ||
+        not_genuinely_supported_by_triton) {
       EXPECT_THAT(run_triton_codegen(), IsOk());
     } else {
       if (skip_failure_branch_to_avoid_crash) {
@@ -344,15 +346,17 @@ ENTRY triton_computation {
                                      data_type, opcode));
 
   bool skip_failure_branch_to_avoid_crash =
-      (opcode == HloOpcode::kDivide &&
-      (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16 ||
-       data_type == PrimitiveType::F8E5M2 ||
-       data_type == PrimitiveType::F8E4M3FN)) ||
-      ((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
-       data_type == PrimitiveType::F8E5M2 || data_type == PrimitiveType::F8E4M3FN);
+      (opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
+      (data_type == PrimitiveType::F8E5M2 || data_type == PrimitiveType::F8E4M3FN);
+
+  bool not_genuinely_supported_by_triton =
+      opcode == HloOpcode::kDivide &&
+      (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16);
+
 
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc,
-                 skip_failure_branch_to_avoid_crash);
+                 skip_failure_branch_to_avoid_crash,
+                 not_genuinely_supported_by_triton);
 }
 
 INSTANTIATE_TEST_SUITE_P(
