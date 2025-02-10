@@ -344,12 +344,8 @@ ENTRY triton_computation {
                                      data_type, opcode));
 
   bool skip_failure_branch_to_avoid_crash =
-      (opcode == HloOpcode::kDivide &&
-      (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16 ||
-       data_type == PrimitiveType::F8E5M2 ||
-       data_type == PrimitiveType::F8E4M3FN)) ||
       ((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
-       data_type == PrimitiveType::F8E5M2 || data_type == PrimitiveType::F8E4M3FN);
+      (data_type == PrimitiveType::F8E5M2 || data_type == PrimitiveType::F8E4M3FN));
 
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc,
                  skip_failure_branch_to_avoid_crash);
