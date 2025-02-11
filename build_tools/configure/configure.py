@@ -383,6 +383,7 @@ class XLAConfigOptions:
     if dpav.clang_major_version in (16, 17, 18):
       self.compiler_options.append("-Wno-gnu-offsetof-extensions")
 
+
     rc.append(f"build --action_env PYTHON_BIN_PATH={self.python_bin_path}")
     rc.append(f"build --python_path {self.python_bin_path}")
     rc.append("test --test_env LD_LIBRARY_PATH")
