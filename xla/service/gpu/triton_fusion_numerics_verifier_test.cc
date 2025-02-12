@@ -65,7 +65,10 @@ class TritonFusionNumericsVerifierTest
         triton_fusion_numerics_pass_internal::ForAllTritonFusions(
             module, /*execution_threads=*/{},
             [&](const HloFusionInstruction& fusion) -> absl::Status {
+#ifndef TENSORFLOW_USE_ROCM
+// On ROCm two softmax fusions are generated for f16 type
               EXPECT_EQ(fusion_result, nullptr);
+#endif
               fusion_result = &fusion;
               return absl::OkStatus();
             });
