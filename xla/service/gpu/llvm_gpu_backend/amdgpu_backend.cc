@@ -174,7 +174,8 @@ void HsacoCache::Add(const std::string& ir, uint64_t hash,
 // Emits the given module to HSA Code Object. target_machine is an initialized
 // TargetMachine for the AMDGPU target.
 absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
-    llvm::Module* module, llvm::TargetMachine* target_machine) {
+    llvm::Module* module, const DebugOptions& debug_options,
+    llvm::TargetMachine* target_machine) {
   auto* env = tsl::Env::Default();
   std::vector<std::string> tempdir_vector;
   env->GetLocalTempDirectories(&tempdir_vector);
@@ -237,12 +238,17 @@ absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
   }
   // Locate lld.
   std::string lld_path;
-  if (std::getenv("LLVM_PATH")) {
-    lld_path = tsl::io::JoinPath(std::getenv("LLVM_PATH"), "bin");
-  } else {
-    lld_path = tsl::io::JoinPath(tsl::RocmRoot(), "llvm/bin");
+  llvm::SmallVector<std::string, 3> lld_paths;
+
+  lld_paths.push_back(
+      tsl::io::JoinPath(debug_options.xla_gpu_cuda_data_dir(), "llvm/bin"));
+  if (const char* llvm_path = std::getenv("LLVM_PATH")) {
+    lld_paths.push_back(tsl::io::JoinPath(llvm_path, "bin"));
   }
-  auto lld_program = llvm::sys::findProgramByName("ld.lld", {lld_path});
+  lld_paths.push_back(tsl::io::JoinPath(tsl::RocmRoot(), "llvm/bin"));
+
+  auto lld_program = llvm::sys::findProgramByName(
+      "ld.lld", llvm::to_vector_of<llvm::StringRef>(lld_paths));
   if (!lld_program) {
     return xla::Internal("unable to find ld.lld in PATH: %s",
                          lld_program.getError().message());
@@ -385,6 +391,7 @@ std::string GetROCDLDir(const DebugOptions& debug_options) {
   std::vector<std::string> potential_rocdl_dirs;
   const std::string& datadir = debug_options.xla_gpu_cuda_data_dir();
   if (!datadir.empty()) {
+    potential_rocdl_dirs.push_back(tsl::io::JoinPath(datadir, "amdgcn/bitcode"));
     potential_rocdl_dirs.push_back(datadir);
   }
   potential_rocdl_dirs.push_back(tsl::RocdlRoot());
@@ -522,7 +529,7 @@ absl::StatusOr<std::vector<uint8_t>> CompileToHsaco(
         kAMDGPUInlineThreshold));
 
     // Lower optimized LLVM module to HSA code object.
-    TF_ASSIGN_OR_RETURN(hsaco, EmitModuleToHsaco(module, target_machine.get()));
+    TF_ASSIGN_OR_RETURN(hsaco, EmitModuleToHsaco(module, debug_options, target_machine.get()));
     HsacoCache::Add(str, hash, gcn_arch_name, hsaco);
   }
   return hsaco;

@@ -29,6 +29,7 @@ limitations under the License.
 #include "xla/service/gpu/matmul_utils.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/stream_executor/device_description.h"
+#include "tsl/platform/path.h"
 #include "xla/tsl/platform/rocm_rocdl_path.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
@@ -138,11 +139,14 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
 
 std::string GetLibdevicePath(const HloModuleConfig& hlo_config,
                              const se::DeviceDescription& device_info) {
-  std::string libdevice_dir = tsl::RocdlRoot();
+  std::string libdevice_dir = tsl::io::JoinPath(
+      hlo_config.debug_options().xla_gpu_cuda_data_dir(), "amdgcn/bitcode");
   auto compute_capability = device_info.rocm_compute_capability();
   const std::string libdevice_path =
       amdgpu::LibDevicePath(compute_capability.gcn_arch_name(), libdevice_dir);
-  return libdevice_path;
+  return !libdevice_path.empty()
+             ? libdevice_path
+             : amdgpu::LibDevicePath(tsl::RocdlRoot(), libdevice_dir);
 }
 
 }  // namespace gpu
