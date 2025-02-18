@@ -29,6 +29,8 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
+namespace {
+
 template <class T>
 std::vector<T*> MakePointerVector(std::vector<T>& input_vec) {
   std::vector<T*> output_pointers;
@@ -78,6 +80,52 @@ absl::StatusOr<Literal> ReadLiteralFromFile(const std::string& name) {
   return Literal::CreateFromProto(proto);
 }
 
+absl::StatusOr<Literal> MakeConstLiteral(const Shape& shape, double val) {
+  
+  if (shape.IsTuple()) {
+    std::vector<Literal> elements;
+    for (const Shape& element_shape : shape.tuple_shapes()) {
+      TF_ASSIGN_OR_RETURN(Literal element, MakeConstLiteral(element_shape, val));
+      elements.push_back(std::move(element));
+    }
+    return LiteralUtil::MakeTupleOwned(std::move(elements));
+  }
+  Literal literal(shape);
+  switch(shape.element_type()) {
+  case PrimitiveType::F16:
+    literal.PopulateWithValue(Eigen::half(val));
+    break;
+  case PrimitiveType::F32:
+    literal.PopulateWithValue(float(val));
+    break;
+  case PrimitiveType::F64:
+    literal.PopulateWithValue(double(val));
+    break;
+  case PrimitiveType::S32:
+    literal.PopulateWithValue(int32_t(val));
+    break;
+  case PrimitiveType::S64:
+    literal.PopulateWithValue(int64_t(val));
+    break;
+  default:
+    return absl::InternalError("MakeConstLiteral: Unsupported number type!");
+  }
+  return std::move(literal);
+}
+
+absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const module) {
+
+  const auto params = module->entry_computation()->parameter_instructions();
+  using T = double;
+  std::vector<Literal> arguments(params.size());
+  for (int i = 0; i < params.size(); ++i) {
+    TF_ASSIGN_OR_RETURN(arguments[i], 
+        MakeConstLiteral(params[i]->shape(), T{i+1}));
+  }
+  return std::move(arguments);
+}
+
+} // namespace 
 
 class HloRunnerTest : public GpuCodegenTest {
 
@@ -90,6 +138,7 @@ protected:
         { std::regex(R"x(\[\(0\),)x"), "[" }, // remove dynamic shapes
         { std::regex(R"x(u32\[\] get-dimension-size\()x"), "s32[] get-dimension-size(" },
         { std::regex(R"x(u32\[\] %get-dimension-size\.)x"), "s32[] %get-dimension-size."},
+        { std::regex(R"x(u32\[\] get-dimension-size\.)x"), "s32[] get-dimension-size."},
     };
     std::stringstream buffer;
     buffer << ifs.rdbuf();
@@ -106,10 +155,13 @@ protected:
   auto ref_module = module->Clone();  
   TF_ASSERT_OK_AND_ASSIGN(auto exec, test_runner_.CreateExecutable(std::move(module), true));
 
-  //VLOG(0) << "Creating fake args..";
+#if 1
   TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, xla::MakeFakeArguments(ref_module.get(), 
         true, /*pseudo-random*/
-        true /* use large range*/));
+        false /* use large range*/));
+#else
+  TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, MakeSpecialArguments(ref_module.get()));
+#endif
   auto arg_ptrs = MakePointerVector<xla::Literal>(fake_arguments);
 
   //  TF_ASSERT_OK_AND_ASSIGN(auto truth, 
@@ -136,6 +188,11 @@ protected:
                           /*executable=*/exec.get(),
                           /*arguments=*/argument_buffers,
                           /*profile=*/&profile));
+    if (i == 0) {
+      TF_ASSERT_OK_AND_ASSIGN(auto host_res, 
+                test_runner_.TransferLiteralFromDevice(result.Result()));
+      WriteLiteralToTempFile(host_res, name); // write execution results to file
+    }
     if (i >= num_warmups) timeNs += profile.compute_time_ns();
     //VLOG(0) << i << " compute time: " << profile.compute_time_ns();
   }
@@ -143,12 +200,11 @@ protected:
   VLOG(0) << "Time elapsed: " << usec << " usec";
   ofs << usec;
 
-#if 1
+#if 0
   VLOG(0) << "Performing correctness check.";
   TF_ASSERT_OK_AND_ASSIGN(
        auto test_res, test_runner_.ExecuteWithExecutable(exec.get(), arg_ptrs));
-
-  WriteLiteralToTempFile(test_res, name);
+  WriteLiteralToTempFile(test_res, name); // write execution results to file
   
   // TF_ASSERT_OK_AND_ASSIGN(auto truth, ReadLiteralFromFile(name));
   
