@@ -15,6 +15,5 @@ those to this list.
 
 temporary_patch_list = [
     "//third_party/triton:temporary/numpy_type_promotion.patch",
-    "//third_party/triton:temporary/fix_InsertInstructionSchedHints.patch",
     # Add new patches just above this line
 ]
