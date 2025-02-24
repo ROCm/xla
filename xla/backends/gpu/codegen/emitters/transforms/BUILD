@@ -52,7 +52,6 @@ gentbl_cc_library(
 cc_library(
     name = "passes",
     srcs = [
-        "convert_float_nvidia.cc",
         "convert_xla_gpu_pure_call_ops.cc",
         "erase_dead_functions.cc",
         "expand_float_ops.cc",
@@ -70,6 +69,11 @@ cc_library(
         "unswitch_loops.cc",
         "vectorize_loads_stores.cc",
     ],
+    ] + if_cuda_is_configured([
+        "convert_float_cuda.cc",
+    ]) + if_rocm_is_configured([
+        "convert_float_rocm.cc",
+    ]),
     hdrs = ["passes.h"],
     copts = if_cuda_is_configured(["-DGOOGLE_CUDA=1"]) + if_rocm_is_configured(["-DTENSORFLOW_USE_ROCM=1"]),
     deps = [
