@@ -75,10 +75,4 @@ bazel \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     --run_under=//tools/ci_build/gpu_build:parallel_gpu_execute \
-    //xla/service/gpu/transforms:gemm_rewriter_test_gpu_amd_any --test_filter=Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDMatrixBiasF8/0
-
-# core dump issue previously
-# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDF8/0, where GetParam() = false
-# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDF8/1, where GetParam() = true
-# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDMatrixBiasF8/0, where GetParam() = false
-# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDMatrixBiasF8/1, where GetParam() = true
+    //xla/service/gpu/transforms:gemm_rewriter_test_gpu_amd_any --test_filter=Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABScaledF32DF8/0

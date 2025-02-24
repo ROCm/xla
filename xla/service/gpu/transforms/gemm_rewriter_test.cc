@@ -4783,8 +4783,14 @@ class ParameterizedFp8GemmRewriteTest : public ParameterizedGemmRewriteTest {
     }
     std::string replaced_hlo_text =
         absl::StrReplaceAll(hlo_text, replacements_);
+    LOG(INFO) << "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+    LOG(INFO) << "Enter RunAndCompare()...";
+    LOG(INFO) << "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
     EXPECT_TRUE(RunAndCompare(absl::StrReplaceAll(hlo_text, replacements_),
                               error_spec));
+    LOG(INFO) << "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+    LOG(INFO) << "Leave RunAndCompare()...";
+    LOG(INFO) << "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
 
     // Most FP8 tests directly create a GemmRewriter and check the output.
     // Here, also run the entire HLO pass pipeline to ensure no other passes
