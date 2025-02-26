@@ -305,7 +305,8 @@ void PopulateWithRandomFloatingPointData(Literal* literal,
                                          std::minstd_rand0* engine) {
   std::uniform_real_distribution<GeneratorT> generator(-0.1f, 0.2f);
   for (FloatT& value : literal->data<FloatT>()) {
-    value = static_cast<FloatT>(generator(*engine));
+    // value = static_cast<FloatT>(generator(*engine));
+    value = static_cast<FloatT>(1.0);
   }
 }
 
@@ -319,6 +320,7 @@ void PopulateWithFloatingPointData(
   CHECK_EQ(literal->shape().element_type(),
            primitive_util::NativeToPrimitiveType<FloatT>());
   if (max_bits_of_precision.has_value()) {
+    LOG(INFO) << "max_bits_of_precision.has_value() == true";
     CHECK(!use_large_range) << "Cannot set both use_large_range and "
                                "max_bits_of_precision for floating points.";
     CHECK(!no_duplicates) << "Cannot set both no_duplicates and "
@@ -333,10 +335,13 @@ void PopulateWithFloatingPointData(
       value = static_cast<FloatT>(temp * pow(2, -ceil(log2(abs(temp)))));
     }
   } else if (no_duplicates) {
+    LOG(INFO) << "no_duplicates == true";
     PopulateWithNoDuplicateData<FloatT>(literal, engine);
   } else if (use_large_range) {
+    LOG(INFO) << "use_large_range == true";
     PopulateWithRandomFullRangeFloatingPointData<FloatT>(literal, engine);
   } else {
+    LOG(INFO) << "PopulateWithRandomFloatingPointData()";
     PopulateWithRandomFloatingPointData<FloatT, ComputeT>(literal, engine);
   }
 }
@@ -692,6 +697,7 @@ absl::StatusOr<Literal> MakeFakeLiteral(
     std::optional<int64_t> max_bits_of_precision) {
   LOG(INFO) << "Use this function to generage fake arguments.";
   if (shape.IsTuple()) {
+    LOG(INFO) << "shape is tuple";
     std::vector<Literal> elements;
     const auto& shape_tuple_shapes = shape.tuple_shapes();
     elements.reserve(shape_tuple_shapes.size());
@@ -705,9 +711,12 @@ absl::StatusOr<Literal> MakeFakeLiteral(
     }
     return LiteralUtil::MakeTupleOwned(std::move(elements));
   }
+  LOG(INFO) << "shape isn't tuple";
   if (engine == nullptr) {
+    LOG(INFO) << "engine == nullptr";
     return Literal::CreateFromShape(shape);
   }
+  LOG(INFO) << "engine != nullptr";
   // Clear tiles/element size in shape's layout before using it for creating
   // literal.
   Shape new_shape = shape;
@@ -722,6 +731,7 @@ absl::StatusOr<Literal> MakeFakeLiteral(
           using NativeT = primitive_util::NativeTypeOf<primitive_type_constant>;
           if constexpr (primitive_util::IsFloatingPointType(
                             primitive_type_constant)) {
+            LOG(INFO) << "primitive_util::IsFloatingPointType() == true";
             PopulateWithFloatingPointData<NativeT>(
                 &literal, engine, no_duplicates, use_large_range,
                 max_bits_of_precision);
