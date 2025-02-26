@@ -690,6 +690,7 @@ absl::StatusOr<Literal> MakeFakeLiteral(
     std::optional<std::pair<int64_t, int64_t>> limit, bool is_sorted,
     bool no_duplicates, bool use_large_range,
     std::optional<int64_t> max_bits_of_precision) {
+  LOG(INFO) << "Use this function to generage fake arguments.";
   if (shape.IsTuple()) {
     std::vector<Literal> elements;
     const auto& shape_tuple_shapes = shape.tuple_shapes();

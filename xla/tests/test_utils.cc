@@ -192,6 +192,7 @@ absl::StatusOr<Literal> CreateLiteralForConstrainedUses(
     const HloInstruction& param, const Shape& param_shape,
     std::minstd_rand0* engine, bool use_large_range,
     std::optional<int64_t> max_bits_of_precision) {
+  LOG(INFO) << "Enter CreateLiteralForConstrainedUses()";
   int64_t index_bound = INT64_MAX;
   bool no_duplicates = false;
   bool needs_constant = false;
@@ -288,6 +289,7 @@ absl::StatusOr<Literal> CreateLiteralForConstrainedUses(
                                max_bits_of_precision);
     }
   } else {
+    LOG(INFO) << "Use this branch to generate fake arguments.";
     return MakeFakeLiteral(param_shape, engine, /*limit=*/std::nullopt,
                            /*is_sorted=*/needs_sorted_indices, no_duplicates,
                            use_large_range, max_bits_of_precision);
