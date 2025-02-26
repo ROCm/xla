@@ -2012,8 +2012,33 @@ absl::StatusOr<int64_t> RematerializeInstructions(
     }
 
     HloCloneContext context(computation->parent());
+    VLOG(-1) << "cj401 Rematerializing instruction: " << best->ToString();
+
     HloInstruction* remat =
         computation->AddInstruction(best->Clone(/*suffix=*/"remat", &context));
+    
+    XLA_VLOG_LINES(-1, "cj401 after clone:\n" + remat->ToString());
+    // update each sub-instruction if it's a fusion
+    if (remat->opcode() == HloOpcode::kFusion) {
+      for (HloComputation* fused_comp : remat->called_computations()) {
+        for (HloInstruction* instr : fused_comp->instructions()) {
+          auto instr_meta = instr->metadata();
+          std::string tmp_str(instr->name());
+          VLOG(-1) << "cj401 update each sub-instruction = " << tmp_str;
+          // Force the scheduling_name to match the IR name
+          instr_meta.set_scheduling_name(tmp_str);
+          instr->set_metadata(instr_meta);
+        }
+      }
+    }
+
+    // Print debug info
+    XLA_VLOG_LINES(-1, "cj401 after updating each sub-instruction:\n" + remat->ToString());
+    if (remat->opcode() == HloOpcode::kFusion) {
+      auto* fused_comp = remat->called_computations()[0];
+      XLA_VLOG_LINES(-1, "cj401 after clone fused computation:\n" + fused_comp->ToString());
+    }
+
     for (auto& cloned_computation_pair : context.cloned_computations()) {
       if (!schedule->is_computation_scheduled(cloned_computation_pair.first)) {
         continue;
@@ -2042,8 +2067,10 @@ absl::StatusOr<int64_t> RematerializeInstructions(
     absl::flat_hash_map<int64_t, HloInstruction*> gte_cache;
     for (auto& user : memory_tracker->GetItemUses(best_item)) {
       if (!memory_tracker->IsPlaced(user.user->instruction)) {
-        VLOG(2) << "  Replacing use of " << best->name() << " in "
+        // VLOG(2) << "  Replacing use of " << best->name() << " in "
+         VLOG(-1) << "cj401  Replacing use of " << best->name() << " in "
                 << user.user->instruction->name() << " with " << remat->name();
+                
         HloInstruction* remat_use = remat;
         HloInstruction* const user_operand =
             user.user->instruction->mutable_operand(user.operand_number);
@@ -2076,6 +2103,11 @@ absl::StatusOr<int64_t> RematerializeInstructions(
         }
         TF_RETURN_IF_ERROR(user.user->instruction->ReplaceOperandWith(
             user.operand_number, remat_use));
+        VLOG(-1) << "cj401 Replacing operand " << user.operand_number 
+            << " of instruction " << user.user->instruction->name()
+            << " from " << user_operand->name()
+            << " to " << remat_use->name();
+  
       }
     }
 
@@ -2828,7 +2860,8 @@ absl::StatusOr<bool> HloRematerialization::Run(
         << "Host memory config is required when host memory offload strategy "
            "is specified";
   }
-  VLOG(1) << "HloRematerialization() with memory limit of "
+  // VLOG(1) << "HloRematerialization() with memory limit of "
+  VLOG(-1) << "cj401 HloRematerialization() with memory limit of "
           << HumanReadableNumBytes(options_.memory_limit_bytes);
   if (!options_.remat_mode_config.compress &&
       !options_.remat_mode_config.recompute &&
