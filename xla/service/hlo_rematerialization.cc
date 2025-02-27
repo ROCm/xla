@@ -2017,26 +2017,17 @@ absl::StatusOr<int64_t> RematerializeInstructions(
     HloInstruction* remat =
         computation->AddInstruction(best->Clone(/*suffix=*/"remat", &context));
     
-    XLA_VLOG_LINES(-1, "cj401 after clone:\n" + remat->ToString());
     // update each sub-instruction if it's a fusion
     if (remat->opcode() == HloOpcode::kFusion) {
       for (HloComputation* fused_comp : remat->called_computations()) {
         for (HloInstruction* instr : fused_comp->instructions()) {
           auto instr_meta = instr->metadata();
           std::string tmp_str(instr->name());
-          VLOG(-1) << "cj401 update each sub-instruction = " << tmp_str;
           // Force the scheduling_name to match the IR name
           instr_meta.set_scheduling_name(tmp_str);
           instr->set_metadata(instr_meta);
         }
       }
-    }
-
-    // Print debug info
-    XLA_VLOG_LINES(-1, "cj401 after updating each sub-instruction:\n" + remat->ToString());
-    if (remat->opcode() == HloOpcode::kFusion) {
-      auto* fused_comp = remat->called_computations()[0];
-      XLA_VLOG_LINES(-1, "cj401 after clone fused computation:\n" + fused_comp->ToString());
     }
 
     for (auto& cloned_computation_pair : context.cloned_computations()) {
