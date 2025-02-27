@@ -2058,8 +2058,7 @@ absl::StatusOr<int64_t> RematerializeInstructions(
     absl::flat_hash_map<int64_t, HloInstruction*> gte_cache;
     for (auto& user : memory_tracker->GetItemUses(best_item)) {
       if (!memory_tracker->IsPlaced(user.user->instruction)) {
-        // VLOG(2) << "  Replacing use of " << best->name() << " in "
-         VLOG(-1) << "cj401  Replacing use of " << best->name() << " in "
+        VLOG(2) << "  Replacing use of " << best->name() << " in "
                 << user.user->instruction->name() << " with " << remat->name();
                 
         HloInstruction* remat_use = remat;
