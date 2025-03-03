@@ -863,17 +863,18 @@ void RocmExecutor::DeallocateStream(Stream* stream) {
 
 absl::Status RocmExecutor::InitBlas() {
   PluginRegistry* registry = PluginRegistry::Instance();
-  TF_ASSIGN_OR_RETURN(
-      auto factory,
+  {
+    TF_ASSIGN_OR_RETURN(auto factory, 
       registry->GetFactory<PluginRegistry::BlasFactory>(rocm::kROCmPlatformId));
-  blas_.reset(factory(this));
+    blas_.reset(factory(this));
+  }
   return absl::OkStatus();
 }
 
 blas::BlasSupport* RocmExecutor::AsBlas() { return blas_.get(); }
 
 dnn::DnnSupport* RocmExecutor::AsDnn() {
-  absl::MutexLock lock(&mu_);
+    absl::MutexLock lock(&mu_);
   if (dnn_ != nullptr) {
     return dnn_.get();
   }

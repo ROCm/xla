@@ -20,6 +20,7 @@ limitations under the License.
 #include <memory>
 #include <optional>
 #include <string>
+#include <deque>
 #include <variant>
 #include <vector>
 
@@ -78,6 +79,14 @@ class GpuExecutable : public Executable {
     std::optional<HloInputOutputAliasConfig::Alias> alias_config;
   };
 
+  // the # of cached buffers allocated for each BufferAllocation entry to be 
+  // used for ping-ponging
+  constexpr static size_t NumCachedBuffers = 2;
+  // keep two memory alloc entries for each BufferAllocation for ping-ponging
+  using AllocationsCacheEntry = std::array<se::ScopedDeviceMemory<uint8_t>, 
+                                                             NumCachedBuffers>;
+  using AllocationsCache = absl::flat_hash_map< BufferAllocation::Index, 
+                                                AllocationsCacheEntry >;
   struct Params {
     std::string asm_text;
     std::vector<uint8_t> binary;
@@ -106,6 +115,24 @@ class GpuExecutable : public Executable {
   // This should be called before ExecuteOnStream.
   void set_ir_module_string(const std::string& ir_module_string) {
     ir_module_string_ = ir_module_string;
+  }
+
+  void advance_cache_index(int id) {
+    absl::MutexLock lock(&module_handle_mutex_);
+    if (static_cast< size_t >(id) >= cached_mem_allocations_.size()) {
+      cached_mem_allocations_.resize(id + 1);
+    }
+    cached_mem_allocations_[id].second = 
+          (cached_mem_allocations_[id].second + 1) % NumCachedBuffers;
+  }
+
+  AllocationsCache& get_allocs_cache(int id, int64_t *index = nullptr) {
+    absl::MutexLock lock(&module_handle_mutex_);
+    if (static_cast< size_t >(id) >= cached_mem_allocations_.size()) {
+      cached_mem_allocations_.resize(id + 1);
+    }
+    if (index) *index = cached_mem_allocations_[id].second;
+    return cached_mem_allocations_[id].first;
   }
 
   // Returns the compiled code for the computation.
@@ -203,6 +230,8 @@ class GpuExecutable : public Executable {
       se::DeviceMemoryAllocator* memory_allocator, int device_ordinal,
       int64_t arg_idx);
 
+
+
   // The LLVM IR, in string format, of the unoptimized module generated for
   // this GpuExecutable. We save a string instead of an llvm::Module* because
   // leaving llvm::Module* in a singleton can cause the heap checker to emit
@@ -257,7 +286,7 @@ class GpuExecutable : public Executable {
 
   int64_t debug_buffer_assignment_show_max_;
 
-  absl::Mutex module_handle_mutex_;
+  mutable absl::Mutex module_handle_mutex_;
   // Cache of module handles. Required to keep loaded modules alive until this
   // executable is destroyed.
   absl::flat_hash_map<stream_executor::StreamExecutor*, se::ScopedModuleHandle>
@@ -267,11 +296,9 @@ class GpuExecutable : public Executable {
                       std::unique_ptr<BufferAllocToDeviceMemoryMap>>
       module_globals_ ABSL_GUARDED_BY(module_handle_mutex_);
 
-  // Cache previous memory allocations for current module, this is used to help
-  // identify if user's model have unstable pointers by turning on VLOG(5).
-  absl::flat_hash_map<stream_executor::StreamExecutor*,
-                      std::vector<se::DeviceMemoryBase>>
-      module_allocations_ ABSL_GUARDED_BY(module_handle_mutex_);
+  std::deque< std::pair<AllocationsCache, int64_t > > cached_mem_allocations_ 
+                                        ABSL_GUARDED_BY(module_handle_mutex_);
+  bool enable_cached_allocs_; // whether to use cached_mem_allocations_
 
   std::vector<ConstantInfo> constants_;
   const absl::flat_hash_map<ShapeIndex, OutputInfo> output_info_;

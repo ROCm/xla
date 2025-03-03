@@ -53,6 +53,7 @@ limitations under the License.
 #include "xla/stream_executor/event.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/stream_executor/gpu/gpu_stream.h"
 #include "xla/util.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/statusor.h"
@@ -211,7 +212,8 @@ NcclCollectiveConfig GetNcclCollectiveConfig(
 NcclCollectiveThunk::NcclCollectiveThunk(Kind kind, ThunkInfo thunk_info,
                                          bool is_sync)
     : Thunk(kind, thunk_info),
-      async_events_(is_sync ? nullptr : new AsyncEvents()) {}
+      async_events_(is_sync ? nullptr : new AsyncEvents()) {
+}
 
 absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
