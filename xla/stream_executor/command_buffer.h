@@ -287,6 +287,7 @@ class CommandBuffer {
   // Returns command buffer state.
   virtual State state() const = 0;
 
+  std::string debug_name;
   //--------------------------------------------------------------------------//
   // Command buffer tracing API
   //--------------------------------------------------------------------------//

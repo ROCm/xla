@@ -119,8 +119,10 @@ namespace wrap {
   __macro(hipGraphExecMemsetNodeSetParams)          \
   __macro(hipGraphExecUpdate)                       \
   __macro(hipGraphInstantiate)                      \
-  __macro(hipGraphMemAllocNodeGetParams)            \
+  __macro(hipGraphKernelNodeGetParams)              \
   __macro(hipGraphLaunch)                           \
+  __macro(hipGraphMemAllocNodeGetParams)            \
+  __macro(hipGraphMemsetNodeGetParams)              \
   __macro(hipGraphNodeGetType)                      \
   __macro(hipGraphNodeSetEnabled)                   \
   __macro(hipHostFree)                              \

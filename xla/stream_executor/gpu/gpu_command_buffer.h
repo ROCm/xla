@@ -23,6 +23,7 @@ limitations under the License.
 
 #include "absl/container/inlined_vector.h"
 #include "absl/log/log.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -31,9 +32,11 @@ limitations under the License.
 #include "xla/stream_executor/command_buffer.h"
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/dnn.h"
+#include "xla/stream_executor/dnn.h"
 #include "xla/stream_executor/gpu/scoped_update_mode.h"
 #include "xla/stream_executor/kernel.h"
 #include "xla/stream_executor/launch_dim.h"
+#include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 
@@ -83,10 +86,12 @@ class GpuCommandBuffer : public CommandBuffer {
   // A simple GPU command recorded into a GPU command buffer. Most of the GPU
   // commands have a single node in the GPU graph, i.e. memset or kernel launch.
   struct GpuCommand : public CommandBuffer::Command {
-    explicit GpuCommand(GraphNodeHandle handle) : handle(handle) {}
+
+    GpuCommand() = default;
+    explicit GpuCommand(GraphNodeHandle handle) : handles(1, handle) {}
 
     // A handle to the gpu graph node corresponding to a command.
-    GraphNodeHandle handle = nullptr;
+    absl::InlinedVector< GraphNodeHandle, 1 > handles;
   };
 
   // A GPU command recorded for the Case operation.
@@ -194,6 +199,8 @@ class GpuCommandBuffer : public CommandBuffer {
   static int64_t NotifyExecDestroyed();
 
   using Dependencies = absl::InlinedVector<GraphNodeHandle, 1>;
+  using ChildNodes = absl::InlinedVector<GraphNodeHandle, 2>;
+
 
  private:
   // Prepares a nested command buffer for an update of the graph.
@@ -271,6 +278,8 @@ class GpuCommandBuffer : public CommandBuffer {
   absl::Status UpdateCase(const Command* command, DeviceMemory<uint8_t> index,
                           bool index_is_bool,
                           std::vector<UpdateCommands> update_branches);
+
+  absl::StatusOr<ChildNodes> GetChildNodes() const;
 
   // Appends a new command to the command buffer.
   template <typename T>
@@ -354,6 +363,21 @@ class GpuCommandBuffer : public CommandBuffer {
   // Returns the number of nodes in the graph associated with this command
   // buffer.
   virtual absl::StatusOr<size_t> GetNodeCount() const = 0;
+
+  // return the list of graph nodes
+  virtual absl::StatusOr<size_t> GraphGetNodes(
+        ChildNodes *pnodes) const = 0;
+
+  virtual absl::StatusOr< GraphNodeHandle > CopyChildNodeToMainGraph(
+          GraphNodeHandle child_node, 
+          absl::Span<const GraphNodeHandle> dependencies) {
+    return absl::InternalError("Not implemented");
+  }
+
+  virtual absl::Status UpdateChildNodeInMainGraph(
+          GraphNodeHandle child_node, GraphNodeHandle main_node) {
+     return absl::InternalError("Not implemented");
+  }
 
   // This gets called at the beginning of `Finalize` and allows subclasses to
   // perform any necessary preparation before the graph is finalized.

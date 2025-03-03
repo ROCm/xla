@@ -18,6 +18,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
@@ -29,6 +30,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/command_buffer_cmd.h"
 #include "xla/backends/gpu/runtime/sequential_thunk.h"
 #include "xla/backends/gpu/runtime/thunk.h"
+#include "xla/service/buffer_assignment.h"
 #include "xla/stream_executor/command_buffer.h"
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/stream_executor.h"
@@ -37,6 +39,7 @@ namespace xla::gpu {
 
 class CommandBufferThunk : public Thunk {
  public:
+  constexpr static int64_t kNumCachedGraphs = 2;
   CommandBufferThunk(CommandBufferCmdExecutor commands, ThunkInfo thunk_info,
                      std::unique_ptr<SequentialThunk> thunks = nullptr,
                      bool enable_command_buffers_during_profiling = false);
@@ -48,12 +51,6 @@ class CommandBufferThunk : public Thunk {
   absl::Status Initialize(const InitializeParams& params) override;
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
 
-  // Return the allocation address that was lazilly allocated inside command
-  // buffer. This API is required when the buffers are allocated inside command
-  // buffer but will be consumed by non-command buffer operations.
-  absl::StatusOr<se::DeviceMemoryBase> GetCommandBufferAllocationAddress(
-      const ExecuteParams& params, int64_t index);
-
   void ForAllThunks(absl::FunctionRef<void(const Thunk*)> fn) const override;
 
   std::string ToString(int indent) const override;
@@ -62,23 +59,45 @@ class CommandBufferThunk : public Thunk {
   // Command buffer instantiated on a `se::StreamExecutor` instance, and
   // auxiliary state required for efficient command buffer updates.
   struct ExecutorCommandBuffer {
-    explicit ExecutorCommandBuffer(
-        std::unique_ptr<se::CommandBuffer> command_buffer);
 
-    // Returns true if `commands` cmd sequence has to be recorded into
-    // `command_buffer` to update it (see `recorded_allocs` below).
-    bool ShouldUpdateCommandBuffer(const CommandBufferCmdExecutor& commands,
-                                   const Thunk::ExecuteParams& params)
+    using AllocsVec = std::vector<se::DeviceMemoryBase>; 
+
+    ExecutorCommandBuffer() = default;
+
+    absl::Status Initialize(se::StreamExecutor* executor,
+          BufferAllocation::Index max_index);
+
+    void SetActiveGraph(int64_t idx) {
+      active_graph_ = idx;
+    }
+
+    se::CommandBuffer *ActiveGraph() {
+      return cached_graphs_[active_graph_].get();
+    }
+
+    // Updates recorded buffer allocation for the given `commands` using the
+    // buffer allocations passed in `params`. Returns buffer allocations that
+    // changed since the last update. Returned buffer allocations are sorted by
+    // the buffer allocation index.
+    bool UpdateBufferAllocations(
+        const CommandBufferCmdExecutor& commands,
+        const Thunk::ExecuteParams& params)
         ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex);
 
     // se::CommandBuffer is not thread safe, and we guard it with a mutex to
     // guarantee that we do not mutate it concurrently.
     absl::Mutex mutex;
-    std::unique_ptr<se::CommandBuffer> command_buffer ABSL_GUARDED_BY(mutex);
+
+    // Number of command buffer executions since last update.
+    int64_t num_executions ABSL_GUARDED_BY(mutex) = 0;
 
     // A manager for an external state attached by commands in a command
     // sequence to a command buffer.
     CommandBufferCmd::StateManager state ABSL_GUARDED_BY(mutex);
+
+  private:
+    std::array<std::unique_ptr<se::CommandBuffer>, kNumCachedGraphs> 
+                                    cached_graphs_ ABSL_GUARDED_BY(mutex);
 
     // Mapping from buffer allocation index to the device memory passed at
     // that index to the last call of `commands_.Record(...)` for
@@ -91,10 +110,10 @@ class CommandBufferThunk : public Thunk {
     // execution on a stream. All other pieces of information (like thread
     // and block sizes) captured by commands at construction time and do not
     // change.
-    std::vector<se::DeviceMemoryBase> recorded_allocs ABSL_GUARDED_BY(mutex);
+    std::array< AllocsVec, kNumCachedGraphs> recorded_allocs_ ABSL_GUARDED_BY(mutex);
 
-    // Number of command buffer executions since last update.
-    int64_t num_executions ABSL_GUARDED_BY(mutex) = 0;
+    // Holds the index of currently active graph [0, kNumCachedGraphs-1]
+    int64_t active_graph_ ABSL_GUARDED_BY(mutex) = kNumCachedGraphs-1;
   };
 
   // Command buffer thunk owns commands buffers instantiated on all executors.
@@ -107,7 +126,8 @@ class CommandBufferThunk : public Thunk {
 
   // Returns a command buffer instantiated for `executor` or creates new one.
   absl::StatusOr<std::shared_ptr<ExecutorCommandBuffer>>
-  GetOrCreateCommandBuffer(se::StreamExecutor* executor);
+  GetOrCreateCommandBuffer(se::StreamExecutor* executor,
+        BufferAllocation::Index max_index);
 
   // Each individual command buffer allocates state on device (CUDA graph) and
   // it adds up pretty quickly. To prevent OOM errors we proactively evict

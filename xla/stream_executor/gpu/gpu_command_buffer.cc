@@ -19,6 +19,7 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
@@ -35,6 +36,7 @@ limitations under the License.
 #include "xla/stream_executor/command_buffer.h"
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/dnn.h"
+#include "xla/stream_executor/dnn.h"
 #include "xla/stream_executor/kernel.h"
 #include "xla/stream_executor/kernel_spec.h"
 #include "xla/stream_executor/launch_dim.h"
@@ -43,7 +45,14 @@ limitations under the License.
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
 #include "tsl/platform/casts.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "tsl/platform/casts.h"
 #include "tsl/platform/path.h"
+
+// Whether to to use subgraphs or extract child nodes directly to the main graph
+#define EXTRACT_CHILD_NODES_FROM_GRAPH 1
 
 namespace stream_executor::gpu {
 
@@ -105,7 +114,7 @@ GpuCommandBuffer::ToGraphNodeDependencies(
     DCHECK(dep) << "Dependency command must be not null";
 
     if (auto* gpu_command = dynamic_cast<const GpuCommand*>(dep)) {
-      handles.push_back(gpu_command->handle);
+      handles.push_back(gpu_command->handles.back());
 
     } else if (auto* gpu_command = dynamic_cast<const GpuCaseCommand*>(dep)) {
       for (const auto& conditional_node : gpu_command->conditional_nodes) {
@@ -146,7 +155,7 @@ absl::Status GpuCommandBuffer::UpdateLaunchWithPackedArgs(
     const Kernel& kernel, const KernelArgsPackedArrayBase& packed_args) {
   TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
   auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
-  return UpdateKernelNode(gpu_command->handle, threads, blocks, kernel,
+  return UpdateKernelNode(gpu_command->handles.back(), threads, blocks, kernel,
                           packed_args);
 }
 
@@ -208,24 +217,91 @@ absl::Status GpuCommandBuffer::UpdateLaunch(const Command* command,
   return absl::InternalError("Unsupported kernel arguments type");
 }
 
+auto GpuCommandBuffer::GetChildNodes() const 
+                -> absl::StatusOr<ChildNodes> {
+  ChildNodes nodes;
+  TF_ASSIGN_OR_RETURN(auto count, GraphGetNodes(nullptr));
+  nodes.resize(count);
+  TF_ASSIGN_OR_RETURN(count, GraphGetNodes(&nodes));
+  return nodes;
+}
+
+#if 0
+const std::vector< std::string > use_subgraph_for = {
+  "CollectivePermuteCmd",
+  "AllToAllCmd",
+  "AllGatherCmd",
+  "AllReduceCmd",
+  "ReduceScatterCmd",
+  "CublasLtCmd", 
+};
+#endif
+
 absl::StatusOr<const CommandBuffer::Command*>
 GpuCommandBuffer::CreateNestedCommand(
     const CommandBuffer& nested,
     absl::Span<const Command* const> dependencies) {
   TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
 
-  TF_ASSIGN_OR_RETURN(
-      GraphNodeHandle handle,
-      CreateChildNode(ToGraphNodeDependencies(dependencies), nested));
+  auto deps = ToGraphNodeDependencies(dependencies);
 
+#if EXTRACT_CHILD_NODES_FROM_GRAPH
+  const auto& gpu_nested = 
+                tensorflow::down_cast< const GpuCommandBuffer& >(nested);
+
+  // bool use_subgraph = false;
+  // for (const auto& s : use_subgraph_for) {
+  //   if (gpu_nested.debug_name == s) {
+  //     use_subgraph = true; break;
+  //   }
+  // }
+
+  TF_ASSIGN_OR_RETURN(auto child_nodes, gpu_nested.GetChildNodes());
+  GpuCommand gpu_cmd;
+  for(auto node : child_nodes) {
+    // NOTE NOTE: this is needed for CUDA !!
+    auto shandle = CopyChildNodeToMainGraph(node, deps);
+    if (!shandle.ok()) {
+      LOG(WARNING) << "Skipping child node due to " << shandle.status().message();
+      continue;
+    }
+    gpu_cmd.handles.push_back(shandle.value());
+    deps.resize(1);
+    deps[0] = shandle.value();
+  } 
+
+  return AppendCommand(std::move(gpu_cmd));
+#else
+  TF_ASSIGN_OR_RETURN(
+      GraphNodeHandle handle, CreateChildNode(deps, nested));
   return AppendCommand(GpuCommand{handle});
+#endif
 }
 
 absl::Status GpuCommandBuffer::UpdateNestedCommand(
     const Command* command, const CommandBuffer& nested) {
   TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
   auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
-  return UpdateChildNode(gpu_command->handle, nested);
+
+#if EXTRACT_CHILD_NODES_FROM_GRAPH
+  const auto& gpu_nested = 
+                tensorflow::down_cast< const GpuCommandBuffer& >(nested);
+
+  TF_ASSIGN_OR_RETURN(auto child_nodes, gpu_nested.GetChildNodes());
+  if (gpu_command->handles.size() != child_nodes.size()) {
+    // return absl::InternalError("Child nodes vs #handles mismatch!");
+  }
+  // special hacky handling for CUDA
+  size_t j = 0;
+  for(size_t i = 0; i < child_nodes.size(); i++) {
+    auto s = UpdateChildNodeInMainGraph(child_nodes[i], 
+              gpu_command->handles[j]);
+    if (s.ok()) j++;
+  }
+  return absl::OkStatus();
+#else
+  return UpdateChildNode(gpu_command->handles.back(), nested);
+#endif
 }
 
 absl::StatusOr<const CommandBuffer::Command*> GpuCommandBuffer::CreateMemcpyD2D(
@@ -246,7 +322,7 @@ absl::Status GpuCommandBuffer::UpdateMemcpyD2D(const Command* command,
                                                uint64_t size) {
   TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
   auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
-  return UpdateMemcpyD2DNode(gpu_command->handle, *dst, src, size);
+  return UpdateMemcpyD2DNode(gpu_command->handles.back(), *dst, src, size);
 }
 
 absl::StatusOr<const CommandBuffer::Command*> GpuCommandBuffer::CreateMemset(
@@ -267,7 +343,7 @@ absl::Status GpuCommandBuffer::UpdateMemset(const Command* command,
                                             size_t num_elements) {
   TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
   auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
-  return UpdateMemsetNode(gpu_command->handle, *dst, bit_pattern, num_elements);
+  return UpdateMemsetNode(gpu_command->handles.back(), *dst, bit_pattern, num_elements);
 }
 
 //----------------------------------------------------------------------------//
@@ -299,15 +375,8 @@ absl::Status GpuCommandBuffer::UpdateDnnGraphCommand(
     const Command* command, dnn::DnnGraph& dnn_graph, Stream& stream,
     absl::Span<DeviceMemoryBase> operands) {
   TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
-
-  auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
-  TF_ASSIGN_OR_RETURN(std::unique_ptr<CommandBuffer> nested,
-                      stream.parent()->CreateCommandBuffer(Mode::kNested));
-  GpuCommandBuffer& nested_gpu =
-      tensorflow::down_cast<GpuCommandBuffer&>(*nested);
-  TF_RETURN_IF_ERROR(nested_gpu.UpdateDnnGraphNode(dnn_graph, stream, operands,
-                                                   gpu_command->handle));
-  return UpdateChildNode(gpu_command->handle, *nested);
+  return UpdateDnnGraphNode(dnn_graph, stream, operands,
+                  tsl::down_cast<const GpuCommand*>(command)->handles.back());
 }
 
 //----------------------------------------------------------------------------//

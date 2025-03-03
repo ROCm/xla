@@ -20,6 +20,7 @@ limitations under the License.
 #include <iterator>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -48,7 +49,10 @@ limitations under the License.
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
+#include "tsl/platform/path.h"
 #include "tsl/platform/casts.h"
+
+#define GPU_GRAPH_API_DEBUG 0
 
 namespace stream_executor::gpu {
 namespace {
@@ -75,9 +79,9 @@ hipGraphNode_t ToHipGraphHandle(GpuCommandBuffer::GraphNodeHandle handle) {
 
 // Converts a list of platform independent GraphNodeHandles into a list of
 // HIP specific hipGraphNode_t.
-std::vector<hipGraphNode_t> ToHipGraphHandles(
+absl::InlinedVector<hipGraphNode_t, 1> ToHipGraphHandles(
     absl::Span<const GraphNodeHandle> opaque_handles) {
-  std::vector<hipGraphNode_t> handles;
+  absl::InlinedVector<hipGraphNode_t, 1> handles;
   handles.reserve(opaque_handles.size());
   for (const GraphNodeHandle opaque_handle : opaque_handles) {
     handles.push_back(ToHipGraphHandle(opaque_handle));
@@ -153,7 +157,7 @@ absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateMemsetNode(
   params.value = bit_pattern.GetPatternBroadcastedToUint32();
   params.width = num_elements;
 
-  std::vector<hipGraphNode_t> deps = ToHipGraphHandles(dependencies);
+  auto deps = ToHipGraphHandles(dependencies);
 
   hipGraphNode_t node_handle = nullptr;
   TF_RETURN_IF_ERROR(
@@ -192,7 +196,7 @@ absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateMemcpyD2DNode(
           << "; dst: " << destination.opaque() << "; src: " << source.opaque()
           << "; size: " << size << "; deps: " << dependencies.size();
 
-  std::vector<hipGraphNode_t> deps = ToHipGraphHandles(dependencies);
+  auto deps = ToHipGraphHandles(dependencies);
 
   hipGraphNode_t node_handle = nullptr;
   TF_RETURN_IF_ERROR(ToStatus(
@@ -227,7 +231,7 @@ absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateChildNode(
   VLOG(2) << "Create a new node by cloning the child graph " << child_graph
           << " and add it to " << graph_ << "; deps: " << dependencies.size();
 
-  std::vector<hipGraphNode_t> deps = ToHipGraphHandles(dependencies);
+  auto deps = ToHipGraphHandles(dependencies);
 
   hipGraphNode_t node_handle = nullptr;
   TF_RETURN_IF_ERROR(ToStatus(
@@ -286,7 +290,7 @@ absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateKernelNode(
         "Failed to set shared memory size"));
   }
 
-  std::vector<hipGraphNode_t> deps = ToHipGraphHandles(dependencies);
+  auto deps = ToHipGraphHandles(dependencies);
 
   hipGraphNode_t node_handle = nullptr;
   TF_RETURN_IF_ERROR(
@@ -337,6 +341,71 @@ absl::Status RocmCommandBuffer::UpdateKernelNode(
                   "Failed to set HIP graph kernel node params");
 }
 
+
+absl::StatusOr< GraphNodeHandle > RocmCommandBuffer::CopyChildNodeToMainGraph(
+          GraphNodeHandle child_node, absl::Span<const GraphNodeHandle> dependencies) {
+
+  auto hchild = ToHipGraphHandle(child_node);
+  // hipGraphNodeGetType(hipGraphNode_t node, hipGraphNodeType* pType) ??
+// NOTE: do we need this ??
+  // if (shared_mem_bytes != 0) {
+  //   TF_RETURN_IF_ERROR(ToStatus(
+  //       wrap::hipFuncSetAttribute(function,
+  //                                 hipFuncAttributeMaxDynamicSharedMemorySize,
+  //                                 shared_mem_bytes),
+  //       "Failed to set shared memory size"));
+  // }
+  auto deps = ToHipGraphHandles(dependencies);
+  hipGraphNode_t hmain = nullptr;
+  {
+    hipKernelNodeParams params;
+    auto s = wrap::hipGraphKernelNodeGetParams(hchild, &params);
+    if (s == hipSuccess) {
+      TF_RETURN_IF_ERROR(
+        ToStatus(wrap::hipGraphAddKernelNode(&hmain, graph_, deps.data(),
+                                           deps.size(), &params),
+               "CopyChildNodeToMainGraph failed creating kernel node"));
+      // VLOG(1) << "Added child kernel node: " << hchild << " -> " << hmain;
+      return FromHipGraphHandle(hmain);
+    }
+  }
+  {
+    hipMemsetParams params;
+    TF_RETURN_IF_ERROR(ToStatus(
+          wrap::hipGraphMemsetNodeGetParams(hchild, &params),
+          "CopyChildNodeToMainGraph failed getting memset node params"));
+    TF_RETURN_IF_ERROR(ToStatus(wrap::hipGraphAddMemsetNode(&hmain, graph_, 
+                                  deps.data(), deps.size(), &params), 
+            "CopyChildNodeToMainGraph failed creating memset node"));
+    // VLOG(1) << "Added child memset node: "<< hchild << " -> " << hmain;
+    return FromHipGraphHandle(hmain);
+  }
+}
+
+absl::Status RocmCommandBuffer::UpdateChildNodeInMainGraph(
+          GraphNodeHandle child_node, GraphNodeHandle main_node) {
+
+  auto hchild = ToHipGraphHandle(child_node),
+       hmain = ToHipGraphHandle(main_node);
+  
+  {
+    hipKernelNodeParams params;
+    auto s = wrap::hipGraphKernelNodeGetParams(hchild, &params);
+    if (s == hipSuccess) {
+      return ToStatus(wrap::hipGraphExecKernelNodeSetParams(exec_, hmain, &params));
+    }
+  }
+  {
+    hipMemsetParams params;
+    TF_RETURN_IF_ERROR(ToStatus(
+          wrap::hipGraphMemsetNodeGetParams(hchild, &params),
+          "UpdateChildNodeInMainGraph failed getting memset node params"));
+    return ToStatus(wrap::hipGraphExecMemsetNodeSetParams(exec_, hmain, &params), 
+            "UpdateChildNodeInMainGraph failed setting memset node params");
+  }
+}
+
+
 absl::Status RocmCommandBuffer::Trace(
     Stream* stream, absl::AnyInvocable<absl::Status()> function) {
   TF_RETURN_IF_ERROR(CheckNotFinalized());
@@ -380,20 +449,75 @@ absl::Status RocmCommandBuffer::Trace(
   return absl::OkStatus();
 }
 
+
+#if GPU_GRAPH_API_DEBUG
+static struct FinalPrinter 
+{
+  using GpuGraphHandle = hipGraph_t;
+
+  constexpr static const uint32_t Num = 8;
+  void dump(uint32_t deviceID, GpuGraphHandle graph) {
+    if(deviceID >= Num) {
+      VLOG(1) << "ERROR: wrong deviceID: " << deviceID;
+      return;
+    }
+    auto& map = graph_map_[deviceID];
+    auto [it, created] = map.emplace(graph, std::tuple{"", 0ull});
+    auto& [name, count] = it->second;
+    if(created) {
+      std::string path = tsl::io::GetTempFilename(/*extension=*/"dot");
+      int flags = hipGraphDebugDotFlagsHandles;
+      auto res = wrap::hipGraphDebugDotPrint(graph, path.c_str(), flags);
+      if(res == hipSuccess) {
+        size_t numNodes = 0;
+        (void)hipGraphGetNodes(graph, /*nodes=*/nullptr, &numNodes);
+        VLOG(1) << "Printed graph to: " << path << " with #nodes " << numNodes;
+      }
+      name = path;
+    }
+    count++;
+  }
+
+  ~FinalPrinter() {
+    int ID = 0;
+    for(const auto& map : graph_map_) {
+      if (map.empty()) continue;
+      VLOG(1) << "======================= graph stats " << ID++ 
+              << "========================";
+      for(const auto &[id, tuple] : map) {
+        const auto& [name,count] = tuple;
+        VLOG(1) << name << " called " << count << " times";
+      }
+    }
+  }
+private:  
+  using Map = std::unordered_map< GpuGraphHandle, 
+                            std::tuple<std::string, uint64_t> >;
+  std::array< Map, Num > graph_map_{};
+} s_printer;
+#endif
+
 absl::Status RocmCommandBuffer::LaunchGraph(Stream* stream) {
-  VLOG(3) << "Launch command buffer executable graph " << exec_
-          << " on a stream: " << stream;
+  VLOG(2) << std::this_thread::get_id() << " launch graph " << exec_
+          << " on a stream: " << stream << " " << stream->parent()->device_ordinal();
+#if GPU_GRAPH_API_DEBUG
+  s_printer.dump(stream->parent()->device_ordinal(), graph_);
+#endif
   return ToStatus(wrap::hipGraphLaunch(
                       exec_, static_cast<hipStream_t>(
                                  stream->platform_specific_handle().stream)),
                   "Failed to launch HIP graph");
 }
-absl::StatusOr<size_t> RocmCommandBuffer::GetNodeCount() const {
-  size_t numNodes;
-  TF_RETURN_IF_ERROR(
-      ToStatus(wrap::hipGraphGetNodes(graph_, /*nodes=*/nullptr, &numNodes),
-               "Failed to get HIP graph node count"));
 
+absl::StatusOr<size_t> RocmCommandBuffer::GraphGetNodes(
+        ChildNodes *pnodes) const {
+  // VLOG(2) << "Get node count in graph " << graph;
+  size_t numNodes = pnodes ? pnodes->size() : 0;
+  auto *hipnodes = reinterpret_cast< hipGraphNode_t * >
+            (pnodes ? pnodes->data() : nullptr);
+  TF_RETURN_IF_ERROR(ToStatus(
+      wrap::hipGraphGetNodes(graph_, hipnodes, &numNodes),
+      "Failed to get HIP graph nodes"));
   return numNodes;
 }
 

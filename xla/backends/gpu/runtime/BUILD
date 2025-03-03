@@ -61,6 +61,7 @@ cc_library(
         ":copy_thunk",
         ":custom_call_thunk",
         ":dynamic_slice_thunk",
+        ":gpublas_lt_matmul_thunk",
         ":thunk",
         "//xla:debug_options_flags",
         "//xla:executable_run_options",
@@ -318,7 +319,6 @@ cc_library(
         "@com_google_absl//absl/log:check",
     ],
 )
-
 cc_library(
     name = "command_buffer_thunk",
     srcs = ["command_buffer_thunk.cc"],
@@ -633,6 +633,8 @@ cc_library(
         "//xla/service:buffer_assignment",
         "//xla/service/gpu:buffer_allocations",
         "//xla/service/gpu:matmul_utils",
+        "//xla/service/gpu/autotuning:autotuner_util",
+        "//xla/service/gpu:stream_executor_util",
         "//xla/stream_executor:device_memory",
         "//xla/stream_executor:stream",
         "//xla/stream_executor/gpu:gpu_blas_lt",

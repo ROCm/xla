@@ -35,6 +35,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
 #include "xla/backends/cpu/runtime/thunk.h"
@@ -76,6 +77,8 @@ struct ThunkOperation : public ExecutionGraph::Operation {
 
   absl::Span<const BufferUse> BufferUses() const final { return buffers; }
   absl::Span<const ResourceUse> ResourceUses() const final { return resources; }
+  
+  absl::string_view name() const override { return "ops"; };
 
  private:
   Thunk::BufferUses buffers;
@@ -509,12 +512,12 @@ void ThunkExecutor::ProcessOutEdges(
   bool is_sink = node.out_edges.empty();
 
   // Append ready nodes to the back of the ready queue.
-  for (NodeId out_edge : node.out_edges) {
-    ExecuteState::Node& out_node = state->node(out_edge);
+  for (auto out_edge : node.out_edges) {
+    ExecuteState::Node& out_node = state->node(out_edge.id);
 
     int64_t cnt = out_node.counter.fetch_sub(1, std::memory_order_release);
     DCHECK_GE(cnt, 1) << "Node counter can't drop below 0";
-    if (cnt == 1) ready_queue.Push(out_edge);
+    if (cnt == 1) ready_queue.Push(out_edge.id);
   }
 
   // Drop the pending sink nodes counter if the node is a sink.
@@ -550,8 +553,9 @@ std::string ThunkExecutor::ToString() const {
   // Collect names of `in_edges`.
   std::vector<std::vector<std::string>> in_edges(num_thunks_);
   for (const auto& node_def : execution_graph_.nodes_defs()) {
-    for (NodeId in_edge : node_def.in_edges) {
-      in_edges[node_def.id].push_back(thunk_sequence_[in_edge]->info().op_name);
+    for (auto in_edge : node_def.in_edges) {
+      // HACK
+      // in_edges[node_def.id].push_back(thunk_sequence_[in_edge]->info().op_name);
     }
   }
 

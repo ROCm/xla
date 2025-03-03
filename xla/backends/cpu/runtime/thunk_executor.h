@@ -185,7 +185,7 @@ class ThunkExecutor {
       explicit Node(const NodeDef& node_def);
 
       alignas(kAtomicAlignment) std::atomic<int64_t> counter;
-      absl::Span<const NodeId> out_edges;
+      absl::Span<const ExecutionGraph::NodeEdge> out_edges;
     };
 
     static_assert(std::is_trivially_destructible_v<Node>,

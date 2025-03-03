@@ -43,9 +43,12 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/p2p_thunk_common.h"
 #include "xla/backends/gpu/runtime/copy_thunk.h"
 #include "xla/backends/gpu/runtime/custom_call_thunk.h"
+#include "xla/backends/gpu/runtime/convolution_thunk.h"
 #include "xla/backends/gpu/runtime/dynamic_slice_thunk.h"
+#include "xla/backends/gpu/runtime/gpublas_lt_matmul_thunk.h"
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/ffi/api/c_api.h"
+#include "xla/ffi/call_frame.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/runtime/buffer_use.h"
 #include "xla/runtime/execution_graph.h"
@@ -64,6 +67,7 @@ limitations under the License.
 #include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/lib/gtl/int_type.h"
 #include "xla/tsl/lib/gtl/int_type.h"
 
 namespace xla::gpu {
@@ -127,6 +131,9 @@ using ResourceUseVector = absl::InlinedVector<ResourceUse, 1>;
 // buffers concurrently on different stream executors.
 class CommandBufferCmd {
  public:
+
+  constexpr static BufferAllocation::Index SpecialAllocIndex = 9999999;
+
   CommandBufferCmd(CommandBufferCmdType cmd_type,
                    ExecutionStreamId execution_stream_id)
       : cmd_type_(cmd_type), execution_stream_id_(execution_stream_id) {}
@@ -212,6 +219,10 @@ class CommandBufferCmd {
     // An external state manager that gives efficient access to per-device state
     // to commands without a need to add expensive synchronization.
     StateManager& state;
+
+    // A flag indicating whether we record comands at command buffer thunk
+    // initialization time.
+    bool is_initialization = false;
   };
 
   // Create new commands in the command buffer using the given dependencies.
@@ -259,14 +270,20 @@ class CommandBufferCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) = 0;
 
-  // For some commands need to force update on Record even the input device
-  // pointers do not change, e.g. command that has state that can be changed by
-  // CPU code.
-  virtual bool force_update() { return false; }
+  // Returns true if command requires initialization (has to be recorded at
+  // command buffer thunk initialization).
+  //
+  // Today this is only true for collective commands that might use NCCL for
+  // communication. With NCCL, all participating ranks must record collective
+  // commands at the same time, if some ranks will skip command updates (because
+  // they got lucky and got the same buffer allocations), it will lead to
+  // deadlocks. By forcing the command update at thunk initialization time, we
+  // ensure that all ranks execute NCCL command update.
+  virtual bool requires_initialization() { return false; }
 
   // Returns all buffers used by the cmd. These will be used to track cmd
   // updates, thus they need to be consistent across calls to the function.
-  virtual BufferUseVector buffers() = 0;
+  virtual BufferUseVector buffers() const = 0;
 
   // Returns true if command implemented as a nested command buffer.
   virtual bool IsNestedCommandBuffer() const { return false; }
@@ -313,6 +330,10 @@ class CommandBufferCmdExecutor {
   CommandBufferCmdExecutor& operator=(CommandBufferCmdExecutor&&) = default;
 
   using RecordParams = CommandBufferCmd::RecordParams;
+
+  BufferAllocation::Index maximal_index() const {
+    return maximal_index_;
+  }
 
   // Synchronization mode defines how much concurrency is allowed between
   // commands in the sequence.
@@ -380,15 +401,18 @@ class CommandBufferCmdExecutor {
   const absl::flat_hash_set<BufferUse>& buffers() const;
 
   // Returns buffer allocations indices referenced by commands in this sequence.
-  const absl::flat_hash_set<BufferAllocation::Index>& allocs_indices() const;
+  absl::Span<const BufferAllocation::Index> allocs_indices() const;
 
   bool empty() const { return commands_.empty(); }
   size_t size() const { return commands_.size(); }
 
-  bool force_update() const {
-    return absl::c_any_of(commands_,
-                          [](const auto& cmd) { return cmd->force_update(); });
+  bool requires_initialization() const {
+    return absl::c_any_of(commands_, [](const auto& cmd) {
+      return cmd->requires_initialization();
+    });
   }
+
+  std::string ToString(int indent) const;
 
  private:
   // We use index into the `commands_` vector as a command id.
@@ -429,40 +453,11 @@ class CommandBufferCmdExecutor {
   // Buffers referenced by commands in this sequence.
   absl::flat_hash_set<BufferUse> buffers_;
 
-  // Buffer allocations indices referenced by commands in this sequence.
-  absl::flat_hash_set<BufferAllocation::Index> allocs_indices_;
-};
-
-//===----------------------------------------------------------------------===//
-// TracedCommandBuffer
-//===----------------------------------------------------------------------===//
-
-// A cache for traced command buffers that will re-trace on change in buffer
-// allocations that are relevant for `buffers` passed to constructor. We use a
-// very simple most-recently-used cache of traced command buffers as in practice
-// subsequent calls to XLA executable tend to reuse the same allocations.
-class TracedCommandBuffer : public CommandBufferCmd::State {
- public:
-  explicit TracedCommandBuffer(const CommandBufferCmd* trace_cmd,
-                               CommandBufferCmd::BufferUseVector buffers,
-                               int64_t capacity = 16);
-
-  // Returns cached command buffer traced using the same buffer addresses or
-  // traces and caches a new command buffer using user provided callback.
-  absl::StatusOr<se::CommandBuffer*> GetOrTraceCommandBuffer(
-      const BufferAllocations* buffer_allocation, se::StreamExecutor* executor,
-      se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace);
-
- private:
+  // Unique buffer allocations indices referenced by all commands in this
+  // sequence (sorted by the buffer allocation index).
   std::vector<BufferAllocation::Index> allocs_indices_;
 
-  struct Entry {
-    std::vector<se::DeviceMemoryBase> recorded_allocs;
-    std::unique_ptr<se::CommandBuffer> command_buffer;
-  };
-  const CommandBufferCmd* trace_cmd_;
-  int64_t capacity_;
-  std::vector<Entry> entries_;
+  BufferAllocation::Index maximal_index_ = 0;
 };
 
 //===----------------------------------------------------------------------===//
@@ -472,6 +467,8 @@ class TracedCommandBuffer : public CommandBufferCmd::State {
 // A base class for commands implemented as tracing of stream activities.
 class TracedCommandBufferCmd : public CommandBufferCmd {
  protected:
+  using TraceFunc = absl::FunctionRef<absl::Status(se::Stream*)>;
+
   explicit TracedCommandBufferCmd(CommandBufferCmdType cmd_type,
                                   ExecutionStreamId execution_stream_id);
 
@@ -482,7 +479,7 @@ class TracedCommandBufferCmd : public CommandBufferCmd {
       const Thunk::ExecuteParams& execute_params,
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer,
-      absl::FunctionRef<absl::Status(se::Stream*)> trace);
+      TraceFunc trace_func);
 };
 
 //===----------------------------------------------------------------------===//
@@ -501,7 +498,7 @@ class ComputationIdCmd : public CommandBufferCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
  private:
   BufferAllocation::Slice dest_;
@@ -522,12 +519,16 @@ class LaunchCmd : public CommandBufferCmd {
   absl::Status Initialize(const Thunk::InitializeParams& params,
                           StateManager& state) override;
 
+  std::string ToString() const override {
+    return kernel_name_;
+  }
+
   absl::StatusOr<const se::CommandBuffer::Command*> Record(
       const Thunk::ExecuteParams& execute_params,
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
  private:
   std::string kernel_name_;
@@ -562,7 +563,7 @@ class CustomKernelLaunchCmd : public CommandBufferCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
  private:
   std::vector<BufferAllocation::Slice> args_;
@@ -591,7 +592,7 @@ class MemcpyDeviceToDeviceCmd : public CommandBufferCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
  private:
   BufferAllocation::Slice dst_;
@@ -613,7 +614,7 @@ class MemzeroCmd : public CommandBufferCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
  private:
   BufferAllocation::Slice dst_;
@@ -633,7 +634,7 @@ class Memset32Cmd : public CommandBufferCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
  private:
   BufferAllocation::Slice dst_;
@@ -657,9 +658,9 @@ class CaseCmd : public CommandBufferCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  bool force_update() override;
+  bool requires_initialization() override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
  private:
   BufferAllocation::Slice index_;
@@ -685,9 +686,9 @@ class WhileCmd : public CommandBufferCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  bool force_update() override;
+  bool requires_initialization() override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
  private:
   BufferAllocation::Slice pred_;
@@ -715,7 +716,7 @@ class GemmCmd : public TracedCommandBufferCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
   bool IsNestedCommandBuffer() const final { return true; }
 
@@ -733,77 +734,38 @@ class GemmCmd : public TracedCommandBufferCmd {
 // CublasLtCmd
 //===----------------------------------------------------------------------===//
 
-class CublasLtCmd : public TracedCommandBufferCmd {
+class CublasLtCmd : public TracedCommandBufferCmd, public CublasLtMatmulThunk {
  public:
-  CublasLtCmd(ExecutionStreamId execution_stream_id, GemmConfig gemm_config,
-              se::gpu::BlasLt::Epilogue epilogue, int64_t algorithm_idx,
-              BufferAllocation::Slice a_buffer,
-              BufferAllocation::Slice b_buffer,
-              BufferAllocation::Slice c_buffer,
-              BufferAllocation::Slice d_buffer,
-              BufferAllocation::Slice bias_buffer /* may be null */,
-              BufferAllocation::Slice aux_buffer /* may be null */,
-              BufferAllocation::Slice a_scale_buffer /* may be null */,
-              BufferAllocation::Slice b_scale_buffer /* may be null */,
-              BufferAllocation::Slice c_scale_buffer /* may be null */,
-              BufferAllocation::Slice d_scale_buffer /* may be null */,
-              BufferAllocation::Slice d_amax_buffer /* may be null */,
-              BufferAllocation::Slice workspace_buffer);
+  CublasLtCmd(ExecutionStreamId execution_stream_id,
+              const CublasLtMatmulThunk& matmul_thunk);
 
   absl::Status Initialize(const Thunk::InitializeParams& params,
                           StateManager& state) override;
+
+  // This is needed to avoid compile errors about "shadowed" virtual function
+  absl::Status Initialize(const InitializeParams& params) override {
+    return CublasLtMatmulThunk::Initialize(params);
+  }
 
   absl::StatusOr<const se::CommandBuffer::Command*> Record(
       const Thunk::ExecuteParams& execute_params,
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
   bool IsNestedCommandBuffer() const final { return true; }
-
- private:
-  absl::StatusOr<se::gpu::BlasLt::MatmulPlan*> GetMatmulPlan(
-      const se::Stream* stream);
-
-  absl::StatusOr<se::gpu::BlasLt::MatmulAlgorithm> GetMatmulAlgorithm(
-      const se::Stream* stream, const se::gpu::BlasLt::MatmulPlan* plan,
-      int64_t max_workspace);
-
-  absl::Mutex matmul_plans_cache_mutex_;
-  absl::flat_hash_map<const se::Stream*, se::gpu::BlasLt::MatmulPlanPtr>
-      matmul_plans_cache_ ABSL_GUARDED_BY(matmul_plans_cache_mutex_);
-
-  absl::Mutex matmul_algorithm_cache_mutex_;
-  absl::flat_hash_map<const se::gpu::BlasLt::MatmulPlan*,
-                      se::gpu::BlasLt::MatmulAlgorithm>
-      matmul_algorithm_cache_ ABSL_GUARDED_BY(matmul_algorithm_cache_mutex_);
-
-  const GemmConfig gemm_config_;
-  const se::gpu::BlasLt::Epilogue epilogue_;
-  const int64_t algorithm_idx_;
-  const BufferAllocation::Slice a_buffer_;
-  const BufferAllocation::Slice b_buffer_;
-  const BufferAllocation::Slice c_buffer_;
-  const BufferAllocation::Slice d_buffer_;
-  const BufferAllocation::Slice bias_buffer_;
-  const BufferAllocation::Slice aux_buffer_;
-  const BufferAllocation::Slice a_scale_buffer_;
-  const BufferAllocation::Slice b_scale_buffer_;
-  const BufferAllocation::Slice c_scale_buffer_;
-  const BufferAllocation::Slice d_scale_buffer_;
-  const BufferAllocation::Slice d_amax_buffer_;
-  const BufferAllocation::Slice workspace_buffer_;
 };
 
 //===----------------------------------------------------------------------===//
 // ConvolutionCmd
 //===----------------------------------------------------------------------===//
 
-class ConvolutionCmd : public TracedCommandBufferCmd, public ConvolutionThunk {
+class ConvolutionCmd : public TracedCommandBufferCmd,
+                    public ConvolutionThunk {
  public:
-  ConvolutionCmd(ExecutionStreamId execution_stream_id,
-                 const ConvolutionThunk& conv_thunk);
+  ConvolutionCmd(ExecutionStreamId execution_stream_id, 
+              const ConvolutionThunk& conv_thunk);
 
   absl::Status Initialize(const Thunk::InitializeParams& params,
                           StateManager& state) override;
@@ -813,7 +775,7 @@ class ConvolutionCmd : public TracedCommandBufferCmd, public ConvolutionThunk {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
   bool IsNestedCommandBuffer() const final { return true; }
 };
@@ -836,7 +798,7 @@ class CuDnnCmd : public TracedCommandBufferCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
   bool IsNestedCommandBuffer() const final { return true; }
 
@@ -890,7 +852,7 @@ class CustomCallCmd : public CommandBufferCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
   bool IsNestedCommandBuffer() const final { return true; }
 
  private:
@@ -926,7 +888,7 @@ class CustomCallCmd : public CommandBufferCmd {
 // CollectiveCmd
 //===----------------------------------------------------------------------===//
 
-class CollectiveCmd : public CommandBufferCmd {
+class CollectiveCmd : public TracedCommandBufferCmd {
  public:
   CollectiveCmd(CommandBufferCmdType cmd_type,
                 ExecutionStreamId execution_stream_id,
@@ -937,15 +899,9 @@ class CollectiveCmd : public CommandBufferCmd {
       const Thunk::PrepareParams& params,
       Thunk::ResourceRequestsInterface& resource_requests) final;
 
-  bool force_update() override { return true; }
+  bool requires_initialization() override { return false; }
 
   bool IsNestedCommandBuffer() const final { return true; }
-
-  absl::StatusOr<const se::CommandBuffer::Command*> RecordTracedCommand(
-      const Thunk::ExecuteParams& execute_params,
-      const RecordParams& record_params, RecordAction record_action,
-      se::CommandBuffer* command_buffer,
-      absl::FunctionRef<absl::Status(se::Stream*)> trace);
 
   virtual AsyncStreamKind GetAsyncStreamKind() = 0;
 
@@ -954,7 +910,8 @@ class CollectiveCmd : public CommandBufferCmd {
   }
 
   CollectiveStreamId nccl_stream_id() {
-    return xla::gpu::GetCollectiveStreamId(IsAsync(), GetAsyncStreamKind());
+    return CollectiveStreamId(stream_id_);
+    // return xla::gpu::GetCollectiveStreamId(IsAsync(), GetAsyncStreamKind());
   }
 
   ExecutionStreamId async_from_stream_id() const {
@@ -964,9 +921,9 @@ class CollectiveCmd : public CommandBufferCmd {
  protected:
   const CollectiveConfig& config() const { return config_; }
 
- private:
   ExecutionStreamId async_from_stream_id_;
   CollectiveConfig config_;
+  int stream_id_ = 0; // this can be used to create different comms
 };
 
 //===----------------------------------------------------------------------===//
@@ -985,7 +942,7 @@ class AllReduceCmd : public CollectiveCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
   AsyncStreamKind GetAsyncStreamKind() override {
     return AsyncStreamKind::kCollective;
@@ -1012,7 +969,7 @@ class ReduceScatterCmd : public CollectiveCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
   AsyncStreamKind GetAsyncStreamKind() override {
     return AsyncStreamKind::kCollective;
@@ -1039,7 +996,7 @@ class AllToAllCmd : public CollectiveCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
   AsyncStreamKind GetAsyncStreamKind() override {
     return AsyncStreamKind::kCollective;
@@ -1065,7 +1022,7 @@ class AllGatherCmd : public CollectiveCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
   AsyncStreamKind GetAsyncStreamKind() override {
     return AsyncStreamKind::kCollective;
@@ -1091,7 +1048,7 @@ class CollectiveBroadcastCmd : public CollectiveCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
  private:
   std::vector<CollectiveThunk::Buffer> buffers_;
@@ -1113,7 +1070,7 @@ class CollectivePermuteCmd : public CollectiveCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
   AsyncStreamKind GetAsyncStreamKind() override {
     return AsyncStreamKind::kCollective;
   }
@@ -1152,9 +1109,9 @@ class DynamicSliceFusionCmd : public CommandBufferCmd {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() override;
+  BufferUseVector buffers() const override;
 
-  bool force_update() override;
+  bool requires_initialization() override;
 
   bool IsNestedCommandBuffer() const final { return true; }
 

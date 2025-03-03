@@ -122,12 +122,14 @@ static bool IsAsyncStartCommand(const HloInstruction* hlo,
       }
     }
     if (hlo->async_wrapped_opcode() == HloOpcode::kReduceScatter ||
-        hlo->async_wrapped_opcode() == HloOpcode::kAllToAll) {
+        hlo->async_wrapped_opcode() == HloOpcode::kAllToAll ||
+        hlo->async_wrapped_opcode() == HloOpcode::kCollectivePermute) {
       return config.enabled_commands.contains(DebugOptions::COLLECTIVES);
     }
   }
 
-  if (HloPredicateIsOp<HloOpcode::kReduceScatter, HloOpcode::kAllToAll>(hlo)) {
+  if (HloPredicateIsOp<HloOpcode::kReduceScatter, HloOpcode::kAllToAll,
+                        HloOpcode::kCollectivePermute >(hlo)) {
     return config.enabled_commands.contains(DebugOptions::COLLECTIVES);
   }
 
@@ -159,7 +161,8 @@ static bool IsAsyncDoneCommand(const HloInstruction* hlo,
       }
     }
     if (hlo->async_wrapped_opcode() == HloOpcode::kReduceScatter ||
-        hlo->async_wrapped_opcode() == HloOpcode::kAllToAll) {
+        hlo->async_wrapped_opcode() == HloOpcode::kAllToAll ||
+        hlo->async_wrapped_opcode() == HloOpcode::kCollectivePermute) {
       return config.enabled_commands.contains(DebugOptions::COLLECTIVES);
     }
   }
@@ -247,6 +250,11 @@ static bool IsCommand(const HloCustomCallInstruction* hlo,
               << " into command buffer.";
       return true;
     }
+  }
+
+  if (config.enabled_commands.contains(DebugOptions::CUDNN) &&
+      IsCustomCallToDnnConvolution(*hlo)) {
+    return true;
   }
 
   if (!config.enabled_commands.contains(DebugOptions::CUSTOM_CALL)) {

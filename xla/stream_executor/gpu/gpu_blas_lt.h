@@ -168,11 +168,11 @@ struct BlasLt {
         DeviceMemoryBase aux,   // may be null
         DeviceMemoryBase a_scale, DeviceMemoryBase b_scale,
         DeviceMemoryBase c_scale, DeviceMemoryBase d_scale,
-        DeviceMemoryBase d_amax, const MatmulAlgorithm& algorithm,
+        DeviceMemoryBase d_amax, 
         ScratchAllocator& scratch_allocator,
         blas::ProfileResult* profile_result = nullptr) const {
       return ExecuteOnStream(
-          stream, algorithm,
+          stream, 
           MemoryArgs{a, b, c, d, bias, aux, a_scale, b_scale, c_scale, d_scale,
                      d_amax, DeviceMemoryBase{}, &scratch_allocator},
           profile_result);
@@ -186,11 +186,10 @@ struct BlasLt {
         DeviceMemoryBase aux,   // may be null
         DeviceMemoryBase a_scale, DeviceMemoryBase b_scale,
         DeviceMemoryBase c_scale, DeviceMemoryBase d_scale,
-        DeviceMemoryBase d_amax, const MatmulAlgorithm& algorithm,
+        DeviceMemoryBase d_amax, 
         DeviceMemoryBase workspace,
         blas::ProfileResult* profile_result = nullptr) const {
-      return ExecuteOnStream(
-          stream, algorithm,
+      return ExecuteOnStream(stream, 
           MemoryArgs{a, b, c, d, bias, aux, a_scale, b_scale, c_scale, d_scale,
                      d_amax, workspace, nullptr},
           profile_result);
@@ -198,7 +197,7 @@ struct BlasLt {
 
     // The most general form: to be implemented by derived clases.
     virtual absl::Status ExecuteOnStream(
-        Stream* stream, const MatmulAlgorithm& algorithm,
+        Stream* stream, 
         const MemoryArgs& args, blas::ProfileResult* profile_result) const = 0;
 
     // Returns a list of supported algorithms for DoMatmul. The algorithms are
@@ -207,6 +206,12 @@ struct BlasLt {
     virtual absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
         const Stream* stream, size_t max_algorithm_count = 128,
         size_t max_workspace_size = 1ll << 32) const = 0;
+
+    // Algorithm must to be set before calling ExecuteOnStream function(s).
+    // Usually, we call ExecuteOnStream with the same algorithm ID, hence using a 
+    // separate function here enables BlasLt implementations to do additional 
+    // optimizations (like preloading matmul kernels) once the algorithm is set.
+    virtual absl::Status SetAlgorithm(const MatmulAlgorithm& algorithm) const = 0;
 
     virtual ~MatmulPlan() {}
   };  // class MatmulPlan

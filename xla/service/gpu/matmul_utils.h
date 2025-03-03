@@ -118,6 +118,8 @@ struct GemmConfig : public se::gpu::GemmConfig {
       std::optional<int64_t> algorithm, int64_t compute_precision, bool grad_x,
       bool grad_y, const se::GpuComputeCapability& gpu_version);
 
+  std::string ToString() const;
+
   struct DescriptorsTuple {
     se::gpu::MatrixDescriptor lhs;
     se::gpu::MatrixDescriptor rhs;
