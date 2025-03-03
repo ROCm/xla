@@ -78,7 +78,7 @@ absl::Status SequentialThunk::ExecuteOnStream(const ExecuteParams& params) {
   std::optional<tsl::profiler::ScopedAnnotation> seq_annotation =
       GetKernelAnnotation(profile_annotation());
 
-#define TIMING_DEBUG 1
+#define TIMING_DEBUG 0
 #if TIMING_DEBUG
   VLOG(0) << "Executing thunks: #" << thunks_.size();
   VLOG(0) << "=============================================================";
