@@ -188,6 +188,8 @@ class GemmAutotuner {
         auto algorithms,
         plan->GetAlgorithms(/*max_algorithm_count*/ 128,
                             /*max_workspace_size*/ workspace_buffer.size()));
+    
+    LOG(INFO) << "Number of algorithms found in Autotuner: " << algorithms.size();
 
     auto tuned_func = [&](const BlasLt::MatmulAlgorithm& algorithm)
         -> absl::StatusOr<se::blas::ProfileResult> {
