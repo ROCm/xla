@@ -401,7 +401,7 @@ TEST_F(GpuKernelTilingTest, ReductionInputTooLarge) {
   absl::Status status = CompileToExecutable(std::move(hlo_module)).status();
   EXPECT_THAT(status.message(),
               ::testing::ContainsRegex(
-                  "Kernel '.*' launch needs more blocks [(]4294967296[)] than "
+                  "Kernel '.*' launch needs more blocks [(]2147483648[)] than "
                   "allowed by hardware [(]2147483647[)]"));
 }
 
