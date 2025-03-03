@@ -232,6 +232,9 @@ absl::Status RedzoneBuffers::CreateInputs(const HloInstruction& instruction,
                                           const AutotuneConfig& config,
                                           const DebugOptions& debug_options,
                                           int64_t& rng_state) {
+  LOG(INFO) << "RedzoneBuffers::CreateInputs()";
+  LOG(INFO) << "#input operands: ";
+  LOG(INFO) << instruction.operands().size();
   for (const auto* operand : instruction.operands()) {
     TF_ASSIGN_OR_RETURN(
         se::DeviceMemoryBase buf,

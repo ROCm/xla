@@ -147,6 +147,7 @@ class GemmAutotuner {
 
   absl::StatusOr<AutotuneResult> TuneGpuBlasLt(const HloInstruction* gemm,
                                                const GemmConfig& gemm_config) {
+    LOG(INFO) << "Enter TuneGpuBlasLt()";
     auto workspace_buffer =
         rz_buffers_.output_buffers().at(gemm->shape().tuple_shapes_size() - 1);
 
@@ -170,9 +171,12 @@ class GemmAutotuner {
     se::DeviceMemoryBase a_scale_buffer, b_scale_buffer, c_scale_buffer,
         d_scale_buffer, d_amax_buffer, bias_buffer, aux_buffer;
 
+    LOG(INFO) << "has_vector_bias: " << has_vector_bias ? "true" : "false";
     if (has_vector_bias) {
       bias_buffer = rz_buffers_.input_buffers().at(has_matrix_bias ? 3 : 2);
     }
+
+    LOG(INFO) << "has_aux_output: " << has_aux_output ? "true" : "false";
     if (has_aux_output) {
       aux_buffer = rz_buffers_.output_buffers().at(1);
     }
@@ -202,10 +206,11 @@ class GemmAutotuner {
           workspace_buffer, &profile_result));
       return std::move(profile_result);
     };
-
-    return GetBestAlgorithm<BlasLt::MatmulAlgorithm>(
+    auto autotune_results = GetBestAlgorithm<BlasLt::MatmulAlgorithm>(
         gemm, algorithms, gemm_config.beta, /*return_algo_index*/ true,
         tuned_func);
+    LOG(INFO) << "Leave TuneGpuBlasLt()";
+    return autotune_results;
   }
 
   absl::StatusOr<AutotuneResult> TuneGpuBlas(const HloInstruction* gemm,

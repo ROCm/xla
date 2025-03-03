@@ -431,18 +431,44 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
 
 #if TF_ROCM_VERSION >= 60000
     if (a_scale != nullptr) {
+      LOG(INFO) << "a_scale != nullptr";
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
                                  a_scale.opaque()));
+    } else {
+      LOG(INFO) << "a_scale == nullptr";
     }
     if (b_scale != nullptr) {
+      LOG(INFO) << "b_scale != nullptr";
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
                                  b_scale.opaque()));
+    } else {
+      LOG(INFO) << "b_scale == nullptr";
     }
-    if (c_scale != nullptr || d_scale != nullptr) {
-      return absl::InternalError(
-          "hipblaslt does not support c_scale or d_scale.");
+    if (c_scale != nullptr) {
+      LOG(INFO) << "c_scale != nullptr";
+      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                 HIPBLASLT_MATMUL_DESC_C_SCALE_POINTER,
+                                 c_scale.opaque()));
+    } else {
+      LOG(INFO) << "c_scale == nullptr";
+    }
+    if (d_scale != nullptr) {
+      LOG(INFO) << "d_scalle != nullptr";
+      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                 HIPBLASLT_MATMUL_DESC_AMAX_D_POINTER,
+                                 d_scale.opaque()));
+    } else {
+      LOG(INFO) << "d_scale == nullptr";
+    }
+    if (d_amax != nullptr) {
+      LOG(INFO) << "d_amax != nullptr";
+      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                 HIPBLASLT_MATMUL_DESC_AMAX_D_POINTER,
+                                 d_amax.opaque()));
+    } else {
+      LOG(INFO) << "d_amax == nullptr";
     }
 #else
     if ((a_scale != nullptr) || (b_scale != nullptr) || (c_scale != nullptr) ||
@@ -450,11 +476,6 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
       return absl::InternalError("hipblaslt does not support scale");
     }
 #endif
-
-    if (d_amax != nullptr) {
-      return absl::InternalError("hipblaslt does not support amax");
-    }
-
     if (aux != nullptr) {
       return absl::InternalError(
           "hipblaslt does not support auxiliary inputs / outputs");
