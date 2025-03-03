@@ -181,6 +181,9 @@ class GemmAutotuner {
       aux_buffer = rz_buffers_.output_buffers().at(1);
     }
 
+    a_scale_buffer = rz_buffers_.input_buffers().at(2);
+    b_scale_buffer = rz_buffers_.input_buffers().at(3);
+
     TF_ASSIGN_OR_RETURN(auto plan,
                         BlasLt::GetMatmulPlan(stream_, gemm_config, epilogue));
 
