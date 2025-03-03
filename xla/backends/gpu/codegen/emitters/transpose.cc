@@ -75,9 +75,9 @@ using mlir::ValueRange;
 using mlir::func::FuncOp;
 using mlir::func::ReturnOp;
 
-constexpr int kNumRows = 4;
-constexpr int kNumThreadsPerBlock = 128;
-constexpr int kMaxVectorizedBytes = 4;
+constexpr int kNumRows = 8;
+constexpr int kNumThreadsPerBlock = 256;
+constexpr int kMaxVectorizedBytes = 8;
 
 }  // namespace
 
