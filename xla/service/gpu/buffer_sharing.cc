@@ -222,6 +222,7 @@ std::optional<bool> CanShareBufferHint(
     const HloInstruction* user, const HloInstruction* operand,
     const ShapeIndex& user_index,
     const se::DeviceDescription& device_description) {
+
   switch (user->opcode()) {
     case HloOpcode::kAllReduce:
     case HloOpcode::kCollectiveBroadcast:

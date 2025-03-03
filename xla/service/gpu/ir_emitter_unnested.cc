@@ -2692,6 +2692,7 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
                ->CanExpandIntoSingleInstruction()) {
         return EmitCollectiveGroupStartThunk(instr);
       }
+
       const HloInstruction* wrapped = instr->async_wrapped_instruction();
       switch (wrapped->opcode()) {
         case HloOpcode::kReduceScatter: {

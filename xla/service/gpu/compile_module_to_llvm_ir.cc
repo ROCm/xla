@@ -287,18 +287,75 @@ absl::StatusOr<CompileModuleResults> CompileModuleToLlvmIr(
     const HloDataflowAnalysis::CanShareBuffer& can_share_buffer_function,
     const BufferValue::SizeFunction& buffer_size_bytes_function,
     bool split_constants_module) {
+<<<<<<< HEAD
   const bool use_cache =
       UseCache(hlo_module->config().debug_options(), split_constants_module);
+=======
+  CompileModuleResults results;
+  results.llvm_module =
+      std::make_unique<llvm::Module>(hlo_module->name(), *llvm_context);
+  results.llvm_module->setTargetTriple(target_triple);
+  results.llvm_module->setDataLayout(data_layout);
+
+  const auto& debug_opts = hlo_module->config().debug_options();
+
+  absl::string_view cache_file_path =
+      debug_opts.xla_gpu_kernel_cache_file();
+  const bool use_cache =
+      !cache_file_path.empty() && split_constants_module &&
+      debug_opts.xla_gpu_enable_llvm_module_compilation_parallelism();
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 
   CompileModuleResults results =
       InitializeResults(hlo_module, llvm_context, target_triple, data_layout,
                         split_constants_module);
 
+<<<<<<< HEAD
   TF_ASSIGN_OR_RETURN(results.buffer_assignment,
                       RunBufferAssignment(hlo_module, can_share_buffer_function,
                                           buffer_size_bytes_function));
   TF_ASSIGN_OR_RETURN(results.output_info,
                       GetOutputInfo(*hlo_module, *results.buffer_assignment));
+=======
+  {
+    tsl::profiler::ScopedAnnotation annotation([&] {
+      return absl::StrFormat("XlaBufferAssignment:#module=%s,program_id=%d#",
+                             hlo_module->name(), hlo_module->unique_id());
+    });
+
+    using HloOrderingPtr = std::unique_ptr<HloOrdering>;
+    auto hlo_ordering = 
+      debug_opts.xla_gpu_graph_enable_concurrent_region() 
+        ? static_cast<HloOrderingPtr>(
+                     std::make_unique<DependencyHloOrdering>(hlo_module))
+        : static_cast<HloOrderingPtr>(
+              std::make_unique<SequentialHloOrdering>(hlo_module->schedule()));
+
+    TF_ASSIGN_OR_RETURN(
+        results.buffer_assignment,
+        BufferAssigner::Run(
+            hlo_module, std::move(hlo_ordering),
+            buffer_size_bytes_function,
+            /*color_alignment=*/
+            [](LogicalBuffer::Color) { return kXlaAllocatedBufferAlignBytes; },
+            /*allocate_buffers_for_constants=*/true,
+            /*colorer=*/
+            debug_opts.xla_gpu_enable_nccl_user_buffers()
+                ? CollectiveColorer()
+                : BufferAssigner::DefaultColorer(),
+            /*must_not_live_out=*/{},
+            /*can_share_buffer*/ can_share_buffer_function,
+            /*preset_assignments*/ {},
+            /*private_stack*/ {}, /*heap_buffer_interval_compare*/ nullptr,
+            /*isolation_options*/ std::nullopt,
+            debug_opts.xla_gpu_temp_buffer_use_separate_color()
+                ? std::optional<BufferValue::Color>(kTempBufferMemorySpaceColor)
+                : std::nullopt));
+  }
+  VLOG(1) << "Buffer Assignment Stats for " << hlo_module->name() << "\n"
+          << results.buffer_assignment->StatsString(
+                 /*report_total_fragmentation=*/true);
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 
   // capture the output shape after buffer assignment because it may change
   // during buffer assignment (nevertheless the const hlo_module)

@@ -54,8 +54,12 @@ limitations under the License.
 #include "xla/stream_executor/event.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
+<<<<<<< HEAD:xla/backends/gpu/runtime/collective_thunk.cc
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
+=======
+#include "xla/stream_executor/gpu/gpu_stream.h"
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update):xla/backends/gpu/runtime/nccl_collective_thunk.cc
 #include "xla/util.h"
 
 namespace xla::gpu {
@@ -229,8 +233,13 @@ CollectiveConfig GetCollectiveConfig(
 CollectiveThunk::CollectiveThunk(Kind kind, ThunkInfo thunk_info, bool is_sync,
                                  AsyncStreamKind stream_kind)
     : Thunk(kind, thunk_info),
+<<<<<<< HEAD:xla/backends/gpu/runtime/collective_thunk.cc
       stream_kind_(stream_kind),
       async_events_(is_sync ? nullptr : new AsyncEvents()) {}
+=======
+      async_events_(is_sync ? nullptr : new AsyncEvents()) {
+}
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update):xla/backends/gpu/runtime/nccl_collective_thunk.cc
 
 absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,

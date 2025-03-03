@@ -224,6 +224,7 @@ build:asan --copt -g
 build:asan --copt -fno-omit-frame-pointer
 build:asan --linkopt -fsanitize=address
 
+<<<<<<< HEAD
 build:rocm_base --copt=-Wno-gnu-offsetof-extensions
 build:rocm_base --crosstool_top=@local_config_rocm//crosstool:toolchain
 build:rocm_base --define=using_rocm_hipcc=true
@@ -231,6 +232,17 @@ build:rocm_base --define=tensorflow_mkldnn_contraction_kernel=0
 build:rocm_base --define=xnn_enable_avxvnniint8=false
 build:rocm_base --define=xnn_enable_avx512fp16=false
 build:rocm_base --repo_env TF_NEED_ROCM=1
+=======
+build:rocm --crosstool_top=@local_config_rocm//crosstool:toolchain
+build:rocm --define=using_rocm_hipcc=true
+build:rocm --define=tensorflow_mkldnn_contraction_kernel=0
+build:rocm --define=xnn_enable_avxvnniint8=false
+build:rocm --define=xnn_enable_avx512fp16=false
+build:rocm --repo_env TF_NEED_ROCM=1
+# dealing with: defining a type within 'offsetof' is a Clang extension
+# n &= ~(upb_alignof(upb_arena) - 1);
+build:rocm --copt=-Wno-gnu-offsetof-extensions
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 
 # Depraceted, will be removed once all build/test scripts are migrated from --config=rocm.
 build:rocm --config=rocm_base 

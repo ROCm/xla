@@ -114,18 +114,18 @@ KernelArgsPacking CreateDefaultArgsPacking() {
 }
 
 // Some of the tests rely on CUDA 12.3+ features.
+<<<<<<< HEAD
 bool IsAtLeastCuda12300(const se::StreamExecutor* stream_executor) {
+=======
+std::optional< bool > IsAtLeastCuda12300(const se::StreamExecutor* stream_executor) {
+
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   const auto& device_description = stream_executor->GetDeviceDescription();
   const auto* cuda_cc = std::get_if<se::CudaComputeCapability>(
       &device_description.gpu_compute_capability());
-  if (cuda_cc != nullptr) {
-    if (device_description.driver_version() >=
-        stream_executor::SemanticVersion(12, 3, 0)) {
-      return true;
-    }
-  }
-
-  return false;
+  if (cuda_cc == nullptr) return std::nullopt;
+  return (device_description.driver_version() >=
+        stream_executor::SemanticVersion(12, 3, 0));
 }
 
 // Give a short aliases to execution threads.
@@ -297,6 +297,11 @@ TEST(CommandBufferThunkTest, Memset32Cmd) {
 TEST(CommandBufferThunkTest, Memset32CmdCommandBuffersDisabledDuringProfiling) {
   se::StreamExecutor* stream_executor = GpuExecutor();
 
+<<<<<<< HEAD
+=======
+  GTEST_SKIP() << "This workaround does not make sense on ROCM !";
+
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   TF_ASSERT_OK_AND_ASSIGN(auto stream, stream_executor->CreateStream());
 
   int64_t length = 4;
@@ -348,6 +353,7 @@ TEST(CommandBufferThunkTest, Memset32CmdCommandBuffersDisabledDuringProfiling) {
   // Copy `a` data back to host.
   std::vector<int32_t> dst(4, 0);
   TF_ASSERT_OK(stream->Memcpy(dst.data(), a, byte_length));
+  TF_ASSERT_OK(stream->BlockHostUntilDone());
 
   ASSERT_EQ(dst, std::vector<int32_t>(4, 84));
 }
@@ -406,6 +412,7 @@ TEST(CommandBufferThunkTest, Memset32CmdCommandBuffersEnabledDuringProfiling) {
   // Copy `a` data back to host.
   std::vector<int32_t> dst(4, 0);
   TF_ASSERT_OK(stream->Memcpy(dst.data(), a, byte_length));
+  TF_ASSERT_OK(stream->BlockHostUntilDone());
 
   ASSERT_EQ(dst, std::vector<int32_t>(4, 12));
 }
@@ -652,7 +659,11 @@ TEST(CommandBufferThunkTest, CustomAddKernelLaunchCmd) {
 TEST(CommandBufferThunkTest, GemmCmd) {
   se::StreamExecutor* stream_executor = GpuExecutor();
 
+<<<<<<< HEAD
   if (!IsAtLeastCuda12300(stream_executor)) {
+=======
+  if (auto s = IsAtLeastCuda12300(stream_executor); s.has_value() && !*s) {
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
     GTEST_SKIP() << "CUDA graph tracing is not supported";
   }
 
@@ -773,7 +784,11 @@ TEST(CommandBufferThunkTest, GemmCmd) {
 TEST(CommandBufferThunkTest, DISABLED_DynamicSliceFusionCmd) {
   se::StreamExecutor* stream_executor = GpuExecutor();
 
+<<<<<<< HEAD
   if (!IsAtLeastCuda12300(stream_executor)) {
+=======
+  if (auto s = IsAtLeastCuda12300(stream_executor); s.has_value() && !*s) {
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
     GTEST_SKIP() << "CUDA graph tracing is not supported";
   }
 
@@ -935,7 +950,11 @@ TEST(CommandBufferThunkTest, DISABLED_DynamicSliceFusionCmd) {
 TEST(CommandBufferThunkTest, CublasLtCmd) {
   se::StreamExecutor* stream_executor = GpuExecutor();
 
+<<<<<<< HEAD
   if (!IsAtLeastCuda12300(stream_executor)) {
+=======
+  if (auto s = IsAtLeastCuda12300(stream_executor); s.has_value() && !*s) {
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
     GTEST_SKIP() << "CUDA graph tracing is not supported";
   }
 
@@ -982,11 +1001,20 @@ TEST(CommandBufferThunkTest, CublasLtCmd) {
   // Prepare commands sequence for constructing command buffer.
   CommandBufferCmdSequence commands;
   commands.Emplace<CublasLtCmd>(
+<<<<<<< HEAD
       s0, config.value(), se::gpu::BlasLt::Epilogue::kDefault, 0, slice_a,
       slice_b, slice_c, slice_d, BufferAllocation::Slice(),
       BufferAllocation::Slice(), BufferAllocation::Slice(),
       BufferAllocation::Slice(), BufferAllocation::Slice(),
       BufferAllocation::Slice(), BufferAllocation::Slice(), slice_workspace);
+=======
+      s0, CublasLtMatmulThunk{nullptr, 
+      config.value(), se::gpu::BlasLt::Epilogue::kDefault, 0, slice_a,
+      slice_b, slice_c, slice_d, BufferAllocation::Slice(),
+      BufferAllocation::Slice(), BufferAllocation::Slice(),
+      BufferAllocation::Slice(), BufferAllocation::Slice(),
+      BufferAllocation::Slice(), BufferAllocation::Slice(), slice_workspace});
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   TF_ASSERT_OK_AND_ASSIGN(
       CommandBufferCmdExecutor executor,
       CommandBufferCmdExecutor::Create(std::move(commands), serialize));
@@ -1207,7 +1235,11 @@ TEST(CommandBufferThunkTest, MultipleLaunchCmd) {
 TEST(CommandBufferThunkTest, CaseCmd) {
   se::StreamExecutor* stream_executor = GpuExecutor();
 
+<<<<<<< HEAD
   if (!IsAtLeastCuda12300(stream_executor)) {
+=======
+  if (auto s = IsAtLeastCuda12300(stream_executor); !s.has_value() || !*s) {
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
     GTEST_SKIP() << "CUDA graph conditionals are not supported";
   }
 
@@ -1310,7 +1342,11 @@ TEST(CommandBufferThunkTest, CaseCmd) {
 TEST(CommandBufferThunkTest, WhileCmd) {
   se::StreamExecutor* stream_executor = GpuExecutor();
 
+<<<<<<< HEAD
   if (!IsAtLeastCuda12300(stream_executor)) {
+=======
+  if (auto s = IsAtLeastCuda12300(stream_executor); !s.has_value() || !*s) {
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
     GTEST_SKIP() << "CUDA graph conditionals are not supported";
   }
 
@@ -1524,6 +1560,7 @@ ENTRY main.49 {
   TF_ASSERT_OK_AND_ASSIGN(module,
                           ParseAndReturnVerifiedModule(module_str, config));
   EXPECT_TRUE(RunAndCompare(std::move(module), ErrorSpec{1e-3, 2e-3}));
+<<<<<<< HEAD
 }
 
 TEST(CommandBufferThunkTest, ToStringPrintsNestedThunks) {
@@ -1542,6 +1579,27 @@ TEST(CommandBufferThunkTest, ToStringPrintsNestedThunks) {
       std::make_unique<SequentialThunk>(Thunk::ThunkInfo(), std::move(thunks)));
   EXPECT_TRUE(
       absl::StrContains(thunk.ToString(/*indent=*/1), "    kMemset32BitValue"));
+=======
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
+}
+
+TEST(CommandBufferThunkTest, ToStringPrintsNestedThunks) {
+  BufferAllocation alloc_a(/*index=*/0, /*size=*/4, /*color=*/0);
+  BufferAllocation::Slice slice_a(&alloc_a, /*offset=*/0, /*size=*/4);
+  CommandBufferCmdSequence commands;
+  commands.Emplace<Memset32Cmd>(s0, slice_a, int32_t{42});
+  TF_ASSERT_OK_AND_ASSIGN(
+      CommandBufferCmdExecutor executor,
+      CommandBufferCmdExecutor::Create(std::move(commands), serialize));
+  std::vector<std::unique_ptr<Thunk>> thunks;
+  thunks.emplace_back(
+      std::make_unique<Memset32BitValueThunk>(Thunk::ThunkInfo(), 42, slice_a));
+  CommandBufferThunk thunk(
+      std::move(executor), Thunk::ThunkInfo(),
+      std::make_unique<SequentialThunk>(Thunk::ThunkInfo(), std::move(thunks)));
+
+  EXPECT_TRUE(
+      absl::StrContains(thunk.ToString(/*indent=*/1), "Memset32Cmd"));
 }
 
 }  // namespace xla::gpu

@@ -148,7 +148,11 @@ TEST(GpuCommandBufferTest, TraceSingleKernel) {
   Platform* platform = GpuPlatform();
   StreamExecutor* executor = platform->ExecutorForDevice(0).value();
 
+<<<<<<< HEAD
   if (!IsAtLeastCuda12300(executor)) {
+=======
+  if (platform->id() == cuda::kCudaPlatformId && !IsAtLeastCuda12300(executor)) {
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
     GTEST_SKIP() << "Command buffer tracing is not supported";
   }
 

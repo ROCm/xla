@@ -123,12 +123,22 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_cpu_enable_fast_min_max(true);
 
   opts.set_xla_gpu_enable_cublaslt(false);
+<<<<<<< HEAD
 
   opts.add_xla_gpu_enable_command_buffer(DebugOptions::FUSION);
   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUBLAS);
   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUBLASLT);
   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUSTOM_CALL);
   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUDNN);
+=======
+#endif
+// Command buffers are disabled by default !
+//   opts.add_xla_gpu_enable_command_buffer(DebugOptions::FUSION);
+//   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUBLAS);
+//   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUSTOM_CALL);
+//   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUDNN);
+
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   opts.set_xla_gpu_graph_min_graph_size(5);
   opts.set_xla_gpu_graph_enable_concurrent_region(false);
   opts.set_xla_cmd_buffer_trace_cache_size(16);
@@ -710,7 +720,7 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
 
   // Custom parser for `xla_gpu_enable_while_loop_unrolling` flag.
   auto setter_for_xla_gpu_enable_while_loop_unrolling =
-      [&debug_options](absl::string_view input) {
+      [debug_options](absl::string_view input) {
         DebugOptions::WhileLoopUnrolling unroll_strategy;
         bool parsed = DebugOptions::WhileLoopUnrolling_Parse(
             absl::AsciiStrToUpper(input), &unroll_strategy);
@@ -1481,7 +1491,7 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_collectives_use_persistent_cliques(),
       "Use persistent per-process XLA:GPU collectives cliques"));
   flag_list->push_back(tsl::Flag(
-      "xla_gpu_graph_level", setter_for_xla_gpu_graph_level, 1,
+      "xla_gpu_graph_level", setter_for_xla_gpu_graph_level, 0,
       "The legacy flag for setting GPU graph level. Use "
       "xla_gpu_enable_command_buffer in new use cases. 0 = off; 1 = capture "
       "fusions and memcpys; 2 = capture gemms; 3 = capture convolutions."));

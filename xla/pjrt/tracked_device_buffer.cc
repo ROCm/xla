@@ -145,6 +145,7 @@ void BufferSequencingEvent::ExecuteOrAddToFutureTasks(
     task();
   };
 
+<<<<<<< HEAD
   // Execute the `task` when definition event becomes available. If it's already
   // available, the task will be executed immediately.
   defined_status_.AndThen(
@@ -219,6 +220,66 @@ tsl::RCReference<RawSEDeviceMemory> RawSEDeviceMemory::CreateForeign(
     absl::AnyInvocable<void() &&> on_delete_callback) {
   return tsl::MakeRef<ForeignRawSEDeviceMemory>(value,
                                                 std::move(on_delete_callback));
+=======
+void BufferSequencingEvent::ExecuteFutureTasks() {
+  absl::flat_hash_map<std::string, std::function<void()>>
+      on_ready_tasks_callback;
+  {
+    absl::MutexLock lock(&mu_);
+    on_ready_tasks_callback = std::move(on_ready_tasks_callback_);
+    // Release the lock to avoid deadlock, in the case where the
+    // thread_pool_->Schedule() executes call_all_task_callbacks inline.
+    // This is rare but could happen. The callbacks could potentially try to
+    // acquire the mutex of this BufferSequencingEvent.
+  }
+  auto call_all_task_callbacks = [on_ready_tasks_callback =
+                                      std::move(on_ready_tasks_callback)]() {
+    for (auto& [task_name, task_callback] : on_ready_tasks_callback) {
+      task_callback();
+    }
+  };
+  thread_pool_->Schedule(std::move(call_all_task_callbacks));
+}
+
+/* static */ std::shared_ptr<TrackedDeviceBuffer>
+TrackedDeviceBuffer::FromScopedShapedBuffer(
+    ScopedShapedBuffer* shaped_buffer,
+    absl::Span<const std::shared_ptr<BufferSequencingEvent>> definition_events,
+    PjRtDevice* device) {
+  ShapeTree<se::DeviceMemoryBase>::iterator iterator =
+      shaped_buffer->buffers().begin();
+  std::vector<se::DeviceMemoryBase> buffers;
+  buffers.reserve(1);
+
+  auto *allocator = shaped_buffer->memory_allocator();
+  size_t num_cached = 0, total = 0;
+  
+  bool cached_ok = !shaped_buffer->alloc_cached_flag.empty();
+  auto cached_it = shaped_buffer->alloc_cached_flag.begin();
+
+  ShapeUtil::ForEachSubshape(
+      shaped_buffer->on_device_shape(), [&](const Shape&, const ShapeIndex&) {
+        CHECK(iterator != shaped_buffer->buffers().end());
+        if (cached_ok && *cached_it++) {
+          allocator = nullptr;
+          num_cached++;
+        }
+        buffers.push_back(iterator->second);
+        iterator->second = se::DeviceMemoryBase();
+        ++iterator, ++total;
+      });
+  
+  if (num_cached != 0 && num_cached != total) {
+    LOG(FATAL) << "Not all output buffers are cached: " << num_cached 
+               << " total: " << total;
+  }
+
+  CHECK(iterator == shaped_buffer->buffers().end());
+  return std::make_shared<TrackedDeviceBuffer>(
+      allocator, device,
+      absl::Span<se::DeviceMemoryBase>(buffers), definition_events,
+      /*on_delete_callback=*/nullptr);
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 }
 
 ShapedBuffer TrackedDeviceBuffer::AsShapedBuffer(

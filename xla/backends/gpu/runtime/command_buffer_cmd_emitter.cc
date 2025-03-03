@@ -37,6 +37,14 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/gpublas_lt_matmul_thunk.h"
 #include "xla/backends/gpu/runtime/kernel_thunk.h"
 #include "xla/backends/gpu/runtime/memset_thunk.h"
+<<<<<<< HEAD
+=======
+#include "xla/backends/gpu/runtime/nccl_all_gather_thunk.h"
+#include "xla/backends/gpu/runtime/nccl_all_reduce_thunk.h"
+#include "xla/backends/gpu/runtime/nccl_all_to_all_thunk.h"
+#include "xla/backends/gpu/runtime/nccl_collective_permute_thunk.h"
+#include "xla/backends/gpu/runtime/nccl_collective_thunk.h"
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 #include "xla/backends/gpu/runtime/replica_id_thunk.h"
 #include "xla/backends/gpu/runtime/sequential_thunk.h"
 #include "xla/backends/gpu/runtime/thunk.h"
@@ -143,6 +151,7 @@ static absl::StatusOr<Command> Convert(const CublasLtMatmulThunk& thunk) {
       thunk.workspace().value());
 }
 
+<<<<<<< HEAD
 static absl::StatusOr<Command> Convert(
     const ConditionalThunk& thunk, const ConvertToCommandsOptions& options) {
   std::vector<CommandBufferCmdExecutor> branch_cmds;
@@ -170,6 +179,9 @@ static absl::StatusOr<Command> Convert(
 }
 
 static absl::StatusOr<Command> Convert(const AllReduceStartThunk& thunk) {
+=======
+static absl::StatusOr<Command> Convert(const NcclAllReduceStartThunk& thunk) {
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   return std::make_unique<AllReduceCmd>(
       thunk.nccl_execution_stream_id(), thunk.execution_stream_id(),
       thunk.config(), thunk.reduction_kind(), thunk.buffers());
@@ -187,7 +199,17 @@ static absl::StatusOr<Command> Convert(const AllToAllStartThunk& thunk) {
       thunk.config(), thunk.has_split_dimension(), thunk.buffers());
 }
 
+<<<<<<< HEAD
 static absl::StatusOr<Command> Convert(const AllGatherStartThunk& thunk) {
+=======
+static absl::StatusOr<Command> Convert(const NcclCollectivePermuteStartThunk& thunk) {
+  return std::make_unique<CollectivePermuteCmd>(
+      thunk.nccl_execution_stream_id(), thunk.execution_stream_id(),
+      thunk.p2pconfig(), thunk.buffers());
+}
+
+static absl::StatusOr<Command> Convert(const NcclAllGatherStartThunk& thunk) {
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   return std::make_unique<AllGatherCmd>(thunk.nccl_execution_stream_id(),
                                         thunk.execution_stream_id(),
                                         thunk.config(), thunk.buffers());
@@ -197,7 +219,11 @@ static absl::StatusOr<Command> Convert(
     const DynamicSliceThunk& thunk, const ConvertToCommandsOptions& options) {
   TF_ASSIGN_OR_RETURN(
       CommandBufferCmdExecutor embedded_cmds,
+<<<<<<< HEAD
       ConvertToCommands(thunk.get_embedded_thunk()->thunks(), options));
+=======
+      ConvertToCommands(thunk.get_embeded_thunk()->thunks(), options));
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 
   auto& thunk_fake_allocations = thunk.get_fake_allocations();
   std::vector<std::unique_ptr<BufferAllocation>> fake_allocations;
@@ -242,6 +268,13 @@ static absl::StatusOr<Command> Convert(const CuDnnThunk& thunk) {
                                     thunk.arguments(), thunk.graph());
 }
 
+<<<<<<< HEAD
+=======
+static absl::StatusOr<Command> Convert(const ConvolutionThunk& thunk) {
+  return std::make_unique<ConvolutionCmd>(thunk.execution_stream_id(), thunk);
+}
+
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 //===----------------------------------------------------------------------===//
 static absl::StatusOr<Command> CopyMetadata(absl::StatusOr<Command> cmd,
                                             const Thunk& thunk) {
@@ -271,8 +304,13 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
   };
 
   switch (thunk.kind()) {
+<<<<<<< HEAD
     case Thunk::Kind::kConditional:
       return append(Convert<ConditionalThunk>(thunk, options));
+=======
+    // case Thunk::Kind::kConditional:
+    //   return append(Convert<ConditionalThunk>(thunk, options));
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
     case Thunk::Kind::kCopy:
       return append(Convert<DeviceToDeviceCopyThunk>(thunk));
     case Thunk::Kind::kCustomCall:
@@ -289,6 +327,7 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
       return append(Convert<Memset32BitValueThunk>(thunk));
     case Thunk::Kind::kMemzero:
       return append(Convert<MemzeroThunk>(thunk));
+<<<<<<< HEAD
     case Thunk::Kind::kAllGatherStart:
       return append(Convert<AllGatherStartThunk>(thunk));
     case Thunk::Kind::kAllReduceStart:
@@ -297,6 +336,18 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
       return append(Convert<ReduceScatterStartThunk>(thunk));
     case Thunk::Kind::kAllToAllStart:
       return append(Convert<AllToAllStartThunk>(thunk));
+=======
+    case Thunk::Kind::kNcclAllGatherStart:
+      return append(Convert<NcclAllGatherStartThunk>(thunk));
+    case Thunk::Kind::kNcclAllReduceStart:
+      return append(Convert<NcclAllReduceStartThunk>(thunk));
+    case Thunk::Kind::kNcclReduceScatterStart:
+      return append(Convert<NcclReduceScatterStartThunk>(thunk));
+    case Thunk::Kind::kNcclAllToAllStart:
+      return append(Convert<NcclAllToAllStartThunk>(thunk));
+    case Thunk::Kind::kNcclCollectivePermuteStart:
+      return append(Convert<NcclCollectivePermuteStartThunk>(thunk));
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
     case Thunk::Kind::kPartitionId:
       return append(Convert<PartitionIdThunk>(thunk));
     case Thunk::Kind::kReplicaId:
@@ -305,6 +356,11 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
       return append(Convert<WhileThunk>(thunk, options));
     case Thunk::Kind::kCuDnn:
       return append(Convert<CuDnnThunk>(thunk));
+<<<<<<< HEAD
+=======
+    case Thunk::Kind::kConvolution:
+      return append(Convert<ConvolutionThunk>(thunk));
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
     case Thunk::Kind::kDynamicSlice:
       return append(Convert<DynamicSliceThunk>(thunk, options));
 
@@ -314,6 +370,16 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
       return AppendCommands(cmd_sequence,
                             static_cast<const SequentialThunk&>(thunk).thunks(),
                             options);
+<<<<<<< HEAD
+=======
+
+    case Thunk::Kind::kNcclAllGatherDone:
+    case Thunk::Kind::kNcclAllReduceDone:
+    case Thunk::Kind::kNcclReduceScatterDone:
+    case Thunk::Kind::kNcclAllToAllDone:
+    case Thunk::Kind::kNcclCollectivePermuteDone: 
+      return absl::OkStatus();
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 
     // Thunks that simply wait for stream events are no-op in the command buffer
     // context, as we convert async thunks to command dependency graph.

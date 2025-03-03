@@ -51,6 +51,7 @@ cc_library(
     ],
 )
 
+<<<<<<< HEAD
 xla_cc_test(
     name = "resource_use_test",
     srcs = ["resource_use_test.cc"],
@@ -61,6 +62,8 @@ xla_cc_test(
     ],
 )
 
+=======
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 cc_library(
     name = "execution_graph",
     srcs = ["execution_graph.cc"],
@@ -70,11 +73,17 @@ cc_library(
         ":resource_use",
         "//xla:util",
         "@com_google_absl//absl/algorithm:container",
+<<<<<<< HEAD
+=======
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
+<<<<<<< HEAD
         "@com_google_absl//absl/types:span",
     ],
 )
@@ -90,11 +99,28 @@ xla_cc_test(
         "//xla/tsl/platform:statusor",
         "//xla/tsl/platform:test",
         "//xla/tsl/platform:test_main",
+=======
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
         "@com_google_absl//absl/types:span",
     ],
 )
 
 cc_library(
+<<<<<<< HEAD
     name = "thunk",
     hdrs = ["thunk.h"],
+=======
+    name = "object_pool",
+    hdrs = ["object_pool.h"],
+    deps = [
+        "//xla/tsl/platform:statusor",
+        # "//xla/tsl/util:safe_reinterpret_cast",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status:statusor",
+    ],
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 )

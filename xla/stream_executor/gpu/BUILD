@@ -623,6 +623,18 @@ xla_test(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest",
+<<<<<<< HEAD
+=======
+        #"@com_google_googletest//:gtest_main",
+        # NOTE this main is needed to enable benchmarking tests
+        "@tsl//tsl/platform:test_main", 
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:status",
+        "@tsl//tsl/platform:status_matchers",
+        "@tsl//tsl/platform:statusor",
+        "@tsl//tsl/platform:test",
+        "@tsl//tsl/platform:test_benchmark",
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
     ] + if_cuda([
         "//xla/stream_executor/cuda:cuda_platform",
     ]) + if_rocm([

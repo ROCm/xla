@@ -16,6 +16,11 @@ limitations under the License.
 #include "xla/runtime/resource_use.h"
 
 #include <memory>
+<<<<<<< HEAD
+=======
+#include <utility>
+#include <vector>
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_set.h"
@@ -49,7 +54,13 @@ void ResourceUse::ReadWriteSet::Add(ResourceUse use) {
 }
 
 void ResourceUse::ReadWriteSet::AddAll(absl::Span<const ResourceUse> uses) {
+<<<<<<< HEAD
   for (const auto& use : uses) Add(use);
+=======
+  for (const auto& use : uses) {
+    Add(use);
+  }
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 }
 
 bool ResourceUse::ReadWriteSet::HasConflicts(const ResourceUse& use) const {
@@ -75,4 +86,26 @@ bool ResourceUse::ReadWriteSet::HasConflicts(const ReadWriteSet& other) {
                         });
 }
 
+<<<<<<< HEAD
+=======
+std::vector<ResourceUse> ResourceUse::ReadWriteSet::Conflicts(
+    const ReadWriteSet& other) {
+  std::vector<ResourceUse> conflicts;
+
+  for (const std::shared_ptr<Resource>& resource : other.read_) {
+    if (auto read = ResourceUse::Read(resource); HasConflicts(read)) {
+      conflicts.push_back(std::move(read));
+    }
+  }
+
+  for (const std::shared_ptr<Resource>& resource : other.write_) {
+    if (auto write = ResourceUse::Write(resource); HasConflicts(write)) {
+      conflicts.push_back(std::move(write));
+    }
+  }
+
+  return conflicts;
+}
+
+>>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 }  // namespace xla

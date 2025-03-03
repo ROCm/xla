@@ -38,6 +38,7 @@ limitations under the License.
 #include "xla/stream_executor/gpu/scoped_update_mode.h"
 #include "xla/stream_executor/kernel.h"
 #include "xla/stream_executor/launch_dim.h"
+#include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 
@@ -153,7 +154,18 @@ class CudaCommandBuffer final : public GpuCommandBuffer {
 
   absl::Status LaunchGraph(Stream* stream) override;
 
-  absl::StatusOr<size_t> GetNodeCount() const override;
+  absl::StatusOr<size_t> GetNodeCount() const override {
+    return GraphGetNodes(nullptr);
+  }
+
+  absl::StatusOr<size_t> GraphGetNodes(ChildNodes *pnodes) const override;
+
+  absl::StatusOr< GraphNodeHandle > CopyChildNodeToMainGraph(
+          GraphNodeHandle child_node, 
+          absl::Span<const GraphNodeHandle> dependencies) override;
+
+  absl::Status UpdateChildNodeInMainGraph(
+          GraphNodeHandle child_node, GraphNodeHandle main_node) override;
 
   absl::Status PrepareFinalization() override;
 
