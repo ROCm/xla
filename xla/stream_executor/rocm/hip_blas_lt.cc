@@ -198,6 +198,7 @@ absl::Status BlasLt::Init() {
 auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
                                        size_t max_workspace_size) const
     -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
+  LOG(INFO) << "Enter BlasLt::MatmulPlan::GetAlgorithms()";
   max_algorithm_count = std::min(max_algorithm_count, size_t{INT_MAX});
   std::vector<hipblasLtMatmulHeuristicResult_t> results(max_algorithm_count);
 
@@ -234,6 +235,7 @@ auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
         blas_lt_ref_.blas_lt_.get(), op_desc_.get(), a_desc_.get(),
         b_desc_.get(), c_desc_.get(), d_desc_.get(), preference.get(),
         max_algorithm_count, results.data(), &found_algorithm_count);
+    LOG(INFO) << "found_algorithm_count: " << found_algorithm_count;
     if (error != 0) {
       VLOG(0) << "hipblasLtMatmulAlgoGetHeuristic returned " << (int)error;
       SE_HIPBLAS_RETURN_IF_ERROR(error);
@@ -248,6 +250,7 @@ auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
       algorithms.push_back({result.algo, result.workspaceSize});
     }
   }
+  LOG(INFO) << "Leave BlasLt::MatmulPlan::GetAlgorithms()";
   return std::move(algorithms);
 }
 
