@@ -63,7 +63,7 @@ bazel \
     --test_sharding_strategy=disabled \
     --cache_test_results=no \
     --test_output=errors \
-    --runs_per_test=1 \
+    --runs_per_test=10 \
     --keep_going \
     --local_test_jobs=${N_TEST_JOBS} \
     --test_env=TF_TESTS_PER_GPU=$TF_TESTS_PER_GPU \

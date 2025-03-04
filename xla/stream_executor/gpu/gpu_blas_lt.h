@@ -268,10 +268,6 @@ struct BlasLt {
         size_t max_algorithm_count = 128,
         size_t max_workspace_size = 1ll << 32) const = 0;
 
-    virtual absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithmsWithScale(
-        size_t max_algorithm_count, size_t max_workspace_size,
-        const DeviceMemoryBase& a_scale) const = 0;
-
     virtual ~MatmulPlan() {}
 
    protected:

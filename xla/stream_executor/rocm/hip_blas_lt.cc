@@ -195,15 +195,6 @@ absl::Status BlasLt::Init() {
   return std::move(desc);
 }
 
-auto BlasLt::MatmulPlan::GetAlgorithmsWithScale(size_t max_algorithm_count,
-                                                size_t max_workspace_size,
-                                                const DeviceMemoryBase& a_scale) const
-    -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
-  TF_RETURN_IF_ERROR(SetAttr(
-      op_desc_.get(), HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER, a_scale.opaque()));
-  return GetAlgorithms(max_algorithm_count, max_workspace_size);
-}
-
 auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
                                        size_t max_workspace_size) const
     -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
@@ -234,9 +225,22 @@ auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
     // no algorithms can be found for "bias epilogues". This is to be removed
     // later when this limitation is gone.
     if (op_desc_.has_bias_epilogue()) {
-      static int64_t dummyPointer = 0xACEBALL;
+      static int64_t dummy_pointer = 0xACEBALL;
       TF_RETURN_IF_ERROR(SetAttr(
-          op_desc_.get(), HIPBLASLT_MATMUL_DESC_BIAS_POINTER, &dummyPointer));
+          op_desc_.get(), HIPBLASLT_MATMUL_DESC_BIAS_POINTER, &dummy_pointer));
+    }
+
+    // hipBlasLt requires setting the a/b scale pointer (even a dummy one),
+    // otherwise no algorithms can be found for "a/b scaling". This is to be
+    // removed later when this limitation is gone.
+    if (true) { // TODO
+      static int64_t dummy_pointer = 0xACEBALL;
+      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                 HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
+                                 &dummy_pointer));
+      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                 HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+                                 &dummy_pointer));
     }
 
     int found_algorithm_count = 0;

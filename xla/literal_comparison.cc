@@ -941,7 +941,7 @@ absl::Status Equal(const LiteralSlice& expected, const LiteralSlice& actual) {
 absl::Status Near(const LiteralSlice& expected, const LiteralSlice& actual,
                   const ErrorSpec& error, std::optional<bool> detailed_message,
                   const MiscompareCallback& miscompare_callback) {
-  if (true) {
+  if (VLOG_IS_ON(1)) {
     LOG(INFO) << "Expected literal:";
     XLA_LOG_LINES(INFO, expected.ToString());
     LOG(INFO) << "Actual literal:";
