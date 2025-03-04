@@ -60,6 +60,28 @@ limitations under the License.
 
 namespace xla {
 namespace gpu {
+
+static void SetScaleContents(se::Stream* stream, const float scale, se::DeviceMemoryBase* buf) {
+  float* host_ptr = new float(scale);
+  CHECK_OK(stream->Memcpy(buf, host_ptr, sizeof(float)));
+  CHECK_OK(stream->BlockHostUntilDone());
+  VLOG(0) << "set scale to " << scale;
+}
+
+static void PrintBufferContents(se::Stream* stream,
+                                const se::DeviceMemoryBase& buf) {
+  auto host_buffer = std::make_unique<char[]>(buf.size());
+  CHECK_OK(stream->Memcpy(host_buffer.get(), buf, buf.size()));
+  CHECK_OK(stream->BlockHostUntilDone());
+
+  auto fpp = (float*)host_buffer.get();
+  std::string buffer_contents;
+  for (int i = 0; i < buf.size() / sizeof(float); i++) {
+    absl::StrAppendFormat(&buffer_contents, "%f ", fpp[i]);
+  }
+  VLOG(0) << "BUF = " << buffer_contents;
+}
+
 namespace {
 
 using se::gpu::BlasLt;
@@ -182,7 +204,14 @@ class GemmAutotuner {
     }
 
     a_scale_buffer = rz_buffers_.input_buffers().at(2);
+    SetScaleContents(stream_, 0.5, &a_scale_buffer);
     b_scale_buffer = rz_buffers_.input_buffers().at(3);
+    SetScaleContents(stream_, 1.0, &b_scale_buffer);
+
+    LOG(INFO) << "Print a_scale: ";
+    PrintBufferContents(stream_, a_scale_buffer);
+    LOG(INFO) << "Print b_scale: ";
+    PrintBufferContents(stream_, b_scale_buffer);
 
     TF_ASSIGN_OR_RETURN(auto plan,
                         BlasLt::GetMatmulPlan(stream_, gemm_config, epilogue));
