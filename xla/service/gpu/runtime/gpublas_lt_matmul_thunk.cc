@@ -35,6 +35,20 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
+static void PrintBufferContents(se::Stream* stream,
+                                const se::DeviceMemoryBase& buf) {
+  auto host_buffer = std::make_unique<char[]>(buf.size());
+  CHECK_OK(stream->Memcpy(host_buffer.get(), buf, buf.size()));
+  CHECK_OK(stream->BlockHostUntilDone());
+
+  auto fpp = (float*)host_buffer.get();
+  std::string buffer_contents;
+  for (int i = 0; i < buf.size() / sizeof(float); i++) {
+    absl::StrAppendFormat(&buffer_contents, "%f ", fpp[i]);
+  }
+  VLOG(0) << "BUF = " << buffer_contents;
+}
+
 CublasLtMatmulThunk::CublasLtMatmulThunk(
     ThunkInfo thunk_info, GemmConfig gemm_config,
     se::gpu::BlasLt::Epilogue epilogue, int64_t algorithm_idx,
@@ -80,18 +94,28 @@ absl::Status CublasLtMatmulThunk::ExecuteOnStream(const ExecuteParams& params) {
   }
   if (a_scale_buffer_.allocation() != nullptr) {
     a_scale = allocs.GetDeviceAddress(a_scale_buffer_);
+    LOG(INFO) << "a_scale: ";
+    PrintBufferContents(params.stream, a_scale);
   }
   if (b_scale_buffer_.allocation() != nullptr) {
     b_scale = allocs.GetDeviceAddress(b_scale_buffer_);
+    LOG(INFO) << "b_scale: ";
+    PrintBufferContents(params.stream, b_scale);
   }
   if (c_scale_buffer_.allocation() != nullptr) {
     c_scale = allocs.GetDeviceAddress(c_scale_buffer_);
+    LOG(INFO) << "c_scale: ";
+    PrintBufferContents(params.stream, c_scale);
   }
   if (d_scale_buffer_.allocation() != nullptr) {
     d_scale = allocs.GetDeviceAddress(d_scale_buffer_);
+    LOG(INFO) << "d_scale: ";
+    PrintBufferContents(params.stream, d_scale);
   }
   if (d_amax_buffer_.allocation() != nullptr) {
     d_amax = allocs.GetDeviceAddress(d_amax_buffer_);
+    LOG(INFO) << "d_amax: ";
+    PrintBufferContents(params.stream, d_amax);
   }
 
   se::DeviceMemoryBase aux;

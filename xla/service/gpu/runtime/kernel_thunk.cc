@@ -97,22 +97,22 @@ absl::Status KernelThunk::Initialize(const InitializeParams& params) {
   return absl::OkStatus();
 }
 
-static void PrintBufferContents(
-    se::Stream* stream, absl::Span<const se::DeviceMemoryBase> buffer_args) {
-  int input_idx = 0;
-  for (const se::DeviceMemoryBase& buf : buffer_args) {
-    auto host_buffer = std::make_unique<char[]>(buf.size());
-    CHECK_OK(stream->Memcpy(host_buffer.get(), buf, buf.size()));
-    CHECK_OK(stream->BlockHostUntilDone());
+// static void PrintBufferContents(
+//   se::Stream* stream, absl::Span<const se::DeviceMemoryBase> buffer_args) {
+// int input_idx = 0;
+// for (const se::DeviceMemoryBase& buf : buffer_args) {
+//   auto host_buffer = std::make_unique<char[]>(buf.size());
+//   CHECK_OK(stream->Memcpy(host_buffer.get(), buf, buf.size()));
+//   CHECK_OK(stream->BlockHostUntilDone());
 
-    std::string buffer_contents;
-    for (int i = 0; i < buf.size(); i++) {
-      absl::StrAppendFormat(&buffer_contents, "%x ",
-                            static_cast<unsigned>(host_buffer[i]));
-    }
-    VLOG(100) << "BUF(" << input_idx++ << ") = " << buffer_contents;
-  }
-}
+//   std::string buffer_contents;
+//   for (int i = 0; i < buf.size(); i++) {
+//     absl::StrAppendFormat(&buffer_contents, "%x ",
+//                           static_cast<unsigned>(host_buffer[i]));
+//   }
+//   VLOG(100) << "BUF(" << input_idx++ << ") = " << buffer_contents;
+// }
+// }
 
 absl::Status KernelThunk::ExecuteOnStream(const ExecuteParams& params) {
   // Load the kernel.
@@ -144,9 +144,9 @@ absl::Status KernelThunk::ExecuteOnStream(const ExecuteParams& params) {
     buffer_args.push_back(buf);
   }
 
-  if (VLOG_IS_ON(100)) {
-    PrintBufferContents(stream, buffer_args);
-  }
+  // if (VLOG_IS_ON(100)) {
+  //   PrintBufferContents(stream, buffer_args);
+  // }
 
   if (cluster_dim.has_value()) {
     return ExecuteKernelOnStream(*kernel, buffer_args, launch_dimensions,
@@ -214,9 +214,9 @@ absl::Status CustomKernelThunk::ExecuteOnStream(const ExecuteParams& params) {
     buffer_args.push_back(buf);
   }
 
-  if (VLOG_IS_ON(100)) {
-    PrintBufferContents(params.stream, buffer_args);
-  }
+  // if (VLOG_IS_ON(100)) {
+  //   PrintBufferContents(params.stream, buffer_args);
+  // }
 
   se::KernelArgsDeviceMemoryArray args(buffer_args,
                                        custom_kernel_.shared_memory_bytes());

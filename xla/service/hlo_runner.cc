@@ -47,7 +47,7 @@ HloRunner::HloRunner(se::Platform* platform, int intra_op_parallelism_threads) {
   device_shape_representation_fn_ = [this](const Shape& shape) {
     return backend_->compiler()->DefaultDeviceShapeRepresentation(shape);
   };
-  VLOG(1) << "Created HloRunner for platform: " << platform->Name();
+  LOG(INFO) << "Created HloRunner for platform: " << platform->Name();
 }
 
 HloRunner::~HloRunner() {}

@@ -233,7 +233,11 @@ class RocmComputeCapability {
 
   bool has_hipblaslt() const { return gfx9_mi200_or_later() || gfx1200() || gfx1201(); }
 
-  bool has_fp8_support() const { return gfx9_mi300() || gfx1200() || gfx1201(); }
+  bool has_fp8_support() const { return has_ocp_fp8_support() || has_nanoo_fp8_support(); }
+
+  bool has_ocp_fp8_support() const { return gfx1200() || gfx1201(); }
+
+  bool has_nanoo_fp8_support() const { return gfx9_mi300(); }
 
   RocmComputeCapabilityProto ToProto() const {
     RocmComputeCapabilityProto proto;

@@ -198,6 +198,7 @@ absl::Status BlasLt::Init() {
 auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
                                        size_t max_workspace_size) const
     -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
+  LOG(INFO) << "Enter BlasLt::MatmulPlan::GetAlgorithms()";
   max_algorithm_count = std::min(max_algorithm_count, size_t{INT_MAX});
   std::vector<hipblasLtMatmulHeuristicResult_t> results(max_algorithm_count);
 
@@ -224,9 +225,22 @@ auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
     // no algorithms can be found for "bias epilogues". This is to be removed
     // later when this limitation is gone.
     if (op_desc_.has_bias_epilogue()) {
-      static int64_t dummyPointer = 0xACEBALL;
+      static int64_t dummy_pointer = 0xACEBALL;
       TF_RETURN_IF_ERROR(SetAttr(
-          op_desc_.get(), HIPBLASLT_MATMUL_DESC_BIAS_POINTER, &dummyPointer));
+          op_desc_.get(), HIPBLASLT_MATMUL_DESC_BIAS_POINTER, &dummy_pointer));
+    }
+
+    // hipBlasLt requires setting the a/b scale pointer (even a dummy one),
+    // otherwise no algorithms can be found for "a/b scaling". This is to be
+    // removed later when this limitation is gone.
+    if (true) { // TODO
+      static int64_t dummy_pointer = 0xACEBALL;
+      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                 HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
+                                 &dummy_pointer));
+      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                 HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+                                 &dummy_pointer));
     }
 
     int found_algorithm_count = 0;
@@ -234,6 +248,7 @@ auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
         blas_lt_ref_.blas_lt_.get(), op_desc_.get(), a_desc_.get(),
         b_desc_.get(), c_desc_.get(), d_desc_.get(), preference.get(),
         max_algorithm_count, results.data(), &found_algorithm_count);
+    LOG(INFO) << "found_algorithm_count: " << found_algorithm_count;
     if (error != 0) {
       VLOG(0) << "hipblasLtMatmulAlgoGetHeuristic returned " << (int)error;
       SE_HIPBLAS_RETURN_IF_ERROR(error);
@@ -248,6 +263,7 @@ auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
       algorithms.push_back({result.algo, result.workspaceSize});
     }
   }
+  LOG(INFO) << "Leave BlasLt::MatmulPlan::GetAlgorithms()";
   return std::move(algorithms);
 }
 
@@ -431,18 +447,44 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
 
 #if TF_ROCM_VERSION >= 60000
     if (a_scale != nullptr) {
+      LOG(INFO) << "a_scale != nullptr";
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
                                  a_scale.opaque()));
+    } else {
+      LOG(INFO) << "a_scale == nullptr";
     }
     if (b_scale != nullptr) {
+      LOG(INFO) << "b_scale != nullptr";
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
                                  b_scale.opaque()));
+    } else {
+      LOG(INFO) << "b_scale == nullptr";
     }
-    if (c_scale != nullptr || d_scale != nullptr) {
-      return absl::InternalError(
-          "hipblaslt does not support c_scale or d_scale.");
+    if (c_scale != nullptr) {
+      LOG(INFO) << "c_scale != nullptr";
+      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                 HIPBLASLT_MATMUL_DESC_C_SCALE_POINTER,
+                                 c_scale.opaque()));
+    } else {
+      LOG(INFO) << "c_scale == nullptr";
+    }
+    if (d_scale != nullptr) {
+      LOG(INFO) << "d_scalle != nullptr";
+      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                 HIPBLASLT_MATMUL_DESC_AMAX_D_POINTER,
+                                 d_scale.opaque()));
+    } else {
+      LOG(INFO) << "d_scale == nullptr";
+    }
+    if (d_amax != nullptr) {
+      LOG(INFO) << "d_amax != nullptr";
+      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                 HIPBLASLT_MATMUL_DESC_AMAX_D_POINTER,
+                                 d_amax.opaque()));
+    } else {
+      LOG(INFO) << "d_amax == nullptr";
     }
 #else
     if ((a_scale != nullptr) || (b_scale != nullptr) || (c_scale != nullptr) ||
@@ -450,11 +492,6 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
       return absl::InternalError("hipblaslt does not support scale");
     }
 #endif
-
-    if (d_amax != nullptr) {
-      return absl::InternalError("hipblaslt does not support amax");
-    }
-
     if (aux != nullptr) {
       return absl::InternalError(
           "hipblaslt does not support auxiliary inputs / outputs");
@@ -507,6 +544,17 @@ struct HipToNativeT<HIP_R_8F_E5M2_FNUZ> {
   using type = tsl::float8_e5m2fnuz;
 };
 #endif  // TF_ROCM_VERSION >= 60000
+
+#if TF_ROCM_VERSION >= 60300
+template <>
+struct HipToNativeT<HIP_R_8F_E4M3> {
+  using type = tsl::float8_e4m3fn;
+};
+template <>
+struct HipToNativeT<HIP_R_8F_E5M2> {
+  using type = tsl::float8_e5m2;
+};
+#endif  // TF_ROCM_VERSION >= 60300
 
 template <>
 struct HipToNativeT<HIP_R_16BF> {
@@ -592,6 +640,31 @@ absl::Status BlasLt::MatmulPlan::ExecuteOnStream(
                HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E5M2_FNUZ)
   TYPED_MATMUL(float, HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E4M3_FNUZ,
                HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E5M2_FNUZ)
+#endif
+
+#if TF_ROCM_VERSION >= 60300
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_16BF, HIP_R_16BF)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_16BF, HIP_R_8F_E4M3)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_16F, HIP_R_8F_E4M3)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_16F, HIP_R_16F)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_32F, HIP_R_32F)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_8F_E4M3)
+
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_16BF, HIP_R_16BF)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_16BF, HIP_R_8F_E4M3)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_16BF, HIP_R_8F_E5M2)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_16F, HIP_R_8F_E4M3)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_16F, HIP_R_8F_E5M2)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_16F, HIP_R_16F)
+  TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E5M2, HIP_R_32F, HIP_R_32F)
+
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_16BF, HIP_R_16BF)
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_16BF, HIP_R_8F_E4M3)
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_16BF, HIP_R_8F_E5M2)
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_16F, HIP_R_8F_E4M3)
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_16F, HIP_R_8F_E5M2)
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_16F, HIP_R_16F)
+  TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_8F_E4M3, HIP_R_32F, HIP_R_32F)
 #endif
 
   // Other data types:
