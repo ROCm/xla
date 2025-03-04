@@ -195,6 +195,15 @@ absl::Status BlasLt::Init() {
   return std::move(desc);
 }
 
+auto BlasLt::MatmulPlan::GetAlgorithmsWithScale(size_t max_algorithm_count,
+                                                size_t max_workspace_size,
+                                                const DeviceMemoryBase& a_scale) const
+    -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
+  TF_RETURN_IF_ERROR(SetAttr(
+      op_desc_.get(), HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER, a_scale.opaque()));
+  return GetAlgorithms(max_algorithm_count, max_workspace_size);
+}
+
 auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
                                        size_t max_workspace_size) const
     -> absl::StatusOr<std::vector<MatmulAlgorithm>> {

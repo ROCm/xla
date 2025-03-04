@@ -110,6 +110,10 @@ class BlasLt : public gpu::BlasLt {
         std::optional<ScratchAllocator*> scratch_allocator,
         blas::ProfileResult* profile_result) const override;
 
+    absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithmsWithScale(
+        size_t max_algorithm_count, size_t max_workspace_size,
+        const DeviceMemoryBase& a_scale) const override;
+
     absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
         size_t max_algorithm_count, size_t max_workspace_size) const override;
 

@@ -218,8 +218,8 @@ class GemmAutotuner {
 
     TF_ASSIGN_OR_RETURN(
         auto algorithms,
-        plan->GetAlgorithms(/*max_algorithm_count*/ 128,
-                            /*max_workspace_size*/ workspace_buffer.size()));
+        plan->GetAlgorithmsWithScale(/*max_algorithm_count*/ 128,
+                            /*max_workspace_size*/ workspace_buffer.size(), a_scale_buffer));
     
     LOG(INFO) << "Number of algorithms found in Autotuner: " << algorithms.size();
 
