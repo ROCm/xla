@@ -478,20 +478,17 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
     } else {
       LOG(INFO) << "d_scale == nullptr";
     }
-    if (d_amax != nullptr) {
-      LOG(INFO) << "d_amax != nullptr";
-      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                 HIPBLASLT_MATMUL_DESC_AMAX_D_POINTER,
-                                 d_amax.opaque()));
-    } else {
-      LOG(INFO) << "d_amax == nullptr";
-    }
 #else
     if ((a_scale != nullptr) || (b_scale != nullptr) || (c_scale != nullptr) ||
         (d_scale != nullptr)) {
       return absl::InternalError("hipblaslt does not support scale");
     }
 #endif
+
+    if (d_amax != nullptr) {
+      return absl::InternalError("hipblaslt does not support amax");
+    }
+
     if (aux != nullptr) {
       return absl::InternalError(
           "hipblaslt does not support auxiliary inputs / outputs");
