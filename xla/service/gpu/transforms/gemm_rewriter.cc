@@ -660,6 +660,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     switch (options_.dtype) {
       case GemmRewriterOptions::DType::kFp8Only: {
         // Rewrite FP8 GEMMs into a type-specific cublasLT Custom Call.
+        gemm_backend_config.set_is_fp8(true);
         TF_ASSIGN_OR_RETURN(
             bool supported_by_cublaslt,
             GemmIsSupportedByCublasLt(*instr, gemm_backend_config));

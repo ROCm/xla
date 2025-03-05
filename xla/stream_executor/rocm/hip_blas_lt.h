@@ -57,10 +57,11 @@ class BlasLt : public gpu::BlasLt {
         blas::Transpose trans_a = blas::Transpose::kNoTranspose,
         blas::Transpose trans_b = blas::Transpose::kNoTranspose,
         Epilogue epilogue = Epilogue::kDefault,
-        PointerMode pointer_mode = PointerMode::kHost);
+        PointerMode pointer_mode = PointerMode::kHost, bool is_fp8 = false);
 
     hipblasComputeType_t compute_type() const { return compute_type_; }
     hipDataType scale_type() const { return datatype_; }
+    bool is_fp8() const { return is_fp8_; }
     bool has_bias_epilogue() const { return has_bias_epilogue_; }
     hipblasPointerMode_t pointer_mode() const {
       return HIPBLAS_POINTER_MODE_HOST;
@@ -69,16 +70,18 @@ class BlasLt : public gpu::BlasLt {
 
    private:
     MatmulDesc(hipblasLtMatmulDesc_t handle, hipblasComputeType_t compute_type,
-               hipDataType datatype, bool bias_epilogue)
+               hipDataType datatype, bool bias_epilogue, bool is_fp8)
         : handle_(handle, wrap::hipblasLtMatmulDescDestroy),
           compute_type_(compute_type),
           datatype_(datatype),
-          has_bias_epilogue_(bias_epilogue) {}
+          has_bias_epilogue_(bias_epilogue),
+          is_fp8_(is_fp8) {}
 
     Owned<hipblasLtMatmulDesc_t> handle_;
     hipblasComputeType_t compute_type_;
     hipDataType datatype_;
     bool has_bias_epilogue_;
+    bool is_fp8_;
   };
 
   struct MatmulPlan : public gpu::BlasLt::MatmulPlan {

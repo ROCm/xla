@@ -165,13 +165,13 @@ absl::Status BlasLt::Init() {
 /*static*/ absl::StatusOr<BlasLt::MatmulDesc> BlasLt::MatmulDesc::Create(
     blas::ComputationType compute_type, blas::DataType scale_type,
     blas::Transpose trans_a, blas::Transpose trans_b, Epilogue epilogue,
-    PointerMode pointer_mode) {
+    PointerMode pointer_mode, bool is_fp8) {
   hipblasLtMatmulDesc_t hip_desc;
   VLOG(2) << "BlasLt::MatmulDesc::Create compute_type: " << int(compute_type)
           << " scale_type: " << int(scale_type)
           << " epilogue: " << int(epilogue) << " trans_a: " << int(trans_a)
           << " trans_b: " << int(trans_b) << " pointer_mode "
-          << int(pointer_mode);
+          << int(pointer_mode) << "is_fp8: " << is_fp8;
   auto hip_scale_type = AsHipblasDataType(scale_type);
   auto hip_compute_type = AsHipblasComputeType(compute_type);
   SE_HIPBLAS_RETURN_IF_ERROR(wrap::hipblasLtMatmulDescCreate(
@@ -181,7 +181,7 @@ absl::Status BlasLt::Init() {
       static_cast<int32_t>(epilogue) & static_cast<int32_t>(Epilogue::kBias);
   // Wrap hipblas handle immediately, so it is cleaned up if an error occurs.
   BlasLt::MatmulDesc desc(hip_desc, hip_compute_type, hip_scale_type,
-                          bias_flag != 0);
+                          bias_flag != 0, is_fp8);
   if (pointer_mode != PointerMode::kHost) {
     return absl::InternalError("hipblaslt does not support device pointers");
   }
@@ -233,7 +233,7 @@ auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
     // hipBlasLt requires setting the a/b scale pointer (even a dummy one),
     // otherwise no algorithms can be found for "a/b scaling". This is to be
     // removed later when this limitation is gone.
-    if (true) { // TODO
+    if (op_desc_.is_fp8()) {
       static int64_t dummy_pointer = 0xACEBALL;
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
@@ -321,9 +321,9 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
 
   TF_ASSIGN_OR_RETURN(
       auto op_desc,
-      MatmulDesc::Create(*compute_type,
-                         gpu::GetScaleType(output_dtype, *compute_type),
-                         trans_a, trans_b, epilogue));
+      MatmulDesc::Create(
+          *compute_type, gpu::GetScaleType(output_dtype, *compute_type),
+          trans_a, trans_b, epilogue, PointerMode::kHost, cfg.is_fp8));
 
   TF_ASSIGN_OR_RETURN(auto a_desc, MatrixLayout::Create(lhs_layout));
   TF_ASSIGN_OR_RETURN(auto b_desc, MatrixLayout::Create(rhs_layout));

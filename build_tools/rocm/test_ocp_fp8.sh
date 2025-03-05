@@ -63,7 +63,7 @@ bazel \
     --test_sharding_strategy=disabled \
     --cache_test_results=no \
     --test_output=errors \
-    --runs_per_test=10 \
+    --runs_per_test=1 \
     --keep_going \
     --local_test_jobs=${N_TEST_JOBS} \
     --test_env=TF_TESTS_PER_GPU=$TF_TESTS_PER_GPU \
@@ -74,4 +74,4 @@ bazel \
     --test_env=XLA_FLAGS="--xla_dump_to=/tmp/generated --xla_dump_hlo_as_text --xla_dump_hlo_as_html --xla_gpu_autotune_level=4" \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
-    //xla/service/gpu/transforms:gemm_rewriter_test_gpu_amd_any --test_filter=Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABScaledF32DF8/0
+    //xla/service/gpu/transforms:gemm_rewriter_test_gpu_amd_any
