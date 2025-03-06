@@ -829,6 +829,9 @@ MlirRowReductionFusion::MlirRowReductionFusion(
                            minor_reduced_tile_size * num_threads_reduced};
     num_blocks_ = {CeilOfRatio(input_shape_[1], tile_sizes_per_block_[0]),
                  CeilOfRatio(input_shape_[2], tile_sizes_per_block_[1])};
+  /* ROCm hipModuleLaunchKernel limitation
+   * https://rocm.docs.amd.com/projects/HIP/en/latest/doxygen/html/group___module.html#ga2e4de5937aa8171e9eda16c881ed0674
+   */
   } while ( kMinorReducedElementsPerThread < 65536 &&
 	  ((Product(num_blocks_) * Product(num_threads_)) > (int64_t)std::numeric_limits<uint32_t>::max())); 
 }
