@@ -2028,6 +2028,7 @@ tf_proto_library(
     cc_api_version = 2,
     protodeps = [
         "//xla/stream_executor:device_description_proto",
+        "@tsl//tsl/protobuf:dnn_proto",
     ],
 )
 
