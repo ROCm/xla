@@ -355,14 +355,20 @@ gpu_only_cc_library(
 )
 
 gpu_kernel_library(
-    name = "redzone_allocator_kernel",
+    name = "redzone_allocator_kernel_rocm",
     srcs = [
-        "redzone_allocator_kernel.cu.cc",
+        "redzone_allocator_kernel.h",
+        "redzone_allocator_kernel_rocm.cu.cc",
     ],
-    tags = ["gpu"],
-    deps = if_cuda_is_configured([
-        "@local_config_cuda//cuda:cuda_headers",
-    ]) + if_rocm_is_configured([
+    tags = ["manual"],
+    deps = [
+        ":gpu_asm_opts",
+        "//xla/stream_executor:device_memory",
+        "//xla/stream_executor:kernel",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor:typed_kernel_factory",
+        "@com_google_absl//absl/container:node_hash_map",
+        "@com_google_absl//absl/status:statusor",
         "@local_config_rocm//rocm:rocm_headers",
         "@local_config_rocm//rocm:rocm_config",
     ]),
