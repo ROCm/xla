@@ -176,6 +176,7 @@ class GemmAutotuner {
 
     int input_buffer_idx = 2;  // lhs is at 0, rhs is at 1
     if (has_vector_bias) {
+      if (has_matrix_bias) { input_buffer_idx++; }
       bias_buffer = rz_buffers_.input_buffers().at(input_buffer_idx++);
     }
     // In the current GemmRewriter design for FP8, the a/b scales remain active
