@@ -94,8 +94,6 @@ bazel \
 # [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDVectorBiasF8/0, where GetParam() = false
 # [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDVectorBiasF8/1, where GetParam() = true
 
-
-
 # after modifying expected hlos
 # INTERNAL: hipblaslt does not support amax
 # [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDMatrixBiasWithDAmaxF8/0, where GetParam() = false
