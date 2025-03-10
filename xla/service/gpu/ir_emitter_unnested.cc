@@ -55,17 +55,17 @@ limitations under the License.
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Linker/Linker.h"
-#include "mlir/AsmParser/AsmParser.h"  // from @llvm-project
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"  // from @llvm-project
+#include "mlir/AsmParser/AsmParser.h"               // from @llvm-project
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"        // from @llvm-project
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"  // from @llvm-project
-#include "mlir/IR/Attributes.h"  // from @llvm-project
-#include "mlir/IR/Builders.h"  // from @llvm-project
-#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/IR/MLIRContext.h"  // from @llvm-project
-#include "mlir/Parser/Parser.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/IR/Attributes.h"                     // from @llvm-project
+#include "mlir/IR/Builders.h"                       // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"              // from @llvm-project
+#include "mlir/IR/BuiltinOps.h"                     // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"                   // from @llvm-project
+#include "mlir/IR/MLIRContext.h"                    // from @llvm-project
+#include "mlir/Parser/Parser.h"                     // from @llvm-project
+#include "mlir/Support/LLVM.h"                      // from @llvm-project
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"  // from @llvm-project
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"  // from @llvm-project
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"  // from @llvm-project
@@ -2875,10 +2875,12 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
       if (IsCustomCallToDnnConvolution(*instr)) {
         return EmitConvolutionThunk(custom_call);
       }
-#if GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
       if (IsCustomCallToCusolver(*instr)) {
         return EmitCholeskyThunk(instr);
       }
+#endif
+#if GOOGLE_CUDA
       if (IsTriangularSolve(*instr)) {
         return EmitTriangularSolveCustomCall(instr);
       }
