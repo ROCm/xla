@@ -435,12 +435,12 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
     if (args.c_scale != nullptr) {
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_C_SCALE_POINTER,
-                                 args.a_scale.opaque()));
+                                 args.c_scale.opaque()));
     }
     if (args.d_scale != nullptr) {
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_D_SCALE_POINTER,
-                                 args.a_scale.opaque()));
+                                 args.d_scale.opaque()));
     }
 #else
     if (!(args.a_scale == nullptr && args.b_scale == nullptr &&
