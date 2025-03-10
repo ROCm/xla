@@ -74,6 +74,48 @@ bazel \
     --test_env=XLA_FLAGS="--xla_dump_to=/tmp/generated --xla_dump_hlo_as_text --xla_dump_hlo_as_html --xla_gpu_autotune_level=4" \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
-    //xla/service/gpu/transforms:gemm_rewriter_fp8_test_gpu_amd_any
+    //xla/service/gpu/transforms:gemm_rewriter_fp8_test_gpu_amd_any --test_filter=Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDVectorBiasF8/0
 
-# --test_filter=Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABScaledF32DF8/0
+# [  FAILED  ] 16 tests, listed below:
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDMatrixBiasWithDAmaxF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDMatrixBiasWithDAmaxF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDReluActivationWithDAmaxF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDReluActivationWithDAmaxF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDWithDAmaxF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDWithDAmaxF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDWithDAmaxF8WithF16Intermediates/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDWithDAmaxF8WithF16Intermediates/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABScaledDF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABScaledDF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDReluActivationF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDReluActivationF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDVectorBiasF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDVectorBiasF8/1, where GetParam() = true
+
+
+
+# after modifying expected hlos
+# INTERNAL: hipblaslt does not support amax
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDMatrixBiasWithDAmaxF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDMatrixBiasWithDAmaxF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDReluActivationWithDAmaxF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDReluActivationWithDAmaxF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDWithDAmaxF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDWithDAmaxF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDWithDAmaxF8WithF16Intermediates/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDWithDAmaxF8WithF16Intermediates/1, where GetParam() = true
+
+# mismatch issue
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDVectorBiasF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDVectorBiasF8/1, where GetParam() = true
+
+# pass
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABScaledDF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABScaledDF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABScaledDF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDReluActivationF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABScaledDReluActivationF8/1, where GetParam() = true
