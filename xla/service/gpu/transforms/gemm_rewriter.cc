@@ -1445,27 +1445,49 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                           HloInstruction *d_scale, HloInstruction *clamp_lower,
                           HloInstruction *clamp_upper,
                           bool mult_scale = false) {
-    // TODO: add ROCm support to this fusion pattern
-    if (IsRocm(gpu_version_)) {
-      return absl::OkStatus();
-    }
     // Verify the data types and the operands of clamp.
-    if (instr->shape().element_type() == F8E4M3FN) {
-      if (!clamp_lower->literal().IsAllFloat(static_cast<float>(
-              std::numeric_limits<tsl::float8_e4m3fn>::lowest())) ||
-          !clamp_upper->literal().IsAllFloat(static_cast<float>(
-              std::numeric_limits<tsl::float8_e4m3fn>::max()))) {
+    if (IsCuda(gpu_version_) ||
+        IsRocm(gpu_version_) &&
+            std::get<se::RocmComputeCapability>(gpu_version_)
+                .has_ocp_fp8_support()) {
+      if (instr->shape().element_type() == F8E4M3FN) {
+        if (!clamp_lower->literal().IsAllFloat(static_cast<float>(
+                std::numeric_limits<tsl::float8_e4m3fn>::lowest())) ||
+            !clamp_upper->literal().IsAllFloat(static_cast<float>(
+                std::numeric_limits<tsl::float8_e4m3fn>::max()))) {
+          return absl::OkStatus();
+        }
+      } else if (instr->shape().element_type() == F8E5M2) {
+        if (!clamp_lower->literal().IsAllFloat(static_cast<float>(
+                std::numeric_limits<tsl::float8_e5m2>::lowest())) ||
+            !clamp_upper->literal().IsAllFloat(static_cast<float>(
+                std::numeric_limits<tsl::float8_e5m2>::max()))) {
+          return absl::OkStatus();
+        }
+      } else {
         return absl::OkStatus();
       }
-    } else if (instr->shape().element_type() == F8E5M2) {
-      if (!clamp_lower->literal().IsAllFloat(static_cast<float>(
-              std::numeric_limits<tsl::float8_e5m2>::lowest())) ||
-          !clamp_upper->literal().IsAllFloat(static_cast<float>(
-              std::numeric_limits<tsl::float8_e5m2>::max()))) {
+    }
+    if (IsRocm(gpu_version_) &&
+        std::get<se::RocmComputeCapability>(gpu_version_)
+            .has_nanoo_fp8_support()) {
+      if (instr->shape().element_type() == F8E4M3FNUZ) {
+        if (!clamp_lower->literal().IsAllFloat(static_cast<float>(
+                std::numeric_limits<tsl::float8_e4m3fnuz>::lowest())) ||
+            !clamp_upper->literal().IsAllFloat(static_cast<float>(
+                std::numeric_limits<tsl::float8_e4m3fnuz>::max()))) {
+          return absl::OkStatus();
+        }
+      } else if (instr->shape().element_type() == F8E5M2FNUZ) {
+        if (!clamp_lower->literal().IsAllFloat(static_cast<float>(
+                std::numeric_limits<tsl::float8_e5m2fnuz>::lowest())) ||
+            !clamp_upper->literal().IsAllFloat(static_cast<float>(
+                std::numeric_limits<tsl::float8_e5m2fnuz>::max()))) {
+          return absl::OkStatus();
+        }
+      } else {
         return absl::OkStatus();
       }
-    } else {
-      return absl::OkStatus();
     }
 
     if (d_scale && !ShapeUtil::IsScalar(d_scale->shape())) {
