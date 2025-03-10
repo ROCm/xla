@@ -1445,6 +1445,10 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                           HloInstruction *d_scale, HloInstruction *clamp_lower,
                           HloInstruction *clamp_upper,
                           bool mult_scale = false) {
+    // TODO: add ROCm support to this fusion pattern
+    if (IsRocm(gpu_version_)) {
+      return absl::OkStatus();
+    }
     // Verify the data types and the operands of clamp.
     if (IsCuda(gpu_version_) ||
         IsRocm(gpu_version_) &&
