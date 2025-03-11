@@ -355,6 +355,14 @@ absl::StatusOr<std::vector<Literal>> MakeFakeArguments(
                                 use_large_range, treat_gte_as_data_formatting,
                                 max_bits_of_precision));
   }
+
+  LOG(INFO) << "Within MakeFakeArguments()...";
+  LOG(INFO) << "The fake arguments are as follows: ";
+  LOG(INFO) << "arguments.size(): " << arguments.size();
+  for (int i = 0; i < arguments.size(); ++i) {
+    LOG(INFO) << arguments[i].ToString();
+  }
+
   return std::move(arguments);
 }
 
