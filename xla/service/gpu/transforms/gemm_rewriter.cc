@@ -1445,6 +1445,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                           HloInstruction *d_scale, HloInstruction *clamp_lower,
                           HloInstruction *clamp_upper,
                           bool mult_scale = false) {
+    LOG(INFO) << "Within F8ConvertD() ...";
     // Verify the data types and the operands of clamp.
     if (IsCuda(gpu_version_) ||
         IsRocm(gpu_version_) &&
@@ -1567,6 +1568,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     // If necessary, invert the scaling factor of D and convert to F32. When no
     // scaling factor was captured, set the factor to one.
     if (d_scale) {
+      LOG(INFO) << "d_scale is not nullptr";
       TF_ASSIGN_OR_RETURN(d_scale,
                           InvertAndConvertScalar(d_scale, !mult_scale));
     } else {
