@@ -62,8 +62,8 @@ class HloRematerialization : public HloModulePass {
         : recompute(recompute),
           compress(compress),
           host_offload(host_offload) {}
-    bool recompute;     // Enables the kCompress RematStrategy.
-    bool compress;      // Enables the kRecompute RematStrategy.
+    bool recompute;     // Enables the kRecompute RematStrategy.
+    bool compress;      // Enables the kCompress RematStrategy. 
     bool host_offload;  // Enables the kHostOffload RematStrategy.
   };
 
