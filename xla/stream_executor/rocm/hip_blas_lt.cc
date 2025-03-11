@@ -375,6 +375,7 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
     Stream* stream, const void* alpha, const void* beta,
     const MatmulAlgorithm& algorithm, const gpu::BlasLt::MemoryArgs& args,
     blas::ProfileResult* profile_result) const {
+  LOG(INFO) << "Within BlasLt::MatmulPlan::DoMatmul() ...";
   DeviceMemoryBase a = args.a, b = args.b;
   if (must_swap_operands_) {
     std::swap(a, b);
@@ -423,24 +424,36 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
 
 #if TF_ROCM_VERSION >= 60000
     if (args.a_scale != nullptr) {
+      LOG(INFO) << "a_scale != nullptr";
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
                                  args.a_scale.opaque()));
+    } else {
+      LOG(INFO) << "a_scale == nullptr";
     }
     if (args.b_scale != nullptr) {
+      LOG(INFO) << "b_scale != nullptr";
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
                                  args.b_scale.opaque()));
+    } else {
+      LOG(INFO) << "b_scale == nullptr";
     }
     if (args.c_scale != nullptr) {
+      LOG(INFO) << "c_scale != nullptr";
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_C_SCALE_POINTER,
                                  args.c_scale.opaque()));
+    } else {
+      LOG(INFO) << "c_scale == nullptr";
     }
     if (args.d_scale != nullptr) {
+      LOG(INFO) << "d_scale != nullptr";
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_D_SCALE_POINTER,
                                  args.d_scale.opaque()));
+    } else {
+      LOG(INFO) << "d_scale == nullptr";
     }
 #else
     if (!(args.a_scale == nullptr && args.b_scale == nullptr &&

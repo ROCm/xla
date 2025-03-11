@@ -96,35 +96,35 @@ absl::Status CublasLtMatmulThunk::ExecuteOnStream(const ExecuteParams& params) {
     LOG(INFO) << "bias: ";
     PrintBufferContents(params.stream, bias);
   } else {
-    LOG(INFO) << "bias is nullptr";
+    LOG(INFO) << "bias == nullptr";
   }
   if (a_scale_buffer_.allocation() != nullptr) {
     a_scale = allocs.GetDeviceAddress(a_scale_buffer_);
     LOG(INFO) << "a_scale: ";
     PrintBufferContents(params.stream, a_scale);
   } else {
-    LOG(INFO) << "a_scale is nullptr";
+    LOG(INFO) << "a_scale == nullptr";
   }
   if (b_scale_buffer_.allocation() != nullptr) {
     b_scale = allocs.GetDeviceAddress(b_scale_buffer_);
     LOG(INFO) << "b_scale: ";
     PrintBufferContents(params.stream, b_scale);
   } else {
-    LOG(INFO) << "b_scale is nullptr";
+    LOG(INFO) << "b_scale == nullptr";
   }
   if (c_scale_buffer_.allocation() != nullptr) {
     c_scale = allocs.GetDeviceAddress(c_scale_buffer_);
     LOG(INFO) << "c_scale: ";
     PrintBufferContents(params.stream, c_scale);
   } else {
-    LOG(INFO) << "c_scale is nullptr";
+    LOG(INFO) << "c_scale == nullptr";
   }
   if (d_scale_buffer_.allocation() != nullptr) {
     d_scale = allocs.GetDeviceAddress(d_scale_buffer_);
     LOG(INFO) << "d_scale: ";
     PrintBufferContents(params.stream, d_scale);
   } else {
-    LOG(INFO) << "d_scale is nullptr";
+    LOG(INFO) << "d_scale == nullptr";
   }
   if (d_amax_buffer_.allocation() != nullptr) {
     d_amax = allocs.GetDeviceAddress(d_amax_buffer_);
