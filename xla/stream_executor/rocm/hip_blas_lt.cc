@@ -255,7 +255,7 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
                                  HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
                                  &dummy_pointer));
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                 HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+                                 HIPBLASLT_MATMUL_DESC_D_SCALE_POINTER,
                                  &dummy_pointer));
     }
 
