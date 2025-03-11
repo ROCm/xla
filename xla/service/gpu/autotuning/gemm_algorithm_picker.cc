@@ -185,6 +185,7 @@ class GemmAutotuner {
     if (gemm_config.is_fp8) {
       a_scale_buffer = rz_buffers_.input_buffers().at(input_buffer_idx++);
       b_scale_buffer = rz_buffers_.input_buffers().at(input_buffer_idx++);
+      d_scale_buffer = rz_buffers_.input_buffers().at(input_buffer_idx++);
     }
 
     if (has_aux_output) {

@@ -254,6 +254,9 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
                                  &dummy_pointer));
+      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                 HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+                                 &dummy_pointer));
     }
 
     int found_algorithm_count = 0;
