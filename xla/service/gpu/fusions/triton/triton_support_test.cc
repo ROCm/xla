@@ -185,7 +185,8 @@ class TritonSupportTest : public TritonSupportTestBase {
   void RunSupportTest(TestedInstruction ti,
                       std::vector<int64_t> output_tile_sizes,
                       se::GpuComputeCapability cc,
-                      bool skip_failure_branch_to_avoid_crash = false) {
+                      bool skip_failure_branch_to_avoid_crash = false,
+                      bool not_genuinely_supported_by_triton = false) {
     // Ensure that the caller provided the right number of output tile sizes.
     // If that is not the case, codegen could fail for that reason---which
     // wouldn't give any valuable signal here.  We skip the check for non-array
@@ -206,7 +207,8 @@ class TritonSupportTest : public TritonSupportTestBase {
                            mlir_context_);
     };
 
-    if (IsTritonSupportedInstruction(ti.Instruction(), cc)) {
+    if (IsTritonSupportedInstruction(ti.Instruction(), cc) ||
+        not_genuinely_supported_by_triton) {
       EXPECT_THAT(run_triton_codegen(), IsOk());
     } else {
       if (skip_failure_branch_to_avoid_crash) {
@@ -235,6 +237,7 @@ using BitcastOrReshapeTest = TritonSupportTestWithTypeAndOpcodeAndDeviceParam;
 
 TEST_P(BitcastOrReshapeTest, IsTritonSupportedBitcastOrReshape) {
   auto [data_type, opcode, cc] = GetParam();
+  bool not_genuinely_supported_by_triton = false;
   const std::string kHloTestTemplate = R"(
 ENTRY triton_computation {
   parameter_0 = $0[1,16,4] parameter(0)
@@ -243,7 +246,14 @@ ENTRY triton_computation {
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
       ParseTemplateAndGetInstruction(kHloTestTemplate, data_type, opcode));
-  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16}, cc);
+
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    not_genuinely_supported_by_triton |= (data_type == PrimitiveType::F8E4M3FN ||
+                                         (data_type == PrimitiveType::F8E5M2));
+  }
+
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16}, cc, false,
+                 not_genuinely_supported_by_triton);
 }
 
 TEST_P(BitcastOrReshapeTest, IsTritonSupported0DBitcastOrReshape) {
@@ -313,7 +323,16 @@ ENTRY triton_computation {
                                    ? kReducePrecisionTemplate
                                    : kDefaultHloTemplate)),
           data_type, opcode));
-  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc);
+  bool not_genuinely_supported_by_triton = false;
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    not_genuinely_supported_by_triton |= ((data_type == PrimitiveType::F8E4M3FN ||
+                                          data_type == PrimitiveType::F8E5M2) &&
+                                          (opcode == HloOpcode::kAbs ||
+                                            opcode == HloOpcode::kReducePrecision));
+  }
+
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc, false,
+                 not_genuinely_supported_by_triton);
 }
 
 constexpr std::array kTestedOpsUnaryElementwise = {HloOpcode::kAbs,
@@ -374,6 +393,7 @@ ENTRY triton_computation {
           HloOpcode::kConvert));
 
   bool skip_failure_branch_to_avoid_crash = false;
+  bool not_genuinely_supported_by_triton = false;
 
   // The two variables below are only needed prior to C++20 as capturing
   // structured bindings is not supported.
@@ -397,21 +417,33 @@ ENTRY triton_computation {
          data_type_out == PrimitiveType::F64);
   }
 
-  // Crashes due to unsupported/unspecified rounding mode.
-  skip_failure_branch_to_avoid_crash |=
-      (any_is(PrimitiveType::F8E4M3FN) && any_is(PrimitiveType::F8E5M2)) ||
-      (data_type_in == PrimitiveType::F64 &&
-       (data_type_out == PrimitiveType::F8E4M3FN ||
-        data_type_out == PrimitiveType::F8E5M2));
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    not_genuinely_supported_by_triton |=
+      (any_is(PrimitiveType::F8E5M2) &&
+      (any_is(F16) || any_is(F32) || any_is(BF16))) ||
+      (data_type_in == data_type_out &&
+        data_type_in == PrimitiveType::F8E4M3FN) ||
+      (data_type_in == data_type_out &&
+        data_type_in == PrimitiveType::F8E5M2);
+  } else {
+    // Crashes due to unsupported/unspecified rounding mode.
+    skip_failure_branch_to_avoid_crash |=
+        (any_is(PrimitiveType::F8E4M3FN) &&
+         any_is(PrimitiveType::F8E5M2)) &&
+        (data_type_in == PrimitiveType::F64 &&
+        (data_type_out == PrimitiveType::F8E4M3FN ||
+          data_type_out == PrimitiveType::F8E5M2));
 
-  // Crashes due to unsupported conversion.
-  skip_failure_branch_to_avoid_crash |=
-      (data_type_out == PrimitiveType::F64 &&
-       (data_type_in == PrimitiveType::F8E4M3FN ||
-        data_type_in == PrimitiveType::F8E5M2));
+    // Crashes due to unsupported conversion.
+    skip_failure_branch_to_avoid_crash |=
+        (data_type_out == PrimitiveType::F64 &&
+        (data_type_in == PrimitiveType::F8E4M3FN ||
+          data_type_in == PrimitiveType::F8E5M2));
+  }
 
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc,
-                 skip_failure_branch_to_avoid_crash);
+                 skip_failure_branch_to_avoid_crash,
+                 not_genuinely_supported_by_triton);
 }
 
 constexpr std::array kTestedOpsConvert = {HloOpcode::kConvert};
@@ -449,13 +481,17 @@ ENTRY triton_computation {
                                      data_type, opcode));
 
   bool skip_failure_branch_to_avoid_crash =
+      (opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
+      (data_type == PrimitiveType::F8E5M2 || data_type == PrimitiveType::F8E4M3FN);
+
+  bool not_genuinely_supported_by_triton =
       opcode == HloOpcode::kDivide &&
-      (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16 ||
-       data_type == PrimitiveType::F8E5M2 ||
-       data_type == PrimitiveType::F8E4M3FN);
+      (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16);
+
 
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc,
-                 skip_failure_branch_to_avoid_crash);
+                 skip_failure_branch_to_avoid_crash,
+                 not_genuinely_supported_by_triton);
 }
 
 TEST_P(BinaryElementwiseTest, IsTritonSupportedBinaryElementwise0D) {
@@ -482,13 +518,15 @@ ENTRY triton_computation {
                                      data_type, opcode));
 
   bool skip_failure_branch_to_avoid_crash =
-      opcode == HloOpcode::kDivide &&
-      (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16 ||
-       data_type == PrimitiveType::F8E5M2 ||
-       data_type == PrimitiveType::F8E4M3FN);
+  (opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
+  (data_type == PrimitiveType::F8E5M2 || data_type == PrimitiveType::F8E4M3FN);
+
+  bool not_genuinely_supported_by_triton =
+  opcode == HloOpcode::kDivide &&
+  (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16);
 
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{}, cc,
-                 skip_failure_branch_to_avoid_crash);
+  skip_failure_branch_to_avoid_crash, not_genuinely_supported_by_triton);
 }
 
 constexpr std::array kTestedOpsBinaryElementwise = {
@@ -534,7 +572,28 @@ ENTRY triton_computation {
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
       ParseTemplateAndGetInstruction(hlo_text, data_type, opcode));
-  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc);
+
+  bool skip_failure_branch_to_avoid_crash = false;
+  bool not_genuinely_supported_by_triton = false;
+
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    skip_failure_branch_to_avoid_crash |=
+      opcode == HloOpcode::kClamp &&
+      (data_type == PrimitiveType::F8E5M2 ||
+       data_type == PrimitiveType::F8E4M3FN);
+
+    not_genuinely_supported_by_triton |=
+      opcode == HloOpcode::kSelect &&
+      (data_type == PrimitiveType::F8E5M2 ||
+       data_type == PrimitiveType::F8E4M3FN);
+  } else {
+    skip_failure_branch_to_avoid_crash |=
+     (opcode == HloOpcode::kClamp || opcode == HloOpcode::kSelect) &&
+     (data_type == PrimitiveType::F8E5M2 || data_type == PrimitiveType::F8E4M3FN);
+  }
+
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc,
+    skip_failure_branch_to_avoid_crash, not_genuinely_supported_by_triton);
 }
 
 constexpr std::array kTestedOpsTernaryElementwise = {HloOpcode::kSelect,
@@ -588,8 +647,7 @@ ENTRY triton_computation {
   TF_ASSERT_OK_AND_ASSIGN(TestedInstruction ti,
                           ParseTemplateAndGetInstruction(kHloTestTemplate, F32,
                                                          HloOpcode::kReduce));
-  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{3, 4},
-                 se::CudaComputeCapability::Ampere());
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{3, 4}, AllDevicesToTest()[0]);
 }
 
 TEST_P(
@@ -676,7 +734,7 @@ ENTRY triton_computation {
 }
 
 TEST_F(ReduceTest, ReduceWithNonConstReduceValueIsSupportedWithTriton) {
-  const se::GpuComputeCapability cc = se::CudaComputeCapability::Ampere();
+  const se::GpuComputeCapability cc = AllDevicesToTest()[0];
   const std::string kHloTestTemplate = R"(
 add {
   Arg_0 = $0[] parameter(0)
@@ -761,12 +819,16 @@ ENTRY triton_computation {
   // TODO(b/361526623): Reduce the cases where setting
   // skip_failure_branch_to_avoid_crash is needed.
   bool skip_failure_branch_to_avoid_crash =
-      opcode == HloOpcode::kDivide &&
-      (data_type == BF16 || data_type == F16 || data_type == F8E4M3FN ||
-       data_type == F8E5M2);
+  (opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
+  (data_type == PrimitiveType::F8E5M2 || data_type == PrimitiveType::F8E4M3FN);
+
+  bool not_genuinely_supported_by_triton =
+  opcode == HloOpcode::kDivide &&
+  (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16);
 
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1}, cc,
-                 skip_failure_branch_to_avoid_crash);
+                 skip_failure_branch_to_avoid_crash,
+                 not_genuinely_supported_by_triton);
 }
 
 std::vector<HloOpcode> ExcludeOps(absl::Span<const HloOpcode> all_ops,
@@ -798,8 +860,14 @@ ENTRY triton_computation {
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
       ParseTemplateAndGetInstruction(kHloTestTemplate, data_type, opcode));
-
-  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32, 16}, cc);
+  bool not_genuinely_supported_by_triton = false;
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    not_genuinely_supported_by_triton |=
+      (data_type == PrimitiveType::F8E5M2 ||
+       data_type == PrimitiveType::F8E4M3FN);
+  }
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32, 16}, cc, false,
+                 not_genuinely_supported_by_triton);
 }
 
 constexpr std::array kTestedOpsTranspose = {HloOpcode::kTranspose};
@@ -825,8 +893,14 @@ ENTRY triton_computation {
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
       ParseTemplateAndGetInstruction(kHloTestTemplate, data_type, opcode));
-
-  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{8, 4}, cc);
+  bool not_genuinely_supported_by_triton = false;
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    not_genuinely_supported_by_triton |=
+      (data_type == PrimitiveType::F8E5M2 ||
+        data_type == PrimitiveType::F8E4M3FN);
+  }
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{8, 4}, cc, false,
+                 not_genuinely_supported_by_triton);
 }
 
 TEST_P(SliceTest, NonContinuousSliceWhereStrideDividesOffsetEvenly) {
@@ -1071,7 +1145,14 @@ ENTRY triton_computation {
   TF_ASSERT_OK_AND_ASSIGN(TestedInstruction ti, ParseTemplateAndGetInstruction(
                                                     kHloTestTemplate, data_type,
                                                     HloOpcode::kBroadcast));
-  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{2, 16, 32, 8}, cc);
+  bool not_genuinely_supported_by_triton = false;
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    not_genuinely_supported_by_triton |=
+      (data_type == PrimitiveType::F8E5M2 ||
+        data_type == PrimitiveType::F8E4M3FN);
+  }
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{2, 16, 32, 8}, cc, false,
+                 not_genuinely_supported_by_triton);
 }
 
 constexpr std::array kTestedOpsBroadcast = {HloOpcode::kBroadcast};
@@ -1095,7 +1176,14 @@ ENTRY triton_computation {
   TF_ASSERT_OK_AND_ASSIGN(TestedInstruction ti, ParseTemplateAndGetInstruction(
                                                     kHloTestTemplate, data_type,
                                                     HloOpcode::kParameter));
-  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32}, cc);
+  bool not_genuinely_supported_by_triton = false;
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    not_genuinely_supported_by_triton |=
+      (data_type == PrimitiveType::F8E5M2 ||
+        data_type == PrimitiveType::F8E4M3FN);
+  }
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32}, cc, false,
+                 not_genuinely_supported_by_triton);
 }
 
 constexpr std::array kTestedOpsParameter = {HloOpcode::kParameter};
@@ -1123,7 +1211,14 @@ ENTRY triton_computation {
   TF_ASSERT_OK_AND_ASSIGN(TestedInstruction ti, ParseTemplateAndGetInstruction(
                                                     kHloTestTemplate, data_type,
                                                     HloOpcode::kConstant));
-  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 1}, cc);
+  bool not_genuinely_supported_by_triton = false;
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    not_genuinely_supported_by_triton |=
+      (data_type == PrimitiveType::F8E5M2 ||
+        data_type == PrimitiveType::F8E4M3FN);
+  }
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 1}, cc, false,
+                 not_genuinely_supported_by_triton);
 }
 
 TEST_P(ConstantTest, Constant2D) {

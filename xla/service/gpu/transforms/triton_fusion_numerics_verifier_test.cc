@@ -52,6 +52,9 @@ class TritonFusionNumericsVerifierTest
     options.set_xla_gpu_verify_triton_fusion_numerics(true);
     return options;
   }
+  const stream_executor::GpuComputeCapability& GpuComputeComp() {
+    return device_desc().gpu_compute_capability();
+  }
 
  protected:
   std::unique_ptr<xla::HloModule> Module(absl::string_view hlo_text_template,
@@ -89,6 +92,10 @@ class TritonFusionNumericsVerifierTest
     TF_EXPECT_OK(opt_compile_util_or);
     EXPECT_TRUE(opt_compile_util_or->has_value());
     return std::move(opt_compile_util_or->value());
+  }
+
+  const stream_executor::DeviceDescription& device_desc() {
+    return backend().default_stream_executor()->GetDeviceDescription();
   }
 };
 
@@ -196,6 +203,9 @@ TEST_F(TritonFusionNumericsVerifierTest, CheckMismatch) {
 // spill. Verify that the numerics verifier still runs on those kernels.
 TEST_F(TritonFusionNumericsVerifierTest,
        CompilationSucceedsEvenIfKernelWillSpillRegisters) {
+  if (std::holds_alternative<se::RocmComputeCapability>(GpuComputeComp())) {
+    GTEST_SKIP() << "Does not produce register spills on ROCM.";
+  }
   auto module = Module(R"(
 HloModule m
 

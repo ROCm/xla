@@ -1,0 +1,11 @@
+--- a/third_party/amd/include/TritonAMDGPUToLLVM/Passes.td
++++ b/third_party/amd/include/TritonAMDGPUToLLVM/Passes.td
+@@ -59,7 +59,7 @@
+     let summary = "Insert instruction scheduling hints after the dot ops in the main loop";
+     let constructor = "mlir::triton::createInsertInstructionSchedHintsPass()";
+ 
+-    let dependentDialects = ["mlir::LLVM::LLVMDialect"];
++    let dependentDialects = ["mlir::LLVM::LLVMDialect", "mlir::triton::amdgpu::TritonAMDGPUDialect"];
+ }
+ 
+ def LowerInstructionSchedHints : Pass<"lower-insert-instruction-sched-hints", "mlir::ModuleOp"> {

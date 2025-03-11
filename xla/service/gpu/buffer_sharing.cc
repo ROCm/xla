@@ -84,7 +84,7 @@ std::optional<bool> FusionCanShareBufferHint(const HloInstruction* user,
   bool is_reduction_emitter = analysis.GetEmitterFusionKind() ==
                               HloFusionAnalysis::EmitterFusionKind::kReduction;
   const HloInstruction* reduction_hero =
-      is_reduction_emitter ? reduction_hero = analysis.FindHeroReduction()
+      is_reduction_emitter ? analysis.FindHeroReduction()
                            : nullptr;
 
   // We need to make sure that the fusion parameter is accessed in the same
