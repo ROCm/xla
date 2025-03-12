@@ -96,17 +96,18 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
   pm->addPass(mlir::createTritonAMDGPUOptimizeEpiloguePass());
   pm->addPass(mt::gpu::createTritonGPUOptimizeDotOperands({true}));
   pm->addNestedPass<mt::FuncOp>(mlir::createTritonAMDGPUHoistLayoutConversionsPass());
-  if (num_stages == kAmdDoubleBuffering && cc.has_amd_matrix_core()) {
+  if (cc.has_amd_matrix_core()) {
     pm->addPass(mlir::createTritonAMDGPUStreamPipelinePass(
-        num_stages, /*stream_prefetch=*/true));
+        num_stages, /*globalPrefetch=*/0, /*localPrefetch=*/0));
     pm->addPass(mlir::createCanonicalizerPass());
   }
   pm->addPass(mt::createTritonAMDGPUInsertInstructionSchedHintsPass("default"));
   pm->addPass(mt::gpu::createTritonGPUOptimizeDotOperands({true}));
   pm->addPass(mt::gpu::createTritonGPURemoveLayoutConversions());
   pm->addPass(mt::gpu::createTritonGPUReduceDataDuplication());
-  if (num_stages != kAmdDoubleBuffering) {
+  if (cc.has_amd_matrix_core()) {
     pm->addPass(mt::gpu::createTritonGPUReorderInstructions());
+    pm->addPass(mlir::createTritonAMDGPUBlockPingpongPass());
   }
   pm->addNestedPass<mt::FuncOp>(mlir::createTritonAMDGPUCanonicalizePointersPass());
   pm->addPass(mlir::createCanonicalizerPass());
