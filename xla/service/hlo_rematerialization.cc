@@ -2863,7 +2863,8 @@ absl::StatusOr<bool> HloRematerialization::Run(
   VLOG(2) << "HloRemat mode: compress: " << options_.remat_mode_config.compress
           << ", host_offload: " << options_.remat_mode_config.host_offload
           << ", recompute: " << options_.remat_mode_config.recompute;
-  XLA_VLOG_LINES(3, "Before HloRematerialization:\n" + module->ToString());
+  // XLA_VLOG_LINES(3, "Before HloRematerialization:\n" + module->ToString());
+  VLOG(-1) << "cj401 Before HloRematerialization:\n" << module->ToString();
 
   // Initialize pass object state.
   computation_peak_memory_.clear();
@@ -2973,7 +2974,8 @@ absl::StatusOr<bool> HloRematerialization::Run(
   const int64_t before_peak_memory =
       computation_peak_memory_.at(module->entry_computation()) +
       module_output_size + total_async_peak_memory;
-  VLOG(1) << "Peak memory usage of module (before): "
+  // VLOG(1) << "Peak memory usage of module (before): "
+  VLOG(-1) << "Peak memory usage of module (before): "
           << HumanReadableNumBytes(before_peak_memory);
 
   // Initialize the HloCostAnalysis on this computation.
