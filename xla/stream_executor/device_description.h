@@ -231,11 +231,11 @@ class RocmComputeCapability {
     return gfx_version() != "gfx900" && gfx_version() != "gfx906";
   }
 
-  bool has_hipblaslt() const { return gfx9_mi200_or_later() || gfx1200() || gfx1201(); }
+  bool has_hipblaslt() const { return gfx9_mi200_or_later() || gfx1200() || gfx1201() || gfx_version() == "gfx950"; }
 
   bool has_fp8_support() const { return has_ocp_fp8_support() || has_nanoo_fp8_support(); }
 
-  bool has_ocp_fp8_support() const { return gfx1200() || gfx1201(); }
+  bool has_ocp_fp8_support() const { return gfx1200() || gfx1201() || gfx_version() == "gfx950"; }
 
   bool has_nanoo_fp8_support() const { return gfx9_mi300(); }
 
@@ -262,6 +262,7 @@ class RocmComputeCapability {
       "gfx1100",                      // RX7900
       "gfx1200",
       "gfx1201",
+      "gfx950",
   };
 };
 
