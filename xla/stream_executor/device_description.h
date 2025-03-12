@@ -122,14 +122,14 @@ class RocmComputeCapability {
   }
 
   bool has_hipblaslt() const {
-    return gfx9_mi200_or_later() || gfx1200() || gfx1201();
+    return gfx9_mi200_or_later() || gfx1200() || gfx1201() || gfx_version() == "gfx950";
   }
 
   bool has_fp8_support() const {
     return has_ocp_fp8_support() || has_nanoo_fp8_support();
   }
 
-  bool has_ocp_fp8_support() const { return gfx1200() || gfx1201(); }
+  bool has_ocp_fp8_support() const { return gfx1200() || gfx1201() || gfx_version() == "gfx950"; }
 
   bool has_nanoo_fp8_support() const { return gfx_version() == "gfx942"; }
 
