@@ -2379,11 +2379,13 @@ std::unique_ptr<HloInstruction> HloInstruction::CloneWithNewOperands(
 std::unique_ptr<HloInstruction> HloInstruction::CloneWithNewOperands(
     const Shape& shape, absl::Span<HloInstruction* const> new_operands,
     const std::string& suffix, HloCloneContext* context) const {
-  VLOG(3) << "CloneWithNewOperands:\n  " << ToString();
-  VLOG(3) << "  new operands:";
+  /*    
+  VLOG(-1) << "cj401 CloneWithNewOperands:\n  " << ToString();
+  VLOG(-1) << "cj401  new operands:";
   for (const HloInstruction* new_operand : new_operands) {
-    VLOG(3) << "    %" << new_operand->name();
+    VLOG(-1) << "cj401    %" << new_operand->name();
   }
+      */
 
   std::unique_ptr<HloInstruction> clone;
   // Explicitly call the factory for the instruction type. This is more robust
@@ -2587,11 +2589,27 @@ std::unique_ptr<HloInstruction> HloInstruction::CloneWithNewOperands(
                  ? context->module()->DeepCloneComputation(callee, context)
                  : callee;
     });
+
+    // cj401
+    if (opcode_ == HloOpcode::kFusion) {
+      VLOG(-1) << "cj401 Fusion after subcomputation cloning: " << clone->name();
+      for (HloComputation* comp : clone->called_computations()) {
+        VLOG(-1) << "cj401  Cloned subcomp " << comp->name() << ":";
+        for (HloInstruction* instr : comp->instructions()) {
+          VLOG(-1) << "cj401    " << instr->name() << " (ID: " << instr->unique_id() << ")";
+        }
+      }
+    }
   }
+
+  // VLOG(-1) << "cj401 before add suffix to instruction name = " << clone->ToString();
 
   if (!suffix.empty()) {
     clone->AddSuffixToInstructionName(suffix);
   }
+
+  // VLOG(-1) << "cj401 after add suffix to instruction name = " << clone->ToString();
+
   return clone;
 }
 
@@ -2626,11 +2644,13 @@ std::unique_ptr<HloInstruction> HloInstruction::CloneWithNewShape(
     HloCloneContext* context) const {
   std::unique_ptr<HloInstruction> clone =
       CloneWithNewOperands(shape, operands_, context);
+  // VLOG(-1) << "cj401 before add suffix to instruction name = " << clone->ToString();
   if (suffix.empty()) {
     clone->name_.assign(name().begin(), name().end());
   } else {
     clone->AddSuffixToInstructionName(suffix);
   }
+  // VLOG(-1) << "cj401 after add suffix to instruction name = " << clone->ToString();
   return clone;
 }
 
