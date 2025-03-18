@@ -200,7 +200,8 @@ class RocmComputeCapability {
 
   bool gfx10_rx69xx() const { return gfx_version() == "gfx1030"; }
 
-  bool gfx11() const { return gfx_version().find("gfx11"); }
+  bool gfx11() const { return gfx_version().find("gfx11") !=
+                              std::string::npos;}
 
   bool gfx1200() const { return gfx_version() == "gfx1200"; }
 
@@ -217,8 +218,9 @@ class RocmComputeCapability {
   bool has_mfma_instr_support() const { return gfx9_mi100_or_later(); }
 
   bool has_amd_matrix_core() const {
-    return (gfx9_mi100_or_later() || gfx_version().find("gfx11") ||
-            gfx_version().find("gfx12"));
+    return (gfx9_mi100_or_later() ||
+            (gfx_version().find("gfx11") != std::string::npos) ||
+            (gfx_version().find("gfx12") != std::string::npos));
   }
 
   bool has_fp16_atomics_support() const {
