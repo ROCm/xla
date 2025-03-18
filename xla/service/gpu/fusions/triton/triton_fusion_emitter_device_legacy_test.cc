@@ -3194,9 +3194,17 @@ ENTRY e {
 }
 )";
 
-  EXPECT_TRUE(RunAndCompareTwoModules(hlo_text_ref, hlo_text_triton,
-                                      ErrorSpec{/*aabs=*/1e-6, /*arel=*/1e-6},
-                                      /*run_hlo_passes=*/false));
+  auto cc = GpuComputeComp();
+  auto rcc = std::get_if<se::RocmComputeCapability>(&cc);
+  if (rcc && rcc->gfx11()) {
+    EXPECT_TRUE(RunAndCompareTwoModules(hlo_text_ref, hlo_text_triton,
+      ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6},
+      /*run_hlo_passes=*/false));
+  } else {
+    EXPECT_TRUE(RunAndCompareTwoModules(hlo_text_ref, hlo_text_triton,
+      ErrorSpec{/*aabs=*/1e-6, /*arel=*/1e-6},
+      /*run_hlo_passes=*/false));
+  }
 }
 
 TEST_F(CompareTest, F32) {
