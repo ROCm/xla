@@ -127,7 +127,7 @@ TEST(DynamicSliceThunkTest, SlicedGemm) {
                       ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
                       ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0,
                       0.0, 0.0, PrecisionConfig::ALG_UNSET, std::nullopt,
-                      se::blas::kDefaultComputePrecision, false, false);
+                      se::blas::kDefaultComputePrecision, false, false, false);
   ASSERT_TRUE(config.ok());
 
   // Creating embedded GEMM thunk.
@@ -279,7 +279,7 @@ TEST(DynamicSliceThunkTest, MulipleSlicedOperandsGemm) {
                       ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
                       ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0,
                       0.0, 0.0, PrecisionConfig::ALG_UNSET, std::nullopt,
-                      se::blas::kDefaultComputePrecision, false, false);
+                      se::blas::kDefaultComputePrecision, false, false, false);
   ASSERT_TRUE(config.ok());
 
   // Creating embedded GEMM thunk.
@@ -798,7 +798,7 @@ TEST(DynamicSliceThunkTest, SlicedGemmArbitraryArgumentOrder) {
                       ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
                       ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0,
                       0.0, 0.0, PrecisionConfig::ALG_UNSET, std::nullopt,
-                      se::blas::kDefaultComputePrecision, false, false);
+                      se::blas::kDefaultComputePrecision, false, false, false);
   ASSERT_TRUE(config.ok());
 
   // Creating embedded GEMM thunk.
@@ -946,7 +946,7 @@ TEST(DynamicSliceThunkTest, SlicedGemmArbitraryNumberOfArguments) {
                       ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
                       ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0,
                       0.0, 0.0, PrecisionConfig::ALG_UNSET, std::nullopt,
-                      se::blas::kDefaultComputePrecision, false, false);
+                      se::blas::kDefaultComputePrecision, false, false, false);
   ASSERT_TRUE(config.ok());
 
   // Creating embedded GEMM thunk.
@@ -1087,7 +1087,7 @@ TEST(DynamicSliceThunkTest, SlicedTupledOperandGemm) {
                       ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
                       ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0,
                       0.0, 0.0, PrecisionConfig::ALG_UNSET, std::nullopt,
-                      se::blas::kDefaultComputePrecision, false, false);
+                      se::blas::kDefaultComputePrecision, false, false, false);
   ASSERT_TRUE(config.ok());
 
   // Creating embedded GEMM thunk.
@@ -1440,7 +1440,7 @@ TEST(DynamicSliceThunkTest, SlicedOperandsSameBufferGemm) {
                       ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
                       ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0,
                       0.0, 0.0, PrecisionConfig::ALG_UNSET, std::nullopt,
-                      se::blas::kDefaultComputePrecision, false, false);
+                      se::blas::kDefaultComputePrecision, false, false, false);
   ASSERT_TRUE(config.ok());
 
   // Creating embedded GEMM thunk.
