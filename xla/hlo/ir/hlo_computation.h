@@ -92,6 +92,7 @@ class HloComputation {
     virtual HloInstruction* AddInstruction(
         std::unique_ptr<HloInstruction> instruction) {
       auto* added_instruction = instruction.get();
+      // VLOG(-1) << "cj401 addInstruction = " << added_instruction->ToString();
       instructions_.push_back(std::move(instruction));
       return added_instruction;
     }

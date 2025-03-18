@@ -2011,13 +2011,35 @@ absl::StatusOr<int64_t> RematerializeInstructions(
       continue;
     }
 
-    HloCloneContext context(computation->parent());
-    VLOG(-1) << "cj401 Rematerializing instruction: " << best->ToString();
+    HloCloneContext context(computation->parent(), "remat");
+    VLOG(-1) << "cj401 Rematerializing instruction: " << best->ToString() << " with address = " << &context << " suffix = " << context.suffix();
+
+    // auto tmp_instr{best->Clone(/*suffix=*/"remat", &context)};
+
+    // VLOG(-1) << "cj401 tmp_instr " << tmp_instr->ToString();
 
     HloInstruction* remat =
         computation->AddInstruction(best->Clone(/*suffix=*/"remat", &context));
     
+    VLOG(-1) << "cj401 after Rematerializing instruction: " << remat->ToString();
+
+    if (best->opcode() == HloOpcode::kFusion) {
+      VLOG(-1) << "cj401 Original fusion sub-instructions:";
+      for (HloComputation* comp : best->called_computations()) {
+        for (HloInstruction* instr : comp->instructions()) {
+          VLOG(-1) << "cj401  " << instr->name() << " (ID: " << instr->unique_id() << ")";
+        }
+      }
+      VLOG(-1) << "cj401 Cloned fusion sub-instructions:";
+      for (HloComputation* comp : remat->called_computations()) {
+        for (HloInstruction* instr : comp->instructions()) {
+          VLOG(-1) << "cj401  " << instr->name() << " (ID: " << instr->unique_id() << ")";
+        }
+      }
+    }
+    
     // update each sub-instruction if it's a fusion
+    /*
     if (remat->opcode() == HloOpcode::kFusion) {
       for (HloComputation* fused_comp : remat->called_computations()) {
         for (HloInstruction* instr : fused_comp->instructions()) {
@@ -2029,7 +2051,7 @@ absl::StatusOr<int64_t> RematerializeInstructions(
         }
       }
     }
-
+    */
     for (auto& cloned_computation_pair : context.cloned_computations()) {
       if (!schedule->is_computation_scheduled(cloned_computation_pair.first)) {
         continue;
@@ -2863,8 +2885,8 @@ absl::StatusOr<bool> HloRematerialization::Run(
   VLOG(2) << "HloRemat mode: compress: " << options_.remat_mode_config.compress
           << ", host_offload: " << options_.remat_mode_config.host_offload
           << ", recompute: " << options_.remat_mode_config.recompute;
-  // XLA_VLOG_LINES(3, "Before HloRematerialization:\n" + module->ToString());
-  VLOG(-1) << "cj401 Before HloRematerialization:\n" << module->ToString();
+  XLA_VLOG_LINES(3, "Before HloRematerialization:\n" + module->ToString());
+  // VLOG(-1) << "cj401 Before HloRematerialization:\n" << module->ToString();
 
   // Initialize pass object state.
   computation_peak_memory_.clear();

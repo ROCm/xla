@@ -162,7 +162,7 @@ class HloModule {
 
   // Adds an embedded computation to the module.
   HloComputation* AddEmbeddedComputation(
-      std::unique_ptr<HloComputation> computation);
+      std::unique_ptr<HloComputation> computation, HloCloneContext* context=nullptr);
 
   // Removes an embedded computation.
   absl::Status RemoveEmbeddedComputation(HloComputation* to_remove);
@@ -545,7 +545,9 @@ class HloModule {
                                  bool is_entry) {
     return AddComputationInternal(std::move(computation), is_entry,
                                   /*uniquify_identifiers=*/false,
-                                  /*preserve_entry_layouts=*/true);
+                                  /*preserve_entry_layouts=*/true,
+                                  /*context=*/nullptr
+                                );
   }
 
   HloComputation* AddComputationAndUnifyNamesAndIds(
@@ -556,7 +558,9 @@ class HloModule {
     }
     return AddComputationInternal(std::move(computation), is_entry,
                                   /*uniquify_identifiers=*/true,
-                                  /*preserve_entry_layouts=*/true);
+                                  /*preserve_entry_layouts=*/true,
+                                  /*context=*/nullptr
+                                );
   }
 
   void SetAndUniquifyInstrName(HloInstruction* instr, absl::string_view name) {
@@ -731,7 +735,7 @@ class HloModule {
  private:
   HloComputation* AddComputationInternal(
       std::unique_ptr<HloComputation> computation, bool is_entry,
-      bool uniquify_identifiers, bool preserve_entry_layouts);
+      bool uniquify_identifiers, bool preserve_entry_layouts, HloCloneContext* context);
 
   std::string name_;
   CopyOnWrite<HloModuleConfig> config_;

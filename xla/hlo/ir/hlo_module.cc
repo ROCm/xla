@@ -119,7 +119,20 @@ HloModule::StackFrame HloModule::get_stack_frame(int id) const {
 
 HloComputation* HloModule::AddComputationInternal(
     std::unique_ptr<HloComputation> computation, bool is_entry,
-    bool uniquify_identifiers, bool preserve_entry_layouts) {
+    bool uniquify_identifiers, bool preserve_entry_layouts,
+    HloCloneContext* context = nullptr
+  ) {
+/*
+VLOG(-1) << "cj401 Entering AddComputationInternal: " << computation->name()
+      << " (is_entry: " << is_entry << ", uniquify_identifiers: " << uniquify_identifiers << ")";
+for (HloInstruction* instr : computation->instructions()) {
+VLOG(-1) << "cj401  Initial: " << instr->name() << " (ID: " << instr->unique_id() << ")";
+}
+*/
+VLOG(-1) << "cj401 Entering AddComputationInternal: " << computation->name()
+<< " (is_entry: " << is_entry << ", uniquify_identifiers: " << uniquify_identifiers 
+<< ", context: " << (context ? "present" : "null") << ")" << " context->suffix() = ";
+  
   if (is_entry) {
     CHECK_EQ(nullptr, entry_computation_);
     entry_computation_ = computation.get();
@@ -138,20 +151,60 @@ HloComputation* HloModule::AddComputationInternal(
     buffer_donor_config_ = HloBufferDonorConfig();
   }
 
-  if (uniquify_identifiers) {
+  // uniquify_identifiers = false;
+  // bool is_clone{true}; // && !is_clone
+  // bool is_remat_clone = context && context->suffix() == "remat";  // Check for rematerialization
+  // VLOG(-1) << "cj401 context->suffix() " << context->suffix(); 
+  bool is_remat_clone = context && context->suffix() == "remat";  // Check for rematerialization
+  // is_remat_clone = true;
+  if (uniquify_identifiers && !is_remat_clone) {
+    VLOG(-1) << "cj401 Before UniquifyName (computation): " << computation->name() << " suffix = " << context;
     computation->UniquifyName(&computation_name_uniquer_);
+    VLOG(-1) << "cj401 After UniquifyName (computation): " << computation->name();
+
+    VLOG(-1) << "cj401 Before UniquifyName (instructions):";
     for (auto* instruction : computation->instructions()) {
+      VLOG(-1) << "cj401  " << instruction->name() << " (ID: " << instruction->unique_id() << ")";
+      // std::string original_name = instruction->name();
+      // absl:string_view original_name = instruction->name();
+      std::string original_name(instruction->name());
       instruction->UniquifyName(&instruction_name_uniquer_);
+      if (instruction->name() != original_name) {
+        VLOG(-1) << "cj401 Uniquified from " << original_name << " to " << instruction->name()
+                << " (ID: " << instruction->unique_id() << ")";
+      }
+    }
+
+    VLOG(-1) << "cj401 After UniquifyName (instructions):";
+    for (auto* instruction : computation->instructions()) {
+      VLOG(-1) << "cj401  " << instruction->name() << " (ID: " << instruction->unique_id() << ")";
     }
 
     // Pick unique IDs for each instruction.
+    VLOG(2) << "cj401 Assigning unique IDs:";
     for (auto* instruction : computation->instructions()) {
+      int old_id = instruction->unique_id();
       instruction->SetUniqueId(NewUniqueInstructionId());
+      VLOG(-1) << "cj401  " << instruction->name() << " ID: " << old_id << " -> " 
+              << instruction->unique_id();
     }
     // Set unique id to this computation.
     CHECK_NE(computation->root_instruction()->unique_id(), -1)
         << "Root has no valid id: " << computation->ToString();
     computation->SetUniqueId(computation->root_instruction()->unique_id());
+  } else if (is_remat_clone) {
+    VLOG(-1) << "cj401 handling remat clone for " << computation->name() << " suffix = " << context->suffix();
+    computation_name_uniquer_.GetUniqueName(computation->name());
+    for (auto* instruction : computation->instructions()) {
+      if (instruction->opcode() == HloOpcode::kParameter) {
+        std::string original_name = std::string(instruction->name());
+        instruction->UniquifyName(&instruction_name_uniquer_);
+        VLOG(1) << "cj401 Uniquified parameter from " << original_name << " to " << instruction->name()
+                << " (ID: " << instruction->unique_id() << ")";
+      } else {
+        instruction_name_uniquer_.GetUniqueName(instruction->name());  // Register only
+      }
+    }
   } else {
     // Don't uniquify the names of the computation or instruction, but we must
     // run the names through the uniquifiers to prevent future name collisions
@@ -160,6 +213,8 @@ HloComputation* HloModule::AddComputationInternal(
     // instruction (or the computation) to avoid ID collisions.
     computation_name_uniquer_.GetUniqueName(computation->name());
     for (auto* instruction : computation->instructions()) {
+      VLOG(-1) << "cj401  Before GetUniqueName: " << instruction->name() 
+              << " (ID: " << instruction->unique_id() << ")";
       instruction_name_uniquer_.GetUniqueName(instruction->name());
       next_unique_id_ = std::max(next_unique_id_, instruction->unique_id() + 1);
     }
@@ -168,9 +223,26 @@ HloComputation* HloModule::AddComputationInternal(
     }
   }
 
+  VLOG(-1) << "cj401 Assigning unique IDs for " << computation->name();
+  for (auto* instruction : computation->instructions()) {
+    if (instruction->unique_id() == -1) {
+      instruction->SetUniqueId(NewUniqueInstructionId());
+      VLOG(2) << "cj401  " << instruction->name() << " assigned ID: " << instruction->unique_id();
+    }
+  }
+  if (computation->unique_id() == -1) {
+    computation->SetUniqueId(computation->root_instruction()->unique_id());
+  }
+
   computation->set_parent(this);
   computations_.push_back(std::move(computation));
-  return computations_.back().get();
+  auto* computation_ptr = computations_.back().get();
+  VLOG(2) << "cj401 Final computation: " << computation_ptr->name();
+  for (HloInstruction* instr : computation_ptr->instructions()) {
+    VLOG(2) << "cj401  " << instr->name() << " (ID: " << instr->unique_id() << ")";
+  }
+  return computation_ptr;
+  // return computations_.back().get();
 }
 
 HloComputation* HloModule::AddEntryComputation(
@@ -203,10 +275,13 @@ absl::Status HloModule::RemoveEmbeddedComputation(HloComputation* to_remove) {
 }
 
 HloComputation* HloModule::AddEmbeddedComputation(
-    std::unique_ptr<HloComputation> computation) {
+    std::unique_ptr<HloComputation> computation, HloCloneContext* context) {
+      VLOG(-1) << "cj401 add embedded computation context = " << context; 
   return AddComputationInternal(std::move(computation), /*is_entry=*/false,
                                 /*uniquify_identifiers=*/true,
-                                /*preserve_entry_layouts=*/false);
+                                /*preserve_entry_layouts=*/false,
+                                /*context=*/context
+                              );
 }
 
 void HloModule::MarkFusionDuplications(
@@ -1140,6 +1215,7 @@ HloComputation* HloModule::DeepCloneComputation(HloComputation* computation,
   HloComputation* new_computation;
   if (context != nullptr) {
     if ((new_computation = context->FindComputation(computation)) != nullptr) {
+      // VLOG(-1) << "cj401 FindComputation = " << new_computation->ToString();
       return new_computation;
     }
     new_computation =

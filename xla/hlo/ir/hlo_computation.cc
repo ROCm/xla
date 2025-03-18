@@ -203,6 +203,7 @@ HloInstruction* HloComputation::AddInstruction(
   CHECK(instruction->opcode() != HloOpcode::kParameter)
       << "Parameter instructions cannot be added to a computation after "
       << "it has been built";
+  // VLOG(-1) << "cj401 new_name = " << new_name;
   if (!new_name.empty()) {
     instruction->SetAndSanitizeName(new_name);
   }
@@ -232,16 +233,18 @@ HloInstruction* HloComputation::AddInstruction(
 HloInstruction* HloComputation::AddInstructionInternal(
     std::unique_ptr<HloInstruction> instruction) {
   if (parent() != nullptr) {
+    // VLOG(-1) << "cj401 before uniquify name = " << instruction->ToString();
     instruction->UniquifyName(&parent()->instruction_name_uniquer());
     instruction->SetUniqueId(parent()->NewUniqueInstructionId());
+    // VLOG(-1) << "cj401 after uniquify name = " << instruction->ToString();
   }
   instruction->set_parent(this);
   HloInstruction* pinst = instruction.release();  // Take ownership
   HloInstructionInfo info;
   info.opcode_ = pinst->opcode();
   info.inst_ = pinst;
-  VLOG(2) << "Adding instruction " << pinst << " " << pinst->name()
-          << " from computation " << name() << " opcode " << info.opcode();
+  // VLOG(-1) << "cj401 Adding instruction " << pinst << " " << pinst->name()
+  //        << " from computation " << name() << " opcode " << info.opcode();
   uint32_t index = instructions_.size();
   instruction_count_++;
   pinst->index_in_parent_ = index;
@@ -1690,6 +1693,7 @@ std::unique_ptr<HloComputation> HloComputation::CloneInContext(
     instructions.emplace_back(instr->Clone());
   }
   for (auto instr : postorder) {
+    // VLOG(-1) << "cj401 Cloning sub-instr: " << instr->name() << " (ID: " << instr->unique_id() << ")";
     std::vector<HloInstruction*> new_operands;
     for (auto operand : instr->operands()) {
       auto replaced_operand = replace(operand);
@@ -1705,6 +1709,7 @@ std::unique_ptr<HloComputation> HloComputation::CloneInContext(
       new_instr->set_parameter_replicated_at_leaf_buffers(
           instr->parameter_replicated_at_leaf_buffers().value());
     }
+    // VLOG(-1) << "cj401 Cloned before adding: " << new_instr->name() << " (ID: " << new_instr->unique_id() << ")";
     instructions.push_back(std::move(new_instr));
   }
 
@@ -1715,14 +1720,30 @@ std::unique_ptr<HloComputation> HloComputation::CloneInContext(
   Builder builder(suffix.empty() ? std::string(name())
                                  : absl::StrCat(name(), ".", suffix));
   for (auto& instr : instructions) {
-    builder.AddInstruction(std::move(instr));
+    // VLOG(-1) << "cj401 before adding to builder: " << instr->name() << " (ID: " << instr->unique_id() << ")";
+    // builder.AddInstruction(std::move(instr));
+    // added->set_name(instr->name());  // Override uniquification
+    VLOG(-1) << "cj401 Before adding to builder: " << instr->name() << " (ID: " << instr->unique_id() << ")";
+    // HloInstruction* added = builder.AddInstruction(std::move(instr));
+    // builder.AddInstruction(std::move(instr));
+    auto* added_instr = builder.AddInstruction(std::move(instr));
+    VLOG(-1) << "cj401 after adding to builder: " << added_instr->name() 
+         << " (ID: " << added_instr->unique_id() << ")";
+
+    // VLOG(-1) << "cj401 after adding to builder: " << instr->name() << " (ID: " << instr->unique_id() << ")";
+    // added->set_name(instr->name());  // Force original name
+    // VLOG(-1) << "cj401 added set name: " << added->name() << " (ID: " << added->unique_id() << ")";
+    // VLOG(-1) << "cj401 after adding to builder: " << instr->name() << " (ID: " << instr->unique_id() << ")";
   }
   auto result = builder.Build(
       /*root_instruction=*/context.GetInstruction(replace(new_root)));
+  // VLOG(-1) << "cj401 Cloned computation: " << result->name();
 
   // Clone control dependencies.
   for (auto instr : postorder) {
+    // VLOG(2) << "cj401  " << instr->name() << " (ID: " << instr->unique_id() << ")";
     HloInstruction* new_instr = context.GetInstruction(instr);
+    // VLOG(-1) << "cj401 new_instr " << new_instr->name() << " (ID: " << new_instr->unique_id() << ")";
     for (auto successor : instr->control_successors()) {
       auto replaced_successor = replace(successor);
       // successor may not have been remapped, because it might have been
@@ -1731,6 +1752,7 @@ std::unique_ptr<HloComputation> HloComputation::CloneInContext(
         TF_CHECK_OK(new_instr->AddControlDependencyTo(
             context.GetInstruction(replaced_successor)));
       }
+      // VLOG(-1) << "cj401  successor instr " << instr->name() << " (ID: " << instr->unique_id() << ")";
     }
   }
 
@@ -1740,6 +1762,7 @@ std::unique_ptr<HloComputation> HloComputation::CloneInContext(
 
   context.MapComputation(this, result.get());
   result->SetExecutionThread(execution_thread());
+  // VLOG(-1) << "cj401  result = " << result->ToString();
   return result;
 }
 
