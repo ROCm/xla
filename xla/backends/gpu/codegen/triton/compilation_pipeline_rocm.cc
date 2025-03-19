@@ -101,6 +101,8 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
     pm->addPass(mt::gpu::createTritonGPUReorderInstructions());
   }
   pm->addPass(mlir::createTritonAMDGPUCanonicalizePointersPass());
+  // pm->addPass(mlir::createCanonicalizerPass());
+  // pm->addPass(mlir::createTritonAMDGPUConvertToBufferOpsPass(cc.gfx_version()));
   pm->addPass(mlir::createCanonicalizerPass());
   pm->addPass(mlir::createCSEPass());
   pm->addPass(mlir::createSymbolDCEPass());
