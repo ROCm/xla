@@ -75,10 +75,49 @@ using mlir::ValueRange;
 using mlir::func::FuncOp;
 using mlir::func::ReturnOp;
 
+namespace mt = ::mlir::tensor;
+namespace mv = ::mlir::vector;
+
 constexpr int kTileSize = 32;
-constexpr int kNumRows = 8;
-constexpr int kNumThreadsPerBlock = kNumRows * kTileSize;
-constexpr int kMaxVectorizedBytes = 16;
+constexpr int kNumRows = 4;
+constexpr int kNumThreadsPerBlock = 128;
+constexpr int kMaxVectorizedBytes = 4;
+
+// Reads the 2D vector tile <vector_size x vector_size> from the shared memory
+// at the given indices.
+Value ReadVectorTileFromShmem(ImplicitLocOpBuilder& b, Value shmem,
+                              ValueRange shmem_indices,
+                              Value vector_tile_init) {
+  int64_t vector_size =
+      mlir::cast<VectorType>(vector_tile_init.getType()).getDimSize(0);
+  Value vector_tile = vector_tile_init;
+  SmallVector<Value> shmem_indices_vec(shmem_indices.begin(),
+                                       shmem_indices.end());
+  auto elem_type =
+      mlir::cast<mlir::RankedTensorType>(shmem.getType()).getElementType();
+  auto vector_type = mlir::VectorType::get({vector_size}, elem_type);
+  for (int64_t i = 0; i < vector_size; ++i) {
+    Value loaded_vector = b.create<mv::TransferReadOp>(
+        vector_type, shmem, shmem_indices_vec, llvm::ArrayRef<bool>{true});
+    for (int64_t j = 0; j < vector_size; ++j) {
+      Value elem =
+          b.create<mv::ExtractOp>(loaded_vector, SmallVector<int64_t>{j});
+      vector_tile =
+          b.create<mv::InsertOp>(elem, vector_tile, SmallVector<int64_t>{j, i});
+    }
+    shmem_indices_vec.front() = b.create<mlir::arith::AddIOp>(
+        shmem_indices_vec.front(), b.create<mlir::arith::ConstantIndexOp>(1));
+  }
+  return vector_tile;
+}
+
+// Offsets each VECTOR_SIZE x VECTOR_SIZE tile in the shared memory by
+// vector_size to the right. This is needed to avoid bank conflicts.
+AffineExpr Swizzle(AffineExpr shmem_row, AffineExpr shmem_col,
+                   int vector_size) {
+  return (shmem_col + shmem_row.floorDiv(vector_size) * vector_size) %
+         (kNumShmemBanks * vector_size);
+}
 
 }  // namespace
 
