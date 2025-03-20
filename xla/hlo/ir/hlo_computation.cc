@@ -1723,12 +1723,12 @@ std::unique_ptr<HloComputation> HloComputation::CloneInContext(
     // VLOG(-1) << "cj401 before adding to builder: " << instr->name() << " (ID: " << instr->unique_id() << ")";
     // builder.AddInstruction(std::move(instr));
     // added->set_name(instr->name());  // Override uniquification
-    VLOG(-1) << "cj401 Before adding to builder: " << instr->name() << " (ID: " << instr->unique_id() << ")";
+    // VLOG(-1) << "cj401 Before adding to builder: " << instr->name() << " (ID: " << instr->unique_id() << ")";
     // HloInstruction* added = builder.AddInstruction(std::move(instr));
     // builder.AddInstruction(std::move(instr));
     auto* added_instr = builder.AddInstruction(std::move(instr));
-    VLOG(-1) << "cj401 after adding to builder: " << added_instr->name() 
-         << " (ID: " << added_instr->unique_id() << ")";
+    // VLOG(-1) << "cj401 after adding to builder: " << added_instr->name() 
+    //     << " (ID: " << added_instr->unique_id() << ")";
 
     // VLOG(-1) << "cj401 after adding to builder: " << instr->name() << " (ID: " << instr->unique_id() << ")";
     // added->set_name(instr->name());  // Force original name

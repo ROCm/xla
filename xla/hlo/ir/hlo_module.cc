@@ -157,7 +157,8 @@ VLOG(-1) << "cj401 Entering AddComputationInternal: " << computation->name()
   // VLOG(-1) << "cj401 context->suffix() " << context->suffix(); 
   bool is_remat_clone = context && context->suffix() == "remat";  // Check for rematerialization
   // is_remat_clone = true;
-  if (uniquify_identifiers && !is_remat_clone) {
+  // if (uniquify_identifiers && !is_remat_clone) {
+    if (uniquify_identifiers) {
     VLOG(-1) << "cj401 Before UniquifyName (computation): " << computation->name() << " suffix = " << context;
     computation->UniquifyName(&computation_name_uniquer_);
     VLOG(-1) << "cj401 After UniquifyName (computation): " << computation->name();
@@ -192,7 +193,9 @@ VLOG(-1) << "cj401 Entering AddComputationInternal: " << computation->name()
     CHECK_NE(computation->root_instruction()->unique_id(), -1)
         << "Root has no valid id: " << computation->ToString();
     computation->SetUniqueId(computation->root_instruction()->unique_id());
-  } else if (is_remat_clone) {
+  } 
+  /*
+  else if (is_remat_clone) {
     VLOG(-1) << "cj401 handling remat clone for " << computation->name() << " suffix = " << context->suffix();
     computation_name_uniquer_.GetUniqueName(computation->name());
     for (auto* instruction : computation->instructions()) {
@@ -205,7 +208,8 @@ VLOG(-1) << "cj401 Entering AddComputationInternal: " << computation->name()
         instruction_name_uniquer_.GetUniqueName(instruction->name());  // Register only
       }
     }
-  } else {
+  } */
+ else {
     // Don't uniquify the names of the computation or instruction, but we must
     // run the names through the uniquifiers to prevent future name collisions
     // for computations and instructions created later. Also, set the
