@@ -125,6 +125,16 @@ class StreamExecutorGpuClient : public xla::PjRtStreamExecutorClient {
                                       int64_t offset,
                                       int64_t transfer_size) override;
 
+  PjRtFuture<> CopyRawHostToDevice(
+      LocalDeviceState* local_device,
+      tsl::RCReference<RawSEDeviceMemory> device_buffer, const void* src,
+      int64_t offset, int64_t transfer_size) override;
+
+  PjRtFuture<> CopyRawDeviceToHost(
+      LocalDeviceState* local_device,
+      tsl::RCReference<RawSEDeviceMemory> device_buffer, void* dst,
+      int64_t offset, int64_t transfer_size) override;
+
   absl::StatusOr<const xla::PjRtTopologyDescription*> GetTopologyDescription()
       const override {
     return &topology_;
@@ -175,6 +185,10 @@ absl::StatusOr<DeviceTopologyPair> BuildDistributedDevices(
 
 absl::StatusOr<std::unique_ptr<PjRtClient>> GetStreamExecutorGpuClient(
     const GpuClientOptions& options);
+
+// Get the fabric info of a local device ordinal in the format of
+// "clusterUuid/cliqueId". Empty on SM90 or lower.
+absl::StatusOr<std::string> GetDeviceFabricInfo(int device_ordinal);
 
 }  // namespace xla
 

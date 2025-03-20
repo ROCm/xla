@@ -293,8 +293,7 @@ static void DecrementCount(
   }
 }
 
-void HloComputation::AddCallee(const HloInstruction* caller,
-                               HloComputation* callee) {
+void HloComputation::AddCallee(HloInstruction* caller, HloComputation* callee) {
   IncrementCount(callee_computations_, callee);
   IncrementCount(callee->caller_computations_, this);
 
@@ -318,7 +317,7 @@ void HloComputation::AddCallee(const HloInstruction* caller,
   }
 }
 
-void HloComputation::RemoveCallee(const HloInstruction* caller,
+void HloComputation::RemoveCallee(HloInstruction* caller,
                                   HloComputation* callee) {
   CHECK(caller);
   CHECK(callee);
@@ -343,22 +342,20 @@ void HloComputation::RemoveCallee(const HloInstruction* caller,
   }
 }
 
-absl::flat_hash_map<const HloInstruction*, int>*
-HloComputation::GetCallersMap() {
+absl::flat_hash_map<HloInstruction*, int>* HloComputation::GetCallersMap() {
   if (static_cast<CallersType>(callers_ & kCallerTypeMask) ==
       CallersType::kCallerCountHashMap) {
-    return reinterpret_cast<absl::flat_hash_map<const HloInstruction*, int>*>(
+    return reinterpret_cast<absl::flat_hash_map<HloInstruction*, int>*>(
         callers_ & ~kCallerTypeMask);
   }
   return nullptr;
 }
 
-absl::flat_hash_map<const HloInstruction*, int>* const
-HloComputation::GetCallersMap() const {
+absl::flat_hash_map<HloInstruction*, int>* const HloComputation::GetCallersMap()
+    const {
   if (static_cast<CallersType>(callers_ & kCallerTypeMask) ==
       CallersType::kCallerCountHashMap) {
-    return reinterpret_cast<
-        absl::flat_hash_map<const HloInstruction*, int>* const>(
+    return reinterpret_cast<absl::flat_hash_map<HloInstruction*, int>* const>(
         callers_ & ~kCallerTypeMask);
   }
   return nullptr;
@@ -367,8 +364,8 @@ HloComputation::GetCallersMap() const {
 HloInstruction* HloComputation::AddInstructionInternal(
     std::unique_ptr<HloInstruction> instruction) {
   if (parent() != nullptr) {
-    instruction->UniquifyName(&parent()->instruction_name_uniquer());
-    instruction->SetUniqueId(parent()->NewUniqueInstructionId());
+    instruction->UniquifyName(parent());
+    instruction->UniquifyId(parent());
   }
   instruction->set_parent(this);
   HloInstruction* pinst = instruction.release();  // Take ownership
@@ -1042,9 +1039,6 @@ void HloComputation::Print(Printer* printer,
 void HloComputation::Print(
     Printer* printer, const HloPrintOptions& options,
     absl::Span<const HloInstruction* const> instruction_order) const {
-  if (!instruction_order.empty()) {
-    CHECK_EQ(instruction_order.size(), instruction_count());
-  }
   const std::string tab(2 * options.indent_amount(), ' ');
 
   printer->Append(tab);

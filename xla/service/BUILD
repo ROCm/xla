@@ -502,7 +502,7 @@ xla_cc_test(
         ":collective_pipeliner",
         ":hlo_module_config",
         ":hlo_verifier",
-        ":host_memory_offload_annotations_hdr",
+        ":memory_annotations_hdr",
         ":scheduling_annotations_util",
         "//xla:literal_util",
         "//xla:test_helpers",
@@ -669,7 +669,7 @@ cc_library(
         ":custom_call_sharding_helper",
         ":dot_as_convolution_util",
         ":hlo_graph_dumper",
-        ":host_memory_offload_annotations_hdr",
+        ":memory_annotations_hdr",
         "//xla:array",
         "//xla:protobuf_util",
         "//xla:shape_tree",
@@ -1061,9 +1061,10 @@ xla_cc_test(
         "//xla/tests:hlo_test_base",
         "//xla/tests:xla_internal_test_main",
         "//xla/tsl/lib/core:status_test_util",
+        "//xla/tsl/platform:status_matchers",
+        "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/strings:string_view",
-        "@tsl//tsl/platform:statusor",
     ],
 )
 
@@ -4927,8 +4928,8 @@ cc_library(
 )
 
 cc_library(
-    name = "host_memory_offload_annotations_hdr",
-    hdrs = ["host_memory_offload_annotations.h"],
+    name = "memory_annotations_hdr",
+    hdrs = ["memory_annotations.h"],
     deps = [
         "@com_google_absl//absl/strings:string_view",
     ],
@@ -4962,7 +4963,7 @@ cc_library(
     deps = [
         ":call_graph",
         ":hlo_buffer",
-        ":host_memory_offload_annotations_hdr",
+        ":memory_annotations_hdr",
         ":pattern_matcher",
         "//xla:literal_util",
         "//xla:shape_util",
@@ -4989,8 +4990,8 @@ xla_cc_test(
     srcs = ["host_offload_utils_test.cc"],
     deps = [
         ":hlo_verifier",
-        ":host_memory_offload_annotations_hdr",
         ":host_offload_utils",
+        ":memory_annotations_hdr",
         ":pattern_matcher",
         ":pattern_matcher_gmock",
         "//xla:shape_util",
@@ -6576,12 +6577,15 @@ cc_library(
     srcs = ["legalize_scheduling_annotations.cc"],
     hdrs = ["legalize_scheduling_annotations.h"],
     deps = [
+        ":scheduling_annotations_util",
         "//xla:side_effect_util",
         "//xla:util",
         "//xla:xla_data_proto_cc",
+        "//xla/hlo/analysis:hlo_reachability",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/ir:ptrvec",
         "//xla/hlo/pass:hlo_pass",
+        "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log",
@@ -6590,7 +6594,6 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
-        "@tsl//tsl/platform:statusor",
     ],
 )
 
@@ -6600,14 +6603,17 @@ xla_cc_test(
     deps = [
         ":legalize_scheduling_annotations",
         "//xla:side_effect_util",
-        "//xla:test_helpers",
         "//xla:util",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/testlib:hlo_hardware_independent_test_base",
         "//xla/hlo/testlib:test_helpers",
         "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest_main",
+        "@tsl//tsl/platform:status_matchers",
     ],
 )
 

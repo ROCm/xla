@@ -1,5 +1,3 @@
-load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
-load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm")
 load("//xla:pytype.default.bzl", "pytype_strict_library")
 load("//xla:strict.default.bzl", "py_strict_library", "py_strict_test")
 load(
@@ -9,7 +7,6 @@ load(
 )
 load(
     "//xla/tsl:tsl.bzl",
-    "if_cuda_or_rocm",
     "if_google",
     "if_oss",
     "internal_visibility",
@@ -126,33 +123,6 @@ py_strict_test(
         "@absl_py//absl/logging",
         "@absl_py//absl/testing:absltest",
     ] + xla_py_test_deps(),
-)
-
-py_strict_test(
-    name = "xla_client_test_gpu",
-    srcs = ["xla_client_test.py"],
-    args = ["--backend=gpu"],
-    main = "xla_client_test.py",
-    tags = [
-        "no_oss",
-        "requires-gpu-nvidia",
-    ] + if_google(["config-cuda-only"]),  # TODO(phawkins): This test passes, but requires --config=monolithic.
-    deps = [
-        ":xla_client",
-        ":xla_extension",
-        "@absl_py//absl/flags",
-        "@absl_py//absl/logging",
-        "@absl_py//absl/testing:absltest",
-        "@absl_py//absl/testing:parameterized",
-        "@ml_dtypes_py//ml_dtypes",
-    ] + if_google(
-        [
-            ":xla_gpu_extension",
-            "//third_party/py/numpy",
-            "//xla/service:gpu_plugin",
-        ],
-        [],
-    ) + xla_py_test_deps(),
 )
 
 tsl_pybind_extension(
@@ -437,6 +407,7 @@ cc_library(
         "-fno-strict-aliasing",
     ],
     features = ["-use_header_modules"],
+    visibility = internal_visibility([":friends"]),
     deps = [
         ":callback",
         ":py_host_callback_proto_cc",
@@ -483,6 +454,7 @@ cc_library(
         "-fno-strict-aliasing",
     ],
     features = ["-use_header_modules"],
+    visibility = internal_visibility([":friends"]),
     deps = [
         ":nb_numpy",
         ":python_ref_manager",
@@ -544,61 +516,6 @@ cc_library(
         "@tsl//tsl/platform:errors",
     ],
     alwayslink = 1,
-)
-
-cc_library(
-    name = "py_client_gpu",
-    srcs = if_google(
-        ["py_client_gpu.cc"],
-        if_cuda_or_rocm(["py_client_gpu.cc"]),
-    ),
-    hdrs = if_google(
-        ["py_client_gpu.h"],
-        if_cuda_or_rocm(["py_client_gpu.h"]),
-    ),
-    compatible_with = [],
-    copts = [
-        "-fexceptions",
-        "-fno-strict-aliasing",
-    ],
-    defines = if_cuda(["GOOGLE_CUDA=1"]) + if_rocm([
-        "TENSORFLOW_USE_ROCM=1",
-    ]),
-    features = ["-use_header_modules"],
-    visibility = internal_visibility([":friends"]),
-    deps = [
-        ":callback",
-        ":nb_numpy",
-        ":py_host_callback",
-        ":types",
-        "//xla:comparison_util",
-        "//xla:shape_util",
-        "//xla/ffi",
-        "//xla/ffi:ffi_api",
-        "//xla/pjrt:exceptions",
-        "//xla/pjrt:host_callback",
-        "//xla/pjrt:transpose",
-        "//xla/python/ifrt",
-        "//xla/service:custom_call_status",
-        "//xla/service:custom_call_target_registry",
-        "//xla/service:platform_util",
-        "//xla/tsl/concurrency:ref_count",
-        "//xla/tsl/platform:errors",
-        "//xla/tsl/platform:statusor",
-        "@com_google_absl//absl/algorithm:container",
-        "@com_google_absl//absl/base",
-        "@com_google_absl//absl/container:inlined_vector",
-        "@com_google_absl//absl/log:check",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/types:span",
-        "@llvm-project//llvm:Support",
-        "@nanobind",
-    ] + if_rocm(
-        ["@local_config_rocm//rocm:rocm_headers"],
-        ["@local_config_cuda//cuda:cuda_headers"],
-    ),
 )
 
 cc_library(
@@ -1149,6 +1066,7 @@ cc_library(
         "//xla/pjrt/c:pjrt_c_api_hdrs",
         "//xla/pjrt/c:pjrt_c_api_profiler_extension_hdrs",
         "//xla/python/profiler:profile_data_lib",
+        "//xla/python/profiler:profile_data_submodule",
         "//xla/tsl/platform:macros",
         "//xla/tsl/profiler/rpc:profiler_server_impl",
         "//xla/tsl/profiler/rpc/client:capture_profile",
@@ -1309,56 +1227,6 @@ cc_library(
     visibility = internal_visibility([":friends"]),
     deps = [
         "@com_google_absl//absl/log:initialize",
-    ],
-)
-
-cc_library(
-    name = "gpu_support",
-    srcs = ["gpu_support.cc"],
-    hdrs = ["gpu_support.h"],
-    compatible_with = [],
-    copts = [
-        "-fexceptions",
-        "-fno-strict-aliasing",
-    ],
-    features = ["-use_header_modules"],
-    deps = [
-        ":nb_class_ptr",
-        ":py_client",
-        ":py_client_gpu",
-        "//xla/pjrt:pjrt_client",
-        "//xla/pjrt:status_casters",
-        "//xla/pjrt/distributed:client",
-        "//xla/pjrt/distributed:key_value_store_interface",
-        "//xla/pjrt/gpu:gpu_helpers",
-        "//xla/pjrt/gpu:se_gpu_pjrt_client",
-        "//xla/python/pjrt_ifrt",
-        "@local_config_python//:python_headers",  # buildcleaner: keep
-        "@nanobind",
-    ],
-)
-
-tsl_pybind_extension(
-    name = "xla_gpu_extension",
-    srcs = ["xla_gpu_support.cc"],
-    copts = [
-        "-fexceptions",
-        "-fno-strict-aliasing",
-    ],
-    features = ["-use_header_modules"],
-    pytype_deps = [],
-    pytype_srcs = [],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":gpu_support",
-        ":logging",
-        ":py_client",
-        # placeholder for index annotation deps  # buildcleaner: keep
-        "@com_google_absl//absl/strings:string_view",
-        "@nanobind",
-        "@local_config_python//:python_headers",  # buildcleaner: keep
-        "//xla/pjrt:status_casters",
-        "//xla/pjrt:triton",
     ],
 )
 

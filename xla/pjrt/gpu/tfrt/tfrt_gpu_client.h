@@ -20,7 +20,7 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <set>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -40,11 +40,14 @@ limitations under the License.
 #include "unsupported/Eigen/CXX11/Tensor"
 #include "mlir/IR/BuiltinOps.h"
 #include "xla/client/local_client.h"
+#include "xla/executable_run_options.h"
 #include "xla/hlo/builder/xla_computation.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/layout.h"
 #include "xla/literal.h"
 #include "xla/pjrt/gpu/gpu_topology.h"
 #include "xla/pjrt/gpu/tfrt/gpu_event.h"
+#include "xla/pjrt/gpu/tfrt/host_memory_allocator.h"
 #include "xla/pjrt/gpu/tfrt/stream_pool.h"
 #include "xla/pjrt/gpu/tfrt/tracked_tfrt_gpu_device_buffer.h"
 #include "xla/pjrt/pjrt_client.h"
@@ -54,8 +57,11 @@ limitations under the License.
 #include "xla/pjrt/pjrt_future.h"
 #include "xla/pjrt/pjrt_stream_executor_device_description.h"
 #include "xla/pjrt/plugin/xla_gpu/xla_gpu_client_options.h"
+#include "xla/pjrt/semaphore.h"
+#include "xla/pjrt/transpose.h"
 #include "xla/pjrt/utils.h"
 #include "xla/service/computation_placer.h"
+#include "xla/service/gpu/gpu_executable_run_options.h"
 #include "xla/service/hlo.pb.h"
 #include "xla/shape.h"
 #include "xla/stream_executor/device_memory_allocator.h"
@@ -162,6 +168,11 @@ class TfrtGpuDevice final : public PjRtDevice {
 
   absl::Status TransferFromOutfeed(MutableBorrowingLiteral literal) override;
 
+  // Returns a semaphore for admission control on inflight computations.
+  Semaphore& max_inflight_computations_semaphore() {
+    return max_inflight_computations_semaphore_;
+  }
+
   void AttachMemorySpace(PjRtMemorySpace* memory_space,
                          bool is_default = false);
 
@@ -181,36 +192,63 @@ class TfrtGpuDevice final : public PjRtDevice {
 
   tsl::Allocator* allocator() { return allocator_.get(); }
 
+  // Returns a fresh, PRNG-generated random seed for an XLA computation.
+  int GetNewPrngSeed();
+
   BoundedStreamPool& stream_pool() { return stream_pool_; }
 
   BoundedStreamPool& compute_stream_pool() { return compute_stream_pool_; }
 
+  se::StreamExecutor* executor() { return executor_; }
+
+  tsl::AsyncValueRef<GpuEvent> GetLastCollectiveLaunchEvent();
+
+  void SetLastCollectiveLaunchEvent(tsl::AsyncValueRef<GpuEvent> event);
+
  private:
   friend class TfrtGpuClient;
+  friend class TfrtGpuExecutable;
+  friend class TfrtGpuBuffer;
 
   int id_;
   PjRtClient* client_ = nullptr;
   PjRtLocalDeviceId local_device_id_;
   PjRtLocalHardwareId local_hardware_id_;
+  se::StreamExecutor* executor_;
   BoundedStreamPool stream_pool_;
   // TODO(b/400541410): Support H2D transfers on compute streams.
   //   Have a dedicated compute stream pool to avoid blocking the stream pool
   //   for H2D transfers.
   BoundedStreamPool compute_stream_pool_;
   std::unique_ptr<tsl::Allocator> allocator_;
+  std::unique_ptr<se::DeviceMemoryAllocator> se_allocator_;
   absl::InlinedVector<PjRtMemorySpace*, 1> memory_spaces_;
   absl::flat_hash_map<int, PjRtMemorySpace*> memory_spaces_by_kind_id_;
 
+  absl::Mutex mu_;
+  std::random_device prng_seed_device_ ABSL_GUARDED_BY(mu_);
+  std::mt19937 prng_seed_generator_ ABSL_GUARDED_BY(mu_);
+  std::uniform_int_distribution<> prng_seed_distribution_ ABSL_GUARDED_BY(mu_);
+  tsl::AsyncValueRef<GpuEvent> last_collective_launch_event_
+      ABSL_GUARDED_BY(mu_);
+
   PjRtStreamExecutorDeviceDescription description_;
   PjRtMemorySpace* default_memory_space_ = nullptr;
+
+  // Semaphore used to limit how many programs can be enqueued by the host
+  // ahead of the device.
+  xla::Semaphore max_inflight_computations_semaphore_;
 };
 
 class TfrtGpuClient final : public PjRtClient {
  public:
   TfrtGpuClient(int process_index, xla::LocalClient* xla_client,
                 std::vector<std::unique_ptr<TfrtGpuDevice>> devices,
+                bool should_stage_host_to_device_transfers,
                 std::unique_ptr<tsl::Allocator> host_memory_allocator,
                 std::shared_ptr<const GpuTopology> gpu_topology);
+
+  ~TfrtGpuClient() override;
 
   int process_index() const override { return process_index_; }
 
@@ -226,7 +264,20 @@ class TfrtGpuClient final : public PjRtClient {
     return addressable_devices_;
   }
 
+  absl::StatusOr<PjRtDevice*> LookupDevice(
+      PjRtGlobalDeviceId global_device_id) const override;
+
   absl::Span<PjRtMemorySpace* const> memory_spaces() const override;
+
+  xla::LocalClient* xla_client() const { return xla_client_; }
+
+  bool should_stage_host_to_device_transfers() const {
+    return should_stage_host_to_device_transfers_;
+  }
+
+  HostMemoryAllocator* host_memory_allocator() const {
+    return host_memory_allocator_.get();
+  }
 
   PjRtPlatformId platform_id() const override {
     // TODO(b/382117736): Add support for ROCM and SYCL.
@@ -239,10 +290,35 @@ class TfrtGpuClient final : public PjRtClient {
     return platform_version_;
   }
 
+  absl::StatusOr<DeviceAssignment> GetDefaultDeviceAssignment(
+      int num_replicas, int num_partitions) const override;
+
+  tsl::thread::ThreadPool* blocking_thread_pool() const {
+    return blocking_thread_pool_.get();
+  }
+
+  tsl::thread::ThreadPool* non_blocking_thread_pool() const {
+    return non_blocking_thread_pool_.get();
+  }
+
   absl::StatusOr<std::unique_ptr<PjRtLoadedExecutable>> CompileAndLoad(
       const XlaComputation& computation, CompileOptions options) override;
   absl::StatusOr<std::unique_ptr<PjRtLoadedExecutable>> CompileAndLoad(
       mlir::ModuleOp mlir_module, CompileOptions options) override;
+
+  absl::StatusOr<std::unique_ptr<PjRtBuffer>> CreateErrorBuffer(
+      absl::Status error, const Shape& shape, PjRtMemorySpace* memory) override;
+
+  gpu::GpuExecutableRunOptions* gpu_run_options() const {
+    return gpu_run_options_.get();
+  }
+
+  absl::StatusOr<std::unique_ptr<PjRtBuffer>> BufferFromHostBuffer(
+      const void* data, PrimitiveType type, absl::Span<int64_t const> dims,
+      std::optional<absl::Span<int64_t const>> byte_strides,
+      HostBufferSemantics host_buffer_semantics,
+      absl::AnyInvocable<void() &&> on_done_with_host_buffer,
+      PjRtMemorySpace* memory_space, const Layout* device_layout) override;
 
  private:
   // Helper function for creating PjRtStreamExecutorExecutables. Modifies
@@ -264,14 +340,11 @@ class TfrtGpuClient final : public PjRtClient {
   int process_index_;
 
   xla::LocalClient* xla_client_;
-
   const std::string platform_version_;
 
-  // Device memory allocator. If owned, the allocator must outlive the devices,
-  // because it is the device destructor that waits for any outstanding work to
-  // complete.
-  se::DeviceMemoryAllocator* allocator_;
-  std::unique_ptr<se::DeviceMemoryAllocator> owned_allocator_;
+  bool should_stage_host_to_device_transfers_;
+  // Allocator to be used for staging memory transfers to devices.
+  std::unique_ptr<HostMemoryAllocator> host_memory_allocator_;
 
   // Includes all devices, including non-local devices on multi-host platforms.
   std::vector<std::unique_ptr<TfrtGpuDevice>> owned_devices_;
@@ -281,6 +354,7 @@ class TfrtGpuClient final : public PjRtClient {
   absl::flat_hash_map<PjRtGlobalDeviceId, TfrtGpuDevice*> id_to_device_;
   // Local devices indexed by local device ordinal.
   std::vector<PjRtDevice*> addressable_devices_;
+  std::unique_ptr<ComputationPlacer> computation_placer_;
 
   // Addressable memory spaces.
   std::vector<std::unique_ptr<PjRtMemorySpace>> owned_memory_spaces_;
@@ -288,6 +362,16 @@ class TfrtGpuClient final : public PjRtClient {
   std::vector<PjRtMemorySpace*> memory_spaces_;
 
   std::unique_ptr<tsl::thread::ThreadPool> compile_thread_pool_;
+  std::unique_ptr<tsl::thread::ThreadPool> blocking_thread_pool_;
+  std::unique_ptr<tsl::thread::ThreadPool> non_blocking_thread_pool_;
+
+  std::unique_ptr<gpu::GpuExecutableRunOptions> gpu_run_options_;
+
+  // A cache for transpose plans. We use transposes to convert
+  // (possibly strided) buffers provided to BufferFromHostBuffer into dense
+  // major-to-minor layout.
+  absl::Mutex transpose_mu_;
+  TransposePlanCache transpose_cache_ ABSL_GUARDED_BY(transpose_mu_);
 };
 
 absl::StatusOr<std::unique_ptr<PjRtClient>> GetTfrtGpuClient(
@@ -312,9 +396,7 @@ class TfrtGpuBuffer final : public PjRtBuffer {
   TfrtGpuDevice* device() const override { return device_; }
   TfrtGpuClient* client() const override { return client_; }
 
-  absl::StatusOr<Shape> logical_on_device_shape() override {
-    return Unimplemented("logical_on_device_shape not implemented.");
-  }
+  absl::StatusOr<Shape> logical_on_device_shape() override;
 
   absl::StatusOr<std::unique_ptr<ExternalReference>> AcquireExternalReference()
       override;
@@ -327,6 +409,7 @@ class TfrtGpuBuffer final : public PjRtBuffer {
     // TODO(b/382117736): Implement ToLiteral.
     return PjRtFuture<>(Unimplemented("ToLiteral not implemented."));
   }
+
   PjRtFuture<> LazyToLiteral(
       absl::AnyInvocable<absl::StatusOr<MutableLiteralBase*>() &&> generator)
       override {
@@ -363,13 +446,79 @@ class TfrtGpuBuffer final : public PjRtBuffer {
             /*sends_were_enqueued=*/false);
   }
 
-  PjRtFuture<> GetReadyFuture() override {
-    return PjRtFuture<>(Unimplemented("GetReadyFuture not implemented."));
-  }
+  PjRtFuture<> GetReadyFuture() override;
 
   bool IsOnCpu() const override { return false; }
 
  private:
+  // Acquires the device buffer for shared read-only usages, and it also adds
+  // the `usage_event` to it. Any donation event in the future is expected to be
+  // serialized after all the usage events added through this method. Returns
+  // nullptr if the buffer is already donated or there is outstanding external
+  // references.
+  TrackedTfrtGpuDeviceBuffer* AcquireUsage(
+      tsl::AsyncValueRef<GpuEvent> usage_event);
+
+  // A helper class for managing a pending donation. It should be committed upon
+  // success. Otherwise, the donated buffer is returned to the TfrtGpuBuffer.
+  class DonationTransaction {
+   public:
+    explicit DonationTransaction(
+        tsl::AsyncValueRef<bool> donation_event,
+        std::unique_ptr<TrackedTfrtGpuDeviceBuffer> device_buffer)
+        : donation_event_(donation_event),
+          device_buffer_(std::move(device_buffer)) {
+      VLOG(3) << "DonationTransaction::DonationTransaction";
+    }
+    DonationTransaction(const DonationTransaction&) = delete;
+    DonationTransaction& operator=(const DonationTransaction&) = delete;
+    DonationTransaction(DonationTransaction&&) = default;
+    DonationTransaction& operator=(DonationTransaction&& other) {
+      Abort();
+
+      donation_event_ = other.donation_event_;
+      device_buffer_ = std::move(other.device_buffer_);
+      return *this;
+    }
+
+    ~DonationTransaction() { Abort(); }
+
+    // Commit the donation. The rvalue ref qualifier is used to ensure the
+    // semantic that it can be committed at most once.
+    void Commit() && {
+      donation_event_.emplace(true);
+      device_buffer_->SetUnOwned();
+      device_buffer_.reset();
+    }
+
+    TrackedTfrtGpuDeviceBuffer* device_buffer() const {
+      return device_buffer_.get();
+    }
+
+   private:
+    void Abort() {
+      if (device_buffer_) {
+        VLOG(0) << "DonationTransaction::Abort is going to "
+                   "abort donation: "
+                << device_buffer_.get();
+        donation_event_.emplace(false);
+        device_buffer_.reset();  // TODO(b/382117736): We should put this back
+                                 // into the TfrtGpuBuffer instead.
+      }
+    }
+
+    tsl::AsyncValueRef<bool> donation_event_;
+    std::unique_ptr<TrackedTfrtGpuDeviceBuffer> device_buffer_;
+  };
+
+  // Acquires the device buffer for exclusive donation. The caller of this
+  // method is expected to use the usage events and definition events to
+  // serialize this donation with previous usages. After this method is called,
+  // calls to AcquireUsage() will fail. Returns error status if the buffer is
+  // already donated or there is outstanding external references.
+  absl::StatusOr<DonationTransaction> AcquireDonation()
+      ABSL_LOCKS_EXCLUDED(mu_);
+
   tsl::AsyncValueRef<bool> GetDonationEvent() {
     absl::MutexLock lock(&mu_);
     return donation_event_;
@@ -426,6 +575,7 @@ class TfrtGpuBuffer final : public PjRtBuffer {
 
   friend class TfrtGpuClient;
   friend class TfrtGpuExecutable;
+  friend class DonationTransactionPeer;
 };
 
 class TfrtGpuExecutable final : public PjRtLoadedExecutable {
@@ -481,9 +631,7 @@ class TfrtGpuExecutable final : public PjRtLoadedExecutable {
   absl::StatusOr<std::vector<std::vector<std::unique_ptr<PjRtBuffer>>>> Execute(
       absl::Span<const std::vector<PjRtBuffer*>> argument_handles,
       const ExecuteOptions& options,
-      std::optional<std::vector<PjRtFuture<>>>& returned_futures) override {
-    return Unimplemented("Not implemented");
-  }
+      std::optional<std::vector<PjRtFuture<>>>& returned_futures) override;
 
   using PjRtLoadedExecutable::ExecuteSharded;
   absl::StatusOr<std::vector<std::unique_ptr<PjRtBuffer>>> ExecuteSharded(
@@ -527,12 +675,27 @@ class TfrtGpuExecutable final : public PjRtLoadedExecutable {
   // donated due to aliases that were specified by the computation.
   absl::Status SetUpDonation(bool tuple_inputs);
 
+  absl::StatusOr<Result> ExecuteHelper(
+      absl::Span<PjRtBuffer* const> argument_handles, int replica,
+      int partition, const RunId& run_id, const ExecuteOptions& options,
+      tsl::AsyncValueRef<GpuEvent> last_collective_launch_event,
+      bool fill_future, TfrtGpuDevice* device = nullptr);
+
   // Create shared pointers so we can free them after the execution: with
   // asynchronous execution, the process being executed can outlive the
   // executable itself.
   TfrtGpuClient* const client_;
   // One executable per partition.
   std::vector<std::shared_ptr<LocalExecutable>> executables_;
+  // On device shapes of the executable parameters.
+  std::vector<std::shared_ptr<std::vector<Shape>>>
+      on_device_executable_parameter_shapes_;
+
+  // Size on device of each leaf buffer of the compiled program, cached here
+  // for performance reasons.
+  std::vector<std::shared_ptr<std::vector<int64_t>>>
+      input_buffer_sizes_in_bytes_;
+
   // Per-executable sorted vector of parameters that have any aliased buffers
   // and thus must be donated when executing the computation.
   std::vector<std::vector<int>> parameters_that_must_be_donated_;

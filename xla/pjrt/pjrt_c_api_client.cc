@@ -416,8 +416,9 @@ PjRtCApiClient::CompileAndLoad(mlir::ModuleOp module, CompileOptions options) {
 }
 
 absl::StatusOr<std::unique_ptr<PjRtLoadedExecutable>>
-PjRtCApiClient::DeserializeExecutable(absl::string_view serialized,
-                                      std::optional<CompileOptions> options) {
+PjRtCApiClient::LoadSerializedExecutable(absl::string_view serialized,
+                                         std::optional<CompileOptions> options,
+                                         const LoadOptions& load_options) {
   PJRT_Executable_DeserializeAndLoad_Args des_args;
 
   des_args.struct_size = PJRT_Executable_DeserializeAndLoad_Args_STRUCT_SIZE;
@@ -2105,8 +2106,7 @@ std::shared_ptr<const PjRtLayout> PjRtCApiBuffer::layout() const {
 
 const Shape& PjRtCApiBuffer::on_device_shape() const {
   if (!on_device_shape_.has_value()) {
-    Shape shape(element_type(), dimensions(), is_dynamic_dimension(),
-                /*tuple_shapes=*/{});
+    Shape shape(element_type(), dimensions(), is_dynamic_dimension());
     *shape.mutable_layout() = layout()->xla_layout();
     absl::MutexLock lock(&mu_);
     on_device_shape_ = shape;
@@ -2119,8 +2119,7 @@ absl::StatusOr<Shape> PjRtCApiBuffer::logical_on_device_shape() {
   if (!dims.ok()) {
     return dims.status();
   }
-  Shape result(element_type(), *dims, is_dynamic_dimension(),
-               /*tuple_shapes=*/{});
+  Shape result(element_type(), *dims, is_dynamic_dimension());
   *result.mutable_layout() = layout()->xla_layout();
   return result;
 }

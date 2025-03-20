@@ -41,11 +41,13 @@ cc_library(
         "//xla/hlo/utils:hlo_sharding_util",
         "//xla/service:computation_layout",
         "//xla/service:hlo_proto_cc",
-        "//xla/service/llvm_ir:llvm_util",
         "//xla/service/spmd/shardy/sdy_round_trip:pipelines",
         "//xla/service/spmd/shardy/stablehlo_round_trip:stablehlo_export",
         "//xla/service/spmd/shardy/stablehlo_round_trip:stablehlo_import",
         "//xla/tsl/framework/mlir:status_scoped_diagnostic_handler",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -63,10 +65,7 @@ cc_library(
         "@llvm-project//mlir:Support",
         "@shardy//shardy/common:file_utils",
         "@shardy//shardy/dialect/sdy/transforms/propagation:passes",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:errors",
         "@tsl//tsl/platform:path",
-        "@tsl//tsl/platform:statusor",
     ],
 )
 
@@ -77,6 +76,7 @@ cc_library(
     deps = [
         ":constants",
         "//xla/mlir_hlo",
+        "//xla/service/spmd/shardy/extensions:mhlo_extensions",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
         "@llvm-project//llvm:Support",
@@ -119,7 +119,9 @@ xla_cc_binary(
     name = "sdy_opt",
     srcs = ["sdy_opt_main.cc"],
     deps = [
+        "//xla/mlir_hlo",
         "//xla/mlir_hlo:stablehlo_extension_passes",
+        "//xla/service/spmd/shardy/extensions:mhlo_extensions",
         "//xla/service/spmd/shardy/round_trip_common:export_named_computations",
         "//xla/service/spmd/shardy/round_trip_common:import_backend_func_calls",
         "//xla/service/spmd/shardy/round_trip_common:import_constants",
