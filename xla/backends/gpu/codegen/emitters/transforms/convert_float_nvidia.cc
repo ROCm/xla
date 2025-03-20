@@ -34,12 +34,14 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/semantic_version.h"
 
+#ifdef GOOGLE_CUDA
 #include "xla/service/gpu/llvm_gpu_backend/nvptx_backend.h"
+#endif
 
 namespace xla {
 namespace gpu {
 
-#define GEN_PASS_DEF_CONVERTFLOATPASS
+#define GEN_PASS_DEF_CONVERTFLOATNVIDIAPASS
 #include "xla/backends/gpu/codegen/emitters/transforms/passes.h.inc"
 
 namespace {
@@ -230,10 +232,10 @@ struct RewriteExtFPattern : public mlir::OpRewritePattern<ma::ExtFOp> {
   }
 };
 
-class ConvertFloatPass
-    : public impl::ConvertFloatPassBase<ConvertFloatPass> {
+class ConvertFloatNvidiaPass
+    : public impl::ConvertFloatNvidiaPassBase<ConvertFloatNvidiaPass> {
  public:
-  using ConvertFloatPassBase::ConvertFloatPassBase;
+  using ConvertFloatNvidiaPassBase::ConvertFloatNvidiaPassBase;
 
   void runOnOperation() override {
     mlir::RewritePatternSet patterns(&getContext());
@@ -247,12 +249,13 @@ class ConvertFloatPass
 
 }  // namespace
 
-std::unique_ptr<mlir::Pass> CreateConvertFloatPass() {
-  return std::make_unique<ConvertFloatPass>();
+std::unique_ptr<mlir::Pass> CreateConvertFloatNvidiaPass() {
+  return std::make_unique<ConvertFloatNvidiaPass>();
 }
 
-std::optional<std::unique_ptr<mlir::Pass>> MaybeCreateConvertFloatPass(
+std::optional<std::unique_ptr<mlir::Pass>> MaybeCreateConvertFloatNvidiaPass(
     const se::DeviceDescription& device_description) {
+#ifdef GOOGLE_CUDA
   se::SemanticVersion ptx_version =
       nvptx::DetermineHighestSupportedPtxVersionFromCudaVersion(
           device_description.runtime_version());
@@ -262,8 +265,9 @@ std::optional<std::unique_ptr<mlir::Pass>> MaybeCreateConvertFloatPass(
   // Older ptx versions only support FP8 conversion for sm90
   if ((ptx_version >= se::SemanticVersion(8, 1, 0) && cc.IsAtLeast(8, 9)) ||
       (ptx_version >= se::SemanticVersion(7, 8, 0) && cc.IsAtLeast(9, 0))) {
-    return CreateConvertFloatPass();
+    return CreateConvertFloatNvidiaPass();
   }
+#endif
   return std::nullopt;
 }
 
