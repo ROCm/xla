@@ -43,10 +43,12 @@ struct MatmulPlanCache {
   static MatmulPlanCache& i(size_t device_id) {
     static absl::Mutex m(absl::kConstInit);
     // Each GPU gets different cache instance
-    static std::deque< MatmulPlanCache > meta(16);
+    static std::vector< std::unique_ptr< MatmulPlanCache > > meta(16);
     absl::MutexLock lock(&m);
     if (device_id >= meta.size()) meta.resize(device_id + 1);
-    return meta[device_id];
+    auto& res = meta[device_id];
+    if (!res) res.reset(new MatmulPlanCache());
+    return *res;
   }
 
   template < class Func >
@@ -54,7 +56,7 @@ struct MatmulPlanCache {
           GetOrCreate(const std::string& key, Func&& create) {
     // each GPU has a different mutex => hence different GPU instances can
     // create matmul plans in parallel
-    absl::MutexLock lock(&mutex_); 
+    absl::MutexLock lock(mutex_.get()); 
     auto res = map_.emplace(key, se::gpu::BlasLt::MatmulPlanPtr{});
     // New entry inserted: always create a new matmul plan if key is empty, 
     // this is used by command_buffer_thunk test.
@@ -70,10 +72,11 @@ struct MatmulPlanCache {
     return map_.size();
   }
 
-  MatmulPlanCache() = default;
+private:
+  MatmulPlanCache() : mutex_(std::make_unique< absl::Mutex >()) { }
 
 private:
-  absl::Mutex mutex_;
+  std::unique_ptr< absl::Mutex > mutex_;
   absl::flat_hash_map<std::string, se::gpu::BlasLt::MatmulPlanPtr> map_;
 };
 
