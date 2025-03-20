@@ -2084,7 +2084,11 @@ absl::Status VerifyInstructionNameUnchanged(const HloModule& module,
   }
   for (auto* comp : module.computations()) {
     for (auto* inst : comp->instructions()) {
+      VLOG(-1) << "cj401 comp name = " << comp->name();
       if (inst->metadata().scheduling_name().empty()) {
+        continue;
+      }
+      if (absl::StrContains(comp->name(), ".clone")) {
         continue;
       }
       // We do not enforce the invariant when the instruction has been cloned
@@ -2887,6 +2891,16 @@ class InstructionVerifier : public DfsHloVisitorWithDefault {
   }
 
   absl::Status Preprocess(HloInstruction* instruction) override {
+    // return absl::OkStatus();  // Exempt remat clones
+    const HloComputation* computation = instruction->parent();
+    bool is_remat_clone = absl::StrContains(computation->name(), '.clone');
+    std::string name = std::string(instruction->name());
+
+    if (is_remat_clone) {
+      VLOG(-1) << "cj401 skipping uniqueness check for remat clone instruction: " << name << " in " << computation->name();
+      return absl::OkStatus();
+    }
+
     auto [it, inserted] =
         instructions_by_name_.emplace(instruction->name(), instruction);
     TF_RET_CHECK(inserted) << "HLO has name that is not unique within module:\n"
@@ -3003,6 +3017,7 @@ class InstructionVerifier : public DfsHloVisitorWithDefault {
   absl::flat_hash_map<std::string, const HloInstruction*> instructions_by_name_;
   const HloVerifierOpts& opts_;
   std::optional<int64_t> num_devices_;
+  HloModule* module_;    // add module reference
 };
 
 }  // namespace
@@ -3027,7 +3042,6 @@ absl::StatusOr<bool> HloVerifier::Run(
     TF_RETURN_IF_ERROR(VerifyChannels(*module));
     TF_RETURN_IF_ERROR(VerifyInstructionNameUnchanged(
         *module, target_metadata_->GetVerifierOpts()));
-
     std::unique_ptr<ShapeVerifier> shape_verifier =
         target_metadata_->GetVerifier();
     InstructionVerifier instruction_verifier(

@@ -2107,14 +2107,32 @@ HloCallableInstruction::GetOrCloneCalledComputations(
     HloCloneContext* context) const {
   HloModule* module = context != nullptr ? context->module() : GetModule();
   absl::InlinedVector<HloComputation*, 1> new_called_computations;
+
   for (auto* comp : called_computations()) {
+    VLOG(-1) << "cj401  context = " << context << " Original subcomp " << comp->name() << ":";
+    for (HloInstruction* instr : comp->instructions()) {
+      VLOG(-1) << "cj401    " << instr->name() << " (ID: " << instr->unique_id() << ")";
+    }
+  }
+
+  for (auto* comp : called_computations()) {
+    // VLOG(-1) << "cj401 context = " << context << " comp = " << comp->ToString();
     HloComputation* new_custom_call_computation = nullptr;
     if (context != nullptr) {
       new_custom_call_computation = context->FindComputation(comp);
+      VLOG(-1) << "cj401 FindComputation result for " << comp->name() << ": "
+              << (new_custom_call_computation ? new_custom_call_computation->name() : "nullptr");
     }
     if (new_custom_call_computation == nullptr) {
+      std::string suffix = context ? context->suffix() : "clone";
+      VLOG(-1) << "cj401 new_custom_call_computation context = " << context << " suffix = " << suffix;
       new_custom_call_computation =
-          module->AddEmbeddedComputation(comp->Clone("clone", context));
+          module->AddEmbeddedComputation(comp->Clone("clone", context), 
+          context);
+      // VLOG(-1) << "cj401 After cloning " << comp->name() << " to " << new_custom_call_computation->name();
+      // for (HloInstruction* instr : new_custom_call_computation->instructions()) {
+      //    VLOG(-1) << "cj401    " << instr->name() << " (ID: " << instr->unique_id() << ")";
+      // }
     }
     new_called_computations.push_back(new_custom_call_computation);
   }
@@ -2506,6 +2524,7 @@ std::unique_ptr<HloInstruction> HloFusionInstruction::CloneWithNewOperandsImpl(
   CHECK_EQ(new_fused_computation.size(), 1);
   auto new_fusion_instruction = std::make_unique<HloFusionInstruction>(
       shape, fusion_kind(), new_operands, new_fused_computation.front());
+  
   new_fusion_instruction->set_output_to_operand_aliasing(
       output_to_operand_aliasing());
   return new_fusion_instruction;
