@@ -33,8 +33,8 @@ namespace gpu {
 #define GEN_PASS_DECL
 #include "xla/backends/gpu/codegen/emitters/transforms/passes.h.inc"
 
-std::unique_ptr<mlir::Pass> CreateConvertFloatPass();
-std::optional<std::unique_ptr<mlir::Pass>> MaybeCreateConvertFloatPass(
+std::unique_ptr<mlir::Pass> CreateConvertFloatNvidiaPass();
+std::optional<std::unique_ptr<mlir::Pass>> MaybeCreateConvertFloatNvidiaPass(
     const se::DeviceDescription& device_description);
 std::unique_ptr<mlir::Pass> CreateConvertPureCallOpsPass();
 std::unique_ptr<mlir::Pass> CreateEraseDeadFunctionsPass();
