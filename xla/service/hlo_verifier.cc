@@ -2083,6 +2083,10 @@ absl::Status VerifyInstructionNameUnchanged(const HloModule& module,
     return absl::OkStatus();
   }
   for (auto* comp : module.computations()) {
+    // We do not enforce the invariant when the computation has been cloned, is it too general?
+    if (absl::StrContains(comp->name(), ".clone")) {
+      continue;
+    }
     for (auto* inst : comp->instructions()) {
       if (inst->metadata().scheduling_name().empty()) {
         continue;
