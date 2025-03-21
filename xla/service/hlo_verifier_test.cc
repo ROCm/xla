@@ -3159,5 +3159,61 @@ TEST_F(HloVerifierTestLayoutSensitive,
               HasSubstr("Instruction has mismatched minor-to-major size and "
                         "dimension size: "));
 }
+
+TEST_F(HloVerifierTest, ClonedComputationNameBypass) {
+  const char* const hlo_string = R"(
+  HloModule test_module
+
+  computation {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  computation.clone {
+    p0 = f32[] parameter(0) 
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  ENTRY entry {
+    p0 = f32[] parameter(0)
+    call1 = f32[] call(p0), to_apply=computation
+    call2 = f32[] call(p0), to_apply=computation.clone
+    ROOT tuple = (f32[], f32[]) tuple(call1, call2)
+  }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(hlo_string));
+  TF_ASSERT_OK(verifier().Run(module.get()));
+}
+
+TEST_F(HloVerifierTest, MultipleClonedComputations) {
+  const char* const hlo_string = R"(
+  HloModule test_module
+
+  original {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  original.clone.1 {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  original.clone.2 {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  ENTRY entry {
+    p0 = f32[] parameter(0)
+    call1 = f32[] call(p0), to_apply=original
+    call2 = f32[] call(p0), to_apply=original.clone.1
+    call3 = f32[] call(p0), to_apply=original.clone.2
+    ROOT tuple = (f32[], f32[], f32[]) tuple(call1, call2, call3)
+  }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(hlo_string));
+  TF_ASSERT_OK(verifier().Run(module.get()));
+}
 }  // namespace
 }  // namespace xla
