@@ -105,8 +105,7 @@ class BuildType(enum.Enum):
   XLA_LINUX_X86_GPU_T4_GITHUB_ACTIONS = enum.auto()
 
   # Presubmit builds for regression testing.
-  XLA_LINUX_X86_CPU_16_VCPU_PRESUBMIT_GITHUB_ACTIONS = enum.auto()
-  XLA_LINUX_ARM64_CPU_16_VCPU_PRESUBMIT_GITHUB_ACTIONS = enum.auto()
+  XLA_LINUX_ARM64_CPU_48_VCPU_PRESUBMIT_GITHUB_ACTIONS = enum.auto()
   XLA_LINUX_X86_CPU_128_VCPU_PRESUBMIT_GITHUB_ACTIONS = enum.auto()
   XLA_LINUX_X86_GPU_T4_16_VCPU_PRESUBMIT_GITHUB_ACTIONS = enum.auto()
   XLA_LINUX_X86_GPU_T4_48_VCPU_PRESUBMIT_GITHUB_ACTIONS = enum.auto()
@@ -261,7 +260,7 @@ cpu_x86_tag_filter = (
     "-requires-gpu-nvidia",
     "-requires-gpu-amd",
 )
-_XLA_LINUX_X86_CPU_GITHUB_ACTIONS_BUILD = Build(
+Build(
     type_=BuildType.XLA_LINUX_X86_CPU_GITHUB_ACTIONS,
     repo="openxla/xla",
     configs=("warnings", "nonccl", "rbe_linux_cpu"),
@@ -278,7 +277,7 @@ cpu_arm_tag_filter = (
     "-requires-gpu-amd",
     "-not_run:arm",
 )
-_XLA_LINUX_ARM64_CPU_GITHUB_ACTIONS_BUILD = Build(
+Build(
     type_=BuildType.XLA_LINUX_ARM64_CPU_GITHUB_ACTIONS,
     repo="openxla/xla",
     configs=("warnings", "rbe_cross_compile_linux_arm64", "nonccl"),
@@ -288,26 +287,14 @@ _XLA_LINUX_ARM64_CPU_GITHUB_ACTIONS_BUILD = Build(
     test_tag_filters=cpu_arm_tag_filter,
 )
 
-_XLA_LINUX_X86_GPU_T4_GITHUB_ACTIONS_BUILD = (
-    nvidia_gpu_build_with_compute_capability(
-        type_=BuildType.XLA_LINUX_X86_GPU_T4_GITHUB_ACTIONS,
-        configs=("warnings", "rbe_linux_cuda_nvcc"),
-        compute_capability=75,
-    )
+nvidia_gpu_build_with_compute_capability(
+    type_=BuildType.XLA_LINUX_X86_GPU_T4_GITHUB_ACTIONS,
+    configs=("warnings", "rbe_linux_cuda_nvcc"),
+    compute_capability=75,
 )
 
-_XLA_LINUX_X86_CPU_16_VCPU_PRESUBMIT_GITHUB_ACTIONS_BUILD = Build(
-    type_=BuildType.XLA_LINUX_X86_CPU_16_VCPU_PRESUBMIT_GITHUB_ACTIONS,
-    repo="openxla/xla",
-    configs=("warnings", "nonccl", "rbe_linux_cpu"),
-    target_patterns=_XLA_CPU_PRESUBMIT_BENCHMARKS_DEFAULT_TARGET_PATTERNS,
-    build_tag_filters=cpu_x86_tag_filter,
-    test_tag_filters=cpu_x86_tag_filter,
-    options=_DEFAULT_BAZEL_OPTIONS,
-    subcommand="build",
-)
 
-_XLA_LINUX_X86_CPU_128_VCPU_PRESUBMIT_GITHUB_ACTIONS_BUILD = Build(
+Build(
     type_=BuildType.XLA_LINUX_X86_CPU_128_VCPU_PRESUBMIT_GITHUB_ACTIONS,
     repo="openxla/xla",
     configs=("warnings", "nonccl", "rbe_linux_cpu"),
@@ -318,8 +305,8 @@ _XLA_LINUX_X86_CPU_128_VCPU_PRESUBMIT_GITHUB_ACTIONS_BUILD = Build(
     subcommand="build",
 )
 
-_XLA_LINUX_ARM64_CPU_16_VCPU_PRESUBMIT_GITHUB_ACTIONS_BUILD = Build(
-    type_=BuildType.XLA_LINUX_ARM64_CPU_16_VCPU_PRESUBMIT_GITHUB_ACTIONS,
+Build(
+    type_=BuildType.XLA_LINUX_ARM64_CPU_48_VCPU_PRESUBMIT_GITHUB_ACTIONS,
     repo="openxla/xla",
     configs=("warnings", "rbe_cross_compile_linux_arm64", "nonccl"),
     target_patterns=_XLA_CPU_PRESUBMIT_BENCHMARKS_DEFAULT_TARGET_PATTERNS,
@@ -329,7 +316,7 @@ _XLA_LINUX_ARM64_CPU_16_VCPU_PRESUBMIT_GITHUB_ACTIONS_BUILD = Build(
     subcommand="build",
 )
 
-_XLA_LINUX_X86_GPU_T4_16_VCPU_PRESUBMIT_GITHUB_ACTIONS_BUILD = Build(
+Build(
     type_=BuildType.XLA_LINUX_X86_GPU_T4_16_VCPU_PRESUBMIT_GITHUB_ACTIONS,
     repo="openxla/xla",
     target_patterns=_XLA_GPU_PRESUBMIT_BENCHMARKS_DEFAULT_TARGET_PATTERNS,
@@ -348,7 +335,7 @@ _XLA_LINUX_X86_GPU_T4_16_VCPU_PRESUBMIT_GITHUB_ACTIONS_BUILD = Build(
     subcommand="build",
 )
 
-_XLA_LINUX_X86_GPU_T4_48_VCPU_PRESUBMIT_GITHUB_ACTIONS_BUILD = Build(
+Build(
     type_=BuildType.XLA_LINUX_X86_GPU_T4_48_VCPU_PRESUBMIT_GITHUB_ACTIONS,
     repo="openxla/xla",
     target_patterns=_XLA_GPU_PRESUBMIT_BENCHMARKS_DEFAULT_TARGET_PATTERNS,
@@ -376,7 +363,7 @@ macos_tag_filter = (
     "-requires-gpu-amd",
 )
 
-_XLA_MACOS_X86_CPU_KOKORO_BUILD = Build(
+Build(
     type_=BuildType.XLA_MACOS_X86_CPU_KOKORO,
     repo="openxla/xla",
     configs=("nonccl",),
@@ -410,7 +397,7 @@ _XLA_MACOS_X86_CPU_KOKORO_BUILD = Build(
     ),
 )
 
-_XLA_MACOS_ARM64_CPU_KOKORO_BUILD = Build(
+Build(
     type_=BuildType.XLA_MACOS_ARM64_CPU_KOKORO,
     repo="openxla/xla",
     configs=("nonccl",),
@@ -437,7 +424,7 @@ _XLA_MACOS_ARM64_CPU_KOKORO_BUILD = Build(
     ),
 )
 
-_JAX_LINUX_X86_CPU_GITHUB_ACTIONS_BUILD = Build(
+Build(
     type_=BuildType.JAX_LINUX_X86_CPU_GITHUB_ACTIONS,
     repo="google/jax",
     configs=("rbe_linux_x86_64",),
@@ -453,7 +440,7 @@ _JAX_LINUX_X86_CPU_GITHUB_ACTIONS_BUILD = Build(
     ),
 )
 
-_JAX_LINUX_X86_GPU_T4_GITHUB_ACTIONS_BUILD = Build(
+Build(
     type_=BuildType.JAX_LINUX_X86_GPU_T4_GITHUB_ACTIONS,
     repo="google/jax",
     configs=("rbe_linux_x86_64_cuda",),
@@ -490,7 +477,7 @@ tensorflow_gpu_tag_filters = tensorflow_tag_filters + (
     "+gpu",
 )
 
-_TENSORFLOW_LINUX_X86_CPU_GITHUB_ACTIONS_BUILD = Build(
+Build(
     type_=BuildType.TENSORFLOW_LINUX_X86_CPU_GITHUB_ACTIONS,
     repo="tensorflow/tensorflow",
     configs=(
@@ -503,11 +490,13 @@ _TENSORFLOW_LINUX_X86_CPU_GITHUB_ACTIONS_BUILD = Build(
         "//tensorflow/python/...",
         "-//tensorflow/python/distribute/...",
         "-//tensorflow/python/kernel_tests/...",
+        "-//tensorflow/python/data/...",
         "-//tensorflow/python/compiler/tensorrt/...",
     ),
     build_tag_filters=tensorflow_cpu_tag_filters,
     test_tag_filters=tensorflow_cpu_tag_filters,
     options=dict(
+        repo_env="USE_PYWRAP_RULES=True",
         verbose_failures=True,
         test_output="errors",
         override_repository=f"xla={_GITHUB_WORKSPACE}/openxla/xla",
@@ -517,7 +506,7 @@ _TENSORFLOW_LINUX_X86_CPU_GITHUB_ACTIONS_BUILD = Build(
     ),
 )
 
-_TENSORFLOW_LINUX_X86_GPU_T4_GITHUB_ACTIONS_BUILD = Build(
+Build(
     type_=BuildType.TENSORFLOW_LINUX_X86_GPU_T4_GITHUB_ACTIONS,
     repo="tensorflow/tensorflow",
     configs=(
@@ -530,11 +519,13 @@ _TENSORFLOW_LINUX_X86_GPU_T4_GITHUB_ACTIONS_BUILD = Build(
         "//tensorflow/python/...",
         "-//tensorflow/python/distribute/...",
         "-//tensorflow/python/kernel_tests/...",
+        "-//tensorflow/python/data/...",
         "-//tensorflow/python/compiler/tensorrt/...",
     ),
     build_tag_filters=tensorflow_gpu_tag_filters,
     test_tag_filters=tensorflow_gpu_tag_filters,
     options=dict(
+        repo_env="USE_PYWRAP_RULES=True",
         verbose_failures=True,
         test_output="errors",
         override_repository=f"xla={_GITHUB_WORKSPACE}/openxla/xla",

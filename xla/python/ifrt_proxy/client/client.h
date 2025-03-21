@@ -70,18 +70,11 @@ class Client final : public llvm::RTTIExtends<Client, xla::ifrt::Client> {
       std::optional<absl::Span<const int64_t>> byte_strides,
       std::shared_ptr<const Sharding> sharding, HostBufferSemantics semantics,
       std::function<void()> on_done_with_host_buffer) override;
+  absl::StatusOr<std::vector<tsl::RCReference<xla::ifrt::Array>>>
+  MakeArraysFromHostBufferShards(
+      absl::Span<MakeArraysFromHostBufferShardsSpec> specs,
+      HostBufferSemantics semantics) override;
 
-  absl::StatusOr<tsl::RCReference<xla::ifrt::Array>>
-  AssembleArrayFromSingleDeviceArrays(
-      Shape shape, std::shared_ptr<const Sharding> sharding,
-      absl::Span<tsl::RCReference<xla::ifrt::Array>> arrays,
-      ArrayCopySemantics semantics) override;
-  absl::StatusOr<tsl::RCReference<xla::ifrt::Array>>
-  AssembleArrayFromSingleDeviceArrays(
-      Shape shape, std::shared_ptr<const Sharding> sharding,
-      absl::Span<tsl::RCReference<xla::ifrt::Array>> arrays,
-      ArrayCopySemantics array_copy_semantics,
-      SingleDeviceShardSemantics single_device_shard_semantics) override;
   absl::StatusOr<tsl::RCReference<xla::ifrt::Array>>
   AssembleArrayFromSingleDeviceArrays(
       DType dtype, Shape shape, std::shared_ptr<const Sharding> sharding,

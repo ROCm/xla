@@ -59,6 +59,7 @@ limitations under the License.
 #include "xla/python/ifrt/attribute_map.h"
 #include "xla/python/ifrt/basic_device_list.h"
 #include "xla/python/ifrt/client.h"
+#include "xla/python/ifrt/client_impl_util.h"
 #include "xla/python/ifrt/device.h"
 #include "xla/python/ifrt/device_list.h"
 #include "xla/python/ifrt/dtype.h"
@@ -554,11 +555,11 @@ absl::StatusOr<tsl::RCReference<Array>> MakeStringArrayFromHostBuffer(
           "kImmutableUntilTransferCompletes are not "
           "currently supported for making BasicStringArrays.");
     }
-    if (!llvm::isa<const SingleDeviceSharding>(sharding.get())) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("Only SingleDeviceSharding is supported for making "
-                       "BasicStringArrays: got: ",
-                       sharding->DebugString()));
+    if (!sharding->IsFullyReplicated()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Only fully replicated shardings are supported for making "
+          "BasicStringArrays: got: ",
+          sharding->DebugString()));
     }
     return absl::OkStatus();
   }();
@@ -676,12 +677,10 @@ AssembleStringArrayFromSingleDeviceStringArrays(
           "All single device arrays must be BasicStringArrays");
     }
 
-    if (!llvm::isa<SingleDeviceSharding>(basic_string_array->sharding()) &&
-        (basic_string_array->sharding().devices()->size() != 1)) {
+    if (basic_string_array->sharding().devices()->size() != 1) {
       return absl::InvalidArgumentError(
           absl::StrFormat("All single device arrays must have single device "
-                          "sharding. got: %s "
-                          "for shard index: %d",
+                          "sharding. got: %s for shard index: %d",
                           basic_string_array->sharding().DebugString(), i));
     }
 
@@ -973,28 +972,11 @@ absl::StatusOr<tsl::RCReference<Array>> PjRtClient::MakeArrayFromHostBuffer(
                            std::move(buffers), std::move(layout));
 }
 
-absl::StatusOr<tsl::RCReference<Array>>
-PjRtClient::AssembleArrayFromSingleDeviceArrays(
-    Shape shape, std::shared_ptr<const Sharding> sharding,
-    absl::Span<tsl::RCReference<Array>> arrays, ArrayCopySemantics semantics) {
-  DCHECK(this);
-  return AssembleArrayFromSingleDeviceArrays(
-      std::move(shape), std::move(sharding), arrays, semantics,
-      SingleDeviceShardSemantics::kAddressableShards);
-}
-
-absl::StatusOr<tsl::RCReference<Array>>
-PjRtClient::AssembleArrayFromSingleDeviceArrays(
-    Shape shape, std::shared_ptr<const Sharding> sharding,
-    absl::Span<tsl::RCReference<Array>> arrays,
-    ArrayCopySemantics array_copy_semantics,
-    SingleDeviceShardSemantics single_device_shard_semantics) {
-  DCHECK(this);
-  DCHECK(!arrays.empty());
-  DType dtype = arrays[0]->dtype();
-  return AssembleArrayFromSingleDeviceArrays(
-      dtype, std::move(shape), std::move(sharding), arrays,
-      array_copy_semantics, single_device_shard_semantics);
+absl::StatusOr<std::vector<tsl::RCReference<Array>>>
+PjRtClient::MakeArraysFromHostBufferShards(
+    absl::Span<MakeArraysFromHostBufferShardsSpec> specs,
+    HostBufferSemantics semantics) {
+  return ClientMakeArraysFromHostBufferShards(this, specs, semantics);
 }
 
 absl::StatusOr<tsl::RCReference<Array>>
@@ -1014,9 +996,10 @@ PjRtClient::AssembleArrayFromSingleDeviceArrays(
           arrays.size());
     }
     return arrays[0];
-  } else if (!llvm::isa<const OpaqueSharding, const ConcreteSharding,
-                        const ConcreteEvenSharding, const ShardingParamSharding,
-                        const HloSharding>(sharding.get())) {
+  } else if (!llvm::isa<const SingleDeviceSharding, const OpaqueSharding,
+                        const ConcreteSharding, const ConcreteEvenSharding,
+                        const ShardingParamSharding, const HloSharding>(
+                 sharding.get())) {
     return InvalidArgument(
         "Only SingleDeviceSharding, OpaqueSharding, ConcreteSharding, "
         "ConcreteEvenSharding, ShardingParamSharding, HloSharding are "

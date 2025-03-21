@@ -44,9 +44,23 @@ limitations under the License.
 #include "xla/stream_executor/cuda/ptx_compiler_support.h"
 #include "xla/tsl/util/command_line_flags.h"
 #include "xla/xla.pb.h"
+#include "tsl/platform/cpu_info.h"  // NOLINT
+#include "tsl/platform/platform.h"
 #include "tsl/platform/protobuf.h"  // IWYU pragma: keep
 
 namespace xla {
+
+inline std::string DefaultMaxIsa() {
+#ifdef PLATFORM_GOOGLE
+  return "";
+#else
+  // There are many missing SVE lowerings in LLVM. Limit features to NEON for
+  // now. There shouldn't be significant performance impact as most AAarch64
+  // CPUs still use 128-bit registers.
+  // TODO(penporn): Remove this once SVE is fully supported.
+  return tsl::port::IsAarch64CPU() ? "NEON" : "";
+#endif  // PLATFORM_GOOGLE
+}
 
 DebugOptions DefaultDebugOptionsIgnoringFlags() {
   DebugOptions opts;
@@ -96,7 +110,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_cpu_copy_insertion_use_region_analysis(false);
   opts.set_xla_cpu_enable_concurrency_optimized_scheduler(true);
   opts.set_xla_cpu_prefer_vector_width(256);
-  opts.set_xla_cpu_max_isa("");
+  opts.set_xla_cpu_max_isa(DefaultMaxIsa());
   opts.set_xla_cpu_generate_unique_c_style_kernel_entry_points(false);
 
   opts.set_xla_cpu_enable_fast_math(false);
@@ -138,6 +152,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
       kDefaultAllGatherCombineThreshold);
   opts.set_xla_gpu_reduce_scatter_combine_threshold_bytes(
       kDefaultReduceScatterCombineThreshold);
+  opts.set_xla_gpu_collective_permute_combine_threshold_bytes(
+      kDefaultCollectivePermuteCombineThreshold);
   opts.set_xla_gpu_enable_all_gather_combine_by_dim(false);
   opts.set_xla_gpu_enable_reduce_scatter_combine_by_dim(false);
   opts.set_xla_gpu_enable_approx_costly_collectives(false);
@@ -156,7 +172,6 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_enable_shared_constants(true);
   opts.set_xla_gpu_enable_nccl_user_buffers(false);
   opts.set_xla_gpu_enable_nccl_comm_splitting(true);
-  opts.set_xla_gpu_enable_nccl_per_stream_comms(false);
   opts.set_xla_gpu_nccl_init_max_rank_per_root_ratio(0);
 
   opts.set_xla_gpu_temp_buffer_use_separate_color(false);
@@ -307,19 +322,23 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_executable_terminate_timeout_seconds(30);
   opts.set_xla_gpu_experimental_collective_perf_table_path("");
   opts.set_xla_gpu_experimental_disable_binary_libraries(false);
-  opts.set_xla_ignore_channel_id(true);
+  // --xla_ignore_channel_id should be kept false by default while channel ids
+  // are load-bearing.
+  opts.set_xla_ignore_channel_id(false);
   opts.set_xla_gpu_dot_merger_threshold_mb(32);
   opts.set_xla_enable_fast_math(false);
   opts.set_xla_gpu_experimental_parallel_collective_overlap_limit(1);
   opts.set_xla_pjrt_allow_auto_layout_in_hlo(false);
   opts.set_xla_gpu_enable_scatter_determinism_expander(true);
   opts.set_xla_gpu_unsupported_enable_ragged_all_to_all_decomposer(false);
-  opts.set_xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel(false);
+  opts.set_xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel(true);
   opts.set_xla_gpu_experimental_pack_dot_operands_along_k_dimension(true);
   opts.set_xla_unsupported_crash_on_hlo_pass_fix_max_iterations(false);
   opts.set_xla_hlo_pass_fix_detect_cycles(false);
   opts.set_xla_gpu_experimental_enable_sync_collective_combining(false);
   opts.set_xla_allow_get_default_platform(true);
+  opts.set_xla_unsupported_crash_on_hlo_pass_silent_hlo_change(false);
+  opts.set_xla_unsupported_crash_on_hlo_pass_noop_change(false);
   return opts;
 }
 
@@ -1361,6 +1380,13 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_reduce_scatter_combine_threshold_bytes(),
       "Size threshold (in bytes) for the GPU reduce-scatter combiner."));
   flag_list->push_back(tsl::Flag(
+      "xla_gpu_collective_permute_combine_threshold_bytes",
+      int64_setter_for(
+          &DebugOptions::
+              set_xla_gpu_collective_permute_combine_threshold_bytes),
+      debug_options->xla_gpu_collective_permute_combine_threshold_bytes(),
+      "Size threshold (in bytes) for the GPU collective-permute combiner."));
+  flag_list->push_back(tsl::Flag(
       "xla_gpu_enable_all_gather_combine_by_dim",
       bool_setter_for(
           &DebugOptions::set_xla_gpu_enable_all_gather_combine_by_dim),
@@ -1579,14 +1605,6 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_enable_nccl_comm_splitting(),
       "Enables NCCL communicator splitting which allows sharing NCCL resources "
       "between different NCCL cliques."));
-  flag_list->push_back(tsl::Flag(
-      "xla_gpu_enable_nccl_per_stream_comms",
-      bool_setter_for(&DebugOptions::set_xla_gpu_enable_nccl_per_stream_comms),
-      debug_options->xla_gpu_enable_nccl_per_stream_comms(),
-      "A separate NCCL communicator will be created for each stream that a "
-      "NCCL collective is executed on. This can lead to higher performance if "
-      "NCCL collectives are issued concurrently at the cost of more GPU memory"
-      " usage."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_nccl_init_max_rank_per_root_ratio",
       int64_setter_for(
@@ -2295,7 +2313,22 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "If non empty will interpret this variable as a path for performance "
       "tables for collectives. Expects `xla.gpu.DeviceHloInstructionProfiles` "
       "proto."));
-}  // NOLINT(readability/fn_size)1
+  flag_list->push_back(tsl::Flag(
+      "xla_unsupported_crash_on_hlo_pass_silent_hlo_change",
+      bool_setter_for(
+          &DebugOptions::
+              set_xla_unsupported_crash_on_hlo_pass_silent_hlo_change),
+      debug_options->xla_unsupported_crash_on_hlo_pass_silent_hlo_change(),
+      "Crash if a pass reports that it did not change the HLO but in fact it "
+      "did."));
+  flag_list->push_back(tsl::Flag(
+      "xla_unsupported_crash_on_hlo_pass_noop_change",
+      bool_setter_for(
+          &DebugOptions::set_xla_unsupported_crash_on_hlo_pass_noop_change),
+      debug_options->xla_unsupported_crash_on_hlo_pass_noop_change(),
+      "Crash if a pass reports that it did change the HLO but in fact it "
+      "did not."));
+}  // NOLINT(readability/fn_size)
 
 // Allocates flag_values and flag_objects; this function must not be called more
 // than once - its call done via call_once.

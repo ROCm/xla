@@ -287,10 +287,6 @@ class PjRtStreamExecutorClient : public PjRtClient {
   // For PjRtStreamExecutorClient, `options` is mandatory.
   // This function returns an InvalidArgument error if `std::nullopt` is passed.
   // TODO(b/237720161): make it actually optional
-  absl::StatusOr<std::unique_ptr<PjRtLoadedExecutable>> DeserializeExecutable(
-      absl::string_view serialized,
-      std::optional<CompileOptions> options) override;
-
   absl::StatusOr<std::unique_ptr<PjRtLoadedExecutable>>
   LoadSerializedExecutable(absl::string_view serialized,
                            std::optional<CompileOptions> options,
@@ -374,6 +370,7 @@ class PjRtStreamExecutorClient : public PjRtClient {
 
  protected:
   friend class PjRtStreamExecutorBuffer;
+  friend class PjRtStreamExecutorRawBuffer;
 
   virtual absl::Status EnqueueCrossHostReceive(
       absl::Span<const std::unique_ptr<PjRtBuffer>> buffers,
@@ -394,6 +391,20 @@ class PjRtStreamExecutorClient : public PjRtClient {
                                               int64_t offset,
                                               int64_t transfer_size) {
     return PjRtFuture<>(Unimplemented("Raw copies to host not implemented."));
+  }
+
+  virtual PjRtFuture<> CopyRawHostToDevice(
+      LocalDeviceState* local_device,
+      tsl::RCReference<RawSEDeviceMemory> device_buffer, const void* src,
+      int64_t offset, int64_t transfer_size) {
+    return PjRtFuture<>(Unimplemented("Raw copies h2d not implemented."));
+  }
+
+  virtual PjRtFuture<> CopyRawDeviceToHost(
+      LocalDeviceState* local_device,
+      tsl::RCReference<RawSEDeviceMemory> device_buffer, void* dst,
+      int64_t offset, int64_t transfer_size) {
+    return PjRtFuture<>(Unimplemented("Raw copies d2h not implemented."));
   }
 
   // Helper function for creating PjRtStreamExecutorExecutables. Modifies

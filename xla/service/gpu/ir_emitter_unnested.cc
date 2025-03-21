@@ -1672,10 +1672,12 @@ absl::Status IrEmitterUnnested::EmitSort(const HloSortInstruction* sort) {
         sort->operand_count() > 1 ? ShapeIndex({i}) : ShapeIndex({});
     // We assume that the layout of all involved operands and outputs is the
     // same.
-    TF_RET_CHECK(LayoutUtil::LayoutsInShapesEqual(keys_shape,
-                                                  sort->operand(i)->shape()));
+    TF_RET_CHECK(
+        LayoutUtil::LayoutsInShapesEqual(keys_shape, sort->operand(i)->shape(),
+                                         Layout::Equal().IgnoreMemorySpace()));
     TF_RET_CHECK(LayoutUtil::LayoutsInShapesEqual(
-        keys_shape, ShapeUtil::GetSubshape(sort->shape(), shape_index)));
+        keys_shape, ShapeUtil::GetSubshape(sort->shape(), shape_index),
+        Layout::Equal().IgnoreMemorySpace()));
 
     BufferAllocation::Slice destination_buffer;
     BufferAllocation::Slice source_address;
@@ -2115,8 +2117,10 @@ static const HloInstruction* FindCanonicalSendRecvStartOp(
           unique_user->opcode() == HloOpcode::kWhile);
     if (unique_user->IsRoot()) {
       // send/recv op in the loop body.
-      CHECK(unique_user->parent()->IsWhileBodyComputation());
-      while_op = unique_user->parent()->WhileCallInstruction();
+      auto maybe_while_op =
+          unique_user->parent()->GetUniqueCaller(HloOpcode::kWhile);
+      CHECK(maybe_while_op);
+      while_op = *maybe_while_op;
       i = unique_user->operand_index(inst);
     } else {
       // send/recv leading into the loop.
@@ -2146,8 +2150,10 @@ static const HloInstruction* FindCanonicalSendRecvStartOp(
     if (iter_tuple->opcode() == HloOpcode::kParameter) {
       // send-done/recv-done in the loop body.
       CHECK(Cast<HloParameterInstruction>(iter_tuple)->parameter_number() == 0);
-      CHECK(operand->parent()->IsWhileBodyComputation());
-      while_op = iter_tuple->parent()->WhileCallInstruction();
+      auto maybe_while =
+          iter_tuple->parent()->GetUniqueCaller(HloOpcode::kWhile);
+      CHECK(maybe_while);
+      while_op = *maybe_while;
       i = gte->tuple_index();
     } else {
       // send-done/recv-done proceeding the loop.

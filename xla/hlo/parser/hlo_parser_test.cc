@@ -2845,7 +2845,7 @@ class HloParameterizedParserTest
                             ParseAndReturnVerifiedModule(original));
     TF_ASSERT_OK_AND_ASSIGN(
         module, ParseAndReturnVerifiedModule(module->ToString(
-                    HloPrintOptions().set_print_operand_shape(true))));
+                    HloPrintOptions().set_print_large_constants(true))));
 
     if (proto_round_trip) {
       TF_ASSERT_OK_AND_ASSIGN(module, HloModule::CreateFromProto(
@@ -2854,14 +2854,16 @@ class HloParameterizedParserTest
     if (short_form) {
       EXPECT_EQ(original, module->ToString(HloPrintOptions::ShortParsable()));
     } else {
-      EXPECT_EQ(original, module->ToString(
-                              HloPrintOptions().set_print_operand_shape(true)));
+      EXPECT_EQ(original,
+                module->ToString(HloPrintOptions()
+                                     .set_print_operand_shape(true)
+                                     .set_print_large_constants(true)));
     }
     for (HloComputation* computation : module->computations()) {
       for (HloInstruction* instr : computation->instructions()) {
         if (instr->opcode() == HloOpcode::kWhile) {
-          EXPECT_EQ(instr->while_body()->WhileCallInstruction(), instr);
-          EXPECT_TRUE(instr->while_body()->IsWhileBodyComputation());
+          EXPECT_EQ(instr->while_body()->GetUniqueCaller(HloOpcode::kWhile),
+                    instr);
         }
       }
     }
@@ -3283,9 +3285,7 @@ ENTRY %ShortConstant.v4 () -> f32[67,89] {
 )";
   auto result = ParseAndReturnVerifiedModule(original);
   TF_EXPECT_OK(result.status());
-  EXPECT_EQ(result.value()->ToString(
-                HloPrintOptions().set_print_large_constants(false)),
-            original);
+  EXPECT_EQ(result.value()->ToString(HloPrintOptions()), original);
 }
 
 TEST_F(HloParserTest, NegativeNan) {

@@ -142,7 +142,8 @@ IrEmitter::IrEmitter(mlir::MLIRContext* mlir_context,
                      const TargetMachineFeatures* target_machine_features,
                      bool emit_code_for_msan,
                      absl::flat_hash_map<BufferAllocation::Slice, int64_t>
-                         slice_to_buffer_table_index)
+                         slice_to_buffer_table_index,
+                     bool allow_runtime_calls)
     : assignment_(assignment),
       module_(llvm_module),
       arch_type_(llvm::Triple(llvm_module->getTargetTriple()).getArch()),
@@ -159,7 +160,8 @@ IrEmitter::IrEmitter(mlir::MLIRContext* mlir_context,
       is_top_level_computation_(false),
       target_machine_features_(*target_machine_features),
       emit_code_for_msan_(emit_code_for_msan),
-      slice_to_buffer_table_index_(std::move(slice_to_buffer_table_index)) {
+      slice_to_buffer_table_index_(std::move(slice_to_buffer_table_index)),
+      allow_runtime_calls_(allow_runtime_calls) {
   b()->setFastMathFlags(llvm_ir::GetCpuFastMathFlags(hlo_module_config_));
   absl::Status s = GatherComputationsByAllocationType(
       &hlo_module, &thread_local_computations_, &global_computations_);
@@ -796,10 +798,10 @@ absl::Status IrEmitter::HandleDot(HloInstruction* dot) {
           << llvm_ir::DumpToString(target_array.GetBasePointer());
 
   // Dot operation is complicated so we delegate to a helper class.
-  return EmitDotOperation(*dot, target_array, lhs_array, rhs_array,
-                          /*addend_array=*/nullptr,
-                          GetExecutableRunOptionsArgument(), b(),
-                          hlo_module_config_, target_machine_features_);
+  return EmitDotOperation(
+      *dot, target_array, lhs_array, rhs_array,
+      /*addend_array=*/nullptr, GetExecutableRunOptionsArgument(), b(),
+      hlo_module_config_, target_machine_features_, allow_runtime_calls_);
 }
 
 absl::Status IrEmitter::HandleConvolution(HloInstruction* convolution) {
@@ -812,8 +814,8 @@ absl::Status IrEmitter::HandleConvolution(HloInstruction* convolution) {
 
   // TODO(tonywy): Add PotentiallyImplementedAsMKLConvolution to support
   // different data layouts.
-  if (PotentiallyImplementedAsEigenConvolution(*convolution,
-                                               target_machine_features_)) {
+  if (allow_runtime_calls_ && PotentiallyImplementedAsEigenConvolution(
+                                  *convolution, target_machine_features_)) {
     const Shape& lhs_shape = lhs->shape();
     const Shape& rhs_shape = rhs->shape();
     const Shape& convolution_shape = convolution->shape();
@@ -2477,6 +2479,14 @@ std::vector<StackAlloca> IrEmitter::EmitOneDnnOperandsAlloca(
   return operands_stack_alloca;
 }
 
+std::pair<llvm::Value*, StackAlloca> IrEmitter::GetPtrAndAllocaFromBufferSlice(
+    const BufferAllocation::Slice& slice, const Shape& shape) {
+  llvm::Value* slice_ptr = EmitBufferPointer(slice, shape);
+  llvm::Type* type = IrShapeType(shape);
+  llvm_ir::IrArray ir_array = llvm_ir::IrArray(slice_ptr, type, shape);
+  return {slice_ptr, GetAllocaAndEmitMemrefInfo(*b(), ir_array)};
+}
+
 absl::Status IrEmitter::HandleOneDnnMatMulCalls(
     HloInstruction* custom_call, std::string runtime_symbol_name) {
   // We would like to emit LLVM IR for the following function call
@@ -2547,29 +2557,24 @@ absl::Status IrEmitter::HandleOneDnnMatMulCalls(
   // scratch and void** args
   std::vector<llvm::Value*> fn_call_args;
   fn_call_args.reserve(3);
+  // Add the scratch buffer to the output, so that oneDNN can use it as a
+  // user-provided scratchpad
   const bool use_scratchpad = custom_call->shape().IsTuple();
   if (use_scratchpad) {
     llvm::Value* result_slice_ptr;
     llvm::Value* scratch_slice_ptr;
-    llvm_ir::IrArray result_array;
-    llvm_ir::IrArray scratch_array;
     TF_ASSIGN_OR_RETURN(const BufferAllocation::Slice result_slice,
                         assignment_.GetUniqueSlice(custom_call, {0}));
     const Shape& result_shape = custom_call->shape().tuple_shapes(0);
-    result_slice_ptr = EmitBufferPointer(result_slice, result_shape);
-    llvm::Type* ir_type = IrShapeType(result_shape);
-    result_array = llvm_ir::IrArray(result_slice_ptr, ir_type, result_shape);
-    result_stack_alloca = GetAllocaAndEmitMemrefInfo(*b(), result_array);
+    std::tie(result_slice_ptr, result_stack_alloca) =
+        GetPtrAndAllocaFromBufferSlice(result_slice, result_shape);
     fn_call_args.push_back(result_stack_alloca.value);
 
     TF_ASSIGN_OR_RETURN(const BufferAllocation::Slice scratch_slice,
                         assignment_.GetUniqueSlice(custom_call, {1}));
     const Shape& scratch_shape = custom_call->shape().tuple_shapes(1);
-    scratch_slice_ptr = EmitBufferPointer(scratch_slice, scratch_shape);
-    llvm::Type* scratch_type = IrShapeType(scratch_shape);
-    scratch_array =
-        llvm_ir::IrArray(scratch_slice_ptr, scratch_type, scratch_shape);
-    scratch_stack_alloca = GetAllocaAndEmitMemrefInfo(*b(), scratch_array);
+    std::tie(scratch_slice_ptr, scratch_stack_alloca) =
+        GetPtrAndAllocaFromBufferSlice(scratch_slice, scratch_shape);
     fn_call_args.push_back(scratch_stack_alloca.value);
     llvm_ir::EmitTuple(GetIrArrayFor(custom_call),
                        {result_slice_ptr, scratch_slice_ptr}, b());
@@ -2647,19 +2652,53 @@ absl::Status IrEmitter::HandleOneDnnConvolution(HloInstruction* custom_call) {
   b()->CreateStore(args_val, args_ptr);
 
   TF_RETURN_IF_ERROR(EmitTargetAddressForOp(custom_call));
-  llvm_ir::IrArray result_array = GetIrArrayFor(custom_call);
-  auto result_stack_alloca = GetAllocaAndEmitMemrefInfo(*b(), result_array);
 
-  EmitCallToFunc(runtime::kOneDnnConvolutionSymbolName,
-                 {result_stack_alloca.value, args_ptr}, b()->getVoidTy());
+  StackAlloca result_stack_alloca;
+  StackAlloca scratch_stack_alloca;
+  std::vector<llvm::Value*> fn_call_args;
+  fn_call_args.reserve(3);
+  // Add the scratch buffer to the output, so that oneDNN can use it as a
+  // user-provided scratchpad
+  const bool use_scratchpad = custom_call->shape().IsTuple();
+  if (use_scratchpad) {
+    llvm::Value* result_slice_ptr;
+    llvm::Value* scratch_slice_ptr;
+    TF_ASSIGN_OR_RETURN(const BufferAllocation::Slice result_slice,
+                        assignment_.GetUniqueSlice(custom_call, {0}));
+    const Shape& result_shape = custom_call->shape().tuple_shapes(0);
+    std::tie(result_slice_ptr, result_stack_alloca) =
+        GetPtrAndAllocaFromBufferSlice(result_slice, result_shape);
+    fn_call_args.push_back(result_stack_alloca.value);
+
+    TF_ASSIGN_OR_RETURN(const BufferAllocation::Slice scratch_slice,
+                        assignment_.GetUniqueSlice(custom_call, {1}));
+    const Shape& scratch_shape = custom_call->shape().tuple_shapes(1);
+    std::tie(scratch_slice_ptr, scratch_stack_alloca) =
+        GetPtrAndAllocaFromBufferSlice(scratch_slice, scratch_shape);
+    fn_call_args.push_back(scratch_stack_alloca.value);
+    llvm_ir::EmitTuple(GetIrArrayFor(custom_call),
+                       {result_slice_ptr, scratch_slice_ptr}, b());
+  } else {
+    llvm_ir::IrArray result_array;
+    result_array = GetIrArrayFor(custom_call);
+    result_stack_alloca = GetAllocaAndEmitMemrefInfo(*b(), result_array);
+    fn_call_args.push_back(result_stack_alloca.value);
+    fn_call_args.push_back(llvm::ConstantPointerNull::get(b()->getPtrTy()));
+  }
+  fn_call_args.push_back(args_ptr);
+  EmitCallToFunc(runtime::kOneDnnConvolutionSymbolName, fn_call_args,
+                 b()->getVoidTy());
 
   // Lifetime ends for all stack allocations.
   b()->CreateLifetimeEnd(nargs_ptr, b()->getInt64(-1));
-  for (int i = 0; i < num_operands; ++i) {
-    operands_stack_alloca[i].EmitLifetimeEnd();
-  }
   b()->CreateLifetimeEnd(args_ptr, b()->getInt64(-1));
+  for (StackAlloca& alloca : operands_stack_alloca) {
+    alloca.EmitLifetimeEnd();
+  }
   result_stack_alloca.EmitLifetimeEnd();
+  if (use_scratchpad) {
+    scratch_stack_alloca.EmitLifetimeEnd();
+  }
 
   return absl::OkStatus();
 }

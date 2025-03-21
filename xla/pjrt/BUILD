@@ -624,6 +624,7 @@ cc_library(
         "//xla/mlir/utils:error_util",
         "//xla/mlir_hlo:hlo_dialect_registration",
         "//xla/mlir_hlo:mhlo_passes",
+        "//xla/mlir_hlo:stablehlo_extension_passes",
         "//xla/service/spmd/shardy:constants",
         "//xla/service/spmd/shardy:utils",
         "//xla/service/spmd/shardy/sdy_round_trip:pipelines",
@@ -751,7 +752,7 @@ cc_library(
         "transpose_kernels.h",
     ],
     hdrs = ["transpose.h"],
-    visibility = [":friends"],
+    visibility = internal_visibility([":friends"]),
     deps = [
         ":lru_cache",
         "//xla:compiler_macros",
@@ -1020,6 +1021,7 @@ cc_library(
         "-fno-strict-aliasing",
     ],
     features = ["-use_header_modules"],
+    visibility = internal_visibility([":friends"]),
     deps = [
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
@@ -1056,6 +1058,7 @@ cc_library(
         "//xla/tsl/platform:logging",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
+        "@llvm-project//llvm:TargetParser",
     ] + if_cuda_is_configured(
         [
             "@com_google_absl//absl/base",
@@ -1109,10 +1112,12 @@ cc_library(
     srcs = ["raw_buffer.cc"],
     hdrs = ["raw_buffer.h"],
     deps = [
+        ":pjrt_client",
         ":pjrt_future",
         "//xla/tsl/concurrency:ref_count",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
     ],
 )
 

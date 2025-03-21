@@ -55,9 +55,9 @@
 #include "xla/python/ifrt_proxy/common/versions.h"
 #include "xla/python/pjrt_ifrt/pjrt_attribute_map_util.h"
 #include "xla/tsl/concurrency/ref_count.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/casts.h"
-#include "tsl/platform/statusor.h"
 #include "tsl/profiler/lib/traceme.h"
 
 namespace xla {
@@ -231,25 +231,12 @@ Client::MakeArrayFromHostBuffer(
       std::move(sharding), semantics, std::move(on_done_with_host_buffer));
 }
 
-absl::StatusOr<tsl::RCReference<xla::ifrt::Array>>
-Client::AssembleArrayFromSingleDeviceArrays(
-    Shape shape, std::shared_ptr<const Sharding> sharding,
-    absl::Span<tsl::RCReference<xla::ifrt::Array>> arrays,
-    ArrayCopySemantics semantics) {
-  return Array::AssembleArrayFromSingleDeviceArrays(
-      this, rpc_helper_, arrays[0]->dtype(), std::move(shape), sharding, arrays,
-      semantics, SingleDeviceShardSemantics::kAllShards);
-}
-
-absl::StatusOr<tsl::RCReference<xla::ifrt::Array>>
-Client::AssembleArrayFromSingleDeviceArrays(
-    Shape shape, std::shared_ptr<const Sharding> sharding,
-    absl::Span<tsl::RCReference<xla::ifrt::Array>> arrays,
-    ArrayCopySemantics array_copy_semantics,
-    SingleDeviceShardSemantics single_device_shard_semantics) {
-  return Array::AssembleArrayFromSingleDeviceArrays(
-      this, rpc_helper_, arrays[0]->dtype(), std::move(shape), sharding, arrays,
-      array_copy_semantics, single_device_shard_semantics);
+absl::StatusOr<std::vector<tsl::RCReference<xla::ifrt::Array>>>
+Client::MakeArraysFromHostBufferShards(
+    absl::Span<MakeArraysFromHostBufferShardsSpec> specs,
+    xla::ifrt::Client::HostBufferSemantics semantics) {
+  return Array::MakeArraysFromHostBufferShards(this, rpc_helper_, specs,
+                                               semantics);
 }
 
 absl::StatusOr<tsl::RCReference<xla::ifrt::Array>>

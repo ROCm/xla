@@ -164,6 +164,27 @@ xla_cc_test(
     ],
 )
 
+cc_library(
+    name = "client_impl_util",
+    srcs = ["client_impl_util.cc"],
+    hdrs = ["client_impl_util.h"],
+    compatible_with = get_compatible_with_portable(),
+    visibility = internal_visibility([
+        ":friends",
+        ":internal",
+    ]),
+    deps = [
+        ":ifrt",
+        "//xla/tsl/concurrency:ref_count",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
 tf_proto_library(
     name = "execute_options_proto",
     srcs = ["execute_options.proto"],
@@ -917,6 +938,22 @@ cc_library(
         "@llvm-project//llvm:Support",
     ],
     alwayslink = True,
+)
+
+cc_library(
+    name = "user_context",
+    srcs = ["user_context.cc"],
+    hdrs = ["user_context.h"],
+    visibility = [
+        ":friends",
+        ":internal",
+        ":users",
+    ],
+    deps = [
+        ":ifrt",
+        "//xla/tsl/concurrency:ref_count",
+        "@llvm-project//llvm:Support",
+    ],
 )
 
 xla_cc_test(
