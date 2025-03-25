@@ -12,7 +12,7 @@ permissions:
 env:
   SYNC_BRANCH_NAME: ci-upstream-sync-${{ github.run_number }}_${{ github.run_attempt }}
 jobs:
-  sync-main:
+  generate-app-token:
     runs-on: ubuntu-latest
     steps:
       - name: Generate an app token
@@ -21,12 +21,18 @@ jobs:
         with:
           app-id: ${{ vars.ROCM_REPO_MANAGEMENT_API_2_ID }}
           private-key: ${{ secrets.ROCM_REPO_MANAGEMENT_API_2_PRIV_KEY }}
+        outputs:
+          token: ${{ steps.generate-token.outputs.token }}
+  sync-main:
+    needs: generate-app-token
+    runs-on: ubuntu-latest
+    steps:
       - name: Sync our main with upstream main
         run: |
           gh auth status
           gh repo sync rocm/xla -b main
         env:
-          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          GH_TOKEN: ${{ needs.generate-app-token.outputs.token }}
   create-sync-branch:
     needs: sync-main
     runs-on: ubuntu-latest
@@ -48,19 +54,13 @@ jobs:
           git merge --abort || true
           git push origin HEAD:refs/heads/$SYNC_BRANCH_NAME
   open-sync-pr:
-    needs: create-sync-branch
+    needs: [create-sync-branch, generate-app-token]
     runs-on: ubuntu-latest
     steps:
-      - name: Generate an app token
-        id: generate-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ vars.ROCM_REPO_MANAGEMENT_API_2_ID }}
-          private-key: ${{ secrets.ROCM_REPO_MANAGEMENT_API_2_PRIV_KEY }}
       - name: Open a PR to rocm-main
         run: |
           gh pr create --repo $GITHUB_REPOSITORY --head $SYNC_BRANCH_NAME --base rocm-main --title "CI: $(date +%x) upstream sync" --body "Daily sync with upstream"
           gh pr merge --repo $GITHUB_REPOSITORY --merge --auto $SYNC_BRANCH_NAME
         env:
-          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          GH_TOKEN: ${{ needs.generate-app-token.outputs.token }}
 
