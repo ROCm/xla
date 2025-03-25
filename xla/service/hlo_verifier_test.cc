@@ -3159,5 +3159,395 @@ TEST_F(HloVerifierTestLayoutSensitive,
               HasSubstr("Instruction has mismatched minor-to-major size and "
                         "dimension size: "));
 }
+
+
+TEST_F(HloVerifierTest, NoErrorOnDuplicateChannelId) {
+  const char* const hlo_string = R"(
+  HloModule m
+
+  ENTRY main {
+    data_param = f32[2048,2048]{1,0} parameter(0)
+    cp1 = f32[2048,2048]{1,0} collective-permute(data_param), source_target_pairs={{0,1},{1,2},{2,3}}, channel_id=1
+    cp2 = f32[2048,2048]{1,0} collective-permute(data_param), source_target_pairs={{0,1}}, channel_id=1
+
+    ROOT tuple = (f32[2048,2048]{1,0}, f32[2048,2048]{1,0}) tuple(cp1, cp2)
+  })";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnUnverifiedModule(hlo_string));
+  HloVerifierOpts opts{};
+  opts.verify_unique_channel_ids = false;
+  HloVerifier verifier(std::move(opts));
+  ASSERT_IS_OK(verifier.Run(module.get()).status());
+}
+
+TEST_F(HloVerifierTestLayoutSensitive, Int4CompareSelect) {
+  const char* const kModuleStr = R"(
+    HloModule test
+
+    ENTRY main {
+      a = s4[10]{0:E(4)} parameter(0)
+      b = s4[10]{0:E(4)} parameter(1)
+      less = pred[10] compare(a, b), direction=LT
+      ROOT result = select(less, a, b)
+    })";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnUnverifiedModule(kModuleStr));
+  TF_ASSERT_OK(verifier().Run(module.get()));
+}
+
+TEST_F(HloVerifierTest, RaggedDotNonContracting) {
+  static const char* const kRaggedDotHloString = R"(
+HloModule module
+ENTRY entry_computation {
+  a = f32[11,5] parameter(0)
+  b = f32[3,5,7] parameter(1)
+  c = u32[3] parameter(2)
+  ROOT dot = f32[11,7] ragged-dot(a, b, c), lhs_contracting_dims={1}, rhs_contracting_dims={1}, lhs_ragged_dims={0}, rhs_group_dims={0}
+})";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnVerifiedModule(kRaggedDotHloString));
+
+  auto status = verifier().Run(module.get()).status();
+  EXPECT_TRUE(status.ok()) << status;
+}
+
+TEST_F(HloVerifierTest, RaggedDotContracting) {
+  static const char* const kRaggedDotHloString = R"(
+HloModule module
+ENTRY entry_computation {
+  a = f32[11,5] parameter(0)
+  b = f32[5,7] parameter(1)
+  c = u32[3] parameter(2)
+  ROOT dot = f32[3,11,7] ragged-dot(a, b, c), lhs_contracting_dims={1}, rhs_contracting_dims={0}, lhs_ragged_dims={1}
+})";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnVerifiedModule(kRaggedDotHloString));
+
+  auto status = verifier().Run(module.get()).status();
+  EXPECT_TRUE(status.ok()) << status;
+}
+
+TEST_F(HloVerifierTest, BatchedRaggedDotNonContracting) {
+  static const char* const kRaggedDotHloString = R"(
+HloModule module
+ENTRY entry_computation {
+  a = f32[19,11,5] parameter(0)
+  b = f32[3,19,5,7] parameter(1)
+  c = u32[19,3] parameter(2)
+  ROOT dot = f32[19,11,7] ragged-dot(a, b, c), lhs_batch_dims={0}, lhs_contracting_dims={2}, rhs_batch_dims={1}, rhs_contracting_dims={2}, lhs_ragged_dims={1}, rhs_group_dims={0}
+})";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnVerifiedModule(kRaggedDotHloString));
+
+  auto status = verifier().Run(module.get()).status();
+  EXPECT_TRUE(status.ok()) << status;
+}
+
+TEST_F(HloVerifierTest, UnaryOpWithResultAccuracy) {
+  constexpr absl::string_view hlo_string = R"(
+  HloModule exponential_hw
+
+  ENTRY exponential_hw {
+    %exponent = f32[] parameter(0)
+    ROOT %exponential = f32[] exponential(f32[] %exponent), result_accuracy={mode=highest}
+  }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnVerifiedModule(hlo_string));
+  auto status = verifier().Run(module.get()).status();
+  EXPECT_TRUE(status.ok()) << status;
+}
+
+TEST_F(HloVerifierTest, EmptyLeafInOriginalValue) {
+  const std::string hlo_string = R"(
+HloModule module
+ENTRY %entry_computation {
+  ROOT op = ((f32[], f32[3]{0}), f32[2,3]) parameter(0),  origin={(({}, {"v2"}), {"v3"})}
+}
+)";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnUnverifiedModule(hlo_string));
+
+  auto status = verifier().Run(module.get()).status();
+  EXPECT_FALSE(status.ok());
+}
+
+TEST_F(HloVerifierTest, RaggedAllToAllWithRank1OffsetsSizes) {
+  const std::string hlo_string = R"(
+  HloModule RaggedAllToAllWithRank1OffsetsSizes
+    ENTRY main {
+      input = bf16[4,1024,4096] parameter(0)
+      output = bf16[4,1024,4096] parameter(1)
+      input_offsets = s32[64] parameter(2)
+      send_sizes = s32[64] parameter(3)
+      output_offsets = s32[64] parameter(4)
+      recv_sizes = s32[64] parameter(5)
+      ROOT ra2a = bf16[4,1024,4096] ragged-all-to-all(input, output, input_offsets, send_sizes, output_offsets, recv_sizes), replica_groups={{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63}}
+    }
+)";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnUnverifiedModule(hlo_string));
+
+  auto status = verifier().Run(module.get()).status();
+  EXPECT_TRUE(status.ok()) << status;
+}
+
+TEST_F(HloVerifierTest, RaggedAllToAllWithRank2OffsetsSizes) {
+  const std::string hlo_string = R"(
+  HloModule RaggedAllToAllWithRank2OffsetsSizes
+    ENTRY main {
+      input = bf16[4,1024,4096] parameter(0)
+      output = bf16[4,1024,4096] parameter(1)
+      input_offsets = s32[64,16] parameter(2)
+      send_sizes = s32[64,16] parameter(3)
+      output_offsets = s32[64,16] parameter(4)
+      recv_sizes = s32[64,16] parameter(5)
+      ROOT ra2a = bf16[4,1024,4096] ragged-all-to-all(input, output, input_offsets, send_sizes, output_offsets, recv_sizes), replica_groups={{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63}}
+    }
+)";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnUnverifiedModule(hlo_string));
+
+  auto status = verifier().Run(module.get()).status();
+  EXPECT_TRUE(status.ok()) << status;
+}
+
+TEST_F(HloVerifierTest, RaggedAllToAllWithInvalidOffsetsRanks) {
+  const std::string hlo_string = R"(
+  HloModule RaggedAllToAllWithInvalidOffsetsRanks
+    ENTRY main {
+      input = bf16[4,1024,4096] parameter(0)
+      output = bf16[4,1024,4096] parameter(1)
+      input_offsets = s32[64,16,8] parameter(2)
+      send_sizes = s32[64,16,8] parameter(3)
+      output_offsets = s32[64,16,8] parameter(4)
+      recv_sizes = s32[64,16,8] parameter(5)
+      ROOT ra2a = bf16[4,1024,4096] ragged-all-to-all(input, output, input_offsets, send_sizes, output_offsets, recv_sizes), replica_groups={{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63}}
+    }
+)";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnUnverifiedModule(hlo_string));
+
+  auto status = verifier().Run(module.get()).status();
+  EXPECT_FALSE(status.ok()) << status;
+  EXPECT_THAT(status.message(),
+              HasSubstr("RaggedAllToAll operand 2 must be rank 1 or 2"));
+}
+
+TEST_F(HloVerifierTest, RaggedAllToAllWithRank2OffsetsShapes) {
+  const std::string hlo_string = R"(
+  HloModule RaggedAllToAllWithRank2OffsetsShapes
+    ENTRY main {
+      input = bf16[4,1024,4096] parameter(0)
+      output = bf16[4,1024,4096] parameter(1)
+      input_offsets = s32[64,16] parameter(2)
+      send_sizes = s32[64] parameter(3)
+      output_offsets = s32[64,16] parameter(4)
+      recv_sizes = s32[64] parameter(5)
+      ROOT ra2a = bf16[4,1024,4096] ragged-all-to-all(input, output, input_offsets, send_sizes, output_offsets, recv_sizes), replica_groups={{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63}}
+    }
+)";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnUnverifiedModule(hlo_string));
+
+  auto status = verifier().Run(module.get()).status();
+  EXPECT_FALSE(status.ok()) << status;
+  EXPECT_THAT(status.message(),
+              HasSubstr("RaggedAllToAll operands have different shapes"));
+}
+
+TEST_F(HloVerifierTest, NoHostMemorySpaceShape) {
+  constexpr absl::string_view hlo_no_host_memory_space_shape = R"(
+HloModule hlo_no_host_memory_space
+ENTRY main {
+  x = f32[] parameter(0)
+  y = f32[] parameter(1)
+  ROOT z = f32[] add(f32[] x, f32[] y)
+}
+)";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(
+                                           hlo_no_host_memory_space_shape));
+
+  auto status = HloVerifier{HloVerifierOpts{}.VerifyNoHostMemorySpace()}
+                    .Run(module.get())
+                    .status();
+  ASSERT_TRUE(status.ok());
+}
+
+TEST_F(HloVerifierTest, NegativeHostMemorySpaceShape) {
+  constexpr absl::string_view hlo_with_host_memory_space_shape = R"(
+HloModule custom_call_bitcast_module
+ENTRY main {
+  param.1 = bf16[8,1,64]{2,0,1} parameter(0)
+  custom-call.2 = bf16[8,1,64]{2,0,1} custom-call(param.1), custom_call_target="MoveToHost"
+  ROOT bitcast.3 = bf16[8,1,64]{2,1,0:S(5)} bitcast(custom-call.2)
+}
+)";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(
+                                           hlo_with_host_memory_space_shape));
+
+  auto status = HloVerifier{HloVerifierOpts{}.VerifyNoHostMemorySpace()}
+                    .Run(module.get())
+                    .status();
+  ASSERT_FALSE(status.ok());
+  EXPECT_THAT(
+      status.message(),
+      HasSubstr("Instruction shouldn't have the layout of host memory space"));
+}
+
+TEST_F(HloVerifierTest, ClonedComputationNameBypass) {
+  const char* const hlo_string = R"(
+  HloModule test_module
+
+  computation {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  computation.clone {
+    p0 = f32[] parameter(0) 
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  ENTRY entry {
+    p0 = f32[] parameter(0)
+    call1 = f32[] call(p0), to_apply=computation
+    call2 = f32[] call(p0), to_apply=computation.clone
+    ROOT tuple = (f32[], f32[]) tuple(call1, call2)
+  }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(hlo_string));
+  TF_ASSERT_OK(verifier().Run(module.get()));
+}
+
+TEST_F(HloVerifierTest, MultipleClonedComputations) {
+  const char* const hlo_string = R"(
+  HloModule test_module
+
+  original {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  original.clone.1 {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  original.clone.2 {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  ENTRY entry {
+    p0 = f32[] parameter(0)
+    call1 = f32[] call(p0), to_apply=original
+    call2 = f32[] call(p0), to_apply=original.clone.1
+    call3 = f32[] call(p0), to_apply=original.clone.2
+    ROOT tuple = (f32[], f32[], f32[]) tuple(call1, call2, call3)
+  }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(hlo_string));
+  TF_ASSERT_OK(verifier().Run(module.get()));
+}
+
+TEST_F(HloVerifierTest, NestedClonedComputations) {
+  const char* const hlo_string = R"(
+  HloModule test_module
+
+  inner {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  inner.clone {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  outer {
+    p0 = f32[] parameter(0)
+    call = f32[] call(p0), to_apply=inner
+    ROOT mul = f32[] multiply(call, p0)
+  }
+
+  outer.clone {
+    p0 = f32[] parameter(0)
+    call = f32[] call(p0), to_apply=inner.clone
+    ROOT mul = f32[] multiply(call, p0)
+  }
+
+  ENTRY entry {
+    p0 = f32[] parameter(0)
+    call1 = f32[] call(p0), to_apply=outer
+    call2 = f32[] call(p0), to_apply=outer.clone
+    ROOT tuple = (f32[], f32[]) tuple(call1, call2)
+  }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(hlo_string));
+  TF_ASSERT_OK(verifier().Run(module.get()));
+}
+
+TEST_F(HloVerifierTest, SkipRematClonedInstructions) {
+  const char* const hlo_string = R"(
+  HloModule test_module
+
+  computation {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  ENTRY entry {
+    p0 = f32[] parameter(0)
+    add = f32[] add(p0, p0)
+    add.clone = f32[] add(p0, p0)
+    ROOT tuple = (f32[], f32[]) tuple(add, add.clone)
+  }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(hlo_string));
+  TF_ASSERT_OK(verifier().Run(module.get()));
+}
+
+TEST_F(HloVerifierTest, ProcessNonClonedInstructions) {
+  const char* const hlo_string = R"(
+  HloModule test_module
+
+  computation {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  ENTRY entry {
+    p0 = f32[] parameter(0)
+    add1 = f32[] add(p0, p0)
+    add2 = f32[] add(p0, p0)
+    ROOT tuple = (f32[], f32[]) tuple(add1, add2)
+  }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(hlo_string));
+  TF_ASSERT_OK(verifier().Run(module.get()));
+}
+
+TEST_F(HloVerifierTest, MultipleClonedAndNonClonedInstructions) {
+  const char* const hlo_string = R"(
+  HloModule test_module
+
+  computation {
+    p0 = f32[] parameter(0)
+    ROOT add = f32[] add(p0, p0)
+  }
+
+  ENTRY entry {
+    p0 = f32[] parameter(0)
+    add1 = f32[] add(p0, p0)
+    add1.clone = f32[] add(p0, p0)
+    add2 = f32[] add(p0, p0)
+    add2.clone = f32[] add(p0, p0)
+    ROOT tuple = (f32[], f32[], f32[], f32[]) tuple(add1, add1.clone, add2, add2.clone)
+  }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(hlo_string));
+  TF_ASSERT_OK(verifier().Run(module.get()));
+}
 }  // namespace
 }  // namespace xla
