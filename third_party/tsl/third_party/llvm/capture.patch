@@ -1,0 +1,11 @@
+--- a/mlir/lib/Dialect/Utils/StaticValueUtils.cpp
++++ a/mlir/lib/Dialect/Utils/StaticValueUtils.cpp
+@@ -119,7 +119,7 @@
+
+ std::optional<SmallVector<int64_t>>
+ getConstantIntValues(ArrayRef<OpFoldResult> ofrs) {
+-  bool failed = false;
++  bool failed = false;__asm__("":"+r"(failed));
+   SmallVector<int64_t> res = llvm::map_to_vector(ofrs, [&](OpFoldResult ofr) {
+     auto cv = getConstantIntValue(ofr);
+     if (!cv.has_value())

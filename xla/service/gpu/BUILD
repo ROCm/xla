@@ -485,11 +485,88 @@ cc_library(
 )
 
 cc_library(
+    name = "gemm_fusion_autotuner_cuda",
+    srcs = [
+        "gemm_fusion_autotuner.h",
+        "gemm_fusion_autotuner_cuda.cc",
+    ],
+    tags = [
+        "cuda-only",
+        "gpu",
+    ],
+    deps = [
+        ":autotuner_compile_util",
+        ":autotuner_util",
+        "//xla:autotuning_proto_cc",
+        "//xla:xla_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:hlo_pass",
+        "//xla/pjrt/distributed:key_value_store_interface",
+        "//xla/service:algorithm_util",
+        "//xla/service:executable",
+        "//xla/service:shaped_buffer",
+        "//xla/service/gpu:ir_emission_utils",
+        "//xla/service/gpu:matmul_utils",
+        "//xla/service/gpu:stream_executor_util",
+        "//xla/service/gpu/transforms:cudnn_fusion_compiler",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor:semantic_version",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@local_config_cuda//cuda:cuda_headers",
+        "@tsl//tsl/platform:env",
+    ],
+)
+
+cc_library(
+    name = "gemm_fusion_autotuner_rocm",
+    srcs = [
+        "gemm_fusion_autotuner.h",
+        "gemm_fusion_autotuner_rocm.cc",
+    ],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":autotuner_compile_util",
+        ":autotuner_util",
+        "//xla:autotuning_proto_cc",
+        "//xla:xla_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:hlo_pass",
+        "//xla/pjrt/distributed:key_value_store_interface",
+        "//xla/service:executable",
+        "//xla/service:shaped_buffer",
+        "//xla/service/gpu:matmul_utils",
+        "//xla/stream_executor:device_description",
+        #"//xla/stream_executor:semantic_version",
+        "//xla/stream_executor/rocm:rocblas_plugin",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform:env",
+    ],
+)
+
+cc_library(
     name = "gemm_fusion_autotuner",
-    srcs = if_cuda_is_configured(["gemm_fusion_autotuner.cc"]),
-    hdrs = if_cuda_is_configured(["gemm_fusion_autotuner.h"]),
+    srcs = ["gemm_fusion_autotuner.cc"],
+    hdrs = ["gemm_fusion_autotuner.h"],
+    tags = ["gpu"],
     local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]),
-    deps = if_cuda_is_configured([
+    deps = if_cuda_is_configured([":gemm_fusion_autotuner_cuda"]) + if_rocm_is_configured([
+        ":gemm_fusion_autotuner_rocm",
+    ]) + [
         ":autotuner_compile_util",
         ":autotuner_util",
         ":backend_configs_cc",
@@ -552,15 +629,12 @@ cc_library(
         "//xla/service/gpu/model:gpu_hlo_cost_analysis",
         "//xla/stream_executor:stream_executor_memory_allocator",
         "@tsl//tsl/platform:path",
-    ]),
+    ],
 )
 
 xla_test(
     name = "gemm_fusion_autotuner_test",
-    srcs = if_cuda_is_configured(["gemm_fusion_autotuner_test.cc"]),
-    backend_tags = {"gpu": [
-        "requires-gpu-sm80",
-    ]},
+    srcs = if_gpu_is_configured(["gemm_fusion_autotuner_test.cc"]),
     backends = [
         "gpu",
     ],
@@ -3803,6 +3877,7 @@ cc_library(
         ":cudnn_fused_conv_rewriter",
         ":cusolver_rewriter",
         ":gemm_algorithm_picker",
+        ":gemm_fusion_autotuner",
         ":gpu_algebraic_simplifier",
         ":gpu_compiler",
         ":gpu_conv_padding_legalization",
