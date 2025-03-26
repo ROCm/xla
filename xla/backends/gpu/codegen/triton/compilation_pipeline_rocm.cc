@@ -95,7 +95,7 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
   // TODO ROCm Check if we want to compare MI100 and greater
   pm->addPass(mlir::createTritonAMDGPUOptimizeEpiloguePass());
   pm->addPass(mt::gpu::createTritonGPUOptimizeDotOperands({true}));
-  pm->addPass(mlir::createTritonAMDGPUHoistLayoutConversionsPass());
+  pm->addNestedPass<mt::FuncOp>(mlir::createTritonAMDGPUHoistLayoutConversionsPass());
   if (num_stages == kAmdDoubleBuffering && cc.has_amd_matrix_core()) {
     pm->addPass(mlir::createTritonAMDGPUStreamPipelinePass(
         num_stages, /*stream_prefetch=*/true));
@@ -108,7 +108,7 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
   if (num_stages != kAmdDoubleBuffering) {
     pm->addPass(mt::gpu::createTritonGPUReorderInstructions());
   }
-  pm->addPass(mlir::createTritonAMDGPUCanonicalizePointersPass());
+  pm->addNestedPass<mt::FuncOp>(mlir::createTritonAMDGPUCanonicalizePointersPass());
   pm->addPass(mlir::createCanonicalizerPass());
   pm->addPass(mlir::createTritonAMDGPUConvertToBufferOpsPass(arch_name));
   pm->addPass(mlir::createCanonicalizerPass());
