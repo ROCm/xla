@@ -39,6 +39,7 @@ class WithoutDotDimensionSorterTest : public GpuCodegenTest {
     // The pass does not touch SortedDimsDoNotCreateTransposes anyway because
     // the dimensions are already ordered there.
     debug_options.add_xla_disable_hlo_passes("dot_dimension_sorter");
+    debug_options.set_xla_gpu_enable_cublaslt(false);
     return debug_options;
   }
 };

@@ -57,7 +57,8 @@ class AlgorithmTest : public GpuCodegenTest {
 
     // Enable triton fusion for all supported GEMMs.
     debug_options.set_xla_gpu_triton_gemm_any(true);
-
+    debug_options.set_xla_gpu_enable_cublaslt(false);
+    
     return debug_options;
   }
 

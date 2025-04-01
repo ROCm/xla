@@ -574,6 +574,7 @@ ENTRY main {
     DebugOptions debug_options = GetDebugOptionsForTest();
     debug_options.set_xla_gpu_cublas_fallback(enable_blas_fallback);
     debug_options.set_xla_gpu_enable_triton_gemm(enable_triton);
+    debug_options.set_xla_gpu_enable_cublaslt(false);
     if (!enable_blas) {
       debug_options.add_xla_disable_hlo_passes("cublas-gemm-rewriter");
     }

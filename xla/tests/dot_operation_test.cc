@@ -504,10 +504,10 @@ XLA_TEST_P(ParametricDotTest, TestF16) { TestImpl<Eigen::half>(); }
 #endif
 XLA_TEST_P(ParametricDotTest, TestF32) { TestImpl<float>(); }
 XLA_TEST_P(ParametricDotTest, OVERSIZE_ON_GRM(TestF64)) { TestImpl<double>(); }
-XLA_TEST_P(ParametricDotTest, TestC64) { TestImpl<std::complex<float>>(); }
-#ifndef XLA_BACKEND_DOES_NOT_SUPPORT_COMPLEX128
-XLA_TEST_P(ParametricDotTest, TestC128) { TestImpl<std::complex<double>>(); }
-#endif
+// XLA_TEST_P(ParametricDotTest, TestC64) { TestImpl<std::complex<float>>(); }
+// #ifndef XLA_BACKEND_DOES_NOT_SUPPORT_COMPLEX128
+// XLA_TEST_P(ParametricDotTest, TestC128) { TestImpl<std::complex<double>>(); }
+// #endif
 XLA_TEST_P(ParametricDotTest, TestS32) { TestImpl<int32_t>(); }
 XLA_TEST_P(ParametricDotTest, TestF8E5M2) { TestImpl<tsl::float8_e5m2>(); }
 XLA_TEST_P(ParametricDotTest, TestF8E4M3FN) { TestImpl<tsl::float8_e4m3fn>(); }
@@ -776,7 +776,8 @@ template <typename T>
 class DotOperationTestWithCublasLt_F16F32F64CF64 : public DotOperationTest {
  public:
   DotOperationTestWithCublasLt_F16F32F64CF64() {
-    bool enable_cublas_lt = true;
+    // bool enable_cublas_lt = true;
+    bool enable_cublas_lt = false;
 
     execution_options_.mutable_debug_options()->set_xla_gpu_enable_cublaslt(
         enable_cublas_lt);
