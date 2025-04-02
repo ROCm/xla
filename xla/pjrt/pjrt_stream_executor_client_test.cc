@@ -92,8 +92,9 @@ absl::Status ExecuteWithSameInputBuffer(
                       client->CreateUninitializedBuffer(shape, device0));
   TF_ASSIGN_OR_RETURN(auto executable,
                       ToyExecutable(*client, shape, std::move(set_up_aliases)));
-  return executable->Execute({{buffer.get(), buffer.get()}}, /*options=*/{})
-      .status();
+  xla::ExecuteOptions options;
+  options.untuple_result = true;
+  return executable->Execute({{buffer.get(), buffer.get()}}, options).status();
 }
 
 TEST(PjRtStreamExecutorClientTest, DonateSameBufferTwice) {
