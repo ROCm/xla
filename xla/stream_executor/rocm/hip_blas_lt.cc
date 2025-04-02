@@ -213,7 +213,9 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
                                        size_t max_algorithm_count,
                                        size_t max_workspace_size) const
     -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
+  LOG(INFO) << "Enter BlasLt::MatmulPlan::GetAlgorithms()...";
   max_algorithm_count = std::min(max_algorithm_count, size_t{INT_MAX});
+  LOG(INFO) << "max_algorithm_count: " << max_algorithm_count;
   std::vector<hipblasLtMatmulHeuristicResult_t> results(max_algorithm_count);
   {
     auto blas_lt = static_cast<BlasLt*>(gpu::BlasLt::Get(stream));
@@ -270,6 +272,7 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
       VLOG(0) << "hipblasLtMatmulAlgoGetHeuristic returned " << (int)error;
       SE_HIPBLAS_RETURN_IF_ERROR(error);
     }
+    LOG(INFO) << "found_algorithm_count: " << found_algorithm_count;
     results.resize(found_algorithm_count);
   }  // end mutex block
 
@@ -280,6 +283,7 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
       algorithms.push_back({result.algo, result.workspaceSize});
     }
   }
+  LOG(INFO) << "Leave BlasLt::MatmulPlan::GetAlgorithms()...";
   return std::move(algorithms);
 }
 
