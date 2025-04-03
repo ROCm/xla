@@ -608,7 +608,12 @@ absl::Status RocmExecutor::Init() {
                       RocmContext::Create(device_ordinal(), device_));
   set_context(rocm_context_);
   TF_ASSIGN_OR_RETURN(version_, GetGpuISAVersion(device_));
-  return absl::OkStatus();
+  // We initialize BLAS interfaces early here since otherwise it might create
+  // us problems during hipBlasLt initialization under graph capture.
+  // There is no real advantage of explicitly using 'lazy initialization' on
+  // ROCM platform because rocBLAS/hipBlasLt already use 'lazy initialization'
+  // internally
+  return InitBlas();
 }
 
 absl::StatusOr<std::unique_ptr<Kernel>> RocmExecutor::LoadKernel(
@@ -771,6 +776,35 @@ bool RocmExecutor::SynchronizeAllActivity() {
   return rocm_context_->Synchronize().ok();
 }
 
+bool RocmExecutor::HostMemoryRegister(void* location, uint64_t size) {
+  VLOG(1) << "Called StreamExecutor::HostMemoryRegister(data=" << location
+          << ")";
+
+  std::unique_ptr<ActivateContext> activation = Activate();
+  // "Portable" memory is visible to all CUDA contexts. Safe for our use model.
+  auto status = ToStatus(
+        hipHostRegister(location, size, hipHostRegisterPortable));
+  if (!status.ok()) {
+    LOG(ERROR) << "error registering host memory at " << location << ": "
+               << status;
+    return false;
+  }
+  return true;
+}
+
+bool RocmExecutor::HostMemoryUnregister(void* location) {
+  VLOG(1) << "Called StreamExecutor::HostUnregister(data=" << location << ")";
+
+  std::unique_ptr<ActivateContext> activation = Activate();
+  auto status = ToStatus(hipHostUnregister(location));
+  if (!status.ok()) {
+    LOG(ERROR) << "error unregistering host memory at " << location << ": "
+               << status;
+    return false;
+  }
+  return true;
+}
+
 absl::Status RocmExecutor::SynchronousMemZero(DeviceMemoryBase* location,
                                               uint64_t size) {
   std::unique_ptr<ActivateContext> activation = Activate();
@@ -826,23 +860,15 @@ void RocmExecutor::DeallocateStream(Stream* stream) {
   alive_gpu_streams_.erase(rocm_stream->stream_handle());
 }
 
-blas::BlasSupport* RocmExecutor::AsBlas() {
-  absl::MutexLock lock(&mu_);
-  if (blas_ != nullptr) {
-    return blas_.get();
-  }
-
+absl::Status RocmExecutor::InitBlas() {
   PluginRegistry* registry = PluginRegistry::Instance();
-  absl::StatusOr<PluginRegistry::BlasFactory> status =
-      registry->GetFactory<PluginRegistry::BlasFactory>(rocm::kROCmPlatformId);
-  if (!status.ok()) {
-    LOG(ERROR) << "Unable to retrieve BLAS factory: "
-               << status.status().message();
-    return nullptr;
-  }
+  TF_ASSIGN_OR_RETURN(auto factory,
+      registry->GetFactory<PluginRegistry::BlasFactory>(rocm::kROCmPlatformId));
+  blas_.reset(factory(this));
+  return absl::OkStatus();
+}
 
-  auto blas = status.value()(this);
-  blas_.reset(blas);
+blas::BlasSupport* RocmExecutor::AsBlas() {
   return blas_.get();
 }
 
