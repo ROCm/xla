@@ -6,7 +6,7 @@ on:
     branches:
       - rocm-main
       - 'rocm-jaxlib-v*'
-  pull_reqeust:
+  pull_request:
     branches:
       - rocm-main
       - 'rocm-jaxlib-v*'
