@@ -194,6 +194,7 @@ limitations under the License.
 #include "xla/service/gpu/transforms/collectives/all_gather_combiner.h"
 #include "xla/service/gpu/transforms/collectives/all_reduce_combiner.h"
 #include "xla/service/gpu/transforms/collectives/collective_combiner_annotator.h"
+#include "xla/service/gpu/transforms/collectives/collective_ops_utils.h"
 #include "xla/service/gpu/transforms/collectives/convert_async_collectives_to_sync.h"
 #include "xla/service/gpu/transforms/collectives/gpu_collective_combiner_utils.h"
 #include "xla/service/gpu/transforms/collectives/reduce_scatter_combiner.h"
@@ -932,9 +933,9 @@ absl::Status RunCollectiveOptimizationPasses(
         /*reuse_pipelined_op_buffer=*/HloPredicateFalse,
         /*should_allow_loop_variant_parameter_in_chain=*/HloPredicateFalse,
         /*should_allow_control_dependencies=*/false,
-        /*postprocess_backward_peeled_op=*/std::nullopt,
-        /*postprocess_backward_rotated_op=*/std::nullopt,
-        /*postprocess_backward_peeled_trailing_op=*/std::nullopt,
+        /*postprocess_backward_peeled_op=*/{},
+        /*postprocess_backward_rotated_op=*/{},
+        /*postprocess_backward_peeled_trailing_op=*/{},
         /*should_add_loop_invariant_op_in_chain=*/false,
         /*postprocess_pipelined_ops=*/AppendPipelinedInstruction,
     };
@@ -956,9 +957,9 @@ absl::Status RunCollectiveOptimizationPasses(
         /*reuse_pipelined_op_buffer=*/HloPredicateFalse,
         /*should_allow_loop_variant_parameter_in_chain=*/HloPredicateFalse,
         /*should_allow_control_dependencies=*/false,
-        /*postprocess_backward_peeled_op=*/std::nullopt,
-        /*postprocess_backward_rotated_op=*/std::nullopt,
-        /*postprocess_backward_peeled_trailing_op=*/std::nullopt,
+        /*postprocess_backward_peeled_op=*/{},
+        /*postprocess_backward_rotated_op=*/{},
+        /*postprocess_backward_peeled_trailing_op=*/{},
         /*should_add_loop_invariant_op_in_chain=*/true,
         /*postprocess_pipelined_ops=*/AppendPipelinedInstruction,
     };
@@ -980,9 +981,9 @@ absl::Status RunCollectiveOptimizationPasses(
         /*reuse_pipelined_op_buffer=*/HloPredicateFalse,
         /*should_allow_loop_variant_parameter_in_chain=*/HloPredicateFalse,
         /*should_allow_control_dependencies=*/false,
-        /*postprocess_backward_peeled_op=*/std::nullopt,
-        /*postprocess_backward_rotated_op=*/std::nullopt,
-        /*postprocess_backward_peeled_trailing_op=*/std::nullopt,
+        /*postprocess_backward_peeled_op=*/{},
+        /*postprocess_backward_rotated_op=*/{},
+        /*postprocess_backward_peeled_trailing_op=*/{},
         /*should_add_loop_invariant_op_in_chain=*/false,
         /*postprocess_pipelined_ops=*/AppendPipelinedInstruction,
     };
@@ -1165,7 +1166,10 @@ void AddCollectiveCombinerPasses(
     const se::DeviceDescription& device_description, int pointer_size) {
   const DebugOptions& opts = module.config().debug_options();
 
-  if (opts.xla_gpu_experimental_enable_sync_collective_combining()) {
+  bool enable_sync_collective_combining =
+      IsMultiHostTopology(module.config(), device_description) ||
+      opts.xla_gpu_experimental_enable_sync_collective_combining();
+  if (enable_sync_collective_combining) {
     pipeline.AddPass<CollectiveCombinerAnnotator>(device_description,
                                                   pointer_size);
   }
