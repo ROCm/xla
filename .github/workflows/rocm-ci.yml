@@ -51,7 +51,8 @@ jobs:
     env:
       JAX_BRANCH: "rocm-jaxlib-v0.5.1"
     steps:
-      # TODO Implement me
-      echo "Not implemented yet"
-
+      - name: Build JAX
+        run: |
+          # TODO Implement me
+          echo "Not implemented yet"
 
