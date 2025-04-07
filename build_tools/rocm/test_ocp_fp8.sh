@@ -68,12 +68,23 @@ bazel \
     --local_test_jobs=${N_TEST_JOBS} \
     --test_env=TF_TESTS_PER_GPU=$TF_TESTS_PER_GPU \
     --test_env=TF_GPU_COUNT=$TF_GPU_COUNT \
-    --test_env=HIPBLASLT_LOG_MASK=0 \
+    --test_env=HIPBLASLT_LOG_MASK=0xff \
+    --test_env=AMD_LOG_LEVEL=0 \
     --test_output=streamed \
     --test_env=TF_CPP_VMODULE="gemm_rewriter=3" \
     --test_env=XLA_FLAGS="--xla_dump_to=/tmp/generated --xla_dump_hlo_as_text --xla_dump_hlo_as_html --xla_gpu_enable_cublaslt=true --xla_gpu_autotune_level=0" \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
-    //xla/service/gpu/transforms:gemm_rewriter_fp8_test_gpu_amd_any --test_filter=Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABUnscaledDF8/0
-
-# --test_filter=Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABUnscaledDF8/0
+    //xla/service/gpu/transforms:gemm_rewriter_fp8_test_gpu_amd_any --test_filter=Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDF8/0
+    
+#   FAILED  ] 10 tests, listed below:
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDPrecisionF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDPrecisionF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDMatrixBiasF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDMatrixBiasF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABUnscaledDF32VectorBiasF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABUnscaledDF32VectorBiasF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABUnscaledDVectorBiasThenApproxGeluActivationF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABUnscaledDVectorBiasThenApproxGeluActivationF8/1, where GetParam() = true
