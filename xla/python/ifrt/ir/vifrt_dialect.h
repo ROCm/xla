@@ -26,7 +26,7 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "xla/python/ifrt/ir/sharding_param.h"  // IWYU pragma: export
-#include "xla/python/ifrt/ir/version.h"  // IWYU pragma: export
+#include "xla/python/ifrt/ir/version.h"         // IWYU pragma: export
 
 namespace xla {
 namespace ifrt {
@@ -54,7 +54,7 @@ class VifrtDialect : public mlir::Dialect {
 
 class VifrtTypeConverterBase : public mlir::TypeConverter {
  public:
-  VifrtTypeConverterBase() : mlir::TypeConverter() {};
+  VifrtTypeConverterBase() : mlir::TypeConverter(){};
 
   ~VifrtTypeConverterBase() override = default;
 };

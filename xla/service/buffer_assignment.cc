@@ -104,8 +104,8 @@ BuildIdToLogicalBufferMap(
         << "Expected logical buffer to have location information in the proto.";
     TF_RET_CHECK(id_to_hlo_instruction.contains(
         logical_buffer_proto.defined_at().instruction_id()))
-        << "Expected hlo instruction " << "with the id '"
-        << logical_buffer_proto.defined_at().instruction_id()
+        << "Expected hlo instruction "
+        << "with the id '" << logical_buffer_proto.defined_at().instruction_id()
         << "' in the proto to also exist in the "
            "HLO module.";
     // Assumption: An hlo module loaded from an hlo proto

@@ -59,7 +59,7 @@ class TpuPlatformInterface : public stream_executor::Platform {
 
   virtual TpuRuntimeVersion version() const = 0;
 
-  virtual void EraseEvent(stream_executor::Event* key) {};
+  virtual void EraseEvent(stream_executor::Event* key){};
 
   TpuTopologyExternal topology() {
     return TpuTopologyExternal(GetTopologyPtr());

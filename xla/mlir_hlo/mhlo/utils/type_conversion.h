@@ -26,7 +26,7 @@ namespace mhlo {
 // Type converter to use as part of lowerings from dialects that carry signs
 // in their types to those that are signless.
 class RemoveSignTypeConverter : public TypeConverter {
- public:
+public:
   RemoveSignTypeConverter();
 };
 
@@ -35,11 +35,11 @@ class RemoveSignTypeConverter : public TypeConverter {
 // This is the type converter used by the test pass and is the sanctioned
 // way to use the underlying patterns.
 class LinalgTypeConverter : public RemoveSignTypeConverter {
- public:
+public:
   LinalgTypeConverter();
 };
 
-}  // namespace mhlo
+} // namespace mhlo
 
 namespace stablehlo {
 
@@ -56,13 +56,13 @@ namespace stablehlo {
 // Types which are specific to individual dialects like !stablehlo.token
 // and !mhlo.token are handled in subclasses.
 class HloTypeConverter : public TypeConverter {
- public:
+public:
   HloTypeConverter();
   virtual ~HloTypeConverter() = default;
 
   // Checks whether the given dialect is the source dialect of the type
   // conversion (e.g. MHLO for HloToStablehloTypeConverter).
-  virtual bool isSourceDialect(Dialect& dialect) = 0;
+  virtual bool isSourceDialect(Dialect &dialect) = 0;
 
   // Convert an encoding defined by the source dialect.
   virtual Attribute convertSourceDialectEncoding(Attribute attr) = 0;
@@ -71,29 +71,29 @@ class HloTypeConverter : public TypeConverter {
 // Type converter that changes all !mhlo.foo types to !stablehlo.foo types.
 // Also changes MHLO-defined encodings to StableHLO equivalents.
 class HloToStablehloTypeConverter : public HloTypeConverter {
- public:
+public:
   HloToStablehloTypeConverter();
-  bool isSourceDialect(Dialect& dialect) override;
+  bool isSourceDialect(Dialect &dialect) override;
   Attribute convertSourceDialectEncoding(Attribute attr) override;
 };
 
 // Type converter that changes all !stablehlo.foo types to !mhlo.foo types.
 // Also changes StableHLO-defined encodings to MHLO equivalents.
 class StablehloToHloTypeConverter : public HloTypeConverter {
- public:
+public:
   StablehloToHloTypeConverter();
-  bool isSourceDialect(Dialect& dialect) override;
+  bool isSourceDialect(Dialect &dialect) override;
   Attribute convertSourceDialectEncoding(Attribute attr) override;
 };
 
 // Complements StableHLO <=> MHLO conversion patterns with boilerplate that
 // makes sure `func.func`, `func.call` and `func.return` ops which involve
 // illegal types get converted to use legal types.
-void registerFuncOpsForTypeConversion(ConversionTarget& target,
-                                      RewritePatternSet& patterns,
-                                      TypeConverter& converter);
+void registerFuncOpsForTypeConversion(ConversionTarget &target,
+                                      RewritePatternSet &patterns,
+                                      TypeConverter &converter);
 
-}  // namespace stablehlo
-}  // namespace mlir
+} // namespace stablehlo
+} // namespace mlir
 
-#endif  // MLIR_HLO_MHLO_UTILS_TYPE_CONVERSION_H
+#endif // MLIR_HLO_MHLO_UTILS_TYPE_CONVERSION_H

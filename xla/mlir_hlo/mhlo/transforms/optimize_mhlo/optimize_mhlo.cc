@@ -18,7 +18,6 @@ limitations under the License.
 
 #include <cstdint>
 
-#include "llvm/ADT/STLExtras.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mhlo/transforms/passes.h"
 #include "mlir/IR/Attributes.h"
@@ -31,6 +30,7 @@ limitations under the License.
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/LLVM.h"
 #include "utils/hlo_utils.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace mlir {
 namespace mhlo {
@@ -38,7 +38,7 @@ namespace {
 
 // Returns 1D 64-bit dense elements attribute with the given values.
 static DenseIntElementsAttr getI64ElementsAttr(ArrayRef<int64_t> values,
-                                               Builder* builder) {
+                                               Builder *builder) {
   RankedTensorType ty = RankedTensorType::get(
       {static_cast<int64_t>(values.size())}, builder->getIntegerType(64));
   return DenseIntElementsAttr::get(ty, values);
@@ -51,7 +51,7 @@ static DenseIntElementsAttr getI64ElementsAttr(ArrayRef<int64_t> values,
 class GatherIsSlice : public OpRewritePattern<GatherOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(GatherOp gather,
-                                PatternRewriter& rewriter) const override {
+                                PatternRewriter &rewriter) const override {
     auto dimensionNumbers = gather.getDimensionNumbers();
 
     // Inputs need to be ranked to lower.
@@ -88,7 +88,7 @@ class GatherIsSlice : public OpRewritePattern<GatherOp> {
       return rewriter.notifyMatchFailure(gather,
                                          "offset_dims.size != operand.rank");
     }
-    for (const auto& it : llvm::enumerate(dimensionNumbers.getOffsetDims())) {
+    for (const auto &it : llvm::enumerate(dimensionNumbers.getOffsetDims())) {
       if (static_cast<int64_t>(it.index()) != it.value()) {
         return rewriter.notifyMatchFailure(gather,
                                            "offset_dims != [0, result.rank)");
@@ -100,7 +100,7 @@ class GatherIsSlice : public OpRewritePattern<GatherOp> {
                                          "slices_size.size > result.rank");
     }
 
-    for (const auto& it : llvm::enumerate(resultTy.getShape())) {
+    for (const auto &it : llvm::enumerate(resultTy.getShape())) {
       if (gather.getSliceSizes().getValues<int64_t>()[it.index() + 1] !=
           it.value()) {
         return failure();
@@ -163,11 +163,11 @@ class GatherIsSlice : public OpRewritePattern<GatherOp> {
   }
 };
 
-}  // end anonymous namespace
+} // end anonymous namespace
 
-static void populateOptimizeMhloPatterns(MLIRContext* context,
-                                         RewritePatternSet* patterns) {
+static void populateOptimizeMhloPatterns(MLIRContext *context,
+                                         RewritePatternSet *patterns) {
   patterns->add<GatherIsSlice>(context);
 }
-}  // end namespace mhlo
-}  // end namespace mlir
+} // end namespace mhlo
+} // end namespace mlir

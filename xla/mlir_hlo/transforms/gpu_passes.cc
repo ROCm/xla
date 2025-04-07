@@ -21,10 +21,10 @@ namespace {
 // Name of the 'gpu.launch_func' attribute which specifies the written operands.
 static constexpr llvm::StringLiteral kWrittenOperandsAttrName("lmhlo.written");
 
-}  // namespace
+} // namespace
 
-ArrayAttr getWrittenOperandsAttribute(Operation* op) {
+ArrayAttr getWrittenOperandsAttribute(Operation *op) {
   return op->getAttrOfType<ArrayAttr>(kWrittenOperandsAttrName);
 }
 
-}  // namespace mlir
+} // namespace mlir

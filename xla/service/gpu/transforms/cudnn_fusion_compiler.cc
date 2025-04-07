@@ -181,7 +181,7 @@ inline std::optional<fe::DataType_t> GetComputeDataType(
 class GemmDimensionAdapter {
   explicit GemmDimensionAdapter(const HloDotInstruction& dot,
                                 TritonFusionAnalysis analysis)
-      : analysis_(std::move(analysis)), dot_(dot) {};
+      : analysis_(std::move(analysis)), dot_(dot){};
 
  public:
   const TritonFusionAnalysis analysis_;

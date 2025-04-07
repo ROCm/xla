@@ -33,27 +33,27 @@ namespace mlir {
 namespace mhlo {
 namespace {
 
-bool hasIntegralShapeType(Operation* op) {
+bool hasIntegralShapeType(Operation *op) {
   auto stp = mlir::dyn_cast<ShapedType>(op->getOperand(0).getType());
   return stp && stp.getElementType().isIntOrIndex();
 }
 
-}  // namespace
+} // namespace
 
-SmallVector<utils::IteratorType, 3> getParallelAndReductionIterators(
-    unsigned nLoops, unsigned nReduction) {
+SmallVector<utils::IteratorType, 3>
+getParallelAndReductionIterators(unsigned nLoops, unsigned nReduction) {
   SmallVector<utils::IteratorType, 3> res(nLoops - nReduction,
                                           utils::IteratorType::parallel);
   res.append(nReduction, utils::IteratorType::reduction);
   return res;
 }
 
-SmallVector<utils::IteratorType, 3> getNParallelLoopsAttrs(
-    unsigned nParallelLoops) {
+SmallVector<utils::IteratorType, 3>
+getNParallelLoopsAttrs(unsigned nParallelLoops) {
   return getParallelAndReductionIterators(nParallelLoops, 0);
 }
 
-Value getEmptySparseTensor(OpBuilder& b, Location loc, ShapedType type,
+Value getEmptySparseTensor(OpBuilder &b, Location loc, ShapedType type,
                            ArrayRef<Value> dynSizes) {
   return b.create<bufferization::AllocTensorOp>(
       loc, mlir::cast<TensorType>(type), dynSizes,
@@ -61,15 +61,15 @@ Value getEmptySparseTensor(OpBuilder& b, Location loc, ShapedType type,
       /*memory_space=*/IntegerAttr());
 }
 
-Value getEmptyTensor(OpBuilder& b, Location loc, ShapedType type,
+Value getEmptyTensor(OpBuilder &b, Location loc, ShapedType type,
                      ArrayRef<Value> dynSizes) {
   return b.create<tensor::EmptyOp>(
       loc, type.getShape(), type.getElementType(), dynSizes,
       mlir::cast<RankedTensorType>(type).getEncoding());
 }
 
-Value getEmptyTensorFor(OpBuilder& b, Location loc, ShapedType resultType,
-                        Operation* op, ValueRange operands) {
+Value getEmptyTensorFor(OpBuilder &b, Location loc, ShapedType resultType,
+                        Operation *op, ValueRange operands) {
   bool isSparse = sparse_tensor::getSparseTensorEncoding(resultType) != nullptr;
   // Collect the sizes for a ranked tensor to be passed as parameter to a
   // new tensor initialization operation. This operation only needs the
@@ -82,8 +82,9 @@ Value getEmptyTensorFor(OpBuilder& b, Location loc, ShapedType resultType,
     (void)shapeSource.reifyReturnTypeShapes(b, operands, reifiedShapes);
     assert(reifiedShapes.size() == 1 && "Expected one reified result");
     // Construct sizes for the required dimensions.
-    for (const auto& en : llvm::enumerate(resultType.getShape())) {
-      if (en.value() != ShapedType::kDynamic) continue;
+    for (const auto &en : llvm::enumerate(resultType.getShape())) {
+      if (en.value() != ShapedType::kDynamic)
+        continue;
       sizes.push_back(b.create<tensor::ExtractOp>(
           loc, reifiedShapes[0],
           ValueRange{b.create<arith::ConstantIndexOp>(loc, en.index())}));
@@ -93,8 +94,8 @@ Value getEmptyTensorFor(OpBuilder& b, Location loc, ShapedType resultType,
                   : getEmptyTensor(b, loc, resultType, sizes);
 }
 
-Value preSparsify(Operation* op, llvm::SmallVector<Value, 2>& values, Type rtp,
-                  OpBuilder* b) {
+Value preSparsify(Operation *op, llvm::SmallVector<Value, 2> &values, Type rtp,
+                  OpBuilder *b) {
   // Apply for semi-ring operations that lower to elaborate code
   // (any sign-op, or an integral abs-op).
   // TODO(peiming, ajcbik): these all can potentially be optimized by applying
@@ -111,7 +112,7 @@ Value preSparsify(Operation* op, llvm::SmallVector<Value, 2>& values, Type rtp,
     Location loc = op->getLoc();
     auto semiring = b->create<sparse_tensor::UnaryOp>(loc, rtp, values[0]);
     Type itp = values[0].getType();
-    Block* present = b->createBlock(&semiring.getPresentRegion(), {}, itp, loc);
+    Block *present = b->createBlock(&semiring.getPresentRegion(), {}, itp, loc);
     b->setInsertionPointToStart(&semiring.getPresentRegion().front());
     values[0] = present->getArgument(0);
     return semiring;
@@ -119,7 +120,7 @@ Value preSparsify(Operation* op, llvm::SmallVector<Value, 2>& values, Type rtp,
   return Value();
 }
 
-Value postSparsify(Operation* op, Value semiring, Value result, OpBuilder* b) {
+Value postSparsify(Operation *op, Value semiring, Value result, OpBuilder *b) {
   if (semiring) {
     b->create<sparse_tensor::YieldOp>(op->getLoc(), result);
     b->setInsertionPointAfter(semiring.getDefiningOp());
@@ -128,19 +129,19 @@ Value postSparsify(Operation* op, Value semiring, Value result, OpBuilder* b) {
   return result;
 }
 
-bool allOperandsAreScalarTensors(Operation* op) {
+bool allOperandsAreScalarTensors(Operation *op) {
   return llvm::all_of(op->getOperands(), [](Value operand) {
     auto operandTy = mlir::dyn_cast<ShapedType>(operand.getType());
     return operandTy && operandTy.getRank() == 0;
   });
 }
 
-bool isInBodyOfLinalgOps(Operation* op) {
-  auto* parentOp = op->getParentRegion()->getParentOp();
+bool isInBodyOfLinalgOps(Operation *op) {
+  auto *parentOp = op->getParentRegion()->getParentOp();
   return parentOp->getDialect() ==
          parentOp->getContext()->getLoadedDialect<linalg::LinalgDialect>();
 }
 
-}  // namespace mhlo
+} // namespace mhlo
 
-}  // namespace mlir
+} // namespace mlir

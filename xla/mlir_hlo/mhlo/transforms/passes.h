@@ -30,7 +30,7 @@ class OperationPass;
 class Pass;
 namespace func {
 class FuncOp;
-}  // namespace func
+} // namespace func
 
 namespace mhlo {
 
@@ -41,8 +41,8 @@ namespace mhlo {
 std::unique_ptr<OperationPass<ModuleOp>> createLegalizeToArithmeticPass();
 
 /// Lowers from HLO dialect to Linalg dialect.
-std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeHloToLinalgPass(
-    bool enablePrimitiveOps = false);
+std::unique_ptr<OperationPass<func::FuncOp>>
+createLegalizeHloToLinalgPass(bool enablePrimitiveOps = false);
 
 // Sinks constants implicitly captured in control flow regions. This is
 // necessary to export to XLA.
@@ -81,8 +81,8 @@ createLegalizeTorchIndexSelectToGatherPass();
 std::unique_ptr<OperationPass<func::FuncOp>> createFlattenTuplePass();
 
 // Creates a pass for expanding mhlo.tuple ops.
-std::unique_ptr<OperationPass<ModuleOp>> createExpandHloTuplesPass(
-    const std::string& entryFunctionName = "main");
+std::unique_ptr<OperationPass<ModuleOp>>
+createExpandHloTuplesPass(const std::string &entryFunctionName = "main");
 
 // Creates a pass for collapsing the mhlo.map if the map only has elementwise
 // op.
@@ -95,8 +95,8 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertToSignlessPass();
 std::unique_ptr<OperationPass<ModuleOp>> createStablehloLegalizeToHloPass();
 
 // Legalizes from the Shape dialect to the MHLO dialect.
-std::unique_ptr<OperationPass<func::FuncOp>> createShapeLegalizeToHloPass(
-    bool legalizeConstraints = false);
+std::unique_ptr<OperationPass<func::FuncOp>>
+createShapeLegalizeToHloPass(bool legalizeConstraints = false);
 
 // Test passes.
 std::unique_ptr<Pass> createTestInferShapedTypeMethodsPass();
@@ -106,7 +106,7 @@ std::unique_ptr<Pass> createTestUnfuseBatchNormPass();
 #define GEN_PASS_REGISTRATION
 #include "mhlo/transforms/mhlo_passes.h.inc"
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir
 
-#endif  // MLIR_HLO_MHLO_TRANSFORMS_PASSES_H
+#endif // MLIR_HLO_MHLO_TRANSFORMS_PASSES_H

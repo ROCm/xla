@@ -270,31 +270,31 @@ namespace wrap {
 
 #else
 
-#define STREAM_EXECUTOR_MIOPEN_WRAP(__name)                              \
-  struct DynLoadShim__##__name {                                         \
-    static const char* kName;                                            \
-    using FuncPtrT = std::add_pointer<decltype(::__name)>::type;         \
-    static void* GetDsoHandle() {                                        \
-      auto s = tsl::internal::CachedDsoLoader::GetMiopenDsoHandle();     \
-      return s.value();                                                  \
-    }                                                                    \
-    static FuncPtrT LoadOrDie() {                                        \
-      void* f;                                                           \
-      auto s = tsl::Env::Default()->GetSymbolFromLibrary(GetDsoHandle(), \
-                                                         kName, &f);     \
-      CHECK(s.ok()) << "could not find " << kName                        \
-                    << " in miopen DSO; dlerror: " << s.message();       \
-      return reinterpret_cast<FuncPtrT>(f);                              \
-    }                                                                    \
-    static FuncPtrT DynLoad() {                                          \
-      static FuncPtrT f = LoadOrDie();                                   \
-      return f;                                                          \
-    }                                                                    \
-    template <typename... Args>                                          \
-    miopenStatus_t operator()(Args... args) {                            \
-      return DynLoad()(args...);                                         \
-    }                                                                    \
-  } __name;                                                              \
+#define STREAM_EXECUTOR_MIOPEN_WRAP(__name)                          \
+  struct DynLoadShim__##__name {                                     \
+    static const char* kName;                                        \
+    using FuncPtrT = std::add_pointer<decltype(::__name)>::type;     \
+    static void* GetDsoHandle() {                                    \
+      auto s = tsl::internal::CachedDsoLoader::GetMiopenDsoHandle(); \
+      return s.value();                                              \
+    }                                                                \
+    static FuncPtrT LoadOrDie() {                                    \
+      void* f;                                                       \
+      auto s = tsl::Env::Default()                                   \
+          -> GetSymbolFromLibrary(GetDsoHandle(), kName, &f);        \
+      CHECK(s.ok()) << "could not find " << kName                    \
+                    << " in miopen DSO; dlerror: " << s.message();   \
+      return reinterpret_cast<FuncPtrT>(f);                          \
+    }                                                                \
+    static FuncPtrT DynLoad() {                                      \
+      static FuncPtrT f = LoadOrDie();                               \
+      return f;                                                      \
+    }                                                                \
+    template <typename... Args>                                      \
+    miopenStatus_t operator()(Args... args) {                        \
+      return DynLoad()(args...);                                     \
+    }                                                                \
+  } __name;                                                          \
   const char* DynLoadShim__##__name::kName = #__name;
 
 #endif

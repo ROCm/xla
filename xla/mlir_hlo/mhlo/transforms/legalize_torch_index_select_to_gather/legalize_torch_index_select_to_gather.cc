@@ -19,7 +19,6 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
-#include "llvm/ADT/SmallVector.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mhlo/transforms/passes.h"
 #include "mhlo/transforms/rewriters.h"
@@ -33,6 +32,7 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
 namespace mhlo {
@@ -143,7 +143,7 @@ struct LegalizeTorchIndexSelectToGatherPass
       return signalPassFailure();
   }
 };
-}  // namespace
+} // namespace
 
 void populateTorchIndexSelectToGatherPatterns(mlir::MLIRContext *context,
                                               RewritePatternSet *patterns) {
@@ -155,5 +155,5 @@ createLegalizeTorchIndexSelectToGatherPass() {
   return std::make_unique<LegalizeTorchIndexSelectToGatherPass>();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

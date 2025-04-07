@@ -78,9 +78,7 @@ constexpr absl::Duration kProtocolDuration = absl::Minutes(15);
 class PreemptionSyncManagerImpl : public PreemptionSyncManager {
  public:
   PreemptionSyncManagerImpl() = default;
-  ~PreemptionSyncManagerImpl() override {
-    shutdown_.Notify();
-  }
+  ~PreemptionSyncManagerImpl() override { shutdown_.Notify(); }
   absl::Status Initialize(CoordinationServiceAgent* agent) override;
   absl::Status Initialize(CoordinationServiceAgent* agent,
                           const std::string& preemption_notifier_type) override;

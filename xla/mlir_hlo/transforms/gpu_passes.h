@@ -25,7 +25,7 @@ class ModuleOp;
 class PassManager;
 namespace gpu {
 class GPUModuleOp;
-}  // namespace gpu
+} // namespace gpu
 
 #define GEN_PASS_DECL
 #include "transforms/gpu_passes.h.inc"
@@ -33,7 +33,7 @@ class GPUModuleOp;
 // Returns array of bool attributes. The value of each element specifies whether
 // the corresponding operand is written. This attribute is attached to
 // 'gpu.launc_func' ops during the fusion rewrite pass above.
-ArrayAttr getWrittenOperandsAttribute(Operation* op);
+ArrayAttr getWrittenOperandsAttribute(Operation *op);
 
 /// Pass that transforms gpu modules in standard dialect to NNVM.
 std::unique_ptr<OperationPass<mlir::gpu::GPUModuleOp>>
@@ -46,6 +46,6 @@ createGpuKernelToRocdlPass();
 #define GEN_PASS_REGISTRATION
 #include "transforms/gpu_passes.h.inc"
 
-}  // namespace mlir
+} // namespace mlir
 
-#endif  // MLIR_HLO_TRANSFORMS_GPU_PASSES_H
+#endif // MLIR_HLO_TRANSFORMS_GPU_PASSES_H

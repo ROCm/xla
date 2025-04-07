@@ -30,21 +30,21 @@ limitations under the License.
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/Complex/IR/Complex.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"  // IWYU pragma: keep
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h" // IWYU pragma: keep
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "mlir/Dialect/Math/IR/Math.h"      // IWYU pragma: keep
-#include "mlir/Dialect/MemRef/IR/MemRef.h"  // IWYU pragma: keep
+#include "mlir/Dialect/Math/IR/Math.h"     // IWYU pragma: keep
+#include "mlir/Dialect/MemRef/IR/MemRef.h" // IWYU pragma: keep
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/MemRef/Transforms/Transforms.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"  // IWYU pragma: keep
+#include "mlir/Dialect/SCF/IR/SCF.h" // IWYU pragma: keep
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
 #include "mlir/Dialect/X86Vector/Transforms.h"
-#include "mlir/Dialect/X86Vector/X86VectorDialect.h"  // IWYU pragma: keep
+#include "mlir/Dialect/X86Vector/X86VectorDialect.h" // IWYU pragma: keep
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Pass/PassManager.h"
@@ -60,14 +60,14 @@ namespace {
 
 class GenericHostToLLVMPass
     : public impl::GenericHostToLLVMPassBase<GenericHostToLLVMPass> {
- public:
+public:
   using GenericHostToLLVMPassBase::GenericHostToLLVMPassBase;
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
 
     // Populate type conversions.
-    MLIRContext* ctx = m.getContext();
+    MLIRContext *ctx = m.getContext();
     LLVMTypeConverter typeConverter(ctx);
 
     {
@@ -132,14 +132,14 @@ class GenericHostToLLVMPass
   }
 };
 
-}  // namespace
+} // namespace
 
 namespace hlo {
 
-std::unique_ptr<OperationPass<ModuleOp>> createGenericHostToLLVMPass(
-    const GenericHostToLLVMPassOptions& options) {
+std::unique_ptr<OperationPass<ModuleOp>>
+createGenericHostToLLVMPass(const GenericHostToLLVMPassOptions &options) {
   return std::make_unique<GenericHostToLLVMPass>(options);
 }
 
-}  // namespace hlo
-}  // namespace mlir
+} // namespace hlo
+} // namespace mlir

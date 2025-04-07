@@ -97,8 +97,8 @@ void CancellationManager::StartCancelWithStatus(const absl::Status& status) {
 
 bool CancellationManager::RegisterCallback(CancellationToken token,
                                            CancelCallback callback) {
-  return RegisterCallbackConfig(
-      token, CallbackConfiguration{callback, "", false});
+  return RegisterCallbackConfig(token,
+                                CallbackConfiguration{callback, "", false});
 }
 
 bool CancellationManager::RegisterCallbackWithErrorLogging(

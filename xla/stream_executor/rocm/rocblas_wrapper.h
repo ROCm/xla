@@ -45,30 +45,30 @@ namespace wrap {
 #else
 using tsl::internal::CachedDsoLoader::GetRocblasDsoHandle;
 
-#define ROCBLAS_API_WRAPPER(__name)                                      \
-  static struct DynLoadShim__##__name {                                  \
-    constexpr static const char* kName = #__name;                        \
-    using FuncPtrT = std::add_pointer<decltype(::__name)>::type;         \
-    static void* GetDsoHandle() {                                        \
-      auto s = GetRocblasDsoHandle();                                    \
-      return s.value();                                                  \
-    }                                                                    \
-    static FuncPtrT LoadOrDie() {                                        \
-      void* f;                                                           \
-      auto s = tsl::Env::Default()->GetSymbolFromLibrary(GetDsoHandle(), \
-                                                         kName, &f);     \
-      CHECK(s.ok()) << "could not find " << kName                        \
-                    << " in rocblas DSO; dlerror: " << s.message();      \
-      return reinterpret_cast<FuncPtrT>(f);                              \
-    }                                                                    \
-    static FuncPtrT DynLoad() {                                          \
-      static FuncPtrT f = LoadOrDie();                                   \
-      return f;                                                          \
-    }                                                                    \
-    template <typename... Args>                                          \
-    auto operator()(Args... args) {                                      \
-      return DynLoad()(args...);                                         \
-    }                                                                    \
+#define ROCBLAS_API_WRAPPER(__name)                                 \
+  static struct DynLoadShim__##__name {                             \
+    constexpr static const char* kName = #__name;                   \
+    using FuncPtrT = std::add_pointer<decltype(::__name)>::type;    \
+    static void* GetDsoHandle() {                                   \
+      auto s = GetRocblasDsoHandle();                               \
+      return s.value();                                             \
+    }                                                               \
+    static FuncPtrT LoadOrDie() {                                   \
+      void* f;                                                      \
+      auto s = tsl::Env::Default()                                  \
+          -> GetSymbolFromLibrary(GetDsoHandle(), kName, &f);       \
+      CHECK(s.ok()) << "could not find " << kName                   \
+                    << " in rocblas DSO; dlerror: " << s.message(); \
+      return reinterpret_cast<FuncPtrT>(f);                         \
+    }                                                               \
+    static FuncPtrT DynLoad() {                                     \
+      static FuncPtrT f = LoadOrDie();                              \
+      return f;                                                     \
+    }                                                               \
+    template <typename... Args>                                     \
+    auto operator()(Args... args) {                                 \
+      return DynLoad()(args...);                                    \
+    }                                                               \
   } __name;
 
 #endif

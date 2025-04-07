@@ -19,8 +19,8 @@ limitations under the License.
 #include <optional>
 #include <set>
 
-#include "llvm/ADT/EquivalenceClasses.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "llvm/ADT/EquivalenceClasses.h"
 
 namespace mlir {
 namespace deallocation {
@@ -28,12 +28,12 @@ namespace deallocation {
 struct RegionEdge {
   // The op in the predecessor that holds the values that are passed. This is
   // either the parent op or a terminator in the predecessor region.
-  Operation* predecessorOp;
+  Operation *predecessorOp;
   // The index in `opWithOperands`' operands where `operands` start.
   int64_t predecessorOperandIndex;
   // The op or region where the values are passed. If the successor is the
   // parent region, this is the parent op.
-  llvm::PointerUnion<Operation*, Region*> successorOpOrRegion;
+  llvm::PointerUnion<Operation *, Region *> successorOpOrRegion;
   // The index in the successor's arguments or op results where `operands`
   // start.
   int64_t successorValueIndex;
@@ -49,11 +49,11 @@ struct RegionEdge {
   }
 
   ValueRange getSuccessorValues() const {
-    if (successorOpOrRegion.is<Operation*>()) {
-      return successorOpOrRegion.get<Operation*>()->getResults().drop_front(
+    if (successorOpOrRegion.is<Operation *>()) {
+      return successorOpOrRegion.get<Operation *>()->getResults().drop_front(
           successorValueIndex);
     }
-    return successorOpOrRegion.get<Region*>()->getArguments().drop_front(
+    return successorOpOrRegion.get<Region *>()->getArguments().drop_front(
         successorValueIndex);
   }
 
@@ -71,14 +71,15 @@ SmallVector<RegionEdge> getSuccessorRegions(RegionBranchOpInterface op,
 
 // Replaces the op with a new op with proper return types. The old op is not
 // removed and it still has uses.
-RegionBranchOpInterface moveRegionsToNewOpButKeepOldOp(
-    RegionBranchOpInterface op);
+RegionBranchOpInterface
+moveRegionsToNewOpButKeepOldOp(RegionBranchOpInterface op);
 
 namespace detail {
 // An arbitrary deterministic Value order.
 struct ValueComparator {
-  bool operator()(const Value& lhs, const Value& rhs) const {
-    if (lhs == rhs) return false;
+  bool operator()(const Value &lhs, const Value &rhs) const {
+    if (lhs == rhs)
+      return false;
 
     // Block arguments are less than results.
     bool lhsIsBBArg = isa<BlockArgument>(lhs);
@@ -86,8 +87,8 @@ struct ValueComparator {
       return lhsIsBBArg;
     }
 
-    Region* lhsRegion;
-    Region* rhsRegion;
+    Region *lhsRegion;
+    Region *rhsRegion;
     if (lhsIsBBArg) {
       auto lhsBBArg = llvm::cast<BlockArgument>(lhs);
       auto rhsBBArg = llvm::cast<BlockArgument>(rhs);
@@ -125,12 +126,13 @@ struct ValueComparator {
       lhsRegion = lhsRegion->getParentRegion();
       rhsRegion = rhsRegion->getParentRegion();
     }
-    if (rhsRegion) return true;
+    if (rhsRegion)
+      return true;
     assert(lhsRegion && "this should only happen if lhs == rhs");
     return false;
   }
 };
-}  // namespace detail
+} // namespace detail
 
 namespace breaks_if_you_move_ops {
 
@@ -142,9 +144,9 @@ using ValueSet = std::set<Value, detail::ValueComparator>;
 template <typename T>
 using ValueMap = std::map<Value, T, detail::ValueComparator>;
 
-}  // namespace breaks_if_you_move_ops
+} // namespace breaks_if_you_move_ops
 
-}  // namespace deallocation
-}  // namespace mlir
+} // namespace deallocation
+} // namespace mlir
 
-#endif  // MLIR_HLO_DEALLOCATION_UTILS_UTIL_H_
+#endif // MLIR_HLO_DEALLOCATION_UTILS_UTIL_H_

@@ -27,4 +27,4 @@ MLIR_CAPI_EXPORTED void mlirRegisterAllMhloPasses();
 }
 #endif
 
-#endif  // MLIR_HLO_BINDINGS_C_PASSES_H
+#endif // MLIR_HLO_BINDINGS_C_PASSES_H

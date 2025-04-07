@@ -44,7 +44,7 @@ class ProfilerSession {
  public:
   // Creates a ProfilerSession and starts profiling.
   static std::unique_ptr<ProfilerSession> Create(
-    const tensorflow::ProfileOptions& options);
+      const tensorflow::ProfileOptions& options);
 
   static tensorflow::ProfileOptions DefaultOptions() {
     tensorflow::ProfileOptions options;

@@ -18,7 +18,7 @@ limitations under the License.
 #include "xla/hlo/testlib/test.h"
 
 class GraphCyclesTest : public ::testing::Test {
- public:
+public:
   GraphCyclesTest() : g_(100) {}
 
   bool AddEdge(int x, int y) { return g_.InsertEdge(x, y); }

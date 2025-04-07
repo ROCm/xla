@@ -23,8 +23,7 @@ using GemmOperation =
                                          float, cutlass::layout::RowMajor,
                                          float, cutlass::layout::RowMajor>;
 
-XLA_GPU_DEFINE_CUTLASS_GEMM_TRAITS(F32xF32ToF32<Arch::kDefault>,
-                                   GemmOperation);
+XLA_GPU_DEFINE_CUTLASS_GEMM_TRAITS(F32xF32ToF32<Arch::kDefault>, GemmOperation);
 
 template class Adaptor<F32xF32ToF32<Arch::kDefault>>;
 template class DeviceKernel<F32xF32ToF32<Arch::kDefault>>;

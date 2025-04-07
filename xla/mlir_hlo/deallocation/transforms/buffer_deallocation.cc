@@ -64,11 +64,6 @@ limitations under the License.
 #include <utility>
 
 #include "deallocation/transforms/passes.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/STLFunctionalExtras.h"
-#include "llvm/Support/LogicalResult.h"
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Dialect/Bufferization/IR/AllocationOpInterface.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
@@ -87,6 +82,11 @@ limitations under the License.
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/Support/LogicalResult.h"
 
 namespace mlir {
 namespace deallocation {
@@ -165,9 +165,8 @@ static bool validateSupportedControlFlow(Operation *op) {
     size_t size = regions.size();
     if (((size == 1 && !operation->getResults().empty()) || size > 1) &&
         !dyn_cast<RegionBranchOpInterface>(operation)) {
-      operation->emitError(
-          "All operations with attached regions need to "
-          "implement the RegionBranchOpInterface.");
+      operation->emitError("All operations with attached regions need to "
+                           "implement the RegionBranchOpInterface.");
     }
 
     return WalkResult::advance();
@@ -182,7 +181,7 @@ static bool validateSupportedControlFlow(Operation *op) {
 /// A straight-forward program analysis which detects loop backedges induced by
 /// explicit control flow.
 class Backedges {
- public:
+public:
   using BlockSetT = mlir::SmallPtrSet<Block *, 16>;
   using BackedgeSetT = llvm::DenseSet<std::pair<Block *, Block *>>;
 
@@ -198,7 +197,7 @@ class Backedges {
   /// Returns the end iterator to loop over all backedges.
   BackedgeSetT::const_iterator end() const { return edgeSet.end(); }
 
- private:
+private:
   /// Enters the current block and inserts a backedge into the `edgeSet` if we
   /// have already visited the current block. The inserted edge links the given
   /// `predecessor` with the `current` block.
@@ -266,13 +265,12 @@ class Backedges {
 /// program have a corresponding de-allocation. As a side-effect, it might also
 /// introduce clones that in turn leads to additional deallocations.
 class BufferDeallocation : public BufferPlacementTransformationBase {
- public:
+public:
   using AliasAllocationMapT =
       llvm::DenseMap<Value, mlir::bufferization::AllocationOpInterface>;
 
   explicit BufferDeallocation(Operation *op)
-      : BufferPlacementTransformationBase(op),
-        dominators(op),
+      : BufferPlacementTransformationBase(op), dominators(op),
         postDominators(op) {}
 
   /// Checks if all allocation operations either provide an already existing
@@ -320,7 +318,7 @@ class BufferDeallocation : public BufferPlacementTransformationBase {
     return placeDeallocs();
   }
 
- private:
+private:
   /// Introduces required clone operations to avoid memory leaks.
   LogicalResult introduceClones() {
     // Initialize the set of values that require a dedicated memory free
@@ -499,10 +497,11 @@ class BufferDeallocation : public BufferPlacementTransformationBase {
   /// regionPredicate is applied to every successor region in order to restrict
   /// the clones to specific regions.
   template <typename TPredicate>
-  LogicalResult introduceClonesForRegionSuccessors(
-      RegionBranchOpInterface regionInterface,
-      mlir::MutableArrayRef<Region> regions, Value argValue,
-      const TPredicate &regionPredicate) {
+  LogicalResult
+  introduceClonesForRegionSuccessors(RegionBranchOpInterface regionInterface,
+                                     mlir::MutableArrayRef<Region> regions,
+                                     Value argValue,
+                                     const TPredicate &regionPredicate) {
     for (Region &region : regions) {
       // Query the regionInterface to get all successor regions of the current
       // one.
@@ -773,7 +772,7 @@ struct BufferDeallocationPass
   }
 };
 
-}  // namespace
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // BufferDeallocationPass construction
@@ -783,5 +782,5 @@ std::unique_ptr<Pass> createBufferDeallocationPass() {
   return std::make_unique<BufferDeallocationPass>();
 }
 
-}  // namespace deallocation
-}  // namespace mlir
+} // namespace deallocation
+} // namespace mlir

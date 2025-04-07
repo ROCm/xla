@@ -44,16 +44,19 @@ LogicalResult removeCopy(memref::CopyOp op, PatternRewriter &rewriter) {
     //    %subview_6 = memref.subview %alloc_4
     //    memref.copy %arg0, %subview_6
     //    memref.copy %arg1, %subview_5
-    if (!subviewOp->hasOneUse()) return failure();
+    if (!subviewOp->hasOneUse())
+      return failure();
   }
 
   auto hasOnlyStoreLikeUsers = [&](Value alloc) {
     return !llvm::any_of(alloc.getUsers(), [&](Operation *op) {
-      if (op == onlyNonStoreLikeUser) return false;
+      if (op == onlyNonStoreLikeUser)
+        return false;
       // TODO(vuson) remove this exception when MemoryEffectOpInterface gets
       // corrected for linalg::FillOp. Right now it has MemoryEffects::Read
       // while the only thing it ever reads is metadata such as dynamic sizes.
-      if (isa<linalg::FillOp>(op)) return false;
+      if (isa<linalg::FillOp>(op))
+        return false;
       if (auto effect = dyn_cast<MemoryEffectOpInterface>(op)) {
         return effect.getEffectOnValue<MemoryEffects::Read>(alloc)
                    .has_value() ||
@@ -84,10 +87,10 @@ struct NaiveCopyRemovalPass
       return signalPassFailure();
   }
 };
-}  // namespace
+} // namespace
 
 std::unique_ptr<OperationPass<func::FuncOp>> createNaiveCopyRemovalPass() {
   return std::make_unique<NaiveCopyRemovalPass>();
 }
 
-}  // namespace mlir
+} // namespace mlir

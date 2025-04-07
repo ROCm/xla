@@ -1173,9 +1173,8 @@ CommandBufferCmd::BufferUseVector GemmCmd::buffers() {
 // CublasLtCmd
 //===----------------------------------------------------------------------===//
 
-CublasLtCmd::CublasLtCmd(
-    ExecutionStreamId execution_stream_id, 
-    const CublasLtMatmulThunk& matmul_thunk)
+CublasLtCmd::CublasLtCmd(ExecutionStreamId execution_stream_id,
+                         const CublasLtMatmulThunk& matmul_thunk)
     : TracedCommandBufferCmd(CommandBufferCmdType::kCublasLtCmd,
                              execution_stream_id),
       CublasLtMatmulThunk(matmul_thunk) {}
@@ -1189,8 +1188,7 @@ absl::Status CublasLtCmd::Initialize(const Thunk::InitializeParams& params,
 absl::Status CublasLtCmd::Record(const Thunk::ExecuteParams& execute_params,
                                  const RecordParams& record_params,
                                  se::CommandBuffer* command_buffer) {
-  
-  // This call is required to make sure matmul plan is already created and 
+  // This call is required to make sure matmul plan is already created and
   // cached before recording the command buffer.
   TF_RETURN_IF_ERROR(GetCachedMatmulPlan(execute_params).status());
   ExecutionScopeId execution_scope_id = GetExecutionScope(record_params);

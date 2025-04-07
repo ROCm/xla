@@ -742,7 +742,6 @@ ENTRY main {
           m::Fusion(m::Parameter()).WithPredicate(HasBlockLevelFusionConfig)));
 }
 
-
 TEST_F(SoftmaxRewriterTritonTest,
        CanFuseBinaryElementwiseOperationWhereOneOperandIsASharedSplatProducer) {
   const std::string hlo_string = R"(

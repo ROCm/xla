@@ -35,33 +35,37 @@ namespace {
 struct TileCopyPattern : public OpRewritePattern<memref::CopyOp> {
   TileCopyPattern(MLIRContext *context, int64_t tileSize,
                   mlir::PatternBenefit benefit = 1)
-      : OpRewritePattern<memref::CopyOp>(context, benefit),
-        tileSize(tileSize) {}
+      : OpRewritePattern<memref::CopyOp>(context, benefit), tileSize(tileSize) {
+  }
   LogicalResult matchAndRewrite(memref::CopyOp op,
                                 PatternRewriter &rewriter) const override {
     auto srcType = dyn_cast<MemRefType>(op.getSource().getType());
     auto targetType = dyn_cast<MemRefType>(op.getTarget().getType());
 
-    if (!srcType || !targetType) return failure();
+    if (!srcType || !targetType)
+      return failure();
 
     if (!srcType.hasStaticShape() || !targetType.hasStaticShape())
       return failure();
 
-    if (srcType.getShape() != targetType.getShape()) return failure();
+    if (srcType.getShape() != targetType.getShape())
+      return failure();
 
     if (memref::isStaticShapeAndContiguousRowMajor(srcType) &&
         memref::isStaticShapeAndContiguousRowMajor(targetType)) {
       return failure();
     }
 
-    if (srcType.getNumElements() <= tileSize) return failure();
+    if (srcType.getNumElements() <= tileSize)
+      return failure();
 
     auto rank = srcType.getRank();
     auto shape = srcType.getShape();
 
     SmallVector<OpFoldResult> offsets(rank, rewriter.getIndexAttr(0));
     SmallVector<OpFoldResult> sizes;
-    for (auto s : shape) sizes.push_back(rewriter.getIndexAttr(s));
+    for (auto s : shape)
+      sizes.push_back(rewriter.getIndexAttr(s));
     SmallVector<OpFoldResult> strides(rank, rewriter.getIndexAttr(1));
 
     createLoopsNest(rewriter, op.getLoc(), 0, op.getSource(), op.getTarget(),
@@ -72,7 +76,7 @@ struct TileCopyPattern : public OpRewritePattern<memref::CopyOp> {
     return success();
   }
 
- private:
+private:
   void createLoopsNest(PatternRewriter &rewriter, Location loc, int64_t dim,
                        Value src, Value target, ArrayRef<int64_t> shape,
                        SmallVector<OpFoldResult> &offsets,
@@ -173,7 +177,8 @@ struct CopyVectorizationPattern : public OpRewritePattern<memref::CopyOp> {
     auto srcType = dyn_cast<MemRefType>(op.getSource().getType());
     auto targetType = dyn_cast<MemRefType>(op.getTarget().getType());
 
-    if (!srcType || !targetType) return failure();
+    if (!srcType || !targetType)
+      return failure();
 
     if (!srcType.hasStaticShape() || !targetType.hasStaticShape())
       return failure();
@@ -200,7 +205,7 @@ struct CopyVectorizationPattern : public OpRewritePattern<memref::CopyOp> {
     return linalg::vectorizeCopy(rewriter, op);
   }
 
- private:
+private:
   int64_t numElementsThreshold;
 };
 
@@ -221,10 +226,10 @@ struct VectorizeCopyPass
   }
 };
 
-}  // namespace
+} // namespace
 
 std::unique_ptr<OperationPass<func::FuncOp>> createVectorizeCopyPass() {
   return std::make_unique<VectorizeCopyPass>();
 }
 
-}  // namespace mlir
+} // namespace mlir

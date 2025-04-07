@@ -29,6 +29,6 @@ void populateExtraBufferizePatterns(MLIRContext *context,
                                     TypeConverter *converter,
                                     RewritePatternSet *patterns);
 
-}  // namespace mlir
+} // namespace mlir
 
-#endif  // MLIR_HLO_TRANSFORMS_REWRITERS_H
+#endif // MLIR_HLO_TRANSFORMS_REWRITERS_H

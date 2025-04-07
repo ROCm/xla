@@ -16,10 +16,10 @@ limitations under the License.
 #ifndef MLIR_HLO_UTILS_CODEGEN_UTILS_H
 #define MLIR_HLO_UTILS_CODEGEN_UTILS_H
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/MLIRContext.h" // TF:llvm-project
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/IR/MLIRContext.h"  // TF:llvm-project
 
 namespace mlir {
 class Value;
@@ -29,17 +29,17 @@ class Location;
 class Operation;
 namespace codegen_utils {
 
-Value emitNumElementsComputation(OpBuilder& b, Location loc, Operation* op);
-Value emitNumElementsComputation(OpBuilder& b, Location loc, Value memref);
+Value emitNumElementsComputation(OpBuilder &b, Location loc, Operation *op);
+Value emitNumElementsComputation(OpBuilder &b, Location loc, Value memref);
 
-llvm::SmallVector<Value> calcMultiDimIndex(OpBuilder& b, Location loc,
+llvm::SmallVector<Value> calcMultiDimIndex(OpBuilder &b, Location loc,
                                            Value linearIndex, Value memref);
 
-llvm::SmallVector<Value> calcMultiDimIndex(OpBuilder& b, Location loc,
+llvm::SmallVector<Value> calcMultiDimIndex(OpBuilder &b, Location loc,
                                            Value linearIndex,
                                            llvm::ArrayRef<Value> shape);
 
-}  // namespace codegen_utils
-}  // namespace mlir
+} // namespace codegen_utils
+} // namespace mlir
 
-#endif  // MLIR_HLO_UTILS_CODEGEN_UTILS_H
+#endif // MLIR_HLO_UTILS_CODEGEN_UTILS_H

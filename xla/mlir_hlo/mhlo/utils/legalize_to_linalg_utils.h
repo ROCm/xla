@@ -24,9 +24,6 @@ limitations under the License.
 #include <string>
 #include <utility>
 
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringSet.h"
 #include "mhlo/transforms/map_mhlo_to_scalar_op.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
@@ -44,6 +41,9 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSet.h"
 
 namespace mlir {
 namespace mhlo {
@@ -51,25 +51,25 @@ namespace mhlo {
 /// Returns an ArrayAttr that contains `nLoops` attributes. All the attributes
 /// are "parallel" except the last `nReduction` elements, where are "reduction"
 /// attributes.
-SmallVector<utils::IteratorType, 3> getParallelAndReductionIterators(
-    unsigned nLoops, unsigned nReduction);
+SmallVector<utils::IteratorType, 3>
+getParallelAndReductionIterators(unsigned nLoops, unsigned nReduction);
 
 /// Returns an ArrayAttr that contains `nParallelLoops` "parallel" attributes.
-SmallVector<utils::IteratorType, 3> getNParallelLoopsAttrs(
-    unsigned nParallelLoops);
+SmallVector<utils::IteratorType, 3>
+getNParallelLoopsAttrs(unsigned nParallelLoops);
 
 /// Generates an init sparse tensor.
-Value getEmptySparseTensor(OpBuilder& b, Location loc, ShapedType type,
+Value getEmptySparseTensor(OpBuilder &b, Location loc, ShapedType type,
                            ArrayRef<Value> dynSizes);
 
 /// Generates a tensor.empty op.
-Value getEmptyTensor(OpBuilder& b, Location loc, ShapedType type,
+Value getEmptyTensor(OpBuilder &b, Location loc, ShapedType type,
                      ArrayRef<Value> dynSizes);
 
 /// Generates an empty tensor for the result of the operation, which could be a
 /// dense tensor or a sparse tensor.
-Value getEmptyTensorFor(OpBuilder& b, Location loc, ShapedType resultType,
-                        Operation* op, ValueRange operands);
+Value getEmptyTensorFor(OpBuilder &b, Location loc, ShapedType resultType,
+                        Operation *op, ValueRange operands);
 
 /// Sparsifies a (block of) operation(s) that cannot be handled directly
 /// by the sparse compiler but has well-known semi-ring semantics.
@@ -84,28 +84,28 @@ Value getEmptyTensorFor(OpBuilder& b, Location loc, ShapedType resultType,
 ///     }
 ///     absent={}
 ///   linalg.yield %result
-Value preSparsify(Operation* op, llvm::SmallVector<Value, 2>& values, Type rtp,
-                  OpBuilder* b);
+Value preSparsify(Operation *op, llvm::SmallVector<Value, 2> &values, Type rtp,
+                  OpBuilder *b);
 
 /// Finalizes sparse semi-ring construction.
-Value postSparsify(Operation* op, Value semiring, Value result, OpBuilder* b);
+Value postSparsify(Operation *op, Value semiring, Value result, OpBuilder *b);
 
 /// Returns true if all operands are tensors with rank 0.
-bool allOperandsAreScalarTensors(Operation* op);
+bool allOperandsAreScalarTensors(Operation *op);
 
 /// Returns true if parent op is linalg.
-bool isInBodyOfLinalgOps(Operation* op);
+bool isInBodyOfLinalgOps(Operation *op);
 
 /// Converts a HLO operation to a linalg.generic op that contains the
 /// corresponding scalar operations.
 template <typename OpTy>
 class PointwiseToLinalgConverter : public OpConversionPattern<OpTy> {
- public:
+public:
   using OpConversionPattern<OpTy>::OpConversionPattern;
 
-  LogicalResult matchAndRewrite(
-      OpTy op, typename OpTy::Adaptor adaptor,
-      ConversionPatternRewriter& rewriter) const final {
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
     auto loc = op.getLoc();
     // Find maximum rank / number of loops.
     auto getRank = [](Value v) {
@@ -152,7 +152,8 @@ class PointwiseToLinalgConverter : public OpConversionPattern<OpTy> {
     AffineMap scalarMap = AffineMap::get(nloops, 0, rewriter.getContext());
     AffineMap idMap = rewriter.getMultiDimIdentityMap(nloops);
     SmallVector<AffineMap, 4> maps;
-    for (Value v : inputs) maps.push_back(isScalar(v) ? scalarMap : idMap);
+    for (Value v : inputs)
+      maps.push_back(isScalar(v) ? scalarMap : idMap);
     maps.push_back(idMap);
 
     // Build `linalg.generic` op.
@@ -160,7 +161,7 @@ class PointwiseToLinalgConverter : public OpConversionPattern<OpTy> {
     auto linalgOp = rewriter.create<linalg::GenericOp>(
         loc, resultTy ? *resultTy : TypeRange{}, inputs, output, maps,
         getNParallelLoopsAttrs(nloops),
-        [&](OpBuilder& nestedBuilder, Location /*nested_loc*/,
+        [&](OpBuilder &nestedBuilder, Location /*nested_loc*/,
             ValueRange args) {
           Type innerResultTy = getElementTypeOrSelf(output);
           auto argvec = llvm::to_vector<2>(args.take_front(inputs.size()));
@@ -176,15 +177,16 @@ class PointwiseToLinalgConverter : public OpConversionPattern<OpTy> {
           }
         },
         linalg::getPrunedAttributeList(op));
-    if (failed) return failure();
+    if (failed)
+      return failure();
 
     rewriter.replaceOp(op, linalgOp->getResults());
     return success();
   }
 };
 
-}  // namespace mhlo
+} // namespace mhlo
 
-}  // namespace mlir
+} // namespace mlir
 
-#endif  // MLIR_HLO_DIALECT_MHLO_TRANSFORMS_LEGALIZE_TO_LINALG_UTILS_H_
+#endif // MLIR_HLO_DIALECT_MHLO_TRANSFORMS_LEGALIZE_TO_LINALG_UTILS_H_

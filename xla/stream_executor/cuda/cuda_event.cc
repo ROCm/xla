@@ -100,7 +100,7 @@ absl::StatusOr<CudaEvent> CudaEvent::Create(StreamExecutor *executor,
 
 CudaEvent::~CudaEvent() { DestroyEvent(executor_, handle_); }
 
-CudaEvent& CudaEvent::operator=(CudaEvent&& other) {
+CudaEvent &CudaEvent::operator=(CudaEvent &&other) {
   if (this == &other) {
     return *this;
   }

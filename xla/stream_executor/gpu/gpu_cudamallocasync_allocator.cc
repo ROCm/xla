@@ -498,7 +498,8 @@ void GpuCudaMallocAsyncAllocator::SetStreamAndPreallocateMemory(void* stream) {
     void* ptr = AllocateRaw(0, prealloc_size);
     DeallocateRaw(ptr);
     VLOG(2) << Name() << " GpuCudaMallocAsyncAllocator reserved the pool for "
-            << prealloc_size << " bytes" << ". First ptr: " << ptr;
+            << prealloc_size << " bytes"
+            << ". First ptr: " << ptr;
     ClearStats();
   }
 }

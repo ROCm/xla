@@ -28,12 +28,12 @@ namespace mlir {
 namespace mhlo {
 
 template <typename R>
-static bool isSeq(R&& range, int64_t start, int64_t size) {
+static bool isSeq(R &&range, int64_t start, int64_t size) {
   return llvm::equal(range, llvm::seq<int64_t>(start, start + size));
 }
 
-static SmallVector<int64_t> getInversePermutation(
-    llvm::ArrayRef<int64_t> permutation) {
+static SmallVector<int64_t>
+getInversePermutation(llvm::ArrayRef<int64_t> permutation) {
   SmallVector<int64_t> inversePermutation(permutation.size());
   for (size_t i = 0, e = permutation.size(); i < e; ++i)
     inversePermutation[permutation[i]] = i;
@@ -61,8 +61,8 @@ bool isCanonicalScatter(ScatterOp scatterOp) {
 }
 
 bool isCanonicalGather(GatherOp gatherOp) {
-  const auto& startIndiceShape = gatherOp.getStartIndices().getType();
-  const auto& dims = gatherOp.getDimensionNumbers();
+  const auto &startIndiceShape = gatherOp.getStartIndices().getType();
+  const auto &dims = gatherOp.getDimensionNumbers();
 
   return startIndiceShape.getRank() == 2 && dims.getIndexVectorDim() == 1 &&
          isSeq(dims.getStartIndexMap(), 0, dims.getStartIndexMap().size()) &&
@@ -78,18 +78,21 @@ makeOperandStartIndexPermutations(ArrayRef<int64_t> dimMap, int operandRank) {
   SmallVector<int64_t> permutation{dimMap};
   permutation.reserve(operandRank);
   for (int i = 0; i < operandRank; ++i) {
-    if (!llvm::is_contained(dimMap, i)) permutation.push_back(i);
+    if (!llvm::is_contained(dimMap, i))
+      permutation.push_back(i);
   }
   return {permutation, getInversePermutation(permutation)};
 }
 
-Value insertDegenerateDimensions(OpBuilder& b, Location loc, Value tensor,
+Value insertDegenerateDimensions(OpBuilder &b, Location loc, Value tensor,
                                  ArrayRef<int64_t> dimsToInsert) {
   assert(llvm::is_sorted(dimsToInsert) && "dimsToInsert must be sorted");
-  if (dimsToInsert.empty()) return tensor;
+  if (dimsToInsert.empty())
+    return tensor;
   TensorType type = mlir::cast<TensorType>(tensor.getType());
   SmallVector<int64_t> newShape{type.getShape()};
-  for (int64_t dim : dimsToInsert) newShape.insert(newShape.begin() + dim, 1);
+  for (int64_t dim : dimsToInsert)
+    newShape.insert(newShape.begin() + dim, 1);
   auto newType = RankedTensorType::get(newShape, type.getElementType());
 
   return b
@@ -102,30 +105,34 @@ Value insertDegenerateDimensions(OpBuilder& b, Location loc, Value tensor,
 // Checks if the indexVectorDim is equal to the rank of `indices`. In that
 // case add the trailing 1 dimension. If indexVectorDim is not the innermost
 // dimension, insert transpose to make it so.
-static Value ensureIndexVectorDimPosition(OpBuilder& b, Location loc,
+static Value ensureIndexVectorDimPosition(OpBuilder &b, Location loc,
                                           Value indices,
                                           int64_t indexVectorDim) {
   int64_t indicesRank = mlir::cast<TensorType>(indices.getType()).getRank();
-  if (indexVectorDim == indicesRank - 1) return indices;
+  if (indexVectorDim == indicesRank - 1)
+    return indices;
   if (indexVectorDim == indicesRank)
     return insertDegenerateDimensions(b, loc, indices, {indicesRank});
 
   SmallVector<int64_t> permutation;
   for (int64_t i = 0; i < indicesRank; ++i)
-    if (i != indexVectorDim) permutation.push_back(i);
+    if (i != indexVectorDim)
+      permutation.push_back(i);
   permutation.push_back(indexVectorDim);
   return b.create<TransposeOp>(loc, indices, b.getI64TensorAttr(permutation))
       .getResult();
 }
 
-Value canonicalizeStartIndices(OpBuilder& b, Location loc, Value indices,
+Value canonicalizeStartIndices(OpBuilder &b, Location loc, Value indices,
                                int64_t indexVectorDim) {
   indices = ensureIndexVectorDimPosition(b, loc, indices, indexVectorDim);
 
   int64_t indicesRank = mlir::cast<TensorType>(indices.getType()).getRank();
 
-  if (indicesRank == 2) return indices;
-  if (indicesRank == 1) return insertDegenerateDimensions(b, loc, indices, {0});
+  if (indicesRank == 2)
+    return indices;
+  if (indicesRank == 1)
+    return insertDegenerateDimensions(b, loc, indices, {0});
 
   // Insert reshape to collapse all outer dimensions of `Indices`.
   SmallVector<ReassociationIndices> reassociation{
@@ -135,5 +142,5 @@ Value canonicalizeStartIndices(OpBuilder& b, Location loc, Value indices,
       .getResult();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

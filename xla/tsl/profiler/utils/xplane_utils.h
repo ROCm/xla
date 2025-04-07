@@ -228,7 +228,7 @@ class AncestorStack {
                 AddChildFn&& add_child_fn)
       : pop_fn_(std::move(pop_fn)),
         is_child_fn_(std::move(is_child_fn)),
-        add_child_fn_(std::move(add_child_fn)) {};
+        add_child_fn_(std::move(add_child_fn)){};
 
   // Pushes a new ancestor onto the stack. If the new ancestor is not a child of
   // some existing ancestors, those ancestors are popped off the stack.

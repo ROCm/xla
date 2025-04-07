@@ -43,8 +43,8 @@ struct CollapseParallelLoopsTo1D
   void runOnOperation() override;
 };
 
-}  // namespace
-}  // namespace mlir
+} // namespace
+} // namespace mlir
 
 using namespace mlir;
 
@@ -52,7 +52,8 @@ void mlir::CollapseParallelLoopsTo1D::runOnOperation() {
   IRRewriter rewriter(&getContext());
   getOperation()->walk([&](ParallelOp op) {
     unsigned numLoops = op.getNumLoops();
-    if (numLoops == 1) return;
+    if (numLoops == 1)
+      return;
     std::vector<unsigned> combinedLoops(numLoops);
     std::iota(combinedLoops.begin(), combinedLoops.end(), 0u);
     mlir::collapseParallelLoops(rewriter, op, {combinedLoops});

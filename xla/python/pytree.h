@@ -155,7 +155,7 @@ class PyTreeRegistry {
 
 class SequenceKey {
  public:
-  explicit SequenceKey(int idx) : idx_(idx) {};
+  explicit SequenceKey(int idx) : idx_(idx){};
   std::string ToReprString() const;
   std::string ToString() const;
   bool Equals(const nanobind::object& other);
@@ -168,7 +168,7 @@ class SequenceKey {
 
 class DictKey {
  public:
-  explicit DictKey(nanobind::object key) : key_(key) {};
+  explicit DictKey(nanobind::object key) : key_(key){};
   std::string ToReprString() const;
   std::string ToString() const;
   bool Equals(const nanobind::object& other);
@@ -184,7 +184,7 @@ class DictKey {
 
 class GetAttrKey {
  public:
-  explicit GetAttrKey(nanobind::str name) : name_(name) {};
+  explicit GetAttrKey(nanobind::str name) : name_(name){};
   std::string ToReprString() const;
   std::string ToString() const;
   bool Equals(const nanobind::object& other);
@@ -197,7 +197,7 @@ class GetAttrKey {
 
 class FlattenedIndexKey {
  public:
-  explicit FlattenedIndexKey(int key) : key_(key) {};
+  explicit FlattenedIndexKey(int key) : key_(key){};
   std::string ToReprString() const;
   std::string ToString() const;
   bool Equals(const nanobind::object& other);

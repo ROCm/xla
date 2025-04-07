@@ -41,7 +41,7 @@ namespace mlir::mhlo {
 // of bitcats, e.g. `arith.bitcast` or `triton.bitcast`.
 template <typename BitCastOp>
 Value reducePrecision(Location loc, Value input, int destExponentBits,
-                      int destMantissaBits, OpBuilder* builder) {
+                      int destMantissaBits, OpBuilder *builder) {
   using llvm::APInt;
   mlir::ImplicitLocOpBuilder b(loc, *builder);
 
@@ -71,7 +71,7 @@ Value reducePrecision(Location loc, Value input, int destExponentBits,
   APInt expBitsMask(nbits, 1);
   expBitsMask = ((expBitsMask << srcExponentBits) - 1) << srcMantissaBits;
 
-  auto createConstant = [&](const APInt& v) {
+  auto createConstant = [&](const APInt &v) {
     return createScalarOrSplatConstant(b, loc, intType, v);
   };
 
@@ -156,6 +156,6 @@ Value reducePrecision(Location loc, Value input, int destExponentBits,
   Value result = b.create<BitCastOp>(input.getType(), xAsInt);
   return b.create<arith::SelectOp>(xIsNan, input, result);
 }
-}  // namespace mlir::mhlo
+} // namespace mlir::mhlo
 
-#endif  // XLA_MLIR_HLO_MHLO_TRANSFORMS_TRANSFORMATION_HELPERS_H_
+#endif // XLA_MLIR_HLO_MHLO_TRANSFORMS_TRANSFORMATION_HELPERS_H_

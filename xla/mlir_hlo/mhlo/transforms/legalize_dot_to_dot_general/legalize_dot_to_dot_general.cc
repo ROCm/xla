@@ -74,7 +74,7 @@ struct LegalizeDotToDotGeneralPass
   }
 };
 
-}  // namespace
+} // namespace
 
 void populateDotToDotGeneralPatterns(mlir::MLIRContext *context,
                                      RewritePatternSet *patterns) {
@@ -86,5 +86,5 @@ createLegalizeDotToDotGeneralPass() {
   return std::make_unique<LegalizeDotToDotGeneralPass>();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

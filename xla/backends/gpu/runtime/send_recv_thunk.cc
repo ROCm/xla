@@ -116,8 +116,9 @@ absl::Status SendThunk::ExecuteOnStream(const ExecuteParams& params) {
                       ShouldSkip("sending buffer", params, device_constraint_));
   if (skip) return absl::OkStatus();
 
-  TraceMe trace(
-      [&] { return TraceMeEncode("Send", {{"channel_id", channel_id_}}); });
+  TraceMe trace([&] {
+    return TraceMeEncode("Send", {{"channel_id", channel_id_}});
+  });
 
   // Use device_to_host stream if it is available.
   se::Stream* stream = params.device_to_host_stream;
@@ -161,8 +162,9 @@ absl::Status SendDoneThunk::ExecuteOnStream(const ExecuteParams& params) {
                                             params, device_constraint_));
   if (skip) return absl::OkStatus();
 
-  TraceMe trace(
-      [&] { return TraceMeEncode("SendDone", {{"channel_id", channel_id_}}); });
+  TraceMe trace([&] {
+    return TraceMeEncode("SendDone", {{"channel_id", channel_id_}});
+  });
 
   se::StreamExecutor* executor = params.stream->parent();
   TF_ASSIGN_OR_RETURN(auto done_event, events_->Extract(executor, channel_id_));
@@ -202,8 +204,9 @@ absl::Status RecvThunk::ExecuteOnStream(const ExecuteParams& params) {
       bool skip, ShouldSkip("receiving buffer", params, device_constraint_));
   if (skip) return absl::OkStatus();
 
-  TraceMe trace(
-      [&] { return TraceMeEncode("Recv", {{"channel_id", channel_id_}}); });
+  TraceMe trace([&] {
+    return TraceMeEncode("Recv", {{"channel_id", channel_id_}});
+  });
 
   // Use host_to_device stream if it is available.
   se::Stream* stream = params.host_to_device_stream;
@@ -246,8 +249,9 @@ absl::Status RecvDoneThunk::ExecuteOnStream(const ExecuteParams& params) {
                                             params, device_constraint_));
   if (skip) return absl::OkStatus();
 
-  TraceMe trace(
-      [&] { return TraceMeEncode("RecvDone", {{"channel_id", channel_id_}}); });
+  TraceMe trace([&] {
+    return TraceMeEncode("RecvDone", {{"channel_id", channel_id_}});
+  });
 
   se::StreamExecutor* executor = params.stream->parent();
   TF_ASSIGN_OR_RETURN(auto done_event, events_->Extract(executor, channel_id_));

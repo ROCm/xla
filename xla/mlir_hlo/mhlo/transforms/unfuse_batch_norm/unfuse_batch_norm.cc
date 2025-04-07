@@ -13,7 +13,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "llvm/ADT/SmallVector.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -28,6 +27,7 @@ limitations under the License.
 #include "mlir/IR/Types.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
 namespace mhlo {
@@ -39,7 +39,7 @@ namespace {
 // a static broadcast.
 Value broadcastToFeatureDim(Location loc, RankedTensorType resultType,
                             Value value1d, Value shapeValue, int64_t featureDim,
-                            PatternRewriter& rewriter) {  // NOLINT
+                            PatternRewriter &rewriter) { // NOLINT
   auto dimsType = RankedTensorType::get({1}, rewriter.getIntegerType(64));
   auto dims = DenseIntElementsAttr::get(dimsType, {featureDim});
   if (shapeValue) {
@@ -53,7 +53,7 @@ Value broadcastToFeatureDim(Location loc, RankedTensorType resultType,
 
 // Get the shape of operand, assuming it is a dynamic shape with static rank.
 Value getShapeValue(Location loc, Value operand,
-                    PatternRewriter &rewriter) {  // NOLINT
+                    PatternRewriter &rewriter) { // NOLINT
   RankedTensorType resultType =
       mlir::dyn_cast<RankedTensorType>(operand.getType());
   return rewriter.create<mlir::shape::ShapeOfOp>(
@@ -64,7 +64,7 @@ Value getShapeValue(Location loc, Value operand,
 
 Value materializeEpsilon(Operation *op, FloatAttr epsilonAttr, FloatType fpType,
                          Value broadcastTo, RankedTensorType broadcastToType,
-                         PatternRewriter &rewriter) {  // NOLINT
+                         PatternRewriter &rewriter) { // NOLINT
   ImplicitLocOpBuilder b(op->getLoc(), rewriter);
   if (epsilonAttr.getType() != fpType) {
     // Need to convert.
@@ -102,11 +102,11 @@ Value materializeEpsilon(Operation *op, FloatAttr epsilonAttr, FloatType fpType,
 
 class UnfuseBatchNormInferencePattern
     : public OpRewritePattern<mhlo::BatchNormInferenceOp> {
- public:
+public:
   using OpRewritePattern<mhlo::BatchNormInferenceOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(mhlo::BatchNormInferenceOp bnOp,
-                                PatternRewriter& rewriter) const override {
+                                PatternRewriter &rewriter) const override {
     // Enforce type invariants.
     // Note that we deduce the actual element type from the variance,
     // which should not be subject to quantization at a higher level.
@@ -169,8 +169,8 @@ class UnfuseBatchNormInferencePattern
 // Create "mhlo.reduce", "operand" is reduce input and "zero" is init value,
 // reduce sum from operand to operand[feature_index].
 Value createReduce(Location loc, Value operand, Value zero,
-                   SmallVector<int64_t>& reduceDims, int64_t featureIndex,
-                   PatternRewriter& rewriter) {
+                   SmallVector<int64_t> &reduceDims, int64_t featureIndex,
+                   PatternRewriter &rewriter) {
   auto operandType = mlir::cast<RankedTensorType>(operand.getType());
   Type reduceResultType = RankedTensorType::get(
       {operandType.getDimSize(featureIndex)}, operandType.getElementType());
@@ -180,12 +180,12 @@ Value createReduce(Location loc, Value operand, Value zero,
 
   // setup "mhlo.reduce"'s body
   Region &region = reduce.getBody();
-  Block& block = region.emplaceBlock();
+  Block &block = region.emplaceBlock();
   RankedTensorType blockArgumentType =
       RankedTensorType::get({}, operandType.getElementType());
   block.addArgument(blockArgumentType, loc);
   block.addArgument(blockArgumentType, loc);
-  auto* firstArgument = block.args_begin();
+  auto *firstArgument = block.args_begin();
   auto secondArgument = block.args_rbegin();
   {
     OpBuilder::InsertionGuard guard(rewriter);
@@ -250,11 +250,11 @@ Value calculateReduceSize(Operation *op, Value operand,
 //    ((X - E[X]) / Sqrt(Var[X] + epsilon)) * scale + offset.
 class UnfuseBatchNormTrainingPattern
     : public OpRewritePattern<mhlo::BatchNormTrainingOp> {
- public:
+public:
   using OpRewritePattern<mhlo::BatchNormTrainingOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(mhlo::BatchNormTrainingOp bnOp,
-                                PatternRewriter& rewriter) const override {
+                                PatternRewriter &rewriter) const override {
     auto operandType =
         mlir::dyn_cast<RankedTensorType>(bnOp.getOperand().getType());
     auto scaleType =
@@ -356,7 +356,7 @@ class UnfuseBatchNormTrainingPattern
   }
 };
 
-}  // namespace
+} // namespace
 
 // Populates conversion patterns to unfuse batch normalization operations.
 // In combination with marking such ops as illegal, this allows backends that
@@ -372,5 +372,5 @@ void populateUnfuseBatchNormTrainingPattern(MLIRContext *context,
   patterns->add<UnfuseBatchNormTrainingPattern>(context);
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

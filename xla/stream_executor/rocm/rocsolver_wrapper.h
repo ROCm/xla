@@ -35,10 +35,10 @@ namespace wrap {
 
 #ifdef PLATFORM_GOOGLE
 
-#define ROCSOLVER_API_WRAPPER(api_name)                        \
-  template <typename... Args>                                  \
-  auto api_name(Args... args)->decltype(::api_name(args...)) { \
-    return ::api_name(args...);                                \
+#define ROCSOLVER_API_WRAPPER(api_name)                          \
+  template <typename... Args>                                    \
+  auto api_name(Args... args) -> decltype(::api_name(args...)) { \
+    return ::api_name(args...);                                  \
   }
 
 #else
@@ -53,7 +53,7 @@ namespace wrap {
     static FuncPtrT loaded = []() -> FuncPtrT {                            \
       static const char* kName = TO_STR(api_name);                         \
       void* f;                                                             \
-      auto s = tsl::Env::Default()->GetSymbolFromLibrary(                  \
+      auto s = tsl::Env::Default() -> GetSymbolFromLibrary(                \
           tsl::internal::CachedDsoLoader::GetRocsolverDsoHandle().value(), \
           kName, &f);                                                      \
       CHECK(s.ok()) << "could not find " << kName                          \

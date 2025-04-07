@@ -36,9 +36,8 @@ namespace {
 class RaggedAllToAllDecomposerTest : public HloRunnerAgnosticTestBase {
  public:
   RaggedAllToAllDecomposerTest()
-      : HloRunnerAgnosticTestBase(
-            std::make_unique<HloRunner>(
-                PlatformUtil::GetDefaultPlatform().value())) {}
+      : HloRunnerAgnosticTestBase(std::make_unique<HloRunner>(
+            PlatformUtil::GetDefaultPlatform().value())) {}
 };
 
 TEST_F(RaggedAllToAllDecomposerTest, SimpleRaggedAllToAllIsSupported) {

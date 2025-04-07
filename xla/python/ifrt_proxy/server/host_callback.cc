@@ -148,16 +148,16 @@ absl::Status RemoteLoadedHostCallback::Execute(void** result_ptrs,
 
   RemoteLoadedHostCallbackQueue::ExecutionRequest request;
 
-  auto to_buffer =
-      [&](absl::Span<const xla::HostCallbackArgInfo> args, void** ptrs,
-          std::vector<RemoteLoadedHostCallbackQueue::Buffer>& buffers) {
-        buffers.reserve(args.size());
-        for (int i = 0; i < args.size(); ++i) {
-          const int64_t size = xla::ShapeUtil::ByteSizeOf(args[i].shape);
-          buffers.push_back(
-              RemoteLoadedHostCallbackQueue::Buffer{ptrs[i], size});
-        }
-      };
+  auto to_buffer = [&](absl::Span<const xla::HostCallbackArgInfo> args,
+                       void** ptrs,
+                       std::vector<RemoteLoadedHostCallbackQueue::Buffer>&
+                           buffers) {
+    buffers.reserve(args.size());
+    for (int i = 0; i < args.size(); ++i) {
+      const int64_t size = xla::ShapeUtil::ByteSizeOf(args[i].shape);
+      buffers.push_back(RemoteLoadedHostCallbackQueue::Buffer{ptrs[i], size});
+    }
+  };
   to_buffer(host_callback().operands, operand_ptrs, request.operands);
   to_buffer(host_callback().results, result_ptrs, request.results);
 

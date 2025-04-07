@@ -15,8 +15,6 @@ limitations under the License.
 
 #include <memory>
 
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/Support/Casting.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Operation.h"
@@ -24,6 +22,8 @@ limitations under the License.
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/Support/Casting.h"
 
 namespace mlir {
 namespace mhlo {
@@ -47,24 +47,27 @@ class SinkConstantsToControlFlowPass
     : public impl::SinkConstantsToControlFlowPassBase<
           SinkConstantsToControlFlowPass> {
   void runOnOperation() override {
-    getOperation().walk([](Operation* op) {
-      for (Region& region : op->getRegions()) sinkToRegion(&region);
+    getOperation().walk([](Operation *op) {
+      for (Region &region : op->getRegions())
+        sinkToRegion(&region);
     });
   }
 
- private:
+private:
   // Performs constant sinking into a region.
-  static void sinkToRegion(Region* region) {
-    llvm::DenseMap<Value, Operation*> sunkConstant;
-    visitUsedValuesDefinedAbove({*region}, [&](OpOperand* use) {
+  static void sinkToRegion(Region *region) {
+    llvm::DenseMap<Value, Operation *> sunkConstant;
+    visitUsedValuesDefinedAbove({*region}, [&](OpOperand *use) {
       Value constant = use->get();
-      auto* op = constant.getDefiningOp();
-      if (!op || !op->hasTrait<mlir::OpTrait::ConstantLike>()) return;
+      auto *op = constant.getDefiningOp();
+      if (!op || !op->hasTrait<mlir::OpTrait::ConstantLike>())
+        return;
       auto mapEntry = sunkConstant.try_emplace(constant, nullptr);
       if (!mapEntry.second) {
         // This constant has already been cloned into the region, reuse it.
         use->set(mapEntry.first->getSecond()->getResult(0));
-        if (op->use_empty()) op->erase();
+        if (op->use_empty())
+          op->erase();
         return;
       }
       if (constant.hasOneUse()) {
@@ -79,7 +82,7 @@ class SinkConstantsToControlFlowPass
   }
 };
 
-}  // anonymous namespace
+} // anonymous namespace
 
 // TODO(hinsu): Rename this pass and move to a different file along with the
 // generalization to make all ops isolated from above.
@@ -88,5 +91,5 @@ createSinkConstantsToControlFlowPass() {
   return std::make_unique<SinkConstantsToControlFlowPass>();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

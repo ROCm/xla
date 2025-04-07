@@ -501,7 +501,8 @@ void* BFCAllocator::AllocateRawInternal(size_t unused_alignment,
     LOG(WARNING)
         << "Allocator (" << Name() << ") ran out of memory trying "
         << "to allocate " << strings::HumanReadableNumBytes(num_bytes)
-        << " (rounded to " << rounded_bytes << ")" << "requested by op "
+        << " (rounded to " << rounded_bytes << ")"
+        << "requested by op "
         << tsl::profiler::ScopedMemoryDebugAnnotation::CurrentAnnotation()
                .pending_op_name
         << "\nIf the cause is memory fragmentation maybe the environment "

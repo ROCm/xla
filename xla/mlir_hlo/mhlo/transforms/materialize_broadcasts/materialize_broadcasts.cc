@@ -42,9 +42,11 @@ struct ClampWithBroadcastConvert : public OpRewritePattern<ClampOp> {
     auto maxType = mlir::dyn_cast<RankedTensorType>(op.getMax().getType());
     auto minType = mlir::dyn_cast<RankedTensorType>(op.getMin().getType());
     // Unrancked types are not supported.
-    if (!operandType || !maxType || !minType) return failure();
+    if (!operandType || !maxType || !minType)
+      return failure();
     // Does not support operand with dynamic dimensions for now.
-    if (!operandType.hasStaticShape()) return failure();
+    if (!operandType.hasStaticShape())
+      return failure();
 
     ArrayRef<int64_t> operandShape = operandType.getShape();
 
@@ -70,7 +72,7 @@ struct ClampWithBroadcastConvert : public OpRewritePattern<ClampOp> {
   }
 };
 
-}  // namespace
+} // namespace
 
 void setupMaterializeBroadcastsLegality(MLIRContext * /*context*/,
                                         ConversionTarget *conversionTarget) {
@@ -88,5 +90,5 @@ void populateMaterializeBroadcastsPatterns(MLIRContext *context,
   patterns->add<ClampWithBroadcastConvert>(context);
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

@@ -127,7 +127,7 @@ RocmEvent::RocmEvent(RocmEvent &&other)
   other.handle_ = nullptr;
 }
 
-RocmEvent& RocmEvent::operator=(RocmEvent&& other) {
+RocmEvent &RocmEvent::operator=(RocmEvent &&other) {
   if (this == &other) {
     return *this;
   }

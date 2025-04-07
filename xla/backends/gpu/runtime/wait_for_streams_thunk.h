@@ -30,7 +30,7 @@ class WaitForStreamsThunk : public Thunk {
                       ExecutionStreamId wait_for_stream_id)
       : Thunk(Kind::kWaitForStreams, thunk_info),
         stream_id_(stream_id),
-        wait_for_stream_id_(wait_for_stream_id) {};
+        wait_for_stream_id_(wait_for_stream_id){};
 
   WaitForStreamsThunk(const WaitForStreamsThunk&) = delete;
   WaitForStreamsThunk& operator=(const WaitForStreamsThunk&) = delete;

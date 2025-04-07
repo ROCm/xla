@@ -85,7 +85,6 @@ absl::Status SequentialThunk::ExecuteOnStream(const ExecuteParams& params) {
 #endif
 
   for (const std::unique_ptr<Thunk>& thunk : thunks_) {
-
 #if TIMING_DEBUG
     auto kind = thunk->kind();
     std::ostringstream oss;

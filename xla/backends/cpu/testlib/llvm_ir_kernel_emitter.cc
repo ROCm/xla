@@ -36,9 +36,7 @@ limitations under the License.
 #include "xla/util.h"
 
 namespace xla::cpu {
-namespace {
-
-}  // namespace
+namespace {}  // namespace
 
 LlvmIrKernelEmitter::LlvmIrKernelEmitter(absl::string_view llvm_ir,
                                          absl::string_view kernel_name,

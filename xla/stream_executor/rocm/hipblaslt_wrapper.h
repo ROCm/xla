@@ -52,7 +52,7 @@ namespace wrap {
     static FuncPtrT loaded = []() -> FuncPtrT {                            \
       static const char* kName = TO_STR(api_name);                         \
       void* f;                                                             \
-      auto s = tsl::Env::Default()->GetSymbolFromLibrary(                  \
+      auto s = tsl::Env::Default() -> GetSymbolFromLibrary(                \
           tsl::internal::CachedDsoLoader::GetHipblasltDsoHandle().value(), \
           kName, &f);                                                      \
       CHECK(s.ok()) << "could not find " << kName                          \

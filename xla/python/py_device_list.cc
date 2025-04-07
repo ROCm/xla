@@ -30,7 +30,7 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "nanobind/make_iterator.h"
 #include "nanobind/nanobind.h"
-#include "nanobind/stl/string.h"  // IWYU pragma: keep
+#include "nanobind/stl/string.h"       // IWYU pragma: keep
 #include "nanobind/stl/string_view.h"  // IWYU pragma: keep
 #include "xla/python/ifrt/device.h"
 #include "xla/python/ifrt/device_list.h"

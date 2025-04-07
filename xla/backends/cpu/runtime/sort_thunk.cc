@@ -847,7 +847,6 @@ static absl::Status SortInplace(
 
 tsl::AsyncValueRef<SortThunk::ExecuteEvent> SortThunk::Execute(
     const ExecuteParams& params) {
-
   VLOG(3) << absl::StreamFormat(
       "Sort %d inputs along dimension %d (is_stable=%v)", inputs_.size(),
       dimension_, is_stable_);

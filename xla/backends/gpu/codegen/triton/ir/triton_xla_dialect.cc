@@ -13,9 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "llvm/ADT/TypeSwitch.h"  // IWYU pragma: keep
+#include "llvm/ADT/TypeSwitch.h"            // IWYU pragma: keep
 #include "mlir/IR/DialectImplementation.h"  // IWYU pragma: keep
-#include "mlir/IR/OpImplementation.h"  // IWYU pragma: keep
+#include "mlir/IR/OpImplementation.h"       // IWYU pragma: keep
 #include "xla/backends/gpu/codegen/triton/ir/triton_xla_ops.h"
 
 #define GET_ATTRDEF_CLASSES

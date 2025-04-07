@@ -22,7 +22,7 @@ namespace mhlo {
 
 // Add chlo and mhlo dialects to the provided registry.
 void registerAllMhloDialects(DialectRegistry &registry);
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir
 
-#endif  // MLIR_HLO_DIALECT_MHLO_IR_REGISTER_H_
+#endif // MLIR_HLO_DIALECT_MHLO_IR_REGISTER_H_

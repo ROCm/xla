@@ -2031,7 +2031,7 @@ class IterableInput {
         block_k_(block_k),
         hlo_instr_(hlo_instr),
         side_(side),
-        boundary_checks_(boundary_checks) {};
+        boundary_checks_(boundary_checks){};
 
   static absl::StatusOr<IterableInput> CreateIterableInput(
       size_t iter_arg_index, EmitterLocOpBuilder& b, const MatMulDims& dims,

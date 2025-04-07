@@ -59,15 +59,15 @@ void AndroidArmV7ACpuUtilsHelper::EnableClockCycleProfiling() {
     // Initialize here to avoid unnecessary initialization
     InitializeInternal();
   }
-    const int64 cpu0_scaling_min = ReadCpuFrequencyFile(0, "scaling_min");
-    const int64 cpu0_scaling_max = ReadCpuFrequencyFile(0, "scaling_max");
-    if (cpu0_scaling_max != cpu0_scaling_min) {
-      LOG(WARNING) << "You enabled clock cycle profile but frequency may "
-                   << "be scaled. (max = " << cpu0_scaling_max << ", min "
-                   << cpu0_scaling_min << ")";
-    }
-    ResetClockCycle();
-    ioctl(fd_, PERF_EVENT_IOC_ENABLE, 0);
+  const int64 cpu0_scaling_min = ReadCpuFrequencyFile(0, "scaling_min");
+  const int64 cpu0_scaling_max = ReadCpuFrequencyFile(0, "scaling_max");
+  if (cpu0_scaling_max != cpu0_scaling_min) {
+    LOG(WARNING) << "You enabled clock cycle profile but frequency may "
+                 << "be scaled. (max = " << cpu0_scaling_max << ", min "
+                 << cpu0_scaling_min << ")";
+  }
+  ResetClockCycle();
+  ioctl(fd_, PERF_EVENT_IOC_ENABLE, 0);
 }
 
 void AndroidArmV7ACpuUtilsHelper::DisableClockCycleProfiling() {

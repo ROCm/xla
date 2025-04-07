@@ -20,18 +20,19 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/StringSet.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringSet.h"
 
 namespace mlir {
 namespace hlo {
 // Verifies the source target pairs attached to collective permute.
-LogicalResult verifyCollectivePermuteSourceTargetPairs(
-    Operation *op, DenseIntElementsAttr attr) {
+LogicalResult
+verifyCollectivePermuteSourceTargetPairs(Operation *op,
+                                         DenseIntElementsAttr attr) {
   auto type = mlir::cast<RankedTensorType>(attr.getType());
   if (type.getRank() != 2)
     return op->emitError() << "expect source_target_pairs attribute to be of "
@@ -52,10 +53,12 @@ LogicalResult verifyCollectivePermuteSourceTargetPairs(
 
     if (i.getIndex() % 2 == 0) {
       bool isUnique = sources.insert(val).second;
-      if (!isUnique) return op->emitError() << "duplicate sources not allowed.";
+      if (!isUnique)
+        return op->emitError() << "duplicate sources not allowed.";
     } else {
       bool isUnique = targets.insert(val).second;
-      if (!isUnique) return op->emitError() << "duplicate targets not allowed.";
+      if (!isUnique)
+        return op->emitError() << "duplicate targets not allowed.";
     }
   }
   return success();
@@ -76,7 +79,8 @@ LogicalResult verifyReduceScatter(Operation *op, TypeRange operandTypes,
   for (auto it : llvm::zip(operandTypes, resultTypes)) {
     auto operandType = mlir::cast<ShapedType>(std::get<0>(it));
     auto resultType = mlir::cast<ShapedType>(std::get<1>(it));
-    if (!operandType.hasRank() || !resultType.hasRank()) continue;
+    if (!operandType.hasRank() || !resultType.hasRank())
+      continue;
     if (operandType.getRank() != resultType.getRank())
       return op->emitOpError() << "operand and result should have same rank";
     if (static_cast<int64_t>(scatterDimension) >= operandType.getRank())
@@ -141,7 +145,7 @@ void printWindowAttribute(OpAsmPrinter &p, DenseElementsAttr attribute) {
     llvm::interleaveComma(attribute.getValues<int64_t>(), p);
   }
 }
-}  // namespace
+} // namespace
 
 void printWindowAttributes(OpAsmPrinter &p, Operation * /*op*/,
                            std::optional<DenseIntElementsAttr> windowStrides,
@@ -159,9 +163,10 @@ void printWindowAttributes(OpAsmPrinter &p, Operation * /*op*/,
   }};
 
   // Do not print attributes that do no exist.
-  auto nonNullAttributes = llvm::make_filter_range(
-      printedAttributes,
-      [](const pair_t &a) { return static_cast<bool>(a.first); });
+  auto nonNullAttributes =
+      llvm::make_filter_range(printedAttributes, [](const pair_t &a) {
+        return static_cast<bool>(a.first);
+      });
 
   llvm::interleaveComma(nonNullAttributes, p, [&](const pair_t &a) {
     p << a.second << " = [";
@@ -256,10 +261,11 @@ ParseResult parseWindowAttributes(OpAsmParser &parser,
       }
     }
     // continue parsing if there is a comma at the end.
-    if (parser.parseOptionalComma().failed()) break;
+    if (parser.parseOptionalComma().failed())
+      break;
   }
   return success();
 }
 
-}  // namespace hlo
-}  // namespace mlir
+} // namespace hlo
+} // namespace mlir

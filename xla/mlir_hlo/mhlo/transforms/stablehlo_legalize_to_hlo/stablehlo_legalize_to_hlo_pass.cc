@@ -16,8 +16,6 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mhlo/transforms/passes.h"
 #include "mhlo/transforms/rewriters.h"
@@ -30,6 +28,8 @@ limitations under the License.
 #include "mlir/Support/TypeID.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "stablehlo/dialect/StablehloOps.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 
 namespace mlir {
 namespace mhlo {
@@ -61,12 +61,12 @@ struct StablehloLegalizeToHloPass
   }
 };
 
-}  // namespace
+} // namespace
 
 std::unique_ptr<mlir::OperationPass<ModuleOp>>
 createStablehloLegalizeToHloPass() {
   return std::make_unique<StablehloLegalizeToHloPass>();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

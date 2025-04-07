@@ -46,9 +46,8 @@ auto MakeDeviceDescription() {
 class GpuFusibleTest : public HloRunnerAgnosticTestBase {
  public:
   GpuFusibleTest()
-      : HloRunnerAgnosticTestBase(
-            std::make_unique<HloRunner>(
-                PlatformUtil::GetDefaultPlatform().value())),
+      : HloRunnerAgnosticTestBase(std::make_unique<HloRunner>(
+            PlatformUtil::GetDefaultPlatform().value())),
         device_description_(MakeDeviceDescription()) {}
 
   bool IsReduceInputFusion(const HloInstruction& instr) const {

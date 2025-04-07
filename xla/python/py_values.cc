@@ -39,7 +39,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "nanobind/nanobind.h"
-#include "nanobind/stl/complex.h"  // IWYU pragma: keep
+#include "nanobind/stl/complex.h"      // IWYU pragma: keep
 #include "nanobind/stl/string_view.h"  // IWYU pragma: keep
 #include "xla/primitive_util.h"
 #include "xla/python/ifrt/array.h"
@@ -313,7 +313,7 @@ absl::StatusOr<DevicePutResultFn> HandleStringNumpyArray(
           sharding = std::move(sharding),
           on_done_with_host_buffer =
               std::move(on_done_with_host_buffer)]() mutable
-             -> absl::StatusOr<DevicePutResult> {
+         -> absl::StatusOr<DevicePutResult> {
     TF_ASSIGN_OR_RETURN(
         auto ifrt_array,
         client->MakeArrayFromHostBuffer(
@@ -427,7 +427,7 @@ absl::StatusOr<DevicePutResultFn> HandlePyArray(
   } else {
     return [ifrt_array = tsl::FormRef(ifrt_array), to_device, to_memory_kind,
             owning_pybuffer = py_array.weak_type()]() mutable
-               -> absl::StatusOr<DevicePutResult> {
+           -> absl::StatusOr<DevicePutResult> {
       auto* ifrt_client = ifrt_array->client();
       TF_ASSIGN_OR_RETURN(
           auto copied_ifrt_arrays,

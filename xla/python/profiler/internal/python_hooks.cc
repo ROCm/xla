@@ -403,8 +403,7 @@ void PythonHookContext::ProfileFast(PyFrameObject* frame, int what,
 }
 
 /*static*/ void PythonHookContext::EnableTraceMe(bool enable) {
-  const char* kModuleName =
-      "tensorflow.python.profiler.trace";
+  const char* kModuleName = "tensorflow.python.profiler.trace";
   try {
     auto trace_module = py::module::import(kModuleName);
     trace_module.attr("enabled") = py::bool_(enable);

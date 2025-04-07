@@ -39,7 +39,7 @@ namespace {
 
 template <typename OpTy>
 class ApproximateOnExtendedF32Lowering : public OpRewritePattern<OpTy> {
- public:
+public:
   explicit ApproximateOnExtendedF32Lowering(MLIRContext *ctx)
       : OpRewritePattern<OpTy>(ctx, /*benefit=*/100) {}
 
@@ -52,7 +52,8 @@ class ApproximateOnExtendedF32Lowering : public OpRewritePattern<OpTy> {
     auto rawArgs = op.getOperation()->getOperands();
 
     // Supports only f16 and f32 for now.
-    if (!op.getType().isF16() && !op.getType().isF32()) return failure();
+    if (!op.getType().isF16() && !op.getType().isF32())
+      return failure();
 
     // Extend operands to f32 if needed and possible.
     SmallVector<Value, 2> f32Args;
@@ -60,13 +61,15 @@ class ApproximateOnExtendedF32Lowering : public OpRewritePattern<OpTy> {
     for (Value arg : rawArgs) {
       // Similar to XLA, do not rewrite f64 as precision might matter.
       Type argTy = arg.getType();
-      if (argTy.isF64()) return failure();
+      if (argTy.isF64())
+        return failure();
 
       if (argTy.isF16())
         arg = rewriter.create<arith::ExtFOp>(loc, rewriter.getF32Type(), arg);
 
       // If we still do not have f32, fail.
-      if (!arg.getType().isF32()) return failure();
+      if (!arg.getType().isF32())
+        return failure();
 
       f32Args.push_back(arg);
     }
@@ -89,7 +92,7 @@ class ApproximateOnExtendedF32Lowering : public OpRewritePattern<OpTy> {
 // https://gitlab.com/libeigen/eigen/-/blob/master/Eigen/src/Core/MathFunctionsImpl.h
 class ApproximateTanhLowering
     : public ApproximateOnExtendedF32Lowering<math::TanhOp> {
- public:
+public:
   explicit ApproximateTanhLowering(MLIRContext *ctx)
       : ApproximateOnExtendedF32Lowering<math::TanhOp>(ctx) {}
 
@@ -178,7 +181,7 @@ struct LegalizeTrigonometricToApproximationPass
   }
 };
 
-}  // anonymous namespace
+} // anonymous namespace
 
 std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>>
 createLegalizeTrigonometricToApproximationPass() {
@@ -192,5 +195,5 @@ void populateTrigonometricToApproximationPatterns(mlir::MLIRContext *context,
   // clang-format on
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

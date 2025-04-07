@@ -36,7 +36,7 @@ namespace stream_executor::gpu {
 
 class CudaKernel : public Kernel {
  public:
-  explicit CudaKernel(StreamExecutor* executor) : executor_(executor) {}
+  explicit CudaKernel(StreamExecutor *executor) : executor_(executor) {}
 
   // Note that the function is unloaded when the module is unloaded, and the
   // module that the function is contained in is owned by the StreamExecutor.
@@ -64,7 +64,7 @@ class CudaKernel : public Kernel {
                       const std::optional<ClusterDim> &cluster_dims,
                       Stream *stream, const KernelArgs &args) override;
 
-  StreamExecutor* executor_ = nullptr;
+  StreamExecutor *executor_ = nullptr;
 
   CUfunction gpu_function_ = nullptr;  // wrapped CUDA kernel handle
   unsigned arity_ = 0;  // number of formal parameters the kernel takes

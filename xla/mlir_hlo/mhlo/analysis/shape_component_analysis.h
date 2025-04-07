@@ -18,10 +18,10 @@ limitations under the License.
 
 #include <optional>
 
-#include "llvm/Support/raw_ostream.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Value.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
 
@@ -32,7 +32,7 @@ namespace mlir {
 // Results are cached but the cache is not consistent across IR mutations and
 // needs to be reset in that case.
 class ShapeComponentAnalysis {
- public:
+public:
   // Represents the analysis request for a specific value. We are either
   // interested in the shape of a value or the value itself.
   class ShapeOrValueInfo {
@@ -41,7 +41,7 @@ class ShapeComponentAnalysis {
     explicit ShapeOrValueInfo(decltype(p) p) : p(p) {}
     ShapeOrValueInfo(Value v, bool isValueInfo) : p(v, isValueInfo) {}
 
-   public:
+  public:
     static ShapeOrValueInfo getShapeInfoOf(Value v) { return {v, false}; }
     static ShapeOrValueInfo getValueInfoOf(Value v) { return {v, true}; }
     Value value() const { return p.getPointer(); }
@@ -113,7 +113,7 @@ class ShapeComponentAnalysis {
                                     ShapeOrValueInfo::DenseMapInfo>;
   using SymbolicShapeConstraintsMap = DenseMap<int, Symbol>;
 
- private:
+private:
   // Mapping from the analysis requests to the results, i.e. to an array of
   // symbolic expressions. This is essentially a cache for all the results of
   // this analysis.
@@ -126,7 +126,7 @@ class ShapeComponentAnalysis {
   // Run the analysis to request either shape or value information.
   void compute(ShapeOrValueInfo v);
 
- public:
+public:
   // Return the computed components for the shape of a value, e.g., the
   // dimensions of a tensor.
   std::optional<ArrayRef<SymbolicExpr>> GetShapeInfo(Value value);
@@ -137,7 +137,7 @@ class ShapeComponentAnalysis {
   // Clear analysis data structures.
   void reset();
 };
-}  // namespace mlir
+} // namespace mlir
 
 namespace llvm {
 
@@ -165,6 +165,6 @@ struct DenseMapInfo<mlir::ShapeComponentAnalysis::Symbol> {
   }
 };
 
-}  // namespace llvm
+} // namespace llvm
 
-#endif  // MLIR_HLO_MHLO_ANALYSIS_SHAPE_COMPONENT_ANALYSIS_H
+#endif // MLIR_HLO_MHLO_ANALYSIS_SHAPE_COMPONENT_ANALYSIS_H

@@ -36,7 +36,6 @@ limitations under the License.
 namespace tsl {
 namespace {
 
-
 string EchoProgram() {
   std::string path = io::JoinPath(testing::XlaSrcRoot(), "tsl", "platform",
                                   "testdata", "test_echo");

@@ -106,31 +106,33 @@ absl::Status AnnotateKernelLaunchDimensions(
   llvm::Triple target_triple = llvm::Triple(llvm_module->getTargetTriple());
 
   if (target_triple.isNVPTX()) {
-  // Our launch bounds are exact, so we can specify them as
-  // reqntid[xyz] rather than maxntid[xyz].
-  AnnotateWithInt32Value("reqntidx", launch_dims.thread_counts_per_block().x,
-                         kernel_name, llvm_module);
-  if (launch_dims.thread_counts_per_block().y > 1) {
-    AnnotateWithInt32Value("reqntidy", launch_dims.thread_counts_per_block().y,
+    // Our launch bounds are exact, so we can specify them as
+    // reqntid[xyz] rather than maxntid[xyz].
+    AnnotateWithInt32Value("reqntidx", launch_dims.thread_counts_per_block().x,
                            kernel_name, llvm_module);
-  }
-  if (launch_dims.thread_counts_per_block().z > 1) {
-    AnnotateWithInt32Value("reqntidz", launch_dims.thread_counts_per_block().z,
-                           kernel_name, llvm_module);
-  }
-  // Maybe we want to set "reqnctapercluster" here, but not sure if needed or if
-  // LLVM supports that yet. Let's do that later when needed.
+    if (launch_dims.thread_counts_per_block().y > 1) {
+      AnnotateWithInt32Value("reqntidy",
+                             launch_dims.thread_counts_per_block().y,
+                             kernel_name, llvm_module);
+    }
+    if (launch_dims.thread_counts_per_block().z > 1) {
+      AnnotateWithInt32Value("reqntidz",
+                             launch_dims.thread_counts_per_block().z,
+                             kernel_name, llvm_module);
+    }
+    // Maybe we want to set "reqnctapercluster" here, but not sure if needed or
+    // if LLVM supports that yet. Let's do that later when needed.
   } else if (target_triple.getArch() == llvm::Triple::amdgcn) {
     auto* kernel = llvm_module->getFunction(kernel_name);
     kernel->addFnAttr("amdgpu-flat-work-group-size",
-                         absl::StrJoin({launch_dims.num_threads_per_block(),
-                                        launch_dims.num_threads_per_block()},
-                                       ","));
+                      absl::StrJoin({launch_dims.num_threads_per_block(),
+                                     launch_dims.num_threads_per_block()},
+                                    ","));
     kernel->addFnAttr("amdgpu-max-num-workgroups",
-                         absl::StrJoin({launch_dims.block_counts().x,
-                                        launch_dims.block_counts().y,
-                                        launch_dims.block_counts().z},
-                                       ","));
+                      absl::StrJoin({launch_dims.block_counts().x,
+                                     launch_dims.block_counts().y,
+                                     launch_dims.block_counts().z},
+                                    ","));
   }
   return absl::OkStatus();
 }

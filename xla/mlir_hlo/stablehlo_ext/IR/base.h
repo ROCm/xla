@@ -17,10 +17,10 @@ limitations under the License.
 #ifndef STABLEHLO_EXT_DIALECT_BASE_H
 #define STABLEHLO_EXT_DIALECT_BASE_H
 
-#include "llvm/ADT/ArrayRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/MLIRContext.h"
+#include "llvm/ADT/ArrayRef.h"
 
 namespace mlir {
 namespace hlo {
@@ -29,7 +29,7 @@ DenseIntElementsAttr getPaddingAttr(MLIRContext *context,
                                     ArrayRef<int64_t> value);
 DenseIntElementsAttr getPaddingAttr(Builder *builder, ArrayRef<int64_t> value);
 
-}  // namespace hlo
-}  // namespace mlir
+} // namespace hlo
+} // namespace mlir
 
-#endif  // STABLEHLO_EXT_DIALECT_BASE_H
+#endif // STABLEHLO_EXT_DIALECT_BASE_H

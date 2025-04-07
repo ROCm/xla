@@ -21,9 +21,6 @@ limitations under the License.
 #include <tuple>
 #include <utility>
 
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/iterator_range.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -35,6 +32,9 @@ limitations under the License.
 #include "mlir/IR/Value.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "transforms/passes.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/iterator_range.h"
 
 namespace mlir {
 
@@ -48,7 +48,7 @@ namespace {
 // This is the implementation of the TileLoops pass declared in
 //  include/transforms/passes.td
 class TileLoopsPass : public impl::TileLoopsPassBase<TileLoopsPass> {
- public:
+public:
   // Creates a TileLoopsPass with tiles sizes provided through `tile_sizes`
   // and unroll factors provided through `unroll_factors`.
   explicit TileLoopsPass(ArrayRef<int64_t> tileSizes,
@@ -60,15 +60,17 @@ class TileLoopsPass : public impl::TileLoopsPassBase<TileLoopsPass> {
   void runOnOperation() override;
 };
 
-}  // namespace
+} // namespace
 
 // Returns whether the access pattern in `ploop` is "complex". That is, whether
 // any memref.load op in its region uses indices that don't correspond to the
 // loop induction variables.
 static bool isComplexAccessPattern(ParallelOp ploop) {
   auto isComplex = [&](memref::LoadOp loadOp) {
-    if (!loadOp.getMemRefType().getLayout().isIdentity()) return true;
-    if (loadOp.getIndices().empty()) return false;
+    if (!loadOp.getMemRefType().getLayout().isIdentity())
+      return true;
+    if (loadOp.getIndices().empty())
+      return false;
     return loadOp.getIndices() != ploop.getInductionVars();
   };
   return llvm::any_of(ploop.getBody()->getOps<memref::LoadOp>(), isComplex);
@@ -111,10 +113,12 @@ void TileLoopsPass::runOnOperation() {
     OpBuilder builder(ploop);
     Location loc = ploop.getLoc();
     for (int64_t i = 0; i < static_cast<int64_t>(unrolledTile.size()); ++i) {
-      if (!lower[i] || !upper[i] || !step[i]) continue;
+      if (!lower[i] || !upper[i] || !step[i])
+        continue;
       int64_t unrollFactor = unroll_factors_[i];
       int64_t difference = upper[i].value() - lower[i].value();
-      if (difference % (step[i].value() * unrollFactor) != 0) continue;
+      if (difference % (step[i].value() * unrollFactor) != 0)
+        continue;
       ploop.getUpperBoundMutable().slice(i, 1).assign(
           builder.create<arith::ConstantIndexOp>(loc, unrollFactor));
     }
@@ -131,9 +135,10 @@ void TileLoopsPass::runOnOperation() {
     return signalPassFailure();
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> createTileLoopsPass(
-    ArrayRef<int64_t> tileSizes, ArrayRef<int64_t> unrollFactors) {
+std::unique_ptr<OperationPass<func::FuncOp>>
+createTileLoopsPass(ArrayRef<int64_t> tileSizes,
+                    ArrayRef<int64_t> unrollFactors) {
   return std::make_unique<TileLoopsPass>(tileSizes, unrollFactors);
 }
 
-}  // namespace mlir
+} // namespace mlir

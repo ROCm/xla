@@ -115,7 +115,8 @@ UNARY_TEST_COMPLEX_64(Log, {
         .skip_comparison(should_skip)
         .build();
   };
-  Run(Log, [](complex64 x) { return std::log(x); }, error_spec_gen);
+  Run(
+      Log, [](complex64 x) { return std::log(x); }, error_spec_gen);
 })
 
 UNARY_TEST_COMPLEX_64(Sqrt, {
@@ -135,7 +136,8 @@ UNARY_TEST_COMPLEX_64(Sqrt, {
         .rel_err(50 * std::numeric_limits<float>::epsilon())
         .build();
   };
-  Run(Sqrt, [](complex64 x) { return std::sqrt(x); }, error_spec_gen);
+  Run(
+      Sqrt, [](complex64 x) { return std::sqrt(x); }, error_spec_gen);
 })
 
 template <typename NativeT, typename ComponentNativeT>
@@ -267,7 +269,8 @@ UNARY_TEST_COMPLEX_128(Log, {
     };
   }
 
-  Run(Log, [](complex128 x) { return std::log(x); }, error_spec_gen);
+  Run(
+      Log, [](complex128 x) { return std::log(x); }, error_spec_gen);
 })
 
 UNARY_TEST_COMPLEX_128(Sqrt, {
@@ -285,7 +288,8 @@ UNARY_TEST_COMPLEX_128(Sqrt, {
         .skip_comparison(std::abs(x) > std::numeric_limits<double>::max() / 2)
         .build();
   };
-  Run(Sqrt, [](complex128 x) { return std::sqrt(x); }, error_spec_gen);
+  Run(
+      Sqrt, [](complex128 x) { return std::sqrt(x); }, error_spec_gen);
 })
 
 UNARY_TEST_COMPLEX_128(Rsqrt, {
@@ -345,7 +349,8 @@ UNARY_TEST_COMPLEX_128(Tanh, {
         .build();
   };
 
-  Run(Tanh, +[](complex128 x) { return std::tanh(x); }, error_spec_gen);
+  Run(
+      Tanh, +[](complex128 x) { return std::tanh(x); }, error_spec_gen);
 })
 
 INSTANTIATE_TEST_SUITE_P(

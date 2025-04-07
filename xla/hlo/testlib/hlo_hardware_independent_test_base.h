@@ -239,7 +239,6 @@ class HloHardwareIndependentTestBase : public ::testing::Test {
         ->Clear();
   }
 
-
   bool verifier_layout_sensitive() const { return verifier_layout_sensitive_; }
   void set_verifier_layout_sensitive(bool verifier_layout_sensitive) {
     verifier_layout_sensitive_ = verifier_layout_sensitive;

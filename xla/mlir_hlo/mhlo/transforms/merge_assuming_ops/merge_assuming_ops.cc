@@ -18,9 +18,6 @@ limitations under the License.
 #include <tuple>
 #include <utility>
 
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Casting.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mhlo/transforms/passes.h"
 #include "mhlo/transforms/rewriters.h"
@@ -37,6 +34,9 @@ limitations under the License.
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 
 namespace mlir {
 namespace mhlo {
@@ -57,7 +57,8 @@ struct ShapeReificationPattern : public OpRewritePattern<shape::ShapeOfOp> {
                                 PatternRewriter &rewriter) const override {
     // Only reify shape computation if operand allows for it.
     auto shapeOrigin = op.getArg().getDefiningOp<InferShapedTypeOpInterface>();
-    if (!shapeOrigin) return failure();
+    if (!shapeOrigin)
+      return failure();
 
     llvm::SmallVector<Value, 1> reifications;
     if (failed(shapeOrigin.reifyReturnTypeShapes(
@@ -95,7 +96,8 @@ struct InlineBroadcastedShapeOperandsPattern : public OpRewritePattern<OpTy> {
     }
 
     // Only rewrite if it makes a difference.
-    if (inlinedOperands.size() == op.getNumOperands()) return failure();
+    if (inlinedOperands.size() == op.getNumOperands())
+      return failure();
 
     // Inline shape operands.
     rewriter.replaceOpWithNewOp<OpTy>(op, op->getResultTypes(), inlinedOperands,
@@ -107,7 +109,8 @@ struct InlineBroadcastedShapeOperandsPattern : public OpRewritePattern<OpTy> {
 LogicalResult moveUpIntoAssumingOpMatchAndRewrite(Operation *op,
                                                   PatternRewriter &rewriter) {
   // Only implemented for single-result ops.
-  if (op->getNumResults() != 1) return failure();
+  if (op->getNumResults() != 1)
+    return failure();
 
   // Find a preceding `assuming` op.
   auto *theBlock = op->getBlock();
@@ -115,7 +118,8 @@ LogicalResult moveUpIntoAssumingOpMatchAndRewrite(Operation *op,
   while (prev != nullptr && !llvm::isa<shape::AssumingOp>(prev))
     prev = prev->getPrevNode();
   auto assumingOp = llvm::dyn_cast_or_null<shape::AssumingOp>(prev);
-  if (!assumingOp) return failure();
+  if (!assumingOp)
+    return failure();
   assert(assumingOp->getBlock() == theBlock && op->getBlock() == theBlock &&
          "expect assuming op and root op to be in the same block");
 
@@ -125,7 +129,8 @@ LogicalResult moveUpIntoAssumingOpMatchAndRewrite(Operation *op,
     return def == nullptr || def->getBlock() != theBlock ||
            !assumingOp->isBeforeInBlock(def);
   };
-  if (!llvm::all_of(op->getOperands(), isAvailable)) return failure();
+  if (!llvm::all_of(op->getOperands(), isAvailable))
+    return failure();
 
   Block *body = assumingOp.getBody();
   auto yieldOp = llvm::cast<shape::AssumingYieldOp>(body->getTerminator());
@@ -135,7 +140,8 @@ LogicalResult moveUpIntoAssumingOpMatchAndRewrite(Operation *op,
   SmallVector<Value, 8> newOperandsUnmapped =
       llvm::to_vector<8>(llvm::map_range(op->getOperands(), [&](Value v) {
         for (const auto &result : llvm::enumerate(assumingOp->getResults())) {
-          if (result.value() == v) return yieldOp->getOperand(result.index());
+          if (result.value() == v)
+            return yieldOp->getOperand(result.index());
         }
         return v;
       }));
@@ -160,9 +166,10 @@ LogicalResult moveUpIntoAssumingOpMatchAndRewrite(Operation *op,
         Operation *newOp = b.clone(*op, mapping);
 
         // Yield the previous results and also the new ones.
-        auto mappedResults = llvm::to_vector<8>(llvm::map_range(
-            yieldOp.getOperands(),
-            [&](Value v) { return mapping.lookupOrDefault(v); }));
+        auto mappedResults = llvm::to_vector<8>(
+            llvm::map_range(yieldOp.getOperands(), [&](Value v) {
+              return mapping.lookupOrDefault(v);
+            }));
         mappedResults.append(newOp->getResults().begin(),
                              newOp->getResults().end());
         return mappedResults;
@@ -203,7 +210,8 @@ struct MoveElementwiseOpsUpIntoAssumingOpPattern : public RewritePattern {
         !op->hasTrait<hlo::OpTrait::BroadcastingElementwise>()) {
       return failure();
     }
-    if (!isMemoryEffectFree(op)) return failure();
+    if (!isMemoryEffectFree(op))
+      return failure();
 
     return moveUpIntoAssumingOpMatchAndRewrite(op, rewriter);
   }
@@ -215,11 +223,13 @@ LogicalResult moveDownIntoAssumingOpMatchAndRewrite(Operation *op,
   auto users = op->getUsers();
   auto it = users.begin();
   auto end = users.end();
-  if (it == end) return failure();
+  if (it == end)
+    return failure();
 
   // Find candidate assuming op.
   auto assumingOp = (it++)->getParentOfType<shape::AssumingOp>();
-  if (!assumingOp || assumingOp->isProperAncestor(op)) return failure();
+  if (!assumingOp || assumingOp->isProperAncestor(op))
+    return failure();
 
   // Make sure all uses are within the unique assuming op's body.
   while (it != end) {
@@ -251,7 +261,8 @@ struct MoveElementwiseOpsDownIntoAssumingOpPattern : public RewritePattern {
         !op->hasTrait<hlo::OpTrait::BroadcastingElementwise>()) {
       return failure();
     }
-    if (!isMemoryEffectFree(op)) return failure();
+    if (!isMemoryEffectFree(op))
+      return failure();
 
     return moveDownIntoAssumingOpMatchAndRewrite(op, rewriter);
   }
@@ -269,7 +280,8 @@ struct MoveUpOutOfAssumingOpPattern : public OpRewritePattern<OpTy> {
                                 PatternRewriter &rewriter) const override {
     // Must be inside of an assuming op.
     auto assumingOp = op->template getParentOfType<shape::AssumingOp>();
-    if (!assumingOp) return failure();
+    if (!assumingOp)
+      return failure();
 
     // Operands must not be defined within the assuming op.
     Block *body = assumingOp.getBody();
@@ -277,7 +289,8 @@ struct MoveUpOutOfAssumingOpPattern : public OpRewritePattern<OpTy> {
       Operation *def = v.getDefiningOp();
       return def == nullptr || def->getBlock() != body;
     };
-    if (!llvm::all_of(op->getOperands(), isAvailable)) return failure();
+    if (!llvm::all_of(op->getOperands(), isAvailable))
+      return failure();
 
     // Move op before the assuming region.
     OpBuilder::InsertionGuard guard(rewriter);
@@ -292,7 +305,8 @@ struct MoveUpOutOfAssumingOpPattern : public OpRewritePattern<OpTy> {
       return llvm::is_contained(newOp->getResults(), v);
     };
     auto yieldOp = cast<shape::AssumingYieldOp>(body->getTerminator());
-    if (llvm::none_of(yieldOp.getOperands(), isNewOpResult)) return success();
+    if (llvm::none_of(yieldOp.getOperands(), isNewOpResult))
+      return success();
 
     // If the assuming region yields any of the new op's results, these values
     // can instead bypass the assuming region. There is no need to yield them
@@ -324,7 +338,8 @@ struct MoveUpOutOfAssumingOpPattern : public OpRewritePattern<OpTy> {
     // Use the assuming op's results for the missing replacement values.
     auto src = newAssumingOp.getResults().begin();
     for (auto &dst : replacementValues) {
-      if (dst) continue;
+      if (dst)
+        continue;
       dst = *src++;
     }
 
@@ -343,8 +358,10 @@ struct MergeAssumingOpsPattern : public OpRewritePattern<shape::AssumingOp> {
     // availiable.
     auto precedingOp =
         llvm::dyn_cast_or_null<shape::AssumingOp>(op->getPrevNode());
-    if (!precedingOp) return failure();
-    if (op.getWitness().getDefiningOp() == precedingOp) return failure();
+    if (!precedingOp)
+      return failure();
+    if (op.getWitness().getDefiningOp() == precedingOp)
+      return failure();
 
     // Merge witnesses.
     OpBuilder::InsertionGuard guard(rewriter);
@@ -441,7 +458,7 @@ struct MergeAssumingOpsPass
   }
 };
 
-}  // namespace
+} // namespace
 
 void populateMergeAssumingOpsPatterns(MLIRContext *context,
                                       RewritePatternSet *patterns) {
@@ -474,5 +491,5 @@ std::unique_ptr<OperationPass<func::FuncOp>> createMergeAssumingOpsPass() {
   return std::make_unique<MergeAssumingOpsPass>();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

@@ -104,9 +104,9 @@ absl::Status InterpreterCompiler::RunHloOptimization(HloModule* hlo_module) {
       /*rewrite_inference_op=*/true,
       /*rewrite_grad_op=*/true);
   const DebugOptions& opts = hlo_module->config().debug_options();
-  if(opts.xla_enable_layout_assignment()) {
+  if (opts.xla_enable_layout_assignment()) {
     pipeline.AddPass<LayoutAssignment>(
-      hlo_module->mutable_entry_computation_layout());
+        hlo_module->mutable_entry_computation_layout());
   }
 
   return pipeline.Run(hlo_module).status();

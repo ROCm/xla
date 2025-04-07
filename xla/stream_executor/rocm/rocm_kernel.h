@@ -36,7 +36,7 @@ namespace stream_executor::gpu {
 
 class RocmKernel : public Kernel {
  public:
-  explicit RocmKernel(StreamExecutor* executor) : executor_(executor) {}
+  explicit RocmKernel(StreamExecutor *executor) : executor_(executor) {}
 
   // Note that the function is unloaded when the module is unloaded, and the
   // module that the function is contained in is owned by the StreamExecutor.
@@ -64,7 +64,7 @@ class RocmKernel : public Kernel {
                       const std::optional<ClusterDim> &cluster_dims,
                       Stream *stream, const KernelArgs &args) override;
 
-  StreamExecutor* executor_ = nullptr;
+  StreamExecutor *executor_ = nullptr;
 
   hipFunction_t rocm_function_ = nullptr;  // wrapped HIP kernel handle
   unsigned arity_ = 0;  // number of formal parameters the kernel takes

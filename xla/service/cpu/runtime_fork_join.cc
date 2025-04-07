@@ -71,7 +71,8 @@ ABSL_ATTRIBUTE_NO_SANITIZE_MEMORY void __xla_cpu_runtime_ParallelForkJoin(
     void** buffer_table, void* status, uint64_t* prof_counters,
     int32_t num_partitions, int64_t* partitions, int32_t num_partitioned_dims,
     void* function_ptr) {
-  VLOG(2) << "ParallelForkJoin ENTRY" << " num_partitions: " << num_partitions
+  VLOG(2) << "ParallelForkJoin ENTRY"
+          << " num_partitions: " << num_partitions
           << " num_partitioned_dims: " << num_partitioned_dims;
   CHECK_EQ(params, nullptr);
   CHECK_GT(num_partitions, 1);

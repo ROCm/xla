@@ -16,7 +16,7 @@ limitations under the License.
 #include <cstdint>
 
 #include "mlir/IR/OpImplementation.h"  // IWYU pragma: keep
-#include "mlir/IR/Types.h"  // IWYU pragma: keep
+#include "mlir/IR/Types.h"             // IWYU pragma: keep
 #include "mlir/Support/LLVM.h"
 #include "xla/backends/gpu/codegen/triton/ir/triton_xla_ops.h"
 

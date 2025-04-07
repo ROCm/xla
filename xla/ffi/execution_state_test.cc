@@ -48,7 +48,7 @@ TEST(ExecutionStateTest, SetAndGet) {
   TF_ASSERT_OK(state.Set(std::make_unique<int32_t>(42)));
   EXPECT_TRUE(state.IsSet());
 
-  TF_ASSERT_OK_AND_ASSIGN(int32_t* data, state.Get<int32_t>());
+  TF_ASSERT_OK_AND_ASSIGN(int32_t * data, state.Get<int32_t>());
   EXPECT_EQ(*data, 42);
 }
 

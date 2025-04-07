@@ -21,8 +21,6 @@ limitations under the License.
 #include <tuple>
 #include <utility>
 
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -30,6 +28,8 @@ limitations under the License.
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 #include "transforms/passes.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
 
@@ -40,13 +40,13 @@ using ::mlir::func::FuncOp;
 
 namespace {
 class UnbufferizePass : public impl::UnbufferizePassBase<UnbufferizePass> {
- public:
+public:
   using UnbufferizePassBase<UnbufferizePass>::UnbufferizePassBase;
 
- private:
+private:
   void runOnOperation() override;
 };
-}  // namespace
+} // namespace
 
 void UnbufferizePass::runOnOperation() {
   FuncOp funcOp = getOperation();
@@ -56,7 +56,8 @@ void UnbufferizePass::runOnOperation() {
   llvm::SmallDenseSet<BlockArgument> insertedArgs;
   funcOp->walk([&](bufferization::ToTensorOp op) {
     auto arg = mlir::dyn_cast<BlockArgument>(op.getMemref());
-    if (!arg) return;
+    if (!arg)
+      return;
     Value newValue = mapping.lookupOrNull(arg);
     if (newValue == nullptr) {
       auto attrs = funcOp.getArgAttrDict(arg.getArgNumber());
@@ -72,7 +73,8 @@ void UnbufferizePass::runOnOperation() {
   SmallVector<DictionaryAttr> resultAttrs;
   funcOp->walk([&](bufferization::MaterializeInDestinationOp op) {
     auto arg = mlir::dyn_cast<BlockArgument>(op.getDest());
-    if (!arg) return;
+    if (!arg)
+      return;
     argsToErase.set(arg.getArgNumber());
     results.push_back(op.getSource());
     resultAttrs.push_back(funcOp.getArgAttrDict(arg.getArgNumber()));
@@ -92,4 +94,4 @@ std::unique_ptr<OperationPass<func::FuncOp>> hlo::createUnbufferizePass() {
   return std::make_unique<UnbufferizePass>();
 }
 
-}  // namespace mlir
+} // namespace mlir

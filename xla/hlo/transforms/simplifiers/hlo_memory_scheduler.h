@@ -49,8 +49,7 @@ using MemorySchedulerPostprocessor =
 using MemorySchedulerAlgorithm =
     std::function<absl::StatusOr<HloInstructionSequence>(
         HloComputation*, const TuplePointsToAnalysis&, const HloAliasAnalysis&,
-        const LogicalBuffer::SizeFunction&,
-        const MemorySchedulerPostprocessor&,
+        const LogicalBuffer::SizeFunction&, const MemorySchedulerPostprocessor&,
         /*peak_memory*/ int64_t*)>;
 
 // Scheduler for the entire module.

@@ -18,12 +18,6 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
-#include "llvm/ADT/DenseMapInfo.h"
-#include "llvm/ADT/Hashing.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Casting.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mhlo/transforms/passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -35,6 +29,12 @@ limitations under the License.
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 
 namespace mlir {
 namespace mhlo {
@@ -61,9 +61,9 @@ struct BroadcastIntent {
   bool operator!=(BroadcastIntent rhs) const { return !(*this == rhs); }
 };
 
-}  // namespace
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace
+} // namespace mhlo
+} // namespace mlir
 
 namespace llvm {
 
@@ -95,7 +95,7 @@ struct DenseMapInfo<mlir::mhlo::BroadcastIntent> {
   }
 };
 
-}  // namespace llvm
+} // namespace llvm
 
 namespace mlir {
 namespace mhlo {
@@ -239,7 +239,8 @@ void setInsertionPointToEarliestPointWithAllValuesAvailable(
   for (Value v : values) {
     Operation *def = v.getDefiningOp();
     if (def && def->getBlock() == block) {
-      if (!lastDef || lastDef->isBeforeInBlock(def)) lastDef = def;
+      if (!lastDef || lastDef->isBeforeInBlock(def))
+        lastDef = def;
     }
   }
   if (lastDef) {
@@ -249,11 +250,11 @@ void setInsertionPointToEarliestPointWithAllValuesAvailable(
   }
 }
 
-DenseMap<BroadcastIntent, Value> realizeBroadcastIntents(
-    SmallVector<BroadcastIntent> &sortedBcastIntents,
-    DenseMap<BroadcastIntent, SmallVector<BroadcastIntent>>
-        &bcastIntentDependencies,
-    Block *parentBlock, PatternRewriter &rewriter) {
+DenseMap<BroadcastIntent, Value>
+realizeBroadcastIntents(SmallVector<BroadcastIntent> &sortedBcastIntents,
+                        DenseMap<BroadcastIntent, SmallVector<BroadcastIntent>>
+                            &bcastIntentDependencies,
+                        Block *parentBlock, PatternRewriter &rewriter) {
   // Realize broadcast intents in order. They must be sorted so that their
   // dependencies are realized before them.
   DenseMap<BroadcastIntent, Value> realizations;
@@ -327,7 +328,8 @@ void transitivelyEraseUnusedSideEffectFreeOps(Operation *root,
     Operation *op = worklist.pop_back_val();
 
     // Erase ops only once.
-    if (opsToEraseSet.count(op)) continue;
+    if (opsToEraseSet.count(op))
+      continue;
 
     // Erase only operations that are unused and free of side effects.
     if (!isMemoryEffectFree(op) ||
@@ -341,12 +343,14 @@ void transitivelyEraseUnusedSideEffectFreeOps(Operation *root,
     opsToEraseSet.insert(op);
     opsToErase.push_back(op);
     for (Value operand : op->getOperands()) {
-      if (Operation *def = operand.getDefiningOp()) worklist.push_back(def);
+      if (Operation *def = operand.getDefiningOp())
+        worklist.push_back(def);
     }
   }
 
   // Finally, erase the ops in the order of their uses.
-  for (Operation *op : opsToErase) rewriter.eraseOp(op);
+  for (Operation *op : opsToErase)
+    rewriter.eraseOp(op);
 }
 
 LogicalResult propagateBroadcast(DynamicBroadcastInDimOp root,
@@ -396,7 +400,8 @@ LogicalResult propagateBroadcast(DynamicBroadcastInDimOp root,
   // longer accessible).
   SmallVector<Operation *> possiblyUnused;
   for (auto operand : root->getOperands()) {
-    if (Operation *def = operand.getDefiningOp()) possiblyUnused.push_back(def);
+    if (Operation *def = operand.getDefiningOp())
+      possiblyUnused.push_back(def);
   }
 
   // Replace the root operation with its broadcast intent's realization.
@@ -446,11 +451,11 @@ struct BroadcastPropagationPass
   }
 };
 
-}  // namespace
+} // namespace
 
 std::unique_ptr<OperationPass<func::FuncOp>> createBroadcastPropagationPass() {
   return std::make_unique<BroadcastPropagationPass>();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

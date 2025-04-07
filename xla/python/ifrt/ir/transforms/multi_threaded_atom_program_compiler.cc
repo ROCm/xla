@@ -217,13 +217,12 @@ absl::StatusOr<CompileFuture> MultiThreadedAtomProgramCompiler::CompileXla(
       mlir::OwningOpRef<mlir::ModuleOp>(module_op.clone()));
   Promise<AtomProgramCompileResult> promise = CompileFuture::CreatePromise();
   CompileFuture future(promise);
-  ScheduleWork(
-      thread_pool, [this, hlo_program = std::move(hlo_program),
-                    compile_options = std::move(compile_options),
-                    promise = std::move(promise)]() mutable {
-        promise.Set(compiler_->CompileXla(std::move(hlo_program),
-                                          std::move(compile_options)));
-      });
+  ScheduleWork(thread_pool, [this, hlo_program = std::move(hlo_program),
+                             compile_options = std::move(compile_options),
+                             promise = std::move(promise)]() mutable {
+    promise.Set(compiler_->CompileXla(std::move(hlo_program),
+                                      std::move(compile_options)));
+  });
   return future;
 }
 

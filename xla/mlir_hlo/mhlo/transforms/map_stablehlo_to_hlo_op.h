@@ -34,14 +34,14 @@ struct StablehloToHloOpImpl;
 template <typename StablehloOpTy>
 using StablehloToHloOp = typename StablehloToHloOpImpl<StablehloOpTy>::Type;
 
-#define MAP_STABLEHLO_TO_HLO(OpName)               \
-  template <>                                      \
-  struct HloToStablehloOpImpl<mhlo::OpName> {      \
-    using Type = stablehlo::OpName;                \
-  };                                               \
-  template <>                                      \
-  struct StablehloToHloOpImpl<stablehlo::OpName> { \
-    using Type = mhlo::OpName;                     \
+#define MAP_STABLEHLO_TO_HLO(OpName)                                           \
+  template <>                                                                  \
+  struct HloToStablehloOpImpl<mhlo::OpName> {                                  \
+    using Type = stablehlo::OpName;                                            \
+  };                                                                           \
+  template <>                                                                  \
+  struct StablehloToHloOpImpl<stablehlo::OpName> {                             \
+    using Type = mhlo::OpName;                                                 \
   };
 
 MAP_STABLEHLO_TO_HLO(AbsOp)
@@ -162,7 +162,7 @@ MAP_STABLEHLO_TO_HLO(XorOp)
 
 #undef MAP_STABLEHLO_TO_HLO
 
-}  // namespace stablehlo
-}  // namespace mlir
+} // namespace stablehlo
+} // namespace mlir
 
-#endif  // MLIR_HLO_MHLO_TRANSFORMS_MAP_STABLEHLO_TO_HLO_OP_H
+#endif // MLIR_HLO_MHLO_TRANSFORMS_MAP_STABLEHLO_TO_HLO_OP_H

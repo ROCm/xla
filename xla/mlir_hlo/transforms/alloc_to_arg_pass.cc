@@ -35,14 +35,14 @@ using ::mlir::func::FuncOp;
 namespace {
 
 class AllocToArgPass : public impl::AllocToArgPassBase<AllocToArgPass> {
- public:
+public:
   using AllocToArgPassBase<AllocToArgPass>::AllocToArgPassBase;
 
- private:
+private:
   void runOnOperation() override;
 };
 
-}  // namespace
+} // namespace
 
 void AllocToArgPass::runOnOperation() {
   // Find unique block and return op.
@@ -108,4 +108,4 @@ std::unique_ptr<OperationPass<func::FuncOp>> hlo::createAllocToArgPass() {
   return std::make_unique<AllocToArgPass>();
 }
 
-}  // namespace mlir
+} // namespace mlir

@@ -92,5 +92,4 @@ absl::StatusOr<absl::Span<const uint8_t>> CompileGpuAsmOrGetCached(
   return absl::MakeSpan(compiled);
 }
 
-
 }  // namespace stream_executor

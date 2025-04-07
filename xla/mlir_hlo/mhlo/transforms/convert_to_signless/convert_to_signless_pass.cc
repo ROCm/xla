@@ -19,8 +19,6 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
 #include "mhlo/transforms/passes.h"
 #include "mhlo/utils/type_conversion.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -36,6 +34,8 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
 namespace mhlo {
@@ -48,23 +48,23 @@ namespace {
 // Generic pattern that rewrites any op by rewriting its operands and result
 // types. Regions are also rewritten.
 class ConvertToSignless : public ConversionPattern {
- public:
-  ConvertToSignless(TypeConverter& typeConverter, MLIRContext* context)
+public:
+  ConvertToSignless(TypeConverter &typeConverter, MLIRContext *context)
       : ConversionPattern(typeConverter, MatchAnyOpTypeTag{}, 0, context) {}
 
-  LogicalResult matchAndRewrite(
-      Operation* op, ArrayRef<Value> operands,
-      ConversionPatternRewriter& rewriter) const final {
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const final {
     SmallVector<Type> resultTypes;
     if (failed(typeConverter->convertTypes(op->getResultTypes(), resultTypes)))
       return failure();
 
-    auto* newOp = Operation::create(
+    auto *newOp = Operation::create(
         op->getLoc(), op->getName(), resultTypes, operands, op->getAttrs(),
         op->getPropertiesStorage(), op->getSuccessors(), op->getNumRegions());
     for (auto regions : llvm::zip(op->getRegions(), newOp->getRegions())) {
-      Region& before = std::get<0>(regions);
-      Region& parent = std::get<1>(regions);
+      Region &before = std::get<0>(regions);
+      Region &parent = std::get<1>(regions);
       rewriter.inlineRegionBefore(before, parent, parent.end());
       if (failed(rewriter.convertRegionTypes(&parent, *typeConverter)))
         return failure();
@@ -79,23 +79,24 @@ class ConvertToSignless : public ConversionPattern {
 // arith.constant
 class ConvertConstantToSignless
     : public OpConversionPattern<arith::ConstantOp> {
- public:
-  ConvertConstantToSignless(TypeConverter& typeConverter, MLIRContext* context)
+public:
+  ConvertConstantToSignless(TypeConverter &typeConverter, MLIRContext *context)
       : OpConversionPattern<arith::ConstantOp>(typeConverter, context) {}
 
-  LogicalResult matchAndRewrite(
-      arith::ConstantOp constantOp, arith::ConstantOpAdaptor adaptor,
-      ConversionPatternRewriter& rewriter) const override {
+  LogicalResult
+  matchAndRewrite(arith::ConstantOp constantOp,
+                  arith::ConstantOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     // We only care about unsigned integers
-    if (!mlir::isa<DenseIntElementsAttr>(adaptor.getValue())) return failure();
+    if (!mlir::isa<DenseIntElementsAttr>(adaptor.getValue()))
+      return failure();
 
     auto values =
         llvm::to_vector(mlir::cast<DenseIntElementsAttr>(adaptor.getValue())
                             .getValues<APInt>());
     Type type = typeConverter->convertType(constantOp.getType());
     auto shapedType = mlir::dyn_cast<ShapedType>(type);
-    auto newValues = DenseIntElementsAttr::get(
-        shapedType, values);
+    auto newValues = DenseIntElementsAttr::get(shapedType, values);
 
     rewriter.replaceOpWithNewOp<arith::ConstantOp>(constantOp, newValues);
     return success();
@@ -104,9 +105,9 @@ class ConvertConstantToSignless
 
 struct ConvertToSignlessPass
     : public impl::ConvertToSignlessPassBase<ConvertToSignlessPass> {
- public:
+public:
   void runOnOperation() override {
-    auto& context = getContext();
+    auto &context = getContext();
     ConversionTarget target(context);
 
     mhlo::RemoveSignTypeConverter converter;
@@ -136,11 +137,11 @@ struct ConvertToSignlessPass
   }
 };
 
-}  // namespace
+} // namespace
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertToSignlessPass() {
   return std::make_unique<ConvertToSignlessPass>();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

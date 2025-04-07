@@ -163,7 +163,9 @@ class UnstackerTransformer {
       }
       PatternInfo& pattern_info = stacked_user.value();
       pattern_type_ = pattern_info.type;
-      VLOG(3) << "PatternInfo:" << "\n" << pattern_info.ToString();
+      VLOG(3) << "PatternInfo:"
+              << "\n"
+              << pattern_info.ToString();
 
       if (pattern_info.unstacking_computation != nullptr &&
           unstacking_computation_ != nullptr) {

@@ -15,16 +15,16 @@ limitations under the License.
 
 #include "mhlo/IR/mhlo_bytecode.h"
 
-#include "llvm/ADT/APFloat.h"
-#include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/Compiler.h"
-#include "llvm/Support/Debug.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mlir/Bytecode/BytecodeImplementation.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "stablehlo/dialect/Base.h"
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/Support/Debug.h"
 
 //===----------------------------------------------------------------------===//
 // Debug Trace Helpers
@@ -36,21 +36,21 @@ limitations under the License.
 // Extract after function name, remove namespace.
 //   Called: write(mlir::mhlo::TokenType, mlir::DialectBytecodeWriter ...
 //   ***Not Implemened: write(...
-#define _EXTRACT_AFTER(a, b) \
+#define _EXTRACT_AFTER(a, b)                                                   \
   llvm::StringRef(a).substr(llvm::StringRef(a).find(b))
 
 #define _LOG_CALL_TO(func)                                                     \
-  DEBUG_WITH_TYPE(                                                             \
-      "mhlo-bytecode",                                                         \
-      llvm::errs() << "Called: " << _EXTRACT_AFTER(LLVM_PRETTY_FUNCTION, func) \
-                   << '\n')
+  DEBUG_WITH_TYPE("mhlo-bytecode",                                             \
+                  llvm::errs()                                                 \
+                      << "Called: "                                            \
+                      << _EXTRACT_AFTER(LLVM_PRETTY_FUNCTION, func) << '\n')
 
 #define LOG_WRITE_CALL _LOG_CALL_TO("write")
 #define LOG_READ_CALL _LOG_CALL_TO(__func__)
-#define LOG_NOT_IMPLEMENTED \
-  DEBUG_WITH_TYPE(          \
-      "mhlo-bytecode",      \
-      llvm::errs() << "***Not Implemented: " << LLVM_PRETTY_FUNCTION << '\n')
+#define LOG_NOT_IMPLEMENTED                                                    \
+  DEBUG_WITH_TYPE("mhlo-bytecode", llvm::errs()                                \
+                                       << "***Not Implemented: "               \
+                                       << LLVM_PRETTY_FUNCTION << '\n')
 
 //===----------------------------------------------------------------------===//
 // Encoding
@@ -210,8 +210,8 @@ enum TypeCode {
   kAsyncBundleType = 1,
 };
 
-}  // namespace mhlo_encoding
-}  // namespace
+} // namespace mhlo_encoding
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // MhloBytecodeInterface
@@ -223,7 +223,7 @@ namespace mhlo {
 namespace {
 /// This class implements the bytecode interface for the StableHLO dialect.
 class MhloBytecodeInterface : public BytecodeDialectInterface {
- public:
+public:
   explicit MhloBytecodeInterface(Dialect *dialect)
       : BytecodeDialectInterface(dialect) {}
 
@@ -238,38 +238,38 @@ class MhloBytecodeInterface : public BytecodeDialectInterface {
 
   // TO ADD ATTRIBUTE: Include a read method for each attribute in StableHLO
   // Ex: SomeAttr readSomeAttr(DialectBytecodeReader &reader) const;
-  ArgResultAliasAttr readArgResultAliasAttr(
-      DialectBytecodeReader &reader) const;
+  ArgResultAliasAttr
+  readArgResultAliasAttr(DialectBytecodeReader &reader) const;
   ChannelHandleAttr readChannelHandleAttr(DialectBytecodeReader &reader) const;
-  ComparisonDirectionAttr readComparisonDirectionAttr(
-      DialectBytecodeReader &reader) const;
-  ComparisonTypeAttr readComparisonTypeAttr(
-      DialectBytecodeReader &reader) const;
-  ConvDimensionNumbersAttr readConvDimensionNumbersAttr(
-      DialectBytecodeReader &reader) const;
+  ComparisonDirectionAttr
+  readComparisonDirectionAttr(DialectBytecodeReader &reader) const;
+  ComparisonTypeAttr
+  readComparisonTypeAttr(DialectBytecodeReader &reader) const;
+  ConvDimensionNumbersAttr
+  readConvDimensionNumbersAttr(DialectBytecodeReader &reader) const;
   DomainKindAttr readDomainKindAttr(DialectBytecodeReader &reader) const;
-  DotDimensionNumbersAttr readDotDimensionNumbersAttr(
-      DialectBytecodeReader &reader) const;
+  DotDimensionNumbersAttr
+  readDotDimensionNumbersAttr(DialectBytecodeReader &reader) const;
   FftTypeAttr readFftTypeAttr(DialectBytecodeReader &reader) const;
   FusionKindAttr readFusionKindAttr(DialectBytecodeReader &reader) const;
-  GatherDimensionNumbersAttr readGatherDimensionNumbersAttr(
-      DialectBytecodeReader &reader) const;
+  GatherDimensionNumbersAttr
+  readGatherDimensionNumbersAttr(DialectBytecodeReader &reader) const;
 
-  OutputOperandAliasAttr readOutputOperandAliasAttr(
-      DialectBytecodeReader &reader) const;
+  OutputOperandAliasAttr
+  readOutputOperandAliasAttr(DialectBytecodeReader &reader) const;
   PrecisionAttr readPrecisionAttr(DialectBytecodeReader &reader) const;
-  ResultAccuracyAttr readResultAccuracyAttr(
-      DialectBytecodeReader &reader) const;
-  ResultAccuracyModeAttr readResultAccuracyModeAttr(
-      DialectBytecodeReader &reader) const;
+  ResultAccuracyAttr
+  readResultAccuracyAttr(DialectBytecodeReader &reader) const;
+  ResultAccuracyModeAttr
+  readResultAccuracyModeAttr(DialectBytecodeReader &reader) const;
   RngAlgorithmAttr readRngAlgorithmAttr(DialectBytecodeReader &reader) const;
-  RngDistributionAttr readRngDistributionAttr(
-      DialectBytecodeReader &reader) const;
-  ScatterDimensionNumbersAttr readScatterDimensionNumbersAttr(
-      DialectBytecodeReader &reader) const;
+  RngDistributionAttr
+  readRngDistributionAttr(DialectBytecodeReader &reader) const;
+  ScatterDimensionNumbersAttr
+  readScatterDimensionNumbersAttr(DialectBytecodeReader &reader) const;
   TransposeAttr readTransposeAttr(DialectBytecodeReader &reader) const;
-  TypeExtensionsAttr readTypeExtensionsAttr(
-      DialectBytecodeReader &reader) const;
+  TypeExtensionsAttr
+  readTypeExtensionsAttr(DialectBytecodeReader &reader) const;
 
   // TO ADD ATTRIBUTE: Include a write method for each attribute in StableHLO
   // Ex: void write(SomeAttr attr, DialectBytecodeWriter &writer) const;
@@ -323,53 +323,54 @@ class MhloBytecodeInterface : public BytecodeDialectInterface {
 // Attributes: Reader
 
 // TO ADD ATTRIBUTE: Update the switch to include a branch for the attr.
-Attribute MhloBytecodeInterface::readAttribute(
-    DialectBytecodeReader &reader) const {
+Attribute
+MhloBytecodeInterface::readAttribute(DialectBytecodeReader &reader) const {
   uint64_t code;
-  if (failed(reader.readVarInt(code))) return Attribute();
+  if (failed(reader.readVarInt(code)))
+    return Attribute();
   switch (code) {
-    case mhlo_encoding::kArgResultAliasAttr:
-      return readArgResultAliasAttr(reader);
-    case mhlo_encoding::kChannelHandleAttr:
-      return readChannelHandleAttr(reader);
-    case mhlo_encoding::kComparisonDirectionAttr:
-      return readComparisonDirectionAttr(reader);
-    case mhlo_encoding::kComparisonTypeAttr:
-      return readComparisonTypeAttr(reader);
-    case mhlo_encoding::kConvDimensionNumbersAttr:
-      return readConvDimensionNumbersAttr(reader);
-    case mhlo_encoding::kDomainKindAttr:
-      return readDomainKindAttr(reader);
-    case mhlo_encoding::kDotDimensionNumbers:
-      return readDotDimensionNumbersAttr(reader);
-    case mhlo_encoding::kFftTypeAttr:
-      return readFftTypeAttr(reader);
-    case mhlo_encoding::kFusionKindAttr:
-      return readFusionKindAttr(reader);
-    case mhlo_encoding::kGatherDimensionNumbers:
-      return readGatherDimensionNumbersAttr(reader);
-    case mhlo_encoding::kOutputOperandAlias:
-      return readOutputOperandAliasAttr(reader);
-    case mhlo_encoding::kPrecisionAttr:
-      return readPrecisionAttr(reader);
-    case mhlo_encoding::kResultAccuracyAttr:
-      return readResultAccuracyAttr(reader);
-    case mhlo_encoding::kResultAccuracyModeAttr:
-      return readResultAccuracyModeAttr(reader);
-    case mhlo_encoding::kRngAlgorithmAttr:
-      return readRngAlgorithmAttr(reader);
-    case mhlo_encoding::kRngDistributionAttr:
-      return readRngDistributionAttr(reader);
-    case mhlo_encoding::kScatterDimensionNumbersAttr:
-      return readScatterDimensionNumbersAttr(reader);
-    case mhlo_encoding::kTransposeAttr:
-      return readTransposeAttr(reader);
-    case mhlo_encoding::kTypeExtensionsAttr:
-      return readTypeExtensionsAttr(reader);
+  case mhlo_encoding::kArgResultAliasAttr:
+    return readArgResultAliasAttr(reader);
+  case mhlo_encoding::kChannelHandleAttr:
+    return readChannelHandleAttr(reader);
+  case mhlo_encoding::kComparisonDirectionAttr:
+    return readComparisonDirectionAttr(reader);
+  case mhlo_encoding::kComparisonTypeAttr:
+    return readComparisonTypeAttr(reader);
+  case mhlo_encoding::kConvDimensionNumbersAttr:
+    return readConvDimensionNumbersAttr(reader);
+  case mhlo_encoding::kDomainKindAttr:
+    return readDomainKindAttr(reader);
+  case mhlo_encoding::kDotDimensionNumbers:
+    return readDotDimensionNumbersAttr(reader);
+  case mhlo_encoding::kFftTypeAttr:
+    return readFftTypeAttr(reader);
+  case mhlo_encoding::kFusionKindAttr:
+    return readFusionKindAttr(reader);
+  case mhlo_encoding::kGatherDimensionNumbers:
+    return readGatherDimensionNumbersAttr(reader);
+  case mhlo_encoding::kOutputOperandAlias:
+    return readOutputOperandAliasAttr(reader);
+  case mhlo_encoding::kPrecisionAttr:
+    return readPrecisionAttr(reader);
+  case mhlo_encoding::kResultAccuracyAttr:
+    return readResultAccuracyAttr(reader);
+  case mhlo_encoding::kResultAccuracyModeAttr:
+    return readResultAccuracyModeAttr(reader);
+  case mhlo_encoding::kRngAlgorithmAttr:
+    return readRngAlgorithmAttr(reader);
+  case mhlo_encoding::kRngDistributionAttr:
+    return readRngDistributionAttr(reader);
+  case mhlo_encoding::kScatterDimensionNumbersAttr:
+    return readScatterDimensionNumbersAttr(reader);
+  case mhlo_encoding::kTransposeAttr:
+    return readTransposeAttr(reader);
+  case mhlo_encoding::kTypeExtensionsAttr:
+    return readTypeExtensionsAttr(reader);
 
-    default:
-      reader.emitError() << "unknown mhlo attribute code: " << code;
-      return Attribute();
+  default:
+    reader.emitError() << "unknown mhlo attribute code: " << code;
+    return Attribute();
   }
 }
 
@@ -451,8 +452,8 @@ ConvDimensionNumbersAttr MhloBytecodeInterface::readConvDimensionNumbersAttr(
       outputBatchDimension, outputFeatureDimension, outputSpatialDimensions);
 }
 
-DomainKindAttr MhloBytecodeInterface::readDomainKindAttr(
-    DialectBytecodeReader &reader) const {
+DomainKindAttr
+MhloBytecodeInterface::readDomainKindAttr(DialectBytecodeReader &reader) const {
   LOG_READ_CALL;
   return hlo::bytecode::readEnumAttribute<DomainKindAttr>(
       reader, getContext(),
@@ -477,15 +478,15 @@ DotDimensionNumbersAttr MhloBytecodeInterface::readDotDimensionNumbersAttr(
       lhsContractingDimensions, rhsContractingDimensions);
 }
 
-FftTypeAttr MhloBytecodeInterface::readFftTypeAttr(
-    DialectBytecodeReader &reader) const {
+FftTypeAttr
+MhloBytecodeInterface::readFftTypeAttr(DialectBytecodeReader &reader) const {
   LOG_READ_CALL;
   return hlo::bytecode::readEnumAttribute<FftTypeAttr>(
       reader, getContext(), [](uint32_t val) { return symbolizeFftType(val); });
 }
 
-FusionKindAttr MhloBytecodeInterface::readFusionKindAttr(
-    DialectBytecodeReader &reader) const {
+FusionKindAttr
+MhloBytecodeInterface::readFusionKindAttr(DialectBytecodeReader &reader) const {
   LOG_READ_CALL;
   return hlo::bytecode::readEnumAttribute<FusionKindAttr>(
       reader, getContext(),
@@ -530,8 +531,8 @@ OutputOperandAliasAttr MhloBytecodeInterface::readOutputOperandAliasAttr(
                                      operandIndex, operandTupleIndices);
 }
 
-PrecisionAttr MhloBytecodeInterface::readPrecisionAttr(
-    DialectBytecodeReader &reader) const {
+PrecisionAttr
+MhloBytecodeInterface::readPrecisionAttr(DialectBytecodeReader &reader) const {
   LOG_READ_CALL;
   return hlo::bytecode::readEnumAttribute<PrecisionAttr>(
       reader, getContext(),
@@ -576,8 +577,8 @@ MhloBytecodeInterface::readScatterDimensionNumbersAttr(
       scatterIndicesBatchingDims, scatterDimsToOperandDims, indexVectorDim);
 }
 
-TransposeAttr MhloBytecodeInterface::readTransposeAttr(
-    DialectBytecodeReader &reader) const {
+TransposeAttr
+MhloBytecodeInterface::readTransposeAttr(DialectBytecodeReader &reader) const {
   LOG_READ_CALL;
   return hlo::bytecode::readEnumAttribute<TransposeAttr>(
       reader, getContext(),
@@ -600,8 +601,9 @@ TypeExtensionsAttr MhloBytecodeInterface::readTypeExtensionsAttr(
 // TO ADD ATTRIBUTE: Update the case selection to include the new attr.
 // If this method returns failure, the string serialization is used in the
 // bytecode.
-LogicalResult MhloBytecodeInterface::writeAttribute(
-    Attribute attr, DialectBytecodeWriter &writer) const {
+LogicalResult
+MhloBytecodeInterface::writeAttribute(Attribute attr,
+                                      DialectBytecodeWriter &writer) const {
   return TypeSwitch<Attribute, LogicalResult>(attr)
       .Case<ArgResultAliasAttr, ComparisonDirectionAttr, ComparisonTypeAttr,
             ConvDimensionNumbersAttr, ChannelHandleAttr, DomainKindAttr,
@@ -770,17 +772,18 @@ void MhloBytecodeInterface::write(TypeExtensionsAttr attr,
 // TO ADD TYPE: Update the case selection to include the new type.
 Type MhloBytecodeInterface::readType(DialectBytecodeReader &reader) const {
   uint64_t code;
-  if (failed(reader.readVarInt(code))) return Type();
+  if (failed(reader.readVarInt(code)))
+    return Type();
 
   switch (code) {
-    case mhlo_encoding::kAsyncBundleType:
-      return readAsyncBundleType(reader);
-    case mhlo_encoding::kTokenType:
-      return readTokenType(reader);
+  case mhlo_encoding::kAsyncBundleType:
+    return readAsyncBundleType(reader);
+  case mhlo_encoding::kTokenType:
+    return readTokenType(reader);
 
-    default:
-      reader.emitError() << "unknown builtin type code: " << code;
-      return Type();
+  default:
+    reader.emitError() << "unknown builtin type code: " << code;
+    return Type();
   }
 }
 
@@ -806,8 +809,9 @@ TokenType MhloBytecodeInterface::readTokenType(DialectBytecodeReader &) const {
 // Types: Writer
 
 // TO ADD TYPE: Update the case selection to include the new type.
-LogicalResult MhloBytecodeInterface::writeType(
-    Type type, DialectBytecodeWriter &writer) const {
+LogicalResult
+MhloBytecodeInterface::writeType(Type type,
+                                 DialectBytecodeWriter &writer) const {
   return TypeSwitch<Type, LogicalResult>(type)
       .Case<AsyncBundleType, TokenType>([&](auto type) {
         LOG_WRITE_CALL;
@@ -864,10 +868,10 @@ ResultAccuracyAttr MhloBytecodeInterface::readResultAccuracyAttr(
   return ResultAccuracyAttr::get(getContext(), *atol, *rtol, ulps, mode);
 }
 
-}  // namespace
+} // namespace
 
 void addBytecodeInterface(MhloDialect *dialect) {
   dialect->addInterfaces<MhloBytecodeInterface>();
 }
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

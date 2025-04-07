@@ -38,11 +38,12 @@ namespace {
 // index_cast is not defined on tensors, so lower it to a tensor.generate.
 template <typename T>
 struct IndexCastConverter : public OpRewritePattern<T> {
- public:
+public:
   using OpRewritePattern<T>::OpRewritePattern;
   LogicalResult matchAndRewrite(T op, PatternRewriter &rewriter) const final {
     auto resultTy = mlir::dyn_cast<RankedTensorType>(op.getType());
-    if (!resultTy) return failure();
+    if (!resultTy)
+      return failure();
 
     SmallVector<Value> dynamicExtents =
         tensor::createDynamicDimValues(rewriter, op.getLoc(), op.getIn());
@@ -69,10 +70,10 @@ struct LowerIndexCastPass
   }
 };
 
-}  // namespace
+} // namespace
 
 std::unique_ptr<OperationPass<func::FuncOp>> createLowerIndexCastPass() {
   return std::make_unique<LowerIndexCastPass>();
 }
 
-}  // namespace mlir
+} // namespace mlir

@@ -111,7 +111,7 @@ class ThunkSequenceSerdesTest : public ::testing::Test {
       // back into this vector. If we don't reserve enough space, reallocation
       // will get triggered which will invalidate the pointers to the
       // allocations owned by the thunks.
-      : buffer_allocations_(10000) {};
+      : buffer_allocations_(10000){};
 
   absl::StatusOr<ThunkSequence> CreateThunkSequenceFromAllThunkTypes() {
     // NOTE create buffer allocations using thunk_testlib

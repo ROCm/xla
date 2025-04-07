@@ -32,19 +32,18 @@ namespace gpu {
 
 class CublasLtMatmulThunk : public Thunk {
  public:
-  CublasLtMatmulThunk(
-      const HloInstruction *instr, GemmConfig gemm_config,
-      se::gpu::BlasLt::Epilogue epilogue, int64_t algorithm_idx,
-      BufferAllocation::Slice a, BufferAllocation::Slice b,
-      BufferAllocation::Slice c, BufferAllocation::Slice d,
-      BufferAllocation::Slice bias /* may be null */,
-      BufferAllocation::Slice aux /* may be null */,
-      BufferAllocation::Slice a_scale /* may be null */,
-      BufferAllocation::Slice b_scale /* may be null */,
-      BufferAllocation::Slice c_scale /* may be null */,
-      BufferAllocation::Slice d_scale /* may be null */,
-      BufferAllocation::Slice d_amax /* may be null */,
-      std::optional<const BufferAllocation::Slice> workspace);
+  CublasLtMatmulThunk(const HloInstruction* instr, GemmConfig gemm_config,
+                      se::gpu::BlasLt::Epilogue epilogue, int64_t algorithm_idx,
+                      BufferAllocation::Slice a, BufferAllocation::Slice b,
+                      BufferAllocation::Slice c, BufferAllocation::Slice d,
+                      BufferAllocation::Slice bias /* may be null */,
+                      BufferAllocation::Slice aux /* may be null */,
+                      BufferAllocation::Slice a_scale /* may be null */,
+                      BufferAllocation::Slice b_scale /* may be null */,
+                      BufferAllocation::Slice c_scale /* may be null */,
+                      BufferAllocation::Slice d_scale /* may be null */,
+                      BufferAllocation::Slice d_amax /* may be null */,
+                      std::optional<const BufferAllocation::Slice> workspace);
 
   std::string ToString(int indent) const override;
   absl::Status ExecuteOnStream(const ExecuteParams& params) override {
@@ -61,10 +60,10 @@ class CublasLtMatmulThunk : public Thunk {
  protected:
   CublasLtMatmulThunk(const CublasLtMatmulThunk& rhs);
 
-  absl::Status ExecuteOnStreamInternal(se::Stream *stream, 
-                                      const ExecuteParams& params);
-  absl::StatusOr<se::gpu::BlasLt::MatmulPlan *> GetCachedMatmulPlan(
-                const ExecuteParams& params);
+  absl::Status ExecuteOnStreamInternal(se::Stream* stream,
+                                       const ExecuteParams& params);
+  absl::StatusOr<se::gpu::BlasLt::MatmulPlan*> GetCachedMatmulPlan(
+      const ExecuteParams& params);
 
  protected:
   GemmConfig gemm_config_;

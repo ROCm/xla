@@ -123,8 +123,9 @@ class HloTestBase
   // HloRunnerInterface implementations, thus we expose it here.
   [[nodiscard]] [[deprecated(
       "This is a temporary method to help migrate existing tests away from "
-      "directly depending on HloRunner. Please do not introduce new uses.")]]
-  absl::StatusOr<std::vector<Literal>> ExecuteReplicatedWithHloRunner(
+      "directly depending on HloRunner. Please do not introduce new "
+      "uses.")]] absl::StatusOr<std::vector<Literal>>
+  ExecuteReplicatedWithHloRunner(
       OpaqueExecutable* executable,
       const HloRunnerInterface::ReplicatedExecuteOptions& options,
       DeviceAssignment* device_assignment,
@@ -145,8 +146,9 @@ class HloTestBase
   // HloRunnerInterface implementations, thus we expose it here.
   [[deprecated(
       "This is a temporary method to help migrate existing tests away from "
-      "directly depending on HloRunner. Please do not introduce new uses.")]]
-  const Backend& backend() const {
+      "directly depending on HloRunner. Please do not introduce new "
+      "uses.")]] const Backend&
+  backend() const {
     return test_runner_as_hlo_runner().backend();
   }
   // Returns the backend owned by the test runner.
@@ -155,8 +157,9 @@ class HloTestBase
   // HloRunnerInterface implementations, thus we expose it here.
   [[deprecated(
       "This is a temporary method to help migrate existing tests away from "
-      "directly depending on HloRunner. Please do not introduce new uses.")]]
-  Backend& backend() {
+      "directly depending on HloRunner. Please do not introduce new "
+      "uses.")]] Backend&
+  backend() {
     return test_runner_as_hlo_runner().backend();
   }
 
@@ -165,8 +168,9 @@ class HloTestBase
   // HloRunnerInterface implementations, thus we expose it here.
   [[deprecated(
       "This is a temporary method to help migrate existing tests away from "
-      "directly depending on HloRunner. Please do not introduce new uses.")]]
-  const HloRunner& test_runner_as_hlo_runner() const {
+      "directly depending on HloRunner. Please do not introduce new "
+      "uses.")]] const HloRunner&
+  test_runner_as_hlo_runner() const {
     return *static_cast<HloRunner*>(&test_runner());
   }
   // DO NOT USE: This is a temporary method to help migrate away from HloRunner.
@@ -174,15 +178,17 @@ class HloTestBase
   // HloRunnerInterface implementations, thus we expose it here.
   [[deprecated(
       "This is a temporary method to help migrate existing tests away from "
-      "directly depending on HloRunner. Please do not introduce new uses.")]]
-  HloRunner& test_runner_as_hlo_runner() {
+      "directly depending on HloRunner. Please do not introduce new "
+      "uses.")]] HloRunner&
+  test_runner_as_hlo_runner() {
     return *static_cast<HloRunner*>(&test_runner());
   }
 
   [[deprecated(
       "This is a temporary method to help migrate existing tests away from "
-      "directly depending on HloRunner. Please do not introduce new uses.")]]
-  int64_t num_devices() {
+      "directly depending on HloRunner. Please do not introduce new "
+      "uses.")]] int64_t
+  num_devices() {
     return backend().device_count();
   }
 

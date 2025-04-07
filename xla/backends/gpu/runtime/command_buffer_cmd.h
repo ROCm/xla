@@ -774,10 +774,9 @@ class GemmCmd : public TracedCommandBufferCmd {
 // CublasLtCmd
 //===----------------------------------------------------------------------===//
 
-class CublasLtCmd : public TracedCommandBufferCmd,
-                    public CublasLtMatmulThunk {
+class CublasLtCmd : public TracedCommandBufferCmd, public CublasLtMatmulThunk {
  public:
-  CublasLtCmd(ExecutionStreamId execution_stream_id, 
+  CublasLtCmd(ExecutionStreamId execution_stream_id,
               const CublasLtMatmulThunk& matmul_thunk);
 
   absl::Status Initialize(const Thunk::InitializeParams& params,

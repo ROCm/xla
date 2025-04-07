@@ -24,19 +24,19 @@ extern "C" {
 // Creates a new ScatterDimensionNumbers attribute with the given parameters.
 // The first three pairs of arguments are interpreted as arrays.
 MLIR_CAPI_EXPORTED MlirAttribute mlirMhloScatterDimensionNumbersGet(
-    MlirContext ctx,                                                  //
-    intptr_t nUpdateWindowDims, const int64_t *updateWindowDims,      //
-    intptr_t nInsertedWindowDims, const int64_t *insertedWindowDims,  //
-    intptr_t nInputBatchingDims, const int64_t *inputBatchingDims,    //
-    intptr_t nScatterIndicesBatchingDims,                             //
-    const int64_t *scatterIndicesBatchingDims,                        //
-    intptr_t nScatteredDimsToOperandDims,                             //
-    const int64_t *scatteredDimsToOperandDims,                        //
+    MlirContext ctx,                                                 //
+    intptr_t nUpdateWindowDims, const int64_t *updateWindowDims,     //
+    intptr_t nInsertedWindowDims, const int64_t *insertedWindowDims, //
+    intptr_t nInputBatchingDims, const int64_t *inputBatchingDims,   //
+    intptr_t nScatterIndicesBatchingDims,                            //
+    const int64_t *scatterIndicesBatchingDims,                       //
+    intptr_t nScatteredDimsToOperandDims,                            //
+    const int64_t *scatteredDimsToOperandDims,                       //
     int64_t indexVectorDim);
 
 // Returns true if the given attribute is a ScatterDimenionNumbers attribute.
-MLIR_CAPI_EXPORTED bool mlirMhloAttributeIsAScatterDimensionNumbers(
-    MlirAttribute attr);
+MLIR_CAPI_EXPORTED bool
+mlirMhloAttributeIsAScatterDimensionNumbers(MlirAttribute attr);
 
 // Returns the properties of ScatterDimensionNumbers attributes.
 MLIR_CAPI_EXPORTED intptr_t
@@ -72,18 +72,18 @@ mlirMhloDimensionNumbersGetIndexVectorDim(MlirAttribute attr);
 // Creates a new GatherDimensionNumbers attribute with the given parameters. The
 // first three pairs of arguments are interpreted as arrays.
 MLIR_CAPI_EXPORTED MlirAttribute mlirMhloGatherDimensionNumbersGet(
-    MlirContext ctx,                                                    //
-    intptr_t nOffsetDims, const int64_t *offsetDims,                    //
-    intptr_t nCollapsedSliceDims, const int64_t *collapsedSliceDims,    //
-    intptr_t nOperandBatchingDims, const int64_t *operandBatchingDims,  //
+    MlirContext ctx,                                                   //
+    intptr_t nOffsetDims, const int64_t *offsetDims,                   //
+    intptr_t nCollapsedSliceDims, const int64_t *collapsedSliceDims,   //
+    intptr_t nOperandBatchingDims, const int64_t *operandBatchingDims, //
     intptr_t nStartIndicesBatchingDims,
-    const int64_t *startIndicesBatchingDims,                //
-    intptr_t nStartIndexMap, const int64_t *startIndexMap,  //
+    const int64_t *startIndicesBatchingDims,               //
+    intptr_t nStartIndexMap, const int64_t *startIndexMap, //
     int64_t indexVectorDim);
 
 // Returns true if the given attribute is a GatherDimensionNumbers attribute.
-MLIR_CAPI_EXPORTED bool mlirMhloAttributeIsAGatherDimensionNumbers(
-    MlirAttribute attr);
+MLIR_CAPI_EXPORTED bool
+mlirMhloAttributeIsAGatherDimensionNumbers(MlirAttribute attr);
 
 // Returns the properties of GatherDimensionNumbers attributes.
 MLIR_CAPI_EXPORTED intptr_t
@@ -118,17 +118,17 @@ mlirMhloGatherDimensionNumbersGetIndexVectorDim(MlirAttribute attr);
 // number of elements and the trailing argument being the pointer to the first
 // element of the array.
 MLIR_CAPI_EXPORTED MlirAttribute mlirMhloDotDimensionNumbersGet(
-    MlirContext ctx,                                                        //
-    intptr_t nLhsBatchingDimensions, const int64_t *lhsBatchingDimensions,  //
-    intptr_t nRhsBatchingDimensions, const int64_t *rhsBatchingDimensions,  //
-    intptr_t nLhsContractingDimensions,                                     //
-    const int64_t *lhsContractingDimensions,                                //
-    intptr_t nRhsContractingDimensions,                                     //
+    MlirContext ctx,                                                       //
+    intptr_t nLhsBatchingDimensions, const int64_t *lhsBatchingDimensions, //
+    intptr_t nRhsBatchingDimensions, const int64_t *rhsBatchingDimensions, //
+    intptr_t nLhsContractingDimensions,                                    //
+    const int64_t *lhsContractingDimensions,                               //
+    intptr_t nRhsContractingDimensions,                                    //
     const int64_t *rhsContractingDimensions);
 
 // Returns true of the given attribute is a DotDimensionNumbers attribute.
-MLIR_CAPI_EXPORTED bool mlirMhloAttributeIsADotDimensionNumbers(
-    MlirAttribute attr);
+MLIR_CAPI_EXPORTED bool
+mlirMhloAttributeIsADotDimensionNumbers(MlirAttribute attr);
 
 // Returns the properties of DotDimensionNumbers attributes.
 MLIR_CAPI_EXPORTED intptr_t
@@ -164,8 +164,8 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirMhloConvDimensionNumbersGet(
     intptr_t nOutputSpatialDimensions, const int64_t *outputSpatialDimensions);
 
 // Returns true of the given attribute is a ConvDimensionNumbers attribute.
-MLIR_CAPI_EXPORTED bool mlirMhloAttributeIsAConvDimensionNumbers(
-    MlirAttribute attr);
+MLIR_CAPI_EXPORTED bool
+mlirMhloAttributeIsAConvDimensionNumbers(MlirAttribute attr);
 
 // Returns the properties of ConvDimensionNumbers attributes.
 MLIR_CAPI_EXPORTED int64_t
@@ -206,8 +206,8 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirMhloOutputOperandAliasGet(
     intptr_t nOperandTupleIndices, const int64_t *operandTupleIndices);
 
 // Returns true of the given attribute is a OutputOperandAlias attribute.
-MLIR_CAPI_EXPORTED bool mlirMhloAttributeIsAOutputOperandAlias(
-    MlirAttribute attr);
+MLIR_CAPI_EXPORTED bool
+mlirMhloAttributeIsAOutputOperandAlias(MlirAttribute attr);
 
 MLIR_CAPI_EXPORTED intptr_t
 mlirMhloOutputOperandAliasGetOutputTupleIndicesSize(MlirAttribute attr);
@@ -231,8 +231,8 @@ MLIR_CAPI_EXPORTED MlirAttribute
 mlirMhloComparisonDirectionAttrGet(MlirContext ctx, MlirStringRef value);
 
 // Returns true if the given attribute is a ComparisonDirection attribute.
-MLIR_CAPI_EXPORTED bool mlirMhloAttributeIsAComparisonDirectionAttr(
-    MlirAttribute attr);
+MLIR_CAPI_EXPORTED bool
+mlirMhloAttributeIsAComparisonDirectionAttr(MlirAttribute attr);
 
 // Returns the direction string associated with ComparisonDirection attribute.
 MLIR_CAPI_EXPORTED MlirStringRef
@@ -247,8 +247,8 @@ MLIR_CAPI_EXPORTED MlirAttribute
 mlirMhloComparisonTypeAttrGet(MlirContext ctx, MlirStringRef value);
 
 // Returns true if the given attribute is a ComparisonType attribute.
-MLIR_CAPI_EXPORTED bool mlirMhloAttributeIsAComparisonTypeAttr(
-    MlirAttribute attr);
+MLIR_CAPI_EXPORTED bool
+mlirMhloAttributeIsAComparisonTypeAttr(MlirAttribute attr);
 
 // Returns the type string associated with ComparisonType attribute.
 MLIR_CAPI_EXPORTED MlirStringRef
@@ -307,8 +307,8 @@ MLIR_CAPI_EXPORTED MlirAttribute
 mlirMhloDequantizeModeAttrGet(MlirContext ctx, MlirStringRef value);
 
 // Returns true if the given attribute is a DequantizeMode attribute.
-MLIR_CAPI_EXPORTED bool mlirMhloAttributeIsADequantizeModeAttr(
-    MlirAttribute attr);
+MLIR_CAPI_EXPORTED bool
+mlirMhloAttributeIsADequantizeModeAttr(MlirAttribute attr);
 
 // Returns the value string associated with DequantizeMode attribute.
 MLIR_CAPI_EXPORTED MlirStringRef
@@ -351,8 +351,8 @@ MLIR_CAPI_EXPORTED MlirAttribute
 mlirMhloRngDistributionAttrGet(MlirContext ctx, MlirStringRef value);
 
 // Returns true if the given attribute is a RngDistribution attribute.
-MLIR_CAPI_EXPORTED bool mlirMhloAttributeIsARngDistributionAttr(
-    MlirAttribute attr);
+MLIR_CAPI_EXPORTED bool
+mlirMhloAttributeIsARngDistributionAttr(MlirAttribute attr);
 
 // Returns the value string associated with RngDistribution attribute.
 MLIR_CAPI_EXPORTED MlirStringRef
@@ -367,8 +367,8 @@ MLIR_CAPI_EXPORTED MlirAttribute
 mlirMhloRngAlgorithmAttrGet(MlirContext ctx, MlirStringRef value);
 
 // Returns true if the given attribute is a RngAlgorithm attribute.
-MLIR_CAPI_EXPORTED bool mlirMhloAttributeIsARngAlgorithmAttr(
-    MlirAttribute attr);
+MLIR_CAPI_EXPORTED bool
+mlirMhloAttributeIsARngAlgorithmAttr(MlirAttribute attr);
 
 // Returns the value string associated with RngAlgorithm attribute.
 MLIR_CAPI_EXPORTED MlirStringRef
@@ -418,8 +418,8 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirMhloSparsityDescriptorGet(
     MlirContext ctx, int64_t dimension, int64_t n, int64_t m);
 
 // Returns true if the given attribute is a SparsityDescriptor attribute.
-MLIR_CAPI_EXPORTED bool mlirMhloAttributeIsASparsityDescriptor(
-    MlirAttribute attr);
+MLIR_CAPI_EXPORTED bool
+mlirMhloAttributeIsASparsityDescriptor(MlirAttribute attr);
 
 // Returns the dimension and N:M sparsity configurations.
 MLIR_CAPI_EXPORTED int64_t
@@ -431,4 +431,4 @@ MLIR_CAPI_EXPORTED int64_t mlirMhloSparsityDescriptorGetM(MlirAttribute attr);
 }
 #endif
 
-#endif  // MLIR_HLO_BINDINGS_C_ATTRIBUTES_H
+#endif // MLIR_HLO_BINDINGS_C_ATTRIBUTES_H

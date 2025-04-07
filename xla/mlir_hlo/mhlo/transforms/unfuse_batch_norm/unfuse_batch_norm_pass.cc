@@ -49,11 +49,11 @@ struct TestUnfuseBatchNormPass
   }
 };
 
-}  // namespace
+} // namespace
 
 std::unique_ptr<::mlir::Pass> createTestUnfuseBatchNormPass() {
   return std::make_unique<TestUnfuseBatchNormPass>();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

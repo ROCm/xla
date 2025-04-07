@@ -26,7 +26,7 @@ namespace stablehlo_ext {
 void populateStablehloExtRefineShapesPatterns(RewritePatternSet *patterns,
                                               MLIRContext *context);
 
-}  // namespace stablehlo_ext
-}  // namespace mlir
+} // namespace stablehlo_ext
+} // namespace mlir
 
-#endif  // XLA_MLIR_HLO_STABLEHLO_EXT_TRANSFORMS_STABLEHLO_REFINE_SHAPES_H_
+#endif // XLA_MLIR_HLO_STABLEHLO_EXT_TRANSFORMS_STABLEHLO_REFINE_SHAPES_H_

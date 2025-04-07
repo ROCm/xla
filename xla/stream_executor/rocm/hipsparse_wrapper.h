@@ -47,30 +47,30 @@ namespace wrap {
 
 #else
 
-#define HIPSPARSE_API_WRAPPER(__name)                                    \
-  static struct DynLoadShim__##__name {                                  \
-    constexpr static const char* kName = #__name;                        \
-    using FuncPtrT = std::add_pointer<decltype(::__name)>::type;         \
-    static void* GetDsoHandle() {                                        \
-      auto s = tsl::internal::CachedDsoLoader::GetHipsparseDsoHandle();  \
-      return s.value();                                                  \
-    }                                                                    \
-    static FuncPtrT LoadOrDie() {                                        \
-      void* f;                                                           \
-      auto s = tsl::Env::Default()->GetSymbolFromLibrary(GetDsoHandle(), \
-                                                         kName, &f);     \
-      CHECK(s.ok()) << "could not find " << kName                        \
-                    << " in miopen DSO; dlerror: " << s.message();       \
-      return reinterpret_cast<FuncPtrT>(f);                              \
-    }                                                                    \
-    static FuncPtrT DynLoad() {                                          \
-      static FuncPtrT f = LoadOrDie();                                   \
-      return f;                                                          \
-    }                                                                    \
-    template <typename... Args>                                          \
-    hipsparseStatus_t operator()(Args... args) {                         \
-      return DynLoad()(args...);                                         \
-    }                                                                    \
+#define HIPSPARSE_API_WRAPPER(__name)                                   \
+  static struct DynLoadShim__##__name {                                 \
+    constexpr static const char* kName = #__name;                       \
+    using FuncPtrT = std::add_pointer<decltype(::__name)>::type;        \
+    static void* GetDsoHandle() {                                       \
+      auto s = tsl::internal::CachedDsoLoader::GetHipsparseDsoHandle(); \
+      return s.value();                                                 \
+    }                                                                   \
+    static FuncPtrT LoadOrDie() {                                       \
+      void* f;                                                          \
+      auto s = tsl::Env::Default()                                      \
+          -> GetSymbolFromLibrary(GetDsoHandle(), kName, &f);           \
+      CHECK(s.ok()) << "could not find " << kName                       \
+                    << " in miopen DSO; dlerror: " << s.message();      \
+      return reinterpret_cast<FuncPtrT>(f);                             \
+    }                                                                   \
+    static FuncPtrT DynLoad() {                                         \
+      static FuncPtrT f = LoadOrDie();                                  \
+      return f;                                                         \
+    }                                                                   \
+    template <typename... Args>                                         \
+    hipsparseStatus_t operator()(Args... args) {                        \
+      return DynLoad()(args...);                                        \
+    }                                                                   \
   } __name;
 
 #endif

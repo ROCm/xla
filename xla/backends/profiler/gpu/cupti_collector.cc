@@ -450,7 +450,8 @@ class PerDeviceCollector {
         continue;
       }
       auto* plane = is_host_event ? host_plane : device_plane;
-      VLOG(9) << "Event" << " type=" << static_cast<int>(event.type)
+      VLOG(9) << "Event"
+              << " type=" << static_cast<int>(event.type)
               << " line_id=" << line_id
               << (is_host_event ? " host plane=" : " device plane=")
               << plane->Name();
@@ -804,8 +805,8 @@ class CuptiTraceCollectorImpl : public CuptiTraceCollector {
       std::string name = GpuPlaneName(device_ordinal);
       XPlaneBuilder device_plane(FindOrAddMutablePlaneWithName(space, name));
       device_plane.SetId(device_ordinal);
-      VLOG(4) << "Creating plane for" << " name=" << name
-              << " ordinal=" << device_ordinal;
+      VLOG(4) << "Creating plane for"
+              << " name=" << name << " ordinal=" << device_ordinal;
 
       // Calculate device capabilities before flushing, so that device
       // properties are available to the occupancy calculator in Flush().

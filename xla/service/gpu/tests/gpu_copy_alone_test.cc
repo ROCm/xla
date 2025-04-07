@@ -29,8 +29,7 @@ namespace {
 // WARNING: This tests must be alone in its file!  Otherwise, the
 // error isn't caught. We expect and CUDA_ERROR_ILLEGAL_ADDRESS to be
 // thrown with the old buggy code.
-class CopyAloneNoOptTest : public GpuCodegenTest {
-};
+class CopyAloneNoOptTest : public GpuCodegenTest {};
 
 TEST_F(CopyAloneNoOptTest, CopyTranspose) {
   const char* hlo_text = R"(

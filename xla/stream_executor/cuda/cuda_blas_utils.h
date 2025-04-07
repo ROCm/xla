@@ -16,7 +16,6 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_CUDA_CUDA_BLAS_UTILS_H_
 #define XLA_STREAM_EXECUTOR_CUDA_CUDA_BLAS_UTILS_H_
 
-
 #include "absl/status/status.h"
 #include "third_party/gpus/cuda/include/cublas_v2.h"
 #include "third_party/gpus/cuda/include/library_types.h"

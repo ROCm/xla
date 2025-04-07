@@ -402,15 +402,14 @@ TEST_F(GpuKernelTilingTest, ReductionInputTooLarge) {
 
   if (xla::PlatformUtil::CanonicalPlatformName("gpu").value() == "rocm") {
     EXPECT_THAT(status.message(),
-              ::testing::ContainsRegex(
-                  "Kernel '.*' launch needs more blocks [(]2147483648, 1[)] "
-                  "than allowed by hardware [(]2147483647, 65535[)]"));
-  }
-  else {
+                ::testing::ContainsRegex(
+                    "Kernel '.*' launch needs more blocks [(]2147483648, 1[)] "
+                    "than allowed by hardware [(]2147483647, 65535[)]"));
+  } else {
     EXPECT_THAT(status.message(),
-              ::testing::ContainsRegex(
-                  "Kernel '.*' launch needs more blocks [(]4294967296, 1[)] "
-                  "than allowed by hardware [(]2147483647, 65535[)]"));
+                ::testing::ContainsRegex(
+                    "Kernel '.*' launch needs more blocks [(]4294967296, 1[)] "
+                    "than allowed by hardware [(]2147483647, 65535[)]"));
   }
 }
 

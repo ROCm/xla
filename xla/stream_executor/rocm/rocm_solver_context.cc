@@ -138,7 +138,7 @@ absl::Status ConvertStatus(hipsolverStatus_t status) {
       return xla::Unknown("Unknown hipsolver error");
   }
 }
-#else  // TF_ROCM_VERSION < 40500
+#else   // TF_ROCM_VERSION < 40500
 rocblas_fill GpuBlasUpperLower(blas::UpperLower uplo) {
   switch (uplo) {
     case blas::UpperLower::kUpper:

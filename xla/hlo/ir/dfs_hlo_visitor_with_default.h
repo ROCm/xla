@@ -338,8 +338,8 @@ class DfsHloRewriteVisitor : public DfsHloVisitorWithDefault {
   absl::Status ReplaceWithNewInstruction(
       HloInstruction* old_instruction,
       std::unique_ptr<HloInstruction> new_instruction) {
-    VLOG(3) << "Replacing instruction:" << "\n  old: "
-            << old_instruction->ToString()
+    VLOG(3) << "Replacing instruction:"
+            << "\n  old: " << old_instruction->ToString()
             << "\n  new: " << new_instruction->ToString();
     absl::Status status = old_instruction->parent()->ReplaceWithNewInstruction(
         old_instruction, std::move(new_instruction));
@@ -355,8 +355,8 @@ class DfsHloRewriteVisitor : public DfsHloVisitorWithDefault {
   absl::StatusOr<bool> ReplaceInstruction(HloInstruction* old_instruction,
                                           HloInstruction* new_instruction,
                                           bool preserve_sharding) {
-    VLOG(3) << "Replacing instruction:" << "\n  old: "
-            << old_instruction->ToString()
+    VLOG(3) << "Replacing instruction:"
+            << "\n  old: " << old_instruction->ToString()
             << "\n  new: " << new_instruction->ToString();
     absl::StatusOr<bool> changed_or =
         old_instruction->parent()->ReplaceInstruction(

@@ -64,32 +64,32 @@ namespace wrap {
 
 #else
 
-#define STREAM_EXECUTOR_ROCFFT_WRAP(__name)                              \
-  struct DynLoadShim__##__name {                                         \
-    static const char *kName;                                            \
-    using FuncPtrT = std::add_pointer<decltype(::__name)>::type;         \
-    static void *GetDsoHandle() {                                        \
-      auto s = tsl::internal::CachedDsoLoader::GetHipfftDsoHandle();     \
-      return s.value();                                                  \
-    }                                                                    \
-    static FuncPtrT LoadOrDie() {                                        \
-      void *f;                                                           \
-      auto s = tsl::Env::Default()->GetSymbolFromLibrary(GetDsoHandle(), \
-                                                         kName, &f);     \
-      CHECK(s.ok()) << "could not find " << kName                        \
-                    << " in rocfft DSO; dlerror: " << s.message();       \
-      return reinterpret_cast<FuncPtrT>(f);                              \
-    }                                                                    \
-    static FuncPtrT DynLoad() {                                          \
-      static FuncPtrT f = LoadOrDie();                                   \
-      return f;                                                          \
-    }                                                                    \
-    template <typename... Args>                                          \
-    hipfftResult operator()(StreamExecutor *parent, Args... args) {      \
-      std::unique_ptr<ActivateContext> activation = parent->Activate();  \
-      return DynLoad()(args...);                                         \
-    }                                                                    \
-  } __name;                                                              \
+#define STREAM_EXECUTOR_ROCFFT_WRAP(__name)                             \
+  struct DynLoadShim__##__name {                                        \
+    static const char *kName;                                           \
+    using FuncPtrT = std::add_pointer<decltype(::__name)>::type;        \
+    static void *GetDsoHandle() {                                       \
+      auto s = tsl::internal::CachedDsoLoader::GetHipfftDsoHandle();    \
+      return s.value();                                                 \
+    }                                                                   \
+    static FuncPtrT LoadOrDie() {                                       \
+      void *f;                                                          \
+      auto s = tsl::Env::Default()                                      \
+          -> GetSymbolFromLibrary(GetDsoHandle(), kName, &f);           \
+      CHECK(s.ok()) << "could not find " << kName                       \
+                    << " in rocfft DSO; dlerror: " << s.message();      \
+      return reinterpret_cast<FuncPtrT>(f);                             \
+    }                                                                   \
+    static FuncPtrT DynLoad() {                                         \
+      static FuncPtrT f = LoadOrDie();                                  \
+      return f;                                                         \
+    }                                                                   \
+    template <typename... Args>                                         \
+    hipfftResult operator()(StreamExecutor *parent, Args... args) {     \
+      std::unique_ptr<ActivateContext> activation = parent->Activate(); \
+      return DynLoad()(args...);                                        \
+    }                                                                   \
+  } __name;                                                             \
   const char *DynLoadShim__##__name::kName = #__name;
 
 #endif

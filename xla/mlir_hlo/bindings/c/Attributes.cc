@@ -24,14 +24,14 @@ limitations under the License.
 //
 
 MlirAttribute mlirMhloScatterDimensionNumbersGet(
-    MlirContext ctx,                                                  //
-    intptr_t nUpdateWindowDims, const int64_t *updateWindowDims,      //
-    intptr_t nInsertedWindowDims, const int64_t *insertedWindowDims,  //
-    intptr_t nInputBatchingDims, const int64_t *inputBatchingDims,    //
+    MlirContext ctx,                                                 //
+    intptr_t nUpdateWindowDims, const int64_t *updateWindowDims,     //
+    intptr_t nInsertedWindowDims, const int64_t *insertedWindowDims, //
+    intptr_t nInputBatchingDims, const int64_t *inputBatchingDims,   //
     intptr_t nScatterIndicesBatchingDims,
-    const int64_t *scatterIndicesBatchingDims,  //
+    const int64_t *scatterIndicesBatchingDims, //
     intptr_t nScatteredDimsToOperandDims,
-    const int64_t *scatteredDimsToOperandDims,  //
+    const int64_t *scatteredDimsToOperandDims, //
     int64_t indexVectorDim) {
   return wrap(mlir::mhlo::ScatterDimensionNumbersAttr::get(
       unwrap(ctx), llvm::ArrayRef(updateWindowDims, nUpdateWindowDims),
@@ -46,41 +46,44 @@ bool mlirMhloAttributeIsAScatterDimensionNumbers(MlirAttribute attr) {
   return mlir::isa<mlir::mhlo::ScatterDimensionNumbersAttr>(unwrap(attr));
 }
 
-intptr_t mlirMhloScatterDimensionNumbersGetUpdateWindowDimsSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloScatterDimensionNumbersGetUpdateWindowDimsSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::ScatterDimensionNumbersAttr>(unwrap(attr))
       .getUpdateWindowDims()
       .size();
 }
 
-int64_t mlirMhloScatterDimensionNumbersGetUpdateWindowDimsElem(
-    MlirAttribute attr, intptr_t pos) {
+int64_t
+mlirMhloScatterDimensionNumbersGetUpdateWindowDimsElem(MlirAttribute attr,
+                                                       intptr_t pos) {
   return mlir::cast<mlir::mhlo::ScatterDimensionNumbersAttr>(unwrap(attr))
       .getUpdateWindowDims()[pos];
 }
 
-intptr_t mlirMhloScatterDimensionNumbersGetInsertedWindowDimsSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloScatterDimensionNumbersGetInsertedWindowDimsSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::ScatterDimensionNumbersAttr>(unwrap(attr))
       .getInsertedWindowDims()
       .size();
 }
 
-int64_t mlirMhloScatterDimensionNumbersGetInsertedWindowDimsElem(
-    MlirAttribute attr, intptr_t pos) {
+int64_t
+mlirMhloScatterDimensionNumbersGetInsertedWindowDimsElem(MlirAttribute attr,
+                                                         intptr_t pos) {
   return mlir::cast<mlir::mhlo::ScatterDimensionNumbersAttr>(unwrap(attr))
       .getInsertedWindowDims()[pos];
 }
 
-intptr_t mlirMhloScatterDimensionNumbersGetInputBatchingDimsSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloScatterDimensionNumbersGetInputBatchingDimsSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::ScatterDimensionNumbersAttr>(unwrap(attr))
       .getInputBatchingDims()
       .size();
 }
 
-int64_t mlirMhloScatterDimensionNumbersGetInputBatchingDimsElem(
-    MlirAttribute attr, intptr_t pos) {
+int64_t
+mlirMhloScatterDimensionNumbersGetInputBatchingDimsElem(MlirAttribute attr,
+                                                        intptr_t pos) {
   return mlir::cast<mlir::mhlo::ScatterDimensionNumbersAttr>(unwrap(attr))
       .getInputBatchingDims()[pos];
 }
@@ -121,13 +124,13 @@ int64_t mlirMhloDimensionNumbersGetIndexVectorDim(MlirAttribute attr) {
 //
 
 MlirAttribute mlirMhloGatherDimensionNumbersGet(
-    MlirContext ctx,                                                    //
-    intptr_t nOffsetDims, const int64_t *offsetDims,                    //
-    intptr_t nCollapsedSliceDims, const int64_t *collapsedSliceDims,    //
-    intptr_t nOperandBatchingDims, const int64_t *operandBatchingDims,  //
+    MlirContext ctx,                                                   //
+    intptr_t nOffsetDims, const int64_t *offsetDims,                   //
+    intptr_t nCollapsedSliceDims, const int64_t *collapsedSliceDims,   //
+    intptr_t nOperandBatchingDims, const int64_t *operandBatchingDims, //
     intptr_t nStartIndicesBatchingDims,
-    const int64_t *startIndicesBatchingDims,                //
-    intptr_t nStartIndexMap, const int64_t *startIndexMap,  //
+    const int64_t *startIndicesBatchingDims,               //
+    intptr_t nStartIndexMap, const int64_t *startIndexMap, //
     int64_t indexVectorDim) {
   return wrap(mlir::mhlo::GatherDimensionNumbersAttr::get(
       unwrap(ctx), llvm::ArrayRef(offsetDims, nOffsetDims),
@@ -153,28 +156,30 @@ int64_t mlirMhloGatherDimensionNumbersGetOffsetDimsElem(MlirAttribute attr,
       .getOffsetDims()[pos];
 }
 
-intptr_t mlirMhloGatherDimensionNumbersGetCollapsedSliceDimsSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloGatherDimensionNumbersGetCollapsedSliceDimsSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::GatherDimensionNumbersAttr>(unwrap(attr))
       .getCollapsedSliceDims()
       .size();
 }
 
-int64_t mlirMhloGatherDimensionNumbersGetCollapsedSliceDimsElem(
-    MlirAttribute attr, intptr_t pos) {
+int64_t
+mlirMhloGatherDimensionNumbersGetCollapsedSliceDimsElem(MlirAttribute attr,
+                                                        intptr_t pos) {
   return mlir::cast<mlir::mhlo::GatherDimensionNumbersAttr>(unwrap(attr))
       .getCollapsedSliceDims()[pos];
 }
 
-intptr_t mlirMhloGatherDimensionNumbersGetOperandBatchingDimsSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloGatherDimensionNumbersGetOperandBatchingDimsSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::GatherDimensionNumbersAttr>(unwrap(attr))
       .getOperandBatchingDims()
       .size();
 }
 
-int64_t mlirMhloGatherDimensionNumbersGetOperandBatchingDimsElem(
-    MlirAttribute attr, intptr_t pos) {
+int64_t
+mlirMhloGatherDimensionNumbersGetOperandBatchingDimsElem(MlirAttribute attr,
+                                                         intptr_t pos) {
   return mlir::cast<mlir::mhlo::GatherDimensionNumbersAttr>(unwrap(attr))
       .getOperandBatchingDims()[pos];
 }
@@ -192,8 +197,8 @@ int64_t mlirMhloGatherDimensionNumbersGetStartIndicesBatchingDimsElem(
       .getStartIndicesBatchingDims()[pos];
 }
 
-intptr_t mlirMhloGatherDimensionNumbersGetStartIndexMapSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloGatherDimensionNumbersGetStartIndexMapSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::GatherDimensionNumbersAttr>(unwrap(attr))
       .getStartIndexMap()
       .size();
@@ -232,54 +237,58 @@ bool mlirMhloAttributeIsADotDimensionNumbers(MlirAttribute attr) {
   return mlir::isa<mlir::mhlo::DotDimensionNumbersAttr>(unwrap(attr));
 }
 
-intptr_t mlirMhloDotDimensionNumbersGetLhsBatchingDimensionsSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloDotDimensionNumbersGetLhsBatchingDimensionsSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::DotDimensionNumbersAttr>(unwrap(attr))
       .getLhsBatchingDimensions()
       .size();
 }
 
-int64_t mlirMhloDotDimensionNumbersGetLhsBatchingDimensionsElem(
-    MlirAttribute attr, intptr_t pos) {
+int64_t
+mlirMhloDotDimensionNumbersGetLhsBatchingDimensionsElem(MlirAttribute attr,
+                                                        intptr_t pos) {
   return mlir::cast<mlir::mhlo::DotDimensionNumbersAttr>(unwrap(attr))
       .getLhsBatchingDimensions()[pos];
 }
 
-intptr_t mlirMhloDotDimensionNumbersGetRhsBatchingDimensionsSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloDotDimensionNumbersGetRhsBatchingDimensionsSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::DotDimensionNumbersAttr>(unwrap(attr))
       .getRhsBatchingDimensions()
       .size();
 }
 
-int64_t mlirMhloDotDimensionNumbersGetRhsBatchingDimensionsElem(
-    MlirAttribute attr, intptr_t pos) {
+int64_t
+mlirMhloDotDimensionNumbersGetRhsBatchingDimensionsElem(MlirAttribute attr,
+                                                        intptr_t pos) {
   return mlir::cast<mlir::mhlo::DotDimensionNumbersAttr>(unwrap(attr))
       .getRhsBatchingDimensions()[pos];
 }
 
-intptr_t mlirMhloDotDimensionNumbersGetLhsContractingDimensionsSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloDotDimensionNumbersGetLhsContractingDimensionsSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::DotDimensionNumbersAttr>(unwrap(attr))
       .getLhsContractingDimensions()
       .size();
 }
 
-int64_t mlirMhloDotDimensionNumbersGetLhsContractingDimensionsElem(
-    MlirAttribute attr, intptr_t pos) {
+int64_t
+mlirMhloDotDimensionNumbersGetLhsContractingDimensionsElem(MlirAttribute attr,
+                                                           intptr_t pos) {
   return mlir::cast<mlir::mhlo::DotDimensionNumbersAttr>(unwrap(attr))
       .getLhsContractingDimensions()[pos];
 }
 
-intptr_t mlirMhloDotDimensionNumbersGetRhsContractingDimensionsSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloDotDimensionNumbersGetRhsContractingDimensionsSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::DotDimensionNumbersAttr>(unwrap(attr))
       .getRhsContractingDimensions()
       .size();
 }
 
-int64_t mlirMhloDotDimensionNumbersGetRhsContractingDimensionsElem(
-    MlirAttribute attr, intptr_t pos) {
+int64_t
+mlirMhloDotDimensionNumbersGetRhsContractingDimensionsElem(MlirAttribute attr,
+                                                           intptr_t pos) {
   return mlir::cast<mlir::mhlo::DotDimensionNumbersAttr>(unwrap(attr))
       .getRhsContractingDimensions()[pos];
 }
@@ -313,27 +322,28 @@ int64_t mlirMhloConvDimensionNumbersGetInputBatchDimension(MlirAttribute attr) {
       .getInputBatchDimension();
 }
 
-int64_t mlirMhloConvDimensionNumbersGetInputFeatureDimension(
-    MlirAttribute attr) {
+int64_t
+mlirMhloConvDimensionNumbersGetInputFeatureDimension(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::ConvDimensionNumbersAttr>(unwrap(attr))
       .getInputFeatureDimension();
 }
 
-intptr_t mlirMhloConvDimensionNumbersGetInputSpatialDimensionsSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloConvDimensionNumbersGetInputSpatialDimensionsSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::ConvDimensionNumbersAttr>(unwrap(attr))
       .getInputSpatialDimensions()
       .size();
 }
 
-int64_t mlirMhloConvDimensionNumbersGetInputSpatialDimensionsElem(
-    MlirAttribute attr, intptr_t pos) {
+int64_t
+mlirMhloConvDimensionNumbersGetInputSpatialDimensionsElem(MlirAttribute attr,
+                                                          intptr_t pos) {
   return mlir::cast<mlir::mhlo::ConvDimensionNumbersAttr>(unwrap(attr))
       .getInputSpatialDimensions()[pos];
 }
 
-int64_t mlirMhloConvDimensionNumbersGetKernelInputFeatureDimension(
-    MlirAttribute attr) {
+int64_t
+mlirMhloConvDimensionNumbersGetKernelInputFeatureDimension(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::ConvDimensionNumbersAttr>(unwrap(attr))
       .getKernelInputFeatureDimension();
 }
@@ -344,40 +354,42 @@ int64_t mlirMhloConvDimensionNumbersGetKernelOutputFeatureDimension(
       .getKernelOutputFeatureDimension();
 }
 
-intptr_t mlirMhloConvDimensionNumbersGetKernelSpatialDimensionsSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloConvDimensionNumbersGetKernelSpatialDimensionsSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::ConvDimensionNumbersAttr>(unwrap(attr))
       .getKernelSpatialDimensions()
       .size();
 }
 
-int64_t mlirMhloConvDimensionNumbersGetKernelSpatialDimensionsElem(
-    MlirAttribute attr, intptr_t pos) {
+int64_t
+mlirMhloConvDimensionNumbersGetKernelSpatialDimensionsElem(MlirAttribute attr,
+                                                           intptr_t pos) {
   return mlir::cast<mlir::mhlo::ConvDimensionNumbersAttr>(unwrap(attr))
       .getKernelSpatialDimensions()[pos];
 }
 
-int64_t mlirMhloConvDimensionNumbersGetOutputBatchDimension(
-    MlirAttribute attr) {
+int64_t
+mlirMhloConvDimensionNumbersGetOutputBatchDimension(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::ConvDimensionNumbersAttr>(unwrap(attr))
       .getOutputBatchDimension();
 }
 
-int64_t mlirMhloConvDimensionNumbersGetOutputFeatureDimension(
-    MlirAttribute attr) {
+int64_t
+mlirMhloConvDimensionNumbersGetOutputFeatureDimension(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::ConvDimensionNumbersAttr>(unwrap(attr))
       .getOutputFeatureDimension();
 }
 
-intptr_t mlirMhloConvDimensionNumbersGetOutputSpatialDimensionsSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloConvDimensionNumbersGetOutputSpatialDimensionsSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::ConvDimensionNumbersAttr>(unwrap(attr))
       .getOutputSpatialDimensions()
       .size();
 }
 
-int64_t mlirMhloConvDimensionNumbersGetOutputSpatialDimensionsElem(
-    MlirAttribute attr, intptr_t pos) {
+int64_t
+mlirMhloConvDimensionNumbersGetOutputSpatialDimensionsElem(MlirAttribute attr,
+                                                           intptr_t pos) {
   return mlir::cast<mlir::mhlo::ConvDimensionNumbersAttr>(unwrap(attr))
       .getOutputSpatialDimensions()[pos];
 }
@@ -399,8 +411,8 @@ bool mlirMhloAttributeIsAOutputOperandAlias(MlirAttribute attr) {
   return mlir::isa<mlir::mhlo::OutputOperandAliasAttr>(unwrap(attr));
 }
 
-intptr_t mlirMhloOutputOperandAliasGetOutputTupleIndicesSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloOutputOperandAliasGetOutputTupleIndicesSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::OutputOperandAliasAttr>(unwrap(attr))
       .getOutputTupleIndices()
       .size();
@@ -417,8 +429,8 @@ int64_t mlirMhloOutputOperandAliasGetOperandIndex(MlirAttribute attr) {
       .getOperandIndex();
 }
 
-intptr_t mlirMhloOutputOperandAliasGetOperandTupleIndicesSize(
-    MlirAttribute attr) {
+intptr_t
+mlirMhloOutputOperandAliasGetOperandTupleIndicesSize(MlirAttribute attr) {
   return mlir::cast<mlir::mhlo::OutputOperandAliasAttr>(unwrap(attr))
       .getOperandTupleIndices()
       .size();
@@ -437,7 +449,8 @@ MlirAttribute mlirMhloComparisonDirectionAttrGet(MlirContext ctx,
                                                  MlirStringRef value) {
   std::optional<mlir::mhlo::ComparisonDirection> comparisonDirection =
       mlir::mhlo::symbolizeComparisonDirection(unwrap(value));
-  if (!comparisonDirection) llvm_unreachable("Invalid value.");
+  if (!comparisonDirection)
+    llvm_unreachable("Invalid value.");
   return wrap(mlir::mhlo::ComparisonDirectionAttr::get(
       unwrap(ctx), comparisonDirection.value()));
 }
@@ -460,7 +473,8 @@ MlirAttribute mlirMhloComparisonTypeAttrGet(MlirContext ctx,
                                             MlirStringRef value) {
   std::optional<mlir::mhlo::ComparisonType> comparisonType =
       mlir::mhlo::symbolizeComparisonType(unwrap(value));
-  if (!comparisonType) llvm_unreachable("Invalid value.");
+  if (!comparisonType)
+    llvm_unreachable("Invalid value.");
   return wrap(
       mlir::mhlo::ComparisonTypeAttr::get(unwrap(ctx), comparisonType.value()));
 }
@@ -481,7 +495,8 @@ MlirStringRef mlirMhloComparisonTypeAttrGetValue(MlirAttribute attr) {
 MlirAttribute mlirMhloDomainKindAttrGet(MlirContext ctx, MlirStringRef value) {
   std::optional<mlir::mhlo::DomainKind> domainKind =
       mlir::mhlo::symbolizeDomainKind(unwrap(value));
-  if (!domainKind) llvm_unreachable("Invalid value.");
+  if (!domainKind)
+    llvm_unreachable("Invalid value.");
   return wrap(mlir::mhlo::DomainKindAttr::get(unwrap(ctx), domainKind.value()));
 }
 
@@ -501,7 +516,8 @@ MlirStringRef mlirMhloDomainKindAttrGetValue(MlirAttribute attr) {
 MlirAttribute mlirMhloPrecisionAttrGet(MlirContext ctx, MlirStringRef value) {
   std::optional<mlir::mhlo::Precision> precision =
       mlir::mhlo::symbolizePrecision(unwrap(value));
-  if (!precision) llvm_unreachable("Invalid value specified.");
+  if (!precision)
+    llvm_unreachable("Invalid value specified.");
   return wrap(mlir::mhlo::PrecisionAttr::get(unwrap(ctx), precision.value()));
 }
 
@@ -521,7 +537,8 @@ MlirStringRef mlirMhloPrecisionAttrGetValue(MlirAttribute attr) {
 MlirAttribute mlirMhloFftTypeAttrGet(MlirContext ctx, MlirStringRef value) {
   std::optional<mlir::mhlo::FftType> fftType =
       mlir::mhlo::symbolizeFftType(unwrap(value));
-  if (!fftType) llvm_unreachable("Invalid value.");
+  if (!fftType)
+    llvm_unreachable("Invalid value.");
   return wrap(mlir::mhlo::FftTypeAttr::get(unwrap(ctx), fftType.value()));
 }
 
@@ -542,7 +559,8 @@ MlirAttribute mlirMhloDequantizeModeAttrGet(MlirContext ctx,
                                             MlirStringRef value) {
   std::optional<mlir::mhlo::DequantizeMode> dequantizeMode =
       mlir::mhlo::symbolizeDequantizeMode(unwrap(value));
-  if (!dequantizeMode) llvm_unreachable("Invalid value.");
+  if (!dequantizeMode)
+    llvm_unreachable("Invalid value.");
   return wrap(
       mlir::mhlo::DequantizeModeAttr::get(unwrap(ctx), dequantizeMode.value()));
 }
@@ -563,7 +581,8 @@ MlirStringRef mlirMhloDequantizeModeAttrGetValue(MlirAttribute attr) {
 MlirAttribute mlirMhloTransposeAttrGet(MlirContext ctx, MlirStringRef value) {
   std::optional<mlir::mhlo::Transpose> transpose =
       mlir::mhlo::symbolizeTranspose(unwrap(value));
-  if (!transpose) llvm_unreachable("Invalid value.");
+  if (!transpose)
+    llvm_unreachable("Invalid value.");
   return wrap(mlir::mhlo::TransposeAttr::get(unwrap(ctx), transpose.value()));
 }
 
@@ -583,7 +602,8 @@ MlirStringRef mlirMhloTransposeAttrGetValue(MlirAttribute attr) {
 MlirAttribute mlirMhloFusionKindAttrGet(MlirContext ctx, MlirStringRef value) {
   std::optional<mlir::mhlo::FusionKind> fusionKind =
       mlir::mhlo::symbolizeFusionKind(unwrap(value));
-  if (!fusionKind) llvm_unreachable("Invalid value.");
+  if (!fusionKind)
+    llvm_unreachable("Invalid value.");
   return wrap(mlir::mhlo::FusionKindAttr::get(unwrap(ctx), fusionKind.value()));
 }
 
@@ -604,7 +624,8 @@ MlirAttribute mlirMhloRngDistributionAttrGet(MlirContext ctx,
                                              MlirStringRef value) {
   std::optional<mlir::mhlo::RngDistribution> rngDistribution =
       mlir::mhlo::symbolizeRngDistribution(unwrap(value));
-  if (!rngDistribution) llvm_unreachable("Invalid value.");
+  if (!rngDistribution)
+    llvm_unreachable("Invalid value.");
   return wrap(mlir::mhlo::RngDistributionAttr::get(unwrap(ctx),
                                                    rngDistribution.value()));
 }
@@ -626,7 +647,8 @@ MlirAttribute mlirMhloRngAlgorithmAttrGet(MlirContext ctx,
                                           MlirStringRef value) {
   std::optional<mlir::mhlo::RngAlgorithm> rngAlgorithm =
       mlir::mhlo::symbolizeRngAlgorithm(unwrap(value));
-  if (!rngAlgorithm) llvm_unreachable("Invalid value.");
+  if (!rngAlgorithm)
+    llvm_unreachable("Invalid value.");
   return wrap(
       mlir::mhlo::RngAlgorithmAttr::get(unwrap(ctx), rngAlgorithm.value()));
 }

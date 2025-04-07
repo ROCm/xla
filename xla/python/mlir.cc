@@ -33,7 +33,7 @@ limitations under the License.
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "nanobind/nanobind.h"
-#include "nanobind/stl/string.h"  // IWYU pragma: keep
+#include "nanobind/stl/string.h"       // IWYU pragma: keep
 #include "nanobind/stl/string_view.h"  // IWYU pragma: keep
 #include "stablehlo/dialect/Serialization.h"
 #include "xla/hlo/builder/xla_computation.h"

@@ -36,8 +36,8 @@ limitations under the License.
 #include "absl/synchronization/notification.h"
 #include "nanobind/nanobind.h"
 #include "nanobind/stl/shared_ptr.h"  // IWYU pragma: keep
-#include "nanobind/stl/string.h"  // IWYU pragma: keep
-#include "nanobind/stl/vector.h"  // IWYU pragma: keep
+#include "nanobind/stl/string.h"      // IWYU pragma: keep
+#include "nanobind/stl/vector.h"      // IWYU pragma: keep
 #include "xla/pjrt/lru_cache.h"
 #include "xla/tsl/platform/logging.h"
 

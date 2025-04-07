@@ -57,11 +57,11 @@ struct TestMaterializeBroadcastsPass
   }
 };
 
-}  // namespace
+} // namespace
 
 std::unique_ptr<::mlir::Pass> createTestMaterializeBroadcastsPass() {
   return std::make_unique<TestMaterializeBroadcastsPass>();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

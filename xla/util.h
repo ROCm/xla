@@ -252,8 +252,8 @@ absl::Status AppendStatus(absl::Status prior, absl::string_view context);
   /*Deduction guide to make variadic arguments play nice with default */ \
   /* absl::SourceLocation argument. */                                   \
   template <typename... Args>                                            \
-  error_type(const absl::FormatSpec<Args...>& format,                    \
-             Args&&...) -> error_type<Args...>;
+  error_type(const absl::FormatSpec<Args...>& format, Args&&...)         \
+      -> error_type<Args...>;
 
 #if defined(PLATFORM_GOOGLE)
 #define XLA_ERROR_WITH_STRFORMAT_AND_BACKTRACE(error_type)               \

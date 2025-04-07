@@ -25,8 +25,8 @@ namespace placement_utils {
 constexpr llvm::StringRef cCpu = "cpu";
 constexpr llvm::StringRef cGpu = "gpu";
 
-}  // namespace placement_utils
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace placement_utils
+} // namespace mhlo
+} // namespace mlir
 
-#endif  // MLIR_HLO_UTILS_PLACEMENT_UTILS_H
+#endif // MLIR_HLO_UTILS_PLACEMENT_UTILS_H

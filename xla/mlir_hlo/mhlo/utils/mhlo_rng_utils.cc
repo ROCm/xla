@@ -20,8 +20,6 @@ limitations under the License.
 #include <cstdint>
 #include <utility>
 
-#include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/SmallVector.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -33,13 +31,15 @@ limitations under the License.
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
 namespace mhlo {
 namespace {
 
 class ArithOp {
- public:
+public:
   ArithOp(OpBuilder b, Location l, Value v) : builder(b), loc(l), value(v) {}
 
   explicit operator Value() { return value; }
@@ -58,7 +58,8 @@ class ArithOp {
   }
 
   ArithOp truncI(int64_t bits) {
-    if (value.getType().getIntOrFloatBitWidth() == bits) return *this;
+    if (value.getType().getIntOrFloatBitWidth() == bits)
+      return *this;
     Value trunc = builder.create<arith::TruncIOp>(
         loc, builder.getIntegerType(bits), value);
     return ArithOp(builder, loc, trunc);
@@ -120,7 +121,7 @@ class ArithOp {
     return ArithOp(builder, loc, shr);
   }
 
- private:
+private:
   OpBuilder builder;
   Location loc;
   Value value;
@@ -189,7 +190,8 @@ std::pair<ArithOp, ArithOp> runThreeFry2xi32(ArithOp key0, ArithOp key1,
 std::pair<Value, Value> extractKey32(OpBuilder &builder, Location loc,
                                      Value store) {
   ShapedType storeTy = mlir::cast<ShapedType>(store.getType());
-  if (storeTy.getRank() != 1) return {nullptr, nullptr};
+  if (storeTy.getRank() != 1)
+    return {nullptr, nullptr};
 
   Type storeETy = storeTy.getElementType();
   auto i32Ty = builder.getIntegerType(32);
@@ -219,7 +221,8 @@ std::pair<Value, Value> extractKey32(OpBuilder &builder, Location loc,
 // Extract and potentially reconstruct the i64 state as necessary.
 Value extractState64(OpBuilder &builder, Location loc, Value store) {
   ShapedType storeTy = mlir::cast<ShapedType>(store.getType());
-  if (storeTy.getRank() != 1) return nullptr;
+  if (storeTy.getRank() != 1)
+    return nullptr;
 
   Type storeETy = storeTy.getElementType();
   auto i64Ty = builder.getIntegerType(64);
@@ -248,7 +251,8 @@ Value extractState64(OpBuilder &builder, Location loc, Value store) {
 
 Value setState64(OpBuilder &b, Location loc, Value store, Value state) {
   ShapedType storeTy = mlir::cast<ShapedType>(store.getType());
-  if (storeTy.getRank() != 1) return nullptr;
+  if (storeTy.getRank() != 1)
+    return nullptr;
 
   Type storeETy = storeTy.getElementType();
 
@@ -312,7 +316,8 @@ std::pair<ShapedType, int64_t> threeFry32Shape(ShapedType resultTy) {
       std::max_element(shape.begin(), shape.end()) - shape.begin();
 
   for (int i = 0, s = shape.size(); i < s; i++) {
-    if (shape[i] & 0x1) continue;
+    if (shape[i] & 0x1)
+      continue;
     halfDim = i;
     break;
   }
@@ -340,10 +345,12 @@ LogicalResult generateLinalgThreeFry32(OpBuilder &builder, Location loc,
 
   // Extract the stateful values as an i64 and increment the state ahead.
   Value initialState = extractState64(builder, loc, store);
-  if (!initialState) return failure();
+  if (!initialState)
+    return failure();
 
   std::pair<Value, Value> keys = extractKey32(builder, loc, store);
-  if (!keys.first || !keys.second) return failure();
+  if (!keys.first || !keys.second)
+    return failure();
 
   ArithOp key0(builder, loc, keys.first);
   ArithOp key1(builder, loc, keys.second);
@@ -431,10 +438,12 @@ LogicalResult generateLinalgThreeFry64(OpBuilder &builder, Location loc,
 
   // Extract the stateful values as an i64 and increment the state ahead.
   Value initialState = extractState64(builder, loc, store);
-  if (!initialState) return failure();
+  if (!initialState)
+    return failure();
 
   std::pair<Value, Value> keys = extractKey32(builder, loc, store);
-  if (!keys.first || !keys.second) return failure();
+  if (!keys.first || !keys.second)
+    return failure();
 
   ArithOp key0(builder, loc, keys.first);
   ArithOp key1(builder, loc, keys.second);
@@ -540,10 +549,12 @@ LogicalResult generateLinalgPhilox32(OpBuilder &builder, Location loc,
   Type resultETy = resultTy.getElementType();
 
   Value initialState = extractState64(builder, loc, store);
-  if (!initialState) return failure();
+  if (!initialState)
+    return failure();
 
   std::pair<Value, Value> keys = extractKey32(builder, loc, store);
-  if (!keys.first || !keys.second) return failure();
+  if (!keys.first || !keys.second)
+    return failure();
 
   int64_t numElements = resultTy.getNumElements();
   int64_t count = (numElements + 3) / 4;
@@ -637,10 +648,12 @@ LogicalResult generateLinalgPhilox64(OpBuilder &builder, Location loc,
   Type resultETy = resultTy.getElementType();
 
   Value initialState = extractState64(builder, loc, store);
-  if (!initialState) return failure();
+  if (!initialState)
+    return failure();
 
   std::pair<Value, Value> keys = extractKey32(builder, loc, store);
-  if (!keys.first || !keys.second) return failure();
+  if (!keys.first || !keys.second)
+    return failure();
 
   int64_t numElements = resultTy.getNumElements();
   int64_t count = (numElements + 1) / 2;
@@ -719,7 +732,7 @@ LogicalResult generateLinalgPhilox64(OpBuilder &builder, Location loc,
   return success();
 }
 
-}  // namespace
+} // namespace
 
 LogicalResult generateLinalgThreeFry(OpBuilder &builder, Location loc,
                                      ShapedType resultTy, Value &state,
@@ -756,5 +769,5 @@ LogicalResult generateLinalgPhilox(OpBuilder &builder, Location loc,
   return failure();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

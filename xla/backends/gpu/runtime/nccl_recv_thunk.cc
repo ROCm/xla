@@ -119,7 +119,7 @@ absl::Status NcclRecvThunk::RunNcclCollective(const ExecuteParams& params,
     if (config_.validation_kind ==
         NcclP2PConfig::ValidationKind::kConditional) {
       se::StreamExecutor* executor = params.stream->parent();
-      TF_ASSIGN_OR_RETURN(int64_t* counter,
+      TF_ASSIGN_OR_RETURN(int64_t * counter,
                           execution_counters_->GetCounter(
                               executor, params.collective_params->run_id));
       auto it = config_.source_target_to_bounds.find(

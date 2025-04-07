@@ -19,10 +19,6 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
-#include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mhlo/transforms/passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -33,6 +29,10 @@ limitations under the License.
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 
 namespace mlir {
 namespace mhlo {
@@ -95,7 +95,8 @@ struct FlattenCustomCallOp : public OpRewritePattern<CustomCallOp> {
       return mlir::isa<TupleType>(operand.getType());
     });
 
-    if (!flattenResult && !flattenOperands) return failure();
+    if (!flattenResult && !flattenOperands)
+      return failure();
 
     llvm::SmallVector<Value> flattenedOperands;
     for (auto operand : op.getInputs())
@@ -108,7 +109,8 @@ struct FlattenCustomCallOp : public OpRewritePattern<CustomCallOp> {
       // Check for nested tuples.
       for (Type innerType :
            mlir::cast<TupleType>(op->getResult(0).getType()).getTypes())
-        if (mlir::isa<TupleType>(innerType)) return failure();
+        if (mlir::isa<TupleType>(innerType))
+          return failure();
 
       for (auto result : op->getResults())
         flattenTupleType(result, flattenedResultTypes);
@@ -127,7 +129,7 @@ struct FlattenCustomCallOp : public OpRewritePattern<CustomCallOp> {
 };
 
 class FlattenTuplePass : public impl::FlattenTuplePassBase<FlattenTuplePass> {
- public:
+public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
@@ -137,7 +139,7 @@ class FlattenTuplePass : public impl::FlattenTuplePassBase<FlattenTuplePass> {
     }
   }
 };
-}  // end namespace
+} // end namespace
 
 static PassRegistration<FlattenTuplePass> pass;
 
@@ -145,5 +147,5 @@ std::unique_ptr<OperationPass<func::FuncOp>> createFlattenTuplePass() {
   return std::make_unique<FlattenTuplePass>();
 }
 
-}  // end namespace mhlo
-}  // end namespace mlir
+} // end namespace mhlo
+} // end namespace mlir

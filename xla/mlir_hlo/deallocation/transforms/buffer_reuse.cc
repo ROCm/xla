@@ -20,9 +20,6 @@ limitations under the License.
 
 #include "deallocation/transforms/passes.h"
 #include "deallocation/utils/util.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Casting.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -35,16 +32,20 @@ limitations under the License.
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 
 namespace mlir {
 namespace deallocation {
 namespace {
 
 template <typename T>
-T findOp(Operation* start, std::function<bool(T)> predicate) {
+T findOp(Operation *start, std::function<bool(T)> predicate) {
   while (start) {
     if (T t = llvm::dyn_cast<T>(start)) {
-      if (predicate(t)) return t;
+      if (predicate(t))
+        return t;
     }
     start = start->getNextNode();
   }
@@ -52,11 +53,12 @@ T findOp(Operation* start, std::function<bool(T)> predicate) {
 }
 
 // Recursively checks if `pred` holds for any op in [start; end)
-bool anyMatchBetween(Operation* start, Operation* end,
-                     const std::function<bool(Operation*)>& predicate) {
+bool anyMatchBetween(Operation *start, Operation *end,
+                     const std::function<bool(Operation *)> &predicate) {
   while (start != end) {
-    if (predicate(start)) return true;
-    for (auto& region : start->getRegions()) {
+    if (predicate(start))
+      return true;
+    for (auto &region : start->getRegions()) {
       if (!region.empty() &&
           anyMatchBetween(&region.front().front(), nullptr, predicate)) {
         return true;
@@ -68,19 +70,19 @@ bool anyMatchBetween(Operation* start, Operation* end,
 }
 
 // Recursively checks if `v` is used in [start; end)
-bool hasUsesBetween(Operation* start, Operation* end, Value v) {
-  return anyMatchBetween(start, end, [v](Operation* op) {
+bool hasUsesBetween(Operation *start, Operation *end, Value v) {
+  return anyMatchBetween(start, end, [v](Operation *op) {
     return llvm::is_contained(op->getOperands(), v);
   });
 }
 
 std::pair<DenseMap<Type, SmallVector<memref::AllocOp>>,
           DenseMap<Type, SmallVector<memref::DeallocOp>>>
-findAllocsAndDeallocs(Block& block) {
+findAllocsAndDeallocs(Block &block) {
   DenseMap<Type, SmallVector<memref::AllocOp>> allocations;
   DenseMap<Type, SmallVector<memref::DeallocOp>> deallocations;
 
-  for (auto& op : block) {
+  for (auto &op : block) {
     if (auto alloc = llvm::dyn_cast<memref::AllocOp>(op)) {
       if (alloc.getDynamicSizes().empty()) {
         allocations[alloc.getResult().getType()].push_back(alloc);
@@ -93,10 +95,10 @@ findAllocsAndDeallocs(Block& block) {
   return {allocations, deallocations};
 }
 
-void doubleBuffer(Operation* op, memref::AllocOp alloc,
+void doubleBuffer(Operation *op, memref::AllocOp alloc,
                   memref::DeallocOp dealloc) {
   assert(alloc->getParentRegion() == dealloc->getParentRegion());
-  auto* region = alloc->getParentRegion();
+  auto *region = alloc->getParentRegion();
   assert(region->hasOneBlock() && "expected the region to have a single block");
 
   // 1. Introduce a new bbarg to replace the alloc.
@@ -130,7 +132,7 @@ RegionBranchOpInterface doubleBuffer(RegionBranchOpInterface op) {
         deallocsToFix.push_back(dealloc);
 
         if (llvm::isa<scf::WhileOp>(op)) {
-          auto& otherRegion = op->getRegion(1 - i);
+          auto &otherRegion = op->getRegion(1 - i);
           // Forward the double buffered alloc.
           Value arg = otherRegion.addArgument(alloc.getType(), op.getLoc());
           otherRegion.front().getTerminator()->insertOperands(
@@ -140,7 +142,8 @@ RegionBranchOpInterface doubleBuffer(RegionBranchOpInterface op) {
     }
   }
 
-  if (deallocsToFix.empty()) return op;
+  if (deallocsToFix.empty())
+    return op;
 
   auto newOp = moveRegionsToNewOpButKeepOldOp(op);
   op->replaceAllUsesWith(newOp->getResults().take_front(op->getNumResults()));
@@ -154,11 +157,11 @@ RegionBranchOpInterface doubleBuffer(RegionBranchOpInterface op) {
   return newOp;
 }
 
-bool doubleBuffer(Block& block) {
-  auto* op = &block.front();
+bool doubleBuffer(Block &block) {
+  auto *op = &block.front();
   bool result = false;
   while (op) {
-    for (auto& region : op->getRegions()) {
+    for (auto &region : op->getRegions()) {
       if (!region.empty()) {
         assert(region.hasOneBlock());
         result |= doubleBuffer(region.front());
@@ -181,16 +184,17 @@ bool isRestrictBbArg(Value value) {
   auto bbarg = llvm::dyn_cast<BlockArgument>(value);
   auto func =
       llvm::dyn_cast<func::FuncOp>(value.getParentBlock()->getParentOp());
-  if (!bbarg || !func) return false;
+  if (!bbarg || !func)
+    return false;
   auto isRestrict = func.getArgAttrOfType<BoolAttr>(bbarg.getArgNumber(),
                                                     "deallocation.restrict");
   return isRestrict && isRestrict.getValue();
 }
 
-void eliminateCopies(Block& block, Block& root) {
-  auto* op = &block.front();
+void eliminateCopies(Block &block, Block &root) {
+  auto *op = &block.front();
   while (op) {
-    for (auto& region : op->getRegions()) {
+    for (auto &region : op->getRegions()) {
       if (!region.empty()) {
         assert(region.hasOneBlock());
         eliminateCopies(region.front(), root);
@@ -209,7 +213,8 @@ void eliminateCopies(Block& block, Block& root) {
 
     auto sourceAlloc = llvm::dyn_cast_or_null<memref::AllocOp>(
         copy.getSource().getDefiningOp());
-    if (!sourceAlloc) continue;
+    if (!sourceAlloc)
+      continue;
 
     bool targetIsFirstUseOfRestrictBbArg =
         isRestrictBbArg(copy.getTarget()) &&
@@ -252,8 +257,8 @@ enum class BufferReuseMode {
   AGGRESSIVE
 };
 
-bool reuseBuffers(Block& block, BufferReuseMode mode) {
-  auto* op = &block.front();
+bool reuseBuffers(Block &block, BufferReuseMode mode) {
+  auto *op = &block.front();
   bool result = false;
   while (op) {
     if (auto dealloc = llvm::dyn_cast<memref::DeallocOp>(op)) {
@@ -265,7 +270,7 @@ bool reuseBuffers(Block& block, BufferReuseMode mode) {
       // dealloc. If we extend the live-range of the buffer past this alloc,
       // this will prevent further reuse.
       if (!alloc || (mode == BufferReuseMode::CONSERVATIVE &&
-                     anyMatchBetween(dealloc, alloc, [&](Operation* op) {
+                     anyMatchBetween(dealloc, alloc, [&](Operation *op) {
                        return llvm::isa<memref::AllocOp>(op) &&
                               op->getResultTypes().front() == alloc.getType();
                      }))) {
@@ -284,7 +289,7 @@ bool reuseBuffers(Block& block, BufferReuseMode mode) {
       }
     }
 
-    for (auto& region : op->getRegions()) {
+    for (auto &region : op->getRegions()) {
       if (!region.empty()) {
         assert(region.hasOneBlock());
         result |= reuseBuffers(region.front(), mode);
@@ -296,20 +301,21 @@ bool reuseBuffers(Block& block, BufferReuseMode mode) {
   return result;
 }
 
-SmallVector<Value> hoistAllocs(Operation* parent, Region& region,
+SmallVector<Value> hoistAllocs(Operation *parent, Region &region,
                                SmallVector<Value> freeAllocs) {
-  if (region.empty()) return freeAllocs;
+  if (region.empty())
+    return freeAllocs;
   assert(region.hasOneBlock() && "expected the region to have a single block");
   // Hoist local allocs out of the loop.
   // TODO(jreiffers): Add some smarts here so we don't blow up the heap for
   // pathological inputs.
 
   SmallVector<Value> result;
-  auto* op = &region.front().front();
+  auto *op = &region.front().front();
   while (op) {
     auto alloc = llvm::dyn_cast<memref::AllocOp>(op);
     if (alloc && alloc.getDynamicSizes().empty()) {
-      auto dealloc = llvm::find_if(op->getUsers(), [&](Operation* user) {
+      auto dealloc = llvm::find_if(op->getUsers(), [&](Operation *user) {
         return llvm::isa<memref::DeallocOp>(user) &&
                user->getParentRegion() == &region;
       });
@@ -318,7 +324,7 @@ SmallVector<Value> hoistAllocs(Operation* parent, Region& region,
         continue;
       }
 
-      auto* reusable = llvm::find_if(freeAllocs, [&](Value free) {
+      auto *reusable = llvm::find_if(freeAllocs, [&](Value free) {
         return free && free.getType() == alloc.getType();
       });
       if (reusable == freeAllocs.end()) {
@@ -340,17 +346,18 @@ SmallVector<Value> hoistAllocs(Operation* parent, Region& region,
   }
   // Return remaining free allocs.
   for (auto reusable : freeAllocs) {
-    if (reusable) result.push_back(reusable);
+    if (reusable)
+      result.push_back(reusable);
   }
   return result;
 }
 
 // Hoists allocs from while and for loops.
-bool hoistAllocs(Block& block) {
-  auto* op = &block.front();
+bool hoistAllocs(Block &block) {
+  auto *op = &block.front();
   bool result = false;
   while (op) {
-    for (auto& region : op->getRegions()) {
+    for (auto &region : op->getRegions()) {
       if (!region.empty()) {
         assert(region.hasOneBlock());
         const bool currResult = hoistAllocs(region.front());
@@ -381,7 +388,7 @@ bool hoistAllocs(Block& block) {
 
     if (auto rbi = llvm::dyn_cast<RegionBranchOpInterface>(op)) {
       SmallVector<Value> hoistedAllocs;
-      for (auto& region : op->getRegions()) {
+      for (auto &region : op->getRegions()) {
         hoistedAllocs = hoistAllocs(rbi, region, std::move(hoistedAllocs));
       }
       result |= !hoistedAllocs.empty();
@@ -402,7 +409,7 @@ void promoteToStack(memref::DeallocOp dealloc) {
   dealloc->erase();
 }
 
-bool simplifyLoopDeallocs(Block& block) {
+bool simplifyLoopDeallocs(Block &block) {
   // Tries to transform:
   //   %a:n = scf.while (...)
   //   dealloc %a#i
@@ -415,9 +422,10 @@ bool simplifyLoopDeallocs(Block& block) {
 
   // This enables more buffer promotion/reuse.
   bool result = false;
-  for (auto& op : block.getOperations()) {
+  for (auto &op : block.getOperations()) {
     auto rbi = llvm::dyn_cast<RegionBranchOpInterface>(op);
-    if (!rbi) continue;
+    if (!rbi)
+      continue;
 
     struct ResultInfo {
       memref::DeallocOp dealloc;
@@ -442,7 +450,7 @@ bool simplifyLoopDeallocs(Block& block) {
 
     breaks_if_you_move_ops::ValueEquivalenceClasses eq;
     auto getAliases = [&](RegionBranchPoint point) {
-      for (const auto& edge : getSuccessorRegions(rbi, point)) {
+      for (const auto &edge : getSuccessorRegions(rbi, point)) {
         for (auto [pred, succ] : llvm::zip(edge.getPredecessorOperands(),
                                            edge.getSuccessorValues())) {
           eq.unionSets(pred, succ);
@@ -451,12 +459,13 @@ bool simplifyLoopDeallocs(Block& block) {
     };
 
     getAliases(RegionBranchPoint::parent());
-    for (auto& region : rbi->getRegions()) {
+    for (auto &region : rbi->getRegions()) {
       getAliases(region);
     }
 
     for (auto it = eq.begin(), e = eq.end(); it != e; ++it) {
-      if (!it->isLeader()) continue;
+      if (!it->isLeader())
+        continue;
 
       breaks_if_you_move_ops::ValueSet equivalentOperands;
       llvm::SmallVector<memref::DeallocOp> deallocs;
@@ -493,17 +502,18 @@ bool simplifyLoopDeallocs(Block& block) {
   return result;
 }
 
-void promoteBuffers(Block& block) {
+void promoteBuffers(Block &block) {
   // TODO(jreiffers): Use byte sizes instead.
   int64_t remainingAllowedStackUse = 1 << 12;
-  for (auto* op = &block.front(); op;) {
+  for (auto *op = &block.front(); op;) {
     auto alloc = llvm::dyn_cast<memref::AllocOp>(op);
     op = op->getNextNode();
 
     if (alloc) {
-      if (!alloc.getMemref().getType().hasStaticShape()) continue;
+      if (!alloc.getMemref().getType().hasStaticShape())
+        continue;
 
-      auto dealloc = llvm::find_if(alloc->getUsers(), [&](Operation* user) {
+      auto dealloc = llvm::find_if(alloc->getUsers(), [&](Operation *user) {
         return user->getBlock() == &block && llvm::isa<memref::DeallocOp>(user);
       });
 
@@ -530,7 +540,7 @@ void promoteBuffers(Block& block) {
 struct BufferReusePass : public impl::BufferReusePassBase<BufferReusePass> {
   void runOnOperation() override {
     bool result;
-    auto& block = getOperation().getBody().front();
+    auto &block = getOperation().getBody().front();
     // Copy elimination requires small live-ranges to work well. We only extend
     // live ranges afterwards, so running it more than once doesn't help.
     eliminateCopies(block, /*root=*/block);
@@ -551,12 +561,12 @@ struct BufferReusePass : public impl::BufferReusePassBase<BufferReusePass> {
   }
 };
 
-}  // namespace
+} // namespace
 
 std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>>
 createBufferReusePass() {
   return std::make_unique<BufferReusePass>();
 }
 
-}  // namespace deallocation
-}  // namespace mlir
+} // namespace deallocation
+} // namespace mlir

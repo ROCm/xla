@@ -75,9 +75,7 @@ class Shape {
 
   // Returns the rank (number of dimensions) of the given shape. Shape must be
   // an array.
-  int64_t rank() const {
-    return dimensions_.size();
-  }
+  int64_t rank() const { return dimensions_.size(); }
 
   // Returns whether the shape is of the specified type (array, tuple, etc).
   bool IsArray() const { return primitive_util::IsArrayType(element_type()); }

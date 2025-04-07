@@ -37,14 +37,14 @@ namespace hlo {
 // between two ranked tensors.
 // If `allow_empty` is true, then null can be returned to mean that the
 // broadcast is an "identity".
-mlir::DenseI64ArrayAttr getBroadcastDimensionsAttr(mlir::Builder* b,
+mlir::DenseI64ArrayAttr getBroadcastDimensionsAttr(mlir::Builder *b,
                                                    mlir::Value x, mlir::Value y,
                                                    bool allowEmpty = true);
 
 // Get a constant splat for the given value of type. Requires value to be of
 // type static shaped RankedTensorType.
 template <typename T>
-static ElementsAttr getSplat(Builder* b, RankedTensorType ty, T constant) {
+static ElementsAttr getSplat(Builder *b, RankedTensorType ty, T constant) {
   Type elementTy = getElementTypeOrSelf(ty);
 
   if (elementTy.isSignlessInteger())
@@ -66,7 +66,7 @@ static ElementsAttr getSplat(Builder* b, RankedTensorType ty, T constant) {
 }
 
 template <typename T>
-static ElementsAttr getSplat(Builder* b, Value val, T constant) {
+static ElementsAttr getSplat(Builder *b, Value val, T constant) {
   return getSplat(b, mlir::cast<RankedTensorType>(val.getType()), constant);
 }
 
@@ -82,10 +82,10 @@ DenseElementsAttr getScalarNegZeroOfType(Type ty);
 
 // Enum type used to specify scalar argument to GetScalarLimitOfType.
 enum ScalarLimit {
-  kLowest,          // The scalar corresponding to numeric_limits<T>::lowest.
-  kInfinityLowest,  // Like kLowest, but returns -infinity where available.
-  kMax,             // The scalar corresponding to numeric_limits<T>::max.
-  kInfinityMax,     // Like kMax, but returns infinity where available.
+  kLowest,         // The scalar corresponding to numeric_limits<T>::lowest.
+  kInfinityLowest, // Like kLowest, but returns -infinity where available.
+  kMax,            // The scalar corresponding to numeric_limits<T>::max.
+  kInfinityMax,    // Like kMax, but returns infinity where available.
 };
 
 // Returns a scalar limit value for the given type.
@@ -98,7 +98,7 @@ DenseElementsAttr getScalarLimitOfType(Type ty, ScalarLimit limit);
 // Given `op_name` from LMHLO, returns the corresponding op name in MHLO.
 // Returns empty string if no such op exists.
 std::string lmhloToMhloOpName(llvm::StringRef opName,
-                              mlir::MLIRContext* context);
+                              mlir::MLIRContext *context);
 
 // Return true if Attr has values [0, 1, ...].
 bool isSequenceStartingWith0(Attribute attr);
@@ -107,21 +107,23 @@ bool isSequenceStartingWith0(Attribute attr);
 int64_t getArgumentIndex(func::FuncOp op, Value value);
 
 /// Computes the memory usage of the given allocations.
-std::pair<size_t, size_t> computeMemory(const std::vector<Value>& allocs);
+std::pair<size_t, size_t> computeMemory(const std::vector<Value> &allocs);
 
-}  // namespace hlo
-}  // namespace mlir
+} // namespace hlo
+} // namespace mlir
 
 namespace mlir {
 namespace chlo {
 
 template <typename T>
-static Value getConstantLike(OpBuilder& b, Location loc, T constant,
+static Value getConstantLike(OpBuilder &b, Location loc, T constant,
                              Value val) {
   Type ty = getElementTypeOrSelf(val.getType());
   auto getAttr = [&]() -> Attribute {
-    if (mlir::isa<IntegerType>(ty)) return b.getIntegerAttr(ty, constant);
-    if (mlir::isa<FloatType>(ty)) return b.getFloatAttr(ty, constant);
+    if (mlir::isa<IntegerType>(ty))
+      return b.getIntegerAttr(ty, constant);
+    if (mlir::isa<FloatType>(ty))
+      return b.getFloatAttr(ty, constant);
     if (auto complexTy = mlir::dyn_cast<ComplexType>(ty))
       return complex::NumberAttr::get(complexTy, constant, 0);
     llvm_unreachable("unhandled element type");
@@ -129,17 +131,17 @@ static Value getConstantLike(OpBuilder& b, Location loc, T constant,
   return b.create<ConstantLikeOp>(loc, cast<TypedAttr>(getAttr()), val);
 }
 
-Value getConstantLike(OpBuilder& b, Location loc, const APFloat& constant,
+Value getConstantLike(OpBuilder &b, Location loc, const APFloat &constant,
                       Value val);
 
-Value getConstantLikeMaxFiniteValue(OpBuilder& b, Location loc, Value val);
+Value getConstantLikeMaxFiniteValue(OpBuilder &b, Location loc, Value val);
 
-Value getConstantLikeInfValue(OpBuilder& b, Location loc, Value val,
+Value getConstantLikeInfValue(OpBuilder &b, Location loc, Value val,
                               bool negative);
 
-Value getConstantLikeSmallestFiniteValue(OpBuilder& b, Location loc, Value val);
+Value getConstantLikeSmallestFiniteValue(OpBuilder &b, Location loc, Value val);
 
-}  // namespace chlo
-}  // namespace mlir
+} // namespace chlo
+} // namespace mlir
 
-#endif  // MLIR_HLO_UTILS_HLO_UTILS_H
+#endif // MLIR_HLO_UTILS_HLO_UTILS_H

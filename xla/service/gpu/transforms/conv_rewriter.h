@@ -37,7 +37,7 @@ namespace gpu {
 class ConvRewriter : public HloModulePass {
  public:
   explicit ConvRewriter(const se::GpuComputeCapability& compute_capability)
-      : compute_capability_(compute_capability) {};
+      : compute_capability_(compute_capability){};
 
   absl::string_view name() const override { return "conv-rewriter"; }
 

@@ -50,7 +50,7 @@ namespace {
 /// that are currently required, currently mixing std, linalg and gpu.
 class GpuKernelToNVVMPass
     : public impl::GpuKernelToNVVMPassBase<GpuKernelToNVVMPass> {
- public:
+public:
   explicit GpuKernelToNVVMPass(bool useBarePtrCallConv) {
     this->useBarePtrCallConv = useBarePtrCallConv;
   }
@@ -64,10 +64,10 @@ class GpuKernelToROCDLPass
   void runOnOperation() override;
 };
 
-}  // namespace
+} // namespace
 
 static void populateAllCommonVectorProgressiveLoweringPatterns(
-    RewritePatternSet& patterns) {
+    RewritePatternSet &patterns) {
   vector::populateVectorToVectorCanonicalizationPatterns(patterns);
   vector::populateVectorBroadcastLoweringPatterns(patterns);
   vector::populateVectorContractLoweringPatterns(
@@ -81,8 +81,8 @@ static void populateAllCommonVectorProgressiveLoweringPatterns(
                                                  /*maxTransferRank=*/1);
 }
 
-static void populateCommonPatterns(LLVMTypeConverter& converter,
-                                   RewritePatternSet& patterns) {
+static void populateCommonPatterns(LLVMTypeConverter &converter,
+                                   RewritePatternSet &patterns) {
   arith::populateArithToLLVMConversionPatterns(converter, patterns);
   populateMathToLLVMConversionPatterns(converter, patterns);
   populateFinalizeMemRefToLLVMConversionPatterns(converter, patterns);
@@ -110,12 +110,12 @@ void GpuKernelToNVVMPass::runOnOperation() {
   populateGpuMemorySpaceAttributeConversions(
       converter, [](gpu::AddressSpace space) {
         switch (space) {
-          case gpu::AddressSpace::Global:
-            return 1;
-          case gpu::AddressSpace::Workgroup:
-            return 3;
-          case gpu::AddressSpace::Private:
-            return 5;
+        case gpu::AddressSpace::Global:
+          return 1;
+        case gpu::AddressSpace::Workgroup:
+          return 3;
+        case gpu::AddressSpace::Private:
+          return 5;
         }
         assert(false && "unknown address space enum value");
         return 0;
@@ -143,8 +143,8 @@ void GpuKernelToROCDLPass::runOnOperation() {
   }
 }
 
-std::unique_ptr<OperationPass<gpu::GPUModuleOp>> createGpuKernelToNvvmPass(
-    bool useBarePtrCallConv) {
+std::unique_ptr<OperationPass<gpu::GPUModuleOp>>
+createGpuKernelToNvvmPass(bool useBarePtrCallConv) {
   return std::make_unique<GpuKernelToNVVMPass>(useBarePtrCallConv);
 }
 
@@ -152,4 +152,4 @@ std::unique_ptr<OperationPass<gpu::GPUModuleOp>> createGpuKernelToRocdlPass() {
   return std::make_unique<GpuKernelToROCDLPass>();
 }
 
-}  // namespace mlir
+} // namespace mlir

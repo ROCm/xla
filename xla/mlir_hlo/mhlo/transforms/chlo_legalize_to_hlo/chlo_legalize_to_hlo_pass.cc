@@ -122,12 +122,12 @@ struct RaggedDotChloToMhlo : public OpRewritePattern<chlo::RaggedDotOp> {
     auto mhloPrecision =
         [](chlo::Precision precision) -> std::optional<mhlo::Precision> {
       switch (precision) {
-        case chlo::Precision::DEFAULT:
-          return mhlo::Precision::DEFAULT;
-        case chlo::Precision::HIGH:
-          return mhlo::Precision::HIGH;
-        case chlo::Precision::HIGHEST:
-          return mhlo::Precision::HIGHEST;
+      case chlo::Precision::DEFAULT:
+        return mhlo::Precision::DEFAULT;
+      case chlo::Precision::HIGH:
+        return mhlo::Precision::HIGH;
+      case chlo::Precision::HIGHEST:
+        return mhlo::Precision::HIGHEST;
       }
     };
     ArrayAttr precisionConfig = rewriter.getArrayAttr({});
@@ -156,15 +156,15 @@ struct RaggedDotChloToMhlo : public OpRewritePattern<chlo::RaggedDotOp> {
   }
 };
 
-}  // namespace
+} // namespace
 
-}  // namespace mhlo
+} // namespace mhlo
 
 namespace chlo {
 namespace {
 #include "chlo_legalize_to_hlo/generated_chlo_legalize_to_hlo.inc"
 
-}  // namespace
+} // namespace
 
 void populateChloToHighLevelMhloOpPatterns(MLIRContext *,
                                            RewritePatternSet *patterns) {
@@ -180,5 +180,5 @@ void populateChloToHloPatterns(MLIRContext *context,
   stablehlo::populateStablehloToHloPatterns(patterns, typeConverter, context);
 }
 
-}  // namespace chlo
-}  // namespace mlir
+} // namespace chlo
+} // namespace mlir

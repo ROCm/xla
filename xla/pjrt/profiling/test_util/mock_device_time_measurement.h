@@ -57,7 +57,7 @@ class MockDeviceTimeMeasurement : public DeviceTimeMeasurement {
   }
 
   // Record elapsed device time for the given input device type.
-  void Record(absl::Duration elapsed, DeviceType device_type) override {};
+  void Record(absl::Duration elapsed, DeviceType device_type) override{};
 };
 
 std::unique_ptr<DeviceTimeMeasurement> CreateDeviceTimeMeasurement();

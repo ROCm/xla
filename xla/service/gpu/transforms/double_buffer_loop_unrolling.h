@@ -51,7 +51,7 @@ class DoubleBufferLoopUnrolling : public HloModulePass {
 
   explicit DoubleBufferLoopUnrolling(
       UnrollStrategy unroll_strategy = UnrollStrategy::kDoubleBuffer)
-      : unroll_strategy_(unroll_strategy) {};
+      : unroll_strategy_(unroll_strategy){};
   ~DoubleBufferLoopUnrolling() override = default;
 
   absl::string_view name() const override {

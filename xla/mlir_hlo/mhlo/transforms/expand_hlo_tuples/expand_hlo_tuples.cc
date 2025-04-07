@@ -18,8 +18,6 @@ limitations under the License.
 #include <string>
 #include <vector>
 
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mhlo/transforms/passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -30,6 +28,8 @@ limitations under the License.
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
 namespace mhlo {
@@ -43,10 +43,10 @@ namespace {
 // the function is more like the main function.
 class ExpandHloTuplesPass
     : public impl::ExpandHloTuplesPassBase<ExpandHloTuplesPass> {
- public:
+public:
   ExpandHloTuplesPass() = default;
-  ExpandHloTuplesPass(const ExpandHloTuplesPass&) = default;
-  explicit ExpandHloTuplesPass(const std::string& entryFunctionName) {
+  ExpandHloTuplesPass(const ExpandHloTuplesPass &) = default;
+  explicit ExpandHloTuplesPass(const std::string &entryFunctionName) {
     entry_function_name_ = entryFunctionName;
   }
 
@@ -120,7 +120,8 @@ class ExpandHloTuplesPass
       }
     }
 
-    if (returnOp.getOperands() == expandedReturnOperands) return;
+    if (returnOp.getOperands() == expandedReturnOperands)
+      return;
 
     builder.create<mlir::func::ReturnOp>(returnOp.getLoc(),
                                          expandedReturnOperands);
@@ -149,12 +150,12 @@ class ExpandHloTuplesPass
   }
 };
 
-}  // end namespace
+} // end namespace
 
-std::unique_ptr<OperationPass<ModuleOp>> createExpandHloTuplesPass(
-    const std::string& entryFunctionName) {
+std::unique_ptr<OperationPass<ModuleOp>>
+createExpandHloTuplesPass(const std::string &entryFunctionName) {
   return std::make_unique<ExpandHloTuplesPass>(entryFunctionName);
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

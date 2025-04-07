@@ -58,7 +58,8 @@ struct BroadcastRemoveSubsumedOperandsPattern
     SmallVector<SmallVector<int64_t, 4>, 4> operandExtents;
     for (Value shape : op.getShapes()) {
       auto &extents = operandExtents.emplace_back();
-      if (failed(shape::getShapeVec(shape, extents))) return failure();
+      if (failed(shape::getShapeVec(shape, extents)))
+        return failure();
 
       // Prepend dynamic dims if sizes don't match.
       if (extents.size() > knownExtents.size()) {
@@ -107,7 +108,8 @@ struct BroadcastRemoveSubsumedOperandsPattern
         int64_t extent = extents[e - i - 1];
         // A dimension of an operand can be subsumed if it's
         //   - a 1 dimension. All other operands will have 1 dims or better.
-        if (extent == 1) continue;
+        if (extent == 1)
+          continue;
 
         //   - a dynamic dim but the result is known to be constant.
         int64_t knownExtent = knownExtents[knownExtents.size() - i - 1];
@@ -159,14 +161,16 @@ struct ExtractFromBroadcastedTensorCanonicalizationPattern
   LogicalResult matchAndRewrite(tensor::ExtractOp op,
                                 PatternRewriter &rewriter) const override {
     auto broadcastOp = op.getTensor().getDefiningOp<BroadcastOp>();
-    if (!broadcastOp) return failure();
+    if (!broadcastOp)
+      return failure();
 
     // Confirm that there is a constant index. This is required, so we can
     // confirm the DimOp's input will define the resulting broadcasted shape in
     // that dimension.
     auto index =
         op.getIndices().front().getDefiningOp<arith::ConstantIndexOp>();
-    if (!index) return failure();
+    if (!index)
+      return failure();
     auto idx = index.value();
 
     // Iterate through the operands with 3 considerations in this order:
@@ -183,13 +187,16 @@ struct ExtractFromBroadcastedTensorCanonicalizationPattern
     int64_t numDynamic = 0;
     for (auto shape : broadcastOp.getShapes()) {
       auto shapeOfOp = shape.getDefiningOp<ShapeOfOp>();
-      if (!shapeOfOp) return failure();
+      if (!shapeOfOp)
+        return failure();
       auto shapedType =
           mlir::cast<ShapedType>(shapeOfOp->getOperandTypes().front());
 
       // Abort on the existence of unranked shapes as they require more logic.
-      if (!shapedType.hasRank()) return failure();
-      if (shapedType.getRank() <= idx) continue;
+      if (!shapedType.hasRank())
+        return failure();
+      if (shapedType.getRank() <= idx)
+        continue;
 
       // Only consider dynamic dimensions after the loop because any non-1
       // static dimension takes precedence.
@@ -199,14 +206,16 @@ struct ExtractFromBroadcastedTensorCanonicalizationPattern
         continue;
       }
 
-      if (shapedType.getDimSize(idx) == 1) continue;
+      if (shapedType.getDimSize(idx) == 1)
+        continue;
 
       // Return as soon as we see a non-1 static dim.
       rewriter.replaceOpWithNewOp<arith::ConstantIndexOp>(
           op, shapedType.getDimSize(idx));
       return success();
     }
-    if (numDynamic > 1) return failure();
+    if (numDynamic > 1)
+      return failure();
 
     // Replace with the single dynamic dimension or 1.
     if (dynamicShape) {
@@ -247,11 +256,11 @@ struct ShapeSimplification
   }
 };
 
-}  // namespace
+} // namespace
 
 std::unique_ptr<OperationPass<func::FuncOp>> createShapeSimplification() {
   return std::make_unique<ShapeSimplification>();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

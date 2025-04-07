@@ -68,7 +68,8 @@ using tsl::profiler::XSpace;
 void AnnotationMap::Add(uint32_t correlation_id,
                         const std::string& annotation) {
   if (annotation.empty()) return;
-  VLOG(3) << "Add annotation: " << " correlation_id=" << correlation_id
+  VLOG(3) << "Add annotation: "
+          << " correlation_id=" << correlation_id
           << ", annotation: " << annotation;
   absl::MutexLock lock(&map_.mutex);
   if (map_.annotations.size() < max_size_) {
@@ -458,7 +459,8 @@ class PerDeviceCollector {
         continue;
       }
       auto* plane = is_host_event ? host_plane : device_plane;
-      VLOG(9) << "Event" << " type=" << static_cast<int>(event.type)
+      VLOG(9) << "Event"
+              << " type=" << static_cast<int>(event.type)
               << " line_id=" << line_id
               << (is_host_event ? " host plane=" : " device plane=")
               << plane->Name();

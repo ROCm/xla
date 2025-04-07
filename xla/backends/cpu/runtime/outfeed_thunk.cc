@@ -54,7 +54,6 @@ OutfeedThunk::OutfeedThunk(Info info,
 
 tsl::AsyncValueRef<Thunk::ExecuteEvent> OutfeedThunk::Execute(
     const ExecuteParams& params) {
-
   VLOG(3) << absl::StreamFormat("Outfeed %d buffers", outfeed_buffers_.size());
 
   runtime::XfeedManager* xfeed = params.xfeed;

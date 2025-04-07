@@ -112,7 +112,7 @@ void populateMergeAssumingOpsPatterns(MLIRContext *context,
 void populateGroupReductionDimensionsPatterns(MLIRContext *context,
                                               RewritePatternSet *patterns,
                                               bool preferColumnsReductions);
-}  // namespace mhlo
+} // namespace mhlo
 
 namespace chlo {
 
@@ -127,7 +127,7 @@ void populateChloToHloPatterns(MLIRContext *context,
                                TypeConverter *typeConverter,
                                RewritePatternSet *patterns);
 
-}  // namespace chlo
+} // namespace chlo
 
 namespace stablehlo {
 
@@ -148,8 +148,8 @@ void populateStablehloToHloPatterns(RewritePatternSet *patterns,
                                     TypeConverter *converter,
                                     MLIRContext *context);
 
-}  // namespace stablehlo
+} // namespace stablehlo
 
-}  // namespace mlir
+} // namespace mlir
 
-#endif  // MLIR_HLO_MHLO_TRANSFORMS_REWRITERS_H
+#endif // MLIR_HLO_MHLO_TRANSFORMS_REWRITERS_H

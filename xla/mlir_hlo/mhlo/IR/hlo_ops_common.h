@@ -30,29 +30,30 @@ namespace mlir {
 namespace hlo {
 
 // Verifies the source target pairs attached to collective permute.
-LogicalResult verifyCollectivePermuteSourceTargetPairs(
-    Operation* op, DenseIntElementsAttr attr);
+LogicalResult
+verifyCollectivePermuteSourceTargetPairs(Operation *op,
+                                         DenseIntElementsAttr attr);
 
-LogicalResult verifyReduceScatter(Operation* op, TypeRange operandTypes,
+LogicalResult verifyReduceScatter(Operation *op, TypeRange operandTypes,
                                   TypeRange resultTypes,
                                   uint64_t scatterDimension);
 
 // Custom formatting for convolution window attributes.
-void printWindowAttributes(OpAsmPrinter& p, Operation* op,
+void printWindowAttributes(OpAsmPrinter &p, Operation *op,
                            std::optional<DenseIntElementsAttr> windowStrides,
                            std::optional<DenseIntElementsAttr> padding,
                            std::optional<DenseIntElementsAttr> lhsDilation,
                            std::optional<DenseIntElementsAttr> rhsDilation,
                            std::optional<DenseElementsAttr> windowReversal);
 
-ParseResult parseWindowAttributes(OpAsmParser& parser,
-                                  DenseIntElementsAttr& windowStrides,
-                                  DenseIntElementsAttr& padding,
-                                  DenseIntElementsAttr& lhsDilation,
-                                  DenseIntElementsAttr& rhsDilation,
-                                  DenseElementsAttr& windowReversal);
+ParseResult parseWindowAttributes(OpAsmParser &parser,
+                                  DenseIntElementsAttr &windowStrides,
+                                  DenseIntElementsAttr &padding,
+                                  DenseIntElementsAttr &lhsDilation,
+                                  DenseIntElementsAttr &rhsDilation,
+                                  DenseElementsAttr &windowReversal);
 
-}  // namespace hlo
-}  // namespace mlir
+} // namespace hlo
+} // namespace mlir
 
-#endif  // MLIR_HLO_MHLO_IR_HLO_OPS_COMMON_H
+#endif // MLIR_HLO_MHLO_IR_HLO_OPS_COMMON_H

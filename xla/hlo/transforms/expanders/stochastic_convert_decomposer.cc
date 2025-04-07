@@ -135,8 +135,7 @@ absl::Status DecomposeStochasticConvert(HloComputation* comp,
 
   // TODO(b/232442915): Add support for converting to floats.
   return Internal("Unsupported stochastic convert: from %s to %s",
-                       PrimitiveType_Name(from_type),
-                       PrimitiveType_Name(to_type));
+                  PrimitiveType_Name(from_type), PrimitiveType_Name(to_type));
 }
 
 absl::StatusOr<bool> StochasticConvertDecomposer::Run(

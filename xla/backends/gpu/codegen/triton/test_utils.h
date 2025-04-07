@@ -100,7 +100,7 @@ class TritonSupportTestBase : public HloTestBase {
 
     TestedInstruction(std::unique_ptr<HloModule> module,
                       const HloInstruction& instruction)
-        : module_(std::move(module)), instruction_(instruction) {};
+        : module_(std::move(module)), instruction_(instruction){};
     std::unique_ptr<HloModule> module_;
     const HloInstruction& instruction_;
   };

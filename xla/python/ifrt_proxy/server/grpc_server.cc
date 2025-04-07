@@ -89,7 +89,7 @@ GrpcServer::CreateFromIfrtClientFactory(
           IfrtProxyVersion version, uint64_t session_id,
           std::shared_ptr<HostBufferStore> host_buffer_store,
           AttributeMap initialization_data) mutable
-          -> absl::StatusOr<std::unique_ptr<BackendInterface>> {
+      -> absl::StatusOr<std::unique_ptr<BackendInterface>> {
         TF_ASSIGN_OR_RETURN(
             auto ifrt_client,
             ifrt_client_factory(std::move(initialization_data)));

@@ -186,7 +186,8 @@ struct JaxPluginPaths {
 JaxPluginPaths getJaxPluginPaths() {
   JaxPluginPaths paths;
 
-  paths.bitcode_path = std::getenv("JAX_ROCM_PLUGIN_INTERNAL_BITCODE_PATH") ?: "";
+  paths.bitcode_path =
+      std::getenv("JAX_ROCM_PLUGIN_INTERNAL_BITCODE_PATH") ?: "";
   paths.lld_path = std::getenv("JAX_ROCM_PLUGIN_INTERNAL_LLD_PATH") ?: "";
 
   return paths;
@@ -362,8 +363,7 @@ std::string MapGCNArchNameTokenToFeatureStr(const std::string& token,
   if (token == "sramecc+") {
     return "+sramecc";
   } else if (token == "sramecc-") {
-    if (gfx == "gfx90a" || gfx == "gfx942")
-      return "";
+    if (gfx == "gfx90a" || gfx == "gfx942") return "";
     return "-sramecc";
   } else if (token == "xnack+") {
     return "+xnack";
@@ -420,9 +420,12 @@ std::string GetROCDLDir(const DebugOptions& debug_options) {
   potential_rocdl_dirs.push_back(getJaxPluginPaths().bitcode_path);
 
   // Tries all potential ROCDL directories in the order they are inserted.
-  // Returns the first directory that contains opencompute math libs bitcode file (ocml.bc)
+  // Returns the first directory that contains opencompute math libs bitcode
+  // file (ocml.bc)
   for (const std::string& potential_rocdl_dir : potential_rocdl_dirs) {
-    if (tsl::Env::Default()->FileExists(tsl::io::JoinPath(potential_rocdl_dir, "ocml.bc")).ok()) {
+    if (tsl::Env::Default()
+            ->FileExists(tsl::io::JoinPath(potential_rocdl_dir, "ocml.bc"))
+            .ok()) {
       VLOG(2) << "Found ROCm-Device-Libs dir " << potential_rocdl_dir;
       return potential_rocdl_dir;
     }

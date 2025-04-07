@@ -42,7 +42,7 @@ namespace mlir {
 // Assumes that T can be cheaply copied for simplicity.
 template <typename T>
 class OrderedSet {
- public:
+public:
   // Inserts `value` into the ordered set.  Returns true if the value was not
   // present in the set before the insertion.
   bool Insert(T value) {
@@ -81,9 +81,9 @@ class OrderedSet {
   bool Contains(T value) const { return value_to_index_.count(value); }
   size_t Size() const { return value_sequence_.size(); }
 
-  const std::vector<T>& GetSequence() const { return value_sequence_; }
+  const std::vector<T> &GetSequence() const { return value_sequence_; }
 
- private:
+private:
   // The stable order that we maintain through insertions and deletions.
   std::vector<T> value_sequence_;
 
@@ -116,7 +116,7 @@ class OrderedSet {
 // The current implementation uses O(|V|+|E|) space.
 
 class GraphCycles {
- public:
+public:
   explicit GraphCycles(int32_t num_nodes);
   ~GraphCycles();
 
@@ -154,13 +154,13 @@ class GraphCycles {
   // ----------------------------------------------------
   struct Rep;
 
- private:
-  GraphCycles(const GraphCycles&) = delete;
-  GraphCycles& operator=(const GraphCycles&) = delete;
+private:
+  GraphCycles(const GraphCycles &) = delete;
+  GraphCycles &operator=(const GraphCycles &) = delete;
 
-  Rep* rep_;  // opaque representation
+  Rep *rep_; // opaque representation
 };
 
-}  // namespace mlir
+} // namespace mlir
 
-#endif  // MLIR_HLO_UTILS_CYCLE_DETECTOR_H
+#endif // MLIR_HLO_UTILS_CYCLE_DETECTOR_H

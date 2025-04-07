@@ -23,10 +23,10 @@ namespace mlir {
 namespace stablehlo_ext {
 
 /// Populates extension patterns for refining shapes of Shardy ops.
-void populateSdyShapeRefinementPatterns(RewritePatternSet* patterns,
-                                        MLIRContext* context);
+void populateSdyShapeRefinementPatterns(RewritePatternSet *patterns,
+                                        MLIRContext *context);
 
-}  // namespace stablehlo_ext
-}  // namespace mlir
+} // namespace stablehlo_ext
+} // namespace mlir
 
-#endif  // XLA_MLIR_HLO_STABLEHLO_EXT_TRANSFORMS_SDY_REFINE_SHAPES_H_
+#endif // XLA_MLIR_HLO_STABLEHLO_EXT_TRANSFORMS_SDY_REFINE_SHAPES_H_

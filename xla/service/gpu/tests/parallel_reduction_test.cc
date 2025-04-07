@@ -77,11 +77,11 @@ ENTRY %cluster {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> hlo_module,
                           ParseAndReturnVerifiedModule(hlo_text));
 
-    CompileAndVerifyIr(std::move(hlo_module),
-                       R"(CHECK:      switch {{.*}} label {{.*}} [
+  CompileAndVerifyIr(std::move(hlo_module),
+                     R"(CHECK:      switch {{.*}} label {{.*}} [
                           CHECK-NEXT:   label
                           CHECK-NEXT: ])",
-                       /*match_optimized_ir=*/false);
+                     /*match_optimized_ir=*/false);
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-5, 1e-5}));
 }
 
@@ -116,11 +116,11 @@ ENTRY %cluster {
 
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> hlo_module,
                           ParseAndReturnVerifiedModule(hlo_text));
-    CompileAndVerifyIr(std::move(hlo_module),
-                       R"(CHECK:      switch {{.*}} label {{.*}} [
+  CompileAndVerifyIr(std::move(hlo_module),
+                     R"(CHECK:      switch {{.*}} label {{.*}} [
                           CHECK-NEXT:   label
                           CHECK-NEXT: ])",
-                       /*match_optimized_ir=*/false);
+                     /*match_optimized_ir=*/false);
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-5, 1e-5}));
 }
 
@@ -306,11 +306,11 @@ ENTRY %cluster {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> hlo_module,
                           ParseAndReturnVerifiedModule(hlo_text));
 
-    CompileAndVerifyIr(std::move(hlo_module),
-                       R"(CHECK:      switch {{.*}} label {{.*}} [
+  CompileAndVerifyIr(std::move(hlo_module),
+                     R"(CHECK:      switch {{.*}} label {{.*}} [
                           CHECK-NEXT:   label
                           CHECK-NEXT: ])",
-                       /*match_optimized_ir=*/false);
+                     /*match_optimized_ir=*/false);
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-5, 1e-5}));
 }
 

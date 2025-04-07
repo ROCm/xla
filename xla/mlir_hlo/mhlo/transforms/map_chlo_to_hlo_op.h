@@ -35,38 +35,38 @@ struct HloNaryElementwiseAdaptor {
   }
 };
 
-inline std::optional<mhlo::ComparisonDirection> mhloComparisonDirection(
-    chlo::ComparisonDirection value) {
+inline std::optional<mhlo::ComparisonDirection>
+mhloComparisonDirection(chlo::ComparisonDirection value) {
   switch (value) {
-    case chlo::ComparisonDirection::EQ:
-      return mhlo::ComparisonDirection::EQ;
-    case chlo::ComparisonDirection::NE:
-      return mhlo::ComparisonDirection::NE;
-    case chlo::ComparisonDirection::GE:
-      return mhlo::ComparisonDirection::GE;
-    case chlo::ComparisonDirection::GT:
-      return mhlo::ComparisonDirection::GT;
-    case chlo::ComparisonDirection::LE:
-      return mhlo::ComparisonDirection::LE;
-    case chlo::ComparisonDirection::LT:
-      return mhlo::ComparisonDirection::LT;
+  case chlo::ComparisonDirection::EQ:
+    return mhlo::ComparisonDirection::EQ;
+  case chlo::ComparisonDirection::NE:
+    return mhlo::ComparisonDirection::NE;
+  case chlo::ComparisonDirection::GE:
+    return mhlo::ComparisonDirection::GE;
+  case chlo::ComparisonDirection::GT:
+    return mhlo::ComparisonDirection::GT;
+  case chlo::ComparisonDirection::LE:
+    return mhlo::ComparisonDirection::LE;
+  case chlo::ComparisonDirection::LT:
+    return mhlo::ComparisonDirection::LT;
   }
   return {};
 }
 
-inline std::optional<mhlo::ComparisonType> mhloComparisonType(
-    chlo::ComparisonType value) {
+inline std::optional<mhlo::ComparisonType>
+mhloComparisonType(chlo::ComparisonType value) {
   switch (value) {
-    case chlo::ComparisonType::NOTYPE:
-      return mhlo::ComparisonType::NOTYPE;
-    case chlo::ComparisonType::FLOAT:
-      return mhlo::ComparisonType::FLOAT;
-    case chlo::ComparisonType::TOTALORDER:
-      return mhlo::ComparisonType::TOTALORDER;
-    case chlo::ComparisonType::SIGNED:
-      return mhlo::ComparisonType::SIGNED;
-    case chlo::ComparisonType::UNSIGNED:
-      return mhlo::ComparisonType::UNSIGNED;
+  case chlo::ComparisonType::NOTYPE:
+    return mhlo::ComparisonType::NOTYPE;
+  case chlo::ComparisonType::FLOAT:
+    return mhlo::ComparisonType::FLOAT;
+  case chlo::ComparisonType::TOTALORDER:
+    return mhlo::ComparisonType::TOTALORDER;
+  case chlo::ComparisonType::SIGNED:
+    return mhlo::ComparisonType::SIGNED;
+  case chlo::ComparisonType::UNSIGNED:
+    return mhlo::ComparisonType::UNSIGNED;
   }
   return {};
 }
@@ -77,10 +77,12 @@ struct HloCompareAdaptor {
                                   OpBuilder &builder) {
     auto chloDirection = fromOp.getComparisonDirection();
     auto mhloDirection = mhloComparisonDirection(chloDirection);
-    if (!mhloDirection) return nullptr;
+    if (!mhloDirection)
+      return nullptr;
     auto chloType = fromOp.getCompareType().value_or(ComparisonType::NOTYPE);
     auto mhloType = mhloComparisonType(chloType);
-    if (!mhloType) return nullptr;
+    if (!mhloType)
+      return nullptr;
     auto mhloTypeAttr =
         fromOp.getCompareType()
             ? mhlo::ComparisonTypeAttr::get(builder.getContext(), *mhloType)
@@ -131,7 +133,7 @@ void populateForBroadcastingBinaryOp(MLIRContext *context,
 #undef POPULATE_BCAST
 }
 
-}  // namespace chlo
-}  // namespace mlir
+} // namespace chlo
+} // namespace mlir
 
-#endif  // MLIR_HLO_MHLO_TRANSFORMS_MAP_CHLO_TO_HLO_OP_H
+#endif // MLIR_HLO_MHLO_TRANSFORMS_MAP_CHLO_TO_HLO_OP_H

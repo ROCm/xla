@@ -35,16 +35,19 @@ namespace hlo {
 
 static constexpr size_t kPaddingSize = 64;
 
-DenseI64ArrayAttr getBroadcastDimensionsAttr(Builder* b, Value x, Value y,
+DenseI64ArrayAttr getBroadcastDimensionsAttr(Builder *b, Value x, Value y,
                                              bool allowEmpty) {
   TensorType xType = mlir::dyn_cast<RankedTensorType>(x.getType());
   TensorType yType = mlir::dyn_cast<RankedTensorType>(y.getType());
-  if (!xType || !yType) return {};
-  if (allowEmpty && xType == yType) return {};
+  if (!xType || !yType)
+    return {};
+  if (allowEmpty && xType == yType)
+    return {};
 
   // If the shapes have the same rank, then there is nothing to do.
   auto xRank = xType.getRank(), yRank = yType.getRank();
-  if (allowEmpty && xRank == yRank) return {};
+  if (allowEmpty && xRank == yRank)
+    return {};
 
   // Otherwise if the ranks of the inputs don't match, TensorFlow automatically
   // reshapes the smaller by padding with dimensions of size 1 as a prefix. In
@@ -111,16 +114,16 @@ DenseElementsAttr getScalarNegZeroOfType(Type ty) {
 }
 
 static APFloat getScalarLimitOfFloatType(FloatType floatTy, ScalarLimit limit) {
-  auto& semantics = floatTy.getFloatSemantics();
+  auto &semantics = floatTy.getFloatSemantics();
   switch (limit) {
-    case kLowest:
-      return APFloat::getLargest(semantics, /*negative=*/true);
-    case kInfinityLowest:
-      return APFloat::getInf(semantics, /*negative=*/true);
-    case kMax:
-      return APFloat::getLargest(semantics, /*negative=*/false);
-    case kInfinityMax:
-      return APFloat::getInf(semantics, /*negative=*/false);
+  case kLowest:
+    return APFloat::getLargest(semantics, /*negative=*/true);
+  case kInfinityLowest:
+    return APFloat::getInf(semantics, /*negative=*/true);
+  case kMax:
+    return APFloat::getLargest(semantics, /*negative=*/false);
+  case kInfinityMax:
+    return APFloat::getInf(semantics, /*negative=*/false);
   }
   llvm_unreachable("invalid limit");
 }
@@ -135,21 +138,21 @@ static APInt getScalarLimitOfIntegerType(IntegerType integerTy,
   unsigned width = integerTy.getWidth();
   bool isBool = (width == 1);
   switch (limit) {
-    case kLowest:
-    case kInfinityLowest:
-      if (integerTy.isUnsigned() || isBool) {
-        return APInt::getMinValue(width);
-      } else {
-        return APInt::getSignedMinValue(width);
-      }
+  case kLowest:
+  case kInfinityLowest:
+    if (integerTy.isUnsigned() || isBool) {
+      return APInt::getMinValue(width);
+    } else {
+      return APInt::getSignedMinValue(width);
+    }
 
-    case kMax:
-    case kInfinityMax:
-      if (integerTy.isUnsigned() || isBool) {
-        return APInt::getMaxValue(width);
-      } else {
-        return APInt::getSignedMaxValue(width);
-      }
+  case kMax:
+  case kInfinityMax:
+    if (integerTy.isUnsigned() || isBool) {
+      return APInt::getMaxValue(width);
+    } else {
+      return APInt::getSignedMaxValue(width);
+    }
   }
   llvm_unreachable("invalid limit");
 }
@@ -168,7 +171,7 @@ DenseElementsAttr getScalarLimitOfType(Type ty, ScalarLimit limit) {
 }
 
 std::string lmhloToMhloOpName(llvm::StringRef opName,
-                              mlir::MLIRContext* context) {
+                              mlir::MLIRContext *context) {
   assert(opName.starts_with("lmhlo.") && "Expected an LMHLO op");
 
   if (opName == "lmhlo.dot") {
@@ -180,25 +183,28 @@ std::string lmhloToMhloOpName(llvm::StringRef opName,
   }
 
   std::string mhloOpName(opName.drop_front(1));
-  if (context->isOperationRegistered(mhloOpName)) return mhloOpName;
+  if (context->isOperationRegistered(mhloOpName))
+    return mhloOpName;
   return "";
 }
 
 bool isSequenceStartingWith0(Attribute attr) {
   DenseIntElementsAttr denseAttr = mlir::dyn_cast<DenseIntElementsAttr>(attr);
   for (int64_t i = 0, e = denseAttr.getNumElements(); i < e; ++i)
-    if (denseAttr.getValues<APInt>()[i].getSExtValue() != i) return false;
+    if (denseAttr.getValues<APInt>()[i].getSExtValue() != i)
+      return false;
   return true;
 }
 
 int64_t getArgumentIndex(mlir::func::FuncOp op, Value value) {
   BlockArgument arg = mlir::dyn_cast<BlockArgument>(value);
-  if (!arg || arg.getOwner() != &op.front()) return -1;
+  if (!arg || arg.getOwner() != &op.front())
+    return -1;
   return arg.getArgNumber();
 }
 
 /// Computes the memory usage of the given allocations.
-std::pair<size_t, size_t> computeMemory(const std::vector<Value>& allocs) {
+std::pair<size_t, size_t> computeMemory(const std::vector<Value> &allocs) {
   size_t totalSize = 0;
   size_t allocCounter = 0;
   for (const Value alloc : allocs) {
@@ -213,37 +219,37 @@ std::pair<size_t, size_t> computeMemory(const std::vector<Value>& allocs) {
   return std::make_pair(totalSize, allocCounter);
 }
 
-}  // namespace hlo
-}  // namespace mlir
+} // namespace hlo
+} // namespace mlir
 
 namespace mlir {
 namespace chlo {
 
-Value getConstantLikeMaxFiniteValue(OpBuilder& b, Location loc, Value val) {
+Value getConstantLikeMaxFiniteValue(OpBuilder &b, Location loc, Value val) {
   auto ty = mlir::cast<FloatType>(getElementTypeOrSelf(val.getType()));
   return getConstantLike(
       b, loc, llvm::APFloat::getLargest(ty.getFloatSemantics()), val);
 }
 
-Value getConstantLikeInfValue(OpBuilder& b, Location loc, Value val,
+Value getConstantLikeInfValue(OpBuilder &b, Location loc, Value val,
                               bool negative) {
   auto ty = mlir::cast<FloatType>(getElementTypeOrSelf(val.getType()));
   return getConstantLike(
       b, loc, llvm::APFloat::getInf(ty.getFloatSemantics(), negative), val);
 }
 
-Value getConstantLikeSmallestFiniteValue(OpBuilder& b, Location loc,
+Value getConstantLikeSmallestFiniteValue(OpBuilder &b, Location loc,
                                          Value val) {
   auto ty = mlir::cast<FloatType>(getElementTypeOrSelf(val.getType()));
   return getConstantLike(
       b, loc, llvm::APFloat::getSmallest(ty.getFloatSemantics()), val);
 }
 
-Value getConstantLike(OpBuilder& b, Location loc, const APFloat& constant,
+Value getConstantLike(OpBuilder &b, Location loc, const APFloat &constant,
                       Value val) {
   Type ty = getElementTypeOrSelf(val.getType());
   return b.create<ConstantLikeOp>(loc, b.getFloatAttr(ty, constant), val);
 }
 
-}  // namespace chlo
-}  // namespace mlir
+} // namespace chlo
+} // namespace mlir

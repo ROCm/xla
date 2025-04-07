@@ -19,7 +19,6 @@ limitations under the License.
 #include <complex>
 #include <cstdint>
 
-#include "llvm/ADT/STLExtras.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mhlo/transforms/passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -37,6 +36,7 @@ limitations under the License.
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "llvm/ADT/STLExtras.h"
 
 #define DEBUG_TYPE "xla-prepare-for-export"
 
@@ -55,14 +55,15 @@ struct PrepareForExportPass
   void runOnOperation() override;
 };
 
-}  // end namespace
+} // end namespace
 
 // Materializes some splat before export because it may be more efficient in
 // HLOInstruction.
 static void prepareConstantOp(Operation *op, SplatElementsAttr attr) {
   // Arbitrarily chosen "small" number. This could be chosen based on the proto
   // size too.
-  if (attr.getNumElements() < 32) return;
+  if (attr.getNumElements() < 32)
+    return;
   ShapedType returnType = mlir::cast<ShapedType>(op->getResultTypes().front());
   ImplicitLocOpBuilder b(op->getLoc(), op);
   ConstantOp cst;
@@ -90,7 +91,8 @@ static void prepareBroadcastInDim(BroadcastInDimOp bcast) {
   DenseIntElementsAttr dims = bcast.getBroadcastDimensions();
   // If dimensions aren't sorted, there is a transpose fused into the op, which
   // XLA Builder does not support, we unfuse here.
-  if (llvm::is_sorted(dims.getValues<int64_t>())) return;
+  if (llvm::is_sorted(dims.getValues<int64_t>()))
+    return;
 
   // We need to compute a permutation that sorts the dimension before the
   // broadcast.
@@ -147,7 +149,8 @@ static void prepareExplicitCapturedConstants(Operation *op) {
 void PrepareForExportPass::runOnOperation() {
   getOperation().walk([&](Operation *op) {
     mlir::SplatElementsAttr attr;
-    if (matchPattern(op, m_Constant(&attr))) return prepareConstantOp(op, attr);
+    if (matchPattern(op, m_Constant(&attr)))
+      return prepareConstantOp(op, attr);
 
     if (auto bcastOp = dyn_cast<BroadcastInDimOp>(op))
       return prepareBroadcastInDim(bcastOp);
@@ -159,5 +162,5 @@ void PrepareForExportPass::runOnOperation() {
   });
 }
 
-}  // end namespace mhlo
-}  // end namespace mlir
+} // end namespace mhlo
+} // end namespace mlir

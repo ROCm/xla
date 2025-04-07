@@ -34,9 +34,9 @@ namespace {
 
 namespace m = match;
 
-int64_t CountControlEdges(const HloComputation& computation) {
+int64_t CountControlEdges(const HloComputation &computation) {
   int64_t count = 0;
-  for (const auto& instruction : computation.instructions()) {
+  for (const auto &instruction : computation.instructions()) {
     count += instruction->control_successors().size();
   }
   return count;
@@ -45,7 +45,7 @@ int64_t CountControlEdges(const HloComputation& computation) {
 class CollectivesScheduleLinearizerTest
     : public HloHardwareIndependentTestBase {
  protected:
-  void InsertCollectivesSchedule(HloModule* module) {
+  void InsertCollectivesSchedule(HloModule *module) {
     CollectivesScheduleLinearizer collectives_schedule_linearizer;
     ASSERT_IS_OK(collectives_schedule_linearizer.Run(module).status());
   }
@@ -75,7 +75,7 @@ ENTRY entry {
   InsertCollectivesSchedule(module.get());
   EXPECT_EQ(CountControlEdges(*module->entry_computation()), 1);
   HloInstruction *c1 = nullptr, *c2 = nullptr;
-  for (HloInstruction* instr : module->entry_computation()->instructions()) {
+  for (HloInstruction *instr : module->entry_computation()->instructions()) {
     if (Match(instr, m::AllReduce(m::Parameter(0)))) {
       c1 = instr;
     }

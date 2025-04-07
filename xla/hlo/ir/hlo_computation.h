@@ -841,23 +841,24 @@ class HloComputation {
 
   // Returns if this computation is a body computation of a while.
   [[deprecated(
-      "This is broken. Use CallGraph::GetComputationCallers() instead")]]
-  bool IsWhileBodyComputation() const {
+      "This is broken. Use CallGraph::GetComputationCallers() instead")]] bool
+  IsWhileBodyComputation() const {
     return instruction_type() == InstructionType::kWhile;
   }
 
   // Returns the owning while call instruction, or nullptr if this is not a
   // while call body computation.
   [[deprecated(
-      "This is broken. Use CallGraph::GetComputationCallers() instead")]]
-  HloInstruction* WhileCallInstruction() const {
+      "This is broken. Use CallGraph::GetComputationCallers() "
+      "instead")]] HloInstruction*
+  WhileCallInstruction() const {
     return instruction_type() == InstructionType::kWhile ? instruction()
                                                          : nullptr;
   }
 
   [[deprecated(
-      "This is broken. Use CallGraph::GetComputationCallers() instead")]]
-  void SetWhileCallInstruction(HloInstruction* while_call_instruction) {
+      "This is broken. Use CallGraph::GetComputationCallers() instead")]] void
+  SetWhileCallInstruction(HloInstruction* while_call_instruction) {
     CHECK(while_call_instruction != nullptr);
     CHECK(while_call_instruction->opcode() == HloOpcode::kWhile);
     SetInstruction(while_call_instruction, InstructionType::kWhile);
@@ -865,24 +866,24 @@ class HloComputation {
 
   // Returns if this computation is a branch computation of a conditional.
   [[deprecated(
-      "This is broken. Use CallGraph::GetComputationCallers() instead")]]
-  bool IsConditionalBranchComputation() const {
+      "This is broken. Use CallGraph::GetComputationCallers() instead")]] bool
+  IsConditionalBranchComputation() const {
     return instruction_type() == InstructionType::kConditional;
   }
 
   // Returns the owning conditional call instruction, or nullptr if this is not
   // a conditional branch computation.
   [[deprecated(
-      "This is broken. Use CallGraph::GetComputationCallers() instead")]]
-  HloInstruction* ConditionalCallInstruction() const {
+      "This is broken. Use CallGraph::GetComputationCallers() "
+      "instead")]] HloInstruction*
+  ConditionalCallInstruction() const {
     return instruction_type() == InstructionType::kConditional ? instruction()
                                                                : nullptr;
   }
 
   [[deprecated(
-      "This is broken. Use CallGraph::GetComputationCallers() instead")]]
-  void SetConditionalCallInstruction(
-      HloInstruction* conditional_call_instruction) {
+      "This is broken. Use CallGraph::GetComputationCallers() instead")]] void
+  SetConditionalCallInstruction(HloInstruction* conditional_call_instruction) {
     CHECK(conditional_call_instruction != nullptr);
     CHECK(conditional_call_instruction->opcode() == HloOpcode::kConditional);
     SetInstruction(conditional_call_instruction, InstructionType::kConditional);

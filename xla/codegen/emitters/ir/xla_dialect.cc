@@ -13,9 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "llvm/ADT/TypeSwitch.h"  // IWYU pragma: keep
+#include "llvm/ADT/TypeSwitch.h"            // IWYU pragma: keep
 #include "mlir/IR/DialectImplementation.h"  // IWYU pragma: keep
-#include "mlir/IR/OpImplementation.h"  // IWYU pragma: keep
+#include "mlir/IR/OpImplementation.h"       // IWYU pragma: keep
 #include "mlir/Transforms/InliningUtils.h"
 #include "xla/codegen/emitters/ir/xla_ops.h"
 

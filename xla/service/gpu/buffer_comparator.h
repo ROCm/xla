@@ -44,6 +44,7 @@ class BufferComparator {
   absl::StatusOr<bool> CompareEqual(se::Stream* stream,
                                     se::DeviceMemoryBase current,
                                     se::DeviceMemoryBase expected) const;
+
  private:
   Shape shape_;
   double relative_tol_;  // relative tolerance for comparison

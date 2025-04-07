@@ -202,7 +202,6 @@ XLA_TEST_F(TupleTest, TupleGTEToTuple) {
   ComputeAndCompareTuple(&builder, expected, {}, error_spec_);
 }
 
-
 // Builds two new tuples from an existing tuple (by means of GetTupleElement),
 // then adds up the components of the new tuples.
 XLA_TEST_F(TupleTest, TupleGTEToTupleToGTEAdd) {
@@ -337,14 +336,13 @@ XLA_TEST_F(TupleTest, ComplexTuples) {
                                         {{1011, 2022}, {3031, 4042}},
                                         {{10011, 20022}, {30031, 40042}}});
   Literal prod(sum.shape());
-  ASSERT_TRUE(prod.Populate<complex64>([&sum](
-                                           absl::Span<const int64_t> indexes) {
-                    return sum.Get<complex64>(indexes) *
-                           (indexes[indexes.size() - 1] == 0
-                                ? complex64(1, 2)
-                                : complex64(1, -2));
-                  })
-                  .ok());
+  ASSERT_TRUE(
+      prod.Populate<complex64>([&sum](absl::Span<const int64_t> indexes) {
+            return sum.Get<complex64>(indexes) *
+                   (indexes[indexes.size() - 1] == 0 ? complex64(1, 2)
+                                                     : complex64(1, -2));
+          })
+          .ok());
   auto expected = LiteralUtil::MakeTupleFromSlices(
       {LiteralUtil::MakeTupleFromSlices({prod, sum}),
        LiteralUtil::CreateR0<complex64>({123, 456})});

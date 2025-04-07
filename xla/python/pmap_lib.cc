@@ -41,9 +41,9 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "nanobind/nanobind.h"
 #include "nanobind/stl/shared_ptr.h"  // IWYU pragma: keep
-#include "nanobind/stl/string.h"  // IWYU pragma: keep
-#include "nanobind/stl/variant.h"  // IWYU pragma: keep
-#include "nanobind/stl/vector.h"  // IWYU pragma: keep
+#include "nanobind/stl/string.h"      // IWYU pragma: keep
+#include "nanobind/stl/variant.h"     // IWYU pragma: keep
+#include "nanobind/stl/vector.h"      // IWYU pragma: keep
 #include "xla/pjrt/exceptions.h"
 #include "xla/pjrt/status_casters.h"
 #include "xla/python/config.h"
@@ -1058,24 +1058,24 @@ void BuildPmapSubmodule(nb::module_& m) {
       absl::StrCat(nb::cast<std::string>(m.attr("__name__")), ".PmapFunction");
   PyType_Spec pmap_function_spec = {
 #if PY_VERSION_HEX < 0x030B0000
-      // Work around for https://github.com/python/cpython/issues/89478
-      // CPython 3.10 and earlier assume that the .name value remains alive
-      // forever.
-      /*.name=*/strdup(name.c_str()),
+    // Work around for https://github.com/python/cpython/issues/89478
+    // CPython 3.10 and earlier assume that the .name value remains alive
+    // forever.
+    /*.name=*/strdup(name.c_str()),
 #else
-      /*.name=*/name.c_str(),
+    /*.name=*/name.c_str(),
 #endif  // PY_VERSION_HEX < 0x030B0000
-      /*.basicsize=*/static_cast<int>(sizeof(JaxPmapFunctionObject)),
-      /*.itemsize=*/0,
+    /*.basicsize=*/static_cast<int>(sizeof(JaxPmapFunctionObject)),
+    /*.itemsize=*/0,
 #if PY_VERSION_HEX < 0x030C0000
-      /*.flags=*/Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
-          Py_TPFLAGS_HAVE_VECTORCALL,
+    /*.flags=*/Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
+        Py_TPFLAGS_HAVE_VECTORCALL,
 #else   // PY_VERSION_HEX >= 0x030C0000
-      /*.flags=*/Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
-          Py_TPFLAGS_HAVE_VECTORCALL | Py_TPFLAGS_MANAGED_DICT |
-          Py_TPFLAGS_MANAGED_WEAKREF,
+    /*.flags=*/Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
+        Py_TPFLAGS_HAVE_VECTORCALL | Py_TPFLAGS_MANAGED_DICT |
+        Py_TPFLAGS_MANAGED_WEAKREF,
 #endif  // PY_VERSION_HEX >= 0x030C0000
-      /*.slots=*/JaxPmapFunction_slots,
+    /*.slots=*/JaxPmapFunction_slots,
   };
 
   JaxPmapFunction_Type = PyType_FromSpec(&pmap_function_spec);

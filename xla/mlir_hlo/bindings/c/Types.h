@@ -30,4 +30,4 @@ MLIR_CAPI_EXPORTED bool mlirMhloTypeIsAToken(MlirType type);
 }
 #endif
 
-#endif  // MLIR_HLO_BINDINGS_C_TYPES_H
+#endif // MLIR_HLO_BINDINGS_C_TYPES_H

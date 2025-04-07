@@ -883,8 +883,6 @@ TEST_F(HloAliasAnalysisTest, SwizzlingWhile) {
   EXPECT_TRUE(AnyValuesInSameBufferInterfere());
 }
 
-
-
 TEST_F(HloAliasAnalysisTest, Bitcast) {
   // Bitcasting a value should not produce a new buffer.
   auto builder = HloComputation::Builder(TestName());

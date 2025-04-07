@@ -239,9 +239,11 @@ absl::StatusOr<bool> UnifyAccumulatorWithInput(
                 match::GetTupleElement(match::Parameter()))) {
         continue;
       }
-      VLOG(3) << while_instr->name() << " -> " << "<accumulator_@"
-              << acc->tuple_index() << ": " << acc->name() << ", " << "input_@"
-              << input->tuple_index() << ": " << input->name() << ">";
+      VLOG(3) << while_instr->name() << " -> "
+              << "<accumulator_@" << acc->tuple_index() << ": " << acc->name()
+              << ", "
+              << "input_@" << input->tuple_index() << ": " << input->name()
+              << ">";
       TF_RETURN_IF_ERROR(input->ReplaceAllUsesWith(acc));
       TF_RETURN_IF_ERROR(while_instr->while_init()->ReplaceOperandWith(
           acc->tuple_index(),

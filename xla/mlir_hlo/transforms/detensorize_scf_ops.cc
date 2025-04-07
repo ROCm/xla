@@ -45,15 +45,15 @@ struct RegionOpPattern : public OpRewritePattern<T> {
   using OpRewritePattern<T>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(T op,
-                                PatternRewriter& rewriter) const override {
+                                PatternRewriter &rewriter) const override {
     // If none of the operands or results are unit tensors, exit early.
     if (!llvm::any_of(op->getOperands(), isUnitTensor) &&
         !llvm::any_of(op->getResults(), isUnitTensor))
       return failure();
 
-    auto* result = rewriter.clone(*op.getOperation());
+    auto *result = rewriter.clone(*op.getOperation());
 
-    auto unitTensors = [](auto&& range) {
+    auto unitTensors = [](auto &&range) {
       return llvm::make_filter_range(llvm::enumerate(range), [](auto it) {
         return isUnitTensor(it.value());
       });
@@ -69,8 +69,8 @@ struct RegionOpPattern : public OpRewritePattern<T> {
     // are unit tensors, so it's safe to do this in all blocks as well (assuming
     // no ops have arguments appearing out of thin air). Inside blocks, we still
     // use tensors. This pass expects linalg-detensorize to run next.
-    for (auto& region : result->getRegions()) {
-      for (auto& block : region.getBlocks()) {
+    for (auto &region : result->getRegions()) {
+      for (auto &block : region.getBlocks()) {
         for (auto [index, arg] : unitTensors(block.getArguments())) {
           b.setInsertionPointToStart(&block);
           // Change the argument type to a scalar, but repack it into a tensor.
@@ -108,7 +108,7 @@ struct RegionOpPattern : public OpRewritePattern<T> {
 
 struct DetensorizeScfOpsPass
     : public impl::DetensorizeScfOpsPassBase<DetensorizeScfOpsPass> {
-  void getDependentDialects(DialectRegistry& registry) const override {
+  void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<scf::SCFDialect>();
     registry.insert<tensor::TensorDialect>();
   }
@@ -126,8 +126,8 @@ struct DetensorizeScfOpsPass
   }
 };
 
-}  // namespace
-}  // namespace mlir
+} // namespace
+} // namespace mlir
 
 std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>>
 mlir::createDetensorizeScfOpsPass() {

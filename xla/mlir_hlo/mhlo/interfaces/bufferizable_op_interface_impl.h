@@ -27,7 +27,7 @@ namespace mhlo {
 /// Register the external models for bufferizing mhlo ops.
 void registerBufferizableOpInterfaceExternalModels(DialectRegistry &registry);
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir
 
-#endif  // MLIR_HLO_MHLO_INTERFACES_BUFFERIZABLE_OP_INTERFACE_IMPL_H
+#endif // MLIR_HLO_MHLO_INTERFACES_BUFFERIZABLE_OP_INTERFACE_IMPL_H

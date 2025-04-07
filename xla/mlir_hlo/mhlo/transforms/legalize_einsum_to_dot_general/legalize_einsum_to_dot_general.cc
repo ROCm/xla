@@ -184,7 +184,7 @@ struct LegalizeEinsumToDotGeneralPass
     }
   }
 };
-}  // namespace
+} // namespace
 
 void populateEinsumToDotGeneralPatterns(mlir::MLIRContext *context,
                                         RewritePatternSet *patterns) {
@@ -196,5 +196,5 @@ createLegalizeEinsumToDotGeneralPass() {
   return std::make_unique<LegalizeEinsumToDotGeneralPass>();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

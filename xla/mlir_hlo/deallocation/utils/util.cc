@@ -23,7 +23,7 @@ namespace deallocation {
 SmallVector<RegionEdge> getSuccessorRegions(RegionBranchOpInterface op,
                                             RegionBranchPoint point) {
   SmallVector<RegionEdge> edges;
-  if (Region* region = point.getRegionOrNull()) {
+  if (Region *region = point.getRegionOrNull()) {
     if (region->empty()) {
       return edges;
     }
@@ -32,10 +32,10 @@ SmallVector<RegionEdge> getSuccessorRegions(RegionBranchOpInterface op,
   SmallVector<RegionSuccessor> successors;
   op.getSuccessorRegions(point, successors);
 
-  for (const auto& successor : successors) {
-    auto& edge = edges.emplace_back();
+  for (const auto &successor : successors) {
+    auto &edge = edges.emplace_back();
     edge.predecessorRegionPoint = point;
-    auto* region = point.getRegionOrNull();
+    auto *region = point.getRegionOrNull();
     edge.predecessorOp =
         region ? region->front().getTerminator() : op.getOperation();
     edge.predecessorOperandIndex = edge.predecessorOp->getNumOperands() -
@@ -59,7 +59,7 @@ SmallVector<RegionEdge> getPredecessorRegions(RegionBranchOpInterface op,
                                               RegionBranchPoint point) {
   SmallVector<RegionEdge> result;
   auto checkPredecessor = [&](RegionBranchPoint possiblePredecessorPoint) {
-    for (const auto& successor :
+    for (const auto &successor :
          getSuccessorRegions(op, possiblePredecessorPoint)) {
       if (successor.successorRegionPoint == point) {
         result.push_back(successor);
@@ -67,14 +67,14 @@ SmallVector<RegionEdge> getPredecessorRegions(RegionBranchOpInterface op,
     }
   };
   checkPredecessor(point.parent());
-  for (Region& region : op->getRegions()) {
+  for (Region &region : op->getRegions()) {
     checkPredecessor(region);
   }
   return result;
 }
 
-RegionBranchOpInterface moveRegionsToNewOpButKeepOldOp(
-    RegionBranchOpInterface op) {
+RegionBranchOpInterface
+moveRegionsToNewOpButKeepOldOp(RegionBranchOpInterface op) {
   OpBuilder b(op);
   RegionBranchOpInterface newOp;
   if (llvm::isa<scf::ForOp>(op)) {
@@ -110,5 +110,5 @@ RegionBranchOpInterface moveRegionsToNewOpButKeepOldOp(
   return newOp;
 }
 
-}  // namespace deallocation
-}  // namespace mlir
+} // namespace deallocation
+} // namespace mlir

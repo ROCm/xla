@@ -50,13 +50,13 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "llvm/Support/Casting.h"
 #include "nanobind/nanobind.h"
-#include "nanobind/stl/optional.h"  // IWYU pragma: keep
-#include "nanobind/stl/pair.h"  // IWYU pragma: keep
-#include "nanobind/stl/shared_ptr.h"  // IWYU pragma: keep
-#include "nanobind/stl/string.h"  // IWYU pragma: keep
+#include "nanobind/stl/optional.h"     // IWYU pragma: keep
+#include "nanobind/stl/pair.h"         // IWYU pragma: keep
+#include "nanobind/stl/shared_ptr.h"   // IWYU pragma: keep
+#include "nanobind/stl/string.h"       // IWYU pragma: keep
 #include "nanobind/stl/string_view.h"  // IWYU pragma: keep
-#include "nanobind/stl/unique_ptr.h"  // IWYU pragma: keep
-#include "nanobind/stl/vector.h"  // IWYU pragma: keep
+#include "nanobind/stl/unique_ptr.h"   // IWYU pragma: keep
+#include "nanobind/stl/vector.h"       // IWYU pragma: keep
 #include "xla/layout.h"
 #include "xla/layout_util.h"
 #include "xla/pjrt/exceptions.h"
@@ -1929,22 +1929,22 @@ absl::Status PyArray::RegisterTypes(nb::module_& m) {
 
   PyType_Spec PyArray_spec = {
 #if PY_VERSION_HEX < 0x030B0000
-      // Work around for https://github.com/python/cpython/issues/89478
-      // CPython 3.10 and earlier assume that the .name value remains alive
-      // forever.
-      /*.name=*/strdup(name.c_str()),
+    // Work around for https://github.com/python/cpython/issues/89478
+    // CPython 3.10 and earlier assume that the .name value remains alive
+    // forever.
+    /*.name=*/strdup(name.c_str()),
 #else
-      /*.name=*/name.c_str(),
+    /*.name=*/name.c_str(),
 #endif  // PY_VERSION_HEX < 0x030B0000
-      /*.basicsize=*/static_cast<int>(sizeof(PyArrayObject)),
-      /*.itemsize=*/0,
+    /*.basicsize=*/static_cast<int>(sizeof(PyArrayObject)),
+    /*.itemsize=*/0,
 #if PY_VERSION_HEX < 0x030C0000
-      /*.flags=*/Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    /*.flags=*/Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
 #else   // PY_VERSION_HEX >= 0x030C0000
-      /*.flags=*/Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
-          Py_TPFLAGS_MANAGED_DICT | Py_TPFLAGS_MANAGED_WEAKREF,
+    /*.flags=*/Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
+        Py_TPFLAGS_MANAGED_DICT | Py_TPFLAGS_MANAGED_WEAKREF,
 #endif  // PY_VERSION_HEX >= 0x030C0000
-      /*.slots=*/PyArray_slots,
+    /*.slots=*/PyArray_slots,
   };
 
   type_ = PyType_FromSpec(&PyArray_spec);

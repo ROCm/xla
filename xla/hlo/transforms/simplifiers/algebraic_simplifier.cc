@@ -4137,7 +4137,9 @@ GatherOfPadInfo CheckPaddedDimsForGatherOfPad(
   };
 
   int64_t num_padded_batching_dims = 0;
-  struct GatherOfPadInfo skip_transform{false, false};
+  struct GatherOfPadInfo skip_transform {
+    false, false
+  };
   for (int64_t operand_dim : padded_operand_dims) {
     if (padded_operand_dims_to_output_dims.contains(operand_dim)) {
       continue;
@@ -6997,7 +6999,7 @@ absl::Status AlgebraicSimplifierVisitor::HandleSlice(HloInstruction* slice) {
     }
   }
 
-  if (HloInstruction* reduce_window;
+  if (HloInstruction * reduce_window;
       options_.enable_window_reduce_to_reduce_replacement() &&
       hlo_instruction_utils::IsUnstridedSlice(slice) &&
       Match(slice, m::Slice(m::ReduceWindow(&reduce_window).WithOneUse()))) {
@@ -8188,7 +8190,7 @@ absl::Status AlgebraicSimplifierVisitor::HandleReduce(HloInstruction* hlo) {
   // For Computation equal to Min, Max, And or Or, replace Reduce(Broadcast(x),
   // a, Computation()) with Computation(x, a) when x is a scalar and the
   // broadcast is reduced to a scalar.
-  if (HloInstruction* broadcast_arg;
+  if (HloInstruction * broadcast_arg;
       Match(arg, m::Broadcast(m::Op(&broadcast_arg))) &&
       (Match(function->root_instruction(),
              m::MaximumAnyOrder(m::Parameter(0), m::Parameter(1))) ||

@@ -21,7 +21,7 @@ limitations under the License.
 #include "mlir-c/IR.h"
 #include "mlir/Bindings/Python/NanobindAdaptors.h"
 #include "nanobind/nanobind.h"
-#include "nanobind/stl/vector.h"  // IWYU pragma: keep
+#include "nanobind/stl/vector.h" // IWYU pragma: keep
 
 namespace nb = nanobind;
 
@@ -44,7 +44,7 @@ auto toPyString(MlirStringRef mlirStringRef) {
   return nb::str(mlirStringRef.data, mlirStringRef.length);
 }
 
-}  // namespace
+} // namespace
 
 NB_MODULE(_mlirHlo, m) {
   m.doc() = "mlir-hlo main python extension";
@@ -146,8 +146,8 @@ NB_MODULE(_mlirHlo, m) {
           [](MlirAttribute self) {
             return attributePropertyVector(
                 self,
-                mlirMhloScatterDimensionNumbersGetScatterIndicesBatchingDimsSize,  // NOLINT(whitespace/line_length)
-                mlirMhloScatterDimensionNumbersGetScatterIndicesBatchingDimsElem  // NOLINT(whitespace/line_length)
+                mlirMhloScatterDimensionNumbersGetScatterIndicesBatchingDimsSize, // NOLINT(whitespace/line_length)
+                mlirMhloScatterDimensionNumbersGetScatterIndicesBatchingDimsElem // NOLINT(whitespace/line_length)
             );
           })
       .def_property_readonly("scattered_dims_to_operand_dims",
@@ -383,11 +383,11 @@ NB_MODULE(_mlirHlo, m) {
                 self, mlirMhloOutputOperandAliasGetOutputTupleIndicesSize,
                 mlirMhloOutputOperandAliasGetOutputTupleIndicesElem);
           })
-      .def_property_readonly(
-          "operand_index",
-          [](MlirAttribute self) {
-            return mlirMhloOutputOperandAliasGetOperandIndex(self);
-          })
+      .def_property_readonly("operand_index",
+                             [](MlirAttribute self) {
+                               return mlirMhloOutputOperandAliasGetOperandIndex(
+                                   self);
+                             })
       .def_property_readonly("operand_tuple_indices", [](MlirAttribute self) {
         return attributePropertyVector(
             self, mlirMhloOutputOperandAliasGetOperandTupleIndicesSize,
@@ -579,11 +579,11 @@ NB_MODULE(_mlirHlo, m) {
           nb::arg("context").none() = nb::none(),
           "Creates a SparseDescriptor attribute with the given sparsity "
           "configurations.")
-      .def_property_readonly(
-          "dimension",
-          [](MlirAttribute self) {
-            return mlirMhloSparsityDescriptorGetDimension(self);
-          })
+      .def_property_readonly("dimension",
+                             [](MlirAttribute self) {
+                               return mlirMhloSparsityDescriptorGetDimension(
+                                   self);
+                             })
       .def_property_readonly("n",
                              [](MlirAttribute self) {
                                return mlirMhloSparsityDescriptorGetN(self);

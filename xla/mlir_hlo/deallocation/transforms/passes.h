@@ -39,7 +39,7 @@ std::unique_ptr<mlir::Pass> createBufferDeallocationPass();
 #define GEN_PASS_REGISTRATION
 #include "deallocation/transforms/passes.h.inc"
 
-}  // namespace deallocation
-}  // namespace mlir
+} // namespace deallocation
+} // namespace mlir
 
-#endif  // MLIR_HLO_DEALLOCATION_TRANSFORMS_PASSES_H
+#endif // MLIR_HLO_DEALLOCATION_TRANSFORMS_PASSES_H

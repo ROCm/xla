@@ -44,10 +44,10 @@ struct RngGetAndUpdateStatePattern
   using OpConversionPattern<
       mhlo::XlaRngGetAndUpdateStateOp>::OpConversionPattern;
 
-  LogicalResult matchAndRewrite(
-      mhlo::XlaRngGetAndUpdateStateOp op,
-      XlaRngGetAndUpdateStateOpAdaptor adaptor,
-      ConversionPatternRewriter& rewriter) const final {
+  LogicalResult
+  matchAndRewrite(mhlo::XlaRngGetAndUpdateStateOp op,
+                  XlaRngGetAndUpdateStateOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
     // Get various type related information
     auto loc = op->getLoc();
 
@@ -62,9 +62,9 @@ struct RngGetAndUpdateStatePattern
     auto numElements = resultType.getNumElements();
 
     // Get or define the global variable
-    auto* globalOp = mlir::SymbolTable::lookupNearestSymbolFrom(op, globalName);
+    auto *globalOp = mlir::SymbolTable::lookupNearestSymbolFrom(op, globalName);
     if (!globalOp) {
-      auto* parent = mlir::SymbolTable::getNearestSymbolTable(op);
+      auto *parent = mlir::SymbolTable::getNearestSymbolTable(op);
       OpBuilder::InsertionGuard g(rewriter);
       rewriter.setInsertionPointToStart(&parent->getRegions().front().front());
 
@@ -114,16 +114,17 @@ struct RngGetAndUpdateStatePattern
 template <typename OpTy>
 struct ScalarHloToArithmeticPattern : public OpConversionPattern<OpTy> {
   ScalarHloToArithmeticPattern(
-      TypeConverter& typeConverter, MLIRContext* context,
-      llvm::function_ref<bool(Operation*)> filterFn = nullptr,
+      TypeConverter &typeConverter, MLIRContext *context,
+      llvm::function_ref<bool(Operation *)> filterFn = nullptr,
       PatternBenefit benefit = 1)
       : OpConversionPattern<OpTy>(typeConverter, context, benefit),
         filterFn(filterFn) {}
 
-  LogicalResult matchAndRewrite(
-      OpTy op, typename OpTy::Adaptor adaptor,
-      ConversionPatternRewriter& rewriter) const final {
-    if (filterFn && !filterFn(op)) return failure();
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    if (filterFn && !filterFn(op))
+      return failure();
 
     auto isScalar = [&](Value v) {
       return mlir::cast<ShapedType>(v.getType()).getRank() == 0;
@@ -146,27 +147,28 @@ struct ScalarHloToArithmeticPattern : public OpConversionPattern<OpTy> {
     Value scalarResult = mhlo::MhloOpToStdScalarOp::mapOp(
         op, resultTy->getElementType(), operands, /*attributes=*/std::nullopt,
         &rewriter);
-    if (!scalarResult) return failure();
+    if (!scalarResult)
+      return failure();
     rewriter.replaceOpWithNewOp<tensor::FromElementsOp>(op, *resultTy,
                                                         scalarResult);
     return success();
   }
 
- private:
-  llvm::function_ref<bool(Operation*)> filterFn;
+private:
+  llvm::function_ref<bool(Operation *)> filterFn;
 };
 
 struct HloLegalizeToArithmeticPass
     : public impl::HloLegalizeToArithmeticPassBase<
           HloLegalizeToArithmeticPass> {
-  void getDependentDialects(DialectRegistry& registry) const override {
+  void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<arith::ArithDialect, memref::MemRefDialect,
                     tensor::TensorDialect>();
   }
 
- public:
+public:
   void runOnOperation() override {
-    auto& context = getContext();
+    auto &context = getContext();
     RewritePatternSet patterns(&context);
     ConversionTarget target(context);
 
@@ -182,16 +184,16 @@ struct HloLegalizeToArithmeticPass
   }
 };
 
-}  // namespace
+} // namespace
 
-void populateHloToArithmeticConversionPatterns(RewritePatternSet* patterns) {
+void populateHloToArithmeticConversionPatterns(RewritePatternSet *patterns) {
   patterns->add<RngGetAndUpdateStatePattern>(patterns->getContext());
 }
 
 void populateScalarHloToArithmeticConversionPatterns(
-    MLIRContext* context, TypeConverter& typeConverter,
-    RewritePatternSet* patterns,
-    llvm::function_ref<bool(Operation*)> filterFn) {
+    MLIRContext *context, TypeConverter &typeConverter,
+    RewritePatternSet *patterns,
+    llvm::function_ref<bool(Operation *)> filterFn) {
   // clang-format off
   patterns->add<
       ScalarHloToArithmeticPattern<mhlo::AbsOp>,
@@ -251,5 +253,5 @@ std::unique_ptr<OperationPass<ModuleOp>> createLegalizeToArithmeticPass() {
   return std::make_unique<HloLegalizeToArithmeticPass>();
 }
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir

@@ -28,7 +28,7 @@ using llvm::SmallVector;
 namespace mlir {
 namespace codegen_utils {
 
-Value emitNumElementsComputation(OpBuilder& b, Location loc, Value memref) {
+Value emitNumElementsComputation(OpBuilder &b, Location loc, Value memref) {
   int rank = mlir::cast<MemRefType>(memref.getType()).getRank();
   Value numElements;
   numElements = b.create<mlir::arith::ConstantOp>(
@@ -40,7 +40,7 @@ Value emitNumElementsComputation(OpBuilder& b, Location loc, Value memref) {
   return numElements;
 }
 
-Value emitNumElementsComputation(OpBuilder& b, Location loc, Operation* op) {
+Value emitNumElementsComputation(OpBuilder &b, Location loc, Operation *op) {
   // only const rank is supported for now
   assert(op->getDialect()->getNamespace() == "lmhlo");
   int numOperands = op->getNumOperands();
@@ -48,11 +48,12 @@ Value emitNumElementsComputation(OpBuilder& b, Location loc, Operation* op) {
   return emitNumElementsComputation(b, loc, resultMemref);
 }
 
-SmallVector<Value> calcMultiDimIndex(OpBuilder& b, Location loc,
+SmallVector<Value> calcMultiDimIndex(OpBuilder &b, Location loc,
                                      Value linearIndex, ArrayRef<Value> shape) {
   int rank = shape.size();
   SmallVector<Value> result;
-  if (rank == 0) return result;
+  if (rank == 0)
+    return result;
   if (rank == 1) {
     result.push_back(linearIndex);
     return result;
@@ -82,11 +83,12 @@ SmallVector<Value> calcMultiDimIndex(OpBuilder& b, Location loc,
   return result;
 }
 
-SmallVector<Value> calcMultiDimIndex(OpBuilder& b, Location loc,
+SmallVector<Value> calcMultiDimIndex(OpBuilder &b, Location loc,
                                      Value linearIndex, Value memref) {
   int rank = mlir::cast<MemRefType>(memref.getType()).getRank();
   SmallVector<Value> result;
-  if (rank == 0) return result;
+  if (rank == 0)
+    return result;
   if (rank == 1) {
     result.push_back(linearIndex);
     return result;
@@ -100,14 +102,14 @@ SmallVector<Value> calcMultiDimIndex(OpBuilder& b, Location loc,
   return calcMultiDimIndex(b, loc, linearIndex, shapeVec);
 }
 
-static SmallVector<Value> calcMultiDimIndexForFirstOperand(OpBuilder& b,
+static SmallVector<Value> calcMultiDimIndexForFirstOperand(OpBuilder &b,
                                                            Location loc,
                                                            Value linearIndex,
-                                                           Operation* op) {
+                                                           Operation *op) {
   assert(op->getDialect()->getNamespace() == "lmhlo");
   Value operandMemref = op->getOperand(0);
   return calcMultiDimIndex(b, loc, linearIndex, operandMemref);
 }
 
-}  // namespace codegen_utils
-}  // namespace mlir
+} // namespace codegen_utils
+} // namespace mlir

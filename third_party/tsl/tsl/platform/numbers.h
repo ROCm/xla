@@ -67,9 +67,9 @@ inline constexpr int kFastToBufferSize = 32;
 // Returns the number of characters written.
 // ----------------------------------------------------------------------
 
-size_t FastInt32ToBufferLeft(int32_t i, char* buffer);  // at least 12 bytes
+size_t FastInt32ToBufferLeft(int32_t i, char* buffer);    // at least 12 bytes
 size_t FastUInt32ToBufferLeft(uint32_t i, char* buffer);  // at least 12 bytes
-size_t FastInt64ToBufferLeft(int64_t i, char* buffer);  // at least 22 bytes
+size_t FastInt64ToBufferLeft(int64_t i, char* buffer);    // at least 22 bytes
 size_t FastUInt64ToBufferLeft(uint64_t i, char* buffer);  // at least 22 bytes
 
 // Required buffer size for DoubleToBuffer is kFastToBufferSize.

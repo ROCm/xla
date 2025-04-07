@@ -22,15 +22,15 @@ limitations under the License.
 namespace mlir {
 namespace mhlo {
 
-LogicalResult generateLinalgThreeFry(OpBuilder& builder, Location loc,
-                                     ShapedType resultTy, Value& state,
-                                     Value& result);
+LogicalResult generateLinalgThreeFry(OpBuilder &builder, Location loc,
+                                     ShapedType resultTy, Value &state,
+                                     Value &result);
 
-LogicalResult generateLinalgPhilox(OpBuilder& builder, Location loc,
-                                   ShapedType resultTy, Value& state,
-                                   Value& result);
+LogicalResult generateLinalgPhilox(OpBuilder &builder, Location loc,
+                                   ShapedType resultTy, Value &state,
+                                   Value &result);
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir
 
-#endif  // MLIR_HLO_MHLO_UTILS_MHLO_RNG_UTILS_H_
+#endif // MLIR_HLO_MHLO_UTILS_MHLO_RNG_UTILS_H_

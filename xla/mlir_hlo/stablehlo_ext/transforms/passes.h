@@ -35,7 +35,7 @@ void createChloLegalizeToStablehloPipeline(OpPassManager &pm);
 #define GEN_PASS_REGISTRATION
 #include "stablehlo_ext/transforms/passes.h.inc"
 
-}  // namespace stablehlo_ext
-}  // namespace mlir
+} // namespace stablehlo_ext
+} // namespace mlir
 
-#endif  // STABLEHLO_EXT_TRANSFORMS_PASSES_H
+#endif // STABLEHLO_EXT_TRANSFORMS_PASSES_H

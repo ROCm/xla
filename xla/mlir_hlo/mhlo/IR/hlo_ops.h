@@ -18,7 +18,6 @@ limitations under the License.
 #ifndef MLIR_HLO_MHLO_IR_HLO_OPS_H
 #define MLIR_HLO_MHLO_IR_HLO_OPS_H
 
-#include "llvm/ADT/StringRef.h"
 #include "mlir/Dialect/Shape/IR/Shape.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -34,11 +33,12 @@ limitations under the License.
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "stablehlo/dialect/Base.h"
+#include "llvm/ADT/StringRef.h"
 
 // Forward declaration for hlo_ops_typedefs.h.inc.
 namespace mlir::mhlo::detail {
 struct AsyncBundleTypeStorage;
-}  // namespace mlir::mhlo::detail
+} // namespace mlir::mhlo::detail
 
 // Include order below matters.
 #include "mhlo/IR/hlo_ops_enums.h.inc"
@@ -53,7 +53,7 @@ class OpBuilder;
 namespace mhlo {
 
 class MhloDialect : public Dialect {
- public:
+public:
   explicit MhloDialect(MLIRContext *context);
   static StringRef getDialectNamespace() { return "mhlo"; }
 
@@ -86,7 +86,7 @@ class MhloDialect : public Dialect {
 };
 
 class TokenType : public Type::TypeBase<TokenType, Type, TypeStorage> {
- public:
+public:
   using Base::Base;
   static constexpr StringLiteral name = "mhlo.token";
 };
@@ -97,8 +97,8 @@ void printConvolutionDimensions(AsmPrinter &p, Operation *,
 ParseResult parseConvolutionDimensions(AsmParser &parser,
                                        ConvDimensionNumbersAttr &dnums);
 
-}  // namespace mhlo
-}  // namespace mlir
+} // namespace mhlo
+} // namespace mlir
 
 #define GET_OP_CLASSES
 #include "mhlo/IR/hlo_ops.h.inc"
@@ -110,6 +110,6 @@ SortOp createSortOp(PatternRewriter *rewriter, const Location &loc,
                     const llvm::ArrayRef<Type> &elementTypes, int64_t dimension,
                     bool isStable, ComparisonDirection direction);
 
-}  // namespace mlir::mhlo
+} // namespace mlir::mhlo
 
-#endif  // MLIR_HLO_MHLO_IR_HLO_OPS_H
+#endif // MLIR_HLO_MHLO_IR_HLO_OPS_H

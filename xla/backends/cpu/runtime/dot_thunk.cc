@@ -70,7 +70,6 @@ DotThunk::DotThunk(Info info, DotDimensionNumbers dot_dimensions,
 
 tsl::AsyncValueRef<DotThunk::ExecuteEvent> DotThunk::Execute(
     const ExecuteParams& params) {
-
   TF_ASSIGN_OR_RETURN(
       se::DeviceMemoryBase lhs_data,
       params.buffer_allocations->GetDeviceAddress(dot_slices_.lhs_buffer));

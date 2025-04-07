@@ -77,7 +77,7 @@ IrFunction::IrFunction(llvm::IRBuilderBase* b, llvm::Module* llvm_module,
       dynamic_loop_bounds_arg_(dynamic_loop_bounds_arg),
       profile_counters_arg_(nullptr),
       status_arg_(nullptr),
-      return_block_(return_block) {};
+      return_block_(return_block){};
 
 IrFunction::~IrFunction() {
   // Branch to function return.
