@@ -37,7 +37,7 @@ jobs:
             --group-add video \
             --cap-add=SYS_PTRACE \
             --security-opt seccomp=unconfined \
-            -v $GITHUB_WORKSPACE/$WORKSPACE_DIR/xla:/tf/xla \
+            -v $GITHUB_WORKSPACE/$WORKSPACE_DIR:/tf/xla \
             rocm/tensorflow-build:latest-jammy-python3.11-rocm6.3.0 \
             "./build_tools/rocm/run_xla.sh && bazel analyze-profile /tf/pkg/profile.json.gz"
             # TODO: Maybe use multi-GPU here?
