@@ -30,7 +30,7 @@ jobs:
           pushd $WORKSPACE_DIR
 
           docker run --rm \
-            -w /tf/xla
+            -w /tf/xla \
             --network=host \
             --device=/dev/kfd \
             --device=/dev/dri \
