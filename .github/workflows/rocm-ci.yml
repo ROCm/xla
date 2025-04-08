@@ -47,7 +47,7 @@ jobs:
         run: |
           echo "TODO: Archive the test results"
   build-jax-plugin:
-    runs-on: mi250
+    runs-on: mi-250
     env:
       JAX_BRANCH: "rocm-jaxlib-v0.5.1"
     steps:
