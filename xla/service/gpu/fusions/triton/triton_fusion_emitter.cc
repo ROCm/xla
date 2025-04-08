@@ -1222,7 +1222,8 @@ absl::StatusOr<TritonWrapperResult> CompileTritonToLLVM(
   pm.addPass(CreateSimplifyAffinePass());
 
   mlir::triton::nvidia_gpu::ClusterInfo cluster_info;
-  if (!CreateTritonPipeline(pm, cc, block_level_parameters, cluster_info)
+  if (!CreateTritonPipeline(pm, cc, device_info, block_level_parameters,
+                            cluster_info)
            .ok()) {
     return Internal("Failed to create Triton pipeline.");
   }

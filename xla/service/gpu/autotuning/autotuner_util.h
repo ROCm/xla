@@ -188,6 +188,13 @@ class AutotuneConfig {
         .device_description.gpu_compute_capability();
   }
 
+  const se::DeviceDescription&  GetDeviceDescription() const {
+    if (auto c = std::get_if<DeviceConfig>(&config_)) {
+      return c->stream_exec->GetDeviceDescription();
+    }
+    return std::get<DevicelessConfig>(config_).device_description;
+  }
+
   bool IsDeviceless() const {
     return std::holds_alternative<DevicelessConfig>(config_);
   }

@@ -108,6 +108,7 @@ absl::StatusOr<TritonWrapperResult> CompileTritonToLLVM(
 // use, but that's not the case currently.
 absl::Status CreateTritonPipeline(
     mlir::OpPassManager& pm, const se::GpuComputeCapability& cc,
+    const se::DeviceDescription& device_info,
     const BlockLevelParameters& block_level_parameters,
     mt::nvidia_gpu::ClusterInfo& out_cluster_info);
 

@@ -849,6 +849,7 @@ GemmFusionAutotunerImpl::GenerateTritonConfigs(const HloDotInstruction& dot) {
       !config_.IsDeviceless()
           ? config_.GetExecutor()->GetDeviceDescription().core_count()
           : 100;  // some sensible default
+  const int kWarpSize = config_.GetDeviceDescription().threads_per_warp()
   const int64_t kSufficientNumberOfTiles = kMaxWavesForSplitK * kCoreCount;
   const int64_t result_size = ShapeUtil::ElementsIn(dot.shape());
 
@@ -883,7 +884,7 @@ GemmFusionAutotunerImpl::GenerateTritonConfigs(const HloDotInstruction& dot) {
           2 * std::max(kMinTileSize, kLdmatrixGranularity / minBitWidth));
       int meta_elements = config.block_m * config.block_k / 16;
       config.num_warps =
-          std::min<int>(config.num_warps, meta_elements / WarpSize());
+          std::min<int>(config.num_warps, meta_elements / kWarpSize);
     }
 
     if (added.insert(config).second) {
@@ -1165,6 +1166,8 @@ GemmFusionAutotunerImpl::GetExhaustiveTritonConfigs() const {
     debug_options_.xla_gpu_enable_triton_hopper() && cc.IsAtLeastHopper();
   }
 
+  const int kWarpSize = config_.GetDeviceDescription().threads_per_warp();
+
   for (int num_stages : kNumStages) {
     for (int tile_m : kBlockSizes) {
       for (int tile_n : kBlockSizes) {
@@ -1173,7 +1176,7 @@ GemmFusionAutotunerImpl::GetExhaustiveTritonConfigs() const {
           const int tile_rhs = tile_k * tile_n;
           for (int num_warps : kNumWarps) {
             // Each thread should read at least one input element.
-            if (num_warps * WarpSize() > std::min(tile_lhs, tile_rhs)) {
+            if (num_warps * kWarpSize > std::min(tile_lhs, tile_rhs)) {
               break;
             }
             for (int split_k : kSplitK) {
