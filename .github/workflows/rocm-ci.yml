@@ -39,7 +39,7 @@ jobs:
             --security-opt seccomp=unconfined \
             -v $GITHUB_WORKSPACE/$WORKSPACE_DIR:/tf/xla \
             rocm/tensorflow-build:latest-jammy-python3.11-rocm6.3.0 \
-            "./build_tools/rocm/run_xla.sh && bazel analyze-profile /tf/pkg/profile.json.gz"
+            /tf/xla/build_tools/rocm/run_xla.sh
             # TODO: Maybe use multi-GPU here?
       - name: Archive test analysis
         run: |
