@@ -849,7 +849,7 @@ GemmFusionAutotunerImpl::GenerateTritonConfigs(const HloDotInstruction& dot) {
       !config_.IsDeviceless()
           ? config_.GetExecutor()->GetDeviceDescription().core_count()
           : 100;  // some sensible default
-  const int kWarpSize = config_.GetDeviceDescription().threads_per_warp()
+  const int kWarpSize = config_.GetDeviceDescription().threads_per_warp();
   const int64_t kSufficientNumberOfTiles = kMaxWavesForSplitK * kCoreCount;
   const int64_t result_size = ShapeUtil::ElementsIn(dot.shape());
 
