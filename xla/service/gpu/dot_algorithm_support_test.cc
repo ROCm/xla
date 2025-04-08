@@ -156,11 +156,15 @@ TEST_P(DotAlgorithmSupportTest, AlgorithmIsSupportedFromCudaCapability) {
                  std::get_if<se::RocmComputeCapability>(&gpu_cc)) {
     is_algorithm_supported = rcc->gfx9_mi100_or_later();
     auto version = std::stol(GetDeviceDescription().runtime_version());
-    if (version < params.min_rocm_version &&
+    // rocm-6.3.0 has fp8 support
+    if ((version <= params.min_rocm_version || !rcc->has_fp8_support()) &&
         (params.input_storage_type == F8E5M2 ||
          params.input_storage_type == F8E4M3FN) &&
         params.output_storage_type == BF16) {
-      GTEST_SKIP() << "TODO: Unsupported F8 to BF16 in ROCm version < 6.3";
+      GTEST_SKIP() << "TODO: Unsupported F8 to BF16 due to "
+        << (version <= params.min_rocm_version
+                    ? "ROCm version < " + std::to_string(params.min_rocm_version)
+                    : "lack of FP8 support on " + rcc->gfx_version());
     }
     if (params.backend_restriction == BackendRestriction::kTritonOnly) {
       GTEST_SKIP() << "TODO: Triton unsupported in ROCm";
