@@ -53,7 +53,7 @@ jobs:
         with:
           path: ${{ env.WORKSPACE_DIR }}
           ref: ${{ env.JAX_BRANCH }}
-          repository: "https://github.com/ROCm/jax"
+          repository: ROCm/jax
       - name: Build JAX wheels
         run: |
           pushd $WORKSPACE_DIR
