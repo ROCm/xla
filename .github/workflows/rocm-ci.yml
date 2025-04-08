@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   test-and-analyze-xla:
-    runs-on: mi250
+    runs-on: mi-250
     env:
       DOCKER_IMAGE_NAME: 
       WORKSPACE_DIR: workdir_${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
