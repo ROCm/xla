@@ -45,6 +45,8 @@ class TritonFusionNumericsVerifierTest
     auto options = HloTestBase::GetDebugOptionsForTest();
     options.set_xla_gpu_enable_triton_softmax_fusion(true);
     options.set_xla_gpu_verify_triton_fusion_numerics(true);
+    // options.set_xla_gpu_enable_triton_softmax_fusion(false);
+    // options.set_xla_gpu_verify_triton_fusion_numerics(false);
     return options;
   }
 
@@ -123,6 +125,11 @@ bool HloPassHasRun(const HloModule& module, absl::string_view pass_name) {
 }
 
 TEST_P(TritonFusionNumericsVerifierTest, VerifyExactSoftmaxFusionNumerics) {
+  se::Platform* platform = PlatformUtil::GetDefaultPlatform().value();
+  if (platform->Name() == "ROCM") {
+    GTEST_SKIP() << "Triton fusion not supported on AMD GPUs yet.";
+  }
+  
   PrimitiveType data_type = GetParam();
 
   auto module = Module(kSoftmaxHlo,
@@ -151,6 +158,10 @@ TEST_F(TritonFusionNumericsVerifierTest, CheckMismatch) {
   // VerifyExactSoftmaxFusionNumerics. The reason to keep two tests is that
   // VerifyExactSoftmaxFusionNumerics is minimal and will be easier to debug if
   // it fails.
+  se::Platform* platform = PlatformUtil::GetDefaultPlatform().value();
+  if (platform->Name() == "ROCM") {
+    GTEST_SKIP() << "Triton fusion not supported on AMD GPUs yet.";
+  }
 
   auto module_f16 = Module(kSoftmaxHlo, "f16");
   auto fusion_f16 = TritonFusion(*module_f16);
