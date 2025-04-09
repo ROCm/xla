@@ -156,10 +156,12 @@ struct RewriteFp8TruncFPattern : public Fp8OpRewritePattern<arith::TruncFOp> {
 
     mlir::Value input;
     mlir::Operation* to_match = vector.getDefiningOp();
+    llvm::APInt dummy;
     while (mlir::matchPattern(to_match, mlir::m_Op<vector::InsertOp>(
                                             mlir::m_Op<arith::TruncFOp>(
                                                 mlir::matchers::m_Any(&input)),
-                                            mlir::matchers::m_Any(&vector))) &&
+                                            mlir::matchers::m_Any(&vector),
+                                            mlir::m_ConstantInt(&dummy))) &&
            matchPos(mlir::cast<vector::InsertOp>(to_match), &pos) &&
            vector.hasOneUse()) {
       if (!addInput(input, pos)) {
@@ -174,7 +176,7 @@ struct RewriteFp8TruncFPattern : public Fp8OpRewritePattern<arith::TruncFOp> {
             insert->use_begin()->getOwner(),
             mlir::m_Op<vector::InsertOp>(
                 mlir::m_Op<arith::TruncFOp>(mlir::matchers::m_Any(&input)),
-                mlir::matchers::m_Val(insert->getResult(0)))) &&
+                mlir::matchers::m_Val(insert->getResult(0)),mlir::m_ConstantInt(&dummy))) &&
         matchPos(mlir::cast<vector::InsertOp>(insert->use_begin()->getOwner()),
                  &pos) &&
         input.getType() == value.getType()) {
