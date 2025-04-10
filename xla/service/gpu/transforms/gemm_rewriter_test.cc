@@ -7904,7 +7904,7 @@ ENTRY main {
   // simplifier simplification which could turn the dot into a non-canonical dot
   // late in the pipeline, which will make it unsupported by the GemmRewriter.
   MatchOptimizedHlo(hlo_string, R"(
-  // CHECK: custom_call_target="__cublas$gemm"
+  // CHECK: custom_call_target="__cublas$lt$matmul"
   )");
 }
 
