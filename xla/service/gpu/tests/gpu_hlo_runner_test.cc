@@ -171,7 +171,7 @@ protected:
 
   auto& runner = test_runner_as_hlo_runner();
 
-  int num_runs = 0, num_warmups = 0;
+  int num_runs = 10, num_warmups = 2;
   TF_ASSERT_OK_AND_ASSIGN(auto argument_buffers,
                       runner.TransferLiteralsToDevice(arg_ptrs));
   
@@ -206,7 +206,7 @@ protected:
                       runner.ExecuteWithExecutable(
                           /*executable=*/exec.get(),
                           /*arguments=*/arg_ptrs));
-  VLOG(0) << test_res.ToString();
+  // VLOG(0) << test_res.ToString();
  
   auto& ref_runner = reference_runner();
   TF_ASSERT_OK_AND_ASSIGN(auto truth, ref_runner.Execute(std::move(ref_module),
