@@ -1112,7 +1112,7 @@ tf_proto_library(
     srcs = ["fusion_process_dump.proto"],
     protodeps = [
         "//xla/stream_executor:device_description_proto",
-        "@tsl//tsl/protobuf:dnn_proto",
+        # "//tsl//tsl/protobuf:dnn_proto",
     ],
 )
 
