@@ -54,12 +54,8 @@ TAGS_FILTER="gpu,requires-gpu-amd,-requires-gpu-nvidia,-no_oss,-oss_excluded,-os
 UNSUPPORTED_GPU_TAGS="$(echo -requires-gpu-sm{60,70,80,86,89,90}{,-only})"
 TAGS_FILTER="${TAGS_FILTER},${UNSUPPORTED_GPU_TAGS// /,}"
 
-DUMP_DIR=dump
-rm -rf $DUMP_DIR
-mkdir -p $DUMP_DIR
-
 bazel \
-    build \
+    test \
     --config=rocm \
     --build_tag_filters=${TAGS_FILTER} \
     --test_tag_filters=${TAGS_FILTER} \
@@ -75,9 +71,6 @@ bazel \
     --test_env=HIPBLASLT_LOG_MASK=0xff \
     --test_env=AMD_LOG_LEVEL=0 \
     --test_output=streamed \
-    --test_env=TEST_TMPDIR=$DUMP_DIR \
-    --test_env=TEST_SRCDIR=$DUMP_DIR \
-    --test_env=TEST_WORKSPACE=$DUMP_DIR \
     --test_env=TF_CPP_VMODULE="gemm_rewriter=3" \
     --test_env=XLA_FLAGS="--xla_dump_to=/tmp/generated --xla_dump_hlo_as_text --xla_dump_hlo_as_html --xla_gpu_enable_cublaslt=true --xla_gpu_autotune_level=4" \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
@@ -87,7 +80,7 @@ bazel \
 #   FAILED  ] 6 tests, listed below:
 # [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.SupportsF8NonMajorBatchDim/0, where GetParam() = false
 # [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.SupportsF8NonMajorBatchDim/1, where GetParam() = true
-# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABUnscaledDVectorBiasThenApproxGeluActivationF8/0, where GetParam() = false
-# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABUnscaledDVectorBiasThenApproxGeluActivationF8/1, where GetParam() = true
 # [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDPrecisionF8/0, where GetParam() = false
 # [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.UnscaledABUnscaledDPrecisionF8/1, where GetParam() = true
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABUnscaledDVectorBiasThenApproxGeluActivationF8/0, where GetParam() = false
+# [  FAILED  ] Fp8CublasTestsBothLegacyAndLt/ParameterizedFp8GemmRewriteTest.ScaledABUnscaledDVectorBiasThenApproxGeluActivationF8/1, where GetParam() = true
