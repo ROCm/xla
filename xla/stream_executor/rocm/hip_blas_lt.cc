@@ -426,7 +426,11 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
       } else {
         LOG(INFO) << "new_size < workspace_size";
       }
-      TF_RET_CHECK(workspace_addr != nullptr && new_size >= workspace_size);
+      if (workspace_addr != nullptr && new_size >= workspace_size) {
+        LOG(INFO) << "workspace_addr != nullptr && new_size >= workspace_size";
+      } else {
+        LOG(FATAL) << "workspace_addr == nullptr or new_size < workspace_size";
+      }
       workspace_size = new_size;
     }
   }

@@ -143,7 +143,11 @@ CublasLtMatmulThunk::GetMatmulAlgorithm(const se::Stream* stream,
                           /*max_workspace_size*/ max_workspace));
   LOG(INFO) << "algorithm_idx_: " << algorithm_idx_;
   LOG(INFO) << "algorithms.size(): " << algorithms.size();
-  TF_RET_CHECK(algorithm_idx_ >= 0 && algorithm_idx_ < algorithms.size());
+  if (algorithm_idx_ >= 0 && algorithm_idx_ < algorithms.size()) {
+    LOG(INFO) << "algorithm_idx_ >= 0 && algorithm_idx_ < algorithms.size()";
+  } else {
+    LOG(FATAL) << "no algo found";
+  }
 
   absl::MutexLock lock(&matmul_algorithm_cache_mutex_);
   auto [it, _] =

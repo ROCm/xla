@@ -1074,7 +1074,6 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDReluActivationF8) {
 
 TEST_P(ParameterizedFp8GemmRewriteTest,
        ScaledABUnscaledDVectorBiasThenApproxGeluActivationF8) {
-  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
     ENTRY test {
