@@ -404,6 +404,8 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
 
   void* workspace_addr = nullptr;
   uint64_t workspace_size = algorithm.workspace_size;
+  LOG(INFO) << "within DoMatmul()";
+  LOG(INFO) << "workspace_size: " << workspace_size;
   if (workspace_size > 0) {
     if (args.scratch_allocator != nullptr) {
       TF_ASSIGN_OR_RETURN(
@@ -413,6 +415,17 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
     } else {
       workspace_addr = args.workspace.opaque();
       size_t new_size = args.workspace.size();
+      LOG(INFO) << "new_size: " << new_size;
+      if (workspace_addr != nullptr) {
+        LOG(INFO) << "workspace_addr != nullptr";
+      } else {
+        LOG(INFO) << "workspace_addr == nullptr";
+      }
+      if (new_size >= workspace_size) {
+        LOG(INFO) << "new_size >= workspace_size";
+      } else {
+        LOG(INFO) << "new_size < workspace_size";
+      }
       TF_RET_CHECK(workspace_addr != nullptr && new_size >= workspace_size);
       workspace_size = new_size;
     }

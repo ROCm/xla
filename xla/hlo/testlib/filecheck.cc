@@ -51,7 +51,7 @@ absl::StatusOr<bool> RunFileCheckWithPatternFile(
       tsl::kIsOpenSource
           ? tsl::io::JoinPath("external", "llvm-project", "llvm", binary_name)
           : tsl::io::JoinPath("llvm", "llvm-project", "llvm", binary_name));
-
+  file_check_path = "/usr/bin/FileCheck-15";
   tsl::SubProcess file_check_process;
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
   std::string file_check_prefixes;

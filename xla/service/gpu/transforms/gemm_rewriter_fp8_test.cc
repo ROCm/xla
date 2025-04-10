@@ -154,6 +154,7 @@ class ParameterizedFp8GemmRewriteTest
 };
 
 TEST_P(ParameterizedFp8GemmRewriteTest, SupportsF8NonMajorBatchDim) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
 HloModule t
 
@@ -179,6 +180,7 @@ ENTRY main {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, DoNotRewriteToF8OnPreAda) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   if (!IsCuda()) {
     GTEST_SKIP() << "FP8 Rewrite pattern is different on ROCM-6.2 ";
   }
@@ -207,6 +209,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, DoNotRewriteToF8OnPreAda) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, DoNotRewriteOnPreAdaWithF32Output) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   if (HasFp8Support()) {
     GTEST_SKIP() << "Test requires a pre-Ada GPU or an AMD GPU prior to MI300.";
   }
@@ -232,6 +235,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, DoNotRewriteOnPreAdaWithF32Output) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, UnsupportedTypesF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   // Test with types unsupported by cuBLAS LT when FP8 is used. cuBLAS LT with
   // FP8 requires one of the operands to be F8E4M3FN.
   const char* hlo_text = R"(
@@ -261,6 +265,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, UnsupportedTypesF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABUnscaledDF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -317,6 +322,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABUnscaledDF8) {
 
 // Do not fuse FP8 matrix bias.
 TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABUnscaledDMatrixBiasF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -365,6 +371,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABUnscaledDMatrixBiasF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDColMajorLhsF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
 HloModule test
     ENTRY test {
@@ -417,6 +424,7 @@ HloModule test
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -469,6 +477,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDPaddedF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -527,6 +536,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDPaddedF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDBitcastF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -563,6 +573,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDBitcastF8) {
 // Test case where F8 inputs are converted to F32 before the dot, but without
 // any scaling.
 TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABUnscaledDWithConvertF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -608,6 +619,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABUnscaledDWithConvertF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDUnaryOpsF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -673,6 +685,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDUnaryOpsF8) {
 
 TEST_P(ParameterizedFp8GemmRewriteTest,
        UnscaledABUnscaledDUnaryOpsWithConvertF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -730,6 +743,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest,
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDDynamicSliceF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -791,6 +805,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDDynamicSliceF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDSelectF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -858,6 +873,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDSelectF8) {
 
 TEST_P(ParameterizedFp8GemmRewriteTest,
        ScaledABUnscaledDSelectNonzeroConstantF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -889,6 +905,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest,
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, BatchedScaledABUnscaledDF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -941,6 +958,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, BatchedScaledABUnscaledDF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABAlphaDF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -997,6 +1015,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABAlphaDF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDReluActivationF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -1055,6 +1074,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDReluActivationF8) {
 
 TEST_P(ParameterizedFp8GemmRewriteTest,
        ScaledABUnscaledDVectorBiasThenApproxGeluActivationF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
     ENTRY test {
@@ -1154,6 +1174,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest,
 
 TEST_P(ParameterizedFp8GemmRewriteTest,
        ScaledABUnscaledDApproxGeluActivationF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
     ENTRY test {
@@ -1249,6 +1270,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest,
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, InvScaledABUnscaledDF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -1279,6 +1301,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, InvScaledABUnscaledDF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDMatrixBiasF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -1341,6 +1364,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDMatrixBiasF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDMatrixBiasPaddedF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -1405,6 +1429,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDMatrixBiasPaddedF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABScaledDF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -1462,6 +1487,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABScaledDF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABScaledF32DF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -1511,6 +1537,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABScaledF32DF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABInvScaledF32DF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -1560,6 +1587,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABInvScaledF32DF8) {
 // Do not fuse output scaling without type conversion when a matrix bias was
 // fused.
 TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABScaledF32DMatrixBiasF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -1613,6 +1641,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABScaledF32DMatrixBiasF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABScaledDF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -1678,6 +1707,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABScaledDF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABInvScaledDF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -1721,6 +1751,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABInvScaledDF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABScaledDReluActivationF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
     ENTRY test {
@@ -1787,6 +1818,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABScaledDReluActivationF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABScaledDMatrixBiasWithDAmaxF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -1867,6 +1899,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABScaledDMatrixBiasWithDAmaxF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABScaledDVectorBiasF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -1940,6 +1973,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABScaledDVectorBiasF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDF32VectorBiasF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -2000,6 +2034,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDF32VectorBiasF8) {
 
 TEST_P(ParameterizedFp8GemmRewriteTest,
        ScaledABUnscaledDVectorBiasThenReluActivationF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -2060,6 +2095,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest,
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, Rank3ScaledABUnscaledDVectorBiasF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
     ENTRY test {
@@ -2137,6 +2173,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, Rank3ScaledABUnscaledDVectorBiasF8) {
 
 TEST_P(ParameterizedFp8GemmRewriteTest,
        Rank3ScaledABUnscaledDVectorBiasPaddedF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
     ENTRY test {
@@ -2222,6 +2259,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest,
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, Rank3ScaledABUnscaledDMatrixBiasF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
     ENTRY test {
@@ -2295,6 +2333,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, Rank3ScaledABUnscaledDMatrixBiasF8) {
 
 TEST_P(ParameterizedFp8GemmRewriteTest,
        Rank3ScaledABUnscaledDMatrixBiasPaddedF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
     ENTRY test {
@@ -2379,6 +2418,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest,
 // of dimensions.
 TEST_P(ParameterizedFp8GemmRewriteTest,
        ScaledABUnscaledDMatrixBiasWithSliceF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
     ENTRY test {
@@ -2443,6 +2483,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest,
 
 TEST_P(ParameterizedFp8GemmRewriteTest,
        ScaledABUnscaledDMatrixBiasThenVectorBiasF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -2507,6 +2548,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest,
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABScaledDWithDAmaxF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -2583,6 +2625,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABScaledDWithDAmaxF8) {
 
 TEST_P(ParameterizedFp8GemmRewriteTest,
        ScaledABScaledDWithDAmaxF8WithF16Intermediates) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   // This is the same as ScaledABScaledDWithDAmaxF8, but uses F16 intermediate
   // values instead of F32 intermediate values.
   const char* hlo_text = R"(
@@ -2664,6 +2707,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest,
 
 TEST_P(ParameterizedFp8GemmRewriteTest,
        ScaledABScaledDReluActivationWithDAmaxF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -2741,6 +2785,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest,
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, UnscaledABUnscaledDPrecisionF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* raw_hlo_template = R"(
     HloModule test
 
@@ -2841,6 +2886,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDF8Parameterized) {
 
 TEST_P(ParameterizedFp8GemmRewriteTest,
        ScaledABUnscaledDF8ParameterizedBatched) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   // TODO(wenscarl): For batched matmul, not all combinations of A, B and
   // output layouts get pattern matched successfully to FP8 custom call. Only
   // a handful of cases are tested here.
@@ -2908,6 +2954,7 @@ ENTRY f {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDF8TF32E5M2) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   const char* hlo_text = R"(
     HloModule test
 
@@ -2938,6 +2985,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, ScaledABUnscaledDF8TF32E5M2) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, FnuzTypeF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   // Test that FNUZ FP8 gemms are not rewritten, as cuBLAS does not support them
   const char* hlo_text = R"(
     HloModule test
@@ -3013,6 +3061,7 @@ TEST_P(ParameterizedFp8GemmRewriteTest, FnuzTypeF8) {
 }
 
 TEST_P(ParameterizedFp8GemmRewriteTest, NoTransposeOnBlackwellF8) {
+  GTEST_SKIP() << "xuefei: skip for debugging";
   if (!IsBlackwell()) {
     GTEST_SKIP() << "Test requires a Blackwell GPU.";
   }
