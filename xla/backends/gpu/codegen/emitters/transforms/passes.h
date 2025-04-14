@@ -48,7 +48,11 @@ std::unique_ptr<mlir::Pass> CreateLowerToLLVMPass(
     const std::string& gpu_device_info = "");
 std::unique_ptr<mlir::Pass> CreateLowerToLLVMPass(
     const se::DeviceDescription& device_description);
-std::unique_ptr<mlir::Pass> CreateLowerXlaGpuToScfPass(int64_t warp_size = 32);
+#ifdef TENSORFLOW_USE_ROCM
+  std::unique_ptr<mlir::Pass> CreateLowerXlaGpuToScfPass(int64_t warp_size = 64);
+#else
+  std::unique_ptr<mlir::Pass> CreateLowerXlaGpuToScfPass(int64_t warp_size = 32);
+#endif  
 std::unique_ptr<mlir::Pass> CreateLowerXlaGpuLoopsToScfPass();
 std::unique_ptr<mlir::Pass> CreateMergePointersToSameSlicePass();
 std::unique_ptr<mlir::Pass> CreateOptimizeLoopsPass();
