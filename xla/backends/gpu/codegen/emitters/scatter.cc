@@ -99,7 +99,11 @@ using mlir::func::FuncOp;
 using mlir::func::ReturnOp;
 using primitive_util::IsUnsignedIntegralType;
 
-constexpr int64_t kNumWarpsPerBlock = 4;
+#ifdef TENSORFLOW_USE_ROCM
+  constexpr int64_t kNumWarpsPerBlock = 2;
+#else
+  constexpr int64_t kNumWarpsPerBlock = 4;
+#endif
 constexpr int64_t kMaxVectorizedBits = 128;
 constexpr int64_t kScatterOperandIndex = 0;
 constexpr int64_t kScatterIndicesIndex = 1;
