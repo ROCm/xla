@@ -93,14 +93,14 @@ TransposeFusion::TransposeFusion(const HloFusionAnalysis& analysis)
       permutation_(transpose_.permutation),
       input_shape_(
           Permute(transpose_.dimensions, InversePermutation(permutation_))),
-      base_block_size_(WarpSize(
+      base_block_size_(
 #ifdef TENSORFLOW_USE_ROCM
                       kTileSize
 #else		      
-		      analysis_.device_info()
+		      WarpSize(analysis_.device_info())
 			      
 #endif		      
-			      )) {
+			      ) {
   ConstHloInstructionSet transposes_to_tile;
   int index = 0;
   int64_t shmem_usage = 0;
