@@ -122,7 +122,12 @@ class ReductionFusion : public EmitterBase {
   }
 
   int64_t WarpSize() const {
+#ifdef TENSORFLOW_USE_ROCM
+    return 32;   // TODO  just a temporary solution  due to the reduction algorithm depends on warpsize 32,
+		 // will change back to right warpsize when algorithm is fixed.
+#else
     return ::xla::gpu::WarpSize(analysis_.device_info());
+#endif    
   }
 
   // The reduction heroes for each reduction group.
