@@ -27,9 +27,13 @@ namespace mlir::triton::xla {
 
 #define GEN_PASS_DECL
 #include "xla/backends/gpu/codegen/triton/xla_triton_passes.h.inc"
-
-std::unique_ptr<mlir::Pass> CreateSparseAddEncodingPass(
+#ifdef TENSORFLOW_USE_ROCM
+  std::unique_ptr<mlir::Pass> CreateSparseAddEncodingPass(
+    int32_t num_warps = 4, int32_t threads_per_warp = 64, int32_t num_ctas = 1);
+#else 
+  std::unique_ptr<mlir::Pass> CreateSparseAddEncodingPass(
     int32_t num_warps = 4, int32_t threads_per_warp = 32, int32_t num_ctas = 1);
+#endif  
 std::unique_ptr<mlir::Pass> CreateSparseBlockedToMMAPass();
 std::unique_ptr<mlir::Pass> CreateSparseRemoveLayoutConversionPass();
 std::unique_ptr<mlir::Pass> CreateSparseLocalLoadToLLVMPass();
