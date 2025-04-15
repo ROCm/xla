@@ -59,7 +59,7 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
                                   mt::nvidia_gpu::ClusterInfo& out_cluster_info,
                                   bool is_xla_fusion) {
   // TODO(ROCm): Check why some test fail when threadsPerWarp is set to 64.
-  const int threadsPerWarp = 32;
+  const int threadsPerWarp = 64;
   auto cc = se::RocmComputeCapability(std::move(arch_name));
 
   if (is_xla_fusion) {
@@ -86,8 +86,7 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
   pm->addPass(mt::gpu::createTritonGPUCoalesce());
   pm->addPass(mt::gpu::createTritonGPURemoveLayoutConversions());
   pm->addPass(mt::gpu::createTritonGPUOptimizeThreadLocality());
-  // TODO ROCm Pass cc.gfx_version() after fixing issue with fmfa
-  pm->addPass(mlir::createTritonAMDGPUAccelerateMatmulPass());
+  pm->addPass(mlir::createTritonAMDGPUAccelerateMatmulPass(cc.gfx_version()));
   pm->addPass(mt::gpu::createTritonGPURemoveLayoutConversions());
   // TODO ROCm Check if we want to compare MI100 and greater
   pm->addPass(mlir::createTritonAMDGPUOptimizeEpiloguePass());
@@ -101,7 +100,9 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
   pm->addPass(mlir::createCanonicalizerPass());
 
   if (cc.has_amd_matrix_core()) {
-    pm->addPass(mlir::createTritonAMDGPUStreamPipelinePass(num_stages));
+    pm->addPass(mlir::createTritonAMDGPUStreamPipelinePass(
+        num_stages, /*globalPrefetch=*/0, /*localPrefetch=*/0,
+        /*use_async_copy=*/false));
     // TODO(ROCm) Modify when corresponding run time flags are introduced.
     if (/*use_async_copy=*/false) {  // Not enabled by default.
       pm->addPass(mlir::createTritonAMDGPUCoalesceAsyncCopyPass());
@@ -121,7 +122,7 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
   if (cc.has_amd_matrix_core()) {
     pm->addPass(mt::gpu::createTritonGPUReorderInstructions());
   }
-  if (/*(use_block_pingpong == "none") ==*/false) {
+  if (/*(use_block_pingpong == "none") ==*/true) {
     pm->addPass(mlir::createTritonAMDGPUBlockPingpongPass(num_stages));
   }
   if (/*use_buffer_ops=*/false) {  // Not enabled by default.
