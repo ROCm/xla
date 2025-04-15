@@ -2129,7 +2129,7 @@ ENTRY test {
 }
 
 TEST_F(CublasLtGemmRewriteTest, MatrixBiasSwishActivation) {
-  
+  auto runtime_version = GetRuntimeVersion();
   bool rocm_swish_available =
       IsRocm() &&
       (runtime_version >= stream_executor::SemanticVersion(6, 4, 0));
