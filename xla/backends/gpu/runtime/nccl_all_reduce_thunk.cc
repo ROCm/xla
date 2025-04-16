@@ -131,6 +131,8 @@ absl::Status NcclAllReduceStartThunk::RunNcclCollective(
       std::vector<DeviceBufferPair> device_buffers,
       ConvertToDeviceBuffers(params, buffers_,
                              config_.config.operand_element_type));
+  if (this->RunFakeCollective(stream)) return absl::OkStatus();
+
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
   return ::xla::gpu::RunAllReduce(collectives, config_.reduction_kind,
                                   device_buffers, stream, comm_handle.comm);
@@ -166,6 +168,9 @@ absl::Status NcclReduceScatterStartThunk::RunNcclCollective(
       std::vector<DeviceBufferPair> device_buffers,
       ConvertToDeviceBuffers(params, buffers_,
                              config_.config.operand_element_type));
+
+  if (this->RunFakeCollective(stream)) return absl::OkStatus();
+
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
   return ::xla::gpu::RunReduceScatter(collectives, config_.reduction_kind,
                                       device_buffers, stream, comm_handle.comm);

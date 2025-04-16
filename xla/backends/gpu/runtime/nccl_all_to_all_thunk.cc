@@ -185,6 +185,8 @@ absl::Status NcclAllToAllStartThunk::RunNcclCollective(
 
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
 
+  if (this->RunFakeCollective(stream)) return absl::OkStatus();
+
   if (is_local() && p2p_memcpy_enabled_) {
     int local_id = stream.parent()->device_ordinal() % num_ranks;
     absl::flat_hash_map<int64_t, uint64_t>* send_pointer_map = nullptr;

@@ -47,15 +47,19 @@ limitations under the License.
 #include "xla/service/computation_placer.h"
 #include "xla/service/global_device_id.h"
 #include "xla/service/gpu/buffer_allocations.h"
+#include "xla/service/gpu/qccl_library.h"
 #include "xla/service/rendezvous.h"
 #include "xla/shape.h"
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/event.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/stream_executor/gpu/gpu_stream.h"
 #include "xla/util.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/statusor.h"
+
+#define NCCL_USE_DUMMY_COLLECTIVES 0
 
 namespace xla {
 namespace gpu {
@@ -211,7 +215,20 @@ NcclCollectiveConfig GetNcclCollectiveConfig(
 NcclCollectiveThunk::NcclCollectiveThunk(Kind kind, ThunkInfo thunk_info,
                                          bool is_sync)
     : Thunk(kind, thunk_info),
-      async_events_(is_sync ? nullptr : new AsyncEvents()) {}
+      async_events_(is_sync ? nullptr : new AsyncEvents()) {
+#if NCCL_USE_DUMMY_COLLECTIVES
+  qcclSyncInit();
+#endif
+}
+
+bool NcclCollectiveThunk::RunFakeCollective(se::Stream& stream) {
+#if NCCL_USE_DUMMY_COLLECTIVES
+  qcclSyncGPUs(se::gpu::AsGpuStreamValue(&stream));
+  return true;
+#else
+  return false;
+#endif
+}
 
 absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,

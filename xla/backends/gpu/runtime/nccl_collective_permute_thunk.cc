@@ -245,6 +245,8 @@ absl::Status NcclCollectivePermuteStartThunk::RunNcclCollective(
   bool use_memcpy = is_local_peer && recv_ptr_map_.IsInitialized(current_id) &&
                     p2p_memcpy_enabled_;
 
+  if (this->RunFakeCollective(stream)) return absl::OkStatus();
+
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
   if (use_memcpy) {
     se::DeviceMemoryBase sync_var_address =

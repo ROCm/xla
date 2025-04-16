@@ -879,6 +879,7 @@ cc_library(
         "//xla/service:rendezvous",
         "//xla/service/gpu:buffer_allocations",
         "//xla/service/gpu:ir_emission_utils",
+        "//xla/service/gpu:qccl_library",
         "//xla/service/llvm_ir:llvm_util",
         "//xla/stream_executor:device_memory",
         "//xla/stream_executor:event",
@@ -1074,8 +1075,10 @@ cc_library(
         "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
+        "//xla/tsl/util:env_var",
         "@tsl//tsl/platform:errors",
         "@tsl//tsl/profiler/lib:scoped_annotation",
+        "@tsl//tsl/profiler/protobuf:profiled_instructions_proto_cc",
     ],
 )
 

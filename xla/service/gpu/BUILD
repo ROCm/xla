@@ -544,6 +544,23 @@ cc_library(
     ],
 )
 
+gpu_kernel_library(
+    name = "qccl_library",
+    srcs = if_gpu_is_configured(["qccl_library.cu.cc"]),
+    hdrs = if_gpu_is_configured(["qccl_library.h"]),
+    local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]) + if_rocm_is_configured([
+        "TENSORFLOW_USE_ROCM=1",
+    ]),
+    deps = if_gpu_is_configured([
+        "//xla/stream_executor/gpu:gpu_types_header",
+        "@tsl//tsl/platform:logging",
+    ]) + if_cuda_is_configured([
+        "@local_config_cuda//cuda:cuda_headers",
+    ]) + if_rocm_is_configured([
+        "@local_config_rocm//rocm:rocm_headers",
+    ]),
+)
+
 bool_flag(
     name = "enable_xlir",
     build_setting_default = if_google(True, False),

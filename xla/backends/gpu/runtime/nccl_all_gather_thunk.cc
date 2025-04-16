@@ -94,6 +94,9 @@ absl::Status NcclAllGatherStartThunk::RunNcclCollective(
       std::vector<DeviceBufferPair> device_buffers,
       ConvertToDeviceBuffers(params, buffers_,
                              config_.config.operand_element_type));
+
+  if (this->RunFakeCollective(stream)) return absl::OkStatus();
+
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
   return xla::gpu::RunAllGather(collectives, device_buffers, stream,
                                 comm_handle.comm);

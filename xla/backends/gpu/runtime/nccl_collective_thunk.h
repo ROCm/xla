@@ -180,6 +180,8 @@ class NcclCollectiveThunk : public Thunk {
   }
 
  protected:
+  bool RunFakeCollective(se::Stream& stream);
+
   virtual absl::Status RunNcclCollective(const ExecuteParams& params,
                                          se::Stream& stream,
                                          CommunicatorHandle comm) = 0;
