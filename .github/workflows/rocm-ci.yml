@@ -1,0 +1,64 @@
+name: ROCm CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - rocm-main
+      - 'rocm-jaxlib-v*'
+  pull_request:
+    branches:
+      - rocm-main
+      - 'rocm-jaxlib-v*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-analyze-xla:
+    runs-on: mi-250
+    container:
+      image: rocm/tensorflow-build-private:disk-cache-openxla-upstream-hermetic
+      options:
+        --device=/dev/kfd
+        --device=/dev/dri
+        --ipc=host
+        --shm-size=16G
+        --group-add=video
+        --cap-add=SYS_PTRACE
+        --security-opt=seccomp=unconfined
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Unzip the Bazel cache
+        run: unzip -q /tf/disk_cache.zip -d /tf/cache
+      - name: Test XLA
+        run: build_tools/rocm/run_xla_ci_build.sh rocm_ci_hermetic /tf/cache
+  build-jax-plugin:
+    runs-on: mi-250
+    env:
+      BASE_DOCKER: "ubuntu:22.04"
+      PYTHON_VERSION: "3.10.12"
+      ROCM_VERSION: "6.3.3"
+      JAX_BRANCH: "rocm-jaxlib-v0.5.0"
+      WORKSPACE_DIR:  workdir_jax_${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }} 
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: $PP env.WORKSPACE_DIR }}/xla
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: ${{ env.WORKSPACE_DIR }}/jax
+          ref: ${{ env.JAX_BRANCH }}
+          repository: ROCm/jax
+      - name: Build JAX wheels
+        run: |
+          pushd $WORKSPACE_DIR/jax
+          python3 ./build/rocm/ci_build \
+            --compiler clang \
+            --base-docker $BASE_DOCKER \
+            --python-versions $PYTHON_VERSION \
+            --rocm-version $ROCM_VERSION \
+            --xla-source-dir ../xla
+            dist_wheels
+
