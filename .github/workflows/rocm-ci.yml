@@ -43,18 +43,22 @@ jobs:
       JAX_BRANCH: "rocm-jaxlib-v0.5.0"
       WORKSPACE_DIR:  workdir_jax_${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }} 
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          path: ${{ env.WORKSPACE_DIR }}
+          path: $PP env.WORKSPACE_DIR }}/xla
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: ${{ env.WORKSPACE_DIR }}/jax
           ref: ${{ env.JAX_BRANCH }}
           repository: ROCm/jax
       - name: Build JAX wheels
         run: |
-          pushd $WORKSPACE_DIR
+          pushd $WORKSPACE_DIR/jax
           python3 ./build/rocm/ci_build \
             --compiler clang \
             --base-docker $BASE_DOCKER \
             --python-versions $PYTHON_VERSION \
             --rocm-version $ROCM_VERSION \
+            --xla-source-dir ../xla
             dist_wheels
 
