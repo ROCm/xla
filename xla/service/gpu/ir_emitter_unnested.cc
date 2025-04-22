@@ -778,14 +778,14 @@ absl::Status IrEmitterUnnested::EmitCublasLtMatmulThunkF8(
       BufferAllocation::Slice b_scale,
       GetAllocationSliceForHlo(instr->operand(a_scale_index + 1)));
 
-  bool is_cuda = std::holds_alternative<stream_executor::CudaComputeCapability>(
-      ir_emitter_context_->gpu_compute_capability());
-  bool is_fp8 = instr->shape().tuple_shapes(0).element_type() == F8E4M3FN ||
-                instr->shape().tuple_shapes(0).element_type() == F8E5M2;
   // cublasLT requires c_scale/d_scale to be null when C/D is not FP8.
   // Currently, C cannot be FP8.
+  bool is_fp8 = instr->shape().tuple_shapes(0).element_type() == F8E4M3FN ||
+                instr->shape().tuple_shapes(0).element_type() == F8E5M2 ||
+                instr->shape().tuple_shapes(0).element_type() == F8E4M3FNUZ ||
+                instr->shape().tuple_shapes(0).element_type() == F8E5M2FNUZ;
   BufferAllocation::Slice c_scale, d_scale;
-  if (is_cuda && is_fp8) {
+  if (is_fp8) {
     TF_ASSIGN_OR_RETURN(d_scale,
                         GetAllocationSliceForHlo(instr->operands().back()));
   }

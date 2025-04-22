@@ -459,7 +459,9 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
 #endif
 
     if (args.d_amax != nullptr) {
-      return absl::InternalError("hipblaslt does not support amax");
+      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                 HIPBLASLT_MATMUL_DESC_AMAX_D_POINTER,
+                                 args.d_amax.opaque()));
     }
 
     if (args.aux != nullptr) {
