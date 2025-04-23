@@ -994,7 +994,12 @@ std::unique_ptr<ReductionFusion> MultiRowReductionFusion::TryCreate(
   }
 
   // The reduced dimension must fit into a single warp.
+ 
+#ifdef TENSORFLOW_USE_ROCM
+  const int64_t warp_size = 32;  //TODO: temporary solution  and will change back to 64 when   reduce algorithm fits warp size 64 
+#else  
   const int64_t warp_size = analysis.device_info().threads_per_warp();
+#endif  
   if (shape[kRowMinorReduced] > warp_size * vector_size) {
     return nullptr;
   }
@@ -1106,8 +1111,11 @@ std::unique_ptr<ReductionFusion> CreateReductionFusion(
     }
     return std::make_unique<RowReductionFusion>(analysis);
   }
-
+#ifdef TENSORFLOW_USE_ROCM
+   const int64_t warp_size = 32;  //TODO: temporary solution, need to set warp size 64 when reduction algorithm fits to 64 
+#else  
   const int64_t warp_size = analysis.device_info().threads_per_warp();
+#endif  
   if (warp_size % reduction_dimensions.dimensions[kColMinorKept] == 0) {
     return std::make_unique<SmallColumnReductionFusion>(analysis);
   }

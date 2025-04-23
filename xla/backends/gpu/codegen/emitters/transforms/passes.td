@@ -194,7 +194,7 @@ def LowerXlaGpuToScfPass :
   ];
 
   let options = [
-    Option<"warp_size", "warp_size", "int64_t", /*default=*/"32", "Warp size.">,
+    Option<"warp_size", "warp_size", "int64_t", /*default=*/"64", "Warp size.">,
   ];
   let constructor = "CreateLowerXlaGpuToScfPass()";
 }
