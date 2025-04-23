@@ -114,6 +114,10 @@ void OnMiscompare(const LiteralSlice& expected, const LiteralSlice& actual,
 /* static */ ::testing::AssertionResult LiteralTestUtil::NearOrEqual(
     const LiteralSlice& expected, const LiteralSlice& actual,
     const std::optional<ErrorSpec>& error) {
+  LOG(INFO) << "expected: shape=" << ShapeUtil::HumanString(expected.shape())
+            << ", value=" << literal_comparison::ToStringTruncated(expected);
+  LOG(INFO) << "actual:   shape=" << ShapeUtil::HumanString(actual.shape())
+            << ", value=" << literal_comparison::ToStringTruncated(actual);
   if (error.has_value()) {
     VLOG(1) << "Expects near";
     return StatusToAssertion(literal_comparison::Near(

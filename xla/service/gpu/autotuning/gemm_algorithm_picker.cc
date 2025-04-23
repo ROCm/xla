@@ -151,6 +151,7 @@ class GemmAutotuner {
 
   absl::StatusOr<AutotuneResult> TuneGpuBlasLt(const HloInstruction* gemm,
                                                const GemmConfig& gemm_config) {
+    LOG(INFO) << "Enter TuneGpuBlasLt()...";
     auto workspace_buffer =
         rz_buffers_.output_buffers().at(gemm->shape().tuple_shapes_size() - 1);
 
@@ -176,6 +177,7 @@ class GemmAutotuner {
 
     int64_t input_buffer_idx = 2;  // lhs is at 0, rhs is at 1
     if (has_vector_bias) {
+      LOG(INFO) << "has_vector_bias == true";
       if (has_matrix_bias) {
         input_buffer_idx++;
       }

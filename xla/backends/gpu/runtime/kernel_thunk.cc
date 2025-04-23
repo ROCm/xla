@@ -105,32 +105,32 @@ absl::Status KernelThunk::Initialize(const InitializeParams& params) {
   return absl::OkStatus();
 }
 
-static void PrintBufferContents(
-    se::Stream* stream, absl::Span<const se::KernelArgument> kernel_args) {
-  int input_idx = 0;
-  for (const auto& arg : kernel_args) {
-    if (std::holds_alternative<se::DeviceMemoryBase>(arg)) {
-      se::DeviceMemoryBase buf = std::get<se::DeviceMemoryBase>(arg);
+// static void PrintBufferContents(
+//     se::Stream* stream, absl::Span<const se::KernelArgument> kernel_args) {
+//   int input_idx = 0;
+//   for (const auto& arg : kernel_args) {
+//     if (std::holds_alternative<se::DeviceMemoryBase>(arg)) {
+//       se::DeviceMemoryBase buf = std::get<se::DeviceMemoryBase>(arg);
 
-      auto host_buffer = std::make_unique<char[]>(buf.size());
-      CHECK_OK(stream->Memcpy(host_buffer.get(), buf, buf.size()));
-      CHECK_OK(stream->BlockHostUntilDone());
+//       auto host_buffer = std::make_unique<char[]>(buf.size());
+//       CHECK_OK(stream->Memcpy(host_buffer.get(), buf, buf.size()));
+//       CHECK_OK(stream->BlockHostUntilDone());
 
-      std::string buffer_contents;
-      for (int i = 0; i < buf.size(); i++) {
-        absl::StrAppendFormat(&buffer_contents, "%x ",
-                              static_cast<unsigned>(host_buffer[i]));
-      }
-      VLOG(100) << "BUF(" << input_idx++ << ") = " << buffer_contents;
-    } else {
-      se::TensorMap tensor_map = std::get<se::TensorMap>(arg);
-      VLOG(100) << "TENSOR_MAP(" << input_idx++ << ") = ";
-      for (auto element : tensor_map.storage) {
-        VLOG(100) << absl::StrFormat("%x ", static_cast<unsigned>(element));
-      }
-    }
-  }
-}
+//       std::string buffer_contents;
+//       for (int i = 0; i < buf.size(); i++) {
+//         absl::StrAppendFormat(&buffer_contents, "%x ",
+//                               static_cast<unsigned>(host_buffer[i]));
+//       }
+//       VLOG(100) << "BUF(" << input_idx++ << ") = " << buffer_contents;
+//     } else {
+//       se::TensorMap tensor_map = std::get<se::TensorMap>(arg);
+//       VLOG(100) << "TENSOR_MAP(" << input_idx++ << ") = ";
+//       for (auto element : tensor_map.storage) {
+//         VLOG(100) << absl::StrFormat("%x ", static_cast<unsigned>(element));
+//       }
+//     }
+//   }
+// }
 
 absl::Status KernelThunk::ExecuteOnStream(const ExecuteParams& params) {
   // Load the kernel.
@@ -178,9 +178,9 @@ absl::Status KernelThunk::ExecuteOnStream(const ExecuteParams& params) {
     }
   }
 
-  if (VLOG_IS_ON(100)) {
-    PrintBufferContents(stream, kernel_args);
-  }
+  // if (VLOG_IS_ON(100)) {
+  //   PrintBufferContents(stream, kernel_args);
+  // }
 
   return ExecuteKernelOnStream(
       *kernel,
@@ -246,13 +246,13 @@ absl::Status CustomKernelThunk::ExecuteOnStream(const ExecuteParams& params) {
     buffer_args.push_back(buf);
   }
 
-  if (VLOG_IS_ON(100)) {
-    absl::InlinedVector<se::KernelArgument, 4> kernel_args;
-    for (const auto& arg : buffer_args) {
-      kernel_args.push_back(arg);
-    }
-    PrintBufferContents(params.stream, kernel_args);
-  }
+  // if (VLOG_IS_ON(100)) {
+  //   absl::InlinedVector<se::KernelArgument, 4> kernel_args;
+  //   for (const auto& arg : buffer_args) {
+  //     kernel_args.push_back(arg);
+  //   }
+  //   PrintBufferContents(params.stream, kernel_args);
+  // }
 
   se::KernelArgsDeviceMemoryArray args(buffer_args,
                                        custom_kernel_.shared_memory_bytes());

@@ -109,6 +109,8 @@ bool SupportsEpilogueFusion(PrimitiveType type) {
   switch (type) {
     case F8E4M3FN:
     case F8E5M2:
+    case F8E4M3FNUZ:
+    case F8E5M2FNUZ:
     case F16:
     case BF16:
     case F32:
@@ -1633,6 +1635,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                                  const HloInstruction *gemm,
                                  HloInstruction *bitcast = nullptr,
                                  HloInstruction *slice = nullptr) {
+    LOG(INFO) << "Enter FuseMatrixBiasAdd()...";
     TF_RET_CHECK(Shape::Equal().IgnoreElementType()(bias->shape(),
                                                     bitcast ? bitcast->shape()
                                                     : slice ? slice->shape()
@@ -1769,6 +1772,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                                          HloInstruction *slice = nullptr,
                                          HloInstruction *convert = nullptr,
                                          HloInstruction *bitcast = nullptr) {
+    LOG(INFO) << "Enter FuseVectorBiasAdd()...";
     if (!bitcast) {
       TF_RET_CHECK(ShapeUtil::Compatible(
           broadcast->shape(), (slice ? slice->shape() : gemm->shape())));

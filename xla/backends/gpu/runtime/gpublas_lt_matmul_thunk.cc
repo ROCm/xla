@@ -38,6 +38,20 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
+static void PrintBufferContents(se::Stream* stream,
+                                const se::DeviceMemoryBase& buf) {
+  auto host_buffer = std::make_unique<char[]>(buf.size());
+  CHECK_OK(stream->Memcpy(host_buffer.get(), buf, buf.size()));
+  CHECK_OK(stream->BlockHostUntilDone());
+
+  auto fpp = (float*)host_buffer.get();
+  std::string buffer_contents;
+  for (int i = 0; i < buf.size() / sizeof(float); i++) {
+    absl::StrAppendFormat(&buffer_contents, "%f ", fpp[i]);
+  }
+  VLOG(0) << "BUF = " << buffer_contents;
+}
+
 CublasLtMatmulThunk::CublasLtMatmulThunk(const CublasLtMatmulThunk& rhs)
     : Thunk(Kind::kCublasLtMatmul, {}),
       gemm_config_(rhs.gemm_config_),
@@ -107,15 +121,23 @@ absl::Status CublasLtMatmulThunk::ExecuteOnStreamInternal(
   }
   if (a_scale_.allocation() != nullptr) {
     a_scale = allocs.GetDeviceAddress(a_scale_);
+    LOG(INFO) << "a_scale: ";
+    PrintBufferContents(params.stream, a_scale);
   }
   if (b_scale_.allocation() != nullptr) {
     b_scale = allocs.GetDeviceAddress(b_scale_);
+    LOG(INFO) << "b_scale: ";
+    PrintBufferContents(params.stream, b_scale);
   }
   if (c_scale_.allocation() != nullptr) {
     c_scale = allocs.GetDeviceAddress(c_scale_);
+    LOG(INFO) << "c_scale: ";
+    PrintBufferContents(params.stream, c_scale);
   }
   if (d_scale_.allocation() != nullptr) {
     d_scale = allocs.GetDeviceAddress(d_scale_);
+    LOG(INFO) << "d_scale: ";
+    PrintBufferContents(params.stream, d_scale);
   }
   if (d_amax_.allocation() != nullptr) {
     d_amax = allocs.GetDeviceAddress(d_amax_);
