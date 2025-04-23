@@ -121,6 +121,7 @@ class DotAlgorithmSupportTest
     // dot's dimensions are under the rewrite size threshold:
     // (2 * non_contracting_size * contracting_size < threshold).
     debug_options.set_xla_gpu_gemm_rewrite_size_threshold(100);
+    debug_options.set_xla_gpu_enable_cublaslt(false);
     return debug_options;
   }
 };
