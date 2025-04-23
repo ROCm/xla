@@ -23,7 +23,7 @@ def SparseAddEncodingPass : Pass<"sparse-add-encoding", "mlir::ModuleOp"> {
   let options = [
     Option<"num_warps_", "num-warps", "int32_t", /*default=*/"4",
            "Number of warps">,
-    Option<"threads_per_warp_", "threads-per-warp", "int32_t", /*default=*/"32",
+    Option<"threads_per_warp_", "threads-per-warp", "int32_t", /*default=*/"64",
            "Number of threads per warp">,
     Option<"num_ctas_", "num-ctas", "int32_t", /*default=*/"1",
            "Number of CTAs in a CGA">,
