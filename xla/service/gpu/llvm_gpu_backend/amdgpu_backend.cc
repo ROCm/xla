@@ -355,7 +355,7 @@ std::string MapGCNArchNameTokenToFeatureStr(const std::string& token,
   if (token == "sramecc+") {
     return "+sramecc";
   } else if (token == "sramecc-") {
-    if (gfx == "gfx90a" || gfx == "gfx942")
+    if (gfx == "gfx90a" || gfx == "gfx942" || gfx == "gfx950")
       return "";
     return "-sramecc";
   } else if (token == "xnack+") {

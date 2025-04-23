@@ -185,14 +185,15 @@ class RocmComputeCapability {
   bool gfx9_mi200() const { return gfx_version() == "gfx90a"; }
 
   bool gfx9_mi300() const { return gfx_version() == "gfx942"; }
+  bool gfx9_gfx950() const { return gfx_version() == "gfx950"; }
 
   bool gfx9_mi100_or_later() const {
-    static constexpr absl::string_view kList[] = {"gfx908", "gfx90a", "gfx942"};
+    static constexpr absl::string_view kList[] = {"gfx908", "gfx90a", "gfx942", "gfx950"};
     return absl::c_count(kList, gfx_version()) != 0;
   }
 
   bool gfx9_mi200_or_later() const {
-    static constexpr absl::string_view kList[] = {"gfx90a", "gfx942"};
+    static constexpr absl::string_view kList[] = {"gfx90a", "gfx942", "gfx950"};
     return absl::c_count(kList, gfx_version()) != 0;
   }
 
@@ -240,7 +241,7 @@ class RocmComputeCapability {
 
   bool has_ocp_fp8_support() const { return gfx1200() || gfx1201() || gfx_version() == "gfx950"; }
 
-  bool has_nanoo_fp8_support() const { return gfx_version() == "gfx942"; }
+  bool has_nanoo_fp8_support() const { return gfx_version() == "gfx942" || gfx_version() == "gfx950"; }
 
   std::string ToString() const { return gcn_arch_name(); }
 
@@ -436,6 +437,10 @@ class DeviceDescription {
             if (capability.gfx9_mi300()) {
               return 32 * 1024;
             }
+             // gfx950 has 32KB L1 cache per CU.
+             if (capability.gfx9_gfx950()) {
+              return 32 * 1024;
+            }
           }
           // Default return for other GPUs (e.g., RTX A6000).
           return 2 * 1024;
@@ -450,6 +455,9 @@ class DeviceDescription {
                                        RocmComputeCapability>) {
             // DRAM->L2 bus is 128 Byte width for MI300.
             if (capability.gfx9_mi300()) {
+              return 128;
+            }
+            if (capability.gfx9_gfx950()) {
               return 128;
             }
           }
@@ -471,6 +479,10 @@ class DeviceDescription {
                                        RocmComputeCapability>) {
             // 16 works well on MI300.
             if (capability.gfx9_mi300()) {
+              return 16;
+            }
+            // 16 works well on gfx950.
+            if (capability.gfx9_gfx950()) {
               return 16;
             }
           }
