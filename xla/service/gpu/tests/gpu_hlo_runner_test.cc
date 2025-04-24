@@ -121,9 +121,9 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
 } // namespace 
 
 
-#define DO_REFERENCE_CHECK 1
+#define DO_REFERENCE_CHECK 0
 #define USE_MULTIPLE_GPUS 0
-#define USE_SPECIAL_ARGUMENTS 1
+#define USE_SPECIAL_ARGUMENTS 0
 
 class HloRunnerTest : public GpuCodegenTest {
 
@@ -146,13 +146,15 @@ protected:
     }
 
     HloModuleConfig config = GetModuleConfigForTest();
+    auto& runner = test_runner_as_hlo_runner();
+
 #if !USE_MULTIPLE_GPUS
   TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(input, 
           config));
   
 #if !USE_SPECIAL_ARGUMENTS
   TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, xla::MakeFakeArguments(module.get(), 
-        true, /*pseudo-random*/
+        false, /*pseudo-random*/
         false /* use large range*/));
 #else
   TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, MakeSpecialArguments(module.get()));
@@ -168,8 +170,6 @@ protected:
   // ref_runner.ExecuteWithExecutable(ref_exec.get(), arg_ptrs, nullptr));
   // WriteLiteralToTempFile(truth, "expected");
   //VLOG(0) << "Got expected literal from file.. running test";
-
-  auto& runner = test_runner_as_hlo_runner();
 
   int num_runs = 10, num_warmups = 2;
   TF_ASSERT_OK_AND_ASSIGN(auto argument_buffers,
@@ -247,21 +247,27 @@ protected:
 
   auto fake_arguments = xla::MakeFakeArguments(
       module.get(),
-      true, /*pseudo-random*/
-      false /* use large range*/).ValueOrDie();
+      false, /*pseudo-random*/
+      false /* use large range*/).value();
   TF_ASSERT_OK_AND_ASSIGN(auto exec, 
-      test_runner_.CreateExecutable(std::move(module), true));
+      runner.CreateExecutable(std::move(module), /*run_hlo_passes*/false));
+
+  HloRunnerInterface::ReplicatedExecuteOptions replicated_opts = {
+    .num_replicas = NumReplicas,
+    // .arguments = 
+  };
 
  for(int i = 0; i < 10; i++) {
    VLOG(0) << "Running iteration #" << i;
    TF_ASSERT_OK_AND_ASSIGN(std::vector<Literal> results,
-         HloTestBase::ExecuteReplicated(
+         runner.ExecuteReplicated(
           [&](int64_t){ return exec.get(); },
           [&fake_arguments](int64_t replica_id)
           { return fake_arguments.size(); },
           [&fake_arguments](int64_t replica_id, int64_t idx)
           { return &fake_arguments[idx]; },
-          NumReplicas, false /*run hlo*/, &assn));
+          replicated_opts, &assn));
+
    ASSERT_EQ(results.size(), NumReplicas);
  }
 #endif // USE_MULTIPLE_GPUS

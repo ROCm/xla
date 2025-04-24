@@ -22,6 +22,7 @@ limitations under the License.
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <string>
 #include <utility>
 #include <variant>
@@ -48,6 +49,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/nccl_all_reduce_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_all_to_all_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_collective_broadcast_thunk.h"
+#include "xla/backends/gpu/runtime/nccl_collective_permute_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_collective_thunk.h"
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/debug_options_flags.h"
@@ -1705,7 +1707,7 @@ absl::Status AllToAllCmd::Record(const Thunk::ExecuteParams& execute_params,
 
   if (!execute_params.collective_params || !execute_params.collective_cliques) {
     return absl::InvalidArgumentError(
-        "ReduceScatterCmd requires collective parameters and cliques");
+        "AllToAllCmd requires collective parameters and cliques");
   }
 
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives,
@@ -1724,6 +1726,88 @@ absl::Status AllToAllCmd::Record(const Thunk::ExecuteParams& execute_params,
 }
 
 CommandBufferCmd::BufferUseVector AllToAllCmd::buffers() {
+  BufferUseVector buffer_usage;
+  for (auto& buffer : buffers_) {
+    buffer_usage.emplace_back(buffer.source_buffer, MemoryAccess::kRead);
+    buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
+  }
+  return buffer_usage;
+}
+
+//===----------------------------------------------------------------------===//
+// CollectivePermuteCmd
+//===----------------------------------------------------------------------===//
+
+CollectivePermuteCmd::CollectivePermuteCmd(ExecutionStreamId execution_stream_id,
+                         ExecutionStreamId async_from_stream_id,
+                         const NcclP2PConfig& config,
+                         absl::Span<const NcclCollectiveThunk::Buffer> buffers)
+    : CollectiveCmd(CommandBufferCmdType::kCollectivePermuteCmd, execution_stream_id,
+                    async_from_stream_id, config.config),
+      id_to_source_target_(config.id_to_source_target),
+      buffers_(buffers.begin(), buffers.end()) {}
+
+absl::Status CollectivePermuteCmd::Record(const Thunk::ExecuteParams& execute_params,
+                                 const RecordParams& record_params,
+                                 se::CommandBuffer* command_buffer) {
+  TF_RETURN_IF_ERROR(BarrierIfAsync(
+      command_buffer, execute_params.stream->parent(), record_params));
+
+  TF_ASSIGN_OR_RETURN(
+      std::vector<DeviceBufferPair> device_buffers,
+      ConvertToDeviceBuffers(execute_params.buffer_allocations, buffers_,
+                             config().operand_element_type));
+
+  for (size_t i = 0; i < device_buffers.size(); ++i) {
+    VLOG(0) << "  Src: " << buffers_[i].source_buffer << " ("
+            << device_buffers[i].source_buffer.opaque() << ")";
+    VLOG(0) << "  Dst: " << buffers_[i].destination_buffer << " ("
+            << device_buffers[i].destination_buffer.opaque() << ")";
+  }
+
+  if (!execute_params.collective_params || !execute_params.collective_cliques) {
+    return absl::InvalidArgumentError(
+        "CollectivePermuteCmd requires collective parameters and cliques");
+  }
+
+  TF_ASSIGN_OR_RETURN(const int64_t current_id,
+                      GetCurrentId(execute_params.collective_params, config()));
+  std::string device_string = "cmd_buf_collective_permute";
+        //GetDeviceString(*params.collective_params);
+
+  const NcclP2PConfig::SourceTargetMapEntry source_target =
+      NcclP2PConfig::GetSourceTarget(id_to_source_target_, current_id);
+
+  ExecutionScopeId execution_scope_id = GetExecutionScope(record_params);
+  VLOG(5) << "CollectivePermuteCmd, execution_scope_id=" << execution_scope_id.value();
+
+  TF_ASSIGN_OR_RETURN(GpuCollectives * collectives,
+                      Thunk::GetGpuCollectives(execute_params));
+  TF_ASSIGN_OR_RETURN(
+      CommunicatorHandle comm_handle,
+      GetNcclComm(collectives, *execute_params.collective_params,
+                  *execute_params.collective_cliques, config().replica_groups,
+                  config().group_mode, nccl_stream_id(), GetAsyncStreamKind()));
+
+
+  return AddTracedCommandBuffer(
+      execute_params, record_params, command_buffer, [&](se::Stream* stream) {
+        VLOG(0) << this << " Tracing collective permute for: " << current_id;
+        // return absl::OkStatus();
+        auto res = RunCollectivePermute(collectives, source_target, device_buffers,
+              *stream, comm_handle.comm, device_string, current_id, 
+              /*use_memcpy*/false, /*recv_ptr_map*/nullptr);
+        finish_counter_++;
+        while(finish_counter_.load() % 8 != 0) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        VLOG(0) << this << " collective permute for: " << current_id << " DONE: " 
+                << finish_counter_.load();
+        return res;
+      });
+}
+
+CommandBufferCmd::BufferUseVector CollectivePermuteCmd::buffers() {
   BufferUseVector buffer_usage;
   for (auto& buffer : buffers_) {
     buffer_usage.emplace_back(buffer.source_buffer, MemoryAccess::kRead);

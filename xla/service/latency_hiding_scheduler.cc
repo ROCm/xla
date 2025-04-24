@@ -1213,6 +1213,9 @@ class ReadySetLt {
     // compilation to avoid allocating memory unnecessarily.
     const HloGraphNode& start =
         sched_state_.sched_graph.GetNode(gn.GetInstr().operand(0));
+
+    VLOG(0) << "GetLatencyBetween: " << start.GetInstr().name() << " and " <<
+          gn.GetInstr().name();
     const LatencyEstimator::TimeCost latency =
         sched_state_.latency_estimator->GetLatencyBetween(start, gn);
     if (!gn_cand.estimated_connected_send_ready_time.has_value()) {
@@ -1996,6 +1999,9 @@ HloScheduleGraph::HloScheduleGraph(
   auto add_dependency_helper = [latency_estimator](HloGraphNode* from,
                                                    HloGraphNode* to) {
     // Get the latency between these two instructions for this edge.
+        VLOG(0) << "GetLatencyBetween: " << from->GetInstr().name() << " and " <<
+          to->GetInstr().name();
+
     const LatencyEstimator::TimeCost latency =
         latency_estimator->GetLatencyBetween(*from, *to);
     // Adding dependencies as successors for the instruction we are

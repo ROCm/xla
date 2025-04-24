@@ -35,6 +35,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/nccl_all_gather_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_all_reduce_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_all_to_all_thunk.h"
+#include "xla/backends/gpu/runtime/nccl_collective_permute_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_collective_thunk.h"
 #include "xla/backends/gpu/runtime/replica_id_thunk.h"
 #include "xla/backends/gpu/runtime/sequential_thunk.h"
@@ -173,6 +174,12 @@ static absl::StatusOr<Command> Convert(const NcclAllToAllStartThunk& thunk) {
       thunk.config(), thunk.has_split_dimension(), thunk.buffers());
 }
 
+static absl::StatusOr<Command> Convert(const NcclCollectivePermuteStartThunk& thunk) {
+  return std::make_unique<CollectivePermuteCmd>(
+      thunk.nccl_execution_stream_id(), thunk.execution_stream_id(),
+      thunk.p2pconfig(), thunk.buffers());
+}
+
 static absl::StatusOr<Command> Convert(const NcclAllGatherStartThunk& thunk) {
   return std::make_unique<AllGatherCmd>(thunk.nccl_execution_stream_id(),
                                         thunk.execution_stream_id(),
@@ -299,6 +306,8 @@ static absl::Status AppendCommands(
       return append(Convert<NcclReduceScatterStartThunk>(thunk));
     case Thunk::Kind::kNcclAllToAllStart:
       return append(Convert<NcclAllToAllStartThunk>(thunk));
+    case Thunk::Kind::kNcclCollectivePermuteStart:
+      return append(Convert<NcclCollectivePermuteStartThunk>(thunk));
     case Thunk::Kind::kPartitionId:
       return append(Convert<PartitionIdThunk>(thunk));
     case Thunk::Kind::kReplicaId:
