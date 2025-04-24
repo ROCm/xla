@@ -2596,14 +2596,19 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
     }
     case HloOpcode::kAsyncStart: {
       // Multi-op async start will emit a NCCL group thunk.
+      VLOG(1) << "Emitting for " << instr->ToString() << " " << instr->name();
       if (!instr->async_wrapped_computation()
                ->CanExpandIntoSingleInstruction()) {
+          VLOG(1) << "Doing EmitNcclGroupStartThunk";
         return EmitNcclGroupStartThunk(instr);
       }
+
       const HloInstruction* wrapped = instr->async_wrapped_instruction();
+      VLOG(1) << "Async wrapped: " << instr->ToString();
       switch (wrapped->opcode()) {
         case HloOpcode::kReduceScatter: {
           auto* reduce_scatter = Cast<HloReduceScatterInstruction>(wrapped);
+          VLOG(1) << "Doing kReduceScatter: " << reduce_scatter->ToString();
           return EmitNcclThunk<NcclReduceScatterStartThunk,
                                HloReduceScatterInstruction>(
               Thunk::kNcclReduceScatter, instr, reduce_scatter,

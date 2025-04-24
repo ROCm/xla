@@ -146,6 +146,8 @@ class ShapedBuffer {
 
 std::ostream& operator<<(std::ostream& out, const ShapedBuffer& buffer);
 
+class Executable; // forward declaration
+
 // ScopedShapedBuffer takes allocated buffers as inputs, and deallocates on
 // destruction. This class represents an owning wrapper around `ShapedBuffer`.
 //
@@ -184,6 +186,8 @@ class ScopedShapedBuffer : public ShapedBuffer {
   // Return the allocator used to allocate the device memory held in this
   // ScopedShapedBuffer.
   se::DeviceMemoryAllocator* memory_allocator() const { return allocator_; }
+
+  std::vector< bool > alloc_cached_flag;
 
   // Sets the device memory buffer at the given index.
   //

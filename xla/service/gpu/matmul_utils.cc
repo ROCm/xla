@@ -522,6 +522,7 @@ std::string GemmConfig::ToString() const {
   printL(lhs_layout); oss << '\n';
   printL(rhs_layout); oss << '\n';
   printL(output_layout); oss << " batch: " << lhs_layout.batch_size;
+  oss << " alpha: " << alpha << " beta: " << beta;
   return oss.str();
 }
 

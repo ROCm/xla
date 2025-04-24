@@ -1337,6 +1337,8 @@ absl::Status GpuCompiler::OptimizeHloModule(
     const CompileOptions& options, const TargetConfig& gpu_target_config) {
   tsl::profiler::TraceMe traceme("GpuCompiler::OptimizeHloModule");
 
+  VLOG(0) << "====================== OptimizeHloModule " << hlo_module->name();
+
   CheckNotScheduled(hlo_module);
   LogDebugOptions(hlo_module);
 

@@ -38,8 +38,10 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "xla/backends/gpu/collectives/gpu_clique_key.h"
 #include "xla/backends/gpu/runtime/custom_call_thunk.h"
+#include "xla/backends/gpu/runtime/convolution_thunk.h"
 #include "xla/backends/gpu/runtime/dynamic_slice_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_collective_thunk.h"
+#include "xla/backends/gpu/runtime/nccl_collective_permute_thunk.h"
 #include "xla/backends/gpu/runtime/gpublas_lt_matmul_thunk.h"
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/ffi/api/c_api.h"
@@ -70,6 +72,7 @@ namespace xla::gpu {
   V(kLaunchCmd, "LaunchCmd")                             \
   V(kCustomKernelLaunchCmd, "CustomKernelLaunchCmd")     \
   V(kCublasLtCmd, "CublasLtCmd")                         \
+  V(kConvolutionCmd, "ConvolutionCmd")                   \
   V(kCuDnnCmd, "CuDnnCmd")                               \
   V(kGemmCmd, "GemmCmd")                                 \
   V(kMemcpyDeviceToDeviceCmd, "MemcpyDeviceToDeviceCmd") \
@@ -88,6 +91,7 @@ namespace xla::gpu {
   V(kAllToAll, "AllToAllCmd")                            \
   V(kAllGatherCmd, "AllGatherCmd")                       \
   V(kCollectiveBroadcastCmd, "CollectiveBroadcastCmd")   \
+  V(kCollectivePermuteCmd, "CollectivePermuteCmd")       \
   V(kDynamicSliceFusionCmd, "DynamicSliceFusionCmd")     \
   V(kUnknownCmd, "UnknownCmd") \
   // clang-format on
@@ -103,6 +107,9 @@ std::string CommandBufferCmdString(CommandBufferCmdType type);
 //===----------------------------------------------------------------------===//
 // CommandBufferCmd
 //===----------------------------------------------------------------------===//
+
+// Forward declaration of internal state type
+class TracedCommandBuffer; 
 
 // Command is a Thunk counterpart that instead of launching operations directly
 // on the underlying device records them into command buffers.
@@ -230,6 +237,11 @@ class CommandBufferCmd {
 
   // Returns true if command implemented as a nested command buffer.
   virtual bool IsNestedCommandBuffer() const { return false; }
+
+  virtual bool IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_params,
+          const RecordParams& record_params, size_t *num_child_nodes);
+
+  TracedCommandBuffer *GetTracedBuffer(const RecordParams& record_params);
 
   // Returns a command execution scope created from the specified
   // 'execution_stream_id'.
@@ -399,15 +411,22 @@ class CommandBufferCmdSequence {
 // subsequent calls to XLA executable tend to reuse the same allocations.
 class TracedCommandBuffer : public CommandBufferCmd::State {
  public:
+  using TraceFunc = absl::FunctionRef<absl::Status(se::Stream*)>;
+
   explicit TracedCommandBuffer(const CommandBufferCmd* trace_cmd,
                                CommandBufferCmd::BufferUseVector buffers,
                                int64_t capacity = 16);
 
-  // Returns cached command buffer traced using the same buffer addresses or
-  // traces and caches a new command buffer using user provided callback.
+  bool IsGraphUpdateNeeded(
+      const BufferAllocations* allocs, se::CommandBuffer **nested_cmd);
+
+  void ResetTopEntry();
+
   absl::StatusOr<se::CommandBuffer*> GetOrTraceCommandBuffer(
-      const BufferAllocations* buffer_allocation, se::StreamExecutor* executor,
-      se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace);
+    const BufferAllocations* buffer_allocation, 
+    se::Stream* stream, TraceFunc trace_func);
+
+  size_t NumChildNodes() const { return num_child_nodes_; }
 
  private:
   std::vector<BufferAllocation::Index> allocs_indices_;
@@ -417,7 +436,7 @@ class TracedCommandBuffer : public CommandBufferCmd::State {
     std::unique_ptr<se::CommandBuffer> command_buffer;
   };
   const CommandBufferCmd* trace_cmd_;
-  int64_t capacity_;
+  size_t num_child_nodes_;
   std::vector<Entry> entries_;
 };
 
@@ -428,6 +447,8 @@ class TracedCommandBuffer : public CommandBufferCmd::State {
 // A base class for commands implemented as tracing of stream activities.
 class TracedCommandBufferCmd : public CommandBufferCmd {
  protected:
+  using TraceFunc = TracedCommandBuffer::TraceFunc;
+
   explicit TracedCommandBufferCmd(CommandBufferCmdType cmd_type,
                                   ExecutionStreamId execution_stream_id);
 
@@ -437,7 +458,7 @@ class TracedCommandBufferCmd : public CommandBufferCmd {
   absl::Status AddTracedCommandBuffer(
       const Thunk::ExecuteParams& execute_params,
       const RecordParams& record_params, se::CommandBuffer* command_buffer,
-      absl::FunctionRef<absl::Status(se::Stream*)> trace);
+      TraceFunc trace_func);
 };
 
 //===----------------------------------------------------------------------===//
@@ -791,6 +812,28 @@ class CublasLtCmd : public TracedCommandBufferCmd,
 };
 
 //===----------------------------------------------------------------------===//
+// ConvolutionCmd
+//===----------------------------------------------------------------------===//
+
+class ConvolutionCmd : public TracedCommandBufferCmd,
+                    public ConvolutionThunk {
+ public:
+  ConvolutionCmd(ExecutionStreamId execution_stream_id, 
+              const ConvolutionThunk& conv_thunk);
+
+  absl::Status Initialize(const Thunk::InitializeParams& params,
+                          StateManager& state) override;
+
+  absl::Status Record(const Thunk::ExecuteParams& execute_params,
+                      const RecordParams& record_params,
+                      se::CommandBuffer* command_buffer) override;
+
+  BufferUseVector buffers() override;
+
+  bool IsNestedCommandBuffer() const final { return true; }
+};
+
+//===----------------------------------------------------------------------===//
 // CuDnnCmd
 //===----------------------------------------------------------------------===//
 
@@ -919,7 +962,7 @@ class BarrierCmd : public CommandBufferCmd {
 // CollectiveCmd
 //===----------------------------------------------------------------------===//
 
-class CollectiveCmd : public CommandBufferCmd {
+class CollectiveCmd : public TracedCommandBufferCmd {
  public:
   CollectiveCmd(CommandBufferCmdType cmd_type,
                 ExecutionStreamId execution_stream_id,
@@ -930,14 +973,12 @@ class CollectiveCmd : public CommandBufferCmd {
       const Thunk::PrepareParams& params,
       Thunk::ResourceRequestsInterface& resource_requests) final;
 
-  bool force_update() override { return true; }
+  bool force_update() override { return false; }
 
   bool IsNestedCommandBuffer() const final { return true; }
 
-  absl::Status AddTracedCommandBuffer(
-      const Thunk::ExecuteParams& execute_params,
-      const RecordParams& record_params, se::CommandBuffer* command_buffer,
-      absl::FunctionRef<absl::Status(se::Stream*)> trace);
+  bool IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_params,
+          const RecordParams& record_params, size_t *num_child_nodes) override;
 
   virtual AsyncStreamKind GetAsyncStreamKind() = 0;
 
@@ -960,9 +1001,11 @@ class CollectiveCmd : public CommandBufferCmd {
  protected:
   const NcclCollectiveConfig& config() const { return config_; }
 
- private:
   ExecutionStreamId async_from_stream_id_;
   NcclCollectiveConfig config_;
+  // TODO this value shall be the same for all but better to add it to state object ??
+  std::atomic< size_t > num_local_participants_;
+  // GpuCliqueKey clique_key_;
 };
 
 //===----------------------------------------------------------------------===//
@@ -1041,6 +1084,33 @@ class AllToAllCmd : public CollectiveCmd {
  private:
   bool has_split_dimension_;
   std::vector<NcclCollectiveThunk::Buffer> buffers_;
+};
+
+//===----------------------------------------------------------------------===//
+// CollectivePermuteCmd
+//===----------------------------------------------------------------------===//
+
+class CollectivePermuteCmd : public CollectiveCmd {
+ public:
+  CollectivePermuteCmd(ExecutionStreamId execution_stream_id,
+              ExecutionStreamId async_from_stream_id,
+              const NcclP2PConfig& config,
+              absl::Span<const NcclCollectiveThunk::Buffer> buffers);
+
+  absl::Status Record(const Thunk::ExecuteParams& execute_params,
+                      const RecordParams& record_params,
+                      se::CommandBuffer* command_buffer) override;
+
+  BufferUseVector buffers() override;
+
+  AsyncStreamKind GetAsyncStreamKind() override {
+    return AsyncStreamKind::kCollective;
+  };
+
+ private:
+  NcclP2PConfig::IdToSourceTargetMap id_to_source_target_;
+  std::vector<NcclCollectiveThunk::Buffer> buffers_;
+  std::atomic_uint32_t finish_counter_;
 };
 
 //===----------------------------------------------------------------------===//

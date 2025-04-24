@@ -178,6 +178,10 @@ class NcclCollectiveThunk : public Thunk {
     return ExecutionStreamId(execution_stream_id().value() +
                              nccl_stream_id().value());
   }
+  
+  static absl::Status RunDebugCollective(se::Stream& stream,
+          se::DeviceMemoryBase src, se::DeviceMemoryBase dst,
+          PrimitiveType dtype, size_t count);
 
  protected:
   bool RunFakeCollective(se::Stream& stream);

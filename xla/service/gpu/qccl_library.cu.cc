@@ -636,6 +636,29 @@ __global__ void gpuSyncKernel(uint32_t *exchangePtr) {
   }
 }
 
+
+QCCL_Result qcclRunDebugKernel(hipStream_t stream, 
+        const uint8_t *src, size_t in_sz, 
+        uint8_t *dst, size_t out_sz) {
+
+  // gpuSyncKernel<<< 1, 64, 0, stream >>>(sharedPtr_);
+  if (in_sz <= out_sz) {
+    for (size_t ofs = 0; ofs < out_sz; ofs += in_sz) {
+      size_t sz = std::min(in_sz, out_sz - ofs);
+      LOG(WARNING) << '[' << in_sz << ',' << out_sz << "] copying1: " << ofs << " sz: " << sz;
+      CHK(hipMemcpyAsync(dst + ofs, src, sz, hipMemcpyDeviceToDevice, stream));
+    }
+  } else {
+    for (size_t ofs = 0; ofs < in_sz; ofs += out_sz) {
+      size_t sz = std::min(out_sz, in_sz - ofs);
+      LOG(WARNING) << '[' << in_sz << ',' << out_sz << "] copying2: " << ofs << " sz: " << sz;
+      CHK(hipMemcpyAsync(dst, src + ofs, sz, hipMemcpyDeviceToDevice, stream));
+    }
+  }
+
+  return QCCL_Result::OK;
+}
+
 struct GpuSync {
 
   ~GpuSync() {

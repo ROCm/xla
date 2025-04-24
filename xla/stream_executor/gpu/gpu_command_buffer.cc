@@ -19,6 +19,7 @@ limitations under the License.
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <thread>
 #include <memory>
 #include <string>
 #include <utility>
@@ -47,6 +48,10 @@ limitations under the License.
 #include "tsl/platform/logging.h"
 #include "tsl/platform/path.h"
 #include "tsl/platform/statusor.h"
+
+#if !defined(EXTRACT_CHILD_NODES_FROM_GRAPH)
+#error Not all flags are defined!
+#endif
 
 namespace stream_executor::gpu {
 
@@ -317,6 +322,11 @@ absl::Status GpuCommandBuffer::Barrier(ExecutionScopeId from_execution_scope_id,
   return UnsupportedStateError(state_);
 }
 
+void GpuCommandBuffer::SkipUpdates(ExecutionScopeId execution_scope_id, 
+                            int64_t num) {
+  execution_scopes_[execution_scope_id].update_state.node_idx += num;
+}
+
 absl::Status GpuCommandBuffer::LaunchWithPackedArgs(
     ExecutionScopeId execution_scope_id, const ThreadDim& threads,
     const BlockDim& blocks, const Kernel& kernel,
@@ -375,12 +385,79 @@ absl::Status GpuCommandBuffer::Launch(ExecutionScopeId execution_scope_id,
   return absl::InternalError("Unsupported kernel arguments type");
 }
 
+absl::StatusOr<size_t> GpuCommandBuffer::GetNumChildNodes() const {
+#if EXTRACT_CHILD_NODES_FROM_GRAPH
+  TF_ASSIGN_OR_RETURN(auto *nodes, GetChildNodes());
+  return nodes->size();
+#else
+  return 1; // # of child nodes is always 1 if we don't extract those from child graphs
+#endif
+}
+
+auto GpuCommandBuffer::GetChildNodes() const 
+                -> absl::StatusOr<const ChildNodes *> {
+  if (child_nodes_.empty()) {
+    TF_ASSIGN_OR_RETURN(auto count, GraphGetNodes(nullptr));
+    child_nodes_.resize(count);
+    TF_ASSIGN_OR_RETURN(count, GraphGetNodes(&child_nodes_));
+  }
+  return &child_nodes_;
+}
+
 absl::Status GpuCommandBuffer::AddNestedCommandBuffer(
     ExecutionScopeId execution_scope_id, const CommandBuffer& nested) {
+
   ExecutionScope& execution_scope = execution_scopes_[execution_scope_id];
-
   TF_RETURN_IF_ERROR(CheckNotFinalized());
+  const auto& gpu_cmd = static_cast< const GpuCommandBuffer& >(nested);
+  TF_ASSIGN_OR_RETURN(auto *child_nodes, gpu_cmd.GetChildNodes());
 
+#if EXTRACT_CHILD_NODES_FROM_GRAPH
+  for(size_t i = 0; i < child_nodes->size(); i++) {
+
+    if (state_ == State::kUpdate) {
+      // if(child_nodes->size()>0)
+      // VLOG(0) << std::this_thread::get_id() << 
+      //     " zupdating node #" << i
+      //     <<  " node ptr: " << (*child_nodes)[i];
+      auto node = execution_scope.
+                        nodes[execution_scope.update_state.node_idx++].handle;
+      TF_RETURN_IF_ERROR(UpdateChildNodeInMainGraph((*child_nodes)[i], node));
+
+    } else if(state_ == State::kCreate) {
+
+      // if(child_nodes->size()>0)
+      // VLOG(0) << std::this_thread::get_id() << 
+      //     " zcreating node #" << i
+      //     <<  " node ptr: " << (*child_nodes)[i];
+
+      if(i > 0) { // Nodes offset for a newly created barrier.
+        size_t nodes_offset = execution_scope.nodes.size();
+        execution_scope.barriers.push_back(
+          {execution_scope.nodes.back().handle, false, nodes_offset});
+      }
+
+      Dependencies barrier = GetBarrier(execution_scope_id);
+      GpuGraphNodeInfo& node_info = execution_scope.nodes.emplace_back();
+            
+      TF_ASSIGN_OR_RETURN(node_info.handle, CopyChildNodeToMainGraph(
+          (*child_nodes)[i], barrier));
+    } else {
+      return UnsupportedStateError(state_);
+    }
+  } // for i
+  
+  return absl::OkStatus();
+#else // embedd subgraphs
+  // Updates child graph node in the executable graph.
+  if (state_ == State::kUpdate) {
+    // auto node = execution_scope.
+    //                     nodes[execution_scope.update_state.node_idx++].handle;
+    // return GpuDriver::GraphExecChildNodeSetParams(exec_, node, child_graph);
+    GraphNodeHandle node =
+        execution_scope.nodes[execution_scope.update_state.node_idx++].handle;
+    return UpdateChildNode(node, nested);
+  }
   // Adds a child graph node to the graph under construction.
   if (state_ == State::kCreate) {
     Dependencies barrier = GetBarrier(execution_scope_id);
@@ -388,14 +465,7 @@ absl::Status GpuCommandBuffer::AddNestedCommandBuffer(
                         CreateChildNode(barrier, nested));
     return absl::OkStatus();
   }
-
-  // Updates child graph node in the executable graph.
-  if (state_ == State::kUpdate) {
-    GraphNodeHandle node =
-        execution_scope.nodes[execution_scope.update_state.node_idx++].handle;
-    return UpdateChildNode(node, nested);
-  }
-
+#endif
   return UnsupportedStateError(state_);
 }
 
@@ -751,7 +821,7 @@ absl::Status GpuCommandBuffer::Finalize() {
 
     uint64_t end_nanos = tsl::Env::Default()->NowNanos();
 
-    VLOG(5) << "Instantiated executable graph #" << NotifyExecCreated()
+    VLOG(0) << "Instantiated executable graph #" << NotifyExecCreated()
             << " in " << (end_nanos - start_nanos) / 1000 << " μs"
             << "; execution_scopes: " << execution_scopes_.size()
             << "; nodes: " << num_nodes
@@ -788,14 +858,14 @@ absl::Status GpuCommandBuffer::Update() {
     return absl::InternalError(
         "Command buffer has to be finalized first before it can be updated");
   }
-
-  VLOG(5) << "Begin update of"
+  VLOG(1) << "Begin update of"
           << (mode_ == Mode::kPrimary ? "primary" : "nested")
           << " command buffer " << this;
 
   state_ = State::kUpdate;
   for (auto& [_, execution_scope] : execution_scopes_) {
     execution_scope.update_state = ExecutionScope::UpdateState();
+    VLOG(1) << " --#nodes: " << execution_scope.nodes.size();
   }
   return absl::OkStatus();
 }

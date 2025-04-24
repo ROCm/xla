@@ -230,6 +230,18 @@ bool NcclCollectiveThunk::RunFakeCollective(se::Stream& stream) {
 #endif
 }
 
+/* static */absl::Status NcclCollectiveThunk::RunDebugCollective(se::Stream& stream,
+          se::DeviceMemoryBase src, se::DeviceMemoryBase dst,
+          PrimitiveType dtype, size_t count) {
+    
+  size_t sz = primitive_util::ByteWidth(dtype) * count;
+  auto res = qcclRunDebugKernel(se::gpu::AsGpuStreamValue(&stream),
+        (const uint8_t *)src.opaque(), sz, 
+        (uint8_t *)dst.opaque(), sz);
+  return res == QCCL_Result::OK ? absl::OkStatus() 
+                    : absl::InternalError("qcclRunDebugKernel failed!");
+}
+
 absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const std::vector<ReplicaGroup>& replica_groups,

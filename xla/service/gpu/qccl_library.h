@@ -35,6 +35,9 @@ QCCL_Result qcclRun(uint32_t ID, ::stream_executor::gpu::GpuStreamHandle stream)
 QCCL_Result qcclSyncInit();
 QCCL_Result qcclSyncGPUs(::stream_executor::gpu::GpuStreamHandle stream);
 
+QCCL_Result qcclRunDebugKernel(hipStream_t stream, 
+        const uint8_t *src, size_t in_sz, uint8_t *dst, size_t out_sz);
+
 }
 
 #endif // QCCL_LIB_H

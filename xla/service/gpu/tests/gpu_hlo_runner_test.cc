@@ -112,7 +112,7 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
   for (int i = 0; i < params.size(); ++i) {
     TF_ASSIGN_OR_RETURN(arguments[i], 
         MakeVarLiteral(params[i]->shape(), 
-          [](int idx){ return idx + 1; }
+          [](int idx){ return 111; }//(idx + 1)/10.0; }
         ));
   }
   return std::move(arguments);
@@ -124,6 +124,8 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
 #define DO_REFERENCE_CHECK 1
 #define USE_MULTIPLE_GPUS 0
 #define USE_SPECIAL_ARGUMENTS 1
+#define USE_PSEUDO_RANDOM true
+#define USE_RANDOM_LARGE_RANGE false
 
 class HloRunnerTest : public GpuCodegenTest {
 
@@ -146,14 +148,16 @@ protected:
     }
 
     HloModuleConfig config = GetModuleConfigForTest();
+    auto& runner = test_runner_as_hlo_runner();
+
 #if !USE_MULTIPLE_GPUS
   TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(input, 
           config));
   
 #if !USE_SPECIAL_ARGUMENTS
-  TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, xla::MakeFakeArguments(module.get(), 
-        true, /*pseudo-random*/
-        false /* use large range*/));
+  auto fake_arguments = xla::MakeFakeArguments(module.get(), 
+        USE_PSEUDO_RANDOM, /*pseudo-random*/
+        USE_RANDOM_LARGE_RANGE /* use large range*/).value();
 #else
   TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, MakeSpecialArguments(module.get()));
 #endif
@@ -169,9 +173,7 @@ protected:
   // WriteLiteralToTempFile(truth, "expected");
   //VLOG(0) << "Got expected literal from file.. running test";
 
-  auto& runner = test_runner_as_hlo_runner();
-
-  int num_runs = 10, num_warmups = 2;
+  int num_runs = 0, num_warmups = 0;
   TF_ASSERT_OK_AND_ASSIGN(auto argument_buffers,
                       runner.TransferLiteralsToDevice(arg_ptrs));
   
@@ -247,21 +249,29 @@ protected:
 
   auto fake_arguments = xla::MakeFakeArguments(
       module.get(),
-      true, /*pseudo-random*/
-      false /* use large range*/).ValueOrDie();
-  TF_ASSERT_OK_AND_ASSIGN(auto exec, 
-      test_runner_.CreateExecutable(std::move(module), true));
+      USE_PSEUDO_RANDOM, /*pseudo-random*/
+      USE_RANDOM_LARGE_RANGE /* use large range*/).value();
 
- for(int i = 0; i < 10; i++) {
+  TF_ASSERT_OK_AND_ASSIGN(auto exec, 
+      runner.CreateExecutable(std::move(module), /*run_hlo_passes*/true));
+
+  HloRunnerInterface::ReplicatedExecuteOptions replicated_opts = {
+    .num_replicas = NumReplicas,
+    // .arguments = 
+    .use_threads = true,
+  };
+
+ for(int i = 0; i < 20; i++) {
    VLOG(0) << "Running iteration #" << i;
    TF_ASSERT_OK_AND_ASSIGN(std::vector<Literal> results,
-         HloTestBase::ExecuteReplicated(
+         runner.ExecuteReplicated(
           [&](int64_t){ return exec.get(); },
           [&fake_arguments](int64_t replica_id)
           { return fake_arguments.size(); },
           [&fake_arguments](int64_t replica_id, int64_t idx)
           { return &fake_arguments[idx]; },
-          NumReplicas, false /*run hlo*/, &assn));
+          replicated_opts, &assn));
+
    ASSERT_EQ(results.size(), NumReplicas);
  }
 #endif // USE_MULTIPLE_GPUS

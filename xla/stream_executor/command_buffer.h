@@ -33,6 +33,19 @@ limitations under the License.
 #include "xla/tsl/lib/gtl/int_type.h"
 #include "tsl/platform/errors.h"
 
+// whether to use rendezvous to share update state between collective Cmds
+#define USE_COLLECTIVE_RENDEZVOUS 0
+// whether to always update simple commands (those that do not have embedded cmdbuf)
+#define ALWAYS_UPDATE_UNTRACED_NODES 1
+// Decide for each element of cmdBuf thunk if the update is needed
+// This flag shall always be 1 when buffer ping-ponging is used since buffers are
+// updated ever iteration
+#define USE_SMALL_CMDBUF_UPDATES 1
+// Whether to to use subgraphs or extract child nodes directly to the main graph
+#define EXTRACT_CHILD_NODES_FROM_GRAPH 0
+
+#define CMD_BUF_THUNK_ENABLE_TIMING 0
+
 namespace stream_executor {
 
 class Stream;
@@ -358,6 +371,14 @@ class CommandBuffer {
   // Returns command buffer state.
   virtual State state() const = 0;
 
+  // Skips updating num commands - instead just increment a counter
+  virtual void SkipUpdates(ExecutionScopeId execution_scope_id, int64_t num = 1) { 
+    LOG(FATAL) << "SkipUpdates is not supported!";
+  }
+
+  virtual absl::StatusOr<size_t> GetNumChildNodes() const {
+    LOG(FATAL) << "GetNumChildNodes is not supported!";
+  }
   //--------------------------------------------------------------------------//
   // Command buffer tracing API
   //--------------------------------------------------------------------------//

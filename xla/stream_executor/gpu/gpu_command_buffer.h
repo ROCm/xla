@@ -179,6 +179,7 @@ class GpuCommandBuffer : public CommandBuffer {
   static int64_t NotifyExecDestroyed();
 
   using Dependencies = absl::InlinedVector<GraphNodeHandle, 1>;
+  using ChildNodes = absl::InlinedVector<GraphNodeHandle, 2>;
 
   using NoOpKernel = TypedKernel<>;
 
@@ -292,6 +293,10 @@ class GpuCommandBuffer : public CommandBuffer {
       const BlockDim& blocks, const Kernel& kernel,
       const KernelArgsPackedArrayBase& packed_args);
 
+  void SkipUpdates(ExecutionScopeId execution_scope_id, int64_t num) override; 
+
+  absl::StatusOr<size_t> GetNumChildNodes() const override;
+
  protected:
   // Returns OK status if command buffer is not finalized and it is still
   // possible to add new commands to it, otherwise returns internal error.
@@ -308,6 +313,8 @@ class GpuCommandBuffer : public CommandBuffer {
 
   // Collects a set of dependencies for a new barrier.
   Dependencies GetBarrierDependencies(ExecutionScopeId execution_scope_id);
+
+  absl::StatusOr<const ChildNodes *> GetChildNodes() const;
 
   Mode mode_;
   State state_ = State::kCreate;
@@ -353,6 +360,8 @@ class GpuCommandBuffer : public CommandBuffer {
 
   // Track the number of command buffer updates for debugging.
   int64_t num_updates_ = 0;
+
+  mutable ChildNodes child_nodes_;
 
   // Creates a nested command buffer, associated with the same executor.
   // The given graph will not be owned by the created command buffer.
@@ -427,6 +436,16 @@ class GpuCommandBuffer : public CommandBuffer {
   // Returns the number of nodes in the graph associated with this command
   // buffer.
   virtual absl::StatusOr<size_t> GetNodeCount() const = 0;
+
+  // return the list of graph nodes
+  virtual absl::StatusOr<size_t> GraphGetNodes(
+        ChildNodes *pnodes) const = 0;
+
+  virtual absl::StatusOr< GraphNodeHandle > CopyChildNodeToMainGraph(
+          GraphNodeHandle child_node, const Dependencies& dependencies) = 0;
+
+  virtual absl::Status UpdateChildNodeInMainGraph(
+          GraphNodeHandle child_node, GraphNodeHandle main_node) = 0;
 
   // This gets called at the beginning of `Finalize` and allows subclasses to
   // perform any necessary preparation before the graph is finalized.

@@ -18,6 +18,7 @@ limitations under the License.
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <thread>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -43,6 +44,10 @@ limitations under the License.
 #include "tsl/profiler/lib/traceme.h"
 #include "tsl/profiler/lib/traceme_encode.h"
 
+#if !defined(USE_SMALL_CMDBUF_UPDATES) || !defined(CMD_BUF_THUNK_ENABLE_TIMING)
+#error Not all flags are defined!
+#endif
+
 namespace xla::gpu {
 
 using tsl::profiler::TraceMe;
@@ -62,7 +67,7 @@ CommandBufferThunk::CommandBufferThunk(
     bool enable_command_buffers_during_profiling)
     : Thunk(Thunk::kCommandBuffer, std::move(thunk_info)),
       commands_(std::move(commands)),
-      thunks_(std::move(thunks)),
+      //thunks_(std::move(thunks)), // do not initialize thunks which 
       enable_command_buffers_during_profiling_(
           enable_command_buffers_during_profiling),
       state_(std::make_shared<State>()) {
@@ -85,6 +90,9 @@ CommandBufferThunk::CommandBufferThunk(
 bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
     const CommandBufferCmdSequence& commands,
     const Thunk::ExecuteParams& params) {
+#if USE_SMALL_CMDBUF_UPDATES
+  return true;
+#endif
   if (commands.force_update()) {
     return true;
   }
@@ -94,20 +102,25 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
 
   // We check only allocations referenced by commands in a cmd sequence, and
   // leave every other entry default initialized (nullptr device memory).
-  for (BufferAllocation::Index index : commands.allocs_indices()) {
-    se::DeviceMemoryBase alloc = allocs->GetDeviceAddress(index);
+  for (const auto idx : commands.allocs_indices()) {
+    se::DeviceMemoryBase alloc = allocs->GetDeviceAddress(idx);
 
-    if (recorded_allocs.size() <= index) {
-      recorded_allocs.resize(index + 1);
+    if (recorded_allocs.size() <= idx) {
+      recorded_allocs.resize(idx + 1);
       should_update = true;
     }
-
-    if (!recorded_allocs[index].IsSameAs(alloc)) {
-      recorded_allocs[index] = alloc;
+    auto& recorded = recorded_allocs[idx];
+    if (!recorded.IsSameAs(alloc)) {
+      VLOG(1) << "Buffer alloc changed for: " << idx << ": " 
+               << recorded.opaque() << " --> " << alloc.opaque();
+      recorded = alloc;
       should_update = true;
     }
   }
-
+  VLOG(1) <<  params.stream->parent()->device_ordinal() << ": === ShouldUpdateCommandBuffer "
+      << params.collective_params->run_id.ToInt() 
+      << " should_update " << should_update;
+  // we now decide for each command individually if update is required!
   return should_update;
 }
 
@@ -206,16 +219,11 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
   // are no-op (e.g. memcpy of size 0) and we have no emitted thunks for them.
   if (commands_.empty()) return absl::OkStatus();
 
-  // TODO(b/290773547): Profiler (CUPTI) + CUDA graphs lead to memory
-  // corruption. As a work around disable command buffers (CUDA graphs) and run
-  // everything in op-by-op mode.
-  if (tsl::profiler::ProfilerLock::HasActiveSession() && thunks_ &&
-      !enable_command_buffers_during_profiling_) {
-    VLOG(1) << "Execute command buffer thunk as a regular thunk sequence "
-               "because we detected active profiling session";
-    TF_RETURN_IF_ERROR(thunks_->ExecuteOnStream(params));
-    return absl::OkStatus();
-  }
+#if CMD_BUF_THUNK_ENABLE_TIMING
+  uint64_t xstart = tsl::Env::Default()->NowMicros();
+#endif
+  // TF_RETURN_IF_ERROR(thunks_->ExecuteOnStream(params));
+  // return absl::OkStatus();
 
   se::StreamExecutor* executor = params.stream->parent();
   TF_ASSIGN_OR_RETURN(std::shared_ptr<ExecutorCommandBuffer> cmd_buffer,
@@ -245,8 +253,14 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
                                         cmd_buffer->command_buffer.get()));
 
     uint64_t end_micros = tsl::Env::Default()->NowMicros();
-    VLOG(3) << "Updated command buffer in " << (end_micros - start_micros)
-            << " μs; num_commands=" << commands_.size();
+    auto ss = (double)(end_micros - start_micros)/1e6;
+#if CMD_BUF_THUNK_ENABLE_TIMING
+    VLOG(0)
+#else
+    VLOG(3)
+#endif
+       << executor->device_ordinal() << " updated command buffer in " << ss
+            << " sec; num_commands=" << commands_.size();
     cmd_buffer->num_executions = 0;
   }
 
@@ -263,7 +277,16 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
                           {"num_executions", cmd_buffer->num_executions}});
   });
 
-  return cmd_buffer->command_buffer->Submit(params.stream);
+  auto s = cmd_buffer->command_buffer->Submit(params.stream);
+#if CMD_BUF_THUNK_ENABLE_TIMING
+  params.stream->BlockHostUntilDone();
+  uint64_t xend = tsl::Env::Default()->NowMicros();
+
+  auto ss = (double)(xend - xstart)/1e6;
+  VLOG(0) << executor->device_ordinal() << " total exec time " << ss
+            << " sec; num_commands=" << commands_.size();
+#endif
+  return s;
 }
 
 absl::StatusOr<std::shared_ptr<CommandBufferThunk::ExecutorCommandBuffer>>

@@ -35,6 +35,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/nccl_all_gather_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_all_reduce_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_all_to_all_thunk.h"
+#include "xla/backends/gpu/runtime/nccl_collective_permute_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_collective_thunk.h"
 #include "xla/backends/gpu/runtime/replica_id_thunk.h"
 #include "xla/backends/gpu/runtime/sequential_thunk.h"
@@ -173,6 +174,12 @@ static absl::StatusOr<Command> Convert(const NcclAllToAllStartThunk& thunk) {
       thunk.config(), thunk.has_split_dimension(), thunk.buffers());
 }
 
+static absl::StatusOr<Command> Convert(const NcclCollectivePermuteStartThunk& thunk) {
+  return std::make_unique<CollectivePermuteCmd>(
+      thunk.nccl_execution_stream_id(), thunk.execution_stream_id(),
+      thunk.p2pconfig(), thunk.buffers());
+}
+
 static absl::StatusOr<Command> Convert(const NcclAllGatherStartThunk& thunk) {
   return std::make_unique<AllGatherCmd>(thunk.nccl_execution_stream_id(),
                                         thunk.execution_stream_id(),
@@ -234,6 +241,10 @@ static absl::StatusOr<Command> Convert(const CuDnnThunk& thunk) {
                                     thunk.arguments(), thunk.graph());
 }
 
+static absl::StatusOr<Command> Convert(const ConvolutionThunk& thunk) {
+  return std::make_unique<ConvolutionCmd>(thunk.execution_stream_id(), thunk);
+}
+
 static absl::StatusOr<Command> Convert(const WaitForStreamsThunk& thunk) {
   return std::make_unique<BarrierCmd>(thunk.stream_id(),
                                       thunk.wait_for_stream_id());
@@ -271,6 +282,7 @@ static absl::Status AppendCommands(
     }
     return command.status();
   };
+  VLOG(1) << "Appending: " << thunk.KindToString(thunk.kind());
 
   switch (thunk.kind()) {
     case Thunk::Kind::kConditional:
@@ -299,6 +311,8 @@ static absl::Status AppendCommands(
       return append(Convert<NcclReduceScatterStartThunk>(thunk));
     case Thunk::Kind::kNcclAllToAllStart:
       return append(Convert<NcclAllToAllStartThunk>(thunk));
+    case Thunk::Kind::kNcclCollectivePermuteStart:
+      return append(Convert<NcclCollectivePermuteStartThunk>(thunk));
     case Thunk::Kind::kPartitionId:
       return append(Convert<PartitionIdThunk>(thunk));
     case Thunk::Kind::kReplicaId:
@@ -307,6 +321,8 @@ static absl::Status AppendCommands(
       return append(Convert<WhileThunk>(thunk, synchronization_mode));
     case Thunk::Kind::kCuDnn:
       return append(Convert<CuDnnThunk>(thunk));
+    case Thunk::Kind::kConvolution:
+      return append(Convert<ConvolutionThunk>(thunk));
 
     // Sequential thunk does not have any special semantics and we simply inline
     // all nested thunks into command buffer.
@@ -319,7 +335,13 @@ static absl::Status AppendCommands(
     case Thunk::Kind::kNcclAllReduceDone:
     case Thunk::Kind::kNcclReduceScatterDone:
     case Thunk::Kind::kNcclAllToAllDone:
-      return append(Convert<NcclCollectiveDoneThunk>(thunk));
+    case Thunk::Kind::kNcclCollectivePermuteDone: {
+      LOG(WARNING) << "Skipping async done command: " 
+          << thunk.KindToString(thunk.kind()) 
+          << " since all graph commands are executed sequentially";
+      return absl::OkStatus();
+      //return append(Convert<NcclCollectiveDoneThunk>(thunk));
+    }
 
     case Thunk::Kind::kDynamicSlice:
       return append(Convert<DynamicSliceThunk>(thunk));

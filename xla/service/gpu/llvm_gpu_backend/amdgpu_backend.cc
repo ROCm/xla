@@ -79,7 +79,6 @@ limitations under the License.
 #include "tsl/platform/random.h"
 #include "tsl/platform/status.h"
 #include "tsl/platform/statusor.h"
-#include "tsl/platform/base64.h"
 #include "tsl/profiler/lib/traceme.h"
 
 namespace xla {
@@ -90,20 +89,19 @@ namespace {
 const int kAMDGPUInlineThreshold = 0x100000;
 
 // Gets the ROCm-Device-Libs filenames for a particular AMDGPU version.
-std::vector<std::string> GetROCDLPaths(std::string gcn_arch_name,
+std::vector<std::string> GetROCDLPaths(const std::string& gcn_arch_name,
                                        const std::string& rocdl_dir_path) {
   // AMDGPU version-neutral bitcodes.
-  static std::vector<std::string>* rocdl_filenames =
-      new std::vector<std::string>(
-          {"opencl.bc", "ocml.bc", "ockl.bc", "oclc_finite_only_off.bc",
-           "oclc_daz_opt_off.bc", "oclc_correctly_rounded_sqrt_on.bc",
-           "oclc_unsafe_math_off.bc", "oclc_wavefrontsize64_on.bc",
-           "oclc_abi_version_500.bc"});
-
+  static const std::vector<absl::string_view> rocdl_filenames = {
+       "opencl.bc", "ocml.bc", "ockl.bc", "oclc_finite_only_off.bc",
+       "oclc_daz_opt_off.bc", "oclc_correctly_rounded_sqrt_on.bc",
+       "oclc_unsafe_math_off.bc", "oclc_wavefrontsize64_on.bc",
+       "oclc_abi_version_500.bc"
+  };
   // Construct full path to ROCDL bitcode libraries.
   std::vector<std::string> result;
-  result.reserve(rocdl_filenames->size() + 1);
-  for (auto& filename : *rocdl_filenames) {
+  result.reserve(rocdl_filenames.size() + 1);
+  for (auto filename : rocdl_filenames) {
     result.push_back(tsl::io::JoinPath(rocdl_dir_path, filename));
   }
 
@@ -119,15 +117,13 @@ std::vector<std::string> GetROCDLPaths(std::string gcn_arch_name,
   return result;
 }
 
-struct HsacoCacheEntry {
-  std::string hash_str;
-  std::string ir;
-  std::vector<uint8_t> hsaco;
-};
+class HsacoCache {
+  struct Entry {
+    std::string hash_str;
+    std::vector<uint8_t> hsaco;
+  };
 
-struct HsacoCache {
- protected:
-  std::list<HsacoCacheEntry> hsaco_cache_;
+  std::list<Entry> hsaco_cache_;
   std::mutex mutex_;
   int request_count_ = 0;
   int hit_count_ = 0;
@@ -135,8 +131,9 @@ struct HsacoCache {
 
   HsacoCache() {
     auto env = tsl::Env::Default();
-    (void)tsl::ReadStringFromEnvVar("TF_XLA_HSACO_CACHE_DIR", "/tmp",
-                                     &hsaco_cache_dir_);
+    // Do not cache hsacos by default !
+    TF_CHECK_OK(tsl::ReadStringFromEnvVar("TF_XLA_HSACO_CACHE_DIR", "",
+                                     &hsaco_cache_dir_));
     if (hsaco_cache_dir_.empty()) {
       LOG(INFO) << "Will not cache XLA HSACOs. ";
     } else {
@@ -156,38 +153,53 @@ struct HsacoCache {
     return obj;
   }
 
-bool Find(const std::string& ir, const std::string& gfx, 
-        std::string *hash_str, std::vector<uint8_t> *hsaco, std::string *hsaco_path) {
-  std::lock_guard<std::mutex> lg(mutex_);
-
-  llvm::SHA256 sha256;
-  sha256.update(llvm::StringRef(ir));
-  std::array<uint8_t, 32> lhash = sha256.final();
-  // C++ strict aliasing rules allow reinterpret casting to (const) char*.
-  absl::string_view hash_view(reinterpret_cast<const char*>(lhash.data()),
-                              lhash.size());
-  (void)tsl::Base64Encode(hash_view, hash_str);
-  // VLOG(0) << "Got hashview:" << hash_str;
-  *hash_str += "." + gfx;
-
-  bool hit = false;
-  for (const auto& x : hsaco_cache_) {
-    if (!(x.hash_str == *hash_str && x.ir == ir)) continue;
-    *hsaco = x.hsaco;
-    hit = true;
-    break;
+  std::optional< std::string > hsaco_file_path(absl::string_view hash_str) const {
+    if (!hsaco_cache_dir_.empty()) {
+      return hsaco_cache_dir_ + std::string{hash_str} + ".hsaco";
+    }
+    return std::nullopt;
   }
 
-  *hsaco_path = hsaco_cache_dir_ + *hash_str + ".hsaco";
-  if (!hit && tsl::Env::Default()->FileExists(*hsaco_path).ok()) {
-      VLOG(1) << "Hsaco cache hit in file " << *hsaco_path;
-      std::ifstream hsaco_file(*hsaco_path, std::ios::binary | std::ios::ate);
-      std::ifstream::pos_type hsaco_file_size = hsaco_file.tellg();
-      *hsaco = std::vector<uint8_t>(hsaco_file_size);
-      hsaco_file.seekg(0, std::ios::beg);
-      hsaco_file.read(reinterpret_cast<char*>(hsaco->data()), hsaco_file_size);
-      hsaco_cache_.emplace_back(HsacoCacheEntry{*hash_str, ir, *hsaco});
+  bool find(absl::string_view hash_str, std::vector<uint8_t> *hsaco);
+
+  // adds to in-memory cache and (if enabled) moves hsaco binary file to
+  // cached location
+  void add(absl::string_view hash_str, const std::vector<uint8_t>& hsaco,
+            const std::string& hsaco_path) {
+    std::lock_guard<std::mutex> lg(mutex_);
+    hsaco_cache_.emplace_back(Entry{std::string{hash_str}, hsaco});
+
+    if (auto save_path = hsaco_file_path(hash_str)) {
+      TF_CHECK_OK(tsl::Env::Default()->RenameFile(hsaco_path, *save_path));
+    }
+  }
+}; // HsacoCache
+
+
+bool HsacoCache::find(absl::string_view hash_str, 
+         std::vector<uint8_t> *hsaco) {
+  std::lock_guard<std::mutex> lg(mutex_);
+
+  bool hit = false;
+  for (const auto& [xhash, xhsaco] : hsaco_cache_) {
+    if (xhash == hash_str) {
+      *hsaco = xhsaco;
       hit = true;
+      break;
+    }
+  }
+
+  auto hsaco_path = hsaco_file_path(hash_str);
+  if (!hit && hsaco_path.has_value() && 
+            tsl::Env::Default()->FileExists(*hsaco_path).ok()) {
+    VLOG(1) << "Hsaco cache hit in file " << *hsaco_path;
+    std::ifstream hsaco_file(*hsaco_path, std::ios::binary | std::ios::ate);
+    auto hsaco_file_size = hsaco_file.tellg();
+    *hsaco = std::vector<uint8_t>(hsaco_file_size);
+    hsaco_file.seekg(0, std::ios::beg);
+    hsaco_file.read(reinterpret_cast<char*>(hsaco->data()), hsaco_file_size);
+    hsaco_cache_.emplace_back(Entry{std::string{hash_str}, *hsaco});
+    hit = true;
   }
   request_count_++;
   if (hit) hit_count_++;
@@ -196,25 +208,14 @@ bool Find(const std::string& ir, const std::string& gfx,
   return hit;
 }
 
-void Add(const std::string& ir, const std::string& hash_str,
-                     const std::vector<uint8_t>& hsaco) {
-  std::lock_guard<std::mutex> lg(mutex_);
-  hsaco_cache_.emplace_back(HsacoCacheEntry{hash_str, ir, hsaco});
-}
-
-}; // HsacoCache
-
-struct JaxPluginPaths {
-  std::string bitcode_path;
-  std::string lld_path;
-};
-
-JaxPluginPaths getJaxPluginPaths() {
-  JaxPluginPaths paths;
-
-  paths.bitcode_path = std::getenv("JAX_ROCM_PLUGIN_INTERNAL_BITCODE_PATH") ?: "";
-  paths.lld_path = std::getenv("JAX_ROCM_PLUGIN_INTERNAL_LLD_PATH") ?: "";
-
+const auto& getJaxPluginPaths() {
+  static const struct {
+    std::string bitcode_path;
+    std::string lld_path;
+  } paths = {
+    std::getenv("JAX_ROCM_PLUGIN_INTERNAL_BITCODE_PATH") ?: "",
+    std::getenv("JAX_ROCM_PLUGIN_INTERNAL_LLD_PATH") ?: "",
+  };
   return paths;
 }
 
@@ -222,7 +223,7 @@ JaxPluginPaths getJaxPluginPaths() {
 // TargetMachine for the AMDGPU target.
 absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
     llvm::Module* module, llvm::TargetMachine* target_machine,
-    const std::string& hsaco_path) {
+    absl::string_view hash_str) {
   auto* env = tsl::Env::Default();
   std::vector<std::string> tempdir_vector;
   env->GetLocalTempDirectories(&tempdir_vector);
@@ -239,63 +240,50 @@ absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
   // Prepare filenames for all stages of compilation:
   // IR, binary ISA, and HSACO.
   std::string random_number = std::to_string(tsl::random::New64());
-  std::string ir_filename =
-      absl::StrCat(module->getModuleIdentifier(), random_number + ".ll");
-  std::string ir_path = tsl::io::JoinPath(tempdir_name, ir_filename);
+  auto gen_path = [module, &random_number, &tempdir_name](absl::string_view ext) {
+    auto name =
+      absl::StrCat(module->getModuleIdentifier(), random_number, ext);
+    return tsl::io::JoinPath(tempdir_name, name);
+  };
 
-  std::string ir_opt_filename =
-      absl::StrCat(module->getModuleIdentifier(), random_number + "_opt.ll");
-  std::string ir_opt_path = tsl::io::JoinPath(tempdir_name, ir_opt_filename);
-
-  std::string isabin_filename =
-      absl::StrCat(module->getModuleIdentifier(), random_number + ".o");
-  std::string isabin_path = tsl::io::JoinPath(tempdir_name, isabin_filename);
-
-  // std::string hsaco_filename =
-  //     absl::StrCat(module->getModuleIdentifier(), random_number + ".hsaco");
-  // std::string hsaco_path = tsl::io::JoinPath(tempdir_name, hsaco_filename);
+  std::string ir_path = gen_path(".ll"),
+              ir_opt_path = gen_path("_opt.ll"),
+              isabin_path = gen_path(".o"),
+              hsaco_path = gen_path(".hsaco");
 
   std::error_code ec;
+  { // Dump LLVM IR.
+    llvm::raw_fd_ostream ir_fs(ir_path, ec, llvm::sys::fs::OF_None);
+    module->print(ir_fs, nullptr);
+  }
 
-  // Dump LLVM IR.
-  std::unique_ptr<llvm::raw_fd_ostream> ir_fs(
-      new llvm::raw_fd_ostream(ir_path, ec, llvm::sys::fs::OF_None));
-  module->print(*ir_fs, nullptr);
-  ir_fs->flush();
-
-  // Emit GCN ISA binary.
-  llvm::legacy::PassManager pm;
-  pm.add(new llvm::TargetLibraryInfoWrapperPass(
+  { // Emit GCN ISA binary.
+    llvm::legacy::PassManager pm;
+    pm.add(new llvm::TargetLibraryInfoWrapperPass(
       llvm::Triple(module->getTargetTriple())));
-  llvm::SmallVector<char, 0> stream;
-  llvm::raw_svector_ostream pstream(stream);
-  std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
-      new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
-  module->setDataLayout(target_machine->createDataLayout());
-  target_machine->addPassesToEmitFile(pm, *isabin_fs, nullptr,
+
+    llvm::raw_fd_ostream isabin_fs(isabin_path, ec, llvm::sys::fs::OF_Text);
+    module->setDataLayout(target_machine->createDataLayout());
+    target_machine->addPassesToEmitFile(pm, isabin_fs, nullptr,
                                       llvm::CodeGenFileType::ObjectFile);
-  pm.run(*module);
-  isabin_fs->flush();
+    pm.run(*module);
+  }
 
   if (keep_tempfiles) {
-    std::unique_ptr<llvm::raw_fd_ostream> ir_fs(
-        new llvm::raw_fd_ostream(ir_opt_path, ec, llvm::sys::fs::OF_None));
-    module->print(*ir_fs, nullptr);
-    ir_fs->flush();
+    llvm::raw_fd_ostream ir_fs(ir_opt_path, ec, llvm::sys::fs::OF_None);
+    module->print(ir_fs, nullptr);
   }
   // Locate lld.
-  std::string lld_path;
   llvm::SmallVector<std::string, 3> lld_paths;
 
   if (const char* llvm_path = std::getenv("LLVM_PATH")) {
-    lld_paths.push_back(tsl::io::JoinPath(std::getenv("LLVM_PATH"), "bin"));
+    lld_paths.push_back(tsl::io::JoinPath(llvm_path, "bin"));
   }
   lld_paths.push_back(tsl::io::JoinPath(tsl::RocmRoot(), "llvm/bin"));
 
   // push LLD path from JAX plugin if set
-  auto jax_paths = getJaxPluginPaths();
-  if (!jax_paths.lld_path.empty()) {
-    lld_paths.push_back(jax_paths.lld_path);
+  if (const auto& path = getJaxPluginPaths().lld_path; !path.empty()) {
+    lld_paths.push_back(path);
   }
 
   auto lld_program = llvm::sys::findProgramByName(
@@ -322,24 +310,28 @@ absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
 
   // Read HSACO.
   std::ifstream hsaco_file(hsaco_path, std::ios::binary | std::ios::ate);
-  std::ifstream::pos_type hsaco_file_size = hsaco_file.tellg();
-
+  auto hsaco_file_size = hsaco_file.tellg();
   std::vector<uint8_t> hsaco(hsaco_file_size);
   hsaco_file.seekg(0, std::ios::beg);
   hsaco_file.read(reinterpret_cast<char*>(hsaco.data()), hsaco_file_size);
   hsaco_file.close();
+
   if (!keep_tempfiles) {
     remove(ir_path.c_str());
     remove(isabin_path.c_str());
-    //remove(hsaco_path.c_str());
+    // if file cache is not enabled => remove temp file
+    if (!HsacoCache::i().hsaco_file_path(hash_str).has_value()) {
+      remove(hsaco_path.c_str());
+    }
   }
+  HsacoCache::i().add(hash_str, hsaco, hsaco_path);
   VLOG(1) << "Written: " << hsaco_path << " size: " << hsaco_file_size;
   return hsaco;
 }
 
 // Links ROCm-Device-Libs into the given module if the module needs it.
 absl::Status LinkROCDLIfNecessary(llvm::Module* module,
-                                  std::string gcn_arch_name,
+                                  const std::string& gcn_arch_name,
                                   const std::string& rocdl_dir_path) {
   if (!CouldNeedDeviceBitcode(*module)) {
     return absl::OkStatus();
@@ -403,7 +395,6 @@ std::string MapGCNArchNameTokenToFeatureStr(const std::string& token,
 
 std::pair<std::string, std::string> GetFeatureStrFromGCNArchName(
     const std::string& gcn_arch_name) {
-  std::string feature_str;
 
   std::string gfx = gcn_arch_name;
   // For ROCm versions 4.0 and greater, we need to specify the correct
@@ -420,21 +411,16 @@ std::pair<std::string, std::string> GetFeatureStrFromGCNArchName(
       mapped_tokens.push_back(mapped_token);
     }
   }
-  feature_str = absl::StrJoin(mapped_tokens, ",");
-
-  return std::make_pair(gfx, feature_str);
+  return std::pair{gfx, absl::StrJoin(mapped_tokens, ",")};
 }
 
 std::unique_ptr<llvm::TargetMachine> AMDGPUGetTargetMachine(
-    llvm::Triple target_triple, se::GpuComputeCapability gpu_version,
+    llvm::Triple target_triple, const std::string& gcn_arch_name,
     const DebugOptions& debug_options) {
-  auto compute_capability =
-      std::get_if<se::RocmComputeCapability>(&gpu_version);
 
-  std::string gcn_arch_name = compute_capability->gcn_arch_name();
-  auto arch = GetFeatureStrFromGCNArchName(gcn_arch_name);
-  return GetTargetMachine(std::move(target_triple), arch.first, debug_options,
-                          arch.second);
+  auto [gfx, feature_str] = GetFeatureStrFromGCNArchName(gcn_arch_name);
+  return GetTargetMachine(std::move(target_triple), gfx, debug_options,
+                          feature_str);
 }
 
 // Returns the directory containing ROCm-Device-Libs files.
@@ -521,69 +507,60 @@ absl::StatusOr<std::vector<uint8_t>> CompileToHsaco(
   auto llvm_opts = GetAMDGPUBackendOptions(debug_options);
   llvm_ir::LLVMCommandLineOptionsLock llvm_lock(llvm_opts);
 
+  auto compute_capability =
+      std::get_if<se::RocmComputeCapability>(&gpu_version);
+  if (!compute_capability) {
+    return xla::Internal("Incompatible compute capability was specified.");
+  }
+
   std::vector<uint8_t> hsaco;
-  std::unique_ptr<llvm::TargetMachine> target_machine;
-  std::string str;
-  llvm::raw_string_ostream stream(str);
-  stream << *module;
-  // Delete the first two lines, since they usually vary even when the rest of
-  // the code is the same (but verify that they are what we expect).
-  if (str.size() >= 13 && str.substr(0, 13) == "; ModuleID = ") {
-    auto pos = str.find('\n');
-    if (pos != std::string::npos) str = str.substr(pos + 1);
-  }
-  if (str.size() >= 18 && str.substr(0, 18) == "source_filename = ") {
-    auto pos = str.find('\n');
-    if (pos != std::string::npos) str = str.substr(pos + 1);
-  }
-  str += module_config_cache_key;
-  {
-    tsl::profiler::TraceMe activity(
+  std::string hash_str;
+
+  tsl::profiler::TraceMe activity(
         [&] { return absl::StrCat("Compiling IR", module->getName().str()); },
         tsl::profiler::TraceMeLevel::kInfo);
-    XLA_SCOPED_LOGGING_TIMER("Compile module " + module->getName().str());
+  XLA_SCOPED_LOGGING_TIMER("Compile module " + module->getName().str());
 
-    auto compute_capability =
-        std::get_if<se::RocmComputeCapability>(&gpu_version);
-    if (!compute_capability) {
-      return xla::Internal("Incompatible compute capability was specified.");
-    }
+  llvm::SmallString<0> bitcode;
+  {
+    llvm::raw_svector_ostream bitcode_ostream(bitcode);
+    llvm::WriteBitcodeToFile(*module, bitcode_ostream);
+  }
+  {
+    llvm::SHA256 sha256;
+    sha256.update(llvm::StringRef(bitcode.data(), bitcode.size()));
+    sha256.update(module_config_cache_key);
+    std::array<uint8_t, 32> lhash = sha256.final();
 
-    std::string hash_str, hsaco_path, 
-        gfx = compute_capability->gfx_version();
-    if (HsacoCache::i().Find(str, gfx, &hash_str, &hsaco, &hsaco_path)) {
-      VLOG(1) << "HSACO cache hit";
-      return hsaco;
-    }
+    std::ostringstream oss;
+    oss << std::hex << std::setw(16) << std::setfill('0');
+    auto *p64 = (uint64_t *)lhash.data();
+    for (size_t i = 0; i < lhash.size()/8; i++) oss << p64[i];
+    hash_str = oss.str();
+    hash_str += "." + compute_capability->gfx_version();
+  }
 
-    VLOG(1) << "HSACO cache miss";
-    bool dump_lls = false;
-    if (dump_lls) {
-      static int hsaco_count = 0;
-      std::string name = "/tmp/" + std::to_string(hsaco_count) + ".ll";
-      hsaco_count++;
-      std::ofstream ofs(name);
-      ofs << str;
-      ofs.close();
-    }
+  if (HsacoCache::i().find(hash_str, &hsaco)) {
+    VLOG(1) << "HSACO cache hit";
+    return hsaco;
+  }
 
-    llvm::Triple default_target_triple("amdgcn--amdhsa-amdgiz");
-    // Construct LLVM TargetMachine for AMDGPU.
-    std::unique_ptr<llvm::TargetMachine> target_machine =
-        AMDGPUGetTargetMachine(default_target_triple, gpu_version,
-                               debug_options);
+  VLOG(1) << "HSACO cache miss";
+  llvm::Triple default_target_triple("amdgcn--amdhsa-amdgiz");
+  // Construct LLVM TargetMachine for AMDGPU.
+  std::unique_ptr<llvm::TargetMachine> target_machine =
+      AMDGPUGetTargetMachine(default_target_triple, 
+          compute_capability->gcn_arch_name(), debug_options);
 
-    // Link with ROCm-Device-Libs, and optimize the LLVM module.
-    TF_RETURN_IF_ERROR(gpu::LinkAndOptimizeModule(
+  // Link with ROCm-Device-Libs, and optimize the LLVM module.
+  TF_RETURN_IF_ERROR(gpu::LinkAndOptimizeModule(
         module, gpu_version, debug_options, rocdl_dir_path,
         AMDGPUTargetModuleLinker, default_target_triple, target_machine.get(),
         kAMDGPUInlineThreshold));
 
-    // Lower optimized LLVM module to HSA code object.
-    TF_ASSIGN_OR_RETURN(hsaco, EmitModuleToHsaco(module, target_machine.get(),
-                       hsaco_path));
-    HsacoCache::i().Add(str, hash_str, hsaco);
-  }
+  // Lower optimized LLVM module to HSA code object.
+  TF_ASSIGN_OR_RETURN(hsaco, 
+        EmitModuleToHsaco(module, target_machine.get(), hash_str));
   return hsaco;
 }
 

@@ -142,9 +142,11 @@ ScopedShapedBuffer::ScopedShapedBuffer(ShapedBuffer shaped_buffer,
     : ShapedBuffer(std::move(shaped_buffer)), allocator_(allocator) {}
 
 ScopedShapedBuffer::ScopedShapedBuffer(ScopedShapedBuffer&& s) noexcept
-    : ShapedBuffer(static_cast<ShapedBuffer&&>(s)), allocator_(s.allocator_) {
+    : ShapedBuffer(static_cast<ShapedBuffer&&>(s)), 
+    allocator_(s.allocator_) {
   // Null out s.allocator_ so it doesn't try to free anything in its destructor.
   s.allocator_ = nullptr;
+  alloc_cached_flag.swap(s.alloc_cached_flag);
 }
 
 ScopedShapedBuffer& ScopedShapedBuffer::operator=(
@@ -153,18 +155,13 @@ ScopedShapedBuffer& ScopedShapedBuffer::operator=(
 
   *static_cast<ShapedBuffer*>(this) = std::move(static_cast<ShapedBuffer&>(s));
   allocator_ = s.allocator_;
+  alloc_cached_flag.swap(s.alloc_cached_flag);
   // Null out s.allocator_ so it doesn't try to free anything in its destructor.
   s.allocator_ = nullptr;
   return *this;
 }
 
 ScopedShapedBuffer::~ScopedShapedBuffer() { Deallocate(); }
-
-ShapedBuffer ScopedShapedBuffer::release() {
-  ShapedBuffer shaped_buffer(static_cast<ShapedBuffer&&>(*this));
-  buffers_ = ShapeTree<se::DeviceMemoryBase>();
-  return shaped_buffer;
-}
 
 void ScopedShapedBuffer::Deallocate() {
   // allocator_ will be null if we were moved-from.
@@ -175,13 +172,28 @@ void ScopedShapedBuffer::Deallocate() {
   // in the shape (eg, a tuple with a repeated element) so keep track of what
   // has been deallocated.
   absl::flat_hash_set<void*> deallocated_ptrs;
+  bool cached_ok = !alloc_cached_flag.empty();
+  auto it = alloc_cached_flag.begin();
   for (auto& pair : buffers_) {
     se::DeviceMemoryBase& memory_base = pair.second;
     if (!memory_base.is_null() &&
         deallocated_ptrs.insert(memory_base.opaque()).second) {
-      TF_CHECK_OK(allocator_->Deallocate(device_ordinal(), memory_base));
+      if (cached_ok && *it) {
+        //VLOG(0) << this << " dev" << device_ordinal() 
+                  // << " NOT deallocating " << memory_base.opaque() 
+                  // << " sz " << memory_base.size();
+      } else {
+        TF_CHECK_OK(allocator_->Deallocate(device_ordinal(), memory_base));
+      }
     }
+    if (cached_ok) it++;
   }
+}
+
+ShapedBuffer ScopedShapedBuffer::release() {
+  ShapedBuffer shaped_buffer(static_cast<ShapedBuffer&&>(*this));
+  buffers_ = ShapeTree<se::DeviceMemoryBase>();
+  return shaped_buffer;
 }
 
 ScopedShapedBuffer ScopedShapedBuffer::TakeSubTree(ShapeIndexView index) {
@@ -191,8 +203,15 @@ ScopedShapedBuffer ScopedShapedBuffer::TakeSubTree(ShapeIndexView index) {
   ScopedShapedBuffer output(sub_on_device_shape, memory_allocator(),
                             device_ordinal(), physical_device_ordinal());
   auto src_it = buffers().find(index);
+  auto ofs = std::distance(buffers().begin(), src_it);
+  auto cached_it = alloc_cached_flag.begin() + ofs;
+  bool cached_ok = !alloc_cached_flag.empty();
+  
   auto dst_it = output.buffers().begin();
   while (dst_it != output.buffers().end()) {
+    if (cached_ok) {
+      output.alloc_cached_flag.push_back(*cached_it++);
+    }
     dst_it->second = src_it->second;
     src_it->second = tensorflow::se::DeviceMemoryBase(nullptr, 0);
     ++src_it;

@@ -52,20 +52,6 @@ namespace xla {
 namespace gpu {
 namespace {
 
-absl::StatusOr<const int64_t> GetCurrentId(
-    Thunk::CollectiveExecuteParams* collective_params,
-    const NcclP2PConfig& config) {
-  GlobalDeviceId global_device_id = collective_params->global_device_id;
-  TF_ASSIGN_OR_RETURN(
-      const DeviceAssignment::LogicalID current_logical_id,
-      collective_params->device_assn->LogicalIdForDevice(global_device_id));
-  const int64_t current_id =
-      config.config.group_mode == CollectiveOpGroupMode::kCrossReplica
-          ? current_logical_id.replica_id
-          : current_logical_id.computation_id;
-  return current_id;
-}
-
 bool IsLocalPeerTransfer(
     const NcclP2PConfig::SourceTargetMapEntry& source_target,
     const int64_t current_id, const int64_t device_count) {
@@ -86,6 +72,20 @@ bool IsLocalPeerTransfer(
 }
 
 }  // namespace
+
+absl::StatusOr<const int64_t> GetCurrentId(
+    Thunk::CollectiveExecuteParams* collective_params,
+    const NcclCollectiveConfig& config) {
+  GlobalDeviceId global_device_id = collective_params->global_device_id;
+  TF_ASSIGN_OR_RETURN(
+      const DeviceAssignment::LogicalID current_logical_id,
+      collective_params->device_assn->LogicalIdForDevice(global_device_id));
+  const int64_t current_id =
+      config.group_mode == CollectiveOpGroupMode::kCrossReplica
+          ? current_logical_id.replica_id
+          : current_logical_id.computation_id;
+  return current_id;
+}
 
 NcclCollectivePermuteStartThunk::NcclCollectivePermuteStartThunk(
     ThunkInfo thunk_info, const HloCollectivePermuteInstruction* instr,
@@ -173,7 +173,7 @@ absl::Status NcclCollectivePermuteStartThunk::Initialize(
 
   if (p2p_memcpy_enabled_) {
     TF_ASSIGN_OR_RETURN(const int64_t current_id,
-                        GetCurrentId(params.collective_params, config_));
+                GetCurrentId(params.collective_params, config_.config));
     absl::MutexLock lock(&barrier_mutex_);
     if (barrier_flags_.find(current_id) == barrier_flags_.end()) {
       if (!params.stream->parent()->HostMemoryRegister(
@@ -215,7 +215,7 @@ absl::Status NcclCollectivePermuteStartThunk::Initialize(
 absl::Status NcclCollectivePermuteStartThunk::Cleanup(
     const CleanupParams& params) {
   TF_ASSIGN_OR_RETURN(const int64_t current_id,
-                      GetCurrentId(params.collective_params, config_));
+                      GetCurrentId(params.collective_params, config_.config));
 
   absl::MutexLock lock(&barrier_mutex_);
   if (!params.executor->HostMemoryUnregister(&barrier_flags_[current_id])) {
@@ -233,7 +233,7 @@ absl::Status NcclCollectivePermuteStartThunk::RunNcclCollective(
                              std::vector<NcclCollectiveThunk::Buffer>(buffers_),
                              config_.config.operand_element_type));
   TF_ASSIGN_OR_RETURN(const int64_t current_id,
-                      GetCurrentId(params.collective_params, config_));
+                      GetCurrentId(params.collective_params, config_.config));
   std::string device_string = GetDeviceString(*params.collective_params);
 
   const NcclP2PConfig::SourceTargetMapEntry source_target =
@@ -258,7 +258,7 @@ absl::Status NcclCollectivePermuteStartThunk::RunNcclCollective(
 
   return ::xla::gpu::RunCollectivePermute(
       collectives, source_target, device_buffers, stream, comm_handle.comm,
-      device_string, current_id, use_memcpy, recv_ptr_map_);
+      device_string, current_id, use_memcpy, &recv_ptr_map_);
 }
 
 absl::Status RunCollectivePermute(
@@ -267,7 +267,7 @@ absl::Status RunCollectivePermute(
     std::vector<DeviceBufferPair>& buffers, se::Stream& stream,
     Communicator* comm, absl::string_view device_string, int64_t current_id,
     bool use_memcpy,
-    NcclCollectivePermuteStartThunk::RecvPtrMap& recv_ptr_map) {
+    NcclCollectivePermuteStartThunk::RecvPtrMap *recv_ptr_map) {
   // Determine the source and target IDs for this instance. The source ID is the
   // ID which will copy its data to this instance. The destination ID is the ID
   // to which this instance will copy its data. Either are optional.
@@ -314,6 +314,16 @@ absl::Status RunCollectivePermute(
                                 source_id.value_or(-1), target_id.value_or(-1));
 
   if (!use_memcpy) {
+    //VLOG(0) << "Total bufs: " << buffers.size();
+    if(0)
+    {
+    int idx = 0;
+    const auto buffer = buffers.at(idx);
+    return NcclCollectiveThunk::RunDebugCollective(stream,
+          src_addrs.at(idx), dest_addrs.at(idx),
+          buffer.element_type, buffer.element_count);
+    }
+
     // GroupStart/End API is needed if we need to dispatch multiple NCCL kernels
     // for multiple buffers
     const bool is_nccl_group_needed = (buffers.size() > 1);
@@ -351,7 +361,7 @@ absl::Status RunCollectivePermute(
   }
 
   if (use_memcpy && target_id) {
-    TF_ASSIGN_OR_RETURN(auto recv_ptrs, recv_ptr_map.GetRecvPtr(*target_id));
+    TF_ASSIGN_OR_RETURN(auto recv_ptrs, recv_ptr_map->GetRecvPtr(*target_id));
 
     VLOG(3) << "Using memcpy, received target pointers, current_id: "
             << current_id << " target_id: " << *target_id;

@@ -194,16 +194,32 @@ TrackedDeviceBuffer::FromScopedShapedBuffer(
   std::vector<se::DeviceMemoryBase> buffers;
   buffers.reserve(1);
 
+  auto *allocator = shaped_buffer->memory_allocator();
+  size_t num_cached = 0, total = 0;
+  
+  bool cached_ok = !shaped_buffer->alloc_cached_flag.empty();
+  auto cached_it = shaped_buffer->alloc_cached_flag.begin();
+
   ShapeUtil::ForEachSubshape(
       shaped_buffer->on_device_shape(), [&](const Shape&, const ShapeIndex&) {
         CHECK(iterator != shaped_buffer->buffers().end());
+        if (cached_ok && *cached_it) {
+          allocator = nullptr;
+          num_cached++;
+        }
         buffers.push_back(iterator->second);
         iterator->second = se::DeviceMemoryBase();
-        ++iterator;
+        ++iterator, ++total, ++cached_it;
       });
+  
+  if (num_cached != 0 && num_cached != total) {
+    LOG(FATAL) << "Not all output buffers are cached: " << num_cached 
+               << " total: " << total;
+  }
+
   CHECK(iterator == shaped_buffer->buffers().end());
   return std::make_shared<TrackedDeviceBuffer>(
-      shaped_buffer->memory_allocator(), device,
+      allocator, device,
       absl::Span<se::DeviceMemoryBase>(buffers), definition_events,
       /*on_delete_callback=*/nullptr);
 }
