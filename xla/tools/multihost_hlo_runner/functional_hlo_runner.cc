@@ -455,9 +455,24 @@ absl::Status FunctionalHloRunner::DumpOutput(
       output_path_vec[literal_id_index] = absl::StrCat("literal_", literal_id);
       std::string literal_path = absl::StrJoin(output_path_vec, ".");
       CHECK_EQ(suffix, std::string("txt"));
+
+      auto& L = literal_vec[literal_id];
+      if (L.shape().element_type() == PrimitiveType::F32) {
+        size_t total = 0, finite = 0;
+        using TT = float;
+
+        L.EachCell<TT>(
+          [&](absl::Span<const int64_t> indices, TT value) {
+            total++;
+            if (std::isfinite(value)) finite++;
+          });
+        VLOG(0) << " device_id: " << device_id << "  total: " << total << 
+            " finite: " << finite;
+      }
       absl::Status write_status =
           tsl::WriteStringToFile(tsl::Env::Default(), literal_path,
                                  literal_vec[literal_id].ToString());
+
       if (!write_status.ok()) {
         return write_status;
       }
@@ -723,7 +738,10 @@ FunctionalHloRunner::CompileAndRun(PjRtClient& client,
                       Compile(client, hlo_module, debug_options,
                               preproc_options, compile_options));
 
-  return Run(client, executable.get(), arguments, running_options);
+  std::minstd_rand0 engine(7777);
+
+  VLOG(0) << "Setting engine " << (&engine);
+  return Run(client, executable.get(), arguments, running_options, &engine);
 }
 
 namespace {
@@ -1099,8 +1117,11 @@ FunctionalHloRunner::RunInternal(
   futures.emplace();
   std::vector<std::vector<std::unique_ptr<PjRtBuffer>>> device_buffers;
   std::vector<std::vector<PjRtBuffer*>> argument_ptrs;
+
+  PerDeviceLiteralVecType Xresults;
+
   for (int repeat = 0; repeat < running_options.num_repeats; ++repeat) {
-    VLOG(1) << "FunctionalHloRunner: ExecuteOnDevices started (repeat = "
+    VLOG(0) << "======== FunctionalHloRunner: ExecuteOnDevices started (repeat = "
             << repeat << ").";
     if (repeat == 0 || running_options.recreate_buffers_between_repeats) {
       VLOG(1) << "Creating argument buffers. repeat = " << repeat;
@@ -1118,9 +1139,23 @@ FunctionalHloRunner::RunInternal(
     }
     execute_options.launch_id = repeat + 1;
     futures->clear();
-    TF_ASSIGN_OR_RETURN(
-        output_buffers,
-        executable->Execute(argument_ptrs, execute_options, futures));
+
+    // for(const auto& z1 : output_buffers) {
+    //   for(const auto& z2 : z1) {
+    //     VLOG(0) << "orig buffer: " << z2->on_device_shape() << " ptr << " << z2->debug_ptr();
+    //   }
+    // }
+    // it has inside shared_ptr< TrackedDeviceBuffer >
+    TF_ASSIGN_OR_RETURN(auto new_bufs,
+          executable->Execute(argument_ptrs, execute_options, futures));
+
+    // for(const auto& z1 : new_bufs) {
+    //   for(const auto& z2 : z1) {
+    //     VLOG(0) << "new buf: " << z2->on_device_shape() << " ptr << " << z2->debug_ptr();
+    //   }
+    // }
+    output_buffers = std::move(new_bufs);
+    
     for (auto& future : *futures) {
       TF_RETURN_IF_ERROR(future.Await());
     }
@@ -1144,16 +1179,44 @@ FunctionalHloRunner::RunInternal(
           break;
       }
     }
-  }
 
-  TF_ASSIGN_OR_RETURN(PerDeviceLiteralVecType results,
+    TF_ASSIGN_OR_RETURN(Xresults,
                       FetchAndLogOutput(client, output_buffers,
                                         running_options.module_output_mode,
                                         running_options.log_input_output()));
+
+    for (const auto& [device_id, literal_vec] : Xresults) {
+    for(const auto& L : literal_vec) {
+
+      if (L.shape().element_type() == PrimitiveType::F32) {
+        size_t total = 0, finite = 0;
+        using TT = float;
+        double ssum = 0;
+        L.EachCell<TT>(
+          [&](absl::Span<const int64_t> indices, TT value) {
+            total++;
+            if (std::isfinite(value)) {
+              finite++;
+              ssum += (double)value;
+            }
+          });
+        VLOG(0) << repeat << ": dev" << device_id << " finite: " << finite
+            << '/' << total << " sum: " 
+            << std::setprecision(12) << (ssum/1e6) << std::hex
+            << " (" << reinterpret_cast< uint64_t& >(ssum) << ')' << std::dec;
+        
+      }
+    } // for literal
+    }// for Xresults
+
+
+  } // for
+
+
   if (running_options.profiler != nullptr) {
     running_options.profiler->UploadSession();
   }
-  return results;
+  return Xresults;
 }
 
 absl::StatusOr<std::vector<std::vector<std::unique_ptr<PjRtBuffer>>>>

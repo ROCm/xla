@@ -812,6 +812,12 @@ class PjRtStreamExecutorBuffer : public PjRtBuffer {
   absl::StatusOr<std::unique_ptr<PjRtBuffer>> DonateWithControlDependency(
       PjRtFuture<> dependency) override;
 
+  void *debug_ptr() const override {
+    absl::MutexLock _(&mu_);
+    if(device_buffer_ == nullptr) return nullptr;
+    return device_buffer_->device_memory()[0].opaque();
+  }
+
  private:
   friend class PjRtClient;
 

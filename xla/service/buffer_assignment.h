@@ -817,6 +817,9 @@ class BufferAssigner {
   std::unique_ptr<memory_space_assignment::PresetAssignments>
       preset_assignments_;
 
+  // Total number of buffer reuses 
+  int64_t num_buffer_reuses_ = 0;
+
   BufferAssigner(const BufferAssigner&) = delete;
   BufferAssigner& operator=(const BufferAssigner&) = delete;
 };

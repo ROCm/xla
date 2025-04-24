@@ -14,7 +14,7 @@ enum QCCL_Result : uint32_t {
   Failed,
 };
 
-#define QCCL_OK(res) (res) == QCCL_Result::OK
+#define QCCL_OK(res) ((res) == QCCL_Result::OK)
 
 // possibly lazy init for each node: to be called on a thread with assigned GPU
 QCCL_Result qcclInit(uint32_t ID);
@@ -30,10 +30,13 @@ QCCL_Result qcclGatewaySend(uint32_t ID, uint32_t numSubscribedPeers,
         size_t dataOfs, size_t dataSize);
 
 // run previously enqueued send-recv primitives on a stream
-QCCL_Result qcclRun(uint32_t ID, ::stream_executor::gpu::GpuStreamHandle stream);
+QCCL_Result qcclRun(uint32_t ID, stream_executor::gpu::GpuStreamHandle stream);
 
 QCCL_Result qcclSyncInit();
-QCCL_Result qcclSyncGPUs(::stream_executor::gpu::GpuStreamHandle stream);
+QCCL_Result qcclSyncGPUs(stream_executor::gpu::GpuStreamHandle stream);
+
+QCCL_Result qcclRunDebugKernel(stream_executor::gpu::GpuStreamHandle stream, 
+        const uint8_t *src, size_t in_sz, uint8_t *dst, size_t out_sz);
 
 }
 

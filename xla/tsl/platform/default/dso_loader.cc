@@ -192,7 +192,11 @@ absl::StatusOr<void*> GetHipsparseDsoHandle() {
 }
 
 absl::StatusOr<void*> GetHipblasltDsoHandle() {
+#if TF_ROCM_VERSION >= 70000  
+  return GetDsoHandle("hipblaslt", "1");
+#else
   return GetDsoHandle("hipblaslt", "0");
+#endif
 }
 
 absl::StatusOr<void*> GetHipDsoHandle() {

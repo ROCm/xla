@@ -264,6 +264,7 @@ limitations under the License.
 #include "xla/stream_executor/semantic_version.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/platform/env.h"
+#include "xla/tsl/util/env_var.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/platform/threadpool.h"
@@ -1100,6 +1101,10 @@ void AddDoubleBufferingPasses(const HloModule& module,
     pipeline.AddPass<DoubleBufferLoopUnrolling>(*unroll_strategy);
     pipeline.AddPass<TupleSimplifier>();
     pipeline.AddPass<HloDCE>();
+    if (unroll_strategy = DoubleBufferLoopUnrolling::UnrollStrategy::kFullUnroll) {
+      // Run simplifier again to remove loops with known trip_count = 1
+      pipeline.AddPass<WhileLoopSimplifier>();
+    }
   }
 }
 
@@ -1336,6 +1341,8 @@ absl::Status GpuCompiler::OptimizeHloModule(
     HloModule* hlo_module, se::StreamExecutor* stream_exec,
     const CompileOptions& options, const TargetConfig& gpu_target_config) {
   tsl::profiler::TraceMe traceme("GpuCompiler::OptimizeHloModule");
+
+  VLOG(0) << "====================== OptimizeHloModule " << hlo_module->name();
 
   CheckNotScheduled(hlo_module);
   LogDebugOptions(hlo_module);
@@ -2719,10 +2726,20 @@ absl::Status GpuCompiler::RunPostSchedulingPipelines(
 
   // Pipeline with passes which wrap a scheduled module into command buffers.
   {
-    HloPassPipeline& pipeline =
+    static std::string name_re = []{
+      std::string value;
+      tsl::ReadStringFromEnvVar("XLA_COMMAND_BUFFERS_MODULE_RE", 
+                                                value, &value).IgnoreError();
+      return value;
+    }();
+    bool use = name_re.empty() || RE2::PartialMatch(module->name(), name_re);
+
+    if (use) {
+      HloPassPipeline& pipeline =
         main_pipeline.AddPass<HloPassPipeline>("command-buffer-scheduling");
-    pipeline.AddPass<CommandBufferScheduling>(gpu_device_info);
-    pipeline.AddPass<SanitizeConstantNames>();
+      pipeline.AddPass<CommandBufferScheduling>(gpu_device_info);
+      pipeline.AddPass<SanitizeConstantNames>();
+    }
   }
 
   if (module->config().debug_options().xla_gpu_pgle_accuracy_checker() ==

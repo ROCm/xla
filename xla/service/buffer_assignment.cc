@@ -65,6 +65,8 @@ limitations under the License.
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/logging.h"
 #include "xla/tsl/platform/statusor.h"
+#include "tsl/platform/env.h"
+#include "xla/tsl/util/env_var.h"
 #include "xla/util.h"
 #include "tsl/platform/numbers.h"
 
@@ -77,6 +79,13 @@ using absl::StrAppend;
 using absl::StrAppendFormat;
 using memory_space_assignment::PresetAssignments;
 using ::tsl::strings::HumanReadableNumBytes;
+
+int64_t MaxBufferReuses() {
+  int64_t value = -1; // by default enable unlimited buffer sharing
+  tsl::ReadInt64FromEnvVar("XLA_BUFFER_ASSIGN_MAX_REUSES", 
+                                                value, &value).IgnoreError();
+  return value;
+}
 
 absl::flat_hash_map<int64_t, const HloInstruction*> BuildIdToHloInstructionMap(
     const HloModule* module) {
@@ -1456,6 +1465,12 @@ bool BufferAssigner::MaybeAssignBuffer(BufferAllocation* allocation,
     return false;
   }
 
+  auto limit = MaxBufferReuses();
+  if (limit >= 0 && num_buffer_reuses_ >= limit) {
+    return false;
+  }
+  num_buffer_reuses_++;
+
   assignment->AddAssignment(allocation, hlo_buffer, /*offset=*/0,
                             assignment->HloBufferSize(hlo_buffer));
   return true;
@@ -1837,6 +1852,9 @@ absl::Status BufferAssigner::AssignBuffersWithSequentialOrdering(
         std::move(algorithms));
   };
 
+  // disable reuse operand buffers if MaxBufferReuses is not set unlimited
+  bool may_reuse_operand_buffers = MaxBufferReuses() >= 0 ? false : true;
+
   if (run_whole_module_heap_simulation) {
     // Run the heap simulation over the whole module. This reduces memory
     // usage, since buffers for kCall, kWhile, and kConditional
@@ -1867,6 +1885,7 @@ absl::Status BufferAssigner::AssignBuffersWithSequentialOrdering(
       VLOG(2) << "Simulating heap for color " << color;
       int64_t alignment = assignment->color_alignment_(color);
       HeapSimulator::Options options;
+      options.may_reuse_operand_buffers = may_reuse_operand_buffers;
       options.alloc_constants = allocate_buffers_for_constants_;
       auto private_stacks_it = private_stacks.find(color);
       if (private_stacks_it != private_stacks.end()) {
@@ -1915,12 +1934,14 @@ absl::Status BufferAssigner::AssignBuffersWithSequentialOrdering(
     // Run the heap-simulation on a per-computation basis. Buffers for
     // sub-computations are assigned disjoint BufferAllocations, assuming the
     // worst-case that they may all be live concurrently.
-    VLOG(1) << "Running per-computation heap simulation";
+    VLOG(1) << "Running per-computation heap simulation " 
+        << buffers_to_assign_sequentially.size();
     for (const auto& pair : buffers_to_assign_sequentially) {
       const HloComputation* computation = pair.first;
       const flat_hash_set<const HloValue*>& buffers_to_assign = pair.second;
       const HloInstructionSequence* instruction_sequence =
           hlo_ordering.SequentialOrder(*computation);
+
       CHECK(instruction_sequence != nullptr) << computation->name();
       auto color_map = SplitBuffersByColor(buffers_to_assign);
       std::vector<LogicalBuffer::Color> sorted_colors;
@@ -1935,6 +1956,7 @@ absl::Status BufferAssigner::AssignBuffersWithSequentialOrdering(
         int64_t alignment = assignment->color_alignment_(color);
         HeapSimulator::Options options;
         options.buffers_to_assign = &color_map[color];
+        options.may_reuse_operand_buffers = may_reuse_operand_buffers;
         TF_ASSIGN_OR_RETURN(
             HeapSimulator::Result<HloValue> result,
             HeapSimulator::Run(get_heap_algorithm(alignment), *computation,
@@ -2238,7 +2260,8 @@ BufferAssigner::CreateAssignment(
   const bool run_whole_module_heap_simulation =
       buffers_to_assign_sequentially.size() == global_computations.size();
   VLOG(2) << "Running whole module heap simulation: "
-          << run_whole_module_heap_simulation;
+          << run_whole_module_heap_simulation
+          << " sequential buffers: " << buffers_to_assign_sequentially.size();
   const int32_t multiheap_size_constraint_per_heap =
       module->config().debug_options().xla_multiheap_size_constraint_per_heap();
   VLOG(2) << "Multiheap per heap size limit: "

@@ -23,10 +23,19 @@ limitations under the License.
 #include "absl/functional/function_ref.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "absl/synchronization/mutex.h"
+
+
 #include "xla/backends/gpu/runtime/annotation.h"
 #include "xla/backends/gpu/runtime/thunk.h"
+#include "xla/tsl/util/env_var.h"
 #include "tsl/platform/errors.h"
 #include "tsl/profiler/lib/scoped_annotation.h"
+#include "tsl/profiler/protobuf/profiled_instructions.pb.h"
+#include "tsl/platform/env.h"
+#include "tsl/platform/errors.h"
+#include "tsl/platform/file_system.h"
+#include "tsl/platform/path.h"
 
 namespace xla {
 namespace gpu {
@@ -78,22 +87,7 @@ absl::Status SequentialThunk::ExecuteOnStream(const ExecuteParams& params) {
   std::optional<tsl::profiler::ScopedAnnotation> seq_annotation =
       GetKernelAnnotation(profile_annotation());
 
-#define TIMING_DEBUG 0
-#if TIMING_DEBUG
-  VLOG(0) << "Executing thunks: #" << thunks_.size();
-  VLOG(0) << "=============================================================";
-#endif
-
   for (const std::unique_ptr<Thunk>& thunk : thunks_) {
-
-#if TIMING_DEBUG
-    auto kind = thunk->kind();
-    std::ostringstream oss;
-    auto str = thunk->ToString(0);
-    if (str.empty()) str = thunk->KindToString(kind);
-    oss << str;
-    auto start_tm = tsl::Env::Default()->NowMicros();
-#endif
 
     std::optional<tsl::profiler::ScopedAnnotation> annotation =
         GetKernelAnnotation(thunk->profile_annotation());
@@ -101,12 +95,6 @@ absl::Status SequentialThunk::ExecuteOnStream(const ExecuteParams& params) {
       continue;
     }
     TF_RETURN_IF_ERROR(thunk->ExecuteOnStream(params));
-#if TIMING_DEBUG
-    TF_RETURN_IF_ERROR(params.stream->BlockHostUntilDone());
-    auto tm = tsl::Env::Default()->NowMicros() - start_tm;
-    oss << " time: " << tm << " usec";
-    VLOG(0) << oss.str();
-#endif
   }
   return absl::OkStatus();
 }

@@ -1213,6 +1213,7 @@ class ReadySetLt {
     // compilation to avoid allocating memory unnecessarily.
     const HloGraphNode& start =
         sched_state_.sched_graph.GetNode(gn.GetInstr().operand(0));
+
     const LatencyEstimator::TimeCost latency =
         sched_state_.latency_estimator->GetLatencyBetween(start, gn);
     if (!gn_cand.estimated_connected_send_ready_time.has_value()) {

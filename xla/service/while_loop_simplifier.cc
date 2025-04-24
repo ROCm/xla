@@ -937,6 +937,18 @@ static absl::StatusOr<bool> TryRemoveWhileLoop(HloInstruction* while_op) {
   // Remove while loops with static trip count of 0.
   optional<int64_t> trip_count =
       ComputeWhileLoopTripCount(while_op, /*max_brute_force_iters=*/1);
+
+  if (!trip_count.has_value()) {
+    auto sconfig = while_op->backend_config<WhileLoopBackendConfig>();
+    if (sconfig.ok()) {
+      auto config = std::move(sconfig).value();
+      if(config.has_known_trip_count()) {
+        trip_count = config.known_trip_count().n();
+      }
+    }
+  }
+
+
   if (trip_count && *trip_count == 0) {
     // The loop never executes, so the value of the loop is the value of its
     // "init" operand.

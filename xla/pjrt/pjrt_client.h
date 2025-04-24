@@ -1116,6 +1116,8 @@ class PjRtBuffer {
     return on_device_shape().element_type();
   }
 
+  virtual void *debug_ptr() const { return nullptr; }
+
   // Returned dimensions have lifetime of this buffer.
   virtual absl::Span<const int64_t> dimensions() const {
     return on_device_shape().dimensions();

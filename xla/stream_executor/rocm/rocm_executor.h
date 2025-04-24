@@ -132,8 +132,8 @@ class RocmExecutor : public GpuExecutor {
   absl::StatusOr<const RocmKernel*> GetRocmKernel(const Kernel* kernel);
 
  private:
-  // Initializes Blas interfaces 
-  absl::Status InitBlas();
+  // Initializes Blas & DNN interfaces 
+  absl::Status InitMathLibs();
 
   // Loads a module in HSACO format.
   absl::StatusOr<ModuleHandle> LoadModuleFromHsaco(const char* hsaco)

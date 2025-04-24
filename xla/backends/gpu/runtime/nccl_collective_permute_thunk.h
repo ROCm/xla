@@ -108,8 +108,11 @@ class NcclCollectivePermuteStartThunk : public NcclCollectiveThunk {
 
   static const char* GetHloOpName() { return "collective-permute-start"; }
 
- protected:
+  const NcclP2PConfig& p2pconfig() const { return config_; }
   const NcclCollectiveConfig& config() const override { return config_.config; }
+  absl::Span<const Buffer> buffers() const { return buffers_; }
+
+ protected:
   absl::Status RunNcclCollective(const ExecuteParams& params,
                                  se::Stream& stream,
                                  CommunicatorHandle comm_handle) override;
@@ -124,12 +127,16 @@ class NcclCollectivePermuteStartThunk : public NcclCollectiveThunk {
   int64_t device_count_;
 };
 
+absl::StatusOr<const int64_t> GetCurrentId(
+    Thunk::CollectiveExecuteParams* collective_params,
+    const NcclCollectiveConfig& config);
+
 absl::Status RunCollectivePermute(
     GpuCollectives* collectives,
     NcclP2PConfig::SourceTargetMapEntry source_target,
     std::vector<DeviceBufferPair>& buffers, se::Stream& stream,
     Communicator* comm, absl::string_view device_string, int64_t current_id,
-    bool use_memcpy, NcclCollectivePermuteStartThunk::RecvPtrMap& recv_ptr_map);
+    bool use_memcpy, NcclCollectivePermuteStartThunk::RecvPtrMap *recv_ptr_map);
 
 }  // namespace gpu
 }  // namespace xla

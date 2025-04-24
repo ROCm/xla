@@ -84,7 +84,7 @@ namespace gpuprim = ::hipcub;
 namespace rocprim {
 namespace detail {
 
-#if (TF_ROCM_VERSION >= 50200)
+#if (TF_ROCM_VERSION >= 50200 && TF_ROCM_VERSION < 70000)
 template <>
 struct float_bit_mask<Eigen::half> {
   static constexpr uint16_t sign_bit = 0x8000;
@@ -101,12 +101,14 @@ struct float_bit_mask<tsl::bfloat16> {
   using bit_type = uint16_t;
 };
 #endif  // TF_ROCM_VERSION >= 50200
+#if (TF_ROCM_VERSION < 70000)
 template <>
 struct radix_key_codec_base<Eigen::half>
     : radix_key_codec_floating<Eigen::half, uint16_t> {};
 template <>
 struct radix_key_codec_base<tsl::bfloat16>
     : radix_key_codec_floating<tsl::bfloat16, uint16_t> {};
+#endif  // TF_ROCM_VERSION < 70000
 };  // namespace detail
 };  // namespace rocprim
 

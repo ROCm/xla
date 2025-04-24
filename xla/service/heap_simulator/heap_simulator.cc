@@ -313,8 +313,11 @@ absl::Status HeapSimulator::RunComputation(
     const HloComputation& computation,
     const HloInstructionSequence& instruction_sequence,
     const HloAliasAnalysis& alias_analysis, HloLiveRange* hlo_live_range) {
-  XLA_VLOG_LINES(1, computation.parent()->ToString());
-  XLA_VLOG_LINES(2, computation.ToString());
+  // XLA_VLOG_LINES(1, computation.parent()->ToString());
+  // XLA_VLOG_LINES(2, computation.ToString());
+
+  auto s = computation.ToString().substr(0,256);
+  VLOG(1) << "RunOnComputation:\n" << s;
 
   VLOG(1) << hlo_live_range->ToString();
 
@@ -453,8 +456,9 @@ absl::Status HeapSimulator::RunComputation(
             // from the actual operand, if directly passing the defining
             // instruction into "CanShareOperandBufferWithUser" it creates a
             // check failure. The first condition guards against that case.
+            // NOTE NOTE!!
             if (value->instruction()->IsUserOf(operand_value->instruction()) &&
-                value->instruction()->opcode() != HloOpcode::kCopy &&
+                value->instruction()->opcode() != HloOpcode::kCopy && /*false &&*/
                 dataflow_analysis.CanShareOperandBufferWithUser(
                     operand_value->instruction(), operand_value->index(),
                     value->instruction(), value->index())) {
@@ -2322,6 +2326,8 @@ GlobalDecreasingSizeBestFitHeap<BufferType>::Finish() {
   std::vector<BufferInterval> sorted_buffer_intervals =
       GetSortedBufferIntervals();
 
+  VLOG(1) << __FUNCTION__;
+
   for (auto& buffer_interval : sorted_buffer_intervals) {
     if (!buffer_interval.need_allocation) {
       continue;
@@ -2543,6 +2549,8 @@ void GlobalDecreasingSizeBestFitHeap<BufferType>::AddToChunkMap(
 
 absl::StatusOr<HeapSimulator::Result<HloValue>>
 ConstrainedGlobalDecreasingSizeBestFitHeap::Finish() {
+
+  VLOG(1) << __FUNCTION__;
   std::vector<BufferInterval> sorted_buffer_vec = GetSortedBufferIntervals();
   // Convert into std::list so that erase() is O(1).
   std::list<BufferInterval> sorted_buffer_intervals(sorted_buffer_vec.begin(),
@@ -2596,11 +2604,14 @@ ConstrainedGlobalDecreasingSizeBestFitHeap::Finish() {
 template <typename BufferType>
 absl::StatusOr<HeapSimulator::Result<BufferType>>
 ChooseBestHeapAlgorithm<BufferType>::Finish() {
+
+  VLOG(1) << __FUNCTION__;
   DCHECK(!algorithms_.empty());
   std::vector<Result> results(algorithms_.size());
   int64_t min_size = INT64_MAX;
   int min_size_index = -1;
   for (int i = 0; i < algorithms_.size(); ++i) {
+    VLOG(1) << __FUNCTION__;
     TF_ASSIGN_OR_RETURN(results[i], algorithms_[i]->Finish());
     if (results[i].heap_size < min_size) {
       min_size = results[i].heap_size;
