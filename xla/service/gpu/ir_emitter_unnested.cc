@@ -1454,7 +1454,8 @@ absl::Status IrEmitterUnnested::EmitTritonCustomCall(
           std::tie(kernel, inputs, outputs),
           BuildKernelPrototypeFromUniqueName(
               *ir_emitter_context_, sanitized_kernel_name,
-              kernel_arguments.args(), arg_size, launch_dimensions, &builder));
+              kernel_arguments.args(), arg_size, launch_dimensions, &builder,
+              call.waves_per_eu));
 
       // Move function body into kernel prototype.
       llvm::Function* prototype_func = builder.GetInsertBlock()->getParent();

@@ -117,7 +117,8 @@ BuildKernelPrototypeFromUniqueName(IrEmitterContext& ir_emitter_context,
                                    absl::Span<const KernelArgument> arguments,
                                    size_t num_inputs,
                                    const LaunchDimensions& launch_dimensions,
-                                   llvm::IRBuilderBase* builder);
+                                   llvm::IRBuilderBase* builder,
+                                   const size_t waves_per_eu = 1);
 
 // Compute the kernel name. The opcode string may contain "-" which cannot be
 // in a PTX function name, so sanitize the name before uniquifying it.
@@ -127,7 +128,7 @@ std::string GetSanitizedUniqueName(IrEmitterContext& ir_emitter_context,
 absl::Status AnnotateKernelLaunchDimensions(
     const se::DeviceDescription& device_info,
     const LaunchDimensions& launch_dims, const std::string& kernel_name,
-    llvm::Module* llvm_module);
+    llvm::Module* llvm_module, const size_t waves_per_eu = 1);
 
 }  // namespace gpu
 }  // namespace xla

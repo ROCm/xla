@@ -90,7 +90,7 @@ void AnnotateWithInt32Value(std::string name, int64_t value,
 absl::Status AnnotateKernelLaunchDimensions(
     const se::DeviceDescription& device_info,
     const LaunchDimensions& launch_dims, const std::string& kernel_name,
-    llvm::Module* llvm_module) {
+    llvm::Module* llvm_module, const size_t waves_per_eu) {
   TF_RET_CHECK(
       (device_info.block_dim_limit().x == 0 ||
        launch_dims.block_counts().x < device_info.block_dim_limit().x) &&
@@ -131,6 +131,7 @@ absl::Status AnnotateKernelLaunchDimensions(
                                         launch_dims.block_counts().y,
                                         launch_dims.block_counts().z},
                                        ","));
+    kernel->addFnAttr("amdgpu-waves-per-eu", std::to_string(waves_per_eu));
   }
   return absl::OkStatus();
 }
@@ -238,7 +239,8 @@ BuildKernelPrototypeFromUniqueName(IrEmitterContext& ir_emitter_context,
                                    absl::Span<const KernelArgument> arguments,
                                    size_t num_inputs,
                                    const LaunchDimensions& launch_dimensions,
-                                   llvm::IRBuilderBase* builder) {
+                                   llvm::IRBuilderBase* builder,
+                                   const size_t waves_per_eu) {
   // If some arguments have the same buffer, we will pass them only once.
   llvm::SmallVector<int> to_llvm_arg_no(arguments.size());
   llvm::SmallVector<int> to_arg_no;
@@ -271,7 +273,7 @@ BuildKernelPrototypeFromUniqueName(IrEmitterContext& ir_emitter_context,
   AnnotateFunctionAsGpuKernel(llvm_module, kernel, builder);
   TF_RETURN_IF_ERROR(AnnotateKernelLaunchDimensions(
       ir_emitter_context.gpu_device_info(), launch_dimensions,
-      unique_kernel_name, llvm_module));
+      unique_kernel_name, llvm_module, waves_per_eu));
 
   // TODO(b/65380986): Investigate if adding fast math flags for generated
   // kernels makes sense.

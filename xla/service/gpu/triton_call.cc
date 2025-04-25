@@ -44,7 +44,9 @@ TritonCall TritonCall::Parse(absl::string_view backend_config,
       attrs.getAs<mlir::IntegerAttr>("num_stages").getValue().getSExtValue();
   auto num_warps =
       attrs.getAs<mlir::IntegerAttr>("num_warps").getValue().getSExtValue();
-  return TritonCall{std::move(name), std::move(ir), num_stages, num_warps,
+  auto waves_per_eu =
+      attrs.getAs<mlir::IntegerAttr>("waves_per_eu").getValue().getSExtValue();
+  return TritonCall{std::move(name), std::move(ir), num_stages, num_warps, waves_per_eu,
                     grid_x,          grid_y,        grid_z};
 }
 
