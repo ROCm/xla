@@ -131,7 +131,10 @@ absl::Status AnnotateKernelLaunchDimensions(
                                         launch_dims.block_counts().y,
                                         launch_dims.block_counts().z},
                                        ","));
-    kernel->addFnAttr("amdgpu-waves-per-eu", std::to_string(waves_per_eu));
+    if (waves_per_eu != 0) {
+      // Default value - same as no value is given.
+      kernel->addFnAttr("amdgpu-waves-per-eu", std::to_string(waves_per_eu));
+    }
   }
   return absl::OkStatus();
 }
