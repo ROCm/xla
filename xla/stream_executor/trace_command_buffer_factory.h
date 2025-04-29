@@ -28,6 +28,7 @@ namespace stream_executor {
 
 class TraceCommandBufferFactory {
  public:
+ using TracedFunc = absl::AnyInvocable<absl::Status(Stream*)>;
   // Creates a new command buffer on the given executor by tracing `function`
   // invocation. All StreamExecutor operations on a Stream argument will be
   // recorded into the command buffer. Returned command buffer is finalized, and
@@ -39,15 +40,13 @@ class TraceCommandBufferFactory {
   // primary use case for traced command buffers is to be inserted into primary
   // command buffers constructed with explicit APIs.
   static absl::StatusOr<std::unique_ptr<CommandBuffer>> Create(
-      StreamExecutor* executor,
-      absl::AnyInvocable<absl::Status(Stream*)> function,
+      StreamExecutor* executor, TracedFunc function,
       CommandBuffer::Mode mode = CommandBuffer::Mode::kNested);
 
   // Creates a new command buffer on the given executor by tracing `function`
   // invocation using a user provided stream that will be passed to `function`.
   static absl::StatusOr<std::unique_ptr<CommandBuffer>> Create(
-      StreamExecutor* executor, Stream* stream,
-      absl::AnyInvocable<absl::Status(Stream*)> function,
+      Stream* stream, TracedFunc function,
       CommandBuffer::Mode mode = CommandBuffer::Mode::kNested);
 };
 

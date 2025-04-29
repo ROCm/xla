@@ -21,6 +21,7 @@ limitations under the License.
 #include <memory>
 #include <optional>
 #include <set>
+#include <thread>
 #include <string>
 #include <utility>
 #include <variant>
@@ -149,6 +150,8 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
 }
 
 GpuExecutable::~GpuExecutable() {
+  (void)FreeBufferAllocCache();
+
   if (has_module() && enable_debug_info_manager_) {
     XlaDebugInfoManager::Get()->UnregisterModule(module().unique_id());
   }
@@ -596,25 +599,42 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
     return registered_buffer;
   } else if (allocation.is_constant()) {
     auto it = globals->find(arg_idx);
-    if (it == globals->end()) {
-      return se::DeviceMemoryBase();
-    }
-    return it->second;
-  } else {
-    // Allocate each allocation that might escape, or is the temp buffer.
-    CHECK(allocation.maybe_live_out() || allocation.IsPreallocatedTempBuffer());
-    const int64_t buffer_size = allocation.size();
-    se::DeviceMemoryBase buffer_address;
-    if (buffer_size > 0) {
-      TF_ASSIGN_OR_RETURN(
-          se::OwningDeviceMemory buffer,
-          memory_allocator->Allocate(device_ordinal, buffer_size,
-                                     /*retry_on_failure=*/true,
-                                     /*memory_space=*/allocation.color()));
-      buffer_address = buffer.Release();
-    }
-    return buffer_address;
+    return (it == globals->end() ? se::DeviceMemoryBase() : it->second);
+  } 
+  // Allocate each allocation that might escape, or is the temp buffer.
+  CHECK(allocation.maybe_live_out() || allocation.IsPreallocatedTempBuffer());
+  const int64_t buffer_size = allocation.size();
+  if (buffer_size == 0) return se::DeviceMemoryBase{};
+
+  // HACK HACK
+  if(allocation.maybe_live_out()) {
+
+    TF_ASSIGN_OR_RETURN(auto bbuf,
+      memory_allocator->Allocate(device_ordinal, buffer_size,
+                                   /*retry_on_failure=*/true,
+                                   /*memory_space=*/allocation.color()));
+    VLOG(1) << "dev: " << device_ordinal << " idx: " << allocation.index() 
+            << " do not cache maybe_leaveout buf: " << bbuf->opaque();
+    return bbuf.Release();
   }
+
+  absl::MutexLock lock(&module_handle_mutex_);
+  auto [it, inserted] = cached_mem_allocations_.emplace(
+     MemCacheKey{device_ordinal, allocation.index()}, 
+          CachedDeviceMem{});
+  if (inserted) {
+    // NOTE: allocation is inside a mutex!!!
+    TF_ASSIGN_OR_RETURN(static_cast<se::OwningDeviceMemory&>(it->second),
+      memory_allocator->Allocate(device_ordinal, buffer_size,
+                                   /*retry_on_failure=*/true,
+                                   /*memory_space=*/allocation.color()));
+    VLOG(0) << device_ordinal << "," << allocation.index() 
+          << " alloc sz: " << buffer_size << " ptr " << it->second->opaque()
+          << " live_out: " << allocation.maybe_live_out()
+          << " IsPreallocatedTempBuffer: " << allocation.IsPreallocatedTempBuffer();
+
+  }
+  return it->second.cref();
 }
 
 static absl::Status CheckAlignment(const BufferAllocation& allocation,
@@ -652,9 +672,13 @@ absl::StatusOr<BufferAllocations> GpuExecutable::GenerateBufferAllocations(
   buffers.reserve(num_buffers);
   for (int64_t i = 0; i < num_buffers; ++i) {
     const BufferAllocation& allocation = allocations[i];
+    // if (!(allocation.is_entry_computation_parameter() || allocation.is_constant())) {
+    //   VLOG(0) << this << " dev" << device_ordinal << ": (" << allocation.index() << ", "
+    //         << allocation.size() << ") --> " << buffers.back().opaque();
+    // }
     TF_ASSIGN_OR_RETURN(
         buffers.emplace_back(),
-        BufferForAllocation(arguments, globals, allocations[i],
+        BufferForAllocation(arguments, globals, allocation,
                             memory_allocator, device_ordinal, i));
     TF_RETURN_IF_ERROR(CheckAlignment(allocation, buffers.back(), i));
   }
@@ -727,33 +751,8 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
       GenerateBufferAllocations(arguments, globals, memory_allocator,
                                 device_ordinal));
   VLOG(3) << buffer_allocations.ToString();
+  //VLOG(0) << this << " zzz total cached allocs: " << cached_mem_allocations_.size();
   absl::Span<const BufferAllocation> allocations = GetAllocations();
-
-  if (VLOG_IS_ON(5)) {
-    // Debug code to compare current allocation's address with previous run's
-    // address, and report the allocation info if memory addressed changed.
-    // Useful for identify in user's model if it is command buffer perf friendly
-    // (no command buffer update cost).
-    absl::MutexLock lock(&module_handle_mutex_);
-    if (module_allocations_.find(executor) == module_allocations_.end()) {
-      std::vector<se::DeviceMemoryBase> allocs_addr;
-      allocs_addr.reserve(buffer_allocations.size());
-      for (int i = 0; i < buffer_allocations.size(); i++) {
-        allocs_addr.push_back(buffer_allocations.GetDeviceAddress(i));
-      }
-      module_allocations_[executor] = std::move(allocs_addr);
-    } else {
-      for (int i = 0; i < buffer_allocations.size(); i++) {
-        if (module_allocations_[executor][i].IsSameAs(
-                buffer_allocations.GetDeviceAddress(i))) {
-          continue;
-        }
-        module_allocations_[executor][i] =
-            buffer_allocations.GetDeviceAddress(i);
-        VLOG(5) << "Gpu address changed for module " << module_name_;
-      }
-    }
-  }
 
   std::set<se::DeviceMemoryBase> buffers_in_result;
 
@@ -866,7 +865,18 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
         result.AddAliasedIndex(index);
       }
     }
+
+    {
+      absl::MutexLock _(&module_handle_mutex_);
+      auto idx = allocation->index();
+      auto it = cached_mem_allocations_.find(MemCacheKey{device_ordinal, idx});
+      if(it != cached_mem_allocations_.end() && result_buffer == it->second.cref()) {
+        //VLOG(0) << "Found liveout alloc matches: " << result_buffer.opaque();
+        it->second.is_live_out = true;
+      }
+    }
     buffers_in_result.insert(result_buffer);
+    // mark this buffer as leave out !
   }
 
   {
@@ -886,14 +896,42 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
         block_host_until_done, execution_stream_ids_));
   }
 
-  TF_RETURN_IF_ERROR(
-      buffer_allocations.TearDown(buffers_in_result, GetAllocations()));
+  {
+  absl::MutexLock _(&module_handle_mutex_);
+  for(auto& [a,b] : cached_mem_allocations_) {
+    int dev_id = std::get<0>(a);
+    auto index = std::get<1>(a);
+    // VLOG(0) << dev_id << " cached mem ptr: " << buf->opaque() << " " << buf->size();
+    // for(const auto& bbf : buffers_in_result) {
+    //   VLOG(0) << bbf.opaque() << " sz: " << bbf.size();
+    // }
+    // if (buffers_in_result.count(buf.cref()) != 0) {
+    //   VLOG(0) << dev_id << " found Non freeing ptr: " << buf->opaque();
+    //   //TF_RETURN_IF_ERROR(b.Free()); // only free non-owned bufs
+    // }
+  }
+  }
+
+  // TF_RETURN_IF_ERROR(
+  //     buffer_allocations.TearDown(buffers_in_result, GetAllocations()));
 
   // Free allocations for arguments.
   if (auto args = std::get_if<absl::Span<ExecutionInput>>(&arguments)) {
     MarkToBeReleasedArguments(*args, result);
   }
   return std::move(result);
+}
+
+absl::Status GpuExecutable::FreeBufferAllocCache() {
+  for(auto& [a,b] : cached_mem_allocations_) {
+    // int dev_id = std::get<0>(a);
+    // auto index = std::get<1>(a);
+    if (b.is_live_out) {
+      //VLOG(0) << std::this_thread::get_id() << " dev" << dev_id << " releasing mem ptr: " << b->opaque();
+      b.Release(); // this buffer is not owned by us -> could already be deallocated
+    }
+  }
+  return absl::OkStatus();
 }
 
 int64_t GpuExecutable::SizeOfGeneratedCodeInBytes() const {

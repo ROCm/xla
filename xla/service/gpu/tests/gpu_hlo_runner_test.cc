@@ -122,7 +122,7 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
 
 
 #define DO_REFERENCE_CHECK 0
-#define USE_MULTIPLE_GPUS 0
+#define USE_MULTIPLE_GPUS 1
 #define USE_SPECIAL_ARGUMENTS 0
 
 class HloRunnerTest : public GpuCodegenTest {
@@ -232,7 +232,7 @@ protected:
  //    EXPECT_TRUE(RunAndCompare(std::move(module), 
   // //     absl::Span< xla::Literal * const>(arg_ptrs.data(), arg_ptrs.size()), error_spec));
 #else // USE_MULTIPLE_GPUS
-  int NumReplicas = 8, NumParts = 1;
+  int NumReplicas = 4, NumParts = 1;
   config.set_replica_count(NumReplicas);
   config.set_num_partitions(NumParts);
 
@@ -250,14 +250,15 @@ protected:
       false, /*pseudo-random*/
       false /* use large range*/).value();
   TF_ASSERT_OK_AND_ASSIGN(auto exec, 
-      runner.CreateExecutable(std::move(module), /*run_hlo_passes*/false));
+      runner.CreateExecutable(std::move(module), /*run_hlo_passes*/true));
 
   HloRunnerInterface::ReplicatedExecuteOptions replicated_opts = {
     .num_replicas = NumReplicas,
     // .arguments = 
+    .use_threads = true,
   };
 
- for(int i = 0; i < 10; i++) {
+ for(int i = 0; i < 20; i++) {
    VLOG(0) << "Running iteration #" << i;
    TF_ASSERT_OK_AND_ASSIGN(std::vector<Literal> results,
          runner.ExecuteReplicated(

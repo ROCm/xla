@@ -213,7 +213,7 @@ TEST_F(FunctionalHloRunnerTest, shard8) {
 
   TF_EXPECT_OK(FunctionalHloRunner::LoadAndRunAndDump(
       *client, debug_options, preproc_options, raw_compile_options,
-      running_options, {"/data/xla/input.hlo"},
+      running_options, {"/tf/xla/input.hlo"},
       InputFormat::kText));
 }
 
@@ -246,7 +246,7 @@ TEST_F(FunctionalHloRunnerTest, shard4) {
 
   TF_EXPECT_OK(FunctionalHloRunner::LoadAndRunAndDump(
       *client, debug_options, preproc_options, raw_compile_options,
-      running_options, {"/data/xla/input.hlo"},
+      running_options, {"/tf/xla/input.hlo"},
       InputFormat::kText));
 }
 
@@ -279,7 +279,7 @@ TEST_F(FunctionalHloRunnerTest, shard2) {
 
   TF_EXPECT_OK(FunctionalHloRunner::LoadAndRunAndDump(
       *client, debug_options, preproc_options, raw_compile_options,
-      running_options, {"/data/xla/input.hlo"},
+      running_options, {"/tf/xla/input.hlo"},
       InputFormat::kText));
 }
 
@@ -303,16 +303,16 @@ TEST_F(FunctionalHloRunnerTest, rep) {
   FunctionalHloRunner::RawCompileOptions raw_compile_options;
   raw_compile_options.spmd_mode =
       FunctionalHloRunner::SpmdMode::kUseSpmdPartitioning;
-  raw_compile_options.num_replicas = 8;
+  raw_compile_options.num_replicas = 4;
   raw_compile_options.num_partitions = 1;
   FunctionalHloRunner::RunningOptions running_options;
-  running_options.num_repeats = 5;
+  running_options.num_repeats = 10;
   running_options.module_argument_mode =
       FunctionalHloRunner::ModuleArgumentMode::kUninitialized;
 
   TF_EXPECT_OK(FunctionalHloRunner::LoadAndRunAndDump(
       *client, debug_options, preproc_options, raw_compile_options,
-      running_options, {"/data/xla/input.hlo"},
+      running_options, {"/tf/xla/input.hlo"},
       InputFormat::kText));
 }
 

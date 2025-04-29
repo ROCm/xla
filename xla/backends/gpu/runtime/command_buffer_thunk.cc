@@ -18,6 +18,7 @@ limitations under the License.
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <thread>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -99,16 +100,22 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
 
     if (recorded_allocs.size() <= index) {
       recorded_allocs.resize(index + 1);
+      // VLOG(0) << " Buffer alloc new index: " << index;
       should_update = true;
     }
 
     if (!recorded_allocs[index].IsSameAs(alloc)) {
+      VLOG(0) << "Buffer alloc changed for: " << index << ": " 
+              << recorded_allocs[index].opaque() << " --> " << alloc.opaque();
       recorded_allocs[index] = alloc;
       should_update = true;
     }
   }
-
-  return should_update;
+  // VLOG(0) << std::this_thread::get_id() << " === ShouldUpdateCommandBuffer "
+  //     << params.collective_params->run_id.ToInt() 
+  //     << " should_update " << should_update;
+  // HACK HACK
+  return true;//should_update;
 }
 
 absl::Status CommandBufferThunk::Prepare(

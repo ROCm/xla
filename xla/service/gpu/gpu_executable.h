@@ -166,6 +166,9 @@ class GpuExecutable : public Executable {
 
   const SequentialThunk& GetThunk() { return *thunks_; }
 
+  absl::Status FreeBufferAllocCache();
+
+
  private:
   // Use GpuExecutable::Create() to create an instance.
   explicit GpuExecutable(Params params);
@@ -267,11 +270,19 @@ class GpuExecutable : public Executable {
                       std::unique_ptr<BufferAllocToDeviceMemoryMap>>
       module_globals_ ABSL_GUARDED_BY(module_handle_mutex_);
 
-  // Cache previous memory allocations for current module, this is used to help
-  // identify if user's model have unstable pointers by turning on VLOG(5).
-  absl::flat_hash_map<stream_executor::StreamExecutor*,
-                      std::vector<se::DeviceMemoryBase>>
-      module_allocations_ ABSL_GUARDED_BY(module_handle_mutex_);
+  // cache key consists of device ordinal, buffer alloc index and memory space
+  // bool - true if this is a persistent buf and should not be released
+  using MemCacheKey = std::tuple< int, BufferAllocation::Index >;
+
+  struct CachedDeviceMem : se::ScopedDeviceMemory<uint8_t> {
+    bool is_live_out = false;     // true if this buffer must not be owned by 
+                                  // the cache
+    // CachedDeviceMem &operator=(ScopedDeviceMemory<uint8_t> &&other) noexcept {
+    //   return 
+    // }
+  };
+  absl::flat_hash_map< MemCacheKey, CachedDeviceMem > 
+            cached_mem_allocations_ ABSL_GUARDED_BY(module_handle_mutex_);
 
   std::vector<ConstantInfo> constants_;
   const absl::flat_hash_map<ShapeIndex, OutputInfo> output_info_;

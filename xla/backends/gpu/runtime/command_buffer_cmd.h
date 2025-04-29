@@ -124,6 +124,10 @@ class CommandBufferCmd {
 
   using BufferUseVector = absl::InlinedVector<BufferUse, 4>;
 
+  std::string cmd_name() const {
+    return CommandBufferCmdString(cmd_type_);
+  }
+
   // A base class for externally managed command state.
   //
   // Commands can be executed concurrently for many stream executors (underlying
@@ -401,15 +405,22 @@ class CommandBufferCmdSequence {
 // subsequent calls to XLA executable tend to reuse the same allocations.
 class TracedCommandBuffer : public CommandBufferCmd::State {
  public:
+  using TraceFunc = absl::FunctionRef<absl::Status(se::Stream*)>;
+
   explicit TracedCommandBuffer(const CommandBufferCmd* trace_cmd,
                                CommandBufferCmd::BufferUseVector buffers,
                                int64_t capacity = 16);
 
-  // Returns cached command buffer traced using the same buffer addresses or
-  // traces and caches a new command buffer using user provided callback.
+
+  se::CommandBuffer* GetIfTraced(
+      const BufferAllocations* buffer_allocation, bool *update_needed);
+
+  absl::StatusOr<se::CommandBuffer*> DoTrace(
+    se::Stream* stream, TraceFunc trace_func);
+
   absl::StatusOr<se::CommandBuffer*> GetOrTraceCommandBuffer(
-      const BufferAllocations* buffer_allocation, se::StreamExecutor* executor,
-      se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace);
+    const BufferAllocations* buffer_allocation, 
+    se::Stream* stream, TraceFunc trace_func);
 
  private:
   std::vector<BufferAllocation::Index> allocs_indices_;
@@ -430,6 +441,8 @@ class TracedCommandBuffer : public CommandBufferCmd::State {
 // A base class for commands implemented as tracing of stream activities.
 class TracedCommandBufferCmd : public CommandBufferCmd {
  protected:
+  using TraceFunc = TracedCommandBuffer::TraceFunc;
+
   explicit TracedCommandBufferCmd(CommandBufferCmdType cmd_type,
                                   ExecutionStreamId execution_stream_id);
 
@@ -439,7 +452,7 @@ class TracedCommandBufferCmd : public CommandBufferCmd {
   absl::Status AddTracedCommandBuffer(
       const Thunk::ExecuteParams& execute_params,
       const RecordParams& record_params, se::CommandBuffer* command_buffer,
-      absl::FunctionRef<absl::Status(se::Stream*)> trace);
+      TraceFunc trace_func);
 };
 
 //===----------------------------------------------------------------------===//
@@ -921,7 +934,7 @@ class BarrierCmd : public CommandBufferCmd {
 // CollectiveCmd
 //===----------------------------------------------------------------------===//
 
-class CollectiveCmd : public CommandBufferCmd {
+class CollectiveCmd : public TracedCommandBufferCmd {
  public:
   CollectiveCmd(CommandBufferCmdType cmd_type,
                 ExecutionStreamId execution_stream_id,
@@ -932,14 +945,9 @@ class CollectiveCmd : public CommandBufferCmd {
       const Thunk::PrepareParams& params,
       Thunk::ResourceRequestsInterface& resource_requests) final;
 
-  bool force_update() override { return true; }
+  bool force_update() override { return false; }
 
   bool IsNestedCommandBuffer() const final { return true; }
-
-  absl::Status AddTracedCommandBuffer(
-      const Thunk::ExecuteParams& execute_params,
-      const RecordParams& record_params, se::CommandBuffer* command_buffer,
-      absl::FunctionRef<absl::Status(se::Stream*)> trace);
 
   virtual AsyncStreamKind GetAsyncStreamKind() = 0;
 
@@ -959,12 +967,18 @@ class CollectiveCmd : public CommandBufferCmd {
       se::CommandBuffer* command_buffer, se::StreamExecutor* executor,
       const CommandBufferCmd::RecordParams& record_params);
 
+  // overloads same function of traced command buffer
+  absl::Status AddTracedCommandBuffer(
+      const Thunk::ExecuteParams& execute_params,
+      const RecordParams& record_params, se::CommandBuffer* command_buffer,
+      TraceFunc trace_func);
+
  protected:
   const NcclCollectiveConfig& config() const { return config_; }
 
- private:
   ExecutionStreamId async_from_stream_id_;
   NcclCollectiveConfig config_;
+  // GpuCliqueKey clique_key_;
 };
 
 //===----------------------------------------------------------------------===//

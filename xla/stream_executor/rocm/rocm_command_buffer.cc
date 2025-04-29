@@ -432,7 +432,11 @@ static struct FinalPrinter
               hipGraphDebugDotFlagsMemcpyNodeParams |
               hipGraphDebugDotFlagsMemsetNodeParams;
       auto res = wrap::hipGraphDebugDotPrint(graph, path.c_str(), flags);
-      if(res == hipSuccess) VLOG(0) << "Printed graph to: " << path;
+      if(res == hipSuccess) {
+        size_t numNodes = 0;
+        (void)hipGraphGetNodes(graph, /*nodes=*/nullptr, &numNodes);
+        VLOG(0) << "Printed graph to: " << path << " with #nodes " << numNodes;
+      }
       name = path;
     }
     count++;
@@ -457,8 +461,8 @@ private:
 #endif
 
 absl::Status RocmCommandBuffer::LaunchGraph(Stream* stream) {
-  VLOG(1) << "Launch command buffer executable graph " << exec_
-          << " on a stream: " << stream;
+  VLOG(1) << std::this_thread::get_id() << " launch graph " << exec_
+          << " on a stream: " << stream << " " << stream->parent()->device_ordinal();
 #if GPU_GRAPH_API_DEBUG
   s_printer.dump(stream->parent()->device_ordinal(), graph_);
 #endif

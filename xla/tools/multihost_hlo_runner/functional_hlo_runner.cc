@@ -1100,7 +1100,7 @@ FunctionalHloRunner::RunInternal(
   std::vector<std::vector<std::unique_ptr<PjRtBuffer>>> device_buffers;
   std::vector<std::vector<PjRtBuffer*>> argument_ptrs;
   for (int repeat = 0; repeat < running_options.num_repeats; ++repeat) {
-    VLOG(1) << "FunctionalHloRunner: ExecuteOnDevices started (repeat = "
+    VLOG(0) << "======== FunctionalHloRunner: ExecuteOnDevices started (repeat = "
             << repeat << ").";
     if (repeat == 0 || running_options.recreate_buffers_between_repeats) {
       VLOG(1) << "Creating argument buffers. repeat = " << repeat;
@@ -1118,9 +1118,27 @@ FunctionalHloRunner::RunInternal(
     }
     execute_options.launch_id = repeat + 1;
     futures->clear();
-    TF_ASSIGN_OR_RETURN(
-        output_buffers,
-        executable->Execute(argument_ptrs, execute_options, futures));
+    absl::StatusOr<std::vector<std::vector<std::unique_ptr<PjRtBuffer>>>> zz 
+          = executable->Execute(argument_ptrs, execute_options, futures);
+    if (!zz.ok()) {
+      return zz.status();
+    }
+    for(const auto& z1 : zz.value()) {
+      for(const auto& z2 : z1) {
+        VLOG(0) << "zshape: " << z2->on_device_shape() << " ptr << " << z2->debug_ptr();
+      }
+    }
+    for(const auto& z1 : output_buffers) {
+      for(const auto& z2 : z1) {
+        // VLOG(0) << "orig buffer: " << z2->on_device_shape() << " ptr << " << z2->debug_ptr();
+      }
+    }
+    // those live-in buffers were not deallocated!
+    // here we reassign output buffers to zz while our cache ensures that
+    // output_buffers and zz are actually the same!!!
+    // therefore we have double free!!
+    output_buffers = std::move(zz).value();
+    
     for (auto& future : *futures) {
       TF_RETURN_IF_ERROR(future.Await());
     }

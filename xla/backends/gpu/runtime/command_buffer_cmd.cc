@@ -383,10 +383,11 @@ TracedCommandBuffer::TracedCommandBuffer(
   allocs_indices_.assign(allocs_indices.begin(), allocs_indices.end());
 }
 
-absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
-    const BufferAllocations* buffer_allocation, se::StreamExecutor* executor,
-    se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace) {
-  // Collect memory addresses for relevant allocations.
+se::CommandBuffer* TracedCommandBuffer::GetIfTraced(
+      const BufferAllocations* buffer_allocation, bool *update_needed) {
+  
+  *update_needed = true;
+   // Collect memory addresses for relevant allocations.
   absl::InlinedVector<se::DeviceMemoryBase, 4> allocs;
   allocs.reserve(allocs_indices_.size());
   for (auto& index : allocs_indices_) {
@@ -397,15 +398,14 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
   // one element to the right. Returns reference to the first entry.
   auto shift_right = [&](size_t i) -> Entry& {
     if (i == 0) return entries_[0];
-
     Entry entry = std::move(entries_[i]);
     do {
       entries_[i] = std::move(entries_[i - 1]);
     } while (--i > 0);
-
     return entries_[0] = std::move(entry);
   };
 
+  size_t trace_idx = capacity_ - 1;
   for (size_t i = 0; i < capacity_; ++i) {
     // Found entry for a given allocations, move it to front and return a
     // pointer to cached command buffer.
@@ -413,32 +413,45 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
                           entries_[i].command_buffer)) {
       VLOG(6) << "Command buffer trace cache hit for command "
               << trace_cmd_->ToString();
+      *update_needed = (i != 0); // if we find our entry on the top => the graph is fine
       return shift_right(i).command_buffer.get();
     }
 
     // Create a new entry by calling a user-provided tracing function, move it
     // to front and return a pointer to cached command buffer.
     if (entries_[i].command_buffer == nullptr) {
-      TF_ASSIGN_OR_RETURN(
-          entries_[i].command_buffer,
-          se::TraceCommandBufferFactory::Create(executor, stream, trace));
-      entries_[i].recorded_allocs.assign(allocs.begin(), allocs.end());
-      VLOG(6) << "Command buffer trace cache create new item for command "
-              << trace_cmd_->ToString();
-      return shift_right(i).command_buffer.get();
+      trace_idx = i;
+      break;
     }
   }
-
   // Create a new entry by calling a user-provided tracing function, replace the
   // last entry with it, move it to front and return a pointer to cached command
   // buffer.
-  TF_ASSIGN_OR_RETURN(
-      entries_[capacity_ - 1].command_buffer,
-      se::TraceCommandBufferFactory::Create(executor, stream, trace));
-  entries_[capacity_ - 1].recorded_allocs.assign(allocs.begin(), allocs.end());
+  entries_[trace_idx].recorded_allocs.assign(allocs.begin(), allocs.end());
   VLOG(6) << "Command buffer trace cache does replacement for command "
           << trace_cmd_->ToString();
-  return shift_right(capacity_ - 1).command_buffer.get();
+  shift_right(trace_idx);
+  return nullptr; // return null since we still need to retrace the operation
+}
+
+absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::DoTrace(
+    se::Stream* stream, TraceFunc trace_func) {
+  
+  TF_ASSIGN_OR_RETURN(
+      entries_[0].command_buffer,
+      se::TraceCommandBufferFactory::Create(stream, trace_func));
+  return entries_[0].command_buffer.get();
+}
+
+absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
+    const BufferAllocations* buffer_allocation, 
+    se::Stream* stream, TraceFunc trace_func) {
+  
+  bool update_needed = false;
+  if (auto *cmd = GetIfTraced(buffer_allocation, &update_needed); cmd != nullptr) {
+    return cmd;
+  }
+  return DoTrace(stream, trace_func);
 }
 
 //===----------------------------------------------------------------------===//
@@ -452,7 +465,7 @@ TracedCommandBufferCmd::TracedCommandBufferCmd(
 absl::Status TracedCommandBufferCmd::AddTracedCommandBuffer(
     const Thunk::ExecuteParams& execute_params,
     const RecordParams& record_params, se::CommandBuffer* command_buffer,
-    absl::FunctionRef<absl::Status(se::Stream*)> trace) {
+    TraceFunc trace_func) {
   auto traced_cmd =
       record_params.state.GetOrCreate<TracedCommandBuffer>(this, [&] {
         const auto& debug_options = xla::GetDebugOptionsFromFlags();
@@ -460,11 +473,15 @@ absl::Status TracedCommandBufferCmd::AddTracedCommandBuffer(
             this, buffers(), debug_options.xla_cmd_buffer_trace_cache_size());
       });
 
-  TF_ASSIGN_OR_RETURN(
-      auto nested_cmd,
-      traced_cmd->GetOrTraceCommandBuffer(
-          execute_params.buffer_allocations, execute_params.stream->parent(),
-          execute_params.command_buffer_trace_stream, trace));
+  bool update_needed = false;
+  auto *nested_cmd = traced_cmd->GetIfTraced(execute_params.buffer_allocations, 
+                                                                &update_needed);
+  if (nested_cmd == nullptr) {
+    //VLOG(0) << "doing retracing for: " << cmd_name();
+    TF_ASSIGN_OR_RETURN(
+      nested_cmd,
+      traced_cmd->DoTrace(execute_params.command_buffer_trace_stream, trace_func));
+  }
 
   ExecutionScopeId execution_scope_id = GetExecutionScope(record_params);
   VLOG(5) << "Add nested command buffer to execution scope: "
@@ -1352,7 +1369,6 @@ absl::Status CustomCallCmd::RecordLegacyCustomCall(
   TF_ASSIGN_OR_RETURN(
       auto nested_cmd,
       se::TraceCommandBufferFactory::Create(
-          execute_params.stream->parent(),
           execute_params.command_buffer_trace_stream, [&](se::Stream* stream) {
             XlaCustomCallStatus custom_call_status;
             call_target_(stream, buffers.data(), opaque_.data(), opaque_.size(),
@@ -1426,7 +1442,6 @@ absl::Status CustomCallCmd::RecordXlaFfiCall(
   TF_ASSIGN_OR_RETURN(
       auto nested_cmd,
       se::TraceCommandBufferFactory::Create(
-          execute_params.stream->parent(),
           execute_params.command_buffer_trace_stream, [&](se::Stream* stream) {
             ffi::CallOptions options = {
                 execute_params.buffer_allocations->device_ordinal(),
@@ -1486,9 +1501,10 @@ CollectiveCmd::CollectiveCmd(CommandBufferCmdType cmd_type,
                              ExecutionStreamId execution_stream_id,
                              ExecutionStreamId async_from_stream_id,
                              NcclCollectiveConfig config)
-    : CommandBufferCmd(cmd_type, execution_stream_id),
+    : TracedCommandBufferCmd(cmd_type, execution_stream_id),
       async_from_stream_id_(async_from_stream_id),
-      config_(std::move(config)) {}
+      config_(std::move(config))
+      {}
 
 absl::Status CollectiveCmd::BarrierIfAsync(
     se::CommandBuffer* command_buffer, se::StreamExecutor* executor,
@@ -1511,8 +1527,11 @@ absl::Status CollectiveCmd::Prepare(
     Thunk::ResourceRequestsInterface& resource_requests) {
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives,
                       Thunk::GetGpuCollectives(params));
+  
+  // using class variable leads to weird failures - of course !
+  // this code is executed by different threads !!!!! racing
   TF_ASSIGN_OR_RETURN(
-      GpuCliqueKey clique_key,
+      auto clique_key,
       GetGpuCliqueKey(collectives, *params.collective_params,
                       config().replica_groups, config().group_mode,
                       nccl_stream_id(), GetAsyncStreamKind()));
@@ -1526,13 +1545,27 @@ absl::Status CollectiveCmd::Prepare(
 absl::Status CollectiveCmd::AddTracedCommandBuffer(
     const Thunk::ExecuteParams& execute_params,
     const RecordParams& record_params, se::CommandBuffer* command_buffer,
-    absl::FunctionRef<absl::Status(se::Stream*)> trace) {
-  TF_ASSIGN_OR_RETURN(std::unique_ptr<se::CommandBuffer> nested_cmd,
-                      se::TraceCommandBufferFactory::Create(
-                          execute_params.stream->parent(),
-                          execute_params.command_buffer_trace_stream, trace));
+    TraceFunc trace_func) {
+  auto traced_cmd =
+      record_params.state.GetOrCreate<TracedCommandBuffer>(this, [&] {
+        const auto& debug_options = xla::GetDebugOptionsFromFlags();
+        return std::make_unique<TracedCommandBuffer>(
+            this, buffers(), debug_options.xla_cmd_buffer_trace_cache_size());
+      });
+
+  bool update_needed = false;
+  auto *nested_cmd = traced_cmd->GetIfTraced(execute_params.buffer_allocations, 
+                                                                &update_needed);
+  if (nested_cmd == nullptr) {
+    //VLOG(0) << "doing retracing for collective: " << cmd_name();
+    TF_ASSIGN_OR_RETURN(
+      nested_cmd,
+      traced_cmd->DoTrace(execute_params.command_buffer_trace_stream, trace_func));
+  }
 
   ExecutionScopeId execution_scope_id = GetExecutionScope(record_params);
+  VLOG(5) << "Add nested command buffer to execution scope: "
+          << execution_scope_id.value();
   return command_buffer->AddNestedCommandBuffer(execution_scope_id,
                                                 *nested_cmd);
 }
@@ -1759,9 +1792,9 @@ absl::Status CollectivePermuteCmd::Record(const Thunk::ExecuteParams& execute_pa
                              config().operand_element_type));
 
   for (size_t i = 0; i < device_buffers.size(); ++i) {
-    VLOG(0) << "  Src: " << buffers_[i].source_buffer << " ("
+    VLOG(5) << "  Src: " << buffers_[i].source_buffer << " ("
             << device_buffers[i].source_buffer.opaque() << ")";
-    VLOG(0) << "  Dst: " << buffers_[i].destination_buffer << " ("
+    VLOG(5) << "  Dst: " << buffers_[i].destination_buffer << " ("
             << device_buffers[i].destination_buffer.opaque() << ")";
   }
 
@@ -1781,6 +1814,33 @@ absl::Status CollectivePermuteCmd::Record(const Thunk::ExecuteParams& execute_pa
   ExecutionScopeId execution_scope_id = GetExecutionScope(record_params);
   VLOG(5) << "CollectivePermuteCmd, execution_scope_id=" << execution_scope_id.value();
 
+// TODO enable rendezvous!!!
+#if 0
+  TF_ASSIGN_OR_RETURN(auto num_participants, 
+      execute_params.collective_cliques->num_communicators(clique_key_));
+
+  auto run_id = execute_params.collective_params->run_id;
+  auto rendezvous_key = std::tuple{run_id, clique_key_};
+  auto rendezvous_name = absl::StrFormat(
+        "CollectiveRecord %d; run_id=%d", config().op_id, run_id.ToInt());
+
+  VLOG(0) << "Rendezvous for #participants: " << num_participants << "  "
+          << rendezvous_name << " my id: " << current_id;
+
+  using ResultType = int32_t;
+  TF_ASSIGN_OR_RETURN(
+      auto ID, Rendezvous<absl::StatusOr<ResultType>>(
+          rendezvous_name, rendezvous_key, current_id, num_participants,
+          [&](auto values) -> ResultType {
+            //VLOG(0) << "All threads arrived!";
+            for(auto v : values) {
+              //VLOG(0) << "val " << *v;
+            }
+            return 11;
+          }
+          //WarnStuckTimeout(), TerminateTimeout()
+          ));
+#endif
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives,
                       Thunk::GetGpuCollectives(execute_params));
   TF_ASSIGN_OR_RETURN(
@@ -1790,6 +1850,7 @@ absl::Status CollectivePermuteCmd::Record(const Thunk::ExecuteParams& execute_pa
                   config().group_mode, nccl_stream_id(), GetAsyncStreamKind()));
 
 
+
   return AddTracedCommandBuffer(
       execute_params, record_params, command_buffer, [&](se::Stream* stream) {
         VLOG(0) << this << " Tracing collective permute for: " << current_id;
@@ -1797,12 +1858,13 @@ absl::Status CollectivePermuteCmd::Record(const Thunk::ExecuteParams& execute_pa
         auto res = RunCollectivePermute(collectives, source_target, device_buffers,
               *stream, comm_handle.comm, device_string, current_id, 
               /*use_memcpy*/false, /*recv_ptr_map*/nullptr);
-        finish_counter_++;
-        while(finish_counter_.load() % 8 != 0) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
-        VLOG(0) << this << " collective permute for: " << current_id << " DONE: " 
-                << finish_counter_.load();
+        // finish_counter_++;
+        // while(finish_counter_.load() % 8 != 0) {
+        //   std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        // }
+        // VLOG(0) << this << " collective permute for: " << current_id << " DONE: " 
+        //         << finish_counter_.load();
+        // std::this_thread::sleep_for(std::chrono::seconds(10));
         return res;
       });
 }
