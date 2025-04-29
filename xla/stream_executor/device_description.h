@@ -185,9 +185,10 @@ class RocmComputeCapability {
   bool gfx9_mi200() const { return gfx_version() == "gfx90a"; }
 
   bool gfx9_mi300() const { return gfx_version() == "gfx942"; }
+  bool gfx9_gfx950() const { return gfx_version() == "gfx950"; }
 
   bool gfx9_mi100_or_later() const {
-    static constexpr absl::string_view kList[] = {"gfx908", "gfx90a", "gfx942"};
+    static constexpr absl::string_view kList[] = {"gfx908", "gfx90a", "gfx942", "gfx950"};
     return absl::c_count(kList, gfx_version()) != 0;
   }
 
@@ -433,7 +434,7 @@ class DeviceDescription {
               return 16 * 1024;
             }
             // MI300 has 32KB L1 cache per CU.
-            if (capability.gfx9_mi300()) {
+            if (capability.gfx9_mi300() || capability.gfx9_gfx950()) {
               return 32 * 1024;
             }
           }
@@ -449,7 +450,7 @@ class DeviceDescription {
           if constexpr (std::is_same_v<std::decay_t<decltype(capability)>,
                                        RocmComputeCapability>) {
             // DRAM->L2 bus is 128 Byte width for MI300.
-            if (capability.gfx9_mi300()) {
+            if (capability.gfx9_mi300() || capability.gfx9_gfx950()) {
               return 128;
             }
           }
@@ -470,7 +471,7 @@ class DeviceDescription {
           if constexpr (std::is_same_v<std::decay_t<decltype(capability)>,
                                        RocmComputeCapability>) {
             // 16 works well on MI300.
-            if (capability.gfx9_mi300()) {
+            if (capability.gfx9_mi300() || capability.gfx9_gfx950()) {
               return 16;
             }
           }
