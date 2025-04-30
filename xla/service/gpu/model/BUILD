@@ -121,9 +121,6 @@ xla_test(
         "gpu_b100",
         "gpu_amd_any",
     ],
-    tags = [
-        "notap",
-    ],
     deps = [
         ":analytical_latency_estimator",
         "//xla:shape_util",

@@ -49,7 +49,7 @@ const std::vector<double>& GetSpeeds(
   // SM90 has different bandwidths.
   static std::vector<double> kIntraNodeSpeedsSm90 = {
       60.0, 40.0, 30.0, 24.0, 20.0, 15.0, 12.0, 6.0, 3.0};
-  return compute_cap.major >= se::CudaComputeCapability::kHopper
+  return compute_cap.major >= se::CudaComputeCapability::HOPPER
              ? kIntraNodeSpeedsSm90
              : kIntraNodeSpeeds;
 }
@@ -202,13 +202,13 @@ int GetNumThreads(int warp_size, int min_num_threads, int max_num_threads,
 float GetMaxSysBwFromGpu(const se::CudaComputeCapability cc,
                          const double* bandwidths_table) {
   switch (cc.major) {
-    case se::CudaComputeCapability::VOLTA:
+    case cc.VOLTA:
       return bandwidths_table[0];
-    case se::CudaComputeCapability::AMPERE:
+    case cc.AMPERE:
       return bandwidths_table[1];
-    case se::CudaComputeCapability::HOPPER:
+    case cc.HOPPER:
       return bandwidths_table[2];
-    case se::CudaComputeCapability::BLACKWELL:
+    case cc.BLACKWELL:
       return bandwidths_table[3];
     default:
       return bandwidths_table[4];
@@ -225,18 +225,16 @@ float GetNvlinkBw(const se::RocmComputeCapability& compute_capability) {
 }
 
 // Returns NVLink bw in GB/s
-/*static*/
-float GpuPerformanceWithCollectiveModel::GetNvlinkBw(
-    const se::CudaComputeCapability& compute_capability) {
+float GetNvlinkBw(const se::CudaComputeCapability& compute_capability) {
   return compute_capability.IsAtLeast(se::CudaComputeCapability::HOPPER)
-             ? kSm90NvlinkBandwidth
+             ? CudaBandwidthSettings::kSm90NvlinkBandwidth
          : compute_capability.IsAtLeast(se::CudaComputeCapability::AMPERE)
-             ? kSm80NvlinkBandwidth
+             ? CudaBandwidthSettings::kSm80NvlinkBandwidth
          : compute_capability.IsAtLeast(se::CudaComputeCapability::VOLTA)
-             ? kSm70NvlinkBandwidth
+             ? CudaBandwidthSettings::kSm70NvlinkBandwidth
          : compute_capability.IsAtLeast(se::CudaComputeCapability::PASCAL_)
-             ? kSm60NvlinkBandwidth
-             : kSm80NvlinkBandwidth;
+             ? CudaBandwidthSettings::kSm60NvlinkBandwidth
+             : CudaBandwidthSettings::kSm80NvlinkBandwidth;
 }
 
 template <typename ComputeCapability, typename GpuBandwidthSettings>
@@ -398,7 +396,9 @@ GpuPerformanceWithCollectiveModel::ComputeAllreduceTime(
                                  stream_executor::CudaComputeCapability>) {
       result = ComputeAllreduceTimeImpl(instr, cost_analysis, gpu_device_info,
                                         cc, CudaBandwidthSettings{});
-    } else {
+    } else if (std::is_same_v<compute_capability,
+                              stream_executor::RocmComputeCapability>) {
+      VLOG(-1) << "#### Is rocm";
       result = ComputeAllreduceTimeImpl(instr, cost_analysis, gpu_device_info,
                                         cc, RocmBandwidthSettings{});
     }
