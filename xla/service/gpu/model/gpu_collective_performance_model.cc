@@ -267,9 +267,9 @@ absl::Duration ComputeAllreduceTimeImpl(
   int64_t num_channels =
       std::max(min_nchannels, GetNcclMaxNumChannels(CollectiveAlgo::RING));
   int default_threads =
-      (bw_intra_node * num_channels <= CudaBandwidthSettings::kPciBandwidth)
+      (bw_intra_node * num_channels <= bandwidth_settings.kPciBandwidth)
           ? 256
-          : CudaBandwidthSettings::kLL128NumThreads;
+          : bandwidth_settings.kLL128NumThreads;
 
   int warp_size = gpu_device_info.threads_per_warp();
   int num_threads =
