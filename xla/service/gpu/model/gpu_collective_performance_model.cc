@@ -55,9 +55,9 @@ const std::vector<double>& GetSpeeds(
 
 const std::vector<double>& GetSpeeds(
     const stream_executor::RocmComputeCapability& compute_cap) {
-  static std::vector<double> kIntraNodeSpeedsSm90 = {
-      60.0, 40.0, 30.0, 24.0, 20.0, 15.0, 12.0, 6.0, 3.0};
-  return kIntraNodeSpeedsSm90;
+  static const std::vector<double> intraNodeSpeeds = {
+      40.0, 30.0, 20.0, 18.0, 15.0, 12.0, 10.0, 9.0, 7.0, 6.0, 5.0, 4.0, 3.0};
+  return intraNodeSpeeds;
 }
 
 // Different algorithms that can be used to perform the collective.
@@ -337,8 +337,10 @@ absl::Duration ComputeAllreduceTimeImpl(
   }
   nvmlReturn_t init_result = xla_nvmlInit();
   return init_result == NVML_SUCCESS;
+#elif TENSORFLOW_USE_ROCM
+  return true;
 #else
-  return false;
+  return false
 #endif  // GOOGLE_CUDA
 }
 
@@ -346,8 +348,10 @@ absl::Duration ComputeAllreduceTimeImpl(
 #if GOOGLE_CUDA
   nvmlReturn_t shutdown_result = xla_nvmlShutdown();
   return shutdown_result == NVML_SUCCESS;
+#elif TENSORFLOW_USE_ROCM
+  return true;
 #else
-  return false;
+  return false
 #endif  // GOOGLE_CUDA
 }
 
