@@ -121,10 +121,7 @@ struct RocmBandwidthSettings {
 
   // Nvlink unidirectional bandwidth for different compute cap. Note this is per
   // lane bandwidth.
-  static constexpr double kSm60NvlinkBandwidth = 18.0;
-  static constexpr double kSm70NvlinkBandwidth = 20.0;
-  static constexpr double kSm80NvlinkBandwidth = 20.0;
-  static constexpr double kSm90NvlinkBandwidth = 20.0;
+  static constexpr double kMi300NvlinkBandwidth = 64.0;
 
   // PCIE bandwidth for PCI Gen3 x16
   static constexpr double kPciBandwidth = 12.0;
@@ -225,7 +222,7 @@ float GetMaxSysBwFromGpu(const se::RocmComputeCapability cc,
 }
 
 float GetNvlinkBw(se::RocmComputeCapability compute_capability) {
-  return RocmBandwidthSettings::kSm90NvlinkBandwidth;
+  return RocmBandwidthSettings::kMi300NvlinkBandwidth;
 }
 
 // Returns NVLink bw in GB/s
