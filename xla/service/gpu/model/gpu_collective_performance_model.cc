@@ -30,7 +30,6 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/model/gpu_hlo_cost_analysis.h"
-#include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/util.h"
 
@@ -216,19 +215,19 @@ float GetMaxSysBwFromGpu(const se::CudaComputeCapability cc,
   }
 }
 
-float GetMaxSysBwFromGpu(const se::RocmComputeCapability cc,
+float GetMaxSysBwFromGpu(const se::RocmComputeCapability& cc,
                          const double* bandwidths_table) {
   return bandwidths_table[4];
 }
 
-float GetNvlinkBw(se::RocmComputeCapability compute_capability) {
+float GetNvlinkBw(const se::RocmComputeCapability& compute_capability) {
   return RocmBandwidthSettings::kMi300NvlinkBandwidth;
 }
 
 // Returns NVLink bw in GB/s
 /*static*/
 float GpuPerformanceWithCollectiveModel::GetNvlinkBw(
-    se::CudaComputeCapability compute_capability) {
+    const se::CudaComputeCapability& compute_capability) {
   return compute_capability.IsAtLeast(se::CudaComputeCapability::HOPPER)
              ? kSm90NvlinkBandwidth
          : compute_capability.IsAtLeast(se::CudaComputeCapability::AMPERE)
