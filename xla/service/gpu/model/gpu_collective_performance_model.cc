@@ -394,14 +394,14 @@ GpuPerformanceWithCollectiveModel::ComputeAllreduceTime(
   absl::Duration total_time = kNcclKernelLaunchOverhead;
   absl::Duration result;
   const auto visitor = [&](const auto& cc) {
-    using compute_capability = std::remove_const_t<decltype(cc)>;
+    using compute_capability =
+        std::remove_const_t<std::remove_reference_t<decltype(cc)>>;
     if constexpr (std::is_same_v<compute_capability,
                                  stream_executor::CudaComputeCapability>) {
       result = ComputeAllreduceTimeImpl(instr, cost_analysis, gpu_device_info,
                                         cc, CudaBandwidthSettings{});
     } else if (std::is_same_v<compute_capability,
                               stream_executor::RocmComputeCapability>) {
-      VLOG(-1) << "#### Is rocm";
       result = ComputeAllreduceTimeImpl(instr, cost_analysis, gpu_device_info,
                                         cc, RocmBandwidthSettings{});
     }
