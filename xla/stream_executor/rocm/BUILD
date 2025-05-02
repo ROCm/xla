@@ -663,7 +663,7 @@ cc_library(
         "hip_blas_utils.h",
         "hipblaslt_wrapper.h",
     ],
-    defines = {"__HIP_DISABLE_CPP_FUNCTIONS__": "1"},
+    # defines = {"__HIP_DISABLE_CPP_FUNCTIONS__": "1"},
     tags = [
         "gpu",
         "rocm-only",
@@ -701,9 +701,11 @@ cc_library(
         "@local_config_rocm//rocm:rocm_headers",
         "@tsl//tsl/platform:dso_loader",
         "@tsl//tsl/platform:ml_dtypes",
+        #"@local_config_rocm//rocm:hipblaslt",
     ] + if_static([
         ":hipblaslt_if_static",
     ]),
+    linkopts = ["/opt/rocm/lib/libhipblaslt.so"],
     alwayslink = True,
 )
 

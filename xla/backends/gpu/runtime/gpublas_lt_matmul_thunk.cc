@@ -155,6 +155,11 @@ CublasLtMatmulThunk::GetCachedMatmulPlan(const ExecuteParams& params) {
         auto algorithms,
         plan->GetAlgorithms(params.stream, num_algorithms, max_workspace));
 
+    if (static_cast< size_t >(algorithm_idx_) >= algorithms.size()) {
+      return absl::InternalError(absl::StrFormat(
+            "Wrong algorithm index: %d, total algorithms found: %z",
+            algorithm_idx_, algorithms.size()));
+    }
     TF_RETURN_IF_ERROR(plan->SetAlgorithm(algorithms[algorithm_idx_]));
     return std::move(plan);
   };
