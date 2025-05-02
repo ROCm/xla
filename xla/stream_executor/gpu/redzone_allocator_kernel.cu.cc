@@ -15,16 +15,10 @@ limitations under the License.
 
 #include <cstdint>
 
-#include "absl/status/statusor.h"
-#include "xla/stream_executor/device_memory.h"
-#include "xla/stream_executor/gpu/redzone_allocator_kernel.h"
-#include "xla/stream_executor/kernel.h"
-#include "xla/stream_executor/stream_executor.h"
-#include "xla/stream_executor/typed_kernel_factory.h"
-#include "tsl/platform/statusor.h"
+namespace stream_executor::redzone_checker_kernel {
 
 namespace {
-__global__ void redzone_checker_kernel(uint8_t* input_buffer,
+__global__ void kernel_func(uint8_t* input_buffer,
                                        uint8_t redzone_pattern,
                                        uint64_t buffer_length,
                                        uint32_t* out_mismatched_ptr) {
@@ -34,18 +28,6 @@ __global__ void redzone_checker_kernel(uint8_t* input_buffer,
 }
 }  // namespace
 
-namespace stream_executor {
+void* kernel() { return reinterpret_cast<void*>(kernel_func); }
 
-absl::StatusOr<ComparisonKernel*> GetComparisonKernel(
-    StreamExecutor* executor, GpuAsmOpts /*gpu_asm_opts*/) {
-  static auto kernel = TypedKernelFactory<
-      DeviceMemory<uint8_t>, uint8_t, uint64_t,
-      DeviceMemory<uint64_t>>::Create(executor, "redzone_checker",
-                                      reinterpret_cast<void*>(
-                                          redzone_checker_kernel));
-
-  if (!kernel.ok()) return kernel.status();
-  return &kernel.value();
-}
-
-}  // namespace stream_executor
+}  // namespace stream_executor::redzone_checker_kernel
