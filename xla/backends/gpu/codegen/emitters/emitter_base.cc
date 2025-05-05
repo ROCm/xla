@@ -267,7 +267,7 @@ absl::StatusOr<FusionEmissionResult> EmitterBase::Emit(
               AnnotateFunctionAsGpuKernel(module.get(), kernel_func, &builder);
               TF_RETURN_IF_ERROR(AnnotateKernelLaunchDimensions(
                   ir_emitter_context.gpu_device_info(), launch_dims,
-                  kernel_name, module.get(), 1));
+                  kernel_name, module.get(), 0));
 
               // Use override flag because libdevice functions can be present in
               // both.

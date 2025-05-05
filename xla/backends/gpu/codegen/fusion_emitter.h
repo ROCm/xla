@@ -128,7 +128,7 @@ std::string GetSanitizedUniqueName(IrEmitterContext& ir_emitter_context,
 absl::Status AnnotateKernelLaunchDimensions(
     const se::DeviceDescription& device_info,
     const LaunchDimensions& launch_dims, const std::string& kernel_name,
-    llvm::Module* llvm_module, const size_t waves_per_eu = 1);
+    llvm::Module* llvm_module, const size_t waves_per_eu = 0);
 
 }  // namespace gpu
 }  // namespace xla
