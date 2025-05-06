@@ -118,7 +118,7 @@ BuildKernelPrototypeFromUniqueName(IrEmitterContext& ir_emitter_context,
                                    size_t num_inputs,
                                    const LaunchDimensions& launch_dimensions,
                                    llvm::IRBuilderBase* builder,
-                                   const size_t waves_per_eu = 1);
+                                   const size_t waves_per_eu = 0);
 
 // Compute the kernel name. The opcode string may contain "-" which cannot be
 // in a PTX function name, so sanitize the name before uniquifying it.
