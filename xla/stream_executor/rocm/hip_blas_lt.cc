@@ -14,7 +14,6 @@ limitations under the License.
 
 #include <algorithm>
 #include <any>
-#include <iostream>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
@@ -47,11 +46,9 @@ limitations under the License.
 #include "xla/stream_executor/event_based_timer.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/stream_executor/gpu/gpu_helpers.h"
-// #include "xla/stream_executor/gpu/gpu_stream.h"
 #include "xla/stream_executor/rocm/hip_blas_utils.h"
 #include "xla/stream_executor/rocm/hipblaslt_wrapper.h"
 #include "xla/stream_executor/rocm/rocm_blas.h"
-// #include "xla/stream_executor/rocm/rocm_event.h"
 #include "xla/stream_executor/scratch_allocator.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/tsl/platform/errors.h"
@@ -59,20 +56,6 @@ limitations under the License.
 #include "xla/types.h"
 #include "xla/util.h"
 #include "tsl/platform/ml_dtypes.h"
-
-#define SET_ATTR(setter, handle, attr, value) \
-  ToStatus(setter((handle), (attr), &value, sizeof(decltype(value))), #setter)
-
-// hipblasLtMatmulDescGetAttribute does not allow nullptr for the last
-// argument (size_t* sizeWritten)
-#define GET_ATTR(getter, handle, attr, ValueT)                          \
-  [&]() -> absl::StatusOr<ValueT> {                                     \
-    ValueT value;                                                       \
-    size_t size;                                                        \
-    TF_RETURN_IF_ERROR(ToStatus(                                        \
-        getter((handle), (attr), &value, sizeof(ValueT), &size), #getter)); \
-    return std::move(value);                                            \
-  }()
 
 namespace stream_executor {
 
@@ -313,23 +296,23 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
   // VLOG(1) << "trans_a/b: " << (int)trans_a << '/' << (int)trans_b << 
   //     " gemm: " << internal_cfg;
 
-  Scale var_alpha, var_beta;
-  auto wrapped_matmul = [&var_alpha, &var_beta, &cfg](auto scale) {
+  Scale alpha, beta;
+  auto set_alpha_beta = [&alpha, &beta, &cfg](auto scale) {
     using InputScale = decltype(scale);
     if constexpr (std::is_same_v<InputScale, xla::complex64> ||
                   std::is_same_v<InputScale, xla::complex128>) {
-      var_alpha = static_cast<InputScale>(cfg.alpha);
+      alpha = static_cast<InputScale>(cfg.alpha);
     } else {
-      var_alpha = static_cast<InputScale>(cfg.alpha.real());
+      alpha = static_cast<InputScale>(cfg.alpha.real());
     }
-    var_beta = static_cast<InputScale>(cfg.beta);
+    beta = static_cast<InputScale>(cfg.beta);
   };
 
   std::tuple operand_types{a_type, b_type, c_type, d_type};
 
 #define TYPED_MATMUL(Scale, ATYPE, BTYPE, CTYPE, DTYPE)          \
   if (operand_types == std::tuple{ATYPE, BTYPE, CTYPE, DTYPE}) { \
-    wrapped_matmul(Scale{});                                     \
+    set_alpha_beta(Scale{});                                     \
   } else
 
 // FP8 compatible types combinations (Full table in
@@ -410,7 +393,7 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
         a_type, b_type, c_type, d_type, hip_compute_type);
 
   return std::make_unique<MatmulPlan>(std::move(gemm), internal_cfg, 
-                            var_alpha, var_beta, must_swap_operands);
+                            alpha, beta, must_swap_operands);
 }
 
 absl::Status BlasLt::MatmulPlan::MaybeSetMemoryArgs(
