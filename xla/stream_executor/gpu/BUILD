@@ -13,6 +13,7 @@ load("//xla:xla.default.bzl", "xla_cc_test")
 load(
     "//xla/stream_executor:build_defs.bzl",
     "stream_executor_gpu_friends",
+    "if_gpu_is_configured",
 )
 load(
     "//xla/tests:build_defs.bzl",
@@ -312,18 +313,24 @@ cc_library(
     ],
 )
 
-cc_library(
+gpu_kernel_library(
     name = "redzone_allocator_kernel",
-    hdrs = [
-        "redzone_allocator_kernel.h",
+    srcs = [
+        "redzone_allocator_kernel.cu.cc",
     ],
+    tags = ["gpu"],
     deps = [
         "//xla/stream_executor:device_memory",
         "//xla/stream_executor:kernel",
-    ],
+    ] + if_cuda_is_configured([
+        "@local_config_cuda//cuda:cuda_headers",
+    ]) + if_rocm_is_configured([
+        "@local_config_rocm//rocm:rocm_headers",
+        "@local_config_rocm//rocm:rocm_config",
+    ]),
 )
 
-cc_library(
+gpu_only_cc_library(
     name = "redzone_allocator",
     srcs = [
         "redzone_allocator.cc",
@@ -353,7 +360,11 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
-    ],
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:statusor",
+    ] + if_gpu_is_configured([
+        ":redzone_allocator_kernel",
+    ]),
 )
 
 xla_test(
