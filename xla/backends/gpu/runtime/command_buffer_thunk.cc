@@ -95,27 +95,26 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
 
   // We check only allocations referenced by commands in a cmd sequence, and
   // leave every other entry default initialized (nullptr device memory).
-  for (BufferAllocation::Index index : commands.allocs_indices()) {
-    se::DeviceMemoryBase alloc = allocs->GetDeviceAddress(index);
+  for (const auto idx : commands.allocs_indices()) {
+    se::DeviceMemoryBase alloc = allocs->GetDeviceAddress(idx);
 
-    if (recorded_allocs.size() <= index) {
-      recorded_allocs.resize(index + 1);
-      // VLOG(0) << " Buffer alloc new index: " << index;
+    if (recorded_allocs.size() <= idx) {
+      recorded_allocs.resize(idx + 1);
       should_update = true;
     }
-
-    if (!recorded_allocs[index].IsSameAs(alloc)) {
-      VLOG(0) << "Buffer alloc changed for: " << index << ": " 
-              << recorded_allocs[index].opaque() << " --> " << alloc.opaque();
-      recorded_allocs[index] = alloc;
+    auto& recorded = recorded_allocs[idx];
+    if (!recorded.IsSameAs(alloc)) {
+      // VLOG(0) << "Buffer alloc changed for: " << idx << ": " 
+      //         << recorded.opaque() << " --> " << alloc.opaque();
+      recorded = alloc;
       should_update = true;
     }
   }
-  // VLOG(0) << std::this_thread::get_id() << " === ShouldUpdateCommandBuffer "
-  //     << params.collective_params->run_id.ToInt() 
-  //     << " should_update " << should_update;
+  VLOG(0) <<  params.stream->parent()->device_ordinal() << ": === ShouldUpdateCommandBuffer "
+      << params.collective_params->run_id.ToInt() 
+      << " should_update " << should_update;
   // HACK HACK
-  return true;//should_update;
+  return should_update;
 }
 
 absl::Status CommandBufferThunk::Prepare(

@@ -613,7 +613,7 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
       memory_allocator->Allocate(device_ordinal, buffer_size,
                                    /*retry_on_failure=*/true,
                                    /*memory_space=*/allocation.color()));
-    VLOG(1) << "dev: " << device_ordinal << " idx: " << allocation.index() 
+    VLOG(0) << "dev: " << device_ordinal << " idx: " << allocation.index() 
             << " do not cache maybe_leaveout buf: " << bbuf->opaque();
     return bbuf.Release();
   }
@@ -672,14 +672,16 @@ absl::StatusOr<BufferAllocations> GpuExecutable::GenerateBufferAllocations(
   buffers.reserve(num_buffers);
   for (int64_t i = 0; i < num_buffers; ++i) {
     const BufferAllocation& allocation = allocations[i];
-    // if (!(allocation.is_entry_computation_parameter() || allocation.is_constant())) {
-    //   VLOG(0) << this << " dev" << device_ordinal << ": (" << allocation.index() << ", "
-    //         << allocation.size() << ") --> " << buffers.back().opaque();
-    // }
+    if (!(allocation.is_entry_computation_parameter() || allocation.is_constant())) {
+      // VLOG(0) << this << " dev" << device_ordinal << ": (" << allocation.index() << ", "
+      //       << allocation.size() << ") --> " << buffers.back().opaque();
+    }
     TF_ASSIGN_OR_RETURN(
         buffers.emplace_back(),
         BufferForAllocation(arguments, globals, allocation,
                             memory_allocator, device_ordinal, i));
+    // VLOG(0) << this << " dev" << device_ordinal << ": (" << allocation.index() << ", "
+    //         << allocation.size() << ") --> " << buffers.back().opaque();
     TF_RETURN_IF_ERROR(CheckAlignment(allocation, buffers.back(), i));
   }
   return {{buffers, device_ordinal, memory_allocator}};

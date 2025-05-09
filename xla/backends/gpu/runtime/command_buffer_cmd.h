@@ -106,6 +106,9 @@ std::string CommandBufferCmdString(CommandBufferCmdType type);
 // CommandBufferCmd
 //===----------------------------------------------------------------------===//
 
+// Forward declaration of internal state type
+class TracedCommandBuffer; 
+
 // Command is a Thunk counterpart that instead of launching operations directly
 // on the underlying device records them into command buffers.
 //
@@ -123,10 +126,6 @@ class CommandBufferCmd {
   virtual ~CommandBufferCmd() = default;
 
   using BufferUseVector = absl::InlinedVector<BufferUse, 4>;
-
-  std::string cmd_name() const {
-    return CommandBufferCmdString(cmd_type_);
-  }
 
   // A base class for externally managed command state.
   //
@@ -236,6 +235,11 @@ class CommandBufferCmd {
 
   // Returns true if command implemented as a nested command buffer.
   virtual bool IsNestedCommandBuffer() const { return false; }
+
+  virtual bool IsRecordNeeded(const Thunk::ExecuteParams& execute_params,
+          const RecordParams& record_params);
+
+  TracedCommandBuffer *GetTracedBuffer(const RecordParams& record_params);
 
   // Returns a command execution scope created from the specified
   // 'execution_stream_id'.
@@ -411,6 +415,8 @@ class TracedCommandBuffer : public CommandBufferCmd::State {
                                CommandBufferCmd::BufferUseVector buffers,
                                int64_t capacity = 16);
 
+  bool IsRecordNeeded(
+      const BufferAllocations* buffer_allocation);
 
   se::CommandBuffer* GetIfTraced(
       const BufferAllocations* buffer_allocation, bool *update_needed);
@@ -948,6 +954,9 @@ class CollectiveCmd : public TracedCommandBufferCmd {
   bool force_update() override { return false; }
 
   bool IsNestedCommandBuffer() const final { return true; }
+
+  bool IsRecordNeeded(const Thunk::ExecuteParams& execute_params,
+          const RecordParams& record_params) override;
 
   virtual AsyncStreamKind GetAsyncStreamKind() = 0;
 
