@@ -251,10 +251,6 @@ absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
       absl::StrCat(module->getModuleIdentifier(), random_number + ".o");
   std::string isabin_path = tsl::io::JoinPath(tempdir_name, isabin_filename);
 
-  // std::string hsaco_filename =
-  //     absl::StrCat(module->getModuleIdentifier(), random_number + ".hsaco");
-  // std::string hsaco_path = tsl::io::JoinPath(tempdir_name, hsaco_filename);
-
   std::error_code ec;
 
   // Dump LLVM IR.
@@ -331,7 +327,6 @@ absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
   if (!keep_tempfiles) {
     remove(ir_path.c_str());
     remove(isabin_path.c_str());
-    //remove(hsaco_path.c_str());
   }
   VLOG(1) << "Written: " << hsaco_path << " size: " << hsaco_file_size;
   return hsaco;
