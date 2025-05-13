@@ -454,9 +454,15 @@ void DeviceDeallocate(Context* context, void* location) {
 absl::StatusOr<void*> HostAllocate(Context* context, uint64_t bytes) {
   ScopedActivateContext activation(context);
   void* host_mem = nullptr;
+  unsigned int flag;
+  #ifdef TENSORFLOW_USE_NUMA
+    flag = hipHostMallocNumaUser;
+  #else
+    flag = hipHostMallocPortable;
+  #endif
   // "Portable" memory is visible to all ROCM contexts. Safe for our use model.
   TF_RETURN_IF_ERROR(
-      ToStatus(wrap::hipHostMalloc(&host_mem, bytes, hipHostMallocPortable),
+      ToStatus(wrap::hipHostMalloc(&host_mem, bytes, flag),
                "failed to allocate host memory"));
   return host_mem;
 }
