@@ -630,6 +630,12 @@ absl::Status RocmExecutor::Init() {
   TF_ASSIGN_OR_RETURN(rocm_context_,
                       RocmContext::Create(device_ordinal(), device_));
   TF_ASSIGN_OR_RETURN(version_, GetGpuISAVersion(device_));
+  numa_node_ = ReadNumaNode(GetPCIBusID(device_), device_ordinal())
+                   .value_or(tsl::port::kNUMANoAffinity);
+  if (numa_node_ == tsl::port::kNUMANoAffinity) {
+    VLOG(2) << "Could not determine NUMA node of device ordinal "
+            << device_ordinal();
+  }
   // We initialize BLAS interfaces early here since otherwise it might create
   // us problems during hipBlasLt initialization under graph capture.
   // There is no real advantage of explicitly using 'lazy initialization' on
