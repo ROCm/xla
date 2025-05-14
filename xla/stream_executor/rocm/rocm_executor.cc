@@ -475,34 +475,63 @@ bool HostUnregister(Context* context, void* location) {
 }
 
 // Allocates memory on the host.
-absl::StatusOr<void*> HostAllocate(Context* context, uint64_t bytes) {
-  ScopedActivateContext activation(context);
-  void* host_mem = nullptr;
-  unsigned int flag;
-  #ifdef TENSORFLOW_USE_NUMA
-    flag = hipHostMallocNumaUser;
-  #else
-    flag = hipHostMallocPortable;
-  #endif
-  // "Portable" memory is visible to all ROCM contexts. Safe for our use model.
-  TF_RETURN_IF_ERROR(
-      ToStatus(wrap::hipHostMalloc(&host_mem, bytes, flag),
-               "failed to allocate host memory"));
-  return host_mem;
+absl::StatusOr<void*> HostAllocate(Context* context, int numa_node,
+                                   uint64_t bytes) {
+  if (numa_node != tsl::port::kNUMANoAffinity) {
+    // CUDA requires the alignment at least 256 bytes."
+    auto* buffer =
+        tsl::port::NUMAMalloc(numa_node, bytes, /* minimum_alignment=*/128);
+    if (buffer == nullptr && bytes > 0) {
+      return absl::InternalError(absl::StrFormat(
+          "Failed to allocate host memory of size %d pinned to NUMA node %d",
+          bytes, numa_node));
+    }
+    if (bytes > 0 && !HostRegister(context, buffer, bytes)) {
+      tsl::port::NUMAFree(buffer, bytes);
+      return absl::InternalError(
+          absl::StrFormat("Failed to register host memory of size %d pinned to "
+                          "NUMA node %d with the GPU driver",
+                          bytes, numa_node));
+    }
+    return buffer;
+  } else {
+    ScopedActivateContext activation(context);
+    void* host_mem = nullptr;
+    // "Portable" memory is visible to all ROCM contexts. Safe for our use
+    // model.
+    TF_RETURN_IF_ERROR(
+        ToStatus(wrap::hipHostMalloc(&host_mem, bytes, hipHostMallocPortable),
+                 "failed to allocate host memory"));
+    return host_mem;
+  }
+}
+
+// Deallocates memory allocated via HostAllocate.
+void HostDeallocate(Context* context, int numa_node, void* location,
+                    uint64_t size) {
+  if (numa_node != tsl::port::kNUMANoAffinity) {
+    if (size > 0) {
+      HostUnregister(context, location);
+    }
+    tsl::port::NUMAFree(location, size);
+  } else {
+    ScopedActivateContext activation(context);
+    hipError_t res = wrap::hipHostFree(location);
+    if (res != hipSuccess) {
+      LOG(ERROR) << "error deallocating host memory at " << location << ": "
+                 << ToString(res);
+    }
+  }
 }
 
 absl::StatusOr<std::unique_ptr<MemoryAllocation>> AllocateHostMemory(
-    RocmContext* rocm_context, uint64_t size) {
-  TF_ASSIGN_OR_RETURN(void* ptr, HostAllocate(rocm_context, size));
+    RocmContext* rocm_context, int numa_node, uint64_t size) {
+  TF_ASSIGN_OR_RETURN(void* ptr, HostAllocate(rocm_context, numa_node, size));
   VLOG(2) << "allocated " << ptr << " for context " << rocm_context << " of "
           << size << " bytes of host memory";
   return std::make_unique<GenericMemoryAllocation>(
-      ptr, size, [rocm_context](void* location, uint64_t size) {
-        hipError_t res = wrap::hipHostFree(location);
-        if (res != hipSuccess) {
-          LOG(ERROR) << "error deallocating host memory at " << location << ": "
-                     << ToString(res);
-        }
+      ptr, size, [rocm_context, numa_node](void* location, uint64_t size) {
+        HostDeallocate(rocm_context, numa_node, location, size);
         VLOG(2) << "deallocated host memory at " << location << " for context "
                 << rocm_context;
       });
@@ -774,7 +803,8 @@ DeviceMemoryBase RocmExecutor::Allocate(uint64_t size, int64_t memory_space) {
     case MemoryType::kDevice:
       return DeviceMemoryBase(DeviceAllocate(rocm_context_, size), size);
     case MemoryType::kHost:
-      if (auto result = HostAllocate(rocm_context_, size); result.ok()) {
+      if (auto result = HostAllocate(rocm_context_, numa_node_, size);
+          result.ok()) {
         return DeviceMemoryBase(*result, size);
       }
       return DeviceMemoryBase(nullptr, 0);
@@ -784,7 +814,7 @@ DeviceMemoryBase RocmExecutor::Allocate(uint64_t size, int64_t memory_space) {
 }
 absl::StatusOr<std::unique_ptr<MemoryAllocation>>
 RocmExecutor::HostMemoryAllocate(uint64_t size) {
-  return AllocateHostMemory(rocm_context_, size);
+  return AllocateHostMemory(rocm_context_, numa_node_, size);
 }
 
 void RocmExecutor::Deallocate(DeviceMemoryBase* mem) {
@@ -799,7 +829,7 @@ void RocmExecutor::Deallocate(DeviceMemoryBase* mem) {
   if (memory_space == MemoryType::kHost) {
     HostDeallocate(rocm_context_, numa_node_, mem->opaque(), mem->size());
   } else {
-  DeviceDeallocate(rocm_context_, mem->opaque());
+    DeviceDeallocate(rocm_context_, mem->opaque());
   }
 }
 
@@ -863,7 +893,7 @@ RocmExecutor::CreateMemoryAllocator(MemoryType type) {
           });
     case MemoryType::kHost:
       return std::make_unique<GenericMemoryAllocator>([this](uint64_t size) {
-        return AllocateHostMemory(rocm_context_, size);
+        return AllocateHostMemory(rocm_context_, numa_node_, size);
       });
     default:
       return absl::UnimplementedError(
