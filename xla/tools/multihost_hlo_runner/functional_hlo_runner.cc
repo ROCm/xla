@@ -1125,7 +1125,6 @@ FunctionalHloRunner::RunInternal(
       }
     }
     // it has inside shared_ptr< TrackedDeviceBuffer >
-    absl::StatusOr<std::vector<std::vector<std::unique_ptr<PjRtBuffer>>>> zz 
     TF_ASSIGN_OR_RETURN(auto new_bufs,
           executable->Execute(argument_ptrs, execute_options, futures));
 

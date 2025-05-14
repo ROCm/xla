@@ -150,8 +150,8 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
 }
 
 GpuExecutable::~GpuExecutable() {
-  (void)FreeBufferAllocCache();
-
+  
+  TF_CHECK_OK(FreeBufferAllocCache());
   if (has_module() && enable_debug_info_manager_) {
     XlaDebugInfoManager::Get()->UnregisterModule(module().unique_id());
   }
@@ -607,7 +607,7 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
   if (buffer_size == 0) return se::DeviceMemoryBase{};
 
   // HACK HACK
-  if(allocation.maybe_live_out()) {
+  if(allocation.maybe_live_out() && false) {
     TF_ASSIGN_OR_RETURN(auto bbuf,
       memory_allocator->Allocate(device_ordinal, buffer_size,
                                    /*retry_on_failure=*/true,
@@ -752,7 +752,6 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
       GenerateBufferAllocations(arguments, globals, memory_allocator,
                                 device_ordinal));
   VLOG(3) << buffer_allocations.ToString();
-  //VLOG(0) << this << " zzz total cached allocs: " << cached_mem_allocations_.size();
   absl::Span<const BufferAllocation> allocations = GetAllocations();
 
   std::set<se::DeviceMemoryBase> buffers_in_result;
@@ -770,18 +769,17 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
     return true;
   }();
 
-  for (auto& p : result.MutableResult()->buffers()) {
-    const ShapeIndex& index = p.first;
+  for (auto& [index, result_buffer] : result.MutableResult()->buffers()) {
     if (!output_info_.contains(index)) {
       continue;
     }
     const OutputInfo& output_info = output_info_.at(index);
     const BufferAllocation* allocation =
         &allocations[output_info.allocation_index];
-    se::DeviceMemoryBase& result_buffer = p.second;
 
-    VLOG(4) << "Looking at: allocation " << output_info.allocation_index
-            << " @ index: " << index.ToString();
+    VLOG(0) << "Looking at: allocation " << output_info.allocation_index
+            << " @ index: " << index.ToString() 
+            << " output_info.alias_config " << output_info.alias_config.has_value();
 
     if (output_info.alias_config) {
       MaybeOwningDeviceMemory* maybe_owning_memory =
@@ -925,7 +923,7 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
 
 absl::Status GpuExecutable::FreeBufferAllocCache() {
   for(auto& [a,b] : cached_mem_allocations_) {
-    // int dev_id = std::get<0>(a);
+    //int dev_id = std::get<0>(a);
     // auto index = std::get<1>(a);
     if (b.is_live_out) {
       //VLOG(0) << std::this_thread::get_id() << " dev" << dev_id << " releasing mem ptr: " << b->opaque();
