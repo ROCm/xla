@@ -239,7 +239,11 @@ void HloHardwareIndependentTestBase::RunAndFilecheckHloRewrite(
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
                           config ? ParseAndReturnVerifiedModule(hlo, *config)
                                  : ParseAndReturnVerifiedModule(hlo));
+  LOG(INFO) << "\n" << "Before the optimization pass: ";
+  LOG(INFO) << "\n" << module->ToString();
   TF_ASSERT_OK_AND_ASSIGN(bool changed, RunHloPass(&hlo_pass, module.get()));
+  LOG(INFO) << "\n" << "After the optimization pass: ";
+  LOG(INFO) << "\n" << module->ToString();
   EXPECT_EQ(changed, expected.has_value()) << module->ToString();
   if (changed) {
     TF_ASSERT_OK_AND_ASSIGN(
