@@ -2424,7 +2424,7 @@ cc_library(
 xla_cc_test(
     name = "priority_fusion_test",
     srcs = ["priority_fusion_test.cc"],
-    local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]),
+    # local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]),
     deps = [
         ":priority_fusion",
         "//xla/hlo/ir:hlo",
