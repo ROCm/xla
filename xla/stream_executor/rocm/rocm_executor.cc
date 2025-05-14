@@ -450,6 +450,30 @@ void DeviceDeallocate(Context* context, void* location) {
   }
 }
 
+bool HostRegister(Context* context, void* location, uint64_t bytes) {
+  ScopedActivateContext activation(context);
+  // "Portable" memory is visible to all ROCM contexts. Safe for our use model.
+  auto status =
+      ToStatus(wrap::hipHostRegister(location, bytes, hipHostRegisterPortable));
+  if (!status.ok()) {
+    LOG(ERROR) << "error registering host memory at " << location << ": "
+               << status;
+    return false;
+  }
+  return true;
+}
+
+bool HostUnregister(Context* context, void* location) {
+  ScopedActivateContext activation(context);
+  auto status = ToStatus(wrap::hipHostUnregister(location));
+  if (!status.ok()) {
+    LOG(ERROR) << "error unregistering host memory at " << location << ": "
+               << status;
+    return false;
+  }
+  return true;
+}
+
 // Allocates memory on the host.
 absl::StatusOr<void*> HostAllocate(Context* context, uint64_t bytes) {
   ScopedActivateContext activation(context);
