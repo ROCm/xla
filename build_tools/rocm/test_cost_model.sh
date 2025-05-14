@@ -75,3 +75,4 @@ bazel \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     //xla/service/gpu/transforms:priority_fusion_test --test_filter=PriorityFusionTest.DoNotFuseReduceIntoReduceEvenIfOccupancyIsHigh
+    
