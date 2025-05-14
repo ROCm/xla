@@ -164,6 +164,7 @@ class BlasAlgorithmTest : public AlgorithmTest {
     // matching the optimized HLO.
     debug_options.set_xla_gpu_enable_split_k_autotuning(false);
     debug_options.set_xla_gpu_enable_triton_gemm(false);
+    debug_options.set_xla_gpu_enable_cublaslt(false);
     return debug_options;
   }
 };
@@ -1118,6 +1119,7 @@ class NumericTestsForBlas : public BlasAlgorithmTest,
     reference_options.set_xla_gpu_triton_gemm_any(false);
     reference_options.set_xla_gpu_enable_triton_gemm(false);
     reference_options.set_xla_gpu_cublas_fallback(true);
+    reference_options.set_xla_gpu_enable_cublaslt(false);
 
     HloModuleConfig config;
     config.set_debug_options(reference_options);
