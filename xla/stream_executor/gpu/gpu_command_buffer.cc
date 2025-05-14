@@ -317,6 +317,11 @@ absl::Status GpuCommandBuffer::Barrier(ExecutionScopeId from_execution_scope_id,
   return UnsupportedStateError(state_);
 }
 
+void GpuCommandBuffer::SkipUpdates(ExecutionScopeId execution_scope_id, 
+                            int64_t num) {
+  execution_scopes_[execution_scope_id].update_state.node_idx += num;
+}
+
 absl::Status GpuCommandBuffer::LaunchWithPackedArgs(
     ExecutionScopeId execution_scope_id, const ThreadDim& threads,
     const BlockDim& blocks, const Kernel& kernel,
@@ -751,7 +756,7 @@ absl::Status GpuCommandBuffer::Finalize() {
 
     uint64_t end_nanos = tsl::Env::Default()->NowNanos();
 
-    VLOG(5) << "Instantiated executable graph #" << NotifyExecCreated()
+    VLOG(0) << "Instantiated executable graph #" << NotifyExecCreated()
             << " in " << (end_nanos - start_nanos) / 1000 << " μs"
             << "; execution_scopes: " << execution_scopes_.size()
             << "; nodes: " << num_nodes
@@ -788,14 +793,14 @@ absl::Status GpuCommandBuffer::Update() {
     return absl::InternalError(
         "Command buffer has to be finalized first before it can be updated");
   }
-
-  VLOG(5) << "Begin update of"
+  VLOG(1) << "Begin update of"
           << (mode_ == Mode::kPrimary ? "primary" : "nested")
           << " command buffer " << this;
 
   state_ = State::kUpdate;
   for (auto& [_, execution_scope] : execution_scopes_) {
     execution_scope.update_state = ExecutionScope::UpdateState();
+    VLOG(1) << " --#nodes: " << execution_scope.nodes.size();
   }
   return absl::OkStatus();
 }

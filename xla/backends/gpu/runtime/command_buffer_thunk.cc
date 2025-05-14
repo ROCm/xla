@@ -44,6 +44,9 @@ limitations under the License.
 #include "tsl/profiler/lib/traceme.h"
 #include "tsl/profiler/lib/traceme_encode.h"
 
+// Decide for each element of cmdBuf thunk if the update is needed
+#define USE_SMALL_CMDBUF_UPDATES 1
+
 namespace xla::gpu {
 
 using tsl::profiler::TraceMe;
@@ -86,6 +89,9 @@ CommandBufferThunk::CommandBufferThunk(
 bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
     const CommandBufferCmdSequence& commands,
     const Thunk::ExecuteParams& params) {
+#if USE_SMALL_CMDBUF_UPDATES
+  return true;
+#endif
   if (commands.force_update()) {
     return true;
   }
@@ -104,8 +110,8 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
     }
     auto& recorded = recorded_allocs[idx];
     if (!recorded.IsSameAs(alloc)) {
-      // VLOG(0) << "Buffer alloc changed for: " << idx << ": " 
-      //         << recorded.opaque() << " --> " << alloc.opaque();
+      VLOG(0) << "Buffer alloc changed for: " << idx << ": " 
+               << recorded.opaque() << " --> " << alloc.opaque();
       recorded = alloc;
       should_update = true;
     }
@@ -113,7 +119,7 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
   VLOG(0) <<  params.stream->parent()->device_ordinal() << ": === ShouldUpdateCommandBuffer "
       << params.collective_params->run_id.ToInt() 
       << " should_update " << should_update;
-  // HACK HACK
+  // we now decide for each command individually if update is required!
   return should_update;
 }
 

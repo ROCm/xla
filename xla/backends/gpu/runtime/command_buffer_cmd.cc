@@ -298,12 +298,13 @@ absl::Status CommandBufferCmdSequence::Record(
     const Thunk::ExecuteParams& execute_params,
     const CommandBufferCmd::RecordParams& record_params,
     se::CommandBuffer* command_buffer, RecordMode mode) {
-  VLOG(3) << "Record " << commands_.size() << " commands into command buffer"
+  VLOG(1) << "Record " << commands_.size() << " commands into command buffer"
           << "; mode=" << RecordModeString(mode);
   uint64_t start_micros = tsl::Env::Default()->NowMicros();
 
   if (mode == RecordMode::kExclusive) {
     if (command_buffer->state() == se::CommandBuffer::State::kFinalized) {
+      // VLOG(0) << "Calling finalized buf update: " << command_buffer;
       TF_RETURN_IF_ERROR(command_buffer->Update());
     }
   }
@@ -326,17 +327,22 @@ absl::Status CommandBufferCmdSequence::Record(
       VLOG(3) << "Add command buffer barrier after "
               << num_recorded_commands[execution_scope_id]
               << " recorded commands into the execution scope #"
-              << execution_scope_id.value();
+              << execution_scope_id.value()
+              << " for " << command.cmd->ToString();
       TF_RETURN_IF_ERROR(command_buffer->Barrier(execution_scope_id));
       num_recorded_commands.erase(execution_scope_id);
     }
     VLOG(5) << "Record command buffer with scope id "
             << execution_scope_id.value();
 
-    //if (command.cmd->IsRecordNeeded(execute_params, record_params)) 
+    // always update barriers since this is just incrementing barrier counter
+    if (command.cmd->command_type() == CommandBufferCmdType::kBarrierCmd || 
+        command.cmd->IsGraphUpdateNeeded(execute_params, record_params))
     {
       TF_RETURN_IF_ERROR(
         command.cmd->Record(execute_params, record_params, command_buffer));
+    } else {
+        command_buffer->SkipUpdates(command.cmd->GetExecutionScope(record_params));
     }
     ++num_recorded_commands[execution_scope_id];
   }
@@ -382,10 +388,12 @@ TracedCommandBuffer *CommandBufferCmd::
   });
 }
 
-bool CommandBufferCmd::IsRecordNeeded(const Thunk::ExecuteParams& execute_params,
+bool CommandBufferCmd::IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_params,
           const RecordParams& record_params) {
+  
+  se::CommandBuffer *nested_cmd = nullptr;
   return GetTracedBuffer(record_params)->
-            IsRecordNeeded(execute_params.buffer_allocations);
+            IsGraphUpdateNeeded(execute_params.buffer_allocations, &nested_cmd);
 }
 
 //===----------------------------------------------------------------------===//
@@ -402,52 +410,41 @@ TracedCommandBuffer::TracedCommandBuffer(
   absl::flat_hash_set<BufferAllocation::Index> allocs_indices;
   for (auto& buffer : buffers) allocs_indices.insert(buffer.slice().index());
   allocs_indices_.assign(allocs_indices.begin(), allocs_indices.end());
+  // this is needed to make implementation if IsGraphUpdateNeeded easier
+  entries_[0].recorded_allocs.resize(allocs_indices_.size()); 
 }
 
-bool TracedCommandBuffer::IsRecordNeeded(
-      const BufferAllocations* buffer_allocation) {
+// 0 - update not needed: current allocs are at the top position
+// 1 - update needed but no retrace: current allocs are not at the top pos
+// (for traced commands) or allocs are not found (for all other commands)
+// 2 - retracing is needed: allocs are not found on retracing cache
 
-  // bool needed = false;
-  // for (auto& index : allocs_indices_) {
-  //   auto [it, inserted] = xmap.try_emplace(index, se::DeviceMemoryBase{});
-  //   auto current_alloc = buffer_allocation->GetDeviceAddress(index);
-  //   if (!it->second.IsSameAs(current_alloc)) {
-  //     if(!needed) {
-  //     VLOG(0) << trace_cmd_->ToString() << " " << this << " alloc " << index << " has changed!";
-  //     }
-  //     it->second = current_alloc;
-  //     needed = true;
-  //   }
-  // }
-  // if(!needed) VLOG(0) << trace_cmd_->ToString() << " " << this << " allocs are stable!";
+bool TracedCommandBuffer::IsGraphUpdateNeeded(
+      const BufferAllocations* buffer_allocs, se::CommandBuffer **nested_cmd) {
 
-  
-  absl::InlinedVector<se::DeviceMemoryBase, 4> allocs;
-  allocs.reserve(allocs_indices_.size());
-  for (auto& index : allocs_indices_) {
-    allocs.emplace_back(buffer_allocation->GetDeviceAddress(index));
+  *nested_cmd = nullptr;
+  if (!trace_cmd_->IsNestedCommandBuffer()) { // easy case for untraced commands
+    bool needed = false;
+    auto recorded_it = entries_[0].recorded_allocs.begin();
+    for (auto& index : allocs_indices_) {
+      auto alloc = buffer_allocs->GetDeviceAddress(index);
+      if (!recorded_it->IsSameAs(alloc)) {
+        needed = true; // update is needed if at least 1 buf address changed
+        // VLOG(0) << "IsGraphUpdateNeeded: " << index << ": " 
+        //        << recorded_it->opaque() << " --> " << alloc.opaque();
+        *recorded_it = alloc;
+      }
+      recorded_it++;
+    }
+    return needed;
   }
-
-  bool needed = !absl::c_equal(entries_[0].recorded_allocs, allocs);
-  if(needed) {
-    // NOTE NOTE: this would break traced buf logic!!
-    entries_[0].recorded_allocs.assign(allocs.begin(), allocs.end());
-  }
-  //if(needed2!=needed) VLOG(0) << "ooops mismatch!!!!!!!!!";
-  return needed;
-}
-
-se::CommandBuffer* TracedCommandBuffer::GetIfTraced(
-      const BufferAllocations* buffer_allocation, bool *update_needed) {
   
-  *update_needed = true;
    // Collect memory addresses for relevant allocations.
   absl::InlinedVector<se::DeviceMemoryBase, 4> allocs;
   allocs.reserve(allocs_indices_.size());
   for (auto& index : allocs_indices_) {
-    allocs.emplace_back(buffer_allocation->GetDeviceAddress(index));
+    allocs.emplace_back(buffer_allocs->GetDeviceAddress(index));
   }
-
   // Moves entry at `i` position to front and moves entries in `[0, i)` range
   // one element to the right. Returns reference to the first entry.
   auto shift_right = [&](size_t i) -> Entry& {
@@ -467,10 +464,9 @@ se::CommandBuffer* TracedCommandBuffer::GetIfTraced(
                           entries_[i].command_buffer)) {
       VLOG(6) << "Command buffer trace cache hit for command "
               << trace_cmd_->ToString();
-      *update_needed = (i != 0); // if we find our entry on the top => the graph is fine
-      return shift_right(i).command_buffer.get();
+      *nested_cmd = shift_right(i).command_buffer.get();
+      return (i != 0); // if we find our entry on the top => the graph is fine
     }
-
     // Create a new entry by calling a user-provided tracing function, move it
     // to front and return a pointer to cached command buffer.
     if (entries_[i].command_buffer == nullptr) {
@@ -484,28 +480,25 @@ se::CommandBuffer* TracedCommandBuffer::GetIfTraced(
   entries_[trace_idx].recorded_allocs.assign(allocs.begin(), allocs.end());
   VLOG(6) << "Command buffer trace cache does replacement for command "
           << trace_cmd_->ToString();
-  shift_right(trace_idx);
-  return nullptr; // return null since we still need to retrace the operation
+  // make sure the top entry is nullptr, this indicates that we need retracing
+  shift_right(trace_idx).command_buffer.reset();
+  return true; // retracing is needed since command buffer is not cached
 }
 
-absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::DoTrace(
-    se::Stream* stream, TraceFunc trace_func) {
-  
-  TF_ASSIGN_OR_RETURN(
-      entries_[0].command_buffer,
-      se::TraceCommandBufferFactory::Create(stream, trace_func));
-  return entries_[0].command_buffer.get();
+void TracedCommandBuffer::ResetTopEntry() {
+  entries_[0].command_buffer.reset();
 }
 
 absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     const BufferAllocations* buffer_allocation, 
     se::Stream* stream, TraceFunc trace_func) {
-  
-  bool update_needed = false;
-  if (auto *cmd = GetIfTraced(buffer_allocation, &update_needed); cmd != nullptr) {
-    return cmd;
+
+  if (entries_[0].command_buffer == nullptr) {
+    TF_ASSIGN_OR_RETURN(
+      entries_[0].command_buffer,
+          se::TraceCommandBufferFactory::Create(stream, trace_func));
   }
-  return DoTrace(stream, trace_func);
+  return entries_[0].command_buffer.get();
 }
 
 //===----------------------------------------------------------------------===//
@@ -521,17 +514,15 @@ absl::Status TracedCommandBufferCmd::AddTracedCommandBuffer(
     const RecordParams& record_params, se::CommandBuffer* command_buffer,
     TraceFunc trace_func) {
 
-  auto traced_cmd = GetTracedBuffer(record_params);
-  bool update_needed = false;
-  auto *nested_cmd = traced_cmd->GetIfTraced(execute_params.buffer_allocations, 
-                                                                &update_needed);
-  if (nested_cmd == nullptr) {
-    //VLOG(0) << "doing retracing for: " << ToString();
-    TF_ASSIGN_OR_RETURN(
-      nested_cmd,
-      traced_cmd->DoTrace(execute_params.command_buffer_trace_stream, trace_func));
-  }
+  // It would be nice for TracedCommandBufferCmd to combine GetIfTraced with
+  // IsGraphUpdateNeeded() to return a pointer to traced_cmd already!
+  auto *traced_cmd = GetTracedBuffer(record_params);
 
+  TF_ASSIGN_OR_RETURN(
+    auto nested_cmd,
+      traced_cmd->GetOrTraceCommandBuffer(execute_params.buffer_allocations,
+              execute_params.command_buffer_trace_stream, trace_func));
+  
   ExecutionScopeId execution_scope_id = GetExecutionScope(record_params);
   VLOG(5) << "Add nested command buffer to execution scope: "
           << execution_scope_id.value();
@@ -1529,7 +1520,7 @@ BarrierCmd::BarrierCmd(ExecutionStreamId execution_stream_id,
 absl::Status BarrierCmd::Record(const Thunk::ExecuteParams& execute_params,
                                 const RecordParams& record_params,
                                 se::CommandBuffer* command_buffer) {
-  VLOG(5) << "BarrierCmd from stream " << from_stream_id_.value()
+  VLOG(1) << "BarrierCmd from stream " << from_stream_id_.value()
           << " to stream " << execution_stream_id().value();
   if (from_stream_id_ != execution_stream_id()) {
     TF_RETURN_IF_ERROR(command_buffer->Barrier(
@@ -1550,10 +1541,15 @@ CollectiveCmd::CollectiveCmd(CommandBufferCmdType cmd_type,
                              ExecutionStreamId execution_stream_id,
                              ExecutionStreamId async_from_stream_id,
                              NcclCollectiveConfig config)
-    : TracedCommandBufferCmd(cmd_type, execution_stream_id),
+ // HACK we ignore execution_stream_id here since all ops are executed in the same stream!
+    : TracedCommandBufferCmd(cmd_type, async_from_stream_id),
       async_from_stream_id_(async_from_stream_id),
       config_(std::move(config))
-      {}
+{
+  if(execution_stream_id != async_from_stream_id) {
+    LOG(WARNING) << "Ignoring async stream ID for collective: " << ToString();
+  }
+}
 
 absl::Status CollectiveCmd::BarrierIfAsync(
     se::CommandBuffer* command_buffer, se::StreamExecutor* executor,
@@ -1585,71 +1581,60 @@ absl::Status CollectiveCmd::Prepare(
                       config().replica_groups, config().group_mode,
                       nccl_stream_id(), GetAsyncStreamKind()));
   TF_ASSIGN_OR_RETURN(
-      size_t num_local_participants,
+      num_local_participants_,
       GetNumLocalParticipants(*params.collective_params,
                               config().replica_groups, config().group_mode));
-  return resource_requests.AddClique(clique_key, num_local_participants);
+  return resource_requests.AddClique(clique_key, num_local_participants_);
 }
 
 // this function must be overriden for collectives in order to execute
 // rendezvous 
-bool CollectiveCmd::IsRecordNeeded(const Thunk::ExecuteParams& execute_params,
+bool CollectiveCmd::IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_params,
           const RecordParams& record_params) {
 
-  bool needed = CommandBufferCmd::IsRecordNeeded(execute_params, record_params);
+  se::CommandBuffer *nested_cmd = nullptr;
+  auto *state = GetTracedBuffer(record_params);
+  bool needed = state->
+            IsGraphUpdateNeeded(execute_params.buffer_allocations, &nested_cmd);
 
-  VLOG(0) << execute_params.stream->parent()->device_ordinal() << 
-        " " << ToString() << " update " << needed;
-#if 0
-  TF_ASSIGN_OR_RETURN(auto num_participants, 
-      execute_params.collective_cliques->num_communicators(clique_key_));
+  // if all nested_cmd pointers are non-null => we are fine even if some of 
+  // them are cached => we just need to update the graph
+  // TODO TODO
+  // TF_ASSIGN_OR_RETURN(auto num_participants, 
+  //     execute_params.collective_cliques->num_communicators(clique_key_));
+
+  // int64_t current_id = 
+  //       GetCurrentId(execute_params.collective_params, config()).value();
 
   auto run_id = execute_params.collective_params->run_id;
-  auto rendezvous_key = std::tuple{run_id, clique_key_};
+  auto rendezvous_key = std::tuple{run_id, config().op_id}; //, clique_key_};
   auto rendezvous_name = absl::StrFormat(
-        "CollectiveRecord %d; run_id=%d", config().op_id, run_id.ToInt());
+        "CollectiveCmd %d; run_id=%d", config().op_id, run_id.ToInt());
 
-  VLOG(0) << "Rendezvous for #participants: " << num_participants << "  "
-          << rendezvous_name << " my id: " << current_id;
-
-  TF_ASSIGN_OR_RETURN(
-      auto ID, Rendezvous<absl::StatusOr<bool>>(
-          rendezvous_name, rendezvous_key, current_id, num_participants,
-          [&](auto values) -> ResultType {
-            //VLOG(0) << "All threads arrived!";
-            for(auto v : values) {
-              //VLOG(0) << "val " << *v;
-            }
-            return 11;
-          }
-          //WarnStuckTimeout(), TerminateTimeout()
-          ));
-#endif
-  return needed;
-}
-
-absl::Status CollectiveCmd::AddTracedCommandBuffer(
-    const Thunk::ExecuteParams& execute_params,
-    const RecordParams& record_params, se::CommandBuffer* command_buffer,
-    TraceFunc trace_func) {
-
-  auto traced_cmd = GetTracedBuffer(record_params);
-  bool update_needed = false;
-  auto *nested_cmd = traced_cmd->GetIfTraced(execute_params.buffer_allocations, 
-                                                                &update_needed);
-  if (nested_cmd == nullptr) {
-    // VLOG(0) << execute_params.stream->parent()->device_ordinal() 
-    //       << ": doing retracing for collective: " << ToString();
-    TF_ASSIGN_OR_RETURN(
-      nested_cmd,
-      traced_cmd->DoTrace(execute_params.command_buffer_trace_stream, trace_func));
+  // VLOG(0) << ToString() <<  " rendezvous for #peers: " << num_local_participants_ 
+  //         << "  " << rendezvous_name;
+  auto IDstatus = Rendezvous<absl::StatusOr<bool>>(
+      rendezvous_name, rendezvous_key, nested_cmd, num_local_participants_,
+      [&](auto values) -> bool {
+        for(auto v : values) {
+          if (*v == nullptr) return true;
+        }
+        return false;
+      },  /*warn_stuck_timeout=*/absl::Seconds(5)); //TerminateTimeout());
+  if (!IDstatus.ok()) {
+    LOG(FATAL) << rendezvous_name << ": " << IDstatus.status();
   }
-
-  ExecutionScopeId execution_scope_id = GetExecutionScope(record_params);
-  VLOG(5) << "Add nested command buffer to execution scope: "
-          << execution_scope_id.value();
-  return command_buffer->AddNestedCommandBuffer(execution_scope_id,
-                                                *nested_cmd);
+  if(*IDstatus.value()) { // if at least 1 is not set => update needed
+    state->ResetTopEntry(); // this will force retracing of all commands
+    VLOG(0) << execute_params.stream->parent()->device_ordinal() << 
+          " " << ToString() << " FULL update needed: " << needed;
+    return true;
+  }
+  if (needed) {
+    VLOG(0) << execute_params.stream->parent()->device_ordinal() << 
+          " " << ToString() << " mild update needed: " << needed;
+  }
+  return needed;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1887,7 +1872,6 @@ absl::Status CollectivePermuteCmd::Record(const Thunk::ExecuteParams& execute_pa
 
   TF_ASSIGN_OR_RETURN(const int64_t current_id,
                       GetCurrentId(execute_params.collective_params, config()));
-  std::string device_string = "cmd_buf_collective_permute";
         //GetDeviceString(*params.collective_params);
 
   const NcclP2PConfig::SourceTargetMapEntry source_target =
@@ -1908,10 +1892,10 @@ absl::Status CollectivePermuteCmd::Record(const Thunk::ExecuteParams& execute_pa
 
   return AddTracedCommandBuffer(
       execute_params, record_params, command_buffer, [&](se::Stream* stream) {
-        VLOG(0) << this << " Tracing collective permute for: " << current_id;
+        //VLOG(0) << this << " Tracing collective permute for: " << current_id;
         // return absl::OkStatus();
         auto res = RunCollectivePermute(collectives, source_target, device_buffers,
-              *stream, comm_handle.comm, device_string, current_id, 
+              *stream, comm_handle.comm, "cmd_buf_collective_permute", current_id, 
               /*use_memcpy*/false, /*recv_ptr_map*/nullptr);
         // finish_counter_++;
         // while(finish_counter_.load() % 8 != 0) {

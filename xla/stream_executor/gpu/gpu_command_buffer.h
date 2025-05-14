@@ -292,6 +292,8 @@ class GpuCommandBuffer : public CommandBuffer {
       const BlockDim& blocks, const Kernel& kernel,
       const KernelArgsPackedArrayBase& packed_args);
 
+  void SkipUpdates(ExecutionScopeId execution_scope_id, int64_t num) override; 
+
  protected:
   // Returns OK status if command buffer is not finalized and it is still
   // possible to add new commands to it, otherwise returns internal error.

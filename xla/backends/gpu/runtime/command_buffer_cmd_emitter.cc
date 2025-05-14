@@ -278,6 +278,7 @@ static absl::Status AppendCommands(
     }
     return command.status();
   };
+  VLOG(1) << "Appending: " << thunk.KindToString(thunk.kind());
 
   switch (thunk.kind()) {
     case Thunk::Kind::kConditional:
@@ -328,7 +329,13 @@ static absl::Status AppendCommands(
     case Thunk::Kind::kNcclAllReduceDone:
     case Thunk::Kind::kNcclReduceScatterDone:
     case Thunk::Kind::kNcclAllToAllDone:
-      return append(Convert<NcclCollectiveDoneThunk>(thunk));
+    case Thunk::Kind::kNcclCollectivePermuteDone: {
+      LOG(WARNING) << "Skipping async done command: " 
+          << thunk.KindToString(thunk.kind()) 
+          << " since all graph commands are executed sequentially";
+      return absl::OkStatus();
+      //return append(Convert<NcclCollectiveDoneThunk>(thunk));
+    }
 
     case Thunk::Kind::kDynamicSlice:
       return append(Convert<DynamicSliceThunk>(thunk));

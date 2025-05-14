@@ -358,6 +358,11 @@ class CommandBuffer {
   // Returns command buffer state.
   virtual State state() const = 0;
 
+  // Skips updating num commands - instead just increment a counter
+  virtual void SkipUpdates(ExecutionScopeId execution_scope_id, int64_t num = 1) { 
+    LOG(FATAL) << "SkipUpdates are not supported!";
+  }
+
   //--------------------------------------------------------------------------//
   // Command buffer tracing API
   //--------------------------------------------------------------------------//

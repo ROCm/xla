@@ -124,6 +124,8 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
 #define DO_REFERENCE_CHECK 0
 #define USE_MULTIPLE_GPUS 1
 #define USE_SPECIAL_ARGUMENTS 0
+#define USE_PSEUDO_RANDOM false
+#define USE_RANDOM_LARGE_RANGE false
 
 class HloRunnerTest : public GpuCodegenTest {
 
@@ -153,9 +155,9 @@ protected:
           config));
   
 #if !USE_SPECIAL_ARGUMENTS
-  TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, xla::MakeFakeArguments(module.get(), 
-        false, /*pseudo-random*/
-        false /* use large range*/));
+  auto fake_arguments, xla::MakeFakeArguments(module.get(), 
+        USE_PSEUDO_RANDOM, /*pseudo-random*/
+        USE_RANDOM_LARGE_RANGE /* use large range*/).value();
 #else
   TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, MakeSpecialArguments(module.get()));
 #endif
@@ -232,7 +234,7 @@ protected:
  //    EXPECT_TRUE(RunAndCompare(std::move(module), 
   // //     absl::Span< xla::Literal * const>(arg_ptrs.data(), arg_ptrs.size()), error_spec));
 #else // USE_MULTIPLE_GPUS
-  int NumReplicas = 4, NumParts = 1;
+  int NumReplicas = 8, NumParts = 1;
   config.set_replica_count(NumReplicas);
   config.set_num_partitions(NumParts);
 
@@ -247,8 +249,9 @@ protected:
 
   auto fake_arguments = xla::MakeFakeArguments(
       module.get(),
-      false, /*pseudo-random*/
-      false /* use large range*/).value();
+      USE_PSEUDO_RANDOM, /*pseudo-random*/
+      USE_RANDOM_LARGE_RANGE /* use large range*/).value();
+
   TF_ASSERT_OK_AND_ASSIGN(auto exec, 
       runner.CreateExecutable(std::move(module), /*run_hlo_passes*/true));
 

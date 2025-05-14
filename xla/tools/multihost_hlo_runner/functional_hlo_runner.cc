@@ -1118,26 +1118,23 @@ FunctionalHloRunner::RunInternal(
     }
     execute_options.launch_id = repeat + 1;
     futures->clear();
-    absl::StatusOr<std::vector<std::vector<std::unique_ptr<PjRtBuffer>>>> zz 
-          = executable->Execute(argument_ptrs, execute_options, futures);
-    if (!zz.ok()) {
-      return zz.status();
-    }
-    for(const auto& z1 : zz.value()) {
-      for(const auto& z2 : z1) {
-        VLOG(0) << "zshape: " << z2->on_device_shape() << " ptr << " << z2->debug_ptr();
-      }
-    }
+
     for(const auto& z1 : output_buffers) {
       for(const auto& z2 : z1) {
-        // VLOG(0) << "orig buffer: " << z2->on_device_shape() << " ptr << " << z2->debug_ptr();
+        VLOG(0) << "orig buffer: " << z2->on_device_shape() << " ptr << " << z2->debug_ptr();
       }
     }
-    // those live-in buffers were not deallocated!
-    // here we reassign output buffers to zz while our cache ensures that
-    // output_buffers and zz are actually the same!!!
-    // therefore we have double free!!
-    output_buffers = std::move(zz).value();
+    // it has inside shared_ptr< TrackedDeviceBuffer >
+    absl::StatusOr<std::vector<std::vector<std::unique_ptr<PjRtBuffer>>>> zz 
+    TF_ASSIGN_OR_RETURN(auto new_bufs,
+          executable->Execute(argument_ptrs, execute_options, futures));
+
+    for(const auto& z1 : new_bufs) {
+      for(const auto& z2 : z1) {
+        VLOG(0) << "new buf: " << z2->on_device_shape() << " ptr << " << z2->debug_ptr();
+      }
+    }
+    output_buffers = std::move(new_bufs);
     
     for (auto& future : *futures) {
       TF_RETURN_IF_ERROR(future.Await());

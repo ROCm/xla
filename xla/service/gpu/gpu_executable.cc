@@ -608,7 +608,6 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
 
   // HACK HACK
   if(allocation.maybe_live_out()) {
-
     TF_ASSIGN_OR_RETURN(auto bbuf,
       memory_allocator->Allocate(device_ordinal, buffer_size,
                                    /*retry_on_failure=*/true,

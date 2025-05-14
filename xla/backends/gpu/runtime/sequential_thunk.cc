@@ -119,7 +119,8 @@ struct ProfileInstructionsCreator {
   }
 
   absl::Status SaveProfileProto(const std::string& path) {
-    VLOG(0) << "Dumping profile info to file: " << path;
+    
+    VLOG(1) << "Dumping profile info to file: " << path;
     tensorflow::profiler::ProfiledInstructionsProto result;
     {
       absl::MutexLock _(&mu_);

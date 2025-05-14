@@ -236,7 +236,7 @@ class CommandBufferCmd {
   // Returns true if command implemented as a nested command buffer.
   virtual bool IsNestedCommandBuffer() const { return false; }
 
-  virtual bool IsRecordNeeded(const Thunk::ExecuteParams& execute_params,
+  virtual bool IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_params,
           const RecordParams& record_params);
 
   TracedCommandBuffer *GetTracedBuffer(const RecordParams& record_params);
@@ -415,14 +415,10 @@ class TracedCommandBuffer : public CommandBufferCmd::State {
                                CommandBufferCmd::BufferUseVector buffers,
                                int64_t capacity = 16);
 
-  bool IsRecordNeeded(
-      const BufferAllocations* buffer_allocation);
+  bool IsGraphUpdateNeeded(
+      const BufferAllocations* allocs, se::CommandBuffer **nested_cmd);
 
-  se::CommandBuffer* GetIfTraced(
-      const BufferAllocations* buffer_allocation, bool *update_needed);
-
-  absl::StatusOr<se::CommandBuffer*> DoTrace(
-    se::Stream* stream, TraceFunc trace_func);
+  void ResetTopEntry();
 
   absl::StatusOr<se::CommandBuffer*> GetOrTraceCommandBuffer(
     const BufferAllocations* buffer_allocation, 
@@ -955,7 +951,7 @@ class CollectiveCmd : public TracedCommandBufferCmd {
 
   bool IsNestedCommandBuffer() const final { return true; }
 
-  bool IsRecordNeeded(const Thunk::ExecuteParams& execute_params,
+  bool IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_params,
           const RecordParams& record_params) override;
 
   virtual AsyncStreamKind GetAsyncStreamKind() = 0;
@@ -976,17 +972,13 @@ class CollectiveCmd : public TracedCommandBufferCmd {
       se::CommandBuffer* command_buffer, se::StreamExecutor* executor,
       const CommandBufferCmd::RecordParams& record_params);
 
-  // overloads same function of traced command buffer
-  absl::Status AddTracedCommandBuffer(
-      const Thunk::ExecuteParams& execute_params,
-      const RecordParams& record_params, se::CommandBuffer* command_buffer,
-      TraceFunc trace_func);
-
  protected:
   const NcclCollectiveConfig& config() const { return config_; }
 
   ExecutionStreamId async_from_stream_id_;
   NcclCollectiveConfig config_;
+  // TODO this value shall be the same for all but better to add it to state object ??
+  std::atomic< size_t > num_local_participants_;
   // GpuCliqueKey clique_key_;
 };
 
