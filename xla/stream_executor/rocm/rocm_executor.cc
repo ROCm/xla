@@ -788,7 +788,19 @@ RocmExecutor::HostMemoryAllocate(uint64_t size) {
 }
 
 void RocmExecutor::Deallocate(DeviceMemoryBase* mem) {
+  VLOG(1) << "RocmExecutor::Deallocate mem: " << mem->opaque();
+
+  auto status_or_memory_space = GetPointerMemorySpace(mem->opaque());
+  if (!status_or_memory_space.ok()) {
+    LOG(ERROR) << status_or_memory_space.status();
+    return;
+  }
+  auto memory_space = status_or_memory_space.value();
+  if (memory_space == MemoryType::kHost) {
+    HostDeallocate(rocm_context_, numa_node_, mem->opaque(), mem->size());
+  } else {
   DeviceDeallocate(rocm_context_, mem->opaque());
+  }
 }
 
 absl::StatusOr<std::unique_ptr<MemoryAllocator>>
