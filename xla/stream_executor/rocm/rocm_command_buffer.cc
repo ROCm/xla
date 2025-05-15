@@ -52,7 +52,7 @@ limitations under the License.
 #include "tsl/platform/statusor.h"
 
 
-#define GPU_GRAPH_API_DEBUG 1
+#define GPU_GRAPH_API_DEBUG 0
 namespace stream_executor::gpu {
 namespace {
 absl::StatusOr<hipGraph_t> CreateGraph() {

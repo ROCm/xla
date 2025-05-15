@@ -166,9 +166,10 @@ class GpuExecutable : public Executable {
 
   const SequentialThunk& GetThunk() { return *thunks_; }
 
+  bool IsBufferCached(se::DeviceMemoryBase) const override;
+
   absl::Status FreeBufferAllocCache();
-
-
+  
  private:
   // Use GpuExecutable::Create() to create an instance.
   explicit GpuExecutable(Params params);
@@ -277,12 +278,11 @@ class GpuExecutable : public Executable {
   struct CachedDeviceMem : se::ScopedDeviceMemory<uint8_t> {
     bool is_live_out = false;     // true if this buffer must not be owned by 
                                   // the cache
-    // CachedDeviceMem &operator=(ScopedDeviceMemory<uint8_t> &&other) noexcept {
-    //   return 
-    // }
   };
   absl::flat_hash_map< MemCacheKey, CachedDeviceMem > 
             cached_mem_allocations_ ABSL_GUARDED_BY(module_handle_mutex_);
+
+  bool enable_cached_allocs_; // whether to use cached_mem_allocations_
 
   std::vector<ConstantInfo> constants_;
   const absl::flat_hash_map<ShapeIndex, OutputInfo> output_info_;

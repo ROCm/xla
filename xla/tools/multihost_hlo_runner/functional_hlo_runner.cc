@@ -1119,20 +1119,20 @@ FunctionalHloRunner::RunInternal(
     execute_options.launch_id = repeat + 1;
     futures->clear();
 
-    for(const auto& z1 : output_buffers) {
-      for(const auto& z2 : z1) {
-        VLOG(0) << "orig buffer: " << z2->on_device_shape() << " ptr << " << z2->debug_ptr();
-      }
-    }
+    // for(const auto& z1 : output_buffers) {
+    //   for(const auto& z2 : z1) {
+    //     VLOG(0) << "orig buffer: " << z2->on_device_shape() << " ptr << " << z2->debug_ptr();
+    //   }
+    // }
     // it has inside shared_ptr< TrackedDeviceBuffer >
     TF_ASSIGN_OR_RETURN(auto new_bufs,
           executable->Execute(argument_ptrs, execute_options, futures));
 
-    for(const auto& z1 : new_bufs) {
-      for(const auto& z2 : z1) {
-        VLOG(0) << "new buf: " << z2->on_device_shape() << " ptr << " << z2->debug_ptr();
-      }
-    }
+    // for(const auto& z1 : new_bufs) {
+    //   for(const auto& z2 : z1) {
+    //     VLOG(0) << "new buf: " << z2->on_device_shape() << " ptr << " << z2->debug_ptr();
+    //   }
+    // }
     output_buffers = std::move(new_bufs);
     
     for (auto& future : *futures) {

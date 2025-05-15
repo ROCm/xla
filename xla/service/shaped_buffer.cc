@@ -142,9 +142,12 @@ ScopedShapedBuffer::ScopedShapedBuffer(ShapedBuffer shaped_buffer,
     : ShapedBuffer(std::move(shaped_buffer)), allocator_(allocator) {}
 
 ScopedShapedBuffer::ScopedShapedBuffer(ScopedShapedBuffer&& s) noexcept
-    : ShapedBuffer(static_cast<ShapedBuffer&&>(s)), allocator_(s.allocator_) {
+    : ShapedBuffer(static_cast<ShapedBuffer&&>(s)), 
+    parent_exec_(s.parent_exec_), 
+    allocator_(s.allocator_) {
   // Null out s.allocator_ so it doesn't try to free anything in its destructor.
   s.allocator_ = nullptr;
+  s.parent_exec_ = nullptr;
 }
 
 ScopedShapedBuffer& ScopedShapedBuffer::operator=(
@@ -153,8 +156,10 @@ ScopedShapedBuffer& ScopedShapedBuffer::operator=(
 
   *static_cast<ShapedBuffer*>(this) = std::move(static_cast<ShapedBuffer&>(s));
   allocator_ = s.allocator_;
+  parent_exec_ = s.parent_exec_;
   // Null out s.allocator_ so it doesn't try to free anything in its destructor.
   s.allocator_ = nullptr;
+  s.parent_exec_ = nullptr;
   return *this;
 }
 

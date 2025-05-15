@@ -1626,12 +1626,12 @@ bool CollectiveCmd::IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_para
   }
   if(*IDstatus.value()) { // if at least 1 is not set => update needed
     state->ResetTopEntry(); // this will force retracing of all commands
-    VLOG(0) << execute_params.stream->parent()->device_ordinal() << 
+    VLOG(1) << execute_params.stream->parent()->device_ordinal() << 
           " " << ToString() << " FULL update needed: " << needed;
     return true;
   }
   if (needed) {
-    VLOG(0) << execute_params.stream->parent()->device_ordinal() << 
+    VLOG(1) << execute_params.stream->parent()->device_ordinal() << 
           " " << ToString() << " mild update needed: " << needed;
   }
   return needed;

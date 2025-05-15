@@ -147,6 +147,20 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
     XlaDebugInfoManager::Get()->RegisterModule(shared_module(),
                                                buffer_assignment_->ToProto());
   }
+  enable_cached_allocs_ = false;
+  for (const auto& thunk : thunks_->thunks()) {
+    if (thunk->kind() == Thunk::kCommandBuffer) {
+      size_t num_nested = 0;
+      thunk->ForAllThunks([&num_nested](const Thunk*){
+        num_nested++;
+      });
+      VLOG(0) << "Found CmdBuf with " << num_nested << " nested commands";
+      if (num_nested >= 5) { 
+        enable_cached_allocs_ = true;
+        break;
+      }
+    }
+  }
 }
 
 GpuExecutable::~GpuExecutable() {
@@ -607,16 +621,16 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
   if (buffer_size == 0) return se::DeviceMemoryBase{};
 
   // HACK HACK
-  if(allocation.maybe_live_out() && false) {
+  if (!enable_cached_allocs_ || (allocation.maybe_live_out() && false)) {
     TF_ASSIGN_OR_RETURN(auto bbuf,
       memory_allocator->Allocate(device_ordinal, buffer_size,
                                    /*retry_on_failure=*/true,
                                    /*memory_space=*/allocation.color()));
-    VLOG(0) << "dev: " << device_ordinal << " idx: " << allocation.index() 
-            << " do not cache maybe_leaveout buf: " << bbuf->opaque();
+    VLOG(1) << "dev: " << device_ordinal << " idx: " << allocation.index() 
+            << " do not cache buf: " << bbuf->opaque();
     return bbuf.Release();
   }
-
+ 
   absl::MutexLock lock(&module_handle_mutex_);
   auto [it, inserted] = cached_mem_allocations_.emplace(
      MemCacheKey{device_ordinal, allocation.index()}, 
@@ -627,7 +641,7 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
       memory_allocator->Allocate(device_ordinal, buffer_size,
                                    /*retry_on_failure=*/true,
                                    /*memory_space=*/allocation.color()));
-    VLOG(0) << device_ordinal << "," << allocation.index() 
+    VLOG(1) << device_ordinal << "," << allocation.index() 
           << " alloc sz: " << buffer_size << " ptr " << it->second->opaque()
           << " live_out: " << allocation.maybe_live_out()
           << " IsPreallocatedTempBuffer: " << allocation.IsPreallocatedTempBuffer();
@@ -769,6 +783,8 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
     return true;
   }();
 
+  result.MutableResult()->parent_exec_ = this;
+
   for (auto& [index, result_buffer] : result.MutableResult()->buffers()) {
     if (!output_info_.contains(index)) {
       continue;
@@ -777,7 +793,7 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
     const BufferAllocation* allocation =
         &allocations[output_info.allocation_index];
 
-    VLOG(0) << "Looking at: allocation " << output_info.allocation_index
+    VLOG(4) << "Looking at: allocation " << output_info.allocation_index
             << " @ index: " << index.ToString() 
             << " output_info.alias_config " << output_info.alias_config.has_value();
 
@@ -921,13 +937,25 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
   return std::move(result);
 }
 
+bool GpuExecutable::IsBufferCached(se::DeviceMemoryBase buf) const {
+  for (const auto& [a,b] : cached_mem_allocations_) {
+    if (b.cref() == buf) {
+      //VLOG(1) << "Buffer " << buf.opaque() << " sz " << buf.size() << " is cached";
+      return true;
+    }
+  }
+  //VLOG(1) << "Buffer " << buf.opaque() << " sz " << buf.size() << " is NOT cached";
+  return false;
+}
+
 absl::Status GpuExecutable::FreeBufferAllocCache() {
-  for(auto& [a,b] : cached_mem_allocations_) {
+  for (auto& [a,b] : cached_mem_allocations_) {
     //int dev_id = std::get<0>(a);
     // auto index = std::get<1>(a);
     if (b.is_live_out) {
       //VLOG(0) << std::this_thread::get_id() << " dev" << dev_id << " releasing mem ptr: " << b->opaque();
-      b.Release(); // this buffer is not owned by us -> could already be deallocated
+      // HACK HACK
+      //b.Release(); // this buffer is not owned by us -> could already be deallocated
     }
   }
   return absl::OkStatus();
