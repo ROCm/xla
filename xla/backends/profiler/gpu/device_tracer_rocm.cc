@@ -102,8 +102,8 @@ absl::Status GpuTracer::DoStart() {
 
   AnnotationStack::Enable(true);
 
-  uint64_t start_gputime_ns = RocmTracer::GetTimestamp();
-  uint64_t start_walltime_ns = tsl::EnvTime::NowNanos();
+  // uint64_t start_gputime_ns = RocmTracer::GetTimestamp();
+  // uint64_t start_walltime_ns = tsl::EnvTime::NowNanos();
  
   // rocm_tracer_->Enable(tracer_options, rocm_trace_collector_.get());
 
