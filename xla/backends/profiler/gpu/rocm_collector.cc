@@ -162,12 +162,12 @@ static void DumpRocmTracerEvent(const RocmTracerEvent& event,
 
 static uint64_t get_timestamp() {
   uint64_t ts;
-  if (se::wrap::roctracer_get_timestamp(&ts) != ROCTRACER_STATUS_SUCCESS) {
-    const char* errstr = se::wrap::roctracer_error_string();
-    LOG(ERROR) << "function roctracer_get_timestamp failed with error "
-               << errstr;
-    // Return 0 on error.
-    return 0;
+  rocprofiler_status_t CHECKSTATUS = se::wrap::rocprofiler_get_timestamp(&ts);
+  if (CHECKSTATUS != ROCPROFILER_STATUS_SUCCESS) {
+      const char* errstr = se::wrap::rocprofiler_get_status_string(CHECKSTATUS);
+      LOG(ERROR) << "function rocprofiler_get_timestamp failed with error "
+                 << errstr;
+      return 0;
   }
   return ts;
 }

@@ -1247,6 +1247,9 @@ tsl_pybind_extension(
         "-fexceptions",
         "-fno-strict-aliasing",
     ],
+    additional_exported_symbols = [
+        "rocprofiler_configure",
+    ],
     features = ["-use_header_modules"],
     linkopts = select({
         ":use_jax_cuda_pip_rpaths": [

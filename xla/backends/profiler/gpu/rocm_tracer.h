@@ -31,91 +31,43 @@ limitations under the License.
 namespace xla {
 namespace profiler {
 
-enum class RocmTracerSyncTypes {
-  InvalidSync = 0,
-  StreamSynchronize,  // caller thread wait stream to become empty
-  EventSynchronize,   // caller thread will block until event happens
-  StreamWait          // compute stream will wait for event to happen
+// This class is used to store the correlation information for a single
+enum CorrelationDomain {
+  begin,
+  Default = begin,
+  Domain0 = begin,
+  Domain1,
+  end,
+  size = end
 };
 
-struct RocmTracerOptions {
-  std::set<uint32_t> api_tracking_set;  // actual api set we want to profile
-
-  // map of domain --> ops for which we need to enable the API callbacks
-  // If the ops vector is empty, then enable API callbacks for entire domain
-  absl::flat_hash_map<activity_domain_t, std::vector<uint32_t> > api_callbacks;
-
-  // map of domain --> ops for which we need to enable the Activity records
-  // If the ops vector is empty, then enable Activity records for entire domain
-  absl::flat_hash_map<activity_domain_t, std::vector<uint32_t> >
-      activity_tracing;
+class ApiIdList {
+  public:
+   ApiIdList();
+   virtual ~ApiIdList() {}
+   bool invertMode() {
+     return invert_;
+   }
+   void setInvertMode(bool invert) {
+     invert_ = invert;
+   }
+   void add(const std::string& apiName);
+   void remove(const std::string& apiName);
+   bool loadUserPrefs();
+ 
+   // Map api string to cnid enum
+   virtual uint32_t mapName(const std::string& apiName) = 0;
+ 
+   bool contains(uint32_t apiId);
+   const std::unordered_map<uint32_t, uint32_t>& filterList() {
+     return filter_;
+   }
+ 
+  private:
+   std::unordered_map<uint32_t, uint32_t> filter_;
+   bool invert_;
 };
 
-class RocmTracer;
-
-class RocmApiCallbackImpl {
- public:
-  RocmApiCallbackImpl(const RocmTracerOptions& options, RocmTracer* tracer,
-                      RocmTraceCollector* collector)
-      : options_(options), tracer_(tracer), collector_(collector) {}
-
-  absl::Status operator()(uint32_t domain, uint32_t cbid, const void* cbdata);
-
- private:
-  void AddKernelEventUponApiExit(uint32_t cbid, const hip_api_data_t* data,
-                                 uint64_t enter_time, uint64_t exit_time);
-  void AddNormalMemcpyEventUponApiExit(uint32_t cbid,
-                                       const hip_api_data_t* data,
-                                       uint64_t enter_time, uint64_t exit_time);
-  void AddMemcpyPeerEventUponApiExit(uint32_t cbid, const hip_api_data_t* data,
-                                     uint64_t enter_time, uint64_t exit_time);
-  void AddMemsetEventUponApiExit(uint32_t cbid, const hip_api_data_t* data,
-                                 uint64_t enter_time, uint64_t exit_time);
-  void AddMallocFreeEventUponApiExit(uint32_t cbid, const hip_api_data_t* data,
-                                     uint32_t device_id, uint64_t enter_time,
-                                     uint64_t exit_time);
-  void AddStreamSynchronizeEventUponApiExit(uint32_t cbid,
-                                            const hip_api_data_t* data,
-                                            uint64_t enter_time,
-                                            uint64_t exit_time);
-  void AddSynchronizeEventUponApiExit(uint32_t cbid, const hip_api_data_t* data,
-                                      uint64_t enter_time, uint64_t exit_time);
-
-  RocmTracerOptions options_;
-  RocmTracer* tracer_ = nullptr;
-  RocmTraceCollector* collector_ = nullptr;
-  tsl::mutex api_call_start_mutex_;
-  // TODO(rocm-profiler): replace this with absl hashmap
-  // keep a map from the corr. id to enter time for API callbacks.
-  std::map<uint32_t, uint64_t> api_call_start_time_
-      TF_GUARDED_BY(api_call_start_mutex_);
-};
-
-class RocmActivityCallbackImpl {
- public:
-  RocmActivityCallbackImpl(const RocmTracerOptions& options, RocmTracer* tracer,
-                           RocmTraceCollector* collector)
-      : options_(options), tracer_(tracer), collector_(collector) {}
-
-  absl::Status operator()(const char* begin, const char* end);
-
- private:
-  void AddHipKernelActivityEvent(const roctracer_record_t* record);
-  void AddNormalHipMemcpyActivityEvent(const roctracer_record_t* record);
-  void AddHipMemsetActivityEvent(const roctracer_record_t* record);
-  void AddHipMallocActivityEvent(const roctracer_record_t* record);
-  void AddHipStreamSynchronizeActivityEvent(const roctracer_record_t* record);
-  void AddHccKernelActivityEvent(const roctracer_record_t* record);
-  void AddNormalHipOpsMemcpyActivityEvent(const roctracer_record_t* record);
-  void AddHipOpsMemsetActivityEvent(const roctracer_record_t* record);
-  RocmTracerOptions options_;
-  RocmTracer* tracer_ = nullptr;
-  RocmTraceCollector* collector_ = nullptr;
-};
-
-// The class uses roctracer callback/activity API and forward the collected
-// trace events to RocmTraceCollector. There should be only one RocmTracer
-// per process.
 class RocmTracer {
  public:
   // Returns a pointer to singleton RocmTracer.
@@ -124,15 +76,23 @@ class RocmTracer {
   // Only one profile session can be live in the same time.
   bool IsAvailable() const;
 
-  void Enable(const RocmTracerOptions& options, RocmTraceCollector* collector);
+  void Enable();
   void Disable();
-
-  absl::Status ApiCallbackHandler(uint32_t domain, uint32_t cbid,
-                                  const void* cbdata);
-  absl::Status ActivityCallbackHandler(const char* begin, const char* end);
 
   static uint64_t GetTimestamp();
   static int NumGpus();
+
+  static int toolInit(
+    rocprofiler_client_finalize_t finalize_func,
+    void* tool_data);
+  static void toolFinalize(void* tool_data);
+
+  static std::string opString(
+    rocprofiler_callback_tracing_kind_t kind,
+    rocprofiler_tracing_operation_t op);
+
+  static void pushCorrelationID(uint64_t id, CorrelationDomain type);
+  static void popCorrelationID(CorrelationDomain type);
 
   void AddToPendingActivityRecords(uint32_t correlation_id) {
     pending_activity_records_.Add(correlation_id);
@@ -153,21 +113,26 @@ class RocmTracer {
   explicit RocmTracer() : num_gpus_(NumGpus()) {}
 
  private:
-  absl::Status EnableApiTracing();
-  absl::Status DisableApiTracing();
+  bool registered_{false};
+  void endTracing();
 
-  absl::Status EnableActivityTracing();
-  absl::Status DisableActivityTracing();
+  static void api_callback(rocprofiler_callback_tracing_record_t record,
+    rocprofiler_user_data_t* user_data,
+    void* callback_data);
+
+  static void code_object_callback(
+    rocprofiler_callback_tracing_record_t record,
+    rocprofiler_user_data_t* user_data,
+    void* callback_data);
+
+  uint32_t maxBufferSize_{1000000}; // 1M GPU runtime/kernel events
 
   int num_gpus_;
-  std::optional<RocmTracerOptions> options_;
-  RocmTraceCollector* collector_ = nullptr;
+
 
   bool api_tracing_enabled_ = false;
   bool activity_tracing_enabled_ = false;
 
-  RocmApiCallbackImpl* api_cb_impl_;
-  RocmActivityCallbackImpl* activity_cb_impl_;
 
   class PendingActivityRecords {
    public:
@@ -191,7 +156,7 @@ class RocmTracer {
       absl::MutexLock lock(&mutex);
       return pending_set.size();
     }
-
+  
    private:
     // set of co-relation ids for which the hcc activity record is pending
     absl::flat_hash_set<uint32_t> pending_set;
