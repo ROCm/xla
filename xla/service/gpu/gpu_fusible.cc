@@ -865,7 +865,9 @@ std::vector<HloComputation*> GetFusibleComputations(
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   auto result = module.MakeComputationPostOrder(execution_threads);
   absl::flat_hash_set<const HloComputation*> computations_not_to_fuse;
+  // for each hlo computation in the hlo module
   for (const auto* computation : result) {
+    // for each hlo instruction in the hlo computation
     for (const auto* instr : computation->instructions()) {
       // Don't fuse within called computations, unless they are for control
       // flow. See also fusion_wrapper.cc, which does the same.

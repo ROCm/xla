@@ -1076,8 +1076,10 @@ FusionDecision PriorityFusion::CanFuseConstant(const HloInstruction* constant,
 absl::StatusOr<bool> PriorityFusion::Run(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
-  bool dump_enabled =
-      DumpingEnabledForHloPass(name(), module->config().debug_options());
+  LOG(INFO) << "Enter PriorityFusion::Run()...";
+  // bool dump_enabled =
+  //     DumpingEnabledForHloPass(name(), module->config().debug_options());
+  bool dump_enabled = true; // force to dump priority_fusion pass
   if (dump_enabled) {
     fusion_process_dump_ = std::make_unique<FusionProcessDumpProto>();
     *fusion_process_dump_->mutable_gpu_device_info() =
