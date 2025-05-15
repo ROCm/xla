@@ -2177,7 +2177,7 @@ ENTRY test {
 ; CHECK-DAG:         "precision_config":{
 ; CHECK-DAG:           "operand_precision":["DEFAULT","DEFAULT"]
 ; CHECK-DAG:         }
-; CHECK-DAG:         "epilogue":"SWISH"
+; CHECK-DAG:         "epilogue":"SILU"
 ; CHECK:           }
       )");
 }
