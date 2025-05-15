@@ -66,6 +66,7 @@ cc_library(
         "optimize_loops.cc",
         "peel_loops.cc",
         "propagate_slice_indices.cc",
+        "recover_exp2.cc",
         "simplify_affine.cc",
         "simplify_arith.cc",
         "unswitch_loops.cc",

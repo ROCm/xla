@@ -57,6 +57,7 @@ std::unique_ptr<mlir::Pass> CreateOptimizeLoopsPass();
 std::unique_ptr<mlir::Pass> CreateFuseLoopsPass();
 std::unique_ptr<mlir::Pass> CreatePeelLoopsPass();
 std::unique_ptr<mlir::Pass> CreatePropagateSliceIndicesPass();
+std::unique_ptr<mlir::Pass> CreateRecoverExp2Pass();
 std::unique_ptr<mlir::Pass> CreateSimplifyAffinePass();
 std::unique_ptr<mlir::Pass> CreateSimplifyArithPass();
 std::unique_ptr<mlir::Pass> CreateUnswitchLoopsPass();
