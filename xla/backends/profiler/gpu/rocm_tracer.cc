@@ -146,7 +146,7 @@ class RocprofLoggerShared {
   rocprofiler_tool_configure_result_t cfg = {
       sizeof(rocprofiler_tool_configure_result_t),
       &RocmTracer::toolInit,
-      &RocmTracer::toolFinalize,  // NOTE: spell exactly as in header.
+      &RocmTracer::toolFinalize, 
       nullptr };
 
   // Contexts ----------------------------------------------------------
@@ -257,7 +257,12 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t /*fini_func*/, void* /*to
   return 0;
 }
 
-// void RocmTracer::toolFinalize(void* /*tool_data*/) { return 0; }
+void RocmTracer::toolFinalize(void* tool_data) {
+  se::wrap::rocprofiler_stop_context(g_shared->utilityContext);
+  g_shared->utilityContext.handle = 0;
+  se::wrap::rocprofiler_stop_context(g_shared->context);
+  g_shared->context.handle = 0;
+}
 
 void RocmTracer::Disable() { LOG(INFO) << "GpuTracer stopped"; }
 
@@ -289,12 +294,12 @@ std::vector<rocprofiler_agent_v0_t> GetGpuDeviceAgents() {
 }
 
 // ----------------------------------------------------------------------------
-// C‑linkage entry‑point expected by rocprofiler.
+// C‑linkage entry‑point expected by rocprofiler-sdk.
 // ----------------------------------------------------------------------------
 extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
     uint32_t version, const char* runtime_version, uint32_t priority,
     rocprofiler_client_id_t* id) {
-  RocprofLoggerShared::Singleton();  // Ensure constructed.
+  RocprofLoggerShared::Singleton();  // Ensure constructed, critical for tracing.
 
   id->name = "XLA-with-rocprofiler-sdk";
   g_shared->clientId = id;
