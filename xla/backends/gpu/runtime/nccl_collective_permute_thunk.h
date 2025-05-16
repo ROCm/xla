@@ -104,7 +104,6 @@ class NcclCollectivePermuteStartThunk : public NcclCollectiveThunk {
                                   const std::vector<Buffer>& buffers,
                                   bool p2p_memcpy_enabled);
   absl::Status Initialize(const InitializeParams& params) override;
-  absl::Status Cleanup(const CleanupParams& params) override;
 
   static const char* GetHloOpName() { return "collective-permute-start"; }
 
@@ -119,7 +118,8 @@ class NcclCollectivePermuteStartThunk : public NcclCollectiveThunk {
   std::vector<Buffer> buffers_;
   RecvPtrMap recv_ptr_map_;
   absl::Mutex barrier_mutex_;
-  std::unordered_map<int64_t, uint8_t> barrier_flags_;
+  std::unordered_map<int64_t, std::unique_ptr<se::Event>>
+      receiver_barrier_events_;
   bool p2p_memcpy_enabled_ = false;
   int64_t device_count_;
 };
