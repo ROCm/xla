@@ -232,6 +232,32 @@ absl::StatusOr<ExecutionOutput> Executable::ExecuteAsyncOnStreamWrapper(
   return return_value;
 }
 
+void ScopedShapedBuffer::Deallocate() {
+  // allocator_ will be null if we were moved-from.
+  if (allocator_ == nullptr) {
+    return;
+  }
+  // Deallocate all non-null buffers. A buffer may appear in more than one spot
+  // in the shape (eg, a tuple with a repeated element) so keep track of what
+  // has been deallocated.
+  absl::flat_hash_set<void*> deallocated_ptrs;
+  for (auto& pair : buffers_) {
+    se::DeviceMemoryBase& memory_base = pair.second;
+    if (!memory_base.is_null() &&
+        deallocated_ptrs.insert(memory_base.opaque()).second) {
+      if (parent_exec_ != nullptr && 
+             parent_exec_->IsBufferCached(device_ordinal(), memory_base)) {
+        //VLOG(0) << this << " dev" << device_ordinal() 
+                  << " NOT deallocating " << memory_base.opaque() 
+                  << " sz " << memory_base.size();
+        continue;
+      }
+      TF_CHECK_OK(allocator_->Deallocate(device_ordinal(), memory_base));
+    }
+  }
+}
+
+
 int64_t Executable::SizeOfGeneratedCodeInBytes() const { return -1; }
 
 void Executable::MarkToBeReleasedArguments(absl::Span<ExecutionInput> arguments,

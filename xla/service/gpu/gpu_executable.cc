@@ -620,14 +620,13 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
   const int64_t buffer_size = allocation.size();
   if (buffer_size == 0) return se::DeviceMemoryBase{};
 
-  // HACK HACK
-  if (!enable_cached_allocs_ || (allocation.maybe_live_out() && false)) {
+  if (!enable_cached_allocs_) { //|| allocation.maybe_live_out()) {
     TF_ASSIGN_OR_RETURN(auto bbuf,
       memory_allocator->Allocate(device_ordinal, buffer_size,
                                    /*retry_on_failure=*/true,
                                    /*memory_space=*/allocation.color()));
-    VLOG(1) << "dev: " << device_ordinal << " idx: " << allocation.index() 
-            << " do not cache buf: " << bbuf->opaque();
+    VLOG(1) << this << " dev: " << device_ordinal << " idx: " << allocation.index() 
+            << " do not cache buf: " << bbuf->opaque() << " sz " << bbuf->size();
     return bbuf.Release();
   }
  
@@ -641,8 +640,8 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
       memory_allocator->Allocate(device_ordinal, buffer_size,
                                    /*retry_on_failure=*/true,
                                    /*memory_space=*/allocation.color()));
-    VLOG(1) << device_ordinal << "," << allocation.index() 
-          << " alloc sz: " << buffer_size << " ptr " << it->second->opaque()
+    VLOG(1) << this << " dev" << device_ordinal << "," << allocation.index() 
+          << " cached alloc sz: " << buffer_size << " ptr " << it->second->opaque()
           << " live_out: " << allocation.maybe_live_out()
           << " IsPreallocatedTempBuffer: " << allocation.IsPreallocatedTempBuffer();
 
@@ -784,6 +783,8 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
   }();
 
   result.MutableResult()->parent_exec_ = this;
+  // VLOG(0) << this << " dev" <<  executor->device_ordinal() << 
+  //     " setting exec for result buf: " << result.MutableResult();
 
   for (auto& [index, result_buffer] : result.MutableResult()->buffers()) {
     if (!output_info_.contains(index)) {
@@ -937,14 +938,15 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
   return std::move(result);
 }
 
-bool GpuExecutable::IsBufferCached(se::DeviceMemoryBase buf) const {
+bool GpuExecutable::IsBufferCached(int device_id, se::DeviceMemoryBase buf) const {
+  absl::MutexLock _(&module_handle_mutex_);
   for (const auto& [a,b] : cached_mem_allocations_) {
-    if (b.cref() == buf) {
-      //VLOG(1) << "Buffer " << buf.opaque() << " sz " << buf.size() << " is cached";
+    if (std::get<0>(a) == device_id && b.cref() == buf) {
+      //VLOG(1) << this << " buf " << buf.opaque() << " sz " << buf.size() << " is cached";
       return true;
     }
   }
-  //VLOG(1) << "Buffer " << buf.opaque() << " sz " << buf.size() << " is NOT cached";
+  //VLOG(1) << this << " buf " << buf.opaque() << " sz " << buf.size() << " is NOT cached";
   return false;
 }
 

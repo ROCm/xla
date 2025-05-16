@@ -171,30 +171,13 @@ ShapedBuffer ScopedShapedBuffer::release() {
   return shaped_buffer;
 }
 
-void ScopedShapedBuffer::Deallocate() {
-  // allocator_ will be null if we were moved-from.
-  if (allocator_ == nullptr) {
-    return;
-  }
-  // Deallocate all non-null buffers. A buffer may appear in more than one spot
-  // in the shape (eg, a tuple with a repeated element) so keep track of what
-  // has been deallocated.
-  absl::flat_hash_set<void*> deallocated_ptrs;
-  for (auto& pair : buffers_) {
-    se::DeviceMemoryBase& memory_base = pair.second;
-    if (!memory_base.is_null() &&
-        deallocated_ptrs.insert(memory_base.opaque()).second) {
-      TF_CHECK_OK(allocator_->Deallocate(device_ordinal(), memory_base));
-    }
-  }
-}
-
 ScopedShapedBuffer ScopedShapedBuffer::TakeSubTree(ShapeIndexView index) {
   const xla::Shape& sub_on_device_shape =
       xla::ShapeUtil::GetSubshape(on_device_shape(), {index});
 
   ScopedShapedBuffer output(sub_on_device_shape, memory_allocator(),
                             device_ordinal(), physical_device_ordinal());
+  output.parent_exec_ = parent_exec_;
   auto src_it = buffers().find(index);
   auto dst_it = output.buffers().begin();
   while (dst_it != output.buffers().end()) {

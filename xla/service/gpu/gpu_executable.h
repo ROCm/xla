@@ -166,7 +166,7 @@ class GpuExecutable : public Executable {
 
   const SequentialThunk& GetThunk() { return *thunks_; }
 
-  bool IsBufferCached(se::DeviceMemoryBase) const override;
+  bool IsBufferCached(int device_id, se::DeviceMemoryBase mem) const override;
 
   absl::Status FreeBufferAllocCache();
   
@@ -261,7 +261,7 @@ class GpuExecutable : public Executable {
 
   int64_t debug_buffer_assignment_show_max_;
 
-  absl::Mutex module_handle_mutex_;
+  mutable absl::Mutex module_handle_mutex_;
   // Cache of module handles. Required to keep loaded modules alive until this
   // executable is destroyed.
   absl::flat_hash_map<stream_executor::StreamExecutor*, se::ScopedModuleHandle>

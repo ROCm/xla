@@ -201,7 +201,8 @@ TrackedDeviceBuffer::FromScopedShapedBuffer(
         CHECK(iterator != shaped_buffer->buffers().end());
         auto exec = shaped_buffer->parent_exec_;
         // could it be that only several buffers are cached ?? probably not..
-        if (exec != nullptr && exec->IsBufferCached(iterator->second)) {
+        if (exec != nullptr && exec->IsBufferCached(
+                    shaped_buffer->device_ordinal(), iterator->second)) {
           allocator = nullptr;
           num_cached++;
         }
@@ -281,10 +282,6 @@ TrackedDeviceBuffer::TrackedDeviceBuffer(
       on_delete_callback_(std::move(on_delete_callback)) {}
 
 TrackedDeviceBuffer::~TrackedDeviceBuffer() {
-  // if (!device_memory_.empty()) {
-  //   VLOG(0) << "~TrackedDeviceBuffer allocator: " << allocator_ << 
-  //     " #bufs: " << device_memory_.size() << " -- " << device_memory_[0].opaque();
-  // }
   if (allocator_) {
     for (const se::DeviceMemoryBase& buffer : device_memory_) {
       absl::Status status =

@@ -413,7 +413,7 @@ class Executable {
     return {};
   }
 
-  virtual bool IsBufferCached(se::DeviceMemoryBase) const { return false; }
+  virtual bool IsBufferCached(int, se::DeviceMemoryBase) const { return false; }
 
  protected:
   // HloModule this was compiled from. BufferAssignment keeps pointers to
