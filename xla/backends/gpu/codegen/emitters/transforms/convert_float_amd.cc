@@ -156,10 +156,12 @@ struct RewriteFp8TruncFPattern : public Fp8OpRewritePattern<arith::TruncFOp> {
 
     mlir::Value input;
     mlir::Operation* to_match = vector.getDefiningOp();
+    llvm::APInt dummy;
     while (mlir::matchPattern(to_match, mlir::m_Op<vector::InsertOp>(
                                             mlir::m_Op<arith::TruncFOp>(
                                                 mlir::matchers::m_Any(&input)),
-                                            mlir::matchers::m_Any(&vector))) &&
+                                            mlir::matchers::m_Any(&vector),
+                                            mlir::m_ConstantInt(&dummy))) &&
            matchPos(mlir::cast<vector::InsertOp>(to_match), &pos) &&
            vector.hasOneUse()) {
       if (!addInput(input, pos)) {
@@ -174,7 +176,7 @@ struct RewriteFp8TruncFPattern : public Fp8OpRewritePattern<arith::TruncFOp> {
             insert->use_begin()->getOwner(),
             mlir::m_Op<vector::InsertOp>(
                 mlir::m_Op<arith::TruncFOp>(mlir::matchers::m_Any(&input)),
-                mlir::matchers::m_Val(insert->getResult(0)))) &&
+                mlir::matchers::m_Val(insert->getResult(0)),mlir::m_ConstantInt(&dummy))) &&
         matchPos(mlir::cast<vector::InsertOp>(insert->use_begin()->getOwner()),
                  &pos) &&
         input.getType() == value.getType()) {
@@ -242,9 +244,9 @@ struct RewriteFp8TruncFPattern : public Fp8OpRewritePattern<arith::TruncFOp> {
               to_ty,
               mlir::ValueRange{b.create<LLVM::BitcastOp>(
                   mlir::VectorType::get(num_elements, i8_ty),
-                  b.create<LLVM::ExtractElementOp>(
+		  b.create<LLVM::ExtractElementOp>(
                       b.create<LLVM::BitcastOp>(
-                          mlir::VectorType::get(2, b.getI16Type()), chunks),
+		      	  mlir::VectorType::get(2, b.getI16Type()), chunks),
                       b.create<LLVM::ConstantOp>(i32_ty, 0)))})
           .getResult(0);
     }
@@ -252,7 +254,7 @@ struct RewriteFp8TruncFPattern : public Fp8OpRewritePattern<arith::TruncFOp> {
     return b
         .create<mlir::UnrealizedConversionCastOp>(
             to_ty, mlir::ValueRange{b.create<LLVM::BitcastOp>(
-                       mlir::VectorType::get(num_elements, i8_ty), chunks)})
+		       mlir::VectorType::get(num_elements, i8_ty), chunks)})                  
         .getResult(0);
   }
 
@@ -445,14 +447,14 @@ struct RewriteFp8ExtFPattern : public Fp8OpRewritePattern<arith::ExtFOp> {
               b.create<LLVM::UndefOp>(mlir::VectorType::get(2, i16_ty)),
               b.create<LLVM::BitcastOp>(
                   i16_ty, b.create<mlir::UnrealizedConversionCastOp>(
-                               mlir::VectorType::get(num_elements, i8_ty),
+			       mlir::VectorType::get(num_elements, i8_ty),
                                mlir::ValueRange{value})
                               .getResult(0)),
               zero_cst));
     } else {
       chunks = b.create<LLVM::BitcastOp>(
           chunks_ty, b.create<mlir::UnrealizedConversionCastOp>(
-                          mlir::VectorType::get(num_elements, i8_ty),
+		          mlir::VectorType::get(num_elements, i8_ty),
                           mlir::ValueRange{value})
                          .getResult(0));
     }

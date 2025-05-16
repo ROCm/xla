@@ -127,9 +127,7 @@ class RocmComputeCapability {
     return has_ocp_fp8_support() || has_nanoo_fp8_support();
   }
 
-  bool has_ocp_fp8_support() const {
-    return gfx1200() || gfx1201() || gfx_version() == "gfx950";
-  }
+  bool has_ocp_fp8_support() const { return gfx1200() || gfx1201() || gfx_version() == "gfx950"; }
 
   bool has_nanoo_fp8_support() const { return gfx_version() == "gfx942"; }
 
@@ -154,7 +152,7 @@ class RocmComputeCapability {
       "gfx908",   // MI100
       "gfx90a",   // MI200
       "gfx942",   // MI300
-      "gfx950",   // MI355
+      "gfx950",  
       "gfx1030",  // RX68xx / RX69xx
       "gfx1100",  // RX7900
       "gfx1101", "gfx1200", "gfx1201",
