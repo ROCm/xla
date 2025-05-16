@@ -44,6 +44,42 @@ limitations under the License.
 namespace xla {
 namespace profiler {
 
+static constexpr int kMaxSymbolSize = 1024;
+
+std::string demangle(const char* name) {
+#ifndef _MSC_VER
+  if (!name) {
+    return "";
+  }
+
+  if (strlen(name) > kMaxSymbolSize) {
+    return name;
+  }
+
+  int status;
+  size_t len = 0;
+  char* demangled = abi::__cxa_demangle(name, nullptr, &len, &status);
+  if (status != 0) {
+    return name;
+  }
+  std::string res(demangled);
+  // The returned buffer must be freed!
+  free(demangled);
+  return res;
+#else
+  // TODO: demangling on Windows
+  if (!name) {
+    return "";
+  } else {
+    return name;
+  }
+#endif
+}
+
+std::string demangle(const std::string& name) {
+  return demangle(name.c_str());
+}
+
 // ----------------------------------------------------------------------------
 // Forward declarations / helpers
 // ----------------------------------------------------------------------------
@@ -265,6 +301,34 @@ void RocmTracer::toolFinalize(void* tool_data) {
 }
 
 void RocmTracer::Disable() { LOG(INFO) << "GpuTracer stopped"; }
+
+void RocmTracer::code_object_callback(
+  rocprofiler_callback_tracing_record_t record,
+  rocprofiler_user_data_t* user_data,
+  void* callback_data) {
+if (record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
+    record.operation == ROCPROFILER_CODE_OBJECT_LOAD) {
+  if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD) {
+    // flush the buffer to ensure that any lookups for the client kernel names
+    // for the code object are completed NOTE: not using buffer ATM
+  }
+} else if (
+    record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
+    record.operation ==
+        ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER) {
+  auto* data = static_cast<kernel_symbol_data_t*>(record.payload);
+  if (record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD) {
+    std::lock_guard<std::mutex> lock(g_shared->kernel_lock);
+    g_shared->kernel_info.emplace(data->kernel_id, *data);
+    g_shared->kernel_names.emplace(data->kernel_id, demangle(data->kernel_name));
+  } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD) {
+    // FIXME: clear these?  At minimum need kernel names at shutdown, async
+    // completion
+    // g_shared->kernel_info.erase(data->kernel_id);
+    // g_shared->kernel_names.erase(data->kernel_id);
+  }
+}
+}
 
 // ----------------------------------------------------------------------------
 // Helper that returns all device agents (GPU + CPU for now).

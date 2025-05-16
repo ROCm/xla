@@ -31,6 +31,9 @@ limitations under the License.
 namespace xla {
 namespace profiler {
 
+std::string demangle(const char* name);
+std::string demangle(const std::string& name);
+
 // This class is used to store the correlation information for a single
 enum CorrelationDomain {
   begin,
@@ -110,7 +113,7 @@ class RocmTracer {
 
  protected:
   // protected constructor for injecting mock cupti interface for testing.
-  explicit RocmTracer() : num_gpus_(NumGpus()) {}
+  explicit RocmTracer() {}
 
  private:
   bool registered_{false};
