@@ -154,18 +154,16 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
       thunk->ForAllThunks([&num_nested](const Thunk*){
         num_nested++;
       });
-      VLOG(0) << "Found CmdBuf with " << num_nested << " nested commands";
+      VLOG(1) << "Found CmdBuf with " << num_nested << " nested commands";
       if (num_nested >= 5) { 
         enable_cached_allocs_ = true;
         break;
       }
     }
-  }
+  } // for
 }
 
 GpuExecutable::~GpuExecutable() {
-  
-  TF_CHECK_OK(FreeBufferAllocCache());
   if (has_module() && enable_debug_info_manager_) {
     XlaDebugInfoManager::Get()->UnregisterModule(module().unique_id());
   }
@@ -928,8 +926,10 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
   }
   }
 
-  // TF_RETURN_IF_ERROR(
-  //     buffer_allocations.TearDown(buffers_in_result, GetAllocations()));
+  if (!enable_cached_allocs_) {
+    TF_RETURN_IF_ERROR(
+      buffer_allocations.TearDown(buffers_in_result, GetAllocations()));
+  }
 
   // Free allocations for arguments.
   if (auto args = std::get_if<absl::Span<ExecutionInput>>(&arguments)) {
@@ -948,19 +948,6 @@ bool GpuExecutable::IsBufferCached(int device_id, se::DeviceMemoryBase buf) cons
   }
   //VLOG(1) << this << " buf " << buf.opaque() << " sz " << buf.size() << " is NOT cached";
   return false;
-}
-
-absl::Status GpuExecutable::FreeBufferAllocCache() {
-  for (auto& [a,b] : cached_mem_allocations_) {
-    //int dev_id = std::get<0>(a);
-    // auto index = std::get<1>(a);
-    if (b.is_live_out) {
-      //VLOG(0) << std::this_thread::get_id() << " dev" << dev_id << " releasing mem ptr: " << b->opaque();
-      // HACK HACK
-      //b.Release(); // this buffer is not owned by us -> could already be deallocated
-    }
-  }
-  return absl::OkStatus();
 }
 
 int64_t GpuExecutable::SizeOfGeneratedCodeInBytes() const {

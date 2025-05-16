@@ -167,8 +167,6 @@ class GpuExecutable : public Executable {
   const SequentialThunk& GetThunk() { return *thunks_; }
 
   bool IsBufferCached(int device_id, se::DeviceMemoryBase mem) const override;
-
-  absl::Status FreeBufferAllocCache();
   
  private:
   // Use GpuExecutable::Create() to create an instance.

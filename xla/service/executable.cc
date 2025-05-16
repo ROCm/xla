@@ -248,8 +248,8 @@ void ScopedShapedBuffer::Deallocate() {
       if (parent_exec_ != nullptr && 
              parent_exec_->IsBufferCached(device_ordinal(), memory_base)) {
         //VLOG(0) << this << " dev" << device_ordinal() 
-                  << " NOT deallocating " << memory_base.opaque() 
-                  << " sz " << memory_base.size();
+                  // << " NOT deallocating " << memory_base.opaque() 
+                  // << " sz " << memory_base.size();
         continue;
       }
       TF_CHECK_OK(allocator_->Deallocate(device_ordinal(), memory_base));
