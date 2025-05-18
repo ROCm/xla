@@ -82,6 +82,10 @@ struct GemmConfig : public se::gpu::GemmConfig {
   // Size of the workspace based on NVIDIA recommendation:
   // https://docs.nvidia.com/cuda/cublas/#cublassetworkspace
   static constexpr int64_t kHopperWorkspace = 32 * 1024 * 1024;  // 32 MiB
+<<<<<<< HEAD
+=======
+  static constexpr int64_t kROCmStreamKWorkspace = 64 * 1024 * 1024;  // 64 MiB
+>>>>>>> 8b94b20ea4 (adjust workspace size for gfx942)
   static constexpr int64_t kDefaultWorkspace = 4 * 1024 * 1024;  // 4 MiB
   // the number of algorithms to consider for autotuning by default
   static constexpr int64_t kNumAlgorithms = 128;
