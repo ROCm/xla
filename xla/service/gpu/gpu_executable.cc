@@ -83,6 +83,7 @@ limitations under the License.
 #include "xla/stream_executor/sycl/sycl_platform_id.h"
 #include "xla/util.h"
 #include "tsl/platform/env.h"
+#include "xla/tsl/util/env_var.h"
 #include "tsl/platform/env_time.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/logging.h"
@@ -116,6 +117,16 @@ absl::StatusOr<std::unique_ptr<GpuExecutable>> GpuExecutable::Create(
   return std::unique_ptr<GpuExecutable>(new GpuExecutable(std::move(params)));
 }
 
+static int64_t GetBufferAllocTh()
+{
+  static int64_t value = [] {
+    int64_t value = 99999999; // this effectively disables cached allocs
+    tsl::ReadInt64FromEnvVar("XLA_BUFFER_ALLOC_CMD_BUF_TH", value, &value).IgnoreError();
+    return value;
+  }();
+  return value;
+}
+
 // Implementation note: HLO profiling is always enabled for GPU executables,
 // since we can use timers around thunks.
 GpuExecutable::GpuExecutable(GpuExecutable::Params params)
@@ -147,7 +158,10 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
     XlaDebugInfoManager::Get()->RegisterModule(shared_module(),
                                                buffer_assignment_->ToProto());
   }
-  enable_cached_allocs_ = false;
+  auto allocs_th = GetBufferAllocTh();
+  // cached allocs are unconditionally enabled if threshold is < 0
+  enable_cached_allocs_ = allocs_th < 0;
+  if (!enable_cached_allocs_)
   for (const auto& thunk : thunks_->thunks()) {
     if (thunk->kind() == Thunk::kCommandBuffer) {
       size_t num_nested = 0;
@@ -155,7 +169,7 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
         num_nested++;
       });
       VLOG(1) << "Found CmdBuf with " << num_nested << " nested commands";
-      if (num_nested >= 5) { 
+      if (num_nested >= static_cast< size_t>(allocs_th)) { 
         enable_cached_allocs_ = true;
         break;
       }
