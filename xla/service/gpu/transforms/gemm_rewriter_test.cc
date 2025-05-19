@@ -101,6 +101,7 @@ class GemmRewriteTest : public GpuCodegenTest {
     debug_options.set_xla_gpu_enable_triton_gemm(false);
     debug_options.set_xla_gpu_enable_cublaslt(false);
     debug_options.set_xla_gpu_gemm_rewrite_size_threshold(0);
+    debug_options.set_xla_gpu_enable_dot_strength_reduction(true);
     return debug_options;
   }
 
@@ -7904,7 +7905,7 @@ ENTRY main {
   // simplifier simplification which could turn the dot into a non-canonical dot
   // late in the pipeline, which will make it unsupported by the GemmRewriter.
   MatchOptimizedHlo(hlo_string, R"(
-  // CHECK: custom_call_target="__cublas$gemm"
+  // CHECK: custom_call_target="__cublas$lt$matmul"
   )");
 }
 
