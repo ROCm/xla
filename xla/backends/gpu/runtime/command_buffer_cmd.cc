@@ -88,6 +88,8 @@ limitations under the License.
 #include "tsl/platform/statusor.h"
 #include "tsl/profiler/lib/scoped_annotation.h"
 
+#define USE_COLLECTIVE_RENDEZVOUS 0
+
 namespace xla::gpu {
 
 using ExecutionScopeId = se::CommandBuffer::ExecutionScopeId;
@@ -494,6 +496,8 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     se::Stream* stream, TraceFunc trace_func) {
 
   if (entries_[0].command_buffer == nullptr) {
+    VLOG(1) << trace_cmd_->ToString() << " dev " << stream->parent()->device_ordinal() <<
+        " -- retracing !";
     TF_ASSIGN_OR_RETURN(
       entries_[0].command_buffer,
           se::TraceCommandBufferFactory::Create(stream, trace_func));
@@ -1596,6 +1600,9 @@ bool CollectiveCmd::IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_para
   auto *state = GetTracedBuffer(record_params);
   bool needed = state->
             IsGraphUpdateNeeded(execute_params.buffer_allocations, &nested_cmd);
+#if !USE_COLLECTIVE_RENDEZVOUS
+  return needed;
+#endif
 
   // if all nested_cmd pointers are non-null => we are fine even if some of 
   // them are cached => we just need to update the graph

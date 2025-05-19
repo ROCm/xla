@@ -44,8 +44,11 @@ limitations under the License.
 #include "tsl/profiler/lib/traceme.h"
 #include "tsl/profiler/lib/traceme_encode.h"
 
+// things to try: check the # of retraces
+// disable small updates, disable rendezvous..
+
 // Decide for each element of cmdBuf thunk if the update is needed
-#define USE_SMALL_CMDBUF_UPDATES 1
+#define USE_SMALL_CMDBUF_UPDATES 0
 
 namespace xla::gpu {
 
@@ -110,13 +113,13 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
     }
     auto& recorded = recorded_allocs[idx];
     if (!recorded.IsSameAs(alloc)) {
-      VLOG(0) << "Buffer alloc changed for: " << idx << ": " 
+      VLOG(1) << "Buffer alloc changed for: " << idx << ": " 
                << recorded.opaque() << " --> " << alloc.opaque();
       recorded = alloc;
       should_update = true;
     }
   }
-  VLOG(0) <<  params.stream->parent()->device_ordinal() << ": === ShouldUpdateCommandBuffer "
+  VLOG(1) <<  params.stream->parent()->device_ordinal() << ": === ShouldUpdateCommandBuffer "
       << params.collective_params->run_id.ToInt() 
       << " should_update " << should_update;
   // we now decide for each command individually if update is required!
