@@ -371,7 +371,7 @@ gpu_kernel_library(
         "@com_google_absl//absl/status:statusor",
         "@local_config_rocm//rocm:rocm_headers",
         "@local_config_rocm//rocm:rocm_config",
-    ]),
+    ],
 )
 
 gpu_only_cc_library(
