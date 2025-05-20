@@ -34,7 +34,6 @@ limitations under the License.
 #include <rocm/include/rocprofiler-sdk/cxx/name_info.hpp>
 #include <rocm/include/rocprofiler-sdk/rocprofiler.h>
 
-
 #include "tsl/platform/dso_loader.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/platform.h"
@@ -45,17 +44,17 @@ namespace wrap {
 #ifdef PLATFORM_GOOGLE
 
 #define ROCTRACER_API_WRAPPER(API_NAME)                            \
-  template <typename... Args>                                      \
-  auto API_NAME(Args... args) -> decltype((::API_NAME)(args...)) { \
+  template <typename... Args>                                       \
+  auto API_NAME(Args... args) -> decltype(::API_NAME(args...)) {    \
     return (::API_NAME)(args...);                                  \
   }
 
 #else
 
 #define ROCTRACER_API_WRAPPER(API_NAME)                                    \
-  template <typename... Args>                                              \
-  auto API_NAME(Args... args) -> decltype(::API_NAME(args...)) {           \
-    using FuncPtrT = std::add_pointer<decltype(::API_NAME)>::type;         \
+  template <typename... Args>                                               \
+  auto API_NAME(Args... args) -> decltype(::API_NAME(args...)) {            \
+    using FuncPtrT = std::add_pointer<decltype(::API_NAME)>::type;          \
     static FuncPtrT loaded = []() -> FuncPtrT {                            \
       static const char* kName = #API_NAME;                                \
       void* f;                                                             \
@@ -73,7 +72,8 @@ namespace wrap {
 
 #if TF_ROCM_VERSION >= 600000
 
-#define FOREACH_ROCTRACER_API(DO_FUNC)                          \ 
+// Define the FOREACH_ROCTRACER_API macro to apply ROCTRACER_API_WRAPPER to each API
+#define FOREACH_ROCTRACER_API(DO_FUNC)                          \
   DO_FUNC(rocprofiler_start_context)                            \
   DO_FUNC(rocprofiler_stop_context)                             \
   DO_FUNC(rocprofiler_create_context)                           \
@@ -95,9 +95,12 @@ namespace wrap {
   DO_FUNC(rocprofiler_iterate_buffer_tracing_kinds)             \
   DO_FUNC(rocprofiler_get_status_string)                        \
   DO_FUNC(rocprofiler_configure)                                \
-  DO_FUNC(rocprofiler_get_timestamp)                                                 
-#endif
+  DO_FUNC(rocprofiler_get_timestamp)
+
+// Apply the wrapper to each API
 FOREACH_ROCTRACER_API(ROCTRACER_API_WRAPPER)
+
+#endif  // TF_ROCM_VERSION >= 600000
 
 #undef FOREACH_ROCTRACER_API
 #undef ROCTRACER_API_WRAPPER
