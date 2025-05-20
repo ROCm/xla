@@ -82,6 +82,10 @@ struct GemmConfig : public se::gpu::GemmConfig {
   // Size of the workspace based on NVIDIA recommendation:
   // https://docs.nvidia.com/cuda/cublas/#cublassetworkspace
   static constexpr int64_t kHopperWorkspace = 32 * 1024 * 1024;  // 32 MiB
+<<<<<<< HEAD
+=======
+  static constexpr int64_t kGFX950Workspace = 72 * 1024 * 1024;  // 72 MiB
+>>>>>>> 3c1a80571f (fix compile error)
   static constexpr int64_t kDefaultWorkspace = 4 * 1024 * 1024;  // 4 MiB
 
   static absl::StatusOr<GemmConfig> For(
