@@ -1241,6 +1241,22 @@ absl::Status CublasLtCmd::Initialize(const Thunk::InitializeParams& params,
   return absl::OkStatus();
 }
 
+template < class NT >
+static void PrintBufferContents(
+    se::Stream* stream, se::DeviceMemoryBase buf) {
+  {
+    std::vector< NT > host_buffer(buf.size()/sizeof(NT));
+    CHECK_OK(stream->Memcpy(host_buffer.data(), buf, buf.size()));
+    CHECK_OK(stream->BlockHostUntilDone());
+
+    std::ostringstream oss;
+    for (auto e : host_buffer) {
+      oss << e << ", ";
+    }
+    VLOG(0) << "\nBUF = " << oss.str();
+  }
+}
+
 absl::Status CublasLtCmd::Record(const Thunk::ExecuteParams& execute_params,
                                  const RecordParams& record_params,
                                  se::CommandBuffer* command_buffer) {
@@ -1265,10 +1281,16 @@ absl::Status CublasLtCmd::Record(const Thunk::ExecuteParams& execute_params,
   VLOG(5) << "  d_amax_buffer: " << d_amax_.ToString();
   VLOG(5) << "  workspace_buffer: " << workspace_->ToString();
 
+
+  // auto C =   execute_params.buffer_allocations->GetDeviceAddress(c_);
+  // PrintBufferContents<float>(execute_params.command_buffer_trace_stream, C);
+
   return AddTracedCommandBuffer(
       execute_params, record_params, command_buffer, [&](se::Stream* stream) {
         return ExecuteOnStreamInternal(stream, execute_params);
       });
+  // PrintBufferContents<float>(execute_params.command_buffer_trace_stream, C);
+  // return s;
 }
 
 CommandBufferCmd::BufferUseVector CublasLtCmd::buffers() {
@@ -1301,6 +1323,54 @@ CommandBufferCmd::BufferUseVector CublasLtCmd::buffers() {
   if (d_amax_.allocation() != nullptr) {
     buffer_usage.push_back({d_amax_, MemoryAccess::kRead});
   }
+  return buffer_usage;
+}
+
+//===----------------------------------------------------------------------===//
+// ConvolutionCmd
+//===----------------------------------------------------------------------===//
+
+ConvolutionCmd::ConvolutionCmd(
+    ExecutionStreamId execution_stream_id, 
+    const ConvolutionThunk& conv_thunk)
+    : TracedCommandBufferCmd(CommandBufferCmdType::kConvolutionCmd,
+                             execution_stream_id),
+      ConvolutionThunk(conv_thunk) {}
+
+absl::Status ConvolutionCmd::Initialize(const Thunk::InitializeParams& params,
+                                     StateManager& state) {
+  // This shall populate runner cache, unless not yet created
+  TF_RETURN_IF_ERROR(ConvolutionThunk::Initialize(params));
+  return absl::OkStatus();
+}
+
+absl::Status ConvolutionCmd::Record(const Thunk::ExecuteParams& execute_params,
+                                 const RecordParams& record_params,
+                                 se::CommandBuffer* command_buffer) {
+  
+  ExecutionScopeId execution_scope_id = GetExecutionScope(record_params);
+
+  VLOG(5) << "ConvolutionCmd with execution_scope_id: "
+          << execution_scope_id.value();
+
+  return AddTracedCommandBuffer(
+      execute_params, record_params, command_buffer, [&](se::Stream* stream) {
+        return ExecuteOnStreamInternal(stream, execute_params);
+      });
+}
+
+CommandBufferCmd::BufferUseVector ConvolutionCmd::buffers() {
+  
+  BufferUseVector buffer_usage;
+  buffer_usage.reserve(operand_buffers_.size() + result_buffers_.size() + 1);
+
+  for (BufferAllocation::Slice buffer : operand_buffers_) {
+    buffer_usage.push_back({buffer, MemoryAccess::kRead});
+  }
+  for (BufferAllocation::Slice buffer : result_buffers_) {
+    buffer_usage.push_back({buffer, MemoryAccess::kWrite});
+  }
+  buffer_usage.push_back({scratch_buffer_, MemoryAccess::kWrite});
   return buffer_usage;
 }
 
@@ -1588,6 +1658,12 @@ absl::Status CollectiveCmd::Prepare(
       num_local_participants_,
       GetNumLocalParticipants(*params.collective_params,
                               config().replica_groups, config().group_mode));
+
+  // see nccl_collective_thunk.cc
+    // TF_ASSIGN_OR_RETURN(
+    //     size_t num_local_participants,
+    //     params.collective_cliques->num_communicators(clique_key));
+
   return resource_requests.AddClique(clique_key, num_local_participants_);
 }
 

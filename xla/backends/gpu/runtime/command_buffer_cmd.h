@@ -38,6 +38,7 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "xla/backends/gpu/collectives/gpu_clique_key.h"
 #include "xla/backends/gpu/runtime/custom_call_thunk.h"
+#include "xla/backends/gpu/runtime/convolution_thunk.h"
 #include "xla/backends/gpu/runtime/dynamic_slice_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_collective_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_collective_permute_thunk.h"
@@ -71,6 +72,7 @@ namespace xla::gpu {
   V(kLaunchCmd, "LaunchCmd")                             \
   V(kCustomKernelLaunchCmd, "CustomKernelLaunchCmd")     \
   V(kCublasLtCmd, "CublasLtCmd")                         \
+  V(kConvolutionCmd, "ConvolutionCmd")                   \
   V(kCuDnnCmd, "CuDnnCmd")                               \
   V(kGemmCmd, "GemmCmd")                                 \
   V(kMemcpyDeviceToDeviceCmd, "MemcpyDeviceToDeviceCmd") \
@@ -794,6 +796,28 @@ class CublasLtCmd : public TracedCommandBufferCmd,
  public:
   CublasLtCmd(ExecutionStreamId execution_stream_id, 
               const CublasLtMatmulThunk& matmul_thunk);
+
+  absl::Status Initialize(const Thunk::InitializeParams& params,
+                          StateManager& state) override;
+
+  absl::Status Record(const Thunk::ExecuteParams& execute_params,
+                      const RecordParams& record_params,
+                      se::CommandBuffer* command_buffer) override;
+
+  BufferUseVector buffers() override;
+
+  bool IsNestedCommandBuffer() const final { return true; }
+};
+
+//===----------------------------------------------------------------------===//
+// ConvolutionCmd
+//===----------------------------------------------------------------------===//
+
+class ConvolutionCmd : public TracedCommandBufferCmd,
+                    public ConvolutionThunk {
+ public:
+  ConvolutionCmd(ExecutionStreamId execution_stream_id, 
+              const ConvolutionThunk& conv_thunk);
 
   absl::Status Initialize(const Thunk::InitializeParams& params,
                           StateManager& state) override;

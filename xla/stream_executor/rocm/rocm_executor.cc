@@ -604,12 +604,12 @@ absl::Status RocmExecutor::Init() {
   TF_ASSIGN_OR_RETURN(rocm_context_,
                       RocmContext::Create(device_ordinal(), device_));
   TF_ASSIGN_OR_RETURN(version_, GetGpuISAVersion(device_));
-  // We initialize BLAS interfaces early here since otherwise it might create 
+  // We initialize BLAS & DNN interfaces early here since otherwise it might create 
   // us problems during hipBlasLt initialization under graph capture.
   // There is no real advantage of explicitly using 'lazy initialization' on 
   // ROCM platform because rocBLAS/hipBlasLt already use 'lazy initialization' 
   // internally
-  return InitBlas();
+  return InitMathLibs();
 }
 
 absl::StatusOr<std::unique_ptr<Kernel>> RocmExecutor::LoadKernel(
@@ -831,11 +831,18 @@ void RocmExecutor::DeallocateStream(Stream* stream) {
   alive_gpu_streams_.erase(rocm_stream->stream_handle());
 }
 
-absl::Status RocmExecutor::InitBlas() {
+absl::Status RocmExecutor::InitMathLibs() {
   PluginRegistry* registry = PluginRegistry::Instance();
-  TF_ASSIGN_OR_RETURN(auto factory, 
+  {
+    TF_ASSIGN_OR_RETURN(auto factory, 
       registry->GetFactory<PluginRegistry::BlasFactory>(rocm::kROCmPlatformId));
-  blas_.reset(factory(this));
+    blas_.reset(factory(this));
+  }
+  {
+    TF_ASSIGN_OR_RETURN(auto factory,
+      registry->GetFactory<PluginRegistry::DnnFactory>(rocm::kROCmPlatformId));
+    dnn_.reset(factory(this));
+  }
   return absl::OkStatus();
 }
 
@@ -844,23 +851,6 @@ blas::BlasSupport* RocmExecutor::AsBlas() {
 }
 
 dnn::DnnSupport* RocmExecutor::AsDnn() {
-  absl::MutexLock lock(&mu_);
-  if (dnn_ != nullptr) {
-    return dnn_.get();
-  }
-  PluginRegistry* registry = PluginRegistry::Instance();
-  absl::StatusOr<PluginRegistry::DnnFactory> status =
-      registry->GetFactory<PluginRegistry::DnnFactory>(rocm::kROCmPlatformId);
-  if (!status.ok()) {
-    LOG(ERROR) << "Unable to retrieve DNN factory: "
-               << status.status().message();
-    return nullptr;
-  }
-
-  auto dnn = status.value()(this);
-
-  dnn_.reset(dnn);
-
   return dnn_.get();
 }
 

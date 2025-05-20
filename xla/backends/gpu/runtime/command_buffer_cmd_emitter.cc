@@ -241,6 +241,10 @@ static absl::StatusOr<Command> Convert(const CuDnnThunk& thunk) {
                                     thunk.arguments(), thunk.graph());
 }
 
+static absl::StatusOr<Command> Convert(const ConvolutionThunk& thunk) {
+  return std::make_unique<ConvolutionCmd>(thunk.execution_stream_id(), thunk);
+}
+
 static absl::StatusOr<Command> Convert(const WaitForStreamsThunk& thunk) {
   return std::make_unique<BarrierCmd>(thunk.stream_id(),
                                       thunk.wait_for_stream_id());
@@ -317,6 +321,8 @@ static absl::Status AppendCommands(
       return append(Convert<WhileThunk>(thunk, synchronization_mode));
     case Thunk::Kind::kCuDnn:
       return append(Convert<CuDnnThunk>(thunk));
+    case Thunk::Kind::kConvolution:
+      return append(Convert<ConvolutionThunk>(thunk));
 
     // Sequential thunk does not have any special semantics and we simply inline
     // all nested thunks into command buffer.

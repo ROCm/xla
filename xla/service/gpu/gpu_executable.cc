@@ -98,10 +98,11 @@ namespace gpu {
 
 using ::tsl::profiler::ScopedAnnotation;
 
+namespace {
 // Returns the set of `ExecutionStreamIds` requested by all `Thunks` in the
 // `GpuExecutable`. At run time `Thunks` may use additional streams to launch
 // compute operations in parallel.
-static absl::flat_hash_set<ExecutionStreamId> GetExecutionStreamIds(
+absl::flat_hash_set<ExecutionStreamId> GetExecutionStreamIds(
     const SequentialThunk& thunks) {
   absl::flat_hash_set<ExecutionStreamId> stream_ids;
   thunks.ForAllThunks([&](const Thunk* thunk) {
@@ -112,12 +113,7 @@ static absl::flat_hash_set<ExecutionStreamId> GetExecutionStreamIds(
   return stream_ids;
 }
 
-absl::StatusOr<std::unique_ptr<GpuExecutable>> GpuExecutable::Create(
-    Params params) {
-  return std::unique_ptr<GpuExecutable>(new GpuExecutable(std::move(params)));
-}
-
-static int64_t GetBufferAllocTh()
+int64_t GetBufferAllocTh()
 {
   static int64_t value = [] {
     int64_t value = 99999999; // this effectively disables cached allocs
@@ -125,6 +121,13 @@ static int64_t GetBufferAllocTh()
     return value;
   }();
   return value;
+}
+
+} // namespace
+
+absl::StatusOr<std::unique_ptr<GpuExecutable>> GpuExecutable::Create(
+    Params params) {
+  return std::unique_ptr<GpuExecutable>(new GpuExecutable(std::move(params)));
 }
 
 // Implementation note: HLO profiling is always enabled for GPU executables,

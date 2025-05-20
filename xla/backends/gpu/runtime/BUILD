@@ -52,6 +52,7 @@ cc_library(
     deps = [
         ":annotation",
         ":custom_call_thunk",
+        ":convolution_thunk",
         ":dynamic_slice_thunk",
         ":gpublas_lt_matmul_thunk",
         ":nccl_all_gather_thunk",

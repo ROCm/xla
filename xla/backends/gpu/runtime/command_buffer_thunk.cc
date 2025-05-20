@@ -69,7 +69,7 @@ CommandBufferThunk::CommandBufferThunk(
     bool enable_command_buffers_during_profiling)
     : Thunk(Thunk::kCommandBuffer, std::move(thunk_info)),
       commands_(std::move(commands)),
-      thunks_(std::move(thunks)),
+      // thunks_(std::move(thunks)), // do not initialize thunks which 
       enable_command_buffers_during_profiling_(
           enable_command_buffers_during_profiling),
       state_(std::make_shared<State>()) {
@@ -220,17 +220,6 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
   // We might end up with empty command sequence if all of the captured fusions
   // are no-op (e.g. memcpy of size 0) and we have no emitted thunks for them.
   if (commands_.empty()) return absl::OkStatus();
-
-  // TODO(b/290773547): Profiler (CUPTI) + CUDA graphs lead to memory
-  // corruption. As a work around disable command buffers (CUDA graphs) and run
-  // everything in op-by-op mode.
-  if (tsl::profiler::ProfilerLock::HasActiveSession() && thunks_ &&
-      !enable_command_buffers_during_profiling_) {
-    VLOG(1) << "Execute command buffer thunk as a regular thunk sequence "
-               "because we detected active profiling session";
-    TF_RETURN_IF_ERROR(thunks_->ExecuteOnStream(params));
-    return absl::OkStatus();
-  }
 
   se::StreamExecutor* executor = params.stream->parent();
   TF_ASSIGN_OR_RETURN(std::shared_ptr<ExecutorCommandBuffer> cmd_buffer,
