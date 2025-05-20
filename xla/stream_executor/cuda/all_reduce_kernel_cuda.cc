@@ -21,16 +21,17 @@ limitations under the License.
 #include "xla/stream_executor/gpu/all_reduce_kernel_lib.cu.h"
 #include "xla/stream_executor/gpu/gpu_kernel_registry.h"
 
-#define REGISTER_ALL_REDUCE_KERNEL(TYPE)                                      \
-  GPU_KERNEL_REGISTRY_REGISTER_KERNEL_STATICALLY(                             \
-      AllReduceKernelCuda##TYPE, stream_executor::gpu::AllReduceKernel<TYPE>, \
-      stream_executor::cuda::kCudaPlatformId, ([] {                           \
-        stream_executor::MultiKernelLoaderSpec spec(4);                       \
-        spec.AddInProcessSymbol(                                              \
-            absl::bit_cast<void*>(                                            \
-                &stream_executor::gpu::AllReduceKernelImpl<TYPE>),            \
-            "one_shot_all_reduce_" #TYPE);                                    \
-        return spec;                                                          \
+#define REGISTER_ALL_REDUCE_KERNEL(SUFFIX, XLA_TYPE, NV_TYPE)         \
+  GPU_KERNEL_REGISTRY_REGISTER_KERNEL_STATICALLY(                     \
+      AllReduceKernelCuda##SUFFIX,                                    \
+      stream_executor::gpu::AllReduceKernel<XLA_TYPE>,                \
+      stream_executor::cuda::kCudaPlatformId, ([] {                   \
+        stream_executor::MultiKernelLoaderSpec spec(6);               \
+        spec.AddInProcessSymbol(                                      \
+            absl::bit_cast<void*>(                                    \
+                &stream_executor::gpu::AllReduceKernelImpl<NV_TYPE>), \
+            "one_shot_all_reduce_" #SUFFIX);                          \
+        return spec;                                                  \
       }));
 
 // Register the kernel for different types using the macro
