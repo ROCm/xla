@@ -187,7 +187,7 @@ class ScopedShapedBuffer : public ShapedBuffer {
   // ScopedShapedBuffer.
   se::DeviceMemoryAllocator* memory_allocator() const { return allocator_; }
 
-  Executable* parent_exec_ = nullptr;
+  std::vector< bool > alloc_cached_flag;
 
   // Sets the device memory buffer at the given index.
   //

@@ -196,19 +196,20 @@ TrackedDeviceBuffer::FromScopedShapedBuffer(
 
   auto *allocator = shaped_buffer->memory_allocator();
   size_t num_cached = 0, total = 0;
+  
+  bool cached_ok = !shaped_buffer->alloc_cached_flag.empty();
+  auto cached_it = shaped_buffer->alloc_cached_flag.begin();
+
   ShapeUtil::ForEachSubshape(
       shaped_buffer->on_device_shape(), [&](const Shape&, const ShapeIndex&) {
         CHECK(iterator != shaped_buffer->buffers().end());
-        auto exec = shaped_buffer->parent_exec_;
-        // could it be that only several buffers are cached ?? probably not..
-        if (exec != nullptr && exec->IsBufferCached(
-                    shaped_buffer->device_ordinal(), iterator->second)) {
+        if (cached_ok && *cached_it) {
           allocator = nullptr;
           num_cached++;
         }
         buffers.push_back(iterator->second);
         iterator->second = se::DeviceMemoryBase();
-        ++iterator, ++total;
+        ++iterator, ++total, ++cached_it;
       });
   
   if (num_cached != 0 && num_cached != total) {

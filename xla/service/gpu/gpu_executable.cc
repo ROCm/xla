@@ -797,11 +797,13 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
     return true;
   }();
 
-  result.MutableResult()->parent_exec_ = this;
+  auto& alloc_cached_flag = result.MutableResult()->alloc_cached_flag;
   // VLOG(0) << this << " dev" <<  executor->device_ordinal() << 
   //     " setting exec for result buf: " << result.MutableResult();
 
   for (auto& [index, result_buffer] : result.MutableResult()->buffers()) {
+
+    alloc_cached_flag.push_back(false);
     if (!output_info_.contains(index)) {
       continue;
     }
@@ -904,6 +906,7 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
       if(it != cached_mem_allocations_.end() && result_buffer == it->second.cref()) {
         //VLOG(0) << "Found liveout alloc matches: " << result_buffer.opaque();
         it->second.is_live_out = true;
+        alloc_cached_flag.back() = true;
       }
     }
     buffers_in_result.insert(result_buffer);
@@ -927,22 +930,6 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
         block_host_until_done, execution_stream_ids_));
   }
 
-  {
-  absl::MutexLock _(&module_handle_mutex_);
-  for(auto& [a,b] : cached_mem_allocations_) {
-    int dev_id = std::get<0>(a);
-    auto index = std::get<1>(a);
-    // VLOG(0) << dev_id << " cached mem ptr: " << buf->opaque() << " " << buf->size();
-    // for(const auto& bbf : buffers_in_result) {
-    //   VLOG(0) << bbf.opaque() << " sz: " << bbf.size();
-    // }
-    // if (buffers_in_result.count(buf.cref()) != 0) {
-    //   VLOG(0) << dev_id << " found Non freeing ptr: " << buf->opaque();
-    //   //TF_RETURN_IF_ERROR(b.Free()); // only free non-owned bufs
-    // }
-  }
-  }
-
   if (!enable_cached_allocs_) {
     TF_RETURN_IF_ERROR(
       buffer_allocations.TearDown(buffers_in_result, GetAllocations()));
@@ -955,17 +942,17 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
   return std::move(result);
 }
 
-bool GpuExecutable::IsBufferCached(int device_id, se::DeviceMemoryBase buf) const {
-  absl::MutexLock _(&module_handle_mutex_);
-  for (const auto& [a,b] : cached_mem_allocations_) {
-    if (std::get<0>(a) == device_id && b.cref() == buf) {
-      //VLOG(1) << this << " buf " << buf.opaque() << " sz " << buf.size() << " is cached";
-      return true;
-    }
-  }
-  //VLOG(1) << this << " buf " << buf.opaque() << " sz " << buf.size() << " is NOT cached";
-  return false;
-}
+// bool GpuExecutable::IsBufferCached(int device_id, se::DeviceMemoryBase buf) const {
+//   absl::MutexLock _(&module_handle_mutex_);
+//   for (const auto& [a,b] : cached_mem_allocations_) {
+//     if (std::get<0>(a) == device_id && b.cref() == buf) {
+//       //VLOG(1) << this << " buf " << buf.opaque() << " sz " << buf.size() << " is cached";
+//       return true;
+//     }
+//   }
+//   //VLOG(1) << this << " buf " << buf.opaque() << " sz " << buf.size() << " is NOT cached";
+//   return false;
+// }
 
 int64_t GpuExecutable::SizeOfGeneratedCodeInBytes() const {
   // Non-empty PTX but empty cubin: compilation must have failed, return
