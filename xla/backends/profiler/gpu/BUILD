@@ -259,6 +259,12 @@ tsl_gpu_library(
     ],
 )
 
+filegroup(
+    name = "rocm_tracer_cc",
+    srcs = ["rocm_tracer.cc"],
+    visibility = ["//xla/python:__pkg__"],
+)
+
 tsl_gpu_library(
     name = "rocm_tracer",
     srcs = if_rocm(["rocm_tracer.cc"]),

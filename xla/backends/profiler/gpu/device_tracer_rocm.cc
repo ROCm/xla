@@ -69,7 +69,7 @@ using tsl::profiler::XSpace;
 class GpuTracer : public profiler::ProfilerInterface {
  public:
   GpuTracer(RocmTracer* rocm_tracer) : rocm_tracer_(rocm_tracer) {
-    LOG(INFO) << "GpuTracer created.";
+    VLOG(-1) << "GpuTracer created.";
   }
   ~GpuTracer() override {}
 
@@ -100,12 +100,12 @@ absl::Status GpuTracer::DoStart() {
     return tsl::errors::Unavailable("Another profile session running.");
   }
 
-  AnnotationStack::Enable(true);
+  // AnnotationStack::Enable(true);
 
   // uint64_t start_gputime_ns = RocmTracer::GetTimestamp();
   // uint64_t start_walltime_ns = tsl::EnvTime::NowNanos();
  
-  // rocm_tracer_->Enable(tracer_options, rocm_trace_collector_.get());
+  rocm_tracer_->Enable();
 
   return absl::OkStatus();
 }
@@ -172,6 +172,7 @@ std::unique_ptr<profiler::ProfilerInterface> CreateGpuTracer(
 }
 
 auto register_rocm_gpu_tracer_factory = [] {
+  VLOG(-1) << "cj401 register_rocm_gpu_tracer_factory";
   RegisterProfilerFactory(&CreateGpuTracer);
   return 0;
 }();

@@ -1242,12 +1242,13 @@ tsl_pybind_extension(
 
 tsl_pybind_extension(
     name = "xla_extension",
-    srcs = ["xla.cc"],
+    srcs = ["xla.cc",
+            ],
     copts = [
         "-fexceptions",
         "-fno-strict-aliasing",
     ],
-    additional_exported_symbols = [
+    additional_exported_symbols = [  # optional if rocprofiler calls it
         "rocprofiler_configure",
     ],
     features = ["-use_header_modules"],
@@ -1269,6 +1270,7 @@ tsl_pybind_extension(
     pytype_srcs = glob(["xla_extension/*.pyi"]),
     visibility = ["//visibility:public"],
     deps = [
+        # "@local_config_rocm//rocm:rocprofiler_sdk",
         ":config",
         ":custom_call_sharding",
         ":dlpack",

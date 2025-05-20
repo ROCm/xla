@@ -117,12 +117,13 @@ class RocmTracer {
 
  private:
   bool registered_{false};
+
   void endTracing();
 
-  static void api_callback(rocprofiler_callback_tracing_record_t record,
+  static void api_callback(
+    rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t* user_data,
     void* callback_data);
-
   static void code_object_callback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t* user_data,
@@ -131,7 +132,10 @@ class RocmTracer {
   uint32_t maxBufferSize_{1000000}; // 1M GPU runtime/kernel events
 
   int num_gpus_;
+  std::mutex externalCorrelationsMutex_;
 
+  bool externalCorrelationEnabled_{true};
+  bool logging_{false};
 
   bool api_tracing_enabled_ = false;
   bool activity_tracing_enabled_ = false;
