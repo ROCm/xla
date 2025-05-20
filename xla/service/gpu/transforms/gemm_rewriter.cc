@@ -2423,8 +2423,6 @@ class GemmWorkspaceRewriteVisitor : public DfsHloRewriteVisitor {
       return absl::OkStatus();
     }
 
-    auto *cuda_cc = std::get_if<se::CudaComputeCapability>(&gpu_version_);
-
     // Pass a user-managed workspace to legacy cuBLAS operations, as
     // otherwise cuBLAS will use its own internal pool which will be competing
     // with XLA allocator for device memory.
