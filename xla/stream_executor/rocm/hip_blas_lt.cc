@@ -289,7 +289,7 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
   auto workspace = 128 * 1024 * 1024;
   for (const hipblasLtMatmulHeuristicResult_t& result : results) {
     auto needed_size=min(result.workspaceSize, workspace);
-    if ((result.state == HIPBLAS_STATUS_SUCCESS) && ( < workspace)){  // Skip failed algos.
+    if (result.state == HIPBLAS_STATUS_SUCCESS){  // Skip failed algos.
       algorithms.push_back({result.algo, needed_size});
     }
   }
