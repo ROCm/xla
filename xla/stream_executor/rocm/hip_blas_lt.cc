@@ -286,10 +286,10 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
   std::vector<MatmulAlgorithm> algorithms;
   algorithms.reserve(results.size());
   // HACK! Need in GPU_VERSION to compute
-  auto workspace = 128 * 1024 * 1024;
+  size_t workspace = 128 * 1024 * 1024;
   for (const hipblasLtMatmulHeuristicResult_t& result : results) {
-    auto needed_size=min(result.workspaceSize, workspace);
-    if (result.state == HIPBLAS_STATUS_SUCCESS){  // Skip failed algos.
+    auto needed_size=std::min(result.workspaceSize, workspace);
+    if (result.state == HIPBLAS_STATUS_SUCCESS) {  // Skip failed algos.
       algorithms.push_back({result.algo, needed_size});
     }
   }
