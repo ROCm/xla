@@ -404,9 +404,6 @@ cc_library(
 
 cc_library(
     name = "amd_comgr",
-    srcs = glob([
-        "%{rocm_root}/lib/libamd_comgr.so*",
-    ]),
     hdrs = glob(["%{rocm_root}/include/amd_comgr/**"]),
     include_prefix = "rocm",
     includes = [
