@@ -533,7 +533,7 @@ absl::StatusOr<std::vector<uint8_t>> CompileToHsaco(
     std::array<uint8_t, 32> lhash = sha256.final();
 
     std::ostringstream oss;
-    oss << std::hex << std::setw(8) << std::setfill('0');
+    oss << std::hex << std::setw(16) << std::setfill('0');
     auto *p64 = (uint64_t *)lhash.data();
     for (size_t i = 0; i < lhash.size()/8; i++) oss << p64[i];
     hash_str = oss.str();

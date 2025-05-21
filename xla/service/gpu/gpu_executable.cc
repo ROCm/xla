@@ -93,6 +93,12 @@ limitations under the License.
 #include "tsl/profiler/lib/scoped_annotation.h"
 #include "tsl/profiler/lib/traceme.h"
 
+namespace stream_executor {
+std::ostream& operator <<(std::ostream& os, const DeviceMemoryBase& m) {
+  return os << '(' << m.opaque() << " sz: " << m.size() << ')';
+}
+}
+
 namespace xla {
 namespace gpu {
 
@@ -116,7 +122,7 @@ absl::flat_hash_set<ExecutionStreamId> GetExecutionStreamIds(
 int64_t GetBufferAllocTh()
 {
   static int64_t value = [] {
-    int64_t value = 99999999; // this effectively disables cached allocs
+    int64_t value = -1; // this effectively disables cached allocs
     tsl::ReadInt64FromEnvVar("XLA_BUFFER_ALLOC_CMD_BUF_TH", value, &value).IgnoreError();
     return value;
   }();
@@ -161,12 +167,15 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
     XlaDebugInfoManager::Get()->RegisterModule(shared_module(),
                                                buffer_assignment_->ToProto());
   }
-  auto allocs_th = GetBufferAllocTh();
-  // cached allocs are unconditionally enabled if threshold is < 0
-  enable_cached_allocs_ = allocs_th < 0;
-  if (!enable_cached_allocs_)
-  for (const auto& thunk : thunks_->thunks()) {
-    if (thunk->kind() == Thunk::kCommandBuffer) {
+
+  // cached allocs are: always disabled if threshold is < 0
+  //                    always enabled if threshold is == 0
+  //                    decide for each module if > 0
+  int64_t allocs_th = GetBufferAllocTh();
+  enable_cached_allocs_ = allocs_th == 0;
+  if (allocs_th > 0) {
+    for (const auto& thunk : thunks_->thunks()) {
+      if (thunk->kind() != Thunk::kCommandBuffer) continue;
       size_t num_nested = 0;
       thunk->ForAllThunks([&num_nested](const Thunk*){
         num_nested++;
@@ -176,8 +185,12 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
         enable_cached_allocs_ = true;
         break;
       }
-    }
-  } // for
+    } // for
+  }
+  if (enable_cached_allocs_) {
+    // allocate at least for 8 devices
+    cached_mem_allocations_.resize(8);
+  }
 }
 
 GpuExecutable::~GpuExecutable() {
@@ -644,24 +657,23 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
             << " do not cache buf: " << bbuf->opaque() << " sz " << bbuf->size();
     return bbuf.Release();
   }
- 
-  absl::MutexLock lock(&module_handle_mutex_);
-  auto [it, inserted] = cached_mem_allocations_.emplace(
-     MemCacheKey{device_ordinal, allocation.index()}, 
-          CachedDeviceMem{});
+
+  auto& cache = get_allocs_cache(device_ordinal);
+  auto [it, inserted] = cache.emplace(allocation.index(), AllocationsCacheEntry{});
   if (inserted) {
     // NOTE: allocation is inside a mutex!!!
-    TF_ASSIGN_OR_RETURN(static_cast<se::OwningDeviceMemory&>(it->second),
+    TF_ASSIGN_OR_RETURN(it->second[0],
       memory_allocator->Allocate(device_ordinal, buffer_size,
                                    /*retry_on_failure=*/true,
                                    /*memory_space=*/allocation.color()));
     VLOG(1) << this << " dev" << device_ordinal << "," << allocation.index() 
-          << " cached alloc sz: " << buffer_size << " ptr " << it->second->opaque()
+          << " cached alloc: " << it->second[0].cref()
           << " live_out: " << allocation.maybe_live_out()
-          << " IsPreallocatedTempBuffer: " << allocation.IsPreallocatedTempBuffer();
+          << " IsTempBuffer: " << allocation.IsPreallocatedTempBuffer();
+  } else {
 
   }
-  return it->second.cref();
+  return it->second[0].cref();
 }
 
 static absl::Status CheckAlignment(const BufferAllocation& allocation,
@@ -699,10 +711,6 @@ absl::StatusOr<BufferAllocations> GpuExecutable::GenerateBufferAllocations(
   buffers.reserve(num_buffers);
   for (int64_t i = 0; i < num_buffers; ++i) {
     const BufferAllocation& allocation = allocations[i];
-    if (!(allocation.is_entry_computation_parameter() || allocation.is_constant())) {
-      // VLOG(0) << this << " dev" << device_ordinal << ": (" << allocation.index() << ", "
-      //       << allocation.size() << ") --> " << buffers.back().opaque();
-    }
     TF_ASSIGN_OR_RETURN(
         buffers.emplace_back(),
         BufferForAllocation(arguments, globals, allocation,
@@ -711,6 +719,21 @@ absl::StatusOr<BufferAllocations> GpuExecutable::GenerateBufferAllocations(
     //         << allocation.size() << ") --> " << buffers.back().opaque();
     TF_RETURN_IF_ERROR(CheckAlignment(allocation, buffers.back(), i));
   }
+
+  if (enable_cached_allocs_) { //|| allocation.maybe_live_out()) {
+    auto& cache = get_allocs_cache(device_ordinal);
+    for (int64_t i = 0; i < num_buffers; ++i) {
+      const BufferAllocation& alloc = allocations[i];
+      if (!(alloc.is_entry_computation_parameter() || 
+                                        alloc.is_constant())) continue;
+      for (const auto& [a,b] : cache) {
+        if (b[0].cref() == buffers[i] || b[1].cref() == buffers[i]) {
+          VLOG(0) << "Input buf: " << buffers[i] << " overlaps with " << b[0].cref();
+        }
+      }
+    }
+  }
+
   return {{buffers, device_ordinal, memory_allocator}};
 }
 
@@ -900,12 +923,10 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
     }
 
     {
-      absl::MutexLock _(&module_handle_mutex_);
-      auto idx = allocation->index();
-      auto it = cached_mem_allocations_.find(MemCacheKey{device_ordinal, idx});
-      if(it != cached_mem_allocations_.end() && result_buffer == it->second.cref()) {
+      auto& cache = get_allocs_cache(device_ordinal);
+      auto it = cache.find(allocation->index());
+      if(it != cache.end() && result_buffer == it->second[0].cref()) {
         //VLOG(0) << "Found liveout alloc matches: " << result_buffer.opaque();
-        it->second.is_live_out = true;
         alloc_cached_flag.back() = true;
       }
     }
@@ -941,18 +962,6 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
   }
   return std::move(result);
 }
-
-// bool GpuExecutable::IsBufferCached(int device_id, se::DeviceMemoryBase buf) const {
-//   absl::MutexLock _(&module_handle_mutex_);
-//   for (const auto& [a,b] : cached_mem_allocations_) {
-//     if (std::get<0>(a) == device_id && b.cref() == buf) {
-//       //VLOG(1) << this << " buf " << buf.opaque() << " sz " << buf.size() << " is cached";
-//       return true;
-//     }
-//   }
-//   //VLOG(1) << this << " buf " << buf.opaque() << " sz " << buf.size() << " is NOT cached";
-//   return false;
-// }
 
 int64_t GpuExecutable::SizeOfGeneratedCodeInBytes() const {
   // Non-empty PTX but empty cubin: compilation must have failed, return

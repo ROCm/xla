@@ -20,6 +20,7 @@ limitations under the License.
 #include <memory>
 #include <optional>
 #include <string>
+#include <deque>
 #include <variant>
 #include <vector>
 
@@ -78,6 +79,10 @@ class GpuExecutable : public Executable {
     std::optional<HloInputOutputAliasConfig::Alias> alias_config;
   };
 
+  // keep two memory alloc entries for each BufferAllocation for ping-ponging
+  using AllocationsCacheEntry = std::array<se::ScopedDeviceMemory<uint8_t>, 2>;
+  using AllocationsCache = absl::flat_hash_map< BufferAllocation::Index, 
+                                                AllocationsCacheEntry >;
   struct Params {
     std::string asm_text;
     std::vector<uint8_t> binary;
@@ -106,6 +111,14 @@ class GpuExecutable : public Executable {
   // This should be called before ExecuteOnStream.
   void set_ir_module_string(const std::string& ir_module_string) {
     ir_module_string_ = ir_module_string;
+  }
+
+  AllocationsCache& get_allocs_cache(int device_ordinal) {
+    absl::MutexLock lock(&module_handle_mutex_);
+    if (static_cast< size_t >(device_ordinal) >= cached_mem_allocations_.size()) {
+      cached_mem_allocations_.resize(device_ordinal + 1);
+    }
+    return cached_mem_allocations_[device_ordinal];
   }
 
   // Returns the compiled code for the computation.
@@ -203,6 +216,8 @@ class GpuExecutable : public Executable {
       se::DeviceMemoryAllocator* memory_allocator, int device_ordinal,
       int64_t arg_idx);
 
+
+
   // The LLVM IR, in string format, of the unoptimized module generated for
   // this GpuExecutable. We save a string instead of an llvm::Module* because
   // leaving llvm::Module* in a singleton can cause the heap checker to emit
@@ -267,17 +282,8 @@ class GpuExecutable : public Executable {
                       std::unique_ptr<BufferAllocToDeviceMemoryMap>>
       module_globals_ ABSL_GUARDED_BY(module_handle_mutex_);
 
-  // cache key consists of device ordinal, buffer alloc index and memory space
-  // bool - true if this is a persistent buf and should not be released
-  using MemCacheKey = std::tuple< int, BufferAllocation::Index >;
-
-  struct CachedDeviceMem : se::ScopedDeviceMemory<uint8_t> {
-    bool is_live_out = false;     // true if this buffer must not be owned by 
-                                  // the cache
-  };
-  absl::flat_hash_map< MemCacheKey, CachedDeviceMem > 
-            cached_mem_allocations_ ABSL_GUARDED_BY(module_handle_mutex_);
-
+  std::deque< AllocationsCache > cached_mem_allocations_ 
+                                        ABSL_GUARDED_BY(module_handle_mutex_);
   bool enable_cached_allocs_; // whether to use cached_mem_allocations_
 
   std::vector<ConstantInfo> constants_;
