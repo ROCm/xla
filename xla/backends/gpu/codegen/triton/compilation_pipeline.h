@@ -20,6 +20,7 @@ limitations under the License.
 
 #include "absl/status/status.h"
 #include "mlir/Pass/PassManager.h"
+#include "xla/stream_executor/device_description.h"
 
 namespace mlir::triton::nvidia_gpu {
 
@@ -30,6 +31,8 @@ struct ClusterInfo;
 
 namespace xla {
 namespace gpu {
+
+namespace se = ::stream_executor;
 
 // Creates a Triton compilation pipeline.
 //
