@@ -400,6 +400,7 @@ class RocprofLoggerShared {
 
   std::map<uint64_t, kernel_args> kernelargs;
   std::map<uint64_t, copy_args> copyargs;
+  std::mutex copyargs_lock;
 
  private:
   RocprofLoggerShared() { g_shared = this; }
@@ -574,6 +575,7 @@ if (record.kind == ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API) {
     // These will be used during dispatch and copy callbacks to complete
     // records
     if (isCopyApi(record.operation)) {
+      std::lock_guard<std::mutex> lock(g_shared->copyargs_lock);
       auto& args = g_shared->copyargs[record.correlation_id.internal];
       rocprofiler_iterate_callback_tracing_kind_operation_args(
           record,
@@ -615,7 +617,7 @@ if (record.kind == ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API) {
       // handled in copy callback
       // FIXME: do not remove here.  Used after the async operation
       // DO it anyway, wait for crash,  async SDMA should assert below
-      g_shared->copyargs.erase(record.correlation_id.internal);
+      // g_shared->copyargs.erase(record.correlation_id.internal);
     }
     // Malloc Records
     else if (isMallocApi(record.operation)) {
@@ -627,7 +629,7 @@ if (record.kind == ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API) {
           1 /*max_deref*/
           ,
           &args);
-      // rVLOG(-1) << "cj401 record = " << record.kind << " ";
+      // VLOG(-1) << "cj401 record = " << record.kind << " ";
       /*
       rocprofMallocRow* row = new rocprofMallocRow(
           record.correlation_id.internal,
@@ -681,11 +683,15 @@ else if (record.kind == ROCPROFILER_CALLBACK_TRACING_KERNEL_DISPATCH) {
       kind = kargs.kind;
       operation = kargs.operation;
     } else if (g_shared->copyargs.count(record.correlation_id.internal) > 0) {
+      // patching
+      std::lock_guard<std::mutex> lock(g_shared->copyargs_lock);
+      VLOG(-1) << "Processing copy-related dispatch for correlation ID: " << record.correlation_id.internal;
       // Grab the stream from the copy row instead
       auto& cargs = g_shared->copyargs.at(record.correlation_id.internal);
       stream = cargs.stream;
       kind = cargs.kind;
       operation = cargs.operation;
+      g_shared->copyargs.erase(record.correlation_id.internal);
     }
 
     // fetch up the timestamps
