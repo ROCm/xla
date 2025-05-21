@@ -37,13 +37,6 @@ class TritonGemmTest : public GpuCodegenTest {
         .gpu_compute_capability();
   }
 
-  void SetUp() override {
-    if (std::holds_alternative<se::RocmComputeCapability>(
-            GetGpuComputeCapability())) {
-      GTEST_SKIP() << "Not supported on ROCm until Triton is re-enabled.";
-    }
-  }
-
   DebugOptions GetDebugOptionsForTest() const override {
     DebugOptions debug_options = HloTestBase::GetDebugOptionsForTest();
     debug_options.set_xla_gpu_cublas_fallback(false);
@@ -52,6 +45,10 @@ class TritonGemmTest : public GpuCodegenTest {
 };
 
 TEST_F(TritonGemmTest, IndexUsing64Bits) {
+  if (std::holds_alternative<se::RocmComputeCapability>
+        (GetGpuComputeCapability())) {
+    GTEST_SKIP() << "Not enough memory to allocate on ROCm.";
+  }
   const char* kHloTextRef = R"(
 HloModule r
 
@@ -113,6 +110,10 @@ ENTRY e {
 }
 
 TEST_F(TritonGemmTest, LargeBatchWorks) {
+  if (std::holds_alternative<se::RocmComputeCapability>
+        (GetGpuComputeCapability())) {
+    GTEST_SKIP() << "Not enough memory to allocate on ROCm.";
+  }
   constexpr absl::string_view kHloText = R"(
 HloModule m
 
@@ -139,6 +140,13 @@ using TritonNormalizationTest = GpuCodegenTest;
 
 TEST_F(TritonNormalizationTest,
        CanEmitDiamondWithInputNumberOfElementsLargerThanInt32Max) {
+  auto cc = backend()
+        .default_stream_executor()
+        ->GetDeviceDescription()
+        .gpu_compute_capability();
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    GTEST_SKIP() << "Not enough memory to allocate on ROCm.";
+  }
   const std::string hlo_text = R"(
 HloModule softmax
 
