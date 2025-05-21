@@ -2525,11 +2525,11 @@ class GemmWorkspaceRewriteVisitor : public DfsHloRewriteVisitor {
     // with XLA allocator for device memory.
     int64_t workspace = GemmConfig::kDefaultWorkspace;
     auto *cuda_cc = std::get_if<se::CudaComputeCapability>(&gpu_version_);
-    if (cuda_cc != nullptr && cuda_cc->IsAtLeastHopper()) {
+    if ((cuda_cc != nullptr) && cuda_cc->IsAtLeastHopper()) {
       workspace = GemmConfig::kHopperWorkspace;
     }
     auto *rocm_cc = std::get_if<se::RocmComputeCapability>(&gpu_version_);
-    if (rocm_cc != nullptr && rocm_cc->gfx_version() == "gfx950") {
+    if ((rocm_cc != nullptr) && ((rocm_cc->gfx_version() == "gfx950") || (rocm_cc->gfx9_mi300()))){
       workspace = GemmConfig::kGFX950Workspace;
     }
 

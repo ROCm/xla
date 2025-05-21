@@ -173,7 +173,7 @@ absl::Status BlasLt::Init() {
   hipblasLtOrder_t order = m.order == gpu::MatrixLayout::Order::kColumnMajor ?
         HIPBLASLT_ORDER_COL : HIPBLASLT_ORDER_ROW;
   TF_RETURN_IF_ERROR(SetAttr(hip_layout, HIPBLASLT_MATRIX_LAYOUT_ORDER, order));
-  
+
   VLOG(2) << "BlasLt::MatrixLayout::Create type: " << (int)type
           << " rows: " << m.num_rows << " cols: " << m.num_cols
           << " batch_size: " << m.batch_size
@@ -219,7 +219,7 @@ absl::Status BlasLt::Init() {
   return std::move(desc);
 }
 
-auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream, 
+auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
                                        size_t max_algorithm_count,
                                        size_t max_workspace_size) const
     -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
@@ -285,9 +285,12 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
 
   std::vector<MatmulAlgorithm> algorithms;
   algorithms.reserve(results.size());
+  // HACK! Need in GPU_VERSION to compute
+  auto workspace = 128 * 1024 * 1024;
   for (const hipblasLtMatmulHeuristicResult_t& result : results) {
-    if (result.state == HIPBLAS_STATUS_SUCCESS) {  // Skip failed algos.
-      algorithms.push_back({result.algo, result.workspaceSize});
+    auto needed_size=min(result.workspaceSize, workspace);
+    if ((result.state == HIPBLAS_STATUS_SUCCESS) && ( < workspace)){  // Skip failed algos.
+      algorithms.push_back({result.algo, needed_size});
     }
   }
   return std::move(algorithms);
@@ -386,9 +389,9 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
                                       cfg.alpha, cfg.beta, must_swap_operands);
 }
 
-absl::Status BlasLt::MatmulPlan::DoMatmul(Stream* stream, const void* alpha, 
+absl::Status BlasLt::MatmulPlan::DoMatmul(Stream* stream, const void* alpha,
                           const void* beta, const gpu::BlasLt::MemoryArgs& args,
-                          blas::ProfileResult* profile_result) const 
+                          blas::ProfileResult* profile_result) const
 {
   if (!algorithm_.has_value()) {
     return absl::InternalError("Algorithm must be set before calling DoMatMul!");
@@ -422,6 +425,7 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(Stream* stream, const void* alpha,
     } else {
       workspace_addr = args.workspace.opaque();
       size_t new_size = args.workspace.size();
+      std::cerr << "addr: " << workspace_addr << " current size: " << workspace_size << " new size " << new_size << std::endl << std::flush;
       TF_RET_CHECK(workspace_addr != nullptr && new_size >= workspace_size);
       workspace_size = new_size;
     }
@@ -460,7 +464,7 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(Stream* stream, const void* alpha,
                                  args.d_scale.opaque()));
     }
 #else
-    if (!(args.a_scale == nullptr && args.b_scale == nullptr && 
+    if (!(args.a_scale == nullptr && args.b_scale == nullptr &&
           args.c_scale == nullptr && args.d_scale == nullptr)) {
       return absl::InternalError("hipblaslt does not support scale");
     }
@@ -507,8 +511,8 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(Stream* stream, const void* alpha,
   return absl::OkStatus();
 }
 
-absl::Status BlasLt::MatmulPlan::ExecuteOnStream(Stream* stream, 
-    const gpu::BlasLt::MemoryArgs& args, 
+absl::Status BlasLt::MatmulPlan::ExecuteOnStream(Stream* stream,
+    const gpu::BlasLt::MemoryArgs& args,
     blas::ProfileResult* profile_result) const {
 
   auto wrapped_matmul = [&](auto scale) {
@@ -518,7 +522,7 @@ absl::Status BlasLt::MatmulPlan::ExecuteOnStream(Stream* stream,
                     std::is_same_v<Scale, xla::complex128>) {
       salpha = static_cast<Scale>(alpha_);
     } else {
-      salpha = static_cast<Scale>(alpha_.real()); 
+      salpha = static_cast<Scale>(alpha_.real());
     }
     Scale sbeta = static_cast<Scale>(beta_);
     return DoMatmul(stream, &salpha, &sbeta, args, profile_result);
