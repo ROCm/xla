@@ -1916,6 +1916,10 @@ TEST_F(TritonEmitterTest,
   // reasonable amount of time, and has been proven to still correctly capture
   // the indexing overflow behaviour of the Triton fusion that we're checking
   // for.
+  if (std::holds_alternative<se::RocmComputeCapability>
+      (GpuComputeComp())) {
+    GTEST_SKIP() << "Not enough memory to allocate on ROCm.";
+  }
   constexpr absl::string_view kTritonHloText = R"(
 computation {
   p0 = s8[256]{0} parameter(0)
