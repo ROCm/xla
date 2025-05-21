@@ -73,9 +73,9 @@ class DotTest : public TritonSupportTestBaseWithParam {
  protected:
   se::GpuComputeCapability GetComputeCapability() {
     return backend()
-        .default_stream_executor()
-        ->GetDeviceDescription()
-        .gpu_compute_capability();
+      .default_stream_executor()
+      ->GetDeviceDescription()
+      .gpu_compute_capability();
   }
 
   void TestDotWithTypes(PrimitiveType lhs_type, PrimitiveType rhs_type,
@@ -146,6 +146,10 @@ ENTRY e {
 };
 
 TEST_P(DotTest, IsTritonSupportedExecutesCorrectlyForDot) {
+  if (std::holds_alternative<se::RocmComputeCapability>
+      (GetComputeCapability())) {
+    GTEST_SKIP() << "Not enough shared memory on ROCm.";
+  }
   PrimitiveType data_type;
   HloOpcode opcode;
   std::tie(data_type, opcode) = GetParam();
