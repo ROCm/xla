@@ -485,8 +485,6 @@ absl::Status NcclCollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
                /*terminate_timeout=*/absl::Seconds(40));
   }
 
-  TF_ASSIGN_OR_RETURN(std::vector<Communicator*> comms, GetCommunicators(params));
-  for (auto comm : comms) { delete comm; }
   return absl::OkStatus();
 }
 
