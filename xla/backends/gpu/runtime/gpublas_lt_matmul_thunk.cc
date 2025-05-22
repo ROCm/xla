@@ -50,19 +50,19 @@ struct MatmulPlanCache {
   }
 
   template < class Func >
-  absl::StatusOr<se::gpu::BlasLt::MatmulPlan *> 
+  absl::StatusOr<se::gpu::BlasLt::MatmulPlan *>
           GetOrCreate(const std::string& key, Func&& create) {
     // each GPU has a different mutex => hence different GPU instances can
     // create matmul plans in parallel
-    absl::MutexLock lock(&mutex_); 
+    absl::MutexLock lock(&mutex_);
     auto res = map_.emplace(key, se::gpu::BlasLt::MatmulPlanPtr{});
-    // New entry inserted: always create a new matmul plan if key is empty, 
+    // New entry inserted: always create a new matmul plan if key is empty,
     // this is used by command_buffer_thunk test.
-    if(res.second || key.empty()) { 
+    if(res.second || key.empty()) {
       VLOG(2) << "Creating a plan for: " << key;
       TF_ASSIGN_OR_RETURN(res.first->second, create());
       VLOG(2) << "Plan created: cache size: " << map_.size();
-    } 
+    }
     return res.first->second.get();
   }
 
@@ -77,7 +77,7 @@ private:
   absl::flat_hash_map<std::string, se::gpu::BlasLt::MatmulPlanPtr> map_;
 };
 
-CublasLtMatmulThunk::CublasLtMatmulThunk(const CublasLtMatmulThunk& rhs) 
+CublasLtMatmulThunk::CublasLtMatmulThunk(const CublasLtMatmulThunk& rhs)
     : Thunk(Kind::kCublasLtMatmul, {}),
       gemm_config_(rhs.gemm_config_),
       epilogue_(rhs.epilogue_),
@@ -102,7 +102,7 @@ CublasLtMatmulThunk::CublasLtMatmulThunk(
     BufferAllocation::Slice c_scale, BufferAllocation::Slice d_scale,
     BufferAllocation::Slice d_amax,
     std::optional<const BufferAllocation::Slice> workspace)
-    : Thunk(Kind::kCublasLtMatmul, 
+    : Thunk(Kind::kCublasLtMatmul,
           instr ? Thunk::ThunkInfo::WithProfileAnnotation(instr) :
                   Thunk::ThunkInfo{}),
       gemm_config_(std::move(gemm_config)),
@@ -116,7 +116,7 @@ CublasLtMatmulThunk::CublasLtMatmulThunk(
       d_scale_(d_scale),
       d_amax_(d_amax),
       workspace_(workspace) {
-  // The tests creating CublasLtMatmulThunk directly might not provide the 
+  // The tests creating CublasLtMatmulThunk directly might not provide the
   // pointer to the actual instruction, in this case Matmul plans are not cached.
   if (instr != nullptr) {
     canonical_hlo_ = xla::gpu::AutotuneCacheKey("unused", *instr).GetHlo();
@@ -131,7 +131,7 @@ std::string CublasLtMatmulThunk::ToString(int indent) const {
   return "BlasLtGemm " + gemm_config_.ToString();
 }
 
-absl::Status CublasLtMatmulThunk::ExecuteOnStreamInternal(se::Stream *stream, 
+absl::Status CublasLtMatmulThunk::ExecuteOnStreamInternal(se::Stream *stream,
                                                 const ExecuteParams& params) {
 
   TF_ASSIGN_OR_RETURN(auto *plan, GetCachedMatmulPlan(params));
@@ -139,7 +139,7 @@ absl::Status CublasLtMatmulThunk::ExecuteOnStreamInternal(se::Stream *stream,
   VLOG(3) << "Running cublas_lt matmul thunk";
   const BufferAllocations& allocs = *params.buffer_allocations;
 
-  se::DeviceMemoryBase bias, a_scale, b_scale, c_scale, d_scale, d_amax, 
+  se::DeviceMemoryBase bias, a_scale, b_scale, c_scale, d_scale, d_amax,
                        aux, workspace;
   if (bias_.allocation() != nullptr) {
     bias = allocs.GetDeviceAddress(bias_);
@@ -178,7 +178,7 @@ auto CublasLtMatmulThunk::GetCachedMatmulPlan(
 
   auto create = [&]() -> absl::StatusOr<se::gpu::BlasLt::MatmulPlanPtr>  {
     VLOG(2) << this << ": Adding new MatmulPlan for stream: " << params.stream;
-    
+
     TF_ASSIGN_OR_RETURN(auto plan, se::gpu::BlasLt::GetMatmulPlan(
                 params.stream, gemm_config_, epilogue_));
     // if workspace buffer is not provided, consider onlt the algorithms which
@@ -194,7 +194,7 @@ auto CublasLtMatmulThunk::GetCachedMatmulPlan(
 
     if (static_cast< size_t >(algorithm_idx_) >= algorithms.size()) {
       return absl::InternalError(absl::StrFormat(
-            "Wrong algorithm index: %d, total algorithms found: %z",
+            "Wrong algorithm index: %d, total algorithms found: %lu",
             algorithm_idx_, algorithms.size()));
     }
     TF_RETURN_IF_ERROR(plan->SetAlgorithm(algorithms[algorithm_idx_]));
