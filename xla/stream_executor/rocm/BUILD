@@ -699,6 +699,7 @@ cc_library(
     ] + if_static([
         ":hipblaslt_if_static",
     ]),
+    linkopts = ["/opt/rocm/lib/libhipblaslt.so"],
     alwayslink = True,
 )
 

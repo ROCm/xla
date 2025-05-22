@@ -35,65 +35,25 @@ class BlasLt : public gpu::BlasLt {
       std::unique_ptr<std::remove_pointer_t<T>, hipblasStatus_t (*)(T)>;
 
  public:
-  struct MatrixLayout {
-    static absl::StatusOr<MatrixLayout> Create(const gpu::MatrixLayout& m);
-
-    hipDataType type() const { return datatype_; }
-    hipblasLtMatrixLayout_t get() const { return handle_.get(); }
-
-   private:
-    MatrixLayout(hipblasLtMatrixLayout_t handle, hipDataType datatype)
-        : handle_(handle, wrap::hipblasLtMatrixLayoutDestroy),
-          datatype_(datatype) {}
-
-    Owned<hipblasLtMatrixLayout_t> handle_;
-    hipDataType datatype_;
-  };
-
-  class MatmulDesc {
-   public:
-    static absl::StatusOr<MatmulDesc> Create(
-        blas::ComputationType compute_type, blas::DataType scale_type,
-        blas::Transpose trans_a = blas::Transpose::kNoTranspose,
-        blas::Transpose trans_b = blas::Transpose::kNoTranspose,
-        Epilogue epilogue = Epilogue::kDefault,
-        PointerMode pointer_mode = PointerMode::kHost);
-
-    hipblasComputeType_t compute_type() const { return compute_type_; }
-    hipDataType scale_type() const { return datatype_; }
-    bool has_bias_epilogue() const { return has_bias_epilogue_; }
-    hipblasPointerMode_t pointer_mode() const {
-      return HIPBLAS_POINTER_MODE_HOST;
-    }
-    hipblasLtMatmulDesc_t get() const { return handle_.get(); }
-
-   private:
-    MatmulDesc(hipblasLtMatmulDesc_t handle, hipblasComputeType_t compute_type,
-               hipDataType datatype, bool bias_epilogue)
-        : handle_(handle, wrap::hipblasLtMatmulDescDestroy),
-          compute_type_(compute_type),
-          datatype_(datatype),
-          has_bias_epilogue_(bias_epilogue) {}
-
-    Owned<hipblasLtMatmulDesc_t> handle_;
-    hipblasComputeType_t compute_type_;
-    hipDataType datatype_;
-    bool has_bias_epilogue_;
-  };
+  using Scale = std::variant< float, double, xla::complex64, xla::complex128 >;
 
   struct MatmulPlan : public gpu::BlasLt::MatmulPlan {
-    MatmulPlan(MatmulDesc&& op_desc,
-               MatrixLayout&& a_desc, MatrixLayout&& b_desc,
-               MatrixLayout&& c_desc, MatrixLayout&& d_desc,
-               xla::complex128 alpha, double beta, bool must_swap_operands)
-        : op_desc_(std::move(op_desc)),
-          a_desc_(std::move(a_desc)),
-          b_desc_(std::move(b_desc)),
-          c_desc_(std::move(c_desc)),
-          d_desc_(std::move(d_desc)),
-          alpha_(alpha),
-          beta_(beta),
-          must_swap_operands_(must_swap_operands) {}
+
+    struct Config {
+      int64_t m, n, k, batch_count;
+      int64_t lda, ldb, ldc, ldd;
+      int64_t strideA, strideB, strideC, strideD;
+      hipblaslt_ext::GemmEpilogue epilogue;
+    };
+
+    MatmulPlan(hipblaslt_ext::Gemm&& gemm,
+               const Config& cfg,
+               Scale alpha, Scale beta,
+               bool must_swap_operands)
+        : gemm_(std::move(gemm)), cfg_(cfg),
+          alpha_(alpha), beta_(beta),
+          must_swap_operands_(must_swap_operands),
+          algorithm_is_dirty_(true) {}
 
     ~MatmulPlan() override = default;
 
@@ -105,27 +65,20 @@ class BlasLt : public gpu::BlasLt {
         const Stream* stream, size_t max_algorithm_count, 
         size_t max_workspace_size) const override;
 
-    absl::Status SetAlgorithm(const MatmulAlgorithm& algorithm) const override {
-      algorithm_ = algorithm;
-      return absl::OkStatus();
-    }
+    absl::Status SetAlgorithm(const MatmulAlgorithm& algorithm) override;
 
-   protected:
-    absl::Status DoMatmul(Stream* stream, const void* alpha, 
-                          const void* beta, const gpu::BlasLt::MemoryArgs& args,
-                          blas::ProfileResult* profile_result) const;
+  protected:
+    absl::Status MaybeSetMemoryArgs(
+        const gpu::BlasLt::MemoryArgs& args) const;
 
-   private:
-    // TODO(cjfj): Add consistency checks for types, shapes, etc.?
-    MatmulDesc op_desc_;
-    MatrixLayout a_desc_;
-    MatrixLayout b_desc_;
-    MatrixLayout c_desc_;
-    MatrixLayout d_desc_;
-    xla::complex128 alpha_;
-    double beta_;
+  private:
+    mutable hipblaslt_ext::Gemm gemm_;
+    mutable Config cfg_;
+    Scale alpha_, beta_;
     bool must_swap_operands_;
-    mutable std::optional< MatmulAlgorithm > algorithm_; // selected algorithm
+    mutable bool algorithm_is_dirty_;
+    mutable std::optional<MatmulAlgorithm> algorithm_;  // selected algorithm
+    mutable gpu::BlasLt::MemoryArgs saved_args_;
   };  // class MatmulPlan
 
   explicit BlasLt(StreamExecutor* parent)
