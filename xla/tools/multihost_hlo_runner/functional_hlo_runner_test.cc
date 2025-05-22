@@ -213,7 +213,7 @@ TEST_F(FunctionalHloRunnerTest, shard8) {
 
   TF_EXPECT_OK(FunctionalHloRunner::LoadAndRunAndDump(
       *client, debug_options, preproc_options, raw_compile_options,
-      running_options, {"/tf/xla/input.hlo"},
+      running_options, {"input.hlo"},
       InputFormat::kText));
 }
 
@@ -246,7 +246,7 @@ TEST_F(FunctionalHloRunnerTest, shard4) {
 
   TF_EXPECT_OK(FunctionalHloRunner::LoadAndRunAndDump(
       *client, debug_options, preproc_options, raw_compile_options,
-      running_options, {"/tf/xla/input.hlo"},
+      running_options, {"input.hlo"},
       InputFormat::kText));
 }
 
@@ -279,7 +279,7 @@ TEST_F(FunctionalHloRunnerTest, shard2) {
 
   TF_EXPECT_OK(FunctionalHloRunner::LoadAndRunAndDump(
       *client, debug_options, preproc_options, raw_compile_options,
-      running_options, {"/tf/xla/input.hlo"},
+      running_options, {"input.hlo"},
       InputFormat::kText));
 }
 
@@ -312,7 +312,7 @@ TEST_F(FunctionalHloRunnerTest, rep) {
 
   TF_EXPECT_OK(FunctionalHloRunner::LoadAndRunAndDump(
       *client, debug_options, preproc_options, raw_compile_options,
-      running_options, {"/tf/xla/input.hlo"},
+      running_options, {"input.hlo"},
       InputFormat::kText));
 }
 

@@ -113,12 +113,22 @@ class GpuExecutable : public Executable {
     ir_module_string_ = ir_module_string;
   }
 
-  AllocationsCache& get_allocs_cache(int device_ordinal) {
+  void inc_cache_counter(int id) {
     absl::MutexLock lock(&module_handle_mutex_);
-    if (static_cast< size_t >(device_ordinal) >= cached_mem_allocations_.size()) {
-      cached_mem_allocations_.resize(device_ordinal + 1);
+    if (static_cast< size_t >(id) >= cached_mem_allocations_.size()) {
+      cached_mem_allocations_.resize(id + 1);
     }
-    return cached_mem_allocations_[device_ordinal];
+    cached_mem_allocations_[id].second++;
+  }
+
+  //(i + device_ord) % x
+  AllocationsCache& get_allocs_cache(int id, int *counter = nullptr) {
+    absl::MutexLock lock(&module_handle_mutex_);
+    if (static_cast< size_t >(id) >= cached_mem_allocations_.size()) {
+      cached_mem_allocations_.resize(id + 1);
+    }
+    if (counter) *counter = cached_mem_allocations_[id].second;
+    return cached_mem_allocations_[id].first;
   }
 
   // Returns the compiled code for the computation.
@@ -282,7 +292,7 @@ class GpuExecutable : public Executable {
                       std::unique_ptr<BufferAllocToDeviceMemoryMap>>
       module_globals_ ABSL_GUARDED_BY(module_handle_mutex_);
 
-  std::deque< AllocationsCache > cached_mem_allocations_ 
+  std::deque< std::pair<AllocationsCache, int > > cached_mem_allocations_ 
                                         ABSL_GUARDED_BY(module_handle_mutex_);
   bool enable_cached_allocs_; // whether to use cached_mem_allocations_
 

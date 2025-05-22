@@ -366,7 +366,7 @@ CommandBufferScheduling::CollectCommandBufferSequences(
 
   // Adds `current_seq` to `sequences` if it has enough commands in it.
   auto collect_current_seq = [&](const HloInstruction *instr) {
-
+    if(num_commands_in_current_seq > 0)
     VLOG(1) << num_commands_in_current_seq << " seq length stopped at: " 
             << (instr ? instr->ToString() : "<end>") 
             << " min_num_commands: " << min_num_commands; 
