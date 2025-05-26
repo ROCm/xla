@@ -292,6 +292,8 @@ absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
   }();
 
   if (use_inprocess_lld) {
+    static absl::Mutex lld_mu(absl::kConstInit);
+
     std::array<const char*, 7> args{
         "ld.lld",
         "--threads=1",
@@ -306,6 +308,7 @@ absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
     llvm::raw_string_ostream os(error_message);
     lld::Result result;
     {
+      absl::MutexLock lock(&lld_mu);
       result =
           lld::lldMain(args, llvm::nulls(), os, {{lld::Gnu, &lld::elf::link}});
     }
