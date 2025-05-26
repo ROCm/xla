@@ -360,9 +360,12 @@ class CommandBuffer {
 
   // Skips updating num commands - instead just increment a counter
   virtual void SkipUpdates(ExecutionScopeId execution_scope_id, int64_t num = 1) { 
-    LOG(FATAL) << "SkipUpdates are not supported!";
+    LOG(FATAL) << "SkipUpdates is not supported!";
   }
 
+  virtual absl::StatusOr<size_t> GetNumChildNodes() const {
+    LOG(FATAL) << "GetNumChildNodes is not supported!";
+  }
   //--------------------------------------------------------------------------//
   // Command buffer tracing API
   //--------------------------------------------------------------------------//

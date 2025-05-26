@@ -239,7 +239,7 @@ class CommandBufferCmd {
   virtual bool IsNestedCommandBuffer() const { return false; }
 
   virtual bool IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_params,
-          const RecordParams& record_params);
+          const RecordParams& record_params, size_t *num_child_nodes);
 
   TracedCommandBuffer *GetTracedBuffer(const RecordParams& record_params);
 
@@ -426,6 +426,8 @@ class TracedCommandBuffer : public CommandBufferCmd::State {
     const BufferAllocations* buffer_allocation, 
     se::Stream* stream, TraceFunc trace_func);
 
+  size_t NumChildNodes() const { return num_child_nodes_; }
+
  private:
   std::vector<BufferAllocation::Index> allocs_indices_;
 
@@ -434,7 +436,7 @@ class TracedCommandBuffer : public CommandBufferCmd::State {
     std::unique_ptr<se::CommandBuffer> command_buffer;
   };
   const CommandBufferCmd* trace_cmd_;
-  int64_t capacity_;
+  size_t num_child_nodes_;
   std::vector<Entry> entries_;
 };
 
@@ -976,7 +978,7 @@ class CollectiveCmd : public TracedCommandBufferCmd {
   bool IsNestedCommandBuffer() const final { return true; }
 
   bool IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_params,
-          const RecordParams& record_params) override;
+          const RecordParams& record_params, size_t *num_child_nodes) override;
 
   virtual AsyncStreamKind GetAsyncStreamKind() = 0;
 

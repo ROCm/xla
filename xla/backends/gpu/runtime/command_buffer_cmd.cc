@@ -338,13 +338,14 @@ absl::Status CommandBufferCmdSequence::Record(
             << execution_scope_id.value();
 
     // always update barriers since this is just incrementing barrier counter
+    size_t num_skips = 0;
     if (command.cmd->command_type() == CommandBufferCmdType::kBarrierCmd || 
-        command.cmd->IsGraphUpdateNeeded(execute_params, record_params))
+        command.cmd->IsGraphUpdateNeeded(execute_params, record_params, &num_skips))
     {
       TF_RETURN_IF_ERROR(
         command.cmd->Record(execute_params, record_params, command_buffer));
     } else {
-        command_buffer->SkipUpdates(command.cmd->GetExecutionScope(record_params));
+      command_buffer->SkipUpdates(execution_scope_id, num_skips);
     }
     ++num_recorded_commands[execution_scope_id];
   }
@@ -390,12 +391,16 @@ TracedCommandBuffer *CommandBufferCmd::
   });
 }
 
-bool CommandBufferCmd::IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_params,
-          const RecordParams& record_params) {
+bool CommandBufferCmd::IsGraphUpdateNeeded(
+          const Thunk::ExecuteParams& execute_params,
+          const RecordParams& record_params, size_t *num_child_nodes) {
   
   se::CommandBuffer *nested_cmd = nullptr;
-  return GetTracedBuffer(record_params)->
+  auto *state = GetTracedBuffer(record_params);
+  *num_child_nodes = state->NumChildNodes(); // set to 1 by default
+  return state->
             IsGraphUpdateNeeded(execute_params.buffer_allocations, &nested_cmd);
+  
 }
 
 //===----------------------------------------------------------------------===//
@@ -405,7 +410,7 @@ bool CommandBufferCmd::IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_p
 TracedCommandBuffer::TracedCommandBuffer(
     const CommandBufferCmd* trace_cmd,
     CommandBufferCmd::BufferUseVector buffers, int64_t capacity)
-    : trace_cmd_(trace_cmd), capacity_(capacity), entries_(capacity) {
+    : trace_cmd_(trace_cmd), num_child_nodes_(1), entries_(capacity) {
   CHECK_GT(capacity, 0) << "capacity must be larger than 0";  // NOLINT
   // Collect unique buffer allocation indices in a set first and convert to
   // vector as flat hash set iteration has measurable overheads.
@@ -458,8 +463,8 @@ bool TracedCommandBuffer::IsGraphUpdateNeeded(
     return entries_[0] = std::move(entry);
   };
 
-  size_t trace_idx = capacity_ - 1;
-  for (size_t i = 0; i < capacity_; ++i) {
+  size_t trace_idx = entries_.size() - 1;
+  for (size_t i = 0; i < entries_.size(); ++i) {
     // Found entry for a given allocations, move it to front and return a
     // pointer to cached command buffer.
     if (ABSL_PREDICT_TRUE(absl::c_equal(entries_[i].recorded_allocs, allocs) &&
@@ -496,11 +501,18 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     se::Stream* stream, TraceFunc trace_func) {
 
   if (entries_[0].command_buffer == nullptr) {
-    VLOG(1) << trace_cmd_->ToString() << " dev " << stream->parent()->device_ordinal() <<
-        " -- retracing !";
+    // int i = 1;
+    // for(i = 1; i < capacity_; i++) {
+    //   if(entries_[i].command_buffer == nullptr) break;
+    // }
+    // VLOG(1) << trace_cmd_->ToString() << " dev " << stream->parent()->device_ordinal() <<
+    //     " -- retracing ! #filled: " << i;
     TF_ASSIGN_OR_RETURN(
       entries_[0].command_buffer,
           se::TraceCommandBufferFactory::Create(stream, trace_func));
+    // keep # of child nodes needed for skipping updates
+    TF_ASSIGN_OR_RETURN(num_child_nodes_, 
+                    entries_[0].command_buffer->GetNumChildNodes());
   }
   return entries_[0].command_buffer.get();
 }
@@ -1670,10 +1682,11 @@ absl::Status CollectiveCmd::Prepare(
 // this function must be overriden for collectives in order to execute
 // rendezvous 
 bool CollectiveCmd::IsGraphUpdateNeeded(const Thunk::ExecuteParams& execute_params,
-          const RecordParams& record_params) {
+          const RecordParams& record_params, size_t *num_child_nodes) {
 
   se::CommandBuffer *nested_cmd = nullptr;
   auto *state = GetTracedBuffer(record_params);
+  *num_child_nodes = state->NumChildNodes();
   bool needed = state->
             IsGraphUpdateNeeded(execute_params.buffer_allocations, &nested_cmd);
 #if !USE_COLLECTIVE_RENDEZVOUS
