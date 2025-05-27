@@ -70,6 +70,7 @@ cc_library(
         "simplify_arith.cc",
         "unswitch_loops.cc",
         "vectorize_loads_stores.cc",
+        "recover_exp2.cc",
     ],
     hdrs = ["passes.h"],
     copts = if_cuda_is_configured(["-DGOOGLE_CUDA=1"]) + if_rocm_is_configured(["-DTENSORFLOW_USE_ROCM=1"]),
