@@ -286,7 +286,8 @@ absl::StatusOr<int64_t> GetMaxRegistersPerBlock(hipDevice_t device) {
 }
 
 absl::StatusOr<int64_t> GetThreadsPerWarp(hipDevice_t device) {
-  return GetSimpleAttribute<int64_t>(device, hipDeviceAttributeWarpSize);
+  //Hack
+  return 64;
 }
 
 absl::Status GetGridLimits(int* x, int* y, int* z, hipDevice_t device) {
