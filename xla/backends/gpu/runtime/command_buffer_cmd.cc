@@ -88,7 +88,9 @@ limitations under the License.
 #include "tsl/platform/statusor.h"
 #include "tsl/profiler/lib/scoped_annotation.h"
 
-#define USE_COLLECTIVE_RENDEZVOUS 0
+#if !defined(USE_COLLECTIVE_RENDEZVOUS) || !defined (ALWAYS_UPDATE_UNTRACED_NODES)
+#error Not all flags are defined!
+#endif
 
 namespace xla::gpu {
 
@@ -394,7 +396,9 @@ TracedCommandBuffer *CommandBufferCmd::
 bool CommandBufferCmd::IsGraphUpdateNeeded(
           const Thunk::ExecuteParams& execute_params,
           const RecordParams& record_params, size_t *num_child_nodes) {
-  
+#if ALWAYS_UPDATE_UNTRACED_NODES
+  if (!IsNestedCommandBuffer()) return true; 
+#endif
   se::CommandBuffer *nested_cmd = nullptr;
   auto *state = GetTracedBuffer(record_params);
   *num_child_nodes = state->NumChildNodes(); // set to 1 by default
@@ -429,6 +433,7 @@ TracedCommandBuffer::TracedCommandBuffer(
 bool TracedCommandBuffer::IsGraphUpdateNeeded(
       const BufferAllocations* buffer_allocs, se::CommandBuffer **nested_cmd) {
 
+// some bug here?? some upates skipped?
   *nested_cmd = nullptr;
   if (!trace_cmd_->IsNestedCommandBuffer()) { // easy case for untraced commands
     bool needed = false;

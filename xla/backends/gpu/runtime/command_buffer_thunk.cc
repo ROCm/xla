@@ -44,11 +44,9 @@ limitations under the License.
 #include "tsl/profiler/lib/traceme.h"
 #include "tsl/profiler/lib/traceme_encode.h"
 
-// things to try: check the # of retraces
-// disable small updates, disable rendezvous..
-
-// Decide for each element of cmdBuf thunk if the update is needed
-#define USE_SMALL_CMDBUF_UPDATES 0
+#if !defined(USE_SMALL_CMDBUF_UPDATES)
+#error Not all flags are defined!
+#endif
 
 namespace xla::gpu {
 
@@ -69,7 +67,7 @@ CommandBufferThunk::CommandBufferThunk(
     bool enable_command_buffers_during_profiling)
     : Thunk(Thunk::kCommandBuffer, std::move(thunk_info)),
       commands_(std::move(commands)),
-      // thunks_(std::move(thunks)), // do not initialize thunks which 
+      //thunks_(std::move(thunks)), // do not initialize thunks which 
       enable_command_buffers_during_profiling_(
           enable_command_buffers_during_profiling),
       state_(std::make_shared<State>()) {
@@ -221,6 +219,11 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
   // are no-op (e.g. memcpy of size 0) and we have no emitted thunks for them.
   if (commands_.empty()) return absl::OkStatus();
 
+  uint64_t xstart = tsl::Env::Default()->NowMicros();
+
+  // TF_RETURN_IF_ERROR(thunks_->ExecuteOnStream(params));
+  // return absl::OkStatus();
+
   se::StreamExecutor* executor = params.stream->parent();
   TF_ASSIGN_OR_RETURN(std::shared_ptr<ExecutorCommandBuffer> cmd_buffer,
                       GetOrCreateCommandBuffer(executor));
@@ -249,8 +252,9 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
                                         cmd_buffer->command_buffer.get()));
 
     uint64_t end_micros = tsl::Env::Default()->NowMicros();
-    VLOG(3) << "Updated command buffer in " << (end_micros - start_micros)
-            << " μs; num_commands=" << commands_.size();
+    auto ss = (double)(end_micros - start_micros)/1e6;
+    VLOG(0) << executor->device_ordinal() << " updated command buffer in " << ss
+            << " sec; num_commands=" << commands_.size();
     cmd_buffer->num_executions = 0;
   }
 
@@ -267,7 +271,16 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
                           {"num_executions", cmd_buffer->num_executions}});
   });
 
-  return cmd_buffer->command_buffer->Submit(params.stream);
+  auto s = cmd_buffer->command_buffer->Submit(params.stream);
+
+  params.stream->BlockHostUntilDone();
+  uint64_t xend = tsl::Env::Default()->NowMicros();
+
+  auto ss = (double)(xend - xstart)/1e6;
+  VLOG(0) << executor->device_ordinal() << " total exec time " << ss
+            << " sec; num_commands=" << commands_.size();
+
+  return s;
 }
 
 absl::StatusOr<std::shared_ptr<CommandBufferThunk::ExecutorCommandBuffer>>

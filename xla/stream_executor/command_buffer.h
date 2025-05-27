@@ -33,6 +33,16 @@ limitations under the License.
 #include "xla/tsl/lib/gtl/int_type.h"
 #include "tsl/platform/errors.h"
 
+// whether to use rendezvous to share update state between collective Cmds
+#define USE_COLLECTIVE_RENDEZVOUS 0
+// whether to always update simple commands (those that do not have embedded cmdbuf)
+#define ALWAYS_UPDATE_UNTRACED_NODES 1
+// Decide for each element of cmdBuf thunk if the update is needed
+#define USE_SMALL_CMDBUF_UPDATES 0
+// Whether to to use subgraphs or extract child nodes directly to the main graph
+#define EXTRACT_CHILD_NODES_FROM_GRAPH 1
+
+
 namespace stream_executor {
 
 class Stream;

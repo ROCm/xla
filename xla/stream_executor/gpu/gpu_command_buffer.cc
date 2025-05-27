@@ -49,6 +49,10 @@ limitations under the License.
 #include "tsl/platform/path.h"
 #include "tsl/platform/statusor.h"
 
+#if !defined(EXTRACT_CHILD_NODES_FROM_GRAPH)
+#error Not all flags are defined!
+#endif
+
 namespace stream_executor::gpu {
 
 //===----------------------------------------------------------------------===//
@@ -382,8 +386,12 @@ absl::Status GpuCommandBuffer::Launch(ExecutionScopeId execution_scope_id,
 }
 
 absl::StatusOr<size_t> GpuCommandBuffer::GetNumChildNodes() const {
+#if EXTRACT_CHILD_NODES_FROM_GRAPH
   TF_ASSIGN_OR_RETURN(auto *nodes, GetChildNodes());
   return nodes->size();
+#else
+  return 1; // # of child nodes is always 1 if we don't extract those from child graphs
+#endif
 }
 
 auto GpuCommandBuffer::GetChildNodes() const 
@@ -402,10 +410,9 @@ absl::Status GpuCommandBuffer::AddNestedCommandBuffer(
   ExecutionScope& execution_scope = execution_scopes_[execution_scope_id];
   TF_RETURN_IF_ERROR(CheckNotFinalized());
   const auto& gpu_cmd = static_cast< const GpuCommandBuffer& >(nested);
-
   TF_ASSIGN_OR_RETURN(auto *child_nodes, gpu_cmd.GetChildNodes());
 
-#if 1
+#if EXTRACT_CHILD_NODES_FROM_GRAPH
   for(size_t i = 0; i < child_nodes->size(); i++) {
 
     if (state_ == State::kUpdate) {
