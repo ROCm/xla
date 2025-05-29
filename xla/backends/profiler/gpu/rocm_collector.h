@@ -147,12 +147,15 @@ struct RocmTracerEvent {
   uint32_t correlation_id = kInvalidCorrelationId;
   uint64_t thread_id = kInvalidThreadId;
   int64_t stream_id = kInvalidStreamId;
+  
   union {
+    
     MemcpyDetails memcpy_info;                    // If type == Memcpy*
     MemsetDetails memset_info;                    // If type == Memset*
     MemAllocDetails memalloc_info;                // If type == MemoryAlloc
     KernelDetails kernel_info;                    // If type == Kernel
     SynchronizationDetails synchronization_info;  // If type == Synchronization
+    
   };
 };
 

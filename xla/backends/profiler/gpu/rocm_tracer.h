@@ -28,6 +28,7 @@ limitations under the License.
 #include "tsl/platform/status.h"
 #include "tsl/platform/types.h"
 
+
 namespace xla {
 namespace profiler {
 
@@ -71,6 +72,18 @@ class ApiIdList {
    bool invert_;
 };
 
+struct RocmTracerOptions {
+  std::set<uint32_t> api_tracking_set;  // actual api set we want to profile
+
+  // map of domain --> ops for which we need to enable the API callbacks
+  // If the ops vector is empty, then enable API callbacks for entire domain
+  // absl::flat_hash_map<activity_domain_t, std::vector<uint32_t> > api_callbacks;
+
+  // map of domain --> ops for which we need to enable the Activity records
+  // If the ops vector is empty, then enable Activity records for entire domain
+  // absl::flat_hash_map<activity_domain_t, std::vector<uint32_t> > activity_tracing;
+};
+
 class RocmTracer {
  public:
   // Returns a pointer to singleton RocmTracer.
@@ -79,12 +92,15 @@ class RocmTracer {
   // Only one profile session can be live in the same time.
   bool IsAvailable() const;
 
-  void Enable();
+  // std::optional<RocmTracerOptions> options_;
+
+  void Enable(const RocmTracerOptions& options, RocmTraceCollector* collector_);
   void Disable();
 
   static uint64_t GetTimestamp();
   static int NumGpus();
-
+  RocmTraceCollector* collector() { return collector_; }
+  
   static int toolInit(
     rocprofiler_client_finalize_t finalize_func,
     void* tool_data);
@@ -97,20 +113,6 @@ class RocmTracer {
   static void pushCorrelationID(uint64_t id, CorrelationDomain type);
   static void popCorrelationID(CorrelationDomain type);
 
-  void AddToPendingActivityRecords(uint32_t correlation_id) {
-    pending_activity_records_.Add(correlation_id);
-  }
-
-  void RemoveFromPendingActivityRecords(uint32_t correlation_id) {
-    pending_activity_records_.Remove(correlation_id);
-  }
-
-  void ClearPendingActivityRecordsCount() { pending_activity_records_.Clear(); }
-
-  size_t GetPendingActivityRecordsCount() {
-    return pending_activity_records_.Count();
-  }
-
  protected:
   // protected constructor for injecting mock cupti interface for testing.
   explicit RocmTracer() {}
@@ -120,10 +122,10 @@ class RocmTracer {
 
   void endTracing();
 
-  static void api_callback(
-    rocprofiler_callback_tracing_record_t record,
-    rocprofiler_user_data_t* user_data,
-    void* callback_data);
+  int num_gpus_;
+  std::optional<RocmTracerOptions> options_;
+  RocmTraceCollector* collector_ = nullptr;
+
   static void code_object_callback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t* user_data,
@@ -131,48 +133,13 @@ class RocmTracer {
 
   uint32_t maxBufferSize_{1000000}; // 1M GPU runtime/kernel events
 
-  int num_gpus_;
-  std::mutex externalCorrelationsMutex_;
+  tsl::mutex externalCorrelationsMutex_;
 
   bool externalCorrelationEnabled_{true};
   bool logging_{false};
 
   bool api_tracing_enabled_ = false;
   bool activity_tracing_enabled_ = false;
-
-
-  class PendingActivityRecords {
-   public:
-    // add a correlation id to the pending set
-    void Add(uint32_t correlation_id) {
-      absl::MutexLock lock(&mutex);
-      pending_set.insert(correlation_id);
-    }
-    // remove a correlation id from the pending set
-    void Remove(uint32_t correlation_id) {
-      absl::MutexLock lock(&mutex);
-      pending_set.erase(correlation_id);
-    }
-    // clear the pending set
-    void Clear() {
-      absl::MutexLock lock(&mutex);
-      pending_set.clear();
-    }
-    // count the number of correlation ids in the pending set
-    size_t Count() {
-      absl::MutexLock lock(&mutex);
-      return pending_set.size();
-    }
-  
-   private:
-    // set of co-relation ids for which the hcc activity record is pending
-    absl::flat_hash_set<uint32_t> pending_set;
-    // the callback which processes the activity records (and consequently
-    // removes items from the pending set) is called in a separate thread
-    // from the one that adds item to the list.
-    absl::Mutex mutex;
-  };
-  PendingActivityRecords pending_activity_records_;
 
  public:
   // Disable copy and move.
