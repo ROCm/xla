@@ -44,7 +44,7 @@ limitations under the License.
 #include "tsl/profiler/lib/traceme.h"
 #include "tsl/profiler/lib/traceme_encode.h"
 
-#if !defined(USE_SMALL_CMDBUF_UPDATES)
+#if !defined(USE_SMALL_CMDBUF_UPDATES) || !defined(CMD_BUF_THUNK_ENABLE_TIMING)
 #error Not all flags are defined!
 #endif
 
@@ -219,8 +219,9 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
   // are no-op (e.g. memcpy of size 0) and we have no emitted thunks for them.
   if (commands_.empty()) return absl::OkStatus();
 
+#if CMD_BUF_THUNK_ENABLE_TIMING
   uint64_t xstart = tsl::Env::Default()->NowMicros();
-
+#endif
   // TF_RETURN_IF_ERROR(thunks_->ExecuteOnStream(params));
   // return absl::OkStatus();
 
@@ -253,7 +254,12 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
 
     uint64_t end_micros = tsl::Env::Default()->NowMicros();
     auto ss = (double)(end_micros - start_micros)/1e6;
-    VLOG(0) << executor->device_ordinal() << " updated command buffer in " << ss
+#if CMD_BUF_THUNK_ENABLE_TIMING
+    VLOG(0)
+#else
+    VLOG(3)
+#endif
+       << executor->device_ordinal() << " updated command buffer in " << ss
             << " sec; num_commands=" << commands_.size();
     cmd_buffer->num_executions = 0;
   }
@@ -272,14 +278,14 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
   });
 
   auto s = cmd_buffer->command_buffer->Submit(params.stream);
-
+#if CMD_BUF_THUNK_ENABLE_TIMING
   params.stream->BlockHostUntilDone();
   uint64_t xend = tsl::Env::Default()->NowMicros();
 
   auto ss = (double)(xend - xstart)/1e6;
   VLOG(0) << executor->device_ordinal() << " total exec time " << ss
             << " sec; num_commands=" << commands_.size();
-
+#endif
   return s;
 }
 

@@ -38,10 +38,13 @@ limitations under the License.
 // whether to always update simple commands (those that do not have embedded cmdbuf)
 #define ALWAYS_UPDATE_UNTRACED_NODES 1
 // Decide for each element of cmdBuf thunk if the update is needed
-#define USE_SMALL_CMDBUF_UPDATES 0
+// This flag shall always be 1 when buffer ping-ponging is used since buffers are
+// updated ever iteration
+#define USE_SMALL_CMDBUF_UPDATES 1
 // Whether to to use subgraphs or extract child nodes directly to the main graph
-#define EXTRACT_CHILD_NODES_FROM_GRAPH 1
+#define EXTRACT_CHILD_NODES_FROM_GRAPH 0
 
+#define CMD_BUF_THUNK_ENABLE_TIMING 0
 
 namespace stream_executor {
 

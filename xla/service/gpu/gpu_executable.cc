@@ -188,7 +188,7 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
     } // for
   }
   // HACK HACK
-  enable_cached_allocs_ = (module_name_ == "jit_train_step");
+  //enable_cached_allocs_ = (module_name_ == "jit_train_step");
   if (enable_cached_allocs_) {
     // allocate at least for 8 devices
     cached_mem_allocations_.resize(8);
@@ -660,26 +660,25 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
     return buf.Release();
   }
 
-  int counter = 0;
-  auto& cache = get_allocs_cache(device_ordinal, &counter);
+  int64_t cache_idx = 0;
+  auto& cache = get_allocs_cache(device_ordinal, &cache_idx);
   auto [it, inserted] = cache.emplace(allocation.index(), AllocationsCacheEntry{});
   bool is_live_out = allocation.maybe_live_out();
   if (inserted) {
-    for(int i = 0; i < (is_live_out ? 2 : 1); i++) {
+    for(size_t i = 0; i < (is_live_out ? NumCachedBuffers : 1u); i++) {
       TF_ASSIGN_OR_RETURN(it->second[i],
         memory_allocator->Allocate(device_ordinal, buffer_size,
                                    /*retry_on_failure=*/true,
                                    /*memory_space=*/allocation.color()));
     }
-    if (!is_live_out) {
-    if(device_ordinal == 0)
-    VLOG(0) << this << " dev" << device_ordinal << "," << allocation.index() 
-          << " cached alloc: " << it->second[0].cref()
-          << " live_out: " << allocation.maybe_live_out()
-          << " ZZTempBuffer: " << allocation.IsPreallocatedTempBuffer();
-    }
+    // if (!is_live_out && device_ordinal == 0) {
+    //   VLOG(0) << this << " dev" << device_ordinal << "," << allocation.index() 
+    //       << " cached alloc: " << it->second[0].cref()
+    //       << " live_out: " << allocation.maybe_live_out()
+    //       << " ZZTempBuffer: " << allocation.IsPreallocatedTempBuffer();
+    // }
   }
-  return it->second[is_live_out ? counter % 2 : 0].cref();
+  return it->second[is_live_out ? cache_idx : 0].cref();
 }
 
 static absl::Status CheckAlignment(const BufferAllocation& allocation,
@@ -712,7 +711,7 @@ absl::StatusOr<BufferAllocations> GpuExecutable::GenerateBufferAllocations(
       tsl::profiler::TraceMeLevel::kInfo);
 
   if (enable_cached_allocs_) { 
-    inc_cache_counter(device_ordinal);
+    advance_cache_index(device_ordinal);
   }
 
   absl::Span<const BufferAllocation> allocations = GetAllocations();
@@ -727,26 +726,6 @@ absl::StatusOr<BufferAllocations> GpuExecutable::GenerateBufferAllocations(
                             memory_allocator, device_ordinal, i));
     TF_RETURN_IF_ERROR(CheckAlignment(allocation, buffers.back(), i));
   }
-
-  // if (enable_cached_allocs_) { 
-  //   auto& cache = get_allocs_cache(device_ordinal);
-  //   for (int64_t i = 0; i < num_buffers; ++i) {
-  //     const BufferAllocation& alloc = allocations[i];
-  //     if (!(alloc.is_entry_computation_parameter() || 
-  //                                       alloc.is_constant())) continue;
-
-  //     for (int64_t j = 0; j < num_buffers; ++j) {
-  //       const auto& ja = allocations[j];
-  //       if(ja.maybe_live_out() || ja.IsPreallocatedTempBuffer()) {
-  //         if (device_ordinal == 0 && buffers[i] == buffers[j] && alloc.index() != ja.index()) {
-  //           VLOG(0) << alloc.index() << " Input buf: " << buffers[i] 
-  //                 << " overlaps with " << ja.index() << " " << buffers[j];
-  //         }
-  //       }
-  //     }
-  //   }
-  // }
-
   return {{buffers, device_ordinal, memory_allocator}};
 }
 
@@ -936,11 +915,10 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
     }
 
     if (enable_cached_allocs_) {
-      int counter = 0;
-      auto& cache = get_allocs_cache(device_ordinal, &counter);
+      int64_t index = 0;
+      auto& cache = get_allocs_cache(device_ordinal, &index);
       auto it = cache.find(allocation->index());
-      if(it != cache.end() && 
-            result_buffer == it->second[counter % 2].cref()) {
+      if(it != cache.end() && result_buffer == it->second[index].cref()) {
         //VLOG(0) << "Found liveout alloc matches: " << result_buffer.opaque();
         alloc_cached_flag.back() = true;
       }

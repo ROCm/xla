@@ -397,7 +397,10 @@ bool CommandBufferCmd::IsGraphUpdateNeeded(
           const Thunk::ExecuteParams& execute_params,
           const RecordParams& record_params, size_t *num_child_nodes) {
 #if ALWAYS_UPDATE_UNTRACED_NODES
-  if (!IsNestedCommandBuffer()) return true; 
+  if (!IsNestedCommandBuffer()) {
+    //if (command_type() == CommandBufferCmdType::kLaunchCmd) return false;
+    return true; // do not update fusion kernels!
+  }
 #endif
   se::CommandBuffer *nested_cmd = nullptr;
   auto *state = GetTracedBuffer(record_params);
@@ -506,11 +509,11 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     se::Stream* stream, TraceFunc trace_func) {
 
   if (entries_[0].command_buffer == nullptr) {
-    // int i = 1;
-    // for(i = 1; i < capacity_; i++) {
+    // size_t i = 1;
+    // for(i = 1; i < entries_.size(); i++) {
     //   if(entries_[i].command_buffer == nullptr) break;
     // }
-    // VLOG(1) << trace_cmd_->ToString() << " dev " << stream->parent()->device_ordinal() <<
+    // VLOG(0) << trace_cmd_->ToString() << " dev " << stream->parent()->device_ordinal() <<
     //     " -- retracing ! #filled: " << i;
     TF_ASSIGN_OR_RETURN(
       entries_[0].command_buffer,
@@ -730,6 +733,10 @@ absl::Status LaunchCmd::Record(const Thunk::ExecuteParams& execute_params,
           << "; shmem_bytes=" << shmem_bytes_
           << "; execution_scope_id=" << execution_scope_id.value();
 
+  if (command_buffer->state() != se::CommandBuffer::State::kCreate) {
+    // command_buffer->SkipUpdates(execution_scope_id, 1);
+    // return absl::OkStatus();
+  }
   se::Kernel* kernel = [&] {
     absl::MutexLock lock(&mutex_);
     return kernels_[execute_params.stream->parent()].get();
@@ -1449,6 +1456,9 @@ CommandBufferCmd::BufferUseVector CuDnnCmd::buffers() {
 absl::Status CustomCallCmd::Record(const Thunk::ExecuteParams& execute_params,
                                    const RecordParams& record_params,
                                    se::CommandBuffer* command_buffer) {
+
+  // VLOG(0) << "--- recording: " << target_name_;
+  //--- recording: te_fused_attn_backward_ffi
   if (handler_ == nullptr) {
     return RecordLegacyCustomCall(execute_params, record_params,
                                   command_buffer);
@@ -1528,6 +1538,13 @@ absl::Status CustomCallCmd::RecordXlaFfiCall(
   ExecutionScopeId execution_scope_id = GetExecutionScope(record_params);
   VLOG(5) << "CustomCallCmd: target_name=" << target_name_
           << ", execution_scope_id=" << execution_scope_id.value();
+
+  // if (command_buffer->state() != se::CommandBuffer::State::kCreate) {
+  //   command_buffer->SkipUpdates(execution_scope_id, 1);
+  //   return absl::OkStatus();
+  // }
+  // do not record custom calls at all!
+  // return absl::OkStatus();
 
   for (int i = 0; i < operands_.size(); ++i) {
     const std::optional<Slice>& slice = operands_[i];

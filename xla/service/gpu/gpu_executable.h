@@ -79,8 +79,12 @@ class GpuExecutable : public Executable {
     std::optional<HloInputOutputAliasConfig::Alias> alias_config;
   };
 
+  // the # of cached buffers allocated for each BufferAllocation entry to be 
+  // used for ping-ponging
+  constexpr static size_t NumCachedBuffers = 2;
   // keep two memory alloc entries for each BufferAllocation for ping-ponging
-  using AllocationsCacheEntry = std::array<se::ScopedDeviceMemory<uint8_t>, 2>;
+  using AllocationsCacheEntry = std::array<se::ScopedDeviceMemory<uint8_t>, 
+                                                             NumCachedBuffers>;
   using AllocationsCache = absl::flat_hash_map< BufferAllocation::Index, 
                                                 AllocationsCacheEntry >;
   struct Params {
@@ -113,21 +117,21 @@ class GpuExecutable : public Executable {
     ir_module_string_ = ir_module_string;
   }
 
-  void inc_cache_counter(int id) {
+  void advance_cache_index(int id) {
     absl::MutexLock lock(&module_handle_mutex_);
     if (static_cast< size_t >(id) >= cached_mem_allocations_.size()) {
       cached_mem_allocations_.resize(id + 1);
     }
-    cached_mem_allocations_[id].second++;
+    cached_mem_allocations_[id].second = 
+          (cached_mem_allocations_[id].second + 1) % NumCachedBuffers;
   }
 
-  //(i + device_ord) % x
-  AllocationsCache& get_allocs_cache(int id, int *counter = nullptr) {
+  AllocationsCache& get_allocs_cache(int id, int64_t *index = nullptr) {
     absl::MutexLock lock(&module_handle_mutex_);
     if (static_cast< size_t >(id) >= cached_mem_allocations_.size()) {
       cached_mem_allocations_.resize(id + 1);
     }
-    if (counter) *counter = cached_mem_allocations_[id].second;
+    if (index) *index = cached_mem_allocations_[id].second;
     return cached_mem_allocations_[id].first;
   }
 
@@ -292,7 +296,7 @@ class GpuExecutable : public Executable {
                       std::unique_ptr<BufferAllocToDeviceMemoryMap>>
       module_globals_ ABSL_GUARDED_BY(module_handle_mutex_);
 
-  std::deque< std::pair<AllocationsCache, int > > cached_mem_allocations_ 
+  std::deque< std::pair<AllocationsCache, int64_t > > cached_mem_allocations_ 
                                         ABSL_GUARDED_BY(module_handle_mutex_);
   bool enable_cached_allocs_; // whether to use cached_mem_allocations_
 
