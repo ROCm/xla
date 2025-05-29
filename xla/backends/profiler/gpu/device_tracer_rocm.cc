@@ -24,7 +24,7 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
-// #include "xla/backends/profiler/gpu/rocm_collector.h"
+#include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/backends/profiler/gpu/rocm_tracer.h"
 #include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
 #include "xla/tsl/profiler/utils/parse_annotation.h"
@@ -82,6 +82,10 @@ class GpuTracer : public profiler::ProfilerInterface {
   absl::Status DoStart();
   absl::Status DoStop();
 
+  RocmTracerOptions GetRocmTracerOptions();
+
+  RocmTraceCollectorOptions GetRocmTraceCollectorOptions(uint32_t num_gpus);
+
   enum State {
     kNotStarted,
     kStartedOk,
@@ -95,18 +99,43 @@ class GpuTracer : public profiler::ProfilerInterface {
   std::unique_ptr<RocmTraceCollector> rocm_trace_collector_;
 };
 
+RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
+  // TODO(rocm-profiler): We need support for context similar to CUDA
+  RocmTracerOptions options;
+
+  return options;
+}
+
+RocmTraceCollectorOptions GpuTracer::GetRocmTraceCollectorOptions(
+  uint32_t num_gpus) {
+RocmTraceCollectorOptions options;
+options.max_callback_api_events = 2 * 1024 * 1024;
+options.max_activity_api_events = 2 * 1024 * 1024;
+options.max_annotation_strings = 1024 * 1024;
+options.num_gpus = num_gpus;
+return options;
+}
+
 absl::Status GpuTracer::DoStart() {
-  if (!rocm_tracer_->IsAvailable()) {
-    return tsl::errors::Unavailable("Another profile session running.");
-  }
+
+  // if (!rocm_tracer_->IsAvailable()) {
+  //   return tsl::errors::Unavailable("Another profile session running.");
+  // }
 
   // AnnotationStack::Enable(true);
-
-  // uint64_t start_gputime_ns = RocmTracer::GetTimestamp();
-  // uint64_t start_walltime_ns = tsl::EnvTime::NowNanos();
+  uint64_t start_gputime_ns = RocmTracer::GetTimestamp();
+  uint64_t start_walltime_ns = tsl::EnvTime::NowNanos();
  
-  rocm_tracer_->Enable();
-
+  // RocmTracerOptions tracer_options = GetRocmTracerOptions();
+  RocmTraceCollectorOptions trace_collector_options =
+      GetRocmTraceCollectorOptions(rocm_tracer_->NumGpus());
+  rocm_trace_collector_ = CreateRocmCollector(
+    trace_collector_options, start_walltime_ns, start_gputime_ns);
+  VLOG(-1) << "cj401 RocmTraceCollector created." << rocm_trace_collector_.get();
+  RocmTracerOptions tracer_options = GetRocmTracerOptions();
+  rocm_tracer_->Enable(tracer_options, rocm_trace_collector_.get());
+  // rocm_tracer_->Enable(rocm_trace_collector_.get());
+  
   return absl::OkStatus();
 }
 

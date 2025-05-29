@@ -94,9 +94,7 @@ namespace wrap {
   DO_FUNC(rocprofiler_iterate_buffer_tracing_kind_operations)   \
   DO_FUNC(rocprofiler_iterate_buffer_tracing_kinds)             \
   DO_FUNC(rocprofiler_get_status_string)                        \
-  DO_FUNC(rocprofiler_configure)                                \
-  DO_FUNC(rocprofiler_get_timestamp)
-
+  DO_FUNC(rocprofiler_configure)                                
 // Apply the wrapper to each API
 FOREACH_ROCTRACER_API(ROCTRACER_API_WRAPPER)
 

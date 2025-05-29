@@ -107,7 +107,7 @@ std::string GetDeviceXLineName(
   if (event_types.empty()) return line_name;
   std::vector<const char*> type_names;
   for (const auto event_type : event_types) {
-    type_names.emplace_back(GetRocmTracerEventTypeName(event_type));
+    // type_names.emplace_back(GetRocmTracerEventTypeName(event_type));
   }
   return absl::StrCat(line_name, "(", absl::StrJoin(type_names, ","), ")");
 }
@@ -157,15 +157,15 @@ static void DumpRocmTracerEvent(const RocmTracerEvent& event,
       break;
   }
   oss << message;
-  VLOG(3) << oss.str();
+  VLOG(-1) << oss.str();
 }
 
 static uint64_t get_timestamp() {
   uint64_t ts;
-  rocprofiler_status_t CHECKSTATUS = se::wrap::rocprofiler_get_timestamp(&ts);
+  rocprofiler_status_t CHECKSTATUS = rocprofiler_get_timestamp(&ts);
   if (CHECKSTATUS != ROCPROFILER_STATUS_SUCCESS) {
-      const char* errstr = se::wrap::rocprofiler_get_status_string(CHECKSTATUS);
-      LOG(ERROR) << "function rocprofiler_get_timestamp failed with error "
+      const char* errstr = rocprofiler_get_status_string(CHECKSTATUS);
+      VLOG(-1) << "function rocprofiler_get_timestamp failed with error "
                  << errstr;
       return 0;
   }
@@ -239,6 +239,8 @@ class PerDeviceCollector {
   void CreateXEvent(const RocmTracerEvent& event, XPlaneBuilder* plane,
                     uint64_t start_gpu_ns, uint64_t end_gpu_ns,
                     XLineBuilder* line) {
+
+                     /* 
     if (event.start_time_ns < start_gpu_ns || event.end_time_ns > end_gpu_ns ||
         event.start_time_ns > event.end_time_ns) {
       VLOG(2) << "events have abnormal timestamps:" << event.name
@@ -359,6 +361,7 @@ class PerDeviceCollector {
                               GetStatTypeStr(StatType::kMemsetDetails)),
                           *plane->GetOrCreateStatMetadata(std::move(value)));
     }
+                          */
     // TODO(rocm-profiler): we need to support the following event type
     /* else if (event.type == CuptiTracerEventType::MemoryResidency) {
       VLOG(7) << "Add MemoryResidency stat";
@@ -371,6 +374,7 @@ class PerDeviceCollector {
                           *plane->GetOrCreateStatMetadata(std::move(value)));
     } */
 
+    /*
     std::vector<Annotation> annotation_stack =
         ParseAnnotationStack(event.annotation);
     if (!annotation_stack.empty()) {
@@ -392,6 +396,7 @@ class PerDeviceCollector {
         }
       }
     }
+      */
   }
 
   void SortByStartTime() {
@@ -626,6 +631,11 @@ void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
                                       bool is_auxiliary) {
   mutex_lock lock(event_maps_mutex_);
 
+  // VLOG(-1) << "cj401 event.source = " << event.source;
+  VLOG(-1) << "cj401 num_callback_events = " << num_callback_events_ << " cj401 num_activity_events = " << num_activity_events_;
+  VLOG(-1) << "cj401 options_.max_callback_api_events = " << options_.max_callback_api_events;
+  VLOG(-1) << "cj401 options_.max_activity_api_events = " << options_.max_activity_api_events;
+
   if (event.source == RocmTracerEventSource::ApiCallback && !is_auxiliary) {
     if (num_callback_events_ > options_.max_callback_api_events) {
       OnEventsDropped("max callback event capacity reached",
@@ -637,12 +647,14 @@ void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
   } else if (event.source == RocmTracerEventSource::Activity &&
              event.domain == RocmTracerEventDomain::HIP_API) {
     // we do not count HIP_OPS activities.
+    /*
     if (num_activity_events_ > options_.max_activity_api_events) {
       OnEventsDropped("max activity event capacity reached",
                       event.correlation_id);
       DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
       return;
     }
+      */
     num_activity_events_++;
   }
 
@@ -653,23 +665,31 @@ void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
     std::tie(std::ignore, emplace_result) =
         target_api_event_map.emplace(event.correlation_id, std::move(event));
   } else if (event.source == RocmTracerEventSource::Activity) {
+    VLOG(-1) << "cj401 emplace result = " << emplace_result;
     auto result = activity_ops_events_map_.emplace(
         event.correlation_id, std::vector<RocmTracerEvent>{});
     result.first->second.push_back(std::move(event));
     emplace_result = true;  // we always accept Hip-Ops events
   }
-  if (!emplace_result) {
-    OnEventsDropped("event with duplicate correlation_id was received.",
-                    event.correlation_id);
-    DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
+  {
+    VLOG(-1) << "cj401 emplace result = " << emplace_result;
+    auto result = activity_ops_events_map_.emplace(
+        event.correlation_id, std::vector<RocmTracerEvent>{});
+    result.first->second.push_back(std::move(event));
+    emplace_result = true;  // we always accept Hip-Ops events
   }
+  // if (!emplace_result) {
+  //   OnEventsDropped("event with duplicate correlation_id was received.",
+  //                   event.correlation_id);
+  //   DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
+  // }
 }
 
 void RocmTraceCollectorImpl::Flush() {
   mutex_lock lock(event_maps_mutex_);
   auto& aggregated_events_ = ApiActivityInfoExchange();
 
-  VLOG(3) << "RocmTraceCollector collected " << num_callback_events_
+  VLOG(-1) << "cj401 RocmTraceCollector collected " << num_callback_events_
           << " callback events, " << num_activity_events_
           << " activity events, and aggregated them into "
           << aggregated_events_.size() << " events.";
@@ -677,7 +697,7 @@ void RocmTraceCollectorImpl::Flush() {
   // device ids for GPUs filled in by roctracer are not zero indexed.
   // They are offset by number of CPUs on the machine
   tsl::uint32 min_device_id = INT32_MAX;
-  ;
+  
   for (auto& event : aggregated_events_) {
     if (event.device_id < min_device_id) {
       min_device_id = event.device_id;
@@ -686,6 +706,7 @@ void RocmTraceCollectorImpl::Flush() {
 
   for (auto event : aggregated_events_) {
     event.device_id = event.device_id - min_device_id;
+    VLOG(-1) << "cj401 RocmTraceCollector flushed event: " << event.device_id << " num_gpus = " << num_gpus_;
     if (event.device_id < num_gpus_) {
       per_device_collector_[event.device_id].AddEvent(event);
     } else {
@@ -739,11 +760,11 @@ RocmTraceCollectorImpl::ApiActivityInfoExchange() {
         activity_ops_events_map_.find(api_event.correlation_id);
 
     if (activity_event == activity_ops_events_map_.end()) {
-      OnEventsDropped(
-          "An event from HIP API discarded."
-          "Could not find the counterpart activity.",
-          api_event.correlation_id);
-      DumpRocmTracerEvent(api_event, 0, 0, ". Dropped!");
+      // OnEventsDropped(
+      //     "An event from HIP API discarded."
+      //     "Could not find the counterpart activity.",
+      //     api_event.correlation_id);
+      // DumpRocmTracerEvent(api_event, 0, 0, ". Dropped!");
     } else {
       api_event.device_id = activity_event->second.front().device_id;
       api_event.stream_id = activity_event->second.front().stream_id;
@@ -766,13 +787,13 @@ RocmTraceCollectorImpl::ApiActivityInfoExchange() {
           break;
         }
         default:
-          OnEventsDropped("Missing API-Activity information exchange. Dropped!",
-                          api_event.correlation_id);
-          DumpRocmTracerEvent(api_event, 0, 0, ". Dropped!");
-          LOG(WARNING) << "A ROCm API event type with unimplemented activity "
-                          "merge dropped! "
-                          "Type="
-                       << GetRocmTracerEventTypeName(api_event.type);
+          // OnEventsDropped("Missing API-Activity information exchange. Dropped!",
+          //                 api_event.correlation_id);
+          // DumpRocmTracerEvent(api_event, 0, 0, ". Dropped!");
+          // LOG(WARNING) << "A ROCm API event type with unimplemented activity "
+          //                 "merge dropped! "
+          //                 "Type="
+          //              << GetRocmTracerEventTypeName(api_event.type);
       }
     }
   }
@@ -787,11 +808,11 @@ RocmTraceCollectorImpl::ApiActivityInfoExchange() {
     }
 
     if (api_event == auxiliary_api_events_map_.end()) {
-      OnEventsDropped(
-          "An event from activity was discarded."
-          "Could not find the counterpart HIP API.",
-          activity_event.correlation_id);
-      DumpRocmTracerEvent(activity_event, 0, 0, ". Dropped!");
+      // OnEventsDropped(
+      //     "An event from activity was discarded."
+      //     "Could not find the counterpart HIP API.",
+      //     activity_event.correlation_id);
+      // DumpRocmTracerEvent(activity_event, 0, 0, ". Dropped!");
     } else {
       switch (activity_event.type) {
         // KERNEL ACTIVITY
@@ -830,13 +851,14 @@ RocmTraceCollectorImpl::ApiActivityInfoExchange() {
           break;
         }
         default:
-          OnEventsDropped("Missing API-Activity information exchange. Dropped!",
-                          activity_event.correlation_id);
-          DumpRocmTracerEvent(activity_event, 0, 0, ". Dropped!");
-          LOG(WARNING) << "A ROCm activity event with unimplemented API "
-                          "callback merge dropped! "
-                          "Type="
-                       << GetRocmTracerEventTypeName(activity_event.type);
+          // OnEventsDropped("Missing API-Activity information exchange. Dropped!",
+          //                 activity_event.correlation_id);
+          // DumpRocmTracerEvent(activity_event, 0, 0, ". Dropped!");
+          
+          // LOG(WARNING) << "A ROCm activity event with unimplemented API "
+          //                 "callback merge dropped! "
+          //                 "Type="
+          //              << GetRocmTracerEventTypeName(activity_event.type);
           break;
       }
     }
