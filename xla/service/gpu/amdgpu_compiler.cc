@@ -178,11 +178,12 @@ absl::Status AMDGPUCompiler::OptimizeHloPostLayoutAssignment(
     HloModule* hlo_module, se::StreamExecutor* stream_exec,
     const CompileOptions& options, const TargetConfig& gpu_target_config,
     tsl::thread::ThreadPool* thread_pool) {
-  HloPassPipeline pre_pipeline("AMDGPU post-layout_assignment part 1");
-
   auto rocm_compute_capability = std::get<se::RocmComputeCapability>(
       gpu_target_config.device_description.gpu_compute_capability());
 
+  HloPassPipeline pre_pipeline("AMDGPU post-layout_assignment part 1");
+  pre_pipeline.AddPass<BlockScalingRewriter>(
+      gpu_target_config.device_description, /*allow_cudnn*/ false);
   pre_pipeline.AddPass<DotDimensionMerger>();
 
   for (const auto& req : HipblasPaddingRequirements) {

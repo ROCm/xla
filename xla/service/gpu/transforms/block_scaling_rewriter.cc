@@ -362,6 +362,14 @@ absl::StatusOr<XlaOp> BuildCudnnScaledDot(XlaOp lhs_input, XlaOp rhs_input,
   return result;
 }
 
+// Build HLO for hipblaslt custom call op.
+absl::StatusOr<XlaOp> BuildHipblasltScaledDot(XlaOp lhs_input, XlaOp rhs_input,
+                                          XlaOp lhs_scale, XlaOp rhs_scale,
+                                          const DotDimensionNumbers& dnums,
+                                          PrimitiveType result_type) {
+  // TODO
+}
+
 // ----- Block scaled dot (general)
 
 // Build HLO for scaled dot op.
@@ -369,7 +377,7 @@ absl::StatusOr<XlaOp> BuildBlockScaledDot(
     XlaBuilder& builder, const HloInstruction* lhs_input,
     const HloInstruction* rhs_input, const HloInstruction* lhs_scale,
     const HloInstruction* rhs_scale, const DotDimensionNumbers& dnums,
-    PrimitiveType result_type, bool allow_cudnn) {
+    const se::DeviceDescription& device_description, const bool allow_cudnn, PrimitiveType result_type) {
   // Get dot LHS parameter(s).
   XlaOp lhs_op = Parameter(&builder, 0, lhs_input->shape(), "lhs");
   XlaOp lhs_scale_op = Parameter(&builder, 2, lhs_scale->shape(), "lhs_scale");
@@ -381,13 +389,25 @@ absl::StatusOr<XlaOp> BuildBlockScaledDot(
     rhs_scale_op = Parameter(&builder, 3, rhs_scale->shape(), "rhs_scale");
   }
 
-  // Use cuDNN kernel, if possible.
-  if (allow_cudnn && rhs_scale_op.valid() &&
+  se::GpuComputeCapability gpu_cc = device_description.gpu_compute_capability();
+  bool is_cuda =
+      std::holds_alternative<stream_executor::CudaComputeCapability>(gpu_cc);
+  bool is_rocm =
+      std::holds_alternative<stream_executor::RocmComputeCapability>(gpu_cc);
+  auto* rocm_cc = std::get_if<se::RocmComputeCapability>(&gpu_cc);
+
+  // For CUDA platform, use cuDNN kernel, if possible.
+  if (is_cuda && allow_cudnn && rhs_scale_op.valid() &&
       IsSupportedByCudnn(
           GetCudnnMxType(lhs_input->shape(), lhs_scale->shape()),
           GetCudnnMxType(rhs_input->shape(), rhs_scale->shape()))) {
     return BuildCudnnScaledDot(lhs_op, rhs_op, lhs_scale_op, rhs_scale_op,
                                dnums, result_type);
+  }
+
+  // For ROCm platform, use hipblaslt kernel, if possible.
+  if (is_rocm) {
+    // return BuildHipblasltScaledDot();
   }
 
   // Build general dot op.
@@ -403,7 +423,8 @@ absl::StatusOr<XlaOp> BuildBlockScaledDot(
 
 // Convert scaled dot custom call to HLO computation.
 absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCall(
-    HloInstruction* instruction, bool allow_cudnn) {
+    HloInstruction* instruction, const se::DeviceDescription& device_description,
+    const bool allow_cudnn) {
   PrimitiveType result_type = instruction->shape().element_type();
 
   // Check operand count.
@@ -437,7 +458,7 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCall(
       XlaOp block_scaled_dot,
       BuildBlockScaledDot(builder, operands[0], operands[1], operands[2],
                           operands.size() == 4 ? operands[3] : nullptr, dnums,
-                          result_type, allow_cudnn));
+                          device_description, allow_cudnn, result_type));
 
   // Reshape to the expected output shape.
   // This should only happen when a unit-sized dimension is added by the pass.
@@ -469,7 +490,7 @@ absl::StatusOr<HloInstruction*> BlockScalingRewriter::ExpandInstruction(
     return ExpandDequantizeCustomCall(instruction);
   }
   if (instruction->custom_call_target() == kBlockScaledDotCustomCallTarget) {
-    return ExpandBlockScaledDotCustomCall(instruction, allow_cudnn_);
+    return ExpandBlockScaledDotCustomCall(instruction, device_description_, allow_cudnn_);
   }
   LOG(FATAL) << "Unexpected custom call target: "
              << instruction->custom_call_target();
