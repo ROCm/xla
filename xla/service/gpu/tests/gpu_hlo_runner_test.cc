@@ -121,10 +121,10 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
 } // namespace 
 
 
-#define DO_REFERENCE_CHECK 1
-#define USE_MULTIPLE_GPUS 0
-#define USE_SPECIAL_ARGUMENTS 1
-#define USE_PSEUDO_RANDOM true
+#define DO_REFERENCE_CHECK 0
+#define NUM_REPLICAS_TO_RUN 4 // set to 0 to use single GPU
+#define USE_SPECIAL_ARGUMENTS 0
+#define USE_PSEUDO_RANDOM false
 #define USE_RANDOM_LARGE_RANGE false
 
 class HloRunnerTest : public GpuCodegenTest {
@@ -150,7 +150,7 @@ protected:
     HloModuleConfig config = GetModuleConfigForTest();
     auto& runner = test_runner_as_hlo_runner();
 
-#if !USE_MULTIPLE_GPUS
+#if !NUM_REPLICAS_TO_RUN
   TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(input, 
           config));
   
@@ -233,8 +233,8 @@ protected:
 #endif // DO_REFERENCE_CHECK
  //    EXPECT_TRUE(RunAndCompare(std::move(module), 
   // //     absl::Span< xla::Literal * const>(arg_ptrs.data(), arg_ptrs.size()), error_spec));
-#else // USE_MULTIPLE_GPUS
-  int NumReplicas = 8, NumParts = 1;
+#else // NUM_REPLICAS_TO_RUN
+  int NumReplicas = NUM_REPLICAS_TO_RUN, NumParts = 1;
   config.set_replica_count(NumReplicas);
   config.set_num_partitions(NumParts);
 

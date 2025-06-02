@@ -38,6 +38,8 @@ namespace xla::gpu {
 
 class CommandBufferThunk : public Thunk {
  public:
+  constexpr static int64_t NumCachedGraphs = 2;
+
   CommandBufferThunk(CommandBufferCmdSequence commands, ThunkInfo thunk_info,
                      std::unique_ptr<SequentialThunk> thunks = nullptr,
                      bool enable_command_buffers_during_profiling = false);
@@ -58,11 +60,27 @@ class CommandBufferThunk : public Thunk {
   void ForAllThunks(absl::FunctionRef<void(const Thunk*)> fn) const override;
 
  private:
+
+
   // Command buffer instantiated on a `se::StreamExecutor` instance, and
   // auxiliary state required for efficient command buffer updates.
   struct ExecutorCommandBuffer {
-    explicit ExecutorCommandBuffer(
-        std::unique_ptr<se::CommandBuffer> command_buffer);
+
+    using AllocsVec = std::vector<se::DeviceMemoryBase>; 
+
+    ExecutorCommandBuffer() = default;
+
+    // Adds new command buffer at index idx (and sets it to be active?)
+    void AddNew(int64_t graph_id, BufferAllocation::Index max_index,
+          std::unique_ptr<se::CommandBuffer> command_buffer);
+
+    void SetActiveGraph(int64_t idx) {
+      active_graph_ = idx;
+    }
+
+    se::CommandBuffer *ActiveGraph() {
+      return cached_graphs_[active_graph_].get();
+    }
 
     // Returns true if `commands` cmd sequence has to be recorded into
     // `command_buffer` to update it (see `recorded_allocs` below).
@@ -73,11 +91,17 @@ class CommandBufferThunk : public Thunk {
     // se::CommandBuffer is not thread safe, and we guard it with a mutex to
     // guarantee that we do not mutate it concurrently.
     absl::Mutex mutex;
-    std::unique_ptr<se::CommandBuffer> command_buffer ABSL_GUARDED_BY(mutex);
+
+    // Number of command buffer executions since last update.
+    int64_t num_executions ABSL_GUARDED_BY(mutex) = 0;
 
     // A manager for an external state attached by commands in a command
     // sequence to a command buffer.
     CommandBufferCmd::StateManager state ABSL_GUARDED_BY(mutex);
+
+  private:
+    std::array<std::unique_ptr<se::CommandBuffer>, NumCachedGraphs> 
+                                    cached_graphs_ ABSL_GUARDED_BY(mutex);
 
     // Mapping from buffer allocation index to the device memory passed at
     // that index to the last call of `commands_.Record(...)` for
@@ -90,10 +114,10 @@ class CommandBufferThunk : public Thunk {
     // execution on a stream. All other pieces of information (like thread
     // and block sizes) captured by commands at construction time and do not
     // change.
-    std::vector<se::DeviceMemoryBase> recorded_allocs ABSL_GUARDED_BY(mutex);
+    std::array< AllocsVec, NumCachedGraphs> recorded_allocs_ ABSL_GUARDED_BY(mutex);
 
-    // Number of command buffer executions since last update.
-    int64_t num_executions ABSL_GUARDED_BY(mutex) = 0;
+    // Holds the index of currently active graph [0, NumCachedGraphs-1]
+    int64_t active_graph_ ABSL_GUARDED_BY(mutex) = 0;
   };
 
   // Command buffer thunk owns commands buffers instantiated on all executors.
@@ -106,7 +130,8 @@ class CommandBufferThunk : public Thunk {
 
   // Returns a command buffer instantiated for `executor` or creates new one.
   absl::StatusOr<std::shared_ptr<ExecutorCommandBuffer>>
-  GetOrCreateCommandBuffer(se::StreamExecutor* executor);
+  GetOrCreateCommandBuffer(se::StreamExecutor* executor,
+        BufferAllocation::Index max_index);
 
   // Each individual command buffer allocates state on device (CUDA graph) and
   // it adds up pretty quickly. To prevent OOM errors we proactively evict

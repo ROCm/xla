@@ -354,6 +354,10 @@ class CommandBufferCmdSequence {
   // Returns buffer allocations indices referenced by commands in this sequence.
   const absl::flat_hash_set<BufferAllocation::Index>& allocs_indices() const;
 
+  BufferAllocation::Index maximal_index() const {
+    return maximal_index_;
+  }
+
   // Returns a vector that tells if command at the given index requires a
   // barrier.
   std::vector<bool> barriers() const;
@@ -389,6 +393,8 @@ class CommandBufferCmdSequence {
 
   // Buffer allocations indices referenced by commands in this sequence.
   absl::flat_hash_set<BufferAllocation::Index> allocs_indices_;
+  // Maximal index used tracked for efficiency
+  BufferAllocation::Index maximal_index_ = 0;
 
   // We track read and write sets of commands recorded into the command
   // sequence to detect conflicts and insert explicit barriers. These are the
@@ -400,6 +406,150 @@ class CommandBufferCmdSequence {
 
   absl::flat_hash_map<ExecutionStreamId, ReadWriteSet> read_write_sets_;
 };
+
+#if 0
+// TODO use this one isntead!
+
+//===----------------------------------------------------------------------===//
+// CommandBufferCmdExecutor
+//===----------------------------------------------------------------------===//
+
+// Command executor is responsible for recording commands sequence into the
+// underlying command buffer and setting up dependencies between commands.
+class CommandBufferCmdExecutor {
+ public:
+  CommandBufferCmdExecutor() = default;
+  CommandBufferCmdExecutor(CommandBufferCmdExecutor&&) = default;
+  CommandBufferCmdExecutor& operator=(CommandBufferCmdExecutor&&) = default;
+
+  using RecordParams = CommandBufferCmd::RecordParams;
+
+  // Synchronization mode defines how much concurrency is allowed between
+  // commands in the sequence.
+  enum class SynchronizationMode {
+    // Serializes execution of all commands recorded into the command buffer
+    // by adding a dependency between them.
+    kSerialize,
+
+    // Relies on execution graph to insert dependencies between commands
+    // that have buffer of resource conflicts, and building a DAG of commands.
+    kAutomatic
+  };
+
+  template <typename Sink>
+  friend void AbslStringify(Sink& sink, SynchronizationMode mode) {
+    switch (mode) {
+      case SynchronizationMode::kSerialize:
+        sink.Append("serialize");
+        break;
+      case SynchronizationMode::kAutomatic:
+        sink.Append("automatic");
+        break;
+    }
+  }
+
+  // Creates a command executor from a sequence of commands using given
+  // synchronization mode.
+  static absl::StatusOr<CommandBufferCmdExecutor> Create(
+      CommandBufferCmdSequence commands,
+      SynchronizationMode synchronization_mode);
+
+  // Prepares all commands added to a sequence.
+  absl::Status Prepare(const Thunk::PrepareParams& params,
+                       Thunk::ResourceRequestsInterface& resource_requests);
+
+  // Initializes all commands added to a sequence.
+  absl::Status Initialize(const Thunk::InitializeParams& params,
+                          CommandBufferCmd::StateManager& state);
+
+  // Records commands into the command buffer. This method automatically
+  // switches between `RecordCreate` or `RecordUpdate` depending on the command
+  // buffer state. This method assumes that no other command buffer sequence is
+  // recorded into the same command buffer, and doesn't set up initial
+  // dependencies for recorded commands.
+  absl::Status Record(const Thunk::ExecuteParams& execute_params,
+                      const RecordParams& record_params,
+                      se::CommandBuffer* command_buffer);
+
+  // Records command creation into the command buffer. Command buffer must be
+  // in create state. The next command sequence recorded into the same command
+  // buffer must use returned commands as dependencies, to guarantee that it is
+  // correctly ordered after this command sequence.
+  absl::StatusOr<std::vector<const se::CommandBuffer::Command*>> RecordCreate(
+      const Thunk::ExecuteParams& execute_params,
+      const RecordParams& record_params, se::CommandBuffer* command_buffer,
+      absl::Span<const se::CommandBuffer::Command* const> dependencies) const;
+
+  // Records command updates into the command buffer. Command buffer must be
+  // in update state.
+  absl::Status RecordUpdate(const Thunk::ExecuteParams& execute_params,
+                            const RecordParams& record_params,
+                            se::CommandBuffer* command_buffer) const;
+
+  // Returns buffers referenced by commands in this sequence.
+  const absl::flat_hash_set<BufferUse>& buffers() const;
+
+  // Returns buffer allocations indices referenced by commands in this sequence.
+  absl::Span<const BufferAllocation::Index> allocs_indices() const;
+
+  bool empty() const { return commands_.empty(); }
+  size_t size() const { return commands_.size(); }
+
+  bool requires_initialization() const {
+    return absl::c_any_of(commands_, [](const auto& cmd) {
+      return cmd->requires_initialization();
+    });
+  }
+
+ private:
+  // We use index into the `commands_` vector as a command id.
+  using CommandId = int64_t;
+
+  // A state associated with commands in the sequence. We rely on this state to
+  // efficiently update command recorded into the command buffer.
+  struct RecordState : public CommandBufferCmd::State {
+    const se::CommandBuffer::Command* command;
+  };
+
+  CommandBufferCmdExecutor(SynchronizationMode synchronization_mode,
+                           CommandBufferCmdSequence commands,
+                           std::optional<ExecutionGraph> execution_graph);
+
+  absl::Status CheckCommandBufferState(
+      se::CommandBuffer* command_buffer,
+      se::CommandBuffer::State expected_state) const;
+
+  // Returns true if command has no dependencies.
+  bool IsSource(CommandId id) const;
+
+  // Returns true if command is not a dependency of any other commands.
+  bool IsSink(CommandId id) const;
+
+  // Returns dependencies of the command with the given id.
+  std::vector<const se::CommandBuffer::Command*> Dependencies(
+      const RecordParams& record_params, se::CommandBuffer* command_buffer,
+      CommandId id) const;
+
+  SynchronizationMode synchronization_mode_;
+  CommandBufferCmdSequence commands_;
+
+  // In automatic synchronization mode we build an execution graph for the
+  // sequence of commands and use it to set up dependencies between commands.
+  std::optional<ExecutionGraph> execution_graph_;
+
+  // Buffers referenced by commands in this sequence.
+  absl::flat_hash_set<BufferUse> buffers_;
+
+  // Unique buffer allocations indices referenced by all commands in this
+  // sequence (sorted by the buffer allocation index).
+  std::vector<BufferAllocation::Index> allocs_indices_;
+
+  // A mapping from command id to unique buffer allocations indices referenced
+  // by the command (sorted by the buffer allocation index).
+  std::vector<std::vector<BufferAllocation::Index>> cmd_allocs_indices_;
+};
+
+#endif
 
 //===----------------------------------------------------------------------===//
 // TracedCommandBuffer

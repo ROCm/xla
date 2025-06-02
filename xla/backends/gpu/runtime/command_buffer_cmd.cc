@@ -204,6 +204,7 @@ void CommandBufferCmdSequence::Append(std::unique_ptr<CommandBufferCmd> cmd) {
   for (const BufferUse& buffer : cmd->buffers()) {
     buffers_.insert(buffer);
     allocs_indices_.insert(buffer.slice().index());
+    maximal_index_ = std::max(maximal_index_, buffer.slice().index());
   }
 
   ExecutionStreamId execution_stream_id = cmd->execution_stream_id();
@@ -308,7 +309,7 @@ absl::Status CommandBufferCmdSequence::Record(
 
   if (mode == RecordMode::kExclusive) {
     if (command_buffer->state() == se::CommandBuffer::State::kFinalized) {
-      // VLOG(0) << "Calling finalized buf update: " << command_buffer;
+      VLOG(0) << "Calling finalized buf update: " << command_buffer;
       TF_RETURN_IF_ERROR(command_buffer->Update());
     }
   }
@@ -339,16 +340,12 @@ absl::Status CommandBufferCmdSequence::Record(
     VLOG(5) << "Record command buffer with scope id "
             << execution_scope_id.value();
 
-    // always update barriers since this is just incrementing barrier counter
-    size_t num_skips = 0;
-    if (command.cmd->command_type() == CommandBufferCmdType::kBarrierCmd || 
-        command.cmd->IsGraphUpdateNeeded(execute_params, record_params, &num_skips))
-    {
-      TF_RETURN_IF_ERROR(
+    if(execute_params.stream->parent()->device_ordinal() == 0)
+    VLOG(0) << "Recording " << command.cmd->ToString();
+    TF_RETURN_IF_ERROR(
         command.cmd->Record(execute_params, record_params, command_buffer));
-    } else {
-      command_buffer->SkipUpdates(execution_scope_id, num_skips);
-    }
+    if(execute_params.stream->parent()->device_ordinal() == 0)
+    VLOG(0) << "Recording DONE: " << command.cmd->ToString();
     ++num_recorded_commands[execution_scope_id];
   }
 
@@ -540,18 +537,25 @@ absl::Status TracedCommandBufferCmd::AddTracedCommandBuffer(
 
   // It would be nice for TracedCommandBufferCmd to combine GetIfTraced with
   // IsGraphUpdateNeeded() to return a pointer to traced_cmd already!
-  auto *traced_cmd = GetTracedBuffer(record_params);
+  // auto *traced_cmd = GetTracedBuffer(record_params);
 
-  TF_ASSIGN_OR_RETURN(
-    auto nested_cmd,
-      traced_cmd->GetOrTraceCommandBuffer(execute_params.buffer_allocations,
-              execute_params.command_buffer_trace_stream, trace_func));
+  // TF_ASSIGN_OR_RETURN(
+  //   auto nested_cmd,
+  //     traced_cmd->GetOrTraceCommandBuffer(execute_params.buffer_allocations,
+  //             execute_params.command_buffer_trace_stream, trace_func));
+
+  TF_ASSIGN_OR_RETURN(auto nested,
+          se::TraceCommandBufferFactory::Create(
+                    execute_params.command_buffer_trace_stream, trace_func));
+
   
   ExecutionScopeId execution_scope_id = GetExecutionScope(record_params);
   VLOG(5) << "Add nested command buffer to execution scope: "
           << execution_scope_id.value();
   return command_buffer->AddNestedCommandBuffer(execution_scope_id,
-                                                *nested_cmd);
+                                                *nested);
+
+  // NOTE NOTE: here nested command buffer is going to be destroyed!!!!
 }
 
 //===----------------------------------------------------------------------===//
