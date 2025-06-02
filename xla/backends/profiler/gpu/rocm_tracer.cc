@@ -73,7 +73,7 @@ using kernel_symbol_data_t = rocprofiler_callback_tracing_code_object_kernel_sym
 rocprofiler_client_id_t*      client_id        = nullptr;
 rocprofiler_client_finalize_t client_fini_func = nullptr;
 // rocprofiler_context_id_t      client_ctx       = {0};
-rocprofiler_buffer_id_t       client_buffer    = {};
+// rocprofiler_buffer_id_t       client_buffer    = {};
 // buffer_name_info              client_name_info = {};
 // kernel_symbol_map_t           client_kernels   = {};
 
@@ -192,8 +192,6 @@ inline auto GetCallbackTracingNames() {
 }
 std::vector<rocprofiler_agent_v0_t> GetGpuDeviceAgents();
 
-
-
 // ----------------------------------------------------------------------------
 // Global pointer that rocprofiler callbacks can dereference.
 // ----------------------------------------------------------------------------
@@ -212,7 +210,6 @@ struct copy_args {
   rocprofiler_callback_tracing_kind_t kind{};
   rocprofiler_tracing_operation_t operation{};
 };
-
 auto ExtractCopyArgs = [](rocprofiler_callback_tracing_kind_t,
                           rocprofiler_tracing_operation_t,
                           uint32_t /*arg_num*/,
@@ -263,7 +260,6 @@ return 0;
 };
 
 //-----------------------------------------------------------------------------
-
 auto extract_copy_args = [](rocprofiler_callback_tracing_kind_t,
                             rocprofiler_tracing_operation_t,
                             uint32_t arg_num,
@@ -457,7 +453,6 @@ bool isMallocApi(uint32_t id) {
   return false;
 }
 
-
 // ----------------------------------------------------------------------------
 // Shared singleton that holds all state needed by the profiler callbacks.
 // ----------------------------------------------------------------------------
@@ -475,8 +470,9 @@ class RocprofLoggerShared {
   // XPlaneBuilder host_plane;
 
   // Contexts ----------------------------------------------------------
-  rocprofiler_context_id_t utilityContext{ 0 };
-  rocprofiler_context_id_t context{ 0 };
+  rocprofiler_context_id_t utilityContext{0};
+  rocprofiler_context_id_t context{0};
+  rocprofiler_buffer_id_t buffer{0};
 
   // Maps & misc -------------------------------------------------------
   kernel_symbol_map_t kernel_info;
@@ -519,8 +515,6 @@ constexpr uint32_t RocmTracerEvent::kInvalidDeviceId;
     }                                                                       \
   } while (false)
 
-
-
 // ----------------------------------------------------------------------------
 // Stub implementations for RocmTracer static functions expected by rocprofiler.
 // ----------------------------------------------------------------------------
@@ -562,31 +556,18 @@ int RocmTracer::NumGpus() {
 
 void RocmTracer::Enable(const RocmTracerOptions& options,
   RocmTraceCollector* collector) {
-// options_ = options;
-collector_ = collector;
-VLOG(-1) << "cj401 collector_ = " << collector_;
-if (g_shared != nullptr) {
-  VLOG(-1) << "GpuTracer started";
-  rocprofiler_start_context(g_shared->context);
-} else {
-  VLOG(-1) << "GpuTracer failed to start due to rocprofiler_configure failure";
-}
-
-  VLOG(-1) << "GpuTracer started";
-}
-/*
-void RocmTracer::Enable(RocmTracerOptions options, RocmTracerCollector* collector) {
-
-  externalCorrelationEnabled_ = true;
-  logging_ = true;
+  // options_ = options;
+  collector_ = collector;
+  VLOG(-1) << "cj401 collector_ = " << collector_;
   if (g_shared != nullptr) {
     VLOG(-1) << "GpuTracer started";
     rocprofiler_start_context(g_shared->context);
   } else {
     VLOG(-1) << "GpuTracer failed to start due to rocprofiler_configure failure";
   }
+  VLOG(-1) << "GpuTracer started";
 }
-*/
+
 void
 tool_tracing_callback(rocprofiler_context_id_t      context,
                       rocprofiler_buffer_id_t       buffer_id,
@@ -615,14 +596,98 @@ tool_tracing_callback(rocprofiler_context_id_t      context,
         return;
       }
 
-      RocmTracerEvent dummy_event{
-        //RocmTracerEventType::Unsupported,
-        RocmTracerEventType::Kernel,
-        RocmTracerEventSource::Activity,
-        RocmTracerEventDomain::HIP_API, "dummy", "123", "234", 0, 1000, 0, 0, 0, 0
+      uint32_t corr_id{0};
+      // API
+      // RocmTracerEvent dummy_api{
+      //   //RocmTracerEventType::Unsupported,
+      //   RocmTracerEventType::Kernel,
+      //   RocmTracerEventSource::ApiCallback,
+      //   RocmTracerEventDomain::HIP_API, "dummy_api", "123", "234", 0, 1000, 0, corr_id, 0, 0
+      // };
+
+      {
+        RocmTracerEvent event;
+        event.type = RocmTracerEventType::Kernel;
+        event.source = RocmTracerEventSource::ApiCallback;
+        event.domain = RocmTracerEventDomain::HIP_API;
+        event.name = "hipLaunchKernel";
+        event.annotation = "ApiCallbackAnnotation";
+        event.start_time_ns = 2'000'000'000;
+        event.end_time_ns = 2'000'050'000;
+        event.device_id = 0;
+        event.correlation_id = 2001;
+        event.thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
+        event.stream_id = 2;
+        event.kernel_info = {
+          0,      // registers_per_thread (unknown, set to 0)
+          0,      // static_shared_memory_usage (unknown, set to 0)
+          0,      // dynamic_shared_memory_usage (from original)
+          128,    // block_x (threads per block in X)
+          1,      // block_y (1D block)
+          1,      // block_z (1D block)
+          512,    // grid_x (blocks in X)
+          1,      // grid_y (1D grid)
+          1,      // grid_z (1D grid)
+          nullptr // func_ptr (from original)
       };
+
+        // VLOG(-1) << "cj401 rocprofiler invoked a buffer callback with " << num_headers << " headers";
+        tracer->collector()->AddEvent(std::move(event), false);
+      }
+
+      // Activity
+      // RocmTracerEvent dummy_event{
+      //   //RocmTracerEventType::Unsupported,
+      //   RocmTracerEventType::Kernel,
+      //   RocmTracerEventSource::Activity,
+      //   RocmTracerEventDomain::HIP_OPS, "dummy_hip", "123", "234", 0, 2000, 0, corr_id, 0, 0
+      // };
+
+      // RocmTracerEvent event;
+      // event.type = RocmTracerEventType::Kernel;
+      // event.source = RocmTracerEventSource::ApiCallback;
+      // event.domain = RocmTracerEventDomain::HIP_API;
+      // event.name = "DummyKernel";
+      // event.annotation = "DummyAnnotation";
+      // event.start_time_ns = 1'000'000'000;
+      // event.end_time_ns = 1'000'100'000;
+      // event.device_id = 0;
+      // event.correlation_id = 1001;
+      // event.thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
+      // event.stream_id = 1;
+      // event.kernel_info = {1024, 256, 0, nullptr};
+
+      {
+        RocmTracerEvent activity_event;
+        activity_event.type = RocmTracerEventType::Kernel;
+        activity_event.source = RocmTracerEventSource::Activity;
+        activity_event.domain = RocmTracerEventDomain::HIP_OPS;
+        activity_event.name = "myKernel"; // Replace with actual kernel name
+        activity_event.annotation = "KernelExecutionAnnotation";
+        activity_event.start_time_ns = 2'000'010'000; // Slightly later than API call
+        activity_event.end_time_ns = 2'000'060'000;   // Adjusted duration
+        activity_event.device_id = 0;
+        activity_event.correlation_id = 2001; // Matches API event
+        activity_event.thread_id = 0; // Typically 0 for activity records
+        activity_event.stream_id = 2; // Matches API event
+        activity_event.kernel_info = {
+          0,      // registers_per_thread (unknown, set to 0)
+          0,      // static_shared_memory_usage (unknown, set to 0)
+          0,      // dynamic_shared_memory_usage (from original)
+          128,    // block_x (threads per block in X)
+          1,      // block_y (1D block)
+          1,      // block_z (1D block)
+          512,    // grid_x (blocks in X)
+          1,      // grid_y (1D grid)
+          1,      // grid_z (1D grid)
+          nullptr // func_ptr (from original)
+      };
+
+        tracer->collector()->AddEvent(std::move(activity_event), false);
+      }
+
       // VLOG(-1) << "cj401 rocprofiler invoked a buffer callback with " << num_headers << " headers";
-      tracer->collector()->AddEvent(std::move(dummy_event), false);
+      corr_id += 1;
       // VLOG(-1) << "cj401 RocmTracer::GetRocmTracerSingleton()->collector()->AddEvent(std::move(dummy_event), false);";
     }
       
@@ -683,10 +748,21 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
     ROCPROFILER_BUFFER_POLICY_LOSSLESS,
     tool_tracing_callback,
     tool_data,
-    &client_buffer);
+    &g_shared->buffer);
 
   rocprofiler_configure_buffer_tracing_service(
-    g_shared->context, ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API, nullptr, 0, client_buffer);
+    g_shared->context, ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API, nullptr, 0, g_shared->buffer);
+
+  rocprofiler_configure_buffer_tracing_service(
+      g_shared->context, ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH, nullptr, 0, g_shared->buffer);
+
+  rocprofiler_configure_buffer_tracing_service(
+        g_shared->context, ROCPROFILER_BUFFER_TRACING_MEMORY_COPY, nullptr, 0, g_shared->buffer);
+
+  auto client_thread = rocprofiler_callback_thread_t{};
+  rocprofiler_create_callback_thread(&client_thread);
+    
+  rocprofiler_assign_callback_thread(g_shared->buffer, client_thread);
 
   int isValid = 0;
   rocprofiler_context_is_valid(g_shared->context, &isValid);
@@ -706,8 +782,13 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
 void RocmTracer::toolFinalize(void* tool_data) {
   rocprofiler_stop_context(g_shared->utilityContext);
   g_shared->utilityContext.handle = 0;
+
+
   rocprofiler_stop_context(g_shared->context);
+  // flush buffer here or in disable?
+
   g_shared->context.handle = 0;
+  
 }
 
 void RocmTracer::Disable() {
@@ -718,11 +799,6 @@ void RocmTracer::Disable() {
 }
 
 //------------------------------------------------------------------------
-
-
-
-//------------------------------------------------------------------------
-
 void RocmTracer::code_object_callback(
   rocprofiler_callback_tracing_record_t record,
   rocprofiler_user_data_t* user_data,
@@ -803,21 +879,7 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
   std::cerr << info.str() << std::endl << std::flush;
 
   return &g_shared->cfg;
-  
 }
 
 }  // namespace profiler
 }  // namespace xla
-
-/*
-extern "C" __attribute__((constructor)) __attribute__((used))
-void InitRocprofilerOnLoad() {
-  fprintf(stderr, "[XLA ROCm] InitRocprofilerOnLoad() triggered\n");
-
-  static rocprofiler_client_id_t dummy_id = {};
-  dummy_id.name = "XLA-dummy";
-
-  // We pass 0 as version/priority and "" for runtime_version to satisfy API
-  xla::profiler::rocprofiler_configure(0, "", 0, &dummy_id);
-}
-*/
