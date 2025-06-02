@@ -100,10 +100,10 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
   const BufferAllocations* allocs = params.buffer_allocations;
 
   // first search if any of recorded graphs is fine
-  for (auto graph_id = active_graph_; 
-                    graph_id < active_graph_ + NumCachedGraphs; graph_id++) { 
+  auto start_id = (active_graph_ + NumCachedGraphs-1) % NumCachedGraphs;
+  for (auto id = start_id; id < start_id + NumCachedGraphs; id++) { 
     bool should_update = false;
-    auto& recorded = recorded_allocs_[graph_id % NumCachedGraphs];
+    auto& recorded = recorded_allocs_[id % NumCachedGraphs];
     for (const auto idx : commands.allocs_indices()) {
       auto alloc = allocs->GetDeviceAddress(idx);
       if (!recorded[idx].IsSameAs(alloc)) {
@@ -112,7 +112,7 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
       }
     }
     if (!should_update) {
-      active_graph_ = graph_id % NumCachedGraphs;
+      active_graph_ = id % NumCachedGraphs;
       // if(params.stream->parent()->device_ordinal()==0)
       // VLOG(0) << "Setting active graph to: " << active_graph_;
       return false;
@@ -122,6 +122,12 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
   active_graph_ = (active_graph_ + NumCachedGraphs-1) % NumCachedGraphs;
   if(params.stream->parent()->device_ordinal()==0) 
    VLOG(0) << "Recording to new active graph: " << active_graph_;
+
+  // then there is no need to allocate graph earlier in AddNew function..
+  // NOTE: well using params.stream->parent() is not very clean..
+  auto command_buffer =
+        params.stream->parent()->CreateCommandBuffer(se::CommandBuffer::Mode::kPrimary).value();
+  cached_graphs_[active_graph_] = std::move(command_buffer);
 
   auto& recorded = recorded_allocs_[active_graph_];
   // We check only allocations referenced by commands in a cmd sequence, and
@@ -216,7 +222,7 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
 #else
     VLOG(3)
 #endif
-       << executor->device_ordinal() << " updated command buffer in " << ss
+       << "dev: " << executor->device_ordinal() << " updated command buffer in " << ss
             << " sec; num_commands=" << commands_.size();
     cmd_buffer->num_executions = 0;
   }

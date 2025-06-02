@@ -865,7 +865,6 @@ absl::Status GpuCommandBuffer::Update() {
   state_ = State::kUpdate;
   for (auto& [_, execution_scope] : execution_scopes_) {
     execution_scope.update_state = ExecutionScope::UpdateState();
-    VLOG(1) << " --#nodes: " << execution_scope.nodes.size();
   }
   return absl::OkStatus();
 }

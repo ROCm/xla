@@ -309,7 +309,7 @@ absl::Status CommandBufferCmdSequence::Record(
 
   if (mode == RecordMode::kExclusive) {
     if (command_buffer->state() == se::CommandBuffer::State::kFinalized) {
-      VLOG(0) << "Calling finalized buf update: " << command_buffer;
+      // VLOG(0) << "Calling finalized buf update: " << command_buffer;
       TF_RETURN_IF_ERROR(command_buffer->Update());
     }
   }
@@ -340,12 +340,12 @@ absl::Status CommandBufferCmdSequence::Record(
     VLOG(5) << "Record command buffer with scope id "
             << execution_scope_id.value();
 
-    if(execute_params.stream->parent()->device_ordinal() == 0)
-    VLOG(0) << "Recording " << command.cmd->ToString();
+    // if(execute_params.stream->parent()->device_ordinal() == 0)
+    // VLOG(0) << "Recording " << command.cmd->ToString();
     TF_RETURN_IF_ERROR(
         command.cmd->Record(execute_params, record_params, command_buffer));
-    if(execute_params.stream->parent()->device_ordinal() == 0)
-    VLOG(0) << "Recording DONE: " << command.cmd->ToString();
+    // if(execute_params.stream->parent()->device_ordinal() == 0)
+    // VLOG(0) << "Recording DONE: " << command.cmd->ToString();
     ++num_recorded_commands[execution_scope_id];
   }
 
@@ -505,7 +505,7 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     const BufferAllocations* buffer_allocation, 
     se::Stream* stream, TraceFunc trace_func) {
 
-  if (entries_[0].command_buffer == nullptr) {
+  //if (entries_[0].command_buffer == nullptr) {
     // size_t i = 1;
     // for(i = 1; i < entries_.size(); i++) {
     //   if(entries_[i].command_buffer == nullptr) break;
@@ -518,7 +518,7 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     // keep # of child nodes needed for skipping updates
     TF_ASSIGN_OR_RETURN(num_child_nodes_, 
                     entries_[0].command_buffer->GetNumChildNodes());
-  }
+  // }
   return entries_[0].command_buffer.get();
 }
 
@@ -537,23 +537,22 @@ absl::Status TracedCommandBufferCmd::AddTracedCommandBuffer(
 
   // It would be nice for TracedCommandBufferCmd to combine GetIfTraced with
   // IsGraphUpdateNeeded() to return a pointer to traced_cmd already!
-  // auto *traced_cmd = GetTracedBuffer(record_params);
+  auto *traced_cmd = GetTracedBuffer(record_params);
 
   // TF_ASSIGN_OR_RETURN(
-  //   auto nested_cmd,
-  //     traced_cmd->GetOrTraceCommandBuffer(execute_params.buffer_allocations,
-  //             execute_params.command_buffer_trace_stream, trace_func));
+  //    auto nested_cmd,
+  //      traced_cmd->GetOrTraceCommandBuffer(execute_params.buffer_allocations,
+  //              execute_params.command_buffer_trace_stream, trace_func));
 
-  TF_ASSIGN_OR_RETURN(auto nested,
+  TF_ASSIGN_OR_RETURN(auto nested_cmd,
           se::TraceCommandBufferFactory::Create(
                     execute_params.command_buffer_trace_stream, trace_func));
-
   
   ExecutionScopeId execution_scope_id = GetExecutionScope(record_params);
   VLOG(5) << "Add nested command buffer to execution scope: "
           << execution_scope_id.value();
   return command_buffer->AddNestedCommandBuffer(execution_scope_id,
-                                                *nested);
+                                                *nested_cmd);
 
   // NOTE NOTE: here nested command buffer is going to be destroyed!!!!
 }
@@ -2014,18 +2013,9 @@ absl::Status CollectivePermuteCmd::Record(const Thunk::ExecuteParams& execute_pa
 
   return AddTracedCommandBuffer(
       execute_params, record_params, command_buffer, [&](se::Stream* stream) {
-        //VLOG(0) << this << " Tracing collective permute for: " << current_id;
-        // return absl::OkStatus();
         auto res = RunCollectivePermute(collectives, source_target, device_buffers,
               *stream, comm_handle.comm, "cmd_buf_collective_permute", current_id, 
               /*use_memcpy*/false, /*recv_ptr_map*/nullptr);
-        // finish_counter_++;
-        // while(finish_counter_.load() % 8 != 0) {
-        //   std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        // }
-        // VLOG(0) << this << " collective permute for: " << current_id << " DONE: " 
-        //         << finish_counter_.load();
-        // std::this_thread::sleep_for(std::chrono::seconds(10));
         return res;
       });
 }
