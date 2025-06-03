@@ -429,7 +429,8 @@ absl::StatusOr<XlaOp> BuildBlockScaledDot(
     XlaBuilder& builder, const HloInstruction* lhs_input,
     const HloInstruction* rhs_input, const HloInstruction* lhs_scale,
     const HloInstruction* rhs_scale, const DotDimensionNumbers& dnums,
-    const se::DeviceDescription& device_description, const bool allow_cudnn, PrimitiveType result_type) {
+    const se::DeviceDescription& device_description, const bool allow_cudnn,
+    const bool allow_hipblaslt, PrimitiveType result_type) {
   // Get dot LHS parameter(s).
   XlaOp lhs_op = Parameter(&builder, 0, lhs_input->shape(), "lhs");
   XlaOp lhs_scale_op = Parameter(&builder, 2, lhs_scale->shape(), "lhs_scale");
@@ -468,7 +469,7 @@ absl::StatusOr<XlaOp> BuildBlockScaledDot(
   }
 
   // For ROCm platform, use hipblaslt kernel, if possible.
-  if (is_rocm && rhs_scale_op.valid()) {
+  if (is_rocm && allow_hipblaslt &&rhs_scale_op.valid()) {
     return BuildHipblasltScaledDot(lhs_op, rhs_op, lhs_scale_op, rhs_scale_op,
                                    dnums, result_type);
   }
@@ -486,8 +487,9 @@ absl::StatusOr<XlaOp> BuildBlockScaledDot(
 
 // Convert scaled dot custom call to HLO computation.
 absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCall(
-    HloInstruction* instruction, const se::DeviceDescription& device_description,
-    const bool allow_cudnn) {
+    HloInstruction* instruction,
+    const se::DeviceDescription& device_description, const bool allow_cudnn,
+    const bool allow_hipblaslt) {
   PrimitiveType result_type = instruction->shape().element_type();
 
   // Check operand count.
@@ -521,7 +523,8 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCall(
       XlaOp block_scaled_dot,
       BuildBlockScaledDot(builder, operands[0], operands[1], operands[2],
                           operands.size() == 4 ? operands[3] : nullptr, dnums,
-                          device_description, allow_cudnn, result_type));
+                          device_description, allow_cudnn, allow_hipblaslt,
+                          result_type));
 
   // Reshape to the expected output shape.
   // This should only happen when a unit-sized dimension is added by the pass.
@@ -553,7 +556,8 @@ absl::StatusOr<HloInstruction*> BlockScalingRewriter::ExpandInstruction(
     return ExpandDequantizeCustomCall(instruction);
   }
   if (instruction->custom_call_target() == kBlockScaledDotCustomCallTarget) {
-    return ExpandBlockScaledDotCustomCall(instruction, device_description_, allow_cudnn_);
+    return ExpandBlockScaledDotCustomCall(instruction, device_description_,
+                                          allow_cudnn_, allow_hipblaslt_);
   }
   LOG(FATAL) << "Unexpected custom call target: "
              << instruction->custom_call_target();

@@ -183,7 +183,8 @@ absl::Status AMDGPUCompiler::OptimizeHloPostLayoutAssignment(
 
   HloPassPipeline pre_pipeline("AMDGPU post-layout_assignment part 1");
   pre_pipeline.AddPass<BlockScalingRewriter>(
-      gpu_target_config.device_description, /*allow_cudnn*/ false);
+      gpu_target_config.device_description, /*allow_cudnn*/ false,
+      /*allow_hipblaslt*/ false);
   pre_pipeline.AddPass<DotDimensionMerger>();
 
   for (const auto& req : HipblasPaddingRequirements) {

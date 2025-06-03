@@ -65,8 +65,11 @@ namespace xla::gpu {
 class BlockScalingRewriter : public OpExpanderPass {
  public:
   explicit BlockScalingRewriter(const se::DeviceDescription& device_description,
-                                const bool allow_cudnn)
-      : device_description_(device_description), allow_cudnn_(allow_cudnn) {};
+                                const bool allow_cudnn,
+                                const bool allow_hipblaslt)
+      : device_description_(device_description),
+        allow_cudnn_(allow_cudnn),
+        allow_hipblaslt_(allow_hipblaslt) {};
 
   absl::string_view name() const override { return "block-scaling-rewriter"; }
 
@@ -90,6 +93,7 @@ class BlockScalingRewriter : public OpExpanderPass {
  private:
   const se::DeviceDescription device_description_;
   const bool allow_cudnn_;
+  const bool allow_hipblaslt_;
 };
 
 }  // namespace xla::gpu
