@@ -441,18 +441,22 @@ absl::StatusOr<XlaOp> BuildBlockScaledDot(
     rhs_scale_op = Parameter(&builder, 3, rhs_scale->shape(), "rhs_scale");
   }
 
-  se::GpuComputeCapability gpu_cc = device_description.gpu_compute_capability();
-  bool is_cuda =
-      std::holds_alternative<stream_executor::CudaComputeCapability>(gpu_cc);
-  auto* cuda_cc = std::get_if<se::CudaComputeCapability>(&gpu_cc);
-  bool is_rocm =
-      std::holds_alternative<stream_executor::RocmComputeCapability>(gpu_cc);
-  auto* rocm_cc = std::get_if<se::RocmComputeCapability>(&gpu_cc);
+  // se::GpuComputeCapability gpu_cc = device_description.gpu_compute_capability();
+  // bool is_cuda =
+  //     std::holds_alternative<stream_executor::CudaComputeCapability>(gpu_cc);
+  // auto* cuda_cc = std::get_if<se::CudaComputeCapability>(&gpu_cc);
+  // bool is_rocm =
+  //     std::holds_alternative<stream_executor::RocmComputeCapability>(gpu_cc);
+  // auto* rocm_cc = std::get_if<se::RocmComputeCapability>(&gpu_cc);
+  //   bool is_cuda = false;
+  // LOG(INFO) << "device_description.name(): " << device_description.name();
+  // LOG(INFO) << "is_cuda: " << is_cuda;
+  // LOG(INFO) << "is_rocm: " << is_rocm;
 
-  LOG(INFO) << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
-  LOG(INFO) << "device_description.name(): " << device_description.name();
-  LOG(INFO) << "is_cuda: " << is_cuda;
-  LOG(INFO) << "is_rocm: " << is_rocm;
+  // In the current implementation, we force the platform to be ROCm.
+  // Later on, we need to let the unit test to set the following variables automatically.
+  bool is_rocm = true;
+  bool is_cuda = false;
 
   // For CUDA platform, use cuDNN kernel, if possible.
   if (is_cuda && allow_cudnn && rhs_scale_op.valid() &&
@@ -464,8 +468,9 @@ absl::StatusOr<XlaOp> BuildBlockScaledDot(
   }
 
   // For ROCm platform, use hipblaslt kernel, if possible.
-  if (is_rocm) {
-    // return BuildHipblasltScaledDot();
+  if (is_rocm && rhs_scale_op.valid()) {
+    return BuildHipblasltScaledDot(lhs_op, rhs_op, lhs_scale_op, rhs_scale_op,
+                                   dnums, result_type);
   }
 
   // Fallback solution: build general dot op.

@@ -241,6 +241,12 @@ void HloHardwareIndependentTestBase::RunAndFilecheckHloRewrite(
                                  : ParseAndReturnVerifiedModule(hlo));
   TF_ASSERT_OK_AND_ASSIGN(bool changed, RunHloPass(&hlo_pass, module.get()));
   EXPECT_EQ(changed, expected.has_value()) << module->ToString();
+  LOG(INFO) << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+  LOG(INFO) << "True HLO: \n";
+  LOG(INFO) << module->ToString();
+  LOG(INFO) << "Expected HLO: \n";
+  LOG(INFO) << expected.value();
+  LOG(INFO) << "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
   if (changed) {
     TF_ASSERT_OK_AND_ASSIGN(
         bool filecheck_matches,

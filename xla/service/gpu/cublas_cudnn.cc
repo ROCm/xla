@@ -58,7 +58,7 @@ const absl::string_view kCublasLtMatmulCallTarget = "__cublas$lt$matmul";
 const absl::string_view kCublasLtMatmulF8CallTarget = "__cublas$lt$matmul$f8";
 const absl::string_view kTriangularSolveCallTarget = "__cublas$triangularSolve";
 const absl::string_view kHipblasltBlockScaledDotCallTarget =
-    "__cudnn$blockScaledDot";
+    "__hipblaslt$blockScaledDot";
 
 const absl::string_view kCudnnConvBackwardInputCallTarget =
     "__cudnn$convBackwardInput";
