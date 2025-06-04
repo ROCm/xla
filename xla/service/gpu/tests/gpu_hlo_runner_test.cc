@@ -25,6 +25,19 @@ limitations under the License.
 #include "tsl/platform/env.h"
 #include "tsl/platform/path.h"
 
+// #include "xla/tsl/profiler/convert/xla_op_utils.h"
+#include "xla/tsl/profiler/rpc/client/capture_profile.h"
+// #include "xla/tsl/profiler/utils/file_system_utils.h"
+// #include "xla/tsl/profiler/utils/xplane_builder.h"
+// #include "xla/tsl/profiler/utils/xplane_schema.h"
+#include "tsl/platform/test.h"
+// #include "tsl/profiler/protobuf/profiled_instructions.pb.h"
+#include "tsl/profiler/protobuf/xplane.pb.h"
+
+#include "tsl/profiler/lib/profiler_session.h"
+
+
+
 namespace xla {
 namespace gpu {
 
@@ -117,6 +130,25 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
   }
   return std::move(arguments);
 }
+
+// absl::Status ExportToTensorBoard(const tensorflow::profiler::XSpace& xspace,
+//                                  const std::string& logdir,
+//                                  bool also_export_trace_json) {
+//   std::string repository_root =
+//       tsl::profiler::GetTensorBoardProfilePluginDir(logdir);
+//   std::string run = tsl::profiler::GetCurrentTimeStampAsString();
+//   std::string host = tsl::port::Hostname();
+//   TF_RETURN_IF_ERROR(
+//       tsl::profiler::SaveXSpace(repository_root, run, host, xspace));
+//   if (also_export_trace_json) {
+//     tsl::profiler::TraceContainer container =
+//         tsl::profiler::ConvertXSpaceToTraceContainer(xspace);
+//     return tsl::profiler::SaveGzippedToolData(
+//         repository_root, run, host, "trace.json.gz",
+//         tsl::profiler::TraceContainerToJson(container));
+//   }
+//   return absl::OkStatus();
+// }
 
 } // namespace 
 
@@ -273,7 +305,22 @@ TEST_F(HloRunnerTest, RunSingle) {
   
   if (std::ifstream ifs("input.hlo"); ifs.good()) {
     std::ofstream ofs;
-    return run_internal(ifs, ofs, "input");
+
+    auto opts = tsl::ProfilerSession::DefaultOptions();
+    //opts.set_device_type(tensorflow::ProfileOptions::GPU);
+    opts.set_python_tracer_level(1);
+    opts.set_enable_hlo_proto(true);
+    auto sess = tsl::ProfilerSession::Create(opts);
+
+    run_internal(ifs, ofs, "input");
+
+    tensorflow::profiler::XSpace xspace;
+    TF_CHECK_OK(sess->CollectData(&xspace));
+    VLOG(0) << "Collected Xspace data!";
+    TF_CHECK_OK(tsl::profiler::ExportToTensorBoard(
+                 xspace, "uu_dump",
+                 /* also_export_trace_json= */ true));
+    return;
   }
   std::ifstream ifs("pattern.txt");
   if (!ifs.good()) {
