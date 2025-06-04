@@ -605,6 +605,9 @@ tool_tracing_callback(rocprofiler_context_id_t      context,
       //   RocmTracerEventDomain::HIP_API, "dummy_api", "123", "234", 0, 1000, 0, corr_id, 0, 0
       // };
 
+      auto tmp_ts = RocmTracer::GetTimestamp();
+      VLOG(-1) << "cj401 tmp_ts = " << tmp_ts;
+      // auto tmp_ts = 4129665416877750;
       {
         RocmTracerEvent event;
         event.type = RocmTracerEventType::Kernel;
@@ -612,10 +615,10 @@ tool_tracing_callback(rocprofiler_context_id_t      context,
         event.domain = RocmTracerEventDomain::HIP_API;
         event.name = "hipLaunchKernel";
         event.annotation = "ApiCallbackAnnotation";
-        event.start_time_ns = 2'000'000'000;
-        event.end_time_ns = 2'000'050'000;
+        event.start_time_ns = tmp_ts + 1000;
+        event.end_time_ns = tmp_ts + 20000;
         event.device_id = 0;
-        event.correlation_id = 2001;
+        event.correlation_id = corr_id;
         event.thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
         event.stream_id = 2;
         event.kernel_info = {
@@ -643,31 +646,17 @@ tool_tracing_callback(rocprofiler_context_id_t      context,
       //   RocmTracerEventDomain::HIP_OPS, "dummy_hip", "123", "234", 0, 2000, 0, corr_id, 0, 0
       // };
 
-      // RocmTracerEvent event;
-      // event.type = RocmTracerEventType::Kernel;
-      // event.source = RocmTracerEventSource::ApiCallback;
-      // event.domain = RocmTracerEventDomain::HIP_API;
-      // event.name = "DummyKernel";
-      // event.annotation = "DummyAnnotation";
-      // event.start_time_ns = 1'000'000'000;
-      // event.end_time_ns = 1'000'100'000;
-      // event.device_id = 0;
-      // event.correlation_id = 1001;
-      // event.thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
-      // event.stream_id = 1;
-      // event.kernel_info = {1024, 256, 0, nullptr};
-
       {
         RocmTracerEvent activity_event;
         activity_event.type = RocmTracerEventType::Kernel;
         activity_event.source = RocmTracerEventSource::Activity;
         activity_event.domain = RocmTracerEventDomain::HIP_OPS;
-        activity_event.name = "myKernel"; // Replace with actual kernel name
+        activity_event.name = "cj_Kernel"; // Replace with actual kernel name
         activity_event.annotation = "KernelExecutionAnnotation";
-        activity_event.start_time_ns = 2'000'010'000; // Slightly later than API call
-        activity_event.end_time_ns = 2'000'060'000;   // Adjusted duration
+        activity_event.start_time_ns = tmp_ts + 2000; // Slightly later than API call
+        activity_event.end_time_ns = tmp_ts + 20000;   // Adjusted duration
         activity_event.device_id = 0;
-        activity_event.correlation_id = 2001; // Matches API event
+        activity_event.correlation_id = corr_id; // Matches API event
         activity_event.thread_id = 0; // Typically 0 for activity records
         activity_event.stream_id = 2; // Matches API event
         activity_event.kernel_info = {
