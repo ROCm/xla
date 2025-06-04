@@ -241,7 +241,7 @@ class PerDeviceCollector {
                     XLineBuilder* line) {
     if (event.start_time_ns < start_gpu_ns || event.end_time_ns > end_gpu_ns ||
         event.start_time_ns > event.end_time_ns) {
-      VLOG(2) << "events have abnormal timestamps:" << event.name
+      VLOG(-1) << "cj401 events have abnormal timestamps:" << event.name
               << " start time(ns): " << event.start_time_ns
               << " end time(ns): " << event.end_time_ns
               << " start gpu(ns):" << start_gpu_ns
@@ -624,50 +624,49 @@ class RocmTraceCollectorImpl : public profiler::RocmTraceCollector {
 //==========
 void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
   bool is_auxiliary) {
-mutex_lock lock(event_maps_mutex_);
+  mutex_lock lock(event_maps_mutex_);
 
-// printf("cj401 event source = %d\n", event.source);
-VLOG(-1) << "cj401 event correlation id = " << event.correlation_id << " event.source = " << int(event.source) << " event.name = " << event.name;
+  // printf("cj401 event source = %d\n", event.source);
+  VLOG(-1) << "cj401 event correlation id = " << event.correlation_id << " event.source = " << int(event.source) << " event.name = " << event.name;
 
-if (event.source == RocmTracerEventSource::ApiCallback && !is_auxiliary) {
-if (num_callback_events_ > options_.max_callback_api_events) {
-OnEventsDropped("max callback event capacity reached",
-event.correlation_id);
-DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
-return;
-}
-num_callback_events_++;
-} else if (event.source == RocmTracerEventSource::Activity &&
-event.domain == RocmTracerEventDomain::HIP_API) {
-// we do not count HIP_OPS activities.
-if (num_activity_events_ > options_.max_activity_api_events) {
-OnEventsDropped("max activity event capacity reached",
-event.correlation_id);
-DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
-return;
-}
-num_activity_events_++;
-}
+  if (event.source == RocmTracerEventSource::ApiCallback && !is_auxiliary) {
+    if (num_callback_events_ > options_.max_callback_api_events) {
+      OnEventsDropped("max callback event capacity reached",
+      event.correlation_id);
+      DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
+      return;
+  }
+    num_callback_events_++;
+  } else if (event.source == RocmTracerEventSource::Activity &&
+    event.domain == RocmTracerEventDomain::HIP_API) {
+      // we do not count HIP_OPS activities.
+      if (num_activity_events_ > options_.max_activity_api_events) {
+        OnEventsDropped("max activity event capacity reached", event.correlation_id);
+        DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
+        return;
+      }
+    num_activity_events_++;
+  }
 
-bool emplace_result = false;
-if (event.source == RocmTracerEventSource::ApiCallback) {
-auto& target_api_event_map =
-(is_auxiliary) ? auxiliary_api_events_map_ : api_events_map_;
-VLOG(-1) << "cj401 event correlation id = " << event.correlation_id << " event.source = " << int(event.source) << " event.name = " << event.name;
-std::tie(std::ignore, emplace_result) =
-target_api_event_map.emplace(event.correlation_id, std::move(event));
-} else if (event.source == RocmTracerEventSource::Activity) {
-auto result = activity_ops_events_map_.emplace(
-event.correlation_id, std::vector<RocmTracerEvent>{});
-VLOG(-1) << "cj401 event correlation id = " << event.correlation_id << " event.source = " << int(event.source) << " event.name = " << event.name;
-result.first->second.push_back(std::move(event));
-emplace_result = true;  // we always accept Hip-Ops events
-}
-if (!emplace_result) {
-OnEventsDropped("event with duplicate correlation_id was received.",
-event.correlation_id);
-DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
-}
+  bool emplace_result = false;
+  if (event.source == RocmTracerEventSource::ApiCallback) {
+    auto& target_api_event_map = (is_auxiliary) ? auxiliary_api_events_map_ : api_events_map_;
+    VLOG(-1) << "cj401 event correlation id = " << event.correlation_id << " event.source = " << int(event.source) << " event.name = " << event.name;
+    std::tie(std::ignore, emplace_result) =
+      target_api_event_map.emplace(event.correlation_id, std::move(event));
+  } else if (event.source == RocmTracerEventSource::Activity) {
+    auto result = activity_ops_events_map_.emplace(
+    event.correlation_id, std::vector<RocmTracerEvent>{});
+    VLOG(-1) << "cj401 event correlation id = " << event.correlation_id << " event.source = " << int(event.source) << " event.name = " << event.name;
+    result.first->second.push_back(std::move(event));
+  emplace_result = true;  // we always accept Hip-Ops events
+  }
+
+  if (!emplace_result) {
+    OnEventsDropped("event with duplicate correlation_id was received.",
+    event.correlation_id);
+    DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
+  }
 }
 
 // void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
