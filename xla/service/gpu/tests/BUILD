@@ -23,6 +23,11 @@ load(
     "if_cuda_is_configured",
 )
 
+load(
+    "//xla/tsl/platform:build_config.bzl",
+    "tf_protos_profiler_service",
+)
+
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = [":friends"],
@@ -192,7 +197,15 @@ xla_test(
         "@tsl//tsl/platform:statusor",
         "@tsl//tsl/platform:test",
         "@tsl//tsl/platform:test_main",
-    ],
+        "@tsl//tsl/profiler/lib:profiler_session_impl",
+        "@tsl//tsl/profiler/lib:profiler_factory_impl",
+        "//xla/tsl/profiler/rpc/client:capture_profile",
+        "//xla/tsl/profiler/rpc:profiler_server_impl",
+        "//xla/tsl/profiler/rpc:profiler_service_impl",
+        "//xla/tsl/profiler/rpc/client:profiler_client_impl",
+        "//xla/backends/profiler:profiler_backends",  # To register the Host Tracers for GPU Plugin.
+        "//xla/backends/profiler/gpu:device_tracer",  # To register the GPU Tracers with the GPU Plugin.
+    ] + tf_protos_profiler_service(),
 )
 
 xla_test(
