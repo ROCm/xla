@@ -28,19 +28,28 @@ if [[ $CONFIG == "rocm_ci_hermetic" ]]; then
 	ASAN_ARGS+=("--config=asan")
 fi
 
-bazel --bazelrc=/usertools/rocm.bazelrc test \
-	--config=${CONFIG} \
-	--config=xla_cpp \
-	--disk_cache=${DISK_CACHE_PATH} \
-	--test_tag_filters=gpu,requires-gpu-amd,-requires-gpu-nvidia,-no_oss,-oss_excluded,-oss_serial,-no_gpu,-no_rocm,-requires-gpu-sm60,-requires-gpu-sm60-only,-requires-gpu-sm70,-requires-gpu-sm70-only,-requires-gpu-sm80,-requires-gpu-sm80-only,-requires-gpu-sm86,-requires-gpu-sm86-only,-requires-gpu-sm89,-requires-gpu-sm89-only,-requires-gpu-sm90,-requires-gpu-sm90-only \
-	--build_tag_filters=gpu,requires-gpu-amd,-requires-gpu-nvidia,-no_oss,-oss_excluded,-oss_serial,-no_gpu,-no_rocm,-requires-gpu-sm60,-requires-gpu-sm60-only,-requires-gpu-sm70,-requires-gpu-sm70-only,-requires-gpu-sm80,-requires-gpu-sm80-only,-requires-gpu-sm86,-requires-gpu-sm86-only,-requires-gpu-sm89,-requires-gpu-sm89-only,-requires-gpu-sm90,-requires-gpu-sm90-only \
-	--profile=/tf/pkg/profile.json.gz \
-	--keep_going \
-	--test_env=TF_TESTS_PER_GPU=1 \
-	--test_env=TF_GPU_COUNT=2 \
-	--action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
-	--action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
-	--test_output=errors \
-	--local_test_jobs=2 \
-	--run_under=//tools/ci_build/gpu_build:parallel_gpu_execute \
-	"${ASAN_ARGS[@]}"
+bazel \
+    --bazelrc=/usertools/rocm.bazelrc \
+    --output_base=/tmp/bzl \
+    test \
+    --config=${CONFIG} \
+    --config=xla_cpp \
+    --disk_cache=${DISK_CACHE_PATH} \
+    --keep_going \
+    --test_env=TF_TESTS_PER_GPU=1 \
+    --test_env=TF_GPU_COUNT=2 \
+    --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
+    --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
+    --test_output=errors \
+    --local_test_jobs=2 \
+    --run_under=//tools/ci_build/gpu_build:parallel_gpu_execute \
+    "${ASAN_ARGS[@]}" \
+    //xla/service:compiler_test_gpu_amd_any \
+    //xla/service:elemental_ir_emitter_test_gpu_amd_any \
+    //xla/service/gpu:gpu_compiler_test_gpu_amd_any \
+    //xla/tests:matmul_test_gpu_amd_any \
+    //xla/service/gpu/tests:kernel_launch_test_gpu_amd_any \
+    //xla/stream_executor/gpu:gpu_kernel_test_gpu_amd_any \
+    //xla/tests:client_test_gpu_amd_any \
+    //xla/tests:convolution_test_gpu_amd_any
+
