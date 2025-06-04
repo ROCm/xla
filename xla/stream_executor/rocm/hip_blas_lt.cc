@@ -71,6 +71,54 @@ limitations under the License.
     return std::move(value);                                            \
   }()
 
+namespace {
+struct _rocblaslt_matmul_desc {
+  // operation applied to the matrix A
+  hipblasOperation_t op_A;
+  // operation applied to the matrix B
+  hipblasOperation_t op_B;
+  // epilogue operation
+  int epilogue;
+  // alpha,beta pointer mode
+  int pointermode;
+  // bias vector pointer
+  void* bias;
+  void* scaleA;
+  void* scaleB;
+  void* scaleC;
+  void* scaleD;
+  void* scaleE;
+  void* amaxD;
+  hipDataType bias_type;
+  // E
+  void* e;
+  hipDataType aux_type;
+  int64_t lde;
+  int64_t stride_e;
+  //
+  int compute_type;
+  int compute_type_original;
+  hipDataType compute_input_typeA;
+  hipDataType compute_input_typeB;
+  hipDataType scale_type;
+};
+
+struct _rocblaslt_matrix_layout
+{
+    // num rows
+    uint64_t m = 0;
+    // num cols
+    uint64_t n = 0;
+    // leading dimension
+    int64_t ld = 0;
+    // data type of the matrix
+    hipDataType      type;
+    int32_t          batch_count;
+    int64_t          batch_stride;
+    hipblasLtOrder_t order;
+};
+}  // namespace
+
 namespace stream_executor {
 
 namespace rocm {
@@ -270,6 +318,30 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
   algorithms.reserve(results.size());
   for (const hipblasLtMatmulHeuristicResult_t& result : results) {
     if (result.state == HIPBLAS_STATUS_SUCCESS) {  // Skip failed algos.
+      auto op_desc = reinterpret_cast<const _rocblaslt_matmul_desc*>(op_desc_.get());
+      auto a_desc = reinterpret_cast<const _rocblaslt_matrix_layout*>(a_desc_.get());
+      auto b_desc = reinterpret_cast<const _rocblaslt_matrix_layout*>(b_desc_.get());
+      auto c_desc = reinterpret_cast<const _rocblaslt_matrix_layout*>(c_desc_.get());
+      auto d_desc = reinterpret_cast<const _rocblaslt_matrix_layout*>(d_desc_.get());
+      auto algoId = *(int*)&result.algo;
+      CHECK(result.workspaceSize <= max_workspace_size)
+          << "Algorithm " << algoId
+          <<" exceded max_workspace_size (" << max_workspace_size
+          << "), requested " << result.workspaceSize
+          << " with max_algorithm_count " << max_algorithm_count << " and"
+          << " opA " << op_desc->op_A << " opB " << op_desc->op_B
+          << " A [" << a_desc->type << "](" << a_desc->m << "," << a_desc->n
+          << "," << a_desc->ld << "," << a_desc->batch_count << ","
+          << a_desc->batch_stride << ")"
+          << " B [" << b_desc->type << "](" << b_desc->m << "," << b_desc->n
+          << "," << b_desc->ld << "," << b_desc->batch_count << ","
+          << b_desc->batch_stride << ")"
+          << " C [" << c_desc->type << "](" << c_desc->m << "," << c_desc->n
+          << "," << c_desc->ld << "," << c_desc->batch_count << ","
+          << c_desc->batch_stride << ")"
+          << " D [" << d_desc->type << "](" << d_desc->m << "," << d_desc->n
+          << "," << d_desc->ld << "," << d_desc->batch_count << ","
+          << d_desc->batch_stride << ")";
       algorithms.push_back({result.algo, result.workspaceSize});
     }
   }
