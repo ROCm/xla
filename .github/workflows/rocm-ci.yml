@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-and-analyze-xla:
+  test-and-analyze-xla-1:
     runs-on: mi-250
     container:
       image: rocm/tensorflow-build:latest-jammy-python3.11-rocm6.3.0
@@ -34,7 +34,35 @@ jobs:
       #- name: Unzip the Bazel cache
       #  run: unzip -q /tf/disk_cache.zip -d /tf/cache
       - name: Test XLA
-        run: build_tools/rocm/run_xla_ci_build.sh rocm_ci
+        run: echo hello #build_tools/rocm/run_xla_ci_build.sh rocm_ci 1
+  test-and-analyze-xla-2:
+    runs-on: mi-250
+    container:
+      image: rocm/tensorflow-build:latest-jammy-python3.11-rocm6.3.0
+      options:
+        --device=/dev/kfd
+        --device=/dev/dri
+        --ipc=host
+        --shm-size=16G
+        --group-add=video
+        --cap-add=SYS_PTRACE
+        --security-opt=seccomp=unconfined
+      volumes:
+        - xla_bazel_cache:/tmp/bazel_cache_archives
+        - /tmp/xla_bazel_cache:/tmp/bazel_disk_cache
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      # TODO: Skip using the bazel cache until runners have the proper permissions.
+      #- name: Unzip the Bazel cache
+      #  run: unzip -q /tf/disk_cache.zip -d /tf/cache
+      - name: Unzip the bazel cache
+        run: unzip -q /tmp/bazel_cache_archives/cache.zip -d /tmp/bazel_disk_cache || true
+      - name: Test XLA
+        run: build_tools/rocm/run_xla_ci_build.sh rocm_ci 2
+      - name: Zip up the bazel cache
+        run: |
+          zip -r /tmp/bazel_cache_archives/cache.zip /tmp/bazel_disk_cache; \
+          rm -rf /tmp/bazel_disk_cache/*
   build-jax-plugin:
     runs-on: mi-250
     env:
