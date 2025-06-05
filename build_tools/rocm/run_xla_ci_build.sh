@@ -19,7 +19,7 @@ set -e
 set -x
 
 CONFIG=$1
-DISK_CACHE_PATH=$2
+TEST_SET_ID=$2
 
 ASAN_ARGS=()
 if [[ $CONFIG == "rocm_ci_hermetic" ]]; then
@@ -28,13 +28,26 @@ if [[ $CONFIG == "rocm_ci_hermetic" ]]; then
 	ASAN_ARGS+=("--config=asan")
 fi
 
+TEST_SET=()
+if [[ $CONFIG == "1" ]]; then
+	TEST_SET+=("//xla/service:compiler_test_gpu_amd_any")
+	TEST_SET+=("//xla/service:elemental_ir_emitter_test_gpu_amd_any ")
+	TEST_SET+=("//xla/service/gpu:gpu_compiler_test_gpu_amd_any")
+	TEST_SET+=("//xla/tests:matmul_test_gpu_amd_any")
+else
+	TEST_SET+=("//xla/service/gpu/tests:kernel_launch_test_gpu_amd_any")
+	TEST_SET+=("//xla/stream_executor/gpu:gpu_kernel_test_gpu_amd_any")
+	TEST_SET+=("//xla/tests:client_test_gpu_amd_any")
+	TEST_SET+=("//xla/tests:convolution_test_gpu_amd_any")
+fi
+
 bazel \
     --bazelrc=/usertools/rocm.bazelrc \
     --output_base=/tmp/bzl \
     test \
     --config=${CONFIG} \
     --config=xla_cpp \
-    --disk_cache=${DISK_CACHE_PATH} \
+    --disk_cache=/tmp/bazel_disk_cache \
     --keep_going \
     --test_env=TF_TESTS_PER_GPU=1 \
     --test_env=TF_GPU_COUNT=2 \
@@ -44,12 +57,4 @@ bazel \
     --local_test_jobs=2 \
     --run_under=//tools/ci_build/gpu_build:parallel_gpu_execute \
     "${ASAN_ARGS[@]}" \
-    //xla/service:compiler_test_gpu_amd_any \
-    //xla/service:elemental_ir_emitter_test_gpu_amd_any \
-    //xla/service/gpu:gpu_compiler_test_gpu_amd_any \
-    //xla/tests:matmul_test_gpu_amd_any \
-    //xla/service/gpu/tests:kernel_launch_test_gpu_amd_any \
-    //xla/stream_executor/gpu:gpu_kernel_test_gpu_amd_any \
-    //xla/tests:client_test_gpu_amd_any \
-    //xla/tests:convolution_test_gpu_amd_any
-
+    "${TEST_SET[@]}"
