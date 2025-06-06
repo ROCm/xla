@@ -671,7 +671,7 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
   ev->stream_id = RocmTracerEvent::kInvalidStreamId;
   ev->kernel_info = KernelDetails{
   };
-  
+
   std::lock_guard<tsl::mutex> lock(g_shared->kernel_lock);
   if (static_cast< size_t >(rec.kind) < g_shared->name_info.size()) {
     auto& vec = g_shared->name_info[rec.kind];
@@ -679,10 +679,66 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
     ev->name = vec[rec.operation];
    // }
   }
-  //  VLOG(0) << "API: agent: " << ev->device_id 
-  //             << " stream: " << ev->stream_id
-  //             << " corr: " << ev->correlation_id
-  //             << " name: " << ev->name;
+  if (isCopyApi(rec.operation)) {
+    // actually one needs to set the real type
+    ev->type = RocmTracerEventType::MemcpyOther;
+  }
+
+  if (isKernelApi(rec.operation)) {
+
+  }
+}
+
+void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
+        RocmTracerEvent *ev) { 
+
+  const auto& rec =
+      *static_cast<const rocprofiler_buffer_tracing_memory_copy_record_t*>(hdr->payload);
+
+#define OO(src, target) \
+  case ROCPROFILER_MEMORY_COPY_##src: \
+    ev->type = RocmTracerEventType::target; \
+    ev->name = #target; \
+  break; 
+
+  switch(rec.operation) {
+  OO(NONE, MemcpyOther)
+  OO(HOST_TO_HOST, MemcpyOther)
+  OO(HOST_TO_DEVICE, MemcpyH2D)
+  OO(DEVICE_TO_HOST, MemcpyD2H)
+  OO(DEVICE_TO_DEVICE, MemcpyD2D)
+  default: 
+    LOG(WARNING) << "Unexpected memcopy operation " << rec.operation;
+    ev->type = RocmTracerEventType::MemcpyOther; 
+  }
+#undef OO
+  auto src_id = rec.src_agent_id.handle,
+       dst_id = rec.dst_agent_id.handle;
+
+  ev->source = RocmTracerEventSource::Activity;
+  ev->domain = RocmTracerEventDomain::HIP_OPS;
+  ev->annotation = "??";
+  ev->roctx_range = "??";
+  ev->start_time_ns = rec.start_timestamp;
+  ev->end_time_ns = rec.end_timestamp;
+  ev->device_id = src_id;
+  ev->correlation_id = rec.correlation_id.internal;
+  ev->thread_id = rec.thread_id;
+  ev->stream_id = 0; // we do not know valid stream ID for memcpy
+  ev->memcpy_info = MemcpyDetails{
+    .num_bytes = rec.bytes,
+    .destination = dst_id,
+    .async = false,
+  };
+
+  if (src_id != dst_id) {
+    std::lock_guard<tsl::mutex> lock(g_shared->kernel_lock);
+    if (src_id < g_shared->agents.size() && dst_id < g_shared->agents.size() &&
+        g_shared->agents[src_id].type == ROCPROFILER_AGENT_TYPE_GPU &&
+        g_shared->agents[dst_id].type == ROCPROFILER_AGENT_TYPE_GPU) {
+      ev->type = RocmTracerEventType::MemcpyP2P; 
+    }
+  }
 }
 
 void RocmTracer::KernelEvent(const rocprofiler_record_header_t *hdr,
@@ -722,11 +778,11 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t *hdr,
   auto it = g_shared->kernel_info.find(kinfo.kernel_id);
   if (it != g_shared->kernel_info.end()) ev->name = it->second.name;
 
-  VLOG(0) << "Kernel: device: " << ev->device_id 
-              << " stream: " << ev->stream_id
-              << " corr: " << ev->correlation_id
-              << " dispatch: " << rec.dispatch_info.dispatch_id
-              << " name: " << ev->name;
+  // VLOG(0) << "Kernel: device: " << ev->device_id 
+  //             << " stream: " << ev->stream_id
+  //             << " corr: " << ev->correlation_id
+  //             << " dispatch: " << rec.dispatch_info.dispatch_id
+  //             << " name: " << ev->name;
 }
 
 void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
@@ -753,14 +809,18 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
     if (header->category != ROCPROFILER_BUFFER_CATEGORY_TRACING) continue;
     
     switch(header->kind) {
-    case ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API: {
+    case ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API: 
       HipApiEvent(header, &event);
       break;
-    }
-    case ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH: {
+
+    case ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH: 
       KernelEvent(header, &event);
       break;
-    }
+
+    case ROCPROFILER_BUFFER_TRACING_MEMORY_COPY: 
+      MemcpyEvent(header, &event);
+      break;
+
     default: continue;
     } // switch
 
