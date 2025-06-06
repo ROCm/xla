@@ -193,11 +193,10 @@ std::unique_ptr<profiler::ProfilerInterface> CreateGpuTracer(
       options.device_type() != ProfileOptions::UNSPECIFIED)
     return nullptr;
 
-  profiler::RocmTracer* rocm_tracer =
-      profiler::RocmTracer::GetRocmTracerSingleton();
-  if (!rocm_tracer->IsAvailable()) return nullptr;
+  auto& rocm_tracer = profiler::RocmTracer::i();
+  if (!rocm_tracer.IsAvailable()) return nullptr;
 
-  return std::make_unique<profiler::GpuTracer>(rocm_tracer);
+  return std::make_unique<profiler::GpuTracer>(&rocm_tracer);
 }
 
 auto register_rocm_gpu_tracer_factory = [] {

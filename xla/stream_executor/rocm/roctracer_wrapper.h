@@ -20,9 +20,7 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_ROCM_ROCTRACER_WRAPPER_H_
 #define XLA_STREAM_EXECUTOR_ROCM_ROCTRACER_WRAPPER_H_
 
-#ifndef TF_ROCM_VERSION
-#define TF_ROCM_VERSION 600000  // Default value if not defined
-#endif
+#include "rocm/rocm_config.h"
 
 #include <rocm/include/rocprofiler-sdk/registration.h>
 #include <rocm/include/rocprofiler-sdk/buffer.h>

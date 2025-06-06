@@ -131,29 +131,10 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
   return std::move(arguments);
 }
 
-// absl::Status ExportToTensorBoard(const tensorflow::profiler::XSpace& xspace,
-//                                  const std::string& logdir,
-//                                  bool also_export_trace_json) {
-//   std::string repository_root =
-//       tsl::profiler::GetTensorBoardProfilePluginDir(logdir);
-//   std::string run = tsl::profiler::GetCurrentTimeStampAsString();
-//   std::string host = tsl::port::Hostname();
-//   TF_RETURN_IF_ERROR(
-//       tsl::profiler::SaveXSpace(repository_root, run, host, xspace));
-//   if (also_export_trace_json) {
-//     tsl::profiler::TraceContainer container =
-//         tsl::profiler::ConvertXSpaceToTraceContainer(xspace);
-//     return tsl::profiler::SaveGzippedToolData(
-//         repository_root, run, host, "trace.json.gz",
-//         tsl::profiler::TraceContainerToJson(container));
-//   }
-//   return absl::OkStatus();
-// }
-
 } // namespace 
 
 
-#define DO_REFERENCE_CHECK 1
+#define DO_REFERENCE_CHECK 0
 #define USE_MULTIPLE_GPUS 0
 #define USE_SPECIAL_ARGUMENTS 1
 
@@ -161,6 +142,8 @@ class HloRunnerTest : public GpuCodegenTest {
 
 protected:
   constexpr static const char *CsvSep = " , ";
+
+  void run_with_profiler(std::istream& ifs);
 
   void run_internal(std::istream& ifs, std::ostream& ofs, const std::string& name) {
 
@@ -203,7 +186,13 @@ protected:
 
   auto& runner = test_runner_as_hlo_runner();
 
-  int num_runs = 10, num_warmups = 2;
+  auto opts = tsl::ProfilerSession::DefaultOptions();
+  opts.set_device_type(tensorflow::ProfileOptions::GPU);
+  //opts.set_python_tracer_level(1);
+  //opts.set_enable_hlo_proto(true);
+  auto sess = tsl::ProfilerSession::Create(opts);
+
+  int num_runs = 5, num_warmups = 0;
   TF_ASSERT_OK_AND_ASSIGN(auto argument_buffers,
                       runner.TransferLiteralsToDevice(arg_ptrs));
   
@@ -231,6 +220,31 @@ protected:
   double usec = (double)timeNs  / (num_runs * 1000);
   VLOG(0) << "Time elapsed: " << usec << " usec";
   ofs << usec;
+
+  {
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+  tensorflow::profiler::XSpace xspace;
+  TF_CHECK_OK(sess->CollectData(&xspace));
+
+  // for(const auto& plane : xspace.planes()) {
+  //   VLOG(0) << "Plane: " << plane.name();
+
+  //   for(const auto& [id, meta] : plane.event_metadata()) {
+  //     VLOG(0) << "event name: " << meta.name();
+  //   }
+
+  //   for(const auto& line : plane.lines()) {
+  //     VLOG(0) << "line: " << line.display_name()
+  //         << " " << line.display_id() 
+  //         << " ts: " << (double)line.timestamp_ns() / 1000.0
+  //         << " dur: " << (double)line.duration_ps() /1e6;
+  //   }
+  // }
+  VLOG(0) << "Collected Xspace data!";
+  TF_CHECK_OK(tsl::profiler::ExportToTensorBoard(
+                 xspace, "uu_dump",
+                 /* also_export_trace_json= */ true));
+  }
 
 #if DO_REFERENCE_CHECK
   VLOG(0) << "Performing correctness check.";
@@ -301,26 +315,21 @@ protected:
 
 };
 
+void HloRunnerTest::run_with_profiler(std::istream& ifs) {
+    
+
+
+  std::ofstream ofs;
+  run_internal(ifs, ofs, "input");
+
+
+
+}
+
 TEST_F(HloRunnerTest, RunSingle) {
   
   if (std::ifstream ifs("input.hlo"); ifs.good()) {
-    std::ofstream ofs;
-
-    auto opts = tsl::ProfilerSession::DefaultOptions();
-    //opts.set_device_type(tensorflow::ProfileOptions::GPU);
-    opts.set_python_tracer_level(1);
-    opts.set_enable_hlo_proto(true);
-    auto sess = tsl::ProfilerSession::Create(opts);
-
-    run_internal(ifs, ofs, "input");
-
-    tensorflow::profiler::XSpace xspace;
-    TF_CHECK_OK(sess->CollectData(&xspace));
-    VLOG(0) << "Collected Xspace data!";
-    TF_CHECK_OK(tsl::profiler::ExportToTensorBoard(
-                 xspace, "uu_dump",
-                 /* also_export_trace_json= */ true));
-    return;
+    return run_with_profiler(ifs);
   }
   std::ifstream ifs("pattern.txt");
   if (!ifs.good()) {
