@@ -170,6 +170,7 @@ cc_library(
         "%{rocm_root}/include",
     ],
     strip_include_prefix = "%{rocm_root}",
+    visibility = ["//visibility:public"],
     deps = [
         ":amd_comgr",
         ":hsa_rocr",
