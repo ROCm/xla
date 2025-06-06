@@ -23,22 +23,22 @@ TEST_SET_ID=$2
 
 ASAN_ARGS=()
 if [[ $CONFIG == "rocm_ci_hermetic" ]]; then
-	ASAN_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=$(realpath $(dirname $0))/asan_ignore_list.txt")
-	ASAN_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=$(realpath $(dirname $0))/lsan_ignore_list.txt")
-	ASAN_ARGS+=("--config=asan")
+    ASAN_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=$(realpath $(dirname $0))/asan_ignore_list.txt")
+    ASAN_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=$(realpath $(dirname $0))/lsan_ignore_list.txt")
+    ASAN_ARGS+=("--config=asan")
 fi
 
 TEST_SET=()
 if [[ $CONFIG == "1" ]]; then
-	TEST_SET+=("//xla/service:compiler_test_gpu_amd_any")
-	TEST_SET+=("//xla/service:elemental_ir_emitter_test_gpu_amd_any ")
-	TEST_SET+=("//xla/service/gpu:gpu_compiler_test_gpu_amd_any")
-	TEST_SET+=("//xla/tests:matmul_test_gpu_amd_any")
+    TEST_SET+=("//xla/service:compiler_test_gpu_amd_any")
+    TEST_SET+=("//xla/service:elemental_ir_emitter_test_gpu_amd_any ")
+    TEST_SET+=("//xla/service/gpu:gpu_compiler_test_gpu_amd_any")
+    TEST_SET+=("//xla/tests:matmul_test_gpu_amd_any")
 else
-	TEST_SET+=("//xla/service/gpu/tests:kernel_launch_test_gpu_amd_any")
-	TEST_SET+=("//xla/stream_executor/gpu:gpu_kernel_test_gpu_amd_any")
-	TEST_SET+=("//xla/tests:client_test_gpu_amd_any")
-	TEST_SET+=("//xla/tests:convolution_test_gpu_amd_any")
+    TEST_SET+=("//xla/service/gpu/tests:kernel_launch_test_gpu_amd_any")
+    TEST_SET+=("//xla/stream_executor/gpu:gpu_kernel_test_gpu_amd_any")
+    TEST_SET+=("//xla/tests:client_test_gpu_amd_any")
+    TEST_SET+=("//xla/tests:convolution_test_gpu_amd_any")
 fi
 
 bazel \
@@ -47,7 +47,8 @@ bazel \
     test \
     --config=${CONFIG} \
     --config=xla_cpp \
-    --disk_cache=/tmp/bazel_disk_cache \
+    --disk_cache=/github/home/.cache/bazel_disk_cache \
+    --experimental_disk_cache_gc_max_size=100G \
     --keep_going \
     --test_env=TF_TESTS_PER_GPU=1 \
     --test_env=TF_GPU_COUNT=2 \

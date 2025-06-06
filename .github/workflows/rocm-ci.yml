@@ -30,11 +30,8 @@ jobs:
         --security-opt=seccomp=unconfined
     steps:
       - uses: actions/checkout@v4
-      # TODO: Skip using the bazel cache until runners have the proper permissions.
-      #- name: Unzip the Bazel cache
-      #  run: unzip -q /tf/disk_cache.zip -d /tf/cache
       - name: Test XLA
-        run: echo hello #build_tools/rocm/run_xla_ci_build.sh rocm_ci 1
+        run: build_tools/rocm/run_xla_ci_build.sh rocm_ci 1
   test-and-analyze-xla-2:
     runs-on: mi-250
     container:
@@ -47,23 +44,10 @@ jobs:
         --group-add=video
         --cap-add=SYS_PTRACE
         --security-opt=seccomp=unconfined
-      volumes:
-        - xla_bazel_cache:/tmp/bazel_cache_archives
-        - /tmp/xla_bazel_cache:/tmp/bazel_disk_cache
     steps:
       - uses: actions/checkout@v4
-      # TODO: Skip using the bazel cache until runners have the proper permissions.
-      #- name: Unzip the Bazel cache
-      #  run: unzip -q /tf/disk_cache.zip -d /tf/cache
-      - name: Unzip the bazel cache
-        run: unzip -q /tmp/bazel_cache_archives/cache.zip -d /tmp/bazel_disk_cache || true
       - name: Test XLA
         run: build_tools/rocm/run_xla_ci_build.sh rocm_ci 2
-      - name: Zip up the bazel cache
-        if: always()
-        run: |
-          zip -r /tmp/bazel_cache_archives/cache.zip /tmp/bazel_disk_cache; \
-          rm -rf /tmp/bazel_disk_cache/*
   build-jax-plugin:
     runs-on: mi-250
     env:
@@ -91,6 +75,3 @@ jobs:
           ls -lah .
           ls -lah rocm-jax
           ls -lah rocm-jax/xla
-
-
-
