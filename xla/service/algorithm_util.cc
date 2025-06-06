@@ -173,6 +173,12 @@ bool IsSupportedByCublasOrCublasLt(
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32:
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X3:
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X6:
+      if (auto rocm_compute_capability =
+              std::get_if<se::RocmComputeCapability>(&gpu_compute_capability)) {
+        if (!rocm_compute_capability->gfx9_mi300_series()) {
+          return false;
+        }
+      }
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X9:
     case PrecisionConfig::ALG_UNSET:
     case PrecisionConfig::ALG_DOT_F16_F16_F32:
