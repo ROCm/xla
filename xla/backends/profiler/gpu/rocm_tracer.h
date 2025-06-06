@@ -129,6 +129,8 @@ class RocmTracer {
         RocmTracerEvent *ev); 
   void KernelEvent(const rocprofiler_record_header_t *hdr,
     RocmTracerEvent *ev);
+  void MemcpyEvent(const rocprofiler_record_header_t *hdr,
+        RocmTracerEvent *ev);
 
   void endTracing();
 
