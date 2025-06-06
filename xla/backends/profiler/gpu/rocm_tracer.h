@@ -87,7 +87,7 @@ struct RocmTracerOptions {
 class RocmTracer {
  public:
   // Returns a pointer to singleton RocmTracer.
-  static RocmTracer* GetRocmTracerSingleton();
+  static RocmTracer& i();
 
   // Only one profile session can be live in the same time.
   bool IsAvailable() const;
@@ -113,27 +113,34 @@ class RocmTracer {
   static void pushCorrelationID(uint64_t id, CorrelationDomain type);
   static void popCorrelationID(CorrelationDomain type);
 
+  void TracingCallback(rocprofiler_context_id_t context,
+                      rocprofiler_buffer_id_t buffer_id,
+                      rocprofiler_record_header_t** headers,
+                      size_t num_headers, uint64_t drop_count);
+
+  void CodeObjectCallback(rocprofiler_callback_tracing_record_t record,
+                          void* callback_data);
+
  protected:
   // protected constructor for injecting mock cupti interface for testing.
   explicit RocmTracer() {}
 
- private:
-  bool registered_{false};
+  void HipApiEvent(const rocprofiler_record_header_t *hdr,
+        RocmTracerEvent *ev); 
+  void KernelEvent(const rocprofiler_record_header_t *hdr,
+    RocmTracerEvent *ev);
 
   void endTracing();
 
+private:
+  bool registered_{false};
   int num_gpus_;
   std::optional<RocmTracerOptions> options_;
   RocmTraceCollector* collector_ = nullptr;
 
-  static void code_object_callback(
-    rocprofiler_callback_tracing_record_t record,
-    rocprofiler_user_data_t* user_data,
-    void* callback_data);
-
   uint32_t maxBufferSize_{1000000}; // 1M GPU runtime/kernel events
 
-  tsl::mutex externalCorrelationsMutex_;
+  tsl::mutex collector_mutex_;
 
   bool externalCorrelationEnabled_{true};
   bool logging_{false};

@@ -270,6 +270,8 @@ class XEventBuilder : public XStatsBuilder<XEvent> {
     return GetTimespan() < other.GetTimespan();
   }
 
+  XEvent* get() { return event_; }
+
  private:
   const XLine* line_;
   XEvent* event_;
