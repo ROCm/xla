@@ -381,7 +381,7 @@ absl::StatusOr<XlaOp> BuildBlockScaledDotForCUDA(
     rhs_scale_op = Parameter(&builder, 3, rhs_scale->shape(), "rhs_scale");
   }
 
-  // use cuDNN kernel, if possible.
+  // Use cuDNN kernel, if possible.
   if (allow_cudnn && rhs_scale_op.valid() &&
       IsSupportedByCudnn(
           GetCudnnMxType(lhs_input->shape(), lhs_scale->shape()),
@@ -390,7 +390,7 @@ absl::StatusOr<XlaOp> BuildBlockScaledDotForCUDA(
                                dnums, result_type);
   }
 
-  // fallback solution: build general dot op.
+  // Fallback solution: build general dot op.
   TF_ASSIGN_OR_RETURN(lhs_op,
                       BuildDequantize(lhs_op, lhs_scale_op, result_type));
   if (rhs_scale_op.valid()) {
@@ -532,13 +532,13 @@ absl::StatusOr<XlaOp> BuildBlockScaledDotForROCm(
     rhs_scale_op = Parameter(&builder, 3, rhs_scale->shape(), "rhs_scale");
   }
 
-  // use hipblaslt kernel, if possible.
+  // Use hipblaslt kernel, if possible.
   if (allow_hipblaslt &&rhs_scale_op.valid()) {
     return BuildHipblasltScaledDot(lhs_op, rhs_op, lhs_scale_op, rhs_scale_op,
                                    dnums, result_type);
   }
 
-  // fallback solution: build general dot op.
+  // Fallback solution: build general dot op.
   TF_ASSIGN_OR_RETURN(lhs_op,
                       BuildDequantize(lhs_op, lhs_scale_op, result_type));
   if (rhs_scale_op.valid()) {
