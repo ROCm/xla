@@ -821,6 +821,97 @@ absl::Status IrEmitterUnnested::EmitCublasLtMatmulThunkF8(
   return absl::OkStatus();
 }
 
+absl::Status IrEmitterUnnested::EmitCublasLtMatmulThunkMX(
+    const HloCustomCallInstruction* instr) {
+  TF_RET_CHECK(instr->operand_count() == 4);
+  TF_ASSIGN_OR_RETURN(const auto gpu_config,
+                      instr->backend_config<xla::gpu::GpuBackendConfig>());
+  const xla::gpu::GemmBackendConfig& config = gpu_config.gemm_backend_config();
+  xla::gpu::GemmBackendConfig_Epilogue epilogue = config.epilogue();
+
+  TF_ASSIGN_OR_RETURN(bool has_vector_bias,
+                      xla::gpu::gpublas_lt::EpilogueAddsVectorBias(epilogue));
+
+  TF_RET_CHECK(instr->shape().IsTuple());
+  xla::ShapeIndex output_index = xla::ShapeIndex{0};
+
+  TF_ASSIGN_OR_RETURN(
+      bool has_aux_output,
+      xla::gpu::gpublas_lt::EpilogueHasAuxiliaryOutput(epilogue));
+
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice a,
+                      GetAllocationSliceForHlo(instr->operand(0)));
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice b,
+                      GetAllocationSliceForHlo(instr->operand(1)));
+  BufferAllocation::Slice c;
+  bool has_matrix_bias = config.beta() != 0;
+  if (has_matrix_bias) {
+    TF_ASSIGN_OR_RETURN(c, GetAllocationSliceForHlo(instr->operand(2)));
+  } else {
+    TF_ASSIGN_OR_RETURN(c, GetAllocationSliceForHlo(instr, output_index));
+  }
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice d,
+                      GetAllocationSliceForHlo(instr, output_index));
+
+  int a_scale_index = has_matrix_bias ? 3 : 2;
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice a_scale,
+                      GetAllocationSliceForHlo(instr->operand(a_scale_index)));
+  TF_ASSIGN_OR_RETURN(
+      BufferAllocation::Slice b_scale,
+      GetAllocationSliceForHlo(instr->operand(a_scale_index + 1)));
+
+  bool is_cuda = std::holds_alternative<stream_executor::CudaComputeCapability>(
+      ir_emitter_context_->gpu_compute_capability());
+  bool is_fp8 = instr->shape().tuple_shapes(0).element_type() == F8E4M3FN ||
+                instr->shape().tuple_shapes(0).element_type() == F8E5M2;
+  // cublasLT requires c_scale/d_scale to be null when C/D is not FP8.
+  // Currently, C cannot be FP8.
+  BufferAllocation::Slice c_scale, d_scale;
+  if (is_cuda && is_fp8) {
+    TF_ASSIGN_OR_RETURN(d_scale,
+                        GetAllocationSliceForHlo(instr->operands().back()));
+  }
+
+  BufferAllocation::Slice bias;
+  if (has_vector_bias) {
+    TF_ASSIGN_OR_RETURN(
+        bias, GetAllocationSliceForHlo(instr->operand(a_scale_index + 2)));
+  }
+
+  BufferAllocation::Slice d_amax;
+  if (config.damax_output()) {
+    TF_ASSIGN_OR_RETURN(d_amax, GetAllocationSliceForHlo(instr, {1}));
+  }
+
+  TF_ASSIGN_OR_RETURN(
+      auto gemm_config,
+      GemmConfig::For(static_cast<const HloInstruction*>(instr),
+                      ir_emitter_context_->gpu_compute_capability()));
+
+  // Use the first algorithm by default (i.e. fastest according to heuristics).
+  int64_t algorithm =
+      config.algorithm_case() == GemmBackendConfig::kSelectedAlgorithm
+          ? config.selected_algorithm()
+          : 0;
+
+  BufferAllocation::Slice aux;  // Not used.
+  TF_RET_CHECK(!has_aux_output);
+  std::optional<BufferAllocation::Slice> workspace_buffer;
+  if (instr->shape().tuple_shapes().size() - config.damax_output() == 2) {
+    TF_ASSIGN_OR_RETURN(workspace_buffer,
+                        GetAllocationSliceForHlo(
+                            instr, {instr->shape().tuple_shapes_size() - 1}));
+  }
+
+  TF_ASSIGN_OR_RETURN(se::gpu::BlasLt::Epilogue blas_lt_epilogue,
+                      gpublas_lt::AsBlasLtEpilogue(epilogue));
+  auto thunk = std::make_unique<CublasLtMatmulThunk>(
+      instr, std::move(gemm_config), blas_lt_epilogue, algorithm, a, b, c, d,
+      bias, aux, a_scale, b_scale, c_scale, d_scale, d_amax, workspace_buffer);
+  AddThunkToThunkSequence(std::move(thunk));
+  return absl::OkStatus();
+}
+
 absl::Status IrEmitterUnnested::EmitConvolutionReorderThunk(
     const HloCustomCallInstruction* instr) {
   bool has_bias = instr->operand_count() > 1;
@@ -1616,6 +1707,13 @@ absl::Status IrEmitterUnnested::EmitAsyncCustomCallStart(
   }
   if (IsCublasLtMatmulF8(*wrapped)) {
     auto status = EmitCublasLtMatmulThunkF8(custom_call);
+    if (status.ok()) {
+      thunk_sequence_.back()->set_execution_stream_id(execution_stream_id);
+    }
+    return status;
+  }
+  if (IsCublasLtMatmulMX(*wrapped)) {
+    auto status = EmitCublasLtMatmulThunkMX(custom_call);
     if (status.ok()) {
       thunk_sequence_.back()->set_execution_stream_id(execution_stream_id);
     }
@@ -2769,6 +2867,9 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
       }
       if (IsCublasLtMatmulF8(*instr)) {
         return EmitCublasLtMatmulThunkF8(custom_call);
+      }
+      if (IsCublasLtMatmulMX(*instr)) {
+        return EmitCublasLtMatmulThunkMX(custom_call);
       }
       if (IsCudnnConvolutionReorder(*instr)) {
         return EmitConvolutionReorderThunk(custom_call);
