@@ -449,8 +449,6 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForCUDA(
   return ExpandInstructionUsingBuilder(builder, instruction);
 }
 
-
-
 /*****************************************************************************************
  *      ROCm Solution: __op$block_scaled_dot --> hipblaslt matmul call                   *
  *****************************************************************************************/
