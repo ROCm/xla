@@ -73,6 +73,9 @@ class BlockScalingRewriter : public OpExpanderPass {
 
   absl::string_view name() const override { return "block-scaling-rewriter"; }
 
+  bool IsCuda();
+  bool IsRocm();
+
   bool InstructionMatchesPattern(HloInstruction* instruction) override;
 
   absl::StatusOr<HloInstruction*> ExpandInstruction(

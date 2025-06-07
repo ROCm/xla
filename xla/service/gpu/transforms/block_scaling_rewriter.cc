@@ -196,7 +196,9 @@ absl::StatusOr<HloInstruction*> ExpandDequantizeCustomCall(
   return ExpandInstructionUsingBuilder(builder, instruction);
 }
 
-// ----- Block scaled dot (cuDNN)
+/*****************************************************************************************
+ *      CUDA Solution: __op$block_scaled_dot --> cudnn graph                             *
+ *****************************************************************************************/
 
 enum class CudnnMxType {
   // Not a supported composite type.
@@ -362,6 +364,97 @@ absl::StatusOr<XlaOp> BuildCudnnScaledDot(XlaOp lhs_input, XlaOp rhs_input,
   return result;
 }
 
+// Build HLO for scaled dot op for CUDA platform.
+absl::StatusOr<XlaOp> BuildBlockScaledDotForCUDA(
+    XlaBuilder& builder, const HloInstruction* lhs_input,
+    const HloInstruction* rhs_input, const HloInstruction* lhs_scale,
+    const HloInstruction* rhs_scale, const DotDimensionNumbers& dnums,
+    const bool allow_cudnn, PrimitiveType result_type) {
+  // Get dot LHS parameter(s).
+  XlaOp lhs_op = Parameter(&builder, 0, lhs_input->shape(), "lhs");
+  XlaOp lhs_scale_op = Parameter(&builder, 2, lhs_scale->shape(), "lhs_scale");
+
+  // Get dot RHS parameter(s).
+  XlaOp rhs_op = Parameter(&builder, 1, rhs_input->shape(), "rhs");
+  XlaOp rhs_scale_op;
+  if (rhs_scale != nullptr) {
+    rhs_scale_op = Parameter(&builder, 3, rhs_scale->shape(), "rhs_scale");
+  }
+
+  // use cuDNN kernel, if possible.
+  if (allow_cudnn && rhs_scale_op.valid() &&
+      IsSupportedByCudnn(
+          GetCudnnMxType(lhs_input->shape(), lhs_scale->shape()),
+          GetCudnnMxType(rhs_input->shape(), rhs_scale->shape()))) {
+    return BuildCudnnScaledDot(lhs_op, rhs_op, lhs_scale_op, rhs_scale_op,
+                               dnums, result_type);
+  }
+
+  // fallback solution: build general dot op.
+  TF_ASSIGN_OR_RETURN(lhs_op,
+                      BuildDequantize(lhs_op, lhs_scale_op, result_type));
+  if (rhs_scale_op.valid()) {
+    TF_ASSIGN_OR_RETURN(rhs_op,
+                        BuildDequantize(rhs_op, rhs_scale_op, result_type));
+  }
+  return DotGeneral(lhs_op, rhs_op, dnums, /*precision_config=*/nullptr,
+                    /*preferred_element_type=*/result_type);
+}
+
+// Convert scaled dot custom call to HLO computation for CUDA platform.
+absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForCUDA(
+    HloInstruction* instruction, const bool allow_cudnn) {
+  PrimitiveType result_type = instruction->shape().element_type();
+
+  // Check operand count.
+  if (instruction->operand_count() != 3 && instruction->operand_count() != 4) {
+    return InvalidArgument(
+        "Incorrect number of operands for block scaled dot op");
+  }
+
+  // Check output shape.
+  const Shape& lhs_shape = instruction->operand(0)->shape();
+  const Shape& rhs_shape = instruction->operand(1)->shape();
+  DotDimensionNumbers dnums;
+  dnums.add_lhs_contracting_dimensions(lhs_shape.dimensions().size() - 1);
+  dnums.add_rhs_contracting_dimensions(rhs_shape.dimensions().size() - 1);
+  if (lhs_shape.dimensions().size() == 3) {
+    dnums.add_lhs_batch_dimensions(0);
+    dnums.add_rhs_batch_dimensions(0);
+  }
+  TF_ASSIGN_OR_RETURN(Shape inferred_shape,
+                      ShapeInference::InferDotOpShape(lhs_shape, rhs_shape,
+                                                      dnums, result_type));
+  if (inferred_shape != instruction->shape()) {
+    return InvalidArgument("Incorrect output shape for block scaled dot op");
+  }
+
+  // Build replacement instruction sequence.
+  XlaBuilder builder(std::string(instruction->name()));
+  auto operands = absl::MakeSpan(instruction->operands());
+  TF_ASSIGN_OR_RETURN(
+      XlaOp block_scaled_dot,
+      BuildBlockScaledDotForCUDA(builder, operands[0], operands[1], operands[2],
+                                 operands.size() == 4 ? operands[3] : nullptr,
+                                 dnums, allow_cudnn, result_type));
+
+  // Reshape to the expected output shape.
+  // This should only happen when a unit-sized dimension is added by the pass.
+  TF_ASSIGN_OR_RETURN(Shape result_shape, builder.GetShape(block_scaled_dot));
+  if (result_shape != instruction->shape()) {
+    CHECK_EQ(ShapeUtil::ElementsIn(instruction->shape()),
+             ShapeUtil::ElementsIn(result_shape));
+    Reshape(instruction->shape(), block_scaled_dot);
+  }
+  return ExpandInstructionUsingBuilder(builder, instruction);
+}
+
+
+
+/*****************************************************************************************
+ *      ROCm Solution: __op$block_scaled_dot --> hipblaslt matmul call                   *
+ *****************************************************************************************/
+
 // Reshape inputs to shapes compatible with hipBLASLt.
 absl::StatusOr<std::tuple<XlaOp, XlaOp>> BuildHipblasltScaledDotInputs(
     XlaOp input_op, XlaOp scale_op) {
@@ -422,14 +515,11 @@ absl::StatusOr<XlaOp> BuildHipblasltScaledDot(XlaOp lhs_input, XlaOp rhs_input,
   return result;
 }
 
-// ----- Block scaled dot (general)
-
-// Build HLO for scaled dot op.
-absl::StatusOr<XlaOp> BuildBlockScaledDot(
+// Build HLO for scaled dot op for CUDA platform.
+absl::StatusOr<XlaOp> BuildBlockScaledDotForROCm(
     XlaBuilder& builder, const HloInstruction* lhs_input,
     const HloInstruction* rhs_input, const HloInstruction* lhs_scale,
     const HloInstruction* rhs_scale, const DotDimensionNumbers& dnums,
-    const se::DeviceDescription& device_description, const bool allow_cudnn,
     const bool allow_hipblaslt, PrimitiveType result_type) {
   // Get dot LHS parameter(s).
   XlaOp lhs_op = Parameter(&builder, 0, lhs_input->shape(), "lhs");
@@ -442,39 +532,13 @@ absl::StatusOr<XlaOp> BuildBlockScaledDot(
     rhs_scale_op = Parameter(&builder, 3, rhs_scale->shape(), "rhs_scale");
   }
 
-  // se::GpuComputeCapability gpu_cc = device_description.gpu_compute_capability();
-  // bool is_cuda =
-  //     std::holds_alternative<stream_executor::CudaComputeCapability>(gpu_cc);
-  // auto* cuda_cc = std::get_if<se::CudaComputeCapability>(&gpu_cc);
-  // bool is_rocm =
-  //     std::holds_alternative<stream_executor::RocmComputeCapability>(gpu_cc);
-  // auto* rocm_cc = std::get_if<se::RocmComputeCapability>(&gpu_cc);
-  //   bool is_cuda = false;
-  // LOG(INFO) << "device_description.name(): " << device_description.name();
-  // LOG(INFO) << "is_cuda: " << is_cuda;
-  // LOG(INFO) << "is_rocm: " << is_rocm;
-
-  // In the current implementation, we force the platform to be ROCm.
-  // Later on, we need to let the unit test to set the following variables automatically.
-  bool is_rocm = true;
-  bool is_cuda = false;
-
-  // For CUDA platform, use cuDNN kernel, if possible.
-  if (is_cuda && allow_cudnn && rhs_scale_op.valid() &&
-      IsSupportedByCudnn(
-          GetCudnnMxType(lhs_input->shape(), lhs_scale->shape()),
-          GetCudnnMxType(rhs_input->shape(), rhs_scale->shape()))) {
-    return BuildCudnnScaledDot(lhs_op, rhs_op, lhs_scale_op, rhs_scale_op,
-                               dnums, result_type);
-  }
-
-  // For ROCm platform, use hipblaslt kernel, if possible.
-  if (is_rocm && allow_hipblaslt &&rhs_scale_op.valid()) {
+  // use hipblaslt kernel, if possible.
+  if (allow_hipblaslt &&rhs_scale_op.valid()) {
     return BuildHipblasltScaledDot(lhs_op, rhs_op, lhs_scale_op, rhs_scale_op,
                                    dnums, result_type);
   }
 
-  // Fallback solution: build general dot op.
+  // fallback solution: build general dot op.
   TF_ASSIGN_OR_RETURN(lhs_op,
                       BuildDequantize(lhs_op, lhs_scale_op, result_type));
   if (rhs_scale_op.valid()) {
@@ -485,11 +549,9 @@ absl::StatusOr<XlaOp> BuildBlockScaledDot(
                     /*preferred_element_type=*/result_type);
 }
 
-// Convert scaled dot custom call to HLO computation.
-absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCall(
-    HloInstruction* instruction,
-    const se::DeviceDescription& device_description, const bool allow_cudnn,
-    const bool allow_hipblaslt) {
+// Convert scaled dot custom call to HLO computation for ROCm platform.
+absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForROCm(
+    HloInstruction* instruction, const bool allow_hipblaslt) {
   PrimitiveType result_type = instruction->shape().element_type();
 
   // Check operand count.
@@ -508,7 +570,6 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCall(
     dnums.add_lhs_batch_dimensions(0);
     dnums.add_rhs_batch_dimensions(0);
   }
-
   TF_ASSIGN_OR_RETURN(Shape inferred_shape,
                       ShapeInference::InferDotOpShape(lhs_shape, rhs_shape,
                                                       dnums, result_type));
@@ -521,10 +582,9 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCall(
   auto operands = absl::MakeSpan(instruction->operands());
   TF_ASSIGN_OR_RETURN(
       XlaOp block_scaled_dot,
-      BuildBlockScaledDot(builder, operands[0], operands[1], operands[2],
-                          operands.size() == 4 ? operands[3] : nullptr, dnums,
-                          device_description, allow_cudnn, allow_hipblaslt,
-                          result_type));
+      BuildBlockScaledDotForROCm(builder, operands[0], operands[1], operands[2],
+                                 operands.size() == 4 ? operands[3] : nullptr,
+                                 dnums, allow_hipblaslt, result_type));
 
   // Reshape to the expected output shape.
   // This should only happen when a unit-sized dimension is added by the pass.
@@ -538,6 +598,20 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCall(
 }
 
 }  // namespace
+
+bool BlockScalingRewriter::IsCuda() {
+  // se::GpuComputeCapability gpu_cc =
+  //     device_description_.gpu_compute_capability();
+  // return std::holds_alternative<stream_executor::CudaComputeCapability>(gpu_cc);
+  return false;
+}
+
+bool BlockScalingRewriter::IsRocm() {
+  // se::GpuComputeCapability gpu_cc =
+  //     device_description_.gpu_compute_capability();
+  // return std::holds_alternative<stream_executor::RocmComputeCapability>(gpu_cc);
+  return true;
+}
 
 bool BlockScalingRewriter::InstructionMatchesPattern(
     HloInstruction* instruction) {
@@ -556,8 +630,12 @@ absl::StatusOr<HloInstruction*> BlockScalingRewriter::ExpandInstruction(
     return ExpandDequantizeCustomCall(instruction);
   }
   if (instruction->custom_call_target() == kBlockScaledDotCustomCallTarget) {
-    return ExpandBlockScaledDotCustomCall(instruction, device_description_,
-                                          allow_cudnn_, allow_hipblaslt_);
+    if (IsCuda()) {
+      return ExpandBlockScaledDotCustomCallForCUDA(instruction, allow_cudnn_);
+    } else if (IsRocm()) {
+      return ExpandBlockScaledDotCustomCallForROCm(instruction,
+                                                   allow_hipblaslt_);
+    }
   }
   LOG(FATAL) << "Unexpected custom call target: "
              << instruction->custom_call_target();
