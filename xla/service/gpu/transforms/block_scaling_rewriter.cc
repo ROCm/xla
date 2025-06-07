@@ -40,6 +40,7 @@ limitations under the License.
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
+#include "xla/service/gpu/backend_configs.pb.h"
 
 namespace xla::gpu {
 namespace {
@@ -54,6 +55,39 @@ absl::StatusOr<HloInstruction*> ExpandInstructionUsingBuilder(
                                      old_instruction->parent()->parent()));
   return old_instruction->parent()->AddInstruction(HloInstruction::CreateCall(
       old_instruction->shape(), old_instruction->operands(), computation));
+}
+
+absl::StatusOr<HloInstruction*> ExpandInstructionWithGemmConfigUsingBuilder(
+    XlaBuilder& builder, HloInstruction* old_instruction,
+    const DotDimensionNumbers& dnums, double alpha = 1.0, double beta = 0.0) {
+  TF_ASSIGN_OR_RETURN(XlaComputation xla_computation, builder.Build());
+  TF_ASSIGN_OR_RETURN(
+      HloComputation * hlo_computation,
+      XlaComputationToHloComputation(xla_computation,
+                                     old_instruction->parent()->parent()));
+
+  // search for hipblaslt custom call and populate GemmBackendConfig if found
+  HloInstruction* target = nullptr;
+  for (HloInstruction* instr : hlo_computation->instructions()) {
+    if (instr->opcode() == HloOpcode::kCustomCall &&
+        instr->custom_call_target() == kHipblasltBlockScaledDotCallTarget) {
+      target = instr;
+      break;
+    }
+  }
+  if (target != nullptr) {
+    GemmBackendConfig cfg;
+    *cfg.mutable_dot_dimension_numbers() = dnums;
+    cfg.set_alpha_real(alpha);
+    cfg.set_beta(beta);
+    cfg.mutable_precision_config()->add_operand_precision(
+        PrecisionConfig::DEFAULT);
+    cfg.set_epilogue(GemmBackendConfig::DEFAULT);
+    TF_RETURN_IF_ERROR(target->set_backend_config(cfg));
+  }
+
+  return old_instruction->parent()->AddInstruction(HloInstruction::CreateCall(
+      old_instruction->shape(), old_instruction->operands(), hlo_computation));
 }
 
 // Determine block size from the shapes.
@@ -592,7 +626,9 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForROCm(
              ShapeUtil::ElementsIn(result_shape));
     Reshape(instruction->shape(), block_scaled_dot);
   }
-  return ExpandInstructionUsingBuilder(builder, instruction);
+  return ExpandInstructionWithGemmConfigUsingBuilder(builder, instruction, dnums, 
+                                                     /*alpha=*/1.0,
+                                                     /*beta=*/0.0);
 }
 
 }  // namespace
