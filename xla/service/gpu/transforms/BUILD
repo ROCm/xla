@@ -298,6 +298,7 @@ cc_library(
         "//xla/service/gpu:cublas_cudnn",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:statusor",
+        "//xla/service/gpu:backend_configs_cc",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status:statusor",
@@ -323,7 +324,7 @@ xla_cc_test(
 xla_test(
     name = "block_scaling_rewriter_cudnn_test",
     srcs = ["block_scaling_rewriter_cudnn_test.cc"],
-    backends = ["gpu_b200"],
+    # backends = ["gpu_b200"],
     tags = ["test_migrated_to_hlo_runner_pjrt"],
     deps = [
         ":block_scaling_rewriter",

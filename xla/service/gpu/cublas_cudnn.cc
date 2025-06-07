@@ -30,7 +30,7 @@ namespace gpu {
 
 bool IsCublasGemm(const HloInstruction& hlo) {
   return IsLegacyCublasMatmul(hlo) || IsCublasLtMatmul(hlo) ||
-         IsCublasLtMatmulF8(hlo);
+         IsCublasLtMatmulF8(hlo) || IsCublasLtMatmulMX(hlo);
 }
 
 bool IsLegacyCublasMatmul(const HloInstruction& hlo) {
@@ -48,6 +48,11 @@ bool IsCublasLtMatmulF8(const HloInstruction& hlo) {
          hlo.custom_call_target() == kCublasLtMatmulF8CallTarget;
 }
 
+bool IsCublasLtMatmulMX(const HloInstruction& hlo) {
+  return hlo.opcode() == HloOpcode::kCustomCall &&
+         hlo.custom_call_target() == kHipblasltBlockScaledDotCallTarget;
+}
+
 bool IsTriangularSolve(const HloInstruction& hlo) {
   return hlo.opcode() == HloOpcode::kCustomCall &&
          hlo.custom_call_target() == kTriangularSolveCallTarget;
@@ -57,6 +62,8 @@ const absl::string_view kGemmCallTarget = "__cublas$gemm";
 const absl::string_view kCublasLtMatmulCallTarget = "__cublas$lt$matmul";
 const absl::string_view kCublasLtMatmulF8CallTarget = "__cublas$lt$matmul$f8";
 const absl::string_view kTriangularSolveCallTarget = "__cublas$triangularSolve";
+const absl::string_view kHipblasltBlockScaledDotCallTarget =
+    "__hipblaslt$blockScaledDot";
 
 const absl::string_view kCudnnConvBackwardInputCallTarget =
     "__cudnn$convBackwardInput";
