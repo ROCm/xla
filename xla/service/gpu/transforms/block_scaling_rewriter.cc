@@ -66,7 +66,7 @@ absl::StatusOr<HloInstruction*> ExpandInstructionWithGemmConfigUsingBuilder(
       XlaComputationToHloComputation(xla_computation,
                                      old_instruction->parent()->parent()));
 
-  // search for hipblaslt custom call and populate GemmBackendConfig if found
+  // search for hipblaslt custom call and populate its backend_config_ if found
   HloInstruction* target = nullptr;
   for (HloInstruction* instr : hlo_computation->instructions()) {
     if (instr->opcode() == HloOpcode::kCustomCall &&
