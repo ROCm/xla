@@ -258,134 +258,13 @@ std::vector<rocprofiler_tracing_operation_t> RocprofApiIdList::allEnabled() {
   return oplist;
 }
 
-// ----------------------------------------------------------------------------
-// Forward declarations / helpers
-// ----------------------------------------------------------------------------
-class RocprofLoggerShared;  // Defined later inside this namespace.
+
 
 inline auto GetCallbackTracingNames() {
   return rocprofiler::sdk::get_callback_tracing_names();
 }
 std::vector<rocprofiler_agent_v0_t> GetGpuDeviceAgents();
 
-// ----------------------------------------------------------------------------
-// Global pointer that rocprofiler callbacks can dereference.
-// ----------------------------------------------------------------------------
-RocprofLoggerShared* g_shared = nullptr;  // NOLINT
-
-// ----------------------------------------------------------------------------
-// Utility structs & extraction lambdas for HIP memcpy / kernel launch callbacks
-// ----------------------------------------------------------------------------
-struct copy_args {
-  const char* dst{ "" };
-  const char* src{ "" };
-  size_t size{ 0 };
-  const char* copyKindStr{ "" };
-  hipMemcpyKind copyKind{ hipMemcpyDefault };
-  hipStream_t stream{ nullptr };
-  rocprofiler_callback_tracing_kind_t kind{};
-  rocprofiler_tracing_operation_t operation{};
-};
-auto ExtractCopyArgs = [](rocprofiler_callback_tracing_kind_t,
-                          rocprofiler_tracing_operation_t,
-                          uint32_t /*arg_num*/,
-                          const void* const arg_value_addr,
-                          int32_t /*indirection_count*/,
-                          const char* /*arg_type*/,
-                          const char* arg_name,
-                          const char* arg_value_str,
-                          int32_t /*dereference_count*/,
-                          void* cb_data) -> int {
-  auto& args = *static_cast<copy_args*>(cb_data);
-  if (std::strcmp("dst", arg_name) == 0) {
-    args.dst = arg_value_str;
-  } else if (std::strcmp("src", arg_name) == 0) {
-    args.src = arg_value_str;
-  } else if (std::strcmp("sizeBytes", arg_name) == 0) {
-    args.size = *reinterpret_cast<const size_t*>(arg_value_addr);
-  } else if (std::strcmp("kind", arg_name) == 0) {
-    args.copyKindStr = arg_value_str;
-    args.copyKind = *reinterpret_cast<const hipMemcpyKind*>(arg_value_addr);
-  } else if (std::strcmp("stream", arg_name) == 0) {
-    args.stream = *reinterpret_cast<const hipStream_t*>(arg_value_addr);
-  }
-  return 0;
-};
-
-struct kernel_args {
-  hipStream_t stream{ nullptr };
-  rocprofiler_callback_tracing_kind_t kind{};
-  rocprofiler_tracing_operation_t operation{};
-};
-auto extract_kernel_args = [](rocprofiler_callback_tracing_kind_t,
-  rocprofiler_tracing_operation_t,
-  uint32_t arg_num,
-  const void* const arg_value_addr,
-  int32_t indirection_count,
-  const char* arg_type,
-  const char* arg_name,
-  const char* arg_value_str,
-  int32_t dereference_count,
-  void* cb_data) -> int {
-if (strcmp("stream", arg_name) == 0) {
-auto& args = *(static_cast<kernel_args*>(cb_data));
-// args.stream = arg_value_str;
-args.stream = *(reinterpret_cast<const hipStream_t*>(arg_value_addr));
-}
-return 0;
-};
-
-//-----------------------------------------------------------------------------
-auto extract_copy_args = [](rocprofiler_callback_tracing_kind_t,
-                            rocprofiler_tracing_operation_t,
-                            uint32_t arg_num,
-                            const void* const arg_value_addr,
-                            int32_t indirection_count,
-                            const char* arg_type,
-                            const char* arg_name,
-                            const char* arg_value_str,
-                            int32_t dereference_count,
-                            void* cb_data) -> int {
-  auto& args = *(static_cast<copy_args*>(cb_data));
-  if (strcmp("dst", arg_name) == 0) {
-    args.dst = arg_value_str;
-  } else if (strcmp("src", arg_name) == 0) {
-    args.src = arg_value_str;
-  } else if (strcmp("sizeBytes", arg_name) == 0) {
-    args.size = *(reinterpret_cast<const size_t*>(arg_value_addr));
-  } else if (strcmp("kind", arg_name) == 0) {
-    args.copyKindStr = arg_value_str;
-    args.copyKind = *(reinterpret_cast<const hipMemcpyKind*>(arg_value_addr));
-  } else if (strcmp("stream", arg_name) == 0) {
-    args.stream = *(reinterpret_cast<const hipStream_t*>(arg_value_addr));
-  }
-  return 0;
-};
-
-// extract malloc args
-struct malloc_args {
-  const char* ptr;
-  size_t size;
-};
-auto extract_malloc_args = [](rocprofiler_callback_tracing_kind_t,
-                              rocprofiler_tracing_operation_t,
-                              uint32_t arg_num,
-                              const void* const arg_value_addr,
-                              int32_t indirection_count,
-                              const char* arg_type,
-                              const char* arg_name,
-                              const char* arg_value_str,
-                              int32_t dereference_count,
-                              void* cb_data) -> int {
-  auto& args = *(static_cast<malloc_args*>(cb_data));
-  if (strcmp("ptr", arg_name) == 0) {
-    args.ptr = arg_value_str;
-  }
-  if (strcmp("size", arg_name) == 0) {
-    args.size = *(reinterpret_cast<const size_t*>(arg_value_addr));
-  }
-  return 0;
-};
 
 //-----------------------------------------------------------------------------
 const char* GetRocmTracerEventSourceName(const RocmTracerEventSource& source) {
@@ -555,8 +434,6 @@ bool RocmTracer::IsAvailable() const {
   if (rocprofiler_get_timestamp(&ts) != ROCPROFILER_STATUS_SUCCESS) {
     // const char* errstr = rocprofiler_error_string();
     VLOG(-1) << "function rocprofiler_get_timestamp failed with error ";
-              // << errstr;
-    // Return 0 on error.
     return 0;
   }
   return ts;
@@ -621,7 +498,6 @@ typedef struct rocprofiler_stream_id_t
 struct tool_buffer_tracing_memory_copy_ext_record_t
 : rocprofiler_buffer_tracing_memory_copy_record_t
 {
-
     rocprofiler_stream_id_t stream_id = {};
 };
 
@@ -648,8 +524,8 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
     ev->type = RocmTracerEventType::MemcpyOther; 
   }
 #undef OO
-  const auto& src_gpu = agents_[rec.src_agent_id.handle],
-            & dst_gpu = agents_[rec.dst_agent_id.handle];
+  const auto& src_gpu = agents_[static_cast<uint32_t>(rec.src_agent_id.handle)],
+            & dst_gpu = agents_[static_cast<uint32_t>(rec.dst_agent_id.handle)];
 
   ev->source = RocmTracerEventSource::Activity;
   ev->domain = RocmTracerEventDomain::HIP_OPS;
@@ -663,7 +539,7 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
   ev->stream_id = rec.stream_id.handle; // we do not know valid stream ID for memcpy
   ev->memcpy_info = MemcpyDetails{
     .num_bytes = rec.bytes,
-    .destination = dst_gpu.id.handle,
+    .destination = static_cast<uint32_t>(dst_gpu.id.handle),
     .async = false,
   };
 
@@ -770,10 +646,6 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
 
 void RocmTracer::CodeObjectCallback(rocprofiler_callback_tracing_record_t record,
                           void* callback_data) {
-  
-  // VLOG(0) << "code_object_callback kind: " << RocProfCallbackKind(record.kind)
-  //         << " op: " << RocProfCodeObjOperation(record.operation);
-
   if (record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
       record.operation == ROCPROFILER_CODE_OBJECT_LOAD) {
     if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD) {
@@ -827,7 +699,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
   // Gather agent info
   num_gpus_ = 0;
   for (const auto& agent : GetGpuDeviceAgents()) {
-    VLOG(-1) <<"agent id = " << agent.id.handle 
+    VLOG(0) <<"agent id = " << agent.id.handle 
              << ", dev = " << agent.device_id 
              << ", name = " << (agent.name ? agent.name : "null");
     agents_[agent.id.handle] = agent;
@@ -852,7 +724,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
     nullptr);
 
   rocprofiler_start_context(utility_context_);
-  VLOG(-1) << "rocprofiler start utilityContext";
+  VLOG(0) << "rocprofiler start utilityContext";
 
   constexpr auto buffer_size_bytes = 4096;
   constexpr auto buffer_watermark_bytes = buffer_size_bytes - (buffer_size_bytes / 8);
