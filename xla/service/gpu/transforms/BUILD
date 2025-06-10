@@ -377,6 +377,22 @@ xla_test(
     ],
 )
 
+xla_test(
+    name = "block_scaling_rewriter_hipblaslt_test",
+    srcs = ["block_scaling_rewriter_hipblaslt_test.cc"],
+    backends = ["gpu"],
+    deps = [
+        ":block_scaling_rewriter",
+        "//xla:error_spec",
+        "//xla/hlo/ir:hlo",
+        "//xla/service/gpu/tests:gpu_codegen_test",
+        "//xla/tests:xla_internal_test_main",
+        "//xla/tsl/platform:status_matchers",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
 cc_library(
     name = "command_buffer_scheduling",
     srcs = ["command_buffer_scheduling.cc"],

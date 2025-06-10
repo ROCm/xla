@@ -872,6 +872,49 @@ absl::Status IrEmitterUnnested::EmitCublasLtMatmulThunkMX(
   return absl::OkStatus();
 }
 
+absl::Status IrEmitterUnnested::EmitConvolutionReorderThunk(
+    const HloCustomCallInstruction* instr) {
+  bool has_bias = instr->operand_count() > 1;
+  Shape shape = has_bias ? instr->shape().tuple_shapes(0) : instr->shape();
+  if (shape.dimensions().size() != 5 || shape.dimensions(4) != 32) {
+    return Internal("Unexpected shape for convolution reorder: %s",
+                    instr->ToString());
+  }
+  absl::InlinedVector<int64_t, 4> filter_dims = {
+      shape.dimensions(0), shape.dimensions(1) * 32, shape.dimensions(2),
+      shape.dimensions(3)};
+
+  absl::InlinedVector<BufferAllocation::Slice, 2> operand_slices;
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice filter_input,
+                      GetAllocationSliceForHlo(instr->operand(0)));
+  operand_slices.push_back(filter_input);
+  if (has_bias) {
+    TF_ASSIGN_OR_RETURN(BufferAllocation::Slice bias_input,
+                        GetAllocationSliceForHlo(instr->operand(1)));
+    operand_slices.push_back(bias_input);
+  }
+
+  absl::InlinedVector<BufferAllocation::Slice, 2> result_slices;
+  if (has_bias) {
+    TF_ASSIGN_OR_RETURN(BufferAllocation::Slice filter_output,
+                        GetAllocationSliceForHlo(instr, {0}));
+    result_slices.push_back(filter_output);
+    TF_ASSIGN_OR_RETURN(BufferAllocation::Slice bias_output,
+                        GetAllocationSliceForHlo(instr, {1}));
+    result_slices.push_back(bias_output);
+  } else {
+    TF_ASSIGN_OR_RETURN(BufferAllocation::Slice filter_output,
+                        GetAllocationSliceForHlo(instr));
+    result_slices.push_back(filter_output);
+  }
+
+  auto thunk = std::make_unique<ConvolutionReorderThunk>(
+      Thunk::ThunkInfo::WithProfileAnnotation(instr),
+      absl::MakeSpan(filter_dims), operand_slices, result_slices);
+  AddThunkToThunkSequence(std::move(thunk));
+  return absl::OkStatus();
+}
+
 absl::Status IrEmitterUnnested::EmitNormThunk(
     const HloCustomCallInstruction* instr) {
   TF_ASSIGN_OR_RETURN(auto const gpu_backend_config,

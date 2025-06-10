@@ -49,6 +49,7 @@ limitations under the License.
 #include "xla/service/gpu/llvm_gpu_backend/amdgpu_backend.h"
 #include "xla/service/gpu/target_constants.h"
 #include "xla/service/gpu/transforms/algebraic_simplifier.h"
+#include "xla/service/gpu/transforms/block_scaling_rewriter.h"
 #include "xla/service/gpu/transforms/conv_padding_legalization.h"
 #include "xla/service/gpu/transforms/conv_rewriter.h"
 #include "xla/service/gpu/transforms/cublas_pad_for_gemms.h"
