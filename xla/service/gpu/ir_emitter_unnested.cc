@@ -834,9 +834,9 @@ absl::Status IrEmitterUnnested::EmitCublasLtMatmulThunkMX(
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice b,
                       GetAllocationSliceForHlo(instr->operand(1)));
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice a_scale,
-                      GetAllocationSliceForHlo(instr->operand(3)));
+                      GetAllocationSliceForHlo(instr->operand(2)));
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice b_scale,
-                      GetAllocationSliceForHlo(instr->operand(4)));
+                      GetAllocationSliceForHlo(instr->operand(3)));
   BufferAllocation::Slice c, c_scale, d_scale, bias;  // not used
 
   TF_RET_CHECK(instr->shape().IsTuple());
