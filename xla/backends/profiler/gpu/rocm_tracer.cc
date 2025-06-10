@@ -51,6 +51,55 @@ using tsl::profiler::XLineBuilder;
 using tsl::profiler::XPlaneBuilder;
 using tsl::profiler::XSpace;
 
+#define ROCPROFILER_VAR_NAME_COMBINE(X, Y) X##Y
+#define ROCPROFILER_VARIABLE(X, Y)         ROCPROFILER_VAR_NAME_COMBINE(X, Y)
+
+#define ROCPROFILER_WARN(result)                                                                   \
+    {                                                                                              \
+        rocprofiler_status_t ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__) = result;                 \
+        if(ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__) != ROCPROFILER_STATUS_SUCCESS)              \
+        {                                                                                          \
+            std::string status_msg =                                                               \
+                rocprofiler_get_status_string(ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__));        \
+            std::cerr << "[" << __FILE__ << ":" << __LINE__ << "] " << #result                     \
+                      << " returned error code " << ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__)    \
+                      << ": " << status_msg << ". This is just a warning!" << std::endl;           \
+        }                                                                                          \
+    }
+
+#define ROCPROFILER_CHECK(result)                                                                  \
+    {                                                                                              \
+        rocprofiler_status_t ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__) = result;                 \
+        if(ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__) != ROCPROFILER_STATUS_SUCCESS)              \
+        {                                                                                          \
+            std::string status_msg =                                                               \
+                rocprofiler_get_status_string(ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__));        \
+            std::stringstream errmsg{};                                                            \
+            errmsg << "[" << __FILE__ << ":" << __LINE__ << "] " << #result                        \
+                   << " failed with error code " << ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__)    \
+                   << " :: " << status_msg;                                                        \
+            throw std::runtime_error(errmsg.str());                                                \
+        }                                                                                          \
+    }
+
+#define ROCPROFILER_CALL(result, msg)                                                              \
+    {                                                                                              \
+        rocprofiler_status_t ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__) = result;                 \
+        if(ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__) != ROCPROFILER_STATUS_SUCCESS)              \
+        {                                                                                          \
+            std::string status_msg =                                                               \
+                rocprofiler_get_status_string(ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__));        \
+            std::cerr << "[" #result "][" << __FILE__ << ":" << __LINE__ << "] " << msg            \
+                      << " failed with error code " << ROCPROFILER_VARIABLE(CHECKSTATUS, __LINE__) \
+                      << ": " << status_msg << std::endl;                                          \
+            std::stringstream errmsg{};                                                            \
+            errmsg << "[" #result "][" << __FILE__ << ":" << __LINE__ << "] " << msg " failure ("  \
+                   << status_msg << ")";                                                           \
+            VLOG(-1) << errmsg.str();                                                \
+        }                                                                                          \
+    }
+
+
 namespace xla {
 namespace profiler {
 
@@ -72,6 +121,7 @@ using kernel_symbol_data_t = rocprofiler_callback_tracing_code_object_kernel_sym
     
 rocprofiler_client_id_t*      client_id        = nullptr;
 rocprofiler_client_finalize_t client_fini_func = nullptr;
+using buffer_name_info   = rocprofiler::sdk::buffer_name_info;
 // rocprofiler_context_id_t      client_ctx       = {0};
 // rocprofiler_buffer_id_t       client_buffer    = {};
 // buffer_name_info              client_name_info = {};
@@ -477,6 +527,10 @@ class RocprofLoggerShared {
   // Maps & misc -------------------------------------------------------
   kernel_symbol_map_t kernel_info;
   kernel_name_map_t kernel_names;
+  rocprofiler_buffer_id_t  client_buffer    = {};
+  buffer_name_info         client_name_info = {};
+  kernel_symbol_map_t      client_kernels   = {};
+
   tsl::mutex kernel_lock;
 
   callback_name_info name_info;
@@ -569,6 +623,42 @@ void RocmTracer::Enable(const RocmTracerOptions& options,
 }
 
 void
+tool_code_object_callback(rocprofiler_callback_tracing_record_t record,
+                          rocprofiler_user_data_t*              user_data,
+                          void*                                 callback_data)
+{
+    if(record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
+       record.operation == ROCPROFILER_CODE_OBJECT_LOAD)
+    {
+        if(record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD)
+        {
+            // flush the buffer to ensure that any lookups for the client kernel names for the code
+            // object are completed
+            auto flush_status = rocprofiler_flush_buffer(g_shared->client_buffer);
+            if(flush_status != ROCPROFILER_STATUS_ERROR_BUFFER_BUSY)
+                ROCPROFILER_CALL(flush_status, "buffer flush");
+        }
+    }
+    else if(record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
+            record.operation == ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER)
+    {
+        auto* data = static_cast<kernel_symbol_data_t*>(record.payload);
+        if(record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD)
+        {
+            g_shared->client_kernels.emplace(data->kernel_id, *data);
+        }
+        else if(record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD)
+        {
+            // do not erase just in case a buffer callback needs this
+            // client_kernels.erase(data->kernel_id);
+        }
+    }
+
+    (void) user_data;
+    (void) callback_data;
+}
+
+void
 tool_tracing_callback(rocprofiler_context_id_t      context,
                       rocprofiler_buffer_id_t       buffer_id,
                       rocprofiler_record_header_t** headers,
@@ -596,111 +686,168 @@ tool_tracing_callback(rocprofiler_context_id_t      context,
         return;
       }
 
-      uint32_t corr_id{0};
-      // API
-      // RocmTracerEvent dummy_api{
-      //   //RocmTracerEventType::Unsupported,
-      //   RocmTracerEventType::Kernel,
-      //   RocmTracerEventSource::ApiCallback,
-      //   RocmTracerEventDomain::HIP_API, "dummy_api", "123", "234", 0, 1000, 0, corr_id, 0, 0
-      // };
+      auto* header = headers[i];
 
-      auto tmp_ts = RocmTracer::GetTimestamp();
-      VLOG(-1) << "cj401 tmp_ts = " << tmp_ts;
-      // auto tmp_ts = 4129665416877750;
-      {
-        RocmTracerEvent event;
-        event.type = RocmTracerEventType::Kernel;
-        event.source = RocmTracerEventSource::ApiCallback;
-        event.domain = RocmTracerEventDomain::HIP_API;
-        event.name = "hipLaunchKernel";
-        event.annotation = "ApiCallbackAnnotation";
-        event.start_time_ns = tmp_ts + 1000;
-        event.end_time_ns = tmp_ts + 20000;
-        event.device_id = 0;
-        event.correlation_id = corr_id;
-        event.thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
-        event.stream_id = 2;
-        event.kernel_info = {
-          0,      // registers_per_thread (unknown, set to 0)
-          0,      // static_shared_memory_usage (unknown, set to 0)
-          0,      // dynamic_shared_memory_usage (from original)
-          128,    // block_x (threads per block in X)
-          1,      // block_y (1D block)
-          1,      // block_z (1D block)
-          512,    // grid_x (blocks in X)
-          1,      // grid_y (1D grid)
-          1,      // grid_z (1D grid)
-          nullptr // func_ptr (from original)
-      };
+      auto get_name = [](const auto* _record) -> std::string_view {
+        // try
+        // {
+            return g_shared->client_name_info.at(_record->kind, _record->operation);
+        //} 
+        /*
+        catch(std::exception& e)
+        {
+            std::cerr << __FUNCTION__
+                      << " threw an exception for buffer tracing kind=" << _record->kind
+                      << ", operation=" << _record->operation << "\nException: " << e.what()
+                      << std::flush;
+            abort();
+        }*/
+        // return std::string_view{"??"};
+    };
 
-        // VLOG(-1) << "cj401 rocprofiler invoked a buffer callback with " << num_headers << " headers";
-        tracer->collector()->AddEvent(std::move(event), false);
+    if(header->category == ROCPROFILER_BUFFER_CATEGORY_TRACING &&
+      header->kind == ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API){
+      auto* record =
+          static_cast<rocprofiler_buffer_tracing_hip_api_record_t*>(header->payload);
+      auto info = std::stringstream{};
+      info << "tid=" << record->thread_id << ", context=" << context.handle
+          << ", buffer_id=" << buffer_id.handle
+          << ", cid=" << record->correlation_id.internal
+          << ", extern_cid=" << record->correlation_id.external.value
+          << ", kind=" << record->kind << ", operation=" << record->operation
+          << ", start=" << record->start_timestamp << ", stop=" << record->end_timestamp
+          << ", name=" << g_shared->client_name_info[record->kind][record->operation];
+
+      if(record->start_timestamp > record->end_timestamp){
+          auto msg = std::stringstream{};
+          msg << "hip api: start > end (" << record->start_timestamp << " > "
+              << record->end_timestamp
+              << "). diff = " << (record->start_timestamp - record->end_timestamp);
+          VLOG(-1) << "threw an exception " << msg.str() << "\n" << std::flush;
+          // throw std::runtime_error{msg.str()};
       }
 
-      // Activity
-      // RocmTracerEvent dummy_event{
-      //   //RocmTracerEventType::Unsupported,
-      //   RocmTracerEventType::Kernel,
-      //   RocmTracerEventSource::Activity,
-      //   RocmTracerEventDomain::HIP_OPS, "dummy_hip", "123", "234", 0, 2000, 0, corr_id, 0, 0
-      // };
+      RocmTracerEvent event;
+      event.type = RocmTracerEventType::Kernel;
+      event.source = RocmTracerEventSource::ApiCallback;
+      event.domain = RocmTracerEventDomain::HIP_API;
+      event.name = g_shared->client_name_info[record->kind][record->operation];
+      event.annotation = g_shared->client_name_info[record->kind][record->operation];
+      event.start_time_ns = record->start_timestamp;
+      event.end_time_ns = record->end_timestamp;
+      event.device_id = 0;
+      event.correlation_id = record->correlation_id.internal;
+      event.thread_id = record->thread_id;
+      // event.stream_id = 2;
+      tracer->collector()->AddEvent(std::move(event), false);
 
-      {
-        RocmTracerEvent activity_event;
-        activity_event.type = RocmTracerEventType::Kernel;
-        activity_event.source = RocmTracerEventSource::Activity;
-        activity_event.domain = RocmTracerEventDomain::HIP_OPS;
-        activity_event.name = "cj_Kernel"; // Replace with actual kernel name
-        activity_event.annotation = "KernelExecutionAnnotation";
-        activity_event.start_time_ns = tmp_ts + 2000; // Slightly later than API call
-        activity_event.end_time_ns = tmp_ts + 20000;   // Adjusted duration
-        activity_event.device_id = 0;
-        activity_event.correlation_id = corr_id; // Matches API event
-        activity_event.thread_id = 0; // Typically 0 for activity records
-        activity_event.stream_id = 2; // Matches API event
-        activity_event.kernel_info = {
-          0,      // registers_per_thread (unknown, set to 0)
-          0,      // static_shared_memory_usage (unknown, set to 0)
-          0,      // dynamic_shared_memory_usage (from original)
-          128,    // block_x (threads per block in X)
-          1,      // block_y (1D block)
-          1,      // block_z (1D block)
-          512,    // grid_x (blocks in X)
-          1,      // grid_y (1D grid)
-          1,      // grid_z (1D grid)
-          nullptr // func_ptr (from original)
-      };
+      VLOG(-1) << info.str();
+    } else if(header->category == ROCPROFILER_BUFFER_CATEGORY_TRACING &&
+        header->kind == ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH) {
+          auto* record =
+              static_cast<rocprofiler_buffer_tracing_kernel_dispatch_record_t*>(header->payload);
 
+          auto info = std::stringstream{};
+
+          auto kernel_id   = record->dispatch_info.kernel_id;
+          auto kernel_name = (g_shared->client_kernels.count(kernel_id) > 0)
+                                ? std::string_view{g_shared->client_kernels.at(kernel_id).kernel_name}
+                                : std::string_view{"??"};
+
+          info << "tid=" << record->thread_id << ", context=" << context.handle
+              << ", buffer_id=" << buffer_id.handle
+              << ", cid=" << record->correlation_id.internal
+              << ", extern_cid=" << record->correlation_id.external.value
+              << ", kind=" << record->kind << ", operation=" << record->operation
+              << ", agent_id=" << record->dispatch_info.agent_id.handle
+              << ", queue_id=" << record->dispatch_info.queue_id.handle
+              << ", kernel_id=" << record->dispatch_info.kernel_id << ", kernel=" << kernel_name
+              << ", start=" << record->start_timestamp << ", stop=" << record->end_timestamp
+              << ", private_segment_size=" << record->dispatch_info.private_segment_size
+              << ", group_segment_size=" << record->dispatch_info.group_segment_size
+              << ", workgroup_size=(" << record->dispatch_info.workgroup_size.x << ","
+              << record->dispatch_info.workgroup_size.y << ","
+              << record->dispatch_info.workgroup_size.z << "), grid_size=("
+              << record->dispatch_info.grid_size.x << "," << record->dispatch_info.grid_size.y
+              << "," << record->dispatch_info.grid_size.z << ")";
+
+          if(record->start_timestamp > record->end_timestamp)
+              VLOG(-1) << "kernel dispatch: start > end";
+
+          RocmTracerEvent activity_event;
+          activity_event.type = RocmTracerEventType::Kernel;
+          activity_event.source = RocmTracerEventSource::Activity;
+          activity_event.domain = RocmTracerEventDomain::HIP_OPS;
+          activity_event.name = kernel_name; // Replace with actual kernel name
+          activity_event.annotation = kernel_name;
+          activity_event.start_time_ns = record->start_timestamp;
+          activity_event.end_time_ns = record->end_timestamp;   // Adjusted duration
+          activity_event.device_id = 0;
+          activity_event.correlation_id = record->correlation_id.internal; // Matches API event
+          activity_event.thread_id = record->thread_id; // Typically 0 for activity records
+          activity_event.stream_id = 2; // Matches API event
+          activity_event.kernel_info = {
+            0,      // registers_per_thread (unknown, set to 0)
+            0,      // static_shared_memory_usage (unknown, set to 0)
+            0,      // dynamic_shared_memory_usage (from original)
+            record->dispatch_info.workgroup_size.x,    // block_x (threads per block in X)
+            record->dispatch_info.workgroup_size.y,      // block_y (1D block)
+            record->dispatch_info.workgroup_size.z,      // block_z (1D block)
+            record->dispatch_info.grid_size.x,    // grid_x (blocks in X)
+            record->dispatch_info.grid_size.y,      // grid_y (1D grid)
+            record->dispatch_info.grid_size.z,      // grid_z (1D grid)
+            nullptr // func_ptr (from original)
+        };
+  
         tracer->collector()->AddEvent(std::move(activity_event), false);
+          
+          VLOG(-1) << info.str();
+      } else if(header->category == ROCPROFILER_BUFFER_CATEGORY_TRACING &&
+          header->kind == ROCPROFILER_BUFFER_TRACING_MEMORY_COPY) {
+            auto* record =
+                static_cast<rocprofiler_buffer_tracing_memory_copy_record_t*>(header->payload);
+
+            auto info = std::stringstream{};
+
+            info << "tid=" << record->thread_id << ", context=" << context.handle
+                << ", buffer_id=" << buffer_id.handle
+                << ", cid=" << record->correlation_id.internal
+                << ", extern_cid=" << record->correlation_id.external.value
+                << ", kind=" << record->kind << ", operation=" << record->operation
+                << ", src_agent_id=" << record->src_agent_id.handle
+                << ", dst_agent_id=" << record->dst_agent_id.handle
+                << ", direction=" << record->operation << ", start=" << record->start_timestamp
+                << ", stop=" << record->end_timestamp << ", name=" << get_name(record);
+
+            if(record->start_timestamp > record->end_timestamp)
+                VLOG(-1) << "memory copy: start > end";
+
+            RocmTracerEvent activity_event;
+            activity_event.type = RocmTracerEventType::Kernel;
+            activity_event.source = RocmTracerEventSource::Activity;
+            activity_event.domain = RocmTracerEventDomain::HIP_OPS;
+            activity_event.name = get_name(record); 
+            activity_event.annotation = get_name(record);
+            activity_event.start_time_ns = record->start_timestamp;
+            activity_event.end_time_ns = record->end_timestamp;   // Adjusted duration
+            activity_event.device_id = 0;
+            activity_event.correlation_id = record->correlation_id.internal; // Matches API event
+            activity_event.thread_id = record->thread_id; // Typically 0 for activity records
+            activity_event.stream_id = 2; // Matches API event
+            
+            tracer->collector()->AddEvent(std::move(activity_event), false);
+
+            VLOG(-1) << info.str();
       }
-
-      // VLOG(-1) << "cj401 rocprofiler invoked a buffer callback with " << num_headers << " headers";
-      corr_id += 1;
-      // VLOG(-1) << "cj401 RocmTracer::GetRocmTracerSingleton()->collector()->AddEvent(std::move(dummy_event), false);";
-    }
-      
+    
+  }    
 }
-
-void
-tool_code_object_callback(rocprofiler_callback_tracing_record_t record,
-                          rocprofiler_user_data_t*              user_data,
-                          void*                                 callback_data)
-{
-    if(record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
-       record.operation == ROCPROFILER_CODE_OBJECT_LOAD)
-    {
-    }
-
-    (void) user_data;
-    (void) callback_data;
-}
-
 
 int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_data) {
   VLOG(-1) << "cj401 gather api names";
   // Gather API names
   g_shared->name_info = GetCallbackTracingNames();
+  g_shared->client_name_info = rocprofiler::sdk::get_buffer_tracing_names();
 
   // Gather agent info
   for (const auto& agent : GetGpuDeviceAgents()) {
