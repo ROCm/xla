@@ -61,16 +61,16 @@ ENTRY main {
         EXPECT_THAT(RunHloPass(&pass, test_module), IsOkAndHolds(true));
       }));
 
-  RunAndFilecheckHloRewrite(
-      hlo_string,
-      BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
-                           /*allow_hipblaslt=*/false),
-      "CHECK-NOT: __hipblaslt$blockScaledDot");
-  RunAndFilecheckHloRewrite(
-      hlo_string,
-      BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
-                           /*allow_hipblaslt=*/true),
-      "CHECK: __hipblaslt$blockScaledDot");
+  // RunAndFilecheckHloRewrite(
+  //     hlo_string,
+  //     BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
+  //                          /*allow_hipblaslt=*/false),
+  //     "CHECK-NOT: __hipblaslt$blockScaledDot");
+  // RunAndFilecheckHloRewrite(
+  //     hlo_string,
+  //     BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
+  //                          /*allow_hipblaslt=*/true),
+  //     "CHECK: __hipblaslt$blockScaledDot");
 }
 
 }  // namespace

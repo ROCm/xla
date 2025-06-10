@@ -76,14 +76,21 @@ absl::StatusOr<HloInstruction*> ExpandInstructionWithGemmConfigUsingBuilder(
     }
   }
   if (target != nullptr) {
-    GemmBackendConfig cfg;
-    *cfg.mutable_dot_dimension_numbers() = dnums;
-    cfg.set_alpha_real(alpha);
-    cfg.set_beta(beta);
-    cfg.mutable_precision_config()->add_operand_precision(
+    xla::gpu::GemmBackendConfig gemm_cfg;
+    gemm_cfg.set_selected_algorithm(0);
+    *gemm_cfg.mutable_dot_dimension_numbers() = dnums;
+    gemm_cfg.set_alpha_real(alpha);
+    gemm_cfg.set_alpha_imag(0.0);
+    gemm_cfg.set_beta(beta);
+    gemm_cfg.set_grad_x(true);
+    gemm_cfg.set_grad_y(true);
+    gemm_cfg.mutable_precision_config()->add_operand_precision(
         PrecisionConfig::DEFAULT);
-    cfg.set_epilogue(GemmBackendConfig::DEFAULT);
-    TF_RETURN_IF_ERROR(target->set_backend_config(cfg));
+    gemm_cfg.set_epilogue(xla::gpu::GemmBackendConfig::DEFAULT);
+
+    xla::gpu::GpuBackendConfig gpu_cfg;
+    *gpu_cfg.mutable_gemm_backend_config() = gemm_cfg;
+    TF_RETURN_IF_ERROR(target->set_backend_config(gpu_cfg));
   }
 
   return old_instruction->parent()->AddInstruction(HloInstruction::CreateCall(
