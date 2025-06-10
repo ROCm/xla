@@ -89,9 +89,11 @@ class BlockScalingRewriter : public OpExpanderPass {
   static constexpr absl::string_view kBlockScaledDotCustomCallTarget =
       "__op$block_scaled_dot";
 
-  // Common block size constants.
+  // Common block size constants for CUDA
   static constexpr int kBlockSizeMXFP8 = 32;
   static constexpr int kBlockSizeNVFP4 = 16;
+  // Common block size constants for ROCm
+  static constexpr int kBlockSizeHipblaslt = 32;
 
  private:
   const se::DeviceDescription device_description_;
