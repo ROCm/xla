@@ -98,10 +98,10 @@ class RocmTracer {
   void Disable();
 
   static uint64_t GetTimestamp();
-  static int NumGpus();
+  uint32_t NumGpus() const { return num_gpus_; };
   RocmTraceCollector* collector() { return collector_; }
   
-  static int toolInit(
+  int toolInit(
     rocprofiler_client_finalize_t finalize_func,
     void* tool_data);
   static void toolFinalize(void* tool_data);
@@ -123,7 +123,7 @@ class RocmTracer {
 
  protected:
   // protected constructor for injecting mock cupti interface for testing.
-  explicit RocmTracer() {}
+  RocmTracer() = default;
 
   void HipApiEvent(const rocprofiler_record_header_t *hdr,
         RocmTracerEvent *ev); 
@@ -136,7 +136,7 @@ class RocmTracer {
 
 private:
   bool registered_{false};
-  int num_gpus_;
+  uint32_t num_gpus_ = 0;
   std::optional<RocmTracerOptions> options_;
   RocmTraceCollector* collector_ = nullptr;
 
@@ -149,6 +149,36 @@ private:
 
   bool api_tracing_enabled_ = false;
   bool activity_tracing_enabled_ = false;
+public:
+
+  using kernel_symbol_data_t =
+    rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t;
+
+  struct ProfilerKernelInfo {
+    std::string name;
+    kernel_symbol_data_t data;
+  };
+
+  using kernel_info_map_t =
+    std::unordered_map<rocprofiler_kernel_id_t, ProfilerKernelInfo>;
+
+  using agent_info_map_t =
+    std::unordered_map<uint64_t, rocprofiler_agent_v0_t>;
+
+  using callback_name_info = rocprofiler::sdk::callback_name_info;
+
+  rocprofiler_client_id_t* client_id_ = nullptr;
+  // Contexts ----------------------------------------------------------
+  rocprofiler_context_id_t utility_context_{};
+  rocprofiler_context_id_t context_{};
+  rocprofiler_buffer_id_t buffer_{};
+
+  // Maps & misc -------------------------------------------------------
+  kernel_info_map_t kernel_info_;
+  tsl::mutex kernel_lock_;
+
+  callback_name_info name_info_;
+  agent_info_map_t agents_;
 
  public:
   // Disable copy and move.
