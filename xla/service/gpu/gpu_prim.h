@@ -43,7 +43,6 @@ namespace rocprim {
 #if (TF_ROCM_VERSION >= 50200 && TF_ROCM_VERSION < 70000)
 namespace detail {
 
-#if (TF_ROCM_VERSION >= 50200)
 template <>
 struct float_bit_mask<Eigen::half> {
   static constexpr uint16_t sign_bit = 0x8000;
@@ -81,7 +80,7 @@ struct rocprim::traits::define<tsl::bfloat16> {
 };
 
 }; // namespace traits
-#endif  // TF_ROCM_VERSION >= 50200 && TF_ROCM_VERSION < 70000
+#endif   // TF_ROCM_VERSION >= 50200 && TF_ROCM_VERSION < 70000
 
 #if (TF_ROCM_VERSION < 70000)
 namespace detail {
@@ -91,6 +90,7 @@ struct radix_key_codec_base<Eigen::half>
 template <>
 struct radix_key_codec_base<tsl::bfloat16>
     : radix_key_codec_floating<tsl::bfloat16, uint16_t> {};
+
 };  // namespace detail
 #endif // TF_ROCM_VERSION < 70000
 
