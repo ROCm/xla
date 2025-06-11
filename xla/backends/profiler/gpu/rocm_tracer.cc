@@ -195,11 +195,6 @@ inline auto GetCallbackTracingNames() {
 }
 std::vector<rocprofiler_agent_v0_t> GetGpuDeviceAgents();
 
-inline auto getBufferTracingNames()
-{
-    return rocprofiler::sdk::get_buffer_tracing_names();
-}
-
 //-----------------------------------------------------------------------------
 const char* GetRocmTracerEventSourceName(const RocmTracerEventSource& source) {
   switch (source) {
@@ -628,7 +623,6 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
 
   // Gather API names
   name_info_ = GetCallbackTracingNames();
-  client_name_info_ = getBufferTracingNames();
 
   // Gather agent info
   num_gpus_ = 0;
