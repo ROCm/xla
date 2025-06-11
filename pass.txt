@@ -1,0 +1,14 @@
+2025-06-10 11:03:05.765061: I xla/service/gpu/reduction_utils.cc:235] ##### Is real reduction 1
+2025-06-10 11:03:05.765081: I xla/service/gpu/reduction_utils.cc:227] ##### Is not real reduction
+2025-06-10 11:03:05.765084: I xla/service/gpu/reduction_utils.cc:235] ##### Is real reduction 1
+2025-06-10 11:03:05.765091: I xla/service/gpu/reduction_utils.cc:235] ##### Is real reduction 1
+2025-06-10 11:03:05.765093: I xla/service/gpu/reduction_utils.cc:227] ##### Is not real reduction
+2025-06-10 11:03:05.765096: I xla/service/gpu/reduction_utils.cc:235] ##### Is real reduction 1
+2025-06-10 11:03:05.765098: I xla/service/gpu/reduction_utils.cc:235] ##### Is real reduction 1
+2025-06-10 11:03:05.765101: I xla/service/gpu/reduction_utils.cc:235] ##### Is real reduction 1
+2025-06-10 11:03:05.765103: I xla/service/gpu/reduction_utils.cc:227] ##### Is not real reduction
+2025-06-10 11:03:05.765105: I xla/service/gpu/reduction_utils.cc:235] ##### Is real reduction 1
+2025-06-10 11:03:05.765108: I xla/service/gpu/reduction_utils.cc:235] ##### Is real reduction 1
+2025-06-10 11:03:05.765119: I xla/service/gpu/reduction_utils.cc:235] ##### Is real reduction 1
+2025-06-10 11:03:05.765122: I xla/service/gpu/reduction_utils.cc:227] ##### Is not real reduction
+2025-06-10 11:03:05.765124: I xla/service/gpu/reduction_utils.cc:235] ##### Is real reduction 1
