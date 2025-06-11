@@ -189,82 +189,16 @@ const char *RocProfCodeObjOperation(/*rocprofiler_code_object_operation_t*/int32
 
 } // namespace
 
-//----------------------------------------------------------------------------
-ApiIdList::ApiIdList() : invert_(true) {}
-
-void ApiIdList::add(const std::string& apiName) {
-  uint32_t cid = mapName(apiName);
-  if (cid > 0)
-    filter_[cid] = 1;
-}
-
-void ApiIdList::remove(const std::string& apiName) {
-  uint32_t cid = mapName(apiName);
-  if (cid > 0)
-    filter_.erase(cid);
-}
-
-bool ApiIdList::loadUserPrefs() {
-  // FIXME: check an ENV variable that points to an exclude file
-  return false;
-}
-
-bool ApiIdList::contains(uint32_t apiId) {
-  return (filter_.find(apiId) != filter_.end()) ? !invert_ : invert_; // XOR
-}
-
-// ----------------------------------------------------------------------------
-// RocprofApiIdList – thin wrapper that maps API name → operation id.
-// ----------------------------------------------------------------------------
-class RocprofApiIdList : public ApiIdList {
-  public:
-   explicit RocprofApiIdList(RocmTracer::callback_name_info& names);  // Defined elsewhere.
-   uint32_t mapName(const std::string& apiName) override;  // Implemented elsewhere.
-   std::vector<rocprofiler_tracing_operation_t> allEnabled();
- 
-  private:
-   std::unordered_map<std::string, size_t> nameMap_;
- };
-
-//-----------------------------------------------------------------------------
-//
-// ApiIdList
-//   Jump through some extra hoops
-//
-//
-RocprofApiIdList::RocprofApiIdList(RocmTracer::callback_name_info& names) : nameMap_() {
-  auto& hipapis =
-      names[ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API].operations;
-
-  for (size_t i = 0; i < hipapis.size(); ++i) {
-    nameMap_.emplace(hipapis[i], i);
-  }
-}
-
-uint32_t RocprofApiIdList::mapName(const std::string& apiName) {
-  auto it = nameMap_.find(apiName);
-  if (it != nameMap_.end()) {
-    return it->second;
-  }
-  return 0;
-}
-
-std::vector<rocprofiler_tracing_operation_t> RocprofApiIdList::allEnabled() {
-  std::vector<rocprofiler_tracing_operation_t> oplist;
-  for (auto& it : nameMap_) {
-    if (contains(it.second))
-      oplist.push_back(it.second);
-  }
-  return oplist;
-}
-
-
 
 inline auto GetCallbackTracingNames() {
   return rocprofiler::sdk::get_callback_tracing_names();
 }
 std::vector<rocprofiler_agent_v0_t> GetGpuDeviceAgents();
 
+inline auto getBufferTracingNames()
+{
+    return rocprofiler::sdk::get_buffer_tracing_names();
+}
 
 //-----------------------------------------------------------------------------
 const char* GetRocmTracerEventSourceName(const RocmTracerEventSource& source) {
@@ -486,7 +420,6 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
   }
 
   if (isKernelApi(rec.operation)) {
-
   }
 }
 
@@ -566,7 +499,7 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t *hdr,
   ev->type = RocmTracerEventType::Kernel;
   ev->source = RocmTracerEventSource::Activity;
   ev->domain = RocmTracerEventDomain::HIP_OPS;
-  ev->name = "??";
+  // ev->name = "??";
   ev->annotation = "??";
   ev->roctx_range = "??";
   ev->start_time_ns = rec.start_timestamp;
@@ -695,6 +628,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
 
   // Gather API names
   name_info_ = GetCallbackTracingNames();
+  client_name_info_ = getBufferTracingNames();
 
   // Gather agent info
   num_gpus_ = 0;
@@ -779,7 +713,6 @@ void RocmTracer::toolFinalize(void* tool_data) {
 }
 
 void RocmTracer::Disable() {
-
   std::lock_guard<tsl::mutex> lk(collector_mutex_);
   collector_->Flush();
   collector_ = nullptr;
@@ -818,7 +751,6 @@ static int toolInitStatic(
     void* tool_data) {
   return RocmTracer::i().toolInit(finalize_func, tool_data);
 }
-
 
 // ----------------------------------------------------------------------------
 // C‑linkage entry‑point expected by rocprofiler-sdk.
