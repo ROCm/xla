@@ -290,6 +290,25 @@ GetMIOpenAlgorithms(const HloCustomCallInstruction* instr,
       /* use_fallback = */ false, scratch_allocator, numeric_options,
       &runners));
 
+  // HACK
+  if (!GpuConvAlgorithmPicker::IsEnabled(instr->GetModule()) &&
+      runners.size() > 1) {
+    runners.resize(1);
+  }
+
+  // HACK 2
+  static size_t algo_limit = []() {
+    int64_t value;
+    TF_CHECK_OK(tsl::ReadInt64FromEnvVar("TF_MIOPEN_TUNED_ALGO_LIMIT",
+                                         INT64_MAX, &value));
+    CHECK(value > 0);
+    return static_cast<size_t>(value);
+  }();
+
+  if (runners.size() > algo_limit) {
+    runners.resize(algo_limit);
+  }
+  LOG(WARNING) << "GetMIOpenAlgorithms returned " << runners.size() << " runners";
   return runners;
 }
 
@@ -1181,11 +1200,11 @@ absl::StatusOr<bool> GpuConvAlgorithmPicker::Run(
   XLA_SCOPED_LOGGING_TIMER(
       absl::StrCat("GpuConvAlgorithmPicker for ", module->name()));
 
-  if (!IsEnabled(module)) {
-    VLOG(3) << "Convolution auto-tuning disabled, GpuConvAlgorithmPicker "
-               "returning early.";
-    return false;
-  }
+  // if (!IsEnabled(module)) {
+  //   VLOG(3) << "Convolution auto-tuning disabled, GpuConvAlgorithmPicker "
+  //              "returning early.";
+  //   return false;
+  // }
 
   bool changed = false;
   for (HloComputation* computation :
