@@ -310,7 +310,7 @@ XEvent *PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
         XLineBuilder* line) {
     if (event.start_time_ns < start_gpu_ns || event.end_time_ns > end_gpu_ns ||
         event.start_time_ns > event.end_time_ns) {
-      VLOG(-1) << "cj401 events have abnormal timestamps:" << event.name
+      VLOG(0) << "events have abnormal timestamps:" << event.name
               << " start time(ns): " << event.start_time_ns
               << " end time(ns): " << event.end_time_ns
               << " start gpu(ns):" << start_gpu_ns
@@ -696,7 +696,7 @@ void RocmTraceCollectorImpl::Flush() {
   mutex_lock lock(event_maps_mutex_);
   auto aggregated_events = ApiActivityInfoExchange();
 
-  VLOG(-1) << "RocmTraceCollector collected " << num_callback_events_
+  VLOG(0) << "RocmTraceCollector collected " << num_callback_events_
           << " callback events, " << num_activity_events_
           << " activity events, and aggregated them into "
           << aggregated_events.size() << " events.";

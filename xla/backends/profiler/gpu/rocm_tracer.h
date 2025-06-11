@@ -45,33 +45,6 @@ enum CorrelationDomain {
   size = end
 };
 
-class ApiIdList {
-  public:
-   ApiIdList();
-   virtual ~ApiIdList() {}
-   bool invertMode() {
-     return invert_;
-   }
-   void setInvertMode(bool invert) {
-     invert_ = invert;
-   }
-   void add(const std::string& apiName);
-   void remove(const std::string& apiName);
-   bool loadUserPrefs();
- 
-   // Map api string to cnid enum
-   virtual uint32_t mapName(const std::string& apiName) = 0;
- 
-   bool contains(uint32_t apiId);
-   const std::unordered_map<uint32_t, uint32_t>& filterList() {
-     return filter_;
-   }
- 
-  private:
-   std::unordered_map<uint32_t, uint32_t> filter_;
-   bool invert_;
-};
-
 struct RocmTracerOptions {
   std::set<uint32_t> api_tracking_set;  // actual api set we want to profile
 
