@@ -494,6 +494,25 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForCUDA(
  *      ROCm Solution: __op$block_scaled_dot --> hipblaslt matmul call                   *
  *****************************************************************************************/
 
+bool IsSupportedByHipblaslt(const Shape& lhs_shape, const Shape& rhs_shape,
+                            const Shape& lhs_scale_shape,
+                            const Shape& rhs_scale_shape) {
+  // batch size must be 1
+  if (lhs_shape.dimensions().size() == 3 && lhs_shape.dimensions(0) != 1) {
+    return false;
+  }
+  // check supported data types
+  if (lhs_shape.element_type() != PrimitiveType::F8E4M3FN ||
+      rhs_shape.element_type() != PrimitiveType::F8E4M3FN) {
+    return false;
+  }
+  if (lhs_scale_shape.element_type() != PrimitiveType::F8E8M0FNU ||
+      rhs_scale_shape.element_type() != PrimitiveType::F8E8M0FNU) {
+    return false;
+  }
+  return true;
+}
+
 // Reshape inputs to shapes compatible with hipBLASLt.
 absl::StatusOr<std::tuple<XlaOp, XlaOp>> BuildHipblasltScaledDotInputs(
     XlaOp input_op, XlaOp scale_op) {
@@ -572,7 +591,9 @@ absl::StatusOr<XlaOp> BuildBlockScaledDotForROCm(
   }
 
   // Use hipblaslt kernel, if possible.
-  if (allow_hipblaslt &&rhs_scale_op.valid()) {
+  if (allow_hipblaslt && rhs_scale_op.valid() &&
+      IsSupportedByHipblaslt(lhs_input->shape(), rhs_input->shape(),
+                             lhs_scale->shape(), rhs_scale->shape())) {
     return BuildHipblasltScaledDot(lhs_op, rhs_op, lhs_scale_op, rhs_scale_op,
                                    dnums, result_type);
   }
