@@ -554,7 +554,7 @@ absl::StatusOr<XlaOp> BuildHipblasltScaledDot(XlaOp lhs_input, XlaOp rhs_input,
   return result;
 }
 
-// Build HLO for scaled dot op for CUDA platform.
+// Build HLO for scaled dot op for ROCm platform.
 absl::StatusOr<XlaOp> BuildBlockScaledDotForROCm(
     XlaBuilder& builder, const HloInstruction* lhs_input,
     const HloInstruction* rhs_input, const HloInstruction* lhs_scale,
