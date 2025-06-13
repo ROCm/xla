@@ -829,9 +829,6 @@ absl::Status IrEmitterUnnested::EmitCublasLtMatmulThunkMX(
   const xla::gpu::GemmBackendConfig& config = gpu_config.gemm_backend_config();
   xla::gpu::GemmBackendConfig_Epilogue epilogue = config.epilogue();
 
-  LOG(INFO) << "gemm_backend_config.dot_dimension_numbers: "
-            << config.dot_dimension_numbers().DebugString();
-
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice a,
                       GetAllocationSliceForHlo(instr->operand(0)));
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice b,

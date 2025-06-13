@@ -497,7 +497,8 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForCUDA(
 bool IsSupportedByHipblaslt(const Shape& lhs_shape, const Shape& rhs_shape,
                             const Shape& lhs_scale_shape,
                             const Shape& rhs_scale_shape) {
-  // batch size must be 1
+  // batch_size must be 1
+  // TODO: remove this constraint when hipblaslt support batch_size > 1
   if (lhs_shape.dimensions().size() == 3 && lhs_shape.dimensions(0) != 1) {
     return false;
   }
@@ -513,61 +514,34 @@ bool IsSupportedByHipblaslt(const Shape& lhs_shape, const Shape& rhs_shape,
   return true;
 }
 
-// Reshape inputs to shapes compatible with hipBLASLt.
-absl::StatusOr<std::tuple<XlaOp, XlaOp>> BuildHipblasltScaledDotInputs(
-    XlaOp input_op, XlaOp scale_op) {
-  // Get shapes from the inputs.
-  XlaBuilder& builder = *input_op.builder();
-  TF_ASSIGN_OR_RETURN(Shape input_shape, builder.GetShape(input_op));
-  TF_ASSIGN_OR_RETURN(Shape scale_shape, builder.GetShape(scale_op));
-  TF_RET_CHECK(input_shape.dimensions().size() == 2 ||
-               input_shape.dimensions().size() == 3);
-
-  // Calculate output shape size.
-  int64_t batch_size =
-      input_shape.dimensions().size() == 3 ? input_shape.dimensions(0) : 1;
-  int64_t size_contracting = input_shape.dimensions().back();
-  int64_t size_noncontracting =
-      input_shape.dimensions(input_shape.dimensions().size() - 2);
-  int64_t scale_contracting = scale_shape.dimensions().back();
-
-  // Reshape inputs, if necessary.
-  if (input_shape.dimensions().size() != 3) {
-    input_op = Reshape(input_op, {1, size_noncontracting, size_contracting});
-    scale_op = Reshape(scale_op, {1, size_noncontracting, scale_contracting});
-  }
-
-  return std::make_tuple(input_op, scale_op);
-}
-
 // Build HLO for hipblaslt custom call op.
 absl::StatusOr<XlaOp> BuildHipblasltScaledDot(XlaOp lhs_input, XlaOp rhs_input,
                                               XlaOp lhs_scale, XlaOp rhs_scale,
                                               const DotDimensionNumbers& dnums,
                                               PrimitiveType result_type) {
-  // Get inputs from parameters.
-  TF_ASSIGN_OR_RETURN(auto lhs_ops,
-                      BuildHipblasltScaledDotInputs(lhs_input, lhs_scale));
-  auto [lhs_input_op, lhs_scale_op] = lhs_ops;
-  TF_ASSIGN_OR_RETURN(auto rhs_ops,
-                      BuildHipblasltScaledDotInputs(rhs_input, rhs_scale));
-  auto [rhs_input_op, rhs_scale_op] = rhs_ops;
-
   // Calculate output shape.
   XlaBuilder& builder = *lhs_input.builder();
-  TF_ASSIGN_OR_RETURN(Shape lhs_shape, builder.GetShape(lhs_input_op));
-  TF_ASSIGN_OR_RETURN(Shape rhs_shape, builder.GetShape(rhs_input_op));
-  Shape result_shape = ShapeUtil::MakeShape(
-      result_type, {lhs_shape.dimensions(0), lhs_shape.dimensions(1),
-                    rhs_shape.dimensions(1)});
+  TF_ASSIGN_OR_RETURN(Shape lhs_shape, builder.GetShape(lhs_input));
+  TF_ASSIGN_OR_RETURN(Shape rhs_shape, builder.GetShape(rhs_input));
+  Shape result_shape;
+  if (lhs_shape.dimensions().size() == 2) {
+    result_shape = ShapeUtil::MakeShape(
+        result_type, {lhs_shape.dimensions(0), rhs_shape.dimensions(0)});
+  } else if (lhs_shape.dimensions().size() == 3) {
+    result_shape = ShapeUtil::MakeShape(
+        result_type, {lhs_shape.dimensions(0), lhs_shape.dimensions(1),
+                      rhs_shape.dimensions(1)});
+  } else {
+    return InvalidArgument("Unsupported input shape for hipblaslt scaled dot");
+  }
   Shape scratch_shape = ShapeUtil::MakeShape(PrimitiveType::U8, {0});
   Shape output_shape = ShapeUtil::MakeTupleShape({result_shape, scratch_shape});
 
   // Build custom call to hipblaslt.
   std::string custom_call_target{kHipblasltBlockScaledDotCallTarget};
-  XlaOp custom_call = CustomCall(
-      &builder, custom_call_target,
-      {lhs_input_op, rhs_input_op, lhs_scale_op, rhs_scale_op}, output_shape);
+  XlaOp custom_call =
+      CustomCall(&builder, custom_call_target,
+                 {lhs_input, rhs_input, lhs_scale, rhs_scale}, output_shape);
   XlaOp result = GetTupleElement(custom_call, 0);
 
   return result;
@@ -601,9 +575,11 @@ absl::StatusOr<XlaOp> BuildBlockScaledDotForROCm(
   // Fallback solution: build general dot op.
   TF_ASSIGN_OR_RETURN(lhs_op,
                       BuildDequantize(lhs_op, lhs_scale_op, result_type));
+  TF_ASSIGN_OR_RETURN(Shape lhs_op_shape, builder.GetShape(lhs_op));
   if (rhs_scale_op.valid()) {
     TF_ASSIGN_OR_RETURN(rhs_op,
                         BuildDequantize(rhs_op, rhs_scale_op, result_type));
+    TF_ASSIGN_OR_RETURN(Shape rhs_op_shape, builder.GetShape(rhs_op));
   }
   return DotGeneral(lhs_op, rhs_op, dnums, /*precision_config=*/nullptr,
                     /*preferred_element_type=*/result_type);
@@ -645,15 +621,8 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForROCm(
       BuildBlockScaledDotForROCm(builder, operands[0], operands[1], operands[2],
                                  operands.size() == 4 ? operands[3] : nullptr,
                                  dnums, allow_hipblaslt, result_type));
-
-  // Reshape to the expected output shape.
-  // This should only happen when a unit-sized dimension is added by the pass.
   TF_ASSIGN_OR_RETURN(Shape result_shape, builder.GetShape(block_scaled_dot));
-  if (result_shape != instruction->shape()) {
-    CHECK_EQ(ShapeUtil::ElementsIn(instruction->shape()),
-             ShapeUtil::ElementsIn(result_shape));
-    Reshape(instruction->shape(), block_scaled_dot);
-  }
+  CHECK_EQ(result_shape, instruction->shape());
   return ExpandInstructionWithGemmConfigUsingBuilder(builder, instruction, dnums, 
                                                      /*alpha=*/1.0,
                                                      /*beta=*/0.0);

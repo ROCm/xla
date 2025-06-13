@@ -68,13 +68,6 @@ absl::StatusOr<Shape> GetBatchRowColumnShape(
     return shape;
   };
 
-  // print parameters
-  LOG(INFO) << "Print parameters of GetBatchRowColumnShape()";
-  LOG(INFO) << "shape: " << shape.ToString();
-  LOG(INFO) << "batch_dims: " << SpanToShape(batch_dims);
-  LOG(INFO) << "row_dims: " << SpanToShape(row_dims);
-  LOG(INFO) << "col_dims: " << SpanToShape(col_dims);
-
   TF_RET_CHECK(shape.has_layout());
 
   std::vector<int64_t> minor_to_major;
@@ -301,6 +294,7 @@ absl::StatusOr<bool> CanFoldTransposeOperandIntoDot(const HloInstruction& dot,
   LOG(INFO) << "Print Parameters of GemmConfig: ";
   LOG(INFO) << "lhs_shape: " << lhs_shape.ToString();
   LOG(INFO) << "lhs_batch_dims: " << SpanToShape(lhs_batch_dims).ToString();
+  LOG(INFO) << "lhs_contracting_dims: " << SpanToShape(lhs_contracting_dims).ToString();
   LOG(INFO) << "rhs_shape: " << rhs_shape.ToString();
   LOG(INFO) << "rhs_batch_dims: " << SpanToShape(rhs_batch_dims).ToString();
   LOG(INFO) << "rhs_contracting_dims: " << SpanToShape(rhs_contracting_dims).ToString();
