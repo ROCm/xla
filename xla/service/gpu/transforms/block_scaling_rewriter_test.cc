@@ -301,7 +301,7 @@ class BlockScalingRewriterHipblasltTest : public BlockScalingRewriterTest {
   };
 };
 
-TEST_F(BlockScalingRewriterHipblasltTest, HipblasltScaledDot2D) {
+TEST_F(BlockScalingRewriterHipblasltTest, HipblasltScaledDot) {
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
@@ -325,7 +325,7 @@ ENTRY main {
 })");
 }
 
-TEST_F(BlockScalingRewriterHipblasltTest, HipblasltScaledDot3D) {
+TEST_F(BlockScalingRewriterHipblasltTest, HipblasltBatchedScaledDot) {
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
