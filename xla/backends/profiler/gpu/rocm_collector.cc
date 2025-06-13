@@ -66,7 +66,6 @@ using tsl::profiler::XEventMetadata;
 using tsl::profiler::XLineBuilder;
 using tsl::profiler::XPlaneBuilder;
 using tsl::profiler::XSpace;
-using tsl::profiler::XEvent;
 
 void AnnotationMap::Add(uint32_t correlation_id,
                         const std::string& annotation) {
@@ -113,49 +112,52 @@ std::string GetDeviceXLineName(
   return absl::StrCat(line_name, "(", absl::StrJoin(type_names, ","), ")");
 }
 
-void PrintRocmTracerEvent(const RocmTracerEvent& event,
-  const std::string& message = {}, uint64_t start_walltime_ns = 0,
-  uint64_t start_gputime_ns = 0) {
+}  // namespace
+
+static void DumpRocmTracerEvent(const RocmTracerEvent& event,
+                                uint64_t start_walltime_ns,
+                                uint64_t start_gputime_ns,
+                                const std::string& message) {
   std::ostringstream oss;
   oss << "correlation_id=" << event.correlation_id;
   oss << ",type=" << GetRocmTracerEventTypeName(event.type);
   oss << ",source=" << GetRocmTracerEventSourceName(event.source);
   oss << ",domain=" << GetRocmTracerEventDomainName(event.domain);
   oss << ",name=" << event.name;
-  oss << ",corr_id=" << event.correlation_id;
   oss << ",annotation=" << event.annotation;
   oss << ",start_time_us="
-  << (start_walltime_ns + (start_gputime_ns - event.start_time_ns)) / 1000;
+      << (start_walltime_ns + (start_gputime_ns - event.start_time_ns)) / 1000;
   oss << ",duration=" << (event.end_time_ns - event.start_time_ns) / 1000;
   oss << ",device_id=" << event.device_id;
   oss << ",thread_id=" << event.thread_id;
   oss << ",stream_id=" << event.stream_id;
 
   switch (event.type) {
-  case RocmTracerEventType::Kernel:
-  break;
-  case RocmTracerEventType::MemcpyD2H:
-  case RocmTracerEventType::MemcpyH2D:
-  case RocmTracerEventType::MemcpyD2D:
-  case RocmTracerEventType::MemcpyP2P:
-  oss << ",num_bytes=" << event.memcpy_info.num_bytes;
-  oss << ",destination=" << event.memcpy_info.destination;
-  oss << ",async=" << event.memcpy_info.async;
-  break;
-  case RocmTracerEventType::MemoryAlloc:
-  oss << ",num_bytes=" << event.memalloc_info.num_bytes;
-  break;
-  case RocmTracerEventType::MemcpyOther:
-  case RocmTracerEventType::MemoryFree:
-  case RocmTracerEventType::Memset:
-  case RocmTracerEventType::Synchronization:
-  case RocmTracerEventType::Generic:
-  break;
-  default:
-  DCHECK(false);
-  break;
+    case RocmTracerEventType::Kernel:
+      break;
+    case RocmTracerEventType::MemcpyD2H:
+    case RocmTracerEventType::MemcpyH2D:
+    case RocmTracerEventType::MemcpyD2D:
+    case RocmTracerEventType::MemcpyP2P:
+      oss << ",num_bytes=" << event.memcpy_info.num_bytes;
+      oss << ",destination=" << event.memcpy_info.destination;
+      oss << ",async=" << event.memcpy_info.async;
+      break;
+    case RocmTracerEventType::MemoryAlloc:
+      oss << ",num_bytes=" << event.memalloc_info.num_bytes;
+      break;
+    case RocmTracerEventType::MemcpyOther:
+    case RocmTracerEventType::MemoryFree:
+    case RocmTracerEventType::Memset:
+    case RocmTracerEventType::Synchronization:
+    case RocmTracerEventType::Generic:
+      break;
+    default:
+      DCHECK(false);
+      break;
   }
-  VLOG(-1) << oss.str() << ' ' << message;
+  oss << message;
+  VLOG(3) << oss.str();
 }
 
 uint64_t get_timestamp() {
@@ -169,8 +171,6 @@ uint64_t get_timestamp() {
   }
   return ts;
 }
-
-}  // namespace
 
 struct RocmDeviceOccupancyParams {
   hipFuncAttributes attributes = {};
@@ -200,84 +200,15 @@ struct OccupancyStats {
   int suggested_block_size = 0;
 };
 
+struct CorrelationInfo {
+  CorrelationInfo(uint32_t t, uint32_t e) : thread_id(t), enqueue_time_ns(e) {}
+  uint32_t thread_id;
+  uint64_t enqueue_time_ns;
+};
+
 class PerDeviceCollector {
- public:
-  void Export(uint64_t start_walltime_ns, uint64_t start_gputime_ns,
-              uint64_t end_gputime_ns, XPlaneBuilder* device_plane,
-              XPlaneBuilder* host_plane);
-
-  PerDeviceCollector() = default;
-
-  void AddEvent(RocmTracerEvent&& event);
-  void GetDeviceCapabilities(int32_t device_ordinal,
-                             XPlaneBuilder* device_plane);
-
  private:
-  OccupancyStats GetOccupancy(const RocmDeviceOccupancyParams& params) const;
-  XEvent *CreateXEvent(const RocmTracerEvent& event, XPlaneBuilder* plane,
-                    uint64_t start_gpu_ns, uint64_t end_gpu_ns,
-                    XLineBuilder* line);
-  void SortByStartTime();
-  bool IsHostEvent(const RocmTracerEvent& event, tsl::int64* line_id);
-
- private:
-  mutex events_mutex_;
-  std::vector<RocmTracerEvent> events_ TF_GUARDED_BY(events_mutex_);
-  absl::flat_hash_map<RocmDeviceOccupancyParams, OccupancyStats>
-      occupancy_cache_;
-  hipDeviceProp_t device_properties_;
-}; // PerDeviceCollector
-
-class RocmTraceCollectorImpl : public profiler::RocmTraceCollector {
- public:
-  RocmTraceCollectorImpl(const RocmTraceCollectorOptions& options,
-                         uint64_t start_walltime_ns, uint64_t start_gputime_ns)
-      : RocmTraceCollector(options),
-        num_callback_events_(0),
-        num_activity_events_(0),
-        start_walltime_ns_(start_walltime_ns),
-        start_gputime_ns_(start_gputime_ns),
-        num_gpus_(options.num_gpus) {}
-
-  void AddEvent(RocmTracerEvent&& event, bool is_auxiliary) override;
-  void Flush() override;
-  void Export(XSpace* space) override;
-
-  void OnEventsDropped(const std::string& reason,
-                       uint32_t correlation_id) override {
-    LOG(INFO) << "RocmTracerEvent dropped (correlation_id=" << correlation_id
-              << ",) : " << reason << ".";
-  }
-
- private:
-  std::atomic<int> num_callback_events_;
-  std::atomic<int> num_activity_events_;
-  uint64_t start_walltime_ns_;
-  uint64_t start_gputime_ns_;
-  int num_gpus_;
-
-  mutex event_maps_mutex_;
-  absl::flat_hash_map<uint32_t, RocmTracerEvent> api_events_map_
-      TF_GUARDED_BY(event_maps_mutex_);
-
-  /* Some apis such as MEMSETD32 (based on an observation with ResNet50),
-   trigger multiple HIP ops domain activities. We keep them in a vector and
-   merge them with api activities at flush time.
- */
-  absl::flat_hash_map<uint32_t, std::vector<RocmTracerEvent>>
-      activity_ops_events_map_ TF_GUARDED_BY(event_maps_mutex_);
-  // This is for the APIs that we track because we need some information from
-  // them to populate the corresponding activity that we actually track.
-  absl::flat_hash_map<uint32_t, RocmTracerEvent> auxiliary_api_events_map_
-      TF_GUARDED_BY(event_maps_mutex_);
-
-  std::vector<RocmTracerEvent> ApiActivityInfoExchange()
-      TF_EXCLUSIVE_LOCKS_REQUIRED(event_maps_mutex_);
-
-  absl::node_hash_map<uint32_t, PerDeviceCollector> per_device_collector_;
-}; // RocmTraceCollectorImpl
-
-OccupancyStats PerDeviceCollector::GetOccupancy(const RocmDeviceOccupancyParams& params) const {
+  OccupancyStats GetOccupancy(const RocmDeviceOccupancyParams& params) const {
     // TODO(rocm-profiler): hipOccupancyMaxActiveBlocksPerMultiprocessor only
     // return hipSuccess for HIP_API_ID_hipLaunchKernel
 
@@ -303,20 +234,20 @@ OccupancyStats PerDeviceCollector::GetOccupancy(const RocmDeviceOccupancyParams&
     }
 
     return stats;
-}
+  }
 
-XEvent *PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event, 
-        XPlaneBuilder* plane, uint64_t start_gpu_ns, uint64_t end_gpu_ns,
-        XLineBuilder* line) {
+  void CreateXEvent(const RocmTracerEvent& event, XPlaneBuilder* plane,
+                    uint64_t start_gpu_ns, uint64_t end_gpu_ns,
+                    XLineBuilder* line) {
     if (event.start_time_ns < start_gpu_ns || event.end_time_ns > end_gpu_ns ||
         event.start_time_ns > event.end_time_ns) {
-      VLOG(0) << "events have abnormal timestamps:" << event.name
+      VLOG(2) << "events have abnormal timestamps:" << event.name
               << " start time(ns): " << event.start_time_ns
               << " end time(ns): " << event.end_time_ns
               << " start gpu(ns):" << start_gpu_ns
               << " end gpu(ns):" << end_gpu_ns
               << " corr. id:" << event.correlation_id;
-      return nullptr;
+      return;
     }
     std::string kernel_name = tsl::port::MaybeAbiDemangle(event.name.c_str());
     if (kernel_name.empty()) {
@@ -324,7 +255,6 @@ XEvent *PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
     }
     XEventMetadata* event_metadata =
         plane->GetOrCreateEventMetadata(std::move(kernel_name));
-
     XEventBuilder xevent = line->AddEvent(*event_metadata);
     VLOG(7) << "Adding event to line=" << line->Id();
     xevent.SetTimestampNs(event.start_time_ns);
@@ -333,11 +263,6 @@ XEvent *PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
       xevent.AddStatValue(
           *plane->GetOrCreateStatMetadata(GetStatTypeStr(StatType::kDeviceId)),
           event.device_id);
-
-      xevent.AddStatValue(
-          *plane->GetOrCreateStatMetadata(GetStatTypeStr(StatType::kThreadId)),
-          event.thread_id);
-          
     }
     if (event.correlation_id != RocmTracerEvent::kInvalidCorrelationId) {
       xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
@@ -391,14 +316,13 @@ XEvent *PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
                event.type == RocmTracerEventType::MemcpyD2D ||
                event.type == RocmTracerEventType::MemcpyP2P ||
                event.type == RocmTracerEventType::MemcpyOther) {
+      VLOG(7) << "Add Memcpy stat";
       const auto& memcpy_info = event.memcpy_info;
       std::string memcpy_details = absl::StrCat(
           // TODO(rocm-profiler): we need to discover the memory kind similar
           // to CUDA
           "kind:", "Unknown", " size:", memcpy_info.num_bytes,
           " dest:", memcpy_info.destination, " async:", memcpy_info.async);
-      VLOG(0) << "Add Memcpy stat bytes: " << memcpy_details;
-
       xevent.AddStatValue(
           *plane->GetOrCreateStatMetadata(
               GetStatTypeStr(StatType::kMemcpyDetails)),
@@ -468,18 +392,17 @@ XEvent *PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
         }
       }
     }
-    return xevent.get();
-}
+  }
 
-void PerDeviceCollector::SortByStartTime() {
-    mutex_lock lock(events_mutex_);
-    std::sort(events_.begin(), events_.end(),
+  void SortByStartTime() {
+    mutex_lock lock(events_mutex);
+    std::sort(events.begin(), events.end(),
               [](const RocmTracerEvent& event1, const RocmTracerEvent& event2) {
                 return event1.start_time_ns < event2.start_time_ns;
               });
-}
+  }
 
-bool PerDeviceCollector::IsHostEvent(const RocmTracerEvent& event, tsl::int64* line_id) {
+  bool IsHostEvent(const RocmTracerEvent& event, tsl::int64* line_id) {
     // DriverCallback(i.e. kernel launching) events are host events.
     if (event.source == RocmTracerEventSource::ApiCallback) {
       *line_id = event.thread_id;
@@ -510,28 +433,26 @@ bool PerDeviceCollector::IsHostEvent(const RocmTracerEvent& event, tsl::int64* l
       *line_id = tsl::profiler::kThreadIdOverhead;
       return false;
     }
-}
+  }
 
-void PerDeviceCollector::Export(uint64_t start_walltime_ns, uint64_t start_gputime_ns,
+ public:
+  void Export(uint64_t start_walltime_ns, uint64_t start_gputime_ns,
               uint64_t end_gputime_ns, XPlaneBuilder* device_plane,
               XPlaneBuilder* host_plane) {
-
     int host_ev_cnt = 0, dev_ev_cnt = 0;
-    mutex_lock l(events_mutex_);
+    mutex_lock l(events_mutex);
     // Tracking event types per line.
     absl::flat_hash_map<tsl::int64, absl::flat_hash_set<RocmTracerEventType>>
         events_types_per_line;
-
-    // absl::flat_hash_map<tsl::int64, std::vector< XEvent *> >
-    //     device_events;
-    // std::vector< std::tuple< XEvent *, int64_t > > api_events;
-
-    for (const RocmTracerEvent& event : events_) {
+    for (const RocmTracerEvent& event : events) {
       int64_t line_id = RocmTracerEvent::kInvalidThreadId;
       bool is_host_event = IsHostEvent(event, &line_id);
 
-      if (is_host_event) host_ev_cnt++;
-      else dev_ev_cnt++;
+      if (is_host_event) {
+        host_ev_cnt++;
+      } else {
+        dev_ev_cnt++;
+      }
 
       if (line_id == RocmTracerEvent::kInvalidThreadId ||
           line_id == RocmTracerEvent::kInvalidStreamId) {
@@ -543,33 +464,11 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns, uint64_t start_gputi
               << " line_id=" << line_id
               << (is_host_event ? " host plane=" : " device plane=")
               << plane->Name();
-
       XLineBuilder line = plane->GetOrCreateLine(line_id);
       line.SetTimestampNs(start_gputime_ns);
-      auto xevent = CreateXEvent(event, plane, start_gputime_ns, end_gputime_ns, &line);
-      if (xevent == nullptr) continue;
-
+      CreateXEvent(event, plane, start_gputime_ns, end_gputime_ns, &line);
       events_types_per_line[line_id].emplace(event.type);
-      // if (is_host_event) {
-      //   api_events.push_back(std::tuple{xevent, event.correlation_id});
-      // } else {
-      //   auto [it,_] = device_events.emplace(event.correlation_id, 
-      //         std::vector< XEvent *>{});
-      //   it->second.push_back(xevent);
-      // }
     }
-    // Tried to set child_id reference from HIP_API to activity..
-    // for (auto [xev,id] : api_events) {
-    //   auto it = device_events.find(id);
-    //   if (it != device_events.end()) {
-    //     auto z = host_plane->GetOrCreateEventMetadata(xev->metadata_id());
-    //     for (auto cev : it->second) {
-    //       z->add_child_id(cev->metadata_id());
-    //     }
-    //     VLOG(0) << "Found host event " << z->name() << " correlated at " << id;
-    //   }
-    // }
-
     device_plane->ForEachLine([&](XLineBuilder line) {
       line.SetName(
           GetDeviceXLineName(line.Id(), events_types_per_line[line.Id()]));
@@ -577,15 +476,28 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns, uint64_t start_gputi
     host_plane->ForEachLine([&](XLineBuilder line) {
       line.SetName(absl::StrCat("Host Threads/", line.Id()));
     });
-    events_.clear();
-}
+    events.clear();
+  }
 
-void PerDeviceCollector::AddEvent(RocmTracerEvent&& event) {
-  mutex_lock l(events_mutex_);
-  events_.emplace_back(std::move(event));
-}
+  PerDeviceCollector() = default;
 
-void PerDeviceCollector::GetDeviceCapabilities(int32_t device_ordinal,
+  void AddEvent(const RocmTracerEvent& event) {
+    mutex_lock l(events_mutex);
+    if (event.source == RocmTracerEventSource::ApiCallback) {
+      // Cupti api callback events were used to populate launch times etc.
+      if (event.correlation_id != RocmTracerEvent::kInvalidCorrelationId) {
+        correlation_info_.insert(
+            {event.correlation_id,
+             CorrelationInfo(event.thread_id, event.start_time_ns)});
+      }
+      events.emplace_back(std::move(event));
+    } else {
+      // Cupti activity events measure device times etc.
+      events.emplace_back(std::move(event));
+    }
+  }
+
+  void GetDeviceCapabilities(int32_t device_ordinal,
                              XPlaneBuilder* device_plane) {
     device_plane->AddStatValue(*device_plane->GetOrCreateStatMetadata(
                                    GetStatTypeStr(StatType::kDevVendor)),
@@ -648,78 +560,137 @@ void PerDeviceCollector::GetDeviceCapabilities(int32_t device_ordinal,
               GetStatTypeStr(StatType::kDevCapComputeCapMinor)),
           compute_capability_minor);
     }
-}
+  }
+
+ private:
+  mutex events_mutex;
+  std::vector<RocmTracerEvent> events TF_GUARDED_BY(events_mutex);
+  absl::flat_hash_map<uint32_t, CorrelationInfo> correlation_info_
+      TF_GUARDED_BY(events_mutex);
+  absl::flat_hash_map<RocmDeviceOccupancyParams, OccupancyStats>
+      occupancy_cache_;
+  hipDeviceProp_t device_properties_;
+};
+
+class RocmTraceCollectorImpl : public profiler::RocmTraceCollector {
+ public:
+  RocmTraceCollectorImpl(const RocmTraceCollectorOptions& options,
+                         uint64_t start_walltime_ns, uint64_t start_gputime_ns)
+      : RocmTraceCollector(options),
+        num_callback_events_(0),
+        num_activity_events_(0),
+        start_walltime_ns_(start_walltime_ns),
+        start_gputime_ns_(start_gputime_ns),
+        num_gpus_(options.num_gpus) {}
+
+  void AddEvent(RocmTracerEvent&& event, bool is_auxiliary) override;
+  void Flush() override;
+  void Export(XSpace* space) override;
+
+  void OnEventsDropped(const std::string& reason,
+                       uint32_t correlation_id) override {
+    VLOG(3) << "RocmTracerEvent dropped (correlation_id=" << correlation_id
+              << ",) : " << reason << ".";
+  }
+
+ private:
+  std::atomic<int> num_callback_events_;
+  std::atomic<int> num_activity_events_;
+  uint64_t start_walltime_ns_;
+  uint64_t start_gputime_ns_;
+  int num_gpus_;
+
+  mutex event_maps_mutex_;
+  absl::flat_hash_map<uint32_t, RocmTracerEvent> api_events_map_
+      TF_GUARDED_BY(event_maps_mutex_);
+
+  /* Some apis such as MEMSETD32 (based on an observation with ResNet50),
+   trigger multiple HIP ops domain activities. We keep them in a vector and
+   merge them with api activities at flush time.
+ */
+  absl::flat_hash_map<uint32_t, std::vector<RocmTracerEvent>>
+      activity_ops_events_map_ TF_GUARDED_BY(event_maps_mutex_);
+  // This is for the APIs that we track because we need some information from
+  // them to populate the corresponding activity that we actually track.
+  absl::flat_hash_map<uint32_t, RocmTracerEvent> auxiliary_api_events_map_
+      TF_GUARDED_BY(event_maps_mutex_);
+
+  const std::vector<RocmTracerEvent> ApiActivityInfoExchange()
+      TF_EXCLUSIVE_LOCKS_REQUIRED(event_maps_mutex_);
+
+  absl::node_hash_map<uint32_t, PerDeviceCollector> per_device_collector_;
+};
+//==========
 
 void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
-  bool is_auxiliary) {
+                                      bool is_auxiliary) {
   mutex_lock lock(event_maps_mutex_);
 
+  if (event.source == RocmTracerEventSource::ApiCallback && !is_auxiliary) {
+    if (num_callback_events_ > options_.max_callback_api_events) {
+      OnEventsDropped("max callback event capacity reached",
+                      event.correlation_id);
+      DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
+      return;
+    }
+    num_callback_events_++;
+  } else if (event.source == RocmTracerEventSource::Activity &&
+             event.domain == RocmTracerEventDomain::HIP_API) {
+    // we do not count HIP_OPS activities.
+    if (num_activity_events_ > options_.max_activity_api_events) {
+      OnEventsDropped("max activity event capacity reached",
+                      event.correlation_id);
+      DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
+      return;
+    }
+    num_activity_events_++;
+  }
+
+  bool emplace_result = false;
   if (event.source == RocmTracerEventSource::ApiCallback) {
-
-    if (!is_auxiliary) {
-      if (num_callback_events_ >= options_.max_callback_api_events) {
-        OnEventsDropped("max callback event capacity reached", event.correlation_id);
-        PrintRocmTracerEvent(event, ". Dropped!");
-        return;
-      }
-      num_callback_events_++;
-    }
-    auto& map = is_auxiliary ? auxiliary_api_events_map_ : api_events_map_;
-    auto [it, added] = map.emplace(event.correlation_id, std::move(event));
-
-    if (!added) {
-      OnEventsDropped("event with duplicate correlation_id was received.", event.correlation_id);
-      PrintRocmTracerEvent(event, ". Dropped!");
-    }
+    auto& target_api_event_map =
+        (is_auxiliary) ? auxiliary_api_events_map_ : api_events_map_;
+    std::tie(std::ignore, emplace_result) =
+        target_api_event_map.emplace(event.correlation_id, std::move(event));
   } else if (event.source == RocmTracerEventSource::Activity) {
-    if (event.domain == RocmTracerEventDomain::HIP_API) {
-      // we do not count HIP_OPS activities.
-      if (num_activity_events_ >= options_.max_activity_api_events) {
-        OnEventsDropped("max activity event capacity reached", event.correlation_id);
-        PrintRocmTracerEvent(event, ". Dropped!");
-        return;
-      }
-      num_activity_events_++;
-    }
-    
-    auto [it, _] = activity_ops_events_map_.emplace(
-            event.correlation_id, std::vector<RocmTracerEvent>{});
-    it->second.push_back(std::move(event));
-  } else {
-
-    VLOG(0) << "Dropping unknown event: " << (int)event.source 
-            << " domain: " << (int)event.domain;
+    auto result = activity_ops_events_map_.emplace(
+        event.correlation_id, std::vector<RocmTracerEvent>{});
+    result.first->second.push_back(std::move(event));
+    emplace_result = true;  // we always accept Hip-Ops events
+  }
+  if (!emplace_result) {
+    OnEventsDropped("event with duplicate correlation_id was received.",
+                    event.correlation_id);
+    DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
   }
 }
 
 void RocmTraceCollectorImpl::Flush() {
   mutex_lock lock(event_maps_mutex_);
-  auto aggregated_events = ApiActivityInfoExchange();
+  auto& aggregated_events_ = ApiActivityInfoExchange();
 
-  VLOG(0) << "RocmTraceCollector collected " << num_callback_events_
+  VLOG(3) << "RocmTraceCollector collected " << num_callback_events_
           << " callback events, " << num_activity_events_
           << " activity events, and aggregated them into "
-          << aggregated_events.size() << " events.";
+          << aggregated_events_.size() << " events.";
 
   // device ids for GPUs filled in by roctracer are not zero indexed.
   // They are offset by number of CPUs on the machine
   tsl::uint32 min_device_id = INT32_MAX;
-  
-  for (const auto& event : aggregated_events) {
+  ;
+  for (auto& event : aggregated_events_) {
     if (event.device_id < min_device_id) {
       min_device_id = event.device_id;
     }
   }
 
-  // TODO: should use g_shared->agents[src_id].type
-  for (auto& event : aggregated_events) {
-    auto id = event.device_id - min_device_id;
-    if (id < num_gpus_) {
-      //PrintRocmTracerEvent(event, ". event in aggregated_events");
-      per_device_collector_[id].AddEvent(std::move(event));
+  for (auto event : aggregated_events_) {
+    event.device_id = event.device_id - min_device_id;
+    if (event.device_id < num_gpus_) {
+      per_device_collector_[event.device_id].AddEvent(event);
     } else {
-      // OnEventsDropped("Invalid device id for an event.", event.correlation_id);
-      PrintRocmTracerEvent(event, ". Dropped due to invalid device ID!");
+      OnEventsDropped("Invalid device id for an event.", event.correlation_id);
+      DumpRocmTracerEvent(event, 0, 0, ". Dropped!");
     }
   }
 
@@ -733,17 +704,16 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
   XPlaneBuilder host_plane(FindOrAddMutablePlaneWithName(
       space, tsl::profiler::kRoctracerApiPlaneName));
 
-  VLOG(0) << "Calling RocmTraceCollectorImpl::Export num_gpus "  << num_gpus_;
-
-  for (int id = 0; id < num_gpus_; id++) {
-    std::string name = GpuPlaneName(id);
+  for (int device_ordinal = 0; device_ordinal < num_gpus_; ++device_ordinal) {
+    VLOG(-1) << "device_ordinal " << device_ordinal
+    std::string name = GpuPlaneName(device_ordinal);
     XPlaneBuilder device_plane(FindOrAddMutablePlaneWithName(space, name));
-    device_plane.SetId(id);
+    device_plane.SetId(device_ordinal);
     // Calculate device capabilities before flushing, so that device
     // properties are available to the occupancy calculator in export().
-    per_device_collector_[id].GetDeviceCapabilities(id,
+    per_device_collector_[device_ordinal].GetDeviceCapabilities(device_ordinal,
                                                                 &device_plane);
-    per_device_collector_[id].Export(
+    per_device_collector_[device_ordinal].Export(
         start_walltime_ns_, start_gputime_ns_, end_gputime_ns, &device_plane,
         &host_plane);
     NormalizeTimeStamps(&device_plane, start_walltime_ns_);
@@ -751,7 +721,7 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
   NormalizeTimeStamps(&host_plane, start_walltime_ns_);
 }
 
-std::vector<RocmTracerEvent>
+const std::vector<RocmTracerEvent>
 RocmTraceCollectorImpl::ApiActivityInfoExchange() {
   /* Different from CUDA, roctracer activity records are not enough to fill a
     TF event. For most of the activities, we need to enable the corresponding
@@ -762,66 +732,59 @@ RocmTraceCollectorImpl::ApiActivityInfoExchange() {
   */
 
   std::vector<RocmTracerEvent> aggregated_events;
-  aggregated_events.reserve(api_events_map_.size());
 
   // Copy info from activity events to API callback events
-  for (auto& [key, api_event] : api_events_map_) {
-    
-    auto iact =
+  for (auto& api_iter : api_events_map_) {
+    RocmTracerEvent& api_event = api_iter.second;
+    auto activity_event =
         activity_ops_events_map_.find(api_event.correlation_id);
 
-    if (iact == activity_ops_events_map_.end()) {
-      // OnEventsDropped(
-      //     "An event from HIP API discarded."
-      //     "Could not find the counterpart activity.",
-      //     api_event.correlation_id);
-      // PrintRocmTracerEvent(api_event, ". Dropped!");
-      // VLOG(1) << api_event.name << "  could not find activity counterpart!";
-      continue;
-    }
-    const auto& item =  iact->second.front();
-    api_event.device_id = item.device_id;
-    api_event.stream_id = item.stream_id;
-    switch (api_event.type) {
-      case RocmTracerEventType::Kernel:
-      case RocmTracerEventType::Memset:
-      case RocmTracerEventType::MemoryAlloc:
-      case RocmTracerEventType::MemoryFree:
-      case RocmTracerEventType::Synchronization: {
-        aggregated_events.push_back(api_event);
-        break;
-      }
-      case RocmTracerEventType::MemcpyD2H:
-      case RocmTracerEventType::MemcpyH2D:
-      case RocmTracerEventType::MemcpyD2D:
-      case RocmTracerEventType::MemcpyP2P:
-      case RocmTracerEventType::MemcpyOther: {
-        // api_event.memcpy_info.destination = item.device_id;
-        api_event.memcpy_info = item.memcpy_info;
-        aggregated_events.push_back(api_event);
-        break;
-      }
-      default:
-        OnEventsDropped("Missing API-Activity information exchange. Dropped!",
+    if (activity_event == activity_ops_events_map_.end()) {
+      OnEventsDropped(
+          "An event from HIP API discarded."
+          "Could not find the counterpart activity.",
+          api_event.correlation_id);
+      DumpRocmTracerEvent(api_event, 0, 0, ". Dropped!");
+    } else {
+      api_event.device_id = activity_event->second.front().device_id;
+      api_event.stream_id = activity_event->second.front().stream_id;
+      switch (api_event.type) {
+        case RocmTracerEventType::Kernel:
+        case RocmTracerEventType::Memset:
+        case RocmTracerEventType::MemoryAlloc:
+        case RocmTracerEventType::MemoryFree:
+        case RocmTracerEventType::Synchronization: {
+          aggregated_events.push_back(api_event);
+          break;
+        }
+        case RocmTracerEventType::MemcpyD2H:
+        case RocmTracerEventType::MemcpyH2D:
+        case RocmTracerEventType::MemcpyD2D:
+        case RocmTracerEventType::MemcpyOther: {
+          api_event.memcpy_info.destination =
+              activity_event->second.front().device_id;
+          aggregated_events.push_back(api_event);
+          break;
+        }
+        default:
+          OnEventsDropped("Missing API-Activity information exchange. Dropped!",
                           api_event.correlation_id);
-        PrintRocmTracerEvent(api_event, ". Dropped!");
-        LOG(WARNING) << "A ROCm API event type with unimplemented activity "
+          DumpRocmTracerEvent(api_event, 0, 0, ". Dropped!");
+          LOG(WARNING) << "A ROCm API event type with unimplemented activity "
                           "merge dropped! "
                           "Type="
                        << GetRocmTracerEventTypeName(api_event.type);
-    } // switch
-  } // for
+      }
+    }
+  }
 
   // Make sure for all activity events we have API callback events
   for (auto& activity_iter : activity_ops_events_map_) {
     RocmTracerEvent& activity_event = activity_iter.second.front();
-    
-    //PrintRocmTracerEvent(activity_event, ". activity event");
     auto api_event = api_events_map_.find(activity_event.correlation_id);
 
     if (api_event == api_events_map_.end()) {
       api_event = auxiliary_api_events_map_.find(activity_event.correlation_id);
-      // PrintRocmTracerEvent(activity_event, ". activity event from api_events_map_");
     }
 
     if (api_event == auxiliary_api_events_map_.end()) {
@@ -829,51 +792,56 @@ RocmTraceCollectorImpl::ApiActivityInfoExchange() {
           "An event from activity was discarded."
           "Could not find the counterpart HIP API.",
           activity_event.correlation_id);
-      PrintRocmTracerEvent(activity_event, ". Dropped!");
-      continue;
-    }
-    
-    switch (activity_event.type) {
-    case RocmTracerEventType::Kernel: 
-        // activity_event.name = api_event->second.name;
-        activity_event.kernel_info = api_event->second.kernel_info;
-        PrintRocmTracerEvent(activity_event, ". activity event from api_event.");
-        aggregated_events.push_back(activity_event);
-        break;
-
-    case RocmTracerEventType::MemcpyD2H:
-    case RocmTracerEventType::MemcpyH2D:
-    case RocmTracerEventType::MemcpyD2D:
-    case RocmTracerEventType::MemcpyP2P:
-    case RocmTracerEventType::MemcpyOther: 
-        //activity_event.memcpy_info = api_event->second.memcpy_info;
-        aggregated_events.push_back(activity_event);
-        break;
-    case RocmTracerEventType::Memset: 
-        activity_event.memset_info = api_event->second.memset_info;
-        aggregated_events.push_back(activity_event);
-        break;
-        
-    case RocmTracerEventType::MemoryAlloc:
-    case RocmTracerEventType::MemoryFree: 
-        activity_event.device_id = api_event->second.device_id;
-        aggregated_events.push_back(activity_event);
-        break;
-        
-    case RocmTracerEventType::Synchronization: 
-        activity_event.device_id = api_event->second.device_id;
-        aggregated_events.push_back(activity_event);
-        break;
-    default:
-        OnEventsDropped("Missing API-Activity information exchange. Dropped!",
+      DumpRocmTracerEvent(activity_event, 0, 0, ". Dropped!");
+    } else {
+      switch (activity_event.type) {
+        // KERNEL ACTIVITY
+        case RocmTracerEventType::Kernel: {
+          activity_event.name = api_event->second.name;
+          activity_event.kernel_info = api_event->second.kernel_info;
+          aggregated_events.push_back(activity_event);
+          break;
+        }
+        // MEMCPY ACTIVITY
+        case RocmTracerEventType::MemcpyD2H:
+        case RocmTracerEventType::MemcpyH2D:
+        case RocmTracerEventType::MemcpyD2D:
+        case RocmTracerEventType::MemcpyOther: {
+          activity_event.memcpy_info = api_event->second.memcpy_info;
+          aggregated_events.push_back(activity_event);
+          break;
+        }
+        // MEMSET ACTIVITY
+        case RocmTracerEventType::Memset: {
+          activity_event.memset_info = api_event->second.memset_info;
+          aggregated_events.push_back(activity_event);
+          break;
+        }
+        // MALLOC ACTIVITY, FREE ACTIVITY
+        case RocmTracerEventType::MemoryAlloc:
+        case RocmTracerEventType::MemoryFree: {
+          activity_event.device_id = api_event->second.device_id;
+          aggregated_events.push_back(activity_event);
+          break;
+        }
+        // SYNCHRONIZATION ACTIVITY
+        case RocmTracerEventType::Synchronization: {
+          activity_event.device_id = api_event->second.device_id;
+          aggregated_events.push_back(activity_event);
+          break;
+        }
+        default:
+          OnEventsDropped("Missing API-Activity information exchange. Dropped!",
                           activity_event.correlation_id);
-        PrintRocmTracerEvent(activity_event, ". Dropped!");
-        LOG(WARNING) << "A ROCm activity event with unimplemented API "
+          DumpRocmTracerEvent(activity_event, 0, 0, ". Dropped!");
+          LOG(WARNING) << "A ROCm activity event with unimplemented API "
                           "callback merge dropped! "
                           "Type="
                        << GetRocmTracerEventTypeName(activity_event.type);
-    } // switch
-  } // for
+          break;
+      }
+    }
+  }
 
   return aggregated_events;
 }
