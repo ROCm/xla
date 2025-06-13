@@ -34,55 +34,16 @@ class BlockScalingRewriterHipblasltTest : public GpuCodegenTest {
   }
 };
 
-// TEST_F(BlockScalingRewriterHipblasltTest, Mxfp8) {
-//   constexpr absl::string_view hlo_string = R"(
-// HloModule test
-
-// ENTRY main {
-//   %lhs = f8e4m3fn[16,128] parameter(0)
-//   %rhs = f8e4m3fn[8,128] parameter(1)
-//   %lhs_scale = f8e8m0fnu[16,8] parameter(2)
-//   %rhs_scale = f8e8m0fnu[8,8] parameter(3)
-//   ROOT %result = f32[16,8] custom-call(%lhs, %rhs, %lhs_scale, %rhs_scale),
-//       custom_call_target="__op$block_scaled_dot"
-// })";
-//   EXPECT_TRUE(RunAndCompare(
-//       hlo_string, ErrorSpec(/*aabs=*/1e-4, /*arel=*/1e-5),
-//       /*reference_preprocessor=*/
-//       [&](HloModule* reference_module) {
-//         BlockScalingRewriter pass(this->device_desc(), /*allow_cudnn=*/false,
-//                                   /*allow_hipblaslt=*/false);
-//         EXPECT_THAT(RunHloPass(&pass, reference_module), IsOkAndHolds(true));
-//       },
-//       /*test_preprocessor=*/
-//       [&](HloModule* test_module) {
-//         BlockScalingRewriter pass(this->device_desc(), /*allow_cudnn=*/false,
-//                                   /*allow_hipblaslt=*/true);
-//         EXPECT_THAT(RunHloPass(&pass, test_module), IsOkAndHolds(true));
-//       }));
-
-//   // RunAndFilecheckHloRewrite(
-//   //     hlo_string,
-//   //     BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
-//   //                          /*allow_hipblaslt=*/false),
-//   //     "CHECK-NOT: __hipblaslt$blockScaledDot");
-//   // RunAndFilecheckHloRewrite(
-//   //     hlo_string,
-//   //     BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
-//   //                          /*allow_hipblaslt=*/true),
-//   //     "CHECK: __hipblaslt$blockScaledDot");
-// }
-
-TEST_F(BlockScalingRewriterHipblasltTest, BatchedMxfp8) {
+TEST_F(BlockScalingRewriterHipblasltTest, Mxfp8) {
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
 ENTRY main {
-  %lhs = f8e4m3fn[1,16,128] parameter(0)
-  %rhs = f8e4m3fn[1,8,128] parameter(1)
-  %lhs_scale = f8e8m0fnu[1,16,8] parameter(2)
-  %rhs_scale = f8e8m0fnu[1,8,8] parameter(3)
-  ROOT %result = f32[1,16,8] custom-call(%lhs, %rhs, %lhs_scale, %rhs_scale),
+  %lhs = f8e4m3fn[16,128] parameter(0)
+  %rhs = f8e4m3fn[8,128] parameter(1)
+  %lhs_scale = f8e8m0fnu[16,8] parameter(2)
+  %rhs_scale = f8e8m0fnu[8,8] parameter(3)
+  ROOT %result = f32[16,8] custom-call(%lhs, %rhs, %lhs_scale, %rhs_scale),
       custom_call_target="__op$block_scaled_dot"
 })";
   EXPECT_TRUE(RunAndCompare(
@@ -111,6 +72,45 @@ ENTRY main {
   //                          /*allow_hipblaslt=*/true),
   //     "CHECK: __hipblaslt$blockScaledDot");
 }
+
+// TEST_F(BlockScalingRewriterHipblasltTest, BatchedMxfp8) {
+//   constexpr absl::string_view hlo_string = R"(
+// HloModule test
+
+// ENTRY main {
+//   %lhs = f8e4m3fn[1,16,128] parameter(0)
+//   %rhs = f8e4m3fn[1,8,128] parameter(1)
+//   %lhs_scale = f8e8m0fnu[1,16,8] parameter(2)
+//   %rhs_scale = f8e8m0fnu[1,8,8] parameter(3)
+//   ROOT %result = f32[1,16,8] custom-call(%lhs, %rhs, %lhs_scale, %rhs_scale),
+//       custom_call_target="__op$block_scaled_dot"
+// })";
+//   EXPECT_TRUE(RunAndCompare(
+//       hlo_string, ErrorSpec(/*aabs=*/1e-4, /*arel=*/1e-5),
+//       /*reference_preprocessor=*/
+//       [&](HloModule* reference_module) {
+//         BlockScalingRewriter pass(this->device_desc(), /*allow_cudnn=*/false,
+//                                   /*allow_hipblaslt=*/false);
+//         EXPECT_THAT(RunHloPass(&pass, reference_module), IsOkAndHolds(true));
+//       },
+//       /*test_preprocessor=*/
+//       [&](HloModule* test_module) {
+//         BlockScalingRewriter pass(this->device_desc(), /*allow_cudnn=*/false,
+//                                   /*allow_hipblaslt=*/true);
+//         EXPECT_THAT(RunHloPass(&pass, test_module), IsOkAndHolds(true));
+//       }));
+
+//   // RunAndFilecheckHloRewrite(
+//   //     hlo_string,
+//   //     BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
+//   //                          /*allow_hipblaslt=*/false),
+//   //     "CHECK-NOT: __hipblaslt$blockScaledDot");
+//   // RunAndFilecheckHloRewrite(
+//   //     hlo_string,
+//   //     BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
+//   //                          /*allow_hipblaslt=*/true),
+//   //     "CHECK: __hipblaslt$blockScaledDot");
+// }
 
 }  // namespace
 }  // namespace xla::gpu

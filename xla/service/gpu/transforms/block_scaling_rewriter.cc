@@ -537,8 +537,8 @@ absl::StatusOr<XlaOp> BuildHipblasltScaledDot(XlaOp lhs_input, XlaOp rhs_input,
   }
   // Append workspace buffer to instruction outputs.
   int64_t workspace = GemmConfig::kDefaultWorkspace;
-  Shape scratch_shape = ShapeUtil::MakeShape(PrimitiveType::S8, {workspace});
-  Shape output_shape = ShapeUtil::MakeTupleShape({result_shape, scratch_shape});
+  Shape workspace_shape = ShapeUtil::MakeShape(PrimitiveType::S8, {workspace});
+  Shape output_shape = ShapeUtil::MakeTupleShape({result_shape, workspace_shape});
 
   // Build custom call to hipblaslt.
   std::string custom_call_target{kHipblasltBlockScaledDotCallTarget};
