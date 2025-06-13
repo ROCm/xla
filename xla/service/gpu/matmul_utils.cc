@@ -62,6 +62,12 @@ namespace gpu {
 absl::StatusOr<Shape> GetBatchRowColumnShape(
     const Shape& shape, absl::Span<const int64_t> batch_dims,
     absl::Span<const int64_t> row_dims, absl::Span<const int64_t> col_dims) {
+  
+  auto SpanToShape = [](const absl::Span<const int64_t> span) {
+    Shape shape = Shape(PrimitiveType::S64, span);
+    return shape;
+  };
+
   TF_RET_CHECK(shape.has_layout());
 
   std::vector<int64_t> minor_to_major;
@@ -279,6 +285,21 @@ absl::StatusOr<bool> CanFoldTransposeOperandIntoDot(const HloInstruction& dot,
     PrecisionConfig::Algorithm precision_algorithm,
     std::optional<int64_t> algorithm, int64_t compute_precision, bool grad_x,
     bool grad_y, const se::GpuComputeCapability& gpu_version) {
+
+  auto SpanToShape = [](const absl::Span<const int64_t> span) {
+    Shape shape = Shape(PrimitiveType::S64, span);
+    return shape;
+  };
+
+  LOG(INFO) << "Print Parameters of GemmConfig Constructor: ";
+  LOG(INFO) << "lhs_shape: " << lhs_shape.ToString();
+  LOG(INFO) << "lhs_batch_dims: " << SpanToShape(lhs_batch_dims).ToString();
+  LOG(INFO) << "lhs_contracting_dims: " << SpanToShape(lhs_contracting_dims).ToString();
+  LOG(INFO) << "rhs_shape: " << rhs_shape.ToString();
+  LOG(INFO) << "rhs_batch_dims: " << SpanToShape(rhs_batch_dims).ToString();
+  LOG(INFO) << "rhs_contracting_dims: " << SpanToShape(rhs_contracting_dims).ToString();
+  LOG(INFO) << "c_shape: " << c_shape.ToString();
+
   absl::Span<const int64_t> lhs_col_dims = lhs_contracting_dims;
   TF_ASSIGN_OR_RETURN(
       std::vector<int64_t> lhs_row_dims,
