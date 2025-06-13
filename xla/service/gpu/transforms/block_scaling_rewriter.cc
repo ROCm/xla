@@ -634,17 +634,15 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForROCm(
 }  // namespace
 
 bool BlockScalingRewriter::IsCuda() {
-  // se::GpuComputeCapability gpu_cc =
-  //     device_description_.gpu_compute_capability();
-  // return std::holds_alternative<stream_executor::CudaComputeCapability>(gpu_cc);
-  return false;
+  se::GpuComputeCapability gpu_cc =
+      device_description_.gpu_compute_capability();
+  return std::holds_alternative<stream_executor::CudaComputeCapability>(gpu_cc);
 }
 
 bool BlockScalingRewriter::IsRocm() {
-  // se::GpuComputeCapability gpu_cc =
-  //     device_description_.gpu_compute_capability();
-  // return std::holds_alternative<stream_executor::RocmComputeCapability>(gpu_cc);
-  return true;
+  se::GpuComputeCapability gpu_cc =
+      device_description_.gpu_compute_capability();
+  return std::holds_alternative<stream_executor::RocmComputeCapability>(gpu_cc);
 }
 
 bool BlockScalingRewriter::InstructionMatchesPattern(

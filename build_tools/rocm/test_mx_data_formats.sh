@@ -74,7 +74,7 @@ bazel \
     --test_env=XLA_FLAGS="--xla_dump_to=/tmp/generated --xla_dump_hlo_as_text --xla_dump_hlo_as_html --xla_gpu_autotune_level=4 --xla_dump_hlo_pass_re=.*" \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
-    //xla/service/gpu/transforms:block_scaling_rewriter_hipblaslt_test
+    //xla/service/gpu/transforms:block_scaling_rewriter_test --test_filter=BlockScalingRewriterTest.CudnnScaledDotSimple
     
 # //xla/service/gpu/transforms:block_scaling_rewriter_test
 # //xla/service/gpu/transforms:block_scaling_rewriter_cudnn_test

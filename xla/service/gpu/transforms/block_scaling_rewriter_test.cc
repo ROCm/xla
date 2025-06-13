@@ -31,6 +31,18 @@ class BlockScalingRewriterTest : public HloTestBase {
   const auto& device_desc() const {
     return backend().default_stream_executor()->GetDeviceDescription();
   }
+
+  bool IsCuda() const {
+    se::GpuComputeCapability gpu_cc = device_desc().gpu_compute_capability();
+    return std::holds_alternative<stream_executor::CudaComputeCapability>(
+        gpu_cc);
+  }
+
+  bool IsRocm() const {
+    se::GpuComputeCapability gpu_cc = device_desc().gpu_compute_capability();
+    return std::holds_alternative<stream_executor::RocmComputeCapability>(
+        gpu_cc);
+  }
 };
 
 TEST_F(BlockScalingRewriterTest, ExpandQuantizeCustomCall) {
@@ -187,8 +199,7 @@ ENTRY main {
 }
 
 TEST_F(BlockScalingRewriterTest, CudnnScaledDotSimple) {
-  // hard code to skip cudnn tests; need to be modified
-  GTEST_SKIP();
+  if (!IsCuda()) { GTEST_SKIP(); }
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
@@ -220,8 +231,7 @@ ENTRY main {
 }
 
 TEST_F(BlockScalingRewriterTest, CudnnScaledDotTransforms) {
-  // hard code to skip cudnn tests; need to be modified
-  GTEST_SKIP();
+  if (!IsCuda()) { GTEST_SKIP(); }
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
@@ -262,6 +272,7 @@ ENTRY main {
 }
 
 TEST_F(BlockScalingRewriterTest, HipblasltScaledDot2D) {
+  if (!IsRocm()) { GTEST_SKIP(); }
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
@@ -286,6 +297,7 @@ ENTRY main {
 }
 
 TEST_F(BlockScalingRewriterTest, HipblasltScaledDot3D) {
+  if (!IsRocm()) { GTEST_SKIP(); }
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
