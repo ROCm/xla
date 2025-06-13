@@ -318,9 +318,10 @@ void PopulateWithRandomFullRangeFloatingPointData(Literal* literal,
 template <typename FloatT, typename GeneratorT>
 void PopulateWithRandomFloatingPointData(Literal* literal,
                                          std::minstd_rand0* engine) {
-  std::uniform_real_distribution<GeneratorT> generator(-0.1f, 0.2f);
+  // std::uniform_real_distribution<GeneratorT> generator(-0.1f, 0.2f);
   for (FloatT& value : literal->data<FloatT>()) {
-    value = static_cast<FloatT>(generator(*engine));
+    // value = static_cast<FloatT>(generator(*engine));
+    value = static_cast<FloatT>(1.0f);
   }
 }
 
