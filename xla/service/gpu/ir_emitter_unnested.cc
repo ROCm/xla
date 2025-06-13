@@ -829,6 +829,9 @@ absl::Status IrEmitterUnnested::EmitCublasLtMatmulThunkMX(
   const xla::gpu::GemmBackendConfig& config = gpu_config.gemm_backend_config();
   xla::gpu::GemmBackendConfig_Epilogue epilogue = config.epilogue();
 
+  TF_RET_CHECK(instr->shape().IsTuple());
+  xla::ShapeIndex output_index = xla::ShapeIndex{0};
+
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice a,
                       GetAllocationSliceForHlo(instr->operand(0)));
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice b,
@@ -837,10 +840,10 @@ absl::Status IrEmitterUnnested::EmitCublasLtMatmulThunkMX(
                       GetAllocationSliceForHlo(instr->operand(2)));
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice b_scale,
                       GetAllocationSliceForHlo(instr->operand(3)));
-  BufferAllocation::Slice c, c_scale, d_scale, bias;  // not used
+  BufferAllocation::Slice c;
+  TF_ASSIGN_OR_RETURN(c, GetAllocationSliceForHlo(instr, output_index));
+  BufferAllocation::Slice c_scale, d_scale, bias;  // not used
 
-  TF_RET_CHECK(instr->shape().IsTuple());
-  xla::ShapeIndex output_index = xla::ShapeIndex{0};
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice d,
                       GetAllocationSliceForHlo(instr, output_index));
   BufferAllocation::Slice d_amax, aux;  // not used

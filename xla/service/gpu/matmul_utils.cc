@@ -291,7 +291,7 @@ absl::StatusOr<bool> CanFoldTransposeOperandIntoDot(const HloInstruction& dot,
     return shape;
   };
 
-  LOG(INFO) << "Print Parameters of GemmConfig: ";
+  LOG(INFO) << "Print Parameters of GemmConfig Constructor: ";
   LOG(INFO) << "lhs_shape: " << lhs_shape.ToString();
   LOG(INFO) << "lhs_batch_dims: " << SpanToShape(lhs_batch_dims).ToString();
   LOG(INFO) << "lhs_contracting_dims: " << SpanToShape(lhs_contracting_dims).ToString();
