@@ -34,13 +34,14 @@ limitations under the License.
 #include "xla/service/gpu/cublas_cudnn.h"
 #include "xla/service/hlo_creation_utils.h"
 #include "xla/service/shape_inference.h"
+#include "xla/service/gpu/matmul_utils.h"
+#include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/status_macros.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
-#include "xla/service/gpu/backend_configs.pb.h"
 
 namespace xla::gpu {
 namespace {
@@ -534,7 +535,9 @@ absl::StatusOr<XlaOp> BuildHipblasltScaledDot(XlaOp lhs_input, XlaOp rhs_input,
   } else {
     return InvalidArgument("Unsupported input shape for hipblaslt scaled dot");
   }
-  Shape scratch_shape = ShapeUtil::MakeShape(PrimitiveType::U8, {0});
+  // Append workspace buffer to instruction outputs.
+  int64_t workspace = GemmConfig::kDefaultWorkspace;
+  Shape scratch_shape = ShapeUtil::MakeShape(PrimitiveType::S8, {workspace});
   Shape output_shape = ShapeUtil::MakeTupleShape({result_shape, scratch_shape});
 
   // Build custom call to hipblaslt.

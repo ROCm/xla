@@ -334,6 +334,7 @@ cc_library(
         "//xla/service:hlo_creation_utils",
         "//xla/service:shape_inference",
         "//xla/service/gpu:cublas_cudnn",
+        "//xla/service/gpu:matmul_utils",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:statusor",
         "//xla/service/gpu:backend_configs_cc",
