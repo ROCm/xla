@@ -20,28 +20,30 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/strings/string_view.h"
 #include "xla/hlo/parser/hlo_parser.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/service/gpu/tests/gpu_codegen_test.h"
 #include "xla/tsl/platform/statusor.h"
 
 namespace xla::gpu {
 namespace {
 
-class BlockScalingRewriterTest : public HloTestBase {
+class BlockScalingRewriterTest : public GpuCodegenTest {
  protected:
   const auto& device_desc() const {
     return backend().default_stream_executor()->GetDeviceDescription();
   }
 
+  const auto& GpuCapability() const {
+    return device_desc().gpu_compute_capability();
+  }
+
   bool IsCuda() const {
-    se::GpuComputeCapability gpu_cc = device_desc().gpu_compute_capability();
     return std::holds_alternative<stream_executor::CudaComputeCapability>(
-        gpu_cc);
+        GpuCapability());
   }
 
   bool IsRocm() const {
-    se::GpuComputeCapability gpu_cc = device_desc().gpu_compute_capability();
     return std::holds_alternative<stream_executor::RocmComputeCapability>(
-        gpu_cc);
+        GpuCapability());
   }
 };
 
@@ -175,8 +177,12 @@ ENTRY main {
   ROOT %dequantized = f32[256,256] custom-call(%values, %scales),
       custom_call_target="__op$dequantize"
 })";
+  DebugOptions debug_options = GetDebugOptionsForTest();
+  debug_options.clear_xla_gpu_enable_command_buffer();
+  HloModuleConfig config;
+  config.set_debug_options(debug_options);
   TF_ASSERT_OK_AND_ASSIGN(auto test_module,
-                          ParseAndReturnUnverifiedModule(hlo_test));
+                          ParseAndReturnUnverifiedModule(hlo_test, config));
 
   BlockScalingRewriter pass(device_desc(), /*allow_cudnn=*/false,
                             /*allow_hipblaslt=*/false);
@@ -189,8 +195,8 @@ HloModule reference
 ENTRY main {
   ROOT %input = f32[256,256] parameter(0)
 })";
-  TF_ASSERT_OK_AND_ASSIGN(auto reference_module,
-                          ParseAndReturnUnverifiedModule(hlo_reference));
+  TF_ASSERT_OK_AND_ASSIGN(auto reference_module, ParseAndReturnUnverifiedModule(
+                                                     hlo_reference, config));
 
   EXPECT_TRUE(RunAndCompareTwoModules(std::move(test_module),
                                       std::move(reference_module),
@@ -198,8 +204,20 @@ ENTRY main {
                                       /*run_hlo_passes=*/false));
 }
 
-TEST_F(BlockScalingRewriterTest, CudnnScaledDotSimple) {
-  if (!IsCuda()) { GTEST_SKIP(); }
+class BlockScalingRewriterCudnnTest : public BlockScalingRewriterTest {
+ protected:
+  void SetUp() override {
+    if (!IsCuda()) {
+      GTEST_SKIP();
+    }
+    auto cuda_cc = std::get<se::CudaComputeCapability>(GpuCapability());
+    if (!cuda_cc.IsAtLeastBlackwell()) {
+      GTEST_SKIP();
+    }
+  };
+};
+
+TEST_F(BlockScalingRewriterCudnnTest, CudnnScaledDotSimple) {
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
@@ -230,8 +248,7 @@ ENTRY main {
 })");
 }
 
-TEST_F(BlockScalingRewriterTest, CudnnScaledDotTransforms) {
-  if (!IsCuda()) { GTEST_SKIP(); }
+TEST_F(BlockScalingRewriterCudnnTest, CudnnScaledDotTransforms) {
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
@@ -271,8 +288,20 @@ ENTRY main {
 })");
 }
 
-TEST_F(BlockScalingRewriterTest, HipblasltScaledDot2D) {
-  if (!IsRocm()) { GTEST_SKIP(); }
+class BlockScalingRewriterHipblasltTest : public BlockScalingRewriterTest {
+ protected:
+  void SetUp() override {
+    if (!IsRocm()) {
+      GTEST_SKIP();
+    }
+    auto rocm_cc = std::get<se::RocmComputeCapability>(GpuCapability());
+    if (rocm_cc.gfx_version() != "gfx950") {
+      GTEST_SKIP();
+    }
+  };
+};
+
+TEST_F(BlockScalingRewriterHipblasltTest, HipblasltScaledDot2D) {
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
@@ -296,8 +325,7 @@ ENTRY main {
 })");
 }
 
-TEST_F(BlockScalingRewriterTest, HipblasltScaledDot3D) {
-  if (!IsRocm()) { GTEST_SKIP(); }
+TEST_F(BlockScalingRewriterHipblasltTest, HipblasltScaledDot3D) {
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 

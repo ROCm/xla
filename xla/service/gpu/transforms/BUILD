@@ -346,13 +346,14 @@ cc_library(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "block_scaling_rewriter_test",
     srcs = ["block_scaling_rewriter_test.cc"],
+    backends = ["gpu"],
     deps = [
         ":block_scaling_rewriter",
         "//xla/hlo/parser:hlo_parser",
-        "//xla/tests:hlo_test_base",
+        "//xla/service/gpu/tests:gpu_codegen_test",
         "//xla/tests:xla_internal_test_main",
         "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/strings:string_view",
