@@ -494,25 +494,49 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForCUDA(
 /*****************************************************************************************
  *      ROCm Solution: __op$block_scaled_dot --> hipblaslt matmul call                   *
  *****************************************************************************************/
-
 bool IsSupportedByHipblaslt(const Shape& lhs_shape, const Shape& rhs_shape,
                             const Shape& lhs_scale_shape,
                             const Shape& rhs_scale_shape) {
-  // batch_size must be 1
-  // TODO: remove this constraint when hipblaslt support batch_size > 1
-  if (lhs_shape.dimensions().size() == 3 && lhs_shape.dimensions(0) != 1) {
-    return false;
-  }
-  // check supported data types
-  if (lhs_shape.element_type() != PrimitiveType::F8E4M3FN ||
-      rhs_shape.element_type() != PrimitiveType::F8E4M3FN) {
-    return false;
-  }
-  if (lhs_scale_shape.element_type() != PrimitiveType::F8E8M0FNU ||
-      rhs_scale_shape.element_type() != PrimitiveType::F8E8M0FNU) {
-    return false;
-  }
-  return true;
+  auto IsSupported = [&](const Shape& input_shape,
+                         const Shape& scale_shape) -> bool {
+    // Check supported shapes
+    // TODO: remove this constraint when hipblaslt supports batch_size > 1
+    if (input_shape.dimensions().size() == 3 &&
+        input_shape.dimensions(0) != 1) {
+      return false;
+    }
+    // TODO: remove this constraint when hipblaslt supports other M, N, K values
+    if (input_shape.dimensions().size() == 2) {
+      if (input_shape.dimensions(0) % 16 != 0 ||
+          input_shape.dimensions(1) % 32 != 0) {
+        return false;
+      }
+    } else if (input_shape.dimensions().size() == 3) {
+      if (input_shape.dimensions(1) % 16 != 0 ||
+          input_shape.dimensions(2) % 32 != 0) {
+        return false;
+      }
+    } else {
+      return false;
+    }
+    int block_size = GetBlockSize(input_shape, scale_shape).value_or(0);
+    if (block_size != BlockScalingRewriter::kBlockSizeHipblaslt) {
+      return false;
+    }
+    // Check supported data types
+    if (input_shape.element_type() != PrimitiveType::F8E4M3FN &&
+        input_shape.element_type() != PrimitiveType::F8E5M2 &&
+        input_shape.element_type() != PrimitiveType::F4E2M1FN) {
+      return false;
+    }
+    if (scale_shape.element_type() != PrimitiveType::F8E8M0FNU) {
+      return false;
+    }
+    return true;
+  };
+
+  return IsSupported(lhs_shape, lhs_scale_shape) &&
+         IsSupported(rhs_shape, rhs_scale_shape);
 }
 
 // Build HLO for hipblaslt custom call op.

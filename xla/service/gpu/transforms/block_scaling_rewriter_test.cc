@@ -306,22 +306,22 @@ TEST_F(BlockScalingRewriterHipblasltTest, HipblasltScaledDot) {
 HloModule test
 
 ENTRY main {
-  %lhs = f8e4m3fn[16,128] parameter(0)
-  %rhs = f8e4m3fn[8,128] parameter(1)
-  %lhs_scale = f8e8m0fnu[16,8] parameter(2)
-  %rhs_scale = f8e8m0fnu[8,8] parameter(3)
-  ROOT %result = f16[16,8] custom-call(%lhs, %rhs, %lhs_scale, %rhs_scale),
+  %lhs = f8e4m3fn[32,256] parameter(0)
+  %rhs = f8e4m3fn[16,256] parameter(1)
+  %lhs_scale = f8e8m0fnu[32,8] parameter(2)
+  %rhs_scale = f8e8m0fnu[16,8] parameter(3)
+  ROOT %result = f16[32,16] custom-call(%lhs, %rhs, %lhs_scale, %rhs_scale),
       custom_call_target="__op$block_scaled_dot"
 })";
   BlockScalingRewriter pass(device_desc(), /*allow_cudnn=*/false,
                             /*allow_hipblaslt=*/true);
   RunAndFilecheckHloRewrite(hlo_string, std::move(pass), R"(
-  CHECK: [[lhs:%.+]] = f8e4m3fn[16,128]{1,0} parameter(0)
-  CHECK: [[rhs:%.+]] = f8e4m3fn[8,128]{1,0} parameter(1)
-  CHECK: [[lhs_scale:%.+]] = f8e8m0fnu[16,8]{1,0} parameter(2)
-  CHECK: [[rhs_scale:%.+]] = f8e8m0fnu[8,8]{1,0} parameter(3)
-  CHECK: [[custom_call:%.+]] = (f16[16,8]{1,0}, s8[4194304]{0}) custom-call([[lhs]], [[rhs]], [[lhs_scale]], [[rhs_scale]]), custom_call_target="__hipblaslt$blockScaledDot"
-  CHECK: ROOT {{.+}} = f16[16,8]{1,0} get-tuple-element([[custom_call]]), index=0
+  CHECK: [[lhs:%.+]] = f8e4m3fn[32,256]{1,0} parameter(0)
+  CHECK: [[rhs:%.+]] = f8e4m3fn[16,256]{1,0} parameter(1)
+  CHECK: [[lhs_scale:%.+]] = f8e8m0fnu[32,8]{1,0} parameter(2)
+  CHECK: [[rhs_scale:%.+]] = f8e8m0fnu[16,8]{1,0} parameter(3)
+  CHECK: [[custom_call:%.+]] = (f16[32,16]{1,0}, s8[4194304]{0}) custom-call([[lhs]], [[rhs]], [[lhs_scale]], [[rhs_scale]]), custom_call_target="__hipblaslt$blockScaledDot"
+  CHECK: ROOT {{.+}} = f16[32,16]{1,0} get-tuple-element([[custom_call]]), index=0
 })");
 }
 
@@ -330,22 +330,22 @@ TEST_F(BlockScalingRewriterHipblasltTest, HipblasltBatchedScaledDot) {
 HloModule test
 
 ENTRY main {
-  %lhs = f8e4m3fn[1,16,128] parameter(0)
-  %rhs = f8e4m3fn[1,8,128] parameter(1)
-  %lhs_scale = f8e8m0fnu[1,16,4] parameter(2)
-  %rhs_scale = f8e8m0fnu[1,8,4] parameter(3)
-  ROOT %result = f16[1,16,8] custom-call(%lhs, %rhs, %lhs_scale, %rhs_scale),
+  %lhs = f8e4m3fn[1,32,256] parameter(0)
+  %rhs = f8e4m3fn[1,16,256] parameter(1)
+  %lhs_scale = f8e8m0fnu[1,32,8] parameter(2)
+  %rhs_scale = f8e8m0fnu[1,16,8] parameter(3)
+  ROOT %result = f16[1,32,16] custom-call(%lhs, %rhs, %lhs_scale, %rhs_scale),
       custom_call_target="__op$block_scaled_dot"
 })";
   BlockScalingRewriter pass(device_desc(), /*allow_cudnn=*/false,
                             /*allow_hipblaslt=*/true);
   RunAndFilecheckHloRewrite(hlo_string, std::move(pass), R"(
-  CHECK: [[lhs:%.+]] = f8e4m3fn[1,16,128]{2,1,0} parameter(0)
-  CHECK: [[rhs:%.+]] = f8e4m3fn[1,8,128]{2,1,0} parameter(1)
-  CHECK: [[lhs_scale:%.+]] = f8e8m0fnu[1,16,4]{2,1,0} parameter(2)
-  CHECK: [[rhs_scale:%.+]] = f8e8m0fnu[1,8,4]{2,1,0} parameter(3)
-  CHECK: [[custom_call:%.+]] = (f16[1,16,8]{2,1,0}, s8[4194304]{0}) custom-call([[lhs]], [[rhs]], [[lhs_scale]], [[rhs_scale]]), custom_call_target="__hipblaslt$blockScaledDot"
-  CHECK: ROOT {{.+}} = f16[1,16,8]{2,1,0} get-tuple-element([[custom_call]]), index=0
+  CHECK: [[lhs:%.+]] = f8e4m3fn[1,32,256]{2,1,0} parameter(0)
+  CHECK: [[rhs:%.+]] = f8e4m3fn[1,16,256]{2,1,0} parameter(1)
+  CHECK: [[lhs_scale:%.+]] = f8e8m0fnu[1,32,8]{2,1,0} parameter(2)
+  CHECK: [[rhs_scale:%.+]] = f8e8m0fnu[1,16,8]{2,1,0} parameter(3)
+  CHECK: [[custom_call:%.+]] = (f16[1,32,16]{2,1,0}, s8[4194304]{0}) custom-call([[lhs]], [[rhs]], [[lhs_scale]], [[rhs_scale]]), custom_call_target="__hipblaslt$blockScaledDot"
+  CHECK: ROOT {{.+}} = f16[1,32,16]{2,1,0} get-tuple-element([[custom_call]]), index=0
 })");
 }
 
