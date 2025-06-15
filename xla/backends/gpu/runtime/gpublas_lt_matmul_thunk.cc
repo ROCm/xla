@@ -177,6 +177,7 @@ CublasLtMatmulThunk::GetCachedMatmulPlan(const ExecuteParams& params) {
         auto algorithms,
         plan->GetAlgorithms(params.stream, num_algorithms, max_workspace));
 
+    LOG(INFO) << "algorithms.size(): " << algorithms.size();
     TF_RETURN_IF_ERROR(plan->SetAlgorithm(algorithms[algorithm_idx_]));
     return std::move(plan);
   };

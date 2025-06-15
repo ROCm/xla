@@ -261,6 +261,12 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
                                  &dummy_pointer));
     }
 
+    // Hardcoding for MX data types
+    hipblasLtMatmulMatrixScale_t scaleAType =
+        HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0;
+    TF_RETURN_IF_ERROR(
+        SetAttr(op_desc_.get(), HIPBLASLT_MATMUL_DESC_A_SCALE_MODE, scaleAType));
+
     int found_algorithm_count = 0;
     auto error = wrap::hipblasLtMatmulAlgoGetHeuristic(
         blas_lt->blas_lt_.get(), op_desc_.get(), a_desc_.get(), b_desc_.get(),
@@ -340,6 +346,12 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
       MatmulDesc::Create(*compute_type,
                          gpu::GetScaleType(output_dtype, *compute_type),
                          trans_a, trans_b, epilogue));
+
+  // Hardcoding for MX data types
+  hipblasLtMatmulMatrixScale_t scaleAType =
+      HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0;
+  TF_RETURN_IF_ERROR(
+      SetAttr(op_desc.get(), HIPBLASLT_MATMUL_DESC_A_SCALE_MODE, scaleAType));
 
   TF_ASSIGN_OR_RETURN(auto a_desc, MatrixLayout::Create(lhs_layout));
   TF_ASSIGN_OR_RETURN(auto b_desc, MatrixLayout::Create(rhs_layout));
