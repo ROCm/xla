@@ -60,7 +60,7 @@ absl::StatusOr<HloInstruction*> ExpandInstructionUsingBuilder(
 
 absl::StatusOr<HloInstruction*> ExpandInstructionWithGemmConfigUsingBuilder(
     XlaBuilder& builder, HloInstruction* old_instruction,
-    const DotDimensionNumbers& dnums, double alpha = 1.0, double beta = 0.0) {
+    const DotDimensionNumbers& dnums) {
   TF_ASSIGN_OR_RETURN(XlaComputation xla_computation, builder.Build());
   TF_ASSIGN_OR_RETURN(
       HloComputation * hlo_computation,
@@ -80,15 +80,14 @@ absl::StatusOr<HloInstruction*> ExpandInstructionWithGemmConfigUsingBuilder(
     xla::gpu::GemmBackendConfig gemm_cfg;
     gemm_cfg.set_selected_algorithm(0);
     *gemm_cfg.mutable_dot_dimension_numbers() = dnums;
-    gemm_cfg.set_alpha_real(alpha);
+    gemm_cfg.set_alpha_real(1.0);
     gemm_cfg.set_alpha_imag(0.0);
-    gemm_cfg.set_beta(beta);
+    gemm_cfg.set_beta(0.0);
     gemm_cfg.set_grad_x(true);
     gemm_cfg.set_grad_y(true);
     gemm_cfg.mutable_precision_config()->add_operand_precision(
         PrecisionConfig::DEFAULT);
     gemm_cfg.set_epilogue(xla::gpu::GemmBackendConfig::DEFAULT);
-
     xla::gpu::GpuBackendConfig gpu_cfg;
     *gpu_cfg.mutable_gemm_backend_config() = gemm_cfg;
     TF_RETURN_IF_ERROR(target->set_backend_config(gpu_cfg));
@@ -540,10 +539,10 @@ bool IsSupportedByHipblaslt(const Shape& lhs_shape, const Shape& rhs_shape,
 }
 
 // Build HLO for hipblaslt custom call op.
-absl::StatusOr<XlaOp> BuildHipblasltScaledDot(XlaOp lhs_input, XlaOp rhs_input,
-                                              XlaOp lhs_scale, XlaOp rhs_scale,
-                                              const DotDimensionNumbers& dnums,
-                                              PrimitiveType result_type) {
+absl::StatusOr<XlaOp> BuildHipblasltScaledDot(
+    XlaOp lhs_input, XlaOp rhs_input, XlaOp lhs_scale, XlaOp rhs_scale,
+    const DotDimensionNumbers& dnums, const PrimitiveType result_type,
+    const se::DeviceDescription& device_description) {
   // Calculate output shape.
   XlaBuilder& builder = *lhs_input.builder();
   TF_ASSIGN_OR_RETURN(Shape lhs_shape, builder.GetShape(lhs_input));
@@ -561,8 +560,14 @@ absl::StatusOr<XlaOp> BuildHipblasltScaledDot(XlaOp lhs_input, XlaOp rhs_input,
   }
   // Append workspace buffer to instruction outputs.
   int64_t workspace = GemmConfig::kDefaultWorkspace;
+  auto* rocm_cc = std::get_if<se::RocmComputeCapability>(
+      &device_description.gpu_compute_capability());
+  if (rocm_cc->gfx_version() == "gfx950") {
+    workspace = GemmConfig::kGFX950Workspace;
+  }
   Shape workspace_shape = ShapeUtil::MakeShape(PrimitiveType::S8, {workspace});
-  Shape output_shape = ShapeUtil::MakeTupleShape({result_shape, workspace_shape});
+  Shape output_shape =
+      ShapeUtil::MakeTupleShape({result_shape, workspace_shape});
 
   // Build custom call to hipblaslt.
   std::string custom_call_target{kHipblasltBlockScaledDotCallTarget};
@@ -579,7 +584,8 @@ absl::StatusOr<XlaOp> BuildBlockScaledDotForROCm(
     XlaBuilder& builder, const HloInstruction* lhs_input,
     const HloInstruction* rhs_input, const HloInstruction* lhs_scale,
     const HloInstruction* rhs_scale, const DotDimensionNumbers& dnums,
-    const bool allow_hipblaslt, PrimitiveType result_type) {
+    const bool allow_hipblaslt, const PrimitiveType result_type,
+    const se::DeviceDescription& device_description) {
   // Get dot LHS parameter(s).
   XlaOp lhs_op = Parameter(&builder, 0, lhs_input->shape(), "lhs");
   XlaOp lhs_scale_op = Parameter(&builder, 2, lhs_scale->shape(), "lhs_scale");
@@ -596,7 +602,7 @@ absl::StatusOr<XlaOp> BuildBlockScaledDotForROCm(
       IsSupportedByHipblaslt(lhs_input->shape(), rhs_input->shape(),
                              lhs_scale->shape(), rhs_scale->shape())) {
     return BuildHipblasltScaledDot(lhs_op, rhs_op, lhs_scale_op, rhs_scale_op,
-                                   dnums, result_type);
+                                   dnums, result_type, device_description);
   }
 
   // Fallback solution: build general dot op.
@@ -614,7 +620,8 @@ absl::StatusOr<XlaOp> BuildBlockScaledDotForROCm(
 
 // Convert scaled dot custom call to HLO computation for ROCm platform.
 absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForROCm(
-    HloInstruction* instruction, const bool allow_hipblaslt) {
+    HloInstruction* instruction, const bool allow_hipblaslt,
+    const se::DeviceDescription& device_description) {
   PrimitiveType result_type = instruction->shape().element_type();
 
   // Check operand count.
@@ -643,16 +650,15 @@ absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForROCm(
   // Build replacement instruction sequence.
   XlaBuilder builder(std::string(instruction->name()));
   auto operands = absl::MakeSpan(instruction->operands());
-  TF_ASSIGN_OR_RETURN(
-      XlaOp block_scaled_dot,
-      BuildBlockScaledDotForROCm(builder, operands[0], operands[1], operands[2],
-                                 operands.size() == 4 ? operands[3] : nullptr,
-                                 dnums, allow_hipblaslt, result_type));
+  TF_ASSIGN_OR_RETURN(XlaOp block_scaled_dot,
+                      BuildBlockScaledDotForROCm(
+                          builder, operands[0], operands[1], operands[2],
+                          operands.size() == 4 ? operands[3] : nullptr, dnums,
+                          allow_hipblaslt, result_type, device_description));
   TF_ASSIGN_OR_RETURN(Shape result_shape, builder.GetShape(block_scaled_dot));
   CHECK_EQ(result_shape, instruction->shape());
-  return ExpandInstructionWithGemmConfigUsingBuilder(builder, instruction, dnums, 
-                                                     /*alpha=*/1.0,
-                                                     /*beta=*/0.0);
+  return ExpandInstructionWithGemmConfigUsingBuilder(builder, instruction,
+                                                     dnums);
 }
 
 }  // namespace
@@ -689,8 +695,8 @@ absl::StatusOr<HloInstruction*> BlockScalingRewriter::ExpandInstruction(
     if (IsCuda()) {
       return ExpandBlockScaledDotCustomCallForCUDA(instruction, allow_cudnn_);
     } else if (IsRocm()) {
-      return ExpandBlockScaledDotCustomCallForROCm(instruction,
-                                                   allow_hipblaslt_);
+      return ExpandBlockScaledDotCustomCallForROCm(
+          instruction, allow_hipblaslt_, device_description_);
     }
   }
   LOG(FATAL) << "Unexpected custom call target: "
