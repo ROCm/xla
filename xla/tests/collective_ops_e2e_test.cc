@@ -625,12 +625,11 @@ XLA_TEST_P(AsyncCollectiveOps,
   const bool enable_async_all_to_all = GetParam();
   TF_ASSERT_OK_AND_ASSIGN(auto executable,
                           CreateExecutable(kModuleStr, kNumReplicas));
-  TF_ASSERT_OK_AND_ASSIGN(const HloModule* const hlo_module,
-                          test_runner().HloModuleFromWrapped(executable.get()));
-
+  EXPECT_TRUE(executable->has_module());
   HloInstruction* a2a_start =
-      FindInstruction(hlo_module, HloOpcode::kAsyncStart);
-  HloInstruction* a2a_done = FindInstruction(hlo_module, HloOpcode::kAsyncDone);
+      FindInstruction(&executable->module(), HloOpcode::kAsyncStart);
+  HloInstruction* a2a_done =
+      FindInstruction(&executable->module(), HloOpcode::kAsyncDone);
   ASSERT_THAT(a2a_start, NotNull());
   ASSERT_THAT(a2a_done, NotNull());
   HloAsyncInstruction* a2a_start_async = Cast<HloAsyncInstruction>(a2a_start);
