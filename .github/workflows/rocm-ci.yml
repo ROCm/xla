@@ -20,6 +20,8 @@ jobs:
     runs-on: mi-250
     container:
       image: rocm/tensorflow-build:latest-jammy-python3.11-rocm6.3.0
+      volumes:
+        - /tmp/xla_bazel_cache:/github/home/.cache/bazel_disk_cache
       options:
         --device=/dev/kfd
         --device=/dev/dri
@@ -36,6 +38,8 @@ jobs:
     runs-on: mi-250
     container:
       image: rocm/tensorflow-build:latest-jammy-python3.11-rocm6.3.0
+      volumes:
+        - /tmp/xla_bazel_cache:/github/home/.cache/bazel_disk_cache
       options:
         --device=/dev/kfd
         --device=/dev/dri
