@@ -32,6 +32,7 @@ limitations under the License.
 #include <time.h>
 #include <unistd.h>
 #include <chrono>
+#include <unistd.h> // For standard sysconf
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
@@ -53,6 +54,18 @@ using tsl::profiler::XSpace;
 
 namespace xla {
 namespace profiler {
+
+// get page_size  
+inline int64_t get_page_size() {
+  static auto _pagesz = sysconf(_SC_PAGESIZE);
+  if (_pagesz <= 0) {
+    // Fallback to 4096 if sysconf fails (e.g., in a test environment)
+    VLOG(0) << "sysconf(_SC_PAGESIZE) failed, using default page size of 4096 bytes";
+    return 4096;
+  }
+  return _pagesz;
+}
+  
 
 // ----------------------------------------------------------------------------
 // Convenience aliases for rocprofiler types.
@@ -569,6 +582,13 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
     default: continue;
     } // switch
 
+    // Increment event count for the GPU associated with this event
+    {
+      std::lock_guard<tsl::mutex> count_lk(event_counts_mutex_);
+      uint32_t gpu_id = event.device_id; // Assuming RocmTracerEvent has gpu_id field
+      gpu_event_counts_[gpu_id]++;
+    }
+
     std::lock_guard<tsl::mutex> lk(collector_mutex_);
     if (collector()) {
       collector()->AddEvent(std::move(event), false);
@@ -658,8 +678,8 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
   rocprofiler_start_context(utility_context_);
   VLOG(0) << "rocprofiler start utilityContext";
 
-  constexpr auto buffer_size_bytes = 4*4096;
-  constexpr auto buffer_watermark_bytes = buffer_size_bytes - (buffer_size_bytes / 8);
+  constexpr auto buffer_size_bytes = 100 * 4096; // 16*4096;
+  constexpr auto buffer_watermark_bytes = 90 * 4096; // buffer_size_bytes - (buffer_size_bytes / 15);
 
   // Utility context to gather code‑object info
   rocprofiler_create_context(&context_);
@@ -714,6 +734,17 @@ void RocmTracer::Disable() {
   std::lock_guard<tsl::mutex> lk(collector_mutex_);
   collector_->Flush();
   collector_ = nullptr;
+
+  //print GPU event counts
+  std::lock_guard<tsl::mutex> count_lk(event_counts_mutex_);
+  VLOG(-1) << "GPU Event Counts:\n";
+  for (const auto& pair : gpu_event_counts_) {
+      VLOG(-1) << "GPU " << pair.first << ": " << pair.second << " events\n";
+  }
+  if (gpu_event_counts_.empty()) {
+      VLOG(-1) << "No events recorded for any GPU.\n";
+  }
+
   VLOG(-1) << "GpuTracer stopped"; 
 }
 

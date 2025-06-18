@@ -150,6 +150,10 @@ public:
   kernel_info_map_t kernel_info_;
   tsl::mutex kernel_lock_;
 
+  // gpu events counter
+  std::unordered_map<uint32_t, uint64_t> gpu_event_counts_; // GPU ID to event count
+  tsl::mutex event_counts_mutex_; // Mutex for gpu_event_counts_
+
   callback_name_info name_info_;
   agent_info_map_t agents_;
 
