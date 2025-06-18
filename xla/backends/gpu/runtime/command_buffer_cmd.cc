@@ -340,8 +340,6 @@ absl::Status CommandBufferCmdSequence::Record(
     VLOG(5) << "Record command buffer with scope id "
             << execution_scope_id.value();
 
-    // if(execute_params.stream->parent()->device_ordinal() == 0)
-    // VLOG(0) << "Recording " << command.cmd->ToString();
     TF_RETURN_IF_ERROR(
         command.cmd->Record(execute_params, record_params, command_buffer));
     // if(execute_params.stream->parent()->device_ordinal() == 0)
@@ -433,7 +431,6 @@ TracedCommandBuffer::TracedCommandBuffer(
 bool TracedCommandBuffer::IsGraphUpdateNeeded(
       const BufferAllocations* buffer_allocs, se::CommandBuffer **nested_cmd) {
 
-// some bug here?? some upates skipped?
   *nested_cmd = nullptr;
   if (!trace_cmd_->IsNestedCommandBuffer()) { // easy case for untraced commands
     bool needed = false;
@@ -504,21 +501,12 @@ void TracedCommandBuffer::ResetTopEntry() {
 absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     const BufferAllocations* buffer_allocation, 
     se::Stream* stream, TraceFunc trace_func) {
-
-  //if (entries_[0].command_buffer == nullptr) {
-    // size_t i = 1;
-    // for(i = 1; i < entries_.size(); i++) {
-    //   if(entries_[i].command_buffer == nullptr) break;
-    // }
-    // VLOG(0) << trace_cmd_->ToString() << " dev " << stream->parent()->device_ordinal() <<
-    //     " -- retracing ! #filled: " << i;
     TF_ASSIGN_OR_RETURN(
       entries_[0].command_buffer,
           se::TraceCommandBufferFactory::Create(stream, trace_func));
     // keep # of child nodes needed for skipping updates
     TF_ASSIGN_OR_RETURN(num_child_nodes_, 
                     entries_[0].command_buffer->GetNumChildNodes());
-  // }
   return entries_[0].command_buffer.get();
 }
 

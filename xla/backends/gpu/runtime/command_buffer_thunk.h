@@ -75,11 +75,11 @@ class CommandBufferThunk : public Thunk {
           std::unique_ptr<se::CommandBuffer> command_buffer);
 
     void SetActiveGraph(int64_t idx) {
-      active_graph_ = idx;
+      active_graph_idx_ = idx;
     }
 
     se::CommandBuffer *ActiveGraph() {
-      return cached_graphs_[active_graph_].get();
+      return cached_graphs_[active_graph_idx_].get();
     }
 
     // Returns true if `commands` cmd sequence has to be recorded into
@@ -114,10 +114,10 @@ class CommandBufferThunk : public Thunk {
     // execution on a stream. All other pieces of information (like thread
     // and block sizes) captured by commands at construction time and do not
     // change.
-    std::array< AllocsVec, NumCachedGraphs> recorded_allocs_ ABSL_GUARDED_BY(mutex);
+    std::vector< AllocsVec, NumCachedGraphs> recorded_allocs_ ABSL_GUARDED_BY(mutex);
 
     // Holds the index of currently active graph [0, NumCachedGraphs-1]
-    int64_t active_graph_ ABSL_GUARDED_BY(mutex) = 0;
+    int64_t active_graph_idx_ ABSL_GUARDED_BY(mutex) = 0;
   };
 
   // Command buffer thunk owns commands buffers instantiated on all executors.

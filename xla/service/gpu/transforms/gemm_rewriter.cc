@@ -831,8 +831,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                                                               ? slice_or_bitcast
                                                               : existing_gemm)))
                                   .WithOneUser())))) {
-        // HACK disable swish!
-        //return FuseSwishActivation(instr, existing_gemm, slice_or_bitcast);
+        return FuseSwishActivation(instr, existing_gemm, slice_or_bitcast);
       }
     }
     return absl::OkStatus();

@@ -409,10 +409,11 @@ absl::Status GpuCommandBuffer::AddNestedCommandBuffer(
 
   ExecutionScope& execution_scope = execution_scopes_[execution_scope_id];
   TF_RETURN_IF_ERROR(CheckNotFinalized());
+
+#if EXTRACT_CHILD_NODES_FROM_GRAPH
   const auto& gpu_cmd = static_cast< const GpuCommandBuffer& >(nested);
   TF_ASSIGN_OR_RETURN(auto *child_nodes, gpu_cmd.GetChildNodes());
 
-#if EXTRACT_CHILD_NODES_FROM_GRAPH
   for(size_t i = 0; i < child_nodes->size(); i++) {
 
     if (state_ == State::kUpdate) {

@@ -185,10 +185,9 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
         enable_cached_allocs_ = true;
         break;
       }
-    } // for
+    } // for loop for all thunks
   }
-  // HACK HACK
-  //enable_cached_allocs_ = (module_name_ == "jit_train_step");
+
   if (enable_cached_allocs_) {
     // allocate at least for 8 devices
     cached_mem_allocations_.resize(8);
@@ -655,7 +654,8 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
       memory_allocator->Allocate(device_ordinal, buffer_size,
                                    /*retry_on_failure=*/true,
                                    /*memory_space=*/allocation.color()));
-    VLOG(1) << this << " dev: " << device_ordinal << " idx: " << allocation.index() 
+    VLOG(1) << this->text_ << " dev: " << device_ordinal 
+            << " idx: " << allocation.index() 
             << " do not cache buf: " << buf.cref();
     return buf.Release();
   }
@@ -671,12 +671,6 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
                                    /*retry_on_failure=*/true,
                                    /*memory_space=*/allocation.color()));
     }
-    // if (!is_live_out && device_ordinal == 0) {
-    //   VLOG(0) << this << " dev" << device_ordinal << "," << allocation.index() 
-    //       << " cached alloc: " << it->second[0].cref()
-    //       << " live_out: " << allocation.maybe_live_out()
-    //       << " ZZTempBuffer: " << allocation.IsPreallocatedTempBuffer();
-    // }
   }
   return it->second[is_live_out ? cache_idx : 0].cref();
 }
@@ -813,8 +807,6 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
   }();
 
   auto& alloc_cached_flag = result.MutableResult()->alloc_cached_flag;
-  // VLOG(0) << this << " dev" <<  executor->device_ordinal() << 
-  //     " setting exec for result buf: " << result.MutableResult();
 
   for (auto& [index, result_buffer] : result.MutableResult()->buffers()) {
 
@@ -919,7 +911,7 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
       auto& cache = get_allocs_cache(device_ordinal, &index);
       auto it = cache.find(allocation->index());
       if(it != cache.end() && result_buffer == it->second[index].cref()) {
-        //VLOG(0) << "Found liveout alloc matches: " << result_buffer.opaque();
+        VLOG(1) << "Found liveout alloc matches: " << result_buffer.opaque();
         alloc_cached_flag.back() = true;
       }
     }
@@ -947,6 +939,8 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
     TF_RETURN_IF_ERROR(
       buffer_allocations.TearDown(buffers_in_result, GetAllocations()));
   }
+
+  // TODO: teardown for AllocationsCache? 
 
   // Free allocations for arguments.
   if (auto args = std::get_if<absl::Span<ExecutionInput>>(&arguments)) {

@@ -41,7 +41,7 @@ limitations under the License.
 // This flag shall always be 1 when buffer ping-ponging is used since buffers are
 // updated ever iteration
 #define USE_SMALL_CMDBUF_UPDATES 1
-// Whether to to use subgraphs or extract child nodes directly to the main graph
+// Whether to use subgraphs or extract child nodes directly to the main graph
 #define EXTRACT_CHILD_NODES_FROM_GRAPH 0
 
 #define CMD_BUF_THUNK_ENABLE_TIMING 0

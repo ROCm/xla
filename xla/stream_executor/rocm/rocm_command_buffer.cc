@@ -532,7 +532,7 @@ private:
                             std::tuple<std::string, uint64_t> >;
   std::array< Map, Num > graph_map_{};
 } s_printer;
-#endif
+#endif  // GPU_GRAPH_API_DEBUG
 
 absl::Status RocmCommandBuffer::LaunchGraph(Stream* stream) {
   VLOG(1) << std::this_thread::get_id() << " launch graph " << exec_

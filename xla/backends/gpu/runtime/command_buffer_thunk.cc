@@ -61,7 +61,6 @@ void CommandBufferThunk::ExecutorCommandBuffer::AddNew(int64_t graph_id,
           BufferAllocation::Index max_index,
           std::unique_ptr<se::CommandBuffer> command_buffer) {
   
-  // absl::MutexLock _(&mutex); ???
   cached_graphs_[graph_id] = std::move(command_buffer);
   recorded_allocs_[graph_id].resize(max_index + 1);
 }
@@ -100,8 +99,8 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
   const BufferAllocations* allocs = params.buffer_allocations;
 
   // first search if any of recorded graphs is fine
-  auto start_id = (active_graph_ + NumCachedGraphs-1) % NumCachedGraphs;
-  for (auto id = start_id; id < start_id + NumCachedGraphs; id++) { 
+  auto start_id = (active_graph_idx_ + NumCachedGraphs - 1) % NumCachedGraphs;
+  for (auto id = start_id; id < start_id + NumCachedGraphs; id++) {
     bool should_update = false;
     auto& recorded = recorded_allocs_[id % NumCachedGraphs];
     for (const auto idx : commands.allocs_indices()) {
@@ -112,24 +111,24 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
       }
     }
     if (!should_update) {
-      active_graph_ = id % NumCachedGraphs;
-      // if(params.stream->parent()->device_ordinal()==0)
-      // VLOG(0) << "Setting active graph to: " << active_graph_;
+      active_graph_idx_ = id % NumCachedGraphs;
       return false;
     }
   }
   // otherwise, we change the active graph to the LRU one ??
-  active_graph_ = (active_graph_ + NumCachedGraphs-1) % NumCachedGraphs;
-  if(params.stream->parent()->device_ordinal()==0) 
-   VLOG(0) << "Recording to new active graph: " << active_graph_;
+  active_graph_idx_ = (active_graph_idx_ + NumCachedGraphs - 1) % NumCachedGraphs;
+  if(params.stream->parent()->device_ordinal() == 0){ 
+    VLOG(1) << "Recording to new active graph: " << active_graph_idx_;
+  }
 
   // then there is no need to allocate graph earlier in AddNew function..
   // NOTE: well using params.stream->parent() is not very clean..
   auto command_buffer =
-        params.stream->parent()->CreateCommandBuffer(se::CommandBuffer::Mode::kPrimary).value();
-  cached_graphs_[active_graph_] = std::move(command_buffer);
+        params.stream->parent()->CreateCommandBuffer(
+                      se::CommandBuffer::Mode::kPrimary).value();
+  cached_graphs_[active_graph_idx_] = std::move(command_buffer);
 
-  auto& recorded = recorded_allocs_[active_graph_];
+  auto& recorded = recorded_allocs_[active_graph_idx_];
   // We check only allocations referenced by commands in a cmd sequence, and
   // leave every other entry default initialized (nullptr device memory).
   for (const auto idx : commands.allocs_indices()) {
@@ -240,7 +239,7 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
                           {"num_executions", cmd_buffer->num_executions}});
   });
 
-  auto s = cmd_buffer->ActiveGraph()->Submit(params.stream);
+  auto executed_status = cmd_buffer->ActiveGraph()->Submit(params.stream);
 #if CMD_BUF_THUNK_ENABLE_TIMING
   params.stream->BlockHostUntilDone();
   uint64_t xend = tsl::Env::Default()->NowMicros();
@@ -249,7 +248,7 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
   VLOG(0) << executor->device_ordinal() << " total exec time " << ss
             << " sec; num_commands=" << commands_.size();
 #endif
-  return s;
+  return executed_status;
 }
 
 absl::StatusOr<std::shared_ptr<CommandBufferThunk::ExecutorCommandBuffer>>
