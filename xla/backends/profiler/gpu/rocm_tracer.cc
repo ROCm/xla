@@ -432,8 +432,11 @@ struct tool_buffer_tracing_memory_copy_ext_record_t
 void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
         RocmTracerEvent *ev) { 
 
+  // const auto& rec =
+  //     *static_cast<const tool_buffer_tracing_memory_copy_ext_record_t*>(hdr->payload);
+
   const auto& rec =
-      *static_cast<const tool_buffer_tracing_memory_copy_ext_record_t*>(hdr->payload);
+      *static_cast<const  rocprofiler_buffer_tracing_memory_copy_record_t*>(hdr->payload);
 
 #define OO(src, target) \
   case ROCPROFILER_MEMORY_COPY_##src: \
@@ -462,9 +465,10 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
   ev->start_time_ns = rec.start_timestamp;
   ev->end_time_ns = rec.end_timestamp;
   ev->device_id = src_gpu.id.handle;
+  VLOG(-1) << "device id = " << ev->device_id;
   ev->correlation_id = rec.correlation_id.internal;
   ev->thread_id = rec.thread_id;
-  ev->stream_id = rec.stream_id.handle; // we do not know valid stream ID for memcpy
+  ev->stream_id = RocmTracerEvent::kInvalidStreamId;   // rec.stream_id.handle; // we do not know valid stream ID for memcpy
   ev->memcpy_info = MemcpyDetails{
     .num_bytes = rec.bytes,
     .destination = static_cast<uint32_t>(dst_gpu.id.handle),
@@ -494,7 +498,7 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t *hdr,
   ev->type = RocmTracerEventType::Kernel;
   ev->source = RocmTracerEventSource::Activity;
   ev->domain = RocmTracerEventDomain::HIP_OPS;
-  // ev->name = "??";
+  ev->name = "??";
   ev->annotation = "??";
   ev->roctx_range = "??";
   ev->start_time_ns = rec.start_timestamp;
@@ -544,8 +548,8 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
   {
     RocmTracerEvent event;
     auto header = headers[i];
-    // VLOG(0) << "category: " << RocProfBufferCategory(h->category)
-    //         << " kind: " << RocProfBufferKind(h->kind);
+    VLOG(-1) << "category: " << RocProfBufferCategory(header->category)
+             << " kind: " << RocProfBufferKind(header->kind);
 
     if (header->category != ROCPROFILER_BUFFER_CATEGORY_TRACING) continue;
     
@@ -560,7 +564,7 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
 
     case ROCPROFILER_BUFFER_TRACING_MEMORY_COPY: 
       MemcpyEvent(header, &event);
-      break;
+       break;
 
     default: continue;
     } // switch
@@ -654,7 +658,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
   rocprofiler_start_context(utility_context_);
   VLOG(0) << "rocprofiler start utilityContext";
 
-  constexpr auto buffer_size_bytes = 4096;
+  constexpr auto buffer_size_bytes = 4*4096;
   constexpr auto buffer_watermark_bytes = buffer_size_bytes - (buffer_size_bytes / 8);
 
   // Utility context to gather code‑object info
@@ -675,7 +679,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
     context_, ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH, nullptr, 0, buffer_);
 
   rocprofiler_configure_buffer_tracing_service(
-    context_, ROCPROFILER_BUFFER_TRACING_MEMORY_COPY, nullptr, 0, buffer_);
+     context_, ROCPROFILER_BUFFER_TRACING_MEMORY_COPY, nullptr, 0, buffer_);
 
   auto client_thread = rocprofiler_callback_thread_t{};
   rocprofiler_create_callback_thread(&client_thread);
