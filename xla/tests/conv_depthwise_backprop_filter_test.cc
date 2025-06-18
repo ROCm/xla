@@ -239,11 +239,6 @@ ENTRY main {
 }
 
 XLA_TEST_F(HloTestBase, DepthwiseBatchOuterDot) {
-  auto cc = backend().default_stream_executor()->GetDeviceDescription().
-              gpu_compute_capability();
-  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
-    GTEST_SKIP() << "Not enough memory to allocate on ROCm.";
-  }
   const std::string hlo_string = R"(
 HloModule main, entry_computation_layout={(f32[8,30,1,64,5]{3,0,2,1,4},f32[8,30,30,64,3]{3,0,2,1,4})->f32[30,30,64,1,11]{2,3,1,0,4}}
 
