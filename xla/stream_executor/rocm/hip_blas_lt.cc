@@ -164,7 +164,7 @@ absl::Status BlasLt::Init() {
   TF_RETURN_IF_ERROR(SetAttr(hip_layout, HIPBLASLT_MATRIX_LAYOUT_BATCH_COUNT,
                              static_cast<int32_t>(m.batch_size)));
 
-  VLOG(2) << "BlasLt::MatrixLayout::Create type: " << (int)type
+  LOG(INFO) << "BlasLt::MatrixLayout::Create type: " << (int)type
           << " rows: " << m.num_rows << " cols: " << m.num_cols
           << " batch_size: " << m.batch_size
           << " leading_dim_stride: " << m.leading_dim_stride
@@ -293,8 +293,12 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
 
 auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
     -> absl::StatusOr<MatmulPlanPtr> {
-  auto lhs_layout = cfg.lhs_layout, rhs_layout = cfg.rhs_layout,
-       output_layout = cfg.output_layout, c_layout = cfg.c_layout;
+  LOG(INFO) << "Enter GetMatmulPlan()...";
+
+  auto lhs_layout = cfg.lhs_layout;
+  auto rhs_layout = cfg.rhs_layout;
+  auto output_layout = cfg.output_layout;
+  auto c_layout = cfg.c_layout;
 
   // cublasLt matmul requires batch sizes to be equal. If only one operand has a
   // batch, the other will be broadcast (as its batch_stride == 0).
@@ -311,16 +315,17 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
   // this is only true if A and B are column-major. If A is row-major, A must
   // *not* be transposed, and if B is row-major, B must be transposed. We never
   // transpose A or B, and expect the caller to ensure A is row-major and B is
-  // column when A and B are FP8.
-  auto trans_a = lhs_layout.transpose, trans_b = rhs_layout.transpose;
+  // column-major when A and B are FP8.
+  auto trans_a = lhs_layout.transpose;
+  auto trans_b = rhs_layout.transpose;
 
   if (xla::primitive_util::IsF8Type(lhs_layout.dtype) &&
       lhs_layout.order == gpu::MatrixLayout::Order::kColumnMajor) {
-    return xla::Internal("The F8 LHS must be column-major");
+    return xla::Internal("The F8 LHS must be row-major");
   }
   if (xla::primitive_util::IsF8Type(rhs_layout.dtype) &&
       rhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
-    return xla::Internal("The F8 RHS must be row-major");
+    return xla::Internal("The F8 RHS must be column-major");
   }
 
   TF_ASSIGN_OR_RETURN(auto output_dtype,
@@ -334,11 +339,24 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
                             output_layout.dtype, cfg.compute_precision));
   }
 
+  if (lhs_layout.order == gpu::MatrixLayout::Order::kColumnMajor) {
+    LOG(INFO) << "Matmul LHS kColumnMajor";
+  } else if (lhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
+    LOG(INFO) << "Matmul LHS kRowMajor";
+  }
+  if (rhs_layout.order == gpu::MatrixLayout::Order::kColumnMajor) {
+    LOG(INFO) << "Matmul RHS kColumnMajor";
+  } else if (rhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
+    LOG(INFO) << "Matmul RHS kRowMajor";
+  }
+
   if (lhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
+    LOG(INFO) << "Transpose LHS...";
     trans_a = blas::Transpose::kTranspose;
     lhs_layout.Transpose();
   }
   if (rhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
+    LOG(INFO) << "Transpose RHS...";
     trans_b = blas::Transpose::kTranspose;
     rhs_layout.Transpose();
   }
@@ -356,6 +374,46 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
       SetAttr(op_desc.get(), HIPBLASLT_MATMUL_DESC_A_SCALE_MODE, MXScaleType));
   TF_RETURN_IF_ERROR(
       SetAttr(op_desc.get(), HIPBLASLT_MATMUL_DESC_B_SCALE_MODE, MXScaleType));
+
+  LOG(INFO) << "LHS...";
+  LOG(INFO) << "lhs_layout.batch_size: " << lhs_layout.batch_size;
+  LOG(INFO) << "lhs_layout.num_rows: " << lhs_layout.num_rows;
+  LOG(INFO) << "lhs_layout.num_cols: " << lhs_layout.num_cols;
+  if (lhs_layout.order == gpu::MatrixLayout::Order::kColumnMajor) {
+    LOG(INFO) << "Matmul LHS kColumnMajor";
+  } else if (lhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
+    LOG(INFO) << "Matmul LHS kRowMajor";
+  }
+  LOG(INFO) << "lhs_layout.leading_dim_stride: "
+            << lhs_layout.leading_dim_stride;
+  LOG(INFO) << "lhs_layout.batch_stride: " << lhs_layout.batch_stride;
+  if (lhs_layout.transpose == blas::Transpose::kNoTranspose) {
+    LOG(INFO) << "lhs_layout.transpose: blas::Transpose::kNoTranspose";
+  } else if (lhs_layout.transpose == blas::Transpose::kTranspose) {
+    LOG(INFO) << "lhs_layout.transpose: blas::Transpose::kTranspose";
+  } else if (lhs_layout.transpose == blas::Transpose::kConjugateTranspose) {
+    LOG(INFO) << "lhs_layout.transpose: blas::Transpose::kConjugateTranspose";
+  }
+
+  LOG(INFO) << "RHS...";
+  LOG(INFO) << "rhs_layout.batch_size: " << rhs_layout.batch_size;
+  LOG(INFO) << "rhs_layout.num_rows: " << rhs_layout.num_rows;
+  LOG(INFO) << "rhs_layout.num_cols: " << rhs_layout.num_cols;
+  if (rhs_layout.order == gpu::MatrixLayout::Order::kColumnMajor) {
+    LOG(INFO) << "Matmul RHS kColumnMajor";
+  } else if (rhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
+    LOG(INFO) << "Matmul RHS kRowMajor";
+  }
+  LOG(INFO) << "rhs_layout.leading_dim_stride: "
+            << rhs_layout.leading_dim_stride;
+  LOG(INFO) << "rhs_layout.batch_stride: " << rhs_layout.batch_stride;
+  if (rhs_layout.transpose == blas::Transpose::kNoTranspose) {
+    LOG(INFO) << "rhs_layout.transpose: blas::Transpose::kNoTranspose";
+  } else if (rhs_layout.transpose == blas::Transpose::kTranspose) {
+    LOG(INFO) << "rhs_layout.transpose: blas::Transpose::kTranspose";
+  } else if (rhs_layout.transpose == blas::Transpose::kConjugateTranspose) {
+    LOG(INFO) << "rhs_layout.transpose: blas::Transpose::kConjugateTranspose";
+  }
 
   TF_ASSIGN_OR_RETURN(auto a_desc, MatrixLayout::Create(lhs_layout));
   TF_ASSIGN_OR_RETURN(auto b_desc, MatrixLayout::Create(rhs_layout));

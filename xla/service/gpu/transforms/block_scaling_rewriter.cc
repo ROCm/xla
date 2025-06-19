@@ -541,7 +541,7 @@ bool IsSupportedByHipblaslt(const Shape& lhs_shape, const Shape& rhs_shape,
 // Build HLO for hipblaslt custom call op.
 absl::StatusOr<XlaOp> BuildHipblasltScaledDot(
     XlaOp lhs_input, XlaOp rhs_input, XlaOp lhs_scale, XlaOp rhs_scale,
-    const DotDimensionNumbers& dnums, const PrimitiveType result_type,
+    const PrimitiveType result_type,
     const se::DeviceDescription& device_description) {
   // Calculate output shape.
   XlaBuilder& builder = *lhs_input.builder();
@@ -602,7 +602,7 @@ absl::StatusOr<XlaOp> BuildBlockScaledDotForROCm(
       IsSupportedByHipblaslt(lhs_input->shape(), rhs_input->shape(),
                              lhs_scale->shape(), rhs_scale->shape())) {
     return BuildHipblasltScaledDot(lhs_op, rhs_op, lhs_scale_op, rhs_scale_op,
-                                   dnums, result_type, device_description);
+                                   result_type, device_description);
   }
 
   // Fallback solution: build general dot op.

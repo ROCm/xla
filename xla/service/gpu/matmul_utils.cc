@@ -118,6 +118,8 @@ absl::StatusOr<Shape> GetBatchRowColumnShape(
 
 // Returns the matrix layout for a logical shape (batch, rows, columns).
 /*static*/ absl::StatusOr<MatrixLayout> MatrixLayout::For(const Shape& shape) {
+  LOG(INFO) << "Enter MatrixLayout::For()...";
+  LOG(INFO) << "shape: " << shape.ToString();
   TF_RET_CHECK(shape.dimensions().size() == 3);
   TF_RET_CHECK(shape.has_layout());
 
@@ -157,6 +159,12 @@ absl::StatusOr<Shape> GetBatchRowColumnShape(
       break;
     default:
       return Unimplemented("batch in most minor dimension");
+  }
+
+  if (order == Order::kColumnMajor) {
+    LOG(INFO) << "order: kColumnMajor";
+  } else if (order == Order::kRowMajor) {
+    LOG(INFO) << "order: kRowMajor";
   }
 
   if (batch_size == 1) {
