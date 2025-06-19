@@ -34,7 +34,7 @@ class BlockScalingRewriterHipblasltTest : public GpuCodegenTest {
   }
 };
 
-TEST_F(BlockScalingRewriterHipblasltTest, Mxfp8xx) {
+TEST_F(BlockScalingRewriterHipblasltTest, Mxfp8) {
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
