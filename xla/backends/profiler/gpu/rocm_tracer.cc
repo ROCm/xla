@@ -429,6 +429,11 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
 
   if (isKernelApi(rec.operation)) {
   }
+
+  // VLOG(0) << "HIP API: device: " << ev->device_id 
+  //             << " stream: " << ev->stream_id
+  //             << " corr: " << ev->correlation_id
+  //             << " name: " << ev->name;
 }
 
 typedef struct rocprofiler_stream_id_t
@@ -471,14 +476,38 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
   const auto& src_gpu = agents_[static_cast<uint32_t>(rec.src_agent_id.handle)],
             & dst_gpu = agents_[static_cast<uint32_t>(rec.dst_agent_id.handle)];
 
+  // Assign device_id based on copy direction
+  if (ev->type == RocmTracerEventType::MemcpyH2D &&
+    dst_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
+    ev->device_id = dst_gpu.id.handle; // Destination is GPU
+  } else if (ev->type == RocmTracerEventType::MemcpyD2H &&
+            src_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
+    ev->device_id = src_gpu.id.handle; // Source is GPU
+  } else if (ev->type == RocmTracerEventType::MemcpyD2D ||
+            ev->type == RocmTracerEventType::MemcpyP2P) {
+    ev->device_id = dst_gpu.id.handle; // Prefer destination GPU for D2D/P2P
+  } else {
+    // Fallback for MemcpyOther or HOST_TO_HOST
+    if (dst_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
+      ev->device_id = dst_gpu.id.handle;
+    } else if (src_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
+      ev->device_id = src_gpu.id.handle;
+    } else {
+      LOG(WARNING) << "No GPU ID available for memory copy operation: " << ev->name
+                  << ", src_agent_type=" << src_gpu.type
+                  << ", dst_agent_type=" << dst_gpu.type;
+      ev->device_id = 0; // Invalid ID or default
+    }
+  }
+
   ev->source = RocmTracerEventSource::Activity;
   ev->domain = RocmTracerEventDomain::HIP_OPS;
   ev->annotation = "??";
   ev->roctx_range = "??";
   ev->start_time_ns = rec.start_timestamp;
   ev->end_time_ns = rec.end_timestamp;
-  ev->device_id = src_gpu.id.handle;
-  VLOG(-1) << "device id = " << ev->device_id;
+  // ev->device_id = src_gpu.id.handle;   // could be CPU id
+  // ev->device_id = dst_gpu.id.handle;
   ev->correlation_id = rec.correlation_id.internal;
   ev->thread_id = rec.thread_id;
   ev->stream_id = RocmTracerEvent::kInvalidStreamId;   // rec.stream_id.handle; // we do not know valid stream ID for memcpy
@@ -499,6 +528,12 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
       ev->name = "MemcpyP2P"; 
     }
   }
+
+  VLOG(0) << "Memcpy: device: " << ev->device_id 
+              << " stream: " << ev->stream_id
+              << " corr: " << ev->correlation_id
+              << " name: " << ev->name;
+
 }
 
 void RocmTracer::KernelEvent(const rocprofiler_record_header_t *hdr,
@@ -536,11 +571,11 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t *hdr,
   auto it = kernel_info_.find(kinfo.kernel_id);
   if (it != kernel_info_.end()) ev->name = it->second.name;
 
-  VLOG(0) << "Kernel: device: " << ev->device_id 
-              << " stream: " << ev->stream_id
-              << " corr: " << ev->correlation_id
-              << " dispatch: " << rec.dispatch_info.dispatch_id
-              << " name: " << ev->name;
+  // VLOG(0) << "Kernel: device: " << ev->device_id 
+  //             << " stream: " << ev->stream_id
+  //             << " corr: " << ev->correlation_id
+  //             << " dispatch: " << rec.dispatch_info.dispatch_id
+  //             << " name: " << ev->name;
 }
 
 void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
@@ -561,8 +596,8 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
   {
     RocmTracerEvent event;
     auto header = headers[i];
-    VLOG(-1) << "category: " << RocProfBufferCategory(header->category)
-             << " kind: " << RocProfBufferKind(header->kind);
+    // VLOG(-1) << "category: " << RocProfBufferCategory(header->category)
+    //          << " kind: " << RocProfBufferKind(header->kind);
 
     if (header->category != ROCPROFILER_BUFFER_CATEGORY_TRACING) continue;
     
@@ -678,8 +713,8 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
   rocprofiler_start_context(utility_context_);
   VLOG(0) << "rocprofiler start utilityContext";
 
-  constexpr auto buffer_size_bytes = 100 * 4096; // 16*4096;
-  constexpr auto buffer_watermark_bytes = 90 * 4096; // buffer_size_bytes - (buffer_size_bytes / 15);
+  constexpr auto buffer_size_bytes = 10 * 4096; // 16*4096;
+  constexpr auto buffer_watermark_bytes = 4 * 4096; // buffer_size_bytes - (buffer_size_bytes / 15);
 
   // Utility context to gather code‑object info
   rocprofiler_create_context(&context_);
