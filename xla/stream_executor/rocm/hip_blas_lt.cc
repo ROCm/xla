@@ -458,9 +458,15 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
     return absl::InternalError(
         "Algorithm must be set before calling DoMatMul!");
   }
-  DeviceMemoryBase a = args.a, b = args.b;
+  DeviceMemoryBase a = args.a;
+  DeviceMemoryBase b = args.b;
+  DeviceMemoryBase a_scale = args.a_scale;
+  DeviceMemoryBase b_scale = args.b_scale;
   if (must_swap_operands_) {
     std::swap(a, b);
+    if (a_scale != nullptr && b_scale != nullptr) {
+      std::swap(a_scale, b_scale);
+    }
   }
 
   auto blas_lt = static_cast<BlasLt*>(gpu::BlasLt::Get(stream));
@@ -507,15 +513,15 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
     }
 
 #if TF_ROCM_VERSION >= 60000
-    if (args.a_scale != nullptr) {
+    if (a_scale != nullptr) {
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
-                                 args.a_scale.opaque()));
+                                 a_scale.opaque()));
     }
-    if (args.b_scale != nullptr) {
+    if (b_scale != nullptr) {
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
-                                 args.b_scale.opaque()));
+                                 b_scale.opaque()));
     }
     if (args.c_scale != nullptr) {
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
@@ -528,8 +534,8 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
                                  args.d_scale.opaque()));
     }
 #else
-    if (!(args.a_scale == nullptr && args.b_scale == nullptr &&
-          args.c_scale == nullptr && args.d_scale == nullptr)) {
+    if (!(a_scale == nullptr && b_scale == nullptr && args.c_scale == nullptr &&
+          args.d_scale == nullptr)) {
       return absl::InternalError("hipblaslt does not support scale");
     }
 #endif
