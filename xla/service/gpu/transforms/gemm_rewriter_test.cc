@@ -254,12 +254,23 @@ ENTRY main {
   ROOT reduce.102 = f32[3,64,13]{2,1,0} reduce(convert.101, constant.66), dimensions={2}, to_apply=region_5.50
 }
 )";
-  // Make sure the dot is lowered to a custom call. There is an algebraic
-  // simplifier simplification which could turn the dot into a non-canonical dot
-  // late in the pipeline, which will make it unsupported by the GemmRewriter.
-  MatchOptimizedHlo(hlo_string, R"(
-  // CHECK: custom_call_target="__cublas$gemm"
-  )");
+auto gpu_cc = backend()
+                  .default_stream_executor()
+                  ->GetDeviceDescription()
+                  .gpu_compute_capability();
+bool is_rocm =
+    std::holds_alternative<stream_executor::RocmComputeCapability>(gpu_cc);
+// Make sure the dot is lowered to a custom call. There is an algebraic
+// simplifier simplification which could turn the dot into a non-canonical dot
+// late in the pipeline, which will make it unsupported by the GemmRewriter.
+const std::string cuda_call_target_string =
+      R"(CHECK: custom_call_target="__cublas$gemm")";
+const std::string rocm_call_target_string =
+      R"(CHECK: custom_call_target="__cublas$lt$matmul")";
+const std::string call_target_string = is_rocm ?
+                                        rocm_call_target_string :
+                                        cuda_call_target_string;
+MatchOptimizedHlo(hlo_string, call_target_string);
 }
 
 TEST_F(GemmRewriteTest, DotWithBias) {
