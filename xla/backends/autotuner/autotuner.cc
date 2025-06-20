@@ -87,6 +87,9 @@ absl::StatusOr<Autotuner::Config> Autotuner::GetBestConfig(
     if (executables[i].ok()) {
       valid_configs.push_back(std::move(supported_configs[i]));
       valid_executables.push_back(std::move(executables[i].value()));
+    } else {
+      VLOG(2) << "Failed to compile config " << i << ": "
+              << executables[i].status();
     }
   }
   VLOG(1) << "Successfully compiled " << valid_configs.size()
@@ -170,6 +173,7 @@ std::vector<absl::StatusOr<std::unique_ptr<Executable>>> Autotuner::CompileAll(
       executables.emplace_back(
           config.codegen_backend->Compile(*instr, *config.backend_config));
     }
+    LOG(INFO) << "YOLO executables: " << executables.size();
     return executables;
   }
 

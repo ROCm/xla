@@ -58,6 +58,7 @@ limitations under the License.
 #include "xla/service/dump.h"
 #include "xla/service/float_support.h"
 #include "xla/service/gpu/alias_info.h"
+#include "xla/service/gpu/autotuning/autotuner_pass.h"
 #include "xla/service/gpu/autotuning/autotuner_util.h"
 #include "xla/service/gpu/autotuning/conv_algorithm_picker.h"
 #include "xla/service/gpu/autotuning/gemm_algorithm_picker.h"
@@ -95,6 +96,7 @@ limitations under the License.
 #include "xla/stream_executor/cuda/compilation_options.h"
 #include "xla/stream_executor/cuda/compilation_provider.h"
 #include "xla/stream_executor/cuda/compilation_provider_options.h"
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/cuda/cuda_diagnostics.h"
 #include "xla/stream_executor/cuda/cuda_platform_id.h"
 #include "xla/stream_executor/cuda/cuda_solver_context.h"
@@ -102,7 +104,10 @@ limitations under the License.
 #include "xla/stream_executor/dnn.h"
 #include "xla/stream_executor/semantic_version.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/threadpool.h"
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
@@ -363,9 +368,16 @@ absl::Status NVPTXCompiler::AddGemmFusionAutotuningPasses(
     HloPassPipeline* pipeline, HloModule* hlo_module,
     AutotuneConfig& autotune_config, tsl::thread::ThreadPool* thread_pool,
     const MultiProcessKeyValueStore& key_value_store,
-    const se::SemanticVersion& toolkit_version) {
-  pipeline->AddPass<GemmFusionAutotuner>(autotune_config, toolkit_version,
-                                         thread_pool, key_value_store);
+    const se::SemanticVersion& toolkit_version,
+    se::StreamExecutor* stream_executor) {
+  if (hlo_module->config()
+          .debug_options()
+          .xla_gpu_experimental_use_autotuner_pass()) {
+    pipeline->AddPass<AutotunerPass>(stream_executor, thread_pool);
+  } else {
+    pipeline->AddPass<GemmFusionAutotuner>(autotune_config, toolkit_version,
+                                           thread_pool, key_value_store);
+  }
   return absl::OkStatus();
 }
 
