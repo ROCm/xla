@@ -69,7 +69,7 @@ using tsl::profiler::XSpace;
 class GpuTracer : public profiler::ProfilerInterface {
  public:
   GpuTracer(RocmTracer* rocm_tracer) : rocm_tracer_(rocm_tracer) {
-    VLOG(-1) << "GpuTracer created.";
+    VLOG(3) << "GpuTracer created.";
   }
   ~GpuTracer() override {}
 
@@ -131,7 +131,6 @@ absl::Status GpuTracer::DoStart() {
       GetRocmTraceCollectorOptions(rocm_tracer_->NumGpus());
   rocm_trace_collector_ = CreateRocmCollector(
     trace_collector_options, start_walltime_ns, start_gputime_ns);
-  VLOG(-1) << "cj401 RocmTraceCollector created." << rocm_trace_collector_.get();
   RocmTracerOptions tracer_options = GetRocmTracerOptions();
   rocm_tracer_->Enable(tracer_options, rocm_trace_collector_.get());
   // rocm_tracer_->Enable(rocm_trace_collector_.get());
