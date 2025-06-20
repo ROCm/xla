@@ -335,6 +335,14 @@ void PopulateWithRandomFloatingPointData<tsl::float8_e8m0fnu, float>(
   }
 }
 
+template <>
+void PopulateWithRandomFloatingPointData<tsl::float4_e2m1fn, float>(
+    Literal* literal, std::minstd_rand0* engine) {
+  for (tsl::float4_e2m1fn& value : literal->data<tsl::float4_e2m1fn>()) {
+    value = static_cast<tsl::float4_e2m1fn>(0.5f);
+  }
+}
+
 template <typename FloatT>
 void PopulateWithFloatingPointData(
     Literal* literal, std::minstd_rand0* engine, bool no_duplicates,

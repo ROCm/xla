@@ -443,7 +443,7 @@ absl::StatusOr<XlaOp> BuildBlockScaledDotForCUDA(
 }
 
 // Convert scaled dot custom call to HLO computation for CUDA platform.
-absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForCUDA(
+absl::StatusOr<HloInstruction*> CudaExpandBlockScaledDotCustomCall(
     HloInstruction* instruction, const bool allow_cudnn) {
   PrimitiveType result_type = instruction->shape().element_type();
 
@@ -619,7 +619,7 @@ absl::StatusOr<XlaOp> BuildBlockScaledDotForROCm(
 }
 
 // Convert scaled dot custom call to HLO computation for ROCm platform.
-absl::StatusOr<HloInstruction*> ExpandBlockScaledDotCustomCallForROCm(
+absl::StatusOr<HloInstruction*> RocmExpandBlockScaledDotCustomCall(
     HloInstruction* instruction, const bool allow_hipblaslt,
     const se::DeviceDescription& device_description) {
   PrimitiveType result_type = instruction->shape().element_type();
@@ -693,10 +693,10 @@ absl::StatusOr<HloInstruction*> BlockScalingRewriter::ExpandInstruction(
   }
   if (instruction->custom_call_target() == kBlockScaledDotCustomCallTarget) {
     if (IsCuda()) {
-      return ExpandBlockScaledDotCustomCallForCUDA(instruction, allow_cudnn_);
+      return CudaExpandBlockScaledDotCustomCall(instruction, allow_cudnn_);
     } else if (IsRocm()) {
-      return ExpandBlockScaledDotCustomCallForROCm(
-          instruction, allow_hipblaslt_, device_description_);
+      return RocmExpandBlockScaledDotCustomCall(instruction, allow_hipblaslt_,
+                                                device_description_);
     }
   }
   LOG(FATAL) << "Unexpected custom call target: "
