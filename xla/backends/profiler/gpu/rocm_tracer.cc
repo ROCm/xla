@@ -517,7 +517,7 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
     .async = false,
   };
 
-  VLOG(0) << "copy bytes: " << ev->memcpy_info.num_bytes
+  VLOG(3) << "copy bytes: " << ev->memcpy_info.num_bytes
           << " stream: " << ev->stream_id
           << " src_id " << ev->device_id << " dst_id " << ev->memcpy_info.destination;
 
@@ -529,7 +529,7 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
     }
   }
 
-  VLOG(0) << "Memcpy: device: " << ev->device_id 
+  VLOG(3) << "Memcpy: device: " << ev->device_id 
               << " stream: " << ev->stream_id
               << " corr: " << ev->correlation_id
               << " name: " << ev->name;
@@ -617,13 +617,6 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
     default: continue;
     } // switch
 
-    // Increment event count for the GPU associated with this event
-    {
-      std::lock_guard<tsl::mutex> count_lk(event_counts_mutex_);
-      uint32_t gpu_id = event.device_id; // Assuming RocmTracerEvent has gpu_id field
-      gpu_event_counts_[gpu_id]++;
-    }
-
     std::lock_guard<tsl::mutex> lk(collector_mutex_);
     if (collector()) {
       collector()->AddEvent(std::move(event), false);
@@ -686,7 +679,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
   // Gather agent info
   num_gpus_ = 0;
   for (const auto& agent : GetGpuDeviceAgents()) {
-    VLOG(0) <<"agent id = " << agent.id.handle 
+    VLOG(3) <<"agent id = " << agent.id.handle 
              << ", dev = " << agent.device_id 
              << ", name = " << (agent.name ? agent.name : "null");
     agents_[agent.id.handle] = agent;
@@ -769,17 +762,6 @@ void RocmTracer::Disable() {
   std::lock_guard<tsl::mutex> lk(collector_mutex_);
   collector_->Flush();
   collector_ = nullptr;
-
-  //print GPU event counts
-  std::lock_guard<tsl::mutex> count_lk(event_counts_mutex_);
-  VLOG(-1) << "GPU Event Counts:\n";
-  for (const auto& pair : gpu_event_counts_) {
-      VLOG(-1) << "GPU " << pair.first << ": " << pair.second << " events\n";
-  }
-  if (gpu_event_counts_.empty()) {
-      VLOG(-1) << "No events recorded for any GPU.\n";
-  }
-
   VLOG(-1) << "GpuTracer stopped"; 
 }
 

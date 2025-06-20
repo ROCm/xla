@@ -155,7 +155,7 @@ void PrintRocmTracerEvent(const RocmTracerEvent& event,
   DCHECK(false);
   break;
   }
-  VLOG(-1) << oss.str() << ' ' << message;
+  VLOG(3) << oss.str() << ' ' << message;
 }
 
 uint64_t get_timestamp() {
@@ -245,7 +245,8 @@ class RocmTraceCollectorImpl : public profiler::RocmTraceCollector {
 
   void OnEventsDropped(const std::string& reason,
                        uint32_t correlation_id) override {
-    LOG(INFO) << "RocmTracerEvent dropped (correlation_id=" << correlation_id
+                        // TO BE UPDATED WITH ROCPROFILER-SDK FOR DROP EVENTS
+    VLOG(3) << "RocmTracerEvent dropped (correlation_id=" << correlation_id
               << ",) : " << reason << ".";
   }
 
@@ -397,7 +398,7 @@ XEvent *PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
           // to CUDA
           "kind:", "Unknown", " size:", memcpy_info.num_bytes,
           " dest:", memcpy_info.destination, " async:", memcpy_info.async);
-      VLOG(0) << "Add Memcpy stat bytes: " << memcpy_details;
+      VLOG(3) << "Add Memcpy stat bytes: " << memcpy_details;
 
       xevent.AddStatValue(
           *plane->GetOrCreateStatMetadata(
@@ -733,7 +734,7 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
   XPlaneBuilder host_plane(FindOrAddMutablePlaneWithName(
       space, tsl::profiler::kRoctracerApiPlaneName));
 
-  VLOG(0) << "Calling RocmTraceCollectorImpl::Export num_gpus "  << num_gpus_;
+  VLOG(3) << "Calling RocmTraceCollectorImpl::Export num_gpus "  << num_gpus_;
 
   for (int id = 0; id < num_gpus_; id++) {
     std::string name = GpuPlaneName(id);
