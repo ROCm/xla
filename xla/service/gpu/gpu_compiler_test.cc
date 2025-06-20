@@ -698,6 +698,8 @@ ENTRY main {
                     .gpu_compute_capability();
   bool is_cuda =
       std::holds_alternative<stream_executor::CudaComputeCapability>(gpu_cc);
+  bool is_rocm =
+      std::holds_alternative<stream_executor::RocmComputeCapability>(gpu_cc);
   auto cuda_cc = backend()
                      .default_stream_executor()
                      ->GetDeviceDescription()
@@ -712,6 +714,9 @@ ENTRY main {
       lhs_name, rhs_name);
   const std::string cublaslt_keep_types = absl::Substitute(
       R"(CHECK: custom-call($0{{[^)]*}}, $1{{[^)]*}}){{.*}}custom_call_target="__cublas$$lt$$matmul$$f8")",
+      lhs_name, rhs_name);
+  const std::string cublaslt_keep_types_nof8 = absl::Substitute(
+      R"(CHECK: custom-call(f16{{[^)]*}}, f16{{[^)]*}}){{.*}}custom_call_target="__cublas$$lt$$matmul")",
       lhs_name, rhs_name);
   const std::string cublas_convert_to_f16 =
       R"(CHECK: custom-call(f16{{[^)]*}}, f16{{[^)]*}}){{.*}}custom_call_target="__cublas$gemm")";
@@ -750,7 +755,7 @@ ENTRY main {
         ((rocm_cc.has_ocp_fp8_support() || cuda_cc.IsAtLeastHopper()) &&
          !(lhs_type == F8E5M2 && rhs_type == F8E5M2))
             ? cublaslt_keep_types
-            : cublas_convert_to_f16;
+            : (is_rocm ? cublaslt_keep_types_nof8 : cublas_convert_to_f16);
 
     TF_ASSERT_OK_AND_ASSIGN(bool filecheck_matched,
                             RunFileCheck(optimized_module_no_triton->ToString(),
