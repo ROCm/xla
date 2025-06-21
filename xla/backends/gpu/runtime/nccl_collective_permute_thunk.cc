@@ -317,9 +317,9 @@ absl::Status RunCollectivePermute(
     //VLOG(0) << "Total bufs: " << buffers.size();
     if(0)
     {
-    int idx = 0;
-    const auto buffer = buffers.at(idx);
-    return NcclCollectiveThunk::RunDebugCollective(stream,
+      int idx = 0;
+      const auto buffer = buffers.at(idx);
+      return NcclCollectiveThunk::RunDebugCollective(stream,
           src_addrs.at(idx), dest_addrs.at(idx),
           buffer.element_type, buffer.element_count);
     }

@@ -113,6 +113,26 @@ GpuCommandBuffer::GpuCommandBuffer(Mode mode, StreamExecutor* parent)
   execution_scopes_.try_emplace(kDefaultExecutionScope);
 }
 
+GpuCommandBuffer::GpuCommandBuffer(const GpuCommandBuffer& rhs, bool) 
+  : mode_(rhs.mode_), //state_(rhs.state_), 
+    parent_(rhs.parent_)
+    // execution_scopes_(rhs.execution_scopes_)
+{
+  // HACK HACK HACK
+  for (const auto& [id, scope] : rhs.execution_scopes_) {
+    auto& es = execution_scopes_[id];
+
+    // TODO: need to find in clone !!
+    es.nodes = scope.nodes;
+    es.barriers = scope.barriers;
+
+    // es.conditional_command_buffers = scope.conditional_command_buffers;
+
+    // Tracks execution scope update state.
+    es.update_state = {};
+  }
+}
+
 GpuCommandBuffer::Dependencies GpuCommandBuffer::GetBarrier(
     ExecutionScopeId execution_scope_id) {
   ExecutionScope& execution_scope = execution_scopes_[execution_scope_id];
@@ -396,11 +416,11 @@ absl::StatusOr<size_t> GpuCommandBuffer::GetNumChildNodes() const {
 
 auto GpuCommandBuffer::GetChildNodes() const 
                 -> absl::StatusOr<const ChildNodes *> {
-  if (child_nodes_.empty()) {
+  //if (child_nodes_.empty()) {
     TF_ASSIGN_OR_RETURN(auto count, GraphGetNodes(nullptr));
     child_nodes_.resize(count);
     TF_ASSIGN_OR_RETURN(count, GraphGetNodes(&child_nodes_));
-  }
+  //}
   return &child_nodes_;
 }
 
@@ -412,24 +432,19 @@ absl::Status GpuCommandBuffer::AddNestedCommandBuffer(
   const auto& gpu_cmd = static_cast< const GpuCommandBuffer& >(nested);
   TF_ASSIGN_OR_RETURN(auto *child_nodes, gpu_cmd.GetChildNodes());
 
+  // if (child_nodes->size() > 2) {
+  //   VLOG(0) << "Nodes to be updated: " << child_nodes->size();
+  // }
+
 #if EXTRACT_CHILD_NODES_FROM_GRAPH
   for(size_t i = 0; i < child_nodes->size(); i++) {
 
     if (state_ == State::kUpdate) {
-      // if(child_nodes->size()>0)
-      // VLOG(0) << std::this_thread::get_id() << 
-      //     " zupdating node #" << i
-      //     <<  " node ptr: " << (*child_nodes)[i];
       auto node = execution_scope.
                         nodes[execution_scope.update_state.node_idx++].handle;
       TF_RETURN_IF_ERROR(UpdateChildNodeInMainGraph((*child_nodes)[i], node));
 
     } else if(state_ == State::kCreate) {
-
-      // if(child_nodes->size()>0)
-      // VLOG(0) << std::this_thread::get_id() << 
-      //     " zcreating node #" << i
-      //     <<  " node ptr: " << (*child_nodes)[i];
 
       if(i > 0) { // Nodes offset for a newly created barrier.
         size_t nodes_offset = execution_scope.nodes.size();
@@ -446,14 +461,10 @@ absl::Status GpuCommandBuffer::AddNestedCommandBuffer(
       return UnsupportedStateError(state_);
     }
   } // for i
-  
   return absl::OkStatus();
 #else // embedd subgraphs
   // Updates child graph node in the executable graph.
   if (state_ == State::kUpdate) {
-    // auto node = execution_scope.
-    //                     nodes[execution_scope.update_state.node_idx++].handle;
-    // return GpuDriver::GraphExecChildNodeSetParams(exec_, node, child_graph);
     GraphNodeHandle node =
         execution_scope.nodes[execution_scope.update_state.node_idx++].handle;
     return UpdateChildNode(node, nested);
@@ -821,7 +832,7 @@ absl::Status GpuCommandBuffer::Finalize() {
 
     uint64_t end_nanos = tsl::Env::Default()->NowNanos();
 
-    VLOG(0) << "Instantiated executable graph #" << NotifyExecCreated()
+    VLOG(1) << "Instantiated executable graph #" << NotifyExecCreated()
             << " in " << (end_nanos - start_nanos) / 1000 << " μs"
             << "; execution_scopes: " << execution_scopes_.size()
             << "; nodes: " << num_nodes
@@ -858,14 +869,18 @@ absl::Status GpuCommandBuffer::Update() {
     return absl::InternalError(
         "Command buffer has to be finalized first before it can be updated");
   }
-  VLOG(1) << "Begin update of"
-          << (mode_ == Mode::kPrimary ? "primary" : "nested")
-          << " command buffer " << this;
 
+  size_t num = 0;
   state_ = State::kUpdate;
   for (auto& [_, execution_scope] : execution_scopes_) {
     execution_scope.update_state = ExecutionScope::UpdateState();
+    num += execution_scope.nodes.size();
   }
+
+  VLOG(1) << "Begin update of "
+          << (mode_ == Mode::kPrimary ? "primary" : "nested")
+          << " command buffer " << this << " #nodes " << num;
+
   return absl::OkStatus();
 }
 

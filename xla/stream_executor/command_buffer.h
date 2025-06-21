@@ -42,7 +42,7 @@ limitations under the License.
 // updated ever iteration
 #define USE_SMALL_CMDBUF_UPDATES 1
 // Whether to to use subgraphs or extract child nodes directly to the main graph
-#define EXTRACT_CHILD_NODES_FROM_GRAPH 0
+#define EXTRACT_CHILD_NODES_FROM_GRAPH 1
 
 #define CMD_BUF_THUNK_ENABLE_TIMING 0
 
@@ -379,6 +379,11 @@ class CommandBuffer {
   virtual absl::StatusOr<size_t> GetNumChildNodes() const {
     LOG(FATAL) << "GetNumChildNodes is not supported!";
   }
+
+  virtual absl::StatusOr<std::unique_ptr<CommandBuffer>> Clone() {
+    LOG(FATAL) << "Cloning is not supported!";
+  } 
+
   //--------------------------------------------------------------------------//
   // Command buffer tracing API
   //--------------------------------------------------------------------------//

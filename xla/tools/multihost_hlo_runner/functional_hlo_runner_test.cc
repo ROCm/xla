@@ -207,7 +207,7 @@ TEST_F(FunctionalHloRunnerTest, shard8) {
   raw_compile_options.num_replicas = 1;
   raw_compile_options.num_partitions = 8;
   FunctionalHloRunner::RunningOptions running_options;
-  running_options.num_repeats = 5;
+  running_options.num_repeats = 15;
   running_options.module_argument_mode =
       FunctionalHloRunner::ModuleArgumentMode::kUninitialized;
 
@@ -240,7 +240,7 @@ TEST_F(FunctionalHloRunnerTest, shard4) {
   raw_compile_options.num_replicas = 1;
   raw_compile_options.num_partitions = 4;
   FunctionalHloRunner::RunningOptions running_options;
-  running_options.num_repeats = 10;
+  running_options.num_repeats = 20;
   running_options.module_argument_mode =
       FunctionalHloRunner::ModuleArgumentMode::kUninitialized;
 
@@ -303,7 +303,7 @@ TEST_F(FunctionalHloRunnerTest, rep) {
   FunctionalHloRunner::RawCompileOptions raw_compile_options;
   raw_compile_options.spmd_mode =
       FunctionalHloRunner::SpmdMode::kUseSpmdPartitioning;
-  raw_compile_options.num_replicas = 4;
+  raw_compile_options.num_replicas = 8;
   raw_compile_options.num_partitions = 1;
   FunctionalHloRunner::RunningOptions running_options;
   running_options.num_repeats = 10;

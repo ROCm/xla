@@ -98,6 +98,8 @@ class GpuCommandBuffer : public CommandBuffer {
 
   GpuCommandBuffer(Mode mode, StreamExecutor* parent);
 
+  GpuCommandBuffer(const GpuCommandBuffer& rhs, bool);
+
   using CommandBuffer::Barrier;
   absl::Status Barrier(ExecutionScopeId execution_scope_id) override;
 

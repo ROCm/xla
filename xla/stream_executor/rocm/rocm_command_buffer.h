@@ -47,12 +47,20 @@ class RocmCommandBuffer : public GpuCommandBuffer {
 
   ~RocmCommandBuffer() override;
 
+  absl::StatusOr<std::unique_ptr<CommandBuffer>> Clone() override; 
+
  private:
   RocmCommandBuffer(Mode mode, StreamExecutor* parent, hipGraph_t graph,
                     bool is_owned_graph)
       : GpuCommandBuffer(mode, parent),
         graph_(graph),
         is_owned_graph_(is_owned_graph) {}
+
+  RocmCommandBuffer(const RocmCommandBuffer& rhs, hipGraph_t cloned_graph) 
+      : GpuCommandBuffer(rhs, true),
+        graph_(cloned_graph),
+        is_owned_graph_(rhs.is_owned_graph_) {}
+
 
   absl::Status LaunchSetIfConditionKernel(
       ExecutionScopeId execution_scope_id,

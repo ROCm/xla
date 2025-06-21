@@ -113,21 +113,33 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
     }
     if (!should_update) {
       active_graph_ = id % NumCachedGraphs;
-      // if(params.stream->parent()->device_ordinal()==0)
-      // VLOG(0) << "Setting active graph to: " << active_graph_;
       return false;
     }
   }
+
   // otherwise, we change the active graph to the LRU one ??
   active_graph_ = (active_graph_ + NumCachedGraphs-1) % NumCachedGraphs;
+  if (cached_graphs_[active_graph_] == nullptr) { // only 0th is created by default
+    auto s = cached_graphs_[0]->Clone();
+    if (!s.ok()) {
+      VLOG(0) << "Graph clone failed: " << s.status().message();
+      return true;
+    }
+    cached_graphs_[active_graph_] = std::move(s).value();
+  }
+
+  // if (cached_graphs_[0]->state() == se::CommandBuffer::State::kFinalized) {
+  //   active_graph_ = 0;
+  // }
+
   if(params.stream->parent()->device_ordinal()==0) 
    VLOG(0) << "Recording to new active graph: " << active_graph_;
 
   // then there is no need to allocate graph earlier in AddNew function..
   // NOTE: well using params.stream->parent() is not very clean..
-  auto command_buffer =
-        params.stream->parent()->CreateCommandBuffer(se::CommandBuffer::Mode::kPrimary).value();
-  cached_graphs_[active_graph_] = std::move(command_buffer);
+  // auto command_buffer =
+  //       params.stream->parent()->CreateCommandBuffer(se::CommandBuffer::Mode::kPrimary).value();
+  // cached_graphs_[active_graph_] = std::move(command_buffer);
 
   auto& recorded = recorded_allocs_[active_graph_];
   // We check only allocations referenced by commands in a cmd sequence, and
@@ -183,20 +195,69 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
   // We might end up with empty command sequence if all of the captured fusions
   // are no-op (e.g. memcpy of size 0) and we have no emitted thunks for them.
   if (commands_.empty()) return absl::OkStatus();
+  se::StreamExecutor* executor = params.stream->parent();
+    int device_id = executor->device_ordinal();
 
+  // VLOG(3) << "dev: " << device_id << "-------------- Starting ExecuteOnStream";
 #if CMD_BUF_THUNK_ENABLE_TIMING
   uint64_t xstart = tsl::Env::Default()->NowMicros();
 #endif
 
-  se::StreamExecutor* executor = params.stream->parent();
   TF_ASSIGN_OR_RETURN(std::shared_ptr<ExecutorCommandBuffer> cmd_buffer,
                       GetOrCreateCommandBuffer(executor,
                             commands_.maximal_index()));
 
   absl::MutexLock lock(&cmd_buffer->mutex);
 
-  if (cmd_buffer->ShouldUpdateCommandBuffer(commands_, params)) {
-    VLOG(3) << "Update command buffer on device #" << executor->device_ordinal()
+  bool update_needed = cmd_buffer->ShouldUpdateCommandBuffer(commands_, params);
+
+  auto* device_assn = params.collective_params->device_assn;
+  int64_t num_local_participants = 0;
+
+  if (device_assn != nullptr) {
+    auto run_id = params.collective_params->run_id;
+    auto rendezvous_key = std::tuple{run_id, 11123}; //, clique_key_};
+    auto rendezvous_name = absl::StrFormat(
+        "ThunkRendezvous run_id=%d", run_id.ToInt());
+
+    // Assume that all participants execute locally first, if we have a local
+    // device id to global device id map we will use it to get the real number of
+    // participating local devices.
+    num_local_participants =
+        device_assn->replica_count() * device_assn->computation_count();
+
+    auto dev_map = params.collective_params->global_device_id_map;
+    if (dev_map != nullptr) {
+      auto d2l_map = device_assn->GetDeviceToLogicalIdMap();
+  
+      num_local_participants = 0;
+      for (const auto& [local_id, global_id] : *dev_map) {
+        num_local_participants += d2l_map.contains(global_id);
+      }
+      if (num_local_participants == 0) {
+        return absl::InternalError(
+          "Cound't find the number of local participants");
+      }
+    }
+    auto IDstatus = Rendezvous<absl::StatusOr<bool>>(
+      rendezvous_name, rendezvous_key, 
+      update_needed, num_local_participants,
+      [&](auto values) -> bool {
+        for(auto v : values) {
+          if (*v) return true;
+        }
+        return false;
+      },  /*warn_stuck_timeout=*/absl::Seconds(5)); //TerminateTimeout());
+    if (!IDstatus.ok()) {
+      LOG(FATAL) << rendezvous_name << ": " << IDstatus.status();
+    }
+    update_needed = *IDstatus.value();
+  } // device_assn
+
+// TF_RETURN_IF_ERROR(params.stream->BlockHostUntilDone());
+
+  if (update_needed) {
+    VLOG(3) << "Update command buffer on device #" << device_id
             << " by recoding command buffer cmd sequence after "
             << cmd_buffer->num_executions << " executions since last update"
             << "; num_commands=" << commands_.size();
@@ -204,7 +265,7 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
     TraceMe trace([&] {
       cmd_buffer->mutex.AssertHeld();
       return TraceMeEncode("command_buffer::update",
-                           {{"device", executor->device_ordinal()},
+                           {{"device", device_id},
                             {"num_commands", commands_.size()},
                             {"num_executions", cmd_buffer->num_executions}});
     });
@@ -212,43 +273,69 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
     uint64_t start_micros = tsl::Env::Default()->NowMicros();
 
     CommandBufferCmd::RecordParams record_params = {cmd_buffer->state};
-    TF_RETURN_IF_ERROR(commands_.Record(params, record_params,
-                                        cmd_buffer->ActiveGraph()));
+    auto s = commands_.Record(params, record_params,
+                                        cmd_buffer->ActiveGraph());
+    if (!s.ok()) {
+      VLOG(0) << "++++++++++++++++++ Oops: " << s.message();
+      return s;
+    }
+
+    // if (num_local_participants > 0) {
+    //   auto run_id = params.collective_params->run_id;
+    //   auto rendezvous_key = std::tuple{run_id, 777}; //, clique_key_};
+    //   auto rendezvous_name = absl::StrFormat(
+    //     "ThunkRendezvous2 run_id=%d", run_id.ToInt());
+
+    //   Rendezvous(
+    //     rendezvous_name, rendezvous_key, 
+    //     num_local_participants,
+    //     /*warn_stuck_timeout=*/absl::Seconds(5)); //TerminateTimeout());
+    // }
 
     uint64_t end_micros = tsl::Env::Default()->NowMicros();
     auto ss = (double)(end_micros - start_micros)/1e6;
+    //if(device_id==0)
 #if CMD_BUF_THUNK_ENABLE_TIMING
     VLOG(0)
 #else
     VLOG(3)
 #endif
-       << "dev: " << executor->device_ordinal() << " updated command buffer in " << ss
-            << " sec; num_commands=" << commands_.size();
+       << "dev: " << device_id << " updated command buffer in " << ss
+            << " sec; this: " << cmd_buffer->ActiveGraph();
     cmd_buffer->num_executions = 0;
+
+  } else {
+    VLOG(3)  << "dev: " << device_id << " no update needed!!";
   }
 
   ++cmd_buffer->num_executions;
 
-  VLOG(3) << "Execute command buffer on device #" << executor->device_ordinal()
+  VLOG(3) << "Execute command buffer on device #" << device_id
           << "; num_executions=" << cmd_buffer->num_executions;
 
   TraceMe trace([&] {
     cmd_buffer->mutex.AssertHeld();
     return TraceMeEncode("command_buffer::execute",
-                         {{"device", executor->device_ordinal()},
+                         {{"device", device_id},
                           {"num_commands", commands_.size()},
                           {"num_executions", cmd_buffer->num_executions}});
   });
 
   auto s = cmd_buffer->ActiveGraph()->Submit(params.stream);
 #if CMD_BUF_THUNK_ENABLE_TIMING
-  params.stream->BlockHostUntilDone();
+  TF_RETURN_IF_ERROR(params.stream->BlockHostUntilDone());
   uint64_t xend = tsl::Env::Default()->NowMicros();
 
   auto ss = (double)(xend - xstart)/1e6;
   VLOG(0) << executor->device_ordinal() << " total exec time " << ss
             << " sec; num_commands=" << commands_.size();
 #endif
+
+    if (!s.ok()) {
+      VLOG(0) << "++++++++++++++++++ Oops: " << s.message();
+      return s;
+    }
+  // VLOG(3) << executor->device_ordinal() << " submitted OK";
   return s;
 }
 
@@ -267,11 +354,18 @@ CommandBufferThunk::GetOrCreateCommandBuffer(se::StreamExecutor* executor,
       executor, std::make_shared<ExecutorCommandBuffer>());
 
   for (int64_t i = 0; i < NumCachedGraphs; i++) {
-    // Create a new empty command buffer.
-    TF_ASSIGN_OR_RETURN(
-        auto command_buffer,
+    std::unique_ptr<se::CommandBuffer> cmdbuf;
+    //if (i == 0) HACK 
+    { // only create 1 buf by default
+      TF_ASSIGN_OR_RETURN(
+        cmdbuf,
         executor->CreateCommandBuffer(se::CommandBuffer::Mode::kPrimary));
-    it->second->AddNew(i, max_index, std::move(command_buffer));
+    }
+    it->second->AddNew(i, max_index, std::move(cmdbuf));
+  }
+  if (NumCachedGraphs >= 2) {
+    // In this case we start filling graph 0 on update
+    it->second->SetActiveGraph(1);
   }
   return it->second; // active graph is 0 by default
 }

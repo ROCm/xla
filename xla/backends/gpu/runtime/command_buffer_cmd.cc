@@ -505,11 +505,17 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     const BufferAllocations* buffer_allocation, 
     se::Stream* stream, TraceFunc trace_func) {
 
-  //if (entries_[0].command_buffer == nullptr) {
-    // size_t i = 1;
-    // for(i = 1; i < entries_.size(); i++) {
-    //   if(entries_[i].command_buffer == nullptr) break;
-    // }
+  auto shift_right = [&](size_t i) -> Entry& {
+    if (i == 0) return entries_[0];
+    Entry entry = std::move(entries_[i]);
+    do {
+      entries_[i] = std::move(entries_[i - 1]);
+    } while (--i > 0);
+    return entries_[0] = std::move(entry);
+  };
+  // shift_right(entries_.size() - 1);
+
+
     // VLOG(0) << trace_cmd_->ToString() << " dev " << stream->parent()->device_ordinal() <<
     //     " -- retracing ! #filled: " << i;
     TF_ASSIGN_OR_RETURN(
@@ -537,17 +543,17 @@ absl::Status TracedCommandBufferCmd::AddTracedCommandBuffer(
 
   // It would be nice for TracedCommandBufferCmd to combine GetIfTraced with
   // IsGraphUpdateNeeded() to return a pointer to traced_cmd already!
+#if 0
   auto *traced_cmd = GetTracedBuffer(record_params);
-
-  // TF_ASSIGN_OR_RETURN(
-  //    auto nested_cmd,
-  //      traced_cmd->GetOrTraceCommandBuffer(execute_params.buffer_allocations,
-  //              execute_params.command_buffer_trace_stream, trace_func));
-
+  TF_ASSIGN_OR_RETURN(
+     auto nested_cmd,
+       traced_cmd->GetOrTraceCommandBuffer(execute_params.buffer_allocations,
+               execute_params.command_buffer_trace_stream, trace_func));
+#else
   TF_ASSIGN_OR_RETURN(auto nested_cmd,
           se::TraceCommandBufferFactory::Create(
                     execute_params.command_buffer_trace_stream, trace_func));
-  
+#endif
   ExecutionScopeId execution_scope_id = GetExecutionScope(record_params);
   VLOG(5) << "Add nested command buffer to execution scope: "
           << execution_scope_id.value();
@@ -2009,6 +2015,9 @@ absl::Status CollectivePermuteCmd::Record(const Thunk::ExecuteParams& execute_pa
                   *execute_params.collective_cliques, config().replica_groups,
                   config().group_mode, nccl_stream_id(), GetAsyncStreamKind()));
 
+  if (command_buffer->state() != se::CommandBuffer::State::kCreate) {
+    // VLOG(0) << 
+  }
 
 
   return AddTracedCommandBuffer(

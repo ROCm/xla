@@ -235,9 +235,13 @@ bool NcclCollectiveThunk::RunFakeCollective(se::Stream& stream) {
           PrimitiveType dtype, size_t count) {
     
   size_t sz = primitive_util::ByteWidth(dtype) * count;
+#if 0
   auto res = qcclRunDebugKernel(se::gpu::AsGpuStreamValue(&stream),
         (const uint8_t *)src.opaque(), sz, 
         (uint8_t *)dst.opaque(), sz);
+#else
+  auto res = qcclSyncGPUs(se::gpu::AsGpuStreamValue(&stream));
+#endif
   return res == QCCL_Result::OK ? absl::OkStatus() 
                     : absl::InternalError("qcclRunDebugKernel failed!");
 }

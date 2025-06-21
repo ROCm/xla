@@ -122,7 +122,7 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
 
 
 #define DO_REFERENCE_CHECK 0
-#define NUM_REPLICAS_TO_RUN 4 // set to 0 to use single GPU
+#define NUM_REPLICAS_TO_RUN 2 // set to 0 to use single GPU
 #define USE_SPECIAL_ARGUMENTS 0
 #define USE_PSEUDO_RANDOM false
 #define USE_RANDOM_LARGE_RANGE false

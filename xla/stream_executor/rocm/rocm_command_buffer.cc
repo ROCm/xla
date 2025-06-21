@@ -51,7 +51,6 @@ limitations under the License.
 #include "tsl/platform/path.h"
 #include "tsl/platform/statusor.h"
 
-
 #define GPU_GRAPH_API_DEBUG 0
 namespace stream_executor::gpu {
 namespace {
@@ -342,6 +341,18 @@ absl::Status RocmCommandBuffer::UpdateKernelNode(
                   "Failed to set HIP graph kernel node params");
 }
 
+static std::string MemsetNodeStr(const hipMemsetParams& p)
+{
+  std::ostringstream s;
+  s << "dst: " << p.dst
+    << " elementSize: " << p.elementSize
+    << " height: " << p.height
+    << " pitch: " << p.pitch
+    << " value: " << p.value
+    << " width: " << p.width;
+  return s.str();
+}
+
 absl::StatusOr< GraphNodeHandle > RocmCommandBuffer::CopyChildNodeToMainGraph(
           GraphNodeHandle child_node, const Dependencies& dependencies) {
 
@@ -377,9 +388,14 @@ absl::StatusOr< GraphNodeHandle > RocmCommandBuffer::CopyChildNodeToMainGraph(
     TF_RETURN_IF_ERROR(ToStatus(wrap::hipGraphAddMemsetNode(&hmain, graph_, 
                                   deps.data(), deps.size(), &params), 
             "CopyChildNodeToMainGraph failed creating memset node"));
-    // VLOG(0) << "Added child memset node: "<< hchild << " -> " << hmain;
+    // VLOG(0) << this << " added child memset node: "<< hchild << " -> " << hmain
+    //         << " params " << MemsetNodeStr(params);
     return FromHipGraphHandle(hmain);
   }
+}
+
+__attribute__((noinline)) void ZZZZ(int ii) {
+  if (ii == 123123123) exit(0);
 }
 
 absl::Status RocmCommandBuffer::UpdateChildNodeInMainGraph(
@@ -387,33 +403,64 @@ absl::Status RocmCommandBuffer::UpdateChildNodeInMainGraph(
 
   auto hchild = ToHipGraphHandle(child_node),
        hmain = ToHipGraphHandle(main_node);
-  
+
+        hipGraphNodeType t1{hipGraphNodeTypeCount}, t2{hipGraphNodeTypeCount};
+        (void)hipGraphNodeGetType(hchild, &t1);
+        (void)hipGraphNodeGetType(hmain, &t2);
+
+        // VLOG(0) << "node params: exec node: " << hchild 
+        //     << '(' << t1 << ") -> " << hmain << '(' << t2 << ')';
+
+
   {
     hipKernelNodeParams params;
     auto s = wrap::hipGraphKernelNodeGetParams(hchild, &params);
+
     if (s == hipSuccess) {
-
       s = wrap::hipGraphExecKernelNodeSetParams(exec_, hmain, &params);
-      // if (s != hipSuccess) {
-
-      //   hipGraphNodeType t1{hipGraphNodeTypeCount}, t2{hipGraphNodeTypeCount};
-      //   (void)hipGraphNodeGetType(hchild, &t1);
-      //   (void)hipGraphNodeGetType(hmain, &t2);
-
-      //   VLOG(0) << "Failed setting exec node params: exec node: " << hchild 
-      //       << '(' << t1 << ") -> " << hmain << '(' << t2 << ')';
-      // }
       return ToStatus(s);
     }
   }
   {
     hipMemsetParams params;
-    TF_RETURN_IF_ERROR(ToStatus(
+    auto s = ToStatus(
           wrap::hipGraphMemsetNodeGetParams(hchild, &params),
-          "UpdateChildNodeInMainGraph failed getting memset node params"));
-    return ToStatus(wrap::hipGraphExecMemsetNodeSetParams(exec_, hmain, &params), 
+          "UpdateChildNodeInMainGraph failed getting memset node params");
+    TF_RETURN_IF_ERROR(s);
+
+    // params.dst = nullptr;
+    // (void)hipHostAlloc(&params.dst, 16*1024*1024, hipHostAllocPortable);
+    // VLOG(0) << "Allocd " << params.dst;
+    // params.dst = new uint8_t[16*1024*1024];
+
+    auto hs = wrap::hipGraphExecMemsetNodeSetParams(exec_, hmain, &params);
+    s = ToStatus(hs, 
             "UpdateChildNodeInMainGraph failed setting memset node params");
+    if (!s.ok()) {
+      VLOG(0) << this << " update failed hmain: " << hmain << " " << MemsetNodeStr(params);
+      ZZZZ((int)hs);
+      // wrap::hipGraphExecMemsetNodeSetParams(exec_, hmain, &params);
+    } else {
+      // VLOG(0) << this << " update hmain OK: " << hmain << " " << MemsetNodeStr(params) ;
+    }
+    return s;//absl::OkStatus();
   }
+}
+
+absl::StatusOr<std::unique_ptr<CommandBuffer>> RocmCommandBuffer::Clone() {
+
+  hipGraph_t cloned_graph{};
+  TF_RETURN_IF_ERROR(
+      ToStatus(hipGraphClone(&cloned_graph, graph_), 
+          "Failed to clone graph!"));
+  
+  auto cloned_buf = std::unique_ptr<RocmCommandBuffer>(
+      new RocmCommandBuffer(*this, cloned_graph));
+
+  if (this->state() == State::kFinalized) {
+    TF_RETURN_IF_ERROR(cloned_buf->Finalize());
+  }
+  return cloned_buf;
 }
 
 absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateBarrierNode(
