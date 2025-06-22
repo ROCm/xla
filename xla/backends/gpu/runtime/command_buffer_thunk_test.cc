@@ -705,8 +705,8 @@ TEST(CommandBufferThunkTest, GemmCmd) {
       ShapeUtil::MakeShape(PrimitiveType::F32, {4, 3}), {}, {0},
       ShapeUtil::MakeShape(PrimitiveType::F32, {2, 3}), 1.0, 0.0, 0.0,
       PrecisionConfig::ALG_UNSET, std::nullopt,
-      se::blas::kDefaultComputePrecision, false, false,
-      false stream_executor->GetDeviceDescription().gpu_compute_capability());
+      se::blas::kDefaultComputePrecision, false, false, false,
+      stream_executor->GetDeviceDescription().gpu_compute_capability());
   ASSERT_TRUE(config.ok());
 
   // Prepare commands sequence for constructing command buffer.
