@@ -62,12 +62,6 @@ namespace gpu {
 absl::StatusOr<Shape> GetBatchRowColumnShape(
     const Shape& shape, absl::Span<const int64_t> batch_dims,
     absl::Span<const int64_t> row_dims, absl::Span<const int64_t> col_dims) {
-  
-  auto SpanToShape = [](const absl::Span<const int64_t> span) {
-    Shape shape = Shape(PrimitiveType::S64, span);
-    return shape;
-  };
-
   TF_RET_CHECK(shape.has_layout());
 
   std::vector<int64_t> minor_to_major;
@@ -118,8 +112,6 @@ absl::StatusOr<Shape> GetBatchRowColumnShape(
 
 // Returns the matrix layout for a logical shape (batch, rows, columns).
 /*static*/ absl::StatusOr<MatrixLayout> MatrixLayout::For(const Shape& shape) {
-  LOG(INFO) << "Enter MatrixLayout::For()...";
-  LOG(INFO) << "shape: " << shape.ToString();
   TF_RET_CHECK(shape.dimensions().size() == 3);
   TF_RET_CHECK(shape.has_layout());
 
@@ -159,12 +151,6 @@ absl::StatusOr<Shape> GetBatchRowColumnShape(
       break;
     default:
       return Unimplemented("batch in most minor dimension");
-  }
-
-  if (order == Order::kColumnMajor) {
-    LOG(INFO) << "order: kColumnMajor";
-  } else if (order == Order::kRowMajor) {
-    LOG(INFO) << "order: kRowMajor";
   }
 
   if (batch_size == 1) {
@@ -293,12 +279,6 @@ absl::StatusOr<bool> CanFoldTransposeOperandIntoDot(const HloInstruction& dot,
     PrecisionConfig::Algorithm precision_algorithm,
     std::optional<int64_t> algorithm, int64_t compute_precision, bool grad_x,
     bool grad_y, bool mx_mode, const se::GpuComputeCapability& gpu_version) {
-
-  auto SpanToShape = [](const absl::Span<const int64_t> span) {
-    Shape shape = Shape(PrimitiveType::S64, span);
-    return shape;
-  };
-
   absl::Span<const int64_t> lhs_col_dims = lhs_contracting_dims;
   TF_ASSIGN_OR_RETURN(
       std::vector<int64_t> lhs_row_dims,

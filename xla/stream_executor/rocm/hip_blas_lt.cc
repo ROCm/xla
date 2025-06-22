@@ -164,7 +164,7 @@ absl::Status BlasLt::Init() {
   TF_RETURN_IF_ERROR(SetAttr(hip_layout, HIPBLASLT_MATRIX_LAYOUT_BATCH_COUNT,
                              static_cast<int32_t>(m.batch_size)));
 
-  LOG(INFO) << "BlasLt::MatrixLayout::Create type: " << (int)type
+  VLOG(2) << "BlasLt::MatrixLayout::Create type: " << (int)type
           << " rows: " << m.num_rows << " cols: " << m.num_cols
           << " batch_size: " << m.batch_size
           << " leading_dim_stride: " << m.leading_dim_stride
@@ -440,8 +440,6 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
     } else {
       workspace_addr = args.workspace.opaque();
       size_t new_size = args.workspace.size();
-      LOG(INFO) << "new_size: " << new_size;
-      LOG(INFO) << "workspace_size: " << workspace_size;
       TF_RET_CHECK(workspace_addr != nullptr && new_size >= workspace_size);
       workspace_size = new_size;
     }
