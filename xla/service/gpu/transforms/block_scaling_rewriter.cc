@@ -78,7 +78,7 @@ absl::StatusOr<HloInstruction*> ExpandInstructionWithGemmConfigUsingBuilder(
   }
   if (target != nullptr) {
     xla::gpu::GemmBackendConfig gemm_cfg;
-    gemm_cfg.set_selected_algorithm(0);
+    gemm_cfg.set_mx_mode(true);
     *gemm_cfg.mutable_dot_dimension_numbers() = dnums;
     gemm_cfg.set_alpha_real(1.0);
     gemm_cfg.set_alpha_imag(0.0);

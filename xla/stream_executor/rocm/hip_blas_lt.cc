@@ -179,13 +179,13 @@ absl::Status BlasLt::Init() {
 /*static*/ absl::StatusOr<BlasLt::MatmulDesc> BlasLt::MatmulDesc::Create(
     blas::ComputationType compute_type, blas::DataType scale_type,
     blas::Transpose trans_a, blas::Transpose trans_b, Epilogue epilogue,
-    PointerMode pointer_mode) {
+    PointerMode pointer_mode, bool mx_mode) {
   hipblasLtMatmulDesc_t hip_desc;
   VLOG(2) << "BlasLt::MatmulDesc::Create compute_type: " << int(compute_type)
           << " scale_type: " << int(scale_type)
           << " epilogue: " << int(epilogue) << " trans_a: " << int(trans_a)
           << " trans_b: " << int(trans_b) << " pointer_mode "
-          << int(pointer_mode);
+          << int(pointer_mode) << "mx_mode: " << mx_mode;
   auto hip_scale_type = AsHipblasDataType(scale_type);
   auto hip_compute_type = AsHipblasComputeType(compute_type);
   SE_HIPBLAS_RETURN_IF_ERROR(wrap::hipblasLtMatmulDescCreate(
@@ -195,7 +195,7 @@ absl::Status BlasLt::Init() {
       static_cast<int32_t>(epilogue) & static_cast<int32_t>(Epilogue::kBias);
   // Wrap hipblas handle immediately, so it is cleaned up if an error occurs.
   BlasLt::MatmulDesc desc(hip_desc, hip_compute_type, hip_scale_type,
-                          bias_flag != 0);
+                          bias_flag != 0, mx_mode);
   if (pointer_mode != PointerMode::kHost) {
     return absl::InternalError("hipblaslt does not support device pointers");
   }
@@ -261,13 +261,14 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
                                  &dummy_pointer));
     }
 
-    // Hardcoding for MX data types
-    hipblasLtMatmulMatrixScale_t MXScaleType =
-        HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0;
-    TF_RETURN_IF_ERROR(
-        SetAttr(op_desc_.get(), HIPBLASLT_MATMUL_DESC_A_SCALE_MODE, MXScaleType));
-    TF_RETURN_IF_ERROR(
-        SetAttr(op_desc_.get(), HIPBLASLT_MATMUL_DESC_B_SCALE_MODE, MXScaleType));
+    if (op_desc_.mx_mode()) {
+      hipblasLtMatmulMatrixScale_t MXScaleType =
+          HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0;
+      TF_RETURN_IF_ERROR(SetAttr(
+          op_desc_.get(), HIPBLASLT_MATMUL_DESC_A_SCALE_MODE, MXScaleType));
+      TF_RETURN_IF_ERROR(SetAttr(
+          op_desc_.get(), HIPBLASLT_MATMUL_DESC_B_SCALE_MODE, MXScaleType));
+    }
 
     int found_algorithm_count = 0;
     auto error = wrap::hipblasLtMatmulAlgoGetHeuristic(
@@ -293,8 +294,6 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
 
 auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
     -> absl::StatusOr<MatmulPlanPtr> {
-  LOG(INFO) << "Enter GetMatmulPlan()...";
-
   auto lhs_layout = cfg.lhs_layout;
   auto rhs_layout = cfg.rhs_layout;
   auto output_layout = cfg.output_layout;
@@ -339,80 +338,28 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
                             output_layout.dtype, cfg.compute_precision));
   }
 
-  if (lhs_layout.order == gpu::MatrixLayout::Order::kColumnMajor) {
-    LOG(INFO) << "Matmul LHS kColumnMajor";
-  } else if (lhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
-    LOG(INFO) << "Matmul LHS kRowMajor";
-  }
-  if (rhs_layout.order == gpu::MatrixLayout::Order::kColumnMajor) {
-    LOG(INFO) << "Matmul RHS kColumnMajor";
-  } else if (rhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
-    LOG(INFO) << "Matmul RHS kRowMajor";
-  }
-
   if (lhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
-    LOG(INFO) << "Transpose LHS...";
     trans_a = blas::Transpose::kTranspose;
     lhs_layout.Transpose();
   }
   if (rhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
-    LOG(INFO) << "Transpose RHS...";
     trans_b = blas::Transpose::kTranspose;
     rhs_layout.Transpose();
   }
 
   TF_ASSIGN_OR_RETURN(
       auto op_desc,
-      MatmulDesc::Create(*compute_type,
-                         gpu::GetScaleType(output_dtype, *compute_type),
-                         trans_a, trans_b, epilogue));
+      MatmulDesc::Create(
+          *compute_type, gpu::GetScaleType(output_dtype, *compute_type),
+          trans_a, trans_b, epilogue, PointerMode::kHost, cfg.mx_mode));
 
-  // Hardcoding for MX data types
-  hipblasLtMatmulMatrixScale_t MXScaleType =
-      HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0;
-  TF_RETURN_IF_ERROR(
-      SetAttr(op_desc.get(), HIPBLASLT_MATMUL_DESC_A_SCALE_MODE, MXScaleType));
-  TF_RETURN_IF_ERROR(
-      SetAttr(op_desc.get(), HIPBLASLT_MATMUL_DESC_B_SCALE_MODE, MXScaleType));
-
-  LOG(INFO) << "LHS...";
-  LOG(INFO) << "lhs_layout.batch_size: " << lhs_layout.batch_size;
-  LOG(INFO) << "lhs_layout.num_rows: " << lhs_layout.num_rows;
-  LOG(INFO) << "lhs_layout.num_cols: " << lhs_layout.num_cols;
-  if (lhs_layout.order == gpu::MatrixLayout::Order::kColumnMajor) {
-    LOG(INFO) << "Matmul LHS kColumnMajor";
-  } else if (lhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
-    LOG(INFO) << "Matmul LHS kRowMajor";
-  }
-  LOG(INFO) << "lhs_layout.leading_dim_stride: "
-            << lhs_layout.leading_dim_stride;
-  LOG(INFO) << "lhs_layout.batch_stride: " << lhs_layout.batch_stride;
-  if (lhs_layout.transpose == blas::Transpose::kNoTranspose) {
-    LOG(INFO) << "lhs_layout.transpose: blas::Transpose::kNoTranspose";
-  } else if (lhs_layout.transpose == blas::Transpose::kTranspose) {
-    LOG(INFO) << "lhs_layout.transpose: blas::Transpose::kTranspose";
-  } else if (lhs_layout.transpose == blas::Transpose::kConjugateTranspose) {
-    LOG(INFO) << "lhs_layout.transpose: blas::Transpose::kConjugateTranspose";
-  }
-
-  LOG(INFO) << "RHS...";
-  LOG(INFO) << "rhs_layout.batch_size: " << rhs_layout.batch_size;
-  LOG(INFO) << "rhs_layout.num_rows: " << rhs_layout.num_rows;
-  LOG(INFO) << "rhs_layout.num_cols: " << rhs_layout.num_cols;
-  if (rhs_layout.order == gpu::MatrixLayout::Order::kColumnMajor) {
-    LOG(INFO) << "Matmul RHS kColumnMajor";
-  } else if (rhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
-    LOG(INFO) << "Matmul RHS kRowMajor";
-  }
-  LOG(INFO) << "rhs_layout.leading_dim_stride: "
-            << rhs_layout.leading_dim_stride;
-  LOG(INFO) << "rhs_layout.batch_stride: " << rhs_layout.batch_stride;
-  if (rhs_layout.transpose == blas::Transpose::kNoTranspose) {
-    LOG(INFO) << "rhs_layout.transpose: blas::Transpose::kNoTranspose";
-  } else if (rhs_layout.transpose == blas::Transpose::kTranspose) {
-    LOG(INFO) << "rhs_layout.transpose: blas::Transpose::kTranspose";
-  } else if (rhs_layout.transpose == blas::Transpose::kConjugateTranspose) {
-    LOG(INFO) << "rhs_layout.transpose: blas::Transpose::kConjugateTranspose";
+  if (op_desc.mx_mode()) {
+    hipblasLtMatmulMatrixScale_t MXScaleType =
+        HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0;
+    TF_RETURN_IF_ERROR(SetAttr(
+        op_desc.get(), HIPBLASLT_MATMUL_DESC_A_SCALE_MODE, MXScaleType));
+    TF_RETURN_IF_ERROR(SetAttr(
+        op_desc.get(), HIPBLASLT_MATMUL_DESC_B_SCALE_MODE, MXScaleType));
   }
 
   TF_ASSIGN_OR_RETURN(auto a_desc, MatrixLayout::Create(lhs_layout));
