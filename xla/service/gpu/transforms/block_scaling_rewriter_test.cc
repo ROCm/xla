@@ -207,13 +207,9 @@ ENTRY main {
 class BlockScalingRewriterCudnnTest : public BlockScalingRewriterTest {
  protected:
   void SetUp() override {
-    if (!IsCuda()) {
-      GTEST_SKIP();
-    }
+    if (!IsCuda()) { GTEST_SKIP(); }
     auto cuda_cc = std::get<se::CudaComputeCapability>(GpuCapability());
-    if (!cuda_cc.IsAtLeastBlackwell()) {
-      GTEST_SKIP();
-    }
+    if (!cuda_cc.IsAtLeastBlackwell()) { GTEST_SKIP(); }
   };
 };
 
@@ -291,13 +287,9 @@ ENTRY main {
 class BlockScalingRewriterHipblasltTest : public BlockScalingRewriterTest {
  protected:
   void SetUp() override {
-    if (!IsRocm()) {
-      GTEST_SKIP();
-    }
+    if (!IsRocm()) { GTEST_SKIP(); }
     auto rocm_cc = std::get<se::RocmComputeCapability>(GpuCapability());
-    if (rocm_cc.gfx_version() != "gfx950") {
-      GTEST_SKIP();
-    }
+    if (rocm_cc.gfx_version() != "gfx950") { GTEST_SKIP(); }
   };
 };
 
