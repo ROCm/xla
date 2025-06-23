@@ -312,7 +312,7 @@ ENTRY main {
   CHECK: [[rhs:%.+]] = f8e4m3fn[16,256]{1,0} parameter(1)
   CHECK: [[lhs_scale:%.+]] = f8e8m0fnu[32,8]{1,0} parameter(2)
   CHECK: [[rhs_scale:%.+]] = f8e8m0fnu[16,8]{1,0} parameter(3)
-  CHECK: [[custom_call:%.+]] = (f16[32,16]{1,0}, s8[67108864]{0}) custom-call([[lhs]], [[rhs]], [[lhs_scale]], [[rhs_scale]]), custom_call_target="__hipblaslt$blockScaledDot"
+  CHECK: [[custom_call:%.+]] = (f16[32,16]{1,0}, s8[67108864]{0}) custom-call([[lhs]], [[rhs]], [[lhs_scale]], [[rhs_scale]]), custom_call_target="__cublas$lt$matmul$mx"
   CHECK: ROOT {{.+}} = f16[32,16]{1,0} get-tuple-element([[custom_call]]), index=0
 })");
 }
@@ -336,7 +336,7 @@ ENTRY main {
   CHECK: [[rhs:%.+]] = f8e4m3fn[1,16,256]{2,1,0} parameter(1)
   CHECK: [[lhs_scale:%.+]] = f8e8m0fnu[1,32,8]{2,1,0} parameter(2)
   CHECK: [[rhs_scale:%.+]] = f8e8m0fnu[1,16,8]{2,1,0} parameter(3)
-  CHECK: [[custom_call:%.+]] = (f16[1,32,16]{2,1,0}, s8[67108864]{0}) custom-call([[lhs]], [[rhs]], [[lhs_scale]], [[rhs_scale]]), custom_call_target="__hipblaslt$blockScaledDot"
+  CHECK: [[custom_call:%.+]] = (f16[1,32,16]{2,1,0}, s8[67108864]{0}) custom-call([[lhs]], [[rhs]], [[lhs_scale]], [[rhs_scale]]), custom_call_target="__cublas$lt$matmul$mx"
   CHECK: ROOT {{.+}} = f16[1,32,16]{2,1,0} get-tuple-element([[custom_call]]), index=0
 })");
 }

@@ -65,12 +65,12 @@ ENTRY main {
       hlo_string,
       BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
                            /*allow_hipblaslt=*/false),
-      "CHECK-NOT: __hipblaslt$blockScaledDot");
+      "CHECK-NOT: __cublas$lt$matmul$mx");
   RunAndFilecheckHloRewrite(
       hlo_string,
       BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
                            /*allow_hipblaslt=*/true),
-      "CHECK: __hipblaslt$blockScaledDot");
+      "CHECK: __cublas$lt$matmul$mx");
 }
 
 TEST_F(BlockScalingRewriterHipblasltTest, BatchedMxfp8) {
@@ -104,12 +104,12 @@ ENTRY main {
       hlo_string,
       BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
                            /*allow_hipblaslt=*/false),
-      "CHECK-NOT: __hipblaslt$blockScaledDot");
+      "CHECK-NOT: __cublas$lt$matmul$mx");
   RunAndFilecheckHloRewrite(
       hlo_string,
       BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
                            /*allow_hipblaslt=*/true),
-      "CHECK: __hipblaslt$blockScaledDot");
+      "CHECK: __cublas$lt$matmul$mx");
 }
 
 TEST_F(BlockScalingRewriterHipblasltTest, BatchedMxfp8_MixedTypes) {
@@ -143,12 +143,12 @@ ENTRY main {
       hlo_string,
       BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
                            /*allow_hipblaslt=*/false),
-      "CHECK-NOT: __hipblaslt$blockScaledDot");
+      "CHECK-NOT: __cublas$lt$matmul$mx");
   RunAndFilecheckHloRewrite(
       hlo_string,
       BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
                            /*allow_hipblaslt=*/true),
-      "CHECK: __hipblaslt$blockScaledDot");
+      "CHECK: __cublas$lt$matmul$mx");
 }
 
 TEST_F(BlockScalingRewriterHipblasltTest, BatchedMxfp4) {
@@ -182,12 +182,12 @@ ENTRY main {
       hlo_string,
       BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
                            /*allow_hipblaslt=*/false),
-      "CHECK-NOT: __hipblaslt$blockScaledDot");
+      "CHECK-NOT: __cublas$lt$matmul$mx");
   RunAndFilecheckHloRewrite(
       hlo_string,
       BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
                            /*allow_hipblaslt=*/true),
-      "CHECK: __hipblaslt$blockScaledDot");
+      "CHECK: __cublas$lt$matmul$mx");
 }
 
 TEST_F(BlockScalingRewriterHipblasltTest, BatchedMxfp4fp8) {
@@ -221,12 +221,12 @@ ENTRY main {
       hlo_string,
       BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
                            /*allow_hipblaslt=*/false),
-      "CHECK-NOT: __hipblaslt$blockScaledDot");
+      "CHECK-NOT: __cublas$lt$matmul$mx");
   RunAndFilecheckHloRewrite(
       hlo_string,
       BlockScalingRewriter(this->device_desc(), /*allow_cudnn=*/false,
                            /*allow_hipblaslt=*/true),
-      "CHECK: __hipblaslt$blockScaledDot");
+      "CHECK: __cublas$lt$matmul$mx");
 }
 
 }  // namespace

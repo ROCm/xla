@@ -71,7 +71,7 @@ absl::StatusOr<HloInstruction*> ExpandInstructionWithGemmConfigUsingBuilder(
   HloInstruction* target = nullptr;
   for (HloInstruction* instr : hlo_computation->instructions()) {
     if (instr->opcode() == HloOpcode::kCustomCall &&
-        instr->custom_call_target() == kHipblasltBlockScaledDotCallTarget) {
+        instr->custom_call_target() == kCublasLtMatmulMXCallTarget) {
       target = instr;
       break;
     }
@@ -570,7 +570,7 @@ absl::StatusOr<XlaOp> BuildHipblasltScaledDot(
       ShapeUtil::MakeTupleShape({result_shape, workspace_shape});
 
   // Build custom call to hipblaslt.
-  std::string custom_call_target{kHipblasltBlockScaledDotCallTarget};
+  std::string custom_call_target{kCublasLtMatmulMXCallTarget};
   XlaOp custom_call =
       CustomCall(&builder, custom_call_target,
                  {lhs_input, rhs_input, lhs_scale, rhs_scale}, output_shape);

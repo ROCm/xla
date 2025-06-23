@@ -217,7 +217,7 @@ bool MHACallHasDropout(absl::string_view fmha_call_name);
 extern const absl::string_view kCudnnBlockScaledDotCallTarget;
 
 // A call to hipblaslt for a block scaled dot.
-extern const absl::string_view kHipblasltBlockScaledDotCallTarget;
+extern const absl::string_view kCublasLtMatmulMXCallTarget;
 
 bool IsCustomCallToBlockScaledDot(const HloInstruction& hlo);
 
