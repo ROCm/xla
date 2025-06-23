@@ -251,7 +251,7 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
              layout.type() == HIP_R_8F_E4M3_FNUZ ||
              layout.type() == HIP_R_8F_E5M2 || layout.type() == HIP_R_8F_E4M3;
     };
-    if (IsFP8(a_desc_) && IsFP8(b_desc_)) {
+    if ((IsFP8(a_desc_) && IsFP8(b_desc_)) || op_desc_.mx_mode()) {
       static int64_t dummy_pointer = 0xACEBALL;
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
