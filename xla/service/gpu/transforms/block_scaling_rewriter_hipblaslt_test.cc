@@ -32,6 +32,21 @@ class BlockScalingRewriterHipblasltTest : public GpuCodegenTest {
   const auto& device_desc() const {
     return backend().default_stream_executor()->GetDeviceDescription();
   }
+
+  const auto& GpuCapability() const {
+    return device_desc().gpu_compute_capability();
+  }
+
+  bool IsRocm() const {
+    return std::holds_alternative<stream_executor::RocmComputeCapability>(
+        GpuCapability());
+  }
+
+  void SetUp() override {
+    if (!IsRocm()) { GTEST_SKIP(); }
+    auto rocm_cc = std::get<se::RocmComputeCapability>(GpuCapability());
+    if (rocm_cc.gfx_version() != "gfx950") { GTEST_SKIP(); }
+  };
 };
 
 TEST_F(BlockScalingRewriterHipblasltTest, Mxfp8) {
