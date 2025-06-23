@@ -121,42 +121,56 @@ absl::flat_hash_set<HloOpcode> TritonSupportedUnaryElementwiseOps(
 CodegenDecision IsTritonSupportedConversion(
     PrimitiveType output, PrimitiveType input,
     const se::GpuComputeCapability& gpu_version) {
+      VLOG(-1) << "Zoran IsTritonSupportedConversion 0";
   auto any_is = [=](PrimitiveType compare) {
     return input == compare || output == compare;
   };
-
+  VLOG(-1) << "Zoran IsTritonSupportedConversion 1";
   auto error_message = [&]() {
     return CodegenDecision::Forbid(
         absl::StrCat("Unsupported conversion in Triton: ",
                      primitive_util::LowercasePrimitiveTypeName(input), " to ",
                      primitive_util::LowercasePrimitiveTypeName(output)));
   };
-
+  VLOG(-1) << "Zoran IsTritonSupportedConversion 2";
   if (input != output && any_is(PrimitiveType::F8E4M3FN) &&
       std::holds_alternative<se::CudaComputeCapability>(gpu_version) &&
       !std::get<se::CudaComputeCapability>(gpu_version).IsAtLeastHopper()) {
     return error_message();
   }
-
+VLOG(-1) << "Zoran IsTritonSupportedConversion 3";
+/*
   if (input != output && any_is(PrimitiveType::F8E4M3FN) &&
       std::holds_alternative<se::RocmComputeCapability>(gpu_version)) {
     return error_message();
   }
+*/
+  auto unsupported_to_f16 = {PrimitiveType::F8E4M3FN, PrimitiveType::F8E5M2, PrimitiveType::F64};
+  if (output == PrimitiveType::F16 &&
+      std::holds_alternative<se::RocmComputeCapability>(gpu_version) &&
+      absl::c_linear_search(unsupported_to_f16, input)
+    ) {
+    return error_message();
+  }  
+
+
+  VLOG(-1) << "Zoran IsTritonSupportedConversion 4";
   bool is_f8_conversion =
       any_is(PrimitiveType::F8E4M3FN) && any_is(PrimitiveType::F8E5M2);
   bool is_f8 = any_is(PrimitiveType::F8E4M3FN) || any_is(PrimitiveType::F8E5M2);
   bool is_f16_or_f32 = any_is(PrimitiveType::F16) ||
                        any_is(PrimitiveType::BF16) ||
                        any_is(PrimitiveType::F32);
+  VLOG(-1) << "Zoran IsTritonSupportedConversion 5";
   if (input != output && is_f8 && !is_f8_conversion && !is_f16_or_f32) {
     return error_message();
   }
-
+  VLOG(-1) << "Zoran IsTritonSupportedConversion 6";
   if (IsTritonSupportedDataType(input, gpu_version) &&
       IsTritonSupportedDataType(output, gpu_version)) {
     return CodegenDecision::Allow();
   }
-
+  VLOG(-1) << "Zoran IsTritonSupportedConversion 7";
   return error_message();
 }
 
@@ -320,10 +334,12 @@ bool IsSupportedDotAlgorithm(PrecisionConfig::Algorithm algorithm) {
 CodegenDecision AreTypesSupportedByAlgUnsetDot(
     PrimitiveType input_type, PrimitiveType result_type,
     const se::GpuComputeCapability& gpu_version) {
+      VLOG(-1) << "Zoran: AreTypesSupportedByAlgUnsetDot 0 i type " << input_type << " o type " << result_type;
   if (input_type == F64 && result_type != F64) {
     return CodegenDecision::Forbid(
         "Dot operation only supports F64 result type for F64 input type.");
   }
+      VLOG(-1) << "Zoran: AreTypesSupportedByAlgUnsetDot 1";
 
   if (input_type == F8E4M3FN || result_type == F8E4M3FN) {
     if (auto* cuda_cc = std::get_if<se::CudaComputeCapability>(&gpu_version);
@@ -332,29 +348,41 @@ CodegenDecision AreTypesSupportedByAlgUnsetDot(
           "Dot operation for F8E4M3FN is not supported before Hopper.");
     }
   }
+        VLOG(-1) << "Zoran: AreTypesSupportedByAlgUnsetDot 2";
 
   auto supported_float_types = {BF16, F16, F32, F64, F8E5M2, F8E4M3FN};
   if (absl::c_linear_search(supported_float_types, input_type)) {
     return CodegenDecision::Allow();
   }
+      VLOG(-1) << "Zoran: AreTypesSupportedByAlgUnsetDot 3";
 
   if (input_type == S8 && result_type == S32) {
     return CodegenDecision::Allow();
   }
+      VLOG(-1) << "Zoran: AreTypesSupportedByAlgUnsetDot 4";
 
   auto partially_supported_signed_types = {S8, S16, S32, S64};
   if (absl::c_linear_search(partially_supported_signed_types, input_type)) {
+          VLOG(-1) << "Zoran: AreTypesSupportedByAlgUnsetDot 5";
+
     if (absl::c_linear_search(partially_supported_signed_types, result_type)) {
+            VLOG(-1) << "Zoran: AreTypesSupportedByAlgUnsetDot 6";
+
       return CodegenDecision::Forbid(
           "Dot operation does not support these signed integer types.");
     }
     if (primitive_util::IsFloatingPointType(result_type)) {
+            VLOG(-1) << "Zoran: AreTypesSupportedByAlgUnsetDot 7";
+
       return CodegenDecision::Forbid(
           "Dot operation does not support floating point input and signed "
           "integer result types.");
     }
+          VLOG(-1) << "Zoran: AreTypesSupportedByAlgUnsetDot 8";
+
     return CodegenDecision::Allow();
   }
+        VLOG(-1) << "Zoran: AreTypesSupportedByAlgUnsetDot 9";
 
   return CodegenDecision::Forbid("Unsupported types.");
 }
@@ -368,16 +396,18 @@ CodegenDecision AreDotAlgorithmInputAndOutputConversionsSupported(
     PrecisionConfig::Algorithm algorithm, PrimitiveType lhs_type,
     PrimitiveType rhs_type, PrimitiveType result_type,
     const se::GpuComputeCapability& gpu_version) {
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 0 ";
+  VLOG(-1) << "alg " << algorithm << " lhs " << lhs_type << " rhs " << rhs_type << " type " << result_type;
   if (algorithm == PrecisionConfig::ALG_UNSET) {
     return CodegenDecision::Allow();
   }
-
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 1";
   auto forbid = [&algorithm](absl::string_view message) {
     return CodegenDecision::Forbid(
         absl::StrCat(message, " for dot algorithm ",
                      PrecisionConfig::Algorithm_Name(algorithm)));
   };
-
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 2";
   absl::StatusOr<std::vector<PrimitiveType>> allowed_operands_types_or =
       algorithm_util::GetAllowedOperandsTypeForAlgorithm(algorithm);
   absl::StatusOr<PrimitiveType> expected_accumulator_type =
@@ -385,6 +415,7 @@ CodegenDecision AreDotAlgorithmInputAndOutputConversionsSupported(
   if (!allowed_operands_types_or.ok() || !expected_accumulator_type.ok()) {
     return forbid("Failed to recover operands types or accumulator type");
   }
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 3";
   CHECK(!allowed_operands_types_or->empty());
 
   if (result_type != *expected_accumulator_type) {
@@ -395,7 +426,7 @@ CodegenDecision AreDotAlgorithmInputAndOutputConversionsSupported(
       return forbid("Unsupported result conversion");
     }
   }
-
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 4";
   if (allowed_operands_types_or->size() != 1 &&
       (lhs_type != rhs_type ||
        !absl::c_linear_search(*allowed_operands_types_or, lhs_type))) {
@@ -403,25 +434,27 @@ CodegenDecision AreDotAlgorithmInputAndOutputConversionsSupported(
   } else if (allowed_operands_types_or->size() == 1) {
     return CodegenDecision::Allow();
   }
-
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 5";
   PrimitiveType expected_operands_type = allowed_operands_types_or->front();
-
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 6";
   if (lhs_type != expected_operands_type &&
       !IsTritonSupportedConversion(expected_operands_type, lhs_type,
                                    gpu_version)) {
     return forbid("Unsupported lhs conversion");
   }
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 7";
   if (rhs_type != expected_operands_type &&
       !IsTritonSupportedConversion(expected_operands_type, rhs_type,
                                    gpu_version)) {
     return forbid("Unsupported rhs conversion");
   }
-
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 8";
   return CodegenDecision::Allow();
 }
 
 CodegenDecision IsTritonSupportedDot(
     const HloDotInstruction& dot, const se::GpuComputeCapability& gpu_version) {
+  VLOG(-1) << "Zoran IsTritonSupportedDot 0";
   if (!IsInTritonNestedGemmFusion(dot)) {
     return CodegenDecision::Forbid(
         "Dot operation is only supported in nested GEMM fusions.");
@@ -431,24 +464,24 @@ CodegenDecision IsTritonSupportedDot(
   const Shape& rhs_shape = dot.operand(1)->shape();
   PrimitiveType lhs_type = lhs_shape.element_type();
   PrimitiveType rhs_type = rhs_shape.element_type();
-
+  VLOG(-1) << "Zoran IsTritonSupportedDot 1";
   if (dot.operand(0)->opcode() != HloOpcode::kFusion ||
       dot.operand(1)->opcode() != HloOpcode::kFusion) {
     return CodegenDecision::Forbid(
         "Only operands that are fusions are supported.");
   }
-
+  VLOG(-1) << "Zoran IsTritonSupportedDot 2";
   // TODO(b/393299275): add support tests for mixed types.
   if (lhs_type != rhs_type) {
     return CodegenDecision::Forbid(
         "Dot operation only supports same types for lhs and rhs.");
   }
-
+  VLOG(-1) << "Zoran IsTritonSupportedDot 3";
   absl::Status status = CheckSupportedCheckDotDimensions(dot);
   if (!status.ok()) {
     return CodegenDecision::Forbid(status.message());
   }
-
+  VLOG(-1) << "Zoran IsTritonSupportedDot 4";
   const PrecisionConfig& precision_config = dot.precision_config();
   const PrecisionConfig::Algorithm algorithm = precision_config.algorithm();
 
@@ -457,7 +490,7 @@ CodegenDecision IsTritonSupportedDot(
         absl::StrCat("Unsupported dot algorithm: ",
                      PrecisionConfig::Algorithm_Name(algorithm)));
   }
-
+  VLOG(-1) << "Zoran IsTritonSupportedDot 5";
   if (algorithm == PrecisionConfig::ALG_UNSET) {
     if (CodegenDecision decision =
             AreTypesSupportedByAlgUnsetDot(lhs_type, result_type, gpu_version);
@@ -465,14 +498,14 @@ CodegenDecision IsTritonSupportedDot(
       return decision;
     }
   }
-
+  VLOG(-1) << "Zoran IsTritonSupportedDot 6";
   if (CodegenDecision conversion_decision =
           AreDotAlgorithmInputAndOutputConversionsSupported(
               algorithm, lhs_type, rhs_type, result_type, gpu_version);
       !conversion_decision) {
     return conversion_decision;
   }
-
+  VLOG(-1) << "Zoran IsTritonSupportedDot 7";
   return CodegenDecision::Allow();
 }
 
@@ -541,6 +574,7 @@ CodegenDecision IsTritonSupportedConcatenate(const HloInstruction& hlo) {
 
 CodegenDecision IsTritonSupportedInstructionImpl(
     const HloInstruction& instr, const se::GpuComputeCapability& gpu_version) {
+  VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 0: " << instr.ToString();
   if (internal::IsTritonUnsupportedOpcode(instr.opcode())) {
     return CodegenDecision::Forbid(
         absl::StrCat("Unsupported opcode ", HloOpcodeString(instr.opcode())));
@@ -548,6 +582,7 @@ CodegenDecision IsTritonSupportedInstructionImpl(
 
   // Special handling for the kConvert instruction, which has a non-standard
   // set of supported types.
+  VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 1";
   if (instr.opcode() == HloOpcode::kConvert) {
     return IsTritonSupportedConversion(instr.shape().element_type(),
                                        instr.operand(0)->shape().element_type(),
@@ -556,25 +591,25 @@ CodegenDecision IsTritonSupportedInstructionImpl(
 
   auto type = instr.shape().element_type();
   bool output_type_is_supported = IsTritonSupportedDataType(type, gpu_version);
-
+  VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 2";
   if (!output_type_is_supported) {
     return CodegenDecision::Forbid("Unsupported output data type.");
   }
-
+VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 3";
   bool input_types_are_supported =
       absl::c_all_of(instr.operands(), [&](const HloInstruction* operand) {
         return IsTritonSupportedDataType(operand->shape().element_type(),
                                          gpu_version);
       });
-
+VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 4";
   if (!input_types_are_supported) {
     return CodegenDecision::Forbid("Unsupported input data type.");
   }
-
+VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 5";
   if (instr.opcode() == HloOpcode::kConcatenate) {
     return IsTritonSupportedConcatenate(instr);
   }
-
+VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 6";
   // Const is technically an elementwise op, so this check must be before the
   // elementwise check.
   if (instr.opcode() == HloOpcode::kConstant) {
@@ -583,7 +618,7 @@ CodegenDecision IsTritonSupportedInstructionImpl(
                : CodegenDecision::Forbid(
                      "Only scalar constants are supported in Triton.");
   }
-
+VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 7";
   if (instr.opcode() == HloOpcode::kIota) {
     PrimitiveType element_type = instr.shape().element_type();
     return element_type != PrimitiveType::F8E4M3FN &&
@@ -592,7 +627,7 @@ CodegenDecision IsTritonSupportedInstructionImpl(
                : CodegenDecision::Forbid(
                      "F8E4M3FN and F8E5M2 are not supported for iota.");
   }
-
+VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 8";
   switch (instr.opcode()) {
     case HloOpcode::kReduce: {
       return CanTritonHandleReduce(*Cast<HloReduceInstruction>(&instr),
@@ -604,19 +639,24 @@ CodegenDecision IsTritonSupportedInstructionImpl(
     case HloOpcode::kReshape:
     case HloOpcode::kSlice:
     case HloOpcode::kTranspose:
+    VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 8a";
       return CodegenDecision::Allow();
     case HloOpcode::kDot:
+    VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 8b";
       return IsTritonSupportedDot(*Cast<HloDotInstruction>(&instr),
                                   gpu_version);
     case HloOpcode::kFusion:
+    VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 8c";
       return IsSupportedFusion(*Cast<HloFusionInstruction>(&instr),
                                gpu_version);
     default:
+    VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 8d";
       // Not all instructions have a special handling.
       break;
   }
-
+VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 9";
   if (instr.IsElementwise()) {
+    VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 10";
     if (!IsTritonSupportedElementwise(
             instr.opcode(),
             // Use the last operand below in order to support both `compare`
@@ -628,6 +668,7 @@ CodegenDecision IsTritonSupportedInstructionImpl(
     }
     return CodegenDecision::Allow();
   }
+  VLOG(-1) << "Zoran IsTritonSupportedInstructionImpl 11";
   return CodegenDecision::Forbid(absl::StrCat("Unsupported instruction opcode ",
                                               HloOpcodeString(instr.opcode())));
 }
@@ -693,6 +734,7 @@ absl::Status EnsureTritonSupportsComputeCapability(
 
 CodegenDecision IsTritonSupportedInstruction(
     const HloInstruction& instr, const se::GpuComputeCapability& gpu_version) {
+      VLOG(-1) << "Zoran: IsTritonSupportedInstruction 0";
   CodegenDecision decision =
       IsTritonSupportedInstructionImpl(instr, gpu_version);
   VLOG(2) << absl::StrCat("IsTritonSupportedInstruction: ", instr.ToString(),

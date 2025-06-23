@@ -140,6 +140,7 @@ bool IsFp8Type(Type t) {
 }
 
 Value Cast(EmitterLocOpBuilder& b, Value value, Type dst_element_ty) {
+  VLOG(-1) << "Zoran: Cast 0";
   Type src_ty = value.getType();
   Type src_element_ty = src_ty;
   Type fp16_ty = b.getF16Type();
@@ -178,11 +179,13 @@ Value Cast(EmitterLocOpBuilder& b, Value value, Type dst_element_ty) {
       return b.create<mt::FpToFpOp>(dst_ty, value);
     }
     if (IsFp8Type(dst_element_ty) && !IsFp8Type(src_element_ty)) {
+      VLOG(-1) << "Zoran: Cast 3";
       return b.create<mt::FpToFpOp>(
           dst_ty, value,
           mt::RoundingModeAttr::get(b.getContext(), mt::RoundingMode::RTNE));
     }
     if (IsFp8Type(src_element_ty) && IsFp8Type(dst_element_ty)) {
+      VLOG(-1) << "Zoran: Cast 4";
       // FP8 <-> FP8 conversion needs to go through FP16
       auto fp16_value = b.create<mt::FpToFpOp>(fp16_ty, value);
       return b.create<mt::FpToFpOp>(

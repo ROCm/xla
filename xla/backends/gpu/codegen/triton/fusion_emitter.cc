@@ -943,6 +943,7 @@ absl::StatusOr<ScalarOrTensor> EmitDot(EmitterLocOpBuilder& b,
 
   Value result = for_op.getResult(0);
   if (dot_output_type != accumulator_type) {
+    //VLOG(-1) << "Zoran: EmitDot Cast " << "acc type: " << accumulator_type << "dot out type: " << dot_output_type;
     result = Cast(b, result, dot_output_type);
   }
 
