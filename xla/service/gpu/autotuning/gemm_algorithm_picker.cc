@@ -191,11 +191,10 @@ class GemmAutotuner {
     // In the current GemmRewriter design for FP8, the a/b scales remain active
     // even when they are not used. Consequently, we must inform the autotuner
     // so it can choose algorithms that properly support a/b scales.
-    if ((xla::primitive_util::IsF8Type(
-             gemm->operand(0)->shape().element_type()) &&
-         xla::primitive_util::IsF8Type(
-             gemm->operand(1)->shape().element_type())) ||
-        gemm_config.mx_mode) {
+    if (xla::primitive_util::IsF8Type(
+            gemm->operand(0)->shape().element_type()) &&
+        xla::primitive_util::IsF8Type(
+            gemm->operand(1)->shape().element_type())) {
       a_scale_buffer = rz_buffers_.input_buffers().at(input_buffer_idx++);
       b_scale_buffer = rz_buffers_.input_buffers().at(input_buffer_idx++);
     }
