@@ -646,6 +646,8 @@ absl::StatusOr<HloInstruction*> RocmExpandBlockScaledDotCustomCall(
                           allow_hipblaslt, result_type, device_description));
   TF_ASSIGN_OR_RETURN(Shape result_shape, builder.GetShape(block_scaled_dot));
   CHECK_EQ(result_shape, instruction->shape());
+
+  // Build gemm_cfg
   xla::gpu::GemmBackendConfig gemm_cfg;
   gemm_cfg.set_alpha_real(1.0);
   gemm_cfg.set_alpha_imag(0.0);
