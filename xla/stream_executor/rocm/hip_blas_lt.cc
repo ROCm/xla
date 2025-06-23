@@ -294,10 +294,8 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
 
 auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
     -> absl::StatusOr<MatmulPlanPtr> {
-  auto lhs_layout = cfg.lhs_layout;
-  auto rhs_layout = cfg.rhs_layout;
-  auto output_layout = cfg.output_layout;
-  auto c_layout = cfg.c_layout;
+  auto lhs_layout = cfg.lhs_layout, rhs_layout = cfg.rhs_layout,
+       output_layout = cfg.output_layout, c_layout = cfg.c_layout;
 
   // cublasLt matmul requires batch sizes to be equal. If only one operand has a
   // batch, the other will be broadcast (as its batch_stride == 0).
@@ -315,16 +313,15 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
   // *not* be transposed, and if B is row-major, B must be transposed. We never
   // transpose A or B, and expect the caller to ensure A is row-major and B is
   // column-major when A and B are FP8.
-  auto trans_a = lhs_layout.transpose;
-  auto trans_b = rhs_layout.transpose;
+  auto trans_a = lhs_layout.transpose, trans_b = rhs_layout.transpose;
 
   if (xla::primitive_util::IsF8Type(lhs_layout.dtype) &&
       lhs_layout.order == gpu::MatrixLayout::Order::kColumnMajor) {
-    return xla::Internal("The F8 LHS must be row-major");
+    return xla::Internal("The F8 LHS must be column-major");
   }
   if (xla::primitive_util::IsF8Type(rhs_layout.dtype) &&
       rhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
-    return xla::Internal("The F8 RHS must be column-major");
+    return xla::Internal("The F8 RHS must be row-major");
   }
 
   TF_ASSIGN_OR_RETURN(auto output_dtype,

@@ -70,6 +70,7 @@ class BlasLt : public gpu::BlasLt {
       return HIPBLAS_POINTER_MODE_HOST;
     }
     bool mx_mode() const { return mx_mode_; }
+    
     hipblasLtMatmulDesc_t get() const { return handle_.get(); }
 
    private:
