@@ -60,14 +60,14 @@ absl::StatusOr<HloInstruction*> ExpandInstructionUsingBuilder(
 
 absl::StatusOr<HloInstruction*> ExpandInstructionWithGemmConfigUsingBuilder(
     XlaBuilder& builder, HloInstruction* old_instruction,
-    const DotDimensionNumbers& dnums) {
+    const xla::gpu::GemmBackendConfig& gemm_cfg) {
   TF_ASSIGN_OR_RETURN(XlaComputation xla_computation, builder.Build());
   TF_ASSIGN_OR_RETURN(
       HloComputation * hlo_computation,
       XlaComputationToHloComputation(xla_computation,
                                      old_instruction->parent()->parent()));
 
-  // search for hipblaslt custom call and populate its backend_config_ if found
+  // search for hipblaslt custom call and populate its backend_config
   HloInstruction* target = nullptr;
   for (HloInstruction* instr : hlo_computation->instructions()) {
     if (instr->opcode() == HloOpcode::kCustomCall &&
@@ -77,17 +77,6 @@ absl::StatusOr<HloInstruction*> ExpandInstructionWithGemmConfigUsingBuilder(
     }
   }
   if (target != nullptr) {
-    xla::gpu::GemmBackendConfig gemm_cfg;
-    gemm_cfg.set_mx_mode(true);
-    *gemm_cfg.mutable_dot_dimension_numbers() = dnums;
-    gemm_cfg.set_alpha_real(1.0);
-    gemm_cfg.set_alpha_imag(0.0);
-    gemm_cfg.set_beta(0.0);
-    gemm_cfg.set_grad_x(true);
-    gemm_cfg.set_grad_y(true);
-    gemm_cfg.mutable_precision_config()->add_operand_precision(
-        PrecisionConfig::DEFAULT);
-    gemm_cfg.set_epilogue(xla::gpu::GemmBackendConfig::DEFAULT);
     xla::gpu::GpuBackendConfig gpu_cfg;
     *gpu_cfg.mutable_gemm_backend_config() = gemm_cfg;
     TF_RETURN_IF_ERROR(target->set_backend_config(gpu_cfg));
@@ -657,8 +646,21 @@ absl::StatusOr<HloInstruction*> RocmExpandBlockScaledDotCustomCall(
                           allow_hipblaslt, result_type, device_description));
   TF_ASSIGN_OR_RETURN(Shape result_shape, builder.GetShape(block_scaled_dot));
   CHECK_EQ(result_shape, instruction->shape());
+  xla::gpu::GemmBackendConfig gemm_cfg;
+  gemm_cfg.set_alpha_real(1.0);
+  gemm_cfg.set_alpha_imag(0.0);
+  gemm_cfg.set_beta(0.0);
+  *gemm_cfg.mutable_dot_dimension_numbers() = dnums;
+  gemm_cfg.mutable_precision_config()->add_operand_precision(
+      PrecisionConfig::DEFAULT);
+  gemm_cfg.set_epilogue(xla::gpu::GemmBackendConfig::DEFAULT);
+  gemm_cfg.set_grad_x(true);
+  gemm_cfg.set_grad_y(true);
+  gemm_cfg.set_damax_output(false);
+  gemm_cfg.set_mx_mode(true);
+
   return ExpandInstructionWithGemmConfigUsingBuilder(builder, instruction,
-                                                     dnums);
+                                                     gemm_cfg);
 }
 
 }  // namespace
