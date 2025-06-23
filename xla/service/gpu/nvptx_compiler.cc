@@ -280,6 +280,7 @@ absl::Status NVPTXCompiler::OptimizeHloPostLayoutAssignment(
     // Rewrite normalization patterns into cuDNN Custom Calls.
     pre_pipeline.AddPass<CudnnNormRewriter>(cuda_compute_capability);
   }
+  
   bool allow_cudnn =
       cuda_compute_capability.IsAtLeastBlackwell() &&
       gpu_target_config.dnn_version_info >= se::dnn::VersionInfo(9, 7);

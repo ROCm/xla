@@ -179,18 +179,19 @@ absl::Status AMDGPUCompiler::OptimizeHloPostLayoutAssignment(
     HloModule* hlo_module, se::StreamExecutor* stream_exec,
     const CompileOptions& options, const TargetConfig& gpu_target_config,
     tsl::thread::ThreadPool* thread_pool) {
-  auto rocm_compute_capability = std::get<se::RocmComputeCapability>(
+  auto rocm_cc = std::get<se::RocmComputeCapability>(
       gpu_target_config.device_description.gpu_compute_capability());
 
   HloPassPipeline pre_pipeline("AMDGPU post-layout_assignment part 1");
+  bool allow_hipblaslt = rocm_cc.gfx_version() == "gfx950";
   pre_pipeline.AddPass<BlockScalingRewriter>(
       gpu_target_config.device_description, /*allow_cudnn*/ false,
-      /*allow_hipblaslt*/ true);
+      allow_hipblaslt);
   pre_pipeline.AddPass<DotDimensionMerger>();
 
   for (const auto& req : HipblasPaddingRequirements) {
-    pre_pipeline.AddPass<CublasPadForGemms>(rocm_compute_capability,
-                                            req.data_type, req.multiple_of);
+    pre_pipeline.AddPass<CublasPadForGemms>(rocm_cc, req.data_type,
+                                            req.multiple_of);
   }
   // Padding a gemm operand that's a constant results in pad(constant).  Run
   // constant-folding to simplify this into a new constant.
