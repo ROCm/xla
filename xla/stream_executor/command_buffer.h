@@ -40,7 +40,7 @@ limitations under the License.
 // updated ever iteration
 #define USE_SMALL_CMDBUF_UPDATES 1
 // Whether to to use subgraphs or extract child nodes directly to the main graph
-#define EXTRACT_CHILD_NODES_FROM_GRAPH 0
+#define EXTRACT_CHILD_NODES_FROM_GRAPH 1
 
 #define CMD_BUF_THUNK_ENABLE_TIMING 0
 
@@ -92,6 +92,8 @@ class CommandBuffer {
   // parameters of the commands (i.e. device memory pointers).
   using UpdateCommands =
       absl::AnyInvocable<absl::Status(CommandBuffer* command_buffer)>;
+
+  std::string xname;
 
   CommandBuffer() = default;
   virtual ~CommandBuffer() = default;

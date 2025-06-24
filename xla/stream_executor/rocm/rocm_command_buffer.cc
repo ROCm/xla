@@ -363,7 +363,7 @@ absl::StatusOr< GraphNodeHandle > RocmCommandBuffer::CopyChildNodeToMainGraph(
       TF_RETURN_IF_ERROR(
         ToStatus(wrap::hipGraphAddKernelNode(&hmain, graph_, deps.data(),
                                            deps.size(), &params),
-               "CopyChildNodeToMainGraph failed addubg kernel node"));
+               "CopyChildNodeToMainGraph failed creating kernel node"));
       // VLOG(0) << "Added child kernel node: " << hchild << " -> " << hmain;
       return FromHipGraphHandle(hmain);
     }
@@ -391,18 +391,7 @@ absl::Status RocmCommandBuffer::UpdateChildNodeInMainGraph(
     hipKernelNodeParams params;
     auto s = wrap::hipGraphKernelNodeGetParams(hchild, &params);
     if (s == hipSuccess) {
-
-      s = wrap::hipGraphExecKernelNodeSetParams(exec_, hmain, &params);
-      // if (s != hipSuccess) {
-
-      //   hipGraphNodeType t1{hipGraphNodeTypeCount}, t2{hipGraphNodeTypeCount};
-      //   (void)hipGraphNodeGetType(hchild, &t1);
-      //   (void)hipGraphNodeGetType(hmain, &t2);
-
-      //   VLOG(0) << "Failed setting exec node params: exec node: " << hchild 
-      //       << '(' << t1 << ") -> " << hmain << '(' << t2 << ')';
-      // }
-      return ToStatus(s);
+      return ToStatus(wrap::hipGraphExecKernelNodeSetParams(exec_, hmain, &params));
     }
   }
   {

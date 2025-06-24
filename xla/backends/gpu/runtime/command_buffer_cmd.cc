@@ -401,7 +401,7 @@ CommandBufferCmdExecutor::RecordCreate(
         record_state->command,
         command->Record(execute_params, record_params, std::move(record_action),
                         command_buffer));
-    // VLOG(0) << execute_params.stream->parent()->device_ordinal() << " Recording done " << command->ToString();
+
     // Collect sink commands as external dependencies for the next command
     // sequence recorded into the same command buffer.
     if (IsSink(id)) {
@@ -436,41 +436,6 @@ absl::Status CommandBufferCmdExecutor::RecordUpdate(
   // Keep a state associated with commands in the sequence in the state manager.
   CommandBufferCmd::StateManager& state = record_params.state;
 
-  // Check if command `id` has to be updated based on the buffer allocations
-  // that changed since the last call to `Record`. We keep intersection vector
-  // outside of a lambda to avoid repeated heap allocations on every call.
-  std::vector<BufferAllocation::Index> alloc_intersection;
-  auto skip_command_update = [&](CommandId id) {
-    // If we don't know what allocations changed since the last call to
-    // `Record` we must always update the command.
-    if (!record_params.updated_allocs) {
-      return false;
-    }
-
-    // We always update commands that require initialization, even if buffer
-    // allocations didn't change.
-    CommandBufferCmd* command = commands_[id].get();
-    if (command->requires_initialization() && record_params.is_initialization) {
-      return false;
-    }
-
-    DCHECK(absl::c_is_sorted(*record_params.updated_allocs))
-        << "Updated allocs must be sorted: "
-        << absl::StrJoin(*record_params.updated_allocs, ", ");
-
-    DCHECK(absl::c_is_sorted(cmd_allocs_indices_[id]))
-        << "Command allocs must be sorted: "
-        << absl::StrJoin(cmd_allocs_indices_[id], ", ");
-
-    alloc_intersection.clear();
-    absl::c_set_intersection(cmd_allocs_indices_[id],
-                             *record_params.updated_allocs,
-                             std::back_inserter(alloc_intersection));
-    return alloc_intersection.empty();
-  };
-
-  size_t num_skipped_command_updates = 0;
-
   for (CommandId id = 0; id < commands_.size(); ++id) {
     CommandBufferCmd* command = commands_[id].get();
 
@@ -483,16 +448,13 @@ absl::Status CommandBufferCmdExecutor::RecordUpdate(
       continue;
     }
 
-    // Skip updating command if it doesn't use any of the updated allocations.
-    if (skip_command_update(id)) {
-      ++num_skipped_command_updates;
-      continue;
-    }
-
     // Update existing commands in the command buffer.
     auto* record_state = state.GetOrNull<RecordState>(command, command_buffer);
     DCHECK(record_state) << "Record state must be not null for "
                          << command->ToString();
+
+    // VLOG(0) << "dev" << execute_params.stream->parent()->device_ordinal()
+    //         << " updating command #" << id << " -- " << command->ToString();
 
     auto record_action = CommandBufferCmd::RecordUpdate{record_state->command};
     TF_ASSIGN_OR_RETURN(
@@ -503,8 +465,7 @@ absl::Status CommandBufferCmdExecutor::RecordUpdate(
 
   uint64_t end_micros = tsl::Env::Default()->NowMicros();
   VLOG(1) << "Updated " << commands_.size() << " commands in "
-          << (end_micros - start_micros) << " μs (skipped "
-          << num_skipped_command_updates << " command updates)";
+          << (end_micros - start_micros) << " μs";
 
   return absl::OkStatus();
 }
@@ -694,7 +655,8 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     const BufferAllocations* buffer_allocation, 
     se::Stream* stream, TraceFunc trace_func) {
 
-  if (entries_[0].command_buffer == nullptr) {
+  // if (entries_[0].command_buffer == nullptr) 
+  {
     // size_t i = 1;
     // for(i = 1; i < entries_.size(); i++) {
     //   if(entries_[i].command_buffer == nullptr) break;
@@ -735,6 +697,8 @@ TracedCommandBufferCmd::RecordTracedCommand(
       traced_cmd->GetOrTraceCommandBuffer(
           execute_params.buffer_allocations, // HACK execute_params.stream->parent(),
           execute_params.command_buffer_trace_stream, trace_func));
+
+  nested_cmd->xname = ToString();
 
   VLOG(5) << "Record traced command into command buffer: " << command_buffer;
   return Handle(

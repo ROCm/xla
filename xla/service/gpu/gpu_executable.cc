@@ -181,14 +181,12 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
         num_nested++;
       });
       VLOG(1) << "Found CmdBuf with " << num_nested << " nested commands";
-      if (num_nested >= static_cast< size_t>(allocs_th)) { 
+      if (num_nested >= static_cast< size_t >(allocs_th)) { 
         enable_cached_allocs_ = true;
         break;
       }
     } // for
   }
-  // HACK HACK
-  //enable_cached_allocs_ = (module_name_ == "jit_train_step");
   if (enable_cached_allocs_) {
     // allocate at least for 8 devices
     cached_mem_allocations_.resize(8);

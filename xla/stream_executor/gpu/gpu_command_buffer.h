@@ -83,10 +83,12 @@ class GpuCommandBuffer : public CommandBuffer {
   // A simple GPU command recorded into a GPU command buffer. Most of the GPU
   // commands have a single node in the GPU graph, i.e. memset or kernel launch.
   struct GpuCommand : public CommandBuffer::Command {
-    explicit GpuCommand(GraphNodeHandle handle) : handle(handle) {}
+
+    GpuCommand() = default;
+    explicit GpuCommand(GraphNodeHandle handle) : handles(1, handle) {}
 
     // A handle to the gpu graph node corresponding to a command.
-    GraphNodeHandle handle = nullptr;
+    absl::InlinedVector< GraphNodeHandle, 1 > handles;
   };
 
   // A GPU command recorded for the Case operation.
@@ -274,7 +276,7 @@ class GpuCommandBuffer : public CommandBuffer {
                           bool index_is_bool,
                           std::vector<UpdateCommands> update_branches);
 
-  absl::StatusOr<const ChildNodes *> GetChildNodes() const;
+  absl::StatusOr<ChildNodes> GetChildNodes() const;
 
   // Appends a new command to the command buffer.
   template <typename T>
@@ -393,8 +395,6 @@ class GpuCommandBuffer : public CommandBuffer {
 
   // Gpu commands recorded into the command buffer.
   std::vector<std::unique_ptr<Command>> commands_;
-
-  mutable ChildNodes child_nodes_;
 };
 
 }  // namespace stream_executor::gpu

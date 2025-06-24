@@ -210,11 +210,6 @@ class CommandBufferCmd {
     // to commands without a need to add expensive synchronization.
     StateManager& state;
 
-    // Buffer allocations that changed since the last call to `Record`. Buffer
-    // allocation indices are sorted. CommandBufferCmdExecutor and individual
-    // commands rely on this information to skip unnecessary updates.
-    std::optional<std::vector<BufferAllocation::Index>> updated_allocs;
-
     // A flag indicating whether we record comands at command buffer thunk
     // initialization time.
     bool is_initialization = false;
