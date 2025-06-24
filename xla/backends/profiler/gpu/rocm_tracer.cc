@@ -55,27 +55,6 @@ using tsl::profiler::XSpace;
 namespace xla {
 namespace profiler {
 
-// get page_size  
-inline int64_t get_page_size() {
-  static auto _pagesz = sysconf(_SC_PAGESIZE);
-  if (_pagesz <= 0) {
-    // Fallback to 4096 if sysconf fails (e.g., in a test environment)
-    VLOG(0) << "sysconf(_SC_PAGESIZE) failed, using default page size of 4096 bytes";
-    return 4096;
-  }
-  return _pagesz;
-}
-  
-
-// ----------------------------------------------------------------------------
-// Convenience aliases for rocprofiler types.
-// ----------------------------------------------------------------------------
-
-using kernel_symbol_data_t = rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t;
-
-rocprofiler_client_id_t*      client_id        = nullptr;
-rocprofiler_client_finalize_t client_fini_func = nullptr;
-
 static constexpr int kMaxSymbolSize = 1024;
 
 std::string demangle(const char* name) {
@@ -145,15 +124,6 @@ const char *RocProfBufferKind(/*rocprofiler_buffer_tracing_kind_t*/int32_t c) {
     OO(SCRATCH_MEMORY)
     OO(CORRELATION_ID_RETIREMENT)
     OO(RCCL_API)
-    OO(OMPT)
-    OO(MEMORY_ALLOCATION)
-    OO(RUNTIME_INITIALIZATION)
-    OO(ROCDECODE_API)
-    // OO(ROCJPEG_API)
-    // OO(HIP_STREAM)
-    // OO(HIP_RUNTIME_API_EXT)
-    // OO(HIP_COMPILER_API_EXT)
-    // OO(ROCDECODE_API_EXT)
   }
   return "unknown buffer tracing kind";
 #undef OO
@@ -170,19 +140,12 @@ const char *RocProfCallbackKind(/*rocprofiler_callback_tracing_kind_t*/int32_t c
     OO(HIP_RUNTIME_API)
     OO(HIP_COMPILER_API)
     OO(MARKER_CORE_API)
-    OO(MARKER_CONTROL_API)
     OO(MARKER_NAME_API)
     OO(CODE_OBJECT)
     OO(SCRATCH_MEMORY)
     OO(KERNEL_DISPATCH)
     OO(MEMORY_COPY)
     OO(RCCL_API)
-    OO(OMPT)
-    OO(MEMORY_ALLOCATION)
-    OO(RUNTIME_INITIALIZATION)
-    OO(ROCDECODE_API)
-    // OO(ROCJPEG_API)
-    // OO(HIP_STREAM)
   }
   return "unknown callback tracing kind";
 #undef OO
@@ -194,7 +157,6 @@ const char *RocProfCodeObjOperation(/*rocprofiler_code_object_operation_t*/int32
     OO(NONE)
     OO(LOAD) //  Code object containing kernel symbols
     OO(DEVICE_KERNEL_SYMBOL_REGISTER) // Kernel symbols - Device
-    OO(HOST_KERNEL_SYMBOL_REGISTER)   // Kernel symbols - Host
   }
   return "unknown code object operation";
 #undef OO
@@ -206,6 +168,7 @@ const char *RocProfCodeObjOperation(/*rocprofiler_code_object_operation_t*/int32
 inline auto GetCallbackTracingNames() {
   return rocprofiler::sdk::get_callback_tracing_names();
 }
+
 std::vector<rocprofiler_agent_v0_t> GetGpuDeviceAgents();
 
 //-----------------------------------------------------------------------------
@@ -238,7 +201,7 @@ const char* GetRocmTracerEventDomainName(const RocmTracerEventDomain& domain) {
       return "HIP_OPS";
       break;
     default:
-      VLOG(3) << "RocmTracerEventDomain::InvalidDomain";
+      LOG(WARNING) << "RocmTracerEventDomain::InvalidDomain";
       DCHECK(false);
       return "";
   }
@@ -343,21 +306,21 @@ bool isMallocApi(uint32_t id) {
 // ----------------------------------------------------------------------------
 // Aliases / convenience to avoid long namespace names.
 // ----------------------------------------------------------------------------
-namespace se = ::stream_executor;
-using tsl::profiler::AnnotationStack;
+// namespace se = ::stream_executor;
+// using tsl::profiler::AnnotationStack;
 
 constexpr uint32_t RocmTracerEvent::kInvalidDeviceId;
 
-#define RETURN_IF_ROCTRACER_ERROR(expr)                                     \
-  do {                                                                      \
-    roctracer_status_t status = expr;                                       \
-    if (status != ROCTRACER_STATUS_SUCCESS) {                               \
-      const char* errstr = roctracer_error_string();              \
-      LOG(ERROR) << "function " << #expr << " failed with error " << errstr; \
-      return tsl::errors::Internal(                                         \
-          absl::StrCat("roctracer call error", errstr));                  \
-    }                                                                       \
-  } while (false)
+// #define RETURN_IF_ROCTRACER_ERROR(expr)                                     \
+//   do {                                                                      \
+//     roctracer_status_t status = expr;                                       \
+//     if (status != ROCTRACER_STATUS_SUCCESS) {                               \
+//       const char* errstr = roctracer_error_string();              \
+//       LOG(ERROR) << "function " << #expr << " failed with error " << errstr; \
+//       return tsl::errors::Internal(                                         \
+//           absl::StrCat("roctracer call error", errstr));                  \
+//     }                                                                       \
+//   } while (false)
 
 // ----------------------------------------------------------------------------
 // Stub implementations for RocmTracer static functions expected by rocprofiler.
@@ -374,8 +337,7 @@ bool RocmTracer::IsAvailable() const {
 /*static*/ uint64_t RocmTracer::GetTimestamp() {
   uint64_t ts;
   if (rocprofiler_get_timestamp(&ts) != ROCPROFILER_STATUS_SUCCESS) {
-    // const char* errstr = rocprofiler_error_string();
-    VLOG(-1) << "function rocprofiler_get_timestamp failed with error ";
+    LOG(ERROR) << "function rocprofiler_get_timestamp failed with error ";
     return 0;
   }
   return ts;
@@ -418,9 +380,7 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
   std::lock_guard<tsl::mutex> lock(kernel_lock_);
   if (static_cast< size_t >(rec.kind) < name_info_.size()) {
     auto& vec = name_info_[rec.kind];
-    //if (static_cast< size_t >(rec.operation) < vec.size()) {
     ev->name = vec[rec.operation];
-   // }
   }
   if (isCopyApi(rec.operation)) {
     // actually one needs to set the real type
@@ -429,30 +389,10 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
 
   if (isKernelApi(rec.operation)) {
   }
-
-  // VLOG(0) << "HIP API: device: " << ev->device_id 
-  //             << " stream: " << ev->stream_id
-  //             << " corr: " << ev->correlation_id
-  //             << " name: " << ev->name;
 }
-
-typedef struct rocprofiler_stream_id_t
-{
-    uint64_t handle;
-} rocprofiler_stream_id_t;
-
-struct tool_buffer_tracing_memory_copy_ext_record_t
-: rocprofiler_buffer_tracing_memory_copy_record_t
-{
-    rocprofiler_stream_id_t stream_id = {};
-};
 
 void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
         RocmTracerEvent *ev) { 
-
-  // const auto& rec =
-  //     *static_cast<const tool_buffer_tracing_memory_copy_ext_record_t*>(hdr->payload);
-
   const auto& rec =
       *static_cast<const  rocprofiler_buffer_tracing_memory_copy_record_t*>(hdr->payload);
 
@@ -506,8 +446,6 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
   ev->roctx_range = "??";
   ev->start_time_ns = rec.start_timestamp;
   ev->end_time_ns = rec.end_timestamp;
-  // ev->device_id = src_gpu.id.handle;   // could be CPU id
-  // ev->device_id = dst_gpu.id.handle;
   ev->correlation_id = rec.correlation_id.internal;
   ev->thread_id = rec.thread_id;
   ev->stream_id = RocmTracerEvent::kInvalidStreamId;   // rec.stream_id.handle; // we do not know valid stream ID for memcpy
@@ -517,7 +455,7 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
     .async = false,
   };
 
-  VLOG(3) << "copy bytes: " << ev->memcpy_info.num_bytes
+  LOG(INFO) << "copy bytes: " << ev->memcpy_info.num_bytes
           << " stream: " << ev->stream_id
           << " src_id " << ev->device_id << " dst_id " << ev->memcpy_info.destination;
 
@@ -528,12 +466,6 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
       ev->name = "MemcpyP2P"; 
     }
   }
-
-  VLOG(3) << "Memcpy: device: " << ev->device_id 
-              << " stream: " << ev->stream_id
-              << " corr: " << ev->correlation_id
-              << " name: " << ev->name;
-
 }
 
 void RocmTracer::KernelEvent(const rocprofiler_record_header_t *hdr,
@@ -570,12 +502,6 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t *hdr,
 
   auto it = kernel_info_.find(kinfo.kernel_id);
   if (it != kernel_info_.end()) ev->name = it->second.name;
-
-  // VLOG(0) << "Kernel: device: " << ev->device_id 
-  //             << " stream: " << ev->stream_id
-  //             << " corr: " << ev->correlation_id
-  //             << " dispatch: " << rec.dispatch_info.dispatch_id
-  //             << " name: " << ev->name;
 }
 
 void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
@@ -587,7 +513,7 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
   assert(drop_count == 0 && "drop count should be zero for lossless policy");
 
   if (headers == nullptr) {
-    VLOG(-1) << "rocprofiler invoked a buffer callback with a null pointer to the "
+    LOG(ERROR) << "rocprofiler invoked a buffer callback with a null pointer to the "
                   "array of headers. this should never happen";
     return;
   }
@@ -596,8 +522,6 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
   {
     RocmTracerEvent event;
     auto header = headers[i];
-    // VLOG(-1) << "category: " << RocProfBufferCategory(header->category)
-    //          << " kind: " << RocProfBufferKind(header->kind);
 
     if (header->category != ROCPROFILER_BUFFER_CATEGORY_TRACING) continue;
     
@@ -679,7 +603,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
   // Gather agent info
   num_gpus_ = 0;
   for (const auto& agent : GetGpuDeviceAgents()) {
-    VLOG(3) <<"agent id = " << agent.id.handle 
+    LOG(INFO) <<"agent id = " << agent.id.handle 
              << ", dev = " << agent.device_id 
              << ", name = " << (agent.name ? agent.name : "null");
     agents_[agent.id.handle] = agent;
@@ -704,10 +628,13 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
     nullptr);
 
   rocprofiler_start_context(utility_context_);
-  VLOG(0) << "rocprofiler start utilityContext";
+  LOG(INFO) << "rocprofiler start utilityContext";
 
-  constexpr auto buffer_size_bytes = 10 * 4096; // 16*4096;
-  constexpr auto buffer_watermark_bytes = 4 * 4096; // buffer_size_bytes - (buffer_size_bytes / 15);
+  // buffer_size_bytes depends on the number of events to be traced (records)
+  // buffer_watermark_bytes used to trigger callbacks, this might cause hang when profiling
+  // might need a better way to set this up
+  constexpr auto buffer_size_bytes = 10 * 4096;
+  constexpr auto buffer_watermark_bytes = 4 * 4096;
 
   // Utility context to gather code‑object info
   rocprofiler_create_context(&context_);
@@ -742,7 +669,6 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
   }
 
   rocprofiler_start_context(context_);
- 
   rocprofiler_stop_context(context_);
   return 0;
 }
@@ -762,7 +688,7 @@ void RocmTracer::Disable() {
   std::lock_guard<tsl::mutex> lk(collector_mutex_);
   collector_->Flush();
   collector_ = nullptr;
-  VLOG(-1) << "GpuTracer stopped"; 
+  LOG(INFO) << "GpuTracer stopped"; 
 }
 
 // ----------------------------------------------------------------------------
@@ -819,7 +745,7 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
   info << id->name << " Configure XLA with rocprofv3... (priority=" << priority
        << ") is using rocprofiler-sdk v" << major << '.' << minor << '.'
        << patch << " (" << runtime_version << ')';
-  std::cerr << info.str() << std::endl << std::flush;
+  LOG(INFO) << info.str();
 
   static rocprofiler_tool_configure_result_t cfg{
       sizeof(rocprofiler_tool_configure_result_t),

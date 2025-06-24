@@ -163,7 +163,7 @@ uint64_t get_timestamp() {
   rocprofiler_status_t CHECKSTATUS = rocprofiler_get_timestamp(&ts);
   if (CHECKSTATUS != ROCPROFILER_STATUS_SUCCESS) {
       const char* errstr = rocprofiler_get_status_string(CHECKSTATUS);
-      VLOG(-1) << "function rocprofiler_get_timestamp failed with error "
+      LOG(ERROR) << "function rocprofiler_get_timestamp failed with error "
                  << errstr;
       return 0;
   }
