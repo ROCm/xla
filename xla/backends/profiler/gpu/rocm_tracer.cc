@@ -303,24 +303,7 @@ bool isMallocApi(uint32_t id) {
   return false;
 }
 
-// ----------------------------------------------------------------------------
-// Aliases / convenience to avoid long namespace names.
-// ----------------------------------------------------------------------------
-// namespace se = ::stream_executor;
-// using tsl::profiler::AnnotationStack;
-
 constexpr uint32_t RocmTracerEvent::kInvalidDeviceId;
-
-// #define RETURN_IF_ROCTRACER_ERROR(expr)                                     \
-//   do {                                                                      \
-//     roctracer_status_t status = expr;                                       \
-//     if (status != ROCTRACER_STATUS_SUCCESS) {                               \
-//       const char* errstr = roctracer_error_string();              \
-//       LOG(ERROR) << "function " << #expr << " failed with error " << errstr; \
-//       return tsl::errors::Internal(                                         \
-//           absl::StrCat("roctracer call error", errstr));                  \
-//     }                                                                       \
-//   } while (false)
 
 // ----------------------------------------------------------------------------
 // Stub implementations for RocmTracer static functions expected by rocprofiler.
@@ -353,7 +336,7 @@ void RocmTracer::Enable(const RocmTracerOptions& options,
   }
   collector_ = collector;
   rocprofiler_start_context(context_);
-  VLOG(0) << "GpuTracer started";
+  LOG(INFO) << "GpuTracer started";
 }
 
 void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
@@ -676,7 +659,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
 void RocmTracer::toolFinalize(void* tool_data) {
 
   auto& obj = RocmTracer::i();
-  VLOG(0) << "Calling toolFinalize!";
+  LOG(INFO) << "Calling toolFinalize!";
   rocprofiler_stop_context(obj.utility_context_);
   obj.utility_context_.handle = 0;
   rocprofiler_stop_context(obj.context_);
