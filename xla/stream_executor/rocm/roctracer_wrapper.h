@@ -22,7 +22,7 @@ limitations under the License.
 
 #include "rocm/rocm_config.h"
 
-// FIXME: how to guard ROCM_VERSION?
+// rocprofiler-sdk works with rocm > 6.2
 #if TF_ROCM_VERSION > 60200
 #include <rocm/include/rocprofiler-sdk/registration.h>
 #include <rocm/include/rocprofiler-sdk/buffer.h>
