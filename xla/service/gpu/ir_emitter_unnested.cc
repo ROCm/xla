@@ -1432,14 +1432,14 @@ absl::Status IrEmitterUnnested::EmitTritonCustomCall(
 
     TF_ASSIGN_OR_RETURN(
         auto kernel_arguments,
-        emitters::KernelArguments::Create(
-            ir_emitter_context_->buffer_assignment(),
-            GetDefaultBufferAlignment(), instr, instr->operands(),
-            /*dedup=*/false));
+        KernelArguments::Create(ir_emitter_context_->buffer_assignment(), instr,
+                                instr->operands(),
+                                /*dedup=*/false));
     auto launch_dimensions = LaunchDimensions(
         se::BlockDim(call.grid_x, call.grid_y, call.grid_z),
-        se::ThreadDim(call.num_warps *
-                      ir_emitter_context_->gpu_device_info().threads_per_warp()));
+        se::ThreadDim(
+            call.num_warps *
+            ir_emitter_context_->gpu_device_info().threads_per_warp()));
 
     std::string sanitized_kernel_name =
         GetSanitizedUniqueName(*ir_emitter_context_, kernel_name);
