@@ -49,7 +49,6 @@ bazel \
     -//xla/backends/gpu/codegen/triton:support_legacy_test_amdgpu_any \
     -//xla/backends/gpu/runtime:topk_test_amdgpu_any \
     -//xla/pjrt/c:pjrt_c_api_gpu_test_amdgpu_any \
-    -//xla/service/gpu/tests:command_buffer_test_amdgpu_any \
     -//xla/service/gpu/tests:dynamic_shared_memory_test_amdgpu_any \
     -//xla/service/gpu/tests:gpu_kernel_tiling_test_amdgpu_any \
     -//xla/service/gpu/tests:gpu_triton_custom_call_test_amdgpu_any \
