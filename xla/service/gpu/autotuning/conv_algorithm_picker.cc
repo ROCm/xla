@@ -994,8 +994,9 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheRocm(
                           &scratch_allocator, stream, numeric_options));
 
   std::vector<AutotuneResult> profile_results;
-
-  if (runners.size() == 1) {
+  // If using TF_ROCM_USE_IMMEDIATE_MODE but user doesn't want autotuning, choose the first
+  // algo.
+  if (runners.size() == 1 || !IsEnabled(instr->GetModule())) {
     TF_ASSIGN_OR_RETURN(auto alg, runners[0]->ToAlgorithmDesc());
     auto algorithm_proto = alg.ToProto();
     profile_results.emplace_back();
@@ -1180,7 +1181,8 @@ absl::StatusOr<bool> GpuConvAlgorithmPicker::Run(
   XLA_SCOPED_LOGGING_TIMER(
       absl::StrCat("GpuConvAlgorithmPicker for ", module->name()));
 
-  if (!IsEnabled(module)) {
+  if (!IsEnabled(module) && !std::holds_alternative<se::RocmComputeCapability>(
+                                config_.GetGpuComputeCapability())) {
     VLOG(3) << "Convolution auto-tuning disabled, GpuConvAlgorithmPicker "
                "returning early.";
     return false;

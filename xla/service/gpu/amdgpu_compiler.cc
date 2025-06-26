@@ -213,7 +213,7 @@ absl::Status AMDGPUCompiler::OptimizeHloPostLayoutAssignment(
 // enabled.
 bool AMDGPUCompiler::RequiresCollectiveScheduleLinearizer(
     const HloModule* module, se::StreamExecutor* stream_exec) {
-  if (stream_exec == nullptr || !GpuConvAlgorithmPicker::IsEnabled(module)) {
+  if (stream_exec == nullptr) {
     return false;
   }
   for (const HloComputation* comp : module->MakeNonfusionComputations()) {
@@ -231,9 +231,8 @@ absl::Status AMDGPUCompiler::AddConvAndGemmAutotuningPasses(
     HloPassPipeline* pipeline, const se::GpuComputeCapability& gpu_version,
     const CompileOptions& options, HloModule* hlo_module,
     AutotuneConfig& autotune_config, tsl::thread::ThreadPool* thread_pool) {
-  if (GpuConvAlgorithmPicker::IsEnabled(hlo_module)) {
-    pipeline->AddPass<GpuConvAlgorithmPicker>(autotune_config);
-  }
+  //We do autotuning irrespective of --xla_gpu_autotune_level
+  pipeline->AddPass<GpuConvAlgorithmPicker>(autotune_config);
   pipeline->AddPass<GemmAlgorithmPicker>(autotune_config);
   return absl::OkStatus();
 }
