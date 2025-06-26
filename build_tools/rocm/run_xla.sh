@@ -27,11 +27,11 @@ N_BUILD_JOBS=$(grep -c ^processor /proc/cpuinfo)
 rocm-smi -i
 STATUS=$?
 if [ $STATUS -ne 0 ]; then TF_GPU_COUNT=1; else
-   TF_GPU_COUNT=$(rocm-smi -i|grep 'Device ID' |grep 'GPU' |wc -l)
+    TF_GPU_COUNT=$(rocm-smi -i | grep 'Device ID' | grep 'GPU' | wc -l)
 fi
 TF_TESTS_PER_GPU=1
 N_TEST_JOBS=$(expr ${TF_GPU_COUNT} \* ${TF_TESTS_PER_GPU})
-amdgpuname=(`rocminfo | grep gfx | head -n 1`)
+amdgpuname=($(rocminfo | grep gfx | head -n 1))
 AMD_GPU_GFX_ID=${amdgpuname[1]}
 echo ""
 echo "Bazel will use ${N_BUILD_JOBS} concurrent build job(s) and ${N_TEST_JOBS} concurrent test job(s) for gpu ${AMD_GPU_GFX_ID}."
@@ -48,14 +48,14 @@ else
     fi
 fi
 
-export PYTHON_BIN_PATH=`which python3`
+export PYTHON_BIN_PATH=$(which python3)
 export TF_NEED_ROCM=1
 export ROCM_PATH=$ROCM_INSTALL_DIR
 TAGS_FILTER="gpu,requires-gpu-amd,-requires-gpu-nvidia,-no_oss,-oss_excluded,-oss_serial,-no_gpu,-cuda-only"
 UNSUPPORTED_GPU_TAGS="$(echo -requires-gpu-sm{60,70,80,86,89,90}{,-only})"
 TAGS_FILTER="${TAGS_FILTER},${UNSUPPORTED_GPU_TAGS// /,}"
 
-GPU_NAME=(`rocminfo | grep -m 1 gfx`)
+GPU_NAME=($(rocminfo | grep -m 1 gfx))
 GPU_NAME=${GPU_NAME[1]}
 
 bazel \
@@ -83,11 +83,10 @@ bazel \
     -//xla/backends/gpu/codegen/triton:fusion_emitter_device_test_gpu_amd_any \
     -//xla/backends/gpu/codegen/triton:fusion_emitter_int4_device_test_gpu_amd_any \
     -//xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_legacy_test_gpu_amd_any \
-    -//xla/backends/gpu/codegen/triton:support_legacy_test_gpu_amd_any \
     -//xla/backends/gpu/codegen/triton:support_test \
+    -//xla/tests:conv_depthwise_backprop_filter_test_gpu_amd_any \
     -//xla/backends/profiler/gpu:cupti_error_manager_test_gpu_amd_any \
     -//xla/pjrt/c:pjrt_c_api_gpu_test_gpu_amd_any \
     -//xla/service/gpu/tests:command_buffer_test_gpu_amd_any \
     -//xla/service/gpu/tests:gpu_kernel_tiling_test_gpu_amd_any \
     -//xla/service/gpu/tests:gpu_triton_custom_call_test_gpu_amd_any \
-    -//xla/tests:conv_depthwise_backprop_filter_test_gpu_amd_any \
