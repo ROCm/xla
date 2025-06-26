@@ -33,22 +33,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Test XLA
-        run: build_tools/rocm/run_xla_ci_build.sh rocm_ci 1
-  test-and-analyze-xla-2:
-    runs-on: mi-250
-    container:
-      image: rocm/tensorflow-build:latest-jammy-python3.11-rocm6.3.0
-      volumes:
-        - /tmp/xla_bazel_cache:/github/home/.cache/bazel_disk_cache
-      options:
-        --device=/dev/kfd
-        --device=/dev/dri
-        --ipc=host
-        --shm-size=16G
-        --group-add=video
-        --cap-add=SYS_PTRACE
-        --security-opt=seccomp=unconfined
-    steps:
-      - uses: actions/checkout@v4
-      - name: Test XLA
-        run: build_tools/rocm/run_xla_ci_build.sh rocm_ci 2
+        run: build_tools/rocm/run_xla_ci_build.sh rocm_ci

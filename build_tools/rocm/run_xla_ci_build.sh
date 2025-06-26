@@ -19,26 +19,12 @@ set -e
 set -x
 
 CONFIG=$1
-TEST_SET_ID=$2
 
 ASAN_ARGS=()
 if [[ $CONFIG == "rocm_ci_hermetic" ]]; then
     ASAN_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=$(realpath $(dirname $0))/asan_ignore_list.txt")
     ASAN_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=$(realpath $(dirname $0))/lsan_ignore_list.txt")
     ASAN_ARGS+=("--config=asan")
-fi
-
-TEST_SET=()
-if [[ $CONFIG == "1" ]]; then
-    TEST_SET+=("//xla/service:compiler_test_gpu_amd_any")
-    TEST_SET+=("//xla/service:elemental_ir_emitter_test_gpu_amd_any ")
-    TEST_SET+=("//xla/service/gpu:gpu_compiler_test_gpu_amd_any")
-    TEST_SET+=("//xla/tests:matmul_test_gpu_amd_any")
-else
-    TEST_SET+=("//xla/service/gpu/tests:kernel_launch_test_gpu_amd_any")
-    TEST_SET+=("//xla/stream_executor/gpu:gpu_kernel_test_gpu_amd_any")
-    TEST_SET+=("//xla/tests:client_test_gpu_amd_any")
-    TEST_SET+=("//xla/tests:convolution_test_gpu_amd_any")
 fi
 
 bazel \
@@ -58,4 +44,17 @@ bazel \
     --local_test_jobs=2 \
     --run_under=//tools/ci_build/gpu_build:parallel_gpu_execute \
     "${ASAN_ARGS[@]}" \
-    "${TEST_SET[@]}"
+    -- \
+    //xla/... \
+    -//xla/backends/gpu/codegen/triton:support_legacy_test_amdgpu_any \
+    -//xla/backends/gpu/runtime:topk_test_amdgpu_any \
+    -//xla/pjrt/c:pjrt_c_api_gpu_test_amdgpu_any \
+    -//xla/service/gpu/tests:command_buffer_test_amdgpu_any \
+    -//xla/service/gpu/tests:dynamic_shared_memory_test_amdgpu_any \
+    -//xla/service/gpu/tests:gpu_kernel_tiling_test_amdgpu_any \
+    -//xla/service/gpu/tests:gpu_triton_custom_call_test_amdgpu_any \
+    -//xla/service/gpu/tests:sorting_test_amdgpu_any \
+    -//xla/service/gpu/transforms:triton_fusion_numerics_verifier_test_amdgpu_any \
+    -//xla/tests:multioutput_fusion_test_amdgpu_any \
+    -//xla/tools/hlo_opt:tests/gpu_hlo_llvm.hlo.test \
+    -//xla/service/gpu/tests:gpu_cub_sort_test_amdgpu_any \ 
