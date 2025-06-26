@@ -19,7 +19,6 @@ set -e
 set -x
 
 CONFIG=$1
-TEST_SET_ID=$2
 
 ASAN_ARGS=()
 if [[ $CONFIG == "rocm_ci_hermetic" ]]; then
@@ -28,34 +27,58 @@ if [[ $CONFIG == "rocm_ci_hermetic" ]]; then
     ASAN_ARGS+=("--config=asan")
 fi
 
-TEST_SET=()
-if [[ $CONFIG == "1" ]]; then
-    TEST_SET+=("//xla/service:compiler_test_gpu_amd_any")
-    TEST_SET+=("//xla/service:elemental_ir_emitter_test_gpu_amd_any ")
-    TEST_SET+=("//xla/service/gpu:gpu_compiler_test_gpu_amd_any")
-    TEST_SET+=("//xla/tests:matmul_test_gpu_amd_any")
-else
-    TEST_SET+=("//xla/service/gpu/tests:kernel_launch_test_gpu_amd_any")
-    TEST_SET+=("//xla/stream_executor/gpu:gpu_kernel_test_gpu_amd_any")
-    TEST_SET+=("//xla/tests:client_test_gpu_amd_any")
-    TEST_SET+=("//xla/tests:convolution_test_gpu_amd_any")
-fi
+TAGS_FILTER="gpu,requires-gpu-amd,-requires-gpu-nvidia,-no_oss,-oss_excluded,-oss_serial,-no_gpu,-cuda-only"
 
 bazel \
-    --bazelrc=/usertools/rocm.bazelrc \
     --output_base=/tmp/bzl \
     test \
+    --build_tag_filters=${TAGS_FILTER} \
+    --test_tag_filters=${TAGS_FILTER} \
     --config=${CONFIG} \
-    --config=xla_cpp \
     --disk_cache=/github/home/.cache/bazel_disk_cache \
     --experimental_disk_cache_gc_max_size=100G \
     --keep_going \
     --test_env=TF_TESTS_PER_GPU=1 \
     --test_env=TF_GPU_COUNT=2 \
-    --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
-    --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
+    --action_env=XLA_FLAGS="--xla_gpu_force_compilation_parallelism=16 --xla_gpu_enable_llvm_module_compilation_parallelism=true" \
     --test_output=errors \
     --local_test_jobs=2 \
     --run_under=//tools/ci_build/gpu_build:parallel_gpu_execute \
     "${ASAN_ARGS[@]}" \
-    "${TEST_SET[@]}"
+    -- \
+    //xla/... \
+    -//xla/tests:grouped_convolution_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:support_test \
+    -//xla/tests:convolution_test_gpu_alternative_layout_amdgpu_any \
+    -//xla/tests:conv_depthwise_test_amdgpu_any \
+    -//xla/tests:reshape_test_amdgpu_any \
+    -//xla/tests:conv_depthwise_backprop_filter_test_amdgpu_any \
+    -//xla/tests:convolution_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/emitters/tests:loop/broadcast_constant_block_dim_limit.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:reduce_row/mof_scalar_variadic.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:reduce_row/side_output_broadcast.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:transpose/multiple_roots.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:transpose/packed_transpose_bf16.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:transpose/packed_transpose_f16.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:transpose/packed_transpose_multiple_heroes.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:transpose/packed_transpose_multiple_roots.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:transpose/packed_transpose_s16.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:transpose/packed_transpose_s4.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:transpose/packed_transpose_s8.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:transpose/packed_transpose_side_output.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:transpose/packed_transpose_two_heroes.hlo.test \
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_port_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:support_legacy_test_amdgpu_any \
+    -//xla/backends/gpu/runtime:topk_test_amdgpu_any \
+    -//xla/backends/profiler/gpu:cupti_error_manager_test_amdgpu_any \
+    -//xla/pjrt/c:pjrt_c_api_gpu_test_amdgpu_any \
+    -//xla/service/gpu/tests:command_buffer_test_amdgpu_any \
+    -//xla/service/gpu/tests:dynamic_shared_memory_test_amdgpu_any \
+    -//xla/service/gpu/tests:gpu_cub_sort_test_amdgpu_any \
+    -//xla/service/gpu/tests:gpu_kernel_tiling_test_amdgpu_any \
+    -//xla/service/gpu/tests:gpu_triton_custom_call_test_amdgpu_any \
+    -//xla/service/gpu/tests:sorting_test_amdgpu_any \
+    -//xla/service/gpu/transforms:triton_fusion_numerics_verifier_test_amdgpu_any \
+    -//xla/tests:multioutput_fusion_test_amdgpu_any \
+    -//xla/tools/hlo_opt:tests/gpu_hlo_llvm.hlo.test \
