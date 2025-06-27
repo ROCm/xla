@@ -145,6 +145,7 @@ xla_test(
     tags = [
         "cuda-only",
         "no_mac",
+        "cuda-only"
     ],
     deps = [
         ":cuda_test",
