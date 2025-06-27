@@ -637,7 +637,8 @@ ENTRY triton_computation {
   }
 
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc,
-                 skip_failure_branch_to_avoid_crash);
+                 skip_failure_branch_to_avoid_crash ? ExpectedFailMode::kCrash
+                                                    : ExpectedFailMode::kFail);
 }
 
 constexpr std::array kTestedOpsTernaryElementwise = {HloOpcode::kSelect,
