@@ -1918,10 +1918,6 @@ TEST_F(TritonEmitterTest,
   // reasonable amount of time, and has been proven to still correctly capture
   // the indexing overflow behaviour of the Triton fusion that we're checking
   // for.
-  if (std::holds_alternative<se::RocmComputeCapability>
-      (GpuComputeComp())) {
-    GTEST_SKIP() << "Not enough memory to allocate on ROCm.";
-  }
   constexpr absl::string_view kTritonHloText = R"(
 computation {
   p0 = s8[256]{0} parameter(0)
@@ -2951,11 +2947,10 @@ TEST_F(TritonEmitterTest, CheckRocmWarpSize) {
   std::string triton_passes_log;
 
   // For MI210 warp_size should be 64
-  const se::DeviceDescription dev_info = TestGpuDeviceInfo::AMDMI210DeviceInfo();
-  TritonWrapper("test_fn", triton_fusion,
-                se::RocmComputeCapability("gfx942"),
-                dev_info, BlockLevelParameters(), &llvm_module,
-                mlir_context);
+  const se::DeviceDescription dev_info =
+      TestGpuDeviceInfo::AMDMI210DeviceInfo();
+  TritonWrapper("test_fn", triton_fusion, se::RocmComputeCapability("gfx942"),
+                dev_info, BlockLevelParameters(), &llvm_module, mlir_context);
   TF_EXPECT_OK(tsl::Env::Default()->GetMatchingPaths(
       tsl::io::JoinPath(output_directory, "*.triton-passes.log"), &paths));
   EXPECT_EQ(paths.size(), 1);
@@ -2967,11 +2962,10 @@ TEST_F(TritonEmitterTest, CheckRocmWarpSize) {
   EXPECT_THAT(RunFileCheck(triton_passes_log, kPattern), true);
 
   // For RX7900 warp_size should be 32
-  const se::DeviceDescription dev_info_n = TestGpuDeviceInfo::AMDRX7900DeviceInfo();
-  TritonWrapper("test_fn", triton_fusion,
-                se::RocmComputeCapability("gfx1100"),
-                dev_info_n, BlockLevelParameters(), &llvm_module,
-                mlir_context);
+  const se::DeviceDescription dev_info_n =
+      TestGpuDeviceInfo::AMDRX7900DeviceInfo();
+  TritonWrapper("test_fn", triton_fusion, se::RocmComputeCapability("gfx1100"),
+                dev_info_n, BlockLevelParameters(), &llvm_module, mlir_context);
   TF_EXPECT_OK(tsl::Env::Default()->GetMatchingPaths(
       tsl::io::JoinPath(output_directory, "*.triton-passes.log"), &paths));
   EXPECT_EQ(paths.size(), 1);
