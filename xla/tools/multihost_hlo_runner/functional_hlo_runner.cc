@@ -1119,8 +1119,10 @@ FunctionalHloRunner::RunInternal(
     execute_options.launch_id = repeat + 1;
     futures->clear();
     TF_ASSIGN_OR_RETURN(
-        output_buffers,
+        auto new_bufs,
         executable->Execute(argument_ptrs, execute_options, futures));
+    output_buffers = std::move(new_bufs);
+    
     for (auto& future : *futures) {
       TF_RETURN_IF_ERROR(future.Await());
     }
