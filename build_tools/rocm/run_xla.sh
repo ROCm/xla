@@ -86,7 +86,6 @@ bazel \
     -//xla/backends/gpu/codegen/triton:support_legacy_test_gpu_amd_any \
     -//xla/backends/gpu/codegen/triton:support_test \
     -//xla/pjrt/c:pjrt_c_api_gpu_test_gpu_amd_any \
-    -//xla/service/gpu/tests:command_buffer_test_gpu_amd_any \
     -//xla/service/gpu/tests:gpu_kernel_tiling_test_gpu_amd_any \
     -//xla/service/gpu/tests:gpu_triton_custom_call_test_gpu_amd_any \
     -//xla/tests:conv_depthwise_backprop_filter_test_gpu_amd_any \
