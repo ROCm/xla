@@ -5057,11 +5057,22 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
       DeviceMemoryBase filter_data, DeviceMemoryBase side_input_data,
       DeviceMemoryBase bias_data, DeviceMemoryBase output_data) const {
     auto miopen = miopen_->GetHandle(parent_, stream);
-    auto status = wrap::miopenConvolutionForwardImmediate(
-        miopen.handle(), filter_.handle(), filter_data.opaque(),
-        input_nd_.handle(), input_data.opaque(), conv_.handle(),
-        output_nd_.handle(), output_data.opaque(), scratch_memory.opaque(),
-        scratch_memory.size(), static_cast<uint64_t>(algo_id_));
+    // auto status = wrap::miopenConvolutionForwardImmediate(
+    //     miopen.handle(), filter_.handle(), filter_data.opaque(),
+    //     input_nd_.handle(), input_data.opaque(), conv_.handle(),
+    //     output_nd_.handle(), output_data.opaque(), scratch_memory.opaque(),
+    //     scratch_memory.size(), static_cast<uint64_t>(algo_id_));
+    // Alpha is the scaling factor for input.
+    float alpha = 1.0;
+    // Beta is the scaling factor for output.
+    float beta = 0.0;
+    auto status = wrap::miopenConvolutionForward(
+              miopen.handle(), &alpha, input_nd_.handle(),
+              input_data.opaque(), filter_.handle(), filter_data.opaque(),
+              conv_.handle(),
+              static_cast<miopenConvFwdAlgorithm_t>(algo_id_), &beta,
+              output_nd_.handle(), output_data.opaque(),
+              scratch_memory.opaque(), scratch_memory.size());
     if (status != miopenStatusSuccess) {
       VLOG(0) << "Failed to enqueue convolution: "
               << stream_executor::gpu::ToString(status);

@@ -308,7 +308,9 @@ absl::StatusOr<bool> FuseRemoveConvertInConv(HloComputation* comp) {
 
 // alpha * gte(custom-call(...)) ->
 // gte(custom-call(..., backend_config={alpha})).
-absl::StatusOr<bool> FuseConvAlpha(HloComputation* comp) {
+absl::StatusOr<bool> FuseConvAlpha(HloComputation* comp,
+                                   se::GpuComputeCapability cc) {
+  if (IsROCm(cc)) return false;
   bool changed = false;
   for (auto instr : comp->MakeInstructionPostOrder()) {
     HloInstruction* conv = nullptr;
@@ -775,7 +777,8 @@ absl::StatusOr<bool> F8GraphConv(HloComputation* comp,
   return changed;
 }
 
-absl::StatusOr<bool> FuseBiasOrSideInput(HloComputation* comp) {
+absl::StatusOr<bool> FuseBiasOrSideInput(HloComputation* comp,
+                                         se::GpuComputeCapability cc) {
   bool changed = false;
   for (auto instr : comp->MakeInstructionPostOrder()) {
     HloInstruction* conv = nullptr;
@@ -889,7 +892,9 @@ absl::StatusOr<bool> FuseBiasOrSideInput(HloComputation* comp) {
 //
 // where `reshape` can be an arbitrary chain of reshapes+transposes.  This idiom
 // is created by the ReshapeMover pass.
-absl::StatusOr<bool> FuseSideInputAlpha(HloComputation* comp) {
+absl::StatusOr<bool> FuseSideInputAlpha(HloComputation* comp,
+                                        se::GpuComputeCapability cc) {
+  if (IsROCm(cc)) return false;
   bool changed = false;
   for (HloInstruction* instr : comp->MakeInstructionPostOrder()) {
     HloInstruction* conv;
@@ -998,6 +1003,7 @@ absl::StatusOr<bool> FuseSideInputAlpha(HloComputation* comp) {
 
 absl::StatusOr<bool> FuseElu(HloComputation* comp,
                              se::GpuComputeCapability cc) {
+  if (IsROCm(cc)) return false;
   if (!ShouldUseCudnnRuntimeFusion(comp->parent()->config().debug_options(),
                                    cc)) {
     return false;
@@ -1060,7 +1066,8 @@ absl::StatusOr<bool> FuseElu(HloComputation* comp,
   return changed;
 }
 
-absl::StatusOr<bool> FuseRelu(HloComputation* comp) {
+absl::StatusOr<bool> FuseRelu(HloComputation* comp,
+                             se::GpuComputeCapability cc) {
   bool changed = false;
   for (HloInstruction* instr : comp->MakeInstructionPostOrder()) {
     HloInstruction* gte;
@@ -1099,6 +1106,7 @@ absl::StatusOr<bool> FuseRelu(HloComputation* comp) {
 
 absl::StatusOr<bool> FuseRelu6(HloComputation* comp,
                                se::GpuComputeCapability cc) {
+  if (IsROCm(cc)) return false;
   if (!ShouldUseCudnnRuntimeFusion(comp->parent()->config().debug_options(),
                                    cc)) {
     return false;
@@ -1148,6 +1156,7 @@ absl::StatusOr<bool> FuseRelu6(HloComputation* comp,
 
 absl::StatusOr<bool> FuseLeakyRelu(HloComputation* comp,
                                    se::GpuComputeCapability cc) {
+  if (IsROCm(cc)) return false;
   if (!ShouldUseCudnnRuntimeFusion(comp->parent()->config().debug_options(),
                                    cc)) {
     return false;
@@ -1507,23 +1516,23 @@ absl::StatusOr<bool> CudnnFusedConvRewriter::Run(
     TF_ASSIGN_OR_RETURN(changed, FuseRemoveConvertInConv(comp));
     any_changed |= changed;
 
-    TF_ASSIGN_OR_RETURN(changed, FuseConvAlpha(comp));
+    TF_ASSIGN_OR_RETURN(changed, FuseConvAlpha(comp, compute_capability_));
     any_changed |= changed;
 
     // s8 convs' bias and side-input appear before conversion to s8.
     //
     // Run FuseBiasOrSideInput twice, so we get both the bias and the side
     // input, if both are present.
-    TF_ASSIGN_OR_RETURN(changed, FuseBiasOrSideInput(comp));
+    TF_ASSIGN_OR_RETURN(changed, FuseBiasOrSideInput(comp, compute_capability_));
     any_changed |= changed;
-    TF_ASSIGN_OR_RETURN(changed, FuseBiasOrSideInput(comp));
+    TF_ASSIGN_OR_RETURN(changed, FuseBiasOrSideInput(comp, compute_capability_));
     any_changed |= changed;
-    TF_ASSIGN_OR_RETURN(changed, FuseSideInputAlpha(comp));
+    TF_ASSIGN_OR_RETURN(changed, FuseSideInputAlpha(comp, compute_capability_));
     any_changed |= changed;
 
     // Relu might appear before or after convert-to-f16/s8, so we check in both
     // cases.
-    TF_ASSIGN_OR_RETURN(changed, FuseRelu(comp));
+    TF_ASSIGN_OR_RETURN(changed, FuseRelu(comp, compute_capability_));
     any_changed |= changed;
     TF_ASSIGN_OR_RETURN(changed, FuseElu(comp, compute_capability_));
     any_changed |= changed;
@@ -1539,14 +1548,14 @@ absl::StatusOr<bool> CudnnFusedConvRewriter::Run(
     any_changed |= changed;
 
     // f16 convs' bias+side-input can appear before or after conversion to f16.
-    TF_ASSIGN_OR_RETURN(changed, FuseBiasOrSideInput(comp));
+    TF_ASSIGN_OR_RETURN(changed, FuseBiasOrSideInput(comp, compute_capability_));
     any_changed |= changed;
-    TF_ASSIGN_OR_RETURN(changed, FuseBiasOrSideInput(comp));
+    TF_ASSIGN_OR_RETURN(changed, FuseBiasOrSideInput(comp, compute_capability_));
     any_changed |= changed;
-    TF_ASSIGN_OR_RETURN(changed, FuseSideInputAlpha(comp));
+    TF_ASSIGN_OR_RETURN(changed, FuseSideInputAlpha(comp, compute_capability_));
     any_changed |= changed;
 
-    TF_ASSIGN_OR_RETURN(changed, FuseRelu(comp));
+    TF_ASSIGN_OR_RETURN(changed, FuseRelu(comp, compute_capability_));
     any_changed |= changed;
     TF_ASSIGN_OR_RETURN(changed, FuseElu(comp, compute_capability_));
     any_changed |= changed;

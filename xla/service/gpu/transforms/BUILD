@@ -905,7 +905,6 @@ xla_test(
         "gpu_a100",
         "gpu_amd_any",
     ] + if_oss(["gpu_any"]),
-    shard_count = 10,
     deps = [
         ":conv_rewriter",
         ":cudnn_fused_conv_rewriter",
