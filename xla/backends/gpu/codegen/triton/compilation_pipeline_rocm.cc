@@ -63,6 +63,10 @@ absl::Status CreateTritonPipeline(
     pm->addPass(mt_xla::CreateInt4ToPackedInt4RewritePass());
   }
 
+  if (is_xla_fusion) {
+    pm->addPass(mt_xla::CreateInt4ToPackedInt4RewritePass());
+  }
+
   // Based on make_ttir() in
   // @triton//:third_party/amd/backend/compiler.py
   pm->addPass(mlir::createInlinerPass());
