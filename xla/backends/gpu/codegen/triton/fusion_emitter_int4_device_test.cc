@@ -880,8 +880,12 @@ TEST_F(TritonTest, NonstandardLayoutWithManyNonContractingDims) {
   )";
 
   TF_ASSERT_OK_AND_ASSIGN(auto module, GetOptimizedModule(kHloText));
-  EXPECT_TRUE(NestFusionsRunAndCompare(
-      std::move(module), ErrorSpec{/*aabs=*/1e-3, /*arel=*/1e-2}));
+  if(std::holds_alternative<se::CudaComputeCapability>(GpuComputeComp())) {
+    EXPECT_TRUE(*RunFileCheck(module->ToString(), R"(CHECK:  "__cublas$gemm")"));
+  } else {
+    EXPECT_TRUE(*RunFileCheck(module->ToString(), R"(CHECK:  "__cublas$lt$matmul")"));
+  }
+  EXPECT_TRUE(RunAndCompare(kHloText, ErrorSpec{/*aabs=*/1e-3, /*arel=*/1e-2}));
 }
 
 TEST_F(TritonTest, NonstandardLayoutWithManyNonContractingDimsReversedLayout) {
@@ -898,8 +902,12 @@ TEST_F(TritonTest, NonstandardLayoutWithManyNonContractingDimsReversedLayout) {
   )";
 
   TF_ASSERT_OK_AND_ASSIGN(auto module, GetOptimizedModule(kHloText));
-  EXPECT_TRUE(NestFusionsRunAndCompare(
-      std::move(module), ErrorSpec{/*aabs=*/1e-3, /*arel=*/1e-3}));
+  if(std::holds_alternative<se::CudaComputeCapability>(GpuComputeComp())) {
+    EXPECT_TRUE(*RunFileCheck(module->ToString(), R"(CHECK:  "__cublas$gemm")"));
+  } else {
+    EXPECT_TRUE(*RunFileCheck(module->ToString(), R"(CHECK:  "__cublas$lt$matmul")"));
+  }
+  EXPECT_TRUE(RunAndCompare(kHloText, ErrorSpec{/*aabs=*/1e-3, /*arel=*/1e-3}));
 }
 
 TEST_F(TritonTest, NegatePlusConvertHLO) {

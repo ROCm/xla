@@ -128,6 +128,7 @@ class BlasAlgorithmTest : public AlgorithmTest {
   DebugOptions GetDebugOptionsForTest() const override {
     DebugOptions debug_options = AlgorithmTest::GetDebugOptionsForTest();
     debug_options.set_xla_gpu_enable_triton_gemm(false);
+    debug_options.set_xla_gpu_enable_cublaslt(false);
     return debug_options;
   }
 };
@@ -695,9 +696,6 @@ CHECK-NOT: mma.sync.aligned.{{.*}}.row.col.f32.tf32.tf32.f32
 }
 
 TEST_F(TritonAlgorithmTest, Algorithm_BF16_BF16_F32_X3) {
-  if (std::holds_alternative<se::RocmComputeCapability>(GpuComputeComp())) {
-    GTEST_SKIP() << "Triton currently disabled on ROCM.";
-  }
   constexpr absl::string_view kHloText = R"(
     HloModule Algorithm_BF16_BF16_F32_X3
 
@@ -718,9 +716,6 @@ TEST_F(TritonAlgorithmTest, Algorithm_BF16_BF16_F32_X3) {
 }
 
 TEST_F(TritonAlgorithmTest, Algorithm_BF16_BF16_F32_X6) {
-  if (std::holds_alternative<se::RocmComputeCapability>(GpuComputeComp())) {
-    GTEST_SKIP() << "Triton currently disabled on ROCM.";
-  }
   constexpr absl::string_view kHloText = R"(
     HloModule Algorithm_BF16_BF16_F32_X6
 
@@ -741,9 +736,6 @@ TEST_F(TritonAlgorithmTest, Algorithm_BF16_BF16_F32_X6) {
 }
 
 TEST_F(TritonAlgorithmTest, Algorithm_TF32_TF32_F32) {
-  if (std::holds_alternative<se::RocmComputeCapability>(GpuComputeComp())) {
-    GTEST_SKIP() << "Triton currently disabled on ROCM.";
-  }
   constexpr absl::string_view kHloText = R"(
     HloModule Algorithm_TF32_TF32_F32
 
@@ -766,9 +758,6 @@ TEST_F(TritonAlgorithmTest, Algorithm_TF32_TF32_F32) {
 }
 
 TEST_F(TritonAlgorithmTest, Algorithm_TF32_TF32_F32_X3) {
-  if (std::holds_alternative<se::RocmComputeCapability>(GpuComputeComp())) {
-    GTEST_SKIP() << "Triton currently disabled on ROCM.";
-  }
   constexpr absl::string_view kHloText = R"(
     HloModule Algorithm_TF32_TF32_F32_X3
 
@@ -1014,6 +1003,7 @@ class NumericTestsForBlas : public BlasAlgorithmTest,
     reference_options.set_xla_gpu_triton_gemm_any(false);
     reference_options.set_xla_gpu_enable_triton_gemm(false);
     reference_options.set_xla_gpu_cublas_fallback(true);
+    reference_options.set_xla_gpu_enable_cublaslt(false);
 
     HloModuleConfig config;
     config.set_debug_options(reference_options);

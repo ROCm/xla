@@ -31,6 +31,8 @@ struct ClusterInfo;
 namespace xla {
 namespace gpu {
 
+namespace se = ::stream_executor;
+
 // Creates a Triton compilation pipeline.
 //
 // `out_cluster_info` must be kept alive at least until pm.run() is called.
@@ -42,7 +44,7 @@ namespace gpu {
 // use, but that's not the case currently.
 absl::Status CreateTritonPipeline(
     mlir::OpPassManager* pm, std::string arch_name, int num_warps, int num_ctas,
-    int num_stages, mlir::triton::nvidia_gpu::ClusterInfo& out_cluster_info);
+    int num_stages, mlir::triton::nvidia_gpu::ClusterInfo& out_cluster_info, bool is_xla_fusion=false);
 
 }  // namespace gpu
 }  // namespace xla

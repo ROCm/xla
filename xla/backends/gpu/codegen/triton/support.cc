@@ -217,6 +217,9 @@ absl::flat_hash_set<HloOpcode> TritonSupportedBinaryElementwiseOps(
     ret.insert(HloOpcode::kAtan2);
     ret.insert(HloOpcode::kPower);
     ret.insert(HloOpcode::kRemainder);
+    if(std::holds_alternative<se::RocmComputeCapability>(gpu_version)) {
+      ret.insert(HloOpcode::kDivide);
+    }
   }
 
   return ret;
