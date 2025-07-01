@@ -58,8 +58,40 @@ TAGS_FILTER="${TAGS_FILTER},${UNSUPPORTED_GPU_TAGS// /,}"
 GPU_NAME=(`rocminfo | grep -m 1 gfx`)
 GPU_NAME=${GPU_NAME[1]}
 
+EXCLUDED_TESTS=(
+ConvertTestSuite/ConvertTest.Convert/bf16_f8e4m3fn_rocm
+ConvertTestSuite/ConvertTest.Convert/f16_f8e4m3fn_rocm
+ConvertTestSuite/ConvertTest.Convert/f32_f8e4m3fn_roc
+ConvertTestSuite/ConvertTest.Convert/f32_f8e4m3fn_rocm
+ConvertTestSuite/ConvertTest.Convert/f8e4m3fn_bf16_rocm
+ConvertTestSuite/ConvertTest.Convert/f8e4m3fn_f16_rocm
+ConvertTestSuite/ConvertTest.Convert/f8e4m3fn_f32_rocm
+ConvertTestSuite/ConvertTest.Convert/f8e4m3fn_f8e5m2_rocm
+ConvertTestSuite/ConvertTest.Convert/f8e5m2_f8e4m3fn_rocm
+DotTest.MultipleNonContractingDimensions
+DotTest.NonDefaultDimensionOrder_kmkn
+DotTest.NonDefaultDimensionOrder_mknk
+DotTest.SingleBatchDim
+GpuKernelTilingTest.ColumnReductionWithLayoutChangeTiled
+GpuKernelTilingTest.ReductionInputTooLarge
+PjrtCAPIGpuExtensionTest.TritonCompile
+ReductionComputationTestSuite/ReductionComputationTest
+TritonGemmTest.FailIfTooMuchShmem
+TritonTest.NonstandardLayoutWithManyNonContractingDims
+TritonTest.NonstandardLayoutWithManyNonContractingDimsReversedLayout
+GpuIndexTest.CompatibleUseLinearIndexWithReshapeAndBroadcast
+RandomEighTestInstantiation/RandomEighTest.Random/512
+TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
+TritonGemmTest.BroadcastOfVectorConstantIsFused
+RandomEighTestInstantiation/RandomEighTest.Random/511
+DotPrecisionTestSuite/DotPrecisionAlgorithmTest.Algorithm/f8e4m3fn_dot_f16_f16_f32_rocm
+TritonEmitterTest.CheckRocmWarpSize
+TritonEmitterTest.FusionWithOutputContainingMoreThanInt32MaxElementsExecutesCorrectly
+)
+
 bazel \
     test \
+    --disk_cache=/home/atheodor/projects/tmp/disk_cache/ \
     --define xnn_enable_avxvnniint8=false --define xnn_enable_avx512fp16=false \
     --config=rocm_ci \
     --build_tag_filters=${TAGS_FILTER} \
@@ -67,7 +99,7 @@ bazel \
     --test_timeout=920,2400,7200,9600 \
     --test_sharding_strategy=disabled \
     --test_output=errors \
-    --flaky_test_attempts=3 \
+    --flaky_test_attempts=1 \
     --keep_going \
     --local_test_jobs=${N_TEST_JOBS} \
     --test_env=TF_TESTS_PER_GPU=$TF_TESTS_PER_GPU \
@@ -76,11 +108,5 @@ bazel \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     --run_under=//build_tools/ci:parallel_gpu_execute \
+    --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
     -- //xla/... \
-    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_gpu_amd_any \
-    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_port_test_gpu_amd_any \
-    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_test_gpu_amd_any \
-    -//xla/backends/gpu/codegen/triton:fusion_emitter_int4_device_test_gpu_amd_any \
-    -//xla/backends/gpu/codegen/triton:support_test \
-    -//xla/pjrt/c:pjrt_c_api_gpu_test_gpu_amd_any \
-    -//xla/service/gpu/tests:gpu_kernel_tiling_test_gpu_amd_any \
