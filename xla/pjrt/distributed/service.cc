@@ -50,6 +50,8 @@ std::unique_ptr<tsl::CoordinationService> EnableCoordinationService(
   tensorflow::CoordinatedJob* job =
       config.mutable_coordinated_job_list()->Add();
   job->set_name(job_name);
+  VLOG(-1) << "#### EnableCoordinationService with num nodes "
+           << options.num_nodes;
   job->set_num_tasks(options.num_nodes);
   auto service =
       tsl::CoordinationService::Create(options.env, config, /*cache=*/nullptr);
