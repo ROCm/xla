@@ -76,7 +76,6 @@ bazel \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     --run_under=//build_tools/ci:parallel_gpu_execute \
-    -- //xla/... \
     //xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_gpu_amd_any \
     //xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_port_test_gpu_amd_any \
     //xla/backends/gpu/codegen/triton:fusion_emitter_device_test_gpu_amd_any \
