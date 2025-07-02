@@ -797,6 +797,17 @@ absl::StatusOr<bool> FuseBiasOrSideInput(HloComputation* comp,
       continue;
     }
 
+    // For now only support fp16 conv2d
+    if (IsROCm(cc) &&
+        (conv->custom_call_target() != kCudnnConvForwardCallTarget ||
+         conv->convolution_dimension_numbers()
+                 .input_spatial_dimensions_size() != 2 ||
+         conv->operand(0)->shape().element_type() != F16 ||
+         conv->operand(1)->shape().element_type() != F16 ||
+         conv->shape().tuple_shapes(0).element_type() != F16)) {
+      continue;
+    }
+
     if (!ConsumeFuel("cudnn-fused-convolution-rewriter", [&] {
           return absl::StrCat("FuseBiasOrSideInput: ", conv->ToString());
         })) {
@@ -827,7 +838,7 @@ absl::StatusOr<bool> FuseBiasOrSideInput(HloComputation* comp,
     // side_input?
     bool can_accept_bias =
         Match(conv->operand(2), m::Broadcast(m::ConstantEffectiveScalar(0)));
-    bool can_accept_side_input = conv->operand_count() < 4;
+    bool can_accept_side_input = conv->operand_count() < 4 && !IsROCm(cc);
 
     // The addend can be fused as a bias if
     //  - it is 1D broadcasted in the output feature dimension, and
@@ -1067,7 +1078,7 @@ absl::StatusOr<bool> FuseElu(HloComputation* comp,
 }
 
 absl::StatusOr<bool> FuseRelu(HloComputation* comp,
-                             se::GpuComputeCapability cc) {
+                              se::GpuComputeCapability cc) {
   bool changed = false;
   for (HloInstruction* instr : comp->MakeInstructionPostOrder()) {
     HloInstruction* gte;
@@ -1090,11 +1101,21 @@ absl::StatusOr<bool> FuseRelu(HloComputation* comp,
       continue;
     }
 
+    // For now only support fp16 conv2d
+    if (IsROCm(cc) && (conv->convolution_dimension_numbers()
+                               .input_spatial_dimensions_size() != 2 ||
+                       conv->operand(0)->shape().element_type() != F16 ||
+                       conv->operand(1)->shape().element_type() != F16 ||
+                       conv->shape().tuple_shapes(0).element_type() != F16)) {
+      continue;
+    }
+
     if (!ConsumeFuel("cudnn-fused-convolution-rewriter", [&] {
           return absl::StrCat("FuseRelu: ", conv->ToString());
         })) {
       continue;
     }
+
     TF_ASSIGN_OR_RETURN(conv, EnsureIsConvBiasActivation(conv));
     config.set_activation_mode(se::dnn::kRelu);
     TF_RETURN_IF_ERROR(conv->set_backend_config(gpu_config));
@@ -1523,9 +1544,11 @@ absl::StatusOr<bool> CudnnFusedConvRewriter::Run(
     //
     // Run FuseBiasOrSideInput twice, so we get both the bias and the side
     // input, if both are present.
-    TF_ASSIGN_OR_RETURN(changed, FuseBiasOrSideInput(comp, compute_capability_));
+    TF_ASSIGN_OR_RETURN(changed,
+                        FuseBiasOrSideInput(comp, compute_capability_));
     any_changed |= changed;
-    TF_ASSIGN_OR_RETURN(changed, FuseBiasOrSideInput(comp, compute_capability_));
+    TF_ASSIGN_OR_RETURN(changed,
+                        FuseBiasOrSideInput(comp, compute_capability_));
     any_changed |= changed;
     TF_ASSIGN_OR_RETURN(changed, FuseSideInputAlpha(comp, compute_capability_));
     any_changed |= changed;
@@ -1548,9 +1571,11 @@ absl::StatusOr<bool> CudnnFusedConvRewriter::Run(
     any_changed |= changed;
 
     // f16 convs' bias+side-input can appear before or after conversion to f16.
-    TF_ASSIGN_OR_RETURN(changed, FuseBiasOrSideInput(comp, compute_capability_));
+    TF_ASSIGN_OR_RETURN(changed,
+                        FuseBiasOrSideInput(comp, compute_capability_));
     any_changed |= changed;
-    TF_ASSIGN_OR_RETURN(changed, FuseBiasOrSideInput(comp, compute_capability_));
+    TF_ASSIGN_OR_RETURN(changed,
+                        FuseBiasOrSideInput(comp, compute_capability_));
     any_changed |= changed;
     TF_ASSIGN_OR_RETURN(changed, FuseSideInputAlpha(comp, compute_capability_));
     any_changed |= changed;

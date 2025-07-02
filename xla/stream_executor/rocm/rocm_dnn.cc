@@ -883,7 +883,7 @@ struct ScopedDescriptor {
   }
 
   ~ScopedDescriptor() {
-    if (handle_ != nullptr) return;
+    if (handle_ == nullptr) return;
 
     auto status = miDestroyObject(
         handle_);  // wrap::miopenDestroyTensorDescriptor(handle_);
@@ -3355,13 +3355,18 @@ class RocmConvRunner : public dnn::ConvRunner {
   }
 
   std::string ToString() const override {
-    return dnn::AlgorithmDesc{algo_id_, false, workspace_size_}.ToString();
+    return MakeAlgorithmDesc().ToString();
   }
 
   size_t GetWorkspaceSize() const override { return workspace_size_; }
 
   absl::StatusOr<AlgorithmDesc> ToAlgorithmDesc() const override {
-    return {{algo_id_, false, workspace_size_}};
+    return MakeAlgorithmDesc();
+  }
+
+  // Internal form of ToAlgorithmDesc without the StatusOr.
+  dnn::AlgorithmDesc MakeAlgorithmDesc() const {
+    return {algo_id_, /*tensor_ops_enabled_*/ false, workspace_size_};
   }
 
   absl::Status operator()(Stream* stream,
@@ -3449,22 +3454,15 @@ class RocmConvRunner : public dnn::ConvRunner {
                                                 static_cast<int>(kind_)));
     }
 
-    if (is_profiling) {
-      if (status == miopenStatusSuccess) {
-        TF_ASSIGN_OR_RETURN(absl::Duration elapsed,
-                            timer->GetElapsedDuration());
-        output_profile_result->set_elapsed_time_in_ms(
-            absl::ToDoubleMilliseconds(elapsed));
-        dnn::AlgorithmDesc algotype(algo_id_, false);
-        output_profile_result->set_algorithm(algotype);
-        output_profile_result->set_scratch_size(scratch_memory.size());
-      }
-    }
-
     if (status != miopenStatusSuccess) {
       return absl::InternalError(
           absl::StrCat("Failed to enqueue convolution on stream: ",
                        ::stream_executor::gpu::ToString(status)));
+    }
+
+    if (is_profiling) {
+      TF_RETURN_IF_ERROR(PopulateProfileFromTimer(
+          timer.get(), ToAlgorithmDesc().value(), output_profile_result));
     }
 
     return absl::OkStatus();
@@ -4887,55 +4885,31 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
           "RocmFusedConvRunner cached across multiple StreamExecutors.");
     }
 
-    // We can't reliably detect whether this sequence can be fused until
-    // we come here and actually try to fuse it. So, we need a fallback.
-    bool do_unfused =
-        (side_input_scale_ != 0.0) || !fusion_plan_.CompilationSucceeded();
+    if (fusion_plan_) {
+      auto miopen = miopen_->GetHandle(parent_, stream);
+      fusion_plan_->SetConvolutionArgs(filter_data.opaque());
+      fusion_plan_->SetBiasArgs(bias_data.opaque());
+      if (activation_desc_.miopen_activation_mode_ != miopenActivationPASTHRU)
+        fusion_plan_->SetActivationForwardArgs(activation_desc_);
+      miopenStatus_t status;
+      status = wrap::miopenExecuteFusionPlan(
+          miopen.handle(), fusion_plan_->fusion_plan_, input_nd_.handle(),
+          input_data.opaque(), output_nd_.handle(), output_data.opaque(),
+          fusion_plan_->fusion_args_);
 
-    if (do_unfused)
-      return execute_unfused(stream, profile_result, scratch_memory, input_data,
-                             filter_data, side_input_data, bias_data,
-                             output_data);
-    auto algo = MakeAlgorithmDesc();
-    auto miopen = miopen_->GetHandle(parent_, stream);
-    fusion_plan_.SetConvolutionArgs(filter_data.opaque());
-    fusion_plan_.SetBiasArgs(bias_data.opaque());
-    if (activation_desc_.miopen_activation_mode_ != miopenActivationPASTHRU)
-      fusion_plan_.SetActivationForwardArgs(activation_desc_);
-
-    std::unique_ptr<EventBasedTimer> timer;
-    if (profile_result) {
-      TF_ASSIGN_OR_RETURN(timer, stream->CreateEventBasedTimer(
-                                     /* use_delay_kernel=*/false));
-    }
-
-    miopenStatus_t status;
-    status = wrap::miopenExecuteFusionPlan(
-        miopen.handle(), fusion_plan_.fusion_plan_, input_nd_.handle(),
-        input_data.opaque(), output_nd_.handle(), output_data.opaque(),
-        fusion_plan_.fusion_args_);
-
-    if (status != miopenStatusSuccess) {
-      LOG(ERROR) << "Failed to enqueue fused convolution on stream: "
-                 << stream_executor::gpu::ToString(status);
-      return absl::InternalError(
-          "Failed to enqueue fused convolution on stream: " +
-          stream_executor::gpu::ToString(status));
-    }
-
-    if (profile_result) {
-      absl::StatusOr<absl::Duration> elapsed = timer->GetElapsedDuration();
-      if (!elapsed.ok()) {
-        LOG(ERROR) << "Failed to get elapsed duration";
-        return absl::InternalError("Timer failure");
+      if (status != miopenStatusSuccess) {
+        LOG(ERROR) << "Failed to enqueue fused convolution on stream: "
+                   << stream_executor::gpu::ToString(status);
+        return absl::InternalError(
+            "Failed to enqueue fused convolution on stream: " +
+            stream_executor::gpu::ToString(status));
       }
-      profile_result->set_elapsed_time_in_ms(
-          absl::ToDoubleMilliseconds(*elapsed));
-      profile_result->set_algorithm(algo);
-      profile_result->set_scratch_size(scratch_memory.size());
+      return absl::OkStatus();
     }
 
-    return absl::OkStatus();
+    return ExecuteUnfused(stream, profile_result, scratch_memory, input_data,
+                           filter_data, side_input_data, bias_data,
+                           output_data);
   }
 
  public:
@@ -4943,8 +4917,7 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
   static absl::StatusOr<std::unique_ptr<const dnn::FusedConvRunner>> Create(
       StreamExecutor* parent, Stream* stream, MIOpenAccess* miopen,
       const dnn::AlgorithmDesc& algo, dnn::DataType input_type,
-      dnn::DataType bias_type, double conv_scale, double side_input_scale,
-      double leakyrelu_alpha, BatchDescriptor input_nd,
+      dnn::DataType bias_type, double leakyrelu_alpha, BatchDescriptor input_nd,
       BatchDescriptor output_nd, FilterDescriptor filter,
       BatchDescriptor bias_nd, ConvolutionDescriptor conv,
       dnn::ActivationMode activation) {
@@ -4964,58 +4937,36 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
         auto activation_desc,
         ScopedActivationDescriptor::Create(activation, leakyrelu_alpha));
 
-    TF_ASSIGN_OR_RETURN(
-        auto fusion_plan,
-        ScopedFusionPlanConvolutionBiasActivation::Create(
-            miopen->GetHandle(parent, stream).handle(), input_nd_.handle(),
-            filter_.handle(), conv_.handle(), bias_nd_.handle(),
-            activation_desc));
+    if (algo.algo_id() == 0) {
+      TF_ASSIGN_OR_RETURN(
+          auto fusion_plan,
+          ScopedFusionPlanConvolutionBiasActivation::Create(
+              miopen->GetHandle(parent, stream).handle(), input_nd_.handle(),
+              filter_.handle(), conv_.handle(), bias_nd_.handle(),
+              activation_desc));
 
-    VLOG(2) << "RocmFusedConvRunner";
-    auto mi = miopen->GetHandle(parent, stream);
+      if (!fusion_plan.CompilationSucceeded()) {
+        return absl::NotFoundError("Fussion plan missing");
+      }
 
-    size_t maxSolutionCount = 0;
-    auto status = wrap::miopenConvolutionForwardGetSolutionCount(
-        mi.handle(), filter_.handle(), input_nd_.handle(), conv_.handle(),
-        output_nd_.handle(), &maxSolutionCount);
+      return std::make_unique<RocmFusedConvRunner>(
+          parent, stream, miopen, 0, 0, input_type, bias_type, leakyrelu_alpha,
+          input_nd, output_nd, filter, bias_nd, conv, activation, input_nd_,
+          output_nd_, filter_, bias_nd_, conv_, activation_desc,
+          std::move(fusion_plan));
+    }
 
-    size_t solutionCount = 0;
-    std::unique_ptr<miopenConvSolution_t[]> solutions(
-        new miopenConvSolution_t[maxSolutionCount]);
-
-    status = wrap::miopenConvolutionForwardGetSolution(
-        mi.handle(), filter_.handle(), input_nd_.handle(), conv_.handle(),
-        output_nd_.handle(), maxSolutionCount, &solutionCount, solutions.get());
-
-    VLOG(2) << solutionCount << " solutions";
-
-    if (solutionCount == 0) return absl::InternalError("No algorithms found");
-
-    size_t workspace_size_1 = solutions[0].workspace_size;
-    size_t true_workspace_size = 0;
-    status = wrap::miopenConvolutionForwardGetWorkSpaceSize(
-        mi.handle(), filter_.handle(), input_nd_.handle(), conv_.handle(),
-        output_nd_.handle(), &true_workspace_size);
-
-    VLOG(2) << "True workspace size " << workspace_size_1 << " "
-            << true_workspace_size;
-
-    auto obj = new RocmFusedConvRunner(
-        parent, stream, miopen, static_cast<int64_t>(solutions[0].solution_id),
-        true_workspace_size, input_type, bias_type, conv_scale,
-        side_input_scale, leakyrelu_alpha, input_nd, output_nd, filter, bias_nd,
-        conv, activation, input_nd_, output_nd_, filter_, bias_nd_, conv_,
-        activation_desc, fusion_plan);
-
-    return std::unique_ptr<const dnn::FusedConvRunner>(obj);
+    return std::make_unique<RocmFusedConvRunner>(
+        parent, stream, miopen, algo.algo_id(), *algo.workspace_size(),
+        input_type, bias_type, leakyrelu_alpha, input_nd, output_nd, filter,
+        bias_nd, conv, activation, input_nd_, output_nd_, filter_, bias_nd_,
+        conv_, activation_desc, std::nullopt);
   }
 
- private:
-  // Private to prevent passing in the wrong workspace_size.
   RocmFusedConvRunner(
       StreamExecutor* parent, Stream* stream, MIOpenAccess* miopen,
       int64_t algo_id, size_t workspace_size, dnn::DataType input_type,
-      dnn::DataType bias_type, double conv_scale, double side_input_scale,
+      dnn::DataType bias_type,
       double leakyrelu_alpha, BatchDescriptor dnn_input_nd,
       BatchDescriptor dnn_output_nd, FilterDescriptor dnn_filter,
       BatchDescriptor dnn_bias_nd, ConvolutionDescriptor dnn_conv,
@@ -5023,19 +4974,14 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
       ScopedTensorDescriptor& output_nd, ScopedFilterDescriptor& filter,
       ScopedTensorDescriptor& bias_nd, ScopedConvolutionDescriptor& conv,
       ScopedActivationDescriptor& activation_desc,
-      ScopedFusionPlanConvolutionBiasActivation& fusion_plan)
+      std::optional<ScopedFusionPlanConvolutionBiasActivation> fusion_plan)
       : parent_(parent),
         miopen_(miopen),
         algo_id_(algo_id),
         workspace_size_(workspace_size),
         input_type_(input_type),
         bias_type_(bias_type),
-
-        conv_scale_(conv_scale),
-        side_input_scale_(side_input_scale),
         leakyrelu_alpha_(leakyrelu_alpha),
-        side_input_scale_f32_(static_cast<float>(side_input_scale)),
-
         activation_mode_(activation),
         dnn_input_nd_(dnn_input_nd),
         dnn_output_nd_(dnn_output_nd),
@@ -5051,28 +4997,26 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
         activation_desc_(std::move(activation_desc)),
         fusion_plan_(std::move(fusion_plan)) {}
 
-  absl::Status execute_unfused(
-      Stream* stream, dnn::ProfileResult* profile_result,
+ private:
+  absl::Status ExecuteUnfused(
+      Stream* stream, dnn::ProfileResult* output_profile_result,
       DeviceMemoryBase scratch_memory, DeviceMemoryBase input_data,
       DeviceMemoryBase filter_data, DeviceMemoryBase side_input_data,
       DeviceMemoryBase bias_data, DeviceMemoryBase output_data) const {
     auto miopen = miopen_->GetHandle(parent_, stream);
-    // auto status = wrap::miopenConvolutionForwardImmediate(
-    //     miopen.handle(), filter_.handle(), filter_data.opaque(),
-    //     input_nd_.handle(), input_data.opaque(), conv_.handle(),
-    //     output_nd_.handle(), output_data.opaque(), scratch_memory.opaque(),
-    //     scratch_memory.size(), static_cast<uint64_t>(algo_id_));
-    // Alpha is the scaling factor for input.
-    float alpha = 1.0;
-    // Beta is the scaling factor for output.
-    float beta = 0.0;
-    auto status = wrap::miopenConvolutionForward(
-              miopen.handle(), &alpha, input_nd_.handle(),
-              input_data.opaque(), filter_.handle(), filter_data.opaque(),
-              conv_.handle(),
-              static_cast<miopenConvFwdAlgorithm_t>(algo_id_), &beta,
-              output_nd_.handle(), output_data.opaque(),
-              scratch_memory.opaque(), scratch_memory.size());
+
+    const bool is_profiling = output_profile_result != nullptr;
+    std::unique_ptr<EventBasedTimer> timer;
+    if (is_profiling) {
+      TF_ASSIGN_OR_RETURN(timer,
+                          stream->CreateEventBasedTimer(
+                              output_profile_result->warmup_run_executed()));
+    }
+    auto status = wrap::miopenConvolutionForwardImmediate(
+        miopen.handle(), filter_.handle(), filter_data.opaque(),
+        input_nd_.handle(), input_data.opaque(), conv_.handle(),
+        output_nd_.handle(), output_data.opaque(), scratch_memory.opaque(),
+        scratch_memory.size(), static_cast<uint64_t>(algo_id_));
     if (status != miopenStatusSuccess) {
       VLOG(0) << "Failed to enqueue convolution: "
               << stream_executor::gpu::ToString(status);
@@ -5130,23 +5074,25 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
     else
       return absl::InternalError("Unsupported data type");
 
-    return absl::OkStatus();
+    if (is_profiling && biasActStatus.ok()) {
+      TF_RETURN_IF_ERROR(PopulateProfileFromTimer(
+          timer.get(), MakeAlgorithmDesc(), output_profile_result));
+    }
+
+    return biasActStatus;
   }
 
   // Internal form of ToAlgorithmDesc without the StatusOr.
   dnn::AlgorithmDesc MakeAlgorithmDesc() const {
-    return {algo_id_, /*tensor_ops_enabled_*/ true, workspace_size_};
+    return {algo_id_, /*tensor_ops_enabled_*/ false, workspace_size_};
   }
-
-  std::string desc_;
 
   StreamExecutor* parent_;
   MIOpenAccess* miopen_;
   int64_t algo_id_;
   size_t workspace_size_;
   dnn::DataType input_type_, bias_type_;
-  double conv_scale_, side_input_scale_, leakyrelu_alpha_;
-  float side_input_scale_f32_;
+  double leakyrelu_alpha_;
   dnn::ActivationMode activation_mode_;
 
   BatchDescriptor dnn_input_nd_;
@@ -5161,7 +5107,7 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
   ScopedTensorDescriptor bias_nd_;
   ScopedConvolutionDescriptor conv_;
   mutable ScopedActivationDescriptor activation_desc_;
-  mutable ScopedFusionPlanConvolutionBiasActivation fusion_plan_;
+  mutable std::optional<ScopedFusionPlanConvolutionBiasActivation> fusion_plan_;
 };
 
 absl::StatusOr<std::unique_ptr<const dnn::FusedConvRunner>>
@@ -5177,16 +5123,18 @@ MIOpenSupport::FusedConvolveRunnerFromDesc(
     const dnn::ConvolutionDescriptor& convolution_descriptor,
     dnn::ActivationMode activation_mode) {
   VLOG(2) << "MIOpenSupport::FusedConvolveRunnerFromDesc "
-          << filter_descriptor.ndims() << " " << side_input_scale << " "
+          << filter_descriptor.ndims() << " "
           << convolution_descriptor.ToString() << getTypeName(input_type) << " "
           << getTypeName(bias_type) << " " << getTypeName(output_type);
 
-  // note: these checks need to be duplicated in XLA logic, because XLA calls
-  // this function directly and it terminates the process on error
+  if (side_input_scale != 0.0 || conv_scale != 1.0) {
+    return absl::UnimplementedError(
+        "MIOpen backend does not support fused convs with scaling.");
+  }
 
   return RocmFusedConvRunner::Create(
       parent_, stream, miopen_.get(), algorithm_desc, input_type, bias_type,
-      conv_scale, side_input_scale, leakyrelu_alpha, input_descriptor,
+      leakyrelu_alpha, input_descriptor,
       output_descriptor, filter_descriptor, bias_descriptor,
       convolution_descriptor, activation_mode);
 }
@@ -5206,27 +5154,39 @@ absl::Status MIOpenSupport::GetFusedConvolveRunners(
   VLOG(2) << "MIOpenSupport::GetFusedConvolveRunners";
   VLOG(2) << "filter_descriptor " << filter_descriptor.ndims();
 
-  std::vector<dnn::AlgorithmDesc> algorithms{
-      // clang-format off
-      dnn::AlgorithmDesc(miopenConvolutionFwdAlgoGEMM, false, 0),
-      dnn::AlgorithmDesc(miopenConvolutionFwdAlgoDirect, false, 0),
-      dnn::AlgorithmDesc(miopenConvolutionFwdAlgoFFT, false, 0),
-      dnn::AlgorithmDesc(miopenConvolutionFwdAlgoWinograd, false, 0),
-      // clang-format on
-  };
-
-  for (const auto& algo : algorithms) {
-    auto runner_or = FusedConvolveRunnerFromDesc(
-        stream, algo, kind, input_type, bias_type, output_type, conv_scale,
-        side_input_scale, leakyrelu_alpha, input_descriptor, filter_descriptor,
-        bias_descriptor, output_descriptor, convolution_descriptor,
-        activation_mode);
-    if (!runner_or.ok()) continue;
+  auto runner_or = FusedConvolveRunnerFromDesc(
+      stream, {0, true, 0}, kind, input_type, bias_type, output_type,
+      conv_scale, side_input_scale, leakyrelu_alpha, input_descriptor,
+      filter_descriptor, bias_descriptor, output_descriptor,
+      convolution_descriptor, activation_mode);
+  if (runner_or.ok()) {
     out_exec_plans->push_back(std::move(runner_or).value());
+    return absl::OkStatus();
   }
 
-  VLOG(2) << "MIOpenSupport::GetFusedConvolveRunners returns "
-          << out_exec_plans->size() << " runners";
+  if (runner_or.status().code() != absl::StatusCode::kNotFound) {
+    return runner_or.status();
+  }
+
+  // Fussion cannot be compiled; provide fallback
+  std::vector<dnn::ProfileResult> profile_results;
+  if (!GetMIOpenConvolveAlgorithms(
+          kind, input_type, output_type, stream, input_descriptor, input_data,
+          filter_descriptor, filter_data, output_descriptor, output_data,
+          convolution_descriptor, scratch_allocator, &profile_results))
+    return absl::InternalError("GetMIOpenConvolveAlgorithms failure");
+
+  for (const auto& profile_result : profile_results) {
+    TF_ASSIGN_OR_RETURN(
+        auto runner,
+        FusedConvolveRunnerFromDesc(
+            stream, profile_result.algorithm(), kind, input_type, bias_type,
+            output_type, conv_scale, side_input_scale, leakyrelu_alpha,
+            input_descriptor, filter_descriptor, bias_descriptor,
+            output_descriptor, convolution_descriptor, activation_mode));
+    out_runners->push_back(std::move(runner));
+  }
+
   return absl::OkStatus();
 }
 

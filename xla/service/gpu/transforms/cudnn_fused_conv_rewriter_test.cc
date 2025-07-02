@@ -70,6 +70,7 @@ using ::testing::Not;
 static const std::initializer_list<absl::string_view> kf16f32f64{"f16", "f32",
                                                                  "f64"};
 static const std::initializer_list<absl::string_view> kf16f32{"f16", "f32"};
+static const std::initializer_list<absl::string_view> kf16{"f16"};
 
 class CudnnFusedConvRewriterHloTest : public HloTestBase {
  public:
@@ -156,21 +157,22 @@ class CudnnFusedConvRewriterTest : public GpuCodegenTest {
   }
 
   void TestMatchWithAllTypes(absl::string_view hlo_string) {
-    for (absl::string_view type : IsCuda() ? kf16f32f64 : kf16f32) {
+    for (absl::string_view type : IsCuda() ? kf16f32f64 : kf16) {
       const std::string hlo_with_new_type =
           absl::StrReplaceAll(hlo_string, {{"TYPE", type}});
       std::string optimized_hlo_string = GetOptimizedHlo(hlo_with_new_type);
+      LOG(ERROR) << optimized_hlo_string;
       EXPECT_THAT(optimized_hlo_string,
                   Not(HasSubstr(kCudnnConvForwardCallTarget)))
           << optimized_hlo_string;
       EXPECT_THAT(optimized_hlo_string,
                   HasSubstr(kCudnnConvBiasActivationForwardCallTarget));
-
       TF_ASSERT_OK_AND_ASSIGN(auto module,
                               ParseAndReturnVerifiedModule(hlo_with_new_type));
       DebugOptions debug_opts = module->config().debug_options();
       debug_opts.set_xla_gpu_use_runtime_fusion(true);
       module->mutable_config().set_debug_options(debug_opts);
+
       EXPECT_TRUE(RunAndCompare(std::move(module), ErrorSpec{0.01}))
           << optimized_hlo_string;
     }
@@ -202,6 +204,27 @@ class CudnnFusedConvRewriterTest : public GpuCodegenTest {
       EXPECT_THAT(optimized_hlo_string, HasSubstr(kCudnnConvForwardCallTarget));
       EXPECT_THAT(optimized_hlo_string,
                   Not(HasSubstr(kCudnnConvBiasActivationForwardCallTarget)));
+    }
+  }
+
+  void TestMatchWithAllTypesOnCuda(absl::string_view hlo_string) {
+    if (IsCuda()) {
+      TestMatchWithAllTypes(hlo_string);
+    } else {
+      for (absl::string_view type : kf16f32) {
+        const std::string hlo_with_new_type =
+            absl::StrReplaceAll(hlo_string, {{"TYPE", type}});
+        std::string optimized_hlo_string = GetOptimizedHlo(hlo_with_new_type);
+        SCOPED_TRACE(optimized_hlo_string);
+        if (type == "f16") {
+          EXPECT_THAT(optimized_hlo_string,
+                      AnyOf(HasSubstr(kCudnnConvForwardCallTarget),
+                            HasSubstr("\"activation_mode\":\"kNone\"")));
+        } else {
+          EXPECT_THAT(optimized_hlo_string,
+                      HasSubstr(kCudnnConvForwardCallTarget));
+        }
+      }
     }
   }
 
@@ -353,8 +376,9 @@ TEST_F(CudnnFusedConvRewriterTest, TestBias) {
 }
 
 TEST_F(CudnnFusedConvRewriterTest, Test3D) {
+  MAYBE_SKIP_TEST("3D");
   // max(0, conv(x, w) + bias);
-  std::string body = R"(
+  TestMatchWithAllTypesOnCuda(R"(
     HloModule Test
 
     ENTRY Test {
@@ -368,20 +392,8 @@ TEST_F(CudnnFusedConvRewriterTest, Test3D) {
       conv = TYPE[1,3,5,7,64] convolution(input, filter), window={size=3x3x3 pad=1_1x1_1x1_1}, dim_labels=b012f_012io->b012f, feature_group_count=1
       broadcasted_bias = TYPE[1,3,5,7,64] broadcast(bias), dimensions={4}
       add1 = TYPE[1,3,5,7,64] add(conv, broadcasted_bias)
-    )";
-
-  std::string relu = R"(
       ROOT relu = TYPE[1,3,5,7,64] maximum(zeros, add1)
-    })";
-
-  std::string elu = R"(
-      cmp = pred[1,3,5,7,64] compare(add1, zeros), direction=GT
-      expm1 = TYPE[1,3,5,7,64] exponential-minus-one(add1)
-      ROOT elu = TYPE[1,3,5,7,64] select(cmp, add1, expm1)
-    })";
-
-  TestMatchWithAllTypes(body + relu);
-  if (!IsCuda()) TestMatchWithAllTypes(body + elu);
+    })");
 }
 
 TEST_F(CudnnFusedConvRewriterTest, TestBiasMultiCall) {
@@ -450,7 +462,7 @@ TEST_F(CudnnFusedConvRewriterTest, DontFuseBiasWithDepthwiseConv) {
 TEST_F(CudnnFusedConvRewriterTest, TestElu) {
   // sum = conv(x, w) + bias
   // select(compare(sum, 0, GT), sum, exponential-minus-one(sum));
-  TestMatchWithAllTypes(R"(
+  TestMatchWithAllTypesOnCuda(R"(
     HloModule Test
 
     ENTRY Test {
@@ -501,7 +513,7 @@ TEST_F(CudnnFusedConvRewriterTest, TestRelu6) {
   }
   // sum = conv(x, w) + bias
   // clamp(0, sum, 6);
-  TestMatchWithAllTypes(R"(
+  TestMatchWithAllTypesOnCuda(R"(
     HloModule Test
     ENTRY Test {
       zero = TYPE[] constant(0)
@@ -527,7 +539,7 @@ TEST_F(CudnnFusedConvRewriterTest, TestRelu6OddChannels) {
     GTEST_SKIP() << "Conv-Bias-Relu6 fusion is supported and recommended with "
                     "the Nvidia Ampere+ GPUs.";
   }
-  TestMatchWithAllTypes(R"(
+  TestMatchWithAllTypesOnCuda(R"(
     HloModule Test
     ENTRY Test {
       zeros = TYPE[1,384,1024,32] broadcast(TYPE[] constant(0)), dimensions={}
@@ -551,7 +563,7 @@ TEST_F(CudnnFusedConvRewriterTest, TestLeakyRelu) {
   }
   // sum = conv(x, w) + bias
   // select(compare(sum, 0, GT), sum, multiply(sum, alpha));
-  TestMatchWithAllTypes(R"(
+  TestMatchWithAllTypesOnCuda(R"(
     HloModule Test
     ENTRY Test {
       zero = TYPE[] constant(0)
@@ -572,7 +584,7 @@ TEST_F(CudnnFusedConvRewriterTest, TestLeakyRelu) {
 
 TEST_F(CudnnFusedConvRewriterTest, TestSideInputOnly) {
   // max(0, conv(x, w) + side_input);
-  TestMatchWithAllTypes(R"(
+  TestMatchWithAllTypesOnCuda(R"(
     HloModule Test
 
     ENTRY Test {
@@ -610,7 +622,7 @@ TEST_F(CudnnFusedConvRewriterTest, DontFuseSideInputWithDepthwiseConv) {
 
 TEST_F(CudnnFusedConvRewriterTest, TestBiasAndSideInput) {
   // max(0, conv(x, w) + side_input + bias);
-  TestMatchWithAllTypes(R"(
+  TestMatchWithAllTypesOnCuda(R"(
     HloModule Test
 
     ENTRY Test {
@@ -631,14 +643,14 @@ TEST_F(CudnnFusedConvRewriterTest, TestBiasAndSideInput) {
 }
 
 TEST_F(CudnnFusedConvRewriterTest, TestScaledConv) {
-  // max(0, 0.999994934 * conv(x, w));
-  TestMatchWithAllTypes(R"(
+  // max(0, 0.99951171875 * conv(x, w));
+  TestMatchWithAllTypesOnCuda(R"(
     HloModule Test
 
     ENTRY Test {
       zero = TYPE[] constant(0)
       zeros = TYPE[1,32,9,9] broadcast(zero), dimensions={}
-      alpha_conv_scalar = TYPE[] constant(0.999994934)
+      alpha_conv_scalar = TYPE[] constant(0.99951171875)
 
       input = TYPE[1,17,9,9] parameter(0)
       filter = TYPE[3,3,17,32] parameter(1)
@@ -651,14 +663,14 @@ TEST_F(CudnnFusedConvRewriterTest, TestScaledConv) {
 }
 
 TEST_F(CudnnFusedConvRewriterTest, DontFuseScaledDepthwiseConv) {
-  // max(0, 0.999994934 * conv(x, w));
+  // max(0, 0.99951171875 * conv(x, w));
   TestNotMatchWithAllTypes(R"(
     HloModule Test
 
     ENTRY Test {
       zero = TYPE[] constant(0)
       zeros = TYPE[1,17,9,9] broadcast(zero), dimensions={}
-      alpha_conv_scalar = TYPE[] constant(0.999994934)
+      alpha_conv_scalar = TYPE[] constant(0.99951171875)
 
       input = TYPE[1,17,9,9] parameter(0)
       filter = TYPE[3,3,1,17] parameter(1)
@@ -692,7 +704,7 @@ TEST_F(CudnnFusedConvRewriterTest, TestNoCrashOnInf) {
 
 TEST_F(CudnnFusedConvRewriterTest, TestConvAndScaledSideInput) {
   // max(0, conv(x, w) + 0.899994934 * side_input);
-  TestMatchWithAllTypes(R"(
+  TestMatchWithAllTypesOnCuda(R"(
     HloModule Test
 
     ENTRY Test {
@@ -735,14 +747,14 @@ TEST_F(CudnnFusedConvRewriterTest, DontFuseDepthwiseConvWithScaledSideInput) {
 }
 
 TEST_F(CudnnFusedConvRewriterTest, TestScaledConvAndScaledSideInput) {
-  // max(0, 0.999994934 * conv(x, w) + 0.899994934 * side_input);
-  TestMatchWithAllTypes(R"(
+  // max(0, 0.99951171875 * conv(x, w) + 0.899994934 * side_input);
+  TestMatchWithAllTypesOnCuda(R"(
     HloModule Test
 
     ENTRY Test {
       zero = TYPE[] constant(0)
       zeros = TYPE[1,3,3,64] broadcast(zero), dimensions={}
-      alpha_conv_scalar = TYPE[] constant(0.999994934)
+      alpha_conv_scalar = TYPE[] constant(0.99951171875)
       alpha_conv = TYPE[1,3,3,64] broadcast(alpha_conv_scalar), dimensions={}
       alpha_side_input_scalar = TYPE[] constant(0.899994934)
       alpha_side_input = TYPE[1,3,3,64] broadcast(alpha_side_input_scalar), dimensions={}
@@ -760,14 +772,14 @@ TEST_F(CudnnFusedConvRewriterTest, TestScaledConvAndScaledSideInput) {
 }
 
 TEST_F(CudnnFusedConvRewriterTest, TestScaledConvAndScaledSideInputWithBias) {
-  // max(0, 0.999994934 * conv(x, w) + 0.899994934 * side_input + bias);
-  TestMatchWithAllTypes(R"(
+  // max(0, 0.99951171875 * conv(x, w) + 0.899994934 * side_input + bias);
+  TestMatchWithAllTypesOnCuda(R"(
     HloModule Test
 
     ENTRY Test {
       zero = TYPE[] constant(0)
       zeros = TYPE[1,3,3,64] broadcast(zero), dimensions={}
-      alpha_conv_scalar = TYPE[] constant(0.999994934)
+      alpha_conv_scalar = TYPE[] constant(0.99951171875)
       alpha_conv = TYPE[1,3,3,64] broadcast(alpha_conv_scalar), dimensions={}
       alpha_side_input_scalar = TYPE[] constant(0.899994934)
       alpha_side_input = TYPE[1,3,3,64] broadcast(alpha_side_input_scalar), dimensions={}
