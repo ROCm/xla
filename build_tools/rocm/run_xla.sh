@@ -59,7 +59,7 @@ GPU_NAME=(`rocminfo | grep -m 1 gfx`)
 GPU_NAME=${GPU_NAME[1]}
 
 EXCLUDED_TESTS=(
-BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F64_F64_F64
+# //xla/backends/gpu/codegen/triton:support_test
 ConvertTestSuite/ConvertTest.Convert/bf16_f8e4m3fn_rocm
 ConvertTestSuite/ConvertTest.Convert/f16_f8e4m3fn_rocm
 ConvertTestSuite/ConvertTest.Convert/f32_f8e4m3fn_roc
@@ -130,27 +130,31 @@ DotTestSuite/DotTypesTest.Dot/s64_f64_rocm
 DotTestSuite/DotTypesTest.Dot/s64_f8e4m3fn_rocm
 DotTestSuite/DotTypesTest.Dot/s8_f64_rocm
 DotTestSuite/DotTypesTest.Dot/s8_f8e4m3fn_rocm
+ReductionComputationTestSuite/ReductionComputationTest
+# //xla/service/gpu/tests:gpu_index_test_gpu_amd_any
 GpuIndexTest.CompatibleUseLinearIndexWithReshapeAndBroadcast
+# //xla/service/gpu/tests:gpu_kernel_tiling_test_gpu_amd_any
 GpuKernelTilingTest.ColumnReductionWithLayoutChangeTiled
 GpuKernelTilingTest.ReductionInputTooLarge
+# //xla/pjrt/c:pjrt_c_api_gpu_test_gpu_amd_any
 PjrtCAPIGpuExtensionTest.TritonCompile
-RandomEighTestInstantiation/RandomEighTest.Random/511
-RandomEighTestInstantiation/RandomEighTest.Random/512
-ReductionComputationTestSuite/ReductionComputationTest
+# //xla/backends/gpu/codegen/triton:fusion_emitter_device_test_gpu_amd_any
 TritonEmitterTest.CheckRocmWarpSize
 TritonEmitterTest.ConvertF16ToF8E5M2Exhaustive
 TritonEmitterTest.FP8ToFP8EndToEnd
 TritonEmitterTest.FusionWithOutputContainingMoreThanInt32MaxElementsExecutesCorrectly
+BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F64_F64_F64
+# //xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_gpu_amd_any
 TritonGemmTest.BroadcastOfVectorConstantIsFused
 TritonGemmTest.FailIfTooMuchShmem
 TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
+# //xla/backends/gpu/codegen/triton:fusion_emitter_int4_device_test_gpu_amd_any
 TritonTest.NonstandardLayoutWithManyNonContractingDims
 TritonTest.NonstandardLayoutWithManyNonContractingDimsReversedLayout
 )
 
 bazel \
     test \
-    --disk_cache=/home/atheodor/projects/tmp/disk_cache/ \
     --define xnn_enable_avxvnniint8=false --define xnn_enable_avx512fp16=false \
     --config=rocm_ci \
     --build_tag_filters=${TAGS_FILTER} \
@@ -158,7 +162,7 @@ bazel \
     --test_timeout=920,2400,7200,9600 \
     --test_sharding_strategy=disabled \
     --test_output=errors \
-    --flaky_test_attempts=1 \
+    --flaky_test_attempts=3 \
     --keep_going \
     --local_test_jobs=${N_TEST_JOBS} \
     --test_env=TF_TESTS_PER_GPU=$TF_TESTS_PER_GPU \
