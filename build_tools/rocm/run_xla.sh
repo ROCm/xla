@@ -151,6 +151,8 @@ TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
 # //xla/backends/gpu/codegen/triton:fusion_emitter_int4_device_test_gpu_amd_any
 TritonTest.NonstandardLayoutWithManyNonContractingDims
 TritonTest.NonstandardLayoutWithManyNonContractingDimsReversedLayout
+# //xla/hlo/builder/lib:self_adjoint_eig_test_gpu_amd_any marked as flaky but randomly red after 3 attempts
+RandomEighTestInstantiation/RandomEighTest.Random/*
 )
 
 bazel \
