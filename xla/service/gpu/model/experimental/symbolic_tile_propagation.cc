@@ -78,6 +78,44 @@ TiledOperands PropagateTileToInputForBroadcastOp(
                        ConstraintExpression::GetAlwaysSatisfied()};
 }
 
+TiledOperands PropagateTileToInputForConcatenateOp(
+    const HloConcatenateInstruction& concatenate,
+    const ExperimentalSymbolicTile& result_tile) {
+  MLIRContext* ctx = result_tile.mlir_context();
+
+  int64_t num_operands = concatenate.operand_count();
+
+  SymbolicTiles symbolic_tiles;
+  symbolic_tiles.reserve(num_operands);
+
+  // For concatenate, we need to adjust the offsets and the bounds in the
+  // concatenate dimension.
+  int64_t concat_dim = concatenate.concatenate_dimension();
+  int64_t concat_dim_size = concatenate.shape().dimensions(concat_dim);
+  int64_t offset = 0;
+  for (const HloInstruction* operand : concatenate.operands()) {
+    SmallVector<AffineExpr, 3> new_offsets(result_tile.offsets().begin(),
+                                           result_tile.offsets().end());
+    new_offsets[concat_dim] = new_offsets[concat_dim] - offset;
+    offset += operand->shape().dimensions(concat_dim);
+    SmallVector<AffineExpr, 3> new_bounds(result_tile.upper_bounds().begin(),
+                                          result_tile.upper_bounds().end());
+    new_bounds[concat_dim] =
+        new_bounds[concat_dim] - (concat_dim_size - offset);
+    ExperimentalSymbolicTile operand_tile{ctx,
+                                          result_tile.num_tile_ids(),
+                                          new_offsets,
+                                          result_tile.sizes(),
+                                          result_tile.strides(),
+                                          new_bounds,
+                                          result_tile.rt_vars()};
+    symbolic_tiles.push_back(operand_tile);
+  }
+
+  return TiledOperands{symbolic_tiles,
+                       ConstraintExpression::GetAlwaysSatisfied()};
+}
+
 std::optional<TiledOperands> PropagateTileToInputForPadOp(
     const HloPadInstruction& pad, const ExperimentalSymbolicTile& result_tile) {
   MLIRContext* ctx = result_tile.mlir_context();
@@ -214,6 +252,11 @@ std::optional<TiledOperands> PropagateTileToInput(
   if (hlo.opcode() == HloOpcode::kBroadcast) {
     return PropagateTileToInputForBroadcastOp(
         *Cast<HloBroadcastInstruction>(&hlo), result_tile);
+  }
+
+  if (hlo.opcode() == HloOpcode::kConcatenate) {
+    return PropagateTileToInputForConcatenateOp(
+        *Cast<HloConcatenateInstruction>(&hlo), result_tile);
   }
 
   if (hlo.opcode() == HloOpcode::kPad) {
