@@ -156,12 +156,12 @@ RandomEighTestInstantiation/RandomEighTest.Random/*
 )
 
 BAZEL_DISK_CACHE_SIZE=100G
+BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.6.0"
 
 bazel \
     test \
     --define xnn_enable_avxvnniint8=false --define xnn_enable_avx512fp16=false \
-    --disk_cache=/tf/disk_cache/rocm-jaxlib-v0.6.0 \
-    --experimental_disk_cache_gc \
+    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
     --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE} \
     --config=rocm_ci \
     --build_tag_filters=${TAGS_FILTER} \
@@ -183,6 +183,5 @@ bazel \
 
 # clean up bazel disk_cache
 bazel shutdown \
-  --disk_cache=/mnt/bazel-cache \
-  --experimental_disk_cache_gc \
+  --disk_cache=${BAZEL_DISK_CACHE_DIR} \
   --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE}
