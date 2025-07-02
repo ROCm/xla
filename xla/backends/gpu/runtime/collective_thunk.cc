@@ -537,6 +537,13 @@ std::string CollectiveThunk::GetDeviceString(
                          collective_params.local_device_ordinal);
 }
 
+std::optional<uint64_t> CollectiveThunk::GetAsyncEventsUniqueId() const {
+  if (!async_events_) {
+    return std::nullopt;
+  }
+  return reinterpret_cast<uint64_t>(async_events_.get());
+}
+
 CollectiveDoneThunk::CollectiveDoneThunk(
     Thunk::Kind kind, ThunkInfo thunk_info,
     std::shared_ptr<CollectiveThunk::AsyncEvents> async_events,
@@ -565,4 +572,10 @@ absl::Status IsValidOperand(Shape shape, Thunk::Kind reduction_op) {
   return absl::OkStatus();
 }
 
+std::optional<uint64_t> CollectiveDoneThunk::GetAsyncEventsUniqueId() const {
+  if (!async_events_) {
+    return std::nullopt;
+  }
+  return reinterpret_cast<uint64_t>(async_events_.get());
+}
 }  // namespace xla::gpu

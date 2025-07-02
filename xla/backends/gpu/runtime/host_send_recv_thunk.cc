@@ -145,6 +145,13 @@ absl::Status HostSendThunk::ExecuteOnStream(const ExecuteParams& params) {
       "SendDeviceMemoryFunction is not available");
 }
 
+std::optional<uint64_t> HostSendThunk::GetAsyncEventsUniqueId() const {
+  if (!events_) {
+    return std::nullopt;
+  }
+  return reinterpret_cast<uint64_t>(events_.get());
+}
+
 //===----------------------------------------------------------------------===//
 // HostSendDoneThunk
 //===----------------------------------------------------------------------===//
@@ -179,6 +186,13 @@ absl::Status HostSendDoneThunk::ExecuteOnStream(const ExecuteParams& params) {
 
   // Once event is recorded we can add a stream dependency.
   return params.stream->WaitFor(done_event.get().get());
+}
+
+std::optional<uint64_t> HostSendDoneThunk::GetAsyncEventsUniqueId() const {
+  if (!events_) {
+    return std::nullopt;
+  }
+  return reinterpret_cast<uint64_t>(events_.get());
 }
 
 //===----------------------------------------------------------------------===//
@@ -232,6 +246,13 @@ absl::Status HostRecvThunk::ExecuteOnStream(const ExecuteParams& params) {
       "RecvDeviceMemoryFunction is not available");
 }
 
+std::optional<uint64_t> HostRecvThunk::GetAsyncEventsUniqueId() const {
+  if (!events_) {
+    return std::nullopt;
+  }
+  return reinterpret_cast<uint64_t>(events_.get());
+}
+
 //===----------------------------------------------------------------------===//
 // HostRecvDoneThunk
 //===----------------------------------------------------------------------===//
@@ -265,6 +286,13 @@ absl::Status HostRecvDoneThunk::ExecuteOnStream(const ExecuteParams& params) {
 
   // Once event is recorded we can add a stream dependency.
   return params.stream->WaitFor(done_event.get().get());
+}
+
+std::optional<uint64_t> HostRecvDoneThunk::GetAsyncEventsUniqueId() const {
+  if (!events_) {
+    return std::nullopt;
+  }
+  return reinterpret_cast<uint64_t>(events_.get());
 }
 
 }  // namespace xla::gpu

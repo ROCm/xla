@@ -92,6 +92,8 @@ class HostSendThunk : public Thunk {
 
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
 
+  std::optional<uint64_t> GetAsyncEventsUniqueId() const override;
+
  private:
   Shape shape_;
   BufferAllocation::Slice buffer_;
@@ -115,6 +117,8 @@ class HostSendDoneThunk : public Thunk {
 
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
 
+  std::optional<uint64_t> GetAsyncEventsUniqueId() const override;
+
  private:
   int64_t channel_id_;
 
@@ -135,6 +139,8 @@ class HostRecvThunk : public Thunk {
                 std::optional<GlobalDeviceId> device_constraint);
 
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
+
+  std::optional<uint64_t> GetAsyncEventsUniqueId() const override;
 
  private:
   Shape shape_;
@@ -158,6 +164,8 @@ class HostRecvDoneThunk : public Thunk {
                     std::optional<GlobalDeviceId> device_constraint);
 
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
+
+  std::optional<uint64_t> GetAsyncEventsUniqueId() const override;
 
  private:
   int64_t channel_id_;

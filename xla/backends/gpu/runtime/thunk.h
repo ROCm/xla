@@ -19,6 +19,7 @@ limitations under the License.
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -528,6 +529,10 @@ class Thunk {
 
   std::vector<const Thunk*> control_predecessors() const {
     return control_predecessors_;
+  }
+
+  virtual std::optional<uint64_t> GetAsyncEventsUniqueId() const {
+    return std::nullopt;
   }
 
  protected:

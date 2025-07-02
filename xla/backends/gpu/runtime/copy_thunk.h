@@ -18,6 +18,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -161,6 +162,8 @@ class DeviceToHostCopyThunk : public CopyThunk {
       ThunkInfo thunk_info, const DeviceToHostCopyThunkProto& thunk_proto,
       absl::Span<const BufferAllocation> buffer_allocations);
 
+  std::optional<uint64_t> GetAsyncEventsUniqueId() const override;
+
  private:
   std::shared_ptr<CopyThunk::AsyncEvents> async_events_;
   const HloInstruction* instr_;
@@ -192,6 +195,8 @@ class HostToDeviceCopyThunk : public CopyThunk {
       ThunkInfo thunk_info, const HostToDeviceCopyThunkProto& thunk_proto,
       absl::Span<const BufferAllocation> buffer_allocations);
 
+  std::optional<uint64_t> GetAsyncEventsUniqueId() const override;
+
  private:
   std::shared_ptr<CopyThunk::AsyncEvents> async_events_;
   const HloInstruction* instr_;
@@ -208,6 +213,8 @@ class CopyDoneThunk : public Thunk {
                 const HloInstruction* copy_start_instr);
 
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
+
+  std::optional<uint64_t> GetAsyncEventsUniqueId() const override;
 
  private:
   std::shared_ptr<CopyThunk::AsyncEvents> async_events_;

@@ -17,6 +17,9 @@ limitations under the License.
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -114,22 +117,123 @@ std::optional<DebugOptions::CommandBufferCmdType> GetCommandBufferCmdType(
     Thunk::Kind kind) {
   switch (kind) {
     case Thunk::kCopy:
+    case Thunk::kKernel:
       return DebugOptions::FUSION;
     case Thunk::kGemm:
       return DebugOptions::CUBLAS;
+    case Thunk::kAllGatherStart:
+    case Thunk::kAllReduceStart:
+    case Thunk::kReduceScatterStart:
+    case Thunk::kAllToAllStart:
+    case Thunk::kCollectiveBroadcastStart:
+    case Thunk::kCollectivePermuteStart:
+    case Thunk::kRaggedAllToAllStart:
+    case Thunk::kRecv:
+    case Thunk::kSend:
+      return DebugOptions::COLLECTIVES;
     default:
       return std::nullopt;
   }
 }
 
-absl::StatusOr<bool> IsConvertible(const Thunk& thunk,
-                                   const CommandBufferConfig& config) {
-  auto cmd_type = GetCommandBufferCmdType(thunk.kind());
+bool IsAsyncStart(Thunk* thunk) {
+  if (thunk->kind() == Thunk::kAllGatherStart ||
+      thunk->kind() == Thunk::kAllReduceStart ||
+      thunk->kind() == Thunk::kReduceScatterStart ||
+      thunk->kind() == Thunk::kAllToAllStart ||
+      thunk->kind() == Thunk::kCollectiveBroadcastStart ||
+      thunk->kind() == Thunk::kCollectivePermuteStart ||
+      thunk->kind() == Thunk::kRaggedAllToAllStart ||
+      thunk->kind() == Thunk::kSend ||
+      thunk->kind() == Thunk::kNvshmemCollectivePermuteStart ||
+      thunk->kind() == Thunk::kCopy || thunk->kind() == Thunk::kHostSend ||
+      thunk->kind() == Thunk::kHostRecv) {
+    return thunk->GetAsyncEventsUniqueId().has_value();
+  }
+  return false;
+}
+
+bool IsAsyncDone(Thunk* thunk) {
+  if (thunk->kind() == Thunk::kAllGatherDone ||
+      thunk->kind() == Thunk::kAllReduceDone ||
+      thunk->kind() == Thunk::kReduceScatterDone ||
+      thunk->kind() == Thunk::kAllToAllDone ||
+      thunk->kind() == Thunk::kCollectiveBroadcastDone ||
+      thunk->kind() == Thunk::kCollectivePermuteDone ||
+      thunk->kind() == Thunk::kRaggedAllToAllDone ||
+      thunk->kind() == Thunk::kRecvDone || thunk->kind() == Thunk::kSendDone ||
+      thunk->kind() == Thunk::kNvshmemCollectivePermuteDone ||
+      thunk->kind() == Thunk::kCopyDone ||
+      thunk->kind() == Thunk::kHostSendDone ||
+      thunk->kind() == Thunk::kHostRecvDone) {
+    return thunk->GetAsyncEventsUniqueId().has_value();
+  }
+  return false;
+}
+
+bool IsConvertible(Thunk* thunk, const CommandBufferConfig& config) {
+  if (IsAsyncDone(thunk)) {
+    return true;
+  }
+  auto cmd_type = GetCommandBufferCmdType(thunk->kind());
   if (!cmd_type.has_value()) {
-    return absl::InvalidArgumentError(
-        "Thunk kind is not supported for command buffer conversion.");
+    return false;  // Thunk kind is not supported for command buffer conversion.
   }
   return config.enabled_commands.contains(*cmd_type);
+}
+
+// Collect the sequence of thunks that contains the async start and its
+// corresponding done thunk. If there is another start thunk
+// between the original start and done, we may potentially extend the sequence
+// to include its corresponding done thunk. For example, if we call this
+// function on async-start_a in the following sequence:
+//
+// async_start_a
+// async_start_b
+// async_done_a
+// async_done_b
+//
+// The returned sequence will contain async_done_b. So that all async pairs
+// are captured by the same command buffer.
+
+// Returns the index of the last thunk in the region if a valid region is
+// found, otherwise returns nullopt.
+std::optional<size_t> CollectAndCheckAsyncRegion(
+    size_t start_index, ThunkSequence& thunks,
+    const CommandBufferConfig& config) {
+  absl::flat_hash_set<int64_t> unpaired_ids_of_async_starts;
+
+  for (size_t i = start_index; i < thunks.size(); ++i) {
+    auto& thunk = thunks[i];
+
+    // Check if thunk is convertible
+    if (!IsConvertible(thunk.get(), config)) {
+      return std::nullopt;  // All thunks in the region must be convertible.
+    }
+
+    // Check if it is async start thunk
+    if (IsAsyncStart(thunk.get())) {
+      unpaired_ids_of_async_starts.insert(
+          thunk->GetAsyncEventsUniqueId().value());
+    }
+
+    // Check if it is async done thunk
+    if (IsAsyncDone(thunk.get())) {
+      auto it = unpaired_ids_of_async_starts.find(
+          thunk->GetAsyncEventsUniqueId().value());
+      if (it == unpaired_ids_of_async_starts.end()) {
+        return std::nullopt;  // We found an async end for an event, whose async
+                              // start is not part of the region
+      }
+      unpaired_ids_of_async_starts.erase(it);
+    }
+
+    if (unpaired_ids_of_async_starts.empty()) {
+      return i;  // We found pairs to all open async events and thunks in
+                 // between are convertible
+    }
+  }
+  return std::nullopt;  // error didn't find an end for some start
 }
 
 }  // namespace
@@ -179,15 +283,40 @@ absl::StatusOr<bool> CommandBufferConversionPass::Run(
            !cmd_buffer_thunk->thunks()->thunks().empty());
     new_thunks.push_back(std::move(cmd_buffer_thunk));
     changed = true;
+    current_command_buffer_thunks.clear();
     return absl::OkStatus();
   };
 
   // TODO(aliia): use post order here
   auto& original_thunks = root_thunk_ptr->thunks();
 
-  for (auto& thunk : original_thunks) {
-    TF_ASSIGN_OR_RETURN(bool is_convertible, IsConvertible(*thunk, config));
-    if (is_convertible) {
+  for (size_t i = 0; i < original_thunks.size(); ++i) {
+    auto& thunk = original_thunks[i];
+
+    // Check if thunk is async start
+    if (IsAsyncStart(thunk.get())) {
+      // Collect and check async region
+      std::optional<size_t> region_end_index =
+          CollectAndCheckAsyncRegion(i, original_thunks, config);
+
+      if (region_end_index.has_value()) {
+        // If a valid region is found, add the whole region to the command
+        // buffer thunks and continue processing.
+        TF_RETURN_IF_ERROR(flush_command_buffer());
+        current_command_buffer_thunks.insert(
+            current_command_buffer_thunks.end(),
+            std::make_move_iterator(original_thunks.begin() + i),
+            std::make_move_iterator(original_thunks.begin() +
+                                    region_end_index.value() + 1));
+        i = region_end_index.value();
+        continue;
+      }
+    } else if (IsConvertible(thunk.get(), config) &&
+               !IsAsyncDone(thunk.get())) {
+      // Check if thunk is convertible and not an async done: async done thunks
+      // can be only added to the current_command_buffer_thunks as part of a
+      // valid async regions.
+
       current_command_buffer_thunks.push_back(std::move(thunk));
       continue;
     }
