@@ -5,13 +5,10 @@ load("@com_github_grpc_grpc//bazel:grpc_deps.bzl", "grpc_deps")
 load("@com_github_nelhage_rules_boost//:boost/boost.bzl", "boost_deps")
 load("@io_bazel_rules_closure//closure:defs.bzl", "closure_repositories")
 load("@rules_pkg//:deps.bzl", "rules_pkg_dependencies")
-load("//:tsl_workspace1.bzl", "tsl_workspace1")
 
 # buildifier: disable=unnamed-macro
 def workspace():
     """Loads a set of TensorFlow dependencies in a WORKSPACE file."""
-    tsl_workspace1()
-
     native.register_toolchains("@local_config_python//:py_toolchain")
     rules_pkg_dependencies()
 
