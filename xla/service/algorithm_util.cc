@@ -111,11 +111,20 @@ bool IsAmpere(stream_executor::GpuComputeCapability gpu_compute_capability) {
 bool IsSupportedByCublasOrCublasLt(
     PrecisionConfig::Algorithm algorithm,
     stream_executor::GpuComputeCapability gpu_compute_capability) {
+
+  const bool is_rocm_mi100_or_mi200 =
+      std::holds_alternative<se::RocmComputeCapability>(
+          gpu_compute_capability) &&
+      ([](const se::RocmComputeCapability& cc) {
+        return cc.gfx9_mi100() || cc.gfx9_mi200();
+      })(std::get<se::RocmComputeCapability>(gpu_compute_capability));
+
   switch (algorithm) {
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32:
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X3:
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X6:
     case PrecisionConfig::ALG_UNSET:
+      return !is_rocm_mi100_or_mi200;
     case PrecisionConfig::ALG_DOT_F16_F16_F32:
     case PrecisionConfig::ALG_DOT_F32_F32_F32:
     case PrecisionConfig::ALG_DOT_F64_F64_F64:
