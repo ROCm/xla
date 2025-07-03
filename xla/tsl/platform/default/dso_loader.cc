@@ -55,13 +55,70 @@ std::string GetHipVersion() {
   return "";
 #endif  // TENSORFLOW_USE_ROCM
 }
-std::string GetRocBlasVersion() {
+std::string GetRocblasVersion() {
 #if TENSORFLOW_USE_ROCM
   return TF_ROCBLAS_SOVERSION;
 #else   // TENSORFLOW_USE_ROCM
   return "";
 #endif  // TENSORFLOW_USE_ROCM
 }
+std::string GetHipblasltVersion() {
+#if TENSORFLOW_USE_ROCM
+  return TF_HIPBLASLT_SOVERSION;
+#else   // TENSORFLOW_USE_ROCM
+  return "";
+#endif  // TENSORFLOW_USE_ROCM
+}
+std::string GetMiopenVersion() {
+#if TENSORFLOW_USE_ROCM
+  return TF_MIOPEN_SOVERSION;
+#else   // TENSORFLOW_USE_ROCM
+  return "";
+#endif  // TENSORFLOW_USE_ROCM
+}
+std::string GetHipfftVersion() {
+#if TENSORFLOW_USE_ROCM
+  return TF_HIPFFT_SOVERSION;
+#else   // TENSORFLOW_USE_ROCM
+  return "";
+#endif  // TENSORFLOW_USE_ROCM
+}
+std::string GetRocsolverVersion() {
+#if TENSORFLOW_USE_ROCM
+  return TF_ROCSOLVER_SOVERSION;
+#else   // TENSORFLOW_USE_ROCM
+  return "";
+#endif  // TENSORFLOW_USE_ROCM
+}
+std::string GetHipsparseVersion() {
+#if TENSORFLOW_USE_ROCM
+  return TF_HIPSPARSE_SOVERSION;
+#else   // TENSORFLOW_USE_ROCM
+  return "";
+#endif  // TENSORFLOW_USE_ROCM
+}
+std::string GetRoctracerVersion() {
+#if TENSORFLOW_USE_ROCM
+  return TF_ROCTRACER_SOVERSION;
+#else   // TENSORFLOW_USE_ROCM
+  return "";
+#endif  // TENSORFLOW_USE_ROCM
+}
+std::string GetHipsolverVersion() {
+#if TENSORFLOW_USE_ROCM
+  return TF_HIPSOLVER_SOVERSION;
+#else   // TENSORFLOW_USE_ROCM
+  return "";
+#endif  // TENSORFLOW_USE_ROCM
+}
+std::string GetRocrandVersion() {
+#if TENSORFLOW_USE_ROCM
+  return TF_ROCRAND_SOVERSION;
+#else   // TENSORFLOW_USE_ROCM
+  return "";
+#endif  // TENSORFLOW_USE_ROCM
+}
+
 
 absl::StatusOr<void*> GetDsoHandle(const std::string& name,
                                    const std::string& version) {
@@ -158,50 +215,41 @@ absl::StatusOr<void*> GetNvInferPluginDsoHandle() {
 }
 
 absl::StatusOr<void*> GetRocblasDsoHandle() {
-  return GetDsoHandle("rocblas", GetRocBlasVersion());
+  return GetDsoHandle("rocblas", GetRocblasVersion());
 }
 
 absl::StatusOr<void*> GetMiopenDsoHandle() {
-  return GetDsoHandle("MIOpen", "1");
+  return GetDsoHandle("MIOpen", GetMiopenVersion());
 }
 
 absl::StatusOr<void*> GetHipfftDsoHandle() {
-  return GetDsoHandle("hipfft", "0");
+  return GetDsoHandle("hipfft", GetHipfftVersion());
 }
 
 absl::StatusOr<void*> GetRocrandDsoHandle() {
-  return GetDsoHandle("rocrand", "1");
+  return GetDsoHandle("rocrand", GetRocrandVersion());
 }
 
 absl::StatusOr<void*> GetRocsolverDsoHandle() {
-  return GetDsoHandle("rocsolver", "0");
+  return GetDsoHandle("rocsolver", GetRocsolverVersion());
 }
 
 #if TF_ROCM_VERSION >= 40500
 absl::StatusOr<void*> GetHipsolverDsoHandle() {
-  #if TF_ROCM_VERSION < 70000
-  return GetDsoHandle("hipsolver", "0");
-  #else // TF_ROCM_VERSION > 70000
-  return GetDsoHandle("hipsolver", "1");
-  #endif   
-
+  return GetDsoHandle("hipsolver", GetHipsolverVersion());
 }
 #endif
 
 absl::StatusOr<void*> GetRoctracerDsoHandle() {
-  return GetDsoHandle("roctracer64", "4");
+  return GetDsoHandle("roctracer64", GetRoctracerVersion());
 }
 
 absl::StatusOr<void*> GetHipsparseDsoHandle() {
-  return GetDsoHandle("hipsparse", "1");
+  return GetDsoHandle("hipsparse", GetHipsparseVersion());
 }
 
 absl::StatusOr<void*> GetHipblasltDsoHandle() {
-  #if TF_ROCM_VERSION < 70000
-  return GetDsoHandle("hipblaslt", "0");
-  #else // TF_ROCM_VERSION > 70000
-  return GetDsoHandle("hipblaslt", "1");
-  #endif
+  return GetDsoHandle("hipblaslt", GetHipblasltVersion());
 }
 
 absl::StatusOr<void*> GetHipDsoHandle() {
