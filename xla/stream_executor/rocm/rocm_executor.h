@@ -113,6 +113,9 @@ class RocmExecutor : public GpuExecutor {
       uint64_t size) override;
   void HostMemoryDeallocate(void* location) override;
 
+  bool HostMemoryRegister(void* location, uint64_t size) override;
+  bool HostMemoryUnregister(void* location) override;
+
   absl::StatusOr<MemoryType> GetPointerMemorySpace(const void* ptr) override;
 
   Stream* FindAllocatedStream(void* gpu_stream) override {
@@ -128,6 +131,9 @@ class RocmExecutor : public GpuExecutor {
   CreateDeviceDescription(int device_ordinal);
 
  private:
+  // Initializes Blas interfaces
+  absl::Status InitBlas();
+
   // Loads a module in HSACO format.
   absl::StatusOr<ModuleHandle> LoadModuleFromHsaco(const char* hsaco)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(in_memory_modules_mu_);

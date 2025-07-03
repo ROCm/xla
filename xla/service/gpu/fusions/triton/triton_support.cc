@@ -55,7 +55,8 @@ bool IsTritonSupportedDataType(PrimitiveType type,
       return true;
     case F8E5M2:
     case F8E4M3FN:
-      return std::holds_alternative<se::CudaComputeCapability>(gpu_version);
+      return std::holds_alternative<se::CudaComputeCapability>(gpu_version) /*||
+             std::holds_alternative<se::RocmComputeCapability>(gpu_version)*/ ;
     case BF16:
       return std::holds_alternative<se::CudaComputeCapability>(gpu_version) ||
              (std::holds_alternative<se::RocmComputeCapability>(gpu_version) &&
