@@ -313,6 +313,8 @@ class ParametricDotTest : public DotOperationTest,
           ::testing::UnitTest::GetInstance()->current_test_info()->name());
       if (name.find("TestF16/270x270x520_MajorToMinor") != std::string::npos) {
         DotTestParam param = GetParam();
+	 execution_options_.mutable_debug_options()->set_xla_gpu_autotune_level(
+			 2);
         // In order to test both grad_x and grad_y attributes, we set
         // propagate_grad_xy_ to 1 or 2 based on some alternating parameter
         // to set it deterministically.

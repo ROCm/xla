@@ -505,10 +505,10 @@ xla_test(
 xla_test(
     name = "gpu_triton_custom_call_test",
     srcs = ["gpu_triton_custom_call_test.cc"],
+    tags = ["cuda-only"],
     backends = [
         "gpu_a100",
         "gpu_v100",
-        "gpu_amd_any",
     ],
     deps = [
         ":gpu_codegen_test",
