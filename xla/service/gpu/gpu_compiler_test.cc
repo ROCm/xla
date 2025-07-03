@@ -597,7 +597,7 @@ ENTRY main {
       R"(CHECK: custom-call($0{{[^)]*}}, $1{{[^)]*}}){{.*}}custom_call_target="__cublas$$lt$$matmul$$f8")",
       lhs_name, rhs_name);
   const std::string cublas_convert_to_f16 =
-      R"(CHECK: custom-call(f16{{[^)]*}}, f16{{[^)]*}}){{.*}}custom_call_target="__cublas$gemm")";
+      R"(CHECK: custom-call(f16{{[^)]*}}, f16{{[^)]*}}){{.*}}custom_call_target="__cublas$lt$matmul")";
   const std::string fallback_convert_to_f16 =
       R"(CHECK: dot(f16{{[^)]*}}, f16{{[^)]*}}))";
 
