@@ -485,6 +485,10 @@ absl::Status NcclCollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
                /*terminate_timeout=*/absl::Seconds(40));
   }
 
+  if (!IsAsync()) {
+    TF_ASSIGN_OR_RETURN(std::vector<Communicator*> comms, GetNcclCommunicators(params));
+    for (auto comm : comms) { delete comm; }
+  }
   return absl::OkStatus();
 }
 
@@ -499,6 +503,19 @@ std::string NcclCollectiveThunk::GetDeviceString(
                          global_device_id.value(),
                          collective_params.local_device_ordinal);
 }
+
+absl::StatusOr<std::vector<Communicator*>> NcclCollectiveThunk::GetNcclCommunicators(
+		const ExecuteParams& params) const {
+  AsyncStreamKind stream_kind = GetAsyncStreamKind();
+  TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
+  TF_ASSIGN_OR_RETURN(
+    CommunicatorHandle comm_handle,
+      GetNcclComm(collectives, *params.collective_params,
+                  *params.collective_cliques, config().replica_groups,
+                  config().group_mode, nccl_stream_id(), stream_kind));
+  return std::vector<Communicator*>{comm_handle.comm};
+}
+
 
 NcclCollectiveDoneThunk::NcclCollectiveDoneThunk(
     Thunk::Kind kind, ThunkInfo thunk_info,
