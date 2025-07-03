@@ -259,11 +259,23 @@ tsl_gpu_library(
     ],
 )
 
+filegroup(
+    name = "rocm_tracer_cc",
+    srcs = ["rocm_tracer.cc"],
+    visibility = ["//xla/python:__pkg__"],
+)
+
 tsl_gpu_library(
     name = "rocm_tracer",
     srcs = if_rocm(["rocm_tracer.cc"]),
     hdrs = if_rocm(["rocm_tracer.h"]),
     copts = tf_profiler_copts() + tsl_copts(),
+    linkopts = select({
+        "//conditions:default": [
+            "-L/opt/rocm/lib",      # search path for all ROCm shared objects
+            "-lrocprofiler-sdk",    # the library that owns the missing symbols
+        ],
+    }),
     tags = [
         "gpu",
         "rocm-only",
