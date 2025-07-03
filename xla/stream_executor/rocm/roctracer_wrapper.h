@@ -20,14 +20,21 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_ROCM_ROCTRACER_WRAPPER_H_
 #define XLA_STREAM_EXECUTOR_ROCM_ROCTRACER_WRAPPER_H_
 
-#include "rocm/include/roctracer/roctracer.h"
-#include "rocm/include/roctracer/roctracer_hip.h"
-#include "rocm/rocm_config.h"
-#if TF_ROCM_VERSION >= 50300
-#include "rocm/include/roctracer/roctracer_roctx.h"
-#else
-#include "rocm/include/roctracer/roctracer_hcc.h"
+#ifndef TF_ROCM_VERSION
+#define TF_ROCM_VERSION 600000  // Default value if not defined
 #endif
+
+#include <rocm/include/rocprofiler-sdk/buffer.h>
+#include <rocm/include/rocprofiler-sdk/buffer_tracing.h>
+#include <rocm/include/rocprofiler-sdk/callback_tracing.h>
+#include <rocm/include/rocprofiler-sdk/external_correlation.h>
+#include <rocm/include/rocprofiler-sdk/fwd.h>
+#include <rocm/include/rocprofiler-sdk/internal_threading.h>
+#include <rocm/include/rocprofiler-sdk/registration.h>
+#include <rocm/include/rocprofiler-sdk/cxx/name_info.hpp>
+#include <rocm/include/rocprofiler-sdk/rocprofiler.h>
+
+
 #include "xla/stream_executor/platform/dso_loader.h"
 #include "xla/stream_executor/platform/port.h"
 #include "tsl/platform/env.h"
@@ -45,7 +52,7 @@ namespace wrap {
   }
 
 #else
-
+/*
 #define ROCTRACER_API_WRAPPER(API_NAME)                                       \
   template <typename... Args>                                                 \
   auto API_NAME(Args... args) -> decltype(::API_NAME(args...)) {              \
@@ -63,46 +70,74 @@ namespace wrap {
     }();                                                                      \
     return loaded(args...);                                                   \
   }
+*/
+#define ROCTRACER_API_WRAPPER(API_NAME)                                       \
+  template <typename... Args>                                                 \
+  auto API_NAME(Args... args) -> decltype(::API_NAME(args...)) {              \
+    using FuncPtrT = std::add_pointer<decltype(::API_NAME)>::type;            \
+    static FuncPtrT loaded = nullptr;                                         \
+    if (!loaded) {                                                            \
+      static const char* kName = #API_NAME;                                   \
+      void* f;                                                                \
+      auto s = tsl::Env::Default()->GetSymbolFromLibrary(                     \
+          stream_executor::internal::CachedDsoLoader::GetRoctracerDsoHandle() \
+              .value(),                                                       \
+          kName, &f);                                                         \
+      CHECK(s.ok()) << "could not find " << kName                             \
+                    << " in roctracer DSO; dlerror: " << s.message();         \
+      loaded = reinterpret_cast<FuncPtrT>(f);                                 \
+    }                                                                         \
+    return loaded(args...);                                                   \
+  }
+
 
 #endif  // PLATFORM_GOOGLE
 
-#if TF_ROCM_VERSION >= 50300
-#define FOREACH_ROCTRACER_API(DO_FUNC)           \
-  DO_FUNC(roctracer_default_pool_expl)           \
-  DO_FUNC(roctracer_disable_domain_activity)     \
-  DO_FUNC(roctracer_disable_domain_callback)     \
-  DO_FUNC(roctracer_disable_op_activity)         \
-  DO_FUNC(roctracer_disable_op_callback)         \
-  DO_FUNC(roctracer_enable_domain_activity_expl) \
-  DO_FUNC(roctracer_enable_domain_callback)      \
-  DO_FUNC(roctracer_enable_op_activity_expl)     \
-  DO_FUNC(roctracer_enable_op_callback)          \
-  DO_FUNC(roctracer_error_string)                \
-  DO_FUNC(roctracer_flush_activity_expl)         \
-  DO_FUNC(roctracer_get_timestamp)               \
-  DO_FUNC(roctracer_op_string)                   \
-  DO_FUNC(roctracer_open_pool_expl)              \
-  DO_FUNC(roctracer_set_properties)              \
-  DO_FUNC(roctracer_next_record)
-#else
-#define FOREACH_ROCTRACER_API(DO_FUNC)           \
-  DO_FUNC(roctracer_default_pool_expl)           \
-  DO_FUNC(roctracer_disable_domain_activity)     \
-  DO_FUNC(roctracer_disable_domain_callback)     \
-  DO_FUNC(roctracer_disable_op_activity)         \
-  DO_FUNC(roctracer_disable_op_callback)         \
-  DO_FUNC(roctracer_enable_domain_activity_expl) \
-  DO_FUNC(roctracer_enable_domain_callback)      \
-  DO_FUNC(roctracer_enable_op_activity_expl)     \
-  DO_FUNC(roctracer_enable_op_callback)          \
-  DO_FUNC(roctracer_error_string)                \
-  DO_FUNC(roctracer_flush_activity_expl)         \
-  DO_FUNC(roctracer_get_timestamp)               \
-  DO_FUNC(roctracer_op_string)                   \
-  DO_FUNC(roctracer_open_pool_expl)              \
-  DO_FUNC(roctracer_set_properties)
+// only support which latest version ?
+/*
+#if TF_ROCM_VERSION >= 507000
+#define FOREACH_ROCTRACER_API(DO_FUNC)                     \
+  DO_FUNC(rocprofiler_force_configure)                     \
+  DO_FUNC(rocprofiler_at_internal_thread_create)           \
+  DO_FUNC(rocprofiler_create_buffer)                       \
+  DO_FUNC(rocprofiler_get_buffer_tracing_names)            \
+  DO_FUNC(rocprofiler_get_callback_tracing_names)          \
+  DO_FUNC(rocprofiler_flush_buffer)                        \
+  DO_FUNC(rocprofiler_get_status_string)                   \
+  DO_FUNC(rocprofiler_create_context)                      \
+  DO_FUNC(rocprofiler_context_is_valid)                    \
+  DO_FUNC(rocprofiler_start_context)                       \
+  DO_FUNC(rocprofiler_configure_callback_tracing_service)  \
+  DO_FUNC(rocprofiler_configure_callback_thread)           \
+  DO_FUNC(rocprofiler_asign_callback_thread)               \
+  DO_FUNC(rocprofiler_get_timestamp)                       
 #endif
 FOREACH_ROCTRACER_API(ROCTRACER_API_WRAPPER)
+*/
+
+ROCTRACER_API_WRAPPER(rocprofiler_force_configure)
+ROCTRACER_API_WRAPPER(rocprofiler_start_context)
+ROCTRACER_API_WRAPPER(rocprofiler_stop_context)
+ROCTRACER_API_WRAPPER(rocprofiler_create_context)
+ROCTRACER_API_WRAPPER(rocprofiler_is_initialized)
+ROCTRACER_API_WRAPPER(rocprofiler_context_is_valid)
+ROCTRACER_API_WRAPPER(rocprofiler_assign_callback_thread)
+ROCTRACER_API_WRAPPER(rocprofiler_create_callback_thread)
+ROCTRACER_API_WRAPPER(rocprofiler_configure_callback_tracing_service)
+ROCTRACER_API_WRAPPER(rocprofiler_create_buffer)
+ROCTRACER_API_WRAPPER(rocprofiler_flush_buffer)
+ROCTRACER_API_WRAPPER(rocprofiler_configure_buffer_tracing_service)
+ROCTRACER_API_WRAPPER(rocprofiler_get_thread_id)
+ROCTRACER_API_WRAPPER(rocprofiler_at_internal_thread_create)
+ROCTRACER_API_WRAPPER(rocprofiler_push_external_correlation_id)
+ROCTRACER_API_WRAPPER(rocprofiler_query_buffer_tracing_kind_name)
+ROCTRACER_API_WRAPPER(rocprofiler_query_buffer_tracing_kind_operation_name)
+ROCTRACER_API_WRAPPER(rocprofiler_iterate_buffer_tracing_kind_operations)
+ROCTRACER_API_WRAPPER(rocprofiler_iterate_buffer_tracing_kinds)
+ROCTRACER_API_WRAPPER(rocprofiler_get_status_string)
+ROCTRACER_API_WRAPPER(rocprofiler_configure)
+ROCTRACER_API_WRAPPER(rocprofiler_get_timestamp)
+
 
 #undef FOREACH_ROCTRACER_API
 #undef ROCTRACER_API_WRAPPER

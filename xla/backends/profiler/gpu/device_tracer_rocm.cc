@@ -65,11 +65,15 @@ using tsl::profiler::XLineBuilder;
 using tsl::profiler::XPlaneBuilder;
 using tsl::profiler::XSpace;
 
+namespace se = ::stream_executor;
+
 // GpuTracer for ROCm GPU.
 class GpuTracer : public profiler::ProfilerInterface {
  public:
-  GpuTracer(RocmTracer* rocm_tracer) : rocm_tracer_(rocm_tracer) {
-    LOG(INFO) << "GpuTracer created.";
+  GpuTracer(RocmTracer* rocmtracer) : rocm_tracer_(rocmtracer) {
+    LOG(ERROR) << "GpuTrace with rocprofv3...\n";
+    Start();
+    LOG(INFO) << "GpuTracer created...";
   }
   ~GpuTracer() override {}
 
@@ -83,7 +87,6 @@ class GpuTracer : public profiler::ProfilerInterface {
   absl::Status DoStop();
 
   RocmTracerOptions GetRocmTracerOptions();
-
   RocmTraceCollectorOptions GetRocmTraceCollectorOptions(uint32_t num_gpus);
 
   enum State {
@@ -100,80 +103,8 @@ class GpuTracer : public profiler::ProfilerInterface {
 };
 
 RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
-  // TODO(rocm-profiler): We need support for context similar to CUDA
+  // TODO(rocm-profiler): We need support for context similar to CUDA ?
   RocmTracerOptions options;
-  std::vector<uint32_t> empty_vec;
-
-  // clang formatting does not preserve one entry per line
-  // clang-format off
-  std::vector<uint32_t> hip_api_domain_ops{
-      // KERNEL
-      HIP_API_ID_hipExtModuleLaunchKernel,
-      HIP_API_ID_hipModuleLaunchKernel,
-      HIP_API_ID_hipHccModuleLaunchKernel,
-      HIP_API_ID_hipLaunchKernel,
-      HIP_API_ID_hipExtLaunchKernel,
-      // MEMCPY
-      HIP_API_ID_hipMemcpy,
-      HIP_API_ID_hipMemcpyAsync,
-      HIP_API_ID_hipMemcpyDtoD,
-      HIP_API_ID_hipMemcpyDtoDAsync,
-      HIP_API_ID_hipMemcpyDtoH,
-      HIP_API_ID_hipMemcpyDtoHAsync,
-      HIP_API_ID_hipMemcpyHtoD,
-      HIP_API_ID_hipMemcpyHtoDAsync,
-      HIP_API_ID_hipMemcpyPeer,
-      HIP_API_ID_hipMemcpyPeerAsync,
-
-      // MEMSet
-      HIP_API_ID_hipMemsetD32,
-      HIP_API_ID_hipMemsetD32Async,
-      HIP_API_ID_hipMemsetD16,
-      HIP_API_ID_hipMemsetD16Async,
-      HIP_API_ID_hipMemsetD8,
-      HIP_API_ID_hipMemsetD8Async,
-      HIP_API_ID_hipMemset,
-      HIP_API_ID_hipMemsetAsync,
-
-      // MEMAlloc
-      HIP_API_ID_hipMalloc,
-      HIP_API_ID_hipMallocPitch,
-      // MEMFree
-      HIP_API_ID_hipFree,
-      // GENERIC
-      HIP_API_ID_hipStreamSynchronize,
-  };
-  // clang-format on
-
-  options.api_tracking_set =
-      std::set<uint32_t>(hip_api_domain_ops.begin(), hip_api_domain_ops.end());
-
-  // These are the list of APIs we track since roctracer activity
-  // does not provide all the information necessary to fully populate the
-  // TF events. We need to track the APIs for those activities in API domain but
-  // we only use them for filling the missing items in their corresponding
-  // activity (using correlation id).
-  // clang-format off
-  std::vector<uint32_t> hip_api_aux_ops{
-    HIP_API_ID_hipStreamWaitEvent,
-    // TODO(rocm-profiler): finding device ID from hipEventSynchronize need some
-    // extra work, we ignore it for now.
-    // HIP_API_ID_hipEventSynchronize,
-    HIP_API_ID_hipHostFree,
-    HIP_API_ID_hipHostMalloc,
-    HIP_API_ID_hipSetDevice  //  added to track default device
-  };
-
-  // clang-format on
-
-  hip_api_domain_ops.insert(hip_api_domain_ops.end(), hip_api_aux_ops.begin(),
-                            hip_api_aux_ops.end());
-
-  // options.api_callbacks.emplace(ACTIVITY_DOMAIN_HIP_API, hip_api_domain_ops);
-  options.api_callbacks.emplace(ACTIVITY_DOMAIN_HIP_API, empty_vec);
-
-  options.activity_tracing.emplace(ACTIVITY_DOMAIN_HIP_OPS, empty_vec);
-
   return options;
 }
 
@@ -191,19 +122,40 @@ absl::Status GpuTracer::DoStart() {
   if (!rocm_tracer_->IsAvailable()) {
     return tsl::errors::Unavailable("Another profile session running.");
   }
-
-  AnnotationStack::Enable(true);
+  
+  // AnnotationStack::Enable(true);
 
   RocmTraceCollectorOptions trace_collector_options =
       GetRocmTraceCollectorOptions(rocm_tracer_->NumGpus());
-  uint64_t start_gputime_ns = RocmTracer::GetTimestamp();
+  uint64_t start_gputime_ns = rocm_tracer_->GetTimestamp();
   uint64_t start_walltime_ns = tsl::EnvTime::NowNanos();
   rocm_trace_collector_ = CreateRocmCollector(
       trace_collector_options, start_walltime_ns, start_gputime_ns);
 
-  RocmTracerOptions tracer_options = GetRocmTracerOptions();
-  rocm_tracer_->Enable(tracer_options, rocm_trace_collector_.get());
+  // RocmTracerOptions tracer_options = GetRocmTracerOptions();
+  // rocm_tracer_->Enable(tracer_options, rocm_trace_collector_.get());
+  
+  // LOG(ERROR) << "cj rocm_tracer_collector = " << rocm_trace_collector_.get();
+  // LOG(ERROR) << "cj rocm_tracer_ collector = " << rocm_tracer_->get_collector();
+  // LOG(ERROR) << "cj check XSpace = " << space;
+  LOG(ERROR) << "DO START ...";
 
+  /*
+  RocmTracer* rocm_tracer_ =
+      profiler::RocmTracer::GetRocmTracerSingleton();
+  LOG(ERROR) << "cj rocm_tracer is available = " << rocm_tracer_->IsAvailable();
+  if (!rocm_tracer_->IsAvailable()) {
+    return absel::;
+  }
+  */
+ for (auto& event: rocm_tracer_->GetEvents()) {
+  rocm_trace_collector_->AddEvent(std::move(event));
+ }
+ LOG(ERROR) << "DO START after moving events...";
+ rocm_trace_collector_->Flush();
+ LOG(ERROR) << "DO START after flush...";
+
+ LOG(ERROR) << "Export XSpace after flush...";
   return absl::OkStatus();
 }
 
@@ -219,9 +171,9 @@ absl::Status GpuTracer::Start() {
 }
 
 absl::Status GpuTracer::DoStop() {
-  rocm_tracer_->Disable();
-  AnnotationStack::Enable(false);
-  return absl::OkStatus();
+  // rocm_tracer_->stop();
+  // rocm_tracer_->shutdown();
+  return absl::OkStatus();  
 }
 
 absl::Status GpuTracer::Stop() {
@@ -233,6 +185,9 @@ absl::Status GpuTracer::Stop() {
 }
 
 absl::Status GpuTracer::CollectData(XSpace* space) {
+  if (rocm_trace_collector_) rocm_trace_collector_->Export(space);
+  LOG(ERROR) << "CollectData XSpace = " << space;
+
   switch (profiling_state_) {
     case State::kNotStarted:
       VLOG(3) << "No trace data collected, session wasn't started";
@@ -247,7 +202,7 @@ absl::Status GpuTracer::CollectData(XSpace* space) {
       VLOG(3) << "No trace data collected";
       return absl::OkStatus();
     case State::kStoppedOk: {
-      if (rocm_trace_collector_) rocm_trace_collector_->Export(space);
+      // if (rocm_trace_collector_) rocm_trace_collector_->Export(space);
       return absl::OkStatus();
     }
   }
@@ -258,12 +213,17 @@ absl::Status GpuTracer::CollectData(XSpace* space) {
 std::unique_ptr<profiler::ProfilerInterface> CreateGpuTracer(
     const ProfileOptions& options) {
   if (options.device_type() != ProfileOptions::GPU &&
-      options.device_type() != ProfileOptions::UNSPECIFIED)
+      options.device_type() != ProfileOptions::UNSPECIFIED){
     return nullptr;
+  }
 
   profiler::RocmTracer* rocm_tracer =
       profiler::RocmTracer::GetRocmTracerSingleton();
-  if (!rocm_tracer->IsAvailable()) return nullptr;
+  LOG(ERROR) << "cj rocm_tracer is available = " << rocm_tracer->IsAvailable();
+  LOG(ERROR) << "Traced events = " << rocm_tracer->GetEvents().size();
+  if (!rocm_tracer->IsAvailable()) {
+    return nullptr;
+  }
 
   return std::make_unique<profiler::GpuTracer>(rocm_tracer);
 }
