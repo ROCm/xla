@@ -214,6 +214,13 @@ class RocmComputeCapability {
 
   bool has_mfma_instr_support() const { return gfx9_mi100_or_later(); }
 
+  bool has_mma_instr_support() const {
+    static constexpr absl::string_view kList[] = {"gfx908", "gfx90a", "gfx940",
+                                                  "gfx942"};
+    return (gfx_version().find("gfx11") ||
+            (absl::c_count(kList, gfx_version()) != 0));
+  }
+
   bool has_fp16_atomics_support() const {
     // TODO(rocm): Check. This should be the same as has_fast_fp16_support().
     return gfx9_mi200_or_later();

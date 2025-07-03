@@ -597,15 +597,19 @@ cc_library(
         "@triton//third_party/nvidia:TritonNVIDIAGPUToLLVM",
         "@triton//:TritonGPUTransforms",
         "@triton//:TritonLLVMIR",
+    ]) + if_rocm_is_configured([
+        "@triton//:TritonGPUTransforms",
+        "@triton//:TritonLLVMIR",
+        "@triton//third_party/amd:TritonAMDGPUToLLVM",
+        "@triton//third_party/amd:TritonAMDGPUTransforms",
     ]),
 )
 
 xla_test(
     name = "ir_emitter_triton_test",
-    srcs = if_cuda_is_configured(["ir_emitter_triton_test.cc"]),
+    srcs = if_gpu_is_configured(["ir_emitter_triton_test.cc"]),
     backends = [
-        "gpu_a100",
-        "gpu_h100",
+        "gpu",
     ],
     shard_count = 20,
     tags = ["nomac"],
