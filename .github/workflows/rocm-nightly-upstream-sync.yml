@@ -21,8 +21,8 @@ jobs:
         with:
           app-id: ${{ vars.ROCM_REPO_MANAGEMENT_API_2_ID }}
           private-key: ${{ secrets.ROCM_REPO_MANAGEMENT_API_2_PRIV_KEY }}
-        outputs:
-          token: ${{ steps.generate-token.outputs.token }}
+    outputs:
+      token: ${{ steps.generate-token.outputs.token }}
   sync-main:
     needs: generate-app-token
     runs-on: ubuntu-latest
