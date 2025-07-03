@@ -683,7 +683,7 @@ ENTRY entry {
   // reduction emitter. The cost model queries the reduction emitter regarding
   // the launch dimensions, so it seems likely that it is caused by different
   // launch dimensions.
-  debug_options.set_xla_gpu_mlir_emitter_level(3);
+  //  debug_options.set_xla_gpu_mlir_emitter_level(3);
   EXPECT_TRUE(fusion_merger_.Run(module.get()).value());
 }
 
@@ -995,7 +995,7 @@ ENTRY e {
   )")
                     .value();
   auto& debug_options = module->mutable_config().mutable_debug_options();
-  debug_options.set_xla_gpu_mlir_emitter_level(3);
+  // debug_options.set_xla_gpu_mlir_emitter_level(3);
   EXPECT_FALSE(fusion_merger_.Run(module.get()).value());
 }
 
