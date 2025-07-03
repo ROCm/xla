@@ -145,6 +145,7 @@ ScopedShapedBuffer::ScopedShapedBuffer(ScopedShapedBuffer&& s) noexcept
     : ShapedBuffer(static_cast<ShapedBuffer&&>(s)), allocator_(s.allocator_) {
   // Null out s.allocator_ so it doesn't try to free anything in its destructor.
   s.allocator_ = nullptr;
+  alloc_cached_flag.swap(s.alloc_cached_flag);
 }
 
 ScopedShapedBuffer& ScopedShapedBuffer::operator=(
@@ -160,11 +161,6 @@ ScopedShapedBuffer& ScopedShapedBuffer::operator=(
 
 ScopedShapedBuffer::~ScopedShapedBuffer() { Deallocate(); }
 
-ShapedBuffer ScopedShapedBuffer::release() {
-  ShapedBuffer shaped_buffer(static_cast<ShapedBuffer&&>(*this));
-  buffers_ = ShapeTree<se::DeviceMemoryBase>();
-  return shaped_buffer;
-}
 
 void ScopedShapedBuffer::Deallocate() {
   // allocator_ will be null if we were moved-from.
@@ -184,6 +180,12 @@ void ScopedShapedBuffer::Deallocate() {
   }
 }
 
+ShapedBuffer ScopedShapedBuffer::release() {
+  ShapedBuffer shaped_buffer(static_cast<ShapedBuffer&&>(*this));
+  buffers_ = ShapeTree<se::DeviceMemoryBase>();
+  return shaped_buffer;
+}
+
 ScopedShapedBuffer ScopedShapedBuffer::TakeSubTree(ShapeIndexView index) {
   const xla::Shape& sub_on_device_shape =
       xla::ShapeUtil::GetSubshape(on_device_shape(), {index});
@@ -191,8 +193,15 @@ ScopedShapedBuffer ScopedShapedBuffer::TakeSubTree(ShapeIndexView index) {
   ScopedShapedBuffer output(sub_on_device_shape, memory_allocator(),
                             device_ordinal(), physical_device_ordinal());
   auto src_it = buffers().find(index);
+  auto offset = std::distance(buffers().begin(), src_it);
+  auto cached_it = alloc_cached_flag.begin() + offset;
+  bool cached_ok = !alloc_cached_flag.empty();
+
   auto dst_it = output.buffers().begin();
   while (dst_it != output.buffers().end()) {
+    if (cached_ok){
+      output.alloc_cached_flag.push_back(*cached_it++);
+    }
     dst_it->second = src_it->second;
     src_it->second = tensorflow::se::DeviceMemoryBase(nullptr, 0);
     ++src_it;

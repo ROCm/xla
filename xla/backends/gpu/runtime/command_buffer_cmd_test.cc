@@ -441,11 +441,11 @@ TEST(TracedCommandBuffer, GetOrUpdateCommandBuffer) {
 
     TF_ASSERT_OK_AND_ASSIGN(auto* command_buffer0,
                             traced_cmd_buffer.GetOrTraceCommandBuffer(
-                                &allocations, executor, stream.get(), trace));
+                                &allocations, stream.get(), trace));
 
     TF_ASSERT_OK_AND_ASSIGN(auto* command_buffer1,
                             traced_cmd_buffer.GetOrTraceCommandBuffer(
-                                &allocations, executor, stream.get(), trace));
+                                &allocations, stream.get(), trace));
 
     // Check that command buffer was reused as buffer allocations didn't
     // change.
@@ -459,7 +459,7 @@ TEST(TracedCommandBuffer, GetOrUpdateCommandBuffer) {
 
     TF_ASSERT_OK_AND_ASSIGN(auto* command_buffer2,
                             traced_cmd_buffer.GetOrTraceCommandBuffer(
-                                &allocations, executor, stream.get(), trace));
+                                &allocations, stream.get(), trace));
 
     ASSERT_NE(command_buffer0, command_buffer2);
     EXPECT_EQ(num_calls, 2);
@@ -469,7 +469,7 @@ TEST(TracedCommandBuffer, GetOrUpdateCommandBuffer) {
 
     TF_ASSERT_OK_AND_ASSIGN(auto* command_buffer3,
                             traced_cmd_buffer.GetOrTraceCommandBuffer(
-                                &allocations, executor, stream.get(), trace));
+                                &allocations, stream.get(), trace));
     ASSERT_EQ(command_buffer0, command_buffer3);
     EXPECT_EQ(num_calls, 2);
 
@@ -479,7 +479,7 @@ TEST(TracedCommandBuffer, GetOrUpdateCommandBuffer) {
 
     TF_ASSERT_OK_AND_ASSIGN(auto* command_buffer4,
                             traced_cmd_buffer.GetOrTraceCommandBuffer(
-                                &allocations, executor, stream.get(), trace));
+                                &allocations, stream.get(), trace));
     ASSERT_NE(command_buffer4, command_buffer3);
     ASSERT_NE(command_buffer4, command_buffer2);
     EXPECT_EQ(num_calls, 3);
@@ -489,7 +489,7 @@ TEST(TracedCommandBuffer, GetOrUpdateCommandBuffer) {
 
     TF_ASSERT_OK_AND_ASSIGN(auto* command_buffer5,
                             traced_cmd_buffer.GetOrTraceCommandBuffer(
-                                &allocations, executor, stream.get(), trace));
+                                &allocations, stream.get(), trace));
     ASSERT_EQ(command_buffer0, command_buffer5);
     EXPECT_EQ(num_calls, 3);
   };
@@ -534,7 +534,7 @@ static void BM_GetOrTraceCommandBuffer(benchmark::State& state) {
   for (auto s : state) {
     TF_CHECK_OK(traced_cmd_buffer
                     .GetOrTraceCommandBuffer(&allocations[index++ % 4],
-                                             executor, stream.get(), trace_ref)
+                                             stream.get(), trace_ref)
                     .status());
   }
 }
