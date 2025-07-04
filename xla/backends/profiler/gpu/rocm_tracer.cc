@@ -509,6 +509,12 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
     return;
   }
 
+  if (num_headers == 0) {
+    // Log or skip processing
+    LOG(INFO) << "Callback received empty headers, skipping\n";
+    return;
+  }
+
   for (size_t i = 0; i < num_headers; i++)
   {
     RocmTracerEvent event;
@@ -539,52 +545,12 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
   } // for 
 }
 
-// void RocmTracer::CodeObjectCallback(rocprofiler_callback_tracing_record_t record,
-//                           void* callback_data) {
-//   if (record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
-//       record.operation == ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER &&
-//       record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD) {
-//     auto* data = static_cast<kernel_symbol_data_t*>(record.payload);
-//     std::lock_guard<tsl::mutex> lock(kernel_lock_);
-//     VLOG(-1) << "cj401 Registering kernel: id = " << data->kernel_id 
-//              << ", name = " << demangle(data->kernel_name) 
-//              << ", kernel_info_ size = " << kernel_info_.size();
-//     kernel_info_.emplace(data->kernel_id, 
-//         ProfilerKernelInfo{demangle(data->kernel_name), *data});
-//   }
-
-//   if (record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
-//       record.operation == ROCPROFILER_CODE_OBJECT_LOAD) {
-//     if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD) {
-//       // flush the buffer to ensure that any lookups for the client kernel names
-//       // for the code object are completed NOTE: not using buffer ATM
-//     }
-//   } else if (
-//       record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
-//       record.operation ==
-//         ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER) {
-//     auto* data = static_cast<kernel_symbol_data_t*>(record.payload);
-//     if (record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD) {
-
-//       std::lock_guard<tsl::mutex> lock(kernel_lock_);
-//       kernel_info_.emplace(data->kernel_id, 
-//           ProfilerKernelInfo{demangle(data->kernel_name), *data});
-//     } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD) {
-//       VLOG(-1) << "cj401 Unloading kernel: id = " << data->kernel_id;
-//       // FIXME: clear these?  At minimum need kernel names at shutdown, async
-//       // completion
-//       // kernel_info_.erase(data->kernel_id);
-//       // g_shared->kernel_names.erase(data->kernel_id);
-//     }
-//   }
-// }
-
 void RocmTracer::CodeObjectCallback(rocprofiler_callback_tracing_record_t record,
                           void* callback_data) {
   if (record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
       record.operation == ROCPROFILER_CODE_OBJECT_LOAD) {
     if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD) {
-      LOG(INFO) << "cj401 Code object unload";
+      // FIXME: clear these?  At minimum need kernel names at shutdown, async
     }
   } else if (
       record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
@@ -593,17 +559,17 @@ void RocmTracer::CodeObjectCallback(rocprofiler_callback_tracing_record_t record
     auto* data = static_cast<kernel_symbol_data_t*>(record.payload);
     if (record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD) {
       std::lock_guard<tsl::mutex> lock(kernel_lock_);
-      LOG(INFO) << "cj401 Registering kernel: id = " << data->kernel_id 
+      LOG(INFO) << "Registering kernel: id = " << data->kernel_id 
                 << ", raw name = " << data->kernel_name 
                 << ", demangled name = " << demangle(data->kernel_name)
                 << ", kernel_info_ size = " << kernel_info_.size() + 1;
       kernel_info_.emplace(data->kernel_id, 
           ProfilerKernelInfo{demangle(data->kernel_name), *data});
     } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD) {
-      LOG(INFO) << "cj401 Unloading kernel: id = " << data->kernel_id;
+      LOG(INFO) << "Unloading kernel: id = " << data->kernel_id;
     }
   } else {
-    LOG(INFO) << "cj401 CodeObjectCallback: kind = " << record.kind 
+    LOG(INFO) << "CodeObjectCallback: kind = " << record.kind 
               << ", operation = " << record.operation 
               << ", phase = " << record.phase;
   }
@@ -681,8 +647,8 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
   // buffer_size_bytes depends on the number of events to be traced (records)
   // buffer_watermark_bytes used to trigger callbacks, this might cause hang when profiling
   // might need a better way to set this up
-  constexpr auto buffer_size_bytes = 10 * 4096;
-  constexpr auto buffer_watermark_bytes = 4 * 4096;
+  constexpr auto buffer_size_bytes = 20 * 4096;
+  constexpr auto buffer_watermark_bytes = 6 * 4096;
 
   // Utility context to gather code‑object info
   rocprofiler_create_context(&context_);
@@ -716,8 +682,6 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
     return -1;
   }
 
-  // rocprofiler_start_context(context_);
-  // rocprofiler_stop_context(context_);
   return 0;
 }
 
