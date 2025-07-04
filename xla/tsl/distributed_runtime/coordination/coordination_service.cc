@@ -217,11 +217,14 @@ CoordinationService::CoordinationService(
       allow_new_incarnation_to_reconnect_(
           config.allow_new_incarnation_to_reconnect()) {
   LOG(INFO) << "Initializing CoordinationService";
+  VLOG(-1) << "#### Initializing coordination service";
   recoverable_jobs_ = absl::flat_hash_set<std::string>(
       config.recoverable_jobs().cbegin(), config.recoverable_jobs().cend());
   for (const auto& job : config.coordinated_job_list()) {
+    VLOG(-1) << "#### Initializing tasks for job: " << job.name();
     for (int i = 0; i < job.num_tasks(); ++i) {
       const std::string task_name = GetTaskName(job.name(), i);
+      VLOG(-1) << "#### Create task: " << task_name;
       cluster_state_.emplace(task_name, std::make_unique<TaskState>(task_name));
     }
   }
@@ -235,11 +238,12 @@ void CoordinationService::CheckHeartbeatTimeout() {
   for (const auto& [task_name, task_state] : cluster_state_) {
     // Skip tasks that are not registered or in error state.
     if (task_state->GetState() != CoordinatedTaskState::TASKSTATE_CONNECTED) {
+      VLOG(-1) << "#### TaskState is DISCONNECTED";
       continue;
     }
     const bool is_stale =
         task_state->TimeSinceLastHeartbeatMs() > heartbeat_timeout_ms_;
-    VLOG(10) << "Checking staleness for " << task_name
+    VLOG(-1) << "#### Checking staleness for " << task_name
              << " stale?=" << is_stale;
     if (is_stale) {
       stale_task_names.push_back(task_name);
@@ -251,6 +255,7 @@ void CoordinationService::CheckHeartbeatTimeout() {
                        "for an earlier error or scheduler events (e.g. "
                        "preemption, eviction) to debug further.")));
 
+      VLOG(-1) << "#### Task is stale: " << task_name;
       SetTaskError(task_name, status);
     }
   }
@@ -276,6 +281,7 @@ void CoordinationService::CheckBarrierTimeout() {
   for (absl::string_view barrier_id : ongoing_barriers_) {
     auto* barrier = &barriers_[barrier_id];
     if (current_time_micros > barrier->deadline_in_micros) {
+      VLOG(-1) << "#### Barrier timedout " << barrier->id;
       expired_barriers[barrier_id] = barrier;
     }
   }
@@ -1357,8 +1363,8 @@ void CoordinationService::PassBarrier(BarrierState* barrier,
                                       const absl::Status& result) {
   barrier->passed = true;
   barrier->result = result;
-  VLOG(3) << "Barrier(" << BarrierName(*barrier)
-          << ") has passed with status: " << result;
+  VLOG(-1) << "#### Barrier(" << BarrierName(*barrier)
+           << ") has passed with status: " << result;
   // Special hook for device propagation barrier to set global device ids.
   if (barrier->id == device_propagation_barrier_id_) {
     AggregateClusterDevices();
@@ -1380,8 +1386,9 @@ void CoordinationService::PassBarrier(BarrierState* barrier,
         MakeCoordinationError(absl::InternalError(absl::StrCat(
             "Cluster registration failed with error: ", result.ToString())));
     SetAllTasksError(register_error);
-    LOG(ERROR)
-        << "Stopping coordination service as cluster registration failed. This "
+    VLOG(-1)
+        << "#### Stopping coordination service as cluster registration failed. "
+           "This "
            "may be due to 1) some tasks crashed earlier before connecting, 2) "
            "some tasks were never scheduled, or 3) scheduling delays. Consider "
            "setting a longer initialization timeout if such delays are "
@@ -1392,6 +1399,7 @@ void CoordinationService::PassBarrier(BarrierState* barrier,
   // Special hook for shutdown barrier to disconnect tasks at the barrier and
   // propagate errors to those that have not.
   if (barrier->id == shutdown_barrier_id_) {
+    VLOG(-1) << "#### Shutdown barrier " << barrier->id;
     CompleteShutdownAfterBarrier(result, barrier);
   }
   if (ServiceHasStopped()) {
@@ -1671,6 +1679,9 @@ void CoordinationService::AggregateClusterDevices() {
         cluster_state_[GetTaskName(task)]->GetDeviceInfo());
   }
 
+  std::string devices;
+  cluster_devices_.SerializeToString(&devices);
+  VLOG(-1) << "#### Cluster devices are " << devices;
   if (post_aggregate_device_fn_ != nullptr) {
     cluster_devices_ = post_aggregate_device_fn_(cluster_devices_);
   }
