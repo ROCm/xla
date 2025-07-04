@@ -365,12 +365,7 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
     auto& vec = name_info_[rec.kind];
     ev->name = vec[rec.operation];
   } 
-  // test kernel names
-  // auto& vec = name_info_[rec.kind];
-  // ev->name = vec[rec.operation];
-
-  // VLOG(-1) << "cj401 HipApiEvent name = " << ev->name;
-
+  
   if (isCopyApi(rec.operation)) {
     // actually one needs to set the real type
     ev->type = RocmTracerEventType::MemcpyOther;
