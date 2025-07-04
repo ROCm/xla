@@ -612,7 +612,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
   // rocprofiler_create_context(&utility_context_);
   rocprofiler_status_t status = rocprofiler_create_context(&utility_context_);
   if (status != ROCPROFILER_STATUS_SUCCESS) {
-    LOG(ERROR) << "cj401 Failed to create utility_context_: " << status;
+    LOG(ERROR) << "Failed to create utility_context_: " << status;
     return -1;
   }
 
@@ -633,7 +633,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
   rocprofiler_context_is_valid(utility_context_, &isValid_);
   if (isValid_ == 0) {
     utility_context_.handle = 0;  // Leak on failure.
-    LOG(ERROR) << "cj401 invalid utility_context ";
+    LOG(ERROR) << "invalid utility_context ";
     return -1;
   } else {
     LOG(INFO) << "rocprofiler start utilityContext";
