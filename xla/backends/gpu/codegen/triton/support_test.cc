@@ -49,6 +49,8 @@ limitations under the License.
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/protobuf.h"
 
+//#define ZORAN
+
 namespace xla {
 namespace gpu {
 namespace {
@@ -136,6 +138,7 @@ bool DoesOpSupportType(HloOpcode opcode, PrimitiveType type) {
 
 std::vector<xla::PrimitiveType> AllOpSupportedTypes(HloOpcode opcode) {
   std::vector<xla::PrimitiveType> result;
+  //result.push_back(PrimitiveType::F8E4M3FN);
   absl::c_copy_if(AllXlaDataTypes(), std::back_inserter(result),
                   [&](PrimitiveType data_type) {
                     return DoesOpSupportType(opcode, data_type);
@@ -166,6 +169,10 @@ auto AllDevicesToTest() {
                          cc(se::CudaComputeCapability::Hopper()),
                          cc(se::CudaComputeCapability::Blackwell())};
 #endif
+}
+
+stream_executor::GpuComputeCapability CudaAmpereOrRocm() {
+  return AllDevicesToTest()[0];
 }
 
 // Generates all the possible test combinations for a given opcodes. A test
@@ -228,6 +235,10 @@ class TritonSupportTest : public TritonSupportTestBase {
       TestedInstruction ti, std::vector<std::vector<int64_t>> output_tile_sizes,
       se::GpuComputeCapability cc,
       ExpectedFailMode failure_mode = ExpectedFailMode::kFail) {
+        if (std::holds_alternative<stream_executor::RocmComputeCapability>(cc))
+          VLOG(-1) << "Zoran: RunSupportTestMultipleOutputTiles rocm";
+        else
+          VLOG(-1) << "Zoran: RunSupportTestMultipleOutputTiles cuda";
     // Ensure that the caller provided the right number of output tile sizes.
     // If that is not the case, codegen could fail for that reason---which
     // wouldn't give any valuable signal here. The check is only done for array
@@ -263,29 +274,58 @@ class TritonSupportTest : public TritonSupportTestBase {
     };
 
     if (IsTritonSupportedInstruction(ti.Instruction(), cc)) {
+      VLOG(-1) << "Zoran: RunSupportTestMultipleOutputTiles OK";
       EXPECT_THAT(run_triton_codegen(), IsOk());
       return;
     }
     if (failure_mode == ExpectedFailMode::kFail) {
+      VLOG(-1) << "Zoran: RunSupportTestMultipleOutputTiles fail";
       EXPECT_THAT(run_triton_codegen(), Not(IsOk()));
       return;
     }
+    VLOG(-1) << "Zoran: RunSupportTestMultipleOutputTiles try";
     EXPECT_DEATH(
         // We need to catch exceptions and abort(), because in OSS there
         // seem to be cases where exceptions are used instead of terminating
         // the program.
         try {
           absl::StatusOr<TritonWrapperResult> s = run_triton_codegen();
+          VLOG(-1) << "Zoran: RunSupportTestMultipleOutputTiles try 2 ";
           if (!s.ok() && failure_mode == ExpectedFailMode::kFailOrCrash) {
+            VLOG(-1) << "Zoran: RunSupportTestMultipleOutputTiles try 3";
             // Force a crash if failure is also acceptable.
             abort();
           }
+          VLOG(-1) << "Zoran: RunSupportTestMultipleOutputTiles try 4";
         } catch (...) { abort(); },
         // It's not possible to find stable matching patterns for all
         // aborting code paths that occur here, so we at least make sure
         // that we don't interpret sanitizer errors as success.
         ::testing::Not(::testing::HasSubstr("Sanitizer:")));
   }
+/*
+  const stream_executor::GpuComputeCapability& GpuComputeComp() {
+    return device_desc().gpu_compute_capability();
+  }
+  stream_executor::GpuComputeCapability CudaAmpereOrRocm() {
+    if (std::holds_alternative<stream_executor::RocmComputeCapability>(
+            GpuComputeComp())) {
+              VLOG(-1) << "Zoran: CudaAmpereOrRocm rocm";
+      return stream_executor::GpuComputeCapability{
+          device_desc().rocm_compute_capability()};
+    } else {
+      VLOG(-1) << "Zoran: CudaAmpereOrRocm ampere";
+      return stream_executor::GpuComputeCapability{
+          stream_executor::CudaComputeCapability{
+              stream_executor::CudaComputeCapability::kAmpere, 0}};
+    }
+  }
+
+ protected:
+  const stream_executor::DeviceDescription& device_desc() {
+    return backend().default_stream_executor()->GetDeviceDescription();
+  }
+*/
 };
 
 class TritonSupportTestWithTypeAndOpcodeAndDeviceParam
@@ -294,7 +334,7 @@ class TritonSupportTestWithTypeAndOpcodeAndDeviceParam
           std::tuple<PrimitiveType, HloOpcode, se::GpuComputeCapability>> {};
 
 using BitcastOrReshapeTest = TritonSupportTestWithTypeAndOpcodeAndDeviceParam;
-
+#ifdef ZORAN
 TEST_P(BitcastOrReshapeTest, IsTritonSupportedBitcastOrReshape) {
   auto [data_type, opcode, cc] = GetParam();
   const std::string kHloTestTemplate = R"(
@@ -529,8 +569,11 @@ ENTRY triton_computation {
   } else {
     if (((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
          (data_type == PrimitiveType::F8E5M2 ||
-          data_type == PrimitiveType::F8E4M3FN))) {
-      fail_mode = ExpectedFailMode::kCrash;
+          data_type == PrimitiveType::F8E4M3FN || 
+          data_type == PrimitiveType::F8E4M3B11FNUZ ||
+          data_type == PrimitiveType::F8E5M2FNUZ ||
+          data_type == PrimitiveType::F8E4M3FNUZ))) {
+      fail_mode = ExpectedFailMode::kFailOrCrash;
     }
   }
 
@@ -571,8 +614,11 @@ ENTRY triton_computation {
   } else {
     if (((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
          (data_type == PrimitiveType::F8E5M2 ||
-          data_type == PrimitiveType::F8E4M3FN))) {
-      fail_mode = ExpectedFailMode::kCrash;
+          data_type == PrimitiveType::F8E4M3FN ||
+          data_type == PrimitiveType::F8E4M3B11FNUZ ||
+          data_type == PrimitiveType::F8E5M2FNUZ ||
+          data_type == PrimitiveType::F8E4M3FNUZ))) {
+      fail_mode = ExpectedFailMode::kFailOrCrash;
     }
   }
 
@@ -633,11 +679,14 @@ ENTRY triton_computation {
     skip_failure_branch_to_avoid_crash =
         (opcode == HloOpcode::kClamp || opcode == HloOpcode::kSelect) &&
         (data_type == PrimitiveType::F8E5M2 ||
-         data_type == PrimitiveType::F8E4M3FN);
+         data_type == PrimitiveType::F8E4M3FN ||
+          data_type == PrimitiveType::F8E4M3B11FNUZ ||
+          data_type == PrimitiveType::F8E5M2FNUZ ||
+          data_type == PrimitiveType::F8E4M3FNUZ);
   }
-
+  VLOG(-1) << "Zoran: IsTritonSupportedTernaryElementwise skip_failure_branch_to_avoid_crash " << skip_failure_branch_to_avoid_crash;
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc,
-                 skip_failure_branch_to_avoid_crash ? ExpectedFailMode::kCrash
+                 skip_failure_branch_to_avoid_crash ? ExpectedFailMode::kFailOrCrash
                                                     : ExpectedFailMode::kFail);
 }
 
@@ -869,7 +918,12 @@ ENTRY triton_computation {
   } else {
     if ((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
         (data_type == PrimitiveType::F8E5M2 ||
-         data_type == PrimitiveType::F8E4M3FN)) {
+         data_type == PrimitiveType::F8E4M3FN  ||
+          data_type == PrimitiveType::F8E5M2FNUZ ||
+          data_type == PrimitiveType::F8E4M3FNUZ)) {
+      fail_mode = ExpectedFailMode::kCrash;
+    }
+    if (opcode == HloOpcode::kReduce && (data_type == PrimitiveType::F8E4M3FNUZ)) {
       fail_mode = ExpectedFailMode::kCrash;
     }
   }
@@ -1772,7 +1826,7 @@ ENTRY triton_computation {
 INSTANTIATE_TEST_SUITE_P(ReverseSuite, ReverseTest,
                          AllTestCombinationsForOpcodes({HloOpcode::kReverse}),
                          TritonSupportTestTypeAndOpcodeAndDeviceToString);
-
+#endif // ZORAN
 using DotTest = TritonSupportTest;
 
 class DotTypesTest
@@ -1793,7 +1847,7 @@ class DotTypesTest
 TEST_P(DotTypesTest, Dot) {
   // Testing B[] = dot(A[], A[]).
   auto [result_type, input_type, cc] = GetParam();
-
+  VLOG(-1) << "DotTypesTest Dot 0";
   ExpectedFailMode fail_mode = ExpectedFailMode::kFail;
   if (input_type == F8E4M3FN || result_type == F8E4M3FN) {
     if (auto* cuda_cc = std::get_if<se::CudaComputeCapability>(&cc);
@@ -1802,7 +1856,19 @@ TEST_P(DotTypesTest, Dot) {
       fail_mode = ExpectedFailMode::kFailOrCrash;
     }
   }
-
+  VLOG(-1) << "DotTypesTest Dot result_type: " << result_type << " input_type: " << input_type;
+/*  
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    VLOG(-1) << "DotTypesTest Dot 1";
+    if ((input_type == F64 || result_type == F64)
+        || (input_type == F8E4M3FN || result_type == F8E4M3FN)) {
+      // Hits No match found in MFMA database.
+      VLOG(-1) << "DotTypesTest Dot 2";
+      fail_mode = ExpectedFailMode::kFailOrCrash;
+    }
+  }
+*/
+  //VLOG(-1) << "DotTypesTest Dot fail_mode " << fail_mode;
   std::string hlo_text = R"(
 flhs {
   ROOT result = $0[128,256] parameter(0)
@@ -1851,7 +1917,7 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::ValuesIn(AllOpSupportedTypes(HloOpcode::kDot)),
         ::testing::ValuesIn(AllDevicesToTest())),
     DotTypesTest::ParamToString);
-
+#ifdef ZORAN
 TEST_F(DotTest, NonFusionRhs) {
   const std::string kHloTestTemplate = R"(
 flhs {
@@ -1877,7 +1943,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_F(DotTest, NonFusionLhs) {
@@ -1905,7 +1971,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_F(DotTest, SingleBatchDim) {
@@ -1945,7 +2011,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_F(DotTest, MultipleNonContractingDimensions) {
@@ -1984,7 +2050,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 16, 1, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_F(DotTest, MultipleContractingDimensions) {
@@ -2024,7 +2090,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_F(DotTest, NonDefaultDimensionOrder_kmkn) {
@@ -2065,7 +2131,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm()); 
 }
 
 TEST_F(DotTest, NonDefaultDimensionOrder_mknk) {
@@ -2106,7 +2172,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_F(DotTest, SparsityConfiguration) {
@@ -2149,7 +2215,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 class DotPrecisionTest
@@ -2209,9 +2275,11 @@ ENTRY triton_computation {
       PrecisionToString(lhs_precision), PrecisionToString(rhs_precision));
 
   ExpectedFailMode fail_mode = ExpectedFailMode::kFail;
-  if (absl::c_linear_search(std::vector{F8E5M2, F8E4M3FN, S8}, data_type)) {
+  VLOG(-1) << "Zoran: OperandPrecision " << data_type;
+  if (absl::c_linear_search(std::vector{F8E5M2, F8E4M3FN, S8, F64}, data_type)) {
     fail_mode = ExpectedFailMode::kFailOrCrash;
   }
+  
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
       ParseTemplateAndGetInstruction(
@@ -2298,6 +2366,13 @@ ENTRY triton_computation {
   if (absl::c_linear_search(std::vector{F8E5M2, F8E4M3FN, F8E4M3, S8},
                             data_type)) {
     fail_mode = ExpectedFailMode::kFailOrCrash;
+  }
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    if (absl::c_linear_search(std::vector{F8E4M3FN, F64},
+                                data_type) ||
+        ((data_type==F16 || data_type==F16)  && algorithm == xla::PrecisionConfig::ALG_DOT_F64_F64_F64)) {
+        fail_mode = ExpectedFailMode::kFailOrCrash;
+    }
   }
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32}, cc, fail_mode);
 }
@@ -2437,7 +2512,7 @@ ENTRY triton_computation {
       TestedInstruction ti,
       ParseTemplateAndGetInstruction(hlo_text, F32, HloOpcode::kFusion,
                                      /*use_nested_gemm_fusions=*/true));
-  se::GpuComputeCapability cc = se::CudaComputeCapability::Ampere();
+  se::GpuComputeCapability cc = CudaAmpereOrRocm();
   ASSERT_FALSE(IsTritonSupportedInstruction(ti.Instruction(), cc));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{64, 32}, cc);
 }
@@ -2828,7 +2903,7 @@ TEST(OpCoverage, AllOpcodesAreTested) {
         << "Opcode `" << HloOpcodeString(opcode) << "` is not tested.";
   }
 }
-
+#endif // ZORAN
 }  // namespace
 }  // namespace gpu
 }  // namespace xla

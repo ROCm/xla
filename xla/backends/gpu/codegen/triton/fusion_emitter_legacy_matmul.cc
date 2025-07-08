@@ -1907,6 +1907,7 @@ absl::Status EmitMatMul(EmitterLocOpBuilder& b,
                         const HloFusionInstruction* fusion,
                         mlir::FunctionOpInterface fn,
                         const BlockLevelParameters&) {
+  VLOG(-1) << "Zoran: EmitMatMul 0";
   TF_ASSIGN_OR_RETURN(TritonGemmConfig config, GetTritonGemmConfig(fusion));
   TF_ASSIGN_OR_RETURN(auto analysis,
                       TritonFusionAnalysis::Execute(
@@ -1986,6 +1987,7 @@ absl::Status EmitMatMul(EmitterLocOpBuilder& b,
   absl::flat_hash_map<const HloInstruction*, Value> values_out;
   TF_ASSIGN_OR_RETURN(Type acc_final_ty,
                       TritonType(b, dot_instr->shape().element_type()));
+                      VLOG(-1) << "Zoran: EmitMatMul 7";
   values_out[dot_instr] = triton::Cast(b, acc_final, acc_final_ty);
 
   // Emit the output scope.

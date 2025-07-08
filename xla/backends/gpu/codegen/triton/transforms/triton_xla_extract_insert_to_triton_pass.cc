@@ -246,15 +246,24 @@ SmallVector<Value> ComputeStrides(::xla::EmitterLocOpBuilder& builder,
 Value ComputeLinearOffset(::xla::EmitterLocOpBuilder& builder,
                           const TiledTensorType& tiled_tensor_type,
                           ValueRange offsets, llvm::ArrayRef<int64_t> layout) {
-  ::xla::Shape shape = ::xla::ShapeUtil::MakeShapeWithDenseLayout(
+                            llvm::dbgs() << "Zoran: ComputeLinearOffset 0\n";
+                            tiled_tensor_type.getElementType();
+  llvm::dbgs() << "Zoran: ComputeLinearOffset 0x\n";
+  llvm::dbgs() << tiled_tensor_type.getElementType();
+  xgt::GetPrimitiveType(tiled_tensor_type.getElementType()).value();
+llvm::dbgs() << "Zoran: ComputeLinearOffset 0a\n";
+tiled_tensor_type.getOriginalShape();
+llvm::dbgs() << "Zoran: ComputeLinearOffset 0b\n";
+                            ::xla::Shape shape = ::xla::ShapeUtil::MakeShapeWithDenseLayout(
       xgt::GetPrimitiveType(tiled_tensor_type.getElementType()).value(),
       tiled_tensor_type.getOriginalShape(), layout);
-
+llvm::dbgs() << "Zoran: ComputeLinearOffset 1\n";
   ::xla::Shape linear_shape = ::xla::ShapeUtil::MakeShape(
       shape.element_type(), {::xla::ShapeUtil::ElementsIn(shape)});
+      llvm::dbgs() << "Zoran: ComputeLinearOffset 2\n";
   auto bitcast_map =
       ::xla::GetBitcastMap(shape, linear_shape, builder.getContext());
-
+  llvm::dbgs() << "Zoran: ComputeLinearOffset 3\n";
   return builder.create<arith::IndexCastUIOp>(
       builder.getI64Type(),
       builder.create<::xla::ApplyIndexingOp>(offsets, bitcast_map)
@@ -269,11 +278,13 @@ struct RewriteFuncOp : mlir::OpRewritePattern<func::FuncOp> {
   mlir::LogicalResult matchAndRewrite(
       func::FuncOp op, mlir::PatternRewriter& rewriter) const override {
     ::xla::EmitterLocOpBuilder builder(op.getLoc(), rewriter);
+    llvm::dbgs() << "Zoran: RewriteFuncOp 0";
 
     auto input_types = op.getFunctionType().getInputs();
     auto output_types = op.getFunctionType().getResults();
 
     if (!AreRankedTensors(input_types) || !AreRankedTensors(output_types)) {
+      llvm::dbgs() << "Zoran: RewriteFuncOp 1";
       return rewriter.notifyMatchFailure(
           op, "Expected all inputs and results to have tensor type.");
     }
@@ -341,7 +352,7 @@ struct RewriteFuncOp : mlir::OpRewritePattern<func::FuncOp> {
     rewriter.setInsertionPoint(terminator);
     rewriter.create<triton::ReturnOp>(new_func.getLoc());
     rewriter.eraseOp(terminator);
-
+    llvm::dbgs() << "Zoran: RewriteFuncOp 2";
     return mlir::success();
   }
 };
@@ -359,28 +370,31 @@ struct RewriteTile : mlir::OpRewritePattern<TileOp> {
   // tt.reinterpret_tensor_desc.
   mlir::LogicalResult matchAndRewrite(
       TileOp op, mlir::PatternRewriter& rewriter) const override {
+        llvm::dbgs() << "Zoran: RewriteTile 0\n";
     ::xla::EmitterLocOpBuilder builder(op.getLoc(), rewriter);
     auto tiled_tensor_type = op.getTiledTensor().getType();
     bool can_use_tma = CanUseTMA(builder, tma_enabled, *device_description,
                                  tiled_tensor_type, op.getTensor());
-
+      llvm::dbgs() << "Zoran: RewriteTile 1\n";
     // can_use_tma ? "tensor -> !tt.ptr<i8, 0>" otherwise "tensor -> !tt.ptr<>"
     Type ptr_type =
         can_use_tma
             ? GetTensorPtrTypeForTma(builder)
             : GetTensorPtrType(op.getTensor().getType().getElementType());
+    llvm::dbgs() << "Zoran: RewriteTile 2\n";
     auto cast_to_tensor_ptr_type =
         builder.create<mlir::UnrealizedConversionCastOp>(ptr_type,
                                                          op.getTensor());
-
+  llvm::dbgs() << "Zoran: RewriteTile 3\n";
     auto linear_offset = ComputeLinearOffset(builder, tiled_tensor_type,
                                              op.getOffsets(), op.getLayout());
+                                             llvm::dbgs() << "Zoran: RewriteTile 3a\n";
     auto ptr = builder
                    .create<AddPtrOp>(
                        cast_to_tensor_ptr_type.getResult(0).getType(),
                        cast_to_tensor_ptr_type.getResult(0), linear_offset)
                    .getResult();
-
+  llvm::dbgs() << "Zoran: RewriteTile 4\n";
     if (can_use_tma) {
       // Add TMA attributes to the corresponding argument in the function.
       auto block_arg = mlir::dyn_cast<BlockArgument>(op.getTensor());
@@ -412,6 +426,7 @@ struct RewriteTile : mlir::OpRewritePattern<TileOp> {
               xgt::StorageType(tiled_tensor_type), reinterpret_tensor_desc);
 
       rewriter.replaceOp(op, cast_desc_ptr_to_tiled_tensor_ptr_type);
+      llvm::dbgs() << "Zoran: RewriteTile 1";
       return mlir::success();
     }
 
@@ -442,13 +457,14 @@ struct RewriteTile : mlir::OpRewritePattern<TileOp> {
                     llvm::to_vector_of<int32_t>(tile_shape), dim_order)
                 .getResult();
     }
-
+  llvm::dbgs() << "Zoran: RewriteTile 5\n";
     // !tt.ptr<tensor> -> tiled_tensor
     auto cast_to_tiled_tensor_type =
         builder.create<mlir::UnrealizedConversionCastOp>(
             xgt::StorageType(tiled_tensor_type), ptr);
 
     rewriter.replaceOp(op, cast_to_tiled_tensor_type);
+    llvm::dbgs() << "Zoran: RewriteTile 6";
     return mlir::success();
   }
 
@@ -463,6 +479,7 @@ struct RewriteExtract : mlir::OpRewritePattern<ExtractOp> {
   // otherwise tt.experimental_descriptor_load.
   mlir::LogicalResult matchAndRewrite(
       ExtractOp op, mlir::PatternRewriter& rewriter) const override {
+        llvm::dbgs() << "Zoran: RewriteExtract 0";
     ::xla::EmitterLocOpBuilder builder(op.getLoc(), rewriter);
 
     if (IsTmaUsed(op.getSrc().getDefiningOp())) {
@@ -483,6 +500,7 @@ struct RewriteExtract : mlir::OpRewritePattern<ExtractOp> {
               .getResult();
 
       rewriter.replaceOp(op, descriptor_load);
+      llvm::dbgs() << "Zoran: RewriteExtract 1";
       return mlir::success();
     }
     // tiled_tensor -> !tt.ptr<tensor>
@@ -509,6 +527,7 @@ struct RewriteExtract : mlir::OpRewritePattern<ExtractOp> {
                     .getResult();
 
     rewriter.replaceOp(op, load);
+    llvm::dbgs() << "Zoran: RewriteExtract 2";
     return mlir::success();
   }
 };
@@ -520,6 +539,7 @@ struct RewriteInsert : mlir::OpRewritePattern<InsertOp> {
   // otherwise tt.experimental_descriptor_store.
   mlir::LogicalResult matchAndRewrite(
       InsertOp op, mlir::PatternRewriter& rewriter) const override {
+        llvm::dbgs() << "Zoran: matchAndRewrite 0";
     ::xla::EmitterLocOpBuilder builder(op.getLoc(), rewriter);
 
     if (IsTmaUsed(op.getDst().getDefiningOp())) {
@@ -560,7 +580,7 @@ struct RewriteInsert : mlir::OpRewritePattern<InsertOp> {
 
     // InsertOp has a result, so we propagate it to the users.
     op->replaceAllUsesWith(ValueRange(op.getDst()));
-
+  llvm::dbgs() << "Zoran: matchAndRewrite 9";
     return mlir::success();
   }
 };
@@ -571,7 +591,9 @@ struct RewriteScalarInsert : mlir::OpRewritePattern<tensor::InsertOp> {
 
   mlir::LogicalResult matchAndRewrite(
       tensor::InsertOp op, mlir::PatternRewriter& rewriter) const override {
+        llvm::dbgs() << "Zoran: RewriteScalarInsert 0";
     if (op.getDest().getType().getRank() != 0) {
+      llvm::dbgs() << "Zoran: RewriteScalarInsert 1";
       return rewriter.notifyMatchFailure(op, "Expected dest to be scalar.");
     }
     ::xla::EmitterLocOpBuilder builder(op.getLoc(), rewriter);
@@ -583,6 +605,7 @@ struct RewriteScalarInsert : mlir::OpRewritePattern<tensor::InsertOp> {
                             /*boundary_checks=*/std::vector<int32_t>{},
                             CacheModifier::NONE, EvictionPolicy::NORMAL);
     rewriter.replaceOp(op, op.getDest());
+    llvm::dbgs() << "Zoran: RewriteScalarInsert 2";
     return mlir::success();
   }
 };
@@ -593,7 +616,9 @@ struct RewriteScalarExtract : mlir::OpRewritePattern<tensor::ExtractOp> {
   // Rewriting ExtractOp as tt.advance + tt.store.
   mlir::LogicalResult matchAndRewrite(
       tensor::ExtractOp op, mlir::PatternRewriter& rewriter) const override {
+              llvm::dbgs() << "Zoran: OpRewritePattern 0";
     if (op.getTensor().getType().getRank() != 0) {
+      llvm::dbgs() << "Zoran: OpRewritePattern 1";
       return rewriter.notifyMatchFailure(op, "Expected src to be scalar.");
     }
     ::xla::EmitterLocOpBuilder builder(op.getLoc(), rewriter);
@@ -606,6 +631,7 @@ struct RewriteScalarExtract : mlir::OpRewritePattern<tensor::ExtractOp> {
         builder.create<LoadOp>(cast_src_to_tensor_ptr_type, CacheModifier::NONE,
                                EvictionPolicy::NORMAL, /*isVolatile=*/false);
     rewriter.replaceOp(op, scalar.getResult());
+    llvm::dbgs() << "Zoran: OpRewritePattern 2";
     return mlir::success();
   }
 };

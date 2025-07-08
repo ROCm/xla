@@ -352,6 +352,7 @@ std::ostream& operator<<(std::ostream& out, const ShapeIndex& shape_index) {
     absl::Span<const int64_t> minor_to_major, absl::Span<const Tile> tiles,
     int64_t tail_padding_alignment_in_elements, int64_t element_size_in_bits,
     int64_t memory_space, absl::Span<const SplitConfig> split_configs) {
+      VLOG(-1) << "Zoran: MakeShapeWithDenseLayout 0";
   auto ret = MakeShapeWithLayoutInternal(
       element_type, dimensions, minor_to_major, /*dim_level_types=*/{},
       /*dim_unique=*/{}, /*dim_ordered=*/{}, tiles,
@@ -360,7 +361,9 @@ std::ostream& operator<<(std::ostream& out, const ShapeIndex& shape_index) {
       /*pointer_primitive_type=*/PRIMITIVE_TYPE_INVALID, element_size_in_bits,
       memory_space, split_configs,
       /*physical_shape=*/std::nullopt);
+      VLOG(-1) << "Zoran: MakeShapeWithDenseLayout 1";
   TF_CHECK_OK(ret.status());
+  VLOG(-1) << "Zoran: MakeShapeWithDenseLayout 2";
   return *ret;
 }
 

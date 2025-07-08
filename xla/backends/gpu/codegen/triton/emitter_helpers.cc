@@ -81,6 +81,7 @@ SmallVector<int64_t> GetPaddedTileSizes(ArrayRef<int64_t> tile_sizes) {
 }
 
 absl::StatusOr<Type> TritonType(EmitterLocOpBuilder& b, PrimitiveType t) {
+  VLOG(-1) << "Zoran: TritonType 0 " << t;
   switch (t) {
     case F64:
       return b.getF64Type();
@@ -104,7 +105,14 @@ absl::StatusOr<Type> TritonType(EmitterLocOpBuilder& b, PrimitiveType t) {
       return b.getType<mlir::Float8E5M2Type>();
     case F8E4M3FN:
       return b.getType<mlir::Float8E4M3FNType>();
+    case F8E4M3B11FNUZ:
+      return b.getType<mlir::Float8E4M3B11FNUZType>();
+    case F8E5M2FNUZ:
+      return b.getType<mlir::Float8E5M2FNUZType>();
+    case F8E4M3FNUZ:
+      return b.getType<mlir::Float8E4M3FNUZType>();
     default:
+      VLOG(-1) << "Zoran: TritonType fail";
       return absl::UnimplementedError(
           absl::StrCat("This type is not supported yet: ",
                        primitive_util::LowercasePrimitiveTypeName(t)));
@@ -123,6 +131,9 @@ absl::StatusOr<PrimitiveType> GetPrimitiveType(Type t) {
   if (t.isInteger(1)) return PRED;
   if (mlir::isa<mlir::Float8E5M2Type>(t)) return F8E5M2;
   if (mlir::isa<mlir::Float8E4M3FNType>(t)) return F8E4M3FN;
+  if (mlir::isa<mlir::Float8E4M3B11FNUZType>(t)) return F8E4M3B11FNUZ;
+  if (mlir::isa<mlir::Float8E5M2FNUZType>(t)) return F8E5M2FNUZ;
+  if (mlir::isa<mlir::Float8E4M3FNUZType>(t)) return F8E4M3FNUZ;
   return absl::UnimplementedError("Unsupported type in getPrimitiveType.\n");
 }
 
@@ -140,6 +151,7 @@ bool IsFp8Type(Type t) {
 }
 
 Value Cast(EmitterLocOpBuilder& b, Value value, Type dst_element_ty) {
+  VLOG(-1) << "Zoran: Cast 0";
   Type src_ty = value.getType();
   Type src_element_ty = src_ty;
   Type fp16_ty = b.getF16Type();
@@ -178,6 +190,7 @@ Value Cast(EmitterLocOpBuilder& b, Value value, Type dst_element_ty) {
       return b.create<mt::FpToFpOp>(dst_ty, value);
     }
     if (IsFp8Type(dst_element_ty) && !IsFp8Type(src_element_ty)) {
+      VLOG(-1) << "Zoran: Cast rtne 1";
       return b.create<mt::FpToFpOp>(
           dst_ty, value,
           mt::RoundingModeAttr::get(b.getContext(), mt::RoundingMode::RTNE));
@@ -185,6 +198,7 @@ Value Cast(EmitterLocOpBuilder& b, Value value, Type dst_element_ty) {
     if (IsFp8Type(src_element_ty) && IsFp8Type(dst_element_ty)) {
       // FP8 <-> FP8 conversion needs to go through FP16
       auto fp16_value = b.create<mt::FpToFpOp>(fp16_ty, value);
+      VLOG(-1) << "Zoran: Cast rtne 2";
       return b.create<mt::FpToFpOp>(
           dst_ty, fp16_value,
           mt::RoundingModeAttr::get(b.getContext(), mt::RoundingMode::RTNE));
@@ -376,6 +390,7 @@ absl::StatusOr<Value> EmitElementwiseLibdeviceFunction(
       (output_type == PrimitiveType::F16 &&
        !HasF16Implementation(dev_fn_id.value(), triple))) {
     // Upcast the inputs to F32.
+    VLOG(-1) << "Zoran: EmitElementwiseLibdeviceFunction  5";
     for (int64_t i = 0; i < inputs.size(); ++i) {
       casted_inputs.push_back(Cast(b, inputs[i], b.getF32Type()));
     }
@@ -391,6 +406,7 @@ absl::StatusOr<Value> EmitElementwiseLibdeviceFunction(
        !HasF16Implementation(dev_fn_id.value(), triple))) {
     // Downcast back to the original output type.
     TF_ASSIGN_OR_RETURN(auto dst_ty, TritonType(b, output_type));
+    VLOG(-1) << "Zoran: EmitElementwiseLibdeviceFunction  7";
     res = Cast(b, res, dst_ty);
   }
   return res;
@@ -429,6 +445,7 @@ absl::StatusOr<Value> EmitElementwise(EmitterLocOpBuilder& b,
     case HloOpcode::kConvert: {
       TF_ASSIGN_OR_RETURN(Type dst_ty,
                           TritonType(b, hlo.shape().element_type()));
+      VLOG(-1) << "Zoran: EmitElementwise  7";
       return Cast(b, inputs[0], dst_ty);
     }
     case HloOpcode::kAdd:

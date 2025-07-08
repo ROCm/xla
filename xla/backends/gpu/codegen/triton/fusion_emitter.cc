@@ -1633,6 +1633,7 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> CreateTritonModule(
     const se::DeviceDescription& device_info,
     const BlockLevelParameters& block_level_parameters,
     mlir::MLIRContext& mlir_context) {
+      VLOG(-1) << "Zoran: CreateTritonModule 0";
   LoadMlirDialectsForTriton(mlir_context);
   const auto debug_options = fusion->GetModule()->config().debug_options();
 
@@ -1652,7 +1653,7 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> CreateTritonModule(
   auto backend_config =
       fusion->backend_config<GpuBackendConfig>()->fusion_backend_config();
   absl::string_view fusion_kind = backend_config.kind();
-
+    VLOG(-1) << "Zoran: CreateTritonModule 1";
   // Build Triton kernel.
   SmallVector<Type> fn_arg_types;
   for (HloInstruction* p : hlo_computation->parameter_instructions()) {
@@ -1671,16 +1672,20 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> CreateTritonModule(
   }
 
   SmallVector<Type> fn_result_types;
-
+  
+  VLOG(-1) << "Zoran: CreateTritonModule 2";
   for (const ShapeUtil::IndexedShape& s :
        ShapeUtil::GetLeafShapes(fusion->shape())) {
+    VLOG(-1) << "Zoran: CreateTritonModule 2a";
     TF_ASSIGN_OR_RETURN(Type triton_ty, TritonType(b, s.shape.element_type()));
+    VLOG(-1) << "Zoran: CreateTritonModule 2b";
     AppendFuncArgType(s.shape.dimensions(), fusion_kind, triton_ty,
                       fn_arg_types);
     AppendFuncResultType(fusion_kind, s.shape.dimensions(), triton_ty,
                          fn_result_types);
+                         VLOG(-1) << "Zoran: CreateTritonModule 2c";
   }
-
+  VLOG(-1) << "Zoran: CreateTritonModule 3";
   mlir::FunctionOpInterface fn =
       CreateFuncOp(b, fn_name, fusion_kind, fn_arg_types, fn_result_types);
 
@@ -1692,6 +1697,7 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> CreateTritonModule(
 
   SmallVector<Value> insert_results;
   if (fusion_kind == kTritonGemmFusionKind) {
+    VLOG(-1) << "Zoran: CreateTritonModule 5";
     // If the generic Triton emitter is enabled, we should never go through the
     // legacy MatMul emitter.
     if (UseGenericTritonEmitterForGemms(fusion)) {
@@ -1699,17 +1705,20 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> CreateTritonModule(
           "The generic Triton emitter is enabled, but the legacy MatMul "
           "emitter is being used.");
     }
+    VLOG(-1) << "Zoran: CreateTritonModule 6";
     TF_RETURN_IF_ERROR(EmitMatMul(b, libdevice_path, device_info, fusion, fn,
                                   block_level_parameters));
   } else if (fusion_kind == kTritonFusionKind ||
              fusion_kind == kTritonNestedGemmFusionKind) {
+              VLOG(-1) << "Zoran: CreateTritonModule 6a";
     TF_ASSIGN_OR_RETURN(insert_results,
                         EmitGeneric(b, libdevice_path, device_info, fusion, fn,
                                     block_level_parameters));
   } else {
+    VLOG(-1) << "Zoran: CreateTritonModule 6c";
     return Internal("Unsupported fusion kind: %s", fusion_kind);
   }
-
+  VLOG(-1) << "Zoran: CreateTritonModule 7";
   EmitReturnOp(b, fusion_kind, insert_results);
 
   if (DumpingEnabledForHloModule(*hlo_computation->parent())) {
@@ -1767,6 +1776,7 @@ absl::StatusOr<TritonWrapperResult> TritonWrapper(
     const se::DeviceDescription& device_info,
     const BlockLevelParameters& block_level_parameters,
     llvm::Module* llvm_module, mlir::MLIRContext& mlir_context) {
+      VLOG(-1) << "Zoran: TritonWrapper 0";
   if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
     auto ccCuda = std::get<se::CudaComputeCapability>(cc);
     if (!ccCuda.IsAtLeastAmpere()) {
@@ -1776,15 +1786,17 @@ absl::StatusOr<TritonWrapperResult> TritonWrapper(
           ".", ccCuda.minor, "."));
     }
   }
+      VLOG(-1) << "Zoran: TritonWrapper 1";
 
   TF_ASSIGN_OR_RETURN(mlir::OwningOpRef<mlir::ModuleOp> triton_module,
                       CreateTritonModule(fn_name, fusion, device_info,
                                          block_level_parameters, mlir_context));
+        VLOG(-1) << "Zoran: TritonWrapper 2";
 
   VLOG(3) << fusion->ToString(HloPrintOptions::ShortParsable());
   VLOG(3) << fusion->fused_instructions_computation()->ToString(
       HloPrintOptions::ShortParsable());
-
+  triton_module.get().dump();
   // Compile Triton kernel to LLVM.
   const HloModule* hlo_module = fusion->GetModule();
   return CompileTritonToLLVM(fn_name, *hlo_module, device_info,
@@ -1825,23 +1837,28 @@ absl::StatusOr<TritonWrapperResult> CompileTritonToLLVM(
       DumpingEnabledForHloModule(hlo_module) &&
       DumpingEnabledForHloPass("triton-fusion-emitter",
                                hlo_config.debug_options());
-
+  should_dump_mlir_passes = true;                               
+  VLOG(-1) << "Zoran: should_dump_mlir_passes " << should_dump_mlir_passes;
   mlir::PassManager pm(&mlir_context);
   pm.enableVerifier(should_verify);
 
   std::optional<llvm::raw_fd_ostream> log_stream;
   if (should_dump_mlir_passes) {
+    VLOG(-1) << "Zoran: dump 1 ";
     std::string outputs_dir;
     if (!tsl::io::GetTestUndeclaredOutputsDir(&outputs_dir)) {
       outputs_dir = hlo_config.debug_options().xla_dump_to();
+      VLOG(-1) << "Zoran: dump 2 " << outputs_dir;
     }
     if (!outputs_dir.empty()) {
+      VLOG(-1) << "Zoran: dump 3 ";
       const std::string basename =
           absl::StrCat(absl::string_view(tsl::io::Basename(hlo_module.name())),
                        ".", kernel_name, ".triton-passes.log");
       std::string path = tsl::io::JoinPath(outputs_dir, basename);
       std::error_code err;
       log_stream.emplace(path, err, llvm::sys::fs::OF_None);
+      VLOG(-1) << "Zoran: path " << path;
       if (err) {
         log_stream.reset();
         LOG(ERROR) << err.message();
