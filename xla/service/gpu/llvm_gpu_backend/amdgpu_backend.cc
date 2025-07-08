@@ -170,7 +170,14 @@ class HsacoCache {
     hsaco_cache_.emplace_back(Entry{std::string{hash_str}, hsaco});
 
     if (auto save_path = hsaco_file_path(hash_str)) {
-      TF_CHECK_OK(tsl::Env::Default()->RenameFile(hsaco_path, *save_path));
+      if (!tsl::Env::Default()->RenameFile(hsaco_path, *save_path).ok()) {
+        std::ofstream ofs(*save_path, std::ios::binary);
+        ofs.write(reinterpret_cast< const char *>(hsaco.data()), hsaco.size());
+        if (ofs.fail()) {
+          LOG(FATAL) << "Unable to write hsaco file cache: " << *save_path;
+        }
+        unlink(hsaco_path.c_str());
+      }
     }
   }
 }; // HsacoCache

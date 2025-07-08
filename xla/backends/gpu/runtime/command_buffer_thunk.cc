@@ -113,6 +113,9 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
     }
     if (!should_update) {
       active_graph_ = id % NumCachedGraphs;
+      if(params.stream->parent()->device_ordinal()==0) 
+         VLOG(0) << "Switching to new active graph: " << active_graph_;
+
       return false;
     }
   }
@@ -127,6 +130,8 @@ bool CommandBufferThunk::ExecutorCommandBuffer::ShouldUpdateCommandBuffer(
     }
     cached_graphs_[active_graph_] = std::move(s).value();
   }
+
+  cached_graphs_[active_graph_] = std::move(params.stream->parent()->CreateCommandBuffer(se::CommandBuffer::Mode::kPrimary)).value();
 
   // if (cached_graphs_[0]->state() == se::CommandBuffer::State::kFinalized) {
   //   active_graph_ = 0;
