@@ -1996,6 +1996,13 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
   absl::Status FuseSwishActivation(HloInstruction *multiply,
                                    HloInstruction *gemm,
                                    HloInstruction *slice_or_bitcast = nullptr) {
+    // Disable Swish fusion for AMD MI300 (gfx942) due to performance regression
+    if (auto rocm_cc = std::get_if<se::RocmComputeCapability>(&gpu_version_)) {
+      if (rocm_cc->gfx_version() == "gfx942") {
+        VLOG(2) << "Skipping Swish fusion for MI300 (gfx942) due to performance considerations";
+        return absl::OkStatus();
+      }
+    }
     if (!SupportsEpilogueFusion(gemm->shape().element_type())) {
       return absl::OkStatus();
     }
