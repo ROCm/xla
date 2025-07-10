@@ -23,6 +23,7 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/types/optional.h"
+#include "rocm/rocm_config.h"
 #include "xla/stream_executor/rocm/roctracer_wrapper.h"
 #include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
 #include "xla/tsl/profiler/utils/parse_annotation.h"
@@ -40,6 +41,7 @@ limitations under the License.
 #include "tsl/platform/types.h"
 #include "tsl/profiler/lib/profiler_factory.h"
 #include "tsl/profiler/lib/profiler_interface.h"
+
 
 namespace xla {
 namespace profiler {
@@ -160,6 +162,7 @@ static void DumpRocmTracerEvent(const RocmTracerEvent& event,
   VLOG(3) << oss.str();
 }
 
+#if TF_ROCM_VERSION < 60300
 static uint64_t get_timestamp() {
   uint64_t ts;
   if (se::wrap::roctracer_get_timestamp(&ts) != ROCTRACER_STATUS_SUCCESS) {
@@ -171,6 +174,19 @@ static uint64_t get_timestamp() {
   }
   return ts;
 }
+#else
+uint64_t get_timestamp() {
+  uint64_t ts;
+  rocprofiler_status_t CHECKSTATUS = rocprofiler_get_timestamp(&ts);
+  if (CHECKSTATUS != ROCPROFILER_STATUS_SUCCESS) {
+      const char* errstr = rocprofiler_get_status_string(CHECKSTATUS);
+      LOG(ERROR) << "function rocprofiler_get_timestamp failed with error "
+                 << errstr;
+      return 0;
+  }
+  return ts;
+}
+#endif
 
 struct RocmDeviceOccupancyParams {
   hipFuncAttributes attributes = {};

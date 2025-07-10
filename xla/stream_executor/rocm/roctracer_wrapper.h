@@ -20,10 +20,25 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_ROCM_ROCTRACER_WRAPPER_H_
 #define XLA_STREAM_EXECUTOR_ROCM_ROCTRACER_WRAPPER_H_
 
+#include "rocm/rocm_config.h"
+
 #include "rocm/include/roctracer/roctracer.h"
 #include "rocm/include/roctracer/roctracer_hip.h"
-#include "rocm/rocm_config.h"
-#if TF_ROCM_VERSION >= 50300
+
+#if TF_ROCM_VERSION >= 60300
+#include <rocm/include/rocprofiler-sdk/registration.h>
+#include <rocm/include/rocprofiler-sdk/buffer.h>
+#include <rocm/include/rocprofiler-sdk/buffer_tracing.h>
+#include <rocm/include/rocprofiler-sdk/callback_tracing.h>
+#include <rocm/include/rocprofiler-sdk/external_correlation.h>
+#include <rocm/include/rocprofiler-sdk/fwd.h>
+#include <rocm/include/rocprofiler-sdk/internal_threading.h>
+#include <rocm/include/rocprofiler-sdk/cxx/name_info.hpp>
+#include <rocm/include/rocprofiler-sdk/rocprofiler.h>
+#include "tsl/platform/dso_loader.h"
+#include "tsl/platform/env.h"
+#include "tsl/platform/platform.h"
+#elif TF_ROCM_VERSION >= 50300
 #include "rocm/include/roctracer/roctracer_roctx.h"
 #else
 #include "rocm/include/roctracer/roctracer_hcc.h"

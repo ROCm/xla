@@ -1,5 +1,6 @@
 # Description:
 #   ROCm-platform specific StreamExecutor support code.
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 
 load(
     "@local_config_rocm//rocm:build_defs.bzl",
@@ -748,6 +749,11 @@ cc_library(
     ],
 )
 
+bool_flag(
+    name = "use_roctracer",
+    build_setting_default = False,
+)
+
 cc_library(
     name = "roctracer_if_static",
     tags = [
@@ -775,6 +781,37 @@ cc_library(
         "@tsl//tsl/platform",
         "@tsl//tsl/platform:dso_loader",
         "@tsl//tsl/platform:env",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "rocprofiler_sdk_if_static",
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = if_static([
+        "@local_config_rocm//rocm:rocprofiler_sdk",
+    ]),
+)
+
+cc_library(
+    name = "rocprofiler_sdk_wrapper",
+    srcs = ["rocprofiler_sdk_wrapper.h"],
+    hdrs = ["rocprofiler_sdk_wrapper.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_executor",
+        ":rocm_platform_id",
+        ":rocprofiler_sdk_if_static",
+        "//xla/tsl/platform:env",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform",
+        "@tsl//tsl/platform:dso_loader",
     ],
     alwayslink = True,
 )

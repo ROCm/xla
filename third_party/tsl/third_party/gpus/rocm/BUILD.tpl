@@ -291,10 +291,28 @@ cc_library(
     deps = [":rocm_config"],
 )
 
+bool_flag(
+    name = "use_roctracer",
+    build_setting_default = False,
+)
+
 cc_library(
     name = "roctracer",
     hdrs = glob(["%{rocm_root}/include/roctracer/**"]),
     data = glob(["%{rocm_root}/lib/libroctracer*.so*"]),
+    include_prefix = "rocm",
+    includes = [
+        "%{rocm_root}/include/",
+    ],
+    strip_include_prefix = "%{rocm_root}",
+    visibility = ["//visibility:public"],
+    deps = [":rocm_config"],
+)
+
+cc_library(
+    name = "rocprofiler_sdk",
+    hdrs = glob(["%{rocm_root}/include/rocprofiler-sdk/**"]),
+    data = glob(["%{rocm_root}/lib/librocprofiler*.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include/",

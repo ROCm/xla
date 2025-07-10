@@ -1,5 +1,6 @@
 load("@local_config_cuda//cuda:build_defs.bzl", "cuda_library", "if_cuda")
 load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm")
+load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm", "rocm_version_number", "select_threshold")
 load("//xla/tests:build_defs.bzl", "xla_test")
 load(
     "//xla/tsl:tsl.bzl",

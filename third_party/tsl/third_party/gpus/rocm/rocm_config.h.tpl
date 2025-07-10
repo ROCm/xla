@@ -30,6 +30,7 @@ limitations under the License.
 #define TF_ROCSOLVER_SOVERSION "%{rocsolver_soversion_number}"
 #define TF_HIPSPARSE_SOVERSION "%{hipsparse_soversion_number}"
 #define TF_ROCTRACER_SOVERSION "%{roctracer_soversion_number}"
+#define TF_ROCPROFILER_SDK_SOVERSION "%{rocprofiler_sdk_soversion_number}"
 #define TF_HIPSOLVER_SOVERSION "%{hipsolver_soversion_number}"
 #define TF_ROCRAND_SOVERSION "%{rocrand_soversion_number}"
 

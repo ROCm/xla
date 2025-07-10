@@ -54,6 +54,7 @@ std::string GetHipfftVersion() { return TF_HIPFFT_SOVERSION; }
 std::string GetRocsolverVersion() { return TF_ROCSOLVER_SOVERSION; }
 std::string GetHipsparseVersion() { return TF_HIPSPARSE_SOVERSION; }
 std::string GetRoctracerVersion() { return TF_ROCTRACER_SOVERSION; }
+std::string GetRocprofilerSdkVersion() { return TF_ROCPROFILER_SDK_SOVERSION; }
 std::string GetHipsolverVersion() { return TF_HIPSOLVER_SOVERSION; }
 std::string GetRocrandVersion() { return TF_ROCRAND_SOVERSION; }
 
@@ -182,6 +183,10 @@ absl::StatusOr<void*> GetRoctracerDsoHandle() {
   return GetDsoHandle("roctracer64", GetRoctracerVersion());
 }
 
+absl::StatusOr<void*> GetRocprofilerSdkDsoHandle() {
+  return GetDsoHandle("rocprofiler-sdk", GetRocprofilerSdkVersion());
+}
+
 absl::StatusOr<void*> GetHipsparseDsoHandle() {
   return GetDsoHandle("hipsparse", GetHipsparseVersion());
 }
@@ -264,6 +269,11 @@ absl::StatusOr<void*> GetRocrandDsoHandle() {
 
 absl::StatusOr<void*> GetRoctracerDsoHandle() {
   static auto result = new auto(DsoLoader::GetRoctracerDsoHandle());
+  return *result;
+}
+
+absl::StatusOr<void*> GetRocprofilerSdkDsoHandle() {
+  static auto result = new auto(DsoLoader::GetRocprofilerSdkDsoHandle());
   return *result;
 }
 

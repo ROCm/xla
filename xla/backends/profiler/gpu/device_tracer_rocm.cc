@@ -15,6 +15,8 @@ limitations under the License.
 
 #if TENSORFLOW_USE_ROCM
 
+#include "rocm/rocm_config.h"
+
 #include <memory>
 #include <utility>
 
@@ -25,6 +27,7 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
+// wrapped in one file for rocmtracer and rocprofiler-sdk
 #include "xla/backends/profiler/gpu/rocm_tracer.h"
 #include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
 #include "xla/tsl/profiler/utils/parse_annotation.h"
@@ -100,10 +103,10 @@ class GpuTracer : public profiler::ProfilerInterface {
 };
 
 RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
-  // TODO(rocm-profiler): We need support for context similar to CUDA
   RocmTracerOptions options;
-  std::vector<uint32_t> empty_vec;
 
+#if TF_ROCM_VERSION < 60300
+  std::vector<uint32_t> empty_vec;
   // clang formatting does not preserve one entry per line
   // clang-format off
   std::vector<uint32_t> hip_api_domain_ops{
@@ -173,9 +176,9 @@ RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
   options.api_callbacks.emplace(ACTIVITY_DOMAIN_HIP_API, empty_vec);
 
   options.activity_tracing.emplace(ACTIVITY_DOMAIN_HIP_OPS, empty_vec);
-
+#endif 
   return options;
-}
+} 
 
 RocmTraceCollectorOptions GpuTracer::GetRocmTraceCollectorOptions(
     uint32_t num_gpus) {
@@ -191,7 +194,6 @@ absl::Status GpuTracer::DoStart() {
   if (!rocm_tracer_->IsAvailable()) {
     return tsl::errors::Unavailable("Another profile session running.");
   }
-
   AnnotationStack::Enable(true);
 
   RocmTraceCollectorOptions trace_collector_options =
@@ -241,7 +243,7 @@ absl::Status GpuTracer::CollectData(XSpace* space) {
       return tsl::errors::FailedPrecondition(
           "Cannot collect trace before stopping");
     case State::kStartedError:
-      LOG(ERROR) << "Cannot collect, roctracer failed to start";
+      LOG(ERROR) << "Cannot collect, ROCm tracer failed to start";
       return absl::OkStatus();
     case State::kStoppedError:
       VLOG(3) << "No trace data collected";
