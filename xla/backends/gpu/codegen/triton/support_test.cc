@@ -1820,6 +1820,14 @@ TEST_P(DotTypesTest, Dot) {
       fail_mode = ExpectedFailMode::kFailOrCrash;
     }
   }
+  if (absl::c_linear_search(std::vector{F8E5M2FNUZ, F8E4M3FNUZ, F8E4M3FN}, input_type) ||
+      absl::c_linear_search(std::vector{F8E5M2FNUZ, F8E4M3FNUZ, F8E4M3FN}, result_type) ||
+      input_type == F64) {
+    if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+      // Hits llvm::report_fatal_error during Triton compilation.
+      fail_mode = ExpectedFailMode::kFailOrCrash;
+    }
+  }
 
   std::string hlo_text = R"(
 flhs {
@@ -2235,6 +2243,12 @@ ENTRY triton_computation {
       fail_mode = ExpectedFailMode::kFailOrCrash;
     }
   }
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    if (absl::c_linear_search(std::vector{F8E4M3FNUZ, F8E5M2FNUZ, F8E4M3FN,
+                                          F64}, data_type)) {
+      fail_mode = ExpectedFailMode::kFailOrCrash;
+    }
+  }
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
       ParseTemplateAndGetInstruction(
@@ -2323,10 +2337,12 @@ ENTRY triton_computation {
     fail_mode = ExpectedFailMode::kFailOrCrash;
   }
   if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
-    if (absl::c_linear_search(std::vector{F8E4M3FN, F64},
+    if (absl::c_linear_search(std::vector{F8E4M3FN, F8E5M2FNUZ, F8E4M3FNUZ, F64},
                                 data_type) ||
-        ((data_type==F16 || data_type==F16)  && algorithm == xla::PrecisionConfig::ALG_DOT_F64_F64_F64)) {
-        fail_mode = ExpectedFailMode::kFailOrCrash;
+        (absl::c_linear_search(std::vector{F16, S64, S32, S16, BF16, F32},
+                                data_type)  &&
+         algorithm == xla::PrecisionConfig::ALG_DOT_F64_F64_F64)) {
+      fail_mode = ExpectedFailMode::kFailOrCrash;
     }
   }
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32}, cc, fail_mode);
