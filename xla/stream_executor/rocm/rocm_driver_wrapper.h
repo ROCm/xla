@@ -44,6 +44,24 @@ namespace wrap {
 #define TO_STR_(x) #x
 #define TO_STR(x) TO_STR_(x)
 
+// #define STREAM_EXECUTOR_HIP_WRAP(hipSymbolName)                             \
+//   template <typename... Args>                                               \
+//   auto hipSymbolName(Args... args) -> decltype(::hipSymbolName(args...)) {  \
+//     using FuncPtrT = std::add_pointer<decltype(::hipSymbolName)>::type;     \
+//     static FuncPtrT loaded = []() -> FuncPtrT {                             \
+//       static const char *kName = TO_STR(hipSymbolName);                     \
+//       void *f;                                                              \
+//       auto s = tsl::Env::Default()->GetSymbolFromLibrary(                   \
+//           tsl::internal::CachedDsoLoader::GetHipDsoHandle().value(), kName, \
+//           &f);                                                              \
+//       CHECK(s.ok()) << "could not find " << kName                           \
+//                     << " in HIP DSO; dlerror: " << s.message();             \
+//       return reinterpret_cast<FuncPtrT>(f);                                 \
+//     }();                                                                    \
+//     return loaded(args...);                                                 \
+//   }
+// #endif
+
 #define STREAM_EXECUTOR_HIP_WRAP(hipSymbolName)                             \
   template <typename... Args>                                               \
   auto hipSymbolName(Args... args) -> decltype(::hipSymbolName(args...)) {  \
@@ -58,6 +76,8 @@ namespace wrap {
                     << " in HIP DSO; dlerror: " << s.message();             \
       return reinterpret_cast<FuncPtrT>(f);                                 \
     }();                                                                    \
+    LOG(INFO) << "HIP API call: " << TO_STR(hipSymbolName) << " at "        \
+              << __FILE__ << ":" << __LINE__;                               \
     return loaded(args...);                                                 \
   }
 #endif
