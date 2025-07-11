@@ -28,14 +28,14 @@ limitations under the License.
 #include "tsl/platform/macros.h"
 #include "tsl/platform/mem.h"
 
-#if TF_ROCM_VERSION < 60300
-namespace xla {
-namespace profiler {
-
 namespace se = ::stream_executor;
 using tsl::mutex;
 using tsl::mutex_lock;
 using tsl::profiler::AnnotationStack;
+
+#if TF_ROCM_VERSION < 60300
+namespace xla {
+namespace profiler {
 
 constexpr uint32_t RocmTracerEvent::kInvalidDeviceId;
 
@@ -1860,7 +1860,7 @@ bool RocmTracer::IsAvailable() const {
 
 /*static*/ uint64_t RocmTracer::GetTimestamp() {
   uint64_t ts;
-  if (rocprofiler_get_timestamp(&ts) != ROCPROFILER_STATUS_SUCCESS) {
+  if (se::wrap::rocprofiler_get_timestamp(&ts) != ROCPROFILER_STATUS_SUCCESS) {
     LOG(ERROR) << "function rocprofiler_get_timestamp failed with error ";
     return 0;
   }
@@ -1876,7 +1876,7 @@ void RocmTracer::Enable(const RocmTracerOptions& options,
     return;
   }
   collector_ = collector;
-  rocprofiler_start_context(context_);
+  se::wrap::rocprofiler_start_context(context_);
   LOG(INFO) << "GpuTracer started";
 }
 
@@ -1910,6 +1910,7 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
     // actually one needs to set the real type
     ev->type = RocmTracerEventType::MemcpyOther;
   }
+  VLOG(-1) << "cj401 event name = " << ev->name;
 }
 
 void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
@@ -2143,13 +2144,13 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
   }
 
   // Utility context to gather code‑object info
-  rocprofiler_create_context(&utility_context_);
+  se::wrap::rocprofiler_create_context(&utility_context_);
 
   // buffered tracing
   auto code_object_ops = std::vector<rocprofiler_tracing_operation_t>{
     ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER};
 
-  rocprofiler_configure_callback_tracing_service(
+  se::wrap::rocprofiler_configure_callback_tracing_service(
     utility_context_,
     ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT,
     code_object_ops.data(),
@@ -2157,7 +2158,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
     code_object_callback,
     nullptr);
 
-  rocprofiler_start_context(utility_context_);
+  se::wrap::rocprofiler_start_context(utility_context_);
   LOG(INFO) << "rocprofiler start utilityContext";
 
   // buffer_size_bytes depends on the number of events to be traced (records)
@@ -2167,9 +2168,9 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
   constexpr auto buffer_watermark_bytes = 6 * 4096;
 
   // Utility context to gather code‑object info
-  rocprofiler_create_context(&context_);
+  se::wrap::rocprofiler_create_context(&context_);
 
-  rocprofiler_create_buffer(context_,
+  se::wrap::rocprofiler_create_buffer(context_,
     buffer_size_bytes,
     buffer_watermark_bytes,
     ROCPROFILER_BUFFER_POLICY_LOSSLESS,
@@ -2177,29 +2178,27 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
     tool_data,
     &buffer_);
 
-  rocprofiler_configure_buffer_tracing_service(
+  se::wrap::rocprofiler_configure_buffer_tracing_service(
     context_, ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API, nullptr, 0, buffer_);
 
-  rocprofiler_configure_buffer_tracing_service(
+  se::wrap::rocprofiler_configure_buffer_tracing_service(
     context_, ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH, nullptr, 0, buffer_);
 
-  rocprofiler_configure_buffer_tracing_service(
+  se::wrap::rocprofiler_configure_buffer_tracing_service(
      context_, ROCPROFILER_BUFFER_TRACING_MEMORY_COPY, nullptr, 0, buffer_);
 
   auto client_thread = rocprofiler_callback_thread_t{};
-  rocprofiler_create_callback_thread(&client_thread);
+  se::wrap::rocprofiler_create_callback_thread(&client_thread);
     
-  rocprofiler_assign_callback_thread(buffer_, client_thread);
+  se::wrap::rocprofiler_assign_callback_thread(buffer_, client_thread);
 
   int isValid = 0;
-  rocprofiler_context_is_valid(context_, &isValid);
+  se::wrap::rocprofiler_context_is_valid(context_, &isValid);
   if (isValid == 0) {
     context_.handle = 0;  // Leak on failure.
     return -1;
   }
 
-  rocprofiler_start_context(context_);
-  rocprofiler_stop_context(context_);
   return 0;
 }
 
@@ -2207,9 +2206,9 @@ void RocmTracer::toolFinalize(void* tool_data) {
 
   auto& obj = RocmTracer::i();
   LOG(INFO) << "Calling toolFinalize!";
-  rocprofiler_stop_context(obj.utility_context_);
+  se::wrap::rocprofiler_stop_context(obj.utility_context_);
   obj.utility_context_.handle = 0;
-  rocprofiler_stop_context(obj.context_);
+  se::wrap::rocprofiler_stop_context(obj.context_);
   // flush buffer here or in disable?
   obj.context_.handle = 0;
 }
@@ -2242,7 +2241,7 @@ std::vector<rocprofiler_agent_v0_t> GetGpuDeviceAgents() {
         return ROCPROFILER_STATUS_SUCCESS;
       };
 
-  rocprofiler_query_available_agents(
+  se::wrap::rocprofiler_query_available_agents(
       ROCPROFILER_AGENT_INFO_VERSION_0, iterate_cb, sizeof(rocprofiler_agent_t),
       static_cast<void*>(&agents));
   return agents;

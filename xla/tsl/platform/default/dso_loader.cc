@@ -179,9 +179,15 @@ absl::StatusOr<void*> GetHipsolverDsoHandle() {
 }
 #endif
 
+#if TF_ROCM_VERSION < 60300
 absl::StatusOr<void*> GetRoctracerDsoHandle() {
   return GetDsoHandle("roctracer64", GetRoctracerVersion());
 }
+#else
+absl::StatusOr<void*> GetRoctracerDsoHandle() {
+  return GetDsoHandle("rocprofiler-sdk", GetRoctracerVersion());
+}
+#endif
 
 absl::StatusOr<void*> GetRocprofilerSdkDsoHandle() {
   return GetDsoHandle("rocprofiler-sdk", GetRocprofilerSdkVersion());

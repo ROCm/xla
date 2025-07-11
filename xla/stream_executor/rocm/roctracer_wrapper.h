@@ -22,8 +22,6 @@ limitations under the License.
 
 #include "rocm/rocm_config.h"
 
-#include "rocm/include/roctracer/roctracer.h"
-#include "rocm/include/roctracer/roctracer_hip.h"
 
 #if TF_ROCM_VERSION >= 60300
 #include <rocm/include/rocprofiler-sdk/registration.h>
@@ -38,10 +36,11 @@ limitations under the License.
 #include "tsl/platform/dso_loader.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/platform.h"
-#elif TF_ROCM_VERSION >= 50300
+#else TF_ROCM_VERSION >= 50300
 #include "rocm/include/roctracer/roctracer_roctx.h"
-#else
 #include "rocm/include/roctracer/roctracer_hcc.h"
+#include "rocm/include/roctracer/roctracer.h"
+#include "rocm/include/roctracer/roctracer_hip.h"
 #endif
 #include "tsl/platform/dso_loader.h"
 #include "tsl/platform/env.h"
@@ -79,7 +78,28 @@ namespace wrap {
 
 #endif  // PLATFORM_GOOGLE
 
-#if TF_ROCM_VERSION >= 50300
+#if TF_ROCM_VERSION >= 60300
+#define FOREACH_ROCTRACER_API(DO_FUNC)                     \
+  DO_FUNC(rocprofiler_configure)                           \
+  DO_FUNC(rocprofiler_at_internal_thread_create)           \
+  DO_FUNC(rocprofiler_create_buffer)                       \
+  DO_FUNC(rocprofiler_create_context)                      \
+  DO_FUNC(rocprofiler_flush_buffer)                        \
+  DO_FUNC(rocprofiler_get_status_string)                   \
+  DO_FUNC(rocprofiler_context_is_valid)                    \
+  DO_FUNC(rocprofiler_start_context)                       \
+  DO_FUNC(rocprofiler_stop_context)                        \
+  DO_FUNC(rocprofiler_configure_callback_tracing_service)  \
+  DO_FUNC(rocprofiler_configure_buffer_tracing_service)    \
+  DO_FUNC(rocprofiler_get_timestamp)                       \
+  DO_FUNC(rocprofiler_query_available_agents)              \
+  DO_FUNC(rocprofiler_iterate_callback_tracing_kinds)      \
+  DO_FUNC(rocprofiler_assign_callback_thread)              \
+  DO_FUNC(rocprofiler_create_callback_thread)              \
+  DO_FUNC(rocprofiler_query_callback_tracing_kind_name)    \
+  DO_FUNC(rocprofiler_iterate_callback_tracing_kind_operations) \
+  DO_FUNC(rocprofiler_query_callback_tracing_kind_operation_name)
+#elif TF_ROCM_VERSION >= 50300 && TF_ROCM_VERSION < 60300
 #define FOREACH_ROCTRACER_API(DO_FUNC)           \
   DO_FUNC(roctracer_default_pool_expl)           \
   DO_FUNC(roctracer_disable_domain_activity)     \
