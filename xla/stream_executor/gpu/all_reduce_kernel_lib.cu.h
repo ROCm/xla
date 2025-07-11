@@ -21,11 +21,17 @@ limitations under the License.
 
 #include "third_party/gpus/cuda/include/cuda/atomic"
 #include "third_party/gpus/cuda/include/cuda_bf16.h"
+#include "xla/service/collective_ops_utils.h"
 #include "xla/stream_executor/gpu/all_reduce_kernel.h"
 
 namespace stream_executor::gpu {
 
 constexpr int64_t kNumElementsPerThread = 4;
+enum class PlatformType : uint32_t {
+  ROCM,
+  CUDA,
+  NOGPU,  // place holder for compiling header only without errors
+};
 
 template <typename T>
 union Vec;
@@ -39,12 +45,26 @@ union alignas(16) Vec<float> {
 };
 
 template <>
-union alignas(8) Vec<__nv_bfloat16> {
-  using PackedType = int2;
+union alignas(4) Vec<uint8_t> {
+  using PackedType = int32_t;
 
-  __nv_bfloat16 data[4];
+  uint8_t data[4];
   PackedType packed;
 };
+
+template <typename T, xla::ReductionKind ReductionKindT>
+__device__ __forceinline__
+    typename std::enable_if<ReductionKindT == xla::ReductionKind::SUM, T>::type
+    ApplyBinaryOp(T a, T b) {
+  return a + b;
+}
+
+template <typename T, xla::ReductionKind ReductionKindT>
+__device__ __forceinline__
+    typename std::enable_if<ReductionKindT == xla::ReductionKind::MAX, T>::type
+    ApplyBinaryOp(T a, T b) {
+  return max(a, b);
+}
 
 template <typename T>
 __device__ __forceinline__ Vec<T> VecLoad(T* addr) {
@@ -66,58 +86,76 @@ __device__ __forceinline__ void VecAdd(Vec<T>& res, const Vec<T>& vec) {
   res.data[3] += vec.data[3];
 }
 
-__device__ __forceinline__ bool CompareExchange(uint32_t* addr,
-                                                uint32_t compare,
-                                                uint32_t val) {
-#if __CUDA_ARCH__ >= 600
-  ::cuda::atomic_ref<uint32_t, ::cuda::thread_scope_system> ref(*addr);
-  return ref.compare_exchange_strong(compare, val,
-                                     ::cuda::memory_order_acq_rel);
-#else
-  assert(false);
-  return true;
-#endif
-}
 
-__device__ __forceinline__ void PutSignalFlag(uint32_t* addr) {
-  while (!CompareExchange(addr, 0, 1)) {
-  }
-}
-
-__device__ __forceinline__ void WaitSignalFlag(uint32_t* addr) {
-  while (!CompareExchange(addr, 1, 0)) {
-  }
-}
-
+template <PlatformType T = PlatformType::NOGPU>
 __device__ __forceinline__ void SyncRemoteBlocks(
     std::array<uint32_t* __restrict__, kMaxNumAllReduceInputPtrs>
         signal_pad_ptrs,
     int64_t rank, int64_t num_ranks) {
   if (threadIdx.x < num_ranks) {
     auto target_rank = threadIdx.x;
-    PutSignalFlag(signal_pad_ptrs[target_rank] + blockIdx.x * num_ranks + rank);
-    WaitSignalFlag(signal_pad_ptrs[rank] + blockIdx.x * num_ranks +
-                   target_rank);
+    PutSignalFlag<T>(
+        signal_pad_ptrs[target_rank] + blockIdx.x * num_ranks + rank,
+        signal_value);
+    WaitSignalFlag<T>(
+        signal_pad_ptrs[rank] + blockIdx.x * num_ranks + target_rank,
+        signal_value);
   }
 }
 
-template <typename T>
-__global__ void AllReduceKernelImpl(
-    std::array<T* __restrict__, kMaxNumAllReduceInputPtrs> input_ptrs,
-    T* __restrict__ output_ptr, int64_t rank, int64_t num_ranks,
-    int64_t num_elements,
-    std::array<uint32_t* __restrict__, kMaxNumAllReduceInputPtrs>
-        signal_flags_ptrs) {
+template <typename T, xla::ReductionKind ReductionKindT,
+          PlatformType PlatformT = PlatformType::NOGPU>
+__device__ __forceinline__ void OneShotAllReduceKernelImpl(
+    const AllReduceKernelParams<T>& args) {
   int64_t offset =
       kNumElementsPerThread * (blockIdx.x * blockDim.x + threadIdx.x);
   int64_t stride = kNumElementsPerThread * blockDim.x * gridDim.x;
 
-  SyncRemoteBlocks(signal_flags_ptrs, rank, num_ranks);
+  // Copy data from local input buffer to remote input buffer.
+  for (int i = offset; i < args.num_elements; i += stride) {
+    VecStore(args.remote_input_buffers[args.rank] + i,
+             VecLoad(args.input_buffer + i));
+  }
+
+  SyncRemoteBlocks<PlatformT>(args.signal_flags_buffers, args.rank,
+                              args.num_ranks, args.signal_value);
   __syncthreads();
 
   for (int i = offset; i < num_elements; i += stride) {
     T sum = 0;
 
+    // Since `remote_input_buffers` are provided in rank order, we get stable
+    // reduction results on all devices.
+#pragma unroll
+    for (int j = 1; j < kMaxNumAllReduceInputPtrs; ++j) {
+      if (j < args.num_ranks) {
+        VecOp<T, ReductionKindT>(acc,
+                                 VecLoad(args.remote_input_buffers[j] + i));
+      }
+    }
+
+    VecStore(args.output_buffer + i, acc);
+  }
+}
+
+template <typename T, xla::ReductionKind ReductionKindT,
+          PlatformType PlatformT = PlatformType::NOGPU>
+__device__ __forceinline__ void TwoShotAllReduceKernelImpl(
+    const AllReduceKernelParams<T>& args) {
+  const int64_t offset = blockIdx.x * args.num_elements_per_block +
+                         threadIdx.x * kNumElementsPerThread;
+  const int64_t offset_end =
+      std::min((blockIdx.x + 1) * args.num_elements_per_block,
+               args.num_elements_per_rank);
+
+  const int64_t block_stride = kNumElementsPerThread * blockDim.x;
+  // Responsibility for accumulation for this rank.
+  const int64_t rank_offset = args.rank * args.num_elements_per_rank;
+
+  // Step1: Copy data from input buffer to the local shared buffer.
+  // Each GPU will copy data from its local input buffer to its own local shared
+  // buffer from where it will be read by participating devices (PULLed).
+  for (int i = offset; i < offset_end; i += block_stride) {
 #pragma unroll
     for (int j = 0; j < kMaxNumAllReduceInputPtrs; ++j) {
       if (j >= num_ranks) break;
@@ -133,8 +171,73 @@ __global__ void AllReduceKernelImpl(
     output_ptr[i] = sum;
   }
 
+  // Shot1: Wait for all participating devices to finish copying data to their
+  // shared buffer.
+  SyncRemoteBlocks<PlatformT>(args.signal_flags_buffers, args.rank,
+                              args.num_ranks, args.signal_value);
   __syncthreads();
-  SyncRemoteBlocks(signal_flags_ptrs, rank, num_ranks);
+
+  // Step2: Accumulate data for the responsible indices in the shared buffers.
+  for (int i = offset; i < offset_end; i += block_stride) {
+    // Each rank is only responsible for accumulating num_elements_per_rank
+    // elements.
+    const int64_t offset_i = rank_offset + i;
+    if (offset_i >= args.num_elements) {
+      continue;
+    }
+    Vec<T> acc = VecLoad(args.remote_input_buffers[0] + offset_i);
+
+    // Since `remote_input_ptrs` are provided in rank order, we get stable
+    // reduction results on all devices.
+#pragma unroll
+    for (int r = 1; r < kMaxNumAllReduceInputPtrs; ++r) {
+      if (r >= args.num_ranks) {
+        continue;
+      }
+      VecOp<T, ReductionKindT>(
+          acc, VecLoad(args.remote_input_buffers[r] + offset_i));
+    }
+    VecStore(args.remote_input_buffers[args.rank] + offset_i, acc);
+  }
+
+  // Shot2: Wait for all participating devices to finish accumulating data in
+  // the shared buffer. Note that signal_value + 1 is used to ensure that the
+  // synchronization is different from the one used above.
+  SyncRemoteBlocks<PlatformT>(args.signal_flags_buffers, args.rank,
+                              args.num_ranks, args.signal_value + 1);
+  __syncthreads();
+
+  // Step3: Copy data from the shared buffers to the output buffer.
+  for (int i = offset; i < offset_end; i += block_stride) {
+#pragma unroll
+    for (int r = 0; r < kMaxNumAllReduceInputPtrs; ++r) {
+      if (r >= args.num_ranks) {
+        continue;
+      }
+      // Rotate ranks to circumvent all GPUs reading from the same location
+      // simultaneously.
+      const int64_t remote_rank = (args.rank + r) % args.num_ranks;
+      const int64_t offset_i = remote_rank * args.num_elements_per_rank + i;
+      if (offset_i >= args.num_elements) {
+        continue;
+      }
+      VecStore(args.output_buffer + offset_i,
+               VecLoad(args.remote_input_buffers[remote_rank] + offset_i));
+    }
+  }
+}
+
+template <typename T, xla::ReductionKind ReductionKindT,
+          AllReduceStrategy kAllReduceStrategy,
+          PlatformType PlatformT = PlatformType::NOGPU>
+__global__ void AllReduceKernelImpl(AllReduceKernelParams<T> args) {
+  if constexpr (kAllReduceStrategy == AllReduceStrategy::kOneShot) {
+    OneShotAllReduceKernelImpl<T, ReductionKindT, PlatformT>(args);
+  } else if constexpr (kAllReduceStrategy == AllReduceStrategy::kTwoShot) {
+    TwoShotAllReduceKernelImpl<T, ReductionKindT, PlatformT>(args);
+  } else {
+    assert(false && "Unsupported all-reduce strategy");
+  }
 }
 
 }  // namespace stream_executor::gpu
