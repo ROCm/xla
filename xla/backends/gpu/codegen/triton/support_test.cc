@@ -180,6 +180,10 @@ auto AllDevicesToTest() {
 #endif
 }
 
+stream_executor::GpuComputeCapability CudaAmpereOrRocm() {
+  return AllDevicesToTest()[0];
+}
+
 // Generates all the possible test combinations for a given opcodes. A test
 // combination is a tuple of the form (data_type, opcode, compute_capability).
 auto AllTestCombinationsForOpcodes(absl::Span<const HloOpcode> opcodes) {
@@ -604,12 +608,23 @@ ENTRY triton_computation {
                                      data_type, opcode));
 
   ExpectedFailMode fail_mode = ExpectedFailMode::kFail;
-  if (opcode == HloOpcode::kDivide &&
-      (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16 ||
-       data_type == PrimitiveType::F8E5M2 ||
-       data_type == PrimitiveType::F8E4M3FN)) {
-    fail_mode = ExpectedFailMode::kCrash;
-  };
+  if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
+    if (opcode == HloOpcode::kDivide &&
+        (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16 ||
+         data_type == PrimitiveType::F8E5M2 ||
+         data_type == PrimitiveType::F8E4M3FN)) {
+      fail_mode = ExpectedFailMode::kCrash;
+    }
+  } else {
+    if (((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
+         (data_type == PrimitiveType::F8E5M2 ||
+          data_type == PrimitiveType::F8E4M3FN || 
+          data_type == PrimitiveType::F8E4M3B11FNUZ ||
+          data_type == PrimitiveType::F8E5M2FNUZ ||
+          data_type == PrimitiveType::F8E4M3FNUZ))) {
+      fail_mode = ExpectedFailMode::kFailOrCrash;
+    }
+  }
 
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc, fail_mode);
 }
@@ -638,11 +653,22 @@ ENTRY triton_computation {
                                      data_type, opcode));
 
   ExpectedFailMode fail_mode = ExpectedFailMode::kFail;
-  if (opcode == HloOpcode::kDivide &&
-      (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16 ||
-       data_type == PrimitiveType::F8E5M2 ||
-       data_type == PrimitiveType::F8E4M3FN)) {
-    fail_mode = ExpectedFailMode::kCrash;
+  if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
+    if (opcode == HloOpcode::kDivide &&
+        (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16 ||
+         data_type == PrimitiveType::F8E5M2 ||
+         data_type == PrimitiveType::F8E4M3FN)) {
+      fail_mode = ExpectedFailMode::kCrash;
+    }
+  } else {
+    if (((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
+         (data_type == PrimitiveType::F8E5M2 ||
+          data_type == PrimitiveType::F8E4M3FN ||
+          data_type == PrimitiveType::F8E4M3B11FNUZ ||
+          data_type == PrimitiveType::F8E5M2FNUZ ||
+          data_type == PrimitiveType::F8E4M3FNUZ))) {
+      fail_mode = ExpectedFailMode::kFailOrCrash;
+    }
   }
 
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{}, cc, fail_mode);
@@ -696,7 +722,21 @@ ENTRY triton_computation {
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
       ParseTemplateAndGetInstruction(hlo_text, data_type, opcode));
-  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc);
+
+  bool skip_failure_branch_to_avoid_crash = false;
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    skip_failure_branch_to_avoid_crash =
+        (opcode == HloOpcode::kClamp || opcode == HloOpcode::kSelect) &&
+        (data_type == PrimitiveType::F8E5M2 ||
+         data_type == PrimitiveType::F8E4M3FN ||
+         data_type == PrimitiveType::F8E4M3B11FNUZ ||
+         data_type == PrimitiveType::F8E5M2FNUZ ||
+         data_type == PrimitiveType::F8E4M3FNUZ);
+  }
+
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 32}, cc,
+                 skip_failure_branch_to_avoid_crash ? ExpectedFailMode::kFailOrCrash
+                                                    : ExpectedFailMode::kFail);
 }
 
 constexpr std::array kTestedOpsTernaryElementwise = {HloOpcode::kSelect,
@@ -926,11 +966,25 @@ ENTRY triton_computation {
 
   // TODO(b/361526623): Reduce the cases where emitter crashes.
   ExpectedFailMode fail_mode = ExpectedFailMode::kFail;
-  if (opcode == HloOpcode::kDivide && (data_type == BF16 || data_type == F16)) {
-    fail_mode = ExpectedFailMode::kCrash;
-  }
-  if (data_type == F8E4M3FN || data_type == F8E5M2) {
-    fail_mode = ExpectedFailMode::kFailOrCrash;
+  if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
+    if (opcode == HloOpcode::kDivide && (data_type == BF16 ||
+                                          data_type == F16)) {
+      fail_mode = ExpectedFailMode::kCrash;
+    }
+    if (data_type == F8E4M3FN || data_type == F8E5M2) {
+      fail_mode = ExpectedFailMode::kFailOrCrash;
+    }
+  } else {
+    if ((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
+        (data_type == PrimitiveType::F8E5M2 ||
+         data_type == PrimitiveType::F8E4M3FN  ||
+         data_type == PrimitiveType::F8E5M2FNUZ ||
+         data_type == PrimitiveType::F8E4M3FNUZ)) {
+      fail_mode = ExpectedFailMode::kCrash;
+    }
+    if (opcode == HloOpcode::kReduce && (data_type == PrimitiveType::F8E4M3FNUZ)) {
+      fail_mode = ExpectedFailMode::kCrash;
+    }
   }
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1}, cc, fail_mode);
 }
@@ -1875,6 +1929,14 @@ TEST_P(DotTypesTest, Dot) {
       fail_mode = ExpectedFailMode::kFailOrCrash;
     }
   }
+  if (absl::c_linear_search(std::vector{F8E5M2FNUZ, F8E4M3FNUZ, F8E4M3FN}, input_type) ||
+      absl::c_linear_search(std::vector{F8E5M2FNUZ, F8E4M3FNUZ, F8E4M3FN}, result_type) ||
+      input_type == F64) {
+    if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+      // Hits llvm::report_fatal_error during Triton compilation.
+      fail_mode = ExpectedFailMode::kFailOrCrash;
+    }
+  }
 
   std::string hlo_text = R"(
 flhs {
@@ -1950,7 +2012,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_F(DotTest, NonFusionLhs) {
@@ -1978,7 +2040,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_F(DotTest, SingleBatchDim) {
@@ -2018,7 +2080,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_F(DotTest, MultipleNonContractingDimensions) {
@@ -2057,7 +2119,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 16, 1, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_F(DotTest, MultipleContractingDimensions) {
@@ -2097,7 +2159,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_F(DotTest, NonDefaultDimensionOrder_kmkn) {
@@ -2138,7 +2200,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_F(DotTest, NonDefaultDimensionOrder_mknk) {
@@ -2179,7 +2241,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 class DotPrecisionTest
@@ -2241,6 +2303,17 @@ ENTRY triton_computation {
   ExpectedFailMode fail_mode = ExpectedFailMode::kFail;
   if (absl::c_linear_search(std::vector{F8E5M2, F8E4M3FN, S8}, data_type)) {
     fail_mode = ExpectedFailMode::kFailOrCrash;
+  }
+  if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
+    if (data_type == F64) {
+      fail_mode = ExpectedFailMode::kFailOrCrash;
+    }
+  }
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    if (absl::c_linear_search(std::vector{F8E4M3FNUZ, F8E5M2FNUZ, F8E4M3FN,
+                                          F64}, data_type)) {
+      fail_mode = ExpectedFailMode::kFailOrCrash;
+    }
   }
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
@@ -2335,6 +2408,15 @@ ENTRY triton_computation {
   if (absl::c_linear_search(std::vector{F8E5M2, F8E4M3FN, F8E4M3, S8},
                             data_type)) {
     fail_mode = ExpectedFailMode::kFailOrCrash;
+  }
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    if (absl::c_linear_search(std::vector{F8E4M3FN, F8E5M2FNUZ, F8E4M3FNUZ, F64},
+                                data_type) ||
+        (absl::c_linear_search(std::vector{F16, S64, S32, S16, BF16, F32},
+                                data_type)  &&
+         algorithm == xla::PrecisionConfig::ALG_DOT_F64_F64_F64)) {
+      fail_mode = ExpectedFailMode::kFailOrCrash;
+    }
   }
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32}, cc, fail_mode);
 }
@@ -2507,7 +2589,7 @@ ENTRY triton_computation {
       TestedInstruction ti,
       ParseTemplateAndGetInstruction(hlo_text, F32, HloOpcode::kFusion,
                                      /*use_nested_gemm_fusions=*/true));
-  se::GpuComputeCapability cc = se::CudaComputeCapability::Ampere();
+  se::GpuComputeCapability cc = CudaAmpereOrRocm();
   ASSERT_FALSE(IsTritonSupportedInstruction(ti.Instruction(), cc));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{64, 32}, cc);
 }
