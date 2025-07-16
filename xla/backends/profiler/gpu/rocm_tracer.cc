@@ -1591,11 +1591,10 @@ absl::Status RocmTracer::DisableActivityTracing() {
 }  // namespace xla
 #else
 
-using tsl::profiler::AnnotationStack;
-
 namespace xla {
 namespace profiler {
 
+using tsl::profiler::AnnotationStack;
 static constexpr int kMaxSymbolSize = 1024;
 
 std::string demangle(const char* name) {
@@ -1850,8 +1849,13 @@ constexpr uint32_t RocmTracerEvent::kInvalidDeviceId;
 // Stub implementations for RocmTracer static functions expected by rocprofiler.
 // ----------------------------------------------------------------------------
 RocmTracer& RocmTracer::i() {
-  static RocmTracer obj;
-  return obj;
+  // static RocmTracer obj;
+  // return obj;
+
+  static RocmTracer* instance = nullptr;
+  static std::once_flag once;
+  std::call_once(once, [] { instance = new RocmTracer(); });
+  return *instance;
 }
 
 bool RocmTracer::IsAvailable() const {
@@ -1870,6 +1874,9 @@ bool RocmTracer::IsAvailable() const {
 void RocmTracer::Enable(const RocmTracerOptions& options,
   RocmTraceCollector* collector) {
   
+  rocprofiler_force_configure(rocprofiler_configure);
+  VLOG(-1) << "cj401 rocprofiler_force_configure";
+
   std::lock_guard<tsl::mutex> lk(collector_mutex_);
   if (collector_ != nullptr) {
     LOG(WARNING) << "ROCM tracer is already running!";
@@ -1890,12 +1897,12 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
   ev->source = RocmTracerEventSource::ApiCallback;
   ev->domain = RocmTracerEventDomain::HIP_API;
   ev->name = "??";
-  ev->annotation = "??";
   ev->roctx_range = "??";
   ev->start_time_ns = rec.start_timestamp;
   ev->end_time_ns = rec.end_timestamp;
   ev->device_id = RocmTracerEvent::kInvalidDeviceId;
   ev->correlation_id = rec.correlation_id.internal;
+  ev->annotation = collector_->annotation_map()->LookUp(ev->correlation_id);
   ev->thread_id = rec.thread_id;
   ev->stream_id = RocmTracerEvent::kInvalidStreamId;
   ev->kernel_info = KernelDetails{
@@ -1910,7 +1917,6 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
     // actually one needs to set the real type
     ev->type = RocmTracerEventType::MemcpyOther;
   }
-  VLOG(-1) << "cj401 event name = " << ev->name;
 }
 
 void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
@@ -2001,12 +2007,12 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t *hdr,
   ev->source = RocmTracerEventSource::Activity;
   ev->domain = RocmTracerEventDomain::HIP_OPS;
   ev->name = "??";
-  ev->annotation = "??";
   ev->roctx_range = "??";
   ev->start_time_ns = rec.start_timestamp;
   ev->end_time_ns = rec.end_timestamp;
   ev->device_id = agents_[kinfo.agent_id.handle].id.handle;
   ev->correlation_id = rec.correlation_id.internal;
+  ev->annotation = collector_->annotation_map()->LookUp(ev->correlation_id);
   ev->thread_id = rec.thread_id;
   ev->stream_id = kinfo.queue_id.handle;
   ev->kernel_info = KernelDetails{
@@ -2081,6 +2087,7 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
 
 void RocmTracer::CodeObjectCallback(rocprofiler_callback_tracing_record_t record,
                           void* callback_data) {
+  // VLOG(-1) << "cj401 inside CodeObjectCallback";
   if (record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
       record.operation == ROCPROFILER_CODE_OBJECT_LOAD) {
     if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD) {
@@ -2199,6 +2206,31 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
     return -1;
   }
 
+  {
+    // for annotations
+    const rocprofiler_tracing_operation_t* hip_ops = nullptr;
+    size_t hip_ops_count = 0;
+
+    rocprofiler_configure_callback_tracing_service(
+      context_,
+      ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API,
+      hip_ops,
+      hip_ops_count,
+      [](rocprofiler_callback_tracing_record_t record,
+         rocprofiler_user_data_t*, void*) {
+        if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
+          const std::string& annotation = tsl::profiler::AnnotationStack::Get();
+          if (!annotation.empty()) {
+            RocmTracer::i()
+              .collector()
+              ->annotation_map()
+              ->Add(record.correlation_id.internal, annotation);
+          }
+        }
+      },
+      nullptr);
+  }
+
   return 0;
 }
 
@@ -2287,5 +2319,9 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
 
 }  // namespace profiler
 }  // namespace xla
+
+void __attribute__((constructor)) init_rocm_lib () {
+     rocprofiler_force_configure(xla::profiler::rocprofiler_configure);
+}
 
 #endif
