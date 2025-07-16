@@ -117,7 +117,7 @@ return options;
 }
 
 absl::Status GpuTracer::DoStart() {
-  // AnnotationStack::Enable(true);
+  AnnotationStack::Enable(true);
   uint64_t start_gputime_ns = RocmTracer::GetTimestamp();
   uint64_t start_walltime_ns = tsl::EnvTime::NowNanos();
  

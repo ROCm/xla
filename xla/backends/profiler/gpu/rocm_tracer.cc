@@ -45,16 +45,10 @@ limitations under the License.
 #include "tsl/platform/macros.h"
 #include "tsl/platform/mem.h"
 
-
-using tsl::profiler::XEventBuilder;
-using tsl::profiler::XEventMetadata;
-using tsl::profiler::XLineBuilder;
-using tsl::profiler::XPlaneBuilder;
-using tsl::profiler::XSpace;
-
 namespace xla {
 namespace profiler {
 
+using tsl::profiler::AnnotationStack;
 static constexpr int kMaxSymbolSize = 1024;
 
 std::string demangle(const char* name) {
@@ -328,7 +322,6 @@ bool RocmTracer::IsAvailable() const {
 
 void RocmTracer::Enable(const RocmTracerOptions& options,
   RocmTraceCollector* collector) {
-  
   std::lock_guard<tsl::mutex> lk(collector_mutex_);
   if (collector_ != nullptr) {
     LOG(WARNING) << "ROCM tracer is already running!";
@@ -349,12 +342,12 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
   ev->source = RocmTracerEventSource::ApiCallback;
   ev->domain = RocmTracerEventDomain::HIP_API;
   ev->name = "??";
-  ev->annotation = "??";
   ev->roctx_range = "??";
   ev->start_time_ns = rec.start_timestamp;
   ev->end_time_ns = rec.end_timestamp;
   ev->device_id = RocmTracerEvent::kInvalidDeviceId;
   ev->correlation_id = rec.correlation_id.internal;
+  ev->annotation = collector_->annotation_map()->LookUp(ev->correlation_id);
   ev->thread_id = rec.thread_id;
   ev->stream_id = RocmTracerEvent::kInvalidStreamId;
   ev->kernel_info = KernelDetails{
@@ -368,9 +361,6 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
   if (isCopyApi(rec.operation)) {
     // actually one needs to set the real type
     ev->type = RocmTracerEventType::MemcpyOther;
-  }
-
-  if (isKernelApi(rec.operation)) {
   }
 }
 
@@ -462,12 +452,12 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t *hdr,
   ev->source = RocmTracerEventSource::Activity;
   ev->domain = RocmTracerEventDomain::HIP_OPS;
   ev->name = "??";
-  ev->annotation = "??";
   ev->roctx_range = "??";
   ev->start_time_ns = rec.start_timestamp;
   ev->end_time_ns = rec.end_timestamp;
   ev->device_id = agents_[kinfo.agent_id.handle].id.handle;
   ev->correlation_id = rec.correlation_id.internal;
+  ev->annotation = collector_->annotation_map()->LookUp(ev->correlation_id);
   ev->thread_id = rec.thread_id;
   ev->stream_id = kinfo.queue_id.handle;
   ev->kernel_info = KernelDetails{
@@ -648,8 +638,31 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
     return -1;
   }
 
-  rocprofiler_start_context(context_);
-  rocprofiler_stop_context(context_);
+  {
+    // for annotations
+    const rocprofiler_tracing_operation_t* hip_ops = nullptr;
+    size_t hip_ops_count = 0;
+
+    rocprofiler_configure_callback_tracing_service(
+      context_,
+      ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API,
+      hip_ops,
+      hip_ops_count,
+      [](rocprofiler_callback_tracing_record_t record,
+         rocprofiler_user_data_t*, void*) {
+        if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
+          const std::string& annotation = tsl::profiler::AnnotationStack::Get();
+          if (!annotation.empty()) {
+            RocmTracer::i()
+              .collector()
+              ->annotation_map()
+              ->Add(record.correlation_id.internal, annotation);
+          }
+        }
+      },
+      nullptr);
+  }
+
   return 0;
 }
 
@@ -715,7 +728,7 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
   id->name = "XLA-with-rocprofiler-sdk";
   obj.client_id_ = id;
 
-  std::cerr << "Configure rocprofiler-sdk..." << std::endl << std::flush;
+  LOG(INFO) << "Configure rocprofiler-sdk...";
 
   const uint32_t major = version / 10000;
   const uint32_t minor = (version % 10000) / 100;
@@ -738,3 +751,7 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
 
 }  // namespace profiler
 }  // namespace xla
+
+void __attribute__((constructor)) init_rocm_lib () {
+     rocprofiler_force_configure(xla::profiler::rocprofiler_configure);
+}
