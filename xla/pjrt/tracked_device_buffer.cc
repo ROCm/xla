@@ -69,10 +69,6 @@ bool BufferSequencingEvent::EventHasBeenRecorded() const {
   return event_.event() != nullptr;
 }
 
-bool BufferSequencingEvent::IsDefinedNoLock() const {
-  return defined_status_.IsConcrete();
-}
-
 uint64_t BufferSequencingEvent::sequence_number() const {
   uint64_t seq = sequence_number_.load(std::memory_order_seq_cst);
   return seq;
@@ -118,7 +114,7 @@ bool BufferSequencingEvent::IsPredeterminedErrorOrDefinedOn(
   // IsDefined would be true for both a defined buffer and an error buffer.
   // Can't use BufferSequencingEvent::EventHasBeenRecorded here since that's
   // only true for a non-error buffer(i.e. defined buffer).
-  mu_.Await(absl::Condition(this, &BufferSequencingEvent::IsDefinedNoLock));
+  mu_.Await(absl::Condition(this, &BufferSequencingEvent::IsDefined));
 
   if (defined_status_.IsConcrete() && !defined_status_.get().ok()) {
     // IsPredeterminedError
