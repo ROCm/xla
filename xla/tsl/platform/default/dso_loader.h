@@ -47,6 +47,7 @@ absl::StatusOr<void*> GetMiopenDsoHandle();
 absl::StatusOr<void*> GetHipfftDsoHandle();
 absl::StatusOr<void*> GetRocrandDsoHandle();
 absl::StatusOr<void*> GetRoctracerDsoHandle();
+absl::StatusOr<void*> GetRocprofilerDsoHandle();
 absl::StatusOr<void*> GetRocsolverDsoHandle();
 absl::StatusOr<void*> GetHipsolverDsoHandle();
 absl::StatusOr<void*> GetHipsparseDsoHandle();

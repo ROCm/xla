@@ -52,6 +52,7 @@ tsl_gpu_library(
         # keep sorted
         ":rocm_collector",
         ":rocm_tracer",
+        ":rocp",
     ]),
     alwayslink = 1,
 )
@@ -255,6 +256,58 @@ tsl_gpu_library(
         "@tsl//tsl/platform:types",
         "@tsl//tsl/profiler/lib:profiler_factory",
         "@tsl//tsl/profiler/lib:profiler_interface",
+    ],
+)
+
+
+tsl_gpu_library(
+    name = "rocprofilersdk_wrapper",
+    hdrs = if_rocm(["rocprofilersdk_wrapper.h"]),
+    copts = tf_profiler_copts() + tsl_copts(),
+    tags = [
+        "gpu",
+        "rocm-only",
+    ] + if_google([
+        # TODO(b/360374983): Remove this tag once the target can be built without --config=rocm.
+        "manual",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+
+tsl_gpu_library(
+    name = "rocp",
+    srcs = if_rocm(["rocp.cc"]),
+    hdrs = if_rocm(["rocp.h"]),
+    copts = tf_profiler_copts() + tsl_copts(),
+    tags = [
+        "gpu",
+        "rocm-only",
+    ] + if_google([
+        # TODO(b/360374983): Remove this tag once the target can be built without --config=rocm.
+        "manual",
+    ]),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":rocm_collector",
+        ":rocm_tracer",
+        ":rocprofilersdk_wrapper",
+        "//xla/stream_executor/rocm:roctracer_wrapper",
+        "//xla/tsl/profiler/backends/cpu:annotation_stack",
+        "//xla/tsl/profiler/utils:time_utils",
+        "@com_google_absl//absl/container:fixed_array",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/container:node_hash_map",
+        "@com_google_absl//absl/container:node_hash_set",
+        "@com_google_absl//absl/status",
+        "@tsl//tsl/platform:env",
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform:macros",
+        "@tsl//tsl/platform:platform_port",
+        "@tsl//tsl/platform:status",
+        "@tsl//tsl/platform:types",
     ],
 )
 
