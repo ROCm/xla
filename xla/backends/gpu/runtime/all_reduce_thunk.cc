@@ -431,7 +431,7 @@ absl::Status AllReduceStartThunk::RunCollective(
     TF_RETURN_IF_ERROR(RunOneShotAllReduce(
         comm_handle.clique_key, *rank, device_buffers, stream, comm_handle.comm,
         local_buffer, start_event, end_event, signal_flags_buffer));
-    return false;
+    return absl::Status();
   }
 
   return RunAllReduce(collectives, config_.reduction_kind, device_buffers,

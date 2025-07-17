@@ -44,7 +44,7 @@ template <typename T>
 absl::Status LaunchTypedKernel(
     se::Stream* stream, se::StreamExecutor* executor,
     const se::ThreadDim& thread_dims, const se::BlockDim& block_dims,
-    const std::array<void*, stream_executor::gpu::kMaxNumAllReduceInputPtrs>&
+    const std::array<T*, stream_executor::gpu::kMaxNumAllReduceInputPtrs>&
         input_ptrs,
     se::DeviceMemoryBase output_buffer, int64_t rank, int64_t num_ranks,
     int64_t num_elements,
