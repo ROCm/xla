@@ -215,7 +215,7 @@ bool IsSupportedByElementalIrEmitter(PrecisionConfig::Algorithm algorithm) {
 // input/output storage types.
 bool IsSupportedDotAlgorithmOnGpu(
     PrecisionConfig::Algorithm algorithm,
-    stream_executor::GpuComputeCapability gpu_compute_capability,
+    const stream_executor::GpuComputeCapability& gpu_compute_capability,
     PrimitiveType input_storage_type, PrimitiveType output_storage_type) {
   // Note: We may want to add some complex types here if people request that.
   const bool is_cuda_ge_ampere =
