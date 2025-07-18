@@ -20,8 +20,10 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_DEVICE_DESCRIPTION_H_
 #define XLA_STREAM_EXECUTOR_DEVICE_DESCRIPTION_H_
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -29,6 +31,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
@@ -55,12 +58,16 @@ class RocmComputeCapability {
   std::string gcn_arch_name() const { return gcn_arch_name_; }
 
   std::string gfx_version() const {
-    std::vector<std::string> tokens = absl::StrSplit(gcn_arch_name_, ':');
-    return tokens[0];
+    //  std::strchr() is faster for the case than std::string::find()
+    const char *const p_colon = std::strchr(gcn_arch_name_.c_str(), ':');
+    if (nullptr == p_colon) {
+      return gcn_arch_name_;  // likely it's the default invalid value
+    }
+    return std::string(gcn_arch_name_.c_str(), p_colon);
   }
 
   bool is_supported_gfx_version() const {
-    return absl::c_count(kSupportedGfxVersions, gfx_version()) != 0;
+    return IsThisGfxInAnyList(kSupportedGfxVersions);
   }
 
   std::string supported_gfx_versions_str() const {
@@ -75,24 +82,29 @@ class RocmComputeCapability {
 
   bool gfx9_mi350() const { return gfx_version() == "gfx950"; }
 
-  bool gfx9_mi300_series() const { return gfx9_mi300() || gfx9_mi350(); }
+  bool gfx9_mi300_series() const {
+    static constexpr absl::string_view kList[] = {"gfx942", "gfx950"};
+    return IsThisGfxInAnyList(kList);
+  }
 
   bool gfx9_mi100_or_later() const {
     static constexpr absl::string_view kList[] = {"gfx908", "gfx90a", "gfx942",
                                                   "gfx950"};
-    return absl::c_count(kList, gfx_version()) != 0;
+    return IsThisGfxInAnyList(kList);
   }
 
   bool gfx9_mi200_or_later() const {
     static constexpr absl::string_view kList[] = {"gfx90a", "gfx942", "gfx950"};
-    return absl::c_count(kList, gfx_version()) != 0;
+    return IsThisGfxInAnyList(kList);
   }
 
   bool gfx10_rx68xx() const { return gfx_version() == "gfx1030"; }
 
   bool gfx10_rx69xx() const { return gfx_version() == "gfx1030"; }
 
-  bool gfx11() const { return gfx_version().find("gfx11"); }
+  bool gfx11() const { return absl::StartsWith(gfx_version(), "gfx11"); }
+
+  bool gfx12() const { return absl::StartsWith(gfx_version(), "gfx12"); }
 
   bool gfx1200() const { return gfx_version() == "gfx1200"; }
 
@@ -100,7 +112,9 @@ class RocmComputeCapability {
 
   bool has_nhwc_layout_support() const { return gfx9_mi100_or_later(); }
 
-  bool has_bf16_dtype_support() const { return gfx9_mi100_or_later(); }
+  bool has_bf16_dtype_support() const {
+    return gfx9_mi100_or_later() || gfx11() || gfx12();
+  }
 
   bool has_fast_fp16_support() const {
     return gfx9_mi100_or_later() || gfx10_rx68xx() || gfx10_rx69xx() || gfx11();
@@ -109,8 +123,7 @@ class RocmComputeCapability {
   bool has_mfma_instr_support() const { return gfx9_mi100_or_later(); }
 
   bool has_amd_matrix_core() const {
-    return (gfx9_mi100_or_later() || gfx_version().find("gfx11") ||
-            gfx_version().find("gfx12"));
+    return gfx9_mi100_or_later() || gfx11() || gfx12();
   }
 
   bool has_packed_fp16_atomics_support() const { return gfx9_mi100_or_later(); }
@@ -118,11 +131,12 @@ class RocmComputeCapability {
   bool has_packed_bf16_atomics_support() const { return gfx9_mi300_series(); }
 
   bool fence_before_barrier() const {
-    return gfx_version() != "gfx900" && gfx_version() != "gfx906";
+    static constexpr absl::string_view kList[] = {"gfx900", "gfx906"};
+    return !IsThisGfxInAnyList(kList);
   }
 
   bool has_hipblaslt() const {
-    return gfx9_mi200_or_later() || gfx1200() || gfx1201();
+    return gfx9_mi200_or_later() || gfx11() || gfx12();
   }
 
   bool has_fp8_support() const {
@@ -130,7 +144,9 @@ class RocmComputeCapability {
   }
 
   bool has_ocp_fp8_support() const {
-    return gfx1200() || gfx1201() || gfx9_mi350();
+    static constexpr absl::string_view kList[] = {"gfx1200", "gfx1201",
+                                                  "gfx950"};
+    return IsThisGfxInAnyList(kList);
   }
 
   bool has_nanoo_fp8_support() const { return gfx9_mi300(); }
@@ -148,15 +164,34 @@ class RocmComputeCapability {
   }
 
  private:
+  /// \brief Takes one or more arrays of string-like objects and tests if the
+  /// result of `gfx_version()` matches to any string in any of the arrays.
+  template <typename... ArrayOfStrings>
+  bool IsThisGfxInAnyList(ArrayOfStrings &&...arr) const {
+    static_assert(sizeof...(arr) >= 1);
+    const auto gfx = gfx_version();
+    return (implIsThisGfxInAnyList(std::begin(arr), std::end(arr), gfx) || ...);
+  }
+
+  /// \brief Template-less implementation of IsThisGfxInAnyList().
+  /// \warning Don't use directly!
+  bool implIsThisGfxInAnyList(const absl::string_view *beg,
+                              const absl::string_view *end,
+                              const std::string &gfx) const {
+    return std::any_of(beg, end, [&gfx = gfx](const absl::string_view &s) {
+      return gfx == s;
+    });
+  }
+
   std::string gcn_arch_name_ = "gfx000";  // default to invalid arch.
 
   static constexpr absl::string_view kSupportedGfxVersions[]{
-      "gfx900",   // MI25
-      "gfx906",   // MI50 / MI60
-      "gfx908",   // MI100
-      "gfx90a",   // MI200
-      "gfx942",   // MI300
-      "gfx950",  
+      "gfx900",  // MI25
+      "gfx906",  // MI50 / MI60
+      "gfx908",  // MI100
+      "gfx90a",  // MI200
+      "gfx942",  // MI300
+      "gfx950",
       "gfx1030",  // RX68xx / RX69xx
       "gfx1100",  // RX7900
       "gfx1101", "gfx1200", "gfx1201",
