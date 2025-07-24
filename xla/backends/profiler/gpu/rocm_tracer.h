@@ -113,8 +113,6 @@ private:
   std::optional<RocmTracerOptions> options_;
   RocmTraceCollector* collector_ = nullptr;
 
-  uint32_t maxBufferSize_{1000000}; // 1M GPU runtime/kernel events
-
   tsl::mutex collector_mutex_;
 
   bool externalCorrelationEnabled_{true};

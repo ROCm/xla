@@ -415,11 +415,11 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t *hdr,
 
   ev->source = RocmTracerEventSource::Activity;
   ev->domain = RocmTracerEventDomain::HIP_OPS;
-  ev->annotation = "??";
   ev->roctx_range = "??";
   ev->start_time_ns = rec.start_timestamp;
   ev->end_time_ns = rec.end_timestamp;
   ev->correlation_id = rec.correlation_id.internal;
+  ev->annotation = "??";
   ev->thread_id = rec.thread_id;
   ev->stream_id = RocmTracerEvent::kInvalidStreamId;   // rec.stream_id.handle; // we do not know valid stream ID for memcpy
   ev->memcpy_info = MemcpyDetails{
@@ -667,7 +667,6 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
 }
 
 void RocmTracer::toolFinalize(void* tool_data) {
-
   auto& obj = RocmTracer::i();
   LOG(INFO) << "Calling toolFinalize!";
   rocprofiler_stop_context(obj.utility_context_);
