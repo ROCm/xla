@@ -94,6 +94,8 @@ class RocmTracer {
   void CodeObjectCallback(rocprofiler_callback_tracing_record_t record,
                           void* callback_data);
 
+  AnnotationMap* annotation_map() { return &annotation_map_; }
+
  protected:
   // protected constructor for injecting mock cupti interface for testing.
   RocmTracer() = default;
@@ -104,8 +106,6 @@ class RocmTracer {
     RocmTracerEvent *ev);
   void MemcpyEvent(const rocprofiler_record_header_t *hdr,
         RocmTracerEvent *ev);
-
-  void endTracing();
 
 private:
   bool registered_{false};
@@ -120,6 +120,9 @@ private:
 
   bool api_tracing_enabled_ = false;
   bool activity_tracing_enabled_ = false;
+
+  AnnotationMap annotation_map_{/* default size, e.g. */ 1024*1024};
+
 public:
 
   using kernel_symbol_data_t =

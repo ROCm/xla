@@ -199,7 +199,7 @@ class AnnotationMap {
 class RocmTraceCollector {
  public:
   explicit RocmTraceCollector(const RocmTraceCollectorOptions& options)
-      : options_(options), annotation_map_(options.max_annotation_strings) {}
+      : options_(options) {} 
   virtual ~RocmTraceCollector() {}
 
   virtual void AddEvent(RocmTracerEvent&& event, bool is_auxiliary) = 0;
@@ -208,13 +208,8 @@ class RocmTraceCollector {
   virtual void Flush() = 0;
   virtual void Export(XSpace* space) = 0;
 
-  AnnotationMap* annotation_map() { return &annotation_map_; }
-
  protected:
   RocmTraceCollectorOptions options_;
-
- private:
-  AnnotationMap annotation_map_;
 
  public:
   // Disable copy and move.

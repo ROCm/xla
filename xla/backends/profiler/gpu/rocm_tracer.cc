@@ -329,7 +329,7 @@ void RocmTracer::Enable(const RocmTracerOptions& options,
   }
   collector_ = collector;
   rocprofiler_start_context(context_);
-  LOG(INFO) << "GpuTracer started";
+  LOG(INFO) << "GpuTracer started with num of GPUS" << NumGpus();
 }
 
 void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
@@ -347,7 +347,7 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t *hdr,
   ev->end_time_ns = rec.end_timestamp;
   ev->device_id = RocmTracerEvent::kInvalidDeviceId;
   ev->correlation_id = rec.correlation_id.internal;
-  ev->annotation = collector_->annotation_map()->LookUp(ev->correlation_id);
+  ev->annotation = annotation_map()->LookUp(ev->correlation_id);
   ev->thread_id = rec.thread_id;
   ev->stream_id = RocmTracerEvent::kInvalidStreamId;
   ev->kernel_info = KernelDetails{
@@ -457,7 +457,7 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t *hdr,
   ev->end_time_ns = rec.end_timestamp;
   ev->device_id = agents_[kinfo.agent_id.handle].id.handle;
   ev->correlation_id = rec.correlation_id.internal;
-  ev->annotation = collector_->annotation_map()->LookUp(ev->correlation_id);
+  ev->annotation = annotation_map()->LookUp(ev->correlation_id);
   ev->thread_id = rec.thread_id;
   ev->stream_id = kinfo.queue_id.handle;
   ev->kernel_info = KernelDetails{
@@ -653,9 +653,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func, void* tool_dat
         if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
           const std::string& annotation = tsl::profiler::AnnotationStack::Get();
           if (!annotation.empty()) {
-            RocmTracer::i()
-              .collector()
-              ->annotation_map()
+            RocmTracer::i().annotation_map()
               ->Add(record.correlation_id.internal, annotation);
           }
         }
