@@ -280,8 +280,10 @@ absl::LogSeverityAtLeast MinLogLevelFromEnv() {
   return absl::LogSeverityAtLeast::kInfinity;
 #else
   const char* tf_env_var_val = getenv("TF_CPP_MIN_LOG_LEVEL");
+  std::cerr << "##### CPP_MIN_LOG_LEVEL" << tf_env_var_val << "override with 0"
+            << std::endl;
   return static_cast<absl::LogSeverityAtLeast>(
-      LogLevelStrToInt(tf_env_var_val));
+      LogLevelStrToInt("0"));
 #endif
 }
 
@@ -508,7 +510,7 @@ void TFDefaultLogSink::Send(const TFLogEntry& entry) {
   if (entry.log_severity() == absl::LogSeverity::kFatal) {
     abort();
   }
-#else   // PLATFORM_POSIX_ANDROID
+#else  // PLATFORM_POSIX_ANDROID
   static const internal::VlogFileMgr vlog_file;
   static bool log_thread_id = internal::EmitThreadIdFromEnv();
   uint64_t now_micros = EnvTime::NowMicros();

@@ -126,7 +126,9 @@ static absl::Status CheckComm(Communicator* comm) {
 // Runs async check on all communicators in a clique.
 static void CheckClique(const GpuCliqueKey& clique_key,
                         LockableGpuClique& lockable_clique) {
+  VLOG(1) << "##### " << __func__ << " Start";
   if (TerminateOnCollectivesError()) {
+    VLOG(1) << "##### " << __func__ << " Terminate on collectives error";
     absl::Status status = lockable_clique.HealthCheck();
     if (!status.ok()) {
       LOG(FATAL) << "Terminating process due to async GPU clique error: "
@@ -144,6 +146,7 @@ static void CheckClique(const GpuCliqueKey& clique_key,
   } else {
     VLOG(5) << "Skip checking in-use GPU clique " << clique_key.ToString();
   }
+  VLOG(1) << "##### " << __func__ << " Done";
 }
 
 // TODO(ezhulenev): We need a mechanism to destroy whole clique when one of the
@@ -160,6 +163,7 @@ static void GpuCliqueHeartBeatMonitorThread() {
       CheckClique(clique_key, lockable_clique);
     }
   }
+  VLOG(1) << "##### " << __func__ << " Done";
 }
 
 static void StartGpuCliqueHeartBeatMonitor() {
@@ -192,8 +196,13 @@ static auto DeviceRanksToString(absl::Span<const DeviceRank> ranks) {
 // side effect, enables peer access even if it was not enabled before.
 static absl::StatusOr<bool> EnablePeerAccess(
     const GpuCliqueKey& key, absl::Span<const DeviceRank> ranks) {
+  VLOG(1) << "##### " << __func__ << " Start";
   if (key.devices().size() != ranks.size()) {
     // The clique is not local, so we can't enable peer access.
+    VLOG(1) << "##### " << __func__
+            << " Device count is not equal to ranks count "
+            << " devices count " << key.devices().size() << " ranks count "
+            << ranks.size();
     return false;
   }
 
@@ -213,11 +222,15 @@ static absl::StatusOr<bool> EnablePeerAccess(
       // the result. OkStatus means that peer access is possible.
       auto status = devices[i]->EnablePeerAccessTo(devices[j]);
       if (!status.ok()) {
+        VLOG(1) << "##### " << __func__
+                << " Was not able to enable perr access from rank " << i
+                << " to rank  " << j;
         return false;
       }
     }
   }
 
+  VLOG(1) << "##### " << __func__ << " Done";
   return true;
 }
 
@@ -230,6 +243,7 @@ InitializeGpuClique(GpuCollectives* collectives, se::StreamExecutor* device,
                     const GpuCollectives::CliqueIdCallback& clique_id_callback,
                     int32_t num_local_participants, RankId rank,
                     const GpuCollectives::Config& config) {
+  VLOG(1) << "##### " << __func__ << " Start";
   VLOG(3) << "Initialize GPU clique " << clique_key.ToString() << " rank #"
           << rank << "; num_local_participants=" << num_local_participants;
 
@@ -348,10 +362,12 @@ InitializeGpuClique(GpuCollectives* collectives, se::StreamExecutor* device,
   // processes are not able to synchronize device activity.
   RendezvousArg rendezvous_arg = std::make_pair(device_rank, synchronized);
 
-  return Rendezvous<LockableGpuClique::Lock>(
+  auto result = Rendezvous<LockableGpuClique::Lock>(
       initialization_rendezvous_name, rendezvous_key, rendezvous_arg,
       num_local_participants, initialize, WarnStuckTimeout(),
       TerminateTimeout());
+  VLOG(1) << "##### " << __func__ << " Done";
+  return result;
 }
 
 // Computes a unique GPU communicator split color from a clique key. We use a
@@ -445,6 +461,9 @@ InitializeGpuClique(GpuCollectives* collectives, se::StreamExecutor* device,
       // The parent clique is local, we can be sure that peer access was already
       // enabled.
       peer_access_enabled = (*parent_clique)->peer_access_enabled();
+      VLOG(1) << "##### " << __func__
+              << " The parent clique is local, we can be sure that perr access "
+                 "was already enabled";
     } else {
       // The parent clique is not local, but this clique can be local. We need
       // to check if peer access is possible between all devices in this clique.
@@ -510,9 +529,11 @@ InitializeGpuClique(GpuCollectives* collectives, se::StreamExecutor* device,
       rank.value(), clique_key.ToString(), run_id.ToInt(),
       parent_clique_key.ToString());
 
-  return Rendezvous<LockableGpuClique::Lock>(
+  auto result = Rendezvous<LockableGpuClique::Lock>(
       initialization_rendezvous_name, rendezvous_key, rank_pair,
       num_local_participants, split, WarnStuckTimeout(), TerminateTimeout());
+  VLOG(1) << "##### " << __func__ << " Done";
+  return result;
 }
 
 //===----------------------------------------------------------------------===//
@@ -522,6 +543,7 @@ absl::StatusOr<std::shared_ptr<LockableGpuClique::Lock>> AcquireGpuClique(
     const GpuCliqueKey& clique_key,
     const GpuCollectives::CliqueIdCallback& clique_id_callback, RankId rank,
     const AcquiredCliquesMap& acquired_cliques, int64_t max_nchannels) {
+  VLOG(1) << "##### " << __func__ << " Start";
   int64_t num_local_participants = clique_key.num_local_participants();
   VLOG(2) << "Acquire GPU clique " << clique_key.ToString() << "; run"
           << run_id.ToString() << "; rank " << rank
@@ -587,9 +609,11 @@ absl::StatusOr<std::shared_ptr<LockableGpuClique::Lock>> AcquireGpuClique(
   }
 
   // If we can't split any of the acquired cliques, create a new one.
-  return InitializeGpuClique(collectives, device, run_id, clique_key,
-                             clique_id_callback, num_local_participants, rank,
-                             config);
+  auto result = InitializeGpuClique(collectives, device, run_id, clique_key,
+                                    clique_id_callback, num_local_participants,
+                                    rank, config);
+  VLOG(1) << "##### " << __func__ << " Done";
+  return result;
 }
 
 }  // namespace xla::gpu
