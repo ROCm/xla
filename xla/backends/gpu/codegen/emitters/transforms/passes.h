@@ -60,6 +60,7 @@ std::unique_ptr<mlir::Pass> CreatePropagateSliceIndicesPass();
 std::unique_ptr<mlir::Pass> CreateSimplifyAffinePass();
 std::unique_ptr<mlir::Pass> CreateSimplifyArithPass();
 std::unique_ptr<mlir::Pass> CreateUnswitchLoopsPass();
+std::unique_ptr<mlir::Pass> CreateRecoverExp2Pass();
 std::unique_ptr<mlir::Pass> CreateVectorizeLoadsAndStoresPass(
     const std::string& gpu_device_info = "");
 std::unique_ptr<mlir::Pass> CreateVectorizeLoadsAndStoresPass(
