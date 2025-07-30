@@ -2404,9 +2404,12 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       return false;
     }
 
+    //const stream_executor::DeviceDescription& gpu_device_info =
+    //       backend().default_stream_executor()->GetDeviceDescription();
+
     if (auto isrocm = std::get_if<se::RocmComputeCapability>(&gpu_version_);
         isrocm) {
-      if (!isrocm->has_hipblaslt()) {
+      if (!isrocm->has_hipblaslt(toolkit_version_)) {
         return false;
       }
     }

@@ -159,7 +159,10 @@ class DeterminismTest : public GpuCodegenTest {
         .default_stream_executor()
         ->GetDeviceDescription()
         .rocm_compute_capability()
-        .has_hipblaslt();
+        .has_hipblaslt(backend()
+            .default_stream_executor()
+            ->GetDeviceDescription()
+            .runtime_version());
   }
 };
 

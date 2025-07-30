@@ -78,9 +78,9 @@ DebugOptions GemmRewriteTestBase::GetDebugOptionsForTest() const {
 }
 
 bool GemmRewriteTestBase::SkipGpuBlasLtTest() {
-  return !IsCuda() &&
+   return !IsCuda() &&
          !std::get<stream_executor::RocmComputeCapability>(Capability())
-              .has_hipblaslt() &&
+              .has_hipblaslt(GetRuntimeVersion()) &&
          GetDebugOptionsForTest().xla_gpu_enable_cublaslt();
 }
 

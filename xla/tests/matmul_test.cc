@@ -41,7 +41,10 @@ class MatmulTestWithCublas : public HloTestBase,
                                ->GetDeviceDescription()
                                .gpu_compute_capability();
       if (auto* rocm = std::get_if<se::RocmComputeCapability>(&gpu_cc);
-          rocm != nullptr && !rocm->has_hipblaslt()) {
+          rocm != nullptr && !rocm->has_hipblaslt(backend()
+                               .default_stream_executor()
+                               ->GetDeviceDescription()
+                               .runtime_version())) {
         GTEST_SKIP() << "No hipblas-lt support on this architecture!";
       }
     }

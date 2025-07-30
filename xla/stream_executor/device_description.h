@@ -240,7 +240,8 @@ class RocmComputeCapability {
     return gfx_version() != "gfx900" && gfx_version() != "gfx906";
   }
 
-  bool has_hipblaslt() const {
+  bool has_hipblaslt(const SemanticVersion& rocm_version) const {
+    std::cout << rocm_version.major() << "." << rocm_version.minor() << std::endl;
     return gfx9_mi200_or_later()    || \
            gfx11_discrete()         || \
            gfx11_apu()              || \

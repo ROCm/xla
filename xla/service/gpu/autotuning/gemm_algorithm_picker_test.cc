@@ -90,7 +90,7 @@ class GemmAlgorithmPickerTest : public HloTestBase,
                       << "This API is not available on ROCM 6.1 and below.";
                 }
               } else if (GetDebugOptionsForTest().xla_gpu_enable_cublaslt() &&
-                         !cc.has_hipblaslt()) {
+                         !cc.has_hipblaslt(device_desc().runtime_version())) {
                 GTEST_SKIP() << "No gpublas-lt support on this architecture!";
               }
             }},
