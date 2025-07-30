@@ -928,6 +928,11 @@ ENTRY e {
 }
 
 TEST_F(TritonGemmTest, SplitAndTransposeLhsExecutesCorrectly) {
+  if (const auto *rocm_cc =
+          std::get_if<se::RocmComputeCapability>(&GpuComputeComp());
+      rocm_cc && rocm_cc->gfx9_mi200()) {
+    GTEST_SKIP() << "Skipped due to fp16 denorm issue on MI200.";
+  }
   constexpr absl::string_view kHloText = R"(
 HloModule m
 
@@ -2144,6 +2149,11 @@ ENTRY e {
 }
 
 TEST_F(TritonGemmLevel2Test, BroadcastOfVectorConstantIsFused) {
+  if (const auto *rocm_cc =
+          std::get_if<se::RocmComputeCapability>(&GpuComputeComp());
+      rocm_cc && rocm_cc->gfx9_mi200()) {
+    GTEST_SKIP() << "Skipped due to fp16 denorm issue on MI200.";
+  }
   constexpr absl::string_view kHloText = R"(
 HloModule m
 
