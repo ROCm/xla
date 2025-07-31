@@ -254,10 +254,15 @@ GpuCommandBuffer::CreateNestedCommand(
   TF_ASSIGN_OR_RETURN(auto child_nodes, gpu_nested.GetChildNodes());
   GpuCommand gpu_cmd;
   for(auto node : child_nodes) {
-    TF_ASSIGN_OR_RETURN(auto handle, CopyChildNodeToMainGraph(node, deps));
-    gpu_cmd.handles.push_back(handle);
+    // NOTE NOTE: this is needed for CUDA !!
+    auto shandle = CopyChildNodeToMainGraph(node, deps);
+    if (!shandle.ok()) {
+      LOG(WARNING) << "Skipping child node due to " << shandle.status().message();
+      continue;
+    }
+    gpu_cmd.handles.push_back(shandle.value());
     deps.resize(1);
-    deps[0] = handle;
+    deps[0] = shandle.value();
   } 
 
   return AppendCommand(std::move(gpu_cmd));
@@ -281,11 +286,12 @@ absl::Status GpuCommandBuffer::UpdateNestedCommand(
   if (gpu_command->handles.size() != child_nodes.size()) {
     // return absl::InternalError("Child nodes vs #handles mismatch!");
   }
-
-  for(size_t i = 0; i < gpu_command->handles.size(); i++) {
-    TF_RETURN_IF_ERROR(UpdateChildNodeInMainGraph(child_nodes[i], 
-              gpu_command->handles[i]));
-    // break;
+  // special hacky handling for CUDA
+  size_t j = 0;
+  for(size_t i = 0; i < child_nodes.size(); i++) {
+    auto s = UpdateChildNodeInMainGraph(child_nodes[i], 
+              gpu_command->handles[j]);
+    if (s.ok()) j++;
   }
   return absl::OkStatus();
 #else

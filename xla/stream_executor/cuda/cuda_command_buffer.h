@@ -160,6 +160,13 @@ class CudaCommandBuffer final : public GpuCommandBuffer {
 
   absl::StatusOr<size_t> GraphGetNodes(ChildNodes *pnodes) const override;
 
+  absl::StatusOr< GraphNodeHandle > CopyChildNodeToMainGraph(
+          GraphNodeHandle child_node, 
+          absl::Span<const GraphNodeHandle> dependencies) override;
+
+  absl::Status UpdateChildNodeInMainGraph(
+          GraphNodeHandle child_node, GraphNodeHandle main_node) override;
+
   absl::Status PrepareFinalization() override;
 
   absl::StatusOr<GraphConditionalHandle> CreateConditionalHandle() override;

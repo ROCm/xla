@@ -56,7 +56,7 @@ limitations under the License.
 #include "tsl/platform/path.h"
 #include "tsl/platform/casts.h"
 
-#define GPU_GRAPH_API_DEBUG 1
+#define GPU_GRAPH_API_DEBUG 0
 
 namespace stream_executor::gpu {
 namespace {
@@ -557,6 +557,65 @@ absl::Status CudaCommandBuffer::UpdateKernelNode(
   return cuda::ToStatus(cuGraphExecKernelNodeSetParams(
                             exec_, ToCudaGraphHandle(node_handle), &params),
                         "Failed to set CUDA graph kernel node params");
+}
+
+absl::StatusOr< GraphNodeHandle > CudaCommandBuffer::CopyChildNodeToMainGraph(
+          GraphNodeHandle child_node, absl::Span<const GraphNodeHandle> dependencies) {
+
+  auto hchild = ToCudaGraphHandle(child_node);
+  // CUgraphNodeType type;
+  // if(cuGraphNodeGetType(hchild, &type) == CUDA_SUCCESS) {
+  //   VLOG(0) << "Creating node with type " << type;
+  // }
+
+  auto deps = ToCudaGraphHandles(dependencies);
+  CUgraphNode hmain = nullptr;
+  {
+    CUDA_KERNEL_NODE_PARAMS params;
+    auto s = cuGraphKernelNodeGetParams(hchild, &params);
+    if (s == CUDA_SUCCESS) {
+      TF_RETURN_IF_ERROR(
+        cuda::ToStatus(cuGraphAddKernelNode(&hmain, graph_, deps.data(),
+                                           deps.size(), &params),
+               "CopyChildNodeToMainGraph failed creating kernel node"));
+      return FromCudaGraphHandle(hmain);
+    }
+  }
+  {
+    CUDA_MEMSET_NODE_PARAMS params;
+    TF_RETURN_IF_ERROR(cuda::ToStatus(
+          cuGraphMemsetNodeGetParams(hchild, &params),
+          "CopyChildNodeToMainGraph failed getting memset node params"));
+    TF_RETURN_IF_ERROR(cuda::ToStatus(cuGraphAddMemsetNode(&hmain, graph_, 
+                deps.data(), deps.size(), &params, cuda_context_->context()), 
+            "CopyChildNodeToMainGraph failed creating memset node"));
+    return FromCudaGraphHandle(hmain);
+  }
+}
+
+absl::Status CudaCommandBuffer::UpdateChildNodeInMainGraph(
+          GraphNodeHandle child_node, GraphNodeHandle main_node) {
+
+  auto hchild = ToCudaGraphHandle(child_node),
+       hmain = ToCudaGraphHandle(main_node);
+  
+  {
+    CUDA_KERNEL_NODE_PARAMS params;
+    auto s = cuGraphKernelNodeGetParams(hchild, &params);
+    if (s == CUDA_SUCCESS) {
+      return cuda::ToStatus(cuGraphExecKernelNodeSetParams(
+            exec_, hmain, &params));
+    }
+  }
+  {
+    CUDA_MEMSET_NODE_PARAMS params;
+    TF_RETURN_IF_ERROR(cuda::ToStatus(
+          cuGraphMemsetNodeGetParams(hchild, &params),
+          "UpdateChildNodeInMainGraph failed getting memset node params"));
+    return cuda::ToStatus(cuGraphExecMemsetNodeSetParams(
+            exec_, hmain, &params, cuda_context_->context()), 
+            "UpdateChildNodeInMainGraph failed setting memset node params");
+  }
 }
 
 absl::Status CudaCommandBuffer::Trace(
