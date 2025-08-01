@@ -93,7 +93,7 @@ class RocmComputeCapability {
   bool gfx11() const { return gfx_version().find("gfx11"); }
 
   bool gfx11_discrete() const {
-    static constexpr absl::string_view kList[] = {"gfx1100", "gfx1101", "gfx1102"};
+    static constexpr absl::string_view kList[] = {"gfx1100", "gfx1101"};
     return absl::c_count(kList, gfx_version()) != 0;
   }
 
@@ -134,14 +134,14 @@ class RocmComputeCapability {
     return gfx9_mi200_or_later()    || \
            gfx11_discrete()         || \
            gfx11_apu()              || \
-           gfx12_discrete()
+           gfx12_discrete();
   }
 
   bool has_fp8_support() const {
     return has_ocp_fp8_support() || has_nanoo_fp8_support();
   }
 
-  bool has_ocp_fp8_support() const { return gfx1200() || gfx1201() || gfx_version() == "gfx950"; }
+  bool has_ocp_fp8_support() const { return gfx12_discrete() || gfx_version() == "gfx950"; }
 
   bool has_nanoo_fp8_support() const { return gfx_version() == "gfx942"; }
 
@@ -170,7 +170,6 @@ class RocmComputeCapability {
       "gfx1030",  // RX68xx / RX69xx
       "gfx1100",  // RX7900
       "gfx1101",  // RX7700 / RX7800
-      "gfx1102",  // RX7600 
       "gfx1103",
       "gfx1150", 
       "gfx1151",

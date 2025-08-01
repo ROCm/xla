@@ -124,7 +124,7 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
   if (cc.has_amd_matrix_core()) {
     pm->addPass(mt::gpu::createTritonGPUReorderInstructions());
   }
-  if (cc.gfx_version() == "gfx942") {
+  if (/*(use_block_pingpong == "none") ==*/true) {
     pm->addPass(mlir::createTritonAMDGPUBlockPingpongPass(num_stages));
   }
   if (/*use_buffer_ops=*/false) {  // Not enabled by default.
