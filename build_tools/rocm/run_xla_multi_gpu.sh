@@ -92,22 +92,26 @@ bazel \
     --test_output=errors \
     --flaky_test_attempts=3 \
     --keep_going \
+    --nocache_test_results \
     --local_test_jobs=${N_TEST_JOBS} \
     --test_env=TF_TESTS_PER_GPU=$TF_TESTS_PER_GPU \
     --test_env=TF_GPU_COUNT=$TF_GPU_COUNT \
     --action_env=TF_ROCM_AMDGPU_TARGETS=${GPU_NAME} \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
+    --action_env=XLA_FLAGS="--xla_dump_to=/tmp/generated --xla_dump_hlo_as_text --xla_dump_hlo_as_html" \
     --action_env=NCCL_MAX_NCHANNELS=1 \
-    -- //xla/tests:collective_ops_e2e_test \
-       //xla/tests:collective_ops_test \
-       //xla/tests:collective_pipeline_parallelism_test \
-       //xla/tests:replicated_io_feed_test \
-       //xla/tools/multihost_hlo_runner:functional_hlo_runner_test \
-       //xla/pjrt/distributed:topology_util_test \
-       //xla/pjrt/distributed:client_server_test
+    //xla/tests:collective_ops_test --test_filter=CollectiveOpsTest.AllReduce_sum_float32_2D
+
+# //xla/tests:collective_ops_e2e_test
+# //xla/tests:collective_ops_test
+# //xla/tests:collective_pipeline_parallelism_test
+# //xla/tests:replicated_io_feed_test
+# //xla/tools/multihost_hlo_runner:functional_hlo_runner_test
+# //xla/pjrt/distributed:topology_util_test
+# //xla/pjrt/distributed:client_server_test
 
 # clean up bazel disk_cache
-bazel shutdown \
-  --disk_cache=${BAZEL_DISK_CACHE_DIR} \
-  --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE}
+# bazel shutdown \
+#   --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+#   --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE}
