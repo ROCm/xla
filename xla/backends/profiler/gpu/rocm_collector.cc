@@ -545,7 +545,7 @@ void RocmTraceCollectorImpl::Flush() {
   mutex_lock lock(event_maps_mutex_);
   auto aggregated_events = ApiActivityInfoExchange();
 
-  VLOG(-1) << "RocmTraceCollector collected " << num_callback_events_
+  VLOG(3) << "RocmTraceCollector collected " << num_callback_events_
            << " callback events, " << num_activity_events_
            << " activity events, and aggregated them into "
            << aggregated_events.size() << " events.";

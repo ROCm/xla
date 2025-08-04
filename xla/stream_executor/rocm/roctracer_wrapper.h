@@ -33,15 +33,12 @@ limitations under the License.
 #include <rocm/include/rocprofiler-sdk/internal_threading.h>
 #include <rocm/include/rocprofiler-sdk/cxx/name_info.hpp>
 #include <rocm/include/rocprofiler-sdk/rocprofiler.h>
-#include "tsl/platform/dso_loader.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/platform.h"
 #elif TF_ROCM_VERSION >= 50300
 #include "rocm/include/roctracer/roctracer_roctx.h"
-#include "rocm/include/roctracer/roctracer_hcc.h"
 #include "rocm/include/roctracer/roctracer.h"
 #include "rocm/include/roctracer/roctracer_hip.h"
 #endif
+
 #include "tsl/platform/dso_loader.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/platform.h"
