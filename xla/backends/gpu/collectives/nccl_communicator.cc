@@ -214,6 +214,7 @@ absl::Status NcclCommunicator::AllReduce(
     se::DeviceMemoryBase send_buffer, se::DeviceMemoryBase recv_buffer,
     PrimitiveType dtype, size_t count, ReductionKind reduction_kind,
     const Communicator::Executor& executor) {
+  VLOG(1) << "##### " << __func__ << " Start";
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
   VLOG(3) << absl::StreamFormat(
@@ -226,10 +227,12 @@ absl::Status NcclCommunicator::AllReduce(
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
 
-  return XLA_NCCL_STATUS(ncclAllReduce(
+  auto res = ncclAllReduce(
       send_buffer.opaque(), recv_buffer.opaque(), ToNcclCount(dtype, count),
       nccl_dtype, ToNcclReduction(reduction_kind), comm_,
-      se::gpu::AsGpuStreamValue(stream)));
+      se::gpu::AsGpuStreamValue(stream));
+  VLOG(1) << "##### " << __func__ << " Done";
+  return XLA_NCCL_STATUS(res);
 }
 
 absl::Status NcclCommunicator::Broadcast(se::DeviceMemoryBase send_buffer,
@@ -237,6 +240,7 @@ absl::Status NcclCommunicator::Broadcast(se::DeviceMemoryBase send_buffer,
                                          PrimitiveType dtype, size_t count,
                                          RankId root,
                                          const Executor& executor) {
+  VLOG(1) << "##### " << __func__ << " Start";
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
   VLOG(3) << absl::StreamFormat(
@@ -249,9 +253,11 @@ absl::Status NcclCommunicator::Broadcast(se::DeviceMemoryBase send_buffer,
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
 
-  return XLA_NCCL_STATUS(ncclBroadcast(
+  auto res = ncclBroadcast(
       send_buffer.opaque(), recv_buffer.opaque(), ToNcclCount(dtype, count),
-      nccl_dtype, root.value(), comm_, se::gpu::AsGpuStreamValue(stream)));
+      nccl_dtype, root.value(), comm_, se::gpu::AsGpuStreamValue(stream));
+  VLOG(1) << "##### " << __func__ << " Done";
+  return XLA_NCCL_STATUS(res);      
 }
 
 absl::Status NcclCommunicator::ReduceScatter(se::DeviceMemoryBase send_buffer,
@@ -259,6 +265,7 @@ absl::Status NcclCommunicator::ReduceScatter(se::DeviceMemoryBase send_buffer,
                                              PrimitiveType dtype, size_t count,
                                              ReductionKind reduction_kind,
                                              const Executor& executor) {
+  VLOG(1) << "##### " << __func__ << " Start";
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
   VLOG(3) << absl::StreamFormat(
@@ -270,17 +277,20 @@ absl::Status NcclCommunicator::ReduceScatter(se::DeviceMemoryBase send_buffer,
       count, ReductionKindToString(reduction_kind), comm_, stream);
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
-
-  return XLA_NCCL_STATUS(ncclReduceScatter(
+  auto res = ncclReduceScatter(
       send_buffer.opaque(), recv_buffer.opaque(), ToNcclCount(dtype, count),
       nccl_dtype, ToNcclReduction(reduction_kind), comm_,
-      se::gpu::AsGpuStreamValue(stream)));
+      se::gpu::AsGpuStreamValue(stream));
+
+  VLOG(1) << "##### " << __func__ << " Done";
+  return XLA_NCCL_STATUS(res);
 }
 
 absl::Status NcclCommunicator::AllGather(se::DeviceMemoryBase send_buffer,
                                          se::DeviceMemoryBase recv_buffer,
                                          PrimitiveType dtype, size_t count,
                                          const Executor& executor) {
+  VLOG(1) << "##### " << __func__ << " Start";
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
   VLOG(3) << absl::StreamFormat(
@@ -291,16 +301,19 @@ absl::Status NcclCommunicator::AllGather(se::DeviceMemoryBase send_buffer,
       count, comm_, stream);
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
-
-  return XLA_NCCL_STATUS(ncclAllGather(
+  auto res = ncclAllGather(
       send_buffer.opaque(), recv_buffer.opaque(), ToNcclCount(dtype, count),
-      nccl_dtype, comm_, se::gpu::AsGpuStreamValue(stream)));
+      nccl_dtype, comm_, se::gpu::AsGpuStreamValue(stream));
+
+  VLOG(1) << "##### " << __func__ << " Done";
+  return XLA_NCCL_STATUS(res);
 }
 
 absl::Status NcclCommunicator::AllToAll(
     absl::Span<const se::DeviceMemoryBase> send_buffers,
     absl::Span<const se::DeviceMemoryBase> recv_buffers, PrimitiveType dtype,
     size_t count, const Executor& executor) {
+  VLOG(1) << "##### " << __func__ << " Start";      
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
   auto buffer_formatter = [](std::string* out, se::DeviceMemoryBase buffer) {
@@ -348,7 +361,7 @@ absl::Status NcclCommunicator::AllToAll(
   }
 
   XLA_NCCL_RETURN_IF_ERROR(ncclGroupEnd());
-
+  VLOG(1) << "##### " << __func__ << " Done";
   return absl::OkStatus();
 }
 
@@ -356,6 +369,7 @@ absl::Status NcclCommunicator::CollectivePermute(
     se::DeviceMemoryBase send_buffer, se::DeviceMemoryBase recv_buffer,
     PrimitiveType dtype, size_t count, std::optional<RankId> source_rank,
     absl::Span<const RankId> target_ranks, const Executor& executor) {
+  VLOG(1) << "##### " << __func__ << " Start";
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
   auto rank_formatter = [](std::string* out, RankId rank) {
@@ -393,13 +407,14 @@ absl::Status NcclCommunicator::CollectivePermute(
   }
 
   XLA_NCCL_RETURN_IF_ERROR(ncclGroupEnd());
-
+  VLOG(1) << "##### " << __func__ << " Done";
   return absl::OkStatus();
 }
 
 absl::Status NcclCommunicator::Send(se::DeviceMemoryBase send_buffer,
                                     PrimitiveType dtype, size_t count,
                                     RankId peer, const Executor& executor) {
+  VLOG(1) << "##### " << __func__ << " Start";
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
   VLOG(3) << absl::StreamFormat(
@@ -410,15 +425,16 @@ absl::Status NcclCommunicator::Send(se::DeviceMemoryBase send_buffer,
       comm_, stream);
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
-
-  return XLA_NCCL_STATUS(
-      ncclSend(send_buffer.opaque(), ToNcclCount(dtype, count), nccl_dtype,
-               peer.value(), comm_, se::gpu::AsGpuStreamValue(stream)));
+  auto res = ncclSend(send_buffer.opaque(), ToNcclCount(dtype, count), nccl_dtype,
+               peer.value(), comm_, se::gpu::AsGpuStreamValue(stream));
+  VLOG(1) << "##### " << __func__ << " Done";
+  return XLA_NCCL_STATUS(res);
 }
 
 absl::Status NcclCommunicator::Recv(se::DeviceMemoryBase recv_buffer,
                                     PrimitiveType dtype, size_t count,
                                     RankId peer, const Executor& executor) {
+  VLOG(1) << "##### " << __func__ << " Start";
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
   VLOG(3) << absl::StreamFormat(
@@ -429,10 +445,10 @@ absl::Status NcclCommunicator::Recv(se::DeviceMemoryBase recv_buffer,
       comm_, stream);
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
-
-  return XLA_NCCL_STATUS(
-      ncclRecv(recv_buffer.opaque(), ToNcclCount(dtype, count), nccl_dtype,
-               peer.value(), comm_, se::gpu::AsGpuStreamValue(stream)));
+  auto res = ncclRecv(recv_buffer.opaque(), ToNcclCount(dtype, count), nccl_dtype,
+               peer.value(), comm_, se::gpu::AsGpuStreamValue(stream));
+  VLOG(1) << "##### " << __func__ << " Done";
+  return XLA_NCCL_STATUS(res);
 }
 
 std::string NcclCommunicator::ToString() const {

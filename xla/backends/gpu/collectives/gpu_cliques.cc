@@ -126,7 +126,10 @@ static absl::Status CheckComm(Communicator* comm) {
 // Runs async check on all communicators in a clique.
 static void CheckClique(const GpuCliqueKey& clique_key,
                         LockableGpuClique& lockable_clique) {
+  
+  VLOG(1) << "##### " << __func__ << " Start";                          
   if (TerminateOnCollectivesError()) {
+    VLOG(1) << "##### " << __func__ << " Terminate on collectives error";
     absl::Status status = lockable_clique.HealthCheck();
     if (!status.ok()) {
       LOG(FATAL) << "Terminating process due to async GPU clique error: "
@@ -144,6 +147,7 @@ static void CheckClique(const GpuCliqueKey& clique_key,
   } else {
     VLOG(5) << "Skip checking in-use GPU clique " << clique_key.ToString();
   }
+  VLOG(1) << "##### " << __func__ << " Done";
 }
 
 // TODO(ezhulenev): We need a mechanism to destroy whole clique when one of the
@@ -160,6 +164,7 @@ static void GpuCliqueHeartBeatMonitorThread() {
       CheckClique(clique_key, lockable_clique);
     }
   }
+  VLOG(1) << "##### " << __func__ << " Done";
 }
 
 static void StartGpuCliqueHeartBeatMonitor() {
@@ -312,10 +317,13 @@ InitializeGpuClique(GpuCollectives* collectives, se::StreamExecutor* device,
   // processes are not able to synchronize device activity.
   RendezvousArg rendezvous_arg = std::make_pair(device_rank, synchronized);
 
-  return Rendezvous<absl::StatusOr<LockableGpuClique::Lock>>(
+  auto result = Rendezvous<absl::StatusOr<LockableGpuClique::Lock>>(
       initialization_rendezvous_name, rendezvous_key, rendezvous_arg,
       num_local_participants, initialize, WarnStuckTimeout(),
       TerminateTimeout());
+
+  VLOG(1) << "##### " << __func__ << " Done";
+  return result;
 }
 
 // Computes a unique GPU communicator split color from a clique key. We use a
@@ -451,9 +459,12 @@ InitializeGpuClique(GpuCollectives* collectives, se::StreamExecutor* device,
       rank.value(), clique_key.ToString(), run_id.ToInt(),
       parent_clique_key.ToString());
 
-  return Rendezvous<absl::StatusOr<LockableGpuClique::Lock>>(
+  auto result = Rendezvous<absl::StatusOr<LockableGpuClique::Lock>>(
       initialization_rendezvous_name, rendezvous_key, rank_pair,
       num_local_participants, split, WarnStuckTimeout(), TerminateTimeout());
+  
+  VLOG(1) << "##### " << __func__ << " Done";
+  return result;
 }
 
 //===----------------------------------------------------------------------===//

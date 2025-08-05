@@ -280,8 +280,10 @@ absl::LogSeverityAtLeast MinLogLevelFromEnv() {
   return absl::LogSeverityAtLeast::kInfinity;
 #else
   const char* tf_env_var_val = getenv("TF_CPP_MIN_LOG_LEVEL");
+  std::cerr << "##### CPP_MIN_LOG_LEVEL" << tf_env_var_val << "override with 0"
+            << std::endl;  
   return static_cast<absl::LogSeverityAtLeast>(
-      LogLevelStrToInt(tf_env_var_val));
+      LogLevelStrToInt("0"));
 #endif
 }
 
