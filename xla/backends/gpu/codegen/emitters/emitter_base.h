@@ -19,6 +19,7 @@ limitations under the License.
 #include <memory>
 #include <string>
 #include <vector>
+#include <array>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
@@ -96,6 +97,10 @@ class EmitterBase : public KernelFusionInterface {
       const emitters::CallTargetProvider& call_targets,
       mlir::func::FuncOp entry_function,
       const HloFusionInstruction& fusion) const = 0;
+
+  static std::array<uint64_t, 2> MaybeSplitGridDimensionX(
+      uint64_t num_threads_x, uint64_t num_blocks_x,
+      const se::DeviceDescription& info);
 
   mlir::Value EmitWorkGroupId(mlir::ImplicitLocOpBuilder& builder,
                               WorkGroupDimension dim) const;
