@@ -112,7 +112,7 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
   for (int i = 0; i < params.size(); ++i) {
     TF_ASSIGN_OR_RETURN(arguments[i], 
         MakeVarLiteral(params[i]->shape(), 
-          [](int idx){ return idx + 1; }
+          [](int idx){ return idx; }
         ));
   }
   return std::move(arguments);
@@ -122,8 +122,10 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
 
 
 #define DO_REFERENCE_CHECK 1
-#define USE_MULTIPLE_GPUS 0
+#define NUM_REPLICAS_TO_RUN 0 // set to 0 to use single GPU
 #define USE_SPECIAL_ARGUMENTS 1
+#define USE_PSEUDO_RANDOM true
+#define USE_RANDOM_LARGE_RANGE false
 
 class HloRunnerTest : public GpuCodegenTest {
 
@@ -152,8 +154,8 @@ protected:
   
 #if !USE_SPECIAL_ARGUMENTS
   TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, xla::MakeFakeArguments(module.get(), 
-        true, /*pseudo-random*/
-        false /* use large range*/));
+        USE_PSEUDO_RANDOM, /*pseudo-random*/
+        USE_RANDOM_LARGE_RANGE /* use large range*/));
 #else
   TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, MakeSpecialArguments(module.get()));
 #endif
@@ -170,8 +172,7 @@ protected:
   //VLOG(0) << "Got expected literal from file.. running test";
 
   auto& runner = test_runner_as_hlo_runner();
-
-  int num_runs = 10, num_warmups = 2;
+  int num_runs = 1, num_warmups = 0;
   TF_ASSERT_OK_AND_ASSIGN(auto argument_buffers,
                       runner.TransferLiteralsToDevice(arg_ptrs));
   
@@ -191,7 +192,15 @@ protected:
     if (i == 0) {
       TF_ASSERT_OK_AND_ASSIGN(auto host_res, 
                 runner.TransferLiteralFromDevice(result.Result()));
-      //WriteLiteralToTempFile(host_res, name); // write execution results to file
+      //WriteLiteralToTempFile(host_res, "myout"); // write execution results to file
+      // int zz = 0, start = 10000, num = 1024;
+      // for (const auto& val : host_res.data<int32_t>()) {
+      //   if (zz >= start) {
+      //     if(zz >= start + num) break;
+      //     VLOG(0) << zz << ": " << val;
+      //   }
+      //   zz++;
+      // }
     }
     if (i >= num_warmups) timeNs += profile.compute_time_ns();
     //VLOG(0) << i << " compute time: " << profile.compute_time_ns();
@@ -206,7 +215,6 @@ protected:
                       runner.ExecuteWithExecutable(
                           /*executable=*/exec.get(),
                           /*arguments=*/arg_ptrs));
-  // VLOG(0) << test_res.ToString();
  
   auto& ref_runner = reference_runner();
   TF_ASSERT_OK_AND_ASSIGN(auto truth, ref_runner.Execute(std::move(ref_module),

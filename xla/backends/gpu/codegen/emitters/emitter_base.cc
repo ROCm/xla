@@ -94,6 +94,7 @@ limitations under the License.
 #include "xla/mlir_hlo/mhlo/transforms/passes.h"
 #include "xla/service/buffer_assignment.h"
 #include "xla/service/dump.h"
+#include "xla/service/platform_util.h"
 #include "xla/service/gpu/hlo_fusion_analysis.h"
 #include "xla/service/gpu/ir_emitter_context.h"
 #include "xla/service/gpu/kernel_arguments.h"
@@ -577,6 +578,46 @@ absl::Status EmitterBase::RunPassPipeline(
   tsl::StatusScopedDiagnosticHandler diagnostic_handler(module.getContext());
   (void)pm.run(module);
   return diagnostic_handler.consumeStatus();
+}
+
+/* static */ std::array<int64_t, 2> EmitterBase::MaybeSplitGridDimensionX(
+      int64_t num_threads_x, int64_t num_blocks_x,
+      const se::DeviceDescription& info)
+{
+  const se::BlockDim& limit = info.block_dim_limit();
+  constexpr int64_t rocm_limit = std::numeric_limits<uint32_t>::max();
+
+  bool is_rocm = 
+           xla::PlatformUtil::CanonicalPlatformName("gpu").value() == "rocm";
+  // Add an extra condition for ROCM backend
+  if (num_blocks_x <= limit.x && 
+            (!is_rocm || num_blocks_x * num_threads_x <= rocm_limit)) {
+    return {num_blocks_x, 1};
+  }
+  // Try to find power-of-two gridDim.y if possible
+  int64_t nzeros = absl::countr_zero(static_cast< uint32_t >(num_blocks_x));
+  int64_t dimx = 0, dimy = 0;
+  for (; nzeros > 0; nzeros--) {
+    if ((1LL << nzeros) <= limit.y) break;
+  }
+  for (; ; nzeros++) {
+    dimy = 1LL << nzeros;
+    if (dimy > limit.y) { 
+      // We could not find the proper power-of-two dim Y => use max gridY
+      dimy = limit.y;
+      dimx = CeilOfRatio(num_blocks_x, dimy);
+      break;
+    }
+    // num_blocks_x might not be divided evenly by dimy:
+    dimx = (num_blocks_x + dimy-1) >> nzeros;
+    if (dimx <= limit.x) {
+      // We have an extra requirement on ROCM to check
+      if (!is_rocm || dimx * num_threads_x <= rocm_limit) break;
+    }
+  }
+  VLOG(1) << num_blocks_x << " splitting as: " << dimx << "x" << dimy 
+           << " wasted blocks: " << (dimx*dimy - num_blocks_x);
+  return {dimx, dimy};
 }
 
 void AddXlaGpuOpsOptimizationPasses(mlir::OpPassManager& pm) {

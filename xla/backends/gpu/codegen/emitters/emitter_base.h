@@ -95,6 +95,10 @@ class EmitterBase : public KernelFusionInterface {
       mlir::func::FuncOp entry_function,
       const HloFusionInstruction& fusion) const = 0;
 
+  static std::array<int64_t, 2> MaybeSplitGridDimensionX(
+      int64_t num_threads_x, int64_t num_blocks_x,
+      const se::DeviceDescription& info);
+
   // Evaluates the epilogue of the fusion. Returns the results for each epilogue
   // root.
   absl::flat_hash_map<const HloInstruction*, mlir::ValueRange> EmitEpilogue(
