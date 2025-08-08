@@ -234,7 +234,7 @@ bool HsacoCache::read_from_file(const HashType& hash_val,
     if (!tsl::Env::Default()->RenameFile(*hsaco_src_path, save_path).ok()) {
       std::ofstream ofs(save_path, std::ios::binary);
       ofs.write(reinterpret_cast< const char *>(hsaco->data()), fsize);
-      unlink(hsaco_src_path->c_str()); // remove temporary file
+      std::remove(hsaco_src_path->c_str()); // remove temporary file
       if (ofs.fail()) {
         LOG(FATAL) << "Unable to write hsaco file cache: " << save_path;
       }
@@ -373,9 +373,9 @@ absl::StatusOr< std::string> EmitModuleToHsaco(
   } // use_inprocess_lld
 
   if (!HsacoCache::i().keep_temp_files()) {
-    unlink(ir_path.c_str());
-    unlink(isabin_path.c_str());
-    unlink(ir_opt_path.c_str());
+    std::remove(ir_path.c_str());
+    std::remove(isabin_path.c_str());
+    std::remove(ir_opt_path.c_str());
   }
   return hsaco_path;
 }
