@@ -307,6 +307,8 @@ class GpuExecutable : public Executable {
   std::vector<std::shared_ptr<se::DeviceMemoryBase>> shared_constants_;
   bool enable_debug_info_manager_;
 
+  std::unique_ptr< ProfileInstructionsCreator > pgle_creator_;
+
   GpuExecutable(const GpuExecutable&) = delete;
   GpuExecutable& operator=(const GpuExecutable&) = delete;
 };

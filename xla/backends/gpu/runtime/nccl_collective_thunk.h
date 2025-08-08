@@ -183,6 +183,8 @@ class NcclCollectiveThunk : public Thunk {
           se::DeviceMemoryBase src, se::DeviceMemoryBase dst,
           PrimitiveType dtype, size_t count);
 
+  bool IsAsync() const { return async_events_ != nullptr; }
+
  protected:
   bool RunFakeCollective(se::Stream& stream);
 
@@ -205,7 +207,6 @@ class NcclCollectiveThunk : public Thunk {
   virtual bool NeedFirstCallRendzevous() const { return true; }
 
  private:
-  bool IsAsync() const { return async_events_ != nullptr; }
   std::shared_ptr<AsyncEvents> async_events_;
 
   // After a first call to this particular instance of a NCCL collective thunk

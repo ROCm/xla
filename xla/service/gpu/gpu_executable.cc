@@ -130,6 +130,22 @@ int64_t UseCachedAllocs()
   return value;
 }
 
+enum {
+  eProfilePrintOut = 1,
+  eProfileDumpToFile = 2,
+  eProfileAny = 3,
+};
+
+static int64_t GetThunksProfiling()
+{
+  static int64_t value = [] {
+    int64_t value = 0;
+    tsl::ReadInt64FromEnvVar("XLA_THUNKS_PROFILING", value, &value).IgnoreError();
+    return value;
+  }();
+  return value;
+}
+
 } // namespace
 
 absl::StatusOr<std::unique_ptr<GpuExecutable>> GpuExecutable::Create(
@@ -191,6 +207,9 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
   if (enable_cached_allocs_) { // allocate at least for 16 devices
     cached_mem_allocations_.resize(16);
   }
+  if (GetThunksProfiling() & eProfileDumpToFile) {
+    pgle_creator_ = std::make_unique< ProfileInstructionsCreator >(module_name_);
+  }
 }
 
 GpuExecutable::~GpuExecutable() {
@@ -246,7 +265,8 @@ absl::Status ExecuteThunks(
     Thunk::ExecutableSource executable_source,
     const ServiceExecutableRunOptions* run_options,
     const BufferAllocations& buffer_allocations, bool block_host_until_done,
-    const absl::flat_hash_set<ExecutionStreamId>& execution_stream_ids) {
+    const absl::flat_hash_set<ExecutionStreamId>& execution_stream_ids,
+    ProfileInstructionsCreator *pgle_creator) {
   bool mock_collectives =
       run_options->run_options().gpu_executable_run_options()
           ? run_options->run_options()
@@ -389,6 +409,8 @@ absl::Status ExecuteThunks(
       *run_options, buffer_allocations, main_stream,
       command_buffer_trace_stream, &collective_params, &collective_cliques,
       std::move(additional_execution_streams));
+
+  execute_params.pgle_creator = pgle_creator;
 
   TF_RETURN_IF_ERROR(thunk_sequence.ExecuteOnStream(execute_params));
 
@@ -949,7 +971,7 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
     TF_RETURN_IF_ERROR(ExecuteThunks(
         has_module() ? &module_config().debug_options() : nullptr, module_name_,
         unique_id, *thunks_, executable_source, run_options, buffer_allocations,
-        block_host_until_done, execution_stream_ids_));
+        block_host_until_done, execution_stream_ids_, pgle_creator_.get()));
   }
 
   if (!enable_cached_allocs_) {

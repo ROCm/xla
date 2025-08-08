@@ -25,6 +25,32 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
+struct ProfileInstructionsCreator {
+  struct Stats {
+    uint64_t total;
+    double sum;
+  };
+  static constexpr uint64_t kNumWarmupRuns = 8;
+
+  ProfileInstructionsCreator(const std::string& module_name) :
+      module_name_(module_name) { }
+  ~ProfileInstructionsCreator();
+
+  void AddCost(se::Stream *stream, absl::string_view name, double usec);
+
+  void AddLatency(se::Stream *stream, absl::string_view src, 
+        absl::string_view tgt, double usec);
+
+  absl::Status SaveProfileProto(const std::string& path);
+
+private:
+  std::string module_name_;
+  absl::Mutex mu_;
+  absl::flat_hash_map<std::string, Stats> hlo_cost_map_ ABSL_GUARDED_BY(mu_);
+  absl::flat_hash_map<std::tuple<std::string, std::string>, Stats> 
+                                          hlo_latency_map_ ABSL_GUARDED_BY(mu_);
+};
+
 // A thunk that wraps a list of sub-thunks. Executing this thunk executes all
 // the sub-thunks sequentially. This is useful to implement instructions that
 // require multiple kernel launches or library calls.

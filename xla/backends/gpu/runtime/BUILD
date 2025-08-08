@@ -1070,6 +1070,7 @@ cc_library(
     deps = [
         ":annotation",
         ":thunk",
+        ":nccl_collective_thunk",
         "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",

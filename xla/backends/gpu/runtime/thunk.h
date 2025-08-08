@@ -106,6 +106,10 @@ TSL_LIB_GTL_DEFINE_INT_TYPE(ExecutionStreamId, uint64_t);
 // different devices (stream executors). For partitioned XLA programs the
 // expectation is that all local participants execute simultaneously on
 // different threads and coordinate resource acquisition via rendezvous.
+
+// forward declaration - defined in SequentialThunk
+struct ProfileInstructionsCreator;
+
 class Thunk {
  public:
   using ExecutionStreamIdMap =
@@ -353,6 +357,8 @@ class Thunk {
   // ExecuteParams
   //===--------------------------------------------------------------------===//
 
+  
+
   // Parameters passed to ExecuteOnStream. ExecuteOnStream is responsible for
   // launching "work" on device, i.e. it launches kernels, executes command
   // buffers and calls into libraries (cuBLAS, cuDNN etc.).
@@ -405,6 +411,8 @@ class Thunk {
     bool mock_collectives = false;
 
     bool requires_exclusive_lock_on_gpu = false;
+
+    ProfileInstructionsCreator *pgle_creator = nullptr;
 
    private:
     friend class CommandBufferThunk;
