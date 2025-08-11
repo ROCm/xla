@@ -632,8 +632,8 @@ public:
   uint64_t bitcode_size() const {
     return pos_;
   }
-   ~sha256_ostream() override {
-    flush();
+  ~sha256_ostream() override {
+    llvm::raw_ostream::flush();
   }
 };
 
