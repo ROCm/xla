@@ -592,7 +592,7 @@ StreamExecutorGpuClient::CreateBuffersForAsyncHostToDevice(
     PjRtDevice* device) {
   auto* stream_executor_device =
       tensorflow::down_cast<PjRtStreamExecutorDevice*>(device);
-  return xla::AsyncHostToDeviceTransferManager::Create(
+  return xla::GpuAsyncHostToDeviceTransferManager::Create(
       shape_specs, std::move(device_layouts), stream_executor_device, this,
       /*memory_space=*/nullptr);
 }
