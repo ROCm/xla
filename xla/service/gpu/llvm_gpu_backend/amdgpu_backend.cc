@@ -722,7 +722,7 @@ absl::StatusOr<std::vector<uint8_t>> CompileToHsaco(
   bool ok = cache.read_from_file(binary_hash, bitcode_size, hash_str,
                           hsaco_output_path, &hsaco);
   if (!cache.keep_temp_files()) {
-    remove(hsaco_output_path.c_str());
+    std::remove(hsaco_output_path.c_str());
   }
   if (!ok) return absl::InternalError("Unable to read hsaco output file!");
   return hsaco;
