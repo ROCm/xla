@@ -1814,10 +1814,37 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
   traced_event->stream_id = RocmTracerEvent::kInvalidStreamId;
   traced_event->kernel_info = KernelDetails{};
 
-  absl::MutexLock lock(&kernel_lock_);
-  if (static_cast<size_t>(rec.kind) < name_info_.size()) {
-    auto& vec = name_info_[rec.kind];
-    traced_event->name = vec[rec.operation];
+  // absl::MutexLock lock(&kernel_lock_);
+  // if (static_cast<size_t>(rec.kind) < name_info_.size()) {
+  //   auto& vec = name_info_[rec.kind];
+  //   traced_event->name = vec[rec.operation];
+  // }
+
+  {
+    // bounds-check name table: kind and operation
+    absl::MutexLock lock(&kernel_lock_);
+    const size_t kind = static_cast<size_t>(rec.kind);
+    if (kind < name_info_.size()) {
+      const auto& vec = name_info_[kind];
+      const size_t op = static_cast<size_t>(rec.operation);
+      if (op < vec.operations.size()) {
+        traced_event->name = vec[op];
+      } else {
+        static std::atomic<int> once{0};
+        if (once.fetch_add(1) == 0) {
+          LOG(ERROR) << "HIP op OOB: kind " << kind << " op = " << op
+                     << " vec.size() = " << vec.operations.size();
+        }
+        traced_event->name = "HIP_UNKNOWN_OP";
+      }
+    } else {
+      static std::atomic<int> once{0};
+      if (once.fetch_add(1) == 0) {
+        LOG(ERROR) << "HIP kind OOB: kind = " << kind
+                   << " name_info_.size() = " << name_info_.size();
+      }
+      traced_event->name = "HIP_UNKNOWN_KIND";
+    }
   }
   if (isCopyApi(rec.operation)) {
     // actually one needs to set the real type
@@ -1938,6 +1965,14 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
                                  rocprofiler_buffer_id_t buffer_id,
                                  rocprofiler_record_header_t** headers,
                                  size_t num_headers, uint64_t drop_count) {
+  // LOG(INFO) << "TracingCallback: num_headers=" << num_headers
+  //           << " drop=" << drop_count;
+  // for (size_t i = 0; i < std::min<size_t>(num_headers, 3); ++i) {
+  //   auto* h = headers[i];
+  //   LOG(INFO) << "  hdr[" << i << "]: cat=" << (h ? h->category : -1)
+  //             << " kind=" << (h ? h->kind : -1);
+  // }
+
   if (collector() == nullptr) return;
   if (num_headers == 0) return;
   assert(drop_count == 0 && "drop count should be zero for lossless policy");
@@ -2054,7 +2089,9 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
 
   // a multiple of the page size, and the gap allows the buffer to absorb bursts
   // of GPU events
-  constexpr auto buffer_size_bytes = 20 * 4096;
+  // constexpr auto buffer_size_bytes = 20 * 4096;
+  // constexpr auto buffer_watermark_bytes = 2 * 4096;
+  constexpr auto buffer_size_bytes = 10 * 4096;
   constexpr auto buffer_watermark_bytes = 2 * 4096;
 
   // Utility context to gather code‑object info
