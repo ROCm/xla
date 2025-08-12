@@ -94,7 +94,7 @@ std::optional<IndexingMap> LoopFusion::ComputeThreadIdToInputIndexing(
 }
 
 LaunchDimensions LoopFusion::launch_dimensions() const {
-  // TODO add cache here ??
+  // TODO add cache (rocm)
   auto dims = CalculateLaunchDimensions(
       GetIndexShape(analysis_.fusion_root(0).shape()), analysis_.device_info(),
       config_);

@@ -126,6 +126,7 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
 #define USE_SPECIAL_ARGUMENTS 1
 #define USE_PSEUDO_RANDOM true
 #define USE_RANDOM_LARGE_RANGE false
+#define DUMP_OUTPUT 0
 
 class HloRunnerTest : public GpuCodegenTest {
 
@@ -192,15 +193,17 @@ protected:
     if (i == 0) {
       TF_ASSERT_OK_AND_ASSIGN(auto host_res, 
                 runner.TransferLiteralFromDevice(result.Result()));
-      //WriteLiteralToTempFile(host_res, "myout"); // write execution results to file
-      // int zz = 0, start = 10000, num = 1024;
-      // for (const auto& val : host_res.data<int32_t>()) {
-      //   if (zz >= start) {
-      //     if(zz >= start + num) break;
-      //     VLOG(0) << zz << ": " << val;
-      //   }
-      //   zz++;
-      // }
+#if DUMP_OUTPUT
+      WriteLiteralToTempFile(host_res, "myout"); // write execution results to file
+      int zz = 0, start = 10000, num = 1024;
+      for (const auto& val : host_res.data<int32_t>()) {
+        if (zz >= start) {
+          if(zz >= start + num) break;
+          VLOG(0) << zz << ": " << val;
+        }
+        zz++;
+      }
+#endif
     }
     if (i >= num_warmups) timeNs += profile.compute_time_ns();
     //VLOG(0) << i << " compute time: " << profile.compute_time_ns();

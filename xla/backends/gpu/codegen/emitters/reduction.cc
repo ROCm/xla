@@ -125,7 +125,6 @@ std::string dumpMLIRV(const Container& v) {
   return oss.str();
 }
 
-
 struct ReductionFusion::EmitterState {
   EmitterState(const ReductionFusion& owner, mlir::func::FuncOp entry_function,
                const HloFusionInstruction& fusion,
@@ -1129,7 +1128,6 @@ IndexingMap MultiRowReductionFusion::ComputeReductionInputIndexing(
     auto bx = mlir::getAffineDimExpr(3, ctx),
        by = mlir::getAffineDimExpr(4, ctx);
     block_id = DelinearizeInBoundsIndex(bx + gpu_blocks_[0] * by, num_blocks_)[0];
-    // VLOG(0) << "ComputeReductionInputIndexing blockid: " << dumpMLIR(block_id);
   }
   auto major_reduced = getAffineSymbolExpr(0, ctx);
   auto vector_index = getAffineSymbolExpr(1, ctx);
@@ -1156,7 +1154,6 @@ IndexingMap MultiRowReductionFusion::ComputeReductionOutputIndexing(
     auto bx = mlir::getAffineDimExpr(3, ctx),
          by = mlir::getAffineDimExpr(4, ctx);
     block_id = DelinearizeInBoundsIndex(bx + gpu_blocks_[0] * by, num_blocks_)[0];
-    // VLOG(0) << "ComputeReductionOutputIndexing blockid: " << dumpMLIR(block_id);
   }
 
   IndexingMap projected_index =
