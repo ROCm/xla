@@ -594,13 +594,10 @@ absl::Status EmitterBase::RunPassPipeline(
             (!is_rocm || num_blocks_x * num_threads_x <= rocm_limit)) {
     return {num_blocks_x, 1};
   }
-  // Try to find power-of-two gridDim.y if possible
-  int64_t nzeros = absl::countr_zero(static_cast< uint32_t >(num_blocks_x));
+  
   int64_t dimx = 0, dimy = 0;
-  for (; nzeros > 0; nzeros--) {
-    if ((1LL << nzeros) <= limit.y) break;
-  }
-  for (; ; nzeros++) {
+  // We assume that num_blocks_x is most likely of the form: 2^N * K
+  for (int64_t nzeros = 1; ; nzeros++) {
     dimy = 1LL << nzeros;
     if (dimy > limit.y) { 
       // We could not find the proper power-of-two dim Y => use max gridY
