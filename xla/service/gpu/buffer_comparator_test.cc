@@ -411,7 +411,7 @@ TEST_F(BufferComparatorTest, VeryLargeArray) {
   // We use overlapping lhs and rhs arrays to reduce memory usage, also this 
   // serves as an extra test for possible pointer aliasing problems
   se::DeviceMemoryBase lhs(base->opaque(), base->size() - sizeof(NT)),
-                       rhs(base->opaque() + sizeof(NT), lhs.size());
+                       rhs(static_cast< NT *>(base->opaque()) + 1, lhs.size());
 
   TF_CHECK_OK(stream->Memset32(&lhs, 0xABCDABCD, base->size()));
 
