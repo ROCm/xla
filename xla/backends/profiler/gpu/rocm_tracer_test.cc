@@ -105,8 +105,8 @@ TEST(RocmTracerTest, EnableAndDisableLifecycle) {
 }
 
 TEST(RocmTracerTest, AnnotationMapWorks) {
-  RocmTracer& tracer = RocmTracer::i();
-  auto* map = tracer.annotation_map();
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  AnnotationMap* map = tracer.annotation_map();
   ASSERT_NE(map, nullptr);
 
   uint64_t id = 42;

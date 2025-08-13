@@ -18,6 +18,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <limits>
+#include <tuple>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
@@ -209,38 +210,6 @@ class AnnotationMap {
   AnnotationMap& operator=(const AnnotationMap&) = delete;
 };
 
-// for roctracer (v1)
-#if TF_ROCM_VERSION < 60300
-
-class RocmTraceCollector {
- public:
-  explicit RocmTraceCollector(const RocmTraceCollectorOptions& options)
-      : options_(options), annotation_map_(options.max_annotation_strings) {}
-  virtual ~RocmTraceCollector() {}
-
-  virtual void AddEvent(RocmTracerEvent&& event, bool is_auxiliary) = 0;
-  virtual void OnEventsDropped(const std::string& reason,
-                               uint32_t num_events) = 0;
-  virtual void Flush() = 0;
-  virtual void Export(XSpace* space) = 0;
-
-  AnnotationMap* annotation_map() { return &annotation_map_; }
-
- protected:
-  RocmTraceCollectorOptions options_;
-
- private:
-  AnnotationMap annotation_map_;
-
- public:
-  // Disable copy and move.
-  RocmTraceCollector(const RocmTraceCollector&) = delete;
-  RocmTraceCollector& operator=(const RocmTraceCollector&) = delete;
-};
-
-#else
-// for rocprofiler-sdk (v3)
-
 class RocmTraceCollector {
  public:
   explicit RocmTraceCollector(const RocmTraceCollectorOptions& options)
@@ -261,7 +230,6 @@ class RocmTraceCollector {
   RocmTraceCollector(const RocmTraceCollector&) = delete;
   RocmTraceCollector& operator=(const RocmTraceCollector&) = delete;
 };
-#endif
 
 struct RocmDeviceOccupancyParams {
   hipFuncAttributes attributes = {};
@@ -269,9 +237,42 @@ struct RocmDeviceOccupancyParams {
   size_t dynamic_smem_size = 0;
   void* func_ptr;
 
-  friend bool operator==(const RocmDeviceOccupancyParams& lhs,
-                         const RocmDeviceOccupancyParams& rhs) {
-    return 0 == memcmp(&lhs, &rhs, sizeof(lhs));
+  friend bool operator==(const RocmDeviceOccupancyParams& a,
+                         const RocmDeviceOccupancyParams& b) noexcept {
+    // Compare only the fields that affect occupancy decisions.
+    return std::tuple{
+             a.attributes.binaryVersion,
+             a.attributes.cacheModeCA,
+             a.attributes.constSizeBytes,
+             a.attributes.localSizeBytes,
+             a.attributes.maxDynamicSharedSizeBytes,
+             a.attributes.maxThreadsPerBlock,
+             a.attributes.numRegs,
+             a.attributes.preferredShmemCarveout,
+             a.attributes.ptxVersion,
+             a.block_size,
+             a.dynamic_smem_size,
+             a.func_ptr
+           } ==
+           std::tuple{
+             b.attributes.binaryVersion,
+             b.attributes.cacheModeCA,
+             b.attributes.constSizeBytes,
+             b.attributes.localSizeBytes,
+             b.attributes.maxDynamicSharedSizeBytes,
+             b.attributes.maxThreadsPerBlock,
+             b.attributes.numRegs,
+             b.attributes.preferredShmemCarveout,
+             b.attributes.ptxVersion,
+             b.block_size,
+             b.dynamic_smem_size,
+             b.func_ptr
+           };
+  }
+
+  friend bool operator!=(const RocmDeviceOccupancyParams& a,
+                         const RocmDeviceOccupancyParams& b) noexcept {
+    return !(a == b);
   }
 
   template <typename H>
@@ -310,13 +311,11 @@ class PerDeviceCollector {
                     uint64_t start_gpu_ns, uint64_t end_gpu_ns,
                     XLineBuilder* line);
   void SortByStartTime();
-  // bool IsHostEvent(const RocmTracerEvent& event, tsl::int64* line_id);
-  bool IsHostEvent(const RocmTracerEvent& event, absl::int64* line_id);
+  bool IsHostEvent(const RocmTracerEvent& event, tsl::int64* line_id);
 
  private:
-  // mutex events_mutex_;
   absl::Mutex events_mutex_;
-  std::vector<RocmTracerEvent> events_ ABSEL_GUARDED_BY(events_mutex_);
+  std::vector<RocmTracerEvent> events_ ABSL_GUARDED_BY(events_mutex_);
   absl::flat_hash_map<RocmDeviceOccupancyParams, OccupancyStats>
       occupancy_cache_;
   hipDeviceProp_t device_properties_;
@@ -350,8 +349,7 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
   uint64_t start_gputime_ns_;
   int num_gpus_;
 
-  // mutex event_maps_mutex_;
-  absl::Mutex event_map_mutex_;
+  absl::Mutex event_maps_mutex_;
   absl::flat_hash_map<uint32_t, RocmTracerEvent> api_events_map_
       ABSL_GUARDED_BY(event_maps_mutex_);
 
@@ -360,14 +358,14 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
    merge them with api activities at flush time.
  */
   absl::flat_hash_map<uint32_t, std::vector<RocmTracerEvent>>
-      activity_ops_events_map_ TF_GUARDED_BY(event_maps_mutex_);
+      activity_ops_events_map_ ABSL_GUARDED_BY(event_maps_mutex_);
   // This is for the APIs that we track because we need some information from
   // them to populate the corresponding activity that we actually track.
   absl::flat_hash_map<uint32_t, RocmTracerEvent> auxiliary_api_events_map_
-      TF_GUARDED_BY(event_maps_mutex_);
+      ABSL_GUARDED_BY(event_maps_mutex_);
 
   std::vector<RocmTracerEvent> ApiActivityInfoExchange()
-      TF_EXCLUSIVE_LOCKS_REQUIRED(event_maps_mutex_);
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(event_maps_mutex_);
 
   absl::node_hash_map<uint32_t, PerDeviceCollector> per_device_collector_;
 };  // RocmTraceCollectorImpl

@@ -31,8 +31,4 @@ limitations under the License.
 #include <rocm/include/rocprofiler-sdk/cxx/name_info.hpp>
 #include <rocm/include/rocprofiler-sdk/rocprofiler.h>
 
-#include "tsl/platform/env.h"
-#include "tsl/platform/platform.h"
-
-
 #endif  // XLA_STREAM_EXECUTOR_ROCM_ROCTRACER_WRAPPER_H_

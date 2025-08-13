@@ -31,9 +31,6 @@ limitations under the License.
 namespace xla {
 namespace profiler {
 
-std::string demangle(const char* name);
-std::string demangle(const std::string& name);
-
 struct RocmTracerOptions {
   // maximum number of annotation strings that AnnotationMap in RocmTracer can
   // store. e.g. 1M

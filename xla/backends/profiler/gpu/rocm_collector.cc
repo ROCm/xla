@@ -103,7 +103,7 @@ std::string GetDeviceXLineName(
 }
 
 void PrintRocmTracerEvent(const RocmTracerEvent& event,
-                          const std::string& message = {},
+                          absl::string_view message = {},
                           uint64_t start_walltime_ns = 0,
                           uint64_t start_gputime_ns = 0) {
   std::ostringstream oss;
@@ -147,21 +147,6 @@ void PrintRocmTracerEvent(const RocmTracerEvent& event,
   VLOG(3) << oss.str() << ' ' << message;
 }
 
-#if TF_ROCM_VERSION < 60300
-
-namespace se = ::stream_executor;
-static uint64_t get_timestamp() {
-  uint64_t ts;
-  if (se::wrap::roctracer_get_timestamp(&ts) != ROCTRACER_STATUS_SUCCESS) {
-    const char* errstr = se::wrap::roctracer_error_string();
-    LOG(ERROR) << "function roctracer_get_timestamp failed with error "
-               << errstr;
-    // Return 0 on error.
-    return 0;
-  }
-  return ts;
-}
-#else
 uint64_t get_timestamp() {
   uint64_t ts;
   rocprofiler_status_t CHECKSTATUS = rocprofiler_get_timestamp(&ts);
@@ -173,8 +158,6 @@ uint64_t get_timestamp() {
   }
   return ts;
 }
-#endif
-
 }  // namespace
 
 OccupancyStats PerDeviceCollector::GetOccupancy(
@@ -345,7 +328,7 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
 }
 
 void PerDeviceCollector::SortByStartTime() {
-  mutex_lock lock(events_mutex_);
+  absl::MutexLock lock(&events_mutex_);
   std::sort(events_.begin(), events_.end(),
             [](const RocmTracerEvent& event1, const RocmTracerEvent& event2) {
               return event1.start_time_ns < event2.start_time_ns;
@@ -353,7 +336,7 @@ void PerDeviceCollector::SortByStartTime() {
 }
 
 bool PerDeviceCollector::IsHostEvent(const RocmTracerEvent& event,
-                                     absl::int64* line_id) {
+                                     tsl::int64* line_id) {
   // DriverCallback(i.e. kernel launching) events are host events.
   if (event.source == RocmTracerEventSource::ApiCallback) {
     *line_id = event.thread_id;
@@ -392,9 +375,9 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
                                 XPlaneBuilder* device_plane,
                                 XPlaneBuilder* host_plane) {
   int host_ev_cnt = 0, dev_ev_cnt = 0;
-  mutex_lock l(events_mutex_);
+  absl::MutexLock lock(&events_mutex_);
   // Tracking event types per line.
-  absl::flat_hash_map<absl::int64, absl::flat_hash_set<RocmTracerEventType>>
+  absl::flat_hash_map<tsl::int64, absl::flat_hash_set<RocmTracerEventType>>
       events_types_per_line;
 
   for (const RocmTracerEvent& event : events_) {
@@ -433,7 +416,7 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
 }
 
 void PerDeviceCollector::AddEvent(RocmTracerEvent&& event) {
-  mutex_lock l(events_mutex_);
+  absl::MutexLock lock(&events_mutex_);
   events_.emplace_back(std::move(event));
 }
 
@@ -546,13 +529,13 @@ void RocmTraceCollectorImpl::Flush() {
   auto aggregated_events = ApiActivityInfoExchange();
 
   VLOG(3) << "RocmTraceCollector collected " << num_callback_events_
-           << " callback events, " << num_activity_events_
-           << " activity events, and aggregated them into "
-           << aggregated_events.size() << " events.";
+          << " callback events, " << num_activity_events_
+          << " activity events, and aggregated them into "
+          << aggregated_events.size() << " events.";
 
   // device ids for GPUs filled in by roctracer are not zero indexed.
   // They are offset by number of CPUs on the machine
-  absl::uint32 min_device_id = INT32_MAX;
+  tsl::uint32 min_device_id = INT32_MAX;
 
   for (const auto& event : aggregated_events) {
     if (event.device_id < min_device_id) {

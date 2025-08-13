@@ -46,15 +46,14 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   options.max_annotation_strings = 100;
   options.num_gpus = 1;
 
-  const uint64_t start_walltime_ns = 1000;
-  const uint64_t start_gputime_ns = 2000;
+  constexpr uint64_t kStartWallTimeNs = 1000;
+  constexpr uint64_t kStartGpuTimeNs = 2000;
 
-  RocmTraceCollectorImpl collector(options, start_walltime_ns,
-                                   start_gputime_ns);
+  RocmTraceCollectorImpl collector(options, kStartWallTimeNs, kStartGpuTimeNs);
 
-  const uint32_t correlation_id = 42;
-  const uint64_t start_time_ns = 3000;
-  const uint64_t end_time_ns = 4000;
+  constexpr uint32_t kCorrelationId = 42;
+  constexpr uint64_t kStartTimeNs = 3000;
+  constexpr uint64_t kEndTimeNs = 4000;
 
   // === 1. Add API Callback Event ===
   RocmTracerEvent api_event;
@@ -83,9 +82,9 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   activity_event.source = RocmTracerEventSource::Activity;
   activity_event.domain = RocmTracerEventDomain::HIP_OPS;
   activity_event.name = "test_rocm_kernel";  // will be filled from api_event
-  activity_event.correlation_id = correlation_id;
-  activity_event.start_time_ns = start_time_ns;
-  activity_event.end_time_ns = end_time_ns;
+  activity_event.correlation_id = kCorrelationId;
+  activity_event.start_time_ns = kStartTimeNs;
+  activity_event.end_time_ns = kEndTimeNs;
   activity_event.device_id = 100;  // Will be adjusted in Flush()
   activity_event.stream_id = 123;
 
@@ -108,8 +107,8 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   ASSERT_GT(line.events_size(), 0);
 
   const auto& event = line.events(0);
-  EXPECT_EQ(event.offset_ps(), (start_time_ns - start_gputime_ns) * 1000);
-  EXPECT_EQ(event.duration_ps(), (end_time_ns - start_time_ns) * 1000);
+  EXPECT_EQ(event.offset_ps(), (kStartTimeNs - kStartGpuTimeNs) * 1000);
+  EXPECT_EQ(event.duration_ps(), (kEndTimeNs - kStartTimeNs) * 1000);
   EXPECT_EQ(gpu_plane->event_metadata().at(event.metadata_id()).name(),
             "test_rocm_kernel");
 }
