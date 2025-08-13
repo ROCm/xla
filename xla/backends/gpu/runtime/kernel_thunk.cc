@@ -135,7 +135,8 @@ absl::Status KernelThunk::ExecuteOnStream(const ExecuteParams& params) {
     kernel = it->second.get();
   }
 
-  VLOG(3) << "Launching " << kernel->name();
+  VLOG(3) << "Launching " << kernel->name() << " " 
+          << launch_dimensions.ToString();
   absl::InlinedVector<se::DeviceMemoryBase, 4> buffer_args;
   for (const BufferAllocation::Slice& arg : args_) {
     se::DeviceMemoryBase buf = params.buffer_allocations->GetDeviceAddress(arg);
