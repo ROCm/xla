@@ -1059,7 +1059,7 @@ absl::Status RunCollectiveOptimizationPasses(
 absl::Status RunLayoutAssignmentPasses(
     HloModule* hlo_module, se::GpuComputeCapability gpu_version,
     se::dnn::VersionInfo dnn_version,
-    const se::DeviceDescription& device_description) {
+    const se::DeviceDescription& device_description,se::StreamExecutor* stream_exec) {
   // Run layout assignment in a separate pipeline from
   // "post-layout-assignment" because we want everything after layout
   // assignment to have a layout-sensitive invariant-checker, but
@@ -1073,7 +1073,7 @@ absl::Status RunLayoutAssignmentPasses(
   ChannelLayoutConstraints layout_constraints;
   pipeline.AddPass<GpuLayoutAssignment>(
       hlo_module->mutable_entry_computation_layout(), gpu_version, dnn_version,
-      device_description, &layout_constraints);
+      device_description, &layout_constraints, stream_exec);
   // Run SubByteNormalization because GpuLayoutAssignment may modify a
   // Layout's element_size_in_bits field.
   pipeline.AddPass<SubByteNormalization>(
@@ -1400,7 +1400,7 @@ absl::Status GpuCompiler::OptimizeHloModule(
       device_description.runtime_version()));
 
   TF_RETURN_IF_ERROR(RunLayoutAssignmentPasses(
-      hlo_module, gpu_version, dnn_version, device_description));
+      hlo_module, gpu_version, dnn_version, device_description, stream_exec));
 
   TF_RETURN_IF_ERROR(RunLayoutNormalizationPasses(hlo_module, gpu_version));
 

@@ -62,6 +62,8 @@ limitations under the License.
 #include "tsl/platform/status.h"
 #include "tsl/platform/statusor.h"
 
+#include "xla/stream_executor/lazy_op_runner.h"
+
 namespace xla {
 namespace gpu {
 
@@ -72,7 +74,8 @@ using se::dnn::FilterLayout;
 static std::tuple<DataLayout, FilterLayout, DataLayout>
 HeuristicLayoutAssignment(const HloInstruction* instr,
                           const se::GpuComputeCapability& gpu_version,
-                          const se::dnn::VersionInfo& dnn_version) {
+                          const se::dnn::VersionInfo& dnn_version,
+                          se::StreamExecutor* stream_exec = nullptr) {
   // DataLayout and FilterLayout uses weird enum names. Translations:
   //   N <=> Batch or Output
   //   C <=> Depth or Input
@@ -95,6 +98,31 @@ HeuristicLayoutAssignment(const HloInstruction* instr,
   constexpr auto kAllNHWC =
       std::make_tuple(DataLayout::kBatchYXDepth, FilterLayout::kOutputYXInput,
                       DataLayout::kBatchYXDepth);
+
+  if (stream_exec && []() -> bool {
+        const auto* s = std::getenv("ARECH_TEST");
+        return s != nullptr && std::strtol(s, nullptr, 10) != 0;
+      }()) {
+    std::printf("Trying to talk to MIOpen!\n");
+    auto stat_stream = stream_exec->CreateStream();
+    if (TF_PREDICT_TRUE(stat_stream.ok())) {
+      auto stream = std::move(stat_stream).value();
+      auto stat_dnn = se::dnn::internal::GetDnnFromStream(stream.get());
+      if (TF_PREDICT_TRUE(stat_dnn.ok())) {
+        auto dnn = std::move(stat_dnn).value();
+
+        
+
+
+      } else {
+        std::printf("Failed to get dnn pointer!\n");
+      }
+    } else {
+      std::printf("Failed to stream_exec->CreateStream()!\n");
+    }
+  } else {
+    std::printf("NO or disabled stream_exec!\n");
+  }
 
   // Integer convolution must use NHWC or NCHW_VECT_C.
   //
@@ -235,8 +263,8 @@ absl::Status GpuLayoutAssignment::AddBackendConstraintsToDnnConvCustomCall(
     DataLayout input;
     FilterLayout filter;
     DataLayout output;
-    std::tie(input, filter, output) =
-        HeuristicLayoutAssignment(instr, gpu_version_, dnn_version_);
+    std::tie(input, filter, output) = HeuristicLayoutAssignment(
+        instr, gpu_version_, dnn_version_, stream_exec_);
 
     TF_ASSIGN_OR_RETURN(
         std::tie(*input_shape->mutable_layout(),

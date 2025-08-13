@@ -40,11 +40,13 @@ class GpuLayoutAssignment : public LayoutAssignment {
       const se::GpuComputeCapability& gpu_version,
       const se::dnn::VersionInfo& dnn_version,
       const se::DeviceDescription& device_description,
-      ChannelLayoutConstraints* channel_constraints = nullptr)
+      ChannelLayoutConstraints* channel_constraints = nullptr,
+      se::StreamExecutor* stream_exec=nullptr
+    )
       : LayoutAssignment(entry_computation_layout, channel_constraints),
         gpu_version_(gpu_version),
         dnn_version_(dnn_version),
-        device_description_(device_description) {}
+        device_description_(device_description),stream_exec_{stream_exec} {}
   ~GpuLayoutAssignment() override = default;
 
  protected:
@@ -85,6 +87,7 @@ class GpuLayoutAssignment : public LayoutAssignment {
   const se::GpuComputeCapability gpu_version_;
   const se::dnn::VersionInfo dnn_version_;
   const se::DeviceDescription& device_description_;
+  se::StreamExecutor*const stream_exec_{};
 };
 
 }  // namespace gpu
