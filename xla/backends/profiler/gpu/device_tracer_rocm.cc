@@ -84,80 +84,7 @@ class GpuTracer : public profiler::ProfilerInterface {
 
 RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
   RocmTracerOptions options;
-#if TF_ROCM_VERSION < 60300
-  std::vector<uint32_t> empty_vec;
-  // clang formatting does not preserve one entry per line
-  // clang-format off
-  std::vector<uint32_t> hip_api_domain_ops{
-      // KERNEL
-      HIP_API_ID_hipExtModuleLaunchKernel,
-      HIP_API_ID_hipModuleLaunchKernel,
-      HIP_API_ID_hipHccModuleLaunchKernel,
-      HIP_API_ID_hipLaunchKernel,
-      HIP_API_ID_hipExtLaunchKernel,
-      // MEMCPY
-      HIP_API_ID_hipMemcpy,
-      HIP_API_ID_hipMemcpyAsync,
-      HIP_API_ID_hipMemcpyDtoD,
-      HIP_API_ID_hipMemcpyDtoDAsync,
-      HIP_API_ID_hipMemcpyDtoH,
-      HIP_API_ID_hipMemcpyDtoHAsync,
-      HIP_API_ID_hipMemcpyHtoD,
-      HIP_API_ID_hipMemcpyHtoDAsync,
-      HIP_API_ID_hipMemcpyPeer,
-      HIP_API_ID_hipMemcpyPeerAsync,
-
-      // MEMSet
-      HIP_API_ID_hipMemsetD32,
-      HIP_API_ID_hipMemsetD32Async,
-      HIP_API_ID_hipMemsetD16,
-      HIP_API_ID_hipMemsetD16Async,
-      HIP_API_ID_hipMemsetD8,
-      HIP_API_ID_hipMemsetD8Async,
-      HIP_API_ID_hipMemset,
-      HIP_API_ID_hipMemsetAsync,
-
-      // MEMAlloc
-      HIP_API_ID_hipMalloc,
-      HIP_API_ID_hipMallocPitch,
-      // MEMFree
-      HIP_API_ID_hipFree,
-      // GENERIC
-      HIP_API_ID_hipStreamSynchronize,
-  };
-  // clang-format on
-
-  options.api_tracking_set =
-      std::set<uint32_t>(hip_api_domain_ops.begin(), hip_api_domain_ops.end());
-
-  // These are the list of APIs we track since roctracer activity
-  // does not provide all the information necessary to fully populate the
-  // TF events. We need to track the APIs for those activities in API domain but
-  // we only use them for filling the missing items in their corresponding
-  // activity (using correlation id).
-  // clang-format off
-  std::vector<uint32_t> hip_api_aux_ops{
-    HIP_API_ID_hipStreamWaitEvent,
-    // TODO(rocm-profiler): finding device ID from hipEventSynchronize need some
-    // extra work, we ignore it for now.
-    // HIP_API_ID_hipEventSynchronize,
-    HIP_API_ID_hipHostFree,
-    HIP_API_ID_hipHostMalloc,
-    HIP_API_ID_hipSetDevice  //  added to track default device
-  };
-
-  // clang-format on
-
-  hip_api_domain_ops.insert(hip_api_domain_ops.end(), hip_api_aux_ops.begin(),
-                            hip_api_aux_ops.end());
-
-  // options.api_callbacks.emplace(ACTIVITY_DOMAIN_HIP_API, hip_api_domain_ops);
-  options.api_callbacks.emplace(ACTIVITY_DOMAIN_HIP_API, empty_vec);
-
-  options.activity_tracing.emplace(ACTIVITY_DOMAIN_HIP_OPS, empty_vec);
-#else
   options.max_annotation_strings = 1024 * 1024;
-#endif
   return options;
 }
 
@@ -231,7 +158,8 @@ absl::Status GpuTracer::CollectData(XSpace* space) {
       return absl::OkStatus();
     }
   }
-  return tsl::errors::Internal("Invalid profiling state: ", profiling_state_);
+  return absl::InternalError(
+      absl::StrCat("Invalid profiling state: ", profiling_state_));
 }
 
 // Not in anonymous namespace for testing purposes.
@@ -240,16 +168,9 @@ std::unique_ptr<profiler::ProfilerInterface> CreateGpuTracer(
   if (options.device_type() != ProfileOptions::GPU &&
       options.device_type() != ProfileOptions::UNSPECIFIED)
     return nullptr;
-#if TF_ROCM_VERSION < 60300
-  profiler::RocmTracer* rocm_tracer =
-      profiler::RocmTracer::GetRocmTracerSingleton();
-  if (!rocm_tracer->IsAvailable()) return nullptr;
-  return std::make_unique<profiler::GpuTracer>(rocm_tracer);
-#else
-  auto& rocm_tracer = profiler::RocmTracer::i();
+  auto& rocm_tracer = profiler::RocmTracer::GetRocmTracerSingleton();
   if (!rocm_tracer.IsAvailable()) return nullptr;
   return std::make_unique<profiler::GpuTracer>(&rocm_tracer);
-#endif
 }
 
 auto register_rocm_gpu_tracer_factory = [] {

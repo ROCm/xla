@@ -34,8 +34,8 @@ limitations under the License.
 namespace xla {
 namespace profiler {
 
-using tsl::mutex;
-using tsl::mutex_lock;
+// using tsl::mutex;
+// using tsl::mutex_lock;
 using tsl::profiler::XEvent;
 using tsl::profiler::XLineBuilder;
 using tsl::profiler::XPlaneBuilder;
@@ -310,11 +310,13 @@ class PerDeviceCollector {
                     uint64_t start_gpu_ns, uint64_t end_gpu_ns,
                     XLineBuilder* line);
   void SortByStartTime();
-  bool IsHostEvent(const RocmTracerEvent& event, tsl::int64* line_id);
+  // bool IsHostEvent(const RocmTracerEvent& event, tsl::int64* line_id);
+  bool IsHostEvent(const RocmTracerEvent& event, absl::int64* line_id);
 
  private:
-  mutex events_mutex_;
-  std::vector<RocmTracerEvent> events_ TF_GUARDED_BY(events_mutex_);
+  // mutex events_mutex_;
+  absl::Mutex events_mutex_;
+  std::vector<RocmTracerEvent> events_ ABSEL_GUARDED_BY(events_mutex_);
   absl::flat_hash_map<RocmDeviceOccupancyParams, OccupancyStats>
       occupancy_cache_;
   hipDeviceProp_t device_properties_;
@@ -348,9 +350,10 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
   uint64_t start_gputime_ns_;
   int num_gpus_;
 
-  mutex event_maps_mutex_;
+  // mutex event_maps_mutex_;
+  absl::Mutex event_map_mutex_;
   absl::flat_hash_map<uint32_t, RocmTracerEvent> api_events_map_
-      TF_GUARDED_BY(event_maps_mutex_);
+      ABSL_GUARDED_BY(event_maps_mutex_);
 
   /* Some apis such as MEMSETD32 (based on an observation with ResNet50),
    trigger multiple HIP ops domain activities. We keep them in a vector and
