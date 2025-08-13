@@ -443,7 +443,6 @@ xla_cc_test(
     name = "rocm_tracer_test",
     size = "small",
     srcs = ["rocm_tracer_test.cc"],
-    copts = tf_profiler_copts() + tsl_copts(),
     tags = [
         "gpu",
         "rocm",
@@ -468,7 +467,6 @@ xla_cc_test(
   name = "rocm_collector_test",
   size = "small",
   srcs = ["rocm_collector_test.cc"],
-  copts = tf_profiler_copts() + tsl_copts(),
   tags = [
       "gpu",
       "rocm",
