@@ -72,7 +72,7 @@ UNSUPPORTED_GPU_TAGS="$(echo -requires-gpu-sm{60,70,80,86,89,90}{,-only})"
 TAGS_FILTER="${TAGS_FILTER},${UNSUPPORTED_GPU_TAGS// /,}"
 
 bazel \
-    test \
+    build \
     --define xnn_enable_avxvnniint8=false \
     --define xnn_enable_avx512fp16=false \
     --config=rocm_gcc \
@@ -92,7 +92,7 @@ bazel \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     --test_env=XLA_FLAGS="--xla_dump_to=/tmp/generated/tensorflow --xla_dump_hlo_as_text --xla_dump_hlo_as_html --xla_gpu_autotune_level=4 --xla_dump_hlo_pass_re=.*" \
     --action_env=NCCL_MAX_NCHANNELS=1 \
-    //xla/backends/gpu/runtime:all_reduce_test
+    //xla/tests:collective_ops_e2e_test
 
 # //xla/tests:collective_ops_e2e_test \
 # //xla/tests:collective_ops_test \
