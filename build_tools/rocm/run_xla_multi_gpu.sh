@@ -82,7 +82,7 @@ bazel \
     --test_sharding_strategy=disabled \
     --test_output=errors \
     --cache_test_results=no \
-    --flaky_test_attempts=3 \
+    --flaky_test_attempts=1 \
     --keep_going \
     --local_test_jobs=${N_TEST_JOBS} \
     --test_env=TF_TESTS_PER_GPU=$TF_TESTS_PER_GPU \
@@ -92,7 +92,7 @@ bazel \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     --test_env=XLA_FLAGS="--xla_dump_to=/tmp/generated/tensorflow --xla_dump_hlo_as_text --xla_dump_hlo_as_html --xla_gpu_autotune_level=4 --xla_dump_hlo_pass_re=.*" \
     --action_env=NCCL_MAX_NCHANNELS=1 \
-    //xla/tests:collective_ops_e2e_test --test_filter=AllReduceTest/AllReduceTest.AsyncAllReduce_F32_2GPUs/sync_one_shot
+    //xla/backends/gpu/runtime:all_reduce_test
 
 # //xla/tests:collective_ops_e2e_test \
 # //xla/tests:collective_ops_test \
