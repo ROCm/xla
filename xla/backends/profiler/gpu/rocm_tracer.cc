@@ -1814,11 +1814,33 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
   traced_event->stream_id = RocmTracerEvent::kInvalidStreamId;
   traced_event->kernel_info = KernelDetails{};
 
-  absl::MutexLock lock(&kernel_lock_);
-  if (static_cast<size_t>(rec.kind) < name_info_.size()) {
-    auto& vec = name_info_[rec.kind];
-    traced_event->name = vec[rec.operation];
+  {
+    // bounds-check name table: kind and operation
+    absl::MutexLock lock(&kernel_lock_);
+    const size_t kind = static_cast<size_t>(rec.kind);
+    if (kind < name_info_.size()) {
+      const auto& vec = name_info_[kind];
+      const size_t op = static_cast<size_t>(rec.operation);
+      if (op < vec.operations.size()) {
+        trace_event->name = vec[op];
+      } else {
+        static std::atomic<int> once{0};
+        if (once.fetch_add(1) == 0) {
+          LOG(ERROR) << "HIP op OOB: kind " << kind << " op = " << op
+                     << " vec.size() = " << vec.operations.size();
+        }
+        trace_event->name = "HIP_UNKNOWN_OP";
+      }
+    } else {
+      static std::atomic<int> once{0};
+      if (once.fetch_add(1) == 0) {
+        LOG(ERROR) << "HIP kind OOB: kind = " << kind
+                   << " name_info_.size() = " << name_info_.size();
+      }
+      trace_event->name = "HIP_UNKNOWN_KIND";
+    }
   }
+
   if (isCopyApi(rec.operation)) {
     // actually one needs to set the real type
     traced_event->type = RocmTracerEventType::MemcpyOther;
