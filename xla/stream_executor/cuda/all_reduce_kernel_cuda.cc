@@ -72,7 +72,7 @@ __device__ __forceinline__ void WaitSignalFlag<PlatformType::CUDA>(
                  XLA_TYPE, xla::ReductionKind::REDUCTION_KIND,                 \
                  xla::se::gpu::AllReduceStrategy::STRATEGY>),                  \
       stream_executor::cuda::kCudaPlatformId, ([] {                            \
-        stream_executor::MultiKernelLoaderSpec spec(4);                        \
+        stream_executor::MultiKernelLoaderSpec spec(1);                        \
         spec.AddInProcessSymbol(                                               \
             absl::bit_cast<void*>(&stream_executor::gpu::AllReduceKernelImpl<  \
                                   NV_TYPE, xla::ReductionKind::REDUCTION_KIND, \

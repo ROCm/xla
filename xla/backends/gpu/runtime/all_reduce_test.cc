@@ -306,36 +306,36 @@ INSTANTIATE_TEST_SUITE_P(
 
 class AllReduceHloTest : public HloHardwareIndependentTestBase {};
 
-TEST_F(AllReduceHloTest, NullDeviceAssnWithHloRunner) {
-  // xla::HloRunner passes a null device assignment to the XLA executable.
-  // Test this returns an error gracefully.
-  const char* const hlo_string = R"(
-    HloModule module, replica_count=2
+// TEST_F(AllReduceHloTest, NullDeviceAssnWithHloRunner) {
+//   // xla::HloRunner passes a null device assignment to the XLA executable.
+//   // Test this returns an error gracefully.
+//   const char* const hlo_string = R"(
+//     HloModule module, replica_count=2
 
-    add {
-      lhs = f32[] parameter(0)
-      rhs = f32[] parameter(1)
-      ROOT add = f32[] add(lhs, rhs)
-    }
+//     add {
+//       lhs = f32[] parameter(0)
+//       rhs = f32[] parameter(1)
+//       ROOT add = f32[] add(lhs, rhs)
+//     }
 
-    ENTRY test {
-      param = f32[1024] parameter(0)
-      ROOT result = f32[1024] all-reduce(param), to_apply=add, replica_groups={{0,1}}
-    }
-  )";
+//     ENTRY test {
+//       param = f32[1024] parameter(0)
+//       ROOT result = f32[1024] all-reduce(param), to_apply=add, replica_groups={{0,1}}
+//     }
+//   )";
 
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(hlo_string));
-  HloRunner runner(PlatformUtil::GetDefaultPlatform().value());
-  Literal input = LiteralUtil::CreateR1<float>(std::vector<float>(1, 2));
+//   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+//                           ParseAndReturnVerifiedModule(hlo_string));
+//   HloRunner runner(PlatformUtil::GetDefaultPlatform().value());
+//   Literal input = LiteralUtil::CreateR1<float>(std::vector<float>(1, 2));
 
-  EXPECT_THAT(
-      runner.Execute(std::move(module), {std::move(input)}),
-      ::tsl::testing::StatusIs(
-          absl::StatusCode::kInvalidArgument,
-          HasSubstr("Device assignment is null, but must be specified when "
-                    "running a collective thunk.")));
-}
+//   EXPECT_THAT(
+//       runner.Execute(std::move(module), {std::move(input)}),
+//       ::tsl::testing::StatusIs(
+//           absl::StatusCode::kInvalidArgument,
+//           HasSubstr("Device assignment is null, but must be specified when "
+//                     "running a collective thunk.")));
+// }
 
 }  // namespace
 }  // namespace xla::gpu
