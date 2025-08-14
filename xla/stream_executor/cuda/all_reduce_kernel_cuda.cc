@@ -71,13 +71,15 @@ __device__ __forceinline__ void WaitSignalFlag<PlatformType::CUDA>(
       SINGLE_ARG(stream_executor::gpu::AllReduceKernel<                        \
                  XLA_TYPE, xla::ReductionKind::REDUCTION_KIND,                 \
                  xla::se::gpu::AllReduceStrategy::STRATEGY>),                  \
-      stream_executor::cuda::kCudaPlatformId, ([](size_t arity) {              \
-        return stream_executor::KernelLoaderSpec::CreateInProcessSymbolSpec(   \
+      stream_executor::cuda::kCudaPlatformId, ([] {                            \
+        stream_executor::MultiKernelLoaderSpec spec(4);                        \
+        spec.AddInProcessSymbol(                                               \
             absl::bit_cast<void*>(&stream_executor::gpu::AllReduceKernelImpl<  \
                                   NV_TYPE, xla::ReductionKind::REDUCTION_KIND, \
                                   xla::se::gpu::AllReduceStrategy::STRATEGY,   \
                                   stream_executor::gpu::PlatformType::CUDA>),  \
-            "all_reduce_" #SUFFIX #STRATEGY, arity);                           \
+            "all_reduce_" #SUFFIX #STRATEGY);                                  \
+        return spec;                                                           \
       }));
 
 // Create instantiations for all all-reduce strategies.
