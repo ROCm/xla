@@ -28,7 +28,7 @@ limitations under the License.
 #include "tsl/platform/env_time.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/macros.h"
-#include "tsl/platform/mutex.h"
+// #include "tsl/platform/mutex.h"
 #include "tsl/platform/status.h"
 #include "tsl/platform/thread_annotations.h"
 #include "tsl/platform/types.h"
@@ -56,25 +56,6 @@ using tsl::profiler::XEventMetadata;
 using tsl::profiler::XLineBuilder;
 using tsl::profiler::XPlaneBuilder;
 using tsl::profiler::XSpace;
-
-void AnnotationMap::Add(uint32_t correlation_id,
-                        const std::string& annotation) {
-  if (annotation.empty()) return;
-  VLOG(3) << "Add annotation: " << " correlation_id=" << correlation_id
-          << ", annotation: " << annotation;
-  absl::MutexLock lock(&map_.mutex);
-  if (map_.annotations.size() < max_size_) {
-    absl::string_view annotation_str =
-        *map_.annotations.insert(annotation).first;
-    map_.correlation_map.emplace(correlation_id, annotation_str);
-  }
-}
-
-absl::string_view AnnotationMap::LookUp(uint32_t correlation_id) {
-  absl::MutexLock lock(&map_.mutex);
-  auto it = map_.correlation_map.find(correlation_id);
-  return it != map_.correlation_map.end() ? it->second : absl::string_view();
-}
 
 //==========
 namespace {

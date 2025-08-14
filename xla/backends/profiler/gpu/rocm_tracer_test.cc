@@ -16,10 +16,9 @@ limitations under the License.
 #include "tsl/platform/test.h"
 #include <gtest/gtest.h>
 
+#include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/backends/profiler/gpu/rocm_tracer.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
-
-#if TF_ROCM_VERSION >= 60300
 
 namespace xla {
 namespace profiler {
@@ -71,21 +70,21 @@ std::unique_ptr<TestRocmTraceCollector> CreateTestCollector() {
 }
 
 TEST(RocmTracerTest, SingletonInstance) {
-  LOG(INFO) << "Before RocmTracer::i()";
-  RocmTracer& tracer1 = RocmTracer::i();
-  RocmTracer& tracer2 = RocmTracer::i();
-  LOG(INFO) << "Before RocmTracer::i()";
+  LOG(INFO) << "Before RocmTracer::GetRocmTracerSingleton()";
+  RocmTracer& tracer1 = RocmTracer::GetRocmTracerSingleton();
+  RocmTracer& tracer2 = RocmTracer::GetRocmTracerSingleton();
+  LOG(INFO) << "Before RocmTracer::GetRocmTracerSingleton()";
   EXPECT_EQ(&tracer1, &tracer2) << "RocmTracer must be a singleton";
 }
 
 TEST(RocmTracerTest, InitialStateIsAvailable) {
-  RocmTracer& tracer = RocmTracer::i();
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
   EXPECT_TRUE(tracer.IsAvailable())
       << "Tracer should be available before Enable()";
 }
 
 TEST(RocmTracerTest, EnableAndDisableLifecycle) {
-  RocmTracer& tracer = RocmTracer::i();
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
   auto collector = CreateTestCollector();
 
   RocmTracerOptions tracer_options{/*max_annotation_strings=*/128};
@@ -120,5 +119,3 @@ TEST(RocmTracerTest, AnnotationMapWorks) {
 }  // namespace test
 }  // namespace profiler
 }  // namespace xla
-
-#endif  // TF_ROCM_VERSION

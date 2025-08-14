@@ -18,8 +18,6 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 
-#if TF_ROCM_VERSION >= 60300
-
 namespace xla {
 namespace profiler {
 namespace test {
@@ -61,7 +59,7 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   api_event.source = RocmTracerEventSource::ApiCallback;
   api_event.domain = RocmTracerEventDomain::HIP_API;
   api_event.name = "test_rocm_kernel";
-  api_event.correlation_id = correlation_id;
+  api_event.correlation_id = kCorrelationId;
   api_event.thread_id = 999;
   api_event.kernel_info = {.registers_per_thread = 32,
                            .static_shared_memory_usage = 1024,
@@ -81,11 +79,11 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   activity_event.type = RocmTracerEventType::Kernel;
   activity_event.source = RocmTracerEventSource::Activity;
   activity_event.domain = RocmTracerEventDomain::HIP_OPS;
-  activity_event.name = "test_rocm_kernel";  // will be filled from api_event
+  activity_event.name = "test_rocm_kernel";
   activity_event.correlation_id = kCorrelationId;
   activity_event.start_time_ns = kStartTimeNs;
   activity_event.end_time_ns = kEndTimeNs;
-  activity_event.device_id = 100;  // Will be adjusted in Flush()
+  activity_event.device_id = 100;
   activity_event.stream_id = 123;
 
   collector.AddEvent(std::move(activity_event), /*is_auxiliary=*/false);
@@ -116,5 +114,3 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
 }  // namespace test
 }  // namespace profiler
 }  // namespace xla
-
-#endif  // TF_ROCM_VERSION

@@ -358,10 +358,38 @@ cc_library(
 )
 
 cc_library(
+  name = "rocm_tracer_utils",
+  srcs = ["rocm_tracer_utils.cc"],
+  hdrs = ["rocm_tracer_utils.h"],
+  deps = [
+    "//xla/tsl/profiler/backends/cpu:annotation_stack",
+    "//xla/tsl/profiler/utils:time_utils",
+    "//xla/tsl/profiler/utils:math_utils",
+    "@com_google_absl//absl/strings:string_view",
+    "@com_google_absl//absl/container:flat_hash_map",
+    "@com_google_absl//absl/container:flat_hash_set",
+    "@com_google_absl//absl/container:node_hash_map",
+    "@com_google_absl//absl/container:node_hash_set",
+    "@tsl//tsl/platform:env_time",
+    "@tsl//tsl/platform:env",
+    "@tsl//tsl/platform:errors",
+    "@tsl//tsl/platform:logging",
+    "@tsl//tsl/platform:macros",
+  ],
+  visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "rocm_collector",
     srcs = ["rocm_collector.cc"],
     hdrs = ["rocm_collector.h"],
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    linkopts = select({
+        "//conditions:default": [
+            "-L/opt/rocm/lib",      # search path for all ROCm shared objects
+            "-lrocprofiler-sdk",    # the library that owns the missing symbols
+        ],
+    }),
     tags = [
         "gpu",
         "rocm-only",
@@ -370,6 +398,7 @@ cc_library(
         "manual",
     ]),
     deps = [
+        ":rocm_tracer_utils",
         "//xla/stream_executor/rocm:roctracer_wrapper",
         "//xla/tsl/profiler/backends/cpu:annotation_stack",
         "//xla/tsl/profiler/utils:parse_annotation",
@@ -416,10 +445,15 @@ cc_library(
         "manual",
     ]),
     deps = [
+        ":rocm_tracer_utils",
         ":rocm_collector",
         "//xla/stream_executor/rocm:roctracer_wrapper",
         "//xla/tsl/profiler/backends/cpu:annotation_stack",
         "//xla/tsl/profiler/utils:time_utils",
+        "//xla/tsl/profiler/utils:xplane_builder",
+        "//xla/tsl/profiler/utils:xplane_schema",
+        "//xla/tsl/profiler/utils:xplane_utils",
+        "//xla/tsl/util:env_var",
         "@com_google_absl//absl/container:fixed_array",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -436,6 +470,8 @@ cc_library(
         "@tsl//tsl/platform:status",
         "@tsl//tsl/platform:thread_annotations",
         "@tsl//tsl/platform:types",
+        "@tsl//tsl/profiler/lib:profiler_factory",
+        "@tsl//tsl/profiler/lib:profiler_interface",
     ],
 )
 
@@ -453,7 +489,7 @@ xla_cc_test(
     ]),
     deps = [
         ":rocm_tracer",
-        ":rocm_collector",
+        ":rocm_tracer_utils",
         "//xla/tsl/profiler/utils:xplane_builder",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_googletest//:gtest_main",
@@ -463,7 +499,7 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_cc_test(    
   name = "rocm_collector_test",
   size = "small",
   srcs = ["rocm_collector_test.cc"],
@@ -475,14 +511,20 @@ xla_cc_test(
       "manual",
   ]),
   deps = [
-    ":rocm_tracer",
+    # ":rocm_tracer",
     ":rocm_collector",
+    ":rocm_tracer_utils",
     "//xla/tsl/profiler/utils:xplane_builder",
     "@com_google_absl//absl/container:flat_hash_map",
     "@com_google_googletest//:gtest_main",
+    "@tsl//tsl/platform:env_time",
     "@tsl//tsl/platform:status_matchers",
     "@tsl//tsl/platform:test",
     "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+    "@tsl//tsl/platform:env",
+    "@tsl//tsl/platform:errors",
+    "@tsl//tsl/platform:logging",
+    "@tsl//tsl/platform:macros",
   ],
 )
 

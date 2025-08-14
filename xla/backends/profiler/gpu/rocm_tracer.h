@@ -16,13 +16,14 @@ limitations under the License.
 #ifndef XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_H_
 #define XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_H_
 
+#include "xla/stream_executor/rocm/roctracer_wrapper.h"
+#include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
+
 #include "absl/container/fixed_array.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_set.h"
 #include "absl/types/optional.h"
-#include "xla/backends/profiler/gpu/rocm_collector.h"
-#include "xla/stream_executor/rocm/roctracer_wrapper.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/macros.h"
 #include "tsl/platform/status.h"
@@ -30,6 +31,8 @@ limitations under the License.
 
 namespace xla {
 namespace profiler {
+// forward declare (interface)
+class RocmTraceCollector;
 
 struct RocmTracerOptions {
   // maximum number of annotation strings that AnnotationMap in RocmTracer can

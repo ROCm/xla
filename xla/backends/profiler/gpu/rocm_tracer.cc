@@ -20,6 +20,8 @@ limitations under the License.
 // can replace the stubs with the actual logic.
 
 #include "xla/backends/profiler/gpu/rocm_tracer.h"
+#include "xla/backends/profiler/gpu/rocm_collector.h"
+#include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 
 #include <cstdint>
 #include <cstring>
@@ -52,8 +54,6 @@ namespace profiler {
 
 using tsl::profiler::AnnotationStack;
 
-// represents the maximum number of chars
-static constexpr int kMaxSymbolSize = 1024;
 // represents an invalid or uninitialized device ID used in RocmTracer events.
 constexpr uint32_t RocmTracerEvent::kInvalidDeviceId;
 
@@ -62,65 +62,6 @@ inline auto GetCallbackTracingNames() {
 }
 
 std::vector<rocprofiler_agent_v0_t> GetGpuDeviceAgents();
-
-//-----------------------------------------------------------------------------
-const char* GetRocmTracerEventSourceName(const RocmTracerEventSource& source) {
-  switch (source) {
-    case RocmTracerEventSource::ApiCallback:
-      return "ApiCallback";
-      break;
-    case RocmTracerEventSource::Activity:
-      return "Activity";
-      break;
-    case RocmTracerEventSource::Invalid:
-      return "Invalid";
-      break;
-    default:
-      DCHECK(false);
-      return "";
-  }
-  return "";
-}
-
-// FIXME(rocm-profiler): These domain names are not consistent with the
-// GetActivityDomainName function
-const char* GetRocmTracerEventDomainName(const RocmTracerEventDomain& domain) {
-  switch (domain) {
-    case RocmTracerEventDomain::HIP_API:
-      return "HIP_API";
-      break;
-    case RocmTracerEventDomain::HIP_OPS:
-      return "HIP_OPS";
-      break;
-    default:
-      LOG(WARNING) << "RocmTracerEventDomain::InvalidDomain";
-      DCHECK(false);
-      return "";
-  }
-  return "";
-}
-
-const char* GetRocmTracerEventTypeName(const RocmTracerEventType& type) {
-#define OO(x)                  \
-  case RocmTracerEventType::x: \
-    return #x;
-  switch (type) {
-    OO(Kernel)
-    OO(MemcpyH2D)
-    OO(MemcpyD2H)
-    OO(MemcpyD2D)
-    OO(MemcpyOther)
-    OO(MemoryAlloc)
-    OO(MemoryFree)
-    OO(Memset)
-    OO(Synchronization)
-    OO(Generic)
-    default:;
-  }
-#undef OO
-  DCHECK(false);
-  return "";
-}
 
 //-----------------------------------------------------------------------------
 // copy api calls
