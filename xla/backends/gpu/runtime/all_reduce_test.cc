@@ -54,12 +54,6 @@ limitations under the License.
 #include "xla/types.h"
 #include "xla/xla_data.pb.h"
 
-#ifdef TENSORFLOW_USE_ROCM
-#include "hip/hip_runtime_api.h"
-#include <cstring>  // for std::memset
-#define HIP_CHECK(cmd) do { hipError_t e = (cmd); CHECK_EQ(e, hipSuccess) << hipGetErrorString(e); } while (0)
-#endif
-
 namespace xla::gpu {
 namespace {
 
@@ -96,32 +90,12 @@ class AllReduceKernelTest : public ::testing::Test,
     TF_RETURN_IF_ERROR(executors[0]->EnablePeerAccessTo(executors[1]));
     TF_RETURN_IF_ERROR(executors[1]->EnablePeerAccessTo(executors[0]));
 
-    VLOG(1) << "0->1 access "  <<executors[0]->CanEnablePeerAccessTo(executors[1]);
-    VLOG(1) << "1->0 access "  <<executors[1]->CanEnablePeerAccessTo(executors[0]);
-
     std::vector<std::unique_ptr<se::Stream>> streams;
     std::vector<se::DeviceMemoryHandle> local_input_buffers;
-    #ifndef TENSORFLOW_USE_ROCM
-      // CUDA path: device VRAM for remote inputs and flags (as before)
-      std::vector<se::DeviceMemoryHandle> data_buffers;
-      std::vector<se::DeviceMemoryHandle> signal_flags_buffers;
-      std::vector<se::DeviceMemoryBase> remote_input_buffers_span;
-      std::vector<se::DeviceMemoryBase> signal_flags_buffers_span;
-    #else
-      // ROCm path: host-pinned, mapped memory for BOTH remote inputs and flags
-      const int64_t flags_elems = num_ranks * launch_dimensions.num_blocks();
-      const size_t flags_bytes = sizeof(uint32_t) * flags_elems;
-      const size_t remote_bytes = sizeof(T) * num_elements;
-
-      // One host buffer per rank for "remote inputs" (size = num_elements each).
-      std::vector<void*> host_remote_inputs(num_ranks, nullptr);
-      // One host buffer per rank for signal flags (size = flags_elems each).
-      std::vector<uint32_t*> host_flag_ptrs(num_ranks, nullptr);
-
-      // Per launching device i, we build per-device pointer tables.
-      std::vector<std::vector<se::DeviceMemoryBase>> per_dev_inputs(num_ranks);
-      std::vector<std::vector<se::DeviceMemoryBase>> per_dev_flags(num_ranks);
-    #endif
+    std::vector<se::DeviceMemoryHandle> data_buffers;
+    std::vector<se::DeviceMemoryHandle> signal_flags_buffers;
+    std::vector<se::DeviceMemoryBase> remote_input_buffers_span;
+    std::vector<se::DeviceMemoryBase> signal_flags_buffers_span;
 
     for (int i = 0; i < num_ranks; ++i) {
       auto* executor = executors[i];
@@ -130,9 +104,7 @@ class AllReduceKernelTest : public ::testing::Test,
       local_input_buffers.emplace_back(
           executor, executor->AllocateArray<T>(num_elements));
       TF_RET_CHECK(!local_input_buffers[i].memory().is_null());
-      
-#ifndef TENSORFLOW_USE_ROCM
-    // CUDA: VRAM-backed "shared" buffers
+
       data_buffers.emplace_back(executor,
                                 executor->AllocateArray<T>(num_elements));
       TF_RET_CHECK(!data_buffers[i].memory().is_null());
@@ -145,48 +117,14 @@ class AllReduceKernelTest : public ::testing::Test,
       TF_RETURN_IF_ERROR(executor->SynchronousMemZero(
           signal_flags_buffers[i].memory_ptr(),
           signal_flags_buffers[i].memory().size()));
-#else
-    // ROCm: allocate host-pinned, mapped memory for remote inputs and flags
-    HIP_CHECK(hipHostMalloc(&host_remote_inputs[i], remote_bytes,
-                            hipHostMallocPortable | hipHostMallocMapped));
-    std::memset(host_remote_inputs[i], 0, remote_bytes);
-
-    HIP_CHECK(hipHostMalloc(reinterpret_cast<void**>(&host_flag_ptrs[i]),
-                            flags_bytes, hipHostMallocPortable | hipHostMallocMapped));
-    std::memset(host_flag_ptrs[i], 0, flags_bytes);
-#endif
 
       TF_RETURN_IF_ERROR(streams[i]->Memcpy(local_input_buffers[i].memory_ptr(),
                                             input_data[i].data(),
                                             num_elements * sizeof(T)));
 
-#ifndef TENSORFLOW_USE_ROCM
-    // CUDA: export device pointers directly                                          
       remote_input_buffers_span.push_back(data_buffers[i].memory());
       signal_flags_buffers_span.push_back(signal_flags_buffers[i].memory());
-#endif
     }
-
-#ifdef TENSORFLOW_USE_ROCM
-  // For each device i, get device pointers to all host-pinned buffers (both remote inputs and flags).
-  for (int i = 0; i < num_ranks; ++i) {
-    per_dev_inputs[i].reserve(num_ranks);
-    per_dev_flags[i].reserve(num_ranks);
-
-    auto act_i = executors[i]->Activate();  // make device i current
-    for (int j = 0; j < num_ranks; ++j) {
-      // Map host-remote-input[j] into device i’s VA space
-      void* dev_remote = nullptr;
-      HIP_CHECK(hipHostGetDevicePointer(&dev_remote, host_remote_inputs[j], 0));
-      per_dev_inputs[i].emplace_back(dev_remote, remote_bytes);
-
-      // Map host-flags[j] into device i’s VA space
-      void* dev_flag = nullptr;
-      HIP_CHECK(hipHostGetDevicePointer(&dev_flag, host_flag_ptrs[j], 0));
-      per_dev_flags[i].emplace_back(dev_flag, flags_bytes);
-    }
-  }
-#endif
 
     for (int i = 0; i < num_ranks; ++i) {
       TF_RETURN_IF_ERROR(streams[i]->BlockHostUntilDone());
@@ -199,16 +137,6 @@ class AllReduceKernelTest : public ::testing::Test,
           primitive_util::NativeToPrimitiveType<T>(),
           /*reduction_kind=*/reduction_kind,
           /*all_reduce_strategy=*/params_.all_reduce_strategy,
-#ifdef TENSORFLOW_USE_ROCM
-          /*remote_input_buffers=*/absl::MakeSpan(per_dev_inputs[i]),
-          // Memory is aliased for both input and output (similar to what nccl
-          // would do).
-          /*local_input_buffer=*/local_input_buffers[i].memory(),
-          /*output_buffer=*/local_input_buffers[i].memory(),
-          /*rank=*/RankId(i), /*num_ranks=*/num_ranks,
-          /*num_elements=*/num_elements,
-          /*signal_flags_buffers=*/absl::MakeSpan(per_dev_flags[i]),
-#else
           /*remote_input_buffers=*/remote_input_buffers_span,
           // Memory is aliased for both input and output (similar to what nccl
           // would do).
@@ -217,12 +145,11 @@ class AllReduceKernelTest : public ::testing::Test,
           /*rank=*/RankId(i), /*num_ranks=*/num_ranks,
           /*num_elements=*/num_elements,
           /*signal_flags_buffers=*/signal_flags_buffers_span,
-#endif
           /*signal_value=*/1));
     }
 
     for (int i = 0; i < num_ranks; ++i) {
-     TF_RETURN_IF_ERROR(streams[i]->BlockHostUntilDone());
+      TF_RETURN_IF_ERROR(streams[i]->BlockHostUntilDone());
     }
 
     std::vector<Array<T>> results;
@@ -235,14 +162,7 @@ class AllReduceKernelTest : public ::testing::Test,
 
       results.push_back(std::move(output_results));
     }
-    
-#ifdef TENSORFLOW_USE_ROCM
-    // Free host-pinned buffers
-    for (int j = 0; j < num_ranks; ++j) {
-      HIP_CHECK(hipHostFree(host_remote_inputs[j]));
-      HIP_CHECK(hipHostFree(host_flag_ptrs[j]));
-    }
-#endif
+
     return results;
   }
 
