@@ -72,7 +72,7 @@ UNSUPPORTED_GPU_TAGS="$(echo -requires-gpu-sm{60,70,80,86,89,90}{,-only})"
 TAGS_FILTER="${TAGS_FILTER},${UNSUPPORTED_GPU_TAGS// /,}"
 
 bazel \
-    build \
+    test \
     --define xnn_enable_avxvnniint8=false \
     --define xnn_enable_avx512fp16=false \
     --config=rocm_gcc \
