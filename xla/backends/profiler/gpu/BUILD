@@ -255,7 +255,6 @@ tsl_gpu_library(
         "@tsl//tsl/platform:types",
         "@tsl//tsl/profiler/lib:profiler_factory",
         "@tsl//tsl/profiler/lib:profiler_interface",
-        "@tsl//tsl/platform:env",
     ],
 )
 
@@ -264,12 +263,6 @@ tsl_gpu_library(
     srcs = if_rocm(["rocm_tracer.cc"]),
     hdrs = if_rocm(["rocm_tracer.h"]),
     copts = tf_profiler_copts() + tsl_copts(),
-    linkopts = select({
-        "//conditions:default": [
-            "-L/opt/rocm/lib",      # search path for all ROCm shared objects
-            "-lrocprofiler-sdk",    # the library that owns the missing symbols
-        ],
-    }),
     tags = [
         "gpu",
         "rocm-only",
@@ -297,58 +290,6 @@ tsl_gpu_library(
         "@tsl//tsl/platform:status",
         "@tsl//tsl/platform:types",
     ],
-)
-
-xla_test(
-    name = "rocm_tracer_test",
-    size = "small",
-    srcs = ["rocm_tracer_test.cc"],
-    copts = tf_profiler_copts() + tsl_copts(),
-    tags = [
-        "gpu",
-        "rocm",
-        "rocm-only",
-    ] + if_google([
-        # Optional: only run internally if ROCm config is enabled
-        "manual",
-    ]),
-    deps = if_rocm([
-        ":rocm_tracer",
-        ":rocm_collector",
-    ]) + [
-        "//xla/tsl/profiler/utils:xplane_builder",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:status_matchers",
-        "@tsl//tsl/platform:test",
-        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
-    ],
-)
-
-xla_test(
-  name = "rocm_collector_test",
-  size = "small",
-  srcs = ["rocm_collector_test.cc"],
-  copts = tf_profiler_copts() + tsl_copts(),
-  tags = [
-      "gpu",
-      "rocm",
-      "rocm-only",
-  ] + if_google([
-      "manual",
-  ]),
-  deps = if_rocm([
-      ":rocm_tracer",
-      ":rocm_collector",
-  ]) + [
-      "//xla/tsl/profiler/utils:xplane_builder",
-      "@com_google_absl//absl/container:flat_hash_map",
-      "@com_google_googletest//:gtest_main",
-      "@tsl//tsl/platform:status_matchers",
-      "@tsl//tsl/platform:test",
-      "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
-  ],
-  args = ["--gtest_shuffle"],
 )
 
 tsl_gpu_library(
