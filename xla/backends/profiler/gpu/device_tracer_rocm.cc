@@ -244,7 +244,6 @@ std::unique_ptr<profiler::ProfilerInterface> CreateGpuTracer(
   auto& rocm_tracer = profiler::RocmTracer::GetRocmTracerSingleton();
   if (!rocm_tracer.IsAvailable()) return nullptr;
   return std::make_unique<profiler::GpuTracer>(&rocm_tracer);
-
 }
 
 auto register_rocm_gpu_tracer_factory = [] {

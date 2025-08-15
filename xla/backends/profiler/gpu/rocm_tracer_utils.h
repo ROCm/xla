@@ -36,7 +36,6 @@ limitations under the License.
 #include "absl/synchronization/mutex.h"
 #include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
 #include "xla/tsl/profiler/utils/time_utils.h"
-#include "xla/tsl/profiler/utils/xplane_builder.h"
 
 #include "tsl/platform/errors.h"
 #include "tsl/platform/macros.h"

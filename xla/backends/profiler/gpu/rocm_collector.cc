@@ -28,7 +28,6 @@ limitations under the License.
 #include "tsl/platform/env_time.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/macros.h"
-// #include "tsl/platform/mutex.h"
 #include "tsl/platform/status.h"
 #include "tsl/platform/thread_annotations.h"
 #include "tsl/platform/types.h"
