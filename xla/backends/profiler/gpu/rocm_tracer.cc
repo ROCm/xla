@@ -299,6 +299,11 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
       .func_ptr = nullptr,
   };
 
+  VLOG(-1) << "cj401 private_segment_size = " << kinfo.private_segment_size;
+  VLOG(-1) << "cj401 group_segment_size = " << kinfo.group_segment_size;
+  VLOG(-1) << "cj401 thread block x = " << kinfo.workgroup_size.x << " y = " << kinfo.workgroup_size.y << " z = " << kinfo.workgroup_size.z;
+  VLOG(-1) << "cj401 grid x = " << kinfo.grid_size.x << " y = " << kinfo.grid_size.y << " z = " << kinfo.grid_size.z;
+
   auto it = kernel_info_.find(kinfo.kernel_id);
   if (it != kernel_info_.end()) trace_event->name = it->second.name;
 }
