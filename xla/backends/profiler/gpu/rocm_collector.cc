@@ -646,6 +646,9 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
 
     switch (activity_event.type) {
       case RocmTracerEventType::Kernel:
+#ifdef TF_ROCM_VERSION < 60300
+        activity_event.name = api_event->second.name;
+#endif
         activity_event.kernel_info = api_event->second.kernel_info;
         PrintRocmTracerEvent(activity_event,
                              ". activity event from api_event.");
