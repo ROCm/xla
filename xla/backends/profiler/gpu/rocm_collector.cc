@@ -596,8 +596,6 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
   NormalizeTimeStamps(&host_plane, start_walltime_ns_);
 }
 
-#if TF_ROCM_VERSION < 60300
-
 static void DumpRocmTracerEvent(const RocmTracerEvent& event,
                                 uint64_t start_walltime_ns,
                                 uint64_t start_gputime_ns,
@@ -768,9 +766,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
   return aggregated_events;
 }
 
-#else
-
-std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
+std::vector<RocmTracerEvent> RocprofTraceCollectorImpl::ApiActivityInfoExchange() {
   /* Different from CUDA, roctracer activity records are not enough to fill a
     TF event. For most of the activities, we need to enable the corresponding
     API callsbacks (we call them auxiliary API callbacks) to capture the
@@ -885,7 +881,13 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
 
   return aggregated_events;
 }
-#endif
+
+std::unique_ptr<RocmTraceCollector> CreateRocprofCollector(
+    const RocmTraceCollectorOptions& options, const uint64_t start_walltime_ns,
+    const uint64_t start_gputime_ns) {
+  return std::make_unique<RocprofTraceCollectorImpl>(options, start_walltime_ns,
+                                                     start_gputime_ns);
+}
 
 std::unique_ptr<RocmTraceCollector> CreateRocmCollector(
     const RocmTraceCollectorOptions& options, const uint64_t start_walltime_ns,

@@ -23,6 +23,7 @@ limitations under the License.
 #include "absl/container/node_hash_map.h"
 #include "absl/container/node_hash_set.h"
 #include "xla/stream_executor/rocm/roctracer_wrapper.h"
+#include "xla/stream_executor/rocm/rocprofiler_sdk_wrapper.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 #include "tsl/profiler/lib/profiler_factory.h"
 #include "tsl/profiler/lib/profiler_interface.h"
@@ -210,8 +211,6 @@ class AnnotationMap {
 };
 
 // for roctracer (v1)
-#if TF_ROCM_VERSION < 60300
-
 class RocmTraceCollector {
  public:
   explicit RocmTraceCollector(const RocmTraceCollectorOptions& options)
@@ -237,31 +236,6 @@ class RocmTraceCollector {
   RocmTraceCollector(const RocmTraceCollector&) = delete;
   RocmTraceCollector& operator=(const RocmTraceCollector&) = delete;
 };
-
-#else
-// for rocprofiler-sdk (v3)
-
-class RocmTraceCollector {
- public:
-  explicit RocmTraceCollector(const RocmTraceCollectorOptions& options)
-      : options_(options) {}
-  virtual ~RocmTraceCollector() {}
-
-  virtual void AddEvent(RocmTracerEvent&& event, bool is_auxiliary) = 0;
-  virtual void OnEventsDropped(const std::string& reason,
-                               uint32_t num_events) = 0;
-  virtual void Flush() = 0;
-  virtual void Export(XSpace* space) = 0;
-
- protected:
-  RocmTraceCollectorOptions options_;
-
- public:
-  // Disable copy and move.
-  RocmTraceCollector(const RocmTraceCollector&) = delete;
-  RocmTraceCollector& operator=(const RocmTraceCollector&) = delete;
-};
-#endif
 
 struct RocmDeviceOccupancyParams {
   hipFuncAttributes attributes = {};
@@ -349,6 +323,7 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
   int num_gpus_;
 
   mutex event_maps_mutex_;
+
   absl::flat_hash_map<uint32_t, RocmTracerEvent> api_events_map_
       TF_GUARDED_BY(event_maps_mutex_);
 
@@ -363,11 +338,28 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
   absl::flat_hash_map<uint32_t, RocmTracerEvent> auxiliary_api_events_map_
       TF_GUARDED_BY(event_maps_mutex_);
 
-  std::vector<RocmTracerEvent> ApiActivityInfoExchange()
+  virtual std::vector<RocmTracerEvent> ApiActivityInfoExchange()
       TF_EXCLUSIVE_LOCKS_REQUIRED(event_maps_mutex_);
 
   absl::node_hash_map<uint32_t, PerDeviceCollector> per_device_collector_;
+
+  friend class RocprofTraceCollectorImpl; 
 };  // RocmTraceCollectorImpl
+
+class RocprofTraceCollectorImpl : private RocmTraceCollectorImpl {
+ public:
+  RocprofTraceCollectorImpl(const RocmTraceCollectorOptions& options,
+                            uint64_t start_walltime_ns, uint64_t start_gputime_ns)
+      : RocmTraceCollectorImpl(options, start_walltime_ns, start_gputime_ns) {}
+
+ private:
+  std::vector<RocmTracerEvent> ApiActivityInfoExchange()
+      TF_EXCLUSIVE_LOCKS_REQUIRED(event_maps_mutex_);
+};
+
+std::unique_ptr<RocmTraceCollector> CreateRocprofCollector(
+    const RocmTraceCollectorOptions& options, const uint64_t start_walltime_ns,
+    const uint64_t start_gputime_ns);
 
 std::unique_ptr<RocmTraceCollector> CreateRocmCollector(
     const RocmTraceCollectorOptions& options, const uint64_t start_walltime_ns,
