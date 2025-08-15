@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_H_
-#define XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_H_
+#ifndef XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_V1_H_
+#define XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_V1_H_
 
 #include <optional>
 
@@ -22,6 +22,7 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_set.h"
+#include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/stream_executor/rocm/roctracer_wrapper.h"
 #include "tsl/platform/errors.h"
@@ -53,6 +54,7 @@ struct RocmTracerOptions {
 };
 
 class RocmTracer;
+class RocmTraceCollector;
 
 class RocmApiCallbackImpl {
  public:
@@ -120,7 +122,7 @@ class RocmActivityCallbackImpl {
 class RocmTracer {
  public:
   // Returns a pointer to singleton RocmTracer.
-  static RocmTracer* GetRocmTracerSingleton();
+  static RocmTracer& GetRocmTracerSingleton();
 
   // Only one profile session can be live in the same time.
   bool IsAvailable() const;
@@ -149,6 +151,8 @@ class RocmTracer {
     return pending_activity_records_.Count();
   }
 
+  profiler::AnnotationMap* annotation_map() { return &annotation_map_; }
+
  protected:
   // protected constructor for injecting mock cupti interface for testing.
   explicit RocmTracer() : num_gpus_(NumGpus()) {}
@@ -169,6 +173,8 @@ class RocmTracer {
 
   RocmApiCallbackImpl* api_cb_impl_;
   RocmActivityCallbackImpl* activity_cb_impl_;
+
+  profiler::AnnotationMap annotation_map_{/* default size, e.g. */ 1024 * 1024};
 
   class PendingActivityRecords {
    public:
@@ -209,6 +215,6 @@ class RocmTracer {
   RocmTracer& operator=(const RocmTracer&) = delete;
 };
 
-}  // namespace profiler
+}  // namespace profiler_v1
 }  // namespace xla
-#endif  // XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_H_
+#endif  // XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_V1_H_

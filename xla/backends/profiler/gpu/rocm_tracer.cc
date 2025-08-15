@@ -332,7 +332,7 @@ absl::Status RocmApiCallbackImpl::operator()(uint32_t domain, uint32_t cbid,
     // Set up the map from correlation id to annotation string.
     const std::string& annotation = AnnotationStack::Get();
     if (!annotation.empty()) {
-      collector_->annotation_map()->Add(data->correlation_id, annotation);
+      RocmTracer::annotation_map()->Add(data->correlation_id, annotation);
     }
 
     if (options_.api_tracking_set.find(cbid) ==
@@ -1035,7 +1035,8 @@ void RocmActivityCallbackImpl::AddHipKernelActivityEvent(
   event.correlation_id = record->correlation_id;
   // TODO(rocm-profiler): CUDA uses device id and correlation ID for finding
   // annotations.
-  event.annotation = collector_->annotation_map()->LookUp(event.correlation_id);
+  // event.annotation = collector_->RocmTracer::annotation_map()->LookUp(event.correlation_id);
+  event.annotation = RocmTracer::annotation_map()->LookUp(event.correlation_id);
 
   event.start_time_ns = record->begin_ns;
   event.end_time_ns = record->end_ns;
@@ -1065,7 +1066,8 @@ void RocmActivityCallbackImpl::AddNormalHipMemcpyActivityEvent(
   event.start_time_ns = record->begin_ns;
   event.end_time_ns = record->end_ns;
   event.correlation_id = record->correlation_id;
-  event.annotation = collector_->annotation_map()->LookUp(event.correlation_id);
+  event.annotation = RocmTracer::annotation_map()->LookUp(event.correlation_id);
+  // event.annotation = collector_->RocmTracer::annotation_map()->LookUp(event.correlation_id);
   // TODO(roc-profiler): record->bytes is not a valid value
   // event.memcpy_info.num_bytes = record->bytes;
   event.name =
@@ -1129,7 +1131,8 @@ void RocmActivityCallbackImpl::AddHipMemsetActivityEvent(
   event.name =
       se::wrap::roctracer_op_string(record->domain, record->op, record->kind);
   event.correlation_id = record->correlation_id;
-  event.annotation = collector_->annotation_map()->LookUp(event.correlation_id);
+  // event.annotation = collector_->RocmTracer::annotation_map()->LookUp(event.correlation_id);
+  event.annotation = RocmTracer::annotation_map()->LookUp(event.correlation_id);
 
   event.type = RocmTracerEventType::Memset;
 
@@ -1183,7 +1186,8 @@ void RocmActivityCallbackImpl::AddHipMallocActivityEvent(
   event.name =
       se::wrap::roctracer_op_string(record->domain, record->op, record->kind);
   event.correlation_id = record->correlation_id;
-  event.annotation = collector_->annotation_map()->LookUp(event.correlation_id);
+  // event.annotation = collector_->RocmTracer::annotation_map()->LookUp(event.correlation_id);
+  event.annotation = RocmTracer::annotation_map()->LookUp(event.correlation_id);
   // similar to CUDA we set this to the default stream
   event.stream_id = 0;
   event.start_time_ns = record->begin_ns;
@@ -1210,7 +1214,8 @@ void RocmActivityCallbackImpl::AddHipStreamSynchronizeActivityEvent(
   event.name =
       se::wrap::roctracer_op_string(record->domain, record->op, record->kind);
   event.correlation_id = record->correlation_id;
-  event.annotation = collector_->annotation_map()->LookUp(event.correlation_id);
+  // event.annotation = collector_->RocmTracer::annotation_map()->LookUp(event.correlation_id);
+  event.annotation = RocmTracer::annotation_map()->LookUp(event.correlation_id);
   event.start_time_ns = record->begin_ns;
 
   // making sure it does not have 0ns duration. Otherwise, it may not show up in
@@ -1249,7 +1254,8 @@ void RocmActivityCallbackImpl::AddHccKernelActivityEvent(
   event.type = RocmTracerEventType::Kernel;
   event.source = RocmTracerEventSource::Activity;
   event.correlation_id = record->correlation_id;
-  event.annotation = collector_->annotation_map()->LookUp(event.correlation_id);
+  // event.annotation = collector_->RocmTracer::annotation_map()->LookUp(event.correlation_id);
+  event.annotation = RocmTracer::annotation_map()->LookUp(event.correlation_id);
   event.start_time_ns = record->begin_ns;
   event.end_time_ns = record->end_ns;
   event.device_id = record->device_id;
@@ -1277,7 +1283,8 @@ void RocmActivityCallbackImpl::AddNormalHipOpsMemcpyActivityEvent(
   event.name =  // name is stored for debug
       se::wrap::roctracer_op_string(record->domain, record->op, record->kind);
   event.correlation_id = record->correlation_id;
-  event.annotation = collector_->annotation_map()->LookUp(event.correlation_id);
+  // event.annotation = collector_->RocmTracer::annotation_map()->LookUp(event.correlation_id);
+  event.annotation = RocmTracer::annotation_map()->LookUp(event.correlation_id);
 
   event.start_time_ns = record->begin_ns;
   event.end_time_ns = record->end_ns;
@@ -1311,7 +1318,8 @@ void RocmActivityCallbackImpl::AddHipOpsMemsetActivityEvent(
   event.name =  // name is stored for debug
       se::wrap::roctracer_op_string(record->domain, record->op, record->kind);
   event.correlation_id = record->correlation_id;
-  event.annotation = collector_->annotation_map()->LookUp(event.correlation_id);
+  // event.annotation = collector_->RocmTracer::annotation_map()->LookUp(event.correlation_id);
+  event.annotation = RocmTracer::annotation_map()->LookUp(event.correlation_id);
 
   event.start_time_ns = record->begin_ns;
   event.end_time_ns = record->end_ns;
@@ -1323,8 +1331,8 @@ void RocmActivityCallbackImpl::AddHipOpsMemsetActivityEvent(
   collector_->AddEvent(std::move(event), false);
 }
 
-/* static */ RocmTracer* RocmTracer::GetRocmTracerSingleton() {
-  static auto* singleton = new RocmTracer();
+RocmTracer& RocmTracer::GetRocmTracerSingleton() {
+  static RocmTracer singleton;
   return singleton;
 }
 
@@ -1587,5 +1595,5 @@ absl::Status RocmTracer::DisableActivityTracing() {
   return ts;
 }
 
-}  // namespace profiler
+}  // namespace profiler_v1
 }  // namespace xla

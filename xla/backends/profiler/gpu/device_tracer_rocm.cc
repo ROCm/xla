@@ -240,16 +240,11 @@ std::unique_ptr<profiler::ProfilerInterface> CreateGpuTracer(
   if (options.device_type() != ProfileOptions::GPU &&
       options.device_type() != ProfileOptions::UNSPECIFIED)
     return nullptr;
-#if TF_ROCM_VERSION < 60300
-  profiler::RocmTracer* rocm_tracer =
-      profiler::RocmTracer::GetRocmTracerSingleton();
-  if (!rocm_tracer->IsAvailable()) return nullptr;
-  return std::make_unique<profiler::GpuTracer>(rocm_tracer);
-#else
-  auto& rocm_tracer = profiler::RocmTracer::i();
+
+  auto& rocm_tracer = profiler::RocmTracer::GetRocmTracerSingleton();
   if (!rocm_tracer.IsAvailable()) return nullptr;
   return std::make_unique<profiler::GpuTracer>(&rocm_tracer);
-#endif
+
 }
 
 auto register_rocm_gpu_tracer_factory = [] {
