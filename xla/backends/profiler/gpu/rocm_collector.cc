@@ -127,15 +127,6 @@ void PrintRocmTracerEvent(const RocmTracerEvent& event,
   VLOG(3) << oss.str() << ' ' << message;
 }
 
-static uint64_t get_timestamp() {
-  uint64_t ns = 0;
-  if (hsa_now_ns(&ns)) return ns;
-
-  // Fallback: host monotonic clock in ns (different time domain!)
-  auto now = std::chrono::steady_clock::now().time_since_epoch();
-  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
-}
-
 #if defined(XLA_GPU_ROCM_TRACER_BACKEND) && (XLA_GPU_ROCM_TRACER_BACKEND == 1)
 namespace se = ::stream_executor;
 static uint64_t get_timestamp() {
