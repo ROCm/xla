@@ -84,7 +84,7 @@ class GpuTracer : public profiler::ProfilerInterface {
 
 RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
   RocmTracerOptions options;
-#if TF_ROCM_VERSION < 60300
+#if defined(XLA_GPU_ROCM_TRACER_BACKEND) && (XLA_GPU_ROCM_TRACER_BACKEND == 1)
   std::vector<uint32_t> empty_vec;
   // clang formatting does not preserve one entry per line
   // clang-format off

@@ -127,6 +127,16 @@ void PrintRocmTracerEvent(const RocmTracerEvent& event,
   VLOG(3) << oss.str() << ' ' << message;
 }
 
+static uint64_t get_timestamp() {
+  uint64_t ns = 0;
+  if (hsa_now_ns(&ns)) return ns;
+
+  // Fallback: host monotonic clock in ns (different time domain!)
+  auto now = std::chrono::steady_clock::now().time_since_epoch();
+  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+}
+
+#if defined(XLA_GPU_ROCM_TRACER_BACKEND) && (XLA_GPU_ROCM_TRACER_BACKEND == 1)
 namespace se = ::stream_executor;
 static uint64_t get_timestamp() {
   uint64_t ts;
@@ -139,18 +149,20 @@ static uint64_t get_timestamp() {
   }
   return ts;
 }
+#else
+uint64_t get_timestamp() {
+  uint64_t ts;
+  rocprofiler_status_t CHECKSTATUS = rocprofiler_get_timestamp(&ts);
+  if (CHECKSTATUS != ROCPROFILER_STATUS_SUCCESS) {
+    const char* errstr = rocprofiler_get_status_string(CHECKSTATUS);
+    LOG(ERROR) << "function rocprofiler_get_timestamp failed with error "
+               << errstr;
+    return 0;
+  }
+  return ts;
+}
+#endif
 
-// uint64_t get_timestamp() {
-//   uint64_t ts;
-//   rocprofiler_status_t CHECKSTATUS = rocprofiler_get_timestamp(&ts);
-//   if (CHECKSTATUS != ROCPROFILER_STATUS_SUCCESS) {
-//     const char* errstr = rocprofiler_get_status_string(CHECKSTATUS);
-//     LOG(ERROR) << "function rocprofiler_get_timestamp failed with error "
-//                << errstr;
-//     return 0;
-//   }
-//   return ts;
-// }
 }  // namespace
 
 OccupancyStats PerDeviceCollector::GetOccupancy(
@@ -646,7 +658,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
 
     switch (activity_event.type) {
       case RocmTracerEventType::Kernel:
-#ifdef TF_ROCM_VERSION < 60300
+#if defined(XLA_GPU_ROCM_TRACER_BACKEND) && (XLA_GPU_ROCM_TRACER_BACKEND == 1)
         activity_event.name = api_event->second.name;
 #endif
         activity_event.kernel_info = api_event->second.kernel_info;

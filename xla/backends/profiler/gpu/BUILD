@@ -361,6 +361,12 @@ cc_library(
   name = "rocm_tracer_utils",
   srcs = ["rocm_tracer_utils.cc"],
   hdrs = ["rocm_tracer_utils.h"],
+  linkopts = [
+    "-Wl,--no-as-needed",
+    "-L/opt/rocm/lib",
+    "-Wl,-rpath,/opt/rocm/lib",
+    "-lhsa-runtime64",
+  ],
   deps = [
     "//xla/tsl/profiler/backends/cpu:annotation_stack",
     "//xla/tsl/profiler/utils:time_utils",
@@ -426,24 +432,63 @@ cc_library(
     ],
 )
 
+config_setting(
+    name = "use_v1",
+    values = {"define": "xla_rocm_profiler=v1"},
+)
+
+config_setting(
+    name = "use_v3",
+    values = {"define": "xla_rocm_profiler=v3"},
+)
+
 cc_library(
     name = "rocm_tracer",
-    srcs = ["rocm_tracer.cc"],
-    hdrs = ["rocm_tracer.h"],
-    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
-    linkopts = select({
+    hdrs = [
+        "rocm_tracer.h",               # the façade (always exported)
+        "rocm_tracer_v3.h",
+        "rocm_tracer_v1.h",
+        "rocm_tracer_v1_adapter.h",
+    ],
+    srcs = select({
+        ":use_v1": [
+            "rocm_tracer_v1.cc",            # original v1 impl  :contentReference[oaicite:9]{index=9}
+            "rocm_tracer_v1_adapter.cc",    # tiny wrapper (matches header above)
+        ],
+        ":use_v3": [
+            "rocm_tracer_v3.cc",            # original v3 impl  :contentReference[oaicite:10]{index=10}
+        ],
         "//conditions:default": [
-            "-L/opt/rocm/lib",      # search path for all ROCm shared objects
-            "-lrocprofiler-sdk",    # the library that owns the missing symbols
+            "rocm_tracer_v3.cc",
         ],
     }),
-    tags = [
-        "gpu",
-        "rocm-only",
-    ] + if_google([
-        # TODO(b/360374983): Remove this tag once the target can be built without --config=rocm.
-        "manual",
-    ]),
+    copts = select({
+        ":use_v1": [
+            "-DXLA_GPU_ROCM_TRACER_BACKEND=1",
+        ],
+        ":use_v3": [
+            "-DXLA_GPU_ROCM_TRACER_BACKEND=3",
+        ],
+        "//conditions:default": [
+            "-DXLA_GPU_ROCM_TRACER_BACKEND=3",
+        ],
+    }),
+    linkopts = select({
+        ":use_v1": [
+            # roctracer (v1)
+            "-L/opt/rocm/lib",
+            "-lroctracer64",
+        ],
+        ":use_v3": [
+            # rocprofiler-sdk (v3)
+            "-L/opt/rocm/lib",
+            "-lrocprofiler-sdk",
+        ],
+        "//conditions:default": [
+            "-L/opt/rocm/lib",
+            "-lrocprofiler-sdk",
+        ],
+    }),
     deps = [
         ":rocm_tracer_utils",
         ":rocm_collector",
@@ -473,7 +518,57 @@ cc_library(
         "@tsl//tsl/profiler/lib:profiler_factory",
         "@tsl//tsl/profiler/lib:profiler_interface",
     ],
+    visibility = ["//visibility:public"],
 )
+
+# cc_library(
+#     name = "rocm_tracer",
+#     srcs = ["rocm_tracer.cc"],
+#     hdrs = ["rocm_tracer.h"],
+#     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+#     linkopts = select({
+#         "//conditions:default": [
+#             "-L/opt/rocm/lib",      # search path for all ROCm shared objects
+#             "-lrocprofiler-sdk",    # the library that owns the missing symbols
+#         ],
+#     }),
+#     tags = [
+#         "gpu",
+#         "rocm-only",
+#     ] + if_google([
+#         # TODO(b/360374983): Remove this tag once the target can be built without --config=rocm.
+#         "manual",
+#     ]),
+#     deps = [
+#         ":rocm_tracer_utils",
+#         ":rocm_collector",
+#         "//xla/stream_executor/rocm:roctracer_wrapper",
+#         "//xla/tsl/profiler/backends/cpu:annotation_stack",
+#         "//xla/tsl/profiler/utils:time_utils",
+#         "//xla/tsl/profiler/utils:xplane_builder",
+#         "//xla/tsl/profiler/utils:xplane_schema",
+#         "//xla/tsl/profiler/utils:xplane_utils",
+#         "//xla/tsl/util:env_var",
+#         "@com_google_absl//absl/container:fixed_array",
+#         "@com_google_absl//absl/container:flat_hash_map",
+#         "@com_google_absl//absl/container:flat_hash_set",
+#         "@com_google_absl//absl/container:node_hash_map",
+#         "@com_google_absl//absl/container:node_hash_set",
+#         "@com_google_absl//absl/status",
+#         "@com_google_absl//absl/synchronization",
+#         "@local_config_rocm//rocm:rocm_headers",
+#         "@tsl//tsl/platform:env",
+#         "@tsl//tsl/platform:errors",
+#         "@tsl//tsl/platform:logging",
+#         "@tsl//tsl/platform:macros",
+#         "@tsl//tsl/platform:platform_port",
+#         "@tsl//tsl/platform:status",
+#         "@tsl//tsl/platform:thread_annotations",
+#         "@tsl//tsl/platform:types",
+#         "@tsl//tsl/profiler/lib:profiler_factory",
+#         "@tsl//tsl/profiler/lib:profiler_interface",
+#     ],
+# )
 
 xla_cc_test(
     name = "rocm_tracer_test",
