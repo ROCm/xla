@@ -36,6 +36,7 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
+#include "xla/debug_options_flags.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_input_output_alias_config.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -74,6 +75,22 @@ namespace gpu {
 
 namespace {
 
+bool EnableAsyncCollectives() {
+  static bool value = []{
+    auto opts = GetDebugOptionsFromFlags();
+    bool enabled = true;
+    for (auto type : opts.xla_gpu_disable_async_collectives()) {
+      if (type == DebugOptions::REDUCESCATTER || 
+          type == DebugOptions::ALLTOALL) {
+        enabled = false;
+        break;
+      }
+    }
+    return enabled;
+  }();
+  return value;
+}
+
 bool ShouldScheduleAsEarlyAsPossible(const HloInstruction& instr) {
   switch (instr.opcode()) {
     case HloOpcode::kAllReduceStart:
@@ -81,7 +98,7 @@ bool ShouldScheduleAsEarlyAsPossible(const HloInstruction& instr) {
       return !IsSyncCollective(&instr);
     case HloOpcode::kAsyncStart:
       // Start async ops as early as possible to allow more concurrency.
-      return true;
+      return EnableAsyncCollectives();
     case HloOpcode::kCustomCall:
       return static_cast<const HloCustomCallInstruction&>(instr)
                  .custom_call_schedule() ==
@@ -106,7 +123,7 @@ bool ShouldScheduleAsLateAsPossible(const HloInstruction& instr) {
     case HloOpcode::kAsyncDone:
       // Schedule as many other ops as possible before blocking on the
       // completion of async ops.
-      return true;
+      return EnableAsyncCollectives();
     case HloOpcode::kCustomCall:
       return static_cast<const HloCustomCallInstruction&>(instr)
                  .custom_call_schedule() == CustomCallSchedule::SCHEDULE_LATEST;
