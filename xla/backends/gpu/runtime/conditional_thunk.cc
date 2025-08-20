@@ -107,17 +107,27 @@ absl::Status ConditionalThunk::ExecuteOnStream(const ExecuteParams& params) {
 
   se::DeviceMemoryBase branch_index_address =
       params.buffer_allocations->GetDeviceAddress(branch_index_buffer_index_);
+
+  // Use a side memcpy stream so we don't block the compute stream.
+  auto memcpy_stream = stream.parent()->CreateStream();
+  TF_RET_CHECK(memcpy_stream.ok());
+  std::unique_ptr<se::Stream> d2h = std::move(memcpy_stream.value());
+  d2h->WaitFor(&stream);
+
   if (config_.branch_index_is_bool) {
-    TF_RETURN_IF_ERROR(stream.Memcpy(std::get<bool*>(branch_index_or_pred),
-                                     branch_index_address, sizeof(bool)));
+    TF_RETURN_IF_ERROR(d2h->Memcpy(std::get<bool*>(branch_index_or_pred),
+                                   branch_index_address, sizeof(bool)));
   } else {
-    TF_RETURN_IF_ERROR(stream.Memcpy(std::get<int32_t*>(branch_index_or_pred),
-                                     branch_index_address, sizeof(int32_t)));
+    TF_RETURN_IF_ERROR(d2h->Memcpy(std::get<int32_t*>(branch_index_or_pred),
+                                   branch_index_address, sizeof(int32_t)));
   }
 
-  if (absl::Status blocked = stream.BlockHostUntilDone(); !blocked.ok()) {
-    return Internal("Failed to retrieve branch_index value on stream %p: %s.",
-                    &stream, blocked.message());
+  if (absl::Status blocked = d2h->BlockHostUntilDone(); !blocked.ok()) {
+    return Internal(
+        "Failed to retrieve branch_index value on stream %p for op=[%s, type: "
+        "%s]: %s.",
+        d2h.get(), this->profile_annotation(), this->KindToString(this->kind()),
+        blocked.message());
   }
 
   int32_t branch_index =
