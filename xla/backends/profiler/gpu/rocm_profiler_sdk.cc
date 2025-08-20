@@ -19,7 +19,7 @@ limitations under the License.
 // keep the compiler and linker happy.  Once real logging is implemented, you
 // can replace the stubs with the actual logic.
 
-#include "xla/backends/profiler/gpu/rocm_tracer_v3.h"
+#include "xla/backends/profiler/gpu/rocm_profiler_sdk.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 

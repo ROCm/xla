@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_H_
-#define XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_H_
+#ifndef XLA_BACKENDS_PROFILER_GPU_ROCM_PROFILER_SDK_H_
+#define XLA_BACKENDS_PROFILER_GPU_ROCM_PROFILER_SDK_H_
 
 #include "xla/stream_executor/rocm/roctracer_wrapper.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
@@ -95,6 +95,7 @@ class RocmTracer {
   AnnotationMap annotation_map_{/* default size, e.g. */ 1024 * 1024};
 
  public:
+  // Type alias for rocprofiler-sdk kernel symbol registration callback data structure
   using kernel_symbol_data_t =
       rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t;
 
@@ -134,4 +135,4 @@ class RocmTracer {
 }  // namespace profiler
 }  // namespace xla
 
-#endif  // XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_H_
+#endif  // XLA_BACKENDS_PROFILER_GPU_ROCM_PROFILER_SDK_H_

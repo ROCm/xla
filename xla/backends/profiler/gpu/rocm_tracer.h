@@ -8,11 +8,9 @@
 #endif
 
 #if XLA_GPU_ROCM_TRACER_BACKEND == 3
-  // Native v3 header 
-  #include "xla/backends/profiler/gpu/rocm_tracer_v3.h"
+  #include "xla/backends/profiler/gpu/rocm_profiler_sdk.h"
 #else
-  // Adapter that wraps v1 and looks like v3
-  #include "xla/backends/profiler/gpu/rocm_tracer_v1_adapter.h"
+  #include "xla/backends/profiler/gpu/rocm_tracer_v1.h"
 #endif
 
 #endif  // XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_FACADE_H_
