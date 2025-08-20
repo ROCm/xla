@@ -133,6 +133,7 @@ class Thunk {
     kCollectivePermute,
     kCollectivePermuteDone,
     kCollectivePermuteStart,
+    kCollectiveKernel,
     kCommandBuffer,
     kConditional,
     kConvolution,
@@ -479,17 +480,19 @@ class Thunk {
   virtual void ForAllThunks(absl::FunctionRef<void(const Thunk*)> fn) const;
 
   // A helper function to get the `GpuCollectives*` pointer from the
+  // CollectiveExecuteParams.
+  static absl::StatusOr<GpuCollectives * absl_nonnull> GetGpuCollectives(
+      CollectiveExecuteParams const& params);
+
+  // A helper function to get the `GpuCollectives*` pointer from the
   // thunk parameters. Returns an error if collectives API is not provided.
   template <typename Params>
-  static absl::StatusOr<GpuCollectives*> GetGpuCollectives(
+  static absl::StatusOr<GpuCollectives* absl_nonnull> GetGpuCollectives(
       const Params& params) {
     if (params.collective_params == nullptr) {
       return Internal("Collective params are not provided");
     }
-    if (params.collective_params->collectives == nullptr) {
-      return Internal("Collectives API is not provided");
-    }
-    return params.collective_params->collectives;
+    return GetGpuCollectives(*params.collective_params);
   }
 
  private:

@@ -150,53 +150,6 @@ absl::Status RendezvousAfterKernelFinish(
   return absl::OkStatus();
 }
 
-absl::Status RunOneShotAllReduce(const GpuCliqueKey& clique_key, RankId rank,
-                                 std::vector<DeviceBufferPair>& buffers,
-                                 se::Stream& stream, Communicator* comm,
-                                 se::DeviceMemoryBase local_buffer,
-                                 se::Event* start_event, se::Event* end_event) {
-  int device_ordinal = stream.parent()->device_ordinal();
-  VLOG(3) << "Performing one-shot all-reduce from device ordinal: "
-          << device_ordinal;
-
-  // TODO(b/407736956): Support variadic all-reduce.
-  if (buffers.size() > 1) {
-    return absl::UnimplementedError(
-        "One-shot kernel does not support variadic all-reduce");
-  }
-  TF_ASSIGN_OR_RETURN(int32_t num_ranks, comm->NumRanks());
-
-  const DeviceBufferPair& buffer = buffers[0];
-
-  // Buffer assignment aliases the source buffer to the destination buffer. This
-  // works for NCCL implementation, but for one-shot kernel, input and output
-  // buffers should be different. We do not have enough information at buffer
-  // assignement time to change aliasing, so we allocate a new device buffer
-  // ourselves and copy the data to it.
-  // TODO(b/407736956): Fuse the copy into the one-shot kernel.
-  TF_RETURN_IF_ERROR(stream.MemcpyD2D(&local_buffer, buffer.source_buffer,
-                                      buffer.source_buffer.size()));
-
-  TF_ASSIGN_OR_RETURN(
-      std::shared_ptr<std::vector<RendezvousValue>> rendezvous_values,
-      RendezvousBeforeKernelStart(clique_key, rank, num_ranks, local_buffer,
-                                  stream, start_event, end_event));
-
-  absl::InlinedVector<se::DeviceMemoryBase, 4> input_ptrs;
-  for (auto& value : *rendezvous_values) {
-    input_ptrs.push_back(value.input_buffer);
-  }
-
-  // TF_RETURN_IF_ERROR(RunAllReduceKernel(&stream, buffer.element_type,
-  //                                       input_ptrs, buffer.destination_buffer,
-  //                                       num_ranks, buffer.element_count));
-
-  TF_RETURN_IF_ERROR(RendezvousAfterKernelFinish(
-      clique_key, rank, num_ranks, stream, end_event, rendezvous_values));
-
-  return absl::OkStatus();
-}
-
 absl::Status CheckImplementableInst(const HloInstruction* inst,
                                     Thunk::Kind reduction_op) {
   for (HloInstruction* operand : inst->operands()) {
@@ -265,11 +218,18 @@ AllReduceStartThunk::AllReduceStartThunk(ThunkInfo thunk_info,
     : AllReduceReduceScatterThunkBase(
           Thunk::kAllReduceStart, thunk_info, GetAllReduceConfigInst(inst),
           std::move(buffers), IsGPUSyncCollective(*inst)),
-      one_shot_kernel_enabled_(
+      collective_kernel_thunk_{
+          thunk_info,
+          config_.config,
+          config_.reduction_kind,
+          IsAsync(),
+          buffers_,
+          /*is_collective_kernel_enabled=*/
           inst->GetModule()
               ->config()
               .debug_options()
-              .xla_gpu_unsupported_use_all_reduce_one_shot_kernel()) {}
+              .xla_gpu_unsupported_use_all_reduce_one_shot_kernel(),
+      } {}
 
 absl::Status AllReduceStartThunk::CheckImplementable(
     const HloAllReduceInstruction* inst, int64_t replica_count,
@@ -284,84 +244,17 @@ CollectiveOpGroupMode AllReduceStartThunk::GetGroupMode(
   return GetGroupModeInst(inst);
 }
 
-// absl::StatusOr<bool> AllReduceStartThunk::ShouldUseOneShotAllReduceKernel(
-//     const GpuCliqueKey& clique_key,
-//     const CollectiveCliques* collective_cliques) {
-//   if (!one_shot_kernel_enabled_) {
-//     return false;
-//   }
-
-//   // TODO(b/407736956): Support variadic all-reduce.
-//   if (buffers_.size() != 1) {
-//     return false;
-//   }
-
-//   int64_t num_elements = buffers_[0].element_count;
-//   PrimitiveType element_type = config().operand_element_type[0];
-
-//   int64_t input_size_bytes =
-//       num_elements * ShapeUtil::ByteSizeOfPrimitiveType(element_type);
-
-//   // One-shot all-reduce is only beneficial for small inputs.
-//   if (input_size_bytes > kMaxOneShotAllReduceSizeBytes) {
-//     return false;
-//   }
-
-//   TF_ASSIGN_OR_RETURN(bool peer_access_enabled,
-//                       collective_cliques->peer_access_enabled(clique_key));
-
-//   // Check that peer access is enabled.
-//   if (!peer_access_enabled) {
-//     return false;
-//   }
-
-//   return IsAllReduceKernelSupported(clique_key.num_local_participants(),
-//                                     config().operand_element_type[0]);
-// }
-
 absl::Status AllReduceStartThunk::Initialize(const InitializeParams& params) {
   TF_RETURN_IF_ERROR(CollectiveThunk::Initialize(params));
-
-  TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
   TF_ASSIGN_OR_RETURN(
       GpuCliqueKey clique_key,
-      GetGpuCliqueKey(collectives, *params.collective_params,
-                      config().replica_groups, config().group_mode,
-                      GetAsyncStreamKind()));
-
-  // TF_ASSIGN_OR_RETURN(
-  //     bool use_one_shot_kernel,
-  //     ShouldUseOneShotAllReduceKernel(clique_key, params.collective_cliques));
-
-  // if (use_one_shot_kernel) {
-  //   absl::MutexLock lock(&mutex_);
-
-  //   if (!local_buffer_allocs_.contains(params.executor)) {
-  //     int64_t max_size = 0;
-  //     for (auto buffer : buffers_) {
-  //       max_size = std::max(max_size, buffer.source_buffer.size());
-  //     }
-
-  //     se::DeviceMemoryHandle local_buffer_alloc(
-  //         params.executor, params.executor->Allocate(max_size));
-
-  //     local_buffer_allocs_.emplace(params.executor,
-  //                                  std::move(local_buffer_alloc));
-  //   }
-
-  //   if (!start_events_.contains(params.executor)) {
-  //     TF_ASSIGN_OR_RETURN(std::unique_ptr<se::Event> event,
-  //                         params.executor->CreateEvent());
-  //     start_events_.emplace(params.executor, std::move(event));
-  //   }
-
-  //   if (!end_events_.contains(params.executor)) {
-  //     TF_ASSIGN_OR_RETURN(std::unique_ptr<se::Event> event,
-  //                         params.executor->CreateEvent());
-  //     end_events_.emplace(params.executor, std::move(event));
-  //   }
-  // }
-
+      GetCollectiveGpuCliqueKey(*params.collective_params, config()));
+  TF_ASSIGN_OR_RETURN(bool use_collective_kernel,
+                      collective_kernel_thunk_.IsSupported(
+                          clique_key, params.collective_cliques));
+  if (use_collective_kernel) {
+    TF_RETURN_IF_ERROR(collective_kernel_thunk_.Initialize(params));
+  }
   return absl::OkStatus();
 }
 
@@ -374,31 +267,16 @@ absl::Status AllReduceStartThunk::RunCollective(
                              config_.config.operand_element_type));
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
 
-  // TF_ASSIGN_OR_RETURN(bool use_one_shot_kernel,
-  //                     ShouldUseOneShotAllReduceKernel(
-  //                         comm_handle.clique_key, params.collective_cliques));
+  TF_ASSIGN_OR_RETURN(bool use_collective_kernel,
+                      collective_kernel_thunk_.IsSupported(
+                          comm_handle.clique_key, params.collective_cliques));
 
-  // if (use_one_shot_kernel) {
-  //   se::Event* start_event = nullptr;
-  //   se::Event* end_event = nullptr;
-  //   se::DeviceMemoryBase local_buffer;
-  //   {
-  //     absl::MutexLock lock(&mutex_);
-  //     local_buffer = local_buffer_allocs_[stream.parent()].memory();
-  //     start_event = start_events_[stream.parent()].get();
-  //     end_event = end_events_[stream.parent()].get();
-  //   }
+  if (use_collective_kernel) {
+    return collective_kernel_thunk_.ExecuteOnStream(params);
+  }
 
-  //   std::optional<RankId> rank =
-  //       comm_handle.clique_key.rank(params.collective_params->global_device_id);
-
-  //   return RunOneShotAllReduce(comm_handle.clique_key, *rank, device_buffers,
-  //                              stream, comm_handle.comm, local_buffer,
-  //                              start_event, end_event);
-  // }
-
-  return RunAllReduce(collectives, config_.reduction_kind, device_buffers,
-                      stream, comm_handle.comm);
+  return RunAllReduce(collectives, config_.reduction_kind, device_buffers, stream,
+                      comm_handle.comm);
 }
 
 ReduceScatterStartThunk::ReduceScatterStartThunk(
