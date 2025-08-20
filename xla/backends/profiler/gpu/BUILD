@@ -381,6 +381,11 @@ cc_library(
   name = "rocm_tracer_utils",
   srcs = ["rocm_tracer_utils.cc"],
   hdrs = ["rocm_tracer_utils.h"],
+  tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
   linkopts = [
     "-Wl,--no-as-needed",
     "-L/opt/rocm/lib",
@@ -460,6 +465,11 @@ cc_library(
         "rocm_profiler_sdk.h",
         "rocm_tracer_v1.h",
     ],
+    tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
     # PROPAGATE the layout macro to every dependent TU:
     defines = select({
         ":use_v1": ["XLA_GPU_ROCM_TRACER_BACKEND=1"],
@@ -476,6 +486,11 @@ cc_library(
         ":use_v3": ["rocm_profiler_sdk.cc"],
         "//conditions:default": ["rocm_profiler_sdk.cc"],
     }),
+    tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
     deps = [
         ":rocm_tracer_headers",
         ":rocm_collector",
@@ -509,6 +524,11 @@ cc_library(
 
 cc_library(
     name = "rocm_tracer",
+    tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
     deps = [":rocm_tracer_headers", ":rocm_tracer_impl"],
     visibility = ["//visibility:public"],
 )
