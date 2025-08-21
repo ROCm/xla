@@ -400,6 +400,7 @@ xla_test(
     srcs = ["rocm_tracer_test.cc"],
     tags = [
         "gpu",
+        "rocm",
         "rocm-only",
     ] + if_google([
         # Optional: only run internally if ROCm config is enabled
@@ -423,6 +424,7 @@ xla_test(
   srcs = ["rocm_collector_test.cc"],
   tags = [
       "gpu",
+      "rocm",
       "rocm-only",
   ] + if_google([
       "manual",
