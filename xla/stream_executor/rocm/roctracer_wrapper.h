@@ -76,7 +76,7 @@ namespace wrap {
 #endif  // PLATFORM_GOOGLE
 
 
-#if TF_ROCM_VERSION >= 50300 && TF_ROCM_VERSION < 60300
+#if TF_ROCM_VERSION >= 50300
 #define FOREACH_ROCTRACER_API(DO_FUNC)           \
   DO_FUNC(roctracer_default_pool_expl)           \
   DO_FUNC(roctracer_disable_domain_activity)     \
