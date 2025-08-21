@@ -22,9 +22,9 @@ limitations under the License.
 #endif
 
 #if XLA_GPU_ROCM_TRACER_BACKEND == 3
-  #include "xla/backends/profiler/gpu/rocm_profiler_sdk.h"
+#include "xla/backends/profiler/gpu/rocm_profiler_sdk.h"
 #else
-  #include "xla/backends/profiler/gpu/rocm_tracer_v1.h"
+#include "xla/backends/profiler/gpu/rocm_tracer_v1.h"
 #endif
 
 #endif  // XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_FACADE_H_

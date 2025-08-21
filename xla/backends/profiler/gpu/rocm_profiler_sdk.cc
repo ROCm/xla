@@ -560,7 +560,7 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
       id->name, static_cast<unsigned>(priority), static_cast<unsigned>(major),
       static_cast<unsigned>(minor), static_cast<unsigned>(patch),
       runtime_version ? runtime_version : "unknown");
-  
+
   // rocprofiler-sdk api call
   static rocprofiler_tool_configure_result_t cfg{
       sizeof(rocprofiler_tool_configure_result_t), &toolInitStatic,

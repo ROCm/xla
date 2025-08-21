@@ -95,7 +95,8 @@ class RocmTracer {
   AnnotationMap annotation_map_{/* default size, e.g. */ 1024 * 1024};
 
  public:
-  // Type alias for rocprofiler-sdk kernel symbol registration callback data structure
+  // Type alias for rocprofiler-sdk kernel symbol registration callback data
+  // structure
   using kernel_symbol_data_t =
       rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t;
 

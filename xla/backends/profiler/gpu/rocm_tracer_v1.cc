@@ -964,7 +964,7 @@ void RocmActivityCallbackImpl::AddHipKernelActivityEvent(
   event.domain = RocmTracerEventDomain::HIP_API;
   event.type = RocmTracerEventType::Kernel;
   event.source = RocmTracerEventSource::Activity;
-  event.name =  /* we use the API name instead*/
+  event.name = /* we use the API name instead*/
       se::wrap::roctracer_op_string(record->domain, record->op, record->kind);
   event.correlation_id = record->correlation_id;
   // TODO(rocm-profiler): CUDA uses device id and correlation ID for finding
