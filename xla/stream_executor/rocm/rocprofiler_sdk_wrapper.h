@@ -53,10 +53,10 @@ namespace wrap {
       static const char* kName = #API_NAME;                                \
       void* f;                                                             \
       auto s = tsl::Env::Default()->GetSymbolFromLibrary(                  \
-          tsl::internal::CachedDsoLoader::GetRoctracerDsoHandle().value(), \
+          tsl::internal::CachedDsoLoader::GetRocprofilerSdkDsoHandle().value(), \
           kName, &f);                                                      \
       CHECK(s.ok()) << "could not find " << kName                          \
-                    << " in roctracer DSO; dlerror: " << s.message();      \
+                    << " in rocprofiler-sdk DSO; dlerror: " << s.message();      \
       return reinterpret_cast<FuncPtrT>(f);                                \
     }();                                                                   \
     return loaded(args...);                                                \

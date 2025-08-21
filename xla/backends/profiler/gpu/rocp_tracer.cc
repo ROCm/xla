@@ -54,7 +54,7 @@ using tsl::profiler::AnnotationStack;
 // represents the maximum number of chars
 static constexpr int kMaxSymbolSize = 1024;
 // represents an invalid or uninitialized device ID used in RocpTracer events.
-constexpr uint32_t RocpTracerEvent::kInvalidDeviceId;
+constexpr uint32_t RocmTracerEvent::kInvalidDeviceId;
 
 std::string demangle(const char* name) {
 #ifndef _MSC_VER
@@ -95,15 +95,15 @@ inline auto GetCallbackTracingNames() {
 std::vector<rocprofiler_agent_v0_t> GetGpuDeviceAgents();
 
 //-----------------------------------------------------------------------------
-const char* GetRocpTracerEventSourceName(const RocpTracerEventSource& source) {
+const char* GetRocpTracerEventSourceName(const RocmTracerEventSource& source) {
   switch (source) {
-    case RocpTracerEventSource::ApiCallback:
+    case RocmTracerEventSource::ApiCallback:
       return "ApiCallback";
       break;
-    case RocpTracerEventSource::Activity:
+    case RocmTracerEventSource::Activity:
       return "Activity";
       break;
-    case RocpTracerEventSource::Invalid:
+    case RocmTracerEventSource::Invalid:
       return "Invalid";
       break;
     default:
@@ -115,25 +115,25 @@ const char* GetRocpTracerEventSourceName(const RocpTracerEventSource& source) {
 
 // FIXME(rocm-profiler): These domain names are not consistent with the
 // GetActivityDomainName function
-const char* GetRocpTracerEventDomainName(const RocpTracerEventDomain& domain) {
+const char* GetRocpTracerEventDomainName(const RocmTracerEventDomain& domain) {
   switch (domain) {
-    case RocpTracerEventDomain::HIP_API:
+    case RocmTracerEventDomain::HIP_API:
       return "HIP_API";
       break;
-    case RocpTracerEventDomain::HIP_OPS:
+    case RocmTracerEventDomain::HIP_OPS:
       return "HIP_OPS";
       break;
     default:
-      LOG(WARNING) << "RocpTracerEventDomain::InvalidDomain";
+      LOG(WARNING) << "RocmTracerEventDomain::InvalidDomain";
       DCHECK(false);
       return "";
   }
   return "";
 }
 
-const char* GetRocpTracerEventTypeName(const RocpTracerEventType& type) {
+const char* GetRocpTracerEventTypeName(const RocmTracerEventType& type) {
 #define OO(x)                  \
-  case RocpTracerEventType::x: \
+  case RocmTracerEventType::x: \
     return #x;
   switch (type) {
     OO(Kernel)
@@ -232,23 +232,23 @@ void RocpTracer::Enable(const RocpTracerOptions& options,
 }
 
 void RocpTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
-                             RocpTracerEvent* traced_event) {
+                             RocmTracerEvent* traced_event) {
   const auto& rec =
       *static_cast<const rocprofiler_buffer_tracing_hip_api_record_t*>(
           hdr->payload);
 
-  traced_event->type = RocpTracerEventType::Kernel;
-  traced_event->source = RocpTracerEventSource::ApiCallback;
-  traced_event->domain = RocpTracerEventDomain::HIP_API;
+  traced_event->type = RocmTracerEventType::Kernel;
+  traced_event->source = RocmTracerEventSource::ApiCallback;
+  traced_event->domain = RocmTracerEventDomain::HIP_API;
   traced_event->name = "??";
   traced_event->start_time_ns = rec.start_timestamp;
   traced_event->end_time_ns = rec.end_timestamp;
-  traced_event->device_id = RocpTracerEvent::kInvalidDeviceId;
+  traced_event->device_id = RocmTracerEvent::kInvalidDeviceId;
   traced_event->correlation_id = rec.correlation_id.internal;
   traced_event->annotation =
       annotation_map()->LookUp(traced_event->correlation_id);
   traced_event->thread_id = rec.thread_id;
-  traced_event->stream_id = RocpTracerEvent::kInvalidStreamId;
+  traced_event->stream_id = RocmTracerEvent::kInvalidStreamId;
   traced_event->kernel_info = KernelDetails{};
 
   {
@@ -259,14 +259,14 @@ void RocpTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
       const auto& vec = name_info_[kind];
       const size_t op = static_cast<size_t>(rec.operation);
       if (op < vec.operations.size()) {
-        trace_event->name = vec[op];
+        traced_event->name = vec[op];
       } else {
         static std::atomic<int> once{0};
         if (once.fetch_add(1) == 0) {
           LOG(ERROR) << "HIP op OOB: kind " << kind << " op = " << op
                      << " vec.size() = " << vec.operations.size();
         }
-        trace_event->name = "HIP_UNKNOWN_OP";
+        traced_event->name = "HIP_UNKNOWN_OP";
       }
     } else {
       static std::atomic<int> once{0};
@@ -274,25 +274,25 @@ void RocpTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
         LOG(ERROR) << "HIP kind OOB: kind = " << kind
                    << " name_info_.size() = " << name_info_.size();
       }
-      trace_event->name = "HIP_UNKNOWN_KIND";
+      traced_event->name = "HIP_UNKNOWN_KIND";
     }
   }
 
   if (isCopyApi(rec.operation)) {
     // actually one needs to set the real type
-    traced_event->type = RocpTracerEventType::MemcpyOther;
+    traced_event->type = RocmTracerEventType::MemcpyOther;
   }
 }
 
 void RocpTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
-                             RocpTracerEvent* traced_event) {
+                             RocmTracerEvent* traced_event) {
   const auto& rec =
       *static_cast<const rocprofiler_buffer_tracing_memory_copy_record_t*>(
           hdr->payload);
 
 #define OO(src, target)                               \
   case ROCPROFILER_MEMORY_COPY_##src:                 \
-    traced_event->type = RocpTracerEventType::target; \
+    traced_event->type = RocmTracerEventType::target; \
     traced_event->name = #target;                     \
     break;
 
@@ -304,20 +304,20 @@ void RocpTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
     OO(DEVICE_TO_DEVICE, MemcpyD2D)
     default:
       LOG(WARNING) << "Unexpected memcopy operation " << rec.operation;
-      traced_event->type = RocpTracerEventType::MemcpyOther;
+      traced_event->type = RocmTracerEventType::MemcpyOther;
   }
 #undef OO
   const auto &src_gpu = agents_[static_cast<uint32_t>(rec.src_agent_id.handle)],
              &dst_gpu = agents_[static_cast<uint32_t>(rec.dst_agent_id.handle)];
 
   // Assign device_id based on copy direction
-  if (traced_event->type == RocpTracerEventType::MemcpyH2D &&
+  if (traced_event->type == RocmTracerEventType::MemcpyH2D &&
       dst_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
     traced_event->device_id = dst_gpu.id.handle;  // Destination is GPU
-  } else if (traced_event->type == RocpTracerEventType::MemcpyD2H &&
+  } else if (traced_event->type == RocmTracerEventType::MemcpyD2H &&
              src_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
     traced_event->device_id = src_gpu.id.handle;  // Source is GPU
-  } else if (traced_event->type == RocpTracerEventType::MemcpyD2D) {
+  } else if (traced_event->type == RocmTracerEventType::MemcpyD2D) {
     // Prefer destination GPU for D2D
     traced_event->device_id = dst_gpu.id.handle;
   } else {
@@ -334,8 +334,8 @@ void RocpTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
     }
   }
 
-  traced_event->source = RocpTracerEventSource::Activity;
-  traced_event->domain = RocpTracerEventDomain::HIP_OPS;
+  traced_event->source = RocmTracerEventSource::Activity;
+  traced_event->domain = RocmTracerEventDomain::HIP_OPS;
   traced_event->start_time_ns = rec.start_timestamp;
   traced_event->end_time_ns = rec.end_timestamp;
   traced_event->correlation_id = rec.correlation_id.internal;
@@ -344,7 +344,7 @@ void RocpTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
   traced_event->thread_id = rec.thread_id;
   // we do not know valid stream ID for memcpy
   // rec.stream_id.handle;
-  traced_event->stream_id = RocpTracerEvent::kInvalidStreamId;
+  traced_event->stream_id = RocmTracerEvent::kInvalidStreamId;
   traced_event->memcpy_info = MemcpyDetails{
       .num_bytes = rec.bytes,
       .destination = static_cast<uint32_t>(dst_gpu.id.handle),
@@ -358,15 +358,15 @@ void RocpTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
 }
 
 void RocpTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
-                             RocpTracerEvent* traced_event) {
+                             RocmTracerEvent* traced_event) {
   const auto& rec =
       *static_cast<const rocprofiler_buffer_tracing_kernel_dispatch_record_t*>(
           hdr->payload);
 
   const auto& kinfo = rec.dispatch_info;
-  traced_event->type = RocpTracerEventType::Kernel;
-  traced_event->source = RocpTracerEventSource::Activity;
-  traced_event->domain = RocpTracerEventDomain::HIP_OPS;
+  traced_event->type = RocmTracerEventType::Kernel;
+  traced_event->source = RocmTracerEventSource::Activity;
+  traced_event->domain = RocmTracerEventDomain::HIP_OPS;
   traced_event->name = "??";
   traced_event->start_time_ns = rec.start_timestamp;
   traced_event->end_time_ns = rec.end_timestamp;
@@ -409,7 +409,7 @@ void RocpTracer::TracingCallback(rocprofiler_context_id_t context,
   }
 
   for (size_t i = 0; i < num_headers; i++) {
-    RocpTracerEvent event;
+    RocmTracerEvent event;
     auto header = headers[i];
 
     if (header->category != ROCPROFILER_BUFFER_CATEGORY_TRACING) continue;
@@ -659,5 +659,3 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
 void __attribute__((constructor)) init_rocm_lib() {
   rocprofiler_force_configure(xla::profiler::rocprofiler_configure);
 }
-
-#endif  //

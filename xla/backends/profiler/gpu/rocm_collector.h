@@ -346,14 +346,14 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
   friend class RocprofTraceCollectorImpl; 
 };  // RocmTraceCollectorImpl
 
-class RocprofTraceCollectorImpl : private RocmTraceCollectorImpl {
+class RocprofTraceCollectorImpl : public RocmTraceCollectorImpl {
  public:
   RocprofTraceCollectorImpl(const RocmTraceCollectorOptions& options,
                             uint64_t start_walltime_ns, uint64_t start_gputime_ns)
       : RocmTraceCollectorImpl(options, start_walltime_ns, start_gputime_ns) {}
 
  private:
-  std::vector<RocmTracerEvent> ApiActivityInfoExchange()
+  std::vector<RocmTracerEvent> ApiActivityInfoExchange() override
       TF_EXCLUSIVE_LOCKS_REQUIRED(event_maps_mutex_);
 };
 
