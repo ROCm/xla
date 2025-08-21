@@ -223,7 +223,7 @@ config_setting(
 )
 
 config_setting(
-    name = "use_v3",
+    name = "use_rocprofiler_sdk",
     values = {"define": "xla_rocm_profiler=v3"},
 )
 
@@ -231,7 +231,7 @@ cc_library(
     name = "rocm_profiler_backend_cfg",
     defines = select({
         ":use_v1": ["XLA_GPU_ROCM_TRACER_BACKEND=1"],
-        ":use_v3": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
+        ":use_rocprofiler_sdk": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
         "//conditions:default": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
     }),
     visibility = ["//visibility:public"],
@@ -400,7 +400,6 @@ xla_test(
     srcs = ["rocm_tracer_test.cc"],
     tags = [
         "gpu",
-        "rocm",
         "rocm-only",
     ] + if_google([
         # Optional: only run internally if ROCm config is enabled
@@ -424,7 +423,6 @@ xla_test(
   srcs = ["rocm_collector_test.cc"],
   tags = [
       "gpu",
-      "rocm",
       "rocm-only",
   ] + if_google([
       "manual",
