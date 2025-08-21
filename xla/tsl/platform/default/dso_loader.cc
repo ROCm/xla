@@ -189,6 +189,10 @@ absl::StatusOr<void*> GetRoctracerDsoHandle() {
   return GetDsoHandle("roctracer64", GetRoctracerVersion());
 }
 
+absl::StatusOr<void*> GetRocprofilerSdkDsoHandle() {
+  return GetDsoHandle("rocprofiler-sdk", GetRoctracerVersion());
+}
+
 absl::StatusOr<void*> GetHipsparseDsoHandle() {
   return GetDsoHandle("hipsparse", GetHipsparseVersion());
 }
@@ -271,6 +275,11 @@ absl::StatusOr<void*> GetRocrandDsoHandle() {
 
 absl::StatusOr<void*> GetRoctracerDsoHandle() {
   static auto result = new auto(DsoLoader::GetRoctracerDsoHandle());
+  return *result;
+}
+
+absl::StatusOr<void*> GetRocprofilerSdkDsoHandle() {
+  static auto result = new auto(DsoLoader::GetRocprofilerSdkDsoHandle());
   return *result;
 }
 

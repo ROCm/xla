@@ -783,6 +783,37 @@ cc_library(
     alwayslink = True,
 )
 
+cc_library(
+    name = "rocprofiler_sdk_if_static",
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = if_static([
+        "@local_config_rocm//rocm:rocprofiler_sdk",
+    ]),
+)
+
+cc_library(
+    name = "rocprofiler_sdk_wrapper",
+    srcs = ["rocprofiler_sdk_wrapper.h"],
+    hdrs = ["rocprofiler_sdk_wrapper.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_executor",
+        "//xla/tsl/platform:env",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform",
+        "@tsl//tsl/platform:dso_loader",
+    ] + if_static([
+        ":rocprofiler_sdk_if_static",
+    ]),
+    alwayslink = True,
+)
+
 rocm_library(
     name = "rocm_helpers",
     srcs = ["rocm_helpers.cu.cc"],

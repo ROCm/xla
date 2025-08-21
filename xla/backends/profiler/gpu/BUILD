@@ -52,6 +52,7 @@ tsl_gpu_library(
         # keep sorted
         ":rocm_collector",
         ":rocm_tracer",
+        ":rocp_tracer",
     ]),
     alwayslink = 1,
 )
@@ -232,6 +233,7 @@ tsl_gpu_library(
     visibility = ["//visibility:public"],
     deps = [
         "//xla/stream_executor/rocm:roctracer_wrapper",
+        "//xla/stream_executor/rocm:rocprofiler_sdk_wrapper",
         "//xla/tsl/profiler/backends/cpu:annotation_stack",
         "//xla/tsl/profiler/utils:parse_annotation",
         "//xla/tsl/profiler/utils:xplane_builder",
@@ -260,16 +262,44 @@ tsl_gpu_library(
 )
 
 tsl_gpu_library(
+    name = "rocp_tracer",
+    srcs = if_rocm(["rocp_tracer.cc"]),
+    hdrs = if_rocm(["rocp_tracer.h"]),
+    copts = tf_profiler_copts() + tsl_copts(),
+    tags = [
+        "gpu",
+        "rocm-only",
+    ] + if_google([
+        # TODO(b/360374983): Remove this tag once the target can be built without --config=rocm.
+        "manual",
+    ]),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":rocm_collector",
+        "//xla/stream_executor/rocm:rocprofiler_sdk_wrapper",
+        "//xla/tsl/profiler/backends/cpu:annotation_stack",
+        "//xla/tsl/profiler/utils:time_utils",
+        "@com_google_absl//absl/container:fixed_array",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/container:node_hash_map",
+        "@com_google_absl//absl/container:node_hash_set",
+        "@com_google_absl//absl/status",
+        "@tsl//tsl/platform:env",
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform:macros",
+        "@tsl//tsl/platform:platform_port",
+        "@tsl//tsl/platform:status",
+        "@tsl//tsl/platform:types",
+    ],
+)
+
+tsl_gpu_library(
     name = "rocm_tracer",
     srcs = if_rocm(["rocm_tracer.cc"]),
     hdrs = if_rocm(["rocm_tracer.h"]),
     copts = tf_profiler_copts() + tsl_copts(),
-    linkopts = select({
-        "//conditions:default": [
-            "-L/opt/rocm/lib",      # search path for all ROCm shared objects
-            "-lrocprofiler-sdk",    # the library that owns the missing symbols
-        ],
-    }),
     tags = [
         "gpu",
         "rocm-only",
