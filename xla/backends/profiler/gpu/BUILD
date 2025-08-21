@@ -393,7 +393,8 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
-xla_cc_test(
+# upstream it's called xla_cc_test as no GPU involved.
+xla_test(
     name = "rocm_tracer_test",
     size = "small",
     srcs = ["rocm_tracer_test.cc"],
@@ -417,7 +418,7 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(    
+xla_test(    
   name = "rocm_collector_test",
   size = "small",
   srcs = ["rocm_collector_test.cc"],
