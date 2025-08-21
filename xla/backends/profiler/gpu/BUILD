@@ -333,7 +333,7 @@ cc_library(
     # PROPAGATE the layout macro to every dependent TU:
     defines = select({
         ":use_v1": ["XLA_GPU_ROCM_TRACER_BACKEND=1"],
-        ":use_v3": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
+        ":use_rocprofiler_sdk": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
         "//conditions:default": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
     }),
     visibility = ["//visibility:public"],
@@ -343,7 +343,7 @@ cc_library(
     name = "rocm_tracer_impl",
     srcs = select({
         ":use_v1": ["rocm_tracer_v1.cc"],
-        ":use_v3": ["rocm_profiler_sdk.cc"],
+        ":use_rocprofiler_sdk": ["rocm_profiler_sdk.cc"],
         "//conditions:default": ["rocm_profiler_sdk.cc"],
     }),
     tags = [
@@ -400,7 +400,6 @@ xla_test(
     srcs = ["rocm_tracer_test.cc"],
     tags = [
         "gpu",
-        "rocm",
         "rocm-only",
     ] + if_google([
         # Optional: only run internally if ROCm config is enabled
@@ -424,7 +423,6 @@ xla_test(
   srcs = ["rocm_collector_test.cc"],
   tags = [
       "gpu",
-      "rocm",
       "rocm-only",
   ] + if_google([
       "manual",
