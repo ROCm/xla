@@ -1513,6 +1513,11 @@ cc_library(
 xla_test(
     name = "all_reduce_test",
     srcs = ["all_reduce_test.cc"],
+    backend_tags = {
+        "gpu": [
+            "multi_gpu",
+        ],
+    },
     backends = ["gpu"],
     disabled_backends = [],
     deps = [
