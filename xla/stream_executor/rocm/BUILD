@@ -814,6 +814,7 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":all_reduce_kernel_rocm",
         ":amdhipblaslt_plugin",
         ":hipfft_plugin",
         ":miopen_plugin",
@@ -1063,4 +1064,28 @@ cc_library(
         "@tsl//tsl/platform:errors",
         "@tsl//tsl/platform:statusor",
     ],
+)
+
+rocm_library(
+    name = "all_reduce_kernel_rocm",
+    srcs = [
+        "all_reduce_kernel_rocm.cc",
+        "//xla/stream_executor/gpu:all_reduce_kernel_lib.cu.h",
+    ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_platform_id",
+        "//xla:types",
+        "//xla/service:collective_ops_utils",
+        "//xla/stream_executor:kernel_spec",
+        "//xla/stream_executor/gpu:all_reduce_kernel",
+        "//xla/stream_executor/gpu:gpu_kernel_registry",
+        "@com_google_absl//absl/base",
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
+    alwayslink = 1,
 )
