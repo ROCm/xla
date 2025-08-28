@@ -3170,10 +3170,8 @@ class AllReduceTest
                                    /*enable_p2p_memcpy=*/false) {}
 
   void SetUp() override {
-    if (IsRocm() &&
-        std::get<se::RocmComputeCapability>(Capability()).gfx_version() !=
-            "gfx950") {
-      GTEST_SKIP();
+    if (IsRocm() && !std::get<se::RocmComputeCapability>(Capability()).gfx9_mi300_series()) {
+        GTEST_SKIP();
     }
   }
 
