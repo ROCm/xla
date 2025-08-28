@@ -27,6 +27,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/all_gather_thunk.h"
 #include "xla/backends/gpu/runtime/all_reduce_thunk.h"
 #include "xla/backends/gpu/runtime/all_to_all_thunk.h"
+#include "xla/backends/gpu/runtime/collective_permute_thunk.h"
 #include "xla/backends/gpu/runtime/command_buffer_cmd.h"
 #include "xla/backends/gpu/runtime/conditional_thunk.h"
 #include "xla/backends/gpu/runtime/copy_thunk.h"
@@ -193,6 +194,13 @@ static absl::StatusOr<Command> Convert(const AllGatherStartThunk& thunk) {
                                         thunk.config(), thunk.buffers());
 }
 
+static absl::StatusOr<Command> Convert(const CollectivePermuteStartThunk& thunk,
+                                       ResourceUseVector resources) {
+  return std::make_unique<CollectivePermuteCmd>(thunk.GetP2PConfig(), 
+            thunk.P2PMemcpyEnabled(), thunk.buffers(),
+            thunk.async_events(), resources);
+}
+
 static absl::StatusOr<Command> Convert(
     const DynamicSliceThunk& thunk, const ConvertToCommandsOptions& options) {
   TF_ASSIGN_OR_RETURN(
@@ -296,7 +304,9 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
     case Thunk::Kind::kReduceScatterStart:
       return append(Convert<ReduceScatterStartThunk>(thunk));
     case Thunk::Kind::kAllToAllStart:
-      return append(Convert<AllToAllStartThunk>(thunk));
+      return append(Convert<AllToAllStartThunk>(thunk, resources));
+    case Thunk::Kind::kCollectivePermuteStart:
+      return append(Convert<CollectivePermuteStartThunk>(thunk, resources));
     case Thunk::Kind::kPartitionId:
       return append(Convert<PartitionIdThunk>(thunk));
     case Thunk::Kind::kReplicaId:
@@ -321,6 +331,22 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
     case Thunk::Kind::kAllReduceDone:
     case Thunk::Kind::kReduceScatterDone:
     case Thunk::Kind::kAllToAllDone:
+    case Thunk::Kind::kCollectivePermuteDone:
+      if (options.synchronization_mode ==
+          CommandBufferCmdExecutor::SynchronizationMode::kLHS) {
+        return append(absl::StatusOr<Command>(std::make_unique<AsyncDoneCmd>(
+            static_cast<const CollectiveDoneThunk&>(thunk).async_events(),
+            resources)));
+      } else {
+        if (resources.empty()) {
+          return absl::OkStatus();
+        }
+        // If there control dependencies between these thunks, we will create
+        // an empty command act as dependency nodes.
+        return append(
+            absl::StatusOr<Command>(std::make_unique<EmptyCmd>(resources)));
+      }
+
     case Thunk::Kind::kWaitForStreams:
       return absl::OkStatus();
 
