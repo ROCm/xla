@@ -282,7 +282,7 @@ absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
 
 // Helper over GetGpuCliqueKey that builds key for AsyncStreamKind::kCollective.
 absl::StatusOr<GpuCliqueKey> GetCollectiveGpuCliqueKey(
-    const CollectiveThunk::CollectiveExecuteParams& params,
+    const Thunk::CollectiveExecuteParams& params,
     const CollectiveConfig& collective_config, bool use_nccl = true);
 
 // Returns a communicator and additional information about the clique.
