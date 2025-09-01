@@ -454,7 +454,7 @@ absl::Status HeapSimulator::RunComputation(
             // instruction into "CanShareOperandBufferWithUser" it creates a
             // check failure. The first condition guards against that case.
             if (value->instruction()->IsUserOf(operand_value->instruction()) &&
-                value->instruction()->opcode() != HloOpcode::kCopy &&
+                value->instruction()->opcode() != HloOpcode::kCopy && 
                 dataflow_analysis.CanShareOperandBufferWithUser(
                     operand_value->instruction(), operand_value->index(),
                     value->instruction(), value->index())) {
@@ -2545,6 +2545,7 @@ void GlobalDecreasingSizeBestFitHeap<BufferType>::AddToChunkMap(
 
 absl::StatusOr<HeapSimulator::Result<HloValue>>
 ConstrainedGlobalDecreasingSizeBestFitHeap::Finish() {
+
   std::vector<BufferInterval> sorted_buffer_vec = GetSortedBufferIntervals();
   // Convert into std::list so that erase() is O(1).
   std::list<BufferInterval> sorted_buffer_intervals(sorted_buffer_vec.begin(),
@@ -2598,6 +2599,7 @@ ConstrainedGlobalDecreasingSizeBestFitHeap::Finish() {
 template <typename BufferType>
 absl::StatusOr<HeapSimulator::Result<BufferType>>
 ChooseBestHeapAlgorithm<BufferType>::Finish() {
+
   DCHECK(!algorithms_.empty());
   std::vector<Result> results(algorithms_.size());
   int64_t min_size = INT64_MAX;

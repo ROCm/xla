@@ -28,7 +28,6 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/tsl/platform/errors.h"
 #include "tsl/profiler/lib/scoped_annotation.h"
-
 namespace xla {
 namespace gpu {
 

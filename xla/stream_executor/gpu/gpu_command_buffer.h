@@ -83,10 +83,14 @@ class GpuCommandBuffer : public CommandBuffer {
   // A simple GPU command recorded into a GPU command buffer. Most of the GPU
   // commands have a single node in the GPU graph, i.e. memset or kernel launch.
   struct GpuCommand : public CommandBuffer::Command {
-    explicit GpuCommand(GraphNodeHandle handle) : handle(handle) {}
+    explicit GpuCommand(GraphNodeHandle handle) : handles(1, handle) {}
 
     // A handle to the gpu graph node corresponding to a command.
     GraphNodeHandle handle = nullptr;
+    GpuCommand() = default;
+
+    // A handle to the gpu graph node corresponding to a command.
+    absl::InlinedVector<GraphNodeHandle, 1> handles;
   };
 
   // A GPU command recorded for the Case operation.
@@ -194,6 +198,7 @@ class GpuCommandBuffer : public CommandBuffer {
   static int64_t NotifyExecDestroyed();
 
   using Dependencies = absl::InlinedVector<GraphNodeHandle, 1>;
+  using ChildNodes = absl::InlinedVector<GraphNodeHandle, 2>;
 
  private:
   // Prepares a nested command buffer for an update of the graph.
@@ -287,6 +292,8 @@ class GpuCommandBuffer : public CommandBuffer {
   // APIs for creating and updating underlying GPU graph nodes.
   //===--------------------------------------------------------------------===//
 
+  absl::StatusOr<ChildNodes> GetChildNodes() const;
+
   // Adds a new conditional node to the graph and creates a corresponding nested
   // command buffer.
   virtual absl::StatusOr<GraphConditionalNodeHandle> CreateConditionalNode(
@@ -354,6 +361,20 @@ class GpuCommandBuffer : public CommandBuffer {
   // Returns the number of nodes in the graph associated with this command
   // buffer.
   virtual absl::StatusOr<size_t> GetNodeCount() const = 0;
+
+  // return the list of graph nodes
+  virtual absl::StatusOr<size_t> GraphGetNodes(ChildNodes* pnodes) const = 0;
+
+  virtual absl::StatusOr<GraphNodeHandle> CopyChildNodeToMainGraph(
+      GraphNodeHandle child_node,
+      absl::Span<const GraphNodeHandle> dependencies) {
+    return absl::InternalError("Not implemented");
+  }
+
+  virtual absl::Status UpdateChildNodeInMainGraph(GraphNodeHandle child_node,
+                                                  GraphNodeHandle main_node) {
+    return absl::InternalError("Not implemented");
+  }
 
   // This gets called at the beginning of `Finalize` and allows subclasses to
   // perform any necessary preparation before the graph is finalized.

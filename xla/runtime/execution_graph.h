@@ -19,14 +19,18 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <string>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/runtime/buffer_use.h"
 #include "xla/runtime/resource_use.h"
@@ -45,8 +49,14 @@ namespace xla {
 //
 // At run time we can relax sequential schedule and execute operations
 // concurrently, as long as we don't create data races (reading and writing
-// from/To the same or overlapping buffer slices concurrently), or resource
+//
+// from/to the same or overlapping buffer slices concurrently), or resource
 // races (using the same mutable resource concurrently).
+//
+// Resources can behave as buffers and require an execution order (operation
+// must wait for the completion of execution of all dependencies), or as a
+// scheduling barrier (operation must wait for the completion of scheduling of
+// all dependencies). See more details in the `NodeEdge::Kind` definition.
 //
 // We use buffer and resource use conflicts to define an execution order of
 // operations as a directed acyclic graph (DAG) that satisfies all dependencies.
@@ -93,6 +103,27 @@ class ExecutionGraph {
     Operation& operator=(Operation&&) = default;
   };
 
+  class Renderer {
+   public:
+    Renderer() = default;
+    virtual ~Renderer() = default;
+
+    // Generates a string representation for the given execution graph
+    // operations which can be published to a URL using `PublishGraph`.
+    virtual std::string GenerateGraphAsString(
+        absl::Span<const ExecutionGraph::Operation* const> operations) = 0;
+
+    // Publishes the generated graph.
+    virtual absl::StatusOr<std::string> PublishGraph(
+        absl::string_view graph_as_string) = 0;
+  };
+
+  // Returns the registered renderer for execution graphs.
+  static Renderer* GetRenderer();
+
+  // Registers a renderer for execution graphs.
+  static void RegisterRenderer(std::unique_ptr<Renderer> renderer);
+
   // Constructs an execution graph from a sequence of operations.
   template <typename Op,
             std::enable_if_t<std::is_base_of_v<Operation, Op>>* = nullptr>
@@ -103,6 +134,10 @@ class ExecutionGraph {
     }
     return Create(ptrs);
   }
+
+  // Constructs an execution graph from a sequence of operations.
+  static absl::StatusOr<ExecutionGraph> Create(
+      absl::Span<const Operation* const> operations);
 
   // Returns execution graph nodes definitions.
   absl::Span<const NodeDef> nodes_defs() const { return nodes_defs_; }
@@ -151,6 +186,13 @@ class ExecutionGraph {
   // We store all `in_edges` and `out_edges` referenced by the `NodeDef` inside
   // large vectors to optimize for data locality on a hot path.
   using NodesEdges = std::vector<NodeId>;
+  void dump_as_dot(const std::string& fname,
+                   const std::vector<std::string>& op_names, size_t node_ofs,
+                   size_t max_nodes);
+
+  // We store all `in_edges` and `out_edges` referenced by the `NodeDef` inside
+  // large vectors to optimize for data locality on a hot path.
+  using NodesEdges = std::vector<NodeEdge>;
 
   // A NodeDef builder to collect all in-edges and out-edges before constructing
   // a NodeDef. We use it at dependency graph construction time when we don't
@@ -173,6 +215,12 @@ class ExecutionGraph {
   // Erases edge from `from` node to `to` node if it exists. We rely on the fact
   // that out and in-edges are sorted and use binary search on a critical path.
   static int64_t EraseEdge(NodeDefBuilder& from, NodeDefBuilder& to);
+
+  // Erases edge from `from` node to `to` node if it exists and it has a weaker
+  // ordering than the given `kind`. We rely on the fact that out and in-edges
+  // are sorted and use binary search on a critical path.
+  static int64_t EraseEdge(NodeDefBuilder& from, NodeDefBuilder& to,
+                           NodeEdge::Kind kind);
 
   // Runs a transitive reduction on the NodeDefBuilder graph to remove redundant
   // edges, and updates nodes priorities. Returns the number of removed edges.

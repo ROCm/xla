@@ -314,6 +314,8 @@ TEST_F(FunctionalHloRunnerTest, ShardedComputationUnderStreamCapture) {
   FunctionalHloRunner::RunningOptions running_options;
   running_options.module_argument_mode =
       FunctionalHloRunner::ModuleArgumentMode::kUseRandomInputs;
+  running_options.recreate_buffers_between_repeats = false;
+  running_options.num_repeats = 2;
 
   TF_EXPECT_OK(FunctionalHloRunner::LoadAndRunAndDump(
       *client, debug_options, preproc_options, raw_compile_options,

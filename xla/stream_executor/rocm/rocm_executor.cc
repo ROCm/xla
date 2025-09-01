@@ -913,10 +913,12 @@ void RocmExecutor::DeallocateStream(Stream* stream) {
 absl::Status RocmExecutor::InitBlas() {
   absl::MutexLock lock(&mu_);
   PluginRegistry* registry = PluginRegistry::Instance();
-  TF_ASSIGN_OR_RETURN(
-      auto factory,
-      registry->GetFactory<PluginRegistry::BlasFactory>(rocm::kROCmPlatformId));
-  blas_.reset(factory(this));
+  {
+    TF_ASSIGN_OR_RETURN(auto factory,
+                        registry->GetFactory<PluginRegistry::BlasFactory>(
+                            rocm::kROCmPlatformId));
+    blas_.reset(factory(this));
+  }
   return absl::OkStatus();
 }
 

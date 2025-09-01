@@ -797,6 +797,7 @@ absl::StatusOr<HloSchedule> ScheduleGpuModuleWithMemoryScheduler(
 
 HloInstructionSequence PostProcessSchedule(
     const HloInstructionSequence& input) {
+
   HloInstructionSequence result = PostprocessorToScheduleSyncCollectives(input);
   return PostprocessorToScheduleAsEarlyOrLateAsPossible(result);
 }

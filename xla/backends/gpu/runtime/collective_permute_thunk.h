@@ -114,6 +114,7 @@ class CollectivePermuteStartThunk : public CollectiveThunk {
   const CollectiveConfig& config() const override { return config_.config; }
   absl::Status RunCollective(const ExecuteParams& params, se::Stream& stream,
                              CommunicatorHandle comm_handle) override;
+  absl::Span<const Buffer> buffers() const { return buffers_; }
 
  private:
   const P2PConfig config_;
@@ -129,12 +130,15 @@ class CollectivePermuteStartThunk : public CollectiveThunk {
   int64_t device_count_;
 };
 
+absl::StatusOr<const int64_t> GetCurrentId(
+    Thunk::CollectiveExecuteParams* collective_params,
+    const CollectiveConfig& config);
+
 absl::Status RunCollectivePermute(
     GpuCollectives* collectives, P2PConfig::SourceTargetMapEntry source_target,
     std::vector<DeviceBufferPair>& buffers, se::Stream& stream,
     Communicator* comm, absl::string_view device_string, int64_t current_id,
     bool use_memcpy, CollectivePermuteStartThunk::RecvPtrMap& recv_ptr_map);
-
 }  // namespace gpu
 }  // namespace xla
 

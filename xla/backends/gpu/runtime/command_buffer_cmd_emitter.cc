@@ -242,6 +242,10 @@ static absl::StatusOr<Command> Convert(const CuDnnThunk& thunk) {
                                     thunk.arguments(), thunk.graph());
 }
 
+static absl::StatusOr<Command> Convert(const ConvolutionThunk& thunk) {
+  return std::make_unique<ConvolutionCmd>(thunk.execution_stream_id(), thunk);
+}
+
 //===----------------------------------------------------------------------===//
 static absl::StatusOr<Command> CopyMetadata(absl::StatusOr<Command> cmd,
                                             const Thunk& thunk) {
@@ -271,8 +275,8 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
   };
 
   switch (thunk.kind()) {
-    case Thunk::Kind::kConditional:
-      return append(Convert<ConditionalThunk>(thunk, options));
+    // case Thunk::Kind::kConditional:
+    //   return append(Convert<ConditionalThunk>(thunk, options));
     case Thunk::Kind::kCopy:
       return append(Convert<DeviceToDeviceCopyThunk>(thunk));
     case Thunk::Kind::kCustomCall:
@@ -297,6 +301,8 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
       return append(Convert<ReduceScatterStartThunk>(thunk));
     case Thunk::Kind::kAllToAllStart:
       return append(Convert<AllToAllStartThunk>(thunk));
+    case Thunk::Kind::kCollectivePermuteStart:
+      return append(Convert<CollectivePermuteStartThunk>(thunk));
     case Thunk::Kind::kPartitionId:
       return append(Convert<PartitionIdThunk>(thunk));
     case Thunk::Kind::kReplicaId:
@@ -305,6 +311,8 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
       return append(Convert<WhileThunk>(thunk, options));
     case Thunk::Kind::kCuDnn:
       return append(Convert<CuDnnThunk>(thunk));
+    case Thunk::Kind::kConvolution:
+      return append(Convert<ConvolutionThunk>(thunk));
     case Thunk::Kind::kDynamicSlice:
       return append(Convert<DynamicSliceThunk>(thunk, options));
 
@@ -314,7 +322,6 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
       return AppendCommands(cmd_sequence,
                             static_cast<const SequentialThunk&>(thunk).thunks(),
                             options);
-
     // Thunks that simply wait for stream events are no-op in the command buffer
     // context, as we convert async thunks to command dependency graph.
     case Thunk::Kind::kAllGatherDone:
@@ -322,6 +329,7 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
     case Thunk::Kind::kReduceScatterDone:
     case Thunk::Kind::kAllToAllDone:
     case Thunk::Kind::kWaitForStreams:
+    case Thunk::Kind::kCollectivePermuteDone:
       return absl::OkStatus();
 
     case Thunk::Kind::kCommandBuffer:

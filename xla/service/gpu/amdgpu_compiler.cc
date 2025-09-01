@@ -184,7 +184,7 @@ absl::Status AMDGPUCompiler::OptimizeHloPostLayoutAssignment(
       gpu_target_config.device_description.gpu_compute_capability());
 
   pre_pipeline.AddPass<DotDimensionMerger>();
-
+  // NOTE NOTE: this must be disabled!!
   for (const auto& req : HipblasPaddingRequirements) {
     pre_pipeline.AddPass<CublasPadForGemms>(rocm_compute_capability,
                                             req.data_type, req.multiple_of);

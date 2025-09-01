@@ -254,4 +254,5 @@ xla_test(
         "@tsl//tsl/platform:path",
         "@tsl//tsl/platform:protobuf",
     ],
+    linkstatic=1,
 )
