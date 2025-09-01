@@ -49,14 +49,10 @@ limitations under the License.
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
-<<<<<<< HEAD
-#include "tsl/platform/casts.h"
-=======
 #include "tsl/platform/path.h"
 #include "tsl/platform/casts.h"
 
 #define GPU_GRAPH_API_DEBUG 0
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 
 namespace stream_executor::gpu {
 namespace {
@@ -345,9 +341,6 @@ absl::Status RocmCommandBuffer::UpdateKernelNode(
                   "Failed to set HIP graph kernel node params");
 }
 
-<<<<<<< HEAD
-=======
-
 absl::StatusOr< GraphNodeHandle > RocmCommandBuffer::CopyChildNodeToMainGraph(
           GraphNodeHandle child_node, absl::Span<const GraphNodeHandle> dependencies) {
 
@@ -411,8 +404,6 @@ absl::Status RocmCommandBuffer::UpdateChildNodeInMainGraph(
   }
 }
 
-
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 absl::Status RocmCommandBuffer::Trace(
     Stream* stream, absl::AnyInvocable<absl::Status()> function) {
   TF_RETURN_IF_ERROR(CheckNotFinalized());
@@ -455,9 +446,6 @@ absl::Status RocmCommandBuffer::Trace(
 
   return absl::OkStatus();
 }
-
-<<<<<<< HEAD
-=======
 
 #if GPU_GRAPH_API_DEBUG
 static struct FinalPrinter 
@@ -506,7 +494,6 @@ private:
 } s_printer;
 #endif
 
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 absl::Status RocmCommandBuffer::LaunchGraph(Stream* stream) {
   VLOG(2) << std::this_thread::get_id() << " launch graph " << exec_
           << " on a stream: " << stream << " " << stream->parent()->device_ordinal();

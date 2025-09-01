@@ -44,12 +44,9 @@ limitations under the License.
 #include "xla/tsl/platform/statusor.h"
 #include "tsl/platform/casts.h"
 #include "tsl/platform/path.h"
-<<<<<<< HEAD
-=======
 
 // Whether to to use subgraphs or extract child nodes directly to the main graph
 #define EXTRACT_CHILD_NODES_FROM_GRAPH 1
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 
 namespace stream_executor::gpu {
 
@@ -111,11 +108,7 @@ GpuCommandBuffer::ToGraphNodeDependencies(
     DCHECK(dep) << "Dependency command must be not null";
 
     if (auto* gpu_command = dynamic_cast<const GpuCommand*>(dep)) {
-<<<<<<< HEAD
-      handles.push_back(gpu_command->handle);
-=======
       handles.push_back(gpu_command->handles.back());
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 
     } else if (auto* gpu_command = dynamic_cast<const GpuCaseCommand*>(dep)) {
       for (const auto& conditional_node : gpu_command->conditional_nodes) {
@@ -156,11 +149,7 @@ absl::Status GpuCommandBuffer::UpdateLaunchWithPackedArgs(
     const Kernel& kernel, const KernelArgsPackedArrayBase& packed_args) {
   TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
   auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
-<<<<<<< HEAD
-  return UpdateKernelNode(gpu_command->handle, threads, blocks, kernel,
-=======
   return UpdateKernelNode(gpu_command->handles.back(), threads, blocks, kernel,
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
                           packed_args);
 }
 
@@ -222,28 +211,6 @@ absl::Status GpuCommandBuffer::UpdateLaunch(const Command* command,
   return absl::InternalError("Unsupported kernel arguments type");
 }
 
-<<<<<<< HEAD
-absl::StatusOr<const CommandBuffer::Command*>
-GpuCommandBuffer::CreateNestedCommand(
-    const CommandBuffer& nested,
-    absl::Span<const Command* const> dependencies) {
-  TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
-
-  TF_ASSIGN_OR_RETURN(
-      GraphNodeHandle handle,
-      CreateChildNode(ToGraphNodeDependencies(dependencies), nested));
-
-  return AppendCommand(GpuCommand{handle});
-}
-
-absl::Status GpuCommandBuffer::UpdateNestedCommand(
-    const Command* command, const CommandBuffer& nested) {
-  TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
-  auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
-  return UpdateChildNode(gpu_command->handle, nested);
-}
-
-=======
 auto GpuCommandBuffer::GetChildNodes() const 
                 -> absl::StatusOr<ChildNodes> {
   ChildNodes nodes;
@@ -327,11 +294,10 @@ absl::Status GpuCommandBuffer::UpdateNestedCommand(
   }
   return absl::OkStatus();
 #else
-  return UpdateChildNode(gpu_command->handles.back(), nested);
+  return UpdateChildNode(gpu_command->handle, nested);
 #endif
 }
 
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 absl::StatusOr<const CommandBuffer::Command*> GpuCommandBuffer::CreateMemcpyD2D(
     DeviceMemoryBase* dst, const DeviceMemoryBase& src, uint64_t size,
     absl::Span<const Command* const> dependencies) {
@@ -350,11 +316,7 @@ absl::Status GpuCommandBuffer::UpdateMemcpyD2D(const Command* command,
                                                uint64_t size) {
   TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
   auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
-<<<<<<< HEAD
-  return UpdateMemcpyD2DNode(gpu_command->handle, *dst, src, size);
-=======
   return UpdateMemcpyD2DNode(gpu_command->handles.back(), *dst, src, size);
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 }
 
 absl::StatusOr<const CommandBuffer::Command*> GpuCommandBuffer::CreateMemset(
@@ -375,11 +337,7 @@ absl::Status GpuCommandBuffer::UpdateMemset(const Command* command,
                                             size_t num_elements) {
   TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
   auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
-<<<<<<< HEAD
-  return UpdateMemsetNode(gpu_command->handle, *dst, bit_pattern, num_elements);
-=======
   return UpdateMemsetNode(gpu_command->handles.back(), *dst, bit_pattern, num_elements);
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 }
 
 //----------------------------------------------------------------------------//
@@ -411,7 +369,6 @@ absl::Status GpuCommandBuffer::UpdateDnnGraphCommand(
     const Command* command, dnn::DnnGraph& dnn_graph, Stream& stream,
     absl::Span<DeviceMemoryBase> operands) {
   TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
-<<<<<<< HEAD
 
   auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
   TF_ASSIGN_OR_RETURN(std::unique_ptr<CommandBuffer> nested,
@@ -419,12 +376,8 @@ absl::Status GpuCommandBuffer::UpdateDnnGraphCommand(
   GpuCommandBuffer& nested_gpu =
       tensorflow::down_cast<GpuCommandBuffer&>(*nested);
   TF_RETURN_IF_ERROR(nested_gpu.UpdateDnnGraphNode(dnn_graph, stream, operands,
-                                                   gpu_command->handle));
-  return UpdateChildNode(gpu_command->handle, *nested);
-=======
-  return UpdateDnnGraphNode(dnn_graph, stream, operands,
-                  tsl::down_cast<const GpuCommand*>(command)->handles.back());
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
+                                                   gpu_command->handles.back()));
+  return UpdateChildNode(gpu_command->handles.back(), *nested);
 }
 
 //----------------------------------------------------------------------------//

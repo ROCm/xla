@@ -83,23 +83,13 @@ class GpuCommandBuffer : public CommandBuffer {
   // A simple GPU command recorded into a GPU command buffer. Most of the GPU
   // commands have a single node in the GPU graph, i.e. memset or kernel launch.
   struct GpuCommand : public CommandBuffer::Command {
-<<<<<<< HEAD
-    explicit GpuCommand(GraphNodeHandle handle) : handle(handle) {}
-
-    // A handle to the gpu graph node corresponding to a command.
-    GraphNodeHandle handle = nullptr;
-  };
-
-=======
-
     GpuCommand() = default;
     explicit GpuCommand(GraphNodeHandle handle) : handles(1, handle) {}
 
     // A handle to the gpu graph node corresponding to a command.
-    absl::InlinedVector< GraphNodeHandle, 1 > handles;
+    absl::InlinedVector<GraphNodeHandle, 1> handles;
   };
 
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   // A GPU command recorded for the Case operation.
   struct GpuCaseCommand : public CommandBuffer::Command {
     std::vector<GraphConditionalHandle> conditionals;
@@ -207,10 +197,6 @@ class GpuCommandBuffer : public CommandBuffer {
   using Dependencies = absl::InlinedVector<GraphNodeHandle, 1>;
   using ChildNodes = absl::InlinedVector<GraphNodeHandle, 2>;
 
-<<<<<<< HEAD
-=======
-
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
  private:
   // Prepares a nested command buffer for an update of the graph.
   // It's a prerequisite to a call to `Update` on a nested command buffer.
@@ -288,7 +274,6 @@ class GpuCommandBuffer : public CommandBuffer {
                           bool index_is_bool,
                           std::vector<UpdateCommands> update_branches);
 
-<<<<<<< HEAD
   // Appends a new command to the command buffer.
   template <typename T>
   const Command* AppendCommand(T command) {
@@ -304,25 +289,12 @@ class GpuCommandBuffer : public CommandBuffer {
   // APIs for creating and updating underlying GPU graph nodes.
   //===--------------------------------------------------------------------===//
 
-=======
   absl::StatusOr<ChildNodes> GetChildNodes() const;
 
-  // Appends a new command to the command buffer.
-  template <typename T>
-  const Command* AppendCommand(T command) {
-    commands_.push_back(std::make_unique<T>(std::move(command)));
-    return commands_.back().get();
-  }
-
-  // Converts a list of command dependencies to a list of graph node handles.
-  std::vector<GraphNodeHandle> ToGraphNodeDependencies(
-      absl::Span<const Command* const> dependencies);
-
   //===--------------------------------------------------------------------===//
   // APIs for creating and updating underlying GPU graph nodes.
   //===--------------------------------------------------------------------===//
 
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   // Adds a new conditional node to the graph and creates a corresponding nested
   // command buffer.
   virtual absl::StatusOr<GraphConditionalNodeHandle> CreateConditionalNode(
@@ -392,18 +364,17 @@ class GpuCommandBuffer : public CommandBuffer {
   virtual absl::StatusOr<size_t> GetNodeCount() const = 0;
 
   // return the list of graph nodes
-  virtual absl::StatusOr<size_t> GraphGetNodes(
-        ChildNodes *pnodes) const = 0;
+  virtual absl::StatusOr<size_t> GraphGetNodes(ChildNodes* pnodes) const = 0;
 
-  virtual absl::StatusOr< GraphNodeHandle > CopyChildNodeToMainGraph(
-          GraphNodeHandle child_node, 
-          absl::Span<const GraphNodeHandle> dependencies) {
+  virtual absl::StatusOr<GraphNodeHandle> CopyChildNodeToMainGraph(
+      GraphNodeHandle child_node,
+      absl::Span<const GraphNodeHandle> dependencies) {
     return absl::InternalError("Not implemented");
   }
 
-  virtual absl::Status UpdateChildNodeInMainGraph(
-          GraphNodeHandle child_node, GraphNodeHandle main_node) {
-     return absl::InternalError("Not implemented");
+  virtual absl::Status UpdateChildNodeInMainGraph(GraphNodeHandle child_node,
+                                                  GraphNodeHandle main_node) {
+    return absl::InternalError("Not implemented");
   }
 
   // This gets called at the beginning of `Finalize` and allows subclasses to
