@@ -56,19 +56,10 @@ cc_library(
         ":annotation",
         ":collective_broadcast_thunk",
         ":collective_thunk",
-        ":custom_call_thunk",
         ":convolution_thunk",
+        ":custom_call_thunk",
         ":dynamic_slice_thunk",
-<<<<<<< HEAD
-=======
         ":gpublas_lt_matmul_thunk",
-        ":nccl_all_gather_thunk",
-        ":nccl_all_reduce_thunk",
-        ":nccl_all_to_all_thunk",
-        ":nccl_collective_broadcast_thunk",
-        ":nccl_collective_permute_thunk",
-        ":nccl_collective_thunk",
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
         ":thunk",
         "//xla:debug_options_flags",
         "//xla:executable_run_options",
@@ -84,10 +75,7 @@ cc_library(
         "//xla/hlo/ir:hlo",
         "//xla/runtime:buffer_use",
         "//xla/runtime:execution_graph",
-<<<<<<< HEAD
-=======
         "//xla/runtime:object_pool",
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
         "//xla/runtime:resource_use",
         "//xla/service:buffer_assignment",
         "//xla/service:collective_ops_utils",
@@ -135,35 +123,6 @@ cc_library(
     ],
 )
 
-<<<<<<< HEAD
-=======
-cc_library(
-    name = "command_buffer_cmd_emitter",
-    srcs = ["command_buffer_cmd_emitter.cc"],
-    hdrs = ["command_buffer_cmd_emitter.h"],
-    deps = [
-        ":command_buffer_cmd",
-        ":conditional_thunk",
-        ":copy_thunk",
-        ":cudnn_thunk",
-        ":gemm_thunk",
-        ":kernel_thunk",
-        ":memset_thunk",
-        ":replica_id_thunk",
-        ":sequential_thunk",
-        ":wait_for_streams_thunk",
-        ":while_thunk",
-        "//xla:util",
-        "//xla/runtime:buffer_use",
-        "@com_google_absl//absl/container:inlined_vector",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:statusor",
-    ],
-)
-
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 xla_test(
     name = "command_buffer_cmd_test",
     srcs = if_gpu_is_configured(["command_buffer_cmd_test.cc"]),
