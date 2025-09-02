@@ -430,7 +430,6 @@ int64_t ExecutionGraph::RunTransitiveReductionAndUpdatePriorities(
   for (int64_t i = builders.size() - 1; i >= 0; --i) {
     NodeDefBuilder& source_node = builders[i];
 
-<<<<<<< HEAD
     // Clear DFS workspace from previous iteration.
     stack.clear();
     visited.assign(builders.size(), false);
@@ -456,43 +455,6 @@ int64_t ExecutionGraph::RunTransitiveReductionAndUpdatePriorities(
 
     // Set node priority to the number of visited nodes in the DFS traversal.
     source_node.priority = absl::c_count(visited, true);
-=======
-    // Clear DFS state from previous iteration.
-    state.Clear(builders.size());
-
-    // Make a copy of out edges to avoid invalidating iterators.
-    for (NodeEdge out_edge : std::vector<NodeEdge>(source_node.out_edges)) {
-      DCHECK(state.Empty()) << "Stack must be empty at the start of the DFS";
-
-      // Initialize state with nodes reachable via `out_edge`. We mark immediate
-      // out nodes as visited to correctly compute node priority below.
-      NodeDefBuilder& out_node = builders[out_edge.id];
-      state.Visited(out_edge.id);
-      state.PushToStack(out_node.out_edges);
-
-      // Do a round of DFS traversal and delete redundant edges from the
-      // `source_node` to the nodes reachable via DFS.
-      while (!state.Empty()) {
-        NodeEdge node_edge = state.PopFromStack();
-        NodeDefBuilder& node = builders[node_edge.id];
-
-        // If we reached `node` via a scheduling edge, then we can't remove an
-        // execution edge from the `source_node`, as we might weaker the
-        // execution order and introduce a data race.
-        bool has_scheduling_edge = out_edge.kind == kScheduling ||
-                                   node_edge.kind == kScheduling ||
-                                   state.num_scheduling_edges();
-        NodeEdge::Kind kind = has_scheduling_edge ? kScheduling : kExecution;
-        num_erased_edges += EraseEdge(source_node, node, kind);
-
-        // Keep following nodes reachable via `node` out edges.
-        state.PushToStack(node.out_edges);
-      }
-    }
-
-    // Set node priority to the number of visited nodes in the DFS traversal.
-    source_node.priority = state.NumVisited();
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   }
 
   return num_erased_edges;

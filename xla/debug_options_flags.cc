@@ -123,22 +123,12 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_cpu_enable_fast_min_max(true);
 
   opts.set_xla_gpu_enable_cublaslt(false);
-<<<<<<< HEAD
+  // Command buffers are disabled by default !
+  //   opts.add_xla_gpu_enable_command_buffer(DebugOptions::FUSION);
+  //   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUBLAS);
+  //   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUSTOM_CALL);
+  //   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUDNN);
 
-  opts.add_xla_gpu_enable_command_buffer(DebugOptions::FUSION);
-  opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUBLAS);
-  opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUBLASLT);
-  opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUSTOM_CALL);
-  opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUDNN);
-=======
-#endif
-// Command buffers are disabled by default !
-//   opts.add_xla_gpu_enable_command_buffer(DebugOptions::FUSION);
-//   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUBLAS);
-//   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUSTOM_CALL);
-//   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUDNN);
-
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   opts.set_xla_gpu_graph_min_graph_size(5);
   opts.set_xla_gpu_graph_enable_concurrent_region(false);
   opts.set_xla_cmd_buffer_trace_cache_size(16);

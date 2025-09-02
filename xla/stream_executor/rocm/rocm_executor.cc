@@ -91,8 +91,7 @@ limitations under the License.
 #include "tsl/platform/fingerprint.h"
 #include "tsl/platform/numbers.h"
 
-namespace stream_executor {
-namespace gpu {
+namespace stream_executor::gpu {
 
 namespace {
 // Given const GPU memory, returns a librocm device pointer datatype, suitable
@@ -623,12 +622,7 @@ absl::Status RocmExecutor::Init() {
   TF_ASSIGN_OR_RETURN(rocm_context_,
                       RocmContext::Create(device_ordinal(), device_));
   TF_ASSIGN_OR_RETURN(version_, GetGpuISAVersion(device_));
-<<<<<<< HEAD
   // We initialize BLAS interfaces early here since otherwise it might create
-=======
-
-  // We initialize BLAS interfaces early here since otherwise it might create 
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   // us problems during hipBlasLt initialization under graph capture.
   // There is no real advantage of explicitly using 'lazy initialization' on
   // ROCM platform because rocBLAS/hipBlasLt already use 'lazy initialization'
@@ -735,7 +729,6 @@ absl::StatusOr<ModuleHandle> RocmExecutor::LoadModuleFromHsaco(
   gpu_binary_to_module_[module_handle] = {module, module_refcount};
   return module_handle;
 }
-
 DeviceMemoryBase RocmExecutor::Allocate(uint64_t size, int64_t memory_space) {
   switch (static_cast<MemoryType>(memory_space)) {
     case MemoryType::kCollective:
@@ -918,16 +911,10 @@ void RocmExecutor::DeallocateStream(Stream* stream) {
 absl::Status RocmExecutor::InitBlas() {
   absl::MutexLock lock(&mu_);
   PluginRegistry* registry = PluginRegistry::Instance();
-<<<<<<< HEAD
   TF_ASSIGN_OR_RETURN(
       auto factory,
-=======
-  {
-    TF_ASSIGN_OR_RETURN(auto factory, 
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
       registry->GetFactory<PluginRegistry::BlasFactory>(rocm::kROCmPlatformId));
-    blas_.reset(factory(this));
-  }
+  blas_.reset(factory(this));
   return absl::OkStatus();
 }
 
@@ -937,7 +924,7 @@ blas::BlasSupport* RocmExecutor::AsBlas() {
 }
 
 dnn::DnnSupport* RocmExecutor::AsDnn() {
-    absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(&mu_);
   if (dnn_ != nullptr) {
     return dnn_.get();
   }
@@ -1199,8 +1186,6 @@ absl::StatusOr<const RocmKernel*> RocmExecutor::GetRocmKernel(
   }
   return static_cast<const RocmKernel*>(*it);
 }
-}  // namespace gpu
-
-}  // namespace stream_executor
+}  // namespace stream_executor::gpu
 
 STREAM_EXECUTOR_REGISTER_MODULE_INITIALIZER(rocm_executor, {});

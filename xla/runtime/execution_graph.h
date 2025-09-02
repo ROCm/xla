@@ -19,26 +19,14 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-<<<<<<< HEAD
 #include <tuple>
 #include <type_traits>
-=======
-#include <memory>
-#include <string>
-#include <tuple>
-#include <type_traits>
-#include <utility>
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
-#include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "absl/status/statusor.h"
-<<<<<<< HEAD
-=======
 #include "absl/strings/string_view.h"
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 #include "absl/types/span.h"
 #include "xla/runtime/buffer_use.h"
 #include "xla/runtime/resource_use.h"
@@ -57,20 +45,9 @@ namespace xla {
 //
 // At run time we can relax sequential schedule and execute operations
 // concurrently, as long as we don't create data races (reading and writing
-<<<<<<< HEAD
 // from/To the same or overlapping buffer slices concurrently), or resource
 // races (using the same mutable resource concurrently).
 //
-=======
-// from/to the same or overlapping buffer slices concurrently), or resource
-// races (using the same mutable resource concurrently).
-//
-// Resources can behave as buffers and require an execution order (operation
-// must wait for the completion of execution of all dependencies), or as a
-// scheduling barrier (operation must wait for the completion of scheduling of
-// all dependencies). See more details in the `NodeEdge::Kind` definition.
-//
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 // We use buffer and resource use conflicts to define an execution order of
 // operations as a directed acyclic graph (DAG) that satisfies all dependencies.
 //
@@ -84,8 +61,6 @@ class ExecutionGraph {
 
   static constexpr NodeId kInvalidNodeId = std::numeric_limits<NodeId>::min();
 
-<<<<<<< HEAD
-=======
   // A base class for an operation that can be executed by the runtime.
   class Operation {
    public:
@@ -176,7 +151,6 @@ class ExecutionGraph {
     NodeId id;
   };
 
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   // NodeDef defines a dependency-based execution order for all operations.
   struct NodeDef {
     NodeId id = kInvalidNodeId;
@@ -196,26 +170,6 @@ class ExecutionGraph {
     int64_t priority = 0;
   };
 
-<<<<<<< HEAD
-  // A base class for an operation that can be executed by the runtime.
-  class Operation {
-   public:
-    virtual ~Operation() = default;
-
-    virtual absl::Span<const BufferUse> BufferUses() const = 0;
-    virtual absl::Span<const ResourceUse> ResourceUses() const = 0;
-
-   protected:
-    Operation() = default;
-
-    Operation(const Operation&) = default;
-    Operation& operator=(const Operation&) = default;
-
-    Operation(Operation&&) = default;
-    Operation& operator=(Operation&&) = default;
-  };
-
-=======
   class Renderer {
    public:
     Renderer() = default;
@@ -237,7 +191,6 @@ class ExecutionGraph {
   // Registers a renderer for execution graphs.
   static void RegisterRenderer(std::unique_ptr<Renderer> renderer);
 
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   // Constructs an execution graph from a sequence of operations.
   template <typename Op,
             std::enable_if_t<std::is_base_of_v<Operation, Op>>* = nullptr>
@@ -249,13 +202,10 @@ class ExecutionGraph {
     return Create(ptrs);
   }
 
-<<<<<<< HEAD
-=======
   // Constructs an execution graph from a sequence of operations.
   static absl::StatusOr<ExecutionGraph> Create(
       absl::Span<const Operation* const> operations);
 
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   // Returns execution graph nodes definitions.
   absl::Span<const NodeDef> nodes_defs() const { return nodes_defs_; }
 
@@ -276,21 +226,13 @@ class ExecutionGraph {
   }
 
   // Returns in-edges for a given node id.
-<<<<<<< HEAD
-  absl::Span<const NodeId> in_edges(NodeId id) const {
-=======
   absl::Span<const NodeEdge> in_edges(NodeId id) const {
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
     DCHECK_EQ(id, nodes_defs_[id].id);
     return nodes_defs_[id].in_edges;
   }
 
   // Returns out-edges for a given node id.
-<<<<<<< HEAD
-  absl::Span<const NodeId> out_edges(NodeId id) const {
-=======
   absl::Span<const NodeEdge> out_edges(NodeId id) const {
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
     DCHECK_EQ(id, nodes_defs_[id].id);
     return nodes_defs_[id].out_edges;
   }
@@ -303,25 +245,18 @@ class ExecutionGraph {
 
   bool is_sequential() const { return is_sequential_; }
 
-<<<<<<< HEAD
  private:
   // Constructs an execution graph from a sequence of operations.
   static absl::StatusOr<ExecutionGraph> Create(
       absl::Span<const Operation* const> operations);
 
-  // We store all `in_edges` and `out_edges` referenced by the `NodeDef` inside
-  // large vectors to optimize for data locality on a hot path.
-  using NodesEdges = std::vector<NodeId>;
-=======
   void dump_as_dot(const std::string& fname,
-      const std::vector< std::string >& op_names, 
-      size_t node_ofs, size_t max_nodes);
+                   const std::vector<std::string>& op_names, size_t node_ofs,
+                   size_t max_nodes);
 
- private:
   // We store all `in_edges` and `out_edges` referenced by the `NodeDef` inside
   // large vectors to optimize for data locality on a hot path.
   using NodesEdges = std::vector<NodeEdge>;
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 
   // A NodeDef builder to collect all in-edges and out-edges before constructing
   // a NodeDef. We use it at dependency graph construction time when we don't
@@ -329,13 +264,8 @@ class ExecutionGraph {
   struct NodeDefBuilder {
     NodeId id = kInvalidNodeId;
     int64_t priority = 0;
-<<<<<<< HEAD
-    std::vector<NodeId> in_edges;
-    std::vector<NodeId> out_edges;
-=======
     std::vector<NodeEdge> in_edges;
     std::vector<NodeEdge> out_edges;
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
   };
 
   ExecutionGraph(NodesEdges nodes_in_edges, NodesEdges nodes_out_edges,
@@ -346,17 +276,9 @@ class ExecutionGraph {
   static std::tuple<NodesEdges, NodesEdges, std::vector<NodeDef>>
   CreateNodeDefs(std::vector<NodeDefBuilder> builders);
 
-<<<<<<< HEAD
   // Erases edge from `from` node to `to` node if it exists. We rely on the fact
   // that out and in-edges are sorted and use binary search on a critical path.
   static int64_t EraseEdge(NodeDefBuilder& from, NodeDefBuilder& to);
-=======
-  // Erases edge from `from` node to `to` node if it exists and it has a weaker
-  // ordering than the given `kind`. We rely on the fact that out and in-edges
-  // are sorted and use binary search on a critical path.
-  static int64_t EraseEdge(NodeDefBuilder& from, NodeDefBuilder& to,
-                           NodeEdge::Kind kind);
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 
   // Runs a transitive reduction on the NodeDefBuilder graph to remove redundant
   // edges, and updates nodes priorities. Returns the number of removed edges.
