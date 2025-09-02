@@ -4,7 +4,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -250,6 +250,11 @@ static absl::StatusOr<Command> Convert(const CuDnnThunk& thunk) {
                                     thunk.arguments(), thunk.graph());
 }
 
+static absl::StatusOr<Command> Convert(const ConvolutionThunk& thunk,
+                                       ResourceUseVector resources) {
+  return std::make_unique<ConvolutionCmd>(thunk, resources);
+}
+
 //===----------------------------------------------------------------------===//
 static absl::StatusOr<Command> CopyMetadata(absl::StatusOr<Command> cmd,
                                             const Thunk& thunk) {
@@ -314,7 +319,9 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
     case Thunk::Kind::kWhile:
       return append(Convert<WhileThunk>(thunk, options));
     case Thunk::Kind::kCuDnn:
-      return append(Convert<CuDnnThunk>(thunk));
+      return append(Convert<CuDnnThunk>(thunk, resources));
+    case Thunk::Kind::kConvolution:
+      return append(Convert<ConvolutionThunk>(thunk, resources));
     case Thunk::Kind::kDynamicSlice:
       return append(Convert<DynamicSliceThunk>(thunk, options));
 
