@@ -312,8 +312,8 @@ absl::Status CollectivePermuteStartThunk::RunCollective(
   }
 
   auto status = ::xla::gpu::RunCollectivePermute(
-      source_target, device_buffers, stream, comm_handle.comm, device_string,
-      current_id, use_memcpy, &recv_ptr_map_));
+      collectives, source_target, device_buffers, stream, comm_handle.comm,
+      device_string, current_id, use_memcpy, &recv_ptr_map_);
 
   if (use_memcpy) {
     std::optional<int64_t> source_id = source_target.source;

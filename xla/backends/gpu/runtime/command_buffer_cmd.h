@@ -108,6 +108,8 @@ enum class CommandBufferCmdType : int32_t {
 
 std::string CommandBufferCmdString(CommandBufferCmdType type);
 
+using ResourceUseVector = absl::InlinedVector<ResourceUse, 1>;
+
 //===----------------------------------------------------------------------===//
 // CommandBufferCmd
 //===----------------------------------------------------------------------===//
@@ -809,7 +811,7 @@ class ConvolutionCmd : public TracedCommandBufferCmd, public ConvolutionThunk {
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() const override;
+  BufferUseVector buffers() override;
 
   bool IsNestedCommandBuffer() const final { return true; }
 };
