@@ -216,8 +216,7 @@ NcclCollectiveThunk::NcclCollectiveThunk(Kind kind, ThunkInfo thunk_info,
 absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, CollectiveStreamId stream_id,
-    AsyncStreamKind stream_kind) {
+    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind) {
   GlobalDeviceId global_device_id = params.global_device_id;
 
   TF_ASSIGN_OR_RETURN(
@@ -243,12 +242,23 @@ absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
         "Partial replica groups are not allowed when using NCCL_COMM_ID "
         "environment configuration.");
   }
-  static const bool enable_per_stream_comms =
-      xla::GetDebugOptionsFromFlags().xla_gpu_enable_nccl_per_stream_comms();
 
-  return GpuCliqueKey(std::move(participants),
-                      enable_per_stream_comms ? stream_id : kNoStreamId,
-                      stream_kind, std::move(participant_groups));
+  TF_ASSIGN_OR_RETURN(
+      int64_t num_local_participants,
+      GetNumLocalParticipants(params, replica_groups, group_mode));
+
+  return GpuCliqueKey(std::move(participants), num_local_participants,
+                      kNoStreamId, stream_kind, std::move(participant_groups));
+}
+
+absl::StatusOr<GpuCliqueKey> GetCollectiveGpuCliqueKey(
+    const Thunk::CollectiveExecuteParams& params,
+    const NcclCollectiveConfig& collective_config, bool use_nccl) {
+  TF_ASSIGN_OR_RETURN(GpuCollectives * collectives,
+                      NcclCollectiveThunk::GetGpuCollectives(params));
+  return GetGpuCliqueKey(collectives, params, collective_config.replica_groups,
+                         collective_config.group_mode,
+                         AsyncStreamKind::kCollective);
 }
 
 absl::StatusOr<CommunicatorHandle> GetNcclComm(
@@ -259,7 +269,7 @@ absl::StatusOr<CommunicatorHandle> GetNcclComm(
     AsyncStreamKind stream_kind) {
   TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
                       GetGpuCliqueKey(collectives, params, replica_groups,
-                                      group_mode, stream_id, stream_kind));
+                                      group_mode, stream_kind));
 
   std::optional<RankId> rank = clique_key.rank(params.global_device_id);
   TF_ASSIGN_OR_RETURN(bool is_local,
@@ -381,7 +391,7 @@ absl::Status NcclCollectiveThunk::Prepare(
       GpuCliqueKey clique_key,
       GetGpuCliqueKey(collectives, *params.collective_params,
                       config().replica_groups, config().group_mode,
-                      nccl_stream_id(), GetAsyncStreamKind()));
+                      GetAsyncStreamKind()));
   TF_ASSIGN_OR_RETURN(
       size_t num_local_participants,
       GetNumLocalParticipants(*params.collective_params,
@@ -418,6 +428,7 @@ absl::Status NcclCollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
   VLOG(1) << absl::StreamFormat("Starting %s %s.", IsAsync() ? "async" : "sync",
                                 Thunk::KindToString(kind()));
   const CollectiveStreamId stream_id = nccl_stream_id();
+
   AsyncStreamKind stream_kind = GetAsyncStreamKind();
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
   TF_ASSIGN_OR_RETURN(
@@ -454,11 +465,10 @@ absl::Status NcclCollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
   if (NeedFirstCallRendzevous() && !first_call_rendezvous_flag_.IsCompleted()) {
     TF_ASSIGN_OR_RETURN(GpuCollectives * collectives,
                         GetGpuCollectives(params));
-    TF_ASSIGN_OR_RETURN(
-        GpuCliqueKey clique_key,
-        GetGpuCliqueKey(collectives, *params.collective_params,
-                        config().replica_groups, config().group_mode, stream_id,
-                        stream_kind));
+    TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
+                        GetGpuCliqueKey(collectives, *params.collective_params,
+                                        config().replica_groups,
+                                        config().group_mode, stream_kind));
 
     TF_ASSIGN_OR_RETURN(
         size_t num_local_participants,

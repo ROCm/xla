@@ -704,10 +704,47 @@ cc_library(
 )
 
 cc_library(
+    name = "collective_kernel_thunk",
+    srcs = ["collective_kernel_thunk.cc"],
+    hdrs = ["collective_kernel_thunk.h"],
+    deps = [
+        ":all_reduce",
+        ":nccl_collective_thunk",
+        ":thunk",
+        "//xla:shape_util",
+        "//xla:status_macros",
+        "//xla:xla_data_proto_cc",
+        "//xla/backends/gpu/collectives:gpu_clique_key",
+        "//xla/core/collectives:rank_id",
+        "//xla/service:collective_ops_utils",
+        "//xla/service:rendezvous",
+        "//xla/service/gpu:launch_dimensions",
+        "//xla/stream_executor:device_memory",
+        "//xla/stream_executor:device_memory_handle",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor/gpu:all_reduce_kernel",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
     name = "nccl_all_reduce_thunk",
     srcs = ["nccl_all_reduce_thunk.cc"],
     hdrs = ["nccl_all_reduce_thunk.h"],
     deps = [
+        ":collective_kernel_thunk",
         ":nccl_collective_thunk",
         ":thunk",
         "//xla:status_macros",
@@ -1284,8 +1321,13 @@ cc_library(
 xla_test(
     name = "all_reduce_test",
     srcs = ["all_reduce_test.cc"],
+    backend_tags = {
+        "gpu": [
+            "multi_gpu",
+        ],
+    },
     backends = ["gpu_amd_any"],
-    #disabled_backends = [],
+    disabled_backends = [],
     deps = [
         ":all_reduce",
         "//xla:array",

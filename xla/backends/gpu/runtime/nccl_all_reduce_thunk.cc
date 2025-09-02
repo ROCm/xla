@@ -109,7 +109,16 @@ NcclAllReduceStartThunk::NcclAllReduceStartThunk(
     : NcclAllReduceReduceScatterThunkBase(
           Thunk::kNcclAllReduceStart, thunk_info,
           impl::GetNcclAllReduceConfigInst(inst), std::move(buffers),
-          IsSyncCollective(inst)) {}
+          IsSyncCollective(inst)),
+      collective_kernel_thunk_{
+          thunk_info, config_.config, config_.reduction_kind, IsAsync(),
+          buffers_,   false
+          /*is_collective_kernel_enabled=*/
+          // inst->GetModule()
+          //     ->config()
+          //     .debug_options()
+          //     .xla_gpu_unsupported_use_all_reduce_one_shot_kernel(),
+      } {}
 
 absl::Status NcclAllReduceStartThunk::CheckImplementable(
     const HloAllReduceInstruction* inst, int64_t replica_count,
@@ -124,6 +133,21 @@ CollectiveOpGroupMode NcclAllReduceStartThunk::GetGroupMode(
   return impl::GetGroupModeInst(inst);
 }
 
+absl::Status NcclAllReduceStartThunk::Initialize(
+    const InitializeParams& params) {
+  TF_RETURN_IF_ERROR(NcclCollectiveThunk::Initialize(params));
+  TF_ASSIGN_OR_RETURN(
+      GpuCliqueKey clique_key,
+      GetCollectiveGpuCliqueKey(*params.collective_params, config()));
+  TF_ASSIGN_OR_RETURN(bool use_collective_kernel,
+                      collective_kernel_thunk_.IsSupported(
+                          clique_key, params.collective_cliques));
+  if (use_collective_kernel) {
+    TF_RETURN_IF_ERROR(collective_kernel_thunk_.Initialize(params));
+  }
+  return absl::OkStatus();
+}
+
 absl::Status NcclAllReduceStartThunk::RunNcclCollective(
     const ExecuteParams& params, se::Stream& stream,
     CommunicatorHandle comm_handle) {
@@ -132,6 +156,17 @@ absl::Status NcclAllReduceStartThunk::RunNcclCollective(
       ConvertToDeviceBuffers(params, buffers_,
                              config_.config.operand_element_type));
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
+
+  bool use_collective_kernel = 0;
+  // TF_ASSIGN_OR_RETURN(bool use_collective_kernel,
+  //                     collective_kernel_thunk_.IsSupported(
+  //                         comm_handle.clique_key,
+  //                         params.collective_cliques));
+
+  if (use_collective_kernel) {
+    return collective_kernel_thunk_.ExecuteOnStream(params);
+  }
+
   return ::xla::gpu::RunAllReduce(collectives, config_.reduction_kind,
                                   device_buffers, stream, comm_handle.comm);
 }

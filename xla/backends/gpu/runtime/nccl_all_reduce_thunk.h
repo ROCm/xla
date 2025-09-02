@@ -22,6 +22,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/types/span.h"
 #include "xla/backends/gpu/collectives/gpu_collectives.h"
+#include "xla/backends/gpu/runtime/collective_kernel_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_collective_thunk.h"
 #include "xla/core/collectives/communicator.h"
 #include "xla/hlo/ir/hlo_instructions.h"
@@ -75,10 +76,33 @@ class NcclAllReduceStartThunk : public NcclAllReduceReduceScatterThunkBase {
   static CollectiveOpGroupMode GetGroupMode(
       const HloAllReduceInstruction* inst);
 
+  absl::Status Initialize(const InitializeParams& params) override;
+
  protected:
   absl::Status RunNcclCollective(const ExecuteParams& params,
                                  se::Stream& stream,
                                  CommunicatorHandle comm_handle) override;
+
+ private:
+  CollectiveKernelThunk collective_kernel_thunk_;
+
+  bool one_shot_kernel_enabled_ = false;
+
+  absl::Mutex mutex_;
+
+  // Local buffer allocations to copy input data for the one-shot kernel.
+  absl::flat_hash_map<se::StreamExecutor*, se::DeviceMemoryHandle>
+      local_buffer_allocs_ ABSL_GUARDED_BY(mutex_);
+
+  // Events to synchronize steams on different devices at the start of the
+  // one-shot kernel.
+  absl::flat_hash_map<se::StreamExecutor*, std::unique_ptr<se::Event>>
+      start_events_ ABSL_GUARDED_BY(mutex_);
+
+  // Events to synchronize steams on different devices at the end of the
+  // one-shot kernel.
+  absl::flat_hash_map<se::StreamExecutor*, std::unique_ptr<se::Event>>
+      end_events_ ABSL_GUARDED_BY(mutex_);
 };
 
 // -----------------------------------------------------------------------------
