@@ -364,9 +364,9 @@ absl::Status RunCollectivePermute(
     GpuCollectives* collectives, P2PConfig::SourceTargetMapEntry source_target,
     std::vector<DeviceBufferPair>& buffers, se::Stream& stream,
     Communicator* comm, absl::string_view device_string, int64_t current_id,
-    VLOG(1) << "##### " << __func__ << " Start";
-    bool use_memcpy, CollectivePermuteStartThunk::RecvPtrMap *recv_ptr_map,
+    bool use_memcpy, CollectivePermuteStartThunk::RecvPtrMap* recv_ptr_map,
     bool use_symmetric_buffer) {
+  VLOG(1) << "##### " << __func__ << " Start";
   // Determine the source and target IDs for this instance. The source ID is the
   // ID which will copy its data to this instance. The destination ID is the ID
   // to which this instance will copy its data. Either are optional.

@@ -796,10 +796,9 @@ class CublasLtCmd : public TracedCommandBufferCmd {
 // ConvolutionCmd
 //===----------------------------------------------------------------------===//
 
-class ConvolutionCmd : public TracedCommandBufferCmd,
-                    public ConvolutionThunk {
+class ConvolutionCmd : public TracedCommandBufferCmd, public ConvolutionThunk {
  public:
-  ConvolutionCmd(const ConvolutionThunk& conv_thunk, 
+  ConvolutionCmd(const ConvolutionThunk& conv_thunk,
                  ResourceUseVector resources = {});
 
   absl::Status Initialize(const Thunk::InitializeParams& params,
@@ -1100,17 +1099,18 @@ class CollectiveBroadcastCmd : public CollectiveCmd {
 
 class CollectivePermuteCmd : public CollectiveCmd {
  public:
-  CollectivePermuteCmd(P2PConfig config, bool p2p_memcpy_enabled, 
-               absl::Span<const CollectiveThunk::Buffer> buffers,
-               std::shared_ptr<CollectiveThunk::AsyncEvents> async_events,
-               ResourceUseVector resources = {});
+  CollectivePermuteCmd(
+      P2PConfig config, bool p2p_memcpy_enabled,
+      absl::Span<const CollectiveThunk::Buffer> buffers,
+      std::shared_ptr<CollectiveThunk::AsyncEvents> async_events,
+      ResourceUseVector resources = {});
 
   absl::StatusOr<const se::CommandBuffer::Command*> Record(
       const Thunk::ExecuteParams& execute_params,
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer) override;
 
-  BufferUseVector buffers() const override;
+  BufferUseVector buffers() override;
 
  private:
   P2PConfig::IdToSourceTargetMap id_to_source_target_;

@@ -40,7 +40,6 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_schedule.h"
-#include "xla/hlo/utils/hlo_longest_prefix.h"
 #include "xla/service/platform_util.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/cublas_cudnn.h"
@@ -102,7 +101,7 @@ static bool IsNoOp(const HloInstruction* hlo) {
 static bool IsAsyncStartCommand(const HloInstruction* hlo,
                                 const CommandBufferConfig& config) {
   if (HloPredicateIsOp<HloOpcode::kAllReduceStart, HloOpcode::kAllGatherStart,
-                    HloOpcode::kCollectivePermuteStart>(hlo)) {
+                       HloOpcode::kCollectivePermuteStart>(hlo)) {
     return config.enabled_commands.contains(DebugOptions::COLLECTIVES);
   }
 
@@ -172,8 +171,7 @@ static bool IsAsyncDoneCommand(const HloInstruction* hlo,
 // Finds an async-done HLO operation corresponding on an async-start one.
 static HloInstruction* FindAsyncDoneCommand(const HloInstruction* start) {
   if (HloPredicateIsOp<HloOpcode::kAllReduceStart, HloOpcode::kAllGatherStart,
-                       HloOpcode::kCollectivePermuteStart>(
-          start)) {
+                       HloOpcode::kCollectivePermuteStart>(start)) {
     CHECK(start->users().size() == 1);  // NOLINT, checked by HLO verifier
     return start->users().front();
   } else if (HloPredicateIsOp<HloOpcode::kAsyncStart>(start)) {
@@ -231,10 +229,9 @@ static bool IsCommand(const HloCustomCallInstruction* hlo,
   }
 
   if (config.enabled_commands.contains(DebugOptions::CUDNN)) {
-    
     if (IsCustomCallToBlockScaledDot(*hlo)) {
-      VLOG(3) << "Recording BlockScaledDot, target " << hlo->custom_call_target()
-              << " into command buffer.";
+      VLOG(3) << "Recording BlockScaledDot, target "
+              << hlo->custom_call_target() << " into command buffer.";
       return true;
     }
     if (IsCustomCallTofMHA(*hlo)) {
@@ -243,7 +240,7 @@ static bool IsCommand(const HloCustomCallInstruction* hlo,
       return true;
     }
     // CUDA backend does not support capturing convolution kernels
-    if (xla::PlatformUtil::CanonicalPlatformName("gpu").value() == "rocm" && 
+    if (xla::PlatformUtil::CanonicalPlatformName("gpu").value() == "rocm" &&
         IsCustomCallToDnnConvolution(*hlo)) {
       VLOG(3) << "Recording convolution, target " << hlo->custom_call_target()
               << " into command buffer.";
@@ -396,10 +393,9 @@ CommandBufferScheduling::CollectCommandBufferSequences(
   int64_t num_commands_in_current_seq = 0;
 
   // Adds `current_seq` to `sequences` if it has enough commands in it.
-  auto collect_current_seq = [&](HloInstruction *instr) {
-
-    VLOG(0) << "Stopped at: " << (instr ? instr->ToString() : "<end>") <<
-        " commands: " << num_commands_in_current_seq;
+  auto collect_current_seq = [&](HloInstruction* instr) {
+    VLOG(0) << "Stopped at: " << (instr ? instr->ToString() : "<end>")
+            << " commands: " << num_commands_in_current_seq;
     if (num_commands_in_current_seq >= std::max(1, min_num_commands)) {
       RemoveTrailingNoOps(current_seq);
       sequences.push_back(std::move(current_seq));
