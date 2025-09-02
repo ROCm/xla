@@ -1345,10 +1345,10 @@ CommandBufferCmd::BufferUseVector CublasLtCmd::buffers() {
 // ConvolutionCmd
 //===----------------------------------------------------------------------===//
 
-ConvolutionCmd::ConvolutionCmd(const ConvolutionThunk& conv_thunk,
-                               ResourceUseVector resources)
+ConvolutionCmd::ConvolutionCmd(ExecutionStreamId execution_stream_id,
+                               const ConvolutionThunk& conv_thunk)
     : TracedCommandBufferCmd(CommandBufferCmdType::kConvolutionCmd,
-                             std::move(resources)),
+                             execution_stream_id),
       ConvolutionThunk(conv_thunk) {}
 
 absl::Status ConvolutionCmd::Initialize(const Thunk::InitializeParams& params,
@@ -1371,7 +1371,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> ConvolutionCmd::Record(
       });
 }
 
-CommandBufferCmd::BufferUseVector ConvolutionCmd::buffers() const {
+CommandBufferCmd::BufferUseVector ConvolutionCmd::buffers() {
   BufferUseVector buffer_usage;
   buffer_usage.reserve(operand_buffers_.size() + result_buffers_.size() + 1);
 
@@ -1984,20 +1984,13 @@ CommandBufferCmd::BufferUseVector CollectiveBroadcastCmd::buffers() {
 //===----------------------------------------------------------------------===//
 
 CollectivePermuteCmd::CollectivePermuteCmd(
-    P2PConfig p2p_config, bool p2p_memcpy_enabled,
-    absl::Span<const CollectiveThunk::Buffer> buffers,
-    std::shared_ptr<CollectiveThunk::AsyncEvents> async_events,
-    ResourceUseVector resources)
+    ExecutionStreamId execution_stream_id,
+    ExecutionStreamId async_from_stream_id, const P2PConfig& config,
+    absl::Span<const CollectiveThunk::Buffer> buffers)
     : CollectiveCmd(CommandBufferCmdType::kCollectivePermuteCmd,
-                    std::move(p2p_config.config), std::move(async_events),
-                    std::move(resources)),
-      id_to_source_target_(std::move(p2p_config.id_to_source_target)),
-      buffers_(buffers.begin(), buffers.end()) {
-  if (p2p_memcpy_enabled) {
-    LOG(WARNING) << "CollectivePermuteCmd does not support p2p_memcpy: "
-                 << "falling back to the default NCCL implementation";
-  }
-}
+                    execution_stream_id, async_from_stream_id, config.config),
+      id_to_source_target_(std::move(config.id_to_source_target)),
+      buffers_(buffers.begin(), buffers.end()) {}
 
 absl::StatusOr<const se::CommandBuffer::Command*> CollectivePermuteCmd::Record(
     const Thunk::ExecuteParams& execute_params,
@@ -2039,14 +2032,13 @@ absl::StatusOr<const se::CommandBuffer::Command*> CollectivePermuteCmd::Record(
       execute_params, record_params, std::move(record_action), command_buffer,
       [&](se::Stream* stream) {
         return RunCollectivePermute(
-            source_target, device_buffers, *stream, comm_handle.comm,
-            "cmd_buf_collective_permute", current_id,
-            /*use_memcpy*/ false, /*recv_ptr_map*/ nullptr,
-            config().use_symmetric_buffer);
+            collectives, source_target, device_buffers, *stream,
+            comm_handle.comm, "cmd_buf_collective_permute", current_id,
+            /*use_memcpy*/ false, /*recv_ptr_map*/ nullptr);
       });
 }
 
-CommandBufferCmd::BufferUseVector CollectivePermuteCmd::buffers() const {
+CommandBufferCmd::BufferUseVector CollectivePermuteCmd::buffers() {
   BufferUseVector buffer_usage;
   for (auto& buffer : buffers_) {
     buffer_usage.emplace_back(buffer.source_buffer, MemoryAccess::kRead);

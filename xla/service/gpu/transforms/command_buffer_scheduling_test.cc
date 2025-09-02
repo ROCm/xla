@@ -38,6 +38,7 @@ limitations under the License.
 #include "xla/tests/hlo_test_base.h"
 #include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/xla.pb.h"
+#include "xla/service/platform_util.h"
 #include "tsl/platform/status.h"
 #include "tsl/platform/statusor.h"
 
@@ -345,7 +346,8 @@ TEST_F(CommandBufferSchedulingTest, CollectivePermuteStartFollowedByDone) {
                             });
 }
 
-TEST_F(CommandBufferSchedulingTest, CollectivePermuteStartFollowedByAnotherStart) {
+TEST_F(CommandBufferSchedulingTest,
+       CollectivePermuteStartFollowedByAnotherStart) {
   const char* hlo = R"(
     HloModule TestModule, is_scheduled=true
 
@@ -366,7 +368,7 @@ TEST_F(CommandBufferSchedulingTest, CollectivePermuteStartFollowedByAnotherStart
       ROOT tuple = (s32[2]{0}, s32[2]{0}) tuple(done.1, done.2)
     })";
 
-// ROOT %tuple = (s32[2]{0}, s32[2]{0}) tuple(%done.1, %done.2)
+  // ROOT %tuple = (s32[2]{0}, s32[2]{0}) tuple(%done.1, %done.2)
 
   const char* expected = R"(
     CHECK: %command_buffer ([[P0:.+]]: s32[2], [[P1:.+]]: s32[2]) -> (s32[2], s32[2]) {
@@ -542,7 +544,6 @@ TEST_F(CommandBufferSchedulingTest, DoNotCaptureUnmatchedAsyncDone) {
 }
 
 TEST_F(CommandBufferSchedulingTest, ConvolutionCustomCallAndCollectivePermute) {
-
   if (xla::PlatformUtil::CanonicalPlatformName("gpu").value() == "cuda") {
     GTEST_SKIP() << "No command buffer support of convolutions on CUDA";
   }

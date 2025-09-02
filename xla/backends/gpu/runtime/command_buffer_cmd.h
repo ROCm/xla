@@ -92,6 +92,8 @@ namespace xla::gpu {
   V(kReduceScatterCmd, "ReduceScatterCmd")                       \
   V(kAllToAllCmd, "AllToAllCmd")                                 \
   V(kAllGatherCmd, "AllGatherCmd")                               \
+  V(kReduceScatter, "ReduceScatterCmd") \
+  V(kAllToAll, "AllToAllCmd") \
   V(kCollectiveBroadcastCmd, "CollectiveBroadcastCmd")           \
   V(kCollectivePermuteCmd, "CollectivePermuteCmd")               \
   V(kAsyncDone, "AsyncDone")                                     \
@@ -800,8 +802,8 @@ class CublasLtCmd : public TracedCommandBufferCmd {
 
 class ConvolutionCmd : public TracedCommandBufferCmd, public ConvolutionThunk {
  public:
-  ConvolutionCmd(const ConvolutionThunk& conv_thunk,
-                 ResourceUseVector resources = {});
+  ConvolutionCmd(ExecutionStreamId execution_stream_id,
+                 const ConvolutionThunk& conv_thunk);
 
   absl::Status Initialize(const Thunk::InitializeParams& params,
                           StateManager& state) override;
@@ -1101,11 +1103,10 @@ class CollectiveBroadcastCmd : public CollectiveCmd {
 
 class CollectivePermuteCmd : public CollectiveCmd {
  public:
-  CollectivePermuteCmd(
-      P2PConfig config, bool p2p_memcpy_enabled,
-      absl::Span<const CollectiveThunk::Buffer> buffers,
-      std::shared_ptr<CollectiveThunk::AsyncEvents> async_events,
-      ResourceUseVector resources = {});
+  CollectivePermuteCmd(ExecutionStreamId execution_stream_id,
+                       ExecutionStreamId async_from_stream_id,
+                       const P2PConfig& config,
+                       absl::Span<const CollectiveThunk::Buffer> buffers);
 
   absl::StatusOr<const se::CommandBuffer::Command*> Record(
       const Thunk::ExecuteParams& execute_params,
@@ -1113,6 +1114,9 @@ class CollectivePermuteCmd : public CollectiveCmd {
       se::CommandBuffer* command_buffer) override;
 
   BufferUseVector buffers() override;
+  AsyncStreamKind GetAsyncStreamKind() override {
+    return AsyncStreamKind::kCollective;
+  }
 
  private:
   P2PConfig::IdToSourceTargetMap id_to_source_target_;

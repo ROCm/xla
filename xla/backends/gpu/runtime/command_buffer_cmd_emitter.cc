@@ -194,11 +194,11 @@ static absl::StatusOr<Command> Convert(const AllGatherStartThunk& thunk) {
                                         thunk.config(), thunk.buffers());
 }
 
-static absl::StatusOr<Command> Convert(const CollectivePermuteStartThunk& thunk,
-                                       ResourceUseVector resources) {
-  return std::make_unique<CollectivePermuteCmd>(thunk.GetP2PConfig(), 
-            thunk.P2PMemcpyEnabled(), thunk.buffers(),
-            thunk.async_events(), resources);
+static absl::StatusOr<Command> Convert(
+    const CollectivePermuteStartThunk& thunk) {
+  return std::make_unique<CollectivePermuteCmd>(
+      thunk.nccl_execution_stream_id(), thunk.execution_stream_id(),
+      thunk.GetP2PConfig(), thunk.buffers());
 }
 
 static absl::StatusOr<Command> Convert(
@@ -250,9 +250,8 @@ static absl::StatusOr<Command> Convert(const CuDnnThunk& thunk) {
                                     thunk.arguments(), thunk.graph());
 }
 
-static absl::StatusOr<Command> Convert(const ConvolutionThunk& thunk,
-                                       ResourceUseVector resources) {
-  return std::make_unique<ConvolutionCmd>(thunk, resources);
+static absl::StatusOr<Command> Convert(const ConvolutionThunk& thunk) {
+  return std::make_unique<ConvolutionCmd>(thunk.execution_stream_id(), thunk);
 }
 
 //===----------------------------------------------------------------------===//
@@ -309,9 +308,9 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
     case Thunk::Kind::kReduceScatterStart:
       return append(Convert<ReduceScatterStartThunk>(thunk));
     case Thunk::Kind::kAllToAllStart:
-      return append(Convert<AllToAllStartThunk>(thunk, resources));
+      return append(Convert<AllToAllStartThunk>(thunk));
     case Thunk::Kind::kCollectivePermuteStart:
-      return append(Convert<CollectivePermuteStartThunk>(thunk, resources));
+      return append(Convert<CollectivePermuteStartThunk>(thunk));
     case Thunk::Kind::kPartitionId:
       return append(Convert<PartitionIdThunk>(thunk));
     case Thunk::Kind::kReplicaId:
@@ -319,9 +318,9 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
     case Thunk::Kind::kWhile:
       return append(Convert<WhileThunk>(thunk, options));
     case Thunk::Kind::kCuDnn:
-      return append(Convert<CuDnnThunk>(thunk, resources));
+      return append(Convert<CuDnnThunk>(thunk));
     case Thunk::Kind::kConvolution:
-      return append(Convert<ConvolutionThunk>(thunk, resources));
+      return append(Convert<ConvolutionThunk>(thunk));
     case Thunk::Kind::kDynamicSlice:
       return append(Convert<DynamicSliceThunk>(thunk, options));
 
@@ -339,21 +338,7 @@ static absl::Status AppendCommands(CommandBufferCmdSequence& cmd_sequence,
     case Thunk::Kind::kReduceScatterDone:
     case Thunk::Kind::kAllToAllDone:
     case Thunk::Kind::kCollectivePermuteDone:
-      if (options.synchronization_mode ==
-          CommandBufferCmdExecutor::SynchronizationMode::kLHS) {
-        return append(absl::StatusOr<Command>(std::make_unique<AsyncDoneCmd>(
-            static_cast<const CollectiveDoneThunk&>(thunk).async_events(),
-            resources)));
-      } else {
-        if (resources.empty()) {
-          return absl::OkStatus();
-        }
-        // If there control dependencies between these thunks, we will create
-        // an empty command act as dependency nodes.
-        return append(
-            absl::StatusOr<Command>(std::make_unique<EmptyCmd>(resources)));
-      }
-
+      return absl::OkStatus();
     case Thunk::Kind::kWaitForStreams:
       return absl::OkStatus();
 
