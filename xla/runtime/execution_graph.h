@@ -21,12 +21,12 @@ limitations under the License.
 #include <limits>
 #include <tuple>
 #include <type_traits>
+#include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/runtime/buffer_use.h"
 #include "xla/runtime/resource_use.h"
@@ -61,107 +61,12 @@ class ExecutionGraph {
 
   static constexpr NodeId kInvalidNodeId = std::numeric_limits<NodeId>::min();
 
-  // A base class for an operation that can be executed by the runtime.
-  class Operation {
-   public:
-    virtual ~Operation() = default;
-
-    virtual absl::string_view name() const = 0;
-    // Optional function that allows grouping operations of the same kind. E.x.
-    // on XLA:CPU this is the id of the thunk kind, and is used for color coding
-    // graph visualization.
-    virtual int64_t op_type_id() const { return 0; };
-    virtual absl::Span<const BufferUse> BufferUses() const = 0;
-    virtual absl::Span<const ResourceUse> ResourceUses() const = 0;
-
-    const std::vector<
-        std::pair<std::string, std::vector<std::unique_ptr<Operation>>>>&
-    named_nested_operations() const {
-      return named_nested_operations_;
-    }
-
-   protected:
-    std::vector<
-        std::pair<std::string, std::vector<std::unique_ptr<Operation>>>>&
-    named_nested_operations() {
-      return named_nested_operations_;
-    }
-
-    Operation() = default;
-
-    Operation(const Operation&) = default;
-    Operation& operator=(const Operation&) = default;
-
-    Operation(Operation&&) = default;
-    Operation& operator=(Operation&&) = default;
-
-   private:
-    std::vector<std::pair<std::string, std::vector<std::unique_ptr<Operation>>>>
-        named_nested_operations_;
-  };
-
-  // An edge between two nodes created for the execution graph operations.
-  struct NodeEdge {
-    // Edge kind defines execution ordering between two operations. Scheduling
-    // edge is weaker than an execution edge, as it gives more flexibility
-    // to the backend runtime to execute operations concurrently.
-    enum class Kind {
-      // If two operations have a scheduling edge between them, then the
-      // dependent operation must be scheduled (start execution) after the
-      // dependency operation scheduled (started execution), however it doesn't
-      // have to wait for the completion of execution. We use this type of
-      // edge to guarantee that operations that share the same resource (i.e.
-      // collective communicator) start execution in a deterministic order
-      // across different ranks, however the execution of operations can
-      // overlap and finish in any order, and backend-implementation specific.
-      kScheduling,
-
-      // If two operations have an execution edge between them, then the
-      // dependent operation must wait for the completion of dependency
-      // operation execution. We use this type of edge to order execution of
-      // operations that read and write from/to the same buffers, as otherwise
-      // we may create data races.
-      kExecution,
-    };
-
-    static constexpr NodeEdge::Kind KindOf(Resource::Kind resource) {
-      switch (resource) {
-        case Resource::kToken:
-          return NodeEdge::Kind::kExecution;
-        case Resource::kCollectiveCommunicator:
-          return NodeEdge::Kind::kScheduling;
-      }
-    }
-
-    bool operator==(const NodeEdge& other) const {
-      return kind == other.kind && id == other.id;
-    }
-
-    template <typename Sink>
-    friend void AbslStringify(Sink& sink, Kind kind) {
-      sink.Append(kind == Kind::kScheduling ? "scheduling" : "execution");
-    }
-
-    template <typename Sink>
-    friend void AbslStringify(Sink& sink, const NodeEdge& edge) {
-      absl::Format(&sink, "NodeEdge {kind: %v, id: %v}", edge.kind, edge.id);
-    }
-
-    Kind kind;
-    NodeId id;
-  };
-
   // NodeDef defines a dependency-based execution order for all operations.
   struct NodeDef {
     NodeId id = kInvalidNodeId;
 
-<<<<<<< HEAD
     absl::Span<const NodeId> in_edges;
     absl::Span<const NodeId> out_edges;
-=======
-    absl::Span<const NodeEdge> in_edges;
-    absl::Span<const NodeEdge> out_edges;
->>>>>>> 0d7041cd96 (command buffer stable version with subgraphs & hsaco cache update)
 
     // When doing the transitive reduction, we assign a priority to each node
     // based on the number of nodes that are reachable from the given node. The
@@ -170,26 +75,23 @@ class ExecutionGraph {
     int64_t priority = 0;
   };
 
-  class Renderer {
+  // A base class for an operation that can be executed by the runtime.
+  class Operation {
    public:
-    Renderer() = default;
-    virtual ~Renderer() = default;
+    virtual ~Operation() = default;
 
-    // Generates a string representation for the given execution graph
-    // operations which can be published to a URL using `PublishGraph`.
-    virtual std::string GenerateGraphAsString(
-        absl::Span<const ExecutionGraph::Operation* const> operations) = 0;
+    virtual absl::Span<const BufferUse> BufferUses() const = 0;
+    virtual absl::Span<const ResourceUse> ResourceUses() const = 0;
 
-    // Publishes the generated graph.
-    virtual absl::StatusOr<std::string> PublishGraph(
-        absl::string_view graph_as_string) = 0;
+   protected:
+    Operation() = default;
+
+    Operation(const Operation&) = default;
+    Operation& operator=(const Operation&) = default;
+
+    Operation(Operation&&) = default;
+    Operation& operator=(Operation&&) = default;
   };
-
-  // Returns the registered renderer for execution graphs.
-  static Renderer* GetRenderer();
-
-  // Registers a renderer for execution graphs.
-  static void RegisterRenderer(std::unique_ptr<Renderer> renderer);
 
   // Constructs an execution graph from a sequence of operations.
   template <typename Op,
@@ -201,10 +103,6 @@ class ExecutionGraph {
     }
     return Create(ptrs);
   }
-
-  // Constructs an execution graph from a sequence of operations.
-  static absl::StatusOr<ExecutionGraph> Create(
-      absl::Span<const Operation* const> operations);
 
   // Returns execution graph nodes definitions.
   absl::Span<const NodeDef> nodes_defs() const { return nodes_defs_; }
@@ -226,13 +124,13 @@ class ExecutionGraph {
   }
 
   // Returns in-edges for a given node id.
-  absl::Span<const NodeEdge> in_edges(NodeId id) const {
+  absl::Span<const NodeId> in_edges(NodeId id) const {
     DCHECK_EQ(id, nodes_defs_[id].id);
     return nodes_defs_[id].in_edges;
   }
 
   // Returns out-edges for a given node id.
-  absl::Span<const NodeEdge> out_edges(NodeId id) const {
+  absl::Span<const NodeId> out_edges(NodeId id) const {
     DCHECK_EQ(id, nodes_defs_[id].id);
     return nodes_defs_[id].out_edges;
   }
@@ -250,13 +148,9 @@ class ExecutionGraph {
   static absl::StatusOr<ExecutionGraph> Create(
       absl::Span<const Operation* const> operations);
 
-  void dump_as_dot(const std::string& fname,
-                   const std::vector<std::string>& op_names, size_t node_ofs,
-                   size_t max_nodes);
-
   // We store all `in_edges` and `out_edges` referenced by the `NodeDef` inside
   // large vectors to optimize for data locality on a hot path.
-  using NodesEdges = std::vector<NodeEdge>;
+  using NodesEdges = std::vector<NodeId>;
 
   // A NodeDef builder to collect all in-edges and out-edges before constructing
   // a NodeDef. We use it at dependency graph construction time when we don't
@@ -264,8 +158,8 @@ class ExecutionGraph {
   struct NodeDefBuilder {
     NodeId id = kInvalidNodeId;
     int64_t priority = 0;
-    std::vector<NodeEdge> in_edges;
-    std::vector<NodeEdge> out_edges;
+    std::vector<NodeId> in_edges;
+    std::vector<NodeId> out_edges;
   };
 
   ExecutionGraph(NodesEdges nodes_in_edges, NodesEdges nodes_out_edges,
