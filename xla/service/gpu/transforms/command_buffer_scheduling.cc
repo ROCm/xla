@@ -394,7 +394,7 @@ CommandBufferScheduling::CollectCommandBufferSequences(
 
   // Adds `current_seq` to `sequences` if it has enough commands in it.
   auto collect_current_seq = [&](HloInstruction* instr) {
-    VLOG(0) << "Stopped at: " << (instr ? instr->ToString() : "<end>")
+    VLOG(1) << "Stopped at: " << (instr ? instr->ToString() : "<end>")
             << " commands: " << num_commands_in_current_seq;
     if (num_commands_in_current_seq >= std::max(1, min_num_commands)) {
       RemoveTrailingNoOps(current_seq);
