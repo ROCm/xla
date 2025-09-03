@@ -112,13 +112,12 @@ absl::Status NcclAllToAllStartThunk::Initialize(
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
 
   if (is_local() && p2p_memcpy_enabled_) {
-    const CollectiveStreamId stream_id = nccl_stream_id();
     AsyncStreamKind stream_kind = GetAsyncStreamKind();
     TF_ASSIGN_OR_RETURN(
         CommunicatorHandle comm_handle,
         GetNcclComm(collectives, *params.collective_params,
                     *params.collective_cliques, config().replica_groups,
-                    config().group_mode, stream_id, stream_kind));
+                    config().group_mode, stream_kind));
     TF_ASSIGN_OR_RETURN(int32_t num_ranks, comm_handle.comm->NumRanks());
     se::StreamExecutor* executor = params.executor;
     {
@@ -272,12 +271,12 @@ static absl::Status RecvPtrFromPeer(void* ptr, RankId peer, Communicator* comm,
 
 // TODO(b/380457503): Memcpy AllToAll implementation must be moved to
 // NcclCommunicator implementation.
-absl::Status RunMemCpyAllToAll(
-    GpuCollectives* collectives, bool has_split_dimension,
-    std::vector<DeviceBufferPair>& buffers, se::Stream& stream,
-    Communicator* comm,
-    uint64_t send_pointer_map[],
-    uint64_t receive_pointer_map[]) {
+absl::Status RunMemCpyAllToAll(GpuCollectives* collectives,
+                               bool has_split_dimension,
+                               std::vector<DeviceBufferPair>& buffers,
+                               se::Stream& stream, Communicator* comm,
+                               uint64_t send_pointer_map[],
+                               uint64_t receive_pointer_map[]) {
   int device_ordinal = stream.parent()->device_ordinal();
   VLOG(3) << "Performing mem-copy-all-to-all from device ordinal: "
           << device_ordinal;

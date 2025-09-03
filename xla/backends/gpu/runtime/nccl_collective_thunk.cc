@@ -265,8 +265,7 @@ absl::StatusOr<CommunicatorHandle> GetNcclComm(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const Thunk::CollectiveCliques& collective_cliques,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, CollectiveStreamId stream_id,
-    AsyncStreamKind stream_kind) {
+    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind) {
   TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
                       GetGpuCliqueKey(collectives, params, replica_groups,
                                       group_mode, stream_kind));
@@ -427,15 +426,13 @@ bool operator==(const FirstCallRendezvousKey& a,
 absl::Status NcclCollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
   VLOG(1) << absl::StreamFormat("Starting %s %s.", IsAsync() ? "async" : "sync",
                                 Thunk::KindToString(kind()));
-  const CollectiveStreamId stream_id = nccl_stream_id();
-
   AsyncStreamKind stream_kind = GetAsyncStreamKind();
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
   TF_ASSIGN_OR_RETURN(
       CommunicatorHandle comm_handle,
       GetNcclComm(collectives, *params.collective_params,
                   *params.collective_cliques, config().replica_groups,
-                  config().group_mode, stream_id, stream_kind));
+                  config().group_mode, stream_kind));
   se::StreamExecutor* executor = params.stream->parent();
   int64_t async_stream_idx = static_cast<int64_t>(stream_kind);
 
