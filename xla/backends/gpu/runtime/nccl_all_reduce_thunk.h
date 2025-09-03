@@ -85,24 +85,6 @@ class NcclAllReduceStartThunk : public NcclAllReduceReduceScatterThunkBase {
 
  private:
   CollectiveKernelThunk collective_kernel_thunk_;
-
-  bool one_shot_kernel_enabled_ = false;
-
-  absl::Mutex mutex_;
-
-  // Local buffer allocations to copy input data for the one-shot kernel.
-  absl::flat_hash_map<se::StreamExecutor*, se::DeviceMemoryHandle>
-      local_buffer_allocs_ ABSL_GUARDED_BY(mutex_);
-
-  // Events to synchronize steams on different devices at the start of the
-  // one-shot kernel.
-  absl::flat_hash_map<se::StreamExecutor*, std::unique_ptr<se::Event>>
-      start_events_ ABSL_GUARDED_BY(mutex_);
-
-  // Events to synchronize steams on different devices at the end of the
-  // one-shot kernel.
-  absl::flat_hash_map<se::StreamExecutor*, std::unique_ptr<se::Event>>
-      end_events_ ABSL_GUARDED_BY(mutex_);
 };
 
 // -----------------------------------------------------------------------------
