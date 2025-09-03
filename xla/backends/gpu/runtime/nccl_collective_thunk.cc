@@ -271,12 +271,10 @@ absl::StatusOr<CommunicatorHandle> GetNcclComm(
                                       group_mode, stream_kind));
 
   std::optional<RankId> rank = clique_key.rank(params.global_device_id);
-  TF_ASSIGN_OR_RETURN(bool is_local,
-                      collective_cliques.is_local_clique(clique_key));
   TF_ASSIGN_OR_RETURN(Communicator * comm,
-                      collective_cliques.GetComm(std::move(clique_key), *rank));
+                      collective_cliques.GetComm(clique_key, *rank));
 
-  return CommunicatorHandle(comm, is_local);
+  return CommunicatorHandle(comm, std::move(clique_key));
 }
 
 absl::StatusOr<std::vector<DeviceBufferPair>> ConvertToDeviceBuffers(

@@ -105,13 +105,13 @@ NcclCollectiveConfig GetNcclCollectiveConfigForMlir(
   return config;
 }
 
-// Handle to a communicator object with its `is_local` property.
+// Handle to a communicator object with corresponding clique key.
 struct CommunicatorHandle {
-  CommunicatorHandle(Communicator* comm, bool is_local)
-      : comm(comm), is_local(is_local) {}
+  CommunicatorHandle(Communicator* comm, GpuCliqueKey clique_key)
+      : comm(comm), clique_key(std::move(clique_key)) {}
 
-  Communicator* comm;  // communicator object
-  bool is_local;       // whether this comm is a node-local comm
+  Communicator* comm;       // communicator object
+  GpuCliqueKey clique_key;  // clique key
 };
 
 //===----------------------------------------------------------------------===//

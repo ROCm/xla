@@ -160,11 +160,9 @@ absl::Status NcclAllReduceStartThunk::RunNcclCollective(
                              config_.config.operand_element_type));
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
 
-  bool use_collective_kernel = 0;
-  // TF_ASSIGN_OR_RETURN(bool use_collective_kernel,
-  //                     collective_kernel_thunk_.IsSupported(
-  //                         comm_handle.clique_key,
-  //                         params.collective_cliques));
+  TF_ASSIGN_OR_RETURN(bool use_collective_kernel,
+                      collective_kernel_thunk_.IsSupported(
+                          comm_handle.clique_key, params.collective_cliques));
 
   if (use_collective_kernel) {
     return collective_kernel_thunk_.ExecuteOnStream(params);
