@@ -2751,7 +2751,7 @@ xla_test(
         ],
     },
     backends = [
-        "gpu",
+       "gpu_amd_any",
     ],
     deps = [
         ":hlo_test_base",
