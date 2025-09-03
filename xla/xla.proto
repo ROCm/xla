@@ -182,6 +182,9 @@ message DebugOptions {
   // Internal debug/testing flag to switch Triton GEMM fusions on or off.
   bool xla_gpu_unsupported_enable_triton_gemm = 322;
 
+  // Internal debug/testing flag to switch Triton GEMM fusions on or off.
+  bool xla_gpu_backported_use_all_reduce_custom_kernel = 387;
+
   // go/keep-sorted end
 
   //--------------------------------------------------------------------------//

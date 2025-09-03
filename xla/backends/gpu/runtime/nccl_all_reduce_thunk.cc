@@ -111,13 +111,16 @@ NcclAllReduceStartThunk::NcclAllReduceStartThunk(
           impl::GetNcclAllReduceConfigInst(inst), std::move(buffers),
           IsSyncCollective(inst)),
       collective_kernel_thunk_{
-          thunk_info, config_.config, config_.reduction_kind, IsAsync(),
-          buffers_,   false
+          thunk_info,
+          config_.config,
+          config_.reduction_kind,
+          IsAsync(),
+          buffers_,
           /*is_collective_kernel_enabled=*/
-          // inst->GetModule()
-          //     ->config()
-          //     .debug_options()
-          //     .xla_gpu_unsupported_use_all_reduce_one_shot_kernel(),
+          inst->GetModule()
+              ->config()
+              .debug_options()
+              .xla_gpu_backported_use_all_reduce_custom_kernel(),
       } {}
 
 absl::Status NcclAllReduceStartThunk::CheckImplementable(
