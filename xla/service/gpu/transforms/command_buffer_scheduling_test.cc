@@ -351,7 +351,7 @@ TEST_F(CommandBufferSchedulingTest,
   const char* hlo = R"(
     HloModule TestModule, is_scheduled=true
 
-    ENTRY main (a: s32[2], b: s32[2]) -> (s32[2], s32[2]) {{
+    ENTRY main (a: s32[2], b: s32[2]) -> (s32[2], s32[2]) {
       a = s32[2] parameter(0)
       b = s32[2] parameter(1)
 
