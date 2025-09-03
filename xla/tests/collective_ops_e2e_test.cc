@@ -89,10 +89,6 @@ class CollectiveOpsTestE2E : public HloTestBase {
     return std::holds_alternative<se::CudaComputeCapability>(Capability());
   }
 
-  bool IsRocm() {
-    return std::holds_alternative<se::RocmComputeCapability>(Capability());
-  }
-
   const se::GpuComputeCapability& Capability() {
     return backend()
         .default_stream_executor()
@@ -3168,12 +3164,6 @@ class AllReduceTest
   AllReduceTest()
       : CollectiveOpsWithFlagsBase(std::get<0>(GetParam()),
                                    /*enable_p2p_memcpy=*/false) {}
-
-  void SetUp() override {
-    if (IsRocm() && !std::get<se::RocmComputeCapability>(Capability()).gfx9_mi300_series()) {
-        GTEST_SKIP();
-    }
-  }
 
  protected:
   DebugOptions GetDebugOptionsForTest() const override {

@@ -42,6 +42,8 @@ limitations under the License.*/
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/device_memory_handle.h"
 #include "xla/stream_executor/gpu/all_reduce_kernel.h"
+#include "xla/stream_executor/cuda/cuda_platform_id.h"
+#include "xla/stream_executor/rocm/rocm_platform_id.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
@@ -58,8 +60,22 @@ static constexpr int64_t kMaxTwoShotAllReduceSizeBytes =
 // Helper for allocating memory on the device.
 absl::StatusOr<se::DeviceMemoryHandle> AllocateMemory(
     se::StreamExecutor* executor, int64_t size,
-    absl::string_view debug_buffer_name) {
-  se::DeviceMemoryHandle local_buffer_alloc(executor, executor->Allocate(size));
+    absl::string_view debug_buffer_name, se::Platform::Id platform_id) {
+  se::DeviceMemoryHandle local_buffer_alloc;
+  if (platform_id == stream_executor::cuda::kCudaPlatformId) {
+    local_buffer_alloc =
+        se::DeviceMemoryHandle(executor, executor->Allocate(size));
+  } else if (platform_id == stream_executor::rocm::kROCmPlatformId) {
+    local_buffer_alloc = se::DeviceMemoryHandle(
+        executor,
+        executor->Allocate(
+            size, static_cast<int64_t>(
+                      stream_executor::MemoryType::kFineGrainedDevice)));
+  } else {
+    return absl::InvalidArgumentError(
+        "Unsupported GPU platform id for allocation");
+  }
+
   if (local_buffer_alloc.memory().is_null()) {
     return absl::InternalError(absl::StrFormat(
         "Failed to allocate %s for all-reduce.", debug_buffer_name));
@@ -203,12 +219,13 @@ absl::Status CollectiveKernelThunk::Initialize(const InitializeParams& params) {
   {
     absl::MutexLock lock(&mutex_);
     if (!per_stream_state_.contains(params.executor)) {
+      auto platform_id = params.executor->GetPlatform()->id();
       // Step1: Allocate local buffer
       TF_ASSIGN_OR_RETURN(
           se::DeviceMemoryHandle local_buffer_alloc,
           AllocateMemory(params.executor,
                          buffers_[0].source_buffer.size() * kNumBuffers,
-                         "LocalBuffer"));
+                         "LocalBuffer", platform_id));
 
       // Step2: Allocate signal buffer
       // We needs 1 atomic flag per block per device on each device.
@@ -218,7 +235,7 @@ absl::Status CollectiveKernelThunk::Initialize(const InitializeParams& params) {
           se::DeviceMemoryHandle signal_flags_alloc,
           AllocateMemory(params.executor,
                          kNumSignalFlags * sizeof(int32_t) * kNumBuffers,
-                         "SignalBuffer"));
+                         "SignalBuffer", platform_id));
       // One-shot kernel expects that the signal flags buffer is zeroed out.
       // Initial state of device memory is undefined, so we need to zero out
       // the buffer. The kernel will take care of leaving the buffer in
