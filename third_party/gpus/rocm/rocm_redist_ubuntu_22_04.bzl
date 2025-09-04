@@ -327,6 +327,10 @@ rocm_redist_ubuntu_22_04 = {
                 sha256 = "66df78d8c5e2d1a0ae43cd4a5e41cf75ec120c870a0bbd7da18a2ba4dec42f9c",
             ),
             struct(
+                url = "https://repo.radeon.com/rocm/apt/6.2/pool/main/r/rocrand6.2.0/rocrand6.2.0_3.1.0.60200-66~22.04_amd64.deb",
+                sha256 = "82b3e6521383779e6693997223ba33390db38e3bdd9d0fd16bfaa125e1f28759",
+            ),
+            struct(
                 url = "https://repo.radeon.com/rocm/apt/6.2/pool/main/r/rocrand-dev/rocrand-dev_3.1.0.60200-66~22.04_amd64.deb",
                 sha256 = "317c16a6e0b0b456153437406dd92225e17dbd454fc1304b0c3fef5fbfc69bc2",
             ),
