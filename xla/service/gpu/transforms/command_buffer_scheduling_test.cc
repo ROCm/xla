@@ -38,7 +38,6 @@ limitations under the License.
 #include "xla/tests/hlo_test_base.h"
 #include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/xla.pb.h"
-#include "xla/service/platform_util.h"
 #include "tsl/platform/status.h"
 #include "tsl/platform/statusor.h"
 
@@ -58,9 +57,13 @@ class CommandBufferSchedulingTest : public HloTestBase {
     debug_options.add_xla_gpu_enable_command_buffer(DebugOptions::WHILE);
     debug_options.add_xla_gpu_enable_command_buffer(DebugOptions::COLLECTIVES);
     debug_options.add_xla_gpu_enable_command_buffer(DebugOptions::CUDNN);
+    debug_options.add_xla_gpu_enable_command_buffer(DebugOptions::CUBLAS);
     debug_options.add_xla_gpu_enable_command_buffer(DebugOptions::CUBLASLT);
     debug_options.add_xla_gpu_enable_command_buffer(DebugOptions::CUSTOM_CALL);
     debug_options.set_xla_gpu_graph_min_graph_size(2);
+    // Needed for ConvolutionCustomCallAndCollectivePermute test
+    debug_options.add_legacy_command_buffer_custom_call_targets(
+        "__cudnn$convBiasActivationForward");
     return debug_options;
   }
 
@@ -544,9 +547,6 @@ TEST_F(CommandBufferSchedulingTest, DoNotCaptureUnmatchedAsyncDone) {
 }
 
 TEST_F(CommandBufferSchedulingTest, ConvolutionCustomCallAndCollectivePermute) {
-  if (xla::PlatformUtil::CanonicalPlatformName("gpu").value() == "cuda") {
-    GTEST_SKIP() << "No command buffer support of convolutions on CUDA";
-  }
 
   const char* hlo = R"(
     HloModule TestModule, is_scheduled=true

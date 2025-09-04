@@ -40,7 +40,6 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_schedule.h"
-#include "xla/service/platform_util.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/cublas_cudnn.h"
 #include "xla/service/gpu/hlo_fusion_analysis.h"
@@ -239,9 +238,11 @@ static bool IsCommand(const HloCustomCallInstruction* hlo,
               << " into command buffer.";
       return true;
     }
-    // CUDA backend does not support capturing convolution kernels
-    if (xla::PlatformUtil::CanonicalPlatformName("gpu").value() == "rocm" &&
-        IsCustomCallToDnnConvolution(*hlo)) {
+    // Not all convolution custom calls can be captured, therefore we capture
+    // only those convolutions which are explicitly enabled by the user.
+    if (IsCustomCallToDnnConvolution(*hlo) && 
+        config.enabled_legacy_custom_call_targets.contains(
+              hlo->custom_call_target())) {
       VLOG(3) << "Recording convolution, target " << hlo->custom_call_target()
               << " into command buffer.";
       return true;
