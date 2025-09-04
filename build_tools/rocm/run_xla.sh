@@ -83,8 +83,8 @@ BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.6.0"
 mkdir -p ${BAZEL_DISK_CACHE_DIR}
 
 ASAN_ARGS=()
-ASAN_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=$(realpath $(dirname $0))/asan_ignore_list.txt")
-ASAN_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=$(realpath $(dirname $0))/lsan_ignore_list.txt")
+ASAN_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=$(realpath $(dirname $0))/asan_ignore_list.txt:use_sigaltstack=0")
+ASAN_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=$(realpath $(dirname $0))/lsan_ignore_list.txt:use_sigaltstack=0")
 ASAN_ARGS+=("--config=asan")
 
 bazel \
@@ -111,9 +111,9 @@ bazel \
     --run_under=//build_tools/ci:parallel_gpu_execute \
     --test_env=MIOPEN_FIND_ENFORCE=5 \
     --test_env=MIOPEN_FIND_MODE=1 \
-    //xla/... \
     --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
-    "${ASAN_ARGS[@]}"
+    "${ASAN_ARGS[@]}" \
+    -- //xla/... 
 
 # clean up bazel disk_cache
 bazel shutdown \
