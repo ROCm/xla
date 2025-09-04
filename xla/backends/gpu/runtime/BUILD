@@ -1517,7 +1517,7 @@ xla_test(
         "gpu": [
             "multi_gpu",
             "multi_gpu_h100",
-            "xla_amdgpu_any",
+            "xla_gpu_amd_any",
         ],
     },
     backends = ["gpu"],
