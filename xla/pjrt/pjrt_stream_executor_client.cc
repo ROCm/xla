@@ -1255,9 +1255,6 @@ PjRtStreamExecutorClient::CreateViewOfDeviceBuffer(
     void* device_ptr, const Shape& shape, PjRtDevice* device,
     std::function<void()> on_delete_callback,
     std::optional<std::intptr_t> stream) {
-  CHECK_EQ(memory_space->devices().size(), 1);
-  auto* device = memory_space->devices().front();
-
   auto buffer = RawSEDeviceMemory::CreateForeign(
       se::DeviceMemoryBase(device_ptr, ShapeUtil::ByteSizeOf(shape)),
       std::move(on_delete_callback));
@@ -2935,19 +2932,6 @@ PjRtStreamExecutorLoadedExecutable::EnqueueExecution(
     tsl::profiler::TraceMe traceme("ComputeSemaphoreAcquire");
     compute_reservation = std::make_shared<Semaphore::ScopedReservation>(
         device_state->compute_semaphore().ScopedAcquire(1));
-  }
-
-  auto start_time_ns = std::make_shared<uint64_t>();
-  std::optional<uint64_t> key = xla::GetDeviceTimeMeasurementKey();
-  // Record the start time of the execution by placing a callback on the stream
-  // directly before the execution. If this callback is added, another callback
-  // will be added directly after the execution to record the elapsed device
-  // time.
-  if (key.has_value()) {
-    TF_RETURN_IF_ERROR(device_state->ThenExecuteCallback(
-        device_state->compute_stream(), [start_time_ns]() {
-          *start_time_ns = tsl::Env::Default()->NowNanos();
-        }));
   }
 
   absl::StatusOr<PjRtStreamExecutorExecutionOutput> result_buffer_or_status =
