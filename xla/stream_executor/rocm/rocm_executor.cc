@@ -721,11 +721,12 @@ absl::StatusOr<ModuleHandle> RocmExecutor::LoadModuleFromHsaco(
 DeviceMemoryBase RocmExecutor::Allocate(uint64_t size, int64_t memory_space) {
   switch (static_cast<MemoryType>(memory_space)) {
     case MemoryType::kCollective:
-      return DeviceMemoryBase(
-          DeviceAllocate(rocm_context_, size, /*is_fine_grained*/ true), size);
     case MemoryType::kDevice:
       return DeviceMemoryBase(
           DeviceAllocate(rocm_context_, size, /*is_fine_grained*/ false), size);
+    case MemoryType::kP2PTempBuf:
+      return DeviceMemoryBase(
+          DeviceAllocate(rocm_context_, size, /*is_fine_grained*/ true), size);
     case MemoryType::kHost:
       return DeviceMemoryBase(HostAllocate(rocm_context_, size), size);
     default:

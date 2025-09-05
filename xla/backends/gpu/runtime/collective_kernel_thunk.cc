@@ -62,7 +62,7 @@ absl::StatusOr<se::DeviceMemoryHandle> AllocateMemory(
   se::DeviceMemoryHandle local_buffer_alloc(
       executor,
       executor->Allocate(size, static_cast<int64_t>(
-                                   stream_executor::MemoryType::kCollective)));
+                                   stream_executor::MemoryType::kP2PTempBuf)));
   if (local_buffer_alloc.memory().is_null()) {
     return absl::InternalError(absl::StrFormat(
         "Failed to allocate %s for all-reduce.", debug_buffer_name));
