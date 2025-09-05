@@ -1630,7 +1630,7 @@ absl::Status GpuCompiler::OptimizeHloPostLayoutAssignment(
       pipeline.AddPass<HloCSE>(/*is_layout_sensitive=*/true);
       pipeline.AddPass<HloConstantFolding>();
       pipeline.AddPass<HloDCE>();
-      if (debug_options.xla_gpu_enable_triton_gemm()) {
+      if (debug_options.xla_gpu_enable_triton_softmax_fusion()) {
         pipeline.AddPass<SoftmaxRewriterTriton>(
             gpu_target_config.device_description, ShapeSizeBytesFunction(),
             /*only_fuse_if_profitable=*/true);
