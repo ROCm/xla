@@ -37,20 +37,9 @@ echo ""
 echo "Bazel will use ${N_BUILD_JOBS} concurrent build job(s) and ${N_TEST_JOBS} concurrent test job(s) for gpu ${AMD_GPU_GFX_ID}."
 echo ""
 
-# First positional argument (if any) specifies the ROCM_INSTALL_DIR
-if [[ -n $1 ]]; then
-    ROCM_INSTALL_DIR=$1
-else
-    if [[ -z "${ROCM_PATH}" ]]; then
-        ROCM_INSTALL_DIR=/opt/rocm/
-    else
-        ROCM_INSTALL_DIR=$ROCM_PATH
-    fi
-fi
-
 export PYTHON_BIN_PATH=`which python3`
 export TF_NEED_ROCM=1
-export ROCM_PATH=$ROCM_INSTALL_DIR
+export ROCM_PATH="/opt/rocm"
 TAGS_FILTER="gpu,requires-gpu-amd,-multi_gpu,-requires-gpu-nvidia,-no_oss,-oss_excluded,-oss_serial,-no_gpu,-cuda-only"
 UNSUPPORTED_GPU_TAGS="$(echo -requires-gpu-sm{60,70,80,86,89,90}{,-only})"
 TAGS_FILTER="${TAGS_FILTER},${UNSUPPORTED_GPU_TAGS// /,}"
@@ -82,10 +71,14 @@ BAZEL_DISK_CACHE_SIZE=100G
 BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.6.0"
 mkdir -p ${BAZEL_DISK_CACHE_DIR}
 
-ASAN_ARGS=()
-ASAN_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=$(realpath $(dirname $0))/asan_ignore_list.txt:use_sigaltstack=0")
-ASAN_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=$(realpath $(dirname $0))/lsan_ignore_list.txt:use_sigaltstack=0")
-ASAN_ARGS+=("--config=asan")
+SANITIZER_ARGS=()
+if [[ $1 == "asan" ]]; then
+    SANITIZER_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=$(realpath $(dirname $0))/asan_ignore_list.txt:use_sigaltstack=0")
+    SANITIZER_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=$(realpath $(dirname $0))/lsan_ignore_list.txt:use_sigaltstack=0")
+    SANITIZER_ARGS+=("--config=$2")
+elif [[ $1 == "tsan" ]]; then
+    SANITIZER_ARGS+=("--config=$2")
+fi
 
 bazel \
     test \
@@ -112,7 +105,7 @@ bazel \
     --test_env=MIOPEN_FIND_ENFORCE=5 \
     --test_env=MIOPEN_FIND_MODE=1 \
     --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
-    "${ASAN_ARGS[@]}" \
+    "${SANITIZER_ARGS[@]}" \
     -- //xla/... 
 
 # clean up bazel disk_cache

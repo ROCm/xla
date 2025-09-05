@@ -224,6 +224,12 @@ build:asan --copt -g
 build:asan --copt -fno-omit-frame-pointer
 build:asan --linkopt -fsanitize=address
 
+build:tsan --strip=never
+build:tsan --copt -fsanitize=thread
+build:tsan --copt -O1
+build:tsan --copt -g
+build:tsan --linkopt -fsanitize=thread
+
 build:rocm_base --copt=-Wno-gnu-offsetof-extensions
 build:rocm_base --crosstool_top=@local_config_rocm//crosstool:toolchain
 build:rocm_base --define=using_rocm_hipcc=true
