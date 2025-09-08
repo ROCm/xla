@@ -2140,6 +2140,12 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "When enabled, the Triton emitter for dot will use int4 as native type "
       "and later the Triton IR will be rewritten by Triton IR rewriting pass "
       "to use int4 packed into int8."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_backported_use_all_reduce_custom_kernel",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_backported_use_all_reduce_custom_kernel),
+      debug_options->xla_gpu_backported_use_all_reduce_custom_kernel(),
+      "When enabled, use the custom allreduce kernel."));
   flag_list->push_back(
       tsl::Flag("xla_gpu_async_dot",
                 bool_setter_for(&DebugOptions::set_xla_gpu_async_dot),
