@@ -90,7 +90,9 @@ static const std::vector<TritonGemmConfig>* const kDefaultRocmConfigs =
     new std::vector<TritonGemmConfig>(
         {Config(32, 32, 256, 1, 1, 4), Config(64, 32, 32, 16, 1, 4),
          Config(32, 64, 64, 4, 1, 4), Config(128, 128, 64, 4, 1, 4),
-         Config(16, 16, 256, 1, 1, 4), Config(16, 128, 32, 16, 1, 4)});
+         Config(16, 16, 256, 1, 1, 4), Config(16, 128, 32, 16, 1, 4),
+         Config(32, 128, 16, 1, 2, 4), Config(16, 64, 128, 1, 2, 4),
+         Config(128, 128, 16, 1, 2, 4), Config(128, 128, 32, 1, 2, 4)});
 
 }  // namespace gpu
 }  // namespace xla
