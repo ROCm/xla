@@ -428,7 +428,6 @@ xla_test(
       "manual",
   ]),
   deps = [
-    # ":rocm_tracer",
     ":rocm_collector",
     ":rocm_tracer_utils",
     "//xla/tsl/profiler/utils:xplane_builder",
