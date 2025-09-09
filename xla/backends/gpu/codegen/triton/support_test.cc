@@ -50,6 +50,7 @@ limitations under the License.
 #include "tsl/platform/protobuf.h"
 
 
+#define ZORAN
 namespace xla {
 namespace gpu {
 namespace {
@@ -779,7 +780,7 @@ ENTRY triton_computation {
                           ParseTemplateAndGetInstruction(kHloTestTemplate, F32,
                                                          HloOpcode::kReduce));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{3, 4},
-                 se::CudaComputeCapability::Ampere());
+                 CudaAmpereOrRocm());
 }
 
 TEST_P(
@@ -827,7 +828,7 @@ ENTRY triton_computation {
 
   bool crashes_on_failure = data_type == PrimitiveType::F8E4M3FN ||
                             data_type == PrimitiveType::F8E5M2 ||
-                            data_type == PrimitiveType::F8E4M3B11FNUZ ||
+                            //data_type == PrimitiveType::F8E4M3B11FNUZ ||
                             data_type == PrimitiveType::F8E5M2FNUZ ||
                             data_type == PrimitiveType::F8E4M3FNUZ;
   RunSupportTest(
@@ -865,7 +866,7 @@ ENTRY triton_computation {
 }
 
 TEST_F(ReduceTest, ReduceWithNonConstReduceValueIsSupportedWithTriton) {
-  const se::GpuComputeCapability cc = se::CudaComputeCapability::Ampere();
+  const se::GpuComputeCapability cc = CudaAmpereOrRocm();
   const std::string kHloTestTemplate = R"(
 add {
   Arg_0 = $0[] parameter(0)
