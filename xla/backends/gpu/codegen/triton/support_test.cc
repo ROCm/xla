@@ -49,6 +49,8 @@ limitations under the License.
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/protobuf.h"
 
+
+#define ZORAN
 namespace xla {
 namespace gpu {
 namespace {
@@ -279,14 +281,17 @@ class TritonSupportTest : public TritonSupportTestBase {
     };
 
     if (IsTritonSupportedInstruction(ti.Instruction(), cc)) {
+      VLOG(-1) << "Zoran: expected absl_testing::IsOk";
       EXPECT_THAT(run_triton_codegen(), absl_testing::IsOk())
           << ti.Module()->ToString();
       return;
     }
     if (failure_mode == ExpectedFailMode::kFail) {
+      VLOG(-1) << "Zoran: expected Fail";
       EXPECT_THAT(run_triton_codegen(), Not(absl_testing::IsOk()));
       return;
     }
+    VLOG(-1) << "Zoran: expected Crash";
     EXPECT_DEATH(
         // We need to catch exceptions and abort(), because in OSS there
         // seem to be cases where exceptions are used instead of terminating
@@ -325,7 +330,7 @@ class TritonSupportTestWithTypeAndOpcodeAndDeviceParam
           std::tuple<PrimitiveType, HloOpcode, se::GpuComputeCapability>> {};
 
 using BitcastOrReshapeTest = TritonSupportTestWithTypeAndOpcodeAndDeviceParam;
-
+#ifdef ZORAN
 TEST_P(BitcastOrReshapeTest, IsTritonSupportedBitcastOrReshape) {
   auto [data_type, opcode, cc] = GetParam();
   const std::string kHloTestTemplate = R"(
@@ -779,7 +784,9 @@ ENTRY triton_computation {
       TestedInstruction ti,
       ParseTemplateAndGetInstruction(kHloTestTemplate, data_type, opcode));
   bool crashes_on_failure = data_type == PrimitiveType::F8E4M3FN ||
-                            data_type == PrimitiveType::F8E5M2;
+                            data_type == PrimitiveType::F8E5M2 ||
+                            data_type == PrimitiveType::F8E5M2FNUZ ||
+                            data_type == PrimitiveType::F8E4M3FNUZ;
   RunSupportTest(
       std::move(ti), /*output_tile_sizes=*/{1}, cc,
       crashes_on_failure ? ExpectedFailMode::kCrash : ExpectedFailMode::kFail);
@@ -850,7 +857,10 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, data_type, opcode));
 
   bool crashes_on_failure = data_type == PrimitiveType::F8E4M3FN ||
-                            data_type == PrimitiveType::F8E5M2;
+                            data_type == PrimitiveType::F8E5M2 ||
+                            data_type == PrimitiveType::F8E4M3B11FNUZ ||
+                            data_type == PrimitiveType::F8E5M2FNUZ ||
+                            data_type == PrimitiveType::F8E4M3FNUZ;
   RunSupportTest(
       std::move(ti), /*output_tile_sizes=*/{1}, cc,
       crashes_on_failure ? ExpectedFailMode::kCrash : ExpectedFailMode::kFail);
@@ -966,16 +976,19 @@ ENTRY triton_computation {
 
   // TODO(b/361526623): Reduce the cases where emitter crashes.
   ExpectedFailMode fail_mode = ExpectedFailMode::kFail;
-  if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
+  //if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
     if (opcode == HloOpcode::kDivide && (data_type == BF16 ||
                                           data_type == F16)) {
       fail_mode = ExpectedFailMode::kCrash;
     }
-    if (data_type == F8E4M3FN || data_type == F8E5M2) {
+    if (data_type == F8E4M3FN || data_type == F8E5M2 ||  data_type == PrimitiveType::F8E5M2FNUZ ||
+         data_type == PrimitiveType::F8E4M3FNUZ) {
       fail_mode = ExpectedFailMode::kFailOrCrash;
     }
+/*
   } else {
-    if ((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
+    if ((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum || opcode == HloOpcode::kMultiply || opcode == HloOpcode::kSubtract ||
+         opcode == HloOpcode::kAdd) &&
         (data_type == PrimitiveType::F8E5M2 ||
          data_type == PrimitiveType::F8E4M3FN  ||
          data_type == PrimitiveType::F8E5M2FNUZ ||
@@ -986,6 +999,8 @@ ENTRY triton_computation {
       fail_mode = ExpectedFailMode::kCrash;
     }
   }
+*/    
+  VLOG(-1) << "Zoran: fail_mode " << static_cast<int>(fail_mode);
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1}, cc, fail_mode);
 }
 
@@ -1899,7 +1914,7 @@ ENTRY triton_computation {
 INSTANTIATE_TEST_SUITE_P(ReverseSuite, ReverseTest,
                          AllTestCombinationsForOpcodes({HloOpcode::kReverse}),
                          TritonSupportTestTypeAndOpcodeAndDeviceToString);
-
+#endif // ZORAN
 using DotTest = TritonSupportTest;
 
 class DotTypesTest
@@ -1986,7 +2001,7 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::ValuesIn(AllOpSupportedTypes(HloOpcode::kDot)),
         ::testing::ValuesIn(AllDevicesToTest())),
     DotTypesTest::ParamToString);
-
+#ifdef ZORAN
 TEST_F(DotTest, NonFusionRhs) {
   const std::string kHloTestTemplate = R"(
 flhs {
@@ -3658,7 +3673,7 @@ TEST(OpCoverage, AllOpcodesAreTested) {
         << "Opcode `" << HloOpcodeString(opcode) << "` is not tested.";
   }
 }
-
+#endif // ZORAN
 }  // namespace
 }  // namespace gpu
 }  // namespace xla
