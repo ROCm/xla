@@ -71,6 +71,7 @@ BAZEL_DISK_CACHE_SIZE=100G
 BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.6.0"
 mkdir -p ${BAZEL_DISK_CACHE_DIR}
 
+# ASAN
 ASAN_ARGS=()
 ASAN_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=$(realpath $(dirname $0))/asan_ignore_list.txt:use_sigaltstack=0")
 ASAN_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=$(realpath $(dirname $0))/lsan_ignore_list.txt:use_sigaltstack=0")
