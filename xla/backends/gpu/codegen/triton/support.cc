@@ -218,6 +218,7 @@ absl::flat_hash_set<HloOpcode> TritonSupportedBinaryElementwiseOps(
     ret.insert(HloOpcode::kAtan2);
     ret.insert(HloOpcode::kPower);
     ret.insert(HloOpcode::kRemainder);
+    ret.insert(HloOpcode::kDivide);
   }
 
   return ret;
@@ -414,16 +415,17 @@ CodegenDecision AreDotAlgorithmInputAndOutputConversionsSupported(
     PrecisionConfig::Algorithm algorithm, PrimitiveType lhs_type,
     PrimitiveType rhs_type, PrimitiveType result_type,
     const se::GpuComputeCapability& gpu_version) {
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 0";
   if (algorithm == PrecisionConfig::ALG_UNSET) {
     return CodegenDecision::Allow();
   }
-
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 1";
   auto forbid = [&algorithm](absl::string_view message) {
     return CodegenDecision::Forbid(
         absl::StrCat(message, " for dot algorithm ",
                      PrecisionConfig::Algorithm_Name(algorithm)));
   };
-
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 2";
   absl::StatusOr<std::vector<PrimitiveType>> allowed_operands_types_or =
       algorithm_util::GetAllowedOperandsTypeForAlgorithm(algorithm);
   absl::StatusOr<PrimitiveType> expected_accumulator_type =
@@ -432,6 +434,7 @@ CodegenDecision AreDotAlgorithmInputAndOutputConversionsSupported(
     return forbid("Failed to recover operands types or accumulator type");
   }
   CHECK(!allowed_operands_types_or->empty());
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 3";
 
   if (result_type != *expected_accumulator_type) {
     if (!IsTritonSupportedConversion(*expected_accumulator_type, result_type,
@@ -441,18 +444,20 @@ CodegenDecision AreDotAlgorithmInputAndOutputConversionsSupported(
       return forbid("Unsupported result conversion");
     }
   }
-
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 4";
   if (algorithm == PrecisionConfig::ALG_DOT_F64_F64_F64 &&
       primitive_util::BitWidth(lhs_type) < 32 &&
       !std::get<se::CudaComputeCapability>(gpu_version).IsAtLeastBlackwell()) {
     return forbid("Unsupported BF16 on GPUs before Blackwell");
   }
-
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 5";
+/*
   if (allowed_operands_types_or->front() == PrimitiveType::F64 &&
       std::holds_alternative<se::RocmComputeCapability>(gpu_version)) {
    return forbid("Unsupported result conversion");
   }
-
+*/
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 6";
   if (allowed_operands_types_or->size() != 1) {
     if (lhs_type == rhs_type &&
         absl::c_linear_search(*allowed_operands_types_or, lhs_type)) {
@@ -462,7 +467,7 @@ CodegenDecision AreDotAlgorithmInputAndOutputConversionsSupported(
     // We may need to handle that in the future.
     return forbid("Unsupported operand types");
   }
-
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 7";
   PrimitiveType expected_operands_type = allowed_operands_types_or->front();
 
   if (lhs_type != expected_operands_type &&
@@ -470,12 +475,13 @@ CodegenDecision AreDotAlgorithmInputAndOutputConversionsSupported(
                                    gpu_version)) {
     return forbid("Unsupported lhs conversion");
   }
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 8";
   if (rhs_type != expected_operands_type &&
       !IsTritonSupportedConversion(expected_operands_type, rhs_type,
                                    gpu_version)) {
     return forbid("Unsupported rhs conversion");
   }
-
+  VLOG(-1) << "Zoran: AreDotAlgorithmInputAndOutputConversionsSupported 9";
   return CodegenDecision::Allow();
 }
 

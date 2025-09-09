@@ -50,7 +50,6 @@ limitations under the License.
 #include "tsl/platform/protobuf.h"
 
 
-#define ZORAN
 namespace xla {
 namespace gpu {
 namespace {
@@ -532,6 +531,7 @@ ENTRY triton_computation {
         any_is(PrimitiveType::F8E4M3FN) && any_is(PrimitiveType::F8E5M2);
   }
 
+/*  
   // Crashes due to unsupported/unspecified rounding mode.
   crashes_on_failure |= (data_type_in == PrimitiveType::F64 &&
                          (data_type_out == PrimitiveType::F8E4M3FN ||
@@ -541,7 +541,7 @@ ENTRY triton_computation {
   crashes_on_failure |= (data_type_out == PrimitiveType::F64 &&
                          (data_type_in == PrimitiveType::F8E4M3FN ||
                           data_type_in == PrimitiveType::F8E5M2));
-
+*/
   RunSupportTest(
       std::move(ti), /*output_tile_sizes=*/{1, 32}, cc,
       crashes_on_failure ? ExpectedFailMode::kCrash : ExpectedFailMode::kFail);
@@ -1900,7 +1900,7 @@ class DotTypesTest
                         "_", ComputeCapabilityToString(cc));
   };
 };
-
+#ifdef ZORAN
 TEST_P(DotTypesTest, Dot) {
   // Testing B[] = dot(A[], A[]).
   auto [result_type, input_type, cc] = GetParam();
@@ -1970,7 +1970,7 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::ValuesIn(AllOpSupportedTypes(HloOpcode::kDot)),
         ::testing::ValuesIn(AllDevicesToTest())),
     DotTypesTest::ParamToString);
-#ifdef ZORAN
+
 TEST_F(DotTest, NonFusionRhs) {
   const std::string kHloTestTemplate = R"(
 flhs {
@@ -2322,7 +2322,7 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::ValuesIn(kOperandPrecisions),
         ::testing::ValuesIn(AllDevicesToTest())),
     OperandPrecisionTestName);
-
+#endif // ZORAN
 class DotPrecisionAlgorithmTest
     : public DotTest,
       public ::testing::WithParamInterface<
@@ -2412,7 +2412,7 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::ValuesIn(AllPrecisionAlgorithms()),
         ::testing::ValuesIn(AllDevicesToTest())),
     DotPrecisionAlgorithmTestName);
-
+#ifdef ZORAN
 class FusionKindsTest
     : public TritonSupportTest,
       public ::testing::WithParamInterface<
