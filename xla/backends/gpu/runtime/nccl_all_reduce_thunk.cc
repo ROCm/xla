@@ -100,6 +100,7 @@ NcclAllReduceReduceScatterThunkBase::NcclAllReduceReduceScatterThunkBase(
     : NcclCollectiveThunk(kind, thunk_info, is_sync),
       config_(std::move(config)),
       buffers_(std::move(buffers)) {
+  VLOG(1) << "##### " << __func__;
   CHECK_EQ(config_.config.operand_count, buffers_.size());
 }
 
@@ -167,6 +168,7 @@ absl::Status NcclReduceScatterStartThunk::RunNcclCollective(
       ConvertToDeviceBuffers(params, buffers_,
                              config_.config.operand_element_type));
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
+  VLOG(1) << "##### " << __func__ << " on stream " << stream.GetName();
   return ::xla::gpu::RunReduceScatter(collectives, config_.reduction_kind,
                                       device_buffers, stream, comm_handle.comm);
 }

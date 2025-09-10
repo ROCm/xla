@@ -166,6 +166,7 @@ NcclCollectivePermuteStartThunk::NcclCollectivePermuteStartThunk(
 
 absl::Status NcclCollectivePermuteStartThunk::Initialize(
     const InitializeParams& params) {
+  VLOG(1) << "##### " << __func__ << " Start";      
   TF_RETURN_IF_ERROR(NcclCollectiveThunk::Initialize(params));
   device_count_ = params.local_device_count;
   CHECK_GT(device_count_, 0);
@@ -178,6 +179,7 @@ absl::Status NcclCollectivePermuteStartThunk::Initialize(
       absl::MutexLock lock(&barrier_mutex_);
       if (receiver_barrier_events_.find(current_id) ==
           receiver_barrier_events_.end()) {
+        VLOG(1) << "##### " << __func__ << " CreateEvent " << current_id;            
         TF_ASSIGN_OR_RETURN(auto receiver_event,
                             params.executor->CreateEvent());
         receiver_barrier_events_.emplace(current_id, std::move(receiver_event));
@@ -195,6 +197,8 @@ absl::Status NcclCollectivePermuteStartThunk::Initialize(
     TF_RETURN_IF_ERROR(recv_ptr_map_.InitializeId(current_id));
 
     if (source_id) {
+      VLOG(1) << "##### " << __func__ << " With source_id "
+              << source_id.value();      
       std::vector<se::DeviceMemoryBase> dest_addrs;
       std::transform(device_buffers.begin(), device_buffers.end(),
                      std::back_inserter(dest_addrs),
@@ -209,7 +213,7 @@ absl::Status NcclCollectivePermuteStartThunk::Initialize(
       TF_RETURN_IF_ERROR(recv_ptr_map_.PutRecvPtr(current_id, dest_opaques));
     }
   }
-
+  VLOG(1) << "##### " << __func__ << " Done";
   return absl::OkStatus();
 }
 struct CallRendezvousKey {
@@ -228,6 +232,7 @@ bool operator==(const CallRendezvousKey& a, const CallRendezvousKey& b) {
 absl::Status NcclCollectivePermuteStartThunk::RunNcclCollective(
     const ExecuteParams& params, se::Stream& stream,
     CommunicatorHandle comm_handle) {
+  VLOG(1) << "##### " << __func__ << " Start";      
   TF_ASSIGN_OR_RETURN(
       std::vector<DeviceBufferPair> device_buffers,
       ConvertToDeviceBuffers(params,
@@ -245,7 +250,7 @@ absl::Status NcclCollectivePermuteStartThunk::RunNcclCollective(
 
   bool use_memcpy = is_local_peer && recv_ptr_map_.IsInitialized(current_id) &&
                     p2p_memcpy_enabled_;
-
+  VLOG(1) << "##### " << __func__ << " Use memcpy: " << use_memcpy;
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
   if (use_memcpy) {
     std::optional<int64_t> source_id = source_target.source;
@@ -269,6 +274,7 @@ absl::Status NcclCollectivePermuteStartThunk::RunNcclCollective(
         "num_local_participants:%d",
         params.collective_params->run_id.ToInt(), config_.config.op_id,
         num_local_participants);
+    VLOG(1) << "##### " << __func__ << rendezvous_name;        
     auto rendezvous_key = CallRendezvousKey{params.collective_params->run_id};
 
     // Perform a rendezvous to make sure all receivers have their events
@@ -281,13 +287,16 @@ absl::Status NcclCollectivePermuteStartThunk::RunNcclCollective(
     if (target_id) {
       absl::MutexLock lock(&barrier_mutex_);
       auto receiver_event = receiver_barrier_events_.find(*target_id);
+      VLOG(1) << "##### " << __func__ << " WaitFor stream";      
       TF_RETURN_IF_ERROR(stream.WaitFor(receiver_event->second.get()));
     }
   }
 
-  return ::xla::gpu::RunCollectivePermute(
+  auto res = ::xla::gpu::RunCollectivePermute(
       collectives, source_target, device_buffers, stream, comm_handle.comm,
       device_string, current_id, use_memcpy, recv_ptr_map_);
+  VLOG(1) << "##### " << __func__ << " Done";      
+  return res;
 }
 
 absl::Status RunCollectivePermute(
@@ -297,6 +306,7 @@ absl::Status RunCollectivePermute(
     Communicator* comm, absl::string_view device_string, int64_t current_id,
     bool use_memcpy,
     NcclCollectivePermuteStartThunk::RecvPtrMap& recv_ptr_map) {
+  VLOG(1) << "##### " << __func__ << " Start";
   // Determine the source and target IDs for this instance. The source ID is the
   // ID which will copy its data to this instance. The destination ID is the ID
   // to which this instance will copy its data. Either are optional.
@@ -394,7 +404,7 @@ absl::Status RunCollectivePermute(
           stream.MemcpyD2D(&dst_addr, src_addr, src_addr.size()));
     }
   }
-
+  VLOG(1) << "##### " << __func__ << " Done";
   return absl::OkStatus();
 }
 

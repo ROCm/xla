@@ -72,6 +72,8 @@ NcclAllGatherStartThunk::NcclAllGatherStartThunk(
                           IsSyncCollective(inst)),
       config_(impl::GetNcclAllGatherConfig(inst)),
       buffers_(std::move(buffers)) {
+  VLOG(1) << "##### " << __func__
+          << " with hlo instruction : " << inst->ToString();        
   CHECK_EQ(config_.config.operand_count, buffers_.size());
 }
 
@@ -95,6 +97,7 @@ absl::Status NcclAllGatherStartThunk::RunNcclCollective(
       ConvertToDeviceBuffers(params, buffers_,
                              config_.config.operand_element_type));
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
+  VLOG(1) << "##### " << __func__ << " on stream " << stream.GetName();
   return xla::gpu::RunAllGather(collectives, device_buffers, stream,
                                 comm_handle.comm);
 }
