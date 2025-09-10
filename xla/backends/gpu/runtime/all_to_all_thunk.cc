@@ -181,7 +181,7 @@ bool AllToAllStartThunk::is_local() const {
   for (const auto& replica_group : config_.config.replica_groups) {
     const int64_t node_id = replica_group.replica_ids().at(0) / device_count;
     if (!absl::c_all_of(replica_group.replica_ids(),
-                        [this, node_id](const int64_t rank) {
+                        [node_id, device_count](const int64_t rank) {
                           return rank / device_count == node_id;
                         })) {
       return false;
