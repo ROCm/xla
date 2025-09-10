@@ -117,10 +117,11 @@ AllToAllStartThunk::AllToAllStartThunk(
 
 absl::Status AllToAllStartThunk::Initialize(const InitializeParams& params) {
   TF_RETURN_IF_ERROR(CollectiveThunk::Initialize(params));
-  device_count_ = params.local_device_count;
-  CHECK_GT(device_count_, 0);
+  device_count_.store(params.local_device_count, std::memory_order_relaxed);
+  CHECK_GT(params.local_device_count, 0);
   XLA_VLOG_DEVICE(5, params.executor->device_ordinal())
-      << "Local device count : " << device_count_;
+      << "Local device count : " << params.local_device_count;
+
 
   if (is_local() && p2p_memcpy_enabled_) {
     AsyncStreamKind stream_kind = GetAsyncStreamKind();
