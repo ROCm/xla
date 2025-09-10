@@ -281,9 +281,11 @@ absl::Status AllReduceStartThunk::RunCollective(
                           comm_handle.clique_key, params.collective_cliques));
 
   if (use_collective_kernel) {
+    VLOG(3) << "Custom AllReduce is used for intra-node communication";
     return collective_kernel_thunk_.ExecuteOnStream(params);
   }
 
+  VLOG(3) << "NCCL AllReduce is used for intra-node communication";
   return RunAllReduce(collectives, config_.reduction_kind, device_buffers, stream,
                       comm_handle.comm);
 }
