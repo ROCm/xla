@@ -154,17 +154,12 @@ absl::Status CollectiveKernelThunk::RendezvousAfterInit(
                  });
     return copy;
   };
-  //   TF_ASSIGN_OR_RETURN(
-  //       std::shared_ptr<std::vector<const StreamState*>> rendezvous_values,
-  //       Rendezvous<std::vector<const StreamState*>>(
-  //           /*name=*/start_rendezvous_key, /*key=*/clique_key,
-  //           /*value=*/state,
-  //           /*num_threads=*/num_ranks, completion_fn));
-
-  auto rendezvous_values = Rendezvous<std::vector<const StreamState*>>(
-      /*name=*/start_rendezvous_key, /*key=*/clique_key,
-      /*value=*/state,
-      /*num_threads=*/num_ranks, completion_fn);
+  TF_ASSIGN_OR_RETURN(
+      std::shared_ptr<std::vector<const StreamState*>> rendezvous_values,
+      Rendezvous<absl::StatusOr<std::vector<const StreamState*>>>(
+          /*name=*/start_rendezvous_key, /*key=*/clique_key,
+          /*value=*/state,
+          /*num_threads=*/num_ranks, completion_fn));
 
   // Sanity check to ensure that Rendezvous() was called only once.
   for (int i = 0; i < state.remote_buffer_ptrs.size(); ++i) {
