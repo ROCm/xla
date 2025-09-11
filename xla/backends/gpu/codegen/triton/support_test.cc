@@ -49,8 +49,6 @@ limitations under the License.
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/protobuf.h"
 
-
-#define ZORAN
 namespace xla {
 namespace gpu {
 namespace {
@@ -281,17 +279,14 @@ class TritonSupportTest : public TritonSupportTestBase {
     };
 
     if (IsTritonSupportedInstruction(ti.Instruction(), cc)) {
-      VLOG(-1) << "Zoran: expected absl_testing::IsOk";
       EXPECT_THAT(run_triton_codegen(), absl_testing::IsOk())
           << ti.Module()->ToString();
       return;
     }
     if (failure_mode == ExpectedFailMode::kFail) {
-      VLOG(-1) << "Zoran: expected Fail";
       EXPECT_THAT(run_triton_codegen(), Not(absl_testing::IsOk()));
       return;
     }
-    VLOG(-1) << "Zoran: expected Crash";
     EXPECT_DEATH(
         // We need to catch exceptions and abort(), because in OSS there
         // seem to be cases where exceptions are used instead of terminating
@@ -330,7 +325,7 @@ class TritonSupportTestWithTypeAndOpcodeAndDeviceParam
           std::tuple<PrimitiveType, HloOpcode, se::GpuComputeCapability>> {};
 
 using BitcastOrReshapeTest = TritonSupportTestWithTypeAndOpcodeAndDeviceParam;
-#ifdef ZORAN
+
 TEST_P(BitcastOrReshapeTest, IsTritonSupportedBitcastOrReshape) {
   auto [data_type, opcode, cc] = GetParam();
   const std::string kHloTestTemplate = R"(
@@ -563,17 +558,17 @@ ENTRY triton_computation {
         any_is(PrimitiveType::F8E4M3FN) && any_is(PrimitiveType::F8E5M2);
   }
 
-/*  
-  // Crashes due to unsupported/unspecified rounding mode.
-  crashes_on_failure |= (data_type_in == PrimitiveType::F64 &&
-                         (data_type_out == PrimitiveType::F8E4M3FN ||
-                          data_type_out == PrimitiveType::F8E5M2));
+  if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
+    // Crashes due to unsupported/unspecified rounding mode.
+    crashes_on_failure |= (data_type_in == PrimitiveType::F64 &&
+                          (data_type_out == PrimitiveType::F8E4M3FN ||
+                            data_type_out == PrimitiveType::F8E5M2));
 
-  // Crashes due to unsupported conversion.
-  crashes_on_failure |= (data_type_out == PrimitiveType::F64 &&
-                         (data_type_in == PrimitiveType::F8E4M3FN ||
-                          data_type_in == PrimitiveType::F8E5M2));
-*/
+    // Crashes due to unsupported conversion.
+    crashes_on_failure |= (data_type_out == PrimitiveType::F64 &&
+                          (data_type_in == PrimitiveType::F8E4M3FN ||
+                            data_type_in == PrimitiveType::F8E5M2));
+  }
   RunSupportTest(
       std::move(ti), /*output_tile_sizes=*/{1, 32}, cc,
       crashes_on_failure ? ExpectedFailMode::kCrash : ExpectedFailMode::kFail);
@@ -625,7 +620,6 @@ ENTRY triton_computation {
     if (((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
          (data_type == PrimitiveType::F8E5M2 ||
           data_type == PrimitiveType::F8E4M3FN || 
-          data_type == PrimitiveType::F8E4M3B11FNUZ ||
           data_type == PrimitiveType::F8E5M2FNUZ ||
           data_type == PrimitiveType::F8E4M3FNUZ))) {
       fail_mode = ExpectedFailMode::kFailOrCrash;
@@ -670,7 +664,6 @@ ENTRY triton_computation {
     if (((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum) &&
          (data_type == PrimitiveType::F8E5M2 ||
           data_type == PrimitiveType::F8E4M3FN ||
-          data_type == PrimitiveType::F8E4M3B11FNUZ ||
           data_type == PrimitiveType::F8E5M2FNUZ ||
           data_type == PrimitiveType::F8E4M3FNUZ))) {
       fail_mode = ExpectedFailMode::kFailOrCrash;
@@ -735,7 +728,6 @@ ENTRY triton_computation {
         (opcode == HloOpcode::kClamp || opcode == HloOpcode::kSelect) &&
         (data_type == PrimitiveType::F8E5M2 ||
          data_type == PrimitiveType::F8E4M3FN ||
-         data_type == PrimitiveType::F8E4M3B11FNUZ ||
          data_type == PrimitiveType::F8E5M2FNUZ ||
          data_type == PrimitiveType::F8E4M3FNUZ);
   }
@@ -859,7 +851,6 @@ ENTRY triton_computation {
 
   bool crashes_on_failure = data_type == PrimitiveType::F8E4M3FN ||
                             data_type == PrimitiveType::F8E5M2 ||
-                            //data_type == PrimitiveType::F8E4M3B11FNUZ ||
                             data_type == PrimitiveType::F8E5M2FNUZ ||
                             data_type == PrimitiveType::F8E4M3FNUZ;
   RunSupportTest(
@@ -977,31 +968,15 @@ ENTRY triton_computation {
 
   // TODO(b/361526623): Reduce the cases where emitter crashes.
   ExpectedFailMode fail_mode = ExpectedFailMode::kFail;
-  //if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
-    if (opcode == HloOpcode::kDivide && (data_type == BF16 ||
-                                          data_type == F16)) {
-      fail_mode = ExpectedFailMode::kCrash;
-    }
-    if (data_type == F8E4M3FN || data_type == F8E5M2 ||  data_type == PrimitiveType::F8E5M2FNUZ ||
-         data_type == PrimitiveType::F8E4M3FNUZ) {
-      fail_mode = ExpectedFailMode::kFailOrCrash;
-    }
-/*
-  } else {
-    if ((opcode == HloOpcode::kMaximum || opcode == HloOpcode::kMinimum || opcode == HloOpcode::kMultiply || opcode == HloOpcode::kSubtract ||
-         opcode == HloOpcode::kAdd) &&
-        (data_type == PrimitiveType::F8E5M2 ||
-         data_type == PrimitiveType::F8E4M3FN  ||
-         data_type == PrimitiveType::F8E5M2FNUZ ||
-         data_type == PrimitiveType::F8E4M3FNUZ)) {
-      fail_mode = ExpectedFailMode::kCrash;
-    }
-    if (opcode == HloOpcode::kReduce && (data_type == PrimitiveType::F8E4M3FNUZ)) {
-      fail_mode = ExpectedFailMode::kCrash;
-    }
+  if (opcode == HloOpcode::kDivide && (data_type == BF16 ||
+                                        data_type == F16)) {
+    fail_mode = ExpectedFailMode::kCrash;
   }
-*/    
-  VLOG(-1) << "Zoran: fail_mode " << static_cast<int>(fail_mode);
+  if (data_type == F8E4M3FN || data_type == F8E5M2 ||  data_type == PrimitiveType::F8E5M2FNUZ ||
+        data_type == PrimitiveType::F8E4M3FNUZ) {
+    fail_mode = ExpectedFailMode::kFailOrCrash;
+  }
+
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1}, cc, fail_mode);
 }
 
@@ -1915,7 +1890,7 @@ ENTRY triton_computation {
 INSTANTIATE_TEST_SUITE_P(ReverseSuite, ReverseTest,
                          AllTestCombinationsForOpcodes({HloOpcode::kReverse}),
                          TritonSupportTestTypeAndOpcodeAndDeviceToString);
-#endif // ZORAN
+
 using DotTest = TritonSupportTest;
 
 class DotTypesTest
@@ -1932,7 +1907,7 @@ class DotTypesTest
                         "_", ComputeCapabilityToString(cc));
   };
 };
-#ifdef ZORAN
+
 TEST_P(DotTypesTest, Dot) {
   // Testing B[] = dot(A[], A[]).
   auto [result_type, input_type, cc] = GetParam();
@@ -1945,12 +1920,12 @@ TEST_P(DotTypesTest, Dot) {
       fail_mode = ExpectedFailMode::kFailOrCrash;
     }
   }
-  if (absl::c_linear_search(std::vector{F8E5M2FNUZ, F8E4M3FNUZ, F8E4M3FN}, input_type) ||
-      absl::c_linear_search(std::vector{F8E5M2FNUZ, F8E4M3FNUZ, F8E4M3FN}, result_type) ||
-      input_type == F64) {
-    if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
-      // Hits llvm::report_fatal_error during Triton compilation.
-      fail_mode = ExpectedFailMode::kFailOrCrash;
+  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+    if (absl::c_linear_search(std::vector{F8E5M2FNUZ, F8E4M3FNUZ, F8E4M3FN}, input_type) ||
+        absl::c_linear_search(std::vector{F8E5M2FNUZ, F8E4M3FNUZ, F8E4M3FN}, result_type) ||
+        input_type == F64) {
+        // Hits llvm::report_fatal_error during Triton compilation.
+        fail_mode = ExpectedFailMode::kFailOrCrash;
     }
   }
 
@@ -2320,11 +2295,6 @@ ENTRY triton_computation {
   if (absl::c_linear_search(std::vector{F8E5M2, F8E4M3FN, S8}, data_type)) {
     fail_mode = ExpectedFailMode::kFailOrCrash;
   }
-  if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
-    if (data_type == F64) {
-      fail_mode = ExpectedFailMode::kFailOrCrash;
-    }
-  }
   if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
     if (absl::c_linear_search(std::vector{F8E4M3FNUZ, F8E5M2FNUZ, F8E4M3FN,
                                           F64}, data_type)) {
@@ -2354,7 +2324,7 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::ValuesIn(kOperandPrecisions),
         ::testing::ValuesIn(AllDevicesToTest())),
     OperandPrecisionTestName);
-#endif // ZORAN
+
 class DotPrecisionAlgorithmTest
     : public DotTest,
       public ::testing::WithParamInterface<
@@ -2428,7 +2398,7 @@ ENTRY triton_computation {
   if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
     if (absl::c_linear_search(std::vector{F8E4M3FN, F8E5M2FNUZ, F8E4M3FNUZ, F64},
                                 data_type) ||
-        (absl::c_linear_search(std::vector{F16, S64, S32, S16, BF16, F32},
+        (absl::c_linear_search(std::vector{S64, S32, S16, BF16, F16, F32},
                                 data_type)  &&
          algorithm == xla::PrecisionConfig::ALG_DOT_F64_F64_F64)) {
       fail_mode = ExpectedFailMode::kFailOrCrash;
@@ -3674,7 +3644,7 @@ TEST(OpCoverage, AllOpcodesAreTested) {
         << "Opcode `" << HloOpcodeString(opcode) << "` is not tested.";
   }
 }
-#endif // ZORAN
+
 }  // namespace
 }  // namespace gpu
 }  // namespace xla
