@@ -22,6 +22,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/types/span.h"
 #include "xla/backends/gpu/collectives/gpu_collectives.h"
+#include "xla/backends/gpu/runtime/collective_kernel_thunk.h"
 #include "xla/backends/gpu/runtime/nccl_collective_thunk.h"
 #include "xla/core/collectives/communicator.h"
 #include "xla/hlo/ir/hlo_instructions.h"
@@ -75,10 +76,15 @@ class NcclAllReduceStartThunk : public NcclAllReduceReduceScatterThunkBase {
   static CollectiveOpGroupMode GetGroupMode(
       const HloAllReduceInstruction* inst);
 
+  absl::Status Initialize(const InitializeParams& params) override;
+
  protected:
   absl::Status RunNcclCollective(const ExecuteParams& params,
                                  se::Stream& stream,
                                  CommunicatorHandle comm_handle) override;
+
+ private:
+  CollectiveKernelThunk collective_kernel_thunk_;
 };
 
 // -----------------------------------------------------------------------------

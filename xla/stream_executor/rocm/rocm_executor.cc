@@ -407,14 +407,21 @@ bool GetDeviceProperties(hipDeviceProp_t* device_properties,
 }
 
 // Allocates memory on the GPU device.
-void* DeviceAllocate(Context* context, uint64_t bytes) {
+void* DeviceAllocate(Context* context, uint64_t bytes, bool is_fine_grained) {
   if (bytes == 0) {
     return nullptr;
   }
 
   ScopedActivateContext activated(context);
-  hipDeviceptr_t result = 0;
-  hipError_t res = wrap::hipMalloc(&result, bytes);
+  hipDeviceptr_t device_mem = 0;
+  hipError_t res;
+  if (is_fine_grained) {
+    res = wrap::hipExtMallocWithFlags(&device_mem, bytes,
+                                      hipDeviceMallocFinegrained);
+  } else {
+    res = wrap::hipMalloc(&device_mem, bytes);
+  }
+
   if (res != hipSuccess) {
     // LOG(INFO) because this isn't always important to users (e.g. BFCAllocator
     // implements a retry if the first allocation fails).
@@ -423,7 +430,7 @@ void* DeviceAllocate(Context* context, uint64_t bytes) {
               << " bytes) from device: " << ToString(res);
     return nullptr;
   }
-  void* ptr = reinterpret_cast<void*>(result);
+  void* ptr = reinterpret_cast<void*>(device_mem);
   VLOG(2) << "allocated " << ptr << " for device " << context->device_ordinal()
           << " of " << bytes << " bytes";
   return ptr;
@@ -603,10 +610,10 @@ absl::Status RocmExecutor::Init() {
   TF_ASSIGN_OR_RETURN(rocm_context_,
                       RocmContext::Create(device_ordinal(), device_));
   TF_ASSIGN_OR_RETURN(version_, GetGpuISAVersion(device_));
-  // We initialize BLAS interfaces early here since otherwise it might create 
+  // We initialize BLAS interfaces early here since otherwise it might create
   // us problems during hipBlasLt initialization under graph capture.
-  // There is no real advantage of explicitly using 'lazy initialization' on 
-  // ROCM platform because rocBLAS/hipBlasLt already use 'lazy initialization' 
+  // There is no real advantage of explicitly using 'lazy initialization' on
+  // ROCM platform because rocBLAS/hipBlasLt already use 'lazy initialization'
   // internally
   return InitBlas();
 }
@@ -712,12 +719,19 @@ absl::StatusOr<ModuleHandle> RocmExecutor::LoadModuleFromHsaco(
 }
 
 DeviceMemoryBase RocmExecutor::Allocate(uint64_t size, int64_t memory_space) {
-  if (memory_space ==
-      static_cast<int64_t>(stream_executor::MemoryType::kHost)) {
-    return DeviceMemoryBase(HostAllocate(rocm_context_, size), size);
+  switch (static_cast<MemoryType>(memory_space)) {
+    case MemoryType::kCollective:
+    case MemoryType::kDevice:
+      return DeviceMemoryBase(
+          DeviceAllocate(rocm_context_, size, /*is_fine_grained*/ false), size);
+    case MemoryType::kP2PTempBuf:
+      return DeviceMemoryBase(
+          DeviceAllocate(rocm_context_, size, /*is_fine_grained*/ true), size);
+    case MemoryType::kHost:
+      return DeviceMemoryBase(HostAllocate(rocm_context_, size), size);
+    default:
+      LOG(FATAL) << "Unsupported memory space: " << memory_space;
   }
-  CHECK_EQ(memory_space, 0);
-  return DeviceMemoryBase(DeviceAllocate(rocm_context_, size), size);
 }
 absl::StatusOr<std::unique_ptr<MemoryAllocation>>
 RocmExecutor::HostMemoryAllocate(uint64_t size) {
@@ -832,15 +846,14 @@ void RocmExecutor::DeallocateStream(Stream* stream) {
 
 absl::Status RocmExecutor::InitBlas() {
   PluginRegistry* registry = PluginRegistry::Instance();
-  TF_ASSIGN_OR_RETURN(auto factory, 
+  TF_ASSIGN_OR_RETURN(
+      auto factory,
       registry->GetFactory<PluginRegistry::BlasFactory>(rocm::kROCmPlatformId));
   blas_.reset(factory(this));
   return absl::OkStatus();
 }
 
-blas::BlasSupport* RocmExecutor::AsBlas() {
-  return blas_.get();
-}
+blas::BlasSupport* RocmExecutor::AsBlas() { return blas_.get(); }
 
 dnn::DnnSupport* RocmExecutor::AsDnn() {
   absl::MutexLock lock(&mu_);
@@ -1032,7 +1045,8 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
 
   desc.set_shared_memory_per_core(GetMaxSharedMemoryPerCore(device).value());
   desc.set_shared_memory_per_block(GetMaxSharedMemoryPerBlock(device).value());
-  desc.set_shared_memory_per_block_optin(GetMaxSharedMemoryPerBlock(device).value());
+  desc.set_shared_memory_per_block_optin(
+      GetMaxSharedMemoryPerBlock(device).value());
   int core_count = GetMultiprocessorCount(device).value();
   desc.set_core_count(core_count);
   desc.set_fpus_per_core(fpus_per_core(gcn_arch_name));

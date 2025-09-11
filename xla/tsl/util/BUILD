@@ -343,3 +343,8 @@ filegroup(
         "//tensorflow/core/util:__pkg__",
     ]),
 )
+
+cc_library(
+    name = "safe_reinterpret_cast",
+    hdrs = ["safe_reinterpret_cast.h"],
+)

@@ -123,6 +123,7 @@ class Thunk {
     kConvolutionReorder,
     kCopy,
     kCopyDone,
+    kCustomCollectiveKernel,
     kCommandBuffer,
     kCubSort,
     kCublasLtMatmul,
@@ -223,6 +224,11 @@ class Thunk {
 
     absl::StatusOr<Communicator*> GetComm(const GpuCliqueKey& clique_key,
                                           RankId rank) const;
+
+    // Returns whether peer device memory access is possible between all devices
+    // in the clique.
+    absl::StatusOr<bool> peer_access_enabled(
+        const GpuCliqueKey& clique_key) const;
 
     // Returns the number of communicators in a collective clique. Returns error
     // if we do not have an acquired clique for a given key.
@@ -506,6 +512,11 @@ class Thunk {
   virtual void ForAllThunks(absl::FunctionRef<void(const Thunk*)> fn) const;
 
   // A helper function to get the `GpuCollectives*` pointer from the
+  // CollectiveExecuteParams.
+  static absl::StatusOr<GpuCollectives*> GetGpuCollectives(
+      CollectiveExecuteParams const& params);
+
+  // A helper function to get the `GpuCollectives*` pointer from the
   // thunk parameters. Returns an error if collectives API is not provided.
   template <typename Params>
   static absl::StatusOr<GpuCollectives*> GetGpuCollectives(
@@ -513,10 +524,7 @@ class Thunk {
     if (params.collective_params == nullptr) {
       return Internal("Collective params are not provided");
     }
-    if (params.collective_params->collectives == nullptr) {
-      return Internal("Collectives API is not provided");
-    }
-    return params.collective_params->collectives;
+    return GetGpuCollectives(*params.collective_params);
   }
 
  private:

@@ -105,13 +105,13 @@ NcclCollectiveConfig GetNcclCollectiveConfigForMlir(
   return config;
 }
 
-// Handle to a communicator object with its `is_local` property.
+// Handle to a communicator object with corresponding clique key.
 struct CommunicatorHandle {
-  CommunicatorHandle(Communicator* comm, bool is_local)
-      : comm(comm), is_local(is_local) {}
+  CommunicatorHandle(Communicator* comm, GpuCliqueKey clique_key)
+      : comm(comm), clique_key(std::move(clique_key)) {}
 
-  Communicator* comm;  // communicator object
-  bool is_local;       // whether this comm is a node-local comm
+  Communicator* comm;       // communicator object
+  GpuCliqueKey clique_key;  // clique key
 };
 
 //===----------------------------------------------------------------------===//
@@ -187,6 +187,7 @@ class NcclCollectiveThunk : public Thunk {
   virtual AsyncStreamKind GetAsyncStreamKind() const {
     return AsyncStreamKind::kCollective;
   }
+  bool IsAsync() const { return async_events_ != nullptr; }
 
   // A collective thunk is normally an independent operation in a sense that
   // different instances of the same collective thunk communicate each other.
@@ -199,7 +200,6 @@ class NcclCollectiveThunk : public Thunk {
   virtual bool NeedFirstCallRendzevous() const { return true; }
 
  private:
-  bool IsAsync() const { return async_events_ != nullptr; }
   std::shared_ptr<AsyncEvents> async_events_;
 
   // After a first call to this particular instance of a NCCL collective thunk
@@ -280,8 +280,12 @@ absl::Status AddOpDescription(absl::Status status, OpT op,
 absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, CollectiveStreamId stream_id,
-    AsyncStreamKind stream_kind);
+    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind);
+
+// Helper over GetGpuCliqueKey that builds key for AsyncStreamKind::kCollective.
+absl::StatusOr<GpuCliqueKey> GetCollectiveGpuCliqueKey(
+    const Thunk::CollectiveExecuteParams& params,
+    const NcclCollectiveConfig& collective_config, bool use_nccl = true);
 
 absl::StatusOr<size_t> GetNumLocalParticipants(
     const Thunk::CollectiveExecuteParams& params,
@@ -293,8 +297,7 @@ absl::StatusOr<CommunicatorHandle> GetNcclComm(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const Thunk::CollectiveCliques& collective_cliques,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, CollectiveStreamId stream_id,
-    AsyncStreamKind stream_kind);
+    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind);
 
 struct DeviceBufferPair {
   PrimitiveType element_type;
