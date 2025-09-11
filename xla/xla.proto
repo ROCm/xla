@@ -745,6 +745,7 @@ message DebugOptions {
   PartitioningAlgorithm xla_partitioning_algorithm = 187;
 
   bool xla_gpu_enable_triton_gemm = 188;
+  bool xla_gpu_enable_triton_softmax_fusion = 363;
 
   bool xla_gpu_enable_cudnn_int8x32_convolution_reordering = 189;
 
@@ -1122,7 +1123,7 @@ message DebugOptions {
   // For sub-byte dot operands, layout them along contracting dimensions.
   bool xla_gpu_experimental_pack_dot_operands_along_k_dimension = 362;
 
-  // Next id: 363
+  // Next id: 364
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
