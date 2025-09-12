@@ -180,7 +180,7 @@ auto AllDevicesToTest() {
 #endif
 }
 
-stream_executor::GpuComputeCapability CudaAmpereOrRocm() {
+stream_executor::GpuComputeCapability DefaultDeviceForTesting() {
   return AllDevicesToTest()[0];
 }
 
@@ -803,7 +803,7 @@ ENTRY triton_computation {
                           ParseTemplateAndGetInstruction(kHloTestTemplate, F32,
                                                          HloOpcode::kReduce));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{3, 4},
-                 CudaAmpereOrRocm());
+                 DefaultDeviceForTesting());
 }
 
 TEST_P(
@@ -888,7 +888,7 @@ ENTRY triton_computation {
 }
 
 TEST_F(ReduceTest, ReduceWithNonConstReduceValueIsSupportedWithTriton) {
-  const se::GpuComputeCapability cc = CudaAmpereOrRocm();
+  const se::GpuComputeCapability cc = DefaultDeviceForTesting();
   const std::string kHloTestTemplate = R"(
 add {
   Arg_0 = $0[] parameter(0)
@@ -2003,7 +2003,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 CudaAmpereOrRocm());
+                 DefaultDeviceForTesting());
 }
 
 TEST_F(DotTest, NonFusionLhs) {
@@ -2031,7 +2031,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 CudaAmpereOrRocm());
+                 DefaultDeviceForTesting());
 }
 
 TEST_F(DotTest, SingleBatchDim) {
@@ -2071,7 +2071,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 16, 32},
-                 CudaAmpereOrRocm());
+                 DefaultDeviceForTesting());
 }
 
 TEST_F(DotTest, MultipleNonContractingDimensions) {
@@ -2110,7 +2110,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 16, 1, 32},
-                 CudaAmpereOrRocm());
+                 DefaultDeviceForTesting());
 }
 
 TEST_F(DotTest, MultipleContractingDimensions) {
@@ -2150,7 +2150,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 CudaAmpereOrRocm());
+                 DefaultDeviceForTesting());
 }
 
 TEST_F(DotTest, NonDefaultDimensionOrder_kmkn) {
@@ -2191,7 +2191,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 CudaAmpereOrRocm());
+                 DefaultDeviceForTesting());
 }
 
 TEST_F(DotTest, NonDefaultDimensionOrder_mknk) {
@@ -2232,7 +2232,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(kHloTestTemplate, F32, HloOpcode::kDot,
                                      /* use_nested_gemm_fusions=*/true));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{16, 32},
-                 CudaAmpereOrRocm());
+                 DefaultDeviceForTesting());
 }
 
 class DotPrecisionTest
@@ -2575,7 +2575,7 @@ ENTRY triton_computation {
       TestedInstruction ti,
       ParseTemplateAndGetInstruction(hlo_text, F32, HloOpcode::kFusion,
                                      /*use_nested_gemm_fusions=*/true));
-  se::GpuComputeCapability cc = CudaAmpereOrRocm();
+  se::GpuComputeCapability cc = DefaultDeviceForTesting();
   ASSERT_FALSE(IsTritonSupportedInstruction(ti.Instruction(), cc));
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{64, 32}, cc);
 }
