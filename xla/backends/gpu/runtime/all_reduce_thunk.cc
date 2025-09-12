@@ -255,13 +255,14 @@ absl::Status AllReduceStartThunk::Initialize(const InitializeParams& params) {
   TF_RETURN_IF_ERROR(CollectiveThunk::Initialize(params));
   TF_ASSIGN_OR_RETURN(
       GpuCliqueKey clique_key,
-      GetCollectiveGpuCliqueKey(*params.collective_params, config()));
+      GetCollectiveGpuCliqueKey(*params.collective_params, config(),
+        Xasync_stream_id_));
   TF_ASSIGN_OR_RETURN(bool use_collective_kernel,
                       collective_kernel_thunk_.IsSupported(
                           clique_key, params.collective_cliques));
   if (use_collective_kernel) {
     TF_RETURN_IF_ERROR(collective_kernel_thunk_.Initialize(params));
-  }
+    }
   return absl::OkStatus();
 }
 

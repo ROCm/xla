@@ -334,6 +334,8 @@ class IrEmitterUnnested : public IrEmitter {
 
   // Cache to store the call_graph.
   std::unique_ptr<CallGraph> call_graph_;
+
+  int64_t num_collectives_in_flight_ = 0;
 };
 
 }  // namespace gpu

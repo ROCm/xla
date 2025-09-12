@@ -279,22 +279,23 @@ static absl::Status RunMultihostHloRunner(int argc, char** argv,
     const char* hlo_file = argv[c];
     execution_profiles.clear();
     if (opts.should_run) {
-      std::cout << "\n** Running " << hlo_file << " **\n";
+      std::cerr << "\n** Running " << hlo_file << " **\n";
       TF_RETURN_IF_ERROR(xla::FunctionalHloRunner::LoadAndRunAndDump(
           *env.client, GetDebugOptionsFromFlags(), preproc_options,
           raw_compile_options, running_options, hlo_file, opts.input_format,
           opts.dump_output_literal_to, opts.task_id));
     } else {
-      std::cout << "\n** Compiling " << hlo_file << " **\n";
+      std::cerr << "\n** Compiling " << hlo_file << " **\n";
       TF_RETURN_IF_ERROR(FunctionalHloRunner::LoadAndCompile(
           *env.client, GetDebugOptionsFromFlags(), preproc_options,
           raw_compile_options, argv[c], opts.input_format, opts.task_id));
     }
     for (int i = 0; i < execution_profiles.size(); ++i) {
-      std::cout << "## Execution time, file=" << hlo_file << " repeat=" << i
-                << " duration=" << execution_profiles[i].compute_time_ns()
-                << "ns" << std::endl;
+      std::cerr << "## Execution time, file=" << hlo_file << " repeat=" << i
+                << " duration=" << (execution_profiles[i].compute_time_ns()/1e6)
+                << "ms" << std::endl;
     }
+    std::flush(std::cerr);
   }
   return absl::OkStatus();
 }

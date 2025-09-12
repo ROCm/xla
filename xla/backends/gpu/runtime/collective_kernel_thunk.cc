@@ -126,7 +126,8 @@ absl::Status CollectiveKernelThunk::Prepare(
     const PrepareParams& params, ResourceRequestsInterface& resource_requests) {
   TF_ASSIGN_OR_RETURN(
       GpuCliqueKey clique_key,
-      GetCollectiveGpuCliqueKey(*params.collective_params, collective_config_));
+      GetCollectiveGpuCliqueKey(*params.collective_params, collective_config_,
+          /*Xasync_stream_id_*/0));
   return resource_requests.AddClique(clique_key);
 }
 
@@ -195,7 +196,8 @@ absl::Status CollectiveKernelThunk::RendezvousAfterInit(
 absl::Status CollectiveKernelThunk::Initialize(const InitializeParams& params) {
   TF_ASSIGN_OR_RETURN(
       const GpuCliqueKey clique_key,
-      GetCollectiveGpuCliqueKey(*params.collective_params, collective_config_));
+      GetCollectiveGpuCliqueKey(*params.collective_params, collective_config_,
+            0/*Xasync_stream_id_*/));
   const std::optional<RankId> rank =
       clique_key.rank(params.collective_params->global_device_id);
   TF_RET_CHECK(rank.has_value())
@@ -260,7 +262,8 @@ absl::Status CollectiveKernelThunk::ExecuteOnStream(
 
   TF_ASSIGN_OR_RETURN(
       const GpuCliqueKey clique_key,
-      GetCollectiveGpuCliqueKey(*params.collective_params, collective_config_));
+      GetCollectiveGpuCliqueKey(*params.collective_params, collective_config_,
+          /*Xasync_stream_id_*/0));
   const int32_t kNumRanks = clique_key.num_devices();
 
   // TODO(b/407736956): Support variadic all-reduce.

@@ -280,6 +280,7 @@ limitations under the License.
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
+#include "xla/tsl/util/env_var.h"
 #include "tsl/platform/casts.h"
 #include "tsl/platform/cpu_info.h"
 #include "tsl/platform/numbers.h"
@@ -1104,9 +1105,15 @@ absl::Status RunFusionPasses(HloModule* hlo_module,
                          .Run(hlo_module)
                          .status());
 
+  bool enable_horiz = true;
+  tsl::ReadBoolFromEnvVar("GPU_ENABLE_HORIZONTAL_FUSION", enable_horiz,
+                     &enable_horiz)
+      .IgnoreError();
+
+  if(enable_horiz) {
   TF_RETURN_IF_ERROR(
       HorizontalFusionPipeline(gpu_device_info).Run(hlo_module).status());
-
+  }
   if (VLOG_IS_ON(2)) {
     HloFusionStatsVisitor stats;
     TF_RETURN_IF_ERROR(hlo_module->entry_computation()->Accept(&stats));

@@ -240,16 +240,24 @@ bool GpuScheduleCrossesOverlapLimit(
       for (const auto occupier :
            sched_state.resource_occupiers_in_flight.at(resource_type)) {
         if (sched_state.async_tracker->IsSupportedAsyncStart(*occupier)) {
+
+          auto real_occupier = occupier;
+          if(occupier->opcode() == xla::HloOpcode::kAsyncStart) {
+            real_occupier = occupier->async_wrapped_instruction();
+          }
+
           // Number of overlapping ranks between this occupier and candidate
-          size_t overlapping_count = CountOverlappingRanks(
-              curr_start_inst->replica_groups(), occupier->replica_groups());
+          size_t overlapping_count = 0;
+          // CountOverlappingRanks(
+          //     curr_start_inst->replica_groups(), real_occupier->replica_groups());
+
           if (overlapping_count > 1) {
             can_overlap = false;
-            VLOG(3) << "Collectives have " << overlapping_count
-                    << "overlapping ranks and cannot be overlapped. Candidate "
+            VLOG(0) << "Collectives have " << overlapping_count
+                    << " overlapping ranks and cannot be overlapped. Candidate "
                        "collective: "
                     << curr_start_inst->ToString()
-                    << ", in flight collective: " << occupier->ToString();
+                    << ", in flight collective: " << real_occupier->ToString();
             break;
           }
         }

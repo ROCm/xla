@@ -235,7 +235,9 @@ CollectiveThunk::CollectiveThunk(Kind kind, ThunkInfo thunk_info, bool is_sync,
 absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind) {
+    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind, 
+    int Xstream_id
+  ) {
   GlobalDeviceId global_device_id = params.global_device_id;
 
   TF_ASSIGN_OR_RETURN(
@@ -265,28 +267,30 @@ absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
   TF_ASSIGN_OR_RETURN(int64_t num_local_participants,
                       GetNumLocalParticipants(params, participants));
 
-  return GpuCliqueKey(std::move(participants), num_local_participants,
-                      kNoStreamId, stream_kind, std::move(participant_groups));
+  auto s = GpuCliqueKey(std::move(participants), num_local_participants,
+                      CollectiveStreamId(Xstream_id), stream_kind, std::move(participant_groups));
+  //VLOG(0) << "Created GPU clique " << s.ToString();
+  return s;
 }
 
 absl::StatusOr<GpuCliqueKey> GetCollectiveGpuCliqueKey(
     const Thunk::CollectiveExecuteParams& params,
-    const CollectiveConfig& collective_config, bool use_nccl) {
+    const CollectiveConfig& collective_config, int stream_id) {
   TF_ASSIGN_OR_RETURN(GpuCollectives * collectives,
                       CollectiveThunk::GetGpuCollectives(params));
   return GetGpuCliqueKey(collectives, params, collective_config.replica_groups,
                          collective_config.group_mode,
-                         AsyncStreamKind::kCollective);
+                         AsyncStreamKind::kCollective, stream_id);
 }
 
 absl::StatusOr<CommunicatorHandle> GetComm(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const Thunk::CollectiveCliques& collective_cliques,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind) {
+    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind, int stream_id) {
   TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
                       GetGpuCliqueKey(collectives, params, replica_groups,
-                                      group_mode, stream_kind));
+                                      group_mode, stream_kind, stream_id));
 
   std::optional<RankId> rank = clique_key.rank(params.global_device_id);
   TF_ASSIGN_OR_RETURN(Communicator * comm,
@@ -406,7 +410,7 @@ absl::Status CollectiveThunk::Prepare(
       GpuCliqueKey clique_key,
       GetGpuCliqueKey(collectives, *params.collective_params,
                       config().replica_groups, config().group_mode,
-                      GetAsyncStreamKind()));
+                      GetAsyncStreamKind(),Xasync_stream_id_));
   return resource_requests.AddClique(clique_key);
 }
 
@@ -444,14 +448,21 @@ absl::Status CollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
       CommunicatorHandle comm_handle,
       GetComm(collectives, *params.collective_params,
               *params.collective_cliques, config().replica_groups,
-              config().group_mode, stream_kind));
+              config().group_mode, stream_kind, Xasync_stream_id_));
   se::StreamExecutor* executor = params.stream->parent();
+
+  // TODO here we have to set Xasync_stream_id_ instead of stream_kind
   int64_t async_stream_idx = static_cast<int64_t>(stream_kind);
 
   if (IsAsync()) {
     // Launch collective operation on an async stream.
-    se::Stream& async_stream =
-        *params.collective_params->async_streams.at(async_stream_idx);
+    auto& streams = params.collective_params->async_streams;
+    se::Stream& async_stream = *streams[Xasync_stream_id_ % streams.size()];
+
+    // if(async_stream.parent()->device_ordinal()==0)
+    // VLOG(0) << "Using stream ID: " << Xasync_stream_id_ 
+    //       << " for " << KindToString(kind()) 
+    //       << " async_stream: " << &async_stream;
 
     // Wait for main compute stream to make sure all buffers are ready.
     TF_RETURN_IF_ERROR(async_stream.WaitFor(params.stream));
@@ -463,6 +474,8 @@ absl::Status CollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
     TF_RETURN_IF_ERROR(async_stream.RecordEvent(event));
 
   } else {
+    // VLOG(0) << "Running sync: " << KindToString(kind());
+
     // Launch collective operation on a main stream.
     TF_RETURN_IF_ERROR(RunCollective(params, *params.stream, comm_handle));
   }

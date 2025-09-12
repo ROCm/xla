@@ -2035,6 +2035,7 @@ absl::Status IrEmitterUnnested::EmitCollectiveThunk(
   }
 
   if (should_use_nccl_thunk) {
+
     auto thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(inst);
     // The wrapper name is used when syntactic sugar is turned on.
     if (ir_emitter_context_->debug_options().xla_syntax_sugar_async_ops()) {
@@ -2043,6 +2044,12 @@ absl::Status IrEmitterUnnested::EmitCollectiveThunk(
     auto thunk = std::make_unique<CollectiveThunkType>(
         thunk_info, inst, /*buffers=*/std::move(buffers),
         ir_emitter_context_->debug_options().xla_gpu_use_memcpy_local_p2p());
+
+    thunk->set_async_stream_id(num_collectives_in_flight_);
+
+    num_collectives_in_flight_++;
+    VLOG(0) << "Total collectives in flight " << num_collectives_in_flight_;
+
     GetCollectivesAsyncEvents().insert({async_start, thunk->async_events()});
     AddThunkToThunkSequence(std::move(thunk));
     return absl::OkStatus();
@@ -2225,6 +2232,9 @@ absl::Status IrEmitterUnnested::EmitCollectiveAsyncDone(
   // Can be null if no start thunk was created (e.g. if the start op is
   // degenerate), in which case there's nothing to do here.
   if (!async_events_it->second) return absl::OkStatus();
+
+  num_collectives_in_flight_--;
+  VLOG(0) << "Done: in flight: " << num_collectives_in_flight_;
 
   AsyncStreamKind stream_kind = AsyncStreamKind::kCollective;
   if (is_send_recv) {
@@ -2625,7 +2635,7 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
     case HloOpcode::kAllReduceDone:
       return EmitCollectiveAsyncDone(Thunk::kAllReduceDone, instr);
     case HloOpcode::kAllReduceStart: {
-      auto* all_reduce = Cast<HloAllReduceInstruction>(instr);
+            auto* all_reduce = Cast<HloAllReduceInstruction>(instr);
       return EmitCollectiveThunk<AllReduceStartThunk, HloAllReduceInstruction>(
           Thunk::kAllReduceStart, all_reduce, all_reduce,
           all_reduce->use_global_device_ids());

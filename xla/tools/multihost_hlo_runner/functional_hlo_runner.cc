@@ -1089,7 +1089,7 @@ FunctionalHloRunner::RunInternal(
   std::vector<std::vector<std::unique_ptr<PjRtBuffer>>> device_buffers;
   std::vector<std::vector<PjRtBuffer*>> argument_ptrs;
   for (int repeat = 0; repeat < running_options.num_repeats; ++repeat) {
-    VLOG(1) << "FunctionalHloRunner: ExecuteOnDevices started (repeat = "
+    VLOG(0) << "FunctionalHloRunner: ExecuteOnDevices started (repeat = "
             << repeat << ").";
     if (repeat == 0 || running_options.recreate_buffers_between_repeats) {
       VLOG(1) << "Creating argument buffers. repeat = " << repeat;

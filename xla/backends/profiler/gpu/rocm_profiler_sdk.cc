@@ -425,8 +425,8 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
 
   // a multiple of the page size, and the gap allows the buffer to absorb bursts
   // of GPU events
-  constexpr auto buffer_size_bytes = 100 * 4096;
-  constexpr auto buffer_watermark_bytes = 20 * 4096;
+  constexpr auto buffer_size_bytes = 2048 * 4096;
+  constexpr auto buffer_watermark_bytes = 2048 * 4096;
 
   // Utility context to gather code‑object info
   rocprofiler_create_context(&context_);

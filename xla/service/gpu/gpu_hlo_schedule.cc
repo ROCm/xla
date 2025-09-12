@@ -265,9 +265,23 @@ SchedulerConfig MakeGPUSchedulerConfig(uint64_t memory_limit,
   config.all_reduce_overlap_limit = 1;
   config.collective_broadcast_overlap_limit = 1;
   config.collective_permute_overlap_limit = 1;
+
+  // int64_t collective_broadcast_overlap_limit = 1;
+  // int64_t collective_permute_overlap_limit = 1;
+  // int64_t all_to_all_overlap_limit = 1;
+  // int64_t ragged_all_to_all_overlap_limit = 1;
+  // int64_t all_gather_overlap_limit = 1;
+  // int64_t all_reduce_overlap_limit = 1;
+  // int64_t reduce_scatter_overlap_limit = 1;
+  // int64_t send_recv_overlap_limit = 1;
+  // int64_t send_recv_host_overlap_limit = 1;
+  // int64_t copy_overlap_limit = 1;
+
   config.use_real_cost_model = false;
   config.aggressive_scheduling_policies = true;
   config.schedule_send_recvs = true;
+  config.prioritize_async_depth_over_stall = true;
+
   config.memory_limit = memory_limit;
   config.parallel_collective_overlap_limit = overlap_limit;
 

@@ -94,7 +94,8 @@ std::string RenderGraph(absl::string_view label, const HloModule& module,
                         RenderedGraphFormat format,
                         bool show_fusion_subcomputations) {
   HloRenderOptions hlo_render_options;
-  hlo_render_options.show_fusion_subcomputations = show_fusion_subcomputations;
+  hlo_render_options.show_fusion_subcomputations = false;
+  hlo_render_options.show_backend_config = false;
   absl::StatusOr<std::string> rendered_graph =
       RenderGraph(*module.entry_computation(), label,
                   module.config().debug_options(), format, hlo_render_options);

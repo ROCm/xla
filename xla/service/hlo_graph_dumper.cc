@@ -721,9 +721,9 @@ std::string HloDotDumper::DumpSubcomputation(
   std::string subcomp_label, style;
   if (parent_instr->opcode() == HloOpcode::kFusion) {
     subcomp_label =
-        StrFormat("Fused expression for <b>%s</b><br/>%s",
-                  HtmlLikeStringSanitize(parent_instr->name()),
-                  HtmlLikeStringSanitize(parent_instr->ToCategory()));
+        StrFormat("Fused expression for <b>%s</b>",
+                  HtmlLikeStringSanitize(parent_instr->name()));
+                  // HtmlLikeStringSanitize(parent_instr->ToCategory()));
     std::string extra_info = GetInstructionNodeExtraInfo(parent_instr);
     if (!extra_info.empty()) {
       StrAppend(&subcomp_label, "<br/>", extra_info);
@@ -731,7 +731,7 @@ std::string HloDotDumper::DumpSubcomputation(
     std::string node_backend_config =
         GetInstructionNodeBackendConfig(parent_instr);
     if (!node_backend_config.empty()) {
-      StrAppend(&subcomp_label, "<br/>", node_backend_config);
+      // StrAppend(&subcomp_label, "<br/>", node_backend_config);
     }
 
     bool highlight = filter_.Highlight(parent_instr);
@@ -986,6 +986,7 @@ std::string HloDotDumper::DumpInstruction(const HloInstruction* instr) {
 
 std::string HloDotDumper::GetInstructionNodeInlinedOperands(
     const HloInstruction* instr) {
+  return "";
   // The constant's shape is a parameter because, in the case of a broadcasted
   // scalar constant, we want to show the broadcasted shape, not the constant's
   // scalar shape.
@@ -1315,6 +1316,7 @@ std::string HloDotDumper::GetInstructionNodeLabel(const HloInstruction* instr) {
 
 std::string HloDotDumper::GetInstructionNodeMetadata(
     const HloInstruction* instr) {
+      return "";
   std::vector<std::string> lines;
   if (!instr->metadata().op_name().empty()) {
     lines.push_back(HtmlLikeStringSanitize(instr->metadata().op_name()));
@@ -1453,6 +1455,7 @@ std::string HloDotDumper::GetInstructionNodeBackendConfig(
 
 std::string HloDotDumper::GetInstructionNodeExtraInfo(
     const HloInstruction* instr) {
+      return "";
   std::vector<std::string> lines;
 
   // Get the instruction's extra attributes excluding the names of its

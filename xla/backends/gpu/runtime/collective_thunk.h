@@ -177,6 +177,12 @@ class CollectiveThunk : public Thunk {
                              nccl_stream_id().value());
   }
 
+  void set_async_stream_id(int id) {
+    Xasync_stream_id_ = id;
+  }
+
+  int Xasync_stream_id_ = 0;
+
  protected:
   virtual absl::Status RunCollective(const ExecuteParams& params,
                                      se::Stream& stream,
@@ -278,19 +284,19 @@ absl::Status AddOpDescription(absl::Status status, OpT op,
 absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind);
+    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind, int stream_id);
 
 // Helper over GetGpuCliqueKey that builds key for AsyncStreamKind::kCollective.
 absl::StatusOr<GpuCliqueKey> GetCollectiveGpuCliqueKey(
     const Thunk::CollectiveExecuteParams& params,
-    const CollectiveConfig& collective_config, bool use_nccl = true);
+    const CollectiveConfig& collective_config, int stream_id);
 
 // Returns a communicator and additional information about the clique.
 absl::StatusOr<CommunicatorHandle> GetComm(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const Thunk::CollectiveCliques& collective_cliques,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind);
+    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind, int stream_id);
 
 struct DeviceBufferPair {
   PrimitiveType element_type;

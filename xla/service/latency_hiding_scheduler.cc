@@ -1090,6 +1090,20 @@ class ReadySetLt {
       }
     }
 
+    if (sched_state_.config.aggressive_scheduling_policies) {
+      // Try to favor paths that are dependent of chains of async operations
+      // with long latency as we want to get to them as soon as possible to
+      // overlap them with computation.
+      if (auto value = DefaultSchedulerCore::ChooseBestCandidate(
+              a.node->GetAsyncDepth() > b.node->GetAsyncDepth(), a,
+              b.node->GetAsyncDepth() > a.node->GetAsyncDepth(), b,
+              "kAsyncDepth")) {
+        VLOG(0) << "A async depth: " << a.node->GetAsyncDepth() 
+                << " B async depth " << b.node->GetAsyncDepth();
+        return *value;
+      }
+    }
+
     const ApproximateLatencyEstimator::TimeCost a_ready_interval =
         std::max(a.node->GetReadyTime() - sched_state_.current_time, 0.0);
     const ApproximateLatencyEstimator::TimeCost b_ready_interval =
@@ -1100,6 +1114,8 @@ class ReadySetLt {
     if (auto value = DefaultSchedulerCore::ChooseBestCandidate(
             a_ready_interval < b_ready_interval, a,
             b_ready_interval < a_ready_interval, b, "kLessStall")) {
+      VLOG(0) << "a_ready_interval " << a_ready_interval << 
+                  " b_ready_interval " << b_ready_interval;
       return *value;
     }
     if (sched_state_.config.resource_serializing) {
@@ -1128,16 +1144,8 @@ class ReadySetLt {
             "kFreeBackedupResource")) {
       return *value;
     }
+
     if (sched_state_.config.aggressive_scheduling_policies) {
-      // Try to favor paths that are dependent of chains of async operations
-      // with long latency as we want to get to them as soon as possible to
-      // overlap them with computation.
-      if (auto value = DefaultSchedulerCore::ChooseBestCandidate(
-              a.node->GetAsyncDepth() > b.node->GetAsyncDepth(), a,
-              b.node->GetAsyncDepth() > a.node->GetAsyncDepth(), b,
-              "kAsyncDepth")) {
-        return *value;
-      }
       // Favor nodes that are the closest in amount of latency they hide with
       // the highest amount of latency that needs to be hidden to avoid
       // wasting / big nodes over small async operations.
@@ -1428,11 +1436,15 @@ DefaultSchedulerCore::FindAndExtractBestNodeAvailable(
   for (auto ready_node_it = sched_state.ready_set.begin(),
             e = sched_state.ready_set.end();
        ready_node_it != e; ++ready_node_it) {
+
+    VLOG(2) << "Current candidate:" << (*ready_node_it)->GetInstr().name();
+
     if (should_skip_node && should_skip_node(*ready_node_it)) {
-      if (ready_chosen.node == nullptr) {
+      //if (ready_chosen.node == nullptr) {
         skipped_nodes_and_reasons.push_back(
             {*ready_node_it, SkipNodeReason::kShouldSkipNodeFunction});
-      }
+      // }
+      // VLOG(2) << "OK";
       continue;
     }
     // These ifs will be true when the iterator points to an annotated node, but
@@ -1440,20 +1452,22 @@ DefaultSchedulerCore::FindAndExtractBestNodeAvailable(
     // be scheduled yet (because of the annotation roots' successors not being
     // scheduled yet). So we skip this node and continue to the next one.
     if ((*ready_node_it)->GetAnnotation() != -1) {
-      if (ready_chosen.node == nullptr) {
+      // if (ready_chosen.node == nullptr) {
         skipped_nodes_and_reasons.push_back(
             {*ready_node_it, SkipNodeReason::kAnnotationGroupNotReady});
-      }
+      // }
+      // VLOG(2) << "OK";
       continue;
     }
     // If this node would cause the max_concurrent_resource count to go beyond
     // the limit do not schedule it and pass to the next node.
     if (scheduling_instruction_crosses_overlap_limit_(sched_state,
                                                       *ready_node_it)) {
-      if (ready_chosen.node == nullptr) {
+      // if (ready_chosen.node == nullptr) {
         skipped_nodes_and_reasons.push_back(
             {*ready_node_it, SkipNodeReason::kExceedsOverlapLimit});
-      }
+      // }
+      // VLOG(2) << "OK overlap_limit";
       continue;
     }
     ScheduleCandidate ready_candidate =
@@ -2360,6 +2374,9 @@ void HloScheduleGraph::InitializeGraphAnalysis(
     }
     if (async_tracker->IsSupportedAsyncDone(node->GetInstr())) {
       for (auto& pred : node->GetPredecessors()) {
+
+        VLOG(0) << "Async done instr: " << node->GetInstr().ToString() << 
+            " latency: " << pred.Latency() << " async depth " << pred.Target().GetAsyncDepth();
         node->SetAsyncDepth(
             std::max(pred.Target().GetAsyncDepth() + pred.Latency(),
                      node->GetAsyncDepth()));
@@ -2511,6 +2528,8 @@ DefaultSchedulerCore::ScheduleComputation(const HloComputation* computation) {
       computation,
       module_pressure_state_->GetPressureStateForComputation(computation)
           .live_ids_at_bottom);
+
+  VLOG(0) << "================== Scheduling computation:" << computation->name();
 
   SchedulingState sched_state(
       &module_schedule.sequence(computation), alias_analysis_.get(),
