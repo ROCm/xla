@@ -2045,10 +2045,16 @@ absl::Status IrEmitterUnnested::EmitCollectiveThunk(
         thunk_info, inst, /*buffers=*/std::move(buffers),
         ir_emitter_context_->debug_options().xla_gpu_use_memcpy_local_p2p());
 
-    thunk->set_async_stream_id(num_collectives_in_flight_);
-
-    num_collectives_in_flight_++;
-    VLOG(0) << "Total collectives in flight " << num_collectives_in_flight_;
+    // this is async event
+    if (ir_emitter_context_->debug_options().xla_gpu_enable_latency_hiding_scheduler() 
+            && thunk->async_events() != nullptr) {
+      thunk->set_async_stream_id(num_collectives_in_flight_);
+      num_collectives_in_flight_++;
+      VLOG(0) << inst->ToString() << ": Total collectives in flight " << num_collectives_in_flight_;
+      // if (inst->opcode() == HloOpcode::kAsyncStart) {
+      //   VLOG(0) << "wrapped: " << inst->async_wrapped_instruction()->ToString();
+      // }
+    }
 
     GetCollectivesAsyncEvents().insert({async_start, thunk->async_events()});
     AddThunkToThunkSequence(std::move(thunk));
@@ -2234,7 +2240,7 @@ absl::Status IrEmitterUnnested::EmitCollectiveAsyncDone(
   if (!async_events_it->second) return absl::OkStatus();
 
   num_collectives_in_flight_--;
-  VLOG(0) << "Done: in flight: " << num_collectives_in_flight_;
+  //VLOG(0) << "Done: in flight: " << num_collectives_in_flight_;
 
   AsyncStreamKind stream_kind = AsyncStreamKind::kCollective;
   if (is_send_recv) {

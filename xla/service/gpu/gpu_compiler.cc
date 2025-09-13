@@ -1106,7 +1106,7 @@ absl::Status RunFusionPasses(HloModule* hlo_module,
                          .status());
 
   bool enable_horiz = true;
-  tsl::ReadBoolFromEnvVar("GPU_ENABLE_HORIZONTAL_FUSION", enable_horiz,
+  tsl::ReadBoolFromEnvVar("XLA_ENABLE_HORIZONTAL_FUSION", enable_horiz,
                      &enable_horiz)
       .IgnoreError();
 

@@ -294,7 +294,14 @@ ReduceScatterStartThunk::ReduceScatterStartThunk(
     std::vector<Buffer> buffers, bool p2p_memcpy_enabled)
     : AllReduceReduceScatterThunkBase(
           Thunk::kReduceScatterStart, thunk_info, GetAllReduceConfigInst(inst),
-          std::move(buffers), IsGPUSyncCollective(*inst)) {}
+          std::move(buffers), IsGPUSyncCollective(*inst)) {
+  // NOTE this op is always async!! although it should not be!!
+  // auto backend_config = inst->backend_config<GpuBackendConfig>();
+  // VLOG(0) << inst->ToString() << " backend ok: " << backend_config.ok();
+  // if(backend_config.ok()) {
+  //   VLOG(0) << " IsSync: " << backend_config->collective_backend_config().is_sync();
+  // }
+}
 
 /*static*/ absl::Status ReduceScatterStartThunk::CheckImplementable(
     const HloReduceScatterInstruction* inst, int64_t replica_count,

@@ -58,11 +58,20 @@ limitations under the License.
 #include "xla/status_macros.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/util/env_var.h"
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 
 namespace xla {
 namespace {
+
+bool PreferAsyncDepth() {
+  bool value = true;
+  tsl::ReadBoolFromEnvVar("XLA_LHS_PREFER_ASYNC_DEPTH", value,
+                     &value)
+      .IgnoreError();
+  return value;
+}
 
 const int64_t kDefaultMemorySpace = 0;
 
@@ -1061,8 +1070,7 @@ class ReadySetLt {
     }
 
     auto async_depth_0_candidate =
-        [this](DefaultSchedulerCore::ScheduleCandidate& a,
-               DefaultSchedulerCore::ScheduleCandidate& b)
+        [this] (auto& a, auto& b) 
         -> std::optional<DefaultSchedulerCore::CandidateResult> {
       // If an instruction releasing a resource is not resource constrained and
       // has an async depth of 0, delay it as much as possible to avoid
@@ -1083,14 +1091,8 @@ class ReadySetLt {
       return std::nullopt;
     };
 
-    if (sched_state_.config.aggressive_scheduling_policies &&
-        sched_state_.config.prioritize_async_depth_over_stall) {
-      if (auto value = async_depth_0_candidate(a, b)) {
-        return *value;
-      }
-    }
-
-    if (sched_state_.config.aggressive_scheduling_policies) {
+    auto check_async_depth = [] (const auto& a, const auto& b) 
+      -> std::optional<DefaultSchedulerCore::CandidateResult> {
       // Try to favor paths that are dependent of chains of async operations
       // with long latency as we want to get to them as soon as possible to
       // overlap them with computation.
@@ -1102,8 +1104,20 @@ class ReadySetLt {
                 << " B async depth " << b.node->GetAsyncDepth();
         return *value;
       }
-    }
+      return std::nullopt;
+    };
 
+    if (sched_state_.config.aggressive_scheduling_policies) {
+      if (PreferAsyncDepth()) {
+        if (auto value = async_depth_0_candidate(a, b)) {
+          return *value;
+        }
+        if (auto value = check_async_depth(a, b)) {
+          return *value;
+        }
+      }
+    }
+   
     const ApproximateLatencyEstimator::TimeCost a_ready_interval =
         std::max(a.node->GetReadyTime() - sched_state_.current_time, 0.0);
     const ApproximateLatencyEstimator::TimeCost b_ready_interval =
@@ -1114,8 +1128,8 @@ class ReadySetLt {
     if (auto value = DefaultSchedulerCore::ChooseBestCandidate(
             a_ready_interval < b_ready_interval, a,
             b_ready_interval < a_ready_interval, b, "kLessStall")) {
-      VLOG(0) << "a_ready_interval " << a_ready_interval << 
-                  " b_ready_interval " << b_ready_interval;
+      // VLOG(0) << "a_ready_interval " << a_ready_interval << 
+      //             " b_ready_interval " << b_ready_interval;
       return *value;
     }
     if (sched_state_.config.resource_serializing) {
@@ -1133,7 +1147,7 @@ class ReadySetLt {
       }
     }
     if (sched_state_.config.aggressive_scheduling_policies &&
-        !sched_state_.config.prioritize_async_depth_over_stall) {
+          !PreferAsyncDepth()) {
       if (auto value = async_depth_0_candidate(a, b)) {
         return *value;
       }
@@ -1146,6 +1160,11 @@ class ReadySetLt {
     }
 
     if (sched_state_.config.aggressive_scheduling_policies) {
+      if (!PreferAsyncDepth()) {
+        if (auto value = check_async_depth(a, b)) {
+          return *value;
+        }
+      }
       // Favor nodes that are the closest in amount of latency they hide with
       // the highest amount of latency that needs to be hidden to avoid
       // wasting / big nodes over small async operations.

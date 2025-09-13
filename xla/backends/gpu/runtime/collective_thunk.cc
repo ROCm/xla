@@ -267,10 +267,9 @@ absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
   TF_ASSIGN_OR_RETURN(int64_t num_local_participants,
                       GetNumLocalParticipants(params, participants));
 
-  auto s = GpuCliqueKey(std::move(participants), num_local_participants,
-                      CollectiveStreamId(Xstream_id), stream_kind, std::move(participant_groups));
-  //VLOG(0) << "Created GPU clique " << s.ToString();
-  return s;
+  return GpuCliqueKey(std::move(participants), num_local_participants,
+                      CollectiveStreamId(Xstream_id), stream_kind, 
+                      std::move(participant_groups));
 }
 
 absl::StatusOr<GpuCliqueKey> GetCollectiveGpuCliqueKey(
@@ -410,7 +409,7 @@ absl::Status CollectiveThunk::Prepare(
       GpuCliqueKey clique_key,
       GetGpuCliqueKey(collectives, *params.collective_params,
                       config().replica_groups, config().group_mode,
-                      GetAsyncStreamKind(),Xasync_stream_id_));
+                      GetAsyncStreamKind(), Xasync_stream_id_));
   return resource_requests.AddClique(clique_key);
 }
 
