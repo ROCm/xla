@@ -48,10 +48,11 @@ inline std::string ToXStat(const KernelDetails& ki,
   // PAE on ROCM 6.4.x rocprofiler sdk mixed up grid and workgroup size...
   // In fact: workgroup_size is effectively block size
   // grid_size is workgroup_size
+  uint32_t grid_x = ki.workgroup_x != 0 ? ki.grid_x / ki.workgroup_x : 0,
+           grid_y = ki.workgroup_y != 0 ? ki.grid_y / ki.workgroup_y : 0,
+           grid_z = ki.workgroup_z != 0 ? ki.grid_z / ki.workgroup_z : 0;
   return absl::StrCat(
-      " grid:", (ki.grid_x / ki.workgroup_x), ",", 
-                (ki.grid_y / ki.workgroup_y), ",", 
-                (ki.grid_z / ki.workgroup_z), 
+      " grid:", grid_x, ",", grid_y, ",", grid_z, 
       " block:", ki.workgroup_x, ",", ki.workgroup_y, ",", ki.workgroup_z,
       " private_mem:", ki.private_segment_size,
       " group_mem:", ki.group_segment_size,
