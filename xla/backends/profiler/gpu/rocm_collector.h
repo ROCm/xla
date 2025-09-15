@@ -42,15 +42,19 @@ using tsl::profiler::XLineBuilder;
 using tsl::profiler::XPlaneBuilder;
 using tsl::profiler::XSpace;
 
-inline std::string ToXStat(const KernelDetails& kernel_info,
+inline std::string ToXStat(const KernelDetails& ki,
                            double occupancy_pct) {
+
+  // PAE on ROCM 6.4.x rocprofiler sdk mixed up grid and workgroup size...
+  // In fact: workgroup_size is effectively block size
+  // grid_size is workgroup_size
   return absl::StrCat(
-      "regs:", kernel_info.registers_per_thread,
-      " static_shared:", kernel_info.static_shared_memory_usage,
-      " dynamic_shared:", kernel_info.dynamic_shared_memory_usage,
-      " grid:", kernel_info.grid_x, ",", kernel_info.grid_y, ",",
-      kernel_info.grid_z, " block:", kernel_info.block_x, ",",
-      kernel_info.block_y, ",", kernel_info.block_z,
+      " grid:", (ki.grid_x / ki.workgroup_x), ",", 
+                (ki.grid_y / ki.workgroup_y), ",", 
+                (ki.grid_z / ki.workgroup_z), 
+      " block:", ki.workgroup_x, ",", ki.workgroup_y, ",", ki.workgroup_z,
+      " private_mem:", ki.private_segment_size,
+      " group_mem:", ki.group_segment_size,
       " occ_pct:", occupancy_pct);
 }
 
