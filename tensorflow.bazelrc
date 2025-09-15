@@ -250,9 +250,9 @@ build:rocm_rbe --remote_executor="grpcs://wardite.cluster.engflow.com"
 build:rocm_rbe --host_platform="//platform/linux_x64"
 build:rocm_rbe --extra_execution_platforms="//platform/linux_x64"
 build:rocm_rbe --platforms="//platform/linux_x64"
-build:rocm_rbe --tls_client_certificate="/ci/ci-cert.crt"
-build:rocm_rbe --tls_client_key="/ci/ci-cert.key"
 build:rocm_rbe --bes_timeout=600s
+build:rocm_rbe --tls_client_certificate="/tf/certificates/ci-cert.crt"
+build:rocm_rbe --tls_client_key="/tf/certificates/ci-cert.key"
 
 build:rocm_ci --config=rocm_clang_official
 
