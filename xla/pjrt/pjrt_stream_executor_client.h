@@ -125,6 +125,22 @@ class PjRtStreamExecutorDeviceDescription : public PjRtDeviceDescription {
   std::array<int, 1> coords_;
 };
 
+struct PjRtStreamExecutorExecutionInput {
+  // Donation is not complete until ReleaseDeviceMemory() is called on the
+  // TrackedDeviceBuffer that provides buf.
+  bool is_donated;
+  tsl::RCReference<RawSEDeviceMemory> buf;
+};
+
+struct PjRtStreamExecutorExecutionOutput {
+  ShapeTree<tsl::RCReference<RawSEDeviceMemory>> result;
+  // Donated inputs which must be freed.
+  std::vector<tsl::RCReference<RawSEDeviceMemory>> to_be_released;
+  // For PjRtStreamExecutorClient implementations that
+  // use OwningDeviceMemory for donated inputs.
+  std::vector<se::OwningDeviceMemory> se_to_be_released;
+};
+
 class PjRtStreamExecutorDevice : public PjRtDevice {
  public:
   explicit PjRtStreamExecutorDevice(
@@ -419,6 +435,11 @@ class PjRtStreamExecutorClient : public PjRtClient {
   }
 
   tsl::thread::ThreadPool* thread_pool() { return &thread_pool_; }
+
+  virtual absl::StatusOr<PjRtStreamExecutorExecutionOutput> RunAsync(
+      LocalExecutable& exec, PjRtDevice* device,
+      std::vector<ShapeTree<PjRtStreamExecutorExecutionInput>> arguments,
+      ExecutableRunOptions run_options);
 
  protected:
   friend class PjRtStreamExecutorBuffer;
@@ -1033,7 +1054,8 @@ class PjRtStreamExecutorLoadedExecutable : public PjRtLoadedExecutable {
   virtual absl::Span<int const> ParametersThatMustBeDonated(
       int executable_idx) const;
 
-  virtual absl::StatusOr<std::vector<ExecutionInput>>
+  virtual absl::StatusOr<
+      std::vector<ShapeTree<PjRtStreamExecutorExecutionInput>>>
   MakeExecutionInputsAndWaitForEvents(
       int device_ordinal, const ExecuteOptions& options,
       absl::Span<const Shape> executable_parameter_shapes,
@@ -1041,22 +1063,24 @@ class PjRtStreamExecutorLoadedExecutable : public PjRtLoadedExecutable {
       absl::Span<const PjRtStreamExecutorBuffer::ScopedHold> device_buffers,
       absl::flat_hash_set<BufferSequencingEvent*>& events) const;
 
-  absl::StatusOr<ScopedShapedBuffer> EnqueueExecution(
+  absl::StatusOr<ShapeTree<tsl::RCReference<RawSEDeviceMemory>>>
+  EnqueueExecution(
       absl::Span<PjRtBuffer* const> argument_handles, int replica,
       int partition, int executable_idx, const RunId& run_id,
       const ExecuteOptions& options, PjRtDevice* device,
       std::vector<PjRtStreamExecutorBuffer::ScopedHold>* device_buffers,
       std::shared_ptr<DeviceAssignment> device_assignment,
-      std::vector<std::function<void()>>& compute_callbacks) const;
+      std::vector<absl::AnyInvocable<void() &&>>& compute_callbacks) const;
 
   virtual absl::StatusOr<std::vector<std::unique_ptr<PjRtBuffer>>>
-  MakeOutputBuffers(int device_ordinal, const ExecuteOptions& options,
-                    ScopedShapedBuffer result_buffer,
-                    std::shared_ptr<BufferSequencingEvent> definition_event,
-                    PjRtDevice* device,
-                    std::vector<std::function<void()>>& compute_callbacks,
-                    std::vector<std::shared_ptr<TrackedDeviceBuffer>>&
-                        buffers_to_release) const;
+  MakeOutputBuffers(
+      int device_ordinal, const ExecuteOptions& options,
+      ShapeTree<tsl::RCReference<RawSEDeviceMemory>> result_buffer,
+      std::shared_ptr<BufferSequencingEvent> definition_event,
+      PjRtDevice* device,
+      std::vector<absl::AnyInvocable<void() &&>>& compute_callbacks,
+      std::vector<std::shared_ptr<TrackedDeviceBuffer>>& buffers_to_release)
+      const;
 
   absl::StatusOr<Result> ExecuteHelper(
       absl::Span<PjRtBuffer* const> argument_handles, int replica,
