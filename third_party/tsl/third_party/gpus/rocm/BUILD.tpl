@@ -146,12 +146,11 @@ cc_library(
     ],
     strip_include_prefix = "%{rocm_root}",
     deps = [
-        ":amd_comgr",
-        ":hsa_rocr",
         ":rocm_config",
         ":rocprofiler_register",
         ":system_libs",
     ],
+    visibility = ["//visibility:public"],
 )
 
 cc_library(
@@ -217,7 +216,6 @@ cc_library(
     hdrs = glob(["%{rocm_root}/include/miopen/**"]),
     srcs = glob(["%{rocm_root}/lib/libMIOpen*.so*"]),
     data = glob([
-        "%{rocm_root}/lib/libMIOpen*.so*",
         "%{rocm_root}/share/miopen/**",
     ]),
     include_prefix = "rocm",
