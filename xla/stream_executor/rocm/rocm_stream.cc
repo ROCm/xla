@@ -312,17 +312,40 @@ void InternalHostCallback(void* data) {
 
 absl::Status RocmStream::DoHostCallbackWithStatus(
     absl::AnyInvocable<absl::Status() &&> callback) {
-  auto callback_ptr =
-      new absl::AnyInvocable<void() &&>([cb = std::move(callback)]() mutable {
-        absl::Status s = std::move(cb)();
+  auto callback_ptr = new absl::AnyInvocable<void() &&>(
+      [cb = std::move(callback), this]() mutable {
+        absl::Status s = (std::move(cb))();
+
         if (!s.ok()) {
           LOG(WARNING) << "Host callback failed: " << s;
         }
+
+        // clang-format off
+        int num_pending_host_callbacks = num_pending_host_callbacks_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        // clang-format on
+
+        // num_pending_host_callbacks_ can theoretically reach -1 if this
+        // callback gets executed before we increase the counter on the main
+        // thread.
+        if (num_pending_host_callbacks == 0) {
+          absl::MutexLock lock(&mutex_);
+          no_pending_host_callbacks_ = num_pending_host_callbacks_ <= 0;
+        }
       });
-  return ToStatus(
-      wrap::hipLaunchHostFunc(stream_handle_, (hipHostFn_t)InternalHostCallback,
-                              callback_ptr),
-      "unable to add host callback");
+
+  TF_RETURN_IF_ERROR(ToStatus(wrap::hipLaunchHostFunc(
+      stream_handle_, InternalHostCallback, callback_ptr)));
+
+  int num_pending_host_callbacks =
+      num_pending_host_callbacks_.fetch_add(1, std::memory_order_acq_rel) + 1;
+
+  if (num_pending_host_callbacks == 1) {
+    // num_pending_host_callbacks == 1 means we had no pending host callbacks
+    // before this one.
+    absl::MutexLock lock(&mutex_);
+    no_pending_host_callbacks_ = num_pending_host_callbacks_ <= 0;
+  }
+  return absl::OkStatus();
 }
 
 namespace {
@@ -356,11 +379,11 @@ absl::Status LaunchRocmKernel(
         function, grid_dim_x, grid_dim_y, grid_dim_z, block_dim_x, block_dim_y,
         block_dim_z, shared_mem_bytes, stream, kernel_params, extra);
   }
-  TF_RETURN_IF_ERROR(
-      ToStatus(res, absl::StrCat("Failed to launch ROCm kernel: ", kernel_name,
-                  "; grid: ", grid_dim_x, "x", grid_dim_y, "x", grid_dim_z,
-                  "; block: ", block_dim_x, "x", block_dim_y, "x", block_dim_z,
-                  "; shared_mem: ", shared_mem_bytes)));
+  TF_RETURN_IF_ERROR(ToStatus(
+      res, absl::StrCat("Failed to launch ROCm kernel: ", kernel_name,
+                        "; grid: ", grid_dim_x, "x", grid_dim_y, "x",
+                        grid_dim_z, "; block: ", block_dim_x, "x", block_dim_y,
+                        "x", block_dim_z, "; shared_mem: ", shared_mem_bytes)));
 
   VLOG(2) << "successfully launched kernel";
   return absl::OkStatus();
@@ -385,7 +408,10 @@ absl::Status LaunchRocmKernel(
 }  // namespace
 
 absl::Status RocmStream::BlockHostUntilDone() {
-  return SynchronizeStream(executor_, stream_handle_);
+  TF_RETURN_IF_ERROR(SynchronizeStream(executor_, stream_handle_));
+  absl::MutexLock lock(&mutex_);
+  mutex_.Await(absl::Condition(&no_pending_host_callbacks_));
+  return absl::OkStatus();
 }
 
 absl::Status RocmStream::LaunchKernel(
