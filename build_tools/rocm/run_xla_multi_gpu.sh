@@ -77,6 +77,7 @@ elif [[ $1 == "tsan" ]]; then
 fi
 
 bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
+    "${SANITIZER_ARGS[@]}" \
     --config=rocm_ci \
     --config=rocm_rbe \
     --config=xla_mgpu \
