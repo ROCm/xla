@@ -15,7 +15,6 @@ race:xla::gpu::AllocateDestinationBuffer
 race:xla::LocalDeviceState::ThenRelease
 
 # To be fixed
-race:xla::LiteralBase::Piece::DeallocateBuffers
 race:xla::PjRtStreamExecutorLoadedExecutable::ExecuteHelper
 race:xla::PjRtStreamExecutorClient::BufferFromHostBufferInternal
 race:xla::HloRunnerPjRt::TransferLiteralsFromDevice
@@ -23,7 +22,6 @@ race:xla::MutableLiteralBase::~MutableLiteralBase
 race:xla::MutableLiteralBase::PopulateR1<int>
 race:xla::LiteralBase::Piece::Storage::Storage
 race:xla::LocalClient::TransferFromOutfeedLocal
-race:xla::gpu::(anonymous namespace)::RecoverExp2Pattern::initStaticsIfNeeded<std::tuple<mlir::Float32Type, mlir::FloatTF32Type, mlir::BFloat16Type>>
 race:lld::lldMain
 race:llvm::*
 race:xla::gpu::GpuExecutable::ExecuteAsyncOnStream
