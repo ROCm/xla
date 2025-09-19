@@ -706,6 +706,9 @@ cc_library(
 xla_test(
     name = "cudnn_fused_conv_rewriter_test",
     srcs = ["cudnn_fused_conv_rewriter_test.cc"],
+    tags = [
+        "cuda-only", # TODO(rocm): Until #12613 is fixed.
+    ],
     backend_tags = {
         "a100": [
             "noasan",
@@ -714,6 +717,7 @@ xla_test(
     },
     backends = [
         "a100",
+		"gpu_amd_any",
     ],
     shard_count = 10,
     tags = [
