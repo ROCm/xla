@@ -15,8 +15,6 @@ race:xla::gpu::AllocateDestinationBuffer
 race:xla::LocalDeviceState::ThenRelease
 
 # To be fixed
-race:xla::PjRtStreamExecutorLoadedExecutable::ExecuteHelper
-race:xla::PjRtStreamExecutorClient::BufferFromHostBufferInternal
 race:xla::HloRunnerPjRt::TransferLiteralsFromDevice
 race:xla::MutableLiteralBase::~MutableLiteralBase
 race:xla::MutableLiteralBase::PopulateR1<int>
