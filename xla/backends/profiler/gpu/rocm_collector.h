@@ -44,7 +44,7 @@ using tsl::profiler::XSpace;
 
 inline std::string ToXStat(const KernelDetails& kernel_info,
                            double occupancy_pct) {
-  // PAE on ROCM 6.4.x/7.0.0 rocprofiler sdk mixed up grid and workgroup size...
+  // on ROCM 6.4.x/7.0.0 rocprofiler sdk mixed up grid and workgroup size...
   // only shows them with ROCm-7.x
   uint32_t grid_x = kernel_info.workgroup_x != 0
                         ? kernel_info.grid_x / kernel_info.workgroup_x

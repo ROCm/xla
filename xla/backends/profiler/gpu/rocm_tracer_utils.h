@@ -66,9 +66,10 @@ struct MemsetDetails {
 };
 
 struct KernelDetails {
-  // The amount of private memory used by kernel
+  // The amount of private memory used by kernel, 
+  // number of register per thread (register spillage if > 0)
   uint32_t private_segment_size;
-  // The amount of global memory ?? not sure what is this
+  // The amount of shared memory (SMEM)
   uint32_t group_segment_size;
   // X-dimension of a workgroup (grid.x*block.x)
   uint32_t workgroup_x;
