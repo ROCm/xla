@@ -1478,7 +1478,6 @@ FunctionalHloRunner::FetchAndLogOutput(
   CHECK(!output_buffers.empty());
   absl::Mutex mu;
   absl::Status status;
-  size_t num_pending_transfers = 0;
   bool device_0_is_local = false;
   for (PjRtDevice* device : GetLocalDevices(client)) {
     if (device->id() == 0) {
@@ -1486,15 +1485,7 @@ FunctionalHloRunner::FetchAndLogOutput(
     }
   }
 
-  if (module_output_mode == ModuleOutputMode::kReturnDevice0Outputs &&
-      device_0_is_local) {
-    num_pending_transfers = output_buffers[0].size();
-  } else if (module_output_mode == ModuleOutputMode::kReturnOutputs) {
-    for (const auto& bs : output_buffers) {
-      num_pending_transfers += bs.size();
-    }
-  }
-
+  std::vector<PjRtFuture<>> literal_futures;
   PerDeviceLiteralVecType outputs;
   for (int i = 0; i < output_buffers.size(); ++i) {
     if (output_buffers[i].empty()) {
@@ -1512,12 +1503,12 @@ FunctionalHloRunner::FetchAndLogOutput(
                "same device";
         output_slice.emplace_back(
             ShapeUtil::DeviceShapeToHostShape(buffer->on_device_shape()));
-        buffer->ToLiteral(&output_slice.back()).OnReady([&](absl::Status s) {
-          absl::MutexLock lock(&mu);
-          --num_pending_transfers;
-          status.Update(s);
-        });
+        literal_futures.emplace_back(buffer->ToLiteral(&output_slice.back()));
       }
+      for (auto& f : literal_futures) {
+        f.Await();
+      }
+      literal_futures.clear();
     } else {
       for (const auto& buffer : output_buffers[i]) {
         TF_RET_CHECK(buffer->device() == output_buffers[i][0]->device())
@@ -1527,9 +1518,7 @@ FunctionalHloRunner::FetchAndLogOutput(
       }
     }
   }
-  auto cond = [&]() { return !status.ok() || num_pending_transfers == 0; };
-  absl::MutexLock lock(&mu);
-  mu.Await(absl::Condition(&cond));
+
   if (module_output_mode == ModuleOutputMode::kReturnOutputs ||
       (module_output_mode == ModuleOutputMode::kReturnDevice0Outputs &&
        device_0_is_local)) {
