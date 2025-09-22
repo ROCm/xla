@@ -490,8 +490,22 @@ TEST_F(PjrtCApiGpuTransferManagerTest, TransferRawDataToBufferIsSuccessful) {
   std::unique_ptr<PJRT_Event, PJRT_EventDeleter> done_with_h2d_transfer_event(
       transfer_args.done_with_h2d_transfer, MakeEventDeleter(api_));
 
-  TF_ASSERT_OK_AND_ASSIGN(std::shared_ptr<xla::Literal> literal,
-                          buffer_out->buffer->ToLiteralSync());
+  absl::Mutex mu;
+  bool got_literal = false;
+  auto literal =
+      std::make_shared<xla::Literal>(xla::ShapeUtil::DeviceShapeToHostShape(
+          buffer_out->buffer->on_device_shape()));
+
+  buffer_out->buffer->ToLiteral(literal.get()).OnReady([&](absl::Status s) {
+    absl::MutexLock l(&mu);
+    TF_ASSERT_OK(s);
+    got_literal = true;
+  });
+
+  {
+    absl::MutexLock l(&mu);
+    mu.Await(absl::Condition(&got_literal));
+  }
   EXPECT_EQ(literal->element_count(), 8);
   EXPECT_THAT(literal->data<uint32_t>(), ElementsAreArray(data));
 
