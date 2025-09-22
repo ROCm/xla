@@ -93,6 +93,9 @@ class RocmStream : public StreamCommon {
   StreamExecutor* executor_;
   RocmEvent completed_event_;
   hipStream_t stream_handle_;
+  absl::Mutex mutex_;
+  bool no_pending_host_callbacks_ ABSL_GUARDED_BY(mutex_) = true;
+  std::atomic<int> num_pending_host_callbacks_ = 0;
 };
 
 }  // namespace gpu
