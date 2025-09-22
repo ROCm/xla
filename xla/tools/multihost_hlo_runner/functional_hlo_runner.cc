@@ -1527,12 +1527,12 @@ FunctionalHloRunner::FetchAndLogOutput(
       }
     }
   }
+  auto cond = [&]() { return !status.ok() || num_pending_transfers == 0; };
+  absl::MutexLock lock(&mu);
+  mu.Await(absl::Condition(&cond));
   if (module_output_mode == ModuleOutputMode::kReturnOutputs ||
       (module_output_mode == ModuleOutputMode::kReturnDevice0Outputs &&
        device_0_is_local)) {
-    auto cond = [&]() { return !status.ok() || num_pending_transfers == 0; };
-    absl::MutexLock lock(&mu);
-    mu.Await(absl::Condition(&cond));
     TF_RETURN_IF_ERROR(status);
     if (log_output) {
       for (const PjRtDevice* device : GetLocalDevices(client)) {

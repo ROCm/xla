@@ -578,12 +578,13 @@ TEST(StreamExecutorGpuClientTest, ToLiteralAsync) {
     TF_ASSERT_OK(s);
     got_literal = true;
   });
-  buffer.reset();
 
   {
     absl::MutexLock l(&mu);
     mu.Await(absl::Condition(&got_literal));
   }
+
+  buffer.reset();
 
   ASSERT_TRUE(ShapeUtil::Compatible(src_literal.shape(), literal->shape()));
   ASSERT_EQ(src_literal.data<float>(),
