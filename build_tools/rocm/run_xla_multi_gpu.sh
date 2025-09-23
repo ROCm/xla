@@ -79,15 +79,12 @@ elif [[ $1 == "tsan" ]]; then
 fi
 
 bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
-    "${SANITIZER_ARGS[@]}" \
     --config=rocm_ci \
     --config=xla_mgpu \
     --profile=/tf/pkg/profile.json.gz \
     --disk_cache=${BAZEL_DISK_CACHE_DIR} \
     --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE} \
     --experimental_guard_against_concurrent_changes \
-    --build_tag_filters=${TAGS_FILTER} \
-    --test_tag_filters=${TAGS_FILTER} \
     --test_timeout=920,2400,7200,9600 \
     --test_sharding_strategy=disabled \
     --test_output=errors \
@@ -99,6 +96,7 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     --action_env=NCCL_MAX_NCHANNELS=1 \
     --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
+    "${SANITIZER_ARGS[@]}" \
     "$@"
 
 # clean up bazel disk_cache
