@@ -193,7 +193,7 @@ xla_test(
         "@tsl//tsl/platform:test",
         "@tsl//tsl/platform:test_main",
     ],
-    linkstatic=1
+    linkstatic=1,
 )
 
 xla_test(

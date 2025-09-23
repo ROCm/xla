@@ -458,7 +458,7 @@ absl::Status FunctionalHloRunner::DumpOutput(
       absl::Status write_status =
           tsl::WriteStringToFile(tsl::Env::Default(), literal_path,
                                  literal_vec[literal_id].ToString());
-      if (!write_status.ok()) {
+     if (!write_status.ok()) {
         return write_status;
       }
     }
@@ -723,7 +723,8 @@ FunctionalHloRunner::CompileAndRun(PjRtClient& client,
                       Compile(client, hlo_module, debug_options,
                               preproc_options, compile_options));
 
-  return Run(client, executable.get(), arguments, running_options);
+  std::minstd_rand0 engine(7777); // for determinism
+  return Run(client, executable.get(), arguments, running_options, &engine);
 }
 
 namespace {
@@ -1099,8 +1100,9 @@ FunctionalHloRunner::RunInternal(
   futures.emplace();
   std::vector<std::vector<std::unique_ptr<PjRtBuffer>>> device_buffers;
   std::vector<std::vector<PjRtBuffer*>> argument_ptrs;
+
   for (int repeat = 0; repeat < running_options.num_repeats; ++repeat) {
-    VLOG(1) << "FunctionalHloRunner: ExecuteOnDevices started (repeat = "
+    VLOG(0) << "======== FunctionalHloRunner: ExecuteOnDevices started (repeat = "
             << repeat << ").";
     if (repeat == 0 || running_options.recreate_buffers_between_repeats) {
       VLOG(1) << "Creating argument buffers. repeat = " << repeat;
@@ -1119,8 +1121,9 @@ FunctionalHloRunner::RunInternal(
     execute_options.launch_id = repeat + 1;
     futures->clear();
     TF_ASSIGN_OR_RETURN(
-        output_buffers,
-        executable->Execute(argument_ptrs, execute_options, futures));
+          output_buffers,
+          executable->Execute(argument_ptrs, execute_options, futures));
+
     for (auto& future : *futures) {
       TF_RETURN_IF_ERROR(future.Await());
     }
@@ -1144,12 +1147,13 @@ FunctionalHloRunner::RunInternal(
           break;
       }
     }
-  }
+  } // for
 
-  TF_ASSIGN_OR_RETURN(PerDeviceLiteralVecType results,
+  TF_ASSIGN_OR_RETURN(auto results,
                       FetchAndLogOutput(client, output_buffers,
                                         running_options.module_output_mode,
                                         running_options.log_input_output()));
+
   if (running_options.profiler != nullptr) {
     running_options.profiler->UploadSession();
   }

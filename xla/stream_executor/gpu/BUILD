@@ -619,7 +619,9 @@ xla_test(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest",
-        "@com_google_googletest//:gtest_main",
+        #"@com_google_googletest//:gtest_main",
+        # NOTE this main is needed to enable benchmarking tests
+        "@tsl//tsl/platform:test_main", 
         "@tsl//tsl/platform:errors",
         "@tsl//tsl/platform:status",
         "@tsl//tsl/platform:status_matchers",

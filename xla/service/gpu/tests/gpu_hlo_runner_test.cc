@@ -112,7 +112,7 @@ absl::StatusOr<std::vector<Literal>> MakeSpecialArguments(HloModule* const modul
   for (int i = 0; i < params.size(); ++i) {
     TF_ASSIGN_OR_RETURN(arguments[i], 
         MakeVarLiteral(params[i]->shape(), 
-          [](int idx){ return idx; }
+          [](int idx){ return 111; }//(idx + 1)/10.0; }
         ));
   }
   return std::move(arguments);
@@ -149,14 +149,16 @@ protected:
     }
 
     HloModuleConfig config = GetModuleConfigForTest();
-#if !USE_MULTIPLE_GPUS
+    auto& runner = test_runner_as_hlo_runner();
+
+#if !NUM_REPLICAS_TO_RUN
   TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(input, 
           config));
   
 #if !USE_SPECIAL_ARGUMENTS
-  TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, xla::MakeFakeArguments(module.get(), 
+  auto fake_arguments = xla::MakeFakeArguments(module.get(), 
         USE_PSEUDO_RANDOM, /*pseudo-random*/
-        USE_RANDOM_LARGE_RANGE /* use large range*/));
+        USE_RANDOM_LARGE_RANGE /* use large range*/).value();
 #else
   TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, MakeSpecialArguments(module.get()));
 #endif
@@ -165,14 +167,6 @@ protected:
   auto ref_module = module->Clone();  
   TF_ASSERT_OK_AND_ASSIGN(auto exec, CreateExecutable(std::move(module), true));
 
-  //  TF_ASSERT_OK_AND_ASSIGN(auto truth, 
-  //        ReadLiteralFromProto("/tf/xla/expected.pb"));
-  // TF_ASSERT_OK_AND_ASSIGN(auto truth, 
-  // ref_runner.ExecuteWithExecutable(ref_exec.get(), arg_ptrs, nullptr));
-  // WriteLiteralToTempFile(truth, "expected");
-  //VLOG(0) << "Got expected literal from file.. running test";
-
-  auto& runner = test_runner_as_hlo_runner();
   int num_runs = 1, num_warmups = 0;
   TF_ASSERT_OK_AND_ASSIGN(auto argument_buffers,
                       runner.TransferLiteralsToDevice(arg_ptrs));
@@ -242,8 +236,8 @@ protected:
 #endif // DO_REFERENCE_CHECK
  //    EXPECT_TRUE(RunAndCompare(std::move(module), 
   // //     absl::Span< xla::Literal * const>(arg_ptrs.data(), arg_ptrs.size()), error_spec));
-#else // USE_MULTIPLE_GPUS
-  int NumReplicas = 8, NumParts = 1;
+#else // NUM_REPLICAS_TO_RUN
+  int NumReplicas = NUM_REPLICAS_TO_RUN, NumParts = 1;
   config.set_replica_count(NumReplicas);
   config.set_num_partitions(NumParts);
 
@@ -258,21 +252,29 @@ protected:
 
   auto fake_arguments = xla::MakeFakeArguments(
       module.get(),
-      true, /*pseudo-random*/
-      false /* use large range*/).ValueOrDie();
-  TF_ASSERT_OK_AND_ASSIGN(auto exec, 
-      test_runner_.CreateExecutable(std::move(module), true));
+      USE_PSEUDO_RANDOM, /*pseudo-random*/
+      USE_RANDOM_LARGE_RANGE /* use large range*/).value();
 
- for(int i = 0; i < 10; i++) {
+  TF_ASSERT_OK_AND_ASSIGN(auto exec, 
+      runner.CreateExecutable(std::move(module), /*run_hlo_passes*/true));
+
+  HloRunnerInterface::ReplicatedExecuteOptions replicated_opts = {
+    .num_replicas = NumReplicas,
+    // .arguments = 
+    .use_threads = true,
+  };
+
+ for(int i = 0; i < 20; i++) {
    VLOG(0) << "Running iteration #" << i;
    TF_ASSERT_OK_AND_ASSIGN(std::vector<Literal> results,
-         HloTestBase::ExecuteReplicated(
+         runner.ExecuteReplicated(
           [&](int64_t){ return exec.get(); },
           [&fake_arguments](int64_t replica_id)
           { return fake_arguments.size(); },
           [&fake_arguments](int64_t replica_id, int64_t idx)
           { return &fake_arguments[idx]; },
-          NumReplicas, false /*run hlo*/, &assn));
+          replicated_opts, &assn));
+
    ASSERT_EQ(results.size(), NumReplicas);
  }
 #endif // USE_MULTIPLE_GPUS
