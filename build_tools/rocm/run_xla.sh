@@ -62,6 +62,11 @@ TritonTest.NonstandardLayoutWithManyNonContractingDims
 TritonTest.NonstandardLayoutWithManyNonContractingDimsReversedLayout
 # //xla/hlo/builder/lib:self_adjoint_eig_test_gpu_amd_any marked as flaky but randomly red after 3 attempts
 RandomEighTestInstantiation/RandomEighTest.Random/*
+# //xla/backends/profiler/gpu:rocm_tracer_test_gpu_amd_any, filtered out due to rocprofiler-sdk
+RocmTracerTest.SingletonInstance
+RocmTracerTest.InitialStateIsAvailable
+RocmTracerTest.EnableAndDisableLifecycle
+RocmTracerTest.AnnotationMapWorks
 )
 
 BAZEL_DISK_CACHE_SIZE=100G
