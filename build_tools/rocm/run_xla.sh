@@ -62,11 +62,10 @@ TritonTest.NonstandardLayoutWithManyNonContractingDims
 TritonTest.NonstandardLayoutWithManyNonContractingDimsReversedLayout
 # //xla/hlo/builder/lib:self_adjoint_eig_test_gpu_amd_any marked as flaky but randomly red after 3 attempts
 RandomEighTestInstantiation/RandomEighTest.Random/*
-# //xla/backends/profiler/gpu:rocm_tracer_test_gpu_amd_any, filtered out due to rocprofiler-sdk
-RocmTracerTest.SingletonInstance
-RocmTracerTest.InitialStateIsAvailable
-RocmTracerTest.EnableAndDisableLifecycle
-RocmTracerTest.AnnotationMapWorks
+)
+
+EXCLUDED_TARGETS=(
+  //xla/backends/profiler/gpu:rocm_tracer_test_gpu_amd_any
 )
 
 BAZEL_DISK_CACHE_SIZE=100G
@@ -113,6 +112,7 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --test_env=MIOPEN_FIND_ENFORCE=5 \
     --test_env=MIOPEN_FIND_MODE=1 \
     --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
+    "${EXCLUDED_TARGETS[@]/#/-}" \
     "${SANITIZER_ARGS[@]}" \
     "$@"
 
