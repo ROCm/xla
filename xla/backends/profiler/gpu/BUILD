@@ -390,6 +390,7 @@ xla_test(
     tags = [
         "gpu",
         "rocm-only",
+        "skip_rocprofiler_sdk",   # due to rocprofiler-sdk's rocprofiler_force_configure
     ] + if_google([
         # Optional: only run internally if ROCm config is enabled
         "manual",

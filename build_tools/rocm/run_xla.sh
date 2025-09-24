@@ -64,16 +64,12 @@ TritonTest.NonstandardLayoutWithManyNonContractingDimsReversedLayout
 RandomEighTestInstantiation/RandomEighTest.Random/*
 )
 
-EXCLUDED_TARGETS=(
-  //xla/backends/profiler/gpu:rocm_tracer_test_gpu_amd_any
-)
-
 BAZEL_DISK_CACHE_SIZE=100G
 BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.6.0"
 mkdir -p ${BAZEL_DISK_CACHE_DIR}
 
 SCRIPT_DIR=$(realpath $(dirname $0))
-TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,-multigpu,-multi_gpu_h100,requires-gpu-amd
+TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,-multigpu,-multi_gpu_h100,requires-gpu-amd,-skip_rocprofiler_sdk
 
 SANITIZER_ARGS=()
 if [[ $1 == "asan" ]]; then
@@ -112,7 +108,6 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --test_env=MIOPEN_FIND_ENFORCE=5 \
     --test_env=MIOPEN_FIND_MODE=1 \
     --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
-    "${EXCLUDED_TARGETS[@]/#/-}" \
     "${SANITIZER_ARGS[@]}" \
     "$@"
 
