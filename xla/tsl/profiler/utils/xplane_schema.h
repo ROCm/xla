@@ -286,6 +286,8 @@ enum StatType {
   kScaledValue,
   kThreadId,
   kMatrixUnitUtilizationPercent,
+  // Cost analysis related.
+  kTimeScaleMultiplier,
   // XLA metadata map related.
   kHloProto,
   // Device capability related.
