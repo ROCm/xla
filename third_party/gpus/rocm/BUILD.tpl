@@ -518,3 +518,9 @@ filegroup(
     srcs = glob(["%{rocm_root}/**"]),
     visibility = ["//visibility:public"],
 )
+
+filegroup(
+    name = "toolchain_data",
+    srcs = glob(["%{rocm_root}/bin/*"]),
+    visibility = ["//visibility:public"],
+)
