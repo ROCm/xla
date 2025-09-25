@@ -50,17 +50,61 @@ fi
 
 export PYTHON_BIN_PATH=`which python3`
 export TF_NEED_ROCM=1
-export ROCM_PATH=$ROCM_INSTALL_DIR
-TAGS_FILTER="gpu,requires-gpu-amd,-requires-gpu-nvidia,-requires-gpu-intel,-no_oss,-oss_excluded,-oss_serial,-no_gpu,-cuda-only,-oneapi-only"
-UNSUPPORTED_GPU_TAGS="$(echo -requires-gpu-sm{60,70,80,86,89,90}{,-only})"
-TAGS_FILTER="${TAGS_FILTER},${UNSUPPORTED_GPU_TAGS// /,}"
+export ROCM_PATH="/opt/rocm"
 
-bazel \
-    test \
-    --define xnn_enable_avxvnniint8=false --define xnn_enable_avx512fp16=false \
-    --config=rocm_gcc \
-    --build_tag_filters=${TAGS_FILTER} \
-    --test_tag_filters=${TAGS_FILTER} \
+GPU_NAME=(`rocminfo | grep -m 1 gfx`)
+GPU_NAME=${GPU_NAME[1]}
+
+EXCLUDED_TESTS=(
+# //xla/pjrt/c:pjrt_c_api_gpu_test_gpu_amd_any
+PjrtCAPIGpuExtensionTest.TritonCompile
+# //xla/backends/gpu/codegen/triton:fusion_emitter_device_test_gpu_amd_any
+TritonEmitterTest.CheckRocmWarpSize
+TritonEmitterTest.ConvertF16ToF8E5M2Exhaustive
+TritonEmitterTest.FP8ToFP8EndToEnd
+TritonEmitterTest.FusionWithOutputContainingMoreThanInt32MaxElementsExecutesCorrectly
+BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F64_F64_F64
+# //xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_gpu_amd_any
+TritonGemmTest.BroadcastOfVectorConstantIsFused
+TritonGemmTest.FailIfTooMuchShmem
+TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
+# //xla/backends/gpu/codegen/triton:fusion_emitter_int4_device_test_gpu_amd_any
+TritonTest.NonstandardLayoutWithManyNonContractingDims
+TritonTest.NonstandardLayoutWithManyNonContractingDimsReversedLayout
+# //xla/hlo/builder/lib:self_adjoint_eig_test_gpu_amd_any marked as flaky but randomly red after 3 attempts
+RandomEighTestInstantiation/RandomEighTest.Random/*
+)
+
+BAZEL_DISK_CACHE_SIZE=100G
+BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.6.0"
+mkdir -p ${BAZEL_DISK_CACHE_DIR}
+
+SCRIPT_DIR=$(realpath $(dirname $0))
+TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,-multigpu,-multi_gpu_h100,requires-gpu-amd,-skip_rocprofiler_sdk
+
+SANITIZER_ARGS=()
+if [[ $1 == "asan" ]]; then
+    SANITIZER_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=${SCRIPT_DIR}/asan_ignore_list.txt:use_sigaltstack=0")
+    SANITIZER_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=${SCRIPT_DIR}/lsan_ignore_list.txt:use_sigaltstack=0")
+    SANITIZER_ARGS+=("--config=asan")
+    TAG_FILTERS=$TAG_FILTERS,-noasan
+    shift
+elif [[ $1 == "tsan" ]]; then
+    SANITIZER_ARGS+=("--test_env=TSAN_OPTIONS=suppressions=${SCRIPT_DIR}/tsan_ignore_list.txt::history_size=7:ignore_noninstrumented_modules=1")
+    SANITIZER_ARGS+=("--config=tsan")
+    TAG_FILTERS=$TAG_FILTERS,-notsan
+    shift
+fi
+
+bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
+    --config=rocm_ci \
+    --config=xla_sgpu \
+    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+    --profile=/tf/pkg/profile.json.gz \
+    --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE} \
+    --experimental_guard_against_concurrent_changes \
+    --build_tag_filters=$TAG_FILTERS \
+    --test_tag_filters=$TAG_FILTERS \
     --test_timeout=920,2400,7200,9600 \
     --test_sharding_strategy=disabled \
     --test_output=errors \
