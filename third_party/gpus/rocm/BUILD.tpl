@@ -87,6 +87,9 @@ cc_library(
         "%{rocm_root}/include/**",
         "%{rocm_root}/lib/llvm/lib/**/*.h",
     ]),
+    data = [
+        ":toolchain_data",
+    ],
     defines = ["MIOPEN_BETA_API=1"],
     include_prefix = "rocm",
     strip_include_prefix = "%{rocm_root}",
@@ -165,6 +168,9 @@ cc_library(
     name = "rocm_hip",
     srcs = glob(["%{rocm_root}/lib/libamdhip*.so"]),
     hdrs = glob(["%{rocm_root}/include/hip/**"]),
+    data = [
+        ":toolchain_data",
+    ],
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include",
@@ -521,6 +527,9 @@ filegroup(
 
 filegroup(
     name = "toolchain_data",
-    srcs = glob(["%{rocm_root}/bin/*"]),
+    srcs = glob([
+        "%{rocm_root}/bin/*",
+        "%{rocm_root}/lib/*",
+    ]),
     visibility = ["//visibility:public"],
 )
