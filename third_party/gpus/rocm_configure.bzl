@@ -91,10 +91,9 @@ def find_cc(repository_ctx):
     """Find the C++ compiler."""
 
     target_cc_name = "clang"
-    cc_path_envvar = _CLANG_COMPILER_PATH
     cc_name = target_cc_name
 
-    cc_name_from_env = get_host_environ(repository_ctx, cc_path_envvar)
+    cc_name_from_env = get_host_environ(repository_ctx, _CLANG_COMPILER_PATH)
     if cc_name_from_env:
         cc_name = cc_name_from_env
     if cc_name.startswith("/"):
@@ -103,7 +102,7 @@ def find_cc(repository_ctx):
     cc = which(repository_ctx, cc_name)
     if cc == None:
         fail(("Cannot find {}, either correct your path or set the {}" +
-              " environment variable").format(target_cc_name, cc_path_envvar))
+              " environment variable").format(target_cc_name, _CLANG_COMPILER_PATH))
     return cc
 
 def auto_configure_fail(msg):
@@ -689,10 +688,7 @@ def _create_local_rocm_repository(repository_ctx):
     )
 
     # Set up crosstool/
-    if is_rocm_clang:
-        cc = rocm_config.rocm_toolkit_path + '/lib/llvm/bin/clang++'
-    else:
-        cc = find_cc(repository_ctx)
+    cc = find_cc(repository_ctx)
 
     host_compiler_includes = get_cxx_inc_directories(
         repository_ctx,
@@ -711,16 +707,7 @@ def _create_local_rocm_repository(repository_ctx):
     rocm_defines["%{extra_no_canonical_prefixes_flags}"] = ""
     rocm_defines["%{unfiltered_compile_flags}"] = ""
     rocm_defines["%{rocm_hipcc_files}"] = "[]"
-
-    if is_rocm_clang:
-        rocm_defines["%{extra_no_canonical_prefixes_flags}"] = "\"-no-canonical-prefixes\""
-    else:
-        # For gcc, do not canonicalize system header paths; some versions of gcc
-        # pick the shortest possible path for system includes when creating the
-        # .d file - given that includes that are prefixed with "../" multiple
-        # time quickly grow longer than the root of the tree, this can lead to
-        # bazel's header check failing.
-        rocm_defines["%{extra_no_canonical_prefixes_flags}"] = "\"-fno-canonical-system-headers\""
+    rocm_defines["%{extra_no_canonical_prefixes_flags}"] = "\"-no-canonical-prefixes\""
 
     rocm_defines["%{unfiltered_compile_flags}"] = to_list_of_strings([
         "-DTENSORFLOW_USE_ROCM=1",
@@ -757,13 +744,10 @@ def _create_local_rocm_repository(repository_ctx):
         tpl_paths["crosstool:clang/bin/crosstool_wrapper_driver_rocm"],
         {
             "%{cpu_compiler}": str(cc),
-            "%{compiler_is_clang}": "True" if is_rocm_clang else "False",
-            "%{rocm_root}": rocm_config.rocm_toolkit_path,
+            "%{compiler_is_clang}": "True",
+            "%{rocm_root}": "external/local_config_rocm/" + str(rocm_config.rocm_toolkit_path),
             "%{hipcc_env}": _hipcc_env(repository_ctx),
-            "%{rocm_path}": str(repository_ctx.path(rocm_config.rocm_toolkit_path)),
-            "%{rocr_runtime_path}": str(repository_ctx.path(rocm_config.rocm_toolkit_path + "/lib")),
             "%{rocr_runtime_library}": "hsa-runtime64",
-            "%{hip_runtime_path}": str(repository_ctx.path(rocm_config.rocm_toolkit_path + "/lib")),
             "%{hip_runtime_library}": "amdhip64",
             "%{crosstool_verbose}": _crosstool_verbose(repository_ctx),
             "%{gcc_host_compiler_path}": str(cc),
