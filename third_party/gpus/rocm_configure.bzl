@@ -87,15 +87,11 @@ def verify_build_defines(params):
             ".",
         )
 
-def find_cc(repository_ctx, use_rocm_clang):
+def find_cc(repository_ctx):
     """Find the C++ compiler."""
 
-    if use_rocm_clang:
-        target_cc_name = "clang"
-        cc_path_envvar = _CLANG_COMPILER_PATH
-    else:
-        target_cc_name = "gcc"
-        cc_path_envvar = _GCC_HOST_COMPILER_PATH
+    target_cc_name = "clang"
+    cc_path_envvar = _CLANG_COMPILER_PATH
     cc_name = target_cc_name
 
     cc_name_from_env = get_host_environ(repository_ctx, cc_path_envvar)
@@ -693,7 +689,11 @@ def _create_local_rocm_repository(repository_ctx):
     )
 
     # Set up crosstool/
-    cc = find_cc(repository_ctx, is_rocm_clang)
+    if is_rocm_clang:
+        cc = rocm_config.rocm_toolkit_path + '/lib/llvm/bin/clang++'
+    else:
+        cc = find_cc(repository_ctx)
+
     host_compiler_includes = get_cxx_inc_directories(
         repository_ctx,
         cc,
@@ -704,9 +704,7 @@ def _create_local_rocm_repository(repository_ctx):
 
     rocm_defines = {}
     rocm_defines["%{builtin_sysroot}"] = tf_sysroot
-    rocm_defines["%{compiler}"] = "unknown"
-    if is_rocm_clang:
-        rocm_defines["%{compiler}"] = "clang"
+    rocm_defines["%{compiler}"] = "clang"
     host_compiler_prefix = get_host_environ(repository_ctx, _GCC_HOST_COMPILER_PREFIX, "/usr/bin")
     rocm_defines["%{host_compiler_prefix}"] = host_compiler_prefix
     rocm_defines["%{linker_bin_path}"] = rocm_config.rocm_toolkit_path + host_compiler_prefix
@@ -760,7 +758,7 @@ def _create_local_rocm_repository(repository_ctx):
         {
             "%{cpu_compiler}": str(cc),
             "%{compiler_is_clang}": "True" if is_rocm_clang else "False",
-            "%{hipcc_path}": str(repository_ctx.path(rocm_config.rocm_toolkit_path + "/bin/hipcc")),
+            "%{rocm_root}": rocm_config.rocm_toolkit_path,
             "%{hipcc_env}": _hipcc_env(repository_ctx),
             "%{rocm_path}": str(repository_ctx.path(rocm_config.rocm_toolkit_path)),
             "%{rocr_runtime_path}": str(repository_ctx.path(rocm_config.rocm_toolkit_path + "/lib")),

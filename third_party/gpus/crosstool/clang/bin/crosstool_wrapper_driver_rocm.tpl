@@ -27,7 +27,7 @@ CPU_COMPILER = ('%{cpu_compiler}')
 USE_CLANG = ('%{compiler_is_clang}' == 'True')
 HOST_COMPILER_PATH = ('%{host_compiler_path}')
 
-HIPCC_PATH = '%{hipcc_path}'
+HIPCC_PATH = '%{rocm_root}/bin/hipcc'
 PREFIX_DIR = os.path.dirname(HOST_COMPILER_PATH)
 HIPCC_ENV = '%{hipcc_env}'
 HIP_RUNTIME_PATH = '%{hip_runtime_path}'
