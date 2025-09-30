@@ -390,6 +390,7 @@ namespace wrap {
   __macro(miopenCreateOpBatchNormBackward)                           \
   __macro(miopenCompileFusionPlan)                                   \
   __macro(miopenFusionPlanGetOp)                                     \
+  __macro(miopenFusionPlanGetWorkSpaceSize)                          \
   __macro(miopenCreateOperatorArgs)                                  \
   __macro(miopenSetOpArgsConvForward)                                \
   __macro(miopenSetOpArgsBiasForward)                                \
@@ -553,6 +554,10 @@ namespace wrap {
 
 #if (MIOPEN_BETA_API && TF_ROCM_VERSION >= 60300)
 STREAM_EXECUTOR_MIOPEN_WRAP(miopenSetTensorDescriptorV2)
+#endif
+
+#if (TF_ROCM_VERSION >= 70000)
+STREAM_EXECUTOR_MIOPEN_WRAP(miopenExecuteFusionPlan_v2)
 #endif
 
 MIOPEN_DNN_ROUTINE_EACH(STREAM_EXECUTOR_MIOPEN_WRAP)
@@ -1292,21 +1297,6 @@ class ScopedFusionPlanBase {
       LOG(FATAL) << "call to miopenDestroyoperatorArgs failed: "
                  << ToString(status);
     }
-  }
-
-  miopenStatus_t Execute(miopenTensorDescriptor_t input_descriptor,
-                         const void* input_data,
-                         miopenTensorDescriptor_t output_descriptor,
-                         void* output_data) {
-    auto status = wrap::miopenExecuteFusionPlan(
-        miopen_handle_, fusion_plan_, input_descriptor, input_data,
-        output_descriptor, output_data, fusion_args_);
-    if (status != miopenStatusSuccess) {
-      LOG(FATAL) << "call to miopenExecuteFusionPlan failed: "
-                 << ToString(status);
-    }
-
-    return status;
   }
 
   bool CompilationSucceeded() { return fusion_plan_compiled_; }
@@ -4857,7 +4847,7 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
     return MakeAlgorithmDesc().ToString();
   }
 
-  uint64_t GetWorkspaceSize() const override { return 0; }
+  uint64_t GetWorkspaceSize() const override { return workspace_size_; }
 
   absl::StatusOr<dnn::AlgorithmDesc> ToAlgorithmDesc() const override {
     return MakeAlgorithmDesc();
@@ -4888,10 +4878,18 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
     }
 
     miopenStatus_t status;
+#if (TF_ROCM_VERSION >= 70000)
+    status = wrap::miopenExecuteFusionPlan_v2(
+        miopen.handle(), fusion_plan_.fusion_plan_, input_nd_.handle(),
+        input_data.opaque(), output_nd_.handle(), output_data.opaque(),
+        fusion_plan_.fusion_args_, scratch_memory.opaque(),
+        scratch_memory.size());
+#else
     status = wrap::miopenExecuteFusionPlan(
         miopen.handle(), fusion_plan_.fusion_plan_, input_nd_.handle(),
         input_data.opaque(), output_nd_.handle(), output_data.opaque(),
         fusion_plan_.fusion_args_);
+#endif
 
     if (status != miopenStatusSuccess) {
       LOG(ERROR) << "Failed to enqueue fused convolution on stream: "
@@ -4911,12 +4909,12 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
 
  public:
   static absl::StatusOr<std::unique_ptr<const dnn::FusedConvRunner>> Create(
-      StreamExecutor* parent, Stream* stream, MIOpenAccess* miopen,
+      StreamExecutor* parent, Stream* stream, MIOpenAccess* miopen_,
       const dnn::AlgorithmDesc& algo, dnn::DataType input_type,
       dnn::DataType bias_type, double leakyrelu_alpha, BatchDescriptor input_nd,
       BatchDescriptor output_nd, FilterDescriptor filter,
       BatchDescriptor bias_nd, ConvolutionDescriptor conv,
-      dnn::ActivationMode activation) {
+      dnn::ActivationMode activation, std::optional<uint64_t> workspace_size) {
     TF_ASSIGN_OR_RETURN(
         auto input_nd_,
         scope(input_nd, ToMIOpenDataType(input_type, input_nd.layout())));
@@ -4933,10 +4931,12 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
         auto activation_desc,
         ScopedActivationDescriptor::Create(activation, leakyrelu_alpha));
 
+    auto miopen = miopen_->GetHandle(parent, stream);
+
     TF_ASSIGN_OR_RETURN(
         auto fusion_plan,
         ScopedFusionPlanConvolutionBiasActivation::Create(
-            miopen->GetHandle(parent, stream).handle(), input_nd_.handle(),
+            miopen.handle(), input_nd_.handle(),
             filter_.handle(), conv_.handle(), bias_nd_.handle(),
             activation_desc));
 
@@ -4944,9 +4944,22 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
       return absl::InternalError("No algorithms found");
     }
 
-    auto obj = new RocmFusedConvRunner(parent, stream, miopen, input_nd_,
-                                       output_nd_, filter_, bias_nd_, conv_,
-                                       activation_desc, fusion_plan);
+    uint64_t workspace_size_ = workspace_size.value_or(0);
+
+    if (!workspace_size.has_value()) {
+      auto status = wrap::miopenFusionPlanGetWorkSpaceSize(
+          miopen.handle(), fusion_plan.fusion_plan_, &workspace_size_,
+          miopenConvolutionFwdAlgoImplicitGEMM);
+      if (status != miopenStatusSuccess) {
+        return absl::InternalError(
+            "call to miopenFusionPlanGetWorkSpaceSize failed: " +
+            stream_executor::gpu::ToString(status));
+      }
+    }
+
+    auto obj = new RocmFusedConvRunner(
+        parent, stream, miopen_, input_nd_, output_nd_, filter_, bias_nd_,
+        conv_, activation_desc, fusion_plan, workspace_size_);
 
     return std::unique_ptr<const dnn::FusedConvRunner>(obj);
   }
@@ -4959,7 +4972,8 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
                       ScopedTensorDescriptor& bias_nd,
                       ScopedConvolutionDescriptor& conv,
                       ScopedActivationDescriptor& activation_desc,
-                      ScopedFusionPlanConvolutionBiasActivation& fusion_plan)
+                      ScopedFusionPlanConvolutionBiasActivation& fusion_plan,
+                      uint64_t workspace_size)
       : parent_(parent),
         miopen_(miopen),
         input_nd_(std::move(input_nd)),
@@ -4968,7 +4982,8 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
         bias_nd_(std::move(bias_nd)),
         conv_(std::move(conv)),
         activation_desc_(std::move(activation_desc)),
-        fusion_plan_(std::move(fusion_plan)) {}
+        fusion_plan_(std::move(fusion_plan)),
+        workspace_size_(workspace_size) {}
 
   // Internal form of ToAlgorithmDesc without the StatusOr.
   dnn::AlgorithmDesc MakeAlgorithmDesc() const {
@@ -4976,7 +4991,7 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
     algorithm.set_algo_id(0);
     algorithm.set_math_type(dnn::AlgorithmProto::TENSOR_OP_MATH);
     algorithm.set_is_cudnn_frontend(true);
-    algorithm.mutable_workspace_size()->set_value(0);
+    algorithm.mutable_workspace_size()->set_value(workspace_size_);
     return dnn::AlgorithmDesc{algorithm};
   }
 
@@ -4990,6 +5005,7 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
   ScopedConvolutionDescriptor conv_;
   mutable ScopedActivationDescriptor activation_desc_;
   mutable ScopedFusionPlanConvolutionBiasActivation fusion_plan_;
+  uint64_t workspace_size_;
 };
 
 absl::StatusOr<std::unique_ptr<const dnn::FusedConvRunner>>
@@ -5017,7 +5033,8 @@ MIOpenSupport::FusedConvolveRunnerFromDesc(
   return RocmFusedConvRunner::Create(
       parent_, stream, miopen_.get(), algorithm_desc, input_type, bias_type,
       leakyrelu_alpha, input_descriptor, output_descriptor, filter_descriptor,
-      bias_descriptor, convolution_descriptor, activation_mode);
+      bias_descriptor, convolution_descriptor, activation_mode,
+      algorithm_desc.workspace_size());
 }
 
 absl::Status MIOpenSupport::GetFusedConvolveRunners(
@@ -5039,7 +5056,12 @@ absl::Status MIOpenSupport::GetFusedConvolveRunners(
       side_input_scale, leakyrelu_alpha, input_descriptor, filter_descriptor,
       bias_descriptor, output_descriptor, convolution_descriptor,
       activation_mode);
+// No way to invoke fused convs with workspace prior to rocm 7
+#if (TF_ROCM_VERSION >= 70000)
   if (runner_or.ok()) {
+#else
+  if (runner_or.ok() && runner_or.value()->GetWorkspaceSize() == 0) {
+#endif
     out_exec_plans->push_back(std::move(runner_or).value());
   }
 
