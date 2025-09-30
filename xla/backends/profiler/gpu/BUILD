@@ -144,8 +144,7 @@ xla_test(
     backends = ["gpu"],
     tags = [
         "cuda-only",
-        "no_mac",
-        "cuda-only"
+        "no_mac"
     ],
     deps = [
         ":cuda_test",
