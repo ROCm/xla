@@ -25,10 +25,8 @@ import shlex
 # Template values set by rocm_configure.bzl.
 CPU_COMPILER = ('%{cpu_compiler}')
 USE_CLANG = ('%{compiler_is_clang}' == 'True')
-HOST_COMPILER_PATH = ('%{host_compiler_path}')
 
 HIPCC_PATH = '%{rocm_root}/bin/hipcc'
-PREFIX_DIR = os.path.dirname(HOST_COMPILER_PATH)
 HIPCC_ENV = '%{hipcc_env}'
 HIP_RUNTIME_PATH = '%{rocm_root}/lib'
 HIP_RUNTIME_LIBRARY = '%{rocm_root}/lib'
