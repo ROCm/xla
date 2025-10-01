@@ -31,7 +31,7 @@ on:
         - 'no'
   pull_request:
     branches:
-      - main
+      - rocm-jaxlib-v0.7.1
 
 concurrency:
   # Group all jobs for a given PR together, and cancel presubmit if a new commit is pushed.
@@ -47,7 +47,7 @@ jobs:
     uses: ./.github/workflows/generate_benchmark_matrix.yml
     with:
       workflow_type: 'PRESUBMIT'
-      registry_file: 'xla/tools/benchmarks/registries/default_registry.yml'
+      registry_file: 'xla/tools/benchmarks/registries/amd_default_registry.yml'
       checkout_ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
   run_benchmarks:
