@@ -102,8 +102,8 @@ GetHardwareToRunnerLabelMap() {
       {"GPU_L4", "linux-x86-g2-16-l4-1gpu"},
       {"GPU_B200", "linux-x86-a4-224-b200-1gpu"},
       // AMD GPU runners (placeholders; adjust to match actual CI runner labels)
-      {"GPU_MI300", "linux-x86-mi300x-1gpu"},
-      {"GPU_MI250", "linux-x86-mi250-1gpu"},
+      {"GPU_MI300", "ixt-rack-04"},
+      {"GPU_MI250", "ixt-rack-04"},
       // Add more mappings
   };
   return *kMap;
