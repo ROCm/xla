@@ -56,7 +56,7 @@ GPU_NAME=(`rocminfo | grep -m 1 gfx`)
 GPU_NAME=${GPU_NAME[1]}
 
 BAZEL_DISK_CACHE_SIZE=100G
-BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.6.0"
+BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
 
 EXCLUDED_TESTS=(
   CollectiveOpsTestE2E.MemcpyP2pLargeMessage

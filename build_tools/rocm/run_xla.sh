@@ -65,7 +65,7 @@ RandomEighTestInstantiation/RandomEighTest.Random/*
 )
 
 BAZEL_DISK_CACHE_SIZE=100G
-BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.6.0"
+BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
 mkdir -p ${BAZEL_DISK_CACHE_DIR}
 
 SCRIPT_DIR=$(realpath $(dirname $0))
