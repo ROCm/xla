@@ -4,9 +4,6 @@ TAG_FILTERS=(
     -no_gpu
     -requires-gpu-intel
     -requires-gpu-nvidia
-    -no_oss
-    -oss_excluded
-    -oss_serial
     -cuda-only
     -oneapi-only
     -requires-gpu-sm60
