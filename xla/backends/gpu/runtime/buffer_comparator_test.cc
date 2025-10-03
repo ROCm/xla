@@ -456,7 +456,7 @@ TEST_F(BufferComparatorTest, VeryLargeArray_Device_U8_Aligned) {
   // Comparator: force device path (exercise kernel indexing).
   BufferComparator comparator(
       ShapeUtil::MakeShape(number_type, {static_cast<int64_t>(element_count)}),
-      /*tolerance=*/0.0, /*verbose=*/false, /*run_host_compare=*/false);
+      /*tolerance=*/0.0, /*verbose=*/false);
 
   // Pass 1: both views read zeros -> equal.
   {
