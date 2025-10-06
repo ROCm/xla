@@ -42,41 +42,81 @@ export TF_NEED_ROCM=1
 export ROCM_PATH="/opt/rocm"
 
 EXCLUDED_TESTS=(
-    BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F16_F16_F16
-    CommandBufferConversionPassTest.ConvertWhileThunk
-    CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
-    CommandBufferTests/CommandBufferTest.WhileLoop/*
-    CommandBufferTests/CommandBufferTest.IndexConditional/*
-    CommandBufferTests/CommandBufferTest.TrueFalseConditional/*
-    CompareTest.SplitK
-    CublasLtGemmRewriteTest.MatrixBiasSwishActivation
-    DeterminismTest.Conv
-    DotTestTestSuite/DotTest.IsTritonSupportedExecutesCorrectlyForDot/f32_dot
-    DotTf32Tf32F32Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_tf32_tf32_f32_*
-    DotTf32Tf32F32X3Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_tf32_tf32_f32_*
-    ElementwiseTestSuiteF16/UnaryElementwiseTest.ElementwiseUnaryOpExecutesCorrectly/f16_cosine
-    ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseBinaryOpExecutesCorrectly/f16_atan2
-    ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseFusionExecutesCorrectly/f16_atan2
-    GpuKernelTilingTest.ReductionInputTooLarge
-    KernelThunkTmaPTXTestSuite/KernelThunkTmaPTXTest.TmaPTX/*
-    MultiOutputFusionTest.MultiOutputReduceFusionMajorWithExtraOutput
-    PjrtCAPIGpuExtensionTest.TritonCompile
-    ScatterTest.TensorFlowScatterV1_UpdateTwice
-    TestRadixSort/CubSortPairsTest.SortPairs/*
-    TestRadixSort/CubSortKeysTest.SortKeys/*
-    TopKTests/TopKKernelTest.*
-    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_*
-    TritonEmitterTest.RocmWarpSizeIsSetCorrectly
-    TritonEmitterTest.FusionWithOutputContainingMoreThanInt32MaxElementsExecutesCorrectly
-    TritonEmitterTest.ConvertF16ToF8E5M2Exhaustive
-    TritonEmitterTest.RocmWarpSizeIsSetCorrectly
-    TritonFusionNumericsVerifierTest.CompilationSucceedsEvenIfKernelWillSpillRegisters
-    TritonFusionNumericsVerifierTest.VerifyThatDisablingTritonIsFast
-    TritonNormalizationTest.CanFuseAndEmitDiamondWithBF16Converts
-    TritonScaledDotGemmTest/TritonScaledDotGemmTest.FP8ScaledDotCompilesToPtxIntrinsicsWhenAvailable/f8e*
-    TritonTest.FuseSubchannelDequantizationWithTranspose
-    TritonTest.FuseSubchannelDequantizationWithTranspose
-    )
+  # //xla/pjrt/c:pjrt_c_api_gpu_test_gpu_amd_any
+  PjrtCAPIGpuExtensionTest.TritonCompile
+
+  # //xla/backends/gpu/codegen/triton:fusion_emitter_device_test_gpu_amd_any
+  TritonEmitterTest.CheckRocmWarpSize
+  TritonEmitterTest.ConvertF16ToF8E5M2Exhaustive
+  TritonEmitterTest.FP8ToFP8EndToEnd
+  TritonEmitterTest.FusionWithOutputContainingMoreThanInt32MaxElementsExecutesCorrectly
+
+  BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F64_F64_F64
+  BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F16_F16_F16
+
+  # //xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_gpu_amd_any
+  TritonGemmTest.BroadcastOfVectorConstantIsFused
+  TritonGemmTest.FailIfTooMuchShmem
+  TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
+
+  # //xla/backends/gpu/codegen/triton:fusion_emitter_int4_device_test_gpu_amd_any
+  TritonTest.NonstandardLayoutWithManyNonContractingDims
+  TritonTest.NonstandardLayoutWithManyNonContractingDimsReversedLayout
+
+  # //xla/hlo/builder/lib:self_adjoint_eig_test_gpu_amd_any marked as flaky but randomly red after 3 attempts
+  RandomEighTestInstantiation/RandomEighTest.Random/*
+
+  # temp excludes for 0.7.1 / 0.8.0
+  CompareTest.SplitK
+  CublasLtGemmRewriteTest.MatrixBiasSwishActivation
+  MultiOutputFusionTest.MultiOutputReduceFusionMajorWithExtraOutput
+
+  GpuIrEmitterUnnestedTest.CanNotEmitTritonCustomCallOnPreAmpereGpu
+
+  CommandBufferConversionPassTest.ConvertWhileThunk
+  CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
+  CommandBufferTests/CommandBufferTest.IndexConditional/*
+  CommandBufferTests/CommandBufferTest.WhileLoop/*
+  CommandBufferTests/CommandBufferTest.TrueFalseConditional/*
+
+  KernelThunkTmaPTXTestSuite/KernelThunkTmaPTXTest.TmaPTX/*
+
+  ScatterTest.TensorFlowScatterV1_UpdateTwice
+
+  TestRadixSort/CubSortKeysTest.SortKeys/*
+  TestRadixSort/CubSortPairsTest.SortPairs/*
+
+  GpuKernelTilingTest.ReductionInputTooLarge
+  DeterminismTest.Conv
+
+  TopKTests/TopKKernelTest*
+
+  DotTestTestSuite/DotTest.IsTritonSupportedExecutesCorrectlyForDot/f8e5m2_dot
+  DotTestTestSuite/DotTest.IsTritonSupportedExecutesCorrectlyForDot/f32_dot
+  DotTf32Tf32F32Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_tf32_tf32_f32_*
+  DotTf32Tf32F32X3Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_tf32_tf32_f32_*
+
+  TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_*
+  TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_tf32_tf32_f32
+  TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_f32_f32_f32
+  TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_tf32_tf32_f32_x3
+
+  TritonFusionNumericsVerifierTest.CompilationSucceedsEvenIfKernelWillSpillRegisters
+  TritonFusionNumericsVerifierTest.VerifyThatDisablingTritonIsFast
+  TritonFusionNumericsVerifierTestSuite/TritonFusionNumericsVerifierTest.VerifyNestedGemmNumerics/1
+
+  TritonNormalizationTest.CanFuseAndEmitDiamondWithBF16Converts
+  TritonScaledDotGemmTest/TritonScaledDotGemmTest.FP8ScaledDotCompilesToPtxIntrinsicsWhenAvailable/f8e*
+
+  TritonTest.FuseSubchannelDequantizationWithTranspose
+
+  ElementwiseTestSuiteF16/UnaryElementwiseTest.ElementwiseUnaryOpExecutesCorrectly/f16_cosine
+  ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseBinaryOpExecutesCorrectly/f16_atan2
+  ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseFusionExecutesCorrectly/f16_atan2
+
+  BufferComparatorTest.VeryLargeArray_Device_U8_Aligned
+)
+
 
 BAZEL_DISK_CACHE_SIZE=100G
 BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
