@@ -55,12 +55,102 @@ TAGS_FILTER="gpu,requires-gpu-amd,-multi_gpu,-requires-gpu-nvidia,-requires-gpu-
 UNSUPPORTED_GPU_TAGS="$(echo -requires-gpu-sm{60,70,80,86,89,90}{,-only})"
 TAGS_FILTER="${TAGS_FILTER},${UNSUPPORTED_GPU_TAGS// /,}"
 
+<<<<<<< HEAD
 bazel \
     test \
     --define xnn_enable_avxvnniint8=false --define xnn_enable_avx512fp16=false \
     --config=rocm_gcc \
     --build_tag_filters=${TAGS_FILTER} \
     --test_tag_filters=${TAGS_FILTER} \
+=======
+GPU_NAME=(`rocminfo | grep -m 1 gfx`)
+GPU_NAME=${GPU_NAME[1]}
+
+EXCLUDED_TESTS=(
+# //xla/pjrt/c:pjrt_c_api_gpu_test_gpu_amd_any
+PjrtCAPIGpuExtensionTest.TritonCompile
+# //xla/backends/gpu/codegen/triton:fusion_emitter_device_test_gpu_amd_any
+TritonEmitterTest.CheckRocmWarpSize
+TritonEmitterTest.ConvertF16ToF8E5M2Exhaustive
+TritonEmitterTest.FP8ToFP8EndToEnd
+TritonEmitterTest.FusionWithOutputContainingMoreThanInt32MaxElementsExecutesCorrectly
+BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F64_F64_F64
+# //xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_gpu_amd_any
+TritonGemmTest.BroadcastOfVectorConstantIsFused
+TritonGemmTest.FailIfTooMuchShmem
+TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
+# //xla/backends/gpu/codegen/triton:fusion_emitter_int4_device_test_gpu_amd_any
+TritonTest.NonstandardLayoutWithManyNonContractingDims
+TritonTest.NonstandardLayoutWithManyNonContractingDimsReversedLayout
+# //xla/hlo/builder/lib:self_adjoint_eig_test_gpu_amd_any marked as flaky but randomly red after 3 attempts
+RandomEighTestInstantiation/RandomEighTest.Random/*
+# temp excludes for 0.7.1
+CompareTest.SplitK
+TritonEmitterTest.RocmWarpSizeIsSetCorrectly
+MultiOutputFusionTest.MultiOutputReduceFusionMajorWithExtraOutput
+TestRadixSort/CubSortKeysTest.SortKeys/*
+GpuIrEmitterUnnestedTest.CanNotEmitTritonCustomCallOnPreAmpereGpu
+CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
+CommandBufferConversionPassTest.ConvertWhileThunk
+TritonFusionNumericsVerifierTest.CompilationSucceedsEvenIfKernelWillSpillRegisters
+TritonFusionNumericsVerifierTest.VerifyThatDisablingTritonIsFast
+TritonFusionNumericsVerifierTestSuite/TritonFusionNumericsVerifierTest.VerifyNestedGemmNumerics/1
+TritonGemmTest.FailForTooComplexTiling
+TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_tf32_tf32_f32
+TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_f32_f32_f32
+TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_tf32_tf32_f32_x3
+TestRadixSort/CubSortPairsTest.SortPairs/*
+GpuKernelTilingTest.ReductionInputTooLarge
+DeterminismTest.Conv
+TopKTests/TopKKernelTest*
+DotTestTestSuite/DotTest.IsTritonSupportedExecutesCorrectlyForDot/f8e5m2_dot
+DotTestTestSuite/DotTest.IsTritonSupportedExecutesCorrectlyForDot/f32_dot
+TritonNormalizationTest.CanFuseAndEmitDiamondWithBF16Converts
+ElementwiseTestSuiteF16/UnaryElementwiseTest.ElementwiseUnaryOpExecutesCorrectly/f16_cosine
+ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseBinaryOpExecutesCorrectly/f16_atan2
+ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseFusionExecutesCorrectly/f16_atan2
+TritonTest.FuseSubchannelDequantizationWithTranspose
+BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F16_F16_F16
+CommandBufferTests/CommandBufferTest.IndexConditional/*
+CommandBufferTests/CommandBufferTest.WhileLoop/*
+CommandBufferTests/CommandBufferTest.TrueFalseConditional/*
+BufferComparatorTest.VeryLargeArray_Device_U8_Aligned
+)
+
+BAZEL_DISK_CACHE_SIZE=100G
+BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
+mkdir -p ${BAZEL_DISK_CACHE_DIR}
+if [ ! -d /tf/pkg ]; then
+	mkdir -p /tf/pkg
+fi
+
+SCRIPT_DIR=$(realpath $(dirname $0))
+TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),-multigpu,-multi_gpu_h100,requires-gpu-amd,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
+
+SANITIZER_ARGS=()
+if [[ $1 == "asan" ]]; then
+    SANITIZER_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=${SCRIPT_DIR}/asan_ignore_list.txt:use_sigaltstack=0")
+    SANITIZER_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=${SCRIPT_DIR}/lsan_ignore_list.txt:use_sigaltstack=0")
+    SANITIZER_ARGS+=("--config=asan")
+    TAG_FILTERS=$TAG_FILTERS,-noasan
+    shift
+elif [[ $1 == "tsan" ]]; then
+    SANITIZER_ARGS+=("--test_env=TSAN_OPTIONS=suppressions=${SCRIPT_DIR}/tsan_ignore_list.txt::history_size=7:ignore_noninstrumented_modules=1")
+    SANITIZER_ARGS+=("--config=tsan")
+    TAG_FILTERS=$TAG_FILTERS,-notsan
+    shift
+fi
+
+bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
+    --config=rocm_ci \
+    --config=xla_sgpu \
+    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+    --profile=/tf/pkg/profile.json.gz \
+    --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE} \
+    --experimental_guard_against_concurrent_changes \
+    --build_tag_filters=$TAG_FILTERS \
+    --test_tag_filters=$TAG_FILTERS \
+>>>>>>> 492d1ee553 (Rocprof sdk integration to v0.7.1 (#387))
     --test_timeout=920,2400,7200,9600 \
     --test_sharding_strategy=disabled \
     --test_output=errors \
@@ -73,4 +163,17 @@ bazel \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     --run_under=//build_tools/ci:parallel_gpu_execute \
+<<<<<<< HEAD
     -- //xla/...
+=======
+    --test_env=MIOPEN_FIND_ENFORCE=5 \
+    --test_env=MIOPEN_FIND_MODE=1 \
+    --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
+    "${SANITIZER_ARGS[@]}" \
+    "$@"
+
+# clean up bazel disk_cache
+bazel shutdown \
+  --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+  --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE}
+>>>>>>> 492d1ee553 (Rocprof sdk integration to v0.7.1 (#387))
