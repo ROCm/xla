@@ -24,14 +24,10 @@ set -x
 N_BUILD_JOBS=$(grep -c ^processor /proc/cpuinfo)
 # If rocm-smi exists locally (it should) use it to find
 # out how many GPUs we have to test with.
-rocm-smi -i
-STATUS=$?
-if [ $STATUS -ne 0 ]; then TF_GPU_COUNT=1; else
-   TF_GPU_COUNT=$(rocm-smi -i|grep 'Device ID' |grep 'GPU' |wc -l)
-fi
+TF_GPU_COUNT=$(/opt/rocm/bin/rocminfo -i | grep 'gfx' | wc -l)
 TF_TESTS_PER_GPU=1
 N_TEST_JOBS=$(expr ${TF_GPU_COUNT} \* ${TF_TESTS_PER_GPU})
-amdgpuname=(`rocminfo | grep gfx | head -n 1`)
+amdgpuname=(`/opt/rocm/bin/rocminfo | grep gfx | head -n 1`)
 AMD_GPU_GFX_ID=${amdgpuname[1]}
 echo ""
 echo "Bazel will use ${N_BUILD_JOBS} concurrent build job(s) and ${N_TEST_JOBS} concurrent test job(s) for gpu ${AMD_GPU_GFX_ID}."
@@ -41,7 +37,7 @@ export PYTHON_BIN_PATH=`which python3`
 export TF_NEED_ROCM=1
 export ROCM_PATH="/opt/rocm"
 
-GPU_NAME=(`rocminfo | grep -m 1 gfx`)
+GPU_NAME=(`/opt/rocm/bin/rocminfo | grep -m 1 gfx`)
 GPU_NAME=${GPU_NAME[1]}
 
 EXCLUDED_TESTS=(
