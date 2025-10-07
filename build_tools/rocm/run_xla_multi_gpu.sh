@@ -52,9 +52,6 @@ export PYTHON_BIN_PATH=`which python3`
 export TF_NEED_ROCM=1
 export ROCM_PATH="/opt/rocm"
 
-GPU_NAME=(`rocminfo | grep -m 1 gfx`)
-GPU_NAME=${GPU_NAME[1]}
-
 BAZEL_DISK_CACHE_SIZE=100G
 BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
 mkdir -p ${BAZEL_DISK_CACHE_DIR}
@@ -102,7 +99,8 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --flaky_test_attempts=3 \
     --keep_going \
     --test_strategy=exclusive \
-    --action_env=TF_ROCM_AMDGPU_TARGETS=${GPU_NAME} \
+    --strategy=TestRunner=local \
+    --action_env=TF_ROCM_AMDGPU_TARGETS=gfx908,gfx942 \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     --action_env=NCCL_MAX_NCHANNELS=1 \

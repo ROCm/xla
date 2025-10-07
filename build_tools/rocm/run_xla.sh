@@ -41,9 +41,6 @@ export PYTHON_BIN_PATH=`which python3`
 export TF_NEED_ROCM=1
 export ROCM_PATH="/opt/rocm"
 
-GPU_NAME=(`rocminfo | grep -m 1 gfx`)
-GPU_NAME=${GPU_NAME[1]}
-
 EXCLUDED_TESTS=(
 # //xla/service/gpu/tests:gpu_kernel_tiling_test_gpu_amd_any
 GpuKernelTilingTest.ColumnReductionWithLayoutChangeTiled
@@ -139,7 +136,7 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --local_test_jobs=${N_TEST_JOBS} \
     --test_env=TF_TESTS_PER_GPU=$TF_TESTS_PER_GPU \
     --test_env=TF_GPU_COUNT=$TF_GPU_COUNT \
-    --action_env=TF_ROCM_AMDGPU_TARGETS=${GPU_NAME} \
+    --action_env=TF_ROCM_AMDGPU_TARGETS=gfx908,gfx942 \
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
     --run_under=//build_tools/ci:parallel_gpu_execute \
     --test_env=MIOPEN_FIND_ENFORCE=5 \
