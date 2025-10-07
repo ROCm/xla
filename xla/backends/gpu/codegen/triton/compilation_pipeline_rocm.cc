@@ -146,10 +146,8 @@ absl::Status CreateTritonPipeline(
   pm->addPass(mlir::createCanonicalizerPass());
   pm->addPass(mlir::createCSEPass());
   pm->addPass(mlir::createSymbolDCEPass());
-  if (/*(instruction_sched_variant=="none") == */ false) {
-    pm->addPass(mt::createTritonAMDGPULowerInstructionSchedHintsPass(
-        cc.gfx_version(), num_stages));
-  }
+  pm->addPass(mt::createTritonAMDGPULowerInstructionSchedHintsPass(
+      cc.gfx_version(), num_stages));
   pm->addPass(mt::createConvertBuiltinFuncToLLVMPass(/*ftz=*/true));
   // There is no clusters in ROCm for now.
   out_cluster_info.clusterDimX = 1;
@@ -161,11 +159,7 @@ absl::Status CreateTritonPipeline(
 
 std::string GetLibdevicePath(const HloModuleConfig& hlo_config,
                              const se::DeviceDescription& device_info) {
-  std::string libdevice_dir = tsl::RocdlRoot();
-  auto compute_capability = device_info.rocm_compute_capability();
-  const std::string libdevice_path =
-      amdgpu::LibDevicePath(compute_capability.gcn_arch_name(), libdevice_dir);
-  return libdevice_path;
+  return "__builtin__";
 }
 
 }  // namespace gpu

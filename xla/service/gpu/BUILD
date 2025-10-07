@@ -520,16 +520,24 @@ cc_library(
     ],
 )
 
+tf_proto_library(
+    name = "triton_call_args_proto",
+    srcs = ["triton_call_args.proto"],
+)
+
 cc_library(
     name = "triton_call",
     srcs = ["triton_call.cc"],
     hdrs = ["triton_call.h"],
     deps = [
+        ":triton_call_args_proto_cc",
         "@com_google_absl//absl/strings:string_view",
         "@llvm-project//mlir:AsmParser",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Parser",
         "@llvm-project//mlir:Support",
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform:protobuf",
     ],
 )
 
@@ -2135,6 +2143,7 @@ cc_library(
         "//xla/service/gpu/transforms:conv_padding_legalization",
         "//xla/service/gpu/transforms:conv_rewriter",
         "//xla/service/gpu/transforms:cublas_pad_for_gemms",
+        "//xla/service/gpu/transforms:cudnn_fused_conv_decomposer",
         "//xla/service/gpu/transforms:cudnn_fused_conv_rewriter",
         "//xla/service/gpu/transforms:gpusolver_rewriter",
         "//xla/service/gpu/transforms:triangular_solve_rewriter",

@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/collective_permute_thunk.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -61,21 +62,8 @@ limitations under the License.
 
 namespace xla {
 namespace gpu {
-namespace {
 
-absl::StatusOr<const int64_t> GetCurrentId(
-    Thunk::CollectiveExecuteParams* collective_params,
-    const P2PConfig& config) {
-  GlobalDeviceId global_device_id = collective_params->global_device_id;
-  TF_ASSIGN_OR_RETURN(
-      const DeviceAssignment::LogicalID current_logical_id,
-      collective_params->device_assn->LogicalIdForDevice(global_device_id));
-  const int64_t current_id =
-      config.config.group_mode == CollectiveOpGroupMode::kCrossReplica
-          ? current_logical_id.replica_id
-          : current_logical_id.computation_id;
-  return current_id;
-}
+namespace {
 
 bool IsLocalPeerTransfer(const P2PConfig::SourceTargetMapEntry& source_target,
                          const int64_t current_id, const int64_t device_count) {
@@ -96,6 +84,20 @@ bool IsLocalPeerTransfer(const P2PConfig::SourceTargetMapEntry& source_target,
 }
 
 }  // namespace
+
+absl::StatusOr<const int64_t> GetCurrentId(
+    Thunk::CollectiveExecuteParams* collective_params,
+    const CollectiveConfig& config) {
+  GlobalDeviceId global_device_id = collective_params->global_device_id;
+  TF_ASSIGN_OR_RETURN(
+      const DeviceAssignment::LogicalID current_logical_id,
+      collective_params->device_assn->LogicalIdForDevice(global_device_id));
+  const int64_t current_id =
+      config.group_mode == CollectiveOpGroupMode::kCrossReplica
+          ? current_logical_id.replica_id
+          : current_logical_id.computation_id;
+  return current_id;
+}
 
 CollectivePermuteStartThunk::CollectivePermuteStartThunk(
     ThunkInfo thunk_info, const HloCollectivePermuteInstruction* instr,
@@ -182,13 +184,13 @@ CollectivePermuteStartThunk::CollectivePermuteStartThunk(
 absl::Status CollectivePermuteStartThunk::Initialize(
     const InitializeParams& params) {
   TF_RETURN_IF_ERROR(CollectiveThunk::Initialize(params));
-  device_count_ = params.local_device_count;
-  CHECK_GT(device_count_, 0);
-  VLOG(5) << "Local device count: " << device_count_;
+  device_count_.store(params.local_device_count, std::memory_order_relaxed);
+  CHECK_GT(params.local_device_count, 0);
+  VLOG(5) << "Local device count: " << params.local_device_count;
 
   if (p2p_memcpy_enabled_) {
     TF_ASSIGN_OR_RETURN(const int64_t current_id,
-                        GetCurrentId(params.collective_params, config_));
+                        GetCurrentId(params.collective_params, config_.config));
     {
       absl::MutexLock lock(&barrier_mutex_);
       if (receiver_barrier_events_.find(current_id) ==
@@ -254,13 +256,14 @@ absl::StatusOr<bool> CollectivePermuteStartThunk::RunCollective(
                              std::vector<CollectiveThunk::Buffer>(buffers_),
                              config_.config.operand_element_type));
   TF_ASSIGN_OR_RETURN(const int64_t current_id,
-                      GetCurrentId(params.collective_params, config_));
+                      GetCurrentId(params.collective_params, config_.config));
   std::string device_string = GetDeviceString(*params.collective_params);
 
   const P2PConfig::SourceTargetMapEntry source_target =
       P2PConfig::GetSourceTarget(config_.id_to_source_target, current_id);
+  const auto device_count = device_count_.load(std::memory_order_relaxed);
   bool is_local_peer =
-      IsLocalPeerTransfer(source_target, current_id, device_count_);
+      IsLocalPeerTransfer(source_target, current_id, device_count);
   VLOG(5) << "Is local peer : " << (is_local_peer ? "true" : "false");
 
   bool use_memcpy = is_local_peer && recv_ptr_map_.IsInitialized(current_id) &&
@@ -306,7 +309,7 @@ absl::StatusOr<bool> CollectivePermuteStartThunk::RunCollective(
 
   TF_RETURN_IF_ERROR(::xla::gpu::RunCollectivePermute(
       source_target, device_buffers, stream, comm_handle.comm, device_string,
-      current_id, use_memcpy, recv_ptr_map_,
+      current_id, use_memcpy, &recv_ptr_map_,
       config_.config.use_symmetric_buffer));
 
   if (use_memcpy) {
@@ -353,7 +356,7 @@ absl::Status RunCollectivePermute(
     P2PConfig::SourceTargetMapEntry source_target,
     std::vector<DeviceBufferPair>& buffers, se::Stream& stream,
     Communicator* comm, absl::string_view device_string, int64_t current_id,
-    bool use_memcpy, CollectivePermuteStartThunk::RecvPtrMap& recv_ptr_map,
+    bool use_memcpy, CollectivePermuteStartThunk::RecvPtrMap* recv_ptr_map,
     bool use_symmetric_buffer) {
   // Determine the source and target IDs for this instance. The source ID is the
   // ID which will copy its data to this instance. The destination ID is the ID
@@ -456,8 +459,8 @@ absl::Status RunCollectivePermute(
     }
   }
 
-  if (use_memcpy && target_id) {
-    TF_ASSIGN_OR_RETURN(auto recv_ptrs, recv_ptr_map.GetRecvPtr(*target_id));
+  if (use_memcpy && target_id && recv_ptr_map != nullptr) {
+    TF_ASSIGN_OR_RETURN(auto recv_ptrs, recv_ptr_map->GetRecvPtr(*target_id));
 
     VLOG(3) << "Using memcpy, received target pointers, current_id: "
             << current_id << " target_id: " << *target_id;
