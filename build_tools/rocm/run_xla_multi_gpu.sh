@@ -99,14 +99,14 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --flaky_test_attempts=3 \
     --keep_going \
     --test_strategy=exclusive \
-    --strategy=TestRunner=local \
     --action_env=TF_ROCM_AMDGPU_TARGETS=gfx908,gfx942 \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     --action_env=NCCL_MAX_NCHANNELS=1 \
     --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
     "${SANITIZER_ARGS[@]}" \
-    "$@"
+    "$@" \
+    --strategy=TestRunner=local # execute multigpu tests locally as there is no gpu exclusive protection on rbe
 
 # clean up bazel disk_cache
 bazel shutdown \
