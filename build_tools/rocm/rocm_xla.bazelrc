@@ -18,7 +18,6 @@ build:rocm_rbe --jobs=200
 build:rocm_rbe --remote_timeout=3600
 
 test:rocm_rbe --strategy=TestRunner=remote,local
-test:rocm_rbe --worker_sandboxing=true
 
 build:asan --strip=never
 build:asan --copt -fsanitize=address
