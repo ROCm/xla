@@ -68,8 +68,12 @@ BAZEL_DISK_CACHE_SIZE=100G
 BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.6.0"
 mkdir -p ${BAZEL_DISK_CACHE_DIR}
 
+if [ ! -d /tf/pkg ]; then
+	mkdir -p /tf/pkg
+fi
+
 SCRIPT_DIR=$(realpath $(dirname $0))
-TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,-multigpu,-multi_gpu_h100,requires-gpu-amd,-skip_rocprofiler_sdk
+TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),-multigpu,-multi_gpu_h100,requires-gpu-amd,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
 
 SANITIZER_ARGS=()
 if [[ $1 == "asan" ]]; then

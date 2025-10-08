@@ -57,6 +57,11 @@ GPU_NAME=${GPU_NAME[1]}
 
 BAZEL_DISK_CACHE_SIZE=100G
 BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.6.0"
+mkdir -p ${BAZEL_DISK_CACHE_DIR}
+
+if [ ! -d /tf/pkg ]; then
+	mkdir -p /tf/pkg
+fi
 
 EXCLUDED_TESTS=(
   CollectiveOpsTestE2E.MemcpyP2pLargeMessage
