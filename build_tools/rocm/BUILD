@@ -17,3 +17,10 @@ package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = ["//visibility:public"],
 )
+
+sh_binary(
+    name = "parallel_gpu_execute",
+    srcs = ["parallel_gpu_execute.sh"],
+    data = [":sanitizer_ignore_lists"],
+    visibility = ["//visibility:public"],
+)
