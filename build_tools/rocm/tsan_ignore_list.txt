@@ -3,6 +3,7 @@ race:libamdhip64.so
 race:hipStreamSynchronize
 race:libhipblaslt.so
 race:libamd_comgr.so
+race:librccl.so
 
 # Abseil reference counting (DropRef / RefCount init)
 race:tsl::ReferenceCounted
