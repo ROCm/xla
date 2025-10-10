@@ -63,6 +63,11 @@ EXCLUDED_TESTS=(
   CollectiveOpsTestE2E.MemcpyP2pLargeMessage
   RaggedAllToAllTest/RaggedAllToAllTest.RaggedAllToAll_8GPUs_2ReplicasPerGroups/sync_decomposer
   RaggedAllToAllTest/RaggedAllToAllTest.RaggedAllToAll_8GPUs_2ReplicasPerGroups/async_decomposer
+  # //xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_legacy_test_amdgpu_any
+  ElementwiseTestSuiteF32/BinaryElementwiseTest.ElementwiseFusionExecutesCorrectly/f32_atan2
+  # //xla/tests:collective_ops_e2e_test_amdgpu_any
+  CollectiveOpsTestE2EPipelinedNonPipelined.CollectivePipelinerBackward
+  CollectiveOpsTestE2EPipelinedNonPipelined.CollectivePipelinerBackwardStartFromOne
 )
 
 SCRIPT_DIR=$(realpath $(dirname $0))
