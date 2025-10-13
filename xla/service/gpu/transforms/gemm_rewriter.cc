@@ -1143,6 +1143,18 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       TF_ASSIGN_OR_RETURN(auto rocm_compute_capability,
                           GetRocmComputeCapability(gpu_version_));
       if (rocm_compute_capability.has_ocp_fp8_support()) {
+        //(MI355X) - Disable FP8, use FP16 fallback
+        // Due to known FP8 stability issues on gfx950, force all FP8 GEMMs
+        // to fall back to FP16 instead. This is a temporary workaround.
+        if (rocm_compute_capability.gfx9_mi350()) {
+          VLOG(1) << "Skipping FP8 rewrite for " << instr->ToShortString()
+                  << " on gfx950 (MI355X). FP8 types "
+                  << PrimitiveType_Name(a_type) << " and "
+                  << PrimitiveType_Name(b_type)
+                  << " will fall back to FP16 due to known stability issues.";
+          return false;  // Reject FP8 custom call → use FP16 fallback
+        }
+        // === End gfx950 workaround ===
         if (a_type == F8E5M2 && b_type == F8E5M2) {
           VLOG(1) << "Failed to rewrite " << instr->ToShortString()
                   << " into FP8 Custom Call. For "
