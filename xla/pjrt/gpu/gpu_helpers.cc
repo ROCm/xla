@@ -33,9 +33,13 @@ limitations under the License.
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "xla/backends/gpu/collectives/gpu_collectives.h"
 #include "xla/client/client_library.h"
 #include "xla/client/local_client.h"
+#include "xla/core/collectives/collectives_registry.h"
 #include "xla/service/platform_util.h"
+#include "xla/stream_executor/generic_memory_allocator.h"
+#include "xla/stream_executor/generic_memory_allocation.h"
 #include "xla/stream_executor/integrations/device_mem_allocator.h"
 #include "xla/stream_executor/integrations/stream_executor_allocator.h"
 #include "xla/stream_executor/platform.h"
@@ -157,9 +161,31 @@ absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateCollectiveBFCAllocator(
     se::StreamExecutor* executor, double memory_fraction,
     size_t collective_memory_size) {
   int device_ordinal = executor->device_ordinal();
-  TF_ASSIGN_OR_RETURN(auto collective_memory_allocator,
-                      executor->CreateMemoryAllocator(
-                          stream_executor::MemoryType::kCollective));
+  // TF_ASSIGN_OR_RETURN(auto collective_memory_allocator,
+  //                     executor->CreateMemoryAllocator(
+  //                         stream_executor::MemoryType::kCollective));
+
+  auto collective_memory_allocator = std::make_unique<se::GenericMemoryAllocator>(
+    [](uint64_t size)
+         -> absl::StatusOr<std::unique_ptr<se::MemoryAllocation>> {
+      TF_ASSIGN_OR_RETURN(auto *coll,
+                      xla::CollectivesRegistry::Get("gpu", "nvshmem"));
+      auto *gpu_coll = tsl::down_cast<gpu::GpuCollectives*>(coll);
+      if (gpu_coll == nullptr) {
+        return absl::InternalError("Failed to get NVSHMEM collectives!");
+      }
+      TF_ASSIGN_OR_RETURN(auto *ptr, gpu_coll->Allocate(size));
+      VLOG(2) << "allocated " << ptr << " of " << size 
+              << " bytes of collective memory";
+      return std::make_unique<se::GenericMemoryAllocation>(
+        ptr, size, [gpu_coll](void* location, uint64_t size) {
+          if (auto s = gpu_coll->Deallocate(location); !s.ok()) {
+            LOG(ERROR) << "Deallocate failed: " << s.message();
+          }
+          VLOG(2) << "deallocated unified memory at " << location;
+      });
+  });
+
   auto sub_allocator = std::make_unique<se::StreamExecutorAllocator>(
       std::move(collective_memory_allocator),
       /*memory_type=*/stream_executor::MemoryType::kCollective, device_ordinal);

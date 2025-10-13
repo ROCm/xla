@@ -10,8 +10,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef XLA_BACKENDS_GPU_COLLECTIVES_NVSHMEM_COMMUNICATOR_H_
-#define XLA_BACKENDS_GPU_COLLECTIVES_NVSHMEM_COMMUNICATOR_H_
+#ifndef XLA_BACKENDS_GPU_COLLECTIVES_ROCSHMEM_COMMUNICATOR_H_
+#define XLA_BACKENDS_GPU_COLLECTIVES_ROCSHMEM_COMMUNICATOR_H_
 
 #include <cstddef>
 #include <optional>
@@ -26,31 +26,31 @@ limitations under the License.
 #include "xla/core/collectives/rank_id.h"
 #include "xla/future.h"
 #include "xla/service/collective_ops_utils.h"
-#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/tsl/concurrency/async_value_ref.h"
 #include "xla/xla_data.pb.h"
 
+#include "third_party/rocshmem/rocshmem.hpp"
+#include "third_party/rocshmem/rocshmem_COLL.hpp"
+
 namespace xla::gpu {
 
-class NvshmemCollectives;
+class RocshmemCollectives;
 
-// XLA collectives communicator wrapping an NVSHMEM communicator.
-class NvshmemCommunicator : public Communicator {
+// XLA collectives communicator wrapping an ROCSHMEM communicator.
+class RocshmemCommunicator : public Communicator {
  public:
+  constexpr static uint32_t kMaxTeams = 24;
 
-  explicit NvshmemCommunicator(NvshmemCollectives* collectives);
-  ~NvshmemCommunicator() override;
-  // Since the communicator is hardcoded to use pre-defined node
-  // team for now, we don't need to call nvshmem_team_destroy on it.
-  // If user-defined comms are used, we need to add a destructor to
-  // call nvshmem_team_destroy on each one.
+  friend class RocshmemCollectives;
+  ~RocshmemCommunicator() override;
 
-  // NvshmemCommunicator is not copyable or movable.
-  NvshmemCommunicator(const NvshmemCommunicator&) = delete;
-  NvshmemCommunicator(NvshmemCommunicator&&) = delete;
-  NvshmemCommunicator& operator=(const NvshmemCommunicator&) = delete;
-  NvshmemCommunicator& operator=(NvshmemCommunicator&&) = delete;
+  // RocshmemCommunicator is not copyable or movable.
+  RocshmemCommunicator(const RocshmemCommunicator&) = delete;
+  RocshmemCommunicator(RocshmemCommunicator&&) = delete;
+  RocshmemCommunicator& operator=(const RocshmemCommunicator&) = delete;
+  RocshmemCommunicator& operator=(RocshmemCommunicator&&) = delete;
 
   absl::Status Abort() final;
   absl::StatusOr<size_t> NumRanks() const final;
@@ -58,40 +58,40 @@ class NvshmemCommunicator : public Communicator {
 
   absl::Status Barrier(const Executor& executor) final;
 
-  Future<> AllReduce(se::DeviceAddressBase send_buffer,
-                     se::DeviceAddressBase recv_buffer, PrimitiveType dtype,
+  Future<> AllReduce(se::DeviceMemoryBase send_buffer,
+                     se::DeviceMemoryBase recv_buffer, PrimitiveType dtype,
                      size_t count, ReductionKind reduction_kind,
                      const Executor& executor) final;
 
-  Future<> Broadcast(se::DeviceAddressBase send_buffer,
-                     se::DeviceAddressBase recv_buffer, PrimitiveType dtype,
+  Future<> Broadcast(se::DeviceMemoryBase send_buffer,
+                     se::DeviceMemoryBase recv_buffer, PrimitiveType dtype,
                      size_t count, RankId root,
                      const Executor& executor) final {
     return absl::UnimplementedError("Not implemented.");
   };
 
-  Future<> ReduceScatter(se::DeviceAddressBase send_buffer,
-                         se::DeviceAddressBase recv_buffer, PrimitiveType dtype,
+  Future<> ReduceScatter(se::DeviceMemoryBase send_buffer,
+                         se::DeviceMemoryBase recv_buffer, PrimitiveType dtype,
                          size_t count, ReductionKind reduction_kind,
                          const Executor& executor) final {
     return absl::UnimplementedError("Not implemented.");
   };
 
-  Future<> AllGather(se::DeviceAddressBase send_buffer,
-                     se::DeviceAddressBase recv_buffer, PrimitiveType dtype,
+  Future<> AllGather(se::DeviceMemoryBase send_buffer,
+                     se::DeviceMemoryBase recv_buffer, PrimitiveType dtype,
                      size_t count, const Executor& executor) final {
     return absl::UnimplementedError("Not implemented.");
   };
 
-  Future<> AllToAll(absl::InlinedVector<se::DeviceAddressBase, 4> send_buffers,
-                    absl::InlinedVector<se::DeviceAddressBase, 4> recv_buffers,
+  Future<> AllToAll(absl::InlinedVector<se::DeviceMemoryBase, 4> send_buffers,
+                    absl::InlinedVector<se::DeviceMemoryBase, 4> recv_buffers,
                     PrimitiveType dtype, size_t count,
                     const Executor& executor) final {
     return absl::UnimplementedError("Not implemented.");
   };
 
-  Future<> CollectivePermute(se::DeviceAddressBase send_buffer,
-                             se::DeviceAddressBase recv_buffer,
+  Future<> CollectivePermute(se::DeviceMemoryBase send_buffer,
+                             se::DeviceMemoryBase recv_buffer,
                              PrimitiveType dtype, size_t count,
                              std::optional<RankId> source_rank,
                              absl::Span<const RankId> target_ranks,
@@ -99,22 +99,22 @@ class NvshmemCommunicator : public Communicator {
     return absl::UnimplementedError("Not implemented.");
   };
 
-  Future<> Send(se::DeviceAddressBase send_buffer, PrimitiveType dtype,
+  Future<> Send(se::DeviceMemoryBase send_buffer, PrimitiveType dtype,
                 size_t count, RankId peer, const Executor& executor) final {
     return absl::UnimplementedError("Not implemented.");
   };
 
-  Future<> Recv(se::DeviceAddressBase recv_buffer, PrimitiveType dtype,
+  Future<> Recv(se::DeviceMemoryBase recv_buffer, PrimitiveType dtype,
                 size_t count, RankId peer, const Executor& executor) final {
     return absl::UnimplementedError("Not implemented.");
   };
 
-  Future<> Send(se::DeviceAddressBase recv_buffer,
-                se::DeviceAddressBase send_buffer, PrimitiveType dtype,
+  Future<> Send(se::DeviceMemoryBase recv_buffer,
+                se::DeviceMemoryBase send_buffer, PrimitiveType dtype,
                 size_t count, RankId peer, const Executor& executor) final;
 
-  Future<> Recv(se::DeviceAddressBase recv_buffer,
-                se::DeviceAddressBase send_buffer, PrimitiveType dtype,
+  Future<> Recv(se::DeviceMemoryBase recv_buffer,
+                se::DeviceMemoryBase send_buffer, PrimitiveType dtype,
                 size_t count, RankId peer, const Executor& executor) final;
 
   absl::Status Quiet(const Executor& executor) final;
@@ -124,17 +124,27 @@ class NvshmemCommunicator : public Communicator {
   std::string ToString() const final;
 
  private:
-  absl::Status P2P(absl::string_view op_name, PrimitiveType type,
-                   se::DeviceAddressBase recv_buffer,
-                   se::DeviceAddressBase send_buffer, size_t count, RankId peer,
+  RocshmemCommunicator(RocshmemCollectives* coll, 
+      rocshmem::rocshmem_team_t *teams) : collectives_(coll), teams_(teams) { }
+
+  enum class P2PType : int32_t {
+    Send,
+    Recv
+  };
+
+  absl::Status P2P(P2PType p2p_type, PrimitiveType type,
+                   se::DeviceMemoryBase recv_buffer,
+                   se::DeviceMemoryBase send_buffer, size_t count, RankId peer,
                    const Executor& executor);
 
   static absl::StatusOr<se::Stream*> ToStream(const Executor& executor);
 
-  NvshmemCollectives* collectives_;  // Parent NvshmemCollectives instance
+  RocshmemCollectives* collectives_;  // Parent RocshmemCollectives instance
   bool aborted_ = false;             // Has Abort() been called?
+  rocshmem::rocshmem_team_t *teams_ = nullptr;
+  rocshmem::rocshmem_team_t host_team_ = rocshmem::ROCSHMEM_TEAM_WORLD;
 };
 
 }  // namespace xla::gpu
 
-#endif  // XLA_BACKENDS_GPU_COLLECTIVES_NVSHMEM_COMMUNICATOR_H_
+#endif  // XLA_BACKENDS_GPU_COLLECTIVES_ROCSHMEM_COMMUNICATOR_H_

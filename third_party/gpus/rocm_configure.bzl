@@ -158,6 +158,8 @@ def _rocm_include_path(repository_ctx, rocm_config, bash_bin):
 
     inc_dirs.append(resource_dir + "/include")
     inc_dirs.append(resource_dir + "/share")
+    # inc_dirs.append('/opt/rocm-6.4.0/lib/llvm/lib/clang/19/include')
+    # inc_dirs.append('/opt/rocm-6.4.0/include/hip')
 
     return inc_dirs
 
@@ -633,6 +635,9 @@ def _create_local_rocm_repository(repository_ctx):
             "%{rocm_gpu_architectures}": str(rocm_config.amdgpu_targets),
             "%{rocm_version_number}": str(rocm_version_number),
             "%{rocm_hipblaslt}": "True",
+            "%{rocm_root}": "external/local_config_rocm/" + str(rocm_config.rocm_toolkit_path),
+            "%{rocr_runtime_library}": "hsa-runtime64",
+            "%{hip_runtime_library}": "amdhip64",
         },
     )
 
@@ -726,7 +731,7 @@ def _create_local_rocm_repository(repository_ctx):
             "%{crosstool_verbose}": _crosstool_verbose(repository_ctx),
             "%{gcc_host_compiler_path}": str(cc),
             "%{rocm_amdgpu_targets}": ",".join(
-                ["\"%s\"" % c for c in rocm_config.amdgpu_targets],
+                ["%s" % c for c in rocm_config.amdgpu_targets],
             ),
             "%{tmpdir}": get_host_environ(
                 repository_ctx,

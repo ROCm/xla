@@ -34,6 +34,7 @@ ROCR_RUNTIME_PATH = '%{rocm_root}/lib'
 ROCR_RUNTIME_LIBRARY = '%{rocr_runtime_library}'
 TMPDIR= '%{tmpdir}'
 VERBOSE = '%{crosstool_verbose}'=='1'
+AMDGPU_TARGETS = '%{rocm_amdgpu_targets}'
 
 def Log(s):
   print('gpus/crosstool: {0}'.format(s))
@@ -200,7 +201,7 @@ def InvokeHipcc(argv, log=False):
   # This flag would trigger GPU kernels be generated at compile time, instead
   # of link time. This allows the default host compiler (gcc) be used as the
   # linker for TensorFlow on ROCm platform.
-  hipccopts += ' -fno-gpu-rdc '
+  hipccopts += ' -fgpu-rdc '
   hipccopts += ' -fcuda-flush-denormals-to-zero '
   hipccopts += undefines
   hipccopts += defines
@@ -246,6 +247,8 @@ def main():
 
   if VERBOSE: print('PWD=' + os.getcwd())
   if VERBOSE: print('HIPCC_ENV=' + HIPCC_ENV)
+  
+  print("Crosstool args", args, leftover, flush=True)
 
   if args.x and args.x[0] == 'rocm':
     # compilation for GPU objects
@@ -277,7 +280,6 @@ def main():
 
   else:
     # compilation for host objects
-
     # Strip our flags before passing through to the CPU compiler for files which
     # are not -x rocm. We can't just pass 'leftover' because it also strips -x.
     # We not only want to pass -x to the CPU compiler, but also keep it in its
@@ -288,6 +290,12 @@ def main():
 
     # XXX: SE codes need to be built with gcc, but need this macro defined
     cpu_compiler_flags.append("-D__HIP_PLATFORM_HCC__")
+    cpu_compiler_flags.append("-fgpu-rdc")
+    cpu_compiler_flags.append("--hip-link")
+    cpu_compiler_flags.append("--offload-arch=" + AMDGPU_TARGETS)
+    
+    # print("???????????????? CPU compile ", cpu_compiler_flags)
+    
     if VERBOSE: print(' '.join([CPU_COMPILER] + cpu_compiler_flags))
     return subprocess.call([CPU_COMPILER] + cpu_compiler_flags)
 

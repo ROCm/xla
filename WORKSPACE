@@ -162,3 +162,6 @@ nightly_timestamp_repo(name = "nightly_timestamp")
 load("//build_tools/pjrt_wheels:release_candidate.bzl", "rc_number_repo")
 
 rc_number_repo(name = "rc_number")
+
+load("//third_party/rocshmem:local_rocshmem_configure.bzl", "local_rocshmem_configure")
+local_rocshmem_configure(name = "rocshmem")

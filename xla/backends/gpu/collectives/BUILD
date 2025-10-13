@@ -1,5 +1,6 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
-load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm_is_configured")
+load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm_is_configured", 
+            "rocm_library")
 load("//xla:xla.default.bzl", "xla_cc_test")
 load("//xla/stream_executor:build_defs.bzl", "if_cuda_or_rocm_is_configured")
 load("//xla/tests:build_defs.bzl", "xla_test")
@@ -37,7 +38,6 @@ config_setting(
 cc_library(
     name = "nvshmem_collectives_if_builtin_used",
     tags = [
-        "cuda-only",
         "gpu",
     ],
     deps =
@@ -61,7 +61,6 @@ config_setting(
 cc_library(
     name = "nvshmem_collectives_if_supported",
     tags = [
-        "cuda-only",
         "gpu",
     ],
     deps =
@@ -79,9 +78,8 @@ cc_library(
         ":gpu_collectives_stub",
     ] + if_cuda_or_rocm_is_configured([
         ":nccl_collectives",
-    ]) + if_cuda_is_configured([
         ":nvshmem_collectives_if_supported",
-    ]),
+    ])
 )
 
 cc_library(
@@ -448,18 +446,49 @@ cc_library(
     ]),
 )
 
+rocm_library(
+    name = "rocshmem_kernels",
+    hdrs = ["rocshmem_kernels.h"],
+    srcs = [
+        "rocshmem_kernels.cu.cc",
+    ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        "//xla/service:collective_opt_utils",
+        "//xla/stream_executor/gpu:gpu_types_header",
+        "@com_google_absl//absl/status",
+        "@rocshmem//:rocshmem_headers",
+    ],
+    additional_linker_inputs = ["@rocshmem//:librocshmem_device"],
+    linkopts = [
+        "-Wl,--whole-archive",
+        "$(location @rocshmem//:librocshmem_device)",
+        "-Wl,--no-whole-archive",
+    ],
+    linkstatic = True,
+)
+
 cc_library(
     name = "nvshmem_collectives",
-    srcs = [
-        "nvshmem_collectives.cc",
-        "nvshmem_communicator.cc",
-    ],
-    hdrs = [
-        "nvshmem_collectives.h",
-        "nvshmem_communicator.h",
-    ],
+    hdrs = if_cuda_is_configured([
+            "nvshmem_collectives.h",
+            "nvshmem_communicator.h",
+            ]) + if_rocm_is_configured([
+            "rocshmem_collectives.h",
+            "rocshmem_communicator.h",
+            ]),
+    srcs = if_cuda_is_configured([
+            "nvshmem_collectives.cc",
+            "nvshmem_communicator.cc",
+            ]) + if_rocm_is_configured([
+            "rocshmem_collectives.cc",
+            "rocshmem_communicator.cc",
+            ]),
     tags = [
-        "cuda-only",
         "gpu",
     ],
     visibility = ["//visibility:private"],
@@ -493,11 +522,14 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
-        "@local_config_cuda//cuda:cuda_headers",
-        "@nvshmem//:nvshmem_lib",
         "@tsl//tsl/platform:casts",
         "@tsl//tsl/platform:numbers",
-    ],
+    ] + if_cuda_is_configured([
+        "@nvshmem//:nvshmem_lib",
+        "@local_config_cuda//cuda:cuda_headers",
+    ]) + if_rocm_is_configured([
+        ":rocshmem_kernels",
+    ]),
     alwayslink = True,
 )
 
@@ -550,6 +582,49 @@ xla_test(
 )
 
 xla_test(
+    name = "nvshmem_collectives_speed_test",
+    srcs = ["nvshmem_collectives_speed_test.cc"],
+    backend_tags = {
+        "gpu": [
+            "multi_gpu",
+            "no_oss",
+            "noasan",
+            "nomsan",
+        ],
+        "nvgpu_any": [
+            "broken",
+            "no_oss",
+        ],
+    },
+    backends = ["gpu"],
+    env = {
+        "XLA_FLAGS": "--xla_gpu_experimental_enable_nvshmem=true",
+    },
+    deps = [
+        "//xla:debug_options_flags",
+        "//xla/service:platform_util",
+        "//xla/service/gpu:gpu_executable_run_options",
+        "//xla:status_macros",
+        "//xla/pjrt/distributed",
+        "//xla/pjrt/distributed:client",
+        "//xla/pjrt/distributed:service",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:status",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:subprocess",
+        "//xla/tsl/util:command_line_flags",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
+        "@com_google_googletest//:gtest",        
+    ] + if_cuda_or_rocm_is_configured([
+        ":nvshmem_collectives",
+    ]),
+)
+
+xla_test(
     name = "nvshmem_collectives_test",
     srcs = ["nvshmem_collectives_test.cc"],
     backend_tags = {
@@ -570,6 +645,7 @@ xla_test(
     },
     deps = [
         "//xla:debug_options_flags",
+        "//xla/service:platform_util",
         "//xla:status_macros",
         "//xla/pjrt/distributed",
         "//xla/pjrt/distributed:client",
@@ -583,9 +659,9 @@ xla_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
-        "@com_google_googletest//:gtest",
-        "@local_config_cuda//cuda:cuda_headers",
-    ] + if_cuda_is_configured([":nvshmem_collectives"]),
+        "@com_google_googletest//:gtest",        
+    ] + if_cuda_or_rocm_is_configured([
+        ":nvshmem_collectives",]),
 )
 
 cc_library(

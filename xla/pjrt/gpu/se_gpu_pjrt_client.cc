@@ -1859,12 +1859,14 @@ static absl::Status CheckAlignment(const BufferAllocation& allocation,
       return gpu::kXlaAllocatedBufferAlignBytes;
     }
   }();
-  if (!buffer.is_null() &&
+  if (allocation.color() != (int)xla::gpu::MemorySpaceColor::kCollective) {
+    if (!buffer.is_null() &&
       reinterpret_cast<uintptr_t>(buffer.opaque()) % expected_alignment != 0) {
-    return Internal(
+      return Internal(
         "Address of buffer %d must be a multiple of %x, but "
         "was %p",
         arg_idx, expected_alignment, buffer.opaque());
+    }
   }
   return absl::OkStatus();
 }
