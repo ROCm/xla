@@ -42,57 +42,57 @@ export TF_NEED_ROCM=1
 export ROCM_PATH="/opt/rocm"
 
 EXCLUDED_TESTS=(
-# //xla/service/gpu/tests:gpu_kernel_tiling_test_gpu_amd_any
-GpuKernelTilingTest.ColumnReductionWithLayoutChangeTiled
-GpuKernelTilingTest.ReductionInputTooLarge
-# //xla/pjrt/c:pjrt_c_api_gpu_test_gpu_amd_any
-PjrtCAPIGpuExtensionTest.TritonCompile
-# //xla/backends/gpu/codegen/triton:fusion_emitter_device_test_gpu_amd_any
-TritonEmitterTest.CheckRocmWarpSize
-TritonEmitterTest.ConvertF16ToF8E5M2Exhaustive
-TritonEmitterTest.FP8ToFP8EndToEnd
-TritonEmitterTest.FusionWithOutputContainingMoreThanInt32MaxElementsExecutesCorrectly
-BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F64_F64_F64
-# //xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_gpu_amd_any
-TritonGemmTest.BroadcastOfVectorConstantIsFused
-TritonGemmTest.FailIfTooMuchShmem
-TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
-# //xla/backends/gpu/codegen/triton:fusion_emitter_int4_device_test_gpu_amd_any
-TritonTest.NonstandardLayoutWithManyNonContractingDims
-TritonTest.NonstandardLayoutWithManyNonContractingDimsReversedLayout
-# //xla/hlo/builder/lib:self_adjoint_eig_test_gpu_amd_any marked as flaky but randomly red after 3 attempts
-RandomEighTestInstantiation/RandomEighTest.Random/*
-# temp excludes for 0.7.1
-CompareTest.SplitK
-TritonEmitterTest.RocmWarpSizeIsSetCorrectly
-MultiOutputFusionTest.MultiOutputReduceFusionMajorWithExtraOutput
-TestRadixSort/CubSortKeysTest.SortKeys/*
-GpuIrEmitterUnnestedTest.CanNotEmitTritonCustomCallOnPreAmpereGpu
-CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
-CommandBufferConversionPassTest.ConvertWhileThunk
-TritonFusionNumericsVerifierTest.CompilationSucceedsEvenIfKernelWillSpillRegisters
-TritonFusionNumericsVerifierTest.VerifyThatDisablingTritonIsFast
-TritonFusionNumericsVerifierTestSuite/TritonFusionNumericsVerifierTest.VerifyNestedGemmNumerics/1
-TritonGemmTest.FailForTooComplexTiling
-TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_tf32_tf32_f32
-TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_f32_f32_f32
-TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_tf32_tf32_f32_x3
-TestRadixSort/CubSortPairsTest.SortPairs/*
-GpuKernelTilingTest.ReductionInputTooLarge
-DeterminismTest.Conv
-TopKTests/TopKKernelTest*
-DotTestTestSuite/DotTest.IsTritonSupportedExecutesCorrectlyForDot/f8e5m2_dot
-DotTestTestSuite/DotTest.IsTritonSupportedExecutesCorrectlyForDot/f32_dot
-TritonNormalizationTest.CanFuseAndEmitDiamondWithBF16Converts
-ElementwiseTestSuiteF16/UnaryElementwiseTest.ElementwiseUnaryOpExecutesCorrectly/f16_cosine
-ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseBinaryOpExecutesCorrectly/f16_atan2
-ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseFusionExecutesCorrectly/f16_atan2
-TritonTest.FuseSubchannelDequantizationWithTranspose
-BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F16_F16_F16
-CommandBufferTests/CommandBufferTest.IndexConditional/*
-CommandBufferTests/CommandBufferTest.WhileLoop/*
-CommandBufferTests/CommandBufferTest.TrueFalseConditional/*
-BufferComparatorTest.VeryLargeArray_Device_U8_Aligned
+    # //xla/service/gpu/tests:gpu_kernel_tiling_test_gpu_amd_any
+    GpuKernelTilingTest.ColumnReductionWithLayoutChangeTiled
+    GpuKernelTilingTest.ReductionInputTooLarge
+    # //xla/pjrt/c:pjrt_c_api_gpu_test_gpu_amd_any
+    PjrtCAPIGpuExtensionTest.TritonCompile
+    # //xla/backends/gpu/codegen/triton:fusion_emitter_device_test_gpu_amd_any
+    TritonEmitterTest.CheckRocmWarpSize
+    TritonEmitterTest.ConvertF16ToF8E5M2Exhaustive
+    TritonEmitterTest.FP8ToFP8EndToEnd
+    TritonEmitterTest.FusionWithOutputContainingMoreThanInt32MaxElementsExecutesCorrectly
+    BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F64_F64_F64
+    # //xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_gpu_amd_any
+    TritonGemmTest.BroadcastOfVectorConstantIsFused
+    TritonGemmTest.FailIfTooMuchShmem
+    TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
+    # //xla/backends/gpu/codegen/triton:fusion_emitter_int4_device_test_gpu_amd_any
+    TritonTest.NonstandardLayoutWithManyNonContractingDims
+    TritonTest.NonstandardLayoutWithManyNonContractingDimsReversedLayout
+    # //xla/hlo/builder/lib:self_adjoint_eig_test_gpu_amd_any marked as flaky but randomly red after 3 attempts
+    RandomEighTestInstantiation/RandomEighTest.Random/*
+    # temp excludes for 0.7.1
+    CompareTest.SplitK
+    TritonEmitterTest.RocmWarpSizeIsSetCorrectly
+    MultiOutputFusionTest.MultiOutputReduceFusionMajorWithExtraOutput
+    TestRadixSort/CubSortKeysTest.SortKeys/*
+    GpuIrEmitterUnnestedTest.CanNotEmitTritonCustomCallOnPreAmpereGpu
+    CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
+    CommandBufferConversionPassTest.ConvertWhileThunk
+    TritonFusionNumericsVerifierTest.CompilationSucceedsEvenIfKernelWillSpillRegisters
+    TritonFusionNumericsVerifierTest.VerifyThatDisablingTritonIsFast
+    TritonFusionNumericsVerifierTestSuite/TritonFusionNumericsVerifierTest.VerifyNestedGemmNumerics/1
+    TritonGemmTest.FailForTooComplexTiling
+    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_tf32_tf32_f32
+    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_f32_f32_f32
+    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_tf32_tf32_f32_x3
+    TestRadixSort/CubSortPairsTest.SortPairs/*
+    GpuKernelTilingTest.ReductionInputTooLarge
+    DeterminismTest.Conv
+    TopKTests/TopKKernelTest*
+    DotTestTestSuite/DotTest.IsTritonSupportedExecutesCorrectlyForDot/f8e5m2_dot
+    DotTestTestSuite/DotTest.IsTritonSupportedExecutesCorrectlyForDot/f32_dot
+    TritonNormalizationTest.CanFuseAndEmitDiamondWithBF16Converts
+    ElementwiseTestSuiteF16/UnaryElementwiseTest.ElementwiseUnaryOpExecutesCorrectly/f16_cosine
+    ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseBinaryOpExecutesCorrectly/f16_atan2
+    ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseFusionExecutesCorrectly/f16_atan2
+    TritonTest.FuseSubchannelDequantizationWithTranspose
+    BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F16_F16_F16
+    CommandBufferTests/CommandBufferTest.IndexConditional/*
+    CommandBufferTests/CommandBufferTest.WhileLoop/*
+    CommandBufferTests/CommandBufferTest.TrueFalseConditional/*
+    BufferComparatorTest.VeryLargeArray_Device_U8_Aligned
 )
 
 BAZEL_DISK_CACHE_SIZE=100G
@@ -107,13 +107,10 @@ TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),-multigpu,-multi_gpu_h100,require
 
 SANITIZER_ARGS=()
 if [[ $1 == "asan" ]]; then
-    SANITIZER_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=build_tools/rocm/asan_ignore_list.txt:use_sigaltstack=0")
-    SANITIZER_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=build_tools/rocm/lsan_ignore_list.txt:use_sigaltstack=0")
     SANITIZER_ARGS+=("--config=asan")
     TAG_FILTERS=$TAG_FILTERS,-noasan
     shift
 elif [[ $1 == "tsan" ]]; then
-    SANITIZER_ARGS+=("--test_env=TSAN_OPTIONS=suppressions=build_tools/rocm/tsan_ignore_list.txt::history_size=7:ignore_noninstrumented_modules=1")
     SANITIZER_ARGS+=("--config=tsan")
     TAG_FILTERS=$TAG_FILTERS,-notsan
     shift
