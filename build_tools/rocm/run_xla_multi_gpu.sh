@@ -75,14 +75,11 @@ TAG_FILTERS="$($SCRIPT_DIR/rocm_tag_filters.sh)"
 
 SANITIZER_ARGS=()
 if [[ $1 == "asan" ]]; then
-    SANITIZER_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=build_tools/rocm/asan_ignore_list.txt:use_sigaltstack=0")
-    SANITIZER_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=build_tools/rocm/lsan_ignore_list.txt:use_sigaltstack=0")
     SANITIZER_ARGS+=("--run_under=//build_tools/rocm:sanitizer_wrapper")
     SANITIZER_ARGS+=("--config=asan")
     TAG_FILTERS="$TAG_FILTERS,-noasan"
     shift
 elif [[ $1 == "tsan" ]]; then
-    SANITIZER_ARGS+=("--test_env=TSAN_OPTIONS=suppressions=build_tools/rocm/tsan_ignore_list.txt::history_size=7:ignore_noninstrumented_modules=1")
     SANITIZER_ARGS+=("--run_under=//build_tools/rocm:sanitizer_wrapper")
     SANITIZER_ARGS+=("--config=tsan")
     TAG_FILTERS="$TAG_FILTERS,-notsan"
