@@ -116,6 +116,9 @@ elif [[ $1 == "tsan" ]]; then
     EXCLUDED_TESTS+=(
         # //xla/tests:collective_ops_e2e_test_amdgpu_any
         CollectiveOpsTestE2E*
+        # //xla/backends/gpu/runtime:host_execute_thunk_test_amdgpu_any
+        HostExecuteStartThunkTest*
+        HostExecuteDoneThunkTest*
     )
     shift
 fi
