@@ -19,6 +19,7 @@ race:xla::LocalDeviceState::ThenRelease
 race:xla::LiteralBase::Piece::DeallocateBuffers
 race:xla::PjRtStreamExecutorLoadedExecutable::ExecuteHelper
 race:xla::PjRtStreamExecutorClient::BufferFromHostBufferInternal
+race:xla::PjRtStreamExecutorClient::AllocateAndRecordEvent
 race:xla::HloRunnerPjRt::TransferLiteralsFromDevice
 race:xla::MutableLiteralBase::~MutableLiteralBase
 race:xla::MutableLiteralBase::PopulateR1<int>
