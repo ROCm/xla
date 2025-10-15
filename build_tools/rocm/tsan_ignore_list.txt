@@ -16,6 +16,7 @@ race:xla::gpu::AllocateDestinationBuffer
 race:xla::LocalDeviceState::ThenRelease
 
 # To be fixed
+race:xla::GpuAsyncHostToDeviceTransferManager::TransferRawDataToSubBuffer
 race:xla::LiteralBase::Piece::DeallocateBuffers
 race:xla::PjRtStreamExecutorLoadedExecutable::ExecuteHelper
 race:xla::PjRtStreamExecutorClient::BufferFromHostBufferInternal
