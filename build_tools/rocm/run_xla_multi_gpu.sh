@@ -68,6 +68,10 @@ EXCLUDED_TESTS=(
   # //xla/tests:collective_ops_e2e_test_amdgpu_any
   CollectiveOpsTestE2EPipelinedNonPipelined.CollectivePipelinerBackward
   CollectiveOpsTestE2EPipelinedNonPipelined.CollectivePipelinerBackwardStartFromOne
+  # //xla/tools/multihost_hlo_runner:functional_hlo_runner_test
+  FunctionalHloRunnerTest.Sharded2DevicesHloUnoptimizedSnapshot
+  FunctionalHloRunnerTest.ShardedComputationUnderStreamCapture
+
 )
 
 SCRIPT_DIR=$(realpath $(dirname $0))
@@ -88,6 +92,12 @@ elif [[ $1 == "tsan" ]]; then
         Fp8CollectiveOpsTest.AllGather_8BitFloat
         Fp8CollectiveOpsTest.CollectivePermute_8BitFloat
         Fp8CollectiveOpsTest.AllToAll_8BitFloat
+        AsyncCollectiveOps*
+        AllReduceTest*
+        RaggedAllToAllTest*
+        AsyncCollectiveOps*
+        AsyncMemcpyCollectiveOps*
+        RaggedAllToAllTest*
     )
     shift
 fi

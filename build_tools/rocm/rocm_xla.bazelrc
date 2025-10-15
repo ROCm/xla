@@ -16,6 +16,8 @@ build:rocm_rbe --remote_cache="grpcs://wardite.cluster.engflow.com"
 build:rocm_rbe --spawn_strategy=local
 build:rocm_rbe --jobs=200
 build:rocm_rbe --remote_timeout=3600
+build:rocm_rbe --remote_download_minimal
+build:rocm_rbe --remote_upload_local_results
 
 test:rocm_rbe --strategy=TestRunner=local
 
