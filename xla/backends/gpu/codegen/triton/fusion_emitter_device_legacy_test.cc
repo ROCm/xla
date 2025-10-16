@@ -1289,7 +1289,7 @@ ENTRY entry {
   HloFusionInstruction* triton_dot_fusion = Cast<HloFusionInstruction>(
       hlo_module->entry_computation()->root_instruction());
   const se::DeviceDescription dev_info =
-      TestGpuDeviceInfo::RTXA6000DeviceInfo();
+      TestGpuDeviceInfo::CudaOrRocmDeviceInfo();
   llvm::LLVMContext llvm_ctx;
   llvm::Module llvm_module("module", llvm_ctx);
   mlir::MLIRContext mlir_context;

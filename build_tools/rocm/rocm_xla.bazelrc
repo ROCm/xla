@@ -82,4 +82,3 @@ test:xla_mgpu -- \
 //xla/pjrt/distributed:topology_util_test \
 //xla/pjrt/distributed:client_server_test \
 //xla/backends/gpu/runtime:all_reduce_test \
--//xla/tests:collective_pipeline_parallelism_test
