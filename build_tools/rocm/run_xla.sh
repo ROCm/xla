@@ -113,6 +113,7 @@ if [[ $1 == "asan" ]]; then
 elif [[ $1 == "tsan" ]]; then
     SANITIZER_ARGS+=("--config=tsan")
     TAG_FILTERS=$TAG_FILTERS,-notsan
+    # excluded from tsan
     EXCLUDED_TESTS+=(
         # //xla/tests:collective_ops_e2e_test_amdgpu_any
         CollectiveOpsTestE2E*

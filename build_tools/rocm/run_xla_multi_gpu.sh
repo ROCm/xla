@@ -87,6 +87,7 @@ elif [[ $1 == "tsan" ]]; then
     SANITIZER_ARGS+=("--run_under=//build_tools/rocm:sanitizer_wrapper")
     SANITIZER_ARGS+=("--config=tsan")
     TAG_FILTERS="$TAG_FILTERS,-notsan"
+    # excluded from tsan
     EXCLUDED_TESTS+=(
         CollectiveOpsTest*
         Fp8CollectiveOpsTest.AllGather_8BitFloat
