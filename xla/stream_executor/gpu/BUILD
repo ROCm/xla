@@ -815,10 +815,20 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "nan_check_kernel",
+    hdrs = ["nan_check_kernel.h"],
+    deps = [
+        "//xla/stream_executor:device_memory",
+        "//xla/stream_executor:kernel",
+    ],
+)
+
 exports_files([
     "buffer_comparator_kernel_lib.cu.h",
     "all_reduce_kernel_lib.cu.h",
     "ragged_all_to_all_kernel_lib.cu.h",
+    "nan_check_kernel_lib.cu.h",
 ])
 
 cc_library(

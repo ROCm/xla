@@ -21,6 +21,7 @@ limitations under the License.
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stack>
 #include <string>
 #include <utility>
 #include <variant>
@@ -296,6 +297,99 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 namespace {
+
+// TODO(rocm): Move into a separate file
+class NanCheckInserter : public HloModulePass {
+  using WorkList =
+      std::stack<HloComputation*, absl::InlinedVector<HloComputation*, 8>>;
+  absl::string_view name() const override { return "nan-check-inserter"; }
+
+  void RunOnComputation(HloModule* module, HloComputation* comp,
+                        WorkList& to_visit) {
+    auto print_options = HloPrintOptions::ShortParsable()
+                             .set_print_operand_shape(true)
+                             .set_print_extra_attributes(true);
+
+    auto is_async_start = [](const HloInstruction* inst) {
+      // TODO(rocm): Use switch
+      auto name = HloOpcodeString(inst->opcode());
+      return name.find("-start") != name.npos;
+    };
+
+    for (HloInstruction* instruction : comp->instructions()) {
+      if (instruction->opcode() == HloOpcode::kWhile) {
+        VLOG(1) << "Found while loop: processing!";
+        to_visit.push(instruction->while_condition());
+        to_visit.push(instruction->while_body());
+      } else if (instruction->opcode() == HloOpcode::kConditional) {
+        VLOG(1) << "Found conditional: processing!";
+        for (auto* branch_comp : instruction->branch_computations()) {
+          to_visit.push(branch_comp);
+        }
+      }
+
+      auto shape = instruction->shape();
+      // TODO(rocm): Check if bitcast can be a copy, then it is not noop
+      if (instruction->opcode() == HloOpcode::kParameter ||
+          instruction->opcode() == HloOpcode::kConstant ||
+          instruction->opcode() == HloOpcode::kBitcast ||
+          is_async_start(instruction) || 
+          !shape.IsArray() ||
+          !primitive_util::IsFloatingPointType(shape.element_type()))
+        continue;
+
+      int32_t index = 0;
+      const HloInstruction* source = instruction;
+
+      if (instruction->opcode() == HloOpcode::kGetTupleElement) {
+        index = instruction->tuple_index();
+        source = instruction->operand(0);
+      }
+
+      if (source->opcode() == HloOpcode::kWhile ||
+          source->opcode() == HloOpcode::kConditional) {
+        continue;
+      }
+      absl::InlinedVector<HloInstruction*, 8> args;
+      args.push_back(instruction);
+
+      if (!is_async_start(source) &&
+          absl::c_all_of(source->operands(),
+                         [&](const auto op) { return op->shape().IsArray() && !is_async_start(op); })) {
+        for (auto op : source->operands()) {
+          if (!op->IsConstant()) {
+            args.push_back(op);
+          }
+        }
+      }
+
+      auto created =
+          Cast<HloCustomCallInstruction>(instruction->parent()->AddInstruction(
+              HloInstruction::CreateCustomCall(
+                  ShapeUtil::MakeTokenShape(), args,
+                  kXlaGpuNanCheckCustomCallTag, "", API_VERSION_ORIGINAL)));
+      created->set_custom_call_has_side_effect(true);
+    }  // for
+  }
+
+  using HloPassInterface::Run;
+  absl::StatusOr<bool> Run(HloModule* module,
+                           const absl::flat_hash_set<absl::string_view>&
+                               execution_threads) override {
+    WorkList to_visit;
+    if (auto* comp = module->entry_computation()) {
+      to_visit.push(comp);
+    }
+
+    while (!to_visit.empty()) {
+      auto* comp = to_visit.top();
+      to_visit.pop();
+      RunOnComputation(module, comp, to_visit);
+    }
+
+    return true;
+  }
+};
 
 using MaybeOwningThreadPool = MaybeOwning<tsl::thread::ThreadPool>;
 
@@ -2757,6 +2851,17 @@ absl::Status GpuCompiler::RunPostSchedulingPipelines(
     HloPassPipeline& pipeline =
         main_pipeline.AddPass<HloPassPipeline>("fusion-wrapper");
     pipeline.AddPass<FusionWrapper>(gpu_device_info);
+  }
+
+  static bool nan_check = []() {
+    const char* env = std::getenv("TF_ROCM_NAN_CHECK");
+    if (env == nullptr || std::strlen(env) == 0 || std::strcmp(env, "0") == 0) {
+      return false;
+    }
+    return true;
+  }();
+  if (module->config().debug_options().xla_gpu_enable_nan_check() || nan_check) {
+    main_pipeline.AddPass<NanCheckInserter>();
   }
 
   // Pipeline with passes which wrap a scheduled module into command buffers.

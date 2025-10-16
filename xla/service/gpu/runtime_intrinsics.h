@@ -22,6 +22,8 @@ namespace xla {
 
 inline constexpr absl::string_view kXlaGpuAssertCustomCallTag =
     "__xla_gpu_assert";
+inline constexpr absl::string_view kXlaGpuNanCheckCustomCallTag =
+    "__xla_gpu_nan_check";
 
 }  // namespace xla
 

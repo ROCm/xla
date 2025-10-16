@@ -642,6 +642,30 @@ cc_library(
     ],
 )
 
+
+cc_library(
+    name = "nan_check_thunk",
+    srcs = ["nan_check_thunk.cc"],
+    hdrs = ["nan_check_thunk.h"],
+    deps = [
+        ":thunk",
+        "//xla:status_macros",
+        "//xla/backends/gpu/runtime:nan_check",
+        "//xla/service:buffer_assignment",
+        "//xla/service/gpu:buffer_allocations",
+        "//xla/stream_executor:device_memory",
+        "//xla/stream_executor:stream",
+        "//xla/tools:hlo_decomposer_lib",
+        "//xla/tsl/util:env_var",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/synchronization",
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform:statusor",
+    ],
+)
+
 cc_library(
     name = "infeed_thunk",
     srcs = ["infeed_thunk.cc"],
@@ -1410,6 +1434,26 @@ cc_library(
         "//xla/stream_executor:stream",
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/gpu:buffer_comparator_kernel",
+        "//xla/stream_executor/gpu:gpu_kernel_registry",
+        "@com_google_absl//absl/status:statusor",
+        "@eigen_archive//:eigen3",
+    ],
+)
+
+cc_library(
+    name = "nan_check",
+    srcs = ["nan_check.cc"],
+    hdrs = ["nan_check.h"],
+    deps = [
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla/service/gpu:launch_dimensions",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor:device_memory",
+        "//xla/stream_executor:device_memory_handle",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/gpu:nan_check_kernel",
         "//xla/stream_executor/gpu:gpu_kernel_registry",
         "@com_google_absl//absl/status:statusor",
         "@eigen_archive//:eigen3",

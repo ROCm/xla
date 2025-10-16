@@ -175,7 +175,8 @@ class Thunk {
     kSequential,
     kTriangularSolve,
     kWaitForStreams,
-    kWhile
+    kWhile,
+    kNanCheck,
     // go/keep-sorted end
   };
 
