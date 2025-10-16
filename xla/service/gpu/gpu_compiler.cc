@@ -297,6 +297,60 @@ namespace xla {
 namespace gpu {
 namespace {
 
+// TODO(rocm): Move into a separate file
+class NanCheckInserter : public HloModulePass {
+  absl::string_view name() const override { return "nan-check-inserter"; }
+
+  using HloPassInterface::Run;
+  absl::StatusOr<bool> Run(HloModule* module,
+                           const absl::flat_hash_set<absl::string_view>&
+                               execution_threads) override {
+    auto print_options = HloPrintOptions::ShortParsable()
+                             .set_print_operand_shape(true)
+                             .set_print_extra_attributes(true);
+    if (HloComputation* computation = module->entry_computation()) {
+      for (HloInstruction* instruction : computation->instructions()) {
+        auto shape = instruction->shape();
+        if (instruction->opcode() != HloOpcode::kParameter && shape.IsArray() &&
+            primitive_util::IsFloatingPointType(shape.element_type())) {
+          int32_t index = 0;
+          const HloInstruction* source = instruction;
+
+          if (instruction->opcode() == HloOpcode::kGetTupleElement) {
+            index = instruction->tuple_index();
+            source = instruction->operand(0);
+          }
+
+          auto msg = absl::StrFormat(
+              "Computation %s/%s: NaN found in result %d of %s\n",
+              module->name(), computation->name(), index,
+              source->ToString(print_options));
+
+          auto msg_shape = ShapeUtil::MakeShapeWithDenseLayout(
+              U8, {static_cast<int64_t>(msg.size() + 1)}, {0}, /*tiles=*/{},
+              /*tail_padding_alignment_in_elements=*/1,
+              /*element_size_in_bits=*/0, Layout::kHostMemorySpace);
+
+          Literal msg_literal(msg_shape);
+          msg_literal.PopulateR1(absl::Span<const uint8_t>(
+              reinterpret_cast<const uint8_t*>(msg.c_str()), msg.size() + 1));
+          // TODO(rocm): Make this an attribute
+          auto msg_constant = instruction->parent()->AddInstruction(
+              HloInstruction::CreateConstant(std::move(msg_literal)));
+
+          auto created = Cast<HloCustomCallInstruction>(
+              instruction->parent()->AddInstruction(
+                  HloInstruction::CreateCustomCall(
+                      ShapeUtil::MakeTokenShape(), {instruction, msg_constant},
+                      kXlaGpuNanCheckCustomCallTag, "", API_VERSION_TYPED_FFI)));
+          created->set_custom_call_has_side_effect(true);
+        }
+      }
+    }
+    return true;
+  }
+};
+
 using MaybeOwningThreadPool = MaybeOwning<tsl::thread::ThreadPool>;
 
 MaybeOwningThreadPool CreateMaybeOwningThreadPool(
@@ -2757,6 +2811,10 @@ absl::Status GpuCompiler::RunPostSchedulingPipelines(
     HloPassPipeline& pipeline =
         main_pipeline.AddPass<HloPassPipeline>("fusion-wrapper");
     pipeline.AddPass<FusionWrapper>(gpu_device_info);
+  }
+
+  if (module->config().debug_options().xla_gpu_enable_nan_check()) {
+    main_pipeline.AddPass<NanCheckInserter>();
   }
 
   // Pipeline with passes which wrap a scheduled module into command buffers.

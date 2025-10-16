@@ -23,6 +23,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/string_view.h"
+#include "xla/backends/gpu/runtime/nan_check.h"
 #include "xla/service/collective_ops_utils.h"
 #include "xla/service/custom_call_status.h"
 #include "xla/service/custom_call_target_registry.h"
@@ -37,6 +38,9 @@ limitations under the License.
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/statusor.h"
+#include "xla/ffi/ffi.h"
+#include "xla/ffi/ffi_api.h"
+
 
 namespace xla {
 
@@ -90,7 +94,43 @@ void NopReturnTokenCustomCall(void* stream_handle, void** buffers,
   VLOG(1) << "NopReturnTokenCustomCall called.";
 }
 
+absl::Status NanCheckCustomCall(
+    se::Stream* stream, ffi::AnyBuffer buffer,
+    ffi::BufferR1<PrimitiveType::U8> msg,
+    xla::ffi::Result<xla::ffi::Buffer<xla::TOKEN>> res) {
+  static std::atomic<const se::MemoryAllocation*> abort_lock;
+
+  auto lock = abort_lock.load(std::memory_order_relaxed);
+
+  // TODO(rocm) Move this into Prepare to make it command buffer safe
+  if (TF_PREDICT_FALSE(lock == nullptr)) {
+    TF_ASSIGN_OR_RETURN(std::unique_ptr<se::MemoryAllocation> lock_buffer,
+                        stream->parent()->HostMemoryAllocate(sizeof(uint32_t)));
+    if (abort_lock.compare_exchange_strong(lock, lock_buffer.get())) {
+      lock = lock_buffer.release();  // Leak it for now
+    }
+  }
+  auto abort_lock_mem = se::DeviceMemory<uint32_t>::MakeFromByteSize(
+      lock->opaque(), sizeof(uint32_t));
+  return gpu::LaunchNanCheckKernel(stream, buffer.device_memory(),
+                                   buffer.element_type(), msg.device_memory(),
+                                   abort_lock_mem);
+}
+
 }  // namespace
+
+XLA_FFI_DEFINE_HANDLER(kXlaGpuNanCheckCustomCall, NanCheckCustomCall,
+                       ffi::Ffi::Bind()
+                           .Ctx<ffi::Stream>()
+                           .Arg<ffi::AnyBuffer>()
+                           .Arg<ffi::BufferR1<PrimitiveType::U8>>()
+                           .Ret<xla::ffi::Buffer<xla::TOKEN>>());
+                          /* {xla::ffi::Traits::kCmdBufferCompatible} */
+
+XLA_FFI_REGISTER_HANDLER(ffi::GetXlaFfiApi(), kXlaGpuNanCheckCustomCallTag,
+                         GetGpuPlatformName(), kXlaGpuNanCheckCustomCall);
+
+
 
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM(
     std::string(kXlaGpuAssertCustomCallTag), AssertionCustomCall,

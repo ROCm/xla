@@ -1419,6 +1419,26 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "nan_check",
+    srcs = ["nan_check.cc"],
+    hdrs = ["nan_check.h"],
+    deps = [
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla/service/gpu:launch_dimensions",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor:device_memory",
+        "//xla/stream_executor:device_memory_handle",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/gpu:nan_check_kernel",
+        "//xla/stream_executor/gpu:gpu_kernel_registry",
+        "@com_google_absl//absl/status:statusor",
+        "@eigen_archive//:eigen3",
+    ],
+)
+
 xla_test(
     name = "buffer_comparator_test",
     srcs = ["buffer_comparator_test.cc"],

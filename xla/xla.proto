@@ -1214,6 +1214,8 @@ message DebugOptions {
   // interpretation of these values is left to the backend.
   map<string, string> xla_backend_extra_options = 500;
 
+  bool xla_gpu_enable_nan_check = 501;
+
   // Reserved tags were xla_hlo_dump_as_graphdef, xla_dump_to,
   // xla_gpu_use_horizontal_fusion,
   // xla_gpu_unsafe_fallback_to_driver_on_ptxas_error,

@@ -2355,6 +2355,11 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_experimental_enable_split_k_rewrite(),
       "Enable the pass that splits GEMMs that underutilize the GPU load by "
       "splitting the K dimension using a heuristic."));
+  flag_list->push_back(
+      tsl::Flag("xla_gpu_enable_nan_check",
+                bool_setter_for(&DebugOptions::set_xla_gpu_enable_nan_check),
+                debug_options->xla_gpu_enable_nan_check(),
+                "Insert NAN check after every operation."));
 }  // NOLINT(readability/fn_size)
 
 // Allocates flag_values and flag_objects; this function must not be called more
