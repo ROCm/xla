@@ -41,9 +41,6 @@ export PYTHON_BIN_PATH=`which python3`
 export TF_NEED_ROCM=1
 export ROCM_PATH="/opt/rocm"
 
-GPU_NAME=(`rocminfo | grep -m 1 gfx`)
-GPU_NAME=${GPU_NAME[1]}
-
 EXCLUDED_TESTS=(
 )
 
@@ -59,15 +56,20 @@ TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),-multigpu,-multi_gpu_h100,require
 
 SANITIZER_ARGS=()
 if [[ $1 == "asan" ]]; then
-    SANITIZER_ARGS+=("--test_env=ASAN_OPTIONS=suppressions=${SCRIPT_DIR}/asan_ignore_list.txt:use_sigaltstack=0")
-    SANITIZER_ARGS+=("--test_env=LSAN_OPTIONS=suppressions=${SCRIPT_DIR}/lsan_ignore_list.txt:use_sigaltstack=0")
     SANITIZER_ARGS+=("--config=asan")
     TAG_FILTERS=$TAG_FILTERS,-noasan
     shift
 elif [[ $1 == "tsan" ]]; then
-    SANITIZER_ARGS+=("--test_env=TSAN_OPTIONS=suppressions=${SCRIPT_DIR}/tsan_ignore_list.txt::history_size=7:ignore_noninstrumented_modules=1")
     SANITIZER_ARGS+=("--config=tsan")
     TAG_FILTERS=$TAG_FILTERS,-notsan
+    # excluded from tsan
+    EXCLUDED_TESTS+=(
+        # //xla/tests:collective_ops_e2e_test_amdgpu_any
+        CollectiveOpsTestE2E*
+        # //xla/backends/gpu/runtime:host_execute_thunk_test_amdgpu_any
+        HostExecuteStartThunkTest*
+        HostExecuteDoneThunkTest*
+    )
     shift
 fi
 
@@ -87,8 +89,6 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --keep_going \
     --local_test_jobs=${N_TEST_JOBS} \
     --test_env=TF_TESTS_PER_GPU=$TF_TESTS_PER_GPU \
-    --test_env=TF_GPU_COUNT=$TF_GPU_COUNT \
-    --action_env=TF_ROCM_AMDGPU_TARGETS=${GPU_NAME} \
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
     --run_under=//build_tools/ci:parallel_gpu_execute \
     --test_env=MIOPEN_FIND_ENFORCE=5 \
