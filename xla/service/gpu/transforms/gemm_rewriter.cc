@@ -363,7 +363,8 @@ HloInstruction *TransposeMatrix(HloInstruction *instr, int64_t contracting_dim,
     permutation[batch_dim] = batch_dim;
   }
   // Identify the non-contracting dimension.
-  int non_contracting_dim;
+  // Initializing to -1 prevents “maybe-uninitialized”
+  int non_contracting_dim = -1;
   for (int i = 0; i < input_shape.dimensions().size(); ++i) {
     if (permutation[i] == -1 && contracting_dim != i) {
       non_contracting_dim = i;
@@ -1652,7 +1653,11 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     if (gemm->shape().element_type() == S32) {
       return absl::OkStatus();
     }
-
+    // This avoids β=1 and the read of C inside GEMM.
+    if (IsCublasLtMatmulF8(*gemm)) {
+      VLOG(1) << "FP8 GEMM: skipping matrix-bias → beta fusion by default.";
+      return absl::OkStatus();  // Leave the Add as a separate op.
+    }
     // To ensure correctness, only slices that chop off the ends of dimensions
     // are supported.
     if (slice) {
@@ -1691,8 +1696,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       return in_out_alias_config.ParameterHasAlias(bias->parameter_number(),
                                                    /*param_index=*/{});
     }();
-    bool want_to_fuse_bias = IsCublasLtMatmulF8(*gemm) ||
-                             IsCublasLtMatmul(*gemm) || can_overwrite_bias;
+    bool want_to_fuse_bias = IsCublasLtMatmul(*gemm) || can_overwrite_bias;
 
     auto gpu_config = gemm->backend_config<GpuBackendConfig>().value();
     GemmBackendConfig &config = *gpu_config.mutable_gemm_backend_config();
@@ -1707,7 +1711,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       return absl::OkStatus();
     }
 
-    config.set_beta(1.0);
+    config.set_beta(1);
 
     std::vector<HloInstruction *> operands(gemm->operands().begin(),
                                            gemm->operands().end());
@@ -1745,7 +1749,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     // true if those uses all come before this operation.  But copy-insertion
     // runs before scheduling, so it can't know and has to conservatively insert
     // copies.)
-    if (IsLegacyCublasMatmul(*fused_op) || can_overwrite_bias) {
+    if (IsLegacyCublasMatmul(*fused_op)) {
       xla::Cast<HloCustomCallInstruction>(fused_op.get())
           ->set_output_to_operand_aliasing({{{}, {2, {}}}});
     }
