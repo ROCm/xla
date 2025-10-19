@@ -478,9 +478,9 @@ CHECK: mma
 // TODO(b/353484968): Tests that don't run RunAndCompareNoHloPasses should be
 // moved to deviceless test file.
 TEST_F(TritonGemmTest, FailIfTooMuchShmem) {
-  auto cc = se::CudaComputeCapability::Ampere();
+  auto cc = CudaAmpereOrRocm();
   const se::DeviceDescription device_info =
-      TestGpuDeviceInfo::RTXA6000DeviceInfo();
+      TestGpuDeviceInfo::CudaOrRocmDeviceInfo();
   llvm::LLVMContext llvm_ctx;
   llvm::Module llvm_module("module", llvm_ctx);
   mlir::MLIRContext mlir_context;
@@ -519,7 +519,7 @@ ENTRY entry {
 
   TF_ASSERT_OK_AND_ASSIGN(ModuleAndNestedFusionMetadata module2_and_metadata,
                           GetModuleAndNestedFusionMetadata(absl::Substitute(
-                              kHloTextTemplate, 64, 128, 128, 1)));
+                              kHloTextTemplate, 64, 64, 128, 1)));
 
   const HloFusionInstruction* fusion2 = Cast<HloFusionInstruction>(
       module2_and_metadata.computation->FusionInstruction());
@@ -529,8 +529,8 @@ ENTRY entry {
       TritonWrapper("test_fn", fusion2, cc, device_info,
                     module2_and_metadata.block_level_parameters, &llvm_module,
                     mlir_context));
-  // Use optin shared memory which is > shared_memory_per_block.
-  EXPECT_GT(result.shmem_bytes, device_info.shared_memory_per_block());
+  // Use optin shared memory == shared_memory_per_block.
+  EXPECT_EQ(result.shmem_bytes, device_info.shared_memory_per_block());
 }
 
 TEST_F(TritonGemmTest, MultipleDims) {

@@ -3714,7 +3714,7 @@ TEST_F(TritonEmitterTest, CheckRocmWarpSize) {
   const se::DeviceDescription dev_info =
       TestGpuDeviceInfo::AMDMI210DeviceInfo();
   TF_ASSERT_OK(TritonWrapper(
-      "test_fn", triton_fusion, se::RocmComputeCapability("gfx942"), dev_info,
+      "test_fn", triton_fusion, se::RocmComputeCapability("gfx90a"), dev_info,
       BlockLevelParameters(), &llvm_module, mlir_context));
   TF_EXPECT_OK(tsl::Env::Default()->GetMatchingPaths(
       tsl::io::JoinPath(output_directory, "*.triton-passes.log"), &paths));
@@ -3726,7 +3726,7 @@ TEST_F(TritonEmitterTest, CheckRocmWarpSize) {
     )";
   EXPECT_THAT(RunFileCheck(triton_passes_log, kPattern), true);
 
-  // For RX7900 warp_size should be 32
+    // For RX7900 warp_size should be 32
   const se::DeviceDescription dev_info_n =
       TestGpuDeviceInfo::AMDRX7900DeviceInfo();
   TF_ASSERT_OK(TritonWrapper(

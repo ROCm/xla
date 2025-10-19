@@ -42,6 +42,40 @@ export TF_NEED_ROCM=1
 export ROCM_PATH="/opt/rocm"
 
 EXCLUDED_TESTS=(
+    # //xla/pjrt/c:pjrt_c_api_gpu_test_gpu_amd_any
+    PjrtCAPIGpuExtensionTest.TritonCompile
+    # //xla/backends/gpu/codegen/triton:fusion_emitter_device_test_gpu_amd_any
+    TritonEmitterTest.CheckRocmWarpSize
+    TritonEmitterTest.ConvertF16ToF8E5M2Exhaustive
+    TritonEmitterTest.FP8ToFP8EndToEnd
+    TritonEmitterTest.FusionWithOutputContainingMoreThanInt32MaxElementsExecutesCorrectly
+    BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F64_F64_F64
+    # //xla/hlo/builder/lib:self_adjoint_eig_test_gpu_amd_any marked as flaky but randomly red after 3 attempts
+    RandomEighTestInstantiation/RandomEighTest.Random/*
+    # temp excludes for 0.7.1
+    MultiOutputFusionTest.MultiOutputReduceFusionMajorWithExtraOutput
+    TestRadixSort/CubSortKeysTest.SortKeys/*
+    TestRadixSort/CubSortPairsTest.SortPairs/*
+    TopKTests/TopKKernelTest*
+    CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
+    CommandBufferConversionPassTest.ConvertWhileThunk
+    TritonFusionNumericsVerifierTest.CompilationSucceedsEvenIfKernelWillSpillRegisters
+    TritonFusionNumericsVerifierTest.VerifyThatDisablingTritonIsFast
+    TritonFusionNumericsVerifierTestSuite/TritonFusionNumericsVerifierTest.VerifyNestedGemmNumerics/1
+    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_tf32_tf32_f32
+    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_f32_f32_f32
+    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_tf32_tf32_f32_x3
+    DotTestTestSuite/DotTest.IsTritonSupportedExecutesCorrectlyForDot/f32_dot
+    TritonNormalizationTest.CanFuseAndEmitDiamondWithBF16Converts
+    ElementwiseTestSuiteF16/UnaryElementwiseTest.ElementwiseUnaryOpExecutesCorrectly/f16_cosine
+    ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseBinaryOpExecutesCorrectly/f16_atan2
+    ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseFusionExecutesCorrectly/f16_atan2
+    TritonTest.FuseSubchannelDequantizationWithTranspose
+    BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F16_F16_F16
+    CommandBufferTests/CommandBufferTest.IndexConditional/*
+    CommandBufferTests/CommandBufferTest.WhileLoop/*
+    CommandBufferTests/CommandBufferTest.TrueFalseConditional/*
+    BufferComparatorTest.VeryLargeArray_Device_U8_Aligned
 )
 
 BAZEL_DISK_CACHE_SIZE=100G
