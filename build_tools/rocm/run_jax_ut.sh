@@ -16,6 +16,7 @@ python build/build.py build \
 
 bazel test \
     --config=rocm \
+    --config=rocm_rbe \
     --build_tag_filters=cpu,gpu,-tpu,-config-cuda-only \
     --test_tag_filters=cpu,gpu,-tpu,-config-cuda-only \
     --action_env=TF_ROCM_AMDGPU_TARGETS=gfx908 \
