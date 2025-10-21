@@ -177,8 +177,8 @@ HeuristicLayoutAssignment(const HloInstruction* instr,
     }
   } else if (std::holds_alternative<se::RocmComputeCapability>(gpu_version)) {
     // ROCm:
-    // If we do not have NHWC layout support or not fp16/bfloat16, or not conv2D, 
-    // or ROCm NHWC is disabled the decision is to use NCHW. 
+    // If we do not have NHWC layout support or not fp16/bfloat16, or not
+    // conv2D, or ROCm NHWC is disabled the decision is to use NCHW.
     bool is_enabled = false;
     TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_USE_ROCM_NHWC",
                                         /*default_val=*/false, &is_enabled));
