@@ -327,12 +327,35 @@ class NanCheckInserter : public HloModulePass {
               module->name(), computation->name(), index,
               source->ToString(print_options));
 
+          constexpr absl::string_view kOpaqueHead = "{msg = \"";
+          constexpr absl::string_view kOpaqueTail = "\"}";
+          constexpr size_t kEscapeSlack = 12;
+          std::string opaque;
+          opaque.reserve(kOpaqueHead.size() + msg.size() + kOpaqueTail.size() +
+                         kEscapeSlack);
+
+          absl::StrAppend(&opaque, kOpaqueHead);
+
+          for (char c : msg) {
+            if (c == '\\') {
+              absl::StrAppend(&opaque, "\\\\");
+            } else if (std::isprint(c) && c != '"') {
+              opaque.push_back(c);
+            } else {
+              absl::StrAppend(
+                  &opaque, "\\",
+                  absl::Hex(static_cast<uint8_t>(c), absl::kZeroPad2));
+            }
+          }
+
+          absl::StrAppend(&opaque, kOpaqueTail);
+
           auto created = Cast<HloCustomCallInstruction>(
               instruction->parent()->AddInstruction(
                   HloInstruction::CreateCustomCall(
                       ShapeUtil::MakeTokenShape(), {instruction},
                       kXlaGpuNanCheckCustomCallTag,
-                      absl::StrFormat("{msg = \"%s\"}", msg),
+                      std::move(opaque),
                       API_VERSION_TYPED_FFI)));
           created->set_custom_call_has_side_effect(true);
         }
