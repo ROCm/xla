@@ -96,25 +96,44 @@ void NopReturnTokenCustomCall(void* stream_handle, void** buffers,
 
 absl::Status NanCheckCustomCall(
     se::Stream* stream, ffi::AnyBuffer buffer,
-    ffi::BufferR1<PrimitiveType::U8> msg,
-    xla::ffi::Result<xla::ffi::Buffer<xla::TOKEN>> res) {
+    xla::ffi::Result<xla::ffi::Buffer<xla::TOKEN>> res,
+    std::string_view msg) {
+
+  static absl::Mutex nan_signal_map_mutex;
+  static absl::flat_hash_map<se::Stream*, se::DeviceMemory<uint32_t>> nan_signal_map;
   static std::atomic<const se::MemoryAllocation*> abort_lock;
 
-  auto lock = abort_lock.load(std::memory_order_relaxed);
-
-  // TODO(rocm) Move this into Prepare to make it command buffer safe
-  if (TF_PREDICT_FALSE(lock == nullptr)) {
-    TF_ASSIGN_OR_RETURN(std::unique_ptr<se::MemoryAllocation> lock_buffer,
-                        stream->parent()->HostMemoryAllocate(sizeof(uint32_t)));
-    if (abort_lock.compare_exchange_strong(lock, lock_buffer.get())) {
-      lock = lock_buffer.release();  // Leak it for now
+  se::DeviceMemory<uint32_t> nan_signal;
+  {
+    // TODO(rocm) Move this into Prepare to make it command buffer safe
+    absl::MutexLock lock(&nan_signal_map_mutex);
+    auto it = nan_signal_map.find(stream);
+    if (TF_PREDICT_FALSE(it == nan_signal_map.end())) {
+      TF_ASSIGN_OR_RETURN(
+          std::unique_ptr<se::MemoryAllocation> signal_buffer,
+          stream->parent()->HostMemoryAllocate(sizeof(uint32_t)));
+      nan_signal = se::DeviceMemory<uint32_t>::MakeFromByteSize(
+          signal_buffer->opaque(), sizeof(uint32_t));
+      TF_RETURN_IF_ERROR(stream->MemZero(&nan_signal, sizeof(uint32_t)));
+      nan_signal_map.emplace(stream, nan_signal);
+      signal_buffer.release();  // TODO(rocm) Leak it for now
+    } else {
+      nan_signal = it->second;
     }
   }
-  auto abort_lock_mem = se::DeviceMemory<uint32_t>::MakeFromByteSize(
-      lock->opaque(), sizeof(uint32_t));
-  return gpu::LaunchNanCheckKernel(stream, buffer.device_memory(),
-                                   buffer.element_type(), msg.device_memory(),
-                                   abort_lock_mem);
+
+  TF_RETURN_IF_ERROR(gpu::LaunchNanCheckKernel(
+      stream, buffer.device_memory(), buffer.element_type(),
+      se::DeviceMemory<uint8_t>{}, nan_signal));
+
+  return stream->DoHostCallback(
+      [_device_ordinal = stream->parent()->device_ordinal(),
+       _msg = std::string(msg),  // TODO(rocm): Do we need to make a defensive copy here
+       &_nan_signal =
+           *reinterpret_cast<std::atomic<uint32_t>*>(nan_signal.opaque())]() {
+        CHECK(_nan_signal.load(std::memory_order_relaxed) == 0)
+            << _msg << " on GPU " << _device_ordinal;
+      });
 }
 
 }  // namespace
@@ -123,8 +142,8 @@ XLA_FFI_DEFINE_HANDLER(kXlaGpuNanCheckCustomCall, NanCheckCustomCall,
                        ffi::Ffi::Bind()
                            .Ctx<ffi::Stream>()
                            .Arg<ffi::AnyBuffer>()
-                           .Arg<ffi::BufferR1<PrimitiveType::U8>>()
-                           .Ret<xla::ffi::Buffer<xla::TOKEN>>());
+                           .Ret<xla::ffi::Buffer<xla::TOKEN>>()
+                           .Attr<absl::string_view>("msg"));
                           /* {xla::ffi::Traits::kCmdBufferCompatible} */
 
 XLA_FFI_REGISTER_HANDLER(ffi::GetXlaFfiApi(), kXlaGpuNanCheckCustomCallTag,

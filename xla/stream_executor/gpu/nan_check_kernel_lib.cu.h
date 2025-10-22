@@ -52,10 +52,7 @@ __global__ void xla_nan_check(T* buffer, uint64_t buffer_length,
     return;
   }
 
-  if (atomicExch(abort_lock, 1) == 0) {
-    printf("%s\n", msg);
-    abort();
-  }
+  atomicExch(abort_lock, 1);
 }
 
 template <typename NativeT>

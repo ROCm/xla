@@ -311,7 +311,8 @@ class NanCheckInserter : public HloModulePass {
     if (HloComputation* computation = module->entry_computation()) {
       for (HloInstruction* instruction : computation->instructions()) {
         auto shape = instruction->shape();
-        if (instruction->opcode() != HloOpcode::kParameter && shape.IsArray() &&
+        if (instruction->opcode() != HloOpcode::kParameter &&
+            instruction->opcode() != HloOpcode::kConstant && shape.IsArray() &&
             primitive_util::IsFloatingPointType(shape.element_type())) {
           int32_t index = 0;
           const HloInstruction* source = instruction;
@@ -322,27 +323,17 @@ class NanCheckInserter : public HloModulePass {
           }
 
           auto msg = absl::StrFormat(
-              "Computation %s/%s: NaN found in result %d of %s\n",
+              "Computation %s/%s: NaN found in result %d of %s",
               module->name(), computation->name(), index,
               source->ToString(print_options));
-
-          auto msg_shape = ShapeUtil::MakeShapeWithDenseLayout(
-              U8, {static_cast<int64_t>(msg.size() + 1)}, {0}, /*tiles=*/{},
-              /*tail_padding_alignment_in_elements=*/1,
-              /*element_size_in_bits=*/0, Layout::kHostMemorySpace);
-
-          Literal msg_literal(msg_shape);
-          msg_literal.PopulateR1(absl::Span<const uint8_t>(
-              reinterpret_cast<const uint8_t*>(msg.c_str()), msg.size() + 1));
-          // TODO(rocm): Make this an attribute
-          auto msg_constant = instruction->parent()->AddInstruction(
-              HloInstruction::CreateConstant(std::move(msg_literal)));
 
           auto created = Cast<HloCustomCallInstruction>(
               instruction->parent()->AddInstruction(
                   HloInstruction::CreateCustomCall(
-                      ShapeUtil::MakeTokenShape(), {instruction, msg_constant},
-                      kXlaGpuNanCheckCustomCallTag, "", API_VERSION_TYPED_FFI)));
+                      ShapeUtil::MakeTokenShape(), {instruction},
+                      kXlaGpuNanCheckCustomCallTag,
+                      absl::StrFormat("{msg = \"%s\"}", msg),
+                      API_VERSION_TYPED_FFI)));
           created->set_custom_call_has_side_effect(true);
         }
       }
