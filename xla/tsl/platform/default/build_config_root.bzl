@@ -49,6 +49,15 @@ def tf_cuda_tests_tags():
 def tf_has_tag(kwargs, tag):
     return ("tags" in kwargs and kwargs["tags"] != None and tag in kwargs["tags"])
 
+"""Append pool rbe specifi settings into the execution_properties of the test target
+
+Args:
+  kwargs: list of the target args.
+
+Returns:
+    execution properties for a given target based on the provided args
+"""
+
 def tf_exec_properties(kwargs):
     if is_rocm_configured():
         if tf_has_tag(kwargs, "multi_gpu"):
