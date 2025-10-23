@@ -1009,6 +1009,7 @@ xla_test(
     srcs = ["dot_operation_test.cc"],
     shard_count = 20,
     tags = [
+        "local",  # TODO: remove when remote execution is fixed
         "optonly",
     ],
     deps = [
@@ -1969,6 +1970,7 @@ cc_library(
     # This is set intentionally as to avoid the default behavior of the TSL
     # `cc_library` definition that is used in this file.
     compatible_with = [],
+    tags = ["local"],  # TODO: remove when remote execution is fixed
     deps = [
         ":client_library_test_base",
         ":hlo_test_base",
