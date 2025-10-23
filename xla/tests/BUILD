@@ -3356,6 +3356,7 @@ xla_test(
     },
     shard_count = 50,
     tags = [
+        "local",  # TODO: remove when remote execution is fixed
         "test_migrated_to_hlo_runner_pjrt",
     ],
     deps = [
