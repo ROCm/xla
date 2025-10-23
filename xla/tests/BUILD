@@ -1243,6 +1243,7 @@ xla_test(
     },
     shard_count = 20,
     tags = [
+        "local",
         "optonly",
     ],
     deps = [
