@@ -948,6 +948,12 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                           GemmOrCublasLtMatmul(&existing_gemm).WithOneUser())
                           .WithOneUser()),
                   m::Op(&bias).WithPredicate(is_not_broadcast)))) {
+      // ROCm FP8: avoid turning Add into matrix-bias fusion (beta=1).
+      if (IsRocm(gpu_version_) &&
+          IsCublasLtMatmulF8(*existing_gemm)) {
+        VLOG(1) << "[GEMM REWRITE] Skip FuseMatrixBiasAdd on ROCm FP8; keep beta==0.";
+        return absl::OkStatus();
+      }
       TF_ASSIGN_OR_RETURN(GpuBackendConfig gpu_backend_config,
                           existing_gemm->backend_config<GpuBackendConfig>());
       const GemmBackendConfig &gemm_backend_config =
@@ -988,6 +994,12 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                                         .WithOneUser()))
                       .WithOneUser(),
                   m::Op(&bias).WithPredicate(is_not_broadcast)))) {
+      // ROCm FP8: avoid matrix-bias fusion (beta=1) on FP8 GEMMs.
+      if (IsRocm(gpu_version_) &&
+          IsCublasLtMatmulF8(*existing_gemm)) {
+        VLOG(1) << "[GEMM REWRITE] Skip FuseMatrixBiasAdd (slice/bitcast) on ROCm FP8; keep beta==0.";
+        return absl::OkStatus();
+      }
       // The matrix bias must not be FP8, see
       // https://docs.nvidia.com/cuda/cublas/index.html.
       if (!IsF8Type(bias)) {
@@ -1643,6 +1655,13 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                                  const HloInstruction *gemm,
                                  HloInstruction *bitcast = nullptr,
                                  HloInstruction *slice = nullptr) {
+    // ROCm FP8: never fuse matrix bias to keep beta==0 for FP8 BF16/F16
+    // GEMMs. This avoids accumulation from C and improves numeric stability.
+    if (IsRocm(gpu_version_) && IsCublasLtMatmulF8(*gemm)) {
+      VLOG(1) << "[GEMM REWRITE] FuseMatrixBiasAdd disabled on ROCm FP8; "
+                 "keeping bias outside GEMM (beta==0).";
+      return absl::OkStatus();
+    }
     TF_RET_CHECK(Shape::Equal().IgnoreElementType()(bias->shape(),
                                                     bitcast ? bitcast->shape()
                                                     : slice ? slice->shape()
