@@ -107,7 +107,7 @@ limitations under the License.
 #define ENABLE_REDUCE_SCATTER_IN_PARALLEL_GRAPH        0
 #define ENABLE_COLLECTIVE_PERMUTE_IN_PARALLEL_GRAPH    0
 #define ENABLE_COLLECTIVE_BROADCAST_IN_PARALLEL_GRAPH  0
-#define DUMP_EXECUTION_GRAPH                           0
+#define DUMP_EXECUTION_GRAPH                           1
 
 
 namespace xla::gpu {
@@ -306,7 +306,7 @@ CommandBufferCmdExecutor::CommandBufferCmdExecutor(
       buffers_.insert(buffer);
       auto idx = buffer.slice().index();
       allocs_indices.insert(idx);   
-      if (idx != CommandBufferCmd::SpecialAllocIndex) {
+      if (idx < CommandBufferCmd::SpecialAllocStart) {
         maximal_index_ = std::max(maximal_index_, idx);
       }
     }
@@ -1597,8 +1597,7 @@ CommandBufferCmd::BufferUseVector CustomCallCmd::buffers() const {
 // CollectiveCmd
 //===----------------------------------------------------------------------===//
 
-static xla::BufferAllocation s_alloc(
-  CommandBufferCmd::SpecialAllocIndex, 8, xla::LogicalBuffer::Color{0});
+static std::vector< xla::BufferAllocation> s_special_allocs;
 
 CollectiveCmd::CollectiveCmd(CommandBufferCmdType cmd_type,
                              ExecutionStreamId execution_stream_id,
@@ -1608,7 +1607,14 @@ CollectiveCmd::CollectiveCmd(CommandBufferCmdType cmd_type,
       async_from_stream_id_(async_from_stream_id),
       config_(std::move(config))
 {
-  s_alloc.set_maybe_live_out(true);
+  if (s_special_allocs.empty()) {
+    s_special_allocs.reserve(8);
+    for (int i = 0; i < 8; i++) {
+      s_special_allocs.emplace_back(CommandBufferCmd::SpecialAllocStart + i, 
+                8, xla::LogicalBuffer::Color{0});
+      s_special_allocs.back().set_maybe_live_out(true);
+    }
+  }
   // if(execution_stream_id != async_from_stream_id) {
   //   LOG(WARNING) << "Ignoring async stream ID for collective: " << ToString();
   // }
@@ -1652,7 +1658,9 @@ AllReduceCmd::AllReduceCmd(
     : CollectiveCmd(CommandBufferCmdType::kAllReduceCmd, execution_stream_id,
                     async_from_stream_id, std::move(config)),
       reduction_kind_(reduction_kind),
-      buffers_(buffers.begin(), buffers.end()) {}
+      buffers_(buffers.begin(), buffers.end()) {
+        this->stream_id_ = 0;
+      }
 
 absl::StatusOr<const se::CommandBuffer::Command*> AllReduceCmd::Record(
     const Thunk::ExecuteParams& execute_params,
@@ -1701,8 +1709,8 @@ CommandBufferCmd::BufferUseVector AllReduceCmd::buffers() const {
     buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
   }
 #if !ENABLE_ALL_REDUCE_IN_PARALLEL_GRAPH
-  buffer_usage.emplace_back(xla::BufferAllocation::Slice(&s_alloc, 0, 8),
-              MemoryAccess::kWrite);
+  buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[0], 0, 8), MemoryAccess::kWrite);
 #endif
   return buffer_usage;
 }
@@ -1719,7 +1727,7 @@ ReduceScatterCmd::ReduceScatterCmd(
     : CollectiveCmd(CommandBufferCmdType::kReduceScatter, execution_stream_id,
                     async_from_stream_id, std::move(config)),
       reduction_kind_(reduction_kind),
-      buffers_(buffers.begin(), buffers.end()) {}
+      buffers_(buffers.begin(), buffers.end()) {this->stream_id_ = 1;}
 
 absl::StatusOr<const se::CommandBuffer::Command*> ReduceScatterCmd::Record(
     const Thunk::ExecuteParams& execute_params,
@@ -1769,8 +1777,8 @@ CommandBufferCmd::BufferUseVector ReduceScatterCmd::buffers() const {
     buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
   }
 #if !ENABLE_REDUCE_SCATTER_IN_PARALLEL_GRAPH
-  buffer_usage.emplace_back(xla::BufferAllocation::Slice(&s_alloc, 0, 8),
-              MemoryAccess::kWrite);
+  buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[1], 0, 8), MemoryAccess::kWrite);
 #endif
   return buffer_usage;
 }
@@ -1786,7 +1794,7 @@ AllToAllCmd::AllToAllCmd(ExecutionStreamId execution_stream_id,
     : CollectiveCmd(CommandBufferCmdType::kAllToAll, execution_stream_id,
                     async_from_stream_id, std::move(config)),
       has_split_dimension_(has_split_dimension),
-      buffers_(buffers.begin(), buffers.end()) {}
+      buffers_(buffers.begin(), buffers.end()) {this->stream_id_ = 2;}
 
 absl::StatusOr<const se::CommandBuffer::Command*> AllToAllCmd::Record(
     const Thunk::ExecuteParams& execute_params,
@@ -1834,8 +1842,8 @@ CommandBufferCmd::BufferUseVector AllToAllCmd::buffers() const {
     buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
   }
 #if !ENABLE_ALL_TO_ALL_IN_PARALLEL_GRAPH
-  buffer_usage.emplace_back(xla::BufferAllocation::Slice(&s_alloc, 0, 8),
-              MemoryAccess::kWrite);
+  buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[2], 0, 8), MemoryAccess::kWrite);
 #endif
   return buffer_usage;
 }
@@ -1851,7 +1859,7 @@ CollectivePermuteCmd::CollectivePermuteCmd(ExecutionStreamId execution_stream_id
     : CollectiveCmd(CommandBufferCmdType::kCollectivePermuteCmd, execution_stream_id,
                     async_from_stream_id, config.config),
       id_to_source_target_(config.id_to_source_target),
-      buffers_(buffers.begin(), buffers.end()) {}
+      buffers_(buffers.begin(), buffers.end()) {this->stream_id_ = 3;}
 
 absl::StatusOr<const se::CommandBuffer::Command*> CollectivePermuteCmd::Record(
     const Thunk::ExecuteParams& execute_params,
@@ -1908,8 +1916,8 @@ CommandBufferCmd::BufferUseVector CollectivePermuteCmd::buffers() const {
     buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
   }
 #if !ENABLE_COLLECTIVE_PERMUTE_IN_PARALLEL_GRAPH
-  buffer_usage.emplace_back(xla::BufferAllocation::Slice(&s_alloc, 0, 8),
-              MemoryAccess::kWrite);
+  buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[3], 0, 8), MemoryAccess::kWrite);
 #endif
   return buffer_usage;
 }
@@ -1925,7 +1933,7 @@ AllGatherCmd::AllGatherCmd(
     absl::Span<const NcclCollectiveThunk::Buffer> buffers)
     : CollectiveCmd(CommandBufferCmdType::kAllGatherCmd, execution_stream_id,
                     async_from_stream_id, std::move(config)),
-      buffers_(buffers.begin(), buffers.end()) {}
+      buffers_(buffers.begin(), buffers.end()) { this->stream_id_ = 4; }
 
 absl::StatusOr<const se::CommandBuffer::Command*> AllGatherCmd::Record(
     const Thunk::ExecuteParams& execute_params,
@@ -1974,8 +1982,8 @@ CommandBufferCmd::BufferUseVector AllGatherCmd::buffers() const {
     buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
   }
 #if !ENABLE_ALL_GATHER_IN_PARALLEL_GRAPH
-  buffer_usage.emplace_back(xla::BufferAllocation::Slice(&s_alloc, 0, 8),
-              MemoryAccess::kWrite);
+  buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[4], 0, 8), MemoryAccess::kWrite);
 #endif
   return buffer_usage;
 }
@@ -1991,7 +1999,7 @@ CollectiveBroadcastCmd::CollectiveBroadcastCmd(
     : CollectiveCmd(CommandBufferCmdType::kCollectiveBroadcastCmd,
                     execution_stream_id, async_from_stream_id,
                     std::move(config)),
-      buffers_(buffers.begin(), buffers.end()) {}
+      buffers_(buffers.begin(), buffers.end()) { this->stream_id_ = 5; }
 
 absl::StatusOr<const se::CommandBuffer::Command*>
 CollectiveBroadcastCmd::Record(const Thunk::ExecuteParams& execute_params,
@@ -2041,8 +2049,8 @@ CommandBufferCmd::BufferUseVector CollectiveBroadcastCmd::buffers() const {
     buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
   }
 #if !ENABLE_COLLECTIVE_BROADCAST_IN_PARALLEL_GRAPH
-  buffer_usage.emplace_back(xla::BufferAllocation::Slice(&s_alloc, 0, 8),
-              MemoryAccess::kWrite);
+  buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[5], 0, 8), MemoryAccess::kWrite);
 #endif
   return buffer_usage;
 }

@@ -50,14 +50,14 @@ std::string GetNcclVersion() { return TF_NCCL_VERSION; }
 std::string GetTensorRTVersion() { return TF_TENSORRT_VERSION; }
 std::string GetHipVersion() {
 #if TENSORFLOW_USE_ROCM
-  return TF_HIPRUNTIME_SOVERSION;
+  return TF_ROCM_VERSION >= 70000 ? "7" : TF_HIPRUNTIME_SOVERSION;
 #else   // TENSORFLOW_USE_ROCM
   return "";
 #endif  // TENSORFLOW_USE_ROCM
 }
 std::string GetRocBlasVersion() {
 #if TENSORFLOW_USE_ROCM
-  return TF_ROCBLAS_SOVERSION;
+  return TF_ROCM_VERSION >= 70000 ? "5" : TF_ROCBLAS_SOVERSION;
 #else   // TENSORFLOW_USE_ROCM
   return "";
 #endif  // TENSORFLOW_USE_ROCM

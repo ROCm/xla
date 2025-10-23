@@ -215,22 +215,33 @@ const std::vector<ReplicaGroup>& GetCollectiveReplicaGroups(
 // channel_id and (b) if it has use_global_device_ids and if yes, its value.
 absl::StatusOr<CollectiveOpGroupMode> GetCollectiveOpGroupMode(
     bool has_channel_id, std::optional<bool> use_global_device_ids) {
+
+  CollectiveOpGroupMode vv;
   if (!has_channel_id) {
     if (!use_global_device_ids.has_value() || !*use_global_device_ids) {
-      return CollectiveOpGroupMode::kCrossReplica;
+      vv = CollectiveOpGroupMode::kCrossReplica;
     } else {
       return InvalidArgument(
           "Invalid combination of has_channel_id and use_global_device_ids");
     }
   } else {
     if (!use_global_device_ids.has_value()) {
-      return CollectiveOpGroupMode::kCrossPartition;
+      vv = CollectiveOpGroupMode::kCrossPartition;
     } else if (!*use_global_device_ids) {
-      return CollectiveOpGroupMode::kCrossReplicaAndPartition;
+      vv = CollectiveOpGroupMode::kCrossReplicaAndPartition;
     } else {
-      return CollectiveOpGroupMode::kFlattenedID;
+      vv = CollectiveOpGroupMode::kFlattenedID;
     }
   }
+  //   VLOG(0) << "has_channel_id: " << has_channel_id
+  //       << " has val " << use_global_device_ids.has_value()
+  //       << " val: " << (use_global_device_ids.has_value() ? (int)*use_global_device_ids : 111)
+  //       << " final " << (int)vv;
+  // if (vv != CollectiveOpGroupMode::kCrossReplica && vv != CollectiveOpGroupMode::kFlattenedID) {
+  //   while(1);
+  // }
+    
+  return vv;
 }
 
 absl::string_view CollectiveOpGroupModeToString(
@@ -509,6 +520,7 @@ absl::StatusOr<std::vector<GlobalDeviceId>> GetParticipatingDevices(
 
   TF_ASSIGN_OR_RETURN(const DeviceAssignment::LogicalID logical_id,
                       device_assignment.LogicalIdForDevice(device_id));
+
   int current_replica_id = logical_id.replica_id;
   int current_partition_id = logical_id.computation_id;
   TF_RET_CHECK(0 <= current_replica_id && current_replica_id < replica_count)
@@ -516,6 +528,12 @@ absl::StatusOr<std::vector<GlobalDeviceId>> GetParticipatingDevices(
   TF_RET_CHECK(0 <= current_partition_id &&
                current_partition_id < partition_count)
       << current_partition_id << " " << partition_count;
+
+    // VLOG(0) << "current_replica_id " << current_replica_id <<
+    //     " replica_count " << replica_count << 
+    //     " current_partition_id " << current_partition_id << 
+    //     " partition_count " << partition_count
+    //     << " group_mode " << (int)group_mode;
 
   std::vector<GlobalDeviceId> participants;
   switch (group_mode) {

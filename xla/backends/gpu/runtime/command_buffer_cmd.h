@@ -125,7 +125,8 @@ class TracedCommandBuffer;
 class CommandBufferCmd {
  public:
 
-  constexpr static BufferAllocation::Index SpecialAllocIndex = 9999999;
+  constexpr static BufferAllocation::Index SpecialAllocStart = 9999900;
+  constexpr static BufferAllocation::Index SpecialAllocEnd = SpecialAllocStart + 100;
 
   CommandBufferCmd(CommandBufferCmdType cmd_type,
                    ExecutionStreamId execution_stream_id)
@@ -926,7 +927,8 @@ class CollectiveCmd : public TracedCommandBufferCmd {
   }
 
   CollectiveStreamId nccl_stream_id() {
-    return xla::gpu::GetCollectiveStreamId(IsAsync(), GetAsyncStreamKind());
+    return CollectiveStreamId(stream_id_);
+    //    xla::gpu::GetCollectiveStreamId(IsAsync(), GetAsyncStreamKind());
   }
 
   ExecutionStreamId async_from_stream_id() const {
@@ -938,6 +940,8 @@ class CollectiveCmd : public TracedCommandBufferCmd {
 
   ExecutionStreamId async_from_stream_id_;
   NcclCollectiveConfig config_;
+  int stream_id_ = 0; // this can be used to create different comms
+
   // TODO this value shall be the same for all but better to add it to state object ??
   //std::atomic< size_t > num_local_participants_;
   // GpuCliqueKey clique_key_;

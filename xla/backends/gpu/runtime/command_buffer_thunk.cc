@@ -104,7 +104,7 @@ bool CommandBufferThunk::ExecutorCommandBuffer::UpdateBufferAllocations(
     bool should_update = false;
     auto& recorded = recorded_allocs_[id % NumCachedGraphs];
     for (const auto idx : commands.allocs_indices()) {
-      if (idx == CommandBufferCmd::SpecialAllocIndex) continue;
+      if (idx >= CommandBufferCmd::SpecialAllocStart) continue;
       auto alloc = allocs->GetDeviceAddress(idx);
       if (!recorded[idx].IsSameAs(alloc)) {
         should_update = true;
@@ -133,7 +133,7 @@ bool CommandBufferThunk::ExecutorCommandBuffer::UpdateBufferAllocations(
   // We check only allocations referenced by commands in a cmd sequence, and
   // leave every other entry default initialized (nullptr device memory).
   for (const auto idx : commands.allocs_indices()) {
-    if (idx != CommandBufferCmd::SpecialAllocIndex) {
+    if (idx < CommandBufferCmd::SpecialAllocStart) {
       recorded[idx] = allocs->GetDeviceAddress(idx);
     }
   }
