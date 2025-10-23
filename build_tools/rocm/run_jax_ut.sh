@@ -3,7 +3,7 @@
 set -e
 
 JAX_DIR=$1
-XLA_DIR=$(pwd)
+XLA_DIR=$2
 
 pushd $JAX_DIR
 
