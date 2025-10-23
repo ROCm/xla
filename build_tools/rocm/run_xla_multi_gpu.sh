@@ -117,6 +117,7 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --flaky_test_attempts=3 \
     --keep_going \
     --test_strategy=exclusive \
+    --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx908,gfx90a,gfx942,gfx1100 \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     --action_env=NCCL_MAX_NCHANNELS=1 \
