@@ -27,17 +27,17 @@ N_BUILD_JOBS=$(grep -c ^processor /proc/cpuinfo)
 rocm-smi -i
 STATUS=$?
 if [ $STATUS -ne 0 ]; then TF_GPU_COUNT=1; else
-   TF_GPU_COUNT=$(rocm-smi -i|grep 'Device ID' |grep 'GPU' |wc -l)
+    TF_GPU_COUNT=$(rocm-smi -i | grep 'Device ID' | grep 'GPU' | wc -l)
 fi
 TF_TESTS_PER_GPU=1
 N_TEST_JOBS=$(expr ${TF_GPU_COUNT} \* ${TF_TESTS_PER_GPU})
-amdgpuname=(`rocminfo | grep gfx | head -n 1`)
+amdgpuname=($(rocminfo | grep gfx | head -n 1))
 AMD_GPU_GFX_ID=${amdgpuname[1]}
 echo ""
 echo "Bazel will use ${N_BUILD_JOBS} concurrent build job(s) and ${N_TEST_JOBS} concurrent test job(s) for gpu ${AMD_GPU_GFX_ID}."
 echo ""
 
-export PYTHON_BIN_PATH=`which python3`
+export PYTHON_BIN_PATH=$(which python3)
 export TF_NEED_ROCM=1
 export ROCM_PATH="/opt/rocm"
 
@@ -99,7 +99,7 @@ BAZEL_DISK_CACHE_SIZE=100G
 BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
 mkdir -p ${BAZEL_DISK_CACHE_DIR}
 if [ ! -d /tf/pkg ]; then
-	mkdir -p /tf/pkg
+    mkdir -p /tf/pkg
 fi
 
 SCRIPT_DIR=$(realpath $(dirname $0))
@@ -120,6 +120,8 @@ elif [[ $1 == "tsan" ]]; then
         # //xla/backends/gpu/runtime:host_execute_thunk_test_amdgpu_any
         HostExecuteStartThunkTest*
         HostExecuteDoneThunkTest*
+        # //xla/tests:select_and_scatter_test_amdgpu_any
+        SelectAndScatterTest_Instantiation*
     )
     shift
 fi
@@ -145,11 +147,14 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --run_under=//build_tools/ci:parallel_gpu_execute \
     --test_env=MIOPEN_FIND_ENFORCE=5 \
     --test_env=MIOPEN_FIND_MODE=1 \
-    --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
+    --test_filter=-$(
+        IFS=:
+        echo "${EXCLUDED_TESTS[*]}"
+    ) \
     "${SANITIZER_ARGS[@]}" \
     "$@"
 
 # clean up bazel disk_cache
 bazel shutdown \
-  --disk_cache=${BAZEL_DISK_CACHE_DIR} \
-  --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE}
+    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+    --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE}
