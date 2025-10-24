@@ -2635,6 +2635,10 @@ xla_test(
         "gpu",
         "cpu",
     ],
+    tags = [
+        "exclusive",
+        "local",
+    ],
     deps = [
         ":hlo_test_base",
         ":literal_test_util",
@@ -2672,6 +2676,10 @@ xla_test(
     },
     backends = [
         "gpu",
+    ],
+    tags = [
+        "exclusive",
+        "local",
     ],
     deps = [
         ":hlo_test_base",
@@ -2729,6 +2737,10 @@ xla_test(
     },
     backends = [
         "gpu",
+    ],
+    tags = [
+        "exclusive",
+        "local",
     ],
     deps = [
         ":hlo_runner_agnostic_test_base",
@@ -2804,7 +2816,11 @@ xla_test(
         ],
     },
     backends = ["gpu"],
-    tags = ["test_migrated_to_hlo_runner_pjrt"],
+    tags = [
+        "exclusive",
+        "local",
+        "test_migrated_to_hlo_runner_pjrt",
+    ],
     deps = [
         ":hlo_pjrt_test_base",
         ":literal_test_util",

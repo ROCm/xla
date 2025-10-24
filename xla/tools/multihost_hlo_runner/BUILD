@@ -242,7 +242,11 @@ xla_test(
         "gpu",
     ],
     data = [":hlo_file"],
-    tags = ["no_mac"],
+    tags = [
+        "exclusive",
+        "local",
+        "no_mac",
+    ],
     deps = [
         ":create_client",
         ":functional_hlo_runner",

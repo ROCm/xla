@@ -105,6 +105,10 @@ cc_library(
 xla_cc_test(
     name = "gpu_clique_key_test",
     srcs = ["gpu_clique_key_test.cc"],
+    tags = [
+        "exclusive",
+        "local",
+    ],
     deps = [
         ":gpu_clique_key",
         "//xla/core/collectives:clique_id",
@@ -450,6 +454,8 @@ xla_test(
         # go/cuda#memorysanitizer
         "nomsan",
         "no-oneapi",
+        "local",
+        "exclusive",
     ],
     visibility = ["//visibility:private"],
     deps = [

@@ -1817,6 +1817,10 @@ xla_test(
     },
     backends = ["gpu"],
     disabled_backends = [],
+    tags = [
+        "exclusive",
+        "local",
+    ],
     deps = [
         ":all_reduce",
         "//xla:array",
