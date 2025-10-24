@@ -301,65 +301,83 @@ namespace {
 class NanCheckInserter : public HloModulePass {
   absl::string_view name() const override { return "nan-check-inserter"; }
 
+  void RunOnComputation(HloModule *module, HloComputation *comp) {
+
+    auto print_options = HloPrintOptions::ShortParsable()
+                             .set_print_operand_shape(true)
+                             .set_print_extra_attributes(true);
+
+    std::vector< HloInstruction* > while_ops;
+    for (HloInstruction* instruction : comp->instructions()) {
+
+      if (instruction->opcode() == HloOpcode::kWhile) {
+        VLOG(1) << "Found while loop: processing!";
+        while_ops.push_back(instruction);
+      }
+
+      auto shape = instruction->shape();
+      if (instruction->opcode() == HloOpcode::kParameter ||
+          instruction->opcode() == HloOpcode::kConstant || !shape.IsArray() || 
+          !primitive_util::IsFloatingPointType(shape.element_type())) continue;
+
+      int32_t index = 0;
+      const HloInstruction* source = instruction;
+
+      if (instruction->opcode() == HloOpcode::kGetTupleElement) {
+        index = instruction->tuple_index();
+        source = instruction->operand(0);
+      }
+
+      auto msg = absl::StrFormat(
+          "Computation %s/%s: NaN found in result %d of %s",
+          module->name(), comp->name(), index,
+          source->ToString(print_options));
+
+      constexpr absl::string_view kOpaqueHead = "{msg = \"";
+      constexpr absl::string_view kOpaqueTail = "\"}";
+      constexpr size_t kEscapeSlack = 12;
+      std::string opaque;
+      opaque.reserve(kOpaqueHead.size() + msg.size() + kOpaqueTail.size() +
+                     kEscapeSlack);
+
+      absl::StrAppend(&opaque, kOpaqueHead);
+
+      for (char c : msg) {
+        if (c == '\\') {
+          absl::StrAppend(&opaque, "\\\\");
+        } else if (std::isprint(c) && c != '"') {
+          opaque.push_back(c);
+        } else {
+          absl::StrAppend(
+              &opaque, "\\",
+              absl::Hex(static_cast<uint8_t>(c), absl::kZeroPad2));
+        }
+      }
+
+      absl::StrAppend(&opaque, kOpaqueTail);
+
+      auto created = Cast<HloCustomCallInstruction>(
+          instruction->parent()->AddInstruction(
+              HloInstruction::CreateCustomCall(
+                  ShapeUtil::MakeTokenShape(), {instruction},
+                  kXlaGpuNanCheckCustomCallTag,
+                  std::move(opaque),
+                  API_VERSION_TYPED_FFI)));
+      created->set_custom_call_has_side_effect(true);
+    } // for
+
+    for(auto *instr :  while_ops) {
+      RunOnComputation(module, instr->while_body());
+      RunOnComputation(module, instr->while_condition());
+    }
+  }
+
   using HloPassInterface::Run;
   absl::StatusOr<bool> Run(HloModule* module,
                            const absl::flat_hash_set<absl::string_view>&
                                execution_threads) override {
-    auto print_options = HloPrintOptions::ShortParsable()
-                             .set_print_operand_shape(true)
-                             .set_print_extra_attributes(true);
-    if (HloComputation* computation = module->entry_computation()) {
-      for (HloInstruction* instruction : computation->instructions()) {
-        auto shape = instruction->shape();
-        if (instruction->opcode() != HloOpcode::kParameter &&
-            instruction->opcode() != HloOpcode::kConstant && shape.IsArray() &&
-            primitive_util::IsFloatingPointType(shape.element_type())) {
-          int32_t index = 0;
-          const HloInstruction* source = instruction;
-
-          if (instruction->opcode() == HloOpcode::kGetTupleElement) {
-            index = instruction->tuple_index();
-            source = instruction->operand(0);
-          }
-
-          auto msg = absl::StrFormat(
-              "Computation %s/%s: NaN found in result %d of %s",
-              module->name(), computation->name(), index,
-              source->ToString(print_options));
-
-          constexpr absl::string_view kOpaqueHead = "{msg = \"";
-          constexpr absl::string_view kOpaqueTail = "\"}";
-          constexpr size_t kEscapeSlack = 12;
-          std::string opaque;
-          opaque.reserve(kOpaqueHead.size() + msg.size() + kOpaqueTail.size() +
-                         kEscapeSlack);
-
-          absl::StrAppend(&opaque, kOpaqueHead);
-
-          for (char c : msg) {
-            if (c == '\\') {
-              absl::StrAppend(&opaque, "\\\\");
-            } else if (std::isprint(c) && c != '"') {
-              opaque.push_back(c);
-            } else {
-              absl::StrAppend(
-                  &opaque, "\\",
-                  absl::Hex(static_cast<uint8_t>(c), absl::kZeroPad2));
-            }
-          }
-
-          absl::StrAppend(&opaque, kOpaqueTail);
-
-          auto created = Cast<HloCustomCallInstruction>(
-              instruction->parent()->AddInstruction(
-                  HloInstruction::CreateCustomCall(
-                      ShapeUtil::MakeTokenShape(), {instruction},
-                      kXlaGpuNanCheckCustomCallTag,
-                      std::move(opaque),
-                      API_VERSION_TYPED_FFI)));
-          created->set_custom_call_has_side_effect(true);
-        }
-      }
+    if (auto* comp = module->entry_computation()) {
+      RunOnComputation(module, comp);
     }
     return true;
   }
