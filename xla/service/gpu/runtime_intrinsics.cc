@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <string>
+#include <regex>
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
@@ -131,8 +132,19 @@ absl::Status NanCheckCustomCall(
        _msg = std::string(msg),  // TODO(rocm): Do we need to make a defensive copy here
        &_nan_signal =
            *reinterpret_cast<std::atomic<uint32_t>*>(nan_signal.opaque())]() {
-        CHECK(_nan_signal.load(std::memory_order_relaxed) == 0)
-            << _msg << " on GPU " << _device_ordinal;
+        if (TF_PREDICT_FALSE(_nan_signal.load(std::memory_order_relaxed) != 0)) {
+          _nan_signal.store(0, std::memory_order_relaxed);
+          static auto filter = []() -> std::optional<std::regex> {
+            const char* pattern = std::getenv("TF_ROCM_NAN_CHECK_FILTER");
+            if (pattern == nullptr || std::strlen(pattern) == 0) {
+              return std::nullopt;
+            }
+            return std::regex(pattern);
+          }();
+          if (!filter || !std::regex_search(_msg, *filter)) {
+            LOG(FATAL) << _msg << " on GPU " << _device_ordinal;;
+          }
+        }
       });
 }
 

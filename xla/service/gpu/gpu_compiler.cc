@@ -21,6 +21,7 @@ limitations under the License.
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stack>
 #include <string>
 #include <utility>
 #include <variant>
@@ -299,26 +300,35 @@ namespace {
 
 // TODO(rocm): Move into a separate file
 class NanCheckInserter : public HloModulePass {
+  using WorkList =
+      std::stack<HloComputation*, absl::InlinedVector<HloComputation*, 8>>;
   absl::string_view name() const override { return "nan-check-inserter"; }
 
-  void RunOnComputation(HloModule *module, HloComputation *comp) {
-
+  void RunOnComputation(HloModule* module, HloComputation* comp,
+                        WorkList& to_visit) {
     auto print_options = HloPrintOptions::ShortParsable()
                              .set_print_operand_shape(true)
                              .set_print_extra_attributes(true);
 
-    std::vector< HloInstruction* > while_ops;
     for (HloInstruction* instruction : comp->instructions()) {
-
       if (instruction->opcode() == HloOpcode::kWhile) {
         VLOG(1) << "Found while loop: processing!";
-        while_ops.push_back(instruction);
+        to_visit.push(instruction->while_condition());
+        to_visit.push(instruction->while_body());
+      } else if (instruction->opcode() == HloOpcode::kConditional) {
+        VLOG(1) << "Found conditional: processing!";
+        for (auto* branch_comp : instruction->branch_computations()) {
+          to_visit.push(branch_comp);
+        }
       }
 
       auto shape = instruction->shape();
+      // TODO(rocm): Check if bitcast can be a copy, then it is not noop
       if (instruction->opcode() == HloOpcode::kParameter ||
-          instruction->opcode() == HloOpcode::kConstant || !shape.IsArray() || 
-          !primitive_util::IsFloatingPointType(shape.element_type())) continue;
+          instruction->opcode() == HloOpcode::kConstant ||
+          instruction->opcode() == HloOpcode::kBitcast || !shape.IsArray() ||
+          !primitive_util::IsFloatingPointType(shape.element_type()))
+        continue;
 
       int32_t index = 0;
       const HloInstruction* source = instruction;
@@ -328,10 +338,14 @@ class NanCheckInserter : public HloModulePass {
         source = instruction->operand(0);
       }
 
+      if (source->opcode() == HloOpcode::kWhile ||
+          source->opcode() == HloOpcode::kConditional) {
+        continue;
+      }
+
       auto msg = absl::StrFormat(
-          "Computation %s/%s: NaN found in result %d of %s",
-          module->name(), comp->name(), index,
-          source->ToString(print_options));
+          "Computation %s/%s: NaN found in result %d of %s", module->name(),
+          comp->name(), index, source->ToString(print_options));
 
       constexpr absl::string_view kOpaqueHead = "{msg = \"";
       constexpr absl::string_view kOpaqueTail = "\"}";
@@ -348,37 +362,38 @@ class NanCheckInserter : public HloModulePass {
         } else if (std::isprint(c) && c != '"') {
           opaque.push_back(c);
         } else {
-          absl::StrAppend(
-              &opaque, "\\",
-              absl::Hex(static_cast<uint8_t>(c), absl::kZeroPad2));
+          absl::StrAppend(&opaque, "\\",
+                          absl::Hex(static_cast<uint8_t>(c), absl::kZeroPad2));
         }
       }
 
       absl::StrAppend(&opaque, kOpaqueTail);
 
-      auto created = Cast<HloCustomCallInstruction>(
-          instruction->parent()->AddInstruction(
+      auto created =
+          Cast<HloCustomCallInstruction>(instruction->parent()->AddInstruction(
               HloInstruction::CreateCustomCall(
                   ShapeUtil::MakeTokenShape(), {instruction},
-                  kXlaGpuNanCheckCustomCallTag,
-                  std::move(opaque),
+                  kXlaGpuNanCheckCustomCallTag, std::move(opaque),
                   API_VERSION_TYPED_FFI)));
       created->set_custom_call_has_side_effect(true);
-    } // for
-
-    for(auto *instr :  while_ops) {
-      RunOnComputation(module, instr->while_body());
-      RunOnComputation(module, instr->while_condition());
-    }
+    }  // for
   }
 
   using HloPassInterface::Run;
   absl::StatusOr<bool> Run(HloModule* module,
                            const absl::flat_hash_set<absl::string_view>&
                                execution_threads) override {
+    WorkList to_visit;
     if (auto* comp = module->entry_computation()) {
-      RunOnComputation(module, comp);
+      to_visit.push(comp);
     }
+
+    while (!to_visit.empty()) {
+      auto* comp = to_visit.top();
+      to_visit.pop();
+      RunOnComputation(module, comp, to_visit);
+    }
+
     return true;
   }
 };
@@ -2845,7 +2860,14 @@ absl::Status GpuCompiler::RunPostSchedulingPipelines(
     pipeline.AddPass<FusionWrapper>(gpu_device_info);
   }
 
-  if (module->config().debug_options().xla_gpu_enable_nan_check()) {
+  static bool nan_check = []() {
+    const char* env = std::getenv("TF_ROCM_NAN_CHECK");
+    if (env == nullptr || std::strlen(env) == 0 || std::strcmp(env, "0") == 0) {
+      return false;
+    }
+    return true;
+  }();
+  if (module->config().debug_options().xla_gpu_enable_nan_check() || nan_check) {
     main_pipeline.AddPass<NanCheckInserter>();
   }
 
