@@ -45,7 +45,7 @@ namespace internal {
 // DLL imported variables cannot be initialized on Windows. This file is
 // included only on DLL exports.
 DECL_DLL_EXPORT std::atomic<int> g_trace_level(
-    TraceMeRecorder::kTracingDisabled);
+  TraceMeRecorder::kTracingDisabled);
 DECL_DLL_EXPORT std::atomic<uint64_t> g_trace_filter_bitmap(
     std::numeric_limits<uint64_t>::max());
 
