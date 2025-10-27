@@ -38,8 +38,9 @@ class ComplexUnaryOpTest : public ClientLibraryTestBase {
   // Otherwise, constant folding pre-computes results using HloEvaluator's
   // reference implementation (std c++), not the backend under test.
   void SetUp() override {
-    ClientLibraryTestRunnerMixin::SetUp();
-    mutable_debug_options()->add_xla_disable_hlo_passes("constant_folding");
+    ClientLibraryTestBase::SetUp();
+    execution_options_.mutable_debug_options()
+        ->add_xla_disable_hlo_passes("constant_folding");
   }
   template <typename T, size_t index, typename... Types>
   std::vector<T> get_column(const std::vector<std::tuple<Types...>>& table) {
