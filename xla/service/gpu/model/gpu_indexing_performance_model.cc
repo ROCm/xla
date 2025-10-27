@@ -673,6 +673,23 @@ GpuPerformanceModelWithIndexingAnalysis::TryFindBestTilingForFusion(
     }
 
     auto tiled_hlo_computation = std::move(maybe_tiled_hlo_computation.value());
+
+    // Reject fusions that are too complex. Large fusions can pass device
+    // constraints and cost model checks but still perform poorly in practice,
+    // especially on architectures with more shared memory.
+    // The cost model may underestimate runtime for
+    // very large fusions due to factors like instruction cache pressure,
+    // register allocation complexity, and reduced occupancy.
+    constexpr int64_t kMaxInstructionsInTritonFusion = 40;
+    auto range = tiled_hlo_computation.instructions();
+    int64_t num_instructions = std::distance(range.begin(), range.end());
+    if (num_instructions > kMaxInstructionsInTritonFusion) {
+      VLOG(2) << "Rejecting tiling: fusion has " << num_instructions 
+              << " instructions, exceeding limit of " 
+              << kMaxInstructionsInTritonFusion;
+      continue;  // Skip this tiling and try the next one
+    }
+
     LaunchDimensions launch_dimensions =
         GetLaunchDimensionsForTiledFusion(tiled_hlo_computation, *device_info_);
 
