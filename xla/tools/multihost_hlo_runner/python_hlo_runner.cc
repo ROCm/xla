@@ -32,9 +32,18 @@ limitations under the License.
 #include "xla/service/custom_call_target_registry.h"
 #include "xla/tools/multihost_hlo_runner/create_client.h"
 #include "xla/tools/multihost_hlo_runner/functional_hlo_runner.h"
-#include "xla/tools/multihost_hlo_runner/hlo_input_output_format.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/xla_data.pb.h"
+
+
+// namespace tsl {
+// namespace profiler {
+// namespace internal {
+// std::atomic<int> g_trace_level(0);
+// std::atomic<uint64_t> g_trace_filter_bitmap(
+//     std::numeric_limits<uint64_t>::max());
+// }}}
+
 
 namespace nb = ::nanobind;
 
@@ -105,8 +114,8 @@ absl::StatusOr<FunctionalHloRunner::RunningOptions> RunningOptionsFromFlags(
   out.module_argument_mode = opts.hlo_argument_mode;
   out.module_output_mode = opts.output_mode;
   out.num_repeats = static_cast<size_t>(opts.num_repeats);
-  out.num_repeats_with_profiler =
-      static_cast<size_t>(opts.num_repeats_with_profiler);
+  // out.num_repeats_with_profiler =
+  //     static_cast<size_t>(opts.num_repeats_with_profiler);
   out.log_input_output_mode =
       opts.log_output ? FunctionalHloRunner::LogOutputMode::kLogOutput
                       : FunctionalHloRunner::LogOutputMode::kNotLogOutput;
@@ -141,6 +150,9 @@ RawCompileOptionsFromFlags(const PyHloRunnerConfig& opts) {
   out.xla_gpu_dump_xspace_to = opts.xla_gpu_dump_xspace_to;
   return out;
 }
+
+
+
 
 absl::Status RunHloFiles(const std::vector<std::string>& hlo_files,
                          const PyHloRunnerConfig& opts) {
@@ -407,9 +419,7 @@ NB_MODULE(py_hlo_multihost_runner, m) {
       .value("UnoptimizedSnapshotProtoBinary",
              InputFormat::kUnoptimizedSnapshotProtoBinary)
       .value("UnoptimizedSnapshotProtoText",
-             InputFormat::kUnoptimizedSnapshotProtoText)
-      .value("SerializedPjrtExecutable",
-             InputFormat::kSerializedPjRtExecutable);
+             InputFormat::kUnoptimizedSnapshotProtoText);
 
   nb::enum_<FunctionalHloRunner::ModuleOutputMode>(m, "ModuleOutputMode")
       .value("ReturnOutputs",

@@ -1,12 +1,17 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
 load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm")
-load("//xla:xla.default.bzl", "xla_cc_binary")
+load("//xla:xla.default.bzl", "xla_cc_binary", "xla_cc_library")
 load("//xla/tests:build_defs.bzl", "xla_test")
 load("//xla/tsl:tsl.bzl", "if_cuda_or_rocm", "if_google")
 load("//xla/tsl:tsl.default.bzl", "tsl_pybind_extension")
 load("//xla/tsl/platform:build_config_root.bzl", "tf_gpu_tests_tags")
-load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library", "cc_shared_library")
+load("@xla//xla:py_strict.bzl", "py_strict_binary")
+load(
+    "@xla//third_party/py:py_import.bzl",
+    "py_import",
+)
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -255,14 +260,17 @@ xla_test(
     ],
 )
 
+xla_cc_library(
+    name = "runner_deps_so_hack",
+)
+
 tsl_pybind_extension(
     name = "py_hlo_multihost_runner",
     srcs = ["python_hlo_runner.cc"],
     deps = [
+        ":runner_deps_so_hack",
         ":create_client",
         ":functional_hlo_runner",
-        ":hlo_input_output_format",
-        ":profiler_interface",
         "//xla:debug_options_flags",
         "//xla:status_macros",
         "//xla:xla_data_proto_cc",
@@ -278,7 +286,6 @@ tsl_pybind_extension(
         "//xla/pjrt/plugin/xla_gpu:xla_gpu_allocator_config",
         "//xla/pjrt/plugin/xla_gpu:xla_gpu_client_options",
         "//xla/python:logging",
-        "//xla/service:cpu_plugin",
         "//xla/service:custom_call_target_registry",
         "//xla/service:hlo_module_util",
         "//xla/tsl/platform:statusor",
@@ -297,7 +304,6 @@ tsl_pybind_extension(
         "@tsl//tsl/platform:statusor",
     ] + if_cuda_or_rocm([
         "//xla/service:gpu_plugin",
-        "//xla/backends/profiler/gpu:cupti_tracer",
         "//xla/backends/profiler/gpu:device_tracer",
     ]) + if_cuda([
         "//xla/stream_executor:cuda_platform",
@@ -308,4 +314,24 @@ tsl_pybind_extension(
     )) + if_rocm([
         "//xla/stream_executor:rocm_platform",
     ]),
+)
+
+
+# py_import(
+#     name = "rocm_te",
+#     wheel = ":transformer_engine_rocm-2.2.0-py3-none-manylinux_2_28_x86_64.whl",
+#     wheel_deps = [],
+#     deps = [],
+# )
+
+
+py_strict_binary(
+    name = "python_hlo_runner_main",
+    srcs = ["python_hlo_runner_main.py"],
+    tags = ["gpu"],
+    deps = [
+        ":py_hlo_multihost_runner",
+        "@absl_py//absl/testing:absltest",
+        # ":rocm_te",
+    ],
 )

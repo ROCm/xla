@@ -726,7 +726,6 @@ def tsl_pybind_extension_opensource(
             compatible_with = compatible_with,
             deprecation = deprecation,
             features = features + ["-use_header_modules"],
-            licenses = licenses,
             restricted_to = restricted_to,
             shared_lib_name = so_file,
             testonly = testonly,

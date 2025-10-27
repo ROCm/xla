@@ -69,6 +69,9 @@ _XLA_SHARED_OBJECT_SENSITIVE_DEPS = if_static(extra_deps = [], otherwise = [
 def xla_cc_binary(deps = [], copts = tsl_copts(), **kwargs):
     native.cc_binary(deps = deps + _XLA_SHARED_OBJECT_SENSITIVE_DEPS, copts = copts, **kwargs)
 
+def xla_cc_library(deps = [], copts = tsl_copts(), **kwargs):
+    native.cc_library(deps = deps + _XLA_SHARED_OBJECT_SENSITIVE_DEPS, copts = copts, **kwargs)
+
 def xla_cc_test(
         name,
         deps = [],
