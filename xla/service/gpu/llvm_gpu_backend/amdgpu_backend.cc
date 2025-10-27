@@ -258,7 +258,14 @@ absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
     ir_fs->flush();
   }
 
-  if (debug_options.xla_gpu_use_inprocess_lld()) {
+  static bool use_inprocess_lld_env = []() {
+    bool inprocess_lld = false;
+    TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_INPROCESS_LLD",
+                                        /*default_val=*/true, &inprocess_lld));
+    return inprocess_lld;
+  }();
+
+  if (debug_options.xla_gpu_use_inprocess_lld() || use_inprocess_lld_env) {
 #ifdef HAS_SUPPORT_FOR_LLD_AS_A_LIBRARY
     static absl::Mutex lld_mu(absl::kConstInit);
 
@@ -657,7 +664,15 @@ absl::Status LinkROCDLIfNecessary(llvm::Module* module,
                      1000 * major + 100 * stepping + minor, 32);
   addControlVariable("__oclc_ABI_version", kAMDGPUAbiVersion, 32);
 
-  if (debug_options.xla_gpu_use_embeded_device_lib()) {
+  static bool use_embedded_device_lib_env = []() {
+    bool embedded_device_lib = false;
+    TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_EMBEDDED_DEVICE_LIB",
+                                  /*default_val=*/true, &embedded_device_lib));
+    return embedded_device_lib;
+  }();
+
+  if (debug_options.xla_gpu_use_embeded_device_lib() ||
+      use_embedded_device_lib_env) {
     llvm::Linker linker(*module);
     auto device_lib = llvm::getLazyBitcodeModule(
         {kAMDGPUDeviceLibData, "device_lib"}, module->getContext());
