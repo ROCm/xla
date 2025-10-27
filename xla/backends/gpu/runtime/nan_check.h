@@ -26,8 +26,7 @@ namespace xla::gpu {
 absl::Status LaunchNanCheckKernel(se::Stream* stream,
                                   const se::DeviceMemoryBase& buffer,
                                   const PrimitiveType element_type,
-                                  const se::DeviceMemory<uint8_t>& msg,
-                                  se::DeviceMemory<uint32_t>& abort_lock);
+                                  se::DeviceMemory<uint32_t>& nan_signal);
 
 }  // namespace xla::gpu
 

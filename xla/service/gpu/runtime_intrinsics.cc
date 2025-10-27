@@ -124,8 +124,7 @@ absl::Status NanCheckCustomCall(
   }
 
   TF_RETURN_IF_ERROR(gpu::LaunchNanCheckKernel(
-      stream, buffer.device_memory(), buffer.element_type(),
-      se::DeviceMemory<uint8_t>{}, nan_signal));
+      stream, buffer.device_memory(), buffer.element_type(), nan_signal));
 
   return stream->DoHostCallback(
       [_device_ordinal = stream->parent()->device_ordinal(),

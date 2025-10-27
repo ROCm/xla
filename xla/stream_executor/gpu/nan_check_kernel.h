@@ -30,7 +30,6 @@ struct NanCheckKernel {
   using KernelType =
       stream_executor::TypedKernel<stream_executor::DeviceMemory<ElementT>,
                                    uint64_t,
-                                   stream_executor::DeviceMemory<uint8_t>,
                                    stream_executor::DeviceMemory<uint32_t>>;
 };
 

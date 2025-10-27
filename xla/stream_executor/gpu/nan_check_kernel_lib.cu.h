@@ -31,8 +31,7 @@ limitations under the License.
 namespace stream_executor::gpu {
 
 template <typename T>
-__global__ void xla_nan_check(T* buffer, uint64_t buffer_length,
-                              const char* msg, uint32_t* abort_lock) {
+__global__ void xla_nan_check(T* buffer, uint64_t buffer_length, uint32_t* nan_signal) {
   const uint64_t block_dim_x = static_cast<uint64_t>(blockDim.x),
                  stride = block_dim_x * gridDim.x;
 
@@ -52,7 +51,7 @@ __global__ void xla_nan_check(T* buffer, uint64_t buffer_length,
     return;
   }
 
-  atomicExch(abort_lock, 1);
+  atomicExch(nan_signal, 1);
 }
 
 template <typename NativeT>
@@ -66,7 +65,7 @@ void RegisterNanCheckKernelParametrized(Platform::Id platform_id) {
   std::string kernel_name = absl::StrCat(
       xla::primitive_util::LowercasePrimitiveTypeName(p_type), "_nan_check");
 
-  stream_executor::MultiKernelLoaderSpec spec(4);
+  stream_executor::MultiKernelLoaderSpec spec(3);
   spec.AddInProcessSymbol(kernel_symbol, kernel_name);
 
   absl::Status result =

@@ -42,8 +42,7 @@ struct NanCheckParams {
   se::Stream* stream = nullptr;
   se::DeviceMemoryBase buffer{};
   PrimitiveType element_type = S1;
-  se::DeviceMemory<uint8_t> msg{};
-  se::DeviceMemory<uint32_t> abort_lock{};
+  se::DeviceMemory<uint32_t> nan_signal{};
 };
 
 template <typename ElementT>
@@ -73,16 +72,15 @@ static absl::Status LaunchNanCheckKernelTyped(const NanCheckParams& params) {
 
   return nan_check_kernel.Launch(
       dim.thread_counts_per_block(), dim.block_counts(), params.stream,
-      buffer_typed, static_cast<uint64_t>(buffer_size), params.msg,
-      params.abort_lock);
+      buffer_typed, static_cast<uint64_t>(buffer_size),
+      params.nan_signal);
 }
 
 absl::Status LaunchNanCheckKernel(se::Stream* stream,
                                   const se::DeviceMemoryBase& buffer,
                                   const PrimitiveType element_type,
-                                  const se::DeviceMemory<uint8_t>& msg,
-                                  se::DeviceMemory<uint32_t>& abort_lock) {
-  NanCheckParams params{stream, buffer, element_type, msg, abort_lock};
+                                  se::DeviceMemory<uint32_t>& nan_signal) {
+  NanCheckParams params{stream, buffer, element_type, nan_signal};
 
   auto do_launch = [&](auto cst_type) {
     using ElementT = primitive_util::NativeTypeOf<cst_type>;
