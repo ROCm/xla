@@ -22,6 +22,7 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include <unistd.h>
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -75,6 +76,9 @@ class DistributedRuntimeCoordinationServiceClient
   tensorflow::CoordinationServiceConfig config_;
   absl::Duration min_connect_barrier_timeout_;
   int task_id_;
+  // int num_nodes_ = 2;  // TODO(howdochain): make this configurable
+  // std::string master_address_;
+  // std::vector<std::string> addresses_;
 };
 
 DistributedRuntimeCoordinationServiceClient::
@@ -114,10 +118,11 @@ DistributedRuntimeCoordinationServiceClient::
     ~DistributedRuntimeCoordinationServiceClient() = default;
 
 absl::Status DistributedRuntimeCoordinationServiceClient::Connect() {
+  // auto hostname = absl::GetHostName();
+  
   absl::Status s = coord_agent_->Connect();
-
   if (s.ok()) {
-    LOG(INFO) << "Connected to distributed JAX controller";
+    LOG(INFO) << "Connected to distributed ROCM controller";
   } else if (absl::IsDeadlineExceeded(s)) {
     LOG(ERROR)
         << "Failed to connect to distributed JAX controller: waited too "

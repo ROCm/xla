@@ -28,6 +28,7 @@ limitations under the License.
 #include <unistd.h>
 #include <chrono>
 #include <unistd.h>
+#include <optional>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/string_view.h"
@@ -39,6 +40,7 @@ limitations under the License.
 
 #include "tsl/platform/errors.h"
 #include "tsl/platform/macros.h"
+#include "absl/time/time.h"
 
 namespace xla {
 namespace profiler {
@@ -161,6 +163,25 @@ struct RocmTracerEvent {
   };
 };
 
+// Distributed profiling context for multi-node timestamp synchronization
+struct DistributedProfilerContext {
+  // Network addresses of all nodes in the distributed job
+  std::vector<std::string> node_addresses;  // e.g., ["192.168.1.10:5000", "192.168.1.11:5000"]
+  
+  // Current node's index in the distributed setup
+  int node_id = -1;
+  
+  // Total number of nodes
+  int num_nodes = 1;
+  
+  // Socket configuration for timestamp exchange
+  // Enable SOF_TIMESTAMPING_RX_SOFTWARE for hardware clock synchronization
+  bool enable_socket_timestamping = false;
+  
+  // Timeout for timestamp exchange operations
+  absl::Duration timestamp_sync_timeout = absl::Seconds(5);
+};
+
 struct RocmTraceCollectorOptions {
   // Maximum number of events to collect from callback API; if -1, no limit.
   // if 0, the callback API is enabled to build a correlation map, but no
@@ -172,6 +193,9 @@ struct RocmTraceCollectorOptions {
   uint64_t max_annotation_strings;
   // Number of GPUs involved.
   uint32_t num_gpus;
+  
+  // NEW: Distributed profiling context
+  std::optional<DistributedProfilerContext> distributed_context;
 };
 
 class AnnotationMap {

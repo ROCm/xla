@@ -137,6 +137,11 @@ void RocmTracer::Enable(const RocmTracerOptions& options,
   AnnotationMap(options_->max_annotation_strings);
   api_tracing_enabled_ = true;
   activity_tracing_enabled_ = true;
+  absl::Status status = collector->InitializeDistributedSync();
+  if (!status.ok()) {
+    LOG(ERROR) << "Failed to initialize distributed timestamp synchronization: " << status;
+    return;
+  }
   rocprofiler_start_context(context_);
   LOG(INFO) << "GpuTracer started with number of GPUs = " << NumGpus();
 }

@@ -23,6 +23,7 @@ limitations under the License.
 #include "absl/strings/str_join.h"
 #include "absl/synchronization/mutex.h"
 #include "xla/stream_executor/rocm/roctracer_wrapper.h"
+#include "xla/backends/profiler/gpu/distributed_timestamp_sync.h"
 #include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
 #include "xla/tsl/util/env_var.h"
 #include "tsl/platform/abi.h"
@@ -543,6 +544,38 @@ void RocmTraceCollectorImpl::Flush() {
   api_events_map_.clear();
   auxiliary_api_events_map_.clear();
 }
+
+absl::Status RocmTraceCollectorImpl::InitializeDistributedSync() {
+  // Get distributed context from singleton (if available)
+  auto dist_ctx_opt = 
+      DistributedProfilerContextManager::Get().GetDistributedContext();
+  
+  if (!dist_ctx_opt.has_value()) {
+    VLOG(1) << "No distributed context available, single-node profiling";
+    return absl::OkStatus();
+  }
+  
+  const auto& dist_ctx = dist_ctx_opt.value();
+  
+  LOG(INFO) << "Initializing distributed timestamp synchronization...";
+  
+  // Create synchronizer with the context from singleton
+  ts_sync_ = std::make_unique<DistributedTimestampSynchronizer>(dist_ctx);
+  TF_RETURN_IF_ERROR(ts_sync_->Initialize());
+  
+  auto synced_ts = ts_sync_->GetLastSyncTimestamps();
+  LOG(INFO) << "Distributed sync initialized. Clock offset: "
+            << ts_sync_->GetClockOffset() << " ns";
+  
+  for (const auto& ts : synced_ts) {
+    LOG(INFO) << "  Node " << ts.node_id << ": " 
+              << "local=" << ts.local_ns << " ns, "
+              << "socket=" << ts.socket_ts_ns << " ns";
+  }
+  
+  return absl::OkStatus();
+}
+
 
 void RocmTraceCollectorImpl::Export(XSpace* space) {
   uint64_t end_gputime_ns = get_timestamp();

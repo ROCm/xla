@@ -408,6 +408,26 @@ cc_library(
 )
 
 cc_library(
+  name = "distributed_timestamp_sync",
+  srcs = ["distributed_timestamp_sync.cc"],
+  hdrs = ["distributed_timestamp_sync.h"],
+  tags = [
+    "gpu",
+    "manual",
+    "rocm-only",
+  ],
+  deps = [
+    ":rocm_tracer_utils",
+    "@com_google_absl//absl/log",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/synchronization",
+    "@com_google_absl//absl/time",
+    "@tsl//tsl/platform:env",
+  ],
+  visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "rocm_collector",
     srcs = ["rocm_collector.cc"],
     hdrs = ["rocm_collector.h"],
@@ -421,6 +441,7 @@ cc_library(
     deps = [
         ":rocm_tracer_utils",
         ":rocm_profiler_backend_cfg",
+        ":distributed_timestamp_sync",
         "//xla/stream_executor/rocm:roctracer_wrapper",
         "//xla/tsl/profiler/backends/cpu:annotation_stack",
         "//xla/tsl/profiler/utils:parse_annotation",

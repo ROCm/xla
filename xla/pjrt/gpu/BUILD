@@ -178,6 +178,7 @@ cc_library(
         "@local_config_cuda//cuda:cuda_headers",
     ]) + if_rocm([
         # keep sorted
+        "//xla/backends/profiler/gpu:distributed_timestamp_sync",
         "@local_config_rocm//rocm:rocm_headers",
     ]),
 )

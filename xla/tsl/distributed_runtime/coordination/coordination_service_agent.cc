@@ -244,6 +244,22 @@ absl::Status CoordinationServiceAgent::Connect() {
   }
 
   LOG(INFO) << "Coordination agent has successfully connected.";
+  auto get_hostname = []() -> std::string {
+    char hostname[256];
+    hostname[255] = '\0';
+    if (gethostname(hostname, 255) == 0) {
+      return std::string(hostname);
+    }
+    return "unknown-host";
+  };
+  auto hostname = get_hostname();
+  auto task_id = task_.task_id();
+  auto addr_key = absl::StrCat("rocm:node_addresses:", task_id);
+  auto address = absl::StrCat(hostname, ":8765");
+  absl::Status s = InsertKeyValue(addr_key, address);
+  if (!s.ok()) {
+    LOG(ERROR) << "Failed to insert key-value for node address " << task_id << ": " << s;
+  }
   heartbeat_thread_.reset(env_->StartThread(
       ThreadOptions(), kHeartbeatThread,
       absl::bind_front(&CoordinationServiceAgent::StartSendingHeartbeats,

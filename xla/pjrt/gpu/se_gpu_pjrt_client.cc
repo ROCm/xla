@@ -135,6 +135,7 @@ limitations under the License.
 #include "xla/stream_executor/gpu/gpu_cudamallocasync_allocator.h"
 #elif TENSORFLOW_USE_ROCM
 #include "rocm/rocm_config.h"
+#include "xla/backends/profiler/gpu/distributed_timestamp_sync.h"
 #endif
 
 #include "xla/service/gpu/gpu_executable_run_options.h"
@@ -155,6 +156,46 @@ absl::Status RunCallbackOnStream(se::Stream* stream,
             });
         return absl::OkStatus();
       });
+}
+
+absl::Status InitializeDistributedProfilerContext(
+  int node_id, int num_nodes, 
+  const std::vector<std::string>& node_addresses,
+  bool enable_socket_timestamping = true) {
+  
+  using xla::profiler::DistributedProfilerContext;
+  using xla::profiler::DistributedProfilerContextManager;
+
+  DistributedProfilerContext dist_ctx;
+  dist_ctx.node_id = node_id;
+  dist_ctx.num_nodes = num_nodes;
+  dist_ctx.node_addresses = node_addresses;
+  dist_ctx.enable_socket_timestamping = enable_socket_timestamping;
+  dist_ctx.timestamp_sync_timeout = absl::Seconds(5);
+
+  // Store in singleton
+  DistributedProfilerContextManager::Get().SetDistributedContext(dist_ctx);
+
+  VLOG(1) << "Distributed context stored in singleton";
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::vector<std::string>> ExchangeNodeAddresses(
+  int node_id, int num_nodes, 
+  KeyValueStoreInterface* kv_store) {
+  std::vector<std::string> addresses;
+  for (int i = 0; i < num_nodes; ++i) {
+    auto addr_key = absl::StrCat("node_addresses:", i);
+    absl::StatusOr<std::string> output =
+        kv_store->TryGet(absl::string_view(addr_key));
+    if (!output.ok()) {
+      return absl::UnavailableError(
+          absl::StrCat("Failed to get address for node ", i));
+    }
+    addresses.push_back(*output);
+  }
+  VLOG(1) << "Exchanged node addresses: " << absl::StrJoin(addresses, ", ");
+  return addresses;  
 }
 
 class GpuAsyncHostToDeviceTransferManager
@@ -1631,6 +1672,18 @@ absl::StatusOr<DeviceTopologyPair> BuildDistributedDevices(
 
   TF_ASSIGN_OR_RETURN(GpuTopologyProto gpu_topology,
                       BuildGpuTopology(global_topology));
+  // init SetDistributedContext
+  if (kv_store != nullptr) {
+    VLOG(1) << "Exchanging node addresses via KV store";
+    TF_ASSIGN_OR_RETURN(
+        auto addresses,
+        ExchangeNodeAddresses(node_id, num_nodes, kv_store.get()));
+    
+    // Store in singleton for profiler to access later
+    TF_RETURN_IF_ERROR(InitializeDistributedProfilerContext(
+        node_id, num_nodes, addresses, 
+        /*enable_socket_timestamping=*/true));
+  }
   return std::make_pair(std::move(devices), gpu_topology);
 }
 

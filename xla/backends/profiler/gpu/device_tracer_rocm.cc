@@ -159,6 +159,28 @@ RocmTraceCollectorOptions GpuTracer::GetRocmTraceCollectorOptions(
   options.max_activity_api_events = 2 * 1024 * 1024;
   options.max_annotation_strings = 1024 * 1024;
   options.num_gpus = num_gpus;
+  
+  // Initialize distributed profiling context if available
+  // This would be passed through ProfileOptions in a real implementation
+  // For now, this is a conceptual placeholder showing where the integration happens
+  //
+  // TODO(distributed-profiling): Extract from ProfileOptions:
+  //   - node_id
+  //   - num_nodes  
+  //   - node_addresses (from KeyValueStore exchange)
+  //   - enable_socket_timestamping
+  //
+  // Example flow:
+  // if (profile_options.has_distributed_profiling_config()) {
+  //   auto config = profile_options.distributed_profiling_config();
+  //   DistributedProfilerContext dist_ctx;
+  //   dist_ctx.node_id = config.node_id();
+  //   dist_ctx.num_nodes = config.num_nodes();
+  //   dist_ctx.node_addresses = GetNodeAddresses(config);  // via KV store
+  //   dist_ctx.enable_socket_timestamping = config.enable_socket_timestamping();
+  //   options.distributed_context = dist_ctx;
+  // }
+  
   return options;
 }
 

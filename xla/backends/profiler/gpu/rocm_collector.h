@@ -33,6 +33,7 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/roctracer_wrapper.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
+#include "xla/backends/profiler/gpu/distributed_timestamp_sync.h"
 
 namespace xla {
 namespace profiler {
@@ -133,6 +134,7 @@ class RocmTraceCollector {
                                uint32_t num_events) = 0;
   virtual void Flush() = 0;
   virtual void Export(XSpace* space) = 0;
+  virtual absl::Status InitializeDistributedSync() = 0;
 
  protected:
   RocmTraceCollectorOptions options_;
@@ -185,6 +187,7 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
   void AddEvent(RocmTracerEvent&& event, bool is_auxiliary) override;
   void Flush() override;
   void Export(XSpace* space) override;
+  absl::Status InitializeDistributedSync() override;
 
   void OnEventsDropped(const std::string& reason,
                        uint32_t correlation_id) override {
@@ -218,6 +221,7 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(event_maps_mutex_);
 
   absl::node_hash_map<uint32_t, PerDeviceCollector> per_device_collector_;
+  std::unique_ptr<DistributedTimestampSynchronizer> ts_sync_;
 };  // RocmTraceCollectorImpl
 
 std::unique_ptr<RocmTraceCollector> CreateRocmCollector(
