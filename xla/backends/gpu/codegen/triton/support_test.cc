@@ -2297,7 +2297,7 @@ ENTRY triton_computation {
   }
   if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
     if (absl::c_linear_search(std::vector{F8E4M3FNUZ, F8E5M2FNUZ, F8E4M3FN,
-                                          F64}, data_type)) {
+                                          S8, S16, S32, S64}, data_type)) {
       fail_mode = ExpectedFailMode::kFailOrCrash;
     }
   }
