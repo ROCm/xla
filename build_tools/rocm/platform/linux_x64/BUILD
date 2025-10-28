@@ -12,7 +12,7 @@ platform(
     ],
     exec_properties = {
         # rocm/tensorflow-build:2.18-jammy-python3.9-rocm7.0.2
-        "container-image": "docker://rocm/tensorflow-build@sha256:e4024d20eb9cfbf33dba739d5ecb962f6d32b6d768e3d51556386b3e50a780ec",
+        "container-image": "docker://rocm/tensorflow-build@sha256:a2672ff2510b369b4a5f034272a518dc93c2e492894e3befaeef19649632ccaa",
         "OSFamily": "Linux",
     },
 )
@@ -26,7 +26,7 @@ platform(
     ],
     exec_properties = {
         # rocm/tensorflow-build:2.18-jammy-python3.9-rocm7.0.2
-        "container-image": "docker://rocm/tensorflow-build@sha256:e4024d20eb9cfbf33dba739d5ecb962f6d32b6d768e3d51556386b3e50a780ec",
+        "container-image": "docker://rocm/tensorflow-build@sha256:a2672ff2510b369b4a5f034272a518dc93c2e492894e3befaeef19649632ccaa",
         "OSFamily": "Linux",
         "Pool": "linux_x64_gpu",
     },
