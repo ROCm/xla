@@ -423,5 +423,134 @@ ENTRY main {
 }
 
 
+TEST_F(TritonFusionNumericsVerifierTest, SoftmaxDebugNVH100) {
+  absl::string_view hlo_text = R"(
+HloModule fused_computation.1242_standalone
+
+%region_1.1358.clone.19 (Arg_0.109: f32[], Arg_1.109: f32[]) -> f32[] {
+  %Arg_0.109 = f32[] parameter(0), metadata={op_name="jit(train_step)/jit(main)/Transformer.encode/encoder/while/body/encoder/pre_attention_layer_norm/reduce_sum"}
+  %Arg_1.109 = f32[] parameter(1), metadata={op_name="jit(train_step)/jit(main)/Transformer.encode/encoder/while/body/encoder/pre_attention_layer_norm/reduce_sum"}
+  ROOT %add.2499.0 = f32[] add(%Arg_0.109, %Arg_1.109), metadata={op_name="jit(train_step)/jit(main)/Transformer.encode/encoder/while/body/encoder/pre_attention_layer_norm/reduce_sum" source_file="/workspace/k-diffusion-jax/t5x/layers_scalable.py" source_line=722}
+}
+
+%region_1.1358.clone.31 (Arg_0.121: f32[], Arg_1.121: f32[]) -> f32[] {
+  %Arg_0.121 = f32[] parameter(0), metadata={op_name="jit(train_step)/jit(main)/Transformer.encode/encoder/while/body/encoder/pre_attention_layer_norm/reduce_sum"}
+  %Arg_1.121 = f32[] parameter(1), metadata={op_name="jit(train_step)/jit(main)/Transformer.encode/encoder/while/body/encoder/pre_attention_layer_norm/reduce_sum"}
+  ROOT %add.2515.0 = f32[] add(%Arg_0.121, %Arg_1.121), metadata={op_name="jit(train_step)/jit(main)/Transformer.encode/encoder/while/body/encoder/pre_attention_layer_norm/reduce_sum" source_file="/workspace/k-diffusion-jax/t5x/layers_scalable.py" source_line=722}
+}
+
+%region_1.1358.clone.32 (Arg_0.122: f32[], Arg_1.122: f32[]) -> f32[] {
+  %Arg_0.122 = f32[] parameter(0), metadata={op_name="jit(train_step)/jit(main)/Transformer.encode/encoder/while/body/encoder/pre_attention_layer_norm/reduce_sum"}
+  %Arg_1.122 = f32[] parameter(1), metadata={op_name="jit(train_step)/jit(main)/Transformer.encode/encoder/while/body/encoder/pre_attention_layer_norm/reduce_sum"}
+  ROOT %add.2516.0 = f32[] add(%Arg_0.122, %Arg_1.122), metadata={op_name="jit(train_step)/jit(main)/Transformer.encode/encoder/while/body/encoder/pre_attention_layer_norm/reduce_sum" source_file="/workspace/k-diffusion-jax/t5x/layers_scalable.py" source_line=722}
+}
+
+%region_1.1358.clone.30 (Arg_0.120: f32[], Arg_1.120: f32[]) -> f32[] {
+  %Arg_0.120 = f32[] parameter(0), metadata={op_name="jit(train_step)/jit(main)/Transformer.encode/encoder/while/body/encoder/pre_attention_layer_norm/reduce_sum"}
+  %Arg_1.120 = f32[] parameter(1), metadata={op_name="jit(train_step)/jit(main)/Transformer.encode/encoder/while/body/encoder/pre_attention_layer_norm/reduce_sum"}
+  ROOT %add.2513.0 = f32[] add(%Arg_0.120, %Arg_1.120), metadata={op_name="jit(train_step)/jit(main)/Transformer.encode/encoder/while/body/encoder/pre_attention_layer_norm/reduce_sum" source_file="/workspace/k-diffusion-jax/t5x/layers_scalable.py" source_line=722}
+}
+
+%fused_computation.1242 (param_0.4366: f32[1,11160,6,5120], param_1.4391: f32[1,11160,1], param_2.3040: bf16[11160,5120], param_3.1916: bf16[1,11160,5120], param_4.1406: f32[1,11160,5120], param_5.1139: bf16[6,5120], param_6.1021: bf16[5120], param_7.1027: f32[1,11160], param_8.684: f32[1,11160,5120]) -> (bf16[1,11160,5120], bf16[1,11160,5120]) {
+  %param_3.1916 = bf16[1,11160,5120]{2,1,0} parameter(3)
+  %param_4.1406 = f32[1,11160,5120]{2,1,0} parameter(4)
+  %bitcast.12036.clone.1 = f32[11160,5120]{1,0} bitcast(%param_4.1406)
+  %constant_7179_clone_1 = f32[] constant(0)
+  %reduce.1451.clone.1 = f32[11160]{0} reduce(%bitcast.12036.clone.1, %constant_7179_clone_1), dimensions={1}, to_apply=%region_1.1358.clone.19, metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/reduce_sum" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=117}
+  %bitcast.12035.clone.1 = f32[1,11160]{1,0} bitcast(%reduce.1451.clone.1), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/reduce_sum" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=117}
+  %constant_7178_clone_1 = f32[] constant(0.000195312503)
+  %broadcast.8054.clone.1 = f32[1,11160]{1,0} broadcast(%constant_7178_clone_1), dimensions={}
+  %multiply.3320.clone.1 = f32[1,11160]{1,0} multiply(%bitcast.12035.clone.1, %broadcast.8054.clone.1), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/div" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=117}
+  %bitcast.12034.clone.1 = f32[11160]{0} bitcast(%multiply.3320.clone.1), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/div" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=117}
+  %broadcast.8053.clone.1 = f32[1,11160,5120]{2,1,0} broadcast(%bitcast.12034.clone.1), dimensions={1}, metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/sub" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=214}
+  %subtract.334.clone.1 = f32[1,11160,5120]{2,1,0} subtract(%param_4.1406, %broadcast.8053.clone.1), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/sub" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=214}
+  %param_8.684 = f32[1,11160,5120]{2,1,0} parameter(8)
+  %param_6.1021 = bf16[5120]{0} parameter(6)
+  %convert.452.10 = f32[5120]{0} convert(%param_6.1021), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/convert_element_type" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=217}
+  %broadcast.3888.24 = f32[1,11160,5120]{2,1,0} broadcast(%convert.452.10), dimensions={2}, metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/mul" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=217}
+  %multiply.1681.5 = f32[1,11160,5120]{2,1,0} multiply(%param_8.684, %broadcast.3888.24), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/mul" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=217}
+  %bitcast.9479.3 = f32[11160,5120]{1,0} bitcast(%multiply.1681.5)
+  %reduce.875.3 = f32[11160]{0} reduce(%bitcast.9479.3, %constant_7179_clone_1), dimensions={1}, to_apply=%region_1.1358.clone.30, metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/reduce_sum" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=217}
+  %bitcast.374.3 = f32[1,11160,1]{2,1,0} bitcast(%reduce.875.3), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/reduce_sum" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=217}
+  %param_1.4391 = f32[1,11160,1]{2,1,0} parameter(1)
+  %param_7.1027 = f32[1,11160]{1,0} parameter(7)
+  %bitcast.316.6 = f32[1,11160,1]{2,1,0} bitcast(%param_7.1027), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/add" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=215}
+  %divide.340.5 = f32[1,11160,1]{2,1,0} divide(%param_1.4391, %bitcast.316.6), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/div" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=215}
+  %constant_2726_5 = f32[] constant(-0.5)
+  %broadcast.3925.30 = f32[1,11160,1]{2,1,0} broadcast(%constant_2726_5), dimensions={}
+  %multiply.1682.5 = f32[1,11160,1]{2,1,0} multiply(%divide.340.5, %broadcast.3925.30), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/mul" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=215}
+  %multiply.1683.3 = f32[1,11160,1]{2,1,0} multiply(%bitcast.374.3, %multiply.1682.5), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/mul" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=215}
+  %constant_2727_5 = f32[] constant(0.000390625)
+  %broadcast.3926.8 = f32[1,11160,1]{2,1,0} broadcast(%constant_2727_5), dimensions={}, metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln2/ln2.forward/mul" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=57}
+  %multiply.1684.3 = f32[1,11160,1]{2,1,0} multiply(%multiply.1683.3, %broadcast.3926.8), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/mul" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=57}
+  %bitcast.375.11.clone.1 = f32[11160]{0} bitcast(%multiply.1684.3), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/mul" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=57}
+  %broadcast.3955.11.clone.1 = f32[1,11160,5120]{2,1,0} broadcast(%bitcast.375.11.clone.1), dimensions={1}, metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/mul" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=57}
+  %multiply.1685.9.clone.1 = f32[1,11160,5120]{2,1,0} multiply(%subtract.334.clone.1, %broadcast.3955.11.clone.1), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/mul" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=57}
+  %bitcast.9481.7 = f32[11160,5120]{1,0} bitcast(%multiply.1685.9.clone.1)
+  %reduce.876.7 = f32[11160]{0} reduce(%bitcast.9481.7, %constant_7179_clone_1), dimensions={1}, to_apply=%region_1.1358.clone.31, metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/reduce_sum" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=141}
+  %bitcast.9482.5 = f32[1,11160]{1,0} bitcast(%reduce.876.7), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/reduce_sum" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=141}
+  %negate.142.5 = f32[1,11160]{1,0} negate(%bitcast.9482.5), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/neg" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=141}
+  %param_2.3040 = bf16[11160,5120]{1,0} parameter(2)
+  %bitcast.373.19 = bf16[1,11160,5120]{2,1,0} bitcast(%param_2.3040), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/cross_attn/cross_attn.forward/q/q.forward/...b,ba->...a/dot_general" source_file="/workspace/k-diffusion-jax/szg_lib/nn/linear.py" source_line=65}
+  %convert.1568.19 = f32[1,11160,5120]{2,1,0} convert(%bitcast.373.19), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/convert_element_type" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=223}
+  %bitcast.317.27 = f32[11160]{0} bitcast(%param_1.4391), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/rsqrt" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=215}
+  %broadcast.3886.27 = f32[1,11160,5120]{2,1,0} broadcast(%bitcast.317.27), dimensions={1}, metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/mul" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=217}
+  %multiply.1611.19 = f32[1,11160,5120]{2,1,0} multiply(%broadcast.3886.27, %broadcast.3888.24), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/ln3/ln3.forward/mul" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=217}
+  %multiply.1686.11 = f32[1,11160,5120]{2,1,0} multiply(%convert.1568.19, %multiply.1611.19), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/mul" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=219}
+  %bitcast.9483.5 = f32[11160,5120]{1,0} bitcast(%multiply.1686.11)
+  %reduce.877.5 = f32[11160]{0} reduce(%bitcast.9483.5, %constant_7179_clone_1), dimensions={1}, to_apply=%region_1.1358.clone.32, metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/reduce_sum" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=214}
+  %bitcast.9484.3 = f32[1,11160]{1,0} bitcast(%reduce.877.5), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/reduce_sum" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=214}
+  %negate.143.3 = f32[1,11160]{1,0} negate(%bitcast.9484.3), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/neg" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=214}
+  %add.1089.3 = f32[1,11160]{1,0} add(%negate.142.5, %negate.143.3), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/add_any" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=214}
+  %multiply.1687.3 = f32[1,11160]{1,0} multiply(%add.1089.3, %broadcast.8054.clone.1), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/div" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=117}
+  %bitcast.376.7.clone.1 = f32[11160]{0} bitcast(%multiply.1687.3), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/div" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=117}
+  %broadcast.3958.7.clone.1 = f32[1,11160,5120]{2,1,0} broadcast(%bitcast.376.7.clone.1), dimensions={1}, metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/broadcast_in_dim" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=117}
+  %add.1090.5.clone.1 = f32[1,11160,5120]{2,1,0} add(%multiply.1685.9.clone.1, %broadcast.3958.7.clone.1), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/add_any" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=117}
+  %convert.482.3.clone.1 = bf16[1,11160,5120]{2,1,0} convert(%add.1090.5.clone.1), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/convert_element_type" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=113}
+  %add.1091.1.clone.1 = bf16[1,11160,5120]{2,1,0} add(%param_3.1916, %convert.482.3.clone.1), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/add_any" source_file="/usr/local/lib/python3.10/dist-packages/flax/linen/normalization.py" source_line=113}
+  %convert.483.3.clone.1 = bf16[1,11160,5120]{2,1,0} convert(%multiply.1686.11), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/convert_element_type" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=214}
+  %add.1092.1.clone.1 = bf16[1,11160,5120]{2,1,0} add(%add.1091.1.clone.1, %convert.483.3.clone.1), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/ln3/ln3.forward/add_any" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=214}
+  %convert.484.4 = f32[1,11160,5120]{2,1,0} convert(%add.1092.1.clone.1), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/convert_element_type" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=180}
+  %param_0.4366 = f32[1,11160,6,5120]{3,1,2,0} parameter(0)
+  %bitcast.2686.37 = f32[1,6,11160,5120]{3,2,1,0} bitcast(%param_0.4366)
+  %param_5.1139 = bf16[6,5120]{1,0} parameter(5)
+  %convert.432.7 = f32[6,5120]{1,0} convert(%param_5.1139), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/convert_element_type" source_file="/workspace/k-diffusion-jax/szg_lib/nn/transformer.py" source_line=218}
+  %broadcast.6560.37 = f32[1,6,11160,5120]{3,2,1,0} broadcast(%convert.432.7), dimensions={1,3}, metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/add" source_file="/workspace/k-diffusion-jax/szg_lib/nn/transformer.py" source_line=218}
+  %add.2798.37 = f32[1,6,11160,5120]{3,2,1,0} add(%bitcast.2686.37, %broadcast.6560.37), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/add" source_file="/workspace/k-diffusion-jax/szg_lib/nn/transformer.py" source_line=218}
+  %slice.957.3 = f32[1,1,11160,5120]{3,2,1,0} slice(%add.2798.37), slice={[0:1], [2:3], [0:11160], [0:5120]}, metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/slice" source_file="/workspace/k-diffusion-jax/szg_lib/nn/transformer.py" source_line=244}
+  %bitcast.312.4 = f32[1,11160,5120]{2,1,0} bitcast(%slice.957.3), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/rematted_computation/blocks/blocks.forward/slice" source_file="/workspace/k-diffusion-jax/szg_lib/nn/transformer.py" source_line=244}
+  %multiply.1690.3 = f32[1,11160,5120]{2,1,0} multiply(%convert.484.4, %bitcast.312.4), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/mul" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=178}
+  %convert.485.1 = bf16[1,11160,5120]{2,1,0} convert(%multiply.1690.3), metadata={op_name="jit(train_step)/jit(main)/transpose(jvp(CausalWanXModel.loss_ode_regression))/CausalWanXModel.forward/transformer/transformer.forward/while/body/checkpoint/blocks/blocks.forward/convert_element_type" source_file="/workspace/k-diffusion-jax/szg_lib/nn/norm.py" source_line=141}
+  ROOT %tuple.113 = (bf16[1,11160,5120]{2,1,0}, bf16[1,11160,5120]{2,1,0}) tuple(%convert.485.1, %add.1092.1.clone.1)
+}
+
+ENTRY main {
+  %param_0 = f32[1,11160,6,5120]{3,1,2,0} parameter(0)
+  %param_1 = f32[1,11160,1]{2,1,0} parameter(1)
+  %param_2 = bf16[11160,5120]{1,0} parameter(2)
+  %param_3 = bf16[1,11160,5120]{2,1,0} parameter(3)
+  %param_4 = f32[1,11160,5120]{2,1,0} parameter(4)
+  %param_5 = bf16[6,5120]{1,0} parameter(5)
+  %param_6 = bf16[5120]{0} parameter(6)
+  %param_7 = f32[1,11160]{1,0} parameter(7)
+  %param_8 = f32[1,11160,5120]{2,1,0} parameter(8)
+  ROOT %fusion = (bf16[1,11160,5120]{2,1,0}, bf16[1,11160,5120]{2,1,0}) fusion(%param_0, %param_1, %param_2, %param_3, %param_4, %param_5, %param_6, %param_7, %param_8), kind=kCustom,
+  calls=%fused_computation.1242, backend_config={
+    "fusion_backend_config":{
+    "kind":"__triton",
+    "block_level_fusion_config":{
+      "output_tiles":[{"sizes":["1","2","5120"]},{"sizes":["1","2","5120"]}],
+      "num_warps":"8",
+      "num_ctas":"1",
+      "num_stages":"1"}}}
+}
+  )";
+  auto module = Module(hlo_text, "");
+  EXPECT_NE(TritonFusion(*module), nullptr);
+  auto verifier = TritonFusionNumericsVerifier(CreateAutotuneConfig());
+  TF_EXPECT_OK(verifier.Run(module.get(), /*execution_threads=*/{}));
+}
+
+
 }  // namespace
 }  // namespace xla::gpu
