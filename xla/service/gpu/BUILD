@@ -360,6 +360,7 @@ cc_library(
         "//xla/backends/gpu/runtime:fft_thunk",
         "//xla/backends/gpu/runtime:gemm_thunk",
         "//xla/backends/gpu/runtime:gpublas_lt_matmul_thunk",
+        "//xla/backends/gpu/runtime:nan_check_thunk",
         "//xla/backends/gpu/runtime:host_send_recv_thunk",
         "//xla/backends/gpu/runtime:infeed_thunk",
         "//xla/backends/gpu/runtime:kernel_thunk",

@@ -155,6 +155,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/triangular_solve_thunk.h"
 #include "xla/backends/gpu/runtime/wait_for_streams_thunk.h"
 #include "xla/backends/gpu/runtime/while_thunk.h"
+#include "xla/backends/gpu/runtime/nan_check_thunk.h"
 #include "xla/service/gpu/stream_executor_util.h"
 #include "xla/service/gpu/triton_call.h"
 #include "xla/service/llvm_ir/buffer_assignment_util.h"
@@ -1515,6 +1516,26 @@ absl::Status IrEmitterUnnested::EmitTritonCustomCall(
   return absl::OkStatus();
 }
 
+absl::Status IrEmitterUnnested::EmitNanCheckCustomCall(
+    const HloCustomCallInstruction* instr) {
+  auto operands = instr->operands();
+  TF_RET_CHECK(operands.size() >= 1)
+      << "Expect at least 1 operand for NanCheck custom call.";
+
+  std::vector<BufferAllocation::Slice> buffers;
+  buffers.reserve(operands.size());
+  for (auto operand : operands) {
+    TF_ASSIGN_OR_RETURN(BufferAllocation::Slice buffer,
+                        GetAllocationSliceForHlo(operand));
+    buffers.push_back(buffer);
+  }
+
+  auto thunk = std::make_unique<NanCheckThunk>(
+      Thunk::ThunkInfo::WithProfileAnnotation(instr), operands[0], std::move(buffers));
+  AddThunkToThunkSequence(std::move(thunk));
+  return absl::OkStatus();
+}
+
 absl::Status IrEmitterUnnested::EmitAsyncComputation(
     const HloInstruction* instr) {
   const HloInstruction* wrapped = instr->async_wrapped_instruction();
@@ -2809,6 +2830,9 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
       }
       if (instr->custom_call_target() == kNopCustomCallTarget) {
         return absl::OkStatus();
+      }
+      if (instr->custom_call_target() == "__xla_gpu_nan_check") {
+        return EmitNanCheckCustomCall(custom_call);
       }
       return EmitCustomCallThunk(custom_call);
     }

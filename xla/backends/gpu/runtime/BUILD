@@ -645,6 +645,29 @@ cc_library(
     ],
 )
 
+
+cc_library(
+    name = "nan_check_thunk",
+    srcs = ["nan_check_thunk.cc"],
+    hdrs = ["nan_check_thunk.h"],
+    deps = [
+        ":thunk",
+        "//xla:status_macros",
+        "//xla/backends/gpu/runtime:nan_check",
+        "//xla/service:buffer_assignment",
+        "//xla/service/gpu:buffer_allocations",
+        "//xla/stream_executor:device_memory",
+        "//xla/stream_executor:stream",
+        "//xla/tools:hlo_decomposer_lib",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/synchronization",
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform:statusor",
+    ],
+)
+
 cc_library(
     name = "infeed_thunk",
     srcs = ["infeed_thunk.cc"],

@@ -140,6 +140,7 @@ class IrEmitterUnnested : public IrEmitter {
   absl::Status EmitTriangularSolveCustomCall(const HloInstruction* instr);
   absl::Status EmitTopKCustomCall(const HloCustomCallInstruction* instr);
   absl::Status EmitTritonCustomCall(const HloCustomCallInstruction* instr);
+  absl::Status EmitNanCheckCustomCall(const HloCustomCallInstruction* instr);
 
   absl::Status EmitSendThunk(const HloSendInstruction* instr);
   absl::Status EmitSendDoneThunk(const HloSendDoneInstruction* instr);

@@ -342,39 +342,24 @@ class NanCheckInserter : public HloModulePass {
           source->opcode() == HloOpcode::kConditional) {
         continue;
       }
+      absl::InlinedVector<HloInstruction*, 8> args;
+      args.push_back(instruction);
 
-      auto msg = absl::StrFormat(
-          "Computation %s/%s: NaN found in result %d of %s", module->name(),
-          comp->name(), index, source->ToString(print_options));
-
-      constexpr absl::string_view kOpaqueHead = "{msg = \"";
-      constexpr absl::string_view kOpaqueTail = "\"}";
-      constexpr size_t kEscapeSlack = 12;
-      std::string opaque;
-      opaque.reserve(kOpaqueHead.size() + msg.size() + kOpaqueTail.size() +
-                     kEscapeSlack);
-
-      absl::StrAppend(&opaque, kOpaqueHead);
-
-      for (char c : msg) {
-        if (c == '\\') {
-          absl::StrAppend(&opaque, "\\\\");
-        } else if (std::isprint(c) && c != '"') {
-          opaque.push_back(c);
-        } else {
-          absl::StrAppend(&opaque, "\\",
-                          absl::Hex(static_cast<uint8_t>(c), absl::kZeroPad2));
+      if (!source->IsAsynchronous() &&
+          absl::c_all_of(source->operands(),
+                         [](const auto op) { return op->shape().IsArray(); })) {
+        for (auto op : source->operands()) {
+          if (!op->IsConstant()) {
+            args.push_back(op);
+          }
         }
       }
-
-      absl::StrAppend(&opaque, kOpaqueTail);
 
       auto created =
           Cast<HloCustomCallInstruction>(instruction->parent()->AddInstruction(
               HloInstruction::CreateCustomCall(
-                  ShapeUtil::MakeTokenShape(), {instruction},
-                  kXlaGpuNanCheckCustomCallTag, std::move(opaque),
-                  API_VERSION_TYPED_FFI)));
+                  ShapeUtil::MakeTokenShape(), args,
+                  kXlaGpuNanCheckCustomCallTag, "", API_VERSION_ORIGINAL)));
       created->set_custom_call_has_side_effect(true);
     }  // for
   }

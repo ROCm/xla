@@ -295,6 +295,7 @@ Thunk::ExecuteParams::ExecuteParams(
     CASE(kTriangularSolve);
     CASE(kWaitForStreams);
     CASE(kWhile);
+    CASE(kNanCheck);
     // # go/keep-sorted end
   }
 }
