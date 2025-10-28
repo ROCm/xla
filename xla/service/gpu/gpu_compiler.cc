@@ -310,6 +310,12 @@ class NanCheckInserter : public HloModulePass {
                              .set_print_operand_shape(true)
                              .set_print_extra_attributes(true);
 
+    auto is_async_start = [](const HloInstruction* inst) {
+      // TODO(rocm): Use switch
+      auto name = HloOpcodeString(inst->opcode());
+      return name.find("-start") != name.npos;
+    };
+
     for (HloInstruction* instruction : comp->instructions()) {
       if (instruction->opcode() == HloOpcode::kWhile) {
         VLOG(1) << "Found while loop: processing!";
@@ -326,7 +332,9 @@ class NanCheckInserter : public HloModulePass {
       // TODO(rocm): Check if bitcast can be a copy, then it is not noop
       if (instruction->opcode() == HloOpcode::kParameter ||
           instruction->opcode() == HloOpcode::kConstant ||
-          instruction->opcode() == HloOpcode::kBitcast || !shape.IsArray() ||
+          instruction->opcode() == HloOpcode::kBitcast ||
+          is_async_start(instruction) || 
+          !shape.IsArray() ||
           !primitive_util::IsFloatingPointType(shape.element_type()))
         continue;
 
@@ -345,9 +353,9 @@ class NanCheckInserter : public HloModulePass {
       absl::InlinedVector<HloInstruction*, 8> args;
       args.push_back(instruction);
 
-      if (!source->IsAsynchronous() &&
+      if (!is_async_start(source) &&
           absl::c_all_of(source->operands(),
-                         [](const auto op) { return op->shape().IsArray(); })) {
+                         [&](const auto op) { return op->shape().IsArray() && !is_async_start(op); })) {
         for (auto op : source->operands()) {
           if (!op->IsConstant()) {
             args.push_back(op);
