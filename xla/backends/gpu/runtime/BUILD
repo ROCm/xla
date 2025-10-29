@@ -659,6 +659,7 @@ cc_library(
         "//xla/stream_executor:device_memory",
         "//xla/stream_executor:stream",
         "//xla/tools:hlo_decomposer_lib",
+        "//xla/tsl/util:env_var",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",

@@ -31,6 +31,7 @@ limitations under the License.
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/tools/hlo_decomposer.h"
+#include "xla/tsl/util/env_var.h"
 #include "xla/tsl/lib/strings/proto_serialization.h"
 #include "xla/tsl/platform/threadpool.h"
 #include "tsl/platform/logging.h"
@@ -112,9 +113,26 @@ void NanCheckThunk::Postprocess(
 
   nan_signal.store(0, std::memory_order_relaxed);
 
+  static auto check_device = []() -> std::optional<int64_t> {
+    int64_t device_id;
+    TF_CHECK_OK(tsl::ReadInt64FromEnvVar("TF_ROCM_NAN_CHECK_DEVICE",
+                                         /*default_val=*/-1, &device_id));
+    if (device_id == -1) {
+      return std::nullopt;
+    }
+    return device_id;
+  }();
+
+  int64_t device_ordinal = stream->parent()->device_ordinal();
+  if (check_device && *check_device != device_ordinal) {
+    return;
+  }
+
   static auto filter = []() -> std::optional<std::regex> {
-    const char* pattern = std::getenv("TF_ROCM_NAN_CHECK_FILTER");
-    if (pattern == nullptr || std::strlen(pattern) == 0) {
+    std::string pattern;
+    TF_CHECK_OK(tsl::ReadStringFromEnvVar("TF_ROCM_NAN_CHECK_FILTER",
+                                          /*default_val=*/"", &pattern));
+    if (pattern.empty()) {
       return std::nullopt;
     }
     return std::regex(pattern);
@@ -188,6 +206,7 @@ void NanCheckThunk::Postprocess(
         }
 
         TF_RETURN_IF_ERROR(transfer_stream->BlockHostUntilDone());
+        return absl::OkStatus();
       }
     }));
 
@@ -209,13 +228,35 @@ void NanCheckThunk::Postprocess(
     return absl::OkStatus();
   };
 
-  auto status = dump_snapshoot();
+  static auto check_count = []() -> std::atomic<int64_t> {
+    int64_t count;
+    TF_CHECK_OK(tsl::ReadInt64FromEnvVar("TF_ROCM_NAN_CHECK_COUNT",
+                                         /*default_val=*/1, &count));
+    return count;
+  }();
 
-  if (!status.ok()) {
-    LOG(ERROR) << "Failed to save hlo snapshoot: " << status.message();
+  int64_t count = check_count.fetch_sub(1);
+
+  LOG(INFO) << "COUNT " << count;
+
+  bool do_abort = count <= 1;
+
+  bool do_snapshoot =
+      do_abort;  // Workaround for now since we leak stream on snapshoot dump.
+
+  if (do_snapshoot) {
+    auto status = dump_snapshoot();
+
+    if (!status.ok()) {
+      LOG(ERROR) << "Failed to save hlo snapshoot: " << status.message();
+    }
   }
 
-  LOG(FATAL) << msg << " on GPU " << stream->parent()->device_ordinal();
+  LOG(ERROR) << msg << " on GPU " << device_ordinal;
+
+  if (do_abort) {
+    std::abort();
+  }
 }
 
 absl::Status NanCheckThunk::Initialize(const InitializeParams& params) {
