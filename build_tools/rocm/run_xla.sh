@@ -105,6 +105,7 @@ fi
 SCRIPT_DIR=$(realpath $(dirname $0))
 TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),-multigpu,-multi_gpu_h100,requires-gpu-amd,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
 
+RBE_OPTIONS=()
 SANITIZER_ARGS=()
 if [[ $1 == "asan" ]]; then
     SANITIZER_ARGS+=("--config=asan")
@@ -120,8 +121,12 @@ elif [[ $1 == "tsan" ]]; then
         # //xla/backends/gpu/runtime:host_execute_thunk_test_amdgpu_any
         HostExecuteStartThunkTest*
         HostExecuteDoneThunkTest*
-        # //xla/tests:select_and_scatter_test_amdgpu_any
-        SelectAndScatterTest_Instantiation*
+    )
+
+    #  tsan tests appear to be flaky in rbe due to the heavy load
+    #  force them to run locally
+    RBE_OPTIONS+=(
+         --strategy=TestRunner=local
     )
     shift
 fi
@@ -147,12 +152,10 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --run_under=//build_tools/ci:parallel_gpu_execute \
     --test_env=MIOPEN_FIND_ENFORCE=5 \
     --test_env=MIOPEN_FIND_MODE=1 \
-    --test_filter=-$(
-        IFS=:
-        echo "${EXCLUDED_TESTS[*]}"
-    ) \
+    --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
     "${SANITIZER_ARGS[@]}" \
-    "$@"
+    "$@" \
+    "${RBE_OPTIONS[@]}"
 
 # clean up bazel disk_cache
 bazel shutdown \
