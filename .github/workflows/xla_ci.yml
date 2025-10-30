@@ -147,7 +147,7 @@ jobs:
 
   # Job for the main test matrix
   xla-tests:
-    name: Test ${{ matrix.platform_name }} arch (${{ matrix.mode_name }})
+    name: Test
     needs: setup
     runs-on: [self-hosted, ${{ matrix.labels }}]
     timeout-minutes: 720
