@@ -935,7 +935,13 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       // Continue below transforming new_add.
       instr = new_add;
     }
-
+    // Detect gfx950; disable matrix‑bias fusion.
+    bool IsGFX950 = false;
+    if (IsRocm(gpu_version_)) {
+      TF_ASSIGN_OR_RETURN(auto rocm_compute_capability,
+                        GetRocmComputeCapability(gpu_version_));
+      IsGFX950 = rocm_compute_capability.gfx9_mi350();
+    }
     // Attempt to fuse matrix bias into gemm with optional convert
     // add(convert(gemm(a, b)), c) -> gemm(a, b, c)
     // add(gemm(a, b), c) -> gemm(a, b, c)
@@ -970,8 +976,9 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
           (instr->user_count() == 1 &&
            instr->users()[0]->opcode() == HloOpcode::kTuple &&
            instr->users()[0]->user_count() == 0);
-
-      if (types_are_supported && has_no_consumer) {
+      // MI355X: Temporarily disable FuseMatrixBiasAdd on gfx950 due to a known FP8 stability
+      // issue in hipBLASLt when matrix bias is used. This expects to re-enable after the next hipBLASLt release.      
+      if (types_are_supported && has_no_consumer && !IsGFX950) {
         return FuseMatrixBiasAdd(instr, bias, existing_gemm);
       }
     }
@@ -989,7 +996,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                   m::Op(&bias).WithPredicate(is_not_broadcast)))) {
       // The matrix bias must not be FP8, see
       // https://docs.nvidia.com/cuda/cublas/index.html.
-      if (!IsF8Type(bias)) {
+      if (!IsF8Type(bias) && !IsGFX950) {
         return FuseMatrixBiasAdd(instr, bias, existing_gemm,
                                  optional_bitcast_matrix,
                                  optional_slice_matrix);
