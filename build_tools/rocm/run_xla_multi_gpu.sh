@@ -123,7 +123,7 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --test_output=errors \
     --flaky_test_attempts=3 \
     --keep_going \
-    --test_strategy=exclusive \
+    --run_under=//build_tools/rocm:exclusive_local_wrapper \
     --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx908,gfx90a,gfx942,gfx1100 \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
