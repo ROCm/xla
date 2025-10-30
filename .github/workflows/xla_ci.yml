@@ -49,7 +49,7 @@ jobs:
                               --arg rl "$RUNNER_LABEL" \
                               '{platform: $p, mode: $m, platform_name: $pn, mode_name: $mn, runner: $rl}')
               
-              MATRIX_JSON=$(echo $MATRIX_JSON | jq ".include += [$ENTRY]")
+              MATRIX_JSON=$(echo $MATRIX_JSON | jq -c ".include += [$ENTRY]")
             done
           done
           
