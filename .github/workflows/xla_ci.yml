@@ -60,7 +60,7 @@ jobs:
     name: jax-ut
     # Runs only on PRs to branches containing '0.7.1'
     if: contains(github.base_ref, '0.7.1')
-    runs-on: [self-hosted, gfx90a, alpha2] 
+    runs-on: linux-mi325-2
     timeout-minutes: 720 # 12 hours
 
     steps:
