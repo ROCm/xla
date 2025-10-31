@@ -132,7 +132,7 @@ elif [[ $1 == "tsan" ]]; then
 else
     RBE_OPTIONS+=(
         --cache_test_results=no
-        --action_env=REBUILD=$(date -Ins)
+        --test_env=REBUILD=$(date -Ins)
         --spawn_strategy=remote,local
     )
 fi
