@@ -56,6 +56,7 @@ cc_library(
         "propagate_slice_indices.cc",
         "simplify_affine.cc",
         "simplify_arith.cc",
+        "simplify_math.cc",
         "unswitch_loops.cc",
         "vectorize_loads_stores.cc",
     ],

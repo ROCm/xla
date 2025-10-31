@@ -236,6 +236,22 @@ def SimplifyArithPass : Pass<"xla-simplify-arith", "mlir::func::FuncOp"> {
   let constructor = "CreateSimplifyArithPass()";
 }
 
+def SimplifyMathPass : Pass<"xla-simplify-math", "mlir::func::FuncOp"> {
+  let summary = "Apply algebraic simplifications to math dialect operations.";
+
+  let description = [{
+    This pass applies algebraic simplifications to math dialect operations.
+    Uses MLIR's built-in math algebraic simplification patterns.
+  }];
+
+  let dependentDialects = [
+    "mlir::math::MathDialect",
+    "mlir::vector::VectorDialect",
+  ];
+
+  let constructor = "CreateSimplifyMathPass()";
+}
+
 def UnswitchLoopsPass :
    Pass<"xla-unswitch-loops", "mlir::func::FuncOp"> {
   let summary = "Swaps scf.if and scf.for.";

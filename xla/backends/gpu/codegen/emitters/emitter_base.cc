@@ -59,6 +59,7 @@ limitations under the License.
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/Math/Transforms/Passes.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -721,6 +722,7 @@ void AddLoweringPasses(mlir::OpPassManager& pm,
     if (cc->has_fp8_support()) {
       pm.addPass(CreateConvertFloatAMDPass(*cc));
     }
+    pm.addNestedPass<FuncOp>(emitters::CreateSimplifyMathPass());
     pm.addPass(CreateRecoverExp2Pass());
   }
 
