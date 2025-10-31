@@ -129,6 +129,11 @@ elif [[ $1 == "tsan" ]]; then
          --strategy=TestRunner=local
     )
     shift
+else
+    RBE_OPTIONS+=(
+        --cache_test_results=no
+        --test_env=REBUILD=$(date -Ins)
+    )
 fi
 
 bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
