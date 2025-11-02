@@ -204,10 +204,9 @@ void NanCheckThunk::Postprocess(
               input_literals.back().untyped_data(), buffers[buffer_index++],
               input_literals.back().size_bytes()));
         }
-
-        TF_RETURN_IF_ERROR(transfer_stream->BlockHostUntilDone());
-        return absl::OkStatus();
       }
+      TF_RETURN_IF_ERROR(transfer_stream->BlockHostUntilDone());
+      return absl::OkStatus();
     }));
 
     *snapshot.mutable_result() = output_literal.ToProto();
