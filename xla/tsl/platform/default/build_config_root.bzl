@@ -20,7 +20,7 @@ GPU_TEST_PROPERTIES = {
 }
 
 ROCM_SINGLE_GPU_TEST_PROPERTIES = {
-    "test.Pool": "linux_x64_gpu",
+    "test.Pool": "linux_x64_gpu_test",
 }
 
 ROCM_MULTI_GPU_TEST_PROPERTIES = {
