@@ -166,6 +166,7 @@ cuda_library(
     srcs = ["cuda_test.cu.cc"],
     hdrs = ["cuda_test.h"],
     visibility = ["//visibility:public"],
+    tags = ["cuda-only"],
     deps = [
         "@com_google_googletest//:gtest_for_library",
         "@local_config_cuda//cuda:cuda_headers",
