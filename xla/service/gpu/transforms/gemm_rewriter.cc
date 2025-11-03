@@ -40,6 +40,9 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#ifdef TENSORFLOW_USE_ROCM
+#include "rocm/rocm_config.h"
+#endif
 #include "xla/hlo/evaluator/hlo_evaluator.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -539,7 +542,17 @@ auto OptionalBitcast(HloInstruction **optional_bitcast, Pattern pattern) {
   return m::AnyOf<HloInstruction>(m::Bitcast(optional_bitcast, pattern),
                                   std::move(pattern));
 }
-
+// Helper function to check if matrix bias should be disabled for ROCm
+// MI355X: Disable matrix-bias fusion on gfx950 for ROCm 7.0.0-7.0.1 due to
+// a known FP8 stability issue in hipBLASLt when matrix bias is used.
+bool ShouldDisableMatrixBiasForRocm(const se::GpuComputeCapability& gpu_version) {
+#if defined(TENSORFLOW_USE_ROCM) && (TF_ROCM_VERSION == 70000 || TF_ROCM_VERSION == 70001)
+  if (auto* rocm_cc = std::get_if<se::RocmComputeCapability>(&gpu_version)) {
+    return rocm_cc->gfx9_mi350();
+  }
+#endif
+  return false;
+}
 // The rewriting proceeds in a bottom-up way:
 //
 // (kDot A B) is rewritten into a (kCustomCall:gemm A B)
@@ -933,6 +946,8 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       instr = new_add;
     }
 
+    // Disable matrix-bias fusion on gfx950 only for ROCm 7.0.0–7.0.1.
+    bool IsDisableMatrixBiasOnGfx950 = ShouldDisableMatrixBiasForRocm(gpu_version_);;
     // Attempt to fuse matrix bias into gemm with optional convert
     // add(convert(gemm(a, b)), c) -> gemm(a, b, c)
     // add(gemm(a, b), c) -> gemm(a, b, c)
@@ -967,8 +982,9 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
           (instr->user_count() == 1 &&
            instr->users()[0]->opcode() == HloOpcode::kTuple &&
            instr->users()[0]->user_count() == 0);
-
-      if (types_are_supported && has_no_consumer) {
+      // MI355X: Disable FuseMatrixBiasAdd on gfx950 due to a known FP8 stability on ROCM 7.0.0 - ROCM 7.0.1
+      // issue in hipBLASLt when matrix bias is used. This expects to re-enable after the next hipBLASLt release.      
+      if (types_are_supported && has_no_consumer && !IsDisableMatrixBiasOnGfx950) {
         return FuseMatrixBiasAdd(instr, bias, existing_gemm);
       }
     }
@@ -986,7 +1002,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                   m::Op(&bias).WithPredicate(is_not_broadcast)))) {
       // The matrix bias must not be FP8, see
       // https://docs.nvidia.com/cuda/cublas/index.html.
-      if (!IsF8Type(bias)) {
+      if (!IsF8Type(bias) && !IsDisableMatrixBiasOnGfx950) {
         return FuseMatrixBiasAdd(instr, bias, existing_gemm,
                                  optional_bitcast_matrix,
                                  optional_slice_matrix);

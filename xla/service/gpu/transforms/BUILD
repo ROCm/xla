@@ -11,6 +11,7 @@ load(
     "//xla/tsl/platform/default:cuda_build_defs.bzl",
     "if_cuda_is_configured",
 )
+load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm_is_configured") 
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -1676,8 +1677,10 @@ cc_library(
         "@tsl//tsl/platform:errors",
         "@tsl//tsl/platform:ml_dtypes",
         "@tsl//tsl/platform:statusor",
-    ],
-)
+    ] + if_rocm_is_configured([
+        "@local_config_rocm//rocm:rocm_config",
+        "@local_config_rocm//rocm:rocm_headers",
+    ]),)
 
 cc_library(
     name = "gemm_rewriter_test_lib",
