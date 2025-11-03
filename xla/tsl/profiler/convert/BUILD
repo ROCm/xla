@@ -74,9 +74,7 @@ cc_library(
     srcs = ["trace_events_to_json.cc"],
     hdrs = ["trace_events_to_json.h"],
     copts = tf_profiler_copts(),
-    visibility = internal_visibility([
-        "//xla/tsl/profiler:internal",
-    ]),
+    visibility = ["//visibility:public"],
     deps = [
         ":trace_container",
         "//xla/tsl/platform:types",
@@ -120,9 +118,7 @@ cc_library(
     srcs = ["xplane_to_trace_events.cc"],
     hdrs = ["xplane_to_trace_events.h"],
     copts = tf_profiler_copts(),
-    visibility = internal_visibility([
-        "//xla/tsl/profiler:internal",
-    ]),
+    visibility = ["//visibility:public"],
     deps = [
         ":trace_container",
         "//xla/tsl/platform:types",

@@ -268,6 +268,8 @@ static bool IsCommand(const HloCustomCallInstruction* hlo,
     return true;
   }
 
+  return true; // enable unregistered custom calls!
+
   // Check if FFI handler is compatible with command buffers.
   auto registration = ffi::FindHandler(hlo->custom_call_target(), "gpu");
   return registration.ok()
@@ -403,6 +405,7 @@ CommandBufferScheduling::CollectCommandBufferSequences(
 
   // Adds `current_seq` to `sequences` if it has enough commands in it.
   auto collect_current_seq = [&](HloInstruction* instr) {
+    if (num_commands_in_current_seq > 0)
     VLOG(1) << "Stopped at: " << (instr ? instr->ToString() : "<end>")
             << " commands: " << num_commands_in_current_seq;
     if (num_commands_in_current_seq >= std::max(1, min_num_commands)) {

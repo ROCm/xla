@@ -76,6 +76,9 @@ limitations under the License.
 #include "xla/tsl/platform/file_system_helper.h"
 #include "xla/tsl/platform/status.h"
 #include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/profiler/rpc/client/save_profile.h"
+#include "xla/tsl/profiler/convert/trace_events_to_json.h"
+#include "xla/tsl/profiler/convert/xplane_to_trace_events.h"
 #include "xla/tsl/util/fixed_option_set_flag.h"
 #include "xla/util.h"
 #include "xla/xla.pb.h"
@@ -84,6 +87,7 @@ limitations under the License.
 #include "tsl/profiler/lib/profiler_session.h"
 #include "tsl/profiler/protobuf/profiler_options.pb.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
+
 
 namespace xla {
 
@@ -1580,12 +1584,21 @@ void HLORunnerProfiler::UploadSession() {
 
   CHECK(!dump_path_.empty());
 
-  LOG(INFO) << "Saving xspace result to " << dump_path_;
+  // TF_CHECK_OK(tsl::profiler::ExportToTensorBoard(*xspace_.get(), dump_path_, true));
+  // if (!keep_xspace_) {
+  //   xspace_ = nullptr;
+  // }
+  // LOG(INFO) << "Saving xspace result to " << dump_path_;
   // Save in binary format to create xprof sessions and extract device stats.
-  CHECK_OK(WriteBinaryProto(tsl::Env::Default(), dump_path_, *xspace_.get()));
+  // CHECK_OK(WriteBinaryProto(tsl::Env::Default(), dump_path_, *xspace_.get()));
+
+  auto container = tsl::profiler::ConvertXSpaceToTraceContainer(*xspace_);
   if (!keep_xspace_) {
     xspace_ = nullptr;
   }
+  TF_CHECK_OK(tsl::profiler::SaveGzippedToolData(
+         "/tf/xla/uu_dump", "", "zzz", "trace.json.gz",
+         tsl::profiler::TraceContainerToJson(container)));
 }
 
 const tensorflow::profiler::XSpace* HLORunnerProfiler::GetXSpace() {

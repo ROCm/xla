@@ -362,10 +362,18 @@ void RocmTracer::CodeObjectCallback(
     auto* data = static_cast<kernel_symbol_data_t*>(record.payload);
     if (record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD) {
       absl::MutexLock lock(&kernel_lock_);
-      kernel_info_.emplace(
+      auto [it, added] = kernel_info_.emplace(
           data->kernel_id,
           ProfilerKernelInfo{tsl::port::MaybeAbiDemangle(data->kernel_name),
                              *data});
+      if (added) {
+        std::string_view s("ncclDevKernel_");
+        auto pos = it->second.name.find(s);
+        if (pos == 0) {
+          it->second.name = it->second.name.substr(s.length());
+          VLOG(0) << "new name " << it->second.name;
+        }
+      }
     } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD) {
       // FIXME: clear these?  At minimum need kernel names at shutdown, async
       // completion We don't erase it just in case a buffer callback still needs

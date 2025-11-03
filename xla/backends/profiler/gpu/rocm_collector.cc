@@ -577,16 +577,34 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
   std::vector<RocmTracerEvent> aggregated_events;
   aggregated_events.reserve(api_events_map_.size());
 
+  // for (auto& [key, ops] : activity_ops_events_map_) {
+
+  //   VLOG(0) << "key " << key << " #ops" << ops.size();
+
+  //   for(const auto& op : ops) {
+  //   switch (op.type) {
+  //   case RocmTracerEventType::Kernel:
+  //       aggregated_events.push_back(op);
+  //       break;
+  //   default: break;
+  //   }
+  //   } // for
+  // }
+
   // Copy info from activity events to API callback events
   for (auto& [key, api_event] : api_events_map_) {
     auto iact = activity_ops_events_map_.find(api_event.correlation_id);
 
     if (iact == activity_ops_events_map_.end()) {
       PrintRocmTracerEvent(api_event, ". Dropped!");
-      VLOG(1) << api_event.name << "  could not find activity counterpart!";
+      VLOG(0) << api_event.name << "  could not find activity counterpart!";
       continue;
+    } else {
+      VLOG(0) << api_event.name << " is OKOK!";
     }
-    const auto& item = iact->second.front();
+
+    for (const auto& item : iact->second) {
+    
     api_event.device_id = item.device_id;
     api_event.stream_id = item.stream_id;
     switch (api_event.type) {
@@ -616,6 +634,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
                         "Type="
                      << GetRocmTracerEventTypeName(api_event.type);
     }  // switch
+    } // for
   }  // for
 
   // Make sure for all activity events we have API callback events
