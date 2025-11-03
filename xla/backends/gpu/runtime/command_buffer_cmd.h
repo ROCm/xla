@@ -102,7 +102,6 @@ namespace xla::gpu {
   V(kCollectivePermuteCmd, "CollectivePermuteCmd")               \
   V(kAsyncDone, "AsyncDone")                                     \
   V(kDynamicSliceFusionCmd, "DynamicSliceFusionCmd")             \
-  V(kDynamicSliceCopyFusionCmd, "DynamicSliceCopyFusionCmd")     \
   V(kUnknownCmd, "UnknownCmd") \
   // clang-format on
 
@@ -132,11 +131,11 @@ using ResourceUseVector = absl::InlinedVector<ResourceUse, 1>;
 class CommandBufferCmd {
  public:
 
-  constexpr static BufferAllocation::Index SpecialAllocIndex = 9999999;
+  constexpr static BufferAllocation::Index SpecialAllocStart = 9999900;
+  constexpr static BufferAllocation::Index SpecialAllocEnd = SpecialAllocStart + 100;
 
   CommandBufferCmd(CommandBufferCmdType cmd_type,
-                   ExecutionStreamId execution_stream_id)
-      : cmd_type_(cmd_type), execution_stream_id_(execution_stream_id) {}
+                   ExecutionStreamId execution_stream_id);
   virtual ~CommandBufferCmd() = default;
 
   using BufferUseVector = absl::InlinedVector<BufferUse, 4>;
@@ -893,7 +892,7 @@ class CollectiveCmd : public TracedCommandBufferCmd {
   CollectiveCmd(CommandBufferCmdType cmd_type,
                 ExecutionStreamId execution_stream_id,
                 ExecutionStreamId async_from_stream_id,
-                CollectiveConfig config);
+                CollectiveConfig config, int comm_stream_id);
 
   absl::Status Prepare(
       const Thunk::PrepareParams& params,
@@ -903,16 +902,18 @@ class CollectiveCmd : public TracedCommandBufferCmd {
 
   bool IsNestedCommandBuffer() const final { return true; }
 
-  virtual AsyncStreamKind GetAsyncStreamKind() = 0;
+  AsyncStreamKind GetAsyncStreamKind() {
+    return static_cast< AsyncStreamKind >(stream_id_);
+  }
 
   bool IsAsync() const {
     return async_from_stream_id_ != execution_stream_id();
   }
 
-  CollectiveStreamId nccl_stream_id() {
-    return CollectiveStreamId(stream_id_);
-    // return xla::gpu::GetCollectiveStreamId(IsAsync(), GetAsyncStreamKind());
-  }
+  // CollectiveStreamId nccl_stream_id() {
+  //   return CollectiveStreamId(stream_id_);
+  //   // return xla::gpu::GetCollectiveStreamId(IsAsync(), GetAsyncStreamKind());
+  // }
 
   ExecutionStreamId async_from_stream_id() const {
     return async_from_stream_id_;
@@ -944,10 +945,6 @@ class AllReduceCmd : public CollectiveCmd {
 
   BufferUseVector buffers() const override;
 
-  AsyncStreamKind GetAsyncStreamKind() override {
-    return AsyncStreamKind::kCollective;
-  };
-
  private:
   ReductionKind reduction_kind_;
   std::vector<CollectiveThunk::Buffer> buffers_;
@@ -970,10 +967,6 @@ class ReduceScatterCmd : public CollectiveCmd {
       se::CommandBuffer* command_buffer) override;
 
   BufferUseVector buffers() const override;
-
-  AsyncStreamKind GetAsyncStreamKind() override {
-    return AsyncStreamKind::kCollective;
-  };
 
  private:
   ReductionKind reduction_kind_;
@@ -998,10 +991,6 @@ class AllToAllCmd : public CollectiveCmd {
 
   BufferUseVector buffers() const override;
 
-  AsyncStreamKind GetAsyncStreamKind() override {
-    return AsyncStreamKind::kCollective;
-  };
-
  private:
   bool has_split_dimension_;
   std::vector<CollectiveThunk::Buffer> buffers_;
@@ -1023,10 +1012,6 @@ class AllGatherCmd : public CollectiveCmd {
       se::CommandBuffer* command_buffer) override;
 
   BufferUseVector buffers() const override;
-
-  AsyncStreamKind GetAsyncStreamKind() override {
-    return AsyncStreamKind::kCollective;
-  };
 
  private:
   std::vector<CollectiveThunk::Buffer> buffers_;
@@ -1071,9 +1056,6 @@ class CollectivePermuteCmd : public CollectiveCmd {
       se::CommandBuffer* command_buffer) override;
 
   BufferUseVector buffers() const override;
-  AsyncStreamKind GetAsyncStreamKind() override {
-    return AsyncStreamKind::kCollective;
-  }
 
  private:
   P2PConfig::IdToSourceTargetMap id_to_source_target_;

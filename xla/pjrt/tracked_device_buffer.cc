@@ -176,6 +176,7 @@ class AllocatedRawSEDeviceMemory : public RawSEDeviceMemory {
 
   ~AllocatedRawSEDeviceMemory() override {
     if (allocator_) {
+      // TODO: we should not deallocate this buffer if it was cached!!
       absl::Status status = allocator_->Deallocate(device_ordinal_, mem());
       if (!status.ok()) {
         LOG(ERROR) << "Buffer deallocation failed: " << status;

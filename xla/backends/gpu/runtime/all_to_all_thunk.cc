@@ -118,7 +118,7 @@ absl::Status AllToAllStartThunk::Initialize(const InitializeParams& params) {
         CommunicatorHandle comm_handle,
         GetComm(collectives, *params.collective_params,
                 *params.collective_cliques, config().replica_groups,
-                config().group_mode, stream_kind));
+                config().group_mode, stream_kind, 0/*stream_id*/));
     TF_ASSIGN_OR_RETURN(int32_t num_ranks, comm_handle.comm->NumRanks());
     se::StreamExecutor* executor = params.executor;
     {

@@ -2477,10 +2477,20 @@ PjRtStreamExecutorClient::RunAsync(
   xla::ShapeTree<tsl::RCReference<RawSEDeviceMemory>> results(
       ssb.on_device_shape());
   auto it = results.begin();
-  se::DeviceMemoryAllocator* allocator = ssb.memory_allocator();
   ShapedBuffer released_ssb = ssb.release();
+
+  bool cached_ok = !ssb.alloc_cached_flag.empty();
+  auto cached_it = ssb.alloc_cached_flag.begin();
+
+  size_t num_cached = 0, total = 0;
   for (auto& buf : released_ssb.buffers()) {
     CHECK(it != results.end());
+
+    auto* allocator = ssb.memory_allocator();
+    if (cached_ok && *cached_it++) {
+      allocator = nullptr;
+      num_cached++;
+    }
     it->second = RawSEDeviceMemory::Create(
         buf.second, device->local_device_id(), allocator);
     ++it;

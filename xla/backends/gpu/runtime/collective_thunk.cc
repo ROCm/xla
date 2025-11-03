@@ -235,7 +235,7 @@ CollectiveThunk::CollectiveThunk(Kind kind, ThunkInfo thunk_info, bool is_sync,
 absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind) {
+    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind, int stream_id) {
   GlobalDeviceId global_device_id = params.global_device_id;
 
   TF_ASSIGN_OR_RETURN(
@@ -266,7 +266,8 @@ absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
                       GetNumLocalParticipants(params, participants));
 
   return GpuCliqueKey(std::move(participants), num_local_participants,
-                      kNoStreamId, stream_kind, std::move(participant_groups));
+                  CollectiveStreamId(stream_id), stream_kind, 
+                  std::move(participant_groups));
 }
 
 absl::StatusOr<GpuCliqueKey> GetCollectiveGpuCliqueKey(
@@ -276,17 +277,17 @@ absl::StatusOr<GpuCliqueKey> GetCollectiveGpuCliqueKey(
                       CollectiveThunk::GetGpuCollectives(params));
   return GetGpuCliqueKey(collectives, params, collective_config.replica_groups,
                          collective_config.group_mode,
-                         AsyncStreamKind::kCollective);
+                         AsyncStreamKind::kCollective, 0/*stream_id*/);
 }
 
 absl::StatusOr<CommunicatorHandle> GetComm(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const Thunk::CollectiveCliques& collective_cliques,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind) {
+    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind, int stream_id) {
   TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
                       GetGpuCliqueKey(collectives, params, replica_groups,
-                                      group_mode, stream_kind));
+                                      group_mode, stream_kind, stream_id));
 
   std::optional<RankId> rank = clique_key.rank(params.global_device_id);
   TF_ASSIGN_OR_RETURN(Communicator * comm,
@@ -406,7 +407,7 @@ absl::Status CollectiveThunk::Prepare(
       GpuCliqueKey clique_key,
       GetGpuCliqueKey(collectives, *params.collective_params,
                       config().replica_groups, config().group_mode,
-                      GetAsyncStreamKind()));
+                      GetAsyncStreamKind(), 0/*stream_id*/));
   return resource_requests.AddClique(clique_key);
 }
 
@@ -444,7 +445,7 @@ absl::Status CollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
       CommunicatorHandle comm_handle,
       GetComm(collectives, *params.collective_params,
               *params.collective_cliques, config().replica_groups,
-              config().group_mode, stream_kind));
+              config().group_mode, stream_kind, 0/*stream_id*/));
   se::StreamExecutor* executor = params.stream->parent();
   int64_t async_stream_idx = static_cast<int64_t>(stream_kind);
 

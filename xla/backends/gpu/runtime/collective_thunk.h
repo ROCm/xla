@@ -278,7 +278,8 @@ absl::Status AddOpDescription(absl::Status status, OpT op,
 absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind);
+    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind, 
+    int stream_id = 0);
 
 // Helper over GetGpuCliqueKey that builds key for AsyncStreamKind::kCollective.
 absl::StatusOr<GpuCliqueKey> GetCollectiveGpuCliqueKey(
@@ -290,7 +291,7 @@ absl::StatusOr<CommunicatorHandle> GetComm(
     GpuCollectives* collectives, const Thunk::CollectiveExecuteParams& params,
     const Thunk::CollectiveCliques& collective_cliques,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind);
+    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind, int stream_id);
 
 struct DeviceBufferPair {
   PrimitiveType element_type;

@@ -1477,7 +1477,7 @@ StreamExecutorGpuClient::RunAsync(
     LocalExecutable& exec, PjRtDevice* device,
     std::vector<ShapeTree<PjRtStreamExecutorExecutionInput>> arguments,
     ExecutableRunOptions run_options_inp) {
-#if defined(GOOGLE_CUDA) || defined(TENSORFLOW_USE_ROCM)
+#if 0 //defined(GOOGLE_CUDA) || defined(TENSORFLOW_USE_ROCM)
   std::vector<const Shape*> argument_shapes;
   argument_shapes.reserve(arguments.size());
   for (const ShapeTree<PjRtStreamExecutorExecutionInput>& arg : arguments) {

@@ -292,8 +292,8 @@ static absl::Status RunMultihostHloRunner(int argc, char** argv,
     }
     for (int i = 0; i < execution_profiles.size(); ++i) {
       std::cout << "## Execution time, file=" << hlo_file << " repeat=" << i
-                << " duration=" << execution_profiles[i].compute_time_ns()
-                << "ns" << std::endl;
+                << " duration=" << (double)execution_profiles[i].compute_time_ns()/1e6
+                << "ms" << std::endl;
     }
   }
   return absl::OkStatus();

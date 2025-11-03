@@ -56,6 +56,8 @@ namespace {
 
 void SetChannelIdForNewCollective(HloInstruction* new_instr,
                                   const HloModule* module) {
+
+  return;
   // This is to track mappings of old->new channel id for async collectives
   // wrapped in the form of HloAsyncInstruction, the start and done need to
   // have the same unique channel id.
