@@ -129,8 +129,7 @@ class CommandBufferCmd {
   constexpr static BufferAllocation::Index SpecialAllocEnd = SpecialAllocStart + 100;
 
   CommandBufferCmd(CommandBufferCmdType cmd_type,
-                   ExecutionStreamId execution_stream_id)
-      : cmd_type_(cmd_type), execution_stream_id_(execution_stream_id) {}
+                   ExecutionStreamId execution_stream_id);
   virtual ~CommandBufferCmd() = default;
 
   using BufferUseVector = absl::InlinedVector<BufferUse, 4>;
@@ -910,7 +909,8 @@ class CollectiveCmd : public TracedCommandBufferCmd {
   CollectiveCmd(CommandBufferCmdType cmd_type,
                 ExecutionStreamId execution_stream_id,
                 ExecutionStreamId async_from_stream_id,
-                NcclCollectiveConfig config);
+                NcclCollectiveConfig config, 
+                int comm_stream_id);
 
   absl::Status Prepare(
       const Thunk::PrepareParams& params,
@@ -920,7 +920,9 @@ class CollectiveCmd : public TracedCommandBufferCmd {
 
   bool IsNestedCommandBuffer() const final { return true; }
 
-  virtual AsyncStreamKind GetAsyncStreamKind() = 0;
+  AsyncStreamKind GetAsyncStreamKind() {
+    return AsyncStreamKind::kCollective;
+  }
 
   bool IsAsync() const {
     return async_from_stream_id_ != execution_stream_id();
@@ -965,10 +967,6 @@ class AllReduceCmd : public CollectiveCmd {
 
   BufferUseVector buffers() const override;
 
-  AsyncStreamKind GetAsyncStreamKind() override {
-    return AsyncStreamKind::kCollective;
-  };
-
  private:
   ReductionKind reduction_kind_;
   std::vector<NcclCollectiveThunk::Buffer> buffers_;
@@ -991,10 +989,6 @@ class ReduceScatterCmd : public CollectiveCmd {
       se::CommandBuffer* command_buffer) override;
 
   BufferUseVector buffers() const override;
-
-  AsyncStreamKind GetAsyncStreamKind() override {
-    return AsyncStreamKind::kCollective;
-  };
 
  private:
   ReductionKind reduction_kind_;
@@ -1019,10 +1013,6 @@ class AllToAllCmd : public CollectiveCmd {
 
   BufferUseVector buffers() const override;
 
-  AsyncStreamKind GetAsyncStreamKind() override {
-    return AsyncStreamKind::kCollective;
-  };
-
  private:
   bool has_split_dimension_;
   std::vector<NcclCollectiveThunk::Buffer> buffers_;
@@ -1045,10 +1035,6 @@ class CollectivePermuteCmd : public CollectiveCmd {
       se::CommandBuffer* command_buffer) override;
 
   BufferUseVector buffers() const override;
-
-  AsyncStreamKind GetAsyncStreamKind() override {
-    return AsyncStreamKind::kCollective;
-  };
 
  private:
   NcclP2PConfig::IdToSourceTargetMap id_to_source_target_;
@@ -1073,10 +1059,6 @@ class AllGatherCmd : public CollectiveCmd {
       se::CommandBuffer* command_buffer) override;
 
   BufferUseVector buffers() const override;
-
-  AsyncStreamKind GetAsyncStreamKind() override {
-    return AsyncStreamKind::kCollective;
-  };
 
  private:
   std::vector<NcclCollectiveThunk::Buffer> buffers_;

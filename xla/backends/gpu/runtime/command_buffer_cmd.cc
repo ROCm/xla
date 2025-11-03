@@ -99,18 +99,34 @@ limitations under the License.
 #error Not all flags are defined!
 #endif
 
-// it seems that collectives cannot be run in parallel with each other: it will
-// result in sporadical freezes
-#define ENABLE_ALL_GATHER_IN_PARALLEL_GRAPH            0
-#define ENABLE_ALL_REDUCE_IN_PARALLEL_GRAPH            0
-#define ENABLE_ALL_TO_ALL_IN_PARALLEL_GRAPH            0
-#define ENABLE_REDUCE_SCATTER_IN_PARALLEL_GRAPH        0
-#define ENABLE_COLLECTIVE_PERMUTE_IN_PARALLEL_GRAPH    0
-#define ENABLE_COLLECTIVE_BROADCAST_IN_PARALLEL_GRAPH  0
-#define DUMP_EXECUTION_GRAPH                           1
-
+#define DUMP_EXECUTION_GRAPH                           0
 
 namespace xla::gpu {
+
+// if set < 0 => this op can be run in parallel with all others
+enum class VirtualBuf : int32_t 
+{
+  ComputationId = 0,
+  FusionKernel = -1, // LaunchCmd
+  CustomKernel = 2, 
+  CublasLt = 3,
+  Gemm = 4,
+  Convolution = 5,
+  Memory = 6,
+  CustomCall = 7,
+  Barrier = 8,
+  AllReduce = 9,
+  ReduceScatter = 10,
+  AllToAll = 11,
+  AllGather = 12,
+  CollectiveBroadcast = 13,
+  CollectivePermute = 14,
+  DynamicSliceFusion = 15,
+  DynamicSliceCopyFusion = 16,
+  Total = 17,
+};
+
+static std::vector< xla::BufferAllocation > s_special_allocs;
 
 using MemoryAccess = BufferUse::MemoryAccess;
 
@@ -218,6 +234,20 @@ static absl::StatusOr<const se::CommandBuffer::Command*> Handle(
 //===----------------------------------------------------------------------===//
 // CommandBufferCmd
 //===----------------------------------------------------------------------===//
+
+CommandBufferCmd::CommandBufferCmd(CommandBufferCmdType cmd_type,
+                   ExecutionStreamId execution_stream_id)
+      : cmd_type_(cmd_type), execution_stream_id_(execution_stream_id) {
+
+  if (s_special_allocs.empty()) {
+    s_special_allocs.reserve((uint32_t)VirtualBuf::Total);
+    for (int i = 0; i < (uint32_t)VirtualBuf::Total; i++) {
+      s_special_allocs.emplace_back(CommandBufferCmd::SpecialAllocStart + i, 
+                8, xla::LogicalBuffer::Color{0});
+      s_special_allocs.back().set_maybe_live_out(true);
+    }
+  }
+}
 
 CommandBufferCmd::StateManager::TypeId
 CommandBufferCmd::StateManager::GetNextTypeId() {
@@ -651,7 +681,14 @@ ComputationIdCmd::ComputationIdCmd(ExecutionStreamId execution_stream_id,
       kind_(kind) {}
 
 CommandBufferCmd::BufferUseVector ComputationIdCmd::buffers() const {
-  return {{dest_, MemoryAccess::kWrite}};
+  BufferUseVector buffers;
+  buffers.reserve(2);
+  buffers.push_back({dest_, MemoryAccess::kWrite});
+  if (auto id = (int32_t)VirtualBuf::ComputationId; id >= 0) {
+    buffers.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
+  return buffers;
 }
 
 absl::StatusOr<const se::CommandBuffer::Command*> ComputationIdCmd::Record(
@@ -766,8 +803,13 @@ absl::StatusOr<const se::CommandBuffer::Command*> LaunchCmd::Record(
 
 CommandBufferCmd::BufferUseVector LaunchCmd::buffers() const {
   BufferUseVector buffers;
+  buffers.reserve(args_.size() + 1);
   for (int32_t i = 0; i < args_.size(); ++i) {
     buffers.emplace_back(args_[i], args_access_[i]);
+  }
+  if (auto id = (int32_t)VirtualBuf::FusionKernel; id >= 0) {
+    buffers.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
   }
   return buffers;
 }
@@ -846,8 +888,13 @@ absl::StatusOr<const se::CommandBuffer::Command*> CustomKernelLaunchCmd::Record(
 
 CommandBufferCmd::BufferUseVector CustomKernelLaunchCmd::buffers() const {
   BufferUseVector buffers;
+  buffers.reserve(args_.size() + 1);
   for (int32_t i = 0; i < args_.size(); ++i) {
     buffers.emplace_back(args_[i], args_access_[i]);
+  }
+  if (auto id = (int32_t)VirtualBuf::CustomKernel; id >= 0) {
+    buffers.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
   }
   return buffers;
 }
@@ -896,7 +943,15 @@ MemcpyDeviceToDeviceCmd::Record(const Thunk::ExecuteParams& execute_params,
 }
 
 CommandBufferCmd::BufferUseVector MemcpyDeviceToDeviceCmd::buffers() const {
-  return {{dst_, MemoryAccess::kWrite}, {src_, MemoryAccess::kRead}};
+  BufferUseVector buffers;
+  buffers.reserve(3);
+  buffers.push_back({dst_, MemoryAccess::kWrite});
+  buffers.push_back({src_, MemoryAccess::kRead});
+  if (auto id = (int32_t)VirtualBuf::Memory; id >= 0) {
+    buffers.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
+  return buffers;
 }
 
 //===----------------------------------------------------------------------===//
@@ -937,7 +992,14 @@ absl::StatusOr<const se::CommandBuffer::Command*> MemzeroCmd::Record(
 }
 
 CommandBufferCmd::BufferUseVector MemzeroCmd::buffers() const {
-  return {{dst_, MemoryAccess::kWrite}};
+  BufferUseVector buffers;
+  buffers.reserve(2);
+  buffers.push_back({dst_, MemoryAccess::kWrite});
+  if (auto id = (int32_t)VirtualBuf::Memory; id >= 0) {
+    buffers.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
+  return buffers;
 }
 
 //===----------------------------------------------------------------------===//
@@ -980,7 +1042,14 @@ absl::StatusOr<const se::CommandBuffer::Command*> Memset32Cmd::Record(
 }
 
 CommandBufferCmd::BufferUseVector Memset32Cmd::buffers() const {
-  return {{dst_, MemoryAccess::kWrite}};
+  BufferUseVector buffers;
+  buffers.reserve(2);
+  buffers.push_back({dst_, MemoryAccess::kWrite});
+  if (auto id = (int32_t)VirtualBuf::Memory; id >= 0) {
+    buffers.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
+  return buffers;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1169,10 +1238,18 @@ absl::StatusOr<const se::CommandBuffer::Command*> GemmCmd::Record(
 }
 
 CommandBufferCmd::BufferUseVector GemmCmd::buffers() const {
-  return {{lhs_buffer_, MemoryAccess::kRead},
-          {rhs_buffer_, MemoryAccess::kRead},
-          {output_buffer_, MemoryAccess::kWrite},
-          {workspace_, MemoryAccess::kWrite}};
+  
+  BufferUseVector buffer_usage;
+  buffer_usage.reserve(5);
+  buffer_usage.push_back({lhs_buffer_, MemoryAccess::kRead});
+  buffer_usage.push_back({rhs_buffer_, MemoryAccess::kRead});
+  buffer_usage.push_back({output_buffer_, MemoryAccess::kWrite});
+  buffer_usage.push_back({workspace_, MemoryAccess::kWrite});
+  if (auto id = (int32_t)VirtualBuf::Gemm; id >= 0) {
+    buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
+  return buffer_usage;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1271,7 +1348,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> CublasLtCmd::Record(
 
 CommandBufferCmd::BufferUseVector CublasLtCmd::buffers() const {
   BufferUseVector buffer_usage;
-  buffer_usage.reserve(13);
+  buffer_usage.reserve(14);
   buffer_usage.push_back({a_, MemoryAccess::kRead});
   buffer_usage.push_back({b_, MemoryAccess::kRead});
   buffer_usage.push_back({c_, MemoryAccess::kRead});
@@ -1298,6 +1375,10 @@ CommandBufferCmd::BufferUseVector CublasLtCmd::buffers() const {
   }
   if (d_amax_.allocation() != nullptr) {
     buffer_usage.push_back({d_amax_, MemoryAccess::kRead});
+  }
+  if (auto id = (int32_t)VirtualBuf::CublasLt; id >= 0) {
+    buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
   }
   return buffer_usage;
 }
@@ -1346,6 +1427,10 @@ CommandBufferCmd::BufferUseVector ConvolutionCmd::buffers() const {
     buffer_usage.push_back({buffer, MemoryAccess::kWrite});
   }
   buffer_usage.push_back({scratch_buffer_, MemoryAccess::kWrite});
+  if (auto id = (int32_t)VirtualBuf::Convolution; id >= 0) {
+    buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
   return buffer_usage;
 }
 
@@ -1415,6 +1500,10 @@ CommandBufferCmd::BufferUseVector CuDnnCmd::buffers() const {
     buffer_usage.push_back({args_[i], MemoryAccess::kRead});
   }
   buffer_usage.push_back({args_.back(), MemoryAccess::kWrite});
+  if (auto id = (int32_t)VirtualBuf::Convolution; id >= 0) {
+    buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
   return buffer_usage;
 }
 
@@ -1590,6 +1679,10 @@ CommandBufferCmd::BufferUseVector CustomCallCmd::buffers() const {
       buffer_usage.push_back({slice->slice, MemoryAccess::kWrite});
     }
   }
+  if (auto id = (int32_t)VirtualBuf::CustomCall; id >= 0) {
+    buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
   return buffer_usage;
 }
 
@@ -1597,28 +1690,15 @@ CommandBufferCmd::BufferUseVector CustomCallCmd::buffers() const {
 // CollectiveCmd
 //===----------------------------------------------------------------------===//
 
-static std::vector< xla::BufferAllocation> s_special_allocs;
-
 CollectiveCmd::CollectiveCmd(CommandBufferCmdType cmd_type,
                              ExecutionStreamId execution_stream_id,
                              ExecutionStreamId async_from_stream_id,
-                             NcclCollectiveConfig config)
+                             NcclCollectiveConfig config,
+                             int comm_stream_id)
     : TracedCommandBufferCmd(cmd_type, execution_stream_id),
       async_from_stream_id_(async_from_stream_id),
-      config_(std::move(config))
-{
-  if (s_special_allocs.empty()) {
-    s_special_allocs.reserve(8);
-    for (int i = 0; i < 8; i++) {
-      s_special_allocs.emplace_back(CommandBufferCmd::SpecialAllocStart + i, 
-                8, xla::LogicalBuffer::Color{0});
-      s_special_allocs.back().set_maybe_live_out(true);
-    }
-  }
-  // if(execution_stream_id != async_from_stream_id) {
-  //   LOG(WARNING) << "Ignoring async stream ID for collective: " << ToString();
-  // }
-}
+      config_(std::move(config)), stream_id_(comm_stream_id)
+{ }
 
 absl::Status CollectiveCmd::Prepare(
     const Thunk::PrepareParams& params,
@@ -1656,11 +1736,9 @@ AllReduceCmd::AllReduceCmd(
     ReductionKind reduction_kind,
     absl::Span<const NcclCollectiveThunk::Buffer> buffers)
     : CollectiveCmd(CommandBufferCmdType::kAllReduceCmd, execution_stream_id,
-                    async_from_stream_id, std::move(config)),
+                    async_from_stream_id, std::move(config), /*stream_id*/0),
       reduction_kind_(reduction_kind),
-      buffers_(buffers.begin(), buffers.end()) {
-        this->stream_id_ = 0;
-      }
+      buffers_(buffers.begin(), buffers.end()) { }
 
 absl::StatusOr<const se::CommandBuffer::Command*> AllReduceCmd::Record(
     const Thunk::ExecuteParams& execute_params,
@@ -1708,10 +1786,10 @@ CommandBufferCmd::BufferUseVector AllReduceCmd::buffers() const {
     buffer_usage.emplace_back(buffer.source_buffer, MemoryAccess::kRead);
     buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
   }
-#if !ENABLE_ALL_REDUCE_IN_PARALLEL_GRAPH
-  buffer_usage.emplace_back(xla::BufferAllocation::Slice(
-        &s_special_allocs[0], 0, 8), MemoryAccess::kWrite);
-#endif
+  if (auto id = (int32_t)VirtualBuf::AllReduce; id >= 0) {
+    buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
   return buffer_usage;
 }
 
@@ -1725,9 +1803,9 @@ ReduceScatterCmd::ReduceScatterCmd(
     ReductionKind reduction_kind,
     absl::Span<const NcclCollectiveThunk::Buffer> buffers)
     : CollectiveCmd(CommandBufferCmdType::kReduceScatter, execution_stream_id,
-                    async_from_stream_id, std::move(config)),
+             async_from_stream_id, std::move(config), /*stream_id*/1),
       reduction_kind_(reduction_kind),
-      buffers_(buffers.begin(), buffers.end()) {this->stream_id_ = 1;}
+      buffers_(buffers.begin(), buffers.end()) { }
 
 absl::StatusOr<const se::CommandBuffer::Command*> ReduceScatterCmd::Record(
     const Thunk::ExecuteParams& execute_params,
@@ -1776,10 +1854,10 @@ CommandBufferCmd::BufferUseVector ReduceScatterCmd::buffers() const {
     buffer_usage.emplace_back(buffer.source_buffer, MemoryAccess::kRead);
     buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
   }
-#if !ENABLE_REDUCE_SCATTER_IN_PARALLEL_GRAPH
-  buffer_usage.emplace_back(xla::BufferAllocation::Slice(
-        &s_special_allocs[1], 0, 8), MemoryAccess::kWrite);
-#endif
+  if (auto id = (int32_t)VirtualBuf::ReduceScatter; id >= 0) {
+    buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
   return buffer_usage;
 }
 
@@ -1792,9 +1870,9 @@ AllToAllCmd::AllToAllCmd(ExecutionStreamId execution_stream_id,
                          NcclCollectiveConfig config, bool has_split_dimension,
                          absl::Span<const NcclCollectiveThunk::Buffer> buffers)
     : CollectiveCmd(CommandBufferCmdType::kAllToAll, execution_stream_id,
-                    async_from_stream_id, std::move(config)),
+                    async_from_stream_id, std::move(config), /*stream_id*/2),
       has_split_dimension_(has_split_dimension),
-      buffers_(buffers.begin(), buffers.end()) {this->stream_id_ = 2;}
+      buffers_(buffers.begin(), buffers.end()) { }
 
 absl::StatusOr<const se::CommandBuffer::Command*> AllToAllCmd::Record(
     const Thunk::ExecuteParams& execute_params,
@@ -1841,10 +1919,10 @@ CommandBufferCmd::BufferUseVector AllToAllCmd::buffers() const {
     buffer_usage.emplace_back(buffer.source_buffer, MemoryAccess::kRead);
     buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
   }
-#if !ENABLE_ALL_TO_ALL_IN_PARALLEL_GRAPH
-  buffer_usage.emplace_back(xla::BufferAllocation::Slice(
-        &s_special_allocs[2], 0, 8), MemoryAccess::kWrite);
-#endif
+  if (auto id = (int32_t)VirtualBuf::AllToAll; id >= 0) {
+    buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
   return buffer_usage;
 }
 
@@ -1857,9 +1935,9 @@ CollectivePermuteCmd::CollectivePermuteCmd(ExecutionStreamId execution_stream_id
                          const NcclP2PConfig& config,
                          absl::Span<const NcclCollectiveThunk::Buffer> buffers)
     : CollectiveCmd(CommandBufferCmdType::kCollectivePermuteCmd, execution_stream_id,
-                    async_from_stream_id, config.config),
+                    async_from_stream_id, config.config, 3/*stream_id*/),
       id_to_source_target_(config.id_to_source_target),
-      buffers_(buffers.begin(), buffers.end()) {this->stream_id_ = 3;}
+      buffers_(buffers.begin(), buffers.end()) { }
 
 absl::StatusOr<const se::CommandBuffer::Command*> CollectivePermuteCmd::Record(
     const Thunk::ExecuteParams& execute_params,
@@ -1915,10 +1993,10 @@ CommandBufferCmd::BufferUseVector CollectivePermuteCmd::buffers() const {
     buffer_usage.emplace_back(buffer.source_buffer, MemoryAccess::kRead);
     buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
   }
-#if !ENABLE_COLLECTIVE_PERMUTE_IN_PARALLEL_GRAPH
-  buffer_usage.emplace_back(xla::BufferAllocation::Slice(
-        &s_special_allocs[3], 0, 8), MemoryAccess::kWrite);
-#endif
+  if (auto id = (int32_t)VirtualBuf::AllGather; id >= 0) {
+    buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
   return buffer_usage;
 }
 
@@ -1932,8 +2010,8 @@ AllGatherCmd::AllGatherCmd(
     ExecutionStreamId async_from_stream_id, NcclCollectiveConfig config,
     absl::Span<const NcclCollectiveThunk::Buffer> buffers)
     : CollectiveCmd(CommandBufferCmdType::kAllGatherCmd, execution_stream_id,
-                    async_from_stream_id, std::move(config)),
-      buffers_(buffers.begin(), buffers.end()) { this->stream_id_ = 4; }
+                    async_from_stream_id, std::move(config), 4/*stream_id*/),
+      buffers_(buffers.begin(), buffers.end()) { }
 
 absl::StatusOr<const se::CommandBuffer::Command*> AllGatherCmd::Record(
     const Thunk::ExecuteParams& execute_params,
@@ -1981,10 +2059,10 @@ CommandBufferCmd::BufferUseVector AllGatherCmd::buffers() const {
     buffer_usage.emplace_back(buffer.source_buffer, MemoryAccess::kRead);
     buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
   }
-#if !ENABLE_ALL_GATHER_IN_PARALLEL_GRAPH
-  buffer_usage.emplace_back(xla::BufferAllocation::Slice(
-        &s_special_allocs[4], 0, 8), MemoryAccess::kWrite);
-#endif
+  if (auto id = (int32_t)VirtualBuf::CollectiveBroadcast; id >= 0) {
+    buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
   return buffer_usage;
 }
 
@@ -1998,8 +2076,8 @@ CollectiveBroadcastCmd::CollectiveBroadcastCmd(
     absl::Span<const NcclCollectiveThunk::Buffer> buffers)
     : CollectiveCmd(CommandBufferCmdType::kCollectiveBroadcastCmd,
                     execution_stream_id, async_from_stream_id,
-                    std::move(config)),
-      buffers_(buffers.begin(), buffers.end()) { this->stream_id_ = 5; }
+                    std::move(config), 5/*stream_id*/),
+      buffers_(buffers.begin(), buffers.end()) { }
 
 absl::StatusOr<const se::CommandBuffer::Command*>
 CollectiveBroadcastCmd::Record(const Thunk::ExecuteParams& execute_params,
@@ -2044,14 +2122,15 @@ CollectiveBroadcastCmd::Record(const Thunk::ExecuteParams& execute_params,
 
 CommandBufferCmd::BufferUseVector CollectiveBroadcastCmd::buffers() const {
   BufferUseVector buffer_usage;
+  buffer_usage.reserve(buffers_.size()*2 + 1);
   for (auto& buffer : buffers_) {
     buffer_usage.emplace_back(buffer.source_buffer, MemoryAccess::kRead);
     buffer_usage.emplace_back(buffer.destination_buffer, MemoryAccess::kWrite);
   }
-#if !ENABLE_COLLECTIVE_BROADCAST_IN_PARALLEL_GRAPH
-  buffer_usage.emplace_back(xla::BufferAllocation::Slice(
-        &s_special_allocs[5], 0, 8), MemoryAccess::kWrite);
-#endif
+  if (auto id = (int32_t)VirtualBuf::CollectivePermute; id >= 0) {
+    buffer_usage.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
+  }
   return buffer_usage;
 }
 
@@ -2310,12 +2389,17 @@ absl::StatusOr<const se::CommandBuffer::Command*> DynamicSliceFusionCmd::Record(
 }
 
 CommandBufferCmd::BufferUseVector DynamicSliceFusionCmd::buffers() const {
-  CommandBufferCmd::BufferUseVector buffers;
   auto embed_buffers = embedded_commands_.buffers();
+  CommandBufferCmd::BufferUseVector buffers;
+  buffers.reserve(embed_buffers.size() + 1);
   for (auto buffer_usage : embed_buffers) {
     buffers.emplace_back(
         *embeded_to_origin_slice_map_.at(buffer_usage.slice().index()),
         buffer_usage.access());
+  }
+  if (auto id = (int32_t)VirtualBuf::DynamicSliceFusion; id >= 0) {
+    buffers.emplace_back(xla::BufferAllocation::Slice(
+        &s_special_allocs[id], 0, 8), MemoryAccess::kWrite);
   }
   return buffers;
 }

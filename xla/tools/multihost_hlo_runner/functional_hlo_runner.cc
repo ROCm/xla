@@ -1180,34 +1180,34 @@ FunctionalHloRunner::RunInternal(
       }
     }
 
-    TF_ASSIGN_OR_RETURN(Xresults,
-                      FetchAndLogOutput(client, output_buffers,
-                                        running_options.module_output_mode,
-                                        running_options.log_input_output()));
+    // TF_ASSIGN_OR_RETURN(Xresults,
+    //                   FetchAndLogOutput(client, output_buffers,
+    //                                     running_options.module_output_mode,
+    //                                     running_options.log_input_output()));
 
-    for (const auto& [device_id, literal_vec] : Xresults) {
-    for(const auto& L : literal_vec) {
+    // for (const auto& [device_id, literal_vec] : Xresults) {
+    // for(const auto& L : literal_vec) {
 
-      if (L.shape().element_type() == PrimitiveType::F32) {
-        size_t total = 0, finite = 0;
-        using TT = float;
-        double ssum = 0;
-        L.EachCell<TT>(
-          [&](absl::Span<const int64_t> indices, TT value) {
-            total++;
-            if (std::isfinite(value)) {
-              finite++;
-              ssum += (double)value;
-            }
-          });
-        VLOG(0) << repeat << ": dev" << device_id << " finite: " << finite
-            << '/' << total << " sum: " 
-            << std::setprecision(12) << (ssum/1e6) << std::hex
-            << " (" << reinterpret_cast< uint64_t& >(ssum) << ')' << std::dec;
+    //   if (L.shape().element_type() == PrimitiveType::F32) {
+    //     size_t total = 0, finite = 0;
+    //     using TT = float;
+    //     double ssum = 0;
+    //     L.EachCell<TT>(
+    //       [&](absl::Span<const int64_t> indices, TT value) {
+    //         total++;
+    //         if (std::isfinite(value)) {
+    //           finite++;
+    //           ssum += (double)value;
+    //         }
+    //       });
+    //     VLOG(0) << repeat << ": dev" << device_id << " finite: " << finite
+    //         << '/' << total << " sum: " 
+    //         << std::setprecision(12) << (ssum/1e6) << std::hex
+    //         << " (" << reinterpret_cast< uint64_t& >(ssum) << ')' << std::dec;
         
-      }
-    } // for literal
-    }// for Xresults
+    //   }
+    // } // for literal
+    // }// for Xresults
 
 
   } // for
