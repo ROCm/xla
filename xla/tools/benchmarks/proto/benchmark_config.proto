@@ -24,6 +24,8 @@ enum HardwareCategory {
   CPU_ARM64 = 2;  // ARM64 CPU
   GPU_L4 = 3;     // L4 GPU
   GPU_B200 = 4;   // B200 GPU
+  GPU_MI300 = 5; // AMD MI300 GPU
+  GPU_MI250 = 6;  // AMD MI250 GPU
 }
 
 // Enum defining the workflow type.

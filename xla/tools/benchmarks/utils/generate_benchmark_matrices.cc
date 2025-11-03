@@ -95,10 +95,15 @@ GetHardwareToRunnerLabelMap() {
   // - CPU_X86: linux-x86-n2-128
   // - GPU_L4: linux-x86-g2-16-l4-1gpu
   // - GPU_B200: linux-x86-a4-224-b200-1gpu
+  // - GPU_MI300: linux-x86-mi300x-1gpu (AMD Instinct MI300)
+  // - GPU_MI250: linux-x86-mi250-1gpu (AMD Instinct MI250)
   static const auto* kMap = new absl::flat_hash_map<std::string, std::string>{
       {"CPU_X86", "linux-x86-n2-128"},
       {"GPU_L4", "linux-x86-g2-16-l4-1gpu"},
       {"GPU_B200", "linux-x86-a4-224-b200-1gpu"},
+      // AMD GPU runners (placeholders; adjust to match actual CI runner labels)
+      {"GPU_MI300", "ixt-rack-04"},
+      {"GPU_MI250", "ixt-rack-04"},
       // Add more mappings
   };
   return *kMap;
@@ -123,6 +128,10 @@ GetHardwareToContainerImage() {
           {"GPU_L4_1H_4D",
            "us-docker.pkg.dev/ml-oss-artifacts-published/ml-public-container/"
            "ml-build-cuda12.8-cudnn9.8:latest"},
+          // AMD GPU container images (ROCm). Replace with canonical published
+          // image if different.
+          {"GPU_MI300", "rocm/tensorflow:rocm7.0-py3.12-tf2.19-dev"},
+          {"GPU_MI250", "rocm/tensorflow:rocm7.0-py3.12-tf2.19-dev"},
       };
   return *kHardwareToContainerImage;
 }
@@ -141,18 +150,20 @@ Json::Value RepeatedStringFieldToJsonArray(
 // Note: TargetMetric can be overridden in the BenchmarkConfig proto.
 const absl::flat_hash_map<std::string, std::vector<TargetMetric>>&
 GetHardwareToDefaultTargetMetrics() {
-  static const auto* kHardwareToDefaultTargetMetrics =
-      new absl::flat_hash_map<std::string, std::vector<TargetMetric>>{
-          // Key is just the hardware category name for this map
-          {"CPU_X86", {TargetMetric::CPU_TIME}},
-          {"CPU_ARM64", {TargetMetric::CPU_TIME}},
-          {"GPU_L4",
-           {TargetMetric::GPU_DEVICE_TIME,
-            TargetMetric::GPU_DEVICE_MEMCPY_TIME}},
-          {"GPU_B200",
-           {TargetMetric::GPU_DEVICE_TIME,
-            TargetMetric::GPU_DEVICE_MEMCPY_TIME}},
-      };
+  static const auto* kHardwareToDefaultTargetMetrics = new absl::flat_hash_map<
+      std::string, std::vector<TargetMetric>>{
+      // Key is just the hardware category name for this map
+      {"CPU_X86", {TargetMetric::CPU_TIME}},
+      {"CPU_ARM64", {TargetMetric::CPU_TIME}},
+      {"GPU_L4",
+       {TargetMetric::GPU_DEVICE_TIME, TargetMetric::GPU_DEVICE_MEMCPY_TIME}},
+      {"GPU_B200",
+       {TargetMetric::GPU_DEVICE_TIME, TargetMetric::GPU_DEVICE_MEMCPY_TIME}},
+      {"GPU_MI300",
+       {TargetMetric::GPU_DEVICE_TIME, TargetMetric::GPU_DEVICE_MEMCPY_TIME}},
+      {"GPU_MI250",
+       {TargetMetric::GPU_DEVICE_TIME, TargetMetric::GPU_DEVICE_MEMCPY_TIME}},
+  };
   return *kHardwareToDefaultTargetMetrics;
 }
 
