@@ -140,7 +140,7 @@ cc_library(
     name = "rocm_rpath",
     linkopts = select({
         ":build_hermetic": [
-            "-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib",
+            "-Wl,-rpath,%{rocm_toolkit_path}/lib",
         ],
         ":multiple_rocm_paths": [
             "-Wl,-rpath=%{rocm_lib_paths}",
@@ -163,7 +163,7 @@ cc_library(
 
 cc_library(
     name = "rocm_hip",
-    srcs = glob(["%{rocm_root}/lib/libamdhip*.so*"]),
+    srcs = glob(["%{rocm_root}/lib/libamdhip*.so"]),
     hdrs = glob(["%{rocm_root}/include/hip/**"]),
     include_prefix = "rocm",
     includes = [
@@ -181,10 +181,7 @@ cc_library(
 # Used by jax_rocm_plugin to minimally link to hip runtime.
 cc_library(
     name = "hip_runtime",
-    srcs = glob([
-        "%{rocm_root}/lib/libamdhip*.so*",
-        "%{rocm_root}/lib/libamd_comgr.so*",
-    ]),
+    srcs = glob(["%{rocm_root}/lib/libamdhip*.so"]),
     hdrs = glob(["%{rocm_root}/include/hip/**"]),
     include_prefix = "rocm",
     includes = [
@@ -218,7 +215,7 @@ cc_library(
     ],
     # workaround to  bring tensile files to the same fs layout as expected in the lib
     # rocblas assumes that tensile files are located in ../roblas/libraries directory
-    linkopts = ["-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib"],
+    linkopts = ["-Wl,-rpath,local_config_rocm/rocm/rocm_dis/lib"],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [":rocm_config"],
@@ -226,8 +223,7 @@ cc_library(
 
 cc_library(
     name = "rocfft",
-    data = glob(["%{rocm_root}/lib/librocfft*.so*"]),
-    linkopts = ["-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib"],
+    srcs = glob(["%{rocm_root}/lib/librocfft*.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include",
@@ -239,8 +235,7 @@ cc_library(
 
 cc_library(
     name = "hipfft",
-    data = glob(["%{rocm_root}/lib/libhipfft*.so*"]),
-    linkopts = ["-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib"],
+    srcs = glob(["%{rocm_root}/lib/libhipfft*.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include",
@@ -271,6 +266,7 @@ miopen_libs = glob([
 
 cc_library(
     name = "miopen",
+    srcs = glob(["%{rocm_root}/lib/libMIOpen*.so*"]),
     hdrs = glob(["%{rocm_root}/include/miopen/**"]),
     data = select({
         ":build_hermetic": miopen_libs,
@@ -283,7 +279,7 @@ cc_library(
     ],
     # workaround to  bring miopen db files to the same fs layout as expected in the lib
     # rocblas assumes that miopen db files are located in ../share/miopen/db directory
-    linkopts = ["-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib"],
+    linkopts = ["-Wl,-rpath,local_config_rocm/rocm/rocm_dis/lib"],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [":rocm_config"],
@@ -433,13 +429,13 @@ hipblas_libs = glob(["%{rocm_root}/lib/libhipblas.so*"])
 
 cc_library(
     name = "hipblas",
+    srcs = glob(["%{rocm_root}/lib/libhipblas.so*"]),
     hdrs = glob(["%{rocm_root}/include/hipblas/**"]),
     data = select({
         ":build_hermetic": hipblas_libs,
         ":multiple_rocm_paths": hipblas_libs,
         "//conditions:default": [],
     }),
-    linkopts = ["-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib"],
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include/",
@@ -483,7 +479,7 @@ cc_library(
     ],
     # workaround to  bring tensile files to the same fs layout as expected in the lib
     # hibplatslt assumes that tensile files are located in ../hipblaslt/libraries directory
-    linkopts = ["-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib"],
+    linkopts = ["-Wl,-rpath,local_config_rocm/rocm/rocm_dis/lib"],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [":rocm_config"],
@@ -583,18 +579,4 @@ filegroup(
     name = "all_files",
     srcs = glob(["%{rocm_root}/**"]),
     visibility = ["//visibility:public"],
-)
-
-platform(
-    name = "linux_x64",
-    constraint_values = [
-        "@platforms//os:linux",
-        "@platforms//cpu:x86_64",
-        "@bazel_tools//tools/cpp:clang",
-    ],
-
-    exec_properties = {
-        "container-image": "docker://%{rocm_rbe_docker_image}",
-        "OSFamily": "Linux",
-    },
 )
