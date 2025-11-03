@@ -542,7 +542,17 @@ auto OptionalBitcast(HloInstruction **optional_bitcast, Pattern pattern) {
   return m::AnyOf<HloInstruction>(m::Bitcast(optional_bitcast, pattern),
                                   std::move(pattern));
 }
-
+// Helper function to check if matrix bias should be disabled for ROCm
+// MI355X: Disable matrix-bias fusion on gfx950 for ROCm 7.0.0-7.0.1 due to
+// a known FP8 stability issue in hipBLASLt when matrix bias is used.
+bool ShouldDisableMatrixBiasForRocm(const se::GpuComputeCapability& gpu_version) {
+#if defined(TENSORFLOW_USE_ROCM) && (TF_ROCM_VERSION == 70000 || TF_ROCM_VERSION == 70001)
+  if (auto* rocm_cc = std::get_if<se::RocmComputeCapability>(&gpu_version)) {
+    return rocm_cc->gfx9_mi350();
+  }
+#endif
+  return false;
+}
 // The rewriting proceeds in a bottom-up way:
 //
 // (kDot A B) is rewritten into a (kCustomCall:gemm A B)
@@ -940,16 +950,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     }
 
     // Disable matrix-bias fusion on gfx950 only for ROCm 7.0.0–7.0.1.
-    bool IsDisableMatrixBiasOnGfx950 = false;
-    #if TF_ROCM_VERSION == 70000 || TF_ROCM_VERSION == 70001
-        bool IsGFX950 = false;
-        if (IsRocm(gpu_version_)) {
-          TF_ASSIGN_OR_RETURN(auto rocm_compute_capability,
-                            GetRocmComputeCapability(gpu_version_));
-          IsGFX950 = rocm_compute_capability.gfx9_mi350();
-        }
-        IsDisableMatrixBiasOnGfx950 = IsGFX950;
-    #endif
+    bool IsDisableMatrixBiasOnGfx950 = ShouldDisableMatrixBiasForRocm(gpu_version_);;
     // Attempt to fuse matrix bias into gemm with optional convert
     // add(convert(gemm(a, b)), c) -> gemm(a, b, c)
     // add(gemm(a, b), c) -> gemm(a, b, c)
