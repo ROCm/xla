@@ -165,7 +165,7 @@ absl::Status NcclRegisteredBufferHandle::Unregister() {
 }
 
 NcclCommunicator::NcclCommunicator(ncclComm_t comm) : comm_(comm) {
-  VLOG(1) << "Created " << *this;
+  std::cerr << "#### Created NcclCommunicator" << *this << std::endl;
 }
 
 NcclCommunicator::~NcclCommunicator() {
@@ -176,6 +176,7 @@ NcclCommunicator::~NcclCommunicator() {
   } else {
     VLOG(1) << "Skipping destruction; already aborted " << *this;
   }
+  std::cerr << "#### Destroyed NicclCommunicator " << *this << std::endl;
 }
 
 absl::Status NcclCommunicator::Abort() {
@@ -210,6 +211,8 @@ absl::StatusOr<size_t> NcclCommunicator::NumRanks() const {
   }
   int32_t count;
   XLA_NCCL_RETURN_IF_ERROR(ncclCommCount(comm_, &count));
+  std::cerr << "#### Get the number of ranks in NCCL communicator: " << count
+            << std::endl;
   return count;
 }
 
@@ -242,13 +245,17 @@ absl::Status NcclCommunicator::AllReduce(
   }
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
-  VLOG(3) << absl::StreamFormat(
-      "Launch NCCL AllReduce operation on device #%d; send_buffer=%p; "
-      "recv_buffer=%p; dtype=%s; count=%d; reduction_kind=%s; comm=%p; "
-      "stream=%p",
-      stream->parent()->device_ordinal(), send_buffer.opaque(),
-      recv_buffer.opaque(), primitive_util::LowercasePrimitiveTypeName(dtype),
-      count, ReductionKindToString(reduction_kind), comm_, stream);
+  std::cerr
+      << absl::StreamFormat(
+             "#### Launch NCCL AllReduce operation on device #%d; "
+             "send_buffer=%p; "
+             "recv_buffer=%p; dtype=%s; count=%d; reduction_kind=%s; comm=%p; "
+             "stream=%p",
+             stream->parent()->device_ordinal(), send_buffer.opaque(),
+             recv_buffer.opaque(),
+             primitive_util::LowercasePrimitiveTypeName(dtype), count,
+             ReductionKindToString(reduction_kind), comm_, stream)
+      << std::endl;
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
 
@@ -272,13 +279,16 @@ absl::Status NcclCommunicator::Broadcast(se::DeviceMemoryBase send_buffer,
   }
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
-  VLOG(3) << absl::StreamFormat(
-      "Launch NCCL Broadcast operation on device #%d; send_buffer=%p; "
-      "recv_buffer=%p; dtype=%s; count=%d; root=%d; comm=%p; "
-      "stream=%p",
-      stream->parent()->device_ordinal(), send_buffer.opaque(),
-      recv_buffer.opaque(), primitive_util::LowercasePrimitiveTypeName(dtype),
-      count, root.value(), comm_, stream);
+  std::cerr << absl::StreamFormat(
+                   "#### Launch NCCL Broadcast operation on device #%d; "
+                   "send_buffer=%p; "
+                   "recv_buffer=%p; dtype=%s; count=%d; root=%d; comm=%p; "
+                   "stream=%p",
+                   stream->parent()->device_ordinal(), send_buffer.opaque(),
+                   recv_buffer.opaque(),
+                   primitive_util::LowercasePrimitiveTypeName(dtype), count,
+                   root.value(), comm_, stream)
+            << std::endl;
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
 
@@ -301,13 +311,17 @@ absl::Status NcclCommunicator::ReduceScatter(se::DeviceMemoryBase send_buffer,
   }
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
-  VLOG(3) << absl::StreamFormat(
-      "Launch NCCL ReduceScatter operation on device #%d; send_buffer=%p; "
-      "recv_buffer=%p; dtype=%s; count=%d; reduction_kind=%s; comm=%p; "
-      "stream=%p",
-      stream->parent()->device_ordinal(), send_buffer.opaque(),
-      recv_buffer.opaque(), primitive_util::LowercasePrimitiveTypeName(dtype),
-      count, ReductionKindToString(reduction_kind), comm_, stream);
+  std::cerr
+      << absl::StreamFormat(
+             "#### Launch NCCL ReduceScatter operation on device #%d; "
+             "send_buffer=%p; "
+             "recv_buffer=%p; dtype=%s; count=%d; reduction_kind=%s; comm=%p; "
+             "stream=%p",
+             stream->parent()->device_ordinal(), send_buffer.opaque(),
+             recv_buffer.opaque(),
+             primitive_util::LowercasePrimitiveTypeName(dtype), count,
+             ReductionKindToString(reduction_kind), comm_, stream)
+      << std::endl;
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
   auto result = ncclReduceScatter(send_buffer.opaque(), recv_buffer.opaque(),
@@ -329,12 +343,15 @@ absl::Status NcclCommunicator::AllGather(se::DeviceMemoryBase send_buffer,
   }
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
-  VLOG(3) << absl::StreamFormat(
-      "Launch NCCL AllGather operation on device #%d; send_buffer=%p; "
-      "recv_buffer=%p; dtype=%s; count=%d; comm=%p; stream=%p",
-      stream->parent()->device_ordinal(), send_buffer.opaque(),
-      recv_buffer.opaque(), primitive_util::LowercasePrimitiveTypeName(dtype),
-      count, comm_, stream);
+  std::cerr << absl::StreamFormat(
+                   "#### Launch NCCL AllGather operation on device #%d; "
+                   "send_buffer=%p; "
+                   "recv_buffer=%p; dtype=%s; count=%d; comm=%p; stream=%p",
+                   stream->parent()->device_ordinal(), send_buffer.opaque(),
+                   recv_buffer.opaque(),
+                   primitive_util::LowercasePrimitiveTypeName(dtype), count,
+                   comm_, stream)
+            << std::endl;
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
 
@@ -359,13 +376,16 @@ absl::Status NcclCommunicator::AllToAll(
     absl::StrAppendFormat(out, "%p", buffer.opaque());
   };
 
-  VLOG(3) << absl::StreamFormat(
-      "Launch NCCL AllToAll operation on device #%d; send_buffers=[%s]; "
-      "recv_buffers=[%s]; dtype=%s; count=%d; comm=%p; stream=%p",
-      stream->parent()->device_ordinal(),
-      absl::StrJoin(send_buffers, ", ", buffer_formatter),
-      absl::StrJoin(recv_buffers, ", ", buffer_formatter),
-      primitive_util::LowercasePrimitiveTypeName(dtype), count, comm_, stream);
+  std::cerr << absl::StreamFormat(
+                   "#### Launch NCCL AllToAll operation on device #%d; "
+                   "send_buffers=[%s]; "
+                   "recv_buffers=[%s]; dtype=%s; count=%d; comm=%p; stream=%p",
+                   stream->parent()->device_ordinal(),
+                   absl::StrJoin(send_buffers, ", ", buffer_formatter),
+                   absl::StrJoin(recv_buffers, ", ", buffer_formatter),
+                   primitive_util::LowercasePrimitiveTypeName(dtype), count,
+                   comm_, stream)
+            << std::endl;
 
   if (send_buffers.size() != recv_buffers.size()) {
     VLOG(-1) << "##### " << __func__ << " Error";
@@ -422,14 +442,20 @@ absl::Status NcclCommunicator::CollectivePermute(
     absl::StrAppendFormat(out, "%d", rank.value());
   };
 
-  VLOG(3) << absl::StreamFormat(
-      "Launch NCCL CollectivePermute operation on device #%d; send_buffer=%p; "
-      "recv_buffer=%p; dtype=%s; source_rank=%s; target_ranks=[%s]; count=%d; "
-      "comm=%p; stream=%p",
-      stream->parent()->device_ordinal(), send_buffer.opaque(),
-      recv_buffer.opaque(), primitive_util::LowercasePrimitiveTypeName(dtype),
-      source_rank ? absl::StrCat(source_rank->value()) : "<empty>",
-      absl::StrJoin(target_ranks, ", ", rank_formatter), count, comm_, stream);
+  std::cerr
+      << absl::StreamFormat(
+             "#### Launch NCCL CollectivePermute operation on device #%d; "
+             "send_buffer=%p; "
+             "recv_buffer=%p; dtype=%s; source_rank=%s; target_ranks=[%s]; "
+             "count=%d; "
+             "comm=%p; stream=%p",
+             stream->parent()->device_ordinal(), send_buffer.opaque(),
+             recv_buffer.opaque(),
+             primitive_util::LowercasePrimitiveTypeName(dtype),
+             source_rank ? absl::StrCat(source_rank->value()) : "<empty>",
+             absl::StrJoin(target_ranks, ", ", rank_formatter), count, comm_,
+             stream)
+      << std::endl;
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
 
@@ -469,12 +495,15 @@ absl::Status NcclCommunicator::Send(se::DeviceMemoryBase send_buffer,
   }
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
-  VLOG(3) << absl::StreamFormat(
-      "Launch NCCL Send operation on device #%d; send_buffer=%p; dtype=%s; "
-      "count=%d; peer=%d; comm=%p; stream=%p",
-      stream->parent()->device_ordinal(), send_buffer.opaque(),
-      primitive_util::LowercasePrimitiveTypeName(dtype), count, peer.value(),
-      comm_, stream);
+  std::cerr
+      << absl::StreamFormat(
+             "#### Launch NCCL Send operation on device #%d; send_buffer=%p; "
+             "dtype=%s; "
+             "count=%d; peer=%d; comm=%p; stream=%p",
+             stream->parent()->device_ordinal(), send_buffer.opaque(),
+             primitive_util::LowercasePrimitiveTypeName(dtype), count,
+             peer.value(), comm_, stream)
+      << std::endl;
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
 
@@ -496,12 +525,15 @@ absl::Status NcclCommunicator::Recv(se::DeviceMemoryBase recv_buffer,
   }
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
-  VLOG(3) << absl::StreamFormat(
-      "Launch NCCL Recv operation on device #%d; recv_buffer=%p; dtype=%s; "
-      "count=%d; peer=%d; comm=%p; stream=%p",
-      stream->parent()->device_ordinal(), recv_buffer.opaque(),
-      primitive_util::LowercasePrimitiveTypeName(dtype), count, peer.value(),
-      comm_, stream);
+  std::cerr
+      << absl::StreamFormat(
+             "#### Launch NCCL Recv operation on device #%d; recv_buffer=%p; "
+             "dtype=%s; "
+             "count=%d; peer=%d; comm=%p; stream=%p",
+             stream->parent()->device_ordinal(), recv_buffer.opaque(),
+             primitive_util::LowercasePrimitiveTypeName(dtype), count,
+             peer.value(), comm_, stream)
+      << std::endl;
 
   TF_ASSIGN_OR_RETURN(ncclDataType_t nccl_dtype, ToNcclDataType(dtype, false));
 

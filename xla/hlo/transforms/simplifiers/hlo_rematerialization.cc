@@ -2996,21 +2996,22 @@ absl::StatusOr<bool> HloRematerialization::Run(
   // exist. Update the schedule and restore it.
   TF_RETURN_IF_ERROR(saved_schedule.Update(execution_threads));
   TF_RETURN_IF_ERROR(module->set_schedule(std::move(saved_schedule)));
-  VLOG(1) << "Rematerialized " << instructions_rematerialized_
-          << " instructions in module " << module->name() << "; "
-          << net_instructions_added_ << " net instructions added";
+  std::cerr << "#### Rematerialized " << instructions_rematerialized_
+            << " instructions in module " << module->name() << "; "
+            << net_instructions_added_ << " net instructions added"
+            << std::endl;
   const int64_t current_peak_memory =
       computation_peak_memory_.at(module->entry_computation()) +
       module_output_size + total_async_peak_memory;
-  VLOG(1) << "Peak memory usage of module now "
-          << HumanReadableNumBytes(current_peak_memory) << " ("
-          << current_peak_memory << " bytes), was "
-          << HumanReadableNumBytes(before_peak_memory) << " ("
-          << before_peak_memory << " bytes)";
+  std::cerr << "#### Peak memory usage of module now "
+            << HumanReadableNumBytes(current_peak_memory) << " ("
+            << current_peak_memory << " bytes), was "
+            << HumanReadableNumBytes(before_peak_memory) << " ("
+            << before_peak_memory << " bytes)" << std::endl;
   const int64_t reduced_peak_memory = before_peak_memory - current_peak_memory;
-  VLOG(1) << "Reduced peak memory by "
-          << HumanReadableNumBytes(reduced_peak_memory) << " ("
-          << reduced_peak_memory << " bytes)";
+  std::cerr << "#### Reduced peak memory by "
+            << HumanReadableNumBytes(reduced_peak_memory) << " ("
+            << reduced_peak_memory << " bytes)" << std::endl;
 
   sizes_.before_bytes = before_peak_memory;
   sizes_.after_bytes = current_peak_memory;
