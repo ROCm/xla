@@ -147,9 +147,33 @@ bool DoesComputationFitInRegisters(
     }
   }
 
+  // Reject fusions that are too complex. Large fusions can pass device
+  // constraints and cost model checks but still perform poorly in practice,
+  // especially on architectures with more shared memory.
+  // The cost model may underestimate runtime for
+  // very large fusions due to factors like instruction cache pressure,
+  // register allocation complexity, and reduced occupancy.
+  int32_t kMaxInstructionsInTritonFusion = 0;
+
+  if (device_info.rocm_compute_capability().gfx9_mi300_series()) {
+    kMaxInstructionsInTritonFusion = 42;
+  }
+
+  const DebugOptions& debug_options = tiled_hlo_computation.GetRoots()[0]
+                                          ->hlo()
+                                          ->GetModule()
+                                          ->config()
+                                          .debug_options();
+  if (debug_options.has_xla_gpu_max_triton_fusion_instructions()) {
+    kMaxInstructionsInTritonFusion =
+        debug_options.xla_gpu_max_triton_fusion_instructions();
+  }
+
+  int32_t num_instructions = 0;
   for (const TiledHloInstruction* tiled_hlo :
        tiled_hlo_computation.instructions()) {
     bool is_operand = !fusion_adaptor.ContainsInstruction(tiled_hlo->hlo());
+    num_instructions++;
 
     // Iota is not an operand, but usually needs to be materialized in
     // registers.
@@ -158,6 +182,15 @@ bool DoesComputationFitInRegisters(
                                  device_info)) {
       return false;
     }
+  }
+
+  if (kMaxInstructionsInTritonFusion > 0 &&
+      num_instructions > kMaxInstructionsInTritonFusion) {
+    VLOG(2) << "Rejecting HloFusionAdaptor: " << fusion_adaptor.ToString()
+            << " fusion has " << num_instructions
+            << " instructions, exceeding limit of "
+            << kMaxInstructionsInTritonFusion;
+    return false;
   }
 
   return true;
@@ -673,22 +706,6 @@ GpuPerformanceModelWithIndexingAnalysis::TryFindBestTilingForFusion(
     }
 
     auto tiled_hlo_computation = std::move(maybe_tiled_hlo_computation.value());
-
-    // Reject fusions that are too complex. Large fusions can pass device
-    // constraints and cost model checks but still perform poorly in practice,
-    // especially on architectures with more shared memory.
-    // The cost model may underestimate runtime for
-    // very large fusions due to factors like instruction cache pressure,
-    // register allocation complexity, and reduced occupancy.
-    constexpr int64_t kMaxInstructionsInTritonFusion = 40;
-    auto range = tiled_hlo_computation.instructions();
-    int64_t num_instructions = std::distance(range.begin(), range.end());
-    if (num_instructions > kMaxInstructionsInTritonFusion) {
-      VLOG(2) << "Rejecting tiling: fusion has " << num_instructions 
-              << " instructions, exceeding limit of " 
-              << kMaxInstructionsInTritonFusion;
-      continue;  // Skip this tiling and try the next one
-    }
 
     LaunchDimensions launch_dimensions =
         GetLaunchDimensionsForTiledFusion(tiled_hlo_computation, *device_info_);
