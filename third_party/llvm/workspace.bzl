@@ -4,8 +4,8 @@ load("//third_party:repo.bzl", "tf_http_archive")
 
 def repo(name):
     """Imports LLVM."""
-    LLVM_COMMIT = "179d30f8c3fddd3c85056fd2b8e877a4a8513158"
-    LLVM_SHA256 = "39f33d0ba77ca40d254c767519a0f3f5692c2caa271f413e7245ab63d0787bd5"
+    LLVM_COMMIT = "edcc5ae27cd58eefbbd3adbf51707f9bbcd24bee"
+    LLVM_SHA256 = ""
 
     tf_http_archive(
         name = name,
@@ -13,7 +13,7 @@ def repo(name):
         strip_prefix = "llvm-project-{commit}".format(commit = LLVM_COMMIT),
         urls = [
             "https://storage.googleapis.com/mirror.tensorflow.org/github.com/llvm/llvm-project/archive/{commit}.tar.gz".format(commit = LLVM_COMMIT),
-            "https://github.com/llvm/llvm-project/archive/{commit}.tar.gz".format(commit = LLVM_COMMIT),
+            "https://github.com/nurmukhametov/llvm-project/archive/{commit}.tar.gz".format(commit = LLVM_COMMIT),
         ],
         build_file = "//third_party/llvm:llvm.BUILD",
         patch_file = [
