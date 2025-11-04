@@ -1,6 +1,10 @@
 name: OpenXLA Internal CI
 
 on:
+  push:
+    branches:
+      - 'rocm-jaxlib-v0.7.1'
+      - 'leo*'
   pull_request:
     branches:
       - 'rocm-jaxlib-v0.7.1'
