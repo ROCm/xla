@@ -166,8 +166,8 @@ cc_library(
 
 cc_library(
     name = "rocm_hip",
+    srcs = glob(["%{rocm_root}/lib/libamdhip*.so*"]),
     hdrs = glob(["%{rocm_root}/include/hip/**"]),
-    data = glob(["%{rocm_root}/lib/libamdhip*.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include",
@@ -176,7 +176,6 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":rocm_config",
-        ":rocm_rpath",
         ":rocprofiler_register",
         ":system_libs",
     ],
@@ -185,13 +184,13 @@ cc_library(
 # Used by jax_rocm_plugin to minimally link to hip runtime.
 cc_library(
     name = "hip_runtime",
-    hdrs = glob(["%{rocm_root}/include/hip/**"]),
     srcs = glob([
         "%{rocm_root}/lib/libamdhip*.so*",
         "%{rocm_root}/lib/libamd_comgr.so*",
         "%{rocm_root}/lib/librccl*.so*",
         "%{rocm_root}/lib/libhipsparse*.so*",
     ]),
+    hdrs = glob(["%{rocm_root}/include/hip/**"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include",
@@ -221,7 +220,6 @@ cc_library(
     includes = [
         "%{rocm_root}/include",
     ],
-
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [
@@ -232,27 +230,23 @@ cc_library(
 
 cc_library(
     name = "rocfft",
-    data = glob(["%{rocm_root}/lib/librocfft*.so*"]),
+    srcs = glob(["%{rocm_root}/lib/librocfft*.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include",
     ],
     linkstatic = 1,
     visibility = ["//visibility:public"],
-    deps = [
-        ":rocm_config",
-        ":rocm_rpath",
-    ],
+    deps = [":rocm_config"],
 )
 
 cc_library(
     name = "hipfft",
-    data = glob(["%{rocm_root}/lib/libhipfft*.so*"]),
+    srcs = glob(["%{rocm_root}/lib/libhipfft*.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include",
     ],
-    linkopts = ["-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib"],
     linkstatic = 1,
     visibility = ["//visibility:public"],
     deps = [
@@ -305,8 +299,8 @@ cc_library(
 
 cc_library(
     name = "rccl",
+    srcs = glob(["%{rocm_root}/lib/librccl*.so*"]),
     hdrs = glob(["%{rocm_root}/include/rccl/**"]),
-    data = glob(["%{rocm_root}/lib/librccl*.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include",
@@ -317,7 +311,6 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":rocm_config",
-        ":rocm_rpath",
         ":system_libs",
     ],
 )
@@ -363,8 +356,8 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":rocm_config",
-        ":rocsparse",
         ":rocm_rpath",
+        ":rocsparse",
     ],
 )
 
@@ -389,8 +382,8 @@ cc_library(
 
 cc_library(
     name = "rocprofiler-sdk",
-    hdrs = glob(["%{rocm_root}/include/rocprofiler-sdk/**"]),
     srcs = glob(["%{rocm_root}/lib/librocprofiler-sdk*.so*"]),
+    hdrs = glob(["%{rocm_root}/include/rocprofiler-sdk/**"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include/",
@@ -398,8 +391,8 @@ cc_library(
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [
-        ":rocm_config",
         ":hip_runtime",
+        ":rocm_config",
     ],
 )
 
