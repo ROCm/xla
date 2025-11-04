@@ -21,9 +21,10 @@ bazel --bazelrc=${XLA_DIR}/build_tools/rocm/rocm_xla.bazelrc test \
     --build_tag_filters=cpu,gpu,-tpu,-config-cuda-only \
     --test_tag_filters=cpu,gpu,-tpu,-config-cuda-only \
     --action_env=TF_ROCM_AMDGPU_TARGETS=gfx908,gfx90a,gfx942 \
+    --test_timeout=920,2400,7200,9600 \
     --//jax:build_jaxlib=true \
     --run_under=@xla//build_tools/rocm:exclusive_local_wrapper \
-    --action_env=REMOTE_GPU_TESTING=True \
+    --action_env=REMOTE_GPU_TESTING=1 \
     "//tests/..."
 
 popd
