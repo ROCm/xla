@@ -1271,12 +1271,19 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
                 "optimizations. debug_options are written to the --xla_dump_to "
                 "dir, or, if no dir is specified, to stdout. Ignored unless "
                 "xla_dump_hlo_as_text is true."));
-  flag_list->push_back(
-      tsl::Flag("xla_gpu_enable_triton_softmax_fusion",
-                bool_setter_for(&DebugOptions::set_xla_gpu_enable_triton_softmax_fusion),
-                debug_options->xla_gpu_enable_triton_softmax_fusion(),
-                "Enable fusion of the softmax function to triton"
-                "default value is true"));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_enable_triton_softmax_fusion",
+      bool_setter_for(&DebugOptions::set_xla_gpu_enable_triton_softmax_fusion),
+      debug_options->xla_gpu_enable_triton_softmax_fusion(),
+      "Enable fusion of the softmax function to triton"
+      "default value is true"));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_max_triton_fusion_instructions",
+      int32_setter_for(
+          &DebugOptions::set_xla_gpu_max_triton_fusion_instructions),
+      debug_options->xla_gpu_max_triton_fusion_instructions(),
+      "Sets the maximum number of instructions in a Triton fusion kernel."
+      "default value is 40"));
   flag_list->push_back(
       tsl::Flag("xla_dump_hlo_as_proto",
                 bool_setter_for(&DebugOptions::set_xla_dump_hlo_as_proto),
@@ -2642,8 +2649,7 @@ FlagStatus GetFlagStatus(absl::string_view flag_name) {
           "xla_gpu_all_reduce_combine_threshold_bytes",
           "xla_gpu_autotune_level",
           "xla_gpu_collective_permute_decomposer_threshold",
-          "xla_gpu_cublas_fallback",
-          "xla_gpu_dot_merger_threshold_mb",
+          "xla_gpu_cublas_fallback", "xla_gpu_dot_merger_threshold_mb",
           "xla_gpu_enable_dynamic_slice_fusion",
           "xla_gpu_enable_latency_hiding_scheduler",
           "xla_gpu_enable_pipelined_all_gather",
