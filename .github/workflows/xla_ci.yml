@@ -4,11 +4,11 @@ on:
   push:
     branches:
       - 'rocm-jaxlib-v0.7.1'
-      - 'leo*'
+      - 'leo/**'
   pull_request:
     branches:
       - 'rocm-jaxlib-v0.7.1'
-      - 'leo*'
+      - 'leo/**'
   workflow_dispatch:
 
 jobs:
