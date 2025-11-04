@@ -189,6 +189,7 @@ cc_library(
         "%{rocm_root}/lib/libamd_comgr.so*",
         "%{rocm_root}/lib/librccl*.so*",
         "%{rocm_root}/lib/libhipsparse*.so*",
+        "%{rocm_root}/lib/libhipsolver*.so*",
     ]),
     hdrs = glob(["%{rocm_root}/include/hip/**"]),
     include_prefix = "rocm",
@@ -198,6 +199,8 @@ cc_library(
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [
+        ":hipfft",
+        ":rocfft",
         ":rocm_config",
         ":system_libs",
     ],
@@ -249,10 +252,7 @@ cc_library(
     ],
     linkstatic = 1,
     visibility = ["//visibility:public"],
-    deps = [
-        ":hipsolver",
-        ":rocm_config",
-    ],
+    deps = [":rocm_config"],
 )
 
 cc_library(
@@ -433,19 +433,22 @@ hipsolver_libs = glob([
 
 cc_library(
     name = "hipsolver",
-    hdrs = glob(["%{rocm_root}/include/hipsolver/**"]),
-    data = select({
+    srcs = select({
         ":build_hermetic": hipsolver_libs,
         ":multiple_rocm_paths": hipsolver_libs,
         "//conditions:default": [],
     }),
+    hdrs = glob(["%{rocm_root}/include/hipsolver/**"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include/",
     ],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
-    deps = [":rocm_config"],
+    deps = [
+        ":rocm_config",
+        ":rocm_rpath",
+    ],
 )
 
 hipblas_libs = glob(["%{rocm_root}/lib/libhipblas.so*"])
@@ -466,7 +469,6 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":hipblas-common",
-        ":hipsolver",
         ":rocm_config",
         ":rocm_rpath",
     ],
@@ -517,10 +519,12 @@ cc_library(
     includes = [
         "%{rocm_root}/include/",
     ],
-    linkopts = ["-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib"],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
-    deps = [":rocm_config"],
+    deps = [
+        ":rocm_config",
+        ":rocm_rpath",
+    ],
 )
 
 cc_library(
