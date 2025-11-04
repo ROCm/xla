@@ -275,9 +275,11 @@ absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
   static const bool enable_per_stream_comms =
       xla::GetDebugOptionsFromFlags().xla_gpu_enable_nccl_per_stream_comms();
 
-  return GpuCliqueKey(std::move(participants),
+  auto s = GpuCliqueKey(std::move(participants),
                       enable_per_stream_comms ? stream_id : kNoStreamId,
                       stream_kind, std::move(participant_groups));
+  VLOG(1) << "GpuCliqueKey " << s.ToString();
+  return s;
 }
 
 absl::StatusOr<CommunicatorHandle> GetNcclComm(
