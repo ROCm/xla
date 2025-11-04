@@ -346,8 +346,8 @@ cc_library(
 
 cc_library(
     name = "hipsparse",
+    srcs = glob(["%{rocm_root}/lib/libhipsparse*.so*"]),
     hdrs = glob(["%{rocm_root}/include/hipsparse/**"]),
-    data = glob(["%{rocm_root}/lib/libhipsparse*.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include/",
@@ -356,7 +356,6 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":rocm_config",
-        ":rocm_rpath",
         ":rocsparse",
     ],
 )
@@ -398,33 +397,27 @@ cc_library(
 
 cc_library(
     name = "rocsolver",
+    srcs = glob(["%{rocm_root}/lib/librocsolver*.so*"]),
     hdrs = glob(["%{rocm_root}/include/rocsolver/**"]),
-    data = glob(["%{rocm_root}/lib/librocsolver*.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include/",
     ],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
-    deps = [
-        ":rocm_config",
-        ":rocm_rpath",
-    ],
+    deps = [":rocm_config"],
 )
 
 cc_library(
     name = "rocsparse",
-    data = glob(["%{rocm_root}/lib/librocsparse*.so*"]),
+    srcs = glob(["%{rocm_root}/lib/librocsparse*.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include/",
     ],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
-    deps = [
-        ":rocm_config",
-        ":rocm_rpath",
-    ],
+    deps = [":rocm_config"],
 )
 
 hipsolver_libs = glob([
@@ -513,18 +506,15 @@ cc_library(
 
 cc_library(
     name = "rocrand",
+    srcs = glob(["%{rocm_root}/lib/librocrand*.so*"]),
     hdrs = glob(["%{rocm_root}/include/rocrand/**"]),
-    data = glob(["%{rocm_root}/lib/librocrand*.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include/",
     ],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
-    deps = [
-        ":rocm_config",
-        ":rocm_rpath",
-    ],
+    deps = [":rocm_config"],
 )
 
 cc_library(
