@@ -3,7 +3,7 @@
 set -e
 
 JAX_DIR=$1
-XLA_DIR=$2
+XLA_DIR="/tf/xla" # TODO: later use argument passed from CI job
 
 pushd $JAX_DIR
 
