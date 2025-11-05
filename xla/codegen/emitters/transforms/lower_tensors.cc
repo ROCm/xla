@@ -814,7 +814,20 @@ Value CreateBitcast(mlir::ImplicitLocOpBuilder& b, mlir::Operation* op,
   // direct bitcast from a struct to an int is possible.
   Type llvm_input_ty = converter.convertType(value.getType());
   Type llvm_result_ty = converter.convertType(ty);
-  Type ptr_ty = ml::LLVMPointerType::get(b.getContext());
+  // Ensure allocas land in the correct address space for the target. On AMDGPU
+  // kernels, allocas must be in private address space (addrspace 5).
+  unsigned alloca_as = 0;
+  if (auto func = op->getParentOfType<mlir::func::FuncOp>()) {
+    if (auto mod = func->getParentOfType<mlir::ModuleOp>()) {
+      if (auto triple = mod->getAttrOfType<mlir::StringAttr>("llvm.target_triple")) {
+        auto tv = triple.getValue();
+        if (tv.contains("amdgcn") || tv.contains("amdgpu")) {
+          alloca_as = 5;
+        }
+      }
+    }
+  }
+  Type ptr_ty = ml::LLVMPointerType::get(b.getContext(), alloca_as);
   auto func = op->getParentOfType<mlir::func::FuncOp>();
   // AMDGPU backend needs allocas to be out of loops.
   // Move them to the entry block to be on the safe side.

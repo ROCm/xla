@@ -82,9 +82,8 @@ std::vector<llvm::Value*> EmitTupleAllocasAtFunctionEntry(
     CHECK(ShapeUtil::IsScalar(element_shape));
     llvm::Type* type = llvm_ir::PrimitiveTypeToIrType(
         element_shape.element_type(), b->getContext());
-    llvm::AllocaInst* alloca = b->CreateAlloca(
-        type,
-        /*ArraySize=*/nullptr, AsStringRef(absl::StrCat("tuple_element_", i)));
+    llvm::AllocaInst* alloca = llvm_ir::EmitAllocaAtFunctionEntry(
+        type, absl::StrCat("tuple_element_", i), b);
     generated_allocas.push_back(alloca);
   }
 
