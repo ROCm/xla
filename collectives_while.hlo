@@ -1,0 +1,50 @@
+HloModule test
+
+sum {
+  a = f32[] parameter(0)
+  b = f32[] parameter(1)
+  ROOT add.2 = f32[] add(a, b)
+}
+
+while_cond {
+  pp = (s32[], f32[1024,1024], f32[1024,4096]) parameter(0)
+  idx = s32[] get-tuple-element(pp), index=0
+  total = s32[] constant(15)
+  ROOT cmp = pred[] compare(idx, total), direction=LT
+}
+
+while_body {
+  pp = (s32[], f32[1024,1024], f32[1024,4096]) parameter(0)
+  idx = s32[] get-tuple-element(pp), index=0
+
+  X = f32[1024,1024] get-tuple-element(pp), index=1
+  Y = f32[1024,4096] get-tuple-element(pp), index=2
+  XZ = f32[1024,1024,4] broadcast(X), dimensions={0,1}
+  X2 = f32[1024,4096] reshape(XZ)
+  dot_XY = f32[1024,1024] dot(X2, Y), lhs_contracting_dims={1}, rhs_contracting_dims={1}
+
+  permute1 = f32[1024,1024] collective-permute(dot_XY), source_target_pairs={{0,1}, {1,2}, {2,3}, {3,0}}
+  permute2 = f32[1024,1024] collective-permute(dot_XY), source_target_pairs={{0,2}, {1,3}, {2,1}, {3,0}}
+  tanh_XY = f32[1024,1024] tanh(dot_XY)
+  a2a = f32[1024,1024] all-to-all(dot_XY), dimensions={0}, replica_groups={{0,1,2,3}}
+
+  all-gather = f32[1024,4096] all-gather(dot_XY), replica_groups={{0,1,2,3}}, dimensions={1}, use_global_device_ids=true, channel_id=1
+  all-reduce = f32[1024,1024] all-reduce(X), replica_groups={}, to_apply=sum
+
+  a1 =  f32[1024,1024] add(permute1, a2a)
+  a2 =  f32[1024,1024] add(a1, permute2)
+  a3 =  f32[1024,1024] multiply(a2, all-reduce)
+
+  inc = s32[] constant(1)
+  idx2 = s32[] add(idx, inc)
+  
+  ROOT TT = (s32[], f32[1024,1024], f32[1024,4096]) tuple(idx2, a3, all-gather)
+} 
+
+ENTRY main {
+  c0 = s32[] constant(0)
+  X = f32[1024,1024] parameter(0)
+  Y = f32[1024,4096] parameter(1)
+  tuple = (s32[], f32[1024,1024], f32[1024,4096]) tuple(c0, X, Y)
+  ROOT while = (s32[], f32[1024,1024], f32[1024,4096]) while(tuple), condition=while_cond, body=while_body
+}
