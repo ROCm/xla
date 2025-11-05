@@ -14,9 +14,33 @@ on:
 jobs:
   build-and-test:
     runs-on: linux-mi325-2
+    env:
+      # Tries to use the GitHub Repository Variable 'DOCKER_IMAGE' first.
+      # If not set falls back to default
+      DOCKER_IMAGE: ${{ vars.DOCKER_IMAGE || 'rocm/tensorflow-build@sha256:a2672ff2510b369b4a5f034272a518dc93c2e492894e3befaeef19649632ccaa' }}
+      CONTAINER_NAME: builder-${{ github.run_id }}
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
 
+      - name: Start Docker container
+        run: |
+          docker run -d -t --name ${{ env.CONTAINER_NAME }} \
+            --device=/dev/kfd \
+            --device=/dev/dri \
+            --ipc=host \
+            --shm-size=16G \
+            --group-add=video \
+            --cap-add=SYS_PTRACE \
+            --network=host \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            ${{ env.DOCKER_IMAGE }} \
+            bash
+
       - name: Run build and test shell script
-        run: ./scripts/my-example-script.sh
+        run: docker exec ${{ env.CONTAINER_NAME }} ./scripts/my-example-script.sh
+
+      - name: Teardown Docker container
+        if: always()
+        run: docker rm -f ${{ env.CONTAINER_NAME }}
