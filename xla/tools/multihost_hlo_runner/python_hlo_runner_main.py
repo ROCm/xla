@@ -18,43 +18,62 @@ import pathlib
 import argparse
 
 from transformer_engine import transformer_engine_jax
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "0"
 from xla.tools.multihost_hlo_runner import py_hlo_multihost_runner
 
+
 def _register_transformer_engine_custom_calls():
-  for name, value in transformer_engine_jax.registrations().items():
-    try:
-      py_hlo_multihost_runner.register_custom_call_target(
-          name, value, platform="ROCM", api_version=1
-      )
-    except:
-      pass
+    for name, value in transformer_engine_jax.registrations().items():
+        try:
+            py_hlo_multihost_runner.register_custom_call_target(
+                name, value, platform="ROCM", api_version=1
+            )
+        except:
+            pass
+
 
 def main():
     parser = argparse.ArgumentParser(description="Run the specified hlo_file.")
     parser.add_argument("hlo_file", help="Path to the input file")
     parser.add_argument("-o", help="Path to output literal file")
+    parser.add_argument(
+        "--num_repeats",
+        type=int,
+        default=1,
+        help="Number of times repeat the run (default: 1)",
+    )
 
     args = parser.parse_args()
-  
+
     _register_transformer_engine_custom_calls()
-    
+
     config = py_hlo_multihost_runner.PyHloRunnerConfig()
-    config.input_format = py_hlo_multihost_runner.InputFormat.Text
+    config.input_format = (
+        py_hlo_multihost_runner.InputFormat.SnapshotProtoBinary
+        if ".pb" in args.hlo_file
+        else py_hlo_multihost_runner.InputFormat.Text
+    )
     config.hlo_argument_mode = (
         py_hlo_multihost_runner.ModuleArgumentMode.UseRandomInputs
     )
+    config.log_output = True
+    config.num_nodes = 1
+    config.num_replicas = 1
+    config.num_repeats = args.num_repeats
+    config.output_mode = py_hlo_multihost_runner.ModuleOutputMode.ReturnDevice0Outputs
     if args.o:
-      config.dump_output_literal_to = args.o
-    
-    os.environ['NVTE_FUSED_ATTN'] = '1'
-    os.environ['NVTE_FUSED_ATTN_CK'] = '1'
-    os.environ['NVTE_CK_USES_FWD_V3'] = '1'
-    os.environ['NVTE_CK_USES_BWD_V3'] = '1'
-    os.environ['NVTE_CK_IS_V3_ATOMIC_FP32'] = '1'
-    os.environ['NVTE_CK_HOW_V3_BF16_CVT'] = '1'
-    
+        config.dump_output_literal_to = args.o
+
+    os.environ["NVTE_FUSED_ATTN"] = "1"
+    os.environ["NVTE_FUSED_ATTN_CK"] = "1"
+    os.environ["NVTE_CK_USES_FWD_V3"] = "1"
+    os.environ["NVTE_CK_USES_BWD_V3"] = "1"
+    os.environ["NVTE_CK_IS_V3_ATOMIC_FP32"] = "1"
+    os.environ["NVTE_CK_HOW_V3_BF16_CVT"] = "1"
+
     py_hlo_multihost_runner.RunHloFiles([args.hlo_file], config)
+    print("DONE")
 
 
 if __name__ == "__main__":
-  main()
+    main()
