@@ -3081,6 +3081,39 @@ xla_test(
     ],
 )
 
+xla_test(
+    name = "triton_fusion_debug_test",
+    timeout = "short",
+    srcs = ["triton_fusion_debug_test.cc"],
+    backends = [
+        "a100",
+        "h100",
+        "b200",
+        "amdgpu_any",
+    ],
+    tags = ["test_migrated_to_hlo_runner_pjrt"],
+    deps = [
+        ":triton_fusion_numerics_verifier",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla:xla_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:platform_util",
+        "//xla/service/gpu/autotuning:autotuner_compile_util",
+        "//xla/service/gpu/autotuning:autotuner_util",
+        "//xla/stream_executor:platform",
+        "//xla/tests:hlo_pjrt_test_base",
+        "//xla/tsl/lib/core:status_test_util",
+        "//xla/tsl/platform:status_matchers",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+
 cc_library(
     name = "variadic_op_splitter",
     srcs = ["variadic_op_splitter.cc"],
