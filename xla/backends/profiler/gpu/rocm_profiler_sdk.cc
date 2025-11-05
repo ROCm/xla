@@ -371,7 +371,6 @@ void RocmTracer::CodeObjectCallback(
         auto pos = it->second.name.find(s);
         if (pos == 0) {
           it->second.name = it->second.name.substr(s.length());
-          VLOG(0) << "new name " << it->second.name;
         }
       }
     } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD) {
