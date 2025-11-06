@@ -1597,7 +1597,7 @@ void HLORunnerProfiler::UploadSession() {
     xspace_ = nullptr;
   }
   TF_CHECK_OK(tsl::profiler::SaveGzippedToolData(
-         "/tf/xla/uu_dump", "", "zzz", "trace.json.gz",
+         dump_path_, "", "profile", "trace.json.gz",
          tsl::profiler::TraceContainerToJson(container)));
 }
 
