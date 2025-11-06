@@ -1240,6 +1240,9 @@ message DebugOptions {
   // xla_gpu_ensure_minor_dot_contraction_dims
   reserved 5, 117, 133, 139, 176, 178, 180, 193, 214, 194, 221, 242, 206, 320,
       325, 326, 332, 361, 270, 229, 271, 279, 218, 369, 371, 249;
+
+  // rocm_trace_max_events
+  int64 xla_gpu_rocm_max_trace_events = 505;
 }
 
 // Contains flags which affects the GPU compilation result.

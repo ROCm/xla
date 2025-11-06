@@ -333,6 +333,9 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_unsupported_crash_on_hlo_pass_silent_hlo_change(false);
   opts.set_xla_unsupported_crash_on_hlo_pass_noop_change(false);
   opts.set_xla_gpu_experimental_enable_split_k_rewrite(false);
+
+  // maximum number of events to be traced, default to 4M
+  opts.set_xla_gpu_rocm_max_trace_events(4 * 1024 * 1024);
   return opts;
 }
 
@@ -1140,12 +1143,12 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
                 "optimizations. debug_options are written to the --xla_dump_to "
                 "dir, or, if no dir is specified, to stdout. Ignored unless "
                 "xla_dump_hlo_as_text is true."));
-  flag_list->push_back(
-      tsl::Flag("xla_gpu_enable_triton_softmax_fusion",
-                bool_setter_for(&DebugOptions::set_xla_gpu_enable_triton_softmax_fusion),
-                debug_options->xla_gpu_enable_triton_softmax_fusion(),
-                "Enable fusion of the softmax function to triton"
-                "default value is true"));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_enable_triton_softmax_fusion",
+      bool_setter_for(&DebugOptions::set_xla_gpu_enable_triton_softmax_fusion),
+      debug_options->xla_gpu_enable_triton_softmax_fusion(),
+      "Enable fusion of the softmax function to triton"
+      "default value is true"));
   flag_list->push_back(
       tsl::Flag("xla_dump_hlo_as_proto",
                 bool_setter_for(&DebugOptions::set_xla_dump_hlo_as_proto),
@@ -2355,6 +2358,12 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_experimental_enable_split_k_rewrite(),
       "Enable the pass that splits GEMMs that underutilize the GPU load by "
       "splitting the K dimension using a heuristic."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_rocm_max_trace_events",
+      int64_setter_for(&DebugOptions::set_xla_gpu_rocm_max_trace_events),
+      debug_options->xla_gpu_rocm_max_trace_events(),
+      "Maximum number of ROCm trace events (applies to callback/activity/"
+      "annotation). Set as high as memory allows; up to 1e9."));
 }  // NOLINT(readability/fn_size)
 
 // Allocates flag_values and flag_objects; this function must not be called more
