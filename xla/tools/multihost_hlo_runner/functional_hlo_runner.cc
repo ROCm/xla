@@ -1093,6 +1093,8 @@ FunctionalHloRunner::RunInternal(
   std::vector<std::vector<std::unique_ptr<PjRtBuffer>>> device_buffers;
   std::vector<std::vector<PjRtBuffer*>> argument_ptrs;
 
+  PerDeviceLiteralVecType Xresults;
+
   for (int repeat = 0; repeat < running_options.num_repeats; ++repeat) {
     VLOG(0) << "======== FunctionalHloRunner: ExecuteOnDevices started (repeat = "
             << repeat << ").";
@@ -1144,17 +1146,41 @@ FunctionalHloRunner::RunInternal(
           break;
       }
     }
-  } // for
 
-  TF_ASSIGN_OR_RETURN(auto results,
+    TF_ASSIGN_OR_RETURN(Xresults,
                       FetchAndLogOutput(client, output_buffers,
                                         running_options.module_output_mode,
                                         running_options.log_input_output()));
 
+    for (const auto& [device_id, literal_vec] : Xresults) {
+    for(const auto& L : literal_vec) {
+
+      if (L.shape().element_type() == PrimitiveType::F32) {
+        size_t total = 0, finite = 0;
+        using TT = float;
+        double ssum = 0;
+        L.EachCell<TT>(
+          [&](absl::Span<const int64_t> indices, TT value) {
+            total++;
+            if (std::isfinite(value)) {
+              finite++;
+              ssum += (double)value;
+            }
+          });
+        VLOG(0) << repeat << ": dev" << device_id << " finite: " << finite
+            << '/' << total << " sum: " 
+            << std::setprecision(12) << (ssum/1e6) << std::hex
+            << " (" << reinterpret_cast< uint64_t& >(ssum) << ')' << std::dec;
+        
+      }
+    } // for literal
+    }// for Xresults
+  } // for
+
   if (running_options.profiler != nullptr) {
     running_options.profiler->UploadSession();
   }
-  return results;
+  return Xresults;
 }
 
 absl::StatusOr<std::vector<std::vector<std::unique_ptr<PjRtBuffer>>>>
