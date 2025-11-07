@@ -243,6 +243,84 @@ ENTRY main {
   TF_EXPECT_OK(verifier.Run(module.get(), /*execution_threads=*/{}));
 }
 
+
+TEST_P(TritonFusionNumericsVerifierTest, CohereHLOV71) {
+  constexpr absl::string_view kHloText = R"(
+HloModule m
+%region_2.260.clone.19 (Arg_0.55: f32[], Arg_1.55: f32[]) -> f32[] {
+  %Arg_0.55 = f32[] parameter(0), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(while)/body/TransformerBlock/TransformerBlock/layernorm/reduce_sum"}
+  %Arg_1.55 = f32[] parameter(1), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(while)/body/TransformerBlock/TransformerBlock/layernorm/reduce_sum"}
+  ROOT %add.492.0 = f32[] add(%Arg_0.55, %Arg_1.55), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(while)/body/TransformerBlock/TransformerBlock/layernorm/reduce_sum" source_file="/model/layers/transformer_block.py" source_line=253}
+}
+
+%region_2.260.clone.8 (Arg_0.44: f32[], Arg_1.44: f32[]) -> f32[] {
+  %Arg_0.44 = f32[] parameter(0), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(while)/body/TransformerBlock/TransformerBlock/layernorm/reduce_sum"}
+  %Arg_1.44 = f32[] parameter(1), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(while)/body/TransformerBlock/TransformerBlock/layernorm/reduce_sum"}
+  ROOT %add.481.0 = f32[] add(%Arg_0.44, %Arg_1.44), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(while)/body/TransformerBlock/TransformerBlock/layernorm/reduce_sum" source_file="/model/layers/transformer_block.py" source_line=253}
+}
+
+%region_2.260.clone.7 (Arg_0.43: f32[], Arg_1.43: f32[]) -> f32[] {
+  %Arg_0.43 = f32[] parameter(0), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(while)/body/TransformerBlock/TransformerBlock/layernorm/reduce_sum"}
+  %Arg_1.43 = f32[] parameter(1), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(while)/body/TransformerBlock/TransformerBlock/layernorm/reduce_sum"}
+  ROOT %add.480.0 = f32[] add(%Arg_0.43, %Arg_1.43), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(while)/body/TransformerBlock/TransformerBlock/layernorm/reduce_sum" source_file="/model/layers/transformer_block.py" source_line=253}
+}
+
+%fused_computation.337 (param_0.1730: bf16[1,16384,4096], param_1.1795: bf16[16384,4096]) -> f32[128,4096] {
+  %param_0.1730 = bf16[1,16384,4096]{2,1,0} parameter(0)
+  %convert.113.32 = f32[1,16384,4096]{2,1,0} convert(%param_0.1730), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/convert_element_type" source_file="/utils/jax_utils.py" source_line=396}
+  %bitcast.1893 = f32[16384,4096]{1,0} bitcast(%convert.113.32)
+  %constant_2184 = f32[] constant(0)
+  %reduce.310 = f32[16384]{0} reduce(%bitcast.1893, %constant_2184), dimensions={1}, to_apply=%region_2.260.clone.7, metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/layernorm/reduce_sum" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %bitcast.1892 = f32[1,16384]{1,0} bitcast(%reduce.310), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/layernorm/reduce_sum" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %constant_2183 = f32[] constant(0.000244140625)
+  %broadcast.1035 = f32[1,16384]{1,0} broadcast(%constant_2183), dimensions={}
+  %multiply.520 = f32[1,16384]{1,0} multiply(%bitcast.1892, %broadcast.1035), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/layernorm/div" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %bitcast.1891 = f32[16384]{0} bitcast(%multiply.520), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/layernorm/div" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %broadcast.1034 = f32[1,16384,4096]{2,1,0} broadcast(%bitcast.1891), dimensions={1}, metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/layernorm/sub" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %subtract.183 = f32[1,16384,4096]{2,1,0} subtract(%convert.113.32, %broadcast.1034), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/layernorm/sub" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %multiply.261.15 = f32[1,16384,4096]{2,1,0} multiply(%subtract.183, %subtract.183), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/layernorm/square" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %bitcast.1136.15 = f32[16384,4096]{1,0} bitcast(%multiply.261.15)
+  %reduce.127.15 = f32[16384]{0} reduce(%bitcast.1136.15, %constant_2184), dimensions={1}, to_apply=%region_2.260.clone.8, metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/layernorm/reduce_sum" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %bitcast.1137.13 = f32[1,16384]{1,0} bitcast(%reduce.127.15), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/layernorm/reduce_sum" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %multiply.262.13 = f32[1,16384]{1,0} multiply(%bitcast.1137.13, %broadcast.1035), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/layernorm/div" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %constant_1233_1 = f32[] constant(1e-05)
+  %broadcast.449.11 = f32[1,16384]{1,0} broadcast(%constant_1233_1), dimensions={}
+  %add.350.11 = f32[1,16384]{1,0} add(%multiply.262.13, %broadcast.449.11), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/layernorm/add" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %bitcast.213.16 = f32[1,16384,1]{2,1,0} bitcast(%add.350.11), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/jvp(LayerNorm)/LayerNorm/layernorm/add" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %rsqrt.14.5 = f32[1,16384,1]{2,1,0} rsqrt(%bitcast.213.16), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/transpose(jvp(LayerNorm))/checkpoint/rematted_computation/LayerNorm/layernorm/rsqrt" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %bitcast.215.7 = f32[16384]{0} bitcast(%rsqrt.14.5), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/transpose(jvp(LayerNorm))/checkpoint/rematted_computation/LayerNorm/layernorm/rsqrt" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %broadcast.472.7 = f32[1,16384,4096]{2,1,0} broadcast(%bitcast.215.7), dimensions={1}, metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/transpose(jvp(LayerNorm))/checkpoint/rematted_computation/LayerNorm/layernorm/mul" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %param_1.1795 = bf16[16384,4096]{1,0} parameter(1)
+  %bitcast.211.19 = bf16[1,16384,4096]{2,1,0} bitcast(%param_1.1795), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/transpose(jvp(InputEmbeddingLayer))/checkpoint/InputEmbeddingLayer/bsE,EV->bsV/dot_general" source_file="/model/layers/input_embedding_layer.py" source_line=187}
+  %convert.201.19 = f32[1,16384,4096]{2,1,0} convert(%bitcast.211.19), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/transpose(jvp(LayerNorm))/checkpoint/LayerNorm/convert_element_type" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %multiply.267.5 = f32[1,16384,4096]{2,1,0} multiply(%subtract.183, %convert.201.19), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/transpose(jvp(LayerNorm))/checkpoint/LayerNorm/layernorm/mul" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %multiply.282.3 = f32[1,16384,4096]{2,1,0} multiply(%broadcast.472.7, %multiply.267.5), metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/transpose(jvp(LayerNorm))/checkpoint/LayerNorm/layernorm/mul" source_file="/model/layers/layernorm_layer.py" source_line=58}
+  %bitcast.1210.1 = f32[128,128,4096]{2,1,0} bitcast(%multiply.282.3)
+  ROOT %reduce.180.1 = f32[128,4096]{1,0} reduce(%bitcast.1210.1, %constant_2184), dimensions={1}, to_apply=%region_2.260.clone.19, metadata={op_name="pjit(fn_with_split_model_state)/jit(main)/transpose(jvp(LayerNorm))/checkpoint/LayerNorm/layernorm/reduce_sum" source_file="/model/layers/layernorm_layer.py" source_line=58}
+}
+ENTRY main {
+  p0 = bf16[1,16384,4096] parameter(0)
+  p1 = bf16[16384,4096] parameter(1)
+  ROOT fusion = f32[128,4096] fusion(p0, p1), kind=kCustom,
+    calls=%fused_computation.337, backend_config={
+      "fusion_backend_config":{
+      "kind":"__triton",
+      "block_level_fusion_config":{
+        "output_tiles":[{"sizes":["1","1"]}],
+        "num_warps":"8",
+        "num_ctas":"1",
+        "num_stages":"1"}}}
+}
+  
+)";
+  auto module = Module(kHloText,
+                       primitive_util::LowercasePrimitiveTypeName(GetParam()));
+
+  EXPECT_NE(TritonFusion(*module), nullptr);
+  auto verifier = TritonFusionNumericsVerifier(CreateDeviceOrDevicelessConfig());
+  TF_EXPECT_OK(verifier.Run(module.get(), /*execution_threads=*/{}));
+}
+
 INSTANTIATE_TEST_SUITE_P(TritonFusionNumericsVerifierTestSuite,
                          TritonFusionNumericsVerifierTest,
                          ::testing::Values(F32));
