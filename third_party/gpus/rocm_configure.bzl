@@ -508,24 +508,27 @@ def _get_file_name(url):
 
 def _download_package(repository_ctx, archive):
     file_name = _get_file_name(archive.url)
+    repository_ctx.report_progress("Downloading and extracting {}, expected hash is {}".format(archive.url, archive.sha256))  # buildifier: disable=print
     tmp_dir = "tmp"
     repository_ctx.file(tmp_dir + "/.idx")  # create tmp dir
-
-    repository_ctx.report_progress("Downloading and extracting {}, expected hash is {}".format(archive.url, archive.sha256))  # buildifier: disable=print
+    repository_ctx.file(_DISTRIBUTION_PATH + "/.idx")  # create tmp dir
     repository_ctx.download_and_extract(
         url = archive.url,
-        output = _DISTRIBUTION_PATH,
+        output = tmp_dir if archive.sub_package else _DISTRIBUTION_PATH,
         sha256 = archive.sha256,
+        stripPrefix = archive.strip_prefix,
+        type = "zip" if archive.url.endswith(".whl") else None,
     )
 
-    all_files = repository_ctx.path(tmp_dir).readdir()
+    if archive.sub_package:
+        repository_ctx.extract(
+            archive = "{}/{}".format(tmp_dir, archive.sub_package.path),
+            output = _DISTRIBUTION_PATH,
+            stripPrefix = archive.sub_package.strip_prefix,
+        )
 
-    matched_files = [f for f in all_files if _get_file_name(str(f)).startswith("data.")]
-    for f in matched_files:
-        repository_ctx.extract(f, _DISTRIBUTION_PATH)
-
-    repository_ctx.delete(tmp_dir)
     repository_ctx.delete(file_name)
+    repository_ctx.delete(tmp_dir)
 
 def _remove_root_dir(path, root_dir):
     if path.startswith(root_dir + "/"):
@@ -540,7 +543,8 @@ def _setup_rocm_distro_dir(repository_ctx):
     if rocm_distro:
         redist = rocm_redist[rocm_distro]
         repository_ctx.file("rocm/.index")
-        _download_package(repository_ctx, redist)
+        for archive in redist:
+            _download_package(repository_ctx, archive)
         return _get_rocm_config(repository_ctx, bash_bin, _DISTRIBUTION_PATH, "")
     elif multiple_paths:
         paths_list = multiple_paths.split(":")
