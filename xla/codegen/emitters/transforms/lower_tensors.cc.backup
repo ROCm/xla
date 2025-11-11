@@ -823,9 +823,8 @@ Value CreateBitcast(mlir::ImplicitLocOpBuilder& b, mlir::Operation* op,
 
   Value llvm_value =
       b.create<UnrealizedConversionCastOp>(llvm_input_ty, value).getResult(0);
-  // Create alloca with address space 5 for AMD GPUs
   Value alloca = entry_builder.create<ml::AllocaOp>(
-      ptr_ty, llvm_input_ty, b.create<ml::ConstantOp>(b.getI32Type(), 1), /*address_space=*/5);
+      ptr_ty, llvm_input_ty, b.create<ml::ConstantOp>(b.getI32Type(), 1));
   b.create<ml::StoreOp>(llvm_value, alloca);
   auto result = b.create<ml::LoadOp>(llvm_result_ty, alloca).getResult();
   return b.create<UnrealizedConversionCastOp>(ty, result).getResult(0);

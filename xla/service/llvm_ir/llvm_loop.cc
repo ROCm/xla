@@ -102,11 +102,8 @@ void ForLoop::Emit(llvm::IRBuilderBase* b) {
   // Emit alloca for the induction variable. We do this at the entry to the
   // basic block to ensure the alloc only executes once per function (we could
   // be emitting a nested loop).
-  llvm::Function* func = preheader_bb_->getParent();
-  b->SetInsertPoint(&func->getEntryBlock(),
-                    func->getEntryBlock().getFirstInsertionPt());
-  llvm::Value* indvar_address = b->CreateAlloca(
-      start_index_->getType(), nullptr, GetQualifiedName("invar_address"));
+  llvm::Value* indvar_address = llvm_ir::EmitAllocaAtFunctionEntry(
+      start_index_->getType(), GetQualifiedName("invar_address"), b);
 
   // Preheader basic block.
   // Initialize induction variable starting index. Create branch to the header.

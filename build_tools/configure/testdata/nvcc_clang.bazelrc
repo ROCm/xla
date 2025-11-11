@@ -15,6 +15,9 @@ test --test_size_filters small,medium
 build --copt -Wno-sign-compare
 build --copt -Wno-error=unused-command-line-argument
 build --copt -Wno-gnu-offsetof-extensions
+# Fix for Clang 21 ABI breaking change (#120670)
+build --cxxopt=-fclang-abi-compat=20
+build --host_cxxopt=-fclang-abi-compat=20
 build --build_tag_filters -no_oss,-rocm-only,-oneapi-only
 build --test_tag_filters -no_oss,-rocm-only,-oneapi-only
 test --build_tag_filters -no_oss,-rocm-only,-oneapi-only
