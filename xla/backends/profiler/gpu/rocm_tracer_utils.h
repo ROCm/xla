@@ -180,6 +180,18 @@ struct DistributedProfilerContext {
   
   // Timeout for timestamp exchange operations
   absl::Duration timestamp_sync_timeout = absl::Seconds(5);
+
+  // Probe configuration for network synchronization
+  uint64_t probe_cadence_us = 800;
+  uint64_t probe_window_s = 4;
+  bool enable_probe_export = true;
+  bool enable_clock_snapshots = false;
+  std::string graph_policy = "random_graph";
+  std::vector<int> neighbors;  // Resolved neighbors for probing
+  std::vector<int> in_neighbors;  // Resolved in-neighbors for probing
+  
+  // Port assignments for directed edges: key="src->dst", value=(dst_listen_port, src_response_port)
+  std::map<std::string, std::pair<uint16_t, uint16_t>> edge_ports;
 };
 
 struct RocmTraceCollectorOptions {

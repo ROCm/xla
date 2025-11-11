@@ -1,0 +1,1203 @@
+#include "xla/backends/profiler/gpu/network_probe.h"
+
+#include <arpa/inet.h>
+#include <linux/net_tstamp.h>
+#include <linux/sockios.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <chrono>
+#include <cstring>
+#include <fstream>
+#include <mutex>
+#include <thread>
+
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
+#include "network_probe.h"
+#include "xla/backends/profiler/gpu/probe_utils.h"
+#include "xla/backends/profiler/gpu/svm_wrapper.h"
+#include "xla/tsl/platform/logging.h"
+
+namespace xla::profiler {
+
+namespace {
+
+constexpr uint16_t kBasePort = 20000;
+constexpr uint16_t kPortsPerNode = 100;
+constexpr uint64_t kPacketSpacingNs = 800000;  // 800 µs
+constexpr int kRecvTimeoutMs = 10;  // 10ms timeout for missing packets
+constexpr char kMarker[8] = "HUYGENS";
+
+// Definition for kernel timestamp structure
+struct scm_timestamping {
+  struct timespec ts[3];  // [0]: software, [1]: deprecated, [2]: hardware
+};
+
+uint64_t GetMonotonicNs() {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000ULL +
+         static_cast<uint64_t>(ts.tv_nsec);
+}
+
+sockaddr_in ParseAddress(const std::string& addr_str, uint16_t port) {
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(port);
+  
+  size_t colon = addr_str.find(':');
+  std::string host = (colon != std::string::npos) ? addr_str.substr(0, colon) : addr_str;
+  
+  if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) <= 0) {
+    // Fallback to any
+    addr.sin_addr.s_addr = INADDR_ANY;
+  }
+  
+  return addr;
+}
+
+}  // namespace
+
+NetworkProbeManager::NetworkProbeManager(const DistributedProfilerContext& config)
+    : config_(config) {}
+
+NetworkProbeManager::~NetworkProbeManager() {
+  Shutdown();
+}
+
+absl::Status NetworkProbeManager::Initialize() {
+  LOG(INFO) << "Initializing NetworkProbeManager for node " << config_.node_id;
+  
+  TF_RETURN_IF_ERROR(BuildGraph());
+  TF_RETURN_IF_ERROR(ComputeInNeighbors());
+  TF_RETURN_IF_ERROR(SetupSockets());
+  
+  // Initialize queues, counters, and mutexes for each neighbor
+  for (int src : in_neighbors_) {
+    listener_queue_map_[src] = std::make_unique<ProbeQueue>();
+    probing_mutex_map_[src] = std::make_unique<std::mutex>();
+    listener_handshake_cond_map_[src] = std::make_unique<std::condition_variable>();
+    listener_handshake_mutex_map_[src] = std::make_unique<std::mutex>();
+    listener_handshake_done_map_[src] = false;
+  }
+  for (int dst : out_neighbors_) {
+    probe_queue_map_[dst] = std::make_unique<ProbeQueue>();
+    seq_counter_map_[dst] = std::make_unique<std::atomic<uint32_t>>(0);
+    probing_mutex_map_[dst] = std::make_unique<std::mutex>();
+    probing_handshake_mutex_map_[dst] = std::make_unique<std::mutex>();
+    probing_handshake_cond_map_[dst] = std::make_unique<std::condition_variable>();
+    probing_handshake_done_map_[dst] = false;
+  }
+  
+  // Start listener threads (one per IN-neighbor)
+  running_ = true;
+  for (int src : in_neighbors_) {
+    // listener_threads_[src] = std::thread(&NetworkProbeManager::ListenerLoop, this, src);
+    listener_threads_[src].fw_thread = std::thread(&NetworkProbeManager::ProbedListener, this, src);
+    {
+      std::unique_lock<std::mutex> lock(*listener_handshake_mutex_map_[src]);
+      listener_handshake_cond_map_[src]->wait(lock, [this, src] { return listener_handshake_done_map_[src]; });
+    }
+    listener_threads_[src].bw_thread = std::thread(&NetworkProbeManager::ProbedResponder, this, src);
+  }
+  
+  LOG(INFO) << "NetworkProbeManager initialized with " 
+            << out_neighbors_.size() << " out-neighbors, " 
+            << in_neighbors_.size() << " in-neighbors (" 
+            << listener_threads_.size() << " listener threads, "
+            << neighbor_socks_.size() << " socket entries)";
+  
+  return absl::OkStatus();
+}
+
+absl::Status NetworkProbeManager::Start() {
+  if (!running_) {
+    return absl::FailedPreconditionError("Manager not initialized");
+  }
+  
+  // Start probe threads for each OUT-neighbor
+  for (int dst : out_neighbors_) {
+    // probe_threads_[dst] = std::thread(&NetworkProbeManager::ProbeNeighbor, this, dst);
+    probe_threads_[dst].fw_thread = std::thread(&NetworkProbeManager::ProbeSender, this, dst);
+    {
+      std::unique_lock<std::mutex> lock(*probing_handshake_mutex_map_[dst]);
+      probing_handshake_cond_map_[dst]->wait(lock, [this, dst] { return probing_handshake_done_map_[dst]; });
+    }
+    probe_threads_[dst].bw_thread = std::thread(&NetworkProbeManager::ProbeRespListener, this, dst);
+  }
+  
+  LOG(INFO) << "Started " << probe_threads_.size() << " probe threads";
+  return absl::OkStatus();
+}
+
+absl::Status NetworkProbeManager::Sync() {
+  // Wait for current window to complete (placeholder)
+  return absl::OkStatus();
+}
+
+absl::Status NetworkProbeManager::SetupSockets() {
+  // Port assignments are centrally allocated by master and stored in config_.edge_ports
+  // No local calculation needed - just query the map
+  
+  LOG(INFO) << "SetupSockets: node=" << config_.node_id 
+          << " out_neighbors=" << out_neighbors_.size()
+          << " in_neighbors=" << in_neighbors_.size()
+          << " edge_ports=" << config_.edge_ports.size();
+  
+  int ts_flags = SOF_TIMESTAMPING_SOFTWARE | 
+                 SOF_TIMESTAMPING_TX_SOFTWARE | 
+                 SOF_TIMESTAMPING_RX_SOFTWARE;
+  struct timeval tv = {.tv_sec = 0, .tv_usec = kRecvTimeoutMs * 1000};
+  
+  sockaddr_in bind_addr{};
+  bind_addr.sin_family = AF_INET;
+  bind_addr.sin_addr.s_addr = INADDR_ANY;
+  
+  // Create 2 sockets for each OUT-neighbor (I probe them)
+  for (int dst : out_neighbors_) {
+    NeighborSockets& socks = neighbor_socks_[dst];
+    
+    // Look up port assignment from config
+    std::string edge_key = absl::StrCat("probe_edge:", config_.node_id, "->", dst);
+    auto it = config_.edge_ports.find(edge_key);
+    if (it == config_.edge_ports.end()) {
+      return absl::InternalError(
+          absl::StrCat("No port assignment found for OUT-edge ", edge_key));
+    }
+    uint16_t dst_listen_port = it->second.first;
+    uint16_t my_response_port = it->second.second;
+    
+    socks.dst_listen_port = dst_listen_port;
+    socks.dst_addr = ParseAddress(config_.node_addresses[dst], dst_listen_port);
+    
+    // Probe socket (send Pt)
+    socks.probe_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (socks.probe_sock < 0) {
+      return absl::InternalError(absl::StrCat("Failed to create probe socket for neighbor ", dst));
+    }
+    
+    if (setsockopt(socks.probe_sock, SOL_SOCKET, SO_TIMESTAMPING, &ts_flags, sizeof(ts_flags)) < 0) {
+      LOG(WARNING) << "Kernel SW timestamping not supported, using clock_gettime fallback";
+      hw_timestamp_enabled_ = false;
+    } else {
+      hw_timestamp_enabled_ = true;
+    }
+    setsockopt(socks.probe_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    
+    bind_addr.sin_port = 0;  // Ephemeral
+    if (bind(socks.probe_sock, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) < 0) {
+      close(socks.probe_sock);
+      return absl::InternalError(absl::StrCat("Failed to bind probe socket for ", dst));
+    }
+    
+    // Probe response socket (recv Pr)
+    socks.probe_response_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (socks.probe_response_sock < 0) {
+      close(socks.probe_sock);
+      return absl::InternalError(absl::StrCat("Failed to create probe response socket for ", dst));
+    }
+    
+    setsockopt(socks.probe_response_sock, SOL_SOCKET, SO_TIMESTAMPING, &ts_flags, sizeof(ts_flags));
+    setsockopt(socks.probe_response_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    
+    bind_addr.sin_port = htons(my_response_port);
+    if (bind(socks.probe_response_sock, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) < 0) {
+      close(socks.probe_sock);
+      close(socks.probe_response_sock);
+      return absl::InternalError(absl::StrCat("Failed to bind response socket to port ", my_response_port));
+    }
+    
+    char dst_ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(socks.dst_addr.sin_addr), dst_ip_str, INET_ADDRSTRLEN);
+    LOG(INFO) << "Created OUT sockets for neighbor " << dst 
+              << " probe_sock=" << socks.probe_sock
+              << " probe_response_sock=" << socks.probe_response_sock
+              << " (send to " << dst_ip_str << ":" << socks.dst_listen_port 
+              << ", recv on port " << my_response_port << ")";
+  }
+  
+  // Create 2 sockets for each IN-neighbor (they probe me)
+  for (int src : in_neighbors_) {
+    NeighborSockets& socks = neighbor_socks_[src];  // May already exist if bidirectional
+    
+    // Look up port assignment from config
+    std::string edge_key = absl::StrCat("probe_edge:", src, "->", config_.node_id);
+    auto it = config_.edge_ports.find(edge_key);
+    if (it == config_.edge_ports.end()) {
+      return absl::InternalError(
+          absl::StrCat("No port assignment found for IN-edge ", edge_key));
+    }
+    uint16_t my_listen_port = it->second.first;
+    uint16_t src_response_port = it->second.second;
+    
+    // Listen socket (recv Pt)
+    socks.listen_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (socks.listen_sock < 0) {
+      return absl::InternalError(absl::StrCat("Failed to create listen socket for neighbor ", src));
+    }
+    
+    setsockopt(socks.listen_sock, SOL_SOCKET, SO_TIMESTAMPING, &ts_flags, sizeof(ts_flags));
+    setsockopt(socks.listen_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    
+    socks.my_listen_port = my_listen_port;
+    bind_addr.sin_port = htons(my_listen_port);
+    if (bind(socks.listen_sock, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) < 0) {
+      close(socks.listen_sock);
+      return absl::InternalError(absl::StrCat("Failed to bind listen socket to port ", socks.my_listen_port));
+    }
+    
+    // Listen response socket (send Pr)
+    socks.listen_response_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (socks.listen_response_sock < 0) {
+      close(socks.listen_sock);
+      return absl::InternalError(absl::StrCat("Failed to create listen response socket for ", src));
+    }
+    
+    setsockopt(socks.listen_response_sock, SOL_SOCKET, SO_TIMESTAMPING, &ts_flags, sizeof(ts_flags));
+    setsockopt(socks.listen_response_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    
+    bind_addr.sin_port = 0;  // Ephemeral
+    if (bind(socks.listen_response_sock, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) < 0) {
+      close(socks.listen_sock);
+      close(socks.listen_response_sock);
+      return absl::InternalError(absl::StrCat("Failed to bind listen response socket for ", src));
+    }
+    
+    socks.src_response_addr = ParseAddress(config_.node_addresses[src], src_response_port);
+    
+    char src_ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(socks.src_response_addr.sin_addr), src_ip_str, INET_ADDRSTRLEN);
+    LOG(INFO) << "Created IN sockets for neighbor " << src 
+              << " listen_sock=" << socks.listen_sock
+              << " listen_response_sock=" << socks.listen_response_sock
+              << " (listen on port " << socks.my_listen_port 
+              << ", send to " << src_ip_str << ":" << src_response_port << ")";
+}
+
+  return absl::OkStatus();
+}
+
+absl::Status NetworkProbeManager::BuildGraph() {
+  out_neighbors_ = config_.neighbors;
+  
+  if (out_neighbors_.empty()) {
+    LOG(INFO) << "No out-neighbors configured for node " << config_.node_id;
+  } else {
+    LOG(INFO) << "Node " << config_.node_id << " has " << out_neighbors_.size() 
+              << " out-neighbors: " << absl::StrJoin(out_neighbors_, ", ");
+  }
+  
+  return absl::OkStatus();
+}
+
+absl::Status NetworkProbeManager::ComputeInNeighbors() {
+  // Discover in-neighbors by checking who has us in their out-neighbors list
+  // This requires the full graph to be available in config
+  
+  in_neighbors_ = config_.in_neighbors;
+  LOG(INFO) << "Node " << config_.node_id << " has " << in_neighbors_.size() 
+            << " in-neighbors: " << absl::StrJoin(in_neighbors_, ", ");
+  
+  return absl::OkStatus();
+}
+
+// Helper: Send packet with timestamping
+bool NetworkProbeManager::SendPacket(int sockfd, const sockaddr_in& dest,
+                                     ProbeMessageType type,
+                                     uint64_t embed1, uint64_t embed2,
+                                     uint32_t sequence_id,
+                                     uint64_t* send_ts_ns) {
+  ProbePacket pkt{};
+  pkt.embed1 = embed1;
+  pkt.embed2 = embed2;
+  pkt.type = static_cast<uint8_t>(type);
+  pkt.version = 1;
+  pkt.src_node_id = static_cast<uint16_t>(config_.node_id);
+  pkt.dst_node_id = 0;  // Set by caller if needed
+  pkt.sequence_id = sequence_id;
+  std::memcpy(pkt.marker, kMarker, sizeof(kMarker));
+  
+  // Try sendmsg for kernel timestamps
+  struct iovec iov = {.iov_base = &pkt, .iov_len = sizeof(pkt)};
+  struct msghdr msg{};
+  msg.msg_name = const_cast<sockaddr_in*>(&dest);
+  msg.msg_namelen = sizeof(dest);
+  msg.msg_iov = &iov;
+  msg.msg_iovlen = 1;
+  
+  ssize_t sent = sendmsg(sockfd, &msg, 0);
+  if (sent < 0) {
+    LOG(INFO) << "sendmsg failed: errno=" << errno << " (" << strerror(errno) 
+            << "), type=" << static_cast<int>(type) << ", seq=" << sequence_id
+            << ", sockfd=" << sockfd;
+    // Fallback to sendto + clock_gettime
+    // ssize_t fallback = sendto(sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr*)&dest, sizeof(dest));
+    // if (fallback < 0) {
+    //   LOG(INFO) << "sendto also failed: errno=" << errno << " (" << strerror(errno) << ")";
+    // }
+    *send_ts_ns = GetMonotonicNs();
+    return false;
+  }
+  
+  // Try to read TX timestamp from error queue
+  char ctrl[256];
+  struct iovec iov_err = {.iov_base = ctrl, .iov_len = sizeof(ctrl)};
+  struct msghdr msg_err{};
+  msg_err.msg_iov = &iov_err;
+  msg_err.msg_iovlen = 1;
+  msg_err.msg_control = ctrl;
+  msg_err.msg_controllen = sizeof(ctrl);
+  
+  ssize_t err_len = recvmsg(sockfd, &msg_err, MSG_ERRQUEUE | MSG_DONTWAIT);
+  if (err_len >= 0) {
+    for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg_err); cmsg != nullptr;
+         cmsg = CMSG_NXTHDR(&msg_err, cmsg)) {
+      if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_TIMESTAMPING) {
+        struct scm_timestamping* tss = (struct scm_timestamping*)CMSG_DATA(cmsg);
+        *send_ts_ns = tss->ts[0].tv_sec * 1e9 + tss->ts[0].tv_nsec;
+      return true;
+      }
+    }
+  }
+  
+  // Fallback
+  *send_ts_ns = GetMonotonicNs();
+  return false;
+}
+
+// Helper: Receive packet with timestamping
+bool NetworkProbeManager::RecvPacket(int sockfd, ProbePacket* pkt,
+                                     uint64_t* recv_ts_ns,
+                                     sockaddr_in* sender) {
+  if (sockfd < 0) {
+    LOG(INFO) << "RecvPacket called with invalid sockfd=" << sockfd;
+    return false;
+  }
+  
+  char ctrl[256];
+  struct iovec iov = {.iov_base = pkt, .iov_len = sizeof(*pkt)};
+  struct msghdr msg{};
+  msg.msg_name = sender;
+  msg.msg_namelen = sender ? sizeof(*sender) : 0;
+  msg.msg_iov = &iov;
+  msg.msg_iovlen = 1;
+  msg.msg_control = ctrl;
+  msg.msg_controllen = sizeof(ctrl);
+  
+  ssize_t len = recvmsg(sockfd, &msg, 0);
+  if (len < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      VLOG(2) << "recvmsg timeout on sockfd=" << sockfd;
+      return false;
+    }
+    LOG(INFO) << "recvmsg failed: len=" << len << " errno=" << errno << " (" << strerror(errno) 
+            << "), sockfd=" << sockfd;
+    // Fallback to recvfrom
+    socklen_t addrlen = sender ? sizeof(*sender) : 0;
+    len = recvfrom(sockfd, pkt, sizeof(*pkt), 0, (struct sockaddr*)sender,
+                   sender ? &addrlen : nullptr);
+    if (len < 0) {
+      LOG(INFO) << "recvfrom also failed: len=" << len << " errno=" << errno << " (" << strerror(errno) << ")";
+      return false;
+    }
+    *recv_ts_ns = GetMonotonicNs();
+    return false;
+  }
+  
+  if (len != sizeof(*pkt)) {
+    LOG(INFO) << "recvmsg received partial packet: len=" << len << " expected=" << sizeof(*pkt) 
+            << " sockfd=" << sockfd;
+    return false;
+  }
+  
+  // Extract RX timestamp from ancillary data
+  for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg); cmsg != nullptr;
+       cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+    if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_TIMESTAMPING) {
+      struct scm_timestamping* tss = (struct scm_timestamping*)CMSG_DATA(cmsg);
+      *recv_ts_ns = tss->ts[0].tv_sec * 1e9 + tss->ts[0].tv_nsec;
+      return true;
+    }
+  }
+  
+  // Fallback
+  *recv_ts_ns = GetMonotonicNs();
+  return false;
+}
+
+bool NetworkProbeManager::PerformHandshake(int neighbor_id, bool is_prober) {
+  auto it = neighbor_socks_.find(neighbor_id);
+  if (it == neighbor_socks_.end()) {
+    LOG(ERROR) << "No socket info for neighbor " << neighbor_id;
+    return false;
+  }
+  
+  constexpr int kHandshakeRetries = 5;
+  constexpr int kHandshakeTimeoutMs = 1000;
+  
+  if (is_prober) {
+    // PROBER: Send SYN, wait for ACK
+    int probe_sock = it->second.probe_sock;
+    int response_sock = it->second.probe_response_sock;
+    sockaddr_in dst_addr = it->second.dst_addr;
+    
+    char dst_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &dst_addr.sin_addr, dst_ip, INET_ADDRSTRLEN);
+    
+    LOG(INFO) << "Handshake: Prober sending SYN to neighbor " << neighbor_id
+              << " via probe_sock=" << probe_sock
+              << " to " << dst_ip << ":" << ntohs(dst_addr.sin_port)
+              << ", waiting for ACK on response_sock=" << response_sock;
+    
+    for (int retry = 0; retry < kHandshakeRetries; ++retry) {
+      // Send SYN
+      uint64_t syn_tx;
+      if (!SendPacket(probe_sock, dst_addr, ProbeMessageType::kSyn, 
+                      0, 0, 0, &syn_tx)) {
+        LOG(WARNING) << "Failed to send SYN to neighbor " << neighbor_id 
+                     << " retry=" << retry;
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        continue;
+      }
+      
+      LOG(INFO) << "Handshake: SYN sent to neighbor " << neighbor_id << ", waiting for ACK...";
+      
+      // Wait for ACK
+      ProbePacket ack;
+      uint64_t ack_rx;
+      if (RecvPacket(response_sock, &ack, &ack_rx, nullptr)) {
+        LOG(INFO) << "Handshake: Received packet type=" << static_cast<int>(ack.type)
+                  << " from node=" << ack.src_node_id
+                  << " (expected type=8, node=" << neighbor_id << ")";
+        if (ack.type == static_cast<uint8_t>(ProbeMessageType::kAck) &&
+            ack.src_node_id == neighbor_id) {
+          LOG(INFO) << "Handshake: Received ACK from neighbor " << neighbor_id;
+          return true;
+        } else {
+          LOG(WARNING) << "Handshake: Wrong packet type or source";
+        }
+      } else {
+        LOG(WARNING) << "Handshake: RecvPacket timeout/failed for neighbor " << neighbor_id;
+      }
+      
+      LOG(WARNING) << "Handshake: No ACK from neighbor " << neighbor_id 
+                   << " retry=" << retry;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    }
+    
+    LOG(ERROR) << "Handshake FAILED: No ACK from neighbor " << neighbor_id 
+               << " after " << kHandshakeRetries << " retries";
+    return false;
+    
+  } else {
+    // LISTENER: Wait for SYN, send ACK
+    int listen_sock = it->second.listen_sock;
+    int response_sock = it->second.listen_response_sock;
+    sockaddr_in src_response_addr = it->second.src_response_addr;
+    
+    char resp_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &src_response_addr.sin_addr, resp_ip, INET_ADDRSTRLEN);
+    
+    LOG(INFO) << "Handshake: Listener waiting for SYN from neighbor " << neighbor_id
+              << " on listen_sock=" << listen_sock
+              << ", will ACK via response_sock=" << response_sock
+              << " to " << resp_ip << ":" << ntohs(src_response_addr.sin_port);
+    
+    for (int retry = 0; retry < kHandshakeRetries; ++retry) {
+      ProbePacket syn;
+      uint64_t syn_rx;
+      sockaddr_in sender_addr;
+      
+      if (RecvPacket(listen_sock, &syn, &syn_rx, &sender_addr)) {
+        char sender_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &sender_addr.sin_addr, sender_ip, INET_ADDRSTRLEN);
+        
+        LOG(INFO) << "Handshake: Listener received packet type=" << static_cast<int>(syn.type)
+                  << " from node=" << syn.src_node_id
+                  << " sender=" << sender_ip << ":" << ntohs(sender_addr.sin_port)
+                  << " (expected type=7, node=" << neighbor_id << ")";
+        
+        if (syn.type == static_cast<uint8_t>(ProbeMessageType::kSyn) &&
+            syn.src_node_id == neighbor_id) {
+          LOG(INFO) << "Handshake: Received SYN from neighbor " << neighbor_id;
+          
+          // Send ACK
+          uint64_t ack_tx;
+          if (SendPacket(response_sock, src_response_addr, ProbeMessageType::kAck,
+                        0, 0, 0, &ack_tx)) {
+            LOG(INFO) << "Handshake: Sent ACK to neighbor " << neighbor_id
+                      << " to " << resp_ip << ":" << ntohs(src_response_addr.sin_port);
+            return true;
+          } else {
+            LOG(ERROR) << "Failed to send ACK to neighbor " << neighbor_id;
+            return false;
+          }
+        } else {
+          LOG(WARNING) << "Handshake: Wrong packet type or source, ignoring";
+        }
+      } else {
+        LOG(WARNING) << "Handshake: RecvPacket timeout on listen_sock, retry=" << retry;
+      }
+      
+      // Timeout, wait longer
+      std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    }
+    
+    LOG(ERROR) << "Handshake FAILED: No SYN from neighbor " << neighbor_id 
+               << " after " << kHandshakeRetries << " retries";
+    return false;
+  }
+}
+
+void NetworkProbeManager::ProbeSender(int dst_node_id) {
+  LOG(INFO) << "ProbeSender thread started for OUT-neighbor " << dst_node_id;
+  
+  auto it = neighbor_socks_.find(dst_node_id);
+  if (it == neighbor_socks_.end() || it->second.probe_sock < 0) {
+    LOG(ERROR) << "No probe socket found for neighbor " << dst_node_id;
+    return;
+  }
+  
+  int probe_sock = it->second.probe_sock;
+  int response_sock = it->second.probe_response_sock;
+  sockaddr_in dst_addr = it->second.dst_addr;
+  
+  LOG(INFO) << "Prober using probe_sock=" << probe_sock 
+          << " response_sock=" << response_sock 
+          << " dst_listen_port=" << it->second.dst_listen_port
+          << " dst_addr=" << inet_ntoa(dst_addr.sin_addr) << ":" << ntohs(dst_addr.sin_port);
+  
+  // Perform handshake before starting probe loop
+  if (!PerformHandshake(dst_node_id, true)) {
+    LOG(ERROR) << "Handshake failed with neighbor " << dst_node_id << ", aborting prober";
+    return;
+  }
+  {
+    std::unique_lock<std::mutex> lock(*probing_handshake_mutex_map_[dst_node_id]);
+    probing_handshake_done_map_[dst_node_id] = true;
+  }
+  probing_handshake_cond_map_[dst_node_id]->notify_one();
+  
+  LOG(INFO) << "Handshake complete with neighbor " << dst_node_id << ", entering probe loop";
+  
+  uint64_t window_start_ns = GetMonotonicNs();
+  uint64_t window_end_ns = window_start_ns + config_.probe_window_s * 1'000'000'000ULL;
+  
+  // std::vector<probe_info::ProbePair> pairs;
+  
+  while (running_.load()) {
+    uint64_t now_ns = GetMonotonicNs();
+    if (now_ns > window_end_ns) {
+      std::scoped_lock<std::mutex> lock(*probing_mutex_map_[dst_node_id]);
+      // End of window: train SVM
+      TrainAndStoreSVM(dst_node_id, probe_pairs_[dst_node_id]);
+      probe_pairs_[dst_node_id].clear();
+      window_start_ns = now_ns;
+      window_end_ns = now_ns + config_.probe_window_s * 1'000'000'000ULL;
+    }
+    
+    // Generate unique sequence ID
+    uint32_t seq_id = seq_counter_map_[dst_node_id]->fetch_add(1);
+    
+    // Send Pt1/Pt2/Pt3
+    uint64_t pt1_tx, pt2_tx;
+    if (!SendPacket(probe_sock, dst_addr, ProbeMessageType::kPt1,
+                    0, 0, seq_id, &pt1_tx)) {
+      LOG(INFO) << "Failed to send Pt1 to neighbor " << dst_node_id << " seq=" << seq_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);  // lost_packets++
+      continue;
+    }
+    else{
+      std::scoped_lock<std::mutex> lock(*probing_mutex_map_[dst_node_id]);
+      probe_pairs_[dst_node_id][seq_id].pt1_tx = pt1_tx;
+    }
+    std::this_thread::sleep_for(std::chrono::nanoseconds(kPacketSpacingNs));
+    
+    if (!SendPacket(probe_sock, dst_addr, ProbeMessageType::kPt2,
+                    pt1_tx, 0, seq_id, &pt2_tx)) {
+      LOG(INFO) << "Failed to send Pt2 to neighbor " << dst_node_id << " seq=" << seq_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+    else{
+      std::scoped_lock<std::mutex> lock(*probing_mutex_map_[dst_node_id]);
+      probe_pairs_[dst_node_id][seq_id].pt2_tx = pt2_tx;
+    }
+  }
+}
+    
+
+void NetworkProbeManager::ProbeRespListener(int dst_node_id) {
+  
+  LOG(INFO) << "Probe Listener thread started for OUT-neighbor " << dst_node_id;
+  
+  auto it = neighbor_socks_.find(dst_node_id);
+  if (it == neighbor_socks_.end() || it->second.probe_sock < 0) {
+    LOG(ERROR) << "No probe socket found for neighbor " << dst_node_id;
+    return;
+  }
+  
+  int probe_sock = it->second.probe_sock;
+  int response_sock = it->second.probe_response_sock;
+  sockaddr_in dst_addr = it->second.dst_addr;
+  
+  LOG(INFO) << "Prober using probe_sock=" << probe_sock 
+          << " response_sock=" << response_sock 
+          << " dst_listen_port=" << it->second.dst_listen_port
+          << " dst_addr=" << inet_ntoa(dst_addr.sin_addr) << ":" << ntohs(dst_addr.sin_port);
+  
+  uint64_t window_start_ns = GetMonotonicNs();
+  uint64_t window_end_ns = window_start_ns + config_.probe_window_s * 1'000'000'000ULL;
+  while (running_.load()) {
+    // Receive Pr (must match seq_id)
+    ProbePacket pr;
+    uint64_t pr_rx;
+    if (!RecvPacket(response_sock, &pr, &pr_rx, nullptr)) {
+      continue;  // Timeout - packet lost
+    }
+    if (pr.type == static_cast<uint8_t>(ProbeMessageType::kPr1)) {
+      auto pt1_rx = pr.embed2;
+      auto seq_id = pr.sequence_id;
+      // Note: dst_node_id is the function parameter, not from packet
+      auto pr1_rx = pr_rx;
+      std::scoped_lock<std::mutex> lock(*probing_mutex_map_[dst_node_id]);
+      probe_pairs_[dst_node_id][seq_id].pt1_rx = pt1_rx;
+      probe_pairs_[dst_node_id][seq_id].pr1_rx = pr1_rx;
+    }
+    else if (pr.type == static_cast<uint8_t>(ProbeMessageType::kPr2)) {
+      auto pt2_rx = pr.embed2;
+      auto seq_id = pr.sequence_id;
+      auto pr1_tx = pr.embed1;
+      auto pr2_rx = pr_rx;
+      std::scoped_lock<std::mutex> lock(*probing_mutex_map_[dst_node_id]);
+      if(probe_pairs_[dst_node_id][seq_id].pr1_rx > 0) {
+        probe_pairs_[dst_node_id][seq_id].pt2_rx = pt2_rx;
+        probe_pairs_[dst_node_id][seq_id].pr2_rx = pr2_rx;
+        probe_pairs_[dst_node_id][seq_id].pr1_tx = pr1_tx;
+      }
+    }
+    else if (pr.type == static_cast<uint8_t>(ProbeMessageType::kPd1)) {
+      auto seq_id = pr.sequence_id;
+      auto pr2_tx = pr.embed1;
+      std::scoped_lock<std::mutex> lock(*probing_mutex_map_[dst_node_id]);
+      probe_pairs_[dst_node_id][seq_id].pr2_tx = pr2_tx;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
+void NetworkProbeManager::ProbedResponder(int src_neighbor_id) {
+  
+  int response_sock = neighbor_socks_[src_neighbor_id].listen_response_sock;
+  sockaddr_in src_response_addr = neighbor_socks_[src_neighbor_id].src_response_addr;
+  
+  while (running_.load()) {
+    // read from queue when queue is not empty
+    // wait for condition variable when queue is empty
+    // generate Pr1/Pr2/Pd1 responses
+    uint64_t pt1_rx, pt2_rx;
+    uint32_t seq_id;
+    {
+      std::unique_lock<std::mutex> lock(listener_queue_map_[src_neighbor_id]->mutex);
+      listener_queue_map_[src_neighbor_id]->cond.wait(lock, [this, src_neighbor_id] { 
+        return !running_.load() || !listener_queue_map_[src_neighbor_id]->queue.empty(); 
+      });
+      
+      // Check if we're shutting down
+      if (!running_.load()) {
+        break;
+      }
+      
+      auto entry = listener_queue_map_[src_neighbor_id]->queue.front();
+      pt1_rx = entry.pt1_rx;
+      pt2_rx = entry.pt2_rx;
+      seq_id = entry.seq_id;
+      listener_queue_map_[src_neighbor_id]->queue.pop_front();
+    }
+    // generate Pr1/Pr2/Pd1 responses
+    uint64_t pr1_tx;
+    if (!SendPacket(response_sock, src_response_addr, ProbeMessageType::kPr1,
+               0, pt1_rx, seq_id, &pr1_tx)) {
+      LOG(ERROR) << "Failed to send Pr1 to neighbor " << src_neighbor_id << " seq=" << seq_id;
+      continue;
+    }
+    std::this_thread::sleep_for(std::chrono::nanoseconds(kPacketSpacingNs));
+    uint64_t pr2_tx;
+    if (!SendPacket(response_sock, src_response_addr, ProbeMessageType::kPr2,
+               pr1_tx, pt2_rx, seq_id, &pr2_tx)) {
+      LOG(ERROR) << "Failed to send Pr2 to neighbor " << src_neighbor_id << " seq=" << seq_id;
+      continue;
+    }
+    uint64_t pd1_tx;
+    if (!SendPacket(response_sock, src_response_addr, ProbeMessageType::kPd1,
+               pr2_tx, 0, seq_id, &pd1_tx)) {
+      LOG(ERROR) << "Failed to send Pd1 to neighbor " << src_neighbor_id << " seq=" << seq_id;
+      continue;
+    }
+  }
+  
+  LOG(INFO) << "Listener thread exiting for IN-neighbor " << src_neighbor_id;
+  
+}
+
+void NetworkProbeManager::ProbedListener(int src_neighbor_id) {
+  LOG(INFO) << "Listener thread started for IN-neighbor " << src_neighbor_id;
+  
+  auto it = neighbor_socks_.find(src_neighbor_id);
+  if (it == neighbor_socks_.end() || it->second.listen_sock < 0) {
+    LOG(ERROR) << "No listen socket found for neighbor " << src_neighbor_id;
+    return;
+  }
+  
+  int listen_sock = it->second.listen_sock;
+  int response_sock = it->second.listen_response_sock;
+  sockaddr_in src_response_addr = it->second.src_response_addr;
+  
+  LOG(INFO) << "Listener using listen_sock=" << listen_sock 
+          << " response_sock=" << response_sock 
+          << " my_listen_port=" << it->second.my_listen_port;
+  
+  // Perform handshake before starting probe loop
+  if (!PerformHandshake(src_neighbor_id, false)) {
+    LOG(ERROR) << "Handshake failed with neighbor " << src_neighbor_id << ", aborting listener";
+    return;
+  }
+  {
+    std::unique_lock<std::mutex> lock(*listener_handshake_mutex_map_[src_neighbor_id]);
+    listener_handshake_done_map_[src_neighbor_id] = true;
+  }
+  listener_handshake_cond_map_[src_neighbor_id]->notify_one();
+  LOG(INFO) << "Handshake complete with neighbor " << src_neighbor_id << ", entering probe loop";
+  
+  while (running_.load()) {
+    // Receive Pt1 from this specific neighbor
+    ProbePacket pt;
+    uint64_t pt_rx;
+    sockaddr_in sender_addr;
+    if (!RecvPacket(listen_sock, &pt, &pt_rx, &sender_addr)) {
+      continue;  // Timeout - this is normal, just continue
+    }
+    uint32_t seq_id = pt.sequence_id;
+    if(pt.type == static_cast<uint8_t>(ProbeMessageType::kPt1)) {
+      auto pt1_rx = pt_rx;
+      auto seq_id = pt.sequence_id;
+      // Note: src_neighbor_id is the function parameter, not from packet
+      std::scoped_lock<std::mutex> lock(*probing_mutex_map_[src_neighbor_id]);
+      probe_pairs_[src_neighbor_id][seq_id].pt1_rx = pt1_rx;
+    }
+    else if(pt.type == static_cast<uint8_t>(ProbeMessageType::kPt2)) {
+      auto pt2_rx = pt_rx;
+      auto seq_id = pt.sequence_id;
+      std::scoped_lock<std::mutex> lock(*probing_mutex_map_[src_neighbor_id]);
+      probe_pairs_[src_neighbor_id][seq_id].pt2_rx = pt2_rx;
+      if(probe_pairs_[src_neighbor_id][seq_id].pt1_rx > 0) {
+        auto pt1_rx = probe_pairs_[src_neighbor_id][seq_id].pt1_rx;
+        {
+          std::unique_lock<std::mutex> lock(listener_queue_map_[src_neighbor_id]->mutex);
+          listener_queue_map_[src_neighbor_id]->queue.push_back({pt1_rx, pt2_rx, seq_id});
+        }
+        listener_queue_map_[src_neighbor_id]->cond.notify_one();
+      }
+    }
+    // wait for condition variable when queue is empty
+  }
+}
+
+void NetworkProbeManager::ListenerLoop(int src_neighbor_id) {
+  LOG(INFO) << "Listener thread started for IN-neighbor " << src_neighbor_id;
+  
+  auto it = neighbor_socks_.find(src_neighbor_id);
+  if (it == neighbor_socks_.end() || it->second.listen_sock < 0) {
+    LOG(ERROR) << "No listen socket found for neighbor " << src_neighbor_id;
+    return;
+  }
+  
+  int listen_sock = it->second.listen_sock;
+  int response_sock = it->second.listen_response_sock;
+  sockaddr_in src_response_addr = it->second.src_response_addr;
+  
+  LOG(INFO) << "Listener using listen_sock=" << listen_sock 
+          << " response_sock=" << response_sock 
+          << " my_listen_port=" << it->second.my_listen_port;
+  
+  // Perform handshake before starting probe loop
+  if (!PerformHandshake(src_neighbor_id, false)) {
+    LOG(ERROR) << "Handshake failed with neighbor " << src_neighbor_id << ", aborting listener";
+    return;
+  }
+  
+  LOG(INFO) << "Handshake complete with neighbor " << src_neighbor_id << ", entering probe loop";
+  
+  while (running_.load()) {
+    // Receive Pt1 from this specific neighbor
+    ProbePacket pt1;
+    uint64_t t1_rx;
+    sockaddr_in sender_addr;
+    
+    if (!RecvPacket(listen_sock, &pt1, &t1_rx, &sender_addr)) {
+      // Timeout - this is normal, just continue
+      continue;
+    }
+    
+    if (pt1.type != static_cast<uint8_t>(ProbeMessageType::kPt1)) {
+      continue;  // Out of order, skip
+    }
+    
+    uint32_t seq_id = pt1.sequence_id;
+    
+    // Receive Pt2 (must match seq_id)
+    ProbePacket pt2;
+    uint64_t t2_rx;
+    if (!RecvPacket(listen_sock, &pt2, &t2_rx, nullptr)) {
+      continue;  // Timeout - packet lost
+    }
+    if (pt2.type != static_cast<uint8_t>(ProbeMessageType::kPt2) ||
+        pt2.sequence_id != seq_id) {
+      continue;  // Sequence mismatch
+    }
+    uint64_t t1_tx = pt2.embed1;
+    
+    // Receive Pt3
+    
+    
+    // Send Pr1/Pr2/Pr3 responses to sender's response port
+    uint64_t pr1_tx, pr2_tx, pd1_tx;
+    SendPacket(response_sock, src_response_addr, ProbeMessageType::kPr1,
+               0, t1_rx, seq_id, &pr1_tx);
+    std::this_thread::sleep_for(std::chrono::nanoseconds(kPacketSpacingNs));
+    
+    SendPacket(response_sock, src_response_addr, ProbeMessageType::kPr2,
+               pr1_tx, t2_rx, seq_id, &pr2_tx);    
+    
+    // uint64_t flag = pure_pt ? (1ULL << 63) : 0ULL;
+    SendPacket(response_sock, src_response_addr, ProbeMessageType::kPd1,
+               pr2_tx, 0, seq_id, &pd1_tx);
+    ProbePacket pd2;
+    uint64_t t3_rx;
+    if (!RecvPacket(listen_sock, &pd2, &t3_rx, nullptr)) {
+      continue;  // Timeout - packet lost
+    }
+    if (pd2.type != static_cast<uint8_t>(ProbeMessageType::kPd2) ||
+        pd2.sequence_id != seq_id) {
+      continue;  // Sequence mismatch
+    }
+    uint64_t t2_tx = pd2.embed1;
+  }
+  
+  LOG(INFO) << "Listener thread exiting for IN-neighbor " << src_neighbor_id;
+}
+
+void NetworkProbeManager::ProbeNeighbor(int dst_node_id) {
+  LOG(INFO) << "Probe thread started for OUT-neighbor " << dst_node_id;
+  
+  auto it = neighbor_socks_.find(dst_node_id);
+  if (it == neighbor_socks_.end() || it->second.probe_sock < 0) {
+    LOG(ERROR) << "No probe socket found for neighbor " << dst_node_id;
+    return;
+  }
+  
+  int probe_sock = it->second.probe_sock;
+  int response_sock = it->second.probe_response_sock;
+  sockaddr_in dst_addr = it->second.dst_addr;
+  
+  LOG(INFO) << "Prober using probe_sock=" << probe_sock 
+          << " response_sock=" << response_sock 
+          << " dst_listen_port=" << it->second.dst_listen_port
+          << " dst_addr=" << inet_ntoa(dst_addr.sin_addr) << ":" << ntohs(dst_addr.sin_port);
+  
+  // Perform handshake before starting probe loop
+  if (!PerformHandshake(dst_node_id, true)) {
+    LOG(ERROR) << "Handshake failed with neighbor " << dst_node_id << ", aborting prober";
+    return;
+  }
+  
+  LOG(INFO) << "Handshake complete with neighbor " << dst_node_id << ", entering probe loop";
+  
+  uint64_t window_start_ns = GetMonotonicNs();
+  uint64_t window_end_ns = window_start_ns + config_.probe_window_s * 1'000'000'000ULL;
+  
+  // std::vector<probe_info::ProbePair> pairs;
+  
+  while (running_.load()) {
+    uint64_t now_ns = GetMonotonicNs();
+    if (now_ns > window_end_ns) {
+      // End of window: train SVM
+      // TrainAndStoreSVM(dst_node_id, pairs);
+      // pairs.clear();
+      window_start_ns = now_ns;
+      window_end_ns = now_ns + config_.probe_window_s * 1'000'000'000ULL;
+    }
+    
+    // Generate unique sequence ID
+    uint32_t seq_id = seq_counter_map_[dst_node_id]->fetch_add(1);
+    
+    // Send Pt1/Pt2/Pt3
+    uint64_t pt1_tx, pt2_tx;
+    if (!SendPacket(probe_sock, dst_addr, ProbeMessageType::kPt1,
+                    0, 0, seq_id, &pt1_tx)) {
+      LOG(INFO) << "Failed to send Pt1 to neighbor " << dst_node_id << " seq=" << seq_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);  // lost_packets++
+      continue;
+    }
+    std::this_thread::sleep_for(std::chrono::nanoseconds(kPacketSpacingNs));
+    
+    if (!SendPacket(probe_sock, dst_addr, ProbeMessageType::kPt2,
+                    pt1_tx, 0, seq_id, &pt2_tx)) {
+      LOG(INFO) << "Failed to send Pt2 to neighbor " << dst_node_id << " seq=" << seq_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+
+
+    
+    // Receive Pr1/Pr2/Pr3 responses (on dedicated response socket)
+    ProbePacket pr1, pr2, pd1, pd2;
+    uint64_t pr1_rx, pr2_rx, pd1_rx, pd2_tx;
+    
+    bool recv_ok = RecvPacket(response_sock, &pr1, &pr1_rx, nullptr);
+    if (!recv_ok) {
+      LOG(INFO) << "Failed to recv Pr1 from neighbor " << dst_node_id << " seq=" << seq_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+    if (pr1.sequence_id != seq_id) {
+      LOG(INFO) << "Pr1 seq mismatch: expected=" << seq_id << " got=" << pr1.sequence_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+    if (pr1.src_node_id != dst_node_id) {
+      LOG(INFO) << "Pr1 src mismatch: expected=" << dst_node_id << " got=" << pr1.src_node_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+    if(pr1.type != static_cast<uint8_t>(ProbeMessageType::kPr1)) {
+      LOG(INFO) << "Pr1 type mismatch: expected=3 got=" << static_cast<int>(pr1.type);
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+    
+    recv_ok = RecvPacket(response_sock, &pr2, &pr2_rx, nullptr);
+    if (!recv_ok) {
+      LOG(INFO) << "Failed to recv Pr2 from neighbor " << dst_node_id << " seq=" << seq_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+    if (pr2.sequence_id != seq_id) {
+      LOG(INFO) << "Pr2 seq mismatch: expected=" << seq_id << " got=" << pr2.sequence_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+    if (pr2.src_node_id != dst_node_id) {
+      LOG(INFO) << "Pr2 src mismatch: expected=" << dst_node_id << " got=" << pr2.src_node_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+    if(pr2.type != static_cast<uint8_t>(ProbeMessageType::kPr2)) {
+      LOG(INFO) << "Pr2 type mismatch: expected=4 got=" << static_cast<int>(pr2.type);
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+
+    recv_ok = RecvPacket(response_sock, &pd1, &pd1_rx, nullptr);
+    if (!recv_ok) {
+      LOG(INFO) << "Failed to recv Pd1 from neighbor " << dst_node_id << " seq=" << seq_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+    if (pd1.sequence_id != seq_id) {
+      LOG(INFO) << "Pd1 seq mismatch: expected=" << seq_id << " got=" << pd1.sequence_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+    if (pd1.src_node_id != dst_node_id) {
+      LOG(INFO) << "Pd1 src mismatch: expected=" << dst_node_id << " got=" << pd1.src_node_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+    if(pd1.type != static_cast<uint8_t>(ProbeMessageType::kPd1)) {
+      LOG(INFO) << "Pd1 type mismatch: expected=5 got=" << static_cast<int>(pd1.type);
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+
+
+    if (!SendPacket(probe_sock, dst_addr, ProbeMessageType::kPd2,
+      0, 0, seq_id, &pd2_tx)) {
+      LOG(INFO) << "Failed to send Pd2 to neighbor " << dst_node_id << " seq=" << seq_id;
+      UpdateEdgeStat(dst_node_id, 1, 0);
+      continue;
+    }
+
+    // Extract embedded data
+    // uint64_t pr1_tx = pr1.embed1;
+    uint64_t pt1_rx = pr1.embed2;
+    uint64_t pr1_tx = pr2.embed1;
+    uint64_t pt2_rx = pr2.embed2;
+    uint64_t pr2_tx = pd1.embed1;
+
+    int64_t dt_sender = pt2_tx - pt1_tx;
+    int64_t dt_receiver = pt2_rx - pt1_rx;
+    bool pure_pt = std::abs(dt_receiver - dt_sender) < 50000;
+    
+    // Compute pure_pr
+    int64_t dr_sender = pr2_tx - pr1_tx;
+    int64_t dr_receiver = pr2_rx - pr1_rx;
+    bool pure_pr = std::abs(dr_sender - dr_receiver) < 50000;
+    
+    // Store pair
+    probe_info::ProbePair pair{};
+    pair.pt1_tx = pt1_tx;
+    pair.pt2_tx = pt2_tx;
+    pair.pt1_rx = pt1_rx;
+    pair.pt2_rx = pt2_rx;
+    pair.pr1_tx = pr1_tx;
+    pair.pr2_tx = pr2_tx;
+    pair.pr1_rx = pr1_rx;
+    pair.pr2_rx = pr2_rx;
+    pair.pure_pt = pure_pt;
+    pair.pure_pr = pure_pr;
+    // pairs.push_back(pair);
+    
+    UpdateEdgeStat(dst_node_id, 0, 1);  // successful_pairs++
+    // VLOG(2) << "Successfully collected pair for edge " << config_.node_id << "->" << dst_node_id 
+    //         << " seq=" << seq_id << " (total=" << pairs.size() << ")";
+    
+    // Sleep until next probe
+    std::this_thread::sleep_for(std::chrono::microseconds(config_.probe_cadence_us));
+  }
+  
+  LOG(INFO) << "Probe thread exiting for OUT-neighbor " << dst_node_id;
+}
+
+void NetworkProbeManager::TrainAndStoreSVM(
+    int dst_node_id,
+    const absl::flat_hash_map<uint32_t, probe_info::ProbePair>& pairs) {
+  if (pairs.size() < 10) {
+    LOG(WARNING) << "Insufficient pairs for SVM training: " << pairs.size();
+    return;
+  }
+  
+  auto xy_pairs = probe_utils::convert_probe_pairs_to_xy_pairs(pairs, 300000);
+  if (xy_pairs.empty()) {
+    return;
+  }
+  
+  SVMModel svm_model;
+  if (!svm_model.train(xy_pairs)) {
+    LOG(WARNING) << "SVM training failed for edge " << config_.node_id 
+                 << "->" << dst_node_id;
+    return;
+  }
+  
+  double alpha = svm_model.getAlpha();
+  double beta = svm_model.getBeta();
+  
+  {
+    absl::MutexLock lock(&stats_mu_);
+    auto key = std::make_pair(config_.node_id, dst_node_id);
+    edge_stats_[key].last_alpha = alpha;
+    edge_stats_[key].last_beta = beta;
+    edge_stats_[key].successful_pairs += xy_pairs.size();
+  }
+  
+  LOG(INFO) << "Edge " << config_.node_id << "->" << dst_node_id
+            << ": α=" << alpha << ", β=" << beta << " ns (" 
+            << pairs.size() << " pairs)";
+}
+
+void NetworkProbeManager::UpdateEdgeStat(int dst_node_id, int lost, int success) {
+  absl::MutexLock lock(&stats_mu_);
+  auto key = std::make_pair(config_.node_id, dst_node_id);
+  edge_stats_[key].lost_packets += lost;
+  edge_stats_[key].successful_pairs += success;
+}
+
+absl::Status NetworkProbeManager::ExportData() {
+  std::string output_dir = "/tmp";  // TODO: Read from config
+  
+  // Export α/β summary
+  std::string summary_file = absl::StrCat(output_dir, "/alpha_beta_node",
+                                          config_.node_id, ".csv");
+  std::ofstream summary_out(summary_file);
+  summary_out << "src,dst,alpha,beta_ns,num_pairs,lost_packets\n";
+  
+  {
+    absl::MutexLock lock(&stats_mu_);
+    for (const auto& [edge, stats] : edge_stats_) {
+      summary_out << edge.first << "," << edge.second << ","
+                  << stats.last_alpha << "," << stats.last_beta << ","
+                  << stats.successful_pairs << "," << stats.lost_packets << "\n";
+    }
+  }
+  
+  summary_out.close();
+  LOG(INFO) << "Exported probe data to " << summary_file;
+
+  return absl::OkStatus();
+}
+
+void NetworkProbeManager::Shutdown() {
+  LOG(INFO) << "Shutdown initiated...";
+  running_.store(false);
+  
+  // Wake up all condition variables waiting in ProbedResponder threads
+  for (auto& [neighbor_id, queue] : listener_queue_map_) {
+    queue->cond.notify_all();
+  }
+  for (auto& [neighbor_id, queue] : probe_queue_map_) {
+    queue->cond.notify_all();
+  }
+  
+  // Close all sockets FIRST to unblock recv() calls immediately
+  LOG(INFO) << "Closing sockets...";
+  for (auto& [neighbor_id, socks] : neighbor_socks_) {
+    if (socks.probe_sock >= 0) {
+      close(socks.probe_sock);
+      socks.probe_sock = -1;
+    }
+    if (socks.probe_response_sock >= 0) {
+      close(socks.probe_response_sock);
+      socks.probe_response_sock = -1;
+    }
+    if (socks.listen_sock >= 0) {
+      close(socks.listen_sock);
+      socks.listen_sock = -1;
+    }
+    if (socks.listen_response_sock >= 0) {
+      close(socks.listen_response_sock);
+      socks.listen_response_sock = -1;
+    }
+  }
+  
+  // Now join listener threads (for IN-neighbors)
+  LOG(INFO) << "Joining listener threads...";
+  for (auto& [neighbor_id, threads] : listener_threads_) {
+    if (threads.fw_thread.joinable()) {
+      threads.fw_thread.join();
+    }
+    if (threads.bw_thread.joinable()) {
+      threads.bw_thread.join();
+    }
+  }
+  
+  // Join probe threads (for OUT-neighbors)
+  LOG(INFO) << "Joining probe threads...";
+  for (auto& [neighbor_id, threads] : probe_threads_) {
+    if (threads.fw_thread.joinable()) {
+      threads.fw_thread.join();
+    }
+    if (threads.bw_thread.joinable()) {
+      threads.bw_thread.join();
+    }
+  }
+  
+  LOG(INFO) << "NetworkProbeManager shutdown complete";
+}
+
+}  // namespace xla::profiler

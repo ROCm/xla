@@ -35,6 +35,7 @@ limitations under the License.
 #include "tsl/platform/types.h"
 #include "tsl/profiler/lib/profiler_factory.h"
 #include "tsl/profiler/lib/profiler_interface.h"
+#include "xla/backends/profiler/gpu/network_probe.h"
 
 namespace xla {
 namespace profiler {
@@ -563,6 +564,13 @@ absl::Status RocmTraceCollectorImpl::InitializeDistributedSync() {
   ts_sync_ = std::make_unique<DistributedTimestampSynchronizer>(dist_ctx);
   TF_RETURN_IF_ERROR(ts_sync_->Initialize());
   
+  // NEW: Start probing if enabled
+  auto probe_status = ts_sync_->StartProbing();
+  if (!probe_status.ok()) {
+    LOG(WARNING) << "Failed to start probing: " << probe_status.message();
+    // Continue without probing
+  }
+  
   auto synced_ts = ts_sync_->GetLastSyncTimestamps();
   LOG(INFO) << "Distributed sync initialized. Clock offset: "
             << ts_sync_->GetClockOffset() << " ns";
@@ -583,6 +591,14 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
       space, tsl::profiler::kRoctracerApiPlaneName));
 
   VLOG(3) << "Calling RocmTraceCollectorImpl::Export num_gpus " << num_gpus_;
+
+  // NEW: Export probe data if available
+  if (ts_sync_) {
+    auto export_status = ts_sync_->ExportProbeData();
+    if (!export_status.ok()) {
+      LOG(WARNING) << "Failed to export probe data: " << export_status.message();
+    }
+  }
 
   for (int id = 0; id < num_gpus_; id++) {
     std::string name = GpuPlaneName(id);

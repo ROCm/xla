@@ -408,6 +408,64 @@ cc_library(
 )
 
 cc_library(
+  name = "svm_wrapper",
+  srcs = ["svm_wrapper.cc"],
+  hdrs = ["svm_wrapper.h"],
+  tags = [
+    "gpu",
+    "manual",
+    "rocm-only",
+  ],
+  deps = [
+    "@libsvm//:libsvm",
+  ],
+  visibility = ["//visibility:public"],
+)
+
+cc_library(
+  name = "probe_utils",
+  srcs = ["probe_utils.cc"],
+  hdrs = ["probe_utils.h"],
+  tags = [
+    "gpu",
+    "manual",
+    "rocm-only",
+  ],
+  deps = [
+    ":svm_wrapper",
+    "@com_google_absl//absl/container:flat_hash_map",
+  ],
+  visibility = ["//visibility:public"],
+)
+
+cc_library(
+  name = "network_probe",
+  srcs = ["network_probe.cc"],
+  hdrs = ["network_probe.h"],
+  copts = [
+    "-DABSL_MIN_LOG_LEVEL=0",
+    "-DABSL_MAX_VLOG_VERBOSITY=2",
+  ],
+  tags = [
+    "gpu",
+    "manual",
+    "rocm-only",
+  ],
+  deps = [
+    ":probe_utils",
+    ":rocm_tracer_utils",
+    ":svm_wrapper",
+    "@com_google_absl//absl/container:flat_hash_map",
+    "@com_google_absl//absl/log",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:statusor",
+    "@com_google_absl//absl/strings",
+    "@com_google_absl//absl/synchronization",
+  ],
+  visibility = ["//visibility:public"],
+)
+
+cc_library(
   name = "distributed_timestamp_sync",
   srcs = ["distributed_timestamp_sync.cc"],
   hdrs = ["distributed_timestamp_sync.h"],
@@ -418,8 +476,10 @@ cc_library(
   ],
   deps = [
     ":rocm_tracer_utils",
+    ":network_probe",
     "@com_google_absl//absl/log",
     "@com_google_absl//absl/status",
+    "@com_google_absl//absl/strings",
     "@com_google_absl//absl/synchronization",
     "@com_google_absl//absl/time",
     "@tsl//tsl/platform:env",
@@ -849,5 +909,47 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@local_config_cuda//cuda:cuda_headers",
         "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc",
+    ],
+)
+
+# Network probe tests (ROCm only)
+cc_test(
+    name = "network_probe_test",
+    size = "small",
+    srcs = ["network_probe_test.cc"],
+    tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
+    deps = [
+        ":network_probe",
+        ":rocm_tracer_utils",
+        "@com_google_absl//absl/strings",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_binary(
+    name = "network_probe_standalone_test",
+    srcs = ["network_probe_standalone_test.cc"],
+    copts = [
+        "-DABSL_MIN_LOG_LEVEL=0",  # Log everything (INFO and above)
+        "-DABSL_MAX_VLOG_VERBOSITY=2",  # Enable VLOG up to level 2
+    ],
+    tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
+    deps = [
+        ":network_probe",
+        ":rocm_tracer_utils",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:globals",
+        "@com_google_absl//absl/log:initialize",
+        "@com_google_absl//absl/strings",
     ],
 )

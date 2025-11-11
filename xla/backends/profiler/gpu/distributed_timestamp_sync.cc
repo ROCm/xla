@@ -26,6 +26,7 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 #include "tsl/platform/env.h"
+#include "xla/backends/profiler/gpu/network_probe.h"
 
 namespace xla::profiler {
 
@@ -97,7 +98,26 @@ absl::Status DistributedTimestampSynchronizer::Initialize() {
   }
   
   // Multi-node: perform initial sync
-  return SyncTimestamps();
+  TF_RETURN_IF_ERROR(SyncTimestamps());
+
+  // NEW: Initialize probe manager if enabled
+  if (config_.probe_cadence_us > 0) {
+    LOG(INFO) << "Enabling network probing with cadence " << config_.probe_cadence_us << " us";
+    probe_manager_ = std::make_unique<NetworkProbeManager>(config_);
+    TF_RETURN_IF_ERROR(probe_manager_->Initialize());
+  } else {
+    LOG(INFO) << "Network probing disabled";
+  }
+  
+  return absl::OkStatus();
+}
+
+absl::Status DistributedTimestampSynchronizer::StartProbing() {
+  if (!probe_manager_) {
+    VLOG(1) << "Probing not enabled, skipping StartProbing";
+    return absl::OkStatus();
+  }
+  return probe_manager_->Start();
 }
 
 int64_t DistributedTimestampSynchronizer::GetClockOffset() const {
@@ -152,10 +172,24 @@ absl::Status DistributedTimestampSynchronizer::SyncTimestamps() {
   // 3. Compute clock offset based on exchanged timestamps
   // clock_offset_ns_ = /* computed from exchanges */;
   
+  // NEW: If probe manager active, perform probe-based sync
+  if (probe_manager_) {
+    TF_RETURN_IF_ERROR(probe_manager_->Sync());
+  }
+  
   LOG(INFO) << "Timestamp synchronization complete. "
             << "Clock offset: " << clock_offset_ns_ << " ns";
   
   return absl::OkStatus();
+}
+
+absl::Status DistributedTimestampSynchronizer::ExportProbeData() {
+  if (!probe_manager_) {
+    VLOG(1) << "Probe manager not initialized, skipping probe data export";
+    return absl::OkStatus();
+  }
+  
+  return probe_manager_->ExportData();
 }
 
 }  // namespace xla::profiler

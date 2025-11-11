@@ -122,7 +122,7 @@ absl::Status DistributedRuntimeCoordinationServiceClient::Connect() {
   
   absl::Status s = coord_agent_->Connect();
   if (s.ok()) {
-    LOG(INFO) << "Connected to distributed ROCM controller";
+    LOG(INFO) << "Connected to distributed JAX controller";
   } else if (absl::IsDeadlineExceeded(s)) {
     LOG(ERROR)
         << "Failed to connect to distributed JAX controller: waited too "

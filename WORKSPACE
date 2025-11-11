@@ -3,6 +3,16 @@ workspace(name = "xla")
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
+# Automatically download and build libsvm from GitHub
+# Version 3.32 (latest as of 2024-11)
+http_archive(
+    name = "libsvm",
+    urls = ["https://github.com/cjlin1/libsvm/archive/refs/tags/v332.tar.gz"],
+    sha256 = "e1d7d316112d199ebd69c9695f79226d236b86e2c8d88e70cfe35fd383954ed8",
+    strip_prefix = "libsvm-332",
+    build_file = "//third_party/libsvm:BUILD",
+)
+
 # Initialize toolchains for ML projects.
 #
 # A hermetic build system is designed to produce completely reproducible builds for C++.

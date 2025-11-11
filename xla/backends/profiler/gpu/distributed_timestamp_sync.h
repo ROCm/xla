@@ -31,6 +31,9 @@ limitations under the License.
 
 namespace xla::profiler {
 
+// Forward declarations
+class NetworkProbeManager;
+
 // ============================================================================
 // SINGLETON: DistributedProfilerContextManager
 // ============================================================================
@@ -116,16 +119,25 @@ class DistributedTimestampSynchronizer {
   // This should be called periodically to refine clock synchronization
   absl::Status SyncTimestamps();
 
+  // NEW: Start the network probing for clock synchronization
+  absl::Status StartProbing();
+
   // Convert local GPU timestamp to synchronized global timestamp
   uint64_t LocalToGlobal(uint64_t local_ns) const;
 
   // Get detailed sync information (for debugging)
   std::vector<SyncedTimestamp> GetLastSyncTimestamps() const;
 
+  // Export probe data (CSV files with timing measurements)
+  absl::Status ExportProbeData();
+
  private:
   DistributedProfilerContext config_;
   int64_t clock_offset_ns_ = 0;  // Offset to apply to local timestamps
   std::vector<SyncedTimestamp> last_sync_timestamps_;
+
+  // NEW: Probe management
+  std::unique_ptr<NetworkProbeManager> probe_manager_;
 
   // Helper: setup socket with SOF_TIMESTAMPING_RX_SOFTWARE
   absl::Status CreateTimestampSocket();
