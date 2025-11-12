@@ -25,7 +25,7 @@ while_body {
 
   permute1 = f32[1024,1024] collective-permute(dot_XY), source_target_pairs={{0,1}, {1,2}, {2,3}, {3,0}}
   permute2 = f32[1024,1024] collective-permute(dot_XY), source_target_pairs={{0,2}, {1,3}, {2,1}, {3,0}}
-  tanh_XY = f32[1024,1024] tanh(dot_XY)
+  tanh_XY = f32[1024,1024] sine(dot_XY)
   a2a = f32[1024,1024] all-to-all(dot_XY), dimensions={0}, replica_groups={{0,1,2,3}}
 
   all-gather = f32[1024,4096] all-gather(dot_XY), replica_groups={{0,1,2,3}}, dimensions={1}, use_global_device_ids=true, channel_id=1
@@ -33,7 +33,9 @@ while_body {
 
   a1 =  f32[1024,1024] add(permute1, a2a)
   a2 =  f32[1024,1024] add(a1, permute2)
-  a3 =  f32[1024,1024] multiply(a2, all-reduce)
+  a2cos = f32[1024,1024] cosine(a2)
+  redcos = f32[1024,1024] cosine(all-reduce)
+  a3 =  f32[1024,1024] multiply(a2cos, redcos)
 
   inc = s32[] constant(1)
   idx2 = s32[] add(idx, inc)
