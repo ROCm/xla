@@ -102,7 +102,8 @@ absl::StatusOr<std::vector<RepeatedFlagModifier>> ParseRepeatedEnumModifiers(
 namespace {
 
 template <typename T>
-static auto FindRepeatedFieldValue(google::protobuf::RepeatedField<int>* list, T value) {
+static auto FindRepeatedFieldValue(google::protobuf::RepeatedField<int>* list,
+                                   T value) {
   for (auto it = list->begin(); it != list->end(); ++it) {
     if (*it == value) {
       return it;
@@ -459,6 +460,18 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_cpu_collective_call_terminate_timeout_seconds(40);
 
   opts.set_xla_keep_shardings_after_spmd(false);
+<<<<<<< HEAD
+=======
+  opts.set_xla_gpu_experimental_enable_checksum_tracing_on_thunks(false);
+  opts.set_xla_gpu_experimental_enable_buffer_saver_on_thunks(false);
+
+  // Disable NaN/Inf detection.
+  opts.set_xla_gpu_detect_nan(DebugOptions::DETECTION_MODE_NONE);
+  opts.set_xla_gpu_detect_inf(DebugOptions::DETECTION_MODE_NONE);
+
+  // maximum number of events to be traced, default to 4M
+  opts.set_xla_gpu_rocm_max_trace_events(4 * 1024 * 1024);
+>>>>>>> fb321d7e19 (update flag and id in xla.proto for rocm_max_trace_events)
   return opts;
 }
 
