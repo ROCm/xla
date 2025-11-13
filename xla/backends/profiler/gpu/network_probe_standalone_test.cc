@@ -1,12 +1,18 @@
-// Standalone 2-node network probe test
+// Standalone multi-node network probe test
 // This tests the actual NetworkProbeManager without requiring full XLA initialization
 //
 // Build:
 //   bazel build --config=rocm //xla/backends/profiler/gpu:network_probe_standalone_test
 //
 // Run 2-node test:
-//   Terminal 1: ./bazel-bin/.../network_probe_standalone_test --node_id=0 --num_nodes=2
-//   Terminal 2: ./bazel-bin/.../network_probe_standalone_test --node_id=1 --num_nodes=2
+//   Terminal 1: ./bazel-bin/.../network_probe_standalone_test --rank=0 --num_nodes=2 --addresses=10.7.76.147:12345,10.227.7.189:12346
+//   Terminal 2: ./bazel-bin/.../network_probe_standalone_test --rank=1 --num_nodes=2 --addresses=10.7.76.147:12345,10.227.7.189:12346
+//
+// Run 4-node test:
+//   Terminal 1: ./bazel-bin/.../network_probe_standalone_test --rank=0 --num_nodes=4 --addresses=addr0:port0,addr1:port1,addr2:port2,addr3:port3
+//   Terminal 2: ./bazel-bin/.../network_probe_standalone_test --rank=1 --num_nodes=4 --addresses=addr0:port0,addr1:port1,addr2:port2,addr3:port3
+//   Terminal 3: ./bazel-bin/.../network_probe_standalone_test --rank=2 --num_nodes=4 --addresses=addr0:port0,addr1:port1,addr2:port2,addr3:port3
+//   Terminal 4: ./bazel-bin/.../network_probe_standalone_test --rank=3 --num_nodes=4 --addresses=addr0:port0,addr1:port1,addr2:port2,addr3:port3
 
 #include "xla/backends/profiler/gpu/network_probe.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
@@ -23,16 +29,15 @@
 #include "absl/log/initialize.h"
 #include "absl/log/globals.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_split.h"
 
-ABSL_FLAG(int, node_id, -1, "Node ID (0 or 1)");
+ABSL_FLAG(int, rank, -1, "Node rank/ID (0 to num_nodes-1)");
 ABSL_FLAG(int, num_nodes, 2, "Total number of nodes");
-ABSL_FLAG(std::string, node0_addr, "10.7.76.147:12345", "Node 0 address");
-ABSL_FLAG(std::string, node1_addr, "10.227.7.189:12346", "Node 1 address");
-// ABSL_FLAG(std::string, node0_addr, "127.0.0.1:12345", "Node 0 address");
-// ABSL_FLAG(std::string, node1_addr, "127.0.0.1:12346", "Node 1 address");
+ABSL_FLAG(std::string, addresses, "10.7.76.147:12345,10.227.7.189:12346", "Comma-separated list of all node addresses (e.g., '10.7.76.147:12345,10.227.7.189:12346')");
 ABSL_FLAG(int, duration_sec, 10, "Test duration in seconds");
 ABSL_FLAG(int, probe_cadence_us, 800, "Probe cadence in microseconds");
 ABSL_FLAG(int, probe_window_s, 4, "Probe window in seconds");
+ABSL_FLAG(std::string, topology, "ring", "Probe topology: 'ring' (each node probes next) or 'directed' (node 0 probes all others)");
 
 namespace xla {
 namespace profiler {
@@ -44,31 +49,79 @@ void signal_handler(int signal) {
   LOG(INFO) << "Caught signal " << signal << ", shutting down...";
 }
 
-// Create a test configuration for 2-node setup
-DistributedProfilerContext CreateTestConfig(int node_id, int num_nodes) {
+// Create a dynamic test configuration for N-node setup
+DistributedProfilerContext CreateTestConfig(int rank, int num_nodes, 
+                                           const std::vector<std::string>& addresses,
+                                           const std::string& topology) {
   DistributedProfilerContext config;
   
-  config.node_id = node_id;
+  config.node_id = rank;
   config.num_nodes = num_nodes;
+  config.node_addresses = addresses;
   
-  // Hardcoded addresses
-  config.node_addresses = {
-    absl::GetFlag(FLAGS_node0_addr),
-    absl::GetFlag(FLAGS_node1_addr)
-  };
-  
-  // Hardcoded directed graph: 0 -> 1 (node 0 probes node 1)
-  if (node_id == 0) {
-    config.neighbors = {1};        // OUT: Node 0 probes node 1
-    config.in_neighbors = {};      // IN: Nobody probes node 0
-  } else if (node_id == 1) {
-    config.neighbors = {};         // OUT: Node 1 doesn't probe anyone
-    config.in_neighbors = {0};     // IN: Node 0 probes node 1
+  // Configure topology
+  if (topology == "ring") {
+    // Ring topology: each node probes the next one (last node probes first)
+    int next_node = (rank + 1) % num_nodes;
+    int prev_node = (rank - 1 + num_nodes) % num_nodes;
+    
+    config.neighbors = {next_node};       // OUT: probe the next node
+    config.in_neighbors = {prev_node};    // IN: previous node probes us
+    
+    // Assign ports for the edge from this node to next
+    std::string edge_key = absl::StrCat("probe_edge:", rank, "->", next_node);
+    // Each edge uses unique ports: target node listens on 40000+target*100, sender receives on 40000+sender*100
+    config.edge_ports[edge_key] = {40000 + next_node * 100, 40000 + rank * 100};
+    
+    config.graph_policy = "test_ring";
+  } else if (topology == "directed") {
+    // Directed topology: node 0 probes all others
+    if (rank == 0) {
+      // Node 0 probes all other nodes
+      for (int i = 1; i < num_nodes; ++i) {
+        config.neighbors.push_back(i);
+        std::string edge_key = absl::StrCat("probe_edge:0->", i);
+        config.edge_ports[edge_key] = {40000 + i * 100, 40000};
+      }
+      config.in_neighbors = {};  // Nobody probes node 0
+    } else {
+      // Other nodes only receive probes from node 0
+      config.neighbors = {};         // Don't probe anyone
+      config.in_neighbors = {0};     // Node 0 probes us
+      std::string edge_key = absl::StrCat("probe_edge:", "0->", rank);
+      config.edge_ports[edge_key] = {40000 + rank * 100, 40000};
+    }
+    config.graph_policy = "test_directed";
   }
-  
-  // Hardcoded port assignments (simulating master assignment)
-  // Edge 0->1: Node 1 listens on 20100, Node 0 receives responses on 20000
-  config.edge_ports["probe_edge:0->1"] = {20100, 20000};
+  else if(topology == "loop_2"){
+    if(rank == 0){
+      config.neighbors = {1};
+      config.in_neighbors = {2,3};
+      config.edge_ports["probe_edge:0->1"] = {40000 + 1 * 100, 40000};  // {40100, 40000}
+      config.edge_ports["probe_edge:2->0"] = {40002, 40000 + 2 * 100}; // {40200, 40002}
+      config.edge_ports["probe_edge:3->0"] = {40003, 40000 + 3 * 100}; // {40300, 40003}
+    }
+    else if(rank == 1){
+      config.neighbors = {2, 3};
+      config.in_neighbors = {0};
+      config.edge_ports["probe_edge:1->2"] = {40000 + 2 * 100 + 1, 40000 + 1 * 100 + 2}; // {40201, 40102}
+      config.edge_ports["probe_edge:1->3"] = {40000 + 3 * 100 + 1, 40000 + 1 * 100 + 3}; // {40301, 40103}
+      config.edge_ports["probe_edge:0->1"] = {40000 + 1 * 100, 40000};
+    }
+    else if(rank == 2){
+      config.neighbors = {0};
+      config.in_neighbors = {1};
+      config.edge_ports["probe_edge:2->0"] = {40002, 40000 + 2 * 100}; // {40200, 40002}
+      config.edge_ports["probe_edge:1->2"] = {40000 + 2 * 100 + 1, 40000 + 1 * 100 + 2}; // {40201, 40102}
+    }
+    else if(rank == 3){
+      config.neighbors = {0};
+      config.in_neighbors = {1};
+      config.edge_ports["probe_edge:3->0"] = {40003, 40000 + 3 * 100};
+      config.edge_ports["probe_edge:1->3"] = {40000 + 3 * 100 + 1, 40000 + 1 * 100};
+    }
+
+  }
   
   // Probe parameters
   config.probe_cadence_us = absl::GetFlag(FLAGS_probe_cadence_us);
@@ -77,7 +130,6 @@ DistributedProfilerContext CreateTestConfig(int node_id, int num_nodes) {
   config.enable_clock_snapshots = false;
   config.enable_socket_timestamping = true;
   config.timestamp_sync_timeout = absl::Seconds(5);
-  config.graph_policy = "test_directed";
   
   return config;
 }
@@ -125,20 +177,37 @@ void PrintResults(int node_id) {
 }
 
 absl::Status RunTest() {
-  int node_id = absl::GetFlag(FLAGS_node_id);
+  int rank = absl::GetFlag(FLAGS_rank);
   int num_nodes = absl::GetFlag(FLAGS_num_nodes);
   int duration_sec = absl::GetFlag(FLAGS_duration_sec);
+  std::string addresses_str = absl::GetFlag(FLAGS_addresses);
+  std::string topology = absl::GetFlag(FLAGS_topology);
   
-  if (node_id < 0 || node_id >= num_nodes) {
+  // Validate rank
+  if (rank < 0 || rank >= num_nodes) {
     return absl::InvalidArgumentError(
-        absl::StrCat("Invalid node_id: ", node_id, " (must be 0 to ", num_nodes - 1, ")"));
+        absl::StrCat("Invalid rank: ", rank, " (must be 0 to ", num_nodes - 1, ")"));
+  }
+  
+  // Parse addresses
+  if (addresses_str.empty()) {
+    return absl::InvalidArgumentError("--addresses flag is required");
+  }
+  std::vector<std::string> addresses = absl::StrSplit(addresses_str, ',');
+  
+  // Validate addresses count
+  if (addresses.size() != num_nodes) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Number of addresses (", addresses.size(), 
+                    ") does not match num_nodes (", num_nodes, ")"));
   }
   
   LOG(INFO) << "Starting standalone network probe test";
-  LOG(INFO) << "Node ID: " << node_id << " / " << num_nodes;
+  LOG(INFO) << "Rank: " << rank << " / " << num_nodes;
+  LOG(INFO) << "Topology: " << topology;
   
   // Create test configuration
-  auto config = CreateTestConfig(node_id, num_nodes);
+  auto config = CreateTestConfig(rank, num_nodes, addresses, topology);
   PrintConfig(config);
   
   // Create NetworkProbeManager
@@ -153,7 +222,7 @@ absl::Status RunTest() {
   LOG(INFO) << "✅ NetworkProbeManager initialized";
   
   // Start probing
-  if (config.neighbors.size() > 0) {
+  if (config.neighbors.size() > 0 || config.in_neighbors.size() > 0) {
     LOG(INFO) << "\nStarting probe threads...";
     status = probe_manager->Start();
     if (!status.ok()) {
@@ -192,7 +261,7 @@ absl::Status RunTest() {
   LOG(INFO) << "✅ Shutdown complete";
   
   // Print results
-  PrintResults(node_id);
+  PrintResults(rank);
   
   return absl::OkStatus();
 }

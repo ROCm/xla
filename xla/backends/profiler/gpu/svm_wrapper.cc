@@ -33,7 +33,8 @@ void SVMModel::initializeParameters() {
   param.C = 1.0;
   param.eps = 1e-3;
   param.p = 0.1;
-  param.shrinking = 1;
+  // param.shrinking = 1;
+  param.shrinking = 0;
   param.probability = 0;
   param.nr_weight = 0;
   param.weight_label = nullptr;
@@ -121,7 +122,7 @@ bool SVMModel::getCoefficients(double coef[2]) const {
       ++sv;
     }
   }
-  printf("Coef: x=%.15e, y=%.15e\n", coef[0], coef[1]);
+  fprintf(stderr, "Coef: x=%.15e, y=%.15e\n", coef[0], coef[1]);
   return true;
 }
 

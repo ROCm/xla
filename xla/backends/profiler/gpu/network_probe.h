@@ -17,6 +17,8 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/synchronization/barrier.h"
+#include "absl/synchronization/mutex.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/backends/profiler/gpu/probe_utils.h"
 
@@ -72,6 +74,51 @@ struct ProbeQueue {
   std::deque<ProbeQueueEntry> queue;
   std::mutex mutex;
   std::condition_variable cond;
+};
+
+// Window manager for shared window state across all probe threads
+class WindowManager {
+ public:
+  struct EdgeWindowStats {
+    double alpha = 0.0;
+    double beta = 0.0;
+    int pairs_collected = 0;
+    int packets_lost = 0;
+  };
+  
+  struct WindowStats {
+    uint64_t window_start_ns = 0;
+    uint64_t window_end_ns = 0;
+    absl::flat_hash_map<int, EdgeWindowStats> edges;  // dst_id -> stats
+  };
+  
+  explicit WindowManager(uint64_t window_duration_ns, int num_probe_threads);
+  
+  bool IsWindowExpired();
+  
+  // Barrier-based rotation: returns true if this thread is the last one (should rotate)
+  bool NotifyWindowExpired();
+  void RotateWindow();
+  
+  void RecordEdgeStats(int dst_id, double alpha, double beta, int pairs, int lost);
+  WindowStats GetCurrentWindow();
+  
+  // Export all accumulated windows to JSONL
+  void ExportAllWindows(std::ofstream& out, int node_id);
+  
+ private:
+  uint64_t window_duration_ns_;
+  int num_probe_threads_;
+  std::atomic<uint64_t> window_start_ns_;
+  std::atomic<uint64_t> window_end_ns_;
+  
+  absl::Mutex mu_;
+  WindowStats current_window_ ABSL_GUARDED_BY(mu_);
+  std::vector<WindowStats> completed_windows_ ABSL_GUARDED_BY(mu_);
+  
+  // Barrier for window rotation
+  std::unique_ptr<absl::Barrier> barrier_;
+  absl::Mutex barrier_mu_;  // Protects barrier recreation
 };
 
 class NetworkProbeManager {
@@ -138,6 +185,10 @@ class NetworkProbeManager {
 
   absl::flat_hash_map<std::pair<int, int>, EdgeStats> edge_stats_;
   absl::Mutex stats_mu_;
+  
+  // Shared window manager (holds all windows in memory until shutdown)
+  // Thread-safe: multiple threads can call RotateWindow(), only one actually rotates
+  std::unique_ptr<WindowManager> window_manager_;
 
   absl::Status SetupSockets();
   absl::Status BuildGraph();

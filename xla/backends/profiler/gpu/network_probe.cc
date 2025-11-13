@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <mutex>
 #include <thread>
 
@@ -19,7 +20,7 @@
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
-#include "network_probe.h"
+#include "absl/synchronization/mutex.h"
 #include "xla/backends/profiler/gpu/probe_utils.h"
 #include "xla/backends/profiler/gpu/svm_wrapper.h"
 #include "xla/tsl/platform/logging.h"
@@ -64,6 +65,134 @@ sockaddr_in ParseAddress(const std::string& addr_str, uint16_t port) {
 
 }  // namespace
 
+// WindowManager implementation
+WindowManager::WindowManager(uint64_t window_duration_ns, int num_probe_threads)
+    : window_duration_ns_(window_duration_ns),
+      num_probe_threads_(num_probe_threads) {
+  window_start_ns_ = GetMonotonicNs();
+  window_end_ns_ = window_start_ns_.load() + window_duration_ns_;
+  
+  // Create barrier for synchronizing window rotation
+  barrier_ = std::make_unique<absl::Barrier>(num_probe_threads);
+}
+
+bool WindowManager::IsWindowExpired() {
+  uint64_t now = GetMonotonicNs();
+  return now > window_end_ns_.load();
+}
+
+bool WindowManager::NotifyWindowExpired() {
+  // Block at barrier until all threads arrive
+  bool am_last = barrier_->Block();
+  
+  if (am_last) {
+    LOG(ERROR) << "Last thread at barrier, will rotate window";
+  } else {
+    VLOG(2) << "Thread released from barrier";
+  }
+  
+  return am_last;
+}
+
+void WindowManager::RotateWindow() {
+  // Rotate the window data
+  {
+    absl::MutexLock lock(&mu_);
+    
+    // Save current window to history if it has data
+    if (!current_window_.edges.empty()) {
+      WindowStats snapshot = current_window_;
+      snapshot.window_start_ns = window_start_ns_.load();
+      snapshot.window_end_ns = window_end_ns_.load();
+      completed_windows_.push_back(std::move(snapshot));
+      LOG(ERROR) << "Rotated window: saved window with " 
+                << snapshot.edges.size() << " edges";
+    }
+    
+    // Start new window with ATOMIC update of timestamps
+    uint64_t now = GetMonotonicNs();
+    window_start_ns_ = window_end_ns_.load();
+    window_end_ns_ = now + window_duration_ns_;
+    current_window_.edges.clear();
+  }
+  
+  // Recreate barrier for next window
+  {
+    absl::MutexLock lock(&barrier_mu_);
+    barrier_ = std::make_unique<absl::Barrier>(num_probe_threads_);
+    LOG(ERROR) << "Barrier recreated for next window";
+  }
+}
+
+void WindowManager::RecordEdgeStats(int dst_id, double alpha, double beta, 
+                                     int pairs, int lost) {
+  absl::MutexLock lock(&mu_);
+  current_window_.edges[dst_id] = {alpha, beta, pairs, lost};
+}
+
+WindowManager::WindowStats WindowManager::GetCurrentWindow() {
+  absl::MutexLock lock(&mu_);
+  WindowStats snapshot = current_window_;
+  snapshot.window_start_ns = window_start_ns_.load();
+  snapshot.window_end_ns = window_end_ns_.load();
+  return snapshot;
+}
+
+void WindowManager::ExportAllWindows(std::ofstream& out, int node_id) {
+  absl::MutexLock lock(&mu_);
+  
+  LOG(ERROR) << "Exporting " << completed_windows_.size() << " completed windows";
+  
+  // Export all completed windows
+  for (const auto& window : completed_windows_) {
+    out << "{\"window_start_ns\":" << window.window_start_ns
+        << ",\"window_end_ns\":" << window.window_end_ns
+        << ",\"node_id\":" << node_id
+        << ",\"edges\":[";
+    
+    bool first = true;
+    for (const auto& [dst_id, stats] : window.edges) {
+      if (!first) out << ",";
+      out << "{\"dst\":" << dst_id
+          << ",\"alpha\":" << std::fixed << std::setprecision(10) << stats.alpha
+          << ",\"beta\":" << static_cast<int64_t>(stats.beta)
+          << ",\"pairs\":" << stats.pairs_collected
+          << ",\"lost\":" << stats.packets_lost
+          << "}";
+      first = false;
+    }
+    out << "]}\n";  // Newline for JSONL format
+  }
+  
+  // Export current window if it has data
+  if (!current_window_.edges.empty()) {
+    WindowStats final_window = current_window_;
+    final_window.window_start_ns = window_start_ns_.load();
+    final_window.window_end_ns = window_end_ns_.load();
+    
+    out << "{\"window_start_ns\":" << final_window.window_start_ns
+        << ",\"window_end_ns\":" << final_window.window_end_ns
+        << ",\"node_id\":" << node_id
+        << ",\"edges\":[";
+    
+    bool first = true;
+    for (const auto& [dst_id, stats] : final_window.edges) {
+      if (!first) out << ",";
+      out << "{\"dst\":" << dst_id
+          << ",\"alpha\":" << std::fixed << std::setprecision(10) << stats.alpha
+          << ",\"beta\":" << static_cast<int64_t>(stats.beta)
+          << ",\"pairs\":" << stats.pairs_collected
+          << ",\"lost\":" << stats.packets_lost
+          << "}";
+      first = false;
+    }
+    out << "]}\n";
+  }
+  
+  out.flush();
+  LOG(ERROR) << "Exported total " << (completed_windows_.size() + (current_window_.edges.empty() ? 0 : 1)) << " windows";
+}
+
 NetworkProbeManager::NetworkProbeManager(const DistributedProfilerContext& config)
     : config_(config) {}
 
@@ -72,11 +201,21 @@ NetworkProbeManager::~NetworkProbeManager() {
 }
 
 absl::Status NetworkProbeManager::Initialize() {
-  LOG(INFO) << "Initializing NetworkProbeManager for node " << config_.node_id;
+  LOG(ERROR) << "Initializing NetworkProbeManager for node " << config_.node_id;
   
   TF_RETURN_IF_ERROR(BuildGraph());
   TF_RETURN_IF_ERROR(ComputeInNeighbors());
   TF_RETURN_IF_ERROR(SetupSockets());
+  
+  // Create shared window manager with barrier for all probe threads
+  int num_probe_threads = out_neighbors_.size();
+  window_manager_ = std::make_unique<WindowManager>(
+      config_.probe_window_s * 1'000'000'000ULL,
+      num_probe_threads);
+  
+  LOG(ERROR) << "Window manager initialized with " << num_probe_threads 
+            << " probe threads (will export to /tmp/probe_windows_node" 
+            << config_.node_id << ".jsonl on shutdown)";
   
   // Initialize queues, counters, and mutexes for each neighbor
   for (int src : in_neighbors_) {
@@ -97,17 +236,8 @@ absl::Status NetworkProbeManager::Initialize() {
   
   // Start listener threads (one per IN-neighbor)
   running_ = true;
-  for (int src : in_neighbors_) {
-    // listener_threads_[src] = std::thread(&NetworkProbeManager::ListenerLoop, this, src);
-    listener_threads_[src].fw_thread = std::thread(&NetworkProbeManager::ProbedListener, this, src);
-    {
-      std::unique_lock<std::mutex> lock(*listener_handshake_mutex_map_[src]);
-      listener_handshake_cond_map_[src]->wait(lock, [this, src] { return listener_handshake_done_map_[src]; });
-    }
-    listener_threads_[src].bw_thread = std::thread(&NetworkProbeManager::ProbedResponder, this, src);
-  }
   
-  LOG(INFO) << "NetworkProbeManager initialized with " 
+  LOG(ERROR) << "NetworkProbeManager initialized with " 
             << out_neighbors_.size() << " out-neighbors, " 
             << in_neighbors_.size() << " in-neighbors (" 
             << listener_threads_.size() << " listener threads, "
@@ -122,9 +252,24 @@ absl::Status NetworkProbeManager::Start() {
   }
   
   // Start probe threads for each OUT-neighbor
+  // TODO: make this loop async
   for (int dst : out_neighbors_) {
     // probe_threads_[dst] = std::thread(&NetworkProbeManager::ProbeNeighbor, this, dst);
     probe_threads_[dst].fw_thread = std::thread(&NetworkProbeManager::ProbeSender, this, dst);
+  }
+  for (int src : in_neighbors_) {
+    // listener_threads_[src] = std::thread(&NetworkProbeManager::ListenerLoop, this, src);
+    listener_threads_[src].fw_thread = std::thread(&NetworkProbeManager::ProbedListener, this, src);
+    
+  }
+  for (int src: in_neighbors_){
+    {
+      std::unique_lock<std::mutex> lock(*listener_handshake_mutex_map_[src]);
+      listener_handshake_cond_map_[src]->wait(lock, [this, src] { return listener_handshake_done_map_[src]; });
+    }
+    listener_threads_[src].bw_thread = std::thread(&NetworkProbeManager::ProbedResponder, this, src);
+  }
+  for(int dst : out_neighbors_){
     {
       std::unique_lock<std::mutex> lock(*probing_handshake_mutex_map_[dst]);
       probing_handshake_cond_map_[dst]->wait(lock, [this, dst] { return probing_handshake_done_map_[dst]; });
@@ -132,7 +277,7 @@ absl::Status NetworkProbeManager::Start() {
     probe_threads_[dst].bw_thread = std::thread(&NetworkProbeManager::ProbeRespListener, this, dst);
   }
   
-  LOG(INFO) << "Started " << probe_threads_.size() << " probe threads";
+  LOG(ERROR) << "Started " << probe_threads_.size() << " probe threads";
   return absl::OkStatus();
 }
 
@@ -145,7 +290,7 @@ absl::Status NetworkProbeManager::SetupSockets() {
   // Port assignments are centrally allocated by master and stored in config_.edge_ports
   // No local calculation needed - just query the map
   
-  LOG(INFO) << "SetupSockets: node=" << config_.node_id 
+  LOG(ERROR) << "SetupSockets: node=" << config_.node_id 
           << " out_neighbors=" << out_neighbors_.size()
           << " in_neighbors=" << in_neighbors_.size()
           << " edge_ports=" << config_.edge_ports.size();
@@ -215,7 +360,7 @@ absl::Status NetworkProbeManager::SetupSockets() {
     
     char dst_ip_str[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &(socks.dst_addr.sin_addr), dst_ip_str, INET_ADDRSTRLEN);
-    LOG(INFO) << "Created OUT sockets for neighbor " << dst 
+    LOG(ERROR) << "Created OUT sockets for neighbor " << dst 
               << " probe_sock=" << socks.probe_sock
               << " probe_response_sock=" << socks.probe_response_sock
               << " (send to " << dst_ip_str << ":" << socks.dst_listen_port 
@@ -273,7 +418,7 @@ absl::Status NetworkProbeManager::SetupSockets() {
     
     char src_ip_str[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &(socks.src_response_addr.sin_addr), src_ip_str, INET_ADDRSTRLEN);
-    LOG(INFO) << "Created IN sockets for neighbor " << src 
+    LOG(ERROR) << "Created IN sockets for neighbor " << src 
               << " listen_sock=" << socks.listen_sock
               << " listen_response_sock=" << socks.listen_response_sock
               << " (listen on port " << socks.my_listen_port 
@@ -287,9 +432,9 @@ absl::Status NetworkProbeManager::BuildGraph() {
   out_neighbors_ = config_.neighbors;
   
   if (out_neighbors_.empty()) {
-    LOG(INFO) << "No out-neighbors configured for node " << config_.node_id;
+    LOG(ERROR) << "No out-neighbors configured for node " << config_.node_id;
   } else {
-    LOG(INFO) << "Node " << config_.node_id << " has " << out_neighbors_.size() 
+    LOG(ERROR) << "Node " << config_.node_id << " has " << out_neighbors_.size() 
               << " out-neighbors: " << absl::StrJoin(out_neighbors_, ", ");
   }
   
@@ -301,7 +446,7 @@ absl::Status NetworkProbeManager::ComputeInNeighbors() {
   // This requires the full graph to be available in config
   
   in_neighbors_ = config_.in_neighbors;
-  LOG(INFO) << "Node " << config_.node_id << " has " << in_neighbors_.size() 
+  LOG(ERROR) << "Node " << config_.node_id << " has " << in_neighbors_.size() 
             << " in-neighbors: " << absl::StrJoin(in_neighbors_, ", ");
   
   return absl::OkStatus();
@@ -333,13 +478,13 @@ bool NetworkProbeManager::SendPacket(int sockfd, const sockaddr_in& dest,
   
   ssize_t sent = sendmsg(sockfd, &msg, 0);
   if (sent < 0) {
-    LOG(INFO) << "sendmsg failed: errno=" << errno << " (" << strerror(errno) 
+    LOG(ERROR) << "sendmsg failed: errno=" << errno << " (" << strerror(errno) 
             << "), type=" << static_cast<int>(type) << ", seq=" << sequence_id
             << ", sockfd=" << sockfd;
     // Fallback to sendto + clock_gettime
     // ssize_t fallback = sendto(sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr*)&dest, sizeof(dest));
     // if (fallback < 0) {
-    //   LOG(INFO) << "sendto also failed: errno=" << errno << " (" << strerror(errno) << ")";
+    //   LOG(ERROR) << "sendto also failed: errno=" << errno << " (" << strerror(errno) << ")";
     // }
     *send_ts_ns = GetMonotonicNs();
     return false;
@@ -362,8 +507,8 @@ bool NetworkProbeManager::SendPacket(int sockfd, const sockaddr_in& dest,
         struct scm_timestamping* tss = (struct scm_timestamping*)CMSG_DATA(cmsg);
         *send_ts_ns = tss->ts[0].tv_sec * 1e9 + tss->ts[0].tv_nsec;
       return true;
-      }
     }
+  }
   }
   
   // Fallback
@@ -376,7 +521,7 @@ bool NetworkProbeManager::RecvPacket(int sockfd, ProbePacket* pkt,
                                      uint64_t* recv_ts_ns,
                                      sockaddr_in* sender) {
   if (sockfd < 0) {
-    LOG(INFO) << "RecvPacket called with invalid sockfd=" << sockfd;
+    LOG(ERROR) << "RecvPacket called with invalid sockfd=" << sockfd;
     return false;
   }
   
@@ -396,14 +541,14 @@ bool NetworkProbeManager::RecvPacket(int sockfd, ProbePacket* pkt,
       VLOG(2) << "recvmsg timeout on sockfd=" << sockfd;
       return false;
     }
-    LOG(INFO) << "recvmsg failed: len=" << len << " errno=" << errno << " (" << strerror(errno) 
+    LOG(ERROR) << "recvmsg failed: len=" << len << " errno=" << errno << " (" << strerror(errno) 
             << "), sockfd=" << sockfd;
     // Fallback to recvfrom
     socklen_t addrlen = sender ? sizeof(*sender) : 0;
     len = recvfrom(sockfd, pkt, sizeof(*pkt), 0, (struct sockaddr*)sender,
                    sender ? &addrlen : nullptr);
     if (len < 0) {
-      LOG(INFO) << "recvfrom also failed: len=" << len << " errno=" << errno << " (" << strerror(errno) << ")";
+      LOG(ERROR) << "recvfrom also failed: len=" << len << " errno=" << errno << " (" << strerror(errno) << ")";
       return false;
     }
     *recv_ts_ns = GetMonotonicNs();
@@ -411,7 +556,7 @@ bool NetworkProbeManager::RecvPacket(int sockfd, ProbePacket* pkt,
   }
   
   if (len != sizeof(*pkt)) {
-    LOG(INFO) << "recvmsg received partial packet: len=" << len << " expected=" << sizeof(*pkt) 
+    LOG(ERROR) << "recvmsg received partial packet: len=" << len << " expected=" << sizeof(*pkt) 
             << " sockfd=" << sockfd;
     return false;
   }
@@ -450,7 +595,7 @@ bool NetworkProbeManager::PerformHandshake(int neighbor_id, bool is_prober) {
     char dst_ip[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &dst_addr.sin_addr, dst_ip, INET_ADDRSTRLEN);
     
-    LOG(INFO) << "Handshake: Prober sending SYN to neighbor " << neighbor_id
+    LOG(ERROR) << "Handshake: Prober sending SYN to neighbor " << neighbor_id
               << " via probe_sock=" << probe_sock
               << " to " << dst_ip << ":" << ntohs(dst_addr.sin_port)
               << ", waiting for ACK on response_sock=" << response_sock;
@@ -466,18 +611,18 @@ bool NetworkProbeManager::PerformHandshake(int neighbor_id, bool is_prober) {
         continue;
       }
       
-      LOG(INFO) << "Handshake: SYN sent to neighbor " << neighbor_id << ", waiting for ACK...";
+      LOG(ERROR) << "Handshake: SYN sent to neighbor " << neighbor_id << ", waiting for ACK...";
       
       // Wait for ACK
       ProbePacket ack;
       uint64_t ack_rx;
       if (RecvPacket(response_sock, &ack, &ack_rx, nullptr)) {
-        LOG(INFO) << "Handshake: Received packet type=" << static_cast<int>(ack.type)
+        LOG(ERROR) << "Handshake: Received packet type=" << static_cast<int>(ack.type)
                   << " from node=" << ack.src_node_id
                   << " (expected type=8, node=" << neighbor_id << ")";
         if (ack.type == static_cast<uint8_t>(ProbeMessageType::kAck) &&
             ack.src_node_id == neighbor_id) {
-          LOG(INFO) << "Handshake: Received ACK from neighbor " << neighbor_id;
+          LOG(ERROR) << "Handshake: Received ACK from neighbor " << neighbor_id;
           return true;
         } else {
           LOG(WARNING) << "Handshake: Wrong packet type or source";
@@ -488,7 +633,7 @@ bool NetworkProbeManager::PerformHandshake(int neighbor_id, bool is_prober) {
       
       LOG(WARNING) << "Handshake: No ACK from neighbor " << neighbor_id 
                    << " retry=" << retry;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+      std::this_thread::sleep_for(std::chrono::milliseconds(2000));
     }
     
     LOG(ERROR) << "Handshake FAILED: No ACK from neighbor " << neighbor_id 
@@ -504,7 +649,7 @@ bool NetworkProbeManager::PerformHandshake(int neighbor_id, bool is_prober) {
     char resp_ip[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &src_response_addr.sin_addr, resp_ip, INET_ADDRSTRLEN);
     
-    LOG(INFO) << "Handshake: Listener waiting for SYN from neighbor " << neighbor_id
+    LOG(ERROR) << "Handshake: Listener waiting for SYN from neighbor " << neighbor_id
               << " on listen_sock=" << listen_sock
               << ", will ACK via response_sock=" << response_sock
               << " to " << resp_ip << ":" << ntohs(src_response_addr.sin_port);
@@ -518,30 +663,30 @@ bool NetworkProbeManager::PerformHandshake(int neighbor_id, bool is_prober) {
         char sender_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &sender_addr.sin_addr, sender_ip, INET_ADDRSTRLEN);
         
-        LOG(INFO) << "Handshake: Listener received packet type=" << static_cast<int>(syn.type)
+        LOG(ERROR) << "Handshake: Listener received packet type=" << static_cast<int>(syn.type)
                   << " from node=" << syn.src_node_id
                   << " sender=" << sender_ip << ":" << ntohs(sender_addr.sin_port)
                   << " (expected type=7, node=" << neighbor_id << ")";
         
         if (syn.type == static_cast<uint8_t>(ProbeMessageType::kSyn) &&
             syn.src_node_id == neighbor_id) {
-          LOG(INFO) << "Handshake: Received SYN from neighbor " << neighbor_id;
+          LOG(ERROR) << "Handshake: Received SYN from neighbor " << neighbor_id;
           
           // Send ACK
           uint64_t ack_tx;
           if (SendPacket(response_sock, src_response_addr, ProbeMessageType::kAck,
                         0, 0, 0, &ack_tx)) {
-            LOG(INFO) << "Handshake: Sent ACK to neighbor " << neighbor_id
+            LOG(ERROR) << "Handshake: Sent ACK to neighbor " << neighbor_id
                       << " to " << resp_ip << ":" << ntohs(src_response_addr.sin_port);
             return true;
           } else {
             LOG(ERROR) << "Failed to send ACK to neighbor " << neighbor_id;
             return false;
-          }
-        } else {
+      }
+    } else {
           LOG(WARNING) << "Handshake: Wrong packet type or source, ignoring";
-        }
-      } else {
+    }
+  } else {
         LOG(WARNING) << "Handshake: RecvPacket timeout on listen_sock, retry=" << retry;
       }
       
@@ -556,7 +701,7 @@ bool NetworkProbeManager::PerformHandshake(int neighbor_id, bool is_prober) {
 }
 
 void NetworkProbeManager::ProbeSender(int dst_node_id) {
-  LOG(INFO) << "ProbeSender thread started for OUT-neighbor " << dst_node_id;
+  LOG(ERROR) << "ProbeSender thread started for OUT-neighbor " << dst_node_id;
   
   auto it = neighbor_socks_.find(dst_node_id);
   if (it == neighbor_socks_.end() || it->second.probe_sock < 0) {
@@ -568,7 +713,7 @@ void NetworkProbeManager::ProbeSender(int dst_node_id) {
   int response_sock = it->second.probe_response_sock;
   sockaddr_in dst_addr = it->second.dst_addr;
   
-  LOG(INFO) << "Prober using probe_sock=" << probe_sock 
+  LOG(ERROR) << "Prober using probe_sock=" << probe_sock 
           << " response_sock=" << response_sock 
           << " dst_listen_port=" << it->second.dst_listen_port
           << " dst_addr=" << inet_ntoa(dst_addr.sin_addr) << ":" << ntohs(dst_addr.sin_port);
@@ -584,22 +729,64 @@ void NetworkProbeManager::ProbeSender(int dst_node_id) {
   }
   probing_handshake_cond_map_[dst_node_id]->notify_one();
   
-  LOG(INFO) << "Handshake complete with neighbor " << dst_node_id << ", entering probe loop";
-  
-  uint64_t window_start_ns = GetMonotonicNs();
-  uint64_t window_end_ns = window_start_ns + config_.probe_window_s * 1'000'000'000ULL;
-  
-  // std::vector<probe_info::ProbePair> pairs;
+  LOG(ERROR) << "Handshake complete with neighbor " << dst_node_id << ", entering probe loop";
   
   while (running_.load()) {
-    uint64_t now_ns = GetMonotonicNs();
-    if (now_ns > window_end_ns) {
+    // Check shared window expiry
+    if (window_manager_->IsWindowExpired()) {
       std::scoped_lock<std::mutex> lock(*probing_mutex_map_[dst_node_id]);
-      // End of window: train SVM
-      TrainAndStoreSVM(dst_node_id, probe_pairs_[dst_node_id]);
+      
+       // Train SVM on current window's pairs
+       auto& pairs_map = probe_pairs_[dst_node_id];
+       if (!pairs_map.empty()) {
+         // Filter to only complete pairs
+         absl::flat_hash_map<uint32_t, probe_info::ProbePair> complete_pairs;
+         for (const auto& [seq_id, pair] : pairs_map) {
+           // Check if pair is complete (all fields non-zero)
+           if (pair.pt1_tx > 0 && pair.pt2_tx > 0 &&
+               pair.pt1_rx > 0 && pair.pt2_rx > 0 &&
+               pair.pr1_tx > 0 && pair.pr2_tx > 0 &&
+               pair.pr1_rx > 0 && pair.pr2_rx > 0) {
+             complete_pairs[seq_id] = pair;
+           }
+         }
+         
+         if (complete_pairs.size() >= 10) {
+           auto xy_pairs = probe_utils::convert_probe_pairs_to_xy_pairs(
+               complete_pairs, 0.2, true);
+          if (!xy_pairs.empty()) {
+            SVMModel svm_model;
+            if (svm_model.train(xy_pairs)) {
+              double alpha = svm_model.getAlpha();
+              double beta = svm_model.getBeta();
+              
+              // Record stats in shared window manager
+              int pairs_count = complete_pairs.size();
+              auto stat_key = std::make_pair(config_.node_id, dst_node_id);
+              int lost_count = edge_stats_[stat_key].lost_packets;
+              window_manager_->RecordEdgeStats(dst_node_id, alpha, beta, 
+                                               pairs_count, lost_count);
+              
+              LOG(ERROR) << "Edge " << config_.node_id << "->" << dst_node_id
+                        << " window stats: α=" << alpha << " β=" << beta 
+                        << " pairs=" << pairs_count << " lost=" << lost_count;
+            }
+          }
+        }
+      }
+      
       probe_pairs_[dst_node_id].clear();
-      window_start_ns = now_ns;
-      window_end_ns = now_ns + config_.probe_window_s * 1'000'000'000ULL;
+      
+      // Notify window expiry and check if this is the last thread
+      if (window_manager_->NotifyWindowExpired()) {
+        // This is the last thread - rotate the window
+        window_manager_->RotateWindow();
+        LOG(ERROR) << "Thread for dst=" << dst_node_id 
+                  << " was last at barrier, rotated window";
+      } else {
+        VLOG(1) << "Thread for dst=" << dst_node_id 
+                << " reached barrier, waiting for others";
+      }
     }
     
     // Generate unique sequence ID
@@ -609,10 +796,10 @@ void NetworkProbeManager::ProbeSender(int dst_node_id) {
     uint64_t pt1_tx, pt2_tx;
     if (!SendPacket(probe_sock, dst_addr, ProbeMessageType::kPt1,
                     0, 0, seq_id, &pt1_tx)) {
-      LOG(INFO) << "Failed to send Pt1 to neighbor " << dst_node_id << " seq=" << seq_id;
+      LOG(ERROR) << "Failed to send Pt1 to neighbor " << dst_node_id << " seq=" << seq_id;
       UpdateEdgeStat(dst_node_id, 1, 0);  // lost_packets++
-      continue;
-    }
+    continue;
+  }
     else{
       std::scoped_lock<std::mutex> lock(*probing_mutex_map_[dst_node_id]);
       probe_pairs_[dst_node_id][seq_id].pt1_tx = pt1_tx;
@@ -621,7 +808,7 @@ void NetworkProbeManager::ProbeSender(int dst_node_id) {
     
     if (!SendPacket(probe_sock, dst_addr, ProbeMessageType::kPt2,
                     pt1_tx, 0, seq_id, &pt2_tx)) {
-      LOG(INFO) << "Failed to send Pt2 to neighbor " << dst_node_id << " seq=" << seq_id;
+      LOG(ERROR) << "Failed to send Pt2 to neighbor " << dst_node_id << " seq=" << seq_id;
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
@@ -629,13 +816,14 @@ void NetworkProbeManager::ProbeSender(int dst_node_id) {
       std::scoped_lock<std::mutex> lock(*probing_mutex_map_[dst_node_id]);
       probe_pairs_[dst_node_id][seq_id].pt2_tx = pt2_tx;
     }
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
   }
 }
     
 
 void NetworkProbeManager::ProbeRespListener(int dst_node_id) {
   
-  LOG(INFO) << "Probe Listener thread started for OUT-neighbor " << dst_node_id;
+  LOG(ERROR) << "Probe Listener thread started for OUT-neighbor " << dst_node_id;
   
   auto it = neighbor_socks_.find(dst_node_id);
   if (it == neighbor_socks_.end() || it->second.probe_sock < 0) {
@@ -647,13 +835,13 @@ void NetworkProbeManager::ProbeRespListener(int dst_node_id) {
   int response_sock = it->second.probe_response_sock;
   sockaddr_in dst_addr = it->second.dst_addr;
   
-  LOG(INFO) << "Prober using probe_sock=" << probe_sock 
+  LOG(ERROR) << "Prober using probe_sock=" << probe_sock 
           << " response_sock=" << response_sock 
           << " dst_listen_port=" << it->second.dst_listen_port
           << " dst_addr=" << inet_ntoa(dst_addr.sin_addr) << ":" << ntohs(dst_addr.sin_port);
   
-  uint64_t window_start_ns = GetMonotonicNs();
-  uint64_t window_end_ns = window_start_ns + config_.probe_window_s * 1'000'000'000ULL;
+  // uint64_t window_start_ns = GetMonotonicNs();
+  // uint64_t window_end_ns = window_start_ns + config_.probe_window_s * 1'000'000'000ULL;
   while (running_.load()) {
     // Receive Pr (must match seq_id)
     ProbePacket pr;
@@ -688,7 +876,7 @@ void NetworkProbeManager::ProbeRespListener(int dst_node_id) {
       std::scoped_lock<std::mutex> lock(*probing_mutex_map_[dst_node_id]);
       probe_pairs_[dst_node_id][seq_id].pr2_tx = pr2_tx;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // std::this_thread::sleep_for(std::chrono::nanoseconds(kPacketSpacingNs));
   }
 }
 
@@ -740,14 +928,15 @@ void NetworkProbeManager::ProbedResponder(int src_neighbor_id) {
       LOG(ERROR) << "Failed to send Pd1 to neighbor " << src_neighbor_id << " seq=" << seq_id;
       continue;
     }
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
   }
   
-  LOG(INFO) << "Listener thread exiting for IN-neighbor " << src_neighbor_id;
+  LOG(ERROR) << "Listener thread exiting for IN-neighbor " << src_neighbor_id;
   
 }
 
 void NetworkProbeManager::ProbedListener(int src_neighbor_id) {
-  LOG(INFO) << "Listener thread started for IN-neighbor " << src_neighbor_id;
+  LOG(ERROR) << "Listener thread started for IN-neighbor " << src_neighbor_id;
   
   auto it = neighbor_socks_.find(src_neighbor_id);
   if (it == neighbor_socks_.end() || it->second.listen_sock < 0) {
@@ -759,7 +948,7 @@ void NetworkProbeManager::ProbedListener(int src_neighbor_id) {
   int response_sock = it->second.listen_response_sock;
   sockaddr_in src_response_addr = it->second.src_response_addr;
   
-  LOG(INFO) << "Listener using listen_sock=" << listen_sock 
+  LOG(ERROR) << "Listener using listen_sock=" << listen_sock 
           << " response_sock=" << response_sock 
           << " my_listen_port=" << it->second.my_listen_port;
   
@@ -773,7 +962,7 @@ void NetworkProbeManager::ProbedListener(int src_neighbor_id) {
     listener_handshake_done_map_[src_neighbor_id] = true;
   }
   listener_handshake_cond_map_[src_neighbor_id]->notify_one();
-  LOG(INFO) << "Handshake complete with neighbor " << src_neighbor_id << ", entering probe loop";
+  LOG(ERROR) << "Handshake complete with neighbor " << src_neighbor_id << ", entering probe loop";
   
   while (running_.load()) {
     // Receive Pt1 from this specific neighbor
@@ -806,11 +995,12 @@ void NetworkProbeManager::ProbedListener(int src_neighbor_id) {
       }
     }
     // wait for condition variable when queue is empty
+    std::this_thread::sleep_for(std::chrono::nanoseconds(kPacketSpacingNs));
   }
 }
 
 void NetworkProbeManager::ListenerLoop(int src_neighbor_id) {
-  LOG(INFO) << "Listener thread started for IN-neighbor " << src_neighbor_id;
+  LOG(ERROR) << "Listener thread started for IN-neighbor " << src_neighbor_id;
   
   auto it = neighbor_socks_.find(src_neighbor_id);
   if (it == neighbor_socks_.end() || it->second.listen_sock < 0) {
@@ -822,7 +1012,7 @@ void NetworkProbeManager::ListenerLoop(int src_neighbor_id) {
   int response_sock = it->second.listen_response_sock;
   sockaddr_in src_response_addr = it->second.src_response_addr;
   
-  LOG(INFO) << "Listener using listen_sock=" << listen_sock 
+  LOG(ERROR) << "Listener using listen_sock=" << listen_sock 
           << " response_sock=" << response_sock 
           << " my_listen_port=" << it->second.my_listen_port;
   
@@ -832,7 +1022,7 @@ void NetworkProbeManager::ListenerLoop(int src_neighbor_id) {
     return;
   }
   
-  LOG(INFO) << "Handshake complete with neighbor " << src_neighbor_id << ", entering probe loop";
+  LOG(ERROR) << "Handshake complete with neighbor " << src_neighbor_id << ", entering probe loop";
   
   while (running_.load()) {
     // Receive Pt1 from this specific neighbor
@@ -890,11 +1080,11 @@ void NetworkProbeManager::ListenerLoop(int src_neighbor_id) {
     uint64_t t2_tx = pd2.embed1;
   }
   
-  LOG(INFO) << "Listener thread exiting for IN-neighbor " << src_neighbor_id;
+  LOG(ERROR) << "Listener thread exiting for IN-neighbor " << src_neighbor_id;
 }
 
 void NetworkProbeManager::ProbeNeighbor(int dst_node_id) {
-  LOG(INFO) << "Probe thread started for OUT-neighbor " << dst_node_id;
+  LOG(ERROR) << "Probe thread started for OUT-neighbor " << dst_node_id;
   
   auto it = neighbor_socks_.find(dst_node_id);
   if (it == neighbor_socks_.end() || it->second.probe_sock < 0) {
@@ -906,7 +1096,7 @@ void NetworkProbeManager::ProbeNeighbor(int dst_node_id) {
   int response_sock = it->second.probe_response_sock;
   sockaddr_in dst_addr = it->second.dst_addr;
   
-  LOG(INFO) << "Prober using probe_sock=" << probe_sock 
+  LOG(ERROR) << "Prober using probe_sock=" << probe_sock 
           << " response_sock=" << response_sock 
           << " dst_listen_port=" << it->second.dst_listen_port
           << " dst_addr=" << inet_ntoa(dst_addr.sin_addr) << ":" << ntohs(dst_addr.sin_port);
@@ -917,7 +1107,7 @@ void NetworkProbeManager::ProbeNeighbor(int dst_node_id) {
     return;
   }
   
-  LOG(INFO) << "Handshake complete with neighbor " << dst_node_id << ", entering probe loop";
+  LOG(ERROR) << "Handshake complete with neighbor " << dst_node_id << ", entering probe loop";
   
   uint64_t window_start_ns = GetMonotonicNs();
   uint64_t window_end_ns = window_start_ns + config_.probe_window_s * 1'000'000'000ULL;
@@ -941,7 +1131,7 @@ void NetworkProbeManager::ProbeNeighbor(int dst_node_id) {
     uint64_t pt1_tx, pt2_tx;
     if (!SendPacket(probe_sock, dst_addr, ProbeMessageType::kPt1,
                     0, 0, seq_id, &pt1_tx)) {
-      LOG(INFO) << "Failed to send Pt1 to neighbor " << dst_node_id << " seq=" << seq_id;
+      LOG(ERROR) << "Failed to send Pt1 to neighbor " << dst_node_id << " seq=" << seq_id;
       UpdateEdgeStat(dst_node_id, 1, 0);  // lost_packets++
       continue;
     }
@@ -949,7 +1139,7 @@ void NetworkProbeManager::ProbeNeighbor(int dst_node_id) {
     
     if (!SendPacket(probe_sock, dst_addr, ProbeMessageType::kPt2,
                     pt1_tx, 0, seq_id, &pt2_tx)) {
-      LOG(INFO) << "Failed to send Pt2 to neighbor " << dst_node_id << " seq=" << seq_id;
+      LOG(ERROR) << "Failed to send Pt2 to neighbor " << dst_node_id << " seq=" << seq_id;
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
@@ -962,66 +1152,66 @@ void NetworkProbeManager::ProbeNeighbor(int dst_node_id) {
     
     bool recv_ok = RecvPacket(response_sock, &pr1, &pr1_rx, nullptr);
     if (!recv_ok) {
-      LOG(INFO) << "Failed to recv Pr1 from neighbor " << dst_node_id << " seq=" << seq_id;
+      LOG(ERROR) << "Failed to recv Pr1 from neighbor " << dst_node_id << " seq=" << seq_id;
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
     if (pr1.sequence_id != seq_id) {
-      LOG(INFO) << "Pr1 seq mismatch: expected=" << seq_id << " got=" << pr1.sequence_id;
+      LOG(ERROR) << "Pr1 seq mismatch: expected=" << seq_id << " got=" << pr1.sequence_id;
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
     if (pr1.src_node_id != dst_node_id) {
-      LOG(INFO) << "Pr1 src mismatch: expected=" << dst_node_id << " got=" << pr1.src_node_id;
+      LOG(ERROR) << "Pr1 src mismatch: expected=" << dst_node_id << " got=" << pr1.src_node_id;
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
     if(pr1.type != static_cast<uint8_t>(ProbeMessageType::kPr1)) {
-      LOG(INFO) << "Pr1 type mismatch: expected=3 got=" << static_cast<int>(pr1.type);
+      LOG(ERROR) << "Pr1 type mismatch: expected=3 got=" << static_cast<int>(pr1.type);
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
     
     recv_ok = RecvPacket(response_sock, &pr2, &pr2_rx, nullptr);
     if (!recv_ok) {
-      LOG(INFO) << "Failed to recv Pr2 from neighbor " << dst_node_id << " seq=" << seq_id;
+      LOG(ERROR) << "Failed to recv Pr2 from neighbor " << dst_node_id << " seq=" << seq_id;
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
     if (pr2.sequence_id != seq_id) {
-      LOG(INFO) << "Pr2 seq mismatch: expected=" << seq_id << " got=" << pr2.sequence_id;
+      LOG(ERROR) << "Pr2 seq mismatch: expected=" << seq_id << " got=" << pr2.sequence_id;
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
     if (pr2.src_node_id != dst_node_id) {
-      LOG(INFO) << "Pr2 src mismatch: expected=" << dst_node_id << " got=" << pr2.src_node_id;
+      LOG(ERROR) << "Pr2 src mismatch: expected=" << dst_node_id << " got=" << pr2.src_node_id;
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
     if(pr2.type != static_cast<uint8_t>(ProbeMessageType::kPr2)) {
-      LOG(INFO) << "Pr2 type mismatch: expected=4 got=" << static_cast<int>(pr2.type);
+      LOG(ERROR) << "Pr2 type mismatch: expected=4 got=" << static_cast<int>(pr2.type);
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
 
     recv_ok = RecvPacket(response_sock, &pd1, &pd1_rx, nullptr);
     if (!recv_ok) {
-      LOG(INFO) << "Failed to recv Pd1 from neighbor " << dst_node_id << " seq=" << seq_id;
+      LOG(ERROR) << "Failed to recv Pd1 from neighbor " << dst_node_id << " seq=" << seq_id;
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
     if (pd1.sequence_id != seq_id) {
-      LOG(INFO) << "Pd1 seq mismatch: expected=" << seq_id << " got=" << pd1.sequence_id;
+      LOG(ERROR) << "Pd1 seq mismatch: expected=" << seq_id << " got=" << pd1.sequence_id;
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
     if (pd1.src_node_id != dst_node_id) {
-      LOG(INFO) << "Pd1 src mismatch: expected=" << dst_node_id << " got=" << pd1.src_node_id;
+      LOG(ERROR) << "Pd1 src mismatch: expected=" << dst_node_id << " got=" << pd1.src_node_id;
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
     if(pd1.type != static_cast<uint8_t>(ProbeMessageType::kPd1)) {
-      LOG(INFO) << "Pd1 type mismatch: expected=5 got=" << static_cast<int>(pd1.type);
+      LOG(ERROR) << "Pd1 type mismatch: expected=5 got=" << static_cast<int>(pd1.type);
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
@@ -1029,7 +1219,7 @@ void NetworkProbeManager::ProbeNeighbor(int dst_node_id) {
 
     if (!SendPacket(probe_sock, dst_addr, ProbeMessageType::kPd2,
       0, 0, seq_id, &pd2_tx)) {
-      LOG(INFO) << "Failed to send Pd2 to neighbor " << dst_node_id << " seq=" << seq_id;
+      LOG(ERROR) << "Failed to send Pd2 to neighbor " << dst_node_id << " seq=" << seq_id;
       UpdateEdgeStat(dst_node_id, 1, 0);
       continue;
     }
@@ -1072,7 +1262,7 @@ void NetworkProbeManager::ProbeNeighbor(int dst_node_id) {
     std::this_thread::sleep_for(std::chrono::microseconds(config_.probe_cadence_us));
   }
   
-  LOG(INFO) << "Probe thread exiting for OUT-neighbor " << dst_node_id;
+  LOG(ERROR) << "Probe thread exiting for OUT-neighbor " << dst_node_id;
 }
 
 void NetworkProbeManager::TrainAndStoreSVM(
@@ -1106,7 +1296,7 @@ void NetworkProbeManager::TrainAndStoreSVM(
     edge_stats_[key].successful_pairs += xy_pairs.size();
   }
   
-  LOG(INFO) << "Edge " << config_.node_id << "->" << dst_node_id
+  LOG(ERROR) << "Edge " << config_.node_id << "->" << dst_node_id
             << ": α=" << alpha << ", β=" << beta << " ns (" 
             << pairs.size() << " pairs)";
 }
@@ -1137,13 +1327,13 @@ absl::Status NetworkProbeManager::ExportData() {
   }
   
   summary_out.close();
-  LOG(INFO) << "Exported probe data to " << summary_file;
+  LOG(ERROR) << "Exported probe data to " << summary_file;
 
   return absl::OkStatus();
 }
 
 void NetworkProbeManager::Shutdown() {
-  LOG(INFO) << "Shutdown initiated...";
+  LOG(ERROR) << "Shutdown initiated...";
   running_.store(false);
   
   // Wake up all condition variables waiting in ProbedResponder threads
@@ -1155,7 +1345,7 @@ void NetworkProbeManager::Shutdown() {
   }
   
   // Close all sockets FIRST to unblock recv() calls immediately
-  LOG(INFO) << "Closing sockets...";
+  LOG(ERROR) << "Closing sockets...";
   for (auto& [neighbor_id, socks] : neighbor_socks_) {
     if (socks.probe_sock >= 0) {
       close(socks.probe_sock);
@@ -1176,7 +1366,7 @@ void NetworkProbeManager::Shutdown() {
   }
   
   // Now join listener threads (for IN-neighbors)
-  LOG(INFO) << "Joining listener threads...";
+  LOG(ERROR) << "Joining listener threads...";
   for (auto& [neighbor_id, threads] : listener_threads_) {
     if (threads.fw_thread.joinable()) {
       threads.fw_thread.join();
@@ -1187,7 +1377,7 @@ void NetworkProbeManager::Shutdown() {
   }
   
   // Join probe threads (for OUT-neighbors)
-  LOG(INFO) << "Joining probe threads...";
+  LOG(ERROR) << "Joining probe threads...";
   for (auto& [neighbor_id, threads] : probe_threads_) {
     if (threads.fw_thread.joinable()) {
       threads.fw_thread.join();
@@ -1197,7 +1387,22 @@ void NetworkProbeManager::Shutdown() {
     }
   }
   
-  LOG(INFO) << "NetworkProbeManager shutdown complete";
+  // Export ALL accumulated windows when shutdown
+  if (window_manager_) {
+    std::string export_file = absl::StrCat("/tmp/probe_windows_node", 
+                                           config_.node_id, ".jsonl");
+    std::ofstream out(export_file, std::ios::out | std::ios::trunc);  // Overwrite mode
+    if (out.is_open()) {
+      LOG(ERROR) << "Exporting all accumulated windows to " << export_file;
+      window_manager_->ExportAllWindows(out, config_.node_id);
+      out.close();
+      LOG(ERROR) << "Export complete";
+    } else {
+      LOG(ERROR) << "Failed to open export file: " << export_file;
+    }
+  }
+  
+  LOG(ERROR) << "NetworkProbeManager shutdown complete";
 }
 
 }  // namespace xla::profiler
