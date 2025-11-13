@@ -2605,7 +2605,6 @@ xla_test(
         "interpreter",
     ],
     tags = [
-        "multi_gpu",
         "test_migrated_to_hlo_runner_pjrt",
     ],
     deps = [
