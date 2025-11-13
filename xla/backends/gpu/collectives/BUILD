@@ -105,6 +105,7 @@ cc_library(
 xla_cc_test(
     name = "gpu_clique_key_test",
     srcs = ["gpu_clique_key_test.cc"],
+    tags = ["multi_gpu"],
     deps = [
         ":gpu_clique_key",
         "//xla/core/collectives:clique_id",
