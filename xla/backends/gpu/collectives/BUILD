@@ -126,6 +126,7 @@ cc_library(
 xla_cc_test(
     name = "gpu_clique_key_test",
     srcs = ["gpu_clique_key_test.cc"],
+    tags = ["multi_gpu"],
     deps = [
         ":gpu_clique_key",
         "//xla/core/collectives:clique_id",
@@ -482,6 +483,7 @@ xla_test(
         "no-oneapi",
         # TODO(b/435404154): Reenable once this is fixed.
         "no_oss",
+        "multi_gpu",
     ],
     visibility = ["//visibility:private"],
     deps = [
