@@ -752,11 +752,11 @@ void NetworkProbeManager::ProbeSender(int dst_node_id) {
          }
          
          if (complete_pairs.size() >= 10) {
-           auto xy_pairs = probe_utils::convert_probe_pairs_to_xy_pairs(
+           auto prob_info = probe_utils::convert_probe_pairs_to_xy_pairs(
                complete_pairs, 0.2, true);
-          if (!xy_pairs.empty()) {
+          if (!prob_info.points.empty()) {
             SVMModel svm_model;
-            if (svm_model.train(xy_pairs)) {
+            if (svm_model.train(prob_info)) {
               double alpha = svm_model.getAlpha();
               double beta = svm_model.getBeta();
               
@@ -1272,14 +1272,15 @@ void NetworkProbeManager::TrainAndStoreSVM(
     LOG(WARNING) << "Insufficient pairs for SVM training: " << pairs.size();
     return;
   }
-  
-  auto xy_pairs = probe_utils::convert_probe_pairs_to_xy_pairs(pairs, 300000);
+
+  auto probed_pairs_info = probe_utils::convert_probe_pairs_to_xy_pairs(pairs, 300000);
+  auto& xy_pairs = probed_pairs_info.points;
   if (xy_pairs.empty()) {
     return;
   }
   
   SVMModel svm_model;
-  if (!svm_model.train(xy_pairs)) {
+  if (!svm_model.train(probed_pairs_info)) {
     LOG(WARNING) << "SVM training failed for edge " << config_.node_id 
                  << "->" << dst_node_id;
     return;

@@ -118,7 +118,7 @@ DistributedProfilerContext CreateTestConfig(int rank, int num_nodes,
       config.neighbors = {0};
       config.in_neighbors = {1};
       config.edge_ports["probe_edge:3->0"] = {40003, 40000 + 3 * 100};
-      config.edge_ports["probe_edge:1->3"] = {40000 + 3 * 100 + 1, 40000 + 1 * 100};
+      config.edge_ports["probe_edge:1->3"] = {40000 + 3 * 100 + 1, 40000 + 1 * 100 + 3};
     }
 
   }

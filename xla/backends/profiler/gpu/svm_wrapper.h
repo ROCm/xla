@@ -15,12 +15,22 @@ struct Point {
   int label;
 };
 
+
+struct ScaleInfo{
+  double y_max = 0.0, y_min = 0.0;
+  double x_max = 0.0, x_min = 0.0;
+};
+struct ProbInfo{
+  std::vector<Point> points;
+  ScaleInfo scale_info;
+};
+
 class SVMModel {
  public:
   SVMModel();
   ~SVMModel();
 
-  bool train(const std::vector<Point>& points);
+  bool train(const ProbInfo& prob_info);
 
   bool getCoefficients(double coef[2]) const;
   double getIntercept() const;
@@ -38,6 +48,7 @@ class SVMModel {
   svm_parameter param;
   std::vector<svm_node> x_space;
   double training_accuracy = 0.0;
+  ScaleInfo scale_info;
 };
 
 }  // namespace xla::profiler

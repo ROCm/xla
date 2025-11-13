@@ -29,35 +29,38 @@ void SVMModel::initializeParameters() {
   param.gamma = 0.0;
   param.coef0 = 0.0;
   param.nu = 0.5;
-  param.cache_size = 100;
+  param.cache_size = 1000;
   param.C = 1.0;
-  param.eps = 1e-3;
+  param.eps = 1e-2;
   param.p = 0.1;
-  // param.shrinking = 1;
-  param.shrinking = 0;
+  param.shrinking = 1;
+  // param.shrinking = 0;
   param.probability = 0;
   param.nr_weight = 0;
   param.weight_label = nullptr;
   param.weight = nullptr;
 }
 
-bool SVMModel::train(const std::vector<Point>& points) {
-  if (points.empty()) {
+bool SVMModel::train(const ProbInfo& prob_info) {
+  if (prob_info.points.empty()) {
     fprintf(stderr, "SVMModel::train: No points\n");
     return false;
   }
 
   cleanupTrainingData();
 
-  problem.l = points.size();
+  problem.l = prob_info.points.size();
   problem.y = new double[problem.l];
   problem.x = new svm_node*[problem.l];  // Array of pointers to per-point node arrays
+  scale_info = prob_info.scale_info;
 
   // FIXED: Flat vector of svm_node structs (contiguous memory)
   x_space.resize(problem.l * 3);
   size_t node_idx = 0;  // Use size_t to match vector
 
-  for (size_t i = 0; i < points.size(); ++i) {
+  auto& points = prob_info.points;
+  auto& scale_info = prob_info.scale_info;
+  for (size_t i = 0; i < prob_info.points.size(); ++i) {
     problem.y[i] = points[i].label;
 
     // Point to the start of this point's nodes in the flat vector
@@ -65,12 +68,12 @@ bool SVMModel::train(const std::vector<Point>& points) {
 
     // Feature 1: x (index 1, 1-based)
     x_space[node_idx].index = 1;
-    x_space[node_idx].value = points[i].x;
+    x_space[node_idx].value = (points[i].x); // - scale_info.x_min) / (scale_info.x_max - scale_info.x_min);
     ++node_idx;
 
     // Feature 2: y (index 2, 1-based)
     x_space[node_idx].index = 2;
-    x_space[node_idx].value = points[i].y;
+    x_space[node_idx].value = (points[i].y); // - scale_info.y_min) / (scale_info.y_max - scale_info.y_min);
     ++node_idx;
 
     // Terminator for this point's nodes
@@ -122,12 +125,22 @@ bool SVMModel::getCoefficients(double coef[2]) const {
       ++sv;
     }
   }
+  
   fprintf(stderr, "Coef: x=%.15e, y=%.15e\n", coef[0], coef[1]);
+  coef[0] /= (scale_info.x_max - scale_info.x_min);
+  coef[1] /= (scale_info.y_max - scale_info.y_min);
   return true;
 }
 
 double SVMModel::getIntercept() const {
-  return model ? -model->rho[0] : 0.0;
+  double coef[2];
+  if (!getCoefficients(coef)) {
+    return 0.0;
+  }
+  auto intercept = model ? -model->rho[0] : 0.0;
+  auto y_mean = scale_info.y_min, y_std = scale_info.y_max - scale_info.y_min;
+  auto x_mean = scale_info.x_min, x_std = scale_info.x_max - scale_info.x_min;
+  return intercept - (coef[0] * x_mean + coef[1] * y_mean);
 }
 
 double SVMModel::getAlpha() const {
@@ -144,7 +157,7 @@ double SVMModel::getBeta() const {
     return 0.0;
   }
   auto intercept = getIntercept();
-  return -intercept / coef[1];
+  return (-intercept - coef[0] * scale_info.x_min) / coef[1];
 }
 
 double SVMModel::getTrainingAccuracy() const {
@@ -164,6 +177,7 @@ void SVMModel::cleanupTrainingData() {
   delete[] problem.x; problem.x = nullptr;
   x_space.clear();
   problem.l = 0;
+  scale_info = ScaleInfo();
 }
 
 }  // namespace xla::profiler

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 #include "absl/container/flat_hash_map.h"
+#include "xla/backends/profiler/gpu/svm_wrapper.h"
 
 namespace xla::profiler {
 
@@ -25,7 +26,7 @@ struct ProbePair {
 
 namespace xla::profiler::probe_utils {
 
-std::vector<Point> convert_probe_pairs_to_xy_pairs(
+ProbInfo convert_probe_pairs_to_xy_pairs(
     const absl::flat_hash_map<uint32_t, probe_info::ProbePair>& probe_pairs, 
     double threshold = 300000, 
     bool adaptive = false
