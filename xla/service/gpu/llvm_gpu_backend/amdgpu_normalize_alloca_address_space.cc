@@ -15,11 +15,13 @@ limitations under the License.
 
 #include "xla/service/gpu/llvm_gpu_backend/amdgpu_normalize_alloca_address_space.h"
 
+#include <string>
 #include <vector>
 
 #include "absl/log/log.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
 namespace xla {
@@ -71,9 +73,12 @@ llvm::PreservedAnalyses AMDGPUNormalizeAllocaAddressSpace::run(
         if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(&inst)) {
           if (alloca->getAddressSpace() == 0) {
             allocas_to_fix.push_back(alloca);
+            std::string type_str;
+            llvm::raw_string_ostream type_stream(type_str);
+            alloca->getAllocatedType()->print(type_stream);
             VLOG(3) << "  Found alloca in function '" << function.getName().str()
                     << "': " << alloca->getName().str() 
-                    << " (type: " << *alloca->getAllocatedType() 
+                    << " (type: " << type_stream.str()
                     << ", addrspace: " << alloca->getAddressSpace() << ")";
           }
         }
