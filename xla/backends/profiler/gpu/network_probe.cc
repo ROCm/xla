@@ -8,6 +8,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -16,12 +17,14 @@
 #include <mutex>
 #include <thread>
 
+#include "absl/algorithm/container.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/synchronization/mutex.h"
 #include "xla/backends/profiler/gpu/probe_utils.h"
+#include "xla/backends/profiler/gpu/graph_calc.h"
 #include "xla/backends/profiler/gpu/svm_wrapper.h"
 #include "xla/tsl/platform/logging.h"
 
@@ -71,6 +74,10 @@ WindowManager::WindowManager(uint64_t window_duration_ns, int num_probe_threads)
       num_probe_threads_(num_probe_threads) {
   window_start_ns_ = GetMonotonicNs();
   window_end_ns_ = window_start_ns_.load() + window_duration_ns_;
+  current_window_.window_start_ns = window_start_ns_.load();
+  current_window_.window_end_ns = window_end_ns_.load();
+  current_window_.window_id = window_id_.load();
+  current_window_.round_id = current_round_id_.load();
   
   // Create barrier for synchronizing window rotation
   barrier_ = std::make_unique<absl::Barrier>(num_probe_threads);
@@ -98,6 +105,10 @@ void WindowManager::RotateWindow() {
   // Rotate the window data
   {
     absl::MutexLock lock(&mu_);
+    current_window_.window_start_ns = window_start_ns_.load();
+    current_window_.window_end_ns = window_end_ns_.load();
+    current_window_.window_id = window_id_.load();
+    current_window_.round_id = current_round_id_.load();
     
     // Save current window to history if it has data
     if (!current_window_.edges.empty()) {
@@ -113,7 +124,12 @@ void WindowManager::RotateWindow() {
     uint64_t now = GetMonotonicNs();
     window_start_ns_ = window_end_ns_.load();
     window_end_ns_ = now + window_duration_ns_;
+    window_id_.fetch_add(1);
     current_window_.edges.clear();
+    current_window_.window_start_ns = window_start_ns_.load();
+    current_window_.window_end_ns = window_end_ns_.load();
+    current_window_.window_id = window_id_.load();
+    current_window_.round_id = current_round_id_.load();
   }
   
   // Recreate barrier for next window
@@ -127,6 +143,10 @@ void WindowManager::RotateWindow() {
 void WindowManager::RecordEdgeStats(int dst_id, double alpha, double beta, 
                                      int pairs, int lost) {
   absl::MutexLock lock(&mu_);
+  current_window_.window_id = window_id_.load();
+  current_window_.round_id = current_round_id_.load();
+  current_window_.window_start_ns = window_start_ns_.load();
+  current_window_.window_end_ns = window_end_ns_.load();
   current_window_.edges[dst_id] = {alpha, beta, pairs, lost};
 }
 
@@ -135,7 +155,45 @@ WindowManager::WindowStats WindowManager::GetCurrentWindow() {
   WindowStats snapshot = current_window_;
   snapshot.window_start_ns = window_start_ns_.load();
   snapshot.window_end_ns = window_end_ns_.load();
+  snapshot.window_id = current_window_.window_id;
+  snapshot.round_id = current_window_.round_id;
   return snapshot;
+}
+
+NodeWindowData WindowManager::CollectWindowData(int node_id) {
+  absl::MutexLock lock(&mu_);
+  NodeWindowData data;
+  data.node_id = node_id;
+  data.window_id = current_window_.window_id;
+  data.round_id = current_window_.round_id;
+  data.window_start_ns = current_window_.window_start_ns;
+  data.window_end_ns = current_window_.window_end_ns;
+  data.edges.reserve(current_window_.edges.size());
+  for (const auto& [dst_id, stats] : current_window_.edges) {
+    EdgeAlphaBeta edge;
+    edge.src_node_id = node_id;
+    edge.dst_node_id = dst_id;
+    edge.alpha = stats.alpha;
+    edge.beta = stats.beta;
+    edge.pairs_count = stats.pairs_collected;
+    edge.lost_count = stats.packets_lost;
+    data.edges.push_back(edge);
+  }
+  return data;
+}
+
+void WindowManager::SetCurrentRoundId(uint64_t round_id) {
+  current_round_id_.store(round_id, std::memory_order_relaxed);
+  absl::MutexLock lock(&mu_);
+  current_window_.round_id = round_id;
+}
+
+uint64_t WindowManager::GetCurrentRoundId() const {
+  return current_round_id_.load(std::memory_order_relaxed);
+}
+
+uint64_t WindowManager::GetCurrentWindowId() const {
+  return window_id_.load(std::memory_order_relaxed);
 }
 
 void WindowManager::ExportAllWindows(std::ofstream& out, int node_id) {
@@ -147,6 +205,8 @@ void WindowManager::ExportAllWindows(std::ofstream& out, int node_id) {
   for (const auto& window : completed_windows_) {
     out << "{\"window_start_ns\":" << window.window_start_ns
         << ",\"window_end_ns\":" << window.window_end_ns
+        << ",\"window_id\":" << window.window_id
+        << ",\"round_id\":" << window.round_id
         << ",\"node_id\":" << node_id
         << ",\"edges\":[";
     
@@ -169,9 +229,13 @@ void WindowManager::ExportAllWindows(std::ofstream& out, int node_id) {
     WindowStats final_window = current_window_;
     final_window.window_start_ns = window_start_ns_.load();
     final_window.window_end_ns = window_end_ns_.load();
+    final_window.window_id = current_window_.window_id;
+    final_window.round_id = current_window_.round_id;
     
     out << "{\"window_start_ns\":" << final_window.window_start_ns
         << ",\"window_end_ns\":" << final_window.window_end_ns
+        << ",\"window_id\":" << final_window.window_id
+        << ",\"round_id\":" << final_window.round_id
         << ",\"node_id\":" << node_id
         << ",\"edges\":[";
     
@@ -216,6 +280,27 @@ absl::Status NetworkProbeManager::Initialize() {
   LOG(ERROR) << "Window manager initialized with " << num_probe_threads 
             << " probe threads (will export to /tmp/probe_windows_node" 
             << config_.node_id << ".jsonl on shutdown)";
+
+  has_probe_senders_ = config_.has_probe_senders || !out_neighbors_.empty();
+  if (!has_probe_senders_ && !config_.probe_participants.empty()) {
+    has_probe_senders_ = absl::c_linear_search(config_.probe_participants,
+                                               config_.node_id);
+  }
+  
+  if (config_.enable_master_sync) {
+    TF_RETURN_IF_ERROR(InitializeMasterSyncSockets());
+  }
+
+  if (enable_master_sync_ && config_.node_id == master_node_id_) {
+    GraphCalc::Config calc_config;
+    calc_config.reference_node_id = master_node_id_;
+    calc_config.num_nodes = config_.num_nodes;
+    calc_config.min_pairs = 12;
+    calc_config.max_loss_ratio = 0.6;
+    graph_calc_ = std::make_unique<GraphCalc>(calc_config);
+    LOG(INFO) << "GraphCalc initialized for master node " << master_node_id_
+              << " (num_nodes=" << config_.num_nodes << ")";
+  }
   
   // Initialize queues, counters, and mutexes for each neighbor
   for (int src : in_neighbors_) {
@@ -275,6 +360,10 @@ absl::Status NetworkProbeManager::Start() {
       probing_handshake_cond_map_[dst]->wait(lock, [this, dst] { return probing_handshake_done_map_[dst]; });
     }
     probe_threads_[dst].bw_thread = std::thread(&NetworkProbeManager::ProbeRespListener, this, dst);
+  }
+  
+  if (enable_master_sync_) {
+    master_sync_thread_ = std::thread(&NetworkProbeManager::MasterSyncThread, this);
   }
   
   LOG(ERROR) << "Started " << probe_threads_.size() << " probe threads";
@@ -450,6 +539,439 @@ absl::Status NetworkProbeManager::ComputeInNeighbors() {
             << " in-neighbors: " << absl::StrJoin(in_neighbors_, ", ");
   
   return absl::OkStatus();
+}
+
+absl::Status NetworkProbeManager::InitializeMasterSyncSockets() {
+  enable_master_sync_ = config_.enable_master_sync;
+  master_node_id_ = config_.master_node_id;
+  if (!enable_master_sync_) {
+    return absl::OkStatus();
+  }
+  
+  worker_participants_.clear();
+  if (!config_.probe_participants.empty()) {
+    worker_participants_ = config_.probe_participants;
+  }
+  absl::c_sort(worker_participants_);
+  worker_participants_.erase(
+      std::unique(worker_participants_.begin(), worker_participants_.end()),
+      worker_participants_.end());
+  if (worker_participants_.empty()) {
+    for (int i = 0; i < config_.num_nodes; ++i) {
+      worker_participants_.push_back(i);
+    }
+  }
+  worker_participants_.erase(
+      std::remove(worker_participants_.begin(), worker_participants_.end(),
+                  master_node_id_),
+      worker_participants_.end());
+  expected_worker_reports_ = worker_participants_.size();
+  
+  control_port_ = config_.master_control_port + config_.node_id;
+  master_sync_port_ = config_.master_sync_port;
+  
+  control_sock_ = socket(AF_INET, SOCK_DGRAM, 0);
+  if (control_sock_ < 0) {
+    return absl::InternalError("Failed to create master control socket");
+  }
+  
+  int reuse = 1;
+  setsockopt(control_sock_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+  
+  sockaddr_in control_bind{};
+  control_bind.sin_family = AF_INET;
+  control_bind.sin_addr.s_addr = INADDR_ANY;
+  control_bind.sin_port = htons(control_port_);
+  
+  if (bind(control_sock_, reinterpret_cast<sockaddr*>(&control_bind),
+           sizeof(control_bind)) < 0) {
+    close(control_sock_);
+    control_sock_ = -1;
+    return absl::InternalError(
+        absl::StrCat("Failed to bind control socket on port ", control_port_,
+                     " errno=", errno));
+  }
+  
+  struct timeval tv = {
+      .tv_sec = static_cast<long>(config_.probe_window_s),
+      .tv_usec = 0,
+  };
+  setsockopt(control_sock_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  
+  if (config_.node_id == master_node_id_) {
+    master_listen_sock_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (master_listen_sock_ < 0) {
+      close(control_sock_);
+      control_sock_ = -1;
+      return absl::InternalError("Failed to create master sync TCP socket");
+    }
+    
+    setsockopt(master_listen_sock_, SOL_SOCKET, SO_REUSEADDR, &reuse,
+               sizeof(reuse));
+    
+    sockaddr_in listen_addr{};
+    listen_addr.sin_family = AF_INET;
+    listen_addr.sin_addr.s_addr = INADDR_ANY;
+    listen_addr.sin_port = htons(master_sync_port_);
+    
+    if (bind(master_listen_sock_,
+             reinterpret_cast<sockaddr*>(&listen_addr),
+             sizeof(listen_addr)) < 0) {
+      close(master_listen_sock_);
+      master_listen_sock_ = -1;
+      close(control_sock_);
+      control_sock_ = -1;
+      return absl::InternalError(
+          absl::StrCat("Failed to bind master sync socket to port ",
+                       master_sync_port_, " errno=", errno));
+    }
+    
+    if (listen(master_listen_sock_, config_.num_nodes) < 0) {
+      close(master_listen_sock_);
+      master_listen_sock_ = -1;
+      close(control_sock_);
+      control_sock_ = -1;
+      return absl::InternalError("Failed to listen on master sync socket");
+    }
+    
+    LOG(INFO) << "Master node " << master_node_id_
+              << " listening for worker sync on TCP port " << master_sync_port_
+              << " expecting " << expected_worker_reports_ << " workers";
+  }
+  
+  LOG(INFO) << "Control socket bound on port " << control_port_
+            << " (enable_master_sync=" << enable_master_sync_ << ")";
+  return absl::OkStatus();
+}
+
+absl::Status NetworkProbeManager::PerformMasterSync(
+    const NodeWindowData& local_data) {
+  if (!enable_master_sync_) {
+    return absl::OkStatus();
+  }
+  if (!has_probe_senders_) {
+    return absl::OkStatus();
+  }
+  
+  if (config_.node_id == master_node_id_) {
+    PerformMasterCollection(local_data);
+    {
+      std::lock_guard<std::mutex> lock(sync_mutex_);
+      round_sync_pending_ = false;
+    }
+    sync_cv_.notify_all();
+  } else {
+    PerformWorkerSync(local_data);
+  }
+  
+  return absl::OkStatus();
+}
+
+void NetworkProbeManager::PerformMasterCollection(
+    const NodeWindowData& local_data) {
+  if (master_listen_sock_ < 0) {
+    LOG(WARNING) << "Master sync socket not initialized";
+    return;
+  }
+  
+  std::vector<NodeWindowData> aggregated;
+  aggregated.reserve(config_.num_nodes);
+  aggregated.push_back(local_data);
+  
+  int expected_workers = expected_worker_reports_;
+  int received_workers = 0;
+  while (received_workers < expected_workers && running_.load()) {
+    sockaddr_in client_addr{};
+    socklen_t client_len = sizeof(client_addr);
+    int conn = accept(master_listen_sock_,
+                      reinterpret_cast<sockaddr*>(&client_addr), &client_len);
+    if (conn < 0) {
+      LOG(WARNING) << "Master failed to accept worker sync connection: errno="
+                   << errno;
+      continue;
+    }
+    
+    uint32_t payload_size = 0;
+    if (RecvAll(conn, &payload_size, sizeof(payload_size)) < 0) {
+      LOG(WARNING) << "Master failed to read payload size from worker";
+      close(conn);
+      continue;
+    }
+    if (payload_size == 0 || payload_size > (4 * 1024 * 1024)) {
+      LOG(WARNING) << "Master received invalid payload size " << payload_size;
+      close(conn);
+      continue;
+    }
+    
+    std::vector<char> payload(payload_size);
+    if (RecvAll(conn, payload.data(), payload.size()) < 0) {
+      LOG(WARNING) << "Master failed to read payload data";
+      close(conn);
+      continue;
+    }
+    
+    auto worker_data =
+        DeserializeNodeWindowData(payload.data(), payload.size());
+    if (!worker_data.ok()) {
+      LOG(WARNING) << "Failed to deserialize worker window: "
+                   << worker_data.status();
+    } else {
+      aggregated.push_back(*worker_data);
+    }
+    
+    close(conn);
+    ++received_workers;
+  }
+  
+  LOG(INFO) << "Master aggregated " << aggregated.size()
+            << " node windows for sequence " << current_sequence_.load();
+
+  GlobalWindowData global;
+  if (!aggregated.empty()) {
+    const NodeWindowData& baseline = aggregated.front();
+    global.window_id = baseline.window_id;
+    global.round_id = baseline.round_id;
+  }
+  global.sequence_number = current_sequence_.load();
+  global.all_nodes = aggregated;
+  global.window_start_ns.clear();
+  global.window_end_ns.clear();
+  global.window_start_ns.reserve(global.all_nodes.size());
+  global.window_end_ns.reserve(global.all_nodes.size());
+  for (const auto& node_window : global.all_nodes) {
+    global.window_start_ns.push_back(node_window.window_start_ns);
+    global.window_end_ns.push_back(node_window.window_end_ns);
+  }
+
+  if (graph_calc_) {
+    auto round_result = graph_calc_->ProcessRound(global);
+    if (!round_result.ok()) {
+      LOG(WARNING) << "GraphCalc processing failed: "
+                   << round_result.status();
+    } else {
+      const auto& summary = *round_result;
+      LOG(INFO) << "GraphCalc summary: round=" << summary.round_id
+                << " edges=" << summary.edges_used
+                << " loops=" << summary.loops_constructed
+                << " converged=" << summary.converged;
+      if (!summary.converged && !summary.failure_reason.empty()) {
+        LOG(WARNING) << "GraphCalc convergence issue: "
+                     << summary.failure_reason;
+      }
+    }
+  }
+}
+
+void NetworkProbeManager::PerformWorkerSync(
+    const NodeWindowData& local_data) {
+  if (!has_probe_senders_) {
+    return;
+  }
+  auto conn_or = ConnectToMaster();
+  if (!conn_or.ok()) {
+    LOG(WARNING) << "Worker failed to connect to master: "
+                 << conn_or.status();
+    return;
+  }
+  int conn = *conn_or;
+  
+  std::string serialized = SerializeNodeWindowData(local_data);
+  uint32_t payload_size = static_cast<uint32_t>(serialized.size());
+  
+  if (SendAll(conn, &payload_size, sizeof(payload_size)) < 0) {
+    LOG(WARNING) << "Worker failed to send payload size to master";
+    close(conn);
+    return;
+  }
+  
+  if (SendAll(conn, serialized.data(), serialized.size()) < 0) {
+    LOG(WARNING) << "Worker failed to send payload data to master";
+    close(conn);
+    return;
+  }
+  
+  close(conn);
+  LOG(INFO) << "Worker " << config_.node_id << " sent "
+            << serialized.size() << " bytes to master";
+}
+
+absl::StatusOr<int> NetworkProbeManager::ConnectToMaster() const {
+  int sock = socket(AF_INET, SOCK_STREAM, 0);
+  if (sock < 0) {
+    return absl::InternalError("Failed to create worker sync socket");
+  }
+  
+  struct timeval tv = {.tv_sec = 5, .tv_usec = 0};
+  setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+  
+  sockaddr_in master_addr =
+      ParseAddress(config_.node_addresses[master_node_id_], master_sync_port_);
+  if (connect(sock, reinterpret_cast<sockaddr*>(&master_addr),
+              sizeof(master_addr)) < 0) {
+    close(sock);
+    return absl::UnavailableError(
+        absl::StrCat("Failed to connect to master ", master_node_id_,
+                     " errno=", errno));
+  }
+  return sock;
+}
+
+ssize_t NetworkProbeManager::SendAll(int sockfd, const void* data,
+                                     size_t len) const {
+  size_t total = 0;
+  const char* ptr = static_cast<const char*>(data);
+  while (total < len) {
+    ssize_t sent = send(sockfd, ptr + total, len - total, 0);
+    if (sent < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return -1;
+    }
+    if (sent == 0) {
+      break;
+    }
+    total += sent;
+  }
+  return static_cast<ssize_t>(total);
+}
+
+ssize_t NetworkProbeManager::RecvAll(int sockfd, void* data,
+                                     size_t len) const {
+  size_t total = 0;
+  char* ptr = static_cast<char*>(data);
+  while (total < len) {
+    ssize_t received = recv(sockfd, ptr + total, len - total, 0);
+    if (received < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return -1;
+    }
+    if (received == 0) {
+      return -1;
+    }
+    total += received;
+  }
+  return static_cast<ssize_t>(total);
+}
+
+void NetworkProbeManager::MasterSyncThread() {
+  if (!enable_master_sync_) {
+    return;
+  }
+  if (control_sock_ < 0) {
+    LOG(WARNING) << "Master sync thread exiting: control socket not initialized";
+    return;
+  }
+  
+  LOG(INFO) << "Master sync thread started on node " << config_.node_id
+            << " (master=" << master_node_id_ << ")";
+  
+  auto control_addr_for = [&](int node_id) {
+    return ParseAddress(config_.node_addresses[node_id],
+                        static_cast<uint16_t>(config_.master_control_port +
+                                              node_id));
+  };
+  
+  while (running_.load()) {
+    if (config_.node_id == master_node_id_) {
+      std::this_thread::sleep_for(
+          std::chrono::seconds(config_.probe_window_s));
+      if (!running_.load()) {
+        break;
+      }
+      
+      SyncMessage end_msg;
+      end_msg.command = SyncCommand::kRoundEnd;
+      end_msg.sequence_number = current_sequence_.load(
+          std::memory_order_relaxed);
+      end_msg.timestamp_ns = GetMonotonicNs();
+      
+      for (int node = 0; node < config_.num_nodes; ++node) {
+        if (node == master_node_id_) continue;
+        sockaddr_in dest = control_addr_for(node);
+        sendto(control_sock_, &end_msg, sizeof(end_msg), 0,
+               reinterpret_cast<sockaddr*>(&dest), sizeof(dest));
+      }
+      
+      stop_probing_.store(true, std::memory_order_relaxed);
+      {
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        round_sync_pending_ = true;
+      }
+      {
+        std::unique_lock<std::mutex> lock(sync_mutex_);
+        sync_cv_.wait(lock, [this] {
+          return !round_sync_pending_ || !running_.load();
+        });
+      }
+      
+      uint64_t new_seq =
+          current_sequence_.fetch_add(1, std::memory_order_relaxed) + 1;
+      SyncMessage start_msg;
+      start_msg.command = SyncCommand::kRoundStart;
+      start_msg.sequence_number = new_seq;
+      start_msg.timestamp_ns = GetMonotonicNs();
+      
+      if (window_manager_) {
+        window_manager_->SetCurrentRoundId(new_seq);
+      }
+      
+      for (int node = 0; node < config_.num_nodes; ++node) {
+        if (node == master_node_id_) continue;
+        sockaddr_in dest = control_addr_for(node);
+        sendto(control_sock_, &start_msg, sizeof(start_msg), 0,
+               reinterpret_cast<sockaddr*>(&dest), sizeof(dest));
+      }
+      
+      stop_probing_.store(false, std::memory_order_relaxed);
+      {
+        std::lock_guard<std::mutex> lock(round_mutex_);
+        round_start_cv_.notify_all();
+      }
+    } else {
+      SyncMessage msg{};
+      sockaddr_in sender{};
+      socklen_t sender_len = sizeof(sender);
+      ssize_t bytes =
+          recvfrom(control_sock_, &msg, sizeof(msg), 0,
+                   reinterpret_cast<sockaddr*>(&sender), &sender_len);
+      if (bytes < 0) {
+        if (!running_.load()) {
+          break;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          continue;
+        }
+        LOG(WARNING) << "Worker control recv failed: errno=" << errno;
+        continue;
+      }
+      if (bytes != sizeof(msg)) {
+        LOG(WARNING) << "Worker received partial control message (bytes="
+                     << bytes << ")";
+        continue;
+      }
+      
+      if (msg.command == SyncCommand::kRoundEnd) {
+        stop_probing_.store(true, std::memory_order_relaxed);
+      } else if (msg.command == SyncCommand::kRoundStart) {
+        current_sequence_.store(msg.sequence_number,
+                                std::memory_order_relaxed);
+        if (window_manager_) {
+          window_manager_->SetCurrentRoundId(msg.sequence_number);
+        }
+        stop_probing_.store(false, std::memory_order_relaxed);
+        {
+          std::lock_guard<std::mutex> lock(round_mutex_);
+          round_start_cv_.notify_all();
+        }
+      }
+    }
+  }
+  
+  LOG(INFO) << "Master sync thread exiting on node " << config_.node_id;
 }
 
 // Helper: Send packet with timestamping
@@ -732,8 +1254,10 @@ void NetworkProbeManager::ProbeSender(int dst_node_id) {
   LOG(ERROR) << "Handshake complete with neighbor " << dst_node_id << ", entering probe loop";
   
   while (running_.load()) {
-    // Check shared window expiry
-    if (window_manager_->IsWindowExpired()) {
+    bool window_expired = window_manager_->IsWindowExpired();
+    bool master_stop = enable_master_sync_ && stop_probing_.load();
+    bool should_rotate = enable_master_sync_ ? master_stop : window_expired;
+    if (should_rotate) {
       std::scoped_lock<std::mutex> lock(*probing_mutex_map_[dst_node_id]);
       
        // Train SVM on current window's pairs
@@ -780,12 +1304,24 @@ void NetworkProbeManager::ProbeSender(int dst_node_id) {
       // Notify window expiry and check if this is the last thread
       if (window_manager_->NotifyWindowExpired()) {
         // This is the last thread - rotate the window
+        NodeWindowData local_data =
+            window_manager_->CollectWindowData(config_.node_id);
+        auto status = PerformMasterSync(local_data);
+        if (!status.ok()) {
+          LOG(ERROR) << "Master synchronization failed: " << status;
+        }
         window_manager_->RotateWindow();
         LOG(ERROR) << "Thread for dst=" << dst_node_id 
                   << " was last at barrier, rotated window";
       } else {
         VLOG(1) << "Thread for dst=" << dst_node_id 
                 << " reached barrier, waiting for others";
+      }
+      
+      if (enable_master_sync_ && stop_probing_.load()) {
+        std::unique_lock<std::mutex> round_lock(round_mutex_);
+        round_start_cv_.wait(
+            round_lock, [this] { return !stop_probing_.load(); });
       }
     }
     
@@ -1265,6 +1801,71 @@ void NetworkProbeManager::ProbeNeighbor(int dst_node_id) {
   LOG(ERROR) << "Probe thread exiting for OUT-neighbor " << dst_node_id;
 }
 
+std::string NetworkProbeManager::SerializeNodeWindowData(
+    const NodeWindowData& data) const {
+  std::string buffer;
+  buffer.reserve(sizeof(NodeWindowData) +
+                 data.edges.size() * sizeof(EdgeAlphaBeta));
+  auto append = [&buffer](const void* src, size_t len) {
+    buffer.append(static_cast<const char*>(src), len);
+  };
+  
+  append(&data.node_id, sizeof(data.node_id));
+  append(&data.window_id, sizeof(data.window_id));
+  append(&data.round_id, sizeof(data.round_id));
+  append(&data.window_start_ns, sizeof(data.window_start_ns));
+  append(&data.window_end_ns, sizeof(data.window_end_ns));
+  
+  uint64_t edge_count = data.edges.size();
+  append(&edge_count, sizeof(edge_count));
+  for (const auto& edge : data.edges) {
+    append(&edge, sizeof(edge));
+  }
+  
+  return buffer;
+}
+
+absl::StatusOr<NodeWindowData> NetworkProbeManager::DeserializeNodeWindowData(
+    const char* data, size_t len) const {
+  auto has_bytes = [len](size_t offset, size_t bytes) {
+    return offset + bytes <= len;
+  };
+  
+  size_t offset = 0;
+  NodeWindowData window;
+  auto read_into = [&](void* dst, size_t bytes) -> absl::Status {
+    if (!has_bytes(offset, bytes)) {
+      return absl::InternalError(
+          "Serialized NodeWindowData unexpectedly truncated");
+    }
+    std::memcpy(dst, data + offset, bytes);
+    offset += bytes;
+    return absl::OkStatus();
+  };
+  
+  TF_RETURN_IF_ERROR(read_into(&window.node_id, sizeof(window.node_id)));
+  TF_RETURN_IF_ERROR(read_into(&window.window_id, sizeof(window.window_id)));
+  TF_RETURN_IF_ERROR(read_into(&window.round_id, sizeof(window.round_id)));
+  TF_RETURN_IF_ERROR(
+      read_into(&window.window_start_ns, sizeof(window.window_start_ns)));
+  TF_RETURN_IF_ERROR(
+      read_into(&window.window_end_ns, sizeof(window.window_end_ns)));
+  
+  uint64_t edge_count = 0;
+  TF_RETURN_IF_ERROR(read_into(&edge_count, sizeof(edge_count)));
+  if (!has_bytes(offset, edge_count * sizeof(EdgeAlphaBeta))) {
+    return absl::InternalError(
+        "Serialized NodeWindowData edge payload truncated");
+  }
+  
+  window.edges.resize(edge_count);
+  for (uint64_t i = 0; i < edge_count; ++i) {
+    TF_RETURN_IF_ERROR(read_into(&window.edges[i], sizeof(EdgeAlphaBeta)));
+  }
+  
+  return window;
+}
+
 void NetworkProbeManager::TrainAndStoreSVM(
     int dst_node_id,
     const absl::flat_hash_map<uint32_t, probe_info::ProbePair>& pairs) {
@@ -1337,6 +1938,15 @@ void NetworkProbeManager::Shutdown() {
   LOG(ERROR) << "Shutdown initiated...";
   running_.store(false);
   
+  if (control_sock_ >= 0) {
+    close(control_sock_);
+    control_sock_ = -1;
+  }
+  if (master_listen_sock_ >= 0) {
+    close(master_listen_sock_);
+    master_listen_sock_ = -1;
+  }
+  
   // Wake up all condition variables waiting in ProbedResponder threads
   for (auto& [neighbor_id, queue] : listener_queue_map_) {
     queue->cond.notify_all();
@@ -1386,6 +1996,10 @@ void NetworkProbeManager::Shutdown() {
     if (threads.bw_thread.joinable()) {
       threads.bw_thread.join();
     }
+  }
+  
+  if (master_sync_thread_.joinable()) {
+    master_sync_thread_.join();
   }
   
   // Export ALL accumulated windows when shutdown

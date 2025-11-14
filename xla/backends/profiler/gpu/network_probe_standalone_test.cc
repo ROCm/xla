@@ -92,6 +92,7 @@ DistributedProfilerContext CreateTestConfig(int rank, int num_nodes,
       config.edge_ports[edge_key] = {40000 + rank * 100, 40000};
     }
     config.graph_policy = "test_directed";
+    config.probe_participants = {0};
   }
   else if(topology == "loop_2"){
     if(rank == 0){
@@ -129,6 +130,8 @@ DistributedProfilerContext CreateTestConfig(int rank, int num_nodes,
   config.enable_probe_export = true;
   config.enable_clock_snapshots = false;
   config.enable_socket_timestamping = true;
+  config.probe_participants = {0, 1, 2, 3};
+  config.has_probe_senders = true;
   config.timestamp_sync_timeout = absl::Seconds(5);
   
   return config;

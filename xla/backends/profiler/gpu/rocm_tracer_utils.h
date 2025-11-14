@@ -189,6 +189,12 @@ struct DistributedProfilerContext {
   std::string graph_policy = "random_graph";
   std::vector<int> neighbors;  // Resolved neighbors for probing
   std::vector<int> in_neighbors;  // Resolved in-neighbors for probing
+  std::vector<int> probe_participants;  // Nodes expected to run ProbeSender
+  bool has_probe_senders = false;
+  bool enable_master_sync = true;
+  int master_node_id = 0;
+  uint16_t master_control_port = 36000;
+  uint16_t master_sync_port = 37000;
   
   // Port assignments for directed edges: key="src->dst", value=(dst_listen_port, src_response_port)
   std::map<std::string, std::pair<uint16_t, uint16_t>> edge_ports;

@@ -290,6 +290,18 @@ absl::StatusOr<std::pair<std::vector<int>, std::vector<int>>> GenerateDirectedNe
       TF_RETURN_IF_ERROR(kv_store->Set(in_key, in_value));
       VLOG(2) << "Stored neighbors for node " << i << ": out=" << out_value << " in=" << in_value;
     }
+
+    // Persist list of nodes that run probe senders (non-empty out-degree)
+    std::vector<std::string> participant_tokens;
+    participant_tokens.reserve(num_nodes);
+    for (int i = 0; i < num_nodes; ++i) {
+      if (!out_edges[i].empty()) {
+        participant_tokens.push_back(absl::StrCat(i));
+      }
+    }
+    TF_RETURN_IF_ERROR(
+        kv_store->Set("probe_participants",
+                      absl::StrJoin(participant_tokens, ",")));
     
     // Master writes a sentinel key to signal graph generation is complete
     // This provides an explicit barrier point for all nodes
@@ -413,6 +425,27 @@ absl::StatusOr<std::map<std::string, std::pair<uint16_t, uint16_t>>> ReadEdgePor
   }
   
   return edge_ports;
+}
+
+absl::StatusOr<std::vector<int>> ReadProbeParticipants(
+    KeyValueStoreInterface* kv_store) {
+  std::vector<int> participants;
+  absl::StatusOr<std::string> raw = kv_store->TryGet("probe_participants");
+  if (!raw.ok() || raw->empty()) {
+    return participants;
+  }
+  std::vector<std::string> tokens = absl::StrSplit(*raw, ',');
+  for (const auto& token : tokens) {
+    if (token.empty()) continue;
+    int node_id;
+    if (!absl::SimpleAtoi(token, &node_id)) {
+      return absl::InternalError(
+          absl::StrCat("Failed to parse probe participant id from token: ",
+                       token));
+    }
+    participants.push_back(node_id);
+  }
+  return participants;
 }
 
 class GpuAsyncHostToDeviceTransferManager
@@ -1906,6 +1939,8 @@ absl::StatusOr<DeviceTopologyPair> BuildDistributedDevices(
     // Read port assignments from KV store
     TF_ASSIGN_OR_RETURN(auto edge_ports,
                         ReadEdgePorts(node_id, neighbors, in_neighbors, kv_store.get()));
+    TF_ASSIGN_OR_RETURN(auto probe_participants,
+                        ReadProbeParticipants(kv_store.get()));
     
     // Read probe config from env
     uint64_t probe_cadence_us = 800;
@@ -1945,6 +1980,8 @@ absl::StatusOr<DeviceTopologyPair> BuildDistributedDevices(
     dist_ctx.enable_probe_export = enable_probe_export;
     dist_ctx.enable_clock_snapshots = enable_clock_snapshots;
     dist_ctx.graph_policy = graph_policy;
+    dist_ctx.probe_participants = probe_participants;
+    dist_ctx.has_probe_senders = !neighbors.empty();
     
     // Set ONCE with all fields populated
     xla::profiler::DistributedProfilerContextManager::Get().SetDistributedContext(dist_ctx);

@@ -440,6 +440,80 @@ cc_library(
 )
 
 cc_library(
+  name = "probe_data_types",
+  hdrs = ["probe_data_types.h"],
+  tags = [
+    "gpu",
+    "manual",
+    "rocm-only",
+  ],
+  visibility = ["//visibility:public"],
+)
+
+cc_library(
+  name = "graph_calc",
+  srcs = ["graph_calc.cc"],
+  hdrs = ["graph_calc.h"],
+  tags = [
+    "gpu",
+    "manual",
+    "rocm-only",
+  ],
+  deps = [
+    ":probe_data_types",
+    "@com_google_absl//absl/container:flat_hash_map",
+    "@com_google_absl//absl/container:flat_hash_set",
+    "@com_google_absl//absl/hash",
+    "@com_google_absl//absl/log",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:statusor",
+    "@com_google_absl//absl/strings",
+    "@eigen_archive//:eigen3",
+  ],
+  visibility = ["//visibility:public"],
+)
+
+cc_library(
+  name = "graph_calc_runner",
+  srcs = ["graph_calc_runner.cc"],
+  hdrs = ["graph_calc_runner.h"],
+  tags = [
+    "gpu",
+    "manual",
+    "rocm-only",
+  ],
+  deps = [
+    ":graph_calc",
+    ":probe_data_types",
+    "@com_google_absl//absl/log",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:statusor",
+    "@com_google_absl//absl/strings",
+    "@jsoncpp_git//:jsoncpp",
+    "@tsl//tsl/platform:errors",
+    "@tsl//tsl/platform:logging",
+    "@tsl//tsl/platform:statusor",
+  ],
+  visibility = ["//visibility:public"],
+)
+
+cc_binary(
+  name = "graph_calc_main",
+  srcs = ["graph_calc_main.cc"],
+  tags = [
+    "gpu",
+    "manual",
+    "rocm-only",
+  ],
+  deps = [
+    ":graph_calc_runner",
+    "@com_google_absl//absl/flags:flag",
+    "@com_google_absl//absl/flags:parse",
+    "@com_google_absl//absl/log",
+  ],
+)
+
+cc_library(
   name = "network_probe",
   srcs = ["network_probe.cc"],
   hdrs = ["network_probe.h"],
@@ -453,6 +527,8 @@ cc_library(
     "rocm-only",
   ],
   deps = [
+    ":graph_calc",
+    ":probe_data_types",
     ":probe_utils",
     ":rocm_tracer_utils",
     ":svm_wrapper",
