@@ -49,9 +49,13 @@ limitations under the License.
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/Analysis/CGSCCPassManager.h"
+#include "llvm/Analysis/LoopAnalysisManager.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
@@ -2094,6 +2098,26 @@ GpuCompiler::CompileSingleModule(
 
     std::string err;
     llvm::raw_string_ostream err_stream(err);
+
+    // Normalize AMD GPU allocas before verification
+    // AMD GPUs require allocas in address space 5 (private/local memory)
+    llvm::Triple target_triple(llvm_module->getTargetTriple());
+    if (target_triple.isAMDGPU()) {
+      llvm::LoopAnalysisManager lam;
+      llvm::FunctionAnalysisManager fam;
+      llvm::CGSCCAnalysisManager cgam;
+      llvm::ModuleAnalysisManager mam;
+      llvm::PassBuilder pb;
+      pb.registerModuleAnalyses(mam);
+      pb.registerCGSCCAnalyses(cgam);
+      pb.registerFunctionAnalyses(fam);
+      pb.registerLoopAnalyses(lam);
+      pb.crossRegisterProxies(lam, fam, cgam, mam);
+      
+      llvm::ModulePassManager mpm;
+      mpm.addPass(AMDGPUNormalizeAllocaAddressSpace());
+      mpm.run(*llvm_module, mam);
+    }
 
     // verifyModule() returns true if the module is broken.
     TF_RET_CHECK(!llvm::verifyModule(*llvm_module, &err_stream))
