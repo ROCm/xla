@@ -2095,57 +2095,6 @@ GpuCompiler::CompileSingleModule(
     std::string err;
     llvm::raw_string_ostream err_stream(err);
 
-    // Fix AMD GPU allocas: they must be in address space 5
-    llvm::Triple target_triple(llvm_module->getTargetTriple());
-    if (target_triple.isAMDGPU()) {
-      LOG(INFO) << "[AMD GPU ALLOCA FIX] Checking module for allocas in wrong address space...";
-      std::vector<llvm::AllocaInst*> allocas_to_fix;
-      for (auto& function : *llvm_module) {
-        for (auto& bb : function) {
-          for (auto& inst : bb) {
-            if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(&inst)) {
-              if (alloca->getAddressSpace() == 0) {
-                allocas_to_fix.push_back(alloca);
-              }
-            }
-          }
-        }
-      }
-      
-      LOG(INFO) << "[AMD GPU ALLOCA FIX] Found " << allocas_to_fix.size() << " allocas to fix";
-      for (auto* alloca : allocas_to_fix) {
-        LOG(INFO) << "[AMD GPU ALLOCA FIX] Fixing alloca: " << alloca->getName().str() 
-                  << " in AS" << alloca->getAddressSpace();
-        
-        // Get the parent function
-        llvm::Function* func = alloca->getFunction();
-        
-        // Create new alloca in address space 5 using AllocaInst constructor
-        llvm::BasicBlock::iterator insert_pt = func->getEntryBlock().getFirstInsertionPt();
-        llvm::AllocaInst* new_alloca = new llvm::AllocaInst(
-            alloca->getAllocatedType(),  // Type to allocate
-            5,                             // Address space
-            alloca->getArraySize(),        // Array size
-            alloca->getAlign(),            // Alignment
-            alloca->getName() + ".as5");   // Name
-        new_alloca->insertBefore(insert_pt);
-        
-        LOG(INFO) << "[AMD GPU ALLOCA FIX] Created new alloca in AS" << new_alloca->getAddressSpace();
-        
-        // Cast from AS5 back to AS0 for compatibility
-        llvm::BasicBlock::iterator alloca_it = alloca->getIterator();
-        llvm::AddrSpaceCastInst* addrspacecast = new llvm::AddrSpaceCastInst(
-            new_alloca,                    // Source (AS5)
-            alloca->getType(),             // Dest type (AS0)
-            alloca->getName() + ".cast");  // Name
-        addrspacecast->insertBefore(alloca_it);
-        
-        // Replace all uses and erase old alloca
-        alloca->replaceAllUsesWith(addrspacecast);
-        alloca->eraseFromParent();
-      }
-    }
-
     // verifyModule() returns true if the module is broken.
     TF_RET_CHECK(!llvm::verifyModule(*llvm_module, &err_stream))
         << "Invalid LLVM IR before optimizations:\n"

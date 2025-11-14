@@ -57,6 +57,7 @@ limitations under the License.
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/Scalar.h"
+#include "xla/service/gpu/llvm_gpu_backend/amdgpu_backend.h"
 #include "xla/service/gpu/llvm_gpu_backend/load_ir_module.h"
 #include "xla/service/gpu/llvm_gpu_backend/utils.h"
 #include "xla/service/llvm_ir/llvm_type_conversion_util.h"
@@ -311,6 +312,9 @@ absl::Status LinkAndOptimizeModule(
 
   llvm::ModulePassManager mpm;
   mpm.addPass(llvm::VerifierPass());
+  // Normalize AMD GPU alloca address spaces before optimization.
+  // This ensures allocas conform to the AMDGPU memory model (AS5 for private).
+  mpm.addPass(AMDGPUNormalizeAllocaAddressSpace());
   if (ol == llvm::OptimizationLevel::O0) {
     mpm.addPass(pb.buildO0DefaultPipeline(ol));
   } else {
