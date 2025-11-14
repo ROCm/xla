@@ -57,7 +57,7 @@ limitations under the License.
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/Scalar.h"
-#include "xla/service/gpu/llvm_gpu_backend/amdgpu_backend.h"
+#include "xla/service/gpu/llvm_gpu_backend/amdgpu_normalize_alloca_address_space.h"
 #include "xla/service/gpu/llvm_gpu_backend/load_ir_module.h"
 #include "xla/service/gpu/llvm_gpu_backend/utils.h"
 #include "xla/service/llvm_ir/llvm_type_conversion_util.h"

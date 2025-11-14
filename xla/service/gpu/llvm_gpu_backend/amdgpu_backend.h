@@ -23,27 +23,8 @@ limitations under the License.
 
 #include "absl/status/statusor.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/PassManager.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/xla.pb.h"
-
-namespace xla {
-namespace gpu {
-
-// LLVM pass that normalizes AMD GPU alloca address spaces to conform to the
-// AMDGPU memory model specification.
-// See implementation for detailed documentation.
-class AMDGPUNormalizeAllocaAddressSpace
-    : public llvm::PassInfoMixin<AMDGPUNormalizeAllocaAddressSpace> {
- public:
-  llvm::PreservedAnalyses run(llvm::Module& module,
-                               llvm::ModuleAnalysisManager& mam);
-  
-  static llvm::StringRef name() { return "AMDGPUNormalizeAllocaAddressSpace"; }
-};
-
-}  // namespace gpu
-}  // namespace xla
 
 namespace xla::gpu::amdgpu {
 // Compiles the argument module and returns it with LLVM AMDGPU backend.

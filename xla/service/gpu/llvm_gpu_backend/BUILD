@@ -21,6 +21,22 @@ package_group(
 )
 
 cc_library(
+    name = "amdgpu_normalize_alloca_pass",
+    srcs = [
+        "amdgpu_normalize_alloca_address_space.cc",
+    ],
+    hdrs = [
+        "amdgpu_normalize_alloca_address_space.h",
+    ],
+    deps = [
+        "@com_google_absl//absl/log",
+        "@llvm-project//llvm:Core",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//llvm:TargetParser",
+    ],
+)
+
+cc_library(
     name = "llvm_gpu_backend",
     srcs = [
         "gpu_backend_lib.cc",
@@ -29,6 +45,7 @@ cc_library(
         "gpu_backend_lib.h",
     ],
     deps = [
+        ":amdgpu_normalize_alloca_pass",
         ":load_ir_module",
         ":utils",
         "//xla:util",
