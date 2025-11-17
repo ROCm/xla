@@ -1408,6 +1408,19 @@ cc_library(
 )
 
 cc_library(
+    name = "amdgpu_address_space_pass",
+    srcs = ["amdgpu_address_space_pass.cc"],
+    hdrs = ["amdgpu_address_space_pass.h"],
+    tags = ["gpu"],
+    deps = [
+        "@llvm-project//llvm:Core",
+        "@llvm-project//llvm:Support",
+        "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/log",
+    ],
+)
+
+cc_library(
     name = "gpu_compiler",
     srcs = [
         "gpu_compiler.cc",
@@ -1418,6 +1431,7 @@ cc_library(
     tags = ["gpu"],
     deps = [
         ":alias_info",
+        ":amdgpu_address_space_pass",
         ":compile_module_to_llvm_ir",
         ":conv_layout_normalization",
         ":cublas_cudnn",
