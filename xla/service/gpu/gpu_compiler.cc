@@ -159,7 +159,6 @@ limitations under the License.
 #include "xla/service/float_support.h"
 #include "xla/service/gather_expander.h"
 #include "xla/service/gpu/alias_info.h"
-#include "xla/service/gpu/amdgpu_address_space_pass.h"
 #include "xla/service/gpu/autotuning/autotuner_util.h"
 #include "xla/service/gpu/autotuning/custom_kernel_fusion_autotuner.h"
 #include "xla/service/gpu/compile_module_to_llvm_ir.h"
@@ -2095,12 +2094,6 @@ GpuCompiler::CompileSingleModule(
 
     std::string err;
     llvm::raw_string_ostream err_stream(err);
-
-    // Fix AMD GPU allocas: they must be in address space 5
-    llvm::Triple target_triple(llvm_module->getTargetTriple());
-    if (target_triple.isAMDGPU()) {
-      AMDGPUAddressSpacePass::Run(llvm_module);
-    }
 
     // verifyModule() returns true if the module is broken.
     TF_RET_CHECK(!llvm::verifyModule(*llvm_module, &err_stream))
