@@ -19,6 +19,9 @@ limitations under the License.
 #include <cstdint>
 #include <limits>
 #include <tuple>
+#include <thread>
+#include <vector>
+#include <atomic>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
@@ -123,6 +126,11 @@ struct OccupancyStats {
   int suggested_block_size = 0;
 };
 
+struct ClockSnapshot {
+  uint64_t sys_ns;
+  uint64_t rocm_ns;
+};
+
 class RocmTraceCollector {
  public:
   explicit RocmTraceCollector(const RocmTraceCollectorOptions& options)
@@ -135,6 +143,8 @@ class RocmTraceCollector {
   virtual void Flush() = 0;
   virtual void Export(XSpace* space) = 0;
   virtual absl::Status InitializeDistributedSync() = 0;
+  virtual void StartSnapshotThread(int period_ms) = 0;
+  virtual void StopSnapshotThread() = 0;
 
  protected:
   RocmTraceCollectorOptions options_;
@@ -188,6 +198,8 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
   void Flush() override;
   void Export(XSpace* space) override;
   absl::Status InitializeDistributedSync() override;
+  void StartSnapshotThread(int period_ms) override;
+  void StopSnapshotThread() override;
 
   void OnEventsDropped(const std::string& reason,
                        uint32_t correlation_id) override {
@@ -222,6 +234,12 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
 
   absl::node_hash_map<uint32_t, PerDeviceCollector> per_device_collector_;
   std::unique_ptr<DistributedTimestampSynchronizer> ts_sync_;
+
+  absl::Mutex snapshot_mutex_;
+  std::vector<ClockSnapshot> snapshots_ ABSL_GUARDED_BY(snapshot_mutex_);
+  std::unique_ptr<std::thread> snapshot_thread_;
+  std::atomic<bool> snapshot_thread_running_{false};
+  int snapshot_period_ms_ = 4000;
 };  // RocmTraceCollectorImpl
 
 std::unique_ptr<RocmTraceCollector> CreateRocmCollector(

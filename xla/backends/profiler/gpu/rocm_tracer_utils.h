@@ -214,6 +214,9 @@ struct RocmTraceCollectorOptions {
   
   // NEW: Distributed profiling context
   std::optional<DistributedProfilerContext> distributed_context;
+
+  // Snapshot period in milliseconds
+  int snapshot_period_ms = 4000;
 };
 
 class AnnotationMap {

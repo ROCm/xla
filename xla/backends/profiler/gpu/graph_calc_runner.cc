@@ -24,11 +24,23 @@ namespace xla::profiler {
 
 namespace {
 
+using EdgeKey = std::pair<int, int>;
+
+struct EdgeHistorySample {
+  uint64_t round_id = 0;
+  double alpha = 0.0;
+  double beta = 0.0;
+};
+
+struct EdgeSampleEntry {
+  uint64_t round_id = 0;
+  EdgeAlphaBeta* edge = nullptr;
+  bool missing = false;
+};
+
 struct AggregatedRound {
   uint64_t round_id = 0;
   uint64_t window_id = 0;
-  std::vector<uint64_t> window_start_ns;
-  std::vector<uint64_t> window_end_ns;
   std::vector<NodeWindowData> nodes;
 };
 
@@ -132,6 +144,61 @@ absl::StatusOr<NodeWindowData> ParseNodeWindow(
   return data;
 }
 
+void SmoothMissingEdges(std::map<uint64_t, AggregatedRound>& aggregated) {
+  std::map<EdgeKey, std::vector<EdgeSampleEntry>> history;
+
+  for (auto& [round_id, agg] : aggregated) {
+    for (auto& node : agg.nodes) {
+      for (auto& edge : node.edges) {
+        EdgeKey key{edge.src_node_id, edge.dst_node_id};
+        bool missing = (edge.alpha == 0.0 && edge.beta == 0.0);
+        history[key].push_back(
+            EdgeSampleEntry{round_id, &edge, missing});
+      }
+    }
+  }
+
+  for (auto& [key, samples] : history) {
+    if (samples.empty()) {
+      continue;
+    }
+    std::vector<std::optional<std::pair<double, double>>> next_values(
+        samples.size());
+    std::optional<std::pair<double, double>> next_seen;
+    for (int i = static_cast<int>(samples.size()) - 1; i >= 0; --i) {
+      auto& entry = samples[i];
+      if (!entry.missing) {
+        next_seen = std::make_pair(entry.edge->alpha, entry.edge->beta);
+      }
+      next_values[i] = next_seen;
+    }
+
+    std::optional<std::pair<double, double>> prev_seen;
+    for (int i = 0; i < samples.size(); ++i) {
+      auto& entry = samples[i];
+      if (!entry.missing) {
+        prev_seen = std::make_pair(entry.edge->alpha, entry.edge->beta);
+        continue;
+      }
+      const auto& next_value = next_values[i];
+      std::optional<std::pair<double, double>> chosen;
+      if (prev_seen && next_value) {
+        chosen = std::make_pair((prev_seen->first + next_value->first) / 2.0,
+                                (prev_seen->second + next_value->second) / 2.0);
+      } else if (prev_seen) {
+        chosen = prev_seen;
+      } else if (next_value) {
+        chosen = next_value;
+      }
+      if (chosen) {
+        entry.edge->alpha = chosen->first;
+        entry.edge->beta = chosen->second;
+        entry.missing = false;
+      }
+    }
+  }
+}
+
 absl::StatusOr<std::vector<std::string>> ReadLines(const std::string& path) {
   std::ifstream in(path);
   if (!in.is_open()) {
@@ -177,9 +244,11 @@ absl::Status ParseFile(const std::string& path,
     agg.round_id = node_window.round_id;
     agg.window_id = std::max(agg.window_id, node_window.window_id);
     agg.nodes.push_back(std::move(node_window));
-    agg.window_start_ns.push_back(agg.nodes.back().window_start_ns);
-    agg.window_end_ns.push_back(agg.nodes.back().window_end_ns);
-    *max_node_id = std::max(*max_node_id, agg.nodes.back().node_id);
+    auto& stored = agg.nodes.back();
+    *max_node_id = std::max(*max_node_id, stored.node_id);
+    for (const auto& edge : stored.edges) {
+      *max_node_id = std::max(*max_node_id, edge.dst_node_id);
+    }
   }
   LOG(INFO) << "Loaded " << lines.size() << " rows from " << path;
   return absl::OkStatus();
@@ -255,6 +324,7 @@ absl::Status GraphCalcRunner::Run(const Options& options) {
     return absl::InvalidArgumentError(
         "reference_node must be < num_nodes");
   }
+  SmoothMissingEdges(aggregated);
   GraphCalc::Config calc_config;
   calc_config.reference_node_id = options.reference_node;
   calc_config.num_nodes = num_nodes;
@@ -268,9 +338,17 @@ absl::Status GraphCalcRunner::Run(const Options& options) {
     GlobalWindowData global;
     global.round_id = round_id;
     global.window_id = agg.window_id;
-    global.window_start_ns = agg.window_start_ns;
-    global.window_end_ns = agg.window_end_ns;
+    global.window_start_ns.assign(num_nodes, 0);
+    global.window_end_ns.assign(num_nodes, 0);
     global.all_nodes = std::move(agg.nodes);
+    for (const auto& node_data : global.all_nodes) {
+      if (node_data.node_id >= 0 && node_data.node_id < num_nodes) {
+        global.window_start_ns[node_data.node_id] =
+            node_data.window_start_ns;
+        global.window_end_ns[node_data.node_id] =
+            node_data.window_end_ns;
+      }
+    }
     auto calc_result = calc.ProcessRound(global);
     if (!calc_result.ok()) {
       LOG(WARNING) << "GraphCalc failed for round " << round_id << ": "

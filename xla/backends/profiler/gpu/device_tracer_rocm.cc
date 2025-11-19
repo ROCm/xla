@@ -43,7 +43,8 @@ using tsl::profiler::XSpace;
 // GpuTracer for ROCm GPU.
 class GpuTracer : public profiler::ProfilerInterface {
  public:
-  explicit GpuTracer(RocmTracer* rocm_tracer) : rocm_tracer_(rocm_tracer) {
+  explicit GpuTracer(RocmTracer* rocm_tracer, const ProfileOptions& options)
+      : rocm_tracer_(rocm_tracer), options_(options) {
     LOG(INFO) << "GpuTracer created.";
   }
   ~GpuTracer() override {}
@@ -71,6 +72,7 @@ class GpuTracer : public profiler::ProfilerInterface {
 
   RocmTracer* rocm_tracer_;
   std::unique_ptr<RocmTraceCollector> rocm_trace_collector_;
+  ProfileOptions options_;
 };
 
 RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
@@ -180,6 +182,14 @@ RocmTraceCollectorOptions GpuTracer::GetRocmTraceCollectorOptions(
   //   dist_ctx.enable_socket_timestamping = config.enable_socket_timestamping();
   //   options.distributed_context = dist_ctx;
   // }
+
+  // Parse snapshot period from advanced_configuration
+  if (auto* adv = options_.mutable_advanced_configuration()) {
+    auto it = adv->find("snapshot_pair_period_ms");
+    if (it != adv->end()) {
+      options.snapshot_period_ms = it->second.int64_value();
+    }
+  }
   
   return options;
 }
@@ -259,7 +269,7 @@ std::unique_ptr<profiler::ProfilerInterface> CreateGpuTracer(
 
   auto& rocm_tracer = profiler::RocmTracer::GetRocmTracerSingleton();
   if (!rocm_tracer.IsAvailable()) return nullptr;
-  return std::make_unique<profiler::GpuTracer>(&rocm_tracer);
+  return std::make_unique<profiler::GpuTracer>(&rocm_tracer, options);
 }
 
 auto register_rocm_gpu_tracer_factory = [] {

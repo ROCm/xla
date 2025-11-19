@@ -43,9 +43,9 @@ struct scm_timestamping {
   struct timespec ts[3];  // [0]: software, [1]: deprecated, [2]: hardware
 };
 
-uint64_t GetMonotonicNs() {
+uint64_t GetSystemNs() {
   struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
+  clock_gettime(CLOCK_REALTIME, &ts);
   return static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000ULL +
          static_cast<uint64_t>(ts.tv_nsec);
 }
@@ -72,7 +72,7 @@ sockaddr_in ParseAddress(const std::string& addr_str, uint16_t port) {
 WindowManager::WindowManager(uint64_t window_duration_ns, int num_probe_threads)
     : window_duration_ns_(window_duration_ns),
       num_probe_threads_(num_probe_threads) {
-  window_start_ns_ = GetMonotonicNs();
+  window_start_ns_ = GetSystemNs();
   window_end_ns_ = window_start_ns_.load() + window_duration_ns_;
   current_window_.window_start_ns = window_start_ns_.load();
   current_window_.window_end_ns = window_end_ns_.load();
@@ -84,7 +84,7 @@ WindowManager::WindowManager(uint64_t window_duration_ns, int num_probe_threads)
 }
 
 bool WindowManager::IsWindowExpired() {
-  uint64_t now = GetMonotonicNs();
+  uint64_t now = GetSystemNs();
   return now > window_end_ns_.load();
 }
 
@@ -121,7 +121,7 @@ void WindowManager::RotateWindow() {
     }
     
     // Start new window with ATOMIC update of timestamps
-    uint64_t now = GetMonotonicNs();
+    uint64_t now = GetSystemNs();
     window_start_ns_ = window_end_ns_.load();
     window_end_ns_ = now + window_duration_ns_;
     window_id_.fetch_add(1);
@@ -887,7 +887,7 @@ void NetworkProbeManager::MasterSyncThread() {
       end_msg.command = SyncCommand::kRoundEnd;
       end_msg.sequence_number = current_sequence_.load(
           std::memory_order_relaxed);
-      end_msg.timestamp_ns = GetMonotonicNs();
+      end_msg.timestamp_ns = GetSystemNs();
       
       for (int node = 0; node < config_.num_nodes; ++node) {
         if (node == master_node_id_) continue;
@@ -913,7 +913,7 @@ void NetworkProbeManager::MasterSyncThread() {
       SyncMessage start_msg;
       start_msg.command = SyncCommand::kRoundStart;
       start_msg.sequence_number = new_seq;
-      start_msg.timestamp_ns = GetMonotonicNs();
+      start_msg.timestamp_ns = GetSystemNs();
       
       if (window_manager_) {
         window_manager_->SetCurrentRoundId(new_seq);
@@ -1008,7 +1008,7 @@ bool NetworkProbeManager::SendPacket(int sockfd, const sockaddr_in& dest,
     // if (fallback < 0) {
     //   LOG(ERROR) << "sendto also failed: errno=" << errno << " (" << strerror(errno) << ")";
     // }
-    *send_ts_ns = GetMonotonicNs();
+    *send_ts_ns = GetSystemNs();
     return false;
   }
   
@@ -1034,7 +1034,7 @@ bool NetworkProbeManager::SendPacket(int sockfd, const sockaddr_in& dest,
   }
   
   // Fallback
-  *send_ts_ns = GetMonotonicNs();
+  *send_ts_ns = GetSystemNs();
   return false;
 }
 
@@ -1073,7 +1073,7 @@ bool NetworkProbeManager::RecvPacket(int sockfd, ProbePacket* pkt,
       LOG(ERROR) << "recvfrom also failed: len=" << len << " errno=" << errno << " (" << strerror(errno) << ")";
       return false;
     }
-    *recv_ts_ns = GetMonotonicNs();
+    *recv_ts_ns = GetSystemNs();
     return false;
   }
   
@@ -1094,7 +1094,7 @@ bool NetworkProbeManager::RecvPacket(int sockfd, ProbePacket* pkt,
   }
   
   // Fallback
-  *recv_ts_ns = GetMonotonicNs();
+  *recv_ts_ns = GetSystemNs();
   return false;
 }
 
@@ -1376,7 +1376,7 @@ void NetworkProbeManager::ProbeRespListener(int dst_node_id) {
           << " dst_listen_port=" << it->second.dst_listen_port
           << " dst_addr=" << inet_ntoa(dst_addr.sin_addr) << ":" << ntohs(dst_addr.sin_port);
   
-  // uint64_t window_start_ns = GetMonotonicNs();
+  // uint64_t window_start_ns = GetSystemNs();
   // uint64_t window_end_ns = window_start_ns + config_.probe_window_s * 1'000'000'000ULL;
   while (running_.load()) {
     // Receive Pr (must match seq_id)
@@ -1645,13 +1645,13 @@ void NetworkProbeManager::ProbeNeighbor(int dst_node_id) {
   
   LOG(ERROR) << "Handshake complete with neighbor " << dst_node_id << ", entering probe loop";
   
-  uint64_t window_start_ns = GetMonotonicNs();
+  uint64_t window_start_ns = GetSystemNs();
   uint64_t window_end_ns = window_start_ns + config_.probe_window_s * 1'000'000'000ULL;
   
   // std::vector<probe_info::ProbePair> pairs;
   
   while (running_.load()) {
-    uint64_t now_ns = GetMonotonicNs();
+    uint64_t now_ns = GetSystemNs();
     if (now_ns > window_end_ns) {
       // End of window: train SVM
       // TrainAndStoreSVM(dst_node_id, pairs);

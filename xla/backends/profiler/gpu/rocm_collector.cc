@@ -581,11 +581,13 @@ absl::Status RocmTraceCollectorImpl::InitializeDistributedSync() {
               << "socket=" << ts.socket_ts_ns << " ns";
   }
   
+  StartSnapshotThread(options_.snapshot_period_ms);
   return absl::OkStatus();
 }
 
 
 void RocmTraceCollectorImpl::Export(XSpace* space) {
+  StopSnapshotThread();
   uint64_t end_gputime_ns = get_timestamp();
   XPlaneBuilder host_plane(FindOrAddMutablePlaneWithName(
       space, tsl::profiler::kRoctracerApiPlaneName));
@@ -613,6 +615,22 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
     NormalizeTimeStamps(&device_plane, start_walltime_ns_);
   }
   NormalizeTimeStamps(&host_plane, start_walltime_ns_);
+
+  // Export snapshots
+  {
+    absl::MutexLock lock(&snapshot_mutex_);
+    if (!snapshots_.empty()) {
+      XPlaneBuilder snapshot_plane(FindOrAddMutablePlaneWithName(space, "/host:snapshots"));
+      XLineBuilder line = snapshot_plane.GetOrCreateLine(0);
+      line.SetName("Clock Snapshots");
+      line.SetTimestampNs(start_walltime_ns_);
+      for (const auto& s : snapshots_) {
+        XEventBuilder event = line.AddEvent(*snapshot_plane.GetOrCreateEventMetadata("Snapshot"));
+        event.SetTimestampNs(s.sys_ns);
+        event.AddStatValue(*snapshot_plane.GetOrCreateStatMetadata("rocm_ns"), s.rocm_ns);
+      }
+    }
+  }
 }
 
 std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
@@ -732,6 +750,34 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
   }  // for
 
   return aggregated_events;
+}
+
+void RocmTraceCollectorImpl::StartSnapshotThread(int period_ms) {
+  if (snapshot_thread_running_.exchange(true)) return;
+  snapshot_period_ms_ = period_ms;
+  snapshot_thread_ = std::make_unique<std::thread>([this]() {
+    while (snapshot_thread_running_) {
+      {
+        absl::MutexLock lock(&snapshot_mutex_);
+        uint64_t sys = tsl::EnvTime::NowNanos();
+        uint64_t rocm = get_timestamp();
+        snapshots_.push_back({sys, rocm});
+      }
+      
+      // Interruptible sleep
+      for (int i = 0; i < snapshot_period_ms_ / 100 && snapshot_thread_running_; ++i) {
+        absl::SleepFor(absl::Milliseconds(100));
+      }
+    }
+  });
+}
+
+void RocmTraceCollectorImpl::StopSnapshotThread() {
+  if (snapshot_thread_running_.exchange(false)) {
+    if (snapshot_thread_ && snapshot_thread_->joinable()) {
+      snapshot_thread_->join();
+    }
+  }
 }
 
 std::unique_ptr<RocmTraceCollector> CreateRocmCollector(

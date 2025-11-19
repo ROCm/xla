@@ -154,3 +154,15 @@ message XStatMetadata {
   // Description of the stat (might be long).
   string description = 3;
 }
+
+// A snapshot of the system clock and the tracer clock.
+message SnapshotPair {
+  uint64 sys_clock_ns = 1;
+  uint64 tracer_clock_ns = 2;
+}
+
+// A collection of SnapshotPairs.
+message SnapshotPairs {
+  repeated SnapshotPair pairs = 1;
+  uint64 sampling_period_ns = 2;
+}
