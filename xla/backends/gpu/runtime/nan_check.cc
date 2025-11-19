@@ -91,10 +91,6 @@ absl::Status LaunchNanCheckKernel(se::Stream* stream,
     return LaunchNanCheckKernelTyped<ElementT>(params);
   };
 
-  if (!primitive_util::IsFloatingPointType(element_type)) {
-    VLOG(0) << "oops expecting flaot type got " << (int)element_type;
-  }
-
   CHECK(primitive_util::IsFloatingPointType(element_type));
   return xla::primitive_util::FloatingPointTypeSwitch<absl::Status>(
       do_launch, element_type);

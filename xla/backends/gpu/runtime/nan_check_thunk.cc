@@ -60,9 +60,7 @@ NanCheckThunk::NanCheckThunk(ThunkInfo thunk_info, HloInstruction* instruction,
                              std::vector<BufferAllocation::Slice>&& buffers)
     : Thunk(Kind::kNanCheck, thunk_info),
       instruction_(instruction),
-      buffers_(std::move(buffers)) {
-  
-}
+      buffers_(std::move(buffers)) {}
 
 absl::Status NanCheckThunk::ExecuteOnStream(const ExecuteParams& params) {
   se::Stream* stream = params.stream;
@@ -113,8 +111,6 @@ absl::Status NanCheckThunk::ExecuteOnStream(const ExecuteParams& params) {
   auto element_type = instruction_->shape().element_type();
   TF_RETURN_IF_ERROR(gpu::LaunchNanCheckKernel(
         stream, buffers[0], element_type, threshold, verbose, nan_signal));
-
-  // (nan_checker_(stream, buffers[0], threshold, nan_signal));
 
   return stream->DoHostCallback(
       [this, _stream = stream,
