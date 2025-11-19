@@ -61,6 +61,43 @@ inline auto GetCallbackTracingNames() {
   return rocprofiler::sdk::get_callback_tracing_names();
 }
 
+inline auto GetBufferTracingNames() {
+  return rocprofiler::sdk::get_buffer_tracing_names();
+}
+
+std::string RocmTracer::GetCallbackName(uint32_t kind, uint32_t op) const {
+  const size_t k = static_cast<size_t>(kind);
+  if (k >= cb_name_info_.size()) {
+    return "CALLBACK_UNKNOWN_KIND";
+  }
+
+  const auto& vec = cb_name_info_[k];
+  const size_t o = static_cast<size_t>(op);
+  if (o >= vec.operations.size()) {
+    return "CALLBACK_UNKNOWN_OP";
+  }
+
+  // vec[o] is a std::string_view-like type.
+  return std::string{vec[o]};
+}
+
+std::string RocmTracer::GetBufferTracingName(uint32_t kind,
+                                              uint32_t op) const {
+  const size_t k = static_cast<size_t>(kind);
+  if (k >= name_info_.size()) {
+    return "BUFFER_TRACING_UNKNOWN_KIND";
+  }
+
+  const auto& vec = name_info_[k];
+  const size_t o = static_cast<size_t>(op);
+  if (o >= vec.operations.size()) {
+    return "BUFFER_TRACING_UNKNOWN_OP";
+  }
+
+  // vec[o] is a std::string_view-like type.
+  return std::string{vec[o]};
+}
+
 std::vector<rocprofiler_agent_v0_t> GetGpuDeviceAgents();
 
 //-----------------------------------------------------------------------------
@@ -128,6 +165,7 @@ bool RocmTracer::IsAvailable() const {
 void RocmTracer::Enable(const RocmTracerOptions& options,
                         RocmTraceCollector* collector) {
   absl::MutexLock lock(&collector_mutex_);
+  // absl::MutexLock lock(collector_mutex_);
   if (collector_ != nullptr) {
     LOG(WARNING) << "ROCM tracer is already running!";
     return;
@@ -141,11 +179,94 @@ void RocmTracer::Enable(const RocmTracerOptions& options,
   LOG(INFO) << "GpuTracer started with number of GPUs = " << NumGpus();
 }
 
+void RocmTracer::HsaApiEvent(const rocprofiler_record_header_t* hdr,
+                             RocmTracerEvent* trace_event) {
+  auto* record =
+      static_cast<const rocprofiler_buffer_tracing_hsa_api_record_t*>(
+          hdr->payload);
+
+  // Small local helper that uses name_info_ and handles OOB safely.
+  auto get_name = [this](const auto* rec) -> std::string_view {
+    const size_t kind = static_cast<size_t>(rec->kind);
+
+    if (kind < name_info_.size()) {
+      const auto& vec = name_info_[kind];
+      const size_t op = static_cast<size_t>(rec->operation);
+      if (op < vec.operations.size()) {
+        return vec[op];
+      }
+    }
+    return std::string_view{"HSA_UNKNOWN"};
+  };
+
+  LOG(INFO) << "HsaApiEvent: tid=" << record->thread_id
+            << ", cid=" << record->correlation_id.internal
+            << ", extern_cid=" << record->correlation_id.external.value
+            << ", kind=" << record->kind << ", operation=" << record->operation
+            << ", start=" << record->start_timestamp
+            << ", stop=" << record->end_timestamp
+            << ", name=" << get_name(record);
+
+  // If you want to also fill trace_event:
+  trace_event->type =
+      RocmTracerEventType::Kernel;  // or HsaApi/Other if you add such
+  trace_event->source = RocmTracerEventSource::ApiCallback;
+  trace_event->domain =
+      RocmTracerEventDomain::HIP_API;  // more accurate than HIP_API
+  trace_event->name = get_name(record);
+  trace_event->start_time_ns = record->start_timestamp;
+  trace_event->end_time_ns = record->end_timestamp;
+  trace_event->device_id = RocmTracerEvent::kInvalidDeviceId;
+  trace_event->correlation_id = record->correlation_id.internal;
+  trace_event->annotation =
+      annotation_map()->LookUp(trace_event->correlation_id);
+  trace_event->thread_id = record->thread_id;
+  trace_event->stream_id = RocmTracerEvent::kInvalidStreamId;
+  trace_event->kernel_info = KernelDetails{};
+}
+
 void RocmTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
                              RocmTracerEvent* trace_event) {
+  // auto* record =
+  //     static_cast<const rocprofiler_buffer_tracing_hip_api_record_t*>(
+  //         hdr->payload);
+
+  // LOG(INFO) << "tid=" << record->thread_id
+  //      << ", cid=" << record->correlation_id.internal
+  //      << ", extern_cid=" << record->correlation_id.external.value
+  //      << ", kind=" << record->kind << ", operation=" << record->operation
+  //      << ", start=" << record->start_timestamp
+  //      << ", stop=" << record->end_timestamp
+  //      << ", name=" << name_info_[record->kind][record->operation];
+
+  // const auto& rec =
+  //     *static_cast<const rocprofiler_buffer_tracing_hip_api_record_t*>(
+  //         hdr->payload);
+
   const auto& rec =
-      *static_cast<const rocprofiler_buffer_tracing_hip_api_record_t*>(
+      *static_cast<const rocprofiler_buffer_tracing_hip_api_ext_record_t*>(
           hdr->payload);
+
+  // Small local helper that uses name_info_ and handles OOB safely.
+  auto get_name = [this](const auto& rec) -> std::string_view {
+    const size_t kind = static_cast<size_t>(rec.kind);
+
+    if (kind < name_info_.size()) {
+      const auto& vec = name_info_[kind];
+      const size_t op = static_cast<size_t>(rec.operation);
+      if (op < vec.operations.size()) {
+        return vec[op];
+      }
+    }
+    return std::string_view{"HIP_UNKNOWN"};
+  };
+
+  LOG(INFO) << "HipApiEvent: tid=" << rec.thread_id
+            << ", cid=" << rec.correlation_id.internal
+            << ", extern_cid=" << rec.correlation_id.external.value
+            << ", kind=" << rec.kind << ", operation=" << rec.operation
+            << ", start=" << rec.start_timestamp
+            << ", stop=" << rec.end_timestamp << ", name=" << get_name(rec);
 
   trace_event->type = RocmTracerEventType::Kernel;
   trace_event->source = RocmTracerEventSource::ApiCallback;
@@ -188,6 +309,8 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
     }
   }
 
+  LOG(INFO) << "trace_event->name = " << trace_event->name;
+
   if (isCopyApi(rec.operation)) {
     // actually one needs to set the real type
     trace_event->type = RocmTracerEventType::MemcpyOther;
@@ -196,9 +319,29 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
 
 void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
                              RocmTracerEvent* trace_event) {
+  // auto* record =
+  //     static_cast<const rocprofiler_buffer_tracing_memory_copy_record_t*>(
+  //         hdr->payload);
+
+  // LOG(INFO) << "tid=" << record->thread_id
+  //      << ", cid=" << record->correlation_id.internal
+  //      << ", extern_cid=" << record->correlation_id.external.value
+  //      << ", kind=" << record->kind << ", operation=" << record->operation
+  //      << ", start=" << record->start_timestamp
+  //      << ", stop=" << record->end_timestamp
+  //      << ", name=" << name_info_[record->kind][record->operation];
+
   const auto& rec =
       *static_cast<const rocprofiler_buffer_tracing_memory_copy_record_t*>(
           hdr->payload);
+
+  LOG(INFO) << "tid=" << rec.thread_id
+            << ", cid=" << rec.correlation_id.internal
+            << ", extern_cid=" << rec.correlation_id.external.value
+            << ", kind=" << rec.kind << ", operation=" << rec.operation
+            << ", start=" << rec.start_timestamp
+            << ", stop=" << rec.end_timestamp
+            << ", name=" << name_info_[rec.kind][rec.operation];
 
 #define OO(src, target)                              \
   case ROCPROFILER_MEMORY_COPY_##src:                \
@@ -262,9 +405,9 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
   };
 
   VLOG(2) << "copy bytes: " << trace_event->memcpy_info.num_bytes
-            << " stream: " << trace_event->stream_id << " src_id "
-            << trace_event->device_id << " dst_id "
-            << trace_event->memcpy_info.destination;
+          << " stream: " << trace_event->stream_id << " src_id "
+          << trace_event->device_id << " dst_id "
+          << trace_event->memcpy_info.destination;
 }
 
 void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
@@ -321,12 +464,16 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
     RocmTracerEvent event;
     auto header = headers[i];
 
+    // LOG(INFO) << "TracingCallback: category=" << header->category
+    //           << " kind=" << header->kind;
+
     if (header->category != ROCPROFILER_BUFFER_CATEGORY_TRACING) continue;
 
     switch (header->kind) {
-      case ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API:
-        HipApiEvent(header, &event);
-        break;
+        // case ROCPROFILER_BUFFER_TRACING_HSA_CORE_API:
+        // case ROCPROFILER_BUFFER_TRACING_HSA_AMD_EXT_API:
+        //   HsaApiEvent(header, &event);
+        //   break;
 
       case ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH:
         KernelEvent(header, &event);
@@ -334,6 +481,12 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
 
       case ROCPROFILER_BUFFER_TRACING_MEMORY_COPY:
         MemcpyEvent(header, &event);
+        break;
+
+      case ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API:
+      // case ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API_EXT:
+      // case ROCPROFILER_BUFFER_TRACING_HIP_COMPILER_API_EXT:
+        HipApiEvent(header, &event);
         break;
 
       default:
@@ -393,7 +546,43 @@ static void tool_tracing_callback(rocprofiler_context_id_t context,
 int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
                          void* tool_data) {
   // Gather API names with rocprofiler-sdk api call
-  name_info_ = GetCallbackTracingNames();
+  cb_name_info_ = GetCallbackTracingNames();
+  // LOG(INFO) << "with name_info_ from callback tracing names()";
+
+  // for (const auto& itr : cb_name_info_) {
+  //   auto name_idx = std::stringstream{};
+  //   name_idx << " [" << std::setw(3) << itr.value << "]";
+
+  //   LOG(INFO) << "rocprofiler_callback_tracing_kind_names  " << name_idx.str()
+  //             << __FILE__ << " " << __LINE__ << " " << std::string{itr.name};
+
+  //   for (auto [didx, ditr] : itr.items()) {
+  //     auto operation_idx = std::stringstream{};
+  //     operation_idx << " [" << std::setw(3) << didx << "]";
+  //     LOG(INFO) << "rocprofiler_callback_tracing_kind_operation_names"
+  //               << operation_idx.str() << __FILE__ << __LINE__
+  //               << std::string{"- "} << std::string{*ditr};
+  //   }
+  // }
+
+  name_info_ = GetBufferTracingNames();
+  // LOG(INFO) << "with name_info_ from buffer tracing names()";
+
+  // for (const auto& itr : name_info_) {
+  //   auto name_idx = std::stringstream{};
+  //   name_idx << " [" << std::setw(3) << itr.value << "]";
+
+  //   LOG(INFO) << "rocprofiler_buffer_tracing_kind_names  " << name_idx.str()
+  //             << __FILE__ << " " << __LINE__ << " " << std::string{itr.name};
+
+  //   for (auto [didx, ditr] : itr.items()) {
+  //     auto operation_idx = std::stringstream{};
+  //     operation_idx << " [" << std::setw(3) << didx << "]";
+  //     LOG(INFO) << "rocprofiler_buffer_tracing_kind_operation_names"
+  //               << operation_idx.str() << __FILE__ << __LINE__
+  //               << std::string{"- "} << std::string{*ditr};
+  //   }
+  // }
 
   // Gather agent info
   num_gpus_ = 0;
@@ -434,9 +623,10 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
                             ROCPROFILER_BUFFER_POLICY_LOSSLESS,
                             tool_tracing_callback, tool_data, &buffer_);
 
-  rocprofiler_configure_buffer_tracing_service(
-      context_, ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API, nullptr, 0,
-      buffer_);
+  // for (auto itr : {ROCPROFILER_BUFFER_TRACING_HSA_CORE_API,
+  //                  ROCPROFILER_BUFFER_TRACING_HSA_AMD_EXT_API})
+  //   rocprofiler_configure_buffer_tracing_service(context_, itr, nullptr, 0,
+  //                                                buffer_);
 
   rocprofiler_configure_buffer_tracing_service(
       context_, ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH, nullptr, 0,
@@ -444,6 +634,50 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
 
   rocprofiler_configure_buffer_tracing_service(
       context_, ROCPROFILER_BUFFER_TRACING_MEMORY_COPY, nullptr, 0, buffer_);
+
+  // const rocprofiler_tracing_operation_t* hip_ops = nullptr;
+  // size_t hip_ops_count = 0;
+
+  // rocprofiler_configure_callback_tracing_service(
+  //     context_, ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API, hip_ops,
+  //     hip_ops_count,
+  //     [](rocprofiler_callback_tracing_record_t record, rocprofiler_user_data_t*,
+  //        void*) {
+  //       auto& tracer = RocmTracer::GetRocmTracerSingleton();
+  //       // Log every HIP runtime callback for now.
+  //       // Decode a human-readable name from callback_names_.
+  //       std::string name = tracer.GetCallbackName(
+  //           static_cast<uint32_t>(record.kind),
+  //           static_cast<uint32_t>(record.operation));
+
+  //       LOG(INFO) << "HIP buffer tracing: kind=" << static_cast<int>(record.kind)
+  //                 << " op=" << static_cast<int>(record.operation)
+  //                 << " phase=" << static_cast<int>(record.phase)
+  //                 << " cid=" << record.correlation_id.internal
+  //                 << " extern_cid=" << record.correlation_id.external.value
+  //                 << " name=" << name;
+
+  //       // Preserve your existing annotation behavior.
+  //       if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
+  //         const std::string& annotation = tsl::profiler::AnnotationStack::Get();
+  //         if (!annotation.empty()) {
+  //           RocmTracer::GetRocmTracerSingleton().annotation_map()->Add(
+  //               record.correlation_id.internal, annotation);
+  //         }
+  //       }
+  //     },
+  //     /*user_data=*/nullptr);
+
+  rocprofiler_configure_buffer_tracing_service(
+      context_,
+      ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API,
+      // ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API_EXT, 
+      nullptr, 0, buffer_);
+
+  // rocprofiler_configure_buffer_tracing_service(
+  //     context_,
+  //     // ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API,
+  //     ROCPROFILER_BUFFER_TRACING_HIP_COMPILER_API_EXT, nullptr, 0, buffer_);
 
   {
     // for annotations
@@ -466,6 +700,42 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
         },
         nullptr);
   }
+
+  // {
+  //   const rocprofiler_tracing_operation_t* hip_ops = nullptr;
+  //   size_t hip_ops_count = 0;
+
+  //   rocprofiler_configure_callback_tracing_service(
+  //       context_, ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API, hip_ops,
+  //       hip_ops_count,
+  //       [](rocprofiler_callback_tracing_record_t record,
+  //          rocprofiler_user_data_t*, void*) {
+  //         auto& tracer = RocmTracer::GetRocmTracerSingleton();
+
+  //         // Decode a human-readable name from callback_names_.
+  //         std::string name =
+  //             tracer.GetCallbackName(static_cast<uint32_t>(record.kind),
+  //                                    static_cast<uint32_t>(record.operation));
+
+  //         LOG(INFO) << "HIP callback: kind=" << static_cast<int>(record.kind)
+  //                   << " op=" << static_cast<int>(record.operation)
+  //                   << " phase=" << static_cast<int>(record.phase)
+  //                   << " cid=" << record.correlation_id.internal
+  //                   << " extern_cid=" << record.correlation_id.external.value
+  //                   << " name=" << name;
+
+  //         // Preserve annotation behavior.
+  //         if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
+  //           const std::string& annotation =
+  //               tsl::profiler::AnnotationStack::Get();
+  //           if (!annotation.empty()) {
+  //             tracer.annotation_map()->Add(record.correlation_id.internal,
+  //                                          annotation);
+  //           }
+  //         }
+  //       },
+  //       /*user_data=*/nullptr);
+  // }
 
   auto client_thread = rocprofiler_callback_thread_t{};
   rocprofiler_create_callback_thread(&client_thread);
@@ -538,11 +808,65 @@ static int toolInitStatic(rocprofiler_client_finalize_t finalize_func,
 // ----------------------------------------------------------------------------
 // C‑linkage entry‑point expected by rocprofiler-sdk.
 // ----------------------------------------------------------------------------
+// extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
+//     uint32_t version, const char* runtime_version, uint32_t priority,
+//     rocprofiler_client_id_t* id) {
+//   auto& obj = RocmTracer::GetRocmTracerSingleton();  // Ensure constructed,
+//                                                      // critical for tracing.
+
+//   id->name = "XLA-with-rocprofiler-sdk";
+//   obj.client_id_ = id;
+
+//   LOG(INFO) << "Configure rocprofiler-sdk...";
+
+//   const uint32_t major = version / 10000;
+//   const uint32_t minor = (version % 10000) / 100;
+//   const uint32_t patch = version % 100;
+
+//   LOG(INFO) << absl::StrFormat(
+//       "%s Configure XLA with rocprofv3... (priority=%u) is using "
+//       "rocprofiler-sdk v%u.%u.%u (%s)",
+//       id->name, static_cast<unsigned>(priority),
+//       static_cast<unsigned>(major), static_cast<unsigned>(minor),
+//       static_cast<unsigned>(patch), runtime_version ? runtime_version :
+//       "unknown");
+
+//   // rocprofiler-sdk api call
+//   static rocprofiler_tool_configure_result_t cfg{
+//       sizeof(rocprofiler_tool_configure_result_t), &toolInitStatic,
+//       &RocmTracer::toolFinalize, nullptr};
+
+//   return &cfg;
+// }
+
+// Simple intercept-table callback: just log what table got registered.
+void ApiTimestampsCallback(rocprofiler_intercept_table_t table_id,
+                           uint64_t lib_version, uint64_t lib_instance,
+                           void** /*tables*/, uint64_t /*num_tables*/,
+                           void* /*user_data*/) {
+  const char* table_name = nullptr;
+  auto status =
+      rocprofiler_query_intercept_table_name(table_id, &table_name, nullptr);
+  if (status != ROCPROFILER_STATUS_SUCCESS) {
+    LOG(WARNING) << "rocprofiler_query_intercept_table_name failed: status="
+                 << static_cast<int>(status)
+                 << " table_id=" << static_cast<int>(table_id);
+    return;
+  }
+
+  uint32_t major = lib_version / 10000;
+  uint32_t minor = (lib_version % 10000) / 100;
+  uint32_t patch = lib_version % 100;
+
+  LOG(INFO) << "rocprofiler intercept table registered: \""
+            << (table_name ? table_name : "unknown") << "\" v" << major << "."
+            << minor << "." << patch << " (instance=" << lib_instance << ")";
+}
+
 extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
     uint32_t version, const char* runtime_version, uint32_t priority,
     rocprofiler_client_id_t* id) {
-  auto& obj = RocmTracer::GetRocmTracerSingleton();  // Ensure constructed,
-                                                     // critical for tracing.
+  auto& obj = RocmTracer::GetRocmTracerSingleton();
 
   id->name = "XLA-with-rocprofiler-sdk";
   obj.client_id_ = id;
@@ -560,7 +884,20 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
       static_cast<unsigned>(minor), static_cast<unsigned>(patch),
       runtime_version ? runtime_version : "unknown");
 
-  // rocprofiler-sdk api call
+  // NEW: register intercept tables for HSA + HIP runtime.
+  int libs = 0;
+  libs |= ROCPROFILER_HSA_TABLE;
+  libs |= ROCPROFILER_HIP_RUNTIME_TABLE;
+
+  rocprofiler_status_t istatus =
+      rocprofiler_at_intercept_table_registration(ApiTimestampsCallback, libs,
+                                                  /*user_data=*/nullptr);
+  if (istatus != ROCPROFILER_STATUS_SUCCESS) {
+    LOG(WARNING)
+        << "rocprofiler_at_intercept_table_registration failed: status="
+        << static_cast<int>(istatus);
+  }
+
   static rocprofiler_tool_configure_result_t cfg{
       sizeof(rocprofiler_tool_configure_result_t), &toolInitStatic,
       &RocmTracer::toolFinalize, nullptr};
@@ -572,9 +909,9 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
 }  // namespace xla
 
 // force to initialize the hooks before hipInit, if we don't use this
-// some high-level framwork, e.g., maxtext, calls hipInit before 
+// some high-level framwork, e.g., maxtext, calls hipInit before
 // rocprofiler_configure, then no tracing callbacks will be triggered,
-// as a result, there is no gpu trace events.  
+// as a result, there is no gpu trace events.
 void __attribute__((constructor)) init_rocm_lib() {
   rocprofiler_force_configure(xla::profiler::rocprofiler_configure);
 }

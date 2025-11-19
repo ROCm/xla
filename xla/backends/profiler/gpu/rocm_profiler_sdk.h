@@ -79,9 +79,13 @@ class RocmTracer {
   // protected constructor for injecting mock cupti interface for testing.
   RocmTracer() = default;
 
+  void HsaApiEvent(const rocprofiler_record_header_t* hdr, RocmTracerEvent* ev);
   void HipApiEvent(const rocprofiler_record_header_t* hdr, RocmTracerEvent* ev);
   void KernelEvent(const rocprofiler_record_header_t* hdr, RocmTracerEvent* ev);
   void MemcpyEvent(const rocprofiler_record_header_t* hdr, RocmTracerEvent* ev);
+
+  std::string GetCallbackName(uint32_t kind, uint32_t op) const;
+  std::string GetBufferTracingName(uint32_t kind, uint32_t op) const;
 
  private:
   uint32_t num_gpus_{0};
@@ -111,6 +115,7 @@ class RocmTracer {
   using agent_info_map_t = std::unordered_map<uint64_t, rocprofiler_agent_v0_t>;
 
   using callback_name_info = rocprofiler::sdk::callback_name_info;
+  using buffer_name_info   = rocprofiler::sdk::buffer_name_info;
 
   rocprofiler_client_id_t* client_id_{nullptr};
   // Contexts ----------------------------------------------------------
@@ -124,7 +129,8 @@ class RocmTracer {
   kernel_info_map_t kernel_info_{};
   absl::Mutex kernel_lock_;
 
-  callback_name_info name_info_;
+  callback_name_info cb_name_info_;
+  buffer_name_info name_info_;
   agent_info_map_t agents_;
 
  public:
