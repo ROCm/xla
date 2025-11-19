@@ -29,7 +29,7 @@ template <typename ElementT>
 struct NanCheckKernel {
   using KernelType =
       stream_executor::TypedKernel<stream_executor::DeviceMemory<ElementT>,
-                                   uint64_t,
+                                   uint64_t, float, bool,
                                    stream_executor::DeviceMemory<uint32_t>>;
 };
 

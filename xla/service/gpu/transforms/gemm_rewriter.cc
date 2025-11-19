@@ -66,6 +66,7 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/stream_executor/semantic_version.h"
+#include "xla/tsl/util/env_var.h"
 #include "xla/tsl/protobuf/dnn.pb.h"
 #include "xla/types.h"
 #include "xla/util.h"
@@ -581,6 +582,17 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
         toolkit_version_(toolkit_version),
         options_(options) {}
 
+  bool IsFP8only() {
+    return options_.dtype == GemmRewriterOptions::DType::kFp8Only;
+  }
+
+  bool fusions_enabled() {
+      bool nan_debug = false;
+      TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_NAN_CHECK_USE_SIMPLE_GEMMS",
+                                  /*default_val=*/false, &nan_debug));
+      return !nan_debug; // disable fusions for NaN debug
+  }
+
   absl::Status HandleDot(HloInstruction *instr) override {
     if (!IsMatrixMultiplication(*instr) &&
         !IsMatrixVectorMultiplication(*instr)) {
@@ -727,6 +739,9 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
   }
 
   absl::Status HandleMultiply(HloInstruction *instr) override {
+
+    if (!fusions_enabled()) return absl::OkStatus();
+
     HloInstruction *alpha, *existing_gemm;
     if (Match(instr,
               m::MultiplyAnyOrder(
@@ -849,6 +864,9 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
   }
 
   absl::Status HandleAdd(HloInstruction *instr) override {
+
+    if (!fusions_enabled()) return absl::OkStatus();
+
     if (options_.bias_mode == GemmRewriterOptions::BiasMode::kNoBias) {
       // See comments for `GemmRewriterOptions::BiasMode` for details.
       return absl::OkStatus();
@@ -1000,6 +1018,9 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
   }
 
   absl::Status HandleMaximum(HloInstruction *instr) override {
+
+    if (!fusions_enabled()) return absl::OkStatus();
+
     HloInstruction *existing_gemm, *zeros;
     HloInstruction *optional_slice_or_bitcast = nullptr;
     // Attempt to elide maximum and fuse ReLU activation into GEMM, including
@@ -1023,6 +1044,9 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
   }
 
   absl::Status HandleConvert(HloInstruction *instr) override {
+
+    if (!fusions_enabled()) return absl::OkStatus();
+
     HloInstruction *clamp_lower, *clamp_upper, *existing_gemm,
         *d_scale = nullptr, *binary = nullptr;
     // Attempt to elide the scaling and conversion of the result of an FP8

@@ -42,6 +42,8 @@ struct NanCheckParams {
   se::Stream* stream = nullptr;
   se::DeviceMemoryBase buffer{};
   PrimitiveType element_type = S1;
+  float threshold;
+  bool verbose;
   se::DeviceMemory<uint32_t> nan_signal{};
 };
 
@@ -72,20 +74,26 @@ static absl::Status LaunchNanCheckKernelTyped(const NanCheckParams& params) {
 
   return nan_check_kernel.Launch(
       dim.thread_counts_per_block(), dim.block_counts(), params.stream,
-      buffer_typed, static_cast<uint64_t>(buffer_size),
-      params.nan_signal);
+      buffer_typed, static_cast<uint64_t>(buffer_size), params.threshold,
+      params.verbose, params.nan_signal);
 }
 
 absl::Status LaunchNanCheckKernel(se::Stream* stream,
                                   const se::DeviceMemoryBase& buffer,
                                   const PrimitiveType element_type,
+                                  float threshold, bool verbose,
                                   se::DeviceMemory<uint32_t>& nan_signal) {
-  NanCheckParams params{stream, buffer, element_type, nan_signal};
+  NanCheckParams params{stream, buffer, element_type, threshold, verbose, 
+                                                                  nan_signal};
 
   auto do_launch = [&](auto cst_type) {
     using ElementT = primitive_util::NativeTypeOf<cst_type>;
     return LaunchNanCheckKernelTyped<ElementT>(params);
   };
+
+  if (!primitive_util::IsFloatingPointType(element_type)) {
+    VLOG(0) << "oops expecting flaot type got " << (int)element_type;
+  }
 
   CHECK(primitive_util::IsFloatingPointType(element_type));
   return xla::primitive_util::FloatingPointTypeSwitch<absl::Status>(

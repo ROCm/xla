@@ -1982,6 +1982,7 @@ cc_library(
         "//xla/stream_executor:semantic_version",
         "//xla/stream_executor/gpu:gpu_blas_lt",
         "//xla/tsl/protobuf:dnn_proto_cc",
+        "//xla/tsl/util:env_var",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log",

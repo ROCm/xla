@@ -23,9 +23,17 @@ limitations under the License.
 
 namespace xla::gpu {
 
+enum class NaNCheckerResult : uint32_t {
+  OK = 0,
+  NaN = 1,
+  Inf = 2,
+  LargeMagnitude = 3,
+};
+
 absl::Status LaunchNanCheckKernel(se::Stream* stream,
                                   const se::DeviceMemoryBase& buffer,
                                   const PrimitiveType element_type,
+                                  float threshold, bool verbose,
                                   se::DeviceMemory<uint32_t>& nan_signal);
 
 }  // namespace xla::gpu

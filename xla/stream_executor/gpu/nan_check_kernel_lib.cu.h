@@ -31,27 +31,51 @@ limitations under the License.
 namespace stream_executor::gpu {
 
 template <typename T>
-__global__ void xla_nan_check(T* buffer, uint64_t buffer_length, uint32_t* nan_signal) {
+__global__ void xla_nan_check(T* buffer, 
+      uint64_t buffer_length, float threshold, bool verbose,
+      uint32_t* nan_signal) {
   const uint64_t block_dim_x = static_cast<uint64_t>(blockDim.x),
                  stride = block_dim_x * gridDim.x;
 
-  constexpr bool verbose = false;
-  if (verbose && threadIdx.x + blockIdx.x * block_dim_x == 0) {
-    printf("Running nan check on %p\n", buffer);
+  __shared__ uint32_t prev_signal_val;
+  
+  // Constants from xla/backends/gpu/runtime/nan_check.h
+  uint32_t found_flag = 0;
+  T last_val;
+  uint64_t idx = 0;
+  for (idx = threadIdx.x + blockIdx.x * block_dim_x;
+       idx < buffer_length && found_flag == 0; idx += stride) {
+    last_val = buffer[idx];
+    if (Eigen::numext::isnan(last_val)) {
+      found_flag = 1;
+    } else if (!Eigen::numext::isfinite(last_val)) {
+       // found_flag = 2; // do not detect Infs by now
+    } else if (Eigen::numext::isfinite(threshold) && 
+          Eigen::numext::abs(static_cast< float >(last_val)) > threshold) {
+      found_flag = 3;
+    }
   }
-
-  bool found_nan = false;
-  // TODO(rocm): vectorize
-  for (uint64_t idx = threadIdx.x + blockIdx.x * block_dim_x;
-       idx < buffer_length; idx += stride) {
-    found_nan |= Eigen::numext::isnan(buffer[idx]);
-  }
-
-  if (TF_PREDICT_TRUE(__all(!found_nan))) {
+  if (TF_PREDICT_TRUE(__all(found_flag == 0))) {
     return;
   }
 
-  atomicExch(nan_signal, 1);
+  auto print = [idx, last_val](auto SZ) {
+    union {
+      T fp;
+      decltype(SZ) dec;
+    } S = { last_val };
+    printf("%lld: b:%d th:%d NaN/Inf/Large value: %f (0x%X)\n",
+          idx, blockIdx.x, threadIdx.x, (float)last_val, S.dec);
+  };
+
+  uint32_t prev = found_flag != 0 ? atomicExch(nan_signal, found_flag) : 1;
+  // we are the first wavefront that set the nan_signal flag
+  if (verbose && __any(prev == 0) && found_flag != 0) { 
+    if constexpr(sizeof(T) == 1) print(uint8_t{});
+    else if constexpr(sizeof(T) == 2) print(uint16_t{});
+    else if constexpr(sizeof(T) == 4) print(uint32_t{});
+    else print(uint64_t{});
+  }
 }
 
 template <typename NativeT>
@@ -65,12 +89,13 @@ void RegisterNanCheckKernelParametrized(Platform::Id platform_id) {
   std::string kernel_name = absl::StrCat(
       xla::primitive_util::LowercasePrimitiveTypeName(p_type), "_nan_check");
 
-  stream_executor::MultiKernelLoaderSpec spec(3);
+  using Kernel = NanCheckKernel<NativeT>;
+  MultiKernelLoaderSpec spec(Kernel::KernelType::kNumberOfParameters);
   spec.AddInProcessSymbol(kernel_symbol, kernel_name);
 
   absl::Status result =
-      stream_executor::gpu::GpuKernelRegistry::GetGlobalRegistry()
-          .RegisterKernel<NanCheckKernel<NativeT>>(platform_id, spec);
+      GpuKernelRegistry::GetGlobalRegistry()
+          .RegisterKernel<Kernel>(platform_id, spec);
 
   if (!result.ok()) {
     LOG(FATAL) << "Failed to register nan check kernel for type "

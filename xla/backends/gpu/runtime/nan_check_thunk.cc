@@ -60,7 +60,9 @@ NanCheckThunk::NanCheckThunk(ThunkInfo thunk_info, HloInstruction* instruction,
                              std::vector<BufferAllocation::Slice>&& buffers)
     : Thunk(Kind::kNanCheck, thunk_info),
       instruction_(instruction),
-      buffers_(std::move(buffers)) {}
+      buffers_(std::move(buffers)) {
+  
+}
 
 absl::Status NanCheckThunk::ExecuteOnStream(const ExecuteParams& params) {
   se::Stream* stream = params.stream;
@@ -93,7 +95,26 @@ absl::Status NanCheckThunk::ExecuteOnStream(const ExecuteParams& params) {
     }
   }
 
-  TF_RETURN_IF_ERROR(nan_checker_(stream, buffers[0], nan_signal));
+  static auto threshold = []() {
+      auto value = std::numeric_limits< float >::infinity();
+      TF_CHECK_OK(tsl::ReadFloatFromEnvVar("TF_ROCM_NAN_CHECK_MAG_THRESHOLD",
+                                  /*default_val=*/value, &value));
+      VLOG(0) << "NaN checker magnitude threshold " << value;
+      return value;
+  }();
+  static auto verbose = []() {
+      bool value = false;
+      TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_NAN_CHECK_VERBOSE",
+                                  /*default_val=*/value, &value));
+      VLOG(0) << "NaN checker magnitude threshold " << value;
+      return value;
+  }();
+
+  auto element_type = instruction_->shape().element_type();
+  TF_RETURN_IF_ERROR(gpu::LaunchNanCheckKernel(
+        stream, buffers[0], element_type, threshold, verbose, nan_signal));
+
+  // (nan_checker_(stream, buffers[0], threshold, nan_signal));
 
   return stream->DoHostCallback(
       [this, _stream = stream,
@@ -107,10 +128,14 @@ absl::Status NanCheckThunk::ExecuteOnStream(const ExecuteParams& params) {
 void NanCheckThunk::Postprocess(
     se::Stream* stream, std::atomic<uint32_t>& nan_signal,
     const absl::InlinedVector<se::DeviceMemoryBase, 4>& buffers) {
-  if (TF_PREDICT_TRUE(nan_signal.load(std::memory_order_relaxed) == 0)) {
+
+  auto signal_value = static_cast< NaNCheckerResult >(
+              nan_signal.load(std::memory_order_relaxed));
+  if (TF_PREDICT_TRUE(signal_value == NaNCheckerResult::OK)) {
     return;
   }
 
+  fflush(stdout);
   nan_signal.store(0, std::memory_order_relaxed);
 
   static auto check_device = []() -> std::optional<int64_t> {
@@ -149,11 +174,21 @@ void NanCheckThunk::Postprocess(
     source = source->mutable_operand(0);
   }
 
-  auto msg = absl::StrFormat("Computation %s/%s: NaN found in result %d of %s",
-                             source->parent()->parent()->name(),
-                             source->parent()->name(), index,
-                             source->ToString(print_options));
+  absl::string_view module_str = source->parent()->parent()->name(),
+                    comp_str = source->parent()->name();
+  auto instr_str = source->ToString(print_options);
 
+  auto msg = signal_value == NaNCheckerResult::NaN ?
+          absl::StrFormat("Computation %s/%s: NaN found in result %d of %s",
+                             module_str, comp_str, index, instr_str) :
+             signal_value == NaNCheckerResult::Inf ?
+          absl::StrFormat(
+              "Computation %s/%s: Inf found in result %d of %s",
+                             module_str, comp_str, index, instr_str) :
+          absl::StrFormat(
+              "Computation %s/%s: large magnitude found in result %d of %s",
+                             module_str, comp_str, index, instr_str);
+  
   if (filter && std::regex_search(msg, *filter)) {
     return;
   }
@@ -241,8 +276,8 @@ void NanCheckThunk::Postprocess(
 
   bool do_abort = count <= 1;
 
-  bool do_snapshoot =
-      do_abort;  // Workaround for now since we leak stream on snapshoot dump.
+  bool do_snapshoot = false; // HACK
+      //do_abort;  // Workaround for now since we leak stream on snapshoot dump.
 
   if (do_snapshoot) {
     auto status = dump_snapshoot();
@@ -257,16 +292,6 @@ void NanCheckThunk::Postprocess(
   if (do_abort) {
     std::abort();
   }
-}
-
-absl::Status NanCheckThunk::Initialize(const InitializeParams& params) {
-  nan_checker_ = [element_type = instruction_->shape().element_type()](
-                     se::Stream* stream, se::DeviceMemoryBase buffer,
-                     se::DeviceMemory<uint32_t> nan_signal) -> absl::Status {
-    return gpu::LaunchNanCheckKernel(stream, buffer, element_type, nan_signal);
-  };
-
-  return absl::OkStatus();
 }
 
 }  // namespace gpu

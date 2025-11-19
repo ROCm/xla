@@ -37,7 +37,6 @@ class NanCheckThunk : public Thunk {
                 std::vector<BufferAllocation::Slice>&& buffers);
 
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
-  absl::Status Initialize(const InitializeParams& params) override;
 
  private:
   void Postprocess(se::Stream* stream, std::atomic<uint32_t>& nan_signal,
@@ -45,9 +44,6 @@ class NanCheckThunk : public Thunk {
 
   HloInstruction* instruction_;
   std::vector<BufferAllocation::Slice> buffers_;
-  absl::AnyInvocable<absl::Status(se::Stream*, se::DeviceMemoryBase,
-                                  se::DeviceMemory<uint32_t>)>
-      nan_checker_{};
 };
 
 }  // namespace gpu

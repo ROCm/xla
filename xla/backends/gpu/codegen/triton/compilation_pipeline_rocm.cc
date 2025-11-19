@@ -30,6 +30,7 @@ limitations under the License.
 #include "xla/service/gpu/matmul_utils.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/stream_executor/device_description.h"
+#include "xla/tsl/util/env_var.h"
 #include "xla/tsl/platform/rocm_rocdl_path.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
@@ -61,6 +62,9 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
   auto cc = se::RocmComputeCapability(std::move(arch_name));
   const int threadsPerWarp = cc.gfx9_mi100_or_later() ? 64 : 32;
 
+  bool nan_debug = false;
+  TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_NAN_CHECK_USE_SIMPLE_GEMMS",
+                                  /*default_val=*/false, &nan_debug));
   if (is_xla_fusion) {
     pm->addPass(mt_xla::CreateInt4ToPackedInt4RewritePass());
   }
@@ -97,13 +101,12 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
   pm->addPass(mt::gpu::createTritonGPUOptimizeDotOperands({true}));
   pm->addNestedPass<mlir::triton::FuncOp>(
       mlir::createTritonAMDGPUHoistLayoutConversionsPass());
-
-  pm->addPass(mt::gpu::createTritonGPUFuseNestedLoops());
+    pm->addPass(mt::gpu::createTritonGPUFuseNestedLoops());
   pm->addPass(mlir::createCSEPass());
   pm->addPass(mlir::createLoopInvariantCodeMotionPass());
   pm->addPass(mlir::createCanonicalizerPass());
 
-  if (cc.has_amd_matrix_core()) {
+  if (cc.has_amd_matrix_core() /*&& !nan_debug*/) {
     pm->addPass(mlir::createTritonAMDGPUStreamPipelinePass(num_stages));
     // TODO(ROCm) Modify when corresponding run time flags are introduced.
     if (/*use_async_copy=*/false) {  // Not enabled by default.
@@ -121,7 +124,7 @@ absl::Status CreateTritonPipeline(mlir::OpPassManager* pm,
     pm->addPass(mlir::createTritonAMDGPUInThreadTransposePass());
     pm->addPass(mt::gpu::createTritonGPURemoveLayoutConversions());
   }
-  if (cc.has_amd_matrix_core()) {
+  if (cc.has_amd_matrix_core()  /*&& !nan_debug*/) {
     pm->addPass(mt::gpu::createTritonGPUReorderInstructions());
   }
   if (cc.gfx_version() == "gfx942") {

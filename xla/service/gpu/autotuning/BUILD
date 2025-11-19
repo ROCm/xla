@@ -330,6 +330,7 @@ cc_library(
         "//xla/tsl/platform:logging",
         "//xla/tsl/platform:statusor",
         "//xla/tsl/util/proto:proto_utils",
+        "//xla/tsl/util:env_var",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",

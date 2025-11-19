@@ -51,6 +51,7 @@ limitations under the License.
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/device_memory_allocator.h"
 #include "xla/stream_executor/gpu/redzone_allocator.h"
+#include "xla/tsl/util/env_var.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/logging.h"
 #include "xla/tsl/platform/statusor.h"
@@ -503,7 +504,12 @@ absl::StatusOr<bool> GemmAlgorithmPicker::Run(
       absl::StrCat("GemmAlgorithmPicker for ", module->name()));
 
   num_algorithms_left_ = 0;
-  if (module->config().debug_options().xla_gpu_autotune_level() == 0) {
+
+  bool nan_debug = false;
+  TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_NAN_CHECK_USE_SIMPLE_GEMMS",
+                                  /*default_val=*/false, &nan_debug));
+
+  if (nan_debug || module->config().debug_options().xla_gpu_autotune_level() == 0) {
     VLOG(2) << "GEMM auto-tuning disabled, GemmAlgorithmPicker returning early";
     return false;
   }
