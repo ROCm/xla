@@ -1,0 +1,50 @@
+name: ROCm OpenXla CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-analyze-xla-1:
+    runs-on: linux-mi325-2
+
+    steps:
+      # Main repo checkout (already works via worker's SSH key)
+      - uses: actions/checkout@v4
+
+      # Second repo checkout via SSH
+      - name: Checkout rocAutomation repo
+        uses: actions/checkout@v4
+        with:
+          repository: ROCm/rocAutomation
+          ref: jenkins-pipelines
+          path: rocAutomation
+          ssh-strict: false
+          debug: true
+
+      # Run container
+      - name: Run tests in custom container
+        run: |
+          docker run --rm \
+            --ipc=host \
+            --shm-size=16G \
+            --security-opt=seccomp=unconfined \
+            --device=/dev/kfd \
+            --device=/dev/dri \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            rocm/tensorflow-build@sha256:a2672ff2510b369b4a5f034272a518dc93c2e492894e3befaeef19649632ccaa \
+            bash -c "
+              build_tools/rocm/run_xla_ci_build.sh \
+                --config=rocm_ci \
+                --config=rocm_rbe \
+                //xla/...
+            "
+
