@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-and-analyze-xla-1:
+  rocm_test_and_analyze_xla_regular:
     runs-on: linux-mi325-2
 
     steps:
@@ -22,12 +22,13 @@ jobs:
       # Second repo checkout via SSH
       - name: Checkout xla repo
         uses: actions/checkout@v4
-
-      - name: Checkout rocAutomation manually via SSH
+      - name: Create RBE cert files
         run: |
-          mkdir -p rocAutomation
-          export GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' 
-          git clone --branch jenkins-pipelines git@github.com:ROCm/rocAutomation.git rocAutomation
+          echo "${{ secrets.RBE_KEY }}" > rbe_key.key
+          echo "${{ secrets.RBE_CERT }}" > rbe_cert.crt
+      - name: Pull docker image
+        run: |
+          docker pull rocm/tensorflow-build@sha256:a2672ff2510b369b4a5f034272a518dc93c2e492894e3befaeef19649632ccaa
 
       # Run container
       - name: Run tests in custom container
@@ -42,9 +43,13 @@ jobs:
             -w /workspace \
             rocm/tensorflow-build@sha256:a2672ff2510b369b4a5f034272a518dc93c2e492894e3befaeef19649632ccaa \
             bash -c "
+              cat /tmp/xla/certificates/rbe_cert.crt || \
+              ls -alsh /tmp/xla/certificates || \
               build_tools/rocm/run_xla_ci_build.sh \
                 --config=rocm_ci \
                 --config=rocm_rbe \
+                --tls_client_key=rbe_key.key \
+                --tls_client_certificate=rbe_cert.crt \
                 //xla/...
             "
 
