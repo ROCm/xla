@@ -1,0 +1,64 @@
+name: ROCm OpenXla CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rocm_test_and_analyze_xla_regular:
+    runs-on: linux-mi325-2
+
+    steps:
+      - name: Print machine specs
+        run: |
+          lscpu
+          free -h  # Memory information
+          df -h    # Disk space information
+          uname -a # Kernel information
+
+      # Main repo checkout (already works via worker's SSH key)
+      - uses: actions/checkout@v4
+
+      # Second repo checkout via SSH
+      - name: Checkout xla repo
+        uses: actions/checkout@v4
+      - name: Create RBE cert files
+        run: |
+          echo "${{ secrets.RBE_KEY }}" > rbe_key.key
+          echo "${{ secrets.RBE_CERT }}" > rbe_cert.crt
+      - name: Pull docker image
+        run: |
+          docker pull rocm/tensorflow-build@sha256:a2672ff2510b369b4a5f034272a518dc93c2e492894e3befaeef19649632ccaa
+
+      # Run container
+      - name: Run tests in custom container
+        env:
+          TERM: xterm-256color
+        run: |
+          docker run --rm \
+            --ipc=host \
+            --shm-size=16G \
+            --security-opt=seccomp=unconfined \
+            --device=/dev/kfd \
+            --device=/dev/dri \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            rocm/tensorflow-build@sha256:a2672ff2510b369b4a5f034272a518dc93c2e492894e3befaeef19649632ccaa \
+            bash -c "
+              cat /tmp/xla/certificates/rbe_cert.crt || \
+              ls -alsh /tmp/xla/certificates || \
+              build_tools/rocm/run_xla_ci_build.sh \
+                --config=rocm_ci \
+                --config=rocm_rbe \
+                --tls_client_key=rbe_key.key \
+                --tls_client_certificate=rbe_cert.crt \
+                //xla/...
+            "
+
