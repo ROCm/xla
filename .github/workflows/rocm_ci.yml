@@ -16,6 +16,13 @@ jobs:
     runs-on: linux-mi325-2
 
     steps:
+      - name: Print machine specs
+        run: |
+          lscpu
+          free -h  # Memory information
+          df -h    # Disk space information
+          uname -a # Kernel information
+
       # Main repo checkout (already works via worker's SSH key)
       - uses: actions/checkout@v4
 
@@ -32,6 +39,8 @@ jobs:
 
       # Run container
       - name: Run tests in custom container
+        env:
+          TERM: xterm-256color
         run: |
           docker run --rm \
             --ipc=host \
