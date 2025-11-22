@@ -538,7 +538,7 @@ static int toolInitStatic(rocprofiler_client_finalize_t finalize_func,
 // ----------------------------------------------------------------------------
 // C‑linkage entry‑point expected by rocprofiler-sdk.
 // ----------------------------------------------------------------------------
-extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
+rocprofiler_tool_configure_result_t* rocprofiler_configure(
     uint32_t version, const char* runtime_version, uint32_t priority,
     rocprofiler_client_id_t* id) {
   auto& obj = RocmTracer::GetRocmTracerSingleton();  // Ensure constructed,
@@ -572,9 +572,9 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
 }  // namespace xla
 
 // force to initialize the hooks before hipInit, if we don't use this
-// some high-level framwork, e.g., maxtext, calls hipInit before 
+// some high-level framwork, e.g., maxtext, calls hipInit before
 // rocprofiler_configure, then no tracing callbacks will be triggered,
-// as a result, there is no gpu trace events.  
+// as a result, there is no gpu trace events.
 void __attribute__((constructor)) init_rocm_lib() {
-  rocprofiler_force_configure(xla::profiler::rocprofiler_configure);
+  // rocprofiler_force_configure(xla::profiler::rocprofiler_configure);
 }
