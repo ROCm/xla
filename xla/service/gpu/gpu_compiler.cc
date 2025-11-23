@@ -23,6 +23,7 @@ limitations under the License.
 #include <optional>
 #include <stack>
 #include <string>
+#include <regex>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -278,6 +279,7 @@ limitations under the License.
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/platform/threadpool.h"
+#include "xla/tsl/util/env_var.h"
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
@@ -350,6 +352,25 @@ class NanCheckInserter : public HloModulePass {
           source->opcode() == HloOpcode::kConditional) {
         continue;
       }
+      static auto check_re = []() -> std::optional<std::regex> {
+        std::string pattern;
+        TF_CHECK_OK(tsl::ReadStringFromEnvVar("TF_ROCM_NAN_CHECK_RE",
+                                              /*default_val=*/"", &pattern));
+        if (pattern.empty()) {
+          return std::nullopt;
+        }
+        return std::regex(pattern);
+      }();
+
+      if (check_re) {
+        auto source_id = absl::StrFormat(
+            "%s/%s:%s", source->parent()->parent()->name(),
+            source->parent()->name(), source->ToString(print_options));
+        if (!std::regex_search(source_id, *check_re)) {
+          continue;
+        }
+      }
+
       absl::InlinedVector<HloInstruction*, 8> args;
       args.push_back(instruction);
 
