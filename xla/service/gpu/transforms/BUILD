@@ -692,13 +692,13 @@ xla_test(
         "cuda-only", # TODO(rocm): Until #12613 is fixed.
     ],
     backend_tags = {
-        "gpu_a100": [
+        "a100": [
             "noasan",
             "nomsan",
         ],
     },
     backends = [
-        "gpu_a100",
+        "a100",
     ],
     shard_count = 10,
     deps = [
