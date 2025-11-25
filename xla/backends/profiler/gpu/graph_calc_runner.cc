@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "json/json.h"
 #include "absl/status/status.h"
@@ -26,16 +27,16 @@ namespace {
 
 using EdgeKey = std::pair<int, int>;
 
-struct EdgeHistorySample {
-  uint64_t round_id = 0;
-  double alpha = 0.0;
-  double beta = 0.0;
-};
-
 struct EdgeSampleEntry {
   uint64_t round_id = 0;
   EdgeAlphaBeta* edge = nullptr;
   bool missing = false;
+};
+
+struct NodeMetadata {
+  bool present = false;
+  uint64_t start_walltime_ns = 0;
+  uint64_t start_gpu_ns = 0;
 };
 
 struct AggregatedRound {
@@ -217,7 +218,8 @@ absl::StatusOr<std::vector<std::string>> ReadLines(const std::string& path) {
 
 absl::Status ParseFile(const std::string& path,
                        std::map<uint64_t, AggregatedRound>* rounds,
-                       int* max_node_id) {
+                       int* max_node_id,
+                       std::map<int, NodeMetadata>* metadata) {
   std::optional<int> inferred_node_id;
   auto inferred = InferNodeIdFromFilename(path);
   if (inferred.ok()) {
@@ -238,6 +240,25 @@ absl::Status ParseFile(const std::string& path,
       return absl::InvalidArgumentError(
           absl::StrCat("JSON parse error in ", path, ": ", errors));
     }
+    if (json_root.isMember("meta") && json_root["meta"].asBool()) {
+      if (!json_root.isMember("node_id")) {
+        return absl::InvalidArgumentError(
+            "Metadata line missing node_id");
+      }
+      int meta_node = json_root["node_id"].asInt();
+      NodeMetadata& meta_entry = (*metadata)[meta_node];
+      meta_entry.present = true;
+      if (json_root.isMember("start_walltime_ns")) {
+        meta_entry.start_walltime_ns =
+            json_root["start_walltime_ns"].asUInt64();
+      }
+      if (json_root.isMember("start_gpu_ns")) {
+        meta_entry.start_gpu_ns = json_root["start_gpu_ns"].asUInt64();
+      }
+      *max_node_id = std::max(*max_node_id, meta_node);
+      continue;
+    }
+
     TF_ASSIGN_OR_RETURN(NodeWindowData node_window,
                         ParseNodeWindow(json_root, inferred_node_id));
     AggregatedRound& agg = (*rounds)[node_window.round_id];
@@ -255,11 +276,27 @@ absl::Status ParseFile(const std::string& path,
 }
 
 absl::Status WriteOffsets(const std::string& path,
-                          const std::vector<GraphCalc::RoundResult>& rounds) {
+                          const std::vector<GraphCalc::RoundResult>& rounds,
+                          const std::vector<NodeMetadata>& metadata) {
   std::ofstream out(path, std::ios::out | std::ios::trunc);
   if (!out.is_open()) {
     return absl::InvalidArgumentError(
         absl::StrCat("Failed to open output file ", path));
+  }
+  if (!metadata.empty()) {
+    out << "{\"meta\":true,\"nodes\":[";
+    bool first = true;
+    for (int i = 0; i < metadata.size(); ++i) {
+      if (!first) {
+        out << ",";
+      }
+      first = false;
+      out << "{\"node_id\":" << i
+          << ",\"start_walltime_ns\":" << metadata[i].start_walltime_ns
+          << ",\"start_gpu_ns\":" << metadata[i].start_gpu_ns
+          << "}";
+    }
+    out << "]}\n";
   }
   for (const auto& round : rounds) {
     for (const auto& node : round.node_offsets) {
@@ -303,8 +340,10 @@ absl::Status GraphCalcRunner::Run(const Options& options) {
   }
   std::map<uint64_t, AggregatedRound> aggregated;
   int max_node_id = -1;
+  std::map<int, NodeMetadata> metadata_map;
   for (const auto& file : options.input_files) {
-    TF_RETURN_IF_ERROR(ParseFile(file, &aggregated, &max_node_id));
+    TF_RETURN_IF_ERROR(
+        ParseFile(file, &aggregated, &max_node_id, &metadata_map));
   }
 
   if (aggregated.empty()) {
@@ -330,6 +369,13 @@ absl::Status GraphCalcRunner::Run(const Options& options) {
   calc_config.num_nodes = num_nodes;
   calc_config.min_pairs = options.min_pairs;
   calc_config.max_loss_ratio = options.max_loss_ratio;
+
+  std::vector<NodeMetadata> metadata(num_nodes);
+  for (const auto& [node_id, meta] : metadata_map) {
+    if (node_id >= 0 && node_id < num_nodes) {
+      metadata[node_id] = meta;
+    }
+  }
 
   GraphCalc calc(calc_config);
   std::vector<GraphCalc::RoundResult> output_rounds;
@@ -366,7 +412,7 @@ absl::Status GraphCalcRunner::Run(const Options& options) {
   if (output_path.empty()) {
     output_path = "round_offsets.jsonl";
   }
-  TF_RETURN_IF_ERROR(WriteOffsets(output_path, output_rounds));
+  TF_RETURN_IF_ERROR(WriteOffsets(output_path, output_rounds, metadata));
   return absl::OkStatus();
 }
 

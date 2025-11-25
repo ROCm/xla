@@ -12,6 +12,7 @@
 #include <vector>
 #include <condition_variable>
 #include <deque>
+#include <optional>
 
 #include <netinet/in.h>
 
@@ -126,7 +127,9 @@ class WindowManager {
   uint64_t GetCurrentWindowId() const;
   
   // Export all accumulated windows to JSONL
-  void ExportAllWindows(std::ofstream& out, int node_id);
+  void ExportAllWindows(std::ofstream& out, int node_id,
+                        const std::optional<uint64_t>& start_walltime_ns,
+                        const std::optional<uint64_t>& start_gpu_ns);
   
  private:
   uint64_t window_duration_ns_;

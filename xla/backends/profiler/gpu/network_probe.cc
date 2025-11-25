@@ -196,10 +196,24 @@ uint64_t WindowManager::GetCurrentWindowId() const {
   return window_id_.load(std::memory_order_relaxed);
 }
 
-void WindowManager::ExportAllWindows(std::ofstream& out, int node_id) {
+void WindowManager::ExportAllWindows(
+    std::ofstream& out, int node_id,
+    const std::optional<uint64_t>& start_walltime_ns,
+    const std::optional<uint64_t>& start_gpu_ns) {
   absl::MutexLock lock(&mu_);
   
   LOG(ERROR) << "Exporting " << completed_windows_.size() << " completed windows";
+
+  if (start_walltime_ns.has_value() || start_gpu_ns.has_value()) {
+    out << "{\"meta\":true,\"node_id\":" << node_id;
+    if (start_walltime_ns.has_value()) {
+      out << ",\"start_walltime_ns\":" << *start_walltime_ns;
+    }
+    if (start_gpu_ns.has_value()) {
+      out << ",\"start_gpu_ns\":" << *start_gpu_ns;
+    }
+    out << "}\n";
+  }
   
   // Export all completed windows
   for (const auto& window : completed_windows_) {
@@ -2009,7 +2023,9 @@ void NetworkProbeManager::Shutdown() {
     std::ofstream out(export_file, std::ios::out | std::ios::trunc);  // Overwrite mode
     if (out.is_open()) {
       LOG(ERROR) << "Exporting all accumulated windows to " << export_file;
-      window_manager_->ExportAllWindows(out, config_.node_id);
+      window_manager_->ExportAllWindows(out, config_.node_id,
+                                        config_.collector_start_walltime_ns,
+                                        config_.collector_start_gpu_ns);
       out.close();
       LOG(ERROR) << "Export complete";
     } else {

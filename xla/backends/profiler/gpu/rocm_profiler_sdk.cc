@@ -52,6 +52,29 @@ limitations under the License.
 namespace xla {
 namespace profiler {
 
+#define RETURN_IF_ROCPROFILER_ERROR(expr)                                   \
+  do {                                                                      \
+    rocprofiler_status_t status = (expr);                                   \
+    if (status != ROCPROFILER_STATUS_SUCCESS) {                             \
+      const char* err_msg = rocprofiler_get_status_string(status);          \
+      LOG(ERROR) << "ROCm Profiler Error: " << #expr << " failed with "     \
+                 << (err_msg ? err_msg : "unknown error") << " (" << status \
+                 << ")";                                                    \
+      return -1;                                                            \
+    }                                                                       \
+  } while (0)
+
+#define LOG_IF_ROCPROFILER_ERROR(expr)                                      \
+  do {                                                                      \
+    rocprofiler_status_t status = (expr);                                   \
+    if (status != ROCPROFILER_STATUS_SUCCESS) {                             \
+      const char* err_msg = rocprofiler_get_status_string(status);          \
+      LOG(ERROR) << "ROCm Profiler Error: " << #expr << " failed with "     \
+                 << (err_msg ? err_msg : "unknown error") << " (" << status \
+                 << ")";                                                    \
+    }                                                                       \
+  } while (0)
+
 using tsl::profiler::AnnotationStack;
 
 // represents an invalid or uninitialized device ID used in RocmTracer events.
@@ -142,7 +165,7 @@ void RocmTracer::Enable(const RocmTracerOptions& options,
     LOG(ERROR) << "Failed to initialize distributed timestamp synchronization: " << status;
     return;
   }
-  rocprofiler_start_context(context_);
+  LOG_IF_ROCPROFILER_ERROR(rocprofiler_start_context(context_));
   LOG(INFO) << "GpuTracer started with number of GPUs = " << NumGpus();
 }
 
@@ -395,6 +418,7 @@ static void tool_tracing_callback(rocprofiler_context_id_t context,
       context, buffer_id, headers, num_headers, drop_count);
 }
 
+
 int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
                          void* tool_data) {
   // Gather API names with rocprofiler-sdk api call
@@ -413,18 +437,18 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
   }
 
   // Utility context to gather code‑object info
-  rocprofiler_create_context(&utility_context_);
+  RETURN_IF_ROCPROFILER_ERROR(rocprofiler_create_context(&utility_context_));
 
   // buffered tracing
   auto code_object_ops = std::vector<rocprofiler_tracing_operation_t>{
       ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER};
   // rocprofiler-sdk api call for code_object callbacks
-  rocprofiler_configure_callback_tracing_service(
+  RETURN_IF_ROCPROFILER_ERROR(rocprofiler_configure_callback_tracing_service(
       utility_context_, ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT,
       code_object_ops.data(), code_object_ops.size(), code_object_callback,
-      nullptr);
+      nullptr));
 
-  rocprofiler_start_context(utility_context_);
+  RETURN_IF_ROCPROFILER_ERROR(rocprofiler_start_context(utility_context_));
   LOG(INFO) << "rocprofiler start utilityContext";
 
   // a multiple of the page size, and the gap allows the buffer to absorb bursts
@@ -433,29 +457,29 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
   constexpr auto buffer_watermark_bytes = 20 * 4096;
 
   // Utility context to gather code‑object info
-  rocprofiler_create_context(&context_);
+  RETURN_IF_ROCPROFILER_ERROR(rocprofiler_create_context(&context_));
   // rocprofiler-sdk api call for buffer callbacks
-  rocprofiler_create_buffer(context_, buffer_size_bytes, buffer_watermark_bytes,
+  RETURN_IF_ROCPROFILER_ERROR(rocprofiler_create_buffer(context_, buffer_size_bytes, buffer_watermark_bytes,
                             ROCPROFILER_BUFFER_POLICY_LOSSLESS,
-                            tool_tracing_callback, tool_data, &buffer_);
+                            tool_tracing_callback, tool_data, &buffer_));
 
-  rocprofiler_configure_buffer_tracing_service(
+  RETURN_IF_ROCPROFILER_ERROR(rocprofiler_configure_buffer_tracing_service(
       context_, ROCPROFILER_BUFFER_TRACING_HIP_RUNTIME_API, nullptr, 0,
-      buffer_);
+      buffer_));
 
-  rocprofiler_configure_buffer_tracing_service(
+  RETURN_IF_ROCPROFILER_ERROR(rocprofiler_configure_buffer_tracing_service(
       context_, ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH, nullptr, 0,
-      buffer_);
+      buffer_));
 
-  rocprofiler_configure_buffer_tracing_service(
-      context_, ROCPROFILER_BUFFER_TRACING_MEMORY_COPY, nullptr, 0, buffer_);
+  RETURN_IF_ROCPROFILER_ERROR(rocprofiler_configure_buffer_tracing_service(
+      context_, ROCPROFILER_BUFFER_TRACING_MEMORY_COPY, nullptr, 0, buffer_));
 
   {
     // for annotations
     const rocprofiler_tracing_operation_t* hip_ops = nullptr;
     size_t hip_ops_count = 0;
     // rocprofiler-sdk api callbacks
-    rocprofiler_configure_callback_tracing_service(
+    RETURN_IF_ROCPROFILER_ERROR(rocprofiler_configure_callback_tracing_service(
         context_, ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API, hip_ops,
         hip_ops_count,
         [](rocprofiler_callback_tracing_record_t record,
@@ -469,15 +493,15 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
             }
           }
         },
-        nullptr);
+        nullptr));
   }
 
   auto client_thread = rocprofiler_callback_thread_t{};
-  rocprofiler_create_callback_thread(&client_thread);
-  rocprofiler_assign_callback_thread(buffer_, client_thread);
+  RETURN_IF_ROCPROFILER_ERROR(rocprofiler_create_callback_thread(&client_thread));
+  RETURN_IF_ROCPROFILER_ERROR(rocprofiler_assign_callback_thread(buffer_, client_thread));
 
   int isValid = 0;
-  rocprofiler_context_is_valid(context_, &isValid);
+  RETURN_IF_ROCPROFILER_ERROR(rocprofiler_context_is_valid(context_, &isValid));
   if (isValid == 0) {
     context_.handle = 0;  // Leak on failure.
     return -1;
@@ -498,6 +522,13 @@ void RocmTracer::toolFinalize(void* tool_data) {
 
 void RocmTracer::Disable() {
   absl::MutexLock lock(&collector_mutex_);
+  // Flush the buffer to ensure we get the last batch of events
+  if (context_.handle != 0 && buffer_.handle != 0) {
+    LOG_IF_ROCPROFILER_ERROR(rocprofiler_flush_buffer(buffer_));
+  }
+  if (context_.handle != 0) {
+    LOG_IF_ROCPROFILER_ERROR(rocprofiler_stop_context(context_));
+  }
   collector_->Flush();
   collector_ = nullptr;
   api_tracing_enabled_ = false;

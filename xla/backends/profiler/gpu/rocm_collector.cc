@@ -556,7 +556,9 @@ absl::Status RocmTraceCollectorImpl::InitializeDistributedSync() {
     return absl::OkStatus();
   }
   
-  const auto& dist_ctx = dist_ctx_opt.value();
+  auto dist_ctx = dist_ctx_opt.value();
+  dist_ctx.collector_start_walltime_ns = start_walltime_ns_;
+  dist_ctx.collector_start_gpu_ns = start_gputime_ns_;
   
   LOG(INFO) << "Initializing distributed timestamp synchronization...";
   

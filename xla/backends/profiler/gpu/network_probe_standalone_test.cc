@@ -30,6 +30,7 @@
 #include "absl/log/globals.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
+#include "xla/tsl/platform/env_time.h"
 
 ABSL_FLAG(int, rank, -1, "Node rank/ID (0 to num_nodes-1)");
 ABSL_FLAG(int, num_nodes, 2, "Total number of nodes");
@@ -55,10 +56,13 @@ DistributedProfilerContext CreateTestConfig(int rank, int num_nodes,
                                            const std::string& topology) {
   DistributedProfilerContext config;
   
+  auto start_walltime_ns =  tsl::EnvTime::NowNanos();
+
   config.node_id = rank;
   config.num_nodes = num_nodes;
   config.node_addresses = addresses;
-  
+  config.collector_start_walltime_ns = start_walltime_ns;
+  config.collector_start_gpu_ns = start_walltime_ns;
   // Configure topology
   if (topology == "ring") {
     // Ring topology: each node probes the next one (last node probes first)
@@ -121,6 +125,7 @@ DistributedProfilerContext CreateTestConfig(int rank, int num_nodes,
       config.edge_ports["probe_edge:3->0"] = {40003, 40000 + 3 * 100};
       config.edge_ports["probe_edge:1->3"] = {40000 + 3 * 100 + 1, 40000 + 1 * 100 + 3};
     }
+    config.probe_participants = {0, 1, 2, 3};
 
   }
   
@@ -130,7 +135,7 @@ DistributedProfilerContext CreateTestConfig(int rank, int num_nodes,
   config.enable_probe_export = true;
   config.enable_clock_snapshots = false;
   config.enable_socket_timestamping = true;
-  config.probe_participants = {0, 1, 2, 3};
+  
   config.has_probe_senders = true;
   config.timestamp_sync_timeout = absl::Seconds(5);
   

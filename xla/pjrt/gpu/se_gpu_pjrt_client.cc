@@ -1923,7 +1923,7 @@ absl::StatusOr<DeviceTopologyPair> BuildDistributedDevices(
   TF_ASSIGN_OR_RETURN(GpuTopologyProto gpu_topology,
                       BuildGpuTopology(global_topology));
   // init SetDistributedContext
-  if (kv_store != nullptr) {
+  if (kv_store != nullptr && num_nodes > 1) {
     VLOG(1) << "Exchanging node addresses via KV store";
     TF_ASSIGN_OR_RETURN(
         auto addresses,

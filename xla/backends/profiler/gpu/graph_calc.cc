@@ -92,6 +92,12 @@ absl::StatusOr<GraphCalc::RoundResult> GraphCalc::ProcessRound(
     reference_start_ns = window.all_nodes.front().window_start_ns;
     reference_end_ns = window.all_nodes.front().window_end_ns;
   }
+  for (int i = 0; i < config_.num_nodes; ++i) {
+    if (result.window_start_ns[i] == 0 && reference_found) {
+      result.window_start_ns[i] = reference_start_ns;
+      result.window_end_ns[i] = reference_end_ns;
+    }
+  }
   result.midpoint_ns = static_cast<double>(
       ComputeMidpoint(reference_start_ns, reference_end_ns));
   const double reference_midpoint_ns =

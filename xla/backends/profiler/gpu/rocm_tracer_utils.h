@@ -198,6 +198,10 @@ struct DistributedProfilerContext {
   
   // Port assignments for directed edges: key="src->dst", value=(dst_listen_port, src_response_port)
   std::map<std::string, std::pair<uint16_t, uint16_t>> edge_ports;
+
+  // Optional profiling-session metadata populated by the collector
+  std::optional<uint64_t> collector_start_walltime_ns;
+  std::optional<uint64_t> collector_start_gpu_ns;
 };
 
 struct RocmTraceCollectorOptions {
