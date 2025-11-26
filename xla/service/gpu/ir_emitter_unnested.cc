@@ -116,6 +116,7 @@ limitations under the License.
 #include "xla/service/gpu/matmul_utils.h"
 #include "xla/service/gpu/model/tiled_hlo_computation.h"
 #include "xla/service/gpu/parallel_loop_emitter.h"
+#include "xla/service/gpu/runtime_intrinsics.h"
 #ifdef TENSORFLOW_USE_ROCM
 #include "xla/stream_executor/rocm/rocm_solver_context.h"
 #endif  // TENSORFLOW_USE_ROCM
@@ -1531,7 +1532,8 @@ absl::Status IrEmitterUnnested::EmitNanCheckCustomCall(
   }
 
   auto thunk = std::make_unique<NanCheckThunk>(
-      Thunk::ThunkInfo::WithProfileAnnotation(instr), operands[0], std::move(buffers));
+      Thunk::ThunkInfo::WithProfileAnnotation(instr), 
+      operands, std::move(buffers));
   AddThunkToThunkSequence(std::move(thunk));
   return absl::OkStatus();
 }
@@ -2831,7 +2833,7 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
       if (instr->custom_call_target() == kNopCustomCallTarget) {
         return absl::OkStatus();
       }
-      if (instr->custom_call_target() == "__xla_gpu_nan_check") {
+      if (instr->custom_call_target() == kXlaGpuNanCheckCustomCallTag) {
         return EmitNanCheckCustomCall(custom_call);
       }
       return EmitCustomCallThunk(custom_call);

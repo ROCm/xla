@@ -36,30 +36,63 @@ limitations under the License.
 #include "xla/tsl/platform/threadpool.h"
 #include "tsl/platform/logging.h"
 #include "tsl/platform/statusor.h"
-
-namespace {
-
-static absl::Status ExecuteOnSeparateThread(
-    absl::AnyInvocable<absl::Status() &&> callback) {
-  absl::Status status;
-  {
-    tsl::thread::ThreadPool one_shot_pool(tsl::Env::Default(),
-                                          tsl::ThreadOptions(), "one_shot", 1);
-
-    one_shot_pool.Schedule(
-        [&status, &callback]() { status = std::move(callback)(); });
-  }
-  return status;
-}
-}  // namespace
+#include "tsl/platform/path.h"
 
 namespace xla {
 namespace gpu {
 
-NanCheckThunk::NanCheckThunk(ThunkInfo thunk_info, HloInstruction* instruction,
-                             std::vector<BufferAllocation::Slice>&& buffers)
+namespace {
+
+static auto env_threshold = []() {
+  auto value = std::numeric_limits< float >::infinity();
+  TF_CHECK_OK(tsl::ReadFloatFromEnvVar("TF_ROCM_NAN_CHECK_MAG_THRESHOLD",
+                                  /*default_val=*/value, &value));
+  VLOG(0) << "NaN checker magnitude threshold " << value;
+  return value;
+}();
+
+static auto env_verbose = []() {
+  bool value = false;
+  TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_NAN_CHECK_VERBOSE",
+                                  /*default_val=*/value, &value));
+  return value;
+}();
+
+static auto env_check_device = []() {
+  int64_t device_id = -1;
+  TF_CHECK_OK(tsl::ReadInt64FromEnvVar("TF_ROCM_NAN_CHECK_DEVICE",
+                                         /*default_val=*/-1, &device_id));
+  return device_id;
+}();
+
+static auto env_filter = []() -> std::optional<std::regex> {
+  std::string pattern;
+  TF_CHECK_OK(tsl::ReadStringFromEnvVar("TF_ROCM_NAN_CHECK_FILTER",
+                                          /*default_val=*/"", &pattern));
+  if (pattern.empty()) {
+    return std::nullopt;
+  }
+  return std::regex(pattern);
+}();
+
+static auto env_check_count = []() -> std::atomic<int64_t> {
+  int64_t count;
+  TF_CHECK_OK(tsl::ReadInt64FromEnvVar("TF_ROCM_NAN_CHECK_COUNT",
+                                         /*default_val=*/1, &count));
+  return count;
+}();
+
+static absl::Mutex nan_signal_map_mutex;
+static absl::flat_hash_map<se::Stream*, se::DeviceMemory<uint32_t>>
+      nan_signal_map;
+
+}  // namespace
+
+NanCheckThunk::NanCheckThunk(ThunkInfo thunk_info, 
+                          const HloInstruction::InstructionVector& operands,
+                          std::vector<BufferAllocation::Slice>&& buffers)
     : Thunk(Kind::kNanCheck, thunk_info),
-      instruction_(instruction),
+      operands_(operands),
       buffers_(std::move(buffers)) {}
 
 absl::Status NanCheckThunk::ExecuteOnStream(const ExecuteParams& params) {
@@ -67,13 +100,18 @@ absl::Status NanCheckThunk::ExecuteOnStream(const ExecuteParams& params) {
   const BufferAllocations& allocs = *params.buffer_allocations;
 
   absl::InlinedVector<se::DeviceMemoryBase, 4> buffers(buffers_.size());
-  for (size_t i = 0; i < buffers_.size(); i++) {
-    buffers[i] = allocs.GetDeviceAddress(buffers_[i]);
+  bool oo = stream->parent()->device_ordinal()==0;
+
+  auto source = operands_[0];
+  if (source->opcode() == HloOpcode::kGetTupleElement) {
+    source = source->mutable_operand(0);
   }
 
-  static absl::Mutex nan_signal_map_mutex;
-  static absl::flat_hash_map<se::Stream*, se::DeviceMemory<uint32_t>>
-      nan_signal_map;
+  //if (oo) VLOG(0) << source->ToString() << " total bufs " << buffers_.size();
+  for (size_t i = 0; i < buffers_.size(); i++) {
+    buffers[i] = allocs.GetDeviceAddress(buffers_[i]);
+    //if (oo) VLOG(0) << i << " buf size: " << buffers[i].size();
+  }
 
   se::DeviceMemory<uint32_t> nan_signal;
   {
@@ -93,162 +131,94 @@ absl::Status NanCheckThunk::ExecuteOnStream(const ExecuteParams& params) {
     }
   }
 
-  static auto threshold = []() {
-      auto value = std::numeric_limits< float >::infinity();
-      TF_CHECK_OK(tsl::ReadFloatFromEnvVar("TF_ROCM_NAN_CHECK_MAG_THRESHOLD",
-                                  /*default_val=*/value, &value));
-      VLOG(0) << "NaN checker magnitude threshold " << value;
-      return value;
-  }();
-  static auto verbose = []() {
-      bool value = false;
-      TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_NAN_CHECK_VERBOSE",
-                                  /*default_val=*/value, &value));
-      VLOG(0) << "NaN checker magnitude threshold " << value;
-      return value;
-  }();
-
-  auto element_type = instruction_->shape().element_type();
+  auto element_type = operands_[0]->shape().element_type();
   TF_RETURN_IF_ERROR(gpu::LaunchNanCheckKernel(
-        stream, buffers[0], element_type, threshold, verbose, nan_signal));
+        stream, buffers[0], element_type, env_threshold, env_verbose, nan_signal));
 
-  return stream->DoHostCallback(
-      [this, _stream = stream,
-       &_nan_signal =
-           *reinterpret_cast<std::atomic<uint32_t>*>(nan_signal.opaque()),
-       _buffers = std::move(buffers)]() {
-        Postprocess(_stream, _nan_signal, _buffers);
-      });
+  return Postprocess(stream, std::move(buffers), 
+           *reinterpret_cast<std::atomic<uint32_t>*>(nan_signal.opaque()));
 }
 
-void NanCheckThunk::Postprocess(
-    se::Stream* stream, std::atomic<uint32_t>& nan_signal,
-    const absl::InlinedVector<se::DeviceMemoryBase, 4>& buffers) {
+absl::Status NanCheckThunk::Postprocess(se::Stream* stream, 
+    absl::InlinedVector<se::DeviceMemoryBase, 4>&& buffers,
+    std::atomic<uint32_t>& nan_signal) {
 
-  auto signal_value = static_cast< NaNCheckerResult >(
+  auto sigval = static_cast< NaNCheckerResult >(
               nan_signal.load(std::memory_order_relaxed));
-  if (TF_PREDICT_TRUE(signal_value == NaNCheckerResult::OK)) {
-    return;
-  }
+  run_no_++; // always increment run_no to distinguish different invocations
+  if (TF_PREDICT_TRUE(sigval == NaNCheckerResult::OK)) return absl::OkStatus();
 
   fflush(stdout);
   nan_signal.store(0, std::memory_order_relaxed);
 
-  static auto check_device = []() -> std::optional<int64_t> {
-    int64_t device_id;
-    TF_CHECK_OK(tsl::ReadInt64FromEnvVar("TF_ROCM_NAN_CHECK_DEVICE",
-                                         /*default_val=*/-1, &device_id));
-    if (device_id == -1) {
-      return std::nullopt;
-    }
-    return device_id;
-  }();
-
-  int64_t device_ordinal = stream->parent()->device_ordinal();
-  if (check_device && *check_device != device_ordinal) {
-    return;
+  auto device_ordinal = stream->parent()->device_ordinal();
+  if (env_check_device >= 0 && env_check_device != device_ordinal) {
+    return absl::OkStatus();
   }
-
-  static auto filter = []() -> std::optional<std::regex> {
-    std::string pattern;
-    TF_CHECK_OK(tsl::ReadStringFromEnvVar("TF_ROCM_NAN_CHECK_FILTER",
-                                          /*default_val=*/"", &pattern));
-    if (pattern.empty()) {
-      return std::nullopt;
-    }
-    return std::regex(pattern);
-  }();
-
   auto print_options = HloPrintOptions::ShortParsable()
                            .set_print_operand_shape(true)
                            .set_print_extra_attributes(true);
 
-  HloInstruction* source = instruction_;
+  HloInstruction* source = operands_[0];
   int64_t index = 0;
   if (source->opcode() == HloOpcode::kGetTupleElement) {
     index = source->tuple_index();
     source = source->mutable_operand(0);
   }
 
-  absl::string_view module_str = source->parent()->parent()->name(),
-                    comp_str = source->parent()->name();
   auto instr_str = source->ToString(print_options);
+  absl::string_view what = sigval == NaNCheckerResult::NaN ?
+            ": NaN in result " : sigval == NaNCheckerResult::Inf ?
+            ": Inf in result " : ": large mag in result ";
 
-  auto msg = signal_value == NaNCheckerResult::NaN ?
-          absl::StrFormat("Computation %s/%s: NaN found in result %d of %s",
-                             module_str, comp_str, index, instr_str) :
-             signal_value == NaNCheckerResult::Inf ?
-          absl::StrFormat(
-              "Computation %s/%s: Inf found in result %d of %s",
-                             module_str, comp_str, index, instr_str) :
-          absl::StrFormat(
-              "Computation %s/%s: large magnitude found in result %d of %s",
-                             module_str, comp_str, index, instr_str);
+  auto msg = absl::StrCat(source->parent()->parent()->name(), "/",
+                  source->parent()->name(), what, index, " of ", instr_str);
   
-  if (filter && std::regex_search(msg, *filter)) {
-    return;
-  }
+  auto dump_snapshot = [&]() -> absl::Status {
+    auto* env = tsl::Env::Default();
+    std::vector<std::string> tempdirs;
+    env->GetLocalTempDirectories(&tempdirs);
+    if (tempdirs.empty()) {
+      return absl::InternalError("Env TMPDIR/TEST_TMPDIR must be set to enable Hlo snapshots!");
+    }
 
-  auto dump_snapshoot = [&]() -> absl::Status {
-    LOG(INFO) << "Dumping snapshoot for " << source->name();
+    LOG(INFO) << "Dumping snapshot for " << source->name();
     std::unique_ptr<HloModule> module;
-    if (instruction_ == source) {
+    if (operands_[0] == source) {
       module = ExtractInstructionIntoNewModule(*source);
     } else {
-      module = ExtractProducerConsumerIntoNewModule(*source, *instruction_);
+      module = ExtractProducerConsumerIntoNewModule(*source, *operands_[0]);
     }
 
     HloSnapshot snapshot;
     snapshot.set_execution_platform("gpu");
     *snapshot.mutable_hlo()->mutable_hlo_module() = module->ToProto();
 
-    Literal output_literal(instruction_->shape());
-    std::vector<Literal> input_literals;
-    input_literals.reserve(source->operands().size());
+    std::vector<Literal> literals;
+    literals.reserve(operands_.size());
 
-    TF_RETURN_IF_ERROR(ExecuteOnSeparateThread([&]() {
-      TF_ASSIGN_OR_RETURN(auto transfer_stream_owned,
-                          stream->parent()->CreateStream());
-
-      // TODO(rocm): Why does the destructor hang? Leak it for now;
-      auto transfer_stream = transfer_stream_owned.release();
-
-      TF_RETURN_IF_ERROR(transfer_stream->Memcpy(output_literal.untyped_data(),
-                                                 buffers[0],
-                                                 output_literal.size_bytes()));
-
-      size_t buffer_index = 1;
-      for (auto operand : source->operands()) {
-        if (!operand->shape().IsArray()) {
-          return absl::InternalError(
-              "Cannot take a snapshoot with non array input");
-        }
-
-        if (operand->opcode() == HloOpcode::kConstant) {
-          input_literals.emplace_back(operand->literal().Clone());
-        } else {
-          input_literals.emplace_back(operand->shape());
-          if (buffer_index == buffers.size()) {
-            return absl::InternalError("Not enough data to take a snapshoot");
-          }
-          TF_RETURN_IF_ERROR(transfer_stream->Memcpy(
-              input_literals.back().untyped_data(), buffers[buffer_index++],
-              input_literals.back().size_bytes()));
-        }
-
-        TF_RETURN_IF_ERROR(transfer_stream->BlockHostUntilDone());
-        return absl::OkStatus();
+    int buf_idx = 0;
+    for (auto op : operands_) {
+      if (op->opcode() == HloOpcode::kConstant) {
+        literals.emplace_back(op->literal().Clone());
+        continue;
       }
-    }));
-
-    *snapshot.mutable_result() = output_literal.ToProto();
-
-    for (const auto& literal : input_literals) {
-      *snapshot.add_arguments() = literal.ToProto();
+      auto& L = literals.emplace_back(op->shape());
+      TF_RETURN_IF_ERROR(stream->Memcpy(L.untyped_data(), buffers[buf_idx++],
+                        L.size_bytes()));
+    }
+    TF_RETURN_IF_ERROR(stream->BlockHostUntilDone());
+    for (uint32_t i = 0; i < literals.size(); i++) {
+      if (i == 0) {
+        *snapshot.mutable_result() = literals[i].ToProto();
+      } else {
+        *snapshot.add_arguments() = literals[i].ToProto();
+      }
     }
 
-    auto filename = absl::StrFormat("%s.%d.hlo_snapshot.pb", module->name(),
-                                    tsl::Env::Default()->NowMicros());
+    auto filename = tsl::io::JoinPath(tempdirs[0], 
+          absl::StrFormat("%s-dev%d-%d.hlo.pb", module->name(),
+                device_ordinal, run_no_));
     std::string pb;
     if (!tsl::SerializeToStringDeterministic(snapshot, &pb)) {
       return absl::InternalError("Failed to serialize hlo snapshoot");
@@ -259,35 +229,20 @@ void NanCheckThunk::Postprocess(
     return absl::OkStatus();
   };
 
-  static auto check_count = []() -> std::atomic<int64_t> {
-    int64_t count;
-    TF_CHECK_OK(tsl::ReadInt64FromEnvVar("TF_ROCM_NAN_CHECK_COUNT",
-                                         /*default_val=*/1, &count));
-    return count;
-  }();
-
-  int64_t count = check_count.fetch_sub(1);
-
+  int64_t count = env_check_count.fetch_sub(1);
   LOG(INFO) << "COUNT " << count;
-
   bool do_abort = count <= 1;
 
-  bool do_snapshoot = false; // HACK
-      //do_abort;  // Workaround for now since we leak stream on snapshoot dump.
-
-  if (do_snapshoot) {
-    auto status = dump_snapshoot();
-
-    if (!status.ok()) {
-      LOG(ERROR) << "Failed to save hlo snapshoot: " << status.message();
+  LOG(ERROR) << msg << " on GPU " << device_ordinal;
+  if (!env_filter.has_value() || std::regex_search(instr_str, *env_filter)) {
+    if (auto s = dump_snapshot(); !s.ok()) {
+      LOG(ERROR) << "Failed to save hlo snapshot: " << s.message();
     }
   }
-
-  LOG(ERROR) << msg << " on GPU " << device_ordinal;
-
   if (do_abort) {
-    std::abort();
+    std::exit(1);
   }
+  return absl::OkStatus();
 }
 
 }  // namespace gpu

@@ -95,74 +95,7 @@ void NopReturnTokenCustomCall(void* stream_handle, void** buffers,
   VLOG(1) << "NopReturnTokenCustomCall called.";
 }
 
-absl::Status NanCheckCustomCall(
-    se::Stream* stream, ffi::AnyBuffer buffer,
-    xla::ffi::Result<xla::ffi::Buffer<xla::TOKEN>> res,
-    std::string_view msg) {
-
-  static absl::Mutex nan_signal_map_mutex;
-  static absl::flat_hash_map<se::Stream*, se::DeviceMemory<uint32_t>> nan_signal_map;
-  static std::atomic<const se::MemoryAllocation*> abort_lock;
-
-  se::DeviceMemory<uint32_t> nan_signal;
-  {
-    // TODO(rocm) Move this into Prepare to make it command buffer safe
-    absl::MutexLock lock(&nan_signal_map_mutex);
-    auto it = nan_signal_map.find(stream);
-    if (TF_PREDICT_FALSE(it == nan_signal_map.end())) {
-      TF_ASSIGN_OR_RETURN(
-          std::unique_ptr<se::MemoryAllocation> signal_buffer,
-          stream->parent()->HostMemoryAllocate(sizeof(uint32_t)));
-      nan_signal = se::DeviceMemory<uint32_t>::MakeFromByteSize(
-          signal_buffer->opaque(), sizeof(uint32_t));
-      TF_RETURN_IF_ERROR(stream->MemZero(&nan_signal, sizeof(uint32_t)));
-      nan_signal_map.emplace(stream, nan_signal);
-      signal_buffer.release();  // TODO(rocm) Leak it for now
-    } else {
-      nan_signal = it->second;
-    }
-  }
-
-  float threshold = std::numeric_limits< float >::infinity();
-  TF_RETURN_IF_ERROR(gpu::LaunchNanCheckKernel(
-      stream, buffer.device_memory(), buffer.element_type(), threshold, 
-      /*verbose*/false, nan_signal));
-
-  return stream->DoHostCallback(
-      [_device_ordinal = stream->parent()->device_ordinal(),
-       _msg = std::string(msg),  // TODO(rocm): Do we need to make a defensive copy here
-       &_nan_signal =
-           *reinterpret_cast<std::atomic<uint32_t>*>(nan_signal.opaque())]() {
-        if (TF_PREDICT_FALSE(_nan_signal.load(std::memory_order_relaxed) != 0)) {
-          _nan_signal.store(0, std::memory_order_relaxed);
-          static auto filter = []() -> std::optional<std::regex> {
-            const char* pattern = std::getenv("TF_ROCM_NAN_CHECK_FILTER");
-            if (pattern == nullptr || std::strlen(pattern) == 0) {
-              return std::nullopt;
-            }
-            return std::regex(pattern);
-          }();
-          if (!filter || !std::regex_search(_msg, *filter)) {
-            LOG(FATAL) << _msg << " on GPU " << _device_ordinal;;
-          }
-        }
-      });
-}
-
 }  // namespace
-
-XLA_FFI_DEFINE_HANDLER(kXlaGpuNanCheckCustomCall, NanCheckCustomCall,
-                       ffi::Ffi::Bind()
-                           .Ctx<ffi::Stream>()
-                           .Arg<ffi::AnyBuffer>()
-                           .Ret<xla::ffi::Buffer<xla::TOKEN>>()
-                           .Attr<absl::string_view>("msg"));
-                          /* {xla::ffi::Traits::kCmdBufferCompatible} */
-
-XLA_FFI_REGISTER_HANDLER(ffi::GetXlaFfiApi(), kXlaGpuNanCheckCustomCallTag,
-                         GetGpuPlatformName(), kXlaGpuNanCheckCustomCall);
-
-
 
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM(
     std::string(kXlaGpuAssertCustomCallTag), AssertionCustomCall,

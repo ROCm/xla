@@ -33,17 +33,21 @@ namespace gpu {
 
 class NanCheckThunk : public Thunk {
  public:
-  NanCheckThunk(ThunkInfo thunk_info, HloInstruction* instruction,
+  NanCheckThunk(ThunkInfo thunk_info, 
+             const HloInstruction::InstructionVector& operands,
                 std::vector<BufferAllocation::Slice>&& buffers);
 
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
 
  private:
-  void Postprocess(se::Stream* stream, std::atomic<uint32_t>& nan_signal,
-                   const absl::InlinedVector<se::DeviceMemoryBase, 4>& buffers);
+  absl::Status Postprocess(se::Stream* stream, 
+    absl::InlinedVector<se::DeviceMemoryBase, 4>&& buffers,
+    std::atomic<uint32_t>& nan_signal);
 
-  HloInstruction* instruction_;
+
+  HloInstruction::InstructionVector operands_;
   std::vector<BufferAllocation::Slice> buffers_;
+  int64_t run_no_ = 0;
 };
 
 }  // namespace gpu

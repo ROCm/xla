@@ -47,6 +47,30 @@ cc_library(
 )
 
 cc_library(
+    name = "nan_check_inserter",
+    srcs = ["nan_check_inserter.cc"],
+    hdrs = ["nan_check_inserter.h"],
+    deps = [
+        "//xla:comparison_util",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:status_macros",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/pass:hlo_pass",
+        "//xla/service:hlo_creation_utils",
+        "//xla/service/gpu:runtime_intrinsics",
+        "//xla/tsl/platform:status",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
     name = "algebraic_simplifier",
     srcs = [
         "algebraic_simplifier.cc",
