@@ -92,6 +92,7 @@ elif [[ $1 == "tsan" ]]; then
     shift
 fi
 
+rm -rf /dev/shm/nccl-*
 bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --config=rocm_ci \
     --config=xla_mgpu \
@@ -116,6 +117,10 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     "$@" \
     --spawn_strategy=local \
     --strategy=TestRunner=local # execute multigpu tests locally as there is no gpu exclusive protection on rbe
+
+
+# clean up nccl- files
+rm -rf /dev/shm/nccl-*
 
 # clean up bazel disk_cache
 bazel shutdown \
