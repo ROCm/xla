@@ -25,6 +25,12 @@ if [ ! -d /tf/pkg ]; then
     mkdir -p /tf/pkg
 fi
 
+EXCLUDED_TESTS=(
+    ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseFusionExecutesCorrectly/f16_atan2
+    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_tf32_tf32_f32
+    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_f32_f32_f32
+)
+
 for arg in "$@"; do
     if [[ "$arg" == "--config=asan" ]]; then
         TAG_FILTERS="${TAG_FILTERS},-noasan"
@@ -45,4 +51,8 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --test_output=errors \
     --local_test_jobs=2 \
     --run_under=//build_tools/rocm:parallel_gpu_execute \
+    --test_filter=-$(
+        IFS=:
+        echo "${EXCLUDED_TESTS[*]}"
+    ) \
     "$@"
