@@ -29,6 +29,7 @@ mkdir -p /tf/pkg
 
 SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
+    --config=rocm_rbe \
     --disk_cache=${BAZEL_DISK_CACHE_DIR} \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
