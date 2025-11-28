@@ -32,3 +32,4 @@ race:xla::gpu::(anonymous namespace)::RecoverExp2Pattern::initStaticsIfNeeded<st
 race:lld::lldMain
 race:llvm::*
 race:xla::gpu::GpuExecutable::ExecuteAsyncOnStream
+race:xla::LocalDeviceState::AllocateAndRecordEvent
