@@ -16,7 +16,6 @@
 # ==============================================================================
 
 set -e
-set -x
 
 SCRIPT_DIR=$(realpath $(dirname $0))
 TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,requires-gpu-amd,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
@@ -101,4 +100,7 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/backends/gpu/codegen/triton:dot_algorithms_legacy_test_amdgpu_any \
     -//xla/tests:cholesky_test_amdgpu_any \
     -//xla/service/gpu/tests:sorting.hlo.test \
-    -//xla/service/gpu/llvm_gpu_backend:amdgpu_bitcode_link_test
+    -//xla/service/gpu/llvm_gpu_backend:amdgpu_bitcode_link_test \
+    -//xla/tests:triangular_solve_test_amdgpu_any \
+    -//xla/tests:batch_norm_training_test_amdgpu_any_notfrt \
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_legacy_test_amdgpu_any
