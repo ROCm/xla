@@ -100,4 +100,5 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/tests:collective_pipeline_parallelism_test_amdgpu_any \
     -//xla/backends/gpu/codegen/triton:dot_algorithms_legacy_test_amdgpu_any \
     -//xla/tests:cholesky_test_amdgpu_any \
-    -//xla/service/gpu/tests:sorting.hlo.test
+    -//xla/service/gpu/tests:sorting.hlo.test \
+    -//xla/service/gpu/llvm_gpu_backend:amdgpu_bitcode_link_test
