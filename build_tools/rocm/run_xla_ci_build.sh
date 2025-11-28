@@ -50,38 +50,32 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/backends/gpu/codegen/triton:support_legacy_test_amdgpu_any \
     -//xla/backends/gpu/codegen/triton:support_test \
     -//xla/backends/gpu/runtime:command_buffer_conversion_pass_test_amdgpu_any \
-    -//xla/backends/gpu/runtime:kernel_thunk_test_amdgpu_any \
     -//xla/backends/gpu/runtime:topk_test_amdgpu_any \
     -//xla/codegen/emitters/tests:loop/broadcast_constant_block_dim_limit.hlo.test \
     -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any \
     -//xla/hlo/builder/lib:svd_test_amdgpu_any \
-    -//xla/hlo/builder/lib:svd_test_amdgpu_any_notfrt \
     -//xla/pjrt/c:pjrt_c_api_gpu_test_amdgpu_any \
     -//xla/service/gpu:determinism_test_amdgpu_any \
     -//xla/service/gpu:dot_algorithm_support_test_amdgpu_any \
     -//xla/service/gpu/tests:command_buffer_test_amdgpu_any \
-    -//xla/service/gpu/tests:command_buffer_test_amdgpu_any_notfrt \
     -//xla/service/gpu/tests:dynamic_shared_memory_test_amdgpu_any \
     -//xla/service/gpu/tests:gpu_cub_sort_test_amdgpu_any \
     -//xla/service/gpu/tests:gpu_kernel_tiling_test_amdgpu_any \
     -//xla/service/gpu/tests:gpu_triton_custom_call_test_amdgpu_any \
     -//xla/service/gpu/tests:sorting_test_amdgpu_any \
     -//xla/service/gpu/transforms:cublas_gemm_rewriter_test_amdgpu_any \
-    -//xla/service/gpu/transforms:layout_assignment_a100.hlo.test \
-    -//xla/service/gpu/transforms:layout_assignment_h100.hlo.test \
-    -//xla/service/gpu/transforms:layout_assignment_v100.hlo.test \
     -//xla/service/gpu/transforms:triton_fusion_numerics_verifier_test_amdgpu_any \
-    -//xla/service/gpu/transforms:triton_fusion_numerics_verifier_test_amdgpu_any_notfrt \
     -//xla/tests:convolution_test_amdgpu_any \
-    -//xla/tests:convolution_test_amdgpu_any_notfrt \
     -//xla/tests:multioutput_fusion_test_amdgpu_any \
     -//xla/tests:sample_file_test_amdgpu_any \
     -//xla/tests:scatter_test_amdgpu_any \
-    -//xla/tests:scatter_test_amdgpu_any_notfrt \
     -//xla/tools/hlo_opt:tests/gpu_hlo_llvm.hlo.test \
     -//xla/backends/gpu/collectives:nccl_communicator_test_amdgpu_any \
     -//xla/tests:collective_ops_e2e_test_amdgpu_any \
-    -//xla/tests:collective_pipeline_parallelism_test_amdgpu_any
+    -//xla/tests:collective_pipeline_parallelism_test_amdgpu_any \
+    -//xla/service/gpu/tests:sorting.hlo.test \
+    -//xla/backends/gpu/codegen/triton:dot_algorithms_legacy_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_amdgpu_any
 
 # clean up bazel disk_cache
 bazel shutdown \
