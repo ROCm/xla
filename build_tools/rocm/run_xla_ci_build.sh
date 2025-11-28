@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Copyright 2025 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# ==============================================================================
+
+set -e
+set -x
+
+SCRIPT_DIR=$(realpath $(dirname $0))
+TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,requires-gpu-amd,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
+
+BAZEL_DISK_CACHE_SIZE=100G
+BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.8.0"
+
+mkdir -p ${BAZEL_DISK_CACHE_DIR}
+mkdir -p /tf/pkg
+
+SCRIPT_DIR=$(dirname $0)
+bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
+    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+    --build_tag_filters=$TAG_FILTERS \
+    --test_tag_filters=$TAG_FILTERS \
+    --profile=/tf/pkg/profile.json.gz \
+    --keep_going \
+    --test_env=TF_TESTS_PER_GPU=1 \
+    --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
+    --test_output=errors \
+    --run_under=//build_tools/rocm:parallel_gpu_execute \
+    "$@" \
+    -//xla/tests:collective_pipeline_parallelism_test \
+    -//xla/backends/gpu/codegen/emitters/tests:reduce_row/mof_scalar_variadic.hlo.test \
+    -//xla/backends/gpu/codegen/emitters/tests:reduce_row/side_output_broadcast.hlo.test \
+    -//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_port_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_int4_device_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:support_legacy_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:support_test \
+    -//xla/backends/gpu/runtime:command_buffer_conversion_pass_test_amdgpu_any \
+    -//xla/backends/gpu/runtime:topk_test_amdgpu_any \
+    -//xla/codegen/emitters/tests:loop/broadcast_constant_block_dim_limit.hlo.test \
+    -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any \
+    -//xla/hlo/builder/lib:svd_test_amdgpu_any \
+    -//xla/pjrt/c:pjrt_c_api_gpu_test_amdgpu_any \
+    -//xla/service/gpu:determinism_test_amdgpu_any \
+    -//xla/service/gpu:dot_algorithm_support_test_amdgpu_any \
+    -//xla/service/gpu/tests:command_buffer_test_amdgpu_any \
+    -//xla/service/gpu/tests:dynamic_shared_memory_test_amdgpu_any \
+    -//xla/service/gpu/tests:gpu_cub_sort_test_amdgpu_any \
+    -//xla/service/gpu/tests:gpu_kernel_tiling_test_amdgpu_any \
+    -//xla/service/gpu/tests:gpu_triton_custom_call_test_amdgpu_any \
+    -//xla/service/gpu/tests:sorting_test_amdgpu_any \
+    -//xla/service/gpu/transforms:cublas_gemm_rewriter_test_amdgpu_any \
+    -//xla/service/gpu/transforms:triton_fusion_numerics_verifier_test_amdgpu_any \
+    -//xla/tests:convolution_test_amdgpu_any \
+    -//xla/tests:multioutput_fusion_test_amdgpu_any \
+    -//xla/tests:sample_file_test_amdgpu_any \
+    -//xla/tests:scatter_test_amdgpu_any \
+    -//xla/tools/hlo_opt:tests/gpu_hlo_llvm.hlo.test \
+    -//xla/backends/gpu/collectives:nccl_communicator_test_amdgpu_any \
+    -//xla/tests:collective_ops_e2e_test_amdgpu_any \
+    -//xla/tests:collective_pipeline_parallelism_test_amdgpu_any \
+    -//xla/service/gpu/tests:sorting.hlo.test \
+    -//xla/backends/gpu/codegen/triton:dot_algorithms_legacy_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_amdgpu_any
+
+# clean up bazel disk_cache
+bazel shutdown \
+    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+    --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE}

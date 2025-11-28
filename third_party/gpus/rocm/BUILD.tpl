@@ -576,6 +576,12 @@ filegroup(
 )
 
 filegroup(
+    name = "rocminfo",
+    srcs = glob(["%{rocm_root}/bin/rocminfo"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
     name = "all_files",
     srcs = glob(["%{rocm_root}/**"]),
     visibility = ["//visibility:public"],
