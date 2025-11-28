@@ -20,16 +20,17 @@ set -x
 
 SCRIPT_DIR=$(realpath $(dirname $0))
 TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,requires-gpu-amd,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
+BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
+mkdir -p ${BAZEL_DISK_CACHE_DIR}
+mkdir -p /tf/pkg
 
-if [ ! -d /tf/pkg ]; then
-    mkdir -p /tf/pkg
-fi
+cleanup_disk_cache() {
+    bazel shutdown \
+        --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+        --experimental_disk_cache_gc_max_size=100G
+}
 
-EXCLUDED_TESTS=(
-    ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseFusionExecutesCorrectly/f16_atan2
-    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_tf32_tf32_f32
-    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_f32_f32_f32
-)
+trap cleanup_disk_cache EXIT
 
 for arg in "$@"; do
     if [[ "$arg" == "--config=asan" ]]; then
@@ -42,6 +43,7 @@ done
 
 SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
+    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
     --profile=/tf/pkg/profile.json.gz \
@@ -51,10 +53,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --test_output=errors \
     --local_test_jobs=2 \
     --run_under=//build_tools/rocm:parallel_gpu_execute \
-    --test_filter=-$(
-        IFS=:
-        echo "${EXCLUDED_TESTS[*]}"
-    ) \
     "$@" \
     -//xla/tests:collective_pipeline_parallelism_test \
     -//xla/backends/gpu/codegen/emitters/tests:reduce_row/mof_scalar_variadic.hlo.test \
@@ -99,3 +97,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/backends/gpu/collectives:nccl_communicator_test_amdgpu_any \
     -//xla/tests:collective_ops_e2e_test_amdgpu_any \
     -//xla/tests:collective_pipeline_parallelism_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:dot_algorithms_legacy_test_amdgpu_any \
+    -//xla/tests:cholesky_test_amdgpu_any \
+    -//xla/service/gpu/tests:sorting.hlo.test
