@@ -51,7 +51,7 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --test_env=TF_TESTS_PER_GPU=1 \
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
     --test_output=errors \
-    --local_test_jobs=2 \
+    --local_test_jobs=4 \
     --run_under=//build_tools/rocm:parallel_gpu_execute \
     "$@" \
     -//xla/tests:collective_pipeline_parallelism_test \
