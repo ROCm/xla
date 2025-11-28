@@ -256,6 +256,10 @@ build:asan --linkopt -fsanitize=address
 
 build:rocm_base --config=clang_local
 build:rocm_base --copt=-Wno-gnu-offsetof-extensions
+# Fix for Clang 20+ ABI change that causes SIGSEGV during exception unwinding.
+# See: https://releases.llvm.org/21.1.0/tools/clang/docs/ReleaseNotes.html#id270
+build:rocm_base --copt=-fclang-abi-compat=20
+build:rocm_base --host_copt=-fclang-abi-compat=20
 build:rocm_base --crosstool_top=@local_config_rocm//crosstool:toolchain
 build:rocm_base --define=using_rocm_hipcc=true
 build:rocm_base --define=tensorflow_mkldnn_contraction_kernel=0

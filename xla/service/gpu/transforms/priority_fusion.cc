@@ -169,7 +169,12 @@ class PriorityFusionQueue {
         reachability_(HloDfsReachability::Build(computation)),
         triton_heroless_fusion_enabled_(triton_heroless_fusion_enabled) {
     VLOG(2) << "Running full HLO cost analysis for " << computation_->name();
-    TF_CHECK_OK(computation_->Accept(&cost_analysis_));
+    // Use manual iteration instead of Accept() to avoid exception issues on ROCm.
+    for (HloInstruction* instruction : computation_->MakeInstructionPostOrder()) {
+      TF_CHECK_OK(cost_analysis_.Preprocess(instruction));
+      TF_CHECK_OK(instruction->Visit(&cost_analysis_));
+      TF_CHECK_OK(cost_analysis_.Postprocess(instruction));
+    }
 
     dump_fusion_visualization_ = computation->parent()
                                      ->config()

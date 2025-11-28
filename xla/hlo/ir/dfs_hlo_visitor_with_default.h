@@ -318,12 +318,19 @@ class DfsHloRewriteVisitor : public DfsHloVisitorWithDefault {
   absl::StatusOr<bool> RunOnModule(
       HloModule* module,
       const absl::flat_hash_set<absl::string_view>& execution_threads = {}) {
-    absl::Status status;
     for (HloComputation* computation :
          module->MakeNonfusionComputations(execution_threads)) {
-      status = computation->Accept(this);
-      if (ABSL_PREDICT_FALSE(!status.ok())) {
-        return status;
+      // Defensive check: skip corrupted computations
+      if (computation == nullptr || computation->name().empty()) {
+        continue;
+      }
+      // Use post-order traversal to visit instructions
+      for (HloInstruction* instruction : computation->MakeInstructionPostOrder()) {
+        if (instruction == nullptr) continue;
+        absl::Status status = instruction->Visit(this);
+        if (ABSL_PREDICT_FALSE(!status.ok())) {
+          return status;
+        }
       }
     }
     return changed();

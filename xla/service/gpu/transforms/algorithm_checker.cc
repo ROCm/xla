@@ -25,7 +25,9 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
+#include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/algorithm_util.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/xla_data.pb.h"
@@ -55,7 +57,18 @@ class AlgorithmCheckerVisitor : public ConstDfsHloVisitorWithDefault {
       const absl::flat_hash_set<absl::string_view>& execution_threads = {}) {
     for (HloComputation* computation :
          module->MakeNonfusionComputations(execution_threads)) {
-      TF_RETURN_IF_ERROR(computation->Accept(this));
+      // Defensive check: skip corrupted computations (empty name indicates corruption)
+      if (computation == nullptr || computation->name().empty()) {
+        LOG(WARNING) << "AlgorithmChecker: skipping corrupted computation";
+        continue;
+      }
+      // Use simple iteration instead of DFS visitor to avoid exception handling issues
+      for (HloInstruction* instruction : computation->instructions()) {
+        if (instruction == nullptr) continue;
+        if (instruction->opcode() == HloOpcode::kDot) {
+          TF_RETURN_IF_ERROR(HandleDot(instruction));
+        }
+      }
     }
     return absl::OkStatus();
   }

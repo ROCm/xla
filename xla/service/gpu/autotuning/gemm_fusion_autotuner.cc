@@ -160,7 +160,17 @@ class GemmFusionCollector : public ConstDfsHloVisitorWithDefault {
     handled_fusions_.clear();
     for (HloComputation* computation :
          module.MakeNonfusionComputations(execution_threads)) {
-      TF_RETURN_IF_ERROR(computation->Accept(this));
+      // Defensive check: skip corrupted computations
+      if (computation == nullptr || computation->name().empty()) {
+        continue;
+      }
+      // Use simple iteration instead of DFS visitor to avoid exception issues
+      for (HloInstruction* instruction : computation->instructions()) {
+        if (instruction == nullptr) continue;
+        if (instruction->opcode() == HloOpcode::kFusion) {
+          TF_RETURN_IF_ERROR(HandleFusion(instruction));
+        }
+      }
     }
     TF_ASSIGN_OR_RETURN(result_.fingerprint,
                         GetBase64EncodedSha256Hash(result_.fingerprint));

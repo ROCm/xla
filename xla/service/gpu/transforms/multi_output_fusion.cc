@@ -417,9 +417,14 @@ absl::StatusOr<bool> MultiOutputFusion::DoMultiOutputFusion() {
                                     /*min_latencies_seconds=*/{},
                                     /*count_multiple_input_accesses=*/true},
                                    device_info_);
-  TF_RETURN_IF_ERROR(computation_->Accept(&cost_analysis));
+  // Use manual iteration instead of Accept() to avoid exception issues on ROCm.
   std::vector<HloInstruction*> defs_before_uses =
       computation_->MakeInstructionPostOrder();
+  for (HloInstruction* instruction : defs_before_uses) {
+    TF_RETURN_IF_ERROR(cost_analysis.Preprocess(instruction));
+    TF_RETURN_IF_ERROR(instruction->Visit(&cost_analysis));
+    TF_RETURN_IF_ERROR(cost_analysis.Postprocess(instruction));
+  }
 
   FusionInfoCache fusion_info_cache(device_info_);
   GpuPerformanceModelOwning gpu_performance_model(device_info_);
