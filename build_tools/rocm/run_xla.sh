@@ -16,7 +16,7 @@
 # ==============================================================================
 
 # This script runs XLA unit tests on ROCm platform by selecting tests that are
-# tagged with requires-gpu-amd
+# tagged with requires-gpu-amd or requires-gpu-rocm
 
 set -e
 set -x
@@ -103,7 +103,7 @@ if [ ! -d /tf/pkg ]; then
 fi
 
 SCRIPT_DIR=$(realpath $(dirname $0))
-TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),-multigpu,-multi_gpu_h100,requires-gpu-amd,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
+TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),-multigpu,-multi_gpu_h100,requires-gpu-amd,requires-gpu-rocm,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
 
 SANITIZER_ARGS=()
 if [[ $1 == "asan" ]]; then
