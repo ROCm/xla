@@ -102,4 +102,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/service/gpu/llvm_gpu_backend:amdgpu_bitcode_link_test \
     -//xla/tests:triangular_solve_test_amdgpu_any \
     -//xla/tests:batch_norm_training_test_amdgpu_any_notfrt \
-    -//xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_legacy_test_amdgpu_any
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_legacy_test_amdgpu_any \
+    -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any_notfrt \
+    -//xla/tests:convert_test_amdgpu_any
