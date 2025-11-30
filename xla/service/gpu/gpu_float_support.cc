@@ -132,8 +132,11 @@ bool GpuFloatSupport::IsSupported(const HloInstruction& hlo) const {
       if (LowPrecisionType() == BF16) {
         auto* cuda_compute_capability =
             std::get_if<se::CudaComputeCapability>(&compute_capability_);
-        return cuda_compute_capability != nullptr &&
-               cuda_compute_capability->IsAtLeastHopper();
+        auto* rocm_compute_capability =
+            std::get_if<se::RocmComputeCapability>(&compute_capability_);
+        return (cuda_compute_capability != nullptr &&
+               cuda_compute_capability->IsAtLeastHopper()) ||
+               rocm_compute_capability != nullptr;
       }
       return false;
     }
