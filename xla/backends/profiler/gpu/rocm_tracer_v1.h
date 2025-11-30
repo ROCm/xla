@@ -28,6 +28,7 @@ limitations under the License.
 #include "tsl/platform/errors.h"
 #include "tsl/platform/macros.h"
 #include "tsl/platform/status.h"
+#include "tsl/platform/thread_annotations.h"
 #include "tsl/platform/types.h"
 
 namespace xla {
@@ -86,7 +87,7 @@ class RocmApiCallbackImpl {
   RocmTracerOptions options_;
   RocmTracer* tracer_ = nullptr;
   RocmTraceCollector* collector_ = nullptr;
-  tsl::mutex api_call_start_mutex_;
+  absl::Mutex api_call_start_mutex_;
   // TODO(rocm-profiler): replace this with absl hashmap
   // keep a map from the corr. id to enter time for API callbacks.
   std::map<uint32_t, uint64_t> api_call_start_time_
