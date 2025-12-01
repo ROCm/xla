@@ -37,6 +37,7 @@ for arg in "$@"; do
 done
 
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
+    --config=rocm_rbe \
     --disk_cache=${BAZEL_DISK_CACHE_DIR} \
     --experimental_disk_cache_gc_max_size=400G \
     --build_tag_filters=$TAG_FILTERS \
