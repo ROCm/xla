@@ -20,3 +20,5 @@ race:lld::lldMain
 race:llvm::*
 race:xla::LocalDeviceState::AllocateAndRecordEvent
 race:xla::HloRunnerPjRt::TransferLiteralFromDevice
+race:xla::Service::TransferFromOutfeed
+race:xla::gpu::OutfeedManager::TransferLiteralFromOutfeed
