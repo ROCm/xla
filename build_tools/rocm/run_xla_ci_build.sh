@@ -40,6 +40,8 @@ for arg in "$@"; do
     fi
 done
 
+set -x
+
 SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --config=rocm_rbe \
