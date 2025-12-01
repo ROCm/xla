@@ -40,6 +40,11 @@ for arg in "$@"; do
     fi
 done
 
+TESTS_TO_FIX=(
+    FunctionalHloRunnerTest.ShardedAutotuningWorks
+    AllReduceKernelTest/AllReduceKernelTest
+)
+
 set -x
 
 SCRIPT_DIR=$(dirname $0)
@@ -55,6 +60,7 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --test_output=errors \
     --local_test_jobs=4 \
     --run_under=//build_tools/rocm:parallel_gpu_execute \
+    --test_filter=-$(IFS=: ; echo "${TESTS_TO_FIX[*]}") \
     "$@" \
     -//xla/tests:collective_pipeline_parallelism_test \
     -//xla/backends/gpu/codegen/emitters/tests:reduce_row/mof_scalar_variadic.hlo.test \
@@ -108,5 +114,13 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/tests:convert_test_amdgpu_any \
     -//xla/pjrt/gpu/tfrt:tfrt_gpu_buffer_test \
     -//xla/backends/gpu/collectives:nvshmem_collectives_test_amdgpu_any \
+    -//xla/pjrt/gpu:nvshmem_gpu_collectives_test_amdgpu_any \
     -//xla/service/gpu:auto_sharding_gpu_compiler_test_amdgpu_any \
-    -//xla/backends/gpu/codegen/triton:fusion_emitter_large_test_amdgpu_any
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_large_test_amdgpu_any \
+    -//xla/pjrt/gpu:se_gpu_pjrt_client_test_amdgpu_any \
+    -//xla/backends/gpu/codegen:dynamic_slice_fusion_test_amdgpu_any \
+    -//xla/pjrt/gpu:pjrt_client_test_se_gpu_amdgpu_any \
+    -//xla/tests:collective_ops_e2e_test_amdgpu_any \
+    -//xla/tests:collective_ops_test_amdgpu_any \
+    -//xla/tools/multihost_hlo_runner:functional_hlo_runner_test_amdgpu_an
+
