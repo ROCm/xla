@@ -19,17 +19,7 @@ set -e
 
 SCRIPT_DIR=$(realpath $(dirname $0))
 TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,-skip_rocprofiler_sdk,-oss_excluded,-oss_serial
-BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
-mkdir -p ${BAZEL_DISK_CACHE_DIR}
 mkdir -p /tf/pkg
-
-cleanup_disk_cache() {
-    bazel shutdown \
-        --disk_cache=${BAZEL_DISK_CACHE_DIR} \
-        --experimental_disk_cache_gc_max_size=100G
-}
-
-trap cleanup_disk_cache EXIT
 
 for arg in "$@"; do
     if [[ "$arg" == "--config=asan" ]]; then
@@ -42,7 +32,6 @@ done
 
 set -x
 
-SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --config=rocm_rbe \
     --disk_cache=${BAZEL_DISK_CACHE_DIR} \
