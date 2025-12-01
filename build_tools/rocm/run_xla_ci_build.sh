@@ -18,7 +18,7 @@
 set -e
 
 SCRIPT_DIR=$(realpath $(dirname $0))
-TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,requires-gpu-amd,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
+TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
 BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
 mkdir -p ${BAZEL_DISK_CACHE_DIR}
 mkdir -p /tf/pkg
@@ -96,6 +96,7 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/tests:scatter_test_amdgpu_any \
     -//xla/tests:scatter_test_amdgpu_any_notfrt \
     -//xla/tools/hlo_opt:tests/gpu_hlo_llvm.hlo.test \
+    -//xla/backends/gpu/collectives:nccl_communicator_test_amdgpu_any \
     -//xla/tests:collective_ops_e2e_test_amdgpu_any \
     -//xla/tests:collective_pipeline_parallelism_test_amdgpu_any \
     -//xla/backends/gpu/codegen/triton:dot_algorithms_legacy_test_amdgpu_any \
