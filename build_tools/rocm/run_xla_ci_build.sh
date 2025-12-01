@@ -19,7 +19,7 @@ set -e
 set -x
 
 SCRIPT_DIR=$(realpath $(dirname $0))
-TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,requires-gpu-amd,,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
+TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,-skip_rocprofiler_sdk,-oss_excluded,-oss_serial
 
 if [ ! -d /tf/pkg ]; then
 	mkdir -p /tf/pkg
