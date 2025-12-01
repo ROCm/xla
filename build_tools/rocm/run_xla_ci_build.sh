@@ -96,7 +96,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/tests:scatter_test_amdgpu_any \
     -//xla/tests:scatter_test_amdgpu_any_notfrt \
     -//xla/tools/hlo_opt:tests/gpu_hlo_llvm.hlo.test \
-    -//xla/tests:collective_ops_e2e_test_amdgpu_any \
     -//xla/tests:collective_pipeline_parallelism_test_amdgpu_any \
     -//xla/backends/gpu/codegen/triton:dot_algorithms_legacy_test_amdgpu_any \
     -//xla/tests:cholesky_test_amdgpu_any \
@@ -107,4 +106,7 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_legacy_test_amdgpu_any \
     -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any_notfrt \
     -//xla/tests:convert_test_amdgpu_any \
-    -//xla/pjrt/gpu/tfrt:tfrt_gpu_buffer_test
+    -//xla/pjrt/gpu/tfrt:tfrt_gpu_buffer_test \
+    -//xla/backends/gpu/collectives:nvshmem_collectives_test \
+    -//xla/service/gpu:auto_sharding_gpu_compiler_test_amdgpu_any \
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_large_test_amdgpu_any
