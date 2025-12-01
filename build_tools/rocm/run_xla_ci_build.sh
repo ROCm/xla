@@ -19,6 +19,8 @@ set -e
 
 SCRIPT_DIR=$(realpath $(dirname $0))
 TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,-skip_rocprofiler_sdk,-oss_excluded,-oss_serial
+BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib"
+mkdir -p ${BAZEL_DISK_CACHE_DIR}
 mkdir -p /tf/pkg
 
 for arg in "$@"; do
@@ -33,6 +35,8 @@ done
 set -x
 
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
+    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+    --experimental_disk_cache_gc_max_size=400G \
     --config=rocm_rbe \
     --disk_cache=${BAZEL_DISK_CACHE_DIR} \
     --build_tag_filters=$TAG_FILTERS \
