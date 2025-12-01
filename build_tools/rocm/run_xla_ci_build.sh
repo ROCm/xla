@@ -18,7 +18,7 @@
 set -e
 
 SCRIPT_DIR=$(realpath $(dirname $0))
-TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
+TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,-skip_rocprofiler_sdk,-oss_excluded,-oss_serial
 BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
 mkdir -p ${BAZEL_DISK_CACHE_DIR}
 mkdir -p /tf/pkg
