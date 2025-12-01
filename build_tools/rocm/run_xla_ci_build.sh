@@ -22,14 +22,14 @@ SCRIPT_DIR=$(realpath $(dirname $0))
 TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,requires-gpu-amd,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
 
 BAZEL_DISK_CACHE_SIZE=100G
-BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.8.0"
+BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib"
 
 mkdir -p ${BAZEL_DISK_CACHE_DIR}
 mkdir -p /tf/pkg
 
-SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+    --experimental_disk_cache_gc_max_size=400G \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
     --profile=/tf/pkg/profile.json.gz \
@@ -76,8 +76,3 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/service/gpu/tests:sorting.hlo.test \
     -//xla/backends/gpu/codegen/triton:dot_algorithms_legacy_test_amdgpu_any \
     -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_amdgpu_any
-
-# clean up bazel disk_cache
-bazel shutdown \
-    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
-    --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE}
