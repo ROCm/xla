@@ -19,3 +19,4 @@ race:xla::LocalDeviceState::ThenRelease
 race:lld::lldMain
 race:llvm::*
 race:xla::LocalDeviceState::AllocateAndRecordEvent
+race:xla::HloRunnerPjRt::TransferLiteralFromDevice
