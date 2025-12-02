@@ -42,6 +42,9 @@ build:tsan --linkopt -g
 build:tsan --//build_tools/rocm:sanitizer=tsan
 build:tsan --test_env=TSAN_OPTIONS=suppressions=build_tools/rocm/tsan_ignore_list.txt::history_size=7:ignore_noninstrumented_modules=1
 
+build:ci_single_gpu --run_under=//build_tools/rocm:parallel_gpu_execute
+build:ci_multi_gpu --test_strategy=exclusive
+
 build:xla_sgpu -- \
 //xla/... \
 -//xla/backends/gpu/collectives:gpu_clique_key_test \

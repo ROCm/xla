@@ -30,6 +30,12 @@ for arg in "$@"; do
     if [[ "$arg" == "--config=tsan" ]]; then
         TAG_FILTERS="${TAG_FILTERS},-notsan"
     fi
+    if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},multi_gpu"
+    fi
+    if [[ "$arg" == "--config=ci_single_gpu" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},-multi_gpu"
+    fi
 done
 
 set -x
@@ -48,7 +54,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
     --test_output=errors \
     --local_test_jobs=4 \
-    --run_under=//build_tools/rocm:parallel_gpu_execute \
     "$@" \
     -//xla/tests:collective_pipeline_parallelism_test \
     -//xla/backends/gpu/codegen/emitters/tests:reduce_row/mof_scalar_variadic.hlo.test \
@@ -111,7 +116,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/tests:collective_ops_e2e_test_amdgpu_any \
     -//xla/tests:collective_ops_test_amdgpu_any \
     -//xla/tools/multihost_hlo_runner:functional_hlo_runner_test_amdgpu_any \
-    -//xla/backends/gpu/runtime:all_reduce_test_amdgpu_any \
     -//xla/pjrt/gpu:se_gpu_pjrt_client_nvshmem_test_amdgpu_any \
     -//xla/tools/multihost_hlo_runner:functional_hlo_runner_test_amdgpu_any
 
