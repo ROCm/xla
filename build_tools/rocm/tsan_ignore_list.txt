@@ -31,4 +31,5 @@ race:llvm::cl::opt_storage<bool, false, false>::setValue<int>
 race:xla::gpu::(anonymous namespace)::RecoverExp2Pattern::initStaticsIfNeeded<std::tuple<mlir::Float32Type, mlir::FloatTF32Type, mlir::BFloat16Type>>
 race:lld::lldMain
 race:llvm::*
-race:xla::gpu::GpuExecutable::ExecuteAsyncOnStream
+race:xla::gpu::GpuExecutable::ExecuteAsyncOnStream*
+race:xla::gpu::HostExecuteStartThunk::ExecuteOnStream*

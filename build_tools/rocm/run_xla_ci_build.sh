@@ -48,9 +48,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
     --test_output=errors \
     --run_under=//build_tools/rocm:parallel_gpu_execute \
-    --test_env=ASAN_OPTIONS=suppressions=$SCRIPT_DIR/asan_ignore_list.txt:use_sigaltstack=0 \
-    --test_env=LSAN_OPTIONS=suppressions=$SCRIPT_DIR/lsan_ignore_list.txt:use_sigaltstack=0 \
-    --test_env=TSAN_OPTIONS=suppressions=$SCRIPT_DIR/tsan_ignore_list.txt::history_size=7:ignore_noninstrumented_modules=1 \
     "$@" \
     -//xla/tests:collective_pipeline_parallelism_test \
     -//xla/backends/gpu/codegen/emitters/tests:reduce_row/mof_scalar_variadic.hlo.test \
