@@ -24,3 +24,4 @@ race:xla::HloRunnerPjRt::TransferLiteralsFromDevice*
 race:xla::Service::TransferFromOutfeed*
 race:xla::gpu::OutfeedManager::TransferLiteralFromOutfeed*
 race:xla::ShapeUtil::MakeShape*
+race:xla::gpu::HostExecuteStartThunk::ExecuteOnStream*
