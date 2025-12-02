@@ -54,6 +54,8 @@ shift
 # *******************************************************************
 
 mkdir -p /var/lock
+ls -alsh /dev/dri
+echo "#### GPU count is ${TF_GPU_COUNT}"
 for i in $(seq 0 $((TF_GPU_COUNT - 1))); do
     exec {lock_fd}>/var/lock/gpulock${i}_${j} || exit 1
     if flock -n "$lock_fd"; then
