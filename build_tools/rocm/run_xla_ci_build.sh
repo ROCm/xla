@@ -84,4 +84,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/tests:collective_pipeline_parallelism_test_amdgpu_any \
     -//xla/service/gpu/tests:sorting.hlo.test \
     -//xla/backends/gpu/codegen/triton:dot_algorithms_legacy_test_amdgpu_any \
-    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_amdgpu_any
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_amdgpu_any \
+    -//xla/service/gpu/transforms:command_buffer_conversion_pass_test_amdgpu_any \
+    -//xla/backends/gpu/runtime:buffer_comparator_test_amdgpu_any
