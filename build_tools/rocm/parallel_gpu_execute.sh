@@ -23,7 +23,6 @@
 
 ROCMINFO=$(find "external/local_config_rocm/rocm/rocm_dist/" -name "rocminfo" -path "*/bin/rocminfo")
 TF_GPU_COUNT=$($ROCMINFO | grep "Name: *gfx*" | wc -l)
-TF_TESTS_PER_GPU=${TF_TESTS_PER_GPU:-8}
 
 # This function is used below in rlocation to check that a path is absolute
 function is_absolute {
@@ -55,29 +54,22 @@ shift
 # *******************************************************************
 
 mkdir -p /var/lock
-# Try to acquire any of the TF_GPU_COUNT * TF_TESTS_PER_GPU
-# slots to run a test at.
-#
-# Prefer to allocate 1 test per GPU over 4 tests on 1 GPU.
-# So, we iterate over TF_TESTS_PER_GPU first.
-for j in $(seq 0 $((TF_TESTS_PER_GPU - 1))); do
-    for i in $(seq 0 $((TF_GPU_COUNT - 1))); do
-        exec {lock_fd}>/var/lock/gpulock${i}_${j} || exit 1
-        if flock -n "$lock_fd"; then
-            (
-                # This export only works within the brackets, so it is isolated to one
-                # single command.
-                export CUDA_VISIBLE_DEVICES=$i
-                export HIP_VISIBLE_DEVICES=$i
-                echo "Running test $TEST_BINARY $* on GPU $CUDA_VISIBLE_DEVICES"
-                "$TEST_BINARY" $@
-            )
-            return_code=$?
-            flock -u "$lock_fd"
-            exit $return_code
-        fi
-    done
+for i in $(seq 0 $((TF_GPU_COUNT - 1))); do
+    exec {lock_fd}>/var/lock/gpulock${i}_${j} || exit 1
+    if flock -n "$lock_fd"; then
+        (
+            # This export only works within the brackets, so it is isolated to one
+            # single command.
+            export CUDA_VISIBLE_DEVICES=$i
+            export HIP_VISIBLE_DEVICES=$i
+            echo "Running test $TEST_BINARY $* on GPU $CUDA_VISIBLE_DEVICES"
+            "$TEST_BINARY" $@
+        )
+        return_code=$?
+        flock -u "$lock_fd"
+        exit $return_code
+    fi
 done
 
-echo "Cannot find a free GPU to run the test $* on, exiting with failure..."
+echo "Cannot find a free GPU to run the test $TEST_BINARY on, exiting with failure..."
 exit 1
