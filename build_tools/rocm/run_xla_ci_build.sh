@@ -22,14 +22,24 @@ SCRIPT_DIR=$(realpath $(dirname $0))
 TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,requires-gpu-amd,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
 
 BAZEL_DISK_CACHE_SIZE=100G
-BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.8.0"
+BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib"
 
 mkdir -p ${BAZEL_DISK_CACHE_DIR}
 mkdir -p /tf/pkg
 
-SCRIPT_DIR=$(dirname $0)
+for arg in "$@"; do
+    if [[ "$arg" == "--config=asan" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},-noasan"
+    fi
+    if [[ "$arg" == "--config=tsan" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},-notsan"
+    fi
+done
+
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
+    --config=rocm_rbe \
     --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+    --experimental_disk_cache_gc_max_size=400G \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
     --profile=/tf/pkg/profile.json.gz \
@@ -49,7 +59,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_test_amdgpu_any \
     -//xla/backends/gpu/codegen/triton:support_legacy_test_amdgpu_any \
     -//xla/backends/gpu/codegen/triton:support_test \
-    -//xla/backends/gpu/runtime:command_buffer_conversion_pass_test_amdgpu_any \
     -//xla/backends/gpu/runtime:topk_test_amdgpu_any \
     -//xla/codegen/emitters/tests:loop/broadcast_constant_block_dim_limit.hlo.test \
     -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any \
@@ -75,9 +84,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/tests:collective_pipeline_parallelism_test_amdgpu_any \
     -//xla/service/gpu/tests:sorting.hlo.test \
     -//xla/backends/gpu/codegen/triton:dot_algorithms_legacy_test_amdgpu_any \
-    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_amdgpu_any
-
-# clean up bazel disk_cache
-bazel shutdown \
-    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
-    --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE}
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_test_amdgpu_any \
+    -//xla/service/gpu/transforms:command_buffer_conversion_pass_test_amdgpu_any \
+    -//xla/backends/gpu/runtime:buffer_comparator_test_amdgpu_any
