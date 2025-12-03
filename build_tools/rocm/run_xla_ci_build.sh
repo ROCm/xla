@@ -77,7 +77,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/service/gpu:dot_algorithm_support_test_amdgpu_any \
     -//xla/service/gpu/tests:command_buffer_test_amdgpu_any \
     -//xla/service/gpu/tests:command_buffer_test_amdgpu_any_notfrt \
-    -//xla/service/gpu/tests:dynamic_shared_memory_test_amdgpu_any \
     -//xla/service/gpu/tests:gpu_cub_sort_test_amdgpu_any \
     -//xla/service/gpu/tests:gpu_kernel_tiling_test_amdgpu_any \
     -//xla/service/gpu/tests:gpu_triton_custom_call_test_amdgpu_any \
@@ -111,9 +110,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/pjrt/gpu:nvshmem_gpu_collectives_test_amdgpu_any \
     -//xla/pjrt/gpu:se_gpu_pjrt_client_nvshmem_test_amdgpu_any \
     -//xla/pjrt/gpu:se_gpu_pjrt_client_test_amdgpu_any \
-    -//xla/tests:collective_ops_e2e_test_amdgpu_any \
-    -//xla/tests:collective_ops_test_amdgpu_any \
     -//xla/tests:nccl_group_execution_test_amdgpu_any \
-    -//xla/tools/multihost_hlo_runner:functional_hlo_runner_test_amdgpu_any  \
-    -//xla/backends/gpu/collectives:nvshmem_collectives_test_amdgpu_any
-
+    -//xla/backends/gpu/collectives:nvshmem_collectives_test_amdgpu_any \
+    -//xla/service/gpu/tests:dynamic_shared_memory_test_amdgpu_any
