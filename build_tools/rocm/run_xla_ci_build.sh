@@ -113,3 +113,4 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     -//xla/tests:nccl_group_execution_test_amdgpu_any \
     -//xla/backends/gpu/collectives:nvshmem_collectives_test_amdgpu_any \
     -//xla/tools/multihost_hlo_runner:functional_hlo_runner_test_amdgpu_any \
+    -//xla/tests:collective_ops_e2e_test_amdgpu_any
