@@ -649,7 +649,7 @@ xla_test(
             "no_oss",
             "noasan",
             "nomsan",
-            "requires-gpu-nvidia",
+            "cuda-only",
         ],
         "b200": [
             "multi_gpu",
