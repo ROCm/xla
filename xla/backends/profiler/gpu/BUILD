@@ -493,6 +493,7 @@ cc_library(
         "//xla/tsl/profiler/utils:xplane_schema",
         "//xla/tsl/profiler/utils:xplane_utils",
         "//xla/tsl/util:env_var",
+        "//xla:debug_options_flags",
         "@com_google_absl//absl/container:fixed_array",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -575,23 +576,6 @@ xla_test(
     "@tsl//tsl/platform:logging",
     "@tsl//tsl/platform:macros",
   ],
-)
-
-cc_library(
-    name = "nvtx_utils",
-    srcs = ["nvtx_utils.cc"],
-    hdrs = ["nvtx_utils.h"],
-    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
-    tags = [
-        "cuda-only",
-        "gpu",
-    ],
-    deps = [
-        "@com_google_absl//absl/strings",
-        "@local_config_cuda//cuda:cuda_headers",
-        "@tsl//tsl/platform",
-        "@tsl//tsl/platform:macros",
-    ],
 )
 
 cc_library(
