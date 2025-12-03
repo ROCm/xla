@@ -7,6 +7,7 @@ import sys
 import os
 import math
 from typing import Dict, List, Tuple, Any
+from tqdm import tqdm
 
 # Ensure we can import xplane_pb2 from the same directory
 sys.path.append(os.path.dirname(__file__))
@@ -338,8 +339,12 @@ def parse_offset_file(filepath: str) -> Tuple[Dict[int, Dict[str, Any]], List[Di
     return meta_nodes, entries
 
 def process_trace_file(trace_path, snapshot_path, offset_entries, meta_nodes, node_id,
-                       apply_correction=True, print_events=False):
+                       apply_correction=True, print_events=False, print_collectives=False,
+                        event_node_dict=None):
     print(f"Processing node {node_id}: trace={trace_path}")
+    
+    if event_node_dict is not None and node_id not in event_node_dict:
+        event_node_dict[node_id] = []
     
     # 1. Load XSpace
     xspace = xplane_pb2.XSpace()
@@ -407,6 +412,7 @@ def process_trace_file(trace_path, snapshot_path, offset_entries, meta_nodes, no
 
     # Process Planes
     events_processed = 0
+    collective_events_printed = 0
     for plane in xspace.planes:
         # Determine if this is a Device plane or Host plane
         is_device_plane = plane.name.startswith("/device:GPU:")
@@ -416,6 +422,18 @@ def process_trace_file(trace_path, snapshot_path, offset_entries, meta_nodes, no
         # Device: S_di
         plane_base_in = start_gpu if is_device_plane else start_wall
         
+        # Build stat metadata map for this plane to find correlation_id and hlo_op
+        stat_map = {m.id: m.name for m in plane.stat_metadata.values()}
+        event_map = {m.id: m.name for m in plane.event_metadata.values()}
+        
+        corr_id_stat_id = None
+        hlo_op_stat_id = None
+        for k, v in stat_map.items():
+            if v == "correlation_id":
+                corr_id_stat_id = k
+            elif v == "hlo_op":
+                hlo_op_stat_id = k
+        
         # Iterate Lines
         for line in plane.lines:
             last_timestamp = -1
@@ -424,8 +442,31 @@ def process_trace_file(trace_path, snapshot_path, offset_entries, meta_nodes, no
             # Original timestamps in file are relative to line.timestamp_ns, 
             # but logically correspond to plane_base_in + offset.
             
-            for event_idx, event in enumerate(line.events):
+            for event_idx, event in tqdm(enumerate(line.events), total=len(line.events), desc=f"Processing events for node {node_id}"):
                 events_processed += 1
+                
+                # Extract correlation_id and hlo_op for collective detection
+                corr_id = -1
+                hlo_op_name = None
+                for stat in event.stats:
+                    if corr_id_stat_id is not None and stat.metadata_id == corr_id_stat_id:
+                        if stat.HasField("uint64_value"):
+                            corr_id = stat.uint64_value
+                        elif stat.HasField("int64_value"):
+                            corr_id = stat.int64_value
+                    if hlo_op_stat_id is not None and stat.metadata_id == hlo_op_stat_id:
+                        hlo_op_name = stat.str_value
+                
+                # Check if this is a collective event
+                # breakpoint()
+                event_name = event_map.get(event.metadata_id, "")
+                is_collective = False
+                if "rccl" in event_name.lower() or "nccl" in event_name.lower():
+                    is_collective = True
+                elif hlo_op_name:
+                    clean_hlo = hlo_op_name.lower()
+                    if any(x in clean_hlo for x in ["reduce", "gather", "scatter", "all-to-all"]):
+                        is_collective = True
                 
                 # 1. Unnormalize
                 # E_un = Base + Offset
@@ -435,18 +476,25 @@ def process_trace_file(trace_path, snapshot_path, offset_entries, meta_nodes, no
                 e_final = e_un
                 
                 # Apply Algorithm
+                interpolated_offset = 0.0
+                e_h0 = e_un  # Default: no correction means e_h0 == e_un
                 if snap_interp and offset_interp and offset_interp.interp.points:
                     # Full correction with snapshot interpolation and offset adjustment
                     if is_device_plane:
                         # Device Event Transform
                         # E_di = E_un
+                        if is_collective and node_id > 0:
+                            # breakpoint()
+                            pass
                         e_di = e_un
                         
                         # map R -> S (Device i -> Host i)
                         e_hi = snap_interp.map_r_to_s(e_di)
+                        # e_hi = e_un
                         
                         # map Host i -> Host 0 (using M_ik -> M_0k)
                         e_h0 = offset_interp.map_local_to_ref(e_hi)
+                        interpolated_offset = e_hi - e_h0  # The offset applied
                         
                         # map Host 0 -> Device i (Inverse Snapshot)
                         e_di_c = snap_interp.map_s_to_r(e_h0)
@@ -470,6 +518,7 @@ def process_trace_file(trace_path, snapshot_path, offset_entries, meta_nodes, no
                         
                         # map Host i -> Host 0
                         e_h0 = offset_interp.map_local_to_ref(e_hi)
+                        interpolated_offset = e_hi - e_h0  # The offset applied
                         
                         # Target: Corrected Host Time
                         e_final = e_h0
@@ -497,6 +546,19 @@ def process_trace_file(trace_path, snapshot_path, offset_entries, meta_nodes, no
                 
                 last_timestamp = e_final
                 corrected_data.append((e_final, event))
+                
+                # Print collective event details if requested
+                if print_collectives and is_collective:
+                    collective_events_printed += 1
+                    op_key = hlo_op_name if hlo_op_name else event_name
+                    # e_un is the unnormalized time on this node
+                    # e_h0 is the corresponding time on master node (node 0)
+                    # For node 0, e_h0 == e_un (no offset applied)
+                    event_node_dict[node_id].append((e_un, interpolated_offset, e_final))
+                    master_node_time = event_node_dict[0][collective_events_printed - 1][2]
+                    print(f"  COLLECTIVE node={node_id} corr_id={corr_id} op='{op_key}' "
+                          f"e_un={e_un:.0f}ns e_h0={master_node_time:.0f}ns "
+                          f"offset_applied={interpolated_offset:.0f}ns e_final={e_final:.0f}ns")
 
                 if print_events:
                     meta = plane.event_metadata.get(event.metadata_id)
@@ -525,6 +587,8 @@ def process_trace_file(trace_path, snapshot_path, offset_entries, meta_nodes, no
                     event.offset_ps = new_offset_ps
     
     print(f"  Processed {events_processed} events in {len(xspace.planes)} planes.")
+    if print_collectives:
+        print(f"  Printed {collective_events_printed} collective events.")
     return xspace
 
 def main():
@@ -536,7 +600,9 @@ def main():
     parser.add_argument("--no_correction", action="store_true",
                         help="Skip timestamp correction and only merge planes/metadata.")
     parser.add_argument("--print_events", action="store_true",
-                        help="Print every event’s metadata name and timestamp while processing (debug).")
+                        help="Print every event's metadata name and timestamp while processing (debug).")
+    parser.add_argument("--print_collectives", action="store_true",
+                        help="Print collective events with correlation_id and interpolated offset.")
     
     args = parser.parse_args()
     
@@ -554,11 +620,15 @@ def main():
     misc_plane_counter = 0  # Global counter for unique misc plane IDs
     all_hostnames = []
     
+    event_node_dict = {}
     for i, (trace_f, snap_f) in enumerate(zip(args.traces, snapshot_files)):
+        
         node_xspace = process_trace_file(
             trace_f, snap_f, offset_entries, meta_nodes, i,
             apply_correction=not args.no_correction,
-            print_events=args.print_events)
+            print_events=args.print_events,
+            print_collectives=args.print_collectives, 
+            event_node_dict=event_node_dict)
         if node_xspace:
             # Collect hostnames from each XSpace
             for hostname in node_xspace.hostnames:

@@ -53,7 +53,10 @@ uint64_t ComputeMidpoint(uint64_t start_ns, uint64_t end_ns) {
 
 }  // namespace
 
-GraphCalc::GraphCalc(const Config& config) : config_(config) {}
+GraphCalc::GraphCalc(const Config& config) : config_(config) {
+  smoothed_offsets_.assign(config_.num_nodes,
+                           std::numeric_limits<double>::quiet_NaN());
+}
 
 absl::StatusOr<GraphCalc::RoundResult> GraphCalc::ProcessRound(
     const GlobalWindowData& window) {
@@ -464,8 +467,17 @@ absl::StatusOr<GraphCalc::RoundResult> GraphCalc::ProcessRound(
     if (std::isfinite(midpoint[node])) {
       ++valid_offsets;
       result.node_offsets[node].reachable = true;
-      result.node_offsets[node].offset_ns =
-          midpoint[node] - reference_midpoint_ns;
+      double raw_offset_ns = midpoint[node] - reference_midpoint_ns;
+
+      if (std::isnan(smoothed_offsets_[node])) {
+        smoothed_offsets_[node] = raw_offset_ns;
+      } else {
+        double gamma = config_.smoothing_factor;
+        smoothed_offsets_[node] =
+            (1.0 - gamma) * smoothed_offsets_[node] + gamma * raw_offset_ns;
+      }
+
+      result.node_offsets[node].offset_ns = smoothed_offsets_[node];
       if (node == config_.reference_node_id) {
         result.node_offsets[node].drift_ppm = 0.0;
         result.node_offsets[node].residual = 0.0;

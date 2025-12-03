@@ -19,6 +19,9 @@ ABSL_FLAG(int, min_pairs, 12,
           "Minimum probe pairs per edge required to participate.");
 ABSL_FLAG(double, max_loss_ratio, 0.6,
           "Maximum allowed loss ratio for an edge to be considered.");
+ABSL_FLAG(double, smoothing_factor, 1.0,
+          "EMA smoothing factor for offsets (1.0 = no smoothing, 0.1 = heavy "
+          "smoothing).");
 
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
@@ -29,6 +32,7 @@ int main(int argc, char** argv) {
   options.reference_node = absl::GetFlag(FLAGS_reference_node);
   options.min_pairs = absl::GetFlag(FLAGS_min_pairs);
   options.max_loss_ratio = absl::GetFlag(FLAGS_max_loss_ratio);
+  options.smoothing_factor = absl::GetFlag(FLAGS_smoothing_factor);
 
   absl::Status status = xla::profiler::GraphCalcRunner::Run(options);
   if (!status.ok()) {

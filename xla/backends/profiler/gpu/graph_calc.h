@@ -20,6 +20,7 @@ class GraphCalc {
     double max_loss_ratio = 0.5;
     double alpha_sanity_bound = 1.0;
     double reverse_alpha_epsilon = 1e-6;
+    double smoothing_factor = 1.0;
   };
 
   struct NodeOffset {
@@ -50,6 +51,7 @@ class GraphCalc {
 
  private:
   Config config_;
+  std::vector<double> smoothed_offsets_;
 };
 
 }  // namespace xla::profiler

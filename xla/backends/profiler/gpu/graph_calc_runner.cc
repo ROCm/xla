@@ -369,6 +369,7 @@ absl::Status GraphCalcRunner::Run(const Options& options) {
   calc_config.num_nodes = num_nodes;
   calc_config.min_pairs = options.min_pairs;
   calc_config.max_loss_ratio = options.max_loss_ratio;
+  calc_config.smoothing_factor = options.smoothing_factor;
 
   std::vector<NodeMetadata> metadata(num_nodes);
   for (const auto& [node_id, meta] : metadata_map) {

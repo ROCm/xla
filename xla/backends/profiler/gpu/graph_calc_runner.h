@@ -17,6 +17,7 @@ class GraphCalcRunner {
     int reference_node = 0;
     int min_pairs = 12;
     double max_loss_ratio = 0.6;
+    double smoothing_factor = 1.0;
   };
 
   static absl::Status Run(const Options& options);
