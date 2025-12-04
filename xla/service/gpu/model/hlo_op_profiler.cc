@@ -15,24 +15,28 @@ limitations under the License.
 
 #include "xla/service/gpu/model/hlo_op_profiler.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <random>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
+#include "absl/types/span.h"
 #include "xla/debug_options_flags.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/literal.h"
 #include "xla/primitive_util.h"
-#include "xla/service/executable.h"
 #include "xla/service/gpu/model/hlo_op_profile.pb.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/service/hlo_runner.h"
@@ -42,18 +46,192 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/tests/test_utils.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
 
-#ifdef GOOGLE_CUDA
+#if defined(GOOGLE_CUDA)
+#include "xla/backends/profiler/gpu/cupti_buffer_events.h"
 #include "xla/backends/profiler/gpu/cupti_collector.h"
 #include "xla/backends/profiler/gpu/cupti_tracer.h"
+#elif defined(TENSORFLOW_USE_ROCM)
+#include "xla/backends/profiler/gpu/rocm_collector.h"
+#include "xla/backends/profiler/gpu/rocm_tracer.h"
 #endif
 
 namespace xla {
 namespace gpu {
+
+static constexpr std::array<PrimitiveType, 13> dtypes = {
+    S8, S16, S32, S64, U8, U16, U32, U64, F16, F32, F64, C64, C128,
+};
+
+static constexpr std::array<HloOpcode, 74> ops = {
+    // Unary
+    // go/keep-sorted start
+    HloOpcode::kAbs,
+    HloOpcode::kBitcast,
+    HloOpcode::kBitcastConvert,
+    HloOpcode::kBroadcast,
+    HloOpcode::kCbrt,
+    HloOpcode::kCeil,
+    HloOpcode::kCholesky,
+    HloOpcode::kClz,
+    HloOpcode::kCollectivePermuteDone,
+    HloOpcode::kConvert,
+    HloOpcode::kCopy,
+    HloOpcode::kCos,
+    HloOpcode::kDomain,
+    HloOpcode::kErf,
+    HloOpcode::kExp,
+    HloOpcode::kExpm1,
+    HloOpcode::kFft,
+    HloOpcode::kFloor,
+    HloOpcode::kGetDimensionSize,
+    HloOpcode::kGetTupleElement,
+    HloOpcode::kImag,
+    HloOpcode::kIsFinite,
+    HloOpcode::kLog,
+    HloOpcode::kLog1p,
+    HloOpcode::kLogistic,
+    HloOpcode::kNegate,
+    HloOpcode::kNot,
+    HloOpcode::kPopulationCount,
+    HloOpcode::kReal,
+    HloOpcode::kReducePrecision,
+    HloOpcode::kReshape,
+    HloOpcode::kReverse,
+    HloOpcode::kRngBitGenerator,
+    HloOpcode::kRoundNearestAfz,
+    HloOpcode::kRoundNearestEven,
+    HloOpcode::kRsqrt,
+    HloOpcode::kSign,
+    HloOpcode::kSin,
+    HloOpcode::kSlice,
+    HloOpcode::kSqrt,
+    HloOpcode::kTan,
+    HloOpcode::kTanh,
+    HloOpcode::kTopK,
+    HloOpcode::kTranspose,
+    // go/keep-sorted end
+    // Binary
+    // go/keep-sorted start
+    HloOpcode::kAdd,
+    HloOpcode::kAddDependency,
+    HloOpcode::kAnd,
+    HloOpcode::kAtan2,
+    HloOpcode::kCompare,
+    HloOpcode::kConvolution,
+    HloOpcode::kDivide,
+    HloOpcode::kDot,
+    HloOpcode::kGather,
+    HloOpcode::kMaximum,
+    HloOpcode::kMinimum,
+    HloOpcode::kMultiply,
+    HloOpcode::kOr,
+    HloOpcode::kOutfeed,
+    HloOpcode::kPad,
+    HloOpcode::kPower,
+    HloOpcode::kRemainder,
+    HloOpcode::kSetDimensionSize,
+    HloOpcode::kShiftLeft,
+    HloOpcode::kShiftRightArithmetic,
+    HloOpcode::kShiftRightLogical,
+    HloOpcode::kStochasticConvert,
+    HloOpcode::kSubtract,
+    HloOpcode::kTriangularSolve,
+    HloOpcode::kXor,
+    // go/keep-sorted end
+    // TODO(b/443800190): HloOpcode::kComplex
+};
+
+static const std::unordered_set<HloOpcode> TooFastToMeasureOps = {
+    // go/keep-sorted start
+    HloOpcode::kAbs,
+    HloOpcode::kAnd,
+    HloOpcode::kBitcast,
+    HloOpcode::kBitcastConvert,
+    HloOpcode::kCeil,
+    HloOpcode::kClz,
+    HloOpcode::kCopy,
+    HloOpcode::kFloor,
+    HloOpcode::kImag,
+    HloOpcode::kIsFinite,
+    HloOpcode::kMaximum,
+    HloOpcode::kMinimum,
+    HloOpcode::kNegate,
+    HloOpcode::kNot,
+    HloOpcode::kOr,
+    HloOpcode::kReal,
+    HloOpcode::kSign,
+    HloOpcode::kXor
+    // go/keep-sorted end
+};
+
+static const std::unordered_set<HloOpcode> UnsupportedOps = {
+    // These Opcodes need custom APIs to create instructions that can be
+    // used for profiling. They are not created by HloInstruction::CreateUnary
+    // or HloInstruction::CreateBinary functions.
+
+    // TODO(444503555): Add support for these Opcodes by using custom APIs.
+    // Unary
+    // go/keep-sorted start
+    HloOpcode::kBitcastConvert,
+    HloOpcode::kBroadcast,
+    HloOpcode::kCholesky,
+    HloOpcode::kCollectivePermuteDone,
+    HloOpcode::kConvert,
+    HloOpcode::kDomain,
+    HloOpcode::kFft,
+    HloOpcode::kGetDimensionSize,
+    HloOpcode::kGetTupleElement,
+    HloOpcode::kOutfeed,
+    HloOpcode::kPad,
+    HloOpcode::kPower,
+    HloOpcode::kReducePrecision,
+    HloOpcode::kRemainder,
+    HloOpcode::kReshape,
+    HloOpcode::kReverse,
+    HloOpcode::kRngBitGenerator,
+    HloOpcode::kSetDimensionSize,
+    HloOpcode::kShiftLeft,
+    HloOpcode::kShiftRightArithmetic,
+    HloOpcode::kShiftRightLogical,
+    HloOpcode::kSlice,
+    HloOpcode::kStochasticConvert,
+    HloOpcode::kTopK,
+    HloOpcode::kTranspose,
+    // go/keep-sorted end
+    // Binary
+    // go/keep-sorted start
+    HloOpcode::kAddDependency,
+    HloOpcode::kCompare,
+    HloOpcode::kConvolution,
+    HloOpcode::kDot,
+    HloOpcode::kGather,
+    HloOpcode::kOutfeed,
+    HloOpcode::kPad,
+    HloOpcode::kSetDimensionSize,
+    HloOpcode::kTriangularSolve,
+    // go/keep-sorted end
+};
+
+absl::Span<const PrimitiveType> HloOpProfiler::AllSupportedDtypes() {
+  return absl::MakeConstSpan(dtypes);
+}
+
+absl::Span<const HloOpcode> HloOpProfiler::AllSupportedOps() {
+  return absl::MakeConstSpan(ops);
+}
+
+const std::unordered_set<HloOpcode>& HloOpProfiler::Unsupported() {
+  return UnsupportedOps;
+}
+
+const std::unordered_set<HloOpcode>& HloOpProfiler::TooFastToMeasure() {
+  return TooFastToMeasureOps;
+}
 
 #ifdef GOOGLE_CUDA
 class CuptiKernelTracer : public HloOpProfiler::KernelTracer,
@@ -77,8 +255,8 @@ class CuptiKernelTracer : public HloOpProfiler::KernelTracer,
       LOG(ERROR) << "No kernel events";
       return 0;
     }
-    std::sort(kernel_times_ns_.begin(), kernel_times_ns_.end());
-    size_t i = kernel_times_ns_.size() / 2;
+    absl::c_sort(kernel_times_ns_);
+    auto i = kernel_times_ns_.size() / 2;
     // Return median value if number of values is odd.
     if (kernel_times_ns_.size() % 2 != 0) {
       return kernel_times_ns_[i];
@@ -105,18 +283,97 @@ class CuptiKernelTracer : public HloOpProfiler::KernelTracer,
   profiler::CuptiTracer* cupti_tracer_;
   std::vector<uint64_t> kernel_times_ns_;
 };
-#else
-class CuptiKernelTracer : public HloOpProfiler::KernelTracer {
+#endif  // GOOGLE_CUDA
+
+#ifdef TENSORFLOW_USE_ROCM
+class RocmKernelTracer : public HloOpProfiler::KernelTracer,
+                         public profiler::RocmTraceCollector {
  public:
-  uint64_t getMedianKernelTimeNs() && {
-    LOG(FATAL) << "Not built with --config=cuda";
+  RocmKernelTracer()
+      :  rocm_tracer_(&profiler::RocmTracer::GetRocmTracerSingleton()),
+         profiler::RocmTraceCollector(MakeCollectorOptions()) {
+    CHECK(rocm_tracer_->IsAvailable());
+    profiler::RocmTracerOptions options;
+    // TODO(esjoblom): What's sensible here?
+    options.max_annotation_strings = 1024 * 1024;
+    rocm_tracer_->Enable(options, this);
+  }
+
+  uint64_t getMedianKernelTimeNs() && override {
+    rocm_tracer_->Disable();  // Also flushes buffer.
+    if (kernel_times_ns_.empty()) {
+      LOG(ERROR) << "No kernel events";
+      return 0;
+    }
+    std::sort(kernel_times_ns_.begin(), kernel_times_ns_.end());
+    auto i = kernel_times_ns_.size() / 2;
+    // Return median value if number of values is odd.
+    if (kernel_times_ns_.size() % 2 != 0) {
+      return kernel_times_ns_[i];
+    }
+    // Return average of the two middle values if the number of values is even.
+    return (kernel_times_ns_[i - 1] + kernel_times_ns_[i] + 1) / 2;
+  }
+
+ private:
+  static profiler::RocmTraceCollectorOptions MakeCollectorOptions() {
+    profiler::RocmTraceCollectorOptions options;
+    options.max_callback_api_events = 2 * 1024 * 1024;
+    options.max_activity_api_events = 2 * 1024 * 1024;
+    options.max_annotation_strings = 1024 * 1024;
+    // TODO(esjoblom): Do not hardcode this
+    options.num_gpus = 8;
+    return options;
+  }
+
+  // RocmTraceCollector interface
+  void AddEvent(profiler::RocmTracerEvent&& event, bool is_auxiliary) override {
+    // Only collect actual kernel dispatch events (Activity source), not HIP API
+    // call events (ApiCallback source). The HipApiEvent() in rocm_tracer.cc
+    // marks all HIP API events as Kernel type, so we need to additionally filter 
+    // by source to get actual GPU kernel execution times.
+    //
+    // TODO(esjoblom): Ensure this does not filter out anything we want
+    // Also filter out kernels like __amd_rocclr_copyBuffer.kd which are memory 
+    // copy operations, not compute kernels we want to measure.
+    if (event.type == profiler::RocmTracerEventType::Kernel &&
+        event.source == profiler::RocmTracerEventSource::Activity &&
+        !absl::StartsWith(event.name, "__amd_rocclr_")) {
+      kernel_times_ns_.push_back(event.end_time_ns - event.start_time_ns);
+      VLOG(3) << "Kernel dispatch: " << event.name << ", "
+              << event.end_time_ns - event.start_time_ns << "ns";
+    }
+  }
+  void OnEventsDropped(const std::string& reason,
+                       uint32_t num_events) override {
+    LOG(WARNING) << "Dropped " << num_events << " events: " << reason;
+  }
+  void Flush() override {}
+  void Export(tsl::profiler::XSpace* space) override {}
+
+  profiler::RocmTracer* rocm_tracer_;
+  std::vector<uint64_t> kernel_times_ns_;
+};
+#endif  // TENSORFLOW_USE_ROCM
+
+#if !defined(GOOGLE_CUDA) && !defined(TENSORFLOW_USE_ROCM)
+class StubKernelTracer : public HloOpProfiler::KernelTracer {
+ public:
+  uint64_t getMedianKernelTimeNs() && override {
+    LOG(FATAL) << "Not built with --config=cuda or --config=rocm";
   }
 };
 #endif
 
 /*static*/ std::unique_ptr<HloOpProfiler::KernelTracer>
 HloOpProfiler::GetKernelTracer() {
+#if defined(GOOGLE_CUDA)
   return std::make_unique<CuptiKernelTracer>();
+#elif defined(TENSORFLOW_USE_ROCM)
+  return std::make_unique<RocmKernelTracer>();
+#else
+  return std::make_unique<StubKernelTracer>();
+#endif
 }
 
 /*static*/ std::unique_ptr<HloModule> HloOpProfiler::MakeModuleForMeasurements(
@@ -133,6 +390,8 @@ HloOpProfiler::GetKernelTracer() {
   HloInstruction* pf = fusion_builder.AddInstruction(
       HloInstruction::CreateParameter(0, shape, "pf"));
   HloInstruction* last = pf;
+  // TODO(appujee): This only works when the op takes `Shape` as input; i.e.,
+  // fails for kComplex for example.
   for (int i = 0; i < chain_length; ++i) {
     switch (HloOpcodeArity(op).value_or(0)) {
       case 1:
@@ -160,9 +419,9 @@ HloOpProfiler::GetKernelTracer() {
 
 absl::StatusOr<absl::Duration> HloOpProfiler::MeasureOpChainDuration(
     HloOpcode op, PrimitiveType data_type, int chain_length) {
-#ifndef GOOGLE_CUDA
-  return FailedPrecondition("Not built with --config=cuda");
-#endif
+#if !defined(GOOGLE_CUDA) && !defined(TENSORFLOW_USE_ROCM)
+  return FailedPrecondition("Not built with --config=cuda or --config=rocm");
+#else
 
   std::unique_ptr<HloModule> module =
       MakeModuleForMeasurements(op, data_type, chain_length);
@@ -191,7 +450,11 @@ absl::StatusOr<absl::Duration> HloOpProfiler::MeasureOpChainDuration(
   TF_RETURN_IF_ERROR(
       runner_.ExecuteWithExecutable(ex.get(), args_small).status());
 
-  CuptiKernelTracer cupti_tracer;
+#if defined(GOOGLE_CUDA)
+  CuptiKernelTracer kernel_tracer;
+#elif defined(TENSORFLOW_USE_ROCM)
+  RocmKernelTracer kernel_tracer;
+#endif
   for (int i = 0; i < 10; ++i) {  // Run a few times to reduce noise.
     TF_RETURN_IF_ERROR(
         runner_.ExecuteWithExecutable(ex.get(), args_small).status());
@@ -199,7 +462,8 @@ absl::StatusOr<absl::Duration> HloOpProfiler::MeasureOpChainDuration(
         runner_.ExecuteWithExecutable(ex.get(), args_large).status());
   }
 
-  return absl::Nanoseconds(std::move(cupti_tracer).getMedianKernelTimeNs());
+  return absl::Nanoseconds(std::move(kernel_tracer).getMedianKernelTimeNs());
+#endif  // !defined(GOOGLE_CUDA) && !defined(TENSORFLOW_USE_ROCM)
 }
 
 HloOpProfiler::HloOpProfiler(HloRunner& runner)
@@ -220,7 +484,9 @@ absl::StatusOr<HloInstructionProfile> HloOpProfiler::MeasureClockCyclesPerOp(
 
   // Longer chains are too slow to compile.
   constexpr int kMinOpChainLength = 16;
-  constexpr int kMaxOpChainLength = 8192;
+  // If you get "too fast to measure" errors on faster GPUs, try increasing
+  // kMaxOpChainLength.
+  constexpr int kMaxOpChainLength = 16 * 1024;
 
   absl::Duration duration = absl::ZeroDuration();
   int chain_length = kMinOpChainLength;
