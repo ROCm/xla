@@ -19,7 +19,7 @@ build:rocm_rbe --remote_timeout=3600
 build:rocm_rbe --remote_download_minimal
 build:rocm_rbe --remote_upload_local_results
 
-test:rocm_rbe --strategy=TestRunner=local
+test:rocm_rbe --strategy=TestRunner=remote,local
 
 build:asan --strip=never
 build:asan --copt -fsanitize=address
