@@ -52,6 +52,7 @@ build:ci_multi_gpu --test_sharding_strategy=disabled
 build:ci_multi_gpu --flaky_test_attempts=3
 build:ci_multi_gpu --experimental_guard_against_concurrent_changes
 build:ci_multi_gpu --test_env=HIP_VISIBLE_DEVICES=0,1,2,3
+build:ci_multi_gpu --strategy=TestRunner=local
 
 build:xla_sgpu -- \
 //xla/... \
