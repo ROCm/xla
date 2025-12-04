@@ -223,6 +223,7 @@ cc_library(
         ":amd_comgr",
         ":rocm_config",
         ":rocm_rpath",
+        ":rocm_smi",
         ":rocprofiler_register",
         ":system_libs",
     ],
@@ -246,6 +247,7 @@ cc_library(
         ":hipblaslt",
         ":rocm_config",
         ":rocm_rpath",
+        ":rocm_smi",
         ":roctracer",
     ],
 )
@@ -572,6 +574,12 @@ cc_library(
     includes = [
         "%{rocm_root}/include",
     ],
+    linkopts = select({
+        ":build_hermetic": [
+            "-lrocm_smi64.so",
+        ],
+        "//conditions:default": [],
+    }),
     strip_include_prefix = "%{rocm_root}",
     deps = [
         ":rocm_config",
