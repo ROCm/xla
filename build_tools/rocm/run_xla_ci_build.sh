@@ -40,6 +40,7 @@ set -x
 
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+    --config=rocm_rbe \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
     --test_timeout=920,2400,7200,9600 \
@@ -49,6 +50,8 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
     --test_output=errors \
     --local_test_jobs=4 \
+    --action_env="rebuild $(date)" \
+    --cache_test_results=no \
     "$@" \
     -//xla/tests:collective_pipeline_parallelism_test \
     -//xla/backends/gpu/codegen/emitters/tests:reduce_row/mof_scalar_variadic.hlo.test \
