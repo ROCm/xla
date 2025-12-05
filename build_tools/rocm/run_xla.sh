@@ -114,7 +114,6 @@ EXCLUDED_TESTS=(
   ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseBinaryOpExecutesCorrectly/f16_atan2
   ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseFusionExecutesCorrectly/f16_atan2
 
-  BufferComparatorTest.VeryLargeArray_Device_U8_Aligned
 )
 
 
