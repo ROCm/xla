@@ -20,7 +20,6 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/status/status.h"
-#include "absl/synchronization/mutex.h"
 #include "rocm/rocm_config.h"
 #include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
 #include "xla/tsl/profiler/utils/time_utils.h"
@@ -34,6 +33,7 @@ namespace xla {
 namespace profiler {
 
 namespace se = ::stream_executor;
+using absl::MutexLock;
 using tsl::profiler::AnnotationStack;
 
 constexpr uint32_t RocmTracerEvent::kInvalidDeviceId;
@@ -44,7 +44,7 @@ constexpr uint32_t RocmTracerEvent::kInvalidDeviceId;
     if (status != ROCTRACER_STATUS_SUCCESS) {                               \
       const char* errstr = se::wrap::roctracer_error_string();              \
       LOG(ERROR) << "function " << #expr << "failed with error " << errstr; \
-      return absl::InternalError(                                           \
+      return tsl::errors::Internal(                                         \
           absl::StrCat("roctracer call error", errstr));                    \
     }                                                                       \
   } while (false)
@@ -236,7 +236,7 @@ absl::Status RocmApiCallbackImpl::operator()(uint32_t domain, uint32_t cbid,
   if (data->phase == ACTIVITY_API_PHASE_ENTER) {
     if (options_.api_tracking_set.find(cbid) !=
         options_.api_tracking_set.end()) {
-      absl::MutexLock lock(&api_call_start_mutex_);
+      MutexLock lock(api_call_start_mutex_);
       api_call_start_time_.emplace(data->correlation_id,
                                    RocmTracer::GetTimestamp());
     }
@@ -249,7 +249,7 @@ absl::Status RocmApiCallbackImpl::operator()(uint32_t domain, uint32_t cbid,
 
     if (options_.api_tracking_set.find(cbid) !=
         options_.api_tracking_set.end()) {
-      absl::MutexLock lock(&api_call_start_mutex_);
+      MutexLock lock(api_call_start_mutex_);
       if (api_call_start_time_.find(data->correlation_id) !=
           api_call_start_time_.end()) {
         enter_time = api_call_start_time_.at(data->correlation_id);
@@ -331,11 +331,11 @@ absl::Status RocmApiCallbackImpl::operator()(uint32_t domain, uint32_t cbid,
         break;
       default:
         //
-        VLOG(1) << "API call "
-                << se::wrap::roctracer_op_string(ACTIVITY_DOMAIN_HIP_API, cbid,
-                                                 0)
-                << ", corr. id=" << data->correlation_id
-                << " dropped. No capturing function was found!";
+        LOG(WARNING) << "API call "
+                     << se::wrap::roctracer_op_string(ACTIVITY_DOMAIN_HIP_API,
+                                                      cbid, 0)
+                     << ", corr. id=" << data->correlation_id
+                     << " dropped. No capturing function was found!";
         // AddGenericEventUponApiExit(cbid, data);
         break;
     }
@@ -369,11 +369,11 @@ void RocmApiCallbackImpl::AddKernelEventUponApiExit(uint32_t cbid,
       const hipFunction_t kernelFunc = data->args.hipModuleLaunchKernel.f;
       if (kernelFunc != nullptr) event.name = hipKernelNameRef(kernelFunc);
 
-      event.kernel_info.dynamic_shared_memory_usage =
+      event.kernel_info.group_segment_size =
           data->args.hipModuleLaunchKernel.sharedMemBytes;
-      event.kernel_info.block_x = data->args.hipModuleLaunchKernel.blockDimX;
-      event.kernel_info.block_y = data->args.hipModuleLaunchKernel.blockDimY;
-      event.kernel_info.block_z = data->args.hipModuleLaunchKernel.blockDimZ;
+      event.kernel_info.workgroup_x = data->args.hipModuleLaunchKernel.blockDimX;
+      event.kernel_info.workgroup_y = data->args.hipModuleLaunchKernel.blockDimY;
+      event.kernel_info.workgroup_z = data->args.hipModuleLaunchKernel.blockDimZ;
       event.kernel_info.grid_x = data->args.hipModuleLaunchKernel.gridDimX;
       event.kernel_info.grid_y = data->args.hipModuleLaunchKernel.gridDimY;
       event.kernel_info.grid_z = data->args.hipModuleLaunchKernel.gridDimZ;
@@ -386,7 +386,7 @@ void RocmApiCallbackImpl::AddKernelEventUponApiExit(uint32_t cbid,
       const hipFunction_t kernelFunc = data->args.hipExtModuleLaunchKernel.f;
       if (kernelFunc != nullptr) event.name = hipKernelNameRef(kernelFunc);
 
-      event.kernel_info.dynamic_shared_memory_usage =
+      event.kernel_info.group_segment_size =
           data->args.hipExtModuleLaunchKernel.sharedMemBytes;
       unsigned int blockDimX =
           data->args.hipExtModuleLaunchKernel.localWorkSizeX;
@@ -395,9 +395,9 @@ void RocmApiCallbackImpl::AddKernelEventUponApiExit(uint32_t cbid,
       unsigned int blockDimZ =
           data->args.hipExtModuleLaunchKernel.localWorkSizeZ;
 
-      event.kernel_info.block_x = blockDimX;
-      event.kernel_info.block_y = blockDimY;
-      event.kernel_info.block_z = blockDimZ;
+      event.kernel_info.workgroup_x = blockDimX;
+      event.kernel_info.workgroup_y = blockDimY;
+      event.kernel_info.workgroup_z = blockDimZ;
       event.kernel_info.grid_x =
           data->args.hipExtModuleLaunchKernel.globalWorkSizeX / blockDimX;
       event.kernel_info.grid_y =
@@ -412,24 +412,24 @@ void RocmApiCallbackImpl::AddKernelEventUponApiExit(uint32_t cbid,
       const hipFunction_t kernelFunc = data->args.hipHccModuleLaunchKernel.f;
       if (kernelFunc != nullptr) event.name = hipKernelNameRef(kernelFunc);
 
-      event.kernel_info.dynamic_shared_memory_usage =
+      event.kernel_info.group_segment_size =
           data->args.hipHccModuleLaunchKernel.sharedMemBytes;
-      event.kernel_info.block_x = data->args.hipHccModuleLaunchKernel.blockDimX;
-      event.kernel_info.block_y = data->args.hipHccModuleLaunchKernel.blockDimY;
-      event.kernel_info.block_z = data->args.hipHccModuleLaunchKernel.blockDimZ;
+      event.kernel_info.workgroup_x = data->args.hipHccModuleLaunchKernel.blockDimX;
+      event.kernel_info.workgroup_y = data->args.hipHccModuleLaunchKernel.blockDimY;
+      event.kernel_info.workgroup_z = data->args.hipHccModuleLaunchKernel.blockDimZ;
       event.kernel_info.grid_x =
           data->args.hipHccModuleLaunchKernel.globalWorkSizeX /
-          event.kernel_info.block_x;
+          event.kernel_info.workgroup_x;
       event.kernel_info.grid_y =
           data->args.hipHccModuleLaunchKernel.globalWorkSizeY /
-          event.kernel_info.block_y;
+          event.kernel_info.workgroup_y;
       event.kernel_info.grid_z =
           data->args.hipHccModuleLaunchKernel.globalWorkSizeZ /
-          event.kernel_info.block_z;
+          event.kernel_info.workgroup_z;
       event.kernel_info.func_ptr = kernelFunc;
       const hipStream_t& stream = data->args.hipHccModuleLaunchKernel.hStream;
       event.device_id = hipGetStreamDeviceId(stream);
-      event.kernel_info.dynamic_shared_memory_usage =
+      event.kernel_info.group_segment_size =
           data->args.hipHccModuleLaunchKernel.sharedMemBytes;
     } break;
     case HIP_API_ID_hipLaunchKernel: {
@@ -438,11 +438,11 @@ void RocmApiCallbackImpl::AddKernelEventUponApiExit(uint32_t cbid,
       if (func_addr != nullptr)
         event.name = hipKernelNameRefByPtr(func_addr, stream);
 
-      event.kernel_info.dynamic_shared_memory_usage =
+      event.kernel_info.group_segment_size =
           data->args.hipLaunchKernel.sharedMemBytes;
-      event.kernel_info.block_x = data->args.hipLaunchKernel.dimBlocks.x;
-      event.kernel_info.block_y = data->args.hipLaunchKernel.dimBlocks.y;
-      event.kernel_info.block_z = data->args.hipLaunchKernel.dimBlocks.z;
+      event.kernel_info.workgroup_x = data->args.hipLaunchKernel.dimBlocks.x;
+      event.kernel_info.workgroup_y = data->args.hipLaunchKernel.dimBlocks.y;
+      event.kernel_info.workgroup_z = data->args.hipLaunchKernel.dimBlocks.z;
       event.kernel_info.grid_x = data->args.hipLaunchKernel.numBlocks.x;
       event.kernel_info.grid_y = data->args.hipLaunchKernel.numBlocks.y;
       event.kernel_info.grid_z = data->args.hipLaunchKernel.numBlocks.z;
@@ -455,11 +455,11 @@ void RocmApiCallbackImpl::AddKernelEventUponApiExit(uint32_t cbid,
       if (func_addr != nullptr)
         event.name = hipKernelNameRefByPtr(func_addr, stream);
 
-      event.kernel_info.dynamic_shared_memory_usage =
+      event.kernel_info.group_segment_size =
           data->args.hipExtLaunchKernel.sharedMemBytes;
-      event.kernel_info.block_x = data->args.hipExtLaunchKernel.dimBlocks.x;
-      event.kernel_info.block_y = data->args.hipExtLaunchKernel.dimBlocks.y;
-      event.kernel_info.block_z = data->args.hipExtLaunchKernel.dimBlocks.z;
+      event.kernel_info.workgroup_x = data->args.hipExtLaunchKernel.dimBlocks.x;
+      event.kernel_info.workgroup_y = data->args.hipExtLaunchKernel.dimBlocks.y;
+      event.kernel_info.workgroup_z = data->args.hipExtLaunchKernel.dimBlocks.z;
       event.kernel_info.grid_x = data->args.hipExtLaunchKernel.numBlocks.x;
       event.kernel_info.grid_y = data->args.hipExtLaunchKernel.numBlocks.y;
       event.kernel_info.grid_z = data->args.hipExtLaunchKernel.numBlocks.z;
@@ -1526,8 +1526,8 @@ absl::Status RocmTracer::DisableActivityTracing() {
   size_t threshold = 1;
   for (int i = 0; i < 6; i++, duration_ms *= 2, threshold *= 2) {
     if (GetPendingActivityRecordsCount() < threshold) break;
-    VLOG(3) << "Wait for pending activity records :"
-            << " Pending count = " << GetPendingActivityRecordsCount()
+    VLOG(3) << "Wait for pending activity records :" << " Pending count = "
+            << GetPendingActivityRecordsCount()
             << ", Threshold = " << threshold;
     VLOG(3) << "Wait for pending activity records : sleep for " << duration_ms
             << " ms";

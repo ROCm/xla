@@ -470,14 +470,18 @@ void PerDeviceCollector::GetDeviceCapabilities(int32_t device_ordinal,
 
 void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
                                       bool is_auxiliary) {
-  absl::MutexLock lock(&event_maps_mutex_);
+  absl::MutexLock lock(event_maps_mutex_);
 
   if (event.source == RocmTracerEventSource::ApiCallback) {
     if (!is_auxiliary) {
       if (num_callback_events_ >= options_.max_callback_api_events) {
-        OnEventsDropped("max callback event capacity reached",
-                        event.correlation_id);
-        PrintRocmTracerEvent(event, ". Dropped!");
+        LOG_FIRST_N(WARNING, 1)
+            << "Number of activity events (" << num_activity_events_
+            << ") has reached the configured limit "
+               "(xla_gpu_rocm_max_trace_events="
+            << options_.max_activity_api_events
+            << "). To collect more GPU events, increase "
+               "XLA_FLAGS=--xla_gpu_rocm_max_trace_events=<value>.";
         return;
       }
       num_callback_events_++;
@@ -494,11 +498,16 @@ void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
     if (event.domain == RocmTracerEventDomain::HIP_API) {
       // we do not count HIP_OPS activities.
       if (num_activity_events_ >= options_.max_activity_api_events) {
-        OnEventsDropped("max activity event capacity reached",
-                        event.correlation_id);
-        PrintRocmTracerEvent(event, ". Dropped!");
+        LOG_FIRST_N(WARNING, 1)
+            << "Number of activity events (" << num_activity_events_
+            << ") has reached the configured limit "
+               "(xla_gpu_rocm_max_trace_events="
+            << options_.max_activity_api_events
+            << "). To collect more GPU events, increase "
+               "XLA_FLAGS=--xla_gpu_rocm_max_trace_events=<value>.";
         return;
       }
+
       num_activity_events_++;
     }
 
