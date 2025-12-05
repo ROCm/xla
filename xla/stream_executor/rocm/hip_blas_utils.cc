@@ -65,7 +65,7 @@ hipDataType AsHipblasDataType(blas::DataType type) {
 #else
     case blas::DataType::kF4E2M1FN:
       LOG(FATAL) << "hipblaslt only supports FP4 in ROCm 7.0 and above";
-#endif
+#endif  // TF_ROCM_VERSION >= 70000
     case blas::DataType::kHalf:
       return HIP_R_16F;
     case blas::DataType::kBF16:

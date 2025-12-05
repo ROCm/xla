@@ -276,7 +276,7 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
       TF_RETURN_IF_ERROR(SetAttr(
           op_desc_.get(), HIPBLASLT_MATMUL_DESC_B_SCALE_MODE, MXScaleType));
     }
-#endif
+#endif // TF_ROCM_VERSION >= 70000
 
     int found_algorithm_count = 0;
     auto error = wrap::hipblasLtMatmulAlgoGetHeuristic(
@@ -367,7 +367,7 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
     TF_RETURN_IF_ERROR(SetAttr(
         op_desc.get(), HIPBLASLT_MATMUL_DESC_B_SCALE_MODE, MXScaleType));
   }
-#endif
+#endif  // TF_ROCM_VERSION >= 70000
 
   TF_ASSIGN_OR_RETURN(auto a_desc, MatrixLayout::Create(lhs_layout));
   TF_ASSIGN_OR_RETURN(auto b_desc, MatrixLayout::Create(rhs_layout));
@@ -668,7 +668,7 @@ absl::Status BlasLt::MatmulPlan::ExecuteOnStream(
   TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_4F_E2M1_EXT, HIP_R_16BF, HIP_R_16BF)
   TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_4F_E2M1_EXT, HIP_R_16BF, HIP_R_32F)
   TYPED_MATMUL(float, HIP_R_8F_E5M2, HIP_R_4F_E2M1_EXT, HIP_R_16BF, HIP_R_16F)
-#endif
+#endif  // TF_ROCM_VERSION >= 70000
 
   // Other data types:
   TYPED_MATMUL(float, HIP_R_16BF, HIP_R_16BF, HIP_R_16BF, HIP_R_16BF)
