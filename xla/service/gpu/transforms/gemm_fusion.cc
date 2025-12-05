@@ -75,6 +75,47 @@ using triton_fusion::FusionContext;
 using triton_fusion::GetPropagatedDimOrdersAndRequirementsIfProfitablyFusible;
 using triton_fusion::TransformDirection;
 
+// Checks if an FP8 dot operation can be handled by Triton.
+// This is used to decide whether to attempt Triton fusion for FP8 GEMMs
+// as an alternative to the cuBLAS path.
+bool CanUseTritonForFP8Dot(const HloDotInstruction& dot,
+                            const se::GpuComputeCapability& gpu_version) {
+  PrimitiveType lhs_type = dot.operand(0)->shape().element_type();
+  PrimitiveType rhs_type = dot.operand(1)->shape().element_type();
+
+  // Only handle if at least one operand is FP8
+  if (!primitive_util::IsF8Type(lhs_type) &&
+      !primitive_util::IsF8Type(rhs_type)) {
+    return false;
+  }
+
+  // Check hardware support
+  if (auto* cuda_cc = std::get_if<se::CudaComputeCapability>(&gpu_version)) {
+    if (!cuda_cc->IsAtLeastHopper()) {
+      VLOG(2) << "FP8 Triton fusion requires Hopper or newer, skipping";
+      return false;  // Need SM90+ for FP8
+    }
+  } else if (auto* rocm_cc = std::get_if<se::RocmComputeCapability>(&gpu_version)) {
+    if (!rocm_cc->has_fp8_support()) {
+      VLOG(2) << "FP8 Triton fusion requires MI300 or newer, skipping";
+      return false;  // Need MI300+ for FP8
+    }
+  } else {
+    return false;  // Unknown platform
+  }
+
+  // Check that output type is supported (F32, F16, BF16)
+  PrimitiveType output_type = dot.shape().element_type();
+  if (output_type != F32 && output_type != F16 && output_type != BF16) {
+    VLOG(2) << "FP8 dot output type not supported for Triton fusion: "
+            << primitive_util::LowercasePrimitiveTypeName(output_type);
+    return false;
+  }
+
+  VLOG(2) << "FP8 dot can use Triton fusion";
+  return true;
+}
+
 // This represents a directed graph.
 class AdjacencyList {
  public:
@@ -665,11 +706,43 @@ absl::StatusOr<Decision> CreateDotFusion(
     std::vector<HloInstruction*>& fusion_inputs,
     HloInstruction** fusion_output_ptr) {
   VLOG(5) << dot.ToString();
-  if (CodegenDecision is_supported =
-          legacy_triton::IsTritonSupportedInstruction(dot, gpu_version);
-      !is_supported) {
-    VLOG(3) << is_supported.Explain();
-    return Decision::Deny(is_supported.Explain());
+
+  // Check if this is an FP8 dot operation and whether it can use Triton
+  PrimitiveType lhs_type = dot.operand(0)->shape().element_type();
+  PrimitiveType rhs_type = dot.operand(1)->shape().element_type();
+  bool is_fp8_dot = primitive_util::IsF8Type(lhs_type) ||
+                    primitive_util::IsF8Type(rhs_type);
+
+  if (is_fp8_dot) {
+    LOG(INFO) << "=== FP8 DOT DETECTED === " << dot.name()
+              << " (LHS: " << primitive_util::LowercasePrimitiveTypeName(lhs_type)
+              << ", RHS: " << primitive_util::LowercasePrimitiveTypeName(rhs_type)
+              << ", Output: " << primitive_util::LowercasePrimitiveTypeName(
+                     dot.shape().element_type()) << ")";
+
+    if (!CanUseTritonForFP8Dot(dot, gpu_version)) {
+      LOG(INFO) << "=== FP8 TRITON FUSION REJECTED === " << dot.name()
+                << " - Falling back to cuBLAS path";
+      return Decision::Deny(
+          "FP8 dot operation cannot use Triton fusion "
+          "(hardware or type constraints not met)");
+    }
+
+    LOG(INFO) << "=== FP8 TRITON FUSION ENABLED === " << dot.name()
+              << " - Proceeding with Triton-based fusion";
+    VLOG(2) << "FP8 dot " << dot.name() << " will use Triton fusion path";
+    
+    // Skip legacy Triton support check for FP8 - we've already validated it
+    // with our FP8-specific checks. The legacy checker doesn't support F8 input types.
+    VLOG(2) << "Skipping legacy Triton support check for FP8 dot";
+  } else {
+    // For non-FP8 dots, use the standard legacy support check
+    if (CodegenDecision is_supported =
+            legacy_triton::IsTritonSupportedInstruction(dot, gpu_version);
+        !is_supported) {
+      VLOG(3) << is_supported.Explain();
+      return Decision::Deny(is_supported.Explain());
+    }
   }
 
   TF_ASSIGN_OR_RETURN(HlosAndRequirements lhs_hlos_and_reqs,
@@ -756,6 +829,14 @@ class GemmFusionVisitor : public DfsHloRewriteVisitor {
   absl::Status HandleDot(HloInstruction* dot) override {
     CHECK_EQ(dot->opcode(), HloOpcode::kDot);
 
+    // Log if we're processing an FP8 dot at the visitor level
+    PrimitiveType lhs_type = dot->operand(0)->shape().element_type();
+    PrimitiveType rhs_type = dot->operand(1)->shape().element_type();
+    if (primitive_util::IsF8Type(lhs_type) ||
+        primitive_util::IsF8Type(rhs_type)) {
+      VLOG(1) << "GemmFusionVisitor processing FP8 dot: " << dot->name();
+    }
+
     int64_t gemm_rewrite_size_threshold =
         dot->GetModule()
             ->config()
@@ -778,6 +859,11 @@ class GemmFusionVisitor : public DfsHloRewriteVisitor {
                         fusion_inputs, &fusion_output));
     if (!decision.CanFuse()) {
       VLOG(3) << "Not fusing: " << decision.Explain();
+      if (primitive_util::IsF8Type(lhs_type) ||
+          primitive_util::IsF8Type(rhs_type)) {
+        LOG(INFO) << "FP8 dot " << dot->name() << " rejected from fusion: "
+                  << decision.Explain();
+      }
       return absl::OkStatus();
     }
     // If a GEMM requiring padding for cuBLAS is encountered here this
@@ -806,6 +892,14 @@ class GemmFusionVisitor : public DfsHloRewriteVisitor {
         *gpu_config.mutable_fusion_backend_config();
     backend_config.set_kind(std::string(kTritonGemmFusionKind));
     TF_RETURN_IF_ERROR(dot_fusion->set_backend_config(gpu_config));
+
+    // Log successful FP8 fusion
+    if (primitive_util::IsF8Type(lhs_type) ||
+        primitive_util::IsF8Type(rhs_type)) {
+      LOG(INFO) << "*** FP8 TRITON FUSION SUCCESSFUL *** " << dot->name()
+                << " -> " << dot_fusion->name()
+                << " (Triton GEMM fusion created)";
+    }
 
     if (fusion_output->IsRoot()) {
       fusion_output->parent()->set_root_instruction(dot_fusion);

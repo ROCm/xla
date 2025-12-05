@@ -376,6 +376,38 @@ absl::StatusOr<Value> EmitRegularDot(EmitterLocOpBuilder b,
       /*maxNumImpreciseAcc=*/max_num_imprecise_acc);
 }
 
+// Emit FP8 dot operation using Triton's native FP8 support.
+// This provides an alternative to the cuBLAS path for FP8 GEMMs.
+absl::StatusOr<Value> EmitFP8Dot(EmitterLocOpBuilder b,
+                                  const DotOperands& dot_operands,
+                                  const PrecisionSpec& precision_spec) {
+  Value lhs = dot_operands.lhs;
+  Value rhs = dot_operands.rhs;
+  Value acc = dot_operands.accumulator;
+
+  VLOG(3) << "Emitting FP8 dot with Triton";
+
+  // Validate that we have FP8 inputs
+  if (!ElementType(lhs).isFloat(8) && !ElementType(rhs).isFloat(8)) {
+    return absl::InvalidArgumentError(
+        "EmitFP8Dot requires at least one FP8 operand");
+  }
+
+  // FP8 dots always use F32 accumulator to match cuBLAS behavior
+  Type target_acc_type = b.getF32Type();
+  if (ElementType(acc) != target_acc_type) {
+    acc = Cast(b, acc, target_acc_type);
+  }
+
+  // For FP8 dots, disable accumulator promotion to mimic cuBLAS
+  int max_num_imprecise_acc = std::numeric_limits<int>::max();
+
+  return b.create<ttir::DotOp>(
+      lhs, rhs, acc,
+      /*inputPrecision=*/ttir::InputPrecision::IEEE,
+      /*maxNumImpreciseAcc=*/max_num_imprecise_acc);
+}
+
 // Returns an emitter for the given dot algorithm. Raises an
 // `UnimplementedError` if the algorithm is not supported.
 absl::StatusOr<AlgorithmEmitter> GetAlgorithmEmitter(
@@ -403,7 +435,9 @@ absl::StatusOr<AlgorithmEmitter> GetAlgorithmEmitter(
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X9:
       return EmitBF16x9Matmul;
     case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32:
+      return EmitFP8Dot;
     case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32_FAST_ACCUM:
+      return EmitFP8Dot;
     default:
       break;
   }

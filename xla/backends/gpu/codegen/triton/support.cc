@@ -261,6 +261,41 @@ absl::flat_hash_set<HloOpcode> TritonSupportedTernaryElementwiseOps(
   return {HloOpcode::kSelect, HloOpcode::kClamp};
 }
 
+// Check if an FP8 dot instruction is supported by Triton for standalone fusion.
+// This is separate from nested GEMM fusion support.
+CodegenDecision IsTritonSupportedFP8DotForFusion(
+    const HloDotInstruction& dot,
+    const se::GpuComputeCapability& gpu_version) {
+  PrimitiveType lhs_type = dot.operand(0)->shape().element_type();
+  PrimitiveType rhs_type = dot.operand(1)->shape().element_type();
+  PrimitiveType output_type = dot.shape().element_type();
+
+  // Check hardware support for FP8
+  if (auto* cuda_cc = std::get_if<se::CudaComputeCapability>(&gpu_version)) {
+    if (!cuda_cc->IsAtLeastHopper()) {
+      return CodegenDecision::Forbid(
+          "FP8 dots require Hopper (SM90) or newer for Triton fusion");
+    }
+  } else if (auto* rocm_cc = std::get_if<se::RocmComputeCapability>(&gpu_version)) {
+    if (!rocm_cc->has_fp8_support()) {
+      return CodegenDecision::Forbid(
+          "FP8 dots require MI300 or newer for Triton fusion");
+    }
+  } else {
+    return CodegenDecision::Forbid(
+        "FP8 dots not supported on this platform for Triton fusion");
+  }
+
+  // Ensure output type is supported (F32, F16, BF16)
+  if (output_type != F32 && output_type != F16 && output_type != BF16) {
+    return CodegenDecision::Forbid(absl::StrCat(
+        "FP8 dot output type must be F32, F16, or BF16 for Triton fusion, got ",
+        primitive_util::LowercasePrimitiveTypeName(output_type)));
+  }
+
+  return CodegenDecision::Allow();
+}
+
 // Returns `true` if the given opcode and element type correspond to a n-ary
 // elementwise op that is genuinely supported by Triton. The caller is
 // responsible for ensuring that the relevant data type is supported on the
@@ -349,6 +384,7 @@ bool IsSupportedDotAlgorithm(PrecisionConfig::Algorithm algorithm,
       }
     case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32:
     case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32_FAST_ACCUM:
+      return true;
     default:
       break;
   }
