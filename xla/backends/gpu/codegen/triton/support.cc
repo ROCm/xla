@@ -349,6 +349,7 @@ bool IsSupportedDotAlgorithm(PrecisionConfig::Algorithm algorithm,
       }
     case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32:
     case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32_FAST_ACCUM:
+      return true;
     default:
       break;
   }

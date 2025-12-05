@@ -73,18 +73,24 @@ bool GpuFloatSupport::IsSupported(const HloInstruction& hlo) const {
       // lower it to a dot + multiply for unsupported types.
       return true;
     case HloOpcode::kDot:  // Handled by Triton GEMM.
-      using TypeAndCC =
-          std::pair<PrimitiveType, stream_executor::CudaComputeCapability>;
-      for (auto [type, cc] :
-           {TypeAndCC(F8E4M3FN, se::CudaComputeCapability::Ampere()),
-            TypeAndCC(F8E5M2, se::CudaComputeCapability::Hopper())}) {
-        if (LowPrecisionType() == type) {
-          auto* cuda_compute_capability =
-              std::get_if<se::CudaComputeCapability>(&compute_capability_);
-          // Do not normalize supported types inside Triton fused computations.
-          return cuda_compute_capability &&
-                 cuda_compute_capability->SupportsAllFeaturesOf(cc) &&
-                 IsTritonFusedComputation(*hlo.parent());
+      // Do not normalize supported types inside Triton fused computations.
+      if (auto* cuda_cc =
+              std::get_if<se::CudaComputeCapability>(&compute_capability_)) {
+        using TypeAndCC =
+            std::pair<PrimitiveType, stream_executor::CudaComputeCapability>;
+        for (auto [type, cc] :
+             {TypeAndCC(F8E4M3FN, se::CudaComputeCapability::Ampere()),
+              TypeAndCC(F8E5M2, se::CudaComputeCapability::Hopper())}) {
+          if (LowPrecisionType() == type) {
+            return cuda_cc->SupportsAllFeaturesOf(cc) &&
+                   IsTritonFusedComputation(*hlo.parent());
+          }
+        }
+      } else if (auto* rocm_cc = std::get_if<se::RocmComputeCapability>(
+                     &compute_capability_)) {
+        if (primitive_util::IsF8Type(LowPrecisionType()) &&
+            IsTritonFusedComputation(*hlo.parent())) {
+          return rocm_cc->has_fp8_support();
         }
       }
       return LowPrecisionType() == BF16;

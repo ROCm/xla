@@ -73,7 +73,9 @@ bool IsTritonSupportedDotOutputType(
               [](const se::CudaComputeCapability& cc) {
                 return cc.IsAtLeastAmpere();
               },
-              [](const se::RocmComputeCapability& cc) { return false; }),
+              [](const se::RocmComputeCapability& cc) {
+                return cc.has_fp8_support();
+              }),
           gpu_version);
 
     case F8E4M3FN:
@@ -82,7 +84,9 @@ bool IsTritonSupportedDotOutputType(
               [](const se::CudaComputeCapability& cc) {
                 return cc.IsAtLeastHopper();
               },
-              [](const se::RocmComputeCapability& cc) { return false; }),
+              [](const se::RocmComputeCapability& cc) {
+                return cc.has_fp8_support();
+              }),
           gpu_version);
     case BF16:
       return std::visit(
@@ -250,6 +254,12 @@ bool IsDotAlgorithmSupportedByTriton(
       }
       if (rocm_compute_capability) {
         return rocm_compute_capability->has_bf16_dtype_support();
+      }
+      return false;
+    case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32:
+    case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32_FAST_ACCUM:
+      if (rocm_compute_capability) {
+        return rocm_compute_capability->has_fp8_support();
       }
       return false;
 
