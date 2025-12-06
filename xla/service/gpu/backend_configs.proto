@@ -112,6 +112,8 @@ message GemmBackendConfig {
 
   // The workspace size used during autotuning when the algorithm was selected.
   int64 autotune_workspace_size = 20;
+
+  bool mx_mode = 21;
 }
 
 // Backend config for bitcast operation generated from MLIR MHLO dialect.

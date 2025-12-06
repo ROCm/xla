@@ -314,6 +314,7 @@ cc_library(
         "//xla/service:shape_inference",
         "//xla/service/gpu:backend_configs_cc",
         "//xla/service/gpu:cublas_cudnn",
+        "//xla/service/gpu:matmul_utils",
         "//xla/stream_executor:dnn",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:statusor",
@@ -326,39 +327,39 @@ cc_library(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "block_scaling_rewriter_test",
     srcs = ["block_scaling_rewriter_test.cc"],
+    backends = ["gpu"],
     tags = ["pjrt_migration_candidate"],
     deps = [
         ":block_scaling_rewriter",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/parser:hlo_parser",
         "//xla/hlo/testlib:filecheck",
-        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
-        "//xla/hlo/testlib:test_helpers",
-        "//xla/stream_executor:dnn",
+        "//xla/service/gpu/tests:gpu_codegen_test",
+        "//xla/tests:xla_internal_test_main",
         "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/strings:string_view",
-        "@com_google_googletest//:gtest_main",
+        "@com_google_googletest//:gtest",
     ],
 )
 
 xla_test(
     name = "block_scaling_rewriter_execution_test",
     srcs = ["block_scaling_rewriter_execution_test.cc"],
-    backends = ["b200"],
-    tags = ["test_migrated_to_hlo_runner_pjrt"],
+    backends = ["gpu"],
+    tags = ["pjrt_migration_candidate"],
     deps = [
         ":block_scaling_rewriter",
         "//xla:error_spec",
         "//xla/hlo/parser:hlo_parser",
-        "//xla/stream_executor:dnn",
-        "//xla/tests:hlo_pjrt_test_base",
+        "//xla/service/gpu/tests:gpu_codegen_test",
+        "//xla/tests:xla_internal_test_main",
         "//xla/tsl/platform:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest",
     ],
 )
 
@@ -377,6 +378,22 @@ xla_test(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest_main",
         "@local_config_cuda//cuda:cudnn_header",
+    ],
+)
+
+xla_test(
+    name = "block_scaling_rewriter_hipblaslt_test",
+    srcs = ["block_scaling_rewriter_hipblaslt_test.cc"],
+    backends = ["gpu"],
+    deps = [
+        ":block_scaling_rewriter",
+        "//xla:error_spec",
+        "//xla/hlo/ir:hlo",
+        "//xla/service/gpu/tests:gpu_codegen_test",
+        "//xla/tests:xla_internal_test_main",
+        "//xla/tsl/platform:status_matchers",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest",
     ],
 )
 

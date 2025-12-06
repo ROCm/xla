@@ -20,14 +20,18 @@ limitations under the License.
 #include "xla/error_spec.h"
 #include "xla/hlo/parser/hlo_parser.h"
 #include "xla/service/gpu/transforms/block_scaling_rewriter.h"
-#include "xla/stream_executor/dnn.h"
-#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/service/gpu/tests/gpu_codegen_test.h"
 #include "xla/tsl/platform/statusor.h"
 
 namespace xla::gpu {
 namespace {
 
-using BlockScalingRewriterExecutionTest = HloPjRtTestBase;
+class BlockScalingRewriterExecutionTest : public GpuCodegenTest {
+ protected:
+  const auto& device_desc() const {
+    return backend().default_stream_executor()->GetDeviceDescription();
+  }
+};
 
 TEST_F(BlockScalingRewriterExecutionTest, QuantizeDequantizeCompare) {
   constexpr absl::string_view hlo_test = R"(
@@ -44,7 +48,8 @@ ENTRY main {
   TF_ASSERT_OK_AND_ASSIGN(auto test_module,
                           ParseAndReturnUnverifiedModule(hlo_test));
 
-  BlockScalingRewriter pass(se::dnn::VersionInfo{});
+  BlockScalingRewriter pass(device_desc(), se::dnn::VersionInfo{},
+                            /*allow_hipblaslt*/ false);
   TF_ASSERT_OK_AND_ASSIGN(
       auto changed, pass.Run(test_module.get(), /*execution_threads=*/{}));
   EXPECT_TRUE(changed);
