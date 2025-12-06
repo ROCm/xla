@@ -214,7 +214,7 @@ absl::StatusOr<std::unique_ptr<DynamicSliceThunk>> CreateSlicedGemmThunk(
           ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
           ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0, 0.0, 0.0,
           PrecisionConfig::ALG_UNSET, std::nullopt,
-          se::blas::kDefaultComputePrecision, false, false,
+          se::blas::kDefaultComputePrecision, false, false, false,
           executor->GetDeviceDescription().gpu_compute_capability()));
   // Creating embedded GEMM thunk.
   ThunkSequence seq;
@@ -382,7 +382,7 @@ CreateMultipleSlicedOperandsGemmThunk(
           ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
           ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0, 0.0, 0.0,
           PrecisionConfig::ALG_UNSET, std::nullopt,
-          se::blas::kDefaultComputePrecision, false, false,
+          se::blas::kDefaultComputePrecision, false, false, false,
           executor->GetDeviceDescription().gpu_compute_capability()));
 
   // Creating embedded GEMM thunk.
@@ -920,7 +920,7 @@ CreateSlicedGemmArbitraryArgumentOrderThunk(
           ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
           ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0, 0.0, 0.0,
           PrecisionConfig::ALG_UNSET, std::nullopt,
-          se::blas::kDefaultComputePrecision, false, false,
+          se::blas::kDefaultComputePrecision, false, false, false,
           executor->GetDeviceDescription().gpu_compute_capability()));
 
   // Creating embedded GEMM thunk.
@@ -1093,7 +1093,7 @@ CreateSlicedGemmArbitraryNumberOfArgumentsThunk(
           ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
           ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0, 0.0, 0.0,
           PrecisionConfig::ALG_UNSET, std::nullopt,
-          se::blas::kDefaultComputePrecision, false, false,
+          se::blas::kDefaultComputePrecision, false, false, false,
           executor->GetDeviceDescription().gpu_compute_capability()));
 
   // Creating embedded GEMM thunk.
@@ -1257,7 +1257,7 @@ CreateSlicedTupledOperandGemmThunk(
           ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
           ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0, 0.0, 0.0,
           PrecisionConfig::ALG_UNSET, std::nullopt,
-          se::blas::kDefaultComputePrecision, false, false,
+          se::blas::kDefaultComputePrecision, false, false, false,
           executor->GetDeviceDescription().gpu_compute_capability()));
 
   // Creating embedded GEMM thunk.
@@ -1633,7 +1633,7 @@ CreateSlicedOperandsSameBufferGemmThunk(
           ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
           ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0, 0.0, 0.0,
           PrecisionConfig::ALG_UNSET, std::nullopt,
-          se::blas::kDefaultComputePrecision, false, false,
+          se::blas::kDefaultComputePrecision, false, false, false,
           executor->GetDeviceDescription().gpu_compute_capability()));
 
   // Creating embedded GEMM thunk.
@@ -1839,7 +1839,7 @@ CreateHostInductionVariableAndOffsetEvaluationThunk(
           /*precision_algorithm=*/PrecisionConfig::ALG_UNSET,
           /*algorithm=*/std::nullopt,
           /*compute_precision=*/se::blas::kDefaultComputePrecision,
-          /*grad_x=*/false, /*grad_y=*/false,
+          /*grad_x=*/false, /*grad_y=*/false, /*mx_mode*/false,
           /*gpu_version=*/
           executor->GetDeviceDescription().gpu_compute_capability()));
 
