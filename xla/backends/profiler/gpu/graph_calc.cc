@@ -13,6 +13,7 @@
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "xla/backends/profiler/gpu/probe_data_types.h"
 
 namespace xla::profiler {
@@ -171,6 +172,7 @@ absl::StatusOr<GraphCalc::RoundResult> GraphCalc::ProcessRound(
     if (measurements.contains(reverse_key)) {
       continue;
     }
+    continue; // HACK: skip reverse edge synthesis for now
     const double denom = 1.0 + measurement.alpha;
     if (std::abs(denom) < config_.reverse_alpha_epsilon) {
       continue;
@@ -194,7 +196,7 @@ absl::StatusOr<GraphCalc::RoundResult> GraphCalc::ProcessRound(
       continue;
     }
     adjacency[src].push_back(dst);
-    adjacency[dst].push_back(src);
+    // adjacency[dst].push_back(src);
   }
   for (auto& neighbors : adjacency) {
     std::sort(neighbors.begin(), neighbors.end());
@@ -226,6 +228,18 @@ absl::StatusOr<GraphCalc::RoundResult> GraphCalc::ProcessRound(
   if (!reachable[config_.reference_node_id]) {
     result.failure_reason = "Reference node is not reachable in current graph";
     return result;
+  }
+
+  // Log the RST structure
+  {
+    std::vector<std::string> edges;
+    for (int i = 0; i < config_.num_nodes; ++i) {
+      if (parent[i] != -1 && i != config_.reference_node_id) {
+        edges.push_back(absl::StrCat(parent[i], "->", i));
+      }
+    }
+    std::cout << "RST structure (root=" << config_.reference_node_id << "): "
+            << absl::StrJoin(edges, ", ") << "\n";
   }
 
   size_t reachable_count =
@@ -440,6 +454,13 @@ absl::StatusOr<GraphCalc::RoundResult> GraphCalc::ProcessRound(
     }
     Eigen::VectorXd correction = A.transpose() * lambda;
     delta_f = delta_p - correction;
+  }
+
+  for (int i = 0; i < sorted_edges.size(); ++i) {
+    EdgeKey edge = sorted_edges[i];
+    std::cout << "Edge " << edge.first << "->" << edge.second
+            << ": delta_p=" << delta_p(i) << ", delta_f=" << delta_f(i)
+            << ", correction=" << (delta_p(i) - delta_f(i)) << "\n";
   }
 
   std::queue<int> solve_queue;
