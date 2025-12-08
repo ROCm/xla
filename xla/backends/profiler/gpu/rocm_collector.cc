@@ -641,7 +641,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
                         "merge dropped! "
                      << GetRocmTracerEventTypeName(api_event.type);
     }  // switch
-  }    // for api_events_map_
+  }  // for api_events_map_
 
   // ---------------------------------------------------------------------------
   // 2) For ALL activity events, merge in any needed info from the matching
@@ -756,8 +756,8 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
                           "callback merge dropped! "
                        << GetRocmTracerEventTypeName(activity_event.type);
       }  // switch
-    }    // for activity_event
-  }      // for activity_ops_events_map_
+    }  // for activity_event
+  }  // for activity_ops_events_map_
 
   return aggregated_events;
 }
