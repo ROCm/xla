@@ -65,20 +65,13 @@ cc_library(
     deps = [
         ":rocm_collector",
         ":rocm_tracer",
+        ":rocm_tracer_utils",
         "//xla/stream_executor/rocm:roctracer_wrapper",
         "//xla/tsl/platform:env_time",
-        "//xla/tsl/platform:errors",
         "//xla/tsl/profiler/backends/cpu:annotation_stack",
-        "//xla/tsl/profiler/utils:parse_annotation",
-        "//xla/tsl/profiler/utils:trace_utils",
-        "//xla/tsl/profiler/utils:xplane_builder",
-        "//xla/tsl/profiler/utils:xplane_schema",
-        "//xla/tsl/profiler/utils:xplane_utils",
-        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
-        "@local_config_rocm//rocm:rocm_headers",
         "@tsl//tsl/profiler/lib:profiler_factory",
         "@tsl//tsl/profiler/lib:profiler_interface",
     ],
@@ -99,6 +92,56 @@ cc_library(
         "@local_config_cuda//cuda:cuda_headers",
         "@tsl//tsl/platform:macros",
         "@tsl//tsl/platform:types",
+    ],
+)
+
+cc_library(
+    name = "cuda_version_variants",
+    srcs = [
+        "cuda_version_variants.cc",
+    ] + if_cuda_newer_than(
+        "12_0",
+        ["cuda_version_12000_newer.cc"],
+        ["cuda_version_12000_older.cc"],
+    ) + if_cuda_newer_than(
+        "12_8",
+        ["cuda_version_12080_newer.cc"],
+        ["cuda_version_12080_older.cc"],
+    ),
+    hdrs = ["cuda_version_variants.h"],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "cuda-only",
+        "gpu",
+        "requires-gpu-nvidia",
+    ],
+    deps = [
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/types:span",
+        "@local_config_cuda//cuda:cuda_headers",
+    ],
+)
+
+xla_cc_test(
+    name = "cuda_version_variants_test",
+    srcs = ["cuda_version_variants_test.cc"],
+    tags = [
+        "cuda-only",
+        "gpu",
+        "no_mac",
+        "nomsan",  # Disable  msan for cuda related tests.
+        "requires-gpu-nvidia",
+    ],
+    deps = [
+        ":cuda_version_variants",
+        "@com_google_absl//absl/types:span",
+        "@com_google_googletest//:gtest_main",
+        "@local_config_cuda//cuda:cuda_headers",
+        "@local_config_cuda//cuda:cuda_runtime",
+        "@tsl//tsl/platform:status_matchers",
+        "@tsl//tsl/platform:test",
     ],
 )
 
@@ -172,6 +215,7 @@ cuda_library(
         "@com_google_googletest//:gtest_for_library",
         "@local_config_cuda//cuda:cuda_headers",
         "@local_config_cuda//cuda:cuda_runtime",
+        "@tsl//tsl/profiler/lib:scoped_annotation",
     ],
 )
 
@@ -202,6 +246,29 @@ cc_library(
 )
 
 cc_library(
+    name = "cupti_tracer_options_utils",
+    srcs = ["cupti_tracer_options_utils.cc"],
+    hdrs = ["cupti_tracer_options_utils.h"],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "cuda-only",
+        "gpu",
+    ],
+    deps = [
+        ":cupti_collector",
+        ":cupti_tracer",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/profiler/utils:profiler_options_util",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@local_config_cuda//cuda:cuda_headers",
+        "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc",
+    ],
+)
+
+cc_library(
     name = "cupti_tracer",
     srcs = ["cupti_tracer.cc"],
     hdrs = ["cupti_tracer.h"],
@@ -212,9 +279,11 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":cuda_version_variants",
         ":cupti_buffer_events",
         ":cupti_collector",
         ":cupti_interface",
+        ":cupti_marker_data_parser",
         ":cupti_pm_sampler_factory",
         ":cupti_utils",
         "//xla/tsl/platform:env",
@@ -225,7 +294,9 @@ cc_library(
         "//xla/tsl/profiler/utils:per_thread",
         "//xla/tsl/profiler/utils:xplane_builder",
         "//xla/tsl/profiler/utils:xplane_schema",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -260,7 +331,6 @@ cc_library(
         "cuda-only",
         "gpu",
     ],
-    visibility = ["//visibility:public"],
     deps = [
         ":cupti_collector",
         ":cupti_interface",
@@ -287,7 +357,6 @@ cc_library(
         "cuda-only",
         "gpu",
     ],
-    visibility = ["//visibility:public"],
     deps = [
         ":cupti_collector",
         "@com_google_absl//absl/status",
@@ -308,7 +377,6 @@ cc_library(
         "gpu",
         "manual",  # This target requires CUDA 12.6+, therefore we only built it if it was requested via a dependency.
     ],
-    visibility = ["//visibility:public"],
     deps = [
         ":cupti_collector",
         ":cupti_interface",
@@ -360,58 +428,27 @@ cc_library(
     ],
 )
 
-config_setting(
-    name = "use_v1",
-    values = {"define": "xla_rocm_profiler=v1"},
-)
-
-config_setting(
-    name = "use_rocprofiler_sdk",
-    values = {"define": "xla_rocm_profiler=v3"},
-)
-
 cc_library(
-    name = "rocm_profiler_backend_cfg",
-    defines = select({
-        ":use_v1": ["XLA_GPU_ROCM_TRACER_BACKEND=1"],
-        ":use_rocprofiler_sdk": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
-        "//conditions:default": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
-    }),
+    name = "rocm_tracer_utils",
+    srcs = ["rocm_tracer_utils.cc"],
+    hdrs = ["rocm_tracer_utils.h"],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = ["//visibility:public"],
-)
-
-cc_library(
-  name = "rocm_tracer_utils",
-  srcs = ["rocm_tracer_utils.cc"],
-  hdrs = ["rocm_tracer_utils.h"],
-  tags = [
-        "gpu",
-        "manual",
-        "rocm-only",
+    deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:node_hash_set",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
     ],
-  deps = [
-    "//xla/tsl/profiler/backends/cpu:annotation_stack",
-    "//xla/tsl/profiler/utils:time_utils",
-    "//xla/tsl/profiler/utils:math_utils",
-    "@com_google_absl//absl/strings:string_view",
-    "@com_google_absl//absl/container:flat_hash_map",
-    "@com_google_absl//absl/container:flat_hash_set",
-    "@com_google_absl//absl/container:node_hash_map",
-    "@com_google_absl//absl/container:node_hash_set",
-    "@tsl//tsl/platform:env_time",
-    "@tsl//tsl/platform:env",
-    "@tsl//tsl/platform:errors",
-    "@tsl//tsl/platform:logging",
-    "@tsl//tsl/platform:macros",
-    "@local_config_rocm//rocm:rocprofiler-sdk",
-  ],
-  visibility = ["//visibility:public"],
 )
 
 cc_library(
     name = "rocm_collector",
     srcs = ["rocm_collector.cc"],
     hdrs = ["rocm_collector.h"],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     tags = [
         "gpu",
         "rocm-only",
@@ -421,161 +458,161 @@ cc_library(
     ]),
     deps = [
         ":rocm_tracer_utils",
-        ":rocm_profiler_backend_cfg",
         "//xla/stream_executor/rocm:roctracer_wrapper",
-        "//xla/tsl/profiler/backends/cpu:annotation_stack",
+        "//xla/tsl/platform:status",
         "//xla/tsl/profiler/utils:parse_annotation",
+        "//xla/tsl/profiler/utils:trace_utils",
         "//xla/tsl/profiler/utils:xplane_builder",
         "//xla/tsl/profiler/utils:xplane_schema",
         "//xla/tsl/profiler/utils:xplane_utils",
-        "//xla/tsl/util:env_var",
-        "@com_google_absl//absl/container:fixed_array",
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/container:node_hash_map",
-        "@com_google_absl//absl/container:node_hash_set",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
+        "@local_config_rocm//rocm:rocm_headers",  # buildcleaner: keep
+        "@local_config_rocm//rocm:rocprofiler-sdk",  # buildcleaner: keep
         "@tsl//tsl/platform:abi",
-        "@tsl//tsl/platform:env_time",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:macros",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:thread_annotations",
-        "@tsl//tsl/platform:types",
-        "@tsl//tsl/profiler/lib:profiler_factory",
-        "@tsl//tsl/profiler/lib:profiler_interface",
-        "@local_config_rocm//rocm:rocprofiler-sdk",
-    ],
-)
-
-cc_library(
-    name = "rocm_tracer_headers",
-    hdrs = [
-        "rocm_tracer.h",
-        "rocm_profiler_sdk.h",
-        "rocm_tracer_v1.h",
-    ],
-    tags = [
-        "gpu",
-        "manual",
-        "rocm-only",
-    ],
-    # PROPAGATE the layout macro to every dependent TU:
-    defines = select({
-        ":use_v1": ["XLA_GPU_ROCM_TRACER_BACKEND=1"],
-        ":use_rocprofiler_sdk": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
-        "//conditions:default": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
-    }),
-    visibility = ["//visibility:public"],
-)
-
-cc_library(
-    name = "rocm_tracer_impl",
-    srcs = select({
-        ":use_v1": ["rocm_tracer_v1.cc"],
-        ":use_rocprofiler_sdk": ["rocm_profiler_sdk.cc"],
-        "//conditions:default": ["rocm_profiler_sdk.cc"],
-    }),
-    tags = [
-        "gpu",
-        "manual",
-        "rocm-only",
-    ],
-    deps = [
-        ":rocm_tracer_headers",
-        ":rocm_collector",
-        "//xla/stream_executor/rocm:roctracer_wrapper",
-        "//xla/tsl/profiler/backends/cpu:annotation_stack",
-        "//xla/tsl/profiler/utils:time_utils",
-        "//xla/tsl/profiler/utils:xplane_builder",
-        "//xla/tsl/profiler/utils:xplane_schema",
-        "//xla/tsl/profiler/utils:xplane_utils",
-        "//xla/tsl/util:env_var",
-        "//xla:debug_options_flags",
-        "@com_google_absl//absl/container:fixed_array",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/container:node_hash_map",
-        "@com_google_absl//absl/container:node_hash_set",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/synchronization",
-        "@local_config_rocm//rocm:rocm_headers",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:macros",
-        "@tsl//tsl/platform:platform_port",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:thread_annotations",
-        "@tsl//tsl/platform:types",
-        "@tsl//tsl/profiler/lib:profiler_factory",
-        "@tsl//tsl/profiler/lib:profiler_interface",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],
 )
 
 cc_library(
     name = "rocm_tracer",
+    srcs = ["rocm_tracer.cc"],
+    hdrs = ["rocm_tracer.h"],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     tags = [
         "gpu",
-        "manual",
         "rocm-only",
+    ] + if_google([
+        # TODO(b/360374983): Remove this tag once the target can be built without --config=rocm.
+        "manual",
+    ]),
+    deps = [
+        ":rocm_collector",
+        ":rocm_tracer_utils",
+        "//xla/stream_executor/rocm:roctracer_wrapper",
+        "//xla/tsl/profiler/backends/cpu:annotation_stack",
+        "@com_google_absl//absl/container:fixed_array",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/container:node_hash_set",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:optional",
+        "@local_config_rocm//rocm:rocm_headers",  # buildcleaner: keep
+        "@local_config_rocm//rocm:rocprofiler-sdk",  # buildcleaner: keep
+        "@tsl//tsl/platform:abi",
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:macros",
+        "@tsl//tsl/platform:status",
+        "@tsl//tsl/platform:types",
     ],
-    deps = [":rocm_tracer_headers", ":rocm_tracer_impl"],
-    visibility = ["//visibility:public"],
 )
 
-# upstream it's called xla_cc_test as no GPU involved.
-xla_test(
+xla_cc_test(
     name = "rocm_tracer_test",
     size = "small",
     srcs = ["rocm_tracer_test.cc"],
     tags = [
         "gpu",
         "rocm-only",
-        "skip_rocprofiler_sdk",   # due to rocprofiler-sdk's rocprofiler_force_configure
     ] + if_google([
         # Optional: only run internally if ROCm config is enabled
         "manual",
     ]),
     deps = [
+        ":rocm_collector",
         ":rocm_tracer",
         ":rocm_tracer_utils",
-        "//xla/tsl/profiler/utils:xplane_builder",
-        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:status_matchers",
-        "@tsl//tsl/platform:test",
+        "@local_config_rocm//rocm:hip",
         "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],
 )
 
-xla_test(    
-  name = "rocm_collector_test",
-  size = "small",
-  srcs = ["rocm_collector_test.cc"],
-  tags = [
-      "gpu",
-      "rocm-only",
-  ] + if_google([
-      "manual",
-  ]),
-  deps = [
-    ":rocm_collector",
-    ":rocm_tracer_utils",
-    "//xla/tsl/profiler/utils:xplane_builder",
-    "@com_google_absl//absl/container:flat_hash_map",
-    "@com_google_googletest//:gtest_main",
-    "@tsl//tsl/platform:env_time",
-    "@tsl//tsl/platform:status_matchers",
-    "@tsl//tsl/platform:test",
-    "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
-    "@tsl//tsl/platform:env",
-    "@tsl//tsl/platform:errors",
-    "@tsl//tsl/platform:logging",
-    "@tsl//tsl/platform:macros",
-  ],
+xla_cc_test(
+    name = "rocm_collector_test",
+    size = "small",
+    srcs = ["rocm_collector_test.cc"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ] + if_google([
+        "manual",
+    ]),
+    deps = [
+        # ":rocm_tracer",
+        ":rocm_collector",
+        ":rocm_tracer_utils",
+        "@com_google_googletest//:gtest_main",
+        "//xla/tsl/profiler/utils:xplane_utils",
+    ],
+)
+
+cc_library(
+    name = "cupti_nvtx_ext_payload",
+    srcs = if_cuda_newer_than(
+        "13_0",
+        ["cupti_nvtx_ext_payload.cc"],
+        [],
+    ),
+    hdrs = if_cuda_newer_than(
+        "13_0",
+        ["cupti_nvtx_ext_payload.h"],
+        [],
+    ),
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "cuda-only",
+        "gpu",
+    ],
+    deps = [
+        "//xla/tsl/cuda:cupti",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@local_config_cuda//cuda:cuda_headers",
+        "@tsl//tsl/platform",
+        "@tsl//tsl/platform:macros",
+    ],
+)
+
+cc_library(
+    name = "cupti_marker_data_parser",
+    srcs = if_cuda_newer_than(
+        "13_0",
+        ["cupti_marker_data_parser_ext.cc"],
+        ["cupti_marker_data_parser.cc"],
+    ),
+    hdrs = ["cupti_marker_data_parser.h"],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "cuda-only",
+        "gpu",
+    ],
+    deps = [
+        "//xla/tsl/cuda:cupti",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@local_config_cuda//cuda:cuda_headers",
+    ] + if_cuda_newer_than(
+        "13_0",
+        [":cupti_nvtx_ext_payload"],
+        [],
+    ),
 )
 
 cc_library(
@@ -631,6 +668,7 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":cupti_interface",
+        ":cupti_marker_data_parser",
         ":cupti_utils",
         "//xla/tsl/cuda:cupti",
         "//xla/tsl/profiler/utils:buffer_pool",
@@ -715,11 +753,7 @@ xla_cc_test(
         ":ondevice_event_exporter",
         "//xla/tsl/profiler/backends/gpu:ondevice_event_receiver",
         "//xla/tsl/profiler/backends/gpu:ondevice_trace_event",
-        "//xla/tsl/profiler/utils:xplane_builder",
-        "//xla/tsl/profiler/utils:xplane_schema",
         "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:test",
-        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],
 )
 
@@ -824,15 +858,20 @@ xla_test(
     size = "small",
     srcs = ["profile_with_cuda_kernels_test.cc"],
     args = if_google(["--heap_check="]),  # There is a memory leak in CUPTI
-    backends = ["gpu"],
+    backends = [
+        "a100",
+        "h100",
+        "b200",
+    ],
     tags = [
         "cuda-only",
         "no_mac",
+        "nomsan",
     ],
     deps = [
         ":cupti_collector",
         ":cupti_error_manager",
-        ":cupti_pm_sampler_stub",
+        ":cupti_pm_sampler_factory",  # buildcleaner: keep
         ":cupti_tracer",
         ":cupti_utils",
         ":cupti_wrapper",
@@ -841,28 +880,6 @@ xla_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/time",
         "@com_google_googletest//:gtest_main",
-    ],
-)
-
-cc_library(
-    name = "cupti_tracer_options_utils",
-    srcs = ["cupti_tracer_options_utils.cc"],
-    hdrs = ["cupti_tracer_options_utils.h"],
-    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
-    tags = [
-        "cuda-only",
-        "gpu",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":cupti_collector",
-        ":cupti_tracer",
-        "//xla/tsl/platform:errors",
-        "//xla/tsl/profiler/utils:profiler_options_util",
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/strings",
         "@local_config_cuda//cuda:cuda_headers",
-        "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc",
     ],
 )
