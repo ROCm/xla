@@ -59,7 +59,8 @@ using tsl::profiler::XSpace;
 
 //==========
 namespace {
-// Set the all XLines of specified XPlane to starting walltime.
+
+// Set all XLines of specified XPlane to starting walltime.
 // Events time in both host and device planes are CUTPI timestamps.
 // We set initial RocmTracer timestamp as start time for all lines to reflect
 // this fact. Eventually we change line start time to corresponding
@@ -156,6 +157,8 @@ uint64_t get_timestamp() {
 #endif
 
 }  // namespace
+
+//==================== PerDeviceCollector ====================//
 
 OccupancyStats PerDeviceCollector::GetOccupancy(
     const RocmDeviceOccupancyParams& params) const {
@@ -279,17 +282,7 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
                             GetStatTypeStr(StatType::kMemsetDetails)),
                         *plane->GetOrCreateStatMetadata(std::move(value)));
   }
-  // TODO(rocm-profiler): we need to support the following event type
-  /* else if (event.type == CuptiTracerEventType::MemoryResidency) {
-    VLOG(7) << "Add MemoryResidency stat";
-    std::string value = absl::StrCat(
-        "kind:", GetMemoryKindName(event.memory_residency_info.kind),
-        " num_bytes:", event.memory_residency_info.num_bytes,
-        " addr:", event.memory_residency_info.address);
-    xevent.AddStatValue(*plane->GetOrCreateStatMetadata(GetStatTypeStr(
-                            StatType::kMemoryResidencyDetails)),
-                        *plane->GetOrCreateStatMetadata(std::move(value)));
-  } */
+  // TODO(rocm-profiler): support MemoryResidency if ROCm exposes it.
 
   std::vector<Annotation> annotation_stack =
       ParseAnnotationStack(event.annotation);
@@ -324,7 +317,7 @@ void PerDeviceCollector::SortByStartTime() {
 
 bool PerDeviceCollector::IsHostEvent(const RocmTracerEvent& event,
                                      tsl::int64* line_id) {
-  // DriverCallback(i.e. kernel launching) events are host events.
+  // DriverCallback (i.e. kernel launching) events are host events.
   if (event.source == RocmTracerEventSource::ApiCallback) {
     *line_id = event.thread_id;
     return true;
@@ -333,16 +326,7 @@ bool PerDeviceCollector::IsHostEvent(const RocmTracerEvent& event,
     return false;
   }
 
-  // TODO(rocm-profiler): do we have such a report in rocm?
-  // Non-overhead activity events are device events.
-  /* if (event.type != CuptiTracerEventType::Overhead) {
-    *line_id = event.stream_id;
-    return false;
-  } */
-  // Overhead events can be associated with a thread or a stream, etc.
-  // If a valid thread id is specified, we consider it as a host event.
-  //
-
+  // The code below is currently unreachable, but kept for parity with CUDA.
   if (event.stream_id != RocmTracerEvent::kInvalidStreamId) {
     *line_id = event.stream_id;
     return false;
@@ -382,10 +366,14 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
       continue;
     }
     auto* plane = is_host_event ? host_plane : device_plane;
-    VLOG(9) << "Event" << " type=" << static_cast<int>(event.type)
+    VLOG(9) << "Event"
+            << " type=" << static_cast<int>(event.type)
             << " line_id=" << line_id
             << (is_host_event ? " host plane=" : " device plane=")
             << plane->Name();
+
+    // Track event types per line for nice line naming.
+    events_types_per_line[line_id].insert(event.type);
 
     XLineBuilder line = plane->GetOrCreateLine(line_id);
     line.SetTimestampNs(start_gputime_ns);
@@ -416,7 +404,7 @@ void PerDeviceCollector::GetDeviceCapabilities(int32_t device_ordinal,
   if (hipGetDeviceProperties(&device_properties_, device_ordinal) != hipSuccess)
     return;
 
-  auto clock_rate_in_khz = device_properties_.clockRate;  // this is also in Khz
+  auto clock_rate_in_khz = device_properties_.clockRate;  // in KHz
   if (clock_rate_in_khz) {
     device_plane->AddStatValue(
         *device_plane->GetOrCreateStatMetadata(
@@ -468,6 +456,8 @@ void PerDeviceCollector::GetDeviceCapabilities(int32_t device_ordinal,
   }
 }
 
+//==================== RocmTraceCollectorImpl ====================//
+
 void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
                                       bool is_auxiliary) {
   absl::MutexLock lock(event_maps_mutex_);
@@ -515,8 +505,8 @@ void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
         event.correlation_id, std::vector<RocmTracerEvent>{});
     it->second.push_back(std::move(event));
   } else {
-    VLOG(3) << "Dropping unknown event: " << (int)event.source
-            << " domain: " << (int)event.domain;
+    VLOG(3) << "Dropping unknown event: " << static_cast<int>(event.source)
+            << " domain: " << static_cast<int>(event.domain);
   }
 }
 
@@ -578,7 +568,7 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
 std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
   /* Different from CUDA, roctracer activity records are not enough to fill a
     TF event. For most of the activities, we need to enable the corresponding
-    API callsbacks (we call them auxiliary API callbacks) to capture the
+    API callbacks (we call them auxiliary API callbacks) to capture the
     necessary fields from them using the correlation id. The purpose of this
     function is to let APIs and activities exchange information to reach a
     state very similar to TF CUDA and getting ready to dump the event.
@@ -617,7 +607,14 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
 
     switch (api_event.type) {
       case RocmTracerEventType::Kernel:
-        api_event.kernel_info = item.kernel_info;
+        // Only copy kernel_info from activity if API side does not have it
+        // and activity side does. This preserves kernel_info coming from
+        // API callbacks (your test case) and still allows activity to
+        // populate it when needed.
+        if (is_kernel_info_empty(api_event.kernel_info) &&
+            !is_kernel_info_empty(item.kernel_info)) {
+          api_event.kernel_info = item.kernel_info;
+        }
         aggregated_events.push_back(api_event);
         break;
 
@@ -644,7 +641,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
                         "merge dropped! "
                      << GetRocmTracerEventTypeName(api_event.type);
     }  // switch
-  }  // for api_events_map_
+  }    // for api_events_map_
 
   // ---------------------------------------------------------------------------
   // 2) For ALL activity events, merge in any needed info from the matching
@@ -656,18 +653,56 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
 
     if (activity_vec.empty()) continue;
 
-    auto api_event = api_events_map_.find(corr_id);
-    if (api_event == api_events_map_.end()) {
-      api_event = auxiliary_api_events_map_.find(corr_id);
+    // Choose the matching API event from api_events_map_ or
+    // auxiliary_api_events_map_.
+    RocmTracerEvent* api = nullptr;
+
+    auto api_it = api_events_map_.find(corr_id);
+    if (api_it != api_events_map_.end()) {
+      api = &api_it->second;
+    } else {
+      auto aux_it = auxiliary_api_events_map_.find(corr_id);
+      if (aux_it != auxiliary_api_events_map_.end()) {
+        api = &aux_it->second;
+      }
     }
 
-    if (api_event == auxiliary_api_events_map_.end()) {
+    if (api == nullptr) {
+      // No matching API counterpart in either map. We can still keep many
+      // activity events that are self-contained (e.g., kernels and memcpy).
       for (auto& activity_event : activity_vec) {
-        OnEventsDropped(
-            "An event from activity was discarded."
-            "Could not find the counterpart HIP API.",
-            activity_event.correlation_id);
-        PrintRocmTracerEvent(activity_event, ". Dropped!");
+        switch (activity_event.type) {
+          case RocmTracerEventType::Kernel:
+          case RocmTracerEventType::MemcpyD2H:
+          case RocmTracerEventType::MemcpyH2D:
+          case RocmTracerEventType::MemcpyD2D:
+          case RocmTracerEventType::MemcpyOther:
+            // Timing + (often) kernel/memcpy details are present in activity.
+            aggregated_events.push_back(activity_event);
+            break;
+
+          case RocmTracerEventType::Memset:
+          case RocmTracerEventType::MemoryAlloc:
+          case RocmTracerEventType::MemoryFree:
+          case RocmTracerEventType::Synchronization:
+            // These may require API-side info; we conservatively drop them.
+            OnEventsDropped(
+                "Activity event dropped due to missing HIP API counterpart.",
+                activity_event.correlation_id);
+            PrintRocmTracerEvent(activity_event, ". Dropped (no API)!");
+            break;
+
+          default:
+            OnEventsDropped(
+                "Missing API-Activity information exchange. Dropped!",
+                activity_event.correlation_id);
+            PrintRocmTracerEvent(activity_event,
+                                 ". Dropped (unknown type/no API)!");
+            LOG(WARNING) << "A ROCm activity event with unimplemented API "
+                            "callback merge dropped! "
+                         << GetRocmTracerEventTypeName(activity_event.type);
+            break;
+        }
       }
       continue;
     }
@@ -678,12 +713,12 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
         case RocmTracerEventType::Kernel:
 #if defined(XLA_GPU_ROCM_TRACER_BACKEND) && (XLA_GPU_ROCM_TRACER_BACKEND == 1)
           if (activity_event.name.empty()) {
-            activity_event.name = api_event->second.name;
+            activity_event.name = api->name;
           }
 #endif
           if (is_kernel_info_empty(activity_event.kernel_info) &&
-              !is_kernel_info_empty(api_event->second.kernel_info)) {
-            activity_event.kernel_info = api_event->second.kernel_info;
+              !is_kernel_info_empty(api->kernel_info)) {
+            activity_event.kernel_info = api->kernel_info;
           }
 
           aggregated_events.push_back(activity_event);
@@ -693,22 +728,23 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
         case RocmTracerEventType::MemcpyH2D:
         case RocmTracerEventType::MemcpyD2D:
         case RocmTracerEventType::MemcpyOther:
+          // Activity memcpy events already carry the important info.
           aggregated_events.push_back(activity_event);
           break;
 
         case RocmTracerEventType::Memset:
-          activity_event.memset_info = api_event->second.memset_info;
+          activity_event.memset_info = api->memset_info;
           aggregated_events.push_back(activity_event);
           break;
 
         case RocmTracerEventType::MemoryAlloc:
         case RocmTracerEventType::MemoryFree:
-          activity_event.device_id = api_event->second.device_id;
+          activity_event.device_id = api->device_id;
           aggregated_events.push_back(activity_event);
           break;
 
         case RocmTracerEventType::Synchronization:
-          activity_event.device_id = api_event->second.device_id;
+          activity_event.device_id = api->device_id;
           aggregated_events.push_back(activity_event);
           break;
 
@@ -720,8 +756,8 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
                           "callback merge dropped! "
                        << GetRocmTracerEventTypeName(activity_event.type);
       }  // switch
-    }  // for activity_event
-  }  // for activity_ops_events_map_
+    }    // for activity_event
+  }      // for activity_ops_events_map_
 
   return aggregated_events;
 }
