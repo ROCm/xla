@@ -65,9 +65,9 @@ namespace {
 // We set initial RocmTracer timestamp as start time for all lines to reflect
 // this fact. Eventually we change line start time to corresponding
 // start_walltime_ns to normalize with CPU wall time.
-static void NormalizeTimeStamps(XPlaneBuilder* plane,
+static void NormalizeTimeStamps(XPlaneBuilder& plane,
                                 uint64_t start_walltime_ns) {
-  plane->ForEachLine([&](tsl::profiler::XLineBuilder line) {
+  plane.ForEachLine([&](tsl::profiler::XLineBuilder line) {
     line.SetTimestampNs(start_walltime_ns);
   });
 }
@@ -129,7 +129,7 @@ void PrintRocmTracerEvent(const RocmTracerEvent& event,
   VLOG(3) << oss.str() << ' ' << message;
 }
 
-#if defined(XLA_GPU_ROCM_TRACER_BACKEND) && (XLA_GPU_ROCM_TRACER_BACKEND == 1)
+#if XLA_GPU_ROCM_TRACER_BACKEND == XLA_GPU_ROCM_TRACER_BACKEND_V1
 namespace se = ::stream_executor;
 static uint64_t get_timestamp() {
   uint64_t ts;
@@ -162,7 +162,7 @@ uint64_t get_timestamp() {
 
 OccupancyStats PerDeviceCollector::GetOccupancy(
     const RocmDeviceOccupancyParams& params) const {
-  // TODO(rocm-profiler): hipOccupancyMaxActiveBlocksPerMultiprocessor only
+  // TODO(cj401-amd): hipOccupancyMaxActiveBlocksPerMultiprocessor only
   // return hipSuccess for HIP_API_ID_hipLaunchKernel
   OccupancyStats stats;
   int number_of_active_blocks;
@@ -189,9 +189,9 @@ OccupancyStats PerDeviceCollector::GetOccupancy(
 }
 
 void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
-                                      XPlaneBuilder* plane,
+                                      XPlaneBuilder& plane,
                                       uint64_t start_gpu_ns,
-                                      uint64_t end_gpu_ns, XLineBuilder* line) {
+                                      uint64_t end_gpu_ns, XLineBuilder& line) {
   if (event.start_time_ns < start_gpu_ns || event.end_time_ns > end_gpu_ns ||
       event.start_time_ns > event.end_time_ns) {
     VLOG(2) << "events have abnormal timestamps:" << event.name
@@ -207,34 +207,34 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
     kernel_name = GetRocmTracerEventTypeName(event.type);
   }
   XEventMetadata* event_metadata =
-      plane->GetOrCreateEventMetadata(std::move(kernel_name));
-  XEventBuilder xevent = line->AddEvent(*event_metadata);
-  VLOG(7) << "Adding event to line=" << line->Id();
+      plane.GetOrCreateEventMetadata(std::move(kernel_name));
+  XEventBuilder xevent = line.AddEvent(*event_metadata);
+  VLOG(7) << "Adding event to line=" << line.Id();
   xevent.SetTimestampNs(event.start_time_ns);
   xevent.SetEndTimestampNs(event.end_time_ns);
   if (event.source == RocmTracerEventSource::ApiCallback) {
     xevent.AddStatValue(
-        *plane->GetOrCreateStatMetadata(GetStatTypeStr(StatType::kDeviceId)),
+        *plane.GetOrCreateStatMetadata(GetStatTypeStr(StatType::kDeviceId)),
         event.device_id);
   }
   if (event.correlation_id != RocmTracerEvent::kInvalidCorrelationId) {
-    xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+    xevent.AddStatValue(*plane.GetOrCreateStatMetadata(
                             GetStatTypeStr(StatType::kCorrelationId)),
                         event.correlation_id);
   }
   if (!event.roctx_range.empty()) {
     xevent.AddStatValue(
-        *plane->GetOrCreateStatMetadata(GetStatTypeStr(StatType::kNVTXRange)),
-        *plane->GetOrCreateStatMetadata(event.roctx_range));
+        *plane.GetOrCreateStatMetadata(GetStatTypeStr(StatType::kNVTXRange)),
+        *plane.GetOrCreateStatMetadata(event.roctx_range));
   }
 
   if (event.type == RocmTracerEventType::Kernel &&
       event.source == RocmTracerEventSource::Activity) {
     xevent.AddStatValue(
-        *plane->GetOrCreateStatMetadata(
+        *plane.GetOrCreateStatMetadata(
             GetStatTypeStr(StatType::kKernelDetails)),
-        *plane->GetOrCreateStatMetadata(ToXStat(event.kernel_info,
-                                                /*occupancy_pct*/ 0)));
+        *plane.GetOrCreateStatMetadata(ToXStat(event.kernel_info,
+                                               /*occupancy_pct*/ 0)));
   } else if (event.type == RocmTracerEventType::MemcpyH2D ||
              event.type == RocmTracerEventType::MemcpyD2H ||
              event.type == RocmTracerEventType::MemcpyD2D ||
@@ -242,54 +242,53 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
     VLOG(7) << "Add Memcpy stat";
     const auto& memcpy_info = event.memcpy_info;
     std::string memcpy_details = absl::StrCat(
-        // TODO(rocm-profiler): we need to discover the memory kind similar
+        // TODO(cj401-amd): we need to discover the memory kind similar
         // to CUDA
         "kind:", "Unknown", " size:", memcpy_info.num_bytes,
         " dest:", memcpy_info.destination, " async:", memcpy_info.async);
     xevent.AddStatValue(
-        *plane->GetOrCreateStatMetadata(
+        *plane.GetOrCreateStatMetadata(
             GetStatTypeStr(StatType::kMemcpyDetails)),
-        *plane->GetOrCreateStatMetadata(std::move(memcpy_details)));
+        *plane.GetOrCreateStatMetadata(std::move(memcpy_details)));
   } else if (event.type == RocmTracerEventType::MemoryAlloc) {
     VLOG(7) << "Add MemAlloc stat";
     std::string value =
-        // TODO(rocm-profiler): we need to discover the memory kind similar
+        // TODO(cj401-amd): we need to discover the memory kind similar
         // to CUDA
         absl::StrCat("kind:", "Unknown",
                      " num_bytes:", event.memalloc_info.num_bytes);
-    xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+    xevent.AddStatValue(*plane.GetOrCreateStatMetadata(
                             GetStatTypeStr(StatType::kMemallocDetails)),
-                        *plane->GetOrCreateStatMetadata(std::move(value)));
+                        *plane.GetOrCreateStatMetadata(std::move(value)));
   } else if (event.type == RocmTracerEventType::MemoryFree) {
     VLOG(7) << "Add MemFree stat";
     std::string value =
-        // TODO(rocm-profiler): we need to discover the memory kind similar
+        // TODO(cj401-amd): we need to discover the memory kind similar
         // to CUDA
         absl::StrCat("kind:", "Unknown",
                      " num_bytes:", event.memalloc_info.num_bytes);
-    xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+    xevent.AddStatValue(*plane.GetOrCreateStatMetadata(
                             GetStatTypeStr(StatType::kMemFreeDetails)),
-                        *plane->GetOrCreateStatMetadata(std::move(value)));
+                        *plane.GetOrCreateStatMetadata(std::move(value)));
   } else if (event.type == RocmTracerEventType::Memset) {
     VLOG(7) << "Add Memset stat";
     auto value =
-        // TODO(rocm-profiler): we need to discover the memory kind similar
+        // TODO(cj401-amd): we need to discover the memory kind similar
         // to CUDA
         absl::StrCat("kind:", "Unknown",
                      " num_bytes:", event.memset_info.num_bytes,
                      " async:", event.memset_info.async);
-    xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+    xevent.AddStatValue(*plane.GetOrCreateStatMetadata(
                             GetStatTypeStr(StatType::kMemsetDetails)),
-                        *plane->GetOrCreateStatMetadata(std::move(value)));
+                        *plane.GetOrCreateStatMetadata(std::move(value)));
   }
-  // TODO(rocm-profiler): support MemoryResidency if ROCm exposes it.
 
   std::vector<Annotation> annotation_stack =
       ParseAnnotationStack(event.annotation);
   if (!annotation_stack.empty()) {
     xevent.AddStatValue(
-        *plane->GetOrCreateStatMetadata(GetStatTypeStr(StatType::kTfOp)),
-        *plane->GetOrCreateStatMetadata(annotation_stack.begin()->name));
+        *plane.GetOrCreateStatMetadata(GetStatTypeStr(StatType::kTfOp)),
+        *plane.GetOrCreateStatMetadata(annotation_stack.begin()->name));
   }
   // If multiple metadata have the same key name, show the values from the
   // top of the stack (innermost annotation). Concatenate the values from
@@ -301,7 +300,7 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
     for (const Annotation::Metadata& metadata : annotation->metadata) {
       if (key_set.insert(metadata.key).second) {
         xevent.ParseAndAddStatValue(
-            *plane->GetOrCreateStatMetadata(metadata.key), metadata.value);
+            *plane.GetOrCreateStatMetadata(metadata.key), metadata.value);
       }
     }
   }
@@ -316,26 +315,26 @@ void PerDeviceCollector::SortByStartTime() {
 }
 
 bool PerDeviceCollector::IsHostEvent(const RocmTracerEvent& event,
-                                     tsl::int64* line_id) {
+                                     tsl::int64& line_id) {
   // DriverCallback (i.e. kernel launching) events are host events.
   if (event.source == RocmTracerEventSource::ApiCallback) {
-    *line_id = event.thread_id;
+    line_id = event.thread_id;
     return true;
   } else {  // activities
-    *line_id = event.stream_id;
+    line_id = event.stream_id;
     return false;
   }
 
   // The code below is currently unreachable, but kept for parity with CUDA.
   if (event.stream_id != RocmTracerEvent::kInvalidStreamId) {
-    *line_id = event.stream_id;
+    line_id = event.stream_id;
     return false;
   } else if (event.thread_id != RocmTracerEvent::kInvalidThreadId &&
              event.thread_id != 0) {
-    *line_id = event.thread_id;
+    line_id = event.thread_id;
     return true;
   } else {
-    *line_id = tsl::profiler::kThreadIdOverhead;
+    line_id = tsl::profiler::kThreadIdOverhead;
     return false;
   }
 }
@@ -343,8 +342,8 @@ bool PerDeviceCollector::IsHostEvent(const RocmTracerEvent& event,
 void PerDeviceCollector::Export(uint64_t start_walltime_ns,
                                 uint64_t start_gputime_ns,
                                 uint64_t end_gputime_ns,
-                                XPlaneBuilder* device_plane,
-                                XPlaneBuilder* host_plane) {
+                                XPlaneBuilder& device_plane,
+                                XPlaneBuilder& host_plane) {
   int host_ev_cnt = 0, dev_ev_cnt = 0;
   absl::MutexLock lock(&events_mutex_);
   // Tracking event types per line.
@@ -353,7 +352,7 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
 
   for (const RocmTracerEvent& event : events_) {
     int64_t line_id = RocmTracerEvent::kInvalidThreadId;
-    bool is_host_event = IsHostEvent(event, &line_id);
+    bool is_host_event = IsHostEvent(event, line_id);
 
     if (is_host_event)
       host_ev_cnt++;
@@ -365,26 +364,26 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
       VLOG(3) << "Ignoring event, type=" << static_cast<int>(event.type);
       continue;
     }
-    auto* plane = is_host_event ? host_plane : device_plane;
+    XPlaneBuilder& plane = is_host_event ? host_plane : device_plane;
     VLOG(9) << "Event"
             << " type=" << static_cast<int>(event.type)
             << " line_id=" << line_id
             << (is_host_event ? " host plane=" : " device plane=")
-            << plane->Name();
+            << plane.Name();
 
     // Track event types per line for nice line naming.
     events_types_per_line[line_id].insert(event.type);
 
-    XLineBuilder line = plane->GetOrCreateLine(line_id);
+    XLineBuilder line = plane.GetOrCreateLine(line_id);
     line.SetTimestampNs(start_gputime_ns);
-    CreateXEvent(event, plane, start_gputime_ns, end_gputime_ns, &line);
+    CreateXEvent(event, plane, start_gputime_ns, end_gputime_ns, line);
   }
 
-  device_plane->ForEachLine([&](XLineBuilder line) {
+  device_plane.ForEachLine([&](XLineBuilder line) {
     line.SetName(
         GetDeviceXLineName(line.Id(), events_types_per_line[line.Id()]));
   });
-  host_plane->ForEachLine([&](XLineBuilder line) {
+  host_plane.ForEachLine([&](XLineBuilder line) {
     line.SetName(absl::StrCat("Host Threads/", line.Id()));
   });
   events_.clear();
@@ -392,31 +391,31 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
 
 void PerDeviceCollector::AddEvent(RocmTracerEvent&& event) {
   absl::MutexLock lock(&events_mutex_);
-  events_.emplace_back(std::move(event));
+  events_.push_back(std::move(event));
 }
 
 void PerDeviceCollector::GetDeviceCapabilities(int32_t device_ordinal,
-                                               XPlaneBuilder* device_plane) {
-  device_plane->AddStatValue(*device_plane->GetOrCreateStatMetadata(
-                                 GetStatTypeStr(StatType::kDevVendor)),
-                             kDeviceVendorAMD);
+                                               XPlaneBuilder& device_plane) {
+  device_plane.AddStatValue(*device_plane.GetOrCreateStatMetadata(
+                                GetStatTypeStr(StatType::kDevVendor)),
+                            kDeviceVendorAMD);
 
   if (hipGetDeviceProperties(&device_properties_, device_ordinal) != hipSuccess)
     return;
 
-  auto clock_rate_in_khz = device_properties_.clockRate;  // in KHz
+  auto clock_rate_in_khz = device_properties_.clockRate;
   if (clock_rate_in_khz) {
-    device_plane->AddStatValue(
-        *device_plane->GetOrCreateStatMetadata(
+    device_plane.AddStatValue(
+        *device_plane.GetOrCreateStatMetadata(
             GetStatTypeStr(StatType::kDevCapClockRateKHz)),
         clock_rate_in_khz);
   }
 
   auto core_count = device_properties_.multiProcessorCount;
   if (core_count) {
-    device_plane->AddStatValue(*device_plane->GetOrCreateStatMetadata(
-                                   GetStatTypeStr(StatType::kDevCapCoreCount)),
-                               core_count);
+    device_plane.AddStatValue(*device_plane.GetOrCreateStatMetadata(
+                                  GetStatTypeStr(StatType::kDevCapCoreCount)),
+                              core_count);
   }
 
   auto mem_clock_khz = device_properties_.memoryClockRate;
@@ -427,30 +426,30 @@ void PerDeviceCollector::GetDeviceCapabilities(int32_t device_ordinal,
     // data lane.
     auto memory_bandwidth =
         uint64_t{2} * (mem_clock_khz) * 1000 * (mem_bus_width_bits) / 8;
-    device_plane->AddStatValue(
-        *device_plane->GetOrCreateStatMetadata(
+    device_plane.AddStatValue(
+        *device_plane.GetOrCreateStatMetadata(
             GetStatTypeStr(StatType::kDevCapMemoryBandwidth)),
         memory_bandwidth);
   }
 
   size_t total_memory = device_properties_.totalGlobalMem;
   if (total_memory) {
-    device_plane->AddStatValue(*device_plane->GetOrCreateStatMetadata(
-                                   GetStatTypeStr(StatType::kDevCapMemorySize)),
-                               static_cast<uint64_t>(total_memory));
+    device_plane.AddStatValue(*device_plane.GetOrCreateStatMetadata(
+                                  GetStatTypeStr(StatType::kDevCapMemorySize)),
+                              static_cast<uint64_t>(total_memory));
   }
 
   auto compute_capability_major = device_properties_.major;
   if (compute_capability_major) {
-    device_plane->AddStatValue(
-        *device_plane->GetOrCreateStatMetadata(
+    device_plane.AddStatValue(
+        *device_plane.GetOrCreateStatMetadata(
             GetStatTypeStr(StatType::kDevCapComputeCapMajor)),
         compute_capability_major);
   }
   auto compute_capability_minor = device_properties_.minor;
   if (compute_capability_minor) {
-    device_plane->AddStatValue(
-        *device_plane->GetOrCreateStatMetadata(
+    device_plane.AddStatValue(
+        *device_plane.GetOrCreateStatMetadata(
             GetStatTypeStr(StatType::kDevCapComputeCapMinor)),
         compute_capability_minor);
   }
@@ -556,13 +555,12 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
     device_plane.SetId(id);
     // Calculate device capabilities before flushing, so that device
     // properties are available to the occupancy calculator in export().
-    per_device_collector_[id].GetDeviceCapabilities(id, &device_plane);
+    per_device_collector_[id].GetDeviceCapabilities(id, device_plane);
     per_device_collector_[id].Export(start_walltime_ns_, start_gputime_ns_,
-                                     end_gputime_ns, &device_plane,
-                                     &host_plane);
-    NormalizeTimeStamps(&device_plane, start_walltime_ns_);
+                                     end_gputime_ns, device_plane, host_plane);
+    NormalizeTimeStamps(device_plane, start_walltime_ns_);
   }
-  NormalizeTimeStamps(&host_plane, start_walltime_ns_);
+  NormalizeTimeStamps(host_plane, start_walltime_ns_);
 }
 
 std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
@@ -711,7 +709,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
     for (auto& activity_event : activity_vec) {
       switch (activity_event.type) {
         case RocmTracerEventType::Kernel:
-#if defined(XLA_GPU_ROCM_TRACER_BACKEND) && (XLA_GPU_ROCM_TRACER_BACKEND == 1)
+#if XLA_GPU_ROCM_TRACER_BACKEND == XLA_GPU_ROCM_TRACER_BACKEND_V1
           if (activity_event.name.empty()) {
             activity_event.name = api->name;
           }

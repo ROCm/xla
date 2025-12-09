@@ -110,7 +110,7 @@ class RocmTracer {
 
   using agent_info_map_t = std::unordered_map<uint64_t, rocprofiler_agent_v0_t>;
 
-  using callback_name_info = rocprofiler::sdk::callback_name_info;
+  using buffer_name_info = rocprofiler::sdk::buffer_name_info;
 
   rocprofiler_client_id_t* client_id_{nullptr};
   // Contexts ----------------------------------------------------------
@@ -124,7 +124,7 @@ class RocmTracer {
   kernel_info_map_t kernel_info_{};
   absl::Mutex kernel_lock_;
 
-  callback_name_info name_info_;
+  buffer_name_info name_info_;
   agent_info_map_t agents_;
 
  public:

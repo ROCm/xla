@@ -79,7 +79,7 @@ class GpuTracer : public profiler::ProfilerInterface {
 
 RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
   RocmTracerOptions options;
-#if defined(XLA_GPU_ROCM_TRACER_BACKEND) && (XLA_GPU_ROCM_TRACER_BACKEND == 1)
+#if XLA_GPU_ROCM_TRACER_BACKEND == XLA_GPU_ROCM_TRACER_BACKEND_V1
   std::vector<uint32_t> empty_vec;
   // clang formatting does not preserve one entry per line
   // clang-format off
@@ -151,7 +151,7 @@ RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
 
   options.activity_tracing.emplace(ACTIVITY_DOMAIN_HIP_OPS, empty_vec);
 #else
-  options.max_annotation_strings = 1024 * 1024;
+  options.max_annotation_strings = 4 * 1024 * 1024;
 #endif
   return options;
 }
