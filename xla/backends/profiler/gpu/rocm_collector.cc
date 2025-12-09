@@ -159,7 +159,6 @@ uint64_t get_timestamp() {
 }  // namespace
 
 //==================== PerDeviceCollector ====================//
-
 OccupancyStats PerDeviceCollector::GetOccupancy(
     const RocmDeviceOccupancyParams& params) const {
   // TODO(cj401-amd): hipOccupancyMaxActiveBlocksPerMultiprocessor only
@@ -456,7 +455,6 @@ void PerDeviceCollector::GetDeviceCapabilities(int32_t device_ordinal,
 }
 
 //==================== RocmTraceCollectorImpl ====================//
-
 void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
                                       bool is_auxiliary) {
   absl::MutexLock lock(event_maps_mutex_);
@@ -528,7 +526,7 @@ void RocmTraceCollectorImpl::Flush() {
     }
   }
 
-  for (auto& event : aggregated_events) {
+  for (auto&& event : aggregated_events) {
     auto id = event.device_id - min_device_id;
     if (id < num_gpus_) {
       per_device_collector_[id].AddEvent(std::move(event));
