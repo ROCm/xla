@@ -341,16 +341,17 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
       annotation_map()->LookUp(trace_event->correlation_id);
   trace_event->thread_id = rec.thread_id;
   trace_event->stream_id = kinfo.queue_id.handle;
+  //  KernelDetails is aggregate-initialized positionally
   trace_event->kernel_info = KernelDetails{
-      .private_segment_size = kinfo.private_segment_size,
-      .group_segment_size = kinfo.group_segment_size,
-      .workgroup_x = kinfo.workgroup_size.x,
-      .workgroup_y = kinfo.workgroup_size.y,
-      .workgroup_z = kinfo.workgroup_size.z,
-      .grid_x = kinfo.grid_size.x,
-      .grid_y = kinfo.grid_size.y,
-      .grid_z = kinfo.grid_size.z,
-      .func_ptr = nullptr,
+      kinfo.private_segment_size,
+      kinfo.group_segment_size,
+      kinfo.workgroup_size.x,
+      kinfo.workgroup_size.y,
+      kinfo.workgroup_size.z,
+      kinfo.grid_size.x,
+      kinfo.grid_size.y,
+      kinfo.grid_size.z,
+      nullptr,
   };
 
   auto it = kernel_info_.find(kinfo.kernel_id);
