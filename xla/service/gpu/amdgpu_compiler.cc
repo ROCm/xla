@@ -131,9 +131,10 @@ absl::Status AMDGPUCompiler::OptimizeHloConvolutionCanonicalization(
       stream_executor::RocmSolverContext::Create);
   pipeline.AddPass<ConvRewriter>(gpu_version);
   pipeline.AddPass<ConvPaddingLegalization>();
-  //TODO(rocm): Until #12613 is fixed.
-  // auto rcc = std::get<se::RocmComputeCapability>(gpu_version);
-  // pipeline.AddPass<CudnnFusedConvRewriter>(rcc, dnn_version, toolkit_version);
+  // TODO(rocm): Until #12613 is fixed.
+  //  auto rcc = std::get<se::RocmComputeCapability>(gpu_version);
+  //  pipeline.AddPass<CudnnFusedConvRewriter>(rcc, dnn_version,
+  //  toolkit_version);
 
   // The conv padding/vectorization passes which we need to get rid of.  They
   // also leave behind unnecessary tuple/get-tuple-element pairs that
@@ -257,17 +258,13 @@ absl::Status AMDGPUCompiler::AddConvAndGemmAutotuningPasses(
     HloPassPipeline* pipeline, const se::GpuComputeCapability& gpu_version,
     const CompileOptions& options, HloModule* hlo_module,
     AutotuneConfig& autotune_config, tsl::thread::ThreadPool* thread_pool,
-  // TODO(b/407494793): Remove the GpuConvAlgorithmPicker and use the autotuner
-  // it supports ROCM.
-  pipeline->AddPass<GpuConvAlgorithmPicker>(autotune_config);
-
-    se::StreamExecutor* stream_exec) {
-  //We do autotuning irrespective of --xla_gpu_autotune_level.
+    se::StreamExecutor* stream_exec,
+    const Compiler::TargetConfig* target_config) {
+  // We do autotuning irrespective of --xla_gpu_autotune_level.
   pipeline->AddPass<GpuConvAlgorithmPicker>(autotune_config);
   // Undo CudnnFusedConvRewriter work if no algorithm was found.
   pipeline->AddPass<CudnnFusedConvDecomposer>();
   pipeline->AddPass<GemmAlgorithmPicker>(autotune_config);
-  return absl::OkStatus();
 }
 
 AMDGPUCompiler::AMDGPUCompiler()
