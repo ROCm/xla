@@ -264,7 +264,6 @@ absl::Status AMDGPUCompiler::AddConvAndGemmAutotuningPasses(
   pipeline->AddPass<GpuConvAlgorithmPicker>(autotune_config);
   // Undo CudnnFusedConvRewriter work if no algorithm was found.
   pipeline->AddPass<CudnnFusedConvDecomposer>();
-  pipeline->AddPass<GemmAlgorithmPicker>(autotune_config);
 }
 
 AMDGPUCompiler::AMDGPUCompiler()
