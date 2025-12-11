@@ -32,15 +32,19 @@ class LinearInterpolator:
         if not self.points:
             return x
 
+        # Special case: single point - assume slope=1 (no drift)
+        # y = y0 + (x - x0) = x + (y0 - x0)
+        if len(self.points) == 1:
+            x0, y0 = self.points[0]
+            return x + (y0 - x0)
+
         idx = bisect.bisect_right(self.xs, x)
         
         if idx == 0:
             # Extrapolate using first segment
-            if len(self.points) < 2: return self.ys[0]
             p0, p1 = self.points[0], self.points[1]
         elif idx >= len(self.points):
             # Extrapolate using last segment
-            if len(self.points) < 2: return self.ys[-1]
             p0, p1 = self.points[-2], self.points[-1]
         else:
             p0, p1 = self.points[idx-1], self.points[idx]
@@ -480,6 +484,9 @@ def process_trace_file(trace_path, snapshot_path, offset_entries, meta_nodes, no
                 e_h0 = e_un  # Default: no correction means e_h0 == e_un
                 if snap_interp and offset_interp and offset_interp.interp.points:
                     # Full correction with snapshot interpolation and offset adjustment
+                    if event.metadata_id == 2:
+                        # breakpoint()
+                        pass
                     if is_device_plane:
                         # Device Event Transform
                         # E_di = E_un
@@ -583,8 +590,12 @@ def process_trace_file(trace_path, snapshot_path, offset_entries, meta_nodes, no
                     # Clamp non-negative just in case
                     if new_offset_ps < 0: 
                         pass
-                        
-                    event.offset_ps = new_offset_ps
+                    try:
+                        event.offset_ps = new_offset_ps
+                    except Exception as e:
+                        print(f"Error setting offset_ps for event {event.metadata_id}: {e}")
+                        # breakpoint()
+                        pass
     
     print(f"  Processed {events_processed} events in {len(xspace.planes)} planes.")
     if print_collectives:

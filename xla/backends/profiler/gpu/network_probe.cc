@@ -26,6 +26,7 @@
 #include "xla/backends/profiler/gpu/probe_utils.h"
 #include "xla/backends/profiler/gpu/graph_calc.h"
 #include "xla/backends/profiler/gpu/svm_wrapper.h"
+#include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/logging.h"
 
 namespace xla::profiler {
@@ -80,7 +81,7 @@ WindowManager::WindowManager(uint64_t window_duration_ns, int num_probe_threads)
   current_window_.round_id = current_round_id_.load();
   
   // Create barrier for synchronizing window rotation
-  barrier_ = std::make_unique<absl::Barrier>(num_probe_threads);
+  barrier_ = std::make_shared<absl::Barrier>(num_probe_threads);
 }
 
 bool WindowManager::IsWindowExpired() {
@@ -89,8 +90,15 @@ bool WindowManager::IsWindowExpired() {
 }
 
 bool WindowManager::NotifyWindowExpired() {
+  // Capture local barrier reference to avoid use-after-free if another thread rotates it
+  std::shared_ptr<absl::Barrier> local_barrier;
+  {
+    absl::MutexLock lock(&barrier_mu_);
+    local_barrier = barrier_;
+  }
+
   // Block at barrier until all threads arrive
-  bool am_last = barrier_->Block();
+  bool am_last = local_barrier->Block();
   
   if (am_last) {
     LOG(ERROR) << "Last thread at barrier, will rotate window";
@@ -135,7 +143,7 @@ void WindowManager::RotateWindow() {
   // Recreate barrier for next window
   {
     absl::MutexLock lock(&barrier_mu_);
-    barrier_ = std::make_unique<absl::Barrier>(num_probe_threads_);
+    barrier_ = std::make_shared<absl::Barrier>(num_probe_threads_);
     LOG(ERROR) << "Barrier recreated for next window";
   }
 }
@@ -292,8 +300,8 @@ absl::Status NetworkProbeManager::Initialize() {
       num_probe_threads);
   
   LOG(ERROR) << "Window manager initialized with " << num_probe_threads 
-            << " probe threads (will export to /tmp/probe_windows_node" 
-            << config_.node_id << ".jsonl on shutdown)";
+            << " probe threads (will export to " << config_.output_dir 
+            << "/probe_windows_node" << config_.node_id << ".jsonl on shutdown)";
 
   has_probe_senders_ = config_.has_probe_senders || !out_neighbors_.empty();
   if (!has_probe_senders_ && !config_.probe_participants.empty()) {
@@ -1925,7 +1933,15 @@ void NetworkProbeManager::UpdateEdgeStat(int dst_node_id, int lost, int success)
 }
 
 absl::Status NetworkProbeManager::ExportData() {
-  std::string output_dir = "/tmp";  // TODO: Read from config
+  const std::string& output_dir = config_.output_dir;
+  
+  // Create output directory if it doesn't exist
+  absl::Status dir_status = tsl::Env::Default()->RecursivelyCreateDir(output_dir);
+  if (!dir_status.ok()) {
+    LOG(ERROR) << "Failed to create output directory " << output_dir 
+               << ": " << dir_status;
+    return dir_status;
+  }
   
   // Export α/β summary
   std::string summary_file = absl::StrCat(output_dir, "/alpha_beta_node",
@@ -2018,7 +2034,14 @@ void NetworkProbeManager::Shutdown() {
   
   // Export ALL accumulated windows when shutdown
   if (window_manager_) {
-    std::string export_file = absl::StrCat("/tmp/probe_windows_node", 
+    // Create output directory if it doesn't exist
+    absl::Status dir_status = tsl::Env::Default()->RecursivelyCreateDir(config_.output_dir);
+    if (!dir_status.ok()) {
+      LOG(ERROR) << "Failed to create output directory " << config_.output_dir 
+                 << ": " << dir_status;
+    }
+    
+    std::string export_file = absl::StrCat(config_.output_dir, "/probe_windows_node", 
                                            config_.node_id, ".jsonl");
     std::ofstream out(export_file, std::ios::out | std::ios::trunc);  // Overwrite mode
     if (out.is_open()) {

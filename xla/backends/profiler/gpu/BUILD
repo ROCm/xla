@@ -389,6 +389,7 @@ cc_library(
         "rocm-only",
     ],
   deps = [
+    ":distributed_profiler_context",
     "//xla/tsl/profiler/backends/cpu:annotation_stack",
     "//xla/tsl/profiler/utils:time_utils",
     "//xla/tsl/profiler/utils:math_utils",
@@ -538,8 +539,26 @@ cc_library(
     "@com_google_absl//absl/status:statusor",
     "@com_google_absl//absl/strings",
     "@com_google_absl//absl/synchronization",
+    "@tsl//tsl/platform:env",
     "@tsl//tsl/platform:logging",
     "@com_google_absl//absl/strings:str_format",
+  ],
+  visibility = ["//visibility:public"],
+)
+
+cc_library(
+  name = "distributed_profiler_context",
+  srcs = ["distributed_profiler_context.cc"],
+  hdrs = ["distributed_profiler_context.h"],
+  tags = [
+    "gpu",
+    "manual",
+    "rocm-only",
+  ],
+  deps = [
+    "@com_google_absl//absl/synchronization",
+    "@com_google_absl//absl/time",
+    "@tsl//tsl/platform:logging",
   ],
   visibility = ["//visibility:public"],
 )
@@ -554,6 +573,7 @@ cc_library(
     "rocm-only",
   ],
   deps = [
+    ":distributed_profiler_context",
     ":rocm_tracer_utils",
     ":network_probe",
     "@com_google_absl//absl/log",
@@ -564,6 +584,59 @@ cc_library(
     "@tsl//tsl/platform:env",
   ],
   visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "profiler_plugin_interface",
+    srcs = ["profiler_plugin_interface.cc"],
+    hdrs = ["profiler_plugin_interface.h"],
+    tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "distributed_profiler_config",
+    srcs = ["distributed_profiler_config.cc"],
+    hdrs = ["distributed_profiler_config.h"],
+    tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
+    deps = [
+        "//xla/tsl/util:env_var",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@tsl//tsl/platform:logging",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "distributed_profiler_plugin",
+    srcs = ["distributed_profiler_plugin.cc"],
+    hdrs = ["distributed_profiler_plugin.h"],
+    tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
+    deps = [
+        ":distributed_profiler_config",
+        ":profiler_plugin_interface",
+        "@tsl//tsl/platform:logging",
+    ],
+    visibility = ["//visibility:public"],
 )
 
 cc_library(
@@ -578,6 +651,8 @@ cc_library(
         "manual",
     ]),
     deps = [
+        ":distributed_profiler_plugin",
+        ":profiler_plugin_interface",
         ":rocm_tracer_utils",
         ":rocm_profiler_backend_cfg",
         ":distributed_timestamp_sync",
@@ -1032,5 +1107,22 @@ cc_binary(
         "@com_google_absl//absl/log:globals",
         "@com_google_absl//absl/log:initialize",
         "@com_google_absl//absl/strings",
+    ],
+)
+
+xla_test(
+    name = "profiler_plugin_interface_test",
+    size = "small",
+    srcs = ["profiler_plugin_interface_test.cc"],
+    tags = [
+        "gpu",
+        "rocm-only",
+        "no_mac",
+    ],
+    deps = [
+        ":profiler_plugin_interface",
+        "@com_google_googletest//:gtest_main",
+        "@tsl//tsl/platform:test",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],
 )

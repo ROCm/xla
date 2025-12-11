@@ -30,52 +30,8 @@ limitations under the License.
 
 namespace xla::profiler {
 
-// ============================================================================
-// DistributedProfilerContextManager - Singleton Implementation
-// ============================================================================
-
-DistributedProfilerContextManager& DistributedProfilerContextManager::Get() {
-  static DistributedProfilerContextManager instance;
-  return instance;
-}
-
-void DistributedProfilerContextManager::SetDistributedContext(
-    const DistributedProfilerContext& ctx) {
-  absl::MutexLock lock(&mu_);
-  
-  if (context_set_) {
-    LOG(WARNING) << "Distributed profiler context already set. "
-                 << "Ignoring new context. "
-                 << "(node_id=" << ctx.node_id << ", num_nodes=" << ctx.num_nodes << ")";
-    return;
-  }
-  
-  context_ = ctx;
-  context_set_ = true;
-  
-  LOG(INFO) << "Distributed profiler context initialized: "
-            << "node_id=" << ctx.node_id << ", num_nodes=" << ctx.num_nodes
-            << ", addresses=" << ctx.node_addresses.size()
-            << ", socket_ts=" << (ctx.enable_socket_timestamping ? "enabled" : "disabled");
-}
-
-std::optional<DistributedProfilerContext> 
-DistributedProfilerContextManager::GetDistributedContext() const {
-  absl::MutexLock lock(&mu_);
-  return context_;
-}
-
-bool DistributedProfilerContextManager::HasDistributedContext() const {
-  absl::MutexLock lock(&mu_);
-  return context_set_;
-}
-
-void DistributedProfilerContextManager::ResetContext() {
-  absl::MutexLock lock(&mu_);
-  context_.reset();
-  context_set_ = false;
-  LOG(INFO) << "Distributed profiler context reset";
-}
+// DistributedProfilerContextManager implementation is now in 
+// distributed_profiler_context.cc
 
 // ============================================================================
 // DistributedTimestampSynchronizer Implementation

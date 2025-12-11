@@ -14,6 +14,7 @@ limitations under the License.
 ==============================================================================*/
 
 #include "xla/backends/profiler/gpu/rocm_collector.h"
+#include "xla/backends/profiler/gpu/profiler_plugin_interface.h"
 
 #include "absl/container/fixed_array.h"
 #include "absl/container/flat_hash_set.h"
@@ -583,6 +584,9 @@ absl::Status RocmTraceCollectorImpl::InitializeDistributedSync() {
               << "socket=" << ts.socket_ts_ns << " ns";
   }
   
+  ProfilerPluginRegistry::Get().InitializePlugins();
+  ProfilerPluginRegistry::Get().OnProfilingStart(this);
+
   StartSnapshotThread(options_.snapshot_period_ms);
   return absl::OkStatus();
 }
@@ -590,11 +594,16 @@ absl::Status RocmTraceCollectorImpl::InitializeDistributedSync() {
 
 void RocmTraceCollectorImpl::Export(XSpace* space) {
   StopSnapshotThread();
+  ProfilerPluginRegistry::Get().OnProfilingStop();
+
   uint64_t end_gputime_ns = get_timestamp();
   XPlaneBuilder host_plane(FindOrAddMutablePlaneWithName(
       space, tsl::profiler::kRoctracerApiPlaneName));
 
   VLOG(3) << "Calling RocmTraceCollectorImpl::Export num_gpus " << num_gpus_;
+
+  // Export plugin data
+  ProfilerPluginRegistry::Get().ExportPluginData(space);
 
   // NEW: Export probe data if available
   if (ts_sync_) {
@@ -780,6 +789,10 @@ void RocmTraceCollectorImpl::StopSnapshotThread() {
       snapshot_thread_->join();
     }
   }
+}
+
+uint64_t RocmTraceCollectorImpl::GetTimestamp() {
+  return get_timestamp();
 }
 
 std::unique_ptr<RocmTraceCollector> CreateRocmCollector(

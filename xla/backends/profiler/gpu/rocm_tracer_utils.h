@@ -41,6 +41,7 @@ limitations under the License.
 #include "tsl/platform/errors.h"
 #include "tsl/platform/macros.h"
 #include "absl/time/time.h"
+#include "xla/backends/profiler/gpu/distributed_profiler_context.h"
 
 namespace xla {
 namespace profiler {
@@ -163,46 +164,7 @@ struct RocmTracerEvent {
   };
 };
 
-// Distributed profiling context for multi-node timestamp synchronization
-struct DistributedProfilerContext {
-  // Network addresses of all nodes in the distributed job
-  std::vector<std::string> node_addresses;  // e.g., ["192.168.1.10:5000", "192.168.1.11:5000"]
-  
-  // Current node's index in the distributed setup
-  int node_id = -1;
-  
-  // Total number of nodes
-  int num_nodes = 1;
-  
-  // Socket configuration for timestamp exchange
-  // Enable SOF_TIMESTAMPING_RX_SOFTWARE for hardware clock synchronization
-  bool enable_socket_timestamping = false;
-  
-  // Timeout for timestamp exchange operations
-  absl::Duration timestamp_sync_timeout = absl::Seconds(5);
-
-  // Probe configuration for network synchronization
-  uint64_t probe_cadence_us = 800;
-  uint64_t probe_window_s = 4;
-  bool enable_probe_export = true;
-  bool enable_clock_snapshots = false;
-  std::string graph_policy = "random_graph";
-  std::vector<int> neighbors;  // Resolved neighbors for probing
-  std::vector<int> in_neighbors;  // Resolved in-neighbors for probing
-  std::vector<int> probe_participants;  // Nodes expected to run ProbeSender
-  bool has_probe_senders = false;
-  bool enable_master_sync = true;
-  int master_node_id = 0;
-  uint16_t master_control_port = 36000;
-  uint16_t master_sync_port = 37000;
-  
-  // Port assignments for directed edges: key="src->dst", value=(dst_listen_port, src_response_port)
-  std::map<std::string, std::pair<uint16_t, uint16_t>> edge_ports;
-
-  // Optional profiling-session metadata populated by the collector
-  std::optional<uint64_t> collector_start_walltime_ns;
-  std::optional<uint64_t> collector_start_gpu_ns;
-};
+// DistributedProfilerContext is now in distributed_profiler_context.h
 
 struct RocmTraceCollectorOptions {
   // Maximum number of events to collect from callback API; if -1, no limit.

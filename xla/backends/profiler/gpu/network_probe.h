@@ -144,7 +144,7 @@ class WindowManager {
   std::vector<WindowStats> completed_windows_ ABSL_GUARDED_BY(mu_);
   
   // Barrier for window rotation
-  std::unique_ptr<absl::Barrier> barrier_;
+  std::shared_ptr<absl::Barrier> barrier_;
   absl::Mutex barrier_mu_;  // Protects barrier recreation
 };
 

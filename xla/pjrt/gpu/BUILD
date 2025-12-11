@@ -48,6 +48,31 @@ cc_library(
 )
 
 cc_library(
+    name = "distributed_context_setup",
+    srcs = ["distributed_context_setup.cc"],
+    hdrs = ["distributed_context_setup.h"],
+    defines = if_rocm(["TENSORFLOW_USE_ROCM=1"]),
+    tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
+    deps = [
+        "//xla/backends/profiler/gpu:distributed_profiler_context",
+        "//xla/backends/profiler/gpu:distributed_timestamp_sync",
+        "//xla/pjrt/distributed:key_value_store_interface",
+        "//xla/tsl/platform:errors",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@tsl//tsl/platform:logging",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "se_gpu_pjrt_client",
     srcs = ["se_gpu_pjrt_client.cc"],
     hdrs = ["se_gpu_pjrt_client.h"],
@@ -178,6 +203,7 @@ cc_library(
         "@local_config_cuda//cuda:cuda_headers",
     ]) + if_rocm([
         # keep sorted
+        ":distributed_context_setup",
         "//xla/backends/profiler/gpu:distributed_timestamp_sync",
         "@local_config_rocm//rocm:rocm_headers",
     ]),

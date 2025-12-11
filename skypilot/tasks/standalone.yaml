@@ -1,0 +1,63 @@
+name: xla_build
+
+resources:
+  cloud: kubernetes
+  image_id: ghcr.io/rocm/jax-ubu24.rocm700:nightly
+  accelerators: MI300:1
+  cpus: 16
+  memory: 16Gi
+
+num_nodes: 4
+
+# setup: |
+#   sudo apt-get install libdw-dev libsqlite3-dev openmpi-bin libopenmpi-dev ethtool cmake vim htop netcat-openbsd iproute2 iputils-ping telnet -y
+#   python -m pip install uv
+#   uv pip install --system etils importlib_resources \
+#       orbax-checkpoint huggingface_hub transformers \
+#       torch flax rich-click
+#   mkdir -p /models
+#   echo "HF_HOME: $HF_HOME"
+#   sudo apt install apt-transport-https curl gnupg -y
+#   curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor >bazel-archive-keyring.gpg
+#   sudo mv bazel-archive-keyring.gpg /usr/share/keyrings
+#   echo "deb [arch=amd64 signed-by=/usr/share/keyrings/bazel-archive-keyring.gpg] https://storage.googleapis.com/bazel-apt stable jdk1.8" | sudo tee /etc/apt/sources.list.d/bazel.list
+#   sudo apt update && sudo apt install bazel lsof gdb -y
+#   sudo apt update && sudo apt install bazel-7.4.1 -y
+# bash scripts/model_prep.sh
+
+
+# workdir: .
+
+
+envs:
+  HF_HOME: /models
+
+secrets:
+  HF_TOKEN: null
+
+# file_mounts:
+#   /models/l3jax8bi: ~/work/models/l3jax8bi
+#   /models/l3jax8bi-quant: ~/work/models/l3jax8bi-quant
+
+# ALL NODES: 10.42.239.64
+# 10.42.201.204
+# 10.42.239.75
+# 10.42.201.205
+# TODO: strip newlines and concat with commas
+
+run: |
+  cd /rocmxla
+  ./build_standalone_test.sh
+  ip a
+  MASTER_ADDR=$(echo "$SKYPILOT_NODE_IPS" | head -n1)
+  ethtool -T eth0
+  echo "Starting distributed training, head node: $MASTER_ADDR"
+  echo "My Rank: $SKYPILOT_NODE_RANK"
+  echo "ALL NODES: $SKYPILOT_NODE_IPS"
+  NODE_IPS=$(echo "$SKYPILOT_NODE_IPS" | tr '\n' ',' | sed 's/,$//')
+  echo "NODE_IPS: $NODE_IPS"
+
+  TF_CPP_V=2 TF_CPP_MIN_LOG_LEVEL=0 bazel-out/k8-dbg/bin/xla/backends/profiler/gpu/network_probe_standalone_test \
+   --rank=${SKYPILOT_NODE_RANK} --num_nodes=${SKYPILOT_NUM_NODES} --duration_sec=20 --addresses=$NODE_IPS --topology=loop_2
+  
+  

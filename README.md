@@ -28,6 +28,12 @@ build this repo. Everything here is intended for XLA contributors who want to
 develop the compiler and XLA integrators who want to debug or add support for ML
 frontends and hardware backends.
 
+## Distributed Profiling (ROCm)
+
+For documentation on the multi-node distributed profiling system (clock synchronization, network probing, and trace alignment), please see:
+
+👉 [**Distributed Profiling Documentation Index**](DOCUMENTATION_INDEX.md)
+
 ## Contribute
 
 If you'd like to contribute to XLA, review

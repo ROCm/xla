@@ -1,0 +1,85 @@
+name: xla_run
+
+resources:
+  cloud: kubernetes
+  image_id: ghcr.io/rocm/jax-ubu24.rocm700:nightly
+  accelerators: MI300:1
+  cpus: 16
+  memory: 16Gi
+
+num_nodes: 4
+
+setup: |
+  sudo apt-get install libdw-dev libsqlite3-dev openmpi-bin libopenmpi-dev ethtool cmake vim htop netcat-openbsd iproute2 iputils-ping telnet -y
+  python -m pip install uv
+  uv pip install --system etils importlib_resources \
+      orbax-checkpoint huggingface_hub transformers \
+      torch flax rich-click
+  mkdir -p /models
+  echo "HF_HOME: $HF_HOME"
+  sudo apt install apt-transport-https curl gnupg git -y
+  curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor >bazel-archive-keyring.gpg
+  sudo mv bazel-archive-keyring.gpg /usr/share/keyrings
+  echo "deb [arch=amd64 signed-by=/usr/share/keyrings/bazel-archive-keyring.gpg] https://storage.googleapis.com/bazel-apt stable jdk1.8" | sudo tee /etc/apt/sources.list.d/bazel.list
+  sudo apt update && sudo apt install bazel lsof gdb -y
+  sudo apt update && sudo apt install bazel-7.4.1 -y
+  uv pip install patchelf --system
+  cd /jax-llm-examples/llama3 && bash scripts/model_prep.sh
+  cd /rocm-systems/projects && cmake -B /opt/rocm  -D CMAKE_INSTALL_PREFIX=/opt/rocm-7.0.0 -DCMAKE_BUILD_TYPE=Debug rocprofiler-sdk
+  cd /opt/rocm-7.0.0 && cmake --build . --parallel 16 --target all
+  cd /rocm-jax/jax_rocm_plugin &&  python3 ./build/build.py build   --wheels="jax-rocm-plugin,jax-rocm-pjrt"   --rocm_version=7   --rocm_path=/opt/rocm-7.0.0   --use_clang=True   --clang_path=/opt/rocm-7.0.0/llvm/bin/clang   --bazel_options="--override_repository=xla=/rocmxla" --local_xla_path /rocmxla \
+    --bazel_options=--copt=-g3 --bazel_options=--copt=-O0 \
+    --bazel_options=--cxxopt=-g3  --bazel_options=--cxxopt=-O0
+  cd /jax && python3 ./build/build.py build   --wheels="jaxlib"   --rocm_version=7   --rocm_path=/opt/rocm-7.0.0   --use_clang=True   --clang_path=/opt/rocm-7.0.0/llvm/bin/clang   --bazel_options="--override_repository=xla=/rocmxla" --local_xla_path /rocmxla \
+    --bazel_options=--copt=-g3 \
+    --bazel_options=--cxxopt=-g3
+  uv pip install /rocm-jax/jax_rocm_plugin/dist/jax_rocm7_p*.whl --system
+  uv pip install /jax/dist/jaxlib-*.whl --system
+  rm /rocm-jax/jax_rocm_plugin/dist/jax_rocm7_pj*.whl
+  
+# bash scripts/model_prep.sh
+
+
+# workdir: .
+
+
+envs:
+  HF_HOME: /models
+
+secrets:
+  HF_TOKEN: null
+
+file_mounts:
+  /rocmxla: /home/howwang/work/ml101/rocmxla
+  /jax: /home/howwang/work/ml101/jax
+  /rocm-systems/projects/rocprofiler-sdk: /home/howwang/work/ml101/rocm-systems/projects/rocprofiler-sdk
+  /rocm-jax: /home/howwang/work/ml101/rocm-jax
+  /jax-llm-examples: /home/howwang/work/ml101/jax-llm-examples
+
+# ALL NODES: 10.42.239.64
+# 10.42.201.204
+# 10.42.239.75
+# 10.42.201.205
+# TODO: strip newlines and concat with commas
+
+run: |
+  ip a
+  MASTER_ADDR=$(echo "$SKYPILOT_NODE_IPS" | head -n1)
+  ethtool -T eth0
+  echo "Starting distributed training, head node: $MASTER_ADDR"
+  echo "My Rank: $SKYPILOT_NODE_RANK"
+  echo "ALL NODES: $SKYPILOT_NODE_IPS"
+  NODE_IPS=$(echo "$SKYPILOT_NODE_IPS" | tr '\n' ',' | sed 's/,$//')
+  echo "NODE_IPS: $NODE_IPS"
+    MASTER_ADDR=$(echo "$SKYPILOT_NODE_IPS" | head -n1)
+  ethtool -T eth0
+  echo "Starting distributed training, head node: $MASTER_ADDR"
+  echo "My Rank: $SKYPILOT_NODE_RANK"
+  cd /jax-llm-examples/llama3 && TF_CPP_MAX_VLOG_LEVEL=1 TF_CPP_MIN_LOG_LEVEL=0 NCCL_SOCKET_IFNAME=eth0 NCCL_DEBUG=INFO python ../psum/p1.py -n $SKYPILOT_NUM_NODES -r ${SKYPILOT_NODE_RANK} --multi -m "$MASTER_ADDR:19488" 2>&1 | tee node${SKYPILOT_NODE_RANK}.log
+
+
+# cd /jax-llm-examples/llama3 && TF_CPP_MAX_VLOG_LEVEL=1 TF_CPP_MIN_LOG_LEVEL=0 NCCL_SOCKET_IFNAME=eth0 NCCL_DEBUG=INFO python main.py -n $SKYPILOT_NUM_NODES -r ${SKYPILOT_NODE_RANK} --multi -m "$MASTER_ADDR:19488" -c /models/l3jax8bi 2>&1 | tee node${SKYPILOT_NODE_RANK}.log
+
+# # TF_CPP_V=2 TF_CPP_MIN_LOG_LEVEL=0 bazel-out/k8-dbg/bin/xla/backends/profiler/gpu/network_probe_standalone_test \
+# #   --rank=${SKYPILOT_NODE_RANK} --num_nodes=${SKYPILOT_NUM_NODES} --duration_sec=20 --addresses=$NODE_IPS --topology=loop_2
+

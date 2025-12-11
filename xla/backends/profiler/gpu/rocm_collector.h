@@ -145,6 +145,10 @@ class RocmTraceCollector {
   virtual absl::Status InitializeDistributedSync() = 0;
   virtual void StartSnapshotThread(int period_ms) = 0;
   virtual void StopSnapshotThread() = 0;
+  
+  virtual uint64_t start_walltime_ns() const = 0;
+  virtual uint64_t start_gputime_ns() const = 0;
+  virtual uint64_t GetTimestamp() = 0;
 
  protected:
   RocmTraceCollectorOptions options_;
@@ -206,6 +210,10 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
     VLOG(2) << "RocmTracerEvent dropped (correlation_id=" << correlation_id
             << ",) : " << reason << ".";
   }
+
+  uint64_t start_walltime_ns() const override { return start_walltime_ns_; }
+  uint64_t start_gputime_ns() const override { return start_gputime_ns_; }
+  uint64_t GetTimestamp() override;
 
  private:
   std::atomic<int> num_callback_events_;

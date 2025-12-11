@@ -30,12 +30,8 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include <arpa/inet.h>
-#include <ifaddrs.h>
-#include <netinet/in.h>
-#include <unistd.h>
-
 #include "absl/container/flat_hash_map.h"
+#include "xla/tsl/distributed_runtime/coordination/network_config_setup.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/flags/flag.h"
 #include "absl/functional/bind_front.h"
@@ -250,106 +246,17 @@ absl::Status CoordinationServiceAgent::Connect() {
   }
 
   LOG(INFO) << "Coordination agent has successfully connected.";
-  auto get_hostname = []() -> std::string {
-    char hostname[256];
-    hostname[255] = '\0';
-    if (gethostname(hostname, 255) == 0) {
-      return std::string(hostname);
-    }
-    return "unknown-host";
+  
+  // Register node address for distributed profiling (via extracted utility)
+  auto insert_fn = [this](const std::string& key, const std::string& value) {
+    return InsertKeyValue(key, value);
   };
-  auto get_local_ip = [](const std::string& ifname) -> std::string {
-      struct ifaddrs *ifaddr;
-      if (getifaddrs(&ifaddr) == -1) {
-          perror("getifaddrs");
-          return std::string();
-      }
-      std::string ip;
-      char *c_ifname = new char[ifname.size() + 1];
-      strcpy(c_ifname, ifname.c_str());
-      for (struct ifaddrs *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
-          if (ifa->ifa_addr == nullptr) continue;
-          if (ifa->ifa_addr->sa_family == AF_INET && strcmp(ifa->ifa_name, c_ifname) == 0) {
-              char buf[INET_ADDRSTRLEN];
-              struct sockaddr_in *sa = reinterpret_cast<struct sockaddr_in *>(ifa->ifa_addr);
-              if (inet_ntop(AF_INET, &(sa->sin_addr), buf, INET_ADDRSTRLEN) != nullptr) {
-                  ip = buf;
-              }
-              break;
-          }
-      }
-      freeifaddrs(ifaddr);
-      delete[] c_ifname;
-      return ip;
-  };
-
-  /*
-  auto hostname_to_ip = [](const std::string& hostname, const std::string& ip_address) -> bool {
-      struct addrinfo hints, *res, *p;
-      int status;
-      char ipstr[INET6_ADDRSTRLEN];
-  
-      // Setup hints structure
-      memset(&hints, 0, sizeof hints);
-      hints.ai_family = AF_UNSPEC;    // IPv4 or IPv6
-      hints.ai_socktype = SOCK_STREAM; // Stream socket (TCP)
-  
-      // Perform DNS lookup
-      if ((status = getaddrinfo(hostname, NULL, &hints, &res)) != 0) {
-          std::cerr << "getaddrinfo error: " << gai_strerror(status) << std::endl;
-          return false;
-      }
-  
-      // Loop through all results and print the first IP found
-      for (p = res; p != NULL; p = p->ai_next) {
-          void *addr;
-          // get the pointer to the address itself,
-          // different fields in IPv4 and IPv6:
-          if (p->ai_family == AF_INET) { // IPv4
-              struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
-              addr = &(ipv4->sin_addr);
-          } else { // IPv6
-              struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)p->ai_addr;
-              addr = &(ipv6->sin6_addr);
-          }
-  
-          // convert the IP to a string and store it
-          if (inet_ntop(p->ai_family, addr, ipstr, sizeof ipstr) != NULL) {
-              ip_address = ipstr;
-              freeaddrinfo(res); // free the linked list
-              return true; // Return the first successful IP
-          }
-      }
-  
-      freeaddrinfo(res); // free the linked list (if loop finished without success)
-      return false; // No address found
-  };
-  */
-  auto hostname = get_hostname();
-  char* env_nics = getenv("NCCL_SOCKET_IFNAME");
-  std::vector<std::string> ifnames;
-  if(env_nics != nullptr) {
-    ifnames = absl::StrSplit(std::string(env_nics), ',');
+  absl::Status addr_status = NetworkConfigSetup::RegisterNodeAddress(
+      task_.task_id(), insert_fn);
+  if (!addr_status.ok()) {
+    LOG(WARNING) << "Failed to register node address: " << addr_status;
   }
-  else{
-    ifnames = {"eth0"};
-  }
-  for(const auto& ifname : ifnames) {
-    auto ip = get_local_ip(ifname);
-    if(!ip.empty()) {
-      auto task_id = task_.task_id();
-      auto addr_key = absl::StrCat("rocm:node_addresses:", task_id);
-      auto address = absl::StrCat(ip, ":8765");
-      absl::Status s = InsertKeyValue(addr_key, address);
-      if (!s.ok()) {
-        LOG(ERROR) << "Failed to insert key-value for node address " << ifname << ": " << s;
-      }
-      else{
-        LOG(INFO) << "Inserted key-value for node address " << ifname << ": " << address;
-        break;
-      }
-    }
-  }
+  
   heartbeat_thread_.reset(env_->StartThread(
       ThreadOptions(), kHeartbeatThread,
       absl::bind_front(&CoordinationServiceAgent::StartSendingHeartbeats,

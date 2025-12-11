@@ -126,6 +126,18 @@ tsl_cc_test(
 )
 
 cc_library(
+    name = "network_config_setup",
+    srcs = ["network_config_setup.cc"],
+    hdrs = ["network_config_setup.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@tsl//tsl/platform:logging",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "coordination_service_agent",
     srcs = ["coordination_service_agent.cc"],
     hdrs = ["coordination_service_agent.h"],
@@ -133,6 +145,7 @@ cc_library(
         ":coordination_client",
         ":coordination_service",
         ":coordination_service_error_util",
+        ":network_config_setup",
         "//xla/tsl/distributed_runtime:call_options",
         "//xla/tsl/framework:cancellation",
         "//xla/tsl/lib/monitoring:gauge",

@@ -27,6 +27,7 @@ limitations under the License.
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 
+#include "xla/backends/profiler/gpu/distributed_profiler_context.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 
 namespace xla::profiler {
@@ -34,52 +35,7 @@ namespace xla::profiler {
 // Forward declarations
 class NetworkProbeManager;
 
-// ============================================================================
-// SINGLETON: DistributedProfilerContextManager
-// ============================================================================
-// Thread-safe singleton to store and manage distributed profiler context.
-// This is initialized EARLY in BuildDistributedDevices() when addresses are
-// exchanged via KV store, then accessed later when ROCM profiler starts.
-//
-// Usage Flow:
-//   1. BuildDistributedDevices() exchanges addresses via KV store
-//   2. BuildDistributedDevices() calls SetDistributedContext() on singleton
-//   3. Later, CreateGpuTracer() or rocm_collector initializer calls
-//      GetDistributedContext() to access the stored context
-//   4. DistributedTimestampSynchronizer is initialized with this context
-
-class DistributedProfilerContextManager {
- public:
-  // Get the singleton instance
-  static DistributedProfilerContextManager& Get();
-
-  // Set the distributed context (called from BuildDistributedDevices)
-  // Can only be called once; subsequent calls are ignored
-  void SetDistributedContext(const DistributedProfilerContext& ctx);
-
-  // Get the distributed context if available
-  std::optional<DistributedProfilerContext> GetDistributedContext() const;
-
-  // Check if context is available
-  bool HasDistributedContext() const;
-
-  // Reset context (for testing)
-  void ResetContext();
-
- private:
-  DistributedProfilerContextManager() = default;
-  ~DistributedProfilerContextManager() = default;
-
-  // Prevent copy/move
-  DistributedProfilerContextManager(const DistributedProfilerContextManager&) =
-      delete;
-  DistributedProfilerContextManager& operator=(
-      const DistributedProfilerContextManager&) = delete;
-
-  mutable absl::Mutex mu_;
-  std::optional<DistributedProfilerContext> context_ ABSL_GUARDED_BY(mu_);
-  bool context_set_ ABSL_GUARDED_BY(mu_) = false;
-};
+// DistributedProfilerContextManager is now in distributed_profiler_context.h
 
 // ============================================================================
 // Struct representing a synchronized timestamp from a specific node
