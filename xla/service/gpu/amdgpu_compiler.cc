@@ -50,6 +50,7 @@ limitations under the License.
 #include "xla/service/gpu/autotuning/autotuner_util.h"
 #include "xla/service/gpu/autotuning/conv_algorithm_picker.h"
 #include "xla/service/gpu/autotuning/gemm_fusion_autotuner.h"
+#include "xla/service/gpu/autotuning/gemm_algorithm_picker.h"
 #include "xla/service/gpu/cublas_cudnn.h"
 #include "xla/service/gpu/cublas_padding_requirements.h"
 #include "xla/service/gpu/gpu_compiler.h"
@@ -264,6 +265,7 @@ absl::Status AMDGPUCompiler::AddConvAndGemmAutotuningPasses(
   pipeline->AddPass<GpuConvAlgorithmPicker>(autotune_config);
   // Undo CudnnFusedConvRewriter work if no algorithm was found.
   pipeline->AddPass<CudnnFusedConvDecomposer>();
+  pipeline->AddPass<GemmAlgorithmPicker>(autotune_config);
 }
 
 AMDGPUCompiler::AMDGPUCompiler()
