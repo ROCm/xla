@@ -647,6 +647,7 @@ xla_test(
     size = "small",
     srcs = ["gpu_executor_test.cc"],
     backends = ["gpu"],
+    tags = ["local"],
     deps = [
         "//xla/service:platform_util",
         "//xla/stream_executor:device_address",
