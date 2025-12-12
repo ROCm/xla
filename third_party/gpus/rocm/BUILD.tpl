@@ -229,7 +229,6 @@ cc_library(
 
 cc_library(
     name = "rocblas",
-    srcs = glob(["%{rocm_root}/lib/librocblas*.so*"]),
     hdrs = glob(["%{rocm_root}/include/rocblas/**"]),
     data = glob([
         "%{rocm_root}/lib/librocblas*.so*",
@@ -240,6 +239,7 @@ cc_library(
     includes = [
         "%{rocm_root}/include",
     ],
+    linkopts = ["-lrocblas"],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [
@@ -410,10 +410,10 @@ cc_library(
 
 cc_library(
     name = "rocsolver",
-    srcs = glob(["%{rocm_root}/lib/librocsolver*.so*"]),
     hdrs = glob(["%{rocm_root}/include/rocsolver/**"]),
     data = glob(["%{rocm_root}/lib/librocsolver*.so*"]),
     include_prefix = "rocm",
+    linkopts = ["-lrocsolver"],
     includes = [
         "%{rocm_root}/include/",
     ],
@@ -439,27 +439,30 @@ cc_library(
 
 cc_library(
     name = "hipsolver",
-    srcs = glob(["%{rocm_root}/lib/libhipsolver*.so*"]),
     hdrs = glob(["%{rocm_root}/include/hipsolver/**"]),
     data = glob(["%{rocm_root}/lib/libhipsolver*.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include/",
     ],
+    linkopts = ["-lhipsolver"],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
-    deps = [":rocm_config"],
+    deps = [
+        ":rocm_config",
+        ":rocm_rpath",
+    ],
 )
 
 cc_library(
     name = "hipblas",
-    srcs = glob(["%{rocm_root}/lib/libhipblas.so*"]),
     hdrs = glob(["%{rocm_root}/include/hipblas/**"]),
     data = glob(["%{rocm_root}/lib/libhipblas.so*"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include/",
     ],
+    linkopts = ["-lhipblas"],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [
