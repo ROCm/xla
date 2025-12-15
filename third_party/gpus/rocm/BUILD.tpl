@@ -126,15 +126,16 @@ cc_library(
 
 cc_library(
     name = "hsa_rocr",
-    srcs = glob(["%{rocm_root}/lib/libhsa-runtime*.so*"]),
+    data = glob(["%{rocm_root}/lib/libhsa-runtime64.so*"]),
     hdrs = glob(["%{rocm_root}/include/hsa/**"]),
     include_prefix = "rocm",
+    linkopts = ["-lhsa-runtime64"],
     includes = [
         "%{rocm_root}/include",
     ],
     linkstatic = 1,
     strip_include_prefix = "%{rocm_root}",
-    deps = [":rocm_config"],
+    deps = [":rocm_rpath", ":rocm_config"],
 )
 
 # workaround to bring data to the same fs layout as expected in the rocm libs
@@ -150,9 +151,11 @@ cc_library(
         ],
         ":multiple_rocm_paths": [
             "-Wl,-rpath=%{rocm_lib_paths}",
+            "-Lexternal/local_config_rocm/rocm/%{rocm_root}/lib",
         ],
         "//conditions:default": [
             "-Wl,-rpath,/opt/rocm/lib",
+            "-Lexternal/local_config_rocm/rocm/%{rocm_root}/lib",
         ],
     }),
     visibility = ["//visibility:public"],
@@ -168,12 +171,25 @@ cc_library(
 )
 
 cc_library(
-    name = "rocm_hip",
-    srcs = glob(
+    name = "hiprtc",
+    data = glob(
         [
-            "%{rocm_root}/lib/libamdhip*.so*",
             "%{rocm_root}/lib/libhiprtc.so*",
             "%{rocm_root}/lib/libhiprtc-builtins.so*",
+        ],
+    ),
+    linkopts = ["-lhiprtc", "-lhiprtc-builtins", "-lpthread"],
+    deps = [
+        ":rocm_config",
+        ":rocm_rpath",
+    ],
+)
+
+cc_library(
+    name = "rocm_hip",
+    data = glob(
+        [
+            "%{rocm_root}/lib/libamdhip64.so*",
         ],
         exclude = [
             # exclude files like libamdhip64.so.7.1.25445-7484b05b13 -> misplaced
@@ -182,29 +198,30 @@ cc_library(
     ),
     hdrs = glob(["%{rocm_root}/include/hip/**"]),
     include_prefix = "rocm",
+    linkopts = ["-lamdhip64", "-lpthread"],
     includes = [
         "%{rocm_root}/include",
     ],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [
+        ":rocm_rpath",
         ":amd_comgr",
         ":hsa_rocr",
         ":rocm_config",
         ":rocm_smi",
         ":rocprofiler_register",
         ":system_libs",
+        ":hiprtc",
     ],
 )
 
 # Used by jax_rocm_plugin to minimally link to hip runtime.
 cc_library(
     name = "hip_runtime",
-    srcs = glob(
+    data = glob(
         [
-            "%{rocm_root}/lib/libamdhip*.so*",
-            "%{rocm_root}/lib/libhiprtc.so*",
-            "%{rocm_root}/lib/libhiprtc-builtins.so*",
+            "%{rocm_root}/lib/libamdhip64.so*",
         ],
         exclude = [
             # exclude files like libamdhip64.so.7.1.25445-7484b05b13 -> misplaced
@@ -213,6 +230,7 @@ cc_library(
     ),
     hdrs = glob(["%{rocm_root}/include/hip/**"]),
     include_prefix = "rocm",
+    linkopts = ["-lamdhip64", "-lpthread"],
     includes = [
         "%{rocm_root}/include",
     ],
@@ -224,6 +242,7 @@ cc_library(
         ":rocm_rpath",
         ":rocprofiler_register",
         ":system_libs",
+        ":hiprtc",
     ],
 )
 
@@ -236,6 +255,7 @@ cc_library(
         "%{rocm_root}/lib/rocblas/**",
     ]),
     include_prefix = "rocm",
+    linkopts = ["-lrocblas"],
     includes = [
         "%{rocm_root}/include",
     ],
@@ -249,6 +269,7 @@ cc_library(
     ],
 )
 
+
 cc_library(
     name = "rocfft",
     data = glob(["%{rocm_root}/lib/librocfft*.so*"]),
@@ -256,7 +277,7 @@ cc_library(
     includes = [
         "%{rocm_root}/include",
     ],
-    linkopts = ["-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib"],
+    linkopts = ["-lrocfft", "-lpthread"],
     linkstatic = 1,
     visibility = ["//visibility:public"],
     deps = [
@@ -272,7 +293,7 @@ cc_library(
     includes = [
         "%{rocm_root}/include",
     ],
-    linkopts = ["-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib"],
+    linkopts = ["-lhipfft", "-lpthread"],
     linkstatic = 1,
     visibility = ["//visibility:public"],
     deps = [
@@ -283,9 +304,10 @@ cc_library(
 
 cc_library(
     name = "hiprand",
-    srcs = glob(["%{rocm_root}/lib/libhiprand*.so*"]),
+    data = glob(["%{rocm_root}/lib/libhiprand*.so*"]),
     hdrs = glob(["%{rocm_root}/include/hiprand/**"]),
     include_prefix = "rocm",
+    linkopts = ["-lhiprand"],
     includes = [
         "%{rocm_root}/include",
         "%{rocm_root}/include/rocrand",
@@ -293,7 +315,7 @@ cc_library(
     linkstatic = 1,
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
-    deps = [":rocm_config"],
+    deps = [":rocm_rpath", ":rocm_config"],
 )
 
 cc_library(
@@ -304,6 +326,7 @@ cc_library(
         "%{rocm_root}/share/miopen/**",
     ]),
     include_prefix = "rocm",
+    linkopts = ["-lMIOpen"],
     includes = [
         "%{rocm_root}/include",
     ],
@@ -318,17 +341,18 @@ cc_library(
 
 cc_library(
     name = "rccl",
-    srcs = glob(["%{rocm_root}/lib/librccl*.so*"]),
+    data = glob(["%{rocm_root}/lib/librccl*.so*"]),
     hdrs = glob(["%{rocm_root}/include/rccl/**"]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include",
     ],
-    linkopts = ["-lnuma"],
+    linkopts = ["-lnuma", "-lrccl"],
     linkstatic = 1,
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [
+        ":rocm_rpath",
         ":rocm_config",
         ":roctracer",
         ":system_libs",
@@ -376,23 +400,27 @@ cc_library(
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [":rocm_rpath", ":rocm_config"],
+    # ADDED: Forces Bazel to treat the srcs as required link targets
+    linkstatic = 1,
 )
 
 cc_library(
     name = "roctracer",
-    srcs = glob([
-        "%{rocm_root}/lib/libroctracer*.so*",
+    data = glob([
+        "%{rocm_root}/lib/libroctracer64.so*",
         "%{rocm_root}/lib/libroctx64.so*",
     ]),
     hdrs = glob(["%{rocm_root}/include/roctracer/**"]),
     include_prefix = "rocm",
+    linkopts = ["-lroctracer64"],
     includes = [
         "%{rocm_root}/include/",
     ],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
-    deps = [":rocm_config"],
+    deps = ["rocm_rpath", ":rocm_config"],
 )
+
 
 cc_library(
     name = "rocprofiler-sdk",
@@ -408,11 +436,13 @@ cc_library(
     deps = [":rocm_rpath", ":rocm_config"],
 )
 
+
 cc_library(
     name = "rocsolver",
     hdrs = glob(["%{rocm_root}/include/rocsolver/**"]),
     data = glob(["%{rocm_root}/lib/librocsolver*.so*"]),
     include_prefix = "rocm",
+    linkopts = ["-lrocsolver"],
     includes = [
         "%{rocm_root}/include/",
     ],
@@ -426,14 +456,15 @@ cc_library(
 
 cc_library(
     name = "rocsparse",
-    srcs = glob(["%{rocm_root}/lib/librocsparse*.so*"]),
+    data = glob(["%{rocm_root}/lib/librocsparse*.so*"]),
     include_prefix = "rocm",
+    linkopts = ["-lrocsparse"],
     includes = [
         "%{rocm_root}/include/",
     ],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
-    deps = [":rocm_config"],
+    deps = [":rocm_rpath", ":rocm_config"],
 )
 
 cc_library(
@@ -441,12 +472,13 @@ cc_library(
     hdrs = glob(["%{rocm_root}/include/hipsolver/**"]),
     data = glob(["%{rocm_root}/lib/libhipsolver*.so*"]),
     include_prefix = "rocm",
+    linkopts = ["-lhipsolver"],
     includes = [
         "%{rocm_root}/include/",
     ],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
-    deps = [":rocm_config"],
+    deps = [":rocm_rpath", ":rocm_config"],
 )
 
 cc_library(
@@ -454,6 +486,7 @@ cc_library(
     hdrs = glob(["%{rocm_root}/include/hipblas/**"]),
     data = glob(["%{rocm_root}/lib/libhipblas.so*"]),
     include_prefix = "rocm",
+    linkopts = ["-lhipblas"],
     includes = [
         "%{rocm_root}/include/",
     ],
@@ -480,11 +513,12 @@ cc_library(
 
 cc_library(
     name = "rocm-core",
-    srcs = glob([
+    data = glob([
         "%{rocm_root}/lib/librocm-core.so*",
     ]),
     visibility = ["//visibility:public"],
-    deps = [":rocm_config"],
+    linkopts = ["-lrocm-core"],
+    deps = [":rocm_rpath", ":rocm_config"],
 )
 
 cc_library(
@@ -495,6 +529,7 @@ cc_library(
         "%{rocm_root}/lib/libhipblaslt.so*",
     ]),
     include_prefix = "rocm",
+    linkopts = ["-lhipblaslt"],
     includes = [
         "%{rocm_root}/include/hipblaslt",
     ],
@@ -509,34 +544,36 @@ cc_library(
 
 cc_library(
     name = "rocrand",
-    srcs = glob(["%{rocm_root}/lib/librocrand*.so*"]),
+    data = glob(["%{rocm_root}/lib/librocrand*.so*"]),
     hdrs = glob(["%{rocm_root}/include/rocrand/**"]),
     include_prefix = "rocm",
+    linkopts = ["-lrocrand"],
     includes = [
         "%{rocm_root}/include/",
     ],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
-    deps = [":rocm_config"],
+    deps = [":rocm_rpath", ":rocm_config"],
 )
 
 cc_library(
     name = "rocprofiler_register",
-    srcs = glob([
+    data = glob([
         "%{rocm_root}/lib/librocprofiler-register.so*",
     ]),
     include_prefix = "rocm",
+    linkopts = ["-lrocprofiler-register"],
     includes = [
         "%{rocm_root}/include",
     ],
     strip_include_prefix = "%{rocm_root}",
-    deps = [":rocm_config"],
+    deps = [":rocm_rpath", ":rocm_config"],
 )
 
 cc_library(
     name = "amd_comgr",
     hdrs = glob(["%{rocm_root}/include/amd_comgr/**"]),
-    srcs = glob([
+    data = glob([
         "%{rocm_root}/lib/libamd_comgr.so*",
     ]),
     include_prefix = "rocm",
@@ -547,7 +584,7 @@ cc_library(
         ":build_hermetic": [
             "-lamd_comgr_loader",
         ],
-        "//conditions:default": [],
+        "//conditions:default": ["-lamd_comgr"],
     }),
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
@@ -560,7 +597,7 @@ cc_library(
 
 cc_library(
     name = "rocm_smi",
-    srcs = glob([
+    data = glob([
         "%{rocm_root}/lib/librocm_smi64.so*",
         "%{rocm_root}/lib/libroam.so*",
     ]),
@@ -569,11 +606,12 @@ cc_library(
         "%{rocm_root}/include/rocm_smi/**",
     ]),
     include_prefix = "rocm",
+    linkopts = ["-lrocm_smi64"],
     includes = [
         "%{rocm_root}/include",
     ],
     strip_include_prefix = "%{rocm_root}",
-    deps = [":rocm_config"],
+    deps = [":rocm_rpath", ":rocm_config"],
 )
 
 cc_library(

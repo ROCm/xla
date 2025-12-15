@@ -36,6 +36,10 @@ limitations under the License.
 #include <chrono>
 #include <unistd.h>  // For standard sysconf
 
+#include <cstdarg>   // va_list, va_start, va_end
+#include <cstdio>    // vsnprintf
+#include <unistd.h>  // write
+
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/strings/str_format.h"
@@ -193,7 +197,7 @@ void RocmTracer::Enable(const RocmTracerOptions& options,
   api_tracing_enabled_ = true;
   activity_tracing_enabled_ = true;
   rocprofiler_start_context(context_);
-  VLOG(1) << "GpuTracer started with number of GPUs = " << NumGpus();
+  LOG(INFO) << "GpuTracer started with number of GPUs = " << NumGpus();
 }
 
 void RocmTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
@@ -442,7 +446,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
   // Gather agent info
   num_gpus_ = 0;
   for (const auto& agent : GetGpuDeviceAgents()) {
-    VLOG(1) << "agent id = " << agent.id.handle << ", dev = " << agent.device_id
+    LOG(INFO) << "agent id = " << agent.id.handle << ", dev = " << agent.device_id
             << ", name = " << (agent.name ? agent.name : "null");
     agents_[agent.id.handle] = agent;
     if (agent.type == ROCPROFILER_AGENT_TYPE_GPU) {
@@ -477,7 +481,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
       nullptr);
 
   rocprofiler_start_context(utility_context_);
-  VLOG(1) << "rocprofiler start utilityContext";
+  LOG(INFO) << "rocprofiler start utilityContext";
 
   // a multiple of the page size, and the gap allows the buffer to absorb bursts
   // of GPU events
@@ -541,7 +545,7 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
 
 void RocmTracer::toolFinalize(void* tool_data) {
   auto& obj = RocmTracer::GetRocmTracerSingleton();
-  VLOG(1) << "Calling toolFinalize!";
+  LOG(INFO) << "Calling toolFinalize!";
   rocprofiler_stop_context(obj.utility_context_);
   obj.utility_context_.handle = 0;
   rocprofiler_stop_context(obj.context_);
@@ -558,7 +562,7 @@ void RocmTracer::Disable() {
   collector_ = nullptr;
   api_tracing_enabled_ = false;
   activity_tracing_enabled_ = false;
-  VLOG(1) << "GpuTracer stopped";
+  LOG(INFO) << "GpuTracer stopped";
 }
 
 // ----------------------------------------------------------------------------
@@ -585,7 +589,7 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
     const uint32_t minor = (version % 10000) / 100;
     const uint32_t patch = version % 100;
 
-    VLOG(1) << absl::StrFormat(
+    LOG(INFO) << absl::StrFormat(
         "%s registered with rocprofiler-sdk (priority=%u), "
         "runtime reports rocprofiler-sdk v%u.%u.%u (%s). "
         "Current XLA integration does not vary behavior based on "
@@ -603,7 +607,7 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
           << ") and ignores subsequent values (version=" << version
           << ", priority=" << priority << ").";
     } else {
-      VLOG(1) << "rocprofiler_configure() called multiple times with "
+      LOG(INFO) << "rocprofiler_configure() called multiple times with "
                  "identical arguments; reusing initial configuration.";
     }
   }
@@ -617,10 +621,56 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
 }  // namespace profiler
 }  // namespace xla
 
+static void write_stderr(const char* s) {
+  if (!s) return;
+  size_t n = 0;
+  while (s[n] != '\0') ++n;
+  (void) ::write(2, s, n);
+}
+
+static void writef(const char* fmt, ...) {
+  char buf[1024];
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  if (n < 0) return;
+  if (n > (int)sizeof(buf)) n = (int)sizeof(buf);
+  (void) ::write(2, buf, (size_t)n);
+}
+
 // force to initialize the hooks before hipInit, if we don't use this
 // some high-level framwork, e.g., maxtext, calls hipInit before
 // rocprofiler_configure, then no tracing callbacks will be triggered,
 // as a result, there is no gpu trace events.
 void __attribute__((constructor)) init_rocm_lib() {
-  rocprofiler_force_configure(xla::profiler::rocprofiler_configure);
+  // rocprofiler_force_configure(xla::profiler::rocprofiler_configure);
+  write_stderr("[XLA] constructor reached: init_rocm_lib_ctor_probe\n");
+
+  // rocprofiler_is_initialized:
+  // status = 0 not initialized/scanned, 1 initialized, -1 initializing/scanning. :contentReference[oaicite:2]{index=2}
+  int init_status = -999;
+  rocprofiler_status_t s0 = rocprofiler_is_initialized(&init_status);
+  writef("[XLA] rocprofiler_is_initialized => ret=%d, status=%d\n",
+         (int)s0, init_status);
+
+  // rocprofiler_force_configure explicitly registers a configuration early. :contentReference[oaicite:3]{index=3}
+  rocprofiler_status_t s1 = rocprofiler_force_configure(&rocprofiler_configure);
+  writef("[XLA] rocprofiler_force_configure => ret=%d\n", (int)s1);
 }
+
+// __attribute__((constructor(101)))
+// static void init_rocm_lib_ctor_probe() {
+//   write_stderr("[XLA] constructor reached: init_rocm_lib_ctor_probe\n");
+
+//   // rocprofiler_is_initialized:
+//   // status = 0 not initialized/scanned, 1 initialized, -1 initializing/scanning. :contentReference[oaicite:2]{index=2}
+//   int init_status = -999;
+//   rocprofiler_status_t s0 = rocprofiler_is_initialized(&init_status);
+//   writef("[XLA] rocprofiler_is_initialized => ret=%d, status=%d\n",
+//          (int)s0, init_status);
+
+//   // rocprofiler_force_configure explicitly registers a configuration early. :contentReference[oaicite:3]{index=3}
+//   rocprofiler_status_t s1 = rocprofiler_force_configure(&rocprofiler_configure);
+//   writef("[XLA] rocprofiler_force_configure => ret=%d\n", (int)s1);
+// }
