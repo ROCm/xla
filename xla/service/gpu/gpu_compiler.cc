@@ -791,19 +791,6 @@ absl::Status RunOptimizationPasses(
   pipeline.AddPass<RngExpander>();
   pipeline.AddPass<RngBitGeneratorExpander>(RandomAlgorithm::RNG_PHILOX);
 
-  // SortRewriter needs to ask the device how much scratch space is needed,
-  // which isn't feasible if we don't have a device.
-  if (hlo_module->config().debug_options().xla_gpu_enable_cub_radix_sort()) {
-    if (stream_exec != nullptr) {
-      pipeline.AddPass<SortRewriter>(gpu_target_config.device_description,
-                                     std::string{platform_name});
-    } else {
-      LOG(WARNING) << "Using fallback sort algorithm rather than SortRewriter, "
-                      "which will be slower at runtime. To avoid this, "
-                      "compile with a GPU present.";
-    }
-  }
-
   // Comparison total order expander
   pipeline.AddPass<ComparisonExpander>(std::array{std::make_pair(BF16, F32)});
 
@@ -830,6 +817,21 @@ absl::Status RunOptimizationPasses(
   // cuSOLVER.
   pipeline.AddPass<QrExpander>();
   pipeline.AddPass<EighExpander>();
+
+  // SortRewriter needs to ask the device how much scratch space is needed,
+  // which isn't feasible if we don't have a device.
+  // It must be called after EighExpander which, otherwise, will fallback to
+  // a sort algorithm provided by IR Emitter.
+  if (hlo_module->config().debug_options().xla_gpu_enable_cub_radix_sort()) {
+    if (stream_exec != nullptr) {
+      pipeline.AddPass<SortRewriter>(gpu_target_config.device_description,
+                                     std::string{platform_name});
+    } else {
+      LOG(WARNING) << "Using fallback sort algorithm rather than SortRewriter, "
+                      "which will be slower at runtime. To avoid this, "
+                      "compile with a GPU present.";
+    }
+  }
 
   pipeline.AddPass<DynamicIndexSplitter>();
 
