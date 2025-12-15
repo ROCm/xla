@@ -35,6 +35,7 @@ limitations under the License.
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
+#include "xla/stream_executor/semantic_version.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
@@ -50,8 +51,21 @@ using CublasLtBackendConfig = AutotuneResult::GemmKey;
 
 namespace {
 
+// SiLU only supported on ROCm 7.0 and later.
+bool IsSiluEpilogueSupported(
+    const se::DeviceDescription& device_description) {
+  const se::GpuComputeCapability& gpu_cc =
+      device_description.gpu_compute_capability();
+  if (!gpu_cc.IsRocm()) {
+    return false;
+  }
+  constexpr se::SemanticVersion min_rocm_version{7, 0, 0};
+  return device_description.compile_time_toolkit_version() >= min_rocm_version;
+}
+
 absl::StatusOr<BlasLt::Epilogue> AsBlasLtEpilogue(
-    GemmBackendConfig_Epilogue epilogue) {
+    GemmBackendConfig_Epilogue epilogue,
+    const se::DeviceDescription& device_description) {
   switch (epilogue) {
     case GemmBackendConfig::DEFAULT:
       return BlasLt::Epilogue::kDefault;
@@ -69,6 +83,17 @@ absl::StatusOr<BlasLt::Epilogue> AsBlasLtEpilogue(
       return BlasLt::Epilogue::kBiasThenGELU;
     case GemmBackendConfig::BIAS_GELU_AUX:
       return BlasLt::Epilogue::kBiasThenGELUWithAux;
+    case GemmBackendConfig::SILU:
+      if (IsSiluEpilogueSupported(device_description)) {
+        return BlasLt::Epilogue::kSILU;
+      }
+      return Internal("SILU epilogue is only supported on ROCm 7.0 and later.");
+    case GemmBackendConfig::BIAS_SILU:
+      if (IsSiluEpilogueSupported(device_description)) {
+        return BlasLt::Epilogue::kBiasThenSILU;
+      }
+      return Internal(
+          "BIAS_SILU epilogue is only supported on ROCm 7.0 and later.");
     default:
       return Internal("Unsupported Epilogue.");
   }
@@ -95,8 +120,10 @@ CublasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
       GemmConfig::For(
           &instr, target_config().device_description.gpu_compute_capability()));
 
-  TF_ASSIGN_OR_RETURN(BlasLt::Epilogue epilogue,
-                      AsBlasLtEpilogue(backend_config.epilogue()));
+  TF_ASSIGN_OR_RETURN(
+      BlasLt::Epilogue epilogue,
+      AsBlasLtEpilogue(backend_config.epilogue(),
+                       target_config().device_description));
 
   TF_ASSIGN_OR_RETURN(std::unique_ptr<se::Stream> stream,
                       stream_executor()->CreateStream());
