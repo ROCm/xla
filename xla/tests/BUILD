@@ -3093,6 +3093,7 @@ xla_test(
         ":test_utils",
         ":xla_internal_test_main",
         "//xla:literal",
+        "//xla/service:platform_util",
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla/client:local_client",
