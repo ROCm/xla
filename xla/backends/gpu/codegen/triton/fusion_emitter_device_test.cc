@@ -3315,7 +3315,7 @@ ENTRY entry_computation {
 // Reproducer from b/384110192.
 TEST_F(TritonEmitterTest,
        FusionWithOutputContainingMoreThanInt32MaxElementsExecutesCorrectly) {
-  if (std::get_if<se::RocmComputeCapability>(&GpuComputeCapability())) {
+  if (auto cc = GpuComputeCapability().rocm_compute_capability()) {
     GTEST_SKIP() << "Not enough shared memory on ROCm.";
   }
   // The point here is to check the output of the Triton fusion. The `slice` op
@@ -3381,8 +3381,7 @@ TEST_F(TritonEmitterTest, ConvertF16ToF8E5M2Exhaustive) {
     GTEST_SKIP() << "Skipping tests above Ampere, Triton's conversion isn't "
                     "always correct";
   }
-  if (auto cc = std::get_if<se::RocmComputeCapability>(
-      &GpuComputeCapability())) {
+  if (auto cc = GpuComputeCapability().rocm_compute_capability()) {
     GTEST_SKIP() << "Skipping on ROCm, Triton's fp8 conversion does not"
                     "generate inf - it clips to max f8 value";
   }
@@ -4569,7 +4568,7 @@ TEST_F(TritonEmitterTest, RocmWarpSizeIsSetCorrectly) {
   }
   DebugOptions debug_options = verified_module->config().debug_options();
   debug_options.set_xla_dump_to(output_directory);
-  debug_options.set_xla_dump_hlo_pass_re("triton-fusion-emitter");
+  debug_options.set_xla_dump_emitter_re("triton-fusion");
   verified_module->mutable_config().set_debug_options(debug_options);
 
   const HloFusionInstruction* triton_fusion = Cast<HloFusionInstruction>(
