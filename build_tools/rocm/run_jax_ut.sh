@@ -8,11 +8,15 @@ XLA_DIR=$2
 pushd $JAX_DIR
 
 python build/build.py build \
-    --wheels=jax-rocm-plugin \
+    --wheels=jaxlib \
     --configure_only \
+    --python_version=3.12 \
     --local_xla_path=${XLA_DIR} \
     --python_version=3.12 \
     --clang_path=/lib/llvm-18/bin/clang-18 \
+    --rocm_version=7 \
+    --rocm_amdgpu_targets=gfx942,gfx90a \
+    --verbose
 
 bazel test \
     --config=rocm \
