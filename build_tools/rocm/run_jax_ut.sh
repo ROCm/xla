@@ -11,10 +11,10 @@ python build/build.py build \
     --wheels=jax-rocm-plugin \
     --configure_only \
     --local_xla_path=${XLA_DIR} \
-    --python_version=3.12
+    --python_version=3.12 \
+    --clang_path=/lib/llvm-18/bin/clang-18 \
 
-# TODO: run the tests when they are green
-bazel build \
+bazel test \
     --config=rocm \
     --build_tag_filters=cpu,gpu,-tpu,-config-cuda-only \
     --test_tag_filters=cpu,gpu,-tpu,-config-cuda-only \
