@@ -576,6 +576,19 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
   for (const auto& kv : activity_ops_events_map_) {
     total_activity_events += kv.second.size();
   }
+
+  if (total_activity_events < 1) {
+    LOG(ERROR) << "no GPU events! please run AMD_LOG_LEVEL=5 to check if "
+                  "hipInit() runs before rocprofiler_configure()!";
+  }
+  if (const char* path = std::getenv("XLA_ROCM_ACTIVITY_COUNT_FILE")) {
+    FILE* f = fopen(path, "w");
+    if (f) {
+      fprintf(f, "%zu\n", total_activity_events);
+      fclose(f);
+    }
+  }
+
   aggregated_events.reserve(api_events_map_.size() + total_activity_events);
 
   auto is_kernel_info_empty = [](const KernelDetails& ki) {
