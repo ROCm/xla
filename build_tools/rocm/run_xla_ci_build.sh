@@ -44,6 +44,7 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --test_tag_filters=$TAG_FILTERS \
     --profile=/tf/pkg/profile.json.gz \
     --keep_going \
+    --test_timeout=920,2400,7200,9600 \
     --test_env=TF_TESTS_PER_GPU=1 \
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
     --test_output=errors \
