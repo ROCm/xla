@@ -19,7 +19,7 @@ set -e
 set -x
 
 SCRIPT_DIR=$(realpath $(dirname $0))
-TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,requires-gpu-amd,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
+TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
 
 BAZEL_DISK_CACHE_SIZE=100G
 BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib"
@@ -33,6 +33,12 @@ for arg in "$@"; do
     fi
     if [[ "$arg" == "--config=tsan" ]]; then
         TAG_FILTERS="${TAG_FILTERS},-notsan"
+    fi
+    if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
+        TAG_FILTERS="multi_gpu,${TAG_FILTERS}"
+    fi
+    if [[ "$arg" == "--config=ci_single_gpu" ]]; then
+        TAG_FILTERS="gpu,-multi_gpu,${TAG_FILTERS}"
     fi
 done
 
