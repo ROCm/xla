@@ -35,13 +35,25 @@ namespace {
 
 class MatmulPerfTableGenTest : public HloTestBase {
   void SetUp() override {
-    auto compute_capability = backend()
-             .default_stream_executor()
-             ->GetDeviceDescription()
-             .gpu_compute_capability();
-    if (!compute_capability.IsCuda() && !compute_capability.IsRocm()) {
+    if (!IsCuda() && !IsRocm()) {
       GTEST_SKIP() << "Not built with --config=cuda or --config=rocm";
     }
+  }
+
+ protected:
+  bool IsCuda() {
+    return std::holds_alternative<stream_executor::CudaComputeCapability>(
+        backend()
+            .default_stream_executor()
+            ->GetDeviceDescription()
+            .gpu_compute_capability());
+  }
+  bool IsRocm() {
+    return std::holds_alternative<stream_executor::RocmComputeCapability>(
+        backend()
+            .default_stream_executor()
+            ->GetDeviceDescription()
+            .gpu_compute_capability());
   }
 };
 

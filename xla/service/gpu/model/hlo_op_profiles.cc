@@ -48,8 +48,8 @@ namespace gpu {
   if (auto* ptr = std::get_if<stream_executor::CudaComputeCapability>(
           &device_info.gpu_compute_capability())) {
     return absl::StrCat("sm_", ptr->major, ptr->minor);
-  } else if (auto* ptr =
-          device_info.gpu_compute_capability().rocm_compute_capability()) {
+  } else if (auto* ptr = std::get_if<stream_executor::RocmComputeCapability>(
+          &device_info.gpu_compute_capability())) {
     return ptr->gfx_version();
   }
   return "<unknown>";

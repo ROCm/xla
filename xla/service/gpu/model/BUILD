@@ -860,6 +860,7 @@ xla_test(
         ":hlo_op_profiler_lib",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
+        "//xla/stream_executor/rocm:rocm_compute_capability",
         "//xla/tests:hlo_test_base",
         "//xla/tsl/lib/core:status_test_util",
         "//xla/tsl/platform:errors",

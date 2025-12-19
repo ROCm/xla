@@ -16,10 +16,12 @@ limitations under the License.
 #include "xla/service/gpu/model/hlo_op_profiler.h"
 
 #include <unordered_set>
+#include <variant>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/tests/hlo_test_base.h"
 #include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/tsl/platform/errors.h"
@@ -117,11 +119,11 @@ TEST_F(HloOpProfilerTest, AllSupportedCombinationsAreMeasurable) {
   FloatTypes.insert(MeasurebleInFloat.begin(), MeasurebleInFloat.end());
   HloOpProfiler profiler(test_runner_as_hlo_runner());
 
-  const bool is_rocm = backend()
-      .default_stream_executor()
-      ->GetDeviceDescription()
-      .gpu_compute_capability()
-      .IsRocm();
+  const bool is_rocm = std::holds_alternative<stream_executor::RocmComputeCapability>(
+      backend()
+          .default_stream_executor()
+          ->GetDeviceDescription()
+          .gpu_compute_capability());
 
   for (const HloOpcode op : HloOpProfiler::AllSupportedOps()) {
     if (!HloOpProfiler::TooFastToMeasure().count(op) &&
