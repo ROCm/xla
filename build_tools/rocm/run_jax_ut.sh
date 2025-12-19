@@ -31,8 +31,6 @@ bazel test \
     //tests:linalg_test_gpu \
     //tests:ffi_test_gpu \
     --test_filter=CoreTest \
-    --test_filter=JaxprTypeChecks \
-    --test_filter=DynamicShapesTest \
-    --test_filter=testMatmul
+    --test_filter='JaxprTypeChecks|DynamicShapesTest|testMatmul'
 
 popd
