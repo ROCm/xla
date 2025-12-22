@@ -791,6 +791,22 @@ absl::Status RunOptimizationPasses(
   pipeline.AddPass<RngExpander>();
   pipeline.AddPass<RngBitGeneratorExpander>(RandomAlgorithm::RNG_PHILOX);
 
+  // SortRewriter needs to ask the device how much scratch space is needed,
+  // which isn't feasible if we don't have a device.
+  bool enable_sort_rewriter =
+      hlo_module->config().debug_options().xla_gpu_enable_cub_radix_sort();
+  if (stream_exec == nullptr) {
+    LOG(WARNING) << "Using fallback sort algorithm rather than SortRewriter, "
+                    "which will be slower at runtime. To avoid this, "
+                    "compile with a GPU present.";
+    enable_sort_rewriter = false;
+  }
+
+  if (enable_sort_rewriter) {
+    pipeline.AddPass<SortRewriter>(gpu_target_config.device_description,
+                                     std::string{platform_name});
+  }
+
   // Comparison total order expander
   pipeline.AddPass<ComparisonExpander>(std::array{std::make_pair(BF16, F32)});
 
@@ -817,21 +833,6 @@ absl::Status RunOptimizationPasses(
   // cuSOLVER.
   pipeline.AddPass<QrExpander>();
   pipeline.AddPass<EighExpander>();
-
-  // SortRewriter needs to ask the device how much scratch space is needed,
-  // which isn't feasible if we don't have a device.
-  // It must be called after EighExpander which, otherwise, will fallback to
-  // a sort algorithm provided by IR Emitter.
-  if (hlo_module->config().debug_options().xla_gpu_enable_cub_radix_sort()) {
-    if (stream_exec != nullptr) {
-      pipeline.AddPass<SortRewriter>(gpu_target_config.device_description,
-                                     std::string{platform_name});
-    } else {
-      LOG(WARNING) << "Using fallback sort algorithm rather than SortRewriter, "
-                      "which will be slower at runtime. To avoid this, "
-                      "compile with a GPU present.";
-    }
-  }
 
   pipeline.AddPass<DynamicIndexSplitter>();
 
@@ -892,10 +893,12 @@ absl::Status RunOptimizationPasses(
 
   // DynamicPadder creates a stable KeyValue sort for dynamic reshapes.
   pipeline.AddPass<DynamicPadder>(dynamic_padder_options);
-
-  // TODO(b/407909195): Add SortRewriter here once it supports S32 keys for
-  // KeyValueSort. It needs to run before StableSortExpander, otherwise we will
-  // not match the comparison computation.
+  // SortRewriter needs to run before StableSortExpander.
+  // It needs to be called twice also because EighExpander can add a Sort op.
+  if (enable_sort_rewriter) {
+    pipeline.AddPass<SortRewriter>(gpu_target_config.device_description,
+                                   gpu_target_config.platform_name);
+  }
 
   // Expand the sort op to support stable sorting if required.
   pipeline.AddPass<StableSortExpander>();
