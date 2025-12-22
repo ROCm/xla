@@ -137,6 +137,11 @@ class CustomCallVisitor : public DfsHloRewriteVisitor {
                     {})),
                 conv_bias))));
         break;
+      default:									
+        return absl::InternalError(
+  	absl::StrCat("Unimplemented activation mode: ",
+                        se::dnn::ActivationModeString(
+                             backend_config.activation_mode())));
     }
 
     CHECK_NE(conv_bias_act, nullptr);
