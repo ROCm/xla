@@ -50,7 +50,7 @@ class MIOpenBackend : public GpuCodegenBackend {
                            const BackendConfig& config) override;
 
  private:
-  bool IsSupported(const HloInstruction& instr) override;
+  bool IsSupported(const HloInstruction& instr);
 };
 
 }  // namespace gpu

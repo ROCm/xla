@@ -849,10 +849,6 @@ message DebugOptions {
   // it's done.
   optional bool xla_gpu_shard_autotuning = 304;
 
-  // If true, abort immediately when conv algorithm picker fails, rather than
-  // logging a warning and proceeding with fallback.
-  optional bool xla_gpu_strict_conv_algorithm_picker = 156;
-
   // Description of the target platform in GpuTargetConfigProto format; if
   // provided, deviceless compilation is assumed, and the current device is
   // ignored.
@@ -1193,7 +1189,8 @@ message DebugOptions {
   // xla_gpu_enable_async_reduce_scatter
   // xla_gpu_enable_async_all_to_all
   // xla_gpu_enable_async_collectives
-  reserved 152, 278, 183, 199, 200, 201, 238;
+  // xla_gpu_strict_conv_algorithm_picker
+  reserved 152, 156, 278, 183, 199, 200, 201, 238;
 
   // Was xla_gpu_all_reduce_contiguous, xla_gpu_enable_all_reduce_splitter
   reserved 158, 299;
