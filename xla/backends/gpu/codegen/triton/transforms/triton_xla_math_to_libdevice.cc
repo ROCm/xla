@@ -193,7 +193,9 @@ class ConvertToLibdevice : public mlir::OpRewritePattern<OpTy> {
     mlir::ImplicitLocOpBuilder builder(op->getLoc(), rewriter);
 
     llvm::SmallVector<Value, 2> casted_inputs;
-    if (output_type_is_16bit_float) {
+    if (output_type_is_16bit_float &&
+        !::xla::gpu::HasF16Implementation(
+            OpInfo<OpTy>::kFunctionID, triple_)) {
       // Upcast the inputs to F32.
       for (auto operand : op->getOperands()) {
         casted_inputs.push_back(
@@ -210,7 +212,9 @@ class ConvertToLibdevice : public mlir::OpRewritePattern<OpTy> {
                                  triple_),
         /*pure=*/true);
 
-    if (res.getType() != output_type) {
+    if (res.getType() != output_type &&
+        !::xla::gpu::HasF16Implementation(
+            OpInfo<OpTy>::kFunctionID, triple_)) {
       // Downcast back to the original output type.
       res = ::xla::xtile::Cast(builder, res, output_type);
     }
