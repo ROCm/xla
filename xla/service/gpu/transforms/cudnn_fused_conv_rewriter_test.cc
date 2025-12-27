@@ -173,13 +173,11 @@ class CudnnFusedConvRewriterTest : public GpuCodegenTest {
       const std::string hlo_with_new_type =
           absl::StrReplaceAll(hlo_string, {{"TYPE", type}});
       std::string optimized_hlo_string = GetOptimizedHlo(hlo_with_new_type);
-      // Match instruction names to allow for CudnnFusedConvDecomposer reverting back
-      // some of the fusions on ROCm.
       EXPECT_THAT(optimized_hlo_string,
-                  Not(HasSubstr("cudnn-conv.")))
+                  Not(HasSubstr(kCudnnConvForwardCallTarget)))
           << optimized_hlo_string;
       EXPECT_THAT(optimized_hlo_string,
-                  HasSubstr("cudnn-conv-bias-activation."));
+                  HasSubstr(kCudnnConvBiasActivationForwardCallTarget));
 
       TF_ASSERT_OK_AND_ASSIGN(auto module,
                               ParseAndReturnVerifiedModule(hlo_with_new_type));
@@ -589,7 +587,6 @@ TEST_F(CudnnFusedConvRewriterTest, TestLeakyRelu) {
 }
 
 TEST_F(CudnnFusedConvRewriterTest, TestSideInputOnly) {
-  MAYBE_SKIP_TEST("SideInput");
   // max(0, conv(x, w) + side_input);
   TestMatchWithAllTypes(R"(
     HloModule Test
@@ -628,7 +625,6 @@ TEST_F(CudnnFusedConvRewriterTest, DontFuseSideInputWithDepthwiseConv) {
 }
 
 TEST_F(CudnnFusedConvRewriterTest, TestBiasAndSideInput) {
-  MAYBE_SKIP_TEST("SideInput");
   // max(0, conv(x, w) + side_input + bias);
   TestMatchWithAllTypes(R"(
     HloModule Test
@@ -651,7 +647,6 @@ TEST_F(CudnnFusedConvRewriterTest, TestBiasAndSideInput) {
 }
 
 TEST_F(CudnnFusedConvRewriterTest, TestScaledConv) {
-  MAYBE_SKIP_TEST("Scale");
   // max(0, 0.999994934 * conv(x, w));
   TestMatchWithAllTypes(R"(
     HloModule Test
@@ -712,7 +707,6 @@ TEST_F(CudnnFusedConvRewriterTest, TestNoCrashOnInf) {
 }
 
 TEST_F(CudnnFusedConvRewriterTest, TestConvAndScaledSideInput) {
-  MAYBE_SKIP_TEST("SideInput");
   // max(0, conv(x, w) + 0.899994934 * side_input);
   TestMatchWithAllTypes(R"(
     HloModule Test
@@ -757,7 +751,6 @@ TEST_F(CudnnFusedConvRewriterTest, DontFuseDepthwiseConvWithScaledSideInput) {
 }
 
 TEST_F(CudnnFusedConvRewriterTest, TestScaledConvAndScaledSideInput) {
-  MAYBE_SKIP_TEST("SideInput");
   // max(0, 0.999994934 * conv(x, w) + 0.899994934 * side_input);
   TestMatchWithAllTypes(R"(
     HloModule Test
@@ -783,7 +776,6 @@ TEST_F(CudnnFusedConvRewriterTest, TestScaledConvAndScaledSideInput) {
 }
 
 TEST_F(CudnnFusedConvRewriterTest, TestScaledConvAndScaledSideInputWithBias) {
-  MAYBE_SKIP_TEST("SideInput");
   // max(0, 0.999994934 * conv(x, w) + 0.899994934 * side_input + bias);
   TestMatchWithAllTypes(R"(
     HloModule Test
