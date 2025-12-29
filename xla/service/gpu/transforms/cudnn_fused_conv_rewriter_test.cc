@@ -173,7 +173,7 @@ class CudnnFusedConvRewriterTest : public GpuCodegenTest {
       const std::string hlo_with_new_type =
           absl::StrReplaceAll(hlo_string, {{"TYPE", type}});
       std::string optimized_hlo_string = GetOptimizedHlo(hlo_with_new_type);
-      // Match instruction names to allow for CudnnFusedConvDecomposer reverting back
+      // Match instruction names to allow for autotuner reverting back
       // some of the fusions on ROCm.
       EXPECT_THAT(optimized_hlo_string,
                   Not(HasSubstr("cudnn-conv.")))
@@ -3487,3 +3487,12 @@ TEST_F(CudnnFusedConvRewriterTest, TestFusedConvInt8ToInt8NoClamp) {
 }  // namespace
 }  // namespace gpu
 }  // namespace xla
+
+int main(int argc, char* argv[]) {
+  std::vector<tsl::Flag> flag_list;
+  xla::AppendDebugOptionsFlags(&flag_list);
+  std::string usage = tsl::Flags::Usage(argv[0], flag_list);
+  tsl::Flags::Parse(&argc, argv, flag_list);
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}

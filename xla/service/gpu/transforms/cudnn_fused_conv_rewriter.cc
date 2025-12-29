@@ -97,7 +97,7 @@ bool IsNonDepthwiseConvCustomCall(const HloInstruction* instr) {
   return IsConvCustomCall(instr) && !IsConvDepthwise(instr);
 }
 
-bool IsROCm(const se::GpuComputeCapability& cc) {
+bool IsROCm(se::GpuComputeCapability cc) {
   return std::holds_alternative<se::RocmComputeCapability>(cc);
 }
 
@@ -111,7 +111,7 @@ bool IsROCm(const se::GpuComputeCapability& cc) {
 // Note that as of writing, xla_gpu_use_runtime_fusion is disabled by default
 // due to apparent bugs in cudnn 8.9.0.  See debug_options_flags.cc for details.
 bool ShouldUseCudnnRuntimeFusion(const DebugOptions& debug_opts,
-                                 const se::GpuComputeCapability& cc) {
+                                 se::GpuComputeCapability cc) {
   const auto* cuda_cc = std::get_if<se::CudaComputeCapability>(&cc);
   if (cuda_cc != nullptr)
     return debug_opts.xla_gpu_use_runtime_fusion() && cuda_cc->IsAtLeast(7, 5);
@@ -1457,7 +1457,7 @@ absl::StatusOr<bool> FuseConvertToF16(HloComputation* comp) {
 }
 
 absl::StatusOr<bool> FuseConvertToS8(HloComputation* comp,
-                                     const se::GpuComputeCapability& cc) {
+                                     se::GpuComputeCapability cc) {
   if (IsROCm(cc)) return false;
   bool changed = false;
   for (HloInstruction* instr : comp->MakeInstructionPostOrder()) {
