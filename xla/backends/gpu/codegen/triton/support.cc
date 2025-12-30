@@ -343,10 +343,12 @@ bool IsSupportedDotAlgorithm(PrecisionConfig::Algorithm algorithm,
       if (!std::holds_alternative<se::RocmComputeCapability>(gpu_version)) {
         return true;
       }
+      [[fallthrough]];
     case PrecisionConfig::ALG_DOT_BF16_BF16_BF16:
       if (std::holds_alternative<se::RocmComputeCapability>(gpu_version)) {
         return true;
       }
+      [[fallthrough]];
     case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32:
     case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32_FAST_ACCUM:
     default:

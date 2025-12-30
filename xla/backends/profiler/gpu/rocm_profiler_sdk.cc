@@ -450,21 +450,6 @@ int RocmTracer::toolInit(rocprofiler_client_finalize_t fini_func,
     }
   }
 
-  auto cleanup_on_error = [this]() {
-    if (buffer_.handle != 0) {
-      rocprofiler_destroy_buffer(buffer_);
-      buffer_.handle = 0;
-    }
-    if (context_.handle != 0) {
-      rocprofiler_stop_context(context_);
-      context_.handle = 0;
-    }
-    if (utility_context_.handle != 0) {
-      rocprofiler_stop_context(utility_context_);
-      utility_context_.handle = 0;
-    }
-  };
-
   // Utility context to gather code‑object info
   rocprofiler_create_context(&utility_context_);
 

@@ -136,7 +136,18 @@ class CustomCallVisitor : public DfsHloRewriteVisitor {
                             backend_config.leakyrelu_alpha()))),
                     {})),
                 conv_bias))));
-        break;
+        break;	
+      case se::dnn::ActivationMode::ActivationMode_INT_MIN_SENTINEL_DO_NOT_USE_:
+      case se::dnn::ActivationMode::ActivationMode_INT_MAX_SENTINEL_DO_NOT_USE_:								
+      case se::dnn::ActivationMode::kSigmoid:
+      case se::dnn::ActivationMode::kReluX:
+      case se::dnn::ActivationMode::kTanh:
+      case se::dnn::ActivationMode::kBandPass:
+      case se::dnn::ActivationMode::kGeluExact:
+        return absl::InternalError(
+  	absl::StrCat("Unimplemented activation mode: ",
+                        se::dnn::ActivationModeString(
+                             backend_config.activation_mode())));
     }
 
     CHECK_NE(conv_bias_act, nullptr);
