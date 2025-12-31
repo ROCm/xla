@@ -310,9 +310,9 @@ size_t BlasLt::GetMatmulPlanCacheSize() const {
   return plan_cache_.size();
 }
 
-/*static*/ auto BlasLt::GetGroupedMatmulPlan(const Stream* stream,
-                                      GroupedGemmConfig& cfg, std::vector<Epilogue> epilogues)
-    -> absl::StatusOr<GroupedMatmulPlanPtr> {
+/*static*/ auto BlasLt::GetGroupedMatmulPlan(
+    const Stream* stream, GroupedGemmConfig& cfg,
+    std::vector<Epilogue> epilogues) -> absl::StatusOr<GroupedMatmulPlanPtr> {
   auto blas = Get(stream);
   if (blas == nullptr) {
     return xla::Internal("BlasLt is unavailable");

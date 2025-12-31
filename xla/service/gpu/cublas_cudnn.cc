@@ -19,11 +19,11 @@ limitations under the License.
 
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "tsl/platform/statusor.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/util.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace gpu {
@@ -62,7 +62,8 @@ const absl::string_view kGemmCallTarget = "__cublas$gemm";
 const absl::string_view kCublasLtMatmulCallTarget = "__cublas$lt$matmul";
 const absl::string_view kCublasLtMatmulF8CallTarget = "__cublas$lt$matmul$f8";
 const absl::string_view kTriangularSolveCallTarget = "__cublas$triangularSolve";
-const absl::string_view kCublasLtGroupedMatmulCallTarget = "__cublas$lt$groupedMatmul";
+const absl::string_view kCublasLtGroupedMatmulCallTarget =
+    "__cublas$lt$groupedMatmul";
 
 const absl::string_view kCudnnConvBackwardInputCallTarget =
     "__cudnn$convBackwardInput";

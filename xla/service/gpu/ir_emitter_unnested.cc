@@ -70,6 +70,9 @@ limitations under the License.
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "tsl/platform/casts.h"
+#include "tsl/platform/human_readable_json.h"
 #include "xla/backends/gpu/codegen/fusion_emitter.h"
 #include "xla/backends/gpu/codegen/fusions.h"
 #include "xla/backends/gpu/codegen/triton/fusion_emitter.h"
@@ -184,9 +187,6 @@ limitations under the License.
 #include "xla/tsl/protobuf/dnn.pb.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/casts.h"
-#include "tsl/platform/human_readable_json.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace xla {
 namespace gpu {
@@ -885,7 +885,7 @@ absl::Status IrEmitterUnnested::EmitCublasLtMatmulThunkF8(
 
 absl::Status IrEmitterUnnested::EmitCublasLtGroupedMatmulThunk(
     const HloCustomCallInstruction* instr) {
- bool has_aux_output = false;
+  bool has_aux_output = false;
 
   TF_RET_CHECK(instr->operand_count() == 3);
 
@@ -899,7 +899,7 @@ absl::Status IrEmitterUnnested::EmitCublasLtGroupedMatmulThunk(
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice group_sizes,
                       GetAllocationSliceForHlo(instr->operand(2)));
   // No bias
-  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice c, 
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice c,
                       GetAllocationSliceForHlo(instr, output_index));
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice d,
                       GetAllocationSliceForHlo(instr, output_index));
@@ -914,7 +914,7 @@ absl::Status IrEmitterUnnested::EmitCublasLtGroupedMatmulThunk(
   TF_ASSIGN_OR_RETURN(
       auto gemm_config,
       GroupedGemmConfig::For(static_cast<const HloInstruction*>(instr),
-                      ir_emitter_context_->gpu_compute_capability()));
+                             ir_emitter_context_->gpu_compute_capability()));
   int64_t algorithm = 0;
 
   BufferAllocation::Slice a_scale, b_scale, c_scale, d_scale, d_amax;
@@ -926,8 +926,8 @@ absl::Status IrEmitterUnnested::EmitCublasLtGroupedMatmulThunk(
 
   auto thunk = std::make_unique<CublasLtGroupedMatmulThunk>(
       std::move(thunk_info), std::move(canonical_hlo), std::move(gemm_config),
-      se::gpu::BlasLt::Epilogue::kDefault, algorithm, a, b, c, d, group_sizes, bias, aux, a_scale, b_scale,
-      c_scale, d_scale, d_amax, workspace_buffer);
+      se::gpu::BlasLt::Epilogue::kDefault, algorithm, a, b, c, d, group_sizes,
+      bias, aux, a_scale, b_scale, c_scale, d_scale, d_amax, workspace_buffer);
   AddThunkToThunkSequence(std::move(thunk));
   return absl::OkStatus();
 }

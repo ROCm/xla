@@ -15,6 +15,9 @@ limitations under the License.
 
 #include "xla/backends/gpu/runtime/gpublas_lt_matmul_thunk.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <deque>
 #include <memory>
@@ -25,8 +28,6 @@ limitations under the License.
 #include <variant>
 #include <vector>
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -328,8 +329,8 @@ struct MockBlasLt : public se::gpu::BlasLt {
     return MatmulPlanPtr{};
   }
 
-  absl::StatusOr<GroupedMatmulPlanPtr> GetGroupedMatmulPlan(const se::gpu::GroupedGemmConfig&,
-                                              std::vector<Epilogue>) const override {
+  absl::StatusOr<GroupedMatmulPlanPtr> GetGroupedMatmulPlan(
+      const se::gpu::GroupedGemmConfig&, std::vector<Epilogue>) const override {
     return GroupedMatmulPlanPtr{};
   }
   ~MockBlasLt() override = default;
@@ -439,8 +440,8 @@ TEST_F(GpuBlasLtMatmulThunkTest, ThunkProtoSerialization) {
   thunk_info.execution_stream_id = 0;
 
   CublasLtMatmulThunkProto proto;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kCublasLtMatmulThunkProtoText,
-                                                  &proto));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kCublasLtMatmulThunkProtoText, &proto));
 
   std::vector<BufferAllocation> allocations = {
       BufferAllocation(/*index=*/0, /*size=*/4, /*color=*/0),  // UNUSED

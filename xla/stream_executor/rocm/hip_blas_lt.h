@@ -30,9 +30,9 @@ limitations under the License.
 #include "xla/stream_executor/rocm/hip_blas_utils.h"
 
 namespace hipblaslt_ext {
-  class GroupedGemm;
-  struct UserArguments;
-}
+class GroupedGemm;
+struct UserArguments;
+}  // namespace hipblaslt_ext
 
 namespace stream_executor {
 
@@ -138,9 +138,8 @@ class BlasLt : public gpu::BlasLt {
   };  // class MatmulPlan
 
   struct GroupedMatmulPlan : public gpu::BlasLt::GroupedMatmulPlan {
-
     friend class BlasLt;
-    using GroupedGemmPtr = std::unique_ptr< hipblaslt_ext::GroupedGemm >;
+    using GroupedGemmPtr = std::unique_ptr<hipblaslt_ext::GroupedGemm>;
 
     GroupedMatmulPlan(gpu::GroupedGemmConfig&& cfg, bool must_swap_operands)
         : cfg_(cfg), must_swap_operands_(must_swap_operands) {}
@@ -155,18 +154,18 @@ class BlasLt : public gpu::BlasLt {
         blas::ProfileResult* profile_result) const override;
 
     absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
-        const Stream* stream,
-        size_t max_algorithm_count,
+        const Stream* stream, size_t max_algorithm_count,
         size_t max_workspace_size) const override;
 
    private:
     GroupedGemmPtr grouped_gemm_;
-    absl::optional< MatmulAlgorithm > algorithm_; // selected algorithm
+    absl::optional<MatmulAlgorithm> algorithm_;  // selected algorithm
     gpu::GroupedGemmConfig cfg_;
     bool must_swap_operands_;
   };
 
-  explicit BlasLt(StreamExecutor* parent) : parent_(parent), blas_lt_(nullptr, wrap::hipblasLtDestroy) {}
+  explicit BlasLt(StreamExecutor* parent)
+      : parent_(parent), blas_lt_(nullptr, wrap::hipblasLtDestroy) {}
 
   absl::Status Init() override;
 
@@ -174,7 +173,7 @@ class BlasLt : public gpu::BlasLt {
                                               Epilogue epilogue) const override;
 
   absl::StatusOr<GroupedMatmulPlanPtr> GetGroupedMatmulPlan(
-		  gpu::GroupedGemmConfig& config,
+      gpu::GroupedGemmConfig& config,
       std::vector<Epilogue> epilogues) const override;
 
   void ClearGroupedMatmulPlanCache();

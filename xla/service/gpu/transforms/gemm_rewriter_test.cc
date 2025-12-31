@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "xla/service/gpu/transforms/gemm_rewriter.h"
 
+#include <gtest/gtest.h>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -22,7 +24,6 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_replace.h"
@@ -147,7 +148,8 @@ ENTRY AddRaggedDotsFunc {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
-TEST_F(GroupedGemmRewriteTest, CheckCustomCallTargetGroupeGemmNonContractingWithBatchDimBatch) {
+TEST_F(GroupedGemmRewriteTest,
+       CheckCustomCallTargetGroupeGemmNonContractingWithBatchDimBatch) {
   if (SkipGpuBlasLtTest()) {
     GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
   }
@@ -187,7 +189,8 @@ ENTRY AddRaggedDotsFunc {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
-TEST_F(GroupedGemmRewriteTest, CheckCustomCallTargetGroupeGemmRaggedDimInContractingDimF32) {
+TEST_F(GroupedGemmRewriteTest,
+       CheckCustomCallTargetGroupeGemmRaggedDimInContractingDimF32) {
   if (SkipGpuBlasLtTest()) {
     GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
   }
@@ -226,7 +229,8 @@ ENTRY AddRaggedDotsFunc {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
-TEST_F(GroupedGemmRewriteTest, CheckCustomCallTargetGroupeGemmRaggedDimInContractingDimMultipleGroups) {
+TEST_F(GroupedGemmRewriteTest,
+       CheckCustomCallTargetGroupeGemmRaggedDimInContractingDimMultipleGroups) {
   if (SkipGpuBlasLtTest()) {
     GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
   }
@@ -265,7 +269,8 @@ ENTRY AddRaggedDotsFunc {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
-TEST_F(GroupedGemmRewriteTest, CheckCustomCallTargetGroupeGemmRaggedDimInContractingDimWithBatchDim) {
+TEST_F(GroupedGemmRewriteTest,
+       CheckCustomCallTargetGroupeGemmRaggedDimInContractingDimWithBatchDim) {
   if (SkipGpuBlasLtTest()) {
     GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
   }
@@ -304,7 +309,8 @@ ENTRY AddRaggedDotsFunc {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
-TEST_F(GroupedGemmRewriteTest, CheckCustomCallTargetGroupeGemmRaggedDimInBatchDimF32) {
+TEST_F(GroupedGemmRewriteTest,
+       CheckCustomCallTargetGroupeGemmRaggedDimInBatchDimF32) {
   if (SkipGpuBlasLtTest()) {
     GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
   }
@@ -343,7 +349,8 @@ ENTRY AddRaggedDotsFunc {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
 }
 
-TEST_F(GroupedGemmRewriteTest, CheckCustomCallTargetGroupeGemmRaggedDimInBatchDimMultipleGroups) {
+TEST_F(GroupedGemmRewriteTest,
+       CheckCustomCallTargetGroupeGemmRaggedDimInBatchDimMultipleGroups) {
   if (SkipGpuBlasLtTest()) {
     GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
   }

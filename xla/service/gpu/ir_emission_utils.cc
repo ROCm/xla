@@ -45,6 +45,7 @@ limitations under the License.
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
+#include "tsl/platform/protobuf.h"
 #include "xla/codegen/ir_emission_utils.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
@@ -67,12 +68,12 @@ limitations under the License.
 #include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/protobuf.h"
 
 namespace xla {
 namespace gpu {
 
-absl::StatusOr<bool> IsCublasSupportedGroupedMatMul(const HloInstruction& instr) {
+absl::StatusOr<bool> IsCublasSupportedGroupedMatMul(
+    const HloInstruction& instr) {
   if (instr.opcode() != HloOpcode::kRaggedDot) {
     return false;
   }

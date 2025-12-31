@@ -33,6 +33,7 @@ limitations under the License.
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Value.h"
+#include "tsl/platform/protobuf.h"
 #include "xla/codegen/ir_emission_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
@@ -46,7 +47,6 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
-#include "tsl/platform/protobuf.h"
 
 namespace xla {
 namespace gpu {
@@ -74,7 +74,7 @@ absl::StatusOr<bool> IsCublasSupportedMatMul(
 
 // Returns true if the given instruction is supported by cuBLAS GroupeMatMul.
 absl::StatusOr<bool> IsCublasSupportedGroupedMatMul(
-  const HloInstruction& instr);
+    const HloInstruction& instr);
 
 inline constexpr int64_t WarpSize(
     const se::DeviceDescription& gpu_device_info) {

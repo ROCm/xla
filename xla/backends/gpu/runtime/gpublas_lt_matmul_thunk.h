@@ -88,23 +88,23 @@ class CublasLtMatmulThunk : public Thunk {
   std::optional<const BufferAllocation::Slice> workspace_;
 };
 
-
 class CublasLtGroupedMatmulThunk : public Thunk {
  public:
-  CublasLtGroupedMatmulThunk(Thunk::ThunkInfo thunk_info, std::string canonical_hlo,
-                      se::gpu::GroupedGemmConfig gemm_config,
-                      se::gpu::BlasLt::Epilogue epilogue, int64_t algorithm_idx,
-                      BufferAllocation::Slice a, BufferAllocation::Slice b,
-                      BufferAllocation::Slice c, BufferAllocation::Slice d,
-                      BufferAllocation::Slice group_sizes,
-                      BufferAllocation::Slice bias /* may be null */,
-                      BufferAllocation::Slice aux /* may be null */,
-                      BufferAllocation::Slice a_scale /* may be null */,
-                      BufferAllocation::Slice b_scale /* may be null */,
-                      BufferAllocation::Slice c_scale /* may be null */,
-                      BufferAllocation::Slice d_scale /* may be null */,
-                      BufferAllocation::Slice d_amax /* may be null */,
-                      std::optional<const BufferAllocation::Slice> workspace);
+  CublasLtGroupedMatmulThunk(
+      Thunk::ThunkInfo thunk_info, std::string canonical_hlo,
+      se::gpu::GroupedGemmConfig gemm_config,
+      se::gpu::BlasLt::Epilogue epilogue, int64_t algorithm_idx,
+      BufferAllocation::Slice a, BufferAllocation::Slice b,
+      BufferAllocation::Slice c, BufferAllocation::Slice d,
+      BufferAllocation::Slice group_sizes,
+      BufferAllocation::Slice bias /* may be null */,
+      BufferAllocation::Slice aux /* may be null */,
+      BufferAllocation::Slice a_scale /* may be null */,
+      BufferAllocation::Slice b_scale /* may be null */,
+      BufferAllocation::Slice c_scale /* may be null */,
+      BufferAllocation::Slice d_scale /* may be null */,
+      BufferAllocation::Slice d_amax /* may be null */,
+      std::optional<const BufferAllocation::Slice> workspace);
 
   absl::Status ExecuteOnStream(const ExecuteParams& params) override {
     return ExecuteOnStreamInternal(params.stream, params);
@@ -124,8 +124,8 @@ class CublasLtGroupedMatmulThunk : public Thunk {
 
   absl::Status ExecuteOnStreamInternal(se::Stream* stream,
                                        const ExecuteParams& params);
-  absl::StatusOr<se::gpu::BlasLt::GroupedMatmulPlan*> GetCachedGroupedMatmulPlan(
-      const ExecuteParams& params);
+  absl::StatusOr<se::gpu::BlasLt::GroupedMatmulPlan*>
+  GetCachedGroupedMatmulPlan(const ExecuteParams& params);
 
   se::gpu::GroupedGemmConfig gemm_config_;
   se::gpu::BlasLt::Epilogue epilogue_;
