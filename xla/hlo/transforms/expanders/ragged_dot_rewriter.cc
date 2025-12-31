@@ -344,9 +344,11 @@ absl::StatusOr<std::unique_ptr<HloInstruction>> RaggedToGeneral(
 absl::StatusOr<bool> RaggedDotRewriter::Run(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
+  const bool hasGroupedGemm = module->config().debug_options().xla_gpu_experimental_use_ragged_dot_grouped_gemm() 
+                                && module->config().debug_options().xla_gpu_enable_cublaslt();
   if (module->config()
           .debug_options()
-          .xla_gpu_experimental_use_ragged_dot_fusion()) {
+          .xla_gpu_experimental_use_ragged_dot_fusion() || hasGroupedGemm) {
     return false;
   }
 

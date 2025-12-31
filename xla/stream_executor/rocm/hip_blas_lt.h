@@ -29,6 +29,11 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/hip_blas_utils.h"
 
+namespace hipblaslt_ext {
+  class GroupedGemm;
+  struct UserArguments;
+}
+
 namespace stream_executor {
 
 namespace rocm {
@@ -132,13 +137,48 @@ class BlasLt : public gpu::BlasLt {
     std::optional<MatmulAlgorithm> algorithm_;  // selected algorithm
   };  // class MatmulPlan
 
-  explicit BlasLt(StreamExecutor* parent)
-      : parent_(parent), blas_lt_(nullptr, wrap::hipblasLtDestroy) {}
+  struct GroupedMatmulPlan : public gpu::BlasLt::GroupedMatmulPlan {
+
+    friend class BlasLt;
+    using GroupedGemmPtr = std::unique_ptr< hipblaslt_ext::GroupedGemm >;
+
+    GroupedMatmulPlan(gpu::GroupedGemmConfig&& cfg, bool must_swap_operands)
+        : cfg_(cfg), must_swap_operands_(must_swap_operands) {}
+
+    absl::Status SetAlgorithm(const MatmulAlgorithm& algorithm) override {
+      algorithm_ = algorithm;
+      return absl::OkStatus();
+    }
+
+    absl::Status ExecuteOnStream(
+        Stream* stream, const MemoryArgs& args,
+        blas::ProfileResult* profile_result) const override;
+
+    absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
+        const Stream* stream,
+        size_t max_algorithm_count,
+        size_t max_workspace_size) const override;
+
+   private:
+    GroupedGemmPtr grouped_gemm_;
+    absl::optional< MatmulAlgorithm > algorithm_; // selected algorithm
+    gpu::GroupedGemmConfig cfg_;
+    bool must_swap_operands_;
+  };
+
+  explicit BlasLt(StreamExecutor* parent) : parent_(parent), blas_lt_(nullptr, wrap::hipblasLtDestroy) {}
 
   absl::Status Init() override;
 
   absl::StatusOr<MatmulPlanPtr> GetMatmulPlan(const gpu::GemmConfig& cfg,
                                               Epilogue epilogue) const override;
+
+  absl::StatusOr<GroupedMatmulPlanPtr> GetGroupedMatmulPlan(
+		  gpu::GroupedGemmConfig& config,
+      std::vector<Epilogue> epilogues) const override;
+
+  void ClearGroupedMatmulPlanCache();
+  size_t GetGroupedMatmulPlanCacheSize() const;
 
   ~BlasLt() override = default;
 
@@ -146,6 +186,9 @@ class BlasLt : public gpu::BlasLt {
   StreamExecutor* parent_;
   mutable absl::Mutex mu_;
   Owned<hipblasLtHandle_t> blas_lt_ ABSL_GUARDED_BY(mu_);
+  mutable absl::Mutex grouped_plan_cache_mu_;
+  absl::flat_hash_map<std::string, GroupedMatmulPlanPtr> grouped_plan_cache_
+      ABSL_GUARDED_BY(grouped_plan_cache_mu_);
 };
 
 }  // namespace rocm

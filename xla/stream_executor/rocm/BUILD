@@ -682,6 +682,7 @@ cc_library(
         "//xla/stream_executor:stream",
         "//xla/stream_executor/gpu:gpu_blas_lt",
         "//xla/stream_executor/gpu:gpu_helpers_header",
+        "//xla/stream_executor/gpu:gpu_stream",
         "//xla/tsl/platform:env",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:status",
@@ -699,6 +700,7 @@ cc_library(
     ] + if_static([
         ":hipblaslt_if_static",
     ]),
+    linkopts = ["/opt/rocm/lib/libhipblaslt.so"],
     alwayslink = True,
 )
 
@@ -719,6 +721,7 @@ cc_library(
         "//xla/stream_executor:blas",
         "//xla/stream_executor:device_memory",
         "//xla/stream_executor:host_or_device_scalar",
+        "//xla/stream_executor:memory_allocation",
         "//xla/stream_executor:stream",
         "//xla/stream_executor/gpu:gpu_blas_lt",
         "//xla/tsl/platform:env",

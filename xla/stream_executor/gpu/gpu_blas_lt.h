@@ -136,6 +136,42 @@ struct GemmConfig {  // plain GemmConfig which is extended with create functions
   xla::GemmConfigProto ToProto() const;
 };
 
+enum class RaggedDotMode {
+  kRaggedNonContracting,
+  kRaggedContracting,
+  kRaggedBatch,
+};
+
+struct GroupedGemmConfig {
+  uint64_t m, n, k;
+  uint64_t batch_count;
+  uint64_t group_count;
+  MatrixLayout lhs_layout;
+  MatrixLayout rhs_layout;
+  MatrixLayout c_layout;
+  MatrixLayout output_layout;
+  xla::complex128 alpha;
+  double beta;
+  blas::DataType type_a, type_b, type_c, type_d;
+  int64_t lhs_contracting_dimension;
+  int64_t rhs_contracting_dimension;
+  int64_t lhs_ragged_dimension;
+  std::optional<int64_t> rhs_group_dimension;
+  int64_t lhs_stride_ragged_dim;
+  int64_t rhs_stride_group_dim;
+  int64_t output_stride_ragged_dim;
+  // PrecisionConfig-level algorithm
+  xla::PrecisionConfig::Algorithm precision_algorithm;
+  int64_t compute_precision;
+  RaggedDotMode raggedMode;
+  std::optional<blas::ComputationType>  compute_type;
+
+  // TODO: must be implemented
+  static absl::StatusOr<GroupedGemmConfig> FromProto(
+      const xla::GemmConfigProto& proto) {return absl::InternalError("Not implemented yet");};
+  xla::GemmConfigProto ToProto() const {};
+};
+
 struct BlasLt {
   enum class Epilogue {
     kDefault = 1,                   // No special postprocessing
@@ -255,8 +291,91 @@ struct BlasLt {
     virtual ~MatmulPlan() {}
   };  // class MatmulPlan
 
+  struct GroupedMatmulPlan {
+
+    virtual absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
+        const Stream* stream,
+        size_t max_algorithm_count = 128,
+        size_t max_workspace_size = 1ll << 32) const = 0;
+
+    virtual absl::Status SetAlgorithm(const MatmulAlgorithm& algorithm) = 0;
+
+    // This function is to be removed once TF interface is fixed,
+    // see tensorflow/core/kernels/matmul_util.cc
+    absl::Status ExecuteOnStream(
+        Stream* stream, DeviceMemoryBase a, DeviceMemoryBase b,
+        DeviceMemoryBase c, DeviceMemoryBase d,
+        DeviceMemoryBase group_sizes,
+        DeviceMemoryBase bias,  // may be null
+        DeviceMemoryBase aux,   // may be null
+        DeviceMemoryBase a_scale, DeviceMemoryBase b_scale,
+        DeviceMemoryBase c_scale, DeviceMemoryBase d_scale,
+        DeviceMemoryBase d_amax, const MatmulAlgorithm& algorithm,
+        ScratchAllocator& scratch_allocator,
+        blas::ProfileResult* profile_result = nullptr) const {
+      // Temporary hack until Tensorflow side is fixed
+      TF_RETURN_IF_ERROR(
+          const_cast<GroupedMatmulPlan*>(this)->SetAlgorithm(algorithm));
+      // Note: GroupedGemm does not have aux. We pass group_sizes in aux to avoid redifining a new structure.
+      return ExecuteOnStream(
+          stream,
+          MemoryArgs{a, b, c, d, bias, group_sizes, a_scale, b_scale, c_scale, d_scale,
+                     d_amax, DeviceMemoryBase{}, &scratch_allocator},
+          profile_result);
+    }
+
+    // API that uses scratch_allocator to allocate workspace.
+    // This version is used by TF: see tensorflow/core/kernels/matmul_util.cc
+    absl::Status ExecuteOnStream(
+        Stream* stream, DeviceMemoryBase a, DeviceMemoryBase b,
+        DeviceMemoryBase c, DeviceMemoryBase d,
+        DeviceMemoryBase group_sizes,
+        DeviceMemoryBase bias,  // may be null
+        DeviceMemoryBase aux,   // may be null
+        DeviceMemoryBase a_scale, DeviceMemoryBase b_scale,
+        DeviceMemoryBase c_scale, DeviceMemoryBase d_scale,
+        DeviceMemoryBase d_amax, ScratchAllocator& scratch_allocator,
+        blas::ProfileResult* profile_result = nullptr) const {
+      // Note: GroupedGemm does not have aux. We pass group_sizes in aux to avoid redifining a new structure.
+      return ExecuteOnStream(
+          stream,
+          MemoryArgs{a, b, c, d, bias, group_sizes, a_scale, b_scale, c_scale, d_scale,
+                     d_amax, DeviceMemoryBase{}, &scratch_allocator},
+          profile_result);
+    }
+
+    // API that uses pre-allocated buffer as workspace.
+    absl::Status ExecuteOnStream(
+        Stream* stream, DeviceMemoryBase a, DeviceMemoryBase b,
+        DeviceMemoryBase c, DeviceMemoryBase d,
+        DeviceMemoryBase group_sizes,
+        DeviceMemoryBase bias,  // may be null
+        DeviceMemoryBase aux,   // may be null
+        DeviceMemoryBase a_scale, DeviceMemoryBase b_scale,
+        DeviceMemoryBase c_scale, DeviceMemoryBase d_scale,
+        DeviceMemoryBase d_amax, DeviceMemoryBase workspace,
+        blas::ProfileResult* profile_result = nullptr) const {
+      // Note: GroupedGemm does not have aux. We pass group_sizes in aux to avoid redifining a new structure.
+      return ExecuteOnStream(
+          stream,
+          MemoryArgs{a, b, c, d, bias, group_sizes, a_scale, b_scale, c_scale, d_scale,
+                     d_amax, workspace, nullptr},
+          profile_result);
+    }
+
+    // The most general form: to be implemented by derived clases.
+    virtual absl::Status ExecuteOnStream(
+        Stream* stream, const MemoryArgs& args,
+        blas::ProfileResult* profile_result) const = 0;
+
+    virtual ~GroupedMatmulPlan() {}
+  };
+
   using MatmulPlanPtr = std::unique_ptr<MatmulPlan>;
   using PlanCreateFunc = absl::AnyInvocable<absl::StatusOr<MatmulPlanPtr>()>;
+
+  using GroupedMatmulPlanPtr = std::unique_ptr<GroupedMatmulPlan>;
+  using GroupedPlanCreateFunc = absl::AnyInvocable<absl::StatusOr<GroupedMatmulPlanPtr>()>;
 
   virtual absl::Status Init() = 0;
 
@@ -276,12 +395,30 @@ struct BlasLt {
   void ClearMatmulPlanCache();
   size_t GetMatmulPlanCacheSize() const;
 
+  virtual absl::StatusOr<GroupedMatmulPlanPtr> GetGroupedMatmulPlan(
+		  gpu::GroupedGemmConfig& config,
+      std::vector<Epilogue> epilogues) const = 0;
+
+  static absl::StatusOr<GroupedMatmulPlanPtr> GetGroupedMatmulPlan(
+		  const Stream *stream,
+		  gpu::GroupedGemmConfig& config,
+      std::vector<Epilogue> epilogues);
+
+  absl::StatusOr<GroupedMatmulPlan*> GetOrCreateGroupedMatmulPlan(const std::string& key,
+                                                    GroupedPlanCreateFunc create);
+
+  void ClearGroupedMatmulPlanCache();
+  size_t GetGroupedMatmulPlanCacheSize() const;
+
   virtual ~BlasLt() {}
 
  protected:
   mutable absl::Mutex plan_cache_mu_;
   absl::flat_hash_map<std::string, MatmulPlanPtr> plan_cache_
       ABSL_GUARDED_BY(plan_cache_mu_);
+  mutable absl::Mutex grouped_plan_cache_mu_;
+  absl::flat_hash_map<std::string, GroupedMatmulPlanPtr> grouped_plan_cache_
+      ABSL_GUARDED_BY(grouped_plan_cache_mu_);
 };  // class BlasLt
 
 }  // namespace stream_executor::gpu

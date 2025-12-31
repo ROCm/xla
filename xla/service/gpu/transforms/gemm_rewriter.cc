@@ -699,6 +699,87 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     return absl::OkStatus();
   }
 
+  absl::Status HandleRaggedDot(HloInstruction* instr) override {
+    TF_ASSIGN_OR_RETURN(
+      bool is_supported_matmul,
+      IsCublasSupportedGroupedMatMul(*instr));
+    if (!is_supported_matmul) {
+      return absl::OkStatus();
+    }
+    HloRaggedDotInstruction* ragged_dot = DynCast<HloRaggedDotInstruction>(instr);
+    if (ragged_dot == nullptr) {
+      return absl::OkStatus();
+    }
+    const auto& ragged_dims = ragged_dot->ragged_dot_dimension_numbers();
+    const auto& dot_dims = ragged_dims.dot_dimension_numbers();
+    if (ragged_dims.lhs_ragged_dimensions().size() != 1) {
+      return absl::UnimplementedError("lhs_ragged_dimensions must have size 1");
+    }
+    int lhs_ragged_dim = ragged_dims.lhs_ragged_dimensions(0);
+
+    auto isLhsRaggedDimInContractingDim = [](int lhs_ragged_dim,
+                               const DotDimensionNumbers& dnums) {
+        if (std::find(dnums.lhs_contracting_dimensions().begin(),
+                dnums.lhs_contracting_dimensions().end(),
+                lhs_ragged_dim) != dnums.lhs_contracting_dimensions().end()) {
+          return true;
+        }
+        return false;
+      };
+
+    auto isLhsRaggedDimInBatchDim = [](int lhs_ragged_dim,
+                               const DotDimensionNumbers& dnums) {
+        if (std::find(dnums.lhs_batch_dimensions().begin(),
+                      dnums.lhs_batch_dimensions().end(),
+                      lhs_ragged_dim) != dnums.lhs_batch_dimensions().end()) {
+          return true;
+        }
+        return false;
+      };
+
+    auto lhs = ragged_dot->mutable_operand(0);
+    auto rhs = ragged_dot->mutable_operand(1);
+    auto group_sizes = ragged_dot->mutable_operand(2);
+    int new_dim_index = group_sizes->shape().dimensions().size() - 1;
+
+    if (!isLhsRaggedDimInContractingDim(lhs_ragged_dim, dot_dims) && 
+        !isLhsRaggedDimInBatchDim(lhs_ragged_dim, dot_dims) && 
+        ragged_dims.rhs_group_dimensions().size() != 1) {
+      return absl::UnimplementedError(
+          "rhs_group_dimensions must have size equal to 1 when lhs ragged "
+          "dimension is a non-contracting dimension");
+    }
+    HloInstruction* grouped_gemm_call =
+              instr->AddInstruction(HloInstruction::CreateCustomCall(
+                      ragged_dot->shape(), ragged_dot->mutable_operands(),
+                       gpu::kCublasLtGroupedMatmulCallTarget));
+
+    // Create a GroupedGemmBackendConfig based on the instruction.
+    TF_ASSIGN_OR_RETURN(gpu::GpuBackendConfig gpu_backend_config,
+                       grouped_gemm_call->backend_config<gpu::GpuBackendConfig>());
+    GroupedGemmBackendConfig& grouped_gemm_backend_config = *gpu_backend_config.mutable_grouped_gemm_backend_config();
+    RaggedDotDimensionNumbers& ragged_dot_dimension_numbers = *grouped_gemm_backend_config.mutable_ragged_dot_dimension_numbers();
+    ragged_dot_dimension_numbers = ragged_dot->ragged_dot_dimension_numbers();
+
+    // Create a GemmBackendConfig based on the instruction.
+    GemmBackendConfig& gemm_backend_config =
+          *grouped_gemm_backend_config.mutable_gemm_backend_config();
+    gemm_backend_config.set_alpha_real(1.0);
+    gemm_backend_config.set_alpha_imag(0.0);
+    gemm_backend_config.set_beta(0.0);
+    *gemm_backend_config.mutable_dot_dimension_numbers() = dot_dims;
+
+    auto attributes = instr->frontend_attributes().map();
+    gemm_backend_config.set_grad_x(attributes["grad_x"] == "true");
+    gemm_backend_config.set_grad_y(attributes["grad_y"] == "true");
+
+
+    TF_RETURN_IF_ERROR(grouped_gemm_call->set_backend_config(gpu_backend_config));
+
+    TF_RETURN_IF_ERROR(ReplaceInstruction(instr, grouped_gemm_call));
+    return absl::OkStatus();
+  }
+
   absl::Status TurnDotIntoConvertAndDotForBF16BF16F32(
       HloInstruction* instr, GemmBackendConfig& gemm_backend_config,
       GpuBackendConfig& gpu_backend_config) {

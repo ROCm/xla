@@ -72,6 +72,14 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
+absl::StatusOr<bool> IsCublasSupportedGroupedMatMul(const HloInstruction& instr) {
+  if (instr.opcode() != HloOpcode::kRaggedDot) {
+    return false;
+  }
+  // TODO: check GroupedGemm configuration
+  return true;
+}
+
 absl::StatusOr<bool> IsCublasSupportedMatMul(
     const HloInstruction& dot, bool allow_matrix_vector_multiplication) {
   if (dot.opcode() != HloOpcode::kDot) {

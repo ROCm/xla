@@ -98,6 +98,15 @@ message GemmThunkProto {
   bool deterministic = 6;
 }
 
+message GroupedGemmThunkProto {
+  xla.GemmConfigProto grouped_gemm_config = 1;
+  xla.buffer_assignment.BufferAllocationSliceProto lhs_buffer = 2;
+  xla.buffer_assignment.BufferAllocationSliceProto rhs_buffer = 3;
+  xla.buffer_assignment.BufferAllocationSliceProto output_buffer = 4;
+  optional xla.buffer_assignment.BufferAllocationSliceProto workspace = 5;
+  bool deterministic = 6;
+}
+
 message WaitForStreamsThunkProto {
   int64 stream_id = 1;
   int64 wait_for_stream_id = 2;
@@ -185,6 +194,26 @@ message CublasLtMatmulThunkProto {
   optional xla.buffer_assignment.BufferAllocationSliceProto workspace = 16;
 }
 
+message CublasLtGroupedMatmulThunkProto {
+  xla.GemmConfigProto gemm_config = 1;
+  xla.BlasLtEpilogueProto epilogue = 2;
+  int64 algorithm_idx = 3;
+  string canonical_hlo = 4;
+  xla.buffer_assignment.BufferAllocationSliceProto a = 5;
+  xla.buffer_assignment.BufferAllocationSliceProto b = 6;
+  xla.buffer_assignment.BufferAllocationSliceProto c = 7;
+  xla.buffer_assignment.BufferAllocationSliceProto d = 8;
+  xla.buffer_assignment.BufferAllocationSliceProto group_sizes = 9;
+  optional xla.buffer_assignment.BufferAllocationSliceProto bias = 10;
+  optional xla.buffer_assignment.BufferAllocationSliceProto aux = 11;
+  optional xla.buffer_assignment.BufferAllocationSliceProto a_scale = 12;
+  optional xla.buffer_assignment.BufferAllocationSliceProto b_scale = 13;
+  optional xla.buffer_assignment.BufferAllocationSliceProto c_scale = 14;
+  optional xla.buffer_assignment.BufferAllocationSliceProto d_scale = 15;
+  optional xla.buffer_assignment.BufferAllocationSliceProto d_amax = 16;
+  optional xla.buffer_assignment.BufferAllocationSliceProto workspace = 17;
+}
+
 message NormThunkProto {
   GpuNormDescriptorProto norm_descriptor = 1;
   xla.buffer_assignment.BufferAllocationSliceProto x = 2;
@@ -252,6 +281,8 @@ message ThunkProto {
     ConvolutionThunkProto convolution_thunk = 25;
     ConvolutionReorderThunkProto convolution_reorder_thunk = 26;
     FftThunkProto fft_thunk = 27;
+    CublasLtGroupedMatmulThunkProto cublas_lt_grouped_matmul_thunk = 28;
+    GroupedGemmThunkProto grouped_gemm_thunk = 29;
   }
 }
 

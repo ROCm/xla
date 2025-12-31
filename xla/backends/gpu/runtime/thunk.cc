@@ -276,6 +276,7 @@ Thunk::ExecuteParams::ExecuteParams(
     CASE(kCuDnn);
     CASE(kCubSort);
     CASE(kCublasLtMatmul);
+    CASE(kCublasLtGroupedMatmul);
     CASE(kCustomCall);
     CASE(kCustomKernel);
     CASE(kDynamicSlice);

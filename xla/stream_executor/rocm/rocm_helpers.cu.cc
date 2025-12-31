@@ -16,6 +16,7 @@ limitations under the License.
 #include <hip/hip_bfloat16.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
+#include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -157,4 +158,65 @@ INSTANTIATE_BIAS_ACTIVATION(float, float)
 INSTANTIATE_BIAS_ACTIVATION(double, double)
 
 };  // namespace gpu
+
+
+namespace rocm {
+
+__global__ void CopyUserArgsKernel(hipblaslt_ext::UserArguments *dest_args,
+    const void **a, const void **b, const void **c, void **d,   
+    size_t byte_width_elem_a, size_t byte_width_elem_b,
+    size_t byte_width_elem_c, size_t byte_width_elem_d,
+    int64_t* d_group_sizes, uint64_t lhs_stride_ragged_dim, 
+    uint64_t rhs_stride_group_dim, uint64_t output_stride_ragged_dim, 
+    bool ragged_dim_in_non_contracting_dim, uint64_t num_gemms)         
+{
+	uint32_t idx = blockIdx.x*blockDim.x + threadIdx.x;
+  if (idx == 0) {
+    if(ragged_dim_in_non_contracting_dim) {  
+      dest_args[0].m = d_group_sizes[0];  
+    } else {
+      dest_args[0].k = d_group_sizes[0];  
+    }
+  } else if((idx < num_gemms) && (idx > 0)) {        
+	  // writing ArrayOfStructs is not optimal..
+    auto arg = dest_args[idx];         
+    // TODO: update shape and pointer according to group sizes.
+	  arg.a = static_cast<void *>(const_cast< uint8_t *>(static_cast<const uint8_t*>(arg.a)+(d_group_sizes[idx-1]*lhs_stride_ragged_dim*byte_width_elem_a)));                      
+    arg.b = static_cast<void *>(const_cast< uint8_t *>(static_cast<const uint8_t*>(arg.b)+(idx*rhs_stride_group_dim*byte_width_elem_b)));                        
+    arg.c = static_cast<void *>(const_cast< uint8_t *>(static_cast<const uint8_t*>(arg.c)+(d_group_sizes[idx-1]*rhs_stride_group_dim*byte_width_elem_c)));
+    if(ragged_dim_in_non_contracting_dim) {           
+      arg.m = d_group_sizes[idx];                 
+	    arg.d = static_cast<void *>(static_cast<uint8_t*>(arg.d)+(d_group_sizes[idx-1]*output_stride_ragged_dim*byte_width_elem_d));
+    } else {
+      arg.k = d_group_sizes[idx];
+      arg.d = d[idx];
+    }                                                    
+	}
+                                          
+}
+
+void GroupGemmUpdateArgs(hipStream_t stream,                                   
+			hipblaslt_ext::UserArguments *dev_args,                                          
+			//const gpu::GroupedGemmConfig& cfg                                                  
+			const void **a, const void **b, const void **c, void **d,
+      size_t byte_width_elem_a, size_t byte_width_elem_b,
+      size_t byte_width_elem_c, size_t byte_width_elem_d, 
+      int64_t* d_group_sizes, uint64_t lhs_stride_ragged_dim, 
+      uint64_t rhs_stride_group_dim, uint64_t output_stride_ragged_dim, 
+      bool ragged_dim_in_non_contracting_dim,                                                      
+			uint64_t num_gemms){
+		
+	const uint64_t block_sz = 128;                                                                                          
+	const uint64_t n_blocks = (num_gemms + block_sz - 1)/block_sz;                                                                                          
+	hipLaunchKernelGGL(CopyUserArgsKernel, n_blocks,                                                                                                         
+	  std::min(block_sz, num_gemms), 0,          
+	  stream, 
+	  dev_args,                                          
+	  a, b, c, d, byte_width_elem_a, byte_width_elem_b, byte_width_elem_c, byte_width_elem_d, 
+    d_group_sizes, lhs_stride_ragged_dim, rhs_stride_group_dim, 
+    output_stride_ragged_dim, ragged_dim_in_non_contracting_dim, num_gemms);                                                                
+}
+
+}; // namespace rocm
+
 };  // namespace stream_executor

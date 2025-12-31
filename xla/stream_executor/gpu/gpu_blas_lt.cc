@@ -310,6 +310,40 @@ size_t BlasLt::GetMatmulPlanCacheSize() const {
   return plan_cache_.size();
 }
 
+/*static*/ auto BlasLt::GetGroupedMatmulPlan(const Stream* stream,
+                                      GroupedGemmConfig& cfg, std::vector<Epilogue> epilogues)
+    -> absl::StatusOr<GroupedMatmulPlanPtr> {
+  auto blas = Get(stream);
+  if (blas == nullptr) {
+    return xla::Internal("BlasLt is unavailable");
+  }
+  return blas->GetGroupedMatmulPlan(cfg, epilogues);
+}
+
+absl::StatusOr<BlasLt::GroupedMatmulPlan*> BlasLt::GetOrCreateGroupedMatmulPlan(
+    const std::string& key, GroupedPlanCreateFunc create) {
+  absl::MutexLock lock(grouped_plan_cache_mu_);  // double mutex ???
+  auto res = grouped_plan_cache_.emplace(key, GroupedMatmulPlanPtr{});
+  // New entry inserted: always create a new matmul plan if key is empty,
+  // this is used by command_buffer_thunk test.
+  if (res.second || key.empty()) {
+    VLOG(2) << "Creating a plan for: " << key;
+    TF_ASSIGN_OR_RETURN(res.first->second, create());
+    VLOG(2) << "Plan created: cache size: " << grouped_plan_cache_.size();
+  }
+  return res.first->second.get();
+}
+
+void BlasLt::ClearGroupedMatmulPlanCache() {
+  absl::MutexLock lock(grouped_plan_cache_mu_);
+  grouped_plan_cache_.clear();
+}
+
+size_t BlasLt::GetGroupedMatmulPlanCacheSize() const {
+  absl::MutexLock lock(grouped_plan_cache_mu_);
+  return grouped_plan_cache_.size();
+}
+
 absl::StatusOr<GemmConfig> GemmConfig::FromProto(
     const xla::GemmConfigProto& proto) {
   TF_ASSIGN_OR_RETURN(MatrixLayout lhs_layout,
