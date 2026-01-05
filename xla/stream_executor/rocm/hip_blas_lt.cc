@@ -885,19 +885,34 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
 
 #ifndef GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
 
+  auto group_size_bytewidth =
+      (cfg_.raggedMode != gpu::RaggedDotMode::kRaggedBatch)
+          ? static_cast<size_t>(args.aux.size() /
+                                (cfg_.group_count * cfg_.batch_count))
+          : static_cast<size_t>(args.aux.size() / cfg_.group_count);
+
   // Copy group_sizes from Device to Host
   TF_ASSIGN_OR_RETURN(
       std::unique_ptr<MemoryAllocation> host_group_sizes,
-      executor->HostMemoryAllocate(cfg_.group_count * sizeof(uint64_t)));
+      executor->HostMemoryAllocate(cfg_.group_count * group_size_bytewidth));
   TF_RETURN_IF_ERROR(
       executor->SynchronousMemcpy(host_group_sizes.get()->opaque(), args.aux,
-                                  cfg_.group_count * sizeof(uint64_t)));
+                                  cfg_.group_count * group_size_bytewidth));
   // Note: The group size are considered the same accross the batch.
   // Indeed, different group sizes for different batch would required to divide
   // our group-gemm into more sub-groups and set the GEMM config for each
   // sub-group by hand.
-  uint64_t *h_group_sizes =
-      static_cast<uint64_t *>(host_group_sizes.get()->opaque());
+  auto get_group_value_at =
+      [group_size_bytewidth](
+          const std::unique_ptr<MemoryAllocation> &host_group_sizes,
+          size_t index) {
+        if (group_size_bytewidth == 8) {
+          return static_cast<int64_t>(
+              static_cast<int64_t *>(host_group_sizes.get()->opaque())[index]);
+        }
+        return static_cast<int64_t>(
+            static_cast<int32_t *>(host_group_sizes.get()->opaque())[index]);
+      };
 
   // Compute args on the host
   userArgs[0].a = a.opaque();
@@ -905,15 +920,15 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
   userArgs[0].c = args.d.opaque();
   userArgs[0].d = args.d.opaque();
   if (cfg_.raggedMode == gpu::RaggedDotMode::kRaggedBatch) {
-    userArgs[0].batch = h_group_sizes[0];
+    userArgs[0].batch = get_group_value_at(host_group_sizes, 0);
   } else if (cfg_.raggedMode == gpu::RaggedDotMode::kRaggedContracting) {
-    userArgs[0].k = h_group_sizes[0];
+    userArgs[0].k = get_group_value_at(host_group_sizes, 0);
   } else {
     if (must_swap_operands_) {
       // The ragged matrix has been set as operand B.
-      userArgs[0].n = h_group_sizes[0];
+      userArgs[0].n = get_group_value_at(host_group_sizes, 0);
     } else {
-      userArgs[0].m = h_group_sizes[0];
+      userArgs[0].m = get_group_value_at(host_group_sizes, 0);
     }
   }
 
@@ -924,32 +939,32 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
     case gpu::RaggedDotMode::kRaggedNonContracting: {
       for (size_t i = 1; i < cfg_.group_count; i++) {
         if (must_swap_operands_) {
-          userArgs[i].n = h_group_sizes[i];
+          userArgs[i].n = get_group_value_at(host_group_sizes, i);
           userArgs[i].b = static_cast<void *>(const_cast<uint8_t *>(
               static_cast<const uint8_t *>(userArgs[i - 1].b) +
-              (h_group_sizes[i - 1] * cfg_.lhs_stride_ragged_dim *
-               byte_width_elem_b)));
+              (get_group_value_at(host_group_sizes, i - 1) *
+               cfg_.lhs_stride_ragged_dim * byte_width_elem_b)));
           userArgs[i].a = static_cast<void *>(const_cast<uint8_t *>(
               static_cast<const uint8_t *>(a.opaque()) +
               (i * cfg_.rhs_stride_group_dim * byte_width_elem_a)));
         } else {
-          userArgs[i].m = h_group_sizes[i];
+          userArgs[i].m = get_group_value_at(host_group_sizes, i);
           userArgs[i].a = static_cast<void *>(const_cast<uint8_t *>(
               static_cast<const uint8_t *>(userArgs[i - 1].a) +
-              (h_group_sizes[i - 1] * cfg_.lhs_stride_ragged_dim *
-               byte_width_elem_a)));
+              (get_group_value_at(host_group_sizes, i - 1) *
+               cfg_.lhs_stride_ragged_dim * byte_width_elem_a)));
           userArgs[i].b = static_cast<void *>(const_cast<uint8_t *>(
               static_cast<const uint8_t *>(b.opaque()) +
               (i * cfg_.rhs_stride_group_dim * byte_width_elem_b)));
         }
         userArgs[i].c = static_cast<void *>(
             static_cast<uint8_t *>(userArgs[i - 1].c) +
-            (h_group_sizes[i - 1] * cfg_.output_stride_ragged_dim *
-             byte_width_elem_c));
+            (get_group_value_at(host_group_sizes, i - 1) *
+             cfg_.output_stride_ragged_dim * byte_width_elem_c));
         userArgs[i].d = static_cast<void *>(
             static_cast<uint8_t *>(userArgs[i - 1].d) +
-            (h_group_sizes[i - 1] * cfg_.output_stride_ragged_dim *
-             byte_width_elem_d));
+            (get_group_value_at(host_group_sizes, i - 1) *
+             cfg_.output_stride_ragged_dim * byte_width_elem_d));
       }
       break;
     }
@@ -958,23 +973,23 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
         if (must_swap_operands_) {
           userArgs[i].b = static_cast<void *>(const_cast<uint8_t *>(
               static_cast<const uint8_t *>(userArgs[i - 1].b) +
-              (h_group_sizes[i - 1] * cfg_.lhs_stride_ragged_dim *
-               byte_width_elem_b)));
+              (get_group_value_at(host_group_sizes, i - 1) *
+               cfg_.lhs_stride_ragged_dim * byte_width_elem_b)));
           userArgs[i].a = static_cast<void *>(const_cast<uint8_t *>(
               static_cast<const uint8_t *>(userArgs[i - 1].a) +
-              (h_group_sizes[i - 1] * cfg_.rhs_stride_group_dim *
-               byte_width_elem_a)));
+              (get_group_value_at(host_group_sizes, i - 1) *
+               cfg_.rhs_stride_group_dim * byte_width_elem_a)));
         } else {
           userArgs[i].a = static_cast<void *>(const_cast<uint8_t *>(
               static_cast<const uint8_t *>(userArgs[i - 1].a) +
-              (h_group_sizes[i - 1] * cfg_.lhs_stride_ragged_dim *
-               byte_width_elem_a)));
+              (get_group_value_at(host_group_sizes, i - 1) *
+               cfg_.lhs_stride_ragged_dim * byte_width_elem_a)));
           userArgs[i].b = static_cast<void *>(const_cast<uint8_t *>(
               static_cast<const uint8_t *>(userArgs[i - 1].b) +
-              (h_group_sizes[i - 1] * cfg_.rhs_stride_group_dim *
-               byte_width_elem_b)));
+              (get_group_value_at(host_group_sizes, i - 1) *
+               cfg_.rhs_stride_group_dim * byte_width_elem_b)));
         }
-        userArgs[i].k = h_group_sizes[i];
+        userArgs[i].k = get_group_value_at(host_group_sizes, i);
         userArgs[i].c = static_cast<void *>(
             static_cast<uint8_t *>(args.c.opaque()) +
             (i * cfg_.batch_count * userArgs[i].strideC2 * byte_width_elem_c));
@@ -989,31 +1004,31 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
         if (must_swap_operands_) {
           userArgs[i].b = static_cast<void *>(const_cast<uint8_t *>(
               static_cast<const uint8_t *>(userArgs[i - 1].b) +
-              (h_group_sizes[i - 1] * cfg_.lhs_stride_ragged_dim *
-               byte_width_elem_b)));
+              (get_group_value_at(host_group_sizes, i - 1) *
+               cfg_.lhs_stride_ragged_dim * byte_width_elem_b)));
           userArgs[i].a = static_cast<void *>(const_cast<uint8_t *>(
               static_cast<const uint8_t *>(userArgs[i - 1].a) +
-              (h_group_sizes[i - 1] * cfg_.rhs_stride_group_dim *
-               byte_width_elem_a)));
+              (get_group_value_at(host_group_sizes, i - 1) *
+               cfg_.rhs_stride_group_dim * byte_width_elem_a)));
         } else {
           userArgs[i].a = static_cast<void *>(const_cast<uint8_t *>(
               static_cast<const uint8_t *>(userArgs[i - 1].a) +
-              (h_group_sizes[i - 1] * cfg_.lhs_stride_ragged_dim *
-               byte_width_elem_a)));
+              (get_group_value_at(host_group_sizes, i - 1) *
+               cfg_.lhs_stride_ragged_dim * byte_width_elem_a)));
           userArgs[i].b = static_cast<void *>(const_cast<uint8_t *>(
               static_cast<const uint8_t *>(userArgs[i - 1].b) +
-              (h_group_sizes[i - 1] * cfg_.rhs_stride_group_dim *
-               byte_width_elem_b)));
+              (get_group_value_at(host_group_sizes, i - 1) *
+               cfg_.rhs_stride_group_dim * byte_width_elem_b)));
         }
-        userArgs[i].batch = h_group_sizes[i];
+        userArgs[i].batch = get_group_value_at(host_group_sizes, i);
         userArgs[i].c = static_cast<void *>(
             static_cast<uint8_t *>(userArgs[i - 1].c) +
-            (h_group_sizes[i - 1] * cfg_.output_stride_ragged_dim *
-             byte_width_elem_c));
+            (get_group_value_at(host_group_sizes, i - 1) *
+             cfg_.output_stride_ragged_dim * byte_width_elem_c));
         userArgs[i].d = static_cast<void *>(
             static_cast<uint8_t *>(userArgs[i - 1].d) +
-            (h_group_sizes[i - 1] * cfg_.output_stride_ragged_dim *
-             byte_width_elem_d));
+            (get_group_value_at(host_group_sizes, i - 1) *
+             cfg_.output_stride_ragged_dim * byte_width_elem_d));
       }
       break;
     }
