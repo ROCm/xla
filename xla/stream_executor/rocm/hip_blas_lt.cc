@@ -182,24 +182,34 @@ absl::Status debug_print_userArgs(StreamExecutor *executor,
       static_cast<hipblaslt_ext::UserArguments *>(
           host_userArgs.get()->opaque());
   for (int i = 0; i < group_count; i++) {
-    VLOG(-1) << "m[" << i << "] = " << h_userArgs[i].m;
-    VLOG(-1) << "n[" << i << "] = " << h_userArgs[i].n;
-    VLOG(-1) << "k[" << i << "] = " << h_userArgs[i].k;
-    VLOG(-1) << "batch[" << i << "] = " << h_userArgs[i].batch;
-    VLOG(-1) << "a[" << i << "] = " << h_userArgs[i].a;
-    VLOG(-1) << "b[" << i << "] = " << h_userArgs[i].b;
-    VLOG(-1) << "c[" << i << "] = " << h_userArgs[i].c;
-    VLOG(-1) << "d[" << i << "] = " << h_userArgs[i].d;
-    VLOG(-1) << "strideA1[" << i << "] = " << h_userArgs[i].strideA1;
-    VLOG(-1) << "strideA2[" << i << "] = " << h_userArgs[i].strideA2;
-    VLOG(-1) << "strideB1[" << i << "] = " << h_userArgs[i].strideB1;
-    VLOG(-1) << "strideB2[" << i << "] = " << h_userArgs[i].strideB2;
-    VLOG(-1) << "strideC1[" << i << "] = " << h_userArgs[i].strideC1;
-    VLOG(-1) << "strideC2[" << i << "] = " << h_userArgs[i].strideC2;
-    VLOG(-1) << "strideD1[" << i << "] = " << h_userArgs[i].strideD1;
-    VLOG(-1) << "strideD2[" << i << "] = " << h_userArgs[i].strideD2;
-    VLOG(-1) << "alpha = " << *reinterpret_cast<float *>(h_userArgs[i].alpha);
-    VLOG(-1) << "beta = " << *reinterpret_cast<float *>(h_userArgs[i].beta);
+    std::cout << "m[" << i << "] = " << h_userArgs[i].m << std::endl;
+    std::cout << "n[" << i << "] = " << h_userArgs[i].n << std::endl;
+    std::cout << "k[" << i << "] = " << h_userArgs[i].k << std::endl;
+    std::cout << "batch[" << i << "] = " << h_userArgs[i].batch << std::endl;
+    std::cout << "a[" << i << "] = " << h_userArgs[i].a << std::endl;
+    std::cout << "b[" << i << "] = " << h_userArgs[i].b << std::endl;
+    std::cout << "c[" << i << "] = " << h_userArgs[i].c << std::endl;
+    std::cout << "d[" << i << "] = " << h_userArgs[i].d << std::endl;
+    std::cout << "strideA1[" << i << "] = " << h_userArgs[i].strideA1
+              << std::endl;
+    std::cout << "strideA2[" << i << "] = " << h_userArgs[i].strideA2
+              << std::endl;
+    std::cout << "strideB1[" << i << "] = " << h_userArgs[i].strideB1
+              << std::endl;
+    std::cout << "strideB2[" << i << "] = " << h_userArgs[i].strideB2
+              << std::endl;
+    std::cout << "strideC1[" << i << "] = " << h_userArgs[i].strideC1
+              << std::endl;
+    std::cout << "strideC2[" << i << "] = " << h_userArgs[i].strideC2
+              << std::endl;
+    std::cout << "strideD1[" << i << "] = " << h_userArgs[i].strideD1
+              << std::endl;
+    std::cout << "strideD2[" << i << "] = " << h_userArgs[i].strideD2
+              << std::endl;
+    std::cout << "alpha = " << *reinterpret_cast<float *>(h_userArgs[i].alpha)
+              << std::endl;
+    std::cout << "beta = " << *reinterpret_cast<float *>(h_userArgs[i].beta)
+              << std::endl;
   }
   return absl::OkStatus();
 }
@@ -739,6 +749,26 @@ auto BlasLt::GetGroupedMatmulPlan(gpu::GroupedGemmConfig &cfg,
       v_strideB(plan->cfg_.group_count, batch_stride_b),
       v_strideC(plan->cfg_.group_count, (m * n)),
       v_strideD(plan->cfg_.group_count, (m * n));
+
+  switch (cfg_.raggedMode) {
+    case gpu::RaggedDotMode::kRaggedNonContracting: {
+      if (must_swap_operands) {
+        // ragged dimension in the n dimension
+        std::fill(v_n.begin() + 1, v_n.end(), 0);
+      } else {
+        std::fill(v_m.begin() + 1, v_m.end(), 0);
+      }
+      break;
+    }
+    case gpu::RaggedDotMode::kRaggedContracting: {
+      std::fill(v_k.begin() + 1, v_k.end(), 0);
+      break;
+    }
+    case gpu::RaggedDotMode::kRaggedBatch: {
+      std::fill(v_batch_count.begin() + 1, v_batch_count.end(), 0);
+      break;
+    }
+  }
 
   // TODO: recover GemmEpilogues from args
   std::vector<GemmEpilogue> epilogue(plan->cfg_.group_count);
