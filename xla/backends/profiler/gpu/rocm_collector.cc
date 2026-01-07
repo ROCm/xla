@@ -457,7 +457,7 @@ void PerDeviceCollector::GetDeviceCapabilities(int32_t device_ordinal,
 //==================== RocmTraceCollectorImpl ====================//
 void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
                                       bool is_auxiliary) {
-  absl::MutexLock lock(event_maps_mutex_);
+  absl::MutexLock lock(&event_maps_mutex_);
 
   if (event.source == RocmTracerEventSource::ApiCallback) {
     if (!is_auxiliary) {
