@@ -1368,6 +1368,7 @@ cc_library(
         "//xla/hlo/pass:hlo_pass",
         "//xla/hlo/utils:hlo_query",
         "//xla/service/gpu:backend_configs_cc",
+	"//xla/service/gpu:matmul_utils",
         "//xla/stream_executor:device_description",
         "//xla/tsl/platform:env",
         "//xla/tsl/platform:errors",
