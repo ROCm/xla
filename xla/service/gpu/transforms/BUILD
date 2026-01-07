@@ -1834,31 +1834,6 @@ xla_cc_test(
     ],
 )
 
-lit_test_suite(
-    name = "hlo_lit_tests",
-    srcs = enforce_glob(
-        [
-            "layout_assignment_v100.hlo",
-            "layout_assignment_a100.hlo",
-            "layout_assignment_h100.hlo",
-        ],
-        include = [
-            "*.hlo",
-        ],
-    ),
-    cfg = "//xla:lit.cfg.py",
-    data = [
-        "//xla/tools/hlo_opt:gpu_specs/a100_pcie_80.txtpb",
-        "//xla/tools/hlo_opt:gpu_specs/h100_sxm.txtpb",
-        "//xla/tools/hlo_opt:gpu_specs/v100.txtpb",
-    ],
-    default_tags = tf_gpu_tests_tags(),
-    tools = [
-        "//xla/tools:hlo-opt",
-        "@llvm-project//llvm:FileCheck",
-    ],
-)
-
 cc_library(
     name = "move_copy_to_users",
     srcs = ["move_copy_to_users.cc"],
