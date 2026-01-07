@@ -750,22 +750,22 @@ auto BlasLt::GetGroupedMatmulPlan(gpu::GroupedGemmConfig &cfg,
       v_strideC(plan->cfg_.group_count, (m * n)),
       v_strideD(plan->cfg_.group_count, (m * n));
 
-  switch (cfg_.raggedMode) {
+  switch (plan->cfg_.raggedMode) {
     case gpu::RaggedDotMode::kRaggedNonContracting: {
       if (must_swap_operands) {
         // ragged dimension in the n dimension
-        std::fill(v_n.begin() + 1, v_n.end(), 0);
+        std::fill(v_n.begin() + 1, v_n.end(), 1);
       } else {
-        std::fill(v_m.begin() + 1, v_m.end(), 0);
+        std::fill(v_m.begin() + 1, v_m.end(), 1);
       }
       break;
     }
     case gpu::RaggedDotMode::kRaggedContracting: {
-      std::fill(v_k.begin() + 1, v_k.end(), 0);
+      std::fill(v_k.begin() + 1, v_k.end(), 1);
       break;
     }
     case gpu::RaggedDotMode::kRaggedBatch: {
-      std::fill(v_batch_count.begin() + 1, v_batch_count.end(), 0);
+      std::fill(v_batch_count.begin() + 1, v_batch_count.end(), 1);
       break;
     }
   }
