@@ -638,7 +638,6 @@ cc_library(
         ":affine_map_evaluator",
         ":tiled_hlo_instruction_or_computation",
         "//xla/hlo/analysis:indexing_analysis",
-        "//xla/hlo/analysis:interval",
         "//xla/hlo/ir:hlo",
         "//xla/service/gpu:gpu_fusible",
         "//xla/service/gpu:hlo_fusion_analysis",
