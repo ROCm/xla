@@ -581,7 +581,6 @@ cc_library(
     deps = [
         "//xla:shape_util",
         "//xla:util",
-        "//xla/backends/gpu/codegen/triton:tiled_emitter_constraints",
         ":affine_map_evaluator",
         ":constraint_expression",
         ":symbolic_tile",
