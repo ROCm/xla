@@ -653,25 +653,6 @@ xla_test(
   ],
 )
 
-xla_cc_test(
-    name = "rocm_collector_test",
-    size = "small",
-    srcs = ["rocm_collector_test.cc"],
-    tags = [
-        "gpu",
-        "rocm-only",
-    ] + if_google([
-        "manual",
-    ]),
-    deps = [
-        # ":rocm_tracer",
-        ":rocm_collector",
-        ":rocm_tracer_utils",
-        "@com_google_googletest//:gtest_main",
-        "//xla/tsl/profiler/utils:xplane_utils",
-    ],
-)
-
 cc_library(
     name = "cupti_nvtx_ext_payload",
     srcs = if_cuda_newer_than(
