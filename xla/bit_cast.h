@@ -35,6 +35,7 @@ limitations under the License.
 
 namespace xla {
 
+
 template <typename T, typename U>
 T BitCast(U src) {
   static_assert(sizeof(T) == sizeof(U), "sizes don't match");
