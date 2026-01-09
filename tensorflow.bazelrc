@@ -586,6 +586,7 @@ build:cross_compile_macos_x86 --config=cross_compile_base
 build:cross_compile_macos_x86 --config=nonccl
 # Target Catalina (10.15) as the minimum supported OS
 build:cross_compile_macos_x86 --action_env  MACOSX_DEPLOYMENT_TARGET=10.15
+build:cross_compile_macos_x86 --action_env  MACOSX_DEPLOYMENT_TARGET=10.15
 
 # Set the target CPU to Darwin x86
 build:cross_compile_macos_x86 --platforms=//tools/toolchains/cross_compile/config:darwin_x86_64
