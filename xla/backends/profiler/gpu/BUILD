@@ -668,7 +668,6 @@ cc_library(
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/memory",
         "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:stringpiece",
     ],
     alwayslink = 1,
 )
