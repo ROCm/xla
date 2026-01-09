@@ -20,27 +20,27 @@ package xla;
 import "xla/stream_executor/blas.proto";
 import "xla/xla_data.proto";
 
-message GemmConfigProto {
-  message MatrixLayout {
-    enum Order {
-      ORDER_UNKNOWN = 0;
-      ORDER_ROW_MAJOR = 1;
-      ORDER_COLUMN_MAJOR = 2;
-    }
-    Order order = 1;
-    int64 num_rows = 2;
-    int64 num_cols = 3;
-    int64 batch_size = 4;
-    int64 leading_dim_stride = 5;
-    int64 batch_stride = 6;
-    xla.BlasTransposeProto transpose = 7;
-    xla.PrimitiveType dtype = 8;
+message MatrixLayoutProto {
+  enum Order {
+    ORDER_UNKNOWN = 0;
+    ORDER_ROW_MAJOR = 1;
+    ORDER_COLUMN_MAJOR = 2;
   }
+  Order order = 1;
+  int64 num_rows = 2;
+  int64 num_cols = 3;
+  int64 batch_size = 4;
+  int64 leading_dim_stride = 5;
+  int64 batch_stride = 6;
+  xla.BlasTransposeProto transpose = 7;
+  xla.PrimitiveType dtype = 8;
+}
 
-  MatrixLayout lhs_layout = 1;
-  MatrixLayout rhs_layout = 2;
-  MatrixLayout c_layout = 3;
-  MatrixLayout output_layout = 4;
+message GemmConfigProto {
+  MatrixLayoutProto lhs_layout = 1;
+  MatrixLayoutProto rhs_layout = 2;
+  MatrixLayoutProto c_layout = 3;
+  MatrixLayoutProto output_layout = 4;
   double alpha_real = 5;
   double alpha_imag = 6;
   double beta = 7;
@@ -50,6 +50,36 @@ message GemmConfigProto {
   bool grad_x = 11;
   bool grad_y = 12;
   xla.BlasComputationTypeProto compute_type = 13;
+}
+
+message GroupedGemmConfigProto {
+  uint64 m = 1;
+  uint64 n = 2;
+  uint64 k = 3;
+  uint64 batch_count = 4;
+  uint64 group_count = 5;
+  MatrixLayoutProto lhs_layout = 6;
+  MatrixLayoutProto rhs_layout = 7;
+  MatrixLayoutProto c_layout = 8;
+  MatrixLayoutProto output_layout = 9;
+  double alpha_real = 10;
+  double alpha_imag = 11;
+  double beta = 12;
+  xla.PrimitiveType type_a = 13;
+  xla.PrimitiveType type_b = 14;
+  xla.PrimitiveType type_c = 15;
+  xla.PrimitiveType type_d = 16;
+  int64 lhs_contracting_dimension = 17;
+  int64 rhs_contracting_dimension = 18;
+  int64 lhs_ragged_dimension = 19;
+  optional int64 rhs_group_dimension = 20;
+  int64 lhs_stride_ragged_dim = 21;
+  int64 rhs_stride_group_dim = 22;
+  int64 output_stride_ragged_dim = 23;
+  xla.PrecisionConfig.Algorithm precision_algorithm = 24;
+  int64 compute_precision = 25;
+  RaggedDotModeProto ragged_mode = 26;
+  xla.BlasComputationTypeProto compute_type = 27;
 }
 
 enum BlasLtEpilogueProto {
@@ -65,4 +95,11 @@ enum BlasLtEpilogueProto {
   EPILOGUE_BIAS_THEN_SILU = 9;
   EPILOGUE_BIAS_THEN_GELU_WITH_AUX = 10;
   EPILOGUE_BIAS_THEN_SILU_WITH_AUX = 11;
+}
+
+
+enum RaggedDotModeProto {
+  RAGGED_NON_CONTRACTING = 0;
+  RAGGED_CONTRACTING = 1;
+  RAGGED_BATCH = 2;
 }

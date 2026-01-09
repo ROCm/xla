@@ -417,7 +417,7 @@ absl::StatusOr<ThunkProto> CublasLtGroupedMatmulThunk::ToProto() const {
 
   CublasLtGroupedMatmulThunkProto* cublas_lt_grouped_matmul_thunk =
       proto.mutable_cublas_lt_grouped_matmul_thunk();
-  *cublas_lt_grouped_matmul_thunk->mutable_gemm_config() =
+  *cublas_lt_grouped_matmul_thunk->mutable_grouped_gemm_config() =
       gemm_config_.ToProto();
   cublas_lt_grouped_matmul_thunk->set_epilogue(
       stream_executor::gpu::BlasLt::EpilogueToProto(epilogue_));
@@ -471,9 +471,9 @@ absl::StatusOr<ThunkProto> CublasLtGroupedMatmulThunk::ToProto() const {
 absl::StatusOr<std::unique_ptr<Thunk>> CublasLtGroupedMatmulThunk::FromProto(
     Thunk::ThunkInfo thunk_info, const CublasLtGroupedMatmulThunkProto& proto,
     absl::Span<const BufferAllocation> allocations) {
-  TF_ASSIGN_OR_RETURN(
-      stream_executor::gpu::GroupedGemmConfig gemm_config,
-      stream_executor::gpu::GroupedGemmConfig::FromProto(proto.gemm_config()));
+  TF_ASSIGN_OR_RETURN(stream_executor::gpu::GroupedGemmConfig gemm_config,
+                      stream_executor::gpu::GroupedGemmConfig::FromProto(
+                          proto.grouped_gemm_config()));
   TF_ASSIGN_OR_RETURN(
       stream_executor::gpu::BlasLt::Epilogue epilogue,
       stream_executor::gpu::BlasLt::EpilogueFromProto(proto.epilogue()));

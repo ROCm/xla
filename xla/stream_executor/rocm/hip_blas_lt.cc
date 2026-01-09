@@ -91,18 +91,6 @@ using ::xla::complex64;
 
 using namespace hipblaslt_ext;
 
-// #define GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
-
-void GroupGemmUpdateArgs(
-    hipStream_t stream, hipblaslt_ext::UserArguments *dev_args,
-    // const gpu::GroupedGemmConfig& cfg
-    const void **a, const void **b, const void **c, void **d,
-    size_t byte_width_elem_a, size_t byte_width_elem_b,
-    size_t byte_width_elem_c, size_t byte_width_elem_d, int64_t *d_group_sizes,
-    uint64_t lhs_stride_ragged_dim, uint64_t rhs_stride_group_dim,
-    uint64_t output_stride_ragged_dim, bool ragged_dim_in_non_contracting_dim,
-    uint64_t num_gemms);
-
 namespace {
 
 template <typename T>
@@ -750,7 +738,7 @@ auto BlasLt::GetGroupedMatmulPlan(gpu::GroupedGemmConfig &cfg,
       v_strideC(plan->cfg_.group_count, (m * n)),
       v_strideD(plan->cfg_.group_count, (m * n));
 
-  switch (plan->cfg_.raggedMode) {
+  switch (plan->cfg_.ragged_mode) {
     case gpu::RaggedDotMode::kRaggedNonContracting: {
       if (must_swap_operands) {
         // ragged dimension in the n dimension
@@ -913,10 +901,8 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
           host_allocation.get()->opaque());
   grouped_gemm_->getDefaultValueForDeviceUserArguments(userArgs);
 
-#ifndef GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
-
   auto group_size_bytewidth =
-      (cfg_.raggedMode != gpu::RaggedDotMode::kRaggedBatch)
+      (cfg_.ragged_mode != gpu::RaggedDotMode::kRaggedBatch)
           ? static_cast<size_t>(args.aux.size() /
                                 (cfg_.group_count * cfg_.batch_count))
           : static_cast<size_t>(args.aux.size() / cfg_.group_count);
@@ -949,9 +935,9 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
   userArgs[0].b = b.opaque();
   userArgs[0].c = args.d.opaque();
   userArgs[0].d = args.d.opaque();
-  if (cfg_.raggedMode == gpu::RaggedDotMode::kRaggedBatch) {
+  if (cfg_.ragged_mode == gpu::RaggedDotMode::kRaggedBatch) {
     userArgs[0].batch = get_group_value_at(host_group_sizes, 0);
-  } else if (cfg_.raggedMode == gpu::RaggedDotMode::kRaggedContracting) {
+  } else if (cfg_.ragged_mode == gpu::RaggedDotMode::kRaggedContracting) {
     userArgs[0].k = get_group_value_at(host_group_sizes, 0);
   } else {
     if (must_swap_operands_) {
@@ -965,7 +951,7 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
   VLOG(2) << "cfg.lhs_stride_ragged_dim = " << cfg_.lhs_stride_ragged_dim;
   VLOG(2) << "cfg.rhs_stride_group_dim = " << cfg_.rhs_stride_group_dim;
   VLOG(2) << "cfg.output_stride_ragged_dim = " << cfg_.output_stride_ragged_dim;
-  switch (cfg_.raggedMode) {
+  switch (cfg_.ragged_mode) {
     case gpu::RaggedDotMode::kRaggedNonContracting: {
       for (size_t i = 1; i < cfg_.group_count; i++) {
         if (must_swap_operands_) {
@@ -1063,14 +1049,6 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
       break;
     }
   }
-#else
-  for (size_t i = 0; i < cfg_.group_count; i++) {
-    userArgs[i].a = a.opaque();
-    userArgs[i].b = b.opaque();
-    userArgs[i].c = args.c.opaque();
-    userArgs[i].d = args.d.opaque();
-  }
-#endif
 
   // Copy arguments to device memory
   DeviceMemoryBase d_userArgs = executor->Allocate(
@@ -1092,29 +1070,6 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
                                    profile_result->warmup_run_executed()));
   }
 
-#ifdef GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
-  // ! The on-device update has not been updated to handle transposed matrices
-  // nor the different ragged modes.
-  const void *opaque_pointer_a = a.opaque();
-  const void *opaque_pointer_b = b.opaque();
-  const void *opaque_pointer_c = args.c.opaque();
-  void *opaque_pointer_d = args.d.opaque();
-  // Warning : the function must be updated to take into consideration
-  // transposed operands
-  GroupGemmUpdateArgs(
-      gpu::AsGpuStreamValue(stream),
-      static_cast<hipblaslt_ext::UserArguments *>(d_userArgs.opaque()),
-      &opaque_pointer_a, &opaque_pointer_b, &opaque_pointer_c,
-      &opaque_pointer_d, byte_width_elem_a, byte_width_elem_b,
-      byte_width_elem_c, byte_width_elem_d,
-      // Note: GroupedGemm does not have aux. group_sizes is passes in aux to
-      // avoid redifining a new structure.
-      static_cast<int64_t *>(args.aux.opaque()), cfg_.lhs_stride_ragged_dim,
-      cfg_.rhs_stride_group_dim, cfg_.output_stride_ragged_dim,
-      ragged_dim_in_non_contracting_dim, cfg_.group_count);
-#endif
-
-  // debug_print_userArgs(executor, d_userArgs, cfg_.group_count);
   SE_HIPBLAS_RETURN_IF_ERROR(
       grouped_gemm_->run(d_userArgs.opaque(), gpu::AsGpuStreamValue(stream)));
   executor->SynchronizeAllActivity();

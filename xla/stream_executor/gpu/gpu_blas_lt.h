@@ -82,8 +82,8 @@ struct MatrixLayout {  // plain MatrixLayout which is extended with create
   blas::Transpose transpose;
 
   static absl::StatusOr<MatrixLayout> FromProto(
-      const xla::GemmConfigProto::MatrixLayout& proto);
-  xla::GemmConfigProto::MatrixLayout ToProto() const;
+      const xla::MatrixLayoutProto& proto);
+  xla::MatrixLayoutProto ToProto() const;
 };
 
 // compact version of the matrix layout to be used to pass matrices
@@ -142,6 +142,10 @@ enum class RaggedDotMode {
   kRaggedBatch,
 };
 
+absl::StatusOr<RaggedDotMode> RaggedDotModeFromProto(
+    const xla::RaggedDotModeProto& proto);
+xla::RaggedDotModeProto RaggedDotModeToProto(RaggedDotMode ragged_mode);
+
 struct GroupedGemmConfig {
   uint64_t m, n, k;
   uint64_t batch_count;
@@ -163,15 +167,12 @@ struct GroupedGemmConfig {
   // PrecisionConfig-level algorithm
   xla::PrecisionConfig::Algorithm precision_algorithm;
   int64_t compute_precision;
-  RaggedDotMode raggedMode;
+  RaggedDotMode ragged_mode;
   std::optional<blas::ComputationType> compute_type;
 
-  // TODO: must be implemented
   static absl::StatusOr<GroupedGemmConfig> FromProto(
-      const xla::GemmConfigProto& proto) {
-    return absl::InternalError("Not implemented yet");
-  };
-  xla::GemmConfigProto ToProto() const {};
+      const xla::GroupedGemmConfigProto& proto);
+  xla::GroupedGemmConfigProto ToProto() const;
 };
 
 struct BlasLt {

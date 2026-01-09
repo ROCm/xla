@@ -159,16 +159,16 @@ void MatrixLayout::Transpose() {
 }
 
 absl::StatusOr<MatrixLayout> MatrixLayout::FromProto(
-    const xla::GemmConfigProto::MatrixLayout& proto) {
+    const xla::MatrixLayoutProto& proto) {
   Order order;
   switch (proto.order()) {
-    case xla::GemmConfigProto::MatrixLayout::ORDER_ROW_MAJOR:
+    case xla::MatrixLayoutProto::ORDER_ROW_MAJOR:
       order = Order::kRowMajor;
       break;
-    case xla::GemmConfigProto::MatrixLayout::ORDER_COLUMN_MAJOR:
+    case xla::MatrixLayoutProto::ORDER_COLUMN_MAJOR:
       order = Order::kColumnMajor;
       break;
-    case xla::GemmConfigProto::MatrixLayout::ORDER_UNKNOWN:
+    case xla::MatrixLayoutProto::ORDER_UNKNOWN:
     default:
       return absl::InvalidArgumentError("Invalid matrix layout order");
   }
@@ -180,14 +180,14 @@ absl::StatusOr<MatrixLayout> MatrixLayout::FromProto(
                       proto.batch_stride(), transpose);
 }
 
-xla::GemmConfigProto::MatrixLayout MatrixLayout::ToProto() const {
-  xla::GemmConfigProto::MatrixLayout proto;
+xla::MatrixLayoutProto MatrixLayout::ToProto() const {
+  xla::MatrixLayoutProto proto;
   switch (order) {
     case Order::kRowMajor:
-      proto.set_order(xla::GemmConfigProto::MatrixLayout::ORDER_ROW_MAJOR);
+      proto.set_order(xla::MatrixLayoutProto::ORDER_ROW_MAJOR);
       break;
     case Order::kColumnMajor:
-      proto.set_order(xla::GemmConfigProto::MatrixLayout::ORDER_COLUMN_MAJOR);
+      proto.set_order(xla::MatrixLayoutProto::ORDER_COLUMN_MAJOR);
       break;
     default: {
       LOG(FATAL) << "Invalid matrix layout order";
@@ -393,6 +393,104 @@ xla::GemmConfigProto GemmConfig::ToProto() const {
   return proto;
 }
 
+absl::StatusOr<GroupedGemmConfig> GroupedGemmConfig::FromProto(
+    const xla::GroupedGemmConfigProto& proto) {
+  TF_ASSIGN_OR_RETURN(MatrixLayout lhs_layout,
+                      MatrixLayout::FromProto(proto.lhs_layout()));
+  TF_ASSIGN_OR_RETURN(MatrixLayout rhs_layout,
+                      MatrixLayout::FromProto(proto.rhs_layout()));
+  TF_ASSIGN_OR_RETURN(MatrixLayout c_layout,
+                      MatrixLayout::FromProto(proto.c_layout()));
+  TF_ASSIGN_OR_RETURN(MatrixLayout output_layout,
+                      MatrixLayout::FromProto(proto.output_layout()));
+  std::optional<blas::ComputationType> compute_type =
+      blas::FromProto(proto.compute_type());
+  TF_ASSIGN_OR_RETURN(blas::DataType typeA, AsBlasDataType(proto.type_a()));
+  TF_ASSIGN_OR_RETURN(blas::DataType typeB, AsBlasDataType(proto.type_b()));
+  TF_ASSIGN_OR_RETURN(blas::DataType typeC, AsBlasDataType(proto.type_c()));
+  TF_ASSIGN_OR_RETURN(blas::DataType typeD, AsBlasDataType(proto.type_d()));
+  TF_ASSIGN_OR_RETURN(RaggedDotMode ragged_mode,
+                      RaggedDotModeFromProto(proto.ragged_mode()));
+  return GroupedGemmConfig{proto.m(),
+                           proto.n(),
+                           proto.k(),
+                           proto.batch_count(),
+                           proto.group_count(),
+                           std::move(lhs_layout),
+                           std::move(rhs_layout),
+                           std::move(c_layout),
+                           std::move(output_layout),
+                           {proto.alpha_real(), proto.alpha_imag()},
+                           proto.beta(),
+                           typeA,
+                           typeB,
+                           typeC,
+                           typeD,
+                           proto.lhs_contracting_dimension(),
+                           proto.rhs_contracting_dimension(),
+                           proto.lhs_ragged_dimension(),
+                           std::optional(proto.rhs_group_dimension()),
+                           proto.lhs_stride_ragged_dim(),
+                           proto.rhs_stride_group_dim(),
+                           proto.output_stride_ragged_dim(),
+                           proto.precision_algorithm(),
+                           proto.compute_precision(),
+                           ragged_mode,
+                           compute_type};
+}
+
+xla::GroupedGemmConfigProto GroupedGemmConfig::ToProto() const {
+  xla::GroupedGemmConfigProto proto;
+  proto.set_m(m);
+  proto.set_n(n);
+  proto.set_k(k);
+  proto.set_batch_count(batch_count);
+  proto.set_group_count(group_count);
+  *proto.mutable_lhs_layout() = lhs_layout.ToProto();
+  *proto.mutable_rhs_layout() = rhs_layout.ToProto();
+  *proto.mutable_c_layout() = c_layout.ToProto();
+  *proto.mutable_output_layout() = output_layout.ToProto();
+  proto.set_alpha_real(alpha.real());
+  proto.set_alpha_imag(alpha.imag());
+  proto.set_beta(beta);
+
+  auto statusOrTypeA = AsXlaPrimitiveType(type_a);
+  xla::PrimitiveType typeA =
+      statusOrTypeA.ok() ? *statusOrTypeA : PrimitiveType::F32;
+  auto statusOrTypeB = AsXlaPrimitiveType(type_b);
+  xla::PrimitiveType typeB =
+      statusOrTypeB.ok() ? *statusOrTypeB : PrimitiveType::F32;
+  auto statusOrTypeC = AsXlaPrimitiveType(type_c);
+  xla::PrimitiveType typeC =
+      statusOrTypeC.ok() ? *statusOrTypeC : PrimitiveType::F32;
+  auto statusOrTypeD = AsXlaPrimitiveType(type_d);
+  xla::PrimitiveType typeD =
+      statusOrTypeD.ok() ? *statusOrTypeD : PrimitiveType::F32;
+
+  proto.set_type_a(typeA);
+  proto.set_type_b(typeB);
+  proto.set_type_c(typeC);
+  proto.set_type_d(typeD);
+
+  proto.set_lhs_contracting_dimension(lhs_contracting_dimension);
+  proto.set_rhs_contracting_dimension(rhs_contracting_dimension);
+  proto.set_lhs_ragged_dimension(lhs_ragged_dimension);
+  if (rhs_group_dimension.has_value()) {
+    proto.set_rhs_group_dimension(rhs_group_dimension.value());
+  }
+  proto.set_lhs_stride_ragged_dim(lhs_stride_ragged_dim);
+  proto.set_rhs_stride_group_dim(rhs_stride_group_dim);
+  proto.set_output_stride_ragged_dim(output_stride_ragged_dim);
+  proto.set_precision_algorithm(precision_algorithm);
+  proto.set_compute_precision(compute_precision);
+  proto.set_ragged_mode(RaggedDotModeToProto(ragged_mode));
+
+  if (compute_type.has_value()) {
+    proto.set_compute_type(blas::ToProto(*compute_type));
+  }
+  return proto;
+}
+
 absl::StatusOr<BlasLt::Epilogue> BlasLt::EpilogueFromProto(
     const xla::BlasLtEpilogueProto& proto) {
   switch (proto) {
@@ -451,6 +549,31 @@ xla::BlasLtEpilogueProto BlasLt::EpilogueToProto(Epilogue epilogue) {
       return xla::BlasLtEpilogueProto::EPILOGUE_BIAS_THEN_GELU_WITH_AUX;
     case Epilogue::kBiasThenSILUWithAux:
       return xla::BlasLtEpilogueProto::EPILOGUE_BIAS_THEN_SILU_WITH_AUX;
+  }
+}
+
+absl::StatusOr<RaggedDotMode> RaggedDotModeFromProto(
+    const xla::RaggedDotModeProto& proto) {
+  switch (proto) {
+    case xla::RaggedDotModeProto::RAGGED_NON_CONTRACTING:
+      return RaggedDotMode::kRaggedNonContracting;
+    case xla::RaggedDotModeProto::RAGGED_CONTRACTING:
+      return RaggedDotMode::kRaggedContracting;
+    case xla::RaggedDotModeProto::RAGGED_BATCH:
+      return RaggedDotMode::kRaggedBatch;
+    default:
+      return absl::InvalidArgumentError("Unsupported RaggedDot mode");
+  }
+}
+
+xla::RaggedDotModeProto RaggedDotModeToProto(RaggedDotMode ragged_mode) {
+  switch (ragged_mode) {
+    case RaggedDotMode::kRaggedNonContracting:
+      return xla::RaggedDotModeProto::RAGGED_NON_CONTRACTING;
+    case RaggedDotMode::kRaggedContracting:
+      return xla::RaggedDotModeProto::RAGGED_CONTRACTING;
+    case RaggedDotMode::kRaggedBatch:
+      return xla::RaggedDotModeProto::RAGGED_BATCH;
   }
 }
 

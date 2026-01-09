@@ -195,7 +195,7 @@ message CublasLtMatmulThunkProto {
 }
 
 message CublasLtGroupedMatmulThunkProto {
-  xla.GemmConfigProto gemm_config = 1;
+  xla.GroupedGemmConfigProto grouped_gemm_config = 1;
   xla.BlasLtEpilogueProto epilogue = 2;
   int64 algorithm_idx = 3;
   string canonical_hlo = 4;
