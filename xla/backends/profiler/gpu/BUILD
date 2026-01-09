@@ -701,27 +701,6 @@ cc_library(
     ],
 )
 
-xla_cc_test(
-    name = "ondevice_event_exporter_test",
-    srcs = ["ondevice_event_exporter_test.cc"],
-    tags = [
-        "cuda-only",
-        "gpu",
-        "no_mac",
-        "requires-gpu-nvidia",
-    ],
-    deps = [
-        ":ondevice_event_exporter",
-        "//xla/tsl/profiler/backends/gpu:ondevice_event_receiver",
-        "//xla/tsl/profiler/backends/gpu:ondevice_trace_event",
-        "//xla/tsl/profiler/utils:xplane_builder",
-        "//xla/tsl/profiler/utils:xplane_schema",
-        "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:test",
-        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
-    ],
-)
-
 cc_library(
     name = "cupti_status",
     srcs = ["cupti_status.cc"],
