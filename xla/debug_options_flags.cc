@@ -274,7 +274,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_enable_nccl_user_buffers(false);
   opts.set_xla_gpu_experimental_enable_nccl_symmetric_buffers(false);
   opts.set_xla_gpu_experimental_enable_nvshmem(false);
-  opts.set_xla_gpu_enable_nccl_comm_splitting(false); // ROCm only
+  opts.set_xla_gpu_enable_nccl_comm_splitting(false);  // ROCm only
   opts.set_xla_gpu_nccl_init_max_rank_per_root_ratio(0);
 
   opts.set_xla_gpu_temp_buffer_use_separate_color(false);
@@ -445,6 +445,9 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_experimental_enable_command_buffer_on_thunks(false);
   opts.set_xla_detect_unstable_reductions(
       DebugOptions::UNSTABLE_REDUCTION_DETECTION_MODE_NONE);
+
+  // maximum number of events to be traced, default to 4M
+  opts.set_xla_gpu_rocm_max_trace_events(4 * 1024 * 1024);
   return opts;
 }
 
@@ -1271,12 +1274,12 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
                 "optimizations. debug_options are written to the --xla_dump_to "
                 "dir, or, if no dir is specified, to stdout. Ignored unless "
                 "xla_dump_hlo_as_text is true."));
-  flag_list->push_back(
-      tsl::Flag("xla_gpu_enable_triton_softmax_fusion",
-                bool_setter_for(&DebugOptions::set_xla_gpu_enable_triton_softmax_fusion),
-                debug_options->xla_gpu_enable_triton_softmax_fusion(),
-                "Enable fusion of the softmax function to triton"
-                "default value is true"));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_enable_triton_softmax_fusion",
+      bool_setter_for(&DebugOptions::set_xla_gpu_enable_triton_softmax_fusion),
+      debug_options->xla_gpu_enable_triton_softmax_fusion(),
+      "Enable fusion of the softmax function to triton"
+      "default value is true"));
   flag_list->push_back(
       tsl::Flag("xla_dump_hlo_as_proto",
                 bool_setter_for(&DebugOptions::set_xla_dump_hlo_as_proto),
@@ -2550,6 +2553,12 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
                 "that checks for unstable reductions in HLO computations. "
                 "Acceptable values are: 'none', 'log', and 'crash'. 'none' is "
                 "the default."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_rocm_max_trace_events",
+      int64_setter_for(&DebugOptions::set_xla_gpu_rocm_max_trace_events),
+      debug_options->xla_gpu_rocm_max_trace_events(),
+      "Maximum number of ROCm trace events (applies to callback/activity/"
+      "annotation). Set as high as memory allows; up to 1e9."));
 }  // NOLINT(readability/fn_size)
 
 // Allocates flag_values and flag_objects; this function must not be called more

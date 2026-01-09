@@ -26,11 +26,15 @@ limitations under the License.
 #include "rocm/include/roctracer/ext/prof_protocol.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/backends/profiler/gpu/rocm_tracer.h"
+#include "tsl/profiler/lib/profiler_factory.h"
+#include "tsl/profiler/lib/profiler_interface.h"
+#include "xla/backends/profiler/gpu/rocm_collector.h"
+#include "xla/backends/profiler/gpu/rocm_tracer.h"
+#include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
+#include "xla/debug_options_flags.h"
 #include "xla/tsl/platform/env_time.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
-#include "tsl/profiler/lib/profiler_factory.h"
-#include "tsl/profiler/lib/profiler_interface.h"
 
 namespace xla {
 namespace profiler {
@@ -75,7 +79,7 @@ class GpuTracer : public profiler::ProfilerInterface {
 
 RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
   RocmTracerOptions options;
-#if defined(XLA_GPU_ROCM_TRACER_BACKEND) && (XLA_GPU_ROCM_TRACER_BACKEND == 1)
+#if XLA_GPU_ROCM_TRACER_BACKEND == XLA_GPU_ROCM_TRACER_BACKEND_V1
   std::vector<uint32_t> empty_vec;
   // clang formatting does not preserve one entry per line
   // clang-format off
@@ -147,7 +151,7 @@ RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
 
   options.activity_tracing.emplace(ACTIVITY_DOMAIN_HIP_OPS, empty_vec);
 #else
-  options.max_annotation_strings = 1024 * 1024;
+  options.max_annotation_strings = 4 * 1024 * 1024;
 #endif
   return options;
 }
@@ -155,10 +159,19 @@ RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
 RocmTraceCollectorOptions GpuTracer::GetRocmTraceCollectorOptions(
     uint32_t num_gpus) {
   RocmTraceCollectorOptions options;
-  options.max_callback_api_events = 2 * 1024 * 1024;
-  options.max_activity_api_events = 2 * 1024 * 1024;
-  options.max_annotation_strings = 1024 * 1024;
   options.num_gpus = num_gpus;
+
+  const auto& dbg = xla::GetDebugOptionsFromFlags();
+  int64_t max_events = dbg.xla_gpu_rocm_max_trace_events();
+  VLOG(2) << "max number of events to be trace from flag = " << max_events;
+  if (max_events <= 0) max_events = 4 * 1024 * 1024;
+  if (max_events > 1'000'000'000LL) max_events = 1'000'000'000LL;
+
+  VLOG(3) << "maximum number of events to be traced = " << max_events;
+
+  options.max_callback_api_events = max_events;
+  options.max_activity_api_events = max_events;
+  options.max_annotation_strings = max_events;
   return options;
 }
 

@@ -68,10 +68,10 @@ struct RocmDeviceOccupancyParams {
   hipFuncAttributes attributes = {};
   int block_size = 0;
   size_t dynamic_smem_size = 0;
-  void* func_ptr;
+  void* func_ptr = nullptr;
 
   friend bool operator==(const RocmDeviceOccupancyParams& a,
-                         const RocmDeviceOccupancyParams& b) noexcept {
+                         const RocmDeviceOccupancyParams& b) {
     // Compare only the fields that affect occupancy decisions.
     return std::tuple{a.attributes.binaryVersion,
                       a.attributes.cacheModeCA,
@@ -100,18 +100,19 @@ struct RocmDeviceOccupancyParams {
   }
 
   friend bool operator!=(const RocmDeviceOccupancyParams& a,
-                         const RocmDeviceOccupancyParams& b) noexcept {
+                         const RocmDeviceOccupancyParams& b) {
     return !(a == b);
   }
 
   template <typename H>
-  friend H AbslHashValue(H hash_state,
-                         const RocmDeviceOccupancyParams& params) {
+  friend H AbslHashValue(H hash_state, const RocmDeviceOccupancyParams& p) {
+    // Hash the same fields we use for equality.
     return H::combine(
-        std::move(hash_state), params.attributes.maxThreadsPerBlock,
-        params.attributes.numRegs, params.attributes.sharedSizeBytes,
-        params.attributes.maxDynamicSharedSizeBytes, params.block_size,
-        params.dynamic_smem_size, params.func_ptr);
+        std::move(hash_state), p.attributes.binaryVersion, p.attributes.cacheModeCA,
+        p.attributes.constSizeBytes, p.attributes.localSizeBytes,
+        p.attributes.maxDynamicSharedSizeBytes, p.attributes.maxThreadsPerBlock,
+        p.attributes.numRegs, p.attributes.preferredShmemCarveout,
+        p.attributes.ptxVersion, p.block_size, p.dynamic_smem_size, p.func_ptr);
   }
 };
 
@@ -146,22 +147,22 @@ class RocmTraceCollector {
 class PerDeviceCollector {
  public:
   void Export(uint64_t start_walltime_ns, uint64_t start_gputime_ns,
-              uint64_t end_gputime_ns, XPlaneBuilder* device_plane,
-              XPlaneBuilder* host_plane);
+              uint64_t end_gputime_ns, XPlaneBuilder& device_plane,
+              XPlaneBuilder& host_plane);
 
   PerDeviceCollector() = default;
 
   void AddEvent(RocmTracerEvent&& event);
   void GetDeviceCapabilities(int32_t device_ordinal,
-                             XPlaneBuilder* device_plane);
+                             XPlaneBuilder& device_plane);
 
  private:
   OccupancyStats GetOccupancy(const RocmDeviceOccupancyParams& params) const;
-  void CreateXEvent(const RocmTracerEvent& event, XPlaneBuilder* plane,
+  void CreateXEvent(const RocmTracerEvent& event, XPlaneBuilder& plane,
                     uint64_t start_gpu_ns, uint64_t end_gpu_ns,
-                    XLineBuilder* line);
+                    XLineBuilder& line);
   void SortByStartTime();
-  bool IsHostEvent(const RocmTracerEvent& event, tsl::int64* line_id);
+  bool IsHostEvent(const RocmTracerEvent& event, tsl::int64& line_id);
 
  private:
   absl::Mutex events_mutex_;
