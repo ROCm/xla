@@ -51,6 +51,7 @@ inline tsl::bfloat16 BitCast<tsl::bfloat16, uint16_t>(uint16_t src) {
 }
 
 template <>
+template <> jjj
 inline uint16_t BitCast<uint16_t, tsl::bfloat16>(tsl::bfloat16 src) {
   return Eigen::numext::bit_cast<uint16_t>(src);
 }
