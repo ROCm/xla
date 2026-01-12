@@ -812,6 +812,8 @@ auto BlasLt::GroupedMatmulPlan::GetAlgorithms(const Stream *stream,
 
   auto problem = grouped_gemm_->getProblemTypes()[0];
 
+  grouped_gemm_->setMaxWorkspaceBytes(max_workspace_size);
+
   SE_HIPBLAS_RETURN_IF_ERROR(
       getAllAlgos(blas_lt->blas_lt_.get(), GemmType::HIPBLASLT_GROUPED_GEMM,
                   problem.getOpA(), problem.getOpB(), problem.getTypeA(),
@@ -820,10 +822,20 @@ auto BlasLt::GroupedMatmulPlan::GetAlgorithms(const Stream *stream,
 
   VLOG(2) << "Total heuristics found: " << heuristicResult.size();
   std::vector<MatmulAlgorithm> algorithms;
-  algorithms.reserve(heuristicResult.size());
-  for (const hipblasLtMatmulHeuristicResult_t &result : heuristicResult) {
-    if (result.state == HIPBLAS_STATUS_SUCCESS) {  // Skip failed algos.
+  algorithms.reserve(max_algorithm_count);
+  for (hipblasLtMatmulHeuristicResult_t &result : heuristicResult) {
+    // Note that the workspace_size returned by `isAlgoSupported` includes
+    // host memory needed to store the GroupedGemm configuration,...
+    // see:
+    // https://github.com/ROCm/rocm-libraries/blob/e3e085ac1592f3d1189d9e4a6d6c27a202ec696b/projects/hipblaslt/tensilelite/src/ContractionSolution.cpp#L3080-L3103
+    // Consequently, the workspace size is not stricly equal to Zero even though
+    // `MaxWorkspaceBytes` is set to 0.
+    size_t workspace_size = 0;
+    if ((result.state == HIPBLAS_STATUS_SUCCESS) &&
+        (grouped_gemm_->isAlgoSupported(result.algo, workspace_size) ==
+         HIPBLAS_STATUS_SUCCESS)) {  // Skip failed algos.
       algorithms.push_back({result.algo, result.workspaceSize});
+      if (algorithms.size() >= max_algorithm_count) break;
     }
   }
   return std::move(algorithms);
@@ -844,7 +856,7 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
 
   auto palgo = std::any_cast<hipblasLtMatmulAlgo_t>(&algorithm_->opaque_algo);
   if (palgo == nullptr) {
-    return absl::InternalError("Wrong GGEMM algorithm instance !");
+    return absl::InternalError("Wrong Grouped GEMM algorithm instance !");
   }
   auto roc_algo = (const rocblaslt_matmul_algo *)palgo;
   auto pindex = (int *)roc_algo->data;

@@ -98,15 +98,6 @@ message GemmThunkProto {
   bool deterministic = 6;
 }
 
-message GroupedGemmThunkProto {
-  xla.GemmConfigProto grouped_gemm_config = 1;
-  xla.buffer_assignment.BufferAllocationSliceProto lhs_buffer = 2;
-  xla.buffer_assignment.BufferAllocationSliceProto rhs_buffer = 3;
-  xla.buffer_assignment.BufferAllocationSliceProto output_buffer = 4;
-  optional xla.buffer_assignment.BufferAllocationSliceProto workspace = 5;
-  bool deterministic = 6;
-}
-
 message WaitForStreamsThunkProto {
   int64 stream_id = 1;
   int64 wait_for_stream_id = 2;
@@ -282,7 +273,6 @@ message ThunkProto {
     ConvolutionReorderThunkProto convolution_reorder_thunk = 26;
     FftThunkProto fft_thunk = 27;
     CublasLtGroupedMatmulThunkProto cublas_lt_grouped_matmul_thunk = 28;
-    GroupedGemmThunkProto grouped_gemm_thunk = 29;
   }
 }
 

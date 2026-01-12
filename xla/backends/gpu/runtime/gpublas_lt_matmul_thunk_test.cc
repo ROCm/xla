@@ -330,9 +330,10 @@ struct MockBlasLt : public se::gpu::BlasLt {
   }
 
   absl::StatusOr<GroupedMatmulPlanPtr> GetGroupedMatmulPlan(
-      const se::gpu::GroupedGemmConfig&, std::vector<Epilogue>) const override {
+      se::gpu::GroupedGemmConfig&, std::vector<Epilogue>) const override {
     return GroupedMatmulPlanPtr{};
   }
+
   ~MockBlasLt() override = default;
 };
 
@@ -459,6 +460,98 @@ TEST_F(GpuBlasLtMatmulThunkTest, ThunkProtoSerialization) {
   ThunkProto reference_thunk_proto;
   *reference_thunk_proto.mutable_thunk_info() = thunk_info.ToProto();
   *reference_thunk_proto.mutable_cublas_lt_matmul_thunk() = proto;
+  EXPECT_THAT(thunk->ToProto(),
+              IsOkAndHolds(EqualsProto(reference_thunk_proto)));
+}
+
+TEST_F(GpuBlasLtMatmulThunkTest, ThunkProtoSerializationGroupedMatmul) {
+  constexpr absl::string_view kCublasLtGroupedMatmulThunkProtoText = R"pb(
+    grouped_gemm_config {
+      m: 101
+      n: 400
+      k: 407
+      batch_count: 1
+      group_count: 1
+      lhs_layout {
+        order: ORDER_ROW_MAJOR
+        num_rows: 101
+        num_cols: 407
+        batch_size: 1
+        leading_dim_stride: 407
+        dtype: F32
+      }
+      rhs_layout {
+        order: ORDER_ROW_MAJOR
+        num_rows: 407
+        num_cols: 400
+        batch_size: 1
+        leading_dim_stride: 400
+        dtype: F32
+      }
+      c_layout {
+        order: ORDER_ROW_MAJOR
+        num_rows: 101
+        num_cols: 400
+        batch_size: 1
+        leading_dim_stride: 400
+        dtype: F32
+      }
+      output_layout {
+        order: ORDER_ROW_MAJOR
+        num_rows: 101
+        num_cols: 400
+        batch_size: 1
+        leading_dim_stride: 400
+        dtype: F32
+      }
+      alpha_real: 1
+      type_a: F32
+      type_b: F32
+      type_c: F32
+      type_d: F32
+      lhs_contracting_dimension: 1
+      rhs_contracting_dimension: 1
+      lhs_ragged_dimension: 0
+      rhs_group_dimension: 0
+      lhs_stride_ragged_dim: 407
+      rhs_stride_group_dim: 400
+      output_stride_ragged_dim: 400
+      ragged_mode: RAGGED_NON_CONTRACTING
+    }
+    epilogue: EPILOGUE_DEFAULT
+    canonical_hlo: "(f32[101,400]{1,0}, s8[33554432]{0}) custom-call(f32[101,407]{1,0}, f32[2, 407,400]{1,0}, s32[2]{0}), custom_call_target=\"__cublas$lt$groupedMatmul backend_config={\"operation_queue_id\":\"0\",\"wait_on_operation_queues\":[], \"force_earliest_schedule\":false,\"reification_cost\":[], \"device_type\":\"DEVICE_TYPE_INVALID\", \"grouped_gemm_backend_config\":{\"gemm_backend_config\":{\"alpha_real\":1,\"beta\":0,\"dot_dimension_numbers\":{\"lhs_contracting_dimensions\":[\"1\"],\"rhs_contracting_dimensions\":[\"1\"],\"lhs_batch_dimensions\":[],\"rhs_batch_dimensions\":[]},\"alpha_imag\":0,\"epilogue\":\"DEFAULT\",\"grad_x\":false,\"grad_y\":false,\"damax_output\":false},\"ragged_dot_dimension_numbers\":{\"dot_dimension_numbers\":{\"lhs_contracting_dimensions\":[\"1\"],\"rhs_contracting_dimensions\":[\"1\"],\"lhs_batch_dimensions\":[],\"rhs_batch_dimensions\":[]},\"lhs_ragged_dimensions\":[\"0\"],\"rhs_group_dimensions\":[\"0\"]}}})"
+    a { size: 164428 buffer_allocation_index: 3 }
+    b { size: 1302400 buffer_allocation_index: 4 }
+    c { size: 161600 buffer_allocation_index: 5 }
+    d { size: 161600 buffer_allocation_index: 5 }
+    group_sizes { size: 8 buffer_allocation_index: 6 }
+  )pb";
+
+  Thunk::ThunkInfo thunk_info;
+  thunk_info.profile_annotation = "test";
+  thunk_info.execution_stream_id = 0;
+
+  CublasLtGroupedMatmulThunkProto proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kCublasLtGroupedMatmulThunkProtoText, &proto));
+
+  std::vector<BufferAllocation> allocations = {
+      BufferAllocation(/*index=*/0, /*size=*/4, /*color=*/0),  // UNUSED
+      BufferAllocation(/*index=*/1, /*size=*/4, /*color=*/0),  // UNUSED
+      BufferAllocation(/*index=*/2, /*size=*/4, /*color=*/0),  // UNUSED
+      BufferAllocation(/*index=*/3, /*size=*/164428, /*color=*/0),
+      BufferAllocation(/*index=*/4, /*size=*/651200, /*color=*/0),
+      BufferAllocation(/*index=*/5, /*size=*/161600, /*color=*/0),
+      BufferAllocation(/*index=*/6, /*size=*/8, /*color=*/0),
+  };
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Thunk> thunk,
+      CublasLtGroupedMatmulThunk::FromProto(thunk_info, proto, allocations));
+
+  ThunkProto reference_thunk_proto;
+  *reference_thunk_proto.mutable_thunk_info() = thunk_info.ToProto();
+  *reference_thunk_proto.mutable_cublas_lt_grouped_matmul_thunk() = proto;
   EXPECT_THAT(thunk->ToProto(),
               IsOkAndHolds(EqualsProto(reference_thunk_proto)));
 }

@@ -70,7 +70,7 @@ class GroupedGemmRewriteTest : public GemmRewriteTest {
   }
 };
 
-TEST_F(GroupedGemmRewriteTest, CheckCustomCallTargetGroupeGemmF32) {
+TEST_F(GroupedGemmRewriteTest, CheckCustomCallTargetGroupeGemm) {
   if (SkipGpuBlasLtTest()) {
     GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
   }
@@ -78,10 +78,10 @@ TEST_F(GroupedGemmRewriteTest, CheckCustomCallTargetGroupeGemmF32) {
 HloModule GroupedGemm
 
 ENTRY AddRaggedDotsFunc {
-    p0 = f32[64,9]{1,0} parameter(0)
-    p1 = f32[2,9,8]{2,1,0} parameter(1)
+    p0 = bf16[64,9]{1,0} parameter(0)
+    p1 = bf16[2,9,8]{2,1,0} parameter(1)
     p2 = s32[2] constant({16, 48})
-    ROOT ragged-dot = f32[64,8]{1,0} ragged-dot(p0, p1, p2),
+    ROOT ragged-dot = bf16[64,8]{1,0} ragged-dot(p0, p1, p2),
                       lhs_contracting_dims={1}, rhs_contracting_dims={1},
                       lhs_ragged_dims={0}, rhs_group_dims={0}
 }
@@ -190,7 +190,7 @@ ENTRY AddRaggedDotsFunc {
 }
 
 TEST_F(GroupedGemmRewriteTest,
-       CheckCustomCallTargetGroupeGemmRaggedDimInContractingDimF32) {
+       CheckCustomCallTargetGroupeGemmRaggedDimInContractingDim) {
   if (SkipGpuBlasLtTest()) {
     GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
   }
@@ -198,10 +198,10 @@ TEST_F(GroupedGemmRewriteTest,
 HloModule GroupedGemm
 
 ENTRY AddRaggedDotsFunc {
-    p0 = f32[64,9]{1,0} parameter(0)
-    p1 = f32[9,8]{1,0} parameter(1)
+    p0 = bf16[64,9]{1,0} parameter(0)
+    p1 = bf16[9,8]{1,0} parameter(1)
     p2 = s64[2] constant({4, 5})
-    ROOT ragged-dot = f32[2,64,8]{2,1,0} ragged-dot(p0, p1, p2),
+    ROOT ragged-dot = bf16[2,64,8]{2,1,0} ragged-dot(p0, p1, p2),
                       lhs_contracting_dims={1}, rhs_contracting_dims={0},
                       lhs_ragged_dims={1}
 }
@@ -310,7 +310,7 @@ ENTRY AddRaggedDotsFunc {
 }
 
 TEST_F(GroupedGemmRewriteTest,
-       CheckCustomCallTargetGroupeGemmRaggedDimInBatchDimF32) {
+       CheckCustomCallTargetGroupeGemmRaggedDimInBatchDim) {
   if (SkipGpuBlasLtTest()) {
     GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
   }
@@ -318,10 +318,10 @@ TEST_F(GroupedGemmRewriteTest,
 HloModule GroupedGemm
 
 ENTRY AddRaggedDotsFunc {
-    p0 = f32[5,16,9]{2,1,0} parameter(0)
-    p1 = f32[5,9,8]{2,1,0} parameter(1)
+    p0 = bf16[5,16,9]{2,1,0} parameter(0)
+    p1 = bf16[5,9,8]{2,1,0} parameter(1)
     p2 = s64[2] constant({3, 2})
-    ROOT ragged-dot = f32[5,16,8]{2,1,0} ragged-dot(p0, p1, p2),
+    ROOT ragged-dot = bf16[5,16,8]{2,1,0} ragged-dot(p0, p1, p2),
                       lhs_contracting_dims={2}, rhs_contracting_dims={1},
                       lhs_ragged_dims={0}, lhs_batch_dims={0}, rhs_batch_dims={0}
 }

@@ -397,6 +397,10 @@ CublasLtGroupedMatmulThunk::GetCachedGroupedMatmulPlan(
         auto algorithms,
         plan->GetAlgorithms(params.stream, num_algorithms, max_workspace));
 
+    if (algorithms.empty()) {
+      return absl::InternalError(
+          "Failed to get a GroupedMatmulPlan: no valid algorithm found.");
+    }
     TF_RETURN_IF_ERROR(plan->SetAlgorithm(algorithms[algorithm_idx_]));
     return std::move(plan);
   };
