@@ -3155,8 +3155,13 @@ PjRtStreamExecutorLoadedExecutable::Execute(
             << "Replicated computation launch failed, but not all replicas "
                "terminated. Aborting process to work around deadlock. "
                "Failure message (there may have been multiple failures, see "
-               "the error log for all failures): \n\n"
-            << first_failure_status.message();
+               "the error log for all failures): \n\n";
+
+        if (!first_failure_status.ok()) {
+          LOG(FATAL) << first_failure_status.message();
+        } else {
+          LOG(FATAL) << "(no failure status captured)";
+        }
       }
     }
   }
