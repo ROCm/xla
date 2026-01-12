@@ -65,6 +65,9 @@ class CommandBufferTest
       public ::testing::WithParamInterface<
           DebugOptions::CommandBufferSchedulingMode> {
  protected:
+  bool IsRocm() {
+    return test_runner().HasProperty(HloRunnerPropertyTag::kUsingGpuRocm);
+  }
   DebugOptions GetDebugOptionsForTest() const override {
     DebugOptions debug_options = HloPjRtTestBase::GetDebugOptionsForTest();
     debug_options.set_xla_gpu_command_buffer_scheduling_mode(GetParam());
@@ -126,6 +129,9 @@ TEST_P(CommandBufferTest, Fusions) {
 }
 
 TEST_P(CommandBufferTest, TrueFalseConditional) {
+  if(IsRocm()) {
+    GTEST_SKIP() << "Graph conditionals are not yet supported on HIP graphs";
+  }
   constexpr absl::string_view hlo_text = R"(
   HloModule m, is_scheduled=true
 
@@ -187,6 +193,9 @@ TEST_P(CommandBufferTest, TrueFalseConditional) {
 }
 
 TEST_P(CommandBufferTest, IndexConditional) {
+  if(IsRocm()) {
+    GTEST_SKIP() << "Graph conditionals are not yet supported on HIP graphs";
+  }
   constexpr absl::string_view hlo_text = R"(
   HloModule m, is_scheduled=true
 
@@ -257,6 +266,9 @@ TEST_P(CommandBufferTest, IndexConditional) {
 }
 
 TEST_P(CommandBufferTest, WhileLoop) {
+  if(IsRocm()) {
+    GTEST_SKIP() << "Graph conditionals are not yet supported on HIP graphs";
+  }
   constexpr absl::string_view hlo_text = R"(
   HloModule m, is_scheduled=true
 
