@@ -306,6 +306,7 @@ cc_library(
         "%{rocm_root}/lib/libMIOpen*.so*",
         "%{rocm_root}/share/miopen/**",
     ]),
+    linkopts = ["-lMIOpen"],
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include",
