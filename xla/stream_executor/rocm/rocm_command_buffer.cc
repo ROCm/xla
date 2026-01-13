@@ -35,6 +35,7 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "rocm/include/hip/driver_types.h"
 #include "rocm/include/hip/hip_runtime.h"
+#include "xla/util.h"
 #include "xla/stream_executor/bit_pattern.h"
 #include "xla/stream_executor/command_buffer.h"
 #include "xla/stream_executor/device_memory.h"
@@ -503,10 +504,15 @@ absl::Status RocmCommandBuffer::LaunchGraph(Stream* stream) {
 #if GPU_GRAPH_API_DEBUG
   s_printer.dump(stream->parent()->device_ordinal(), graph_);
 #endif
-  return ToStatus(wrap::hipGraphLaunch(
+  
+  auto s1 = tsl::Env::Default()->NowMicros();
+  auto res = ToStatus(wrap::hipGraphLaunch(
                       exec_, static_cast<hipStream_t>(
                                  stream->platform_specific_handle().stream)),
                   "Failed to launch HIP graph");
+  auto dif = tsl::Env::Default()->NowMicros() - s1;
+  VLOG(0) << "Launch time: " << dif << " usec";
+  return res;
 }
 
 absl::StatusOr<size_t> RocmCommandBuffer::GraphGetNodes(

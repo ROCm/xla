@@ -99,6 +99,10 @@ bool CommandBufferThunk::ExecutorCommandBuffer::UpdateBufferAllocations(
   const BufferAllocations* allocs = params.buffer_allocations;
   int dev_id = params.stream->parent()->device_ordinal();
 
+  // TODO: we can keep track of allocations which are only used by non-traced commands
+  // kernels and update them locally (without recreating the whole graph
+  // BUT 
+
   // first search if any of recorded graphs is fine
   auto start_id = (active_graph_ + kNumCachedGraphs-1) % kNumCachedGraphs;
   for (auto id = start_id; id < start_id + kNumCachedGraphs; id++) { 
@@ -113,7 +117,7 @@ bool CommandBufferThunk::ExecutorCommandBuffer::UpdateBufferAllocations(
           VLOG(1) << this << " " << (id % kNumCachedGraphs) << " Alloc " << idx << " has changed: "
                   << recorded[idx].opaque() << " -> " << alloc.opaque();
         }
-        break;
+        // break;
       }
     } // for
     if (!should_update) {

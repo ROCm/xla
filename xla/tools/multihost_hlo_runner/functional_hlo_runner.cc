@@ -1098,6 +1098,12 @@ FunctionalHloRunner::RunInternal(
   for (int repeat = 0; repeat < running_options.num_repeats; ++repeat) {
     VLOG(0) << "======== FunctionalHloRunner: ExecuteOnDevices started (repeat = "
             << repeat << ").";
+    if (repeat == 2) {
+      VLOG(0) << "Calling profile script!";
+      auto s = absl::StrCat("./fff_profile.sh ", getpid(), " &");
+      system(s.c_str());
+      std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
     if (repeat == 0 || running_options.recreate_buffers_between_repeats) {
       VLOG(1) << "Creating argument buffers. repeat = " << repeat;
       device_buffers.clear();
@@ -1146,7 +1152,7 @@ FunctionalHloRunner::RunInternal(
           break;
       }
     }
-
+#if 0
     TF_ASSIGN_OR_RETURN(Xresults,
                       FetchAndLogOutput(client, output_buffers,
                                         running_options.module_output_mode,
@@ -1175,6 +1181,7 @@ FunctionalHloRunner::RunInternal(
       }
     } // for literal
     }// for Xresults
+#endif
   } // for
 
   if (running_options.profiler != nullptr) {

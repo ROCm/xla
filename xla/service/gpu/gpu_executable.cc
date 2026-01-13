@@ -181,7 +181,7 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
       thunk->ForAllThunks([&num_nested](const Thunk*){
         num_nested++;
       });
-      VLOG(1) << "Found CmdBuf with " << num_nested << " nested commands";
+      VLOG(1) << module_name_ << " CmdBuf with " << num_nested << " nested commands";
       if (num_nested >= static_cast< size_t >(allocs_th)) { 
         enable_cached_allocs_ = true;
         break;
@@ -189,6 +189,7 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
     } // for
   }
   if (enable_cached_allocs_) { // allocate at least for 16 devices
+    VLOG(1) << module_name_ << " cached allocations enabled!";
     cached_mem_allocations_.resize(16);
   }
 }
@@ -630,6 +631,10 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
           "zero elements.",
           allocation.param_shape_index().ToString(), param_no);
     }
+    if (device_ordinal == 0) {
+      VLOG(1) << allocation.index() << " Input param: " << param_no 
+            << " buf " << registered_buffer.opaque() << " sz " << registered_buffer.size();
+    }
     return registered_buffer;
   } else if (allocation.is_constant()) {
     auto it = globals->find(arg_idx);
@@ -645,8 +650,10 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
       memory_allocator->Allocate(device_ordinal, buffer_size,
                                    /*retry_on_failure=*/true,
                                    /*memory_space=*/allocation.color()));
-    VLOG(1) << this << " dev: " << device_ordinal << " idx: " << allocation.index() 
+    if (device_ordinal == 0) {
+      VLOG(1) << module_name_ << " idx: " << allocation.index() 
             << " do not cache buf: " << buf.cref();
+    }
     return buf.Release();
   }
 
@@ -662,10 +669,11 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
                                    /*memory_space=*/allocation.color()));
     }
     if (device_ordinal == 0) {
-      VLOG(1) << "dev" << device_ordinal << "," << allocation.index() 
-          << " cached alloc: " << it->second[0].cref()
+      VLOG(1) << module_name_ << "," << allocation.index() 
+          << " new cached alloc: " << it->second[0].cref()
           << " live_out: " << allocation.maybe_live_out()
-          << " is_temp: " << allocation.IsPreallocatedTempBuffer();
+          << " is_temp: " << allocation.IsPreallocatedTempBuffer()
+          << " size: " << buffer_size;
     }
   }
   return it->second[is_live_out ? cache_idx : 0].cref();
