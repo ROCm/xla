@@ -622,5 +622,5 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
 // rocprofiler_configure, then no tracing callbacks will be triggered,
 // as a result, there is no gpu trace events.
 void __attribute__((constructor)) init_rocm_lib() {
-  rocprofiler_force_configure(xla::profiler::rocprofiler_configure);
+  // rocprofiler_force_configure(xla::profiler::rocprofiler_configure);
 }
