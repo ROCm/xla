@@ -72,12 +72,11 @@ namespace proxy {
 namespace {
 
 std::string device_summary(Device* device) {
-  auto it = device->Attributes().map().find("slice_index");
-  int slice_index =
-      (it != device->Attributes().map().end() &&
-       std::holds_alternative<AttributeMap::Int64Value>(it->second))
-          ? std::get<AttributeMap::Int64Value>(it->second).value
-          : 0;
+  int64_t slice_index = 0;
+  auto slice_index_attr = device->Attributes().Get<int64_t>("slice_index");
+  if (slice_index_attr.ok()) {
+    slice_index = *slice_index_attr;
+  }
   return absl::StrCat(device->Kind(), "s", slice_index);
 }
 
@@ -140,9 +139,9 @@ absl::StatusOr<std::unique_ptr<Client>> Client::Create(
     bool is_addressable = addressable_device_ids.contains(d.id());
     bool is_primary = primary_device_ids.contains(d.id());
 
-    auto device =
-        std::make_unique<Device>(std::move(desc), d.local_device_id(),
-                                 d.local_hardware_id(), is_addressable);
+    auto device = std::make_unique<Device>(
+        std::move(desc), d.platform_name(), d.local_device_id(),
+        d.local_hardware_id(), is_addressable);
     all_device_ptrs.push_back(device.get());
     if (is_primary) {
       primary_device_ptrs.push_back(device.get());
@@ -361,10 +360,12 @@ absl::StatusOr<std::vector<xla::ifrt::ArrayRef>> Client::CopyArrays(
         arrays[i]->sharding().WithDeviceAssignment(devices, memory_kind));
     auto* proxy_array = llvm::cast<xla::ifrt::proxy::Array>(arrays[i].get());
     CHECK(proxy_array != nullptr);
-    new_arrays.push_back(tsl::MakeRef<Array>(
-        this, rpc_helper_, arrays[i]->dtype(), arrays[i]->shape(),
-        std::move(new_sharding), ArrayHandle{result_handles[i]},
-        /*layout=*/proxy_array->custom_layout()));
+    TF_ASSIGN_OR_RETURN(std::shared_ptr<const xla::PjRtLayout> layout,
+                        proxy_array->pjrt_layout());
+    new_arrays.push_back(
+        tsl::MakeRef<Array>(this, rpc_helper_, arrays[i]->dtype(),
+                            arrays[i]->shape(), std::move(new_sharding),
+                            ArrayHandle{result_handles[i]}, std::move(layout)));
   }
   return new_arrays;
 }
@@ -460,7 +461,7 @@ Client::GetDefaultPjRtLayout(xla::ifrt::DType dtype,
     }
   }
 
-  *req->mutable_dtype() = dtype.ToProto(rpc_helper_->ifrt_serdes_version());
+  dtype.ToProto(*req->mutable_dtype(), rpc_helper_->ifrt_serdes_version());
   req->mutable_dims()->Reserve(dims.size());
   for (int64_t dim : dims) {
     req->add_dims(dim);

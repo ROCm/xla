@@ -363,8 +363,7 @@ absl::Status SpmdPartitioningVisitor::HandleFft(HloInstruction* hlo) {
 
   // Support partition at the last dimension only.
   if (!hlo->has_sharding() ||
-      hlo->sharding().tile_assignment().dimensions().back() !=
-          num_partitions_) {
+      hlo->sharding().dimensions().back() != num_partitions_) {
     return DefaultAction(hlo);
   }
 
@@ -426,10 +425,7 @@ absl::Status SpmdPartitioningVisitor::HandleFft(HloInstruction* hlo) {
       partitioned_input.state().next_channel_id, module_,
       partitioned_input.state().b);
 
-  result->set_sharding(hlo->sharding());
-  auto partitioned_fft =
-      PartitionedHlo(result, hlo->shape(), partitioned_input.state());
-  SetPartitionedHlo(hlo, std::move(partitioned_fft));
+  SetPartitionedHlo(hlo, result);
   return absl::OkStatus();
 }
 

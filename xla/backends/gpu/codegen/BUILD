@@ -1,6 +1,7 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//xla:xla.default.bzl", "xla_cc_test")
 load("//xla/tests:build_defs.bzl", "xla_test")
+load("//xla/tsl:tsl.bzl", "if_google")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -25,6 +26,7 @@ cc_library(
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla/backends/gpu/runtime:copy_thunk",
+        "//xla/backends/gpu/runtime:shaped_slice",
         "//xla/backends/gpu/runtime:thunk",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/utils:hlo_traversal",
@@ -79,10 +81,6 @@ cc_library(
 xla_test(
     name = "cudnn_test",
     srcs = ["cudnn_test.cc"],
-    backend_tags = {
-        # TODO(b/445172709): Re-enable once fixed.
-        "b200": ["broken"],
-    },
     backends = ["gpu"],
     tags = ["cuda-only"],
     deps = [
@@ -108,7 +106,6 @@ xla_test(
         "//xla/stream_executor:dnn",
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor:stream_executor_memory_allocator",
-        "//xla/tsl/lib/core:status_test_util",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -132,15 +129,17 @@ cc_library(
         "//xla:shape_util",
         "//xla:status_macros",
         "//xla:util",
-        "//xla/backends/gpu/collectives:gpu_clique_key",
+        "//xla:xla_data_proto_cc",
         "//xla/backends/gpu/runtime:all_reduce_thunk",
         "//xla/backends/gpu/runtime:collective_thunk",
         "//xla/backends/gpu/runtime:copy_thunk",
         "//xla/backends/gpu/runtime:custom_call_target",
         "//xla/backends/gpu/runtime:custom_call_thunk",
+        "//xla/backends/gpu/runtime:custom_kernel_thunk",
         "//xla/backends/gpu/runtime:dynamic_slice_thunk",
         "//xla/backends/gpu/runtime:gemm_thunk",
         "//xla/backends/gpu/runtime:kernel_thunk",
+        "//xla/backends/gpu/runtime:shaped_slice",
         "//xla/backends/gpu/runtime:thunk",
         "//xla/codegen/emitters:kernel_arguments",
         "//xla/ffi:attribute_map",
@@ -187,6 +186,16 @@ cc_library(
 xla_test(
     name = "dynamic_slice_fusion_test",
     srcs = ["dynamic_slice_fusion_test.cc"],
+    # TODO(b/467915739): Remove heap_check= once the bug is fixed.
+    backend_args = if_google(
+        {
+            "gpu": ["--heap_check="],
+            "b200": ["--heap_check="],
+            "a100": ["--heap_check="],
+            "h100": ["--heap_check="],
+        },
+        {},
+    ),
     backend_tags = {
         "gpu": [
             "multi_gpu",
@@ -203,6 +212,7 @@ xla_test(
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla:xla_proto_cc",
+        "//xla/backends/gpu:ffi",
         "//xla/backends/gpu/runtime:dynamic_slice_thunk",
         "//xla/backends/gpu/runtime:sequential_thunk",
         "//xla/backends/gpu/runtime:thunk",
@@ -221,8 +231,10 @@ xla_test(
         "//xla/service/gpu:gpu_executable",
         "//xla/service/gpu:ir_emission_utils",
         "//xla/service/gpu/transforms:dynamic_slice_fusion_rewriter",
-        "//xla/stream_executor:device_memory",
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:platform_manager",
         "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_h",
         "//xla/tests:hlo_test_base",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:statusor",
@@ -254,7 +266,6 @@ cc_library(
         "//xla/service/gpu:ir_emitter_context",
         "//xla/service/gpu:launch_dimensions",
         "//xla/service/gpu:target_util",
-        "//xla/service/gpu/model/experimental:symbolic_expr",
         "//xla/service/llvm_ir:ir_array",
         "//xla/service/llvm_ir:llvm_util",
         "//xla/stream_executor:device_description",
@@ -301,7 +312,6 @@ cc_library(
         "//xla/service/gpu:backend_configs_cc",
         "//xla/service/gpu:hlo_fusion_analysis",
         "//xla/service/gpu:ir_emission_utils",
-        "//xla/service/gpu/model/experimental:symbolic_expr",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
     ],

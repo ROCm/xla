@@ -35,14 +35,13 @@ class BlockScalingRewriterHipblasltTest : public GpuCodegenTest {
   }
 
   bool IsRocm() const {
-    return std::holds_alternative<stream_executor::RocmComputeCapability>(
-        GpuCapability());
+    return GpuCapability().IsRocm();
   }
 
   void SetUp() override {
     if (!IsRocm()) { GTEST_SKIP(); }
-    auto rocm_cc = std::get<se::RocmComputeCapability>(GpuCapability());
-    if (rocm_cc.gfx_version() != "gfx950") { GTEST_SKIP(); }
+    auto rocm_cc = GpuCapability().rocm_compute_capability();
+    if (rocm_cc->gfx_version() != "gfx950") { GTEST_SKIP(); }
   };
 };
 

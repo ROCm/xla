@@ -90,7 +90,7 @@ TEST_F(IndexingAnalysisTest, ComputeGroupedOutputToInputIndexing) {
   auto fusion_adaptor = HloFusionAdaptor::ForProducerConsumer(transpose, root);
 
   auto grouped_indexing = ComputeGroupedOutputToInputIndexing(
-      *fusion_adaptor, fusion_adaptor->GetRoots()[0], &symbolic_expr_context_);
+      *fusion_adaptor, fusion_adaptor->GetRoots()[0], &mlir_context_);
   EXPECT_THAT(grouped_indexing,
               UnorderedElementsAre(
                   Pair(root, ElementsAre(MatchOperandIndexing(R"(
@@ -147,7 +147,7 @@ TEST_F(IndexingAnalysisTest,
   auto fusion_adaptor = HloFusionAdaptor::ForInstruction(root);
 
   auto grouped_indexing = ComputeGroupedOutputToInputIndexing(
-      *fusion_adaptor, fusion_adaptor->GetRoots()[0], &symbolic_expr_context_);
+      *fusion_adaptor, fusion_adaptor->GetRoots()[0], &mlir_context_);
 
   EXPECT_THAT(grouped_indexing,
               UnorderedElementsAre(
@@ -200,7 +200,7 @@ TEST_F(IndexingAnalysisTest, ComputeGroupedOutputToInputIndexing_SingleOp) {
   HloInstructionAdaptor parameter_adaptor =
       fusion_adaptor->GetRoots()[0].GetOperand(0);
   auto grouped_indexing = ComputeGroupedOutputToInputIndexing(
-      *fusion_adaptor, parameter_adaptor, &symbolic_expr_context_);
+      *fusion_adaptor, parameter_adaptor, &mlir_context_);
   EXPECT_THAT(
       grouped_indexing,
       UnorderedElementsAre(Pair(parameter, ElementsAre(MatchOperandIndexing(R"(
@@ -241,7 +241,7 @@ TEST_F(IndexingAnalysisTest,
   auto parameter_0 = bcast.GetOperand(0);
 
   auto grouped_indexing = ComputeGroupedOutputToInputIndexing(
-      *fusion_adaptor, bcast, &symbolic_expr_context_);
+      *fusion_adaptor, bcast, &mlir_context_);
   EXPECT_THAT(
       grouped_indexing,
       UnorderedElementsAre(
@@ -1072,6 +1072,43 @@ TEST_F(IndexingAnalysisTest, GatherOp) {
         rt0: %indices = s32[1806,2]{1,0} parameter(1); (d0, d1, d2, d3) -> (d0, 0),
           domain: d0 in [0, 1805], d1 in [0, 6], d2 in [0, 7], d3 in [0, 3]
         rt1: %indices = s32[1806,2]{1,0} parameter(1); (d0, d1, d2, d3) -> (d0, 1),
+          domain: d0 in [0, 1805], d1 in [0, 6], d2 in [0, 7], d3 in [0, 3]
+    operand id = 1
+      (d0, d1, d2, d3)[s0] -> (d0, s0),
+      domain:
+        d0 in [0, 1805],
+        d1 in [0, 6],
+        d2 in [0, 7],
+        d3 in [0, 3],
+        s0 in [0, 1]
+    )"));
+}
+
+TEST_F(IndexingAnalysisTest, GatherOpWithShuffledStartIndexMap) {
+  auto input_indexing = GetOutputToInputIndexing(ParseAndGetRoot(R"(
+    HloModule m
+    ENTRY main {
+      operand = f32[33,76,70] parameter(0)
+      indices = s32[1806,2] parameter(1)
+      ROOT r = f32[1806,7,8,4] gather(operand, indices), offset_dims={1,2,3},
+                                 collapsed_slice_dims={}, start_index_map={1,0},
+                                 index_vector_dim=1, slice_sizes={7,8,4}
+    }
+  )"));
+  EXPECT_THAT(input_indexing.ToString(), MatchIndexingString(R"(
+    operand id = 0
+      (d0, d1, d2, d3){rt0, rt1} -> (d1 + rt0, d2 + rt1, d3),
+      domain:
+        d0 in [0, 1805],
+        d1 in [0, 6],
+        d2 in [0, 7],
+        d3 in [0, 3],
+        rt0 in [0, 26],
+        rt1 in [0, 68]
+      runtime variables:
+        rt0: %indices = s32[1806,2]{1,0} parameter(1); (d0, d1, d2, d3) -> (d0, 1),
+          domain: d0 in [0, 1805], d1 in [0, 6], d2 in [0, 7], d3 in [0, 3]
+        rt1: %indices = s32[1806,2]{1,0} parameter(1); (d0, d1, d2, d3) -> (d0, 0),
           domain: d0 in [0, 1805], d1 in [0, 6], d2 in [0, 7], d3 in [0, 3]
     operand id = 1
       (d0, d1, d2, d3)[s0] -> (d0, s0),
@@ -2656,8 +2693,8 @@ TEST_F(IndexingAnalysisTest, EpilogueIndexing) {
   HloInstructionAdaptor log(*computation->GetInstructionWithName("log"),
                             fusion.get());
 
-  EXPECT_THAT(ToString(ComputeEpilogueInputToOutputIndexing(
-                  transpose, log, &symbolic_expr_context_)),
+  EXPECT_THAT(ToString(ComputeEpilogueInputToOutputIndexing(transpose, log,
+                                                            &mlir_context_)),
               MatchIndexingString(R"(
                   (d0, d1) -> (d1 * 1000 + d0),
                   domain:
@@ -2686,7 +2723,7 @@ TEST_F(IndexingAnalysisTest, EpilogueIndexing_NoEpilogue) {
                                   fusion.get());
 
   EXPECT_THAT(ToString(ComputeEpilogueInputToOutputIndexing(
-                  transpose, transpose, &symbolic_expr_context_)),
+                  transpose, transpose, &mlir_context_)),
               MatchIndexingString(R"(
                   (d0, d1) -> (d0, d1),
                   domain:
@@ -2999,7 +3036,7 @@ TEST_F(IndexingAnalysisTest, AllGatherFusionWithReshape) {
   auto fusion_adaptor = HloFusionAdaptor::ForProducerConsumer(all_gather, root);
 
   auto grouped_indexing = ComputeGroupedOutputToInputIndexing(
-      *fusion_adaptor, fusion_adaptor->GetRoots()[0], &symbolic_expr_context_);
+      *fusion_adaptor, fusion_adaptor->GetRoots()[0], &mlir_context_);
 
   EXPECT_THAT(grouped_indexing[root], ElementsAre(MatchOperandIndexing(R"(
     (d0) -> (d0),
@@ -3043,7 +3080,7 @@ TEST_F(IndexingAnalysisTest, ChainedAllGatherFusion) {
   auto fusion_adaptor = HloFusionAdaptor::ForProducerConsumer(all_gather, root);
 
   auto grouped_indexing = ComputeGroupedOutputToInputIndexing(
-      *fusion_adaptor, fusion_adaptor->GetRoots()[0], &symbolic_expr_context_);
+      *fusion_adaptor, fusion_adaptor->GetRoots()[0], &mlir_context_);
 
   EXPECT_THAT(grouped_indexing[parameter],
               ElementsAre(UndefinedOperandIndexing()));
@@ -3067,7 +3104,7 @@ TEST_F(IndexingAnalysisTest, AllGatherDotFusion_GatherNonContractingDim) {
   auto fusion_adaptor = HloFusionAdaptor::ForProducerConsumer(all_gather, root);
 
   auto grouped_indexing = ComputeGroupedOutputToInputIndexing(
-      *fusion_adaptor, fusion_adaptor->GetRoots()[0], &symbolic_expr_context_);
+      *fusion_adaptor, fusion_adaptor->GetRoots()[0], &mlir_context_);
 
   EXPECT_THAT(grouped_indexing[parameter], ElementsAre(MatchOperandIndexing(R"(
     (d0, d1)[s0] -> (d0 mod 64, s0),
@@ -3102,7 +3139,7 @@ TEST_F(IndexingAnalysisTest, AllGatherDotFusion_GatherContractingDim) {
   auto fusion_adaptor = HloFusionAdaptor::ForProducerConsumer(all_gather, root);
 
   auto grouped_indexing = ComputeGroupedOutputToInputIndexing(
-      *fusion_adaptor, fusion_adaptor->GetRoots()[0], &symbolic_expr_context_);
+      *fusion_adaptor, fusion_adaptor->GetRoots()[0], &mlir_context_);
 
   EXPECT_THAT(grouped_indexing[parameter], ElementsAre(MatchOperandIndexing(R"(
     (d0, d1)[s0] -> (d0, s0 mod 128),

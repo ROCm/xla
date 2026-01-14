@@ -29,6 +29,7 @@ limitations under the License.
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
@@ -40,7 +41,6 @@ limitations under the License.
 #include "xla/service/gpu/hlo_fusion_analysis.h"
 #include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/service/gpu/launch_dimensions.h"
-#include "xla/service/gpu/model/experimental/symbolic_expr.h"
 #include "xla/shape.h"
 #include "xla/xla_data.pb.h"
 
@@ -50,8 +50,8 @@ namespace gpu {
 class TransposeFusionBase : public EmitterBase {
  public:
   explicit TransposeFusionBase(const HloFusionAnalysis& analysis,
-                               SymbolicExprContext* symbolic_expr_context)
-      : analysis_(analysis), symbolic_expr_context_(symbolic_expr_context) {}
+                               mlir::MLIRContext* mlir_context)
+      : analysis_(analysis), mlir_context_(mlir_context) {}
 
  protected:
   absl::Status EmitEntryFunction(
@@ -62,7 +62,7 @@ class TransposeFusionBase : public EmitterBase {
 
   std::vector<emitters::EpilogueSpecification> GetEpilogues(
       const HloFusionInstruction& fusion,
-      SymbolicExprContext* symbolic_expr_context) const override;
+      mlir::MLIRContext* mlir_context) const override;
 
   struct WriteResult {
     // All output tensors of the fusion, with side outputs written to them.
@@ -87,7 +87,7 @@ class TransposeFusionBase : public EmitterBase {
       mlir::ValueRange thread_and_block_ids) const = 0;
 
   const HloFusionAnalysis& analysis_;
-  SymbolicExprContext* symbolic_expr_context_;
+  mlir::MLIRContext* mlir_context_;
 
   // Transpose instructions that require shared memory. Note that not all
   // transposes require shared memory, e.g. the ones with a large innermost
@@ -118,16 +118,14 @@ class TransposeFusionBase : public EmitterBase {
 class TransposeFusion : public TransposeFusionBase {
  public:
   explicit TransposeFusion(const HloFusionAnalysis& analysis,
-                           SymbolicExprContext* symbolic_expr_context);
+                           mlir::MLIRContext* mlir_context);
   LaunchDimensions launch_dimensions() const override;
 
   std::optional<IndexingMap> ComputeThreadIdToOutputIndexing(
-      int64_t root_index,
-      SymbolicExprContext* symbolic_expr_context) const override;
+      int64_t root_index, mlir::MLIRContext* mlir_context) const override;
 
   std::optional<std::vector<IndexingMap>> ComputeThreadIdToInputIndexing(
-      int64_t root_index,
-      SymbolicExprContext* symbolic_expr_context) const override;
+      int64_t root_index, mlir::MLIRContext* mlir_context) const override;
 
  protected:
   WriteResult EmitWriteToShMemMlir(
@@ -146,12 +144,12 @@ class TransposeFusion : public TransposeFusionBase {
 
  private:
   IndexingMap GetIndexing(bool input, const xla::Shape& shape,
-                          SymbolicExprContext* symbolic_expr_context) const;
-  IndexingMap GetSharedMemoryIndexing(
-      bool read, SymbolicExprContext* symbolic_expr_context) const;
+                          mlir::MLIRContext* mlir_context) const;
+  IndexingMap GetSharedMemoryIndexing(bool read,
+                                      mlir::MLIRContext* mlir_context) const;
 
   llvm::SmallVector<mlir::AffineExpr, 4> GetThreadOffsets(
-      bool read, SymbolicExprContext* symbolic_expr_context) const;
+      bool read, mlir::MLIRContext* mlir_context) const;
   bool MostMinorDimensionUnchanged() const;
 
   TransposeDescription transpose_;
@@ -166,9 +164,9 @@ class TransposeFusion : public TransposeFusionBase {
 };
 
 // Packed transpose is a more advanced version of the transpose emitter.
-// It considers the canonical transpose described by TransposeSpec class,
-// i.e. [T2, A, T1, B] -> [T1, A, T2, B] and tries to pack as many T1 rows into
-// shared memory as possible.
+// It considers the canonical transpose described by PackedTransposeDescription
+// class, i.e. [T2, A, T1, B] -> [T1, A, T2, B] and tries to pack as many T1
+// rows into shared memory as possible.
 //
 // Let's describe the algorithm for a concrete example.
 //   bf16 [640,100,6,1] - > bf16 [6,100,640,1]
@@ -239,20 +237,18 @@ class TransposeFusion : public TransposeFusionBase {
 class PackedTranspose : public TransposeFusionBase {
  public:
   explicit PackedTranspose(const HloFusionAnalysis& analysis,
-                           const TransposeSpec& spec,
+                           const PackedTransposeDescription& spec,
                            absl::Span<const int64_t> output_block_tile,
                            int64_t num_shmem_groups,
-                           SymbolicExprContext* symbolic_expr_context);
+                           mlir::MLIRContext* mlir_context);
 
   LaunchDimensions launch_dimensions() const override;
 
   std::optional<IndexingMap> ComputeThreadIdToOutputIndexing(
-      int64_t root_index,
-      SymbolicExprContext* symbolic_expr_context) const override;
+      int64_t root_index, mlir::MLIRContext* mlir_context) const override;
 
   std::optional<std::vector<IndexingMap>> ComputeThreadIdToInputIndexing(
-      int64_t root_index,
-      SymbolicExprContext* symbolic_expr_context) const override;
+      int64_t root_index, mlir::MLIRContext* mlir_context) const override;
 
  protected:
   WriteResult EmitWriteToShMemMlir(
@@ -271,13 +267,13 @@ class PackedTranspose : public TransposeFusionBase {
       mlir::ValueRange thread_and_block_ids) const override;
 
  private:
-  IndexingMap GetInputIndexing(SymbolicExprContext* ctx) const;
-  IndexingMap GetShmemWriteIndexing(SymbolicExprContext* ctx) const;
+  IndexingMap GetInputIndexing(mlir::MLIRContext* ctx) const;
+  IndexingMap GetShmemWriteIndexing(mlir::MLIRContext* ctx) const;
 
-  IndexingMap GetShmemReadIndexing(SymbolicExprContext* ctx) const;
-  IndexingMap GetOutputIndexing(SymbolicExprContext* ctx) const;
+  IndexingMap GetShmemReadIndexing(mlir::MLIRContext* ctx) const;
+  IndexingMap GetOutputIndexing(mlir::MLIRContext* ctx) const;
 
-  TransposeSpec spec_;
+  PackedTransposeDescription spec_;
 
   // Tile sizes for the canonical input shape.
   std::vector<int64_t> output_tile_;
@@ -310,8 +306,7 @@ class PackedTranspose : public TransposeFusionBase {
 };
 
 std::unique_ptr<EmitterBase> CreateTransposeFusion(
-    const HloFusionAnalysis& analysis,
-    SymbolicExprContext* symbolic_expr_context);
+    const HloFusionAnalysis& analysis, mlir::MLIRContext* mlir_context);
 
 }  // namespace gpu
 }  // namespace xla

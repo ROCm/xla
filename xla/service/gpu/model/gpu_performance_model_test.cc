@@ -32,7 +32,6 @@ limitations under the License.
 #include "xla/hlo/testlib/test_helpers.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
-#include "xla/service/gpu/model/experimental/symbolic_expr.h"
 #include "xla/service/gpu/model/fusion_analysis_cache.h"
 #include "xla/service/gpu/model/gpu_hlo_cost_analysis.h"
 #include "xla/service/gpu/model/gpu_indexing_performance_model.h"
@@ -49,6 +48,8 @@ namespace xla {
 namespace gpu {
 namespace {
 
+using ::mlir::MLIRContext;
+
 class GpuPerformanceModelTest : public HloHardwareIndependentTestBase {
  public:
   GpuPerformanceModel::RunTimes EstimateRunTimes(
@@ -63,8 +64,7 @@ class GpuPerformanceModelTest : public HloHardwareIndependentTestBase {
                                                    fused_consumers);
   }
 
-  mlir::MLIRContext mlir_context_;
-  SymbolicExprContext symbolic_expr_context_{&mlir_context_};
+  MLIRContext mlir_context_;
   GpuHloCostAnalysis::Options options_{.count_multiple_input_accesses = true};
   // The reference times in the test cases below are measured
   // on A6000 by profiling the execution of the HLOs.
@@ -74,11 +74,11 @@ class GpuPerformanceModelTest : public HloHardwareIndependentTestBase {
   GpuPerformanceModelCache gpu_performance_model_cache_;
   GpuPerformanceModel gpu_performance_model_{
       device_info_, fusion_analysis_cache_, gpu_performance_model_cache_,
-      &symbolic_expr_context_};
+      &mlir_context_};
 
   GpuPerformanceModelWithIndexingAnalysis indexing_cost_model_{
       &device_info_, &fusion_analysis_cache_, HloCostAnalysis::DefaultShapeSize,
-      &symbolic_expr_context_};
+      &mlir_context_};
 };
 
 TEST_F(GpuPerformanceModelTest, LargeWrite) {
@@ -761,8 +761,8 @@ ENTRY entry_computation.1 {
 
   auto t = gpu_performance_model_.EstimateRunTimesForMultiOutputFusion(
       producer, consumer, &analysis_);
-  EXPECT_NEAR(absl::ToInt64Milliseconds(t.time_unfused), 162, 1);
-  EXPECT_NEAR(absl::ToInt64Milliseconds(t.time_fused), 145, 1);
+  EXPECT_NEAR(absl::ToInt64Milliseconds(t.time_unfused), 120, 1);
+  EXPECT_NEAR(absl::ToInt64Milliseconds(t.time_fused), 103, 1);
 }
 
 }  // namespace

@@ -103,8 +103,8 @@ absl::Status SpmdPartitioningVisitor::HandleCustomCallTopK(
   const int64_t sort_dim = 1;
 
   CHECK(sharding.IsTiled());
-  const int64_t shard_count = sharding.tile_assignment().dim(sort_dim);
-  const int64_t batch_dim_partition = sharding.tile_assignment().dim(batch_dim);
+  const int64_t shard_count = sharding.dimension(sort_dim);
+  const int64_t batch_dim_partition = sharding.dimension(batch_dim);
 
   const int64_t input_size = hlo->operand(0)->shape().dimensions(sort_dim);
   const int64_t batch_size = hlo->shape().tuple_shapes(0).dimensions(batch_dim);
@@ -130,9 +130,8 @@ absl::Status SpmdPartitioningVisitor::HandleCustomCallTopK(
     partition_state = CreatePerGroupPartitioningState(
         partitioned_input.state(), sharding_grouped.device_groups,
         partitioned_input.state().b);
-    std::vector<int64_t> reshape_dimensions(
-        sharding.tile_assignment().dimensions().begin(),
-        sharding.tile_assignment().dimensions().end());
+    std::vector<int64_t> reshape_dimensions(sharding.dimensions().begin(),
+                                            sharding.dimensions().end());
     reshape_dimensions.push_back(reshape_dimensions.back());
     reshape_dimensions[sort_dim] = 1;
     auto reshape_tile_assignment =
@@ -341,7 +340,7 @@ absl::Status SpmdPartitioningVisitor::HandleCustomCallSPMDInternal_RotateRight(
   };
   HloInstruction* rotated0 = rotate_with_padding(amount);
   if (right_padding == 0) {
-    SetPartitionedHlo(hlo, [&] { return rotated0; });
+    SetPartitionedHlo(hlo, rotated0);
     return absl::OkStatus();
   }
 
@@ -374,10 +373,9 @@ absl::Status SpmdPartitioningVisitor::HandleCustomCallSPMDInternal_RotateRight(
   HloInstruction* pred = b_.AddInstruction(HloInstruction::CreateCompare(
       ShapeUtil::ChangeElementType(iota->shape(), PRED), iota,
       selection_boundary, Comparison::Direction::kLt));
-  SetPartitionedHlo(hlo, [&] {
-    return b_.AddInstruction(HloInstruction::CreateTernary(
-        rotated0->shape(), HloOpcode::kSelect, pred, rotated1, rotated0));
-  });
+  SetPartitionedHlo(hlo, b_.AddInstruction(HloInstruction::CreateTernary(
+                             rotated0->shape(), HloOpcode::kSelect, pred,
+                             rotated1, rotated0)));
   return absl::OkStatus();
 }
 
@@ -405,7 +403,7 @@ absl::Status SpmdPartitioningVisitor::HandleCustomCall(HloInstruction* hlo) {
         input->shape(), MakePartitionedShape(hlo->shape(), hlo->sharding())));
     auto copy = b_.AddInstruction(
         HloInstruction::CreateUnary(input->shape(), HloOpcode::kCopy, input));
-    SetPartitionedHlo(hlo, [&] { return copy; });
+    SetPartitionedHlo(hlo, copy);
     return absl::OkStatus();
   }
   if (hlo->custom_call_target() == "SPMDShardToFullShape") {
@@ -416,7 +414,7 @@ absl::Status SpmdPartitioningVisitor::HandleCustomCall(HloInstruction* hlo) {
         HloInstruction::CreateUnary(input->shape(), HloOpcode::kCopy, input));
     CHECK(ShapeUtil::Compatible(
         copy->shape(), MakePartitionedShape(hlo->shape(), hlo->sharding())));
-    SetPartitionedHlo(hlo, [&] { return copy; });
+    SetPartitionedHlo(hlo, copy);
     return absl::OkStatus();
   }
 
@@ -484,7 +482,7 @@ absl::Status SpmdPartitioningVisitor::HandleCustomCall(HloInstruction* hlo) {
   // Block-scaled dot with MX operands.
   if (hlo->custom_call_target() == "__op$block_scaled_dot") {
     // Evaluate the dimension numbers of the block-scaled dot.
-    int dimensions_size = hlo->operand(0)->shape().dimensions_size();
+    int dimensions_size = hlo->operand(0)->shape().dimensions().size();
     TF_RET_CHECK(dimensions_size == 2 || dimensions_size == 3);
     DotDimensionNumbers dimension_numbers;
     dimension_numbers.add_lhs_contracting_dimensions(dimensions_size - 1);

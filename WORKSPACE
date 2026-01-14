@@ -1,19 +1,19 @@
 # buildifier: disable=load-on-top
 workspace(name = "xla")
 
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("//third_party:repo.bzl", "tf_http_archive", "tf_mirror_urls")
 
 # Initialize toolchains for ML projects.
 #
 # A hermetic build system is designed to produce completely reproducible builds for C++.
 # Details: https://github.com/google-ml-infra/rules_ml_toolchain
-http_archive(
+tf_http_archive(
     name = "rules_ml_toolchain",
-    sha256 = "3ea1041deb46cf4f927dd994e32acd8c436f7997b12a9558e85dee6a5a89e35c",
-    strip_prefix = "rules_ml_toolchain-0fccc2447ef3bec3d75046a60a1895f053424727",
-    urls = [
-        "https://github.com/google-ml-infra/rules_ml_toolchain/archive/0fccc2447ef3bec3d75046a60a1895f053424727.tar.gz",
-    ],
+    sha256 = "53905ede50e3eebc782266e20e9b9ac1d7166ef68b877bea593d3600dcfe03e6",
+    strip_prefix = "rules_ml_toolchain-a1ff84835e407b41eef5fd1a865a23748c294db6",
+    urls = tf_mirror_urls(
+        "https://github.com/google-ml-infra/rules_ml_toolchain/archive/a1ff84835e407b41eef5fd1a865a23748c294db6.tar.gz",
+    ),
 )
 
 load(
@@ -152,3 +152,13 @@ load(
 nvshmem_redist_init_repository(
     nvshmem_redistributions = NVSHMEM_REDISTRIBUTIONS,
 )
+
+# This is used for building nightly PJRT wheels.
+load("//build_tools/pjrt_wheels:nightly.bzl", "nightly_timestamp_repo")
+
+nightly_timestamp_repo(name = "nightly_timestamp")
+
+# This is used for building release candidate PJRT wheels.
+load("//build_tools/pjrt_wheels:release_candidate.bzl", "rc_number_repo")
+
+rc_number_repo(name = "rc_number")

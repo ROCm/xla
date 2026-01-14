@@ -36,7 +36,6 @@ limitations under the License.
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "xla/hlo/analysis/indexed_array_analysis.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/pass/hlo_pass_pipeline.h"
@@ -247,9 +246,10 @@ void OptProvider::RegisterAllHardwareIndependentPasses() {
   RegisterPass<AsyncCollectiveCreator>(
       AsyncCollectiveCreator::CollectiveCreatorConfig());
   RegisterPass<BFloat16ConversionFolding>(
-      /*bfloat16_support=*/bfloat16_support);
+      /*bfloat16_support=*/bfloat16_support, alias_info_.get());
   RegisterPass<BFloat16MixedPrecisionRemoval>();
-  RegisterPass<BFloat16Propagation>(/*bfloat16_support=*/bfloat16_support);
+  RegisterPass<BFloat16Propagation>(/*bfloat16_support=*/bfloat16_support,
+                                    alias_info_.get());
   RegisterPass<BatchDotSimplification>();
   RegisterPass<BroadcastCanonicalizer>();
   RegisterPass<CholeskyExpander>();
@@ -295,7 +295,6 @@ void OptProvider::RegisterAllHardwareIndependentPasses() {
   RegisterPass<HostOffloadLegalize>();
   RegisterPass<HostOffloadingPrepare>(
       /*rewrite=*/HostOffloadingPrepare::Rewrite::kElideMoveToHost);
-  RegisterPass<IndexedArrayAnalysisPrinterPass>();
   RegisterPass<InfeedTokenPropagation>();
   RegisterPass<InstructionHoister>();
   RegisterPass<LiteralCanonicalizer>(

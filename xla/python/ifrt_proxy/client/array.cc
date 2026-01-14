@@ -224,10 +224,10 @@ absl::StatusOr<xla::ifrt::ArrayRef> Array::MakeArrayFromHostBuffer(
   // Reuse the host_buffer_handle as also the client-generated
   // array_handle.
   req->set_array_handle(host_buffer_handle);
-  *req->mutable_dtype() = dtype.ToProto(rpc_helper->ifrt_serdes_version());
-  *req->mutable_shape() = shape.ToProto(rpc_helper->ifrt_serdes_version());
-  TF_ASSIGN_OR_RETURN(*req->mutable_sharding(),
-                      sharding->ToProto(rpc_helper->ifrt_serdes_version()));
+  dtype.ToProto(*req->mutable_dtype(), rpc_helper->ifrt_serdes_version());
+  shape.ToProto(*req->mutable_shape(), rpc_helper->ifrt_serdes_version());
+  TF_RETURN_IF_ERROR(sharding->ToProto(*req->mutable_sharding(),
+                                       rpc_helper->ifrt_serdes_version()));
   if (byte_strides.has_value()) {
     *req->mutable_byte_strides() = ToByteStridesProto(*byte_strides);
   }
@@ -320,10 +320,10 @@ Array::MakeArraysFromHostBufferShards(
 
       MakeArraysFromHostBufferShardsRequest::HostBuffer* host_buffer_proto =
           spec_proto->add_host_buffers();
-      *host_buffer_proto->mutable_dtype() =
-          host_buffer.dtype.ToProto(rpc_helper->ifrt_serdes_version());
-      *host_buffer_proto->mutable_shape() =
-          host_buffer.shape.ToProto(rpc_helper->ifrt_serdes_version());
+      host_buffer.dtype.ToProto(*host_buffer_proto->mutable_dtype(),
+                                rpc_helper->ifrt_serdes_version());
+      host_buffer.shape.ToProto(*host_buffer_proto->mutable_shape(),
+                                rpc_helper->ifrt_serdes_version());
       host_buffer_proto->set_host_buffer_handle(
           host_buffer_handles_for_specs[spec_idx][buffer_idx]);
       if (host_buffer.byte_strides.has_value()) {
@@ -331,9 +331,8 @@ Array::MakeArraysFromHostBufferShards(
             ToByteStridesProto(*host_buffer.byte_strides);
       }
     }
-    TF_ASSIGN_OR_RETURN(
-        *spec_proto->mutable_array_spec(),
-        spec.array_spec.ToProto(rpc_helper->ifrt_serdes_version()));
+    TF_RETURN_IF_ERROR(spec.array_spec.ToProto(
+        *spec_proto->mutable_array_spec(), rpc_helper->ifrt_serdes_version()));
 
     if (!GetGlobalClientFlags()->synchronous_host_buffer_store) {
       uint64_t arr_handle;
@@ -389,8 +388,8 @@ absl::StatusOr<std::vector<xla::ifrt::ArrayRef>> Array::MakeErrorArrays(
   for (const ArraySpec& array_spec : array_specs) {
     const uint64_t array_handle = rpc_helper->NextHandle();
     req->add_array_handles(array_handle);
-    TF_ASSIGN_OR_RETURN(*req->add_array_specs(),
-                        array_spec.ToProto(rpc_helper->ifrt_serdes_version()));
+    TF_RETURN_IF_ERROR(array_spec.ToProto(*req->add_array_specs(),
+                                          rpc_helper->ifrt_serdes_version()));
     arr_handles.push_back(ArrayHandle{array_handle});
   }
 
@@ -498,9 +497,6 @@ bool Array::IsDeleted() const {
       return false;
     }
   }
-  if (GetGlobalClientFlags()->array_is_deleted_hack) {
-    return false;
-  }
   auto req = std::make_unique<IsArrayDeletedRequest>();
   req->set_array_handle(handle_.handle);
 
@@ -550,13 +546,13 @@ absl::StatusOr<xla::ifrt::ArrayRef> Array::AssembleArrayFromSingleDeviceArrays(
         "AssembleArrayFromSingleDeviceArrays() called with empty arrays list");
   }
   auto req = std::make_unique<AssembleArrayFromSingleDeviceArraysRequest>();
-  *req->mutable_shape() = shape.ToProto(rpc_helper->ifrt_serdes_version());
-  TF_ASSIGN_OR_RETURN(*req->mutable_sharding(),
-                      sharding->ToProto(rpc_helper->ifrt_serdes_version()));
+  shape.ToProto(*req->mutable_shape(), rpc_helper->ifrt_serdes_version());
+  TF_RETURN_IF_ERROR(sharding->ToProto(*req->mutable_sharding(),
+                                       rpc_helper->ifrt_serdes_version()));
   req->set_copy_semantics(ToArrayCopySemanticsProto(array_copy_semantics));
   req->set_single_device_shard_semantics(
       ToSingleDeviceShardSemanticsProto(single_device_shard_semantics));
-  *req->mutable_dtype() = dtype.ToProto(rpc_helper->ifrt_serdes_version());
+  dtype.ToProto(*req->mutable_dtype(), rpc_helper->ifrt_serdes_version());
   for (const xla::ifrt::ArrayRef& rcref : arrays) {
     Array* array = llvm::dyn_cast<Array>(rcref.get());
     if (array == nullptr) {
@@ -589,10 +585,11 @@ absl::StatusOr<xla::ifrt::ArrayRef> Array::AssembleArrayFromSingleDeviceArrays(
   // We assume that all shards have the same layout.
   const xla::ifrt::ArrayRef& rcref = arrays[0];
   Array* array = llvm::cast<Array>(rcref.get());
-
+  TF_ASSIGN_OR_RETURN(std::shared_ptr<const xla::PjRtLayout> layout,
+                      array->pjrt_layout());
   return xla::ifrt::ArrayRef(tsl::MakeRef<Array>(
       client, std::move(rpc_helper), dtype, std::move(shape),
-      std::move(sharding), result_handle, array->custom_layout()));
+      std::move(sharding), result_handle, std::move(layout)));
 }
 
 absl::StatusOr<std::vector<xla::ifrt::ArrayRef>> Array::RemapArrays(
@@ -615,8 +612,8 @@ absl::StatusOr<std::vector<xla::ifrt::ArrayRef>> Array::RemapArrays(
 
   auto req = std::make_unique<RemapArraysRequest>();
   TF_RET_CHECK(!arrays.empty());
-  TF_ASSIGN_OR_RETURN(*req->mutable_plan(),
-                      plan.ToProto(rpc_helper->ifrt_serdes_version()));
+  TF_RETURN_IF_ERROR(
+      plan.ToProto(*req->mutable_plan(), rpc_helper->ifrt_serdes_version()));
   req->set_copy_semantics(ToArrayCopySemanticsProto(semantics));
   for (int i = 0; i < num_inputs; ++i) {
     const xla::ifrt::ArrayRef& rcref = arrays[i];
@@ -664,7 +661,9 @@ absl::StatusOr<std::vector<xla::ifrt::ArrayRef>> Array::RemapArrays(
     if (output_layouts[mapping.out_array] == nullptr) {
       const xla::ifrt::ArrayRef& rcref = arrays[mapping.in_array];
       Array* array = llvm::cast<Array>(rcref.get());
-      output_layouts[mapping.out_array] = array->custom_layout();
+      TF_ASSIGN_OR_RETURN(std::shared_ptr<const xla::PjRtLayout> layout,
+                          array->pjrt_layout());
+      output_layouts[mapping.out_array] = std::move(layout);
     }
   }
 
@@ -751,8 +750,7 @@ Array::DisassembleIntoSingleDeviceArrays(
   for (int i = 0; i < result_handles.size(); ++i) {
     result.push_back(xla::ifrt::ArrayRef(tsl::MakeRef<Array>(
         client_, rpc_helper_, dtype_, std::move(shape_and_shardings[i].first),
-        std::move(shape_and_shardings[i].second), result_handles[i],
-        this->custom_layout())));
+        std::move(shape_and_shardings[i].second), result_handles[i], layout_)));
   }
 
   return result;
@@ -792,7 +790,7 @@ absl::StatusOr<xla::ifrt::ArrayRef> Array::FullyReplicatedShard(
 
   return xla::ifrt::ArrayRef(tsl::MakeRef<Array>(
       client_, rpc_helper_, dtype_, shape_, std::move(single_device_sharding),
-      result_handle, this->custom_layout()));
+      result_handle, layout_));
 }
 
 tsl::Future<> Array::CopyToStringHostBuffer(
@@ -940,15 +938,7 @@ tsl::Future<> Array::CopyToHostBuffer(
 }
 
 absl::StatusOr<std::shared_ptr<const PjRtLayout>> Array::pjrt_layout() const {
-  absl::MutexLock l(mu_);
-  if (custom_layout_ != nullptr) {
-    return custom_layout_;
-  }
-
-  TF_ASSIGN_OR_RETURN(auto shard_shape, sharding_->GetShardShape(shape_));
-  return client_->GetDefaultPjRtLayout(dtype_, shard_shape.dims(),
-                                       sharding_->devices()->devices().front(),
-                                       sharding_->memory_kind());
+  return layout_;
 }
 
 xla::ifrt::Client* Array::client() const { return client_; }

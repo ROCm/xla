@@ -122,3 +122,4 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --local_test_jobs=4 \
     "$@" \
     "${TARGETS_TO_EXCLUDE[@]}" \
+

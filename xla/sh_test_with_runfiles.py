@@ -14,37 +14,35 @@
 """Lit runner configuration."""
 
 import os
-import sys
-import tempfile
 import pathlib
 
 import lit.formats
 
 
 class ShTestWithRunfiles(lit.formats.ShTest):
-    """Used to symlink bazels runfiles subdirs into the lit tmp test dir"""
+  """Used to symlink bazels runfiles subdirs into the lit tmp test dir."""
 
-    def execute(self, test, lit_config):
-        runfiles = os.environ.get("RUNFILES_DIR")
-        if not runfiles:
-            return super().execute(test, lit_config)
+  def execute(self, test, lit_config):
+    runfiles = os.environ.get("RUNFILES_DIR")
+    if not runfiles:
+      return super().execute(test, lit_config)
 
-        runfiles_dir = pathlib.Path(runfiles) / "xla"
-        if not runfiles_dir.is_dir():
-            return super().execute(test, lit_config)
+    runfiles_dir = pathlib.Path(runfiles) / "xla"
+    if not runfiles_dir.is_dir():
+      return super().execute(test, lit_config)
 
-        dst = pathlib.Path(test.getExecPath()).parent
-        dst.mkdir(parents=True, exist_ok=True)
-        runfiles = []
-        for item in runfiles_dir.iterdir():
-            target = dst / item.name
-            try:
-                target.symlink_to(item, target_is_directory=item.is_dir())
-                runfiles.append(target)
-            except FileExistsError:
-                pass
+    dst = pathlib.Path(test.getExecPath()).parent
+    dst.mkdir(parents=True, exist_ok=True)
+    runfiles = []
+    for item in runfiles_dir.iterdir():
+      target = dst / item.name
+      try:
+        target.symlink_to(item, target_is_directory=item.is_dir())
+        runfiles.append(target)
+      except FileExistsError:
+        pass
 
-        result = super().execute(test, lit_config)
-        for target in runfiles:
-            target.unlink()
-        return result;
+    result = super().execute(test, lit_config)
+    for target in runfiles:
+      target.unlink()
+    return result

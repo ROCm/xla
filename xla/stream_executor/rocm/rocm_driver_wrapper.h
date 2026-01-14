@@ -49,9 +49,9 @@ namespace wrap {
   auto hipSymbolName(Args... args) -> decltype(::hipSymbolName(args...)) {  \
     using FuncPtrT = std::add_pointer<decltype(::hipSymbolName)>::type;     \
     static FuncPtrT loaded = []() -> FuncPtrT {                             \
-      static const char *kName = TO_STR(hipSymbolName);                     \
-      void *f;                                                              \
-      auto s = tsl::Env::Default() -> GetSymbolFromLibrary(                 \
+      static const char* kName = TO_STR(hipSymbolName);                     \
+      void* f;                                                              \
+      auto s = tsl::Env::Default()->GetSymbolFromLibrary(                   \
           tsl::internal::CachedDsoLoader::GetHipDsoHandle().value(), kName, \
           &f);                                                              \
       CHECK(s.ok()) << "could not find " << kName                           \

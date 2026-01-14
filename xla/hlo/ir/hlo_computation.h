@@ -23,6 +23,7 @@ limitations under the License.
 #include <string>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/algorithm/container.h"
@@ -325,6 +326,12 @@ class HloComputation {
   // the control dependencies from the predecessors to the successors of the
   // removed instructions, so that the logical exeuction order of the remaining
   // unremoved instructions are preserved.
+  //
+  // Parameters from the entry computation can never be removed.
+  // If caller allows this with `remove_dead_parameters_from_entry_computation`
+  // then they need to update the entry computation layout of the module too.
+  // Note: This breaks the contract with the frontend. Use only in tests.
+  //
   absl::Status RemoveInstructionAndUnusedOperands(
       HloInstruction* instruction,
       std::optional<absl::FunctionRef<void(HloInstruction*)>> cleanup =
@@ -332,7 +339,8 @@ class HloComputation {
       bool ignore_control_dependencies = false,
       std::optional<absl::FunctionRef<
           std::vector<HloInstruction*>(const HloComputation*)>>
-          computation_callers = std::nullopt);
+          computation_callers = std::nullopt,
+      bool remove_dead_parameters_from_entry_computation = false);
 
   // Set the root of the computation to the given instruction. The instruction
   // must have already been added to the computation. In addition it must have
@@ -424,10 +432,18 @@ class HloComputation {
   //   computation_map: a map from computation id to HloComputation*. This map
   //     must contain all computations which the newly constructed computation
   //     calls.
+  //   preserve_instruction_ids: if true, the instruction ids in the proto will
+  //     be preserved. Otherwise, the instruction ids will be remapped to start
+  //     from 0.
+  //   id_remap_map: if not null, it will be populated with a map from the
+  //     original instruction ids in the proto as is, to the remapped
+  //     instructions full unique ids using the proto's computation id. This is
+  //     only meaningful if preserve_instruction_ids is false.
   static absl::StatusOr<std::unique_ptr<HloComputation>> CreateFromProto(
       const HloComputationProto& proto,
       const absl::flat_hash_map<int64_t, HloComputation*>& computation_map,
-      bool prohibit_empty_literal = true);
+      bool prohibit_empty_literal = true, bool preserve_instruction_ids = true,
+      absl::flat_hash_map<int64_t, int64_t>* id_remap_map = nullptr);
 
   // Generates a hash value of an HLO computation. Hash considers
   // information on opcode, shape, operands, and typically a root instruction.
@@ -731,6 +747,11 @@ class HloComputation {
   // 'extra_parameters' allows to specify additional parameters that should be
   // added to the computation.
   //
+  // 'new_root' allows specifying a new root instruction for the clone. If it's
+  // a pointer to an instruction in the computation being cloned, the new root
+  // is that instruction. If it's a span, the new root is a tuple instruction,
+  // where the instructions in the span are the tuple elements.
+  //
   // All relevant instructions are cloned, *including* unique_ptr in the
   // `replacements` map.
   std::unique_ptr<HloComputation> CloneWithReplacements(
@@ -738,7 +759,9 @@ class HloComputation {
                                 std::unique_ptr<HloInstruction>>* replacements,
       absl::Span<const HloInstruction* const> extra_parameters = {},
       HloCloneContext* context = nullptr, const std::string& suffix = "clone",
-      const HloInstruction* new_root = nullptr);
+      std::variant<const HloInstruction*,
+                   const absl::Span<HloInstruction* const>>
+          new_root = nullptr);
 
   // Like CloneWithReplacements(), but this is a const method and `context` must
   // be specified.
@@ -749,7 +772,9 @@ class HloComputation {
           nullptr,
       absl::Span<const HloInstruction* const> extra_parameters = {},
       const std::string& suffix = "clone",
-      const HloInstruction* new_root = nullptr) const;
+      std::variant<const HloInstruction*,
+                   const absl::Span<HloInstruction* const>>
+          new_root = nullptr) const;
 
   // Convenience overloads for CloneWithReplacements.  You want to do
   //
@@ -780,6 +805,11 @@ class HloComputation {
   // via computation_callers. This is expected to be equivalent to
   // CallGraph::GetComputationCallers().
   //
+  // Parameters from the entry computation can never be removed.
+  // If caller allows this with `remove_dead_parameters_from_entry_computation`
+  // then they need to update the entry computation layout of the module too.
+  // Note: This breaks the contract with the frontend. Use only in tests.
+  //
   // Note that IsSafelyRemovable() is a necessary condition to remove an
   // instruction rather than a sufficient condition. For example, instructions
   // with side-effect (e.g., Send, Infeed) may be removed from a computation,
@@ -790,7 +820,8 @@ class HloComputation {
       const HloInstruction* instruction, bool ignore_control_dependency = false,
       std::optional<absl::FunctionRef<
           std::vector<HloInstruction*>(const HloComputation*)>>
-          computation_callers = std::nullopt) const;
+          computation_callers = std::nullopt,
+      bool remove_dead_parameters_from_entry_computation = false) const;
 
   // Returns a map from an instruction to the group of instructions associated
   // with the same channel. These instructions will be considered as a single
@@ -953,6 +984,10 @@ class HloComputation {
 
   void ClearCalledComputations();
 
+  // Permutes the parameter numbers of this computation according to the
+  // provided permutation.
+  absl::Status PermuteParameters(absl::Span<const int64_t> permutation);
+
  private:
   friend class HloModule;
 
@@ -965,12 +1000,13 @@ class HloComputation {
   explicit HloComputation(
       const std::string& name, int parameter_count,
       std::vector<std::unique_ptr<HloInstruction>>* instructions,
-      HloInstruction* root_instruction, bool from_proto = false);
+      HloInstruction* root_instruction, bool preserve_instruction_ids = false);
 
   // Internal helper for adding instructions. Only assigns a unique id if it is
   // not already set.
   HloInstruction* AddInstructionInternal(
-      std::unique_ptr<HloInstruction> instruction, bool from_proto = false);
+      std::unique_ptr<HloInstruction> instruction,
+      bool preserve_unique_id = false);
 
   // Internal helper for comparison with different options.
   bool EqualInternal(

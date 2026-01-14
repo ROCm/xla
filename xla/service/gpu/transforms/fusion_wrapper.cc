@@ -21,12 +21,14 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
-bool FusionWrapper::MustWrapInstruction(HloOpcode opcode) {
+bool FusionWrapper::MustWrapInstruction(const HloInstruction& instruction) {
+  const HloOpcode opcode = instruction.opcode();
   switch (opcode) {
     case HloOpcode::kAbs:
     case HloOpcode::kAcos:
     case HloOpcode::kAcosh:
     case HloOpcode::kAsin:
+    case HloOpcode::kAsinh:
     case HloOpcode::kAdd:
     case HloOpcode::kAnd:
     case HloOpcode::kAtan2:

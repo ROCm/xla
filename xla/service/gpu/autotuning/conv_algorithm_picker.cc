@@ -44,6 +44,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_print_options.h"
 #include "xla/literal_util.h"
+#include "xla/service/gpu/autotuning/autotune_cache_key.h"
 #include "xla/service/gpu/autotuning/autotuner_util.h"
 #include "xla/service/gpu/autotuning/gpu_autotuning.pb.h"
 #include "xla/service/gpu/autotuning/redzone_buffers.h"
@@ -58,13 +59,13 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/cuda/cuda_platform_id.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/device_description.h"
-#include "xla/stream_executor/device_memory.h"
-#include "xla/stream_executor/device_memory_allocator.h"
 #include "xla/stream_executor/dnn.h"
+#include "xla/stream_executor/engine_options.h"
 #include "xla/stream_executor/gpu/redzone_allocator.h"
 #include "xla/stream_executor/lazy_op_runner.h"
-#include "xla/stream_executor/numeric_options.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/rocm/rocm_platform_id.h"
 #include "xla/stream_executor/scratch_allocator.h"
@@ -72,7 +73,6 @@ limitations under the License.
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/logging.h"
-#include "xla/tsl/platform/status.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/protobuf/dnn.pb.h"
 #include "xla/tsl/util/env_var.h"
@@ -86,7 +86,7 @@ namespace xla {
 namespace gpu {
 namespace {
 
-using se::DeviceMemoryBase;
+using se::DeviceAddressBase;
 using se::dnn::AlgorithmDesc;
 using std::optional;
 
@@ -102,7 +102,7 @@ Shape MaybeTupleElementShape(Shape shape, int64_t tuple_idx) {
 class ScratchAllocator : public se::ScratchAllocator {
  public:
   ScratchAllocator(int device_ordinal,
-                   se::DeviceMemoryAllocator* memory_allocator)
+                   se::DeviceAddressAllocator* memory_allocator)
       : device_ordinal_(device_ordinal), memory_allocator_(memory_allocator) {}
 
   int64_t GetMemoryLimitInBytes() override {
@@ -112,29 +112,29 @@ class ScratchAllocator : public se::ScratchAllocator {
 
   static int64_t GetDefaultMemoryLimitInBytes() {
     int64_t value;
-    TF_CHECK_OK(tsl::ReadInt64FromEnvVar("TF_CUDNN_WORKSPACE_LIMIT_IN_MB",
-                                         1LL << 12, &value));
+    CHECK_OK(tsl::ReadInt64FromEnvVar("TF_CUDNN_WORKSPACE_LIMIT_IN_MB",
+                                      1LL << 12, &value));
     return value * (1LL << 20);
   }
 
-  absl::StatusOr<se::DeviceMemory<uint8_t>> AllocateBytes(
+  absl::StatusOr<se::DeviceAddress<uint8_t>> AllocateBytes(
       int64_t byte_size) override;
 
   template <typename T>
-  absl::StatusOr<se::DeviceMemory<T>> Allocate(int64_t num_elements) {
-    TF_ASSIGN_OR_RETURN(se::DeviceMemory<uint8_t> bytes,
+  absl::StatusOr<se::DeviceAddress<T>> Allocate(int64_t num_elements) {
+    TF_ASSIGN_OR_RETURN(se::DeviceAddress<uint8_t> bytes,
                         AllocateBytes(num_elements * sizeof(T)));
-    return se::DeviceMemory<T>(bytes);
+    return se::DeviceAddress<T>(bytes);
   }
 
  private:
   const int device_ordinal_;
-  se::DeviceMemoryAllocator* memory_allocator_;
-  std::vector<se::OwningDeviceMemory> allocated_buffers_;
+  se::DeviceAddressAllocator* memory_allocator_;
+  std::vector<se::ScopedDeviceAddress<uint8_t>> allocated_buffers_;
   int64_t total_allocated_bytes_ = 0;
 };
 
-absl::StatusOr<se::DeviceMemory<uint8_t>> ScratchAllocator::AllocateBytes(
+absl::StatusOr<se::DeviceAddress<uint8_t>> ScratchAllocator::AllocateBytes(
     int64_t byte_size) {
   CHECK_GE(byte_size, 0) << "byte_size must be positive.";
   if (byte_size > GetMemoryLimitInBytes()) {
@@ -143,19 +143,19 @@ absl::StatusOr<se::DeviceMemory<uint8_t>> ScratchAllocator::AllocateBytes(
         GetMemoryLimitInBytes()));
   }
 
-  TF_ASSIGN_OR_RETURN(se::OwningDeviceMemory allocated_buffer,
+  TF_ASSIGN_OR_RETURN(se::ScopedDeviceAddress<uint8_t> allocated_buffer,
                       memory_allocator_->Allocate(device_ordinal_, byte_size,
                                                   /*retry_on_failure=*/false));
   total_allocated_bytes_ += byte_size;
 
-  se::DeviceMemoryBase buffer_addr = *allocated_buffer;
+  se::DeviceAddressBase buffer_addr = *allocated_buffer;
   allocated_buffers_.push_back(std::move(allocated_buffer));
-  return se::DeviceMemory<uint8_t>(buffer_addr);
+  return se::DeviceAddress<uint8_t>(buffer_addr);
 }
 
 absl::StatusOr<std::vector<GenericConvRunner>> GetAlgorithms(
     const GpuConvConfig& config, se::Stream* stream, bool use_fallback,
-    const se::NumericOptions& numeric_options) {
+    const se::EngineOptions& engine_options) {
   TF_ASSIGN_OR_RETURN(se::dnn::DataType input_type,
                       GetDNNDataTypeFromPrimitiveType(config.input_type));
 
@@ -189,7 +189,7 @@ absl::StatusOr<std::vector<GenericConvRunner>> GetAlgorithms(
           /* leakyrelu_alpha = */ config.fusion->leakyrelu_alpha, stream,
           config.input_descriptor, config.filter_descriptor,
           config.bias_descriptor, config.output_descriptor, config.conv_desc,
-          use_fallback, config.fusion->mode, numeric_options, &runners));
+          use_fallback, config.fusion->mode, engine_options, &runners));
       for (auto& runner : runners) {
         TF_ASSIGN_OR_RETURN(
             auto runner_cache,
@@ -202,12 +202,12 @@ absl::StatusOr<std::vector<GenericConvRunner>> GetAlgorithms(
 
     case se::dnn::ConvolutionKind::FORWARD_GRAPH: {
       std::vector<std::unique_ptr<const se::dnn::GraphConvRunner>> runners;
-      // This path is cuDNN-only, where the DeviceMemoryBase arguments and the
+      // This path is cuDNN-only, where the DeviceAddressBase arguments and the
       // allocator are unused; so, they're all provided as nullptr.
       TF_RETURN_IF_ERROR(dnn->GetGraphConvolveRunners(
           kind, input_type, output_type, stream, config.input_descriptor,
           config.filter_descriptor, config.output_descriptor, config.conv_desc,
-          use_fallback, numeric_options, &runners, config.serialized_graph));
+          use_fallback, engine_options, &runners, config.serialized_graph));
       for (auto& runner : runners) {
         TF_ASSIGN_OR_RETURN(
             auto runner_cache,
@@ -222,16 +222,16 @@ absl::StatusOr<std::vector<GenericConvRunner>> GetAlgorithms(
     case se::dnn::ConvolutionKind::BACKWARD_DATA:
     case se::dnn::ConvolutionKind::BACKWARD_FILTER: {
       std::vector<std::unique_ptr<const se::dnn::ConvRunner>> runners;
-      // This path is cuDNN-only, where the DeviceMemoryBase arguments and the
+      // This path is cuDNN-only, where the DeviceAddressBase arguments and the
       // allocator are unused; so, they're all provided as nullptr.
       TF_RETURN_IF_ERROR(dnn->GetConvolveRunners(
           kind, input_type, output_type, stream, config.input_descriptor,
-          /* input_data = */ DeviceMemoryBase(nullptr),
+          /* input_data = */ DeviceAddressBase(nullptr),
           config.filter_descriptor,
-          /* filter_data = */ DeviceMemoryBase(nullptr),
+          /* filter_data = */ DeviceAddressBase(nullptr),
           config.output_descriptor,
-          /* output_data = */ DeviceMemoryBase(nullptr), config.conv_desc,
-          use_fallback, nullptr, numeric_options, &runners));
+          /* output_data = */ DeviceAddressBase(nullptr), config.conv_desc,
+          use_fallback, nullptr, engine_options, &runners));
 
       for (auto& runner : runners) {
         TF_ASSIGN_OR_RETURN(
@@ -249,11 +249,11 @@ absl::StatusOr<std::vector<GenericConvRunner>> GetAlgorithms(
 
 absl::StatusOr<std::vector<std::unique_ptr<const se::dnn::ConvRunner>>>
 GetMIOpenAlgorithms(const HloCustomCallInstruction* instr,
-                    absl::Span<se::DeviceMemoryBase> operand_buffers,
-                    absl::Span<se::DeviceMemoryBase> result_buffers,
+                    absl::Span<se::DeviceAddressBase> operand_buffers,
+                    absl::Span<se::DeviceAddressBase> result_buffers,
                     se::StreamExecutor* stream_exec,
                     ScratchAllocator* scratch_allocator, se::Stream* stream,
-                    const se::NumericOptions& numeric_options) {
+                    const se::EngineOptions& engine_options) {
   TF_ASSIGN_OR_RETURN(GpuConvConfig config, GetGpuConvConfig(instr));
 
   TF_ASSIGN_OR_RETURN(se::dnn::DataType dtype,
@@ -274,8 +274,7 @@ GetMIOpenAlgorithms(const HloCustomCallInstruction* instr,
       params.config->filter_descriptor, params.filter_buf,
       params.config->output_descriptor, params.output_buf,
       params.config->conv_desc,
-      /* use_fallback = */ false, scratch_allocator, numeric_options,
-      &runners));
+      /* use_fallback = */ false, scratch_allocator, engine_options, &runners));
 
   return runners;
 }
@@ -598,7 +597,7 @@ absl::StatusOr<AutotuneResult> GpuConvAlgorithmPicker::AutotuneOneConvRunner(
                         absl::StrCat("Scratch allocation failed: ",
                                      scratch_or.status().ToString()));
   }
-  se::DeviceMemoryBase scratch_memory = scratch_or.value();
+  se::DeviceAddressBase scratch_memory = scratch_or.value();
 
   // Use assignment instead of brace-list to make GCC 4.9 happy.
   RunConvOptions options;
@@ -608,9 +607,9 @@ absl::StatusOr<AutotuneResult> GpuConvAlgorithmPicker::AutotuneOneConvRunner(
   float max_time = 0;
   float min_time = std::numeric_limits<float>::max();
   absl::Status launch_status;
-  std::vector<se::DeviceMemoryBase> operand_buffers =
+  std::vector<se::DeviceAddressBase> operand_buffers =
       runtime_arguments.rz_buffers.input_buffers();
-  std::vector<se::DeviceMemoryBase> result_buffers =
+  std::vector<se::DeviceAddressBase> result_buffers =
       runtime_arguments.rz_buffers.output_buffers();
 
   // Dry-run to warmup the plan.
@@ -672,7 +671,7 @@ absl::StatusOr<AutotuneResult> GpuConvAlgorithmPicker::AutotuneOneConvRunner(
   if (!ShouldCheckConv(runtime_arguments.hlo_module_config)) {
     if (!reference_result->has_value()) {
       (*reference_result) = {
-          alg, std::vector<DeviceMemoryBase>(result_buffers.size())};
+          alg, std::vector<DeviceAddressBase>(result_buffers.size())};
     }
     return result;
   }
@@ -763,7 +762,7 @@ absl::StatusOr<AutotuneResult> GpuConvAlgorithmPicker::AutotuneOneConvRunner(
     }
   } else {
     XLA_SCOPED_LOGGING_TIMER_LEVEL("Memcpy Reference Result", 2);
-    std::vector<DeviceMemoryBase> reference_result_buffers(
+    std::vector<DeviceAddressBase> reference_result_buffers(
         result_buffers.size());
     for (int i = 0; i < result_buffers.size(); ++i) {
       TF_ASSIGN_OR_RETURN(
@@ -812,8 +811,9 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheCuda(
         instr->precision_config().operand_precision(),
         [](int precision) { return precision <= PrecisionConfig::HIGH; });
   }
-  const se::NumericOptions numeric_options{
-      RequireDeterminism(instr->GetModule()->config()), allow_tf32};
+  const se::EngineOptions engine_options{
+      RequireDeterminism(instr->GetModule()->config()), allow_tf32,
+      /*require_command_buffer=*/false};
 
   // Use the first algorithm that's supported as reference. There isn't a
   // particular reason to use it, as any algorithm suffices. It doesn't make
@@ -827,7 +827,7 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheCuda(
   TF_ASSIGN_OR_RETURN(
       std::vector<GenericConvRunner> runners,
       GetAlgorithms(runtime_arguments.gpu_conv_config, stream,
-                    /* use_fallback = */ false, numeric_options));
+                    /* use_fallback = */ false, engine_options));
 
   std::vector<AutotuneResult> profile_results;
   for (auto& runner_cache : runners) {
@@ -850,7 +850,7 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheCuda(
     TF_ASSIGN_OR_RETURN(
         std::vector<GenericConvRunner> fallback_runners,
         GetAlgorithms(runtime_arguments.gpu_conv_config, stream,
-                      /* use_fallback = */ true, numeric_options));
+                      /* use_fallback = */ true, engine_options));
 
     for (auto& runner_cache : fallback_runners) {
       TF_ASSIGN_OR_RETURN(
@@ -872,7 +872,7 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheCuda(
         instr_log.add_operand_addresses(reinterpret_cast<uint64_t>(
             runtime_arguments.rz_buffers.input_buffers()[i].opaque()));
       }
-      for (se::DeviceMemoryBase result_buffer :
+      for (se::DeviceAddressBase result_buffer :
            runtime_arguments.rz_buffers.output_buffers()) {
         instr_log.add_result_addresses(
             reinterpret_cast<uint64_t>(result_buffer.opaque()));
@@ -983,21 +983,20 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheRocm(
   const bool allow_tf32 = absl::c_all_of(
       instr->precision_config().operand_precision(),
       [](int precision) { return precision <= PrecisionConfig::HIGH; });
-
-  const se::NumericOptions numeric_options{
-      RequireDeterminism(hlo_config),
-      allow_tf32};
+  const se::EngineOptions engine_options{
+      RequireDeterminism(instr->GetModule()->config()), allow_tf32,
+      /*require_command_buffer=*/false};
 
   se::StreamExecutor* stream_exec = config_.GetExecutor();
   const auto device_ordinal = stream_exec->device_ordinal();
-  std::vector<se::DeviceMemoryBase> operand_buffers;
+  std::vector<se::DeviceAddressBase> operand_buffers;
 
   // allocator either points to this->allocator_ or, if that's null, to a
   // se::StreamExecutorMemoryAllocator for stream_exec.
-  se::DeviceMemoryAllocator* allocator = config_.GetAllocator();
+  se::DeviceAddressAllocator* allocator = config_.GetAllocator();
   ScratchAllocator input_output_allocator(device_ordinal, allocator);
   TF_ASSIGN_OR_RETURN(se::Stream* const stream, config_.GetStream());
-  const auto initialize_buffer = [stream](DeviceMemoryBase buffer) {
+  const auto initialize_buffer = [stream](DeviceAddressBase buffer) {
     // Although we don't have evidence this matters, zero out the buffers
     // before autotuning.  It's conceivable that using uninitialized memory as
     // the inputs might affect performance if e.g. the inputs contain
@@ -1016,7 +1015,7 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheRocm(
     operand_buffers.push_back(buffer);
   }
 
-  std::vector<se::DeviceMemoryBase> result_buffers(
+  std::vector<se::DeviceAddressBase> result_buffers(
       instr->shape().tuple_shapes().size());
   if (instr->shape().IsTuple()) {
     for (int i = 0; i < instr->shape().tuple_shapes().size(); ++i) {
@@ -1040,7 +1039,7 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheRocm(
       std::vector<std::unique_ptr<const se::dnn::ConvRunner>> runners,
       GetMIOpenAlgorithms(instr, absl::MakeSpan(operand_buffers),
                           absl::MakeSpan(result_buffers), stream_exec,
-                          &scratch_allocator, stream, numeric_options));
+                          &scratch_allocator, stream, engine_options));
 
   std::vector<AutotuneResult> profile_results;
   // If using TF_ROCM_USE_IMMEDIATE_MODE but user doesn't want autotuning, choose the first
@@ -1073,7 +1072,7 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheRocm(
               << instr->ToString();
 
       TF_ASSIGN_OR_RETURN(
-          DeviceMemoryBase scratch_memory,
+          DeviceAddressBase scratch_memory,
           scratch_allocator.AllocateBytes(runner->GetWorkspaceSize()));
 
       TF_ASSIGN_OR_RETURN(auto lazy_runner,
@@ -1224,14 +1223,13 @@ absl::StatusOr<bool> GpuConvAlgorithmPicker::RunOnComputation(
   return changed;
 }
 
-absl::StatusOr<bool> GpuConvAlgorithmPicker::Run(
+absl::StatusOr<bool> GpuConvAlgorithmPicker::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   XLA_SCOPED_LOGGING_TIMER(
       absl::StrCat("GpuConvAlgorithmPicker for ", module->name()));
 
-  if (!IsEnabled(module) && !std::holds_alternative<se::RocmComputeCapability>(
-                                config_.GetGpuComputeCapability())) {
+  if (!IsEnabled(module) && !config_.GetGpuComputeCapability().IsRocm()) {
     VLOG(3) << "Convolution auto-tuning disabled, GpuConvAlgorithmPicker "
                "returning early.";
     return false;

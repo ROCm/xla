@@ -73,7 +73,6 @@ build:xla_sgpu -- \
 -//xla/service:p2p_schedule_preparation_test \
 -//xla/pjrt/distributed:topology_util_test \
 -//xla/pjrt/distributed:client_server_test \
--//xla/service/gpu/tests:dynamic_shared_memory_test_amdgpu_any \
 -//xla/service/gpu/tests:gpu_cub_sort_test_amdgpu_any
 
 test:xla_mgpu -- \

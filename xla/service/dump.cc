@@ -45,6 +45,8 @@ limitations under the License.
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Transforms/LocationSnapshot.h"
+#include "google/protobuf/descriptor.h"
+#include "google/protobuf/text_format.h"
 #include "xla/debug_options_flags.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -64,7 +66,6 @@ limitations under the License.
 #include "xla/util.h"
 #include "tsl/platform/path.h"
 #include "tsl/platform/platform.h"
-#include "tsl/platform/protobuf.h"
 #include "tsl/platform/regexp.h"
 #include "tsl/profiler/lib/scoped_annotation.h"
 
@@ -210,6 +211,7 @@ struct CanonicalDebugOptions {
         return RE2::PartialMatch(module_name, pattern);
       };
     } else if (!opts.xla_dump_hlo_pass_re().empty() ||
+               !opts.xla_dump_emitter_re().empty() ||
                !opts.xla_dump_to().empty() || output_format_specified) {
       should_dump_module = [](string_view) { return true; };
     } else {
@@ -225,6 +227,15 @@ struct CanonicalDebugOptions {
       };
     } else {
       should_dump_pass = [](string_view) { return false; };
+    }
+
+    if (!opts.xla_dump_emitter_re().empty()) {
+      std::string pattern = opts.xla_dump_emitter_re();
+      should_dump_emitter = [pattern](string_view emitter_name) {
+        return RE2::PartialMatch(emitter_name, pattern);
+      };
+    } else {
+      should_dump_emitter = [](string_view) { return false; };
     }
 
     // Initialize should_dump_pipeline. If the option was not specified, dump
@@ -251,6 +262,7 @@ struct CanonicalDebugOptions {
                       "is not set, so cannot dump anywhere.";
         should_dump_module = [](string_view) { return false; };
         should_dump_pass = [](string_view) { return false; };
+        should_dump_emitter = [](string_view) { return false; };
         should_dump_pipeline = [](string_view) { return false; };
       }
     }
@@ -269,6 +281,7 @@ struct CanonicalDebugOptions {
   std::string dump_to;
   std::function<bool(string_view module_name)> should_dump_module;
   std::function<bool(string_view pass_name)> should_dump_pass;
+  std::function<bool(string_view emitter_name)> should_dump_emitter;
   std::function<bool(string_view pipeline_name)> should_dump_pipeline;
 
   // dump_ir isn't present here because this file is mostly concerned with
@@ -1015,6 +1028,11 @@ bool DumpingEnabledForHloPass(string_view hlo_pass_name,
   return CanonicalDebugOptions(opts).should_dump_pass(hlo_pass_name);
 }
 
+bool DumpingEnabledForEmitter(string_view emitter_name,
+                              const DebugOptions& opts) {
+  return CanonicalDebugOptions(opts).should_dump_emitter(emitter_name);
+}
+
 bool DumpingToStdout(const DebugOptions& opts) {
   return CanonicalDebugOptions(opts).dumping_to_stdout();
 }
@@ -1176,6 +1194,8 @@ void DumpHloUnoptimizedSnapshotIfEnabled(
       return;
     }
     tsl::WritableFileCopyingOutputStream output_stream(file.get());
+    // TODO - b/457711066: Add missing include once capybara can re-write the
+    // dependency correctly.
     tsl::protobuf::io::CopyingOutputStreamAdaptor adaptor(&output_stream);
     if (!SerializeHloUnoptimizedSnapshot(hlo_snapshot, &adaptor).ok()) {
       LOG(ERROR) << "Failed to serialize HLO unoptimized snapshot proto";

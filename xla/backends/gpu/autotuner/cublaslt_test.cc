@@ -17,12 +17,12 @@ limitations under the License.
 
 #include <memory>
 #include <string>
-#include <variant>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
@@ -30,14 +30,13 @@ limitations under the License.
 #include "xla/hlo/testlib/filecheck.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/service/compiler.h"
+#include "xla/service/executable.h"
+#include "xla/service/gpu/nvptx_compiler.h"
 #include "xla/service/platform_util.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/device_description.pb.h"
-#include "xla/stream_executor/platform.h"
-#include "xla/stream_executor/semantic_version.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/lib/core/status_test_util.h"
-#include "xla/tsl/platform/status_matchers.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/xla.pb.h"
 
@@ -45,9 +44,6 @@ namespace xla {
 namespace gpu {
 
 using CublasLtBackendConfig = AutotuneResult::GemmKey;
-using ::tsl::testing::IsOk;
-using ::tsl::testing::IsOkAndHolds;
-using ::tsl::testing::StatusIs;
 
 const char kCublasLtCustomCallHlo[] = R"(
 HloModule module
@@ -107,18 +103,18 @@ const char kUnsupportedHlo[] = R"(
 class CublasLtBackendTest : public HloHardwareIndependentTestBase {
  protected:
   DebugOptions debug_options_;
-  se::Platform* platform_;
+  NVPTXCompiler compiler_;
   se::StreamExecutor* stream_executor_;
-  std::unique_ptr<Compiler> compiler_;
-  Compiler::TargetConfig target_config_;
+  Compiler::GpuTargetConfig target_config_;
   CublasLtBackend backend_;
 
   CublasLtBackendTest()
-      : platform_(PlatformUtil::GetDefaultPlatform().value()),
-        stream_executor_(platform_->ExecutorForDevice(0).value()),
-        compiler_(Compiler::GetForPlatform(platform_).value()),
+      : stream_executor_(PlatformUtil::GetDefaultPlatform()
+                             .value()
+                             ->ExecutorForDevice(0)
+                             .value()),
         target_config_(stream_executor_),
-        backend_(stream_executor_, &debug_options_, compiler_.get(),
+        backend_(stream_executor_, &debug_options_, &compiler_,
                  &target_config_) {}
 
   CublasLtBackendConfig ExpectedDefaultAlgorithm() {
@@ -201,80 +197,49 @@ TEST_F(CublasLtBackendTest, ApplyConfig) {
               absl_testing::IsOkAndHolds(true));
 }
 
-const char kCublasLtSiluHlo[] = R"(
+TEST_F(CublasLtBackendTest, CompileFp8SwapOperands) {
+  if (!stream_executor_->GetDeviceDescription()
+           .cuda_compute_capability()
+           .IsAtLeast(8, 9)) {
+    GTEST_SKIP() << "FP8 requires compute capability 8.9 or higher";
+  }
+  // CuBLASLt requires the operands to be in a specific layout (transposed /
+  // non-transposed) for FP8 matrix multiplication. This HLO defines a
+  // row-major output which forces the backend to swap operands, implicitly
+  // satisfying the layout requirements.
+  const char kFp8MatmulWithSwapHlo[] = R"(
   HloModule module
 
-  ENTRY main {
-    p0 = f32[100,100] parameter(0)
-    p1 = f32[100,100] parameter(1)
-    %custom-call.1 = (f32[100,100]{1,0}, s8[4194304]{0}) custom-call(p0, p1),
-      custom_call_target="__cublas$lt$matmul",
-      backend_config={
-        "gemm_backend_config":{
-          "selected_algorithm":"0",
-          "alpha_real":1,
-          "beta":0,
-          "dot_dimension_numbers":{
-            "lhs_contracting_dimensions":["1"],
-            "rhs_contracting_dimensions":["0"],
-            "lhs_batch_dimensions":[],
-            "rhs_batch_dimensions":[]
-          },
-          "alpha_imag":0,
-          "precision_config":{
-            "operand_precision":["DEFAULT","DEFAULT"],
-            "algorithm":"ALG_UNSET"
-          },
-          "epilogue":"SILU",
-          "lhs_stride":"10000",
-          "rhs_stride":"10000",
-          "grad_x":false,
-          "grad_y":false,
-          "damax_output":false
-        }
-      }
-    ROOT %get-tuple-element = f32[100,100]{1,0} get-tuple-element(%custom-call.1), index=0
+  ENTRY %main (lhs: f8e4m3fn[16,16], rhs: f8e4m3fn[16,16], lhs_scale: f32[], rhs_scale: f32[]) -> f32[16,16] {
+    %lhs = f8e4m3fn[16,16]{1,0} parameter(0)
+    %rhs = f8e4m3fn[16,16]{1,0} parameter(1)
+    %lhs_scale = f32[] parameter(2)
+    %rhs_scale = f32[] parameter(3)
+
+    %custom-call = (f32[16,16]{1,0}, s8[100]{0}) custom-call(%lhs, %rhs, %lhs_scale, %rhs_scale),
+      custom_call_target="__cublas$lt$matmul$f8",
+      backend_config={"gemm_backend_config":{
+        "dot_dimension_numbers":{
+          "lhs_contracting_dimensions":["1"],
+          "rhs_contracting_dimensions":["0"],
+          "lhs_batch_dimensions":[],
+          "rhs_batch_dimensions":[]
+        },
+        "alpha_real": 1,
+        "beta": 0
+      }}
+    ROOT %get-tuple-element = f32[16,16]{1,0} get-tuple-element(%custom-call), index=0
   })";
 
-TEST_F(CublasLtBackendTest, SiluEpilogueSupportedOnRocm7) {
-  const auto& device_description = stream_executor_->GetDeviceDescription();
-  const auto& gpu_cc = device_description.gpu_compute_capability();
-  constexpr se::SemanticVersion kMinRocmVersion{7, 0, 0};
-
-  if (!std::holds_alternative<se::RocmComputeCapability>(gpu_cc) ||
-      device_description.compile_time_toolkit_version() < kMinRocmVersion) {
-    GTEST_SKIP() << "SiLU epilogue requires ROCm 7.0 or later";
-  }
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
-                          ParseAndReturnVerifiedModule(kCublasLtSiluHlo));
-
-  absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>> configs =
-      backend_.GetSupportedConfigs(
-          *hlo_module->entry_computation()->root_instruction()->operand(0));
-
-  EXPECT_THAT(configs,
-              absl_testing::IsOkAndHolds(testing::SizeIs(testing::Gt(0))));
-}
-
-TEST_F(CublasLtBackendTest, SiluEpilogueNotSupportedOnNonRocm7) {
-  const auto& device_description = stream_executor_->GetDeviceDescription();
-  const auto& gpu_cc = device_description.gpu_compute_capability();
-  constexpr se::SemanticVersion kMinRocmVersion{7, 0, 0};
-
-  if (std::holds_alternative<se::RocmComputeCapability>(gpu_cc) &&
-      device_description.compile_time_toolkit_version() >= kMinRocmVersion) {
-    GTEST_SKIP() << "Test requires CUDA or ROCm < 7.0";
-  }
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
-                          ParseAndReturnVerifiedModule(kCublasLtSiluHlo));
-
-  absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>> configs =
-      backend_.GetSupportedConfigs(
-          *hlo_module->entry_computation()->root_instruction()->operand(0));
-
-  EXPECT_THAT(configs, testing::Not(absl_testing::IsOk()));
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                          ParseAndReturnVerifiedModule(kFp8MatmulWithSwapHlo));
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<BackendConfig> config,
+      backend_.GetDefaultConfig(
+          *(module->entry_computation()->root_instruction()->operand(0))));
+  absl::StatusOr<std::unique_ptr<Executable>> executable = backend_.Compile(
+      *(module->entry_computation()->root_instruction()->operand(0)), *config);
+  EXPECT_THAT(executable, absl_testing::IsOk());
 }
 
 }  // namespace gpu

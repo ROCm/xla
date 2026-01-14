@@ -28,6 +28,7 @@ limitations under the License.
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
@@ -53,23 +54,8 @@ limitations under the License.
 #include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/util.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/status.h"
 
 namespace xla {
-
-#if defined(PLATFORM_GOOGLE)
-FusionDecision::FusionDecision(bool decision,
-                               absl::SourceLocation source_location) {
-  if (!decision) {
-    explanation_ =
-        absl::StrCat("Not fusing: due to ", source_location.file_name(), ":",
-                     source_location.line());
-  }
-}
-#endif  // PLATFORM_GOOGLE
-
 namespace {
 
 // These nodes can always be duplicated into consumers, even if
@@ -177,6 +163,7 @@ bool IsAlwaysDuplicable(const HloInstruction& instruction) {
     case HloOpcode::kAcos:
     case HloOpcode::kAcosh:
     case HloOpcode::kAsin:
+    case HloOpcode::kAsinh:
     case HloOpcode::kAddDependency:
     case HloOpcode::kAfterAll:
     case HloOpcode::kAtan2:
@@ -598,7 +585,7 @@ std::unique_ptr<FusionQueue> InstructionFusion::GetFusionQueue(
   return std::make_unique<ReversePostOrderFusionQueue>(computation);
 }
 
-absl::StatusOr<bool> InstructionFusion::Run(
+absl::StatusOr<bool> InstructionFusion::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   bool changed = false;
@@ -799,7 +786,7 @@ HloInstruction* InstructionFusion::AddFusionInstruction(
     // have the same value as the root of the fused computation. However, we
     // copy the value nontheless to simplify some use cases that involve
     // fusions.
-    TF_CHECK_OK(computation->ReplaceInstruction(consumer, fusion_instruction));
+    CHECK_OK(computation->ReplaceInstruction(consumer, fusion_instruction));
   }
   return fusion_instruction;
 }

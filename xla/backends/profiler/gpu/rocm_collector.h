@@ -16,36 +16,30 @@ limitations under the License.
 #ifndef XLA_BACKENDS_PROFILER_GPU_ROCM_COLLECTOR_H_
 #define XLA_BACKENDS_PROFILER_GPU_ROCM_COLLECTOR_H_
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
-#include <limits>
+#include <memory>
+#include <string>
 #include <tuple>
+#include <vector>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
-#include "absl/container/node_hash_set.h"
-#include "tsl/profiler/protobuf/xplane.pb.h"
-#include "tsl/profiler/lib/profiler_factory.h"
-#include "tsl/profiler/lib/profiler_interface.h"
-#include "xla/tsl/profiler/utils/parse_annotation.h"
-#include "xla/tsl/profiler/utils/xplane_builder.h"
-#include "xla/tsl/profiler/utils/xplane_schema.h"
-#include "xla/tsl/profiler/utils/xplane_utils.h"
-
-#include "xla/stream_executor/rocm/roctracer_wrapper.h"
+#include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
+#include "absl/synchronization/mutex.h"
+#include "rocm/include/hip/hip_runtime.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
+#include "xla/tsl/profiler/utils/xplane_builder.h"
+#include "tsl/profiler/protobuf/xplane.pb.h"
 
 namespace xla {
 namespace profiler {
 
-using tsl::profiler::XEvent;
-using tsl::profiler::XLineBuilder;
-using tsl::profiler::XPlaneBuilder;
-using tsl::profiler::XSpace;
-
 inline std::string ToXStat(const KernelDetails& kernel_info,
                            double occupancy_pct) {
-  // on ROCM 6.4.x/7.0.0 rocprofiler sdk mixed up grid and workgroup size...
-  // only shows them with ROCm-7.x
   uint32_t grid_x = kernel_info.workgroup_x != 0
                         ? kernel_info.grid_x / kernel_info.workgroup_x
                         : 0,
@@ -68,10 +62,10 @@ struct RocmDeviceOccupancyParams {
   hipFuncAttributes attributes = {};
   int block_size = 0;
   size_t dynamic_smem_size = 0;
-  void* func_ptr = nullptr;
+  void* func_ptr;
 
   friend bool operator==(const RocmDeviceOccupancyParams& a,
-                         const RocmDeviceOccupancyParams& b) {
+                         const RocmDeviceOccupancyParams& b) noexcept {
     // Compare only the fields that affect occupancy decisions.
     return std::tuple{a.attributes.binaryVersion,
                       a.attributes.cacheModeCA,
@@ -100,19 +94,18 @@ struct RocmDeviceOccupancyParams {
   }
 
   friend bool operator!=(const RocmDeviceOccupancyParams& a,
-                         const RocmDeviceOccupancyParams& b) {
+                         const RocmDeviceOccupancyParams& b) noexcept {
     return !(a == b);
   }
 
   template <typename H>
-  friend H AbslHashValue(H hash_state, const RocmDeviceOccupancyParams& p) {
-    // Hash the same fields we use for equality.
+  friend H AbslHashValue(H hash_state,
+                         const RocmDeviceOccupancyParams& params) {
     return H::combine(
-        std::move(hash_state), p.attributes.binaryVersion, p.attributes.cacheModeCA,
-        p.attributes.constSizeBytes, p.attributes.localSizeBytes,
-        p.attributes.maxDynamicSharedSizeBytes, p.attributes.maxThreadsPerBlock,
-        p.attributes.numRegs, p.attributes.preferredShmemCarveout,
-        p.attributes.ptxVersion, p.block_size, p.dynamic_smem_size, p.func_ptr);
+        std::move(hash_state), params.attributes.maxThreadsPerBlock,
+        params.attributes.numRegs, params.attributes.sharedSizeBytes,
+        params.attributes.maxDynamicSharedSizeBytes, params.block_size,
+        params.dynamic_smem_size, params.func_ptr);
   }
 };
 
@@ -133,7 +126,7 @@ class RocmTraceCollector {
   virtual void OnEventsDropped(const std::string& reason,
                                uint32_t num_events) = 0;
   virtual void Flush() = 0;
-  virtual void Export(XSpace* space) = 0;
+  virtual void Export(tsl::profiler::XSpace* space) = 0;
 
  protected:
   RocmTraceCollectorOptions options_;
@@ -147,22 +140,23 @@ class RocmTraceCollector {
 class PerDeviceCollector {
  public:
   void Export(uint64_t start_walltime_ns, uint64_t start_gputime_ns,
-              uint64_t end_gputime_ns, XPlaneBuilder& device_plane,
-              XPlaneBuilder& host_plane);
+              uint64_t end_gputime_ns,
+              tsl::profiler::XPlaneBuilder* device_plane,
+              tsl::profiler::XPlaneBuilder* host_plane);
 
   PerDeviceCollector() = default;
 
   void AddEvent(RocmTracerEvent&& event);
   void GetDeviceCapabilities(int32_t device_ordinal,
-                             XPlaneBuilder& device_plane);
+                             tsl::profiler::XPlaneBuilder* device_plane);
 
  private:
   OccupancyStats GetOccupancy(const RocmDeviceOccupancyParams& params) const;
-  void CreateXEvent(const RocmTracerEvent& event, XPlaneBuilder& plane,
-                    uint64_t start_gpu_ns, uint64_t end_gpu_ns,
-                    XLineBuilder& line);
+  void CreateXEvent(const RocmTracerEvent& event,
+                    tsl::profiler::XPlaneBuilder* plane, uint64_t start_gpu_ns,
+                    uint64_t end_gpu_ns, tsl::profiler::XLineBuilder* line);
   void SortByStartTime();
-  bool IsHostEvent(const RocmTracerEvent& event, tsl::int64& line_id);
+  bool IsHostEvent(const RocmTracerEvent& event, int64_t* line_id);
 
  private:
   absl::Mutex events_mutex_;
@@ -185,7 +179,7 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
 
   void AddEvent(RocmTracerEvent&& event, bool is_auxiliary) override;
   void Flush() override;
-  void Export(XSpace* space) override;
+  void Export(tsl::profiler::XSpace* space) override;
 
   void OnEventsDropped(const std::string& reason,
                        uint32_t correlation_id) override {
@@ -222,8 +216,8 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
 };  // RocmTraceCollectorImpl
 
 std::unique_ptr<RocmTraceCollector> CreateRocmCollector(
-    const RocmTraceCollectorOptions& options, const uint64_t start_walltime_ns,
-    const uint64_t start_gputime_ns);
+    const RocmTraceCollectorOptions& options, uint64_t start_walltime_ns,
+    uint64_t start_gputime_ns);
 
 }  // namespace profiler
 }  // namespace xla

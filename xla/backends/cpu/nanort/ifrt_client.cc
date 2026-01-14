@@ -103,7 +103,7 @@ limitations under the License.
 namespace xla::cpu {
 namespace {
 
-static const char kMemoryKind[] = "";
+static const char kMemoryKind[] = "device";
 
 // Returns a Future that is immediately ready with the given status. This is
 // mostly useful because everything NanoRT does is immediately ready.
@@ -412,9 +412,7 @@ class NanoArray final : public NanoValue<NanoArray, ifrt::Array> {
 
   absl::StatusOr<std::shared_ptr<const PjRtLayout>> pjrt_layout()
       const override {
-    TF_RETURN_IF_ERROR(ValidateNotDeleted());
-    return std::make_shared<PjRtLayout>(
-        LayoutUtil::MakeDescendingLayout(shape().dims().size()));
+    return nullptr;
   }
 
   absl::StatusOr<std::vector<ifrt::ArrayRef>> DisassembleIntoSingleDeviceArrays(
@@ -511,9 +509,10 @@ class NanoArray final : public NanoValue<NanoArray, ifrt::Array> {
   // Allocates an aligned buffer of the given size.
   static absl::StatusOr<OwnedDataPtr> AllocateData(size_t size) {
     OwnedDataPtr owned_data(
-        tsl::port::AlignedMalloc(std::max<size_t>(size, Align()), Align()),
+        tsl::port::AlignedMalloc(std::max<size_t>(size, Align()),
+                                 static_cast<std::align_val_t>(Align())),
         [](void* ptr) { tsl::port::AlignedFree(ptr); });
-    if (ABSL_PREDICT_FALSE(owned_data.get() == nullptr)) {
+    if (ABSL_PREDICT_FALSE(owned_data == nullptr)) {
       return Internal("Failed to allocate memory for NanoArray. Errno: %s",
                       strerror(errno));
     }
@@ -646,7 +645,7 @@ class ShardedNanoArray final : public NanoValue<ShardedNanoArray, ifrt::Array> {
 
   absl::StatusOr<std::shared_ptr<const PjRtLayout>> pjrt_layout()
       const override {
-    return std::make_shared<PjRtLayout>(Layout(shape().dims()));
+    return nullptr;
   }
 
   absl::StatusOr<std::vector<ifrt::ArrayRef>> DisassembleIntoSingleDeviceArrays(
@@ -682,6 +681,10 @@ class ShardedNanoArray final : public NanoValue<ShardedNanoArray, ifrt::Array> {
 
   absl::StatusOr<tsl::RCReference<NanoArray>> Assemble(
       ifrt::ShardingRef sharding) {
+    if (sharding->IsFullyReplicated()) {
+      return shards_[0];
+    }
+
     TF_ASSIGN_OR_RETURN(auto index_domains, sharding->IndexDomains(shape()));
     if (ABSL_PREDICT_FALSE(index_domains.size() != shards_.size())) {
       return absl::FailedPreconditionError(
@@ -1007,7 +1010,9 @@ class NanoExecutable final
     return client_->addressable_devices();
   }
 
-  const ifrt::DeviceListRef& devices() const override { return devices_; }
+  std::optional<ifrt::DeviceListRef> devices() const override {
+    return devices_;
+  }
 
   static char ID;  // NOLINT
 
@@ -1255,6 +1260,8 @@ class NanoDevice final : public llvm::RTTIExtends<NanoDevice, ifrt::Device> {
     static auto attributes = new ifrt::AttributeMap({});
     return *attributes;
   }
+
+  absl::string_view PlatformName() const override { return "cpu"; }
 
   absl::string_view Kind() const override { return "cpu"; }
 

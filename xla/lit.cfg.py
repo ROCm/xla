@@ -25,6 +25,8 @@ from xla.sh_test_with_runfiles import ShTestWithRunfiles
 # from xla.lit_google_cfg import ENV_FLAGS as google_env_flags
 # copybara:uncomment_end
 
+from xla.sh_test_with_runfiles import ShTestWithRunfiles
+
 # pylint: disable=undefined-variable
 
 extra_env_flags = []

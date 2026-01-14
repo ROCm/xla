@@ -50,20 +50,16 @@ limitations under the License.
 #include "xla/service/gpu/autotuning/autotuner_util.h"
 #include "xla/service/gpu/autotuning/conv_algorithm_picker.h"
 #include "xla/service/gpu/autotuning/gemm_fusion_autotuner.h"
-#include "xla/service/gpu/autotuning/gemm_algorithm_picker.h"
 #include "xla/service/gpu/cublas_cudnn.h"
 #include "xla/service/gpu/cublas_padding_requirements.h"
 #include "xla/service/gpu/gpu_compiler.h"
 #include "xla/service/gpu/llvm_gpu_backend/amdgpu_backend.h"
 #include "xla/service/gpu/target_constants.h"
 #include "xla/service/gpu/transforms/algebraic_simplifier.h"
-#include "xla/service/gpu/transforms/block_scaling_rewriter.h"
 #include "xla/service/gpu/transforms/conv_padding_legalization.h"
 #include "xla/service/gpu/transforms/conv_rewriter.h"
 #include "xla/service/gpu/transforms/cublas_pad_for_gemms.h"
 #include "xla/service/gpu/transforms/cudnn_fused_conv_rewriter.h"
-#include "xla/service/gpu/transforms/cudnn_fused_conv_decomposer.h"
-#include "xla/service/gpu/transforms/gpusolver_rewriter.h"
 #include "xla/service/gpu/transforms/triangular_solve_rewriter.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/service/hlo_verifier.h"
@@ -113,7 +109,7 @@ class ConvBfloat16Support : public FloatSupport {
 }  // namespace
 
 absl::Status AMDGPUCompiler::OptimizeHloConvolutionCanonicalization(
-    HloModule* hlo_module, se::GpuComputeCapability gpu_version,
+    HloModule* hlo_module, const se::GpuComputeCapability& gpu_version,
     se::dnn::VersionInfo dnn_version,
     const se::SemanticVersion& toolkit_version) {
   // Convert convolutions into CustomCalls to MIOpen, then canonicalize them
@@ -124,18 +120,13 @@ absl::Status AMDGPUCompiler::OptimizeHloConvolutionCanonicalization(
       /*allow_mixed_precision=*/false);
 
   // Convert unsupported bf16 convolutions to f32.
-  ConvBfloat16Support conv_bf16_support(
-      std::get<se::RocmComputeCapability>(gpu_version));
+  ConvBfloat16Support conv_bf16_support(*gpu_version.rocm_compute_capability());
   pipeline.AddPass<FloatNormalization>(&conv_bf16_support);
 
-  pipeline.AddPass<GpusolverRewriter>(
-      stream_executor::RocmSolverContext::Create);
   pipeline.AddPass<ConvRewriter>(gpu_version);
   pipeline.AddPass<ConvPaddingLegalization>();
-  // TODO(rocm): Until #12613 is fixed.
-  //  auto rcc = std::get<se::RocmComputeCapability>(gpu_version);
-  //  pipeline.AddPass<CudnnFusedConvRewriter>(rcc, dnn_version,
-  //  toolkit_version);
+  //auto rcc = gpu_version.rocm_compute_capability();
+  //pipeline.AddPass<CudnnFusedConvRewriter>(*rcc, dnn_version, toolkit_version);
 
   // The conv padding/vectorization passes which we need to get rid of.  They
   // also leave behind unnecessary tuple/get-tuple-element pairs that
@@ -190,24 +181,16 @@ absl::Status AMDGPUCompiler::OptimizeHloConvolutionCanonicalization(
 
 absl::Status AMDGPUCompiler::OptimizeHloPostLayoutAssignment(
     HloModule* hlo_module, se::StreamExecutor* stream_exec,
-    const CompileOptions& options, const TargetConfig& gpu_target_config,
+    const CompileOptions& options, const GpuTargetConfig& gpu_target_config,
     const GpuAliasInfo* alias_info, tsl::thread::ThreadPool* thread_pool) {
-  auto rocm_cc = std::get<se::RocmComputeCapability>(
-      gpu_target_config.device_description.gpu_compute_capability());
-
   HloPassPipeline pre_pipeline("AMDGPU post-layout_assignment part 1");
-  pre_pipeline.AddPass<BlockScalingRewriter>(
-      gpu_target_config.device_description, se::dnn::VersionInfo{},
-      rocm_cc.has_hipblaslt_mx_support());
-
-  auto rocm_compute_capability = std::get<se::RocmComputeCapability>(
-      gpu_target_config.device_description.gpu_compute_capability());
 
   pre_pipeline.AddPass<DotDimensionMerger>();
 
   for (const auto& req : HipblasPaddingRequirements) {
-    pre_pipeline.AddPass<CublasPadForGemms>(rocm_cc, req.data_type,
-                                            req.multiple_of);
+    pre_pipeline.AddPass<CublasPadForGemms>(
+        gpu_target_config.device_description.gpu_compute_capability(),
+        req.data_type, req.multiple_of);
   }
   // Padding a gemm operand that's a constant results in pad(constant).  Run
   // constant-folding to simplify this into a new constant.
@@ -241,7 +224,7 @@ absl::Status AMDGPUCompiler::OptimizeHloPostLayoutAssignment(
 // enabled.
 bool AMDGPUCompiler::RequiresCollectiveScheduleLinearizer(
     const HloModule* module, se::StreamExecutor* stream_exec) {
-  if (stream_exec == nullptr) {
+  if (stream_exec == nullptr || !GpuConvAlgorithmPicker::IsEnabled(module)) {
     return false;
   }
   for (const HloComputation* comp : module->MakeNonfusionComputations()) {
@@ -260,12 +243,39 @@ absl::Status AMDGPUCompiler::AddConvAndGemmAutotuningPasses(
     const CompileOptions& options, HloModule* hlo_module,
     AutotuneConfig& autotune_config, tsl::thread::ThreadPool* thread_pool,
     se::StreamExecutor* stream_exec,
-    const Compiler::TargetConfig* target_config) {
-  // We do autotuning irrespective of --xla_gpu_autotune_level.
+    const Compiler::GpuTargetConfig* target_config) {
+  const DebugOptions& debug_options = hlo_module->config().debug_options();
+  if (hlo_module->config()
+          .debug_options()
+          .xla_gpu_experimental_disable_binary_libraries() ||
+      debug_options.xla_gpu_autotune_level() == 0 ||
+      debug_options.xla_gpu_exclude_nondeterministic_ops() ||
+      stream_exec == nullptr) {
+    return absl::OkStatus();
+  }
+
+  // TODO(b/407494793): Remove the GpuConvAlgorithmPicker and use the autotuner
+  // it supports ROCM.
   pipeline->AddPass<GpuConvAlgorithmPicker>(autotune_config);
-  // Undo CudnnFusedConvRewriter work if no algorithm was found.
-  pipeline->AddPass<CudnnFusedConvDecomposer>();
-  pipeline->AddPass<GemmAlgorithmPicker>(autotune_config);
+
+  std::vector<std::unique_ptr<CodegenBackend>> backends;
+  // TODO(b/407494793): - Add proper support for ROCM. Currently the Cublas
+  // backend uses the same API as rocBLAS.
+  backends.push_back(std::make_unique<CublasBackend>(
+      stream_exec, &debug_options, this, target_config));
+  backends.push_back(std::make_unique<CublasLtBackend>(
+      stream_exec, &debug_options, this, target_config));
+  auto should_autotune = [](const HloInstruction& instruction) -> bool {
+    return instruction.opcode() == HloOpcode::kCustomCall &&
+           IsCublasGemm(instruction);
+  };
+  TF_ASSIGN_OR_RETURN(
+      std::unique_ptr<AutotunerPass> autotuner_pass,
+      AutotunerPass::Create(std::move(backends), debug_options, stream_exec,
+                            thread_pool, should_autotune, target_config,
+                            options.device_allocator));
+  pipeline->AddPass(std::move(autotuner_pass));
+
   return absl::OkStatus();
 }
 
@@ -289,13 +299,12 @@ AMDGPUCompiler::CompileTargetBinary(
     // parallelized compilation of LLVM modules.
     XLA_SCOPED_LOGGING_TIMER_IF(
         "AMDGPUCompiler::CompileTargetBinary - CompileToHsaco",
-        !options.is_autotuning_compilation);
+        module_config.debug_options().xla_enable_scoped_logging_timers());
     TF_ASSIGN_OR_RETURN(
         hsaco, amdgpu::CompileToHsaco(
                    llvm_module, device_description.gpu_compute_capability(),
                    module_config.debug_options(),
-                   module_config.compilation_cache_key(),
-                   options.is_autotuning_compilation));
+                   module_config.compilation_cache_key()));
   }
 
   return BackendCompileResult{"", std::move(hsaco)};
@@ -309,7 +318,7 @@ absl::Status AMDGPUCompiler::AddGemmFusionAutotuningPasses(
     se::StreamExecutor* stream_executor) {
   pipeline->AddPass<GemmFusionAutotuner>(autotune_config, toolkit_version,
                                          thread_pool, key_value_store,
-                                         symbolic_expr_context());
+                                         mlir_context());
   return absl::OkStatus();
 }
 

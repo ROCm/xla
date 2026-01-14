@@ -32,9 +32,9 @@ limitations under the License.
 #include "xla/service/platform_util.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
 #include "xla/tests/literal_test_util.h"
-#include "xla/tsl/platform/status.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/platform/test.h"
 #include "xla/xla_data.pb.h"
@@ -42,15 +42,16 @@ limitations under the License.
 namespace xla {
 namespace {
 
-class MultiOutputFusionTest : public HloTestBase {
- protected:
-  MultiOutputFusionTest() { error_spec_ = ErrorSpec{0.0001, 1e-2}; }
+constexpr ErrorSpec kErrorSpec{0.0001, 1e-2};
 
+class MultiOutputFusionTest
+    : public HloPjRtInterpreterReferenceMixin<HloPjRtTestBase> {
+ protected:
   // Layout assignment assumes that there are no fusions in the input graph.
   // Since the purpose of this test is to send pre-fused graphs to XLA, we have
   // to do layout assignment ourselves.
   DebugOptions GetDebugOptionsForTest() const override {
-    auto opts = HloTestBase::GetDebugOptionsForTest();
+    auto opts = HloPjRtTestBase::GetDebugOptionsForTest();
     opts.add_xla_disable_hlo_passes("layout-assignment");
     return opts;
   }
@@ -95,8 +96,8 @@ class MultiOutputFusionTest : public HloTestBase {
           HloInstruction::CreateGetTupleElement(elem_shape2, tuple, 0));
       auto gte1 = computation->AddInstruction(
           HloInstruction::CreateGetTupleElement(elem_shape2, tuple, 1));
-      TF_CHECK_OK(dot->ReplaceOperandWith(0, gte0));
-      TF_CHECK_OK(dot->ReplaceOperandWith(1, gte1));
+      CHECK_OK(dot->ReplaceOperandWith(0, gte0));
+      CHECK_OK(dot->ReplaceOperandWith(1, gte1));
 
       CHECK_NE(
           computation->CreateFusionInstruction(
@@ -112,7 +113,7 @@ class MultiOutputFusionTest : public HloTestBase {
     Literal literal_r0 = LiteralUtil::CreateR0<float>(-9.0f);
     TF_ASSERT_OK_AND_ASSIGN(
         Literal actual, Execute(std::move(hlo_module), {&literal_r0, &arg1}));
-    EXPECT_TRUE(LiteralTestUtil::Near(expect, actual, error_spec_));
+    EXPECT_TRUE(LiteralTestUtil::Near(expect, actual, kErrorSpec));
   }
 
   void RunTest1D(bool manual_fusion, int size) {
@@ -159,8 +160,8 @@ class MultiOutputFusionTest : public HloTestBase {
           HloInstruction::CreateGetTupleElement(elem_shape_U8, tuple, 0));
       auto gte1 = computation->AddInstruction(
           HloInstruction::CreateGetTupleElement(elem_shape_F32, tuple, 1));
-      TF_CHECK_OK(sub->ReplaceOperandWith(0, gte0));
-      TF_CHECK_OK(reshape->ReplaceOperandWith(0, gte1));
+      CHECK_OK(sub->ReplaceOperandWith(0, gte0));
+      CHECK_OK(reshape->ReplaceOperandWith(0, gte1));
 
       CHECK_NE(computation->CreateFusionInstruction(
                    {tuple, sub_U8, add, param0_U8, param1_F32},
@@ -176,7 +177,7 @@ class MultiOutputFusionTest : public HloTestBase {
     Literal expect = LiteralUtil::CreateR1<float>({size * 1.5f * 3.5f});
     TF_ASSERT_OK_AND_ASSIGN(Literal actual,
                             Execute(std::move(hlo_module), {&input0, &input1}));
-    EXPECT_TRUE(LiteralTestUtil::Near(expect, actual, error_spec_));
+    EXPECT_TRUE(LiteralTestUtil::Near(expect, actual, kErrorSpec));
   }
 };
 

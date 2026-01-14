@@ -42,7 +42,7 @@ limitations under the License.
 #include "xla/status_macros.h"
 #include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/blas.h"
-#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/event_based_timer.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/stream_executor/gpu/gpu_helpers.h"
@@ -441,7 +441,7 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
   if (workspace_size > 0) {
     if (args.scratch_allocator != nullptr) {
       TF_ASSIGN_OR_RETURN(
-          DeviceMemory<uint8_t> alloc,
+          DeviceAddress<uint8_t> alloc,
           args.scratch_allocator->AllocateBytes(workspace_size));
       workspace_addr = gpu::GpuMemoryMutable(&alloc);
     } else {

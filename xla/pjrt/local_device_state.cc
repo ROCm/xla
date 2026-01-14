@@ -34,7 +34,7 @@ limitations under the License.
 #include "xla/client/local_client.h"
 #include "xla/pjrt/buffer_sequencing_event.h"
 #include "xla/pjrt/worker_thread.h"
-#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/errors.h"
@@ -139,15 +139,16 @@ LocalDeviceState::~LocalDeviceState() {
     LOG(ERROR) << "Error when closing device: " << status;
   }
 
-  // Explicitly delete all the streams to ensure that their callbacks are
-  // executed before the destruction of the LocalDeviceState and its callback
-  // threads.
+  // Explicitly delete all the streams and events to ensure that their callbacks
+  // are executed before the destruction of the LocalDeviceState and its
+  // callback threads.
   external_ready_event_streams_.clear();
   fixed_size_pool_usage_streams_.clear();
   device_to_device_streams_.clear();
   device_to_host_streams_.clear();
   host_to_device_stream_.reset();
   compute_stream_.reset();
+  compute_events_.clear();
 }
 
 absl::Status LocalDeviceState::SynchronizeAllActivity() {
@@ -159,7 +160,7 @@ absl::Status LocalDeviceState::SynchronizeAllActivity() {
   // fixed, we could remove the BlockHostUntilDone call.
   status.Update(compute_stream_->BlockHostUntilDone());
   if (callback_stream_map_.has_value()) {
-    absl::MutexLock lock(&callback_stream_map_mu_);
+    absl::MutexLock lock(callback_stream_map_mu_);
     for (auto& callback_stream : callback_stream_map_.value()) {
       status.Update(callback_stream.second->BlockHostUntilDone());
     }
@@ -176,7 +177,7 @@ absl::Status LocalDeviceState::SynchronizeAllActivity() {
 
 absl::Status LocalDeviceState::ThenMemcpyDeviceToDevice(
     se::Stream* transfer_stream, se::Stream* dst_stream,
-    se::DeviceMemoryBase src_buffer, se::DeviceMemoryBase dst_buffer) {
+    se::DeviceAddressBase src_buffer, se::DeviceAddressBase dst_buffer) {
   // The default implementation simply calls MemcpyD2D, and assumes that
   // the buffer addresses identify the devices. This does not work
   // on all platforms; this method is virtual so it can be overridden.
@@ -188,7 +189,7 @@ absl::Status LocalDeviceState::ThenExecuteCallback(
   tsl::profiler::TraceMe traceme("ThenExecuteCallback");
   if (callback_stream_map_.has_value()) {
     // Prevent concurrent updates to the callback stream map.
-    absl::MutexLock lock(&callback_stream_map_mu_);
+    absl::MutexLock lock(callback_stream_map_mu_);
     auto callback_stream = callback_stream_map_->find(stream);
     if (callback_stream == callback_stream_map_->end()) {
       TF_ASSIGN_OR_RETURN(auto new_stream, executor_->CreateStream());
@@ -207,7 +208,7 @@ absl::Status LocalDeviceState::ThenExecuteCallback(
 }
 
 se::Stream* LocalDeviceState::GetDeviceToHostStream() {
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   int i = next_device_to_host_stream_;
   next_device_to_host_stream_ =
       (next_device_to_host_stream_ + 1) % device_to_host_streams_.size();
@@ -215,7 +216,7 @@ se::Stream* LocalDeviceState::GetDeviceToHostStream() {
 }
 
 se::Stream* LocalDeviceState::GetDeviceToDeviceStream() {
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   int i = next_device_to_device_stream_;
   next_device_to_device_stream_ =
       (next_device_to_device_stream_ + 1) % device_to_device_streams_.size();
@@ -223,7 +224,7 @@ se::Stream* LocalDeviceState::GetDeviceToDeviceStream() {
 }
 
 se::Stream* LocalDeviceState::GetFixedSizePoolUsageStream() {
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   int i = next_fixed_size_pool_usage_stream_;
   next_fixed_size_pool_usage_stream_ =
       (next_fixed_size_pool_usage_stream_ + 1) %
@@ -232,7 +233,7 @@ se::Stream* LocalDeviceState::GetFixedSizePoolUsageStream() {
 }
 
 se::Stream* LocalDeviceState::GetExternalReadyEventStream() {
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   int i = next_external_ready_event_stream_;
   next_external_ready_event_stream_ = (next_external_ready_event_stream_ + 1) %
                                       external_ready_event_streams_.size();
@@ -256,7 +257,7 @@ absl::StatusOr<se::Stream*> LocalDeviceState::GetStreamFromExternalStream(
 }
 
 std::vector<se::Stream*> LocalDeviceState::GetDeviceToDeviceStreams() {
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   std::vector<se::Stream*> result;
   result.reserve(device_to_device_streams_.size());
   for (const auto& stream : device_to_device_streams_) {
@@ -267,7 +268,7 @@ std::vector<se::Stream*> LocalDeviceState::GetDeviceToDeviceStreams() {
 
 std::unique_ptr<se::Stream> LocalDeviceState::BorrowStreamFromPool() {
   {
-    absl::MutexLock lock(&stream_pool_mu_);
+    absl::MutexLock lock(stream_pool_mu_);
     if (!usage_stream_pool_.empty()) {
       std::unique_ptr<se::Stream> stream = std::move(usage_stream_pool_.top());
       usage_stream_pool_.pop();
@@ -294,12 +295,12 @@ void LocalDeviceState::ReturnStreamToPool(std::unique_ptr<se::Stream> stream) {
   if (status.code() != tsl::error::ABORTED) {
     CHECK(stream->ok()) << status;
   }
-  absl::MutexLock lock(&stream_pool_mu_);
+  absl::MutexLock lock(stream_pool_mu_);
   usage_stream_pool_.push(std::move(stream));
 }
 
 int LocalDeviceState::GetNewPrngSeed() {
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   int x = 0;
   do {
     x = prng_seed_distribution_(prng_seed_generator_);
@@ -355,7 +356,7 @@ LocalDeviceState::GetEventForComputeStreamSyncPoint(
   }
   mu_.unlock();
   event.AndThen([this, cur_sync_point]() {
-    absl::MutexLock l(&mu_);
+    absl::MutexLock l(mu_);
     while (base_compute_event_sequence_id_ < cur_sync_point) {
       compute_events_.pop_front();
       ++base_compute_event_sequence_id_;

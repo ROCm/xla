@@ -32,7 +32,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/service/buffer_assignment.h"
 #include "xla/stream_executor/command_buffer.h"
-#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/stream_executor.h"
 
 namespace xla::gpu {
@@ -45,15 +45,14 @@ class CommandBufferThunk : public Thunk {
 
   const std::unique_ptr<SequentialThunk>& thunks() const { return thunks_; }
 
-  absl::Status Prepare(const PrepareParams& params,
-                       ResourceRequestsInterface& resource_requests) override;
+  absl::Status Prepare(const PrepareParams& params) override;
   absl::Status Initialize(const InitializeParams& params) override;
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
 
   // Return the allocation address that was lazilly allocated inside command
   // buffer. This API is required when the buffers are allocated inside command
   // buffer but will be consumed by non-command buffer operations.
-  absl::StatusOr<se::DeviceMemoryBase> GetCommandBufferAllocationAddress(
+  absl::StatusOr<se::DeviceAddressBase> GetCommandBufferAllocationAddress(
       const ExecuteParams& params, int64_t index);
 
   void ForAllThunks(absl::FunctionRef<void(const Thunk*)> fn) const override;
@@ -97,10 +96,19 @@ class CommandBufferThunk : public Thunk {
     // execution on a stream. All other pieces of information (like thread
     // and block sizes) captured by commands at construction time and do not
     // change.
-    std::vector<se::DeviceMemoryBase> recorded_allocs ABSL_GUARDED_BY(mutex);
+    std::vector<se::DeviceAddressBase> recorded_allocs ABSL_GUARDED_BY(mutex);
 
     // Number of command buffer executions since last update.
     int64_t num_executions ABSL_GUARDED_BY(mutex) = 0;
+
+    // For GPU backend, NCCL may call cuda-graph un-supported host side API
+    // during graph capturing (e.g. cuCtxEnablePeerAccess), this will break XLA
+    // cuda graph run. To work around the issue, this PR introduces a warm up
+    // iteration for command buffer thunk, during warm up iteration, command
+    // buffer thunk are executed through normal thunks. The warm up iteration
+    // will do the proper NCCL setup, so later iterations running through
+    // command buffer does not need to call NCCL setup APIs.
+    bool warmup_done ABSL_GUARDED_BY(mutex) = false;
   };
 
   // Command buffer thunk owns commands buffers instantiated on all executors.

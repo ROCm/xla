@@ -24,6 +24,7 @@ limitations under the License.
 #include "absl/log/check.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "google/protobuf/text_format.h"
 #include "xla/hlo/ir/hlo_clone_context.h"
 #include "xla/hlo/parser/hlo_parser.h"
 #include "xla/stream_executor/device_description.h"
@@ -65,8 +66,8 @@ TEST(AutotuneCacheKeyTest, DeviceDescriptionToCacheKey) {
     std::string spec_string;
     CHECK_OK(tsl::ReadFileToString(
         tsl::Env::Default(),
-        tsl::io::JoinPath(tsl::testing::XlaSrcRoot(), "tools", "hlo_opt",
-                          "gpu_specs", spec_file_name),
+        tsl::io::JoinPath(tsl::testing::XlaSrcRoot(),
+                          "backends/gpu/target_config/specs", spec_file_name),
         &spec_string));
     EXPECT_TRUE(
         tsl::protobuf::TextFormat::ParseFromString(spec_string, &proto));

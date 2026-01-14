@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/service/gpu/llvm_gpu_backend/amdgpu_backend.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
@@ -46,6 +47,8 @@ limitations under the License.
 #include "llvm/Analysis/LoopAnalysisManager.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/BinaryFormat/ELF.h"
+#include "llvm/BinaryFormat/MsgPackDocument.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/CodeGen/CommandFlags.h"
@@ -61,9 +64,13 @@ limitations under the License.
 #include "llvm/InitializePasses.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Object/ELF.h"
+#include "llvm/Object/ELFObjectFile.h"
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/PassRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/StandardInstrumentations.h"
+#include "llvm/Support/AMDGPUMetadata.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/FileSystem.h"
@@ -151,6 +158,232 @@ struct HsacoCache {
 
 static HsacoCache g_hsacoCache;  // NOLINT: static/global vars forbidden
 
+// Structure to hold register spilling and stack information from HSACO metadata
+struct RegisterSpillInfo {
+  uint64_t sgpr_spill_count = 0;
+  uint64_t vgpr_spill_count = 0;
+  uint64_t private_segment_size = 0;
+  bool uses_dynamic_stack = false;
+
+  bool HasSpilling() const {
+    return sgpr_spill_count > 0 || vgpr_spill_count > 0;
+  }
+
+  bool HasStackUsage() const {
+    return private_segment_size > 0 || uses_dynamic_stack;
+  }
+};
+
+// Parse NT_AMDGPU_METADATA note contents and extract register spill counts.
+// The metadata is in MessagePack format containing kernel information.
+RegisterSpillInfo ParseAMDGPUMetadataForSpills(llvm::StringRef metadata) {
+  RegisterSpillInfo spill_info;
+
+  // Parse the MsgPack metadata
+  llvm::msgpack::Document doc;
+  if (!doc.readFromBlob(metadata, /*Multi=*/false)) {
+    VLOG(2) << "Could not parse MsgPack metadata from NT_AMDGPU_METADATA note";
+    return spill_info;
+  }
+
+  llvm::msgpack::DocNode root = doc.getRoot();
+  if (!root.isMap()) {
+    VLOG(2) << "AMDGPU metadata root is not a map (unexpected format)";
+    return spill_info;
+  }
+
+  // Look for "amdhsa.kernels" array
+  llvm::msgpack::MapDocNode root_map = root.getMap();
+  auto kernels_it = root_map.find("amdhsa.kernels");
+
+  if (kernels_it == root_map.end() || !kernels_it->second.isArray()) {
+    VLOG(2) << "NT_AMDGPU_METADATA found but missing 'amdhsa.kernels' array";
+    return spill_info;
+  }
+
+  llvm::msgpack::ArrayDocNode kernels_array = kernels_it->second.getArray();
+
+  // Iterate through each kernel
+  for (auto& kernel_node : kernels_array) {
+    uint64_t kernel_sgpr_spill = 0;
+    uint64_t kernel_vgpr_spill = 0;
+    uint64_t kernel_sgpr_count = 0;
+    uint64_t kernel_vgpr_count = 0;
+    uint64_t kernel_private_size = 0;
+    bool kernel_uses_dynamic = false;
+
+    if (!kernel_node.isMap()) continue;
+
+    llvm::msgpack::MapDocNode kernel_map = kernel_node.getMap();
+
+    // Look for ".sgpr_spill_count"
+    auto sgpr_it = kernel_map.find(".sgpr_spill_count");
+    if (sgpr_it != kernel_map.end() &&
+        sgpr_it->second.getKind() == llvm::msgpack::Type::UInt) {
+      kernel_sgpr_spill = sgpr_it->second.getUInt();
+      spill_info.sgpr_spill_count =
+          std::max(spill_info.sgpr_spill_count, kernel_sgpr_spill);
+    }
+
+    // Look for ".vgpr_spill_count"
+    auto vgpr_it = kernel_map.find(".vgpr_spill_count");
+    if (vgpr_it != kernel_map.end() &&
+        vgpr_it->second.getKind() == llvm::msgpack::Type::UInt) {
+      kernel_vgpr_spill = vgpr_it->second.getUInt();
+      spill_info.vgpr_spill_count =
+          std::max(spill_info.vgpr_spill_count, kernel_vgpr_spill);
+    }
+
+    // Look for ".private_segment_fixed_size"
+    auto priv_it = kernel_map.find(".private_segment_fixed_size");
+    if (priv_it != kernel_map.end() &&
+        priv_it->second.getKind() == llvm::msgpack::Type::UInt) {
+      kernel_private_size = priv_it->second.getUInt();
+      spill_info.private_segment_size =
+          std::max(spill_info.private_segment_size, kernel_private_size);
+    }
+
+    // Look for ".uses_dynamic_stack"
+    auto dyn_it = kernel_map.find(".uses_dynamic_stack");
+    if (dyn_it != kernel_map.end() &&
+        dyn_it->second.getKind() == llvm::msgpack::Type::Boolean) {
+      kernel_uses_dynamic = dyn_it->second.getBool();
+      spill_info.uses_dynamic_stack =
+          spill_info.uses_dynamic_stack || kernel_uses_dynamic;
+    }
+
+    // Helper to get kernel name for logging (only when needed)
+    auto get_kernel_name = [&kernel_map]() -> std::string {
+      auto name_it = kernel_map.find(".name");
+      if (name_it != kernel_map.end() &&
+          name_it->second.getKind() == llvm::msgpack::Type::String) {
+        return name_it->second.getString().str();
+      }
+      return "unknown";
+    };
+
+    // Log per-kernel spill information with register usage
+    if (kernel_sgpr_spill > 0 || kernel_vgpr_spill > 0) {
+      // Look for ".sgpr_count" (total SGPRs used)
+      auto sgpr_count_it = kernel_map.find(".sgpr_count");
+      if (sgpr_count_it != kernel_map.end() &&
+          sgpr_count_it->second.getKind() == llvm::msgpack::Type::UInt) {
+        kernel_sgpr_count = sgpr_count_it->second.getUInt();
+      }
+
+      // Look for ".vgpr_count" (total VGPRs used)
+      auto vgpr_count_it = kernel_map.find(".vgpr_count");
+      if (vgpr_count_it != kernel_map.end() &&
+          vgpr_count_it->second.getKind() == llvm::msgpack::Type::UInt) {
+        kernel_vgpr_count = vgpr_count_it->second.getUInt();
+      }
+
+      VLOG(2) << "Kernel '" << get_kernel_name() << "' has register spilling: "
+              << "SGPR=" << kernel_sgpr_spill << ", VGPR=" << kernel_vgpr_spill
+              << ". Register count: SGPR=" << kernel_sgpr_count
+              << ", VGPR=" << kernel_vgpr_count;
+    }
+
+    // Log per-kernel stack usage
+    if (kernel_private_size > 0 || kernel_uses_dynamic) {
+      VLOG(2) << "Kernel '" << get_kernel_name() << "' stack usage: "
+              << "private=" << kernel_private_size
+              << ", dynamic=" << (kernel_uses_dynamic ? "true" : "false");
+    }
+  }
+
+  return spill_info;
+}
+
+// ELF note descriptor alignment per ELF specification
+constexpr int kElfNoteDescAlignment = 4;
+
+// Returns spill counts by parsing AMDGPU metadata from note sections of HSACO
+// ELF binary.
+//
+// HSACO file (ELF binary)
+//   -- .note section(s)
+//       -- ELF Note with type=NT_AMDGPU_METADATA
+//           -- MessagePack data
+//               -- Root map
+//                   -- "amdhsa.kernels" array
+//                       -- Each kernel object
+//                           - ".sgpr_spill_count"
+//                           - ".vgpr_spill_count"
+//                           - ... (other kernel properties)
+RegisterSpillInfo ExtractRegisterSpillingFromHsaco(
+    const std::vector<uint8_t>& hsaco) {
+  RegisterSpillInfo spill_info;
+
+  // Create memory buffer from HSACO data
+  std::unique_ptr<llvm::MemoryBuffer> mem_buffer =
+      llvm::MemoryBuffer::getMemBuffer(
+          llvm::StringRef(reinterpret_cast<const char*>(hsaco.data()),
+                          hsaco.size()),
+          "", /*RequiresNullTerminator=*/false);
+
+  // Parse as ELF object file
+  llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> obj_or_err =
+      llvm::object::ObjectFile::createObjectFile(mem_buffer->getMemBufferRef());
+
+  if (!obj_or_err) {
+    VLOG(2) << "Could not parse HSACO as ELF object file: "
+            << llvm::toString(obj_or_err.takeError());
+    return spill_info;
+  }
+
+  llvm::object::ObjectFile* obj = obj_or_err->get();
+
+  // Cast to ELF64LE object file (AMDGPU uses 64-bit little-endian ELF)
+  auto* elf_obj = llvm::dyn_cast<llvm::object::ELF64LEObjectFile>(obj);
+  if (!elf_obj) {
+    VLOG(2) << "HSACO is not a 64-bit little-endian ELF file";
+    return spill_info;
+  }
+
+  // Get the underlying ELFFile to access the notes() API
+  const auto& elf_file = elf_obj->getELFFile();
+
+  for (const auto& section : elf_obj->sections()) {
+    llvm::Expected<const typename llvm::object::ELF64LEObjectFile::Elf_Shdr*>
+        shdr_or_err = elf_obj->getSection(section.getRawDataRefImpl());
+
+    if (!shdr_or_err) {
+      continue;  // Skip sections we can't access
+    }
+
+    const auto* shdr = *shdr_or_err;
+
+    if (shdr->sh_type != llvm::ELF::SHT_NOTE) {
+      continue;
+    }
+
+    llvm::Error err = llvm::Error::success();
+    for (const auto& note : elf_file.notes(*shdr, err)) {
+      if (note.getType() == llvm::ELF::NT_AMDGPU_METADATA) {
+        llvm::StringRef metadata =
+            note.getDescAsStringRef(kElfNoteDescAlignment);
+
+        if (metadata.empty()) {
+          VLOG(2) << "Found NT_AMDGPU_METADATA note but it contains no data";
+          continue;
+        }
+
+        // Parse the metadata and extract spill counts, return immediately
+        return ParseAMDGPUMetadataForSpills(metadata);
+      }
+    }
+
+    if (err) {
+      VLOG(2) << "Error parsing notes: " << llvm::toString(std::move(err));
+    }
+  }
+
+  // If we reach here, no metadata was found
+  VLOG(2) << "No AMDGPU metadata found in HSACO";
+  return spill_info;
+}
+
 bool HsacoCache::Find(const std::string& ir, uint64_t& hash,
                       const std::string& gfx, std::vector<uint8_t>& hsaco) {
   absl::MutexLock lock(g_hsacoCache.mutex);
@@ -208,8 +441,8 @@ absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
   VLOG(1) << "Compile-time artifacts located at: " << tempdir_name;
 
   bool keep_tempfiles = false;
-  TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_KEEP_XLA_TEMPFILES",
-                                      /*default_val=*/false, &keep_tempfiles));
+  CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_KEEP_XLA_TEMPFILES",
+                                   /*default_val=*/false, &keep_tempfiles));
   // Prepare filenames for all stages of compilation:
   // IR, binary ISA, and HSACO.
   std::string random_number = std::to_string(tsl::random::New64());
@@ -486,8 +719,7 @@ absl::Status AMDGPUTargetModuleLinker(
     const std::string& device_bitcode_dir_path) {
   // Link the input module with ROCDL.
 
-  auto compute_capability =
-      std::get_if<se::RocmComputeCapability>(&gpu_version);
+  auto compute_capability = gpu_version.rocm_compute_capability();
   if (!compute_capability) {
     return xla::Internal("Incompatible compute capability was specified.");
   }
@@ -567,8 +799,7 @@ std::pair<std::string, std::string> GetFeatureStrFromGCNArchName(
 std::unique_ptr<llvm::TargetMachine> AMDGPUGetTargetMachine(
     llvm::Triple target_triple, se::GpuComputeCapability gpu_version,
     const DebugOptions& debug_options) {
-  auto compute_capability =
-      std::get_if<se::RocmComputeCapability>(&gpu_version);
+  auto compute_capability = gpu_version.rocm_compute_capability();
 
   std::string gcn_arch_name = compute_capability->gcn_arch_name();
   auto arch = GetFeatureStrFromGCNArchName(gcn_arch_name);
@@ -793,8 +1024,7 @@ absl::StatusOr<std::vector<uint8_t>> CompileToHsaco(
         tsl::profiler::TraceMeLevel::kInfo);
     XLA_SCOPED_LOGGING_TIMER("Compile module " + module->getName().str());
 
-    auto compute_capability =
-        std::get_if<se::RocmComputeCapability>(&gpu_version);
+    auto compute_capability = gpu_version.rocm_compute_capability();
     if (!compute_capability) {
       return xla::Internal("Incompatible compute capability was specified.");
     }

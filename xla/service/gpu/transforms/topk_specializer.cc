@@ -20,7 +20,6 @@ limitations under the License.
 #include <initializer_list>
 #include <string>
 #include <utility>
-#include <variant>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_set.h"
@@ -127,9 +126,7 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
       return absl::OkStatus();
     }
     TF_RET_CHECK(topk->operand_count() == 1);
-    bool is_cuda =
-        std::holds_alternative<stream_executor::CudaComputeCapability>(
-            compute_capability_);
+    bool is_cuda = compute_capability_.IsCuda();
 
     if (auto small_topk = SmallBufferOptimization(
             topk, is_cuda,
@@ -153,7 +150,7 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
 
 }  // namespace
 
-absl::StatusOr<bool> TopkSpecializer::Run(
+absl::StatusOr<bool> TopkSpecializer::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   return SpecializeTopkVisitor(compute_capability_)

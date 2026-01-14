@@ -44,7 +44,6 @@ limitations under the License.
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
 #include "xla/service/gpu/launch_dimensions.h"
-#include "xla/service/gpu/model/experimental/symbolic_expr.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/tsl/platform/statusor.h"
 
@@ -57,12 +56,12 @@ class DummyCopyEmitter : public EmitterBase {
   LaunchDimensions launch_dimensions() const final { return {1, 100}; }
 
   std::optional<IndexingMap> ComputeThreadIdToOutputIndexing(
-      int64_t, SymbolicExprContext*) const final {
+      int64_t, mlir::MLIRContext*) const final {
     return std::nullopt;
   }
 
   std::optional<std::vector<IndexingMap>> ComputeThreadIdToInputIndexing(
-      int64_t, SymbolicExprContext*) const final {
+      int64_t, mlir::MLIRContext*) const final {
     return std::nullopt;
   }
 
@@ -75,11 +74,11 @@ class DummyCopyEmitter : public EmitterBase {
     mlir::ImplicitLocOpBuilder b(entry_function.getLoc(), entry_function);
     b.setInsertionPointToStart(entry_function.addEntryBlock());
     auto thread_id = EmitThreadId(b, 0);
-    auto value = b.create<mlir::tensor::ExtractOp>(
-        entry_function.getArgument(0), mlir::ValueRange{thread_id});
-    auto result = b.create<mlir::tensor::InsertOp>(
-        value, entry_function.getArgument(1), mlir::ValueRange{thread_id});
-    b.create<mlir::func::ReturnOp>(result->getResults());
+    auto value = mlir::tensor::ExtractOp::create(
+        b, entry_function.getArgument(0), mlir::ValueRange{thread_id});
+    auto result = mlir::tensor::InsertOp::create(
+        b, value, entry_function.getArgument(1), mlir::ValueRange{thread_id});
+    mlir::func::ReturnOp::create(b, result->getResults());
     return absl::OkStatus();
   }
 };
@@ -92,7 +91,6 @@ class EmitterBaseTest : public HloHardwareIndependentTestBase {
   }
 
   mlir::MLIRContext mlir_context_;
-  SymbolicExprContext symbolic_expr_context_{&mlir_context_};
   stream_executor::DeviceDescription device_info_ =
       TestGpuDeviceInfo::CudaOrRocmDeviceInfo();
 };
@@ -113,7 +111,7 @@ TEST_F(EmitterBaseTest, CreateMlirModule) {
   TF_ASSERT_OK_AND_ASSIGN(
       auto mlir_module,
       emitter.CreateMLIRModule(
-          symbolic_expr_context_,
+          mlir_context_,
           *Cast<HloFusionInstruction>(
               module->entry_computation()->root_instruction()),
           "fusion",
@@ -144,7 +142,7 @@ TEST_F(EmitterBaseTest, CreateLLVMModule) {
   TF_ASSERT_OK_AND_ASSIGN(
       auto llvm_module,
       emitter.CreateLLVMModule(
-          symbolic_expr_context_, llvm_context, device_info_,
+          mlir_context_, llvm_context, device_info_,
           *Cast<HloFusionInstruction>(
               module->entry_computation()->root_instruction()),
           "fusion",

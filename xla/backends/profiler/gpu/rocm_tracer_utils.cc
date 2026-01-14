@@ -15,6 +15,14 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 
+#include <cstdint>
+#include <string>
+
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+
 // for rocprofiler-sdk
 namespace xla {
 namespace profiler {
@@ -71,7 +79,8 @@ const char* GetRocmTracerEventTypeName(const RocmTracerEventType& type) {
     OO(Memset)
     OO(Synchronization)
     OO(Generic)
-    default:;
+    default: {
+    };
   }
 #undef OO
   DCHECK(false);
@@ -80,10 +89,12 @@ const char* GetRocmTracerEventTypeName(const RocmTracerEventType& type) {
 
 void AnnotationMap::Add(uint32_t correlation_id,
                         const std::string& annotation) {
-  if (annotation.empty()) return;
+  if (annotation.empty()) {
+    return;
+  }
   VLOG(3) << "Add annotation: " << " correlation_id=" << correlation_id
           << ", annotation: " << annotation;
-  absl::MutexLock lock(&map_.mutex);
+  absl::MutexLock lock(map_.mutex);
   if (map_.annotations.size() < max_size_) {
     absl::string_view annotation_str =
         *map_.annotations.insert(annotation).first;
@@ -92,7 +103,7 @@ void AnnotationMap::Add(uint32_t correlation_id,
 }
 
 absl::string_view AnnotationMap::LookUp(uint32_t correlation_id) {
-  absl::MutexLock lock(&map_.mutex);
+  absl::MutexLock lock(map_.mutex);
   auto it = map_.correlation_map.find(correlation_id);
   return it != map_.correlation_map.end() ? it->second : absl::string_view();
 }

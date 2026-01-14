@@ -319,6 +319,8 @@ int main(int argc, char** argv) {
       "ArrayImplTest.MakeArrayFromHostBufferAndCopyToHostBufferWithString:"
       "ArrayImplTest."
       "MakeArraysFromHostBufferShardsAndCopyToHostBufferWithString:"
+      // Custom layouts are not supported in NanoIfrtClient.
+      "ArrayImplTest.MakeArraysFromHostBufferShardsWithLayout:"
       // `MakeErrorArrays` is not supported in NanoIfrtClient.
       "ArrayImplTest.MakeErrorArrays:"
       "ArrayImplTest.CopyPoisonedArray:"
@@ -335,6 +337,8 @@ int main(int argc, char** argv) {
       "*LoadedExecutableImplTest.GetHloModules*:"
       "*LoadedExecutableImplTest.ProgramText*:"
       "*LoadedExecutableImplTest.Analysis*:"
+      // NanoRT does not support portable execution.
+      "*LoadedExecutableImplTest.CompileAndExecutePortable*:"
       // Serialization is not implemented.
       "*SerializeAndLoad*";
   xla::ifrt::test_util::SetTestFilterIfNotUserSpecified(kFilter);

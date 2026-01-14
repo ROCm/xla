@@ -38,13 +38,11 @@ class BlockScalingRewriterTest : public GpuCodegenTest {
   }
 
   bool IsCuda() const {
-    return std::holds_alternative<stream_executor::CudaComputeCapability>(
-        GpuCapability());
+    return GpuCapability().IsCuda();
   }
 
   bool IsRocm() const {
-    return std::holds_alternative<stream_executor::RocmComputeCapability>(
-        GpuCapability());
+    return GpuCapability().IsRocm();
   }
 };
 

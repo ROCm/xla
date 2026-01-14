@@ -7,8 +7,8 @@ load("//third_party/triton:temporary/series.bzl", "temporary_patch_list")
 def repo():
     """Imports Triton."""
 
-    TRITON_COMMIT = "triton_integrate_branch-1.12"
-    TRITON_SHA256 = "6754c1c474c58916c1ddd88ceb1adb2a553ec3609afbe5fec936902a0297a7ad"
+    TRITON_COMMIT = "triton_integrate_branch-1.15"
+    TRITON_SHA256 = "a502364ad54bd822dae5d2fc6215695f7d343617a8c643a39a49f40ef474d013"
     tf_http_archive(
         name = "triton",
         sha256 = TRITON_SHA256,

@@ -290,6 +290,7 @@ enum StatType {
   kScaledValue,
   kThreadId,
   kMatrixUnitUtilizationPercent,
+  kHbmUtilizationPercent,
   // Cost analysis related.
   kTimeScaleMultiplier,
   // XLA metadata map related.
@@ -372,7 +373,11 @@ enum StatType {
   kCudaGraphMapValueId,
   kCudaGraphNodeMapId,
   kGraphMetadataLineId,
-  kLastStatType = kGraphMetadataLineId,
+  kOffloadCoreId,
+  kTcOffloadStartId,
+  kOffloadExecutionIndex,
+  kMarkerPayloadString,
+  kLastStatType = kMarkerPayloadString,
 };
 
 enum MegaScaleStatType : uint8_t {
@@ -503,7 +508,7 @@ class XFlow {
   }
 
   // Encoding
-  uint64 ToStatValue() const { return encoded_.whole; }
+  uint64_t ToStatValue() const { return encoded_.whole; }
 
   // Decoding
   static XFlow FromStatValue(uint64_t encoded) { return XFlow(encoded); }

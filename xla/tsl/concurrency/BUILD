@@ -124,7 +124,7 @@ tsl_cc_test(
     deps = [
         ":concurrent_vector",
         "//xla/tsl/platform:env",
-        "//xla/tsl/platform:env_impl",
+        "//xla/tsl/platform:env_impl",  # buildcleaner: keep
         "//xla/tsl/platform:test",
         "@com_google_googletest//:gtest_main",
     ],
@@ -152,13 +152,13 @@ cc_library(
         "//xla/tsl/platform:logging",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/functional:bind_front",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/meta:type_traits",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
-        "@com_google_absl//absl/utility",
     ],
 )
 
@@ -191,7 +191,6 @@ tsl_cc_test(
     deps = [
         ":ref_count",
         "//xla/tsl/platform:test",
-        "//xla/tsl/platform:test_benchmark",
         "//xla/tsl/platform:test_main",
         "@com_google_absl//absl/base:nullability",
     ],

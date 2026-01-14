@@ -21,8 +21,11 @@ limitations under the License.
 #include <vector>
 
 #include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/barrier.h"
@@ -42,27 +45,25 @@ limitations under the License.
 #include "xla/pjrt/distributed/protocol.pb.h"
 #include "xla/pjrt/distributed/service.h"
 #include "xla/pjrt/distributed/topology_util.h"
+#include "xla/runtime/device_id.h"
 #include "xla/status_macros.h"
-#include "xla/tsl/distributed_runtime/coordination/coordination_service_agent.h"
 #include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
 #include "xla/tsl/platform/threadpool.h"
 #include "xla/tsl/util/proto/proto_matchers.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/platform/test.h"
-#include "tsl/platform/threadpool.h"
 
 namespace xla {
 namespace {
 
 using ::testing::IsEmpty;
+using ::testing::Key;
 using ::testing::Matches;
 using ::testing::Pair;
 using ::testing::UnorderedElementsAre;
 using ::tsl::proto_testing::EqualsProto;
-using ::tsl::testing::IsOkAndHolds;
-using ::tsl::testing::StatusIs;
 
 constexpr absl::Duration kHeartbeatTimeout = absl::Milliseconds(2500);
 constexpr absl::Duration kBarrierTimeout = absl::Milliseconds(200);
@@ -1001,10 +1002,10 @@ TEST_F(ClientServerTest, GetLiveTasksSucceeds) {
       TF_ASSERT_OK(client->Connect());
 
       // Get the set of live nodes. All three nodes should be live.
-      absl::StatusOr<std::vector<int32_t>> live_nodes =
-          client->GetLiveNodes(std::vector<int>{0, 1, 2});
+      absl::StatusOr<absl::flat_hash_map<int32_t, IncarnationId>> live_nodes =
+          client->GetLiveNodesWithIncarnations(std::vector<int>{0, 1, 2});
       TF_ASSERT_OK(live_nodes.status());
-      EXPECT_THAT(*live_nodes, UnorderedElementsAre(0, 1, 2));
+      EXPECT_THAT(*live_nodes, UnorderedElementsAre(Key(0), Key(1), Key(2)));
     });
   }
 }
@@ -1023,7 +1024,7 @@ TEST_F(ClientServerTest, GetLiveTasksWithoutBeingAMember) {
       // Get the set of live nodes but don't include ourselves.
       std::vector<int> nodes{0, 1, 2};
       nodes.erase(nodes.begin() + i);
-      EXPECT_THAT(client->GetLiveNodes(nodes),
+      EXPECT_THAT(client->GetLiveNodesWithIncarnations(nodes),
                   absl_testing::StatusIs(absl::StatusCode::kInvalidArgument));
     });
   }
