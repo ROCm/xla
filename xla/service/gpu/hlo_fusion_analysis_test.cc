@@ -510,5 +510,104 @@ TEST_F(HloFusionAnalysisTest, ConcatenateFusionFallbackToLoop) {
   EXPECT_EQ(&analysis.fusion_hero(0).instruction(), multiply);
 }
 
+// Tests that when two concat fusions share computation through slices (like in
+// concat_fusion_minimal.hlo), the emitter falls back to kLoop to allow
+// multi-output fusion to merge them later.
+TEST_F(HloFusionAnalysisTest, ConcatenateFusionWithSiblingSharingInputs) {
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+    HloModule module
+
+    fusion1 {
+      a = f32[64,64] parameter(0)
+      b = f32[64,64] parameter(1)
+      s = f32[64,64] add(a, b)
+      top = f32[32,64] slice(s), slice={[0:32],[0:64]}
+      bot = f32[32,64] slice(s), slice={[32:64],[0:64]}
+      ROOT concatenate = f32[64,64] concatenate(top, bot), dimensions={0}
+    }
+
+    fusion2 {
+      a = f32[64,64] parameter(0)
+      b = f32[64,64] parameter(1)
+      d = f32[64,64] subtract(a, b)
+      left = f32[64,32] slice(d), slice={[0:64],[0:32]}
+      right = f32[64,32] slice(d), slice={[0:64],[32:64]}
+      ROOT concatenate = f32[64,64] concatenate(left, right), dimensions={1}
+    }
+
+    ENTRY entry_computation {
+      a = f32[64,64] parameter(0)
+      b = f32[64,64] parameter(1)
+      fusion.1 = f32[64,64] fusion(a, b), kind=kInput, calls=fusion1
+      fusion.2 = f32[64,64] fusion(a, b), kind=kInput, calls=fusion2
+      ROOT tuple = (f32[64,64], f32[64,64]) tuple(fusion.1, fusion.2)
+  })"));
+
+  auto device_info = TestGpuDeviceInfo::RTXA6000DeviceInfo();
+
+  auto* entry = module->entry_computation();
+  auto* fusion1 = entry->GetInstructionWithName("fusion.1");
+  auto* fusion2 = entry->GetInstructionWithName("fusion.2");
+
+  // Both fusions share inputs a and b, so they should fall back to kLoop
+  // to enable multi-output fusion.
+  auto analysis1 = HloFusionAnalysis::Create(*fusion1, device_info);
+  EXPECT_EQ(analysis1.emitter_fusion_kind(),
+            HloFusionAnalysis::EmitterFusionKind::kLoop);
+
+  auto analysis2 = HloFusionAnalysis::Create(*fusion2, device_info);
+  EXPECT_EQ(analysis2.emitter_fusion_kind(),
+            HloFusionAnalysis::EmitterFusionKind::kLoop);
+}
+
+// Tests that concat fusions with non-overlapping inputs use kConcatenate.
+TEST_F(HloFusionAnalysisTest, ConcatenateFusionsWithNonOverlappingInputs) {
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+    HloModule module
+
+    fusion1 {
+      a = f32[64,64] parameter(0)
+      b = f32[64,64] parameter(1)
+      s = f32[64,64] add(a, b)
+      top = f32[32,64] slice(s), slice={[0:32],[0:64]}
+      bot = f32[32,64] slice(s), slice={[32:64],[0:64]}
+      ROOT concatenate = f32[64,64] concatenate(top, bot), dimensions={0}
+    }
+
+    fusion2 {
+      c = f32[64,64] parameter(0)
+      d = f32[64,64] parameter(1)
+      m = f32[64,64] multiply(c, d)
+      left = f32[64,32] slice(m), slice={[0:64],[0:32]}
+      right = f32[64,32] slice(m), slice={[0:64],[32:64]}
+      ROOT concatenate = f32[64,64] concatenate(left, right), dimensions={1}
+    }
+
+    ENTRY entry_computation {
+      a = f32[64,64] parameter(0)
+      b = f32[64,64] parameter(1)
+      c = f32[64,64] parameter(2)
+      d = f32[64,64] parameter(3)
+      fusion.1 = f32[64,64] fusion(a, b), kind=kInput, calls=fusion1
+      fusion.2 = f32[64,64] fusion(c, d), kind=kInput, calls=fusion2
+      ROOT tuple = (f32[64,64], f32[64,64]) tuple(fusion.1, fusion.2)
+  })"));
+
+  auto device_info = TestGpuDeviceInfo::RTXA6000DeviceInfo();
+
+  auto* entry = module->entry_computation();
+  auto* fusion1 = entry->GetInstructionWithName("fusion.1");
+  auto* fusion2 = entry->GetInstructionWithName("fusion.2");
+
+  // Different inputs (a,b vs c,d), so both should use kConcatenate.
+  auto analysis1 = HloFusionAnalysis::Create(*fusion1, device_info);
+  EXPECT_EQ(analysis1.emitter_fusion_kind(),
+            HloFusionAnalysis::EmitterFusionKind::kConcatenate);
+
+  auto analysis2 = HloFusionAnalysis::Create(*fusion2, device_info);
+  EXPECT_EQ(analysis2.emitter_fusion_kind(),
+            HloFusionAnalysis::EmitterFusionKind::kConcatenate);
+}
+
 }  // namespace
 }  // namespace xla::gpu
