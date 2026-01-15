@@ -70,10 +70,13 @@ void ExpectGroupedGemmConfigEq(const GroupedGemmConfig& lhs,
   EXPECT_EQ(lhs.k, rhs.k);
   EXPECT_EQ(lhs.batch_count, rhs.batch_count);
   EXPECT_EQ(lhs.group_count, rhs.group_count);
-  ExpectMatrixLayoutEq(lhs.lhs_layout, rhs.lhs_layout);
-  ExpectMatrixLayoutEq(lhs.rhs_layout, rhs.rhs_layout);
-  ExpectMatrixLayoutEq(lhs.c_layout, rhs.c_layout);
-  ExpectMatrixLayoutEq(lhs.output_layout, rhs.output_layout);
+  EXPECT_EQ(lhs.lhs_leading_dim_stride, rhs.lhs_leading_dim_stride);
+  EXPECT_EQ(lhs.rhs_leading_dim_stride, rhs.rhs_leading_dim_stride);
+  EXPECT_EQ(lhs.c_leading_dim_stride, rhs.c_leading_dim_stride);
+  EXPECT_EQ(lhs.output_leading_dim_stride, rhs.output_leading_dim_stride);
+  EXPECT_EQ(lhs.trans_a, rhs.trans_a);
+  EXPECT_EQ(lhs.trans_b, rhs.trans_b);
+  EXPECT_EQ(lhs.must_swap_operands, rhs.must_swap_operands);
   EXPECT_EQ(lhs.alpha.real(), rhs.alpha.real());
   EXPECT_EQ(lhs.alpha.imag(), rhs.alpha.imag());
   EXPECT_EQ(lhs.beta, rhs.beta);
@@ -81,12 +84,8 @@ void ExpectGroupedGemmConfigEq(const GroupedGemmConfig& lhs,
   EXPECT_EQ(lhs.type_b, rhs.type_b);
   EXPECT_EQ(lhs.type_c, rhs.type_c);
   EXPECT_EQ(lhs.type_d, rhs.type_d);
-  EXPECT_EQ(lhs.lhs_contracting_dimension, rhs.lhs_contracting_dimension);
-  EXPECT_EQ(lhs.rhs_contracting_dimension, rhs.rhs_contracting_dimension);
-  EXPECT_EQ(lhs.lhs_ragged_dimension, rhs.lhs_ragged_dimension);
-  EXPECT_EQ(lhs.rhs_group_dimension, rhs.rhs_group_dimension);
-  EXPECT_EQ(lhs.lhs_stride_ragged_dim, rhs.lhs_stride_ragged_dim);
-  EXPECT_EQ(lhs.rhs_stride_group_dim, rhs.rhs_stride_group_dim);
+  EXPECT_EQ(lhs.stride_ragged_dim, rhs.stride_ragged_dim);
+  EXPECT_EQ(lhs.stride_group_dim, rhs.stride_group_dim);
   EXPECT_EQ(lhs.output_stride_ragged_dim, rhs.output_stride_ragged_dim);
   EXPECT_EQ(lhs.precision_algorithm, rhs.precision_algorithm);
   EXPECT_EQ(lhs.compute_precision, rhs.compute_precision);
@@ -153,38 +152,27 @@ TEST(GemmConfigTest, ProtoConversionWithOptionals) {
 }
 
 TEST(GroupedGemmConfigTest, ProtoConversionWithOptionals) {
-  MatrixLayout layout_a(xla::PrimitiveType::BF16, 32, 64,
-                        MatrixLayout::Order::kColumnMajor, 2, 64, 64 * 32 * 2,
-                        blas::Transpose::kTranspose);
-  MatrixLayout layout_b(xla::PrimitiveType::BF16, 64, 48,
-                        MatrixLayout::Order::kRowMajor, 2, 48, 48 * 64 * 2,
-                        blas::Transpose::kNoTranspose);
-  MatrixLayout layout_c(xla::PrimitiveType::F32, 32, 48,
-                        MatrixLayout::Order::kColumnMajor, 2, 48, 48 * 32 * 2,
-                        blas::Transpose::kNoTranspose);
-
   GroupedGemmConfig original_config = {
       32,                                         // m
       48,                                         // n
       64,                                         // k
       1,                                          // batch count
       4,                                          // group count
-      layout_a,                                   // lhs_layout
-      layout_b,                                   // rhs_layout
-      layout_c,                                   // c_layout
-      layout_c,                                   // output_layout
+      128,                                        // lhs_leading_dim_stride
+      256,                                        // rhs_leading_dim_stride
+      128,                                        // c_leading_dim_stride
+      128,                                        // output_leading_dim_stride
+      blas::Transpose::kTranspose,                // trans_a
+      blas::Transpose::kNoTranspose,              // trans_b
+      true,                                       // must_swap_operands
       {0.5, 0.1},                                 // alpha
       1.5,                                        // beta
       blas::DataType::kBF16,                      // type_a
       blas::DataType::kBF16,                      // type_b
       blas::DataType::kFloat,                     // type_c
       blas::DataType::kFloat,                     // type_d
-      1,                                          // lhs_contracting_dimension
-      1,                                          // rhs_contracting_dimension
-      0,                                          // lhs_ragged_dimension
-      0,                                          // rhs_group_dimension
-      64,                                         // lhs_stride_ragged_dim
-      64 * 48,                                    // rhs_stride_group_dim
+      64,                                         // stride_ragged_dim
+      64 * 48,                                    // stride_group_dim
       48,                                         // output_stride_ragged_dim
       xla::PrecisionConfig::ALG_DOT_F32_F32_F32,  // precision_algorithm
       1,                                          // compute_precision

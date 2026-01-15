@@ -111,7 +111,7 @@ message GemmBackendConfig {
   reserved 19;
 }
 
-// Backend config for the GEMM operation running through cuBLAS.
+// Backend config for the GEMM operation running through cuBLASLt.
 message GroupedGemmBackendConfig {
   oneof gemm_config {
     GemmBackendConfig gemm_backend_config = 1;

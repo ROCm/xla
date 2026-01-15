@@ -330,7 +330,8 @@ struct MockBlasLt : public se::gpu::BlasLt {
   }
 
   absl::StatusOr<GroupedMatmulPlanPtr> GetGroupedMatmulPlan(
-      se::gpu::GroupedGemmConfig&, std::vector<Epilogue>) const override {
+      se::gpu::GroupedGemmConfig&,
+      const std::vector<Epilogue>&) const override {
     return GroupedMatmulPlanPtr{};
   }
 
@@ -472,49 +473,20 @@ TEST_F(GpuBlasLtMatmulThunkTest, ThunkProtoSerializationGroupedMatmul) {
       k: 407
       batch_count: 1
       group_count: 1
-      lhs_layout {
-        order: ORDER_ROW_MAJOR
-        num_rows: 101
-        num_cols: 407
-        batch_size: 1
-        leading_dim_stride: 407
-        dtype: F32
-      }
-      rhs_layout {
-        order: ORDER_ROW_MAJOR
-        num_rows: 407
-        num_cols: 400
-        batch_size: 1
-        leading_dim_stride: 400
-        dtype: F32
-      }
-      c_layout {
-        order: ORDER_ROW_MAJOR
-        num_rows: 101
-        num_cols: 400
-        batch_size: 1
-        leading_dim_stride: 400
-        dtype: F32
-      }
-      output_layout {
-        order: ORDER_ROW_MAJOR
-        num_rows: 101
-        num_cols: 400
-        batch_size: 1
-        leading_dim_stride: 400
-        dtype: F32
-      }
+      lhs_leading_dim_stride: 407
+      rhs_leading_dim_stride: 400
+      c_leading_dim_stride: 400
+      output_leading_dim_stride: 400
+      trans_a: BLAS_TRANSPOSE
+      trans_b: BLAS_TRANSPOSE
+      must_swap_operands: True
       alpha_real: 1
       type_a: F32
       type_b: F32
       type_c: F32
       type_d: F32
-      lhs_contracting_dimension: 1
-      rhs_contracting_dimension: 1
-      lhs_ragged_dimension: 0
-      rhs_group_dimension: 0
-      lhs_stride_ragged_dim: 407
-      rhs_stride_group_dim: 400
+      stride_ragged_dim: 407
+      stride_group_dim: 400
       output_stride_ragged_dim: 400
       ragged_mode: RAGGED_NON_CONTRACTING
     }

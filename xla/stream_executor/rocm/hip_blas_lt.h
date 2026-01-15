@@ -141,11 +141,11 @@ class BlasLt : public gpu::BlasLt {
     friend class BlasLt;
     using GroupedGemmPtr = std::unique_ptr<hipblaslt_ext::GroupedGemm>;
 
-    GroupedMatmulPlan(gpu::GroupedGemmConfig&& cfg, bool must_swap_operands)
-        : cfg_(cfg), must_swap_operands_(must_swap_operands) {}
+    GroupedMatmulPlan(gpu::GroupedGemmConfig&& cfg) : cfg_(cfg) {}
 
     absl::Status SetAlgorithm(const MatmulAlgorithm& algorithm) override {
       algorithm_ = algorithm;
+      algorithm_must_be_initialized_ = true;
       return absl::OkStatus();
     }
 
@@ -161,7 +161,8 @@ class BlasLt : public gpu::BlasLt {
     GroupedGemmPtr grouped_gemm_;
     absl::optional<MatmulAlgorithm> algorithm_;  // selected algorithm
     gpu::GroupedGemmConfig cfg_;
-    bool must_swap_operands_;
+    mutable bool algorithm_must_be_initialized_;
+    mutable DeviceMemoryBase saved_address_workspace_{};
   };
 
   explicit BlasLt(StreamExecutor* parent)
@@ -174,7 +175,7 @@ class BlasLt : public gpu::BlasLt {
 
   absl::StatusOr<GroupedMatmulPlanPtr> GetGroupedMatmulPlan(
       gpu::GroupedGemmConfig& config,
-      std::vector<Epilogue> epilogues) const override;
+      const std::vector<Epilogue>& epilogues) const override;
 
   void ClearGroupedMatmulPlanCache();
   size_t GetGroupedMatmulPlanCacheSize() const;
@@ -185,9 +186,6 @@ class BlasLt : public gpu::BlasLt {
   StreamExecutor* parent_;
   mutable absl::Mutex mu_;
   Owned<hipblasLtHandle_t> blas_lt_ ABSL_GUARDED_BY(mu_);
-  mutable absl::Mutex grouped_plan_cache_mu_;
-  absl::flat_hash_map<std::string, GroupedMatmulPlanPtr> grouped_plan_cache_
-      ABSL_GUARDED_BY(grouped_plan_cache_mu_);
 };
 
 }  // namespace rocm

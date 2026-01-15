@@ -159,16 +159,16 @@ void MatrixLayout::Transpose() {
 }
 
 absl::StatusOr<MatrixLayout> MatrixLayout::FromProto(
-    const xla::MatrixLayoutProto& proto) {
+    const xla::GemmConfigProto::MatrixLayout& proto) {
   Order order;
   switch (proto.order()) {
-    case xla::MatrixLayoutProto::ORDER_ROW_MAJOR:
+    case xla::GemmConfigProto::MatrixLayout::ORDER_ROW_MAJOR:
       order = Order::kRowMajor;
       break;
-    case xla::MatrixLayoutProto::ORDER_COLUMN_MAJOR:
+    case xla::GemmConfigProto::MatrixLayout::ORDER_COLUMN_MAJOR:
       order = Order::kColumnMajor;
       break;
-    case xla::MatrixLayoutProto::ORDER_UNKNOWN:
+    case xla::GemmConfigProto::MatrixLayout::ORDER_UNKNOWN:
     default:
       return absl::InvalidArgumentError("Invalid matrix layout order");
   }
@@ -180,14 +180,14 @@ absl::StatusOr<MatrixLayout> MatrixLayout::FromProto(
                       proto.batch_stride(), transpose);
 }
 
-xla::MatrixLayoutProto MatrixLayout::ToProto() const {
-  xla::MatrixLayoutProto proto;
+xla::GemmConfigProto::MatrixLayout MatrixLayout::ToProto() const {
+  xla::GemmConfigProto::MatrixLayout proto;
   switch (order) {
     case Order::kRowMajor:
-      proto.set_order(xla::MatrixLayoutProto::ORDER_ROW_MAJOR);
+      proto.set_order(xla::GemmConfigProto::MatrixLayout::ORDER_ROW_MAJOR);
       break;
     case Order::kColumnMajor:
-      proto.set_order(xla::MatrixLayoutProto::ORDER_COLUMN_MAJOR);
+      proto.set_order(xla::GemmConfigProto::MatrixLayout::ORDER_COLUMN_MAJOR);
       break;
     default: {
       LOG(FATAL) << "Invalid matrix layout order";
@@ -312,7 +312,8 @@ size_t BlasLt::GetMatmulPlanCacheSize() const {
 
 /*static*/ auto BlasLt::GetGroupedMatmulPlan(
     const Stream* stream, GroupedGemmConfig& cfg,
-    std::vector<Epilogue> epilogues) -> absl::StatusOr<GroupedMatmulPlanPtr> {
+    const std::vector<Epilogue>& epilogues)
+    -> absl::StatusOr<GroupedMatmulPlanPtr> {
   auto blas = Get(stream);
   if (blas == nullptr) {
     return xla::Internal("BlasLt is unavailable");
@@ -322,7 +323,7 @@ size_t BlasLt::GetMatmulPlanCacheSize() const {
 
 absl::StatusOr<BlasLt::GroupedMatmulPlan*> BlasLt::GetOrCreateGroupedMatmulPlan(
     const std::string& key, GroupedPlanCreateFunc create) {
-  absl::MutexLock lock(grouped_plan_cache_mu_);  // double mutex ???
+  absl::MutexLock lock(plan_cache_mu_);  // double mutex ???
   auto res = grouped_plan_cache_.emplace(key, GroupedMatmulPlanPtr{});
   // New entry inserted: always create a new matmul plan if key is empty,
   // this is used by command_buffer_thunk test.
@@ -335,12 +336,12 @@ absl::StatusOr<BlasLt::GroupedMatmulPlan*> BlasLt::GetOrCreateGroupedMatmulPlan(
 }
 
 void BlasLt::ClearGroupedMatmulPlanCache() {
-  absl::MutexLock lock(grouped_plan_cache_mu_);
+  absl::MutexLock lock(plan_cache_mu_);
   grouped_plan_cache_.clear();
 }
 
 size_t BlasLt::GetGroupedMatmulPlanCacheSize() const {
-  absl::MutexLock lock(grouped_plan_cache_mu_);
+  absl::MutexLock lock(plan_cache_mu_);
   return grouped_plan_cache_.size();
 }
 
@@ -395,14 +396,6 @@ xla::GemmConfigProto GemmConfig::ToProto() const {
 
 absl::StatusOr<GroupedGemmConfig> GroupedGemmConfig::FromProto(
     const xla::GroupedGemmConfigProto& proto) {
-  TF_ASSIGN_OR_RETURN(MatrixLayout lhs_layout,
-                      MatrixLayout::FromProto(proto.lhs_layout()));
-  TF_ASSIGN_OR_RETURN(MatrixLayout rhs_layout,
-                      MatrixLayout::FromProto(proto.rhs_layout()));
-  TF_ASSIGN_OR_RETURN(MatrixLayout c_layout,
-                      MatrixLayout::FromProto(proto.c_layout()));
-  TF_ASSIGN_OR_RETURN(MatrixLayout output_layout,
-                      MatrixLayout::FromProto(proto.output_layout()));
   std::optional<blas::ComputationType> compute_type =
       blas::FromProto(proto.compute_type());
   TF_ASSIGN_OR_RETURN(blas::DataType typeA, AsBlasDataType(proto.type_a()));
@@ -411,27 +404,30 @@ absl::StatusOr<GroupedGemmConfig> GroupedGemmConfig::FromProto(
   TF_ASSIGN_OR_RETURN(blas::DataType typeD, AsBlasDataType(proto.type_d()));
   TF_ASSIGN_OR_RETURN(RaggedDotMode ragged_mode,
                       RaggedDotModeFromProto(proto.ragged_mode()));
+  TF_ASSIGN_OR_RETURN(blas::Transpose trans_a,
+                      blas::FromProto(proto.trans_a()));
+  TF_ASSIGN_OR_RETURN(blas::Transpose trans_b,
+                      blas::FromProto(proto.trans_b()));
   return GroupedGemmConfig{proto.m(),
                            proto.n(),
                            proto.k(),
                            proto.batch_count(),
                            proto.group_count(),
-                           std::move(lhs_layout),
-                           std::move(rhs_layout),
-                           std::move(c_layout),
-                           std::move(output_layout),
+                           proto.lhs_leading_dim_stride(),
+                           proto.rhs_leading_dim_stride(),
+                           proto.c_leading_dim_stride(),
+                           proto.output_leading_dim_stride(),
+                           trans_a,
+                           trans_b,
+                           proto.must_swap_operands(),
                            {proto.alpha_real(), proto.alpha_imag()},
                            proto.beta(),
                            typeA,
                            typeB,
                            typeC,
                            typeD,
-                           proto.lhs_contracting_dimension(),
-                           proto.rhs_contracting_dimension(),
-                           proto.lhs_ragged_dimension(),
-                           std::optional(proto.rhs_group_dimension()),
-                           proto.lhs_stride_ragged_dim(),
-                           proto.rhs_stride_group_dim(),
+                           proto.stride_ragged_dim(),
+                           proto.stride_group_dim(),
                            proto.output_stride_ragged_dim(),
                            proto.precision_algorithm(),
                            proto.compute_precision(),
@@ -446,10 +442,13 @@ xla::GroupedGemmConfigProto GroupedGemmConfig::ToProto() const {
   proto.set_k(k);
   proto.set_batch_count(batch_count);
   proto.set_group_count(group_count);
-  *proto.mutable_lhs_layout() = lhs_layout.ToProto();
-  *proto.mutable_rhs_layout() = rhs_layout.ToProto();
-  *proto.mutable_c_layout() = c_layout.ToProto();
-  *proto.mutable_output_layout() = output_layout.ToProto();
+  proto.set_lhs_leading_dim_stride(lhs_leading_dim_stride);
+  proto.set_rhs_leading_dim_stride(rhs_leading_dim_stride);
+  proto.set_c_leading_dim_stride(c_leading_dim_stride);
+  proto.set_output_leading_dim_stride(output_leading_dim_stride);
+  proto.set_trans_a(blas::ToProto(trans_a));
+  proto.set_trans_b(blas::ToProto(trans_b));
+  proto.set_must_swap_operands(must_swap_operands);
   proto.set_alpha_real(alpha.real());
   proto.set_alpha_imag(alpha.imag());
   proto.set_beta(beta);
@@ -472,14 +471,8 @@ xla::GroupedGemmConfigProto GroupedGemmConfig::ToProto() const {
   proto.set_type_c(typeC);
   proto.set_type_d(typeD);
 
-  proto.set_lhs_contracting_dimension(lhs_contracting_dimension);
-  proto.set_rhs_contracting_dimension(rhs_contracting_dimension);
-  proto.set_lhs_ragged_dimension(lhs_ragged_dimension);
-  if (rhs_group_dimension.has_value()) {
-    proto.set_rhs_group_dimension(rhs_group_dimension.value());
-  }
-  proto.set_lhs_stride_ragged_dim(lhs_stride_ragged_dim);
-  proto.set_rhs_stride_group_dim(rhs_stride_group_dim);
+  proto.set_stride_ragged_dim(stride_ragged_dim);
+  proto.set_stride_group_dim(stride_group_dim);
   proto.set_output_stride_ragged_dim(output_stride_ragged_dim);
   proto.set_precision_algorithm(precision_algorithm);
   proto.set_compute_precision(compute_precision);

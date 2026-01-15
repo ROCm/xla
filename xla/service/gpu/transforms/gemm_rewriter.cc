@@ -701,7 +701,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
   absl::Status HandleRaggedDot(HloInstruction* instr) override {
     TF_ASSIGN_OR_RETURN(bool is_supported_matmul,
-                        IsCublasSupportedGroupedMatMul(*instr));
+                        IsCublasLtSupportedGroupedMatMul(*instr));
     if (!is_supported_matmul) {
       return absl::OkStatus();
     }
@@ -736,11 +736,6 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       }
       return false;
     };
-
-    auto lhs = ragged_dot->mutable_operand(0);
-    auto rhs = ragged_dot->mutable_operand(1);
-    auto group_sizes = ragged_dot->mutable_operand(2);
-    int new_dim_index = group_sizes->shape().dimensions().size() - 1;
 
     if (!isLhsRaggedDimInContractingDim(lhs_ragged_dim, dot_dims) &&
         !isLhsRaggedDimInBatchDim(lhs_ragged_dim, dot_dims) &&
@@ -2610,6 +2605,11 @@ class GemmWorkspaceRewriteVisitor : public DfsHloRewriteVisitor {
             instr->shape().IsArray())) {
         return absl::OkStatus();
       }
+    } else if (instr->custom_call_target() ==
+               kCublasLtGroupedMatmulCallTarget) {
+      if (!instr->shape().IsArray()) {
+        return absl::OkStatus();
+      }
     } else if (instr->custom_call_target() != kGemmCallTarget ||
                !instr->shape().IsArray()) {
       return absl::OkStatus();
@@ -2645,6 +2645,12 @@ class GemmWorkspaceRewriteVisitor : public DfsHloRewriteVisitor {
         operands_byte_size += ShapeUtil::ByteSizeOf(operand->shape());
       }
       workspace = std::min(workspace, operands_byte_size);
+    }
+
+    // For grouped matmul, add workspace for user args updates
+    if (instr->custom_call_target() == kCublasLtGroupedMatmulCallTarget) {
+      size_t num_groups = instr->operand(2)->shape().dimensions().back();
+      workspace = GroupedGemmConfig::kUserArgsSizeBytes * num_groups;
     }
 
     // Append workspace buffer to instruction outputs.

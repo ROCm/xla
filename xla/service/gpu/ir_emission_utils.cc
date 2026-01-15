@@ -72,13 +72,22 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
-absl::StatusOr<bool> IsCublasSupportedGroupedMatMul(
+absl::StatusOr<bool> IsCublasLtSupportedGroupedMatMul(
     const HloInstruction& instr) {
-  if (instr.opcode() != HloOpcode::kRaggedDot) {
-    return false;
+  if (instr.opcode() == HloOpcode::kRaggedDot) {
+    switch (instr.shape().element_type()) {
+      // Only float 16 and bf 16 are supported by HipBlasLt GroupGemm
+      case F16:
+      case BF16:
+        return (((instr.operand(0)->shape().element_type() == F16) ||
+                 (instr.operand(0)->shape().element_type() == BF16)) &&
+                ((instr.operand(1)->shape().element_type() == F16) ||
+                 (instr.operand(1)->shape().element_type() == BF16)));
+      default:
+        return false;
+    }
   }
-  // TODO: check GroupedGemm configuration
-  return true;
+  return false;
 }
 
 absl::StatusOr<bool> IsCublasSupportedMatMul(

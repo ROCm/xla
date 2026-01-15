@@ -625,30 +625,36 @@ bool IsTf32Allowed(PrecisionConfig::Algorithm algorithm,
                           precision_algorithm, lhs_shape.element_type(),
                           output_shape.element_type(), compute_precision));
 
-  std::optional<int64_t> rhs_group_dim;
-  if (rhs_group_dimensions.size() == 1) {
-    rhs_group_dim = rhs_group_dimensions.back();
+  bool must_swap_operands =
+      (output_layout.order != gpu::MatrixLayout::Order::kColumnMajor);
+
+  auto trans_a = lhs_layout.transpose, trans_b = rhs_layout.transpose;
+  if (lhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
+    trans_a = se::blas::Transpose::kTranspose;
   }
+  if (rhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
+    trans_b = se::blas::Transpose::kTranspose;
+  }
+
   return GroupedGemmConfig(
       se::gpu::GroupedGemmConfig{m,
                                  n,
                                  k,
                                  (uint64_t)lhs_layout.batch_size,
                                  group_count,
-                                 lhs_layout,
-                                 rhs_layout,
-                                 output_layout,
-                                 output_layout,
+                                 lhs_layout.leading_dim_stride,
+                                 rhs_layout.leading_dim_stride,
+                                 output_layout.leading_dim_stride,
+                                 output_layout.leading_dim_stride,
+                                 lhs_layout.transpose,
+                                 rhs_layout.transpose,
+                                 must_swap_operands,
                                  {alpha_real, alpha_imag},
                                  beta,
                                  type_a,
                                  type_b,
                                  type_c,
                                  type_d,
-                                 lhs_contracting_dims.back(),
-                                 rhs_contracting_dims.back(),
-                                 lhs_ragged_dimension,
-                                 rhs_group_dim,
                                  lhs_stride_ragged_dim,
                                  rhs_stride_group_dim,
                                  output_stride_ragged_dim,

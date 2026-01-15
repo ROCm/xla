@@ -158,13 +158,8 @@ struct GroupedGemmConfig : public se::gpu::GroupedGemmConfig {
 
   // For legacy Gemm operations XLA:GPU allocates its own workspace and passes
   // it to all BLAS API calls.
-  //
-  // Size of the workspace based on NVIDIA recommendation:
-  // https://docs.nvidia.com/cuda/cublas/#cublassetworkspace
-  static constexpr int64_t kHopperWorkspace = 32 * 1024 * 1024;  // 32 MiB
-  static constexpr int64_t kGFX942Workspace = 76 * 1024 * 1024;  // 76 MiB
-  static constexpr int64_t kGFX950Workspace = 64 * 1024 * 1024;  // 64 MiB
-  static constexpr int64_t kDefaultWorkspace = 4 * 1024 * 1024;  // 4 MiB
+  static constexpr int64_t kUserArgsSizeBytes = 196;
+
   // the number of algorithms to consider for autotuning by default
   static constexpr int64_t kNumAlgorithms = 128;
 
@@ -190,16 +185,6 @@ struct GroupedGemmConfig : public se::gpu::GroupedGemmConfig {
   static absl::StatusOr<GroupedGemmConfig> For(
       const HloInstruction* groupe_gemm,
       const se::GpuComputeCapability& gpu_version);
-
-  struct DescriptorsTuple {
-    se::gpu::MatrixDescriptor lhs;
-    se::gpu::MatrixDescriptor rhs;
-    se::gpu::OutputMatrixDescriptor output;
-    bool operands_swapped;
-  };
-  absl::StatusOr<DescriptorsTuple> GetMatrixDescriptors(
-      se::DeviceMemoryBase lhs_buf, se::DeviceMemoryBase rhs_buf,
-      se::DeviceMemoryBase out_buf) const;
 };
 
 // Run the given GEMM instruction `gemm` subject to the configuration

@@ -339,6 +339,15 @@ absl::StatusOr<std::unique_ptr<HloInstruction>> RaggedToGeneral(
                                    ragged_dot->precision_config());
 }
 
+bool isFloat16Operation(const HloInstruction* ragged_dot) {
+  return (((ragged_dot->shape().element_type() == F16) ||
+           (ragged_dot->shape().element_type() == BF16)) &&
+          ((ragged_dot->operand(0)->shape().element_type() == F16) ||
+           (ragged_dot->operand(0)->shape().element_type() == BF16)) &&
+          ((ragged_dot->operand(1)->shape().element_type() == F16) ||
+           (ragged_dot->operand(1)->shape().element_type() == BF16)));
+}
+
 }  // namespace
 
 absl::StatusOr<bool> RaggedDotRewriter::Run(
@@ -351,8 +360,7 @@ absl::StatusOr<bool> RaggedDotRewriter::Run(
       module->config().debug_options().xla_gpu_enable_cublaslt();
   if (module->config()
           .debug_options()
-          .xla_gpu_experimental_use_ragged_dot_fusion() ||
-      hasGroupedGemm) {
+          .xla_gpu_experimental_use_ragged_dot_fusion()) {
     return false;
   }
 
@@ -362,7 +370,11 @@ absl::StatusOr<bool> RaggedDotRewriter::Run(
        module->MakeNonfusionComputations(execution_threads)) {
     for (auto* instruction : computation->instructions()) {
       if (instruction->opcode() == HloOpcode::kRaggedDot) {
-        ragged_dots.push_back(Cast<HloRaggedDotInstruction>(instruction));
+        if (!(hasGroupedGemm && isFloat16Operation(instruction))) {
+          // Only ragged-dot that cannot be lowered through cublatLt GroupGemm
+          // are added to the list of operations to rewrite in regular dot.
+          ragged_dots.push_back(Cast<HloRaggedDotInstruction>(instruction));
+        }
       }
     }
   }

@@ -905,8 +905,7 @@ absl::Status IrEmitterUnnested::EmitCublasLtGroupedMatmulThunk(
                       GetAllocationSliceForHlo(instr, output_index));
 
   std::optional<BufferAllocation::Slice> workspace_buffer;
-  if (instr->shape().IsTuple() &&
-      (instr->shape().tuple_shapes().size() /* - has_aux_output */ - 1)) {
+  if (instr->shape().IsTuple() && (instr->shape().tuple_shapes().size() - 1)) {
     TF_ASSIGN_OR_RETURN(workspace_buffer,
                         GetAllocationSliceForHlo(
                             instr, {instr->shape().tuple_shapes_size() - 1}));
