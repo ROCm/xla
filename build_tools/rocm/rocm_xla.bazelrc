@@ -59,6 +59,7 @@ build:xla_sgpu -- \
 -//xla/backends/gpu/collectives:gpu_clique_key_test \
 -//xla/backends/gpu/collectives:nccl_communicator_test \
 -//xla/service:collective_ops_utils_test \
+-//xla/tests:collective_ops_e2e_test_amdgpu_any \
 -//xla/service:collective_pipeliner_test \
 -//xla/service:collective_permute_cycle_test \
 -//xla/service:batched_gather_scatter_normalizer_test \
