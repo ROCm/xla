@@ -602,6 +602,23 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
 }  // namespace profiler
 }  // namespace xla
 
+// NOTE: The following constructor was previously used to force profiler
+// initialization before hipInit. This was intended to ensure tracing callbacks
+// were registered for frameworks like MaxText that call hipInit early.
+//
+// However, this constructor causes a critical bug: when HIP command buffers
+// (graphs) are enabled, the forced rocprofiler configuration leads to
+// segmentation faults after approximately 1800 consecutive hipGraphLaunch()
+// calls. The crash occurs inside libhsa-runtime64.so during graph execution.
+//
+// This is disabled until the interaction between rocprofiler-sdk and HIP
+// graphs is resolved. Users who need profiling should explicitly configure
+// the profiler after their application has initialized.
+//
+// TODO(ROCm): Investigate the rocprofiler-sdk/HIP graph interaction and
+// find a solution that allows both early profiler init and stable graph
+// execution.
+#if 0
 // force to initialize the hooks before hipInit, if we don't use this
 // some high-level framwork, e.g., maxtext, calls hipInit before
 // rocprofiler_configure, then no tracing callbacks will be triggered,
@@ -609,3 +626,4 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
 void __attribute__((constructor)) init_rocm_lib() {
   rocprofiler_force_configure(xla::profiler::rocprofiler_configure);
 }
+#endif
