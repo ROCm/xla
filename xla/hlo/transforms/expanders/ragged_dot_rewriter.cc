@@ -353,6 +353,10 @@ bool isFloat16Operation(const HloInstruction* ragged_dot) {
 absl::StatusOr<bool> RaggedDotRewriter::Run(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
+  // Check if target is AMD/ROCm
+  const bool isROCm = std::holds_alternative<se::RocmComputeCapability>(
+      gpu_compute_capability_);
+
   const bool hasGroupedGemm =
       module->config()
           .debug_options()
@@ -370,7 +374,7 @@ absl::StatusOr<bool> RaggedDotRewriter::Run(
        module->MakeNonfusionComputations(execution_threads)) {
     for (auto* instruction : computation->instructions()) {
       if (instruction->opcode() == HloOpcode::kRaggedDot) {
-        if (!(hasGroupedGemm && isFloat16Operation(instruction))) {
+        if (!(isROCm && hasGroupedGemm && isFloat16Operation(instruction))) {
           // Only ragged-dot that cannot be lowered through cublatLt GroupGemm
           // are added to the list of operations to rewrite in regular dot.
           ragged_dots.push_back(Cast<HloRaggedDotInstruction>(instruction));

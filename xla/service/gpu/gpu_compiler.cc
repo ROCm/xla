@@ -751,7 +751,7 @@ absl::Status RunOptimizationPasses(
       DebugOptions::UNSTABLE_REDUCTION_DETECTION_MODE_NONE) {
     pipeline.AddPass<UnstableReductionDetector>();
   }
-  pipeline.AddPass<RaggedDotRewriter>();
+  pipeline.AddPass<RaggedDotRewriter>(gpu_version);
   if (!debug_options.xla_gpu_experimental_scaled_dot_with_triton()) {
     pipeline.AddPass<ScaledDotRewriter>();
   }
@@ -1836,9 +1836,9 @@ absl::Status GpuCompiler::OptimizeHloPostLayoutAssignment(
       pipeline.AddPass<HloDCE>();
       if (debug_options.xla_gpu_enable_triton_softmax_fusion()) {
         pipeline.AddPass<SoftmaxRewriterTriton>(
-          gpu_target_config.device_description, ShapeSizeBytesFunction(),
-          &symbolic_expr_context_,
-          /*only_fuse_if_profitable=*/true);
+            gpu_target_config.device_description, ShapeSizeBytesFunction(),
+            &symbolic_expr_context_,
+            /*only_fuse_if_profitable=*/true);
       }
     }
 

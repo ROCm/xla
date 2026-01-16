@@ -79,8 +79,6 @@ namespace rocm {
 using ::xla::complex128;
 using ::xla::complex64;
 
-using namespace hipblaslt_ext;
-
 #define GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
 
 void GroupGemmUpdateArgs(
@@ -709,7 +707,7 @@ auto BlasLt::GetGroupedMatmulPlan(gpu::GroupedGemmConfig &cfg,
 
   auto plan = std::make_unique<GroupedMatmulPlan>(std::move(cfg));
 
-  plan->grouped_gemm_ = std::make_unique<GroupedGemm>(
+  plan->grouped_gemm_ = std::make_unique<hipblaslt_ext::GroupedGemm>(
       blas_lt_.get(), AsHipblasOperation(trans_a), AsHipblasOperation(trans_b),
       AsHipblasDataType(type_a), AsHipblasDataType(type_b),
       AsHipblasDataType(plan->cfg_.type_c),
@@ -748,8 +746,8 @@ auto BlasLt::GetGroupedMatmulPlan(gpu::GroupedGemmConfig &cfg,
   }
 
   // TODO: recover GemmEpilogues from args
-  std::vector<GemmEpilogue> epilogue(plan->cfg_.group_count);
-  std::vector<GemmInputs> inputs(plan->cfg_.group_count);
+  std::vector<hipblaslt_ext::GemmEpilogue> epilogue(plan->cfg_.group_count);
+  std::vector<hipblaslt_ext::GemmInputs> inputs(plan->cfg_.group_count);
 
   // TODO Improve alpha and beta conversion (similarly to done in the
   // MatmulPlan)
@@ -765,12 +763,12 @@ auto BlasLt::GetGroupedMatmulPlan(gpu::GroupedGemmConfig &cfg,
     inputs[i].setBeta(static_cast<void *>(&sbeta));
   }
 
-  GemmProblemType problem(AsHipblasOperation(trans_a),
-                          AsHipblasOperation(trans_b),
-                          AsHipblasDataType(type_a), AsHipblasDataType(type_b),
-                          AsHipblasDataType(plan->cfg_.type_c),
-                          AsHipblasDataType(plan->cfg_.type_d),
-                          AsHipblasComputeType(*compute_type));
+  hipblaslt_ext::GemmProblemType problem(
+      AsHipblasOperation(trans_a), AsHipblasOperation(trans_b),
+      AsHipblasDataType(type_a), AsHipblasDataType(type_b),
+      AsHipblasDataType(plan->cfg_.type_c),
+      AsHipblasDataType(plan->cfg_.type_d),
+      AsHipblasComputeType(*compute_type));
 
   // Set the Matrix orders does not seem to change anything.
   // This unexpectec behavior worth to be further investigated.
@@ -803,11 +801,11 @@ auto BlasLt::GroupedMatmulPlan::GetAlgorithms(const Stream *stream,
 
   grouped_gemm_->setMaxWorkspaceBytes(max_workspace_size);
 
-  SE_HIPBLAS_RETURN_IF_ERROR(
-      getAllAlgos(blas_lt->blas_lt_.get(), GemmType::HIPBLASLT_GROUPED_GEMM,
-                  problem.getOpA(), problem.getOpB(), problem.getTypeA(),
-                  problem.getTypeB(), problem.getTypeC(), problem.getTypeD(),
-                  problem.getTypeCompute(), heuristicResult));
+  SE_HIPBLAS_RETURN_IF_ERROR(getAllAlgos(
+      blas_lt->blas_lt_.get(), hipblaslt_ext::GemmType::HIPBLASLT_GROUPED_GEMM,
+      problem.getOpA(), problem.getOpB(), problem.getTypeA(),
+      problem.getTypeB(), problem.getTypeC(), problem.getTypeD(),
+      problem.getTypeCompute(), heuristicResult));
   VLOG(2) << "Total heuristics found: " << heuristicResult.size();
   std::vector<MatmulAlgorithm> algorithms;
   algorithms.reserve(max_algorithm_count);
@@ -1128,7 +1126,7 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
     // set algorithm ID to be unique (otherwise it gets kDefaultAlgorithm ID)
     hipblasLtMatmulAlgo_t algo =
         std::any_cast<hipblasLtMatmulAlgo_t>(algorithm_->opaque_algo);
-    profile_result->set_algorithm(getIndexFromAlgo(algo));
+    profile_result->set_algorithm(hipblaslt_ext::getIndexFromAlgo(algo));
     profile_result->set_is_valid(true);
     profile_result->set_elapsed_time_in_ms(absl::ToDoubleMilliseconds(elapsed));
   }
