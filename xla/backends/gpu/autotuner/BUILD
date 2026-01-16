@@ -244,8 +244,8 @@ xla_test(
         "b200",
     ],
     tags = [
-        "cuda-only",
         "no_mac",
+        "cuda-only",
     ],
     deps = [
         ":cublaslt",
@@ -258,9 +258,9 @@ xla_test(
         "//xla/service:compiler",
         "//xla/service:executable",
         "//xla/service:platform_util",
-        "//xla/service/gpu:nvptx_compiler_impl",
         "//xla/stream_executor:blas",
         "//xla/stream_executor:device_description_proto_cc",
+        "//xla/stream_executor:platform",
         "//xla/stream_executor:stream_executor_h",
         "//xla/tsl/lib/core:status_test_util",
         "//xla/tsl/platform:statusor",

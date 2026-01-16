@@ -19,6 +19,8 @@ import tempfile
 
 import lit.formats
 
+from xla.sh_test_with_runfiles import ShTestWithRunfiles
+
 # copybara:uncomment_begin(google-only)
 # from xla.lit_google_cfg import ENV_FLAGS as google_env_flags
 # copybara:uncomment_end

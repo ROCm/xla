@@ -6,10 +6,11 @@ load(
     "if_gpu_is_configured",
 )
 load("//xla/tests:build_defs.bzl", "xla_test")
+load("//xla/tsl:tsl.bzl", "if_google")
 load("//xla/tsl:tsl.bzl", "if_oss")
 load(
     "//xla/tsl/platform:build_config_root.bzl",
-    "tf_gpu_tests_tags",
+    "tf_cuda_tests_tags",
 )
 load(
     "//xla/tsl/platform/default:cuda_build_defs.bzl",
@@ -312,6 +313,7 @@ cc_library(
         "//xla/service:shape_inference",
         "//xla/service/gpu:backend_configs_cc",
         "//xla/service/gpu:cublas_cudnn",
+        "//xla/service/gpu:matmul_utils",
         "//xla/stream_executor:dnn",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:statusor",
@@ -324,14 +326,16 @@ cc_library(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "block_scaling_rewriter_test",
     srcs = ["block_scaling_rewriter_test.cc"],
+    backends = ["gpu"],
     deps = [
         ":block_scaling_rewriter",
         "//xla:error_spec",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/parser:hlo_parser",
+        "//xla/service/gpu/tests:gpu_codegen_test",
         "//xla/hlo/testlib:filecheck",
         "//xla/tests:hlo_test_base",
         "//xla/tsl/platform:statusor",
@@ -356,6 +360,22 @@ xla_test(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest_main",
         "@local_config_cuda//cuda:cudnn_header",
+    ],
+)
+
+xla_test(
+    name = "block_scaling_rewriter_hipblaslt_test",
+    srcs = ["block_scaling_rewriter_hipblaslt_test.cc"],
+    backends = ["gpu"],
+    deps = [
+        ":block_scaling_rewriter",
+        "//xla:error_spec",
+        "//xla/hlo/ir:hlo",
+        "//xla/service/gpu/tests:gpu_codegen_test",
+        "//xla/tests:xla_internal_test_main",
+        "//xla/tsl/platform:status_matchers",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest",
     ],
 )
 
@@ -621,16 +641,18 @@ xla_test(
     name = "cudnn_fused_conv_rewriter_test",
     srcs = ["cudnn_fused_conv_rewriter_test.cc"],
     backend_tags = {
-        "gpu_a100": [
+        "a100": [
             "noasan",
             "nomsan",
         ],
     },
     backends = [
         "a100",
-        "amdgpu_any",
-    ] + if_oss(["nvgpu_any"]),
+    ],
     shard_count = 10,
+    tags = [
+        "cuda-only",  # TODO(rocm): Until #12613 is fixed.
+    ],
     deps = [
         ":conv_rewriter",
         ":cudnn_fused_conv_rewriter",
@@ -666,6 +688,42 @@ xla_test(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_googletest//:gtest_main",
+        "@tsl//tsl/platform:statusor",
+    ],
+)
+
+# Tested via :cudnn_fused_conv_rewriter_test
+cc_library(
+    name = "cudnn_fused_conv_decomposer",
+    srcs = ["cudnn_fused_conv_decomposer.cc"],
+    hdrs = ["cudnn_fused_conv_decomposer.h"],
+    deps = [
+        "//xla:comparison_util",
+        "//xla:debug_options_flags",
+        "//xla:literal",
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla:xla_data_proto_cc",
+        "//xla:xla_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/ir:hlo_instruction_utils",
+        "//xla/hlo/pass:hlo_pass",
+        "//xla/service:hlo_creation_utils",
+        "//xla/service:pattern_matcher",
+        "//xla/service/gpu:backend_configs_cc",
+        "//xla/service/gpu:cublas_cudnn",
+        "//xla/stream_executor:dnn",
+        "//xla/tsl/protobuf:dnn_proto_cc",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:ml_dtypes",
         "@tsl//tsl/platform:statusor",
     ],
 )
@@ -1776,7 +1834,7 @@ lit_test_suite(
     ),
     cfg = "//xla:lit.cfg.py",
     data = ["//xla/backends/gpu/target_config:all_gpu_specs"],
-    default_tags = tf_gpu_tests_tags(),
+    default_tags = ["cuda-only"] + tf_cuda_tests_tags(),
     tools = [
         "//xla/tools:hlo-opt",
         "@llvm-project//llvm:FileCheck",
@@ -2637,7 +2695,6 @@ xla_test(
         "gpu",
     ],
     tags = [
-        "cuda-only",
         "test_migrated_to_hlo_runner_pjrt",
     ],
     deps = [

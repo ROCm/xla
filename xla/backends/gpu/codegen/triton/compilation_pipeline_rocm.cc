@@ -67,7 +67,8 @@ static void MakeTTGIR(mlir::OpPassManager* pm,
   pm->addPass(mt::gpu::createTritonGPURemoveLayoutConversions());
   pm->addPass(mt::gpu::createTritonGPUOptimizeThreadLocality());
   // TODO ROCm Pass rocm_cc.gfx_version() after fixing issue with fmfa
-  pm->addPass(mlir::createTritonAMDGPUAccelerateMatmul({arch_name}));
+  pm->addPass(mlir::createTritonAMDGPUAccelerateMatmul(
+      {rocm_cc.gfx_version()}));
   pm->addPass(mt::gpu::createTritonGPURemoveLayoutConversions());
   // TODO ROCm Check if we want to compare MI100 and greater
   pm->addPass(mlir::createTritonAMDGPUOptimizeEpilogue());
@@ -140,10 +141,8 @@ static void MakeLLIR(mlir::OpPassManager* pm,
   pm->addPass(mlir::createCanonicalizerPass());
   pm->addPass(mlir::createCSEPass());
   pm->addPass(mlir::createSymbolDCEPass());
-  if (/*(instruction_sched_variant=="none") == */ false) {
-    pm->addPass(mt::createTritonAMDGPULowerInstructionSchedHintsPass(
-        rocm_cc.gfx_version(), num_stages));
-  }
+  pm->addPass(mt::createTritonAMDGPULowerInstructionSchedHintsPass(
+      rocm_cc.gfx_version(), num_stages));
   pm->addPass(mt::createConvertBuiltinFuncToLLVMPass(/*ftz=*/true));
 }
 

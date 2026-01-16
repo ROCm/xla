@@ -99,6 +99,8 @@ limitations under the License.
 #include "tsl/platform/random.h"
 #include "tsl/profiler/lib/traceme.h"
 
+#include "amd_comgr/amd_comgr.h"
+
 #ifdef HAS_SUPPORT_FOR_LLD_AS_A_LIBRARY
 #include <array>
 
@@ -427,7 +429,7 @@ void HsacoCache::Add(const std::string& ir, uint64_t hash,
 // TargetMachine for the AMDGPU target.
 absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
     llvm::Module* module, llvm::TargetMachine* target_machine,
-    const DebugOptions& debug_options) {
+    const DebugOptions& debug_options, bool is_autotuning_compilation) {
   auto* env = tsl::Env::Default();
   std::vector<std::string> tempdir_vector;
   env->GetLocalTempDirectories(&tempdir_vector);
@@ -489,7 +491,14 @@ absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
     ir_fs->flush();
   }
 
-  if (debug_options.xla_gpu_use_inprocess_lld()) {
+  static bool use_inprocess_lld_env = []() {
+    bool inprocess_lld = false;
+    TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_INPROCESS_LLD",
+                                        /*default_val=*/true, &inprocess_lld));
+    return inprocess_lld;
+  }();
+
+  if (debug_options.xla_gpu_use_inprocess_lld() || use_inprocess_lld_env) {
 #ifdef HAS_SUPPORT_FOR_LLD_AS_A_LIBRARY
     static absl::Mutex lld_mu(absl::kConstInit);
 
@@ -563,42 +572,136 @@ absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
   hsaco_file.close();
 
   // Check for register spilling using HSACO metadata
+  // Use amd_comgr library for fast in-process metadata extraction
   VLOG(2) << "Checking for register spilling in: "
           << module->getModuleIdentifier();
 
-  RegisterSpillInfo spill_info = ExtractRegisterSpillingFromHsaco(hsaco);
+  bool has_spilling = false;
+  int sgpr_spill_count = 0;
+  int vgpr_spill_count = 0;
+  int private_segment_size = 0;
 
-  if (spill_info.HasSpilling()) {
-    // We can have SGPR spills without stack being used. They are saved to
-    // VGPRs. In that case, we don't want to discard such kernel, so just
-    // report such cases.
-    VLOG(1) << "Register spilling (SGPR: " << spill_info.sgpr_spill_count
-            << ", VGPR: " << spill_info.vgpr_spill_count << ") detected in "
-            << module->getModuleIdentifier();
-  } else {
-    VLOG(2) << "No register spilling detected in "
-            << module->getModuleIdentifier();
+  // Use already-loaded HSACO data for amd_comgr parsing
+  {
+    // Create amd_comgr data object from HSACO
+    amd_comgr_data_t comgr_data;
+    amd_comgr_status_t status =
+        amd_comgr_create_data(AMD_COMGR_DATA_KIND_EXECUTABLE, &comgr_data);
+
+    if (status == AMD_COMGR_STATUS_SUCCESS) {
+      status = amd_comgr_set_data(comgr_data, hsaco.size(),
+                                  reinterpret_cast<const char*>(hsaco.data()));
+
+      if (status == AMD_COMGR_STATUS_SUCCESS) {
+        // Get metadata from the executable
+        amd_comgr_metadata_node_t metadata;
+        status = amd_comgr_get_data_metadata(comgr_data, &metadata);
+
+        if (status == AMD_COMGR_STATUS_SUCCESS) {
+          // Helper lambda to lookup integer value from metadata map
+          auto lookup_int_value = [](amd_comgr_metadata_node_t root,
+                                     const char* key) -> int {
+            amd_comgr_metadata_node_t value_node;
+            amd_comgr_status_t s =
+                amd_comgr_metadata_lookup(root, key, &value_node);
+            if (s != AMD_COMGR_STATUS_SUCCESS) {
+              return 0;
+            }
+
+            size_t size = 0;
+            s = amd_comgr_get_metadata_string(value_node, &size, nullptr);
+            if (s != AMD_COMGR_STATUS_SUCCESS || size == 0) {
+              amd_comgr_destroy_metadata(value_node);
+              return 0;
+            }
+
+            std::string str_value(size, '\0');
+            s = amd_comgr_get_metadata_string(value_node, &size,
+                                              str_value.data());
+            amd_comgr_destroy_metadata(value_node);
+
+            if (s != AMD_COMGR_STATUS_SUCCESS) {
+              return 0;
+            }
+
+            // Parse the integer value
+            try {
+              return std::stoi(str_value);
+            } catch (...) {
+              return 0;
+            }
+          };
+
+          // Navigate to amdhsa.kernels array and check each kernel
+          amd_comgr_metadata_node_t kernels_node;
+          if (amd_comgr_metadata_lookup(metadata, "amdhsa.kernels",
+                                        &kernels_node) ==
+              AMD_COMGR_STATUS_SUCCESS) {
+            size_t kernel_count = 0;
+            amd_comgr_get_metadata_list_size(kernels_node, &kernel_count);
+
+            for (size_t i = 0; i < kernel_count; ++i) {
+              amd_comgr_metadata_node_t kernel_node;
+              if (amd_comgr_index_list_metadata(kernels_node, i,
+                                                &kernel_node) ==
+                  AMD_COMGR_STATUS_SUCCESS) {
+                // Get spill counts for this kernel
+                int kernel_sgpr_spill =
+                    lookup_int_value(kernel_node, ".sgpr_spill_count");
+                int kernel_vgpr_spill =
+                    lookup_int_value(kernel_node, ".vgpr_spill_count");
+                int kernel_private_size = lookup_int_value(
+                    kernel_node, ".private_segment_fixed_size");
+
+                // Aggregate max values across all kernels
+                sgpr_spill_count =
+                    std::max(sgpr_spill_count, kernel_sgpr_spill);
+                vgpr_spill_count =
+                    std::max(vgpr_spill_count, kernel_vgpr_spill);
+                private_segment_size =
+                    std::max(private_segment_size, kernel_private_size);
+
+                amd_comgr_destroy_metadata(kernel_node);
+              }
+            }
+            amd_comgr_destroy_metadata(kernels_node);
+          }
+
+          amd_comgr_destroy_metadata(metadata);
+        } else {
+          VLOG(2) << "Could not get HSACO metadata via amd_comgr";
+        }
+      }
+      amd_comgr_release_data(comgr_data);
+    } else {
+      VLOG(2) << "Could not create amd_comgr data object";
+    }
+
+    if (sgpr_spill_count > 0 || vgpr_spill_count > 0 ||
+        private_segment_size > 0) {
+      has_spilling = true;
+    }
   }
 
-  if (spill_info.HasStackUsage()) {
-    VLOG(1) << "Stack usage (private: " << spill_info.private_segment_size
-            << ", dynamic: "
-            << (spill_info.uses_dynamic_stack ? "true" : "false")
-            << ") detected in " << module->getModuleIdentifier();
+  if (has_spilling) {
+    VLOG(0) << "====== REGISTER SPILLING DETECTED ======";
+    VLOG(0) << "Module: " << module->getModuleIdentifier();
+    VLOG(0) << "SGPR spill count: " << sgpr_spill_count;
+    VLOG(0) << "VGPR spill count: " << vgpr_spill_count;
+    VLOG(0) << "Private segment size: " << private_segment_size << " bytes";
+    VLOG(0) << "Performance may be degraded due to register pressure";
+    VLOG(0) << "========================================";
 
     // Filter out kernels with register spilling during autotuning
     // This matches NVIDIA's behavior in ptx_compiler_impl.cc
-    // TODO: remove ptx from xla_gpu_fail_ptx_compilation_on_register_spilling
-    // to make the flag more general
-    if (debug_options.xla_gpu_fail_ptx_compilation_on_register_spilling()) {
-      VLOG(0) << "Discard module " << module->getModuleIdentifier()
-              << " due register spilling or stack usage";
+    if (debug_options
+            .xla_gpu_filter_kernels_spilling_registers_on_autotuning() &&
+        is_autotuning_compilation) {
       return xla::Cancelled(
-          "Compilation result discarded due to register spilling or stack "
-          "usage");
+          "Compilation result discarded due to register spilling");
     }
   } else {
-    VLOG(2) << "No stack usage detected in " << module->getModuleIdentifier();
+    VLOG(2) << "No register spilling detected";
   }
 
   // Clean up temp files
@@ -792,7 +895,15 @@ absl::Status LinkROCDLIfNecessary(llvm::Module* module,
                      1000 * major + 100 * stepping + minor, 32);
   addControlVariable("__oclc_ABI_version", kAMDGPUAbiVersion, 32);
 
-  if (debug_options.xla_gpu_use_embeded_device_lib()) {
+  static bool use_embedded_device_lib_env = []() {
+    bool embedded_device_lib = false;
+    TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_EMBEDDED_DEVICE_LIB",
+                                  /*default_val=*/true, &embedded_device_lib));
+    return embedded_device_lib;
+  }();
+
+  if (debug_options.xla_gpu_use_embeded_device_lib() ||
+      use_embedded_device_lib_env) {
     llvm::Linker linker(*module);
     auto device_lib = llvm::getLazyBitcodeModule(
         {kAMDGPUDeviceLibData, "device_lib"}, module->getContext());
@@ -872,7 +983,8 @@ std::vector<std::string> GetAMDGPUBackendOptions(
 absl::StatusOr<std::vector<uint8_t>> CompileToHsaco(
     llvm::Module* module, se::GpuComputeCapability gpu_version,
     const DebugOptions& debug_options,
-    const std::string& module_config_cache_key) {
+    const std::string& module_config_cache_key,
+    bool is_autotuning_compilation) {
   static absl::once_flag backend_init_flag;
   // TODO(rocm) Ideally this would be refreshed if xla_gpu_cuda_data_dir
   // changes.
@@ -949,7 +1061,8 @@ absl::StatusOr<std::vector<uint8_t>> CompileToHsaco(
 
     // Lower optimized LLVM module to HSA code object.
     TF_ASSIGN_OR_RETURN(
-        hsaco, EmitModuleToHsaco(module, target_machine.get(), debug_options));
+        hsaco, EmitModuleToHsaco(module, target_machine.get(), debug_options,
+                                 is_autotuning_compilation));
     HsacoCache::Add(str, hash, gcn_arch_name, hsaco);
   }
   return hsaco;
