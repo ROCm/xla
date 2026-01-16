@@ -686,7 +686,7 @@ auto BlasLt::GetGroupedMatmulPlan(gpu::GroupedGemmConfig &cfg,
     std::swap(type_a, type_b);
     std::swap(m, n);
     std::swap(batch_stride_a, batch_stride_b);
-    // std::swap(trans_a, trans_b);
+    std::swap(lda, ldb);
   }
 
   auto compute_type = cfg.compute_type;
@@ -1062,7 +1062,7 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
 
   // Copy arguments to device memory
   TF_RETURN_IF_ERROR(executor->SynchronousMemcpy(
-      &d_userArgs_check, userArgs,
+      d_userArgs, userArgs,
       cfg_.group_count * sizeof(hipblaslt_ext::UserArguments)));
 
 #endif  // GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
@@ -1102,7 +1102,6 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
   float salpha = cfg_.alpha.real();
   float sbeta = cfg_.beta;
 
-  VLOG(-1) << "d_userArgs->opaque() = " << d_userArgs->opaque();
   GroupGemmUpdateArgs(
       gpu::AsGpuStreamValue(stream),
       static_cast<hipblaslt_ext::UserArguments *>(d_userArgs->opaque()),
