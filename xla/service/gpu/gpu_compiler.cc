@@ -619,15 +619,18 @@ absl::Status RunOptimizationPasses(
 
   // SortRewriter needs to ask the device how much scratch space is needed,
   // which isn't feasible if we don't have a device.
-  if (hlo_module->config().debug_options().xla_gpu_enable_cub_radix_sort()) {
-    if (stream_exec != nullptr) {
-      pipeline.AddPass<SortRewriter>(gpu_target_config.device_description,
+  bool enable_sort_rewriter =
+      hlo_module->config().debug_options().xla_gpu_enable_cub_radix_sort();
+  if (stream_exec == nullptr) {
+    LOG(WARNING) << "Using fallback sort algorithm rather than SortRewriter, "
+                    "which will be slower at runtime. To avoid this, "
+                    "compile with a GPU present.";
+    enable_sort_rewriter = false;
+  }
+
+  if (enable_sort_rewriter) {
+    pipeline.AddPass<SortRewriter>(gpu_target_config.device_description,
                                      std::string{platform_name});
-    } else {
-      LOG(WARNING) << "Using fallback sort algorithm rather than SortRewriter, "
-                      "which will be slower at runtime. To avoid this, "
-                      "compile with a GPU present.";
-    }
   }
 
   // Comparison total order expander

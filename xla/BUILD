@@ -20,6 +20,11 @@ package(
     licenses = ["notice"],
 )
 
+
+exports_files([
+    "sh_test_with_runfiles.py",
+])
+
 exports_files([
     "sh_test_with_runfiles.py",
 ])

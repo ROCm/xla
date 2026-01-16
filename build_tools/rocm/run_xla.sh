@@ -39,21 +39,67 @@ echo ""
 
 export PYTHON_BIN_PATH=`which python3`
 export TF_NEED_ROCM=1
-export ROCM_PATH=/opt/rocm
+export ROCM_PATH="/opt/rocm"
 
-SCRIPT_DIR=$(realpath $(dirname $0))
-TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),gpu,-multi_gpu,-multi_gpu_h100,requires-gpu-amd,,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
+EXCLUDED_TESTS=(
+    AlgorithmTest.Algorithm6xBF16
+    CommandBufferConversionPassTest.ConvertWhileThunk
+    CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
+    CompareTest.SplitK
+    DeterminismTest.Conv
+    DotTestTestSuite/DotTest.IsTritonSupportedExecutesCorrectlyForDot/f8e5m2_dot
+    DotTf32Tf32F32Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_tf32_tf32_f32_*
+    DotTf32Tf32F32X3Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_tf32_tf32_f32_*
+    ElementwiseTestSuiteF16/UnaryElementwiseTest.ElementwiseUnaryOpExecutesCorrectly/f16_cosine
+    ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseBinaryOpExecutesCorrectly/f16_atan2
+    ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseFusionExecutesCorrectly/f16_atan2
+    PjrtCAPIGpuExtensionTest.TritonCompile
+    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_*
+    TritonFusionNumericsVerifierTest.CompilationSucceedsEvenIfKernelWillSpillRegisters
+    TritonFusionNumericsVerifierTestSuite/TritonFusionNumericsVerifierTest.VerifyMultipleNestedFusionNumerics/*
+    TritonEmitterTest.RocmWarpSizeIsSetCorrectly
+    TritonNormalizationTest.CanFuseAndEmitDiamondWithBF16Converts
+    TritonTest.FuseSubchannelDequantizationWithTranspose
+    )
 
+BAZEL_DISK_CACHE_SIZE=100G
+BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
+mkdir -p ${BAZEL_DISK_CACHE_DIR}
 if [ ! -d /tf/pkg ]; then
 	mkdir -p /tf/pkg
+fi
+
+SCRIPT_DIR=$(realpath $(dirname $0))
+TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh),-multigpu,-multi_gpu_h100,requires-gpu-amd,-skip_rocprofiler_sdk,-no_oss,-oss_excluded,-oss_serial
+
+SANITIZER_ARGS=()
+if [[ $1 == "asan" ]]; then
+    SANITIZER_ARGS+=("--config=asan")
+    TAG_FILTERS=$TAG_FILTERS,-noasan
+    shift
+elif [[ $1 == "tsan" ]]; then
+    SANITIZER_ARGS+=("--config=tsan")
+    TAG_FILTERS=$TAG_FILTERS,-notsan
+    # excluded from tsan
+    EXCLUDED_TESTS+=(
+        # //xla/tests:collective_ops_e2e_test_amdgpu_any
+        CollectiveOpsTestE2E*
+        # //xla/backends/gpu/runtime:host_execute_thunk_test_amdgpu_any
+        HostExecuteStartThunkTest*
+        HostExecuteDoneThunkTest*
+    )
+    shift
 fi
 
 bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --config=rocm_ci \
     --config=xla_sgpu \
+    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+    --profile=/tf/pkg/profile.json.gz \
+    --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE} \
+    --experimental_guard_against_concurrent_changes \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
-    --profile=/tf/pkg/profile.json.gz \
     --test_timeout=920,2400,7200,9600 \
     --test_sharding_strategy=disabled \
     --test_output=errors \
@@ -61,8 +107,17 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --keep_going \
     --local_test_jobs=${N_TEST_JOBS} \
     --test_env=TF_TESTS_PER_GPU=$TF_TESTS_PER_GPU \
-    --test_env=TF_GPU_COUNT=$TF_GPU_COUNT \
-    --action_env=TF_ROCM_AMDGPU_TARGETS=${AMD_GPU_GFX_ID} \
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
-    --repo_env="ROCM_PATH=$ROCM_PATH" \
-    --run_under=//build_tools/ci:parallel_gpu_execute
+    --run_under=//build_tools/ci:parallel_gpu_execute \
+    --test_env=MIOPEN_FIND_ENFORCE=5 \
+    --test_env=MIOPEN_FIND_MODE=1 \
+    --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
+    "${SANITIZER_ARGS[@]}" \
+    "$@" \
+    --spawn_strategy=local \
+    --strategy=TestRunner=local # execute multigpu tests locally as there is no gpu exclusive protection on rbe
+
+# clean up bazel disk_cache
+bazel shutdown \
+  --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+  --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE}

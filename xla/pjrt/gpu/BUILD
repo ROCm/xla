@@ -194,6 +194,7 @@ xla_test(
             "multi_gpu",
             "noasan",
             "nomsan",
+            "cuda-only",
         ],
         # TODO(464116734): Re-enable once multi-device presubmits will be available in OSS.
         "nvgpu_any": [
@@ -315,6 +316,7 @@ xla_test(
             "no_oss",
             "noasan",
             "nomsan",
+            "cuda-only",
         ],
         "nvgpu_any": [
             "broken",
@@ -370,6 +372,7 @@ xla_test(
             "no_oss",
             "noasan",
             "nomsan",
+            "cuda-only",
         ],
     },
     backends = ["gpu"],
