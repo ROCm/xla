@@ -102,6 +102,18 @@ elif [[ $1 == "tsan" ]]; then
     shift
 fi
 
+clean_up() {
+    # clean up nccl- files
+    rm -rf /dev/shm/nccl-*
+
+    # clean up bazel disk_cache
+    bazel shutdown \
+        --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+        --experimental_disk_cache_gc_max_size=100G
+}
+
+trap clean_up EXIT
+
 bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --config=rocm_ci \
     --config=xla_mgpu \
@@ -124,8 +136,3 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     "${SANITIZER_ARGS[@]}" \
     "$@" \
     --strategy=TestRunner=local # execute multigpu tests locally as there is no gpu exclusive protection on rbe
-
-# clean up bazel disk_cache
-bazel shutdown \
-  --disk_cache=${BAZEL_DISK_CACHE_DIR} \
-  --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE}

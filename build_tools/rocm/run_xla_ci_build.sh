@@ -36,6 +36,18 @@ for arg in "$@"; do
     fi
 done
 
+clean_up() {
+    # clean up nccl- files
+    rm -rf /dev/shm/nccl-*
+
+    # clean up bazel disk_cache
+    bazel shutdown \
+        --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+        --experimental_disk_cache_gc_max_size=100G
+}
+
+trap clean_up EXIT
+
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --config=rocm_rbe \
     --disk_cache=${BAZEL_DISK_CACHE_DIR} \
