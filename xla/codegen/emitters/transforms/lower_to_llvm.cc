@@ -44,6 +44,7 @@ limitations under the License.
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "xla/codegen/device_spec.h"
+#include "xla/codegen/emitters/transforms/lowering_utils.h"
 #include "xla/codegen/emitters/transforms/passes.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/device_description.pb.h"
@@ -139,6 +140,11 @@ class LowerToLLVMPass : public impl::LowerToLLVMPassBase<LowerToLLVMPass> {
     if (failed(applyFullConversion(getOperation(), target,
                                    std::move(mathPatterns)))) {
       signalPassFailure();
+      return;
+    }
+
+    if (device_spec_.IsAmdGpu()) {
+      EnsureAMDGPUAllocasUseAS5(getOperation());
     }
     
     // For AMDGPU, fix allocas to use address space 5 (private)
