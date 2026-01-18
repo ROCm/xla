@@ -65,13 +65,20 @@ cc_library(
     deps = [
         ":rocm_collector",
         ":rocm_tracer",
-        ":rocm_tracer_utils",
         "//xla/stream_executor/rocm:roctracer_wrapper",
         "//xla/tsl/platform:env_time",
+        "//xla/tsl/platform:errors",
         "//xla/tsl/profiler/backends/cpu:annotation_stack",
+        "//xla/tsl/profiler/utils:parse_annotation",
+        "//xla/tsl/profiler/utils:trace_utils",
+        "//xla/tsl/profiler/utils:xplane_builder",
+        "//xla/tsl/profiler/utils:xplane_schema",
+        "//xla/tsl/profiler/utils:xplane_utils",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
+        "@local_config_rocm//rocm:rocm_headers",
         "@tsl//tsl/profiler/lib:profiler_factory",
         "@tsl//tsl/profiler/lib:profiler_interface",
         "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc",
@@ -425,19 +432,52 @@ cc_library(
     ],
 )
 
+config_setting(
+    name = "use_v1",
+    values = {"define": "xla_rocm_profiler=v1"},
+)
+
+config_setting(
+    name = "use_rocprofiler_sdk",
+    values = {"define": "xla_rocm_profiler=v3"},
+)
+
 cc_library(
-    name = "rocm_tracer_utils",
-    srcs = ["rocm_tracer_utils.cc"],
-    hdrs = ["rocm_tracer_utils.h"],
+    name = "rocm_profiler_backend_cfg",
+    defines = select({
+        ":use_v1": ["XLA_GPU_ROCM_TRACER_BACKEND=1"],
+        ":use_rocprofiler_sdk": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
+        "//conditions:default": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
+    }),
     visibility = ["//visibility:public"],
-    deps = [
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/container:node_hash_set",
-        "@com_google_absl//absl/log",
-        "@com_google_absl//absl/log:check",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/synchronization",
+)
+
+cc_library(
+  name = "rocm_tracer_utils",
+  srcs = ["rocm_tracer_utils.cc"],
+  hdrs = ["rocm_tracer_utils.h"],
+  tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
     ],
+  deps = [
+    "//xla/tsl/profiler/backends/cpu:annotation_stack",
+    "//xla/tsl/profiler/utils:time_utils",
+    "//xla/tsl/profiler/utils:math_utils",
+    "@com_google_absl//absl/strings:string_view",
+    "@com_google_absl//absl/container:flat_hash_map",
+    "@com_google_absl//absl/container:flat_hash_set",
+    "@com_google_absl//absl/container:node_hash_map",
+    "@com_google_absl//absl/container:node_hash_set",
+    "@tsl//tsl/platform:env_time",
+    "@tsl//tsl/platform:env",
+    "@tsl//tsl/platform:errors",
+    "@tsl//tsl/platform:logging",
+    "@tsl//tsl/platform:macros",
+    "@local_config_rocm//rocm:rocprofiler-sdk",
+  ],
+  visibility = ["//visibility:public"],
 )
 
 cc_library(
@@ -453,82 +493,132 @@ cc_library(
     ]),
     deps = [
         ":rocm_tracer_utils",
+        ":rocm_profiler_backend_cfg",
         "//xla/stream_executor/rocm:roctracer_wrapper",
-        "//xla/tsl/platform:status",
+        "//xla/tsl/profiler/backends/cpu:annotation_stack",
         "//xla/tsl/profiler/utils:parse_annotation",
-        "//xla/tsl/profiler/utils:trace_utils",
         "//xla/tsl/profiler/utils:xplane_builder",
         "//xla/tsl/profiler/utils:xplane_schema",
         "//xla/tsl/profiler/utils:xplane_utils",
-        "@com_google_absl//absl/base:core_headers",
+        "//xla/tsl/util:env_var",
+        "@com_google_absl//absl/container:fixed_array",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/container:node_hash_map",
-        "@com_google_absl//absl/log",
-        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/container:node_hash_set",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
-        "@local_config_rocm//rocm:rocm_headers",  # buildcleaner: keep
-        "@local_config_rocm//rocm:rocprofiler-sdk",  # buildcleaner: keep
         "@tsl//tsl/platform:abi",
-        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+        "@tsl//tsl/platform:env_time",
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:macros",
+        "@tsl//tsl/platform:status",
+        "@tsl//tsl/platform:thread_annotations",
+        "@tsl//tsl/platform:types",
+        "@tsl//tsl/profiler/lib:profiler_factory",
+        "@tsl//tsl/profiler/lib:profiler_interface",
+        "@local_config_rocm//rocm:rocprofiler-sdk",
+    ],
+)
+
+cc_library(
+    name = "rocm_tracer_headers",
+    hdrs = [
+        "rocm_tracer.h",
+        "rocm_profiler_sdk.h",
+        "rocm_tracer_v1.h",
+    ],
+    tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
+    # PROPAGATE the layout macro to every dependent TU:
+    defines = select({
+        ":use_v1": ["XLA_GPU_ROCM_TRACER_BACKEND=1"],
+        ":use_rocprofiler_sdk": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
+        "//conditions:default": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
+    }),
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "rocm_tracer_impl",
+    srcs = select({
+        ":use_v1": ["rocm_tracer_v1.cc"],
+        ":use_rocprofiler_sdk": ["rocm_profiler_sdk.cc"],
+        "//conditions:default": ["rocm_profiler_sdk.cc"],
+    }),
+    tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_tracer_headers",
+        ":rocm_collector",
+        "//xla/stream_executor/rocm:roctracer_wrapper",
+        "//xla/tsl/profiler/backends/cpu:annotation_stack",
+        "//xla/tsl/profiler/utils:time_utils",
+        "//xla/tsl/profiler/utils:xplane_builder",
+        "//xla/tsl/profiler/utils:xplane_schema",
+        "//xla/tsl/profiler/utils:xplane_utils",
+        "//xla/tsl/util:env_var",
+        "//xla:debug_options_flags",
+        "@com_google_absl//absl/container:fixed_array",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/container:node_hash_map",
+        "@com_google_absl//absl/container:node_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/synchronization",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform:env",
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform:macros",
+        "@tsl//tsl/platform:platform_port",
+        "@tsl//tsl/platform:status",
+        "@tsl//tsl/platform:thread_annotations",
+        "@tsl//tsl/platform:types",
+        "@tsl//tsl/profiler/lib:profiler_factory",
+        "@tsl//tsl/profiler/lib:profiler_interface",
     ],
 )
 
 cc_library(
     name = "rocm_tracer",
-    srcs = ["rocm_tracer.cc"],
-    hdrs = ["rocm_tracer.h"],
     tags = [
         "gpu",
-        "rocm-only",
-    ] + if_google([
-        # TODO(b/360374983): Remove this tag once the target can be built without --config=rocm.
         "manual",
-    ]),
-    deps = [
-        ":rocm_collector",
-        ":rocm_tracer_utils",
-        "//xla/stream_executor/rocm:roctracer_wrapper",
-        "//xla/tsl/profiler/backends/cpu:annotation_stack",
-        "@com_google_absl//absl/container:fixed_array",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/container:node_hash_set",
-        "@com_google_absl//absl/log",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/types:optional",
-        "@local_config_rocm//rocm:rocm_headers",  # buildcleaner: keep
-        "@local_config_rocm//rocm:rocprofiler-sdk",  # buildcleaner: keep
-        "@tsl//tsl/platform:abi",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:macros",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:types",
+        "rocm-only",
     ],
+    deps = [":rocm_tracer_headers", ":rocm_tracer_impl"],
+    visibility = ["//visibility:public"],
 )
 
-xla_cc_test(
+# upstream it's called xla_cc_test as no GPU involved.
+xla_test(
     name = "rocm_tracer_test",
     size = "small",
     srcs = ["rocm_tracer_test.cc"],
     tags = [
         "gpu",
         "rocm-only",
+        "skip_rocprofiler_sdk",   # due to rocprofiler-sdk's rocprofiler_force_configure
     ] + if_google([
         # Optional: only run internally if ROCm config is enabled
         "manual",
     ]),
     deps = [
-        ":rocm_collector",
         ":rocm_tracer",
         ":rocm_tracer_utils",
-        "@com_google_absl//absl/log",
-        "@com_google_absl//absl/strings:string_view",
+        "//xla/tsl/profiler/utils:xplane_builder",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_googletest//:gtest_main",
-        "@local_config_rocm//rocm:hip",  # buildcleaner: keep
-        "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform:status_matchers",
+        "@tsl//tsl/platform:test",
         "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],
 )
@@ -544,7 +634,6 @@ xla_cc_test(
         "manual",
     ]),
     deps = [
-        # ":rocm_tracer",
         ":rocm_collector",
         ":rocm_tracer_utils",
         "@com_google_googletest//:gtest_main",
