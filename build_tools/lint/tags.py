@@ -101,6 +101,7 @@ _TAGS_TO_DOCUMENTATION_MAP = {
         "Tags the target as a PJRT migration candidate."
     ),
     "multi_gpu": "Used by `xla_test` to signal that multiple GPUs are needed.",
+    "skip_rocprofiler_sdk": "used to skip rocmtracer test as it calls rocprofiler-sdk via rocprofiler_force_configure",
 }
 
 
