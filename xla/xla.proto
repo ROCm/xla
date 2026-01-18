@@ -148,7 +148,7 @@ message DebugOptions {
   // Allow host-to-host copy even when automatic host compute offload is
   // disabled, i.e. when xla_disable_automatic_host_compute_offload is set.
   optional bool
-      xla_allow_h2h_copy_when_automatic_host_compute_offload_disabled = 439;
+      xla_allow_h2h_copy_when_automatic_host_compute_offload_disabled = 441;
   // Return an error if HostOffloader would have automatically offloaded some
   // compute to the host.
   optional bool xla_disable_automatic_host_compute_offload = 408;
@@ -1326,10 +1326,13 @@ message DebugOptions {
   // If true, use third-party library raft::matrix::select_k to implement TopK.
   optional bool xla_gpu_experimental_use_raft_select_k = 413;
 
+  // rocm max trace events
+  optional int64 xla_gpu_rocm_max_trace_events = 439;
+
   // Note: when adding a new flag, please add it to one of the hardware-specific
   // or hardware-agnostic sections at the top of this proto message.
 
-  // Next id: 441
+  // Next id: 442
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
