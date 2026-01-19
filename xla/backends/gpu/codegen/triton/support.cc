@@ -64,7 +64,10 @@ bool IsTritonSupportedDataType(PrimitiveType type,
       return true;
     case F8E5M2:
     case F8E4M3FN:
-      return gpu_version.IsCuda();
+      return gpu_version.IsCuda() || gpu_version.IsRocm();
+    case F8E5M2FNUZ:
+    case F8E4M3FNUZ:
+      return gpu_version.IsRocm();
     case BF16:
       return gpu_version.IsCuda() ||
              (gpu_version.IsRocm() &&
