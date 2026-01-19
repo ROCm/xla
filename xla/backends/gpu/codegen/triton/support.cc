@@ -64,7 +64,10 @@ bool IsTritonSupportedDataType(PrimitiveType type,
       return true;
     case F8E5M2:
     case F8E4M3FN:
-      return gpu_version.IsCuda();
+      return gpu_version.IsCuda() || gpu_version.IsRocm();
+    case F8E5M2FNUZ:
+    case F8E4M3FNUZ:
+      return gpu_version.IsRocm();
     case BF16:
       return gpu_version.IsCuda() ||
              (gpu_version.IsRocm() &&
@@ -93,6 +96,8 @@ absl::flat_hash_set<HloOpcode> TritonSupportedUnaryElementwiseOps(
 
   if (element_type != PrimitiveType::F8E5M2 &&
       element_type != PrimitiveType::F8E4M3FN &&
+      element_type != PrimitiveType::F8E5M2FNUZ &&
+      element_type != PrimitiveType::F8E5M3FNUZ &&
       element_type != PrimitiveType::F8E8M0FNU) {
     ret.insert(HloOpcode::kNegate);
   }
@@ -467,9 +472,10 @@ CodegenDecision AreDotAlgorithmInputAndOutputConversionsSupported(
   }
 
   if (algorithm == PrecisionConfig::ALG_DOT_F64_F64_F64 &&
-      primitive_util::BitWidth(lhs_type) < 32 &&
-      !gpu_version.cuda_compute_capability()->IsAtLeastBlackwell()) {
-    return forbid("Unsupported BF16 on GPUs before Blackwell");
+      primitive_util::BitWidth(lhs_type) < 32 && (
+      gpu_version.IsRocm() ||
+      !gpu_version.cuda_compute_capability()->IsAtLeastBlackwell())) {
+    return forbid("Unsupported BF16 on GPUs before Blackwell and on ROCm");
   }
 
   if (allowed_operands_types_or->size() != 1) {

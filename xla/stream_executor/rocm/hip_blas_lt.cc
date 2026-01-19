@@ -412,10 +412,10 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
     return absl::InternalError(
         "Algorithm must be set before calling DoMatMul!");
   }
-  DeviceMemoryBase a = args.a;
-  DeviceMemoryBase b = args.b;
-  DeviceMemoryBase a_scale = args.a_scale;
-  DeviceMemoryBase b_scale = args.b_scale;
+  DeviceAddressBase a = args.a;
+  DeviceAddressBase b = args.b;
+  DeviceAddressBase a_scale = args.a_scale;
+  DeviceAddressBase b_scale = args.b_scale;
   if (must_swap_operands_) {
     std::swap(a, b);
     if (a_scale != nullptr && b_scale != nullptr) {
