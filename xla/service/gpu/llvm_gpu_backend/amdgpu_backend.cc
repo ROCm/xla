@@ -99,8 +99,6 @@ limitations under the License.
 #include "tsl/platform/random.h"
 #include "tsl/profiler/lib/traceme.h"
 
-#include "amd_comgr/amd_comgr.h"
-
 #ifdef HAS_SUPPORT_FOR_LLD_AS_A_LIBRARY
 #include <array>
 
@@ -572,136 +570,42 @@ absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
   hsaco_file.close();
 
   // Check for register spilling using HSACO metadata
-  // Use amd_comgr library for fast in-process metadata extraction
   VLOG(2) << "Checking for register spilling in: "
           << module->getModuleIdentifier();
 
-  bool has_spilling = false;
-  int sgpr_spill_count = 0;
-  int vgpr_spill_count = 0;
-  int private_segment_size = 0;
+  RegisterSpillInfo spill_info = ExtractRegisterSpillingFromHsaco(hsaco);
 
-  // Use already-loaded HSACO data for amd_comgr parsing
-  {
-    // Create amd_comgr data object from HSACO
-    amd_comgr_data_t comgr_data;
-    amd_comgr_status_t status =
-        amd_comgr_create_data(AMD_COMGR_DATA_KIND_EXECUTABLE, &comgr_data);
-
-    if (status == AMD_COMGR_STATUS_SUCCESS) {
-      status = amd_comgr_set_data(comgr_data, hsaco.size(),
-                                  reinterpret_cast<const char*>(hsaco.data()));
-
-      if (status == AMD_COMGR_STATUS_SUCCESS) {
-        // Get metadata from the executable
-        amd_comgr_metadata_node_t metadata;
-        status = amd_comgr_get_data_metadata(comgr_data, &metadata);
-
-        if (status == AMD_COMGR_STATUS_SUCCESS) {
-          // Helper lambda to lookup integer value from metadata map
-          auto lookup_int_value = [](amd_comgr_metadata_node_t root,
-                                     const char* key) -> int {
-            amd_comgr_metadata_node_t value_node;
-            amd_comgr_status_t s =
-                amd_comgr_metadata_lookup(root, key, &value_node);
-            if (s != AMD_COMGR_STATUS_SUCCESS) {
-              return 0;
-            }
-
-            size_t size = 0;
-            s = amd_comgr_get_metadata_string(value_node, &size, nullptr);
-            if (s != AMD_COMGR_STATUS_SUCCESS || size == 0) {
-              amd_comgr_destroy_metadata(value_node);
-              return 0;
-            }
-
-            std::string str_value(size, '\0');
-            s = amd_comgr_get_metadata_string(value_node, &size,
-                                              str_value.data());
-            amd_comgr_destroy_metadata(value_node);
-
-            if (s != AMD_COMGR_STATUS_SUCCESS) {
-              return 0;
-            }
-
-            // Parse the integer value
-            try {
-              return std::stoi(str_value);
-            } catch (...) {
-              return 0;
-            }
-          };
-
-          // Navigate to amdhsa.kernels array and check each kernel
-          amd_comgr_metadata_node_t kernels_node;
-          if (amd_comgr_metadata_lookup(metadata, "amdhsa.kernels",
-                                        &kernels_node) ==
-              AMD_COMGR_STATUS_SUCCESS) {
-            size_t kernel_count = 0;
-            amd_comgr_get_metadata_list_size(kernels_node, &kernel_count);
-
-            for (size_t i = 0; i < kernel_count; ++i) {
-              amd_comgr_metadata_node_t kernel_node;
-              if (amd_comgr_index_list_metadata(kernels_node, i,
-                                                &kernel_node) ==
-                  AMD_COMGR_STATUS_SUCCESS) {
-                // Get spill counts for this kernel
-                int kernel_sgpr_spill =
-                    lookup_int_value(kernel_node, ".sgpr_spill_count");
-                int kernel_vgpr_spill =
-                    lookup_int_value(kernel_node, ".vgpr_spill_count");
-                int kernel_private_size = lookup_int_value(
-                    kernel_node, ".private_segment_fixed_size");
-
-                // Aggregate max values across all kernels
-                sgpr_spill_count =
-                    std::max(sgpr_spill_count, kernel_sgpr_spill);
-                vgpr_spill_count =
-                    std::max(vgpr_spill_count, kernel_vgpr_spill);
-                private_segment_size =
-                    std::max(private_segment_size, kernel_private_size);
-
-                amd_comgr_destroy_metadata(kernel_node);
-              }
-            }
-            amd_comgr_destroy_metadata(kernels_node);
-          }
-
-          amd_comgr_destroy_metadata(metadata);
-        } else {
-          VLOG(2) << "Could not get HSACO metadata via amd_comgr";
-        }
-      }
-      amd_comgr_release_data(comgr_data);
-    } else {
-      VLOG(2) << "Could not create amd_comgr data object";
-    }
-
-    if (sgpr_spill_count > 0 || vgpr_spill_count > 0 ||
-        private_segment_size > 0) {
-      has_spilling = true;
-    }
+  if (spill_info.HasSpilling()) {
+    // We can have SGPR spills without stack being used. They are saved to
+    // VGPRs. In that case, we don't want to discard such kernel, so just
+    // report such cases.
+    VLOG(1) << "Register spilling (SGPR: " << spill_info.sgpr_spill_count
+            << ", VGPR: " << spill_info.vgpr_spill_count << ") detected in "
+            << module->getModuleIdentifier();
+  } else {
+    VLOG(2) << "No register spilling detected in "
+            << module->getModuleIdentifier();
   }
 
-  if (has_spilling) {
-    VLOG(0) << "====== REGISTER SPILLING DETECTED ======";
-    VLOG(0) << "Module: " << module->getModuleIdentifier();
-    VLOG(0) << "SGPR spill count: " << sgpr_spill_count;
-    VLOG(0) << "VGPR spill count: " << vgpr_spill_count;
-    VLOG(0) << "Private segment size: " << private_segment_size << " bytes";
-    VLOG(0) << "Performance may be degraded due to register pressure";
-    VLOG(0) << "========================================";
+  if (spill_info.HasStackUsage()) {
+    VLOG(1) << "Stack usage (private: " << spill_info.private_segment_size
+            << ", dynamic: "
+            << (spill_info.uses_dynamic_stack ? "true" : "false")
+            << ") detected in " << module->getModuleIdentifier();
 
     // Filter out kernels with register spilling during autotuning
     // This matches NVIDIA's behavior in ptx_compiler_impl.cc
-    if (debug_options
-            .xla_gpu_filter_kernels_spilling_registers_on_autotuning() &&
-        is_autotuning_compilation) {
+    // TODO: remove ptx from xla_gpu_fail_ptx_compilation_on_register_spilling
+    // to make the flag more general
+    if (debug_options.xla_gpu_fail_ptx_compilation_on_register_spilling()) {
+      VLOG(0) << "Discard module " << module->getModuleIdentifier()
+              << " due register spilling or stack usage";
       return xla::Cancelled(
-          "Compilation result discarded due to register spilling");
+          "Compilation result discarded due to register spilling or stack "
+          "usage");
     }
   } else {
-    VLOG(2) << "No register spilling detected";
+    VLOG(2) << "No stack usage detected in " << module->getModuleIdentifier();
   }
 
   // Clean up temp files
