@@ -563,7 +563,7 @@ ENTRY triton_computation {
         any_is(PrimitiveType::F8E4M3FN) && any_is(PrimitiveType::F8E5M2);
   }
 
-  if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
+  if (cc.IsCuda()) {
     // Crashes due to unsupported/unspecified rounding mode.
     crashes_on_failure |= (data_type_in == PrimitiveType::F64 &&
                           (data_type_out == PrimitiveType::F8E4M3FN ||
@@ -614,7 +614,7 @@ ENTRY triton_computation {
                                      data_type, opcode));
 
   ExpectedFailMode fail_mode = ExpectedFailMode::kFail;
-  if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
+  if (cc.IsCuda()) {
     if (opcode == HloOpcode::kDivide &&
         (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16 ||
          data_type == PrimitiveType::F8E5M2 ||
@@ -658,7 +658,7 @@ ENTRY triton_computation {
                                      data_type, opcode));
 
   ExpectedFailMode fail_mode = ExpectedFailMode::kFail;
-  if (std::holds_alternative<se::CudaComputeCapability>(cc)) {
+  if (cc.IsCuda()) {
     if (opcode == HloOpcode::kDivide &&
         (data_type == PrimitiveType::BF16 || data_type == PrimitiveType::F16 ||
          data_type == PrimitiveType::F8E5M2 ||
@@ -728,7 +728,7 @@ ENTRY triton_computation {
       ParseTemplateAndGetInstruction(hlo_text, data_type, opcode));
 
   bool skip_failure_branch_to_avoid_crash = false;
-  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+  if (cc.IsRocm()) {
     skip_failure_branch_to_avoid_crash =
         (opcode == HloOpcode::kClamp || opcode == HloOpcode::kSelect) &&
         (data_type == PrimitiveType::F8E5M2 ||
@@ -1935,7 +1935,7 @@ TEST_P(DotTypesTest, Dot) {
       fail_mode = ExpectedFailMode::kFailOrCrash;
     }
   }
-  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+  if (cc.IsRocm()) {
     if (absl::c_linear_search(std::vector{F8E5M2FNUZ, F8E4M3FNUZ, F8E4M3FN}, input_type) ||
         absl::c_linear_search(std::vector{F8E5M2FNUZ, F8E4M3FNUZ, F8E4M3FN}, result_type) ||
         input_type == F64) {
@@ -2377,7 +2377,7 @@ ENTRY triton_computation {
   if (absl::c_linear_search(std::vector{F8E5M2, F8E4M3FN, S8}, data_type)) {
     fail_mode = ExpectedFailMode::kFailOrCrash;
   }
-  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+  if (cc.IsRocm()) {
     if (absl::c_linear_search(std::vector{F8E4M3FNUZ, F8E5M2FNUZ, F8E4M3FN,
                                           S8, S16, S32, S64}, data_type)) {
       fail_mode = ExpectedFailMode::kFailOrCrash;
@@ -2475,7 +2475,7 @@ ENTRY triton_computation {
                             data_type)) {
     fail_mode = ExpectedFailMode::kFailOrCrash;
   }
-  if (std::holds_alternative<se::RocmComputeCapability>(cc)) {
+  if (cc.IsRocm()) {
     if (absl::c_linear_search(std::vector{F8E4M3FN, F8E5M2FNUZ, F8E4M3FNUZ, F64},
                                 data_type) ||
         (absl::c_linear_search(std::vector{S64, S32, S16, BF16, F16, F32},
