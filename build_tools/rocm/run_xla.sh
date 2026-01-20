@@ -41,42 +41,7 @@ export PYTHON_BIN_PATH=`which python3`
 export TF_NEED_ROCM=1
 export ROCM_PATH="/opt/rocm"
 
-EXCLUDED_TESTS=(
-    BasicDotAlgorithmEmitterTestSuite/BasicDotAlgorithmEmitterTest.BasicAlgorithmIsEmittedCorrectly/ALG_DOT_F16_F16_F16
-    CommandBufferConversionPassTest.ConvertWhileThunk
-    CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
-    CommandBufferTests/CommandBufferTest.WhileLoop/*
-    CommandBufferTests/CommandBufferTest.IndexConditional/*
-    CommandBufferTests/CommandBufferTest.TrueFalseConditional/*
-    CompareTest.SplitK
-    CublasLtGemmRewriteTest.MatrixBiasSwishActivation
-    DeterminismTest.Conv
-    DotTestTestSuite/DotTest.IsTritonSupportedExecutesCorrectlyForDot/f32_dot
-    DotTf32Tf32F32Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_tf32_tf32_f32_*
-    DotTf32Tf32F32X3Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_tf32_tf32_f32_*
-    ElementwiseTestSuiteF16/UnaryElementwiseTest.ElementwiseUnaryOpExecutesCorrectly/f16_cosine
-    ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseBinaryOpExecutesCorrectly/f16_atan2
-    ElementwiseTestSuiteF16/BinaryElementwiseTest.ElementwiseFusionExecutesCorrectly/f16_atan2
-    GpuKernelTilingTest.ReductionInputTooLarge
-    KernelThunkTmaPTXTestSuite/KernelThunkTmaPTXTest.TmaPTX/*
-    MultiOutputFusionTest.MultiOutputReduceFusionMajorWithExtraOutput
-    PjrtCAPIGpuExtensionTest.TritonCompile
-    ScatterTest.TensorFlowScatterV1_UpdateTwice
-    TestRadixSort/CubSortPairsTest.SortPairs/*
-    TestRadixSort/CubSortKeysTest.SortKeys/*
-    TopKTests/TopKKernelTest.*
-    TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_*
-    TritonEmitterTest.RocmWarpSizeIsSetCorrectly
-    TritonEmitterTest.FusionWithOutputContainingMoreThanInt32MaxElementsExecutesCorrectly
-    TritonEmitterTest.ConvertF16ToF8E5M2Exhaustive
-    TritonEmitterTest.RocmWarpSizeIsSetCorrectly
-    TritonFusionNumericsVerifierTest.CompilationSucceedsEvenIfKernelWillSpillRegisters
-    TritonFusionNumericsVerifierTest.VerifyThatDisablingTritonIsFast
-    TritonNormalizationTest.CanFuseAndEmitDiamondWithBF16Converts
-    TritonScaledDotGemmTest/TritonScaledDotGemmTest.FP8ScaledDotCompilesToPtxIntrinsicsWhenAvailable/f8e*
-    TritonTest.FuseSubchannelDequantizationWithTranspose
-    TritonTest.FuseSubchannelDequantizationWithTranspose
-    )
+EXCLUDED_TESTS=()
 
 BAZEL_DISK_CACHE_SIZE=100G
 BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
@@ -107,7 +72,7 @@ elif [[ $1 == "tsan" ]]; then
     shift
 fi
 
-bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
+bazel --bazelrc=rocm_xla.bazelrc test \
     --config=rocm_ci \
     --config=xla_sgpu \
     --disk_cache=${BAZEL_DISK_CACHE_DIR} \
