@@ -230,7 +230,8 @@ absl::Status RunPassPipeline(mlir::ModuleOp module, const HloModule& hlo_module,
   const se::BlockDim& limit = info.block_dim_limit();
   constexpr uint64_t rocm_limit = std::numeric_limits<uint32_t>::max();
 
-  bool is_rocm = info.gpu_compute_capability().IsRocm();
+  const auto& cc = info.gpu_compute_capability();
+  bool is_rocm = std::get_if<se::RocmComputeCapability>(&cc) != nullptr;
   // Add an extra condition for ROCM backend
   if (num_blocks_x <= limit.x && 
             (!is_rocm || num_blocks_x * num_threads_x <= rocm_limit)) {
