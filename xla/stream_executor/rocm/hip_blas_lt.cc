@@ -902,6 +902,13 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
   size_t byte_width_elem_c = ByteWidth(cfg_.type_c);
   size_t byte_width_elem_d = ByteWidth(cfg_.type_d);
 
+  auto group_size_bytewidth =
+      (cfg_.ragged_mode != gpu::RaggedDotMode::kRaggedBatch)
+          ? static_cast<size_t>(args.aux.size() /
+                                (cfg_.group_count * cfg_.batch_count))
+          : static_cast<size_t>(args.aux.size() / cfg_.group_count);
+
+#ifndef GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
   // Get the default hipblaslt_ext::UserArguments
   auto executor = blas_lt->parent_;
   TF_ASSIGN_OR_RETURN(
@@ -913,13 +920,6 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
           host_allocation.get()->opaque());
   grouped_gemm_->getDefaultValueForDeviceUserArguments(userArgs);
 
-  auto group_size_bytewidth =
-      (cfg_.ragged_mode != gpu::RaggedDotMode::kRaggedBatch)
-          ? static_cast<size_t>(args.aux.size() /
-                                (cfg_.group_count * cfg_.batch_count))
-          : static_cast<size_t>(args.aux.size() / cfg_.group_count);
-
-#ifndef GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
   // Copy group_sizes from Device to Host
   TF_ASSIGN_OR_RETURN(
       std::unique_ptr<MemoryAllocation> host_group_sizes,

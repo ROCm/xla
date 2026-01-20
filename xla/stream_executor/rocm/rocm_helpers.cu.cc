@@ -16,6 +16,7 @@ limitations under the License.
 #include <hip/hip_bfloat16.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
+#include <hipcub/hipcub.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -162,29 +163,41 @@ INSTANTIATE_BIAS_ACTIVATION(double, double)
 
 namespace rocm {
 
+constexpr int BLOCK_SIZE = 256;
+
 template <typename T>
 __global__ void SetUserArgsKernelRaggedInNonContractingDim(
     hipblaslt_ext::UserArguments* dest_args, void* a, void* b, void* c, void* d,
     void* e, const void* group_sizes, size_t byte_width_elem_a,
     size_t byte_width_elem_b, size_t byte_width_elem_c,
-    size_t byte_width_elem_d, uint64_t stride_ragged_dim,
-    uint64_t stride_group_dim, uint64_t output_stride_ragged_dim,
-    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
-    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-    uint32_t strideC1, uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
-    float alpha, float beta, uint64_t num_gemms) {
+    size_t byte_width_elem_d, uint64_t stride_a, uint64_t stride_b,
+    uint64_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
+    uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
+    uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideC1,
+    uint32_t strideC2, uint32_t strideD1, uint32_t strideD2, float alpha,
+    float beta, uint64_t num_gemms) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= num_gemms) {
     return;
   }
 
-  uint64_t offset_group = 0;
+  uint32_t offset_group = 0;
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
-  for (uint32_t i = 0; i < idx; i++) {
-    offset_group += typed_group_sizes[i];
+  if (blockIdx.x == 0) {
+    // Shared memory for BlockScan
+    __shared__ typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage
+        temp_storage;
+    offset_group = typed_group_sizes[idx];
+    hipcub::BlockScan<uint32_t, BLOCK_SIZE>(temp_storage)
+        .ExclusiveSum(offset_group, offset_group);
+  } else {
+    for (uint32_t i = 0; i < idx; i++) {
+      offset_group += typed_group_sizes[i];
+    }
   }
 
-  auto& arg = dest_args[idx];
+  // Declare shared memory for UserArguments
+  __shared__ hipblaslt_ext::UserArguments arg;
 
   if (must_swap_operands) {
     // The ragged matrix has been set as operand B.
@@ -192,19 +205,17 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
     arg.m = m;
 
     arg.a = static_cast<void*>(static_cast<uint8_t*>(a) +
-                               (idx * stride_group_dim * byte_width_elem_a));
-    arg.b = static_cast<void*>(
-        static_cast<uint8_t*>(b) +
-        (offset_group * stride_ragged_dim * byte_width_elem_b));
+                               (idx * stride_a * byte_width_elem_a));
+    arg.b = static_cast<void*>(static_cast<uint8_t*>(b) +
+                               (offset_group * stride_b * byte_width_elem_b));
   } else {
     arg.m = typed_group_sizes[idx];
     arg.n = n;
 
-    arg.a = static_cast<void*>(
-        static_cast<uint8_t*>(a) +
-        (offset_group * stride_ragged_dim * byte_width_elem_a));
+    arg.a = static_cast<void*>(static_cast<uint8_t*>(a) +
+                               (offset_group * stride_a * byte_width_elem_a));
     arg.b = static_cast<void*>(static_cast<uint8_t*>(b) +
-                               (idx * stride_group_dim * byte_width_elem_b));
+                               (idx * stride_b * byte_width_elem_b));
   }
   arg.c = static_cast<void*>(
       static_cast<uint8_t*>(c) +
@@ -224,12 +235,14 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
   arg.strideD2 = strideD2;
   arg.strideE1 = 0;
   arg.strideE2 = 0;
-  int8_t* alpha_i = static_cast<int8_t*>(static_cast<void*>(&alpha));
-  int8_t* beta_i = static_cast<int8_t*>(static_cast<void*>(&beta));
+  // Set alpha to float(1) and beta to float(0).
+  // As these values are imposed in the gemm_rewritter pass anyway.
   for (int8_t i = 0; i < 16; i++) {
-    arg.alpha[i] = alpha_i[i];
-    arg.beta[i] = beta_i[i];
+    arg.alpha[i] = 0;
+    arg.beta[i] = 0;
   }
+  arg.alpha[2] = -128;
+  arg.alpha[3] = 63;
   arg.scaleA = nullptr;
   arg.scaleB = nullptr;
   arg.scaleC = nullptr;
@@ -241,6 +254,11 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
   arg.act0 = 0.0;
   arg.act1 = 0.0;
   arg.activationType = 0;
+
+  // Copy from shared memory to global memory
+  // dest_args[idx] = sharedUserArgs[threadIdx.x];
+  dest_args[idx] = arg;
+  __threadfence();
 }
 
 template <typename T>
@@ -248,41 +266,41 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
     hipblaslt_ext::UserArguments* dest_args, void* a, void* b, void* c, void* d,
     void* e, const void* group_sizes, size_t byte_width_elem_a,
     size_t byte_width_elem_b, size_t byte_width_elem_c,
-    size_t byte_width_elem_d, uint64_t stride_ragged_dim,
-    uint64_t stride_group_dim, uint64_t output_stride_ragged_dim,
-    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
-    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-    uint32_t strideC1, uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
-    float alpha, float beta, uint64_t num_gemms) {
+    size_t byte_width_elem_d, uint64_t stride_a, uint64_t stride_b,
+    uint64_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
+    uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
+    uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideC1,
+    uint32_t strideC2, uint32_t strideD1, uint32_t strideD2, float alpha,
+    float beta, uint64_t num_gemms) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= num_gemms) {
     return;
   }
 
-  uint64_t offset_group = 0;
+  uint32_t offset_group = 0;
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
-  for (uint32_t i = 0; i < idx; i++) {
-    offset_group += typed_group_sizes[i];
+  if (blockIdx.x == 0) {
+    // Shared memory for BlockScan
+    __shared__ typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage
+        temp_storage;
+    offset_group = typed_group_sizes[idx];
+    hipcub::BlockScan<uint32_t, BLOCK_SIZE>(temp_storage)
+        .ExclusiveSum(offset_group, offset_group);
+  } else {
+    for (uint32_t i = 0; i < idx; i++) {
+      offset_group += typed_group_sizes[i];
+    }
   }
 
-  auto& arg = dest_args[idx];
+  // Declare shared memory for UserArguments
+  __shared__ hipblaslt_ext::UserArguments arg;
+
   arg.m = m;
   arg.n = n;
-  if (must_swap_operands) {
-    arg.a = static_cast<void*>(
-        static_cast<uint8_t*>(a) +
-        (offset_group * stride_group_dim * byte_width_elem_a));
-    arg.b = static_cast<void*>(
-        static_cast<uint8_t*>(b) +
-        (offset_group * stride_ragged_dim * byte_width_elem_b));
-  } else {
-    arg.a = static_cast<void*>(
-        static_cast<uint8_t*>(a) +
-        (offset_group * stride_ragged_dim * byte_width_elem_a));
-    arg.b = static_cast<void*>(
-        static_cast<uint8_t*>(b) +
-        (offset_group * stride_group_dim * byte_width_elem_b));
-  }
+  arg.a = static_cast<void*>(static_cast<uint8_t*>(a) +
+                             (offset_group * stride_a * byte_width_elem_a));
+  arg.b = static_cast<void*>(static_cast<uint8_t*>(b) +
+                             (offset_group * stride_b * byte_width_elem_b));
   arg.c = static_cast<void*>(static_cast<uint8_t*>(c) +
                              (idx * batch * strideC2 * byte_width_elem_c));
   arg.d = static_cast<void*>(static_cast<uint8_t*>(d) +
@@ -299,12 +317,14 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
   arg.strideD2 = strideD2;
   arg.strideE1 = 0;
   arg.strideE2 = 0;
-  int8_t* alpha_i = static_cast<int8_t*>(static_cast<void*>(&alpha));
-  int8_t* beta_i = static_cast<int8_t*>(static_cast<void*>(&beta));
+  // Set alpha to float(1) and beta to float(0).
+  // As these values are imposed in the gemm_rewritter pass anyway.
   for (int8_t i = 0; i < 16; i++) {
-    arg.alpha[i] = alpha_i[i];
-    arg.beta[i] = beta_i[i];
+    arg.alpha[i] = 0;
+    arg.beta[i] = 0;
   }
+  arg.alpha[2] = -128;
+  arg.alpha[3] = 63;
   arg.scaleA = nullptr;
   arg.scaleB = nullptr;
   arg.scaleC = nullptr;
@@ -316,6 +336,10 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
   arg.act0 = 0.0;
   arg.act1 = 0.0;
   arg.activationType = 0;
+
+  // Copy from shared memory to global memory
+  dest_args[idx] = arg;
+  __threadfence();
 }
 
 template <typename T>
@@ -323,41 +347,41 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
     hipblaslt_ext::UserArguments* dest_args, void* a, void* b, void* c, void* d,
     void* e, const void* group_sizes, size_t byte_width_elem_a,
     size_t byte_width_elem_b, size_t byte_width_elem_c,
-    size_t byte_width_elem_d, uint64_t stride_ragged_dim,
-    uint64_t stride_group_dim, uint64_t output_stride_ragged_dim,
-    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
-    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-    uint32_t strideC1, uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
-    float alpha, float beta, uint64_t num_gemms) {
+    size_t byte_width_elem_d, uint64_t stride_a, uint64_t stride_b,
+    uint64_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
+    uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
+    uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideC1,
+    uint32_t strideC2, uint32_t strideD1, uint32_t strideD2, float alpha,
+    float beta, uint64_t num_gemms) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= num_gemms) {
     return;
   }
 
-  uint64_t offset_group = 0;
+  uint32_t offset_group = 0;
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
-  for (uint32_t i = 0; i < idx; i++) {
-    offset_group += typed_group_sizes[i];
+  if (blockIdx.x == 0) {
+    // Shared memory for BlockScan
+    __shared__ typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage
+        temp_storage;
+    offset_group = typed_group_sizes[idx];
+    hipcub::BlockScan<uint32_t, BLOCK_SIZE>(temp_storage)
+        .ExclusiveSum(offset_group, offset_group);
+  } else {
+    for (uint32_t i = 0; i < idx; i++) {
+      offset_group += typed_group_sizes[i];
+    }
   }
 
-  auto& arg = dest_args[idx];
+  // Declare shared memory for UserArguments
+  __shared__ hipblaslt_ext::UserArguments arg;
+
   arg.m = m;
   arg.n = n;
-  if (must_swap_operands) {
-    arg.a = static_cast<void*>(
-        static_cast<uint8_t*>(a) +
-        (offset_group * stride_group_dim * byte_width_elem_a));
-    arg.b = static_cast<void*>(
-        static_cast<uint8_t*>(b) +
-        (offset_group * stride_ragged_dim * byte_width_elem_b));
-  } else {
-    arg.a = static_cast<void*>(
-        static_cast<uint8_t*>(a) +
-        (offset_group * stride_ragged_dim * byte_width_elem_a));
-    arg.b = static_cast<void*>(
-        static_cast<uint8_t*>(b) +
-        (offset_group * stride_group_dim * byte_width_elem_b));
-  }
+  arg.a = static_cast<void*>(static_cast<uint8_t*>(a) +
+                             (offset_group * stride_a * byte_width_elem_a));
+  arg.b = static_cast<void*>(static_cast<uint8_t*>(b) +
+                             (offset_group * stride_b * byte_width_elem_b));
   arg.c = static_cast<void*>(
       static_cast<uint8_t*>(c) +
       (offset_group * output_stride_ragged_dim * byte_width_elem_c));
@@ -376,12 +400,14 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
   arg.strideD2 = strideD2;
   arg.strideE1 = 0;
   arg.strideE2 = 0;
-  int8_t* alpha_i = static_cast<int8_t*>(static_cast<void*>(&alpha));
-  int8_t* beta_i = static_cast<int8_t*>(static_cast<void*>(&beta));
+  // Set alpha to float(1) and beta to float(0).
+  // As these values are imposed in the gemm_rewritter pass anyway.
   for (int8_t i = 0; i < 16; i++) {
-    arg.alpha[i] = alpha_i[i];
-    arg.beta[i] = beta_i[i];
+    arg.alpha[i] = 0;
+    arg.beta[i] = 0;
   }
+  arg.alpha[2] = -128;
+  arg.alpha[3] = 63;
   arg.scaleA = nullptr;
   arg.scaleB = nullptr;
   arg.scaleC = nullptr;
@@ -393,6 +419,10 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
   arg.act0 = 0.0;
   arg.act1 = 0.0;
   arg.activationType = 0;
+
+  // Copy from shared memory to global memory
+  dest_args[idx] = arg;
+  __threadfence();
 }
 
 void GroupGemmUpdateArgs(
@@ -406,7 +436,7 @@ void GroupGemmUpdateArgs(
     uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
     uint32_t strideC1, uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
     float alpha, float beta, const uint8_t ragged_mode, uint64_t num_gemms) {
-  const uint64_t block_sz = 128;
+  const uint64_t block_sz = BLOCK_SIZE;
   const uint64_t n_blocks = (num_gemms + block_sz - 1) / block_sz;
   auto kernel = SetUserArgsKernelRaggedInNonContractingDim<uint64_t>;
   switch (ragged_mode) {
@@ -431,13 +461,18 @@ void GroupGemmUpdateArgs(
       break;
     }
   }
+  auto stride_a = stride_ragged_dim;
+  auto stride_b = stride_group_dim;
+  if (must_swap_operands) {
+    std::swap(stride_a, stride_b);
+  }
   hipLaunchKernelGGL(kernel, n_blocks, std::min(block_sz, num_gemms), 0, stream,
                      args, a, b, c, d, e, group_sizes, byte_width_elem_a,
                      byte_width_elem_b, byte_width_elem_c, byte_width_elem_d,
-                     stride_ragged_dim, stride_group_dim,
-                     output_stride_ragged_dim, must_swap_operands, m, n, k,
-                     batch, strideA1, strideA2, strideB1, strideB2, strideC1,
-                     strideC2, strideD1, strideD2, alpha, beta, num_gemms);
+                     stride_a, stride_b, output_stride_ragged_dim,
+                     must_swap_operands, m, n, k, batch, strideA1, strideA2,
+                     strideB1, strideB2, strideC1, strideC2, strideD1, strideD2,
+                     alpha, beta, num_gemms);
 }
 };  // namespace rocm
 
