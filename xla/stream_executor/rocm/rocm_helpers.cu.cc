@@ -174,8 +174,8 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
     uint64_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
     uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
     uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideC1,
-    uint32_t strideC2, uint32_t strideD1, uint32_t strideD2, float alpha,
-    float beta, uint64_t num_gemms) {
+    uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
+    uint64_t num_gemms) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= num_gemms) {
     return;
@@ -270,8 +270,8 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
     uint64_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
     uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
     uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideC1,
-    uint32_t strideC2, uint32_t strideD1, uint32_t strideD2, float alpha,
-    float beta, uint64_t num_gemms) {
+    uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
+    uint64_t num_gemms) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= num_gemms) {
     return;
@@ -351,8 +351,8 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
     uint64_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
     uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
     uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideC1,
-    uint32_t strideC2, uint32_t strideD1, uint32_t strideD2, float alpha,
-    float beta, uint64_t num_gemms) {
+    uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
+    uint64_t num_gemms) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= num_gemms) {
     return;
@@ -435,7 +435,7 @@ void GroupGemmUpdateArgs(
     bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
     uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
     uint32_t strideC1, uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
-    float alpha, float beta, const uint8_t ragged_mode, uint64_t num_gemms) {
+    const uint8_t ragged_mode, uint64_t num_gemms) {
   const uint64_t block_sz = BLOCK_SIZE;
   const uint64_t n_blocks = (num_gemms + block_sz - 1) / block_sz;
   auto kernel = SetUserArgsKernelRaggedInNonContractingDim<uint64_t>;
@@ -472,7 +472,7 @@ void GroupGemmUpdateArgs(
                      stride_a, stride_b, output_stride_ragged_dim,
                      must_swap_operands, m, n, k, batch, strideA1, strideA2,
                      strideB1, strideB2, strideC1, strideC2, strideD1, strideD2,
-                     alpha, beta, num_gemms);
+                     num_gemms);
 }
 };  // namespace rocm
 

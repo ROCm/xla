@@ -91,7 +91,7 @@ void GroupGemmUpdateArgs(
     bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
     uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
     uint32_t strideC1, uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
-    float alpha, float beta, const uint8_t ragged_mode, uint64_t num_gemms);
+    const uint8_t ragged_mode, uint64_t num_gemms);
 namespace {
 
 template <typename T>
@@ -1099,9 +1099,6 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
     std::swap(strideA2, strideB2);
   }
 
-  float salpha = cfg_.alpha.real();
-  float sbeta = cfg_.beta;
-
   GroupGemmUpdateArgs(
       gpu::AsGpuStreamValue(stream),
       static_cast<hipblaslt_ext::UserArguments *>(d_userArgs->opaque()),
@@ -1113,7 +1110,7 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
       cfg_.stride_ragged_dim, cfg_.stride_group_dim,
       cfg_.output_stride_ragged_dim, cfg_.must_swap_operands, m, n, cfg_.k,
       cfg_.batch_count, strideA1, strideA2, strideB1, strideB2, strideC1,
-      strideC2, strideD1, strideD2, salpha, sbeta,
+      strideC2, strideD1, strideD2,
       static_cast<const uint8_t>(cfg_.ragged_mode), cfg_.group_count);
 #endif
   SE_HIPBLAS_RETURN_IF_ERROR(
