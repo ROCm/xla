@@ -17,7 +17,6 @@
 
 
 TAG_FILTERS=(
-    -no_oss
     -no_gpu
     -requires-gpu-intel
     -requires-gpu-nvidia
