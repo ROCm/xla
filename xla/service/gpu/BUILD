@@ -2021,7 +2021,6 @@ xla_test(
     name = "auto_sharding_gpu_compiler_test",
     srcs = ["auto_sharding_gpu_compiler_test.cc"],
     backends = ["gpu"],
-    tags = ["no_oss"],  
     tags = [
         "no_oss",   # TODO(b/277355322): Make autosharding work in OSS
         "cuda-only",  
