@@ -40,7 +40,6 @@ TARGETS_TO_EXCLUDE=(
     -//xla/backends/gpu/codegen/emitters/tests:reduce_row/mof_scalar_variadic.hlo.test
     -//xla/backends/gpu/codegen/emitters/tests:reduce_row/side_output_broadcast.hlo.test
     -//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any
-    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_port_test_amdgpu_any
     -//xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_test_amdgpu_any
     -//xla/backends/gpu/codegen/triton:support_legacy_test_amdgpu_any
     -//xla/backends/gpu/runtime:command_buffer_conversion_pass_test_amdgpu_any
