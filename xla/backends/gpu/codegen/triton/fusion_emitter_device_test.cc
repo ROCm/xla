@@ -4556,7 +4556,7 @@ TEST_F(TritonEmitterTest, RocmWarpSizeIsSetCorrectly) {
   }
   DebugOptions debug_options = verified_module->config().debug_options();
   debug_options.set_xla_dump_to(output_directory);
-  debug_options.set_xla_dump_hlo_pass_re("triton-fusion-emitter");
+  debug_options.set_xla_dump_emitter_re("triton-fusion");
   verified_module->mutable_config().set_debug_options(debug_options);
 
   const HloFusionInstruction* triton_fusion = Cast<HloFusionInstruction>(
@@ -4579,10 +4579,13 @@ TEST_F(TritonEmitterTest, RocmWarpSizeIsSetCorrectly) {
   // For MI210 warp_size should be 64
   se::DeviceDescription dev_info =
       TestGpuDeviceInfo::AMDMI210DeviceInfo();
+  // Now, as we pass valid tiles, we also need to set non-zero `shared_memory_per_block_optin`
+  // to pass this check https://github.com/openxla/xla/blob/c8b710f1b70f890c9ee4b8756bc53f3a599a0ed5/xla/backends/gpu/codegen/triton/fusion_emitter.cc#L1863-L1867
+  dev_info.set_shared_memory_per_block_optin(64 * 1024);
   TF_ASSERT_OK(TritonWrapper(
       "test_fn", triton_fusion,
       se::GpuComputeCapability{se::RocmComputeCapability("gfx942")}, dev_info,
-      BlockLevelParameters(), target_triple, data_layout, llvm_ctx,
+      block_level_parameters, target_triple, data_layout, llvm_ctx,
       mlir_context));
   TF_EXPECT_OK(tsl::Env::Default()->GetMatchingPaths(
       tsl::io::JoinPath(output_directory, "*.triton-passes.log"), &paths));
@@ -4597,10 +4600,13 @@ TEST_F(TritonEmitterTest, RocmWarpSizeIsSetCorrectly) {
   // For RX7900 warp_size should be 32
   se::DeviceDescription dev_info_n =
       TestGpuDeviceInfo::AMDRX7900DeviceInfo();
+  // Now, we as pass valid tiles, we also need to set non-zero `shared_memory_per_block_optin`
+  // to pass this check https://github.com/openxla/xla/blob/c8b710f1b70f890c9ee4b8756bc53f3a599a0ed5/xla/backends/gpu/codegen/triton/fusion_emitter.cc#L1863-L1867
+  dev_info_n.set_shared_memory_per_block_optin(64 * 1024);
   TF_ASSERT_OK(TritonWrapper(
       "test_fn", triton_fusion,
       se::GpuComputeCapability{se::RocmComputeCapability("gfx1100")},
-      dev_info_n, BlockLevelParameters(), target_triple, data_layout, llvm_ctx,
+      dev_info_n, block_level_parameters, target_triple, data_layout, llvm_ctx,
       mlir_context));
   TF_EXPECT_OK(tsl::Env::Default()->GetMatchingPaths(
       tsl::io::JoinPath(output_directory, "*.triton-passes.log"), &paths));
