@@ -95,6 +95,7 @@ PJRT_Error* PJRT_Client_Create(PJRT_Client_Create_Args* args) {
           {"enable_mock_nccl", PJRT_NamedValue_Type::PJRT_NamedValue_kBool},
           {"mock_gpu_topology", PJRT_NamedValue_Type::PJRT_NamedValue_kString},
           {"partition_index", PJRT_NamedValue_Type::PJRT_NamedValue_kInt64},
+          {"collective_backend", PJRT_NamedValue_Type::PJRT_NamedValue_kString},
       });
   PJRT_RETURN_IF_ERROR(
       ValidateCreateOptions(create_options, kExpectedOptionNameAndTypes));
@@ -180,6 +181,28 @@ PJRT_Error* PJRT_Client_Create(PJRT_Client_Create_Args* args) {
     partition_index = std::get<int64_t>(it->second);
   }
 
+  // Parse collective_backend option: "auto", "nccl", "rccl", or "ctran"
+  xla::GpuCollectiveBackend collective_backend =
+      xla::GpuCollectiveBackend::kAuto;
+  if (auto it = create_options.find("collective_backend");
+      it != create_options.end()) {
+    auto backend_name = std::get<std::string>(it->second);
+    if (backend_name == "auto") {
+      collective_backend = xla::GpuCollectiveBackend::kAuto;
+    } else if (backend_name == "nccl") {
+      collective_backend = xla::GpuCollectiveBackend::kNccl;
+    } else if (backend_name == "rccl") {
+      collective_backend = xla::GpuCollectiveBackend::kRccl;
+    } else if (backend_name == "ctran") {
+      collective_backend = xla::GpuCollectiveBackend::kCtran;
+    } else {
+      return new PJRT_Error{absl::InvalidArgumentError(absl::StrFormat(
+          "Unknown collective_backend '%s'. Supported options are: "
+          "'auto', 'nccl', 'rccl', 'ctran'.",
+          backend_name))};
+    }
+  }
+
   xla::GpuClientOptions options;
   options.allocator_config = allocator_config;
   options.node_id = node_id;
@@ -196,6 +219,7 @@ PJRT_Error* PJRT_Client_Create(PJRT_Client_Create_Args* args) {
   options.enable_mock_nccl = enable_mock_nccl;
   options.mock_gpu_topology = mock_gpu_topology;
   options.partition_index = partition_index;
+  options.collective_backend = collective_backend;
   PJRT_ASSIGN_OR_RETURN(std::unique_ptr<xla::PjRtClient> client,
                         xla::GetXlaPjrtGpuClient(options));
   args->client = pjrt::CreateWrapperClient(std::move(client));
