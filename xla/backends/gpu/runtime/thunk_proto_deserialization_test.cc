@@ -467,7 +467,7 @@ TEST(ThunkProtoDeserializationTest, CublasLtGroupedMatmulThunk) {
   ThunkProto proto = ParseTextProtoOrDie<ThunkProto>(
       R"pb(
         thunk_info { profile_annotation: "custom-call.4" }
-        cublas_lt_grouped_matmul_thunk {
+        cublas_lt_matmul_thunk {
           grouped_gemm_config {
             m: 101
             n: 400

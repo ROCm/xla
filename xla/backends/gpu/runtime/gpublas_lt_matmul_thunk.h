@@ -83,9 +83,6 @@ class CublasLtMatmulThunk : public Thunk {
   static absl::StatusOr<std::unique_ptr<Thunk>> FromProto(
       Thunk::ThunkInfo thunk_info, const CublasLtMatmulThunkProto& proto,
       absl::Span<const BufferAllocation> allocations);
-  static absl::StatusOr<std::unique_ptr<Thunk>> FromProto(
-      Thunk::ThunkInfo thunk_info, const CublasLtGroupedMatmulThunkProto& proto,
-      absl::Span<const BufferAllocation> allocations);
 
  protected:
   CublasLtMatmulThunk(const CublasLtMatmulThunk& rhs);

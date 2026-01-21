@@ -154,7 +154,6 @@ class Thunk {
     kCuDnn,
     kCubSort,
     kCublasLtMatmul,
-    kCublasLtGroupedMatmul,
     kCustomCall,
     kCustomKernel,
     kDynamicSlice,

@@ -167,7 +167,10 @@ message SelectKThunkProto {
 }
 
 message CublasLtMatmulThunkProto {
-  xla.GemmConfigProto gemm_config = 1;
+  // For regular matmul, use gemm_config. For grouped matmul, use grouped_gemm_config.
+  optional xla.GemmConfigProto gemm_config = 1;
+  optional xla.GroupedGemmConfigProto grouped_gemm_config = 17;
+
   xla.BlasLtEpilogueProto epilogue = 2;
   int64 algorithm_idx = 3;
   string canonical_hlo = 4;
@@ -175,6 +178,7 @@ message CublasLtMatmulThunkProto {
   xla.buffer_assignment.BufferAllocationSliceProto b = 6;
   xla.buffer_assignment.BufferAllocationSliceProto c = 7;
   xla.buffer_assignment.BufferAllocationSliceProto d = 8;
+  optional xla.buffer_assignment.BufferAllocationSliceProto group_sizes = 18;  // Only for grouped
   optional xla.buffer_assignment.BufferAllocationSliceProto bias = 9;
   optional xla.buffer_assignment.BufferAllocationSliceProto aux = 10;
   optional xla.buffer_assignment.BufferAllocationSliceProto a_scale = 11;
@@ -183,26 +187,6 @@ message CublasLtMatmulThunkProto {
   optional xla.buffer_assignment.BufferAllocationSliceProto d_scale = 14;
   optional xla.buffer_assignment.BufferAllocationSliceProto d_amax = 15;
   optional xla.buffer_assignment.BufferAllocationSliceProto workspace = 16;
-}
-
-message CublasLtGroupedMatmulThunkProto {
-  xla.GroupedGemmConfigProto grouped_gemm_config = 1;
-  xla.BlasLtEpilogueProto epilogue = 2;
-  int64 algorithm_idx = 3;
-  string canonical_hlo = 4;
-  xla.buffer_assignment.BufferAllocationSliceProto a = 5;
-  xla.buffer_assignment.BufferAllocationSliceProto b = 6;
-  xla.buffer_assignment.BufferAllocationSliceProto c = 7;
-  xla.buffer_assignment.BufferAllocationSliceProto d = 8;
-  xla.buffer_assignment.BufferAllocationSliceProto group_sizes = 9;
-  optional xla.buffer_assignment.BufferAllocationSliceProto bias = 10;
-  optional xla.buffer_assignment.BufferAllocationSliceProto aux = 11;
-  optional xla.buffer_assignment.BufferAllocationSliceProto a_scale = 12;
-  optional xla.buffer_assignment.BufferAllocationSliceProto b_scale = 13;
-  optional xla.buffer_assignment.BufferAllocationSliceProto c_scale = 14;
-  optional xla.buffer_assignment.BufferAllocationSliceProto d_scale = 15;
-  optional xla.buffer_assignment.BufferAllocationSliceProto d_amax = 16;
-  optional xla.buffer_assignment.BufferAllocationSliceProto workspace = 17;
 }
 
 message NormThunkProto {
@@ -272,7 +256,6 @@ message ThunkProto {
     ConvolutionThunkProto convolution_thunk = 25;
     ConvolutionReorderThunkProto convolution_reorder_thunk = 26;
     FftThunkProto fft_thunk = 27;
-    CublasLtGroupedMatmulThunkProto cublas_lt_grouped_matmul_thunk = 28;
   }
 }
 
