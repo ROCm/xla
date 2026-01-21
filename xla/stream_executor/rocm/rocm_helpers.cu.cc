@@ -163,7 +163,7 @@ INSTANTIATE_BIAS_ACTIVATION(double, double)
 
 namespace rocm {
 
-constexpr int BLOCK_SIZE = 256;
+constexpr int BLOCK_SIZE = 1024;
 
 template <typename T>
 __global__ void SetUserArgsKernelRaggedInNonContractingDim(
