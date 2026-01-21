@@ -73,7 +73,7 @@ bool IsTritonSupportedDotOutputType(
               [](const se::CudaComputeCapability& cc) {
                 return cc.IsAtLeastAmpere();
               },
-              [](const se::RocmComputeCapability& cc) { return false; }),
+              [](const se::RocmComputeCapability& cc) { return true; }),
           gpu_version);
 
     case F8E4M3FN:
@@ -82,7 +82,7 @@ bool IsTritonSupportedDotOutputType(
               [](const se::CudaComputeCapability& cc) {
                 return cc.IsAtLeastHopper();
               },
-              [](const se::RocmComputeCapability& cc) { return false; }),
+              [](const se::RocmComputeCapability& cc) { return true; }),
           gpu_version);
     case BF16:
       return std::visit(

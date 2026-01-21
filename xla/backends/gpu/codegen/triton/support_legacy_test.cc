@@ -38,6 +38,7 @@ limitations under the License.
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
 #include "xla/service/gpu/triton_fusion_analysis.h"
 #include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/platform_manager.h"
 #include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
@@ -48,9 +49,13 @@ namespace xla {
 namespace gpu {
 namespace {
 
-se::GpuComputeCapability GetComputeCapability() {
-  return se::CudaComputeCapability::Ampere();
-}
+ se::GpuComputeCapability GetComputeCapability() {
+   if (se::PlatformManager::PlatformWithName("CUDA").ok()) {
+      return se::CudaComputeCapability::Ampere();
+   } else {
+      return se::RocmComputeCapability("gfx90a");
+   }
+ }
 
 bool CombinationCrashesTriton(PrimitiveType lhs_type, PrimitiveType rhs_type,
                               PrimitiveType output_type,
@@ -121,7 +126,9 @@ ENTRY e {
         return;
       }
       const se::DeviceDescription dev_info =
-          TestGpuDeviceInfo::RTXA6000DeviceInfo(GetComputeCapability());
+        (se::PlatformManager::PlatformWithName("CUDA").ok()) ?
+          TestGpuDeviceInfo::RTXA6000DeviceInfo(GetComputeCapability()) :
+          TestGpuDeviceInfo::AMDMI210DeviceInfo();
       BlockLevelParameters block_level_parameters;
       block_level_parameters.num_ctas = 1;
       block_level_parameters.num_stages = 4;
@@ -141,6 +148,11 @@ TEST_P(DotTest, IsTritonSupportedExecutesCorrectlyForDot) {
   PrimitiveType data_type;
   HloOpcode opcode;
   std::tie(data_type, opcode) = GetParam();
+  if (std::holds_alternative<se::RocmComputeCapability>(GetComputeCapability())) {
+    if (data_type == F32) {
+      GTEST_SKIP() << "Not enough shared memory on ROCm.";
+    }
+  }
   CHECK_EQ(opcode, HloOpcode::kDot);
   TestDotWithTypes(data_type, data_type, data_type);
 
