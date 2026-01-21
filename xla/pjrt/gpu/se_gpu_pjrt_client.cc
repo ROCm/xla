@@ -1597,6 +1597,47 @@ StreamExecutorGpuHbmMemorySpace::StreamExecutorGpuHbmMemorySpace(
     int id, PjRtDevice* device)
     : PjRtStreamExecutorMemorySpace(id, device, kKind, kKindId) {}
 
+// Helper function to convert GpuCollectiveBackend enum to string for logging.
+static const char* CollectiveBackendToString(GpuCollectiveBackend backend) {
+  switch (backend) {
+    case GpuCollectiveBackend::kAuto:
+      return "auto";
+    case GpuCollectiveBackend::kNccl:
+      return "nccl";
+    case GpuCollectiveBackend::kRccl:
+      return "rccl";
+    case GpuCollectiveBackend::kCtran:
+      return "ctran";
+    default:
+      return "unknown";
+  }
+}
+
+// Determine the actual collective backend to use based on config and platform.
+static std::string ResolveCollectiveBackend(GpuCollectiveBackend config_backend,
+                                            absl::string_view platform_name) {
+  if (config_backend == GpuCollectiveBackend::kAuto) {
+    // Auto-select based on platform
+    if (platform_name == "rocm") {
+      return "rccl";
+    } else {
+      return "nccl";
+    }
+  } else if (config_backend == GpuCollectiveBackend::kCtran) {
+    // CTran requested
+    // TODO: Add CTran availability check and initialization here
+    LOG(INFO) << "CTran collective backend requested (experimental). "
+              << "Features: multi-transport (NVLink/IB/TCP), fault tolerance.";
+    return "ctran";
+  } else if (config_backend == GpuCollectiveBackend::kNccl) {
+    return "nccl";
+  } else if (config_backend == GpuCollectiveBackend::kRccl) {
+    return "rccl";
+  }
+  // Fallback
+  return "nccl";
+}
+
 absl::StatusOr<std::unique_ptr<PjRtClient>> GetStreamExecutorGpuClient(
     const GpuClientOptions& options) {
 #if TENSORFLOW_USE_ROCM
@@ -1606,6 +1647,21 @@ absl::StatusOr<std::unique_ptr<PjRtClient>> GetStreamExecutorGpuClient(
 #else   // TENSORFLOW_USE_ROCM
   auto pjrt_platform_name = xla::CudaName();
 #endif  // TENSORFLOW_USE_ROCM
+
+  // Log collective backend selection
+  std::string resolved_backend =
+      ResolveCollectiveBackend(options.collective_backend, pjrt_platform_name);
+  LOG(INFO) << "GPU collective backend: config="
+            << CollectiveBackendToString(options.collective_backend)
+            << ", resolved=" << resolved_backend
+            << ", platform=" << pjrt_platform_name;
+
+  // TODO: When CTran is fully integrated, use resolved_backend to select
+  // the collective implementation. For now, we continue with NCCL/RCCL.
+  if (resolved_backend == "ctran") {
+    LOG(WARNING) << "CTran collective backend is not yet fully implemented. "
+                 << "Falling back to default (NCCL/RCCL).";
+  }
 
   TF_ASSIGN_OR_RETURN(
       LocalClient * xla_client,
