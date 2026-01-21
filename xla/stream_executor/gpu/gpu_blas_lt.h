@@ -208,8 +208,11 @@ struct BlasLt {
     DeviceMemoryBase a, b, c, d;                          // these are mandatory
     DeviceMemoryBase bias, aux;                           // these may be null
     DeviceMemoryBase a_scale, b_scale, c_scale, d_scale;  // these may be null
-    DeviceMemoryBase d_amax;                              // this may be null
-    DeviceMemoryBase workspace;                           // either workspace or
+    union {
+      DeviceMemoryBase d_amax;       // this may be null
+      DeviceMemoryBase group_sizes;  // used by grouped gemm
+    };
+    DeviceMemoryBase workspace;           // either workspace or
     ScratchAllocator* scratch_allocator;  // scratch_allocator must not be null
   };
 
@@ -309,12 +312,10 @@ struct BlasLt {
         DeviceMemoryBase c_scale, DeviceMemoryBase d_scale,
         DeviceMemoryBase d_amax, DeviceMemoryBase workspace,
         blas::ProfileResult* profile_result = nullptr) const {
-      // Note: GroupedGemm does not have aux. We pass group_sizes in aux to
-      // avoid redifining a new structure.
       return ExecuteOnStream(
           stream,
-          MemoryArgs{a, b, c, d, bias, group_sizes, a_scale, b_scale, c_scale,
-                     d_scale, d_amax, workspace, nullptr},
+          MemoryArgs{a, b, c, d, bias, aux, a_scale, b_scale, c_scale, d_scale,
+                     group_sizes, workspace, nullptr},
           profile_result);
     }
 

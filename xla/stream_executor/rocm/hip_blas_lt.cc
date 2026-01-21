@@ -904,9 +904,9 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
 
   auto group_size_bytewidth =
       (cfg_.ragged_mode != gpu::RaggedDotMode::kRaggedBatch)
-          ? static_cast<size_t>(args.aux.size() /
+          ? static_cast<size_t>(args.group_sizes.size() /
                                 (cfg_.group_count * cfg_.batch_count))
-          : static_cast<size_t>(args.aux.size() / cfg_.group_count);
+          : static_cast<size_t>(args.group_sizes.size() / cfg_.group_count);
 
 #ifndef GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
   // Get the default hipblaslt_ext::UserArguments
@@ -924,9 +924,9 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
   TF_ASSIGN_OR_RETURN(
       std::unique_ptr<MemoryAllocation> host_group_sizes,
       executor->HostMemoryAllocate(cfg_.group_count * group_size_bytewidth));
-  TF_RETURN_IF_ERROR(
-      executor->SynchronousMemcpy(host_group_sizes.get()->opaque(), args.aux,
-                                  cfg_.group_count * group_size_bytewidth));
+  TF_RETURN_IF_ERROR(executor->SynchronousMemcpy(
+      host_group_sizes.get()->opaque(), args.group_sizes,
+      cfg_.group_count * group_size_bytewidth));
   // Note: The group size are considered the same accross the batch.
   // Indeed, different group sizes for different batch would required to divide
   // our group-gemm into more sub-groups and set the GEMM config for each
@@ -1103,9 +1103,7 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
       gpu::AsGpuStreamValue(stream),
       static_cast<hipblaslt_ext::UserArguments *>(d_userArgs->opaque()),
       a.opaque(), b.opaque(), args.c.opaque(), args.d.opaque(), nullptr,
-      // Note: GroupedGemm does not have aux. group_sizes is passes in aux to
-      // avoid redifining a new structure.
-      args.aux.opaque(), group_size_bytewidth, byte_width_elem_a,
+      args.group_sizes.opaque(), group_size_bytewidth, byte_width_elem_a,
       byte_width_elem_b, byte_width_elem_c, byte_width_elem_d,
       cfg_.stride_ragged_dim, cfg_.stride_group_dim,
       cfg_.output_stride_ragged_dim, cfg_.must_swap_operands, m, n, cfg_.k,
