@@ -4593,7 +4593,7 @@ TEST_F(TritonEmitterTest, RocmWarpSizeIsSetCorrectly) {
   // For MI210 warp_size should be 64
   se::DeviceDescription dev_info =
       TestGpuDeviceInfo::AMDMI210DeviceInfo();
-  // Now, we pass valud tiles, we also need to set non-zero `shared_memory_per_block_optin`
+  // Now, as we pass valid tiles, we also need to set non-zero `shared_memory_per_block_optin`
   // to pass this check https://github.com/openxla/xla/blob/c8b710f1b70f890c9ee4b8756bc53f3a599a0ed5/xla/backends/gpu/codegen/triton/fusion_emitter.cc#L1863-L1867
   dev_info.set_shared_memory_per_block_optin(64 * 1024);
   TF_ASSERT_OK(TritonWrapper(
