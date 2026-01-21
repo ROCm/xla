@@ -109,8 +109,9 @@ TEST_P(TopKKernelTest, TopKFloat) {
   TF_ASSERT_OK(
       stream->MemZero(&output_indices, k * batch_size * sizeof(uint32_t)));
 
+  int64_t wavefront_size = executor->GetDeviceDescription().threads_per_warp();
   auto custom_kernel = GetTopKKernel("topk", PrimitiveType::F32, n, k,
-                                     batch_size, platform->Name(), 32);
+                                     batch_size, platform->Name(), wavefront_size);
 
   TF_ASSERT_OK_AND_ASSIGN(auto kernel,
                           executor->LoadKernel(custom_kernel->kernel_spec()));
@@ -163,8 +164,9 @@ TEST_P(TopKKernelTest, TopKPackedNegative) {
   TF_ASSERT_OK(
       stream->MemZero(&output_indices, k * batch_size * sizeof(uint32_t)));
 
+  int64_t wavefront_size = executor->GetDeviceDescription().threads_per_warp();
   auto custom_kernel = GetTopKKernel("topk", PrimitiveType::F32, n, k,
-                                     batch_size, platform->Name(), 32);
+                                     batch_size, platform->Name(), wavefront_size);
 
   TF_ASSERT_OK_AND_ASSIGN(auto kernel,
                           executor->LoadKernel(custom_kernel->kernel_spec()));
