@@ -199,12 +199,12 @@ CublasLtMatmulThunk::GetCachedMatmulPlan(const ExecuteParams& params) {
   return blas_lt->GetOrCreateMatmulPlan(canonical_hlo_, create);
 }
 
-absl::StatusOr<se::gpu::BlasLt::GroupedMatmulPlan*>
+absl::StatusOr<se::gpu::BlasLt::MatmulPlan*>
 CublasLtMatmulThunk::GetCachedGroupedMatmulPlan(const ExecuteParams& params) {
   auto* blas_lt = se::gpu::BlasLt::Get(params.stream);
-  auto create = [&]() -> absl::StatusOr<se::gpu::BlasLt::GroupedMatmulPlanPtr> {
+  auto create = [&]() -> absl::StatusOr<se::gpu::BlasLt::MatmulPlanPtr> {
     VLOG(2) << this
-            << ": Adding new GroupedMatmulPlan for stream: " << params.stream
+            << ": Adding new Grouped MatmulPlan for stream: " << params.stream
             << " instr: " << canonical_hlo_;
 
     auto gemm_config = std::get<se::gpu::GroupedGemmConfig>(gemm_config_);

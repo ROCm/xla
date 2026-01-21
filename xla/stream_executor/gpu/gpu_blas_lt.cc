@@ -312,8 +312,7 @@ size_t BlasLt::GetMatmulPlanCacheSize() const {
 
 /*static*/ auto BlasLt::GetGroupedMatmulPlan(
     const Stream* stream, GroupedGemmConfig& cfg,
-    const std::vector<Epilogue>& epilogues)
-    -> absl::StatusOr<GroupedMatmulPlanPtr> {
+    const std::vector<Epilogue>& epilogues) -> absl::StatusOr<MatmulPlanPtr> {
   auto blas = Get(stream);
   if (blas == nullptr) {
     return xla::Internal("BlasLt is unavailable");
@@ -321,16 +320,17 @@ size_t BlasLt::GetMatmulPlanCacheSize() const {
   return blas->GetGroupedMatmulPlan(cfg, epilogues);
 }
 
-absl::StatusOr<BlasLt::GroupedMatmulPlan*> BlasLt::GetOrCreateGroupedMatmulPlan(
-    const std::string& key, GroupedPlanCreateFunc create) {
+absl::StatusOr<BlasLt::MatmulPlan*> BlasLt::GetOrCreateGroupedMatmulPlan(
+    const std::string& key, PlanCreateFunc create) {
   absl::MutexLock lock(plan_cache_mu_);  // double mutex ???
-  auto res = grouped_plan_cache_.emplace(key, GroupedMatmulPlanPtr{});
+  auto res = grouped_plan_cache_.emplace(key, MatmulPlanPtr{});
   // New entry inserted: always create a new matmul plan if key is empty,
   // this is used by command_buffer_thunk test.
   if (res.second || key.empty()) {
-    VLOG(2) << "Creating a plan for: " << key;
+    VLOG(2) << "Creating a grouped plan for: " << key;
     TF_ASSIGN_OR_RETURN(res.first->second, create());
-    VLOG(2) << "Plan created: cache size: " << grouped_plan_cache_.size();
+    VLOG(2) << "Grouped Plan created: cache size: "
+            << grouped_plan_cache_.size();
   }
   return res.first->second.get();
 }

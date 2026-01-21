@@ -329,10 +329,10 @@ struct MockBlasLt : public se::gpu::BlasLt {
     return MatmulPlanPtr{};
   }
 
-  absl::StatusOr<GroupedMatmulPlanPtr> GetGroupedMatmulPlan(
+  absl::StatusOr<MatmulPlanPtr> GetGroupedMatmulPlan(
       se::gpu::GroupedGemmConfig&,
       const std::vector<Epilogue>&) const override {
-    return GroupedMatmulPlanPtr{};
+    return MatmulPlanPtr{};
   }
 
   ~MockBlasLt() override = default;

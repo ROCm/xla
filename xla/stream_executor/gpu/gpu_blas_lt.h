@@ -257,7 +257,7 @@ struct BlasLt {
           profile_result);
     }
 
-    // API that uses pre-allocated buffer as workspace.
+    // API that uses pre-allocated buffer as workspace (regular matmul).
     absl::Status ExecuteOnStream(
         Stream* stream, DeviceMemoryBase a, DeviceMemoryBase b,
         DeviceMemoryBase c, DeviceMemoryBase d,
@@ -271,6 +271,23 @@ struct BlasLt {
           stream,
           MemoryArgs{a, b, c, d, bias, aux, a_scale, b_scale, c_scale, d_scale,
                      d_amax, workspace, nullptr},
+          profile_result);
+    }
+
+    // API that uses pre-allocated buffer as workspace (grouped matmul).
+    absl::Status ExecuteOnStream(
+        Stream* stream, DeviceMemoryBase a, DeviceMemoryBase b,
+        DeviceMemoryBase c, DeviceMemoryBase d, DeviceMemoryBase group_sizes,
+        DeviceMemoryBase bias,  // may be null
+        DeviceMemoryBase aux,   // may be null
+        DeviceMemoryBase a_scale, DeviceMemoryBase b_scale,
+        DeviceMemoryBase c_scale, DeviceMemoryBase d_scale,
+        DeviceMemoryBase d_amax, DeviceMemoryBase workspace,
+        blas::ProfileResult* profile_result = nullptr) const {
+      return ExecuteOnStream(
+          stream,
+          MemoryArgs{a, b, c, d, bias, aux, a_scale, b_scale, c_scale, d_scale,
+                     group_sizes, workspace, nullptr},
           profile_result);
     }
 
@@ -295,49 +312,17 @@ struct BlasLt {
     virtual ~MatmulPlan() {}
   };  // class MatmulPlan
 
-  struct GroupedMatmulPlan {
-    virtual absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
-        const Stream* stream, size_t max_algorithm_count = 128,
-        size_t max_workspace_size = 1ll << 32) const = 0;
-
-    virtual absl::Status SetAlgorithm(const MatmulAlgorithm& algorithm) = 0;
-
-    // API that uses pre-allocated buffer as workspace.
-    absl::Status ExecuteOnStream(
-        Stream* stream, DeviceMemoryBase a, DeviceMemoryBase b,
-        DeviceMemoryBase c, DeviceMemoryBase d, DeviceMemoryBase group_sizes,
-        DeviceMemoryBase bias,  // may be null
-        DeviceMemoryBase aux,   // may be null
-        DeviceMemoryBase a_scale, DeviceMemoryBase b_scale,
-        DeviceMemoryBase c_scale, DeviceMemoryBase d_scale,
-        DeviceMemoryBase d_amax, DeviceMemoryBase workspace,
-        blas::ProfileResult* profile_result = nullptr) const {
-      return ExecuteOnStream(
-          stream,
-          MemoryArgs{a, b, c, d, bias, aux, a_scale, b_scale, c_scale, d_scale,
-                     group_sizes, workspace, nullptr},
-          profile_result);
-    }
-
-    // The most general form: to be implemented by derived clases.
-    virtual absl::Status ExecuteOnStream(
-        Stream* stream, const MemoryArgs& args,
-        blas::ProfileResult* profile_result) const = 0;
-
-    virtual ~GroupedMatmulPlan() {}
-  };
-
   using MatmulPlanPtr = std::unique_ptr<MatmulPlan>;
   using PlanCreateFunc = absl::AnyInvocable<absl::StatusOr<MatmulPlanPtr>()>;
-
-  using GroupedMatmulPlanPtr = std::unique_ptr<GroupedMatmulPlan>;
-  using GroupedPlanCreateFunc =
-      absl::AnyInvocable<absl::StatusOr<GroupedMatmulPlanPtr>()>;
 
   virtual absl::Status Init() = 0;
 
   virtual absl::StatusOr<MatmulPlanPtr> GetMatmulPlan(
       const GemmConfig& cfg, Epilogue epilogue) const = 0;
+
+  virtual absl::StatusOr<MatmulPlanPtr> GetGroupedMatmulPlan(
+      gpu::GroupedGemmConfig& config,
+      const std::vector<Epilogue>& epilogues) const = 0;
 
   static BlasLt* Get(const Stream* stream);
 
@@ -346,22 +331,18 @@ struct BlasLt {
                                                      const GemmConfig& cfg,
                                                      Epilogue epilogue);
 
-  absl::StatusOr<MatmulPlan*> GetOrCreateMatmulPlan(const std::string& key,
-                                                    PlanCreateFunc create);
-
-  void ClearMatmulPlanCache();
-  size_t GetMatmulPlanCacheSize() const;
-
-  virtual absl::StatusOr<GroupedMatmulPlanPtr> GetGroupedMatmulPlan(
-      gpu::GroupedGemmConfig& config,
-      const std::vector<Epilogue>& epilogues) const = 0;
-
-  static absl::StatusOr<GroupedMatmulPlanPtr> GetGroupedMatmulPlan(
+  static absl::StatusOr<MatmulPlanPtr> GetGroupedMatmulPlan(
       const Stream* stream, gpu::GroupedGemmConfig& config,
       const std::vector<Epilogue>& epilogues);
 
-  absl::StatusOr<GroupedMatmulPlan*> GetOrCreateGroupedMatmulPlan(
-      const std::string& key, GroupedPlanCreateFunc create);
+  absl::StatusOr<MatmulPlan*> GetOrCreateMatmulPlan(const std::string& key,
+                                                    PlanCreateFunc create);
+
+  absl::StatusOr<MatmulPlan*> GetOrCreateGroupedMatmulPlan(
+      const std::string& key, PlanCreateFunc create);
+
+  void ClearMatmulPlanCache();
+  size_t GetMatmulPlanCacheSize() const;
 
   void ClearGroupedMatmulPlanCache();
   size_t GetGroupedMatmulPlanCacheSize() const;
@@ -372,7 +353,7 @@ struct BlasLt {
   mutable absl::Mutex plan_cache_mu_;
   absl::flat_hash_map<std::string, MatmulPlanPtr> plan_cache_
       ABSL_GUARDED_BY(plan_cache_mu_);
-  absl::flat_hash_map<std::string, GroupedMatmulPlanPtr> grouped_plan_cache_
+  absl::flat_hash_map<std::string, MatmulPlanPtr> grouped_plan_cache_
       ABSL_GUARDED_BY(plan_cache_mu_);
 };  // class BlasLt
 

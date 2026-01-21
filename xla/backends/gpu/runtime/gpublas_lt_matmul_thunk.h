@@ -94,8 +94,8 @@ class CublasLtMatmulThunk : public Thunk {
                                        const ExecuteParams& params);
   absl::StatusOr<se::gpu::BlasLt::MatmulPlan*> GetCachedMatmulPlan(
       const ExecuteParams& params);
-  absl::StatusOr<se::gpu::BlasLt::GroupedMatmulPlan*>
-  GetCachedGroupedMatmulPlan(const ExecuteParams& params);
+  absl::StatusOr<se::gpu::BlasLt::MatmulPlan*> GetCachedGroupedMatmulPlan(
+      const ExecuteParams& params);
 
   std::variant<GemmConfig, se::gpu::GroupedGemmConfig> gemm_config_;
   se::gpu::BlasLt::Epilogue epilogue_;
