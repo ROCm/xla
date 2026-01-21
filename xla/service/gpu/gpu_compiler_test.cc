@@ -817,12 +817,6 @@ ENTRY main {
     return GetOptimizedModule(std::move(module));
   };
 
-  auto gpu_cc = backend()
-                    .default_stream_executor()
-                    ->GetDeviceDescription()
-                    .gpu_compute_capability();
-  bool is_cuda =
-      std::holds_alternative<stream_executor::CudaComputeCapability>(gpu_cc);
   auto cuda_cc = backend()
                      .default_stream_executor()
                      ->GetDeviceDescription()
@@ -845,7 +839,7 @@ ENTRY main {
 
   HloPrintOptions print_options =
       HloPrintOptions().set_print_operand_shape(true);
-  if (is_cuda) {
+  {
     // Triton enabled, no fallback.
     TF_ASSERT_OK_AND_ASSIGN(auto optimized_module_no_fallback,
                             optimize_module(/*enable_triton=*/true,
@@ -855,7 +849,8 @@ ENTRY main {
     const std::string triton_expected_check =
         (cuda_cc.IsAtLeastHopper() ||
          (cuda_cc.IsAtLeastAmpere() && lhs_type == F8E5M2 &&
-          rhs_type == F8E5M2))
+          rhs_type == F8E5M2) ||
+         rocm_cc.has_ocp_fp8_support())
             ? triton_keep_types
             : cublas_convert_to_f16;
     TF_ASSERT_OK_AND_ASSIGN(

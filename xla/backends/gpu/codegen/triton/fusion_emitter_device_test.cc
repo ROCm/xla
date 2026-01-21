@@ -3899,9 +3899,6 @@ INSTANTIATE_TEST_SUITE_P(
     DotUnsetAlgorithmEmitterTest::ParamToString);
 
 TEST_F(TritonEmitterTest, ScaledDotIsSupportedByReferencePlatform) {
-  if (!std::get_if<se::CudaComputeCapability>(&GpuComputeCapability())) {
-    GTEST_SKIP() << "Ignore scaled dot test on ROCM.";
-  }
   constexpr absl::string_view kHloText = R"(
     HloModule ScaledDotIsSupportedByReferencePlatform
 
