@@ -27,6 +27,21 @@ limitations under the License.
 
 namespace xla {
 
+// Collective backend options for GPU.
+// Determines which communication library to use for collective operations.
+enum class GpuCollectiveBackend {
+  // Automatically select based on platform (NCCL for CUDA, RCCL for ROCm)
+  kAuto,
+  // Use NVIDIA NCCL (for CUDA GPUs)
+  kNccl,
+  // Use AMD RCCL (for ROCm GPUs)
+  kRccl,
+  // Use Meta's CTran transport layer (experimental)
+  // Provides multi-transport support (NVLink/InfiniBand/TCP) and fault
+  // tolerance features.
+  kCtran,
+};
+
 // Options for creating a XLA:GPU PjRtClient.
 struct GpuClientOptions {
   GpuAllocatorConfig allocator_config;
@@ -56,6 +71,11 @@ struct GpuClientOptions {
   std::optional<int> partition_index;
 
   bool use_tfrt_gpu_client = false;
+
+  // Collective communication backend to use.
+  // Default is kAuto which selects NCCL for CUDA and RCCL for ROCm.
+  // Set to kCtran to use Meta's CTran transport layer (experimental).
+  GpuCollectiveBackend collective_backend = GpuCollectiveBackend::kAuto;
 };
 
 }  //  namespace xla
