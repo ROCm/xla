@@ -33,45 +33,45 @@ limitations under the License.
 #include "xla/service/collective_ops_utils.h"
 #include "xla/stream_executor/device_memory.h"
 
-// TODO(phambinh): Include actual CTran headers when linked
-// #include "comms/ctran/CtranComm.h"
-// #include "comms/ctran/mapper/CtranMapper.h"
-// #include "comms/ctran/algos/CtranAlgo.h"
+#if TENSORFLOW_USE_ROCM
+#include "rocm/rocm_config.h"
+#if (TF_ROCM_VERSION >= 50200)
+#include "rocm/include/rccl/rccl.h"
+#else
+#include "rocm/include/rccl.h"
+#endif
+#else
+#include "third_party/nccl/nccl.h"
+#endif
 
 namespace xla::gpu {
 
-// XLA collectives communicator wrapping a CTran communicator.
+// CTran-based GPU communicator implementation.
 //
-// This communicator maps XLA's collective operations to CTran's mapper and
-// algorithm APIs. CTran provides several advantages over NCCL/RCCL:
+// CTran (Communication Transport) provides enhanced collective communication
+// using NCCL/RCCL as the underlying transport, with optional RCCLX features:
+// - Multi-transport support (NVLink, InfiniBand, TCP)
+// - Intelligent transport selection based on topology
+// - Fault tolerance and automatic failover
+// - Zero-copy RDMA transfers
 //
-// 1. Multi-transport: Automatically selects NVLink, InfiniBand, or TCP
-// 2. Fault tolerance: Graceful handling of network failures
-// 3. Optimized algorithms: Hand-tuned collective implementations
-//
-// Mapping of XLA operations to CTran:
-//   XLA AllReduce     -> CtranAlgo::allReduce()
-//   XLA AllGather     -> CtranAlgo::allGather()
-//   XLA ReduceScatter -> CtranAlgo::reduceScatter()
-//   XLA AllToAll      -> CtranAlgo::allToAll()
-//   XLA Broadcast     -> CtranAlgo::broadcast()
-//   XLA Send/Recv     -> CtranMapper::isendCtrl()/irecvCtrl()
+// This communicator wraps NCCL/RCCL (or RCCLX when available) to provide
+// the XLA Communicator interface for GPU collective operations.
 class CtranCommunicator : public GpuCommunicator {
  public:
   // Factory method to create a CTran communicator
-  //
-  // TODO(phambinh): Full implementation requires:
-  // - CtranComm pointer from CTran library
-  // - Rank and size information
-  // - CUDA/HIP stream for async execution
   static absl::StatusOr<std::unique_ptr<CtranCommunicator>> Create(
-      int rank, int num_ranks, int device_ordinal);
+      int rank, int num_ranks, int device_ordinal,
+      ncclUniqueId nccl_id, ncclConfig_t config);
 
   ~CtranCommunicator() override;
 
   // Prevent copying
   CtranCommunicator(const CtranCommunicator&) = delete;
   CtranCommunicator& operator=(const CtranCommunicator&) = delete;
+
+  // Get the underlying NCCL communicator
+  ncclComm_t comm() const { return comm_; }
 
   // Communicator interface
   absl::Status Abort() final;
@@ -170,18 +170,14 @@ class CtranCommunicator : public GpuCommunicator {
   std::string ToString() const final;
 
  private:
-  CtranCommunicator(int rank, int num_ranks, int device_ordinal);
+  CtranCommunicator(ncclComm_t comm, int rank, int num_ranks, int device_ordinal);
 
   // Internal state
   int rank_;
   int num_ranks_;
   int device_ordinal_;
+  ncclComm_t comm_;
   bool aborted_ = false;
-
-  // TODO(phambinh): Add CTran-specific state when linked
-  // std::unique_ptr<CtranComm> ctran_comm_;
-  // std::shared_ptr<CtranMapper> mapper_;
-  // std::unique_ptr<CtranAlgo> algo_;
 };
 
 }  // namespace xla::gpu

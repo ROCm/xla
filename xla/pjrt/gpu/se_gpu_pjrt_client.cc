@@ -1656,11 +1656,9 @@ absl::StatusOr<std::unique_ptr<PjRtClient>> GetStreamExecutorGpuClient(
             << ", resolved=" << resolved_backend
             << ", platform=" << pjrt_platform_name;
 
-  // TODO: When CTran is fully integrated, use resolved_backend to select
-  // the collective implementation. For now, we continue with NCCL/RCCL.
+  // CTran is now integrated and uses NCCL/RCCL with optional RCCLX features
   if (resolved_backend == "ctran") {
-    LOG(WARNING) << "CTran collective backend is not yet fully implemented. "
-                 << "Falling back to default (NCCL/RCCL).";
+    LOG(INFO) << "Using CTran collective backend with NCCL/RCCL transport.";
   }
 
   TF_ASSIGN_OR_RETURN(

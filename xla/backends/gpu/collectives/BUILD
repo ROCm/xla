@@ -444,13 +444,15 @@ cc_library(
     ],
     visibility = ["//visibility:private"],
     deps = [
-        ":gpu_collectives",
         ":gpu_communicator",
+        ":nccl_errors",
         "//xla:future",
+        "//xla:primitive_util",
         "//xla/core/collectives:communicator",
         "//xla/core/collectives:rank_id",
         "//xla/service:collective_ops_utils",
         "//xla/stream_executor:device_memory",
+        "//xla/stream_executor/gpu:gpu_stream",
         "//xla/tsl/concurrency:async_value",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/functional:any_invocable",
@@ -459,9 +461,13 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:span",
-    ],
-    # TODO(phambinh): Add CTran/torchcomms dependency when available
-    # + ["@torchcomms//:ctran"],
+    ] + if_cuda_is_configured([
+        "@local_config_cuda//cuda:cuda_headers",
+        "@local_config_nccl//:nccl",
+    ]) + if_rocm_is_configured([
+        "@local_config_rocm//rocm:rocm_headers",
+        "@local_config_rocm//rocm:rccl",
+    ]),
 )
 
 cc_library(
@@ -481,12 +487,18 @@ cc_library(
         "//xla/core/collectives:collectives_registry",
         "//xla/core/collectives:communicator",
         "//xla/core/collectives:rank_id",
+        "//xla/tsl/platform:env",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
-    ],
+    ] + if_cuda_is_configured([
+        "@local_config_nccl//:nccl",
+    ]) + if_rocm_is_configured([
+        "@local_config_rocm//rocm:rccl",
+    ]),
     alwayslink = True,  # registers collectives implementation
 )
 
