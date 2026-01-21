@@ -113,64 +113,6 @@ class CublasLtMatmulThunk : public Thunk {
   std::optional<const BufferAllocation::Slice> workspace_;
 };
 
-// class CublasLtGroupedMatmulThunk : public Thunk {
-//  public:
-//   CublasLtGroupedMatmulThunk(
-//       Thunk::ThunkInfo thunk_info, std::string canonical_hlo,
-//       se::gpu::GroupedGemmConfig gemm_config,
-//       se::gpu::BlasLt::Epilogue epilogue, int64_t algorithm_idx,
-//       BufferAllocation::Slice a, BufferAllocation::Slice b,
-//       BufferAllocation::Slice c, BufferAllocation::Slice d,
-//       BufferAllocation::Slice group_sizes,
-//       BufferAllocation::Slice bias /* may be null */,
-//       BufferAllocation::Slice aux /* may be null */,
-//       BufferAllocation::Slice a_scale /* may be null */,
-//       BufferAllocation::Slice b_scale /* may be null */,
-//       BufferAllocation::Slice c_scale /* may be null */,
-//       BufferAllocation::Slice d_scale /* may be null */,
-//       BufferAllocation::Slice d_amax /* may be null */,
-//       std::optional<const BufferAllocation::Slice> workspace);
-
-//   absl::Status ExecuteOnStream(const ExecuteParams& params) override {
-//     return ExecuteOnStreamInternal(params.stream, params);
-//   }
-//   absl::Status Initialize(const InitializeParams& params) override;
-//   std::optional<const BufferAllocation::Slice> workspace() const {
-//     return workspace_;
-//   }
-
-//   absl::StatusOr<ThunkProto> ToProto() const override;
-//   static absl::StatusOr<std::unique_ptr<Thunk>> FromProto(
-//       Thunk::ThunkInfo thunk_info, const CublasLtGroupedMatmulThunkProto&
-//       proto, absl::Span<const BufferAllocation> allocations);
-
-//  protected:
-//   CublasLtGroupedMatmulThunk(const CublasLtGroupedMatmulThunk& rhs);
-
-//   absl::Status ExecuteOnStreamInternal(se::Stream* stream,
-//                                        const ExecuteParams& params);
-//   absl::StatusOr<se::gpu::BlasLt::GroupedMatmulPlan*>
-//   GetCachedGroupedMatmulPlan(const ExecuteParams& params);
-
-//   se::gpu::GroupedGemmConfig gemm_config_;
-//   se::gpu::BlasLt::Epilogue epilogue_;
-//   int64_t algorithm_idx_;
-//   std::string canonical_hlo_;
-//   BufferAllocation::Slice a_;
-//   BufferAllocation::Slice b_;
-//   BufferAllocation::Slice c_;
-//   BufferAllocation::Slice d_;
-//   BufferAllocation::Slice group_sizes_;
-//   BufferAllocation::Slice bias_;
-//   BufferAllocation::Slice aux_;
-//   BufferAllocation::Slice a_scale_;
-//   BufferAllocation::Slice b_scale_;
-//   BufferAllocation::Slice c_scale_;
-//   BufferAllocation::Slice d_scale_;
-//   BufferAllocation::Slice d_amax_;
-//   std::optional<const BufferAllocation::Slice> workspace_;
-// };
-
 }  // namespace gpu
 }  // namespace xla
 
