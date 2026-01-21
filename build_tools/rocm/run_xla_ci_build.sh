@@ -45,7 +45,6 @@ TARGETS_TO_EXCLUDE=(
     -//xla/backends/gpu/codegen/triton:support_legacy_test_amdgpu_any
     -//xla/backends/gpu/runtime:command_buffer_conversion_pass_test_amdgpu_any
     -//xla/backends/gpu/runtime:kernel_thunk_test_amdgpu_any
-    -//xla/backends/gpu/runtime:topk_test_amdgpu_any
     -//xla/codegen/emitters/tests:loop/broadcast_constant_block_dim_limit.hlo.test
     -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any
     -//xla/hlo/builder/lib:svd_test_amdgpu_any
