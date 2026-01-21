@@ -149,7 +149,7 @@ absl::StatusOr<std::unique_ptr<Thunk>> DeserializeThunkProto(
           std::move(thunk_info), thunk_proto.cublas_lt_matmul_thunk(),
           buffer_allocations);
     case ThunkProto::kCublasLtGroupedMatmulThunk:
-      return CublasLtGroupedMatmulThunk::FromProto(
+      return CublasLtMatmulThunk::FromProto(
           std::move(thunk_info), thunk_proto.cublas_lt_grouped_matmul_thunk(),
           buffer_allocations);
     case ThunkProto::kNormThunk:

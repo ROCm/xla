@@ -519,7 +519,7 @@ TEST_F(GpuBlasLtMatmulThunkTest, ThunkProtoSerializationGroupedMatmul) {
 
   TF_ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<Thunk> thunk,
-      CublasLtGroupedMatmulThunk::FromProto(thunk_info, proto, allocations));
+      CublasLtMatmulThunk::FromProto(thunk_info, proto, allocations));
 
   ThunkProto reference_thunk_proto;
   *reference_thunk_proto.mutable_thunk_info() = thunk_info.ToProto();

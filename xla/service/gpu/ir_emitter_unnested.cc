@@ -923,7 +923,7 @@ absl::Status IrEmitterUnnested::EmitCublasLtGroupedMatmulThunk(
   std::string canonical_hlo = instr->ToString(
       HloPrintOptions::Fingerprint().set_print_backend_config(true));
 
-  auto thunk = std::make_unique<CublasLtGroupedMatmulThunk>(
+  auto thunk = std::make_unique<CublasLtMatmulThunk>(
       std::move(thunk_info), std::move(canonical_hlo), std::move(gemm_config),
       se::gpu::BlasLt::Epilogue::kDefault, algorithm, a, b, c, d, group_sizes,
       bias, aux, a_scale, b_scale, c_scale, d_scale, d_amax, workspace_buffer);
