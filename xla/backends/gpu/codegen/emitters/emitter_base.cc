@@ -223,8 +223,9 @@ absl::Status RunPassPipeline(mlir::ModuleOp module, const HloModule& hlo_module,
 }  // namespace
 
 /* static */ std::array<uint64_t, 2> EmitterBase::MaybeSplitGridDimensionX(
-      uint64_t num_threads_x, uint64_t num_blocks_x,
-      const se::DeviceDescription& info)
+                                     uint64_t num_threads_x, 
+                                     uint64_t num_blocks_x,
+                                     const se::DeviceDescription& info)
 {
 
   const se::BlockDim& limit = info.block_dim_limit();

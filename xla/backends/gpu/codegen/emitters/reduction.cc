@@ -863,15 +863,11 @@ RowReductionFusion::RowReductionFusion(
   Vector3 shape = reduction_dimensions_.dimensions;
   int64_t kMinorReducedElementsPerThread = 16;
 
-  int64_t num_threads_kept = 1;
   // Number of threads doing the reduction.
-  int64_t num_threads_reduced = [&] {
-    int64_t max_block_size = MinThreadsXRowReduction();
-    return std::min(max_block_size,
+  int64_t num_threads_reduced = std::min(MinThreadsXRowReduction(),
                   RoundUpTo(CeilOfRatio(shape[kRowMinorReduced],
                                         kMinorReducedElementsPerThread),
                             WarpSize()));
-  }();
 
   // If we're limited by the size of the x dimension, add additional parallelism
   // in the y dimension. The code generator doesn't currently support
@@ -879,15 +875,14 @@ RowReductionFusion::RowReductionFusion(
   // recommendation is to use between 128 and 512 threads, so we just go for
   // 256. See https://forums.developer.nvidia.com/t/55529
   constexpr int64_t kThreadsPerBlockTarget = 256;
+  int64_t num_threads_kept = 1;
   if (num_threads_reduced * 2 <= kThreadsPerBlockTarget) {
     int64_t kept_size = reduction_dimensions_.dimensions[kRowKept];
     // Increase the size of the y dimension as long as there's remaining
-    // parallelism.
-    if (kept_size * num_threads_reduced <= kThreadsPerBlockTarget) {
-      num_threads_kept = kept_size;
-    } else {
-      num_threads_kept = kThreadsPerBlockTarget / num_threads_reduced;
-    }
+    // parallelism: num_threads_reduced is rounded up to the warp size, hence it must evenly
+    // divide kThreadsPerBlockTarget.
+    num_threads_kept = std::min(kept_size, 
+                                kThreadsPerBlockTarget / num_threads_reduced);
   }
 
   int vector_size = GetVectorSizeForMlir(analysis, /*minor_dim=*/shape.back(),
