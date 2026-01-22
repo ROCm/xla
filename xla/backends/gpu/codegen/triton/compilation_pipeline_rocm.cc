@@ -156,10 +156,8 @@ static void MakeLLIR(mlir::OpPassManager* pm,
   pm->addPass(mlir::createCanonicalizerPass());
   pm->addPass(mlir::createCSEPass());
   pm->addPass(mlir::createSymbolDCEPass());
-  if (/*(instruction_sched_variant=="none") == */ /* DISABLES CODE */ (false)) {
-    pm->addPass(mt::createTritonAMDGPULowerInstructionSchedHintsPass(
-        rocm_cc.gfx_version(), num_stages));
-  }
+  pm->addPass(mt::createTritonAMDGPULowerInstructionSchedHintsPass(
+      rocm_cc.gfx_version(), num_stages));
   pm->addPass(mt::createConvertBuiltinFuncToLLVMPass(/*ftz=*/true));
 }
 
