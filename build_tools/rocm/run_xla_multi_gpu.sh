@@ -45,41 +45,84 @@ if [[ $TF_GPU_COUNT -lt 4 ]]; then
     exit
 fi
 
-TF_TESTS_PER_GPU=1
-N_TEST_JOBS=$(expr ${TF_GPU_COUNT} \* ${TF_TESTS_PER_GPU})
 amdgpuname=(`rocminfo | grep gfx | head -n 1`)
 AMD_GPU_GFX_ID=${amdgpuname[1]}
-echo ""
-echo "Bazel will use ${N_BUILD_JOBS} concurrent build job(s) and ${N_TEST_JOBS} concurrent test job(s) for gpu ${AMD_GPU_GFX_ID}."
-echo ""
 
 export PYTHON_BIN_PATH=`which python3`
 export TF_NEED_ROCM=1
-export ROCM_PATH=/opt/rocm/
+export ROCM_PATH="/opt/rocm"
 
-SCRIPT_DIR=$(realpath $(dirname $0))
-TAG_FILTERS="$($SCRIPT_DIR/rocm_tag_filters.sh)"
-
+BAZEL_DISK_CACHE_SIZE=100G
+BAZEL_DISK_CACHE_DIR="/tf/disk_cache/rocm-jaxlib-v0.7.1"
+mkdir -p ${BAZEL_DISK_CACHE_DIR}
 if [ ! -d /tf/pkg ]; then
 	mkdir -p /tf/pkg
 fi
 
+EXCLUDED_TESTS=(
+    CollectiveOpsTestE2EShardedUnsharded.BlockScaled*
+)
+
+SCRIPT_DIR=$(realpath $(dirname $0))
+TAG_FILTERS="$($SCRIPT_DIR/rocm_tag_filters.sh)"
+
+SANITIZER_ARGS=()
+if [[ $1 == "asan" ]]; then
+    SANITIZER_ARGS+=("--run_under=//build_tools/rocm:sanitizer_wrapper")
+    SANITIZER_ARGS+=("--config=asan")
+    TAG_FILTERS="$TAG_FILTERS,-noasan"
+    shift
+elif [[ $1 == "tsan" ]]; then
+    SANITIZER_ARGS+=("--run_under=//build_tools/rocm:sanitizer_wrapper")
+    SANITIZER_ARGS+=("--config=tsan")
+    TAG_FILTERS="$TAG_FILTERS,-notsan"
+    # excluded from tsan
+    EXCLUDED_TESTS+=(
+        CollectiveOpsTest*
+        Fp8CollectiveOpsTest.AllGather_8BitFloat
+        Fp8CollectiveOpsTest.CollectivePermute_8BitFloat
+        Fp8CollectiveOpsTest.AllToAll_8BitFloat
+        AsyncCollectiveOps*
+        AllReduceTest*
+        RaggedAllToAllTest*
+        AsyncCollectiveOps*
+        AsyncMemcpyCollectiveOps*
+        RaggedAllToAllTest*
+    )
+    shift
+fi
+
+rm -rf /dev/shm/nccl-*
 bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --config=rocm_ci \
     --config=xla_mgpu \
-    --build_tag_filters=${TAG_FILTERS} \
-    --test_tag_filters=${TAG_FILTERS} \
     --profile=/tf/pkg/profile.json.gz \
+    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+    --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE} \
+    --experimental_guard_against_concurrent_changes \
+    --build_tag_filters=$TAG_FILTERS \
+    --test_tag_filters=$TAG_FILTERS \
     --test_timeout=920,2400,7200,9600 \
     --test_sharding_strategy=disabled \
     --test_output=errors \
     --flaky_test_attempts=3 \
     --keep_going \
-    --local_test_jobs=${N_TEST_JOBS} \
-    --test_env=TF_TESTS_PER_GPU=$TF_TESTS_PER_GPU \
-    --test_env=TF_GPU_COUNT=$TF_GPU_COUNT \
-    --action_env=TF_ROCM_AMDGPU_TARGETS=${AMD_GPU_GFX_ID} \
+    --test_strategy=exclusive \
     --action_env=XLA_FLAGS=--xla_gpu_force_compilation_parallelism=16 \
     --action_env=XLA_FLAGS=--xla_gpu_enable_llvm_module_compilation_parallelism=true \
     --action_env=NCCL_MAX_NCHANNELS=1 \
-    --repo_env="ROCM_PATH=$ROCM_PATH"
+    --test_env=HIP_VISIBLE_DEVICES=0,1,2,3 \
+    --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
+    "${SANITIZER_ARGS[@]}" \
+    "$@" \
+    --spawn_strategy=local \
+    --strategy=TestRunner=local # execute multigpu tests locally as there is no gpu exclusive protection on rbe
+
+
+# clean up nccl- files
+rm -rf /dev/shm/nccl-*
+
+# clean up bazel disk_cache
+bazel shutdown \
+  --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+  --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_SIZE}
