@@ -33,6 +33,7 @@ limitations under the License.
 #include "xla/service/gpu/model/experimental/symbolic_expr.h"
 #include "xla/service/platform_util.h"
 #include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/rocm/rocm_platform_id.h"
 #include "xla/tests/hlo_pjrt_test_base.h"
 #include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/xla.pb.h"
@@ -53,9 +54,10 @@ class TritonFusionNumericsVerifierTest
 
  protected:
   std::unique_ptr<xla::HloModule> Module(absl::string_view hlo_text_template,
-                                         absl::string_view type) {
+                                         absl::string_view type,
+                                         int value = 0) {
     auto m = ParseAndReturnVerifiedModule(
-        absl::Substitute(hlo_text_template, type), GetModuleConfigForTest());
+        absl::Substitute(hlo_text_template, type, value), GetModuleConfigForTest());
     TF_EXPECT_OK(m);
     return std::move(m.value());
   }
@@ -303,12 +305,16 @@ ENTRY main (p0: bf16[128,512], p1: bf16[256,512], p2: bf16[512,512]) -> bf16[384
         "num_warps":"8",
         "output_tiles":[{"sizes":["128","256"]}],
         "num_ctas":1,
-        "num_stages":4,
+        "num_stages":$1,
         "is_tma_allowed":false}}}
 }
 )";
+  se::Platform* platform = PlatformUtil::GetDefaultPlatform().value();
+  int num_stages =
+    platform->id() == se::rocm::kROCmPlatformId ? 2 : 4;
   auto module = Module(kMultiOutputFusionHloText,
-                       primitive_util::LowercasePrimitiveTypeName(GetParam()));
+                       primitive_util::LowercasePrimitiveTypeName(GetParam()),
+                       num_stages);
 
   EXPECT_NE(TritonFusion(*module), nullptr);
   auto verifier = TritonFusionNumericsVerifier(CreateDeviceOrDevicelessConfig(),
@@ -516,12 +522,15 @@ ENTRY main {
       "kind":"__triton",
       "block_level_fusion_config":{
         "output_tiles":[{"sizes":["1","1","1","16384"]}],
-        "num_warps":"32",
+        "num_warps":"$1",
         "num_ctas":"1",
         "num_stages":"1"}}}
 }
   )";
-  auto module = Module(hlo_text, "");
+  se::Platform* platform = PlatformUtil::GetDefaultPlatform().value();
+  int num_warps =
+    platform->id() == se::rocm::kROCmPlatformId ? 16 : 32;
+  auto module = Module(hlo_text, "", num_warps);
   EXPECT_NE(TritonFusion(*module), nullptr);
   auto verifier = TritonFusionNumericsVerifier(CreateDeviceOrDevicelessConfig(),
                                                &symbolic_expr_context_);
