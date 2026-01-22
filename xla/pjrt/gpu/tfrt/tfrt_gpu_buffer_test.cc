@@ -23,7 +23,6 @@ limitations under the License.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/statusor.h"
-#include "absl/status/status_matchers.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "absl/types/span.h"
@@ -122,7 +121,7 @@ TEST(TfrtGpuBufferTest, AcquireExternalReference) {
   // Trigger the definition event. AcquireExternalReference should be unblocked.
   definition_event.SetStateConcrete();
   BlockUntilReady(ref_acquired_event.GetAsyncValue());
-  EXPECT_THAT(ref_status, absl_testing::IsOk());
+  EXPECT_OK(ref_status);
 
   // TODO(b/382117736): external reference should block donation.
 }
@@ -164,14 +163,14 @@ TEST(TfrtGpuBufferTest, ReleaseDeviceMemoryOwnershipNoWait) {
   // Release and don't wait for definition or usage events to complete.
   auto ref_status = buffer->ReleaseDeviceMemoryOwnership(
       /*wait_for_operations_to_complete=*/false);
-  EXPECT_THAT(ref_status, absl_testing::IsOk());
+  EXPECT_OK(ref_status);
   auto ref = std::move(ref_status).value();
   EXPECT_EQ(device_memory_opaque, ref->OpaqueDeviceMemoryDataPointer());
 
   // Release again should return nullptr.
   auto ref_status_2 = buffer->ReleaseDeviceMemoryOwnership(
       /*wait_for_operations_to_complete=*/false);
-  EXPECT_THAT(ref_status_2, absl_testing::IsOk());
+  EXPECT_OK(ref_status_2);
   EXPECT_EQ(nullptr, ref_status_2.value().get());
 }
 
@@ -231,7 +230,7 @@ TEST(TfrtGpuBufferTest, ReleaseDeviceMemoryOwnershipWait) {
   // Trigger the usage event.
   usage_event.SetStateConcrete();
   BlockUntilReady(ref_acquired_event.GetAsyncValue());
-  EXPECT_THAT(ref_status, absl_testing::IsOk());
+  EXPECT_OK(ref_status);
 
   // TODO(b/382117736): should also block until donation event is triggered.
   auto ref = std::move(ref_status).value();
@@ -240,7 +239,7 @@ TEST(TfrtGpuBufferTest, ReleaseDeviceMemoryOwnershipWait) {
   // Release again should return nullptr.
   auto ref_status_2 = buffer->ReleaseDeviceMemoryOwnership(
       /*wait_for_operations_to_complete=*/false);
-  EXPECT_THAT(ref_status_2, absl_testing::IsOk());
+  EXPECT_OK(ref_status_2);
   EXPECT_EQ(nullptr, ref_status_2.value().get());
 }
 

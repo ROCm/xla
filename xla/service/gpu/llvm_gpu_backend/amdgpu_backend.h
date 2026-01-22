@@ -40,11 +40,6 @@ absl::StatusOr<std::vector<uint8_t>> CompileToHsaco(
     const DebugOptions& debug_options,
     const std::string& module_config_cache_key,
     bool is_autotuning_compilation = false);
-// Compiles the argument module and returns path of compiled Hsaco file.
-absl::StatusOr<std::string> CompileToHsacoAndReturnFilePath(
-    llvm::Module* module, stream_executor::GpuComputeCapability gpu_version,
-    const DebugOptions& debug_options, bool is_autotuning_compilation,
-    bool keep_tempfiles);
 
 // Returns the LLVM command line flags that we use for compilation.
 std::vector<std::string> GetAMDGPUBackendOptions(

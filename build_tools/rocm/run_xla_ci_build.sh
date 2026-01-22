@@ -42,6 +42,7 @@ TARGETS_TO_EXCLUDE=(
     -//xla/backends/gpu/codegen/triton:support_legacy_test_amdgpu_any
     -//xla/backends/gpu/runtime:command_buffer_conversion_pass_test_amdgpu_any
     -//xla/backends/gpu/runtime:kernel_thunk_test_amdgpu_any
+    -//xla/backends/gpu/runtime:topk_test_amdgpu_any
     -//xla/codegen/emitters/tests:loop/broadcast_constant_block_dim_limit.hlo.test
     -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any
     -//xla/hlo/builder/lib:svd_test_amdgpu_any
@@ -68,6 +69,7 @@ TARGETS_TO_EXCLUDE=(
     -//xla/service/gpu/llvm_gpu_backend:amdgpu_bitcode_link_test
     -//xla/tests:triangular_solve_test_amdgpu_any
     -//xla/tests:batch_norm_training_test_amdgpu_any_notfrt
+    -//xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_legacy_test_amdgpu_any
     -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any_notfrt
     -//xla/tests:convert_test_amdgpu_any
     -//xla/pjrt/gpu/tfrt:tfrt_gpu_buffer_test

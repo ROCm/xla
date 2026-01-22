@@ -25,7 +25,7 @@ limitations under the License.
 extern "C" {
 #endif
 
-#define PJRT_API_TRITON_EXTENSION_VERSION 2
+#define PJRT_API_TRITON_EXTENSION_VERSION 1
 
 struct PJRT_Triton_Compile_Args {
   size_t struct_size;
@@ -42,10 +42,8 @@ struct PJRT_Triton_Compile_Args {
   int out_cluster_dim_x;
   int out_cluster_dim_y;
   int out_cluster_dim_z;
-  const char* out_path;  // owned
-  size_t out_path_size;
 };
-PJRT_DEFINE_STRUCT_TRAITS(PJRT_Triton_Compile_Args, out_path_size);
+PJRT_DEFINE_STRUCT_TRAITS(PJRT_Triton_Compile_Args, out_cluster_dim_z);
 
 // Compiles a given Triton kernel.
 typedef PJRT_Error* PJRT_Triton_Compile(PJRT_Triton_Compile_Args* args);
