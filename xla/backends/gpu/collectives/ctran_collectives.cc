@@ -45,24 +45,49 @@ limitations under the License.
 #else
 #include "rocm/include/rccl.h"
 #endif
+#include "rocm/include/hip/hip_runtime.h"
 #else
 #include "third_party/nccl/nccl.h"
+#include "third_party/gpus/cuda/include/cuda_runtime.h"
 #endif
 
 namespace xla::gpu {
 
-// RCCLX library handle for dynamic loading
+// RCCLX library handle for dynamic loading with extended function pointers
 struct RcclxLibrary {
   void* handle = nullptr;
   bool loaded = false;
   bool checked = false;
+  std::string library_path;
   
-  // Function pointers for RCCLX-specific features (beyond standard RCCL)
+  // RCCLX-specific function pointers (enhanced features beyond standard RCCL)
   // These are optional and provide enhanced functionality when available
+  
+  // Memory management with RDMA registration
+  using NcclMemAllocFn = ncclResult_t (*)(void**, size_t);
+  using NcclMemFreeFn = ncclResult_t (*)(void*);
+  NcclMemAllocFn ncclMemAlloc = nullptr;
+  NcclMemFreeFn ncclMemFree = nullptr;
+  
+  // User buffer registration (NCCL 2.19+)
+  using NcclCommRegisterFn = ncclResult_t (*)(ncclComm_t, void*, size_t, void**);
+  using NcclCommDeregisterFn = ncclResult_t (*)(ncclComm_t, void*);
+  NcclCommRegisterFn ncclCommRegister = nullptr;
+  NcclCommDeregisterFn ncclCommDeregister = nullptr;
+  
+  // Scalable init with multiple unique IDs
+  using NcclCommInitRankScalableFn = ncclResult_t (*)(ncclComm_t*, int, int, int, ncclUniqueId*, ncclConfig_t*);
+  NcclCommInitRankScalableFn ncclCommInitRankScalable = nullptr;
+  
+  // Version info
+  int major_version = 0;
+  int minor_version = 0;
+  int patch_version = 0;
   
   ~RcclxLibrary() {
     if (handle) {
       dlclose(handle);
+      handle = nullptr;
     }
   }
   
@@ -76,24 +101,77 @@ struct RcclxLibrary {
     checked = true;
     
     // Try to load RCCLX library
-    // RCCLX is typically installed as librccl.so but with extended features
+    // RCCLX is typically installed with extended features beyond standard RCCL
     const char* lib_paths[] = {
       "librcclx.so",           // RCCLX from torchcomms
       "librccl_meta.so",       // Meta's RCCL build
+      "librccl.so.1",          // System RCCL (may have RCCLX features)
       nullptr
     };
     
     for (const char** path = lib_paths; *path != nullptr; ++path) {
       handle = dlopen(*path, RTLD_NOW | RTLD_LOCAL);
       if (handle) {
+        library_path = *path;
         LOG(INFO) << "CTran: Loaded RCCLX library from " << *path;
         loaded = true;
+        LoadFunctionPointers();
         return true;
       }
     }
     
     LOG(INFO) << "CTran: RCCLX library not found, using standard RCCL";
     return false;
+  }
+  
+  void LoadFunctionPointers() {
+    if (!handle) return;
+    
+    // Load RCCLX-specific functions
+    ncclMemAlloc = reinterpret_cast<NcclMemAllocFn>(
+        dlsym(handle, "ncclMemAlloc"));
+    ncclMemFree = reinterpret_cast<NcclMemFreeFn>(
+        dlsym(handle, "ncclMemFree"));
+    ncclCommRegister = reinterpret_cast<NcclCommRegisterFn>(
+        dlsym(handle, "ncclCommRegister"));
+    ncclCommDeregister = reinterpret_cast<NcclCommDeregisterFn>(
+        dlsym(handle, "ncclCommDeregister"));
+    ncclCommInitRankScalable = reinterpret_cast<NcclCommInitRankScalableFn>(
+        dlsym(handle, "ncclCommInitRankScalable"));
+    
+    // Get version
+    using NcclGetVersionFn = ncclResult_t (*)(int*);
+    auto getVersion = reinterpret_cast<NcclGetVersionFn>(
+        dlsym(handle, "ncclGetVersion"));
+    if (getVersion) {
+      int version = 0;
+      if (getVersion(&version) == ncclSuccess) {
+        // NCCL version encoding: XXYYZZ for major.minor.patch
+        major_version = version / 10000;
+        minor_version = (version / 100) % 100;
+        patch_version = version % 100;
+      }
+    }
+    
+    LOG(INFO) << "CTran RCCLX: Loaded function pointers - "
+              << "ncclMemAlloc=" << (ncclMemAlloc ? "yes" : "no")
+              << ", ncclMemFree=" << (ncclMemFree ? "yes" : "no")
+              << ", ncclCommRegister=" << (ncclCommRegister ? "yes" : "no")
+              << ", ncclCommDeregister=" << (ncclCommDeregister ? "yes" : "no")
+              << ", ncclCommInitRankScalable=" << (ncclCommInitRankScalable ? "yes" : "no")
+              << ", version=" << major_version << "." << minor_version << "." << patch_version;
+  }
+  
+  bool HasMemoryManagement() const {
+    return ncclMemAlloc != nullptr && ncclMemFree != nullptr;
+  }
+  
+  bool HasBufferRegistration() const {
+    return ncclCommRegister != nullptr && ncclCommDeregister != nullptr;
+  }
+  
+  bool HasScalableInit() const {
+    return ncclCommInitRankScalable != nullptr;
   }
 };
 
@@ -253,35 +331,83 @@ CtranCollectives::SplitCommunicators(absl::Span<const Communicator* const> comms
 }
 
 absl::StatusOr<void*> CtranCollectives::Allocate(uint64_t bytes) {
-  LOG(INFO) << "CTran: Allocating " << bytes << " bytes of collective memory";
+  VLOG(1) << "CTran: Allocating " << bytes << " bytes of collective memory";
   
   if (!IsCtranAvailable()) {
     return absl::UnavailableError("CTran not available for memory allocation");
   }
   
-  // TODO(phambinh): Use CTran's memory registration for RDMA-capable memory
-  //
-  // Real implementation would:
-  // 1. Allocate GPU memory via cudaMalloc/hipMalloc
-  // 2. Register with CTran for RDMA access: ctran_mapper->regMem(ptr, bytes)
-  // 3. Return the pointer
-  //
-  // CTran memory registration enables:
-  // - Zero-copy RDMA transfers over InfiniBand
-  // - NVLink direct memory access
-  // - Efficient TCP DevMem transfers
+  auto& rcclx = RcclxLibrary::Get();
   
-  return absl::UnimplementedError("CTran memory allocation not yet implemented");
+  // Use RCCLX ncclMemAlloc if available (provides RDMA-registered memory)
+  if (rcclx.HasMemoryManagement()) {
+    void* ptr = nullptr;
+    ncclResult_t result = rcclx.ncclMemAlloc(&ptr, bytes);
+    if (result == ncclSuccess && ptr != nullptr) {
+      VLOG(1) << "CTran: Allocated " << bytes << " bytes via ncclMemAlloc at " << ptr;
+      return ptr;
+    }
+    LOG(WARNING) << "CTran: ncclMemAlloc failed: " << ncclGetErrorString(result)
+                 << ", falling back to standard allocation";
+  }
+  
+  // Fallback: Use standard GPU allocation
+  void* ptr = nullptr;
+#if TENSORFLOW_USE_ROCM
+  hipError_t hip_result = hipMalloc(&ptr, bytes);
+  if (hip_result != hipSuccess) {
+    return absl::InternalError(
+        absl::StrCat("CTran: hipMalloc failed: ", hipGetErrorString(hip_result)));
+  }
+#else
+  cudaError_t cuda_result = cudaMalloc(&ptr, bytes);
+  if (cuda_result != cudaSuccess) {
+    return absl::InternalError(
+        absl::StrCat("CTran: cudaMalloc failed: ", cudaGetErrorString(cuda_result)));
+  }
+#endif
+  
+  VLOG(1) << "CTran: Allocated " << bytes << " bytes via standard GPU alloc at " << ptr;
+  return ptr;
 }
 
 absl::Status CtranCollectives::Deallocate(void* location) {
-  LOG(INFO) << "CTran: Deallocating collective memory at " << location;
+  VLOG(1) << "CTran: Deallocating collective memory at " << location;
   
-  // TODO(phambinh): Deregister and free CTran memory
-  // ctran_mapper->deregMem(location)
-  // cudaFree/hipFree(location)
+  if (location == nullptr) {
+    return absl::OkStatus();
+  }
   
-  return absl::UnimplementedError("CTran memory deallocation not yet implemented");
+  auto& rcclx = RcclxLibrary::Get();
+  
+  // Try RCCLX ncclMemFree first if available
+  if (rcclx.HasMemoryManagement()) {
+    ncclResult_t result = rcclx.ncclMemFree(location);
+    if (result == ncclSuccess) {
+      VLOG(1) << "CTran: Freed memory via ncclMemFree";
+      return absl::OkStatus();
+    }
+    // If ncclMemFree fails, try standard free (memory might have been allocated differently)
+    LOG(WARNING) << "CTran: ncclMemFree failed, trying standard free";
+  }
+  
+  // Fallback: Use standard GPU deallocation
+#if TENSORFLOW_USE_ROCM
+  hipError_t hip_result = hipFree(location);
+  if (hip_result != hipSuccess) {
+    return absl::InternalError(
+        absl::StrCat("CTran: hipFree failed: ", hipGetErrorString(hip_result)));
+  }
+#else
+  cudaError_t cuda_result = cudaFree(location);
+  if (cuda_result != cudaSuccess) {
+    return absl::InternalError(
+        absl::StrCat("CTran: cudaFree failed: ", cudaGetErrorString(cuda_result)));
+  }
+#endif
+  
+  VLOG(1) << "CTran: Freed memory via standard GPU free";
+  return absl::OkStatus();
 }
 
 absl::Status CtranCollectives::InitializeTopology(Topology topology) {
@@ -338,9 +464,21 @@ bool CtranCollectives::IsCtranAvailable() {
 }
 
 std::string CtranCollectives::GetCtranVersion() {
-  bool rcclx = RcclxLibrary::Get().loaded;
-  if (rcclx) {
-    return "ctran-rcclx-1.0.0";
+  auto& rcclx = RcclxLibrary::Get();
+  if (rcclx.loaded) {
+    std::string features;
+    if (rcclx.HasMemoryManagement()) features += "+mem";
+    if (rcclx.HasBufferRegistration()) features += "+bufreg";
+    if (rcclx.HasScalableInit()) features += "+scalable";
+    
+    if (rcclx.major_version > 0) {
+      return absl::StrCat("ctran-rcclx-", 
+                          rcclx.major_version, ".", 
+                          rcclx.minor_version, ".",
+                          rcclx.patch_version,
+                          features.empty() ? "" : features);
+    }
+    return absl::StrCat("ctran-rcclx-1.0.0", features);
   }
 #if TENSORFLOW_USE_ROCM
   return absl::StrCat("ctran-rccl-", NCCL_MAJOR, ".", NCCL_MINOR, ".", NCCL_PATCH);
