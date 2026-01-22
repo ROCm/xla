@@ -14,12 +14,6 @@
 # ============================================================================
 
 load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
-load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
-
-package(
-    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
-    default_visibility = ["//visibility:public"],
-)
 
 string_flag(
     name = "sanitizer",
