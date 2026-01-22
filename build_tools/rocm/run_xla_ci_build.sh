@@ -36,7 +36,6 @@ clean_up() {
 trap clean_up EXIT
 
 TARGETS_TO_EXCLUDE=(
-    -//xla/tests:collective_pipeline_parallelism_test
     -//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any
     -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_port_test_amdgpu_any
     -//xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_test_amdgpu_any
