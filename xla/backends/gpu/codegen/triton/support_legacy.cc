@@ -247,6 +247,7 @@ bool IsDotAlgorithmSupportedByTriton(
       if (rocm_compute_capability) {
         return rocm_compute_capability->has_bf16_dtype_support();
       }
+      return false;
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X6:
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X9:
       if (cuda_compute_capability) {
@@ -260,6 +261,7 @@ bool IsDotAlgorithmSupportedByTriton(
       if (rocm_compute_capability) {
         return true;
       }
+      return false;
     default:
       return false;
   }
