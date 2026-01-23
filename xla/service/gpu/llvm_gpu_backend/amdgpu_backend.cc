@@ -427,7 +427,7 @@ void HsacoCache::Add(const std::string& ir, uint64_t hash,
 // TargetMachine for the AMDGPU target.
 absl::StatusOr<std::vector<uint8_t>> EmitModuleToHsaco(
     llvm::Module* module, llvm::TargetMachine* target_machine,
-    const DebugOptions& debug_options, bool is_autotuning_compilation) {
+    const DebugOptions& debug_options) {
   auto* env = tsl::Env::Default();
   std::vector<std::string> tempdir_vector;
   env->GetLocalTempDirectories(&tempdir_vector);
@@ -887,8 +887,7 @@ std::vector<std::string> GetAMDGPUBackendOptions(
 absl::StatusOr<std::vector<uint8_t>> CompileToHsaco(
     llvm::Module* module, se::GpuComputeCapability gpu_version,
     const DebugOptions& debug_options,
-    const std::string& module_config_cache_key,
-    bool is_autotuning_compilation) {
+    const std::string& module_config_cache_key) {
   static absl::once_flag backend_init_flag;
   // TODO(rocm) Ideally this would be refreshed if xla_gpu_cuda_data_dir
   // changes.
@@ -965,8 +964,7 @@ absl::StatusOr<std::vector<uint8_t>> CompileToHsaco(
 
     // Lower optimized LLVM module to HSA code object.
     TF_ASSIGN_OR_RETURN(
-        hsaco, EmitModuleToHsaco(module, target_machine.get(), debug_options,
-                                 is_autotuning_compilation));
+        hsaco, EmitModuleToHsaco(module, target_machine.get(), debug_options));
     HsacoCache::Add(str, hash, gcn_arch_name, hsaco);
   }
   return hsaco;
