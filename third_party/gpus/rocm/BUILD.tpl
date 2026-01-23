@@ -594,7 +594,6 @@ alias(
         threshold = 71000,
         value = rocm_version_number(),
     ),
-    visibility = ["//visibility:public"],
 )
 
 cc_library(
