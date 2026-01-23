@@ -37,7 +37,6 @@ trap clean_up EXIT
 
 TARGETS_TO_EXCLUDE=(
     -//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any
-    -//xla/backends/gpu/codegen/triton:fusion_emitter_device_legacy_port_test_amdgpu_any
     -//xla/backends/gpu/codegen/triton:fusion_emitter_parametrized_test_amdgpu_any
     -//xla/backends/gpu/codegen/triton:support_legacy_test_amdgpu_any
     -//xla/backends/gpu/runtime:command_buffer_conversion_pass_test_amdgpu_any
