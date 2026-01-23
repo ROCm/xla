@@ -50,6 +50,9 @@ class TritonGemmTest : public GpuCodegenTest {
 };
 
 TEST_F(TritonGemmTest, IndexUsing64Bits) {
+  if (test_runner().HasProperty(HloRunnerPropertyTag::kUsingGpuRocm)) {
+    GTEST_SKIP() << "Not enough memory on ROCm.";
+  }
   const char* kHloTextRef = R"(
 HloModule r
 
@@ -149,6 +152,9 @@ using TritonNormalizationTest = GpuCodegenTest;
 
 TEST_F(TritonNormalizationTest,
        CanEmitDiamondWithInputNumberOfElementsLargerThanInt32Max) {
+  if (test_runner().HasProperty(HloRunnerPropertyTag::kUsingGpuRocm)) {
+    GTEST_SKIP() << "Not enough memory on ROCm.";
+  }
   const std::string hlo_text = R"(
 HloModule softmax
 
@@ -171,7 +177,7 @@ ENTRY main {
   ROOT fusion = f16[65538,32768]{1,0} fusion(param_0), kind=kCustom,
     calls=triton_fusion_computation, backend_config={
       "fusion_backend_config":{
-        "kind":"__triton", 
+        "kind":"__triton",
         "block_level_fusion_config":{
           "output_tiles":[{"sizes":["1","32768"]}],
           "num_warps":"1",
