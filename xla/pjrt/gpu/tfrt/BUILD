@@ -325,7 +325,7 @@ xla_cc_test(
     ],
 )
 
-xla_test(
+xla_cc_test(
     name = "tfrt_gpu_buffer_test",
     srcs = ["tfrt_gpu_buffer_test.cc"],
     tags = [
@@ -343,6 +343,7 @@ xla_test(
         "//xla:xla_data_proto_cc",
         "//xla/pjrt:pjrt_client",
         "//xla/pjrt/plugin/xla_gpu:xla_gpu_client_options",
+        "//xla/service:gpu_plugin",
         "//xla/tsl/concurrency:async_value",
         "//xla/tsl/platform:env",
         "//xla/tsl/platform:statusor",
