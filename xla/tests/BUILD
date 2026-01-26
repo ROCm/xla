@@ -1504,7 +1504,6 @@ xla_test(
     ],
     shard_count = 40,
     tags = [
-        "cuda-only",
         "optonly",
         "test_migrated_to_hlo_runner_pjrt",
     ],
@@ -1571,7 +1570,6 @@ xla_test(
     backends = ["gpu"],
     shard_count = 40,
     tags = [
-        "cuda-only",
         "optonly",
         "test_migrated_to_hlo_runner_pjrt",
     ],
@@ -1609,7 +1607,6 @@ xla_test(
     backends = ["gpu"],
     shard_count = 40,
     tags = [
-        "cuda-only",
         "optonly",
         "test_migrated_to_hlo_runner_pjrt",
     ],
