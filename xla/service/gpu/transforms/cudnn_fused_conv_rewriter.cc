@@ -62,6 +62,7 @@ limitations under the License.
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/ml_dtypes.h"
+#include "xla/tsl/platform/status_macros.h"
 
 namespace xla {
 namespace gpu {
@@ -309,7 +310,9 @@ absl::StatusOr<bool> FuseRemoveConvertInConv(HloComputation* comp) {
 // gte(custom-call(..., backend_config={alpha})).
 absl::StatusOr<bool> FuseConvAlpha(HloComputation* comp,
                                    const se::GpuComputeCapability& cc) {
-  if (cc.IsRocm()) return false;
+  if (cc.IsRocm()) {
+    return false;
+  }
   bool changed = false;
   for (auto instr : comp->MakeInstructionPostOrder()) {
     HloInstruction* conv = nullptr;
@@ -1069,7 +1072,9 @@ absl::StatusOr<bool> FuseBiasOrSideInput(HloComputation* comp,
 // is created by the ReshapeMover pass.
 absl::StatusOr<bool> FuseSideInputAlpha(HloComputation* comp,
                                         const se::GpuComputeCapability& cc) {
-  if (cc.IsRocm()) return false;
+  if (cc.IsRocm()) {
+    return false;
+  }
   bool changed = false;
   for (HloInstruction* instr : comp->MakeInstructionPostOrder()) {
     HloInstruction* conv;

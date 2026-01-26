@@ -621,6 +621,7 @@ cc_library(
         "//xla/stream_executor:semantic_version",
         "//xla/stream_executor/cuda:cuda_compute_capability",
         "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:status_macros",
         "//xla/tsl/platform:statusor",
         "//xla/tsl/protobuf:dnn_proto_cc",
         "@com_google_absl//absl/algorithm:container",
@@ -637,26 +638,16 @@ cc_library(
     ],
 )
 
-xla_test(
-    name = "cudnn_fused_conv_rewriter_test",
+cc_library(
+    name = "cudnn_fused_conv_rewriter_test_common",
+    testonly = True,
     srcs = ["cudnn_fused_conv_rewriter_test.cc"],
-    backend_tags = {
-        "a100": [
-            "noasan",
-            "nomsan",
-        ],
-    },
-    backends = [
-        "a100",
-    ],
-    shard_count = 10,
-    tags = [
-        "cuda-only",  # TODO(rocm): Until #12613 is fixed.
-    ],
+    tags = ["gpu"],
     deps = [
         ":conv_rewriter",
         ":cudnn_fused_conv_rewriter",
         "//xla:comparison_util",
+        "//xla:debug_options_flags",
         "//xla:error_spec",
         "//xla:xla_data_proto_cc",
         "//xla:xla_proto_cc",
@@ -682,6 +673,7 @@ xla_test(
         "//xla/tests:hlo_test_base",
         "//xla/tsl/lib/core:status_test_util",
         "//xla/tsl/protobuf:dnn_proto_cc",
+        "//xla/tsl/util:command_line_flags",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status:statusor",
@@ -692,39 +684,40 @@ xla_test(
     ],
 )
 
-# Tested via :cudnn_fused_conv_rewriter_test
-cc_library(
-    name = "cudnn_fused_conv_decomposer",
-    srcs = ["cudnn_fused_conv_decomposer.cc"],
-    hdrs = ["cudnn_fused_conv_decomposer.h"],
+xla_test(
+    name = "cudnn_fused_conv_rewriter_test",
+    srcs = [],
+    backend_tags = {
+        "gpu_a100": [
+            "noasan",
+            "nomsan",
+        ],
+    },
+    backends = [
+        "a100",
+        "amdgpu_any",
+    ] + if_oss(["nvgpu_any"]),
+    shard_count = 10,
+    tags = ["pjrt_migration_candidate"],
     deps = [
-        "//xla:comparison_util",
-        "//xla:debug_options_flags",
-        "//xla:literal",
-        "//xla:shape_util",
-        "//xla:util",
-        "//xla:xla_data_proto_cc",
-        "//xla:xla_proto_cc",
-        "//xla/hlo/ir:hlo",
-        "//xla/hlo/ir:hlo_instruction_utils",
-        "//xla/hlo/pass:hlo_pass",
-        "//xla/service:hlo_creation_utils",
-        "//xla/service:pattern_matcher",
-        "//xla/service/gpu:backend_configs_cc",
-        "//xla/service/gpu:cublas_cudnn",
-        "//xla/stream_executor:dnn",
-        "//xla/tsl/protobuf:dnn_proto_cc",
-        "@com_google_absl//absl/algorithm:container",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/container:inlined_vector",
-        "@com_google_absl//absl/log",
-        "@com_google_absl//absl/log:check",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:ml_dtypes",
-        "@tsl//tsl/platform:statusor",
+        ":cudnn_fused_conv_rewriter_test_common",
+    ],
+)
+
+xla_test(
+    name = "cudnn_fused_conv_rewriter_autotune_disabled_test",
+    srcs = [],
+    args = ["--xla_gpu_autotune_level=0"],
+    backends = [
+        "a100",
+        "amdgpu_any",
+    ],
+    #fail_if_no_test_linked = False,  # NOLINT=Only tests AMD GPUs.
+    #fail_if_no_test_selected = False,  # NOLINT=Only tests AMD GPUs.
+    shard_count = 4,
+    tags = ["pjrt_migration_candidate"],
+    deps = [
+        ":cudnn_fused_conv_rewriter_test_common",
     ],
 )
 
