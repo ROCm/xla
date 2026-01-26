@@ -1,0 +1,23 @@
+--- a/third_party/amd/lib/TritonAMDGPUTransforms/AccelerateAMDMatmul.cpp
++++ b/third_party/amd/lib/TritonAMDGPUTransforms/AccelerateAMDMatmul.cpp
+@@ -431,9 +431,17 @@ Value convertAndCastTensor(PatternRewriter &rewriter, Value value,
+     else if (oldElemType.isF32() && newElemType.isF16())
+       castedTensor =
+           arith::TruncFOp::create(rewriter, loc, castedType, convertedTensor);
+-    else
+-      castedTensor =
+-          tt::FpToFpOp::create(rewriter, loc, castedType, convertedTensor);
++    else {
++      if(oldElemType.getIntOrFloatBitWidth() > newElemType.getIntOrFloatBitWidth()) {
++        auto rmode =
++           RoundingModeAttr::get(rewriter.getContext(), RoundingMode::RTNE);
++        castedTensor =
++          rewriter.create<tt::FpToFpOp>(loc, castedType, convertedTensor, rmode);
++      } else {
++        castedTensor =
++            rewriter.create<tt::FpToFpOp>(loc, castedType, convertedTensor);
++      }
++    }
+   }
+   return castedTensor;
+ }
