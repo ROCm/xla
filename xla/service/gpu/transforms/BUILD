@@ -6,8 +6,9 @@ load(
     "if_gpu_is_configured",
 )
 load("//xla/tests:build_defs.bzl", "xla_test")
-load("//xla/tsl:tsl.bzl", "if_google")
-load("//xla/tsl:tsl.bzl", "if_oss")
+load("//xla/tsl:tsl.bzl",
+    "if_oss", # @unused
+)
 load(
     "//xla/tsl/platform:build_config_root.bzl",
     "tf_cuda_tests_tags",
