@@ -1597,6 +1597,12 @@ TEST_F(GemmRewriteTest, SwishActivationFusion) {
     GTEST_SKIP() << "Swish fusion is only supported on ROCm";
   }
 
+  // Check ROCm version - SILU epilogue requires ROCm 7.0+
+  if (GetToolkitVersion() < stream_executor::SemanticVersion{7, 0, 0}) {
+    GTEST_SKIP() << "Swish fusion requires ROCm 7.0 or later, current version: "
+                 << GetToolkitVersion().ToString();
+  }
+
   const char* hlo_text = R"(
     HloModule swish_fusion
 
