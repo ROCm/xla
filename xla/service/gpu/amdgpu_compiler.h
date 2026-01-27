@@ -79,6 +79,17 @@ class AMDGPUCompiler : public GpuCompiler {
       const Compiler::GpuTargetConfig* target_config,
       HloCostAnalysis::ShapeSizeFunction shape_size_fn) override;
 
+  absl::Status AddConvAndGemmAutotuningPass(
+      HloPassPipeline* pipeline, HloModule* hlo_module,
+      const se::GpuComputeCapability& gpu_version,
+      const CompileOptions& options, AutotuneConfig& autotune_config,
+      tsl::thread::ThreadPool* thread_pool, se::StreamExecutor* stream_exec,
+      const Compiler::GpuTargetConfig* target_config,
+      const MultiProcessKeyValueStore& key_value_store,
+      const se::SemanticVersion& toolkit_version,
+      const DebugOptions& debug_options, mlir::MLIRContext* mlir_context,
+      HloCostAnalysis::ShapeSizeFunction shape_size_fn) override;
+
  private:
   AMDGPUCompiler(const AMDGPUCompiler&) = delete;
   AMDGPUCompiler& operator=(const AMDGPUCompiler&) = delete;

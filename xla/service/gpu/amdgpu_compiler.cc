@@ -58,7 +58,9 @@ limitations under the License.
 #include "xla/service/gpu/autotuning/autotuner_pass.h"
 #include "xla/service/gpu/autotuning/autotuner_util.h"
 #include "xla/service/gpu/autotuning/gemm_fusion_autotuner.h"
+#include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/cublas_cudnn.h"
+#include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/service/gpu/cublas_padding_requirements.h"
 #include "xla/service/gpu/gpu_compiler.h"
 #include "xla/service/gpu/llvm_gpu_backend/amdgpu_backend.h"
@@ -399,6 +401,69 @@ absl::Status AMDGPUCompiler::AddFusionAutotuningPass(
                             MultiProcessKeyValueStore(),
                             /*allow_reg_spills=*/true));
   pipeline->AddPass(std::move(autotuner_pass));
+  return absl::OkStatus();
+}
+
+absl::Status AMDGPUCompiler::AddConvAndGemmAutotuningPass(
+    HloPassPipeline* pipeline, HloModule* hlo_module,
+    const se::GpuComputeCapability& gpu_version, const CompileOptions& options,
+    AutotuneConfig& autotune_config, tsl::thread::ThreadPool* thread_pool,
+    se::StreamExecutor* stream_exec,
+    const Compiler::GpuTargetConfig* target_config,
+    const MultiProcessKeyValueStore& key_value_store,
+    const se::SemanticVersion& toolkit_version,
+    const DebugOptions& debug_options, mlir::MLIRContext* mlir_context,
+    HloCostAnalysis::ShapeSizeFunction shape_size_fn) {
+  TF_ASSIGN_OR_RETURN(std::vector<std::unique_ptr<CodegenBackend>> backends,
+                      GetCodegenBackends(stream_exec, target_config,
+                                         debug_options, mlir_context));
+
+  bool do_not_autotune_cublas_and_cudnn =
+      debug_options.xla_gpu_experimental_disable_binary_libraries() ||
+      debug_options.xla_gpu_autotune_level() == 0 ||
+      debug_options.xla_gpu_exclude_nondeterministic_ops();
+
+  // For ROCm: Always include convolutions for MIOpen processing, even when
+  // autotune_level=0. This is required because MIOpen backend handles
+  // decomposition of unsupported fused convolutions back to regular convs.
+  auto should_autotune = [do_not_autotune_cublas_and_cudnn](
+                             const HloInstruction& instruction) -> bool {
+    if (instruction.opcode() == HloOpcode::kCustomCall) {
+      // Always process convolutions for potential decomposition by MIOpen
+      if (IsCustomCallToDnnConvolution(instruction)) {
+        return true;
+      }
+      // Only autotune cuBLAS GEMMs if autotuning is enabled
+      if (!do_not_autotune_cublas_and_cudnn && IsCublasGemm(instruction)) {
+        return true;
+      }
+    }
+    if (instruction.opcode() != HloOpcode::kFusion) {
+      return false;
+    }
+    auto gpu_config = instruction.backend_config<GpuBackendConfig>();
+    const FusionBackendConfig& backend_config =
+        gpu_config->fusion_backend_config();
+    if (backend_config.kind() == kTritonGemmFusionKind) {
+      return !backend_config.has_triton_gemm_config();
+    }
+    if (backend_config.kind() == kCuDnnFusionKind) {
+      return !backend_config.has_cudnn_fusion_config();
+    }
+    if (backend_config.kind() == kCustomFusionKind) {
+      return !backend_config.has_custom_fusion_config();
+    }
+    return false;
+  };
+
+  TF_ASSIGN_OR_RETURN(
+      std::unique_ptr<AutotunerPass> autotuner_pass,
+      AutotunerPass::Create(std::move(backends), debug_options, stream_exec,
+                            thread_pool, should_autotune, target_config,
+                            options.device_allocator,
+                            /*optimize_scratch_bytes=*/true, key_value_store));
+  pipeline->AddPass(std::move(autotuner_pass));
+
   return absl::OkStatus();
 }
 
