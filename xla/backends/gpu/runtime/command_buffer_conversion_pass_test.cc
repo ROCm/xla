@@ -86,6 +86,10 @@ se::StreamExecutor* GpuExecutor() {
   return platform->ExecutorForDevice(0).value();
 }
 
+bool IsRocm() {
+  return absl::StrContains(GetPlatformName(), "ROCM");
+}
+
 std::unique_ptr<AllGatherStartThunk> CreateAllGatherStartThunk(
     const BufferAllocation& alloc0, const BufferAllocation& alloc1) {
   auto create_replica_groups =
@@ -624,6 +628,9 @@ TEST(CommandBufferConversionPassTest, DontConvertIfNotMinGraphSize) {
 }
 
 TEST(CommandBufferConversionPassTest, ConvertWhileThunk) {
+  if(IsRocm()) {
+    GTEST_SKIP() << "Graph conditionals are not yet supported on HIP graphs";
+  }
   CommandBufferConversionPass pass{"test"};
 
   std::vector<std::unique_ptr<Thunk>> thunks;
@@ -735,6 +742,9 @@ TEST(CommandBufferConversionPassTest,
 }
 
 TEST(CommandBufferConversionPassTest, ConvertWhileThunkWithAsyncPair) {
+  if(IsRocm()) {
+    GTEST_SKIP() << "Graph conditionals are not yet supported on HIP graphs";
+  }
   CommandBufferConversionPass pass{"test"};
 
   std::vector<std::unique_ptr<Thunk>> thunks;
