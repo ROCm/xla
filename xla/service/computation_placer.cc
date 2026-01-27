@@ -183,7 +183,6 @@ void ComputationPlacer::RegisterComputationPlacer(
   if (placers.find(id) != placers.end()) {
     LOG(WARNING) << "Computation placer creation function is already "
                     "registered for this platform";
-    return;
   }
   placers[id].creation_function = creation_function;
 }
