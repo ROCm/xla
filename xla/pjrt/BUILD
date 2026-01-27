@@ -1253,8 +1253,9 @@ cc_library(
         "triton.h",
     ],
     tags = [
-        "manual",
         "gpu",
+        "manual",
+        "rocm-only",
     ],
     visibility = internal_visibility([":friends"]),
     deps = [
