@@ -76,6 +76,7 @@ build:xla_sgpu -- \
 -//xla/service/gpu/tests:dynamic_shared_memory_test_amdgpu_any \
 -//xla/service/gpu/tests:gpu_cub_sort_test_amdgpu_any
 
+test:ci_multi_gpu --config=xla_mgpu
 test:xla_mgpu -- \
 //xla/tests:collective_ops_e2e_test \
 //xla/tests:collective_ops_test \
