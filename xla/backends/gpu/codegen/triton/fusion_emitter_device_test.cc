@@ -4556,7 +4556,8 @@ TEST_F(TritonEmitterTest, RocmWarpSizeIsSetCorrectly) {
   }
   DebugOptions debug_options = verified_module->config().debug_options();
   debug_options.set_xla_dump_to(output_directory);
-  debug_options.set_xla_dump_emitter_re("triton-fusion");
+  // The emitter name used by EnableIRPrintingIfRequested is "triton-to-llvm".
+  debug_options.set_xla_dump_emitter_re("triton-to-llvm");
   verified_module->mutable_config().set_debug_options(debug_options);
 
   const HloFusionInstruction* triton_fusion = Cast<HloFusionInstruction>(
@@ -4587,8 +4588,11 @@ TEST_F(TritonEmitterTest, RocmWarpSizeIsSetCorrectly) {
       se::GpuComputeCapability{se::RocmComputeCapability("gfx942")}, dev_info,
       block_level_parameters, target_triple, data_layout, llvm_ctx,
       mlir_context));
+
+  // After the refactor in commit 4ce93268d3, dump files are named
+  // {module}.{kernel}.{pass_manager_name}.txt instead of *.triton-passes.log.
   TF_EXPECT_OK(tsl::Env::Default()->GetMatchingPaths(
-      tsl::io::JoinPath(output_directory, "*.triton-passes.log"), &paths));
+      tsl::io::JoinPath(output_directory, "*.triton-to-llvm.txt"), &paths));
   EXPECT_EQ(paths.size(), 1);
   TF_ASSERT_OK(
       tsl::ReadFileToString(tsl::Env::Default(), paths[0], &triton_passes_log));
@@ -4608,8 +4612,10 @@ TEST_F(TritonEmitterTest, RocmWarpSizeIsSetCorrectly) {
       se::GpuComputeCapability{se::RocmComputeCapability("gfx1100")},
       dev_info_n, block_level_parameters, target_triple, data_layout, llvm_ctx,
       mlir_context));
+
+  paths.clear();
   TF_EXPECT_OK(tsl::Env::Default()->GetMatchingPaths(
-      tsl::io::JoinPath(output_directory, "*.triton-passes.log"), &paths));
+      tsl::io::JoinPath(output_directory, "*.triton-to-llvm.txt"), &paths));
   EXPECT_EQ(paths.size(), 1);
   TF_ASSERT_OK(
       tsl::ReadFileToString(tsl::Env::Default(), paths[0], &triton_passes_log));
