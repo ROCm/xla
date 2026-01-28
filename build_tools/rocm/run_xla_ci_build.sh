@@ -36,7 +36,6 @@ clean_up() {
 trap clean_up EXIT
 
 TARGETS_TO_EXCLUDE=()
-ADDITIONAL_CONFIGS=()
 
 for arg in "$@"; do
     if [[ "$arg" == "--config=asan" ]]; then
@@ -51,7 +50,6 @@ for arg in "$@"; do
     fi
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
         TAG_FILTERS="" # in mgpu we have a standard set of tests
-        ADDITIONAL_CONFIGS=('--config=xla_mgpu') 
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu,-no_oss"
@@ -63,7 +61,6 @@ set -x
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --disk_cache=${BAZEL_DISK_CACHE_DIR} \
     --config=rocm_rbe \
-    "${ADDITIONAL_CONFIGS[@]}" \
     --disk_cache=${BAZEL_DISK_CACHE_DIR} \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
