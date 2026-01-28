@@ -109,6 +109,32 @@ ENTRY AddRaggedDotsFunc {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
+TEST_F(GroupedGemmRewriteTest,
+       CheckCustomCallTargetGroupedGemmLargeGroupCount600) {
+  if (SkipGpuBlasLtTest()) {
+    GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
+  }
+  // Test with 600 groups (> 256) to test single batch processing in grid-stride
+  // loop Sum of group sizes: 600 * 4 = 2400 (matches p0 first dim)
+  const char* hlo_text = R"(
+HloModule GroupedGemmLarge600
+
+ENTRY AddRaggedDotsFunc {
+    p0 = bf16[2400,9]{1,0} parameter(0)
+    p1 = bf16[600,9,8]{2,1,0} parameter(1)
+    scalar = s32[] constant(4)
+    p2 = s32[600] broadcast(scalar), dimensions={}
+    ROOT ragged-dot = bf16[2400,8]{1,0} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={1}, rhs_contracting_dims={1},
+                      lhs_ragged_dims={0}, rhs_group_dims={0}
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+                    ; CHECK: custom_call_target="__cublas$lt$groupedMatmul")");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
 TEST_F(GroupedGemmRewriteTest, CheckCustomCallTargetGroupedGemmMulipleGroups) {
   if (SkipGpuBlasLtTest()) {
     GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
@@ -270,6 +296,33 @@ ENTRY AddRaggedDotsFunc {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
+TEST_F(
+    GroupedGemmRewriteTest,
+    CheckCustomCallTargetGroupedGemmRaggedDimInContractingDimLargeGroupCount600) {
+  if (SkipGpuBlasLtTest()) {
+    GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
+  }
+  // Test with 600 groups (> 256) for RaggedDimInContractingDim
+  // Sum of group sizes: 600 * 4 = 2400 (matches p1 first dim for contracting)
+  const char* hlo_text = R"(
+HloModule GroupedGemmRaggedContractingLarge600
+
+ENTRY AddRaggedDotsFunc {
+    p0 = bf16[64,2400]{1,0} parameter(0)
+    p1 = bf16[2400,8]{1,0} parameter(1)
+    scalar = s64[] constant(4)
+    p2 = s64[600] broadcast(scalar), dimensions={}
+    ROOT ragged-dot = bf16[600,64,8]{2,1,0} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={1}, rhs_contracting_dims={0},
+                      lhs_ragged_dims={1}
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+                    ; CHECK: custom_call_target="__cublas$lt$groupedMatmul")");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
 TEST_F(GroupedGemmRewriteTest,
        CheckCustomCallTargetGroupedGemmRaggedDimInContractingDimWithBatchDim) {
   if (SkipGpuBlasLtTest()) {
@@ -388,6 +441,32 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "lhs_ragged_dimensions":["0"],
                     ; CHECK-SAME: "rhs_group_dimensions":[]}}})");
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
+}
+
+TEST_F(GroupedGemmRewriteTest,
+       CheckCustomCallTargetGroupedGemmRaggedDimInBatchDimLargeGroupCount600) {
+  if (SkipGpuBlasLtTest()) {
+    GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
+  }
+  // Test with 600 groups (> 256) for RaggedDimInBatchDim
+  // Sum of group sizes: 600 * 4 = 2400 (matches p0 first dim for batch)
+  const char* hlo_text = R"(
+HloModule GroupedGemmRaggedBatchLarge600
+
+ENTRY AddRaggedDotsFunc {
+    p0 = bf16[2400,64,9]{2,1,0} parameter(0)
+    p1 = bf16[2400,9,8]{2,1,0} parameter(1)
+    scalar = s64[] constant(4)
+    p2 = s64[600] broadcast(scalar), dimensions={}
+    ROOT ragged-dot = bf16[2400,64,8]{2,1,0} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+                      lhs_ragged_dims={0}, lhs_batch_dims={0}, rhs_batch_dims={0}
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+                    ; CHECK: custom_call_target="__cublas$lt$groupedMatmul")");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
 }
 
 TEST_F(GemmRewriteTest, CheckCustomCallTarget) {

@@ -174,99 +174,116 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
     bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
     uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
     uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
-  uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= num_gemms) {
-    return;
-  }
-
-  uint32_t offset_group = 0;
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
-  if (blockIdx.x == 0) {
-    // Shared memory for BlockScan
-    __shared__ typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage
-        temp_storage;
-    offset_group = typed_group_sizes[idx];
-    hipcub::BlockScan<uint32_t, BLOCK_SIZE>(temp_storage)
-        .ExclusiveSum(offset_group, offset_group);
-  } else {
-    for (uint32_t i = 0; i < idx; i++) {
-      offset_group += typed_group_sizes[i];
-    }
-  }
 
-  // Declare shared memory for UserArguments
-
+  // Shared memory for BlockScan and cumulative offset
+  __shared__
+      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage scan_temp;
+  __shared__ uint32_t cumulative_offset;
   __shared__ hipblaslt_ext::UserArguments* sharedUserArgs;
+
+  // Initialize cumulative offset
   if (threadIdx.x == 0) {
+    cumulative_offset = 0;
     sharedUserArgs = new hipblaslt_ext::UserArguments[num_gemms];
   }
   __syncthreads();
 
-  auto& arg = sharedUserArgs[threadIdx.x];
-  if (must_swap_operands) {
-    // The ragged matrix has been set as operand B.
-    arg.n = typed_group_sizes[idx];
-    arg.m = m;
+  // Process all elements in batches of BLOCK_SIZE
+  for (uint64_t batch_start = 0; batch_start < num_gemms;
+       batch_start += BLOCK_SIZE) {
+    uint32_t idx = batch_start + threadIdx.x;
 
-    arg.a = const_cast<void*>(
-        static_cast<const void*>(static_cast<const uint8_t*>(a) +
-                                 ((idx * stride_a) << log2_byte_width_elem_a)));
-    arg.b = const_cast<void*>(static_cast<const void*>(
-        static_cast<const uint8_t*>(b) +
-        ((offset_group * stride_b) << log2_byte_width_elem_b)));
-  } else {
-    arg.m = typed_group_sizes[idx];
-    arg.n = n;
+    // Load group size for this thread (0 if out of bounds)
+    uint32_t group_size = (idx < num_gemms) ? typed_group_sizes[idx] : 0;
 
-    arg.a = const_cast<void*>(static_cast<const void*>(
-        static_cast<const uint8_t*>(a) +
-        ((offset_group * stride_a) << log2_byte_width_elem_a)));
-    arg.b = const_cast<void*>(
-        static_cast<const void*>(static_cast<const uint8_t*>(b) +
-                                 ((idx * stride_b) << log2_byte_width_elem_b)));
+    // Compute exclusive prefix sum for this batch
+    uint32_t offset_in_batch;
+    hipcub::BlockScan<uint32_t, BLOCK_SIZE>(scan_temp).ExclusiveSum(
+        group_size, offset_in_batch);
+
+    // Add cumulative offset to get global offset
+    uint32_t offset_group = cumulative_offset + offset_in_batch;
+
+    // Determine the last active thread in this batch
+    uint32_t batch_size =
+        min(BLOCK_SIZE, static_cast<uint32_t>(num_gemms - batch_start));
+
+    // Last active thread updates cumulative offset for next batch
+    if (threadIdx.x == batch_size - 1) {
+      cumulative_offset += offset_in_batch + group_size;
+    }
+
+    if (idx >= num_gemms) {
+      return;
+    }
+
+    auto& arg = sharedUserArgs[threadIdx.x];
+    if (must_swap_operands) {
+      // The ragged matrix has been set as operand B.
+      arg.n = typed_group_sizes[idx];
+      arg.m = m;
+
+      arg.a = const_cast<void*>(static_cast<const void*>(
+          static_cast<const uint8_t*>(a) +
+          ((idx * stride_a) << log2_byte_width_elem_a)));
+      arg.b = const_cast<void*>(static_cast<const void*>(
+          static_cast<const uint8_t*>(b) +
+          ((offset_group * stride_b) << log2_byte_width_elem_b)));
+    } else {
+      arg.m = typed_group_sizes[idx];
+      arg.n = n;
+
+      arg.a = const_cast<void*>(static_cast<const void*>(
+          static_cast<const uint8_t*>(a) +
+          ((offset_group * stride_a) << log2_byte_width_elem_a)));
+      arg.b = const_cast<void*>(static_cast<const void*>(
+          static_cast<const uint8_t*>(b) +
+          ((idx * stride_b) << log2_byte_width_elem_b)));
+    }
+    arg.c = static_cast<void*>(
+        static_cast<uint8_t*>(c) +
+        ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
+    arg.d = static_cast<void*>(
+        static_cast<uint8_t*>(d) +
+        ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
+    arg.k = k;
+    arg.batch = batch;
+    arg.strideA1 = strideA1;
+    arg.strideA2 = strideA2;
+    arg.strideB1 = strideB1;
+    arg.strideB2 = strideB2;
+    // We only support C = D
+    arg.strideC1 = strideD1;
+    arg.strideC2 = strideD2;
+    arg.strideD1 = strideD1;
+    arg.strideD2 = strideD2;
+    arg.strideE1 = 0;
+    arg.strideE2 = 0;
+    // Set alpha to float(1) and beta to float(0).
+    // As these values are imposed in the gemm_rewritter pass anyway.
+    for (int8_t i = 0; i < 16; i++) {
+      arg.alpha[i] = 0;
+      arg.beta[i] = 0;
+    }
+    arg.alpha[2] = -128;
+    arg.alpha[3] = 63;
+    arg.scaleA = nullptr;
+    arg.scaleB = nullptr;
+    arg.scaleC = nullptr;
+    arg.scaleD = nullptr;
+    arg.scaleAlphaVec = nullptr;
+    arg.bias = nullptr;
+    arg.biasType = 0;
+    arg.e = nullptr;
+    arg.act0 = 0.0;
+    arg.act1 = 0.0;
+    arg.activationType = 0;
+
+    // Copy from shared memory to global memory
+    dest_args[idx] = arg;
+    __syncthreads();
   }
-  arg.c = static_cast<void*>(
-      static_cast<uint8_t*>(c) +
-      ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
-  arg.d = static_cast<void*>(
-      static_cast<uint8_t*>(d) +
-      ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
-  arg.k = k;
-  arg.batch = batch;
-  arg.strideA1 = strideA1;
-  arg.strideA2 = strideA2;
-  arg.strideB1 = strideB1;
-  arg.strideB2 = strideB2;
-  // We only support C = D
-  arg.strideC1 = strideD1;
-  arg.strideC2 = strideD2;
-  arg.strideD1 = strideD1;
-  arg.strideD2 = strideD2;
-  arg.strideE1 = 0;
-  arg.strideE2 = 0;
-  // Set alpha to float(1) and beta to float(0).
-  // As these values are imposed in the gemm_rewritter pass anyway.
-  for (int8_t i = 0; i < 16; i++) {
-    arg.alpha[i] = 0;
-    arg.beta[i] = 0;
-  }
-  arg.alpha[2] = -128;
-  arg.alpha[3] = 63;
-  arg.scaleA = nullptr;
-  arg.scaleB = nullptr;
-  arg.scaleC = nullptr;
-  arg.scaleD = nullptr;
-  arg.scaleAlphaVec = nullptr;
-  arg.bias = nullptr;
-  arg.biasType = 0;
-  arg.e = nullptr;
-  arg.act0 = 0.0;
-  arg.act1 = 0.0;
-  arg.activationType = 0;
-
-  // Copy from shared memory to global memory
-  dest_args[idx] = arg;
-  __syncthreads();
 
   if (threadIdx.x == 0) {
     delete[] sharedUserArgs;
@@ -282,79 +299,107 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
     bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
     uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
     uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
-  uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= num_gemms) {
-    return;
-  }
-
-  uint32_t offset_group = 0;
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
-  if (blockIdx.x == 0) {
-    // Shared memory for BlockScan
-    __shared__ typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage
-        temp_storage;
-    offset_group = typed_group_sizes[idx];
-    hipcub::BlockScan<uint32_t, BLOCK_SIZE>(temp_storage)
-        .ExclusiveSum(offset_group, offset_group);
-  } else {
-    for (uint32_t i = 0; i < idx; i++) {
-      offset_group += typed_group_sizes[i];
+
+  // Shared memory for BlockScan and cumulative offset
+  __shared__
+      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage scan_temp;
+  __shared__ uint32_t cumulative_offset;
+  __shared__ hipblaslt_ext::UserArguments* sharedUserArgs;
+
+  // Initialize cumulative offset
+  if (threadIdx.x == 0) {
+    cumulative_offset = 0;
+    sharedUserArgs = new hipblaslt_ext::UserArguments[num_gemms];
+  }
+  __syncthreads();
+
+  // Process all elements in batches of BLOCK_SIZE
+  for (uint64_t batch_start = 0; batch_start < num_gemms;
+       batch_start += BLOCK_SIZE) {
+    uint32_t idx = batch_start + threadIdx.x;
+
+    // Load group size for this thread (0 if out of bounds)
+    uint32_t group_size = (idx < num_gemms) ? typed_group_sizes[idx] : 0;
+
+    // Compute exclusive prefix sum for this batch
+    uint32_t offset_in_batch;
+    hipcub::BlockScan<uint32_t, BLOCK_SIZE>(scan_temp).ExclusiveSum(
+        group_size, offset_in_batch);
+
+    // Add cumulative offset to get global offset
+    uint32_t offset_group = cumulative_offset + offset_in_batch;
+
+    // Determine the last active thread in this batch
+    uint32_t batch_size =
+        min(BLOCK_SIZE, static_cast<uint32_t>(num_gemms - batch_start));
+
+    // Last active thread updates cumulative offset for next batch
+    if (threadIdx.x == batch_size - 1) {
+      cumulative_offset += offset_in_batch + group_size;
     }
+
+    if (idx >= num_gemms) {
+      return;
+    }
+
+    auto& arg = sharedUserArgs[threadIdx.x];
+
+    arg.m = m;
+    arg.n = n;
+    arg.a = const_cast<void*>(static_cast<const void*>(
+        static_cast<const uint8_t*>(a) +
+        ((offset_group * stride_a) << log2_byte_width_elem_a)));
+    arg.b = const_cast<void*>(static_cast<const void*>(
+        static_cast<const uint8_t*>(b) +
+        ((offset_group * stride_b) << log2_byte_width_elem_b)));
+    arg.c = const_cast<void*>(static_cast<void*>(
+        static_cast<uint8_t*>(c) +
+        ((idx * batch * strideD2) << log2_byte_width_elem_d)));
+    arg.d = const_cast<void*>(static_cast<void*>(
+        static_cast<uint8_t*>(d) +
+        ((idx * batch * strideD2) << log2_byte_width_elem_d)));
+    arg.k = typed_group_sizes[idx];
+    arg.batch = batch;
+    arg.strideA1 = strideA1;
+    arg.strideA2 = strideA2;
+    arg.strideB1 = strideB1;
+    arg.strideB2 = strideB2;
+    // We only support C = D
+    arg.strideC1 = strideD1;
+    arg.strideC2 = strideD2;
+    arg.strideD1 = strideD1;
+    arg.strideD2 = strideD2;
+    arg.strideE1 = 0;
+    arg.strideE2 = 0;
+    // Set alpha to float(1) and beta to float(0).
+    // As these values are imposed in the gemm_rewritter pass anyway.
+    for (int8_t i = 0; i < 16; i++) {
+      arg.alpha[i] = 0;
+      arg.beta[i] = 0;
+    }
+    arg.alpha[2] = -128;
+    arg.alpha[3] = 63;
+    arg.scaleA = nullptr;
+    arg.scaleB = nullptr;
+    arg.scaleC = nullptr;
+    arg.scaleD = nullptr;
+    arg.scaleAlphaVec = nullptr;
+    arg.bias = nullptr;
+    arg.biasType = 0;
+    arg.e = nullptr;
+    arg.act0 = 0.0;
+    arg.act1 = 0.0;
+    arg.activationType = 0;
+
+    // Copy from shared memory to global memory
+    dest_args[idx] = arg;
+    __syncthreads();
   }
 
-  // Declare shared memory for UserArguments
-  __shared__ hipblaslt_ext::UserArguments arg;
-
-  arg.m = m;
-  arg.n = n;
-  arg.a = const_cast<void*>(static_cast<const void*>(
-      static_cast<const uint8_t*>(a) +
-      ((offset_group * stride_a) << log2_byte_width_elem_a)));
-  arg.b = const_cast<void*>(static_cast<const void*>(
-      static_cast<const uint8_t*>(b) +
-      ((offset_group * stride_b) << log2_byte_width_elem_b)));
-  arg.c = const_cast<void*>(
-      static_cast<void*>(static_cast<uint8_t*>(c) +
-                         ((idx * batch * strideD2) << log2_byte_width_elem_d)));
-  arg.d = const_cast<void*>(
-      static_cast<void*>(static_cast<uint8_t*>(d) +
-                         ((idx * batch * strideD2) << log2_byte_width_elem_d)));
-  arg.k = typed_group_sizes[idx];
-  arg.batch = batch;
-  arg.strideA1 = strideA1;
-  arg.strideA2 = strideA2;
-  arg.strideB1 = strideB1;
-  arg.strideB2 = strideB2;
-  // We only support C = D
-  arg.strideC1 = strideD1;
-  arg.strideC2 = strideD2;
-  arg.strideD1 = strideD1;
-  arg.strideD2 = strideD2;
-  arg.strideE1 = 0;
-  arg.strideE2 = 0;
-  // Set alpha to float(1) and beta to float(0).
-  // As these values are imposed in the gemm_rewritter pass anyway.
-  for (int8_t i = 0; i < 16; i++) {
-    arg.alpha[i] = 0;
-    arg.beta[i] = 0;
+  if (threadIdx.x == 0) {
+    delete[] sharedUserArgs;
   }
-  arg.alpha[2] = -128;
-  arg.alpha[3] = 63;
-  arg.scaleA = nullptr;
-  arg.scaleB = nullptr;
-  arg.scaleC = nullptr;
-  arg.scaleD = nullptr;
-  arg.scaleAlphaVec = nullptr;
-  arg.bias = nullptr;
-  arg.biasType = 0;
-  arg.e = nullptr;
-  arg.act0 = 0.0;
-  arg.act1 = 0.0;
-  arg.activationType = 0;
-
-  // Copy from shared memory to global memory
-  dest_args[idx] = arg;
-  __threadfence();
 }
 
 template <typename T>
@@ -366,79 +411,107 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
     bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
     uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
     uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
-  uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= num_gemms) {
-    return;
-  }
-
-  uint32_t offset_group = 0;
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
-  if (blockIdx.x == 0) {
-    // Shared memory for BlockScan
-    __shared__ typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage
-        temp_storage;
-    offset_group = typed_group_sizes[idx];
-    hipcub::BlockScan<uint32_t, BLOCK_SIZE>(temp_storage)
-        .ExclusiveSum(offset_group, offset_group);
-  } else {
-    for (uint32_t i = 0; i < idx; i++) {
-      offset_group += typed_group_sizes[i];
+
+  // Shared memory for BlockScan and cumulative offset
+  __shared__
+      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage scan_temp;
+  __shared__ uint32_t cumulative_offset;
+  __shared__ hipblaslt_ext::UserArguments* sharedUserArgs;
+
+  // Initialize cumulative offset
+  if (threadIdx.x == 0) {
+    cumulative_offset = 0;
+    sharedUserArgs = new hipblaslt_ext::UserArguments[num_gemms];
+  }
+  __syncthreads();
+
+  // Process all elements in batches of BLOCK_SIZE
+  for (uint64_t batch_start = 0; batch_start < num_gemms;
+       batch_start += BLOCK_SIZE) {
+    uint32_t idx = batch_start + threadIdx.x;
+
+    // Load group size for this thread (0 if out of bounds)
+    uint32_t group_size = (idx < num_gemms) ? typed_group_sizes[idx] : 0;
+
+    // Compute exclusive prefix sum for this batch
+    uint32_t offset_in_batch;
+    hipcub::BlockScan<uint32_t, BLOCK_SIZE>(scan_temp).ExclusiveSum(
+        group_size, offset_in_batch);
+
+    // Add cumulative offset to get global offset
+    uint32_t offset_group = cumulative_offset + offset_in_batch;
+
+    // Determine the last active thread in this batch
+    uint32_t batch_size =
+        min(BLOCK_SIZE, static_cast<uint32_t>(num_gemms - batch_start));
+
+    // Last active thread updates cumulative offset for next batch
+    if (threadIdx.x == batch_size - 1) {
+      cumulative_offset += offset_in_batch + group_size;
     }
+
+    if (idx >= num_gemms) {
+      return;
+    }
+
+    auto& arg = sharedUserArgs[threadIdx.x];
+
+    arg.m = m;
+    arg.n = n;
+    arg.a = const_cast<void*>(static_cast<const void*>(
+        static_cast<const uint8_t*>(a) +
+        ((offset_group * stride_a) << log2_byte_width_elem_a)));
+    arg.b = const_cast<void*>(static_cast<const void*>(
+        static_cast<const uint8_t*>(b) +
+        ((offset_group * stride_b) << log2_byte_width_elem_b)));
+    arg.c = static_cast<void*>(
+        static_cast<uint8_t*>(c) +
+        ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
+    arg.d = static_cast<void*>(
+        static_cast<uint8_t*>(d) +
+        ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
+    arg.k = k;
+    arg.batch = typed_group_sizes[idx];
+    arg.strideA1 = strideA1;
+    arg.strideA2 = strideA2;
+    arg.strideB1 = strideB1;
+    arg.strideB2 = strideB2;
+    // We only support C = D
+    arg.strideC1 = strideD1;
+    arg.strideC2 = strideD2;
+    arg.strideD1 = strideD1;
+    arg.strideD2 = strideD2;
+    arg.strideE1 = 0;
+    arg.strideE2 = 0;
+    // Set alpha to float(1) and beta to float(0).
+    // As these values are imposed in the gemm_rewritter pass anyway.
+    for (int8_t i = 0; i < 16; i++) {
+      arg.alpha[i] = 0;
+      arg.beta[i] = 0;
+    }
+    arg.alpha[2] = -128;
+    arg.alpha[3] = 63;
+    arg.scaleA = nullptr;
+    arg.scaleB = nullptr;
+    arg.scaleC = nullptr;
+    arg.scaleD = nullptr;
+    arg.scaleAlphaVec = nullptr;
+    arg.bias = nullptr;
+    arg.biasType = 0;
+    arg.e = nullptr;
+    arg.act0 = 0.0;
+    arg.act1 = 0.0;
+    arg.activationType = 0;
+
+    // Copy from shared memory to global memory
+    dest_args[idx] = arg;
+    __syncthreads();
   }
 
-  // Declare shared memory for UserArguments
-  __shared__ hipblaslt_ext::UserArguments arg;
-
-  arg.m = m;
-  arg.n = n;
-  arg.a = const_cast<void*>(static_cast<const void*>(
-      static_cast<const uint8_t*>(a) +
-      ((offset_group * stride_a) << log2_byte_width_elem_a)));
-  arg.b = const_cast<void*>(static_cast<const void*>(
-      static_cast<const uint8_t*>(b) +
-      ((offset_group * stride_b) << log2_byte_width_elem_b)));
-  arg.c = static_cast<void*>(
-      static_cast<uint8_t*>(c) +
-      ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
-  arg.d = static_cast<void*>(
-      static_cast<uint8_t*>(d) +
-      ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
-  arg.k = k;
-  arg.batch = typed_group_sizes[idx];
-  arg.strideA1 = strideA1;
-  arg.strideA2 = strideA2;
-  arg.strideB1 = strideB1;
-  arg.strideB2 = strideB2;
-  // We only support C = D
-  arg.strideC1 = strideD1;
-  arg.strideC2 = strideD2;
-  arg.strideD1 = strideD1;
-  arg.strideD2 = strideD2;
-  arg.strideE1 = 0;
-  arg.strideE2 = 0;
-  // Set alpha to float(1) and beta to float(0).
-  // As these values are imposed in the gemm_rewritter pass anyway.
-  for (int8_t i = 0; i < 16; i++) {
-    arg.alpha[i] = 0;
-    arg.beta[i] = 0;
+  if (threadIdx.x == 0) {
+    delete[] sharedUserArgs;
   }
-  arg.alpha[2] = -128;
-  arg.alpha[3] = 63;
-  arg.scaleA = nullptr;
-  arg.scaleB = nullptr;
-  arg.scaleC = nullptr;
-  arg.scaleD = nullptr;
-  arg.scaleAlphaVec = nullptr;
-  arg.bias = nullptr;
-  arg.biasType = 0;
-  arg.e = nullptr;
-  arg.act0 = 0.0;
-  arg.act1 = 0.0;
-  arg.activationType = 0;
-
-  // Copy from shared memory to global memory
-  dest_args[idx] = arg;
-  __threadfence();
 }
 
 void GroupGemmUpdateArgs(
@@ -453,7 +526,6 @@ void GroupGemmUpdateArgs(
     uint32_t strideD1, uint32_t strideD2, const uint8_t ragged_mode,
     uint32_t num_gemms) {
   const uint32_t block_sz = BLOCK_SIZE;
-  const uint64_t n_blocks = (num_gemms + block_sz - 1) / block_sz;
   auto kernel = SetUserArgsKernelRaggedInNonContractingDim<uint64_t>;
   switch (ragged_mode) {
     case 0: {  // RaggedInNonContractingDim
@@ -482,8 +554,8 @@ void GroupGemmUpdateArgs(
   if (must_swap_operands) {
     std::swap(stride_a, stride_b);
   }
-  hipLaunchKernelGGL(kernel, n_blocks, std::min(block_sz, num_gemms), 0, stream,
-                     args, a, b, c, d, group_sizes, log2_byte_width_elem_a,
+  hipLaunchKernelGGL(kernel, 1, block_sz, 0, stream, args, a, b, c, d,
+                     group_sizes, log2_byte_width_elem_a,
                      log2_byte_width_elem_b, log2_byte_width_elem_d, stride_a,
                      stride_b, output_stride_ragged_dim, must_swap_operands, m,
                      n, k, batch, strideA1, strideA2, strideB1, strideB2,
