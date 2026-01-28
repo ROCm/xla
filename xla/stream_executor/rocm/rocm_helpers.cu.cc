@@ -163,19 +163,17 @@ INSTANTIATE_BIAS_ACTIVATION(double, double)
 
 namespace rocm {
 
-constexpr int BLOCK_SIZE = 1024;
+constexpr int BLOCK_SIZE = 256;
 
 template <typename T>
 __global__ void SetUserArgsKernelRaggedInNonContractingDim(
-    hipblaslt_ext::UserArguments* dest_args, void* a, void* b, void* c, void* d,
-    void* e, const void* group_sizes, size_t byte_width_elem_a,
-    size_t byte_width_elem_b, size_t byte_width_elem_c,
-    size_t byte_width_elem_d, uint64_t stride_a, uint64_t stride_b,
-    uint64_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
-    uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
-    uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideC1,
-    uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
-    uint64_t num_gemms) {
+    hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
+    void* c, void* d, const void* group_sizes, uint8_t log2_byte_width_elem_a,
+    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
+    uint32_t stride_a, uint32_t stride_b, uint32_t output_stride_ragged_dim,
+    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
+    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
+    uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= num_gemms) {
     return;
@@ -197,40 +195,51 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
   }
 
   // Declare shared memory for UserArguments
-  __shared__ hipblaslt_ext::UserArguments arg;
 
+  __shared__ hipblaslt_ext::UserArguments* sharedUserArgs;
+  if (threadIdx.x == 0) {
+    sharedUserArgs = new hipblaslt_ext::UserArguments[num_gemms];
+  }
+  __syncthreads();
+
+  auto& arg = sharedUserArgs[threadIdx.x];
   if (must_swap_operands) {
     // The ragged matrix has been set as operand B.
     arg.n = typed_group_sizes[idx];
     arg.m = m;
 
-    arg.a = static_cast<void*>(static_cast<uint8_t*>(a) +
-                               (idx * stride_a * byte_width_elem_a));
-    arg.b = static_cast<void*>(static_cast<uint8_t*>(b) +
-                               (offset_group * stride_b * byte_width_elem_b));
+    arg.a = const_cast<void*>(
+        static_cast<const void*>(static_cast<const uint8_t*>(a) +
+                                 ((idx * stride_a) << log2_byte_width_elem_a)));
+    arg.b = const_cast<void*>(static_cast<const void*>(
+        static_cast<const uint8_t*>(b) +
+        ((offset_group * stride_b) << log2_byte_width_elem_b)));
   } else {
     arg.m = typed_group_sizes[idx];
     arg.n = n;
 
-    arg.a = static_cast<void*>(static_cast<uint8_t*>(a) +
-                               (offset_group * stride_a * byte_width_elem_a));
-    arg.b = static_cast<void*>(static_cast<uint8_t*>(b) +
-                               (idx * stride_b * byte_width_elem_b));
+    arg.a = const_cast<void*>(static_cast<const void*>(
+        static_cast<const uint8_t*>(a) +
+        ((offset_group * stride_a) << log2_byte_width_elem_a)));
+    arg.b = const_cast<void*>(
+        static_cast<const void*>(static_cast<const uint8_t*>(b) +
+                                 ((idx * stride_b) << log2_byte_width_elem_b)));
   }
   arg.c = static_cast<void*>(
       static_cast<uint8_t*>(c) +
-      (offset_group * output_stride_ragged_dim * byte_width_elem_c));
+      ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
   arg.d = static_cast<void*>(
       static_cast<uint8_t*>(d) +
-      (offset_group * output_stride_ragged_dim * byte_width_elem_d));
+      ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
   arg.k = k;
   arg.batch = batch;
   arg.strideA1 = strideA1;
   arg.strideA2 = strideA2;
   arg.strideB1 = strideB1;
   arg.strideB2 = strideB2;
-  arg.strideC1 = strideC1;
-  arg.strideC2 = strideC2;
+  // We only support C = D
+  arg.strideC1 = strideD1;
+  arg.strideC2 = strideD2;
   arg.strideD1 = strideD1;
   arg.strideD2 = strideD2;
   arg.strideE1 = 0;
@@ -256,22 +265,23 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
   arg.activationType = 0;
 
   // Copy from shared memory to global memory
-  // dest_args[idx] = sharedUserArgs[threadIdx.x];
   dest_args[idx] = arg;
-  __threadfence();
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    delete[] sharedUserArgs;
+  }
 }
 
 template <typename T>
 __global__ void SetUserArgsKernelRaggedInContractingDim(
-    hipblaslt_ext::UserArguments* dest_args, void* a, void* b, void* c, void* d,
-    void* e, const void* group_sizes, size_t byte_width_elem_a,
-    size_t byte_width_elem_b, size_t byte_width_elem_c,
-    size_t byte_width_elem_d, uint64_t stride_a, uint64_t stride_b,
-    uint64_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
-    uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
-    uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideC1,
-    uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
-    uint64_t num_gemms) {
+    hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
+    void* c, void* d, const void* group_sizes, uint8_t log2_byte_width_elem_a,
+    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
+    uint32_t stride_a, uint32_t stride_b, uint32_t output_stride_ragged_dim,
+    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
+    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
+    uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= num_gemms) {
     return;
@@ -297,22 +307,27 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
 
   arg.m = m;
   arg.n = n;
-  arg.a = static_cast<void*>(static_cast<uint8_t*>(a) +
-                             (offset_group * stride_a * byte_width_elem_a));
-  arg.b = static_cast<void*>(static_cast<uint8_t*>(b) +
-                             (offset_group * stride_b * byte_width_elem_b));
-  arg.c = static_cast<void*>(static_cast<uint8_t*>(c) +
-                             (idx * batch * strideC2 * byte_width_elem_c));
-  arg.d = static_cast<void*>(static_cast<uint8_t*>(d) +
-                             (idx * batch * strideD2 * byte_width_elem_d));
+  arg.a = const_cast<void*>(static_cast<const void*>(
+      static_cast<const uint8_t*>(a) +
+      ((offset_group * stride_a) << log2_byte_width_elem_a)));
+  arg.b = const_cast<void*>(static_cast<const void*>(
+      static_cast<const uint8_t*>(b) +
+      ((offset_group * stride_b) << log2_byte_width_elem_b)));
+  arg.c = const_cast<void*>(
+      static_cast<void*>(static_cast<uint8_t*>(c) +
+                         ((idx * batch * strideD2) << log2_byte_width_elem_d)));
+  arg.d = const_cast<void*>(
+      static_cast<void*>(static_cast<uint8_t*>(d) +
+                         ((idx * batch * strideD2) << log2_byte_width_elem_d)));
   arg.k = typed_group_sizes[idx];
   arg.batch = batch;
   arg.strideA1 = strideA1;
   arg.strideA2 = strideA2;
   arg.strideB1 = strideB1;
   arg.strideB2 = strideB2;
-  arg.strideC1 = strideC1;
-  arg.strideC2 = strideC2;
+  // We only support C = D
+  arg.strideC1 = strideD1;
+  arg.strideC2 = strideD2;
   arg.strideD1 = strideD1;
   arg.strideD2 = strideD2;
   arg.strideE1 = 0;
@@ -344,15 +359,13 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
 
 template <typename T>
 __global__ void SetUserArgsKernelRaggedInBatchDim(
-    hipblaslt_ext::UserArguments* dest_args, void* a, void* b, void* c, void* d,
-    void* e, const void* group_sizes, size_t byte_width_elem_a,
-    size_t byte_width_elem_b, size_t byte_width_elem_c,
-    size_t byte_width_elem_d, uint64_t stride_a, uint64_t stride_b,
-    uint64_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
-    uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
-    uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideC1,
-    uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
-    uint64_t num_gemms) {
+    hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
+    void* c, void* d, const void* group_sizes, uint8_t log2_byte_width_elem_a,
+    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
+    uint32_t stride_a, uint32_t stride_b, uint32_t output_stride_ragged_dim,
+    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
+    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
+    uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= num_gemms) {
     return;
@@ -378,24 +391,27 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
 
   arg.m = m;
   arg.n = n;
-  arg.a = static_cast<void*>(static_cast<uint8_t*>(a) +
-                             (offset_group * stride_a * byte_width_elem_a));
-  arg.b = static_cast<void*>(static_cast<uint8_t*>(b) +
-                             (offset_group * stride_b * byte_width_elem_b));
+  arg.a = const_cast<void*>(static_cast<const void*>(
+      static_cast<const uint8_t*>(a) +
+      ((offset_group * stride_a) << log2_byte_width_elem_a)));
+  arg.b = const_cast<void*>(static_cast<const void*>(
+      static_cast<const uint8_t*>(b) +
+      ((offset_group * stride_b) << log2_byte_width_elem_b)));
   arg.c = static_cast<void*>(
       static_cast<uint8_t*>(c) +
-      (offset_group * output_stride_ragged_dim * byte_width_elem_c));
+      ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
   arg.d = static_cast<void*>(
       static_cast<uint8_t*>(d) +
-      (offset_group * output_stride_ragged_dim * byte_width_elem_d));
+      ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
   arg.k = k;
   arg.batch = typed_group_sizes[idx];
   arg.strideA1 = strideA1;
   arg.strideA2 = strideA2;
   arg.strideB1 = strideB1;
   arg.strideB2 = strideB2;
-  arg.strideC1 = strideC1;
-  arg.strideC2 = strideC2;
+  // We only support C = D
+  arg.strideC1 = strideD1;
+  arg.strideC2 = strideD2;
   arg.strideD1 = strideD1;
   arg.strideD2 = strideD2;
   arg.strideE1 = 0;
@@ -426,17 +442,17 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
 }
 
 void GroupGemmUpdateArgs(
-    hipStream_t stream, hipblaslt_ext::UserArguments* args, void* a, void* b,
-    void* c, void* d, void* e, const void* group_sizes,
-    size_t group_size_bytewidth, size_t byte_width_elem_a,
-    size_t byte_width_elem_b, size_t byte_width_elem_c,
-    size_t byte_width_elem_d, uint64_t stride_ragged_dim,
-    uint64_t stride_group_dim, uint64_t output_stride_ragged_dim,
+    hipStream_t stream, hipblaslt_ext::UserArguments* args, const void* a,
+    const void* b, void* c, void* d, const void* group_sizes,
+    uint8_t group_size_bytewidth, uint8_t log2_byte_width_elem_a,
+    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_c,
+    uint8_t log2_byte_width_elem_d, uint32_t stride_ragged_dim,
+    uint32_t stride_group_dim, uint32_t output_stride_ragged_dim,
     bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
     uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-    uint32_t strideC1, uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
-    const uint8_t ragged_mode, uint64_t num_gemms) {
-  const uint64_t block_sz = BLOCK_SIZE;
+    uint32_t strideD1, uint32_t strideD2, const uint8_t ragged_mode,
+    uint32_t num_gemms) {
+  const uint32_t block_sz = BLOCK_SIZE;
   const uint64_t n_blocks = (num_gemms + block_sz - 1) / block_sz;
   auto kernel = SetUserArgsKernelRaggedInNonContractingDim<uint64_t>;
   switch (ragged_mode) {
@@ -467,12 +483,11 @@ void GroupGemmUpdateArgs(
     std::swap(stride_a, stride_b);
   }
   hipLaunchKernelGGL(kernel, n_blocks, std::min(block_sz, num_gemms), 0, stream,
-                     args, a, b, c, d, e, group_sizes, byte_width_elem_a,
-                     byte_width_elem_b, byte_width_elem_c, byte_width_elem_d,
-                     stride_a, stride_b, output_stride_ragged_dim,
-                     must_swap_operands, m, n, k, batch, strideA1, strideA2,
-                     strideB1, strideB2, strideC1, strideC2, strideD1, strideD2,
-                     num_gemms);
+                     args, a, b, c, d, group_sizes, log2_byte_width_elem_a,
+                     log2_byte_width_elem_b, log2_byte_width_elem_d, stride_a,
+                     stride_b, output_stride_ragged_dim, must_swap_operands, m,
+                     n, k, batch, strideA1, strideA2, strideB1, strideB2,
+                     strideD1, strideD2, num_gemms);
 }
 };  // namespace rocm
 

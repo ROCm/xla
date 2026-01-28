@@ -79,19 +79,17 @@ namespace rocm {
 using ::xla::complex128;
 using ::xla::complex64;
 
-#define GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
-
 void GroupGemmUpdateArgs(
-    hipStream_t stream, hipblaslt_ext::UserArguments *args, void *a, void *b,
-    void *c, void *d, void *e, const void *group_sizes,
-    size_t group_size_bytewidth, size_t byte_width_elem_a,
-    size_t byte_width_elem_b, size_t byte_width_elem_c,
-    size_t byte_width_elem_d, uint64_t stride_ragged_dim,
-    uint64_t stride_group_dim, uint64_t output_stride_ragged_dim,
+    hipStream_t stream, hipblaslt_ext::UserArguments *args, const void *a,
+    const void *b, void *c, void *d, const void *group_sizes,
+    uint8_t group_size_bytewidth, uint8_t log2_byte_width_elem_a,
+    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_c,
+    uint8_t log2_byte_width_elem_d, uint32_t stride_ragged_dim,
+    uint32_t stride_group_dim, uint32_t output_stride_ragged_dim,
     bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
     uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-    uint32_t strideC1, uint32_t strideC2, uint32_t strideD1, uint32_t strideD2,
-    const uint8_t ragged_mode, uint64_t num_gemms);
+    uint32_t strideD1, uint32_t strideD2, const uint8_t ragged_mode,
+    uint32_t num_gemms);
 namespace {
 
 template <typename T>
@@ -878,6 +876,38 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
     }
   };
 
+  auto Log2ByteWidth = [](blas::DataType ty) -> uint8_t {
+    switch (ty) {
+      case blas::DataType::kInt8:
+      case blas::DataType::kF8E5M2:      // 8-bit float: 1 sign, 5 exponent, 2
+                                         // mantissa bits
+      case blas::DataType::kF8E4M3FN:    // 8-bit float: 1 sign, 4 exponent, 3
+                                         // mantissa bits (FN variant)
+      case blas::DataType::kF8E5M2FNUZ:  // 8-bit float: E5M2 FNUZ variant
+      case blas::DataType::kF8E4M3FNUZ:  // 8-bit float: E4M3 FNUZ variant
+      case blas::DataType::kF8E4M3:      // 8-bit float: 1 sign, 4 exponent, 3
+                                         // mantissa bits
+      case blas::DataType::kF8E3M4:      // 8-bit float: 1 sign, 3 exponent, 4
+                                         // mantissa bits
+      case blas::DataType::kF8E8M0FNU:   // 8-bit float: 8 exponent, 0 mantissa
+                                         // bits (FNU variant)
+        return 0;
+      case blas::DataType::kBF16:
+      case blas::DataType::kHalf:
+        return 1;
+      case blas::DataType::kFloat:
+      case blas::DataType::kInt32:
+      case blas::DataType::kComplexFloat:
+        return 2;
+      case blas::DataType::kDouble:
+      case blas::DataType::kComplexDouble:
+      case blas::DataType::kInt64:
+        return 3;
+      default:
+        LOG(FATAL) << "Unknown DataType " << static_cast<int32_t>(ty);
+    }
+  };
+
   DeviceMemoryBase a = args.a, b = args.b;
   DeviceMemoryBase *d_userArgs =
       const_cast<DeviceMemoryBase *>(&args.workspace);
@@ -889,175 +919,16 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
     std::swap(m, n);
   }
 
-  size_t byte_width_elem_a = ByteWidth(type_a);
-  size_t byte_width_elem_b = ByteWidth(type_b);
-  size_t byte_width_elem_c = ByteWidth(cfg_->type_c);
-  size_t byte_width_elem_d = ByteWidth(cfg_->type_d);
+  uint8_t log2_byte_width_elem_a = Log2ByteWidth(type_a);
+  uint8_t log2_byte_width_elem_b = Log2ByteWidth(type_b);
+  uint8_t log2_byte_width_elem_c = Log2ByteWidth(cfg_->type_c);
+  uint8_t log2_byte_width_elem_d = Log2ByteWidth(cfg_->type_d);
 
   auto group_size_bytewidth =
       (cfg_->ragged_mode != gpu::RaggedDotMode::kRaggedBatch)
           ? static_cast<size_t>(args.group_sizes.size() /
                                 (cfg_->group_count * cfg_->batch_count))
           : static_cast<size_t>(args.group_sizes.size() / cfg_->group_count);
-
-#ifndef GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
-  // Get the default hipblaslt_ext::UserArguments
-  auto executor = blas_lt->parent_;
-  TF_ASSIGN_OR_RETURN(
-      std::unique_ptr<MemoryAllocation> host_allocation,
-      executor->HostMemoryAllocate(cfg_->group_count *
-                                   sizeof(hipblaslt_ext::UserArguments)));
-  hipblaslt_ext::UserArguments *userArgs =
-      static_cast<hipblaslt_ext::UserArguments *>(
-          host_allocation.get()->opaque());
-  grouped_gemm_->getDefaultValueForDeviceUserArguments(userArgs);
-
-  // Copy group_sizes from Device to Host
-  TF_ASSIGN_OR_RETURN(
-      std::unique_ptr<MemoryAllocation> host_group_sizes,
-      executor->HostMemoryAllocate(cfg_->group_count * group_size_bytewidth));
-  TF_RETURN_IF_ERROR(executor->SynchronousMemcpy(
-      host_group_sizes.get()->opaque(), args.group_sizes,
-      cfg_->group_count * group_size_bytewidth));
-  // Note: The group size are considered the same accross the batch.
-  // Indeed, different group sizes for different batch would required to divide
-  // our group-gemm into more sub-groups and set the GEMM config for each
-  // sub-group by hand.
-  auto get_group_value_at =
-      [group_size_bytewidth](
-          const std::unique_ptr<MemoryAllocation> &host_group_sizes,
-          size_t index) {
-        if (group_size_bytewidth == 8) {
-          return static_cast<int64_t>(
-              static_cast<int64_t *>(host_group_sizes.get()->opaque())[index]);
-        }
-        return static_cast<int64_t>(
-            static_cast<int32_t *>(host_group_sizes.get()->opaque())[index]);
-      };
-
-  // Compute args on the host
-  userArgs[0].a = a.opaque();
-  userArgs[0].b = b.opaque();
-  userArgs[0].c = args.d.opaque();
-  userArgs[0].d = args.d.opaque();
-  if (cfg_->ragged_mode == gpu::RaggedDotMode::kRaggedBatch) {
-    userArgs[0].batch = get_group_value_at(host_group_sizes, 0);
-  } else if (cfg_->ragged_mode == gpu::RaggedDotMode::kRaggedContracting) {
-    userArgs[0].k = get_group_value_at(host_group_sizes, 0);
-  } else {
-    if (cfg_->must_swap_operands) {
-      // The ragged matrix has been set as operand B.
-      userArgs[0].n = get_group_value_at(host_group_sizes, 0);
-    } else {
-      userArgs[0].m = get_group_value_at(host_group_sizes, 0);
-    }
-  }
-
-  switch (cfg_->ragged_mode) {
-    case gpu::RaggedDotMode::kRaggedNonContracting: {
-      for (size_t i = 1; i < cfg_->group_count; i++) {
-        if (cfg_->must_swap_operands) {
-          userArgs[i].n = get_group_value_at(host_group_sizes, i);
-          userArgs[i].b = static_cast<void *>(const_cast<uint8_t *>(
-              static_cast<const uint8_t *>(userArgs[i - 1].b) +
-              (get_group_value_at(host_group_sizes, i - 1) *
-               cfg_->stride_ragged_dim * byte_width_elem_b)));
-          userArgs[i].a = static_cast<void *>(const_cast<uint8_t *>(
-              static_cast<const uint8_t *>(a.opaque()) +
-              (i * cfg_->stride_group_dim * byte_width_elem_a)));
-        } else {
-          userArgs[i].m = get_group_value_at(host_group_sizes, i);
-          userArgs[i].a = static_cast<void *>(const_cast<uint8_t *>(
-              static_cast<const uint8_t *>(userArgs[i - 1].a) +
-              (get_group_value_at(host_group_sizes, i - 1) *
-               cfg_->stride_ragged_dim * byte_width_elem_a)));
-          userArgs[i].b = static_cast<void *>(const_cast<uint8_t *>(
-              static_cast<const uint8_t *>(b.opaque()) +
-              (i * cfg_->stride_group_dim * byte_width_elem_b)));
-        }
-        userArgs[i].c = static_cast<void *>(
-            static_cast<uint8_t *>(userArgs[i - 1].c) +
-            (get_group_value_at(host_group_sizes, i - 1) *
-             cfg_->output_stride_ragged_dim * byte_width_elem_c));
-        userArgs[i].d = static_cast<void *>(
-            static_cast<uint8_t *>(userArgs[i - 1].d) +
-            (get_group_value_at(host_group_sizes, i - 1) *
-             cfg_->output_stride_ragged_dim * byte_width_elem_d));
-      }
-      break;
-    }
-    case gpu::RaggedDotMode::kRaggedContracting: {
-      for (size_t i = 1; i < cfg_->group_count; i++) {
-        if (cfg_->must_swap_operands) {
-          userArgs[i].b = static_cast<void *>(const_cast<uint8_t *>(
-              static_cast<const uint8_t *>(userArgs[i - 1].b) +
-              (get_group_value_at(host_group_sizes, i - 1) *
-               cfg_->stride_ragged_dim * byte_width_elem_b)));
-          userArgs[i].a = static_cast<void *>(const_cast<uint8_t *>(
-              static_cast<const uint8_t *>(userArgs[i - 1].a) +
-              (get_group_value_at(host_group_sizes, i - 1) *
-               cfg_->stride_group_dim * byte_width_elem_a)));
-        } else {
-          userArgs[i].a = static_cast<void *>(const_cast<uint8_t *>(
-              static_cast<const uint8_t *>(userArgs[i - 1].a) +
-              (get_group_value_at(host_group_sizes, i - 1) *
-               cfg_->stride_ragged_dim * byte_width_elem_a)));
-          userArgs[i].b = static_cast<void *>(const_cast<uint8_t *>(
-              static_cast<const uint8_t *>(userArgs[i - 1].b) +
-              (get_group_value_at(host_group_sizes, i - 1) *
-               cfg_->stride_group_dim * byte_width_elem_b)));
-        }
-        userArgs[i].k = get_group_value_at(host_group_sizes, i);
-        userArgs[i].c = static_cast<void *>(
-            static_cast<uint8_t *>(args.c.opaque()) +
-            (i * cfg_->batch_count * userArgs[i].strideC2 * byte_width_elem_c));
-        userArgs[i].d = static_cast<void *>(
-            static_cast<uint8_t *>(args.d.opaque()) +
-            (i * cfg_->batch_count * userArgs[i].strideD2 * byte_width_elem_d));
-      }
-      break;
-    }
-    case gpu::RaggedDotMode::kRaggedBatch: {
-      for (size_t i = 1; i < cfg_->group_count; i++) {
-        if (cfg_->must_swap_operands) {
-          userArgs[i].b = static_cast<void *>(const_cast<uint8_t *>(
-              static_cast<const uint8_t *>(userArgs[i - 1].b) +
-              (get_group_value_at(host_group_sizes, i - 1) *
-               cfg_->stride_ragged_dim * byte_width_elem_b)));
-          userArgs[i].a = static_cast<void *>(const_cast<uint8_t *>(
-              static_cast<const uint8_t *>(userArgs[i - 1].a) +
-              (get_group_value_at(host_group_sizes, i - 1) *
-               cfg_->stride_group_dim * byte_width_elem_a)));
-        } else {
-          userArgs[i].a = static_cast<void *>(const_cast<uint8_t *>(
-              static_cast<const uint8_t *>(userArgs[i - 1].a) +
-              (get_group_value_at(host_group_sizes, i - 1) *
-               cfg_->stride_ragged_dim * byte_width_elem_a)));
-          userArgs[i].b = static_cast<void *>(const_cast<uint8_t *>(
-              static_cast<const uint8_t *>(userArgs[i - 1].b) +
-              (get_group_value_at(host_group_sizes, i - 1) *
-               cfg_->stride_group_dim * byte_width_elem_b)));
-        }
-        userArgs[i].batch = get_group_value_at(host_group_sizes, i);
-        userArgs[i].c = static_cast<void *>(
-            static_cast<uint8_t *>(userArgs[i - 1].c) +
-            (get_group_value_at(host_group_sizes, i - 1) *
-             cfg_->output_stride_ragged_dim * byte_width_elem_c));
-        userArgs[i].d = static_cast<void *>(
-            static_cast<uint8_t *>(userArgs[i - 1].d) +
-            (get_group_value_at(host_group_sizes, i - 1) *
-             cfg_->output_stride_ragged_dim * byte_width_elem_d));
-      }
-      break;
-    }
-  }
-
-  // Copy arguments to device memory
-  TF_RETURN_IF_ERROR(executor->SynchronousMemcpy(
-      d_userArgs, userArgs,
-      cfg_->group_count * sizeof(hipblaslt_ext::UserArguments)));
-
-#endif  // GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
 
   TF_RET_CHECK(blas_lt != nullptr);
   absl::Status status =
@@ -1072,7 +943,6 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
                                    profile_result->warmup_run_executed()));
   }
 
-#ifdef GROUPED_GEMM_UPDATE_ARGS_ON_DEVICE
   // ! The on-device update has not been updated to handle transposed matrices
   // nor the different ragged modes.
   uint32_t strideA1 = cfg_->lhs_leading_dim_stride;
@@ -1084,8 +954,6 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
   }
   uint32_t strideD1 = cfg_->output_leading_dim_stride;
   uint32_t strideD2 = cfg_->m * cfg_->n;
-  uint32_t strideC1 = strideD1;
-  uint32_t strideC2 = strideD2;
   if (cfg_->must_swap_operands) {
     std::swap(strideA1, strideB1);
     std::swap(strideA2, strideB2);
@@ -1094,15 +962,15 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
   GroupGemmUpdateArgs(
       gpu::AsGpuStreamValue(stream),
       static_cast<hipblaslt_ext::UserArguments *>(d_userArgs->opaque()),
-      a.opaque(), b.opaque(), args.c.opaque(), args.d.opaque(), nullptr,
-      args.group_sizes.opaque(), group_size_bytewidth, byte_width_elem_a,
-      byte_width_elem_b, byte_width_elem_c, byte_width_elem_d,
+      a.opaque(), b.opaque(), args.c.opaque(), args.d.opaque(),
+      args.group_sizes.opaque(), group_size_bytewidth, log2_byte_width_elem_a,
+      log2_byte_width_elem_b, log2_byte_width_elem_c, log2_byte_width_elem_d,
       cfg_->stride_ragged_dim, cfg_->stride_group_dim,
       cfg_->output_stride_ragged_dim, cfg_->must_swap_operands, m, n, cfg_->k,
-      cfg_->batch_count, strideA1, strideA2, strideB1, strideB2, strideC1,
-      strideC2, strideD1, strideD2,
-      static_cast<const uint8_t>(cfg_->ragged_mode), cfg_->group_count);
-#endif
+      cfg_->batch_count, strideA1, strideA2, strideB1, strideB2, strideD1,
+      strideD2, static_cast<const uint8_t>(cfg_->ragged_mode),
+      cfg_->group_count);
+
   SE_HIPBLAS_RETURN_IF_ERROR(
       grouped_gemm_->run(d_userArgs->opaque(), gpu::AsGpuStreamValue(stream)));
 
