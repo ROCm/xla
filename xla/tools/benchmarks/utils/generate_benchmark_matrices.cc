@@ -97,10 +97,12 @@ GetHardwareToRunnerLabelMap() {
   // - CPU_X86: linux-x86-n2-128
   // - GPU_L4: linux-x86-g2-16-l4-1gpu
   // - GPU_B200: linux-x86-a4-224-b200-1gpu
+  // - GPU_MI250: linux-mi250-4
   static const auto* kMap = new absl::flat_hash_map<std::string, std::string>{
       {"CPU_X86", "linux-x86-n2-128"},
       {"GPU_L4", "linux-x86-g2-16-l4-1gpu"},
       {"GPU_B200", "linux-x86-a4-224-b200-1gpu"},
+      {"GPU_MI250", "linux-mi250-4"},
       // Add more mappings
   };
   return *kMap;
@@ -125,6 +127,8 @@ GetHardwareToContainerImage() {
           {"GPU_L4_1H_4D",
            "us-docker.pkg.dev/ml-oss-artifacts-published/ml-public-container/"
            "ml-build-cuda12.8-cudnn9.8:latest"},
+           {"GPU_MI250", 
+            "rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa"},
       };
   return *kHardwareToContainerImage;
 }
@@ -152,6 +156,9 @@ GetHardwareToDefaultTargetMetrics() {
            {TargetMetric::GPU_DEVICE_TIME,
             TargetMetric::GPU_DEVICE_MEMCPY_TIME}},
           {"GPU_B200",
+           {TargetMetric::GPU_DEVICE_TIME,
+            TargetMetric::GPU_DEVICE_MEMCPY_TIME}},
+          {"GPU_MI250",
            {TargetMetric::GPU_DEVICE_TIME,
             TargetMetric::GPU_DEVICE_MEMCPY_TIME}},
       };

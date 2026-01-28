@@ -31,10 +31,10 @@ on:
         - 'no'
   push:
     branches:
-      - main
+      - rocm-jaxlib-v0.8.2
 
 concurrency:
-  # Run every push to main and do not cancel in-progress jobs; the timeout is 60 minutes.
+  # Run every push to rocm-jaxlib-v0.8.2 and do not cancel in-progress jobs; the timeout is 60 minutes.
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: false
 
@@ -44,15 +44,15 @@ jobs:
   # =================================================================
   generate_matrix:
     name: Generate Postsubmit Matrix
-    # Condition: Run if manually dispatched OR if it's a push event to the main branch.
+    # Condition: Run if manually dispatched OR if it's a push event to the rocm-jaxlib-v0.8.2 branch.
     if: |
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      (github.event_name == 'push' && github.ref == 'refs/heads/rocm-jaxlib-v0.8.2')
     uses: ./.github/workflows/generate_benchmark_matrix.yml
     with:
       workflow_type: 'POSTSUBMIT'
       registry_file: 'xla/tools/benchmarks/registries/default_registry.yml'
-      checkout_ref: ${{ github.sha }} # On push/dispatch to main, github.sha is the commit SHA
+      checkout_ref: ${{ github.sha }} # On push/dispatch to rocm-jaxlib-v0.8.2, github.sha is the commit SHA
 
   run_benchmarks:
     name: Run Benchmark (${{ matrix.benchmark_entry.config_id }}) # config_id will indicate the workflow type, e.g., '_postsubmit'

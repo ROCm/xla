@@ -53,6 +53,10 @@ configure_backend() {
       echo "Running: ./configure.py --backend=CUDA --cuda_compiler=nvcc"
       ./configure.py --backend=CUDA --cuda_compiler=nvcc || echo "INFO: GPU Configure script failed or is not applicable."
       ;;
+    GPU_MI250)
+      echo "Running: ./configure.py --backend=ROCM --rocm_compiler=hipcc"
+      ./configure.py --backend=ROCM --rocm_compiler=hipcc || echo "INFO: GPU Configure script failed or is not applicable."
+      ;;
     *)
       echo "INFO: Unknown hardware category '$hw_category_upper_for_configure'"
       ;;
@@ -92,6 +96,12 @@ case "$HARDWARE_CATEGORY" in
     ;;
   GPU_B200)
     BUILD_TYPE="XLA_LINUX_X86_GPU_A4_224_VCPU_BENCHMARK_PRESUBMIT_GITHUB_ACTIONS"
+    runner_binary_path="./$BAZEL_BIN_DIR/xla/tools/multihost_hlo_runner/hlo_runner_main_gpu"
+    stats_binary_path="./$BAZEL_BIN_DIR/xla/tools/compute_xspace_stats_main_gpu"
+    device_type_flag_value="gpu"
+    ;;
+  GPU_MI250)
+    BUILD_TYPE="XLA_LINUX_X86_GPU_ROCM_BENCHMARK_PRESUBMIT_GITHUB_ACTIONS"
     runner_binary_path="./$BAZEL_BIN_DIR/xla/tools/multihost_hlo_runner/hlo_runner_main_gpu"
     stats_binary_path="./$BAZEL_BIN_DIR/xla/tools/compute_xspace_stats_main_gpu"
     device_type_flag_value="gpu"

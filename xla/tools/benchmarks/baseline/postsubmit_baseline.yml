@@ -35,6 +35,16 @@
       "threshold": 0.30 # Allow 30% regression max
     }
   },
+  "gemma3_1b_flax_call_mi250_1h1d_postsubmit": { #TODO To be adapted once initial benchmarks are run
+    "GPU_DEVICE_TIME": {
+      "baseline_ms": 1000,
+      "threshold": 0.30 # Allow 30% regression max
+    },
+    "GPU_DEVICE_MEMCPY_TIME": {
+      "baseline_ms": 0.05,
+      "threshold": 0.30 # Allow 30% regression max
+    }
+  },
   "gemma2_2b_keras_jax_b200_1h1d_postsubmit": {  # config_id
     "GPU_DEVICE_TIME": {
       "baseline_ms": 100,
@@ -62,6 +72,16 @@
     },
     "GPU_DEVICE_MEMCPY_TIME": {
       "baseline_ms": 0.05,
+      "threshold": 0.30 # Allow 30% regression max
+    }
+  },
+  "gemma2_2b_keras_jax_mi250_1h1d_postsubmit": { #TODO To be adapted once initial benchmarks are run
+    "GPU_DEVICE_TIME": {
+      "baseline_ms": 1000,
+      "threshold": 0.30 # Allow 30% regression max
+    },
+    "GPU_DEVICE_MEMCPY_TIME": {
+      "baseline_ms": 0.1,
       "threshold": 0.30 # Allow 30% regression max
     }
   },
