@@ -106,7 +106,7 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
 }
 
 TEST(RocmCollectorTest, Collect4MEvents) {
-    constexpr uint64_t kMaxEvents = 8 * 1024 * 1024;  // Actual 4M limit
+    constexpr uint64_t kMaxEvents = 4 * 1024 * 1024;  // Actual 4M limit
     
     RocmTraceCollectorOptions options;
     options.max_callback_api_events = kMaxEvents;
