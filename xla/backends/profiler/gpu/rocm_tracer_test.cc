@@ -19,6 +19,7 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>  // NOLINT(build/c++11)
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -192,6 +193,54 @@ TEST(RocmTracerTest, CapturesHipEvents) {
 
   EXPECT_GT(collector_ptr->event_count(), 0)
       << "Expected to capture at least one trace event";
+}
+
+TEST(RocmTracerTest, MultiGpu4MEvents) {
+#define HIP_ASSERT_OK(expr) ASSERT_EQ((expr), hipSuccess) << #expr " failed"
+
+  int num_gpus = 0;
+  HIP_ASSERT_OK(hipGetDeviceCount(&num_gpus));
+  if (num_gpus < 2) {
+    GTEST_SKIP() << "Test requires 2+ GPUs";
+  }
+  
+  constexpr uint64_t kEventsPerGpu = 2 * 1024 * 1024;  // 2M each
+  
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  RocmTraceCollectorOptions opts;
+  opts.max_callback_api_events = 4 * 1024 * 1024;
+  opts.max_activity_api_events = 4 * 1024 * 1024;
+  opts.max_annotation_strings = 4 * 1024 * 1024;
+  opts.num_gpus = num_gpus;
+  
+  auto collector = CreateRocmCollector(opts, 0, 0);
+  RocmTracerOptions tracer_opts{4 * 1024 * 1024};
+  tracer.Enable(tracer_opts, collector.get());
+  
+  // Generate events on both GPUs concurrently
+  std::vector<std::thread> threads;
+  for (int gpu = 0; gpu < 2; gpu++) {
+    threads.emplace_back([gpu]() {
+      HIP_ASSERT_OK(hipSetDevice(gpu));
+      for (int i = 0; i < 1000; i++) {
+        void* ptr;
+        HIP_ASSERT_OK(hipMalloc(&ptr, 4096));
+        HIP_ASSERT_OK(hipFree(ptr));
+      }
+      HIP_ASSERT_OK(hipDeviceSynchronize());
+    });
+  }
+  
+  for (auto& t : threads) t.join();
+  
+  tracer.Disable();
+  XSpace space;
+  collector->Export(&space);
+  
+  // Verify events from both GPUs captured
+  EXPECT_GE(space.planes_size(), 2);
+
+#undef HIP_ASSERT_OK
 }
 
 }  // namespace

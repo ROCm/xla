@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 
+#include <chrono>  // NOLINT(build/c++11)
 #include <cstdint>
 #include <utility>
 
@@ -103,6 +104,60 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   EXPECT_EQ(gpu_plane->event_metadata().at(event.metadata_id()).name(),
             "test_rocm_kernel");
 }
+
+TEST(RocmCollectorTest, Collect4MEvents) {
+    constexpr uint64_t kMaxEvents = 8 * 1024 * 1024;  // Actual 4M limit
+    
+    RocmTraceCollectorOptions options;
+    options.max_callback_api_events = kMaxEvents;
+    options.max_activity_api_events = kMaxEvents;
+    options.max_annotation_strings = kMaxEvents;
+    options.num_gpus = 1;
+    
+    auto start_time = std::chrono::high_resolution_clock::now();
+    
+    RocmTraceCollectorImpl collector(options, 1000, 2000);
+    
+    // Simulate adding 4M events
+    for (uint64_t i = 0; i < kMaxEvents; i++) {
+      RocmTracerEvent event;
+      event.type = RocmTracerEventType::Kernel;
+      event.source = RocmTracerEventSource::ApiCallback;
+      event.domain = RocmTracerEventDomain::HIP_API;
+      event.name = "kernel";
+      event.correlation_id = i;
+      event.thread_id = i % 1024;  // Vary thread IDs
+      
+      collector.AddEvent(std::move(event), false);
+      
+      // Periodic progress
+      if (i % 1'000'000 == 0) {
+        LOG(INFO) << "Added " << i << " events";
+      }
+    }
+    
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        end_time - start_time);
+    
+    LOG(INFO) << "Time to add 4M events: " << duration.count() << " ms";
+    
+    // Test export performance
+    start_time = std::chrono::high_resolution_clock::now();
+    collector.Flush();
+    XSpace space;
+    collector.Export(&space);
+    end_time = std::chrono::high_resolution_clock::now();
+    
+    duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        end_time - start_time);
+    LOG(INFO) << "Time to export 4M events: " << duration.count() << " ms";
+    
+    // Verify memory usage is reasonable
+    size_t estimated_memory_mb = (kMaxEvents * sizeof(RocmTracerEvent)) / (1024 * 1024);
+    LOG(INFO) << "Estimated memory usage: " << estimated_memory_mb << " MB";
+    EXPECT_LT(estimated_memory_mb, 2000);  // Should be < 2GB
+  }
 
 }  // namespace test
 }  // namespace profiler
