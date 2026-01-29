@@ -66,7 +66,8 @@ jobs:
             --cap-add=SYS_PTRACE \
             --security-opt=seccomp=unconfined \
             -v ${{ github.workspace }}:/workspace \
-            -v ${{ github.workspace }}/rocAutomation/resources/certificates:/tf/certificates:ro \
+            -v ${{ github.workspace }}/rocAutomation/resources/certificates/ci-cert.crt:/tmp/jax_rocm_plugin/ci-cert.crt:ro \
+            -v ${{ github.workspace }}/rocAutomation/resources/certificates/ci-cert.key:/tmp/jax_rocm_plugin/ci-cert.key:ro \
             -v ${{ github.workspace }}/rocAutomation/resources/upstream-xla-data/rocm_tag_filters.sh:/workspace/build_tools/rocm/rocm_tag_filters.sh:ro \
             -v ${{ github.workspace }}/rocAutomation/resources/upstream-xla-data/execute_ci_build.sh:/workspace/build_tools/rocm/execute_ci_build.sh:ro \
             -v ${{ github.workspace }}/jax:/tmp/jax \
@@ -74,15 +75,13 @@ jobs:
             ${{ env.DOCKER_IMAGE }}
 
       - name: Create temporary wheelhouse directory
-        id: wheelhouse
         run: |
-          WHEELHOUSE_DIR=$(mktemp -d)
-          echo "dir=$WHEELHOUSE_DIR" >> "$GITHUB_OUTPUT"
+          docker exec ${{ env.CONTAINER_NAME }} mkdir -p /tmp/wheelhouse
 
       - name: Build rocm plugin wheels (Python ${{ matrix.python_version }})
         run: |
-          bash build/rocm/ci_build_plugin_wheels.sh \
-            --wheelhouse=${{ steps.wheelhouse.outputs.dir }} \
+          docker exec ${{ env.CONTAINER_NAME }} bash build/rocm/ci_build_plugin_wheels.sh \
+            --wheelhouse=/tmp/wheelhouse \
             --git_hash=${{ github.sha }} \
             --rocm_version=$ROCM_VERSION \
             --repo_env=HERMETIC_PYTHON_VERSION=${{ matrix.python_version }} \
@@ -94,10 +93,10 @@ jobs:
       - name: Run single-GPU unit tests (Python ${{ matrix.python_version }})
         if: always()
         run: |
-          bash build/rocm/ci_run_jax_ut.sh \
+          docker exec ${{ env.CONTAINER_NAME }} bash build/rocm/ci_run_jax_ut.sh \
             --config=rocm_sgpu \
             --config=rocm_rbe \
-            --wheelhouse=${{ steps.wheelhouse.outputs.dir }} \
+            --wheelhouse=/tmp/wheelhouse \
             --override_repository=xla="/workspace" \
             --rocm_version=$ROCM_VERSION \
             --jax_version=$JAX_VERSION \
@@ -108,10 +107,10 @@ jobs:
       - name: Run multi-GPU unit tests (Python ${{ matrix.python_version }})
         if: always()
         run: |
-          bash build/rocm/ci_run_jax_ut.sh \
+          docker exec ${{ env.CONTAINER_NAME }} bash build/rocm/ci_run_jax_ut.sh \
             --config=rocm_mgpu \
             --config=rocm_rbe \
-            --wheelhouse=${{ steps.wheelhouse.outputs.dir }} \
+            --wheelhouse=/tmp/wheelhouse \
             --rocm_version=$ROCM_VERSION \
             --jax_version=$JAX_VERSION \
             --repo_env=HERMETIC_PYTHON_VERSION=${{ matrix.python_version }} \
