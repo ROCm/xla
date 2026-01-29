@@ -66,8 +66,7 @@ jobs:
             --cap-add=SYS_PTRACE \
             --security-opt=seccomp=unconfined \
             -v ${{ github.workspace }}:/workspace \
-            -v ${{ github.workspace }}/rocAutomation/resources/certificates/ci-cert.crt:/tmp/jax_rocm_plugin/ci-cert.crt:ro \
-            -v ${{ github.workspace }}/rocAutomation/resources/certificates/ci-cert.key:/tmp/jax_rocm_plugin/ci-cert.key:ro \
+            -v ${{ github.workspace }}/rocAutomation/resources/certificates:/tmp/jax_rocm_plugin/certificates:ro \
             -v ${{ github.workspace }}/rocAutomation/resources/upstream-xla-data/rocm_tag_filters.sh:/workspace/build_tools/rocm/rocm_tag_filters.sh:ro \
             -v ${{ github.workspace }}/rocAutomation/resources/upstream-xla-data/execute_ci_build.sh:/workspace/build_tools/rocm/execute_ci_build.sh:ro \
             -v ${{ github.workspace }}/jax:/tmp/jax \
@@ -85,7 +84,11 @@ jobs:
             --git_hash=${{ github.sha }} \
             --rocm_version=$ROCM_VERSION \
             --repo_env=HERMETIC_PYTHON_VERSION=${{ matrix.python_version }} \
+            --tls_client_certificate="/tmp/certificates/ci-cert.crt" \
+            --tls_client_key="/tmp/certificates/ci-cert.key"
             --override_repository=xla="/workspace" \
+            --tls_client_certificate="/tmp/certificates/ci-cert.crt" \
+            --tls_client_key="/tmp/certificates/ci-cert.key"
             --curses=no \
             --color=yes \
             --config=rocm_rbe
@@ -101,6 +104,8 @@ jobs:
             --rocm_version=$ROCM_VERSION \
             --jax_version=$JAX_VERSION \
             --repo_env=HERMETIC_PYTHON_VERSION=${{ matrix.python_version }} \
+            --tls_client_certificate="/tmp/certificates/ci-cert.crt" \
+            --tls_client_key="/tmp/certificates/ci-cert.key"
             --curses=no \
             --color=yes
 
