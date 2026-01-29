@@ -392,6 +392,45 @@ InitializeGpuClique(GpuCollectives* collectives, se::StreamExecutor* device,
               << emplaced.first->second.DebugString();
     } else {
       VLOG(3) << "Created new clique: " << emplaced.first->second.DebugString();
+
+      // When NCCL comm splitting is enabled, invalidate any cached cliques
+      // that are proper subsets of the newly created clique. This ensures
+      // that subsequent operations using those subset device groups will
+      // create split communicators from this parent clique rather than
+      // reusing stale standalone communicators.
+      //
+      // Without this, if clique [0,1] exists from a previous run and we
+      // create [0,1,2,3], a subsequent [2,3] operation would try to split
+      // from [0,1,2,3] but [0,1] operations would use the old standalone
+      // clique, causing rendezvous deadlocks.
+      static const bool enable_nccl_comm_splitting =
+          xla::GetDebugOptionsFromFlags().xla_gpu_enable_nccl_comm_splitting();
+      if (enable_nccl_comm_splitting) {
+        std::vector<GpuCliqueKey> keys_to_remove;
+        for (auto& [cached_key, cached_clique] : cliques.map) {
+          // Skip the clique we just created and check if cached is a proper
+          // subset of the new clique (same devices would mean equal keys)
+          if (!(cached_key == clique_key) &&
+              cached_key.IsSubsetOf(clique_key)) {
+            VLOG(3) << "Invalidating cached subset clique: "
+                    << cached_key.ToString()
+                    << " (subset of new clique: " << clique_key.ToString()
+                    << ")";
+            keys_to_remove.push_back(cached_key);
+          }
+        }
+        for (const auto& key : keys_to_remove) {
+          auto it = cliques.map.find(key);
+          if (it != cliques.map.end()) {
+            // Abort the communicators before removing
+            if (auto status = it->second.Abort(); !status.ok()) {
+              LOG(WARNING) << "Failed to abort subset clique "
+                           << key.ToString() << ": " << status;
+            }
+            cliques.map.erase(it);
+          }
+        }
+      }
     }
 
     return emplaced.first->second.Acquire();
