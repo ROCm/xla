@@ -237,7 +237,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   // By default, copy TF's Eigen style min_max behavior with nans.
   opts.set_xla_cpu_enable_fast_min_max(true);
 
-  opts.set_xla_gpu_enable_cublaslt(false);
+  opts.set_xla_gpu_enable_cublaslt(true);
 
   opts.add_xla_gpu_enable_command_buffer(DebugOptions::FUSION);
   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUBLAS);
@@ -285,7 +285,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_enable_nccl_user_buffers(false);
   opts.set_xla_gpu_experimental_enable_nccl_symmetric_buffers(false);
   opts.set_xla_gpu_experimental_enable_nvshmem(false);
-  opts.set_xla_gpu_enable_nccl_comm_splitting(true);
+  opts.set_xla_gpu_enable_nccl_comm_splitting(false);
   opts.set_xla_gpu_nccl_init_max_rank_per_root_ratio(0);
 
   opts.set_xla_gpu_temp_buffer_use_separate_color(false);
