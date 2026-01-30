@@ -123,6 +123,7 @@ class BuildType(enum.Enum):
   XLA_LINUX_X86_GPU_L4_16_VCPU_BENCHMARK_PRESUBMIT_GITHUB_ACTIONS = enum.auto()
   XLA_LINUX_X86_GPU_L4_48_VCPU_BENCHMARK_PRESUBMIT_GITHUB_ACTIONS = enum.auto()
   XLA_LINUX_X86_GPU_A4_224_VCPU_BENCHMARK_PRESUBMIT_GITHUB_ACTIONS = enum.auto()
+  XLA_LINUX_X86_GPU_ROCM_BENCHMARK_PRESUBMIT_GITHUB_ACTIONS = enum.auto()
 
   XLA_MACOS_X86_CPU_KOKORO = enum.auto()
   XLA_MACOS_ARM64_CPU_KOKORO = enum.auto()
@@ -273,6 +274,29 @@ def _tag_filters_for_compute_capability(
   tag_filters += ("-requires-gpu-intel",)
   return tag_filters
 
+rocm_tag_filters = (
+    "-no_gpu",
+    "-skip_rocprofiler_sdk",
+    "-no_oss",
+    "-oss_excluded",
+    "-oss_serial",
+    "-requires-gpu-intel",
+    "-requires-gpu-nvidia",
+    "-cuda-only",
+    "-oneapi-only",
+    "-requires-gpu-sm60",
+    "-requires-gpu-sm60-only",
+    "-requires-gpu-sm70",
+    "-requires-gpu-sm70-only",
+    "-requires-gpu-sm80",
+    "-requires-gpu-sm80-only",
+    "-requires-gpu-sm86",
+    "-requires-gpu-sm86-only",
+    "-requires-gpu-sm89",
+    "-requires-gpu-sm89-only",
+    "-requires-gpu-sm90",
+    "-requires-gpu-sm90-only",
+)
 
 nvidia_gpu_filters = (
     "-no_oss",
@@ -644,6 +668,24 @@ Build(
         "HERMETIC_CUDNN_VERSION": "9.8.0",
     },
     extra_setup_commands=(["nvidia-smi"],),
+    subcommand="build",
+)
+
+Build(
+    type_=BuildType.XLA_LINUX_X86_GPU_ROCM_BENCHMARK_PRESUBMIT_GITHUB_ACTIONS,
+    repo="openxla/xla",
+    configs=("rocm_ci"),
+    target_patterns=_XLA_GPU_PRESUBMIT_BENCHMARKS_DEFAULT_TARGET_PATTERNS,
+    test_tag_filters=rocm_tag_filters,
+    build_tag_filters=rocm_tag_filters,
+    options={
+        "run_under": "//build_tools/ci:parallel_gpu_execute",
+        "//xla/tsl:ci_build": True,
+        **_DEFAULT_BAZEL_OPTIONS,
+    },
+    repo_env={
+        "TF_ROCM_AMDGPU_TARGETS": "gfx90a",
+    },
     subcommand="build",
 )
 
