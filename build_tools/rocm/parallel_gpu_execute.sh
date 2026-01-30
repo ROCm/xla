@@ -26,6 +26,7 @@ TF_GPU_COUNT=$($ROCMINFO | grep "Name: *gfx*" | wc -l)
 
 # if there are no GPUs on that system e.g rbe default pool then execute the test without lock
 if [[ $TF_GPU_COUNT == 0 ]];then
+    echo "Execute with no GPU support"
     exec "$@"
 fi
 
