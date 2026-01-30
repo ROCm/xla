@@ -23,6 +23,12 @@
 
 ROCMINFO=$(find "external/local_config_rocm/rocm/rocm_dist/" -name "rocminfo" -path "*/bin/rocminfo")
 TF_GPU_COUNT=$($ROCMINFO | grep "Name: *gfx*" | wc -l)
+
+# if there are no GPUs on that system e.g rbe default pool then execute the test without lock
+if [[ $TF_GPU_COUNT == 0 ]];then
+    exec "$@"
+fi
+
 TF_TESTS_PER_GPU=${TF_TESTS_PER_GPU:-8}
 
 # This function is used below in rlocation to check that a path is absolute
