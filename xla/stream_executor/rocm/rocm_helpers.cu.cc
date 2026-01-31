@@ -209,6 +209,7 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
     uint32_t batch_size =
         min(BLOCK_SIZE, static_cast<uint32_t>(num_gemms - batch_start));
 
+    __syncthreads();
     // Last active thread updates cumulative offset for next batch
     if (threadIdx.x == batch_size - 1) {
       cumulative_offset += offset_in_batch + group_size;
@@ -334,6 +335,7 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
     uint32_t batch_size =
         min(BLOCK_SIZE, static_cast<uint32_t>(num_gemms - batch_start));
 
+    __syncthreads();
     // Last active thread updates cumulative offset for next batch
     if (threadIdx.x == batch_size - 1) {
       cumulative_offset += offset_in_batch + group_size;
@@ -445,6 +447,8 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
     // Determine the last active thread in this batch
     uint32_t batch_size =
         min(BLOCK_SIZE, static_cast<uint32_t>(num_gemms - batch_start));
+
+    __syncthreads();
 
     // Last active thread updates cumulative offset for next batch
     if (threadIdx.x == batch_size - 1) {
