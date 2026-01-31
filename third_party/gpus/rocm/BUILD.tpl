@@ -614,6 +614,16 @@ cc_library(
     deps = [":rocm_config"],
 )
 
+# cc_import version of rocm_smi for use in lit tests.
+# Unlike cc_library, cc_import properly exposes the shared_library
+# via CcInfo.linking_context so _tools_on_path can bundle it.
+# We use .so.1 (the SONAME) because that's what the runtime linker looks for.
+cc_import(
+    name = "rocm_smi_import",
+    shared_library = "%{rocm_root}/lib/librocm_smi64.so.1",
+    visibility = ["//visibility:public"],
+)
+
 cc_library(
     name = "system_libs",
     srcs = glob([
