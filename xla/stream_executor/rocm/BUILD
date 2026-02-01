@@ -943,6 +943,28 @@ xla_test(
     ],
 )
 
+xla_test(
+    name = "hip_blas_lt_thread_test",
+    srcs = ["hip_blas_lt_thread_test.cc"],
+    backends = ["gpu"],
+    tags = [
+        "rocm-only",
+        "requires-gpu",
+    ],
+    deps = [
+        ":amdhipblaslt_plugin",
+        ":rocm_executor",
+        ":rocm_platform_id",
+        "//xla/stream_executor:device_memory",        
+        "//xla/stream_executor:platform_manager",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor/gpu:gpu_blas_lt",        
+        "//xla/tsl/platform:test",
+        "//xla/tsl/platform:env",
+        "@com_google_googletest//:gtest_main",        
+    ],
+)
+
 cc_library(
     name = "rocm_timer",
     srcs = ["rocm_timer.cc"],
