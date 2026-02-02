@@ -604,12 +604,15 @@ void TritonDotFusionSearchSpace::AddContractingTiling(
     // The validation in MakeSplitKOperand checks:
     //   split_k > ceil(contracting_size / block_k) → error
     // So we need: split_k <= ceil(contracting_size / block_k)
-    const int64_t max_split_for_this_k =
-        CeilOfRatio(contracting_size_, static_cast<int64_t>(k));
-    if (split > max_split_for_this_k) {
-      VLOG(10) << "Skipping block_k=" << k << " for split_k=" << split
-               << " (max_split=" << max_split_for_this_k << ")";
-      continue;
+    // Skip this check if keep_large_split is true (user forced a large split).
+    if (!config.keep_large_split) {
+      const int64_t max_split_for_this_k =
+          CeilOfRatio(contracting_size_, static_cast<int64_t>(k));
+      if (split > max_split_for_this_k) {
+        VLOG(10) << "Skipping block_k=" << k << " for split_k=" << split
+                 << " (max_split=" << max_split_for_this_k << ")";
+        continue;
+      }
     }
     new_config.config.block_k = k;
     VLOG(10) << "Adding contracting tiling: config = " << new_config.ToString();
