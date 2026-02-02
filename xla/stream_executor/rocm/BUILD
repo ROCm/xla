@@ -957,6 +957,7 @@ xla_test(
         ":rocm_platform_id",
         "//xla/stream_executor:device_memory",        
         "//xla/stream_executor:platform_manager",
+        "//xla/stream_executor:scratch_allocator",
         "//xla/stream_executor:stream",
         "//xla/stream_executor/gpu:gpu_blas_lt",        
         "//xla/tsl/platform:test",
