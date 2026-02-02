@@ -546,8 +546,8 @@ auto OptionalBitcast(HloInstruction** optional_bitcast, Pattern pattern) {
 // Counts the number of final users of an instruction, recursively traversing
 // through slice and bitcast operations. If a user is a slice or bitcast, we
 // recursively count its users. Otherwise, we count it as a final user.
-int64_t CountFinalUsers(const HloInstruction* instr) {
-  int64_t final_user_count = 0;
+static inline uint32_t CountFinalUsers(const HloInstruction* instr) {
+  uint32_t final_user_count = 0;
   for (const HloInstruction* user : instr->users()) {
     if (user->opcode() == HloOpcode::kSlice ||
         user->opcode() == HloOpcode::kBitcast) {
