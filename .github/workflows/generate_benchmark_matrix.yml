@@ -43,7 +43,7 @@ on:
 jobs:
   generate:
     name: Generate Matrix (${{ inputs.workflow_type }})
-    runs-on: linux-x86-n2-64
+    runs-on: linux-mi250-4
     container: us-docker.pkg.dev/ml-oss-artifacts-published/ml-public-container/ml-build:latest
     outputs:
       matrix_json_output: ${{ steps.run_generator.outputs.matrix_json }}
