@@ -174,26 +174,27 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
     bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
     uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
     uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
+  __builtin_assume(num_gemms != 0);
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
 
-  // Shared memory for BlockScan and cumulative offset
-  __shared__
-      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage scan_temp;
+  // Dynamic shared memory - reused for both BlockScan and UserArguments
+  extern __shared__ uint8_t shared_mem[];
+
+  // Alias for BlockScan temporary storage (used first)
+  auto& scan_temp = *reinterpret_cast<
+      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage*>(
+      shared_mem);
+
+  // Alias for UserArguments array (used after BlockScan)
+  auto* sharedUserArgs =
+      reinterpret_cast<hipblaslt_ext::UserArguments*>(shared_mem);
+
+  // Static shared memory for cumulative offset
   __shared__ uint32_t cumulative_offset;
-  __shared__ hipblaslt_ext::UserArguments* sharedUserArgs;
-
-  // Initialize cumulative offset
-  if (threadIdx.x == 0) {
-    cumulative_offset = 0;
-    sharedUserArgs = new hipblaslt_ext::UserArguments[num_gemms];
-  }
-  __syncthreads();
-
   // Process all elements in batches of BLOCK_SIZE
   for (uint64_t batch_start = 0; batch_start < num_gemms;
        batch_start += BLOCK_SIZE) {
     uint32_t idx = batch_start + threadIdx.x;
-
     // Load group size for this thread (0 if out of bounds)
     uint32_t group_size = (idx < num_gemms) ? typed_group_sizes[idx] : 0;
 
@@ -203,7 +204,10 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
         group_size, offset_in_batch);
 
     // Add cumulative offset to get global offset
-    uint32_t offset_group = cumulative_offset + offset_in_batch;
+    // On first iteration, cumulative_offset is 0
+    uint32_t offset_group = (batch_start == 0)
+                                ? offset_in_batch
+                                : (cumulative_offset + offset_in_batch);
 
     // Determine the last active thread in this batch
     uint32_t batch_size =
@@ -215,79 +219,90 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
       cumulative_offset += offset_in_batch + group_size;
     }
 
-    if (idx >= num_gemms) {
-      return;
+    if (idx < num_gemms) {
+      auto& arg = sharedUserArgs[threadIdx.x];
+      if (must_swap_operands) {
+        // The ragged matrix has been set as operand B.
+        arg.n = typed_group_sizes[idx];
+        arg.m = m;
+
+        arg.a = const_cast<void*>(static_cast<const void*>(
+            static_cast<const uint8_t*>(a) +
+            (static_cast<intptr_t>(idx * stride_a) << log2_byte_width_elem_a)));
+        arg.b = const_cast<void*>(static_cast<const void*>(
+            static_cast<const uint8_t*>(b) +
+            (static_cast<intptr_t>(offset_group * stride_b)
+             << log2_byte_width_elem_b)));
+      } else {
+        arg.m = typed_group_sizes[idx];
+        arg.n = n;
+
+        arg.a = const_cast<void*>(static_cast<const void*>(
+            static_cast<const uint8_t*>(a) +
+            (static_cast<intptr_t>(offset_group * stride_a)
+             << log2_byte_width_elem_a)));
+        arg.b = const_cast<void*>(static_cast<const void*>(
+            static_cast<const uint8_t*>(b) +
+            (static_cast<intptr_t>(idx * stride_b) << log2_byte_width_elem_b)));
+      }
+      arg.c = static_cast<void*>(
+          static_cast<uint8_t*>(c) +
+          (static_cast<intptr_t>(offset_group * output_stride_ragged_dim)
+           << log2_byte_width_elem_d));
+      arg.d = static_cast<void*>(
+          static_cast<uint8_t*>(d) +
+          (static_cast<intptr_t>(offset_group * output_stride_ragged_dim)
+           << log2_byte_width_elem_d));
+      arg.k = k;
+      arg.batch = batch;
+      arg.strideA1 = strideA1;
+      arg.strideA2 = strideA2;
+      arg.strideB1 = strideB1;
+      arg.strideB2 = strideB2;
+      // We only support C = D
+      arg.strideC1 = strideD1;
+      arg.strideC2 = strideD2;
+      arg.strideD1 = strideD1;
+      arg.strideD2 = strideD2;
+      arg.strideE1 = 0;
+      arg.strideE2 = 0;
+      // Set alpha to float(1) and beta to float(0).
+      // As these values are imposed in the gemm_rewritter pass anyway.
+      for (int8_t i = 0; i < 16; i++) {
+        arg.alpha[i] = 0;
+        arg.beta[i] = 0;
+      }
+      arg.alpha[2] = -128;
+      arg.alpha[3] = 63;
+      arg.scaleA = nullptr;
+      arg.scaleB = nullptr;
+      arg.scaleC = nullptr;
+      arg.scaleD = nullptr;
+      arg.scaleAlphaVec = nullptr;
+      arg.bias = nullptr;
+      arg.biasType = 0;
+      arg.e = nullptr;
+      arg.act0 = 0.0;
+      arg.act1 = 0.0;
+      arg.activationType = 0;
     }
 
-    auto& arg = sharedUserArgs[threadIdx.x];
-    if (must_swap_operands) {
-      // The ragged matrix has been set as operand B.
-      arg.n = typed_group_sizes[idx];
-      arg.m = m;
+    __barrier(__CLK_LOCAL_MEM_FENCE);
 
-      arg.a = const_cast<void*>(static_cast<const void*>(
-          static_cast<const uint8_t*>(a) +
-          ((idx * stride_a) << log2_byte_width_elem_a)));
-      arg.b = const_cast<void*>(static_cast<const void*>(
-          static_cast<const uint8_t*>(b) +
-          ((offset_group * stride_b) << log2_byte_width_elem_b)));
-    } else {
-      arg.m = typed_group_sizes[idx];
-      arg.n = n;
+    // Copy from shared memory to global memory with coalesced 16-byte writes
+    // Each thread writes 16 bytes (4 x int32) consecutively
+    constexpr size_t BYTES_PER_THREAD = 16;
 
-      arg.a = const_cast<void*>(static_cast<const void*>(
-          static_cast<const uint8_t*>(a) +
-          ((offset_group * stride_a) << log2_byte_width_elem_a)));
-      arg.b = const_cast<void*>(static_cast<const void*>(
-          static_cast<const uint8_t*>(b) +
-          ((idx * stride_b) << log2_byte_width_elem_b)));
+    size_t total_bytes = batch_size * sizeof(hipblaslt_ext::UserArguments);
+    uint8_t* src_ptr = reinterpret_cast<uint8_t*>(sharedUserArgs);
+    uint8_t* dest_ptr = reinterpret_cast<uint8_t*>(&dest_args[batch_start]);
+
+    // Each thread copies BYTES_PER_THREAD consecutive bytes
+    for (size_t offset = threadIdx.x * BYTES_PER_THREAD; offset < total_bytes;
+         offset += BLOCK_SIZE * BYTES_PER_THREAD) {
+      size_t bytes_to_copy = min(BYTES_PER_THREAD, total_bytes - offset);
+      memcpy(&dest_ptr[offset], &src_ptr[offset], bytes_to_copy);
     }
-    arg.c = static_cast<void*>(
-        static_cast<uint8_t*>(c) +
-        ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
-    arg.d = static_cast<void*>(
-        static_cast<uint8_t*>(d) +
-        ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
-    arg.k = k;
-    arg.batch = batch;
-    arg.strideA1 = strideA1;
-    arg.strideA2 = strideA2;
-    arg.strideB1 = strideB1;
-    arg.strideB2 = strideB2;
-    // We only support C = D
-    arg.strideC1 = strideD1;
-    arg.strideC2 = strideD2;
-    arg.strideD1 = strideD1;
-    arg.strideD2 = strideD2;
-    arg.strideE1 = 0;
-    arg.strideE2 = 0;
-    // Set alpha to float(1) and beta to float(0).
-    // As these values are imposed in the gemm_rewritter pass anyway.
-    for (int8_t i = 0; i < 16; i++) {
-      arg.alpha[i] = 0;
-      arg.beta[i] = 0;
-    }
-    arg.alpha[2] = -128;
-    arg.alpha[3] = 63;
-    arg.scaleA = nullptr;
-    arg.scaleB = nullptr;
-    arg.scaleC = nullptr;
-    arg.scaleD = nullptr;
-    arg.scaleAlphaVec = nullptr;
-    arg.bias = nullptr;
-    arg.biasType = 0;
-    arg.e = nullptr;
-    arg.act0 = 0.0;
-    arg.act1 = 0.0;
-    arg.activationType = 0;
-
-    // Copy from shared memory to global memory
-    dest_args[idx] = arg;
-    __syncthreads();
-  }
-
-  if (threadIdx.x == 0) {
-    delete[] sharedUserArgs;
   }
 }
 
@@ -300,20 +315,23 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
     bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
     uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
     uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
+  __builtin_assume(num_gemms != 0);
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
 
-  // Shared memory for BlockScan and cumulative offset
-  __shared__
-      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage scan_temp;
-  __shared__ uint32_t cumulative_offset;
-  __shared__ hipblaslt_ext::UserArguments* sharedUserArgs;
+  // Dynamic shared memory - reused for both BlockScan and UserArguments
+  extern __shared__ uint8_t shared_mem[];
 
-  // Initialize cumulative offset
-  if (threadIdx.x == 0) {
-    cumulative_offset = 0;
-    sharedUserArgs = new hipblaslt_ext::UserArguments[num_gemms];
-  }
-  __syncthreads();
+  // Alias for BlockScan temporary storage (used first)
+  auto& scan_temp = *reinterpret_cast<
+      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage*>(
+      shared_mem);
+
+  // Alias for UserArguments array (used after BlockScan)
+  auto* sharedUserArgs =
+      reinterpret_cast<hipblaslt_ext::UserArguments*>(shared_mem);
+
+  // Static shared memory for cumulative offset
+  __shared__ uint32_t cumulative_offset;
 
   // Process all elements in batches of BLOCK_SIZE
   for (uint64_t batch_start = 0; batch_start < num_gemms;
@@ -329,7 +347,10 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
         group_size, offset_in_batch);
 
     // Add cumulative offset to get global offset
-    uint32_t offset_group = cumulative_offset + offset_in_batch;
+    // On first iteration, cumulative_offset is 0
+    uint32_t offset_group = (batch_start == 0)
+                                ? offset_in_batch
+                                : (cumulative_offset + offset_in_batch);
 
     // Determine the last active thread in this batch
     uint32_t batch_size =
@@ -341,66 +362,77 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
       cumulative_offset += offset_in_batch + group_size;
     }
 
-    if (idx >= num_gemms) {
-      return;
+    if (idx < num_gemms) {
+      auto& arg = sharedUserArgs[threadIdx.x];
+
+      arg.m = m;
+      arg.n = n;
+      arg.a = const_cast<void*>(static_cast<const void*>(
+          static_cast<const uint8_t*>(a) +
+          (static_cast<intptr_t>(offset_group * stride_a)
+           << log2_byte_width_elem_a)));
+      arg.b = const_cast<void*>(static_cast<const void*>(
+          static_cast<const uint8_t*>(b) +
+          (static_cast<intptr_t>(offset_group * stride_b)
+           << log2_byte_width_elem_b)));
+      arg.c = const_cast<void*>(
+          static_cast<void*>(static_cast<uint8_t*>(c) +
+                             (static_cast<intptr_t>(idx * batch * strideD2)
+                              << log2_byte_width_elem_d)));
+      arg.d = const_cast<void*>(
+          static_cast<void*>(static_cast<uint8_t*>(d) +
+                             (static_cast<intptr_t>(idx * batch * strideD2)
+                              << log2_byte_width_elem_d)));
+      arg.k = typed_group_sizes[idx];
+      arg.batch = batch;
+      arg.strideA1 = strideA1;
+      arg.strideA2 = strideA2;
+      arg.strideB1 = strideB1;
+      arg.strideB2 = strideB2;
+      // We only support C = D
+      arg.strideC1 = strideD1;
+      arg.strideC2 = strideD2;
+      arg.strideD1 = strideD1;
+      arg.strideD2 = strideD2;
+      arg.strideE1 = 0;
+      arg.strideE2 = 0;
+      // Set alpha to float(1) and beta to float(0).
+      // As these values are imposed in the gemm_rewritter pass anyway.
+      for (int8_t i = 0; i < 16; i++) {
+        arg.alpha[i] = 0;
+        arg.beta[i] = 0;
+      }
+      arg.alpha[2] = -128;
+      arg.alpha[3] = 63;
+      arg.scaleA = nullptr;
+      arg.scaleB = nullptr;
+      arg.scaleC = nullptr;
+      arg.scaleD = nullptr;
+      arg.scaleAlphaVec = nullptr;
+      arg.bias = nullptr;
+      arg.biasType = 0;
+      arg.e = nullptr;
+      arg.act0 = 0.0;
+      arg.act1 = 0.0;
+      arg.activationType = 0;
     }
 
-    auto& arg = sharedUserArgs[threadIdx.x];
+    __barrier(__CLK_LOCAL_MEM_FENCE);
 
-    arg.m = m;
-    arg.n = n;
-    arg.a = const_cast<void*>(static_cast<const void*>(
-        static_cast<const uint8_t*>(a) +
-        ((offset_group * stride_a) << log2_byte_width_elem_a)));
-    arg.b = const_cast<void*>(static_cast<const void*>(
-        static_cast<const uint8_t*>(b) +
-        ((offset_group * stride_b) << log2_byte_width_elem_b)));
-    arg.c = const_cast<void*>(static_cast<void*>(
-        static_cast<uint8_t*>(c) +
-        ((idx * batch * strideD2) << log2_byte_width_elem_d)));
-    arg.d = const_cast<void*>(static_cast<void*>(
-        static_cast<uint8_t*>(d) +
-        ((idx * batch * strideD2) << log2_byte_width_elem_d)));
-    arg.k = typed_group_sizes[idx];
-    arg.batch = batch;
-    arg.strideA1 = strideA1;
-    arg.strideA2 = strideA2;
-    arg.strideB1 = strideB1;
-    arg.strideB2 = strideB2;
-    // We only support C = D
-    arg.strideC1 = strideD1;
-    arg.strideC2 = strideD2;
-    arg.strideD1 = strideD1;
-    arg.strideD2 = strideD2;
-    arg.strideE1 = 0;
-    arg.strideE2 = 0;
-    // Set alpha to float(1) and beta to float(0).
-    // As these values are imposed in the gemm_rewritter pass anyway.
-    for (int8_t i = 0; i < 16; i++) {
-      arg.alpha[i] = 0;
-      arg.beta[i] = 0;
+    // Copy from shared memory to global memory with coalesced 16-byte writes
+    // Each thread writes 16 bytes (4 x int32) consecutively
+    constexpr size_t BYTES_PER_THREAD = 16;
+
+    size_t total_bytes = batch_size * sizeof(hipblaslt_ext::UserArguments);
+    uint8_t* src_ptr = reinterpret_cast<uint8_t*>(sharedUserArgs);
+    uint8_t* dest_ptr = reinterpret_cast<uint8_t*>(&dest_args[batch_start]);
+
+    // Each thread copies BYTES_PER_THREAD consecutive bytes
+    for (size_t offset = threadIdx.x * BYTES_PER_THREAD; offset < total_bytes;
+         offset += BLOCK_SIZE * BYTES_PER_THREAD) {
+      size_t bytes_to_copy = min(BYTES_PER_THREAD, total_bytes - offset);
+      memcpy(&dest_ptr[offset], &src_ptr[offset], bytes_to_copy);
     }
-    arg.alpha[2] = -128;
-    arg.alpha[3] = 63;
-    arg.scaleA = nullptr;
-    arg.scaleB = nullptr;
-    arg.scaleC = nullptr;
-    arg.scaleD = nullptr;
-    arg.scaleAlphaVec = nullptr;
-    arg.bias = nullptr;
-    arg.biasType = 0;
-    arg.e = nullptr;
-    arg.act0 = 0.0;
-    arg.act1 = 0.0;
-    arg.activationType = 0;
-
-    // Copy from shared memory to global memory
-    dest_args[idx] = arg;
-    __syncthreads();
-  }
-
-  if (threadIdx.x == 0) {
-    delete[] sharedUserArgs;
   }
 }
 
@@ -413,20 +445,23 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
     bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
     uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
     uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
+  __builtin_assume(num_gemms != 0);
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
 
-  // Shared memory for BlockScan and cumulative offset
-  __shared__
-      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage scan_temp;
-  __shared__ uint32_t cumulative_offset;
-  __shared__ hipblaslt_ext::UserArguments* sharedUserArgs;
+  // Dynamic shared memory - reused for both BlockScan and UserArguments
+  extern __shared__ uint8_t shared_mem[];
 
-  // Initialize cumulative offset
-  if (threadIdx.x == 0) {
-    cumulative_offset = 0;
-    sharedUserArgs = new hipblaslt_ext::UserArguments[num_gemms];
-  }
-  __syncthreads();
+  // Alias for BlockScan temporary storage (used first)
+  auto& scan_temp = *reinterpret_cast<
+      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage*>(
+      shared_mem);
+
+  // Alias for UserArguments array (used after BlockScan)
+  auto* sharedUserArgs =
+      reinterpret_cast<hipblaslt_ext::UserArguments*>(shared_mem);
+
+  // Static shared memory for cumulative offset
+  __shared__ uint32_t cumulative_offset;
 
   // Process all elements in batches of BLOCK_SIZE
   for (uint64_t batch_start = 0; batch_start < num_gemms;
@@ -442,7 +477,10 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
         group_size, offset_in_batch);
 
     // Add cumulative offset to get global offset
-    uint32_t offset_group = cumulative_offset + offset_in_batch;
+    // On first iteration, cumulative_offset is 0
+    uint32_t offset_group = (batch_start == 0)
+                                ? offset_in_batch
+                                : (cumulative_offset + offset_in_batch);
 
     // Determine the last active thread in this batch
     uint32_t batch_size =
@@ -455,66 +493,77 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
       cumulative_offset += offset_in_batch + group_size;
     }
 
-    if (idx >= num_gemms) {
-      return;
+    if (idx < num_gemms) {
+      auto& arg = sharedUserArgs[threadIdx.x];
+
+      arg.m = m;
+      arg.n = n;
+      arg.a = const_cast<void*>(static_cast<const void*>(
+          static_cast<const uint8_t*>(a) +
+          (static_cast<intptr_t>(offset_group * stride_a)
+           << log2_byte_width_elem_a)));
+      arg.b = const_cast<void*>(static_cast<const void*>(
+          static_cast<const uint8_t*>(b) +
+          (static_cast<intptr_t>(offset_group * stride_b)
+           << log2_byte_width_elem_b)));
+      arg.c = static_cast<void*>(
+          static_cast<uint8_t*>(c) +
+          (static_cast<intptr_t>(offset_group * output_stride_ragged_dim)
+           << log2_byte_width_elem_d));
+      arg.d = static_cast<void*>(
+          static_cast<uint8_t*>(d) +
+          (static_cast<intptr_t>(offset_group * output_stride_ragged_dim)
+           << log2_byte_width_elem_d));
+      arg.k = k;
+      arg.batch = typed_group_sizes[idx];
+      arg.strideA1 = strideA1;
+      arg.strideA2 = strideA2;
+      arg.strideB1 = strideB1;
+      arg.strideB2 = strideB2;
+      // We only support C = D
+      arg.strideC1 = strideD1;
+      arg.strideC2 = strideD2;
+      arg.strideD1 = strideD1;
+      arg.strideD2 = strideD2;
+      arg.strideE1 = 0;
+      arg.strideE2 = 0;
+      // Set alpha to float(1) and beta to float(0).
+      // As these values are imposed in the gemm_rewritter pass anyway.
+      for (int8_t i = 0; i < 16; i++) {
+        arg.alpha[i] = 0;
+        arg.beta[i] = 0;
+      }
+      arg.alpha[2] = -128;
+      arg.alpha[3] = 63;
+      arg.scaleA = nullptr;
+      arg.scaleB = nullptr;
+      arg.scaleC = nullptr;
+      arg.scaleD = nullptr;
+      arg.scaleAlphaVec = nullptr;
+      arg.bias = nullptr;
+      arg.biasType = 0;
+      arg.e = nullptr;
+      arg.act0 = 0.0;
+      arg.act1 = 0.0;
+      arg.activationType = 0;
     }
 
-    auto& arg = sharedUserArgs[threadIdx.x];
+    __barrier(__CLK_LOCAL_MEM_FENCE);
 
-    arg.m = m;
-    arg.n = n;
-    arg.a = const_cast<void*>(static_cast<const void*>(
-        static_cast<const uint8_t*>(a) +
-        ((offset_group * stride_a) << log2_byte_width_elem_a)));
-    arg.b = const_cast<void*>(static_cast<const void*>(
-        static_cast<const uint8_t*>(b) +
-        ((offset_group * stride_b) << log2_byte_width_elem_b)));
-    arg.c = static_cast<void*>(
-        static_cast<uint8_t*>(c) +
-        ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
-    arg.d = static_cast<void*>(
-        static_cast<uint8_t*>(d) +
-        ((offset_group * output_stride_ragged_dim) << log2_byte_width_elem_d));
-    arg.k = k;
-    arg.batch = typed_group_sizes[idx];
-    arg.strideA1 = strideA1;
-    arg.strideA2 = strideA2;
-    arg.strideB1 = strideB1;
-    arg.strideB2 = strideB2;
-    // We only support C = D
-    arg.strideC1 = strideD1;
-    arg.strideC2 = strideD2;
-    arg.strideD1 = strideD1;
-    arg.strideD2 = strideD2;
-    arg.strideE1 = 0;
-    arg.strideE2 = 0;
-    // Set alpha to float(1) and beta to float(0).
-    // As these values are imposed in the gemm_rewritter pass anyway.
-    for (int8_t i = 0; i < 16; i++) {
-      arg.alpha[i] = 0;
-      arg.beta[i] = 0;
+    // Copy from shared memory to global memory with coalesced 16-byte writes
+    // Each thread writes 16 bytes (4 x int32) consecutively
+    constexpr size_t BYTES_PER_THREAD = 16;
+
+    size_t total_bytes = batch_size * sizeof(hipblaslt_ext::UserArguments);
+    uint8_t* src_ptr = reinterpret_cast<uint8_t*>(sharedUserArgs);
+    uint8_t* dest_ptr = reinterpret_cast<uint8_t*>(&dest_args[batch_start]);
+
+    // Each thread copies BYTES_PER_THREAD consecutive bytes
+    for (size_t offset = threadIdx.x * BYTES_PER_THREAD; offset < total_bytes;
+         offset += BLOCK_SIZE * BYTES_PER_THREAD) {
+      size_t bytes_to_copy = min(BYTES_PER_THREAD, total_bytes - offset);
+      memcpy(&dest_ptr[offset], &src_ptr[offset], bytes_to_copy);
     }
-    arg.alpha[2] = -128;
-    arg.alpha[3] = 63;
-    arg.scaleA = nullptr;
-    arg.scaleB = nullptr;
-    arg.scaleC = nullptr;
-    arg.scaleD = nullptr;
-    arg.scaleAlphaVec = nullptr;
-    arg.bias = nullptr;
-    arg.biasType = 0;
-    arg.e = nullptr;
-    arg.act0 = 0.0;
-    arg.act1 = 0.0;
-    arg.activationType = 0;
-
-    // Copy from shared memory to global memory
-    dest_args[idx] = arg;
-    __syncthreads();
-  }
-
-  if (threadIdx.x == 0) {
-    delete[] sharedUserArgs;
   }
 }
 
@@ -558,8 +607,16 @@ void GroupGemmUpdateArgs(
   if (must_swap_operands) {
     std::swap(stride_a, stride_b);
   }
-  hipLaunchKernelGGL(kernel, 1, block_sz, 0, stream, args, a, b, c, d,
-                     group_sizes, log2_byte_width_elem_a,
+
+  // Calculate dynamic shared memory size as max of BlockScan temp storage and
+  // UserArguments array
+  size_t scan_temp_size =
+      sizeof(typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage);
+  size_t user_args_size = block_sz * sizeof(hipblaslt_ext::UserArguments);
+  size_t shared_mem_size = max(scan_temp_size, user_args_size);
+
+  hipLaunchKernelGGL(kernel, 1, block_sz, shared_mem_size, stream, args, a, b,
+                     c, d, group_sizes, log2_byte_width_elem_a,
                      log2_byte_width_elem_b, log2_byte_width_elem_d, stride_a,
                      stride_b, output_stride_ragged_dim, must_swap_operands, m,
                      n, k, batch, strideA1, strideA2, strideB1, strideB2,
