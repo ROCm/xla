@@ -130,6 +130,8 @@ class DotAlgorithmSupportTest
   }
 };
 
+using PC = PrecisionConfig;
+
 // A parametrized test that checks if an algorithm is supported, with the given
 // input and output storage types, from a given cuda capability.
 TEST_P(DotAlgorithmSupportTest, AlgorithmIsSupportedFromCudaCapability) {
@@ -162,7 +164,10 @@ TEST_P(DotAlgorithmSupportTest, AlgorithmIsSupportedFromCudaCapability) {
     is_algorithm_supported =
         ccc->SupportsAllFeaturesOf(params.min_cuda_capability);
   } else if (const auto* rcc = gpu_cc.rocm_compute_capability()) {
-    is_algorithm_supported = rcc->gfx9_mi100_or_later();
+    is_algorithm_supported = rcc->gfx9_mi100_or_later() &&
+                             !(rcc->gfx9_mi350() &&
+                             (params.algorithm == PC::ALG_DOT_TF32_TF32_F32 ||
+                              params.algorithm == PC::ALG_DOT_TF32_TF32_F32_X3));
     if (GetDeviceDescription().runtime_version() < params.min_rocm_version &&
         (params.lhs_storage_type == F8E5M2 ||
          params.lhs_storage_type == F8E4M3FN ||
@@ -191,7 +196,6 @@ TEST_P(DotAlgorithmSupportTest, AlgorithmIsSupportedFromCudaCapability) {
   }
 }
 
-using PC = PrecisionConfig;
 using CC = se::CudaComputeCapability;
 
 INSTANTIATE_TEST_SUITE_P(
