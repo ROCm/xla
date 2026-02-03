@@ -75,14 +75,27 @@ absl::Status DoPotrfUnbatched(CholeskyParams* params, se::Stream* stream,
   int* info_base = static_cast<int*>(params->info_buffer.opaque());
 
   int64_t stride = params->n * params->n;
+  LOG(INFO) << "[DoPotrfUnbatched] n=" << params->n << ", batch_size=" << params->batch_size
+            << ", workspace_size=" << params->workspace_buffer.size() << " bytes ("
+            << (params->workspace_buffer.size() / sizeof(T)) << " elements)";
+  
   for (int64_t i = 0; i < params->batch_size; ++i) {
     se::DeviceMemory<T> a_data(
         se::DeviceMemoryBase(&a_base[i * stride], sizeof(T) * stride));
     se::DeviceMemory<int> info_data(
         se::DeviceMemoryBase(&info_base[i], sizeof(int)));
     se::DeviceMemory<T> workspace_data(params->workspace_buffer);
-    TF_RETURN_IF_ERROR(context.Potrf(params->uplo, params->n, a_data, params->n,
-                                     info_data, workspace_data));
+    
+    LOG(INFO) << "[DoPotrfUnbatched] Batch " << i << ": BEFORE Calling context.Potrf() with workspace "
+              << workspace_data.size() << " bytes (" << workspace_data.ElementCount() << " elements)";
+    
+    auto status = context.Potrf(params->uplo, params->n, a_data, params->n,
+                                info_data, workspace_data);
+    
+    LOG(INFO) << "[DoPotrfUnbatched] Batch " << i << ": AFTER context.Potrf(), status=" 
+              << (status.ok() ? "OK" : status.ToString());
+    
+    TF_RETURN_IF_ERROR(status);
   }
   return absl::OkStatus();
 }
@@ -149,6 +162,12 @@ CholeskyThunk::CholeskyThunk(
       solver_context_creator_(std::move(solver_context_creator)) {}
 
 absl::Status CholeskyThunk::ExecuteOnStream(const ExecuteParams& params) {
+  LOG(INFO) << "[CholeskyThunk::ExecuteOnStream] type=" << PrimitiveType_Name(type_)
+            << " uplo=" << se::blas::UpperLowerString(uplo_)
+            << " batch_size=" << batch_size_ << " n=" << n_
+            << " a=" << a_buffer_.ToString()
+            << " workspace=" << workspace_buffer_.ToString()
+            << " info=" << info_buffer_.ToString();
   VLOG(3) << "type=" << PrimitiveType_Name(type_)
           << " uplo=" << se::blas::UpperLowerString(uplo_)
           << " batch_size=" << batch_size_ << " n=" << n_
@@ -162,6 +181,10 @@ absl::Status CholeskyThunk::ExecuteOnStream(const ExecuteParams& params) {
       params.buffer_allocations->GetDeviceAddress(info_buffer_);
   se::DeviceMemoryBase workspace_buffer =
       params.buffer_allocations->GetDeviceAddress(workspace_buffer_);
+  
+  LOG(INFO) << "[CholeskyThunk] Workspace buffer size: " << workspace_buffer.size() 
+            << " bytes (" << (workspace_buffer.size() / sizeof(float)) << " floats for F32)";
+  
   CholeskyParams cholesky_params{n_,       batch_size_,      uplo_,
                                  a_buffer, workspace_buffer, info_buffer};
   thread_local absl::StatusOr<
