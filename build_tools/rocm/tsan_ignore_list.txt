@@ -19,6 +19,8 @@ race:xla::LocalDeviceState::ThenRelease
 race:tsl::AsyncValue::NotifyAvailable
 race:DoHostCallbackWithStatus
 race:xla::EventPool::Handle::Handle
+race:absl::*::internal_any_invocable::CoreImpl*::CoreImpl
+race:xla::GpuAsyncHostToDeviceTransferManager::TransferRawDataToSubBuffer
 
 # To be fixed
 race:lld::lldMain
