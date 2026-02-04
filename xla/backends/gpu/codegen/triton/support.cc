@@ -363,8 +363,6 @@ bool IsSupportedDotAlgorithm(PrecisionConfig::Algorithm algorithm,
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32:
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X3:
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X6:
-    case PrecisionConfig::ALG_DOT_TF32_TF32_F32:
-    case PrecisionConfig::ALG_DOT_TF32_TF32_F32_X3:
     case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X9:
       if (!gpu_version.IsRocm()) {
         return true;
@@ -372,6 +370,13 @@ bool IsSupportedDotAlgorithm(PrecisionConfig::Algorithm algorithm,
       [[fallthrough]];
     case PrecisionConfig::ALG_DOT_BF16_BF16_BF16:
       if (gpu_version.IsRocm()) {
+        return true;
+      }
+      return false;
+    case PrecisionConfig::ALG_DOT_TF32_TF32_F32:
+    case PrecisionConfig::ALG_DOT_TF32_TF32_F32_X3:
+      if (!(gpu_version.IsRocm() && gpu_version.rocm_compute_capability()
+                                       ->gfx9_mi350())) {
         return true;
       }
       [[fallthrough]];
