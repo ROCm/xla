@@ -15,6 +15,7 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <thread>
 
 #include "absl/base/casts.h"
 #include "absl/log/log.h"
@@ -131,9 +132,14 @@ static CUstream AsCudaStream(se::Stream* stream) {
       reduce, TYPENAME, TYPE, team, (TYPE*)source_ptr, (TYPE*)dest_ptr, count, \
       gpu_stream, reduction_kind);
 
-#define CALL_NVSHMEM_P2P(op, TYPENAME, TYPE, pe, source_ptr, dest_ptr,    \
+#define CALL_NVSHMEM_P2P(op, ...) CALL_NVSHMEM_P2P_##op(__VA_ARGS__)
+
+#define CALL_NVSHMEM_P2P_get(...) \
+    std::this_thread::sleep_for(std::chrono::seconds(5))
+
+#define CALL_NVSHMEM_P2P_put(TYPENAME, TYPE, pe, source_ptr, dest_ptr,    \
                          num_elements, stream)                            \
-  nvshmemx_##TYPENAME##_##op##_nbi_on_stream(                             \
+  nvshmemx_##TYPENAME##_put_nbi_on_stream(                             \
       (TYPE*)dest_ptr, (const TYPE*)source_ptr, num_elements, pe.value(), \
       AsCudaStream(stream))
 
@@ -377,10 +383,10 @@ absl::Status NvshmemCommunicator::P2P(absl::string_view op_name,
     case PrimitiveType::F32:
       if (op_name == "send") {
         CALL_NVSHMEM_P2P(put, float, float, peer, source_ptr, dest_ptr, count,
-                         stream);
+                          stream);
       } else {
         CALL_NVSHMEM_P2P(get, float, float, peer, source_ptr, dest_ptr, count,
-                         stream);
+                          stream);
       }
       break;
     case PrimitiveType::F16:
