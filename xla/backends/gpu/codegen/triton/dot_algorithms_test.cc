@@ -413,6 +413,11 @@ TEST_F(BlasAlgorithmTest, Algorithm_TF32_TF32_F32_X3) {
   // We check that the algorithm is propagated to the BLAS call.
   // We also check that the kernel name matches the algorithm for Ampere.
 
+  if ((GpuComputeComp().IsRocm() && GpuComputeComp().
+        rocm_compute_capability()->
+        gfx9_mi350())) {
+    GTEST_SKIP() << "Algorithm_TF32_TF32_F32_X3 not supported on gfx950";
+  }
   constexpr absl::string_view kHloText = R"(
     HloModule Algorithm_TF32_TF32_F32_X3
 
@@ -1042,6 +1047,17 @@ class NumericTestsForBlas : public BlasAlgorithmTest,
   )";
 
  protected:
+   void SetUp() override {
+    auto algorithm = GetParam();
+    if ((GpuComputeComp().IsRocm() &&
+          GpuComputeComp().rocm_compute_capability()->gfx9_mi350()) &&
+        (algorithm == PC::ALG_DOT_TF32_TF32_F32_X3 ||
+          algorithm == PC::ALG_DOT_TF32_TF32_F32)) {
+      GTEST_SKIP() << AlgorithmToString(GetParam()) <<
+        " not supported on ROCM and gfx950.";
+    }
+  }
+
   std::string algorithm_;
 };
 
@@ -1061,6 +1077,16 @@ class NumericTestsForTriton : public TritonAlgorithmTest,
       R"(CHECK: __triton_nested_gemm_fusion)";
 
  private:
+  void SetUp() override {
+    auto algorithm = GetParam();
+    if ((GpuComputeComp().IsRocm() && GpuComputeComp().
+         rocm_compute_capability()->gfx9_mi350()) &&
+        (algorithm == PC::ALG_DOT_TF32_TF32_F32_X3 ||
+         algorithm == PC::ALG_DOT_TF32_TF32_F32)) {
+      GTEST_SKIP() << AlgorithmToString(GetParam()) <<
+        " not supported on ROCM and gfx950.";
+    }
+  }
   static constexpr absl::string_view kHloTextTemplate = R"(
     HloModule %s
 
@@ -1524,8 +1550,6 @@ TEST_P(TritonAndBlasSupportForDifferentTensorSizes,
   auto result_or_status = run("triton", triton_options_);
   switch (GetParam()) {
     case PC::ALG_UNSET:
-    case PC::ALG_DOT_TF32_TF32_F32:
-    case PC::ALG_DOT_TF32_TF32_F32_X3:
     case PC::ALG_DOT_BF16_BF16_F32:
     case PC::ALG_DOT_BF16_BF16_F32_X3:
     case PC::ALG_DOT_F32_F32_F32:
@@ -1546,6 +1570,20 @@ TEST_P(TritonAndBlasSupportForDifferentTensorSizes,
             << "failed to compile " << algorithm_;
         EXPECT_TRUE(result_or_status.value())
             << "wrong result for " << algorithm_;
+      }
+      break;
+    case PC::ALG_DOT_TF32_TF32_F32:
+    case PC::ALG_DOT_TF32_TF32_F32_X3:
+      if (!(GpuComputeComp().IsRocm() && GpuComputeComp().
+                                         rocm_compute_capability()->
+                                         gfx9_mi350())) {
+      ASSERT_TRUE(result_or_status.status().ok())
+          << "failed to compile " << algorithm_;
+      EXPECT_TRUE(result_or_status.value())
+          << "wrong result for " << algorithm_;
+      } else {
+        EXPECT_EQ(result_or_status.status().code(),
+                  absl::StatusCode::kUnimplemented);
       }
       break;
     case PC::ALG_DOT_F64_F64_F64:
