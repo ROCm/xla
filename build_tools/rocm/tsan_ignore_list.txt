@@ -15,6 +15,11 @@ race:xla::RawSEDeviceMemory
 race:xla::gpu::AllocateDestinationBuffer
 race:xla::LocalDeviceState::ThenRelease
 
+# False positives due to rocm
+race:tsl::AsyncValue::NotifyAvailable
+race:DoHostCallbackWithStatus
+race:xla::EventPool::Handle::Handle
+
 # To be fixed
 race:lld::lldMain
 race:llvm::*
@@ -25,7 +30,4 @@ race:xla::Service::TransferFromOutfeed*
 race:xla::gpu::OutfeedManager::TransferLiteralFromOutfeed*
 race:xla::ShapeUtil::MakeShape*
 race:xla::gpu::HostExecuteStartThunk::ExecuteOnStream*
-race:xla::HloRunnerPjRt::ExecuteReplicatedImpl
-race:tsl::AsyncValue::NotifyAvailable
-race:DoHostCallbackWithStatus
-race:xla::EventPool::Handle::Handle
+race:xla::HloRunnerPjRt::ExecuteReplicatedImp
