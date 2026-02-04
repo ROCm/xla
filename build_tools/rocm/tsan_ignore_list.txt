@@ -25,7 +25,6 @@ race:xla::GpuAsyncHostToDeviceTransferManager::TransferRawDataToSubBuffer
 # To be fixed
 race:lld::lldMain
 race:llvm::*
-race:xla::MutableLiteralBase::~MutableLiteralBase*
 race:xla::LocalDeviceState::AllocateAndRecordEvent*
 race:xla::HloRunnerPjRt::TransferLiteralsFromDevice*
 race:xla::Service::TransferFromOutfeed*
