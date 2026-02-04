@@ -165,6 +165,36 @@ namespace rocm {
 
 constexpr int BLOCK_SIZE = 256;
 
+// Inline device function for copying data from shared memory to global memory
+// Uses vectorized uint4 copy for efficiency, with fallback for remaining bytes
+__device__ __forceinline__ void copy_shared_to_global(void* shared_src,
+                                                      void* global_dest,
+                                                      size_t total_bytes) {
+  size_t count_uint4 = total_bytes / sizeof(uint4);
+
+  // Vectorized copy using uint4 (16 bytes per iteration)
+  if (count_uint4 > 0) {
+    uint4* src_ptr = reinterpret_cast<uint4*>(shared_src);
+    uint4* dest_ptr = reinterpret_cast<uint4*>(global_dest);
+
+    for (size_t i = threadIdx.x; i < count_uint4; i += blockDim.x) {
+      dest_ptr[i] = src_ptr[i];
+    }
+  }
+
+  // Handle remaining bytes (if total_bytes is not a multiple of 16)
+  size_t remaining_bytes = total_bytes % sizeof(uint4);
+  if (remaining_bytes > 0) {
+    uint8_t* src_ptr = reinterpret_cast<uint8_t*>(shared_src);
+    uint8_t* dest_ptr = reinterpret_cast<uint8_t*>(global_dest);
+    size_t offset = count_uint4 * sizeof(uint4);
+
+    for (size_t i = threadIdx.x; i < remaining_bytes; i += blockDim.x) {
+      dest_ptr[offset + i] = src_ptr[offset + i];
+    }
+  }
+}
+
 template <typename T>
 __global__ void SetUserArgsKernelRaggedInNonContractingDim(
     hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
@@ -289,20 +319,11 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
 
     __barrier(__CLK_LOCAL_MEM_FENCE);
 
-    // Copy from shared memory to global memory with coalesced 16-byte writes
-    // Each thread writes 16 bytes (4 x int32) consecutively
-    constexpr size_t BYTES_PER_THREAD = 16;
-
+    // Copy from shared memory to global memory
     size_t total_bytes = batch_size * sizeof(hipblaslt_ext::UserArguments);
-    uint8_t* src_ptr = reinterpret_cast<uint8_t*>(sharedUserArgs);
-    uint8_t* dest_ptr = reinterpret_cast<uint8_t*>(&dest_args[batch_start]);
-
-    // Each thread copies BYTES_PER_THREAD consecutive bytes
-    for (size_t offset = threadIdx.x * BYTES_PER_THREAD; offset < total_bytes;
-         offset += BLOCK_SIZE * BYTES_PER_THREAD) {
-      size_t bytes_to_copy = min(BYTES_PER_THREAD, total_bytes - offset);
-      memcpy(&dest_ptr[offset], &src_ptr[offset], bytes_to_copy);
-    }
+    copy_shared_to_global(sharedUserArgs, &dest_args[batch_start], total_bytes);
+    // Synchronize before next iteration to ensure copy is complete
+    __syncthreads();
   }
 }
 
@@ -419,20 +440,11 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
 
     __barrier(__CLK_LOCAL_MEM_FENCE);
 
-    // Copy from shared memory to global memory with coalesced 16-byte writes
-    // Each thread writes 16 bytes (4 x int32) consecutively
-    constexpr size_t BYTES_PER_THREAD = 16;
-
+    // Copy from shared memory to global memory
     size_t total_bytes = batch_size * sizeof(hipblaslt_ext::UserArguments);
-    uint8_t* src_ptr = reinterpret_cast<uint8_t*>(sharedUserArgs);
-    uint8_t* dest_ptr = reinterpret_cast<uint8_t*>(&dest_args[batch_start]);
-
-    // Each thread copies BYTES_PER_THREAD consecutive bytes
-    for (size_t offset = threadIdx.x * BYTES_PER_THREAD; offset < total_bytes;
-         offset += BLOCK_SIZE * BYTES_PER_THREAD) {
-      size_t bytes_to_copy = min(BYTES_PER_THREAD, total_bytes - offset);
-      memcpy(&dest_ptr[offset], &src_ptr[offset], bytes_to_copy);
-    }
+    copy_shared_to_global(sharedUserArgs, &dest_args[batch_start], total_bytes);
+    // Synchronize before next iteration to ensure copy is complete
+    __syncthreads();
   }
 }
 
@@ -550,20 +562,11 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
 
     __barrier(__CLK_LOCAL_MEM_FENCE);
 
-    // Copy from shared memory to global memory with coalesced 16-byte writes
-    // Each thread writes 16 bytes (4 x int32) consecutively
-    constexpr size_t BYTES_PER_THREAD = 16;
-
+    // Copy from shared memory to global memory
     size_t total_bytes = batch_size * sizeof(hipblaslt_ext::UserArguments);
-    uint8_t* src_ptr = reinterpret_cast<uint8_t*>(sharedUserArgs);
-    uint8_t* dest_ptr = reinterpret_cast<uint8_t*>(&dest_args[batch_start]);
-
-    // Each thread copies BYTES_PER_THREAD consecutive bytes
-    for (size_t offset = threadIdx.x * BYTES_PER_THREAD; offset < total_bytes;
-         offset += BLOCK_SIZE * BYTES_PER_THREAD) {
-      size_t bytes_to_copy = min(BYTES_PER_THREAD, total_bytes - offset);
-      memcpy(&dest_ptr[offset], &src_ptr[offset], bytes_to_copy);
-    }
+    copy_shared_to_global(sharedUserArgs, &dest_args[batch_start], total_bytes);
+    // Synchronize before next iteration to ensure copy is complete
+    __syncthreads();
   }
 }
 
