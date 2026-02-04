@@ -15,5 +15,6 @@ those to this list.
 
 temporary_patch_list = [
     "//third_party/triton:temporary/accelerateamdmatmul2.patch",
+    "//third_party/triton:temporary/test_analysis_visibility.patch",
     # Add new patches just above this line
 ]

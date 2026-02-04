@@ -15,6 +15,7 @@ limitations under the License.
 
 #include <string>
 
+#include "bin/RegisterTritonDialects.h"
 #include "llvm/Support/CommandLine.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -38,8 +39,7 @@ limitations under the License.
 #include "xla/codegen/xtile/ir/xtile_dialect.h"
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/device_description.h"
-#include "third_party/triton/bin/RegisterTritonDialects.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 
 namespace {
 
