@@ -1577,13 +1577,8 @@ Future<> PjRtStreamExecutorBuffer::ToLiteralHelper(
                 stage_shape.dimensions().size());
             auto staged = std::make_shared<Literal>(stage_shape);
 
-            // Explicitly construct MutableBorrowingLiteral before the async
-            // transfer to avoid a data race between reading the source
-            // literal's buffer pointer and the completion callback potentially
-            // triggering destruction of the source literal.
-            MutableBorrowingLiteral borrowing_staged(staged.get());
             transfer_manager->TransferLiteralFromDevice(
-                stream, shaped_buffer, borrowing_staged,
+                stream, shaped_buffer, staged.get(),
                 [transpose = std::move(transpose), promise, staged,
                  literal = std::move(literal)](absl::Status status) mutable {
                   if (status.ok()) {
@@ -1594,13 +1589,8 @@ Future<> PjRtStreamExecutorBuffer::ToLiteralHelper(
                 },
                 transfer_metadata_ptr);
           } else {
-            // Explicitly construct MutableBorrowingLiteral before the async
-            // transfer to avoid a data race between reading the source
-            // literal's buffer pointer and the completion callback potentially
-            // triggering destruction of the source literal.
-            MutableBorrowingLiteral borrowing_literal(literal);
             transfer_manager->TransferLiteralFromDevice(
-                stream, shaped_buffer, borrowing_literal,
+                stream, shaped_buffer, literal,
                 [promise](absl::Status status) mutable {
                   promise->Set(std::move(status));
                 },

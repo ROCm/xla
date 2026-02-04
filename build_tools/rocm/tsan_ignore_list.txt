@@ -16,11 +16,19 @@ race:xla::gpu::AllocateDestinationBuffer
 race:xla::LocalDeviceState::ThenRelease
 
 # False positives due to rocm
+# TSAN cannot track synchronization through HIP runtime callbacks
+# (hipLaunchHostFunc). The HIP runtime provides proper synchronization but
+# since libamdhip64.so is not compiled with TSAN instrumentation, TSAN
+# reports false positives on code paths that rely on HIP callback ordering.
 race:tsl::AsyncValue::NotifyAvailable
 race:DoHostCallbackWithStatus
 race:xla::EventPool::Handle::Handle
 race:absl::*::internal_any_invocable::CoreImpl*::CoreImpl
 race:xla::GpuAsyncHostToDeviceTransferManager::TransferRawDataToSubBuffer
+# MutableBorrowingLiteral construction reads from source literal, and the
+# literal destruction happens after HIP callback signals completion. TSAN
+# can't see the happens-before relationship through hipLaunchHostFunc.
+race:xla::MutableLiteralBase::~MutableLiteralBase*
 
 # To be fixed
 race:lld::lldMain
