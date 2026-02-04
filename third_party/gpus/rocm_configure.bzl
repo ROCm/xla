@@ -651,6 +651,9 @@ def _create_local_rocm_repository(repository_ctx):
             "%{rocm_gpu_architectures}": str(rocm_config.amdgpu_targets),
             "%{rocm_version_number}": str(rocm_version_number),
             "%{rocm_hipblaslt}": "True",
+            "%{rocm_root}": "external/local_config_rocm/" + str(rocm_config.rocm_toolkit_path),
+            "%{rocr_runtime_library}": "hsa-runtime64",
+            "%{hip_runtime_library}": "amdhip64",
         },
     )
 
@@ -744,7 +747,7 @@ def _create_local_rocm_repository(repository_ctx):
             "%{crosstool_verbose}": _crosstool_verbose(repository_ctx),
             "%{gcc_host_compiler_path}": str(cc),
             "%{rocm_amdgpu_targets}": ",".join(
-                ["\"%s\"" % c for c in rocm_config.amdgpu_targets],
+                ["%s" % c for c in rocm_config.amdgpu_targets],
             ),
             "%{tmpdir}": get_host_environ(
                 repository_ctx,
