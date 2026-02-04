@@ -540,7 +540,7 @@ absl::Status ExecuteThunksImpl(const DebugOptions* debug_options,
       debug_options
           ? debug_options->xla_gpu_enable_highest_priority_async_stream()
           : false;
-
+  bool is_dry_run = run_options->run_options().dry_run();
   se::Stream* main_stream = run_options->stream();
   se::StreamExecutor* executor = main_stream->parent();
   stream_executor::StreamPriority stream_priority =
@@ -641,7 +641,7 @@ absl::Status ExecuteThunksImpl(const DebugOptions* debug_options,
   se::Stream* command_buffer_trace_stream = nullptr;
   std::vector<StreamPool::Ptr> async_comms_streams_owner;
   StreamPool::Ptr borrowed_command_buffer_trace_stream;
-  if (run_options->HasStreamBorrower()) {
+  if (run_options->HasStreamBorrower() && !is_dry_run) {
     ASSIGN_OR_RETURN(
         async_comms_streams_owner,
         run_options->BorrowStreams(executor->device_ordinal(),
@@ -659,7 +659,7 @@ absl::Status ExecuteThunksImpl(const DebugOptions* debug_options,
   // Borrow streams for additional compute streams.
   std::vector<se::Stream*> additional_compute_streams;
   std::vector<StreamPool::Ptr> borrowed_compute_streams;
-  if (num_additional_compute_streams > 0) {
+  if (num_additional_compute_streams > 0 && !is_dry_run) {
     if (run_options->HasStreamBorrower()) {
       ASSIGN_OR_RETURN(
           borrowed_compute_streams,
@@ -755,7 +755,13 @@ absl::Status ExecuteThunksImpl(const DebugOptions* debug_options,
       AllFirstRendezvousCompleted(collective_cliques,
                                   collective_clique_requests.RequestedCliques(),
                                   module_name));
-
+  if(is_dry_run) {
+    VLOG(0) << "Dry run mode: skipping thunk initialization "
+        << " device_ordinal=" << run_options->device_ordinal()
+        << " module_name=" << module_name;
+    return absl::OkStatus();
+  }
+  
   ASSIGN_OR_RETURN(ScratchMemory scratch_memory,
                    AcquireScratchMemory(
                        collective_params, scratch_memory_requests,
@@ -765,6 +771,7 @@ absl::Status ExecuteThunksImpl(const DebugOptions* debug_options,
                    AcquireCollectiveMemory(
                        collective_params, collective_cliques,
                        collective_memory_requests, collective_memory_cache));
+  
   {  // Initialize thunks using prepared resources before execution.
     Thunk::InitializeParams initialize_params{
         executor,
@@ -947,14 +954,15 @@ absl::Status BarrierAfterExecutable(
     const ServiceExecutableRunOptions& run_options,
     const DebugOptions* absl_nullable debug_options, se::Stream& stream,
     const size_t num_participants) {
-  if (debug_options != nullptr &&
-      debug_options->xla_gpu_experimental_enable_nvshmem()) {
-    ASSIGN_OR_RETURN(auto* collectives, GetNvshmemCollectivesFromRegistry());
-    ASSIGN_OR_RETURN(std::unique_ptr<Communicator> nvshmem_comm,
-                     collectives->CreateCommunicator());
+  // if (debug_options != nullptr &&
+  //     debug_options->xla_gpu_experimental_enable_nvshmem()) {
+  //   ASSIGN_OR_RETURN(auto* collectives, GetNvshmemCollectivesFromRegistry());
+  //   ASSIGN_OR_RETURN(std::unique_ptr<Communicator> nvshmem_comm,
+  //                    collectives->CreateCommunicator());
 
-    RETURN_IF_ERROR(nvshmem_comm->Barrier(GpuCollectives::On(stream)));
-  } else {
+  //   RETURN_IF_ERROR(nvshmem_comm->Barrier(GpuCollectives::On(stream)));
+  // } else 
+  {
     RETURN_IF_ERROR(stream.BlockHostUntilDone());
 
     XLA_VLOG_DEVICE(1, run_options.device_ordinal()) << absl::StreamFormat(
@@ -1662,7 +1670,7 @@ absl::Status GpuExecutable::ExecuteThunks(
         {{"module_name", module_name_}});
   });
 
-  if (VLOG_IS_ON(5)) {
+  if (VLOG_IS_ON(5) && !run_options->run_options().dry_run()) {
     // Debug code to compare current allocation's address with previous run's
     // address, and report the allocation info if memory addressed changed.
     // Useful for identify in user's model if it is command buffer perf friendly

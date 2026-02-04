@@ -34,6 +34,7 @@ ROCR_RUNTIME_PATH = '%{rocm_root}/lib'
 ROCR_RUNTIME_LIBRARY = '%{rocr_runtime_library}'
 TMPDIR= '%{tmpdir}'
 VERBOSE = '%{crosstool_verbose}'=='1'
+AMDGPU_TARGETS = '%{rocm_amdgpu_targets}'
 
 def Log(s):
   print('gpus/crosstool: {0}'.format(s))
@@ -107,15 +108,13 @@ def GetHipccOptions(argv):
   """
 
   parser = ArgumentParser()
-  parser.add_argument('--offload-arch', nargs='*', action='append')
   # TODO find a better place for this
   parser.add_argument('-gline-tables-only', action='store_true')
 
   args, _ = parser.parse_known_args(argv)
 
   hipcc_opts = ' -gline-tables-only ' if args.gline_tables_only else ''
-  if args.offload_arch:
-    hipcc_opts = hipcc_opts + ' '.join(['--offload-arch=' + a for a in sum(args.offload_arch, [])])
+  hipcc_opts = hipcc_opts + ' --offload-arch=' + AMDGPU_TARGETS
 
   return hipcc_opts
 

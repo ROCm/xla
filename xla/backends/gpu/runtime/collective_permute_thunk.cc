@@ -385,6 +385,9 @@ absl::Status RunCollectivePermute(P2PConfig::SourceTargetRanks source_target,
       auto future = comm.CollectivePermute(
           src, dst, buf.element_type, buf.element_count, source_target.source,
           target_ranks, GpuCollectives::On(stream));
+      // Barrier is no-op for NCCL-based collectives, 
+      // but required for SDMA-based collectives
+      TF_RETURN_IF_ERROR(comm.Barrier(GpuCollectives::On(stream)));
       TF_RETURN_IF_ERROR(future.Await());
     }
   } else {
@@ -403,6 +406,9 @@ absl::Status RunCollectivePermute(P2PConfig::SourceTargetRanks source_target,
           }
           return absl::OkStatus();
         });
+    // Barrier is no-op for NCCL-based collectives, 
+    // but required for SDMA-based collectives
+    TF_RETURN_IF_ERROR(comm.Barrier(GpuCollectives::On(stream)));
     TF_RETURN_IF_ERROR(future.Await());
   }
 

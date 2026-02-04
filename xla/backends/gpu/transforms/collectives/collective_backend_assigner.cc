@@ -43,7 +43,9 @@ namespace {
 bool IsCollectiveOp(const HloInstruction* instr) {
   return HloPredicateIsOp<HloOpcode::kAllReduce, HloOpcode::kAllReduceStart,
                           HloOpcode::kCollectivePermute,
-                          HloOpcode::kCollectivePermuteStart>(instr);
+                          HloOpcode::kCollectivePermuteStart,
+                          HloOpcode::kAllGather,
+                          HloOpcode::kAllGatherStart>(instr);
 }
 
 bool IsCollectivePermuteOp(const HloInstruction* instr) {
@@ -102,7 +104,7 @@ absl::StatusOr<bool> AssignNvshmemBackend(
               << " threshold_in_bytes=" << threshold_in_bytes
               << " slice_size=" << slice_size;
       bool use_nvshmem =
-          (num_visible_devices_per_process == 1 ||
+          (/*num_visible_devices_per_process_ == 1*/true || // HACK HACK
            comm_type == GPUCommunicationType::SINGLE_PARTITION ||
            (slice_size > 0 &&
             IsIntraNVLinkDomain(module->config(), slice_size))) &&

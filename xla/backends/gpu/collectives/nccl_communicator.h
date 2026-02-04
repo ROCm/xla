@@ -156,6 +156,10 @@ class NcclCommunicator : public GpuCommunicator {
 
   se::StreamExecutor* stream_executor() const { return stream_executor_; }
 
+  absl::Status Barrier(const Executor& executor) final {
+    return absl::OkStatus();
+  }
+
  private:
   NcclCommunicator(se::StreamExecutor* stream_executor, ncclComm_t comm,
                    std::unique_ptr<tsl::Executor> executor,
