@@ -379,7 +379,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_nccl_collective_max_nchannels(0);
   opts.set_xla_gpu_nccl_p2p_max_nchannels(0);
   opts.set_xla_gpu_multi_streamed_windowed_einsum(true);
-  opts.set_xla_gpu_experimental_enable_cublaslt_swish_fusion(false);
+  opts.set_xla_gpu_experimental_enable_cublaslt_swish_fusion(true);
 
   opts.set_xla_gpu_experimental_stream_annotation(true);
   // Minimum combined size of matrices in matrix multiplication to
