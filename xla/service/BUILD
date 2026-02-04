@@ -1562,6 +1562,30 @@ cc_library(
 )
 
 cc_library(
+    name = "mori_ffi_custom_calls",
+    srcs = if_rocm_is_configured(["mori_ffi_custom_calls.cc"]),
+    deps = if_rocm_is_configured([
+       # "//xla:primitive_util",
+        "//xla:status_macros",
+        "//xla:xla_data_proto_cc",
+        "//xla/backends/gpu/collectives:gpu_collectives",
+        "//xla/backends/gpu/collectives:nvshmem_collectives",
+        "//xla/backends/gpu:ffi",
+        "//xla/core/collectives:communicator",
+        "//xla/core/collectives:rank_id",
+        "//xla/ffi",
+        "//xla/ffi:ffi_api",
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:stream",
+        "//xla/tsl/platform:errors",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
+    ]),
+    alwayslink = 1,
+)
+
+cc_library(
     name = "gpu_plugin_without_collectives",
     compatible_with = get_compatible_with_portable(),
     deps = [
@@ -1573,6 +1597,7 @@ cc_library(
         "//xla/service/gpu:nvptx_compiler",
         "//xla/stream_executor/cuda:stream_executor_cuda",
     ]) + if_rocm_is_configured([
+        ":mori_ffi_custom_calls",
         "//xla/service/gpu:amdgpu_compiler",
         "//xla/stream_executor/rocm:stream_executor_rocm",
     ]) + if_sycl_is_configured([

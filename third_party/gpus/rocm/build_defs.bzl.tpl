@@ -22,24 +22,6 @@ def select_threshold(value, threshold_dict):
 
     return result
 
-def rocm_default_copts():
-    """Default options for all ROCm compilations."""
-    return if_rocm(["-x", "rocm"] + %{rocm_extra_copts})
-
-def rocm_copts(opts = []):
-    """Gets the appropriate set of copts for (maybe) ROCm compilation.
-
-      If we're doing ROCm compilation, returns copts for our particular ROCm
-      compiler.  If we're not doing ROCm compilation, returns an empty list.
-
-      """
-    return rocm_default_copts() + select({
-        "//conditions:default": [],
-        "@local_config_rocm//rocm:using_hipcc": ([
-            "",
-        ]),
-    }) + if_rocm_is_configured(opts)
-
 def rocm_gpu_architectures():
     """Returns a list of supported GPU architectures."""
     return %{rocm_gpu_architectures}
@@ -84,11 +66,16 @@ def if_rocm_hipblaslt(x):
       return select({"//conditions:default": x})
     return select({"//conditions:default": []})
 
-def rocm_library(copts = [], deps = [], **kwargs):
+def rocm_library(copts = [], deps = [], linkopts = [], **kwargs):
     """Wrapper over cc_library which adds default ROCm options."""
     if "@local_config_rocm//rocm:rocm_headers" not in deps:
       deps.append("@local_config_rocm//rocm:rocm_headers")
-    cc_library(copts = rocm_default_copts() + copts, deps = deps, **kwargs)
+    cc_library(copts = if_rocm(["-x", "rocm"]) + copts, deps = deps, 
+       linkopts = [
+            "-l%{hip_runtime_library}",
+            "-l%{rocr_runtime_library}",
+            "-L%{rocm_root}/lib", 
+    ] + linkopts, **kwargs)
 
 def get_rbe_amdgpu_pool(is_single_gpu = False):
     return "%{single_gpu_rbe_pool}" if is_single_gpu else "%{multi_gpu_rbe_pool}"
