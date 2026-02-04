@@ -28,3 +28,4 @@ race:xla::gpu::HostExecuteStartThunk::ExecuteOnStream*
 race:xla::HloRunnerPjRt::ExecuteReplicatedImpl
 race:tsl::AsyncValue::NotifyAvailable
 race:DoHostCallbackWithStatus
+race:xla::EventPool::Handle::Handle
