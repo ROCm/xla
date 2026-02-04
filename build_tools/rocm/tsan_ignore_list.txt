@@ -26,3 +26,5 @@ race:xla::gpu::OutfeedManager::TransferLiteralFromOutfeed*
 race:xla::ShapeUtil::MakeShape*
 race:xla::gpu::HostExecuteStartThunk::ExecuteOnStream*
 race:xla::HloRunnerPjRt::ExecuteReplicatedImpl
+race:tsl::AsyncValue::NotifyAvailable
+race:DoHostCallbackWithStatus
