@@ -43,16 +43,76 @@ jobs:
   # Job 1: Generate the matrix specifically for POSTSUBMIT benchmarks
   # =================================================================
   generate_matrix:
-    name: Generate Postsubmit Matrix
-    # Condition: Run if manually dispatched OR if it's a push event to the rocm-jaxlib-v0.8.2 branch.
+    name: Generate Postsubmit Matrix (Mock ROCm)
+    runs-on: ubuntu-latest
+    outputs:
+      matrix_include_json: ${{ steps.set-matrix.outputs.matrix_include_json }}
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/rocm-jaxlib-v0.8.2')
-    uses: ./.github/workflows/generate_benchmark_matrix.yml
-    with:
-      workflow_type: 'POSTSUBMIT'
-      registry_file: 'xla/tools/benchmarks/registries/default_registry.yml'
-      checkout_ref: ${{ github.sha }} # On push/dispatch to rocm-jaxlib-v0.8.2, github.sha is the commit SHA
+    steps:
+      - name: Set ROCm Matrix
+        id: set-matrix
+        run: |
+          # Prebaked json for rocm Internal CI since we don't have Google's creds to generate the matrix properly
+          
+          read -r -d '' JSON_BLOCK << EOM
+          [
+            {
+              "benchmark_name": "gemma3_1b_flax_call",
+              "config_id": "gemma3_1b_flax_call_mi250_1h1d_postsubmit",
+              "description": "Gemma3 1b in Flax.",
+              "owner": "juliagmt-google@",
+              "hardware_category": "GPU_MI250",
+              "artifact_location": "https://storage.googleapis.com/xla-benchmarking-temp/gemma3_1b_flax_call.hlo",
+              "input_format": "HLO_TEXT",
+              "is_gcs_artifact": true,
+              "model_source_info": ["Gemma3 1B"],
+              "topology": {
+                "num_hosts": 1,
+                "num_devices_per_host": 1,
+                "multi_host": false,
+                "multi_device": false
+              },
+              "target_metrics": ["GPU_DEVICE_TIME", "GPU_DEVICE_MEMCPY_TIME"],
+              "workflow_type": "POSTSUBMIT",
+              "runtime_flags": ["--num_repeats=5"],
+              "xla_compilation_flags": [],
+              "github_labels": [],
+              "runner_label": "linux-mi250-4",
+              "container_image": "rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa"
+            },
+            {
+              "benchmark_name": "gemma2_2b_keras_jax",
+              "config_id": "gemma2_2b_keras_jax_mi250_1h1d_postsubmit",
+              "description": "Gemma2 2B in Keras.",
+              "owner": "juliagmt-google@",
+              "hardware_category": "GPU_MI250",
+              "artifact_location": "https://storage.googleapis.com/xla-benchmarking-temp/gemma2_2b_keras_jax.hlo",
+              "input_format": "HLO_TEXT",
+              "is_gcs_artifact": true,
+              "model_source_info": ["Gemma2 2B"],
+              "topology": {
+                "num_hosts": 1,
+                "num_devices_per_host": 1,
+                "multi_host": false,
+                "multi_device": false
+              },
+              "target_metrics": ["GPU_DEVICE_TIME", "GPU_DEVICE_MEMCPY_TIME"],
+              "workflow_type": "POSTSUBMIT",
+              "runtime_flags": ["--num_repeats=5"],
+              "xla_compilation_flags": [],
+              "github_labels": ["blocking_presubmit_test"],
+              "runner_label": "linux-mi250-4",
+              "container_image": "rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faat"
+            }
+          ]
+          EOM
+
+          # Minify JSON to a single line for GITHUB_OUTPUT safe usage
+          JSON_ONE_LINE=$(echo "$JSON_BLOCK" | jq -c .) || JSON_ONE_LINE=$(echo "$JSON_BLOCK" | tr -d '\n' | sed 's/ //g')
+          
+          echo "matrix_include_json=$JSON_ONE_LINE" >> "$GITHUB_OUTPUT"
 
   run_benchmarks:
     name: Run Benchmark (${{ matrix.benchmark_entry.config_id }}) # config_id will indicate the workflow type, e.g., '_postsubmit'
