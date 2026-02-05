@@ -56,7 +56,7 @@ jobs:
         run: |
           # Prebaked json for rocm Internal CI since we don't have Google's creds to generate the matrix properly
           
-          read -r -d '' JSON_BLOCK << EOM
+          read -r -d '' JSON_BLOCK << EOM || true
           [
             {
               "benchmark_name": "gemma3_1b_flax_call",
