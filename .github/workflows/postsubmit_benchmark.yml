@@ -104,7 +104,7 @@ jobs:
               "xla_compilation_flags": [],
               "github_labels": ["blocking_presubmit_test"],
               "runner_label": "linux-mi250-4",
-              "container_image": "rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faat"
+              "container_image": "rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa"
             }
           ]
           EOM
@@ -161,10 +161,6 @@ jobs:
       COMPARISON_SCRIPT_RELATIVE: .github/workflows/benchmarks/compare_with_baseline.py
 
     steps:
-      - name: "Wait For Connection"
-        uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
-        with:
-          halt-dispatch-input: ${{ inputs.halt-for-connection }}
 
       - name: Print Job Info & Set Full Paths in ENV
         run: |
@@ -261,26 +257,6 @@ jobs:
           bash "$RESOLVED_RUN_COMPARISON_SCRIPT" # This script calls the Python comparison script
           echo "Baseline comparison finished."
           echo "---------------------------------------------"
-
-      - name: Upload results.json directly to GCS
-        run: |
-          GCS_BUCKET="gs://openxla-postsubmit-transient"
-          RESULTS_JSON_FILE_PATH="${{ env.RESOLVED_OUTPUT_DIR }}/results.json"
-
-          # Check if the results file exists
-          if [ ! -f "$RESULTS_JSON_FILE_PATH" ]; then
-            echo "::error::results.json not found at $RESULTS_JSON_FILE_PATH"
-            exit 1
-          fi
-
-          # Construct a GCS object name
-          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          DATE_FOLDER=$(date +%Y%m%d)
-          COMMIT_SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-8)
-          GCS_OBJECT_NAME="${BENCHMARK_NAME}/${DATE_FOLDER}/${TIMESTAMP}_run_${WORKFLOW_RUN_ID}_commit_${COMMIT_SHA_SHORT}.json"
-
-          echo "Uploading $RESULTS_JSON_FILE_PATH to $GCS_BUCKET/$GCS_OBJECT_NAME"
-          gsutil cp "$RESULTS_JSON_FILE_PATH" "$GCS_BUCKET/$GCS_OBJECT_NAME"
 
       - name: Upload Benchmark Artifacts
         if: always()
