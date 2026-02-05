@@ -3,6 +3,7 @@
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@rules_python//python:defs.bzl", "py_binary")
+load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm_is_configured")
 load("//xla/tsl:package_groups.bzl", "DEFAULT_LOAD_VISIBILITY")
 load("//xla/tsl:tsl.bzl", "if_google", "if_oss")
 load("//xla/tsl:tsl.default.bzl", "if_cuda_tools")
@@ -326,11 +327,11 @@ def lit_test(
         srcs = tools,
         bin_dir = bin_dir,
         lib_dir = lib_dir,
-        deps = if_cuda_is_configured(
-            [
-                "//xla/stream_executor/cuda:all_runtime",
-            ],
-        ),
+        deps = if_cuda_is_configured([
+            "//xla/stream_executor/cuda:all_runtime",
+        ]) + if_rocm_is_configured([
+            "@local_config_rocm//rocm:rocm_smi_import",
+        ]),
         visibility = ["//visibility:private"],
         **kwargs
     )
