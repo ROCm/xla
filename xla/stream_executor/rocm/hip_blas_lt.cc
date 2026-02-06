@@ -201,6 +201,99 @@ absl::Status debug_print_userArgs(StreamExecutor *executor,
   return absl::OkStatus();
 }
 
+const char *HipblasOperationToString(hipblasOperation_t op) {
+  switch (op) {
+    case HIPBLAS_OP_N:
+      return "HIPBLAS_OP_N (Non-transpose)";
+    case HIPBLAS_OP_T:
+      return "HIPBLAS_OP_T (Transpose)";
+    case HIPBLAS_OP_C:
+      return "HIPBLAS_OP_C (Conjugate transpose)";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+const char *HipblasDataTypeToString(hipDataType type) {
+  switch (type) {
+    case HIP_R_16F:
+      return "HIP_R_16F (FP16)";
+    case HIP_R_32F:
+      return "HIP_R_32F (FP32)";
+    case HIP_R_64F:
+      return "HIP_R_64F (FP64)";
+    case HIP_R_16BF:
+      return "HIP_R_16BF (BF16)";
+    case HIP_R_8I:
+      return "HIP_R_8I (INT8)";
+    case HIP_R_32I:
+      return "HIP_R_32I (INT32)";
+    case HIP_C_32F:
+      return "HIP_C_32F (Complex FP32)";
+    case HIP_C_64F:
+      return "HIP_C_64F (Complex FP64)";
+#if TF_ROCM_VERSION >= 60000
+    case HIP_R_8F_E4M3_FNUZ:
+      return "HIP_R_8F_E4M3_FNUZ (FP8 E4M3)";
+    case HIP_R_8F_E5M2_FNUZ:
+      return "HIP_R_8F_E5M2_FNUZ (FP8 E5M2)";
+#endif
+#if TF_ROCM_VERSION >= 60300
+    case HIP_R_8F_E4M3:
+      return "HIP_R_8F_E4M3 (FP8 E4M3)";
+    case HIP_R_8F_E5M2:
+      return "HIP_R_8F_E5M2 (FP8 E5M2)";
+#endif
+    default:
+      return "UNKNOWN";
+  }
+}
+
+const char *HipblasComputeTypeToString(hipblasComputeType_t type) {
+  switch (type) {
+    case HIPBLAS_COMPUTE_16F:
+      return "HIPBLAS_COMPUTE_16F";
+    case HIPBLAS_COMPUTE_32F:
+      return "HIPBLAS_COMPUTE_32F";
+    case HIPBLAS_COMPUTE_64F:
+      return "HIPBLAS_COMPUTE_64F";
+    case HIPBLAS_COMPUTE_32I:
+      return "HIPBLAS_COMPUTE_32I";
+#if TF_ROCM_VERSION >= 60000
+    case HIPBLAS_COMPUTE_32F_FAST_16F:
+      return "HIPBLAS_COMPUTE_32F_FAST_16F";
+    case HIPBLAS_COMPUTE_32F_FAST_16BF:
+      return "HIPBLAS_COMPUTE_32F_FAST_16BF";
+    case HIPBLAS_COMPUTE_32F_FAST_TF32:
+      return "HIPBLAS_COMPUTE_32F_FAST_TF32";
+#endif
+    default:
+      return "UNKNOWN";
+  }
+}
+
+absl::Status debug_print_problem_type(
+    const hipblaslt_ext::GemmProblemType &problem) {
+  std::cout << "=== GemmProblemType Debug Info ===" << std::endl;
+  std::cout << "Operation A: " << HipblasOperationToString(problem.getOpA())
+            << std::endl;
+  std::cout << "Operation B: " << HipblasOperationToString(problem.getOpB())
+            << std::endl;
+  std::cout << "Type A: " << HipblasDataTypeToString(problem.getTypeA())
+            << std::endl;
+  std::cout << "Type B: " << HipblasDataTypeToString(problem.getTypeB())
+            << std::endl;
+  std::cout << "Type C: " << HipblasDataTypeToString(problem.getTypeC())
+            << std::endl;
+  std::cout << "Type D: " << HipblasDataTypeToString(problem.getTypeD())
+            << std::endl;
+  std::cout << "Compute Type: "
+            << HipblasComputeTypeToString(problem.getTypeCompute())
+            << std::endl;
+  std::cout << "===================================" << std::endl;
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 absl::Status BlasLt::Init() {
@@ -700,32 +793,20 @@ absl::Status BlasLt::MatmulPlan::ExecuteRegularMatmul(
 auto BlasLt::GetGroupedMatmulPlan(gpu::GroupedGemmConfig &cfg,
                                   const std::vector<Epilogue> &epilogues) const
     -> absl::StatusOr<MatmulPlanPtr> {
-  auto lda = cfg.lhs_leading_dim_stride;
-  auto ldb = cfg.rhs_leading_dim_stride;
-  auto ldc = cfg.c_leading_dim_stride;
-  auto ldd = cfg.output_leading_dim_stride;
-
-  auto m = cfg.m, n = cfg.n;
-  auto type_a = cfg.type_a, type_b = cfg.type_b;
-  auto batch_stride_a = (m * cfg.k);
-  auto batch_stride_b = (n * cfg.k);
+  auto batch_stride_a = (cfg.m * cfg.k);
+  auto batch_stride_b = (cfg.n * cfg.k);
   if (cfg.ragged_mode == gpu::RaggedDotMode::kRaggedNonContracting) {
-    batch_stride_b *= cfg.group_count;
-  }
-
-  auto trans_a = cfg.trans_a;
-  auto trans_b = cfg.trans_b;
-  if (cfg.must_swap_operands) {
-    std::swap(type_a, type_b);
-    std::swap(m, n);
-    std::swap(batch_stride_a, batch_stride_b);
-    std::swap(lda, ldb);
+    if (cfg.must_swap_operands) {
+      batch_stride_a *= cfg.group_count;
+    } else {
+      batch_stride_b *= cfg.group_count;
+    }
   }
 
   auto compute_type = cfg.compute_type;
   if (!compute_type) {  // obtain compute_type unless provided by the user
     TF_ASSIGN_OR_RETURN(xla::PrimitiveType primitive_type_a,
-                        gpu::AsXlaPrimitiveType(type_a));
+                        gpu::AsXlaPrimitiveType(cfg.type_a));
     TF_ASSIGN_OR_RETURN(xla::PrimitiveType primitive_type_d,
                         gpu::AsXlaPrimitiveType(cfg.type_d));
     TF_ASSIGN_OR_RETURN(
@@ -742,22 +823,27 @@ auto BlasLt::GetGroupedMatmulPlan(gpu::GroupedGemmConfig &cfg,
   auto plan = std::make_unique<MatmulPlan>(std::move(cfg), must_swap);
 
   plan->grouped_gemm_ = std::make_unique<hipblaslt_ext::GroupedGemm>(
-      blas_lt_.get(), AsHipblasOperation(trans_a), AsHipblasOperation(trans_b),
-      AsHipblasDataType(type_a), AsHipblasDataType(type_b),
+      blas_lt_.get(), AsHipblasOperation(plan->cfg_->trans_a),
+      AsHipblasOperation(plan->cfg_->trans_b),
+      AsHipblasDataType(plan->cfg_->type_a),
+      AsHipblasDataType(plan->cfg_->type_b),
       AsHipblasDataType(plan->cfg_->type_c),
       AsHipblasDataType(plan->cfg_->type_d),
       AsHipblasComputeType(*compute_type));
   auto &ggemm = plan->grouped_gemm_;
 
-  std::vector<int64_t> v_m(plan->cfg_->group_count, m),
-      v_n(plan->cfg_->group_count, n), v_k(plan->cfg_->group_count, cfg.k),
-      v_batch_count(plan->cfg_->group_count, cfg.batch_count),
-      v_lda(plan->cfg_->group_count, lda), v_ldb(plan->cfg_->group_count, ldb),
-      v_ldc(plan->cfg_->group_count, ldc), v_ldd(plan->cfg_->group_count, ldd),
+  std::vector<int64_t> v_m(plan->cfg_->group_count, plan->cfg_->m),
+      v_n(plan->cfg_->group_count, plan->cfg_->n),
+      v_k(plan->cfg_->group_count, plan->cfg_->k),
+      v_batch_count(plan->cfg_->group_count, plan->cfg_->batch_count),
+      v_lda(plan->cfg_->group_count, plan->cfg_->lhs_leading_dim_stride),
+      v_ldb(plan->cfg_->group_count, plan->cfg_->rhs_leading_dim_stride),
+      v_ldc(plan->cfg_->group_count, plan->cfg_->output_leading_dim_stride),
+      v_ldd(plan->cfg_->group_count, plan->cfg_->output_leading_dim_stride),
       v_strideA(plan->cfg_->group_count, batch_stride_a),
       v_strideB(plan->cfg_->group_count, batch_stride_b),
-      v_strideC(plan->cfg_->group_count, (m * n)),
-      v_strideD(plan->cfg_->group_count, (m * n));
+      v_strideC(plan->cfg_->group_count, (plan->cfg_->m * plan->cfg_->n)),
+      v_strideD(plan->cfg_->group_count, (plan->cfg_->m * plan->cfg_->n));
 
   switch (plan->cfg_->ragged_mode) {
     case gpu::RaggedDotMode::kRaggedNonContracting: {
@@ -798,8 +884,10 @@ auto BlasLt::GetGroupedMatmulPlan(gpu::GroupedGemmConfig &cfg,
   }
 
   hipblaslt_ext::GemmProblemType problem(
-      AsHipblasOperation(trans_a), AsHipblasOperation(trans_b),
-      AsHipblasDataType(type_a), AsHipblasDataType(type_b),
+      AsHipblasOperation(plan->cfg_->trans_a),
+      AsHipblasOperation(plan->cfg_->trans_b),
+      AsHipblasDataType(plan->cfg_->type_a),
+      AsHipblasDataType(plan->cfg_->type_b),
       AsHipblasDataType(plan->cfg_->type_c),
       AsHipblasDataType(plan->cfg_->type_d),
       AsHipblasComputeType(*compute_type));
@@ -908,19 +996,13 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
     }
   };
 
-  DeviceMemoryBase a = args.a, b = args.b;
+  DeviceMemoryBase a = cfg_->must_swap_operands ? args.b : args.a;
+  DeviceMemoryBase b = cfg_->must_swap_operands ? args.a : args.b;
   DeviceMemoryBase *d_userArgs =
       const_cast<DeviceMemoryBase *>(&args.workspace);
-  auto type_a = cfg_->type_a, type_b = cfg_->type_b;
-  auto m = cfg_->m, n = cfg_->n;
-  if (cfg_->must_swap_operands) {
-    std::swap(a, b);
-    std::swap(type_a, type_b);
-    std::swap(m, n);
-  }
 
-  uint8_t log2_byte_width_elem_a = Log2ByteWidth(type_a);
-  uint8_t log2_byte_width_elem_b = Log2ByteWidth(type_b);
+  uint8_t log2_byte_width_elem_a = Log2ByteWidth(cfg_->type_a);
+  uint8_t log2_byte_width_elem_b = Log2ByteWidth(cfg_->type_b);
   uint8_t log2_byte_width_elem_c = Log2ByteWidth(cfg_->type_c);
   uint8_t log2_byte_width_elem_d = Log2ByteWidth(cfg_->type_d);
 
@@ -934,8 +1016,8 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
   absl::Status status =
       blas_lt->parent_->RecordApiTrace(StreamExecutor::GemmCallTrace{
           StreamExecutor::GemmCallTrace::GemmType::kBlasLt, 0,
-          m * cfg_->k * cfg_->batch_count,
-          cfg_->k * n * cfg_->batch_count * cfg_->group_count});
+          cfg_->m * cfg_->k * cfg_->batch_count,
+          cfg_->k * cfg_->n * cfg_->batch_count * cfg_->group_count});
   std::unique_ptr<EventBasedTimer> timer;
 
   if (profile_result != nullptr) {
@@ -950,14 +1032,14 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
   uint32_t strideB1 = cfg_->rhs_leading_dim_stride;
   uint32_t strideB2 = cfg_->n * cfg_->k;
   if (cfg_->ragged_mode == gpu::RaggedDotMode::kRaggedNonContracting) {
-    strideB2 *= cfg_->group_count;
+    if (cfg_->must_swap_operands) {
+      strideA2 *= cfg_->group_count;
+    } else {
+      strideB2 *= cfg_->group_count;
+    }
   }
   uint32_t strideD1 = cfg_->output_leading_dim_stride;
   uint32_t strideD2 = cfg_->m * cfg_->n;
-  if (cfg_->must_swap_operands) {
-    std::swap(strideA1, strideB1);
-    std::swap(strideA2, strideB2);
-  }
 
   GroupGemmUpdateArgs(
       gpu::AsGpuStreamValue(stream),
@@ -966,10 +1048,10 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
       args.group_sizes.opaque(), group_size_bytewidth, log2_byte_width_elem_a,
       log2_byte_width_elem_b, log2_byte_width_elem_c, log2_byte_width_elem_d,
       cfg_->stride_ragged_dim, cfg_->stride_group_dim,
-      cfg_->output_stride_ragged_dim, cfg_->must_swap_operands, m, n, cfg_->k,
-      cfg_->batch_count, strideA1, strideA2, strideB1, strideB2, strideD1,
-      strideD2, static_cast<const uint8_t>(cfg_->ragged_mode),
-      cfg_->group_count);
+      cfg_->output_stride_ragged_dim, cfg_->must_swap_operands, cfg_->m,
+      cfg_->n, cfg_->k, cfg_->batch_count, strideA1, strideA2, strideB1,
+      strideB2, strideD1, strideD2,
+      static_cast<const uint8_t>(cfg_->ragged_mode), cfg_->group_count);
 
   SE_HIPBLAS_RETURN_IF_ERROR(
       grouped_gemm_->run(d_userArgs->opaque(), gpu::AsGpuStreamValue(stream)));

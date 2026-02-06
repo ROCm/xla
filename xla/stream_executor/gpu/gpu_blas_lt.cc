@@ -158,6 +158,18 @@ void MatrixLayout::Transpose() {
   order = (order == Order::kRowMajor) ? Order::kColumnMajor : Order::kRowMajor;
 }
 
+std::string MatrixLayout::ToString() const {
+  return absl::StrFormat(
+      "MatrixLayout{dtype=%s, rows=%d, cols=%d, order=%s, batch=%d, "
+      "ld_stride=%d, batch_stride=%d, transpose=%s}",
+      xla::primitive_util::LowercasePrimitiveTypeName(dtype), num_rows,
+      num_cols, (order == Order::kRowMajor ? "RowMajor" : "ColumnMajor"),
+      batch_size, leading_dim_stride, batch_stride,
+      (transpose == blas::Transpose::kNoTranspose ? "NoTranspose"
+       : transpose == blas::Transpose::kTranspose ? "Transpose"
+                                                  : "ConjugateTranspose"));
+}
+
 absl::StatusOr<MatrixLayout> MatrixLayout::FromProto(
     const xla::GemmConfigProto::MatrixLayout& proto) {
   Order order;

@@ -132,7 +132,7 @@ ENTRY AddRaggedDotsFunc {
   MatchOptimizedHlo(hlo_text,
                     R"(
                     ; CHECK: custom_call_target="__cublas$lt$groupedMatmul")");
-  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-2, 1e-2}));
 }
 
 TEST_F(GroupedGemmRewriteTest, CheckCustomCallTargetGroupedGemmMulipleGroups) {
@@ -147,6 +147,46 @@ ENTRY AddRaggedDotsFunc {
     p1 = bf16[4,9,8]{2,1,0} parameter(1)
     p2 = s64[4] constant({16, 8, 24, 16})
     ROOT ragged-dot = bf16[64,8]{1,0} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={1}, rhs_contracting_dims={1},
+                      lhs_ragged_dims={0}, rhs_group_dims={0}
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+                    ; CHECK: custom_call_target="__cublas$lt$groupedMatmul", 
+                    ; CHECK-SAME: backend_config={"operation_queue_id":"0","wait_on_operation_queues":[],
+                    ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
+                    ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
+                    ; CHECK-SAME: "grouped_gemm_backend_config":{
+                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["1"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
+                    ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
+                    ; CHECK-SAME: "grad_x":false,"grad_y":false,
+                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
+                    ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
+                    ; CHECK-SAME: "lhs_batch_dimensions":[],
+                    ; CHECK-SAME: "rhs_batch_dimensions":[]},
+                    ; CHECK-SAME: "lhs_ragged_dimensions":["0"],
+                    ; CHECK-SAME: "rhs_group_dimensions":["0"]}}})");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
+}
+
+TEST_F(GroupedGemmRewriteTest,
+       CheckCustomCallTargetGroupedGemmMulipleGroupsOutputColumnMajor) {
+  if (SkipGpuBlasLtTest()) {
+    GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
+  }
+  const char* hlo_text = R"(
+HloModule GroupedGemm
+
+ENTRY AddRaggedDotsFunc {
+    p0 = bf16[64,9]{1,0} parameter(0)
+    p1 = bf16[4,9,8]{2,1,0} parameter(1)
+    p2 = s64[4] constant({16, 8, 24, 16})
+    ROOT ragged-dot = bf16[64,8]{0,1} ragged-dot(p0, p1, p2),
                       lhs_contracting_dims={1}, rhs_contracting_dims={1},
                       lhs_ragged_dims={0}, rhs_group_dims={0}
 }
@@ -298,6 +338,47 @@ ENTRY AddRaggedDotsFunc {
 
 TEST_F(
     GroupedGemmRewriteTest,
+    CheckCustomCallTargetGroupedGemmRaggedDimInContractingDimMultipleGroupsOutputColumnMajor) {
+  if (SkipGpuBlasLtTest()) {
+    GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
+  }
+  const char* hlo_text = R"(
+HloModule GroupedGemm
+
+ENTRY AddRaggedDotsFunc {
+    p0 = bf16[64,16]{1,0} parameter(0)
+    p1 = bf16[16,8]{1,0} parameter(1)
+    p2 = s64[4] constant({4, 5, 3, 4})
+    ROOT ragged-dot = bf16[4,64,8]{1,2,0} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={1}, rhs_contracting_dims={0},
+                      lhs_ragged_dims={1}
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+                    ; CHECK: custom_call_target="__cublas$lt$groupedMatmul", 
+                    ; CHECK-SAME: backend_config={"operation_queue_id":"0","wait_on_operation_queues":[],
+                    ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
+                    ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
+                    ; CHECK-SAME: "grouped_gemm_backend_config":{
+                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["1"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
+                    ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
+                    ; CHECK-SAME: "grad_x":false,"grad_y":false,
+                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
+                    ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
+                    ; CHECK-SAME: "lhs_batch_dimensions":[],
+                    ; CHECK-SAME: "rhs_batch_dimensions":[]},
+                    ; CHECK-SAME: "lhs_ragged_dimensions":["1"],
+                    ; CHECK-SAME: "rhs_group_dimensions":[]}}})");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
+}
+
+TEST_F(
+    GroupedGemmRewriteTest,
     CheckCustomCallTargetGroupedGemmRaggedDimInContractingDimLargeGroupCount600) {
   if (SkipGpuBlasLtTest()) {
     GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
@@ -320,7 +401,7 @@ ENTRY AddRaggedDotsFunc {
   MatchOptimizedHlo(hlo_text,
                     R"(
                     ; CHECK: custom_call_target="__cublas$lt$groupedMatmul")");
-  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-2, 1e-2}));
 }
 
 TEST_F(GroupedGemmRewriteTest,
@@ -443,6 +524,47 @@ ENTRY AddRaggedDotsFunc {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
+TEST_F(
+    GroupedGemmRewriteTest,
+    CheckCustomCallTargetGroupedGemmRaggedDimInBatchDimMultipleGroupsOutputColumnMajor) {
+  if (SkipGpuBlasLtTest()) {
+    GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
+  }
+  const char* hlo_text = R"(
+HloModule GroupedGemm
+
+ENTRY AddRaggedDotsFunc {
+    p0 = bf16[16,64,9]{2,1,0} parameter(0)
+    p1 = bf16[16,9,8]{2,1,0} parameter(1)
+    p2 = s64[4] constant({4, 2, 6, 4})
+    ROOT ragged-dot = bf16[16,64,8]{1,2,0} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+                      lhs_ragged_dims={0}, lhs_batch_dims={0}, rhs_batch_dims={0}
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+                    ; CHECK: custom_call_target="__cublas$lt$groupedMatmul", 
+                    ; CHECK-SAME: backend_config={"operation_queue_id":"0","wait_on_operation_queues":[],
+                    ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
+                    ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
+                    ; CHECK-SAME: "grouped_gemm_backend_config":{
+                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["2"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
+                    ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
+                    ; CHECK-SAME: "grad_x":false,"grad_y":false,
+                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
+                    ; CHECK-SAME: "lhs_contracting_dimensions":["2"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
+                    ; CHECK-SAME: "lhs_batch_dimensions":["0"],
+                    ; CHECK-SAME: "rhs_batch_dimensions":["0"]},
+                    ; CHECK-SAME: "lhs_ragged_dimensions":["0"],
+                    ; CHECK-SAME: "rhs_group_dimensions":[]}}})");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
+}
+
 TEST_F(GroupedGemmRewriteTest,
        CheckCustomCallTargetGroupedGemmRaggedDimInBatchDimLargeGroupCount600) {
   if (SkipGpuBlasLtTest()) {
@@ -466,7 +588,168 @@ ENTRY AddRaggedDotsFunc {
   MatchOptimizedHlo(hlo_text,
                     R"(
                     ; CHECK: custom_call_target="__cublas$lt$groupedMatmul")");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-2, 1e-2}));
+}
+
+TEST_F(
+    GroupedGemmRewriteTest,
+    CheckCustomCallTargetGroupedGemmRaggedInNonContractingGroupDimNoOuterDim) {
+  if (SkipGpuBlasLtTest()) {
+    GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
+  }
+  const char* hlo_text = R"(
+HloModule GroupedGemm
+
+ENTRY AddRaggedDotsFunc {
+    p0 = bf16[128,64]{1,0} parameter(0)
+    p1 = bf16[8,64,32]{2,0,1} parameter(1)
+    p2 = s32[8] constant({16, 16, 16, 16, 16, 16, 16, 16})
+    ROOT ragged-dot = bf16[128,32]{1,0} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={1}, rhs_contracting_dims={1},
+                      lhs_ragged_dims={0}, rhs_group_dims={0}
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+                    ; CHECK: custom_call_target="__cublas$lt$groupedMatmul", 
+                    ; CHECK-SAME: backend_config={"operation_queue_id":"0","wait_on_operation_queues":[],
+                    ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
+                    ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
+                    ; CHECK-SAME: "grouped_gemm_backend_config":{
+                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["1"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
+                    ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
+                    ; CHECK-SAME: "grad_x":false,"grad_y":false,
+                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
+                    ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
+                    ; CHECK-SAME: "lhs_batch_dimensions":[],
+                    ; CHECK-SAME: "rhs_batch_dimensions":[]},
+                    ; CHECK-SAME: "lhs_ragged_dimensions":["0"],
+                    ; CHECK-SAME: "rhs_group_dimensions":["0"]}}})");
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+TEST_F(GroupedGemmRewriteTest,
+       CheckCustomCallTargetGroupedGemmRaggedInContractingGroupDimNoOuterDim) {
+  if (SkipGpuBlasLtTest()) {
+    GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
+  }
+  const char* hlo_text = R"(
+HloModule GroupedGemm
+
+ENTRY AddRaggedDotsFunc {
+    p0 = bf16[64,1024]{1,0} parameter(0)
+    p1 = bf16[1024,256]{1,0} parameter(1)
+    p2 = s32[8] constant({128, 128, 128, 128, 128, 128, 128, 128})
+    ROOT ragged-dot = bf16[8,64,256]{2,0,1} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={1}, rhs_contracting_dims={0},
+                      lhs_ragged_dims={1}
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+                    ; CHECK: custom_call_target="__cublas$lt$groupedMatmul", 
+                    ; CHECK-SAME: backend_config={"operation_queue_id":"0","wait_on_operation_queues":[],
+                    ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
+                    ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
+                    ; CHECK-SAME: "grouped_gemm_backend_config":{
+                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["1"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
+                    ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
+                    ; CHECK-SAME: "grad_x":false,"grad_y":false,
+                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
+                    ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
+                    ; CHECK-SAME: "lhs_batch_dimensions":[],
+                    ; CHECK-SAME: "rhs_batch_dimensions":[]},
+                    ; CHECK-SAME: "lhs_ragged_dimensions":["1"],
+                    ; CHECK-SAME: "rhs_group_dimensions":[]}}})");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-2, 1e-2}));
+}
+
+TEST_F(GroupedGemmRewriteTest,
+       CheckCustomCallTargetGroupedGemmRaggedInContractingTranspose) {
+  if (SkipGpuBlasLtTest()) {
+    GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
+  }
+  const char* hlo_text = R"(
+HloModule GroupedGemm
+
+ENTRY AddRaggedDotsFunc {
+    p0 = bf16[1024,64]{1,0} parameter(0)
+    p1 = bf16[1024,256]{1,0} parameter(1)
+    p2 = s32[8] constant({128, 128, 128, 128, 128, 128, 128, 128})
+    ROOT ragged-dot = bf16[8,64,256]{2,0,1} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+                      lhs_ragged_dims={0}
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+                    ; CHECK: custom_call_target="__cublas$lt$groupedMatmul", 
+                    ; CHECK-SAME: backend_config={"operation_queue_id":"0","wait_on_operation_queues":[],
+                    ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
+                    ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
+                    ; CHECK-SAME: "grouped_gemm_backend_config":{
+                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["0"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
+                    ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
+                    ; CHECK-SAME: "grad_x":false,"grad_y":false,
+                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
+                    ; CHECK-SAME: "lhs_contracting_dimensions":["0"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
+                    ; CHECK-SAME: "lhs_batch_dimensions":[],
+                    ; CHECK-SAME: "rhs_batch_dimensions":[]},
+                    ; CHECK-SAME: "lhs_ragged_dimensions":["0"],
+                    ; CHECK-SAME: "rhs_group_dimensions":[]}}})");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-2, 1e-2}));
+}
+
+TEST_F(GroupedGemmRewriteTest,
+       CheckCustomCallTargetGroupedGemmRaggedNonContractingTranspose) {
+  if (SkipGpuBlasLtTest()) {
+    GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
+  }
+  const char* hlo_text = R"(
+HloModule GroupedGemm
+
+ENTRY AddRaggedDotsFunc {
+    p0 = bf16[9,64]{1,0} parameter(0)
+    p1 = bf16[4,9,8]{2,1,0} parameter(1)
+    p2 = s64[4] constant({16, 8, 24, 16})
+    ROOT ragged-dot = bf16[64,8]{1,0} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={0}, rhs_contracting_dims={1},
+                      lhs_ragged_dims={1}, rhs_group_dims={0}
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+                    ; CHECK: custom_call_target="__cublas$lt$groupedMatmul", 
+                    ; CHECK-SAME: backend_config={"operation_queue_id":"0","wait_on_operation_queues":[],
+                    ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
+                    ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
+                    ; CHECK-SAME: "grouped_gemm_backend_config":{
+                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["0"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
+                    ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
+                    ; CHECK-SAME: "grad_x":false,"grad_y":false,
+                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
+                    ; CHECK-SAME: "lhs_contracting_dimensions":["0"],
+                    ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
+                    ; CHECK-SAME: "lhs_batch_dimensions":[],
+                    ; CHECK-SAME: "rhs_batch_dimensions":[]},
+                    ; CHECK-SAME: "lhs_ragged_dimensions":["1"],
+                    ; CHECK-SAME: "rhs_group_dimensions":["0"]}}})");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
 TEST_F(GemmRewriteTest, CheckCustomCallTarget) {

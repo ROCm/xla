@@ -68,6 +68,8 @@ struct MatrixLayout {  // plain MatrixLayout which is extended with create
 
   void Transpose();
 
+  std::string ToString() const;
+
   xla::PrimitiveType dtype;
   // `num_rows` / `num_cols` are for the "logical" matrix shape:
   // i.e. the contracting dim has size `num_cols` for LHS operands and

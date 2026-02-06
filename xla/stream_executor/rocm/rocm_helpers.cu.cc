@@ -323,7 +323,7 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
     size_t total_bytes = batch_size * sizeof(hipblaslt_ext::UserArguments);
     copy_shared_to_global(sharedUserArgs, &dest_args[batch_start], total_bytes);
     // Synchronize before next iteration to ensure copy is complete
-    __syncthreads();
+    __barrier(__CLK_LOCAL_MEM_FENCE);
   }
 }
 
@@ -396,14 +396,14 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
           static_cast<const uint8_t*>(b) +
           (static_cast<intptr_t>(offset_group * stride_b)
            << log2_byte_width_elem_b)));
-      arg.c = const_cast<void*>(
-          static_cast<void*>(static_cast<uint8_t*>(c) +
-                             (static_cast<intptr_t>(idx * batch * strideD2)
-                              << log2_byte_width_elem_d)));
-      arg.d = const_cast<void*>(
-          static_cast<void*>(static_cast<uint8_t*>(d) +
-                             (static_cast<intptr_t>(idx * batch * strideD2)
-                              << log2_byte_width_elem_d)));
+      arg.c = const_cast<void*>(static_cast<void*>(
+          static_cast<uint8_t*>(c) +
+          (static_cast<intptr_t>(idx * output_stride_ragged_dim)
+           << log2_byte_width_elem_d)));
+      arg.d = const_cast<void*>(static_cast<void*>(
+          static_cast<uint8_t*>(d) +
+          (static_cast<intptr_t>(idx * output_stride_ragged_dim)
+           << log2_byte_width_elem_d)));
       arg.k = typed_group_sizes[idx];
       arg.batch = batch;
       arg.strideA1 = strideA1;
@@ -444,7 +444,7 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
     size_t total_bytes = batch_size * sizeof(hipblaslt_ext::UserArguments);
     copy_shared_to_global(sharedUserArgs, &dest_args[batch_start], total_bytes);
     // Synchronize before next iteration to ensure copy is complete
-    __syncthreads();
+    __barrier(__CLK_LOCAL_MEM_FENCE);
   }
 }
 
@@ -566,7 +566,7 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
     size_t total_bytes = batch_size * sizeof(hipblaslt_ext::UserArguments);
     copy_shared_to_global(sharedUserArgs, &dest_args[batch_start], total_bytes);
     // Synchronize before next iteration to ensure copy is complete
-    __syncthreads();
+    __barrier(__CLK_LOCAL_MEM_FENCE);
   }
 }
 
