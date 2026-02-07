@@ -1,5 +1,6 @@
 """cc_toolchain_config rule for configuring CUDA toolchains on Linux, Mac, and Windows."""
 
+load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
 load(
     "@bazel_tools//tools/cpp:cc_toolchain_config_lib.bzl",
     "action_config",
@@ -15,7 +16,6 @@ load(
     "variable_with_value",
     "with_feature_set",
 )
-load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
 
 def all_assembly_actions():
     return [
@@ -500,9 +500,9 @@ def _features(cpu, compiler, ctx):
                     flag_set(
                         actions = all_link_actions(),
                         flag_groups = ([
-                            flag_group(flags = ["-Wl,-no-as-needed"])
+                            flag_group(flags = ["-Wl,-no-as-needed"]),
                         ] if cpu == "local" else []) + ([
-                            flag_group(flags = ["-B" + ctx.attr.linker_bin_path])
+                            flag_group(flags = ["-B" + ctx.attr.linker_bin_path]),
                         ] if ctx.attr.linker_bin_path else []) + [
                             flag_group(
                                 flags = ["@%{linker_param_file}"],

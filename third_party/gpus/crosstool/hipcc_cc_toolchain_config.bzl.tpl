@@ -381,6 +381,30 @@ def _impl(ctx):
         provides = ["profile"],
     )
 
+    # Targets can set features = ["no_solib_rpaths"] to suppress the
+    # automatic solib RPATH entries and rely on their own linkopts instead.
+    no_solib_rpaths_feature = feature(name = "no_solib_rpaths")
+
+    rocm_rpath_feature = feature(
+        name = "rocm_rpath",
+        enabled = True,
+        flag_sets = [
+            flag_set(
+                actions = all_link_actions + lto_index_actions,
+                flag_groups = ([
+                    flag_group(
+                        flags = ctx.attr.rocm_rpath_flags,
+                    ),
+                ] if ctx.attr.rocm_rpath_flags else []),
+                with_features = [
+                    with_feature_set(
+                        not_features = ["no_solib_rpaths"],
+                    ),
+                ],
+            ),
+        ],
+    )
+
     runtime_library_search_directories_feature = feature(
         name = "runtime_library_search_directories",
         flag_sets = [
@@ -408,7 +432,10 @@ def _impl(ctx):
                     ),
                 ],
                 with_features = [
-                    with_feature_set(features = ["static_link_cpp_runtimes"]),
+                    with_feature_set(
+                        features = ["static_link_cpp_runtimes"],
+                        not_features = ["no_solib_rpaths"],
+                    ),
                 ],
             ),
             flag_set(
@@ -429,7 +456,7 @@ def _impl(ctx):
                 ],
                 with_features = [
                     with_feature_set(
-                        not_features = ["static_link_cpp_runtimes"],
+                        not_features = ["static_link_cpp_runtimes", "no_solib_rpaths"],
                     ),
                 ],
             ),
@@ -1083,6 +1110,8 @@ def _impl(ctx):
         shared_flag_feature,
         linkstamps_feature,
         output_execpath_flags_feature,
+        no_solib_rpaths_feature,
+        rocm_rpath_feature,
         runtime_library_search_directories_feature,
         library_search_directories_feature,
         archiver_flags_feature,
@@ -1155,6 +1184,7 @@ cc_toolchain_config = rule(
         "host_compiler_path": attr.string(),
         "host_compiler_prefix": attr.string(),
         "linker_bin_path": attr.string(),
+        "rocm_rpath_flags": attr.string_list(),
     },
     provides = [CcToolchainConfigInfo],
 )

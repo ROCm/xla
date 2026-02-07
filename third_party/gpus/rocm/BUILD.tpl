@@ -142,21 +142,7 @@ cc_library(
 # hibplatslt assumes that tensile files are located in ../hipblaslt/library directory
 cc_library(
     name = "rocm_rpath",
-    linkopts = select({
-        ":build_hermetic": [
-            "-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib",
-            "-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib/llvm/lib",
-            "-Lexternal/local_config_rocm/rocm/%{rocm_root}/lib",
-        ],
-        ":multiple_rocm_paths": [
-            "-Wl,-rpath=%{rocm_lib_paths}",
-            "-Lexternal/local_config_rocm/rocm/%{rocm_root}/lib",
-        ],
-        "//conditions:default": [
-            "-Wl,-rpath,/opt/rocm/lib",
-            "-Lexternal/local_config_rocm/rocm/%{rocm_root}/lib",
-        ],
-    }),
+    linkopts = ["-Lexternal/local_config_rocm/rocm/%{rocm_root}/lib"],
     visibility = ["//visibility:public"],
 )
 
@@ -259,7 +245,6 @@ cc_library(
     includes = [
         "%{rocm_root}/include",
     ],
-    linkopts = ["-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib"],
     linkstatic = 1,
     visibility = ["//visibility:public"],
     deps = [
@@ -275,7 +260,6 @@ cc_library(
     includes = [
         "%{rocm_root}/include",
     ],
-    linkopts = ["-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib"],
     linkstatic = 1,
     visibility = ["//visibility:public"],
     deps = [

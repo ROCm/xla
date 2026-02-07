@@ -81,6 +81,7 @@ def verify_build_defines(params):
         "host_compiler_path",
         "host_compiler_prefix",
         "linker_bin_path",
+        "rocm_root",
         "unfiltered_compile_flags",
     ]:
         if ("%{" + param + "}") not in params:
@@ -673,6 +674,9 @@ def _create_local_rocm_repository(repository_ctx):
     # host_compiler_includes = get_cxx_inc_directories(repository_ctx, cc)
 
     rocm_defines = {}
+    rocm_defines["%{rocm_root}"] = rocm_toolkit_path
+    if multiple_paths:
+        rocm_defines["%{rocm_lib_paths}"] = repository_dict["%{rocm_lib_paths}"]
     rocm_defines["%{builtin_sysroot}"] = tf_sysroot
     rocm_defines["%{compiler}"] = "clang"
     host_compiler_prefix = "/usr/bin"

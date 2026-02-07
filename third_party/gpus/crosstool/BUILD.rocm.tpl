@@ -100,6 +100,18 @@ cc_toolchain_config(
         "-D__TIME__=\"redacted\"",
     ] + [%{unfiltered_compile_flags}],
     linker_bin_path = "%{linker_bin_path}",
+    rocm_rpath_flags = select({
+        "@local_config_rocm//rocm:build_hermetic": [
+            "-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib",
+            "-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib/llvm/lib",
+        ],
+        "@local_config_rocm//rocm:multiple_rocm_paths": [
+            "-Wl,-rpath=%{rocm_lib_paths}",
+        ],
+        "//conditions:default": [
+            "-Wl,-rpath,/opt/rocm/lib",
+        ],
+    }),
     coverage_compile_flags = ["--coverage"],
     coverage_link_flags = ["--coverage"],
     supports_start_end_lib = True,
