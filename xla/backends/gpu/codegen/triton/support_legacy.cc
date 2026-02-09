@@ -236,6 +236,12 @@ bool IsDotAlgorithmSupportedByTriton(
   switch (algorithm) {
     case PrecisionConfig::ALG_DOT_TF32_TF32_F32:
     case PrecisionConfig::ALG_DOT_TF32_TF32_F32_X3:
+      if (cuda_compute_capability ||
+          (rocm_compute_capability &&
+           !rocm_compute_capability->gfx9_mi350())) {
+        return true;
+      }
+      return false;
     case PrecisionConfig::ALG_DOT_F32_F32_F32:
       if (cuda_compute_capability || rocm_compute_capability) {
         return true;

@@ -246,6 +246,12 @@ bool IsSupportedDotAlgorithmOnGpu(
       std::get<se::RocmComputeCapability>(gpu_compute_capability)
           .has_bf16_dtype_support();
 
+  const bool is_rocm_mi350 =
+      std::holds_alternative<se::RocmComputeCapability>(
+          gpu_compute_capability) &&
+      std::get<se::RocmComputeCapability>(gpu_compute_capability)
+          .gfx9_mi350();
+
   switch (algorithm) {
     case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32:
     case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32_FAST_ACCUM:
@@ -293,7 +299,8 @@ bool IsSupportedDotAlgorithmOnGpu(
              output_storage_type == F32;
     case PrecisionConfig::ALG_DOT_TF32_TF32_F32_X3:
     case PrecisionConfig::ALG_DOT_TF32_TF32_F32:
-      return (is_cuda_ge_ampere || is_rocm_mi100_and_above) &&
+      return (is_cuda_ge_ampere ||
+              (is_rocm_mi100_and_above && !is_rocm_mi350)) &&
              lhs_storage_type == rhs_storage_type && lhs_storage_type == F32 &&
              output_storage_type == F32;
     case PrecisionConfig::ALG_DOT_F32_F32_F32:
