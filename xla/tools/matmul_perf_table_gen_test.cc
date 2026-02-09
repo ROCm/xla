@@ -35,14 +35,21 @@ namespace {
 
 class MatmulPerfTableGenTest : public HloTestBase {
   void SetUp() override {
-    if (!IsCuda()) {
-      GTEST_SKIP() << "Not built with --config=cuda";
+    if (!IsCuda() && !IsRocm()) {
+      GTEST_SKIP() << "Not built with --config=cuda or --config=rocm";
     }
   }
 
  protected:
   bool IsCuda() {
     return std::holds_alternative<stream_executor::CudaComputeCapability>(
+        backend()
+            .default_stream_executor()
+            ->GetDeviceDescription()
+            .gpu_compute_capability());
+  }
+  bool IsRocm() {
+    return std::holds_alternative<stream_executor::RocmComputeCapability>(
         backend()
             .default_stream_executor()
             ->GetDeviceDescription()
@@ -318,6 +325,37 @@ TEST_F(MatmulPerfTableGenTest, MergeGemmTables) {
   EXPECT_THAT(expected_merged_perf_table,
               tsl::proto_testing::IgnoringRepeatedFieldOrdering(
                   tsl::proto_testing::EqualsProto(actual_merged_perf_table)));
+}
+
+TEST_F(MatmulPerfTableGenTest, ProfilesSmallMatmul) {
+  MatmulPerfTableGen::Config cfg;
+  cfg.b_spec.start = 1;
+  cfg.b_spec.stop = 1;
+  cfg.b_spec.step = 1;
+  cfg.k_spec.start = 8;
+  cfg.k_spec.stop = 8;
+  cfg.k_spec.step = 1;
+  cfg.m_spec.start = 8;
+  cfg.m_spec.stop = 8;
+  cfg.m_spec.step = 1;
+  cfg.n_spec.start = 8;
+  cfg.n_spec.stop = 8;
+  cfg.n_spec.step = 1;
+  cfg.dry_run = false;
+  cfg.dtypes.emplace_back(
+      MatmulPerfTableGen::DataTypeSpec{"f32", "f32", "f32"});
+
+  MatmulPerfTableGen gen(cfg);
+  DeviceHloInstructionProfiles profiles = gen.ComputeTable();
+
+  EXPECT_EQ(profiles.entries_size(), 1);
+  EXPECT_EQ(profiles.entries().begin()->second.entries_size(), 1);
+
+  const HloInstructionProfile& entry =
+      profiles.entries().begin()->second.entries(0);
+
+  EXPECT_GT(entry.clock_cycles(), 0);
+  EXPECT_GT(entry.flops(), 0);
 }
 
 }  // namespace
