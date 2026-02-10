@@ -37,6 +37,8 @@ limitations under the License.
 #include "tsl/platform/casts.h"
 #include "tsl/platform/numbers.h"
 
+using namespace mori;
+
 namespace xla::gpu {
 
 MoriCollectives::~MoriCollectives() {
@@ -76,37 +78,39 @@ absl::Status MoriCollectives::InitializeOnce() {
     if (device_count_per_process_ != 1) {
       LOG(FATAL) << "MORI API is only supported with one device per process";
     }
-    // rocm_mori_init_attr_t init_attr;
-    // rocm_mori_uniqueid_t rocm_mori_id;
+    shmem::mori_shmem_uniqueid_t uid;
 
-    // // Initialize MORI
-    // if (std::shared_ptr<KeyValueStoreInterface> kv_store = kv_store_.lock()) {
-    //   if (process_id_ == 0) {
-    //     if (rocm_mori_get_uniqueid(&rocm_mori_id) != 0) {
-    //       return absl::InternalError("rocm_mori_get_uniqueid failed.");
-    //     }
-    //     char buf[sizeof(rocm_mori_uniqueid_t)];
-    //     std::memcpy(buf, &rocm_mori_id, sizeof(rocm_mori_uniqueid_t));
-    //     absl::string_view rocm_mori_id_str{buf, sizeof(buf)};
-    //     TF_RETURN_IF_ERROR(kv_store->Set(kKvStoreKey, rocm_mori_id_str));
-    //   } else {
-    //     TF_ASSIGN_OR_RETURN(std::string id_str,
-    //                         kv_store->Get(kKvStoreKey, absl::Minutes(10)));
-    //     CHECK(id_str.size() >= sizeof(rocm_mori_uniqueid_t));
-    //     std::memcpy(&rocm_mori_id, id_str.data(), sizeof(rocm_mori_uniqueid_t));
-    //   }
-    // } else {
-    //   return absl::InternalError(
-    //       "KV store is not available for rocshmem initialization.");
-    // }
+    // Initialize MORI
+    if (std::shared_ptr<KeyValueStoreInterface> kv_store = kv_store_.lock()) {
+      if (process_id_ == 0) {
+        if (shmem::ShmemGetUniqueId(&uid) != 0) {
+          return absl::InternalError("ShmemGetUniqueId failed.");
+        }
+        char buf[sizeof(uid)];
+        std::memcpy(buf, &uid, sizeof(uid)); 
+        // do we need the buf??
+        absl::string_view uid_str{buf, sizeof(buf)};
+        TF_RETURN_IF_ERROR(kv_store->Set(kKvStoreKey, uid_str));
+      } else {
+        TF_ASSIGN_OR_RETURN(std::string uid_str,
+                            kv_store->Get(kKvStoreKey, absl::Minutes(10)));
+        CHECK(uid_str.size() >= sizeof(uid));
+        std::memcpy(&uid, uid_str.data(), sizeof(uid));
+      }
+    } else {
+      return absl::InternalError(
+          "KV store is not available for rocshmem initialization.");
+    }
 
-    // if (rocm_mori_set_attr_uniqueid_args(process_id_, num_processes_,
-    //                                     &rocm_mori_id, &init_attr) != 0) {
-    //   return absl::InternalError("rocm_mori_set_attr_uniqueid_args failed.");
-    // }
-    // if (rocm_mori_init_attr(ROCSHMEM_INIT_WITH_UNIQUEID, &init_attr) != 0) {
-    //   return absl::InternalError("rocm_mori_hostlib_init_attr failed.");
-    // }
+    shmem::mori_shmem_init_attr_t init_attr;
+    if (shmem::ShmemSetAttrUniqueIdArgs(process_id_.value(), num_processes_,
+                                 &uid, &init_attr) != 0) {
+      return absl::InternalError("rocm_mori_set_attr_uniqueid_args failed.");
+    }
+    if (shmem::ShmemInitAttr(shmem::MORI_SHMEM_INIT_WITH_UNIQUEID, 
+                             &init_attr) != 0) {
+      return absl::InternalError("rocm_mori_hostlib_init_attr failed.");
+    }
 
     VLOG(3) << absl::StreamFormat(
       "Initialized MORI on process %d; num_processes=%llu", process_id_.value(),
@@ -127,7 +131,7 @@ void MoriCollectives::Finalize() {
   VLOG(0) << absl::StreamFormat(
       "Finilizing MORI on process %d; num_processes=%llu", process_id_.value(),
       num_processes_);
-  // rocm_mori_finalize();
+  shmem::ShmemFinalize();
 }
 
 absl::StatusOr<void*> MoriCollectives::Allocate(uint64_t bytes) {
@@ -135,7 +139,7 @@ absl::StatusOr<void*> MoriCollectives::Allocate(uint64_t bytes) {
   VLOG(3) << absl::StreamFormat(
       "Start allocation of %s (%llu bytes) for MORI",
       tsl::strings::HumanReadableNumBytes(bytes), bytes);
-  void* buffer = nullptr; //rocm_mori_malloc(bytes);
+  void* buffer = shmem::ShmemMalloc(bytes); // ShmemMallocAlign
   if (buffer == nullptr) {
     return absl::InternalError(absl::StrFormat(
         "Failed to allocate %s (%llu bytes) from MORI memory",
@@ -148,7 +152,7 @@ absl::Status MoriCollectives::Deallocate(void* buffer) {
   TF_RETURN_IF_ERROR(InitializeOnce());
   VLOG(3) << absl::StreamFormat("Start de-allocation for MORI buffer: %p",
                                 buffer);
-  // rocm_mori_free(buffer);
+  shmem::ShmemFree(buffer);
   return absl::OkStatus();
 }
 

@@ -38,7 +38,6 @@ cc_library(
         ":gpu_collectives_stub",
     ] + if_cuda_or_rocm_is_configured([
         ":nccl_or_rccl_collectives",
-    ]) + if_cuda_is_configured([
         ":nvshmem_collectives_if_supported",
     ]),
 )
@@ -633,13 +632,14 @@ rocm_library(
         # "//xla/stream_executor/gpu:gpu_types_header",
         "@com_google_absl//absl/status",
         "@roc_mori//:mori_headers",
+        "@roc_mori//:mori_libs",
     ],
-    # additional_linker_inputs = ["@rocshmem//:libroc_mori_device"],
-    # linkopts = [
-    #     "-Wl,--whole-archive",
-    #     "$(location @rocshmem//:libroc_mori_device)",
-    #     "-Wl,--no-whole-archive",
-    # ],
+    additional_linker_inputs = ["@roc_mori//:libmori_shmem_dev"],
+    linkopts = [
+        "-Wl,--whole-archive",
+        "$(location @roc_mori//:libmori_shmem_dev)",
+        "-Wl,--no-whole-archive",
+    ],
     linkstatic = True,
 )
 
@@ -707,7 +707,6 @@ cc_library(
 cc_library(
     name = "nvshmem_collectives_if_builtin_used",
     tags = [
-        "cuda-only",
         "gpu",
     ],
     deps = select({
@@ -719,13 +718,15 @@ cc_library(
 cc_library(
     name = "nvshmem_collectives_if_supported",
     tags = [
-        "cuda-only",
         "gpu",
     ],
     deps = select({
         "//xla/stream_executor/cuda:nvshmem_supported": [
             ":nvshmem_collectives_if_builtin_used",
         ],
+        # "//xla/stream_executor/rocm:roc_mori_supported": [
+        #     ":nvshmem_collectives_if_builtin_used",
+        # ],
         "//conditions:default": [],
     }),
 )

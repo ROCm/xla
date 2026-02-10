@@ -39,6 +39,7 @@ limitations under the License.
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/casts.h"
 
+using namespace mori;
 namespace xla::gpu {
 
 static auto AsRocmStream(se::Stream* stream) {
@@ -83,12 +84,10 @@ absl::StatusOr<size_t> MoriCommunicator::NumRanks() const {
   VLOG(5) << "Get the number of ranks in MORI communicator: " << ToString();
   CHECK_ABORTED()
 
-  int32_t count = 0;
-  // count = rocm_mori_team_n_pes(host_team_);
-  // if (count < 0) {
-  //   return absl::InvalidArgumentError(
-  //       "MoriCommunicator::NumRanks invalid team.");
-  // }
+  int32_t count = shmem::ShmemNPes();
+  if (count < 0) {
+    return absl::InvalidArgumentError("MoriCommunicator::NumRanks failed.");
+  }
   return count;
 }
 
@@ -96,12 +95,10 @@ absl::StatusOr<size_t> MoriCommunicator::CurrentRank() {
   VLOG(5) << "Get current rank in MORI communicator: " << ToString();
   CHECK_ABORTED()
 
-  int32_t rank = 0;
-  // rank = rocm_mori_team_my_pe(host_team_);
-  // if (rank < 0) {
-  //   return absl::InvalidArgumentError(
-  //       "MoriCommunicator::NumRanks invalid team.");
-  // }
+  int32_t rank = shmem::ShmemMyPe();
+  if (rank < 0) {
+    return absl::InvalidArgumentError("MoriCommunicator::CurrentRank failed.");
+  }
   return rank;
 }
 
@@ -171,8 +168,9 @@ absl::Status MoriCommunicator::P2P(P2PType p2p_type,
                                       size_t count, RankId peer,
                                       const Executor& executor) {
   
-  VLOG(1) << (p2p_type == P2PType::Send ? "Send" : "Recv") 
-          << " MORI communicator: " << ToString();
+  VLOG(1) << CurrentRank().value() << (p2p_type == P2PType::Send ? " Send" : " Recv") 
+          << " to " << peer.value() << " count " << count
+          << " MORI communicator: " << ToString() ;
   CHECK_ABORTED()
 
   if (primitive_util::IsComplexType(dtype)) count *= 2;

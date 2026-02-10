@@ -31,8 +31,8 @@ limitations under the License.
 #include "xla/tsl/concurrency/async_value_ref.h"
 #include "xla/xla_data.pb.h"
 
-// #include "third_party/rocshmem/rocshmem.hpp"
-// #include "third_party/rocshmem/roc_mori_COLL.hpp"
+#define MORI_DISABLE_APP_INCLUDE
+#include "third_party/mori/shmem/shmem_api.hpp"
 
 namespace xla::gpu {
 

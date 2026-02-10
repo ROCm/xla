@@ -85,8 +85,6 @@ absl::Status InitializationTestBody(const int node_id, const int num_nodes) {
       GetDistributedKeyValueStore(distributed_client, /*key_prefix=*/"gpu:");
 
   TF_ASSIGN_OR_RETURN(auto platform, xla::PlatformUtil::GetPlatform("gpu"));
-  VLOG(0) << "Platform name " << platform->Name();
-
   TF_ASSIGN_OR_RETURN(auto collectives,
       xla::CollectivesRegistry::Get(platform->Name(), "nvshmem"));
 

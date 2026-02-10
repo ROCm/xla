@@ -237,9 +237,6 @@ bool IsGPUSyncCollective(const HloInstruction& instr) {
 absl::StatusOr<GPUCommunicationType> CommunicationType(
     int num_devices_per_partition, const HloChannelInstruction& instr,
     const se::GpuComputeCapability& gpu_version) {
-  if (!gpu_version.IsCuda()) {
-    return absl::FailedPreconditionError("Only CUDA is supported.");
-  }
 
   if (const auto* collective = DynCast<HloCollectiveInstruction>(&instr)) {
     TF_ASSIGN_OR_RETURN(
