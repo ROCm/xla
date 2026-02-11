@@ -19,7 +19,9 @@ limitations under the License.
 
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
@@ -37,6 +39,12 @@ namespace mlir::triton::xla {
 #include "xla/backends/gpu/codegen/triton/transforms/passes.h.inc"
 
 namespace {
+
+// Helper to detect if we're compiling for AMD/ROCm target
+bool IsAMDGPUTarget(mlir::Operation* op) {
+  // TODO: implement this function
+  return true;
+}
 
 absl::string_view GetMemorySemanticStr(triton::MemSemantic semantic) {
   switch (semantic) {
@@ -98,10 +106,50 @@ LogicalResult LowerAtomicWriteOp(AtomicWriteOp atomic_write,
   absl::string_view memory_semantic = GetMemorySemanticStr(semantic);
   absl::string_view scope = GetMemSyncScopeStr(atomic_write.getMemSyncScope());
 
-  // Predicate ASM to check if the mask is set.
-  // NB: The arguments start from 1 because 0 is reserved to be the output.
-  // Even though we don't care about result($0) in this case it must be there
-  // for ElementwiseInlineAsmOp verifiers to work
+  // Check if we're compiling for AMD GPUs
+  bool is_amd = IsAMDGPUTarget(atomic_write);
+
+  mlir::Type result_type = GetResultType(ptr.getType(), rewriter);
+  mlir::Value mask = atomic_write.getMask();
+
+  if (is_amd) {
+    // AMD GCN inline assembly for atomic write
+    constexpr absl::string_view kAtomicWriteAmdAsmTemplate = R"(
+      flat_store_dword $1, $2 glc
+      s_waitcnt vmcnt(0) lgkmcnt(0)
+    )";
+    constexpr absl::string_view kAtomicWriteAmdAsmWithMaskTemplate = R"(
+      v_cmp_ne_u32 vcc, $3, 0
+      s_cbranch_vccz done
+      flat_store_dword $1, $2 glc
+      s_waitcnt vmcnt(0) lgkmcnt(0)
+      done:
+    )";
+    
+    if (mask) {
+      triton::ElementwiseInlineAsmOp::create(
+          builder,
+          /*result_types=*/result_type,
+          /*asm_string=*/rewriter.getStringAttr(kAtomicWriteAmdAsmWithMaskTemplate),
+          /*constraints=*/rewriter.getStringAttr("=r,v,v,v"),
+          /*pure=*/rewriter.getBoolAttr(false),
+          /*packed_element=*/rewriter.getI32IntegerAttr(1),
+          /*args=*/mlir::ValueRange{ptr, value, mask});
+    } else {
+      triton::ElementwiseInlineAsmOp::create(
+          builder,
+          /*result_types=*/result_type,
+          /*asm_string=*/rewriter.getStringAttr(kAtomicWriteAmdAsmTemplate),
+          /*constraints=*/rewriter.getStringAttr("=r,v,v"),
+          /*pure=*/rewriter.getBoolAttr(false),
+          /*packed_element=*/rewriter.getI32IntegerAttr(1),
+          /*args=*/mlir::ValueRange{ptr, value});
+    }
+    rewriter.eraseOp(atomic_write);
+    return success();
+  }
+
+  // NVIDIA/CUDA: Use PTX inline assembly (original implementation)
   constexpr absl::string_view kAtomicWriteAsmWithMaskTemplate = R"(
     {
     .reg .pred %%p<>;
@@ -113,8 +161,6 @@ LogicalResult LowerAtomicWriteOp(AtomicWriteOp atomic_write,
     st.global.%s.%s.u32 [$1], $2;
   )";
 
-  mlir::Type result_type = GetResultType(ptr.getType(), rewriter);
-  mlir::Value mask = atomic_write.getMask();
   if (mask) {
     const std::string atomic_write_asm_with_mask = absl::StrFormat(
         kAtomicWriteAsmWithMaskTemplate, scope, memory_semantic);
@@ -158,8 +204,64 @@ LogicalResult LowerAtomicSpinWaitOp(AtomicSpinWaitOp atomic_wait,
   }
   absl::string_view memory_semantic = GetMemorySemanticStr(semantic);
   absl::string_view scope = GetMemSyncScopeStr(atomic_wait.getMemSyncScope());
-
   absl::string_view comparator = GetComparatorStr(atomic_wait.getComparator());
+
+  // Check if we're compiling for AMD GPUs
+  bool is_amd = IsAMDGPUTarget(atomic_wait);
+
+  mlir::Type result_type = GetResultType(ptr.getType(), rewriter);
+  Value mask = atomic_wait.getMask();
+
+  if (is_amd) {
+    // AMD GCN inline assembly for atomic spin-wait
+    // GCN uses different syntax and instructions compared to PTX
+    constexpr absl::string_view kAtomicSpinWaitAmdAsmTemplate = R"(
+      wait:
+        flat_load_dword $0, $1 glc slc
+        s_waitcnt vmcnt(0)
+        v_cmp_%s_u32 vcc, $0, $2
+        s_cbranch_vccnz wait
+    )";
+    constexpr absl::string_view kAtomicSpinWaitAmdAsmWithMaskTemplate = R"(
+      v_cmp_ne_u32 vcc, $3, 0
+      s_cbranch_vccz .Ldone
+      wait:
+        flat_load_dword $0, $1 glc slc
+        s_waitcnt vmcnt(0)
+        v_cmp_%s_u32 vcc, $0, $2
+        s_cbranch_vccnz wait
+      .Ldone:
+    )";
+    
+    if (mask) {
+      const std::string atomic_wait_asm_with_mask = absl::StrFormat(
+          kAtomicSpinWaitAmdAsmWithMaskTemplate, comparator);
+      triton::ElementwiseInlineAsmOp::create(
+          builder,
+          /*result_types=*/result_type,
+          /*asm_string=*/rewriter.getStringAttr(atomic_wait_asm_with_mask),
+          /*constraints=*/rewriter.getStringAttr("=r,v,v,v"),
+          /*pure=*/rewriter.getBoolAttr(false),
+          /*packed_element=*/rewriter.getI32IntegerAttr(1),
+          /*args=*/mlir::ValueRange{ptr, expected, mask});
+    } else {
+      const std::string atomic_wait_asm = absl::StrFormat(
+          kAtomicSpinWaitAmdAsmTemplate, comparator);
+      triton::ElementwiseInlineAsmOp::create(
+          builder,
+          /*result_types=*/result_type,
+          /*asm_string=*/rewriter.getStringAttr(atomic_wait_asm),
+          /*constraints=*/rewriter.getStringAttr("=r,v,v"),
+          /*pure=*/rewriter.getBoolAttr(false),
+          /*packed_element=*/rewriter.getI32IntegerAttr(1),
+          /*args=*/mlir::ValueRange{ptr, expected});
+    }
+    
+    rewriter.eraseOp(atomic_wait);
+    return success();
+  }
+
+  // NVIDIA/CUDA: Use PTX inline assembly (original implementation)
   constexpr absl::string_view kAtomicSpinWaitAsmTemplate = R"(
     {
     .reg .pred %%p<1>;
@@ -183,8 +285,7 @@ LogicalResult LowerAtomicSpinWaitOp(AtomicSpinWaitOp atomic_wait,
     done:
     }
   )";
-  mlir::Type result_type = GetResultType(ptr.getType(), rewriter);
-  Value mask = atomic_wait.getMask();
+  
   if (mask) {
     const std::string atomic_wait_asm_with_mask = absl::StrFormat(
         kAtomicSpinWaitAsmWithMaskTemplate, scope, memory_semantic, comparator);

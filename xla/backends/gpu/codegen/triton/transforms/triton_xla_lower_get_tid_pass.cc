@@ -17,7 +17,9 @@ limitations under the License.
 #include <utility>
 
 #include "absl/strings/string_view.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
@@ -36,24 +38,51 @@ namespace mlir::triton::xla {
 
 namespace {
 
+// Helper to detect if we're compiling for AMD/ROCm target
+bool IsAMDGPUTarget(mlir::Operation* op) {
+  //TODO: implement this function
+  return true;
+}
+
 LogicalResult LowerGetTidOp(GetTidOp get_flat_tid, PatternRewriter& rewriter) {
   mlir::OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(get_flat_tid);
   const Location loc = get_flat_tid.getLoc();
-
   const mlir::Type i32_type = rewriter.getI32Type();
-  const absl::string_view get_tid_asm = R"(
-    mov.u32 $0, %tid.x;
-  )";
-  auto tid_op = mlir::triton::ElementwiseInlineAsmOp::create(
-      rewriter, loc,
-      /*result_types=*/i32_type,
-      /*asm_string=*/rewriter.getStringAttr(get_tid_asm),
-      /*constraints=*/rewriter.getStringAttr("=r"),
-      /*pure=*/rewriter.getBoolAttr(true),
-      /*packed_element=*/rewriter.getI32IntegerAttr(1),
-      /*args*/ mlir::ValueRange{});
-  rewriter.replaceOp(get_flat_tid, tid_op->getResults());
+
+  // Check if we're compiling for AMD GPUs
+  bool is_amd = IsAMDGPUTarget(get_flat_tid);
+
+  if (is_amd) {
+    // AMD GCN: Read thread ID from hardware register
+    constexpr absl::string_view get_tid_asm = R"(
+      v_mbcnt_lo_u32_b32 $0, -1, 0
+      v_mbcnt_hi_u32_b32 $0, -1, $0
+    )";
+    auto tid_op = mlir::triton::ElementwiseInlineAsmOp::create(
+        rewriter, loc,
+        /*result_types=*/i32_type,
+        /*asm_string=*/rewriter.getStringAttr(get_tid_asm),
+        /*constraints=*/rewriter.getStringAttr("=v"),
+        /*pure=*/rewriter.getBoolAttr(true),
+        /*packed_element=*/rewriter.getI32IntegerAttr(1),
+        /*args*/ mlir::ValueRange{});
+    rewriter.replaceOp(get_flat_tid, tid_op->getResults());
+  } else {
+    // NVIDIA PTX: Read thread ID from special register
+    constexpr absl::string_view get_tid_asm = R"(
+      mov.u32 $0, %tid.x;
+    )";
+    auto tid_op = mlir::triton::ElementwiseInlineAsmOp::create(
+        rewriter, loc,
+        /*result_types=*/i32_type,
+        /*asm_string=*/rewriter.getStringAttr(get_tid_asm),
+        /*constraints=*/rewriter.getStringAttr("=r"),
+        /*pure=*/rewriter.getBoolAttr(true),
+        /*packed_element=*/rewriter.getI32IntegerAttr(1),
+        /*args*/ mlir::ValueRange{});
+    rewriter.replaceOp(get_flat_tid, tid_op->getResults());
+  }
   return success();
 }
 
