@@ -279,19 +279,28 @@ ENTRY Xtest {
 }
 
 absl::Status NvshmemRunSendRecv(
-      PjRtClient& client, uint32_t num_ranks, 
+      PjRtClient& client, uint32_t rank_id, uint32_t num_ranks, 
       const CompileOptions& compile_options, PrimitiveType dtype) {
 
   const char *kProgram = R"(HloModule Test
-ENTRY test_computation {
-  data = $0[] constant(42)
+addf {
+  x = f32[] parameter(0)
+  y = f32[] parameter(1)
+  ROOT apply_op = f32[] add(x, y)
+}
+ENTRY Xtest {
+  data = $0$1 iota(), iota_dimension=0
   after-all = token[] after-all()
-  recv = ($0[], $0[], token[]) recv(after-all), channel_id=0, frontend_attributes={_xla_send_recv_source_target_pairs="{{0,1}}"}, backend_config={"collective_backend_config":{"backend":"NVSHMEM"}}
-  send = ($0[], $0[], token[]) send(data, after-all), channel_id=0, control-predecessors={recv}, frontend_attributes={_xla_send_recv_source_target_pairs="{{0,1}}"}, backend_config={"collective_backend_config":{"backend":"NVSHMEM"}}
-  recv-done = ($0[], token[]) recv-done(recv), channel_id=0
-  recv-data = $0[] get-tuple-element(recv-done), index=0
+  recv = ($0$1, f32[], token[]) recv(after-all), channel_id=0, frontend_attributes={_xla_send_recv_source_target_pairs="{{0,1}}"}, backend_config={"collective_backend_config":{"backend":"NVSHMEM"}}
+  send = ($0$1, f32[], token[]) send(data, after-all), channel_id=0, control-predecessors={recv}, frontend_attributes={_xla_send_recv_source_target_pairs="{{0,1}}"}, backend_config={"collective_backend_config":{"backend":"NVSHMEM"}}
+  recv-done = ($0$1, token[]) recv-done(recv), channel_id=0
+  recv-data = $0$1 get-tuple-element(recv-done), index=0
   send-done = token[] send-done(send), channel_id=0, control-predecessors={recv}
-  ROOT result = $0[] copy(recv-data)
+  res = $0$1 copy(recv-data)
+  resf = f32$1 convert(res)
+  zero = f32[] constant(0)
+  ROOT final = f32[] reduce(resf, zero), dimensions={0}, to_apply=addf
+
 })";
   std::ostringstream sprogram;
   {
@@ -299,21 +308,16 @@ ENTRY test_computation {
   if (!ifs) return absl::InternalError("Ops wrong HLO file!");
     sprogram << ifs.rdbuf();
   }
+  int64_t N = 10000;
   auto dtype_str = primitive_util::LowercasePrimitiveTypeName(dtype);
-  auto hlo_text = sprogram.str();
-  VLOG(0) << "input text " << hlo_text;
-  //auto hlo_text = absl::Substitute(kProgram, dtype_str);
-
+  //auto hlo_text = sprogram.str();
+  auto hlo_text = absl::Substitute(kProgram, 
+        dtype_str, absl::StrFormat("[%lld]", N));
+  //VLOG(0) << "input text " << hlo_text;
+  
   TF_ASSIGN_OR_RETURN(auto executable,
                       CompileExecutable(hlo_text, client, compile_options));
 
-  // auto param = LiteralUtil::CreateFull({}, num_ranks);
-  // auto *device = client.addressable_devices()[0];
-
-  // TF_ASSIGN_OR_RETURN(
-  //     auto input, client.BufferFromHostLiteral(
-  //         param, *device->default_memory_space()));
-  
   TF_ASSIGN_OR_RETURN(auto result,
                         executable->Execute({{ //input.get()
                         }}, ExecuteOptions()));
@@ -322,10 +326,11 @@ ENTRY test_computation {
   TF_ASSIGN_OR_RETURN(auto output, result_buffers[0]->ToLiteralSync());
 
   VLOG(0) << "Got literal output " << output->ToString();
-  auto expected = LiteralUtil::CreateFull({}, (uint32_t)0);
+  if (rank_id == 0) return absl::OkStatus(); // 0-th rank just sends
+
+  auto expected = LiteralUtil::CreateFull({}, (float)N/2*(N-1));
   return literal_comparison::Equal(expected, *output, nullptr);
 }
-
 
 absl::Status NvshmemCollectiveTestBody(int rank_id, int num_ranks,
                                        int input_data_type,
@@ -368,7 +373,7 @@ absl::Status NvshmemCollectiveTestBody(int rank_id, int num_ranks,
   if (test_case == "collective_permute") {
     return NvshmemRunCollectivePermute(*client, num_ranks, options, data_type);
   } else if (test_case == "send_recv") {
-    return NvshmemRunSendRecv(*client, num_ranks, options, data_type);
+    return NvshmemRunSendRecv(*client, rank_id, num_ranks, options, data_type);
   } else if (test_case == "all_reduce") {
     VLOG(0) << "Running all reduce";
     return NvshmemRunAllReduce(*client, num_ranks, options, data_type);
