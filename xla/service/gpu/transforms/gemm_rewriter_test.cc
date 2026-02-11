@@ -98,7 +98,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -163,7 +163,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -203,7 +203,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -244,7 +244,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["2"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["2"],
@@ -284,7 +284,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
@@ -325,7 +325,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
@@ -366,7 +366,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
@@ -433,7 +433,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -473,7 +473,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -513,7 +513,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -554,7 +554,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -621,7 +621,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -661,7 +661,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
@@ -701,7 +701,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["0"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
@@ -741,7 +741,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false},
+                    ; CHECK-SAME: "damax_output":false,"mx_mode":false},
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["0"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],

@@ -543,6 +543,24 @@ auto OptionalBitcast(HloInstruction** optional_bitcast, Pattern pattern) {
                                   std::move(pattern));
 }
 
+// Counts the number of final users of an instruction, recursively traversing
+// through slice and bitcast operations. If a user is a slice or bitcast, we
+// recursively count its users. Otherwise, we count it as a final user.
+static inline uint32_t CountFinalUsers(const HloInstruction* instr) {
+  uint32_t final_user_count = 0;
+  for (const HloInstruction* user : instr->users()) {
+    if (user->opcode() == HloOpcode::kSlice ||
+        user->opcode() == HloOpcode::kBitcast) {
+      // Recursively count users of slice/bitcast operations
+      final_user_count += CountFinalUsers(user);
+    } else {
+      // This is a final user (not a slice or bitcast)
+      final_user_count += 1;
+    }
+  }
+  return final_user_count;
+}
+
 // The rewriting proceeds in a bottom-up way:
 //
 // (kDot A B) is rewritten into a (kCustomCall:gemm A B)
@@ -887,7 +905,12 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
     const auto is_rocm =
         std::holds_alternative<se::RocmComputeCapability>(gpu_version_);
-    if (is_rocm &&
+    const bool swishFusionEnabled =
+        instr->GetModule()
+            ->config()
+            .debug_options()
+            .xla_gpu_experimental_enable_cublaslt_swish_fusion();
+    if (swishFusionEnabled && is_rocm &&
         toolkit_version_ >= stream_executor::SemanticVersion{7, 0, 0}) {
       // Attempt to match approximate Swish activation
       // (https://flax.readthedocs.io/en/v0.5.3/_autosummary/flax.linen.swish.html),
@@ -2088,8 +2111,13 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       return absl::OkStatus();
     }
 
-    // There are four users of the gemm output within the GELU calculation.
-    bool has_aux = gemm->user_count() > 4;
+    // There are 2 final users of the gemm output within the Swish calculation.
+    bool has_aux = CountFinalUsers(gemm) > 2;
+    if (has_aux) {
+      // SILU_AUX epilogue is not supported yet.
+      // https://rocm.docs.amd.com/projects/hipBLASLt/en/latest/reference/datatypes.html
+      return absl::OkStatus();
+    }
 
     TF_ASSIGN_OR_RETURN(auto gpu_config,
                         gemm->backend_config<GpuBackendConfig>());
@@ -2103,9 +2131,8 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       return absl::OkStatus();
     }
 
-    std::unique_ptr<HloInstruction> output = gemm->CloneWithNewShape(
-        has_aux ? ShapeUtil::MakeTupleShape({gemm->shape(), gemm->shape()})
-                : gemm->shape());
+    std::unique_ptr<HloInstruction> output =
+        gemm->CloneWithNewShape(gemm->shape());
     TF_RETURN_IF_ERROR(output->set_backend_config(gpu_config));
     TF_RETURN_IF_ERROR(SetName(multiply->GetModule(), output.get()));
 
@@ -2113,14 +2140,6 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       output = slice_or_bitcast->CloneWithNewOperands(
           slice_or_bitcast->shape(),
           {gemm->parent()->AddInstruction(std::move(output))});
-    }
-
-    if (has_aux) {
-      HloInstruction* tuple_output =
-          gemm->parent()->AddInstruction(std::move(output));
-      TF_RETURN_IF_ERROR(ReplaceWithNewInstruction(
-          gemm, HloInstruction::CreateGetTupleElement(tuple_output, 1)));
-      output = HloInstruction::CreateGetTupleElement(tuple_output, 0);
     }
 
     return ReplaceWithNewInstruction(multiply, std::move(output));

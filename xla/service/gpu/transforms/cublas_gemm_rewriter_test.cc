@@ -35,6 +35,7 @@ limitations under the License.
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/semantic_version.h"
+#include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
@@ -791,6 +792,7 @@ class CublasLtGemmRewriteTest : public GemmRewriteTestBase {
     DebugOptions debug_options = GemmRewriteTestBase::GetDebugOptionsForTest();
     debug_options.set_xla_gpu_enable_cublaslt(true);
     debug_options.set_xla_gpu_enable_triton_gemm(false);
+    debug_options.set_xla_gpu_experimental_enable_cublaslt_swish_fusion(true);
     return debug_options;
   }
 
@@ -2153,10 +2155,10 @@ ENTRY test {
 
 TEST_F(CublasLtGemmRewriteTest, MatrixBiasSwishActivation) {
   auto runtime_version = GetRuntimeVersion();
-  bool rocm_gelu_available =
+  bool rocm_swish_available =
       IsRocm() &&
       (runtime_version >= stream_executor::SemanticVersion(7, 0, 0));
-  if (!rocm_gelu_available) {
+  if (!rocm_swish_available) {
     GTEST_SKIP() << "TODO: Unsupported blas-lt epilogue on ROCM";
   }
   const char* hlo_text = R"(
@@ -2202,6 +2204,117 @@ ENTRY test {
 ; CHECK-DAG:         "epilogue":"SILU"
 ; CHECK:           }
       )");
+}
+
+// Test Swish/SILU activation with bitcast - expects no-fusion when there are
+// additional users beyond the Swish pattern
+TEST_F(CublasLtGemmRewriteTest, SwishActivationWithBitcastAndAuxiliaryOutput) {
+  auto runtime_version = GetRuntimeVersion();
+  bool rocm_swish_available =
+      IsRocm() &&
+      (runtime_version >= stream_executor::SemanticVersion(7, 0, 0));
+  if (!rocm_swish_available) {
+    GTEST_SKIP() << "Swish/SILU activation fusion only available on ROCm 7.0+";
+  }
+
+  const char* hlo_text = R"(
+HloModule test
+
+ENTRY %test (x: bf16[49152,11008], y: bf16[11008,11008]) -> (bf16[12,4096,11008], bf16[49152,11008]) {
+  %x = bf16[49152,11008]{1,0} parameter(0)
+  %y = bf16[11008,11008]{1,0} parameter(1)
+  %dot = bf16[49152,11008]{1,0} dot(%x, %y), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+  %bitcast = bf16[12,4096,11008]{2,1,0} bitcast(%dot)
+  
+  %one = bf16[] constant(1)
+  %one_bcast = bf16[12,4096,11008]{2,1,0} broadcast(%one), dimensions={}
+  %neg = bf16[12,4096,11008]{2,1,0} negate(%bitcast)
+  %exp = bf16[12,4096,11008]{2,1,0} exponential(%neg)
+  %add = bf16[12,4096,11008]{2,1,0} add(%exp, %one_bcast)
+  %sigmoid = bf16[12,4096,11008]{2,1,0} divide(%one_bcast, %add)
+  %swish = bf16[12,4096,11008]{2,1,0} multiply(%bitcast, %sigmoid)
+  
+  %extra_user = bf16[49152,11008]{1,0} negate(%dot)
+  
+  ROOT %out = (bf16[12,4096,11008]{2,1,0}, bf16[49152,11008]{1,0}) tuple(%swish, %extra_user)
+}
+)";
+
+  HloModuleConfig config;
+  DebugOptions debug_options = GetDebugOptionsForTest();
+  config.set_debug_options(debug_options);
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                          ParseAndReturnVerifiedModule(hlo_text, config));
+
+  GemmRewriter pass(Capability(), GetToolkitVersion());
+  TF_ASSERT_OK_AND_ASSIGN(bool changed, RunHloPass(&pass, module.get()));
+  EXPECT_TRUE(changed);
+
+  TF_ASSERT_OK_AND_ASSIGN(bool filecheck_result,
+                          RunFileCheck(module->ToString(), R"(
+; CHECK:           [[GEMM_TUPLE:%[^ ]+]] = {{.*}} custom-call
+; CHECK:           custom_call_target="__cublas$lt$matmul",
+; CHECK-DAG:         "epilogue":"DEFAULT"
+      )"));
+  EXPECT_TRUE(filecheck_result);
+}
+
+TEST_F(CublasLtGemmRewriteTest, SwishActivationFusionDisabled) {
+  if (SkipGpuBlasLtTest()) {
+    GTEST_SKIP() << "BlasLt is not supported on this GPU architecture";
+  }
+
+  // Swish fusion is only supported on ROCm with toolkit version >= 7.0.0
+  if (!IsRocm()) {
+    GTEST_SKIP() << "Swish fusion is only supported on ROCm";
+  }
+
+  const char* hlo_text = R"(
+    HloModule swish_fusion
+
+    ENTRY main {
+      x = f32[128,256] parameter(0)
+      y = f32[256,512] parameter(1)
+      dot = f32[128,512] dot(x, y), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+      
+      // Swish activation: x * sigmoid(x)
+      // where: sigmoid(x) = 1/(1 + exp(-x))
+      one = f32[] constant(1)
+      one_bcast = f32[128,512] broadcast(one), dimensions={}
+      neg_dot = f32[128,512] negate(dot)
+      exp_neg_dot = f32[128,512] exponential(neg_dot)
+      denom = f32[128,512] add(one_bcast, exp_neg_dot)
+      sigmoid = f32[128,512] divide(one_bcast, denom)
+      ROOT swish = f32[128,512] multiply(dot, sigmoid)
+    }
+    )";
+
+  DebugOptions debug_options = GetDebugOptionsForTest();
+  debug_options.set_xla_gpu_experimental_enable_cublaslt_swish_fusion(false);
+
+  HloModuleConfig config;
+  config.set_debug_options(debug_options);
+
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                          ParseAndReturnVerifiedModule(hlo_text, config));
+
+  EXPECT_TRUE(RunAndCompare(std::move(module), ErrorSpec{1e-3, 1e-3}));
+
+  // Check that the swish activation is fused into the cuBLASLt call
+  TF_ASSERT_OK_AND_ASSIGN(module,
+                          ParseAndReturnVerifiedModule(hlo_text, config));
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> optimized_module,
+                          GetOptimizedModule(std::move(module)));
+
+  absl::StatusOr<bool> filecheck_result =
+      RunFileCheck(optimized_module->ToString(),
+                   R"(
+      ; CHECK: custom_call_target="__cublas$lt$matmul"
+      ; CHECK-SAME: "epilogue":"DEFAULT"
+      ; CHECK-NOT: "epilogue":"SILU"
+      )");
+  TF_ASSERT_OK(filecheck_result.status());
+  EXPECT_TRUE(filecheck_result.value());
 }
 
 TEST_F(CublasLtGemmRewriteTest, VectorBiasThenApproxGeluActivation) {

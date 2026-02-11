@@ -793,15 +793,18 @@ absl::Status RunOptimizationPasses(
 
   // SortRewriter needs to ask the device how much scratch space is needed,
   // which isn't feasible if we don't have a device.
-  if (hlo_module->config().debug_options().xla_gpu_enable_cub_radix_sort()) {
-    if (stream_exec != nullptr) {
-      pipeline.AddPass<SortRewriter>(gpu_target_config.device_description,
+  bool enable_sort_rewriter =
+      hlo_module->config().debug_options().xla_gpu_enable_cub_radix_sort();
+  if (stream_exec == nullptr) {
+    LOG(WARNING) << "Using fallback sort algorithm rather than SortRewriter, "
+                    "which will be slower at runtime. To avoid this, "
+                    "compile with a GPU present.";
+    enable_sort_rewriter = false;
+  }
+
+  if (enable_sort_rewriter) {
+    pipeline.AddPass<SortRewriter>(gpu_target_config.device_description,
                                      std::string{platform_name});
-    } else {
-      LOG(WARNING) << "Using fallback sort algorithm rather than SortRewriter, "
-                      "which will be slower at runtime. To avoid this, "
-                      "compile with a GPU present.";
-    }
   }
 
   // Comparison total order expander
@@ -890,10 +893,12 @@ absl::Status RunOptimizationPasses(
 
   // DynamicPadder creates a stable KeyValue sort for dynamic reshapes.
   pipeline.AddPass<DynamicPadder>(dynamic_padder_options);
-
-  // TODO(b/407909195): Add SortRewriter here once it supports S32 keys for
-  // KeyValueSort. It needs to run before StableSortExpander, otherwise we will
-  // not match the comparison computation.
+  // SortRewriter needs to run before StableSortExpander.
+  // It needs to be called twice also because EighExpander can add a Sort op.
+  if (enable_sort_rewriter) {
+    pipeline.AddPass<SortRewriter>(gpu_target_config.device_description,
+                                   gpu_target_config.platform_name);
+  }
 
   // Expand the sort op to support stable sorting if required.
   pipeline.AddPass<StableSortExpander>();
@@ -1834,12 +1839,10 @@ absl::Status GpuCompiler::OptimizeHloPostLayoutAssignment(
       pipeline.AddPass<HloCSE>(/*is_layout_sensitive=*/true);
       pipeline.AddPass<HloConstantFolding>();
       pipeline.AddPass<HloDCE>();
-      if (debug_options.xla_gpu_enable_triton_softmax_fusion()) {
-        pipeline.AddPass<SoftmaxRewriterTriton>(
-            gpu_target_config.device_description, ShapeSizeBytesFunction(),
-            &symbolic_expr_context_,
-            /*only_fuse_if_profitable=*/true);
-      }
+      pipeline.AddPass<SoftmaxRewriterTriton>(
+          gpu_target_config.device_description, ShapeSizeBytesFunction(),
+          &symbolic_expr_context_,
+          /*only_fuse_if_profitable=*/true);
     }
 
     pipeline.AddPass<ReductionDimensionGrouper>();

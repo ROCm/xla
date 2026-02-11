@@ -102,7 +102,8 @@ absl::StatusOr<std::vector<RepeatedFlagModifier>> ParseRepeatedEnumModifiers(
 namespace {
 
 template <typename T>
-static auto FindRepeatedFieldValue(google::protobuf::RepeatedField<int>* list, T value) {
+static auto FindRepeatedFieldValue(google::protobuf::RepeatedField<int>* list,
+                                   T value) {
   for (auto it = list->begin(); it != list->end(); ++it) {
     if (*it == value) {
       return it;
@@ -279,7 +280,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_enable_nccl_user_buffers(false);
   opts.set_xla_gpu_experimental_enable_nccl_symmetric_buffers(false);
   opts.set_xla_gpu_experimental_enable_nvshmem(false);
-  opts.set_xla_gpu_enable_nccl_comm_splitting(true);
+  opts.set_xla_gpu_enable_nccl_comm_splitting(false);
   opts.set_xla_gpu_nccl_init_max_rank_per_root_ratio(0);
 
   opts.set_xla_gpu_temp_buffer_use_separate_color(false);
@@ -326,7 +327,6 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.add_xla_gpu_unsupported_generic_triton_emitter_features(
       DebugOptions::GENERIC_TRITON_EMITTER_ENABLE_NESTED_GEMM);
   opts.set_xla_gpu_unsupported_enable_triton_multi_output_fusion(false);
-  opts.set_xla_gpu_enable_triton_softmax_fusion(true);
   opts.set_xla_gpu_enable_cudnn_int8x32_convolution_reordering(true);
   opts.set_xla_gpu_triton_gemm_any(true);
   opts.set_xla_gpu_verify_triton_fusion_numerics(false);
@@ -376,6 +376,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_nccl_collective_max_nchannels(0);
   opts.set_xla_gpu_nccl_p2p_max_nchannels(0);
   opts.set_xla_gpu_multi_streamed_windowed_einsum(true);
+  opts.set_xla_gpu_experimental_enable_cublaslt_swish_fusion(true);
 
   opts.set_xla_gpu_experimental_stream_annotation(true);
   // Minimum combined size of matrices in matrix multiplication to
@@ -385,6 +386,14 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   // on V100 and H100 GPUs. See openxla/xla #9319 for details.
   const int64_t kDefaultMinGemmRewriteSize = 100;
   opts.set_xla_gpu_gemm_rewrite_size_threshold(kDefaultMinGemmRewriteSize);
+
+#ifdef HAS_SUPPORT_FOR_EMBEDDED_LIB_DEVICE
+  opts.set_xla_gpu_use_embeded_device_lib(true);
+#endif
+
+#ifdef HAS_SUPPORT_FOR_LLD_AS_A_LIBRARY
+  opts.set_xla_gpu_use_inprocess_lld(true);
+#endif
 
   opts.set_xla_gpu_use_memcpy_local_p2p(false);
 
@@ -460,6 +469,9 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_cpu_collective_call_terminate_timeout_seconds(40);
 
   opts.set_xla_keep_shardings_after_spmd(false);
+
+  // maximum number of events to be traced, default to 4M
+  opts.set_xla_gpu_rocm_max_trace_events(4 * 1024 * 1024);
   return opts;
 }
 
@@ -1271,12 +1283,6 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
                 "optimizations. debug_options are written to the --xla_dump_to "
                 "dir, or, if no dir is specified, to stdout. Ignored unless "
                 "xla_dump_hlo_as_text is true."));
-  flag_list->push_back(
-      tsl::Flag("xla_gpu_enable_triton_softmax_fusion",
-                bool_setter_for(&DebugOptions::set_xla_gpu_enable_triton_softmax_fusion),
-                debug_options->xla_gpu_enable_triton_softmax_fusion(),
-                "Enable fusion of the softmax function to triton"
-                "default value is true"));
   flag_list->push_back(
       tsl::Flag("xla_dump_hlo_as_proto",
                 bool_setter_for(&DebugOptions::set_xla_dump_hlo_as_proto),
@@ -2180,6 +2186,12 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "(minimum combined number of elements of both matrices "
       "in non-batch dimensions to be considered for a rewrite)."));
   flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_enable_cublaslt_swish_fusion",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_experimental_enable_cublaslt_swish_fusion),
+      debug_options->xla_gpu_experimental_enable_cublaslt_swish_fusion(),
+      "Enable fusion of the swish activiation with cublaslt gemm."));
+  flag_list->push_back(tsl::Flag(
       "xla_gpu_use_embeded_device_lib",
       bool_setter_for(&DebugOptions::set_xla_gpu_use_embeded_device_lib),
       debug_options->xla_gpu_use_embeded_device_lib(),
@@ -2601,6 +2613,12 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       bool_setter_for(&DebugOptions::set_xla_keep_shardings_after_spmd),
       debug_options->xla_keep_shardings_after_spmd(),
       "If true, keep shardings after SPMD."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_rocm_max_trace_events",
+      int64_setter_for(&DebugOptions::set_xla_gpu_rocm_max_trace_events),
+      debug_options->xla_gpu_rocm_max_trace_events(),
+      "Maximum number of ROCm trace events (applies to callback/activity/"
+      "annotation). Set as high as memory allows; up to 1e9."));
 }  // NOLINT(readability/fn_size)
 
 // Allocates flag_values and flag_objects; this function must not be called more
@@ -2693,8 +2711,7 @@ FlagStatus GetFlagStatus(absl::string_view flag_name) {
           "xla_gpu_all_reduce_combine_threshold_bytes",
           "xla_gpu_autotune_level",
           "xla_gpu_collective_permute_decomposer_threshold",
-          "xla_gpu_cublas_fallback",
-          "xla_gpu_dot_merger_threshold_mb",
+          "xla_gpu_cublas_fallback", "xla_gpu_dot_merger_threshold_mb",
           "xla_gpu_enable_dynamic_slice_fusion",
           "xla_gpu_enable_latency_hiding_scheduler",
           "xla_gpu_enable_pipelined_all_gather",

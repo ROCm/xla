@@ -121,8 +121,6 @@ absl::Status AllToAllStartThunk::Initialize(const InitializeParams& params) {
   CHECK_GT(params.local_device_count, 0);
   VLOG(5) << "Local device count: " << params.local_device_count;
 
-  TF_ASSIGN_OR_RETURN(GpuCollectives * collectives, GetGpuCollectives(params));
-
   if (is_local() && p2p_memcpy_enabled_) {
     TF_ASSIGN_OR_RETURN(GpuCollectives * collectives,
                         GetGpuCollectives(params));

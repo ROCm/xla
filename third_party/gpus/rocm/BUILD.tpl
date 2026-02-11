@@ -150,9 +150,11 @@ cc_library(
         ],
         ":multiple_rocm_paths": [
             "-Wl,-rpath=%{rocm_lib_paths}",
+            "-Lexternal/local_config_rocm/rocm/%{rocm_root}/lib",
         ],
         "//conditions:default": [
             "-Wl,-rpath,/opt/rocm/lib",
+            "-Lexternal/local_config_rocm/rocm/%{rocm_root}/lib",
         ],
     }),
     visibility = ["//visibility:public"],
@@ -239,6 +241,7 @@ cc_library(
     includes = [
         "%{rocm_root}/include",
     ],
+    linkopts = ["-lrocblas"],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [
@@ -303,6 +306,7 @@ cc_library(
         "%{rocm_root}/lib/libMIOpen*.so*",
         "%{rocm_root}/share/miopen/**",
     ]),
+    linkopts = ["-lMIOpen"],
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include",
@@ -412,6 +416,7 @@ cc_library(
     hdrs = glob(["%{rocm_root}/include/rocsolver/**"]),
     data = glob(["%{rocm_root}/lib/librocsolver*.so*"]),
     include_prefix = "rocm",
+    linkopts = ["-lrocsolver"],
     includes = [
         "%{rocm_root}/include/",
     ],
@@ -443,9 +448,13 @@ cc_library(
     includes = [
         "%{rocm_root}/include/",
     ],
+    linkopts = ["-lhipsolver"],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
-    deps = [":rocm_config"],
+    deps = [
+        ":rocm_config",
+        ":rocm_rpath",
+    ],
 )
 
 cc_library(
@@ -456,6 +465,7 @@ cc_library(
     includes = [
         "%{rocm_root}/include/",
     ],
+    linkopts = ["-lhipblas"],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [
@@ -535,10 +545,8 @@ cc_library(
 cc_library(
     name = "amd_comgr",
     hdrs = glob(["%{rocm_root}/include/amd_comgr/**"]),
-    data = glob([
-        "%{rocm_root}/lib/libamd_comgr_loader.so*",
+    srcs = glob([
         "%{rocm_root}/lib/libamd_comgr.so*",
-        "%{rocm_root}/lib/llvm/lib/libLLVM.so*",
     ]),
     include_prefix = "rocm",
     includes = [
@@ -551,6 +559,7 @@ cc_library(
         "//conditions:default": [],
     }),
     strip_include_prefix = "%{rocm_root}",
+    visibility = ["//visibility:public"],
     deps = [
         ":rocm_config",
         ":rocm_rpath",

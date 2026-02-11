@@ -84,6 +84,10 @@ se::StreamExecutor* GpuExecutor() {
   return platform->ExecutorForDevice(0).value();
 }
 
+bool IsRocm() {
+  return absl::StrContains(GetPlatformName(), "ROCM");
+}
+
 std::unique_ptr<AllGatherStartThunk> CreateAllGatherStartThunk(
     const BufferAllocation& alloc0, const BufferAllocation& alloc1) {
   auto create_replica_groups =
@@ -145,7 +149,7 @@ std::unique_ptr<GemmThunk> CreateGemmThunk(const BufferAllocation& alloc1) {
       ShapeUtil::MakeShape(PrimitiveType::F32, {3, 1}), {}, {0},
       ShapeUtil::MakeShape(PrimitiveType::F32, {1, 1}), 1.0, 0.0, 0.0,
       PrecisionConfig::ALG_UNSET, std::nullopt,
-      se::blas::kDefaultComputePrecision, false, false,
+      se::blas::kDefaultComputePrecision, false, false, false,
       executor->GetDeviceDescription().gpu_compute_capability());
   BufferAllocation::Slice slice1(&alloc1, 0, 16 * 4);
   return std::make_unique<GemmThunk>(Thunk::ThunkInfo(), config.value(), slice1,
@@ -620,6 +624,9 @@ TEST(CommandBufferConversionPassTest, DontConvertIfNotMinGraphSize) {
 }
 
 TEST(CommandBufferConversionPassTest, ConvertWhileThunk) {
+  if(IsRocm()) {
+    GTEST_SKIP() << "Graph conditionals are not yet supported on HIP graphs";
+  }
   CommandBufferConversionPass pass{"test"};
 
   std::vector<std::unique_ptr<Thunk>> thunks;
@@ -731,6 +738,9 @@ TEST(CommandBufferConversionPassTest,
 }
 
 TEST(CommandBufferConversionPassTest, ConvertWhileThunkWithAsyncPair) {
+  if(IsRocm()) {
+    GTEST_SKIP() << "Graph conditionals are not yet supported on HIP graphs";
+  }
   CommandBufferConversionPass pass{"test"};
 
   std::vector<std::unique_ptr<Thunk>> thunks;
