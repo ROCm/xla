@@ -367,6 +367,7 @@ absl::StatusOr< GraphNodeHandle > RocmCommandBuffer::CopyChildNodeToMainGraph(
                                            deps.size(), &params),
                "CopyChildNodeToMainGraph failed creating kernel node"));
       // VLOG(1) << "Added child kernel node: " << hchild << " -> " << hmain;
+      static_cast< void >(hipGetLastError()); // need to flush the last error
       return FromHipGraphHandle(hmain);
     }
   }
@@ -378,7 +379,7 @@ absl::StatusOr< GraphNodeHandle > RocmCommandBuffer::CopyChildNodeToMainGraph(
     TF_RETURN_IF_ERROR(ToStatus(wrap::hipGraphAddMemsetNode(&hmain, graph_, 
                                   deps.data(), deps.size(), &params), 
             "CopyChildNodeToMainGraph failed creating memset node"));
-    // VLOG(1) << "Added child memset node: "<< hchild << " -> " << hmain;
+    static_cast< void >(hipGetLastError()); // need to flush the last error
     return FromHipGraphHandle(hmain);
   }
 }
@@ -393,6 +394,7 @@ absl::Status RocmCommandBuffer::UpdateChildNodeInMainGraph(
     hipKernelNodeParams params;
     auto s = wrap::hipGraphKernelNodeGetParams(hchild, &params);
     if (s == hipSuccess) {
+      static_cast< void >(hipGetLastError()); // need to flush the last error
       return ToStatus(wrap::hipGraphExecKernelNodeSetParams(exec_, hmain, &params));
     }
   }
@@ -401,6 +403,7 @@ absl::Status RocmCommandBuffer::UpdateChildNodeInMainGraph(
     TF_RETURN_IF_ERROR(ToStatus(
           wrap::hipGraphMemsetNodeGetParams(hchild, &params),
           "UpdateChildNodeInMainGraph failed getting memset node params"));
+    static_cast< void >(hipGetLastError()); // need to flush the last error
     return ToStatus(wrap::hipGraphExecMemsetNodeSetParams(exec_, hmain, &params), 
             "UpdateChildNodeInMainGraph failed setting memset node params");
   }
@@ -505,13 +508,14 @@ absl::Status RocmCommandBuffer::LaunchGraph(Stream* stream) {
   s_printer.dump(stream->parent()->device_ordinal(), graph_);
 #endif
   
-  auto s1 = tsl::Env::Default()->NowMicros();
+  // auto s1 = tsl::Env::Default()->NowMicros();
   auto res = ToStatus(wrap::hipGraphLaunch(
                       exec_, static_cast<hipStream_t>(
                                  stream->platform_specific_handle().stream)),
                   "Failed to launch HIP graph");
-  auto dif = tsl::Env::Default()->NowMicros() - s1;
-  VLOG(0) << "Launch time: " << dif << " usec";
+  // auto dif = tsl::Env::Default()->NowMicros() - s1;
+  // if(stream->parent()->device_ordinal()==0)
+  // VLOG(0) << "Launch time: " << dif << " usec";
   return res;
 }
 

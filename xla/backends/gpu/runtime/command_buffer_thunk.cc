@@ -117,7 +117,7 @@ bool CommandBufferThunk::ExecutorCommandBuffer::UpdateBufferAllocations(
           VLOG(1) << this << " " << (id % kNumCachedGraphs) << " Alloc " << idx << " has changed: "
                   << recorded[idx].opaque() << " -> " << alloc.opaque();
         }
-        // break;
+        break;
       }
     } // for
     if (!should_update) {

@@ -577,12 +577,9 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
   std::vector<RocmTracerEvent> aggregated_events;
   aggregated_events.reserve(api_events_map_.size());
 
-  VLOG(0) << "Total API events: " << api_events_map_.size() <<
+  VLOG(1) << "Total API events: " << api_events_map_.size() <<
             " total activity events: " << activity_ops_events_map_.size();
   for (auto& [key, ops] : activity_ops_events_map_) {
-
-    VLOG(0) << "key " << key << " #ops" << ops.size();
-
     for(const auto& op : ops) {
     switch (op.type) {
     case RocmTracerEventType::Kernel:
@@ -638,7 +635,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
     }  // switch
     } // for
   }  // for
-  VLOG(0) << "Total aggregated_events " << aggregated_events.size();
+  VLOG(1) << "Total aggregated_events " << aggregated_events.size();
 
   // Make sure for all activity events we have API callback events
   for (auto& activity_iter : activity_ops_events_map_) {

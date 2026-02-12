@@ -9,7 +9,7 @@ sum {
 while_cond {
   pp = (s32[], f32[1024,1024], f32[1024,4096]) parameter(0)
   idx = s32[] get-tuple-element(pp), index=0
-  total = s32[] constant(15)
+  total = s32[] constant(20)
   ROOT cmp = pred[] compare(idx, total), direction=LT
 }
 

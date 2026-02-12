@@ -137,6 +137,29 @@ absl::StatusOr<std::unique_ptr<GpuExecutable>> GpuExecutable::Create(
   return std::unique_ptr<GpuExecutable>(new GpuExecutable(std::move(params)));
 }
 
+absl::StatusOr<se::OwningDeviceMemory> CachedAllocator::CachedAllocate(
+                                              BufferAllocation::Index idx,
+                                              int device_ordinal,
+                                              uint64_t size,
+                                              bool retry_on_failure,
+                                              int64_t memory_space) {
+  
+  return allocator_->Allocate(device_ordinal, size, retry_on_failure, 
+                                memory_space);
+}
+
+absl::Status CachedAllocator::Deallocate(int device_ordinal, 
+                                         se::DeviceMemoryBase mem) {
+  
+  auto& set = exec_->get_allocs_cache(device_ordinal).address_set;
+  // do not deallocate private mem
+  if (set.find(mem.opaque()) != set.end()) {
+    VLOG(0) << "Skipping deallocation of " << mem.opaque() << " " << mem.size();
+    return absl::OkStatus();
+  }
+  return allocator_->Deallocate(device_ordinal, mem);
+}
+
 // Implementation note: HLO profiling is always enabled for GPU executables,
 // since we can use timers around thunks.
 GpuExecutable::GpuExecutable(GpuExecutable::Params params)
@@ -659,7 +682,8 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
 
   int64_t cache_idx = 0;
   auto& cache = get_allocs_cache(device_ordinal, &cache_idx);
-  auto [it, inserted] = cache.emplace(allocation.index(), AllocationsCacheEntry{});
+  auto [it, inserted] = cache.index2entry.emplace(
+                          allocation.index(), AllocationsCacheEntry{});
   bool is_live_out = allocation.maybe_live_out();
   if (inserted) {
     for(size_t i = 0; i < (is_live_out ? NumCachedBuffers : 1u); i++) {
@@ -667,6 +691,8 @@ absl::StatusOr<se::DeviceMemoryBase> GpuExecutable::BufferForAllocation(
         memory_allocator->Allocate(device_ordinal, buffer_size,
                                    /*retry_on_failure=*/true,
                                    /*memory_space=*/allocation.color()));
+      // mark this address as used
+      cache.address_set.insert(it->second[i].cref().opaque());
     }
     if (device_ordinal == 0) {
       VLOG(1) << module_name_ << "," << allocation.index() 
@@ -746,8 +772,19 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
     VariantArguments arguments) {
   XLA_SCOPED_LOGGING_TIMER(absl::StrCat(
       "GpuExecutable::ExecuteAsyncOnStreamImpl(", module_name_, ")"));
-  se::DeviceMemoryAllocator* const memory_allocator = run_options->allocator();
+  auto *memory_allocator = run_options->allocator();
   se::StreamExecutor* executor = run_options->stream()->parent();
+
+  if (enable_cached_allocs_) {
+    if (!cached_allocator_) {
+      cached_allocator_ = std::make_unique< CachedAllocator >(
+            memory_allocator, this);
+    }
+    if (cached_allocator_->GetAllocator() != memory_allocator) {
+      LOG(FATAL) << module_name() << " OOps allocator has changed!";
+    }
+    memory_allocator = cached_allocator_.get();
+  }
 
   // GpuExecutable always bound to a single GpuContext during its execution, so
   // we activate it once to skip expensive context activations later.
@@ -909,10 +946,10 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
 
     if (enable_cached_allocs_) {
       int64_t index = 0;
-      auto& cache = get_allocs_cache(device_ordinal, &index);
+      auto& cache = get_allocs_cache(device_ordinal, &index).index2entry;
       auto it = cache.find(allocation->index());
       if(it != cache.end() && result_buffer == it->second[index].cref()) {
-        alloc_cached_flag.back() = true;
+        //alloc_cached_flag.back() = true;
       } 
 
       if(VLOG_IS_ON(1) && device_ordinal == 0) {

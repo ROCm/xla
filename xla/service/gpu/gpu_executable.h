@@ -55,6 +55,50 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
+class GpuExecutable;
+class CachedAllocator : public se::DeviceMemoryAllocator {
+ public:
+  // Parameter platform indicates which platform the allocator allocates memory
+  // on. Must be non-null.
+  explicit CachedAllocator(se::DeviceMemoryAllocator *allocator, 
+      GpuExecutable *exec) : se::DeviceMemoryAllocator(allocator_->platform()),
+      allocator_(allocator), exec_(exec) {}
+  virtual ~CachedAllocator() {}
+
+  const se::DeviceMemoryAllocator *GetAllocator() const {
+    return allocator_;
+  }
+
+  absl::StatusOr<se::OwningDeviceMemory> CachedAllocate(
+                                              BufferAllocation::Index idx,
+                                              int device_ordinal,
+                                              uint64_t size,
+                                              bool retry_on_failure,
+                                              int64_t memory_space);
+
+  absl::StatusOr<se::OwningDeviceMemory> Allocate(int device_ordinal,
+                                              uint64_t size,
+                                              bool retry_on_failure,
+                                              int64_t memory_space) override {
+    return allocator_->Allocate(device_ordinal, size, retry_on_failure, 
+                                memory_space);
+  }
+
+  absl::Status Deallocate(int device_ordinal, se::DeviceMemoryBase mem) override;
+
+  bool AllowsAsynchronousDeallocation() const override 
+  { return allocator_->AllowsAsynchronousDeallocation(); }
+
+  absl::StatusOr<se::Stream *> GetStream(int device_ordinal) override {
+    return allocator_->GetStream(device_ordinal);
+  }
+
+ protected:
+  se::DeviceMemoryAllocator *allocator_;
+  GpuExecutable *exec_;
+};
+
+
 // GPU-targeting implementation of the XLA Executable interface.
 //
 // Launches the given GPU kernel via the StreamExecutor.
@@ -86,8 +130,12 @@ class GpuExecutable : public Executable {
   // keep two memory alloc entries for each BufferAllocation for ping-ponging
   using AllocationsCacheEntry = std::array<se::ScopedDeviceMemory<uint8_t>, 
                                                              NumCachedBuffers>;
-  using AllocationsCache = absl::flat_hash_map< BufferAllocation::Index, 
-                                                AllocationsCacheEntry >;
+  struct AllocationsCache {
+    absl::flat_hash_set< void * > address_set;
+    absl::flat_hash_map< BufferAllocation::Index, AllocationsCacheEntry > 
+          index2entry;
+  };
+
   struct Params {
     std::string asm_text;
     std::vector<uint8_t> binary;
@@ -313,6 +361,8 @@ class GpuExecutable : public Executable {
   std::deque< std::pair<AllocationsCache, int64_t > > cached_mem_allocations_ 
                                         ABSL_GUARDED_BY(module_handle_mutex_);
   bool enable_cached_allocs_; // whether to use cached_mem_allocations_
+
+  std::unique_ptr< CachedAllocator > cached_allocator_;
 
   std::vector<ConstantInfo> constants_;
   const absl::flat_hash_map<ShapeIndex, OutputInfo> output_info_;
