@@ -2086,7 +2086,10 @@ xla_test(
     name = "auto_sharding_gpu_compiler_test",
     srcs = ["auto_sharding_gpu_compiler_test.cc"],
     backends = ["gpu"],
-    tags = ["no_oss"],  # TODO(b/277355322): Make autosharding work in OSS
+    tags = [
+        "no_oss",   # TODO(b/277355322): Make autosharding work in OSS
+        "cuda-only",
+    ],
     deps = [
         "//xla:xla_data_proto_cc",
         "//xla/hlo/experimental/auto_sharding:auto_sharding_option",
