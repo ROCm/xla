@@ -81,6 +81,19 @@ std::vector<TritonGemmConfig> GetDefaultTritonConfigs(
   return configs;
 }
 
+bool IsLegalSplitKForDot(const HloDotInstruction& dot,
+                         const TritonGemmConfig& config) {
+  const DotDimensionNumbers& dnums = dot.dot_dimension_numbers();
+  int64_t contracting_size = 1;
+  for (int i = 0; i < dnums.lhs_contracting_dimensions_size(); ++i) {
+    contracting_size *=
+        dot.operand(0)->shape().dimensions(dnums.lhs_contracting_dimensions(i));
+  }
+  const int64_t max_split_k =
+      CeilOfRatio<int64_t>(contracting_size, config.block_k);
+  return config.split_k <= max_split_k;
+}
+
 }  // namespace
 
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
@@ -131,6 +144,38 @@ TritonBackend::GetSupportedConfigsForDot(const HloInstruction* instr) {
         gemm_configs, /*hints=*/GetDefaultTritonConfigs(
             target_config().device_description.gpu_compute_capability()));
   }
+
+  // Strictly keep only split-k legal configs for this dot shape.
+  std::vector<TritonGemmConfig> legal_gemm_configs;
+  legal_gemm_configs.reserve(gemm_configs.size());
+  for (const auto& config : gemm_configs) {
+    if (IsLegalSplitKForDot(*dot, config)) {
+      legal_gemm_configs.push_back(config);
+    }
+  }
+
+  // If legal_gemm_configs is empty, synthesize one split_k=1 candidate from
+  // the most conservative seed config.
+  if (legal_gemm_configs.empty() && !gemm_configs.empty()) {
+    int fallback_idx = 0;
+    for (int i = 1; i < gemm_configs.size(); ++i) {
+      const TritonGemmConfig& cur = gemm_configs[i];
+      const TritonGemmConfig& best = gemm_configs[fallback_idx];
+      if (cur.block_k < best.block_k ||
+          (cur.block_k == best.block_k && cur.block_m * cur.block_n <
+                                              best.block_m * best.block_n) ||
+          (cur.block_k == best.block_k &&
+           cur.block_m * cur.block_n == best.block_m * best.block_n &&
+           cur.num_warps < best.num_warps)) {
+        fallback_idx = i;
+      }
+    }
+    TritonGemmConfig fallback = gemm_configs[fallback_idx];
+    fallback.split_k = 1;
+    legal_gemm_configs.push_back(fallback);
+  }
+  gemm_configs = std::move(legal_gemm_configs);
+
   configs.reserve(gemm_configs.size());
   for (const auto& config : gemm_configs) {
     auto any = std::make_unique<google::protobuf::Any>();

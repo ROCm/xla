@@ -39,6 +39,7 @@ limitations under the License.
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/util/proto/proto_matchers.h"
+#include "xla/util.h"
 #include "xla/xla.pb.h"
 
 namespace xla {
@@ -86,6 +87,28 @@ ENTRY %entry (lhs: bf16[4,4], rhs: bf16[4,4], lhs_scale: bf16[1,1], rhs_scale: b
   %lhs_scale = bf16[1,1]{1,0} parameter(2)
   %rhs_scale = bf16[1,1]{1,0} parameter(3)
   ROOT %fusion = bf16[4,4]{1,0} fusion(%lhs, %rhs, %lhs_scale, %rhs_scale), kind=kCustom, calls=%fusion_dot, metadata={op_name="foo"}, backend_config={"operation_queue_id":"0","wait_on_operation_queues":[],"fusion_backend_config":{"kind":"__triton_gemm"},"force_earliest_schedule":false,"reification_cost":[],"device_type":"DEVICE_TYPE_INVALID"}
+})";
+
+const char kFwd0LikeHlo[] = R"(
+HloModule fwd0_like
+
+fused_dot {
+  lhs = f32[1,2,72,384]{3,2,1,0} parameter(0)
+  rhs = f32[1,384,2,72]{3,2,1,0} parameter(1)
+  ROOT dot = f32[1,2,72,72]{3,2,1,0} dot(lhs, rhs),
+    lhs_batch_dims={0,1},
+    lhs_contracting_dims={3},
+    rhs_batch_dims={0,2},
+    rhs_contracting_dims={1}
+}
+
+ENTRY main {
+  lhs = f32[1,2,72,384]{3,2,1,0} parameter(0)
+  rhs = f32[1,384,2,72]{3,2,1,0} parameter(1)
+  ROOT fusion = f32[1,2,72,72]{3,2,1,0} fusion(lhs, rhs),
+    kind=kCustom,
+    calls=fused_dot,
+    backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
 })";
 
 class TritonBackendTest : public HloHardwareIndependentTestBase {
@@ -215,6 +238,34 @@ TEST_F(TritonBackendTest, Compile) {
   absl::StatusOr<std::unique_ptr<Executable>> executable = backend_.Compile(
       *(module->entry_computation()->root_instruction()), *config);
   EXPECT_THAT(executable, absl_testing::IsOk());
+}
+
+TEST_F(TritonBackendTest, GetSupportedConfigsRespectSplitKLegality) {
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                          ParseAndReturnVerifiedModule(kFwd0LikeHlo));
+  HloInstruction* fusion = module->entry_computation()->root_instruction();
+  HloInstruction* dot =
+      fusion->called_computations()[0]->root_instruction();
+  const DotDimensionNumbers& dnums = dot->dot_dimension_numbers();
+
+  int64_t contracting_size = 1;
+  for (int i = 0; i < dnums.lhs_contracting_dimensions_size(); ++i) {
+    contracting_size *=
+        dot->operand(0)->shape().dimensions(dnums.lhs_contracting_dimensions(i));
+  }
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::vector<std::unique_ptr<BackendConfig>> configs,
+      backend_.GetSupportedConfigs(*fusion));
+  ASSERT_FALSE(configs.empty());
+
+  for (const auto& config_any : configs) {
+    TritonBackendConfig cfg;
+    ASSERT_TRUE(config_any->UnpackTo(&cfg));
+    const int64_t max_split_k =
+        CeilOfRatio<int64_t>(contracting_size, cfg.block_k());
+    EXPECT_LE(cfg.split_k(), max_split_k);
+  }
 }
 
 }  // namespace
