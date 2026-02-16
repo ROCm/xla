@@ -1,0 +1,29 @@
+--- a/third_party/amd/lib/TritonAMDGPUTransforms/ReorderInstructions.cpp
++++ b/third_party/amd/lib/TritonAMDGPUTransforms/ReorderInstructions.cpp
+@@ -285,11 +285,21 @@ static void sinkSecondLoad(scf::ForOp forOp) {
+   if (!(tileAShape[0] >= 128 && tileAShape[1] >= 64 && tileBShape[1] >= 128))
+     return;
+   // Only apply the optimization when the moving is legal
+-  // 1. Make sure the 2nd loadOp is before the dot
+-  // 2. Make sure the first user of the 2nd loadOp is after the dot.
+-  bool isBeforeDotOp = ldBOp->isBeforeInBlock(dotOp);
+-  auto firstUser = *ldBOp.getResult().getUsers().begin();
+-  bool firstUserAfterDotOp = dotOp->isBeforeInBlock(firstUser);
++  // 1. Make sure the 2nd loadOp is before the dot.
++  // 2. Make sure all users of the 2nd loadOp (resolved to the same block)
++  //    are after the dot.
++  Block *block = forOp.getBody();
++  bool isBeforeDotOp = ldBOp->isBeforeInBlock(dotOp.getOperation());
++  bool firstUserAfterDotOp = true;
++  for (auto user : ldBOp.getResult().getUsers()) {
++    Operation *ancestor = block->findAncestorOpInBlock(*user);
++    if (!ancestor)
++      continue;
++    if (!dotOp->isBeforeInBlock(ancestor)) {
++      firstUserAfterDotOp = false;
++      break;
++    }
++  }
+   if (isBeforeDotOp && firstUserAfterDotOp)
+     // move ldBOp right before tt.dot
+     ldBOp->moveBefore(dotOp);
