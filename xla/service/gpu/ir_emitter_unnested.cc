@@ -70,6 +70,9 @@ limitations under the License.
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "tsl/platform/casts.h"
+#include "tsl/platform/human_readable_json.h"
 #include "xla/backends/gpu/codegen/fusion_emitter.h"
 #include "xla/backends/gpu/codegen/fusions.h"
 #include "xla/backends/gpu/codegen/triton/fusion_emitter.h"
@@ -184,9 +187,6 @@ limitations under the License.
 #include "xla/tsl/protobuf/dnn.pb.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/casts.h"
-#include "tsl/platform/human_readable_json.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace xla {
 namespace gpu {
@@ -879,6 +879,66 @@ absl::Status IrEmitterUnnested::EmitCublasLtMatmulThunkF8(
       std::move(thunk_info), std::move(canonical_hlo), std::move(gemm_config),
       blas_lt_epilogue, algorithm, a, b, c, d, bias, aux, a_scale, b_scale,
       c_scale, d_scale, d_amax, workspace_buffer);
+  AddThunkToThunkSequence(std::move(thunk));
+  return absl::OkStatus();
+}
+
+absl::Status IrEmitterUnnested::EmitCublasLtGroupedMatmulThunk(
+    const HloCustomCallInstruction* instr) {
+  TF_ASSIGN_OR_RETURN(const auto gpu_config,
+                      instr->backend_config<xla::gpu::GpuBackendConfig>());
+  const xla::gpu::GemmBackendConfig& config = gpu_config.gemm_backend_config();
+  bool has_aux_output = false;
+
+  TF_RET_CHECK(instr->operand_count() == 3);
+
+  xla::ShapeIndex output_index =
+      instr->shape().IsTuple() ? xla::ShapeIndex{0} : xla::ShapeIndex{};
+
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice a,
+                      GetAllocationSliceForHlo(instr->operand(0)));
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice b,
+                      GetAllocationSliceForHlo(instr->operand(1)));
+
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice group_sizes,
+                      GetAllocationSliceForHlo(instr->operand(2)));
+  // No bias
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice c,
+                      GetAllocationSliceForHlo(instr, output_index));
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice d,
+                      GetAllocationSliceForHlo(instr, output_index));
+
+  std::optional<BufferAllocation::Slice> workspace_buffer;
+  if (instr->shape().IsTuple() && (instr->shape().tuple_shapes().size() - 1)) {
+    TF_ASSIGN_OR_RETURN(workspace_buffer,
+                        GetAllocationSliceForHlo(
+                            instr, {instr->shape().tuple_shapes_size() - 1}));
+  }
+
+  TF_ASSIGN_OR_RETURN(
+      auto gemm_config,
+      GroupedGemmConfig::For(static_cast<const HloInstruction*>(instr),
+                             ir_emitter_context_->gpu_compute_capability()));
+
+  // Use the first algorithm by default (i.e. fastest according to
+  // heuristics).
+  int64_t algorithm =
+      config.algorithm_case() == GemmBackendConfig::kSelectedAlgorithm
+          ? config.selected_algorithm()
+          : 0;
+
+  BufferAllocation::Slice a_scale, b_scale, c_scale, d_scale, d_amax;
+  BufferAllocation::Slice bias, aux;
+  Thunk::ThunkInfo thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(
+      instr, ir_emitter_context_->GetNextThunkId());
+  std::string canonical_hlo = instr->ToString(
+      HloPrintOptions::Fingerprint().set_print_backend_config(true));
+
+  auto thunk = std::make_unique<CublasLtMatmulThunk>(
+      std::move(thunk_info), std::move(canonical_hlo), std::move(gemm_config),
+      se::gpu::BlasLt::Epilogue::kDefault, algorithm, a, b, c, d, group_sizes,
+      bias, aux, a_scale, b_scale, c_scale, d_scale, d_amax, workspace_buffer);
+
   AddThunkToThunkSequence(std::move(thunk));
   return absl::OkStatus();
 }
@@ -1760,6 +1820,13 @@ absl::Status IrEmitterUnnested::EmitAsyncCustomCallStart(
   }
   if (IsCublasLtMatmulF8(*wrapped)) {
     auto status = EmitCublasLtMatmulThunkF8(custom_call);
+    if (status.ok()) {
+      thunk_sequence_.back()->set_execution_stream_id(execution_stream_id);
+    }
+    return status;
+  }
+  if (IsCublasLtGroupedMatmul(*wrapped)) {
+    auto status = EmitCublasLtGroupedMatmulThunk(custom_call);
     if (status.ok()) {
       thunk_sequence_.back()->set_execution_stream_id(execution_stream_id);
     }
@@ -3345,6 +3412,9 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
       }
       if (IsCublasLtMatmulF8(*instr)) {
         return EmitCublasLtMatmulThunkF8(custom_call);
+      }
+      if (IsCublasLtGroupedMatmul(*instr)) {
+        return EmitCublasLtGroupedMatmulThunk(custom_call);
       }
       if (IsCublasLtMatmulMX(*instr)) {
         return EmitCublasLtMatmulThunkMX(custom_call);

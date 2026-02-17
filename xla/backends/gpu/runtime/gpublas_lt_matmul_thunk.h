@@ -20,6 +20,7 @@ limitations under the License.
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -35,11 +36,28 @@ namespace gpu {
 
 class CublasLtMatmulThunk : public Thunk {
  public:
+  // Constructor for regular matmul
   CublasLtMatmulThunk(Thunk::ThunkInfo thunk_info, std::string canonical_hlo,
                       GemmConfig gemm_config,
                       se::gpu::BlasLt::Epilogue epilogue, int64_t algorithm_idx,
                       BufferAllocation::Slice a, BufferAllocation::Slice b,
                       BufferAllocation::Slice c, BufferAllocation::Slice d,
+                      BufferAllocation::Slice bias /* may be null */,
+                      BufferAllocation::Slice aux /* may be null */,
+                      BufferAllocation::Slice a_scale /* may be null */,
+                      BufferAllocation::Slice b_scale /* may be null */,
+                      BufferAllocation::Slice c_scale /* may be null */,
+                      BufferAllocation::Slice d_scale /* may be null */,
+                      BufferAllocation::Slice d_amax /* may be null */,
+                      std::optional<const BufferAllocation::Slice> workspace);
+
+  // Constructor for grouped matmul
+  CublasLtMatmulThunk(Thunk::ThunkInfo thunk_info, std::string canonical_hlo,
+                      se::gpu::GroupedGemmConfig gemm_config,
+                      se::gpu::BlasLt::Epilogue epilogue, int64_t algorithm_idx,
+                      BufferAllocation::Slice a, BufferAllocation::Slice b,
+                      BufferAllocation::Slice c, BufferAllocation::Slice d,
+                      BufferAllocation::Slice group_sizes,
                       BufferAllocation::Slice bias /* may be null */,
                       BufferAllocation::Slice aux /* may be null */,
                       BufferAllocation::Slice a_scale /* may be null */,
@@ -57,6 +75,10 @@ class CublasLtMatmulThunk : public Thunk {
     return workspace_;
   }
 
+  bool is_grouped() const {
+    return std::holds_alternative<se::gpu::GroupedGemmConfig>(gemm_config_);
+  }
+
   absl::StatusOr<ThunkProto> ToProto() const override;
   static absl::StatusOr<std::unique_ptr<Thunk>> FromProto(
       Thunk::ThunkInfo thunk_info, const CublasLtMatmulThunkProto& proto,
@@ -69,8 +91,10 @@ class CublasLtMatmulThunk : public Thunk {
                                        const ExecuteParams& params);
   absl::StatusOr<se::gpu::BlasLt::MatmulPlan*> GetCachedMatmulPlan(
       const ExecuteParams& params);
+  absl::StatusOr<se::gpu::BlasLt::MatmulPlan*> GetCachedGroupedMatmulPlan(
+      const ExecuteParams& params);
 
-  GemmConfig gemm_config_;
+  std::variant<GemmConfig, se::gpu::GroupedGemmConfig> gemm_config_;
   se::gpu::BlasLt::Epilogue epilogue_;
   int64_t algorithm_idx_;
   std::string canonical_hlo_;
@@ -78,6 +102,7 @@ class CublasLtMatmulThunk : public Thunk {
   BufferAllocation::Slice b_;
   BufferAllocation::Slice c_;
   BufferAllocation::Slice d_;
+  std::optional<BufferAllocation::Slice> group_sizes_;  // Only for grouped
   BufferAllocation::Slice bias_;
   BufferAllocation::Slice aux_;
   BufferAllocation::Slice a_scale_;

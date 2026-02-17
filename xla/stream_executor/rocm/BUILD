@@ -682,6 +682,7 @@ cc_library(
         "//xla/stream_executor:stream",
         "//xla/stream_executor/gpu:gpu_blas_lt",
         "//xla/stream_executor/gpu:gpu_helpers_header",
+        "//xla/stream_executor/gpu:gpu_stream",
         "//xla/tsl/platform:env",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:status",
@@ -694,6 +695,7 @@ cc_library(
         "@com_google_absl//absl/time",
         "@eigen_archive//:eigen3",
         "@local_config_rocm//rocm:rocm_headers",
+        "@local_config_rocm//rocm:hipblaslt_link",
         "@tsl//tsl/platform:dso_loader",
         "@tsl//tsl/platform:ml_dtypes",
     ] + if_static([
@@ -719,6 +721,7 @@ cc_library(
         "//xla/stream_executor:blas",
         "//xla/stream_executor:device_memory",
         "//xla/stream_executor:host_or_device_scalar",
+        "//xla/stream_executor:memory_allocation",
         "//xla/stream_executor:stream",
         "//xla/stream_executor/gpu:gpu_blas_lt",
         "//xla/tsl/platform:env",

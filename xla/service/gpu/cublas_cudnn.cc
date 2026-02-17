@@ -19,18 +19,18 @@ limitations under the License.
 
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "tsl/platform/statusor.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/util.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace gpu {
 
 bool IsCublasGemm(const HloInstruction& hlo) {
   return IsLegacyCublasMatmul(hlo) || IsCublasLtMatmul(hlo) ||
-         IsCublasLtMatmulF8(hlo);
+         IsCublasLtMatmulF8(hlo) || IsCublasLtGroupedMatmul(hlo);
 }
 
 bool IsLegacyCublasMatmul(const HloInstruction& hlo) {
@@ -41,6 +41,11 @@ bool IsLegacyCublasMatmul(const HloInstruction& hlo) {
 bool IsCublasLtMatmul(const HloInstruction& hlo) {
   return hlo.opcode() == HloOpcode::kCustomCall &&
          hlo.custom_call_target() == kCublasLtMatmulCallTarget;
+}
+
+bool IsCublasLtGroupedMatmul(const HloInstruction& hlo) {
+  return hlo.opcode() == HloOpcode::kCustomCall &&
+         hlo.custom_call_target() == kCublasLtGroupedMatmulCallTarget;
 }
 
 bool IsCublasLtMatmulF8(const HloInstruction& hlo) {
@@ -63,6 +68,8 @@ const absl::string_view kCublasLtMatmulCallTarget = "__cublas$lt$matmul";
 const absl::string_view kCublasLtMatmulF8CallTarget = "__cublas$lt$matmul$f8";
 const absl::string_view kCublasLtMatmulMXCallTarget = "__cublas$lt$matmul$mx";
 const absl::string_view kTriangularSolveCallTarget = "__cublas$triangularSolve";
+const absl::string_view kCublasLtGroupedMatmulCallTarget =
+    "__cublas$lt$groupedMatmul";
 
 const absl::string_view kCudnnConvBackwardInputCallTarget =
     "__cudnn$convBackwardInput";
