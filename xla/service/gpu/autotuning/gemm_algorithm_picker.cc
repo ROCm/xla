@@ -125,11 +125,6 @@ class GemmAutotuner {
     deterministic_ops_ = RequireDeterminism(gemm->GetModule()->config());
     solutions_limit_ = debug_options.xla_gpu_autotune_max_solutions();
 
-    TF_ASSIGN_OR_RETURN(auto gemm_config,
-                        GemmConfig::For(gemm, stream_->parent()
-                                                  ->GetDeviceDescription()
-                                                  .gpu_compute_capability()));
-
     // Don't run autotuning concurrently on the same GPU.
     absl::MutexLock gpu_lock(&GetGpuMutex(stream_->parent()));
 
@@ -143,6 +138,17 @@ class GemmAutotuner {
             *gemm, autotune_config_.GetAllocator(), stream,
             RedzoneBuffers::kAllInputsAllOutputs, should_init_buffers,
             should_check_correctness, redzone_padding_bytes));
+
+    // Grouped GEMM uses cuBLASLt but doesn't need GemmConfig for autotuning
+    // since the plan is created directly from GroupedGemmConfig
+    if (IsCublasLtGroupedMatmul(*gemm)) {
+      return TuneGpuBlasLtGrouped(gemm);
+    }
+
+    TF_ASSIGN_OR_RETURN(auto gemm_config,
+                        GemmConfig::For(gemm, stream_->parent()
+                                                  ->GetDeviceDescription()
+                                                  .gpu_compute_capability()));
 
     return IsCublasLtMatmul(*gemm) || IsCublasLtMatmulF8(*gemm)
                ? TuneGpuBlasLt(gemm, gemm_config)
@@ -159,6 +165,54 @@ class GemmAutotuner {
   const Shape& GetOutputShape(const HloInstruction* gemm) {
     return gemm->shape().IsTuple() ? gemm->shape().tuple_shapes(0)
                                    : gemm->shape();
+  }
+
+  absl::StatusOr<AutotuneResult> TuneGpuBlasLtGrouped(
+      const HloInstruction* gemm) {
+    auto workspace_buffer = rz_buffers_.output_buffers().at(
+        gemm->shape().tuple_shapes().size() - 1);
+
+    TF_ASSIGN_OR_RETURN(
+        auto gemm_config,
+        GroupedGemmConfig::For(gemm, stream_->parent()
+                                         ->GetDeviceDescription()
+                                         .gpu_compute_capability()));
+
+    std::vector<BlasLt::Epilogue> epilogues(1, BlasLt::Epilogue::kDefault);
+    TF_ASSIGN_OR_RETURN(auto plan, BlasLt::GetGroupedMatmulPlan(
+                                       stream_, gemm_config, epilogues));
+
+    TF_ASSIGN_OR_RETURN(
+        auto algorithms,
+        plan->GetAlgorithms(stream_, GemmConfig::kNumAlgorithms,
+                            /*max_workspace_size*/ workspace_buffer.size()));
+
+    se::DeviceMemoryBase group_sizes_buffer = rz_buffers_.input_buffers().at(2);
+
+    auto tuned_func = [&](const BlasLt::MatmulAlgorithm& algorithm)
+        -> absl::StatusOr<se::blas::ProfileResult> {
+      // Run a warmup iteration without the profiler active.
+      TF_RETURN_IF_ERROR(plan->SetAlgorithm(algorithm));
+      TF_RETURN_IF_ERROR(plan->ExecuteOnStream(
+          stream_, LhsBuffer(), RhsBuffer(), OutputBuffer(), OutputBuffer(),
+          group_sizes_buffer, se::DeviceMemoryBase{}, se::DeviceMemoryBase{},
+          se::DeviceMemoryBase{}, se::DeviceMemoryBase{},
+          se::DeviceMemoryBase{}, se::DeviceMemoryBase{},
+          se::DeviceMemoryBase{}, workspace_buffer));
+      se::blas::ProfileResult profile_result;
+      profile_result.set_warmup_run_executed(true);
+      TF_RETURN_IF_ERROR(plan->ExecuteOnStream(
+          stream_, LhsBuffer(), RhsBuffer(), OutputBuffer(), OutputBuffer(),
+          group_sizes_buffer, se::DeviceMemoryBase{}, se::DeviceMemoryBase{},
+          se::DeviceMemoryBase{}, se::DeviceMemoryBase{},
+          se::DeviceMemoryBase{}, se::DeviceMemoryBase{},
+          se::DeviceMemoryBase{}, workspace_buffer, &profile_result));
+      return std::move(profile_result);
+    };
+
+    return GetBestAlgorithm<BlasLt::MatmulAlgorithm>(
+        gemm, algorithms, gemm_config.beta, /*return_algo_index*/ true,
+        tuned_func);
   }
 
   absl::StatusOr<AutotuneResult> TuneGpuBlasLt(const HloInstruction* gemm,
@@ -431,7 +485,21 @@ absl::StatusOr<bool> RunOnInstruction(HloInstruction* gemm,
 
   GpuBackendConfig gpu_config =
       gemm->backend_config<GpuBackendConfig>().value();
-  GemmBackendConfig& backend_config = *gpu_config.mutable_gemm_backend_config();
+
+  // Handle both regular GEMM and grouped GEMM
+  GemmBackendConfig* backend_config_ptr = nullptr;
+  if (gpu_config.has_gemm_backend_config()) {
+    backend_config_ptr = gpu_config.mutable_gemm_backend_config();
+  } else if (gpu_config.has_grouped_gemm_backend_config()) {
+    backend_config_ptr = gpu_config.mutable_grouped_gemm_backend_config()
+                             ->mutable_gemm_backend_config();
+  } else {
+    return Internal(
+        "GEMM instruction has neither gemm_backend_config nor "
+        "grouped_gemm_backend_config");
+  }
+
+  GemmBackendConfig& backend_config = *backend_config_ptr;
 
   // Degenerate gemms replaced with memzero operation, no need to auto tune it.
   if (backend_config.alpha_real() == 0.0 &&

@@ -93,7 +93,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -158,7 +158,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -198,7 +198,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -239,7 +239,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["2"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -279,7 +279,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -320,7 +320,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -361,7 +361,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -428,7 +428,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -468,7 +468,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -508,7 +508,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -549,7 +549,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -616,7 +616,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -656,7 +656,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -696,7 +696,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["0"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
@@ -736,7 +736,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "force_earliest_schedule":false,"reification_cost":[],
                     ; CHECK-SAME: "device_type":"DEVICE_TYPE_INVALID",
                     ; CHECK-SAME: "grouped_gemm_backend_config":{
-                    ; CHECK-SAME: "gemm_backend_config":{"alpha_real":1,"beta":0,
+                    ; CHECK-SAME: "gemm_backend_config":{
                     ; CHECK-SAME: "dot_dimension_numbers":{"lhs_contracting_dimensions":["0"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",

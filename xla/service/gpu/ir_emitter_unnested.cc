@@ -885,6 +885,9 @@ absl::Status IrEmitterUnnested::EmitCublasLtMatmulThunkF8(
 
 absl::Status IrEmitterUnnested::EmitCublasLtGroupedMatmulThunk(
     const HloCustomCallInstruction* instr) {
+  TF_ASSIGN_OR_RETURN(const auto gpu_config,
+                      instr->backend_config<xla::gpu::GpuBackendConfig>());
+  const xla::gpu::GemmBackendConfig& config = gpu_config.gemm_backend_config();
   bool has_aux_output = false;
 
   TF_RET_CHECK(instr->operand_count() == 3);
@@ -916,7 +919,13 @@ absl::Status IrEmitterUnnested::EmitCublasLtGroupedMatmulThunk(
       auto gemm_config,
       GroupedGemmConfig::For(static_cast<const HloInstruction*>(instr),
                              ir_emitter_context_->gpu_compute_capability()));
-  int64_t algorithm = 0;
+
+  // Use the first algorithm by default (i.e. fastest according to
+  // heuristics).
+  int64_t algorithm =
+      config.algorithm_case() == GemmBackendConfig::kSelectedAlgorithm
+          ? config.selected_algorithm()
+          : 0;
 
   BufferAllocation::Slice a_scale, b_scale, c_scale, d_scale, d_amax;
   BufferAllocation::Slice bias, aux;
