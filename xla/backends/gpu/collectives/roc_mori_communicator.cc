@@ -48,7 +48,10 @@ static auto AsRocmStream(se::Stream* stream) {
 }
 
 MoriCommunicator::~MoriCommunicator() {
-  
+  if (signal_flags_ != nullptr) {
+    collectives_->Deallocate(signal_flags_).IgnoreError();
+    signal_flags_ = nullptr;
+  }
   // if (teams_ != nullptr) {
   //   for (uint32_t i = 0; i < kMaxTeams; i++) {
   //     rocm_mori_team_destroy(teams_[i]);
@@ -158,9 +161,21 @@ Future<> MoriCommunicator::AllReduce(
   return absl::InternalError("Invalid MORI reduction type.");
 }
 
+// Lazily allocate per-peer signal flags and block retirement counter.
+absl::Status MoriCommunicator::InitSignals() {
+  TF_ASSIGN_OR_RETURN(auto npes, NumRanks());
+  size_t alloc_size = (npes + 1) * sizeof(uint32_t);
+  TF_ASSIGN_OR_RETURN(auto *ptr, collectives_->Allocate(alloc_size));
+  signal_flags_ = static_cast< uint32_t *>(ptr);
+  // Zero-initialise everything (signals must start at 0).
+  roc_mori::InitSignalMemory(signal_flags_, alloc_size);
+  return absl::OkStatus();
+}
+
 // Performs point-to-point communication between two ranks using MORI.
-// This is a helper function used by both Send and Recv operations to handle
-// the actual data transfer between peers.
+// Send: launches a single GPU kernel that copies data to the peer via P2P
+//       and sets a completion flag on the peer.
+// Recv: launches a single-thread GPU kernel that waits for the flag.
 absl::Status MoriCommunicator::P2P(P2PType p2p_type,
                                       PrimitiveType dtype,
                                       se::DeviceMemoryBase recv_buffer,
@@ -168,8 +183,9 @@ absl::Status MoriCommunicator::P2P(P2PType p2p_type,
                                       size_t count, RankId peer,
                                       const Executor& executor) {
   
-  VLOG(1) << CurrentRank().value() << (p2p_type == P2PType::Send ? " Send" : " Recv") 
-          << " to " << peer.value() << " count " << count
+  const char *stype = (p2p_type == P2PType::Send ? " Send" : " Recv");
+  VLOG(1) << CurrentRank().value() << stype << " to " << peer.value() 
+          << " count " << count
           << " MORI communicator: " << ToString() ;
   CHECK_ABORTED()
 
@@ -180,37 +196,17 @@ absl::Status MoriCommunicator::P2P(P2PType p2p_type,
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
   auto gpu_stream = AsRocmStream(stream);
 
-  // auto call = [&](auto T) -> absl::Status {
-  //   using Type = decltype(T);
-  //   auto *dest = static_cast< Type *>(dest_ptr);
-  //   const auto *source = static_cast< const Type *>(source_ptr);
-  //   if (p2p_type == P2PType::Send) {
-  //     return put_nbi_on_stream(peer.value(), dest, source, count, gpu_stream);
-  //   } else {
-  //     return get_nbi_on_stream(peer.value(), dest, source, count, gpu_stream);
-  //   }
-  // };
-
-  // switch(dtype) {
-  // case PrimitiveType::F64: return call(double{});
-  // case PrimitiveType::F32: return call(float{});
-  // case PrimitiveType::S64: 
-  // case PrimitiveType::U64: 
-  //   return call(longlong{});
-  // case PrimitiveType::S32: 
-  // case PrimitiveType::U32:
-  //   return call(int{});
-  // case PrimitiveType::S16: 
-  // case PrimitiveType::BF16: 
-  // case PrimitiveType::F16: 
-  //   return call(short{});
-  // case PrimitiveType::S8:
-  // case PrimitiveType::U8:
-  //   return call(char{});
-  // }
-  return absl::InternalError(
-          absl::StrFormat("Invalid MORI %s type.", 
-            p2p_type == P2PType::Recv ? "recv" : "send"));
+  size_t bytes = count * primitive_util::BitWidth(dtype) / 8;
+  int res = 0;
+  if (p2p_type == P2PType::Send) {
+    res = roc_mori::Send(dest_ptr, source_ptr, bytes, peer.value(),
+                         signal_flags_, gpu_stream);
+  } else {
+    res = roc_mori::Recv(dest_ptr, source_ptr, bytes, peer.value(),
+                         signal_flags_, gpu_stream);
+  }
+  if (res == 0) return absl::OkStatus();
+  return absl::InternalError(absl::StrFormat("MORI %s failed", stype));
 }
 
 Future<> MoriCommunicator::Send(se::DeviceMemoryBase recv_buffer,

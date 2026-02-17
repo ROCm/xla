@@ -31,23 +31,22 @@ using GpuStreamHandle = std::intptr_t;
 
 void synchronize_all();
 
-// Intra-node P2P Send via MORI (put model).
-// Pushes 'count' elements from the local send_buffer to peer's recv_buffer,
-// then writes a completion signal to peer's *signal location.
-// Both data buffers and the signal must reside in MORI's symmetric heap
-// (allocated via shmem::ShmemMalloc).
-// The signal must be initialised to 0 before the first call.
-template <class T>
-int Send(T* recv_buffer, T* send_buffer, size_t count, int peer,
-         uint64_t* signal);
+// Zero-initialise signal flag memory (device memory / symmetric heap).
+void InitSignalMemory(void* ptr, size_t bytes);
+
+// Intra-node P2P Send via MORI (put model, single kernel).
+int Send(void* recv_buffer, void* send_buffer, size_t bytes, int peer,
+         uint32_t* signal_flags, std::intptr_t stream_handle);
 
 // Intra-node P2P Recv via MORI (put model – wait only).
-// Does NOT transfer any data.  Blocks the GPU stream until the local
-// *signal becomes non-zero (written by the remote peer's Send), then
-// resets it to 0 for the next round.
-template <class T>
-int Recv(T* recv_buffer, T* send_buffer, size_t count, int peer,
-         uint64_t* signal);
+int Recv(void* recv_buffer, void* send_buffer, size_t bytes, int peer,
+         uint32_t* signal_flags, std::intptr_t stream_handle);
+
+// P2P barrier across all PEs, enqueued on the given stream.
+// barrier_count must be a single uint32_t in MORI's symmetric heap.
+// round is 1-based and must be incremented by the caller each invocation.
+void BarrierOnStream(uint32_t* barrier_count, uint32_t round,
+                     std::intptr_t stream_handle);
 
 } // namespace roc_mori
 

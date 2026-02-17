@@ -139,10 +139,16 @@ class MoriCommunicator : public Communicator {
                    se::DeviceMemoryBase send_buffer, size_t count, RankId peer,
                    const Executor& executor);
 
+  absl::Status InitSignals();
+
   static absl::StatusOr<se::Stream*> ToStream(const Executor& executor);
 
   MoriCollectives* collectives_;  // Parent MoriCollectives instance
   bool aborted_ = false;             // Has Abort() been called?
+
+  // Per-peer completion signal flags in MORI symmetric heap.
+  // signal_flags_[i] is set by PE i when it finishes sending data to us.
+  uint32_t* signal_flags_ = nullptr;
   // rocshmem::rocm_mori_team_t *teams_ = nullptr;
   // rocshmem::rocm_mori_team_t host_team_ = rocshmem::ROC_MORI_TEAM_WORLD;
 };

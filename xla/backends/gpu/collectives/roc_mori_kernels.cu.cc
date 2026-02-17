@@ -19,131 +19,177 @@ limitations under the License.
 namespace roc_mori {
 namespace {
 
-// Launch configuration constants.
-constexpr int kBlockSize = 256;
-constexpr int kMaxBlocks = 128;
-
-// Number of T-elements each warp processes per loop iteration.
-// 1024 elements × 4 B/float = 4 KB per warp-chunk — large enough
-// for good vectorisation yet small enough for balanced work distribution.
-constexpr size_t kChunkElems = 1024;
+constexpr int kWarpSize = 64, kWarpsPerBlock = 2;
+constexpr int kBlockSize = kWarpSize * kWarpsPerBlock;
+constexpr int kMaxBlocks = 16;
+constexpr size_t kBytesPerWarp = 2*1024;
 
 // --------------------------------------------------------------------------
-// MoriPutCopyKernel – pushes data from the local send_buffer to the peer's
-// recv_buffer via P2P.  Both buffers live in MORI's symmetric heap.
+// MoriPutKernel – single kernel that:
+//   1. Copies data from local send_buffer to peer's recv_buffer via P2P.
+//   2. Uses a retirement counter so that the LAST block to finish sets
+//      a completion flag on the remote peer's signal_flags[myPe].
+//
+// signal_flags  – base of the per-PE signal array (in symmetric heap).
+// block_counter – a single uint32_t in device memory, initialised to 0.
+//                 It is used only within this kernel and reset before exit.
 // --------------------------------------------------------------------------
-template <typename T>
-__global__ void MoriPutCopyKernel(T* recv_buffer, const T* send_buffer,
-                                  size_t count, int peer) {
-  int myPe = mori::shmem::ShmemMyPe();
-
-  // Translate the local symmetric address of recv_buffer to the
-  // P2P-mapped address on the remote peer.
-  uint64_t remote_addr = mori::shmem::ShmemPtrP2p(
+__global__ void MoriPutKernel(void* recv_buffer, void* send_buffer,
+                              size_t bytes, int peer,
+                              uint32_t* signal_flags) {
+  using T = uint8_t;
+  T *src = static_cast<T *>(send_buffer), *dst;
+  uint32_t *remote_sig;
+  {
+    int myPe = mori::shmem::ShmemMyPe();
+    // Translate the local symmetric address of recv_buffer to the
+    // P2P-mapped address on the remote peer.
+    uint64_t remote_addr = mori::shmem::ShmemPtrP2p(
       reinterpret_cast<uint64_t>(recv_buffer), myPe, peer);
-  T* dst = reinterpret_cast<T*>(remote_addr);
+    dst = reinterpret_cast<T*>(remote_addr);
+    remote_addr = mori::shmem::ShmemPtrP2p(
+      reinterpret_cast<uint64_t>(signal_flags + myPe + 1), myPe, peer);
+    remote_sig = reinterpret_cast<uint32_t*>(remote_addr);
+    if (threadIdx.x == 0) {
+      while (mori::core::AtomicLoadRelaxedSystem(remote_sig) != 0) {
+        __builtin_amdgcn_s_sleep(1);
+      }
+    }
+  }
+  __syncthreads();
 
-  int warpSz     = warpSize;
-  int warpId     = (blockIdx.x * blockDim.x + threadIdx.x) / warpSz;
-  int totalWarps = (gridDim.x * blockDim.x) / warpSz;
-
-  for (size_t off = static_cast<size_t>(warpId) * kChunkElems;
-       off < count;
-       off += static_cast<size_t>(totalWarps) * kChunkElems) {
-    size_t n = (off + kChunkElems <= count) ? kChunkElems : (count - off);
-    mori::core::WarpCopy<T>(dst + off, send_buffer + off, n);
+  uint32_t warpId = blockIdx.x * blockDim.x + threadIdx.x,
+           totalWarps = gridDim.x * blockDim.x;
+  if (warpSize == 64) {
+    warpId /= 64, totalWarps /= 64;
+  } else {
+    warpId /= 32, totalWarps /= 32;
+  }
+  for (size_t off = static_cast<size_t>(warpId) * kBytesPerWarp; off < bytes;
+              off += static_cast<size_t>(totalWarps) * kBytesPerWarp) {
+    size_t n = std::min(kBytesPerWarp, bytes - off);
+    mori::core::WarpCopy<T>(dst + off, src + off, n);
   }
 
-  // Make sure every write to the remote GPU memory is globally visible
-  // before the kernel completes.
+  // Ensure all P2P writes from this thread are globally visible.
   __threadfence_system();
+  // Intra-block barrier: every thread in this block has completed its
+  // WarpCopy + fence before we touch the retirement counter.
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    // no need to transfer this flag => it lives on this node
+    auto prev = mori::core::AtomicAddRelaxed(signal_flags, uint32_t{1});
+    if (prev + 1 == gridDim.x) { // all blocks are done => set global flag
+      mori::core::AtomicStoreRelaxed(signal_flags, uint32_t{0}); // reset counter
+      mori::core::AtomicStoreRelaxedSystem(remote_sig, uint32_t{1});
+    }
+  }
 }
 
 // --------------------------------------------------------------------------
-// MoriPutSignalKernel – writes a signal value to the peer's signal location
-// via P2P.  Launched after MoriPutCopyKernel on the same stream so that
-// the signal is only written once all data has landed.
+// MoriWaitKernel – spins on a local signal location until the remote
+// peer has written a non-zero value (via MoriPutKernel), then resets it.
 // --------------------------------------------------------------------------
-__global__ void MoriPutSignalKernel(uint64_t* signal, int peer) {
-  int myPe = mori::shmem::ShmemMyPe();
-  uint64_t remote_addr = mori::shmem::ShmemPtrP2p(
-      reinterpret_cast<uint64_t>(signal), myPe, peer);
-  mori::core::AtomicStoreRelaxedSystem(
-      reinterpret_cast<uint64_t*>(remote_addr), uint64_t{1});
-}
-
-// --------------------------------------------------------------------------
-// MoriWaitSignalKernel – spins on a local signal location until the remote
-// peer writes a non-zero value, then resets it to 0 for the next round.
-// --------------------------------------------------------------------------
-__global__ void MoriWaitSignalKernel(uint64_t* signal) {
-  // Spin until the sender has set the signal.
+__global__ void MoriWaitKernel(uint32_t* signal) {
   while (mori::core::AtomicLoadRelaxedSystem(signal) == 0) {
+    __builtin_amdgcn_s_sleep(1);
   }
-  // Reset for the next Send/Recv round.
-  mori::core::AtomicStoreRelaxedSystem(signal, uint64_t{0});
+  // Reset for the next round.
+  mori::core::AtomicStoreRelaxedSystem(signal, uint32_t{0});
+  // __threadfence_system(); ???
+}
+
+// --------------------------------------------------------------------------
+// MoriBarrierKernel – P2P barrier across all PEs (intra-node).
+//
+//   Uses a monotonically increasing counter per PE in symmetric memory.
+//   Each PE atomically adds 1 to every other PE's counter via P2P
+//   (signalling arrival), then spins until the local counter reaches
+//   round * (nPes - 1).
+//
+//   The host tracks 'round' (starting at 1, incremented each call).
+//   Since kernel launches on the same stream are serialised, the
+//   counter never races across rounds.
+//
+//   barrier_count – a single uint32_t in symmetric heap, one per PE.
+//   round         – 1-based round number managed by the host.
+// --------------------------------------------------------------------------
+__global__ void MoriBarrierKernel(uint32_t* barrier_count, uint32_t round) {
+  int myPe = mori::shmem::ShmemMyPe();
+  int nPes = mori::shmem::ShmemNPes();
+
+  // Phase 1: signal arrival to every other PE.
+  for (int pe = 0; pe < nPes; ++pe) {
+    if (pe == myPe) continue;
+    uint64_t remote = mori::shmem::ShmemPtrP2p(
+        reinterpret_cast<uint64_t>(barrier_count), myPe, pe);
+    mori::core::AtomicAddRelaxedSystem(
+        reinterpret_cast<uint32_t*>(remote), uint32_t{1});
+  }
   __threadfence_system();
+
+  // Phase 2: wait until all other PEs have signalled this round.
+  uint32_t expected = round * static_cast<uint32_t>(nPes - 1);
+  while (mori::core::AtomicLoadRelaxedSystem(barrier_count) < expected) {
+    __builtin_amdgcn_s_sleep(1);
+  }
 }
 
 }  // anonymous namespace
 
 // --------------------------------------------------------------------------
-// Host-side Send (put model).
-//   1. Launches the bulk copy kernel  (multi-block, multi-warp).
-//   2. Launches a tiny signal kernel  (1 thread) that writes to the peer's
-//      signal location.  Stream ordering guarantees the signal is only
-//      written after the copy is complete.
+// Host-side helpers
 // --------------------------------------------------------------------------
-template <class T>
-int Send(T* recv_buffer, T* send_buffer, size_t count, int peer,
-         uint64_t* signal) {
-  constexpr int kWarpSize = 64;  // AMD GFX9 warp (wavefront) size
-  constexpr int kWarpsPerBlock = kBlockSize / kWarpSize;
-  int numBlocks = static_cast<int>(
-      (count + kChunkElems * kWarpsPerBlock - 1) /
-      (kChunkElems * kWarpsPerBlock));
+
+void InitSignalMemory(void* ptr, size_t bytes) {
+  hipMemset(ptr, 0, bytes);
+}
+
+int Send(void* recv_buffer, void* send_buffer, size_t bytes, int peer,
+         uint32_t* signal_flags, std::intptr_t stream_handle) {
+
+  size_t total = kBytesPerWarp * kWarpsPerBlock;
+
+  // 4K - handled by 1 block
+  // 8K - by 2 blocks
+  // anything until 6K - also handled by 1 block
+  
+  int numBlocks = static_cast<int>((bytes + total / 2) / total);
   numBlocks = std::max(1, std::min(numBlocks, kMaxBlocks));
 
-  // Kernel 1: bulk WarpCopy data to peer's recv_buffer.
-  MoriPutCopyKernel<<<numBlocks, kBlockSize>>>(
-      recv_buffer, send_buffer, count, peer);
+  fprintf(stderr, "MORI send Using blocks %d\n", numBlocks);
 
-  // Kernel 2: write the completion signal on the peer (1 thread).
-  if (signal != nullptr) {
-    MoriPutSignalKernel<<<1, 1>>>(signal, peer);
-  }
+  auto stream = reinterpret_cast< hipStream_t >(stream_handle);
+  MoriPutKernel<<<numBlocks, kBlockSize, 0, stream>>>(
+      recv_buffer, send_buffer, bytes, peer, signal_flags);
   return 0;
 }
 
 // --------------------------------------------------------------------------
 // Host-side Recv (put model – wait only).
-//   Does NOT copy any data.  The remote peer is expected to have pushed the
-//   data via Send().  This call simply blocks the GPU stream until the
-//   local signal becomes non-zero, then resets it.
+//   Does NOT copy any data.  Launches a single-thread kernel that spins on
+//   the local signal_flags[peer] until the remote peer's Send has set it.
 // --------------------------------------------------------------------------
-template <class T>
-int Recv(T* /*recv_buffer*/, T* /*send_buffer*/, size_t /*count*/,
-         int /*peer*/, uint64_t* signal) {
-  if (signal != nullptr) {
-    MoriWaitSignalKernel<<<1, 1>>>(signal);
-  }
+int Recv(void* /*recv_buffer*/, void* /*send_buffer*/, size_t /*bytes*/,
+         int peer, uint32_t* signal_flags, std::intptr_t stream_handle) {
+
+  auto stream = reinterpret_cast< hipStream_t >(stream_handle);
+  MoriWaitKernel<<<1, 1, 0, stream>>>(&signal_flags[peer + 1]);
   return 0;
 }
 
-// Explicit template instantiations for the types used by XLA.
-template int Send<float>(float*, float*, size_t, int, uint64_t*);
-template int Send<double>(double*, double*, size_t, int, uint64_t*);
-template int Send<long long>(long long*, long long*, size_t, int, uint64_t*);
-template int Send<int>(int*, int*, size_t, int, uint64_t*);
-template int Send<short>(short*, short*, size_t, int, uint64_t*);
-template int Send<char>(char*, char*, size_t, int, uint64_t*);
 
-template int Recv<float>(float*, float*, size_t, int, uint64_t*);
-template int Recv<double>(double*, double*, size_t, int, uint64_t*);
-template int Recv<long long>(long long*, long long*, size_t, int, uint64_t*);
-template int Recv<int>(int*, int*, size_t, int, uint64_t*);
-template int Recv<short>(short*, short*, size_t, int, uint64_t*);
-template int Recv<char>(char*, char*, size_t, int, uint64_t*);
+// --------------------------------------------------------------------------
+// Host-side BarrierOnStream – enqueues a P2P barrier on the given stream.
+//   barrier_count : single uint32_t in MORI symmetric heap.
+//   round         : 1-based, incremented by the caller each invocation.
+// --------------------------------------------------------------------------
+void BarrierOnStream(uint32_t* barrier_count, uint32_t round,
+                     std::intptr_t stream_handle) {
+  auto stream = reinterpret_cast<hipStream_t>(stream_handle);
+  MoriBarrierKernel<<<1, 1, 0, stream>>>(barrier_count, round);
+}
 
 void synchronize_all() {
   hipDeviceSynchronize();

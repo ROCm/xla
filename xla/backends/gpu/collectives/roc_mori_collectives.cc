@@ -163,8 +163,7 @@ MoriCollectives::CreateCommunicator() {
   //       Allocate(sizeof(rocm_mori_team_t) * MoriCommunicator::kMaxTeams));
   // auto *teams = static_cast< rocm_mori_team_t *>(ptr);
   auto comm = absl::WrapUnique(new MoriCommunicator(this));
-  
-  // int npes = rocm_mori_team_n_pes(ROCSHMEM_TEAM_WORLD);
+  TF_RETURN_IF_ERROR(comm->InitSignals());
   // for (uint32_t i = 0; i < MoriCommunicator::kMaxTeams; i++) {
   //   auto res = rocm_mori_team_split_strided(ROCSHMEM_TEAM_WORLD, 0, 1, 
   //             npes, nullptr, 0, &teams[i]);
@@ -172,7 +171,7 @@ MoriCollectives::CreateCommunicator() {
   //     return absl::InternalError("Unable to create a rocshmem team!");
   //   }
   // }
-  VLOG(1) << "Created " << *comm;// << " npes " << npes;
+  VLOG(1) << "Created " << *comm; // << " with npes: " << npes;
   return comm;
 }
 
