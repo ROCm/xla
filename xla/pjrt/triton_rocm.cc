@@ -105,9 +105,12 @@ absl::StatusOr<std::string> LLVMToHSACO(mlir::ModuleOp module,
   }
 
   xla::DebugOptions debug_opts = xla::DefaultDebugOptionsIgnoringFlags();
-  return xla::gpu::amdgpu::CompileToHsacoAndReturnFilePath(
-      llvm_module.get(), stream_executor::GpuComputeCapability(rocm_cc),
-      debug_opts, /*keep_tempfiles=*/false);
+  TF_ASSIGN_OR_RETURN(
+      auto hsaco_file_result,
+      xla::gpu::amdgpu::CompileToHsacoAndReturnFilePath(
+          llvm_module.get(), stream_executor::GpuComputeCapability(rocm_cc),
+          debug_opts, /*keep_tempfiles=*/false));
+  return hsaco_file_result.hsaco_path;
 }
 
 }  // namespace
