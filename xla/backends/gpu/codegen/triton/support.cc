@@ -62,11 +62,8 @@ CodegenDecision IsTritonSupportedDataType(
       return CodegenDecision::Allow();
     case F8E5M2:
     case F8E4M3FN:
-      if (gpu_version.IsCuda()) {
+      if (gpu_version.IsCuda() || gpu_version.IsRocm()) {
         return CodegenDecision::Allow();
-      }
-      if (gpu_version.IsRocm()) {
-        return CodegenDecision::Forbid("F8E4M3FN is not supported on ROCm.");
       }
       return CodegenDecision::Forbid(
           "Unsupported GPU architecture for F8E4M3FN.");
@@ -385,7 +382,7 @@ absl::Status CheckSupportedCheckDotDimensions(const HloDotInstruction& dot) {
   return absl::OkStatus();
 }
 
-bool IsSupportedDotAlgorithm(PrecisionConfig::Algorithm algorithm) {
+CodegenDecision IsSupportedDotAlgorithm(PrecisionConfig::Algorithm algorithm) {
   switch (algorithm) {
     case PrecisionConfig::ALG_UNSET:
     case PrecisionConfig::ALG_DOT_F16_F16_F16:
