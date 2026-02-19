@@ -126,7 +126,9 @@ jobs:
          benchmark_entry: ${{ fromJson(needs.generate_matrix.outputs.matrix_include_json || '[]') }}
 
     runs-on: ${{ matrix.benchmark_entry.runner_label }}
-    container: ${{ matrix.benchmark_entry.container_image }}
+    container: 
+      image: ${{ matrix.benchmark_entry.container_image }}
+      options: --device=/dev/dri --device=/dev/kfd
 
     defaults:
       run:
