@@ -1,15 +1,149 @@
 name: Claude Auto Review
 
 on:
+  # Triggered by pr_event_dispatch.yml via `gh api .../dispatches`.
+  # Expected client_payload schema:
+  #   pull_number: number
+  repository_dispatch:
+    types: [claude-review]
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: number
 
 jobs:
   claude-review:
-    runs-on: ubuntu-latest
+    runs-on: build-only-xla
+    container:
+      image: ubuntu:24.04
     permissions:
       contents: read
       pull-requests: write
-      id-token: write
     steps:
-      - name: Dummy step
-        run: echo "Claude Auto Review job placeholder"
+      - name: Install dependencies
+        run: |
+          apt-get update -y
+          apt-get install -y curl git gh unzip
+          # The job runs inside a container where the workspace is owned by a different
+          # UID than the git process. Without this, git refuses to operate on the repo.
+          git config --global --add safe.directory '*'
+
+      # refs/pull/<number>/head is a GitHub-managed ref that always exists in the base
+      # repo for every PR, including those from forks. Using the branch name would fail
+      # for fork PRs since the branch lives in the fork, not here.
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.client_payload.pull_number || inputs.pr_number }}/head
+
+      # The PR branch may not have the .claude/ directory (skills, settings) since it
+      # only lives on the default branch. Overlay it so Claude Code can find the skill.
+      - name: Fetch .claude config from default branch
+        run: |
+          git fetch origin ${{ github.event.repository.default_branch }} -- .claude
+          git checkout origin/${{ github.event.repository.default_branch }} -- .claude
+
+      # =============================================================================
+      # WORKAROUND: Pre-install and warmup Claude Code
+      # =============================================================================
+      # Without this step, claude-code-action hangs indefinitely after printing
+      # "Running Claude with prompt from file: ..." with no LLM requests being made.
+      #
+      # This warmup step:
+      # - Pre-installs Claude Code before the action runs
+      # - Runs a simple command to complete first-run initialization
+      #
+      # TODO: This workaround may be addressing temporary issues in claude-code-action,
+      # Claude Code CLI, or server-side. The same hang was observed even with standard
+      # console_auth setup (without LLM gateway). Re-test periodically to check if
+      # this workaround is still needed.
+      # =============================================================================
+      - name: Install and Warmup Claude Code
+        timeout-minutes: 2
+        env:
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_CUSTOM_HEADERS: "Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}"
+          ANTHROPIC_API_KEY: "sk-ant-dummy-gateway-key"
+          ANTHROPIC_MODEL: "Claude-Sonnet-4.6"
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+
+          export PATH="$HOME/.local/bin:$PATH"
+
+          claude --version
+
+          timeout 60 claude --print -p "Say OK" || echo "Warmup complete (exit ok)"
+
+      # claude-code-action auto-configures the GitHub inline comment MCP server only
+      # when triggered by pull_request or pull_request_target events, where it can
+      # infer the PR number from the event context. When triggered by repository_dispatch
+      # or workflow_dispatch, there is no PR event context, so the action cannot set up
+      # the MCP server automatically. We create the config manually, passing the PR number
+      # from the dispatch payload so the inline comment tool knows which PR to annotate.
+      - name: Create MCP config
+        id: mcp
+        run: |
+          server=$(find /__w/_actions/anthropics/claude-code-action -name "github-inline-comment-server.ts" 2>/dev/null | head -1)
+          config=/tmp/mcp-config.json
+          cat > "$config" << EOF
+          {
+            "mcpServers": {
+              "github_inline_comment": {
+                "command": "bun",
+                "args": ["run", "$server"],
+                "env": {
+                  "REPO_OWNER": "${{ github.repository_owner }}",
+                  "REPO_NAME": "${{ github.event.repository.name }}",
+                  "PR_NUMBER": "${{ github.event.client_payload.pull_number || inputs.pr_number }}",
+                  "GITHUB_API_URL": "${{ github.api_url }}"
+                }
+              }
+            }
+          }
+          EOF
+          echo "file=$config" >> $GITHUB_OUTPUT
+
+      - name: Review Pull Request
+        id: claude-code
+        timeout-minutes: 15
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_CUSTOM_HEADERS: "Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}"
+          ANTHROPIC_MODEL: "Claude-Sonnet-4.6"
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-4.6"
+          ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          anthropic_api_key: "sk-ant-dummy-gateway-key"
+          show_full_output: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.client_payload.pull_number || inputs.pr_number }}
+            Review PR using the /review-xla-pr skill.
+
+            Note: The PR branch is already checked out in the current working directory.
+
+            After the review is complete, post results to the PR:
+            - Use `mcp__github_inline_comment__create_inline_comment` to post
+              each specific finding inline on the relevant diff lines.
+            - Use `gh pr comment` to post ONLY a short top-level summary. Do
+              NOT repeat individual findings in the top-level comment — those
+              belong inline.
+            - Do NOT post intermediate analysis steps, or thinking-out-loud to the PR.
+            - Only post GitHub comments - don't submit review text as messages.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh *),Bash(git *),Bash(head *),Bash(grep *),Read,Grep,Glob" --mcp-config ${{ steps.mcp.outputs.file }}
+          settings: |
+            {
+              "hasCompletedOnboarding": true
+            }
+
+      - name: Upload Claude Execution Log
+        if: always() && steps.claude-code.outputs.execution_file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-execution-log
+          path: ${{ steps.claude-code.outputs.execution_file }}

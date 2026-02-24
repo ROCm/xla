@@ -1,0 +1,23 @@
+name: PR Event Dispatch
+
+# This lightweight workflow forwards PR events to workflows on the
+# default branch via repository_dispatch. Cherry-pick this file to
+# any branch that receives PRs.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Dispatch review event
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/dispatches \
+            -f event_type=claude-review \
+            -f 'client_payload[pull_number]=${{ github.event.pull_request.number }}'
