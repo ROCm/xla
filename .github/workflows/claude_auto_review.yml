@@ -1,0 +1,15 @@
+name: Claude Auto Review
+
+on:
+  workflow_dispatch:
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Dummy step
+        run: echo "Claude Auto Review job placeholder"
