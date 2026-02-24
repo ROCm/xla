@@ -12,3 +12,4 @@ contain fork-specific commits. This separation ensures the `merge-upstream` API
 | Workflow | Schedule | Description |
 |----------|----------|-------------|
 | `sync_upstream.yml` | Every 3h (weekdays), daily (weekends) | Syncs `main` with `openxla/xla:main` via the GitHub merge-upstream API |
+| `claude_auto_review.yml` | Every PR (`pull_request`) | Automatically runs Claude-powered code review on every pull request |
