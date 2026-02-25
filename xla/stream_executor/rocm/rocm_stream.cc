@@ -287,24 +287,39 @@ absl::Status RocmStream::Memcpy(void* host_dst,
 }
 
 void RocmStream::InternalHostCallback(void* data) {
-  auto* callback =
-      reinterpret_cast<absl::AnyInvocable<absl::Status() &&>*>(data);
-  absl::Status s = std::move(*callback)();
+  auto* callback_data_ptr = reinterpret_cast<
+      std::tuple<absl::AnyInvocable<absl::Status() &&>, TsanContext>*>(data);
+
+  // "Synchronize with" DoHostCallbackWithStatus
+  TsanContext{callback_data_ptr}.Acquire();
+
+  auto tsan_ctx = std::get<1>(*callback_data_ptr);
+
+  // "Synchronize with" previous InternalHostCallback (may not be any)
+  tsan_ctx.Acquire();
+
+  absl::Status s = std::move(std::get<0>(*callback_data_ptr))();
   if (ABSL_PREDICT_FALSE(!s.ok())) {
     LOG(WARNING) << "Host callback failed: " << s;
   }
-  delete callback;
+
+  delete callback_data_ptr;
+  tsan_ctx.Release();
 }
 
 absl::Status RocmStream::DoHostCallbackWithStatus(
     absl::AnyInvocable<absl::Status() &&> callback) {
-  auto callback_ptr = std::make_unique<absl::AnyInvocable<absl::Status() &&>>(
-      std::move(callback));
+  auto callback_data_ptr = std::make_unique<
+      std::tuple<absl::AnyInvocable<absl::Status() &&>, TsanContext>>(
+      std::move(callback), TsanContext{this});
 
-  hipError_t res = wrap::hipLaunchHostFunc(
-      stream_handle_, (hipHostFn_t)InternalHostCallback, callback_ptr.get());
+  TsanContext{callback_data_ptr.get()}.Release();
+
+  hipError_t res =
+      wrap::hipLaunchHostFunc(stream_handle_, (hipHostFn_t)InternalHostCallback,
+                              callback_data_ptr.get());
   if (res == hipSuccess) {
-    callback_ptr.release();
+    callback_data_ptr.release();
     return absl::OkStatus();
   }
   return ToStatus(res, "unable to add host callback");
@@ -369,7 +384,10 @@ absl::Status LaunchRocmKernel(
 }  // namespace
 
 absl::Status RocmStream::BlockHostUntilDone() {
-  return SynchronizeStream(executor_, stream_handle_);
+  auto status = SynchronizeStream(executor_, stream_handle_);
+  // "Synchronize with" InternalHostCallback (may not be any)
+  TsanContext{this}.Acquire();
+  return status;
 }
 
 absl::Status RocmStream::LaunchKernel(

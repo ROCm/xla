@@ -36,6 +36,20 @@ limitations under the License.
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_common.h"
 
+#if defined(__has_feature)
+#define ROCM_STREAM_HAS_TSAN __has_feature(thread_sanitizer)
+#else
+#if defined(__SANITIZE_THREAD__)
+#define ROCM_STREAM_HAS_TSAN 1
+#else
+#define ROCM_STREAM_HAS_TSAN 0
+#endif
+#endif
+
+#if ROCM_STREAM_HAS_TSAN
+#include <sanitizer/tsan_interface.h>
+#endif
+
 namespace stream_executor {
 namespace gpu {
 
@@ -94,6 +108,23 @@ class RocmStream : public StreamCommon {
 
   static void InternalHostCallback(void*);
 
+#if ROCM_STREAM_HAS_TSAN
+  struct TsanContext {
+    explicit TsanContext(void* ptr) : ctx(ptr) { CHECK(ctx != nullptr); }
+    void Acquire() { __tsan_acquire(ctx); }
+    void Release() { __tsan_release(ctx); }
+
+   private:
+    void* ctx;
+  };
+#else
+  struct TsanContext {
+    explicit TsanContext(void*) {}
+    void Acquire() {}
+    void Release() {}
+  };
+#endif
+
   StreamExecutor* executor_;
   RocmEvent completed_event_;
   hipStream_t stream_handle_;
@@ -102,4 +133,5 @@ class RocmStream : public StreamCommon {
 }  // namespace gpu
 }  // namespace stream_executor
 
+#undef ROCM_STREAM_HAS_TSAN
 #endif  // XLA_STREAM_EXECUTOR_ROCM_ROCM_STREAM_H_
