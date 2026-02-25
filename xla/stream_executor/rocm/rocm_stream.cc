@@ -286,27 +286,28 @@ absl::Status RocmStream::Memcpy(void* host_dst,
                                size, stream_handle_);
 }
 
-namespace {
-void InternalHostCallback(void* data) {
-  auto* callback = reinterpret_cast<absl::AnyInvocable<void() &&>*>(data);
-  std::move (*callback)();
+void RocmStream::InternalHostCallback(void* data) {
+  auto* callback =
+      reinterpret_cast<absl::AnyInvocable<absl::Status() &&>*>(data);
+  absl::Status s = std::move(*callback)();
+  if (ABSL_PREDICT_FALSE(!s.ok())) {
+    LOG(WARNING) << "Host callback failed: " << s;
+  }
   delete callback;
 }
-}  // namespace
 
 absl::Status RocmStream::DoHostCallbackWithStatus(
     absl::AnyInvocable<absl::Status() &&> callback) {
-  auto callback_ptr =
-      new absl::AnyInvocable<void() &&>([cb = std::move(callback)]() mutable {
-        absl::Status s = std::move(cb)();
-        if (!s.ok()) {
-          LOG(WARNING) << "Host callback failed: " << s;
-        }
-      });
-  return ToStatus(
-      wrap::hipLaunchHostFunc(stream_handle_, (hipHostFn_t)InternalHostCallback,
-                              callback_ptr),
-      "unable to add host callback");
+  auto callback_ptr = std::make_unique<absl::AnyInvocable<absl::Status() &&>>(
+      std::move(callback));
+
+  hipError_t res = wrap::hipLaunchHostFunc(
+      stream_handle_, (hipHostFn_t)InternalHostCallback, callback_ptr.get());
+  if (res == hipSuccess) {
+    callback_ptr.release();
+    return absl::OkStatus();
+  }
+  return ToStatus(res, "unable to add host callback");
 }
 
 namespace {

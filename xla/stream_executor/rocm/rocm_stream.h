@@ -92,6 +92,8 @@ class RocmStream : public StreamCommon {
                             void* function, absl::string_view name, void** args,
                             int64_t shmem_bytes) override;
 
+  static void InternalHostCallback(void*);
+
   StreamExecutor* executor_;
   RocmEvent completed_event_;
   hipStream_t stream_handle_;
