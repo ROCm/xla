@@ -97,10 +97,13 @@ XTileTestBase::CreateXTileIrAndFileCheck(
       ir_emitter_triton_internal::TilingFromAnnotatedFusion(
           fusion, symbolic_tile_analysis, block_level_parameters));
 
+  const auto device_info = TestGpuDeviceInfo::RTXA6000DeviceInfo();
   TF_ASSIGN_OR_RETURN(
       mlir::OwningOpRef<mlir::ModuleOp> xtile_dialect_module,
-      xtile::EmitXTileModule("xtile_dialect_fn", fusion, symbolic_tile_analysis,
-                             tiling, *mlir_context()));
+      xtile::EmitXTileModule(
+          "xtile_dialect_fn", fusion, symbolic_tile_analysis, tiling,
+          *mlir_context(), {},
+          std::make_optional(device_info.gpu_compute_capability())));
 
   std::string out;
   llvm::raw_string_ostream os(out);

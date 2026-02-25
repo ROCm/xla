@@ -181,8 +181,8 @@ SmallVector<int64_t> GetPaddedTileSizes(ArrayRef<int64_t> tile_sizes) {
 }
 
 absl::StatusOr<Type> PrimitiveTypeToMlirType(mlir::ImplicitLocOpBuilder& b,
-
-                                             PrimitiveType t) {
+                                             PrimitiveType t,
+                                             const std::optional<se::GpuComputeCapability>& gpu_cc) {
   switch (t) {
     case F64:
       return b.getF64Type();
@@ -223,9 +223,15 @@ absl::StatusOr<Type> PrimitiveTypeToMlirType(mlir::ImplicitLocOpBuilder& b,
     case F4E2M1FN:
       return b.getType<mlir::Float4E2M1FNType>();
     case F8E5M2FNUZ:
-      return b.getType<mlir::Float8E5M2FNUZType>();
+      if (gpu_cc.has_value() && gpu_cc.value().IsRocm()) {
+        return b.getType<mlir::Float8E5M2FNUZType>();
+      }
+      return absl::UnimplementedError("F8E5M2FNUZ is not supported on this GPU.");
     case F8E4M3FNUZ:
-      return b.getType<mlir::Float8E4M3FNUZType>();
+      if (gpu_cc.has_value() && gpu_cc.value().IsRocm()) {
+        return b.getType<mlir::Float8E4M3FNUZType>();
+      }
+      return absl::UnimplementedError("F8E4M3FNUZ is not supported on this GPU.");
     default:
       return absl::UnimplementedError(
           absl::StrCat("This type is not supported yet: ",
