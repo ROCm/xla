@@ -1,4 +1,4 @@
-# ROCm/XLA Infrastructure Branch
+# ROCm/XLA Dev Infrastructure Branch
 
 This is the `rocm-dev-infra` branch — the default branch of the [`ROCm/xla`](https://github.com/ROCm/xla) fork of [`openxla/xla`](https://github.com/openxla/xla).
 It hosts GitHub Actions workflows, CI/CD infrastructure, and serves as a central index for all ROCm JAX/XLA release branches and their hardware support matrix.
