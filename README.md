@@ -7,7 +7,7 @@ The **`main`** branch is an exact mirror of `openxla/xla:main` and should never
 contain fork-specific commits. This separation ensures the `merge-upstream` API
 (fast-forward only) continues to work for automatic syncing.
 
-## XLA Branches
+## XLA Branches for JAX
 
 | JAX Release | XLA Branch | JAX Branch |
 |-------------|------------|------------|
