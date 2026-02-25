@@ -26,9 +26,12 @@ limitations under the License.
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/utils/hlo_query.h"
 #include "xla/service/compiler.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/cublas_cudnn.h"
+#include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/service/gpu/matmul_utils.h"
 #include "xla/shape.h"
 #include "xla/shape_layout.h"
@@ -40,6 +43,7 @@ limitations under the License.
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace gpu {
@@ -79,10 +83,37 @@ absl::StatusOr<BlasLt::Epilogue> AsBlasLtEpilogue(
   }
 }
 
+bool IsScaledDotFusion(const HloInstruction& instr) {
+  if (instr.opcode() != HloOpcode::kFusion) return false;
+  auto gpu_config = instr.backend_config<GpuBackendConfig>();
+  if (!gpu_config.ok()) return false;
+  if (gpu_config->fusion_backend_config().kind() != kTritonGemmFusionKind) {
+    return false;
+  }
+  const HloInstruction* scaled_dot =
+      hlo_query::GetFirstInstructionWithOpcode(
+          *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
+  return scaled_dot != nullptr;
+}
+
+const HloInstruction* FindScaledDotInFusion(const HloInstruction& fusion) {
+  return hlo_query::GetFirstInstructionWithOpcode(
+      *fusion.fused_instructions_computation(), HloOpcode::kScaledDot);
+}
+
 }  // namespace
 
 bool HipblasLtBackend::IsSupported(const HloInstruction& instr) {
-  return IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr);
+  if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr)) {
+    return true;
+  }
+  if (IsScaledDotFusion(instr)) {
+    const auto& gpu_cc =
+        target_config().device_description.gpu_compute_capability();
+    const auto* rocm_cc = gpu_cc.rocm_compute_capability();
+    return rocm_cc != nullptr && rocm_cc->gfx9_mi350();
+  }
+  return false;
 }
 
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
@@ -91,6 +122,26 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
     return std::vector<std::unique_ptr<BackendConfig>>();
   }
 
+  // For kScaledDot fusions, return a single candidate config with the default
+  // algorithm. We skip GetMatmulPlan validation here because the fusion's
+  // internal shapes may not yet have hipBLASLt-compatible FP8 layouts
+  // (LHS row-major, RHS column-major). Layout assignment runs before
+  // GemmFusion in the pipeline, but the fusion's parameter shapes may not
+  // reflect the assigned layouts at this point. The actual plan creation
+  // happens during Compile() -> ApplyConfig() -> RunHloPasses(), where
+  // layout assignment produces the correct layouts for the custom call.
+  if (IsScaledDotFusion(instr)) {
+    HipblasLtBackendConfig gemm_key;
+    gemm_key.set_algorithm(0);
+    gemm_key.set_autotune_workspace_size(GemmConfig::kDefaultWorkspace);
+    auto any = std::make_unique<google::protobuf::Any>();
+    any->PackFrom(gemm_key);
+    std::vector<std::unique_ptr<BackendConfig>> configs;
+    configs.push_back(std::move(any));
+    return configs;
+  }
+
+  // Existing path for kCustomCall (cuBLASLt matmul / F8 matmul).
   GpuBackendConfig gpu_config =
       instr.backend_config<GpuBackendConfig>().value();
   const GemmBackendConfig& backend_config = gpu_config.gemm_backend_config();
@@ -115,7 +166,6 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
     return Internal(
         "Invalid shape for HipblasLt matmul: output is not a non-empty tuple.");
   }
-  // The last element of the output tuple is the workspace.
   const int64_t workspace_size =
       ShapeUtil::ByteSizeOf(output_shape.tuple_shapes().back());
 
@@ -142,7 +192,7 @@ absl::StatusOr<std::unique_ptr<BackendConfig>>
 HipblasLtBackend::GetDefaultConfig(const HloInstruction& instr) {
   if (!IsSupported(instr)) {
     return absl::InvalidArgumentError(
-        "Not a HipblasLt custom call instruction.");
+        "Not a supported HipblasLt instruction.");
   }
 
   AutotuneResult::GemmKey gemm_key;
@@ -159,6 +209,73 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
     return absl::InvalidArgumentError(
         "Failed to unpack HipblasLtBackendConfig from Any.");
   }
+
+  // For kScaledDot fusions: replace the __triton_gemm fusion with a
+  // __cublas$lt$matmul$mx custom call.
+  if (IsScaledDotFusion(instr)) {
+    const HloInstruction* scaled_dot = FindScaledDotInFusion(instr);
+    TF_RET_CHECK(scaled_dot != nullptr);
+
+    HloComputation* parent = instr.parent();
+
+    // The fusion's operands correspond to the scaled-dot's parameters.
+    TF_RET_CHECK(instr.operand_count() == 4);
+    HloInstruction* lhs = instr.mutable_operand(0);
+    HloInstruction* rhs = instr.mutable_operand(1);
+    HloInstruction* lhs_scale = instr.mutable_operand(2);
+    HloInstruction* rhs_scale = instr.mutable_operand(3);
+
+    const Shape& result_shape = scaled_dot->shape();
+    int64_t workspace_size = gemm_key.autotune_workspace_size();
+    Shape workspace_shape = ShapeUtil::MakeShape(S8, {workspace_size});
+    Shape output_shape =
+        ShapeUtil::MakeTupleShape({result_shape, workspace_shape});
+
+    // Build GemmBackendConfig for the MX custom call.
+    GpuBackendConfig gpu_backend_config;
+    GemmBackendConfig& gemm_config =
+        *gpu_backend_config.mutable_gemm_backend_config();
+    *gemm_config.mutable_dot_dimension_numbers() =
+        scaled_dot->dot_dimension_numbers();
+    gemm_config.set_alpha_real(1.0);
+    gemm_config.set_alpha_imag(0.0);
+    gemm_config.set_beta(0.0);
+    gemm_config.set_mx_mode(true);
+    gemm_config.set_selected_algorithm(gemm_key.algorithm());
+    gemm_config.set_autotune_workspace_size(workspace_size);
+
+    HloInstruction* custom_call =
+        parent->AddInstruction(HloInstruction::CreateCustomCall(
+            output_shape, {lhs, rhs, lhs_scale, rhs_scale},
+            kCublasLtMatmulMxCallTarget));
+    TF_RETURN_IF_ERROR(custom_call->set_backend_config(gpu_backend_config));
+
+    // If the fusion was the root, we need a GTE to extract the result.
+    if (parent->root_instruction() == &instr) {
+      HloInstruction* gte = parent->AddInstruction(
+          HloInstruction::CreateGetTupleElement(result_shape, custom_call, 0));
+      parent->set_root_instruction(gte);
+      TF_RETURN_IF_ERROR(parent->RemoveInstruction(&instr));
+    } else {
+      // Replace all uses and add a GTE.
+      HloInstruction* gte = parent->AddInstruction(
+          HloInstruction::CreateGetTupleElement(result_shape, custom_call, 0));
+      TF_RETURN_IF_ERROR(instr.ReplaceAllUsesWith(gte));
+      TF_RETURN_IF_ERROR(parent->RemoveInstruction(&instr));
+    }
+
+    if (HloModule* module = parent->parent()) {
+      if (module->entry_computation() == parent &&
+          parent->root_instruction()->opcode() ==
+              HloOpcode::kGetTupleElement) {
+        *module->mutable_entry_computation_layout()->mutable_result_layout() =
+            ShapeLayout(parent->root_instruction()->shape());
+      }
+    }
+    return absl::OkStatus();
+  }
+
+  // Existing path for kCustomCall instructions.
   TF_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
                       instr.backend_config<GpuBackendConfig>());
   GemmBackendConfig& backend_config = *gpu_config.mutable_gemm_backend_config();

@@ -59,6 +59,7 @@ void ExpectGemmConfigEq(const GemmConfig& lhs, const GemmConfig& rhs) {
   EXPECT_EQ(lhs.algorithm, rhs.algorithm);
   EXPECT_EQ(lhs.grad_x, rhs.grad_x);
   EXPECT_EQ(lhs.grad_y, rhs.grad_y);
+  EXPECT_EQ(lhs.mx_mode, rhs.mx_mode);
   EXPECT_EQ(lhs.compute_type, rhs.compute_type);
 }
 
@@ -77,6 +78,7 @@ TEST(GemmConfigTest, ProtoConversion) {
       std::nullopt,                     // algorithm
       false,                            // grad_x
       false,                            // grad_y
+      false,                            // mx_mode
       std::nullopt                      // compute_type
   };
 
@@ -110,6 +112,7 @@ TEST(GemmConfigTest, ProtoConversionWithOptionals) {
       7,                                          // algorithm
       true,                                       // grad_x
       false,                                      // grad_y
+      false,                                      // mx_mode
       blas::ComputationType::kTF32AsF32           // compute_type
   };
 
@@ -118,6 +121,36 @@ TEST(GemmConfigTest, ProtoConversionWithOptionals) {
                           GemmConfig::FromProto(proto));
 
   ExpectGemmConfigEq(original_config, round_tripped_config);
+}
+
+TEST(GemmConfigTest, ProtoConversionWithMxMode) {
+  MatrixLayout layout(xla::PrimitiveType::F8E4M3FN, 128, 256,
+                      MatrixLayout::Order::kRowMajor);
+  MatrixLayout output_layout(xla::PrimitiveType::BF16, 128, 128,
+                             MatrixLayout::Order::kRowMajor);
+  GemmConfig original_config = {
+      layout,                           // lhs_layout
+      layout,                           // rhs_layout
+      output_layout,                    // c_layout
+      output_layout,                    // output_layout
+      {1.0, 0.0},                       // alpha
+      0.0,                              // beta
+      0,                                // compute_precision
+      xla::PrecisionConfig::ALG_UNSET,  // precision_algorithm
+      std::nullopt,                     // algorithm
+      false,                            // grad_x
+      false,                            // grad_y
+      true,                             // mx_mode
+      std::nullopt                      // compute_type
+  };
+
+  xla::GemmConfigProto proto = original_config.ToProto();
+  EXPECT_TRUE(proto.mx_mode());
+  TF_ASSERT_OK_AND_ASSIGN(auto round_tripped_config,
+                          GemmConfig::FromProto(proto));
+
+  ExpectGemmConfigEq(original_config, round_tripped_config);
+  EXPECT_TRUE(round_tripped_config.mx_mode);
 }
 
 TEST(EpilogueTest, ToProtoSucceedsForValidValues) {
