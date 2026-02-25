@@ -1,35 +1,112 @@
-race:libhsa-runtime64.so
-race:libamdhip64.so
-race:hipStreamSynchronize
-race:libhipblaslt.so
-race:libamd_comgr.so
-race:librccl.so
+# False positive: AqlQueue::queue_lock() contains a function-local static
+# (static std::mutex* queue_lock_ = new std::mutex()). When two threads call
+# the AqlQueue constructor concurrently for the first time, TSan sees
+# conflicting accesses to the hidden C++ guard byte (size 1, amd_aql_queue.h:351)
+# and the pointer itself (size 8, amd_aql_queue.h:352). The C++ standard
+# guarantees thread-safe initialization of function-local statics via
+# __cxa_guard_acquire/__cxa_guard_release, but TSan's instrumentation does not
+# always track that synchronization correctly. queue_lock() is inlined by the
+# compiler into AqlQueue::AqlQueue, so the suppression must target the
+# constructor, not queue_lock itself.
+race:rocr::AMD::AqlQueue::AqlQueue
 
-# Abseil reference counting (DropRef / RefCount init)
-race:tsl::ReferenceCounted
-race:absl::lts_*::Mutex
-race:absl::lts_*::CondVar
+# False positive: Flag::cu_mask() contains a function-local static
+# (static const std::vector<uint32_t> empty). Same __cxa_guard false-positive
+# pattern as queue_lock above. cu_mask() is inlined by the compiler into
+# AqlQueue::SetCUMasking(), so the suppression must target the visible caller.
+race:rocr::AMD::AqlQueue::SetCUMasking
 
-# XLA GPU RawSEDeviceMemory RCReference reuse
-race:xla::RawSEDeviceMemory
-race:xla::gpu::AllocateDestinationBuffer
-race:xla::LocalDeviceState::ThenRelease
+# False positive: IsaRegistry::GetSupportedGenericVersions() contains a function-local
+# static pointer (static const std::unordered_map<std::string,unsigned int>* p =
+#   new std::unordered_map<std::string,unsigned int>{...}).
+# Same __cxa_guard false-positive pattern as queue_lock above: TSan sees conflicting
+# accesses to the hidden guard byte (size 1, isa.cpp:256) and to the heap-allocated
+# unordered_map internals (size 8, isa.cpp:258 / Isa::IsCompatible isa.cpp:82).
+# The C++ standard guarantees one-time thread-safe initialization via
+# __cxa_guard_acquire/__cxa_guard_release; TSan does not track that synchronization.
+# Two suppressions are needed: one for the guard-byte race (reported inside
+# GetSupportedGenericVersions itself) and one for the map-internals race (reported
+# at the call site Isa::IsCompatible, due to inlining of the new expression).
+race:rocr::core::IsaRegistry::GetSupportedGenericVersions
+race:rocr::core::Isa::IsCompatible
 
-# To be fixed
-race:xla::GpuAsyncHostToDeviceTransferManager::TransferRawDataToSubBuffer
-race:xla::LiteralBase::Piece::DeallocateBuffers
-race:xla::PjRtStreamExecutorLoadedExecutable::ExecuteHelper
-race:xla::PjRtStreamExecutorClient::BufferFromHostBufferInternal
-race:xla::PjRtStreamExecutorClient::AllocateAndRecordEvent
-race:xla::HloRunnerPjRt::TransferLiteralsFromDevice
-race:xla::MutableLiteralBase::~MutableLiteralBase
-race:xla::MutableLiteralBase::PopulateR1<int>
-race:xla::gpu::GpuCompiler::CompileSingleModule
-race:xla::LiteralBase::Piece::Storage::Storage
-race:xla::LocalClient::TransferFromOutfeedLocal
-race:llvm::cl::opt_storage<bool, false, false>::setValue<int>
+# False positive: AqlQueue::StoreRelaxed writes the AQL queue hardware doorbell register using
+# _mm_sfence() + plain store to MMIO/WC-mapped memory. This is the correct x86 pattern for a
+# release write to a write-only hardware register: using __atomic_store on MMIO causes some
+# compilers to emit xchg at -O0, which is undefined behavior on MMIO (rocr commit 38ea4370c1).
+# The original code used atomic::Store(..., std::memory_order_release), which was TSAN-visible;
+# the hardware-correct replacement is not. The plain store is semantically equivalent to a
+# release store on x86 and cannot produce a torn write (8-byte aligned TSO guarantee).
+race:rocr::AMD::AqlQueue::StoreRelaxed
+race:rocr::AMD::AqlQueue::StoreRelease
 
-race:xla::gpu::(anonymous namespace)::RecoverExp2Pattern::initStaticsIfNeeded*
-race:lld::lldMain
-race:llvm::*
-race:xla::gpu::GpuExecutable::ExecuteAsyncOnStream
+# Real race (regression introduced by rocr commit 7d84abbc3b, Sep 2024): the async events
+# handler thread calls AqlPacket::IsDispatchAndNeedsScratch() which reads packet.header with
+# a plain load, while the dispatch thread writes it with __atomic_store_n(__ATOMIC_RELEASE)
+# via packet_store_release() (rocvirtual.cpp). The correct fix (atomic acquire load of the
+# header before calling IsDispatchAndNeedsScratch) was established by rocr commit 9cdf39a706
+# (Oct 2023) for the prior DynamicScratchHandler code path but was not applied to the new
+# scan loop added in 7d84abbc3b. Suppressed pending upstream fix in ROCr.
+race:rocr::core::AqlPacket::IsDispatchAndNeedsScratch
+
+# Benign races involving LLVM global state accessed concurrently by multiple autotuner
+# threads. The autotuner compiles many kernel configurations in parallel using a thread
+# pool; each thread calls CompileToHsaco -> EmitModuleToHsaco (under a per-invocation
+# mutex for lld) and/or the LLVM optimization pipeline (outside that mutex).
+#
+# Two categories of globals race:
+#
+# 1. llvm::cl::opt<T> globals: lld calls llvm::cl::ResetAllOptionOccurrences() at the
+#    start of every link (inside the lld mutex), writing all registered cl::opt globals
+#    back to their defaults. Concurrently, the LLVM optimization pipeline (e.g.
+#    SLPVectorizer -> ScalarEvolution::getTruncateExpr, GCNMaxOccupancySchedStrategy)
+#    reads those same globals as algorithm thresholds, outside the mutex. The values are
+#    small POD integers/bools; the worst outcome is a stale threshold for one compile.
+#    Root cause: llvm::cl was designed for single-threaded CLI tools, no internal locking.
+race:llvm::cl::opt_storage
+race:llvm::cl::ResetAllOptionOccurrences
+race:llvm::GCNMaxOccupancySchedStrategy::GCNMaxOccupancySchedStrategy
+#
+# 2. llvm::TargetRegistry globals: lld calls initLLVM() -> LLVMInitializeAMDGPUTarget()
+#    at the start of every link (inside the lld mutex), which registers target
+#    components (TargetMachine factory, MCInstrInfo, MCRegInfo, etc.) into LLVM's global
+#    Target singleton by writing function pointers into its fields. Concurrently, other
+#    autotuner threads call GetTargetMachine() -> Target::createTargetMachine(), reading
+#    those same function pointer fields, outside the mutex. Since LLVM targets are
+#    always initialized to the same values (idempotent registration), the write and read
+#    produce the same end state; the race cannot cause incorrect behavior. The fix would
+#    be for lld to check whether LLVM is already initialized before calling
+#    InitializeAllTargets() on every invocation.
+race:llvm::TargetRegistry::RegisterTargetMachine
+race:llvm::TargetRegistry::RegisterMCInstrInfo
+race:llvm::TargetRegistry::RegisterAsmPrinter
+race:LLVMInitializeAMDGPUTargetMC
+
+# Real race (pending upstream fix: rocr-runtime commit 502ee18db0): the async events loop
+# thread reads AsyncEventsControl::exit (1-byte flag at runtime.cpp:1812) with a plain load,
+# while the main thread writes it via AsyncEventsControl::Shutdown() (runtime.cpp:2840) under
+# a mutex. The read has no corresponding acquire load, so TSAN sees an unsynchronized access.
+# The fix adds atomic acquire/release semantics to the exit flag. Suppressed pending that
+# commit landing in the TheRock ROCm build used here.
+race:rocr::core::Runtime::AsyncEventsLoop
+race:rocr::core::Runtime::AsyncEventsControl::Shutdown
+
+# Real race (pending upstream fix: rocclr commit 537032ce6c): VirtualGPU maintains a bitfield
+# state union (1 byte at rocvirtual.cpp:2045). ReleaseHwQueue() reads the bitfield with a plain
+# load (T256, inside the ROCr async events callback HsaAmdSignalHandler), while submitMarker()
+# writes it under a set of mutexes (T1088, rocvirtual.cpp:4156). Because the two threads hold
+# disjoint lock sets, TSAN sees an unsynchronized read-write pair on the bitfield byte. The fix
+# changes the state field to an atomic type. Suppressed pending that commit landing in TheRock.
+race:amd::roc::VirtualGPU::ReleaseHwQueue
+race:amd::roc::VirtualGPU::submitMarker
+
+# Benign: amd::roc::Timestamp::ticksToTime_ lazy init in VirtualGPU::create().
+# Multiple XLA Eigen thread pool workers can call VirtualGPU::create() concurrently
+# (one per GPU device), racing on the unsynchronized check-then-set of the static
+# double Timestamp::ticksToTime_. Both threads compute 1e9/HSA_SYSTEM_INFO_TIMESTAMP_FREQUENCY
+# — an identical double derived from the same hardware constant — and write it to an
+# aligned 8-byte static. The write is idempotent and cannot tear on x86_64 (TSO guarantee
+# for aligned 8-byte stores). No control flow depends on the exact moment of completion.
+# Upstream fix: use std::call_once in VirtualGPU::create() to guard the initialization.
+race:amd::roc::Timestamp::setGpuTicksToTime
+race:amd::roc::Timestamp::getGpuTicksToTime
