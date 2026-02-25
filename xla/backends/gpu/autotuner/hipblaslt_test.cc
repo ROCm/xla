@@ -252,12 +252,10 @@ TEST_F(HipblasLtBackendTest, GetSupportedConfigsForScaledDot) {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(kScaledDotFusionHlo));
   HloInstruction* fusion = module->entry_computation()->root_instruction();
-  // GetSupportedConfigs may return empty if FP8 layout constraints prevent
-  // plan creation. This is expected in unit tests that don't go through
-  // layout assignment; the autotuner will fall through to other backends.
   absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>> configs =
       backend_.GetSupportedConfigs(*fusion);
-  EXPECT_THAT(configs, absl_testing::IsOk());
+  EXPECT_THAT(configs,
+              absl_testing::IsOkAndHolds(testing::SizeIs(testing::Gt(0))));
 }
 
 TEST_F(HipblasLtBackendTest, GetDefaultConfigForScaledDot) {

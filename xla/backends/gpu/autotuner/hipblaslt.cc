@@ -124,19 +124,60 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
   if (!IsSupported(instr)) {
     return std::vector<std::unique_ptr<BackendConfig>>();
   } else if (IsScaledDotFusion(instr)) {
-    // Return a single candidate config with the default algorithm.
-    // We skip GetMatmulPlan validation here because the fusion's internal
-    // shapes may not yet have hipBLASLt-compatible FP8 layouts (LHS
-    // row-major, RHS column-major). The actual plan creation happens during
-    // Compile() -> ApplyConfig() -> RunHloPasses(), where layout assignment
-    // produces the correct layouts for the __cublas$lt$matmul$mx custom call.
-    HipblasLtBackendConfig gemm_key;
-    gemm_key.set_algorithm(0);
-    gemm_key.set_autotune_workspace_size(GemmConfig::kDefaultWorkspace);
-    auto any = std::make_unique<google::protobuf::Any>();
-    any->PackFrom(gemm_key);
+    const HloInstruction* scaled_dot = FindScaledDotInFusion(instr);
+    TF_RET_CHECK(scaled_dot != nullptr);
+
+    const Shape& lhs_shape = scaled_dot->operand(0)->shape();
+    const Shape& rhs_shape = scaled_dot->operand(1)->shape();
+    const DotDimensionNumbers& dot_dims =
+        scaled_dot->dot_dimension_numbers();
+    const Shape& output_shape = scaled_dot->shape();
+
+    auto gemm_config_or = GemmConfig::For(
+        lhs_shape, dot_dims.lhs_batch_dimensions(),
+        dot_dims.lhs_contracting_dimensions(), rhs_shape,
+        dot_dims.rhs_batch_dimensions(),
+        dot_dims.rhs_contracting_dimensions(), output_shape,
+        /*alpha_real=*/1.0, /*alpha_imag=*/0.0, /*beta=*/0.0,
+        PrecisionConfig::ALG_UNSET, /*algorithm=*/std::nullopt,
+        se::blas::kDefaultComputePrecision, /*grad_x=*/false,
+        /*grad_y=*/false, /*mx_mode=*/true,
+        target_config().device_description.gpu_compute_capability());
+    if (!gemm_config_or.ok()) {
+      VLOG(2) << "hipBLASLt MX: GemmConfig::For failed: "
+              << gemm_config_or.status();
+      return std::vector<std::unique_ptr<BackendConfig>>();
+    }
+
+    TF_ASSIGN_OR_RETURN(std::unique_ptr<se::Stream> stream,
+                        stream_executor()->CreateStream());
+    auto plan_or = se::gpu::BlasLt::GetMatmulPlan(
+        stream.get(), *gemm_config_or, BlasLt::Epilogue::kDefault);
+    if (!plan_or.ok()) {
+      VLOG(2) << "hipBLASLt MX: GetMatmulPlan failed: " << plan_or.status();
+      return std::vector<std::unique_ptr<BackendConfig>>();
+    }
+
+    int64_t workspace_size = GemmConfig::kDefaultWorkspace;
+    TF_ASSIGN_OR_RETURN(
+        std::vector<BlasLt::MatmulAlgorithm> algorithms,
+        (*plan_or)->GetAlgorithms(stream.get(), GemmConfig::kNumAlgorithms,
+                                  workspace_size));
+    if (algorithms.empty()) {
+      VLOG(2) << "hipBLASLt MX: no algorithms found for scaled dot.";
+      return std::vector<std::unique_ptr<BackendConfig>>();
+    }
+
     std::vector<std::unique_ptr<BackendConfig>> configs;
-    configs.push_back(std::move(any));
+    configs.reserve(algorithms.size());
+    for (int i = 0; i < algorithms.size(); ++i) {
+      HipblasLtBackendConfig gemm_key;
+      gemm_key.set_algorithm(i);
+      gemm_key.set_autotune_workspace_size(workspace_size);
+      auto any = std::make_unique<google::protobuf::Any>();
+      any->PackFrom(gemm_key);
+      configs.push_back(std::move(any));
+    }
     return configs;
   } else if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr)) {
     GpuBackendConfig gpu_config =
