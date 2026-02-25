@@ -84,15 +84,18 @@ absl::StatusOr<BlasLt::Epilogue> AsBlasLtEpilogue(
 }
 
 bool IsScaledDotFusion(const HloInstruction& instr) {
-  if (instr.opcode() != HloOpcode::kFusion) return false;
+  if (instr.opcode() != HloOpcode::kFusion) {
+    return false;
+  }
   auto gpu_config = instr.backend_config<GpuBackendConfig>();
-  if (!gpu_config.ok()) return false;
+  if (!gpu_config.ok()) {
+    return false;
+  }
   if (gpu_config->fusion_backend_config().kind() != kTritonGemmFusionKind) {
     return false;
   }
-  const HloInstruction* scaled_dot =
-      hlo_query::GetFirstInstructionWithOpcode(
-          *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
+  const HloInstruction* scaled_dot = hlo_query::GetFirstInstructionWithOpcode(
+      *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
   return scaled_dot != nullptr;
 }
 
@@ -120,17 +123,13 @@ absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
 HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
   if (!IsSupported(instr)) {
     return std::vector<std::unique_ptr<BackendConfig>>();
-  }
-
-  // For kScaledDot fusions, return a single candidate config with the default
-  // algorithm. We skip GetMatmulPlan validation here because the fusion's
-  // internal shapes may not yet have hipBLASLt-compatible FP8 layouts
-  // (LHS row-major, RHS column-major). Layout assignment runs before
-  // GemmFusion in the pipeline, but the fusion's parameter shapes may not
-  // reflect the assigned layouts at this point. The actual plan creation
-  // happens during Compile() -> ApplyConfig() -> RunHloPasses(), where
-  // layout assignment produces the correct layouts for the custom call.
-  if (IsScaledDotFusion(instr)) {
+  } else if (IsScaledDotFusion(instr)) {
+    // Return a single candidate config with the default algorithm.
+    // We skip GetMatmulPlan validation here because the fusion's internal
+    // shapes may not yet have hipBLASLt-compatible FP8 layouts (LHS
+    // row-major, RHS column-major). The actual plan creation happens during
+    // Compile() -> ApplyConfig() -> RunHloPasses(), where layout assignment
+    // produces the correct layouts for the __cublas$lt$matmul$mx custom call.
     HipblasLtBackendConfig gemm_key;
     gemm_key.set_algorithm(0);
     gemm_key.set_autotune_workspace_size(GemmConfig::kDefaultWorkspace);
@@ -139,53 +138,55 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
     std::vector<std::unique_ptr<BackendConfig>> configs;
     configs.push_back(std::move(any));
     return configs;
+  } else if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr)) {
+    GpuBackendConfig gpu_config =
+        instr.backend_config<GpuBackendConfig>().value();
+    const GemmBackendConfig& backend_config = gpu_config.gemm_backend_config();
+
+    TF_ASSIGN_OR_RETURN(
+        GemmConfig gemm_config,
+        GemmConfig::For(&instr, target_config()
+                                    .device_description
+                                    .gpu_compute_capability()));
+
+    TF_ASSIGN_OR_RETURN(BlasLt::Epilogue epilogue,
+                        AsBlasLtEpilogue(backend_config.epilogue()));
+
+    TF_ASSIGN_OR_RETURN(std::unique_ptr<se::Stream> stream,
+                        stream_executor()->CreateStream());
+
+    TF_ASSIGN_OR_RETURN(
+        std::unique_ptr<BlasLt::MatmulPlan> plan,
+        se::gpu::BlasLt::GetMatmulPlan(stream.get(), gemm_config, epilogue));
+
+    const Shape& output_shape = instr.shape();
+    if (!output_shape.IsTuple() || output_shape.tuple_shapes().empty()) {
+      return Internal(
+          "Invalid shape for HipblasLt matmul: output is not a non-empty "
+          "tuple.");
+    }
+    const int64_t workspace_size =
+        ShapeUtil::ByteSizeOf(output_shape.tuple_shapes().back());
+
+    TF_ASSIGN_OR_RETURN(
+        std::vector<BlasLt::MatmulAlgorithm> algorithms,
+        plan->GetAlgorithms(stream.get(), GemmConfig::kNumAlgorithms,
+                            workspace_size));
+    int num_algorithms = algorithms.size();
+    std::vector<std::unique_ptr<BackendConfig>> configs;
+    configs.reserve(num_algorithms);
+    for (int i = 0; i < num_algorithms; ++i) {
+      HipblasLtBackendConfig gemm_key;
+      gemm_key.set_algorithm(i);
+      gemm_key.set_autotune_workspace_size(workspace_size);
+      auto any = std::make_unique<google::protobuf::Any>();
+      any->PackFrom(gemm_key);
+      configs.push_back(std::move(any));
+    }
+    return configs;
   }
 
-  // Existing path for kCustomCall (cuBLASLt matmul / F8 matmul).
-  GpuBackendConfig gpu_config =
-      instr.backend_config<GpuBackendConfig>().value();
-  const GemmBackendConfig& backend_config = gpu_config.gemm_backend_config();
-
-  TF_ASSIGN_OR_RETURN(
-      GemmConfig gemm_config,
-      GemmConfig::For(
-          &instr, target_config().device_description.gpu_compute_capability()));
-
-  TF_ASSIGN_OR_RETURN(BlasLt::Epilogue epilogue,
-                      AsBlasLtEpilogue(backend_config.epilogue()));
-
-  TF_ASSIGN_OR_RETURN(std::unique_ptr<se::Stream> stream,
-                      stream_executor()->CreateStream());
-
-  TF_ASSIGN_OR_RETURN(
-      std::unique_ptr<BlasLt::MatmulPlan> plan,
-      se::gpu::BlasLt::GetMatmulPlan(stream.get(), gemm_config, epilogue));
-
-  const Shape& output_shape = instr.shape();
-  if (!output_shape.IsTuple() || output_shape.tuple_shapes().empty()) {
-    return Internal(
-        "Invalid shape for HipblasLt matmul: output is not a non-empty tuple.");
-  }
-  const int64_t workspace_size =
-      ShapeUtil::ByteSizeOf(output_shape.tuple_shapes().back());
-
-  TF_ASSIGN_OR_RETURN(
-      std::vector<BlasLt::MatmulAlgorithm> algorithms,
-      plan->GetAlgorithms(stream.get(), GemmConfig::kNumAlgorithms,
-                          workspace_size));
-  int num_algorithms = algorithms.size();
-  std::vector<std::unique_ptr<BackendConfig>> configs;
-  configs.reserve(num_algorithms);
-  for (int i = 0; i < num_algorithms; ++i) {
-    HipblasLtBackendConfig gemm_key;
-    gemm_key.set_algorithm(i);
-    gemm_key.set_autotune_workspace_size(workspace_size);
-    auto any = std::make_unique<google::protobuf::Any>();
-    any->PackFrom(gemm_key);
-    configs.push_back(std::move(any));
-  }
-
-  return configs;
+  return std::vector<std::unique_ptr<BackendConfig>>();
 }
 
 absl::StatusOr<std::unique_ptr<BackendConfig>>
@@ -210,15 +211,14 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
         "Failed to unpack HipblasLtBackendConfig from Any.");
   }
 
-  // For kScaledDot fusions: replace the __triton_gemm fusion with a
-  // __cublas$lt$matmul$mx custom call.
   if (IsScaledDotFusion(instr)) {
+    // Replace the __triton_gemm fusion with a __cublas$lt$matmul$mx
+    // custom call.
     const HloInstruction* scaled_dot = FindScaledDotInFusion(instr);
     TF_RET_CHECK(scaled_dot != nullptr);
 
     HloComputation* parent = instr.parent();
 
-    // The fusion's operands correspond to the scaled-dot's parameters.
     TF_RET_CHECK(instr.operand_count() == 4);
     HloInstruction* lhs = instr.mutable_operand(0);
     HloInstruction* rhs = instr.mutable_operand(1);
@@ -231,7 +231,6 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
     Shape output_shape =
         ShapeUtil::MakeTupleShape({result_shape, workspace_shape});
 
-    // Build GemmBackendConfig for the MX custom call.
     GpuBackendConfig gpu_backend_config;
     GemmBackendConfig& gemm_config =
         *gpu_backend_config.mutable_gemm_backend_config();
@@ -250,19 +249,14 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
             kCublasLtMatmulMxCallTarget));
     TF_RETURN_IF_ERROR(custom_call->set_backend_config(gpu_backend_config));
 
-    // If the fusion was the root, we need a GTE to extract the result.
+    HloInstruction* gte = parent->AddInstruction(
+        HloInstruction::CreateGetTupleElement(result_shape, custom_call, 0));
     if (parent->root_instruction() == &instr) {
-      HloInstruction* gte = parent->AddInstruction(
-          HloInstruction::CreateGetTupleElement(result_shape, custom_call, 0));
       parent->set_root_instruction(gte);
-      TF_RETURN_IF_ERROR(parent->RemoveInstruction(&instr));
     } else {
-      // Replace all uses and add a GTE.
-      HloInstruction* gte = parent->AddInstruction(
-          HloInstruction::CreateGetTupleElement(result_shape, custom_call, 0));
       TF_RETURN_IF_ERROR(instr.ReplaceAllUsesWith(gte));
-      TF_RETURN_IF_ERROR(parent->RemoveInstruction(&instr));
     }
+    TF_RETURN_IF_ERROR(parent->RemoveInstruction(&instr));
 
     if (HloModule* module = parent->parent()) {
       if (module->entry_computation() == parent &&
@@ -273,34 +267,40 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
       }
     }
     return absl::OkStatus();
-  }
 
-  // Existing path for kCustomCall instructions.
-  TF_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
-                      instr.backend_config<GpuBackendConfig>());
-  GemmBackendConfig& backend_config = *gpu_config.mutable_gemm_backend_config();
-  backend_config.set_selected_algorithm(gemm_key.algorithm());
-  backend_config.set_autotune_workspace_size(
-      gemm_key.autotune_workspace_size());
-  TF_RETURN_IF_ERROR(instr.set_backend_config(std::move(gpu_config)));
+  } else if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr)) {
+    // Update the existing custom call's backend config with the tuned
+    // algorithm and workspace size.
+    TF_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
+                        instr.backend_config<GpuBackendConfig>());
+    GemmBackendConfig& backend_config =
+        *gpu_config.mutable_gemm_backend_config();
+    backend_config.set_selected_algorithm(gemm_key.algorithm());
+    backend_config.set_autotune_workspace_size(
+        gemm_key.autotune_workspace_size());
+    TF_RETURN_IF_ERROR(instr.set_backend_config(std::move(gpu_config)));
 
-  if (instr.shape().IsTuple() && !instr.shape().tuple_shapes().empty()) {
-    Shape* workspace_shape = instr.mutable_shape()->mutable_tuple_shapes(
-        instr.shape().tuple_shapes().size() - 1);
-    if (workspace_shape->element_type() == S8 &&
-        workspace_shape->dimensions().size() == 1) {
-      workspace_shape->set_dimensions(0, gemm_key.autotune_workspace_size());
-      if (HloModule* module = instr.GetModule()) {
-        if (module->entry_computation() &&
-            module->entry_computation()->root_instruction() == &instr) {
-          *module->mutable_entry_computation_layout()->mutable_result_layout() =
-              ShapeLayout(instr.shape());
+    if (instr.shape().IsTuple() && !instr.shape().tuple_shapes().empty()) {
+      Shape* workspace_shape = instr.mutable_shape()->mutable_tuple_shapes(
+          instr.shape().tuple_shapes().size() - 1);
+      if (workspace_shape->element_type() == S8 &&
+          workspace_shape->dimensions().size() == 1) {
+        workspace_shape->set_dimensions(0,
+                                        gemm_key.autotune_workspace_size());
+        if (HloModule* module = instr.GetModule()) {
+          if (module->entry_computation() &&
+              module->entry_computation()->root_instruction() == &instr) {
+            *module->mutable_entry_computation_layout()
+                 ->mutable_result_layout() = ShapeLayout(instr.shape());
+          }
         }
       }
     }
+    return absl::OkStatus();
   }
 
-  return absl::OkStatus();
+  return absl::InvalidArgumentError(
+      "ApplyConfig called on unsupported instruction.");
 }
 
 }  // namespace gpu
