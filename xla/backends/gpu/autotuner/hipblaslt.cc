@@ -105,7 +105,7 @@ bool HipblasLtBackend::IsSupported(const HloInstruction& instr) {
     const auto& gpu_cc =
         target_config().device_description.gpu_compute_capability();
     const auto* rocm_cc = gpu_cc.rocm_compute_capability();
-    return rocm_cc != nullptr && rocm_cc->gfx9_mi350();
+    return rocm_cc != nullptr && rocm_cc->has_mx_type_support();
   }
   return false;
 }
