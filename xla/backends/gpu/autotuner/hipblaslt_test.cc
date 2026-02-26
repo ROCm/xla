@@ -215,7 +215,7 @@ TEST_F(HipblasLtBackendTest, Compile) {
   EXPECT_THAT(executable, absl_testing::IsOk());
 }
 
-const char kScaledDotFusionHlo[] = R"(
+const char kScaledDotFp8FusionHlo[] = R"(
 HloModule ScaledDotFusion
 
 %fusion_dot (p0: f8e4m3fn[32,256], p1: f8e4m3fn[16,256], p2: f8e8m0fnu[32,8], p3: f8e8m0fnu[16,8]) -> f32[32,16] {
@@ -263,121 +263,57 @@ class HipblasLtScaledDotTest : public HipblasLtBackendTest {
       GTEST_SKIP() << "Scaled dot requires MX type support (gfx950+).";
     }
   }
+
+  static constexpr const char* kScaledDotHlos[] = {kScaledDotFp8FusionHlo,
+                                                    kScaledDotFp4FusionHlo};
 };
 
-TEST_F(HipblasLtScaledDotTest, IsSupported) {
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(kScaledDotFusionHlo));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  absl::StatusOr<std::unique_ptr<BackendConfig>> config =
-      backend_.GetDefaultConfig(*fusion);
-  EXPECT_THAT(config, absl_testing::IsOk());
-}
-
 TEST_F(HipblasLtScaledDotTest, GetSupportedConfigs) {
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(kScaledDotFusionHlo));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>> configs =
-      backend_.GetSupportedConfigs(*fusion);
-  EXPECT_THAT(configs,
-              absl_testing::IsOkAndHolds(testing::SizeIs(testing::Gt(0))));
-}
-
-TEST_F(HipblasLtScaledDotTest, GetDefaultConfig) {
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(kScaledDotFusionHlo));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  absl::StatusOr<std::unique_ptr<BackendConfig>> config =
-      backend_.GetDefaultConfig(*fusion);
-  EXPECT_THAT(config, absl_testing::IsOk());
+  for (const char* hlo : kScaledDotHlos) {
+    TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
+    HloInstruction* fusion = module->entry_computation()->root_instruction();
+    auto configs = backend_.GetSupportedConfigs(*fusion);
+    EXPECT_THAT(configs,
+                absl_testing::IsOkAndHolds(testing::SizeIs(testing::Gt(0))));
+  }
 }
 
 TEST_F(HipblasLtScaledDotTest, ApplyConfig) {
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(kScaledDotFusionHlo));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
+  for (const char* hlo : kScaledDotHlos) {
+    TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
+    HloInstruction* fusion = module->entry_computation()->root_instruction();
 
-  HipblasLtBackendConfig config;
-  config.set_algorithm(0);
-  config.set_autotune_workspace_size(4194304);
-  google::protobuf::Any any;
-  any.PackFrom(config);
+    HipblasLtBackendConfig config;
+    config.set_algorithm(0);
+    config.set_autotune_workspace_size(4194304);
+    google::protobuf::Any any;
+    any.PackFrom(config);
 
-  TF_EXPECT_OK(backend_.ApplyConfig(*fusion, any));
+    TF_EXPECT_OK(backend_.ApplyConfig(*fusion, any));
 
-  EXPECT_THAT(
-      RunFileCheck(module->ToString(),
-                   R"(CHECK: custom-call
-                      CHECK-SAME: custom_call_target="__cublas$lt$matmul$mx"
-                      CHECK: "mx_mode":true)"),
-      absl_testing::IsOkAndHolds(true));
+    EXPECT_THAT(
+        RunFileCheck(module->ToString(),
+                     R"(CHECK: custom-call
+                        CHECK-SAME: custom_call_target="__cublas$lt$matmul$mx"
+                        CHECK: "mx_mode":true)"),
+        absl_testing::IsOkAndHolds(true));
+  }
 }
 
 TEST_F(HipblasLtScaledDotTest, Compile) {
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(kScaledDotFusionHlo));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackendConfig> config,
-                          backend_.GetDefaultConfig(*fusion));
-  absl::StatusOr<std::unique_ptr<Executable>> executable =
-      backend_.Compile(*fusion, *config);
-  EXPECT_THAT(executable, absl_testing::IsOk());
-}
+  for (const char* hlo : kScaledDotHlos) {
+    TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
+    HloInstruction* fusion = module->entry_computation()->root_instruction();
 
-TEST_F(HipblasLtScaledDotTest, Fp4IsSupported) {
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<HloModule> module,
-      ParseAndReturnVerifiedModule(kScaledDotFp4FusionHlo));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  absl::StatusOr<std::unique_ptr<BackendConfig>> config =
-      backend_.GetDefaultConfig(*fusion);
-  EXPECT_THAT(config, absl_testing::IsOk());
-}
+    HipblasLtBackendConfig config;
+    config.set_algorithm(0);
+    config.set_autotune_workspace_size(4194304);
+    google::protobuf::Any any;
+    any.PackFrom(config);
 
-TEST_F(HipblasLtScaledDotTest, Fp4GetSupportedConfigs) {
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<HloModule> module,
-      ParseAndReturnVerifiedModule(kScaledDotFp4FusionHlo));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>> configs =
-      backend_.GetSupportedConfigs(*fusion);
-  EXPECT_THAT(configs,
-              absl_testing::IsOkAndHolds(testing::SizeIs(testing::Gt(0))));
-}
-
-TEST_F(HipblasLtScaledDotTest, Fp4ApplyConfig) {
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<HloModule> module,
-      ParseAndReturnVerifiedModule(kScaledDotFp4FusionHlo));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-
-  HipblasLtBackendConfig config;
-  config.set_algorithm(0);
-  config.set_autotune_workspace_size(4194304);
-  google::protobuf::Any any;
-  any.PackFrom(config);
-
-  TF_EXPECT_OK(backend_.ApplyConfig(*fusion, any));
-
-  EXPECT_THAT(
-      RunFileCheck(module->ToString(),
-                   R"(CHECK: custom-call
-                      CHECK-SAME: custom_call_target="__cublas$lt$matmul$mx"
-                      CHECK: "mx_mode":true)"),
-      absl_testing::IsOkAndHolds(true));
-}
-
-TEST_F(HipblasLtScaledDotTest, Fp4Compile) {
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<HloModule> module,
-      ParseAndReturnVerifiedModule(kScaledDotFp4FusionHlo));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackendConfig> config,
-                          backend_.GetDefaultConfig(*fusion));
-  absl::StatusOr<std::unique_ptr<Executable>> executable =
-      backend_.Compile(*fusion, *config);
-  EXPECT_THAT(executable, absl_testing::IsOk());
+    auto executable = backend_.Compile(*fusion, any);
+    EXPECT_THAT(executable, absl_testing::IsOk());
+  }
 }
 
 }  // namespace gpu
