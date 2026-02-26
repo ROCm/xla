@@ -21,6 +21,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      id-token: write  # Required by claude-code-action for internal OIDC auth.
     steps:
       - name: Install dependencies
         run: |
@@ -41,8 +42,9 @@ jobs:
       # only lives on the default branch. Overlay it so Claude Code can find the skill.
       - name: Fetch .claude config from default branch
         run: |
-          git fetch origin ${{ github.event.repository.default_branch }} -- .claude
-          git checkout origin/${{ github.event.repository.default_branch }} -- .claude
+          git fetch origin ${{ github.event.repository.default_branch }}
+          git restore --source=origin/${{ github.event.repository.default_branch }} --worktree -- .claude
+          find .claude -type f | sort
 
       # =============================================================================
       # WORKAROUND: Pre-install and warmup Claude Code

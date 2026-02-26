@@ -12,7 +12,7 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write  # Required to call the repository_dispatch API.
     steps:
       - name: Dispatch review event
         env:
