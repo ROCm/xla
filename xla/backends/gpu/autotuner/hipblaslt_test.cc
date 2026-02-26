@@ -282,14 +282,10 @@ TEST_F(HipblasLtScaledDotTest, ApplyConfig) {
   for (const char* hlo : kScaledDotHlos) {
     TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
     HloInstruction* fusion = module->entry_computation()->root_instruction();
+    TF_ASSERT_OK_AND_ASSIGN(auto config,
+                            backend_.GetDefaultConfig(*fusion));
 
-    HipblasLtBackendConfig config;
-    config.set_algorithm(0);
-    config.set_autotune_workspace_size(4194304);
-    google::protobuf::Any any;
-    any.PackFrom(config);
-
-    TF_EXPECT_OK(backend_.ApplyConfig(*fusion, any));
+    TF_EXPECT_OK(backend_.ApplyConfig(*fusion, *config));
 
     EXPECT_THAT(
         RunFileCheck(module->ToString(),
@@ -304,14 +300,10 @@ TEST_F(HipblasLtScaledDotTest, Compile) {
   for (const char* hlo : kScaledDotHlos) {
     TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
     HloInstruction* fusion = module->entry_computation()->root_instruction();
+    TF_ASSERT_OK_AND_ASSIGN(auto config,
+                            backend_.GetDefaultConfig(*fusion));
 
-    HipblasLtBackendConfig config;
-    config.set_algorithm(0);
-    config.set_autotune_workspace_size(4194304);
-    google::protobuf::Any any;
-    any.PackFrom(config);
-
-    auto executable = backend_.Compile(*fusion, any);
+    auto executable = backend_.Compile(*fusion, *config);
     EXPECT_THAT(executable, absl_testing::IsOk());
   }
 }
