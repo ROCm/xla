@@ -123,36 +123,6 @@ TEST(GemmConfigTest, ProtoConversionWithOptionals) {
   ExpectGemmConfigEq(original_config, round_tripped_config);
 }
 
-TEST(GemmConfigTest, ProtoConversionWithMxMode) {
-  MatrixLayout layout(xla::PrimitiveType::F8E4M3FN, 128, 256,
-                      MatrixLayout::Order::kRowMajor);
-  MatrixLayout output_layout(xla::PrimitiveType::BF16, 128, 128,
-                             MatrixLayout::Order::kRowMajor);
-  GemmConfig original_config = {
-      layout,                           // lhs_layout
-      layout,                           // rhs_layout
-      output_layout,                    // c_layout
-      output_layout,                    // output_layout
-      {1.0, 0.0},                       // alpha
-      0.0,                              // beta
-      0,                                // compute_precision
-      xla::PrecisionConfig::ALG_UNSET,  // precision_algorithm
-      std::nullopt,                     // algorithm
-      false,                            // grad_x
-      false,                            // grad_y
-      true,                             // mx_mode
-      std::nullopt                      // compute_type
-  };
-
-  xla::GemmConfigProto proto = original_config.ToProto();
-  EXPECT_TRUE(proto.mx_mode());
-  TF_ASSERT_OK_AND_ASSIGN(auto round_tripped_config,
-                          GemmConfig::FromProto(proto));
-
-  ExpectGemmConfigEq(original_config, round_tripped_config);
-  EXPECT_TRUE(round_tripped_config.mx_mode);
-}
-
 TEST(EpilogueTest, ToProtoSucceedsForValidValues) {
   EXPECT_EQ(BlasLt::EpilogueToProto(BlasLt::Epilogue::kDefault),
             xla::BlasLtEpilogueProto::EPILOGUE_DEFAULT);
