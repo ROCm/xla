@@ -245,8 +245,6 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
   }
 
   if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr)) {
-    // Update the existing custom call's backend config with the tuned
-    // algorithm and workspace size.
     TF_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
                         instr.backend_config<GpuBackendConfig>());
     GemmBackendConfig& backend_config =
@@ -273,10 +271,7 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
       }
     }
     return absl::OkStatus();
-
   } else if (IsScaledDotFusion(instr)) {
-    // Replace the __triton_gemm fusion with a __cublas$lt$matmul$mx
-    // custom call.
     const HloInstruction* scaled_dot =
         hlo_query::GetFirstInstructionWithOpcode(
             *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
@@ -312,25 +307,9 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
             output_shape, {lhs, rhs, lhs_scale, rhs_scale},
             kCublasLtMatmulMxCallTarget));
     TF_RETURN_IF_ERROR(custom_call->set_backend_config(gpu_backend_config));
-
     HloInstruction* gte = parent->AddInstruction(
         HloInstruction::CreateGetTupleElement(result_shape, custom_call, 0));
-    if (parent->root_instruction() == &instr) {
-      parent->set_root_instruction(gte);
-    } else {
-      TF_RETURN_IF_ERROR(instr.ReplaceAllUsesWith(gte));
-    }
-    TF_RETURN_IF_ERROR(parent->RemoveInstruction(&instr));
-
-    if (HloModule* module = parent->parent()) {
-      if (module->entry_computation() == parent &&
-          parent->root_instruction()->opcode() ==
-              HloOpcode::kGetTupleElement) {
-        *module->mutable_entry_computation_layout()->mutable_result_layout() =
-            ShapeLayout(parent->root_instruction()->shape());
-      }
-    }
-    return absl::OkStatus();
+    return parent->ReplaceInstruction(&instr, gte);
   }
 
   return absl::InvalidArgumentError(
