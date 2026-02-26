@@ -125,7 +125,7 @@ jobs:
         env:
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
           ANTHROPIC_CUSTOM_HEADERS: "Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}"
-          ANTHROPIC_MODEL: "Claude-Sonnet-4.6"
+          ANTHROPIC_MODEL: "Claude-Opus-4.6"
           ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-4.6"
           ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
           ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
