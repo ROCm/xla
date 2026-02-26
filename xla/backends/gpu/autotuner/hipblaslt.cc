@@ -20,6 +20,7 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -83,6 +84,102 @@ absl::StatusOr<BlasLt::Epilogue> AsBlasLtEpilogue(
   }
 }
 
+bool IsValidMxScaledDot(const HloInstruction* scaled_dot) {
+  const Shape& lhs_shape = scaled_dot->operand(0)->shape();
+  const Shape& rhs_shape = scaled_dot->operand(1)->shape();
+  const Shape& lhs_scale_shape = scaled_dot->operand(2)->shape();
+  const Shape& rhs_scale_shape = scaled_dot->operand(3)->shape();
+  const Shape& output_shape = scaled_dot->shape();
+  const DotDimensionNumbers& dot_dims =
+      scaled_dot->dot_dimension_numbers();
+
+  auto IsValidInputType = [](PrimitiveType type) {
+    return type == F8E4M3FN || type == F8E5M2 || type == F4E2M1FN;
+  };
+
+  PrimitiveType lhs_type = lhs_shape.element_type();
+  PrimitiveType rhs_type = rhs_shape.element_type();
+  if (!IsValidInputType(lhs_type) || !IsValidInputType(rhs_type)) {
+    VLOG(2) << "hipBLASLt MX: unsupported data type, lhs="
+            << PrimitiveType_Name(lhs_type)
+            << " rhs=" << PrimitiveType_Name(rhs_type);
+    return false;
+  }
+
+  if (lhs_scale_shape.element_type() != F8E8M0FNU ||
+      rhs_scale_shape.element_type() != F8E8M0FNU) {
+    VLOG(2) << "hipBLASLt MX: scale type must be F8E8M0FNU";
+    return false;
+  }
+
+  PrimitiveType out_type = output_shape.element_type();
+  if (out_type != F32 && out_type != F16 && out_type != BF16) {
+    VLOG(2) << "hipBLASLt MX: output type must be F32/F16/BF16, got "
+            << PrimitiveType_Name(out_type);
+    return false;
+  }
+
+  int64_t batch_size = 1;
+  for (int64_t dim : dot_dims.lhs_batch_dimensions()) {
+    batch_size *= lhs_shape.dimensions(dim);
+  }
+  if (batch_size != 1) {
+    VLOG(2) << "hipBLASLt MX: batch_size > 1 not supported, got "
+            << batch_size;
+    return false;
+  }
+
+  int64_t m = 1;
+  for (int64_t i = 0; i < lhs_shape.dimensions_size(); ++i) {
+    if (!absl::c_linear_search(dot_dims.lhs_batch_dimensions(), i) &&
+        !absl::c_linear_search(dot_dims.lhs_contracting_dimensions(), i)) {
+      m *= lhs_shape.dimensions(i);
+    }
+  }
+
+  int64_t n = 1;
+  for (int64_t i = 0; i < rhs_shape.dimensions_size(); ++i) {
+    if (!absl::c_linear_search(dot_dims.rhs_batch_dimensions(), i) &&
+        !absl::c_linear_search(dot_dims.rhs_contracting_dimensions(), i)) {
+      n *= rhs_shape.dimensions(i);
+    }
+  }
+
+  int64_t k = 1;
+  for (int64_t dim : dot_dims.lhs_contracting_dimensions()) {
+    k *= lhs_shape.dimensions(dim);
+  }
+
+  if (m % 16 != 0 || n % 16 != 0) {
+    VLOG(2) << "hipBLASLt MX: M and N must be divisible by 16, got M=" << m
+            << " N=" << n;
+    return false;
+  }
+
+  if (k % 32 != 0) {
+    VLOG(2) << "hipBLASLt MX: K must be divisible by 32, got K=" << k;
+    return false;
+  }
+
+  int64_t lhs_scale_k = 1;
+  for (int64_t dim : dot_dims.lhs_contracting_dimensions()) {
+    lhs_scale_k *= lhs_scale_shape.dimensions(dim);
+  }
+  int64_t rhs_scale_k = 1;
+  for (int64_t dim : dot_dims.rhs_contracting_dimensions()) {
+    rhs_scale_k *= rhs_scale_shape.dimensions(dim);
+  }
+  if (lhs_scale_k == 0 || k / lhs_scale_k != 32 ||
+      rhs_scale_k == 0 || k / rhs_scale_k != 32) {
+    VLOG(2) << "hipBLASLt MX: block size must be 32, got lhs="
+            << (lhs_scale_k > 0 ? k / lhs_scale_k : 0)
+            << " rhs=" << (rhs_scale_k > 0 ? k / rhs_scale_k : 0);
+    return false;
+  }
+
+  return true;
+}
+
 bool IsScaledDotFusion(const HloInstruction& instr) {
   if (instr.opcode() != HloOpcode::kFusion) return false;
   auto gpu_config = instr.backend_config<GpuBackendConfig>();
@@ -144,7 +241,7 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
     const int64_t workspace_size =
         ShapeUtil::ByteSizeOf(output_shape.tuple_shapes().back());
 
-    TF_ASSIGN_OR_RETURN(
+    TF_ASSIGN_OR_RETURN( 
         std::vector<BlasLt::MatmulAlgorithm> algorithms,
         plan->GetAlgorithms(stream.get(), GemmConfig::kNumAlgorithms,
                             workspace_size));
@@ -165,6 +262,11 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
         hlo_query::GetFirstInstructionWithOpcode(
             *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
     TF_RET_CHECK(scaled_dot != nullptr);
+
+    if (!IsValidMxScaledDot(scaled_dot)) {
+      return std::vector<std::unique_ptr<BackendConfig>>();
+    }
+
     const Shape& lhs_shape = scaled_dot->operand(0)->shape();
     const Shape& rhs_shape = scaled_dot->operand(1)->shape();
     const DotDimensionNumbers& dot_dims =
