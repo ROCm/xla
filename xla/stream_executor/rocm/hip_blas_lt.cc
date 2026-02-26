@@ -328,11 +328,11 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg, Epilogue epilogue) const
   };
   if (IsScaledType(lhs_layout.dtype) &&
       lhs_layout.order == gpu::MatrixLayout::Order::kColumnMajor) {
-    return xla::Internal("The F8/MX LHS must not be column-major");
+    return xla::Internal("The F8/MX LHS must be row-major");
   }
   if (IsScaledType(rhs_layout.dtype) &&
       rhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {
-    return xla::Internal("The F8/MX RHS must not be row-major");
+    return xla::Internal("The F8/MX RHS must be column-major");
   }
 
   TF_ASSIGN_OR_RETURN(auto output_dtype,

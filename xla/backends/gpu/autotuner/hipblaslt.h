@@ -37,7 +37,7 @@ namespace gpu {
 //
 // Supports two instruction types:
 // 1. cuBLASLt custom calls (__cublas$lt$matmul, __cublas$lt$matmul$f8)
-// 2. __triton_gemm fusions containing kScaledDot， which are converted to
+// 2. __triton_gemm fusions containing kScaledDot, which are converted to
 // __cublas$lt$matmul$mx custom calls.
 class HipblasLtBackend : public GpuCodegenBackend {
  public:
