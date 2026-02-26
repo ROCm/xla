@@ -405,8 +405,12 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
         "Algorithm must be set before calling DoMatMul!");
   }
   DeviceAddressBase a = args.a, b = args.b;
+  DeviceAddressBase a_scale = args.a_scale, b_scale = args.b_scale;
   if (must_swap_operands_) {
     std::swap(a, b);
+    if (a_scale != nullptr && b_scale != nullptr) {
+      std::swap(a_scale, b_scale);
+    }
   }
 
   auto blas_lt = static_cast<BlasLt*>(gpu::BlasLt::Get(stream));
@@ -451,15 +455,15 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
     }
 
 #if TF_ROCM_VERSION >= 60000
-    if (args.a_scale != nullptr) {
+    if (a_scale != nullptr) {
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
-                                 args.a_scale.opaque()));
+                                 a_scale.opaque()));
     }
-    if (args.b_scale != nullptr) {
+    if (b_scale != nullptr) {
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
                                  HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
-                                 args.b_scale.opaque()));
+                                 b_scale.opaque()));
     }
     if (args.c_scale != nullptr) {
       TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
