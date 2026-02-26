@@ -9,14 +9,13 @@ allowed-tools: Bash(gh *), Bash(git *), Bash(head *), Bash(grep *), Read, Grep, 
 
 # XLA PR Review
 
-## Pull Request Context
+## Fetching Pull Request Context
 
-- **PR description**: !`gh pr view $ARGUMENTS`
-- **Changed files**: !`gh pr diff $ARGUMENTS --name-only`
-- **PR diff**: !`gh pr diff $ARGUMENTS`
-- **Existing comments**: !`gh pr view $ARGUMENTS --comments 2>/dev/null || echo "(no comments yet)"`
-
----
+Before reviewing, fetch the PR context by running these commands:
+- `gh pr view $ARGUMENTS` — PR title, description, author
+- `gh pr diff $ARGUMENTS --name-only` — list of changed files
+- `gh pr diff $ARGUMENTS` — full diff
+- `gh pr view $ARGUMENTS --comments 2>/dev/null || echo "(no comments yet)"` — existing review comments
 
 ## Your Task
 

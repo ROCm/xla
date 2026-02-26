@@ -128,7 +128,7 @@ jobs:
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.client_payload.pull_number || inputs.pr_number }}
-            Review PR using the /review-xla-pr skill.
+            Review PR using the /review-xla-pr skill. Pass only the PR number as the skill argument (e.g. /review-xla-pr 640).
 
             Note: The PR branch is already checked out in the current working directory.
 
