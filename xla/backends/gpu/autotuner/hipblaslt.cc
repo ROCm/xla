@@ -84,24 +84,15 @@ absl::StatusOr<BlasLt::Epilogue> AsBlasLtEpilogue(
 }
 
 bool IsScaledDotFusion(const HloInstruction& instr) {
-  if (instr.opcode() != HloOpcode::kFusion) {
-    return false;
-  }
+  if (instr.opcode() != HloOpcode::kFusion) return false;
   auto gpu_config = instr.backend_config<GpuBackendConfig>();
-  if (!gpu_config.ok()) {
-    return false;
-  }
+  if (!gpu_config.ok()) return false;
   if (gpu_config->fusion_backend_config().kind() != kTritonGemmFusionKind) {
     return false;
   }
-  const HloInstruction* scaled_dot = hlo_query::GetFirstInstructionWithOpcode(
-      *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
-  return scaled_dot != nullptr;
-}
-
-const HloInstruction* FindScaledDotInFusion(const HloInstruction& fusion) {
   return hlo_query::GetFirstInstructionWithOpcode(
-      *fusion.fused_instructions_computation(), HloOpcode::kScaledDot);
+             *instr.fused_instructions_computation(),
+             HloOpcode::kScaledDot) != nullptr;
 }
 
 }  // namespace
@@ -123,62 +114,6 @@ absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
 HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
   if (!IsSupported(instr)) {
     return std::vector<std::unique_ptr<BackendConfig>>();
-  } else if (IsScaledDotFusion(instr)) {
-    const HloInstruction* scaled_dot = FindScaledDotInFusion(instr);
-    TF_RET_CHECK(scaled_dot != nullptr);
-
-    const Shape& lhs_shape = scaled_dot->operand(0)->shape();
-    const Shape& rhs_shape = scaled_dot->operand(1)->shape();
-    const DotDimensionNumbers& dot_dims =
-        scaled_dot->dot_dimension_numbers();
-    const Shape& output_shape = scaled_dot->shape();
-
-    auto gemm_config_or = GemmConfig::For(
-        lhs_shape, dot_dims.lhs_batch_dimensions(),
-        dot_dims.lhs_contracting_dimensions(), rhs_shape,
-        dot_dims.rhs_batch_dimensions(),
-        dot_dims.rhs_contracting_dimensions(), output_shape,
-        /*alpha_real=*/1.0, /*alpha_imag=*/0.0, /*beta=*/0.0,
-        PrecisionConfig::ALG_UNSET, /*algorithm=*/std::nullopt,
-        se::blas::kDefaultComputePrecision, /*grad_x=*/false,
-        /*grad_y=*/false, /*mx_mode=*/true,
-        target_config().device_description.gpu_compute_capability());
-    if (!gemm_config_or.ok()) {
-      VLOG(2) << "hipBLASLt MX: GemmConfig::For failed: "
-              << gemm_config_or.status();
-      return std::vector<std::unique_ptr<BackendConfig>>();
-    }
-
-    TF_ASSIGN_OR_RETURN(std::unique_ptr<se::Stream> stream,
-                        stream_executor()->CreateStream());
-    auto plan_or = se::gpu::BlasLt::GetMatmulPlan(
-        stream.get(), *gemm_config_or, BlasLt::Epilogue::kDefault);
-    if (!plan_or.ok()) {
-      VLOG(2) << "hipBLASLt MX: GetMatmulPlan failed: " << plan_or.status();
-      return std::vector<std::unique_ptr<BackendConfig>>();
-    }
-
-    int64_t workspace_size = GemmConfig::kDefaultWorkspace;
-    TF_ASSIGN_OR_RETURN(
-        std::vector<BlasLt::MatmulAlgorithm> algorithms,
-        (*plan_or)->GetAlgorithms(stream.get(), GemmConfig::kNumAlgorithms,
-                                  workspace_size));
-    if (algorithms.empty()) {
-      VLOG(2) << "hipBLASLt MX: no algorithms found for scaled dot.";
-      return std::vector<std::unique_ptr<BackendConfig>>();
-    }
-
-    std::vector<std::unique_ptr<BackendConfig>> configs;
-    configs.reserve(algorithms.size());
-    for (int i = 0; i < algorithms.size(); ++i) {
-      HipblasLtBackendConfig gemm_key;
-      gemm_key.set_algorithm(i);
-      gemm_key.set_autotune_workspace_size(workspace_size);
-      auto any = std::make_unique<google::protobuf::Any>();
-      any->PackFrom(gemm_key);
-      configs.push_back(std::move(any));
-    }
-    return configs;
   } else if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr)) {
     GpuBackendConfig gpu_config =
         instr.backend_config<GpuBackendConfig>().value();
@@ -225,6 +160,63 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
       configs.push_back(std::move(any));
     }
     return configs;
+  } else if (IsScaledDotFusion(instr)) {
+    const HloInstruction* scaled_dot =
+        hlo_query::GetFirstInstructionWithOpcode(
+            *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
+    TF_RET_CHECK(scaled_dot != nullptr);
+    const Shape& lhs_shape = scaled_dot->operand(0)->shape();
+    const Shape& rhs_shape = scaled_dot->operand(1)->shape();
+    const DotDimensionNumbers& dot_dims =
+        scaled_dot->dot_dimension_numbers();
+    const Shape& output_shape = scaled_dot->shape();
+
+    auto gemm_config_or = GemmConfig::For(
+        lhs_shape, dot_dims.lhs_batch_dimensions(),
+        dot_dims.lhs_contracting_dimensions(), rhs_shape,
+        dot_dims.rhs_batch_dimensions(),
+        dot_dims.rhs_contracting_dimensions(), output_shape,
+        /*alpha_real=*/1.0, /*alpha_imag=*/0.0, /*beta=*/0.0,
+        PrecisionConfig::ALG_UNSET, /*algorithm=*/std::nullopt,
+        se::blas::kDefaultComputePrecision, /*grad_x=*/false,
+        /*grad_y=*/false, /*mx_mode=*/true,
+        target_config().device_description.gpu_compute_capability());
+    if (!gemm_config_or.ok()) {
+      VLOG(2) << "hipBLASLt MX: GemmConfig::For failed: "
+              << gemm_config_or.status();
+      return std::vector<std::unique_ptr<BackendConfig>>();
+    }
+
+    TF_ASSIGN_OR_RETURN(std::unique_ptr<se::Stream> stream,
+                        stream_executor()->CreateStream());
+    auto plan_or = se::gpu::BlasLt::GetMatmulPlan(
+        stream.get(), *gemm_config_or, BlasLt::Epilogue::kDefault);
+    if (!plan_or.ok()) {
+      VLOG(2) << "hipBLASLt MX: GetMatmulPlan failed: " << plan_or.status();
+      return std::vector<std::unique_ptr<BackendConfig>>();
+    }
+
+    int64_t workspace_size = GemmConfig::kDefaultWorkspace;
+    TF_ASSIGN_OR_RETURN(
+        std::vector<BlasLt::MatmulAlgorithm> algorithms,
+        (*plan_or)->GetAlgorithms(stream.get(), GemmConfig::kNumAlgorithms,
+                                  workspace_size));
+    if (algorithms.empty()) {
+      VLOG(2) << "hipBLASLt MX: no algorithms found for scaled dot.";
+      return std::vector<std::unique_ptr<BackendConfig>>();
+    }
+
+    std::vector<std::unique_ptr<BackendConfig>> configs;
+    configs.reserve(algorithms.size());
+    for (size_t i = 0; i < algorithms.size(); ++i) {
+      HipblasLtBackendConfig gemm_key;
+      gemm_key.set_algorithm(i);
+      gemm_key.set_autotune_workspace_size(workspace_size);
+      auto any = std::make_unique<google::protobuf::Any>();
+      any->PackFrom(gemm_key);
+      configs.push_back(std::move(any));
+    }
+    return configs;
   }
 
   return std::vector<std::unique_ptr<BackendConfig>>();
@@ -252,12 +244,43 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
         "Failed to unpack HipblasLtBackendConfig from Any.");
   }
 
-  if (IsScaledDotFusion(instr)) {
+  if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr)) {
+    // Update the existing custom call's backend config with the tuned
+    // algorithm and workspace size.
+    TF_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
+                        instr.backend_config<GpuBackendConfig>());
+    GemmBackendConfig& backend_config =
+        *gpu_config.mutable_gemm_backend_config();
+    backend_config.set_selected_algorithm(gemm_key.algorithm());
+    backend_config.set_autotune_workspace_size(
+        gemm_key.autotune_workspace_size());
+    TF_RETURN_IF_ERROR(instr.set_backend_config(std::move(gpu_config)));
+
+    if (instr.shape().IsTuple() && !instr.shape().tuple_shapes().empty()) {
+      Shape* workspace_shape = instr.mutable_shape()->mutable_tuple_shapes(
+          instr.shape().tuple_shapes().size() - 1);
+      if (workspace_shape->element_type() == S8 &&
+          workspace_shape->dimensions().size() == 1) {
+        workspace_shape->set_dimensions(0,
+                                        gemm_key.autotune_workspace_size());
+        if (HloModule* module = instr.GetModule()) {
+          if (module->entry_computation() &&
+              module->entry_computation()->root_instruction() == &instr) {
+            *module->mutable_entry_computation_layout()
+                 ->mutable_result_layout() = ShapeLayout(instr.shape());
+          }
+        }
+      }
+    }
+    return absl::OkStatus();
+
+  } else if (IsScaledDotFusion(instr)) {
     // Replace the __triton_gemm fusion with a __cublas$lt$matmul$mx
     // custom call.
-    const HloInstruction* scaled_dot = FindScaledDotInFusion(instr);
+    const HloInstruction* scaled_dot =
+        hlo_query::GetFirstInstructionWithOpcode(
+            *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
     TF_RET_CHECK(scaled_dot != nullptr);
-
     HloComputation* parent = instr.parent();
 
     TF_RET_CHECK(instr.operand_count() == 4);
@@ -305,36 +328,6 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
               HloOpcode::kGetTupleElement) {
         *module->mutable_entry_computation_layout()->mutable_result_layout() =
             ShapeLayout(parent->root_instruction()->shape());
-      }
-    }
-    return absl::OkStatus();
-
-  } else if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr)) {
-    // Update the existing custom call's backend config with the tuned
-    // algorithm and workspace size.
-    TF_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
-                        instr.backend_config<GpuBackendConfig>());
-    GemmBackendConfig& backend_config =
-        *gpu_config.mutable_gemm_backend_config();
-    backend_config.set_selected_algorithm(gemm_key.algorithm());
-    backend_config.set_autotune_workspace_size(
-        gemm_key.autotune_workspace_size());
-    TF_RETURN_IF_ERROR(instr.set_backend_config(std::move(gpu_config)));
-
-    if (instr.shape().IsTuple() && !instr.shape().tuple_shapes().empty()) {
-      Shape* workspace_shape = instr.mutable_shape()->mutable_tuple_shapes(
-          instr.shape().tuple_shapes().size() - 1);
-      if (workspace_shape->element_type() == S8 &&
-          workspace_shape->dimensions().size() == 1) {
-        workspace_shape->set_dimensions(0,
-                                        gemm_key.autotune_workspace_size());
-        if (HloModule* module = instr.GetModule()) {
-          if (module->entry_computation() &&
-              module->entry_computation()->root_instruction() == &instr) {
-            *module->mutable_entry_computation_layout()
-                 ->mutable_result_layout() = ShapeLayout(instr.shape());
-          }
-        }
       }
     }
     return absl::OkStatus();
