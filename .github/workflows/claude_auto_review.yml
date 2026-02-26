@@ -26,7 +26,19 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update -y
-          apt-get install -y curl git gh unzip
+          apt-get install -y curl git unzip
+
+          # Install latest gh from GitHub's official package repo instead of
+          # Ubuntu's lagging apt repo to avoid stale GraphQL deprecation warnings.
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+            | tee /etc/apt/sources.list.d/github-cli.list
+          apt-get update -y
+          apt-get install -y gh
+          gh --version
+
           # The job runs inside a container where the workspace is owned by a different
           # UID than the git process. Without this, git refuses to operate on the repo.
           git config --global --add safe.directory '*'
