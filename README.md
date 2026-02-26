@@ -1,5 +1,4 @@
 # ROCm/XLA Dev Infrastructure Branch
-
 This is the `rocm-dev-infra` branch — the default branch of the [`ROCm/xla`](https://github.com/ROCm/xla) fork of [`openxla/xla`](https://github.com/openxla/xla).
 It hosts GitHub Actions workflows, CI/CD infrastructure, and serves as a central index for all ROCm JAX/XLA release branches and their hardware support matrix.
 
@@ -38,4 +37,4 @@ Track pending and in-progress ROCm/AMD upstream contributions to OpenXLA on the 
 | Workflow | Schedule | Description |
 |----------|----------|-------------|
 | `sync_upstream.yml` | Every 3h (weekdays), daily (weekends) | Syncs `main` with `openxla/xla:main` via the GitHub merge-upstream API |
-| `claude_auto_review.yml` | Every PR (`pull_request`) | Automatically runs Claude-powered code review on every pull request |
+| `claude_auto_review.yml` | Every PR opened against a branch that has `pr_event_dispatch.yml` | Automatically runs Claude Opus 4.6-powered code review on every pull request |
