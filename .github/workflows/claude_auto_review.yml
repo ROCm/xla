@@ -120,6 +120,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           anthropic_api_key: "sk-ant-dummy-gateway-key"
+          # When triggered via repository_dispatch (from pr_event_dispatch.yml), the
+          # actor is github-actions[bot], not a human. Without this, claude-code-action
+          # rejects the run with "Workflow initiated by non-human actor".
+          allowed_bots: "github-actions[bot]"
           show_full_output: true
           prompt: |
             REPO: ${{ github.repository }}
