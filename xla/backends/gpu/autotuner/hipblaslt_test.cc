@@ -234,6 +234,25 @@ ENTRY %main (lhs: f8e4m3fn[32,256], rhs: f8e4m3fn[16,256], lhs_scale: f8e8m0fnu[
   ROOT %fusion = f32[32,16]{1,0} fusion(%lhs, %rhs, %lhs_scale, %rhs_scale), kind=kCustom, calls=%fusion_dot, backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
 })";
 
+const char kScaledDotFp4FusionHlo[] = R"(
+HloModule ScaledDotFp4Fusion
+
+%fusion_dot (p0: f4e2m1fn[32,256], p1: f4e2m1fn[16,256], p2: f8e8m0fnu[32,8], p3: f8e8m0fnu[16,8]) -> f32[32,16] {
+  %p0 = f4e2m1fn[32,256]{1,0} parameter(0)
+  %p1 = f4e2m1fn[16,256]{1,0} parameter(1)
+  %p2 = f8e8m0fnu[32,8]{1,0} parameter(2)
+  %p3 = f8e8m0fnu[16,8]{1,0} parameter(3)
+  ROOT %scaled_dot = f32[32,16]{1,0} scaled-dot(%p0, %p1, %p2, %p3), lhs_contracting_dims={1}, rhs_contracting_dims={1}
+}
+
+ENTRY %main (lhs: f4e2m1fn[32,256], rhs: f4e2m1fn[16,256], lhs_scale: f8e8m0fnu[32,8], rhs_scale: f8e8m0fnu[16,8]) -> f32[32,16] {
+  %lhs = f4e2m1fn[32,256]{1,0} parameter(0)
+  %rhs = f4e2m1fn[16,256]{1,0} parameter(1)
+  %lhs_scale = f8e8m0fnu[32,8]{1,0} parameter(2)
+  %rhs_scale = f8e8m0fnu[16,8]{1,0} parameter(3)
+  ROOT %fusion = f32[32,16]{1,0} fusion(%lhs, %rhs, %lhs_scale, %rhs_scale), kind=kCustom, calls=%fusion_dot, backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
+})";
+
 class HipblasLtScaledDotTest : public HipblasLtBackendTest {
  protected:
   void SetUp() override {
@@ -298,6 +317,61 @@ TEST_F(HipblasLtScaledDotTest, ApplyConfig) {
 TEST_F(HipblasLtScaledDotTest, Compile) {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(kScaledDotFusionHlo));
+  HloInstruction* fusion = module->entry_computation()->root_instruction();
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackendConfig> config,
+                          backend_.GetDefaultConfig(*fusion));
+  absl::StatusOr<std::unique_ptr<Executable>> executable =
+      backend_.Compile(*fusion, *config);
+  EXPECT_THAT(executable, absl_testing::IsOk());
+}
+
+TEST_F(HipblasLtScaledDotTest, Fp4IsSupported) {
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseAndReturnVerifiedModule(kScaledDotFp4FusionHlo));
+  HloInstruction* fusion = module->entry_computation()->root_instruction();
+  absl::StatusOr<std::unique_ptr<BackendConfig>> config =
+      backend_.GetDefaultConfig(*fusion);
+  EXPECT_THAT(config, absl_testing::IsOk());
+}
+
+TEST_F(HipblasLtScaledDotTest, Fp4GetSupportedConfigs) {
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseAndReturnVerifiedModule(kScaledDotFp4FusionHlo));
+  HloInstruction* fusion = module->entry_computation()->root_instruction();
+  absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>> configs =
+      backend_.GetSupportedConfigs(*fusion);
+  EXPECT_THAT(configs,
+              absl_testing::IsOkAndHolds(testing::SizeIs(testing::Gt(0))));
+}
+
+TEST_F(HipblasLtScaledDotTest, Fp4ApplyConfig) {
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseAndReturnVerifiedModule(kScaledDotFp4FusionHlo));
+  HloInstruction* fusion = module->entry_computation()->root_instruction();
+
+  HipblasLtBackendConfig config;
+  config.set_algorithm(0);
+  config.set_autotune_workspace_size(4194304);
+  google::protobuf::Any any;
+  any.PackFrom(config);
+
+  TF_EXPECT_OK(backend_.ApplyConfig(*fusion, any));
+
+  EXPECT_THAT(
+      RunFileCheck(module->ToString(),
+                   R"(CHECK: custom-call
+                      CHECK-SAME: custom_call_target="__cublas$lt$matmul$mx"
+                      CHECK: "mx_mode":true)"),
+      absl_testing::IsOkAndHolds(true));
+}
+
+TEST_F(HipblasLtScaledDotTest, Fp4Compile) {
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseAndReturnVerifiedModule(kScaledDotFp4FusionHlo));
   HloInstruction* fusion = module->entry_computation()->root_instruction();
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackendConfig> config,
                           backend_.GetDefaultConfig(*fusion));
