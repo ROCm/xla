@@ -17,10 +17,11 @@ limitations under the License.
 #include <utility>
 
 #include <gtest/gtest.h>
+#include "absl/status/status_matchers.h"
 #include "absl/strings/string_view.h"
-#include "xla/backends/gpu/transforms/scaled_dot_rewriter.h"
 #include "xla/error_spec.h"
 #include "xla/hlo/parser/hlo_parser.h"
+#include "xla/hlo/testlib/filecheck.h"
 #include "xla/tests/hlo_pjrt_test_base.h"
 #include "xla/tsl/platform/statusor.h"
 
@@ -29,8 +30,6 @@ namespace {
 
 using HipblasLtMxExecutionTest = HloPjRtTestBase;
 
-// Shapes from PR #33947 (known to work with hipBLASLt MX on gfx950).
-// K=256 with block_size=32 gives scale dim K/32=8.
 constexpr absl::string_view kMxFp8Hlo = R"(
 HloModule mx_test
 ENTRY main {
@@ -54,16 +53,15 @@ ENTRY main {
       lhs_contracting_dims={2}, rhs_contracting_dims={2}
 })";
 
-// Numerical correctness: kScaledDot goes through the full pipeline with
-// xla_gpu_experimental_scaled_dot_with_triton=true, entering GemmFusion and
-// the autotuner. The reference decomposes it via ScaledDotRewriter.
 TEST_F(HipblasLtMxExecutionTest, MxFp8Correctness) {
   TF_ASSERT_OK_AND_ASSIGN(auto reference_module,
                           ParseAndReturnUnverifiedModule(kMxFp8Hlo));
-  ScaledDotRewriter rewriter;
-  TF_ASSERT_OK_AND_ASSIGN(
-      auto changed, rewriter.Run(reference_module.get(), {}));
-  EXPECT_TRUE(changed);
+  reference_module->mutable_config()
+      .mutable_debug_options()
+      .set_xla_gpu_experimental_scaled_dot_with_triton(false);
+  reference_module->mutable_config()
+      .mutable_debug_options()
+      .set_xla_gpu_enable_triton_gemm(false);
 
   TF_ASSERT_OK_AND_ASSIGN(auto test_module,
                           ParseAndReturnUnverifiedModule(kMxFp8Hlo));
@@ -76,17 +74,40 @@ TEST_F(HipblasLtMxExecutionTest, MxFp8Correctness) {
 
   EXPECT_TRUE(RunAndCompareTwoModules(
       std::move(test_module), std::move(reference_module),
-      ErrorSpec(/*aabs=*/0.1, /*arel=*/0.1),
+      ErrorSpec(/*aabs=*/1e-4, /*arel=*/1e-5),
       /*run_hlo_passes=*/true));
+
+  HloModuleConfig ref_config = GetModuleConfigForTest();
+  ref_config.mutable_debug_options()
+      .set_xla_gpu_experimental_scaled_dot_with_triton(false);
+  ref_config.mutable_debug_options().set_xla_gpu_enable_triton_gemm(false);
+  TF_ASSERT_OK_AND_ASSIGN(auto ref_optimized,
+                          GetOptimizedModule(kMxFp8Hlo, ref_config));
+  EXPECT_THAT(
+      RunFileCheck(ref_optimized->ToString(),
+                   "CHECK-NOT: __cublas$lt$matmul$mx\nCHECK-NOT: scaled-dot"),
+      absl_testing::IsOkAndHolds(true));
+
+  HloModuleConfig test_config = GetModuleConfigForTest();
+  test_config.mutable_debug_options()
+      .set_xla_gpu_experimental_scaled_dot_with_triton(true);
+  test_config.mutable_debug_options().set_xla_gpu_enable_triton_gemm(true);
+  TF_ASSERT_OK_AND_ASSIGN(auto test_optimized,
+                          GetOptimizedModule(kMxFp8Hlo, test_config));
+  EXPECT_THAT(RunFileCheck(test_optimized->ToString(),
+                           "CHECK: __cublas$lt$matmul$mx"),
+              absl_testing::IsOkAndHolds(true));
 }
 
 TEST_F(HipblasLtMxExecutionTest, MxFp8BatchedCorrectness) {
   TF_ASSERT_OK_AND_ASSIGN(auto reference_module,
                           ParseAndReturnUnverifiedModule(kMxFp8BatchedHlo));
-  ScaledDotRewriter rewriter;
-  TF_ASSERT_OK_AND_ASSIGN(
-      auto changed, rewriter.Run(reference_module.get(), {}));
-  EXPECT_TRUE(changed);
+  reference_module->mutable_config()
+      .mutable_debug_options()
+      .set_xla_gpu_experimental_scaled_dot_with_triton(false);
+  reference_module->mutable_config()
+      .mutable_debug_options()
+      .set_xla_gpu_enable_triton_gemm(false);
 
   TF_ASSERT_OK_AND_ASSIGN(auto test_module,
                           ParseAndReturnUnverifiedModule(kMxFp8BatchedHlo));
@@ -99,28 +120,31 @@ TEST_F(HipblasLtMxExecutionTest, MxFp8BatchedCorrectness) {
 
   EXPECT_TRUE(RunAndCompareTwoModules(
       std::move(test_module), std::move(reference_module),
-      ErrorSpec(/*aabs=*/0.1, /*arel=*/0.1),
+      ErrorSpec(/*aabs=*/1e-4, /*arel=*/1e-5),
       /*run_hlo_passes=*/true));
+
+  HloModuleConfig ref_config = GetModuleConfigForTest();
+  ref_config.mutable_debug_options()
+      .set_xla_gpu_experimental_scaled_dot_with_triton(false);
+  ref_config.mutable_debug_options().set_xla_gpu_enable_triton_gemm(false);
+  TF_ASSERT_OK_AND_ASSIGN(auto ref_optimized,
+                          GetOptimizedModule(kMxFp8BatchedHlo, ref_config));
+  EXPECT_THAT(
+      RunFileCheck(ref_optimized->ToString(),
+                   "CHECK-NOT: __cublas$lt$matmul$mx\nCHECK-NOT: scaled-dot"),
+      absl_testing::IsOkAndHolds(true));
+
+  HloModuleConfig test_config = GetModuleConfigForTest();
+  test_config.mutable_debug_options()
+      .set_xla_gpu_experimental_scaled_dot_with_triton(true);
+  test_config.mutable_debug_options().set_xla_gpu_enable_triton_gemm(true);
+  TF_ASSERT_OK_AND_ASSIGN(auto test_optimized,
+                          GetOptimizedModule(kMxFp8BatchedHlo, test_config));
+  EXPECT_THAT(RunFileCheck(test_optimized->ToString(),
+                           "CHECK: __cublas$lt$matmul$mx"),
+              absl_testing::IsOkAndHolds(true));
 }
 
-// Fallback correctness: default flags decompose kScaledDot via
-// ScaledDotRewriter in the pipeline, matching our reference.
-TEST_F(HipblasLtMxExecutionTest, DecompositionFallbackCorrectness) {
-  TF_ASSERT_OK_AND_ASSIGN(auto reference_module,
-                          ParseAndReturnUnverifiedModule(kMxFp8Hlo));
-  ScaledDotRewriter rewriter;
-  TF_ASSERT_OK_AND_ASSIGN(
-      auto changed, rewriter.Run(reference_module.get(), {}));
-  EXPECT_TRUE(changed);
-
-  TF_ASSERT_OK_AND_ASSIGN(auto test_module,
-                          ParseAndReturnUnverifiedModule(kMxFp8Hlo));
-
-  EXPECT_TRUE(RunAndCompareTwoModules(
-      std::move(test_module), std::move(reference_module),
-      ErrorSpec(/*aabs=*/0.01, /*arel=*/0.01),
-      /*run_hlo_passes=*/true));
-}
 
 }  // namespace
 }  // namespace xla::gpu

@@ -744,10 +744,11 @@ xla_test(
     ],
     deps = [
         "//xla:error_spec",
-        "//xla/backends/gpu/transforms:scaled_dot_rewriter",
         "//xla/hlo/parser:hlo_parser",
+        "//xla/hlo/testlib:filecheck",
         "//xla/tests:hlo_pjrt_test_base",
         "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest_main",
     ],
