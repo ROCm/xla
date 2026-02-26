@@ -215,9 +215,6 @@ TEST_F(HipblasLtBackendTest, Compile) {
   EXPECT_THAT(executable, absl_testing::IsOk());
 }
 
-// HLO fixture for kScaledDot in a __triton_gemm fusion with MXFP8 types.
-// Shapes from PR #33947: LHS [M,K], RHS [N,K] with both contracting on
-// the last dim (rhs_contracting_dims={1}, equivalent to lhs * rhs^T).
 const char kScaledDotFusionHlo[] = R"(
 HloModule ScaledDotFusion
 
@@ -237,18 +234,28 @@ ENTRY %main (lhs: f8e4m3fn[32,256], rhs: f8e4m3fn[16,256], lhs_scale: f8e8m0fnu[
   ROOT %fusion = f32[32,16]{1,0} fusion(%lhs, %rhs, %lhs_scale, %rhs_scale), kind=kCustom, calls=%fusion_dot, backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
 })";
 
-TEST_F(HipblasLtBackendTest, IsSupportedForScaledDotFusion) {
+class HipblasLtScaledDotTest : public HipblasLtBackendTest {
+ protected:
+  void SetUp() override {
+    const auto& gpu_cc =
+        target_config_.device_description.gpu_compute_capability();
+    const auto* rocm_cc = gpu_cc.rocm_compute_capability();
+    if (rocm_cc == nullptr || !rocm_cc->has_mx_type_support()) {
+      GTEST_SKIP() << "Scaled dot requires MX type support (gfx950+).";
+    }
+  }
+};
+
+TEST_F(HipblasLtScaledDotTest, IsSupported) {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(kScaledDotFusionHlo));
   HloInstruction* fusion = module->entry_computation()->root_instruction();
-  // IsSupported is tested indirectly via GetDefaultConfig (which also checks
-  // IsSupported). On gfx950, the kScaledDot fusion should be recognized.
   absl::StatusOr<std::unique_ptr<BackendConfig>> config =
       backend_.GetDefaultConfig(*fusion);
   EXPECT_THAT(config, absl_testing::IsOk());
 }
 
-TEST_F(HipblasLtBackendTest, GetSupportedConfigsForScaledDot) {
+TEST_F(HipblasLtScaledDotTest, GetSupportedConfigs) {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(kScaledDotFusionHlo));
   HloInstruction* fusion = module->entry_computation()->root_instruction();
@@ -258,7 +265,7 @@ TEST_F(HipblasLtBackendTest, GetSupportedConfigsForScaledDot) {
               absl_testing::IsOkAndHolds(testing::SizeIs(testing::Gt(0))));
 }
 
-TEST_F(HipblasLtBackendTest, GetDefaultConfigForScaledDot) {
+TEST_F(HipblasLtScaledDotTest, GetDefaultConfig) {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(kScaledDotFusionHlo));
   HloInstruction* fusion = module->entry_computation()->root_instruction();
@@ -267,7 +274,7 @@ TEST_F(HipblasLtBackendTest, GetDefaultConfigForScaledDot) {
   EXPECT_THAT(config, absl_testing::IsOk());
 }
 
-TEST_F(HipblasLtBackendTest, ApplyConfigForScaledDot) {
+TEST_F(HipblasLtScaledDotTest, ApplyConfig) {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(kScaledDotFusionHlo));
   HloInstruction* fusion = module->entry_computation()->root_instruction();
@@ -280,7 +287,6 @@ TEST_F(HipblasLtBackendTest, ApplyConfigForScaledDot) {
 
   TF_EXPECT_OK(backend_.ApplyConfig(*fusion, any));
 
-  // After ApplyConfig, the fusion should be replaced with a custom call.
   EXPECT_THAT(
       RunFileCheck(module->ToString(),
                    R"(CHECK: custom-call
@@ -289,7 +295,7 @@ TEST_F(HipblasLtBackendTest, ApplyConfigForScaledDot) {
       absl_testing::IsOkAndHolds(true));
 }
 
-TEST_F(HipblasLtBackendTest, CompileScaledDot) {
+TEST_F(HipblasLtScaledDotTest, Compile) {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(kScaledDotFusionHlo));
   HloInstruction* fusion = module->entry_computation()->root_instruction();
