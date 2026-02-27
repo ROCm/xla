@@ -343,7 +343,6 @@ absl::StatusOr<GemmConfig> GemmConfig::FromProto(
       proto.has_algorithm() ? std::optional(proto.algorithm()) : std::nullopt,
       proto.grad_x(),
       proto.grad_y(),
-      proto.mx_mode(),
       compute_type};
 }
 

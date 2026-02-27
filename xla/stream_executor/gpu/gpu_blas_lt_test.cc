@@ -77,7 +77,6 @@ TEST(GemmConfigTest, ProtoConversion) {
       std::nullopt,                     // algorithm
       false,                            // grad_x
       false,                            // grad_y
-      false,                            // mx_mode
       std::nullopt                      // compute_type
   };
 
@@ -111,7 +110,6 @@ TEST(GemmConfigTest, ProtoConversionWithOptionals) {
       7,                                          // algorithm
       true,                                       // grad_x
       false,                                      // grad_y
-      false,                                      // mx_mode
       blas::ComputationType::kTF32AsF32           // compute_type
   };
 

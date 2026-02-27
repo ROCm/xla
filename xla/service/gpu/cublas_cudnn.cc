@@ -48,11 +48,6 @@ bool IsCublasLtMatmulF8(const HloInstruction& hlo) {
          hlo.custom_call_target() == kCublasLtMatmulF8CallTarget;
 }
 
-bool IsCublasLtMatmulMX(const HloInstruction& hlo) {
-  return hlo.opcode() == HloOpcode::kCustomCall &&
-         hlo.custom_call_target() == kCublasLtMatmulMXCallTarget;
-}
-
 bool IsTriangularSolve(const HloInstruction& hlo) {
   return hlo.opcode() == HloOpcode::kCustomCall &&
          hlo.custom_call_target() == kTriangularSolveCallTarget;
@@ -61,7 +56,6 @@ bool IsTriangularSolve(const HloInstruction& hlo) {
 const absl::string_view kGemmCallTarget = "__cublas$gemm";
 const absl::string_view kCublasLtMatmulCallTarget = "__cublas$lt$matmul";
 const absl::string_view kCublasLtMatmulF8CallTarget = "__cublas$lt$matmul$f8";
-const absl::string_view kCublasLtMatmulMXCallTarget = "__cublas$lt$matmul$mx";
 const absl::string_view kTriangularSolveCallTarget = "__cublas$triangularSolve";
 
 const absl::string_view kCudnnConvBackwardInputCallTarget =
