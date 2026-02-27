@@ -59,6 +59,7 @@ void ExpectGemmConfigEq(const GemmConfig& lhs, const GemmConfig& rhs) {
   EXPECT_EQ(lhs.algorithm, rhs.algorithm);
   EXPECT_EQ(lhs.grad_x, rhs.grad_x);
   EXPECT_EQ(lhs.grad_y, rhs.grad_y);
+  EXPECT_EQ(lhs.mx_mode, rhs.mx_mode);
   EXPECT_EQ(lhs.compute_type, rhs.compute_type);
 }
 

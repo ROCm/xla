@@ -63,15 +63,16 @@ class BlasLt : public gpu::BlasLt {
         blas::Transpose trans_a = blas::Transpose::kNoTranspose,
         blas::Transpose trans_b = blas::Transpose::kNoTranspose,
         Epilogue epilogue = Epilogue::kDefault,
-        PointerMode pointer_mode = PointerMode::kHost, bool mx_mode = false);
+        PointerMode pointer_mode = PointerMode::kHost,
+        bool mx_mode = false);
 
     hipblasComputeType_t compute_type() const { return compute_type_; }
     hipDataType scale_type() const { return datatype_; }
     bool has_bias_epilogue() const { return has_bias_epilogue_; }
+    bool mx_mode() const { return mx_mode_; }
     hipblasPointerMode_t pointer_mode() const {
       return HIPBLAS_POINTER_MODE_HOST;
     }
-    bool mx_mode() const { return mx_mode_; }
     hipblasLtMatmulDesc_t get() const { return handle_.get(); }
 
    private:

@@ -73,17 +73,10 @@ const se::dnn::VersionInfo kCudnnSupportsBlockScaledDotWithGlobalScale(9, 13);
 //    config if the block scaled dimension is padded.
 class BlockScalingRewriter : public OpExpanderPass {
  public:
-  explicit BlockScalingRewriter(const se::DeviceDescription& device_description,
-                                const se::dnn::VersionInfo& cudnn_version,
-                                const bool allow_hipblaslt)
-      : device_description_(device_description),
-        cudnn_version_(cudnn_version),
-        allow_hipblaslt_(allow_hipblaslt) {};
+  explicit BlockScalingRewriter(se::dnn::VersionInfo cudnn_version)
+      : cudnn_version_(cudnn_version) {};
 
   absl::string_view name() const override { return "block-scaling-rewriter"; }
-
-  bool IsCuda();
-  bool IsRocm();
 
   bool InstructionMatchesPattern(HloInstruction* instruction) override;
 
@@ -98,16 +91,12 @@ class BlockScalingRewriter : public OpExpanderPass {
   static constexpr absl::string_view kBlockScaledDotCustomCallTarget =
       "__op$block_scaled_dot";
 
-  // Common block size constants for CUDA
+  // Common block size constants.
   static constexpr int kBlockSizeMXFP8 = 32;
   static constexpr int kBlockSizeNVFP4 = 16;
-  // Common block size constants for ROCm
-  static constexpr int kBlockSizeHipblaslt = 32;
 
  private:
-  const se::DeviceDescription device_description_;
-  const se::dnn::VersionInfo cudnn_version_;
-  const bool allow_hipblaslt_;
+  se::dnn::VersionInfo cudnn_version_;
 };
 
 // Helper class for building cuDNN scaled dot operations.

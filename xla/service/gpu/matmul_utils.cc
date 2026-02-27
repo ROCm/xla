@@ -263,7 +263,8 @@ absl::StatusOr<bool> CanFoldTransposeOperandIntoDot(const HloInstruction& dot,
     double alpha_real, double alpha_imag, double beta,
     PrecisionConfig::Algorithm precision_algorithm,
     std::optional<int64_t> algorithm, int64_t compute_precision, bool grad_x,
-    bool grad_y, bool mx_mode, const se::GpuComputeCapability& gpu_version) {
+    bool grad_y, bool mx_mode,
+    const se::GpuComputeCapability& gpu_version) {
   return GemmConfig::For(lhs_shape, lhs_batch_dims, lhs_contracting_dims,
                          rhs_shape, rhs_batch_dims, rhs_contracting_dims,
                          /*c_shape=*/output_shape, /*bias_shape_ptr=*/nullptr,
@@ -281,7 +282,8 @@ absl::StatusOr<bool> CanFoldTransposeOperandIntoDot(const HloInstruction& dot,
     double alpha_imag, double beta,
     PrecisionConfig::Algorithm precision_algorithm,
     std::optional<int64_t> algorithm, int64_t compute_precision, bool grad_x,
-    bool grad_y, bool mx_mode, const se::GpuComputeCapability& gpu_version) {
+    bool grad_y, bool mx_mode,
+    const se::GpuComputeCapability& gpu_version) {
   absl::Span<const int64_t> lhs_col_dims = lhs_contracting_dims;
   TF_ASSIGN_OR_RETURN(
       std::vector<int64_t> lhs_row_dims,
