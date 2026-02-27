@@ -730,6 +730,7 @@ xla_test(
 
 xla_test(
     name = "hipblaslt_test",
+    timeout = "long",
     srcs = ["hipblaslt_test.cc"],
     backends = [
         "amdgpu_any",
