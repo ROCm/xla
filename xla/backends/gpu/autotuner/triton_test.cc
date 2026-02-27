@@ -134,6 +134,9 @@ TEST_F(TritonBackendTest, GetSupportedConfigs) {
 }
 
 TEST_F(TritonBackendTest, GetSupportedConfigsForScaledDot) {
+  if (target_config_.device_description.gpu_compute_capability().IsRocm()) {
+    GTEST_SKIP() << "Triton scaled dot not supported on ROCm.";
+  }
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(kScaledDotHlo));
   HloInstruction* fusion_instr =
@@ -145,6 +148,9 @@ TEST_F(TritonBackendTest, GetSupportedConfigsForScaledDot) {
 }
 
 TEST_F(TritonBackendTest, GetAndApplyConfigForScaledDot) {
+  if (target_config_.device_description.gpu_compute_capability().IsRocm()) {
+    GTEST_SKIP() << "Triton scaled dot not supported on ROCm.";
+  }
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(kScaledDotHlo));
   HloInstruction* fusion_instr =

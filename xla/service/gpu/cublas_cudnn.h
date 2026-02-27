@@ -99,6 +99,9 @@ bool IsCublasLtMatmul(const HloInstruction& hlo);
 // Scaled matrix multiplication in FP8. Calls into cublasLt.
 bool IsCublasLtMatmulF8(const HloInstruction& hlo);
 
+// Block-scaled matrix multiplication in MX formats. Calls into hipBLASLt.
+bool IsCublasLtMatmulMx(const HloInstruction& hlo);
+
 // Triangular solve that calls into legacy cublas.
 bool IsTriangularSolve(const HloInstruction& hlo);
 
@@ -110,6 +113,10 @@ extern const absl::string_view kCublasLtMatmulCallTarget;
 
 // A call to cuBLASLt for scaled matrix multiplication in FP8.
 extern const absl::string_view kCublasLtMatmulF8CallTarget;
+
+// A call to hipBLASLt for block-scaled matrix multiplication in MX formats.
+inline constexpr absl::string_view kCublasLtMatmulMxCallTarget =
+    "__cublas$lt$matmul$mx";
 
 // A call to cuBLAS for a triangular solve.
 //
