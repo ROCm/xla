@@ -26,6 +26,12 @@ limitations under the License.
 
 namespace xla {
 
+DebugOptions LlvmIrGenTestBase::GetDebugOptionsForTest() const {
+  DebugOptions debug_options = CodegenTestBase::GetDebugOptionsForTest();
+  debug_options.set_xla_gpu_force_compilation_parallelism(1);
+  return debug_options;
+}
+
 void LlvmIrGenTestBase::SetIrHook(bool match_optimized_ir) {
   auto llvm_compiler = GetLLVMCompiler();
   using std::placeholders::_1;

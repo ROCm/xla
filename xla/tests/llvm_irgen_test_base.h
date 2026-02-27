@@ -60,6 +60,8 @@ class LlvmIrGenTestBase : public CodegenTestBase {
                                      const std::string& pattern,
                                      bool match_optimized_ir);
 
+  DebugOptions GetDebugOptionsForTest() const override;
+
  private:
   LLVMCompiler* GetLLVMCompiler();
 

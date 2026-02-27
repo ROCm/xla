@@ -286,27 +286,43 @@ absl::Status RocmStream::Memcpy(void* host_dst,
                                size, stream_handle_);
 }
 
-namespace {
-void InternalHostCallback(void* data) {
-  auto* callback = reinterpret_cast<absl::AnyInvocable<void() &&>*>(data);
-  std::move (*callback)();
-  delete callback;
+void RocmStream::InternalHostCallback(void* data) {
+  auto* callback_data_ptr = reinterpret_cast<
+      std::tuple<absl::AnyInvocable<absl::Status() &&>, TsanContext>*>(data);
+
+  // "Synchronize with" DoHostCallbackWithStatus
+  TsanContext{callback_data_ptr}.Acquire();
+
+  auto tsan_ctx = std::get<1>(*callback_data_ptr);
+
+  // "Synchronize with" previous InternalHostCallback (may not be any)
+  tsan_ctx.Acquire();
+
+  absl::Status s = std::move(std::get<0>(*callback_data_ptr))();
+  if (ABSL_PREDICT_FALSE(!s.ok())) {
+    LOG(WARNING) << "Host callback failed: " << s;
+  }
+
+  delete callback_data_ptr;
+  tsan_ctx.Release();
 }
-}  // namespace
 
 absl::Status RocmStream::DoHostCallbackWithStatus(
     absl::AnyInvocable<absl::Status() &&> callback) {
-  auto callback_ptr =
-      new absl::AnyInvocable<void() &&>([cb = std::move(callback)]() mutable {
-        absl::Status s = std::move(cb)();
-        if (!s.ok()) {
-          LOG(WARNING) << "Host callback failed: " << s;
-        }
-      });
-  return ToStatus(
+  auto callback_data_ptr = std::make_unique<
+      std::tuple<absl::AnyInvocable<absl::Status() &&>, TsanContext>>(
+      std::move(callback), TsanContext{this});
+
+  TsanContext{callback_data_ptr.get()}.Release();
+
+  hipError_t res =
       wrap::hipLaunchHostFunc(stream_handle_, (hipHostFn_t)InternalHostCallback,
-                              callback_ptr),
-      "unable to add host callback");
+                              callback_data_ptr.get());
+  if (res == hipSuccess) {
+    callback_data_ptr.release();
+    return absl::OkStatus();
+  }
+  return ToStatus(res, "unable to add host callback");
 }
 
 namespace {
@@ -368,7 +384,10 @@ absl::Status LaunchRocmKernel(
 }  // namespace
 
 absl::Status RocmStream::BlockHostUntilDone() {
-  return SynchronizeStream(executor_, stream_handle_);
+  auto status = SynchronizeStream(executor_, stream_handle_);
+  // "Synchronize with" InternalHostCallback (may not be any)
+  TsanContext{this}.Acquire();
+  return status;
 }
 
 absl::Status RocmStream::LaunchKernel(
