@@ -223,15 +223,16 @@ absl::StatusOr<Type> PrimitiveTypeToMlirType(mlir::ImplicitLocOpBuilder& b,
     case F4E2M1FN:
       return b.getType<mlir::Float4E2M1FNType>();
     case F8E5M2FNUZ:
-      if (gpu_cc.has_value() && gpu_cc.value().IsRocm()) {
-        return b.getType<mlir::Float8E5M2FNUZType>();
+      if (gpu_cc.has_value() && !gpu_cc.value().IsRocm()) {
+        return absl::UnimplementedError(
+          "F8E5M2FNUZ is not supported on this GPU.");
       }
-      return absl::UnimplementedError("F8E5M2FNUZ is not supported on this GPU.");
+      return b.getType<mlir::Float8E5M2FNUZType>();
     case F8E4M3FNUZ:
-      if (gpu_cc.has_value() && gpu_cc.value().IsRocm()) {
-        return b.getType<mlir::Float8E4M3FNUZType>();
+      if (gpu_cc.has_value() && !gpu_cc.value().IsRocm()) {
+        return absl::UnimplementedError("F8E4M3FNUZ is not supported on this GPU.");
       }
-      return absl::UnimplementedError("F8E4M3FNUZ is not supported on this GPU.");
+      return b.getType<mlir::Float8E4M3FNUZType>();
     default:
       return absl::UnimplementedError(
           absl::StrCat("This type is not supported yet: ",
