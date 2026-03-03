@@ -695,7 +695,7 @@ cc_library(
         "@com_google_absl//absl/time",
         "@eigen_archive//:eigen3",
         "@local_config_rocm//rocm:rocm_headers",
-        "@local_config_rocm//rocm:hipblaslt_link",
+        "@local_config_rocm//rocm:hipblaslt",
         "@tsl//tsl/platform:dso_loader",
         "@tsl//tsl/platform:ml_dtypes",
     ] + if_static([

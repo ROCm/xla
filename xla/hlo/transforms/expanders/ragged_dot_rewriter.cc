@@ -339,19 +339,19 @@ absl::StatusOr<std::unique_ptr<HloInstruction>> RaggedToGeneral(
                                    ragged_dot->precision_config());
 }
 
-bool isFP16Operation(const HloInstruction* ragged_dot) {
+bool IsFP16Operation(const HloInstruction* ragged_dot) {
   return (ragged_dot->shape().element_type() == F16) &&
          (ragged_dot->operand(0)->shape().element_type() == F16) &&
          (ragged_dot->operand(1)->shape().element_type() == F16);
 }
 
-bool isBF16Operation(const HloInstruction* ragged_dot) {
+bool IsBF16Operation(const HloInstruction* ragged_dot) {
   return (ragged_dot->shape().element_type() == BF16) &&
          (ragged_dot->operand(0)->shape().element_type() == BF16) &&
          (ragged_dot->operand(1)->shape().element_type() == BF16);
 }
 
-bool canBeHandledByCublasltGroupGemm(
+bool CanBeHandledByCublasltGroupGemm(
     const se::GpuComputeCapability& gpu_compute_capability,
     const HloInstruction* instruction) {
   if (!std::holds_alternative<se::RocmComputeCapability>(
@@ -368,11 +368,11 @@ bool canBeHandledByCublasltGroupGemm(
   // For MI350/355 targets (gfx950) : datatype supported FP16 only
 
   if (gfx_version == "gfx942" &&
-      (isFP16Operation(instruction) || isBF16Operation(instruction))) {
+      (IsFP16Operation(instruction) || IsBF16Operation(instruction))) {
     return true;
   }
 
-  if (gfx_version == "gfx950" && isFP16Operation(instruction)) {
+  if (gfx_version == "gfx950" && IsFP16Operation(instruction)) {
     return true;
   }
 
@@ -384,7 +384,7 @@ bool canBeHandledByCublasltGroupGemm(
 absl::StatusOr<bool> RaggedDotRewriter::Run(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
-  const bool hasGroupedGemm =
+  const bool has_grouped_gemm =
       module->config()
           .debug_options()
           .xla_gpu_experimental_use_ragged_dot_grouped_gemm() &&
@@ -401,7 +401,7 @@ absl::StatusOr<bool> RaggedDotRewriter::Run(
        module->MakeNonfusionComputations(execution_threads)) {
     for (auto* instruction : computation->instructions()) {
       if (instruction->opcode() == HloOpcode::kRaggedDot) {
-        if (!(hasGroupedGemm && canBeHandledByCublasltGroupGemm(
+        if (!(has_grouped_gemm && CanBeHandledByCublasltGroupGemm(
                                     gpu_compute_capability_, instruction))) {
           // Only ragged-dot that cannot be lowered through cublatLt GroupGemm
           // are added to the list of operations to rewrite in regular dot.

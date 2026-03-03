@@ -887,8 +887,7 @@ absl::Status IrEmitterUnnested::EmitCublasLtGroupedMatmulThunk(
     const HloCustomCallInstruction* instr) {
   TF_ASSIGN_OR_RETURN(const auto gpu_config,
                       instr->backend_config<xla::gpu::GpuBackendConfig>());
-  const xla::gpu::GemmBackendConfig& config = gpu_config.gemm_backend_config();
-  bool has_aux_output = false;
+  const xla::gpu::GemmBackendConfig& config = gpu_config.grouped_gemm_backend_config().gemm_backend_config();
 
   TF_RET_CHECK(instr->operand_count() == 3);
 

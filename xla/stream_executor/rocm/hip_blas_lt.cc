@@ -81,15 +81,14 @@ using ::xla::complex64;
 
 void GroupGemmUpdateArgs(
     hipStream_t stream, hipblaslt_ext::UserArguments *args, const void *a,
-    const void *b, void *c, void *d, const void *group_sizes,
+    const void *b, void *d, const void *group_sizes,
     uint8_t group_size_bytewidth, uint8_t log2_byte_width_elem_a,
-    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_c,
-    uint8_t log2_byte_width_elem_d, uint32_t stride_ragged_dim,
-    uint32_t stride_group_dim, uint32_t output_stride_ragged_dim,
-    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
-    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-    uint32_t strideD1, uint32_t strideD2, const uint8_t ragged_mode,
-    uint32_t num_gemms);
+    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
+    uint32_t stride_ragged_dim, uint32_t stride_group_dim,
+    uint32_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
+    uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
+    uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideD1,
+    uint32_t strideD2, const uint8_t ragged_mode, uint32_t num_gemms);
 namespace {
 
 template <typename T>
@@ -461,7 +460,7 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream *stream,
       TF_RETURN_IF_ERROR(SetAttr(
           op_desc_->get(), HIPBLASLT_MATMUL_DESC_B_SCALE_MODE, MXScaleType));
     }
-#endif // TF_ROCM_VERSION >= 70000
+#endif  // TF_ROCM_VERSION >= 70000
 
     int found_algorithm_count = 0;
     auto error = wrap::hipblasLtMatmulAlgoGetHeuristic(
@@ -812,15 +811,24 @@ absl::Status BlasLt::MatmulPlan::ExecuteRegularMatmul(
 #endif
 
 #if TF_ROCM_VERSION >= 70000
-  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_32F, HIP_R_32F)
-  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_32F, HIP_R_16F)
-  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_32F, HIP_R_16BF)
-  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_16F, HIP_R_16F)
-  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_16F, HIP_R_32F)
-  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_16F, HIP_R_16BF)
-  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_16BF, HIP_R_16BF)
-  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_16BF, HIP_R_32F)
-  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_16BF, HIP_R_16F)
+  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_32F,
+               HIP_R_32F)
+  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_32F,
+               HIP_R_16F)
+  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_32F,
+               HIP_R_16BF)
+  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_16F,
+               HIP_R_16F)
+  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_16F,
+               HIP_R_32F)
+  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_16F,
+               HIP_R_16BF)
+  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_16BF,
+               HIP_R_16BF)
+  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_16BF,
+               HIP_R_32F)
+  TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_4F_E2M1_EXT, HIP_R_16BF,
+               HIP_R_16F)
 
   TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_8F_E4M3, HIP_R_32F, HIP_R_32F)
   TYPED_MATMUL(float, HIP_R_4F_E2M1_EXT, HIP_R_8F_E4M3, HIP_R_32F, HIP_R_16F)
@@ -1041,12 +1049,13 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
         return 2;
       case blas::DataType::kFloat:
       case blas::DataType::kInt32:
-      case blas::DataType::kComplexFloat:
         return 4;
+      case blas::DataType::kComplexFloat:
       case blas::DataType::kDouble:
-      case blas::DataType::kComplexDouble:
       case blas::DataType::kInt64:
         return 8;
+      case blas::DataType::kComplexDouble:
+        return 16;
       default:
         LOG(FATAL) << "Unknown DataType " << static_cast<int32_t>(ty);
     }
@@ -1073,12 +1082,13 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
         return 1;
       case blas::DataType::kFloat:
       case blas::DataType::kInt32:
-      case blas::DataType::kComplexFloat:
         return 2;
+      case blas::DataType::kComplexFloat:
       case blas::DataType::kDouble:
-      case blas::DataType::kComplexDouble:
       case blas::DataType::kInt64:
         return 3;
+      case blas::DataType::kComplexDouble:
+        return 4;
       default:
         LOG(FATAL) << "Unknown DataType " << static_cast<int32_t>(ty);
     }
@@ -1091,7 +1101,6 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
 
   uint8_t log2_byte_width_elem_a = Log2ByteWidth(cfg_->type_a);
   uint8_t log2_byte_width_elem_b = Log2ByteWidth(cfg_->type_b);
-  uint8_t log2_byte_width_elem_c = Log2ByteWidth(cfg_->type_c);
   uint8_t log2_byte_width_elem_d = Log2ByteWidth(cfg_->type_d);
 
   auto group_size_bytewidth =
@@ -1132,10 +1141,9 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
   GroupGemmUpdateArgs(
       gpu::AsGpuStreamValue(stream),
       static_cast<hipblaslt_ext::UserArguments *>(d_userArgs->opaque()),
-      a.opaque(), b.opaque(), args.c.opaque(), args.d.opaque(),
-      args.group_sizes.opaque(), group_size_bytewidth, log2_byte_width_elem_a,
-      log2_byte_width_elem_b, log2_byte_width_elem_c, log2_byte_width_elem_d,
-      cfg_->stride_ragged_dim, cfg_->stride_group_dim,
+      a.opaque(), b.opaque(), args.d.opaque(), args.group_sizes.opaque(),
+      group_size_bytewidth, log2_byte_width_elem_a, log2_byte_width_elem_b,
+      log2_byte_width_elem_d, cfg_->stride_ragged_dim, cfg_->stride_group_dim,
       cfg_->output_stride_ragged_dim, cfg_->must_swap_operands, cfg_->m,
       cfg_->n, cfg_->k, cfg_->batch_count, strideA1, strideA2, strideB1,
       strideB2, strideD1, strideD2,

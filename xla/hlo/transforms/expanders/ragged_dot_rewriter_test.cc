@@ -39,7 +39,7 @@ class RaggedDotRewriterTest : public HloHardwareIndependentTestBase {
   }
 
   se::GpuComputeCapability GetRocmComputeCapability() {
-    return se::RocmComputeCapability{};
+    return se::RocmComputeCapability{se::RocmComputeCapability{"gfx942"}};
   }
 };
 

@@ -196,32 +196,29 @@ __device__ __forceinline__ void copy_shared_to_global(void* shared_src,
 }
 
 template <typename T>
-__global__ void SetUserArgsKernelRaggedInNonContractingDim(
-    hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
-    void* c, void* d, const void* group_sizes, uint8_t log2_byte_width_elem_a,
-    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
-    uint32_t stride_a, uint32_t stride_b, uint32_t output_stride_ragged_dim,
-    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
-    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-    uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
+__launch_bounds__(BLOCK_SIZE) __global__
+    void SetUserArgsKernelRaggedInNonContractingDim(
+        hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
+        void* d, const void* group_sizes, uint8_t log2_byte_width_elem_a,
+        uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
+        uint32_t stride_a, uint32_t stride_b, uint32_t output_stride_ragged_dim,
+        bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k,
+        uint32_t batch, uint32_t strideA1, uint32_t strideA2, uint32_t strideB1,
+        uint32_t strideB2, uint32_t strideD1, uint32_t strideD2,
+        uint32_t num_gemms) {
   __builtin_assume(num_gemms != 0);
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
 
-  // Dynamic shared memory - separate spaces for BlockScan and UserArguments
-  extern __shared__ uint8_t shared_mem[];
-
-  // BlockScan temporary storage at the beginning
-  auto& scan_temp = *reinterpret_cast<
-      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage*>(
-      shared_mem);
-
-  // UserArguments array after BlockScan temp storage
-  auto* sharedUserArgs = reinterpret_cast<hipblaslt_ext::UserArguments*>(
-      shared_mem +
-      sizeof(typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage));
-
+  // Static shared memory for BlockScan temporary storage
+  __shared__
+      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage scan_temp;
   // Static shared memory for cumulative offset
   __shared__ uint32_t cumulative_offset;
+
+  // Dynamic shared memory for UserArguments array
+  extern __shared__ uint8_t shared_mem[];
+  auto* sharedUserArgs =
+      reinterpret_cast<hipblaslt_ext::UserArguments*>(shared_mem);
 
   // Last thread initilize cumulative offset
   // No need to syncthread here as this variable will be
@@ -284,14 +281,12 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
             static_cast<const uint8_t*>(b) +
             (static_cast<intptr_t>(idx * stride_b) << log2_byte_width_elem_b)));
       }
-      arg.c = static_cast<void*>(
-          static_cast<uint8_t*>(c) +
-          (static_cast<intptr_t>(offset_group * output_stride_ragged_dim)
-           << log2_byte_width_elem_d));
       arg.d = static_cast<void*>(
           static_cast<uint8_t*>(d) +
           (static_cast<intptr_t>(offset_group * output_stride_ragged_dim)
            << log2_byte_width_elem_d));
+      // We only support C = D
+      arg.c = arg.d;
       arg.k = k;
       arg.batch = batch;
       arg.strideA1 = strideA1;
@@ -337,32 +332,29 @@ __global__ void SetUserArgsKernelRaggedInNonContractingDim(
 }
 
 template <typename T>
-__global__ void SetUserArgsKernelRaggedInContractingDim(
-    hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
-    void* c, void* d, const void* group_sizes, uint8_t log2_byte_width_elem_a,
-    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
-    uint32_t stride_a, uint32_t stride_b, uint32_t output_stride_ragged_dim,
-    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
-    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-    uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
+__launch_bounds__(BLOCK_SIZE) __global__
+    void SetUserArgsKernelRaggedInContractingDim(
+        hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
+        void* d, const void* group_sizes, uint8_t log2_byte_width_elem_a,
+        uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
+        uint32_t stride_a, uint32_t stride_b, uint32_t output_stride_ragged_dim,
+        bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k,
+        uint32_t batch, uint32_t strideA1, uint32_t strideA2, uint32_t strideB1,
+        uint32_t strideB2, uint32_t strideD1, uint32_t strideD2,
+        uint32_t num_gemms) {
   __builtin_assume(num_gemms != 0);
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
 
-  // Dynamic shared memory - separate spaces for BlockScan and UserArguments
-  extern __shared__ uint8_t shared_mem[];
-
-  // BlockScan temporary storage at the beginning
-  auto& scan_temp = *reinterpret_cast<
-      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage*>(
-      shared_mem);
-
-  // UserArguments array after BlockScan temp storage
-  auto* sharedUserArgs = reinterpret_cast<hipblaslt_ext::UserArguments*>(
-      shared_mem +
-      sizeof(typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage));
-
+  // Static shared memory for BlockScan temporary storage
+  __shared__
+      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage scan_temp;
   // Static shared memory for cumulative offset
   __shared__ uint32_t cumulative_offset;
+
+  // Dynamic shared memory for UserArguments array
+  extern __shared__ uint8_t shared_mem[];
+  auto* sharedUserArgs =
+      reinterpret_cast<hipblaslt_ext::UserArguments*>(shared_mem);
 
   // Last thread initilize cumulative offset
   // No need to syncthread here as this variable will be
@@ -396,7 +388,7 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
         min(BLOCK_SIZE, static_cast<uint32_t>(num_gemms - batch_start));
 
     // Last thread updates cumulative offset for next batch
-    if (threadIdx.x == BLOCK_SIZE - 1) {
+    if (threadIdx.x == batch_size - 1) {
       cumulative_offset += offset_in_batch + group_size;
     }
 
@@ -413,14 +405,12 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
           static_cast<const uint8_t*>(b) +
           (static_cast<intptr_t>(offset_group * stride_b)
            << log2_byte_width_elem_b)));
-      arg.c = const_cast<void*>(static_cast<void*>(
-          static_cast<uint8_t*>(c) +
-          (static_cast<intptr_t>(idx * output_stride_ragged_dim)
-           << log2_byte_width_elem_d)));
       arg.d = const_cast<void*>(static_cast<void*>(
           static_cast<uint8_t*>(d) +
           (static_cast<intptr_t>(idx * output_stride_ragged_dim)
            << log2_byte_width_elem_d)));
+      // We only support C = D
+      arg.c = arg.d;
       arg.k = typed_group_sizes[idx];
       arg.batch = batch;
       arg.strideA1 = strideA1;
@@ -466,32 +456,29 @@ __global__ void SetUserArgsKernelRaggedInContractingDim(
 }
 
 template <typename T>
-__global__ void SetUserArgsKernelRaggedInBatchDim(
-    hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
-    void* c, void* d, const void* group_sizes, uint8_t log2_byte_width_elem_a,
-    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
-    uint32_t stride_a, uint32_t stride_b, uint32_t output_stride_ragged_dim,
-    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
-    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-    uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
+__launch_bounds__(BLOCK_SIZE) __global__
+    void SetUserArgsKernelRaggedInBatchDim(
+        hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
+        void* d, const void* group_sizes, uint8_t log2_byte_width_elem_a,
+        uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
+        uint32_t stride_a, uint32_t stride_b, uint32_t output_stride_ragged_dim,
+        bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k,
+        uint32_t batch, uint32_t strideA1, uint32_t strideA2, uint32_t strideB1,
+        uint32_t strideB2, uint32_t strideD1, uint32_t strideD2,
+        uint32_t num_gemms) {
   __builtin_assume(num_gemms != 0);
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
 
-  // Dynamic shared memory - separate spaces for BlockScan and UserArguments
-  extern __shared__ uint8_t shared_mem[];
-
-  // BlockScan temporary storage at the beginning
-  auto& scan_temp = *reinterpret_cast<
-      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage*>(
-      shared_mem);
-
-  // UserArguments array after BlockScan temp storage
-  auto* sharedUserArgs = reinterpret_cast<hipblaslt_ext::UserArguments*>(
-      shared_mem +
-      sizeof(typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage));
-
+  // Static shared memory for BlockScan temporary storage
+  __shared__
+      typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage scan_temp;
   // Static shared memory for cumulative offset
   __shared__ uint32_t cumulative_offset;
+
+  // Dynamic shared memory for UserArguments array
+  extern __shared__ uint8_t shared_mem[];
+  auto* sharedUserArgs =
+      reinterpret_cast<hipblaslt_ext::UserArguments*>(shared_mem);
 
   // Last thread initilize cumulative offset
   // No need to syncthread here as this variable will be
@@ -542,14 +529,12 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
           static_cast<const uint8_t*>(b) +
           (static_cast<intptr_t>(offset_group * stride_b)
            << log2_byte_width_elem_b)));
-      arg.c = static_cast<void*>(
-          static_cast<uint8_t*>(c) +
-          (static_cast<intptr_t>(offset_group * output_stride_ragged_dim)
-           << log2_byte_width_elem_d));
       arg.d = static_cast<void*>(
           static_cast<uint8_t*>(d) +
           (static_cast<intptr_t>(offset_group * output_stride_ragged_dim)
            << log2_byte_width_elem_d));
+      // We only support C = D
+      arg.c = arg.d;
       arg.k = k;
       arg.batch = typed_group_sizes[idx];
       arg.strideA1 = strideA1;
@@ -596,15 +581,14 @@ __global__ void SetUserArgsKernelRaggedInBatchDim(
 
 void GroupGemmUpdateArgs(
     hipStream_t stream, hipblaslt_ext::UserArguments* args, const void* a,
-    const void* b, void* c, void* d, const void* group_sizes,
+    const void* b, void* d, const void* group_sizes,
     uint8_t group_size_bytewidth, uint8_t log2_byte_width_elem_a,
-    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_c,
-    uint8_t log2_byte_width_elem_d, uint32_t stride_ragged_dim,
-    uint32_t stride_group_dim, uint32_t output_stride_ragged_dim,
-    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
-    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-    uint32_t strideD1, uint32_t strideD2, const uint8_t ragged_mode,
-    uint32_t num_gemms) {
+    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
+    uint32_t stride_ragged_dim, uint32_t stride_group_dim,
+    uint32_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
+    uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
+    uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideD1,
+    uint32_t strideD2, const uint8_t ragged_mode, uint32_t num_gemms) {
   const uint32_t block_sz = BLOCK_SIZE;
   auto kernel = SetUserArgsKernelRaggedInNonContractingDim<uint64_t>;
   switch (ragged_mode) {
@@ -635,15 +619,12 @@ void GroupGemmUpdateArgs(
     std::swap(stride_a, stride_b);
   }
 
-  // Calculate dynamic shared memory size as max of BlockScan temp storage and
-  // UserArguments array
-  size_t scan_temp_size =
-      sizeof(typename hipcub::BlockScan<uint32_t, BLOCK_SIZE>::TempStorage);
-  size_t user_args_size = block_sz * sizeof(hipblaslt_ext::UserArguments);
-  size_t shared_mem_size = scan_temp_size + user_args_size;
+  // Calculate dynamic shared memory size for UserArguments array
+  size_t shared_mem_size =
+      min(block_sz, num_gemms) * sizeof(hipblaslt_ext::UserArguments);
 
-  hipLaunchKernelGGL(kernel, 1, block_sz, shared_mem_size, stream, args, a, b,
-                     c, d, group_sizes, log2_byte_width_elem_a,
+  hipLaunchKernelGGL(kernel, dim3(1), dim3(block_sz), shared_mem_size, stream,
+                     args, a, b, d, group_sizes, log2_byte_width_elem_a,
                      log2_byte_width_elem_b, log2_byte_width_elem_d, stride_a,
                      stride_b, output_stride_ragged_dim, must_swap_operands, m,
                      n, k, batch, strideA1, strideA2, strideB1, strideB2,

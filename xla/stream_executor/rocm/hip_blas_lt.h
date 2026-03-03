@@ -27,6 +27,7 @@ limitations under the License.
 
 #if TF_HIPBLASLT
 
+#include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
 #include "xla/stream_executor/rocm/hip_blas_utils.h"
 
 namespace hipblaslt_ext {
