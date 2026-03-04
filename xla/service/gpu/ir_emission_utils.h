@@ -33,6 +33,7 @@ limitations under the License.
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Value.h"
+#include "tsl/platform/protobuf.h"
 #include "xla/codegen/ir_emission_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
@@ -46,7 +47,6 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
-#include "tsl/platform/protobuf.h"
 
 namespace xla {
 namespace gpu {
@@ -71,6 +71,10 @@ inline constexpr int64_t kMaxBitsInMostMinorDimension = 8 * 8;
 // Returns true if the given dot is supported by cuBLAS.
 absl::StatusOr<bool> IsCublasSupportedMatMul(
     const HloInstruction& dot, bool allow_matrix_vector_multiplication);
+
+// Returns true if the given instruction is supported by cuBLASLt GroupeMatMul.
+absl::StatusOr<bool> IsCublasLtSupportedGroupedMatMul(
+    const HloInstruction& instr);
 
 inline constexpr int64_t WarpSize(
     const se::DeviceDescription& gpu_device_info) {
