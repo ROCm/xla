@@ -15,12 +15,12 @@ limitations under the License.
 #ifndef XLA_BACKENDS_GPU_CODEGEN_EMITTERS_REDUCTION_H_
 #define XLA_BACKENDS_GPU_CODEGEN_EMITTERS_REDUCTION_H_
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
-#include <array>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
