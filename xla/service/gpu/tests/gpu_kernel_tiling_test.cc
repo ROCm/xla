@@ -519,15 +519,6 @@ TEST_F(GpuKernelTilingTest, ReductionInputTooLarge) {
       .set_xla_gpu_autotune_level(0);
   absl::Status status = CompileToExecutable(std::move(hlo_module)).status();
 
-/*
-E0000 00:00:1772642220.540622  216091 status_macros.cc:58] INTERNAL: RET_CHECK failure (xla/backends/gpu/codegen/fusion_emitter.cc:120) (limit.x == 0 || block_count.x <= limit.x) && (limit.y == 0 || block_count.y <= limit.y) && (limit.z == 0 || block_count.z <= limit.z) Kernel 'input_reduce_fusion' launch needs more blocks (4294967296, 65536, 1) than allowed by hardware (2147483647, 65536, 65536).
-
-xla/service/gpu/tests/gpu_kernel_tiling_test.cc:526: Failure
-Value of: status.message()
-Expected: contains regular expression "Kernel '.*' launch needs more blocks [(]* , 65536, *[)] than allowed by hardware [(]2147483647, 65536, 65536[)]"
-  Actual: "RET_CHECK failure (xla/backends/gpu/codegen/fusion_emitter.cc:120) (limit.x == 0 || block_count.x <= limit.x) && (limit.y == 0 || block_count.y <= limit.y) && (limit.z == 0 || block_count.z <= limit.z) Kernel 'input_reduce_fusion' launch needs more blocks (4294967296, 65536, 1) than allowed by hardware (2147483647, 65536, 65536)."
-*/
-
   if (xla::PlatformUtil::CanonicalPlatformName("gpu").value() == "rocm") {
     EXPECT_THAT(status.message(),
                 ::testing::ContainsRegex(

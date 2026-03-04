@@ -15,11 +15,11 @@ limitations under the License.
 #ifndef XLA_BACKENDS_GPU_CODEGEN_EMITTERS_EMITTER_BASE_H_
 #define XLA_BACKENDS_GPU_CODEGEN_EMITTERS_EMITTER_BASE_H_
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
-#include <array>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
