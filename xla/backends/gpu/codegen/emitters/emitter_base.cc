@@ -228,7 +228,6 @@ absl::Status RunPassPipeline(mlir::ModuleOp module, const HloModule& hlo_module,
       uint64_t num_threads_x, uint64_t num_blocks_x,
       const se::DeviceDescription& info)
 {
-
   const se::BlockDim& limit = info.block_dim_limit();
   constexpr uint64_t rocm_limit = std::numeric_limits<uint32_t>::max();
 
@@ -250,13 +249,13 @@ absl::Status RunPassPipeline(mlir::ModuleOp module, const HloModule& hlo_module,
       break;
     }
     // num_blocks_x might not be divided evenly by dimy, so we round up.
-    dimx = (num_blocks_x + dimy-1) >> nzeros;
+    dimx = CeilOfRatio(num_blocks_x, dimy);
     if (dimx <= limit.x) {
       // We have an extra requirement on ROCM to check
       if (!is_rocm || dimx * num_threads_x <= rocm_limit) break;
     }
   }
-  VLOG(1) << num_blocks_x << " splitting as: " << dimx << "x" << dimy 
+  VLOG(3) << num_blocks_x << " splitting as: " << dimx << "x" << dimy 
            << " wasted blocks: " << (dimx*dimy - num_blocks_x);
   return {dimx, dimy};
 }

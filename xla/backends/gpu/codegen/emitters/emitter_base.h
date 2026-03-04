@@ -19,6 +19,7 @@ limitations under the License.
 #include <memory>
 #include <string>
 #include <vector>
+#include <array>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"

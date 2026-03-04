@@ -20,6 +20,7 @@ limitations under the License.
 #include <optional>
 #include <utility>
 #include <vector>
+#include <array>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
@@ -145,7 +146,7 @@ class ReductionFusion : public EmitterBase {
   // virtual grid dimension: used by LLVM internally
   absl::InlinedVector<int64_t, 4> num_blocks_;
   // real block dimensions used to launch a fusion kernel
-  std::array<uint64_t, 2> gpu_blocks_;
+  std::array<uint64_t, 2> gpu_blocks_ = {0, 0};
   int64_t vector_size_ = 1;
 
   ReductionDimensions reduction_dimensions_;
