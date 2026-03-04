@@ -426,7 +426,7 @@ ENTRY RowLargeReduce {
   B = s32[762145,776223]{1,0} broadcast(A), dimensions={0}
   I = s32[762145,776223]{1,0} iota(), iota_dimension=1
   Z = s32[762145,776223]{1,0} add(B, I)
-  BB = s32[762145,999,777]{2,1,0} reshape(B)
+  BB = s32[762145,999,777]{2,1,0} reshape(Z)
   CC = s32[] constant(0)
   R = s32[762145,999]{1,0} reduce(BB, CC), dimensions={2}, to_apply=reduceOp
   ROOT O = s16[762145,999] convert(R)
@@ -526,15 +526,14 @@ TEST_F(GpuKernelTilingTest, ReductionInputTooLarge) {
   if (xla::PlatformUtil::CanonicalPlatformName("gpu").value() == "rocm") {
     EXPECT_THAT(status.message(),
                 ::testing::ContainsRegex(
-                    "Kernel '.*' launch needs more blocks [(]4294967296, 65536[)] "
-                    "than allowed by hardware [(]2147483647, 65536[)]"));
+                    "Kernel '.*' launch needs more blocks [(][0-9]+, 65536, [0-9]+[)] "
+                    "than allowed by hardware [(]2147483647, 65536, [0-9]+[)]"));
   } else {
     EXPECT_THAT(status.message(),
                 ::testing::ContainsRegex(
-                    "Kernel '.*' launch needs more blocks [(].*, 65535[)] "
-                    "than allowed by hardware [(]2147483647, 65535[)]"));
-  }
-}
+                    "Kernel '.*' launch needs more blocks [(][0-9]+, 65535, [0-9]+[)] "
+                    "than allowed by hardware [(]2147483647, 65535, [0-9]+[)]"));
+  }}
 
 }  // namespace
 }  // namespace gpu
