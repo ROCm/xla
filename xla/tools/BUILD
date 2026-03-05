@@ -16,7 +16,7 @@ load(
     "xla_internal_plugin_deps",
     "xla_py_proto_library",
 )
-load("//xla/stream_executor:build_defs.bzl", "if_gpu_is_configured")
+load("//xla/stream_executor:build_defs.bzl", "if_cuda_or_rocm_is_configured", "if_gpu_is_configured")
 load("//xla/tests:build_defs.bzl", "xla_test")
 load(
     "//xla/tsl:tsl.bzl",
@@ -88,6 +88,8 @@ xla_cc_binary(
         "//xla/stream_executor:cuda_platform",
     ]) + if_rocm_is_configured([
         "//xla/stream_executor:rocm_platform",
+    ]) + if_cuda_or_rocm_is_configured([
+        "//xla/backends/gpu/collectives:gpu_collectives_plugin",
     ]),
 )
 
