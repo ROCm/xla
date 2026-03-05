@@ -674,7 +674,7 @@ Build(
 Build(
     type_=BuildType.XLA_LINUX_X86_GPU_ROCM_BENCHMARK_PRESUBMIT_GITHUB_ACTIONS,
     repo="openxla/xla",
-    configs=("rocm_ci"),
+    configs=("rocm_ci",),
     target_patterns=_XLA_GPU_PRESUBMIT_BENCHMARKS_DEFAULT_TARGET_PATTERNS,
     test_tag_filters=rocm_tag_filters,
     build_tag_filters=rocm_tag_filters,
