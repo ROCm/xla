@@ -605,7 +605,7 @@ absl::Status BlasLt::MatmulPlan::ExecuteOnStream(
   return xla::Internal("Unexpected dtype");
 }
 
-/* Temporary code due to PR split*/ 
+/* Temporary code due to PR split*/
 auto BlasLt::GetGroupedMatmulPlan(
     gpu::GroupedGemmConfig& config,
     const std::vector<gpu::BlasLt::Epilogue>& epilogues) const
@@ -613,7 +613,7 @@ auto BlasLt::GetGroupedMatmulPlan(
   return absl::UnimplementedError(
       "Grouped GEMM is not supported for Hip BlasLt");
 }
-/* End of temporary code due to PR split*/ 
+/* End of temporary code due to PR split*/
 
 }  // namespace rocm
 
