@@ -18,14 +18,15 @@ limitations under the License.
 #include <string>
 
 #include "absl/strings/str_cat.h"
-#include "third_party/amd/include/TritonAMDGPUToLLVM/Passes.h"
-#include "third_party/amd/include/TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
+#include "third_party/amd/include/TritonAMDGPUToLLVM/Passes.h"
+#include "third_party/amd/include/TritonAMDGPUTransforms/Passes.h"
+#include "xla/backends/gpu/codegen/triton/transforms/passes.h"
 #include "xla/stream_executor/device_description.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"

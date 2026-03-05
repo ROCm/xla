@@ -35,9 +35,16 @@ void CreateTritonXlaPipeline(
     bool allow_tma, int num_stages, bool warp_specialization_allowed) {
   pm->addPass(mlir::triton::xla::CreateTritonXLASqueezeDimsPass());
   pm->addPass(mlir::triton::xla::CreateTritonXLAFoldTransposePass());
-  pm->addPass(mlir::triton::xla::CreateTritonXLALowerBlockBarrierPass());
-  pm->addPass(mlir::triton::xla::CreateTritonXLALowerAtomicsPass());
-  pm->addPass(mlir::triton::xla::CreateTritonXLALowerGetTidPass());
+
+  // Use ROCm-specific or CUDA-specific passes based on target
+  if (gpu_cc.IsRocm()) {
+    pm->addPass(mlir::triton::xla::CreateTritonXLALowerBlockBarrierROCmPass());
+    pm->addPass(mlir::triton::xla::CreateTritonXLALowerAtomicsROCmPass());
+  } else {
+    pm->addPass(mlir::triton::xla::CreateTritonXLALowerBlockBarrierPass());
+    pm->addPass(mlir::triton::xla::CreateTritonXLALowerAtomicsPass());
+    pm->addPass(mlir::triton::xla::CreateTritonXLALowerGetTidPass());
+  }
   pm->addPass(mlir::triton::xla::CreateTritonXLALowerXTilePass());
   pm->addPass(mlir::triton::xla::CreateStableHLOLowerToTritonPass(
       warp_specialization_allowed));
