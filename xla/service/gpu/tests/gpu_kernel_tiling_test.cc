@@ -470,7 +470,7 @@ ENTRY MultiRowLargeReduce {
   B = s32[762145,639936]{1,0} broadcast(A), dimensions={0}
   I = s32[762145,639936]{1,0} iota(), iota_dimension=1
   Z = s32[762145,639936]{1,0} add(B, I)
-  BB = s32[762145,9999,64]{2,1,0} reshape(B)
+  BB = s32[762145,9999,64]{2,1,0} reshape(Z)
   CC = s32[] constant(0)
   ROOT R = s32[762145,9999]{1,0} reduce(BB, CC), dimensions={2}, to_apply=reduceOp
 })";
@@ -533,7 +533,8 @@ TEST_F(GpuKernelTilingTest, ReductionInputTooLarge) {
                 ::testing::ContainsRegex(
                     "Kernel '.*' launch needs more blocks [(][0-9]+, 65535, [0-9]+[)] "
                     "than allowed by hardware [(]2147483647, 65535, [0-9]+[)]"));
-  }}
+  }
+}
 
 }  // namespace
 }  // namespace gpu
