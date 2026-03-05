@@ -49,17 +49,19 @@ namespace {
 
 using ::mlir::MLIRContext;
 
-std::unique_ptr<HloPassPipeline> GetHipblasLtRewriterPipeline(
-    const stream_executor::DeviceDescription& device_description) {
-  auto pipeline =
-      std::make_unique<HloPassPipeline>("hipblaslt_rewriter_pipeline");
+std::unique_ptr<HloPassPipeline> GetGemmRewriterPipeline(
+    const stream_executor::DeviceDescription& device_description,
+    bool enable_cublaslt) {
+  auto pipeline = std::make_unique<HloPassPipeline>(
+      enable_cublaslt ? "hipblaslt_rewriter_pipeline"
+                      : "rocblas_rewriter_pipeline");
   pipeline->AddPass(std::make_unique<DotAlgorithmRewriter>());
   pipeline->AddPass(std::make_unique<ScaledDotRewriter>());
   for (GemmRewriterOptions::DType dtype :
        {GemmRewriterOptions::DType::kFp8Only,
         GemmRewriterOptions::DType::kNonFp8Only}) {
     GemmRewriterOptions options{dtype};
-    options.enable_cublaslt = true;
+    options.enable_cublaslt = enable_cublaslt;
     auto gemm_rewriter = std::make_unique<GemmRewriter>(
         device_description.gpu_compute_capability(),
         device_description.runtime_version(), options);
@@ -87,9 +89,18 @@ std::vector<std::unique_ptr<CodegenBackend>> GetCodegenBackendsForROCm(
       stream_executor, debug_options, compiler, target_config));
   backends.push_back(std::make_unique<FissionBackend>(
       debug_options, compiler, target_config,
+      std::make_unique<RocblasBackend>(stream_executor, debug_options, compiler,
+                                       target_config,
+                                       /*fp8_lt_fallback=*/true),
+      GetGemmRewriterPipeline(target_config->device_description,
+                              /*enable_cublaslt=*/false),
+      alias_info, mlir_context));
+  backends.push_back(std::make_unique<FissionBackend>(
+      debug_options, compiler, target_config,
       std::make_unique<HipblasLtBackend>(stream_executor, debug_options,
                                          compiler, target_config),
-      GetHipblasLtRewriterPipeline(target_config->device_description),
+      GetGemmRewriterPipeline(target_config->device_description,
+                              /*enable_cublaslt=*/true),
       alias_info, mlir_context));
   if (!backend_allowlist.empty()) {
     backends.erase(

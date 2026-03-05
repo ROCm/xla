@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/backends/gpu/autotuner/fission_backend.h"
 
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -84,23 +85,31 @@ absl::Status InlineFissionedComputation(HloInstruction* fusion_instr,
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
 FissionBackend::GetSupportedConfigs(const HloInstruction& instr) {
   if (!IsSupported(instr)) {
-    VLOG(3) << "Instruction not supported by " << name() << ": "
-            << instr.ToString();
+    VLOG(3) << "[FissionBackend] Instruction not supported by " << name()
+            << ": " << instr.ToString();
     return std::vector<std::unique_ptr<BackendConfig>>();
   }
+  VLOG(2) << "[FissionBackend] GetSupportedConfigs for: " << instr.name();
   TF_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> hlo_module,
                       GetFissionedAndRewrittenModule(instr));
   absl::StatusOr<HloInstruction*> supported_instr =
       FindFirstSupportedInstruction(hlo_module.get());
   if (supported_instr.status().code() == absl::StatusCode::kNotFound) {
-    VLOG(3) << "No supported instructions found by " << name() << ": "
-            << instr.ToString();
+    VLOG(2) << "[FissionBackend] No supported instructions found after "
+               "fission+rewrite for: "
+            << instr.name();
     return std::vector<std::unique_ptr<BackendConfig>>();
   }
   TF_RETURN_IF_ERROR(supported_instr.status());
-  return codegen_backend_->GetSupportedConfigs(**supported_instr);
-
-  return std::vector<std::unique_ptr<BackendConfig>>();
+  auto configs = codegen_backend_->GetSupportedConfigs(**supported_instr);
+  if (configs.ok()) {
+    VLOG(1) << "[FissionBackend] Found " << configs->size()
+            << " supported configs for " << instr.name()
+            << " via inner backend " << codegen_backend_->name()
+            << " (fissioned instruction: "
+            << (*supported_instr)->ToString() << ")";
+  }
+  return configs;
 }
 
 absl::StatusOr<std::unique_ptr<BackendConfig>> FissionBackend::GetDefaultConfig(
@@ -108,6 +117,7 @@ absl::StatusOr<std::unique_ptr<BackendConfig>> FissionBackend::GetDefaultConfig(
   if (!IsSupported(instr)) {
     return absl::InvalidArgumentError("Not a fusion instruction.");
   }
+  VLOG(2) << "[FissionBackend] GetDefaultConfig for: " << instr.name();
   TF_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> hlo_module,
                       GetFissionedAndRewrittenModule(instr));
   TF_ASSIGN_OR_RETURN(HloInstruction * supported_instr,
@@ -118,6 +128,7 @@ absl::StatusOr<std::unique_ptr<BackendConfig>> FissionBackend::GetDefaultConfig(
 absl::StatusOr<std::unique_ptr<HloModule>> FissionBackend::RunHloPasses(
     std::unique_ptr<HloModule> hlo_module,
     const Compiler::CompileOptions& options) {
+  VLOG(2) << "[FissionBackend] RunHloPasses: running inner backend passes";
   TF_ASSIGN_OR_RETURN(
       std::unique_ptr<HloModule> module,
       codegen_backend_->RunHloPasses(std::move(hlo_module), options));
@@ -130,33 +141,54 @@ absl::StatusOr<std::unique_ptr<HloModule>> FissionBackend::RunHloPasses(
       /*thread_pool=*/nullptr, target_config().device_description, alias_info_,
       priority_fusion_options, mlir_context_);
   TF_RETURN_IF_ERROR(priority_fusion.Run(module.get()).status());
+  VLOG(2) << "[FissionBackend] RunHloPasses: completed for module "
+          << module->name();
   return module;
 }
 
 absl::Status FissionBackend::ApplyConfig(HloInstruction& instr,
                                          const BackendConfig& config) {
+  LOG(INFO) << "[FissionBackend] ApplyConfig: autotuner selected "
+            << name() << " for instruction " << instr.name();
+  VLOG(1) << "[FissionBackend] Original fusion instruction: "
+          << instr.ToString();
   HloModule* module = instr.GetModule();
   TF_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> hlo_module,
                       GetFissionedAndRewrittenModule(instr));
   TF_ASSIGN_OR_RETURN(HloInstruction * supported_instr,
                       FindFirstSupportedInstruction(hlo_module.get()));
+  VLOG(1) << "[FissionBackend] Applying config to fissioned instruction: "
+          << supported_instr->ToString();
   TF_RETURN_IF_ERROR(codegen_backend_->ApplyConfig(*supported_instr, config));
+  VLOG(2) << "[FissionBackend] Inlining fissioned computation back into "
+             "parent module";
   TF_RETURN_IF_ERROR(
       InlineFissionedComputation(&instr, hlo_module->entry_computation()));
+  VLOG(1) << "[FissionBackend] Successfully applied fission config for "
+          << instr.name();
   return module->RemoveUnusedComputations();
 }
 
 bool FissionBackend::IsSupported(const HloInstruction& instr) {
-  return instr.opcode() == HloOpcode::kFusion;
+  bool supported = instr.opcode() == HloOpcode::kFusion;
+  VLOG(3) << "[FissionBackend] IsSupported(" << instr.name()
+          << "): " << (supported ? "yes" : "no");
+  return supported;
 }
 
 absl::StatusOr<std::unique_ptr<HloModule>>
 FissionBackend::GetFissionedAndRewrittenModule(
     const HloInstruction& fusion_instr) {
   const auto* fusion = Cast<HloFusionInstruction>(&fusion_instr);
+  VLOG(3) << "[FissionBackend] Extracting fused computation from: "
+          << fusion_instr.name();
   std::unique_ptr<HloModule> hlo_module =
       ExtractComputationIntoNewModule(*fusion->called_computation());
+  VLOG(3) << "[FissionBackend] Extracted module before rewrite:\n"
+          << hlo_module->ToString();
   TF_RETURN_IF_ERROR(rewriter_pipeline_->Run(hlo_module.get()).status());
+  VLOG(3) << "[FissionBackend] Module after rewriter pipeline:\n"
+          << hlo_module->ToString();
   return hlo_module;
 }
 
@@ -167,17 +199,24 @@ absl::StatusOr<HloInstruction*> FissionBackend::FindFirstSupportedInstruction(
     for (HloInstruction* instruction : computation->instructions()) {
       if (codegen_backend_->IsSupported(*instruction)) {
         supported_instructions.push_back(instruction);
+        VLOG(3) << "[FissionBackend] Inner backend " << codegen_backend_->name()
+                << " supports: " << instruction->ToString();
       }
     }
   }
   if (supported_instructions.empty()) {
+    VLOG(2) << "[FissionBackend] No instructions supported by inner backend "
+            << codegen_backend_->name() << " after fission";
     return absl::NotFoundError("No supported instructions found.");
   }
   if (supported_instructions.size() > 1) {
-    LOG(WARNING) << "Backend " << name()
-                 << " found multiple supported instructions found. Using the "
-                    "first one.";
+    LOG(WARNING) << "[FissionBackend] Backend " << name()
+                 << " found " << supported_instructions.size()
+                 << " supported instructions. Using the first one: "
+                 << supported_instructions[0]->ToString();
   }
+  VLOG(2) << "[FissionBackend] Selected instruction for inner backend: "
+          << supported_instructions[0]->name();
   return supported_instructions[0];
 }
 
