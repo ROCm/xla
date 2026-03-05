@@ -406,7 +406,7 @@ ENTRY RowLargeReduce {
   ROOT R = s32[262144,512]{1,0} reduce(BB, CC), dimensions={2}, to_apply=reduceOp
 })";
   ASSERT_OK_AND_ASSIGN(auto hlo_module, ParseAndReturnVerifiedModule(kHlo));
-  EXPECT_TRUE(Run(std::move(hlo_module), /*run_hlo_passes*/true));
+  EXPECT_TRUE(Run(std::move(hlo_module), /*run_hlo_passes*/ true));
 }
 
 TEST_F(GpuKernelTilingTest, LargeRowReductionNonMultipleOf2) {
@@ -428,7 +428,7 @@ ENTRY RowLargeReduce {
   ROOT O = s16[762145,999] convert(R)
 })";
   ASSERT_OK_AND_ASSIGN(auto hlo_module, ParseAndReturnVerifiedModule(kHlo));
-  EXPECT_TRUE(Run(std::move(hlo_module), /*run_hlo_passes*/true));
+  EXPECT_TRUE(Run(std::move(hlo_module), /*run_hlo_passes*/ true));
 }
 
 TEST_F(GpuKernelTilingTest, MultiRowLargeReduce) {
@@ -450,7 +450,7 @@ ENTRY MultiRowLargeReduce {
   ROOT O = s16[262144,4096]{1,0} convert(R)
 })";
   ASSERT_OK_AND_ASSIGN(auto hlo_module, ParseAndReturnVerifiedModule(kHlo));
-  EXPECT_TRUE(Run(std::move(hlo_module), /*run_hlo_passes*/true));
+  EXPECT_TRUE(Run(std::move(hlo_module), /*run_hlo_passes*/ true));
 }
 
 TEST_F(GpuKernelTilingTest, MultiRowLargeReduceNonMultipleOf2) {
@@ -474,11 +474,11 @@ ENTRY MultiRowLargeReduce {
   HloModuleConfig config;
   auto debug_options = HloTestBase::GetDebugOptionsForTest();
   // Disable autotuning since it eats up too much memory.
-  debug_options.set_xla_gpu_autotune_level(0); 
+  debug_options.set_xla_gpu_autotune_level(0);
   config.set_debug_options(debug_options);
 
-  ASSERT_OK_AND_ASSIGN(auto hlo_module, 
-                  ParseAndReturnVerifiedModule(kHlo, config));
+  ASSERT_OK_AND_ASSIGN(auto hlo_module,
+                       ParseAndReturnVerifiedModule(kHlo, config));
   EXPECT_OK(CompileToExecutable(std::move(hlo_module)));
 }
 
@@ -494,7 +494,6 @@ ENTRY LargeLoop {
 }
 
 TEST_F(GpuKernelTilingTest, ReductionInputTooLarge) {
-
   const char *const kHlo = R"(
   HloModule RowReduce
 
@@ -520,15 +519,17 @@ TEST_F(GpuKernelTilingTest, ReductionInputTooLarge) {
   absl::Status status = CompileToExecutable(std::move(hlo_module)).status();
 
   if (xla::PlatformUtil::CanonicalPlatformName("gpu").value() == "rocm") {
-    EXPECT_THAT(status.message(),
-                ::testing::ContainsRegex(
-                    "Kernel '.*' launch needs more blocks [(][0-9]+, 65536, [0-9]+[)] "
-                    "than allowed by hardware [(]2147483647, 65536, [0-9]+[)]"));
+    EXPECT_THAT(
+        status.message(),
+        ::testing::ContainsRegex(
+            "Kernel '.*' launch needs more blocks [(][0-9]+, 65536, [0-9]+[)] "
+            "than allowed by hardware [(]2147483647, 65536, [0-9]+[)]"));
   } else {
-    EXPECT_THAT(status.message(),
-                ::testing::ContainsRegex(
-                    "Kernel '.*' launch needs more blocks [(][0-9]+, 65535, [0-9]+[)] "
-                    "than allowed by hardware [(]2147483647, 65535, [0-9]+[)]"));
+    EXPECT_THAT(
+        status.message(),
+        ::testing::ContainsRegex(
+            "Kernel '.*' launch needs more blocks [(][0-9]+, 65535, [0-9]+[)] "
+            "than allowed by hardware [(]2147483647, 65535, [0-9]+[)]"));
   }
 }
 
