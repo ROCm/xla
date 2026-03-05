@@ -31,6 +31,7 @@ limitations under the License.
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "xla/backends/gpu/codegen/triton/transforms/passes.h"
 
 namespace xla {
 namespace gpu {
@@ -51,6 +52,12 @@ static void MakeTTIR(mlir::OpPassManager* pm) {
   pm->addPass(mlir::createLoopInvariantCodeMotionPass());
   pm->addPass(mlir::createSymbolDCEPass());
   pm->addPass(mt::createTritonLoopUnroll());
+  
+  // ROCm-specific: Lower XLA custom operations using pure Triton
+  // Note: GetTidOp lowering returns dummy value; block barrier doesn't use it
+  pm->addPass(mt::xla::CreateTritonXLALowerGetTidROCmPass());
+  pm->addPass(mt::xla::CreateTritonXLALowerAtomicsROCmPass());
+  pm->addPass(mt::xla::CreateTritonXLALowerBlockBarrierROCmPass());
 }
 
 static bool is_pingpong_schedule_enabled(

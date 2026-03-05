@@ -128,6 +128,16 @@ def TritonXLALowerGetTidPass
   let constructor = "CreateTritonXLALowerGetTidPass()";
 }
 
+def TritonXLALowerGetTidROCmPass
+    : Pass<"triton-xla-get-tid-rocm", "mlir::ModuleOp"> {
+  let summary = "Lower get_tid for ROCm using pure Triton operations.";
+  let description = [{
+    This pass lowers get_tid to Triton GPU's GetThreadIdOp for ROCm/HIP
+    compatibility, avoiding platform-specific inline assembly.
+  }];
+  let constructor = "CreateTritonXLALowerGetTidROCmPass()";
+}
+
 def TritonXLALowerAtomicsPass
     : Pass<"triton-xla-atomics", "mlir::ModuleOp"> {
   let summary = "Lower triton_xla.atomic operations.";
@@ -138,6 +148,17 @@ def TritonXLALowerAtomicsPass
   let constructor = "CreateTritonXLALowerAtomicsPass()";
 }
 
+def TritonXLALowerAtomicsROCmPass
+    : Pass<"triton-xla-atomics-rocm", "mlir::ModuleOp"> {
+  let summary = "Lower triton_xla.atomic operations for ROCm.";
+  let description = [{
+    This pass lowers atomic operations to pure Triton atomic operations
+    (AtomicRMWOp and AtomicCASOp) for ROCm/HIP compatibility, avoiding
+    platform-specific inline assembly.
+  }];
+  let constructor = "CreateTritonXLALowerAtomicsROCmPass()";
+}
+
 def TritonXLALowerBlockBarrierPass
     : Pass<"triton-xla-block-barrier", "mlir::ModuleOp"> {
   let summary = "Lower a block barrier to triton_xla/triton operations.";
@@ -146,6 +167,17 @@ def TritonXLALowerBlockBarrierPass
     spin-wait operations.
   }];
   let constructor = "CreateTritonXLALowerBlockBarrierPass()";
+}
+
+def TritonXLALowerBlockBarrierROCmPass
+    : Pass<"triton-xla-block-barrier-rocm", "mlir::ModuleOp"> {
+  let summary = "Lower a block barrier for ROCm without thread IDs.";
+  let description = [{
+    This pass lowers a block barrier to Triton IR for ROCm using only
+    tensor operations and program IDs, following the IRIS pattern.
+    Unlike the CUDA version, this doesn't use thread IDs.
+  }];
+  let constructor = "CreateTritonXLALowerBlockBarrierROCmPass()";
 }
 
 def TritonXLAConvertUnsupportedTypesPass
