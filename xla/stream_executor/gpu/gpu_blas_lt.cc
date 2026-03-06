@@ -363,6 +363,7 @@ xla::GemmConfigProto GemmConfig::ToProto() const {
   }
   proto.set_grad_x(grad_x);
   proto.set_grad_y(grad_y);
+  proto.set_mx_mode(mx_mode);
   if (compute_type.has_value()) {
     proto.set_compute_type(blas::ToProto(*compute_type));
   }
