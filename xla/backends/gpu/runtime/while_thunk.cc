@@ -133,11 +133,28 @@ absl::Status WhileThunk::ExecuteOnStream(const ExecuteParams& params) {
   if (trip_count_.has_value()) {
     XLA_VLOG_DEVICE(2, device_ordinal)
         << "Executing WhileThunk for " << *trip_count_ << " iterations";
+    // Periodically synchronize the stream to prevent overwhelming the ROCm
+    // HSA runtime's async event handler with too many queued operations.
+    // Without this, large trip counts can cause segfaults in
+    // rocr::core::Runtime::AsyncEventsLoop on some ROCm builds (e.g.
+    // TheRock 7.11.0 nightly). The sync is only applied for loops with
+    // 20+ iterations to avoid any overhead on short loops.
+    constexpr int64_t kSyncInterval = 20;
+    const bool needs_periodic_sync = *trip_count_ >= kSyncInterval;
     for (iter = 0; iter < trip_count_; ++iter) {
       XLA_VLOG_DEVICE(3, device_ordinal)
           << "Executing iteration # " << iter
           << " (Device: " << stream.parent()->device_ordinal() << ")";
       TF_RETURN_IF_ERROR(body_thunk_sequence_->ExecuteOnStream(params));
+      if (needs_periodic_sync &&
+          (iter + 1) % kSyncInterval == 0 && (iter + 1) < *trip_count_) {
+        if (absl::Status blocked = stream.BlockHostUntilDone();
+            !blocked.ok()) {
+          return absl::InternalError(absl::StrFormat(
+              "Failed to sync stream during WhileThunk iteration %d: %s",
+              iter, blocked.message()));
+        }
+      }
     }
     return absl::OkStatus();
   }
