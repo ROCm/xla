@@ -770,7 +770,7 @@ xla_test(
         "//xla/pjrt/distributed",
         "//xla/pjrt/distributed:client",
         "//xla/pjrt/distributed:service",
-        "//xla/stream_executor/cuda:nvshmem",
+        # "//xla/stream_executor/cuda:nvshmem",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:status",
         "//xla/tsl/platform:statusor",

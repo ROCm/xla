@@ -53,12 +53,12 @@ class MoriCollectives : public GpuCollectives {
 
   bool IsImplemented() const final { return true; }
 
-  // bool IsGlobalConfig() const final { return false; }
+  bool IsGlobalConfig() const final { return false; }
 
-  // absl::StatusOr<const CliqueIdCallback*> GetCliqueIdCallback(
-  //     const CliqueIdCallback* clique_id_callback, bool is_local) final {
-  //   return absl::UnimplementedError("Not implemented.");
-  // }
+  absl::StatusOr<const CliqueIdCallback*> GetCliqueIdCallback(
+      const CliqueIdCallback* clique_id_callback, bool is_local) final {
+    return absl::UnimplementedError("Not implemented.");
+  }
 
   absl::StatusOr<std::vector<std::unique_ptr<Communicator>>>
   CreateCommunicators(const CliqueKey& clique_key,
@@ -77,16 +77,15 @@ class MoriCollectives : public GpuCollectives {
     return absl::UnimplementedError("Not implemented.");
   }
 
-  absl::StatusOr<CliqueIdCallback> InitializeTopology(
-      const Topology& topology) final;
+  absl::Status InitializeTopology(Topology topology) final; 
 
  private:
   absl::Status InitializeOnce();
 
   void Finalize();
 
-  ProcessId process_id_{};
-  size_t num_processes_ = 0;
+  int32_t process_id_{};
+  int32_t num_processes_ = 0;
   size_t device_count_per_process_ = 0;
   std::weak_ptr<KeyValueStoreInterface> kv_store_;
   bool initialized_ = false;

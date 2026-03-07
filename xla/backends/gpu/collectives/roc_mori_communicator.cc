@@ -80,6 +80,7 @@ absl::Status MoriCommunicator::Barrier(
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
 
   auto gpu_stream = AsRocmStream(stream);
+  static_cast<void>(gpu_stream);
   // rocm_mori_barrier_all_on_stream(/*host_team_,*/ gpu_stream);
   return absl::OkStatus();
 }
@@ -128,9 +129,12 @@ Future<> MoriCommunicator::AllReduce(
 
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
   auto gpu_stream = AsRocmStream(stream);
+  static_cast<void>(gpu_stream);
 
   void* source_ptr = send_buffer.opaque();
   void* dest_ptr = recv_buffer.opaque();
+  static_cast<void>(source_ptr);
+  static_cast<void>(dest_ptr);
   if (primitive_util::IsComplexType(dtype)) count *= 2;
 
   VLOG(3) << absl::StreamFormat(
@@ -229,6 +233,8 @@ absl::Status MoriCommunicator::Quiet(const Executor& executor) {
   VLOG(1) << "Quiet MORI communicator: " << ToString();
   CHECK_ABORTED()
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
+  auto gpu_stream = AsRocmStream(stream);
+  static_cast<void>(gpu_stream);
   // rocm_mori_quiet_on_stream(AsRocmStream(stream));
   return absl::OkStatus();
 }

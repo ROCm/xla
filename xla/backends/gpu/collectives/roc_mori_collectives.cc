@@ -57,15 +57,14 @@ MoriCollectives* MoriCollectives::Default() {
   LOG(FATAL) << "Unsupported collectives implementation for MORI";
 }
 
-absl::StatusOr<GpuCollectives::CliqueIdCallback>
-MoriCollectives::InitializeTopology(const Topology& topology) {
-  process_id_ = topology.process_id;
-  num_processes_ = topology.num_processes;
+absl::Status
+MoriCollectives::InitializeTopology(Topology topology) {
+  process_id_ = topology.node_id;
+  num_processes_ = topology.num_nodes;
   device_count_per_process_ = topology.device_count_per_process;
   kv_store_ = topology.kv_store;
   
-  TF_RETURN_IF_ERROR(InitializeOnce());
-  return [](const CliqueKey&) { return CliqueIds(CliqueId("")); };
+  return InitializeOnce();
 }
 
 absl::Status MoriCollectives::InitializeOnce() {
@@ -103,7 +102,7 @@ absl::Status MoriCollectives::InitializeOnce() {
     }
 
     shmem::mori_shmem_init_attr_t init_attr;
-    if (shmem::ShmemSetAttrUniqueIdArgs(process_id_.value(), num_processes_,
+    if (shmem::ShmemSetAttrUniqueIdArgs(process_id_, num_processes_,
                                  &uid, &init_attr) != 0) {
       return absl::InternalError("rocm_mori_set_attr_uniqueid_args failed.");
     }
@@ -113,7 +112,7 @@ absl::Status MoriCollectives::InitializeOnce() {
     }
 
     VLOG(3) << absl::StreamFormat(
-      "Initialized MORI on process %d; num_processes=%llu", process_id_.value(),
+      "Initialized MORI on process %d; num_processes=%llu", process_id_,
       num_processes_);
     return absl::OkStatus();
   };
@@ -129,7 +128,7 @@ absl::Status MoriCollectives::InitializeOnce() {
 
 void MoriCollectives::Finalize() {
   VLOG(0) << absl::StreamFormat(
-      "Finilizing MORI on process %d; num_processes=%llu", process_id_.value(),
+      "Finilizing MORI on process %d; num_processes=%llu", process_id_,
       num_processes_);
   shmem::ShmemFinalize();
 }

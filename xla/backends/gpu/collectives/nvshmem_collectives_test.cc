@@ -100,10 +100,10 @@ absl::Status InitializationTestBody(const int node_id, const int num_nodes) {
   EXPECT_TRUE(!executors.empty());
   auto ctx = executors[0]->Activate(); // select device for this node_id
 
-  TF_ASSIGN_OR_RETURN(auto callback, gpu_collectives->InitializeTopology(
+  TF_RETURN_IF_ERROR(gpu_collectives->InitializeTopology(
     GpuCollectives::Topology{
-    .process_id = ProcessId(node_id),
-    .num_processes = static_cast< size_t >(num_nodes),
+    .node_id = node_id,
+    .num_nodes = num_nodes,
     .device_count_per_process = 1,
     .kv_store = kv_store,
   }));
