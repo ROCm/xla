@@ -17,5 +17,8 @@ temporary_patch_list = [
     "//third_party/triton:temporary/accelerateamdmatmul2.patch",
     "//third_party/triton:temporary/test_analysis_visibility.patch",
     "//third_party/triton:temporary/fix_sink_second_load_cross_block.patch",
+    # Backport of triton-lang/triton#9618 (crash fix).
+    # Remove when Triton is integrated past this commit.
+    "//third_party/triton:temporary/fix_block_pingpong_non_mfma_dot.patch",
     # Add new patches just above this line
 ]
