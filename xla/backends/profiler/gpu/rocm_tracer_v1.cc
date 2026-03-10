@@ -430,8 +430,6 @@ void RocmApiCallbackImpl::AddKernelEventUponApiExit(uint32_t cbid,
       event.kernel_info.func_ptr = kernelFunc;
       const hipStream_t& stream = data->args.hipHccModuleLaunchKernel.hStream;
       event.device_id = hipGetStreamDeviceId(stream);
-      event.kernel_info.group_segment_size =
-          data->args.hipHccModuleLaunchKernel.sharedMemBytes;
     } break;
     case HIP_API_ID_hipLaunchKernel: {
       const void* func_addr = data->args.hipLaunchKernel.function_address;
