@@ -368,7 +368,7 @@ absl::Status NcclCommunicator::AllToAll(
       primitive_util::LowercasePrimitiveTypeName(dtype), count, comm_, stream);
 
   if (send_buffers.size() != recv_buffers.size()) {
-    VLOG(-1) << "##### " << __func__ << " Error";
+    VLOG(1) << "##### " << __func__ << " Error";
     return InvalidArgument(
         "Number of send buffers must match number of recv buffers: %d != %d",
         send_buffers.size(), recv_buffers.size());
@@ -464,7 +464,7 @@ absl::Status NcclCommunicator::Send(se::DeviceMemoryBase send_buffer,
                                     RankId peer, const Executor& executor) {
   VLOG(1) << "##### " << __func__ << " Start";
   if (aborted_) {
-    VLOG(-1) << "##### " << __func__ << " Aborted";
+    VLOG(1) << "##### " << __func__ << " Aborted";
     return absl::FailedPreconditionError("NcclCommunicator aborted");
   }
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
@@ -491,7 +491,7 @@ absl::Status NcclCommunicator::Recv(se::DeviceMemoryBase recv_buffer,
                                     RankId peer, const Executor& executor) {
   VLOG(1) << "##### " << __func__ << " Start";
   if (aborted_) {
-    VLOG(-1) << "##### " << __func__ << " Aborted";
+    VLOG(1) << "##### " << __func__ << " Aborted";
     return absl::FailedPreconditionError("NcclCommunicator aborted");
   }
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
