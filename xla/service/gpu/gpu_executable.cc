@@ -154,7 +154,7 @@ absl::Status CachedAllocator::Deallocate(int device_ordinal,
   auto& set = exec_->get_allocs_cache(device_ordinal).address_set;
   // do not deallocate private mem
   if (set.find(mem.opaque()) != set.end()) {
-    VLOG(0) << "Skipping deallocation of " << mem.opaque() << " " << mem.size();
+    // VLOG(0) << "Skipping deallocation of " << mem.opaque() << " " << mem.size();
     return absl::OkStatus();
   }
   return allocator_->Deallocate(device_ordinal, mem);
@@ -843,7 +843,6 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
     return true;
   }();
 
-  auto& alloc_cached_flag = result.MutableResult()->alloc_cached_flag;
   if(VLOG_IS_ON(1) && device_ordinal == 0) {
     VLOG(1) << module_name_ << " dev" <<  device_ordinal << 
       " setting for result buf: " << result.MutableResult()->on_device_shape().ToString();
@@ -851,7 +850,6 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
 
   for (auto& [index, result_buffer] : result.MutableResult()->buffers()) {
 
-    alloc_cached_flag.push_back(false);
     if (!output_info_.contains(index)) {
       continue;
     }
@@ -944,28 +942,8 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
       }
     }
 
-    if (enable_cached_allocs_) {
-      int64_t index = 0;
-      auto& cache = get_allocs_cache(device_ordinal, &index).index2entry;
-      auto it = cache.find(allocation->index());
-      if(it != cache.end() && result_buffer == it->second[index].cref()) {
-        //alloc_cached_flag.back() = true;
-      } 
-
-      if(VLOG_IS_ON(1) && device_ordinal == 0) {
-        auto str = alloc_cached_flag.back() ? " Found liveout alloc: " 
-                                            : " Live-out buffer not cached: ";
-        VLOG(1) << module_name_ << str <<
-              result_buffer.opaque() << " -- " << result_buffer.size();
-      }
-    }
     buffers_in_result.insert(result_buffer);
   }
-  if(VLOG_IS_ON(1) && device_ordinal == 0) {
-    VLOG(1) << module_name_ << " created shaped buffer: " 
-            << result.MutableResult()->dump_cached_flag();
-  }
-
   TF_RETURN_IF_ERROR(ExecuteThunks(buffer_allocations, run_options));
 
   if (!enable_cached_allocs_) {

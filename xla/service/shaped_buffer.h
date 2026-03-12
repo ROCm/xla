@@ -183,13 +183,9 @@ class ScopedShapedBuffer : public ShapedBuffer {
   // All buffers in the shape are deallocated on destruction.
   ~ScopedShapedBuffer() override;
 
-  std::string dump_cached_flag() const;
-
   // Return the allocator used to allocate the device memory held in this
   // ScopedShapedBuffer.
   se::DeviceMemoryAllocator* memory_allocator() const { return allocator_; }
-
-  std::vector< bool > alloc_cached_flag;
 
   // Sets the device memory buffer at the given index.
   //
