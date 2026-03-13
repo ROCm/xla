@@ -74,7 +74,7 @@ const se::dnn::VersionInfo kCudnnSupportsBlockScaledDotWithGlobalScale(9, 13);
 class BlockScalingRewriter : public OpExpanderPass {
  public:
   explicit BlockScalingRewriter(se::dnn::VersionInfo cudnn_version)
-      : cudnn_version_(cudnn_version) {};
+      : cudnn_version_(cudnn_version){};
 
   absl::string_view name() const override { return "block-scaling-rewriter"; }
 
