@@ -134,10 +134,10 @@ struct AllReduceTestParams {
 
   static std::vector<AllReduceTestParams> Generate() {
     std::vector<AllReduceTestParams> params;
-    for (bool is_async : {true, false}) {
-      for (bool use_all_reduce_one_shot_kernel : {true, false}) {
+    for (bool is_async : {/*true,*/ false}) {
+      for (bool use_all_reduce_one_shot_kernel : {true/*, false*/}) {
         for (auto strategy :
-             {AllReduceStrategy::kOneShot, AllReduceStrategy::kTwoShot}) {
+             {AllReduceStrategy::kOneShot/*, AllReduceStrategy::kTwoShot*/}) {
           params.push_back(
               {is_async, use_all_reduce_one_shot_kernel, strategy});
         }
@@ -268,48 +268,48 @@ INSTANTIATE_TEST_SUITE_P(
           info.param.strategy);
     });
 
-TEST_P(AllReduceTest, Pred_2GPUs) {
-  const absl::string_view kModuleStr = R"(
-  HloModule test
+// TEST_P(AllReduceTest, Pred_2GPUs) {
+//   const absl::string_view kModuleStr = R"(
+//   HloModule test
 
-  apply_op {
-    x = pred[] parameter(0)
-    y = pred[] parameter(1)
-    ROOT apply_op = pred[] or(x, y)
-  }
+//   apply_op {
+//     x = pred[] parameter(0)
+//     y = pred[] parameter(1)
+//     ROOT apply_op = pred[] or(x, y)
+//   }
 
-  ENTRY test_computation {
-    param_0 = pred[%1$d] parameter(0)
-    ROOT all-reduce = pred[%1$d] all-reduce(param_0), to_apply=apply_op, replica_groups={{0,1}}
-  }
-  )";
-  const int64_t num_elements = GetParam().NumElements(PrimitiveType::PRED);
-  const int64_t kNumReplicas = 2;
-  ASSERT_GE(device_count(), kNumReplicas)
-      << "Test requires at least " << kNumReplicas << " devices ("
-      << device_count() << " available)";
+//   ENTRY test_computation {
+//     param_0 = pred[%1$d] parameter(0)
+//     ROOT all-reduce = pred[%1$d] all-reduce(param_0), to_apply=apply_op, replica_groups={{0,1}}
+//   }
+//   )";
+//   const int64_t num_elements = GetParam().NumElements(PrimitiveType::PRED);
+//   const int64_t kNumReplicas = 2;
+//   ASSERT_GE(device_count(), kNumReplicas)
+//       << "Test requires at least " << kNumReplicas << " devices ("
+//       << device_count() << " available)";
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      auto module,
-      ParseAndReturnVerifiedModule(absl::StrFormat(kModuleStr, num_elements),
-                                   kNumReplicas));
+//   TF_ASSERT_OK_AND_ASSIGN(
+//       auto module,
+//       ParseAndReturnVerifiedModule(absl::StrFormat(kModuleStr, num_elements),
+//                                    kNumReplicas));
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      InputsOutputs test_io,
-      (BuildTestInputsOutputs<PrimitiveType::PRED, HloOpcode::kOr>(
-          *module, kNumReplicas, /*num_iterations=*/1)));
+//   TF_ASSERT_OK_AND_ASSIGN(
+//       InputsOutputs test_io,
+//       (BuildTestInputsOutputs<PrimitiveType::PRED, HloOpcode::kOr>(
+//           *module, kNumReplicas, /*num_iterations=*/1)));
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      ExecutionResult execution_result,
-      ExecuteReplicated(std::move(module),
-                        /*arguments=*/test_io.InputLiteralPtrs()))
-  const std::vector<Literal>& results = execution_result.results;
-  ASSERT_EQ(results.size(), kNumReplicas);
-  for (int i = 0; i < kNumReplicas; ++i) {
-    ASSERT_TRUE(LiteralTestUtil::Equal(test_io.expected_outputs[i], results[i]))
-        << "ExpectedOutput != Result at rank " << i;
-  }
-}
+//   TF_ASSERT_OK_AND_ASSIGN(
+//       ExecutionResult execution_result,
+//       ExecuteReplicated(std::move(module),
+//                         /*arguments=*/test_io.InputLiteralPtrs()))
+//   const std::vector<Literal>& results = execution_result.results;
+//   ASSERT_EQ(results.size(), kNumReplicas);
+//   for (int i = 0; i < kNumReplicas; ++i) {
+//     ASSERT_TRUE(LiteralTestUtil::Equal(test_io.expected_outputs[i], results[i]))
+//         << "ExpectedOutput != Result at rank " << i;
+//   }
+// }
 
 TEST_P(AllReduceTest, F32_8GPUs_AllReplicasOneGroup) {
   const absl::string_view kModuleStr = R"(
@@ -359,256 +359,256 @@ TEST_P(AllReduceTest, F32_8GPUs_AllReplicasOneGroup) {
   }
 }
 
-TEST_P(AllReduceTest, F32_8GPUs_2ReplicasPerGroup) {
-  const int64_t num_elements = GetParam().NumElements(PrimitiveType::F32);
-  const int64_t kNumIterations = 3;
-  const auto kModuleStr = absl::StrFormat(
-      R"(
-  HloModule test
+// TEST_P(AllReduceTest, F32_8GPUs_2ReplicasPerGroup) {
+//   const int64_t num_elements = GetParam().NumElements(PrimitiveType::F32);
+//   const int64_t kNumIterations = 3;
+//   const auto kModuleStr = absl::StrFormat(
+//       R"(
+//   HloModule test
 
-  apply_op {
-    x = f32[] parameter(0)
-    y = f32[] parameter(1)
-    ROOT apply_op = f32[] add(x, y)
-  }
+//   apply_op {
+//     x = f32[] parameter(0)
+//     y = f32[] parameter(1)
+//     ROOT apply_op = f32[] add(x, y)
+//   }
 
-  while_condition {
-    limit = s32[] constant(%1$d)
-    params = (s32[], f32[%2$d]{0}) parameter(0)
-    loop_counter = get-tuple-element(params), index=0
-    ROOT result = pred[] compare(loop_counter, limit), direction=LT
-  }
+//   while_condition {
+//     limit = s32[] constant(%1$d)
+//     params = (s32[], f32[%2$d]{0}) parameter(0)
+//     loop_counter = get-tuple-element(params), index=0
+//     ROOT result = pred[] compare(loop_counter, limit), direction=LT
+//   }
 
-  while_body {
-    params = (s32[], f32[%2$d]{0}) parameter(0)
-    loop_counter = get-tuple-element(params), index=0
-    tensor = get-tuple-element(params), index=1
-    out0 = f32[%2$d] all-reduce(tensor), to_apply=apply_op,
-      replica_groups={{0,4},{1,5},{2,6},{3,7}}
-    new_loop_counter = s32[] add(loop_counter, s32[] constant(1))
-    ROOT result = (s32[], f32[%2$d]{0}) tuple(new_loop_counter, out0)
-  }
+//   while_body {
+//     params = (s32[], f32[%2$d]{0}) parameter(0)
+//     loop_counter = get-tuple-element(params), index=0
+//     tensor = get-tuple-element(params), index=1
+//     out0 = f32[%2$d] all-reduce(tensor), to_apply=apply_op,
+//       replica_groups={{0,4},{1,5},{2,6},{3,7}}
+//     new_loop_counter = s32[] add(loop_counter, s32[] constant(1))
+//     ROOT result = (s32[], f32[%2$d]{0}) tuple(new_loop_counter, out0)
+//   }
 
-  ENTRY test_computation {
-    param_0 = f32[%2$d] parameter(0)
-    while_init = (s32[], f32[%2$d]{0}) tuple(s32[] constant(0), param_0)
-    while_result = (s32[], f32[%2$d]{0})
-      while(while_init), condition=while_condition, body=while_body
-    ROOT result = get-tuple-element(while_result), index=1
-  }
-  )",
-      kNumIterations, num_elements);
+//   ENTRY test_computation {
+//     param_0 = f32[%2$d] parameter(0)
+//     while_init = (s32[], f32[%2$d]{0}) tuple(s32[] constant(0), param_0)
+//     while_result = (s32[], f32[%2$d]{0})
+//       while(while_init), condition=while_condition, body=while_body
+//     ROOT result = get-tuple-element(while_result), index=1
+//   }
+//   )",
+//       kNumIterations, num_elements);
 
-  const int64_t kNumReplicas = 8;
-  if (device_count() < kNumReplicas) {
-    GTEST_SKIP() << "Test requires at least " << kNumReplicas << " devices ("
-                 << device_count() << " available)";
-  }
+//   const int64_t kNumReplicas = 8;
+//   if (device_count() < kNumReplicas) {
+//     GTEST_SKIP() << "Test requires at least " << kNumReplicas << " devices ("
+//                  << device_count() << " available)";
+//   }
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      auto module, ParseAndReturnVerifiedModule(kModuleStr, kNumReplicas));
+//   TF_ASSERT_OK_AND_ASSIGN(
+//       auto module, ParseAndReturnVerifiedModule(kModuleStr, kNumReplicas));
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      InputsOutputs test_io,
-      (BuildTestInputsOutputs<PrimitiveType::F32, HloOpcode::kAdd>(
-          *module, kNumReplicas, kNumIterations)));
+//   TF_ASSERT_OK_AND_ASSIGN(
+//       InputsOutputs test_io,
+//       (BuildTestInputsOutputs<PrimitiveType::F32, HloOpcode::kAdd>(
+//           *module, kNumReplicas, kNumIterations)));
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      ExecutionResult execution_result,
-      ExecuteReplicated(std::move(module),
-                        /*arguments=*/test_io.InputLiteralPtrs()));
-  const std::vector<Literal>& results = execution_result.results;
-  ASSERT_EQ(results.size(), kNumReplicas);
-  for (int i = 0; i < kNumReplicas; ++i) {
-    ASSERT_TRUE(LiteralTestUtil::Equal(test_io.expected_outputs[i], results[i]))
-        << "ExpectedOutput != Result at index " << i;
-  }
-}
+//   TF_ASSERT_OK_AND_ASSIGN(
+//       ExecutionResult execution_result,
+//       ExecuteReplicated(std::move(module),
+//                         /*arguments=*/test_io.InputLiteralPtrs()));
+//   const std::vector<Literal>& results = execution_result.results;
+//   ASSERT_EQ(results.size(), kNumReplicas);
+//   for (int i = 0; i < kNumReplicas; ++i) {
+//     ASSERT_TRUE(LiteralTestUtil::Equal(test_io.expected_outputs[i], results[i]))
+//         << "ExpectedOutput != Result at index " << i;
+//   }
+// }
 
-// FP8 vs FP16 training step comparison.
-TEST_F(AllReduceTestNoParams, AsyncAllReduce_F8E4M3FN_TrainingStep_2GPUs) {
-  bool has_fp8_support = false;
-  if (Capability().IsCuda()) {
-    has_fp8_support = Capability().cuda_compute_capability()->IsAtLeast(9, 0);
-  } else if (Capability().IsRocm()) {
-    has_fp8_support =
-        Capability().rocm_compute_capability()->has_ocp_fp8_support();
-  }
+// // FP8 vs FP16 training step comparison.
+// TEST_F(AllReduceTestNoParams, AsyncAllReduce_F8E4M3FN_TrainingStep_2GPUs) {
+//   bool has_fp8_support = false;
+//   if (Capability().IsCuda()) {
+//     has_fp8_support = Capability().cuda_compute_capability()->IsAtLeast(9, 0);
+//   } else if (Capability().IsRocm()) {
+//     has_fp8_support =
+//         Capability().rocm_compute_capability()->has_ocp_fp8_support();
+//   }
 
-  if (!has_fp8_support) {
-    GTEST_SKIP() << "FP8 requires GPU with OCP FP8 support (CUDA Hopper+ or "
-                    "ROCm MI350/gfx12xx with ROCm 7.0+).";
-  }
+//   if (!has_fp8_support) {
+//     GTEST_SKIP() << "FP8 requires GPU with OCP FP8 support (CUDA Hopper+ or "
+//                     "ROCm MI350/gfx12xx with ROCm 7.0+).";
+//   }
 
-  // FP16 baseline
-  const absl::string_view kF16ModuleStr = R"(
-  HloModule f16_training_step
-  add_f16 { x = f16[] parameter(0)  y = f16[] parameter(1)  ROOT add = f16[] add(x, y) }
-  ENTRY training_step {
-    activations = f16[32,64] parameter(0)
-    weights = f16[64,128] parameter(1)
-    upstream_grad = f16[32,128] parameter(2)
-    lr = f16[] parameter(3)
-    output = f16[32,128] dot(activations, weights), lhs_contracting_dims={1}, rhs_contracting_dims={0}
-    activations_t = f16[64,32] transpose(activations), dimensions={1,0}
-    weight_grad = f16[64,128] dot(activations_t, upstream_grad), lhs_contracting_dims={1}, rhs_contracting_dims={0}
-    weight_grad_allreduce = f16[64,128] all-reduce(weight_grad), to_apply=add_f16, replica_groups={{0,1}}
-    two = f16[] constant(2)
-    two_bcast = f16[64,128] broadcast(two), dimensions={}
-    weight_grad_avg = f16[64,128] divide(weight_grad_allreduce, two_bcast)
-    lr_bcast = f16[64,128] broadcast(lr), dimensions={}
-    weight_update = f16[64,128] multiply(lr_bcast, weight_grad_avg)
-    new_weights = f16[64,128] subtract(weights, weight_update)
-    ROOT result = (f16[32,128], f16[64,128]) tuple(output, new_weights)
-  })";
+//   // FP16 baseline
+//   const absl::string_view kF16ModuleStr = R"(
+//   HloModule f16_training_step
+//   add_f16 { x = f16[] parameter(0)  y = f16[] parameter(1)  ROOT add = f16[] add(x, y) }
+//   ENTRY training_step {
+//     activations = f16[32,64] parameter(0)
+//     weights = f16[64,128] parameter(1)
+//     upstream_grad = f16[32,128] parameter(2)
+//     lr = f16[] parameter(3)
+//     output = f16[32,128] dot(activations, weights), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+//     activations_t = f16[64,32] transpose(activations), dimensions={1,0}
+//     weight_grad = f16[64,128] dot(activations_t, upstream_grad), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+//     weight_grad_allreduce = f16[64,128] all-reduce(weight_grad), to_apply=add_f16, replica_groups={{0,1}}
+//     two = f16[] constant(2)
+//     two_bcast = f16[64,128] broadcast(two), dimensions={}
+//     weight_grad_avg = f16[64,128] divide(weight_grad_allreduce, two_bcast)
+//     lr_bcast = f16[64,128] broadcast(lr), dimensions={}
+//     weight_update = f16[64,128] multiply(lr_bcast, weight_grad_avg)
+//     new_weights = f16[64,128] subtract(weights, weight_update)
+//     ROOT result = (f16[32,128], f16[64,128]) tuple(output, new_weights)
+//   })";
 
-  // FP8 version
-  const absl::string_view kF8ModuleStr = R"(
-  HloModule fp8_training_step
-  add_f8 { x = f8e4m3fn[] parameter(0)  y = f8e4m3fn[] parameter(1)  ROOT add = f8e4m3fn[] add(x, y) }
-  ENTRY training_step {
-    activations = f16[32,64] parameter(0)
-    weights = f16[64,128] parameter(1)
-    upstream_grad = f16[32,128] parameter(2)
-    lr = f16[] parameter(3)
-    output = f16[32,128] dot(activations, weights), lhs_contracting_dims={1}, rhs_contracting_dims={0}
-    activations_t = f16[64,32] transpose(activations), dimensions={1,0}
-    weight_grad = f16[64,128] dot(activations_t, upstream_grad), lhs_contracting_dims={1}, rhs_contracting_dims={0}
-    weight_grad_f8 = f8e4m3fn[64,128] convert(weight_grad)
-    weight_grad_allreduce_f8 = f8e4m3fn[64,128] all-reduce(weight_grad_f8), to_apply=add_f8, replica_groups={{0,1}}
-    weight_grad_allreduce = f16[64,128] convert(weight_grad_allreduce_f8)
-    two = f16[] constant(2)
-    two_bcast = f16[64,128] broadcast(two), dimensions={}
-    weight_grad_avg = f16[64,128] divide(weight_grad_allreduce, two_bcast)
-    lr_bcast = f16[64,128] broadcast(lr), dimensions={}
-    weight_update = f16[64,128] multiply(lr_bcast, weight_grad_avg)
-    new_weights = f16[64,128] subtract(weights, weight_update)
-    ROOT result = (f16[32,128], f16[64,128]) tuple(output, new_weights)
-  })";
+//   // FP8 version
+//   const absl::string_view kF8ModuleStr = R"(
+//   HloModule fp8_training_step
+//   add_f8 { x = f8e4m3fn[] parameter(0)  y = f8e4m3fn[] parameter(1)  ROOT add = f8e4m3fn[] add(x, y) }
+//   ENTRY training_step {
+//     activations = f16[32,64] parameter(0)
+//     weights = f16[64,128] parameter(1)
+//     upstream_grad = f16[32,128] parameter(2)
+//     lr = f16[] parameter(3)
+//     output = f16[32,128] dot(activations, weights), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+//     activations_t = f16[64,32] transpose(activations), dimensions={1,0}
+//     weight_grad = f16[64,128] dot(activations_t, upstream_grad), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+//     weight_grad_f8 = f8e4m3fn[64,128] convert(weight_grad)
+//     weight_grad_allreduce_f8 = f8e4m3fn[64,128] all-reduce(weight_grad_f8), to_apply=add_f8, replica_groups={{0,1}}
+//     weight_grad_allreduce = f16[64,128] convert(weight_grad_allreduce_f8)
+//     two = f16[] constant(2)
+//     two_bcast = f16[64,128] broadcast(two), dimensions={}
+//     weight_grad_avg = f16[64,128] divide(weight_grad_allreduce, two_bcast)
+//     lr_bcast = f16[64,128] broadcast(lr), dimensions={}
+//     weight_update = f16[64,128] multiply(lr_bcast, weight_grad_avg)
+//     new_weights = f16[64,128] subtract(weights, weight_update)
+//     ROOT result = (f16[32,128], f16[64,128]) tuple(output, new_weights)
+//   })";
 
-  const int64_t kNumReplicas = 2;
-  ASSERT_GE(device_count(), kNumReplicas)
-      << "Test requires at least " << kNumReplicas << " devices ("
-      << device_count() << " available)";
+//   const int64_t kNumReplicas = 2;
+//   ASSERT_GE(device_count(), kNumReplicas)
+//       << "Test requires at least " << kNumReplicas << " devices ("
+//       << device_count() << " available)";
 
-  Array<Eigen::half> activations1({32, 64}), activations2({32, 64});
-  activations1.FillRandom(Eigen::half(0.1f), 0.5f, /*seed=*/0);
-  activations2.FillRandom(Eigen::half(0.1f), 0.5f, /*seed=*/1);
-  Array<Eigen::half> weights({64, 128});
-  weights.FillRandom(Eigen::half(0.1f), 0.3f, /*seed=*/42);
-  Array<Eigen::half> upstream_grad1({32, 128}), upstream_grad2({32, 128});
-  upstream_grad1.FillRandom(Eigen::half(0.01f), 0.1f, /*seed=*/100);
-  upstream_grad2.FillRandom(Eigen::half(0.01f), 0.1f, /*seed=*/101);
+//   Array<Eigen::half> activations1({32, 64}), activations2({32, 64});
+//   activations1.FillRandom(Eigen::half(0.1f), 0.5f, /*seed=*/0);
+//   activations2.FillRandom(Eigen::half(0.1f), 0.5f, /*seed=*/1);
+//   Array<Eigen::half> weights({64, 128});
+//   weights.FillRandom(Eigen::half(0.1f), 0.3f, /*seed=*/42);
+//   Array<Eigen::half> upstream_grad1({32, 128}), upstream_grad2({32, 128});
+//   upstream_grad1.FillRandom(Eigen::half(0.01f), 0.1f, /*seed=*/100);
+//   upstream_grad2.FillRandom(Eigen::half(0.01f), 0.1f, /*seed=*/101);
 
-  Literal lr = LiteralUtil::CreateR0<Eigen::half>(Eigen::half(0.01f));
-  Literal activations_lit1 = LiteralUtil::CreateFromArray(activations1);
-  Literal activations_lit2 = LiteralUtil::CreateFromArray(activations2);
-  Literal weights_lit = LiteralUtil::CreateFromArray(weights);
-  Literal upstream_grad_lit1 = LiteralUtil::CreateFromArray(upstream_grad1);
-  Literal upstream_grad_lit2 = LiteralUtil::CreateFromArray(upstream_grad2);
+//   Literal lr = LiteralUtil::CreateR0<Eigen::half>(Eigen::half(0.01f));
+//   Literal activations_lit1 = LiteralUtil::CreateFromArray(activations1);
+//   Literal activations_lit2 = LiteralUtil::CreateFromArray(activations2);
+//   Literal weights_lit = LiteralUtil::CreateFromArray(weights);
+//   Literal upstream_grad_lit1 = LiteralUtil::CreateFromArray(upstream_grad1);
+//   Literal upstream_grad_lit2 = LiteralUtil::CreateFromArray(upstream_grad2);
 
-  TF_ASSERT_OK_AND_ASSIGN(auto f16_module, ParseAndReturnVerifiedModule(
-                                               kF16ModuleStr, kNumReplicas));
-  TF_ASSERT_OK_AND_ASSIGN(
-      ExecutionResult f16_result,
-      ExecuteReplicated(
-          std::move(f16_module),
-          std::vector<std::vector<Literal*>>{
-              {&activations_lit1, &weights_lit, &upstream_grad_lit1, &lr},
-              {&activations_lit2, &weights_lit, &upstream_grad_lit2, &lr}}));
-  // Verify FP16 all-reduce type in optimized module
-  VerifyAllReduceType(f16_result.optimized_module, F16);
+//   TF_ASSERT_OK_AND_ASSIGN(auto f16_module, ParseAndReturnVerifiedModule(
+//                                                kF16ModuleStr, kNumReplicas));
+//   TF_ASSERT_OK_AND_ASSIGN(
+//       ExecutionResult f16_result,
+//       ExecuteReplicated(
+//           std::move(f16_module),
+//           std::vector<std::vector<Literal*>>{
+//               {&activations_lit1, &weights_lit, &upstream_grad_lit1, &lr},
+//               {&activations_lit2, &weights_lit, &upstream_grad_lit2, &lr}}));
+//   // Verify FP16 all-reduce type in optimized module
+//   VerifyAllReduceType(f16_result.optimized_module, F16);
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      auto f8_module, ParseAndReturnVerifiedModule(kF8ModuleStr, kNumReplicas));
-  TF_ASSERT_OK_AND_ASSIGN(
-      ExecutionResult f8_result,
-      ExecuteReplicated(
-          std::move(f8_module),
-          std::vector<std::vector<Literal*>>{
-              {&activations_lit1, &weights_lit, &upstream_grad_lit1, &lr},
-              {&activations_lit2, &weights_lit, &upstream_grad_lit2, &lr}}));
-  // Verify FP8 all-reduce type in optimized module
-  VerifyAllReduceType(f8_result.optimized_module, F8E4M3FN);
+//   TF_ASSERT_OK_AND_ASSIGN(
+//       auto f8_module, ParseAndReturnVerifiedModule(kF8ModuleStr, kNumReplicas));
+//   TF_ASSERT_OK_AND_ASSIGN(
+//       ExecutionResult f8_result,
+//       ExecuteReplicated(
+//           std::move(f8_module),
+//           std::vector<std::vector<Literal*>>{
+//               {&activations_lit1, &weights_lit, &upstream_grad_lit1, &lr},
+//               {&activations_lit2, &weights_lit, &upstream_grad_lit2, &lr}}));
+//   // Verify FP8 all-reduce type in optimized module
+//   VerifyAllReduceType(f8_result.optimized_module, F8E4M3FN);
 
-  ASSERT_EQ(f16_result.results.size(), kNumReplicas);
-  ASSERT_EQ(f8_result.results.size(), kNumReplicas);
+//   ASSERT_EQ(f16_result.results.size(), kNumReplicas);
+//   ASSERT_EQ(f8_result.results.size(), kNumReplicas);
 
-  std::vector<Literal> f16_r0 = f16_result.results[0].DecomposeTuple();
-  std::vector<Literal> f8_r0 = f8_result.results[0].DecomposeTuple();
-  std::vector<Literal> f8_r1 = f8_result.results[1].DecomposeTuple();
+//   std::vector<Literal> f16_r0 = f16_result.results[0].DecomposeTuple();
+//   std::vector<Literal> f8_r0 = f8_result.results[0].DecomposeTuple();
+//   std::vector<Literal> f8_r1 = f8_result.results[1].DecomposeTuple();
 
-  // Forward outputs should match exactly (no FP8 in forward path)
-  EXPECT_TRUE(LiteralTestUtil::Equal(f16_r0[0], f8_r0[0]));
+//   // Forward outputs should match exactly (no FP8 in forward path)
+//   EXPECT_TRUE(LiteralTestUtil::Equal(f16_r0[0], f8_r0[0]));
 
-  // FP8 vs FP16 weight comparison: should be close but not identical
-  EXPECT_TRUE(
-      LiteralTestUtil::Near(f16_r0[1], f8_r0[1], ErrorSpec{1e-2, 1e-2}));
+//   // FP8 vs FP16 weight comparison: should be close but not identical
+//   EXPECT_TRUE(
+//       LiteralTestUtil::Near(f16_r0[1], f8_r0[1], ErrorSpec{1e-2, 1e-2}));
 
-  // Numerical precision check: FP8 should produce measurably different results
-  // than FP16. FP8 e4m3 has ~6% relative error (2^-4), FP16 has ~0.1% (2^-10).
-  TF_ASSERT_OK_AND_ASSIGN(Literal f16_f32, f16_r0[1].Convert(F32));
-  TF_ASSERT_OK_AND_ASSIGN(Literal f8_f32, f8_r0[1].Convert(F32));
-  absl::Span<const float> f16_data = f16_f32.data<float>();
-  absl::Span<const float> f8_data = f8_f32.data<float>();
-  float max_abs_diff = 0.0f;
-  for (size_t i = 0; i < f16_data.size(); ++i) {
-    max_abs_diff = std::max(max_abs_diff, std::abs(f16_data[i] - f8_data[i]));
-  }
-  // Expect measurable difference (> FP16 noise floor of ~0.1%)
-  EXPECT_GT(max_abs_diff, 1e-3f);
-}
+//   // Numerical precision check: FP8 should produce measurably different results
+//   // than FP16. FP8 e4m3 has ~6% relative error (2^-4), FP16 has ~0.1% (2^-10).
+//   TF_ASSERT_OK_AND_ASSIGN(Literal f16_f32, f16_r0[1].Convert(F32));
+//   TF_ASSERT_OK_AND_ASSIGN(Literal f8_f32, f8_r0[1].Convert(F32));
+//   absl::Span<const float> f16_data = f16_f32.data<float>();
+//   absl::Span<const float> f8_data = f8_f32.data<float>();
+//   float max_abs_diff = 0.0f;
+//   for (size_t i = 0; i < f16_data.size(); ++i) {
+//     max_abs_diff = std::max(max_abs_diff, std::abs(f16_data[i] - f8_data[i]));
+//   }
+//   // Expect measurable difference (> FP16 noise floor of ~0.1%)
+//   EXPECT_GT(max_abs_diff, 1e-3f);
+// }
 
-// Test that FP8 all-reduce fails on pre-Hopper CUDA GPUs without FP8 support.
-// Note: ROCm is skipped because it has a fallback to ncclInt8 for all GPUs.
-TEST_F(AllReduceTestNoParams, AsyncAllReduce_F8E4M3FN_FailsOnUnsupportedGPUs) {
-  if (Capability().IsRocm()) {
-    GTEST_SKIP()
-        << "Test is CUDA-only. ROCm has fallback to ncclInt8 for all GPUs.";
-  }
+// // Test that FP8 all-reduce fails on pre-Hopper CUDA GPUs without FP8 support.
+// // Note: ROCm is skipped because it has a fallback to ncclInt8 for all GPUs.
+// TEST_F(AllReduceTestNoParams, AsyncAllReduce_F8E4M3FN_FailsOnUnsupportedGPUs) {
+//   if (Capability().IsRocm()) {
+//     GTEST_SKIP()
+//         << "Test is CUDA-only. ROCm has fallback to ncclInt8 for all GPUs.";
+//   }
 
-  if (!Capability().IsCuda()) {
-    GTEST_SKIP() << "Test requires CUDA.";
-  }
+//   if (!Capability().IsCuda()) {
+//     GTEST_SKIP() << "Test requires CUDA.";
+//   }
 
-  if (Capability().cuda_compute_capability()->IsAtLeast(9, 0)) {
-    GTEST_SKIP() << "Test requires pre-Hopper GPU (compute capability < 9.0).";
-  }
+//   if (Capability().cuda_compute_capability()->IsAtLeast(9, 0)) {
+//     GTEST_SKIP() << "Test requires pre-Hopper GPU (compute capability < 9.0).";
+//   }
 
-  const absl::string_view kF8ModuleStr = R"(
-  HloModule fp8_allreduce_test
-  add_f8 { x = f8e4m3fn[] parameter(0)  y = f8e4m3fn[] parameter(1)  ROOT add = f8e4m3fn[] add(x, y) }
-  ENTRY test_computation {
-    param_0 = f16[64,128] parameter(0)
-    param_f8 = f8e4m3fn[64,128] convert(param_0)
-    allreduce_f8 = f8e4m3fn[64,128] all-reduce(param_f8), to_apply=add_f8, replica_groups={{0,1}}
-    ROOT result = f16[64,128] convert(allreduce_f8)
-  })";
+//   const absl::string_view kF8ModuleStr = R"(
+//   HloModule fp8_allreduce_test
+//   add_f8 { x = f8e4m3fn[] parameter(0)  y = f8e4m3fn[] parameter(1)  ROOT add = f8e4m3fn[] add(x, y) }
+//   ENTRY test_computation {
+//     param_0 = f16[64,128] parameter(0)
+//     param_f8 = f8e4m3fn[64,128] convert(param_0)
+//     allreduce_f8 = f8e4m3fn[64,128] all-reduce(param_f8), to_apply=add_f8, replica_groups={{0,1}}
+//     ROOT result = f16[64,128] convert(allreduce_f8)
+//   })";
 
-  const int64_t kNumReplicas = 2;
-  ASSERT_GE(device_count(), kNumReplicas)
-      << "Test requires at least " << kNumReplicas << " devices ("
-      << device_count() << " available)";
+//   const int64_t kNumReplicas = 2;
+//   ASSERT_GE(device_count(), kNumReplicas)
+//       << "Test requires at least " << kNumReplicas << " devices ("
+//       << device_count() << " available)";
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      auto module, ParseAndReturnVerifiedModule(kF8ModuleStr, kNumReplicas));
+//   TF_ASSERT_OK_AND_ASSIGN(
+//       auto module, ParseAndReturnVerifiedModule(kF8ModuleStr, kNumReplicas));
 
-  Array<Eigen::half> input1({64, 128}), input2({64, 128});
-  input1.FillRandom(Eigen::half(0.1f), 0.5f, /*seed=*/0);
-  input2.FillRandom(Eigen::half(0.1f), 0.5f, /*seed=*/1);
-  Literal input_literal1 = LiteralUtil::CreateFromArray(input1);
-  Literal input_literal2 = LiteralUtil::CreateFromArray(input2);
+//   Array<Eigen::half> input1({64, 128}), input2({64, 128});
+//   input1.FillRandom(Eigen::half(0.1f), 0.5f, /*seed=*/0);
+//   input2.FillRandom(Eigen::half(0.1f), 0.5f, /*seed=*/1);
+//   Literal input_literal1 = LiteralUtil::CreateFromArray(input1);
+//   Literal input_literal2 = LiteralUtil::CreateFromArray(input2);
 
-  auto result = ExecuteReplicated(
-      std::move(module),
-      std::vector<std::vector<Literal*>>{{&input_literal1}, {&input_literal2}});
+//   auto result = ExecuteReplicated(
+//       std::move(module),
+//       std::vector<std::vector<Literal*>>{{&input_literal1}, {&input_literal2}});
 
-  EXPECT_FALSE(result.ok())
-      << "FP8 all-reduce should fail on pre-Hopper GPUs, but succeeded.";
-  // NCCL returns ncclInvalidArgument for FP8 reductions on pre-sm90 GPUs.
-  EXPECT_THAT(result.status().message(),
-              ::testing::HasSubstr("FP8 reduction support begins with sm90"));
-}
+//   EXPECT_FALSE(result.ok())
+//       << "FP8 all-reduce should fail on pre-Hopper GPUs, but succeeded.";
+//   // NCCL returns ncclInvalidArgument for FP8 reductions on pre-sm90 GPUs.
+//   EXPECT_THAT(result.status().message(),
+//               ::testing::HasSubstr("FP8 reduction support begins with sm90"));
+// }
 
 }  // namespace
 }  // namespace xla

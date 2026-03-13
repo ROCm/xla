@@ -170,6 +170,37 @@ def TritonXLALowerBlockBarrierROCmPass
   let constructor = "CreateTritonXLALowerBlockBarrierROCmPass()";
 }
 
+def TritonXLALowerAtomicsROCmAsmPass
+    : Pass<"triton-xla-atomics-rocm-asm", "mlir::ModuleOp"> {
+  let summary = "Lower triton_xla.atomic operations for ROCm using inline GCN assembly.";
+  let description = [{
+    This pass lowers atomic operations to inline GCN assembly for ROCm,
+    providing fine-grained control over memory ordering and synchronization.
+  }];
+  let constructor = "CreateTritonXLALowerAtomicsROCmAsmPass()";
+}
+
+def TritonXLALowerBlockBarrierROCmAsmPass
+    : Pass<"triton-xla-block-barrier-rocm-asm", "mlir::ModuleOp"> {
+  let summary = "Lower a block barrier for ROCm using inline GCN assembly.";
+  let description = [{
+    This pass lowers a block barrier to Triton IR for ROCm using inline
+    GCN assembly for atomic operations, providing fine-grained control
+    over memory ordering.
+  }];
+  let constructor = "CreateTritonXLALowerBlockBarrierROCmAsmPass()";
+}
+
+def TritonXLALowerGetTidROCmAsmPass
+    : Pass<"triton-xla-get-tid-rocm-asm", "mlir::ModuleOp"> {
+  let summary = "Lower get_tid for ROCm using inline GCN assembly.";
+  let description = [{
+    This pass lowers get_tid to inline GCN assembly for ROCm by reading
+    the thread ID directly from hardware registers.
+  }];
+  let constructor = "CreateTritonXLALowerGetTidROCmAsmPass()";
+}
+
 def TritonXLAConvertUnsupportedTypesPass
     : Pass<"convert-unsupported-types", "mlir::ModuleOp"> {
   let summary = "Converts types unsupported by Triton into their supported equivalents.";
