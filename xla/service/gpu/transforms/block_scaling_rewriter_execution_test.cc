@@ -21,38 +21,13 @@ limitations under the License.
 #include "xla/hlo/parser/hlo_parser.h"
 #include "xla/service/gpu/transforms/block_scaling_rewriter.h"
 #include "xla/stream_executor/dnn.h"
-#include "xla/stream_executor/platform.h"
-#include "xla/stream_executor/platform_manager.h"
 #include "xla/tests/hlo_pjrt_test_base.h"
 #include "xla/tsl/platform/statusor.h"
 
 namespace xla::gpu {
 namespace {
 
-class BlockScalingRewriterExecutionTest : public HloPjRtTestBase {
- protected:
-  // Get a stream executor to access device description.
-  // This is needed because BlockScalingRewriter requires DeviceDescription
-  // for ROCm/hipblaslt support.
-  static se::StreamExecutor* GetStreamExecutor() {
-    // Try CUDA first, then ROCm
-    auto cuda_platform = se::PlatformManager::PlatformWithName("CUDA");
-    if (cuda_platform.ok()) {
-      auto executor = (*cuda_platform)->ExecutorForDevice(0);
-      if (executor.ok()) {
-        return *executor;
-      }
-    }
-    auto rocm_platform = se::PlatformManager::PlatformWithName("ROCM");
-    if (rocm_platform.ok()) {
-      auto executor = (*rocm_platform)->ExecutorForDevice(0);
-      if (executor.ok()) {
-        return *executor;
-      }
-    }
-    return nullptr;
-  }
-};
+using BlockScalingRewriterExecutionTest = HloPjRtTestBase;
 
 TEST_F(BlockScalingRewriterExecutionTest, QuantizeDequantizeCompare) {
   constexpr absl::string_view hlo_test = R"(
@@ -69,12 +44,7 @@ ENTRY main {
   TF_ASSERT_OK_AND_ASSIGN(auto test_module,
                           ParseAndReturnUnverifiedModule(hlo_test));
 
-  se::StreamExecutor* executor = GetStreamExecutor();
-  ASSERT_NE(executor, nullptr) << "No GPU stream executor available";
-
-  BlockScalingRewriter pass(executor->GetDeviceDescription(),
-                            se::dnn::VersionInfo{},
-                            /*allow_hipblaslt*/ false);
+  BlockScalingRewriter pass(se::dnn::VersionInfo{});
   TF_ASSERT_OK_AND_ASSIGN(
       auto changed, pass.Run(test_module.get(), /*execution_threads=*/{}));
   EXPECT_TRUE(changed);
