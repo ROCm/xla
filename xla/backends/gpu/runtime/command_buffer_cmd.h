@@ -33,11 +33,11 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "xla/backends/gpu/codegen/kernels/custom_kernel.h"
 #include "xla/backends/gpu/runtime/collective_permute_thunk.h"
-#include "xla/backends/gpu/runtime/convolution_thunk.h"
 #include "xla/backends/gpu/runtime/collective_thunk.h"
 #include "xla/backends/gpu/runtime/command.h"
 #include "xla/backends/gpu/runtime/command_executor.h"
 #include "xla/backends/gpu/runtime/command_state.h"
+#include "xla/backends/gpu/runtime/convolution_thunk.h"
 #include "xla/backends/gpu/runtime/custom_call_thunk.h"
 #include "xla/backends/gpu/runtime/dynamic_memcpy_thunk.h"
 #include "xla/backends/gpu/runtime/dynamic_slice_thunk.h"
@@ -445,7 +445,7 @@ class ConvolutionCmd : public TracedCommandBufferCmd {
 
   bool IsNestedCommandBuffer() const final { return true; }
 
-private:
+ private:
   std::vector<ShapedSlice> operand_buffers_;
   std::vector<ShapedSlice> result_buffers_;
   BufferAllocation::Slice scratch_buffer_;
