@@ -19,8 +19,6 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/rocm_tracer.h"
 
-#include <unistd.h>
-
 #include <atomic>
 #include <cassert>
 #include <cstdint>
@@ -43,6 +41,7 @@ limitations under the License.
 #include "rocm/include/rocprofiler-sdk/internal_threading.h"
 #include "rocm/include/rocprofiler-sdk/registration.h"
 #include "rocm/include/rocprofiler-sdk/rocprofiler.h"
+#include <unistd.h>
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
@@ -139,6 +138,24 @@ void RocmTracer::Enable(const RocmTracerOptions& options,
   activity_tracing_enabled_ = true;
   rocprofiler_start_context(context_);
   VLOG(1) << "GpuTracer started with number of GPUs = " << NumGpus();
+}
+
+bool RocmTracer::GetGpuSimdInfo(uint32_t device_ordinal, uint32_t* simd_per_cu,
+                                uint32_t* max_waves_per_simd,
+                                uint32_t* gfx_target_version) const {
+  uint32_t gpu_index = 0;
+  for (const auto& [handle, agent] : agents_) {
+    if (agent.type == ROCPROFILER_AGENT_TYPE_GPU) {
+      if (gpu_index == device_ordinal) {
+        *simd_per_cu = agent.simd_per_cu;
+        *max_waves_per_simd = agent.max_waves_per_simd;
+        *gfx_target_version = agent.gfx_target_version;
+        return true;
+      }
+      gpu_index++;
+    }
+  }
+  return false;
 }
 
 void RocmTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
@@ -295,11 +312,17 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
       .grid_x = kinfo.grid_size.x,
       .grid_y = kinfo.grid_size.y,
       .grid_z = kinfo.grid_size.z,
-      .func_ptr = nullptr,
+      .sgpr_count = 0,
+      .arch_vgpr_count = 0,
   };
 
   auto it = kernel_info_.find(kinfo.kernel_id);
-  if (it != kernel_info_.end()) trace_event->name = it->second.name;
+  if (it != kernel_info_.end()) {
+    trace_event->name = it->second.name;
+    const auto& sym = it->second.data;
+    trace_event->kernel_info.sgpr_count = sym.sgpr_count;
+    trace_event->kernel_info.arch_vgpr_count = sym.arch_vgpr_count;
+  }
 }
 
 void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
