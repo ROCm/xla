@@ -570,6 +570,120 @@ xla_cc_binary(
     ]),
 )
 
+# ---------------------------------------------------------------------------
+# Triton config compilation validator (ROCm).
+#
+# Two binaries work together:
+#   triton_config_validator_worker  – compiles one (HLO, TritonGemmConfig)
+#                                     pair and exits with a structured code.
+#   triton_config_validator_runner  – generates the exhaustive config space,
+#                                     spawns the worker per config, and writes
+#                                     a TSV report.
+#
+# Build (ROCm):
+#   bazel build --config=rocm_ci_hermetic \
+#     //xla/tools:triton_config_validator_worker \
+#     //xla/tools:triton_config_validator_runner
+#
+# Run:
+#   ./triton_config_validator_runner \
+#     --worker=$(pwd)/triton_config_validator_worker \
+#     --hlo_dir=/path/to/hlo_shapes \
+#     --output_file=results.tsv \
+#     --jobs=8
+# ---------------------------------------------------------------------------
+
+xla_cc_binary(
+    name = "triton_config_validator_worker",
+    srcs = ["triton_config_validator_worker.cc"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = if_rocm_is_configured([
+        "//xla/service/gpu:amdgpu_compiler",
+        "//xla/stream_executor/rocm:all_runtime",
+        "//xla/stream_executor/rocm:rocm_platform_id",
+    ]) + [
+        "//xla:autotuning_proto_cc",
+        "//xla:debug_options_flags",
+        "//xla:xla_proto_cc",
+        "//xla/backends/gpu/target_config:target_config",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/parser:hlo_parser",
+        "//xla/service:compiler",
+        "//xla/service:platform_util",
+        "//xla/hlo/transforms/simplifiers:float_normalization",
+        "//xla/service:hlo_cost_analysis",
+        "//xla/service/gpu:backend_configs_cc",
+        "//xla/service/gpu:ir_emission_utils",
+        "//xla/service/gpu:gpu_float_support",
+        "//xla/service/gpu:matmul_utils",
+        "//xla/service/gpu:split_k_gemm_rewriter",
+        "//xla/service/gpu/transforms:fusion_wrapper",
+        "//xla/service/gpu/transforms:hoist_fused_bitcasts",
+        "//xla/service/gpu/transforms:nest_gemm_fusion",
+        "//xla/service/gpu/transforms:priority_fusion",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor:device_description_proto_cc",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:platform_manager",
+        ":hlo_decomposer_lib",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/util:command_line_flags",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@llvm-project//mlir:IR",
+        "@tsl//tsl/platform:platform_port",
+        "@tsl//tsl/platform:protobuf",
+    ],
+)
+
+xla_cc_binary(
+    name = "triton_config_validator_runner",
+    srcs = ["triton_config_validator_runner.cc"],
+    data = [":triton_config_validator_worker"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = if_rocm_is_configured([
+        "//xla/service/gpu:amdgpu_compiler",
+        "//xla/stream_executor/rocm:all_runtime",
+        "//xla/stream_executor/rocm:rocm_platform_id",
+    ]) + [
+        "//xla:autotuning_proto_cc",
+        "//xla:debug_options_flags",
+        "//xla:xla_proto_cc",
+        "//xla/backends/gpu/target_config:target_config",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/parser:hlo_parser",
+        "//xla/hlo/utils:hlo_query",
+        "//xla/service:platform_util",
+        "//xla/service/gpu:matmul_utils",
+        "//xla/service/gpu/autotuning:dot_search_space",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor:device_description_proto_cc",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:platform_manager",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/util:command_line_flags",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@tsl//tsl/platform:platform_port",
+        "@tsl//tsl/platform:protobuf",
+    ],
+)
+
 xla_cc_test(
     name = "run_hlo_module_bin_test",
     srcs = ["run_hlo_module_bin_test.cc"],
