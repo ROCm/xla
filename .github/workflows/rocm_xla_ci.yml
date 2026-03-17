@@ -55,8 +55,7 @@ jobs:
           git clone -b jenkins-pipelines https://github.com/ROCm/rocAutomation.git rocAutomation
 
       - name: Start Container
-        run: |
-          docker run -dt \
+          CONTAINER_NAME: xla-runner-${{ github.run_id }}
             --name ${{ env.CONTAINER_NAME }} \
             --init \
             --network=host \
