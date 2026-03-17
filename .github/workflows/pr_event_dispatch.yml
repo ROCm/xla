@@ -20,4 +20,17 @@ jobs:
         run: |
           gh api repos/${{ github.repository }}/dispatches \
             -f event_type=claude-review \
-            -f 'client_payload[pull_number]=${{ github.event.pull_request.number }}'
+            -f 'client_payload[pull_number]=${{ github.event.pull_request.number }}' \
+            -f 'client_payload[head_ref]=${{ github.event.pull_request.head.ref }}' \
+            -f 'client_payload[head_sha]=${{ github.event.pull_request.head.sha }}' \
+            -f 'client_payload[head_repo]=${{ github.event.pull_request.head.repo.full_name }}'
+      - name: Dispatch PR check event
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/dispatches \
+            -f event_type=pr-check \
+            -f 'client_payload[pull_number]=${{ github.event.pull_request.number }}' \
+            -f 'client_payload[head_ref]=${{ github.event.pull_request.head.ref }}' \
+            -f 'client_payload[head_sha]=${{ github.event.pull_request.head.sha }}' \
+            -f 'client_payload[head_repo]=${{ github.event.pull_request.head.repo.full_name }}'
