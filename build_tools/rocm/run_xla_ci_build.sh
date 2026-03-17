@@ -32,6 +32,7 @@ for arg in "$@"; do
     fi
 done
 
+echo test
 SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --build_tag_filters=$TAG_FILTERS \
