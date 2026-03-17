@@ -42,7 +42,7 @@ void CreateTritonXlaPipeline(
     pm->addPass(mlir::triton::xla::CreateTritonXLALowerBlockBarrierROCmPass());
     pm->addPass(mlir::triton::xla::CreateTritonXLALowerAtomicsROCmPass());
     */
-    pm->addPass(mlir::triton::xla::CreateTritonXLALowerBlockBarrierPass());
+    pm->addPass(mlir::triton::xla::CreateTritonXLALowerBlockBarrierROCmAsmPass());
     pm->addPass(mlir::triton::xla::CreateTritonXLALowerAtomicsROCmAsmPass());
     pm->addPass(mlir::triton::xla::CreateTritonXLALowerGetTidROCmAsmPass());
   } else 
