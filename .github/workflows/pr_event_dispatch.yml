@@ -21,3 +21,10 @@ jobs:
           gh api repos/${{ github.repository }}/dispatches \
             -f event_type=claude-review \
             -f 'client_payload[pull_number]=${{ github.event.pull_request.number }}'
+      - name: Dispatch PR check event
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/dispatches \
+            -f event_type=pr-check \
+            -f 'client_payload[pull_number]=${{ github.event.pull_request.number }}'
