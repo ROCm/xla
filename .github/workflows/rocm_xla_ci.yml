@@ -20,6 +20,9 @@ on:
   # Triggered by pr_event_dispatch.yml via `gh api .../dispatches`.
   # Expected client_payload schema:
   #   pull_number: number
+  #   head_ref: string (branch name)
+  #   head_sha: string (commit SHA)
+  #   head_repo: string (full repo name, e.g., "owner/repo")
   repository_dispatch:
     types: [pr-check]
   workflow_dispatch:
@@ -45,17 +48,21 @@ jobs:
         run: docker rm -f ${{ env.CONTAINER_NAME }} || true
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-    - name: Checkout code
-      uses: actions/checkout@v3
-      with:
-        ref: refs/pull/${{ github.event.client_payload.pull_number || inputs.pr_number }}/head
+        with:
+          # For repository_dispatch: use head_repo and head_sha from payload
+          # For workflow_dispatch: fall back to refs/pull/<number>/head
+          repository: ${{ github.event.client_payload.head_repo || github.repository }}
+          ref: ${{ github.event.client_payload.head_sha || format('refs/pull/{0}/head', inputs.pr_number) }}
+          persist-credentials: false
+
       - name: Checkout rocAutomation using local creds
         run: |
           rm -rf rocAutomation
           git clone -b jenkins-pipelines https://github.com/ROCm/rocAutomation.git rocAutomation
 
       - name: Start Container
-          CONTAINER_NAME: xla-runner-${{ github.run_id }}
+        run: |
+          docker run -dt \
             --name ${{ env.CONTAINER_NAME }} \
             --init \
             --network=host \
