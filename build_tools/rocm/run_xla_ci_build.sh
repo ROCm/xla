@@ -32,6 +32,11 @@ for arg in "$@"; do
     fi
 done
 
+ls -alsh /tf/certificates/
+echo cert
+head /tf/certificates/ci-cert.crt
+echo key
+head /tf/certificates/ci-cert.key
 SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --build_tag_filters=$TAG_FILTERS \
