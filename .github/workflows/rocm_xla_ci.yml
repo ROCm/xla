@@ -39,11 +39,8 @@ jobs:
     container:
       image: rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa
       options: >-
-        --init
-        --network=host
         --device=/dev/dri
         --device=/dev/kfd
-        --ipc=host
         --shm-size=16G
         --cap-add=SYS_PTRACE
         --security-opt=seccomp=unconfined
@@ -56,24 +53,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout rocAutomation
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: ROCm/rocAutomation
-          ref: jenkins-pipelines
-          path: rocAutomation
-          persist-credentials: false
-
-      - name: Mount rocAutomation resources
+      - name: Get RBE cluster keys
+        env:
+          RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
+          RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}
         run: |
-          # Copy resources to workspace so they're accessible within the container
-          mkdir -p /workspace/build_tools/rocm
-          cp -f rocAutomation/resources/upstream-xla-data/rocm_tag_filters.sh /workspace/build_tools/rocm/rocm_tag_filters.sh
-          cp -f rocAutomation/resources/upstream-xla-data/execute_ci_build.sh /workspace/build_tools/rocm/execute_ci_build.sh
-          chmod +x /workspace/build_tools/rocm/*.sh
-          # Copy certificates
           mkdir -p /tf/certificates
-          cp -r rocAutomation/resources/certificates/* /tf/certificates/
+          echo "$RBE_CI_CERT" >> /tf/certificates/ci-cert.crt
+          echo "$RBE_CI_KEY" >> /tf/certificates/ci-cert.key
 
       - name: CPU Info
         run: lscpu
