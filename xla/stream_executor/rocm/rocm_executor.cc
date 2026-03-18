@@ -99,6 +99,16 @@ namespace stream_executor {
 namespace gpu {
 
 namespace {
+
+bool ShouldLaunchDelayKernel() {
+  // Only launch the delay kernel if HIP_LAUNCH_BLOCKING is not set to 1.
+  static bool value = [] {
+    const char* blocking = std::getenv("HIP_LAUNCH_BLOCKING");
+    return !blocking || absl::string_view{blocking} != "1";
+  }();
+  return value;
+}
+
 // Given const GPU memory, returns a librocm device pointer datatype, suitable
 // for passing directly to librocm APIs.
 //
@@ -608,7 +618,13 @@ RocmExecutor::CreateOrShareConstant(Stream* stream,
 
 absl::StatusOr<std::unique_ptr<EventBasedTimer>>
 RocmExecutor::CreateEventBasedTimer(Stream* stream, bool use_delay_kernel) {
-  TF_ASSIGN_OR_RETURN(auto timer, RocmTimer::Create(this, stream));
+  const RocmTimer::TimerType timer_type =
+      (use_delay_kernel && ShouldLaunchDelayKernel())
+          ? RocmTimer::TimerType::kDelayKernel
+          : RocmTimer::TimerType::kEventBased;
+
+  TF_ASSIGN_OR_RETURN(auto timer,
+                      RocmTimer::Create(this, stream, timer_type));
   return std::make_unique<RocmTimer>(std::move(timer));
 }
 

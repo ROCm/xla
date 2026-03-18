@@ -801,6 +801,23 @@ rocm_library(
     alwayslink = True,
 )
 
+rocm_library(
+    name = "delay_kernel_rocm",
+    srcs = ["delay_kernel_rocm.cu.cc"],
+    hdrs = ["delay_kernel.h"],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:typed_kernel_factory",
+        "//xla/stream_executor/gpu:gpu_semaphore",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
 cc_library(
     name = "rocm_complex_converters",
     hdrs = ["rocm_complex_converters.h"],
@@ -962,6 +979,7 @@ cc_library(
         "rocm-only",
     ],
     deps = [
+        ":delay_kernel_rocm",
         ":rocm_driver_wrapper",
         ":rocm_event",
         ":rocm_status",
@@ -969,6 +987,7 @@ cc_library(
         "//xla/stream_executor:event_based_timer",
         "//xla/stream_executor:stream",
         "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/gpu:gpu_semaphore",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/log",

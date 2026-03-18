@@ -75,11 +75,28 @@ class RocmTimerTest : public ::testing::Test {
 };
 
 TEST_F(RocmTimerTest, Create) {
-  TF_ASSERT_OK_AND_ASSIGN(RocmTimer timer,
-                          RocmTimer::Create(executor_, stream_.get()));
+  TF_ASSERT_OK_AND_ASSIGN(
+      RocmTimer timer,
+      RocmTimer::Create(executor_, stream_.get(),
+                        RocmTimer::TimerType::kEventBased));
 
   // We don't really care what kernel we launch here as long as it takes a
   // non-zero amount of time.
+  LaunchSomeKernel(executor_, stream_.get());
+
+  TF_ASSERT_OK_AND_ASSIGN(absl::Duration timer_result,
+                          timer.GetElapsedDuration());
+  EXPECT_THAT(timer_result, Gt(absl::ZeroDuration()));
+  EXPECT_THAT(timer.GetElapsedDuration(),
+              absl_testing::StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST_F(RocmTimerTest, CreateWithDelayKernel) {
+  TF_ASSERT_OK_AND_ASSIGN(
+      RocmTimer timer,
+      RocmTimer::Create(executor_, stream_.get(),
+                        RocmTimer::TimerType::kDelayKernel));
+
   LaunchSomeKernel(executor_, stream_.get());
 
   TF_ASSERT_OK_AND_ASSIGN(absl::Duration timer_result,
