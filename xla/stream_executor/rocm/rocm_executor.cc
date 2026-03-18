@@ -15,11 +15,10 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/rocm_executor.h"
 
-#include <unistd.h>
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -49,6 +48,7 @@ limitations under the License.
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/include/hip/hip_version.h"
 #include "rocm/rocm_config.h"
+#include <unistd.h>
 #include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/command_buffer.h"
@@ -76,6 +76,7 @@ limitations under the License.
 #include "xla/stream_executor/platform/initialize.h"
 #include "xla/stream_executor/plugin_registry.h"
 #include "xla/stream_executor/rocm/rocm_command_buffer.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/stream_executor/rocm/rocm_context.h"
 #include "xla/stream_executor/rocm/rocm_event.h"
 #include "xla/stream_executor/rocm/rocm_kernel.h"
@@ -102,6 +103,24 @@ namespace stream_executor {
 namespace gpu {
 
 namespace {
+
+bool ShouldLaunchDelayKernel() {
+  // Disable the delay kernel when HIP is configured to serialize
+  // launches. With HIP_LAUNCH_BLOCKING=1 or AMD_SERIALIZE_KERNEL/
+  // AMD_SERIALIZE_COPY != 0 we hit the delay kernel timeout every time
+  static bool value = [] {
+    auto is_nonzero = [](const char* name) {
+      const char* v = std::getenv(name);
+      return v && absl::string_view{v} != "0" && absl::string_view{v} != "";
+    };
+    const char* blocking = std::getenv("HIP_LAUNCH_BLOCKING");
+    const bool launch_blocking = blocking && absl::string_view{blocking} == "1";
+    return !launch_blocking && !is_nonzero("AMD_SERIALIZE_KERNEL") &&
+           !is_nonzero("AMD_SERIALIZE_COPY");
+  }();
+  return value;
+}
+
 // Given const GPU memory, returns a librocm device pointer datatype, suitable
 // for passing directly to librocm APIs.
 //
@@ -582,7 +601,13 @@ RocmExecutor::CreateOrShareConstant(Stream* stream,
 
 absl::StatusOr<std::unique_ptr<EventBasedTimer>>
 RocmExecutor::CreateEventBasedTimer(Stream* stream, bool use_delay_kernel) {
-  ASSIGN_OR_RETURN(auto timer, RocmTimer::Create(this, stream));
+  const RocmTimer::TimerType timer_type =
+      (use_delay_kernel && delay_kernels_supported_ &&
+       ShouldLaunchDelayKernel())
+          ? RocmTimer::TimerType::kDelayKernel
+          : RocmTimer::TimerType::kEventBased;
+
+  ASSIGN_OR_RETURN(auto timer, RocmTimer::Create(this, stream, timer_type));
   return std::make_unique<RocmTimer>(std::move(timer));
 }
 
@@ -629,8 +654,15 @@ absl::Status RocmExecutor::Init() {
   ASSIGN_OR_RETURN(device_, GetDevice(device_ordinal()));
   ASSIGN_OR_RETURN(version_, GetGpuISAVersion(device_));
 
+  // Only enable on MI300+ where the feature is empirically observed to be
+  // beneficial
+  ASSIGN_OR_RETURN(std::string gcn_arch_name, GetGpuGCNArchName(device_));
+  delay_kernels_supported_ =
+      RocmComputeCapability(gcn_arch_name).gfx9_mi300_series();
+
   // Initialize peer access cache for all devices
   int device_count = 0;
+
   RETURN_IF_ERROR(
       ToStatus(hipGetDeviceCount(&device_count), "Failed to get device count"));
   for (int i = 0; i < device_count; ++i) {
