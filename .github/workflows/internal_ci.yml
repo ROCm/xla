@@ -29,3 +29,4 @@ jobs:
     uses: ROCm/xla/.github/workflows/rocm_xla_ci.yml@rocm-dev-infra
     with:
       ref: ${{ github.event.pull_request.head.sha }}
+      concurrency_group: ${{ format('CI ROCm-PR-{0}', github.event.pull_request.number) }}
