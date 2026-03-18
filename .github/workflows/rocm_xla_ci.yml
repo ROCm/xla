@@ -92,6 +92,7 @@ jobs:
             --config=ci_single_gpu \
             --local_test_jobs=4 \
             --color=yes \
+            --spawn_strategy=local \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
             //xla/...
 
@@ -102,6 +103,7 @@ jobs:
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=rocm_rbe \
             --config=ci_multi_gpu \
+            --spawn_strategy=local \
             --strategy=TestRunner=local \
             --local_test_jobs=1 \
             --color=yes \
