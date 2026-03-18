@@ -22,9 +22,8 @@ on:
       - main
   workflow_call:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'main' }}
+# Note: concurrency control is handled by the calling workflow (pr_event_dispatch.yml)
+# to avoid deadlocks when used as a reusable workflow via workflow_call
 
 jobs:
   execute-xla-ut:
