@@ -1,4 +1,4 @@
-name: PR Event Dispatch
+name: Internal CI
 
 # This lightweight workflow forwards PR events to workflows on the
 # default branch via repository_dispatch. Cherry-pick this file to
