@@ -21,6 +21,12 @@ on:
     branches:
       - main
   workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to checkout (branch, tag, or SHA)'
+        required: false
+        type: string
+        default: ''
 
 # Note: concurrency control is handled by the calling workflow (pr_event_dispatch.yml)
 # to avoid deadlocks when used as a reusable workflow via workflow_call
@@ -51,6 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
 
       - name: Get RBE cluster keys
