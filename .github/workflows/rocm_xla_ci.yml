@@ -81,7 +81,7 @@ jobs:
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
-            --colors=true \
+            --color=yes \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
             //xla/...
 
@@ -93,6 +93,6 @@ jobs:
             --config=ci_multi_gpu \
             --strategy=TestRunner=local \
             --local_test_jobs=1 \
-            --colors=true \
+            --color=yes \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
             //xla/...
