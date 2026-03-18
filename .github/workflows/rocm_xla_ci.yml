@@ -27,6 +27,15 @@ on:
         required: false
         type: string
         default: ''
+      concurrency_group:
+        description: 'Concurrency group identifier (e.g., PR number or branch name)'
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: ${{ inputs.concurrency_group || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ !contains(github.ref, 'main') }}
 
 # Note: concurrency control is handled by the calling workflow (pr_event_dispatch.yml)
 # to avoid deadlocks when used as a reusable workflow via workflow_call
@@ -79,6 +88,7 @@ jobs:
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
+            --config=rocm_rbe \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
             --color=yes \
@@ -90,6 +100,7 @@ jobs:
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
+            --config=rocm_rbe \
             --config=ci_multi_gpu \
             --strategy=TestRunner=local \
             --local_test_jobs=1 \
