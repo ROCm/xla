@@ -55,9 +55,8 @@ std::string MemSyncScopeToString(triton::MemSyncScope scope) {
       return "cta";
     case triton::MemSyncScope::SYSTEM:
       return "system";
-    default:
-      return "unknown";
   }
+  LOG(FATAL) << "Unknown MemSyncScope: " << static_cast<int>(scope);
 }
 
 // Convert MemSemantic to string for function naming
@@ -71,9 +70,8 @@ std::string MemSemanticToString(triton::MemSemantic semantic) {
       return "release";
     case triton::MemSemantic::ACQUIRE_RELEASE:
       return "acq_rel";
-    default:
-      return "unknown";
   }
+  LOG(FATAL) << "Unknown MemSemantic: " << static_cast<int>(semantic);
 }
 
 // Convert Comparator to string for function naming
@@ -83,9 +81,8 @@ std::string ComparatorToString(Comparator comparator) {
       return "lt";
     case Comparator::EQ:
       return "eq";
-    default:
-      return "unknown";
   }
+  LOG(FATAL) << "Unknown Comparator: " << static_cast<int>(comparator);
 }
 
 // Lower AtomicWriteOp to tt.extern_elementwise.
@@ -101,6 +98,14 @@ LogicalResult LowerAtomicWriteOp(AtomicWriteOp atomic_write,
 
   triton::MemSemantic semantic = atomic_write.getMemSyncSemantic();
   triton::MemSyncScope scope = atomic_write.getMemSyncScope();
+
+  // Validate memory semantics (same as CUDA pass)
+  if (semantic != triton::MemSemantic::RELAXED &&
+      semantic != triton::MemSemantic::RELEASE) {
+    return rewriter.notifyMatchFailure(
+        atomic_write,
+        "AtomicWriteOp only supports RELAXED or RELEASE semantics");
+  }
 
   // Build function name: xla_atomic_write_<semantic>_<scope>
   std::string func_name =
@@ -130,22 +135,23 @@ LogicalResult LowerAtomicWriteOp(AtomicWriteOp atomic_write,
     auto value_tensor =
         triton::SplatOp::create(builder, result_tensor_type, value);
 
+    // Prepare operands for extern call
+    llvm::SmallVector<mlir::Value> operands = {ptr, value_tensor};
+
+    // If mask is provided, pass it as third argument
+    if (mask) {
+      operands.push_back(mask);
+    }
+
     // Create tt.extern_elementwise call
     // The function will perform atomic exchange and return the old value
     builder.create<triton::ExternElementwiseOp>(
         /*resultType=*/result_tensor_type,
-        /*srcs=*/mlir::ValueRange{ptr, value_tensor},
+        /*srcs=*/operands,
         /*libname=*/"",
         /*libpath=*/"",
         /*symbol=*/func_name,
         /*pure=*/false);
-
-    // If mask is provided, we need to handle it
-    // For now, we assume no mask or handle it in the implementation
-    if (mask) {
-      VLOG(3) << "LowerAtomicWriteOp: Mask provided but not yet handled in "
-                 "extern_elementwise";
-    }
   } else {
     // Scalar path: ptr is !tt.ptr<T>
     VLOG(3) << "LowerAtomicWriteOp: Scalar atomic write";
@@ -182,6 +188,14 @@ LogicalResult LowerAtomicSpinWaitOp(AtomicSpinWaitOp atomic_wait,
   triton::MemSyncScope scope = atomic_wait.getMemSyncScope();
   Comparator comparator = atomic_wait.getComparator();
 
+  // Validate memory semantics (same as CUDA pass)
+  if (semantic != triton::MemSemantic::RELAXED &&
+      semantic != triton::MemSemantic::ACQUIRE) {
+    return rewriter.notifyMatchFailure(
+        atomic_wait,
+        "AtomicSpinWaitOp only supports RELAXED or ACQUIRE semantics");
+  }
+
   // Build function name: xla_atomic_spin_wait_<semantic>_<scope>_<comparator>
   std::string func_name = absl::StrFormat(
       "xla_atomic_spin_wait_%s_%s_%s", MemSemanticToString(semantic),
@@ -207,22 +221,24 @@ LogicalResult LowerAtomicSpinWaitOp(AtomicSpinWaitOp atomic_wait,
   auto expected_tensor =
       triton::SplatOp::create(builder, result_tensor_type, expected);
 
+  // Prepare operands for extern call
+  llvm::SmallVector<mlir::Value> operands = {ptr, expected_tensor};
+
+  // If mask is provided, pass it as third argument
+  if (mask) {
+    operands.push_back(mask);
+  }
+
   // Create tt.extern_elementwise call
   // The function will spin-wait until the condition is met
   // It returns void (or a dummy value that we ignore)
   builder.create<triton::ExternElementwiseOp>(
       /*resultType=*/result_tensor_type,
-      /*srcs=*/mlir::ValueRange{ptr, expected_tensor},
+      /*srcs=*/operands,
       /*libname=*/"",
       /*libpath=*/"",
       /*symbol=*/func_name,
       /*pure=*/false);
-
-  // If mask is provided, we need to handle it
-  if (mask) {
-    VLOG(3) << "LowerAtomicSpinWaitOp: Mask provided but not yet handled in "
-               "extern_elementwise";
-  }
 
   rewriter.eraseOp(atomic_wait);
   return success();
