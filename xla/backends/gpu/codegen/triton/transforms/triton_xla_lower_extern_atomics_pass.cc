@@ -159,10 +159,18 @@ LogicalResult LowerAtomicWriteOp(AtomicWriteOp atomic_write,
     auto ptr_type = mlir::cast<triton::PointerType>(ptr.getType());
     auto elem_type = ptr_type.getPointeeType();
 
+    // Prepare operands for extern call
+    llvm::SmallVector<mlir::Value> operands = {ptr, value};
+
+    // If mask is provided, pass it as third argument
+    if (mask) {
+      operands.push_back(mask);
+    }
+
     // Create tt.extern_elementwise call
     builder.create<triton::ExternElementwiseOp>(
         /*resultType=*/elem_type,
-        /*srcs=*/mlir::ValueRange{ptr, value},
+        /*srcs=*/operands,
         /*libname=*/"",
         /*libpath=*/"",
         /*symbol=*/func_name,

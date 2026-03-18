@@ -16,7 +16,7 @@ limitations under the License.
 // ROCm-specific implementation of extern_elementwise atomic functions.
 // This pass runs in the Triton ROCm pipeline and inlines the implementations
 // of custom atomic functions by replacing llvm.call operations with actual
-// LLVM dialect operations (intrinsics, atomics, ...).
+// LLVM dialect operations (intrinsics, atomics, loops).
 
 #include <memory>
 #include <string>
@@ -44,13 +44,35 @@ std::string ParseSyncScope(const std::string& func_name) {
   // - "" (empty) = system scope (cross-device visibility)
   // - "agent" = GPU scope (single device)
   // - "workgroup" = CTA/block scope
-  if (func_name.find("_system") != std::string::npos) {
-    return "";  // System scope for cross-GPU visibility
-  } else if (func_name.find("_gpu") != std::string::npos) {
-    return "agent";
-  } else if (func_name.find("_cta") != std::string::npos) {
-    return "workgroup";
+
+  // Extract scope field by finding the last underscore before comparator (if
+  // any) For xla_atomic_write_release_system: scope is "system" For
+  // xla_atomic_spin_wait_acquire_system_lt: scope is "system" (before "_lt")
+
+  size_t last_underscore = func_name.rfind('_');
+  std::string name_without_comparator = func_name;
+
+  // Strip comparator suffix if present (_lt or _eq)
+  if (last_underscore != std::string::npos) {
+    std::string suffix = func_name.substr(last_underscore + 1);
+    if (suffix == "lt" || suffix == "eq") {
+      name_without_comparator = func_name.substr(0, last_underscore);
+      last_underscore = name_without_comparator.rfind('_');
+    }
   }
+
+  // Now extract the scope (last field)
+  if (last_underscore != std::string::npos) {
+    std::string scope = name_without_comparator.substr(last_underscore + 1);
+    if (scope == "system") {
+      return "";  // System scope for cross-GPU visibility
+    } else if (scope == "gpu") {
+      return "agent";
+    } else if (scope == "cta") {
+      return "workgroup";
+    }
+  }
+
   LOG(FATAL) << "Unable to parse syncscope from function name: " << func_name;
 }
 
@@ -60,6 +82,23 @@ bool EndsWithComparator(const std::string& func_name,
   if (func_name.size() < comparator.size()) return false;
   return func_name.compare(func_name.size() - comparator.size(),
                            comparator.size(), comparator) == 0;
+}
+
+// Helper to parse memory ordering from function name
+// Function names follow pattern: xla_atomic_*_<semantic>_<scope>[_<comparator>]
+LLVM::AtomicOrdering ParseAtomicOrdering(const std::string& func_name) {
+  // Map Triton semantics to LLVM atomic ordering
+  if (func_name.find("_relaxed_") != std::string::npos) {
+    return LLVM::AtomicOrdering::monotonic;  // LLVM's "relaxed"
+  } else if (func_name.find("_acquire_") != std::string::npos) {
+    return LLVM::AtomicOrdering::acquire;
+  } else if (func_name.find("_release_") != std::string::npos) {
+    return LLVM::AtomicOrdering::release;
+  } else if (func_name.find("_acq_rel_") != std::string::npos) {
+    return LLVM::AtomicOrdering::acq_rel;
+  }
+  LOG(FATAL) << "Unable to parse memory ordering from function name: "
+             << func_name;
 }
 
 // MLIR pass that inlines extern function calls with actual implementations
@@ -105,20 +144,25 @@ class TritonXLAImplementExternAtomicsROCmPass
 
       } else if (absl::StartsWith(callee_name, "xla_atomic_write_")) {
         // Replace with atomicrmw xchg
+        // Expected operand layout: [ptr, value, mask?]
+        // - operands[0]: address pointer
+        // - operands[1]: value to write
+        // - operands[2]: optional mask (present if size > 2)
         auto operands = call_op.getOperands();
         auto addr = operands[0];
         auto value = operands[1];
         mlir::Value mask = operands.size() > 2 ? operands[2] : mlir::Value{};
 
         std::string syncscope = ParseSyncScope(callee_name);
+        LLVM::AtomicOrdering ordering = ParseAtomicOrdering(callee_name);
 
         if (mask) {
           // Masked atomic: use conditional execution
           // if (mask != 0) { atomic_xchg } else { return 0 }
-          auto* current_block = call_op->getBlock();
-          auto* atomic_block = current_block->splitBlock(call_op);
-          auto* skip_block = atomic_block->splitBlock(call_op);
-          auto* exit_block = skip_block->splitBlock(call_op);
+          auto current_block = call_op->getBlock();
+          auto atomic_block = current_block->splitBlock(call_op);
+          auto skip_block = atomic_block->splitBlock(call_op);
+          auto exit_block = skip_block->splitBlock(call_op);
 
           // Current block: check mask and branch
           builder.setInsertionPointToEnd(current_block);
@@ -126,21 +170,25 @@ class TritonXLAImplementExternAtomicsROCmPass
           auto zero = LLVM::ConstantOp::create(builder, loc, i32_type,
                                                builder.getI32IntegerAttr(0));
           auto mask_nonzero = LLVM::ICmpOp::create(
-              builder, loc, LLVM::ICmpPredicate::ne, mask, zero);
+              builder, loc, LLVM::ICmpPredicate::ne, mask, zero->getResult(0));
           LLVM::CondBrOp::create(builder, loc, mask_nonzero->getResult(0),
-                                 atomic_block, skip_block);
+                                 static_cast<mlir::Block*>(atomic_block),
+                                 mlir::ValueRange{},
+                                 static_cast<mlir::Block*>(skip_block),
+                                 mlir::ValueRange{}, std::nullopt);
 
           // Atomic block: perform atomic exchange
           builder.setInsertionPointToStart(atomic_block);
           auto atomic_xchg = LLVM::AtomicRMWOp::create(
-              builder, loc, LLVM::AtomicBinOp::xchg, addr, value,
-              LLVM::AtomicOrdering::release, builder.getStringAttr(syncscope));
+              builder, loc, LLVM::AtomicBinOp::xchg, addr, value, ordering,
+              builder.getStringAttr(syncscope));
           LLVM::BrOp::create(builder, loc, atomic_xchg->getResults(),
                              exit_block);
 
           // Skip block: return zero
           builder.setInsertionPointToStart(skip_block);
-          LLVM::BrOp::create(builder, loc, mlir::ValueRange{zero}, exit_block);
+          LLVM::BrOp::create(builder, loc, mlir::ValueRange{zero->getResult(0)},
+                             exit_block);
 
           // Exit block: phi node to select result
           exit_block->addArgument(i32_type, loc);
@@ -150,8 +198,8 @@ class TritonXLAImplementExternAtomicsROCmPass
         } else {
           // Unmasked atomic: direct atomic exchange
           auto atomic_xchg = LLVM::AtomicRMWOp::create(
-              builder, loc, LLVM::AtomicBinOp::xchg, addr, value,
-              LLVM::AtomicOrdering::release, builder.getStringAttr(syncscope));
+              builder, loc, LLVM::AtomicBinOp::xchg, addr, value, ordering,
+              builder.getStringAttr(syncscope));
 
           call_op.replaceAllUsesWith(atomic_xchg->getResults());
           call_op.erase();
@@ -159,12 +207,17 @@ class TritonXLAImplementExternAtomicsROCmPass
 
       } else if (absl::StartsWith(callee_name, "xla_atomic_spin_wait_")) {
         // Replace with inline loop
+        // Expected operand layout: [ptr, expected, mask?]
+        // - operands[0]: address pointer
+        // - operands[1]: expected value to compare against
+        // - operands[2]: optional mask (present if size > 2)
         auto operands = call_op.getOperands();
         auto addr = operands[0];
         auto expected = operands[1];
         mlir::Value mask = operands.size() > 2 ? operands[2] : mlir::Value{};
 
         std::string syncscope = ParseSyncScope(callee_name);
+        LLVM::AtomicOrdering ordering = ParseAtomicOrdering(callee_name);
 
         // Check comparator suffix (more robust than substring search)
         bool is_lt = EndsWithComparator(callee_name, "_lt");
@@ -174,49 +227,54 @@ class TritonXLAImplementExternAtomicsROCmPass
         if (mask) {
           // Masked spin wait: check mask first, skip if mask is zero
           // if (mask == 0) goto done; else { spin wait loop }
-          auto* current_block = call_op->getBlock();
-          auto* loop_block = current_block->splitBlock(call_op);
-          auto* exit_block = loop_block->splitBlock(call_op);
+          auto current_block = call_op->getBlock();
+          auto loop_block = current_block->splitBlock(call_op);
+          auto exit_block = loop_block->splitBlock(call_op);
+
+          // Exit block: receives loaded value as argument (add before creating
+          // branches)
+          exit_block->addArgument(i32_type, loc);
 
           // Current block: check mask
           builder.setInsertionPointToEnd(current_block);
           auto zero = LLVM::ConstantOp::create(builder, loc, i32_type,
                                                builder.getI32IntegerAttr(0));
           auto mask_nonzero = LLVM::ICmpOp::create(
-              builder, loc, LLVM::ICmpPredicate::ne, mask, zero);
-          LLVM::CondBrOp::create(builder, loc, mask_nonzero->getResult(0),
-                                 loop_block, exit_block);
+              builder, loc, LLVM::ICmpPredicate::ne, mask, zero->getResult(0));
+          LLVM::CondBrOp::create(
+              builder, loc, mask_nonzero->getResult(0),
+              static_cast<mlir::Block*>(loop_block), mlir::ValueRange{},
+              static_cast<mlir::Block*>(exit_block),
+              mlir::ValueRange{zero->getResult(0)}, std::nullopt);
 
           // Loop block: spin wait
           builder.setInsertionPointToStart(loop_block);
           auto loaded = LLVM::LoadOp::create(
-              builder, loc, i32_type, addr, 0, false, false, false, false,
-              LLVM::AtomicOrdering::acquire, builder.getStringAttr(syncscope));
+              builder, loc, i32_type, addr, 4, false, false, false, false,
+              ordering, builder.getStringAttr(syncscope));
 
-          mlir::Value condition;
-          if (is_lt) {
-            condition =
-                LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ult,
-                                     loaded->getResult(0), expected)
-                    ->getResult(0);
-          } else {
-            condition =
-                LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
-                                     loaded->getResult(0), expected)
-                    ->getResult(0);
-          }
+          auto condition_op =
+              is_lt
+                  ? LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ult,
+                                         loaded->getResult(0), expected)
+                  : LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
+                                         loaded->getResult(0), expected);
 
-          LLVM::CondBrOp::create(builder, loc, condition, loop_block,
-                                 exit_block);
+          // Branch: continue loop or exit with loaded value
+          LLVM::CondBrOp::create(
+              builder, loc, condition_op->getResult(0),
+              static_cast<mlir::Block*>(loop_block), mlir::ValueRange{},
+              static_cast<mlir::Block*>(exit_block),
+              mlir::ValueRange{loaded->getResult(0)}, std::nullopt);
 
-          // Exit block
-          call_op.replaceAllUsesWith(loaded->getResults());
+          call_op.replaceAllUsesWith(
+              mlir::ValueRange{exit_block->getArgument(0)});
           call_op.erase();
         } else {
           // Unmasked spin wait: direct loop
-          auto* current_block = call_op->getBlock();
-          auto* loop_block = current_block->splitBlock(call_op);
-          auto* exit_block = loop_block->splitBlock(call_op);
+          auto current_block = call_op->getBlock();
+          auto loop_block = current_block->splitBlock(call_op);
+          auto exit_block = loop_block->splitBlock(call_op);
 
           // Entry: branch to loop
           builder.setInsertionPointToEnd(current_block);
@@ -225,27 +283,27 @@ class TritonXLAImplementExternAtomicsROCmPass
           // Loop: atomic load + compare + conditional branch
           builder.setInsertionPointToStart(loop_block);
           auto loaded = LLVM::LoadOp::create(
-              builder, loc, i32_type, addr, 0, false, false, false, false,
-              LLVM::AtomicOrdering::acquire, builder.getStringAttr(syncscope));
+              builder, loc, i32_type, addr, 4, false, false, false, false,
+              ordering, builder.getStringAttr(syncscope));
 
-          mlir::Value condition;
-          if (is_lt) {
-            condition =
-                LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ult,
-                                     loaded->getResult(0), expected)
-                    ->getResult(0);
-          } else {
-            condition =
-                LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
-                                     loaded->getResult(0), expected)
-                    ->getResult(0);
-          }
+          auto condition_op =
+              is_lt
+                  ? LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ult,
+                                         loaded->getResult(0), expected)
+                  : LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
+                                         loaded->getResult(0), expected);
 
-          LLVM::CondBrOp::create(builder, loc, condition, loop_block,
-                                 exit_block);
+          // Branch: continue loop or exit with loaded value
+          LLVM::CondBrOp::create(
+              builder, loc, condition_op->getResult(0),
+              static_cast<mlir::Block*>(loop_block), mlir::ValueRange{},
+              static_cast<mlir::Block*>(exit_block),
+              mlir::ValueRange{loaded->getResult(0)}, std::nullopt);
 
-          // Exit: use loaded value as result
-          call_op.replaceAllUsesWith(loaded->getResults());
+          // Exit block: receives loaded value as argument
+          exit_block->addArgument(i32_type, loc);
+          call_op.replaceAllUsesWith(
+              mlir::ValueRange{exit_block->getArgument(0)});
           call_op.erase();
         }
       }
