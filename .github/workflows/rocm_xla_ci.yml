@@ -28,6 +28,14 @@ on:
 jobs:
   execute-xla-ut:
     runs-on: linux-mi250-4
+    strategy:
+      fail-fast: false
+      matrix:
+        mode:
+          - {name: "default", configs: ["--config=rocm_ci"]}
+          - {name: "asan", configs: ["--config=rocm_ci", "--config=asan"]}
+          - {name: "tsan", configs: ["--config=rocm_ci", "--config=tsan"]}
+          - {name: "hermetic", configs: ["--config=rocm_ci_hermetic"]}
     container:
       image: rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa
       options: >-
@@ -73,19 +81,20 @@ jobs:
       - name: ROCm info
         run: /opt/rocm/bin/rocminfo
 
-      - name: Test XLA [single_gpu]
+      - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         run: |
-          build_tools/rocm/execute_ci_build.sh \
+          build_tools/rocm/run_xla_ci_build.sh \
+            ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_single_gpu \
-            --local_test_jobs=2 \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
+            --local_test_jobs=4 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}
 
-      - name: Test XLA [multi_gpu]
+      - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always()
         run: |
-          build_tools/rocm/execute_ci_build.sh \
+          build_tools/rocm/run_xla_ci_build.sh \
+            ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_multi_gpu \
             --strategy=TestRunner=local \
-            --local_test_jobs=2 \
+            --local_test_jobs=1 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}
