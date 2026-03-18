@@ -27,3 +27,5 @@ jobs:
             -f 'client_payload[pull_number]=${{ github.event.pull_request.number }}'
   pr-check:
     uses: ROCm/xla/.github/workflows/rocm_xla_ci.yml@rocm-dev-infra
+    with:
+      ref: ${{ github.event.pull_request.head.sha }}
