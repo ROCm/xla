@@ -94,7 +94,7 @@ jobs:
             --color=yes \
             --spawn_strategy=local \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
-            //xla/...
+            --config=xla_sgpu \
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always()
@@ -108,4 +108,4 @@ jobs:
             --local_test_jobs=1 \
             --color=yes \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
-            //xla/...
+            --config=xla_mgpu \
