@@ -26,4 +26,4 @@ jobs:
             -f event_type=claude-review \
             -f 'client_payload[pull_number]=${{ github.event.pull_request.number }}'
   pr-check:
-    uses: ROCm/xla/.github/workflows/rocm_xla_ci.yml@add_xla_pr_check_workflow
+    uses: ROCm/xla/.github/workflows/rocm_xla_ci.yml@rocm-dev-infra
