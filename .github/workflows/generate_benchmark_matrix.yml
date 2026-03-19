@@ -80,7 +80,6 @@ jobs:
                 --nobuild_tests_only \
                 --profile=profile.json.gz \
                 --flaky_test_attempts=3 \
-                --jobs=150 \
                 --bes_backend="" \
                 //xla/tools/benchmarks/utils:generate_benchmark_matrices_main
           if [ $? -ne 0 ]; then
