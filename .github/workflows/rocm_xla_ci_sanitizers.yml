@@ -13,42 +13,30 @@
 # limitations under the License.
 # ============================================================================
 
-name: CI ROCm
+name: CI ROCm Sanitizers
+
 permissions:
   contents: read
+
 on:
-  push:
-    branches:
-      - main
-  workflow_call:
-    inputs:
-      ref:
-        description: 'Git ref to checkout (branch, tag, or SHA)'
-        required: false
-        type: string
-        default: ''
-      concurrency_group:
-        description: 'Concurrency group identifier (e.g., PR number or branch name)'
-        required: false
-        type: string
-        default: ''
+  pull_request_target:
+    types: [labeled]
 
 concurrency:
-  group: ${{ inputs.concurrency_group || format('{0}-{1}', github.workflow, github.ref) }}
-  cancel-in-progress: ${{ !contains(github.ref, 'main') }}
-
-# Note: concurrency control is handled by the calling workflow (pr_event_dispatch.yml)
-# to avoid deadlocks when used as a reusable workflow via workflow_call
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
-  execute-xla-ut:
+  execute-xla-ut-sanitizers:
+    # Only run if the "sanitizers" label was added
+    if: github.event.label.name == 'sanitizers'
     runs-on: linux-mi250-4
     strategy:
       fail-fast: false
       matrix:
         mode:
-          - {name: "default", configs: ["--config=rocm_ci"]}
-          - {name: "hermetic", configs: ["--config=rocm_ci_hermetic"]}
+          - {name: "asan", configs: ["--config=rocm_ci", "--config=asan"]}
+          - {name: "tsan", configs: ["--config=rocm_ci", "--config=tsan"]}
     container:
       image: rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa
       options: >-
@@ -64,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - name: Get RBE cluster keys
