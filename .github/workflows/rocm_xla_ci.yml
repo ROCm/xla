@@ -32,6 +32,11 @@ on:
         required: false
         type: string
         default: ''
+      pr_labels:
+        description: 'JSON array of PR labels'
+        required: false
+        type: string
+        default: '[]'
 
 concurrency:
   group: ${{ inputs.concurrency_group || format('{0}-{1}', github.workflow, github.ref) }}
@@ -43,6 +48,11 @@ concurrency:
 jobs:
   execute-xla-ut:
     runs-on: linux-mi250-4
+    # Skip asan/tsan builds unless PR has the "sanitizers" label
+    if: |
+      matrix.mode.name == 'default' ||
+      matrix.mode.name == 'hermetic' ||
+      contains(fromJSON(inputs.pr_labels), 'sanitizers')
     strategy:
       fail-fast: false
       matrix:

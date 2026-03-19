@@ -6,7 +6,7 @@ name: Internal CI
 
 on:
   pull_request_target:
-    types: [opened, synchronize]
+    types: [opened, synchronize, labeled]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -30,5 +30,6 @@ jobs:
     with:
       ref: ${{ github.event.pull_request.head.sha }}
       concurrency_group: ${{ format('CI ROCm-PR-{0}', github.event.pull_request.number) }}
+      pr_labels: ${{ toJSON(github.event.pull_request.labels.*.name) }}
     secrets: inherit
 
