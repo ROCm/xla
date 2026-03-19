@@ -73,7 +73,6 @@ jobs:
                 --test_tag_filters=-no_oss,-gpu,-requires-gpu-nvidia,-requires-gpu-amd \
                 --config=warnings \
                 --config=nonccl \
-                --config=rbe_linux_cpu \
                 --color=yes \
                 --test_output=errors \
                 --verbose_failures \
@@ -82,7 +81,7 @@ jobs:
                 --profile=profile.json.gz \
                 --flaky_test_attempts=3 \
                 --jobs=150 \
-                --bes_upload_mode=fully_async \
+                --bes_backend="" \
                 //xla/tools/benchmarks/utils:generate_benchmark_matrices_main
           if [ $? -ne 0 ]; then
              echo "::error::Failed to build generate_benchmark_matrices_main"
