@@ -275,8 +275,9 @@ absl::Status AMDGPUCompiler::AddConvAndGemmAutotuningPasses(
     backends.push_back(std::make_unique<CublasLtBackend>(
         stream_exec, &debug_options, this, target_config));
   }
-  backends.push_back(std::make_unique<MIOpenBackend>(
-      stream_exec, &debug_options, this, target_config));
+  backends.push_back(
+      std::make_unique<MIOpenBackend>(stream_exec, &debug_options, this,
+                                      target_config, options.device_allocator));
 
   auto should_autotune = +[](const HloInstruction& instruction) -> bool {
     return instruction.opcode() == HloOpcode::kCustomCall &&

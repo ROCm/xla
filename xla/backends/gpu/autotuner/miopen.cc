@@ -48,7 +48,6 @@ limitations under the License.
 #include "xla/stream_executor/scratch_allocator.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
-#include "xla/stream_executor/stream_executor_memory_allocator.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/protobuf/dnn.pb.h"
@@ -268,6 +267,7 @@ absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
 GetConvolutionCustomCallConfigs(const HloCustomCallInstruction* instr,
                                 const HloModule* module,
                                 se::StreamExecutor* stream_executor,
+                                se::DeviceAddressAllocator* allocator,
                                 se::Stream* stream) {
   CHECK(instr->custom_call_target() != kCudnnConvForwardGraphCallTarget);
   ASSIGN_OR_RETURN(GpuConvConfig gpu_conv_config, GetGpuConvConfig(instr));
@@ -279,10 +279,10 @@ GetConvolutionCustomCallConfigs(const HloCustomCallInstruction* instr,
       se::dnn::DataType output_type,
       GetDNNDataTypeFromPrimitiveType(gpu_conv_config.output_type));
   se::dnn::DnnSupport* dnn = stream_executor->AsDnn();
-  se::StreamExecutorMemoryAllocator allocator(stream_executor);
+  std::unique_ptr<se::Stream> owned_stream;
   if (stream == nullptr) {
-    TF_ASSIGN_OR_RETURN(stream,
-                        allocator.GetStream(stream_executor->device_ordinal()));
+    TF_ASSIGN_OR_RETURN(owned_stream, stream_executor->CreateStream());
+    stream = owned_stream.get();
   }
   bool allow_tf32 = absl::c_all_of(
       instr->precision_config().operand_precision(),
@@ -292,7 +292,7 @@ GetConvolutionCustomCallConfigs(const HloCustomCallInstruction* instr,
                                          /*require_command_buffer=*/false};
 
   se::OwningScratchAllocator<> scratch_allocator(
-      stream_executor->device_ordinal(), &allocator);
+      stream_executor->device_ordinal(), allocator);
 
   const auto initialize_buffer = [stream](se::DeviceAddressBase buffer) {
     // Although we don't have evidence this matters, zero out the buffers
@@ -351,7 +351,8 @@ GetConvolutionCustomCallConfigs(const HloCustomCallInstruction* instr,
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
 GetFusedConvolutionCustomCallConfigs(const HloCustomCallInstruction* instr,
                                      const HloModule* module,
-                                     se::StreamExecutor* stream_executor) {
+                                     se::StreamExecutor* stream_executor,
+                                     se::DeviceAddressAllocator* allocator) {
   ASSIGN_OR_RETURN(GpuConvConfig gpu_conv_config, GetGpuConvConfig(instr));
   ASSIGN_OR_RETURN(se::dnn::DataType input_type,
                    GetDNNDataTypeFromPrimitiveType(gpu_conv_config.input_type));
@@ -409,7 +410,7 @@ GetFusedConvolutionCustomCallConfigs(const HloCustomCallInstruction* instr,
 
   return GetConvolutionCustomCallConfigs(
       static_cast<HloCustomCallInstruction*>(new_conv.get()), module,
-      stream_executor, owned_stream.get());
+      stream_executor, allocator, owned_stream.get());
 }
 
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
@@ -418,11 +419,12 @@ MIOpenBackend::GetSupportedConfigs(const HloInstruction& instr) {
     auto custom_call_instr = Cast<HloCustomCallInstruction>(&instr);
     if (IsCustomCallToDnnFusedConvolution(*custom_call_instr)) {
       return GetFusedConvolutionCustomCallConfigs(
-          custom_call_instr, custom_call_instr->GetModule(), stream_executor());
+          custom_call_instr, custom_call_instr->GetModule(), stream_executor(),
+          allocator_);
     }
     return GetConvolutionCustomCallConfigs(
         custom_call_instr, custom_call_instr->GetModule(), stream_executor(),
-        /* stream */ nullptr);
+        allocator_, /* stream */ nullptr);
   }
   return std::vector<std::unique_ptr<BackendConfig>>();
 }
