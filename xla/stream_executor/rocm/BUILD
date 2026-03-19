@@ -51,6 +51,32 @@ xla_cc_test(
 )
 
 cc_library(
+    name = "rocm_core_info_table",
+    srcs = ["rocm_core_info_table.cc"],
+    hdrs = ["rocm_core_info_table.h"],
+    deps = [
+        ":rocm_compute_capability",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/container:flat_hash_map",
+    ],
+)
+
+xla_cc_test(
+    name = "rocm_core_info_table_test",
+    srcs = ["rocm_core_info_table_test.cc"],
+    deps = [
+        ":rocm_compute_capability",
+        ":rocm_core_info_table",
+        "//xla:xla_data_proto_cc",
+        "//xla/stream_executor:device_description",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "rocm_context",
     srcs = ["rocm_context.cc"],
     hdrs = ["rocm_context.h"],
@@ -145,7 +171,9 @@ cc_library(
     ],
     deps = [
         ":rocm_command_buffer",
+        ":rocm_compute_capability",
         ":rocm_context",
+        ":rocm_core_info_table",
         ":rocm_driver_wrapper",
         ":rocm_event",
         ":rocm_kernel",
