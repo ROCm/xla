@@ -3261,9 +3261,10 @@ absl::Status GpuCompiler::AddConvAndGemmAutotuningPass(
     const se::SemanticVersion& toolkit_version,
     const DebugOptions& debug_options, mlir::MLIRContext* mlir_context,
     HloCostAnalysis::ShapeSizeFunction shape_size_fn) {
-  TF_ASSIGN_OR_RETURN(std::vector<std::unique_ptr<CodegenBackend>> backends,
-                      GetCodegenBackends(stream_exec, target_config,
-                                         debug_options, mlir_context));
+  TF_ASSIGN_OR_RETURN(
+      std::vector<std::unique_ptr<CodegenBackend>> backends,
+      GetCodegenBackends(stream_exec, options.device_allocator, target_config,
+                         debug_options, mlir_context));
 
   bool do_not_autotune_cublas_and_cudnn =
       debug_options.xla_gpu_experimental_disable_binary_libraries() ||
