@@ -629,7 +629,7 @@ TEST(CommandBufferConversionPassTest, DontConvertIfNotMinGraphSize) {
 }
 
 TEST(CommandBufferConversionPassTest, ConvertWhileThunk) {
-  if(IsRocm()) {
+  if (IsRocm()) {
     GTEST_SKIP() << "Graph conditionals are not yet supported on HIP graphs";
   }
   CommandBufferConversionPass pass{"test"};
@@ -743,7 +743,7 @@ TEST(CommandBufferConversionPassTest,
 }
 
 TEST(CommandBufferConversionPassTest, ConvertWhileThunkWithAsyncPair) {
-  if(IsRocm()) {
+  if (IsRocm()) {
     GTEST_SKIP() << "Graph conditionals are not yet supported on HIP graphs";
   }
   CommandBufferConversionPass pass{"test"};
