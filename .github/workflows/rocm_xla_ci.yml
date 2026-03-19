@@ -48,19 +48,14 @@ concurrency:
 jobs:
   execute-xla-ut:
     runs-on: linux-mi250-4
-    # Skip asan/tsan builds unless PR has the "sanitizers" label
-    if: |
-      matrix.mode.name == 'default' ||
-      matrix.mode.name == 'hermetic' ||
-      contains(fromJSON(inputs.pr_labels), 'sanitizers')
     strategy:
       fail-fast: false
       matrix:
         mode:
-          - {name: "default", configs: ["--config=rocm_ci"]}
-          - {name: "asan", configs: ["--config=rocm_ci", "--config=asan"]}
-          - {name: "tsan", configs: ["--config=rocm_ci", "--config=tsan"]}
-          - {name: "hermetic", configs: ["--config=rocm_ci_hermetic"]}
+          - {name: "default", configs: ["--config=rocm_ci"], skip_without_label: false}
+          - {name: "asan", configs: ["--config=rocm_ci", "--config=asan"], skip_without_label: true}
+          - {name: "tsan", configs: ["--config=rocm_ci", "--config=tsan"], skip_without_label: true}
+          - {name: "hermetic", configs: ["--config=rocm_ci_hermetic"], skip_without_label: false}
     container:
       image: rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa
       options: >-
@@ -95,6 +90,10 @@ jobs:
         run: /opt/rocm/bin/rocminfo
 
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
+        # Skip sanitizer builds unless PR has "sanitizers" label
+        if: |
+          !matrix.mode.skip_without_label ||
+          contains(fromJSON(inputs.pr_labels), 'sanitizers')
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
@@ -107,7 +106,12 @@ jobs:
             --config=xla_sgpu \
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
-        if: always()
+        # Skip sanitizer builds unless PR has "sanitizers" label
+        if: |
+          always() && (
+            !matrix.mode.skip_without_label ||
+            contains(fromJSON(inputs.pr_labels), 'sanitizers')
+          )
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
