@@ -43,8 +43,8 @@ on:
 jobs:
   generate:
     name: Generate Matrix (${{ inputs.workflow_type }})
-    runs-on: linux-x86-n2-64
-    container: us-docker.pkg.dev/ml-oss-artifacts-published/ml-public-container/ml-build:latest
+    runs-on: linux-mi250-4
+    container: rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa
     outputs:
       matrix_json_output: ${{ steps.run_generator.outputs.matrix_json }}
     defaults:
