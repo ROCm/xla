@@ -44,6 +44,7 @@ using ::mlir::MLIRContext;
 
 std::vector<std::unique_ptr<CodegenBackend>> GetCodegenBackendsForROCm(
     stream_executor::StreamExecutor* stream_executor,
+    stream_executor::DeviceAddressAllocator* device_allocator,
     const DebugOptions* debug_options, Compiler* compiler,
     const Compiler::GpuTargetConfig* target_config, const AliasInfo* alias_info,
     MLIRContext* mlir_context,
@@ -51,8 +52,9 @@ std::vector<std::unique_ptr<CodegenBackend>> GetCodegenBackendsForROCm(
   std::vector<std::unique_ptr<CodegenBackend>> backends;
   backends.push_back(std::make_unique<TritonBackend>(
       debug_options, compiler, target_config, alias_info, mlir_context));
-  backends.push_back(std::make_unique<MIOpenBackend>(
-      stream_executor, debug_options, compiler, target_config));
+  backends.push_back(
+      std::make_unique<MIOpenBackend>(stream_executor, debug_options, compiler,
+                                      target_config, device_allocator));
   backends.push_back(std::make_unique<RocblasBackend>(
       stream_executor, debug_options, compiler, target_config));
   backends.push_back(std::make_unique<HipblasLtBackend>(
