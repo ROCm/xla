@@ -259,6 +259,7 @@ bool AMDGPUCompiler::RequiresCollectiveScheduleLinearizer(
 absl::StatusOr<std::vector<std::unique_ptr<CodegenBackend>>>
 AMDGPUCompiler::GetCodegenBackends(
     se::StreamExecutor* stream_exec,
+    se::DeviceAddressAllocator* device_allocator,
     const Compiler::GpuTargetConfig* target_config,
     const DebugOptions& debug_options, mlir::MLIRContext* mlir_context) {
   std::vector<std::unique_ptr<CodegenBackend>> backends;
@@ -292,7 +293,7 @@ AMDGPUCompiler::GetCodegenBackends(
 
   if (is_backend_enabled(DebugOptions::AUTOTUNE_BACKEND_MIOPEN)) {
     backends.push_back(std::make_unique<MIOpenBackend>(
-        stream_exec, &debug_options, this, target_config));
+        stream_exec, &debug_options, this, target_config, device_allocator));
   }
 
   if (is_backend_enabled(DebugOptions::AUTOTUNE_BACKEND_ROCBLAS)) {
@@ -428,9 +429,10 @@ absl::Status AMDGPUCompiler::AddConvAndGemmAutotuningPass(
     const se::SemanticVersion& toolkit_version,
     const DebugOptions& debug_options, mlir::MLIRContext* mlir_context,
     HloCostAnalysis::ShapeSizeFunction shape_size_fn) {
-  TF_ASSIGN_OR_RETURN(std::vector<std::unique_ptr<CodegenBackend>> backends,
-                      GetCodegenBackends(stream_exec, target_config,
-                                         debug_options, mlir_context));
+  TF_ASSIGN_OR_RETURN(
+      std::vector<std::unique_ptr<CodegenBackend>> backends,
+      GetCodegenBackends(stream_exec, options.device_allocator, target_config,
+                         debug_options, mlir_context));
 
   bool do_not_autotune_cublas_and_cudnn =
       debug_options.xla_gpu_experimental_disable_binary_libraries() ||
