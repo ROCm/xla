@@ -2435,7 +2435,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                                          b_dtype, output_dtype})) {
       return true;
     }
-    const TypeCombinations supported_type_combinations = {
+    const TypeCombinations core_type_combinations = {
         // Other data types:
         {ComputationType::kF16, DataType::kHalf, PrimitiveType::F16,
          PrimitiveType::F16, DataType::kHalf},
@@ -2455,22 +2455,26 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
          PrimitiveType::F32, DataType::kFloat},
     };
 
-    if (absl::c_linear_search(supported_type_combinations,
-                              std::make_tuple(compute_type, scale_type, a_dtype,
-                                              b_dtype, output_dtype))) {
-      return true;
-    }
-
-    const TypeCombinations non_mi200_type_combinations = {
+    const TypeCombinations extended_type_combinations = {
         // Type combinations not supported only by mi200
         {ComputationType::kF32, DataType::kFloat, PrimitiveType::BF16,
          PrimitiveType::BF16, DataType::kFloat},
         {ComputationType::kF32, DataType::kFloat, PrimitiveType::F16,
          PrimitiveType::F16, DataType::kFloat}};
 
-    if ((!gpu_version_.IsRocm() ||
-         !gpu_version_.rocm_compute_capability()->gfx9_mi200()) &&
-        absl::c_linear_search(non_mi200_type_combinations,
+    const bool is_cuda = gpu_version_.IsCuda();
+    const bool is_rocm = gpu_version_.IsRocm();
+    const bool is_mi200 =
+        is_rocm && gpu_version_.rocm_compute_capability()->gfx9_mi200();
+
+    if (absl::c_linear_search(core_type_combinations,
+                              std::make_tuple(compute_type, scale_type, a_dtype,
+                                              b_dtype, output_dtype))) {
+      return true;
+    }
+
+    if ((is_cuda || !is_mi200) &&
+        absl::c_linear_search(extended_type_combinations,
                               std::make_tuple(compute_type, scale_type, a_dtype,
                                               b_dtype, output_dtype))) {
       return true;

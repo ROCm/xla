@@ -1350,8 +1350,7 @@ ENTRY test {
   bool is_mi200 =
       IsRocm() && Capability().rocm_compute_capability()->gfx9_mi200();
   // Mi200 does not support given type combination
-  auto kCustomCallTarget =
-      !IsRocm() || !is_mi200 ? CustomCallTarget() : "__cublas$gemm";
+  auto kCustomCallTarget = is_mi200 ? "__cublas$gemm" : CustomCallTarget();
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(hlo_text));
   GemmRewriterOptions options;
