@@ -23,7 +23,6 @@ ${SCRIPT_DIR}/run_xla_ci_build.sh \
     --spawn_strategy=local \
     --repo_env=REMOTE_GPU_TESTING=1 \
     --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
-    --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
     --remote_download_outputs=minimal \
     --grpc_keepalive_time=30s \
     --test_sharding_strategy=disabled \
