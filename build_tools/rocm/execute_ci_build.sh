@@ -5,7 +5,7 @@ set -e
 SCRIPT_DIR=$(dirname $0)
 
 EXCLUDED_TESTS=(
-    HostMemoryAllocateTest.Numa          # numa tests will fail on rbe
+    HostMemoryAllocateTest.Numa # numa tests will fail on rbe
 )
 
 TEST_TARGETS_SGPU=(
@@ -66,7 +66,7 @@ done
 
 ${SCRIPT_DIR}/run_xla_ci_build.sh \
     --config=rocm_ci \
-    --config=rocm_rbe \
+    --config=rocm_rbe_dynamic \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
     --execution_log_compact_file=execution_log.binpb.zst \
@@ -78,7 +78,10 @@ ${SCRIPT_DIR}/run_xla_ci_build.sh \
     --grpc_keepalive_time=30s \
     --test_sharding_strategy=disabled \
     --test_verbose_timeout_warnings \
-    --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
+    --test_filter=-$(
+        IFS=:
+        echo "${EXCLUDED_TESTS[*]}"
+    ) \
     --curses=no \
     --color=yes \
     $@ \
