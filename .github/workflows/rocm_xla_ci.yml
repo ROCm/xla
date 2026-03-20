@@ -65,11 +65,11 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Fetch execute_ci_build.sh from rocm-dev-infram
         run: |
-          wget -O build_tools/rocm/execute_ci_build.sh https://raw.githubusercontent.com/ROCm/xla/rocm-dev-infram/build_tools/rocm/execute_ci_build.sh
+          wget -O build_tools/rocm/execute_ci_build.sh https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/execute_ci_build.sh
           chmod +x build_tools/rocm/execute_ci_build.sh
 
       - name: Get RBE cluster keys
