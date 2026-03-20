@@ -63,7 +63,7 @@ jobs:
           persist-credentials: false
 
       - name: Configure OpenXLA
-        run: "echo \"Configuring OpenXLA for CPU to build the generator tool...\"\nif [ -f \"./configure.py\" ]; then\n  ./configure.py --backend=CPU \nelse\n  echo \"::warning::configure.py not found. Assuming C++ tool build doesn't require it or is pre-configured.\"\nfi\n"
+        run: "echo \"Configuring OpenXLA for CPU to build the generator tool...\"\nif [ -f \"./configure.py\" ]; then\n  ./configure.py --backend=CPU --clang_path=/lib/llvm-18/bin/clang-18 \nelse\n  echo \"::warning::configure.py not found. Assuming C++ tool build doesn't require it or is pre-configured.\"\nfi\n"
       # TODO(juliagmt): Use build.py to build the binary.
       - name: Build generate_benchmark_matrices_main
         run: |
