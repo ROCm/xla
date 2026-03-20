@@ -81,6 +81,7 @@ jobs:
             --config=ci_single_gpu \
             --local_test_jobs=4 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
+            --config=xla_sgpu
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always()
@@ -90,3 +91,4 @@ jobs:
             --config=ci_multi_gpu \
             --local_test_jobs=1 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
+            --config=xla_mgpu
