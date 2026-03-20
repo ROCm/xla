@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   claude-review:
-    if: github.event.label.name == 'claude-review'
+    if: github.event.label.name == 'claude-review' || github.event_name == 'workflow_dispatch'
     runs-on: build-only-xla
     permissions:
       contents: read
