@@ -362,10 +362,9 @@ std::optional<TargetDeviceFunctionID> GetTargetDeviceFunctionID(HloOpcode op) {
 
 bool HasF16Implementation(TargetDeviceFunctionID func_id,
                           llvm::Triple target_triple) {
-  if(target_triple.isAMDGPU() &&
-     (func_id != TargetDeviceFunctionID::kHypot &&
-      func_id != TargetDeviceFunctionID::kSqrt)) {
-      return true;
+  if (target_triple.isAMDGPU() && (func_id != TargetDeviceFunctionID::kHypot &&
+                                   func_id != TargetDeviceFunctionID::kSqrt)) {
+    return true;
   }
   return false;
 }

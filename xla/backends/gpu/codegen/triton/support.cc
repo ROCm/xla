@@ -66,7 +66,7 @@ CodegenDecision IsTritonSupportedDataType(
         return CodegenDecision::Allow();
       }
       return CodegenDecision::Forbid(
-          "Unsupported GPU architecture for F8E4M3FN.");
+          "Unsupported GPU architecture for F8E4M3FN/F8E5M2.");
     case F8E5M2FNUZ:
     case F8E4M3FNUZ:
       if (gpu_version.IsCuda()) {
@@ -322,7 +322,7 @@ CodegenDecision CanTritonHandleReduce(
       (gpu_version.IsRocm() &&
        reduce.shape().element_type() == PrimitiveType::F8E4M3FNUZ)) {
     return CodegenDecision::Forbid(
-        "F8E4M3FN and F8E5M2 are not supported for reductions.");
+        "F8 types are not supported for reductions.");
   }
 
   bool is_triton_supported_reduction_computation = absl::c_all_of(
@@ -756,15 +756,14 @@ CodegenDecision IsTritonSupportedInstructionImpl(
 
   if (instr.opcode() == HloOpcode::kIota) {
     PrimitiveType element_type = instr.shape().element_type();
-    return CodegenDecision(
-        element_type != PrimitiveType::F8E4M3FN &&
-            element_type != PrimitiveType::F8E5M2 &&
-            !(gpu_version.IsRocm() &&
-              element_type == PrimitiveType::F8E4M3FNUZ) &&
-            !(gpu_version.IsRocm() &&
-              element_type == PrimitiveType::F8E5M2FNUZ) &&
-            element_type != PrimitiveType::S4,
-        "F8E4M3FN, F8E5M2 and S4 are not supported for iota.");
+    return CodegenDecision(element_type != PrimitiveType::F8E4M3FN &&
+                               element_type != PrimitiveType::F8E5M2 &&
+                               !(gpu_version.IsRocm() &&
+                                 element_type == PrimitiveType::F8E4M3FNUZ) &&
+                               !(gpu_version.IsRocm() &&
+                                 element_type == PrimitiveType::F8E5M2FNUZ) &&
+                               element_type != PrimitiveType::S4,
+                           "F8 and S4 are not supported for iota.");
   }
 
   switch (instr.opcode()) {
