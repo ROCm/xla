@@ -55,6 +55,19 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
+      - name: Checkout rocm-dev-infram branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ROCm/xla
+          ref: rocm-dev-infram
+          path: rocm-dev-infram-checkout
+          persist-credentials: false
+
+      - name: Mount execute_ci_build.sh from rocm-dev-infram
+        run: |
+          cp rocm-dev-infram-checkout/build_tools/rocm/execute_ci_build.sh build_tools/rocm/execute_ci_build.sh
+          chmod +x build_tools/rocm/execute_ci_build.sh
+
       - name: Get RBE cluster keys
         env:
           RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
@@ -72,7 +85,7 @@ jobs:
 
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         run: |
-          build_tools/rocm/run_xla_ci_build.sh \
+          build_tools/rocm/execute_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=rocm_rbe \
             --config=ci_single_gpu \
@@ -90,7 +103,7 @@ jobs:
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always()
         run: |
-          build_tools/rocm/run_xla_ci_build.sh \
+          build_tools/rocm/execute_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=rocm_rbe \
             --config=ci_multi_gpu \
