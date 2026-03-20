@@ -4,12 +4,7 @@ set -e
 
 SCRIPT_DIR=$(dirname $0)
 
-EXCLUDED_TESTS=(
-    HostMemoryAllocateTest.Numa # numa tests will fail on rbe
-)
-
 TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh)
-TEST_TARGETS=("//xla/...")
 for arg in "$@"; do
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
         TAG_FILTERS="" # in mgpu we have a standard set of tests from the xla_mgpu config
@@ -33,10 +28,6 @@ ${SCRIPT_DIR}/run_xla_ci_build.sh \
     --grpc_keepalive_time=30s \
     --test_sharding_strategy=disabled \
     --test_verbose_timeout_warnings \
-    --test_filter=-$(
-        IFS=:
-        echo "${EXCLUDED_TESTS[*]}"
-    ) \
     --curses=no \
     --color=yes \
     $@
