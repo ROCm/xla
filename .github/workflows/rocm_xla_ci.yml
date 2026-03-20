@@ -21,77 +21,11 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.ref != 'main' }}
 
 jobs:
-  execute-xla-ut:
-    runs-on: linux-x64-mi210-64-2gpu-amd
-    env:
-      DOCKER_IMAGE: rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa
-      CONTAINER_NAME: xla-runner
-    steps:
-      # Pre-clean up in case a previous run crashed
-      - name: Cleanup container
-        run: docker rm -f ${{ env.CONTAINER_NAME }} || true
-
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Checkout rocAutomation using local creds
-        run: |
-          rm -rf rocAutomation
-          git clone -b jenkins-pipelines https://github.com/ROCm/rocAutomation.git rocAutomation
-
-      - name: Start Container
-        run: |
-          docker run -dt \
-            --name ${{ env.CONTAINER_NAME }} \
-            --init \
-            --network=host \
-            --device=/dev/dri \
-            --device=/dev/kfd \
-            --group-add $(getent group render | cut -d: -f3) \
-            --group-add $(getent group video | cut -d: -f3) \
-            --ipc=host \
-            --shm-size=16G \
-            --cap-add=SYS_PTRACE \
-            --security-opt=seccomp=unconfined \
-            --tmpfs /root/.cache/bazel:rw,exec,size=80g \
-            -v ${{ github.workspace }}:/workspace \
-            -v ${{ github.workspace }}/rocAutomation/resources/certificates:/tf/certificates:ro \
-            -v ${{ github.workspace }}/rocAutomation/resources/upstream-xla-data/rocm_tag_filters.sh:/workspace/build_tools/rocm/rocm_tag_filters.sh:ro \
-            -v ${{ github.workspace }}/rocAutomation/resources/upstream-xla-data/execute_ci_build.sh:/workspace/build_tools/rocm/execute_ci_build.sh:ro \
-            -w /workspace \
-            ${{ env.DOCKER_IMAGE }}
-
-      - name: CPU Info
-        run: |
-          docker exec ${{ env.CONTAINER_NAME }} bash -c "lscpu"
-
-      - name: ROCm info
-        run: |
-          docker exec ${{ env.CONTAINER_NAME }} bash -c "/opt/rocm/bin/rocminfo"
-
-      - name: Test XLA [single_gpu]
-        run: |
-          docker exec \
-            ${{ env.CONTAINER_NAME }} \
-            bash -c "build_tools/rocm/execute_ci_build.sh --config=ci_single_gpu --local_test_jobs=2 --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}"
-
-      - name: Test XLA [multi_gpu]
-        if: always()
-        run: |
-          docker exec \
-            ${{ env.CONTAINER_NAME }} \
-            bash -c "build_tools/rocm/execute_ci_build.sh --config=ci_multi_gpu --strategy=TestRunner=local --local_test_jobs=2 --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}"
-
-      - name: Cleanup container
-        if: always()
-        run: |
-          docker stop --time=60 ${{ env.CONTAINER_NAME }} || true
-          docker rm -f ${{ env.CONTAINER_NAME }} || true
+  pr-check:
+    uses: ROCm/xla/.github/workflows/rocm_xla_ci.yml@add_xla_pr_check_workflow
