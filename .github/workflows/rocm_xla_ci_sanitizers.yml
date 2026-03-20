@@ -84,6 +84,7 @@ jobs:
             --strategy=TestRunner=local \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
+            --config=xla_sgpu
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always()
@@ -95,3 +96,4 @@ jobs:
             --strategy=TestRunner=local \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
+            --config=xla_mgpu
