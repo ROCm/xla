@@ -31,8 +31,7 @@ benchmarks: [
       target_metrics: [GPU_DEVICE_TIME, GPU_DEVICE_MEMCPY_TIME]
       workflow_type: [POSTSUBMIT]
       runtime_flags: ["--num_repeats=5"]
-    },
-    ]
+    }]
     update_frequency_policy: QUARTERLY
   },
   {
