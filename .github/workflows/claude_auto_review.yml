@@ -2,7 +2,7 @@ name: Claude Auto Review
 
 on:
   pull_request_target:
-    types: [opened, synchronize]
+    types: [labeled]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   claude-review:
+    if: github.event.label.name == 'claude-review'
     runs-on: build-only-xla
     permissions:
       contents: read
@@ -157,3 +158,12 @@ jobs:
         with:
           name: claude-execution-log
           path: ${{ steps.claude-code.outputs.execution_file }}
+
+      - name: Remove claude-review label
+        if: always() && github.event.label.name == 'claude-review'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method DELETE \
+            "/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels/claude-review" \
+            || true
