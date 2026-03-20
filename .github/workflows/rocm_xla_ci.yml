@@ -67,6 +67,19 @@ jobs:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
+      - name: Checkout rocm-dev-infram branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ROCm/xla
+          ref: rocm-dev-infram
+          path: rocm-dev-infram-checkout
+          persist-credentials: false
+
+      - name: Mount execute_ci_build.sh from rocm-dev-infram
+        run: |
+          cp rocm-dev-infram-checkout/build_tools/rocm/execute_ci_build.sh build_tools/rocm/execute_ci_build.sh
+          chmod +x build_tools/rocm/execute_ci_build.sh
+
       - name: Get RBE cluster keys
         env:
           RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
@@ -84,36 +97,17 @@ jobs:
 
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         run: |
-          build_tools/rocm/run_xla_ci_build.sh \
+          build_tools/rocm/execute_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
-            --config=rocm_rbe \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
-            --curses=no \
-            --color=yes \
-            --spawn_strategy=local \
-            --execution_log_compact_file=execution_log.binpb.zst \
-            --test_sharding_strategy=disabled \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
-            --remote_download_outputs=minimal \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
-            --config=xla_sgpu \
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always()
         run: |
-          build_tools/rocm/run_xla_ci_build.sh \
+          build_tools/rocm/execute_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=rocm_rbe \
-            --config=ci_multi_gpu \
-            --spawn_strategy=local \
-            --strategy=TestRunner=local \
             --local_test_jobs=1 \
-            --curses=no \
-            --color=yes \
-            --execution_log_compact_file=execution_log.binpb.zst \
-            --test_sharding_strategy=disabled \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
-            --remote_download_outputs=minimal \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
-            --config=xla_mgpu \
