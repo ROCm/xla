@@ -54,8 +54,8 @@ configure_backend() {
       ./configure.py --backend=CUDA --cuda_compiler=nvcc || echo "INFO: GPU Configure script failed or is not applicable."
       ;;
     GPU_MI250)
-      echo "Running: ./configure.py --backend=ROCM --rocm_compiler=hipcc"
-      ./configure.py --backend=ROCM --rocm_compiler=hipcc || echo "INFO: GPU Configure script failed or is not applicable."
+      echo "Running: ./configure.py --backend=ROCM --rocm_compiler=hipcc --clang_path=/lib/llvm-18/bin/clang-18"
+      ./configure.py --backend=ROCM --rocm_compiler=hipcc --clang_path=/lib/llvm-18/bin/clang-18 || echo "INFO: GPU Configure script failed or is not applicable."
       ;;
     *)
       echo "INFO: Unknown hardware category '$hw_category_upper_for_configure'"
