@@ -87,7 +87,7 @@ jobs:
             --config=xla_sgpu
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
-        if: always()
+        if: always() && !cancelled()
         run: |
           build_tools/rocm/execute_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
