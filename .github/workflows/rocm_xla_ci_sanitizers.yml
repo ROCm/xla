@@ -57,7 +57,7 @@ jobs:
 
       - name: Fetch execute_ci_build.sh from rocm-dev-infram
         run: |
-          wget -O build_tools/rocm/execute_ci_build.sh https://raw.githubusercontent.com/ROCm/xla/rocm-dev-infram/build_tools/rocm/execute_ci_build.sh
+          wget -O build_tools/rocm/execute_ci_build.sh https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/execute_ci_build.sh
           chmod +x build_tools/rocm/execute_ci_build.sh
 
       - name: Get RBE cluster keys
