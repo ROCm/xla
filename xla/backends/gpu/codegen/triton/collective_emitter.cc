@@ -31,7 +31,7 @@ limitations under the License.
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/MathExtras.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
@@ -85,9 +85,10 @@ using ReductionComputationEmitter = absl::AnyInvocable<xtile::TensorValue(
     mlir::ImplicitLocOpBuilder&, xtile::TensorValue, xtile::TensorValue)>;
 
 // The main memory space on a device (HBM).
+// Use GPU dialect address space which is platform-independent.
 static constexpr auto kGlobalAddressSpace =
-    static_cast<std::underlying_type_t<mlir::NVVM::NVVMMemorySpace>>(
-        mlir::NVVM::NVVMMemorySpace::Global);
+    static_cast<std::underlying_type_t<mlir::gpu::AddressSpace>>(
+        mlir::gpu::AddressSpace::Global);
 
 // Metadata arguments for the collective emitter.
 // device_rank, signal_value, signal_buffers.
@@ -239,6 +240,24 @@ absl::StatusOr<std::optional<BlockLevelFusionConfig>>
 GetBlockLevelFusionConfigForAllReduce(
     const se::DeviceDescription& device_info,
     const HloAllReduceInstruction* all_reduce) {
+  // Check if the device supports Triton collective codegen
+  bool is_supported = false;
+
+  // CUDA: Requires compute capability 9.0+ (Hopper or newer)
+  if (device_info.cuda_compute_capability().major >= 9) {
+    is_supported = true;
+  }
+
+  // ROCm: All versions with Triton support are enabled
+  if (device_info.gpu_compute_capability().IsRocm()) {
+    is_supported = true;
+  }
+
+  if (!is_supported) {
+    VLOG(3) << "Collective codegen requires CUDA compute capability >= 9.0 "
+            << "or ROCm with Triton support. Codegen will not be supported.";
+    return std::nullopt;
+  }
   const std::optional<AllReduceInfo> all_reduce_info =
       MaybeBuildAllReduceInfo(all_reduce);
   if (!all_reduce_info.has_value()) {
