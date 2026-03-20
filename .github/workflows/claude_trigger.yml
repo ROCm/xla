@@ -1,0 +1,33 @@
+name: Claude Review Trigger
+
+# Dispatches the Claude review workflow when the 'claude-review' label is applied.
+#
+# This indirection exists because claude-code-action uses OIDC to exchange a
+# GitHub Actions identity token for a GitHub App installation token (claude[bot]).
+# The OIDC subject claim differs by event type:
+#   - repository_dispatch → sub: repo:ORG/REPO:ref:refs/heads/BRANCH (accepted)
+#   - pull_request_target → sub: repo:ORG/REPO:pull_request        (rejected)
+#
+# Anthropic's token exchange endpoint rejects pull_request_target OIDC tokens
+# with 401 Invalid OIDC token. By forwarding via repository_dispatch, the review
+# workflow runs with a ref-based OIDC subject that the endpoint accepts, allowing
+# comments to appear as claude[bot].
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+jobs:
+  dispatch-claude-review:
+    if: github.event.label.name == 'claude-review'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Dispatch review event
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/dispatches \
+            -f event_type=claude-review \
+            -f 'client_payload[pull_number]=${{ github.event.pull_request.number }}'
