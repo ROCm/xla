@@ -61,6 +61,7 @@ jobs:
           repository: ROCm/xla
           ref: rocm-dev-infram
           path: rocm-dev-infram-checkout
+          token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: false
 
       - name: Mount execute_ci_build.sh from rocm-dev-infram

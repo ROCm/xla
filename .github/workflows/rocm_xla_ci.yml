@@ -67,11 +67,13 @@ jobs:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: true
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Checkout rocm-dev-infram branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ROCm/xla
           ref: rocm-dev-infram
           path: rocm-dev-infram-checkout
+          token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: false
 
       - name: Mount execute_ci_build.sh from rocm-dev-infram
