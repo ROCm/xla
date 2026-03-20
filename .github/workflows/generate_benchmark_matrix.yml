@@ -43,8 +43,8 @@ on:
 jobs:
   generate:
     name: Generate Matrix (${{ inputs.workflow_type }})
-    runs-on: linux-x86-n2-64
-    container: us-docker.pkg.dev/ml-oss-artifacts-published/ml-public-container/ml-build:latest
+    runs-on: linux-mi250-4
+    container: rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa
     outputs:
       matrix_json_output: ${{ steps.run_generator.outputs.matrix_json }}
     defaults:
@@ -63,7 +63,7 @@ jobs:
           persist-credentials: false
 
       - name: Configure OpenXLA
-        run: "echo \"Configuring OpenXLA for CPU to build the generator tool...\"\nif [ -f \"./configure.py\" ]; then\n  ./configure.py --backend=CPU \nelse\n  echo \"::warning::configure.py not found. Assuming C++ tool build doesn't require it or is pre-configured.\"\nfi\n"
+        run: "echo \"Configuring OpenXLA for CPU to build the generator tool...\"\nif [ -f \"./configure.py\" ]; then\n  ./configure.py --backend=CPU --clang_path=/lib/llvm-18/bin/clang-18 \nelse\n  echo \"::warning::configure.py not found. Assuming C++ tool build doesn't require it or is pre-configured.\"\nfi\n"
       # TODO(juliagmt): Use build.py to build the binary.
       - name: Build generate_benchmark_matrices_main
         run: |
@@ -73,7 +73,6 @@ jobs:
                 --test_tag_filters=-no_oss,-gpu,-requires-gpu-nvidia,-requires-gpu-amd \
                 --config=warnings \
                 --config=nonccl \
-                --config=rbe_linux_cpu \
                 --color=yes \
                 --test_output=errors \
                 --verbose_failures \
@@ -81,8 +80,7 @@ jobs:
                 --nobuild_tests_only \
                 --profile=profile.json.gz \
                 --flaky_test_attempts=3 \
-                --jobs=150 \
-                --bes_upload_mode=fully_async \
+                --bes_backend="" \
                 //xla/tools/benchmarks/utils:generate_benchmark_matrices_main
           if [ $? -ne 0 ]; then
              echo "::error::Failed to build generate_benchmark_matrices_main"
@@ -135,52 +133,3 @@ jobs:
         env:
           INPUTS_REGISTRY_FILE: ${{ inputs.registry_file }}
           INPUTS_WORKFLOW_TYPE: ${{ inputs.workflow_type }}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
