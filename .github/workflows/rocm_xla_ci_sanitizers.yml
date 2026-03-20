@@ -64,7 +64,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: true
 
-
       - name: Mount execute_ci_build.sh from rocm-dev-infram
         run: |
           cp rocm-dev-infram-checkout/build_tools/rocm/execute_ci_build.sh build_tools/rocm/execute_ci_build.sh
