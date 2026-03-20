@@ -903,4 +903,120 @@ static void BM_GetOrTraceCommandBuffer(benchmark::State& state) {
 
 BENCHMARK(BM_GetOrTraceCommandBuffer);
 
+TEST(TracedCommandBuffer, HasEntry) {
+  se::StreamExecutor* executor = GpuExecutor();
+  auto stream = executor->CreateStream().value();
+  auto traced_cmd = FakeCmd();
+
+  BufferAllocation alloc0(/*index=*/0, /*size=*/1024, /*color=*/0);
+  BufferAllocation alloc1(/*index=*/1, /*size=*/1024, /*color=*/0);
+
+  CommandBufferCmd::BufferUseVector buffers = {
+      BufferUse::Read(BufferAllocation::Slice(&alloc0, 0, 1024)),
+      BufferUse::Write(BufferAllocation::Slice(&alloc1, 0, 1024))};
+
+  TracedCommandBuffer traced_cmd_buffer(&traced_cmd, buffers,
+                                        /*capacity=*/4);
+
+  se::DeviceAddressBase mem0(reinterpret_cast<void*>(0x01234567));
+  se::DeviceAddressBase mem1(reinterpret_cast<void*>(0x12345670));
+  se::DeviceAddressBase mem2(reinterpret_cast<void*>(0x23456701));
+
+  se::StreamExecutorMemoryAllocator allocator(executor);
+  BufferAllocations allocations({mem0, mem1}, 0, &allocator);
+
+  // Empty cache should report no entry.
+  EXPECT_FALSE(traced_cmd_buffer.HasEntry(&allocations));
+
+  // Trace a command buffer for {mem0, mem1}.
+  se::DeviceAddress<int32_t> mem = executor->AllocateArray<int32_t>(16, 0);
+  auto trace = [&](se::Stream* stream) -> absl::Status {
+    TF_RETURN_IF_ERROR(stream->Memset32(&mem, 42, 16));
+    return absl::OkStatus();
+  };
+
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocations, executor,
+                                            stream.get(), trace)
+                   .status());
+
+  // Now HasEntry should find {mem0, mem1}.
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations));
+
+  // Different addresses should not be found.
+  BufferAllocations different_allocs({mem0, mem2}, 0, &allocator);
+  EXPECT_FALSE(traced_cmd_buffer.HasEntry(&different_allocs));
+
+  // Trace for {mem0, mem2} and verify both entries exist.
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&different_allocs, executor,
+                                            stream.get(), trace)
+                   .status());
+
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations));
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&different_allocs));
+}
+
+TEST(TracedCommandBuffer, HasEntryDoesNotModifyCache) {
+  se::StreamExecutor* executor = GpuExecutor();
+  auto stream = executor->CreateStream().value();
+  auto traced_cmd = FakeCmd();
+
+  BufferAllocation alloc0(/*index=*/0, /*size=*/1024, /*color=*/0);
+
+  CommandBufferCmd::BufferUseVector buffers = {
+      BufferUse::Read(BufferAllocation::Slice(&alloc0, 0, 1024))};
+
+  TracedCommandBuffer traced_cmd_buffer(&traced_cmd, buffers,
+                                        /*capacity=*/2);
+
+  se::DeviceAddressBase mem0(reinterpret_cast<void*>(0x01234567));
+  se::DeviceAddressBase mem1(reinterpret_cast<void*>(0x12345670));
+  se::DeviceAddressBase mem2(reinterpret_cast<void*>(0x23456701));
+
+  se::StreamExecutorMemoryAllocator allocator(executor);
+
+  se::DeviceAddress<int32_t> mem = executor->AllocateArray<int32_t>(16, 0);
+  int64_t num_traces = 0;
+  auto trace = [&](se::Stream* stream) -> absl::Status {
+    TF_RETURN_IF_ERROR(stream->Memset32(&mem, 42, 16));
+    num_traces++;
+    return absl::OkStatus();
+  };
+
+  // Fill cache with {mem0} and {mem1}.
+  BufferAllocations allocs0({mem0}, 0, &allocator);
+  BufferAllocations allocs1({mem1}, 0, &allocator);
+  BufferAllocations allocs2({mem2}, 0, &allocator);
+
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocs0, executor, stream.get(),
+                                            trace)
+                   .status());
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocs1, executor, stream.get(),
+                                            trace)
+                   .status());
+  EXPECT_EQ(num_traces, 2);
+
+  // HasEntry should not affect the LRU order -- calling it many times
+  // for allocs0 should not evict allocs1.
+  for (int i = 0; i < 10; i++) {
+    EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocs0));
+    EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocs1));
+    EXPECT_FALSE(traced_cmd_buffer.HasEntry(&allocs2));
+  }
+
+  // Both should still be in cache (no re-trace needed).
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocs0, executor, stream.get(),
+                                            trace)
+                   .status());
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocs1, executor, stream.get(),
+                                            trace)
+                   .status());
+  EXPECT_EQ(num_traces, 2);
+}
+
 }  // namespace xla::gpu
