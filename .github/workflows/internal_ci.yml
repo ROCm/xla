@@ -1,8 +1,6 @@
 name: Internal CI
 
-# This lightweight workflow forwards PR events to workflows on the
-# default branch via repository_dispatch. Cherry-pick this file to
-# any branch that receives PRs.
+# Runs CI checks on pull requests targeting this branch.
 
 on:
   pull_request_target:
@@ -13,19 +11,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dispatch:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write  # Required to call the repository_dispatch API.
-    steps:
-      - name: Dispatch review event
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api repos/${{ github.repository }}/dispatches \
-            -f event_type=claude-review \
-            -f 'client_payload[pull_number]=${{ github.event.pull_request.number }}'
-
   pr-check:
     uses: ROCm/xla/.github/workflows/rocm_xla_ci.yml@rocm-dev-infra
     with:
