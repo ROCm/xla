@@ -21,7 +21,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-      id-token: write  # Required by claude-code-action for internal OIDC auth.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -103,9 +102,9 @@ jobs:
           ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-4.6"
           ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
           ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           anthropic_api_key: "sk-ant-dummy-gateway-key"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           show_full_output: true
           prompt: |
             REPO: ${{ github.repository }}
