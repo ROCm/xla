@@ -49,6 +49,7 @@ benchmarks: [
       target_metrics: [GPU_DEVICE_TIME, GPU_DEVICE_MEMCPY_TIME]
       workflow_type: [POSTSUBMIT]
       runtime_flags: ["--num_repeats=5"]
+      xla_compilation_flags: ["--xla_gpu_enable_command_buffer="]
     }]
     update_frequency_policy: QUARTERLY
     # TODO(juliagmt): remove this label once the benchmark is stable.
