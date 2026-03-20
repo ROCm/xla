@@ -1,8 +1,11 @@
 name: Claude Auto Review
 
 on:
-  pull_request_target:
-    types: [labeled]
+  # Triggered by claude_trigger.yml via repository_dispatch.
+  # Expected client_payload schema:
+  #   pull_number: number
+  repository_dispatch:
+    types: [claude-review]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -10,21 +13,20 @@ on:
         required: true
         type: number
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
-  cancel-in-progress: true
-
 jobs:
   claude-review:
-    if: github.event.label.name == 'claude-review' || github.event_name == 'workflow_dispatch'
     runs-on: build-only-xla
     permissions:
       contents: read
       pull-requests: write
+      id-token: write  # Required by claude-code-action for OIDC auth.
     steps:
+      # refs/pull/<number>/head is a GitHub-managed ref that always exists in the base
+      # repo for every PR, including those from forks. Using the branch name would fail
+      # for fork PRs since the branch lives in the fork, not here.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pr_number) }}
+          ref: refs/pull/${{ github.event.client_payload.pull_number || inputs.pr_number }}/head
 
       # The PR branch may not have the .claude/ directory (skills, settings) since it
       # only lives on the default branch. Overlay it so Claude Code can find the skill.
@@ -65,9 +67,12 @@ jobs:
 
           timeout 60 claude --print -p "Say OK" || echo "Warmup complete (exit ok)"
 
-      # claude-code-action auto-configures the GitHub inline comment MCP server for
-      # pull_request_target events, but not for workflow_dispatch. We create the config
-      # manually so that the inline comment tool works consistently for both triggers.
+      # claude-code-action auto-configures the GitHub inline comment MCP server only
+      # when triggered by pull_request or pull_request_target events, where it can
+      # infer the PR number from the event context. When triggered by repository_dispatch
+      # or workflow_dispatch, there is no PR event context, so the action cannot set up
+      # the MCP server automatically. We create the config manually, passing the PR number
+      # from the dispatch payload so the inline comment tool knows which PR to annotate.
       - name: Create MCP config
         id: mcp
         run: |
@@ -82,7 +87,7 @@ jobs:
                 "env": {
                   "REPO_OWNER": "${{ github.repository_owner }}",
                   "REPO_NAME": "${{ github.event.repository.name }}",
-                  "PR_NUMBER": "${{ github.event.pull_request.number || inputs.pr_number }}",
+                  "PR_NUMBER": "${{ github.event.client_payload.pull_number || inputs.pr_number }}",
                   "GITHUB_API_URL": "${{ github.api_url }}"
                 }
               }
@@ -102,20 +107,23 @@ jobs:
           ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-4.6"
           ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
           ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           anthropic_api_key: "sk-ant-dummy-gateway-key"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # When triggered via repository_dispatch, the actor is github-actions[bot],
+          # not a human. Without this, claude-code-action rejects the run.
+          allowed_bots: "github-actions[bot]"
           show_full_output: true
           prompt: |
             REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+            PR NUMBER: ${{ github.event.client_payload.pull_number || inputs.pr_number }}
 
             Note: The PR branch is already checked out in the current working directory.
 
             ## Step 1 — Check for previous Claude review comments
             Run this command to determine whether previous Claude inline comments exist on this PR:
             ```
-            gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number || inputs.pr_number }}/comments" | jq -s 'add // [] | [.[] | select(.user.login == "claude[bot]" and .in_reply_to_id == null)] | length'
+            gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.client_payload.pull_number || inputs.pr_number }}/comments" | jq -s 'add // [] | [.[] | select(.user.login == "claude[bot]" and .in_reply_to_id == null)] | length'
             ```
 
             ## Step 2 — Fresh Review
@@ -159,10 +167,10 @@ jobs:
           path: ${{ steps.claude-code.outputs.execution_file }}
 
       - name: Remove claude-review label
-        if: always() && github.event.label.name == 'claude-review'
+        if: always() && github.event.client_payload.pull_number
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api --method DELETE \
-            "/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels/claude-review" \
+            "/repos/${{ github.repository }}/issues/${{ github.event.client_payload.pull_number }}/labels/claude-review" \
             || true
