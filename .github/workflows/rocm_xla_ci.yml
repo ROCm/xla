@@ -20,25 +20,12 @@ on:
   push:
     branches:
       - rocm-jaxlib-v*
-  workflow_call:
-    inputs:
-      ref:
-        description: 'Git ref to checkout (branch, tag, or SHA)'
-        required: false
-        type: string
-        default: ''
-      concurrency_group:
-        description: 'Concurrency group identifier (e.g., PR number or branch name)'
-        required: false
-        type: string
-        default: ''
+  pull_request_target:
+    types: [opened, synchronize]
 
 concurrency:
-  group: ${{ inputs.concurrency_group || format('{0}-{1}', github.workflow, github.ref) }}
-  cancel-in-progress: ${{ !contains(github.ref, 'main') }}
-
-# Note: concurrency control is handled by the calling workflow (pr_event_dispatch.yml)
-# to avoid deadlocks when used as a reusable workflow via workflow_call
+  group: ${{ github.event.pull_request.number && format('CI ROCm-PR-{0}', github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: true
 
 jobs:
   execute-xla-ut:
@@ -64,7 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Fetch execute_ci_build.sh from rocm-dev-infram
