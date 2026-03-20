@@ -67,18 +67,9 @@ jobs:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: true
 
-      - name: Checkout rocm-dev-infram branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: ROCm/xla
-          ref: rocm-dev-infram
-          path: rocm-dev-infram-checkout
-          token: ${{ secrets.GITHUB_TOKEN }}
-          persist-credentials: true
-
-      - name: Mount execute_ci_build.sh from rocm-dev-infram
+      - name: Fetch execute_ci_build.sh from rocm-dev-infram
         run: |
-          cp rocm-dev-infram-checkout/build_tools/rocm/execute_ci_build.sh build_tools/rocm/execute_ci_build.sh
+          wget -O build_tools/rocm/execute_ci_build.sh https://raw.githubusercontent.com/ROCm/xla/rocm-dev-infram/build_tools/rocm/execute_ci_build.sh
           chmod +x build_tools/rocm/execute_ci_build.sh
 
       - name: Get RBE cluster keys
