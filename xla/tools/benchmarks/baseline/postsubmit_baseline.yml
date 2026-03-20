@@ -37,7 +37,7 @@
   },
   "gemma3_1b_flax_call_mi250_1h1d_postsubmit": { #TODO To be adapted once initial benchmarks are run
     "GPU_DEVICE_TIME": {
-      "baseline_ms": 15,
+      "baseline_ms": 5.6,
       "threshold": 0.30 # Allow 30% regression max
     },
     "GPU_DEVICE_MEMCPY_TIME": {
@@ -77,7 +77,7 @@
   },
   "gemma2_2b_keras_jax_mi250_1h1d_postsubmit": { #TODO To be adapted once initial benchmarks are run
     "GPU_DEVICE_TIME": {
-      "baseline_ms": 100,
+      "baseline_ms": 205,
       "threshold": 0.30 # Allow 30% regression max
     },
     "GPU_DEVICE_MEMCPY_TIME": {
