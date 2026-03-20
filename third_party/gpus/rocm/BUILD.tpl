@@ -426,10 +426,10 @@ cc_library(
         "%{rocm_root}/lib/host-math/lib/*.so*",
     ]),
     include_prefix = "rocm",
-    linkopts = ["-lrocsolver"],
     includes = [
         "%{rocm_root}/include/",
     ],
+    linkopts = ["-lrocsolver"],
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
     deps = [
