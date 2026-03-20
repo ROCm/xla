@@ -16,33 +16,11 @@ on:
 jobs:
   claude-review:
     runs-on: build-only-xla
-    container:
-      image: ubuntu:24.04
     permissions:
       contents: read
       pull-requests: write
       id-token: write  # Required by claude-code-action for internal OIDC auth.
     steps:
-      - name: Install dependencies
-        run: |
-          apt-get update -y
-          apt-get install -y curl git unzip jq
-
-          # Install latest gh from GitHub's official package repo instead of
-          # Ubuntu's lagging apt repo to avoid stale GraphQL deprecation warnings.
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-            | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-            | tee /etc/apt/sources.list.d/github-cli.list
-          apt-get update -y
-          apt-get install -y gh
-          gh --version
-
-          # The job runs inside a container where the workspace is owned by a different
-          # UID than the git process. Without this, git refuses to operate on the repo.
-          git config --global --add safe.directory '*'
-
       # refs/pull/<number>/head is a GitHub-managed ref that always exists in the base
       # repo for every PR, including those from forks. Using the branch name would fail
       # for fork PRs since the branch lives in the fork, not here.
@@ -98,7 +76,7 @@ jobs:
       - name: Create MCP config
         id: mcp
         run: |
-          server=$(find /__w/_actions/anthropics/claude-code-action -name "github-inline-comment-server.ts" 2>/dev/null | head -1)
+          server=$(find "$(dirname "$RUNNER_WORKSPACE")/_actions/anthropics/claude-code-action" -name "github-inline-comment-server.ts" 2>/dev/null | head -1)
           config=/tmp/mcp-config.json
           cat > "$config" << EOF
           {
