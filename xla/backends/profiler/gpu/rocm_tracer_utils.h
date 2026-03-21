@@ -69,9 +69,9 @@ struct KernelDetails {
   uint32_t grid_y;
   // Z-dimension of a grid.
   uint32_t grid_z;
-
-  // kernel address. Used for calculating core occupancy
-  void* func_ptr;
+  // Register counts (in DWORDs) from kernel code object metadata.
+  uint32_t sgpr_count;
+  uint32_t arch_vgpr_count;
 };
 
 enum class RocmTracerEventType {
@@ -148,6 +148,9 @@ struct RocmTracerEvent {
 };
 
 struct RocmTraceCollectorOptions {
+  uint32_t simd_per_cu = 0;
+  uint32_t max_waves_per_simd = 0;
+  uint32_t gfx_target_version = 0;
   // Maximum number of events to collect from callback API; if -1, no limit.
   // if 0, the callback API is enabled to build a correlation map, but no
   // events are collected.

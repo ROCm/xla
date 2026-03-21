@@ -53,6 +53,11 @@ class RocmTracer {
   void Disable();
 
   static uint64_t GetTimestamp();
+
+  // Get GPU agent properties needed for theoretical occupancy calculation.
+  bool GetGpuSimdInfo(uint32_t device_ordinal, uint32_t* simd_per_cu,
+                      uint32_t* max_waves_per_simd,
+                      uint32_t* gfx_target_version) const;
   uint32_t NumGpus() const { return num_gpus_; };
   RocmTraceCollector* collector() { return collector_; }
 

@@ -554,8 +554,8 @@ xla_cc_test(
         "manual",
     ]),
     deps = [
-        # ":rocm_tracer",
         ":rocm_collector",
+        ":rocm_tracer",
         ":rocm_tracer_utils",
         "@com_google_googletest//:gtest_main",
         "//xla/tsl/profiler/utils:xplane_utils",
