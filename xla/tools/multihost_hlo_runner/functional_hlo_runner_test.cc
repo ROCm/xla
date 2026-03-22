@@ -33,6 +33,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/time.h"
@@ -669,17 +670,25 @@ absl::Status ShardedAutotuningWorksTestBody(const int node_id) {
       kNumNodes, /*kv_store=*/nullptr,
       /*use_gpu_count_workaround=*/false));
   if (node_id == 0) {
+    // The backend fingerprint is part of the KV store key and differs per
+    // platform because each platform registers different autotuner backends.
+    // CUDA: CUBLAS,CUBLAS_FISSION,CUDNN,CUSTOM_KERNEL_FISSION,TRITON
+    // ROCm: MIOPEN,ROCBLAS,ROCBLAS_FISSION,TRITON
+    std::string backend_fingerprint =
+        env.client->platform_name() == "rocm" ? "3662254336" : "4253997026";
     TF_ASSIGN_OR_RETURN(
         std::string results0,
-        env.kv_store->Get("autotune_results_adb7d459c2974fa512555763cba3d92a_"
-                          "4253997026_0",
-                          absl::Seconds(1)));
+        env.kv_store->Get(
+            absl::StrCat("autotune_results_adb7d459c2974fa512555763cba3d92a_",
+                         backend_fingerprint, "_0"),
+            absl::Seconds(1)));
     CHECK(absl::StrContains(results0, "result"));
     TF_ASSIGN_OR_RETURN(
         std::string results1,
-        env.kv_store->Get("autotune_results_adb7d459c2974fa512555763cba3d92a_"
-                          "4253997026_1",
-                          absl::Seconds(1)));
+        env.kv_store->Get(
+            absl::StrCat("autotune_results_adb7d459c2974fa512555763cba3d92a_",
+                         backend_fingerprint, "_1"),
+            absl::Seconds(1)));
     CHECK(absl::StrContains(results1, "result"));
     // The nodes autotune different fusions.
     CHECK_NE(results0, results1);
