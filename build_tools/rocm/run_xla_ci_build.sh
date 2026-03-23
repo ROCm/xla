@@ -24,6 +24,12 @@ TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh)
 mkdir -p /tf/pkg
 
 for arg in "$@"; do
+    if [[ "$arg" == "--config=asan" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},-noasan"
+    fi
+    if [[ "$arg" == "--config=tsan" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},-notsan"
+    fi
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},multi_gpu"
     fi
