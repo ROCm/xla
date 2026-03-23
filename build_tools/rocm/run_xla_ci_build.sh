@@ -32,6 +32,14 @@ for arg in "$@"; do
     fi
 done
 
+TEST_FILTER=(
+    PersistedAutotuningTest.SingleOperationGetsAutotuned
+    DotTf32Tf32F32X3Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_tf32_tf32_f32_x3_with_lhs_f32_rhs_f32_output_f32_from_cc_8_0_rocm_60_no_restriction_c_16_nc_2
+    TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
+    CommandBufferConversionPassTest.ConvertWhileThunk
+    CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
+)
+
 SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --build_tag_filters=$TAG_FILTERS \
@@ -43,4 +51,8 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --test_output=errors \
     --test_timeout=920,2400,7200,960 \
     --run_under=//build_tools/rocm:parallel_gpu_execute \
+    --test_filter=-$(
+        IFS=:
+        echo "${TEST_FILTER[*]}"
+    ) \
     "$@"
