@@ -26,11 +26,6 @@ mkdir -p /tf/pkg
 clean_up() {
     # clean up nccl- files
     rm -rf /dev/shm/nccl-*
-
-    # clean up bazel disk_cache
-    bazel shutdown \
-        --disk_cache=${BAZEL_DISK_CACHE_DIR} \
-        --experimental_disk_cache_gc_max_size=100G
 }
 
 trap clean_up EXIT
@@ -41,6 +36,8 @@ TEST_FILTER=(
     TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
     CommandBufferConversionPassTest.ConvertWhileThunk
     CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
+    GpuBlasLtMatmulThunkTest.SharedMatmulPlansFunctional
+    GpuBlasLtMatmulThunkTest.SharedMatmulPlansUnit
 )
 
 for arg in "$@"; do
@@ -61,9 +58,7 @@ done
 set -x
 
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
-    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
-    --config=rocm_rbe \
-    --disk_cache=${BAZEL_DISK_CACHE_DIR} \
+    "$@" \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
     --test_timeout=920,2400,7200,9600 \
@@ -72,9 +67,8 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --test_env=TF_TESTS_PER_GPU=1 \
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
     --test_output=errors \
-    --local_test_jobs=4 \
     --test_filter=-$(
         IFS=:
         echo "${TEST_FILTER[*]}"
     ) \
-    "$@"
+    --spawn_strategy=local
