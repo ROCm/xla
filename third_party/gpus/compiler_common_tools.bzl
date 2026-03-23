@@ -105,8 +105,11 @@ def _get_cxx_inc_directories_impl(repository_ctx, cc, lang_is_cpp, tf_sys_root):
     if print_resource_dir_supported:
         resource_dir = repository_ctx.execute(
             [cc, "-print-resource-dir"],
-        ).stdout.strip() + "/share"
-        inc_dirs += "\n" + resource_dir
+        ).stdout.strip()
+        # Add the share directory
+        inc_dirs += "\n" + resource_dir + "/share"
+        # Also add the include directory where cet.h lives (needed for zstd assembly)
+        inc_dirs += "\n" + resource_dir + "/include"
 
     compiler_includes = [
         _normalize_include_path(repository_ctx, _cxx_inc_convert(p))

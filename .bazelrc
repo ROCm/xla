@@ -15,6 +15,6 @@ import %workspace%/tensorflow.bazelrc
 import %workspace%/warnings.bazelrc
 
 # Treat warnings as errors
-build --config=warnings 
+build --config=warnings
 
 try-import %workspace%/xla_configure.bazelrc
