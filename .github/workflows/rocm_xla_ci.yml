@@ -90,5 +90,6 @@ jobs:
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_multi_gpu \
             --local_test_jobs=1 \
+            --strategy=TestRunner=local \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
             --config=xla_mgpu
