@@ -601,7 +601,12 @@ cc_library(
 alias(
     name = "amd_comgr",
     actual = select_threshold(
-        above_or_eq = ":amd_comgr_dynamic",
+        above_or_eq = select_threshold(
+            above_or_eq = ":amd_comgr_static",
+            below = ":amd_comgr_dynamic",
+            threshold = 71200,
+            value = rocm_version_number(),
+        ),
         below = ":amd_comgr_static",
         threshold = 71000,
         value = rocm_version_number(),
