@@ -15,6 +15,7 @@ for arg in "$@"; do
 done
 
 ${SCRIPT_DIR}/run_xla_ci_build.sh \
+    $@ \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
     --execution_log_compact_file=execution_log.binpb.zst \
@@ -26,5 +27,4 @@ ${SCRIPT_DIR}/run_xla_ci_build.sh \
     --test_sharding_strategy=disabled \
     --test_verbose_timeout_warnings \
     --curses=no \
-    --color=yes \
-    $@
+    --color=yes
