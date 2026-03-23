@@ -30,7 +30,7 @@ benchmarks: [
       topology: { num_hosts: 1, num_devices_per_host: 1, multi_host: false, multi_device: false }
       target_metrics: [GPU_DEVICE_TIME, GPU_DEVICE_MEMCPY_TIME]
       workflow_type: [POSTSUBMIT]
-      runtime_flags: ["--num_repeats=5"]
+      runtime_flags: ["--num_repeats=5", "--hlo_argument_mode=uninitialized"]
     }]
     update_frequency_policy: QUARTERLY
   },
@@ -48,7 +48,7 @@ benchmarks: [
       topology: { num_hosts: 1, num_devices_per_host: 1, multi_host: false, multi_device: false }
       target_metrics: [GPU_DEVICE_TIME, GPU_DEVICE_MEMCPY_TIME]
       workflow_type: [POSTSUBMIT]
-      runtime_flags: ["--num_repeats=5"]
+      runtime_flags: ["--num_repeats=5", "--hlo_argument_mode=uninitialized"]
       xla_compilation_flags: ["--xla_gpu_enable_command_buffer="]
     }]
     update_frequency_policy: QUARTERLY
