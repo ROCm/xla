@@ -53,6 +53,11 @@ for arg in "$@"; do
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu,-no_oss"
     fi
+    if [[ "$arg" == "--config=rocm_ci_hermetic" ]]; then
+        TEST_FILTER+=(
+            LegacyCublasGemmRewriteTest*
+        )
+    fi
 done
 
 set -x
