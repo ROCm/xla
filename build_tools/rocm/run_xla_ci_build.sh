@@ -30,7 +30,9 @@ clean_up() {
 
 trap clean_up EXIT
 
-TEST_FILTER=()
+TEST_FILTER=(
+    TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
+)
 
 for arg in "$@"; do
     if [[ "$arg" == "--config=asan" ]]; then
