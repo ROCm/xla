@@ -46,7 +46,12 @@ for arg in "$@"; do
     fi
     if [[ "$arg" == "--config=rocm_ci_hermetic" ]]; then
         TEST_FILTER+=(
+            CollectiveOpsTest*
             CublasLtGemmRewriteTest*
+            AsyncCollectiveOps*
+            LegacyCublasGemmRewriteTest*
+            ParameterizedFp8GemmRewriteTest*
+            InPlaceOpTest*
         )
     fi
 done
