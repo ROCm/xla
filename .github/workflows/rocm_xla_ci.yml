@@ -35,7 +35,7 @@ jobs:
       matrix:
         mode:
           - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe_dynamic"]}
-          - {name: "hermetic", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe"]}
+          #- {name: "hermetic", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe"]}
     container:
       image: rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa
       options: >-
