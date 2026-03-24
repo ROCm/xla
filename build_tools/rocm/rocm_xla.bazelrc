@@ -74,7 +74,7 @@ test:xla_sgpu -- \
 -//xla/service:sharding_remover_test \
 -//xla/service:p2p_schedule_preparation_test \
 -//xla/pjrt/distributed:topology_util_test \
--//xla/pjrt/distributed:client_server_test
+-//xla/pjrt/distributed:client_server_test \
 -//xla/tests:iota_test_amdgpu_any_notfrt \
 -//xla/tests:iota_test_amdgpu_any
 
