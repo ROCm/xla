@@ -288,8 +288,8 @@ common:rocm_ci --config=rocm
 
 common:rocm_ci_hermetic --dynamic_mode=off
 common:rocm_ci_hermetic --config=rocm_clang_official
-common:rocm_ci_hermetic --repo_env="ROCM_DISTRO_URL=https://therock-nightly-tarball.s3.amazonaws.com/therock-dist-linux-gfx94X-dcgpu-7.10.0a20251107.tar.gz"
-common:rocm_ci_hermetic --repo_env="ROCM_DISTRO_HASH=486dbf647bcf9b78f21d7477f43addc7b2075b1a322a119045db9cdc5eb98380"
+common:rocm_ci_hermetic --repo_env="ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx94X-dcgpu-7.10.0.tar.gz"
+common:rocm_ci_hermetic --repo_env="ROCM_DISTRO_HASH=f53d58a26c8738f633a33582d650be76fe634122b693b3f4f0e7c9dd3f840623"
 common:rocm_ci_hermetic --repo_env="ROCM_DISTRO_LINKS=llvm/amdgcn:amdgcn"
 common:rocm_ci_hermetic --@local_config_rocm//rocm:rocm_path_type=hermetic
 

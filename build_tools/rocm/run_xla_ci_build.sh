@@ -23,15 +23,6 @@ TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh)
 
 mkdir -p /tf/pkg
 
-for arg in "$@"; do
-    if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},multi_gpu"
-    fi
-    if [[ "$arg" == "--config=ci_single_gpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu"
-    fi
-done
-
 TEST_FILTER=(
     PersistedAutotuningTest.SingleOperationGetsAutotuned
     DotTf32Tf32F32X3Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_tf32_tf32_f32_x3_with_lhs_f32_rhs_f32_output_f32_from_cc_8_0_rocm_60_no_restriction_c_16_nc_2
@@ -39,6 +30,31 @@ TEST_FILTER=(
     CommandBufferConversionPassTest.ConvertWhileThunk
     CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
 )
+
+for arg in "$@"; do
+    if [[ "$arg" == "--config=asan" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},-noasan"
+    fi
+    if [[ "$arg" == "--config=tsan" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},-notsan"
+    fi
+    if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},multi_gpu"
+    fi
+    if [[ "$arg" == "--config=ci_single_gpu" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu"
+    fi
+    if [[ "$arg" == "--config=rocm_ci_hermetic" ]]; then
+        TEST_FILTER+=(
+            CollectiveOpsTest*
+            CublasLtGemmRewriteTest*
+            AsyncCollectiveOps*
+            LegacyCublasGemmRewriteTest*
+            ParameterizedFp8GemmRewriteTest*
+            InPlaceOpTest*
+        )
+    fi
+done
 
 SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
