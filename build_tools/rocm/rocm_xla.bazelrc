@@ -75,6 +75,8 @@ test:xla_sgpu -- \
 -//xla/service:p2p_schedule_preparation_test \
 -//xla/pjrt/distributed:topology_util_test \
 -//xla/pjrt/distributed:client_server_test
+-//xla/tests:iota_test_amdgpu_any_notfrt \
+-//xla/tests:iota_test_amdgpu_any
 
 test:xla_mgpu -- \
 //xla/tests:collective_ops_e2e_test \
