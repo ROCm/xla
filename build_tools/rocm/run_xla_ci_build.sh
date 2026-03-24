@@ -30,6 +30,12 @@ for arg in "$@"; do
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu"
     fi
+    if [[ "$arg" == "--config=asan" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},-noasan"
+    fi
+    if [[ "$arg" == "--config=tsan" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},-notsan"
+    fi
 done
 
 SCRIPT_DIR=$(dirname $0)
