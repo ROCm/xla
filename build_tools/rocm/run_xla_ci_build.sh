@@ -30,15 +30,7 @@ clean_up() {
 
 trap clean_up EXIT
 
-TEST_FILTER=(
-    PersistedAutotuningTest.SingleOperationGetsAutotuned
-    DotTf32Tf32F32X3Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_tf32_tf32_f32_x3_with_lhs_f32_rhs_f32_output_f32_from_cc_8_0_rocm_60_no_restriction_c_16_nc_2
-    TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
-    CommandBufferConversionPassTest.ConvertWhileThunk
-    CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
-    GpuBlasLtMatmulThunkTest.SharedMatmulPlansFunctional
-    GpuBlasLtMatmulThunkTest.SharedMatmulPlansUnit
-)
+TEST_FILTER=()
 
 for arg in "$@"; do
     if [[ "$arg" == "--config=asan" ]]; then
@@ -63,7 +55,6 @@ done
 set -x
 
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
-    "$@" \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
     --test_timeout=920,2400,7200,9600 \
@@ -76,4 +67,5 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
         IFS=:
         echo "${TEST_FILTER[*]}"
     ) \
-    --spawn_strategy=local
+    --spawn_strategy=local \
+    "$@" \
