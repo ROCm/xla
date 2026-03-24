@@ -27,6 +27,9 @@ on:
           - 'yes'
           - 'no'
   pull_request:
+    branches-ignore:
+      - rocm-dev-infra
+      - rocm-jaxlib-v*
   push:
     branches:
       - main

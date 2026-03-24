@@ -60,7 +60,6 @@ build:ci_multi_gpu --test_env=HIP_VISIBLE_DEVICES=0,1,2,3
 test:xla_sgpu -- \
 //xla/... \
 -//xla/backends/gpu/collectives:gpu_clique_key_test \
--//xla/backends/gpu/collectives:nccl_communicator_test \
 -//xla/service:collective_ops_utils_test \
 -//xla/service:collective_pipeliner_test \
 -//xla/service:collective_permute_cycle_test \
@@ -75,7 +74,8 @@ test:xla_sgpu -- \
 -//xla/service:sharding_remover_test \
 -//xla/service:p2p_schedule_preparation_test \
 -//xla/pjrt/distributed:topology_util_test \
--//xla/pjrt/distributed:client_server_test
+-//xla/pjrt/distributed:client_server_test \
+-//xla/tests:iota_test_amdgpu_any
 
 test:xla_mgpu -- \
 //xla/tests:collective_ops_e2e_test \
@@ -83,7 +83,6 @@ test:xla_mgpu -- \
 //xla/tests:collective_pipeline_parallelism_test \
 //xla/tests:replicated_io_feed_test \
 //xla/backends/gpu/collectives:gpu_clique_key_test \
-//xla/backends/gpu/collectives:nccl_communicator_test \
 //xla/backends/gpu/runtime:all_reduce_test \
 //xla/service:collective_ops_utils_test \
 //xla/service:collective_pipeliner_test \

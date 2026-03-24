@@ -137,13 +137,6 @@ class GpuIrEmitterUnnestedTest : public GpuPjRtCodegenTest {
   se::GpuComputeCapability GetGpuComputeCapability() {
     return device_description().gpu_compute_capability();
   }
-
-  se::GpuComputeCapability GetGpuComputeCapability() {
-    return backend()
-           .default_stream_executor()
-           ->GetDeviceDescription()
-           .gpu_compute_capability();
-  }
 };
 
 TEST_F(GpuIrEmitterUnnestedTest, EmitTritonCustomCallWithCorrectLowering) {
