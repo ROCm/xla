@@ -112,6 +112,7 @@ cc_library(
         ":miopen",
         ":rocblas",
         ":rocm_config",
+        ":rocm_smi",
         ":rocprofiler_register",
         ":rocsolver",
         ":rocsparse",
@@ -220,6 +221,7 @@ cc_library(
         ":amd_comgr",
         ":rocm_config",
         ":rocm_rpath",
+        ":rocm_smi",
         ":rocprofiler_register",
         ":system_libs",
     ],
@@ -244,6 +246,7 @@ cc_library(
         ":hipblaslt",
         ":rocm_config",
         ":rocm_rpath",
+        ":rocm_smi",
         ":roctracer",
     ],
 )
@@ -324,7 +327,6 @@ cc_library(
     includes = [
         "%{rocm_root}/include",
     ],
-    linkopts = ["-lnuma"],
     linkstatic = 1,
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
@@ -595,20 +597,29 @@ alias(
 
 cc_library(
     name = "rocm_smi",
-    srcs = glob([
-        "%{rocm_root}/lib/librocm_smi64.so*",
-        "%{rocm_root}/lib/libroam.so*",
-    ]),
     hdrs = glob([
         "%{rocm_root}/include/oam/**",
         "%{rocm_root}/include/rocm_smi/**",
+    ]),
+    data = glob([
+        "%{rocm_root}/lib/librocm_smi64.so*",
+        "%{rocm_root}/lib/libroam.so*",
     ]),
     include_prefix = "rocm",
     includes = [
         "%{rocm_root}/include",
     ],
+    linkopts = select({
+        ":build_hermetic": [
+            "-lrocm_smi64.so",
+        ],
+        "//conditions:default": [],
+    }),
     strip_include_prefix = "%{rocm_root}",
-    deps = [":rocm_config"],
+    deps = [
+        ":rocm_config",
+        ":rocm_rpath",
+    ],
 )
 
 cc_library(
