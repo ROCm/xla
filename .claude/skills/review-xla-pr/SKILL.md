@@ -4,10 +4,17 @@ description: Review an XLA pull request with deep expertise in HLO optimizations
 argument-hint: [PR-number]
 context: fork
 agent: general-purpose
-allowed-tools: Bash(gh *), Bash(git *), Bash(head *), Bash(grep *), Read, Grep, Glob
+allowed-tools: Bash(gh pr view *), Bash(gh pr diff *), Bash(git log *), Bash(git show *), Bash(git diff *), Bash(git blame *), Bash(head *), Bash(grep *), Read, Grep, Glob
 ---
 
 # XLA PR Review
+
+## IMPORTANT: Do NOT post comments
+
+This skill is read-only. Do NOT post any comments, reviews, or reactions to GitHub.
+Do NOT use `gh pr comment`, `gh pr review`, `gh api` with POST/PUT/PATCH/DELETE,
+or any other write operation. Only return your findings as text output — the caller
+is responsible for posting them.
 
 ## Fetching Pull Request Context
 
