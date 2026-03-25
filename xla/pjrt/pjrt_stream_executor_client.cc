@@ -3103,7 +3103,7 @@ PjRtStreamExecutorLoadedExecutable::Execute(
     results[0] = ExecuteHelper(argument_handles[0], replica, partition, run_id,
                                options, returned_futures.has_value());
   } else {
-    std::unique_ptr<ProfilingContext> pc = CreateProfilingContext();
+    std::shared_ptr<ProfilingContext> pc = CreateProfilingContext();
     absl::Mutex mu;
     int running = num_addressable_devices;
     int failed = 0;
@@ -3116,7 +3116,7 @@ PjRtStreamExecutorLoadedExecutable::Execute(
       const LocalDeviceState& device_state =
           *tensorflow::down_cast<PjRtStreamExecutorDevice*>(device)
                ->local_device_state();
-      device_state.execute_thread()->Schedule([&, replica, partition, i] {
+      device_state.execute_thread()->Schedule([&, pc, replica, partition, i] {
         std::unique_ptr<WithProfilingContext> wpc =
             CreateWithProfilingContext(pc.get());
         results[i] =
@@ -3155,8 +3155,13 @@ PjRtStreamExecutorLoadedExecutable::Execute(
             << "Replicated computation launch failed, but not all replicas "
                "terminated. Aborting process to work around deadlock. "
                "Failure message (there may have been multiple failures, see "
-               "the error log for all failures): \n\n"
-            << first_failure_status.message();
+               "the error log for all failures): \n\n";
+
+        if (!first_failure_status.ok()) {
+          LOG(FATAL) << first_failure_status.message();
+        } else {
+          LOG(FATAL) << "(no failure status captured)";
+        }
       }
     }
   }
