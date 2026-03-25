@@ -23,6 +23,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
@@ -87,6 +88,85 @@ std::optional<TransposeDescription> FindConsistentTransposeHero(
   return tiled_transpose_hero;
 }
 
+// Returns true if the instruction is a trivial data-moving operation.
+bool IsTrivialDataMover(const HloInstruction* instr) {
+  switch (instr->opcode()) {
+    case HloOpcode::kSlice:
+    case HloOpcode::kReshape:
+    case HloOpcode::kBroadcast:
+    case HloOpcode::kBitcast:
+    case HloOpcode::kTranspose:
+    case HloOpcode::kCopy:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Collects the "root" inputs of an instruction by traversing through trivial
+// data-moving operations (slice, bitcast, etc.). These are the real sources
+// of data that the instruction depends on.
+void CollectRootInputs(const HloInstruction* instr,
+                       absl::flat_hash_set<const HloInstruction*>& roots) {
+  if (IsTrivialDataMover(instr)) {
+    for (const HloInstruction* operand : instr->operands()) {
+      CollectRootInputs(operand, roots);
+    }
+  } else {
+    roots.insert(instr);
+  }
+}
+
+// Returns true if the fusion's root is a concatenate.
+bool FusionHasConcatenateRoot(const HloInstruction* fusion) {
+  if (fusion->opcode() != HloOpcode::kFusion) return false;
+  return fusion->fused_instructions_computation()
+             ->root_instruction()
+             ->opcode() == HloOpcode::kConcatenate;
+}
+
+// Returns true if the concat shares inputs with another concat (or fusion
+// containing a concat) in the parent computation.
+bool SharesInputsWithSiblingConcatenates(const HloInstruction& concat) {
+  const HloComputation* comp = concat.parent();
+
+  // If inside a fused computation, use the fusion instruction as our
+  // representative and check siblings in the fusion's parent computation.
+  const HloInstruction* our_instr = &concat;
+  if (comp->IsFusionComputation()) {
+    our_instr = comp->FusionInstruction();
+    comp = our_instr->parent();
+  }
+
+  // Collect root inputs for our instruction
+  absl::flat_hash_set<const HloInstruction*> our_roots;
+  for (const HloInstruction* operand : our_instr->operands()) {
+    CollectRootInputs(operand, our_roots);
+  }
+
+  // Check other concats and concat-fusions for shared inputs
+  for (const HloInstruction* instr : comp->instructions()) {
+    if (instr == our_instr) continue;
+
+    bool is_concat = instr->opcode() == HloOpcode::kConcatenate;
+    bool is_concat_fusion = FusionHasConcatenateRoot(instr);
+    if (!is_concat && !is_concat_fusion) continue;
+
+    absl::flat_hash_set<const HloInstruction*> other_roots;
+    for (const HloInstruction* operand : instr->operands()) {
+      CollectRootInputs(operand, other_roots);
+    }
+
+    for (const HloInstruction* root : other_roots) {
+      if (our_roots.contains(root)) {
+        return true;  // Found shared input with sibling concat
+      }
+    }
+  }
+
+  return false;
+}
+
 bool UseConcatenateFusion(absl::Span<const HloInstructionAdaptor> roots,
                           absl::Span<const HloInstructionAdaptor> heroes) {
   if (heroes.size() != 1) return false;
@@ -96,6 +176,13 @@ bool UseConcatenateFusion(absl::Span<const HloInstructionAdaptor> roots,
   // Limit the number of operands because the concat emitter produces code for
   // each operand, hurting occupancy.
   if (heroes.front().instruction().operand_count() > 4) return false;
+  // Don't use concat fusion if there may be sibling concats that share same
+  // input. The loop emitter is preferred because it can be merged via
+  // multi-output fusion, avoiding duplicate computation and memory reads.
+  // TODO: Remove this check when concat emitter supports multiple outputs.
+  if (SharesInputsWithSiblingConcatenates(heroes.front().instruction())) {
+    return false;
+  }
   // The loop emitter is faster when warp divergence and occupancy are both low.
   // TODO(csigg): exclude this case.
   return true;
