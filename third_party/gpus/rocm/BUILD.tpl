@@ -116,12 +116,8 @@ cc_library(
         ":rocsolver",
         ":rocsparse",
         ":roctracer",
-    ] + select_threshold(
-        above_or_eq = [":hipfft"],
-        below = [":rocfft"],
-        threshold = 40100,
-        value = rocm_version_number(),
-    ),
+        ":hipfft",
+    ],
 )
 
 cc_library(
@@ -594,6 +590,7 @@ alias(
         },
         value = rocm_version_number(),
     ),
+    visibility = ["//visibility:public"],
 )
 
 cc_library(
