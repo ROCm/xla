@@ -63,7 +63,7 @@ jobs:
           ref: ${{ github.event_name == 'schedule' && 'main' || github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - name: Fetch execute_ci_build.sh from rocm-dev-infram
+      - name: Fetch execute_ci_build.sh from rocm-dev-infra
         run: |
           wget -O build_tools/rocm/execute_ci_build.sh https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/execute_ci_build.sh
           chmod +x build_tools/rocm/execute_ci_build.sh
