@@ -175,8 +175,8 @@ static void MakeLLIR(mlir::OpPassManager* pm,
 
   // Add XLA custom pass to implement extern_elementwise atomic functions
   // This must run after MLIR->LLVM conversion
-  pm->addPass(
-      mlir::triton::xla::CreateTritonXLAImplementExternAtomicsROCmPass());
+  pm->addPass(mlir::triton::xla::CreateTritonXLAImplementExternAtomicsPass(
+      mlir::triton::xla::TargetBackend::ROCM));
 }
 
 void CreateTritonRocmPipeline(
