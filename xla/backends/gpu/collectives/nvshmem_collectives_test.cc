@@ -72,19 +72,23 @@ absl::Status InitializationTestBody(const int node_id, const int num_nodes) {
     xla::CoordinationServiceImpl::Options service_options;
     service_options.num_nodes = num_nodes;
     TF_ASSIGN_OR_RETURN(service, xla::GetDistributedRuntimeService(
-                                     "[::]:12345", service_options));
+                                     "0.0.0.0:7777", service_options));
   }
 
   xla::DistributedRuntimeClient::Options distributed_options;
   distributed_options.node_id = node_id;
   distributed_options.init_timeout = absl::Seconds(120);
   auto distributed_client =
-      GetDistributedRuntimeClient("127.0.0.1:12345", distributed_options);
+      GetDistributedRuntimeClient("127.0.0.1:7777", distributed_options);
   TF_QCHECK_OK(distributed_client->Connect());
   auto kv_store =
       GetDistributedKeyValueStore(distributed_client, /*key_prefix=*/"gpu:");
 
+  LOG(ERROR) << "Getting platform";
   TF_ASSIGN_OR_RETURN(auto platform, xla::PlatformUtil::GetPlatform("gpu"));
+  
+  LOG(ERROR) << "Platform name: " << platform->Name();
+  
   TF_ASSIGN_OR_RETURN(auto collectives,
       xla::CollectivesRegistry::Get(platform->Name(), "nvshmem"));
 
@@ -135,7 +139,11 @@ int main(int argc, char* argv[]) {
   std::string usage = tsl::Flags::Usage(argv[0], flag_list);
   tsl::Flags::Parse(&argc, argv, flag_list);
   testing::InitGoogleTest(&argc, argv);
+
+  LOG(ERROR) << "Running InitializationTestBody for node " << node_id;
+
   if (node_id >= 0) {
+    LOG(ERROR) << "Running InitializationTestBody for node " << node_id;
     absl::Status result = xla::gpu::InitializationTestBody(node_id, num_nodes);
     if (!result.ok()) {
       LOG(ERROR) << result;

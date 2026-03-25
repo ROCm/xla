@@ -342,14 +342,14 @@ absl::Status NvshmemCollectiveTestBody(int rank_id, int num_ranks,
     xla::CoordinationServiceImpl::Options service_options;
     service_options.num_nodes = num_ranks;
     TF_ASSIGN_OR_RETURN(service, xla::GetDistributedRuntimeService(
-                                     "[::]:12345", service_options));
+                                     "[::]:7777", service_options));
   }
 
   xla::DistributedRuntimeClient::Options distributed_options;
   distributed_options.node_id = rank_id;
   distributed_options.init_timeout = absl::Seconds(120);
   auto distributed_client =
-      GetDistributedRuntimeClient("127.0.0.1:12345", distributed_options);
+      GetDistributedRuntimeClient("127.0.0.1:7777", distributed_options);
   TF_QCHECK_OK(distributed_client->Connect());
 
   GpuClientOptions client_options;

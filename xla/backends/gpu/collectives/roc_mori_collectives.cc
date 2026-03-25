@@ -159,6 +159,9 @@ absl::Status MoriCollectives::Deallocate(void* buffer) {
 absl::StatusOr<std::unique_ptr<Communicator>>
 MoriCollectives::CreateCommunicator() {
 
+  if (!initialized_) {
+    return absl::InternalError("MoriCollectives is not initialized");
+  }
   // TF_ASSIGN_OR_RETURN(auto *ptr, 
   //       Allocate(sizeof(rocm_mori_team_t) * MoriCommunicator::kMaxTeams));
   // auto *teams = static_cast< rocm_mori_team_t *>(ptr);
