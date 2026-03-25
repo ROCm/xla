@@ -71,5 +71,6 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
     --test_output=errors \
     --local_test_jobs=4 \
+    --cache_test_results=no \
     "$@" \
     "${TARGETS_TO_EXCLUDE[@]}" \
