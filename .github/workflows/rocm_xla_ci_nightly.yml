@@ -1,0 +1,107 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+
+name: CI ROCm Sanitizers
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    # Run every 24 hours at 3:47 AM UTC
+    - cron: '47 3 * * *'
+  pull_request_target:
+    types: [labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  execute-xla-ut-sanitizers:
+    # Run on schedule or if the "nightly_pipeline" label was added
+    if: github.event_name == 'schedule' || github.event.label.name == 'nightly-pipeline'
+    runs-on: linux-mi250-4
+    strategy:
+      fail-fast: false
+      matrix:
+        mode:
+          - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe_dynamic"]}
+          - {name: "hermetic", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe"]}
+          - {name: "asan", configs: ["--config=rocm_ci", "--config=asan"]}
+          - {name: "tsan", configs: ["--config=rocm_ci", "--config=tsan"]}
+    container:
+      image: rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa
+      options: >-
+        --device=/dev/dri
+        --device=/dev/kfd
+        --shm-size=16G
+        --cap-add=SYS_PTRACE
+        --security-opt=seccomp=unconfined
+      volumes:
+        - /tmp/bazel-cache:/root/.cache/bazel
+    env:
+      DOCKER_IMAGE: rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Scheduled runs: checkout upstream openxla/xla main branch
+          # Label-triggered runs: checkout the PR branch
+          repository: ${{ github.event_name == 'schedule' && 'openxla/xla' || github.repository }}
+          ref: ${{ github.event_name == 'schedule' && 'main' || github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Fetch execute_ci_build.sh from rocm-dev-infram
+        run: |
+          wget -O build_tools/rocm/execute_ci_build.sh https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/execute_ci_build.sh
+          chmod +x build_tools/rocm/execute_ci_build.sh
+
+      - name: Get RBE cluster keys
+        env:
+          RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
+          RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}
+        run: |
+          mkdir -p /tf/certificates
+          echo "$RBE_CI_CERT" > /tf/certificates/ci-cert.crt
+          echo "$RBE_CI_KEY" > /tf/certificates/ci-cert.key
+
+      - name: CPU Info
+        run: lscpu
+
+      - name: ROCm info
+        run: /opt/rocm/bin/rocminfo
+
+      - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
+        run: |
+          build_tools/rocm/execute_ci_build.sh \
+            ${{ join(matrix.mode.configs, ' ') }} \
+            --config=ci_single_gpu \
+            --local_test_jobs=4 \
+            --strategy=TestRunner=local \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
+            --config=xla_sgpu
+
+      - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
+        if: always() && !cancelled()
+        run: |
+          build_tools/rocm/execute_ci_build.sh \
+            ${{ join(matrix.mode.configs, ' ') }} \
+            --config=ci_multi_gpu \
+            --local_test_jobs=1 \
+            --strategy=TestRunner=local \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }} \
+            --config=xla_mgpu
