@@ -1589,6 +1589,7 @@ cc_library(
     srcs = ["all_gather_thunk.cc"],
     hdrs = ["all_gather_thunk.h"],
     deps = [
+        ":collective_kernel_thunk",
         ":collective_thunk",
         ":thunk",
         "//xla:future",

@@ -151,6 +151,9 @@ absl::Status CopyCollectiveMetadataToDevice(
 absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
     const GpuCliqueKey& clique_key, se::StreamExecutor& executor,
     const CollectiveParams& collective_params) const {
+  const bool is_all_gather =
+      (collective_op_kind_ == CollectiveOpKind::kAllGather);
+
   if (!collective_kernel_enabled_) {
     XLA_VLOG_DEVICE(3, executor.device_ordinal())
         << "Collective kernel is not enabled.";
@@ -163,15 +166,20 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
         << "Variadic arguments are not implemented for collective kernels.";
     return false;
   }
+
   const int64_t num_elements = buffers_[0].element_count;
   const int64_t input_size_bytes = GetInputSizeBytes();
-  const AllReduceStrategy strategy =
-      GetAllReduceStrategy(input_size_bytes, is_multimem_enabled_);
-  // Custom all-reduce strategy is only supported for small inputs.
-  if (input_size_bytes > GetMaxSupportedAllReduceSizeBytes(strategy)) {
-    XLA_VLOG_DEVICE(3, executor.device_ordinal())
-        << "Custom all-reduce strategy is only supported for small inputs.";
-    return false;
+
+  // Skip all-reduce-specific checks for all-gather
+  if (!is_all_gather) {
+    const AllReduceStrategy strategy =
+        GetAllReduceStrategy(input_size_bytes, is_multimem_enabled_);
+    // Custom all-reduce strategy is only supported for small inputs.
+    if (input_size_bytes > GetMaxSupportedAllReduceSizeBytes(strategy)) {
+      XLA_VLOG_DEVICE(3, executor.device_ordinal())
+          << "Custom all-reduce strategy is only supported for small inputs.";
+      return false;
+    }
   }
 
   // Only single-host collectives are supported for now.
@@ -191,9 +199,20 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
     }
   }
 
-  return IsAllReduceKernelSupported(
+  // For all-gather, we need an emitted Triton kernel
+  // If no kernel was emitted (kernel_name_ is empty), fall back to NCCL
+  if (is_all_gather) {
+    bool has_kernel = !kernel_name_.empty();
+    return has_kernel;
+  }
+
+  // All-reduce specific validation
+  const AllReduceStrategy strategy =
+      GetAllReduceStrategy(input_size_bytes, is_multimem_enabled_);
+  bool supported = IsAllReduceKernelSupported(
       clique_key.num_local_participants(), num_elements,
       collective_config_.operand_element_type[0], reduction_kind_, strategy);
+  return supported;
 }
 
 absl::Status CollectiveKernelThunk::Prepare(const PrepareParams& params) {
@@ -404,8 +423,8 @@ absl::Status CollectiveKernelThunk::Initialize(const InitializeParams& params) {
           tsl::safe_reinterpret_cast<char*>(dst_mmem) + dst_mmem_offset;
 
       XLA_VLOG_DEVICE(3, params.executor->device_ordinal())
-          << "Constructed device state {"
-          << " metadata rank: " << metadata.rank << ", param_to_peers: ("
+          << "Constructed device state {" << " metadata rank: " << metadata.rank
+          << ", param_to_peers: ("
           << absl::StrJoin(param_to_peers_ptrs, ", ", PtrFormatter{})
           << "), multimem_addresses: ("
           << absl::StrJoin(multimem_addresses, ", ", PtrFormatter{}) << ")}";

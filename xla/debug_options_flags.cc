@@ -455,6 +455,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_unsupported_enable_all_reduce_decomposer(false);
   opts.set_xla_gpu_unsupported_enable_ragged_all_to_all_decomposer(false);
   opts.set_xla_gpu_unsupported_use_all_reduce_one_shot_kernel(false);
+  opts.set_xla_gpu_unsupported_use_all_gather_triton_backend(false);
   opts.set_xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel(true);
   opts.set_xla_gpu_experimental_use_autotuner_pass(false);
   opts.set_xla_gpu_experimental_enable_fusion_autotuner(true);
@@ -2641,6 +2642,13 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_unsupported_use_all_reduce_one_shot_kernel(),
       "Internal: Enable the one-shot kernel for single-host all-reduce "
       "operations."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_unsupported_use_all_gather_triton_backend",
+      bool_setter_for(
+          &DebugOptions::
+              set_xla_gpu_unsupported_use_all_gather_triton_backend),
+      debug_options->xla_gpu_unsupported_use_all_gather_triton_backend(),
+      "Internal: Enable Triton backend for all-gather operations."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel",
       bool_setter_for(
