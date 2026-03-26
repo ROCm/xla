@@ -53,7 +53,6 @@ cc_library(
         "//xla/pjrt/distributed:service",
         "//xla/pjrt/plugin/xla_gpu:xla_gpu_allocator_config",
         "//xla/pjrt/plugin/xla_gpu:xla_gpu_client_options",
-        "//xla/service:cpu_plugin",
         "//xla/service:hlo_module_util",
         "//xla/tsl/platform:statusor",
         "//xla/tsl/util:command_line_flags",
@@ -92,6 +91,7 @@ xla_cc_binary(
     ],
     deps = [
         ":hlo_runner_main_lib",
+        "//xla/service:cpu_plugin",
     ],
 )
 
