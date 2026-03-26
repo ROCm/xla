@@ -91,6 +91,7 @@ xla_cc_binary(
     ],
     deps = [
         ":hlo_runner_main_lib",
+        "//xla/pjrt/plugin/xla_cpu:xla_cpu_pjrt_client",
         "//xla/service:cpu_plugin",
     ],
 )
@@ -104,6 +105,7 @@ xla_cc_binary(
     ] + tf_gpu_tests_tags(),
     deps = [
         ":hlo_runner_main_lib",
+        "//xla/pjrt/plugin/xla_cpu:xla_cpu_pjrt_client_stub",
         "//xla/service:gpu_plugin",
     ] + if_cuda([    
         "//xla/stream_executor:cuda_platform",
@@ -128,7 +130,7 @@ cc_library(
         "//xla/pjrt/distributed:key_value_store_interface",
         "//xla/pjrt/distributed:service",
         "//xla/pjrt/plugin/xla_cpu:cpu_client_options",
-        "//xla/pjrt/plugin/xla_cpu:xla_cpu_pjrt_client",
+        "//xla/pjrt/plugin/xla_cpu:xla_cpu_pjrt_client_hdr",
         "//xla/pjrt/plugin/xla_gpu:xla_gpu_client_options",
         "//xla/pjrt/plugin/xla_gpu:xla_gpu_pjrt_client",
         "@com_google_absl//absl/log",

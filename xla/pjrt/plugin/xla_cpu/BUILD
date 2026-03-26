@@ -9,6 +9,16 @@ package(
 )
 
 cc_library(
+    name = "xla_cpu_pjrt_client_hdr",
+    hdrs = ["xla_cpu_pjrt_client.h"],
+    deps = [
+        ":cpu_client_options",
+        "//xla/pjrt:pjrt_client",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
     name = "xla_cpu_pjrt_client",
     srcs = ["xla_cpu_pjrt_client.cc"],
     hdrs = ["xla_cpu_pjrt_client.h"],
@@ -16,6 +26,15 @@ cc_library(
         ":cpu_client_options",
         "//xla/pjrt:pjrt_client",
         "//xla/pjrt/cpu:cpu_client",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
+    name = "xla_cpu_pjrt_client_stub",
+    srcs = ["xla_cpu_pjrt_client_stub.cc"],
+    deps = [
+        ":xla_cpu_pjrt_client_hdr",
         "@com_google_absl//absl/status:statusor",
     ],
 )
