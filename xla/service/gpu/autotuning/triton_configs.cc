@@ -145,13 +145,9 @@ config { block_m: 16 block_n: 128 block_k: 32 split_k: 16 num_stages: 1 num_warp
 //   2. Per-GEMM-shape winners from exhaustive search on isolated GEMM HLOs.
 //   3. Full-model winners from exhaustive search on the complete Llama 3.1 8B
 //      HLO (BMM attention configs + additional large-GEMM variants).
-//   4. AITER project gfx942 configs (aiter/ops/triton/configs/gemm/).
-//      Converted from AITER's MI300-tuned Triton GEMM configs (A16W16, A8W8,
-//      blockscale, batched GEMM, fused FF). AITER-only parameters dropped:
-//      GROUP_SIZE_M, waves_per_eu, matrix_instr_nonkdim, cache_modifier, kpack.
-//   5. Gemma2 2B (f32) exhaustive search winners on 1-GPU MI300X. Projection
+//   4. Gemma2 2B (f32) exhaustive search winners on 1-GPU MI300X. Projection
 //      GEMMs with N=31 (short sequence). Closes 23% wall-clock gap vs default.
-//   6. Gemma3 1B (bf16) exhaustive search winners on 1-GPU MI300X. Small-model
+//   5. Gemma3 1B (bf16) exhaustive search winners on 1-GPU MI300X. Small-model
 //      GEMMs with N=1,11 (decode + short sequence). Adds small-tile coverage.
 constexpr absl::string_view kMI300TritonConfigs = R"(
 # --- Original ROCm defaults ---
@@ -178,47 +174,6 @@ config { block_m: 128 block_n: 256 block_k: 64 split_k: 2 num_stages: 2 num_warp
 config { block_m: 256 block_n: 128 block_k: 32 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
 config { block_m: 256 block_n: 256 block_k: 32 split_k: 1 num_stages: 1 num_warps: 8 num_ctas: 1 }
 config { block_m: 256 block_n: 256 block_k: 32 split_k: 4 num_stages: 2 num_warps: 8 num_ctas: 1 }
-# --- AITER gfx942 configs (aiter/ops/triton/configs/gemm/gfx942-*.json) ---
-# Converted from AITER project's MI300 Triton GEMM tuning results.
-# AITER-only params not representable in XLA: GROUP_SIZE_M, waves_per_eu,
-# matrix_instr_nonkdim, cache_modifier, kpack.
-# 8 AITER configs with block_k=0 (dynamic K) are omitted as invalid for XLA.
-config { block_m: 4 block_n: 16 block_k: 512 split_k: 4 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 4 block_n: 16 block_k: 1024 split_k: 1 num_stages: 2 num_warps: 1 num_ctas: 1 }
-config { block_m: 4 block_n: 16 block_k: 1024 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 4 block_n: 256 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
-config { block_m: 8 block_n: 16 block_k: 512 split_k: 4 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 8 block_n: 16 block_k: 1024 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 8 block_n: 16 block_k: 1024 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
-config { block_m: 8 block_n: 256 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
-config { block_m: 16 block_n: 16 block_k: 128 split_k: 1 num_stages: 2 num_warps: 2 num_ctas: 1 }
-config { block_m: 16 block_n: 16 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 16 block_n: 16 block_k: 128 split_k: 14 num_stages: 2 num_warps: 2 num_ctas: 1 }
-config { block_m: 16 block_n: 16 block_k: 1024 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 16 block_n: 16 block_k: 1024 split_k: 3 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 16 block_n: 32 block_k: 128 split_k: 7 num_stages: 2 num_warps: 2 num_ctas: 1 }
-config { block_m: 16 block_n: 64 block_k: 128 split_k: 1 num_stages: 2 num_warps: 2 num_ctas: 1 }
-config { block_m: 16 block_n: 128 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 32 block_n: 16 block_k: 512 split_k: 4 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 32 block_n: 16 block_k: 1024 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
-config { block_m: 32 block_n: 32 block_k: 512 split_k: 4 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 32 block_n: 64 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 64 block_n: 16 block_k: 128 split_k: 1 num_stages: 3 num_warps: 2 num_ctas: 1 }
-config { block_m: 64 block_n: 16 block_k: 128 split_k: 1 num_stages: 3 num_warps: 4 num_ctas: 1 }
-config { block_m: 64 block_n: 32 block_k: 128 split_k: 4 num_stages: 2 num_warps: 2 num_ctas: 1 }
-config { block_m: 64 block_n: 64 block_k: 128 split_k: 14 num_stages: 2 num_warps: 2 num_ctas: 1 }
-config { block_m: 64 block_n: 64 block_k: 128 split_k: 14 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 64 block_n: 128 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 64 block_n: 128 block_k: 128 split_k: 1 num_stages: 3 num_warps: 4 num_ctas: 1 }
-config { block_m: 64 block_n: 256 block_k: 128 split_k: 1 num_stages: 1 num_warps: 8 num_ctas: 1 }
-config { block_m: 128 block_n: 64 block_k: 128 split_k: 4 num_stages: 2 num_warps: 2 num_ctas: 1 }
-config { block_m: 128 block_n: 64 block_k: 128 split_k: 7 num_stages: 2 num_warps: 2 num_ctas: 1 }
-config { block_m: 128 block_n: 128 block_k: 32 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
-config { block_m: 128 block_n: 128 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
-config { block_m: 128 block_n: 128 block_k: 128 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
-config { block_m: 128 block_n: 256 block_k: 128 split_k: 1 num_stages: 1 num_warps: 8 num_ctas: 1 }
-config { block_m: 128 block_n: 256 block_k: 128 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
-config { block_m: 256 block_n: 256 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
 # --- Gemma2 2B (f32) exhaustive search winners (1-GPU, MI300X) ---
 # Projection GEMMs (repeated per layer, ~26 layers):
 #   4096x31x2304 W_qkv: default 3.67ms -> exhaustive 1.57ms (-57%)
