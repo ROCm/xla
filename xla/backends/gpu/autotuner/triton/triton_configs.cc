@@ -50,17 +50,22 @@ const std::vector<TritonGemmConfig>& GetTritonConfigsForPlatform(
     TritonConfigsPlatform platform) {
   static const absl::NoDestructor<
       absl::flat_hash_map<TritonConfigsPlatform, std::vector<TritonGemmConfig>>>
-      kConfigs(
-          {{TritonConfigsPlatform::kAmpere, ParseConfig(configs::get_a100())},
-           {TritonConfigsPlatform::kBlackwell,
-            ParseConfig(configs::get_b200())},
-           {TritonConfigsPlatform::kBlackwellConsumer,
-            ParseConfig(configs::get_sm120())},
-           {TritonConfigsPlatform::kDefaultCuda,
-            ParseConfig(configs::get_cuda())},
-           {TritonConfigsPlatform::kDefaultRocm,
-            ParseConfig(configs::get_rocm())},
-           {TritonConfigsPlatform::kHopper, ParseConfig(configs::get_h100())}});
+      kConfigs({{TritonConfigsPlatform::kAmpere,
+                 ParseConfig(GetDefaultConfigStr("a100.txtpb"))},
+                {TritonConfigsPlatform::kBlackwell,
+                 ParseConfig(GetDefaultConfigStr("b200.txtpb"))},
+                {TritonConfigsPlatform::kBlackwellConsumer,
+                 ParseConfig(GetDefaultConfigStr("sm120.txtpb"))},
+                {TritonConfigsPlatform::kDefaultCuda,
+                 ParseConfig(GetDefaultConfigStr("cuda.txtpb"))},
+                {TritonConfigsPlatform::kDefaultRocm,
+                 ParseConfig(GetDefaultConfigStr("rocm.txtpb"))},
+                {TritonConfigsPlatform::kHopper,
+                 ParseConfig(GetDefaultConfigStr("h100.txtpb"))},
+                {TritonConfigsPlatform::kMI300,
+                 ParseConfig(GetDefaultConfigStr("mi300.txtpb"))},
+                {TritonConfigsPlatform::kMI350,
+                 ParseConfig(GetDefaultConfigStr("mi350.txtpb"))}});
   return kConfigs->at(platform);
 }
 
