@@ -149,6 +149,7 @@ cc_library(
         ":rocm_driver_wrapper",
         ":rocm_event",
         ":rocm_kernel",
+        ":rocm_pcie_bandwidth",
         ":rocm_platform_id",
         ":rocm_status",
         ":rocm_stream",
@@ -329,6 +330,52 @@ cc_library(
     srcs = ["rocm_platform_id.cc"],
     hdrs = ["rocm_platform_id.h"],
     deps = ["//xla/stream_executor:platform_id"],
+)
+
+cc_library(
+    name = "amdsmi_wrapper",
+    hdrs = ["amdsmi_wrapper.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        "//xla/tsl/platform:env",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform:dso_loader",
+        "@tsl//tsl/platform:platform_port",
+    ],
+)
+
+cc_library(
+    name = "rocm_pcie_bandwidth",
+    srcs = ["rocm_pcie_bandwidth.cc"],
+    hdrs = ["rocm_pcie_bandwidth.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":amdsmi_wrapper",
+        "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/strings",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform:dso_loader",
+    ],
+)
+
+xla_cc_test(
+    name = "rocm_pcie_bandwidth_test",
+    srcs = ["rocm_pcie_bandwidth_test.cc"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_pcie_bandwidth",
+        "@com_google_googletest//:gtest_main",
+    ],
 )
 
 cc_library(
