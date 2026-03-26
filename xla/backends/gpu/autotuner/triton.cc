@@ -61,6 +61,12 @@ namespace {
 std::vector<TritonGemmConfig> GetDefaultTritonConfigs(
     se::GpuComputeCapability compute_capability) {
   if (compute_capability.IsRocm()) {
+    const auto* rocm_cc = compute_capability.rocm_compute_capability();
+    if (rocm_cc != nullptr && rocm_cc->gfx_version() == "gfx942") {
+      VLOG(1) << "ROCm Triton autotuner: using kMI300 configs for gfx942";
+      return GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI300);
+    }
+    VLOG(1) << "ROCm Triton autotuner: using kDefaultRocm configs";
     return GetTritonConfigsForPlatform(TritonConfigsPlatform::kDefaultRocm);
   }
 

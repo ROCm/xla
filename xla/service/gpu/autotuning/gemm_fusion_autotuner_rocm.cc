@@ -17,6 +17,7 @@ limitations under the License.
 #include <memory>
 #include <vector>
 
+#include "tsl/platform/logging.h"
 #include "absl/status/statusor.h"
 #include "rocm/include/hipblas/hipblas.h"
 #include "xla/backends/autotuner/codegen_backend.h"
@@ -50,7 +51,21 @@ GemmFusionAutotuner::GetPlatformCodegenBackends(
 
 std::vector<TritonGemmConfig> GemmFusionAutotunerImpl::GetDefaultTritonConfigs()
     const {
-  return GetTritonConfigsForPlatform(TritonConfigsPlatform::kDefaultRocm);
+  auto compute_capability = GetComputeCapability();
+  const auto* rocm_cc = compute_capability.rocm_compute_capability();
+  if (rocm_cc != nullptr) {
+    VLOG(1) << "ROCm GemmFusionAutotuner: gfx_version=" << rocm_cc->gfx_version();
+    if (rocm_cc->gfx_version() == "gfx942") {
+      const auto& configs = GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI300);
+      VLOG(1) << "ROCm GemmFusionAutotuner: using kMI300 configs (" << configs.size() << " configs)";
+      return configs;
+    }
+  } else {
+    VLOG(1) << "ROCm GemmFusionAutotuner: rocm_compute_capability is null";
+  }
+  const auto& configs = GetTritonConfigsForPlatform(TritonConfigsPlatform::kDefaultRocm);
+  VLOG(1) << "ROCm GemmFusionAutotuner: using kDefaultRocm configs (" << configs.size() << " configs)";
+  return configs;
 }
 
 }  // namespace gpu

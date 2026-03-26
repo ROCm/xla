@@ -140,6 +140,83 @@ config { block_m: 16 block_n: 16 block_k: 256 split_k: 1 num_stages: 1 num_warps
 config { block_m: 16 block_n: 128 block_k: 32 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
 )";
 
+// MI300 (gfx942) configs from multiple sources:
+//   1. Original ROCm defaults (kDefaultRocmTritonConfigs).
+//   2. Per-GEMM-shape winners from exhaustive search on isolated GEMM HLOs.
+//   3. Full-model winners from exhaustive search on the complete Llama 3.1 8B
+//      HLO (BMM attention configs + additional large-GEMM variants).
+//   4. AITER project gfx942 configs (aiter/ops/triton/configs/gemm/).
+//      Converted from AITER's MI300-tuned Triton GEMM configs (A16W16, A8W8,
+//      blockscale, batched GEMM, fused FF). AITER-only parameters dropped:
+//      GROUP_SIZE_M, waves_per_eu, matrix_instr_nonkdim, cache_modifier, kpack.
+constexpr absl::string_view kMI300TritonConfigs = R"(
+# --- Original ROCm defaults ---
+config { block_m: 32 block_n: 32 block_k: 256 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 32 block_k: 32 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 64 block_k: 64 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 64 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 256 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 16 block_n: 128 block_k: 32 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
+# --- Per-GEMM-shape exhaustive search winners ---
+config { block_m: 256 block_n: 256 block_k: 32 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 256 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 256 block_k: 32 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 256 block_n: 128 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 64 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+# --- Full-model exhaustive search winners ---
+config { block_m: 32 block_n: 8 block_k: 16 split_k: 1 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 32 block_n: 8 block_k: 16 split_k: 1 num_stages: 4 num_warps: 2 num_ctas: 1 }
+config { block_m: 64 block_n: 32 block_k: 16 split_k: 1 num_stages: 1 num_warps: 2 num_ctas: 1 }
+config { block_m: 128 block_n: 32 block_k: 16 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 128 block_n: 64 block_k: 128 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 32 split_k: 1 num_stages: 3 num_warps: 4 num_ctas: 1 }
+config { block_m: 128 block_n: 256 block_k: 64 split_k: 2 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 256 block_n: 128 block_k: 32 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 256 block_n: 256 block_k: 32 split_k: 1 num_stages: 1 num_warps: 8 num_ctas: 1 }
+config { block_m: 256 block_n: 256 block_k: 32 split_k: 4 num_stages: 2 num_warps: 8 num_ctas: 1 }
+# --- AITER gfx942 configs (aiter/ops/triton/configs/gemm/gfx942-*.json) ---
+# Converted from AITER project's MI300 Triton GEMM tuning results.
+# AITER-only params not representable in XLA: GROUP_SIZE_M, waves_per_eu,
+# matrix_instr_nonkdim, cache_modifier, kpack.
+# 8 AITER configs with block_k=0 (dynamic K) are omitted as invalid for XLA.
+config { block_m: 4 block_n: 16 block_k: 512 split_k: 4 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 4 block_n: 16 block_k: 1024 split_k: 1 num_stages: 2 num_warps: 1 num_ctas: 1 }
+config { block_m: 4 block_n: 16 block_k: 1024 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 4 block_n: 256 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 8 block_n: 16 block_k: 512 split_k: 4 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 8 block_n: 16 block_k: 1024 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 8 block_n: 16 block_k: 1024 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 8 block_n: 256 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 128 split_k: 1 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 128 split_k: 14 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 1024 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 1024 split_k: 3 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 16 block_n: 32 block_k: 128 split_k: 7 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 16 block_n: 64 block_k: 128 split_k: 1 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 16 block_n: 128 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 16 block_k: 512 split_k: 4 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 16 block_k: 1024 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 32 block_k: 512 split_k: 4 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 64 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 16 block_k: 128 split_k: 1 num_stages: 3 num_warps: 2 num_ctas: 1 }
+config { block_m: 64 block_n: 16 block_k: 128 split_k: 1 num_stages: 3 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 32 block_k: 128 split_k: 4 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 64 block_n: 64 block_k: 128 split_k: 14 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 64 block_n: 64 block_k: 128 split_k: 14 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 128 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 128 block_k: 128 split_k: 1 num_stages: 3 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 256 block_k: 128 split_k: 1 num_stages: 1 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 64 block_k: 128 split_k: 4 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 128 block_n: 64 block_k: 128 split_k: 7 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 32 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 128 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 256 block_k: 128 split_k: 1 num_stages: 1 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 256 block_k: 128 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 256 block_n: 256 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+)";
+
 constexpr absl::string_view kAmpereTritonConfigs = R"(
 config { block_m: 16 block_n: 16 block_k: 64 split_k: 1 num_stages: 4 num_warps: 2 num_ctas: 1 }
 config { block_m: 16 block_n: 16 block_k: 128 split_k: 1 num_stages: 4 num_warps: 4 num_ctas: 1 }
@@ -274,6 +351,7 @@ LoadTritonConfigs() {
           {TritonConfigsPlatform::kDefaultCuda, kDefaultCudaTritonConfigs},
           {TritonConfigsPlatform::kDefaultRocm, kDefaultRocmTritonConfigs},
           {TritonConfigsPlatform::kHopper, kHopperTritonConfigs},
+          {TritonConfigsPlatform::kMI300, kMI300TritonConfigs},
       };
   for (const auto& [platform, config_str] : kConfigsMap) {
     result[platform] = parse_config(config_str);
