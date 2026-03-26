@@ -629,6 +629,23 @@ cc_library(
 )
 
 cc_library(
+    name = "amdsmi",
+    srcs = glob([
+        "%{rocm_root}/lib/libamd_smi*.so*",
+    ]),
+    hdrs = glob([
+        "%{rocm_root}/include/amd_smi/**",
+    ]),
+    include_prefix = "rocm",
+    includes = [
+        "%{rocm_root}/include",
+    ],
+    strip_include_prefix = "%{rocm_root}",
+    visibility = ["//visibility:public"],
+    deps = [":rocm_config"],
+)
+
+cc_library(
     name = "system_libs",
     srcs = glob([
         "%{rocm_root}/lib/rocm_sysdeps/lib/*.so*",

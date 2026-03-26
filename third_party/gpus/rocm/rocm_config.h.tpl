@@ -32,5 +32,6 @@ limitations under the License.
 #define TF_ROCTRACER_SOVERSION "%{roctracer_soversion_number}"
 #define TF_HIPSOLVER_SOVERSION "%{hipsolver_soversion_number}"
 #define TF_ROCRAND_SOVERSION "%{rocrand_soversion_number}"
+#define TF_AMDSMI_SOVERSION "%{amdsmi_soversion_number}"
 
 #endif  // ROCM_ROCM_CONFIG_H_
