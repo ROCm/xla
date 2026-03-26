@@ -121,6 +121,13 @@ std::string GetRocrandVersion() {
   return "";
 #endif  // TENSORFLOW_USE_ROCM
 }
+std::string GetAmdSmiVersion() {
+#if TENSORFLOW_USE_ROCM
+  return TF_AMDSMI_SOVERSION;
+#else   // TENSORFLOW_USE_ROCM
+  return "";
+#endif  // TENSORFLOW_USE_ROCM
+}
 
 absl::StatusOr<void*> GetDsoHandle(const std::string& name,
                                    absl::string_view version) {
@@ -267,6 +274,10 @@ absl::StatusOr<void*> GetHipDsoHandle() {
   return GetDsoHandle("amdhip64", GetHipVersion());
 }
 
+absl::StatusOr<void*> GetAmdSmiDsoHandle() {
+  return GetDsoHandle("amd_smi", GetAmdSmiVersion());
+}
+
 }  // namespace DsoLoader
 
 namespace CachedDsoLoader {
@@ -364,6 +375,11 @@ absl::StatusOr<void*> GetHipblasltDsoHandle() {
 
 absl::StatusOr<void*> GetHipDsoHandle() {
   static auto result = new auto(DsoLoader::GetHipDsoHandle());
+  return *result;
+}
+
+absl::StatusOr<void*> GetAmdSmiDsoHandle() {
+  static auto result = new auto(DsoLoader::GetAmdSmiDsoHandle());
   return *result;
 }
 
