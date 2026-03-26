@@ -149,6 +149,10 @@ config { block_m: 16 block_n: 128 block_k: 32 split_k: 16 num_stages: 1 num_warp
 //      Converted from AITER's MI300-tuned Triton GEMM configs (A16W16, A8W8,
 //      blockscale, batched GEMM, fused FF). AITER-only parameters dropped:
 //      GROUP_SIZE_M, waves_per_eu, matrix_instr_nonkdim, cache_modifier, kpack.
+//   5. Gemma2 2B (f32) exhaustive search winners on 1-GPU MI300X. Projection
+//      GEMMs with N=31 (short sequence). Closes 23% wall-clock gap vs default.
+//   6. Gemma3 1B (bf16) exhaustive search winners on 1-GPU MI300X. Small-model
+//      GEMMs with N=1,11 (decode + short sequence). Adds small-tile coverage.
 constexpr absl::string_view kMI300TritonConfigs = R"(
 # --- Original ROCm defaults ---
 config { block_m: 32 block_n: 32 block_k: 256 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
@@ -215,6 +219,39 @@ config { block_m: 128 block_n: 128 block_k: 128 split_k: 1 num_stages: 2 num_war
 config { block_m: 128 block_n: 256 block_k: 128 split_k: 1 num_stages: 1 num_warps: 8 num_ctas: 1 }
 config { block_m: 128 block_n: 256 block_k: 128 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
 config { block_m: 256 block_n: 256 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+# --- Gemma2 2B (f32) exhaustive search winners (1-GPU, MI300X) ---
+# Projection GEMMs (repeated per layer, ~26 layers):
+#   4096x31x2304 W_qkv: default 3.67ms -> exhaustive 1.57ms (-57%)
+config { block_m: 128 block_n: 32 block_k: 32 split_k: 8 num_stages: 1 num_warps: 4 num_ctas: 1 }
+#   4096x31x2304 W_qkv variant: -57%
+config { block_m: 64 block_n: 32 block_k: 32 split_k: 8 num_stages: 3 num_warps: 2 num_ctas: 1 }
+#   2048x31x2304 W_qkv small: default 3.91ms -> exhaustive 1.97ms (-50%)
+config { block_m: 64 block_n: 32 block_k: 32 split_k: 8 num_stages: 5 num_warps: 2 num_ctas: 1 }
+#   2304x31x9216 MLP down: default 2.35ms -> exhaustive 1.50ms (-36%)
+config { block_m: 128 block_n: 32 block_k: 32 split_k: 32 num_stages: 2 num_warps: 4 num_ctas: 1 }
+#   2304x31x2048 O proj: default 2.49ms -> exhaustive 1.49ms (-40%)
+config { block_m: 32 block_n: 32 block_k: 32 split_k: 8 num_stages: 2 num_warps: 2 num_ctas: 1 }
+#   9216x31x2304 MLP gate: default 3.66ms -> exhaustive 3.14ms (-14%)
+config { block_m: 64 block_n: 32 block_k: 128 split_k: 2 num_stages: 2 num_warps: 2 num_ctas: 1 }
+#   256000x1x2304 LM head: default 68.01ms -> exhaustive 52.42ms (-23%)
+config { block_m: 256 block_n: 8 block_k: 32 split_k: 4 num_stages: 1 num_warps: 2 num_ctas: 1 }
+# --- Gemma3 1B (bf16) exhaustive search winners (1-GPU, MI300X) ---
+#   13824x11x1152 MLP gate/up
+config { block_m: 128 block_n: 16 block_k: 128 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+#   1024x11x1152 W_qkv (A)
+config { block_m: 32 block_n: 16 block_k: 128 split_k: 1 num_stages: 4 num_warps: 4 num_ctas: 1 }
+#   1024x11x1152 W_qkv (B)
+config { block_m: 32 block_n: 16 block_k: 128 split_k: 2 num_stages: 5 num_warps: 2 num_ctas: 1 }
+#   512x11x1152 MLP proj
+config { block_m: 32 block_n: 16 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+#   262144x1x1152 LM head (bf16)
+config { block_m: 64 block_n: 8 block_k: 128 split_k: 1 num_stages: 1 num_warps: 2 num_ctas: 1 }
+#   1152x11x1024 O/down proj
+config { block_m: 32 block_n: 16 block_k: 256 split_k: 1 num_stages: 2 num_warps: 2 num_ctas: 1 }
+#   9216x1x2304 MLP gate decode (bs=1)
+config { block_m: 256 block_n: 8 block_k: 16 split_k: 8 num_stages: 2 num_warps: 2 num_ctas: 1 }
+#   2304x1x9216 MLP down decode (bs=1)
+config { block_m: 128 block_n: 8 block_k: 16 split_k: 32 num_stages: 1 num_warps: 2 num_ctas: 1 }
 )";
 
 constexpr absl::string_view kAmpereTritonConfigs = R"(
