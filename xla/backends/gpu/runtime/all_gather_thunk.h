@@ -24,6 +24,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "xla/backends/gpu/collectives/gpu_clique_key.h"
+#include "xla/backends/gpu/runtime/collective_kernel_thunk.h"
 #include "xla/backends/gpu/runtime/collective_thunk.h"
 #include "xla/core/collectives/communicator.h"
 #include "xla/hlo/ir/hlo_instructions.h"
@@ -44,6 +45,11 @@ class AllGatherStartThunk : public CollectiveThunk {
   AllGatherStartThunk(ThunkInfo thunk_info, const HloAllGatherInstruction* inst,
                       std::vector<Buffer> buffers,
                       bool p2p_memcpy_enabled = false);
+  AllGatherStartThunk(
+      ThunkInfo thunk_info, const HloAllGatherInstruction* inst,
+      std::vector<Buffer> buffers,
+      std::unique_ptr<CollectiveKernelThunk> collective_kernel_thunk,
+      bool p2p_memcpy_enabled = false);
   AllGatherStartThunk(
       ThunkInfo thunk_info,
       std::shared_ptr<CollectiveThunk::AsyncEvents> async_events,
@@ -83,6 +89,8 @@ class AllGatherStartThunk : public CollectiveThunk {
  protected:
   bool RequiresRendezvous() const override { return true; }
 
+  absl::Status Prepare(const PrepareParams& params) override;
+  absl::Status Initialize(const InitializeParams& params) override;
   absl::Status RunCollective(const ExecuteParams& params,
                              const GpuCliqueKey& clique_key, se::Stream& stream,
                              Communicator& comm) override;
@@ -90,6 +98,7 @@ class AllGatherStartThunk : public CollectiveThunk {
  private:
   const AllGatherConfig config_;
   const std::vector<Buffer> buffers_;
+  std::unique_ptr<CollectiveKernelThunk> collective_kernel_thunk_;
 };
 
 absl::Status RunAllGather(std::vector<DeviceBufferPair>& buffers,

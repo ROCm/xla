@@ -58,6 +58,11 @@ namespace xla::gpu {
 // must be set.
 class CollectiveKernelThunk : public Thunk {
  public:
+  enum class CollectiveOpKind {
+    kAllReduce,
+    kAllGather,
+  };
+
   static constexpr auto kMaxNumExecutors =
       ::stream_executor::gpu::kMaxNumAllReduceInputPtrs;
 
@@ -70,7 +75,8 @@ class CollectiveKernelThunk : public Thunk {
       absl::string_view kernel_name = "",                                //
       std::optional<LaunchDimensions> launch_dimensions = std::nullopt,  //
       int32_t shmem_bytes = 0,                                           //
-      bool is_multimem_enabled = false)
+      bool is_multimem_enabled = false,                                  //
+      CollectiveOpKind collective_op_kind = CollectiveOpKind::kAllReduce)
       : Thunk{Thunk::kCollectiveKernel, info},
         collective_kernel_enabled_(is_collective_kernel_enabled),
         is_async_(is_async),
@@ -80,7 +86,8 @@ class CollectiveKernelThunk : public Thunk {
         kernel_name_(kernel_name),
         shmem_bytes_(shmem_bytes),
         buffers_(std::move(buffers)),
-        is_multimem_enabled_(is_multimem_enabled) {
+        is_multimem_enabled_(is_multimem_enabled),
+        collective_op_kind_(collective_op_kind) {
     per_stream_state_.reserve(kMaxNumExecutors);
   }
 
@@ -202,6 +209,7 @@ class CollectiveKernelThunk : public Thunk {
   absl::flat_hash_map<se::StreamExecutor*, std::unique_ptr<StreamMemory>>
       per_stream_memory_ ABSL_GUARDED_BY(mutex_);
   const bool is_multimem_enabled_;
+  const CollectiveOpKind collective_op_kind_;
 };
 }  // namespace xla::gpu
 
