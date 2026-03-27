@@ -44,17 +44,16 @@ export HIP_FORCE_DEV_KERNARG=1
 # export AMD_LOG_LEVEL=4
 export TF_CPP_VMODULE=command_buffer_scheduling=1,latency_hiding_scheduler=0,\
 command_buffer_cmd=1,command_buffer_thunk=1,\
-gpu_compiler=0,gpu_command_buffer=0,rocm_executor=1,\
-rocm_command_buffer=0,gpu_executable=0,nccl_communicator=1,gpu_cliques=0
+gpu_compiler=0,gpu_command_buffer=0,rocm_executor=0,\
+rocm_command_buffer=0,gpu_executable=0,nccl_communicator=0,gpu_cliques=0
 
 export TEST_TMPDIR=$DUMP_DIR 
 
 export HSA_NO_SCRATCH_RECLAIM=1
-export XLA_COMMAND_BUFFERS_USE_CACHED_ALLOCS=0
+export XLA_COMMAND_BUFFERS_USE_CACHED_ALLOCS=1
 #export XLA_COMMAND_BUFFERS_MODULE_RE=jit_train_step.*
 export XLA_COMMAND_BUFFERS_USE_RENDEZVOUS=false
 export XLA_BUFFER_ASSIGN_MAX_REUSES=-1
-export XLA_THUNKS_PROFILING=0
 export XLA_ENABLE_HORIZONTAL_FUSION=true
 export XLA_LHS_PREFER_ASYNC_DEPTH=true
 export HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
@@ -67,8 +66,7 @@ export XLA_CLIENT_MEM_FRACTION=0.95
 
 rm -f gpucore.* graph_*
 
-#HIPLIB=/tf/clr/build/hipamd/lib/libamdhip64.so
-HIPLIB=/tf/xla/libamdhip64.so.7.1.25434-a69b0b7e43
+HIPLIB= #this can be used to override the HIPLIB
 
 XLA_TEST_DEVICE_TYPE=ROCM \
 LD_PRELOAD=/opt/rocm/lib/libMIOpen.so.1:$HIPLIB \
