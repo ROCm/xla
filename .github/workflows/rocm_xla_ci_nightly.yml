@@ -38,13 +38,13 @@ jobs:
       fail-fast: false
       matrix:
         mode:
-          - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe_dynamic"]}
-          - {name: "hermetic", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe"]}
-          - {name: "asan", configs: ["--config=rocm_ci", "--config=asan"]}
-          - {name: "tsan", configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local"]}
+          - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe_dynamic"], container: "DOCKER_IMAGE"}
+          - {name: "hermetic", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe"], container: "DOCKER_IMAGE_HERMETIC"}
+          - {name: "asan", configs: ["--config=rocm_ci", "--config=asan"], container: "DOCKER_IMAGE"}
+          - {name: "tsan", configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local"], container: "DOCKER_IMAGE"}
     container:
       # set in https://github.com/ROCm/xla/settings/variables/actions
-      image: ${{ vars.DOCKER_IMAGE }}
+      image: ${{ vars[matrix.mode.container] }}
       options: >-
         --device=/dev/dri
         --device=/dev/kfd
@@ -89,7 +89,7 @@ jobs:
             --config=ci_single_gpu \
             --local_test_jobs=4 \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
             --config=xla_sgpu
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
@@ -101,5 +101,5 @@ jobs:
             --local_test_jobs=1 \
             --strategy=TestRunner=local \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
             --config=xla_mgpu
