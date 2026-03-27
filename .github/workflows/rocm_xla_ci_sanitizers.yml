@@ -35,8 +35,8 @@ jobs:
       fail-fast: false
       matrix:
         mode:
-          - {name: "asan", configs: ["--config=rocm_ci", "--config=asan"]}
-          - {name: "tsan", configs: ["--config=rocm_ci", "--config=tsan"]}
+          - {name: "asan", configs: ["--config=rocm_ci", "--config=rocm_rbe", "--config=asan"]}
+          - {name: "tsan", configs: ["--config=rocm_ci", "--config=rocm_rbe", "--config=tsan"]}
     container:
       # set in https://github.com/ROCm/xla/settings/variables/actions
       image: ${{ vars.DOCKER_IMAGE }}
@@ -80,6 +80,7 @@ jobs:
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
+            --spawn_strategy=local \
             --strategy=TestRunner=local \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
@@ -92,6 +93,7 @@ jobs:
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_multi_gpu \
             --local_test_jobs=1 \
+            --spawn_strategy=local \
             --strategy=TestRunner=local \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
