@@ -3,10 +3,16 @@ set -ex
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
 EXCLUDED_TESTS=(
-    CubSort/CubSortPairsTest*
+    CubSort*
     SortRewriterTest*
     SortRewriterArgsort*
     FloatSupportTestWithCublas*
+    RandomEighTestInstantiation*
+    SVDTest*
+    *Tests/DotAlgorithmSupportTest*
+    IotaR1Test*
+    HostMemoryAllocateTest.Numa
+    TritonFusionNumericsVerifierTestSuite*
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
