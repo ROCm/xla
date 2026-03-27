@@ -42,7 +42,7 @@ limitations under the License.
 #include "xla/core/host_offloading/host_offloading_buffer.h"
 #include "xla/core/host_offloading/host_offloading_executable.h"
 #include "xla/core/host_offloading/host_offloading_executable.pb.h"
-#include "xla/core/host_offloading/host_offloading_nanort_executable.h"
+#include "xla/core/host_offloading/host_offloading_nanort_executable_stub.h"  // TODO(rocm-build): stub
 #include "xla/executable_run_options.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/primitive_util.h"

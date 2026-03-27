@@ -147,6 +147,20 @@ cc_library(
 )
 
 cc_library(
+    name = "host_offloading_nanort_executable_stub",
+    srcs = ["host_offloading_nanort_executable_stub.cc"],
+    hdrs = ["host_offloading_nanort_executable_stub.h"],
+    compatible_with = get_compatible_with_libtpu_portable(),
+    deps = [
+        ":host_offloading_buffer",
+        ":host_offloading_executable",
+        ":host_offloading_executable_proto_cc",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
     name = "host_offloading_nanort_executable",
     srcs = ["host_offloading_nanort_executable.cc"],
     hdrs = ["host_offloading_nanort_executable.h"],

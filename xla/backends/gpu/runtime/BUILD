@@ -3766,7 +3766,7 @@ cc_library(
         "//xla/core/host_offloading:host_offloading_buffer",
         "//xla/core/host_offloading:host_offloading_executable",
         "//xla/core/host_offloading:host_offloading_executable_proto_cc",
-        "//xla/core/host_offloading:host_offloading_nanort_executable",
+        "//xla/core/host_offloading:host_offloading_nanort_executable_stub",  # TODO(rocm-build): stub
         "//xla/hlo/ir:hlo",
         "//xla/service:buffer_assignment",
         "//xla/service:shaped_slice_proto_cc",
