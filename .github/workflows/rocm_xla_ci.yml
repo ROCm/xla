@@ -34,7 +34,7 @@ jobs:
       fail-fast: false
       matrix:
         mode:
-          - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe_dynamic"]}
+          - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe"]}
           #- {name: "hermetic", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe"]}
     container:
       # set in https://github.com/ROCm/xla/settings/variables/actions
