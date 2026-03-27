@@ -64,8 +64,8 @@ limitations under the License.
 #include "riegeli/bytes/string_reader.h"
 #include "riegeli/bytes/string_writer.h"
 #include "xla/backends/autotuner/codegen_backend.h"
-#include "xla/backends/cpu/nanort/nanort_client.h"
-#include "xla/backends/cpu/nanort/nanort_executable.h"
+// TODO(rocm-build): nanort_client/nanort_executable removed to cut CPU/oneDNN
+// build deps from hlo_runner_main_gpu. GetCpuCompilationResult is stubbed out.
 #include "xla/backends/gpu/autotuner/block_level_emitter.h"
 #include "xla/backends/gpu/autotuner/factory.h"
 #include "xla/backends/gpu/autotuner/native_emitter.h"
@@ -239,7 +239,7 @@ limitations under the License.
 #include "xla/service/compiler.h"
 #include "xla/service/conditional_simplifier.h"
 #include "xla/service/copy_insertion.h"
-#include "xla/service/cpu/cpu_aot_compilation_result.h"
+#include "xla/service/cpu/executable.pb.h"
 #include "xla/service/cpu_gpu_shape_verifier.h"
 #include "xla/service/debug/unstable_reduction_detector.h"
 #include "xla/service/dump.h"
@@ -2574,17 +2574,13 @@ absl::StatusOr<GpuCompiler::BackendCompileResult> GpuCompiler::CompileAndLink(
 }
 
 namespace {
+// TODO(rocm-build): stubbed out to remove CPU compiler/oneDNN build deps.
+// HostExecute thunks are not used in ROCm benchmark workloads.
 absl::StatusOr<xla::cpu::CompilationResultProto> GetCpuCompilationResult(
     const HloModuleProto& hlo_proto) {
-  xla::cpu::NanoRtClient client;
-  XlaComputation computation(hlo_proto);
-  TF_ASSIGN_OR_RETURN(std::unique_ptr<xla::cpu::NanoRtExecutable> executable,
-                      client.Compile(computation));
-  TF_ASSIGN_OR_RETURN(std::unique_ptr<CompiledModule> result,
-                      client.Export(executable.get()));
-  xla::cpu::CpuAotCompilationResult* cpu_aot_compilation_result =
-      tsl::down_cast<xla::cpu::CpuAotCompilationResult*>(result.get());
-  return cpu_aot_compilation_result->proto();
+  return absl::UnimplementedError(
+      "GetCpuCompilationResult: CPU NanoRt compilation not available in this "
+      "build. HostExecute thunks are not supported.");
 }
 }  // namespace
 

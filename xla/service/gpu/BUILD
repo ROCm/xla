@@ -1646,8 +1646,7 @@ cc_library(
         "//xla:xla_data_proto_cc",
         "//xla:xla_proto_cc",
         "//xla/backends/autotuner:codegen_backend",
-        "//xla/backends/cpu/nanort:nanort_client",
-        "//xla/backends/cpu/nanort:nanort_executable",
+        # TODO(rocm-build): nanort_client/nanort_executable removed to cut CPU/oneDNN deps.
         "//xla/backends/gpu/autotuner:block_level_emitter",
         "//xla/backends/gpu/autotuner:factory",
         "//xla/backends/gpu/autotuner:native_emitter",
@@ -1861,7 +1860,7 @@ cc_library(
         "//xla/service:while_loop_all_reduce_code_motion",
         "//xla/service:while_loop_constant_sinking",
         "//xla/service:while_loop_simplifier",
-        "//xla/service/cpu:cpu_aot_compilation_result",
+        "//xla/service/cpu:executable_proto_cc",  # TODO(rocm-build): was cpu_aot_compilation_result
         "//xla/service/debug:unstable_reduction_detector",
         "//xla/service/gpu/autotuning:autotuner_pass",
         "//xla/service/gpu/autotuning:autotuner_util",
