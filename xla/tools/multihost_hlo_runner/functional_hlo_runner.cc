@@ -1152,7 +1152,7 @@ FunctionalHloRunner::RunInternal(
           break;
       }
     }
-#if 0
+#if 1
     TF_ASSIGN_OR_RETURN(Xresults,
                       FetchAndLogOutput(client, output_buffers,
                                         running_options.module_output_mode,
