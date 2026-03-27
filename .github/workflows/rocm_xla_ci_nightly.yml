@@ -38,7 +38,7 @@ jobs:
       fail-fast: false
       matrix:
         mode:
-          - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe_dynamic"], container: "DOCKER_IMAGE"}
+          - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe"], container: "DOCKER_IMAGE"}
           - {name: "hermetic", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe"], container: "DOCKER_IMAGE_HERMETIC"}
           - {name: "asan", configs: ["--config=rocm_ci", "--config=asan"], container: "DOCKER_IMAGE"}
           - {name: "tsan", configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local"], container: "DOCKER_IMAGE"}
