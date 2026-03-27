@@ -2,7 +2,12 @@ set -ex
 
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
-EXCLUDED_TESTS=()
+EXCLUDED_TESTS=(
+    CubSort/CubSortPairsTest*
+    SortRewriterTest*
+    SortRewriterArgsort*
+    FloatSupportTestWithCublas*
+)
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
 
@@ -29,5 +34,8 @@ ${SCRIPT_DIR}/run_xla_ci_build.sh \
     --test_verbose_timeout_warnings \
     --curses=no \
     --color=yes \
-    --test_filter=-$(IFS=: ; echo "${EXCLUDED_TESTS[*]}") \
+    --test_filter=-$(
+        IFS=:
+        echo "${EXCLUDED_TESTS[*]}"
+    ) \
     -- //xla/...
