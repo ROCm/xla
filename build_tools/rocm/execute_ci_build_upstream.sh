@@ -5,6 +5,21 @@ SCRIPT_DIR=$(realpath "$(dirname "$0")")
 EXCLUDED_TESTS=(
 )
 
+GPU_TESTS_PACKAGE=
+if [[ -f xla/service/gpu/tests/BUILD ]]; then
+    GPU_TESTS_PACKAGE=//xla/service/gpu/tests
+elif [[ -f xla/backends/gpu/tests/BUILD ]]; then
+    GPU_TESTS_PACKAGE=//xla/backends/gpu/tests
+fi
+
+GPU_TESTS_SKIPS=()
+if [[ -n "$GPU_TESTS_PACKAGE" ]]; then
+    GPU_TESTS_SKIPS=(
+        "-${GPU_TESTS_PACKAGE}:gpu_cub_sort_test_amdgpu_any"
+        "-${GPU_TESTS_PACKAGE}:sorting_test_amdgpu_any"
+    )
+fi
+
 TEST_TARGETS_SGPU=(
     //xla/...
     -//xla/tests:iota_test_amdgpu_any
@@ -34,19 +49,14 @@ TEST_TARGETS_SGPU=(
     -//xla/service:elemental_ir_emitter_test_amdgpu_any
     -//xla/service/gpu:dot_algorithm_support_test_amdgpu_any
     -//xla/service/gpu:float_support_test_amdgpu_any
-    -//xla/service/gpu/tests:gpu_cub_sort_test_amdgpu_any
-    -//xla/service/gpu/tests:sorting_test_amdgpu_any
     -//xla/tests:dot_operation_single_threaded_runtime_test_amdgpu_any
     -//xla/tests:dot_operation_test_amdgpu_any
 )
 
 TEST_TARGETS_MGPU=(
-    //xla/tests:collective_ops_e2e_test
-    //xla/tests:collective_ops_test
     //xla/tests:collective_pipeline_parallelism_test
     //xla/tests:replicated_io_feed_test
     //xla/backends/gpu/collectives:gpu_clique_key_test
-    //xla/backends/gpu/runtime:all_reduce_test
     //xla/service:collective_ops_utils_test
     //xla/service:collective_pipeliner_test
     //xla/service:collective_permute_cycle_test
@@ -62,12 +72,11 @@ TEST_TARGETS_MGPU=(
     //xla/service:p2p_schedule_preparation_test
     //xla/pjrt/distributed:topology_util_test
     //xla/pjrt/distributed:client_server_test
-    //xla/tools/multihost_hlo_runner:functional_hlo_runner_test
-    -//xla/tools/multihost_hlo_runner:functional_hlo_runner_test_amdgpu_any
-    -//xla/tests:collective_ops_test_amdgpu_any
-    -//xla/tests:collective_ops_e2e_test_amdgpu_any
-    -//xla/backends/gpu/runtime:all_reduce_test_amdgpu_any
 )
+
+if [[ ${#GPU_TESTS_SKIPS[@]} -gt 0 ]]; then
+    TEST_TARGETS_SGPU+=("${GPU_TESTS_SKIPS[@]}")
+fi
 
 TAG_FILTERS=$("$SCRIPT_DIR/rocm_tag_filters.sh")
 TEST_TARGETS=(//xla/...)
