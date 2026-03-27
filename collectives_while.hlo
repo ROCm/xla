@@ -48,5 +48,11 @@ ENTRY main {
   X = f32[1024,1024] parameter(0)
   Y = f32[1024,4096] parameter(1)
   tuple = (s32[], f32[1024,1024], f32[1024,4096]) tuple(c0, X, Y)
-  ROOT while = (s32[], f32[1024,1024], f32[1024,4096]) while(tuple), condition=while_cond, body=while_body
+  while = (s32[], f32[1024,1024], f32[1024,4096]) while(tuple), condition=while_cond, body=while_body
+  A = f32[1024,1024] get-tuple-element(while), index=1
+  B = f32[1024,4096] get-tuple-element(while), index=2
+  zero = f32[] constant(0)
+  Ared = f32[1024] reduce(A, zero), dimensions={1}, to_apply=sum
+  Bred = f32[1024] reduce(B, zero), dimensions={1}, to_apply=sum
+  ROOT C = f32[1024] add(Ared, Bred)
 }
