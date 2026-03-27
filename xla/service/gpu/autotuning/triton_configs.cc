@@ -215,6 +215,13 @@ config { block_m: 128 block_n: 8 block_k: 16 split_k: 32 num_stages: 1 num_warps
 //      good for MI350.
 //   3. gfx950-specific configs: deduplicated tile families not covered by
 //      kMI300 (deeper pipelines, new block_k values, split_k variants).
+//   4. Gemma3 1B (bf16) exhaustive search winners on 1-GPU MI350X. Adds
+//      block_k=128 family (O/down proj, small proj, decode LM head) and
+//      split_k=16 for short-K down proj.
+//   5. Gemma2 2B (f32) exhaustive search winners on 1-GPU MI350X. Small-N
+//      projection GEMMs (N=31) with split_k={8,16} and decode column GEMMs.
+//   6. Additional configs from gfx950 perf analysis: new split_k=1 variants
+//      of common tiles (block_k=64, block_k=32) and short-K/large-K combos.
 constexpr absl::string_view kMI350TritonConfigs = R"(
 # --- Original ROCm defaults (required: GPU-specific pools are standalone) ---
 config { block_m: 32 block_n: 32 block_k: 256 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
@@ -248,6 +255,34 @@ config { block_m: 256 block_n: 128 block_k: 64 split_k: 1 num_stages: 1 num_warp
 config { block_m: 256 block_n: 128 block_k: 64 split_k: 4 num_stages: 2 num_warps: 2 num_ctas: 1 }
 # Embedding backward: block_k=16 (unique smaller-K tile for vocab-dim GEMMs)
 config { block_m: 256 block_n: 128 block_k: 16 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+# --- Gemma3 1B (bf16) exhaustive search winners (1-GPU, MI350X) ---
+# block_k=128 family: O/down proj, small projections, decode LM head
+config { block_m: 16 block_n: 16 block_k: 128 split_k: 1 num_stages: 3 num_warps: 2 num_ctas: 1 }
+config { block_m: 32 block_n: 16 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 16 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 8 block_k: 128 split_k: 1 num_stages: 4 num_warps: 2 num_ctas: 1 }
+# AV product: 256xN tile with block_k=16 (1152 hidden, seq=11)
+config { block_m: 256 block_n: 64 block_k: 16 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+# down proj with split_k=16 (short K-dim: 6912→1152)
+config { block_m: 64 block_n: 16 block_k: 64 split_k: 16 num_stages: 2 num_warps: 2 num_ctas: 1 }
+# --- Gemma2 2B (f32) exhaustive search winners (1-GPU, MI350X) ---
+# small-N projection GEMMs (N=31) with split_k: generalizes to N<64
+config { block_m: 128 block_n: 32 block_k: 16 split_k: 16 num_stages: 3 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 32 block_k: 16 split_k: 16 num_stages: 1 num_warps: 2 num_ctas: 1 }
+config { block_m: 32 block_n: 16 block_k: 32 split_k: 8 num_stages: 2 num_warps: 2 num_ctas: 1 }
+# decode column GEMM (K=9216, N=1): high split_k over large-K
+config { block_m: 64 block_n: 8 block_k: 16 split_k: 8 num_stages: 3 num_warps: 2 num_ctas: 1 }
+# --- Additional configs from gfx950 perf analysis ---
+# split_k=1 variants of tiles that exist only with split_k>1 in ROCm defaults
+config { block_m: 128 block_n: 128 block_k: 64 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 64 block_k: 64 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 32 block_k: 32 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+# new tile families: small block_k=64, block_k=32 with split_k
+config { block_m: 16 block_n: 16 block_k: 64 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 16 block_k: 64 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 16 block_k: 32 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
+# large block_k=256 with small tile
+config { block_m: 32 block_n: 16 block_k: 256 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
 )";
 
 constexpr absl::string_view kAmpereTritonConfigs = R"(
