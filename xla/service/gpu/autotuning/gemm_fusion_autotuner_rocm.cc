@@ -59,6 +59,10 @@ std::vector<TritonGemmConfig> GemmFusionAutotunerImpl::GetDefaultTritonConfigs()
       const auto& configs = GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI300);
       VLOG(1) << "ROCm GemmFusionAutotuner: using kMI300 configs (" << configs.size() << " configs)";
       return configs;
+    } else if (rocm_cc->gfx_version() == "gfx950") {
+      const auto& configs = GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI350);
+      VLOG(1) << "ROCm GemmFusionAutotuner: using kMI350 configs (" << configs.size() << " configs)";
+      return configs;
     }
   } else {
     VLOG(1) << "ROCm GemmFusionAutotuner: rocm_compute_capability is null";

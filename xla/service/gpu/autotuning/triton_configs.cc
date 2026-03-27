@@ -209,6 +209,47 @@ config { block_m: 256 block_n: 8 block_k: 16 split_k: 8 num_stages: 2 num_warps:
 config { block_m: 128 block_n: 8 block_k: 16 split_k: 32 num_stages: 1 num_warps: 2 num_ctas: 1 }
 )";
 
+// MI350 (gfx950) configs from multiple sources:
+//   1. Original ROCm defaults (required: GPU-specific pools are standalone).
+//   2. Per-GEMM and full-model exhaustive search winners from kMI300 confirmed
+//      good for MI350.
+//   3. gfx950-specific configs: deduplicated tile families not covered by
+//      kMI300 (deeper pipelines, new block_k values, split_k variants).
+constexpr absl::string_view kMI350TritonConfigs = R"(
+# --- Original ROCm defaults (required: GPU-specific pools are standalone) ---
+config { block_m: 32 block_n: 32 block_k: 256 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 32 block_k: 32 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 64 block_k: 64 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 64 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 256 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 16 block_n: 128 block_k: 32 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
+# --- Copied from kMI300: per-GEMM exhaustive winners confirmed good for MI350 ---
+config { block_m: 256 block_n: 256 block_k: 32 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 256 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 256 block_k: 32 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 256 block_n: 128 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 64 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+# --- Copied from kMI300: full-model exhaustive winners confirmed good for MI350 ---
+config { block_m: 32 block_n: 8 block_k: 16 split_k: 1 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 32 block_n: 8 block_k: 16 split_k: 1 num_stages: 4 num_warps: 2 num_ctas: 1 }
+config { block_m: 128 block_n: 32 block_k: 16 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+# --- gfx950-specific: deduplicated tile families not covered by kMI300 ---
+# 256x256x32 with deeper pipelines (MI300 caps at s=2; MI350 wins with s=3-5)
+config { block_m: 256 block_n: 256 block_k: 32 split_k: 1 num_stages: 4 num_warps: 8 num_ctas: 1 }
+# Attn AV product: block_k=32 (MI300 has block_k=16 only)
+config { block_m: 32 block_n: 8 block_k: 32 split_k: 1 num_stages: 1 num_warps: 2 num_ctas: 1 }
+# Attn QK score: w=2 variant (MI300 has w=4 only)
+config { block_m: 128 block_n: 32 block_k: 16 split_k: 1 num_stages: 1 num_warps: 2 num_ctas: 1 }
+# FFN grad: block_k=16 + split_k=2 (unique combination)
+config { block_m: 256 block_n: 256 block_k: 16 split_k: 2 num_stages: 4 num_warps: 8 num_ctas: 1 }
+# FFN down fwd: 256x128x64 s=1 (MI300 has s=2 only)
+config { block_m: 256 block_n: 128 block_k: 64 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+# Small KV proj backward: split_k=4 (MI300 has split_k=1 only for this tile)
+config { block_m: 256 block_n: 128 block_k: 64 split_k: 4 num_stages: 2 num_warps: 2 num_ctas: 1 }
+# Embedding backward: block_k=16 (unique smaller-K tile for vocab-dim GEMMs)
+config { block_m: 256 block_n: 128 block_k: 16 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+)";
+
 constexpr absl::string_view kAmpereTritonConfigs = R"(
 config { block_m: 16 block_n: 16 block_k: 64 split_k: 1 num_stages: 4 num_warps: 2 num_ctas: 1 }
 config { block_m: 16 block_n: 16 block_k: 128 split_k: 1 num_stages: 4 num_warps: 4 num_ctas: 1 }
@@ -344,6 +385,7 @@ LoadTritonConfigs() {
           {TritonConfigsPlatform::kDefaultRocm, kDefaultRocmTritonConfigs},
           {TritonConfigsPlatform::kHopper, kHopperTritonConfigs},
           {TritonConfigsPlatform::kMI300, kMI300TritonConfigs},
+          {TritonConfigsPlatform::kMI350, kMI350TritonConfigs},
       };
   for (const auto& [platform, config_str] : kConfigsMap) {
     result[platform] = parse_config(config_str);

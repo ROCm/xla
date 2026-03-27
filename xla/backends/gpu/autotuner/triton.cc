@@ -65,6 +65,9 @@ std::vector<TritonGemmConfig> GetDefaultTritonConfigs(
     if (rocm_cc != nullptr && rocm_cc->gfx_version() == "gfx942") {
       VLOG(1) << "ROCm Triton autotuner: using kMI300 configs for gfx942";
       return GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI300);
+    } else if (rocm_cc != nullptr && rocm_cc->gfx_version() == "gfx950") {
+      VLOG(1) << "ROCm Triton autotuner: using kMI350 configs for gfx950";
+      return GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI350);
     }
     VLOG(1) << "ROCm Triton autotuner: using kDefaultRocm configs";
     return GetTritonConfigsForPlatform(TritonConfigsPlatform::kDefaultRocm);
