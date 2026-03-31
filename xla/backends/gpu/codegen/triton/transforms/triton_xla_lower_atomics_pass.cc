@@ -13,10 +13,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+// Generic lowering of atomic operations for Triton XLA using
+// tt.extern_elementwise. This implementation uses tt.extern_elementwise to call
+// custom atomic functions that will be implemented in platform-specific passes
+// later in the Triton pipeline.
+
 #include <memory>
 #include <string>
 #include <utility>
 
+#include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "mlir/IR/Builders.h"
@@ -38,7 +44,8 @@ namespace mlir::triton::xla {
 
 namespace {
 
-absl::string_view GetMemorySemanticStr(triton::MemSemantic semantic) {
+// Helper function to convert MemSemantic enum to string
+absl::string_view MemSemanticToString(triton::MemSemantic semantic) {
   switch (semantic) {
     case triton::MemSemantic::RELAXED:
       return "relaxed";
@@ -49,26 +56,31 @@ absl::string_view GetMemorySemanticStr(triton::MemSemantic semantic) {
     case triton::MemSemantic::ACQUIRE_RELEASE:
       return "acq_rel";
   }
+  LOG(FATAL) << "Unknown MemSemantic value";
 }
 
-absl::string_view GetMemSyncScopeStr(triton::MemSyncScope scope) {
+// Helper function to convert MemSyncScope enum to string
+absl::string_view MemSyncScopeToString(triton::MemSyncScope scope) {
   switch (scope) {
+    case triton::MemSyncScope::SYSTEM:
+      return "system";
     case triton::MemSyncScope::GPU:
       return "gpu";
-    case triton::MemSyncScope::SYSTEM:
-      return "sys";
     case triton::MemSyncScope::CTA:
       return "cta";
   }
+  LOG(FATAL) << "Unknown MemSyncScope value";
 }
 
-absl::string_view GetComparatorStr(Comparator comparator) {
+// Helper function to convert Comparator enum to string
+absl::string_view ComparatorToString(Comparator comparator) {
   switch (comparator) {
     case Comparator::EQ:
       return "eq";
     case Comparator::LT:
       return "lt";
   }
+  LOG(FATAL) << "Unknown Comparator value";
 }
 
 mlir::Type GetResultType(mlir::Type ptr_type, PatternRewriter& rewriter) {
@@ -82,132 +94,117 @@ mlir::Type GetResultType(mlir::Type ptr_type, PatternRewriter& rewriter) {
   return result_type;
 }
 
+// Lower AtomicWriteOp to tt.extern_elementwise.
+// This creates extern calls that will be implemented in a separate ROCm pass.
 LogicalResult LowerAtomicWriteOp(AtomicWriteOp atomic_write,
                                  PatternRewriter& rewriter) {
+  VLOG(2) << "LowerAtomicWriteOp: Starting tt.extern_elementwise lowering";
   mlir::ImplicitLocOpBuilder builder(atomic_write.getLoc(), rewriter);
 
   mlir::Value ptr = atomic_write.getPtr();
   mlir::Value value = atomic_write.getValue();
+  mlir::Value mask = atomic_write.getMask();
+
   triton::MemSemantic semantic = atomic_write.getMemSyncSemantic();
+  triton::MemSyncScope scope = atomic_write.getMemSyncScope();
+
+  // Validate memory semantics
   if (semantic != triton::MemSemantic::RELAXED &&
       semantic != triton::MemSemantic::RELEASE) {
     return rewriter.notifyMatchFailure(
-        atomic_write, absl::StrFormat("Unsupported memory semantic: %s",
-                                      stringifyMemSemantic(semantic)));
+        atomic_write,
+        "AtomicWriteOp only supports RELAXED or RELEASE semantics");
   }
-  absl::string_view memory_semantic = GetMemorySemanticStr(semantic);
-  absl::string_view scope = GetMemSyncScopeStr(atomic_write.getMemSyncScope());
 
-  // Predicate ASM to check if the mask is set.
-  // NB: The arguments start from 1 because 0 is reserved to be the output.
-  // Even though we don't care about result($0) in this case it must be there
-  // for ElementwiseInlineAsmOp verifiers to work
-  constexpr absl::string_view kAtomicWriteAsmWithMaskTemplate = R"(
-    {
-    .reg .pred %%p<>;
-    setp.ne.u32 %%p<>, $3, 0;
-    @%%p st.global.%s.%s.u32 [$1], $2;
-    }
-  )";
-  constexpr absl::string_view kAtomicWriteAsmTemplate = R"(
-    st.global.%s.%s.u32 [$1], $2;
-  )";
+  // Build function name: xla_atomic_write_<semantic>_<scope>
+  std::string func_name =
+      absl::StrFormat("xla_atomic_write_%s_%s", MemSemanticToString(semantic),
+                      MemSyncScopeToString(scope));
 
+  VLOG(3) << "LowerAtomicWriteOp: Creating extern_elementwise call to "
+          << func_name;
+
+  // Get result type (handles both tensor and scalar pointers)
   mlir::Type result_type = GetResultType(ptr.getType(), rewriter);
-  mlir::Value mask = atomic_write.getMask();
+
+  // Prepare operands: ptr (tensor or scalar), value (always scalar)
+  llvm::SmallVector<mlir::Value> operands = {ptr, value};
+
+  // If mask is provided, pass it as third argument
   if (mask) {
-    const std::string atomic_write_asm_with_mask = absl::StrFormat(
-        kAtomicWriteAsmWithMaskTemplate, scope, memory_semantic);
-    triton::ElementwiseInlineAsmOp::create(
-        builder,
-        /*result_types=*/result_type,
-        /*asm_string=*/rewriter.getStringAttr(atomic_write_asm_with_mask),
-        /*constraints=*/rewriter.getStringAttr("=r,l,r,r"),
-        /*pure=*/rewriter.getBoolAttr(false),
-        /*packed_element=*/rewriter.getI32IntegerAttr(1),
-        /*args=*/mlir::ValueRange{ptr, value, mask});
-  } else {
-    const std::string atomic_write_asm =
-        absl::StrFormat(kAtomicWriteAsmTemplate, scope, memory_semantic);
-    triton::ElementwiseInlineAsmOp::create(
-        builder,
-        /*result_types=*/result_type,
-        /*asm_string=*/rewriter.getStringAttr(atomic_write_asm),
-        /*constraints=*/rewriter.getStringAttr("=r,l,r"),
-        /*pure=*/rewriter.getBoolAttr(false),
-        /*packed_element=*/rewriter.getI32IntegerAttr(1),
-        /*args=*/mlir::ValueRange{ptr, value});
+    operands.push_back(mask);
   }
-  // No results to replace; just erase the op.
+
+  // Create tt.extern_elementwise call
+  // The function will perform atomic exchange and return the old value
+  // Note: extern_elementwise handles broadcasting scalar value to tensor
+  // automatically
+  builder.create<triton::ExternElementwiseOp>(
+      /*resultType=*/result_type,
+      /*srcs=*/operands,
+      /*libname=*/"",
+      /*libpath=*/"",
+      /*symbol=*/func_name,
+      /*pure=*/false);
+
   rewriter.eraseOp(atomic_write);
   return success();
 }
 
+// Lower AtomicSpinWaitOp to tt.extern_elementwise.
+// This creates extern calls that will be implemented in a separate ROCm pass.
 LogicalResult LowerAtomicSpinWaitOp(AtomicSpinWaitOp atomic_wait,
                                     PatternRewriter& rewriter) {
+  VLOG(2) << "LowerAtomicSpinWaitOp: Starting tt.extern_elementwise lowering";
   mlir::ImplicitLocOpBuilder builder(atomic_wait.getLoc(), rewriter);
 
   mlir::Value ptr = atomic_wait.getPtr();
   mlir::Value expected = atomic_wait.getExpected();
+  mlir::Value mask = atomic_wait.getMask();
+
   triton::MemSemantic semantic = atomic_wait.getMemSyncSemantic();
+  triton::MemSyncScope scope = atomic_wait.getMemSyncScope();
+  Comparator comparator = atomic_wait.getComparator();
+
+  // Validate memory semantics
   if (semantic != triton::MemSemantic::RELAXED &&
       semantic != triton::MemSemantic::ACQUIRE) {
     return rewriter.notifyMatchFailure(
-        atomic_wait, absl::StrFormat("Unsupported memory semantic: %s",
-                                     stringifyMemSemantic(semantic)));
+        atomic_wait,
+        "AtomicSpinWaitOp only supports RELAXED or ACQUIRE semantics");
   }
-  absl::string_view memory_semantic = GetMemorySemanticStr(semantic);
-  absl::string_view scope = GetMemSyncScopeStr(atomic_wait.getMemSyncScope());
 
-  absl::string_view comparator = GetComparatorStr(atomic_wait.getComparator());
-  constexpr absl::string_view kAtomicSpinWaitAsmTemplate = R"(
-    {
-    .reg .pred %%p<1>;
-    .reg .b32 %%r<1>;
-    wait:
-      ld.global.%s.%s.u32 %%r0, [$1];
-      setp.%s.u32 %%p0, %%r0, $2;
-      @%%p0 bra wait;
-    }
-  )";
-  constexpr absl::string_view kAtomicSpinWaitAsmWithMaskTemplate = R"(
-    {
-    .reg .pred %%p<2>;
-    .reg .b32 %%r<1>;
-    setp.ne.u32 %%p0, $3, 0;
-    @%%!p0 bra done;
-    wait:
-      ld.global.%s.%s.u32 %%r0, [$1];
-      setp.%s.u32 %%p1, %%r0, $2;
-      @%%p1 bra wait;
-    done:
-    }
-  )";
+  // Build function name: xla_atomic_spin_wait_<semantic>_<scope>_<comparator>
+  std::string func_name = absl::StrFormat(
+      "xla_atomic_spin_wait_%s_%s_%s", MemSemanticToString(semantic),
+      MemSyncScopeToString(scope), ComparatorToString(comparator));
+
+  VLOG(3) << "LowerAtomicSpinWaitOp: Creating extern_elementwise call to "
+          << func_name;
+
+  // Get result type (handles both tensor and scalar pointers)
   mlir::Type result_type = GetResultType(ptr.getType(), rewriter);
-  Value mask = atomic_wait.getMask();
+
+  // Prepare operands: ptr (tensor or scalar), expected (always scalar)
+  llvm::SmallVector<mlir::Value> operands = {ptr, expected};
+
+  // If mask is provided, pass it as third argument
   if (mask) {
-    const std::string atomic_wait_asm_with_mask = absl::StrFormat(
-        kAtomicSpinWaitAsmWithMaskTemplate, scope, memory_semantic, comparator);
-    triton::ElementwiseInlineAsmOp::create(
-        builder,
-        /*result_types=*/result_type,
-        /*asm_string=*/rewriter.getStringAttr(atomic_wait_asm_with_mask),
-        /*constraints=*/rewriter.getStringAttr("=r,l,r,r"),
-        /*pure=*/rewriter.getBoolAttr(false),
-        /*packed_element=*/rewriter.getI32IntegerAttr(1),
-        /*args=*/mlir::ValueRange{ptr, expected, mask});
-  } else {
-    const std::string atomic_wait_asm = absl::StrFormat(
-        kAtomicSpinWaitAsmTemplate, scope, memory_semantic, comparator);
-    triton::ElementwiseInlineAsmOp::create(
-        builder,
-        /*result_types=*/result_type,
-        /*asm_string=*/rewriter.getStringAttr(atomic_wait_asm),
-        /*constraints=*/rewriter.getStringAttr("=r,l,r"),
-        /*pure=*/rewriter.getBoolAttr(false),
-        /*packed_element=*/rewriter.getI32IntegerAttr(1),
-        /*args=*/mlir::ValueRange{ptr, expected});
+    operands.push_back(mask);
   }
+
+  // Create tt.extern_elementwise call
+  // The function will spin-wait until the condition is met
+  // Note: extern_elementwise handles broadcasting scalar expected to tensor
+  // automatically
+  builder.create<triton::ExternElementwiseOp>(
+      /*resultType=*/result_type,
+      /*srcs=*/operands,
+      /*libname=*/"",
+      /*libpath=*/"",
+      /*symbol=*/func_name,
+      /*pure=*/false);
+
   rewriter.eraseOp(atomic_wait);
   return success();
 }
