@@ -165,7 +165,6 @@ limitations under the License.
 #include "xla/stream_executor/memory_space.h"
 #include "xla/tools/hlo_decomposer.h"
 #include "xla/tsl/platform/errors.h"
-#include "xla/tsl/platform/status_macros.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/protobuf/dnn.pb.h"
 #include "xla/util.h"
@@ -174,6 +173,7 @@ limitations under the License.
 #include "tsl/platform/casts.h"
 #include "tsl/platform/human_readable_json.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "xla/tsl/platform/status_macros.h"
 
 namespace xla::gpu {
 namespace {
@@ -209,15 +209,13 @@ static constexpr bool kRequiresCollectiveKernelThunk =
 // function of ThunkEmitter.
 // As it stands now the collective kernel thunk is wrapped inside other
 // collective thunks such as AllReduceStart and AllGatherStart. So this function
-// is only responsible for emitting the collective kernel thunk and its
-// dependencies.
+// is only responsible for emitting the collective kernel thunk and its dependencies.
 absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
     IrEmitterContext* ir_emitter_context, const CallGraph* call_graph,
     Thunk::ThunkInfo thunk_info, std::vector<CollectiveThunk::Buffer> buffers,
     const HloAllReduceInstruction* instr, const AllReduceConfig& config) {
-  LOG(INFO) << "EmitCollectiveKernelThunk called for AllReduce: "
-            << instr->name();
-
+  LOG(INFO) << "EmitCollectiveKernelThunk called for AllReduce: " << instr->name();
+  
   std::unique_ptr<HloModule> fused_module =
       NewModuleWithFusion(instr, HloInstruction::FusionKind::kLoop);
   HloFusionInstruction* fusion_instr = Cast<HloFusionInstruction>(
@@ -244,8 +242,7 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
   TF_ASSIGN_OR_RETURN(bool did_set_config, TrySetGpuBackendConfigForCollective(
                                                device_info, fusion_instr));
   if (!did_set_config) {
-    LOG(INFO) << "TrySetGpuBackendConfigForCollective returned false - not "
-                 "using Triton";
+    LOG(INFO) << "TrySetGpuBackendConfigForCollective returned false - not using Triton";
     return make_thunk(/*kernel_name=*/"",
                       /*shmem_bytes=*/0,
                       /*launch_dimensions=*/std::nullopt,
@@ -287,16 +284,15 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
     IrEmitterContext* ir_emitter_context, const CallGraph* call_graph,
     Thunk::ThunkInfo thunk_info, std::vector<CollectiveThunk::Buffer> buffers,
     const HloAllGatherInstruction* instr) {
-  LOG(INFO) << "EmitCollectiveKernelThunk called for AllGather: "
-            << instr->name();
-
+  LOG(INFO) << "EmitCollectiveKernelThunk called for AllGather: " << instr->name();
+  
   std::unique_ptr<HloModule> fused_module =
       NewModuleWithFusion(instr, HloInstruction::FusionKind::kLoop);
   HloFusionInstruction* fusion_instr = Cast<HloFusionInstruction>(
       fused_module->entry_computation()->root_instruction());
   const se::DeviceDescription& device_info =
       ir_emitter_context->gpu_device_info();
-
+  
   // For AllGather, we don't have a reduction, so we create a dummy config
   const auto make_thunk = [&](absl::string_view kernel_name,
                               int32_t shmem_bytes,
@@ -305,8 +301,7 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
     // AllGather doesn't have reduction, use a placeholder
     return EmitCollectiveResult{
         std::make_unique<CollectiveKernelThunk>(
-            thunk_info,
-            GetCollectiveConfig(instr, instr->use_global_device_ids()),
+            thunk_info, GetCollectiveConfig(instr, instr->use_global_device_ids()),
             ReductionKind::SUM,  // Placeholder, not used for AllGather
             /*is_async=*/!IsGPUSyncCollective(*instr), std::move(buffers),
             /*is_collective_kernel_enabled=*/
@@ -318,19 +313,20 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
             /*launch_dimensions=*/launch_dimensions,
             /*shmem_bytes=*/shmem_bytes,
             /*is_multimem_enabled=*/false,
-            /*collective_op_kind=*/
-            CollectiveKernelThunk::CollectiveOpKind::kAllGather),
+            /*collective_op_kind=*/CollectiveKernelThunk::CollectiveOpKind::kAllGather),
         std::move(local_module)};
   };
-
+  
   TF_ASSIGN_OR_RETURN(bool did_set_config, TrySetGpuBackendConfigForCollective(
                                                device_info, fusion_instr));
   if (!did_set_config) {
+    LOG(INFO) << "TrySetGpuBackendConfigForCollective returned false for AllGather - not using Triton";
     return make_thunk(/*kernel_name=*/"",
                       /*shmem_bytes=*/0,
                       /*launch_dimensions=*/std::nullopt,
                       /*local_module=*/nullptr);
   }
+  LOG(INFO) << "TrySetGpuBackendConfigForCollective succeeded for AllGather - using Triton!";
   const HloFusionAnalysis fusion_analysis =
       HloFusionAnalysis::Create(*fusion_instr, device_info);
   auto emitter = std::make_unique<TritonFusion>(fusion_analysis);
@@ -339,7 +335,8 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
     XLA_SCOPED_LOGGING_TIMER("Emit collective kernel thunk for AllGather");
     TF_ASSIGN_OR_RETURN(std::vector<Shape> unmanaged_arguments,
                         GetCollectiveUnmanagedKernelArguments(fusion_instr));
-
+    LOG(INFO) << "EmitCollectiveKernelThunk before emit!";
+    
     // For AllGather, use instr_override to get correct buffer assignments.
     // The special KernelArguments::Create overload in fusion.cc handles
     // the tuple unpacking, using fusion for shapes and AllGather for buffers.
@@ -354,9 +351,10 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
 
 }  // namespace
 
-ThunkEmitter::ThunkEmitter(IrEmitterContext* absl_nonnull ir_emitter_context,
-                           llvm_ir::LLVMCommandLineOptionsReleasableLock*
-                               absl_nonnull llvm_options_lock)
+ThunkEmitter::ThunkEmitter(
+    IrEmitterContext* absl_nonnull ir_emitter_context,
+    llvm_ir::LLVMCommandLineOptionsReleasableLock* absl_nonnull
+        llvm_options_lock)
     : ir_emitter_context_(ir_emitter_context),
       send_recv_events_(std::make_shared<HostSendRecvAsyncEvents>()),
       copy_events_(std::make_shared<CopyThunk::AsyncEvents>()),
@@ -1763,9 +1761,9 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCollectiveThunk(
     if constexpr (std::is_same_v<HloInstType, HloAllReduceInstruction>) {
       TF_ASSIGN_OR_RETURN(
           auto emit_result,
-          EmitCollectiveKernelThunk(ir_emitter_context_, call_graph_.get(),
-                                    thunk_info, buffers, inst,
-                                    GetAllReduceConfigInst(inst)));
+          EmitCollectiveKernelThunk(
+              ir_emitter_context_, call_graph_.get(), thunk_info, buffers,
+              inst, GetAllReduceConfigInst(inst)));
       if (emit_result.llvm_module != nullptr) {
         kernel_modules_.push_back(std::move(emit_result.llvm_module));
       }
@@ -1776,8 +1774,9 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCollectiveThunk(
     } else if constexpr (std::is_same_v<HloInstType, HloAllGatherInstruction>) {
       TF_ASSIGN_OR_RETURN(
           auto emit_result,
-          EmitCollectiveKernelThunk(ir_emitter_context_, call_graph_.get(),
-                                    thunk_info, buffers, inst));
+          EmitCollectiveKernelThunk(
+              ir_emitter_context_, call_graph_.get(), thunk_info, buffers,
+              inst));
       if (emit_result.llvm_module != nullptr) {
         kernel_modules_.push_back(std::move(emit_result.llvm_module));
       }
