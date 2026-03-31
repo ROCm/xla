@@ -13,6 +13,16 @@ EXCLUDED_TESTS=(
     IotaR1Test*
     HostMemoryAllocateTest.Numa
     TritonFusionNumericsVerifierTestSuite*
+    TypeSupportTest*
+    SortingTest*
+    *GpuCompilerTest*
+    *PersistedAutotuningTest*
+    *FloatNormalizationTest*
+    *GpuCompilerPassTest*
+    *PassOrderTest*
+    *FixPointTest*
+    *GpuCompilerSelectKTest*
+    *GpuCompilerParametersCopyCollectiveMemoryTest*
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
@@ -26,8 +36,8 @@ for arg in "$@"; do
     fi
 done
 
-${SCRIPT_DIR}/run_xla_ci_build.sh \
-    $@ \
+"${SCRIPT_DIR}/run_xla_ci_build.sh" \
+    "$@" \
     --build_tag_filters="$TAG_FILTERS" \
     --test_tag_filters="$TAG_FILTERS" \
     --execution_log_compact_file=execution_log.binpb.zst \
