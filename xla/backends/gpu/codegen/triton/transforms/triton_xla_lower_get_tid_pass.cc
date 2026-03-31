@@ -13,6 +13,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+// Generic lowering of GetTidOp using tt.extern_elementwise.
+// This implementation uses tt.extern_elementwise to call a custom function
+// that will be implemented in platform-specific passes in the Triton pipeline.
+
 #include <memory>
 #include <utility>
 
@@ -41,19 +45,21 @@ LogicalResult LowerGetTidOp(GetTidOp get_flat_tid, PatternRewriter& rewriter) {
   rewriter.setInsertionPoint(get_flat_tid);
   const Location loc = get_flat_tid.getLoc();
 
-  const mlir::Type i32_type = rewriter.getI32Type();
-  const absl::string_view get_tid_asm = R"(
-    mov.u32 $0, %tid.x;
-  )";
-  auto tid_op = mlir::triton::ElementwiseInlineAsmOp::create(
-      rewriter, loc,
-      /*result_types=*/i32_type,
-      /*asm_string=*/rewriter.getStringAttr(get_tid_asm),
-      /*constraints=*/rewriter.getStringAttr("=r"),
-      /*pure=*/rewriter.getBoolAttr(true),
-      /*packed_element=*/rewriter.getI32IntegerAttr(1),
-      /*args*/ mlir::ValueRange{});
-  rewriter.replaceOp(get_flat_tid, tid_op->getResults());
+  // Get i32 type for the result
+  mlir::Type i32_type = rewriter.getI32Type();
+
+  // Use tt.extern_elementwise to call a custom function that returns thread ID
+  // This function will be implemented in platform-specific passes
+  auto tid_op = rewriter.create<triton::ExternElementwiseOp>(
+      loc,
+      /*resultType=*/i32_type,
+      /*srcs=*/mlir::ValueRange{},  // No inputs needed
+      /*libname=*/"",
+      /*libpath=*/"",
+      /*symbol=*/"xla_get_thread_id",
+      /*pure=*/true);  // Thread ID is pure (deterministic for a given thread)
+
+  rewriter.replaceOp(get_flat_tid, tid_op.getResult());
   return success();
 }
 
