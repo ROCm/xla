@@ -676,7 +676,7 @@ Build(
         "TF_ROCM_AMDGPU_TARGETS": "gfx90a",
         "TF_ROCM_RBE_DOCKER_IMAGE": "rocm/"
            "tensorflow-build@sha256:"
-           "7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa"
+           "66eb4c1e39db76fae2eb0a1029490acbe7bfce0e00d6ab435e170f743921f4c4"
     },
     subcommand="build",
 )
