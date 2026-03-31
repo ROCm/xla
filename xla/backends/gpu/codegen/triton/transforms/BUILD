@@ -107,3 +107,23 @@ cc_library(
         "@tsl//tsl/platform:tensor_float_32_hdr_lib",
     ],
 )
+
+cc_library(
+    name = "triton_xla_implement_extern_element_wise_pass",
+    srcs = ["triton_xla_implement_extern_element_wise_pass.cc"],
+    hdrs = ["passes.h"],
+    deps = [
+        ":passes_inc_gen",
+        "//xla/backends/gpu/codegen/triton/ir:triton_xla",
+        "//xla/codegen/xtile/ir:xtile",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings",
+        "@llvm-project//llvm:Core",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LLVMDialect",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:ToLLVMIRTranslation",
+    ],
+)
