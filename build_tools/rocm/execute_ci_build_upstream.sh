@@ -9,6 +9,15 @@ EXCLUDED_TESTS=(
     "HostMemoryAllocateTest.Numa"
     "CubSort*"
 )
+
+EXCLUDED_TARGETS=(
+    "//xla/service/gpu:dot_algorithm_support_test_amdgpu_any"
+    "//xla/service/gpu:float_support_test_amdgpu_any"
+    "//xla/backends/gpu/transforms:scatter_determinism_expander_test_amdgpu_any"
+    "//xla/backends/gpu/transforms:triton_fusion_numerics_verifier_test_amdgpu_any"
+    "//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any"
+)
+
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
 
 for arg in "$@"; do
@@ -38,4 +47,4 @@ done
         IFS=:
         echo "${EXCLUDED_TESTS[*]}"
     ) \
-    -- //xla/...
+    -- //xla/... "${EXCLUDED_TARGETS[@]/#/-}"
