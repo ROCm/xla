@@ -3,28 +3,12 @@ set -ex
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
 EXCLUDED_TESTS=(
-    CubSort*
-    SortRewriterTest*
-    SortRewriterArgsort*
-    FloatSupportTestWithCublas*
-    RandomEighTestInstantiation*
-    SVDTest*
-    *Tests/DotAlgorithmSupportTest*
-    IotaR1Test*
-    HostMemoryAllocateTest.Numa
-    TritonFusionNumericsVerifierTestSuite*
-    TypeSupportTest*
-    SortingTest*
-    *GpuCompilerTest*
-    *PersistedAutotuningTest*
-    *FloatNormalizationTest*
-    *GpuCompilerPassTest*
-    *PassOrderTest*
-    *FixPointTest*
-    *GpuCompilerSelectKTest*
-    *GpuCompilerParametersCopyCollectiveMemoryTest*
+    "*ParametersUsedByCollectiveMosaicShouldBeCopiedToCollectiveMemory"
+    "SortingTest*"
+    "*IotaR1Test*"
+    "HostMemoryAllocateTest.Numa"
+    "CubSort*"
 )
-
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
 
 for arg in "$@"; do
