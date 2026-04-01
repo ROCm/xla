@@ -79,6 +79,7 @@ limitations under the License.
 #include "xla/stream_executor/rocm/rocm_event.h"
 #include "xla/stream_executor/rocm/rocm_kernel.h"
 #include "xla/stream_executor/rocm/rocm_pcie_bandwidth.h"
+#include "xla/stream_executor/rocm/rocm_xgmi_topology.h"
 #include "xla/stream_executor/rocm/rocm_platform_id.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
 #include "xla/stream_executor/rocm/rocm_stream.h"
@@ -1166,6 +1167,18 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
       LOG(WARNING) << "Could not determine PCIe bandwidth for device "
                    << device_ordinal << " via rocm_smi. Assuming PCIe Gen4 x16.";
       desc.set_pcie_bandwidth(32LL * 1024 * 1024 * 1024);
+    }
+  }
+
+  {
+    gpu::XgmiTopologyInfo xgmi = gpu::GetRocmXgmiTopology(pci_bus_id);
+    if (xgmi.active_links > 0) {
+      DeviceInterconnectInfo info;
+      info.active_links = xgmi.active_links;
+      desc.set_device_interconnect_info(info);
+      VLOG(1) << "Device " << device_ordinal << ": detected "
+              << xgmi.active_links << " active xGMI links"
+              << " (hive_id=" << xgmi.hive_id << ")";
     }
   }
 

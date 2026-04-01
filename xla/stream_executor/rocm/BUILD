@@ -151,6 +151,7 @@ cc_library(
         ":rocm_kernel",
         ":rocm_pcie_bandwidth",
         ":rocm_platform_id",
+        ":rocm_xgmi_topology",
         ":rocm_status",
         ":rocm_stream",
         ":rocm_timer",
@@ -363,9 +364,9 @@ cc_library(
 )
 
 cc_library(
-    name = "rocm_pcie_bandwidth",
-    srcs = ["rocm_pcie_bandwidth.cc"],
-    hdrs = ["rocm_pcie_bandwidth.h"],
+    name = "rocm_smi_util",
+    srcs = ["rocm_smi_util.cc"],
+    hdrs = ["rocm_smi_util.h"],
     tags = [
         "gpu",
         "rocm-only",
@@ -379,6 +380,40 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "rocm_pcie_bandwidth",
+    srcs = ["rocm_pcie_bandwidth.cc"],
+    hdrs = ["rocm_pcie_bandwidth.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_smi_util",
+        ":rocm_smi_wrapper",
+        "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/strings",
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
+)
+
+cc_library(
+    name = "rocm_xgmi_topology",
+    srcs = ["rocm_xgmi_topology.cc"],
+    hdrs = ["rocm_xgmi_topology.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_smi_util",
+        ":rocm_smi_wrapper",
+        "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/strings",
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
+)
+
 xla_cc_test(
     name = "rocm_pcie_bandwidth_test",
     srcs = ["rocm_pcie_bandwidth_test.cc"],
@@ -388,6 +423,19 @@ xla_cc_test(
     ],
     deps = [
         ":rocm_pcie_bandwidth",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+xla_cc_test(
+    name = "rocm_xgmi_topology_test",
+    srcs = ["rocm_xgmi_topology_test.cc"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_xgmi_topology",
         "@com_google_googletest//:gtest_main",
     ],
 )

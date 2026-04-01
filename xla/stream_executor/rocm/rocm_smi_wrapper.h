@@ -59,8 +59,10 @@ namespace wrap {
   __macro(rsmi_shut_down)                          \
   __macro(rsmi_num_monitor_devices)                \
   __macro(rsmi_dev_pci_id_get)                     \
-  __macro(rsmi_dev_pci_bandwidth_get)              \
-  __macro(rsmi_status_string)
+  __macro(rsmi_dev_gpu_metrics_info_get)            \
+  __macro(rsmi_status_string)                      \
+  __macro(rsmi_topo_get_link_type)                 \
+  __macro(rsmi_dev_xgmi_hive_id_get)
 // clang-format on
 
 FOREACH_ROCM_SMI_API(ROCM_SMI_API_WRAPPER)
