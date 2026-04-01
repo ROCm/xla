@@ -355,6 +355,7 @@ def _find_libs(repository_ctx, rocm_config, bash_bin):
             ("hipblaslt", repo_path),
             ("rocprofiler-sdk", repo_path),
             ("amd_smi", repo_path),
+            ("rocm_smi64", repo_path),
         ]
     ]
 
@@ -783,6 +784,7 @@ def _create_local_rocm_repository(repository_ctx):
             "%{roctracer_soversion_number}": rocm_libs["roctracer64"].soversion,
             "%{rocrand_soversion_number}": rocm_libs["rocrand"].soversion,
             "%{amdsmi_soversion_number}": rocm_libs["amd_smi"].soversion,
+            "%{rocm_smi_soversion_number}": rocm_libs["rocm_smi64"].soversion,
         },
     )
 
@@ -811,6 +813,7 @@ def _create_local_rocm_repository(repository_ctx):
             "%{roctracer_soversion_number}": rocm_libs["roctracer64"].soversion,
             "%{rocrand_soversion_number}": rocm_libs["rocrand"].soversion,
             "%{amdsmi_soversion_number}": rocm_libs["amd_smi"].soversion,
+            "%{rocm_smi_soversion_number}": rocm_libs["rocm_smi64"].soversion,
         },
     )
 

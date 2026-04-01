@@ -20,9 +20,9 @@ limitations under the License.
 
 namespace stream_executor::gpu {
 
-// Queries the current PCIe bandwidth for a ROCm device via amdsmi.
+// Queries the current PCIe bandwidth for a ROCm device via rocm_smi.
 // |pci_bus_id| is the PCI bus ID string from HIP (e.g. "0000:41:00.0").
-// Returns bandwidth in bytes/second, or std::nullopt if amdsmi is unavailable
+// Returns bandwidth in bytes/second, or std::nullopt if rocm_smi is unavailable
 // or the query fails.
 std::optional<int64_t> GetRocmPcieBandwidth(absl::string_view pci_bus_id);
 
