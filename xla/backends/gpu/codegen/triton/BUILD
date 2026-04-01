@@ -622,6 +622,39 @@ xla_test(
 )
 
 cc_library(
+    name = "extern_function_helper",
+    srcs = ["extern_function_helper.cc"],
+    hdrs = ["extern_function_helper.h"],
+    deps = [
+        "//xla/backends/gpu/codegen/triton/ir:triton_xla",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LLVMDialect",
+        "@llvm-project//mlir:Support",
+        "@triton//:TritonDialects",
+    ],
+)
+
+xla_cc_test(
+    name = "extern_function_helper_test",
+    srcs = ["extern_function_helper_test.cc"],
+    deps = [
+        ":extern_function_helper",
+        "//xla/backends/gpu/codegen/triton/ir:triton_xla",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LLVMDialect",
+        "@triton//:TritonDialects",
+    ],
+)
+
+cc_library(
     name = "tma_utils",
     srcs = ["tma_utils.cc"],
     hdrs = ["tma_utils.h"],
