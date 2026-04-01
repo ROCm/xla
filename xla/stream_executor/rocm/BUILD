@@ -348,6 +348,21 @@ cc_library(
 )
 
 cc_library(
+    name = "rocm_smi_wrapper",
+    hdrs = ["rocm_smi_wrapper.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        "//xla/tsl/platform:env",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform:dso_loader",
+        "@tsl//tsl/platform:platform_port",
+    ],
+)
+
+cc_library(
     name = "rocm_pcie_bandwidth",
     srcs = ["rocm_pcie_bandwidth.cc"],
     hdrs = ["rocm_pcie_bandwidth.h"],
@@ -356,9 +371,8 @@ cc_library(
         "rocm-only",
     ],
     deps = [
-        ":amdsmi_wrapper",
+        ":rocm_smi_wrapper",
         "//xla/tsl/platform:logging",
-        "@com_google_absl//absl/base",
         "@com_google_absl//absl/strings",
         "@local_config_rocm//rocm:rocm_headers",
         "@tsl//tsl/platform:dso_loader",

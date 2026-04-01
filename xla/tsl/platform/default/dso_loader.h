@@ -53,6 +53,7 @@ absl::StatusOr<void*> GetHipsolverDsoHandle();
 absl::StatusOr<void*> GetHipsparseDsoHandle();
 absl::StatusOr<void*> GetHipDsoHandle();
 absl::StatusOr<void*> GetAmdSmiDsoHandle();
+absl::StatusOr<void*> GetRocmSmiDsoHandle();
 
 // The following method tries to dlopen all necessary GPU libraries for the GPU
 // platform TF is built with (CUDA or ROCm) only when these libraries should be
@@ -91,6 +92,7 @@ absl::StatusOr<void*> GetHipsparseDsoHandle();
 absl::StatusOr<void*> GetHipblasltDsoHandle();
 absl::StatusOr<void*> GetHipDsoHandle();
 absl::StatusOr<void*> GetAmdSmiDsoHandle();
+absl::StatusOr<void*> GetRocmSmiDsoHandle();
 }  // namespace CachedDsoLoader
 
 }  // namespace internal
