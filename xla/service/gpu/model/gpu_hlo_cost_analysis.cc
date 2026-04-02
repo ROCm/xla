@@ -502,12 +502,22 @@ absl::Status GpuHloCostAnalysis::HandleReduce(const HloInstruction* hlo) {
 
 absl::Status GpuHloCostAnalysis::HandleAllReduceStart(
     const HloInstruction* hlo) {
+  TF_ASSIGN_OR_RETURN(int64_t num_ranks,
+                      NumRanks(*Cast<HloAllReduceInstruction>(hlo)));
+
   int64_t bytes_transferred = ShapeSize(hlo->shape(), options_.shape_size);
 
   current_properties_[kFlopsKey] = GetFlopsForElementwiseOp(
       hlo->to_apply()->root_instruction()->opcode(), hlo->shape());
   current_properties_[kBytesAccessedKey] = bytes_transferred;
   current_properties_[kCollBytesTransferred] = bytes_transferred;
+  current_properties_[kCollNumDevicesKey] = num_ranks;
+
+  int num_intra_steps = 2 * (num_ranks - 1);
+  float scaling_ratio =
+      num_intra_steps > 0 ? (1.0 * num_ranks) / num_intra_steps : 0;
+  current_properties_[kCollAlgoScaleRatioKey] = scaling_ratio;
+
   return absl::OkStatus();
 }
 

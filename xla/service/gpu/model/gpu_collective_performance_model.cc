@@ -300,6 +300,13 @@ absl::Duration ComputeAllreduceTimeImpl(
                             ? 256
                             : bandwidth_settings.kLL128NumThreads;
 
+  VLOG(5) << "[CollectiveCostModel] " << instr.name()
+          << ": initial bw_intra_node=" << bw_intra_node
+          << " GB/s, num_devices=" << num_devices
+          << ", num_channels=" << num_channels
+          << ", pcie_bandwidth=" << pcie_bandwidth_gbps
+          << " GB/s, default_threads=" << default_threads;
+
   int warp_size = gpu_device_info.threads_per_warp();
   int num_threads =
       GetNumThreads(warp_size, bandwidth_settings.kLL128NumThreads / 4,
@@ -313,17 +320,19 @@ absl::Duration ComputeAllreduceTimeImpl(
           /*num_blocks=*/num_channels, /*num_threads_per_block=*/num_threads);
   total_time += compute_time_per_channel;
 
-  if (gpu_device_info.device_interconnect_info().active_links) {
-    VLOG(8) << "Nvlink supports p2p communication, setting intra node "
-               "bandwidth to nvlink bw.";
+  int active_links = gpu_device_info.device_interconnect_info().active_links;
+  if (active_links) {
     bw_intra_node = bandwidth_settings.GetNvlinkBw();
     num_channels =
-        std::min(static_cast<int64_t>(
-                     gpu_device_info.device_interconnect_info().active_links),
-                 num_channels);
+        std::min(static_cast<int64_t>(active_links), num_channels);
+    VLOG(5) << "[CollectiveCostModel] " << instr.name()
+            << ": active_links=" << active_links
+            << " -> bw_intra_node=" << bw_intra_node
+            << " GB/s (per-link), num_channels=" << num_channels;
   } else {
-    VLOG(8) << "Nvlink doesn't support p2p communication. Model will "
-               "continue using default system bandwidth.";
+    VLOG(5) << "[CollectiveCostModel] " << instr.name()
+            << ": active_links=0, using aggregate bw_intra_node="
+            << bw_intra_node << " GB/s";
   }
 
   double bus_bandwidth = bw_intra_node * num_channels;
@@ -340,6 +349,15 @@ absl::Duration ComputeAllreduceTimeImpl(
   absl::Duration communication_time = absl::Milliseconds(
       cost_analysis->bytes_accessed(instr) / (1e6 * actual_bandwidth));
   total_time += communication_time;
+
+  VLOG(5) << "[CollectiveCostModel] " << instr.name()
+          << ": bus_bandwidth=" << bus_bandwidth
+          << " GB/s, scaling_ratio=" << cost_analysis->ScalingRatio(instr)
+          << ", actual_bandwidth=" << actual_bandwidth
+          << " GB/s, bytes=" << cost_analysis->bytes_accessed(instr)
+          << ", compute_time=" << absl::ToDoubleMicroseconds(compute_time_per_channel)
+          << " us, comm_time=" << absl::ToDoubleMicroseconds(communication_time)
+          << " us, total_time=" << absl::ToDoubleMicroseconds(total_time) << " us";
   return total_time;
 }
 
@@ -376,8 +394,11 @@ GpuPerformanceWithCollectiveModel::ComputeAllreduceTime(
 GpuPerformanceWithCollectiveModel::ComputeCollectiveTime(
     const HloInstruction& instr, const GpuHloCostAnalysis* cost_analysis,
     const se::DeviceDescription& gpu_device_info) {
-  if (cost_analysis->NumOfDevices(instr) == 1) {
-    VLOG(8) << "Returning only kernel launch overhead for a single partition.";
+  if (cost_analysis->NumOfDevices(instr) <= 1) {
+    VLOG(5) << "[CollectiveCostModel] " << instr.name()
+            << ": num_devices=" << cost_analysis->NumOfDevices(instr)
+            << ", returning launch overhead only ("
+            << absl::ToDoubleMicroseconds(kNcclKernelLaunchOverhead) << " us)";
     return kNcclKernelLaunchOverhead;
   }
 
@@ -390,9 +411,11 @@ GpuPerformanceWithCollectiveModel::ComputeCollectiveTime(
     case HloOpcode::kAllReduceStart:
       return ComputeAllreduceTime(instr, cost_analysis, gpu_device_info);
     default: {
-      LOG(WARNING)
-          << "Runtime estimate for " << instr.name()
-          << " not implemented. Returning only the kernel launch time.";
+      VLOG(5) << "[CollectiveCostModel] " << instr.name()
+              << " (opcode=" << HloOpcodeString(instr.opcode())
+              << "): no analytical model, returning launch overhead only ("
+              << absl::ToDoubleMicroseconds(kNcclKernelLaunchOverhead)
+              << " us)";
       return kNcclKernelLaunchOverhead;
     }
   }
