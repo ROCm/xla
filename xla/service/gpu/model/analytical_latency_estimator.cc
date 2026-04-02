@@ -47,9 +47,9 @@ LatencyEstimator::TimeCost AnalyticalLatencyEstimator::GetLatencyBetween(
     double coll_time = absl::ToDoubleMicroseconds(
         GpuPerformanceWithCollectiveModel::ComputeCollectiveTime(
             from.GetInstr(), &*cost_analysis_, gpu_info_));
-    VLOG(10) << "Analytical estimator calculated latency between "
-             << from.GetInstr().name() << " and " << target.GetInstr().name()
-             << " to be: " << coll_time << " us.";
+    VLOG(5) << "[AnalyticalEstimator] async latency: "
+            << from.GetInstr().name() << " -> " << target.GetInstr().name()
+            << " = " << coll_time << " us";
     return coll_time;
   }
   return latency_estimator_->GetLatencyBetween(from, target);
@@ -68,8 +68,8 @@ LatencyEstimator::TimeCost AnalyticalLatencyEstimator::NodeCost(
           .exec_time;
   LatencyEstimator::TimeCost cost_in_us =
       absl::ToDoubleMicroseconds(total_estimated_time);
-  VLOG(10) << "Analytical estimator calculated cost for: " << instr->name()
-           << ". Cost: " << cost_in_us;
+  VLOG(5) << "[AnalyticalEstimator] node cost: " << instr->name()
+          << " = " << cost_in_us << " us";
   return cost_in_us;
 }
 
