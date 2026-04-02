@@ -1,0 +1,30 @@
+base_config: "base.yml"
+run_name: "llama_hipgraph"
+hardware: "gpu"
+enable_checkpointing: False
+steps: 40
+#attention: "cudnn_flash_te"
+attention: "dot_product"
+base_output_directory: "./"
+model_name: "llama3-8b"
+ici_tensor_parallelism: -1
+ici_fsdp_parallelism: 8
+remat_policy: "minimal_flash"
+scan_layers: False
+dataset_type: "synthetic"
+logits_dot_in_fp32: False
+dtype: "bfloat16"
+weight_dtype: bfloat16
+per_device_batch_size: 4 #6
+max_target_length: 4096
+profiler: "xplane"
+skip_first_n_steps_for_profiler: 3
+profiler_steps: 1
+enable_goodput_recording: False
+monitor_goodput: False
+
+vocab_size: 32_000 # powers of 2 for sharding
+
+#vocab_size: 8_192 #32_000 # powers of 2 for sharding
+
+jax_cache_dir: "" # override jax cache dir !!!
