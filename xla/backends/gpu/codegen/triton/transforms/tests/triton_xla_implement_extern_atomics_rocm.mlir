@@ -1,14 +1,14 @@
-// RUN: xla-opt %s -triton-xla-implement-extern-element-wise="target=cuda" | FileCheck %s
+// RUN: xla-opt %s -triton-xla-implement-extern-element-wise="target=rocm" | FileCheck %s
 
-// Test CUDA implementation of extern_elementwise atomic functions
-// This pass operates on LLVM dialect and generates LLVM intrinsics instead of inline PTX assembly
+// Test ROCm implementation of extern_elementwise atomic functions
+// This pass operates on LLVM dialect and generates LLVM intrinsics for AMD GPUs
 
 // Test unmasked operations
-module attributes {llvm.target_triple = "nvptx64-unknown-unknown"} {
+module attributes {llvm.target_triple = "amdgcn-amd-amdhsa"} {
   // CHECK-LABEL: llvm.func @test_get_thread_id
   llvm.func @test_get_thread_id() -> i32 {
     // CHECK-NOT: llvm.call @xla_get_thread_id
-    // CHECK: [[TID:%.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.tid.x"() : () -> i32
+    // CHECK: [[TID:%.*]] = llvm.call_intrinsic "llvm.amdgcn.workitem.id.x"() : () -> i32
     // CHECK: llvm.return [[TID]]
     %tid = llvm.call @xla_get_thread_id() : () -> i32
     llvm.return %tid : i32
@@ -60,19 +60,19 @@ module attributes {llvm.target_triple = "nvptx64-unknown-unknown"} {
     llvm.return %result : i32
   }
   
-  // CHECK-LABEL: llvm.func @test_gpu_scope
-  llvm.func @test_gpu_scope(%ptr: !llvm.ptr<1>, %value: i32) -> i32 {
+  // CHECK-LABEL: llvm.func @test_agent_scope
+  llvm.func @test_agent_scope(%ptr: !llvm.ptr<1>, %value: i32) -> i32 {
     // CHECK: [[POISON:%.*]] = llvm.mlir.poison : i32
-    // CHECK: llvm.store %arg1, %arg0 atomic syncscope("device") release {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK: llvm.store %arg1, %arg0 atomic syncscope("agent") release {alignment = 4 : i64} : i32, !llvm.ptr<1>
     // CHECK: llvm.return [[POISON]]
     %result = llvm.call @xla_atomic_write_release_gpu(%ptr, %value) : (!llvm.ptr<1>, i32) -> i32
     llvm.return %result : i32
   }
   
-  // CHECK-LABEL: llvm.func @test_cta_scope
-  llvm.func @test_cta_scope(%ptr: !llvm.ptr<1>, %value: i32) -> i32 {
+  // CHECK-LABEL: llvm.func @test_workgroup_scope
+  llvm.func @test_workgroup_scope(%ptr: !llvm.ptr<1>, %value: i32) -> i32 {
     // CHECK: [[POISON:%.*]] = llvm.mlir.poison : i32
-    // CHECK: llvm.store %arg1, %arg0 atomic syncscope("block") release {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK: llvm.store %arg1, %arg0 atomic syncscope("workgroup") release {alignment = 4 : i64} : i32, !llvm.ptr<1>
     // CHECK: llvm.return [[POISON]]
     %result = llvm.call @xla_atomic_write_release_cta(%ptr, %value) : (!llvm.ptr<1>, i32) -> i32
     llvm.return %result : i32
@@ -109,7 +109,7 @@ module attributes {llvm.target_triple = "nvptx64-unknown-unknown"} {
 }
 
 // Test masked operations in separate module to avoid function redefinition
-module attributes {llvm.target_triple = "nvptx64-unknown-unknown"} {
+module attributes {llvm.target_triple = "amdgcn-amd-amdhsa"} {
   // CHECK-LABEL: llvm.func @test_atomic_write_masked
   llvm.func @test_atomic_write_masked(%ptr: !llvm.ptr<1>, %value: i32, %mask: i32) -> i32 {
     // CHECK-NOT: llvm.call @xla_atomic_write_release_system

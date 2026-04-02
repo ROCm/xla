@@ -252,11 +252,22 @@ absl::Status IsAllReduceKernelSupported(
   if (!is_collective_kernel_enabled) {
     return absl::UnimplementedError("Collective kernel is not enabled.");
   }
+  // Check if the device supports Triton collective codegen
+  bool is_supported = false;
   const auto compute_capability = device_info.cuda_compute_capability();
-  if (!compute_capability.IsAtLeastHopper()) {
+  // CUDA: Requires compute capability 9.0+ (Hopper or newer)
+  if (compute_capability.IsAtLeastHopper()) {
+    is_supported = true;
+  }
+  // ROCm: All versions with Triton support are enabled
+  if (device_info.gpu_compute_capability().IsRocm()) {
+    is_supported = true;
+  }
+  if (!is_supported) {
     return absl::UnimplementedError(
-        absl::StrCat("Collective kernel is not supported for compute "
-                     "capability less than 9.0. Got ",
+        absl::StrCat("Collective codegen requires CUDA compute "
+                     "capability >= 9.0 cor ROCm with Triton support."
+                     "Got ",
                      compute_capability.ToString(), "."));
   }
   // TODO(b/383125489): Support variadic arguments.
