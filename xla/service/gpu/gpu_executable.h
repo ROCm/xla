@@ -69,6 +69,10 @@ limitations under the License.
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/xla.pb.h"
 
+namespace stream_executor::gpu {
+class CircularVmmPool;
+}  // namespace stream_executor::gpu
+
 namespace xla {
 namespace gpu {
 
@@ -441,7 +445,10 @@ class GpuExecutable : public Executable {
 
   struct CircularPoolState {
     absl::Mutex mu;
-    std::shared_ptr<void> pool ABSL_GUARDED_BY(mu);
+    // Typed pool pointer; destructor handled by shared_ptr deleter captured
+    // from the original unique_ptr<CircularVmmPool>.
+    std::shared_ptr<stream_executor::gpu::CircularVmmPool> pool
+        ABSL_GUARDED_BY(mu);
     std::atomic<uint64_t> iteration_count{0};
     absl::btree_set<BufferAllocation::Index> pool_indexes ABSL_GUARDED_BY(mu);
     absl::btree_set<BufferAllocation::Index> copy_indexes ABSL_GUARDED_BY(mu);

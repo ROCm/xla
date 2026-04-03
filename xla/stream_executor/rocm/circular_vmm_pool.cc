@@ -22,6 +22,7 @@ limitations under the License.
 
 #include <sched.h>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -124,6 +125,13 @@ absl::StatusOr<std::unique_ptr<CircularVmmPool>> CircularVmmPool::Create(
                "hipExtMallocWithFlags for circular VMM pool timeline"));
   *static_cast<volatile uint64_t*>(timeline_host_ptr) = 0;
 
+  // Guard signal memory: if slot creation fails, free timeline memory.
+  auto timeline_cleanup = absl::MakeCleanup([&timeline_host_ptr]() {
+    if (timeline_host_ptr != nullptr) {
+      wrap::hipFree(timeline_host_ptr);
+    }
+  });
+
   // Create N slots, each with its own physical chunk and VA range.
   std::vector<Slot> slots;
   slots.reserve(num_slots);
@@ -155,6 +163,9 @@ absl::StatusOr<std::unique_ptr<CircularVmmPool>> CircularVmmPool::Create(
     slots.push_back({std::move(physical), std::move(va_range),
                      std::move(mapping), std::move(buffer_addresses)});
   }
+
+  // All slots created successfully — cancel the cleanup guard.
+  std::move(timeline_cleanup).Cancel();
 
   return absl::WrapUnique(new CircularVmmPool(
       executor, num_slots, std::move(slots), std::move(layout),

@@ -1590,7 +1590,7 @@ absl::Status GpuExecutable::ExecuteThunksWithCircularVmmPool(
         execution_stream_ids_, collective_memory_cache_);
   }
 
-  auto* pool = static_cast<se::gpu::CircularVmmPool*>(pool_state->pool.get());
+  auto* pool = pool_state->pool.get();
   uint64_t iteration = pool_state->iteration_count.fetch_add(1);
   int slot_idx = iteration % pool->num_slots();
 
