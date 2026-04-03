@@ -560,6 +560,16 @@ message DebugOptions {
   // buffer to be recorded once and replayed without updates.
   optional bool xla_gpu_enable_command_buffer_va_remapping = 464;
 
+  // Enable circular VMM pool for command buffer thunks. Pre-allocates N
+  // physical memory slots with permanent VA mappings and cycles through them,
+  // using GPU timeline signaling for safe slot reuse. Eliminates per-iteration
+  // map/unmap overhead entirely after startup.
+  optional bool xla_gpu_enable_circular_vmm_pool = 468;
+
+  // Number of slots in the circular VMM pool (default 2). Higher values allow
+  // more GPU/CPU overlap but use proportionally more physical memory.
+  optional int32 xla_gpu_circular_vmm_pool_slots = 469;
+
   // Enable radix sort using CUB.
   optional bool xla_gpu_enable_cub_radix_sort = 259;
 

@@ -123,7 +123,7 @@ absl::Status RocmMemoryReservation::SetAccess(uint64_t reservation_offset,
     desc.location.id = peer;
     desc.flags = hipMemAccessFlagsProtReadWrite;
     TF_RETURN_IF_ERROR(ToStatus(
-        wrap::hipMemSetAccess(ptr_ + reservation_offset, size, &desc, 1),
+        wrap::hipMemSetAccess(PtrAdd(ptr_, reservation_offset), size, &desc, 1),
         "hipMemSetAccess for peer device"));
   }
   return absl::OkStatus();

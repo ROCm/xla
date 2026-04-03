@@ -399,8 +399,11 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCommandBufferThunk(
 
   bool enable_loop_unroll = ir_emitter_context_->debug_options()
                                 .xla_gpu_command_buffer_unroll_loops();
-  bool enable_va_remapping = ir_emitter_context_->debug_options()
-                                 .xla_gpu_enable_command_buffer_va_remapping();
+  bool enable_va_remapping =
+      ir_emitter_context_->debug_options()
+          .xla_gpu_enable_command_buffer_va_remapping() ||
+      ir_emitter_context_->debug_options()
+          .xla_gpu_enable_circular_vmm_pool();
   TF_ASSIGN_OR_RETURN(
       CommandExecutor cmd_executor,
       ConvertToCommands(

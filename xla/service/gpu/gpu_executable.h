@@ -430,6 +430,24 @@ class GpuExecutable : public Executable {
   absl::node_hash_map<stream_executor::StreamExecutor*, VaRanges>
       module_va_ranges_ ABSL_GUARDED_BY(va_ranges_mutex_);
 
+  // Circular VMM pool: pre-allocated slots with permanent VA mappings and
+  // GPU timeline signaling for safe slot reuse. ROCm-only.
+  absl::Status ExecuteThunksWithCircularVmmPool(
+      const BufferAllocations& buffer_allocations,
+      const ServiceExecutableRunOptions* run_options,
+      stream_executor::StreamExecutor* executor, int64_t unique_id,
+      Thunk::ExecutableSource executable_source, bool block_host_until_done);
+
+  struct CircularPoolState {
+    std::shared_ptr<void> pool;
+    uint64_t iteration_count = 0;
+    // Track last-seen BFC addresses to skip redundant D2D memcpy.
+    absl::flat_hash_map<BufferAllocation::Index, void*> last_param_addrs;
+  };
+  absl::Mutex circular_pool_mutex_;
+  absl::node_hash_map<stream_executor::StreamExecutor*, CircularPoolState>
+      circular_pools_ ABSL_GUARDED_BY(circular_pool_mutex_);
+
   GpuExecutable(const GpuExecutable&) = delete;
   GpuExecutable& operator=(const GpuExecutable&) = delete;
 

@@ -443,7 +443,8 @@ ConvertThunksToCommandBuffer(
     const DebugOptions& debug_options) {
   bool enable_loop_unroll = debug_options.xla_gpu_command_buffer_unroll_loops();
   bool enable_va_remapping =
-      debug_options.xla_gpu_enable_command_buffer_va_remapping();
+      debug_options.xla_gpu_enable_command_buffer_va_remapping() ||
+      debug_options.xla_gpu_enable_circular_vmm_pool();
   TF_ASSIGN_OR_RETURN(
       CommandExecutor cmd_executor,
       ConvertToCommands(

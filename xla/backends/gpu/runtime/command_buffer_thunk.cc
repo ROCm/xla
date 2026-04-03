@@ -198,20 +198,28 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
       /*additional_compute_streams=*/{}, params.execution_scoped_state,
       /*mock_collectives=*/false);
 
-  // If command buffer is in `kCreate` state it means that command buffer
-  // sequence was never recorded into it. We initialize all command buffers
-  // before execution, because command buffers when instantiated will allocate
-  // memory on device and this might lead to deadlocks when we have concurrent
-  // NCCL operations in flight.
-  //
-  // If commands require initialization (and VA remapping is not enabled), we
-  // also record them into the command buffer before execution. This is required
-  // to guarantee that collective commands are recorded on all participating
-  // ranks to avoid deadlocks.
-  if (cmd_buffer->warmup_done && (cmd_buffer->command_buffer->state() ==
-                                      se::CommandBuffer::State::kCreate ||
-                                  (!enable_command_buffer_va_remapping_ &&
-                                   commands_.requires_initialization()))) {
+  bool warmup = cmd_buffer->warmup_done;
+  auto state = cmd_buffer->command_buffer->state();
+  bool will_record = warmup && (state == se::CommandBuffer::State::kCreate ||
+                                (!enable_command_buffer_va_remapping_ &&
+                                 commands_.requires_initialization()));
+  LOG(INFO) << absl::StrFormat(
+      "CommandBufferThunk::Initialize: warmup_done=%d state=%d "
+      "va_remapping=%d requires_init=%d will_record=%d",
+      warmup, static_cast<int>(state), enable_command_buffer_va_remapping_,
+      commands_.requires_initialization(), will_record);
+
+  // Log the addresses that will be used for recording
+  if (will_record) {
+    for (auto idx : commands_.allocs_indices()) {
+      auto addr = execute_params.buffer_allocations->GetDeviceAddress(idx);
+      LOG(INFO) << absl::StrFormat(
+          "  Initialize record addr[%d]: %p size=%d", idx, addr.opaque(),
+          addr.size());
+    }
+  }
+
+  if (will_record) {
     VLOG(3) << "Initialize command buffer on device #"
             << params.executor->device_ordinal()
             << " by recoding command buffer cmd sequence"
@@ -271,7 +279,12 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
 
   // warm up iteration, run through thunks if they are present.
   if (!cmd_buffer->warmup_done && thunks_) {
-    VLOG(2) << "Executing warm up iteration of command buffer thunk";
+    LOG(INFO) << "CommandBufferThunk: WARMUP - running sequential thunks";
+    for (auto idx : commands_.allocs_indices()) {
+      auto addr = params.buffer_allocations->GetDeviceAddress(idx);
+      LOG(INFO) << absl::StrFormat(
+          "  Warmup addr[%d]: %p size=%d", idx, addr.opaque(), addr.size());
+    }
     TF_RETURN_IF_ERROR(thunks_->ExecuteOnStream(params));
     cmd_buffer->warmup_done = true;
     return absl::OkStatus();
@@ -279,13 +292,27 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
 
   auto updated_allocs = cmd_buffer->UpdateBufferAllocations(commands_, params);
 
-  // Determine whether to (re-)record the command buffer and whether this is a
-  // first-time initialization recording (VA remapping path).
   bool is_first_record =
       enable_command_buffer_va_remapping_ &&
       cmd_buffer->command_buffer->state() == se::CommandBuffer::State::kCreate;
   bool needs_update = !enable_command_buffer_va_remapping_ &&
                       (!updated_allocs.empty() || commands_.force_update());
+
+  LOG(INFO) << absl::StrFormat(
+      "CommandBufferThunk::ExecuteOnStream: va_remapping=%d updated_allocs=%d "
+      "is_first_record=%d needs_update=%d num_executions=%d state=%d",
+      enable_command_buffer_va_remapping_, updated_allocs.size(),
+      is_first_record, needs_update, cmd_buffer->num_executions,
+      static_cast<int>(cmd_buffer->command_buffer->state()));
+
+  // Log addresses on first few executions
+  if (cmd_buffer->num_executions < 3) {
+    for (auto idx : commands_.allocs_indices()) {
+      auto addr = params.buffer_allocations->GetDeviceAddress(idx);
+      LOG(INFO) << absl::StrFormat(
+          "  Execute addr[%d]: %p size=%d", idx, addr.opaque(), addr.size());
+    }
+  }
 
   if (is_first_record || needs_update) {
     XLA_VLOG_DEVICE(3, executor->device_ordinal())
