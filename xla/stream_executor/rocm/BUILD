@@ -589,17 +589,6 @@ cc_library(
 )
 
 cc_library(
-    name = "rocsolver_if_static",
-    tags = [
-        "gpu",
-        "rocm-only",
-    ],
-    deps = if_static([
-        "@local_config_rocm//rocm:rocsolver",
-    ]),
-)
-
-cc_library(
     name = "rocsolver_wrapper",
     srcs = ["rocsolver_wrapper.h"],
     hdrs = ["rocsolver_wrapper.h"],
@@ -610,7 +599,6 @@ cc_library(
     deps = [
         ":rocm_executor",
         ":rocm_platform_id",
-        ":rocsolver_if_static",
         "//xla/tsl/platform:env",
         "@local_config_rocm//rocm:rocm_headers",
         "@tsl//tsl/platform:dso_loader",
@@ -762,17 +750,6 @@ cc_library(
 )
 
 cc_library(
-    name = "roctracer_if_static",
-    tags = [
-        "gpu",
-        "rocm-only",
-    ],
-    deps = if_static([
-        "@local_config_rocm//rocm:roctracer",
-    ]),
-)
-
-cc_library(
     name = "roctracer_wrapper",
     srcs = ["roctracer_wrapper.h"],
     hdrs = ["roctracer_wrapper.h"],
@@ -781,9 +758,8 @@ cc_library(
         "rocm-only",
     ],
     deps = [
-        ":rocm_executor",
-        ":roctracer_if_static",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocm_headers",
+        "@local_config_rocm//rocm:rocprofiler_sdk",
     ],
     alwayslink = True,
 )
