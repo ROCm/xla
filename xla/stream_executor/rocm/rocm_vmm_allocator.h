@@ -38,7 +38,8 @@ class RocmVmmAllocator : public MemoryAllocator {
 
  private:
   StreamExecutor* executor_;
-  bool is_rdma_supported_;
+  // is_rdma_supported_ removed: hipMemAllocationProp does not expose an
+  // RDMA flag like CUDA's CUmemAllocationProp::allocFlags.
 };
 
 }  // namespace stream_executor::gpu

@@ -20,10 +20,14 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include <sched.h>
+
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "xla/stream_executor/activate_context.h"
@@ -160,7 +164,21 @@ absl::StatusOr<std::vector<DeviceAddressBase>> CircularVmmPool::AcquireNextSlot(
   if (iteration >= static_cast<uint64_t>(num_slots_)) {
     uint64_t required = iteration - num_slots_ + 1;
     uint64_t completed = __atomic_load_n(timeline_, __ATOMIC_ACQUIRE);
+    constexpr int kMaxSpinIterations = 1000;
+    constexpr auto kTimeout = absl::Seconds(30);
+    auto deadline = absl::Now() + kTimeout;
+    int spin_count = 0;
     while (completed < required) {
+      if (++spin_count > kMaxSpinIterations) {
+        if (absl::Now() > deadline) {
+          return absl::DeadlineExceededError(absl::StrFormat(
+              "CircularVmmPool: timed out waiting for slot %d "
+              "(required=%d, completed=%d)",
+              iteration % num_slots_, required, completed));
+        }
+        sched_yield();
+        spin_count = 0;
+      }
       completed = __atomic_load_n(timeline_, __ATOMIC_ACQUIRE);
     }
   }

@@ -37,8 +37,7 @@ limitations under the License.
 
 namespace stream_executor::gpu {
 
-static hipMemAllocationProp GetVmmAllocationProperties(
-    hipDevice_t device, bool is_rdma_supported) {
+static hipMemAllocationProp GetVmmAllocationProperties(hipDevice_t device) {
   hipMemAllocationProp properties = {};
   properties.type = hipMemAllocationTypePinned;
   properties.location.type = hipMemLocationTypeDevice;
@@ -59,7 +58,7 @@ static hipMemAccessDesc GetVmmAccessDescriptor(int device) {
 // the padded size, and the allocation handle.
 static absl::StatusOr<
     std::tuple<void*, uint64_t, hipMemGenericAllocationHandle_t>>
-VmmAllocate(StreamExecutor* executor, bool is_rdma_supported, uint64_t size) {
+VmmAllocate(StreamExecutor* executor, uint64_t size) {
   std::unique_ptr<ActivateContext> activation = executor->Activate();
 
   hipDevice_t device;
@@ -67,7 +66,7 @@ VmmAllocate(StreamExecutor* executor, bool is_rdma_supported, uint64_t size) {
       ToStatus(wrap::hipDeviceGet(&device, executor->device_ordinal())));
 
   hipMemAllocationProp properties =
-      GetVmmAllocationProperties(device, is_rdma_supported);
+      GetVmmAllocationProperties(device);
   size_t granularity = 0;
   TF_RETURN_IF_ERROR(ToStatus(wrap::hipMemGetAllocationGranularity(
       &granularity, &properties, hipMemAllocationGranularityRecommended)));
@@ -182,8 +181,8 @@ class RocmVmmMemoryAllocation : public MemoryAllocation {
 }  // namespace
 
 RocmVmmAllocator::RocmVmmAllocator(StreamExecutor* executor,
-                                   bool is_rdma_supported)
-    : executor_(executor), is_rdma_supported_(is_rdma_supported) {}
+                                   bool /*is_rdma_supported*/)
+    : executor_(executor) {}
 
 absl::StatusOr<std::unique_ptr<MemoryAllocation>> RocmVmmAllocator::Allocate(
     uint64_t size) {
@@ -193,7 +192,7 @@ absl::StatusOr<std::unique_ptr<MemoryAllocation>> RocmVmmAllocator::Allocate(
   }
 
   TF_ASSIGN_OR_RETURN(auto result,
-                      VmmAllocate(executor_, is_rdma_supported_, size));
+                      VmmAllocate(executor_, size));
   auto [ptr, padded_size, handle] = result;
 
   return std::make_unique<RocmVmmMemoryAllocation>(executor_, ptr, size,

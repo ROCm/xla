@@ -94,7 +94,7 @@ class CircularVmmPool {
   // via hipStreamWriteValue64 after each iteration; the CPU reads it to
   // determine when a slot is safe to reuse.
   volatile uint64_t* timeline_;
-  void* timeline_host_ptr_;  // Raw pointer for hipHostFree.
+  void* timeline_host_ptr_;  // Raw pointer for hipFree (signal memory).
 };
 
 }  // namespace stream_executor::gpu
