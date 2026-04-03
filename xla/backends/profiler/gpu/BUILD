@@ -451,6 +451,11 @@ cc_library(
         ":use_rocprofiler_sdk": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
         "//conditions:default": ["XLA_GPU_ROCM_TRACER_BACKEND=3"],
     }),
+    deps = select({
+        ":use_v1": ["@local_config_rocm//rocm:roctracer"],
+        ":use_rocprofiler_sdk": ["@local_config_rocm//rocm:rocprofiler_sdk"],
+        "//conditions:default": ["@local_config_rocm//rocm:rocprofiler_sdk"],
+    }),
     visibility = ["//visibility:public"],
 )
 
@@ -477,7 +482,6 @@ cc_library(
     "@tsl//tsl/platform:errors",
     "@tsl//tsl/platform:logging",
     "@tsl//tsl/platform:macros",
-    "@local_config_rocm//rocm:rocprofiler-sdk",
   ],
   visibility = ["//visibility:public"],
 )
@@ -520,7 +524,6 @@ cc_library(
         "@tsl//tsl/platform:types",
         "@tsl//tsl/profiler/lib:profiler_factory",
         "@tsl//tsl/profiler/lib:profiler_interface",
-        "@local_config_rocm//rocm:rocprofiler-sdk",
     ],
 )
 
