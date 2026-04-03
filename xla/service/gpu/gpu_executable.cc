@@ -117,6 +117,9 @@ limitations under the License.
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/stream_executor/sycl/sycl_platform_id.h"
 #include "xla/stream_executor/vmm_device_address_allocator.h"
+#if TENSORFLOW_USE_ROCM
+#include "xla/stream_executor/rocm/circular_vmm_pool.h"
+#endif
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/env_time.h"
 #include "xla/tsl/platform/logging.h"
@@ -1519,6 +1522,166 @@ absl::Status GpuExecutable::ExecuteThunksWithVaRemapping(
   return absl::OkStatus();
 }
 
+absl::Status GpuExecutable::ExecuteThunksWithCircularVmmPool(
+    const BufferAllocations& buffer_allocations,
+    const ServiceExecutableRunOptions* run_options,
+    se::StreamExecutor* executor, int64_t unique_id,
+    Thunk::ExecutableSource executable_source, bool block_host_until_done) {
+#if TENSORFLOW_USE_ROCM
+  CircularPoolState* pool_state = nullptr;
+  {
+    absl::MutexLock lock(&circular_pool_mutex_);
+    pool_state = &circular_pools_[executor];
+  }
+
+  // One-time initialization: compute buffer classification and create pool.
+  // Uses std::atomic<bool> initialized + mutex for safe double-checked locking.
+  if (!pool_state->initialized.load(std::memory_order_acquire)) {
+    absl::MutexLock lock(&pool_state->mu);
+    if (!pool_state->initialized.load(std::memory_order_relaxed)) {
+      if (buffer_assignment_) {
+        for (BufferAllocation::Index idx : command_buffer_allocation_indexes_) {
+          const auto& alloc = buffer_assignment_->GetAllocation(idx);
+          if (alloc.is_constant() || alloc.size() == 0) continue;
+          pool_state->pool_indexes.insert(idx);
+          if (alloc.is_entry_computation_parameter() ||
+              alloc.maybe_live_out()) {
+            pool_state->copy_indexes.insert(idx);
+          }
+        }
+      }
+
+      if (!pool_state->pool_indexes.empty()) {
+        int num_slots = has_module()
+            ? module_config().debug_options().xla_gpu_circular_vmm_pool_slots()
+            : 1;
+
+        std::vector<uint64_t> buffer_sizes;
+        buffer_sizes.reserve(pool_state->pool_indexes.size());
+        for (BufferAllocation::Index idx : pool_state->pool_indexes) {
+          buffer_sizes.push_back(
+              buffer_allocations.GetDeviceAddress(idx).size());
+        }
+
+        TF_ASSIGN_OR_RETURN(
+            auto pool,
+            se::gpu::CircularVmmPool::Create(executor, buffer_sizes,
+                                             num_slots));
+
+        LOG(INFO) << absl::StrFormat(
+            "CircularVmmPool: created %d slots for module %s on device %d "
+            "(%d command buffer allocations)",
+            num_slots, module_name_, executor->device_ordinal(),
+            command_buffer_allocation_indexes_.size());
+
+        pool_state->pool = std::move(pool);
+      }
+
+      pool_state->initialized.store(true, std::memory_order_release);
+    }
+  }
+
+  // After initialization, pool_indexes/copy_indexes are immutable — safe to
+  // read without lock.
+  const auto& pool_indexes = pool_state->pool_indexes;
+  const auto& copy_indexes = pool_state->copy_indexes;
+
+  if (pool_state->pool == nullptr) {
+    return ExecuteThunksImpl(
+        has_module() ? &module_config().debug_options() : nullptr,
+        module_name_, unique_id, *thunk_executor_, executable_source,
+        run_options, buffer_allocations, block_host_until_done,
+        execution_stream_ids_, collective_memory_cache_);
+  }
+
+  auto* pool = pool_state->pool.get();
+  uint64_t iteration = pool_state->iteration_count.fetch_add(1);
+  int slot_idx = iteration % pool->num_slots();
+
+  // Acquire next slot — non-blocking check of GPU timeline counter.
+  TF_ASSIGN_OR_RETURN(auto slot_addresses, pool->AcquireNextSlot(iteration));
+
+  VLOG(3) << absl::StrFormat(
+      "CircularVmmPool iter=%d slot=%d/%d: %d pool addrs",
+      iteration, slot_idx, pool->num_slots(), slot_addresses.size());
+
+  // Build remapped buffer allocations: all pooled buffers use pool VA
+  // addresses; constants and non-command-buffer buffers keep BFC addresses.
+  // For params/live-out, copy data from BFC into pool VA before execution.
+  std::vector<se::DeviceAddressBase> mapped_buffers;
+  mapped_buffers.reserve(buffer_allocations.size());
+  int slot_addr_idx = 0;
+  for (BufferAllocation::Index i = 0;
+       i < static_cast<BufferAllocation::Index>(buffer_allocations.size());
+       ++i) {
+    if (pool_indexes.contains(i)) {
+      auto pool_addr = slot_addresses[slot_addr_idx++];
+      auto bfc_addr = buffer_allocations.GetDeviceAddress(i);
+
+      // Copy param data from BFC into pool before execution. This is needed
+      // because the graph uses stable pool VA addresses, but the actual data
+      // lives at BFC addresses which may change. For params, the data itself
+      // may also change (e.g., optimizer weight updates in training).
+      if (copy_indexes.contains(i) && !bfc_addr.is_null() &&
+          bfc_addr.size() > 0) {
+        se::DeviceAddressBase pool_dst(pool_addr.opaque(), bfc_addr.size());
+        TF_RETURN_IF_ERROR(run_options->stream()->MemcpyD2D(
+            &pool_dst, bfc_addr, bfc_addr.size()));
+      }
+      mapped_buffers.push_back(pool_addr);
+    } else {
+      mapped_buffers.push_back(buffer_allocations.GetDeviceAddress(i));
+    }
+  }
+
+  BufferAllocations remapped_buffer_allocations(
+      mapped_buffers, buffer_allocations.device_ordinal(),
+      buffer_allocations.memory_allocator());
+
+  TF_RETURN_IF_ERROR(ExecuteThunksImpl(
+      has_module() ? &module_config().debug_options() : nullptr, module_name_,
+      unique_id, *thunk_executor_, executable_source, run_options,
+      remapped_buffer_allocations, block_host_until_done,
+      execution_stream_ids_, collective_memory_cache_));
+
+  // Copy live-out results back from pool to BFC so the output appears at
+  // the expected BFC address for downstream consumers.
+  slot_addr_idx = 0;
+  for (BufferAllocation::Index i = 0;
+       i < static_cast<BufferAllocation::Index>(buffer_allocations.size());
+       ++i) {
+    if (pool_indexes.contains(i)) {
+      auto pool_addr = slot_addresses[slot_addr_idx++];
+      if (copy_indexes.contains(i) && buffer_assignment_) {
+        const auto& alloc = buffer_assignment_->GetAllocation(i);
+        if (alloc.maybe_live_out()) {
+          auto bfc_addr = buffer_allocations.GetDeviceAddress(i);
+          if (!bfc_addr.is_null() && bfc_addr.size() > 0) {
+            se::DeviceAddressBase bfc_dst(bfc_addr.opaque(), bfc_addr.size());
+            se::DeviceAddressBase pool_src(pool_addr.opaque(), bfc_addr.size());
+            TF_RETURN_IF_ERROR(run_options->stream()->MemcpyD2D(
+                &bfc_dst, pool_src, bfc_addr.size()));
+          }
+        }
+      }
+    }
+  }
+
+  if (block_host_until_done) {
+    TF_RETURN_IF_ERROR(run_options->stream()->BlockHostUntilDone());
+  }
+
+  // GPU signals slot completion so the CPU knows when this slot is safe to
+  // reuse (non-blocking write via hipStreamWriteValue64).
+  TF_RETURN_IF_ERROR(pool->ReleaseSlot(run_options->stream(), iteration));
+
+  return absl::OkStatus();
+#else
+  return absl::UnimplementedError(
+      "Circular VMM pool is only supported on ROCm.");
+#endif
+}
+
 absl::Status GpuExecutable::ExecuteThunks(
     const BufferAllocations& buffer_allocations,
     const ServiceExecutableRunOptions* run_options) {
@@ -1591,21 +1754,32 @@ absl::Status GpuExecutable::ExecuteThunks(
 
   se::StreamExecutor* executor = run_options->stream()->parent();
 
+  bool has_cmd_buffer_allocs = !command_buffer_allocation_indexes_.empty();
+
+  // Check if circular VMM pool is enabled (takes priority over VA remapping).
+  bool enable_circular_vmm_pool =
+      has_cmd_buffer_allocs && has_module() &&
+      module_config().debug_options().xla_gpu_enable_circular_vmm_pool();
+
   // Check if command buffer VA remapping is enabled.
   bool enable_command_buffer_va_remapping =
-      (command_buffer_allocation_indexes_.size() > 0) && has_module() &&
+      !enable_circular_vmm_pool && has_cmd_buffer_allocs && has_module() &&
       module_config()
           .debug_options()
           .xla_gpu_enable_command_buffer_va_remapping() &&
       dynamic_cast<se::DeviceAddressVmmAllocator*>(memory_allocator) != nullptr;
 
   XLA_VLOG_DEVICE(3, executor->device_ordinal()) << absl::StreamFormat(
-      "ExecuteThunks: command_buffer_allocation_indexes_.size()=%d "
-      "enable_command_buffer_va_remapping=%d",
-      command_buffer_allocation_indexes_.size(),
+      "ExecuteThunks: cmd_buffer_allocs=%d circular_vmm_pool=%d "
+      "va_remapping=%d",
+      command_buffer_allocation_indexes_.size(), enable_circular_vmm_pool,
       enable_command_buffer_va_remapping);
 
-  if (enable_command_buffer_va_remapping) {
+  if (enable_circular_vmm_pool) {
+    TF_RETURN_IF_ERROR(ExecuteThunksWithCircularVmmPool(
+        buffer_allocations, run_options, executor, unique_id, executable_source,
+        block_host_until_done));
+  } else if (enable_command_buffer_va_remapping) {
     TF_RETURN_IF_ERROR(ExecuteThunksWithVaRemapping(
         buffer_allocations, run_options, executor, unique_id, executable_source,
         block_host_until_done));

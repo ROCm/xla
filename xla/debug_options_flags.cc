@@ -503,6 +503,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
 
   opts.set_xla_gpu_enable_pdl(true);
   opts.set_xla_gpu_enable_command_buffer_va_remapping(false);
+  opts.set_xla_gpu_enable_circular_vmm_pool(false);
+  opts.set_xla_gpu_circular_vmm_pool_slots(1);
   return opts;
 }
 
@@ -2994,6 +2996,21 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "Enable VA remapping for command buffer thunks. When enabled, command "
       "buffer thunks use fixed virtual addresses across executions, allowing "
       "the command buffer to be recorded once and replayed without updates."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_enable_circular_vmm_pool",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_enable_circular_vmm_pool),
+      debug_options->xla_gpu_enable_circular_vmm_pool(),
+      "Enable circular VMM pool for command buffer thunks. Pre-allocates N "
+      "physical memory slots with permanent VA mappings, using GPU timeline "
+      "signaling for safe slot reuse. Eliminates per-iteration map/unmap "
+      "overhead entirely after startup."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_circular_vmm_pool_slots",
+      int32_setter_for(
+          &DebugOptions::set_xla_gpu_circular_vmm_pool_slots),
+      debug_options->xla_gpu_circular_vmm_pool_slots(),
+      "Number of slots in the circular VMM pool (default 1)."));
 }  // NOLINT(readability/fn_size)
 
 // Allocates flag_values and flag_objects; this function must not be called more

@@ -704,6 +704,7 @@ cc_library(
     name = "gpu_executable",
     srcs = ["gpu_executable.cc"],
     hdrs = ["gpu_executable.h"],
+    local_defines = if_rocm_is_configured(["TENSORFLOW_USE_ROCM=1"]),
     deps = [
         ":alias_info",
         ":backend_configs_cc",
@@ -807,7 +808,9 @@ cc_library(
         "@tsl//tsl/platform:random",
         "@tsl//tsl/profiler/lib:scoped_annotation",
         "@tsl//tsl/profiler/lib:traceme",
-    ],
+    ] + if_rocm_is_configured([
+        "//xla/stream_executor/rocm:circular_vmm_pool",
+    ]),
 )
 
 tf_proto_library(
