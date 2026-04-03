@@ -28,7 +28,6 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/gpu/context_map.h"
 #include "xla/stream_executor/gpu/scoped_activate_context.h"
-#include "xla/stream_executor/rocm/rocm_driver_wrapper.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/status.h"
@@ -82,7 +81,7 @@ ContextMap<hipCtx_t, RocmContext>* RocmContext::GetContextMap() {
 
 bool RocmContext::GetDeviceTotalMemory(hipDevice_t device, uint64_t* result) {
   size_t value = -1;
-  hipError_t res = wrap::hipDeviceTotalMem(&value, device);
+  hipError_t res = hipDeviceTotalMem(&value, device);
   if (res != hipSuccess) {
     LOG(ERROR) << "failed to query total available memory: " << ToString(res);
     return false;
@@ -95,7 +94,7 @@ bool RocmContext::GetDeviceMemoryUsage(int64_t* free_out, int64_t* total_out) {
   ScopedActivateContext activation(this);
   size_t free = 0;
   size_t total = 0;
-  hipError_t res = wrap::hipMemGetInfo(&free, &total);
+  hipError_t res = hipMemGetInfo(&free, &total);
   if (res != hipSuccess) {
     LOG(ERROR) << "failed to query device memory info: " << ToString(res);
     return false;
@@ -121,10 +120,10 @@ RocmContext::~RocmContext() {
   // about calling a virtual method in the destructor.
   RocmContext::SetActive();
   hipDevice_t device;
-  CHECK_EQ(hipSuccess, wrap::hipCtxGetDevice(&device));
-  CHECK_EQ(hipSuccess, wrap::hipCtxSetCurrent(former_context));
+  CHECK_EQ(hipSuccess, hipCtxGetDevice(&device));
+  CHECK_EQ(hipSuccess, hipCtxSetCurrent(former_context));
 
-  auto res = wrap::hipDevicePrimaryCtxRelease(device);
+  auto res = hipDevicePrimaryCtxRelease(device);
 
   if (res != hipSuccess) {
     LOG(ERROR) << "failed to release HIP context; leaking: " << ToString(res);
@@ -134,16 +133,15 @@ RocmContext::~RocmContext() {
 }
 
 void RocmContext::SetActive() {
-  TF_CHECK_OK(
-      ToStatus(wrap::hipCtxSetCurrent(context_), "Failed setting context"));
+  TF_CHECK_OK(ToStatus(hipCtxSetCurrent(context_), "Failed setting context"));
 }
 
 bool RocmContext::IsActive() const { return CurrentContext() == context_; }
 
 absl::Status RocmContext::Synchronize() {
   ScopedActivateContext activation(this);
-  TF_RETURN_IF_ERROR(ToStatus(wrap::hipDeviceSynchronize(),
-                              "could not synchronize on ROCM device"));
+  TF_RETURN_IF_ERROR(
+      ToStatus(hipDeviceSynchronize(), "could not synchronize on ROCM device"));
   return absl::OkStatus();
 }
 
@@ -159,9 +157,9 @@ absl::StatusOr<RocmContext*> RocmContext::Create(int device_ordinal,
 
   unsigned int former_primary_context_flags;
   int former_primary_context_is_active;
-  CHECK_EQ(hipSuccess, wrap::hipDevicePrimaryCtxGetState(
-                           device, &former_primary_context_flags,
-                           &former_primary_context_is_active));
+  CHECK_EQ(hipSuccess,
+           hipDevicePrimaryCtxGetState(device, &former_primary_context_flags,
+                                       &former_primary_context_is_active));
   if (former_primary_context_flags != flags) {
     if (former_primary_context_is_active) {
       LOG(ERROR)
@@ -169,15 +167,15 @@ absl::StatusOr<RocmContext*> RocmContext::Create(int device_ordinal,
           << former_primary_context_flags << ") than the desired flag set ("
           << flags << ").";
     } else {
-      CHECK_EQ(hipSuccess, wrap::hipDevicePrimaryCtxSetFlags(device, flags));
+      CHECK_EQ(hipSuccess, hipDevicePrimaryCtxSetFlags(device, flags));
     }
   }
 
   former_context = CurrentContextOrDie();
-  res = wrap::hipDevicePrimaryCtxRetain(&new_context, device);
+  res = hipDevicePrimaryCtxRetain(&new_context, device);
   if (former_context != nullptr) {
     hipDevice_t former_device;
-    if (wrap::hipCtxGetDevice(&former_device) == hipSuccess) {
+    if (hipCtxGetDevice(&former_device) == hipSuccess) {
       if (former_device == device) {
         if (former_context == new_context) {
           VLOG(2) << "The primary context " << former_context << " for device "
@@ -196,7 +194,7 @@ absl::StatusOr<RocmContext*> RocmContext::Create(int device_ordinal,
                  << former_context;
     }
   }
-  CHECK_EQ(hipSuccess, wrap::hipCtxSetCurrent(former_context));
+  CHECK_EQ(hipSuccess, hipCtxSetCurrent(former_context));
 
   if (res == hipSuccess) {
     context = GetContextMap()->Add(new_context, device_ordinal);

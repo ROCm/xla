@@ -50,8 +50,8 @@ struct GpuComplexT {
 using gpuDataType_t = hipDataType;
 
 #if TF_ROCM_VERSION >= 40500
-#define GPU_SOLVER_CONTEXT_PREFIX wrap::hipsolver
-#define GPU_SOLVER_PREFIX wrap::hipsolver
+#define GPU_SOLVER_CONTEXT_PREFIX hipsolver
+#define GPU_SOLVER_PREFIX hipsolver
 
 template <>
 struct GpuComplexT<std::complex<float>> {

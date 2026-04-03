@@ -29,7 +29,7 @@ limitations under the License.
 #include "rocm/rocm_config.h"
 // Macros to ease the transition from rocsolver to hipsolver.
 #if TENSORFLOW_USE_HIPSOLVER
-#include "xla/stream_executor/rocm/hipsolver_wrapper.h"
+#include "rocm/include/hipsolver/hipsolver.h"
 using gpusolverHandle_t = hipsolverHandle_t;
 #else  // TENSORFLOW_USE_ROCSOLVER
 #include "xla/stream_executor/rocm/rocblas_wrapper.h"

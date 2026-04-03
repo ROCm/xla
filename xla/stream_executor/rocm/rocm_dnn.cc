@@ -255,311 +255,6 @@ class MIOpenHandle {
   miopenHandle_t handle_;  // Not owned.
 };
 
-namespace wrap {
-
-#ifdef PLATFORM_GOOGLE
-#define STREAM_EXECUTOR_MIOPEN_WRAP(__name)      \
-  struct WrapperShim__##__name {                 \
-    template <typename... Args>                  \
-    miopenStatus_t operator()(Args... args) {    \
-      miopenStatus_t retval = ::__name(args...); \
-      return retval;                             \
-    }                                            \
-  } __name;
-
-#else
-
-#define STREAM_EXECUTOR_MIOPEN_WRAP(__name)                              \
-  struct DynLoadShim__##__name {                                         \
-    static const char* kName;                                            \
-    using FuncPtrT = std::add_pointer<decltype(::__name)>::type;         \
-    static void* GetDsoHandle() {                                        \
-      auto s = tsl::internal::CachedDsoLoader::GetMiopenDsoHandle();     \
-      return s.value();                                                  \
-    }                                                                    \
-    static FuncPtrT LoadOrDie() {                                        \
-      void* f;                                                           \
-      auto s = tsl::Env::Default()->GetSymbolFromLibrary(GetDsoHandle(), \
-                                                         kName, &f);     \
-      CHECK(s.ok()) << "could not find " << kName                        \
-                    << " in miopen DSO; dlerror: " << s.message();       \
-      return reinterpret_cast<FuncPtrT>(f);                              \
-    }                                                                    \
-    static FuncPtrT DynLoad() {                                          \
-      static FuncPtrT f = LoadOrDie();                                   \
-      return f;                                                          \
-    }                                                                    \
-    template <typename... Args>                                          \
-    miopenStatus_t operator()(Args... args) {                            \
-      return DynLoad()(args...);                                         \
-    }                                                                    \
-  } __name;                                                              \
-  const char* DynLoadShim__##__name::kName = #__name;
-
-#endif
-
-#if (TF_ROCM_VERSION >= 50000)
-// clang-format off
-#define MIOPEN_DNN_ROUTINE_EACH(__macro)                             \
-  __macro(miopenBatchNormalizationBackward)                          \
-  __macro(miopenBatchNormalizationForwardInference)                  \
-  __macro(miopenBatchNormalizationForwardTraining)                   \
-  __macro(miopenGetConvolutionForwardOutputDim)                      \
-  __macro(miopenGetConvolutionNdForwardOutputDim)                    \
-  __macro(miopenFindConvolutionForwardAlgorithm)                     \
-  __macro(miopenCreateTensorDescriptor)                              \
-  __macro(miopenDestroyTensorDescriptor)                             \
-  __macro(miopenSetNdPoolingDescriptor)                              \
-  __macro(miopenSetPoolingIndexType)                                 \
-  __macro(miopenSetLRNDescriptor)                                    \
-  __macro(miopenLRNGetWorkSpaceSize)                                 \
-  __macro(miopenCreateConvolutionDescriptor)                         \
-  __macro(miopenCreatePoolingDescriptor)                             \
-  __macro(miopenDestroyPoolingDescriptor)                            \
-  __macro(miopenCreateLRNDescriptor)                                 \
-  __macro(miopenDestroyLRNDescriptor)                                \
-  __macro(miopenDestroyConvolutionDescriptor)                        \
-  __macro(miopenCreateWithStream)                                    \
-  __macro(miopenDestroy)                                             \
-  __macro(miopenSetStream)                                           \
-  __macro(miopenSetAllocator)                                        \
-  __macro(miopenActivationForward)                                   \
-  __macro(miopenConvolutionForward)                                  \
-  __macro(miopenConvolutionBackwardBias)                             \
-  __macro(miopenConvolutionForwardGetWorkSpaceSize)                  \
-  __macro(miopenInitConvolutionDescriptor)                           \
-  __macro(miopenInitConvolutionNdDescriptor)                         \
-  __macro(miopenGetConvolutionDescriptor)                            \
-  __macro(miopenGetConvolutionNdDescriptor)                          \
-  __macro(miopenSetConvolutionGroupCount)                            \
-  __macro(miopenSet4dTensorDescriptor)                               \
-  __macro(miopenGetTensorDescriptor)                                 \
-  __macro(miopenSetTensorDescriptor)                                 \
-  __macro(miopenGetTensorDescriptorSize)                             \
-  __macro(miopenPoolingForward)                                      \
-  __macro(miopenPoolingGetWorkSpaceSizeV2)                           \
-  __macro(miopenPoolingBackward)                                     \
-  __macro(miopenLRNForward)                                          \
-  __macro(miopenLRNBackward)                                         \
-  __macro(miopenOpTensor)                                            \
-  __macro(miopenConvolutionBackwardData)                             \
-  __macro(miopenConvolutionBackwardWeights)                          \
-  __macro(miopenConvolutionBackwardWeightsGetWorkSpaceSize)          \
-  __macro(miopenFindConvolutionBackwardDataAlgorithm)                \
-  __macro(miopenFindConvolutionBackwardWeightsAlgorithm)             \
-  __macro(miopenConvolutionBackwardDataGetWorkSpaceSize)             \
-  __macro(miopenCreateRNNDescriptor)                                 \
-  __macro(miopenSetRNNDescriptor)                                    \
-  __macro(miopenSetRNNDescriptor_V2)                                 \
-  __macro(miopenDestroyRNNDescriptor)                                \
-  __macro(miopenGetRNNParamsSize)                                    \
-  __macro(miopenGetRNNLayerParam)                                    \
-  __macro(miopenGetRNNLayerBias)                                     \
-  __macro(miopenGetRNNWorkspaceSize)                                 \
-  __macro(miopenGetRNNTrainingReserveSize)                           \
-  __macro(miopenRNNForwardInference)                                 \
-  __macro(miopenRNNForwardTraining)                                  \
-  __macro(miopenRNNBackwardData)                                     \
-  __macro(miopenRNNBackwardWeights)                                  \
-  __macro(miopenGetRNNLayerParamOffset)                              \
-  __macro(miopenGetRNNLayerParamSize)                                \
-  __macro(miopenGetRNNLayerBiasOffset)                               \
-  __macro(miopenGetRNNLayerBiasSize)                                 \
-  __macro(miopenGetRNNParamsDescriptor)                              \
-  __macro(miopenCreateDropoutDescriptor)                             \
-  __macro(miopenSetDropoutDescriptor)                                \
-  __macro(miopenGetDropoutDescriptor)                                \
-  __macro(miopenDestroyDropoutDescriptor)                            \
-  __macro(miopenRestoreDropoutDescriptor)                            \
-  __macro(miopenDropoutGetReserveSpaceSize)                          \
-  __macro(miopenDropoutGetStatesSize)                                \
-  __macro(miopenDropoutForward)                                      \
-  __macro(miopenDropoutBackward)                                     \
-  __macro(miopenCreateActivationDescriptor)                          \
-  __macro(miopenSetActivationDescriptor)                             \
-  __macro(miopenGetActivationDescriptor)                             \
-  __macro(miopenDestroyActivationDescriptor)                         \
-  __macro(miopenCreateFusionPlan)                                    \
-  __macro(miopenCreateOpConvForward)                                 \
-  __macro(miopenCreateOpBiasForward)                                 \
-  __macro(miopenCreateOpActivationForward)                           \
-  __macro(miopenCreateOpActivationBackward)                          \
-  __macro(miopenCreateOpBatchNormInference)                          \
-  __macro(miopenCreateOpBatchNormForward)                            \
-  __macro(miopenCreateOpBatchNormBackward)                           \
-  __macro(miopenCompileFusionPlan)                                   \
-  __macro(miopenFusionPlanGetOp)                                     \
-  __macro(miopenCreateOperatorArgs)                                  \
-  __macro(miopenSetOpArgsConvForward)                                \
-  __macro(miopenSetOpArgsBiasForward)                                \
-  __macro(miopenSetOpArgsActivForward)                               \
-  __macro(miopenSetOpArgsActivBackward)                              \
-  __macro(miopenSetOpArgsBatchNormInference)                         \
-  __macro(miopenSetOpArgsBatchNormForward)                           \
-  __macro(miopenSetOpArgsBatchNormBackward)                          \
-  __macro(miopenExecuteFusionPlan)                                   \
-  __macro(miopenDestroyOperatorArgs)                                 \
-  __macro(miopenDestroyFusionPlan)                                   \
-  __macro(miopenConvolutionForwardGetSolutionCount)                  \
-  __macro(miopenConvolutionForwardGetSolution)                       \
-  __macro(miopenConvolutionForwardGetSolutionWorkspaceSize)          \
-  __macro(miopenConvolutionForwardCompileSolution)                   \
-  __macro(miopenConvolutionForwardImmediate)                         \
-  __macro(miopenConvolutionForwardBias)                              \
-  __macro(miopenConvolutionBiasActivationForward)                    \
-  __macro(miopenConvolutionBackwardDataGetSolutionCount)             \
-  __macro(miopenConvolutionBackwardDataGetSolution)                  \
-  __macro(miopenConvolutionBackwardDataGetSolutionWorkspaceSize)     \
-  __macro(miopenConvolutionBackwardDataCompileSolution)              \
-  __macro(miopenConvolutionBackwardDataImmediate)                    \
-  __macro(miopenConvolutionBackwardWeightsGetSolutionCount)          \
-  __macro(miopenConvolutionBackwardWeightsGetSolution)               \
-  __macro(miopenConvolutionBackwardWeightsGetSolutionWorkspaceSize)  \
-  __macro(miopenConvolutionBackwardWeightsCompileSolution)           \
-  __macro(miopenConvolutionBackwardWeightsImmediate)                 \
-  __macro(miopenCreateCTCLossDescriptor)                             \
-  __macro(miopenSetCTCLossDescriptor)                                \
-  __macro(miopenGetCTCLossWorkspaceSize)                             \
-  __macro(miopenCTCLoss)                                             \
-  __macro(miopenDestroyCTCLossDescriptor)                            \
-  __macro(miopenSetConvolutionAttribute)  // clang-format on
-#else
-// clang-format off
-#define MIOPEN_DNN_ROUTINE_EACH(__macro)                             \
-  __macro(miopenBatchNormalizationBackward)                          \
-  __macro(miopenBatchNormalizationForwardInference)                  \
-  __macro(miopenBatchNormalizationForwardTraining)                   \
-  __macro(miopenGetConvolutionForwardOutputDim)                      \
-  __macro(miopenGetConvolutionNdForwardOutputDim)                    \
-  __macro(miopenFindConvolutionForwardAlgorithm)                     \
-  __macro(miopenCreateTensorDescriptor)                              \
-  __macro(miopenDestroyTensorDescriptor)                             \
-  __macro(miopenSetNdPoolingDescriptor)                              \
-  __macro(miopenSetPoolingIndexType)                                 \
-  __macro(miopenSetLRNDescriptor)                                    \
-  __macro(miopenLRNGetWorkSpaceSize)                                 \
-  __macro(miopenCreateConvolutionDescriptor)                         \
-  __macro(miopenCreatePoolingDescriptor)                             \
-  __macro(miopenDestroyPoolingDescriptor)                            \
-  __macro(miopenCreateLRNDescriptor)                                 \
-  __macro(miopenDestroyLRNDescriptor)                                \
-  __macro(miopenDestroyConvolutionDescriptor)                        \
-  __macro(miopenCreateWithStream)                                    \
-  __macro(miopenDestroy)                                             \
-  __macro(miopenSetStream)                                           \
-  __macro(miopenSetAllocator)                                        \
-  __macro(miopenActivationForward)                                   \
-  __macro(miopenConvolutionForward)                                  \
-  __macro(miopenConvolutionBackwardBias)                             \
-  __macro(miopenConvolutionForwardGetWorkSpaceSize)                  \
-  __macro(miopenInitConvolutionDescriptor)                           \
-  __macro(miopenInitConvolutionNdDescriptor)                         \
-  __macro(miopenGetConvolutionDescriptor)                            \
-  __macro(miopenGetConvolutionNdDescriptor)                          \
-  __macro(miopenSetConvolutionGroupCount)                            \
-  __macro(miopenSet4dTensorDescriptor)                               \
-  __macro(miopenGetTensorDescriptor)                                 \
-  __macro(miopenSetTensorDescriptor)                                 \
-  __macro(miopenGetTensorDescriptorSize)                             \
-  __macro(miopenPoolingForward)                                      \
-  __macro(miopenPoolingGetWorkSpaceSizeV2)                           \
-  __macro(miopenPoolingBackward)                                     \
-  __macro(miopenLRNForward)                                          \
-  __macro(miopenLRNBackward)                                         \
-  __macro(miopenOpTensor)                                            \
-  __macro(miopenConvolutionBackwardData)                             \
-  __macro(miopenConvolutionBackwardWeights)                          \
-  __macro(miopenConvolutionBackwardWeightsGetWorkSpaceSize)          \
-  __macro(miopenFindConvolutionBackwardDataAlgorithm)                \
-  __macro(miopenFindConvolutionBackwardWeightsAlgorithm)             \
-  __macro(miopenConvolutionBackwardDataGetWorkSpaceSize)             \
-  __macro(miopenCreateRNNDescriptor)                                 \
-  __macro(miopenSetRNNDescriptor)                                    \
-  __macro(miopenSetRNNDescriptor_V2)                                 \
-  __macro(miopenDestroyRNNDescriptor)                                \
-  __macro(miopenGetRNNParamsSize)                                    \
-  __macro(miopenGetRNNLayerParam)                                    \
-  __macro(miopenGetRNNLayerBias)                                     \
-  __macro(miopenGetRNNWorkspaceSize)                                 \
-  __macro(miopenGetRNNTrainingReserveSize)                           \
-  __macro(miopenRNNForwardInference)                                 \
-  __macro(miopenRNNForwardTraining)                                  \
-  __macro(miopenRNNBackwardData)                                     \
-  __macro(miopenRNNBackwardWeights)                                  \
-  __macro(miopenGetRNNLayerParamOffset)                              \
-  __macro(miopenGetRNNLayerParamSize)                                \
-  __macro(miopenGetRNNLayerBiasOffset)                               \
-  __macro(miopenGetRNNLayerBiasSize)                                 \
-  __macro(miopenGetRNNParamsDescriptor)                              \
-  __macro(miopenCreateDropoutDescriptor)                             \
-  __macro(miopenSetDropoutDescriptor)                                \
-  __macro(miopenGetDropoutDescriptor)                                \
-  __macro(miopenDestroyDropoutDescriptor)                            \
-  __macro(miopenRestoreDropoutDescriptor)                            \
-  __macro(miopenDropoutGetReserveSpaceSize)                          \
-  __macro(miopenDropoutGetStatesSize)                                \
-  __macro(miopenDropoutForward)                                      \
-  __macro(miopenDropoutBackward)                                     \
-  __macro(miopenCreateActivationDescriptor)                          \
-  __macro(miopenSetActivationDescriptor)                             \
-  __macro(miopenGetActivationDescriptor)                             \
-  __macro(miopenDestroyActivationDescriptor)                         \
-  __macro(miopenCreateFusionPlan)                                    \
-  __macro(miopenCreateOpConvForward)                                 \
-  __macro(miopenCreateOpBiasForward)                                 \
-  __macro(miopenCreateOpActivationForward)                           \
-  __macro(miopenCreateOpActivationBackward)                          \
-  __macro(miopenCreateOpBatchNormInference)                          \
-  __macro(miopenCreateOpBatchNormForward)                            \
-  __macro(miopenCreateOpBatchNormBackward)                           \
-  __macro(miopenCompileFusionPlan)                                   \
-  __macro(miopenFusionPlanGetOp)                                     \
-  __macro(miopenCreateOperatorArgs)                                  \
-  __macro(miopenSetOpArgsConvForward)                                \
-  __macro(miopenSetOpArgsBiasForward)                                \
-  __macro(miopenSetOpArgsActivForward)                               \
-  __macro(miopenSetOpArgsActivBackward)                              \
-  __macro(miopenSetOpArgsBatchNormInference)                         \
-  __macro(miopenSetOpArgsBatchNormForward)                           \
-  __macro(miopenSetOpArgsBatchNormBackward)                          \
-  __macro(miopenExecuteFusionPlan)                                   \
-  __macro(miopenDestroyOperatorArgs)                                 \
-  __macro(miopenDestroyFusionPlan)                                   \
-  __macro(miopenConvolutionBiasActivationForward)                    \
-  __macro(miopenConvolutionForwardGetSolutionCount)                  \
-  __macro(miopenConvolutionForwardGetSolution)                       \
-  __macro(miopenConvolutionForwardGetSolutionWorkspaceSize)          \
-  __macro(miopenConvolutionForwardCompileSolution)                   \
-  __macro(miopenConvolutionForwardImmediate)                         \
-  __macro(miopenConvolutionForwardBias)                              \
-  __macro(miopenConvolutionBackwardDataGetSolutionCount)             \
-  __macro(miopenConvolutionBackwardDataGetSolution)                  \
-  __macro(miopenConvolutionBackwardDataGetSolutionWorkspaceSize)     \
-  __macro(miopenConvolutionBackwardDataCompileSolution)              \
-  __macro(miopenConvolutionBackwardDataImmediate)                    \
-  __macro(miopenConvolutionBackwardWeightsGetSolutionCount)          \
-  __macro(miopenConvolutionBackwardWeightsGetSolution)               \
-  __macro(miopenConvolutionBackwardWeightsGetSolutionWorkspaceSize)  \
-  __macro(miopenConvolutionBackwardWeightsCompileSolution)           \
-  __macro(miopenConvolutionBackwardWeightsImmediate)                 \
-  __macro(miopenCreateCTCLossDescriptor)                             \
-  __macro(miopenSetCTCLossDescriptor)                                \
-  __macro(miopenGetCTCLossWorkspaceSize)                             \
-  __macro(miopenCTCLoss)                                             \
-  __macro(miopenDestroyCTCLossDescriptor)
-// clang-format on
-#endif
-
-#if (MIOPEN_BETA_API && TF_ROCM_VERSION >= 60300)
-STREAM_EXECUTOR_MIOPEN_WRAP(miopenSetTensorDescriptorV2)
-#endif
-
-MIOPEN_DNN_ROUTINE_EACH(STREAM_EXECUTOR_MIOPEN_WRAP)
-
-#undef MIOPEN_DNN_ROUTINE_EACH
-
-}  // namespace wrap
-
 namespace {
 
 // These routines should ideally be provided as an MIOpen API.
@@ -575,7 +270,7 @@ uint64_t GetHashValue(miopenTensorDescriptor_t tensor_desc) {
   miopenDataType_t datatype = miopenFloat;
   int dims[kMaxMIOpenTensorSize] = {0};
   int strides[kMaxMIOpenTensorSize] = {0};
-  wrap::miopenGetTensorDescriptor(tensor_desc, &datatype, dims, strides);
+  miopenGetTensorDescriptor(tensor_desc, &datatype, dims, strides);
 
   uint64_t hash_value = tsl::hash<int>()(datatype);
   for (int dim : dims)
@@ -589,15 +284,15 @@ uint64_t GetHashValue(miopenTensorDescriptor_t tensor_desc) {
 uint64_t GetHashValue(miopenConvolutionDescriptor_t conv_desc) {
   miopenConvolutionMode_t c_mode = miopenConvolution;
   int nd = 0;
-  wrap::miopenGetConvolutionNdDescriptor(conv_desc, 0, &nd, nullptr, nullptr,
-                                         nullptr, &c_mode);
+  miopenGetConvolutionNdDescriptor(conv_desc, 0, &nd, nullptr, nullptr, nullptr,
+                                   &c_mode);
 
   std::vector<int> stride(nd);
   std::vector<int> pad(nd);
   std::vector<int> dilation(nd);
 
-  wrap::miopenGetConvolutionNdDescriptor(
-      conv_desc, nd, &nd, pad.data(), stride.data(), dilation.data(), &c_mode);
+  miopenGetConvolutionNdDescriptor(conv_desc, nd, &nd, pad.data(),
+                                   stride.data(), dilation.data(), &c_mode);
 
   uint64_t hash_value = tsl::hash<int>()(c_mode);
   auto hash64Combine = [&hash_value](int element) {
@@ -638,8 +333,8 @@ class CachedFusionPlans {
       found_cached_plan = true;
     } else {
       VLOG(2) << "Creating a new plan for " << hash;
-      auto status = wrap::miopenCreateFusionPlan(fusion_plan, fusion_direction,
-                                                 input_descriptor);
+      auto status = miopenCreateFusionPlan(fusion_plan, fusion_direction,
+                                           input_descriptor);
       if (status != miopenStatusSuccess) {
         LOG(FATAL) << "call to miopenCreateFusionPlan failed: "
                    << ToString(status);
@@ -656,7 +351,7 @@ class CachedFusionPlans {
     absl::MutexLock lock{cached_plans_mutex};
 
     for (auto it : cached_plans) {
-      auto status = wrap::miopenDestroyFusionPlan(it.second);
+      auto status = miopenDestroyFusionPlan(it.second);
       if (status != miopenStatusSuccess) {
         LOG(FATAL) << "call to miopenDestroyFusionPlan failed: "
                    << ToString(status);
@@ -746,7 +441,7 @@ class MIOpenAccess {
 
   ~MIOpenAccess() {
     absl::MutexLock lock(mutex_);
-    wrap::miopenDestroy(handle_);
+    miopenDestroy(handle_);
   }
 
   // Creates a MIOpenHandle instance for stream.
@@ -770,7 +465,7 @@ class MIOpenAccess {
         stream ? static_cast<hipStream_t>(
                      stream->platform_specific_handle().stream)
                : nullptr;
-    auto status = wrap::miopenSetStream(handle_, hip_stream);
+    auto status = miopenSetStream(handle_, hip_stream);
     CHECK_EQ(status, miopenStatusSuccess) << "Failed to set MIOpen stream.";
     return MIOpenHandle(executor, std::move(lock), handle_);
   }
@@ -808,7 +503,7 @@ MIOpenSupport::MIOpenSupport(StreamExecutor* parent) : parent_(parent) {
 absl::Status MIOpenSupport::Init() {
   std::unique_ptr<ActivateContext> context = parent_->Activate();
   miopenHandle_t miopen_handle = nullptr;
-  auto status = wrap::miopenCreateWithStream(
+  auto status = miopenCreateWithStream(
       reinterpret_cast<miopenHandle_t*>(&miopen_handle), (hipStream_t) nullptr);
   if (status == miopenStatusSuccess) {
     miopen_ = std::make_unique<MIOpenAccess>(miopen_handle);
@@ -834,22 +529,22 @@ miopenStatus_t miDestroyObject(T obj) {
 
 template <>
 miopenStatus_t miDestroyObject(miopenTensorDescriptor_t obj) {
-  return wrap::miopenDestroyTensorDescriptor(obj);
+  return miopenDestroyTensorDescriptor(obj);
 }
 
 template <>
 miopenStatus_t miDestroyObject(miopenConvolutionDescriptor_t obj) {
-  return wrap::miopenDestroyConvolutionDescriptor(obj);
+  return miopenDestroyConvolutionDescriptor(obj);
 }
 
 template <>
 miopenStatus_t miDestroyObject(miopenPoolingDescriptor_t obj) {
-  return wrap::miopenDestroyPoolingDescriptor(obj);
+  return miopenDestroyPoolingDescriptor(obj);
 }
 
 template <>
 miopenStatus_t miDestroyObject(miopenLRNDescriptor_t obj) {
-  return wrap::miopenDestroyLRNDescriptor(obj);
+  return miopenDestroyLRNDescriptor(obj);
 }
 
 template <typename T>
@@ -864,8 +559,8 @@ struct ScopedDescriptor {
   ~ScopedDescriptor() {
     if (handle_ == nullptr) return;
 
-    auto status = miDestroyObject(
-        handle_);  // wrap::miopenDestroyTensorDescriptor(handle_);
+    auto status =
+        miDestroyObject(handle_);  // miopenDestroyTensorDescriptor(handle_);
     if (status != miopenStatusSuccess) {
       LOG(ERROR) << "could not destroy miopen tensor descriptor: "
                  << ToString(status);
@@ -890,7 +585,7 @@ using ScopedNormalizeDescriptor = ScopedDescriptor<miopenLRNDescriptor_t>;
 absl::StatusOr<ScopedTensorDescriptor> scope(
     const BatchDescriptor& batch_descriptor, miopenDataType_t data_type) {
   ScopedTensorDescriptor obj;
-  auto status = wrap::miopenCreateTensorDescriptor(&obj.handle_);
+  auto status = miopenCreateTensorDescriptor(&obj.handle_);
   if (status != miopenStatusSuccess) {
     return absl::InternalError("could not create miopen tensor descriptor: " +
                                ToString(status));
@@ -908,9 +603,9 @@ absl::StatusOr<ScopedTensorDescriptor> scope(
           batch_descriptor.full_dims(dnn::DataLayout::kBatchDepthYX);
 
 #if (MIOPEN_BETA_API && TF_ROCM_VERSION >= 60300)
-      status = wrap::miopenSetTensorDescriptorV2(
-          obj.handle_, data_type, nd, (const size_t*)dims64.data(),
-          (const size_t*)strides64.data());
+      status = miopenSetTensorDescriptorV2(obj.handle_, data_type, nd,
+                                           (const size_t*)dims64.data(),
+                                           (const size_t*)strides64.data());
 #else
       // MIOpen requires arrays of ints.
       std::vector<int> strides(nd);
@@ -919,8 +614,8 @@ absl::StatusOr<ScopedTensorDescriptor> scope(
                      &CheckedNarrowing<int64_t, int>);
       std::transform(dims64.cbegin(), dims64.cend(), dims.begin(),
                      &CheckedNarrowing<int64_t, int>);
-      status = wrap::miopenSetTensorDescriptor(obj.handle_, data_type, nd,
-                                               dims.data(), strides.data());
+      status = miopenSetTensorDescriptor(obj.handle_, data_type, nd,
+                                         dims.data(), strides.data());
 #endif
       if (status != miopenStatusSuccess) {
         return absl::InternalError(
@@ -939,7 +634,7 @@ absl::StatusOr<ScopedTensorDescriptor> scope(
 absl::StatusOr<ScopedFilterDescriptor> scope(
     const FilterDescriptor& filter_descriptor, miopenDataType_t data_type) {
   ScopedFilterDescriptor obj;
-  auto status = wrap::miopenCreateTensorDescriptor(&obj.handle_);
+  auto status = miopenCreateTensorDescriptor(&obj.handle_);
   if (status != miopenStatusSuccess) {
     LOG(FATAL) << "could not create miopen filter descriptor: "
                << ToString(status);
@@ -990,9 +685,9 @@ absl::StatusOr<ScopedFilterDescriptor> scope(
           filter_descriptor.full_dims(dnn::FilterLayout::kOutputInputYX);
 
 #if (MIOPEN_BETA_API && TF_ROCM_VERSION >= 60300)
-      status = wrap::miopenSetTensorDescriptorV2(
-          obj.handle_, data_type, nd, (const size_t*)dims64.data(),
-          (const size_t*)strides64.data());
+      status = miopenSetTensorDescriptorV2(obj.handle_, data_type, nd,
+                                           (const size_t*)dims64.data(),
+                                           (const size_t*)strides64.data());
 #else
       // MIOpen requires arrays of ints.
       std::vector<int> strides;
@@ -1001,8 +696,8 @@ absl::StatusOr<ScopedFilterDescriptor> scope(
                         &CheckedNarrowing<int64_t, int>);
       absl::c_transform(dims64, std::back_inserter(dims),
                         &CheckedNarrowing<int64_t, int>);
-      status = wrap::miopenSetTensorDescriptor(obj.handle_, data_type, nd,
-                                               dims.data(), strides.data());
+      status = miopenSetTensorDescriptor(obj.handle_, data_type, nd,
+                                         dims.data(), strides.data());
 #endif
       if (status != miopenStatusSuccess) {
         LOG(FATAL) << "could not convert FilterDescriptor "
@@ -1021,7 +716,7 @@ absl::StatusOr<ScopedFilterDescriptor> scope(
 absl::StatusOr<ScopedConvolutionDescriptor> scope(
     const ConvolutionDescriptor& convolution_descriptor) {
   ScopedConvolutionDescriptor obj;
-  auto status = wrap::miopenCreateConvolutionDescriptor(&obj.handle_);
+  auto status = miopenCreateConvolutionDescriptor(&obj.handle_);
   if (status != miopenStatusSuccess) {
     LOG(FATAL) << "could not create miopen convolution descriptor: "
                << ToString(status);
@@ -1042,7 +737,7 @@ absl::StatusOr<ScopedConvolutionDescriptor> scope(
   std::transform(dilations64.cbegin(), dilations64.cend(), upscale.begin(),
                  &CheckedNarrowing<int64_t, int>);
 
-  status = wrap::miopenInitConvolutionNdDescriptor(
+  status = miopenInitConvolutionNdDescriptor(
       obj.handle_, convolution_descriptor.ndims(), padding.data(),
       strides.data(), upscale.data(), miopenConvolution);
   if (status != miopenStatusSuccess) {
@@ -1052,8 +747,8 @@ absl::StatusOr<ScopedConvolutionDescriptor> scope(
 
   VLOG(2) << "Requesting grouped convolution: "
           << convolution_descriptor.group_count();
-  status = wrap::miopenSetConvolutionGroupCount(
-      obj.handle_, convolution_descriptor.group_count());
+  status = miopenSetConvolutionGroupCount(obj.handle_,
+                                          convolution_descriptor.group_count());
   if (status != miopenStatusSuccess) {
     LOG(FATAL) << "could not set miopen convolution group count: "
                << ToString(status);
@@ -1061,7 +756,7 @@ absl::StatusOr<ScopedConvolutionDescriptor> scope(
 
 #if (TF_ROCM_VERSION >= 50300)
   if (RequireMIOpenDeterminism()) {
-    status = wrap::miopenSetConvolutionAttribute(
+    status = miopenSetConvolutionAttribute(
         obj.handle_, MIOPEN_CONVOLUTION_ATTRIB_DETERMINISTIC, 1);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "could not set miopen convolution attribute: "
@@ -1075,7 +770,7 @@ absl::StatusOr<ScopedConvolutionDescriptor> scope(
 absl::StatusOr<ScopedPoolingDescriptor> scope(
     const PoolingDescriptor& pooling_descriptor) {
   ScopedPoolingDescriptor obj;
-  auto status = wrap::miopenCreatePoolingDescriptor(&obj.handle_);
+  auto status = miopenCreatePoolingDescriptor(&obj.handle_);
   if (status != miopenStatusSuccess) {
     LOG(FATAL) << "could not create miopen pooling descriptor: "
                << ToString(status);
@@ -1096,7 +791,7 @@ absl::StatusOr<ScopedPoolingDescriptor> scope(
   std::transform(shape64.cbegin(), shape64.cend(), shape.begin(),
                  &CheckedNarrowing<int64_t, int>);
 
-  status = wrap::miopenSetNdPoolingDescriptor(
+  status = miopenSetNdPoolingDescriptor(
       obj.handle_,
       (pooling_descriptor.mode() == dnn::PoolingMode::kMaximum
            ? miopenPoolingMax
@@ -1107,7 +802,7 @@ absl::StatusOr<ScopedPoolingDescriptor> scope(
   // API assumes all input indexes to be the same type. Since a tensor
   // descriptor can only use int32 type, the index type here need to be
   // aligned with the tensor index type of the (input) tensor descritptor
-  status = wrap::miopenSetPoolingIndexType(obj.handle_, miopenIndexUint32);
+  status = miopenSetPoolingIndexType(obj.handle_, miopenIndexUint32);
 
   if (status != miopenStatusSuccess) {
     LOG(FATAL) << "could not set miopen pooling descriptor: "
@@ -1119,7 +814,7 @@ absl::StatusOr<ScopedPoolingDescriptor> scope(
 absl::StatusOr<ScopedNormalizeDescriptor> scope(
     const NormalizeDescriptor& normalize_descriptor) {
   ScopedNormalizeDescriptor obj;
-  auto status = wrap::miopenCreateLRNDescriptor(&obj.handle_);
+  auto status = miopenCreateLRNDescriptor(&obj.handle_);
   if (status != miopenStatusSuccess) {
     LOG(FATAL) << "could not create miopen LRN descriptor: "
                << ToString(status);
@@ -1145,8 +840,8 @@ absl::StatusOr<ScopedNormalizeDescriptor> scope(
 
   double lrn_beta = normalize_descriptor.beta();
   double lrn_k = normalize_descriptor.bias();
-  status = wrap::miopenSetLRNDescriptor(obj.handle_, miopenLRNCrossChannel,
-                                        lrn_N, lrn_alpha, lrn_beta, lrn_k);
+  status = miopenSetLRNDescriptor(obj.handle_, miopenLRNCrossChannel, lrn_N,
+                                  lrn_alpha, lrn_beta, lrn_k);
   if (status != miopenStatusSuccess) {
     LOG(FATAL) << "could not set miopen LRN descriptor: " << ToString(status);
   }
@@ -1161,7 +856,7 @@ struct ScopedActivationDescriptor
       dnn::ActivationMode activation_mode, double alpha = 0.0) {
     ScopedActivationDescriptor obj;
     obj.alpha_ = alpha;
-    auto status = wrap::miopenCreateActivationDescriptor(&obj.handle_);
+    auto status = miopenCreateActivationDescriptor(&obj.handle_);
     if (status != miopenStatusSuccess) {
       return absl::InternalError(
           "call to miopenCreateActivationDescriptor failed: " +
@@ -1206,9 +901,9 @@ struct ScopedActivationDescriptor
           return absl::InternalError("Activation not implemented");
       }
 
-      status = wrap::miopenSetActivationDescriptor(
-          obj.handle_, obj.miopen_activation_mode_, obj.alpha_, obj.beta_,
-          obj.gamma_);
+      status = miopenSetActivationDescriptor(obj.handle_,
+                                             obj.miopen_activation_mode_,
+                                             obj.alpha_, obj.beta_, obj.gamma_);
       if (status != miopenStatusSuccess) {
         return absl::InternalError(
             "call to miopenSetActivationDescriptor failed: " +
@@ -1261,7 +956,7 @@ class ScopedFusionPlanBase {
         fusion_plan_(nullptr),
         fusion_args_(nullptr),
         fusion_plan_compiled_(false) {
-    auto status = wrap::miopenCreateOperatorArgs(&fusion_args_);
+    auto status = miopenCreateOperatorArgs(&fusion_args_);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenCreateOperatorArgs failed: "
                  << ToString(status);
@@ -1270,7 +965,7 @@ class ScopedFusionPlanBase {
 
   virtual ~ScopedFusionPlanBase() {
     if (fusion_args_ == nullptr) return;
-    auto status = wrap::miopenDestroyOperatorArgs(fusion_args_);
+    auto status = miopenDestroyOperatorArgs(fusion_args_);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenDestroyoperatorArgs failed: "
                  << ToString(status);
@@ -1281,7 +976,7 @@ class ScopedFusionPlanBase {
                          const void* input_data,
                          miopenTensorDescriptor_t output_descriptor,
                          void* output_data) {
-    auto status = wrap::miopenExecuteFusionPlan(
+    auto status = miopenExecuteFusionPlan(
         miopen_handle_, fusion_plan_, input_descriptor, input_data,
         output_descriptor, output_data, fusion_args_);
     if (status != miopenStatusSuccess) {
@@ -1297,14 +992,14 @@ class ScopedFusionPlanBase {
   miopenStatus_t SetConvolutionArgs(const int op_idx, const float* alpha,
                                     const float* beta, const void* data) {
     miopenFusionOpDescriptor_t conv_op;
-    auto status = wrap::miopenFusionPlanGetOp(fusion_plan_, op_idx, &conv_op);
+    auto status = miopenFusionPlanGetOp(fusion_plan_, op_idx, &conv_op);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenFusionPlanGetOp failed: "
                  << ToString(status);
     }
 
-    status = wrap::miopenSetOpArgsConvForward(fusion_args_, conv_op, alpha,
-                                              beta, data);
+    status =
+        miopenSetOpArgsConvForward(fusion_args_, conv_op, alpha, beta, data);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenSetOpArgsConvForward failed: "
                  << ToString(status);
@@ -1315,14 +1010,14 @@ class ScopedFusionPlanBase {
   miopenStatus_t SetBiasArgs(const int op_idx, const float* alpha,
                              const float* beta, const void* data) {
     miopenFusionOpDescriptor_t bias_op;
-    auto status = wrap::miopenFusionPlanGetOp(fusion_plan_, op_idx, &bias_op);
+    auto status = miopenFusionPlanGetOp(fusion_plan_, op_idx, &bias_op);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenFusionPlanGetOp failed: "
                  << ToString(status);
     }
 
-    status = wrap::miopenSetOpArgsBiasForward(fusion_args_, bias_op, alpha,
-                                              beta, data);
+    status =
+        miopenSetOpArgsBiasForward(fusion_args_, bias_op, alpha, beta, data);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenSetOpArgsBiasForward failed: "
                  << ToString(status);
@@ -1336,16 +1031,15 @@ class ScopedFusionPlanBase {
                                            const void* variance,
                                            double epsilon) {
     miopenFusionOpDescriptor_t batchnorm_op;
-    auto status =
-        wrap::miopenFusionPlanGetOp(fusion_plan_, op_idx, &batchnorm_op);
+    auto status = miopenFusionPlanGetOp(fusion_plan_, op_idx, &batchnorm_op);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenFusionPlanGetOp failed: "
                  << ToString(status);
     }
 
-    status = wrap::miopenSetOpArgsBatchNormInference(fusion_args_, batchnorm_op,
-                                                     alpha, beta, scale, offset,
-                                                     mean, variance, epsilon);
+    status = miopenSetOpArgsBatchNormInference(fusion_args_, batchnorm_op,
+                                               alpha, beta, scale, offset, mean,
+                                               variance, epsilon);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenSetOpArgsBatchNormInference failed: "
                  << ToString(status);
@@ -1359,14 +1053,13 @@ class ScopedFusionPlanBase {
       void* running_variance, void* saved_mean, void* saved_inv_variance,
       double exponential_average_factor, double epsilon) {
     miopenFusionOpDescriptor_t batchnorm_op;
-    auto status =
-        wrap::miopenFusionPlanGetOp(fusion_plan_, op_idx, &batchnorm_op);
+    auto status = miopenFusionPlanGetOp(fusion_plan_, op_idx, &batchnorm_op);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenFusionPlanGetOp failed: "
                  << ToString(status);
     }
 
-    status = wrap::miopenSetOpArgsBatchNormForward(
+    status = miopenSetOpArgsBatchNormForward(
         fusion_args_, batchnorm_op, alpha, beta, scale, offset, saved_mean,
         saved_inv_variance, running_mean, running_variance,
         exponential_average_factor, epsilon);
@@ -1384,14 +1077,13 @@ class ScopedFusionPlanBase {
                                           const void* saved_mean,
                                           const void* saved_inv_variance) {
     miopenFusionOpDescriptor_t batchnorm_op;
-    auto status =
-        wrap::miopenFusionPlanGetOp(fusion_plan_, op_idx, &batchnorm_op);
+    auto status = miopenFusionPlanGetOp(fusion_plan_, op_idx, &batchnorm_op);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenFusionPlanGetOp failed: "
                  << ToString(status);
     }
 
-    status = wrap::miopenSetOpArgsBatchNormBackward(
+    status = miopenSetOpArgsBatchNormBackward(
         fusion_args_, batchnorm_op, alpha, beta, x, scale, offset, scale_grad,
         offset_grad, saved_mean, saved_inv_variance);
     if (status != miopenStatusSuccess) {
@@ -1406,15 +1098,14 @@ class ScopedFusionPlanBase {
                                           double activ_beta,
                                           double activ_gamma) {
     miopenFusionOpDescriptor_t actv_op;
-    auto status = wrap::miopenFusionPlanGetOp(fusion_plan_, op_idx, &actv_op);
+    auto status = miopenFusionPlanGetOp(fusion_plan_, op_idx, &actv_op);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenFusionPlanGetOp failed: "
                  << ToString(status);
     }
 
-    status =
-        wrap::miopenSetOpArgsActivForward(fusion_args_, actv_op, alpha, beta,
-                                          activ_alpha, activ_beta, activ_gamma);
+    status = miopenSetOpArgsActivForward(fusion_args_, actv_op, alpha, beta,
+                                         activ_alpha, activ_beta, activ_gamma);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenSetOpArgsActivForward failed: "
                  << ToString(status);
@@ -1428,15 +1119,15 @@ class ScopedFusionPlanBase {
                                            double activ_beta,
                                            double activ_gamma) {
     miopenFusionOpDescriptor_t actv_op;
-    auto status = wrap::miopenFusionPlanGetOp(fusion_plan_, op_idx, &actv_op);
+    auto status = miopenFusionPlanGetOp(fusion_plan_, op_idx, &actv_op);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenFusionPlanGetOp failed: "
                  << ToString(status);
     }
 
-    status = wrap::miopenSetOpArgsActivBackward(fusion_args_, actv_op, alpha,
-                                                beta, y, nullptr, activ_alpha,
-                                                activ_beta, activ_gamma);
+    status = miopenSetOpArgsActivBackward(fusion_args_, actv_op, alpha, beta, y,
+                                          nullptr, activ_alpha, activ_beta,
+                                          activ_gamma);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenSetOpArgsActivBackward failed: "
                  << ToString(status);
@@ -1497,20 +1188,20 @@ class ScopedFusionPlanConvolutionBiasActivation : public ScopedFusionPlanBase {
         hash, &obj.fusion_plan_, miopenVerticalFusion, input_descriptor);
     if (is_compiled) VLOG(2) << "Cache hit";
     if (!is_compiled) {
-      auto status = wrap::miopenCreateOpConvForward(
+      auto status = miopenCreateOpConvForward(
           obj.fusion_plan_, &obj.conv_op, conv_descriptor, filter_descriptor);
       if (status != miopenStatusSuccess)
         return absl::InternalError("miopenCreateOpConvForward failed: " +
                                    ToString(status));
 
-      status = wrap::miopenCreateOpBiasForward(obj.fusion_plan_, &obj.bias_op,
-                                               bias_descriptor);
+      status = miopenCreateOpBiasForward(obj.fusion_plan_, &obj.bias_op,
+                                         bias_descriptor);
       if (status != miopenStatusSuccess)
         return absl::InternalError("miopenCreateOpBiasForward failed: " +
                                    ToString(status));
 
       if (act_descriptor.miopen_activation_mode_ != miopenActivationPASTHRU) {
-        status = wrap::miopenCreateOpActivationForward(
+        status = miopenCreateOpActivationForward(
             obj.fusion_plan_, &obj.actv_op,
             act_descriptor.miopen_activation_mode_);
         if (status != miopenStatusSuccess)
@@ -1518,7 +1209,7 @@ class ScopedFusionPlanConvolutionBiasActivation : public ScopedFusionPlanBase {
               "miopenCreateOpActivationForward failed: " + ToString(status));
       }
 
-      status = wrap::miopenCompileFusionPlan(miopen_handle, obj.fusion_plan_);
+      status = miopenCompileFusionPlan(miopen_handle, obj.fusion_plan_);
       if (status != miopenStatusSuccess) {
         VLOG(2) << "call to miopenCompileFusionPlan (CBA) failed: "
                 << ToString(status);
@@ -1615,7 +1306,7 @@ class ScopedFusionPlanBatchNormActivationInference
 
     if (!is_compiled) {
       miopenFusionOpDescriptor_t batchnorm_op;
-      auto status = wrap::miopenCreateOpBatchNormInference(
+      auto status = miopenCreateOpBatchNormInference(
           fusion_plan_, &batchnorm_op, miopenBNSpatial,
           scale_offset_mean_variance_descriptor);
 
@@ -1625,7 +1316,7 @@ class ScopedFusionPlanBatchNormActivationInference
       }
 
       miopenFusionOpDescriptor_t actv_op;
-      status = wrap::miopenCreateOpActivationForward(
+      status = miopenCreateOpActivationForward(
           fusion_plan_, &actv_op,
           activation_descriptor.miopen_activation_mode_);
       if (status != miopenStatusSuccess) {
@@ -1633,7 +1324,7 @@ class ScopedFusionPlanBatchNormActivationInference
                    << ToString(status);
       }
 
-      status = wrap::miopenCompileFusionPlan(miopen_handle_, fusion_plan_);
+      status = miopenCompileFusionPlan(miopen_handle_, fusion_plan_);
       if (status != miopenStatusSuccess) {
         VLOG(2) << "call to miopenCompileFusionPlan (BnA inference) failed: "
                 << ToString(status);
@@ -1716,7 +1407,7 @@ class ScopedFusionPlanBatchNormActivationForward : public ScopedFusionPlanBase {
 
     if (!is_compiled) {
       miopenFusionOpDescriptor_t batchnorm_op;
-      auto status = wrap::miopenCreateOpBatchNormForward(
+      auto status = miopenCreateOpBatchNormForward(
           fusion_plan_, &batchnorm_op, miopenBNSpatial,
           true /* runningMeanVariance */);
 
@@ -1726,7 +1417,7 @@ class ScopedFusionPlanBatchNormActivationForward : public ScopedFusionPlanBase {
       }
 
       miopenFusionOpDescriptor_t actv_op;
-      status = wrap::miopenCreateOpActivationForward(
+      status = miopenCreateOpActivationForward(
           fusion_plan_, &actv_op,
           activation_descriptor.miopen_activation_mode_);
       if (status != miopenStatusSuccess) {
@@ -1734,7 +1425,7 @@ class ScopedFusionPlanBatchNormActivationForward : public ScopedFusionPlanBase {
                    << ToString(status);
       }
 
-      status = wrap::miopenCompileFusionPlan(miopen_handle_, fusion_plan_);
+      status = miopenCompileFusionPlan(miopen_handle_, fusion_plan_);
       if (status != miopenStatusSuccess) {
         VLOG(2) << "call to miopenCompileFusionPlan (BnA forward) failed: "
                 << ToString(status);
@@ -1818,8 +1509,8 @@ class ScopedFusionPlanBatchNormActivationBackward
 
     if (!is_compiled) {
       miopenFusionOpDescriptor_t batchnorm_op;
-      auto status = wrap::miopenCreateOpBatchNormBackward(
-          fusion_plan_, &batchnorm_op, miopenBNSpatial);
+      auto status = miopenCreateOpBatchNormBackward(fusion_plan_, &batchnorm_op,
+                                                    miopenBNSpatial);
 
       if (status != miopenStatusSuccess) {
         LOG(FATAL) << "call to miopenCreateOpBatchNormBackward failed: "
@@ -1827,7 +1518,7 @@ class ScopedFusionPlanBatchNormActivationBackward
       }
 
       miopenFusionOpDescriptor_t actv_op;
-      status = wrap::miopenCreateOpActivationBackward(
+      status = miopenCreateOpActivationBackward(
           fusion_plan_, &actv_op,
           activation_descriptor.miopen_activation_mode_);
       if (status != miopenStatusSuccess) {
@@ -1835,7 +1526,7 @@ class ScopedFusionPlanBatchNormActivationBackward
                    << ToString(status);
       }
 
-      status = wrap::miopenCompileFusionPlan(miopen_handle_, fusion_plan_);
+      status = miopenCompileFusionPlan(miopen_handle_, fusion_plan_);
       if (status != miopenStatusSuccess) {
         VLOG(2) << "call to miopenCompileFusionPlan (BnA backward) failed: "
                 << ToString(status);
@@ -2017,7 +1708,7 @@ class MIOpenRnnParamsDescriptor : public MIOpenDescriptorCommon<void> {
   MIOpenRnnParamsDescriptor(miopenHandle_t miopen_handle,
                             const MIOpenRnnDescriptor& rnn_desc);
   ~MIOpenRnnParamsDescriptor() {
-    auto status = wrap::miopenDestroyTensorDescriptor(handle_);
+    auto status = miopenDestroyTensorDescriptor(handle_);
     RETURN_IF_MIOPEN_ERROR(status, "Failed to destroy RNN tensor descriptor");
   }
   miopenTensorDescriptor_t handle() const {
@@ -2051,7 +1742,7 @@ class MIOpenDropoutDescriptor {
   MIOpenDropoutDescriptor(miopenHandle_t miopen_handle, float dropout,
                           uint64_t seed, ScratchAllocator* state_allocator)
       : dropout_desc_(nullptr) {
-    auto status = wrap::miopenCreateDropoutDescriptor(&dropout_desc_);
+    auto status = miopenCreateDropoutDescriptor(&dropout_desc_);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenCreateDropoutDescriptor failed: "
                  << ToString(status);
@@ -2061,8 +1752,8 @@ class MIOpenDropoutDescriptor {
       DeviceMemory<uint8_t> state_memory;
       if (state_allocator) {
         size_t state_sizes_in_bytes = 0;
-        status = wrap::miopenDropoutGetStatesSize(miopen_handle,
-                                                  &state_sizes_in_bytes);
+        status =
+            miopenDropoutGetStatesSize(miopen_handle, &state_sizes_in_bytes);
         if (status != miopenStatusSuccess) {
           LOG(FATAL) << "call to miopenDropoutGetStatesSize failed: "
                      << ToString(status);
@@ -2078,7 +1769,7 @@ class MIOpenDropoutDescriptor {
 
       bool state_evo = false;  // input placeholder, currently not enabled
       bool use_mask = true;
-      status = wrap::miopenSetDropoutDescriptor(
+      status = miopenSetDropoutDescriptor(
           dropout_desc_ /*dropoutDesc*/, miopen_handle /*handle*/,
           dropout /*dropout*/, state_memory.opaque() /*states*/,
           state_memory.size() /*stateSizeInBytes*/, seed /*seed*/,
@@ -2092,7 +1783,7 @@ class MIOpenDropoutDescriptor {
   }
 
   ~MIOpenDropoutDescriptor() {
-    auto status = wrap::miopenDestroyDropoutDescriptor(dropout_desc_);
+    auto status = miopenDestroyDropoutDescriptor(dropout_desc_);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenDestroyDropoutDescriptor failed: "
                  << ToString(status);
@@ -2131,9 +1822,9 @@ class MIOpenRnnDescriptor : public MIOpenDescriptorCommon<dnn::RnnDescriptor> {
     miopen_dropout_desc_ = std::make_unique<MIOpenDropoutDescriptor>(
         miopen_handle, dropout, seed, state_allocator);
     // Create the RNN handle
-    auto status = wrap::miopenCreateRNNDescriptor(&rnn_desc_);
+    auto status = miopenCreateRNNDescriptor(&rnn_desc_);
     RETURN_IF_MIOPEN_ERROR(status, "Unable to create RNN descriptor");
-    status = wrap::miopenSetRNNDescriptor_V2(
+    status = miopenSetRNNDescriptor_V2(
         rnn_desc_ /*rnnDesc*/, hidden_size /*hiddenSize*/,
         num_layers /*numLayers*/,
         miopen_dropout_desc_->handle() /*dropoutDesc*/,
@@ -2151,7 +1842,7 @@ class MIOpenRnnDescriptor : public MIOpenDescriptorCommon<dnn::RnnDescriptor> {
   }
   ~MIOpenRnnDescriptor() override {
     if (rnn_desc_) {
-      auto status = wrap::miopenDestroyRNNDescriptor(rnn_desc_);
+      auto status = miopenDestroyRNNDescriptor(rnn_desc_);
       RETURN_IF_MIOPEN_ERROR(status, "Unable to destroy RNN descriptor");
     }
   }
@@ -2236,10 +1927,10 @@ class MIOpenRnnSequenceTensorDescriptor
       SetFailure(absl::UnknownError(error_msg));
       return;
     }
-    auto status = wrap::miopenCreateTensorDescriptor(&handle);
+    auto status = miopenCreateTensorDescriptor(&handle);
     RETURN_IF_MIOPEN_ERROR(status, "Failed to create tensor descriptor");
     std::array<int, 2> dims = {{batch_size, data_size}};
-    status = wrap::miopenSetTensorDescriptor(
+    status = miopenSetTensorDescriptor(
         handle /*tensorDesc*/, data_type /*dataType*/, 2 /*nbDims*/,
         dims.data() /*dimA*/, nullptr /*strideA*/);
     RETURN_IF_MIOPEN_ERROR(status, "Failed to update tensor descriptor");
@@ -2249,7 +1940,7 @@ class MIOpenRnnSequenceTensorDescriptor
 
   ~MIOpenRnnSequenceTensorDescriptor() override {
     // Only the first one needs to be destroyed. All others are the same.
-    auto status = wrap::miopenDestroyTensorDescriptor(handles_[0]);
+    auto status = miopenDestroyTensorDescriptor(handles_[0]);
     RETURN_IF_MIOPEN_ERROR(status,
                            "Failed to destroy sequence tensor descriptor");
   }
@@ -2286,10 +1977,10 @@ class MIOpenRnnStateTensorDescriptor
         batch_size_(batch_size),
         data_size_(data_size),
         data_type_(data_type) {
-    auto status = wrap::miopenCreateTensorDescriptor(&handle_);
+    auto status = miopenCreateTensorDescriptor(&handle_);
     RETURN_IF_MIOPEN_ERROR(status, "Failed to create tensor descriptor");
     std::array<int, 3> dims = {{num_layers, batch_size, data_size}};
-    status = wrap::miopenSetTensorDescriptor(
+    status = miopenSetTensorDescriptor(
         handle_ /*tensorDesc*/, data_type /*dataType*/, 3 /*nbDims*/,
         dims.data() /*dimA*/, nullptr /*strideA*/);
     RETURN_IF_MIOPEN_ERROR(status, "Failed to update tensor descriptor");
@@ -2297,7 +1988,7 @@ class MIOpenRnnStateTensorDescriptor
 
   ~MIOpenRnnStateTensorDescriptor() override {
     if (!handle_) {
-      auto status = wrap::miopenDestroyTensorDescriptor(handle_);
+      auto status = miopenDestroyTensorDescriptor(handle_);
       RETURN_IF_MIOPEN_ERROR(status, "Unable to destroy RNN state tensor");
     }
   }
@@ -2398,7 +2089,7 @@ bool CheckRNNParameterSize(
     miopenHandle_t miopen_handle, const MIOpenRnnDescriptor& rnn_desc,
     const MIOpenRnnSequenceTensorDescriptor& input_desc) {
   size_t params_size_in_bytes = 0;
-  auto status = wrap::miopenGetRNNParamsSize(
+  auto status = miopenGetRNNParamsSize(
       miopen_handle /*handle*/, rnn_desc.handle() /*rnnDesc*/,
       input_desc.handles()[0] /*xDesc*/, &params_size_in_bytes /*sizeInBytes*/,
       rnn_desc.data_type() /*dataType*/);
@@ -2417,7 +2108,7 @@ bool CreateRnnWorkspace(Stream* stream, miopenHandle_t miopen_handle,
                         DeviceMemory<uint8_t>* workspace) {
   // Query the workspace size.
   size_t workspace_size_in_bytes = 0;
-  auto status = wrap::miopenGetRNNWorkspaceSize(
+  auto status = miopenGetRNNWorkspaceSize(
       miopen_handle /*handle*/, rnn_desc.handle() /*rnnDesc*/,
       input_desc.seq_length() /*seqLength*/, input_desc.handles() /*xDesc*/,
       &workspace_size_in_bytes /*sizeInBytes*/);
@@ -2497,7 +2188,7 @@ absl::Status MIOpenSupport::DoRnnForwardImpl(
   DeviceMemory<uint8_t> reserve_space;
   if (is_training) {
     size_t reserve_space_size_in_bytes = 0;
-    auto status = wrap::miopenGetRNNTrainingReserveSize(
+    auto status = miopenGetRNNTrainingReserveSize(
         miopen.handle() /*handle*/, rnn_desc.handle() /*rnnDesc*/,
         model_dims.seq_length /*seqLength*/, input_desc.handles() /*xDesc*/,
         &reserve_space_size_in_bytes /*sizeInBytes*/);
@@ -2530,7 +2221,7 @@ absl::Status MIOpenSupport::DoRnnForwardImpl(
 
   // make the forward call
   if (!is_training) {
-    auto status = wrap::miopenRNNForwardInference(
+    auto status = miopenRNNForwardInference(
         miopen.handle() /*handle*/, rnn_desc.handle() /*rnnDesc*/,
         model_dims.seq_length /*seqLength*/, input_desc.handles() /*xDesc*/,
         input_data.opaque() /*x*/, input_h_desc.handle() /*hxDesc*/,
@@ -2548,7 +2239,7 @@ absl::Status MIOpenSupport::DoRnnForwardImpl(
       return absl::InternalError("miopenRNNForwardInference failed");
     }
   } else {
-    auto status = wrap::miopenRNNForwardTraining(
+    auto status = miopenRNNForwardTraining(
         miopen.handle() /*handle*/, rnn_desc.handle() /*rnnDesc*/,
         model_dims.seq_length /*seqLength*/, input_desc.handles() /*xDesc*/,
         input_data.opaque() /*x*/, input_h_desc.handle() /*hxDesc*/,
@@ -2661,7 +2352,7 @@ absl::Status MIOpenSupport::DoRnnBackwardImpl(
   }
 
   // make the backward data call
-  auto status = wrap::miopenRNNBackwardData(
+  auto status = miopenRNNBackwardData(
       miopen.handle() /*handle*/, rnn_desc.handle() /*rnnDesc*/,
       model_dims.seq_length /*seqLength*/, output_desc.handles() /*yDesc*/,
       output_data.opaque() /*y*/, output_desc.handles() /*dyDesc*/,
@@ -2690,7 +2381,7 @@ absl::Status MIOpenSupport::DoRnnBackwardImpl(
     TF_RETURN_IF_ERROR(
         stream->MemZero(params_backprop_data, params_backprop_data->size()));
     // make the backward weight call
-    status = wrap::miopenRNNBackwardWeights(
+    status = miopenRNNBackwardWeights(
         miopen.handle() /*handle*/, rnn_desc.handle() /*rnnDesc*/,
         model_dims.seq_length /*seqLength*/, input_desc.handles() /*xDesc*/,
         input_data.opaque() /*x*/, input_h_desc.handle() /*hxDesc*/,
@@ -2722,16 +2413,16 @@ MIOpenRnnParamsDescriptor::MIOpenRnnParamsDescriptor(
   miopenTensorDescriptor_t input_desc = nullptr;
   {
     // Query the params size.
-    auto status = wrap::miopenCreateTensorDescriptor(&input_desc);
+    auto status = miopenCreateTensorDescriptor(&input_desc);
     RETURN_IF_MIOPEN_ERROR(status, "MIOpen fails to create tensor descriptor");
     std::array<int, 2> dims = {{1, rnn_desc.input_size()}};
-    status = wrap::miopenSetTensorDescriptor(
+    status = miopenSetTensorDescriptor(
         input_desc /*tensorDesc*/, rnn_desc.data_type() /*dataType*/,
         2 /*nbDims*/, dims.data() /*dimA*/, nullptr /*strideA*/);
     RETURN_IF_MIOPEN_ERROR(status, "MIOpen fails to set tensor descriptor");
 
     size_t params_size = 0;
-    status = wrap::miopenGetRNNParamsSize(
+    status = miopenGetRNNParamsSize(
         miopen_handle /*handle*/, rnn_desc.handle() /*rnnDesc*/,
         input_desc /*xDesc*/, &params_size /*sizeInBytes*/,
         rnn_desc.data_type() /*dataType*/);
@@ -2741,18 +2432,18 @@ MIOpenRnnParamsDescriptor::MIOpenRnnParamsDescriptor(
 
   {
     // Create the params descriptor.
-    auto status = wrap::miopenCreateTensorDescriptor(&handle_);
+    auto status = miopenCreateTensorDescriptor(&handle_);
     RETURN_IF_MIOPEN_ERROR(status,
                            "MIOpen fails to create RNN params descriptor");
-    status = wrap::miopenGetRNNParamsDescriptor(miopen_handle,
-                                                rnn_desc.handle(), input_desc,
-                                                handle_, rnn_desc.data_type());
+    status =
+        miopenGetRNNParamsDescriptor(miopen_handle, rnn_desc.handle(),
+                                     input_desc, handle_, rnn_desc.data_type());
     RETURN_IF_MIOPEN_ERROR(status,
                            "MIOpen fails to update RNN filter descriptor");
   }
   {
     // Release the dummy input tensor descriptor.
-    auto status = wrap::miopenDestroyTensorDescriptor(input_desc);
+    auto status = miopenDestroyTensorDescriptor(input_desc);
     RETURN_IF_MIOPEN_ERROR(status, "MIOpen fails to destroy tensor descriptor");
   }
 }
@@ -2760,15 +2451,15 @@ MIOpenRnnParamsDescriptor::MIOpenRnnParamsDescriptor(
 class MIOpenCTCLossDescriptor {
  public:
   explicit MIOpenCTCLossDescriptor(miopenDataType_t data_type) {
-    auto status = wrap::miopenCreateCTCLossDescriptor(&handle_);
+    auto status = miopenCreateCTCLossDescriptor(&handle_);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenCreateCTCLossDescriptor failed: "
                  << ToString(status);
     }
 
     bool apply_softmax_layer = true;
-    status = wrap::miopenSetCTCLossDescriptor(handle_, data_type, 0,
-                                              apply_softmax_layer);
+    status =
+        miopenSetCTCLossDescriptor(handle_, data_type, 0, apply_softmax_layer);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenSetCTCLossDescriptor failed: "
                  << ToString(status);
@@ -2776,7 +2467,7 @@ class MIOpenCTCLossDescriptor {
   }
 
   ~MIOpenCTCLossDescriptor() {
-    auto status = wrap::miopenDestroyCTCLossDescriptor(handle_);
+    auto status = miopenDestroyCTCLossDescriptor(handle_);
     if (status != miopenStatusSuccess) {
       LOG(FATAL) << "call to miopenDestroyCTCLossDescriptor failed: "
                  << ToString(status);
@@ -2814,7 +2505,7 @@ absl::Status MIOpenSupport::DoPrepareForCtcLoss(
   const MIOpenRnnStateTensorDescriptor& miopen_grads_desc =
       static_cast<const MIOpenRnnStateTensorDescriptor&>(grads_desc);
 
-  auto status = wrap::miopenGetCTCLossWorkspaceSize(
+  auto status = miopenGetCTCLossWorkspaceSize(
       miopen.handle(), miopen_probs_desc.handle(), miopen_grads_desc.handle(),
       labels_data.data(), labels_lengths_data.data(), input_lengths_data.data(),
       MIOPEN_CTC_LOSS_ALGO_DETERMINISTIC, miopen_ctc_loss_desc.handle(),
@@ -2871,7 +2562,7 @@ absl::Status MIOpenSupport::DoCtcLossImpl(
   int total_size = kNumLabels * kNumTimestamps * kBatchSize;
   (void)total_size;
 
-  auto status = wrap::miopenCTCLoss(
+  auto status = miopenCTCLoss(
       miopen.handle(), probs_desc.handle(), probs_data.opaque(),
       labels_data.data(), labels_lengths_data.data(), input_lengths_data.data(),
       costs_data.opaque(), grads_desc.handle(), grads_data.opaque(),
@@ -3323,8 +3014,8 @@ class RocmConvRunner : public dnn::ConvRunner {
                         (kind == dnn::ConvolutionKind::BACKWARD_FILTER));
     // #if TF_ROCM_VERSION >= 50000
     if (is_backprop && (ToMIOpenDataType(input_type) == miopenHalf)) {
-      wrap::miopenSetConvolutionAttribute(
-          conv_desc_.handle(), MIOPEN_CONVOLUTION_ATTRIB_FP16_ALT_IMPL, 1);
+      miopenSetConvolutionAttribute(conv_desc_.handle(),
+                                    MIOPEN_CONVOLUTION_ATTRIB_FP16_ALT_IMPL, 1);
     }
     // #endif
   }
@@ -3363,14 +3054,14 @@ class RocmConvRunner : public dnn::ConvRunner {
     switch (kind_) {
       case dnn::ConvolutionKind::FORWARD: {
         if (use_immediate_mode_) {
-          status = wrap::miopenConvolutionForwardImmediate(
+          status = miopenConvolutionForwardImmediate(
               miopen.handle(), filter_desc_.handle(), filter_data.opaque(),
               input_desc_.handle(), input_data.opaque(), conv_desc_.handle(),
               output_desc_.handle(), output_data.opaque(),
               scratch_memory.opaque(), scratch_memory.size(),
               static_cast<uint64_t>(algo_id_));
         } else {
-          status = wrap::miopenConvolutionForward(
+          status = miopenConvolutionForward(
               miopen.handle(), &alpha, input_desc_.handle(),
               input_data.opaque(), filter_desc_.handle(), filter_data.opaque(),
               conv_desc_.handle(),
@@ -3383,14 +3074,14 @@ class RocmConvRunner : public dnn::ConvRunner {
       }
       case dnn::ConvolutionKind::BACKWARD_DATA: {
         if (use_immediate_mode_) {
-          status = wrap::miopenConvolutionBackwardDataImmediate(
+          status = miopenConvolutionBackwardDataImmediate(
               miopen.handle(), output_desc_.handle(), output_data.opaque(),
               filter_desc_.handle(), filter_data.opaque(), conv_desc_.handle(),
               input_desc_.handle(), input_data.opaque(),
               scratch_memory.opaque(), scratch_memory.size(),
               static_cast<uint64_t>(algo_id_));
         } else {
-          status = wrap::miopenConvolutionBackwardData(
+          status = miopenConvolutionBackwardData(
               miopen.handle(), &alpha, output_desc_.handle(),
               output_data.opaque(), filter_desc_.handle(), filter_data.opaque(),
               conv_desc_.handle(),
@@ -3402,14 +3093,14 @@ class RocmConvRunner : public dnn::ConvRunner {
       }
       case dnn::ConvolutionKind::BACKWARD_FILTER: {
         if (use_immediate_mode_) {
-          status = wrap::miopenConvolutionBackwardWeightsImmediate(
+          status = miopenConvolutionBackwardWeightsImmediate(
               miopen.handle(), output_desc_.handle(), output_data.opaque(),
               input_desc_.handle(), input_data.opaque(), conv_desc_.handle(),
               filter_desc_.handle(), filter_data.opaque(),
               scratch_memory.opaque(), scratch_memory.size(),
               static_cast<uint64_t>(algo_id_));
         } else {
-          status = wrap::miopenConvolutionBackwardWeights(
+          status = miopenConvolutionBackwardWeights(
               miopen.handle(), &alpha, output_desc_.handle(),
               output_data.opaque(), input_desc_.handle(), input_data.opaque(),
               conv_desc_.handle(),
@@ -3590,8 +3281,8 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsImmediateMode(
 
 #if TF_ROCM_VERSION >= 50000
   if (is_backprop && (ToMIOpenDataType(input_type) == miopenHalf)) {
-    wrap::miopenSetConvolutionAttribute(
-        conv.handle(), MIOPEN_CONVOLUTION_ATTRIB_FP16_ALT_IMPL, 1);
+    miopenSetConvolutionAttribute(conv.handle(),
+                                  MIOPEN_CONVOLUTION_ATTRIB_FP16_ALT_IMPL, 1);
   }
 #endif
   // First determine the number of algorithms available
@@ -3599,7 +3290,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsImmediateMode(
 
   switch (kind) {
     case dnn::ConvolutionKind::FORWARD: {
-      auto status = wrap::miopenConvolutionForwardGetSolutionCount(
+      auto status = miopenConvolutionForwardGetSolutionCount(
           miopen.handle(), filter.handle(), input_nd.handle(), conv.handle(),
           output_nd.handle(), &maxSolutionCount);
       if (status != miopenStatusSuccess) {
@@ -3610,7 +3301,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsImmediateMode(
       break;
     }
     case dnn::ConvolutionKind::BACKWARD_DATA: {
-      auto status = wrap::miopenConvolutionBackwardDataGetSolutionCount(
+      auto status = miopenConvolutionBackwardDataGetSolutionCount(
           miopen.handle(), output_nd.handle(), filter.handle(), conv.handle(),
           input_nd.handle(), &maxSolutionCount);
       if (status != miopenStatusSuccess) {
@@ -3622,7 +3313,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsImmediateMode(
       break;
     }
     case dnn::ConvolutionKind::BACKWARD_FILTER: {
-      auto status = wrap::miopenConvolutionBackwardWeightsGetSolutionCount(
+      auto status = miopenConvolutionBackwardWeightsGetSolutionCount(
           miopen.handle(), output_nd.handle(), input_nd.handle(), conv.handle(),
           filter.handle(), &maxSolutionCount);
       if (status != miopenStatusSuccess) {
@@ -3654,7 +3345,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsImmediateMode(
 
   switch (kind) {
     case dnn::ConvolutionKind::FORWARD: {
-      auto status = wrap::miopenConvolutionForwardGetSolution(
+      auto status = miopenConvolutionForwardGetSolution(
           miopen.handle(), filter.handle(), input_nd.handle(), conv.handle(),
           output_nd.handle(), maxSolutionCount, &solutionCount,
           solutions.get());
@@ -3676,7 +3367,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsImmediateMode(
             << ", " << solution.workspace_size << ", " << solution.solution_id
             << ", " << ToString(solution.algorithm);
 
-        status = wrap::miopenConvolutionForwardCompileSolution(
+        status = miopenConvolutionForwardCompileSolution(
             miopen.handle(), filter.handle(), input_nd.handle(), conv.handle(),
             output_nd.handle(), solution.solution_id);
 
@@ -3693,7 +3384,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsImmediateMode(
     }
 
     case dnn::ConvolutionKind::BACKWARD_DATA: {
-      auto status = wrap::miopenConvolutionBackwardDataGetSolution(
+      auto status = miopenConvolutionBackwardDataGetSolution(
           miopen.handle(), output_nd.handle(), filter.handle(), conv.handle(),
           input_nd.handle(), maxSolutionCount, &solutionCount, solutions.get());
       if (status != miopenStatusSuccess) {
@@ -3713,7 +3404,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsImmediateMode(
             << ", " << solution.workspace_size << ", " << solution.solution_id
             << ", " << ToString(solution.algorithm);
 
-        status = wrap::miopenConvolutionBackwardDataCompileSolution(
+        status = miopenConvolutionBackwardDataCompileSolution(
             miopen.handle(), output_nd.handle(), filter.handle(), conv.handle(),
             input_nd.handle(), solution.solution_id);
 
@@ -3730,7 +3421,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsImmediateMode(
       break;
     }
     case dnn::ConvolutionKind::BACKWARD_FILTER: {
-      auto status = wrap::miopenConvolutionBackwardWeightsGetSolution(
+      auto status = miopenConvolutionBackwardWeightsGetSolution(
           miopen.handle(), output_nd.handle(), input_nd.handle(), conv.handle(),
           filter.handle(), maxSolutionCount, &solutionCount, solutions.get());
       if (status != miopenStatusSuccess) {
@@ -3750,7 +3441,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsImmediateMode(
             << ", " << solution.workspace_size << ", " << solution.solution_id
             << ", " << ToString(solution.algorithm);
 
-        status = wrap::miopenConvolutionBackwardWeightsCompileSolution(
+        status = miopenConvolutionBackwardWeightsCompileSolution(
             miopen.handle(), output_nd.handle(), input_nd.handle(),
             conv.handle(), filter.handle(), solution.solution_id);
 
@@ -3802,8 +3493,8 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsFindMode(
 
 #if TF_ROCM_VERSION >= 50000
   if (is_backprop && (ToMIOpenDataType(input_type) == miopenHalf)) {
-    wrap::miopenSetConvolutionAttribute(
-        conv.handle(), MIOPEN_CONVOLUTION_ATTRIB_FP16_ALT_IMPL, 1);
+    miopenSetConvolutionAttribute(conv.handle(),
+                                  MIOPEN_CONVOLUTION_ATTRIB_FP16_ALT_IMPL, 1);
   }
 #endif
 
@@ -3811,7 +3502,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsFindMode(
   size_t scratch_memory_size = 0;
   switch (kind) {
     case dnn::ConvolutionKind::FORWARD: {
-      auto status = wrap::miopenConvolutionForwardGetWorkSpaceSize(
+      auto status = miopenConvolutionForwardGetWorkSpaceSize(
           miopen.handle(), filter.handle(), input_nd.handle(), conv.handle(),
           output_nd.handle(), &scratch_memory_size);
       if (status != miopenStatusSuccess) {
@@ -3822,7 +3513,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsFindMode(
       break;
     }
     case dnn::ConvolutionKind::BACKWARD_DATA: {
-      auto status = wrap::miopenConvolutionBackwardDataGetWorkSpaceSize(
+      auto status = miopenConvolutionBackwardDataGetWorkSpaceSize(
           miopen.handle(), output_nd.handle(), filter.handle(), conv.handle(),
           input_nd.handle(), &scratch_memory_size);
       if (status != miopenStatusSuccess) {
@@ -3833,7 +3524,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsFindMode(
       break;
     }
     case dnn::ConvolutionKind::BACKWARD_FILTER: {
-      auto status = wrap::miopenConvolutionBackwardWeightsGetWorkSpaceSize(
+      auto status = miopenConvolutionBackwardWeightsGetWorkSpaceSize(
           miopen.handle(), output_nd.handle(), input_nd.handle(), conv.handle(),
           filter.handle(), &scratch_memory_size);
       if (status != miopenStatusSuccess) {
@@ -3887,7 +3578,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsFindMode(
 
   switch (kind) {
     case dnn::ConvolutionKind::FORWARD: {
-      auto status = wrap::miopenFindConvolutionForwardAlgorithm(
+      auto status = miopenFindConvolutionForwardAlgorithm(
           miopen.handle(), input_nd.handle(), input_data.opaque(),
           filter.handle(), filter_data.opaque(), conv.handle(),
           output_nd.handle(), output_data.opaque(), requestedAlgorithmCount,
@@ -3901,7 +3592,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsFindMode(
       break;
     }
     case dnn::ConvolutionKind::BACKWARD_DATA: {
-      auto status = wrap::miopenFindConvolutionBackwardDataAlgorithm(
+      auto status = miopenFindConvolutionBackwardDataAlgorithm(
           miopen.handle(), output_nd.handle(), output_data.opaque(),
           filter.handle(), filter_data.opaque(), conv.handle(),
           input_nd.handle(), input_data.opaque(), requestedAlgorithmCount,
@@ -3915,7 +3606,7 @@ absl::Status MIOpenSupport::GetMIOpenConvolveAlgorithmsFindMode(
       break;
     }
     case dnn::ConvolutionKind::BACKWARD_FILTER: {
-      auto status = wrap::miopenFindConvolutionBackwardWeightsAlgorithm(
+      auto status = miopenFindConvolutionBackwardWeightsAlgorithm(
           miopen.handle(), output_nd.handle(), output_data.opaque(),
           input_nd.handle(), input_data.opaque(), conv.handle(),
           filter.handle(), filter_data.opaque(), requestedAlgorithmCount,
@@ -4052,7 +3743,7 @@ absl::Status MIOpenSupport::DoBatchNormalizationForwardImpl(
 
   auto status = miopenStatusInvalidValue;
   if (is_training) {
-    status = wrap::miopenBatchNormalizationForwardTraining(
+    status = miopenBatchNormalizationForwardTraining(
         miopen.handle(), mode, &one, &zero, x_descriptor.handle(), x.opaque(),
         x_descriptor.handle(), y->opaque(), scale_offset_descriptor.handle(),
         const_cast<void*>(scale.opaque()), const_cast<void*>(offset.opaque()),
@@ -4060,7 +3751,7 @@ absl::Status MIOpenSupport::DoBatchNormalizationForwardImpl(
         epsilon, saved_mean->opaque(), saved_inv_var->opaque());
   } else {
     const void* maybe_inv_var = estimated_variance.opaque();
-    status = wrap::miopenBatchNormalizationForwardInference(
+    status = miopenBatchNormalizationForwardInference(
         miopen.handle(), mode, &one, &zero, x_descriptor.handle(), x.opaque(),
         x_descriptor.handle(), y->opaque(), scale_offset_descriptor.handle(),
         const_cast<void*>(scale.opaque()), const_cast<void*>(offset.opaque()),
@@ -4153,7 +3844,7 @@ absl::Status MIOpenSupport::DoBatchNormalizationBackwardImpl(
   float one = 1.0;
   float zero = 0.0;
 
-  auto status = wrap::miopenBatchNormalizationBackward(
+  auto status = miopenBatchNormalizationBackward(
       miopen.handle(), mode, &one, &zero, &one, &zero, x_descriptor.handle(),
       x.opaque(), x_descriptor.handle(), y_backprop.opaque(),
       x_descriptor.handle(), x_backprop->opaque(),
@@ -4423,7 +4114,7 @@ absl::Status MIOpenSupport::DoPoolForward(
   size_t workspace_size = 0;
   if (m_pooling_cache_enabled && element_type == dnn::DataType::kFloat) {
     do_backward = true;
-    auto status = wrap::miopenPoolingGetWorkSpaceSizeV2(
+    auto status = miopenPoolingGetWorkSpaceSizeV2(
         pooling_desc.handle(), dest_desc.handle(), &workspace_size);
     if (status != miopenStatusSuccess) {
       return absl::InternalError(absl::StrCat(
@@ -4449,7 +4140,7 @@ absl::Status MIOpenSupport::DoPoolForward(
     }
   }
 
-  auto status = wrap::miopenPoolingForward(
+  auto status = miopenPoolingForward(
       miopen.handle(), pooling_desc.handle(), &alpha, src_desc.handle(),
       input_data.opaque(), &beta, dest_desc.handle(), output_data.opaque(),
       do_backward, workspace, workspace_size);
@@ -4578,7 +4269,7 @@ absl::Status MIOpenSupport::DoPoolBackward(
   PoolingWorkspaceDescriptor* pdesc = nullptr;
 
   size_t workspace_size_in_bytes = 0;
-  auto status = wrap::miopenPoolingGetWorkSpaceSizeV2(
+  auto status = miopenPoolingGetWorkSpaceSizeV2(
       pooling_desc.handle(), dest_desc.handle(), &workspace_size_in_bytes);
   if (status != miopenStatusSuccess) {
     return absl::InternalError(absl::StrCat(
@@ -4632,7 +4323,7 @@ absl::Status MIOpenSupport::DoPoolBackward(
                       "backward pooling";
       }
 
-      status = wrap::miopenPoolingForward(
+      status = miopenPoolingForward(
           miopen.handle(), pooling_desc.handle(), &alpha, src_desc.handle(),
           input_data.opaque(), &beta, dest_desc.handle(), dest2.opaque(), true,
           workspace.opaque(), workspace_size_in_bytes);
@@ -4646,7 +4337,7 @@ absl::Status MIOpenSupport::DoPoolBackward(
     }
   }
 
-  status = wrap::miopenPoolingBackward(
+  status = miopenPoolingBackward(
       miopen.handle(), pooling_desc.handle(), &alpha, dest_desc.handle(),
       output_data.opaque(), dest_desc.handle(), input_diff_data.opaque(),
       src_desc.handle(), input_data.opaque(), &beta, src_desc.handle(),
@@ -4695,10 +4386,10 @@ bool MIOpenSupport::DoNormalizeWithDimensions(
   // Beta is the scaling factor for output.
   float beta = 0.0f;
 
-  auto status = wrap::miopenLRNForward(
-      miopen.handle(), normalize.handle(), &alpha, dims.handle(),
-      input_data.opaque(), &beta, dims.handle(), output_data->opaque(), false,
-      nullptr);
+  auto status =
+      miopenLRNForward(miopen.handle(), normalize.handle(), &alpha,
+                       dims.handle(), input_data.opaque(), &beta, dims.handle(),
+                       output_data->opaque(), false, nullptr);
   if (status != miopenStatusSuccess) {
     LOG(ERROR) << "failed to run miopenLRNForward";
     return false;
@@ -4734,7 +4425,7 @@ bool MIOpenSupport::DoNormalizeBackwardWithDimensions(
   DeviceMemory<uint8_t> workspace;
   size_t workspace_size_in_bytes = 0;
   auto status =
-      wrap::miopenLRNGetWorkSpaceSize(dims.handle(), &workspace_size_in_bytes);
+      miopenLRNGetWorkSpaceSize(dims.handle(), &workspace_size_in_bytes);
 
   if (status != miopenStatusSuccess) {
     LOG(ERROR) << "failed to obtain workspace size for miopenLRNBackward";
@@ -4781,22 +4472,22 @@ bool MIOpenSupport::DoNormalizeBackwardWithDimensions(
                   "backward LRN";
   }
 
-  status = wrap::miopenLRNForward(miopen.handle(), normalize.handle(), &alpha,
-                                  dims.handle(), raw_data.opaque(), &beta,
-                                  dims.handle(), dest2.opaque(), true,
-                                  workspace.opaque());
+  status =
+      miopenLRNForward(miopen.handle(), normalize.handle(), &alpha,
+                       dims.handle(), raw_data.opaque(), &beta, dims.handle(),
+                       dest2.opaque(), true, workspace.opaque());
 
   if (status != miopenStatusSuccess) {
     LOG(ERROR) << "failed to run miopenLRNForward";
     return false;
   }
 
-  status = wrap::miopenLRNBackward(
-      miopen.handle(), normalize.handle(), &alpha, dims.handle(),
-      normalized_data.opaque(), dims.handle(),
-      normalized_variable_gradient.opaque(), dims.handle(), raw_data.opaque(),
-      &beta, dims.handle(), raw_variable_gradient->opaque(),
-      workspace.opaque());
+  status =
+      miopenLRNBackward(miopen.handle(), normalize.handle(), &alpha,
+                        dims.handle(), normalized_data.opaque(), dims.handle(),
+                        normalized_variable_gradient.opaque(), dims.handle(),
+                        raw_data.opaque(), &beta, dims.handle(),
+                        raw_variable_gradient->opaque(), workspace.opaque());
 
   if (status != miopenStatusSuccess) {
     LOG(ERROR) << "failed to run miopenLRNBackward";
@@ -4816,7 +4507,7 @@ bool MIOpenSupport::DeriveOutputBatchDescriptor(
 
   int dn = batch_descriptor.ndims() + 2;
   std::vector<int> dims(dn);  // in BDYX
-  auto status = wrap::miopenGetConvolutionNdForwardOutputDim(
+  auto status = miopenGetConvolutionNdForwardOutputDim(
       conv.handle(), input_nd.handle(), filter.handle(), &dn, dims.data());
   if (status != miopenStatusSuccess) {
     LOG(ERROR) << "could not get output tensor for convolution: "
@@ -4873,10 +4564,10 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
     }
 
     miopenStatus_t status;
-    status = wrap::miopenExecuteFusionPlan(
-        miopen.handle(), fusion_plan_.fusion_plan_, input_nd_.handle(),
-        input_data.opaque(), output_nd_.handle(), output_data.opaque(),
-        fusion_plan_.fusion_args_);
+    status = miopenExecuteFusionPlan(miopen.handle(), fusion_plan_.fusion_plan_,
+                                     input_nd_.handle(), input_data.opaque(),
+                                     output_nd_.handle(), output_data.opaque(),
+                                     fusion_plan_.fusion_args_);
 
     if (status != miopenStatusSuccess) {
       LOG(ERROR) << "Failed to enqueue fused convolution on stream: "

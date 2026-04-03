@@ -34,6 +34,19 @@ limitations under the License.
 #include "xla/stream_executor/rocm/roctracer_wrapper.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 
+// Backend: 3=v3 (rocprofiler-sdk), 1=v1 (roctracer). Default to v3.
+#if !defined(XLA_GPU_ROCM_TRACER_BACKEND_V3)
+#define XLA_GPU_ROCM_TRACER_BACKEND_V3 3
+#endif
+
+#if !defined(XLA_GPU_ROCM_TRACER_BACKEND_V1)
+#define XLA_GPU_ROCM_TRACER_BACKEND_V1 1
+#endif
+
+#ifndef XLA_GPU_ROCM_TRACER_BACKEND
+#error "XLA_GPU_ROCM_TRACER_BACKEND not defined"
+#endif
+
 namespace xla {
 namespace profiler {
 
