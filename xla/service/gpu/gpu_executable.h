@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_SERVICE_GPU_GPU_EXECUTABLE_H_
 #define XLA_SERVICE_GPU_GPU_EXECUTABLE_H_
 
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -440,9 +441,12 @@ class GpuExecutable : public Executable {
 
   struct CircularPoolState {
     std::shared_ptr<void> pool;
-    uint64_t iteration_count = 0;
-    // Track last-seen BFC addresses to skip redundant D2D memcpy.
-    absl::flat_hash_map<BufferAllocation::Index, void*> last_param_addrs;
+    std::atomic<uint64_t> iteration_count{0};
+    absl::Mutex mu;
+    // Cached buffer classification (computed once at init, reused every iter).
+    absl::btree_set<BufferAllocation::Index> pool_indexes;
+    absl::btree_set<BufferAllocation::Index> copy_indexes;
+    bool indexes_cached = false;
   };
   absl::Mutex circular_pool_mutex_;
   absl::node_hash_map<stream_executor::StreamExecutor*, CircularPoolState>

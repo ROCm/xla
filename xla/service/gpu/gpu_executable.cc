@@ -1530,21 +1530,26 @@ absl::Status GpuExecutable::ExecuteThunksWithCircularVmmPool(
     pool_state = &circular_pools_[executor];
   }
 
-  // Build sets: which buffers go into pool, which need data copying.
-  // Pool ALL non-constant command buffer allocations (params + temps).
-  // Constants keep BFC addresses (loaded from module globals, stable).
-  absl::btree_set<BufferAllocation::Index> pool_indexes;
-  absl::btree_set<BufferAllocation::Index> copy_indexes;
-  if (buffer_assignment_) {
-    for (BufferAllocation::Index idx : command_buffer_allocation_indexes_) {
-      const auto& alloc = buffer_assignment_->GetAllocation(idx);
-      if (alloc.is_constant() || alloc.size() == 0) continue;
-      pool_indexes.insert(idx);
-      if (alloc.is_entry_computation_parameter() || alloc.maybe_live_out()) {
-        copy_indexes.insert(idx);
+  // Cache buffer classification on first call (doesn't change between iters).
+  if (!pool_state->indexes_cached) {
+    absl::MutexLock lock(&pool_state->mu);
+    if (!pool_state->indexes_cached) {
+      if (buffer_assignment_) {
+        for (BufferAllocation::Index idx : command_buffer_allocation_indexes_) {
+          const auto& alloc = buffer_assignment_->GetAllocation(idx);
+          if (alloc.is_constant() || alloc.size() == 0) continue;
+          pool_state->pool_indexes.insert(idx);
+          if (alloc.is_entry_computation_parameter() ||
+              alloc.maybe_live_out()) {
+            pool_state->copy_indexes.insert(idx);
+          }
+        }
       }
+      pool_state->indexes_cached = true;
     }
   }
+  const auto& pool_indexes = pool_state->pool_indexes;
+  const auto& copy_indexes = pool_state->copy_indexes;
 
   // Initialize pool on first use.
   if (pool_state->pool == nullptr) {
@@ -1580,13 +1585,13 @@ absl::Status GpuExecutable::ExecuteThunksWithCircularVmmPool(
   }
 
   auto* pool = static_cast<se::gpu::CircularVmmPool*>(pool_state->pool.get());
-  uint64_t iteration = pool_state->iteration_count++;
+  uint64_t iteration = pool_state->iteration_count.fetch_add(1);
   int slot_idx = iteration % pool->num_slots();
 
   // Acquire next slot — non-blocking check of GPU timeline counter.
   TF_ASSIGN_OR_RETURN(auto slot_addresses, pool->AcquireNextSlot(iteration));
 
-  LOG(INFO) << absl::StrFormat(
+  VLOG(3) << absl::StrFormat(
       "CircularVmmPool iter=%d slot=%d/%d: %d pool addrs",
       iteration, slot_idx, pool->num_slots(), slot_addresses.size());
 
@@ -1650,6 +1655,10 @@ absl::Status GpuExecutable::ExecuteThunksWithCircularVmmPool(
         }
       }
     }
+  }
+
+  if (block_host_until_done) {
+    TF_RETURN_IF_ERROR(run_options->stream()->BlockHostUntilDone());
   }
 
   // GPU signals slot completion so the CPU knows when this slot is safe to
@@ -1750,7 +1759,7 @@ absl::Status GpuExecutable::ExecuteThunks(
           .xla_gpu_enable_command_buffer_va_remapping() &&
       dynamic_cast<se::DeviceAddressVmmAllocator*>(memory_allocator) != nullptr;
 
-  LOG(INFO) << absl::StreamFormat(
+  XLA_VLOG_DEVICE(3, executor->device_ordinal()) << absl::StreamFormat(
       "ExecuteThunks: cmd_buffer_allocs=%d circular_vmm_pool=%d "
       "va_remapping=%d",
       command_buffer_allocation_indexes_.size(), enable_circular_vmm_pool,

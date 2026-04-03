@@ -3028,7 +3028,7 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       int32_setter_for(
           &DebugOptions::set_xla_gpu_circular_vmm_pool_slots),
       debug_options->xla_gpu_circular_vmm_pool_slots(),
-      "Number of slots in the circular VMM pool (default 2)."));
+      "Number of slots in the circular VMM pool (default 1)."));
 }  // NOLINT(readability/fn_size)
 
 // Allocates flag_values and flag_objects; this function must not be called more
