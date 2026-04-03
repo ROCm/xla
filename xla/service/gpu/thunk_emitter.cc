@@ -399,11 +399,13 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCommandBufferThunk(
 
   bool enable_loop_unroll = ir_emitter_context_->debug_options()
                                 .xla_gpu_command_buffer_unroll_loops();
+  // When the circular VMM pool is active, pool VA addresses are permanently
+  // stable so CommandBufferThunk naturally sees no address changes and replays
+  // without re-recording. We do NOT force va_remapping here because it skips
+  // the warmup/init path that NCCL collectives require.
   bool enable_va_remapping =
       ir_emitter_context_->debug_options()
-          .xla_gpu_enable_command_buffer_va_remapping() ||
-      ir_emitter_context_->debug_options()
-          .xla_gpu_enable_circular_vmm_pool();
+          .xla_gpu_enable_command_buffer_va_remapping();
   TF_ASSIGN_OR_RETURN(
       CommandExecutor cmd_executor,
       ConvertToCommands(
