@@ -440,13 +440,12 @@ class GpuExecutable : public Executable {
       Thunk::ExecutableSource executable_source, bool block_host_until_done);
 
   struct CircularPoolState {
-    std::shared_ptr<void> pool;
-    std::atomic<uint64_t> iteration_count{0};
     absl::Mutex mu;
-    // Cached buffer classification (computed once at init, reused every iter).
-    absl::btree_set<BufferAllocation::Index> pool_indexes;
-    absl::btree_set<BufferAllocation::Index> copy_indexes;
-    bool indexes_cached = false;
+    std::shared_ptr<void> pool ABSL_GUARDED_BY(mu);
+    std::atomic<uint64_t> iteration_count{0};
+    absl::btree_set<BufferAllocation::Index> pool_indexes ABSL_GUARDED_BY(mu);
+    absl::btree_set<BufferAllocation::Index> copy_indexes ABSL_GUARDED_BY(mu);
+    std::atomic<bool> initialized{false};
   };
   absl::Mutex circular_pool_mutex_;
   absl::node_hash_map<stream_executor::StreamExecutor*, CircularPoolState>

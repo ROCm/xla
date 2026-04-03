@@ -28,6 +28,7 @@ limitations under the License.
 #include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/memory_allocation.h"
+#include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/rocm/rocm_driver_wrapper.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
 #include "xla/stream_executor/stream_executor.h"
@@ -99,20 +100,24 @@ VmmAllocate(StreamExecutor* executor, uint64_t size) {
           << " granularity: " << granularity
           << " device: " << executor->device_ordinal();
 
-  // Set access for the owning device and all peers.
+  // Set access for the owning device and all P2P-capable peers, matching the
+  // pattern in RocmMemoryReservation::SetAccess.
   int device_count = 0;
   TF_RETURN_IF_ERROR(ToStatus(wrap::hipGetDeviceCount(&device_count)));
   for (int peer = 0; peer < device_count; peer++) {
-    hipMemAccessDesc access_desc = GetVmmAccessDescriptor(peer);
-    auto access_status =
-        ToStatus(wrap::hipMemSetAccess(ptr, padded_size, &access_desc, 1));
-    if (!access_status.ok()) {
-      if (peer == executor->device_ordinal()) {
-        return access_status;
+    if (peer != executor->device_ordinal()) {
+      auto peer_executor_or =
+          const_cast<Platform*>(executor->GetPlatform())
+              ->ExecutorForDevice(peer);
+      if (!peer_executor_or.ok() ||
+          !executor->CanEnablePeerAccessTo(peer_executor_or.value())) {
+        continue;
       }
-      VLOG(3) << "Could not set VMM access for peer device " << peer << ": "
-              << access_status;
     }
+    hipMemAccessDesc access_desc = GetVmmAccessDescriptor(peer);
+    TF_RETURN_IF_ERROR(ToStatus(
+        wrap::hipMemSetAccess(ptr, padded_size, &access_desc, 1),
+        "hipMemSetAccess for peer device"));
   }
 
   return std::make_tuple(ptr, padded_size, handle);

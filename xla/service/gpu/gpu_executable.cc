@@ -1530,10 +1530,11 @@ absl::Status GpuExecutable::ExecuteThunksWithCircularVmmPool(
     pool_state = &circular_pools_[executor];
   }
 
-  // Cache buffer classification on first call (doesn't change between iters).
-  if (!pool_state->indexes_cached) {
+  // One-time initialization: compute buffer classification and create pool.
+  // Uses std::atomic<bool> initialized + mutex for safe double-checked locking.
+  if (!pool_state->initialized.load(std::memory_order_acquire)) {
     absl::MutexLock lock(&pool_state->mu);
-    if (!pool_state->indexes_cached) {
+    if (!pool_state->initialized.load(std::memory_order_relaxed)) {
       if (buffer_assignment_) {
         for (BufferAllocation::Index idx : command_buffer_allocation_indexes_) {
           const auto& alloc = buffer_assignment_->GetAllocation(idx);
@@ -1545,43 +1546,48 @@ absl::Status GpuExecutable::ExecuteThunksWithCircularVmmPool(
           }
         }
       }
-      pool_state->indexes_cached = true;
+
+      if (!pool_state->pool_indexes.empty()) {
+        int num_slots = has_module()
+            ? module_config().debug_options().xla_gpu_circular_vmm_pool_slots()
+            : 1;
+
+        std::vector<uint64_t> buffer_sizes;
+        buffer_sizes.reserve(pool_state->pool_indexes.size());
+        for (BufferAllocation::Index idx : pool_state->pool_indexes) {
+          buffer_sizes.push_back(
+              buffer_allocations.GetDeviceAddress(idx).size());
+        }
+
+        TF_ASSIGN_OR_RETURN(
+            auto pool,
+            se::gpu::CircularVmmPool::Create(executor, buffer_sizes,
+                                             num_slots));
+
+        LOG(INFO) << absl::StrFormat(
+            "CircularVmmPool: created %d slots for module %s on device %d "
+            "(%d command buffer allocations)",
+            num_slots, module_name_, executor->device_ordinal(),
+            command_buffer_allocation_indexes_.size());
+
+        pool_state->pool = std::move(pool);
+      }
+
+      pool_state->initialized.store(true, std::memory_order_release);
     }
   }
+
+  // After initialization, pool_indexes/copy_indexes are immutable — safe to
+  // read without lock.
   const auto& pool_indexes = pool_state->pool_indexes;
   const auto& copy_indexes = pool_state->copy_indexes;
 
-  // Initialize pool on first use.
   if (pool_state->pool == nullptr) {
-    int num_slots = has_module()
-        ? module_config().debug_options().xla_gpu_circular_vmm_pool_slots()
-        : 1;
-
-    if (pool_indexes.empty()) {
-      return ExecuteThunksImpl(
-          has_module() ? &module_config().debug_options() : nullptr,
-          module_name_, unique_id, *thunk_executor_, executable_source,
-          run_options, buffer_allocations, block_host_until_done,
-          execution_stream_ids_, collective_memory_cache_);
-    }
-
-    std::vector<uint64_t> buffer_sizes;
-    buffer_sizes.reserve(pool_indexes.size());
-    for (BufferAllocation::Index idx : pool_indexes) {
-      buffer_sizes.push_back(buffer_allocations.GetDeviceAddress(idx).size());
-    }
-
-    TF_ASSIGN_OR_RETURN(
-        auto pool,
-        se::gpu::CircularVmmPool::Create(executor, buffer_sizes, num_slots));
-
-    LOG(INFO) << absl::StrFormat(
-        "CircularVmmPool: created %d slots for module %s on device %d "
-        "(%d command buffer allocations)",
-        num_slots, module_name_, executor->device_ordinal(),
-        command_buffer_allocation_indexes_.size());
-
-    pool_state->pool = std::move(pool);
+    return ExecuteThunksImpl(
+        has_module() ? &module_config().debug_options() : nullptr,
+        module_name_, unique_id, *thunk_executor_, executable_source,
+        run_options, buffer_allocations, block_host_until_done,
+        execution_stream_ids_, collective_memory_cache_);
   }
 
   auto* pool = static_cast<se::gpu::CircularVmmPool*>(pool_state->pool.get());

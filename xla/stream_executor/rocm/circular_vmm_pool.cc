@@ -56,6 +56,12 @@ CircularVmmPool::CircularVmmPool(StreamExecutor* executor, int num_slots,
       timeline_host_ptr_(timeline_host_ptr) {}
 
 CircularVmmPool::~CircularVmmPool() {
+  // Release ScopedMappings before reservations to avoid double-unmap.
+  // ScopedMapping destructor calls UnMap; reservation destructor also unmaps
+  // the full range. Releasing mappings first ensures only one unmap occurs.
+  for (auto& slot : slots_) {
+    slot.mapping = MemoryReservation::ScopedMapping();
+  }
   slots_.clear();
   if (timeline_host_ptr_ != nullptr) {
     auto status = ToStatus(wrap::hipFree(timeline_host_ptr_),

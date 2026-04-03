@@ -566,7 +566,7 @@ message DebugOptions {
   // map/unmap overhead entirely after startup.
   optional bool xla_gpu_enable_circular_vmm_pool = 468;
 
-  // Number of slots in the circular VMM pool (default 2). Higher values allow
+  // Number of slots in the circular VMM pool (default 1). Higher values allow
   // more GPU/CPU overlap but use proportionally more physical memory.
   optional int32 xla_gpu_circular_vmm_pool_slots = 469;
 
