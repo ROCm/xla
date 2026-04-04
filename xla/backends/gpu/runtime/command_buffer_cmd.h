@@ -563,7 +563,11 @@ class CollectiveCmd : public Command {
 
   bool requires_initialization() const final { return true; }
 
-  bool force_update() const final { return true; }
+  // With the collective trace cache, force_update is not needed — the cache
+  // handles retrace decisions internally via Rendezvous coordination.
+  // Forcing parent graph update on every iteration causes state corruption
+  // after multiple cycles on complex models like MaxText.
+  bool force_update() const final { return false; }
 
   bool IsNestedCommandBuffer() const final { return true; }
 
