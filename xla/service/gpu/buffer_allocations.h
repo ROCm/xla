@@ -22,6 +22,7 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "absl/container/btree_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
@@ -75,9 +76,13 @@ class BufferAllocations {
       const se::DeviceAddressBase& addr) const;
 
   // Tears down all buffers allocated by this object that are not in
-  // `live_addresses`.
-  absl::Status TearDown(const std::set<se::DeviceAddressBase>& live_addresses,
-                        absl::Span<const BufferAllocation* const> allocations);
+  // `live_addresses`. If `skip_dealloc_indexes` is non-null, buffers at those
+  // indices are skipped (owned by buffer cache for address stability).
+  absl::Status TearDown(
+      const std::set<se::DeviceAddressBase>& live_addresses,
+      absl::Span<const BufferAllocation* const> allocations,
+      const absl::btree_set<BufferAllocation::Index>* skip_dealloc_indexes =
+          nullptr);
 
   std::string ToString() const {
     std::string out;

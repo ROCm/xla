@@ -964,6 +964,7 @@ GpuExecutable::ResolveConstantGlobals(se::Stream* stream) {
 }
 
 absl::StatusOr<se::DeviceAddressBase> GpuExecutable::BufferForAllocation(
+    const ServiceExecutableRunOptions* run_options,
     VariantArguments arguments,
     const GpuExecutable::BufferAllocToDeviceMemoryMap* globals,
     const BufferAllocation& allocation,
@@ -1002,12 +1003,30 @@ absl::StatusOr<se::DeviceAddressBase> GpuExecutable::BufferForAllocation(
     }
     return it->second;
   } else {
-    // Allocate each allocation that might escape, or is the temp buffer.
     CHECK(allocation.maybe_live_out() || allocation.IsPreallocatedTempBuffer());
+
+    // If this buffer is used by a command buffer and we have a cached address
+    // from a previous execution, return the cached address. This keeps buffer
+    // addresses stable across iterations so HIP graphs replay without
+    // re-recording. The cache is populated on the first execution and never
+    // freed (TearDown skips cached buffers).
+    if (!command_buffer_allocation_indexes_.empty() &&
+        command_buffer_allocation_indexes_.count(arg_idx)) {
+      se::StreamExecutor* executor =
+          run_options->stream()->parent();
+      absl::MutexLock lock(&buffer_cache_mutex_);
+      auto executor_it = cached_allocations_.find(executor);
+      if (executor_it != cached_allocations_.end()) {
+        auto buf_it = executor_it->second.find(arg_idx);
+        if (buf_it != executor_it->second.end()) {
+          return buf_it->second;
+        }
+      }
+    }
+
     int64_t buffer_size = allocation.size();
     se::DeviceAddressBase buffer_address;
     if (buffer_size > 0) {
-      // Maybe round up buffer allocation size to the requested granulariy.
       if (auto it = allocate_granularity.find(allocation.color());
           it != allocate_granularity.end()) {
         buffer_size = RoundUpTo(buffer_size, it->second);
@@ -1019,6 +1038,17 @@ absl::StatusOr<se::DeviceAddressBase> GpuExecutable::BufferForAllocation(
                                      /*memory_space=*/allocation.color()));
       buffer_address = buffer.Release();
     }
+
+    // Cache the address for next iteration.
+    if (!command_buffer_allocation_indexes_.empty() &&
+        command_buffer_allocation_indexes_.count(arg_idx) &&
+        !buffer_address.is_null()) {
+      se::StreamExecutor* executor =
+          run_options->stream()->parent();
+      absl::MutexLock lock(&buffer_cache_mutex_);
+      cached_allocations_[executor][arg_idx] = buffer_address;
+    }
+
     return buffer_address;
   }
 }
@@ -1085,8 +1115,9 @@ absl::StatusOr<BufferAllocations> GpuExecutable::GenerateBufferAllocations(
     const BufferAllocation& allocation = *allocations[i];
     ASSIGN_OR_RETURN(
         buffers.emplace_back(),
-        BufferForAllocation(arguments, globals, allocation, memory_allocator,
-                            device_ordinal, i, allocate_granularity));
+        BufferForAllocation(run_options, arguments, globals, allocation,
+                            memory_allocator, device_ordinal, i,
+                            allocate_granularity));
     RETURN_IF_ERROR(CheckAlignment(allocation, buffers.back(), i));
   }
   return {{buffers, device_ordinal, memory_allocator}};
@@ -1272,8 +1303,18 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
 
   absl::Status execute_status = ExecuteThunks(buffer_allocations, run_options);
 
+  // Skip deallocation for command buffer buffers with cached addresses.
+  // These are held permanently so HIP graphs see stable addresses.
+  const absl::btree_set<BufferAllocation::Index>* skip_dealloc = nullptr;
+  if (!command_buffer_allocation_indexes_.empty()) {
+    absl::MutexLock lock(&buffer_cache_mutex_);
+    if (cached_allocations_.count(executor)) {
+      skip_dealloc = &command_buffer_allocation_indexes_;
+    }
+  }
   absl::Status teardown_status =
-      buffer_allocations.TearDown(buffers_in_result, GetAllocations());
+      buffer_allocations.TearDown(buffers_in_result, GetAllocations(),
+                                  skip_dealloc);
 
   RETURN_IF_ERROR(execute_status);
   RETURN_IF_ERROR(teardown_status);

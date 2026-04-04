@@ -29,16 +29,16 @@ namespace gpu {
 
 absl::Status BufferAllocations::TearDown(
     const std::set<se::DeviceAddressBase>& live_addresses,
-    absl::Span<const BufferAllocation* const> allocations) {
-  // Deallocate temporary buffers, taking care to try to deallocate all of them
-  // even if one of the deallocations fails.
+    absl::Span<const BufferAllocation* const> allocations,
+    const absl::btree_set<BufferAllocation::Index>* skip_dealloc_indexes) {
   absl::Status status;
   const int64_t num_buffers = allocations.size();
   for (BufferAllocation::Index i = 0; i < num_buffers; ++i) {
+    if (skip_dealloc_indexes != nullptr && skip_dealloc_indexes->count(i)) {
+      continue;
+    }
     const BufferAllocation& allocation = *allocations[i];
     se::DeviceAddressBase buffer_address = GetDeviceAddress(allocation.index());
-    // Deallocate buffers marked "maybe_live_out" but aren't actually live out,
-    // and temp buffers.
     if ((allocation.maybe_live_out() &&
          !live_addresses.count(buffer_address)) ||
         allocation.IsPreallocatedTempBuffer()) {

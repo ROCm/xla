@@ -305,6 +305,7 @@ class GpuExecutable : public Executable {
       se::DeviceAddressAllocator* memory_allocator, int device_ordinal);
 
   absl::StatusOr<se::DeviceAddressBase> BufferForAllocation(
+      const ServiceExecutableRunOptions* run_options,
       VariantArguments arguments,
       const GpuExecutable::BufferAllocToDeviceMemoryMap* globals,
       const BufferAllocation& allocation,
@@ -423,6 +424,16 @@ class GpuExecutable : public Executable {
   // Buffer allocation indices accessed by command buffer thunks. Using
   // btree_set for deterministic iteration order.
   absl::btree_set<BufferAllocation::Index> command_buffer_allocation_indexes_;
+
+  // Cached buffer addresses for command buffer allocations. Once populated
+  // (first execution), BufferForAllocation returns cached addresses instead
+  // of calling BFC.Allocate, and TearDown skips deallocation for these.
+  // This keeps addresses stable so HIP graphs replay without re-recording.
+  absl::Mutex buffer_cache_mutex_;
+  absl::flat_hash_map<
+      stream_executor::StreamExecutor*,
+      absl::flat_hash_map<BufferAllocation::Index, se::DeviceAddressBase>>
+      cached_allocations_ ABSL_GUARDED_BY(buffer_cache_mutex_);
 
   // Separate mutex for VA ranges to avoid contention with module_handle_mutex_
   // during VA remapping operations which may involve GPU synchronization.
