@@ -37,7 +37,6 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
-#include "xla/backends/gpu/collectives/gpu_clique_key.h"
 #include "xla/backends/gpu/runtime/collective_permute_thunk.h"
 #include "xla/backends/gpu/runtime/collective_thunk.h"
 #include "xla/backends/gpu/runtime/copy_thunk.h"
@@ -612,8 +611,6 @@ class TracedCommandBuffer : public CommandBufferCmd::State {
       se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace,
       se::StreamPriority priority = se::StreamPriority::Default);
 
-  bool HasEntry(const BufferAllocations* buffer_allocation) const;
-
  private:
   std::vector<BufferAllocation::Index> allocs_indices_;
 
@@ -1120,16 +1117,13 @@ class CollectiveCmd : public CommandBufferCmd {
 
   bool requires_initialization() override { return true; }
 
-  bool force_update() override { return true; }
-
   bool IsNestedCommandBuffer() const final { return true; }
 
   absl::StatusOr<const se::CommandBuffer::Command*> RecordTracedCommand(
       const Thunk::ExecuteParams& execute_params,
       const RecordParams& record_params, RecordAction record_action,
       se::CommandBuffer* command_buffer,
-      absl::FunctionRef<absl::Status(se::Stream*)> trace,
-      const GpuCliqueKey& clique_key);
+      absl::FunctionRef<absl::Status(se::Stream*)> trace);
 
   bool IsAsync() const { return async_events_ != nullptr; }
   std::shared_ptr<CollectiveThunk::AsyncEvents> async_events() const {
