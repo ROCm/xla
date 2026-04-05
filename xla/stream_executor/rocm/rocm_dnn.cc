@@ -764,6 +764,14 @@ class MIOpenAccess {
   miopenHandle_t handle_ ABSL_GUARDED_BY(mutex_);  // Owned.
 };
 
+// MIOpen's internal global state (kernel source map, hipRTC compilation cache)
+// is not thread-safe for concurrent access from different handles/GPUs.
+// MIOpenAccess::mutex_ only serializes per-handle (per-GPU) access, but
+// concurrent Find/CompileSolution calls from different GPUs race on MIOpen's
+// process-wide internals (e.g. miopen::kernels() static map accessed via
+// PrecompileKernels). This global mutex serializes all such operations.
+ABSL_CONST_INIT static absl::Mutex miopen_global_autotune_mutex(absl::kConstInit);
+
 MIOpenSupport::MIOpenSupport(StreamExecutor* parent) : parent_(parent) {
   bool enable_pooling_cache = false;
   CHECK_OK(tsl::ReadBoolFromEnvVar("TF_ROCM_BW_POOL_CACHE", false,
@@ -3355,51 +3363,57 @@ MIOpenSupport::ConvolveRunnerFromDesc(
         scoped_conv_desc.handle(), MIOPEN_CONVOLUTION_ATTRIB_FP16_ALT_IMPL, 1);
   }
 
-  auto miopen = miopen_->GetHandle(parent_, stream);
+  {
+    absl::MutexLock global_lock(&miopen_global_autotune_mutex);
+    VLOG(1) << "[MIOpen-SYNC] CompileSolution on device "
+            << parent_->device_ordinal()
+            << " algo_id=" << algo_id;
+    auto miopen = miopen_->GetHandle(parent_, stream);
 
-  switch (kind) {
-    case dnn::ConvolutionKind::FORWARD: {
-      auto status = wrap::miopenConvolutionForwardCompileSolution(
-          miopen.handle(), scoped_filter_desc.handle(),
-          scoped_input_desc.handle(), scoped_conv_desc.handle(),
-          scoped_output_desc.handle(), algo_id);
+    switch (kind) {
+      case dnn::ConvolutionKind::FORWARD: {
+        auto status = wrap::miopenConvolutionForwardCompileSolution(
+            miopen.handle(), scoped_filter_desc.handle(),
+            scoped_input_desc.handle(), scoped_conv_desc.handle(),
+            scoped_output_desc.handle(), algo_id);
 
-      if (status != miopenStatusSuccess) {
-        return absl::InternalError(
-            "call to miopenConvolutionForwardCompileSolution failed: " +
-            ToString(status));
+        if (status != miopenStatusSuccess) {
+          return absl::InternalError(
+              "call to miopenConvolutionForwardCompileSolution failed: " +
+              ToString(status));
+        }
+      } break;
+
+      case dnn::ConvolutionKind::BACKWARD_DATA: {
+        auto status = wrap::miopenConvolutionBackwardDataCompileSolution(
+            miopen.handle(), scoped_output_desc.handle(),
+            scoped_filter_desc.handle(), scoped_conv_desc.handle(),
+            scoped_input_desc.handle(), algo_id);
+
+        if (status != miopenStatusSuccess) {
+          return absl::InternalError(
+              " call to miopenConvolutionBackwardDataCompileSolution "
+              "failed: " +
+              ToString(status));
+        }
+      } break;
+      case dnn::ConvolutionKind::BACKWARD_FILTER: {
+        auto status = wrap::miopenConvolutionBackwardWeightsCompileSolution(
+            miopen.handle(), scoped_output_desc.handle(),
+            scoped_input_desc.handle(), scoped_conv_desc.handle(),
+            scoped_filter_desc.handle(), algo_id);
+
+        if (status != miopenStatusSuccess) {
+          return absl::InternalError(
+              "call to miopenConvolutionBackwardWeightsCompileSolution "
+              "failed: " +
+              ToString(status));
+        }
+      } break;
+      default: {
+        return absl::InternalError("Unexpected convolution kind " +
+                                   std::to_string(static_cast<int>(kind)));
       }
-    } break;
-
-    case dnn::ConvolutionKind::BACKWARD_DATA: {
-      auto status = wrap::miopenConvolutionBackwardDataCompileSolution(
-          miopen.handle(), scoped_output_desc.handle(),
-          scoped_filter_desc.handle(), scoped_conv_desc.handle(),
-          scoped_input_desc.handle(), algo_id);
-
-      if (status != miopenStatusSuccess) {
-        return absl::InternalError(
-            " call to miopenConvolutionBackwardDataCompileSolution "
-            "failed: " +
-            ToString(status));
-      }
-    } break;
-    case dnn::ConvolutionKind::BACKWARD_FILTER: {
-      auto status = wrap::miopenConvolutionBackwardWeightsCompileSolution(
-          miopen.handle(), scoped_output_desc.handle(),
-          scoped_input_desc.handle(), scoped_conv_desc.handle(),
-          scoped_filter_desc.handle(), algo_id);
-
-      if (status != miopenStatusSuccess) {
-        return absl::InternalError(
-            "call to miopenConvolutionBackwardWeightsCompileSolution "
-            "failed: " +
-            ToString(status));
-      }
-    } break;
-    default: {
-      return absl::InternalError("Unexpected convolution kind " +
-                                 std::to_string(static_cast<int>(kind)));
     }
   }
 
@@ -3584,6 +3598,9 @@ absl::Status MIOpenSupport::PopulateMIOpenFindDb(
     DeviceAddressBase output_data,
     const dnn::ConvolutionDescriptor& convolution_descriptor,
     ScratchAllocator* scratch_allocator) {
+  absl::MutexLock global_lock(&miopen_global_autotune_mutex);
+  VLOG(1) << "[MIOpen-SYNC] PopulateMIOpenFindDb on device "
+          << parent_->device_ordinal();
   auto miopen = miopen_->GetHandle(parent_, stream);
 
   TF_ASSIGN_OR_RETURN(auto input_nd,
@@ -3658,9 +3675,11 @@ absl::Status MIOpenSupport::PopulateMIOpenFindDb(
     if (allocated.ok()) {
       scratch_memory = allocated.value();
     } else {
-      LOG(FATAL) << "Failed to allocate scratch memory - "
-                 << allocated.status().message();
-      return absl::InternalError("Out of memory");
+      return absl::ResourceExhaustedError(
+          absl::StrCat("Failed to allocate scratch memory for MIOpen "
+                       "autotuning (",
+                       scratch_memory_size, " bytes): ",
+                       allocated.status().message()));
     }
   }
 
@@ -4702,6 +4721,9 @@ class RocmFusedConvRunner : public dnn::FusedConvRunner {
         auto activation_desc,
         ScopedActivationDescriptor::Create(activation, leakyrelu_alpha));
 
+    absl::MutexLock global_lock(&miopen_global_autotune_mutex);
+    VLOG(1) << "[MIOpen-SYNC] FusedConv::Create on device "
+            << parent->device_ordinal();
     auto miopen = miopen_->GetHandle(parent, stream);
 
     TF_ASSIGN_OR_RETURN(
