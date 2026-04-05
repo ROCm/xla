@@ -27,6 +27,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/array.h"
@@ -87,6 +88,20 @@ class CollectiveOpsTestE2E : public CollectiveOpsE2ETestBase {
            GetDebugOptionsForTest().xla_gpu_enable_cublaslt();
   }
 
+  // MI300X (gfx942) uses NANOO FP8 types (f8e4m3fnuz/f8e5m2fnuz), while
+  // CUDA and MI350+ use OCP/IEEE types (f8e4m3fn/f8e5m2). The HLO test
+  // strings are written with OCP types; this replaces them with NANOO types
+  // when running on MI300X so the GEMM rewriter can produce FP8 custom calls.
+  std::string ReplaceFp8Types(absl::string_view hlo_text) {
+    if (Capability().IsRocm() &&
+        Capability().rocm_compute_capability()->has_nanoo_fp8_support() &&
+        !Capability().rocm_compute_capability()->has_ocp_fp8_support()) {
+      return absl::StrReplaceAll(
+          hlo_text, {{"f8e4m3fn", "f8e4m3fnuz"}, {"f8e5m2", "f8e5m2fnuz"}});
+    }
+    return std::string(hlo_text);
+  }
+
   void CollectiveOpsVerifyF8Matmul(absl::string_view hlo_text,
                                    const DebugOptions& options) {
     if (!HasFp8Support()) {
@@ -99,11 +114,12 @@ class CollectiveOpsTestE2E : public CollectiveOpsE2ETestBase {
                    << " devices (" << device_count() << " available)";
     }
 
+    std::string replaced_hlo = ReplaceFp8Types(hlo_text);
     HloModuleConfig config = GetModuleConfigForTest(
         /*replica_count=*/kNumReplicas, /*num_partitions=*/kNumPartitions);
     config.set_debug_options(options);
     TF_ASSERT_OK_AND_ASSIGN(auto module,
-                            ParseAndReturnVerifiedModule(hlo_text, config));
+                            ParseAndReturnVerifiedModule(replaced_hlo, config));
 
     TF_ASSERT_OK_AND_ASSIGN(auto executable,
                             CreateExecutable(std::move(module),
@@ -1277,6 +1293,7 @@ class CollectiveOpsTestE2EWindowedNonWindowed : public CollectiveOpsTestE2E {
                    << " devices (" << device_count() << " available)";
     }
 
+    std::string replaced_hlo = ReplaceFp8Types(hlo_text);
     HloModuleConfig config = GetModuleConfigForTest(
         /*replica_count=*/kNumReplicas, /*num_partitions=*/kNumPartitions);
 
@@ -1288,8 +1305,9 @@ class CollectiveOpsTestE2EWindowedNonWindowed : public CollectiveOpsTestE2E {
     }
 
     // Run with reference config.
-    TF_ASSERT_OK_AND_ASSIGN(auto ref_module,
-                            ParseAndReturnVerifiedModule(hlo_text, config));
+    TF_ASSERT_OK_AND_ASSIGN(
+        auto ref_module,
+        ParseAndReturnVerifiedModule(replaced_hlo, config));
     ASSERT_OK_AND_ASSIGN(auto ref_executable,
                          CreateExecutable(std::move(ref_module),
                                           /*run_hlo_passes=*/true));
@@ -1314,8 +1332,9 @@ class CollectiveOpsTestE2EWindowedNonWindowed : public CollectiveOpsTestE2E {
     debug_options.set_xla_gpu_multi_streamed_windowed_einsum(true);
     debug_options.set_xla_gpu_experimental_enable_alltoall_windowed_einsum(
         enable_a2a_rewrite);
-    TF_ASSERT_OK_AND_ASSIGN(auto module,
-                            ParseAndReturnVerifiedModule(hlo_text, config));
+    TF_ASSERT_OK_AND_ASSIGN(
+        auto module,
+        ParseAndReturnVerifiedModule(replaced_hlo, config));
 
     TF_ASSERT_OK_AND_ASSIGN(
         ExecutionResult execution_result,
