@@ -92,10 +92,13 @@ class CollectiveOpsTestE2E : public CollectiveOpsE2ETestBase {
   // CUDA and MI350+ use OCP/IEEE types (f8e4m3fn/f8e5m2). The HLO test
   // strings are written with OCP types; this replaces them with NANOO types
   // when running on MI300X so the GEMM rewriter can produce FP8 custom calls.
+  // Note: the input HLO must not already contain FNUZ type strings, as the
+  // substring replacement of "f8e4m3fn" would also match inside "f8e4m3fnuz".
   std::string ReplaceFp8Types(absl::string_view hlo_text) {
-    if (Capability().IsRocm() &&
-        Capability().rocm_compute_capability()->has_nanoo_fp8_support() &&
-        !Capability().rocm_compute_capability()->has_ocp_fp8_support()) {
+    const auto& cap = Capability();
+    if (cap.IsRocm() &&
+        cap.rocm_compute_capability()->has_nanoo_fp8_support() &&
+        !cap.rocm_compute_capability()->has_ocp_fp8_support()) {
       return absl::StrReplaceAll(
           hlo_text, {{"f8e4m3fn", "f8e4m3fnuz"}, {"f8e5m2", "f8e5m2fnuz"}});
     }
