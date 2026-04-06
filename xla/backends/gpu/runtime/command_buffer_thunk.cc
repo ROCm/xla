@@ -287,6 +287,14 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
   bool needs_update = !enable_command_buffer_va_remapping_ &&
                       (!updated_allocs.empty() || commands_.force_update());
 
+  VLOG(1) << "CmdBufThunk dev=" << executor->device_ordinal()
+           << " updated=" << updated_allocs.size()
+           << " force=" << commands_.force_update()
+           << " va_remap=" << enable_command_buffer_va_remapping_
+           << " first=" << is_first_record
+           << " needs_update=" << needs_update
+           << " total_allocs=" << commands_.allocs_indices().size();
+
   if (is_first_record || needs_update) {
     XLA_VLOG_DEVICE(3, executor->device_ordinal())
         << "Create/Update command buffer"

@@ -18,6 +18,7 @@ limitations under the License.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <memory>
 #include <optional>
@@ -385,11 +386,40 @@ GpuExecutable::GpuExecutable(
           return absl::OkStatus();
         }));
   }
+
+  // Enable cached allocations via environment variable, but only for modules
+  // that actually use command buffers (skip autotuning/small modules).
+  if (!command_buffer_allocation_indexes_.empty()) {
+    if (const char* env = std::getenv("XLA_COMMAND_BUFFERS_USE_CACHED_ALLOCS")) {
+      std::string val(env);
+      enable_cached_allocs_ = (val == "1" || val == "true");
+      if (enable_cached_allocs_) {
+        LOG(WARNING) << "CachedAllocs: enabled for module " << module_name_
+                     << " with " << command_buffer_allocation_indexes_.size()
+                     << " command buffer allocations";
+      }
+    }
+  }
 }
 
 GpuExecutable::~GpuExecutable() {
   if (has_module() && enable_debug_info_manager_) {
     XlaDebugInfoManager::Get()->UnregisterModule(module().unique_id());
+  }
+  // Free cached allocations through the real (underlying) allocator.
+  if (enable_cached_allocs_) {
+    absl::MutexLock lock(&allocs_cache_mutex_);
+    for (auto& [device_ordinal, cache] : cached_allocs_) {
+      auto it = cached_allocators_.find(device_ordinal);
+      if (it == cached_allocators_.end() || !it->second) continue;
+      auto* real_allocator =
+          static_cast<CachedAllocator*>(it->second.get());
+      for (auto& [idx, addr] : cache.entries) {
+        if (!addr.is_null()) {
+          (void)real_allocator->DeallocateUnderlying(device_ordinal, addr);
+        }
+      }
+    }
   }
 }
 
@@ -1012,12 +1042,35 @@ absl::StatusOr<se::DeviceAddressBase> GpuExecutable::BufferForAllocation(
           it != allocate_granularity.end()) {
         buffer_size = RoundUpTo(buffer_size, it->second);
       }
+
+      // Cache all internally-allocated buffers (temp + live-out) for address
+      // stability. The CachedAllocator wrapper prevents TearDown and
+      // ExecutionOutput from freeing cached addresses.
+      bool cacheable = enable_cached_allocs_;
+
+      if (cacheable) {
+        absl::MutexLock lock(&allocs_cache_mutex_);
+        auto& cache = cached_allocs_[device_ordinal];
+        auto it = cache.entries.find(arg_idx);
+        if (it != cache.entries.end() &&
+            it->second.size() >= static_cast<uint64_t>(buffer_size)) {
+          return it->second;
+        }
+      }
+
       ASSIGN_OR_RETURN(
           se::ScopedDeviceAddress<uint8_t> buffer,
           memory_allocator->Allocate(device_ordinal, buffer_size,
                                      /*retry_on_failure=*/true,
                                      /*memory_space=*/allocation.color()));
       buffer_address = buffer.Release();
+
+      if (cacheable) {
+        absl::MutexLock lock(&allocs_cache_mutex_);
+        auto& cache = cached_allocs_[device_ordinal];
+        cache.entries[arg_idx] = buffer_address;
+        cache.cached_ptrs.insert(buffer_address.opaque());
+      }
     }
     return buffer_address;
   }
@@ -1081,14 +1134,36 @@ absl::StatusOr<BufferAllocations> GpuExecutable::GenerateBufferAllocations(
   const int64_t num_buffers = allocations.size();
   std::vector<se::DeviceAddressBase> buffers;
   buffers.reserve(num_buffers);
+
+  int64_t n_params = 0, n_const = 0, n_thread = 0, n_alloc = 0, n_cached = 0;
   for (int64_t i = 0; i < num_buffers; ++i) {
     const BufferAllocation& allocation = *allocations[i];
+    if (allocation.is_thread_local())
+      n_thread++;
+    else if (allocation.is_entry_computation_parameter())
+      n_params++;
+    else if (allocation.is_constant())
+      n_const++;
+    else
+      n_alloc++;
+
     ASSIGN_OR_RETURN(
         buffers.emplace_back(),
         BufferForAllocation(arguments, globals, allocation, memory_allocator,
                             device_ordinal, i, allocate_granularity));
     RETURN_IF_ERROR(CheckAlignment(allocation, buffers.back(), i));
   }
+
+  if (enable_cached_allocs_) {
+    absl::MutexLock lock(&allocs_cache_mutex_);
+    n_cached = cached_allocs_[device_ordinal].entries.size();
+  }
+
+  VLOG(1) << "GenBufAllocs dev=" << device_ordinal
+           << " total=" << num_buffers << " params=" << n_params
+           << " const=" << n_const << " thread=" << n_thread
+           << " alloc=" << n_alloc << " cached=" << n_cached;
+
   return {{buffers, device_ordinal, memory_allocator}};
 }
 
@@ -1146,13 +1221,29 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
   const int device_ordinal = run_options->device_ordinal() != -1
                                  ? run_options->device_ordinal()
                                  : executor->device_ordinal();
+
+  // If cached allocations are enabled, wrap the allocator so that TearDown
+  // and ExecutionOutput skip deallocation for cached buffer addresses.
+  se::DeviceAddressAllocator* effective_allocator = memory_allocator;
+  if (enable_cached_allocs_) {
+    absl::MutexLock lock(&allocs_cache_mutex_);
+    auto& cache = cached_allocs_[device_ordinal];
+    auto& allocator = cached_allocators_[device_ordinal];
+    if (!allocator) {
+      allocator =
+          std::make_unique<CachedAllocator>(memory_allocator, &cache.cached_ptrs);
+    }
+    effective_allocator = allocator.get();
+  }
+
   ExecutionOutput result(/*on_device_shape=*/program_shape_.result(),
-                         memory_allocator, device_ordinal,
+                         effective_allocator, device_ordinal,
                          executor->device_ordinal());
 
   ASSIGN_OR_RETURN(BufferAllocations buffer_allocations,
                    GenerateBufferAllocations(run_options, arguments, globals,
-                                             memory_allocator, device_ordinal));
+                                             effective_allocator,
+                                             device_ordinal));
   XLA_VLOG_DEVICE(3, device_ordinal) << buffer_allocations.ToString();
   absl::Span<const BufferAllocation* const> allocations = GetAllocations();
 

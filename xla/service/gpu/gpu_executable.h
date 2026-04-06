@@ -17,6 +17,7 @@ limitations under the License.
 #define XLA_SERVICE_GPU_GPU_EXECUTABLE_H_
 
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <memory>
 #include <optional>
@@ -70,6 +71,55 @@ limitations under the License.
 
 namespace xla {
 namespace gpu {
+
+// Wraps a real DeviceAddressAllocator and intercepts Deallocate calls for
+// cached buffer addresses, preventing TearDown from freeing them.
+class CachedAllocator : public se::DeviceAddressAllocator {
+ public:
+  CachedAllocator(se::DeviceAddressAllocator* underlying,
+                  const absl::flat_hash_set<void*>* cached_ptrs)
+      : DeviceAddressAllocator(underlying->platform()),
+        underlying_(underlying),
+        cached_ptrs_(cached_ptrs) {}
+
+  absl::StatusOr<se::ScopedDeviceAddress<uint8_t>> Allocate(
+      int device_ordinal, uint64_t size, bool retry_on_failure,
+      int64_t memory_space) override {
+    return underlying_->Allocate(device_ordinal, size, retry_on_failure,
+                                 memory_space);
+  }
+
+  absl::Status Deallocate(int device_ordinal,
+                          se::DeviceAddressBase mem) override {
+    if (cached_ptrs_ && cached_ptrs_->contains(mem.opaque())) {
+      return absl::OkStatus();
+    }
+    return underlying_->Deallocate(device_ordinal, mem);
+  }
+
+  absl::StatusOr<se::Stream*> GetStream(int device_ordinal) override {
+    return underlying_->GetStream(device_ordinal);
+  }
+
+  bool AllowsAsynchronousDeallocation() const override {
+    return underlying_->AllowsAsynchronousDeallocation();
+  }
+
+  // Bypass the cache and deallocate directly through the underlying allocator.
+  absl::Status DeallocateUnderlying(int device_ordinal,
+                                    se::DeviceAddressBase mem) {
+    return underlying_->Deallocate(device_ordinal, mem);
+  }
+
+ private:
+  se::DeviceAddressAllocator* underlying_;
+  const absl::flat_hash_set<void*>* cached_ptrs_;
+};
+
+struct AllocationsCache {
+  absl::flat_hash_map<BufferAllocation::Index, se::DeviceAddressBase> entries;
+  absl::flat_hash_set<void*> cached_ptrs;
+};
 
 // GPU-targeting implementation of the XLA Executable interface.
 //
@@ -423,6 +473,17 @@ class GpuExecutable : public Executable {
   // Buffer allocation indices accessed by command buffer thunks. Using
   // btree_set for deterministic iteration order.
   absl::btree_set<BufferAllocation::Index> command_buffer_allocation_indexes_;
+
+  // Cached buffer allocations to stabilize addresses across steps,
+  // reducing command buffer re-trace triggers.
+  bool enable_cached_allocs_ = false;
+  absl::Mutex allocs_cache_mutex_;
+  absl::node_hash_map<int, AllocationsCache> cached_allocs_
+      ABSL_GUARDED_BY(allocs_cache_mutex_);
+  // Persistent CachedAllocator per device ordinal so it outlives
+  // ExecutionOutput (which may free result buffers asynchronously).
+  absl::node_hash_map<int, std::unique_ptr<CachedAllocator>>
+      cached_allocators_ ABSL_GUARDED_BY(allocs_cache_mutex_);
 
   // Separate mutex for VA ranges to avoid contention with module_handle_mutex_
   // during VA remapping operations which may involve GPU synchronization.
