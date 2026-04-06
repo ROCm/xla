@@ -1024,6 +1024,7 @@ absl::StatusOr<se::DeviceAddressBase> GpuExecutable::BufferForAllocation(
           "zero elements.",
           allocation.param_shape_index().ToString(), param_no);
     }
+
     return registered_buffer;
   } else if (allocation.is_constant()) {
     auto it = globals->find(arg_idx);
@@ -1244,6 +1245,43 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
                    GenerateBufferAllocations(run_options, arguments, globals,
                                              effective_allocator,
                                              device_ordinal));
+
+  // For cached allocs: stabilize parameter addresses used by command buffers.
+  // If a parameter's address changed (e.g. due to buffer donation), memcpy
+  // its data to the cached stable address and update the buffer allocation.
+  if (enable_cached_allocs_ && !command_buffer_allocation_indexes_.empty()) {
+    se::Stream* stream = run_options->stream();
+    absl::MutexLock lock(&allocs_cache_mutex_);
+    auto& cache = cached_allocs_[device_ordinal];
+    for (auto idx : command_buffer_allocation_indexes_) {
+      if (idx < 0 || static_cast<size_t>(idx) >= GetAllocations().size())
+        continue;
+      const BufferAllocation& alloc = *GetAllocations()[idx];
+      if (!alloc.is_entry_computation_parameter()) continue;
+
+      se::DeviceAddressBase current =
+          buffer_allocations.GetDeviceAddress(idx);
+      if (current.is_null() || current.size() == 0) continue;
+
+      auto it = cache.entries.find(idx);
+      if (it != cache.entries.end() &&
+          it->second.size() >= current.size()) {
+        if (!it->second.IsSameAs(current)) {
+          VLOG(1) << "CachedAllocs: memcpy param alloc " << idx
+                  << " size=" << current.size()
+                  << " from " << current.opaque()
+                  << " to " << it->second.opaque();
+          TF_RETURN_IF_ERROR(stream->MemcpyD2D(
+              &it->second, current, current.size()));
+          buffer_allocations.GetMutableDeviceAddress(idx) = it->second;
+        }
+      } else {
+        cache.entries[idx] = current;
+        cache.cached_ptrs.insert(current.opaque());
+      }
+    }
+  }
+
   XLA_VLOG_DEVICE(3, device_ordinal) << buffer_allocations.ToString();
   absl::Span<const BufferAllocation* const> allocations = GetAllocations();
 

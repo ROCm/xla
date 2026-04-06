@@ -114,6 +114,11 @@ class CommandBufferThunk : public Thunk {
     // will do the proper NCCL setup, so later iterations running through
     // command buffer does not need to call NCCL setup APIs.
     bool warmup_done ABSL_GUARDED_BY(mutex) = false;
+
+    // Tracks whether collective initialization recording has been done.
+    // Prevents re-recording on every Initialize() call when VA remapping
+    // is disabled but addresses are stable (e.g. via CachedAllocator).
+    bool collective_init_done ABSL_GUARDED_BY(mutex) = false;
   };
 
   // Command buffer thunk owns commands buffers instantiated on all executors.

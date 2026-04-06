@@ -208,10 +208,17 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
   // also record them into the command buffer before execution. This is required
   // to guarantee that collective commands are recorded on all participating
   // ranks to avoid deadlocks.
-  if (cmd_buffer->warmup_done && (cmd_buffer->command_buffer->state() ==
-                                      se::CommandBuffer::State::kCreate ||
-                                  (!enable_command_buffer_va_remapping_ &&
-                                   commands_.requires_initialization()))) {
+  // Skip re-initialization when VA remapping is enabled (addresses are
+  // remapped at the hardware level) or when the command buffer has already
+  // been initialized (addresses are stable via CachedAllocator or similar).
+  bool first_init = cmd_buffer->command_buffer->state() ==
+                    se::CommandBuffer::State::kCreate;
+  bool needs_collective_init =
+      !enable_command_buffer_va_remapping_ &&
+      !cmd_buffer->collective_init_done &&
+      commands_.requires_initialization();
+  if (cmd_buffer->warmup_done && (first_init || needs_collective_init)) {
+    cmd_buffer->collective_init_done = true;
     VLOG(3) << "Initialize command buffer on device #"
             << params.executor->device_ordinal()
             << " by recoding command buffer cmd sequence"
@@ -287,13 +294,19 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
   bool needs_update = !enable_command_buffer_va_remapping_ &&
                       (!updated_allocs.empty() || commands_.force_update());
 
-  VLOG(1) << "CmdBufThunk dev=" << executor->device_ordinal()
-           << " updated=" << updated_allocs.size()
-           << " force=" << commands_.force_update()
-           << " va_remap=" << enable_command_buffer_va_remapping_
-           << " first=" << is_first_record
-           << " needs_update=" << needs_update
-           << " total_allocs=" << commands_.allocs_indices().size();
+  std::string changed_indices;
+  for (auto idx : updated_allocs) {
+    if (!changed_indices.empty()) changed_indices += ",";
+    changed_indices += std::to_string(idx);
+  }
+  LOG(WARNING) << "CmdBufThunk dev=" << executor->device_ordinal()
+               << " updated=" << updated_allocs.size()
+               << " [" << changed_indices << "]"
+               << " force=" << commands_.force_update()
+               << " va_remap=" << enable_command_buffer_va_remapping_
+               << " first=" << is_first_record
+               << " needs_update=" << needs_update
+               << " total=" << commands_.allocs_indices().size();
 
   if (is_first_record || needs_update) {
     XLA_VLOG_DEVICE(3, executor->device_ordinal())
