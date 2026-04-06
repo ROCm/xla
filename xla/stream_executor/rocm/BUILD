@@ -591,7 +591,6 @@ cc_library(
     hdrs = [
         "hip_blas_lt.h",
         "hip_blas_utils.h",
-        "hipblaslt_wrapper.h",
     ],
     defines = {"__HIP_DISABLE_CPP_FUNCTIONS__": "1"},
     tags = [
@@ -643,7 +642,6 @@ cc_library(
     hdrs = [
         "hip_blas_lt.h",
         "hip_blas_utils.h",
-        "hipblaslt_wrapper.h",
     ],
     tags = [
         "gpu",
