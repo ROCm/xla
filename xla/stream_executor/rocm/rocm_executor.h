@@ -140,7 +140,8 @@ class RocmExecutor : public GpuExecutor {
   absl::Status InitBlas();
 
   // Loads a module in HSACO format.
-  absl::StatusOr<ModuleHandle> LoadModuleFromHsaco(const char* hsaco)
+  absl::StatusOr<ModuleHandle> LoadModuleFromHsaco(const char* hsaco,
+                                                   size_t size)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(in_memory_modules_mu_);
 
   bool UnloadGpuBinary(ModuleHandle module_handle)
