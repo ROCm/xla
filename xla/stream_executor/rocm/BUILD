@@ -416,38 +416,6 @@ cc_library(
 )
 
 cc_library(
-    name = "rocm_solver_context",
-    srcs = ["rocm_solver_context.cc"],
-    hdrs = ["rocm_solver_context.h"],
-    tags = [
-        "gpu",
-        "manual",
-        "rocm-only",
-    ],
-    deps = [
-        ":hipsolver_wrapper",
-        ":rocblas_wrapper",
-        ":rocm_platform_id",
-        ":rocsolver_wrapper",
-        "//xla:comparison_util",
-        "//xla:util",
-        "//xla:xla_data_proto_cc",
-        "//xla/stream_executor:blas",
-        "//xla/stream_executor:device_address",
-        "//xla/stream_executor:gpu_solver_context",
-        "//xla/stream_executor:stream",
-        "//xla/stream_executor/platform:platform_object_registry",
-        "//xla/tsl/platform:errors",
-        "//xla/tsl/platform:logging",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@local_config_rocm//rocm:rocm_headers",
-    ],
-    alwayslink = 1,
-)
-
-cc_library(
     name = "hipfft_plugin",
     srcs = ["rocm_fft.cc"],
     hdrs = ["rocm_fft.h"],
@@ -597,35 +565,6 @@ cc_library(
         "rocm-only",
     ],
     deps = [
-        ":rocm_executor",
-        ":rocm_platform_id",
-        "//xla/tsl/platform:env",
-        "@local_config_rocm//rocm:rocm_headers",
-        "@tsl//tsl/platform:dso_loader",
-    ],
-    alwayslink = True,
-)
-
-cc_library(
-    name = "hipsolver_if_static",
-    tags = [
-        "gpu",
-        "rocm-only",
-    ],
-    deps = if_static([
-        "@local_config_rocm//rocm:hipsolver",
-    ]),
-)
-
-cc_library(
-    name = "hipsolver_wrapper",
-    hdrs = ["hipsolver_wrapper.h"],
-    tags = [
-        "gpu",
-        "rocm-only",
-    ],
-    deps = [
-        ":hipsolver_if_static",
         ":rocm_executor",
         ":rocm_platform_id",
         "//xla/tsl/platform:env",
@@ -816,7 +755,6 @@ cc_library(
         ":rocblas_plugin",
         ":rocm_helpers",
         ":rocm_platform",
-        ":rocm_solver_context",
         ":topk_kernel_rocm",
     ],
     alwayslink = 1,
