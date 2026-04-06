@@ -526,37 +526,6 @@ cc_library(
 )
 
 cc_library(
-    name = "hipsparse_if_static",
-    tags = [
-        "gpu",
-        "rocm-only",
-    ],
-    deps = if_static([
-        "@local_config_rocm//rocm:hipsparse",
-    ]),
-)
-
-cc_library(
-    name = "hipsparse_wrapper",
-    srcs = ["hipsparse_wrapper.h"],
-    hdrs = ["hipsparse_wrapper.h"],
-    tags = [
-        "gpu",
-        "rocm-only",
-    ],
-    deps = [
-        ":hipsparse_if_static",
-        ":rocm_executor",
-        ":rocm_platform_id",
-        "//xla/tsl/platform:env",
-        "@local_config_rocm//rocm:rocm_headers",
-        "@tsl//tsl/platform",
-        "@tsl//tsl/platform:dso_loader",
-    ],
-    alwayslink = True,
-)
-
-cc_library(
     name = "rocsolver_wrapper",
     srcs = ["rocsolver_wrapper.h"],
     hdrs = ["rocsolver_wrapper.h"],
@@ -684,6 +653,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
     ],
+    alwayslink = 1,
 )
 
 cc_library(
