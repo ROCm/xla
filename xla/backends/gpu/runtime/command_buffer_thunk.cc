@@ -17,7 +17,9 @@ limitations under the License.
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -69,6 +71,10 @@ CommandBufferThunk::CommandBufferThunk(
       enable_command_buffers_during_profiling_(
           enable_command_buffers_during_profiling),
       enable_command_buffer_va_remapping_(enable_command_buffer_va_remapping),
+      enable_cached_allocs_([] {
+        const char* env = std::getenv("XLA_COMMAND_BUFFERS_USE_CACHED_ALLOCS");
+        return env && (std::string(env) == "1" || std::string(env) == "true");
+      }()),
       state_(std::make_shared<State>()) {
   if (VLOG_IS_ON(5)) {
     absl::StatusOr<std::string> graph = commands_.RenderExecutionGraph();
@@ -232,7 +238,6 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
 
     uint64_t start_micros = tsl::Env::Default()->NowMicros();
 
-    // Update recorded buffer allocations.
     auto updated_allocs =
         cmd_buffer->UpdateBufferAllocations(commands_, execute_params);
 
@@ -286,27 +291,103 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
 
   auto updated_allocs = cmd_buffer->UpdateBufferAllocations(commands_, params);
 
-  // Determine whether to (re-)record the command buffer and whether this is a
-  // first-time initialization recording (VA remapping path).
+  // Stabilize allocation addresses: for allocations that changed address
+  // (e.g. donated parameters), memcpy data to a cached stable address and
+  // revert recorded_allocs to the stable address. This prevents both the
+  // coarse-grained UpdateBufferAllocations check and the fine-grained
+  // TracedCommandBuffer cache from seeing address churn.
+  const Thunk::ExecuteParams* effective_params = &params;
+  std::optional<BufferAllocations> stable_allocs;
+  std::optional<Thunk::ExecuteParams> stable_params;
+  // Indices that were stabilized and need post-execution copy-back.
+  std::vector<BufferAllocation::Index> copyback_indices;
+
+  if (enable_cached_allocs_ && cmd_buffer->alloc_cache_ready &&
+      !updated_allocs.empty()) {
+    int64_t stabilized = 0;
+    const BufferAllocations* orig = params.buffer_allocations;
+    auto& cache = cmd_buffer->alloc_address_cache;
+    se::DeviceAddressAllocator* allocator = orig->memory_allocator();
+    int dev = orig->device_ordinal();
+
+    for (auto it = updated_allocs.begin(); it != updated_allocs.end();) {
+      BufferAllocation::Index idx = *it;
+      se::DeviceAddressBase current = orig->GetDeviceAddress(idx);
+      if (current.is_null() || current.size() == 0) {
+        ++it;
+        continue;
+      }
+
+      auto cached_it = cache.find(idx);
+      if (cached_it != cache.end() &&
+          cached_it->second.size() >= current.size()) {
+        // Persistent buffer exists: memcpy data and revert recorded_allocs.
+        se::DeviceAddressBase& cached = cached_it->second;
+        if (!cached.IsSameAs(current)) {
+          TF_RETURN_IF_ERROR(
+              params.stream->MemcpyD2D(&cached, current, current.size()));
+          cmd_buffer->recorded_allocs[idx] = cached;
+          copyback_indices.push_back(idx);
+          ++stabilized;
+        }
+        it = updated_allocs.erase(it);
+      } else {
+        // First encounter: allocate a persistent buffer. Keep this index
+        // in updated_allocs so the graph gets recorded with the new address.
+        auto alloc_result = allocator->Allocate(
+            dev, current.size(), /*retry_on_failure=*/true,
+            /*memory_space=*/0);
+        if (alloc_result.ok()) {
+          se::DeviceAddressBase persistent = alloc_result->Release();
+          TF_RETURN_IF_ERROR(params.stream->MemcpyD2D(
+              &persistent, current, current.size()));
+          cache[idx] = persistent;
+          cmd_buffer->recorded_allocs[idx] = persistent;
+          copyback_indices.push_back(idx);
+          ++stabilized;
+        } else {
+          LOG(WARNING) << "CachedAllocs: failed to allocate persistent "
+                       << "buffer for alloc " << idx
+                       << " size=" << current.size() << ": "
+                       << alloc_result.status();
+        }
+        ++it;
+      }
+    }
+
+    if (stabilized > 0) {
+      // Build a BufferAllocations with cached addresses so that
+      // TracedCommandBuffer sees stable pointers.
+      size_t n = orig->size();
+      std::vector<se::DeviceAddressBase> stable_bufs;
+      stable_bufs.reserve(n);
+      for (size_t i = 0; i < n; ++i) {
+        auto ci = cache.find(i);
+        if (ci != cache.end()) {
+          stable_bufs.push_back(ci->second);
+        } else {
+          stable_bufs.push_back(orig->GetDeviceAddress(i));
+        }
+      }
+      stable_allocs.emplace(stable_bufs, orig->device_ordinal(),
+                            orig->memory_allocator());
+      stable_params.emplace(
+          Thunk::ExecuteParams::CloneWithNewAllocations(params, *stable_allocs));
+      effective_params = &*stable_params;
+    }
+  }
+
   bool is_first_record =
       enable_command_buffer_va_remapping_ &&
       cmd_buffer->command_buffer->state() == se::CommandBuffer::State::kCreate;
   bool needs_update = !enable_command_buffer_va_remapping_ &&
                       (!updated_allocs.empty() || commands_.force_update());
 
-  std::string changed_indices;
-  for (auto idx : updated_allocs) {
-    if (!changed_indices.empty()) changed_indices += ",";
-    changed_indices += std::to_string(idx);
-  }
-  LOG(WARNING) << "CmdBufThunk dev=" << executor->device_ordinal()
-               << " updated=" << updated_allocs.size()
-               << " [" << changed_indices << "]"
-               << " force=" << commands_.force_update()
-               << " va_remap=" << enable_command_buffer_va_remapping_
-               << " first=" << is_first_record
-               << " needs_update=" << needs_update
-               << " total=" << commands_.allocs_indices().size();
+  VLOG(3) << "CmdBufThunk dev=" << executor->device_ordinal()
+           << " updated=" << updated_allocs.size()
+           << " stabilized=" << copyback_indices.size()
+           << " force=" << commands_.force_update()
+           << " needs_update=" << needs_update;
 
   if (is_first_record || needs_update) {
     XLA_VLOG_DEVICE(3, executor->device_ordinal())
@@ -333,7 +414,7 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
     Command::RecordParams record_params = {
         cmd_buffer->state, std::move(updated_allocs),
         /*is_initialization=*/is_first_record};
-    TF_RETURN_IF_ERROR(commands_.Record(params, record_params,
+    TF_RETURN_IF_ERROR(commands_.Record(*effective_params, record_params,
                                         cmd_buffer->command_buffer.get()));
 
     uint64_t end_micros = tsl::Env::Default()->NowMicros();
@@ -342,6 +423,10 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
         << (end_micros - start_micros)
         << " μs; num_commands=" << commands_.size();
     cmd_buffer->num_executions = 0;
+
+    if (enable_cached_allocs_ && !cmd_buffer->alloc_cache_ready) {
+      cmd_buffer->alloc_cache_ready = true;
+    }
   }
 
   ++cmd_buffer->num_executions;
@@ -358,7 +443,24 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
                           {"num_executions", cmd_buffer->num_executions}});
   });
 
-  return cmd_buffer->command_buffer->Submit(params.stream);
+  TF_RETURN_IF_ERROR(cmd_buffer->command_buffer->Submit(params.stream));
+
+  // Copy results from persistent buffers back to the original (donated)
+  // addresses so the framework receives correct output data.
+  if (!copyback_indices.empty()) {
+    auto& cache = cmd_buffer->alloc_address_cache;
+    const BufferAllocations* orig = params.buffer_allocations;
+    for (auto idx : copyback_indices) {
+      se::DeviceAddressBase donated = orig->GetDeviceAddress(idx);
+      auto ci = cache.find(idx);
+      if (ci == cache.end() || donated.is_null()) continue;
+      uint64_t copy_size = std::min(ci->second.size(), donated.size());
+      TF_RETURN_IF_ERROR(params.stream->MemcpyD2D(
+          &donated, ci->second, copy_size));
+    }
+  }
+
+  return absl::OkStatus();
 }
 
 absl::StatusOr<std::shared_ptr<CommandBufferThunk::ExecutorCommandBuffer>>
