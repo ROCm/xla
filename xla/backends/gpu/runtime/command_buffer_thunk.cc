@@ -307,8 +307,6 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
     int64_t stabilized = 0;
     const BufferAllocations* orig = params.buffer_allocations;
     auto& cache = cmd_buffer->alloc_address_cache;
-    se::DeviceAddressAllocator* allocator = orig->memory_allocator();
-    int dev = orig->device_ordinal();
 
     for (auto it = updated_allocs.begin(); it != updated_allocs.end();) {
       BufferAllocation::Index idx = *it;
@@ -321,7 +319,6 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
       auto cached_it = cache.find(idx);
       if (cached_it != cache.end() &&
           cached_it->second.size() >= current.size()) {
-        // Persistent buffer exists: memcpy data and revert recorded_allocs.
         se::DeviceAddressBase& cached = cached_it->second;
         if (!cached.IsSameAs(current)) {
           TF_RETURN_IF_ERROR(
@@ -332,13 +329,9 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
         }
         it = updated_allocs.erase(it);
       } else {
-        // First encounter: allocate a persistent buffer. Keep this index
-        // in updated_allocs so the graph gets recorded with the new address.
-        auto alloc_result = allocator->Allocate(
-            dev, current.size(), /*retry_on_failure=*/true,
-            /*memory_space=*/0);
-        if (alloc_result.ok()) {
-          se::DeviceAddressBase persistent = alloc_result->Release();
+        se::DeviceAddressBase persistent =
+            executor->Allocate(current.size(), /*memory_space=*/0);
+        if (!persistent.is_null()) {
           TF_RETURN_IF_ERROR(params.stream->MemcpyD2D(
               &persistent, current, current.size()));
           cache[idx] = persistent;
@@ -348,8 +341,7 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
         } else {
           LOG(WARNING) << "CachedAllocs: failed to allocate persistent "
                        << "buffer for alloc " << idx
-                       << " size=" << current.size() << ": "
-                       << alloc_result.status();
+                       << " size=" << current.size();
         }
         ++it;
       }
