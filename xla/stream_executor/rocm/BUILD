@@ -338,24 +338,6 @@ cc_library(
 )
 
 cc_library(
-    name = "rocblas_wrapper",
-    hdrs = ["rocblas_wrapper.h"],
-    tags = [
-        "gpu",
-        "rocm-only",
-    ],
-    deps = [
-        ":rocm_executor",
-        "//xla/tsl/platform:env",
-        "//xla/tsl/util:determinism_for_kernels",
-        "@local_config_rocm//rocm:rocm_headers",
-        "@tsl//tsl/platform",
-        "@tsl//tsl/platform:dso_loader",
-    ],
-    alwayslink = True,
-)
-
-cc_library(
     name = "rocblas_plugin",
     srcs = ["rocm_blas.cc"],
     hdrs = ["rocm_blas.h"],
@@ -367,7 +349,6 @@ cc_library(
     deps = [
         ":hipblas_lt_header",
         ":rocblas_if_static",
-        ":rocblas_wrapper",
         ":rocm_complex_converters",
         ":rocm_executor",
         ":rocm_helpers",
