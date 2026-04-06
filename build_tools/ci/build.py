@@ -674,18 +674,23 @@ Build(
 Build(
     type_=BuildType.XLA_LINUX_X86_GPU_ROCM_BENCHMARK_PRESUBMIT_GITHUB_ACTIONS,
     repo="openxla/xla",
-    configs=("rocm_ci"),
+    configs=("rocm_ci", "rocm_rbe"),
     target_patterns=_XLA_GPU_PRESUBMIT_BENCHMARKS_DEFAULT_TARGET_PATTERNS,
     test_tag_filters=rocm_tag_filters,
     build_tag_filters=rocm_tag_filters,
     options={
         "run_under": "//build_tools/ci:parallel_gpu_execute",
         "//xla/tsl:ci_build": True,
+        "remote_download_toplevel": True,  # Override remote_download_minimal from rocm_rbe
         **_DEFAULT_BAZEL_OPTIONS,
     },
     repo_env={
         "TF_ROCM_AMDGPU_TARGETS": "gfx90a",
+        "TF_ROCM_RBE_DOCKER_IMAGE": "rocm/"
+           "tensorflow-build@sha256:"
+           "66eb4c1e39db76fae2eb0a1029490acbe7bfce0e00d6ab435e170f743921f4c4"
     },
+    startup_options={"bazelrc": "build_tools/rocm/rocm_xla.bazelrc"},
     subcommand="build",
 )
 
