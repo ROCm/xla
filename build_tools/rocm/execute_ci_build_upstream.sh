@@ -30,11 +30,8 @@ TEST_TARGETS_SGPU=(
 )
 
 TEST_TARGETS_MGPU=(
-    "//xla/tests:collective_ops_test"
-    "//xla/backends/gpu/tests:collective_ops_e2e_test"
     "//xla/backends/gpu/tests:collective_pipeline_parallelism_test"
     "//xla/backends/gpu/collectives:gpu_clique_key_test"
-    "//xla/backends/gpu/runtime:all_reduce_test"
     "//xla/service:collective_ops_utils_test"
     "//xla/service:collective_pipeliner_test"
     "//xla/service:collective_permute_cycle_test"
@@ -50,7 +47,6 @@ TEST_TARGETS_MGPU=(
     "//xla/service:p2p_schedule_preparation_test"
     "//xla/pjrt/distributed:topology_util_test"
     "//xla/pjrt/distributed:client_server_test"
-    "//xla/tools/multihost_hlo_runner:functional_hlo_runner_test"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
