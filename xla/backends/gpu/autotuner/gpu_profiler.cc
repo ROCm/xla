@@ -94,12 +94,35 @@ int GetScratchBytes(const Executable* executable) {
   return scratch_bytes;
 }
 
+// Initialize a specific input buffer with custom values.
+// This is useful for initializing constant parameters like group sizes
+// in group-gemm operations after buffers are created.
+static absl::Status InitializeInputBuffer(GpuInputBuffers& gpu_buffers,
+                                          se::Stream* stream, int buffer_index,
+                                          const void* values,
+                                          size_t size_bytes) {
+  RedzoneBuffers& rz_buffers = gpu_buffers.redzone_buffers;
+
+  if (buffer_index < 0 || buffer_index >= rz_buffers.input_buffers().size()) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("Invalid buffer_index %d, must be in range [0, %d)",
+                        buffer_index, rz_buffers.input_buffers().size()));
+  }
+
+  se::DeviceAddressBase buffer = rz_buffers.input_buffers()[buffer_index];
+  TF_RETURN_IF_ERROR(stream->Memcpy(const_cast<se::DeviceAddressBase*>(&buffer),
+                                    values, size_bytes));
+  TF_RETURN_IF_ERROR(stream->BlockHostUntilDone());
+
+  return absl::OkStatus();
+}
+
 // Initialize input buffers based on the operation type.
 // This function examines the HLO instruction and initializes
 // specific input buffers based on the operation's requirements.
 static absl::Status InitializeBuffersIfRequiredByOpcode(
-    const HloInstruction* instr, Profiler* profiler,
-    InputBuffers& input_buffers) {
+    const HloInstruction* instr, GpuInputBuffers& gpu_buffers, 
+    se::Stream* stream) {
   if (instr == nullptr) {
     return absl::OkStatus();
   }
@@ -158,8 +181,8 @@ static absl::Status InitializeBuffersIfRequiredByOpcode(
           group_sizes[i] = static_cast<int32_t>(base_group_size);
         }
       }
-      TF_RETURN_IF_ERROR(profiler->InitializeInputBuffer(
-          input_buffers,
+      TF_RETURN_IF_ERROR(InitializeInputBuffer(
+          gpu_buffers, stream,
           instr->operand_count() - 1,  // Last parameter is group sizes
           group_sizes.data(), total_elements * sizeof(int32_t)));
     } else if (group_sizes_type == S64) {
@@ -174,8 +197,8 @@ static absl::Status InitializeBuffersIfRequiredByOpcode(
           group_sizes[i] = base_group_size;
         }
       }
-      TF_RETURN_IF_ERROR(profiler->InitializeInputBuffer(
-          input_buffers,
+      TF_RETURN_IF_ERROR(InitializeInputBuffer(
+          gpu_buffers, stream,
           instr->operand_count() - 1,  // Last parameter is group sizes
           group_sizes.data(), total_elements * sizeof(int64_t)));
     }
@@ -227,7 +250,7 @@ absl::StatusOr<std::unique_ptr<InputBuffers>> GpuProfiler::CreateInputBuffers(
 
   // Initialize buffers based on operation type
   TF_RETURN_IF_ERROR(
-      InitializeBuffersIfRequiredByOpcode(instr, this, *gpu_buffers));
+      InitializeBuffersIfRequiredByOpcode(instr, *gpu_buffers, stream_));
 
   return gpu_buffers;
 }
@@ -319,27 +342,6 @@ absl::Status GpuProfiler::CheckOutputBuffer(ScopedShapedBuffer& output,
         return absl::InternalError(
             "Output buffer does not match reference buffer.");
       });
-}
-
-absl::Status GpuProfiler::InitializeInputBuffer(InputBuffers& buffers,
-                                                int buffer_index,
-                                                const void* values,
-                                                size_t size_bytes) {
-  GpuInputBuffers& gpu_buffers = tsl::down_cast<GpuInputBuffers&>(buffers);
-  RedzoneBuffers& rz_buffers = gpu_buffers.redzone_buffers;
-
-  if (buffer_index < 0 || buffer_index >= rz_buffers.input_buffers().size()) {
-    return absl::InvalidArgumentError(
-        absl::StrFormat("Invalid buffer_index %d, must be in range [0, %d)",
-                        buffer_index, rz_buffers.input_buffers().size()));
-  }
-
-  se::DeviceAddressBase buffer = rz_buffers.input_buffers()[buffer_index];
-  TF_RETURN_IF_ERROR(stream_->Memcpy(
-      const_cast<se::DeviceAddressBase*>(&buffer), values, size_bytes));
-  TF_RETURN_IF_ERROR(stream_->BlockHostUntilDone());
-
-  return absl::OkStatus();
 }
 
 }  // namespace gpu

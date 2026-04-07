@@ -213,6 +213,7 @@ class Autotuner {
       std::pair<Config, std::optional<std::unique_ptr<Executable>>>>>
   CompileAll(HloInstruction* instr, std::vector<Config>& configs);
 
+  // Profiles all the executable candidates for a given instruction.
   absl::StatusOr<std::vector<ConfigResult>> ProfileAll(
       std::vector<ExecutableCandidate> candidates,
       const HloInstruction* instr = nullptr);
