@@ -571,6 +571,7 @@ cc_library(
         "//xla/pjrt/proto:topology_description_proto_cc",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/base",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -582,6 +583,7 @@ cc_library(
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
         "@llvm-project//mlir:IR",
+        "@tsl//tsl/platform:casts",
         "@tsl//tsl/platform:fingerprint",
     ],
 )
@@ -1352,6 +1354,7 @@ cc_library(
     visibility = internal_visibility([":friends"]),
     deps = [
         "//xla:debug_options_flags",
+        "//xla:xla_proto_cc",
         "//xla/backends/gpu/codegen/triton:compilation_pipeline",
         "//xla/service/gpu:target_constants",
         "//xla/service/gpu/llvm_gpu_backend:amdgpu_backend",
@@ -1699,7 +1702,9 @@ cc_library(
     deps = [
         ":pjrt_abi_version",
         ":pjrt_common",
+        "//xla/pjrt/proto:pjrt_abi_version_proto_cc",
         "//xla/stream_executor/abi:executable_abi_version",
+        "//xla/stream_executor/abi:executable_abi_version_proto_cc",
         "//xla/tsl/platform:status_macros",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",

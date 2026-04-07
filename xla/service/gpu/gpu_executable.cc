@@ -554,19 +554,22 @@ absl::Status ExecuteThunksImpl(const DebugOptions* debug_options,
                             std::move(pre_abort)));
   }
 
+  constexpr int64_t kAsyncStreamTotal =
+      static_cast<int64_t>(AsyncStreamKind::ASYNC_STREAM_KIND_MEMCPYP2P) + 1;
+
   // Borrow streams required for CollectiveThunk.
   absl::InlinedVector<se::Stream*, kAsyncStreamTotal> async_comms_streams(
       kAsyncStreamTotal, nullptr);
   se::Stream* command_buffer_trace_stream = nullptr;
-  std::vector<StreamPool::Ptr> async_comms_streams_ownr;
+  std::vector<StreamPool::Ptr> async_comms_streams_owner;
   StreamPool::Ptr borrowed_command_buffer_trace_stream;
   if (run_options->HasStreamBorrower()) {
     ASSIGN_OR_RETURN(
-        async_comms_streams_ownr,
+        async_comms_streams_owner,
         run_options->BorrowStreams(executor->device_ordinal(),
                                    kAsyncStreamTotal, stream_priority));
     for (int64_t i = 0; i < kAsyncStreamTotal; ++i) {
-      async_comms_streams[i] = async_comms_streams_ownr[i].get();
+      async_comms_streams[i] = async_comms_streams_owner[i].get();
     }
 
     // Borrow stream for tracing command buffers.

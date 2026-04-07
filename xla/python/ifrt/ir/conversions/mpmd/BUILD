@@ -25,7 +25,7 @@ cc_library(
         "//xla/hlo/ir:hlo_sharding",
         "//xla/python/ifrt/ir",
         "//xla/python/ifrt/ir:sharding_param",
-        "//xla/python/ifrt/support:sharding_conversions",
+        "//xla/python/ifrt/ir/support:sharding_conversions",
         "//xla/service/spmd/shardy:constants",
         "//xla/service/spmd/shardy/stablehlo_round_trip:export_shardings",
         "@com_google_absl//absl/algorithm:container",
@@ -81,7 +81,7 @@ xla_cc_test(
     deps = [
         ":utils",
         "//xla/hlo/ir:hlo_sharding",
-        "//xla/python/ifrt/support:sharding_conversions",
+        "//xla/python/ifrt/ir/support:sharding_conversions",
         "//xla/service/spmd/shardy/stablehlo_round_trip:stablehlo_import",
         "//xla/tsl/lib/core:status_test_util",
         "//xla/tsl/platform:statusor",
