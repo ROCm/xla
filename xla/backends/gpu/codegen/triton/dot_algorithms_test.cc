@@ -155,9 +155,9 @@ TEST_F(AlgorithmTest, Algorithm3xBF16) {
 }
 
 TEST_F(AlgorithmTest, Algorithm6xBF16) {
-  if (GpuComputeComp().IsRocm()) {
-    if (GpuComputeComp().rocm_compute_capability()->gfx9_mi200())
-      GTEST_SKIP() << "ALG_DOT_BF16_BF16_F32_X6 not supported on MI200.";
+  if (GpuComputeComp().IsRocm() &&
+      GpuComputeComp().rocm_compute_capability()->gfx9_mi200()) {
+    GTEST_SKIP() << "ALG_DOT_BF16_BF16_F32_X6 not supported on MI200.";
   }
   constexpr absl::string_view kHloText = R"(
     HloModule Algorithm6xBF16
@@ -1061,14 +1061,13 @@ class NumericTestsForBlas : public BlasAlgorithmTest,
  protected:
   void SetUp() override {
     PC::Algorithm algorithm = GetParam();
-    if (GpuComputeComp().IsRocm()) {
-      if (GpuComputeComp().rocm_compute_capability()->gfx9_mi200() &&
-          (algorithm == PC::ALG_DOT_BF16_BF16_F32_X3 ||
-           algorithm == PC::ALG_DOT_BF16_BF16_F32_X6 ||
-           algorithm == PC::ALG_DOT_BF16_BF16_F32_X9)) {
-        GTEST_SKIP() << AlgorithmToString(GetParam())
-                     << " not supported on MI200.";
-      }
+    if (GpuComputeComp().IsRocm() &&
+        GpuComputeComp().rocm_compute_capability()->gfx9_mi200() &&
+        (algorithm == PC::ALG_DOT_BF16_BF16_F32_X3 ||
+         algorithm == PC::ALG_DOT_BF16_BF16_F32_X6 ||
+         algorithm == PC::ALG_DOT_BF16_BF16_F32_X9)) {
+      GTEST_SKIP() << AlgorithmToString(GetParam())
+                   << " not supported on MI200.";
     }
   }
 
@@ -1573,11 +1572,9 @@ TEST_P(TritonAndBlasSupportForDifferentTensorSizes,
           // because they often require too much shared memory.
           EXPECT_FALSE(result_or_status.value())
               << "algorithms not supported on ROCm";
-        } else {
-          if (GpuComputeComp().rocm_compute_capability()->gfx9_mi200()) {
-            EXPECT_EQ(result_or_status.status().code(),
-                      absl::StatusCode::kInternal);
-          }
+        } else if (GpuComputeComp().rocm_compute_capability()->gfx9_mi200()) {
+          EXPECT_EQ(result_or_status.status().code(),
+                    absl::StatusCode::kInternal);
         }
       } else {
         ASSERT_TRUE(result_or_status.status().ok())
