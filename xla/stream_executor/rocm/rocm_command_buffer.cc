@@ -264,6 +264,8 @@ RocmCommandBuffer::FlattenChildGraphNodes(
     absl::Span<const Command* const> dependencies) {
   TF_RETURN_IF_ERROR(CheckNotFinalized());
 
+  VLOG(2) << "FlattenChildGraphNodes: graph=" << graph_ << " exec=" << exec_;
+
   const auto& child_buf =
       tensorflow::down_cast<const RocmCommandBuffer&>(nested);
   hipGraph_t child_graph = child_buf.graph_;
@@ -397,16 +399,23 @@ RocmCommandBuffer::FlattenChildGraphNodes(
               << " kernelParams=" << kparams.kernelParams
               << " extra=" << kparams.extra;
 
-      hipError_t kerr = wrap::hipGraphAddKernelNode(
-          &new_node, graph_, hip_deps.data(), hip_deps.size(), &kparams);
-      if (kerr != hipSuccess) {
-        // Kernels using opaque `extra` arg-packing can't be replicated.
-        // Abort flattening and let the caller fall back to child graph.
-        VLOG(1) << "FlattenChildGraphNodes: kernel with extra args can't "
-                   "be flattened (error=" << kerr << "), aborting";
-        return absl::UnimplementedError(
+      // Kernels captured with the opaque `extra` arg-packing (used by
+      // hipBLAS/rocBLAS internally during stream capture) cannot be
+      // individually transplanted via hipGraphAddKernelNode because the
+      // `extra` pointer from hipGraphKernelNodeGetParams is an internal
+      // HIP handle, not a standard HIP_LAUNCH_PARAM array.
+      // For such child graphs, fall back to the child-graph approach.
+      if (kparams.kernelParams == nullptr && kparams.extra != nullptr) {
+        VLOG(1) << "FlattenChildGraphNodes: kernel uses opaque extra "
+                   "args, cannot flatten";
+        return absl::InternalError(
             "Cannot flatten kernel with opaque extra args");
       }
+
+      TF_RETURN_IF_ERROR(ToStatus(
+          wrap::hipGraphAddKernelNode(&new_node, graph_, hip_deps.data(),
+                                     hip_deps.size(), &kparams),
+          "Failed to add flattened kernel node"));
 
     } else if (type == hipGraphNodeTypeMemcpy) {
       hipMemcpy3DParms mparams = {};

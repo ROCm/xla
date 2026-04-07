@@ -356,8 +356,9 @@ TracedCommandBufferCmd::RecordTracedCommand(
           [&](absl::Span<const se::CommandBuffer::Command* const> deps)
               -> absl::StatusOr<const se::CommandBuffer::Command*> {
             auto r = gpu_cmd_buffer->FlattenChildGraphNodes(*nested_cmd, deps);
-            if (r.status().code() == absl::StatusCode::kUnimplemented) {
-              VLOG(1) << "Flattening not possible, falling back to child cmd";
+            if (!r.ok()) {
+              VLOG(1) << "Flattening failed (" << r.status()
+                      << "), falling back to child cmd";
               return command_buffer->CreateChildCommand(*nested_cmd, deps);
             }
             return r;
@@ -365,7 +366,7 @@ TracedCommandBufferCmd::RecordTracedCommand(
           [&](const se::CommandBuffer::Command* command) {
             auto s = gpu_cmd_buffer->UpdateFlattenedChildNodes(command,
                                                                 *nested_cmd);
-            if (s.code() == absl::StatusCode::kUnimplemented) {
+            if (!s.ok()) {
               return command_buffer->UpdateChildCommand(command, *nested_cmd);
             }
             return s;
