@@ -56,12 +56,12 @@ for arg in "$@"; do
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
         TAG_FILTERS=""
         TEST_TARGETS=("${TEST_TARGETS_MGPU[@]}")
-        AMDGPU_TARGETS="${TF_ROCM_AMDGPU_TARGETS:-gfx90a,gfx942}"
+        AMDGPU_TARGETS="${TF_ROCM_AMDGPU_TARGETS:-gfx950}"
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu,-no_oss"
         TEST_TARGETS=("${TEST_TARGETS_SGPU[@]}")
-        AMDGPU_TARGETS="${TF_ROCM_AMDGPU_TARGETS:-gfx950}"
+        AMDGPU_TARGETS="${TF_ROCM_AMDGPU_TARGETS:-gfx90a,gfx942}"
     fi
 done
 
