@@ -58,7 +58,6 @@ cc_library(
         "rocm-only",
     ],
     deps = [
-        ":rocm_driver_wrapper",
         ":rocm_status",
         "//xla/stream_executor/gpu:context",
         "//xla/stream_executor/gpu:scoped_activate_context",
@@ -66,22 +65,6 @@ cc_library(
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
         "@local_config_rocm//rocm:rocm_headers",
-    ],
-)
-
-cc_library(
-    name = "rocm_driver_wrapper",
-    hdrs = ["rocm_driver_wrapper.h"],
-    defines = {"__HIP_DISABLE_CPP_FUNCTIONS__": "1"},
-    tags = [
-        "gpu",
-        "rocm-only",
-    ],
-    deps = [
-        "//xla/tsl/platform:env",
-        "@local_config_rocm//rocm:hip",  # buildcleaner: keep
-        "@local_config_rocm//rocm:rocm_headers",
-        "@tsl//tsl/platform:dso_loader",
     ],
 )
 
@@ -94,7 +77,6 @@ cc_library(
         "rocm-only",
     ],
     deps = [
-        ":rocm_driver_wrapper",
         ":rocm_status",
         "//xla/stream_executor:activate_context",
         "//xla/stream_executor:event",
@@ -107,6 +89,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
+        "@local_config_rocm//rocm:hip",
         "@local_config_rocm//rocm:rocm_headers",
     ],
 )
@@ -141,7 +124,6 @@ cc_library(
     deps = [
         ":rocm_command_buffer",
         ":rocm_context",
-        ":rocm_driver_wrapper",
         ":rocm_event",
         ":rocm_kernel",
         ":rocm_platform_id",
@@ -197,6 +179,7 @@ cc_library(
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
+        "@local_config_rocm//rocm:hip",
         "@local_config_rocm//rocm:rocm_headers",
         "@tsl//tsl/platform:fingerprint",
         "@tsl//tsl/platform:numbers",
@@ -243,7 +226,6 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        ":rocm_driver_wrapper",
         ":rocm_status",
         "//xla/stream_executor:activate_context",
         "//xla/stream_executor:kernel",
@@ -259,6 +241,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@local_config_rocm//rocm:hip",
         "@local_config_rocm//rocm:rocm_headers",
     ],
 )
@@ -297,7 +280,6 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        ":rocm_driver_wrapper",
         ":rocm_executor",
         ":rocm_platform_id",
         ":rocm_status",
@@ -314,6 +296,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
+        "@local_config_rocm//rocm:hip",
         "@local_config_rocm//rocm:rocm_headers",
     ],
     alwayslink = True,  # Registers itself with the PlatformManager.
@@ -730,7 +713,6 @@ cc_library(
         "rocm-only",
     ],
     deps = [
-        ":rocm_driver_wrapper",
         ":rocm_event",
         ":rocm_kernel",
         ":rocm_status",
@@ -754,6 +736,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
+        "@local_config_rocm//rocm:hip",
         "@local_config_rocm//rocm:rocm_headers",
     ],
 )
@@ -793,7 +776,6 @@ cc_library(
         "rocm-only",
     ],
     deps = [
-        ":rocm_driver_wrapper",
         ":rocm_event",
         ":rocm_status",
         "//xla/stream_executor:activate_context",
@@ -806,6 +788,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/time",
+        "@local_config_rocm//rocm:hip",
         "@local_config_rocm//rocm:rocm_headers",
     ],
 )
@@ -881,7 +864,6 @@ cc_library(
         "rocm-only",
     ],
     deps = [
-        ":rocm_driver_wrapper",
         ":rocm_kernel",
         ":rocm_status",
         "//xla/stream_executor:bit_pattern",
@@ -903,6 +885,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
+        "@local_config_rocm//rocm:hip",
         "@local_config_rocm//rocm:rocm_headers",
         "@tsl//tsl/platform:casts",
     ],
