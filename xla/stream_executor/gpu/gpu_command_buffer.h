@@ -117,6 +117,13 @@ class GpuCommandBuffer : public CommandBuffer {
     std::unique_ptr<CommandBuffer> command_buffer;
   };
 
+  // A command representing a set of nodes that were extracted ("flattened")
+  // from a traced child graph into the parent graph.  Stores all flattened
+  // node handles so they can be updated individually.
+  struct GpuFlattenedCommand : public CommandBuffer::Command {
+    std::vector<GraphNodeHandle> node_handles;
+  };
+
   GpuCommandBuffer(Mode mode, StreamExecutor* executor);
 
   // Bring CreateLaunch and UpdateLaunch template functions into scope.
@@ -207,6 +214,25 @@ class GpuCommandBuffer : public CommandBuffer {
 
   absl::Span<const std::unique_ptr<Command>> commands() const;
 
+  // Extracts nodes from a nested (traced) command buffer and adds them
+  // directly to this parent graph as individual kernel/memcpy/memset nodes,
+  // avoiding child graph re-tracing.  Returns a single GpuFlattenedCommand
+  // that owns all the flattened node handles.
+  virtual absl::StatusOr<const Command*> FlattenChildGraphNodes(
+      const CommandBuffer& nested,
+      absl::Span<const Command* const> dependencies) {
+    return absl::UnimplementedError(
+        "FlattenChildGraphNodes not supported on this platform");
+  }
+
+  // Updates all kernel nodes inside a previously flattened command by scanning
+  // their arguments and replacing old device pointers with new ones.
+  virtual absl::Status UpdateFlattenedChildNodes(
+      const Command* command, const CommandBuffer& nested) {
+    return absl::UnimplementedError(
+        "UpdateFlattenedChildNodes not supported on this platform");
+  }
+
  protected:
   // We track the total number of allocated and alive executable graphs in the
   // process to track the command buffers resource usage. Executable graph
@@ -280,6 +306,15 @@ class GpuCommandBuffer : public CommandBuffer {
   // Returns OK status if the command buffer can be updated.
   virtual absl::Status CheckCanBeUpdated() = 0;
 
+  // Appends a new command to the command buffer.
+  template <typename T>
+  const Command* AppendCommand(T command) {
+    commands_.push_back(std::make_unique<T>(std::move(command)));
+    VLOG(5) << "AppendCommand: "
+            << reinterpret_cast<const void*>(commands_.back().get());
+    return commands_.back().get();
+  }
+
  private:
   absl::StatusOr<const Command*> CreateCase(
       DeviceAddress<uint8_t> index, bool index_is_bool,
@@ -289,15 +324,6 @@ class GpuCommandBuffer : public CommandBuffer {
   absl::Status UpdateCase(const Command* command, DeviceAddress<uint8_t> index,
                           bool index_is_bool,
                           std::vector<UpdateCommands> update_branches);
-
-  // Appends a new command to the command buffer.
-  template <typename T>
-  const Command* AppendCommand(T command) {
-    commands_.push_back(std::make_unique<T>(std::move(command)));
-    VLOG(5) << "AppendCommand: "
-            << reinterpret_cast<const void*>(commands_.back().get());
-    return commands_.back().get();
-  }
 
   // Converts a list of command dependencies to a list of graph node handles.
   std::vector<GraphNodeHandle> ToGraphNodeDependencies(

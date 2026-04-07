@@ -245,6 +245,7 @@ cc_library(
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor:tensor_map",
         "//xla/stream_executor:trace_command_buffer_factory",
+        "//xla/stream_executor/gpu:gpu_command_buffer",
         "//xla/stream_executor/gpu:multi_gpu_barrier_kernel",
         "//xla/stream_executor/gpu:tma_metadata",
         "//xla/tsl/platform:env",

@@ -99,6 +99,7 @@ limitations under the License.
 #include "xla/status_macros.h"
 #include "xla/stream_executor/command_buffer.h"
 #include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/gpu/gpu_command_buffer.h"
 #include "xla/stream_executor/device_address_handle.h"
 #include "xla/stream_executor/dnn.h"
 #include "xla/stream_executor/gpu/multi_gpu_barrier_kernel.h"
@@ -335,6 +336,27 @@ TracedCommandBufferCmd::RecordTracedCommand(
       traced_cmd->GetOrTraceCommandBuffer(
           execute_params.buffer_allocations, execute_params.stream->parent(),
           execute_params.command_buffer_trace_stream, trace, priority()));
+
+  const auto& debug_options = xla::GetDebugOptionsFromFlags();
+  bool flatten = debug_options.xla_gpu_graph_enable_node_flattening();
+
+  if (flatten) {
+    auto* gpu_cmd_buffer =
+        dynamic_cast<se::gpu::GpuCommandBuffer*>(command_buffer);
+    if (gpu_cmd_buffer) {
+      VLOG(3) << "Record flattened traced command into command buffer: "
+              << command_buffer;
+      return Handle(
+          std::move(record_action),
+          [&](absl::Span<const se::CommandBuffer::Command* const> deps) {
+            return gpu_cmd_buffer->FlattenChildGraphNodes(*nested_cmd, deps);
+          },
+          [&](const se::CommandBuffer::Command* command) {
+            return gpu_cmd_buffer->UpdateFlattenedChildNodes(command,
+                                                             *nested_cmd);
+          });
+    }
+  }
 
   VLOG(5) << "Record traced command into command buffer: " << command_buffer;
   return Handle(

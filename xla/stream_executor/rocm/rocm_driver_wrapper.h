@@ -113,6 +113,12 @@ namespace wrap {
   __macro(hipGraphDestroy)                          \
   __macro(hipGraphGetNodes)                         \
   __macro(hipGraphGetRootNodes)                     \
+  __macro(hipGraphGetEdges)                         \
+  __macro(hipGraphNodeGetDependencies)              \
+  __macro(hipGraphKernelNodeGetParams)              \
+  __macro(hipGraphMemcpyNodeGetParams)              \
+  __macro(hipGraphMemsetNodeGetParams)              \
+  __macro(hipGraphAddMemcpyNode)                    \
   __macro(hipGraphExecChildGraphNodeSetParams)      \
   __macro(hipGraphExecDestroy)                      \
   __macro(hipGraphExecKernelNodeSetParams)          \

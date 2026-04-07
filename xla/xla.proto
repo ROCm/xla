@@ -550,6 +550,12 @@ message DebugOptions {
   // buffer to be recorded once and replayed without updates.
   optional bool xla_gpu_enable_command_buffer_va_remapping = 464;
 
+  // When enabled, traced sub-graphs (child graph nodes) are flattened into
+  // the parent HIP graph as individual kernel/memcpy/memset nodes.  This
+  // allows per-node address updates via hipGraphExecKernelNodeSetParams
+  // instead of full child graph re-tracing on buffer address changes.
+  optional bool xla_gpu_graph_enable_node_flattening = 502;
+
   // Enable radix sort using CUB.
   optional bool xla_gpu_enable_cub_radix_sort = 259;
 
