@@ -337,24 +337,40 @@ TracedCommandBufferCmd::RecordTracedCommand(
           execute_params.buffer_allocations, execute_params.stream->parent(),
           execute_params.command_buffer_trace_stream, trace, priority()));
 
-  const auto& debug_options = xla::GetDebugOptionsFromFlags();
-  bool flatten = debug_options.xla_gpu_graph_enable_node_flattening();
+  static const bool flatten = [] {
+    const char* env = std::getenv("XLA_GPU_GRAPH_ENABLE_NODE_FLATTENING");
+    bool val = env != nullptr && std::string(env) == "1";
+    if (val) {
+      LOG(WARNING) << "Graph node flattening ENABLED via "
+                      "XLA_GPU_GRAPH_ENABLE_NODE_FLATTENING=1";
+    }
+    return val;
+  }();
 
   if (flatten) {
     auto* gpu_cmd_buffer =
         dynamic_cast<se::gpu::GpuCommandBuffer*>(command_buffer);
     if (gpu_cmd_buffer) {
-      VLOG(3) << "Record flattened traced command into command buffer: "
-              << command_buffer;
-      return Handle(
-          std::move(record_action),
-          [&](absl::Span<const se::CommandBuffer::Command* const> deps) {
-            return gpu_cmd_buffer->FlattenChildGraphNodes(*nested_cmd, deps);
+      auto result = Handle(
+          record_action,
+          [&](absl::Span<const se::CommandBuffer::Command* const> deps)
+              -> absl::StatusOr<const se::CommandBuffer::Command*> {
+            auto r = gpu_cmd_buffer->FlattenChildGraphNodes(*nested_cmd, deps);
+            if (r.status().code() == absl::StatusCode::kUnimplemented) {
+              VLOG(1) << "Flattening not possible, falling back to child cmd";
+              return command_buffer->CreateChildCommand(*nested_cmd, deps);
+            }
+            return r;
           },
           [&](const se::CommandBuffer::Command* command) {
-            return gpu_cmd_buffer->UpdateFlattenedChildNodes(command,
-                                                             *nested_cmd);
+            auto s = gpu_cmd_buffer->UpdateFlattenedChildNodes(command,
+                                                                *nested_cmd);
+            if (s.code() == absl::StatusCode::kUnimplemented) {
+              return command_buffer->UpdateChildCommand(command, *nested_cmd);
+            }
+            return s;
           });
+      if (result.ok()) return result;
     }
   }
 

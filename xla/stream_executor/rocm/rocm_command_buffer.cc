@@ -374,13 +374,39 @@ RocmCommandBuffer::FlattenChildGraphNodes(
 
     if (type == hipGraphNodeTypeKernel) {
       hipKernelNodeParams kparams;
+      memset(&kparams, 0, sizeof(kparams));
       TF_RETURN_IF_ERROR(
           ToStatus(wrap::hipGraphKernelNodeGetParams(child_node, &kparams),
                    "Failed to get kernel node params"));
-      TF_RETURN_IF_ERROR(ToStatus(
-          wrap::hipGraphAddKernelNode(&new_node, graph_, hip_deps.data(),
-                                     hip_deps.size(), &kparams),
-          "Failed to add flattened kernel node"));
+
+      if (kparams.sharedMemBytes != 0 && kparams.func != nullptr) {
+        TF_RETURN_IF_ERROR(ToStatus(
+            wrap::hipFuncSetAttribute(
+                kparams.func,
+                hipFuncAttributeMaxDynamicSharedMemorySize,
+                kparams.sharedMemBytes),
+            "Failed to set shared memory size for flattened kernel"));
+      }
+
+      VLOG(2) << "FlattenChildGraphNodes: kernel func=" << kparams.func
+              << " grid=(" << kparams.gridDim.x << ","
+              << kparams.gridDim.y << "," << kparams.gridDim.z
+              << ") block=(" << kparams.blockDim.x << ","
+              << kparams.blockDim.y << "," << kparams.blockDim.z
+              << ") shmem=" << kparams.sharedMemBytes
+              << " kernelParams=" << kparams.kernelParams
+              << " extra=" << kparams.extra;
+
+      hipError_t kerr = wrap::hipGraphAddKernelNode(
+          &new_node, graph_, hip_deps.data(), hip_deps.size(), &kparams);
+      if (kerr != hipSuccess) {
+        // Kernels using opaque `extra` arg-packing can't be replicated.
+        // Abort flattening and let the caller fall back to child graph.
+        VLOG(1) << "FlattenChildGraphNodes: kernel with extra args can't "
+                   "be flattened (error=" << kerr << "), aborting";
+        return absl::UnimplementedError(
+            "Cannot flatten kernel with opaque extra args");
+      }
 
     } else if (type == hipGraphNodeTypeMemcpy) {
       hipMemcpy3DParms mparams = {};
