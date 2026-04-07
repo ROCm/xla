@@ -3763,7 +3763,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -3818,7 +3818,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -3826,16 +3826,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},
                     ; CHECK-SAME: "lhs_ragged_dimensions":["0"],
                     ; CHECK-SAME: "rhs_group_dimensions":["0"]}}})");
-
-  // Enable autotuning for RunAndCompare
-  DebugOptions debug_options_with_autotune = GetDebugOptionsForTest();
-  debug_options_with_autotune.set_xla_gpu_autotune_level(
-      4);  // Enable autotuning
-  HloModuleConfig config;
-  config.set_debug_options(debug_options_with_autotune);
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_text, config));
-  EXPECT_TRUE(RunAndCompare(std::move(module), ErrorSpec{1e-4, 1e-5}));
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
 TEST_F(GroupedGemmRewriteTest,
@@ -3864,7 +3855,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -3902,7 +3893,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["2"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["2"],
@@ -3912,8 +3903,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_group_dimensions":["1"]}}})");
   // Enable autotuning for RunAndCompare
   DebugOptions debug_options_with_autotune = GetDebugOptionsForTest();
-  debug_options_with_autotune.set_xla_gpu_autotune_level(
-      4);  // Enable autotuning
+  debug_options_with_autotune.set_xla_gpu_autotune_level(4);
   HloModuleConfig config;
   config.set_debug_options(debug_options_with_autotune);
   TF_ASSERT_OK_AND_ASSIGN(auto module,
@@ -3947,7 +3937,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
@@ -3964,10 +3954,10 @@ TEST_F(GroupedGemmRewriteTest,
 HloModule GroupedGemm
 
 ENTRY AddRaggedDotsFunc {
-    p0 = bf16[64,16]{1,0} parameter(0)
+    p0 = bf16[6,16]{1,0} parameter(0)
     p1 = bf16[16,8]{1,0} parameter(1)
     p2 = s64[4] constant({4, 5, 3, 4})
-    ROOT ragged-dot = bf16[4,64,8]{2,1,0} ragged-dot(p0, p1, p2),
+    ROOT ragged-dot = bf16[4,6,8]{2,1,0} ragged-dot(p0, p1, p2),
                       lhs_contracting_dims={1}, rhs_contracting_dims={0},
                       lhs_ragged_dims={1}
 }
@@ -3984,7 +3974,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
@@ -3994,8 +3984,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_group_dimensions":[]}}})");
   // Enable autotuning for RunAndCompare
   DebugOptions debug_options_with_autotune = GetDebugOptionsForTest();
-  debug_options_with_autotune.set_xla_gpu_autotune_level(
-      4);  // Enable autotuning
+  debug_options_with_autotune.set_xla_gpu_autotune_level(4);
   HloModuleConfig config;
   config.set_debug_options(debug_options_with_autotune);
   TF_ASSERT_OK_AND_ASSIGN(auto module,
@@ -4030,7 +4019,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
@@ -4041,12 +4030,8 @@ ENTRY AddRaggedDotsFunc {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
-TEST_F(
-    GroupedGemmRewriteTest,
-    CustomCallTargetGroupedGemmRaggedDimInContractingDimLargeGroupCount600) {
-  // Disable autotuning for this large test (600 groups)
-  DebugOptions debug_options = GetDebugOptionsForTest();
-  debug_options.set_xla_gpu_autotune_level(0);
+TEST_F(GroupedGemmRewriteTest,
+       CustomCallTargetGroupedGemmRaggedDimInContractingDimLargeGroupCount600) {
   // Test with 600 groups (> 256) for RaggedDimInContractingDim
   // Sum of group sizes: 600 * 4 = 2400 (matches p1 first dim for contracting)
   const char* hlo_text = R"(
@@ -4071,10 +4056,10 @@ TEST_F(GroupedGemmRewriteTest,
 HloModule GroupedGemm
 
 ENTRY AddRaggedDotsFunc {
-    p0 = bf16[3,64,9]{2,1,0} parameter(0)
+    p0 = bf16[3,16,9]{2,1,0} parameter(0)
     p1 = bf16[3,9,8]{2,1,0} parameter(1)
     p2 = s64[3,2] constant({{4, 5}, {4, 5}, {4, 5}})
-    ROOT ragged-dot = bf16[2,3,64,8]{3,2,1,0} ragged-dot(p0, p1, p2),
+    ROOT ragged-dot = bf16[2,3,16,8]{3,2,1,0} ragged-dot(p0, p1, p2),
                       lhs_contracting_dims={2}, rhs_contracting_dims={1},
                       lhs_ragged_dims={2}, lhs_batch_dims={0}, rhs_batch_dims={0}
 }
@@ -4091,7 +4076,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -4099,15 +4084,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},
                     ; CHECK-SAME: "lhs_ragged_dimensions":["2"],
                     ; CHECK-SAME: "rhs_group_dimensions":[]}}})");
-  // Enable autotuning for RunAndCompare
-  DebugOptions debug_options_with_autotune = GetDebugOptionsForTest();
-  debug_options_with_autotune.set_xla_gpu_autotune_level(
-      4);  // Enable autotuning
-  HloModuleConfig config;
-  config.set_debug_options(debug_options_with_autotune);
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_text, config));
-  EXPECT_TRUE(RunAndCompare(std::move(module), ErrorSpec{1e-4, 1e-5}));
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
 TEST_F(GroupedGemmRewriteTest, CustomCallTargetGroupedGemmRaggedDimInBatchDim) {
@@ -4135,7 +4112,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -4153,10 +4130,10 @@ TEST_F(GroupedGemmRewriteTest,
 HloModule GroupedGemm
 
 ENTRY AddRaggedDotsFunc {
-    p0 = bf16[16,64,9]{2,1,0} parameter(0)
+    p0 = bf16[16,6,9]{2,1,0} parameter(0)
     p1 = bf16[16,9,8]{2,1,0} parameter(1)
     p2 = s64[4] constant({4, 2, 6, 4})
-    ROOT ragged-dot = bf16[16,64,8]{2,1,0} ragged-dot(p0, p1, p2),
+    ROOT ragged-dot = bf16[16,6,8]{2,1,0} ragged-dot(p0, p1, p2),
                       lhs_contracting_dims={2}, rhs_contracting_dims={1},
                       lhs_ragged_dims={0}, lhs_batch_dims={0}, rhs_batch_dims={0}
 }
@@ -4173,7 +4150,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -4183,8 +4160,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_group_dimensions":[]}}})");
   // Enable autotuning for RunAndCompare
   DebugOptions debug_options_with_autotune = GetDebugOptionsForTest();
-  debug_options_with_autotune.set_xla_gpu_autotune_level(
-      4);  // Enable autotuning
+  debug_options_with_autotune.set_xla_gpu_autotune_level(4);
   HloModuleConfig config;
   config.set_debug_options(debug_options_with_autotune);
   TF_ASSERT_OK_AND_ASSIGN(auto module,
@@ -4219,7 +4195,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":["0"],
                     ; CHECK-SAME: "rhs_batch_dimensions":["0"]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["2"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -4276,7 +4252,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],
@@ -4313,7 +4289,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["1"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
@@ -4350,7 +4326,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["0"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["0"],
@@ -4387,7 +4363,7 @@ ENTRY AddRaggedDotsFunc {
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],"lhs_batch_dimensions":[],
                     ; CHECK-SAME: "rhs_batch_dimensions":[]},"alpha_imag":0,"epilogue":"DEFAULT",
                     ; CHECK-SAME: "grad_x":false,"grad_y":false,
-                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}"},
+                    ; CHECK-SAME: "damax_output":false,"autotune_workspace_size":"{{[0-9]+}}",
                     ; CHECK-SAME: "ragged_dot_dimension_numbers":{"dot_dimension_numbers":{
                     ; CHECK-SAME: "lhs_contracting_dimensions":["0"],
                     ; CHECK-SAME: "rhs_contracting_dimensions":["1"],

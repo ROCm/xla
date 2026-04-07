@@ -408,8 +408,9 @@ tsl::Future<Autotuner::Config> Autotuner::TuneBestConfig(
           return std::move(executable_candidates[0].config);
         }
 
-        TF_ASSIGN_OR_RETURN(std::vector<ConfigResult> results,
-                            ProfileAll(std::move(executable_candidates), instr));
+        TF_ASSIGN_OR_RETURN(
+            std::vector<ConfigResult> results,
+            ProfileAll(std::move(executable_candidates), instr));
         LogConfigResults(*instr, results);
         absl::StatusOr<ConfigResult> best_result = PickBestConfig(results);
         if (!best_result.ok()) {

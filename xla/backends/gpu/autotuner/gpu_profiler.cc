@@ -121,7 +121,7 @@ static absl::Status InitializeInputBuffer(GpuInputBuffers& gpu_buffers,
 // This function examines the HLO instruction and initializes
 // specific input buffers based on the operation's requirements.
 static absl::Status InitializeBuffersIfRequiredByOpcode(
-    const HloInstruction* instr, GpuInputBuffers& gpu_buffers, 
+    const HloInstruction* instr, GpuInputBuffers& gpu_buffers,
     se::Stream* stream) {
   if (instr == nullptr) {
     return absl::OkStatus();
