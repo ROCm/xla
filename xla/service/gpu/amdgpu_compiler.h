@@ -62,6 +62,7 @@ class AMDGPUCompiler : public GpuCompiler {
 
   absl::StatusOr<std::vector<std::unique_ptr<CodegenBackend>>>
   GetCodegenBackends(se::StreamExecutor* stream_exec,
+                     se::DeviceAddressAllocator* device_allocator,
                      const Compiler::GpuTargetConfig* target_config,
                      const DebugOptions& debug_options,
                      mlir::MLIRContext* mlir_context) override;

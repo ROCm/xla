@@ -42,6 +42,7 @@ limitations under the License.
 #include "xla/service/hlo_cost_analysis.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/service/llvm_compiler.h"
+#include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/device_description.pb.h"
 #include "xla/stream_executor/dnn.h"
@@ -190,6 +191,7 @@ class GpuCompiler : public LLVMCompiler {
 
   virtual absl::StatusOr<std::vector<std::unique_ptr<CodegenBackend>>>
   GetCodegenBackends(se::StreamExecutor* stream_exec,
+                     se::DeviceAddressAllocator* device_allocator,
                      const Compiler::GpuTargetConfig* target_config,
                      const DebugOptions& debug_options,
                      mlir::MLIRContext* mlir_context) {
