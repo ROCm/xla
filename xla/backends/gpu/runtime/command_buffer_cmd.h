@@ -94,10 +94,16 @@ class TracedCommandBuffer : public CommandState {
       se::StreamPriority priority = se::StreamPriority::Default);
 
  private:
+  // Unique allocation indices for cache-level comparison.
   std::vector<BufferAllocation::Index> allocs_indices_;
+
+  // Full slice descriptors for resolving slice-level addresses during patching.
+  std::vector<BufferAllocation::Slice> buffer_slices_;
 
   struct Entry {
     std::vector<se::DeviceAddressBase> recorded_allocs;
+    // Slice-level addresses for kernel node patching.
+    std::vector<se::DeviceAddressBase> recorded_slice_addrs;
     std::unique_ptr<se::CommandBuffer> command_buffer;
   };
   const Command* trace_cmd_;

@@ -130,12 +130,26 @@ class RocmCommandBuffer : public GpuCommandBuffer {
   absl::Status UpdateClonedChildNode(GraphNodeHandle node_handle,
                                      const CommandBuffer& nested) override;
 
+  void DumpGraphKernelNodes(absl::string_view label) override;
+
+  absl::Status UpdateKernelNodes(
+      absl::Span<const DeviceAddressBase> old_addresses,
+      absl::Span<const DeviceAddressBase> new_addresses) override;
+
   absl::StatusOr<const Command*> FlattenChildGraphNodes(
       const CommandBuffer& nested,
       absl::Span<const Command* const> dependencies) override;
 
   absl::Status UpdateFlattenedChildNodes(
       const Command* command, const CommandBuffer& nested) override;
+
+  absl::Status BuildPatchTable(
+      const Command* command,
+      absl::Span<const DeviceAddressBase> known_addresses) override;
+
+  absl::Status PatchFlattenedNodes(
+      const Command* command,
+      absl::Span<const DeviceAddressBase> new_addresses) override;
 
   absl::StatusOr<GraphNodeHandle> CreateKernelNode(
       absl::Span<const GraphNodeHandle> dependencies, StreamPriority priority,

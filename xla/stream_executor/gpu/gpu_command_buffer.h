@@ -120,8 +120,51 @@ class GpuCommandBuffer : public CommandBuffer {
   // A command representing a set of nodes that were extracted ("flattened")
   // from a traced child graph into the parent graph.  Stores all flattened
   // node handles so they can be updated individually.
+  enum class FlatNodeKind : uint8_t {
+    kKernel,
+    kKernelExtra,
+    kMemcpy,
+    kMemset,
+    kEmpty,
+  };
+
+  struct FlatNodeInfo {
+    FlatNodeKind kind;
+    void* func = nullptr;  // kernel function pointer (for kKernel/kKernelExtra)
+  };
+
+  // Records where a known device pointer appears inside a kernel node's
+  // packed argument buffer (the `extra` HIP_LAUNCH_PARAM blob).
+  struct ArgPatchEntry {
+    size_t node_index;      // index into node_handles/node_infos
+    size_t byte_offset;     // offset within the packed arg buffer
+    int buffer_use_index;   // index into the buffer_uses() vector
+  };
+
   struct GpuFlattenedCommand : public CommandBuffer::Command {
     std::vector<GraphNodeHandle> node_handles;
+    std::vector<FlatNodeInfo> node_infos;
+
+    // Deep-copied extra arg buffers for kernel nodes that use the
+    // HIP_LAUNCH_PARAM packed-buffer launch convention (e.g. rocBLAS).
+    // Kept alive for the lifetime of the parent graph.
+    std::vector<std::unique_ptr<uint8_t[]>> extra_arg_buffers;
+    std::vector<std::unique_ptr<size_t>> extra_arg_sizes;
+
+    // Patch table for skip-retrace updates: records where each known
+    // buffer address appears inside the packed args of flattened
+    // extra-style kernel nodes.
+    std::vector<ArgPatchEntry> patch_table;
+
+    // Per-node deep-copied arg buffer and its size (only for extra-style
+    // kernel nodes that have patch entries).
+    struct NodeArgBuffer {
+      std::unique_ptr<uint8_t[]> data;
+      size_t size = 0;
+    };
+    std::vector<NodeArgBuffer> node_arg_buffers;
+
+    bool has_patch_table = false;
   };
 
   GpuCommandBuffer(Mode mode, StreamExecutor* executor);
@@ -214,6 +257,19 @@ class GpuCommandBuffer : public CommandBuffer {
 
   absl::Span<const std::unique_ptr<Command>> commands() const;
 
+  // Dumps kernel node info from this command buffer's graph for debugging.
+  virtual void DumpGraphKernelNodes(absl::string_view label) {}
+
+  // Updates kernel nodes inside this command buffer's graph in place,
+  // replacing old_addresses with new_addresses at the corresponding positions.
+  // This avoids re-tracing the graph when only buffer addresses change.
+  virtual absl::Status UpdateKernelNodes(
+      absl::Span<const DeviceAddressBase> old_addresses,
+      absl::Span<const DeviceAddressBase> new_addresses) {
+    return absl::UnimplementedError(
+        "UpdateKernelNodes not supported on this platform");
+  }
+
   // Extracts nodes from a nested (traced) command buffer and adds them
   // directly to this parent graph as individual kernel/memcpy/memset nodes,
   // avoiding child graph re-tracing.  Returns a single GpuFlattenedCommand
@@ -231,6 +287,25 @@ class GpuCommandBuffer : public CommandBuffer {
       const Command* command, const CommandBuffer& nested) {
     return absl::UnimplementedError(
         "UpdateFlattenedChildNodes not supported on this platform");
+  }
+
+  // Builds a patch table on a flattened command: scans each extra-style
+  // kernel node's packed argument buffer to find byte offsets of known
+  // buffer addresses.  Must be called once after FlattenChildGraphNodes.
+  virtual absl::Status BuildPatchTable(
+      const Command* command,
+      absl::Span<const DeviceAddressBase> known_addresses) {
+    return absl::UnimplementedError(
+        "BuildPatchTable not supported on this platform");
+  }
+
+  // Directly patches buffer addresses in flattened nodes using the
+  // previously built patch table. Skips re-tracing entirely.
+  virtual absl::Status PatchFlattenedNodes(
+      const Command* command,
+      absl::Span<const DeviceAddressBase> new_addresses) {
+    return absl::UnimplementedError(
+        "PatchFlattenedNodes not supported on this platform");
   }
 
  protected:
