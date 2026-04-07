@@ -18,6 +18,7 @@ limitations under the License.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -148,32 +149,109 @@ uint64_t get_timestamp() {
 }
 }  // namespace
 
-OccupancyStats PerDeviceCollector::GetOccupancy(
-    const RocmDeviceOccupancyParams& params) const {
-  // TODO(rocm-profiler): hipOccupancyMaxActiveBlocksPerMultiprocessor only
-  // return hipSuccess for HIP_API_ID_hipLaunchKernel
-  OccupancyStats stats;
-  int number_of_active_blocks;
-  hipError_t err = hipOccupancyMaxActiveBlocksPerMultiprocessor(
-      &number_of_active_blocks, params.func_ptr, params.block_size,
-      params.dynamic_smem_size);
+// SGPR allocation granularity is 16 across all architectures.
+// (see HIP CLR: hipamd/src/hip_platform.cpp)
+constexpr uint32_t kSgprAllocGranularity = 16;
 
-  if (err != hipError_t::hipSuccess) {
-    return {};
+double PerDeviceCollector::ComputeTheoreticalOccupancy(
+    const KernelDetails& ki) {
+  int block_size = ki.workgroup_x * ki.workgroup_y * ki.workgroup_z;
+  OccupancyKey key{ki.arch_vgpr_count, ki.sgpr_count, ki.group_segment_size,
+                   static_cast<uint32_t>(block_size)};
+  auto it = theoretical_occupancy_cache_.find(key);
+  if (it != theoretical_occupancy_cache_.end()) {
+    return it->second;
+  }
+  if (block_size <= 0 || device_properties_.warpSize <= 0 ||
+      simd_per_cu_ == 0 || max_waves_per_simd_ == 0) {
+    return 0.0;
   }
 
-  stats.occupancy_pct = number_of_active_blocks * params.block_size * 100;
-  stats.occupancy_pct /= device_properties_.maxThreadsPerMultiProcessor;
+  int wave_size = device_properties_.warpSize;
+  uint32_t gfx_major = gfx_target_version_ / 10000;
 
-  err = hipOccupancyMaxPotentialBlockSize(
-      &stats.min_grid_size, &stats.suggested_block_size,
-      static_cast<const void*>(params.func_ptr), params.dynamic_smem_size, 0);
+  // Derive VGPRs per SIMD from device properties.
+  // (see HIP CLR: rocclr/device/rocm/rocdevice.cpp)
+  uint32_t vgprs_per_simd =
+      device_properties_.regsPerMultiprocessor / wave_size / simd_per_cu_;
 
-  if (err != hipError_t::hipSuccess) {
-    return {};
+  // VGPR allocation granularity per thread.
+  // gfx10+ adjusts for wave64 mode by halving the granularity.
+  // (see HIP CLR: hipamd/src/hip_platform.cpp)
+  uint32_t vgpr_alloc_granularity;
+  if (gfx_major <= 9) {
+    vgpr_alloc_granularity = 8;
+  } else if (gfx_major <= 10) {
+    vgpr_alloc_granularity = wave_size == 64 ? 4 : 8;
+  } else {
+    vgpr_alloc_granularity = wave_size == 64 ? 6 : 12;
   }
 
-  return stats;
+  // VGPR limit: how many waves fit per SIMD given VGPR usage.
+  uint32_t used_vgprs = ki.arch_vgpr_count;
+  uint32_t vgpr_waves = max_waves_per_simd_;
+  if (used_vgprs > 0) {
+    uint32_t alloc_vgprs =
+        ((used_vgprs + vgpr_alloc_granularity - 1) / vgpr_alloc_granularity) *
+        vgpr_alloc_granularity;
+    vgpr_waves = vgprs_per_simd / alloc_vgprs;
+  }
+  if (vgpr_waves == 0) {
+    return 0.0;
+  }
+
+  // SGPRs per SIMD: shared between waves on gfx8/gfx9, unlimited on gfx10+.
+  // (see HIP CLR: rocclr/device/rocm/rocdevice.cpp)
+  uint32_t sgprs_per_simd;
+  if (gfx_major < 8) {
+    sgprs_per_simd = 512;
+  } else if (gfx_major < 10) {
+    sgprs_per_simd = 800;
+  } else {
+    sgprs_per_simd = std::numeric_limits<uint32_t>::max();
+  }
+
+  // SGPR limit
+  uint32_t gpr_waves = vgpr_waves;
+  if (ki.sgpr_count > 0 &&
+      sgprs_per_simd != std::numeric_limits<uint32_t>::max()) {
+    uint32_t alloc_sgprs =
+        ((ki.sgpr_count + kSgprAllocGranularity - 1) / kSgprAllocGranularity) *
+        kSgprAllocGranularity;
+    uint32_t sgpr_waves = sgprs_per_simd / alloc_sgprs;
+    gpr_waves = std::min(gpr_waves, sgpr_waves);
+  }
+
+  // ALU occupancy: total threads per CU limited by registers
+  int alu_waves = simd_per_cu_ * std::min(max_waves_per_simd_, gpr_waves);
+  int alu_limited_threads = alu_waves * wave_size;
+
+  // LDS limit: how many workgroups fit given LDS usage
+  int lds_limited_wgs = std::numeric_limits<int>::max();
+  if (ki.group_segment_size > 0 &&
+      device_properties_.maxSharedMemoryPerMultiProcessor > 0) {
+    lds_limited_wgs =
+        static_cast<int>(device_properties_.maxSharedMemoryPerMultiProcessor /
+                         ki.group_segment_size);
+  }
+
+  // Block size aligned to wavefront
+  int aligned_block = ((block_size + wave_size - 1) / wave_size) * wave_size;
+  int max_blocks = alu_limited_threads / aligned_block;
+  max_blocks = std::min(max_blocks, lds_limited_wgs);
+  max_blocks =
+      std::min(max_blocks, device_properties_.maxBlocksPerMultiProcessor);
+  max_blocks = std::max(max_blocks, 0);
+
+  int max_threads = device_properties_.maxThreadsPerMultiProcessor;
+  if (max_threads <= 0) {
+    return 0.0;
+  }
+
+  double result =
+      std::min(100.0, 100.0 * max_blocks * block_size / max_threads);
+  theoretical_occupancy_cache_[key] = result;
+  return result;
 }
 
 void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
@@ -223,11 +301,15 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
 
   if (event.type == RocmTracerEventType::Kernel &&
       event.source == RocmTracerEventSource::Activity) {
-    xevent.AddStatValue(
-        *plane->GetOrCreateStatMetadata(
-            GetStatTypeStr(StatType::kKernelDetails)),
-        *plane->GetOrCreateStatMetadata(ToXStat(event.kernel_info,
-                                                /*occupancy_pct*/ 0)));
+    double theoretical_occupancy_pct =
+        ComputeTheoreticalOccupancy(event.kernel_info);
+    xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+                            GetStatTypeStr(StatType::kTheoreticalOccupancyPct)),
+                        theoretical_occupancy_pct);
+    xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+                            GetStatTypeStr(StatType::kKernelDetails)),
+                        *plane->GetOrCreateStatMetadata(ToXStat(
+                            event.kernel_info, theoretical_occupancy_pct)));
   } else if (event.type == RocmTracerEventType::MemcpyH2D ||
              event.type == RocmTracerEventType::MemcpyD2H ||
              event.type == RocmTracerEventType::MemcpyD2D ||
@@ -405,7 +487,13 @@ void PerDeviceCollector::AddEvent(RocmTracerEvent&& event) {
 }
 
 void PerDeviceCollector::GetDeviceCapabilities(int32_t device_ordinal,
-                                               XPlaneBuilder* device_plane) {
+                                               XPlaneBuilder* device_plane,
+                                               uint32_t simd_per_cu,
+                                               uint32_t max_waves_per_simd,
+                                               uint32_t gfx_target_version) {
+  simd_per_cu_ = simd_per_cu;
+  max_waves_per_simd_ = max_waves_per_simd;
+  gfx_target_version_ = gfx_target_version;
   device_plane->AddStatValue(*device_plane->GetOrCreateStatMetadata(
                                  GetStatTypeStr(StatType::kDevVendor)),
                              kDeviceVendorAMD);
@@ -576,7 +664,9 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
     device_plane.SetId(id);
     // Calculate device capabilities before flushing, so that device
     // properties are available to the occupancy calculator in export().
-    per_device_collector_[id].GetDeviceCapabilities(id, &device_plane);
+    per_device_collector_[id].GetDeviceCapabilities(
+        id, &device_plane, options_.simd_per_cu, options_.max_waves_per_simd,
+        options_.gfx_target_version);
     per_device_collector_[id].Export(start_walltime_ns_, start_gputime_ns_,
                                      end_gputime_ns, &device_plane,
                                      &host_plane);

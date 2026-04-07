@@ -96,6 +96,17 @@ RocmTraceCollectorOptions GpuTracer::GetRocmTraceCollectorOptions(
   options.max_callback_api_events = max_events;
   options.max_activity_api_events = max_events;
   options.max_annotation_strings = max_events;
+
+  // Get SIMD properties for theoretical occupancy calculation.
+  uint32_t simd_per_cu = 0, max_waves = 0, gfx_ver = 0;
+  if (rocm_tracer_->GetGpuSimdInfo(0, &simd_per_cu, &max_waves, &gfx_ver)) {
+    options.simd_per_cu = simd_per_cu;
+    options.max_waves_per_simd = max_waves;
+    options.gfx_target_version = gfx_ver;
+  } else {
+    LOG(WARNING) << "Failed to query GPU SIMD properties; "
+                    "theoretical occupancy will not be reported.";
+  }
   return options;
 }
 

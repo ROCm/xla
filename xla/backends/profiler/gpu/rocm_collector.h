@@ -58,64 +58,6 @@ inline std::string ToXStat(const KernelDetails& kernel_info,
                       " occ_pct:", occupancy_pct);
 }
 
-struct RocmDeviceOccupancyParams {
-  hipFuncAttributes attributes = {};
-  int block_size = 0;
-  size_t dynamic_smem_size = 0;
-  void* func_ptr;
-
-  friend bool operator==(const RocmDeviceOccupancyParams& a,
-                         const RocmDeviceOccupancyParams& b) noexcept {
-    // Compare only the fields that affect occupancy decisions.
-    return std::tuple{a.attributes.binaryVersion,
-                      a.attributes.cacheModeCA,
-                      a.attributes.constSizeBytes,
-                      a.attributes.localSizeBytes,
-                      a.attributes.maxDynamicSharedSizeBytes,
-                      a.attributes.maxThreadsPerBlock,
-                      a.attributes.numRegs,
-                      a.attributes.preferredShmemCarveout,
-                      a.attributes.ptxVersion,
-                      a.block_size,
-                      a.dynamic_smem_size,
-                      a.func_ptr} ==
-           std::tuple{b.attributes.binaryVersion,
-                      b.attributes.cacheModeCA,
-                      b.attributes.constSizeBytes,
-                      b.attributes.localSizeBytes,
-                      b.attributes.maxDynamicSharedSizeBytes,
-                      b.attributes.maxThreadsPerBlock,
-                      b.attributes.numRegs,
-                      b.attributes.preferredShmemCarveout,
-                      b.attributes.ptxVersion,
-                      b.block_size,
-                      b.dynamic_smem_size,
-                      b.func_ptr};
-  }
-
-  friend bool operator!=(const RocmDeviceOccupancyParams& a,
-                         const RocmDeviceOccupancyParams& b) noexcept {
-    return !(a == b);
-  }
-
-  template <typename H>
-  friend H AbslHashValue(H hash_state,
-                         const RocmDeviceOccupancyParams& params) {
-    return H::combine(
-        std::move(hash_state), params.attributes.maxThreadsPerBlock,
-        params.attributes.numRegs, params.attributes.sharedSizeBytes,
-        params.attributes.maxDynamicSharedSizeBytes, params.block_size,
-        params.dynamic_smem_size, params.func_ptr);
-  }
-};
-
-// FIXME: rocprofiler-sdk does not have this one yet
-struct OccupancyStats {
-  double occupancy_pct = 0.0;
-  int min_grid_size = 0;
-  int suggested_block_size = 0;
-};
-
 class RocmTraceCollector {
  public:
   explicit RocmTraceCollector(const RocmTraceCollectorOptions& options)
@@ -149,10 +91,12 @@ class PerDeviceCollector {
 
   void AddEvent(RocmTracerEvent&& event);
   void GetDeviceCapabilities(int32_t device_ordinal,
-                             tsl::profiler::XPlaneBuilder* device_plane);
+                             tsl::profiler::XPlaneBuilder* device_plane,
+                             uint32_t simd_per_cu, uint32_t max_waves_per_simd,
+                             uint32_t gfx_target_version);
 
  private:
-  OccupancyStats GetOccupancy(const RocmDeviceOccupancyParams& params) const;
+  double ComputeTheoreticalOccupancy(const KernelDetails& ki);
   void CreateXEvent(const RocmTracerEvent& event,
                     tsl::profiler::XPlaneBuilder* plane, uint64_t start_gpu_ns,
                     uint64_t end_gpu_ns, tsl::profiler::XLineBuilder* line);
@@ -162,9 +106,30 @@ class PerDeviceCollector {
  private:
   absl::Mutex events_mutex_;
   std::vector<RocmTracerEvent> events_ ABSL_GUARDED_BY(events_mutex_);
-  absl::flat_hash_map<RocmDeviceOccupancyParams, OccupancyStats>
-      occupancy_cache_;
   hipDeviceProp_t device_properties_;
+  struct OccupancyKey {
+    uint32_t arch_vgpr_count;
+    uint32_t sgpr_count;
+    uint32_t group_segment_size;
+    uint32_t block_size;
+
+    template <typename H>
+    friend H AbslHashValue(H h, const OccupancyKey& k) {
+      return H::combine(std::move(h), k.arch_vgpr_count, k.sgpr_count,
+                        k.group_segment_size, k.block_size);
+    }
+    friend bool operator==(const OccupancyKey& a, const OccupancyKey& b) {
+      return a.arch_vgpr_count == b.arch_vgpr_count &&
+             a.sgpr_count == b.sgpr_count &&
+             a.group_segment_size == b.group_segment_size &&
+             a.block_size == b.block_size;
+    }
+  };
+
+  absl::flat_hash_map<OccupancyKey, double> theoretical_occupancy_cache_;
+  uint32_t simd_per_cu_ = 0;
+  uint32_t max_waves_per_simd_ = 0;
+  uint32_t gfx_target_version_ = 0;
 };  // PerDeviceCollector
 
 class RocmTraceCollectorImpl : public RocmTraceCollector {
