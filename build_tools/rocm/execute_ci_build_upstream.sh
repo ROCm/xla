@@ -56,10 +56,12 @@ for arg in "$@"; do
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
         TAG_FILTERS=""
         TEST_TARGETS=("${TEST_TARGETS_MGPU[@]}")
+        AMDGPU_TARGETS="${TF_ROCM_AMDGPU_TARGETS:-gfx950}"
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu,-no_oss"
         TEST_TARGETS=("${TEST_TARGETS_SGPU[@]}")
+        AMDGPU_TARGETS="${TF_ROCM_AMDGPU_TARGETS:-gfx90a,gfx942}"
     fi
 done
 
@@ -70,7 +72,7 @@ done
     --execution_log_compact_file=execution_log.binpb.zst \
     --spawn_strategy=local \
     --repo_env=REMOTE_GPU_TESTING=1 \
-    --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
+    --repo_env=TF_ROCM_AMDGPU_TARGETS=${AMDGPU_TARGETS} \
     --remote_download_outputs=minimal \
     --grpc_keepalive_time=30s \
     --test_sharding_strategy=disabled \
