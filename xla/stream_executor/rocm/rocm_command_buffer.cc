@@ -289,69 +289,107 @@ absl::Status RocmCommandBuffer::UpdateKernelNodes(
     TF_RETURN_IF_ERROR(
         ToStatus(wrap::hipGraphNodeGetType(nodes[ni], &type),
                  "Failed to get node type"));
-    if (type != hipGraphNodeTypeKernel) continue;
 
-    hipKernelNodeParams kp;
-    memset(&kp, 0, sizeof(kp));
-    TF_RETURN_IF_ERROR(
-        ToStatus(wrap::hipGraphKernelNodeGetParams(nodes[ni], &kp),
-                 "Failed to get kernel node params"));
+    if (type == hipGraphNodeTypeKernel) {
+      hipKernelNodeParams kp;
+      memset(&kp, 0, sizeof(kp));
+      TF_RETURN_IF_ERROR(
+          ToStatus(wrap::hipGraphKernelNodeGetParams(nodes[ni], &kp),
+                   "Failed to get kernel node params"));
 
-    bool modified = false;
+      bool modified = false;
 
-    if (kp.extra != nullptr) {
-      void* buf_ptr = nullptr;
-      size_t buf_size = 0;
-      void** ep = static_cast<void**>(kp.extra);
-      while (*ep != HIP_LAUNCH_PARAM_END) {
-        if (*ep == HIP_LAUNCH_PARAM_BUFFER_POINTER) {
-          buf_ptr = *(ep + 1);
-          ep += 2;
-        } else if (*ep == HIP_LAUNCH_PARAM_BUFFER_SIZE) {
-          buf_size = *static_cast<size_t*>(*(ep + 1));
-          ep += 2;
-        } else {
-          ep++;
+      if (kp.extra != nullptr) {
+        void* buf_ptr = nullptr;
+        size_t buf_size = 0;
+        void** ep = static_cast<void**>(kp.extra);
+        while (*ep != HIP_LAUNCH_PARAM_END) {
+          if (*ep == HIP_LAUNCH_PARAM_BUFFER_POINTER) {
+            buf_ptr = *(ep + 1);
+            ep += 2;
+          } else if (*ep == HIP_LAUNCH_PARAM_BUFFER_SIZE) {
+            buf_size = *static_cast<size_t*>(*(ep + 1));
+            ep += 2;
+          } else {
+            ep++;
+          }
         }
-      }
 
-      if (buf_ptr && buf_size > 0) {
-        auto* buf = static_cast<uint8_t*>(buf_ptr);
-        for (size_t off = 0; off + sizeof(void*) <= buf_size;
-             off += sizeof(void*)) {
+        if (buf_ptr && buf_size > 0) {
+          auto* buf = static_cast<uint8_t*>(buf_ptr);
+          for (size_t off = 0; off + sizeof(void*) <= buf_size;
+               off += sizeof(void*)) {
+            uintptr_t val;
+            memcpy(&val, buf + off, sizeof(uintptr_t));
+            auto it = old_addr_map.find(val);
+            if (it != old_addr_map.end()) {
+              uintptr_t new_val = reinterpret_cast<uintptr_t>(
+                  new_addresses[it->second].opaque());
+              memcpy(buf + off, &new_val, sizeof(uintptr_t));
+              modified = true;
+            }
+          }
+
+          if (modified) {
+            TF_RETURN_IF_ERROR(ToStatus(
+                wrap::hipGraphKernelNodeSetParams(nodes[ni], &kp),
+                "Failed to set kernel node params after patching"));
+          }
+        }
+      } else if (kp.kernelParams != nullptr) {
+        for (int a = 0; a < 64 && kp.kernelParams[a] != nullptr; ++a) {
           uintptr_t val;
-          memcpy(&val, buf + off, sizeof(uintptr_t));
+          memcpy(&val, kp.kernelParams[a], sizeof(uintptr_t));
           auto it = old_addr_map.find(val);
           if (it != old_addr_map.end()) {
             uintptr_t new_val = reinterpret_cast<uintptr_t>(
                 new_addresses[it->second].opaque());
-            memcpy(buf + off, &new_val, sizeof(uintptr_t));
+            memcpy(kp.kernelParams[a], &new_val, sizeof(uintptr_t));
             modified = true;
           }
         }
-
         if (modified) {
           TF_RETURN_IF_ERROR(ToStatus(
               wrap::hipGraphKernelNodeSetParams(nodes[ni], &kp),
               "Failed to set kernel node params after patching"));
         }
       }
-    } else if (kp.kernelParams != nullptr) {
-      for (int a = 0; a < 64 && kp.kernelParams[a] != nullptr; ++a) {
-        uintptr_t val;
-        memcpy(&val, kp.kernelParams[a], sizeof(uintptr_t));
+    } else if (type == hipGraphNodeTypeMemcpy) {
+      hipMemcpy3DParms mp = {};
+      TF_RETURN_IF_ERROR(
+          ToStatus(wrap::hipGraphMemcpyNodeGetParams(nodes[ni], &mp),
+                   "Failed to get memcpy node params"));
+
+      bool modified = false;
+      auto patch_ptr = [&](void*& ptr) {
+        auto val = reinterpret_cast<uintptr_t>(ptr);
         auto it = old_addr_map.find(val);
         if (it != old_addr_map.end()) {
-          uintptr_t new_val = reinterpret_cast<uintptr_t>(
-              new_addresses[it->second].opaque());
-          memcpy(kp.kernelParams[a], &new_val, sizeof(uintptr_t));
+          ptr = new_addresses[it->second].opaque();
           modified = true;
         }
-      }
+      };
+      patch_ptr(mp.srcPtr.ptr);
+      patch_ptr(mp.dstPtr.ptr);
+
       if (modified) {
         TF_RETURN_IF_ERROR(ToStatus(
-            wrap::hipGraphKernelNodeSetParams(nodes[ni], &kp),
-            "Failed to set kernel node params after patching"));
+            wrap::hipGraphMemcpyNodeSetParams(nodes[ni], &mp),
+            "Failed to set memcpy node params after patching"));
+      }
+    } else if (type == hipGraphNodeTypeMemset) {
+      hipMemsetParams msp = {};
+      TF_RETURN_IF_ERROR(
+          ToStatus(wrap::hipGraphMemsetNodeGetParams(nodes[ni], &msp),
+                   "Failed to get memset node params"));
+
+      auto val = reinterpret_cast<uintptr_t>(msp.dst);
+      auto it = old_addr_map.find(val);
+      if (it != old_addr_map.end()) {
+        msp.dst = new_addresses[it->second].opaque();
+        TF_RETURN_IF_ERROR(ToStatus(
+            wrap::hipGraphMemsetNodeSetParams(nodes[ni], &msp),
+            "Failed to set memset node params after patching"));
       }
     }
   }
