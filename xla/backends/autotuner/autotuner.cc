@@ -26,7 +26,6 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "google/protobuf/any.pb.h"
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
@@ -41,12 +40,15 @@ limitations under the License.
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 #include "absl/types/span.h"
+#include "google/protobuf/any.pb.h"
 #include "google/protobuf/text_format.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/autotuner_cache_interface.h"
 #include "xla/backends/autotuner/codegen_backend.h"
 #include "xla/backends/autotuner/profiler.h"
+#include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_print_options.h"
 #include "xla/pjrt/distributed/key_value_store_interface.h"
 #include "xla/service/dump.h"
@@ -58,6 +60,7 @@ limitations under the License.
 #include "xla/tsl/concurrency/future.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/platform/threadpool.h"
 #include "xla/tsl/util/proto/proto_utils.h"
@@ -66,7 +69,6 @@ limitations under the License.
 #include "tsl/platform/fingerprint.h"
 #include "tsl/profiler/lib/scoped_annotation.h"
 #include "tsl/profiler/lib/traceme.h"
-#include "xla/tsl/platform/status_macros.h"
 
 namespace xla {
 
@@ -452,8 +454,9 @@ tsl::Future<Autotuner::Config> Autotuner::TuneBestConfig(
           return std::move(executable_candidates[0].config);
         }
 
-        TF_ASSIGN_OR_RETURN(std::vector<ConfigResult> results,
-                            ProfileAll(executable_candidates));
+        TF_ASSIGN_OR_RETURN(
+            std::vector<ConfigResult> results,
+            ProfileAll(std::move(executable_candidates), instr));
         LogConfigResults(*instr, results);
         absl::StatusOr<ConfigResult> best_result = PickBestConfig(results);
         if (!best_result.ok()) {
@@ -585,7 +588,7 @@ Autotuner::CompileAll(HloInstruction* instr, std::vector<Config>& configs) {
 }
 
 absl::StatusOr<std::vector<Autotuner::ConfigResult>> Autotuner::ProfileAll(
-    std::vector<ExecutableCandidate>& candidates) {
+    std::vector<ExecutableCandidate> candidates, const HloInstruction* instr) {
   std::vector<ConfigResult> results_vec;
   results_vec.reserve(candidates.size());
 
@@ -593,15 +596,14 @@ absl::StatusOr<std::vector<Autotuner::ConfigResult>> Autotuner::ProfileAll(
 
   ASSIGN_OR_RETURN(
       std::unique_ptr<InputBuffers> input_buffers,
-      profiler_->CreateInputBuffers(candidates[0].executable.get()));
+      profiler_->CreateInputBuffers(candidates[0].executable.get(), instr));
 
   std::optional<ScopedShapedBuffer> reference_output;
   if (autotune_config_.check_buffers) {
     VLOG(2) << "Checking buffers";
     reference_output = GetReferenceOutput(candidates, *input_buffers);
     if (!reference_output.has_value()) {
-      LOG(WARNING) << "No reference output found even though buffer checking "
-                      "was requested while autotuning";
+      LOG(WARNING) << "No reference output found even though buffer checking ";
     }
   }
 
