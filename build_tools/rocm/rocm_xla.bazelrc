@@ -18,7 +18,13 @@ build:rocm_rbe --grpc_keepalive_time=30s
 test:rocm_rbe --jobs=200
 test:rocm_rbe --remote_executor=grpcs://wardite.cluster.engflow.com
 test:rocm_rbe --remote_timeout=3600
-test:rocm_rbe --strategy=TestRunner=remote,local
+test:rocm_rbe --experimental_spawn_scheduler
+test:rocm_rbe --strategy=TestRunner=dynamic
+test:rocm_rbe --dynamic_mode=default
+test:rocm_rbe --dynamic_local_strategy=worker,standalone,local
+test:rocm_rbe --dynamic_remote_strategy=remote
+test:rocm_rbe --experimental_local_execution_delay=1000
+test:rocm_rbe --local_resources=cpu=HOST_CPUS*0.5
 
 # Dynamic execution config for ROCm RBE - builds locally, tests use hybrid mode
 build:rocm_rbe_dynamic --config=rocm_rbe
