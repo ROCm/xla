@@ -725,6 +725,147 @@ TEST_P(AllGatherTest, F32_3D_2GPUs_Dim2) {
   }
 }
 
+// Large BF16 test matching the Python test configuration
+// Tests 1024 elements (2KB) with 2 GPUs to verify Triton output correctness
+TEST_P(AllGatherTest, BF16_1024Elements_2GPUs) {
+  constexpr absl::string_view kModuleStr = R"(
+  HloModule test
+
+  ENTRY test_computation {
+    param_0 = bf16[1024] parameter(0)
+    ROOT all-gather = bf16[2048] all-gather(param_0),
+      replica_groups={{0,1}}, dimensions={0}
+  }
+  )";
+
+  constexpr int64_t kNumReplicas = 2;
+  if (!CheckDeviceCount(kNumReplicas)) {
+    return;
+  }
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto module, ParseAndReturnVerifiedModule(kModuleStr, kNumReplicas));
+
+  // Build test inputs and expected outputs
+  TF_ASSERT_OK_AND_ASSIGN(InputsOutputs test_io,
+                          (BuildTestInputsOutputs<PrimitiveType::BF16>(
+                              *module, kNumReplicas,
+                              /*all_gather_dimension=*/0)));
+
+  // Execute the all-gather operation
+  TF_ASSERT_OK_AND_ASSIGN(
+      ExecutionResult execution_result,
+      ExecuteReplicated(std::move(module),
+                        /*arguments=*/test_io.InputLiteralPtrs()));
+
+  // Verify outputs match expected
+  const std::vector<Literal>& results = execution_result.results;
+  ASSERT_EQ(results.size(), kNumReplicas);
+
+  for (int i = 0; i < kNumReplicas; ++i) {
+    ASSERT_TRUE(LiteralTestUtil::Near(test_io.expected_outputs[i], results[i],
+                                      ErrorSpec{1e-3}))
+        << "ExpectedOutput != Result at replica " << i
+        << "\nThis test verifies that AllGather output matches the expected "
+        << "concatenation of inputs. Failure indicates incorrect Triton "
+           "implementation.";
+  }
+}
+
+// Large BF16 test with 4 GPUs
+// Tests 1024 elements per replica (2KB) -> 4096 elements output (8KB)
+TEST_P(AllGatherTest, BF16_1024Elements_4GPUs) {
+  constexpr absl::string_view kModuleStr = R"(
+  HloModule test
+
+  ENTRY test_computation {
+    param_0 = bf16[1024] parameter(0)
+    ROOT all-gather = bf16[4096] all-gather(param_0),
+      replica_groups={{0,1,2,3}}, dimensions={0}
+  }
+  )";
+
+  constexpr int64_t kNumReplicas = 4;
+  if (!CheckDeviceCount(kNumReplicas)) {
+    return;
+  }
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto module, ParseAndReturnVerifiedModule(kModuleStr, kNumReplicas));
+
+  // Build test inputs and expected outputs
+  TF_ASSERT_OK_AND_ASSIGN(InputsOutputs test_io,
+                          (BuildTestInputsOutputs<PrimitiveType::BF16>(
+                              *module, kNumReplicas,
+                              /*all_gather_dimension=*/0)));
+
+  // Execute the all-gather operation
+  TF_ASSERT_OK_AND_ASSIGN(
+      ExecutionResult execution_result,
+      ExecuteReplicated(std::move(module),
+                        /*arguments=*/test_io.InputLiteralPtrs()));
+
+  // Verify outputs match expected
+  const std::vector<Literal>& results = execution_result.results;
+  ASSERT_EQ(results.size(), kNumReplicas);
+
+  for (int i = 0; i < kNumReplicas; ++i) {
+    ASSERT_TRUE(LiteralTestUtil::Near(test_io.expected_outputs[i], results[i],
+                                      ErrorSpec{1e-3}))
+        << "ExpectedOutput != Result at replica " << i
+        << "\nThis test verifies that AllGather output matches the expected "
+        << "concatenation of inputs. Failure indicates incorrect Triton "
+           "implementation.";
+  }
+}
+
+// Large BF16 test with 8 GPUs
+// Tests 1024 elements per replica (2KB) -> 8192 elements output (16KB)
+TEST_P(AllGatherTest, BF16_1024Elements_8GPUs) {
+  constexpr absl::string_view kModuleStr = R"(
+  HloModule test
+
+  ENTRY test_computation {
+    param_0 = bf16[1024] parameter(0)
+    ROOT all-gather = bf16[8192] all-gather(param_0),
+      replica_groups={{0,1,2,3,4,5,6,7}}, dimensions={0}
+  }
+  )";
+
+  constexpr int64_t kNumReplicas = 8;
+  if (!CheckDeviceCount(kNumReplicas)) {
+    return;
+  }
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto module, ParseAndReturnVerifiedModule(kModuleStr, kNumReplicas));
+
+  // Build test inputs and expected outputs
+  TF_ASSERT_OK_AND_ASSIGN(InputsOutputs test_io,
+                          (BuildTestInputsOutputs<PrimitiveType::BF16>(
+                              *module, kNumReplicas,
+                              /*all_gather_dimension=*/0)));
+
+  // Execute the all-gather operation
+  TF_ASSERT_OK_AND_ASSIGN(
+      ExecutionResult execution_result,
+      ExecuteReplicated(std::move(module),
+                        /*arguments=*/test_io.InputLiteralPtrs()));
+
+  // Verify outputs match expected
+  const std::vector<Literal>& results = execution_result.results;
+  ASSERT_EQ(results.size(), kNumReplicas);
+
+  for (int i = 0; i < kNumReplicas; ++i) {
+    ASSERT_TRUE(LiteralTestUtil::Near(test_io.expected_outputs[i], results[i],
+                                      ErrorSpec{1e-3}))
+        << "ExpectedOutput != Result at replica " << i
+        << "\nThis test verifies that AllGather output matches the expected "
+        << "concatenation of inputs. Failure indicates incorrect Triton "
+           "implementation.";
+  }
+}
+
 // FP8 vs FP16 all-gather comparison.
 TEST_F(AllGatherTestNoParams, AsyncAllGather_F8E4M3FN_2GPUs) {
   bool has_fp8_support = false;
