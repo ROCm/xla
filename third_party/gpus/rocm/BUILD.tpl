@@ -561,13 +561,6 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-#TODO(rocm) Be more specific
-filegroup(
-    name = "all_files",
-    srcs = glob(["%{rocm_root}/**"]),
-    visibility = ["//visibility:public"],
-)
-
 filegroup(
     name = "rocminfo",
     srcs = glob([
