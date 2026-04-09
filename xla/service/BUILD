@@ -1035,7 +1035,6 @@ xla_cc_test(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest",
         "@tsl//tsl/platform:protobuf",
-        "@tsl//tsl/platform:statusor",
     ],
 )
 
@@ -1062,6 +1061,7 @@ xla_cc_test(
         "//xla/tsl/util/proto:parse_text_proto",
         "//xla/tsl/util/proto:proto_matchers",
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/hash",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/types:span",
@@ -4614,6 +4614,9 @@ cc_library(
         "//xla:util",
         "//xla/hlo/ir:hlo",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_protobuf//:protobuf",
     ],
 )
 
@@ -6049,7 +6052,9 @@ xla_cc_binary(
         "//xla/service/gpu:amdgpu_compiler_impl",
         "//xla/stream_executor/rocm:all_runtime",
         "//xla/stream_executor/rocm:rocm_platform",
-    ]) + xla_internal(["tools:xsymbol_repository"]),
+    ]) + xla_internal(["tools:xsymbol_repository"]) + if_google([
+        "//third_party/py/jax/jaxlib/cuda:cuda_gpu_kernels",
+    ]),
 )
 
 # A simple test of xla_aot_compile which generates an output file from an mhlo file.

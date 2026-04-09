@@ -910,40 +910,14 @@ absl::StatusOr<TensorValue> EmitScaledDot(
   return tensor_result;
 }
 
-absl::Status CheckConcatenateOperands(
-    const TiledHloInstruction& tiled_concatenate,
-    int64_t concat_dim_tile_size) {
-  int64_t concatenate_dimension =
-      tiled_concatenate.hlo()->concatenate_dimension();
-  int64_t num_operands = tiled_concatenate.operands().size();
-  for (const auto [index, operand] :
-       llvm::enumerate(tiled_concatenate.operands())) {
-    int64_t operand_concat_dim_size =
-        operand->hlo()->shape().dimensions(concatenate_dimension);
-    // The last operand does not have to be a multiple of the tile size, since
-    // we can pad it.
-    if (index != num_operands - 1 &&
-        operand_concat_dim_size % concat_dim_tile_size != 0) {
-      // Sanity check: concatenation dimension should be divisible by the tile
-      // size for each operand. This is not a fundamental limitation, but this
-      // lowering will emit incorrect code if this does not hold---so we gate
-      // against it explicitly.
-      return absl::FailedPreconditionError(absl::StrCat(
-          "Expected the tile size of the concatenation dimension of operand ",
-          operand->ToString(), "to divide the dimension size exactly, but got",
-          operand_concat_dim_size, " % ", concat_dim_tile_size, " != 0"));
-    }
-  }
-  return absl::OkStatus();
-}
-
 absl::StatusOr<TensorValue> EmitConcatenate(
     mlir::ImplicitLocOpBuilder& b, const HloFusionInstruction* fusion,
     const TiledHloInstruction& tiled_concatenate, mlir::FunctionOpInterface fn,
     Value pid,
     absl::flat_hash_map<const TiledHloInstruction*, TensorValue>& values) {
-  const int64_t concatenate_dimension =
-      tiled_concatenate.hlo()->concatenate_dimension();
+  const HloConcatenateInstruction* hlo_concat =
+      ::xla::Cast<HloConcatenateInstruction>(tiled_concatenate.hlo());
+  const int64_t concatenate_dimension = hlo_concat->concatenate_dimension();
 
   TF_RET_CHECK(tiled_concatenate.operands().size() ==
                tiled_concatenate.regions().size())
@@ -957,7 +931,7 @@ absl::StatusOr<TensorValue> EmitConcatenate(
   int64_t concat_dim_tile_size = padded_tile_sizes[concatenate_dimension];
 
   TF_RETURN_IF_ERROR(
-      CheckConcatenateOperands(tiled_concatenate, concat_dim_tile_size));
+      CheckConcatenateOperands(*hlo_concat, concat_dim_tile_size));
   TF_ASSIGN_OR_RETURN(Type element_type,
                       PrimitiveTypeToMlirType(
                           b, tiled_concatenate.hlo()->shape().element_type()));

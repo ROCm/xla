@@ -29,8 +29,8 @@ cc_library(
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla/codegen/tiling:constraint_expression",
-        "//xla/hlo/analysis:indexing_analysis",
         "//xla/hlo/analysis:interval",
+        "//xla/hlo/analysis:symbolic_map",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/utils:hlo_traversal",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -53,10 +53,33 @@ xla_cc_test(
     deps = [
         ":tile",
         "//xla/hlo/analysis:indexing_test_utils",
+        "//xla/hlo/analysis:symbolic_map",
         "//xla/hlo/testlib:hlo_hardware_independent_test_base",
         "//xla/tests:xla_internal_test_main",
         "@com_google_googletest//:gtest",
         "@llvm-project//mlir:IR",
+    ],
+)
+
+cc_library(
+    name = "reshape_analysis",
+    srcs = ["reshape_analysis.cc"],
+    hdrs = ["reshape_analysis.h"],
+    deps = [
+        "//xla:shape_util",
+        "@com_google_absl//absl/log:check",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+xla_cc_test(
+    name = "reshape_analysis_test",
+    srcs = ["reshape_analysis_test.cc"],
+    deps = [
+        ":reshape_analysis",
+        "//xla:shape_util",
+        "//xla/tsl/platform:test_main",
+        "@com_google_googletest//:gtest",
     ],
 )
 
@@ -70,6 +93,7 @@ cc_library(
         "//xla:permutation_util",
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
+        "//xla/hlo/analysis:symbolic_map",
         "//xla/hlo/ir:hlo",
         "//xla/service:matmul_indexing_utils",
         "@com_google_absl//absl/algorithm:container",
@@ -89,6 +113,8 @@ xla_cc_test(
         ":test_utils",
         ":tile",
         ":tile_propagation",
+        "//xla/hlo/analysis:indexing_test_utils",
+        "//xla/hlo/analysis:symbolic_map",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/testlib:hlo_hardware_independent_test_base",
         "//xla/hlo/testlib:verified_hlo_module",
@@ -107,6 +133,7 @@ xla_cc_test(
     deps = [
         ":tile",
         "//xla/hlo/analysis:indexing_test_utils",
+        "//xla/hlo/analysis:symbolic_map",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/testlib:hlo_hardware_independent_test_base",
         "//xla/hlo/testlib:verified_hlo_module",
@@ -195,6 +222,7 @@ xla_cc_test(
         ":tile_propagation",
         ":tiled_hlo",
         "//xla:util",
+        "//xla/hlo/analysis:symbolic_map",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/parser:hlo_parser",
         "//xla/hlo/testlib:hlo_hardware_independent_test_base",
@@ -218,6 +246,7 @@ cc_library(
     deps = [
         ":tile",
         "//xla/hlo/analysis:indexing_test_utils",
+        "//xla/hlo/analysis:symbolic_map",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_for_library",

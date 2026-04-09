@@ -1882,6 +1882,8 @@ TEST(StreamExecutorGpuClientTest, ExecutePinnedHostOutputTest) {
   EXPECT_EQ(memory_stats.output_size_in_bytes, 0);
   EXPECT_EQ(memory_stats.host_output_size_in_bytes, 16);
   EXPECT_GE(memory_stats.peak_memory_in_bytes, 0);
+  EXPECT_GE(memory_stats.total_allocation_bytes, 0);
+  EXPECT_GE(memory_stats.indefinite_allocations, 0);
 }
 
 TEST(StreamExecutorGpuClientTest, ExecutePinnedHostOutputTupleTest) {

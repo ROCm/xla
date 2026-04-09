@@ -206,7 +206,7 @@ RaggedAllToAllThunk::RaggedAllToAllThunk(
 RaggedAllToAllThunk::RaggedAllToAllThunk(
     ThunkInfo thunk_info, const RaggedAllToAllConfig& config,
     std::vector<CollectiveThunk::Buffer> buffers)
-    : CollectiveThunk(Thunk::kRaggedAllToAll, thunk_info, /*is_p2p=*/false),
+    : CollectiveThunk(Thunk::kRaggedAllToAll, thunk_info),
       config_(config),
       buffers_(std::move(buffers)) {
   CHECK_EQ(config_.config.operand_element_type.size(), buffers_.size());
@@ -269,9 +269,9 @@ absl::StatusOr<RaggedAllToAllStreamState*> RaggedAllToAllThunk::InitializeOnce(
     }
   }
 
-  ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
-                   GetCollectiveGpuCliqueKey(*params.collective_params,
-                                             config_.config, /*is_p2p=*/false));
+  ASSIGN_OR_RETURN(
+      GpuCliqueKey clique_key,
+      GetCollectiveGpuCliqueKey(*params.collective_params, config_.config));
   const std::optional<RankId> rank =
       clique_key.rank(params.collective_params->global_device_id);
 
@@ -673,7 +673,7 @@ absl::Status RunOneShotRaggedAllToAllWithNccl(
     int64_t num_total_updates, int64_t num_input_rows, int64_t num_row_elements,
     absl::Span<DeviceBufferPair const> buffers) {
   int device_ordinal = stream.parent()->device_ordinal();
-  const int64_t num_ranks = clique_key.num_local_participants();
+  const int64_t num_ranks = clique_key.num_devices();
 
   XLA_VLOG_DEVICE(3, device_ordinal)
       << "Performing one-shot ragged-all-to-all with NCCL barrier rank: "

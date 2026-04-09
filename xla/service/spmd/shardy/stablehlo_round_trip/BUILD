@@ -110,11 +110,11 @@ cc_library(
         ":export_shardings",
         ":shard_map_export",
         ":unflatten_call_graph",
-        "//xla/service/spmd/shardy/round_trip_common:export_named_computations",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Support",
         "@llvm-project//mlir:Transforms",
+        "@shardy//shardy/dialect/sdy/transforms/export:passes",
     ],
 )
 
@@ -130,7 +130,6 @@ cc_library(
         "//xla/hlo/ir:tile_assignment",
         "//xla/hlo/translate/mhlo_to_hlo:attribute_exporter",
         "//xla/service/spmd/shardy:constants",
-        "//xla/service/spmd/shardy/round_trip_common:import_func_calls",
         "//xla/service/spmd/shardy/round_trip_common:import_sdy_custom_calls",
         "//xla/service/spmd/shardy/round_trip_common:open_while_free_vars_sharding",
         "//xla/service/spmd/shardy/sdy_round_trip:pipelines",

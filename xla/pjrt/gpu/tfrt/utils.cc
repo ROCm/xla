@@ -263,6 +263,8 @@ absl::Status CheckBufferCompatibilities(
   return absl::OkStatus();
 }
 
+namespace {
+
 std::optional<stream_executor::GpuTargetConfigProto> GetTargetConfigForDevices(
     absl::Span<PjRtDevice* const> devices) {
   if (devices.empty()) {
@@ -300,6 +302,8 @@ absl::flat_hash_map<std::string, PjRtDeviceAttribute> GetAttrsForDevices(
   }
   return attrs;
 }
+
+}  // namespace
 
 class TfrtGpuCopyToDeviceStream : public CopyToDeviceStream {
  public:

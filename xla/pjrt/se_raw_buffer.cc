@@ -126,6 +126,7 @@ PjRtStreamExecutorRawBuffer::CopyRawHostToDeviceAndReturnEvent(
           }
           HostMemoryAllocator::AllocateOptions alloc_opts;
           alloc_opts.numa_node = stream->parent()->numa_node();
+          alloc_opts.local_device_id = local_device->local_device_id();
           staging_buffer = client->GetHostMemoryAllocator()->Allocate(
               transfer_size, alloc_opts);
           auto copy_to_staging_buffer = [src, transfer_size,
@@ -181,6 +182,7 @@ PjRtStreamExecutorRawBuffer::CopyRawDeviceToHostAndReturnEvent(
           }
           HostMemoryAllocator::AllocateOptions alloc_opts;
           alloc_opts.numa_node = stream->parent()->numa_node();
+          alloc_opts.local_device_id = local_device->local_device_id();
           std::shared_ptr<void> staging_buffer =
               client->GetHostMemoryAllocator()->Allocate(transfer_size,
                                                          alloc_opts);
@@ -442,6 +444,7 @@ void PjRtStreamExecutorRawBuffer::CopyTo(
   } else {
     HostMemoryAllocator::AllocateOptions alloc_opts;
     alloc_opts.numa_node = local_device_->executor()->numa_node();
+    alloc_opts.local_device_id = local_device_->local_device_id();
     std::shared_ptr<void> staging_buffer =
         client_->GetHostMemoryAllocator()->Allocate(GetOnDeviceSizeInBytes(),
                                                     alloc_opts);

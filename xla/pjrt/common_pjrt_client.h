@@ -556,7 +556,7 @@ class CommonPjRtLoadedExecutable : public PjRtLoadedExecutable {
     }
     return GetExecutable()->GetOutputMemoryKinds();
   }
-  absl::StatusOr<std::string> FingerprintExecutable() const {
+  absl::StatusOr<std::string> FingerprintExecutable() const override {
     if (extras_) {
       return extras_->fingerprint;
     }
@@ -593,8 +593,8 @@ class CommonPjRtLoadedExecutable : public PjRtLoadedExecutable {
 
   virtual absl::StatusOr<std::unique_ptr<PjRtRawLoadedExecutable>>
   LoadRawExecutable(const ExecuteOptions& options, size_t host_callback_idx,
-                    xla::RunId run_id,
-                    DeviceAndAssignment device_and_assign) const = 0;
+                    xla::RunId run_id, DeviceAndAssignment device_and_assign,
+                    int attempt) const = 0;
 
   // Returns a sorted list of the parameters that must be donated as a
   // side-effect of the execution. Derived classes may use custom logic.
@@ -614,8 +614,8 @@ class CommonPjRtLoadedExecutable : public PjRtLoadedExecutable {
                               absl::Span<PjRtBuffer* const> argument_handles,
                               xla::RunId run_id, int replica, int partition,
                               const ExecuteOptions& options,
-                              size_t host_callback_idx,
-                              PjRtDevice* device) const;
+                              size_t host_callback_idx, PjRtDevice* device,
+                              int attempt) const;
 
   // Run Prepare and Launch phases on a single device.
   absl::StatusOr<Result> ExecuteHelperOnSingleDevice(
