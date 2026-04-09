@@ -75,8 +75,7 @@ class CommandBufferThunk : public Thunk {
 
     // Updates recorded buffer allocation for the given `commands` using the
     // buffer allocations passed in `params`. Returns buffer allocations that
-    // changed since the last update. Returned buffer allocations are sorted by
-    // the buffer allocation index.
+    // changed since the last update.
     std::vector<BufferAllocation::Index> UpdateBufferAllocations(
         const CommandExecutor& commands, const Thunk::ExecuteParams& params)
         ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex);
@@ -102,6 +101,14 @@ class CommandBufferThunk : public Thunk {
     // and block sizes) captured by commands at construction time and do not
     // change.
     std::vector<se::DeviceAddressBase> recorded_allocs ABSL_GUARDED_BY(mutex);
+
+    // Snapshot of recorded_allocs after the last successful Submit, used by
+    // the fast-update path to compute old->new address diffs.
+    // Uses mmap-backed storage to avoid system allocator (heap) interference
+    // with the HIP graph runtime.
+    se::DeviceAddressBase* prev_allocs ABSL_GUARDED_BY(mutex) = nullptr;
+    size_t prev_allocs_capacity ABSL_GUARDED_BY(mutex) = 0;
+    size_t prev_allocs_size ABSL_GUARDED_BY(mutex) = 0;
 
     // Number of command buffer executions since last update.
     int64_t num_executions ABSL_GUARDED_BY(mutex) = 0;

@@ -251,6 +251,11 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     const BufferAllocations* buffer_allocation, se::StreamExecutor* executor,
     se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace,
     se::StreamPriority priority) {
+  static const bool profile_trace = [] {
+    const char* env = std::getenv("XLA_PROFILE_CMD_BUFFER");
+    return env != nullptr && std::string(env) == "1";
+  }();
+
   // Collect memory addresses for relevant allocations (for cache comparison).
   absl::InlinedVector<se::DeviceAddressBase, 4> allocs;
   allocs.reserve(allocs_indices_.size());
@@ -293,8 +298,9 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
   for (size_t i = 0; i < capacity_; ++i) {
     if (ABSL_PREDICT_TRUE(absl::c_equal(entries_[i].recorded_allocs, allocs) &&
                           entries_[i].command_buffer)) {
-      VLOG(6) << "Command buffer trace cache hit for command "
-              << trace_cmd_->ToString();
+      if (profile_trace) {
+        LOG(WARNING) << "TraceCache HIT cmd=" << trace_cmd_->ToString();
+      }
       return shift_right(i).command_buffer.get();
     }
 
@@ -305,14 +311,20 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
       auto* gpu_cmd = dynamic_cast<se::gpu::GpuCommandBuffer*>(
           entries_[i].command_buffer.get());
       if (gpu_cmd) {
+        uint64_t patch_start = 0;
+        if (profile_trace) patch_start = tsl::Env::Default()->NowMicros();
+
         auto status = gpu_cmd->UpdateKernelNodes(
             entries_[i].recorded_slice_addrs, slice_addrs);
         if (status.ok()) {
           entries_[i].recorded_allocs.assign(allocs.begin(), allocs.end());
           entries_[i].recorded_slice_addrs.assign(slice_addrs.begin(),
                                                   slice_addrs.end());
-          VLOG(6) << "Patched kernel nodes in-place for command "
-                  << trace_cmd_->ToString();
+          if (profile_trace) {
+            uint64_t patch_end = tsl::Env::Default()->NowMicros();
+            LOG(WARNING) << "TraceCache PATCH cmd=" << trace_cmd_->ToString()
+                         << " time=" << (patch_end - patch_start) << "us";
+          }
           return shift_right(i).command_buffer.get();
         }
         VLOG(3) << "Kernel node patch failed for " << trace_cmd_->ToString()
@@ -321,6 +333,9 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     }
 
     if (entries_[i].command_buffer == nullptr) {
+      uint64_t trace_start = 0;
+      if (profile_trace) trace_start = tsl::Env::Default()->NowMicros();
+
       TF_ASSIGN_OR_RETURN(
           entries_[i].command_buffer,
           se::TraceCommandBufferFactory::Create(executor, stream, trace));
@@ -330,8 +345,11 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
       if (priority != se::StreamPriority::Default) {
         TF_RETURN_IF_ERROR(entries_[i].command_buffer->SetPriority(priority));
       }
-      VLOG(6) << "Command buffer trace cache create new item for command "
-              << trace_cmd_->ToString();
+      if (profile_trace) {
+        uint64_t trace_end = tsl::Env::Default()->NowMicros();
+        LOG(WARNING) << "TraceCache NEW cmd=" << trace_cmd_->ToString()
+                     << " time=" << (trace_end - trace_start) << "us";
+      }
       return shift_right(i).command_buffer.get();
     }
   }
@@ -341,6 +359,9 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     auto* gpu_cmd = dynamic_cast<se::gpu::GpuCommandBuffer*>(
         entries_[capacity_ - 1].command_buffer.get());
     if (gpu_cmd) {
+      uint64_t patch_start = 0;
+      if (profile_trace) patch_start = tsl::Env::Default()->NowMicros();
+
       auto status = gpu_cmd->UpdateKernelNodes(
           entries_[capacity_ - 1].recorded_slice_addrs, slice_addrs);
       if (status.ok()) {
@@ -348,21 +369,33 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
                                                        allocs.end());
         entries_[capacity_ - 1].recorded_slice_addrs.assign(
             slice_addrs.begin(), slice_addrs.end());
-        VLOG(6) << "Patched kernel nodes (evict slot) for command "
-                << trace_cmd_->ToString();
+        if (profile_trace) {
+          uint64_t patch_end = tsl::Env::Default()->NowMicros();
+          LOG(WARNING) << "TraceCache PATCH(evict) cmd="
+                       << trace_cmd_->ToString()
+                       << " time=" << (patch_end - patch_start) << "us";
+        }
         return shift_right(capacity_ - 1).command_buffer.get();
       }
     }
   }
 
-  VLOG(6) << "Command buffer trace cache does replacement for command "
-          << trace_cmd_->ToString();
+  uint64_t trace_start = 0;
+  if (profile_trace) trace_start = tsl::Env::Default()->NowMicros();
+
   TF_ASSIGN_OR_RETURN(
       entries_[capacity_ - 1].command_buffer,
       se::TraceCommandBufferFactory::Create(executor, stream, trace));
   entries_[capacity_ - 1].recorded_allocs.assign(allocs.begin(), allocs.end());
   entries_[capacity_ - 1].recorded_slice_addrs.assign(slice_addrs.begin(),
                                                       slice_addrs.end());
+
+  if (profile_trace) {
+    uint64_t trace_end = tsl::Env::Default()->NowMicros();
+    LOG(WARNING) << "TraceCache RETRACE cmd=" << trace_cmd_->ToString()
+                 << " time=" << (trace_end - trace_start) << "us";
+  }
+
   return shift_right(capacity_ - 1).command_buffer.get();
 }
 

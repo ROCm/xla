@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/rocm_command_buffer.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -239,6 +240,10 @@ absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateClonedChildNode(
       wrap::hipGraphAddChildGraphNode(&node_handle, graph_, deps.data(),
                                       deps.size(), child_graph),
       "Failed to create a child graph node and add it to a HIP graph"));
+
+  if (child_command_buffer.has_kernelparams_nodes_) {
+    has_kernelparams_nodes_ = true;
+  }
   return FromHipGraphHandle(node_handle);
 }
 
@@ -397,6 +402,277 @@ absl::Status RocmCommandBuffer::UpdateKernelNodes(
   return absl::OkStatus();
 }
 
+namespace {
+
+// Patch addresses in graph nodes. Only safe when has_kernelparams_nodes_ is
+// false (i.e., all kernel nodes use extra-style args).
+absl::Status PatchGraphNodes(
+    hipGraph_t graph,
+    const absl::flat_hash_map<uintptr_t, size_t>& old_addr_map,
+    absl::Span<const DeviceAddressBase> new_addresses,
+    int depth, int* patched_count) {
+  size_t num_nodes = 0;
+  TF_RETURN_IF_ERROR(
+      ToStatus(wrap::hipGraphGetNodes(graph, nullptr, &num_nodes),
+               "Failed to get graph node count"));
+  if (num_nodes == 0) return absl::OkStatus();
+
+  std::vector<hipGraphNode_t> nodes(num_nodes);
+  TF_RETURN_IF_ERROR(
+      ToStatus(wrap::hipGraphGetNodes(graph, nodes.data(), &num_nodes),
+               "Failed to get graph nodes"));
+
+  for (size_t ni = 0; ni < num_nodes; ++ni) {
+    hipGraphNodeType type;
+    TF_RETURN_IF_ERROR(
+        ToStatus(wrap::hipGraphNodeGetType(nodes[ni], &type),
+                 "Failed to get node type"));
+
+    if (type == hipGraphNodeTypeGraph) {
+      hipGraph_t child_graph = nullptr;
+      TF_RETURN_IF_ERROR(
+          ToStatus(hipGraphChildGraphNodeGetGraph(nodes[ni], &child_graph),
+                   "Failed to get child graph from node"));
+      if (child_graph) {
+        TF_RETURN_IF_ERROR(PatchGraphNodes(
+            child_graph, old_addr_map, new_addresses, depth + 1,
+            patched_count));
+      }
+    } else if (type == hipGraphNodeTypeKernel) {
+      hipKernelNodeParams kp;
+      memset(&kp, 0, sizeof(kp));
+      TF_RETURN_IF_ERROR(
+          ToStatus(wrap::hipGraphKernelNodeGetParams(nodes[ni], &kp),
+                   "Failed to get kernel node params"));
+
+      if (kp.extra == nullptr) continue;
+
+      bool modified = false;
+      void* buf_ptr = nullptr;
+      size_t buf_size = 0;
+      void** ep = static_cast<void**>(kp.extra);
+      int ep_count = 0;
+      while (*ep != HIP_LAUNCH_PARAM_END && ep_count < 100) {
+        if (*ep == HIP_LAUNCH_PARAM_BUFFER_POINTER) {
+          buf_ptr = *(ep + 1);
+          ep += 2;
+        } else if (*ep == HIP_LAUNCH_PARAM_BUFFER_SIZE) {
+          buf_size = *static_cast<size_t*>(*(ep + 1));
+          ep += 2;
+        } else {
+          ep++;
+        }
+        ++ep_count;
+      }
+
+      if (buf_ptr && buf_size > 0) {
+        auto* buf = static_cast<uint8_t*>(buf_ptr);
+        for (size_t off = 0; off + sizeof(void*) <= buf_size;
+             off += sizeof(void*)) {
+          uintptr_t val;
+          memcpy(&val, buf + off, sizeof(uintptr_t));
+          auto it = old_addr_map.find(val);
+          if (it != old_addr_map.end()) {
+            uintptr_t new_val = reinterpret_cast<uintptr_t>(
+                new_addresses[it->second].opaque());
+            memcpy(buf + off, &new_val, sizeof(uintptr_t));
+            modified = true;
+          }
+        }
+      }
+
+      if (modified) {
+        TF_RETURN_IF_ERROR(ToStatus(
+            wrap::hipGraphKernelNodeSetParams(nodes[ni], &kp),
+            "Failed to set kernel node params"));
+        ++(*patched_count);
+      }
+    } else if (type == hipGraphNodeTypeMemcpy) {
+      hipMemcpy3DParms mp = {};
+      TF_RETURN_IF_ERROR(
+          ToStatus(wrap::hipGraphMemcpyNodeGetParams(nodes[ni], &mp),
+                   "Failed to get memcpy node params"));
+
+      bool modified = false;
+      auto patch_ptr = [&](void*& ptr) {
+        auto val = reinterpret_cast<uintptr_t>(ptr);
+        auto it = old_addr_map.find(val);
+        if (it != old_addr_map.end()) {
+          ptr = new_addresses[it->second].opaque();
+          modified = true;
+        }
+      };
+      patch_ptr(mp.srcPtr.ptr);
+      patch_ptr(mp.dstPtr.ptr);
+
+      if (modified) {
+        TF_RETURN_IF_ERROR(ToStatus(
+            wrap::hipGraphMemcpyNodeSetParams(nodes[ni], &mp),
+            "Failed to set memcpy node params"));
+        ++(*patched_count);
+      }
+    } else if (type == hipGraphNodeTypeMemset) {
+      hipMemsetParams msp = {};
+      TF_RETURN_IF_ERROR(
+          ToStatus(wrap::hipGraphMemsetNodeGetParams(nodes[ni], &msp),
+                   "Failed to get memset node params"));
+
+      auto val = reinterpret_cast<uintptr_t>(msp.dst);
+      auto it = old_addr_map.find(val);
+      if (it != old_addr_map.end()) {
+        msp.dst = new_addresses[it->second].opaque();
+        TF_RETURN_IF_ERROR(ToStatus(
+            wrap::hipGraphMemsetNodeSetParams(nodes[ni], &msp),
+            "Failed to set memset node params"));
+        ++(*patched_count);
+      }
+    }
+  }
+
+  return absl::OkStatus();
+}
+
+}  // namespace
+
+bool RocmCommandBuffer::SupportsNodeAddressUpdate() const {
+  return exec_ != nullptr && graph_ != nullptr && !has_kernelparams_nodes_;
+}
+
+absl::StatusOr<bool> RocmCommandBuffer::UpdateNodeAddresses(
+    absl::Span<const DeviceAddressBase> old_addresses,
+    absl::Span<const DeviceAddressBase> new_addresses) {
+  if (exec_ == nullptr || graph_ == nullptr) {
+    return false;
+  }
+
+  if (has_kernelparams_nodes_) return false;
+
+  size_t common_size = std::min(old_addresses.size(), new_addresses.size());
+  absl::flat_hash_map<uintptr_t, size_t> old_addr_map;
+  for (size_t i = 0; i < common_size; ++i) {
+    auto old_val = reinterpret_cast<uintptr_t>(old_addresses[i].opaque());
+    auto new_val = reinterpret_cast<uintptr_t>(new_addresses[i].opaque());
+    if (old_val != 0 && old_val != new_val) {
+      old_addr_map[old_val] = i;
+    }
+  }
+
+  if (old_addr_map.empty()) return true;
+
+  // Fast path: patch owned arg buffers directly and update exec nodes.
+  // No need to walk the graph definition — we cached node handles during
+  // CreateKernelNode.
+  int patched_count = 0;
+  for (auto& kn : kernel_nodes_) {
+    if (!kn.node || !kn.arg_data || kn.arg_size == 0) continue;
+
+    bool modified = false;
+    uint8_t* buf = kn.arg_data.get();
+    for (size_t off = 0; off + sizeof(void*) <= kn.arg_size;
+         off += sizeof(void*)) {
+      uintptr_t val;
+      memcpy(&val, buf + off, sizeof(uintptr_t));
+      auto it = old_addr_map.find(val);
+      if (it != old_addr_map.end()) {
+        uintptr_t new_val = reinterpret_cast<uintptr_t>(
+            new_addresses[it->second].opaque());
+        memcpy(buf + off, &new_val, sizeof(uintptr_t));
+        modified = true;
+      }
+    }
+
+    if (modified) {
+      void* extra_arr[5] = {
+          HIP_LAUNCH_PARAM_BUFFER_POINTER, kn.arg_data.get(),
+          HIP_LAUNCH_PARAM_BUFFER_SIZE, &kn.arg_size,
+          HIP_LAUNCH_PARAM_END};
+
+      hipKernelNodeParams kp = kn.params;
+      kp.kernelParams = nullptr;
+      kp.extra = extra_arr;
+
+      auto s = wrap::hipGraphExecKernelNodeSetParams(exec_, kn.node, &kp);
+      if (s != hipSuccess) {
+        VLOG(1) << "UpdateNodeAddresses: exec kernel set params failed";
+        return false;
+      }
+      ++patched_count;
+    }
+  }
+
+  // Also patch memcpy/memset nodes via the graph walk (these are less common).
+  if (!old_addr_map.empty()) {
+    size_t num_nodes = 0;
+    TF_RETURN_IF_ERROR(
+        ToStatus(wrap::hipGraphGetNodes(graph_, nullptr, &num_nodes),
+                 "UpdateNodeAddresses: get node count"));
+    std::vector<hipGraphNode_t> nodes(num_nodes);
+    TF_RETURN_IF_ERROR(
+        ToStatus(wrap::hipGraphGetNodes(graph_, nodes.data(), &num_nodes),
+                 "UpdateNodeAddresses: get nodes"));
+
+    for (size_t ni = 0; ni < num_nodes; ++ni) {
+      hipGraphNodeType type;
+      TF_RETURN_IF_ERROR(
+          ToStatus(wrap::hipGraphNodeGetType(nodes[ni], &type),
+                   "UpdateNodeAddresses: get node type"));
+
+      if (type == hipGraphNodeTypeMemcpy) {
+        hipMemcpy3DParms mp = {};
+        TF_RETURN_IF_ERROR(
+            ToStatus(wrap::hipGraphMemcpyNodeGetParams(nodes[ni], &mp),
+                     "UpdateNodeAddresses: get memcpy params"));
+
+        bool mod = false;
+        auto patch = [&](void*& ptr) {
+          auto it = old_addr_map.find(reinterpret_cast<uintptr_t>(ptr));
+          if (it != old_addr_map.end()) {
+            ptr = new_addresses[it->second].opaque();
+            mod = true;
+          }
+        };
+        patch(mp.srcPtr.ptr);
+        patch(mp.dstPtr.ptr);
+
+        if (mod) {
+          // Compute the size from the 3D params extent.
+          size_t copy_size = mp.extent.width;
+          if (mp.extent.height > 0) copy_size *= mp.extent.height;
+          if (mp.extent.depth > 0) copy_size *= mp.extent.depth;
+
+          TF_RETURN_IF_ERROR(ToStatus(
+              wrap::hipGraphMemcpyNodeSetParams(nodes[ni], &mp),
+              "UpdateNodeAddresses: set memcpy params on def graph"));
+          auto s = wrap::hipGraphExecMemcpyNodeSetParams1D(
+              exec_, nodes[ni], mp.dstPtr.ptr, mp.srcPtr.ptr,
+              copy_size, hipMemcpyDeviceToDevice);
+          if (s != hipSuccess) return false;
+          ++patched_count;
+        }
+      } else if (type == hipGraphNodeTypeMemset) {
+        hipMemsetParams msp = {};
+        TF_RETURN_IF_ERROR(
+            ToStatus(wrap::hipGraphMemsetNodeGetParams(nodes[ni], &msp),
+                     "UpdateNodeAddresses: get memset params"));
+
+        auto it = old_addr_map.find(reinterpret_cast<uintptr_t>(msp.dst));
+        if (it != old_addr_map.end()) {
+          msp.dst = new_addresses[it->second].opaque();
+          TF_RETURN_IF_ERROR(ToStatus(
+              wrap::hipGraphMemsetNodeSetParams(nodes[ni], &msp),
+              "UpdateNodeAddresses: set memset params on def graph"));
+          auto s = wrap::hipGraphExecMemsetNodeSetParams(exec_, nodes[ni], &msp);
+          if (s != hipSuccess) return false;
+          ++patched_count;
+        }
+      }
+    }
+  }
+
+  VLOG(3) << "UpdateNodeAddresses: patched " << patched_count << " nodes";
+  return true;
+}
+
 void RocmCommandBuffer::DumpGraphKernelNodes(absl::string_view label) {
   if (!VLOG_IS_ON(3)) return;
 
@@ -409,20 +685,20 @@ void RocmCommandBuffer::DumpGraphKernelNodes(absl::string_view label) {
   }
 
   std::vector<hipGraphNode_t> nodes(num_nodes);
-  wrap::hipGraphGetNodes(graph_, nodes.data(), &num_nodes);
+  (void)wrap::hipGraphGetNodes(graph_, nodes.data(), &num_nodes);
 
   VLOG(3) << "DumpGraph[" << label << "] graph=" << graph_
           << " total_nodes=" << num_nodes;
 
   for (size_t i = 0; i < num_nodes; i++) {
     hipGraphNodeType type;
-    wrap::hipGraphNodeGetType(nodes[i], &type);
+    (void)wrap::hipGraphNodeGetType(nodes[i], &type);
 
     if (type != hipGraphNodeTypeKernel) continue;
 
     hipKernelNodeParams kp;
     memset(&kp, 0, sizeof(kp));
-    wrap::hipGraphKernelNodeGetParams(nodes[i], &kp);
+    (void)wrap::hipGraphKernelNodeGetParams(nodes[i], &kp);
 
     std::string msg;
     absl::StrAppend(&msg, "  node[", i, "] func=",
@@ -672,6 +948,7 @@ RocmCommandBuffer::FlattenChildGraphNodes(
                                        hip_deps.size(), &kparams),
             "Failed to add flattened kernel node"));
         node_info = {FlatNodeKind::kKernel, kparams.func};
+        has_kernelparams_nodes_ = true;
       }
 
     } else if (type == hipGraphNodeTypeMemcpy) {
@@ -1017,8 +1294,32 @@ absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateKernelNode(
   params.blockDim.y = threads.y;
   params.blockDim.z = threads.z;
   params.sharedMemBytes = shared_mem_bytes;
-  params.kernelParams = const_cast<void**>(args.argument_addresses().data());
-  params.extra = nullptr;
+
+  // Pack all argument values into a contiguous buffer and use extra-style
+  // launch (HIP_LAUNCH_PARAM_BUFFER_POINTER) instead of kernelParams.
+  // This avoids the HIP bug (ROCm/clr#138) where hipGraphKernelNodeGetParams
+  // returns dangling kernelParams pointers, and enables UpdateNodeAddresses.
+  auto arg_addrs = args.argument_addresses();
+  size_t num_args = arg_addrs.size();
+
+  // Each argument is a pointer-sized value; pack them contiguously.
+  size_t buf_size = num_args * sizeof(void*);
+  auto packed_buf = std::make_unique<uint8_t[]>(buf_size);
+  for (size_t i = 0; i < num_args; ++i) {
+    memcpy(packed_buf.get() + i * sizeof(void*), arg_addrs[i], sizeof(void*));
+  }
+
+  size_t buf_idx = kernel_nodes_.size();
+  kernel_nodes_.push_back({nullptr, {}, std::move(packed_buf), buf_size});
+  auto& owned = kernel_nodes_[buf_idx];
+  owned.params = params;
+
+  void* extra_arr[5] = {
+      HIP_LAUNCH_PARAM_BUFFER_POINTER, owned.arg_data.get(),
+      HIP_LAUNCH_PARAM_BUFFER_SIZE, &owned.arg_size,
+      HIP_LAUNCH_PARAM_END};
+  params.kernelParams = nullptr;
+  params.extra = extra_arr;
 
   if (shared_mem_bytes != 0) {
     TF_RETURN_IF_ERROR(ToStatus(
@@ -1036,6 +1337,7 @@ absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateKernelNode(
                                            deps.size(), &params),
                "Failed to add kernel node to a HIP graph"));
 
+  owned.node = node_handle;
   return FromHipGraphHandle(node_handle);
 }
 
@@ -1063,8 +1365,22 @@ absl::Status RocmCommandBuffer::UpdateKernelNode(
   params.blockDim.y = threads.y;
   params.blockDim.z = threads.z;
   params.sharedMemBytes = shared_mem_bytes;
-  params.kernelParams = const_cast<void**>(args.argument_addresses().data());
-  params.extra = nullptr;
+
+  // Use extra-style args to match the original CreateKernelNode encoding.
+  auto arg_addrs = args.argument_addresses();
+  size_t num_args = arg_addrs.size();
+  size_t buf_size = num_args * sizeof(void*);
+  auto packed_buf = std::make_unique<uint8_t[]>(buf_size);
+  for (size_t i = 0; i < num_args; ++i) {
+    memcpy(packed_buf.get() + i * sizeof(void*), arg_addrs[i], sizeof(void*));
+  }
+
+  void* extra_arr[5] = {
+      HIP_LAUNCH_PARAM_BUFFER_POINTER, packed_buf.get(),
+      HIP_LAUNCH_PARAM_BUFFER_SIZE, &buf_size,
+      HIP_LAUNCH_PARAM_END};
+  params.kernelParams = nullptr;
+  params.extra = extra_arr;
 
   if (shared_mem_bytes != 0) {
     TF_RETURN_IF_ERROR(ToStatus(

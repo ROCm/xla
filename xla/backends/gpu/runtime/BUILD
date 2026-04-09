@@ -600,6 +600,7 @@ cc_library(
         "//xla/stream_executor:command_buffer",
         "//xla/stream_executor:device_address",
         "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/gpu:gpu_command_buffer",
         "//xla/tsl/platform:env",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:logging",

@@ -270,6 +270,21 @@ class GpuCommandBuffer : public CommandBuffer {
         "UpdateKernelNodes not supported on this platform");
   }
 
+  // Patches device addresses in the already-instantiated executable graph
+  // Returns true if UpdateNodeAddresses can be used on this command buffer.
+  virtual bool SupportsNodeAddressUpdate() const { return false; }
+
+  // (exec_) directly, recursing into child graphs. This bypasses the entire
+  // Record/GetOrTrace/Finalize loop — only address values change, the graph
+  // structure and kernel functions remain identical.
+  // Returns true if patching succeeded and the graph can be re-launched.
+  virtual absl::StatusOr<bool> UpdateNodeAddresses(
+      absl::Span<const DeviceAddressBase> old_addresses,
+      absl::Span<const DeviceAddressBase> new_addresses) {
+    return absl::UnimplementedError(
+        "UpdateNodeAddresses not supported on this platform");
+  }
+
   // Extracts nodes from a nested (traced) command buffer and adds them
   // directly to this parent graph as individual kernel/memcpy/memset nodes,
   // avoiding child graph re-tracing.  Returns a single GpuFlattenedCommand

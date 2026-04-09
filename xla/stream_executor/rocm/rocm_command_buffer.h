@@ -136,6 +136,12 @@ class RocmCommandBuffer : public GpuCommandBuffer {
       absl::Span<const DeviceAddressBase> old_addresses,
       absl::Span<const DeviceAddressBase> new_addresses) override;
 
+  bool SupportsNodeAddressUpdate() const override;
+
+  absl::StatusOr<bool> UpdateNodeAddresses(
+      absl::Span<const DeviceAddressBase> old_addresses,
+      absl::Span<const DeviceAddressBase> new_addresses) override;
+
   absl::StatusOr<const Command*> FlattenChildGraphNodes(
       const CommandBuffer& nested,
       absl::Span<const Command* const> dependencies) override;
@@ -199,6 +205,22 @@ class RocmCommandBuffer : public GpuCommandBuffer {
   hipGraph_t graph_ = nullptr;
   bool is_owned_graph_ = true;
   hipGraphExec_t exec_ = nullptr;
+
+  // Set to true when any kernel node uses kernelParams-style args.
+  // When true, UpdateNodeAddresses is not safe due to HIP bug ROCm/clr#138.
+  bool has_kernelparams_nodes_ = false;
+
+  // Packed argument buffers owned by the command buffer. Each kernel node
+  // created via CreateKernelNode stores its arguments as a contiguous buffer
+  // here so that extra-style HIP_LAUNCH_PARAM_BUFFER_POINTER can be used
+  // instead of kernelParams-style.
+  struct OwnedKernelNode {
+    hipGraphNode_t node = nullptr;
+    hipKernelNodeParams params = {};
+    std::unique_ptr<uint8_t[]> arg_data;
+    size_t arg_size = 0;
+  };
+  std::vector<OwnedKernelNode> kernel_nodes_;
 };
 
 }  // namespace stream_executor::gpu
