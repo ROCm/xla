@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/command_buffer_thunk.h"
 
 #include <algorithm>
+#include <sys/mman.h>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -23,6 +24,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/functional/function_ref.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
@@ -35,6 +37,7 @@ limitations under the License.
 #include "xla/service/gpu/buffer_allocations.h"
 #include "xla/stream_executor/command_buffer.h"
 #include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/gpu/gpu_command_buffer.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/errors.h"
@@ -49,6 +52,7 @@ namespace xla::gpu {
 
 using tsl::profiler::TraceMe;
 using tsl::profiler::TraceMeEncode;
+
 
 //===----------------------------------------------------------------------===//
 // CommandBufferThunk
@@ -102,8 +106,6 @@ CommandBufferThunk::ExecutorCommandBuffer::UpdateBufferAllocations(
   std::vector<BufferAllocation::Index> updated_allocs;
   const BufferAllocations* allocs = params.buffer_allocations;
 
-  // We check only allocations referenced by commands in a cmd sequence, and
-  // leave every other entry default initialized (nullptr device memory).
   for (BufferAllocation::Index index : commands.allocs_indices()) {
     se::DeviceAddressBase alloc = allocs->GetDeviceAddress(index);
 
@@ -246,6 +248,11 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
 }
 
 absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
+  static const bool profile_steps = [] {
+    const char* env = std::getenv("XLA_PROFILE_CMD_BUFFER");
+    return env != nullptr && std::string(env) == "1";
+  }();
+
   // We might end up with empty command sequence if all of the captured fusions
   // are no-op (e.g. memcpy of size 0) and we have no emitted thunks for them.
   if (commands_.empty()) {
@@ -277,49 +284,109 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
     return absl::OkStatus();
   }
 
+  static const bool fast_update = [] {
+    const char* env = std::getenv("XLA_GPU_GRAPH_FAST_UPDATE");
+    return env != nullptr && std::string(env) == "1";
+  }();
+
+  uint64_t t_alloc_start = 0, t_alloc_end = 0;
+  uint64_t t_record_start = 0, t_record_end = 0;
+  uint64_t t_submit_start = 0, t_submit_end = 0;
+
+  if (profile_steps) t_alloc_start = tsl::Env::Default()->NowMicros();
+
   auto updated_allocs = cmd_buffer->UpdateBufferAllocations(commands_, params);
 
-  // Determine whether to (re-)record the command buffer and whether this is a
-  // first-time initialization recording (VA remapping path).
+  if (profile_steps) t_alloc_end = tsl::Env::Default()->NowMicros();
+
   bool is_first_record =
       enable_command_buffer_va_remapping_ &&
       cmd_buffer->command_buffer->state() == se::CommandBuffer::State::kCreate;
   bool needs_update = !enable_command_buffer_va_remapping_ &&
                       (!updated_allocs.empty() || commands_.force_update());
+  size_t num_allocs_changed = updated_allocs.size();
+
+  bool can_fast_update =
+      fast_update && !is_first_record && needs_update &&
+      !commands_.force_update() &&
+      cmd_buffer->command_buffer->state() ==
+          se::CommandBuffer::State::kFinalized &&
+      cmd_buffer->num_executions > 0;
 
   if (is_first_record || needs_update) {
-    XLA_VLOG_DEVICE(3, executor->device_ordinal())
-        << "Create/Update command buffer"
-        << " by recoding command buffer cmd sequence after "
-        << cmd_buffer->num_executions << " executions since last update"
-        << "; num_commands=" << commands_.size()
-        << "; updated_allocs=" << updated_allocs.size()
-        << "; is_first_record=" << is_first_record
-        << "; needs_update=" << needs_update;
+    bool did_fast_update = false;
 
-    TraceMe trace([&] {
-      cmd_buffer->mutex.AssertHeld();
-      return TraceMeEncode(needs_update
-                               ? "command_buffer::update"
-                               : "command_buffer::record_for_va_remapping",
-                           {{"device", executor->device_ordinal()},
-                            {"num_commands", commands_.size()},
-                            {"num_executions", cmd_buffer->num_executions}});
-    });
+    if (can_fast_update && cmd_buffer->prev_allocs_size > 0) {
+      auto* gpu_cmd_buf = static_cast<se::gpu::GpuCommandBuffer*>(
+          cmd_buffer->command_buffer.get());
 
-    uint64_t start_micros = tsl::Env::Default()->NowMicros();
+      bool supports = gpu_cmd_buf && gpu_cmd_buf->SupportsNodeAddressUpdate();
+      if (profile_steps) {
+        LOG(WARNING) << "CmdBufFastPath dev=" << executor->device_ordinal()
+                     << " supports=" << supports
+                     << " prev_sz=" << cmd_buffer->prev_allocs_size
+                     << " rec_sz=" << cmd_buffer->recorded_allocs.size();
+      }
 
-    Command::RecordParams record_params = {
-        cmd_buffer->state, std::move(updated_allocs),
-        /*is_initialization=*/is_first_record};
-    TF_RETURN_IF_ERROR(commands_.Record(params, record_params,
-                                        cmd_buffer->command_buffer.get()));
+      if (supports) {
+        if (profile_steps) t_record_start = tsl::Env::Default()->NowMicros();
 
-    uint64_t end_micros = tsl::Env::Default()->NowMicros();
-    XLA_VLOG_DEVICE(3, executor->device_ordinal())
-        << (needs_update ? "Updated" : "Recorded") << " command buffer in "
-        << (end_micros - start_micros)
-        << " μs; num_commands=" << commands_.size();
+        auto result = gpu_cmd_buf->UpdateNodeAddresses(
+            absl::MakeSpan(cmd_buffer->prev_allocs,
+                           cmd_buffer->prev_allocs_size),
+            absl::MakeSpan(cmd_buffer->recorded_allocs));
+
+        if (result.ok() && *result) {
+          did_fast_update = true;
+          if (profile_steps)
+            t_record_end = tsl::Env::Default()->NowMicros();
+          if (profile_steps) {
+            LOG(WARNING) << "CmdBufFastUpdate dev="
+                         << executor->device_ordinal()
+                         << " took="
+                         << (t_record_end - t_record_start) << "us";
+          }
+        } else {
+          VLOG(1) << "Fast-update failed on device "
+                  << executor->device_ordinal()
+                  << ", falling back to Record; status="
+                  << (result.ok() ? "returned false"
+                                  : result.status().ToString());
+        }
+      }
+    }
+
+    if (!did_fast_update) {
+      XLA_VLOG_DEVICE(3, executor->device_ordinal())
+          << "Create/Update command buffer"
+          << " by recoding command buffer cmd sequence after "
+          << cmd_buffer->num_executions << " executions since last update"
+          << "; num_commands=" << commands_.size()
+          << "; updated_allocs=" << updated_allocs.size()
+          << "; is_first_record=" << is_first_record
+          << "; needs_update=" << needs_update;
+
+      TraceMe trace([&] {
+        cmd_buffer->mutex.AssertHeld();
+        return TraceMeEncode(
+            needs_update ? "command_buffer::update"
+                         : "command_buffer::record_for_va_remapping",
+            {{"device", executor->device_ordinal()},
+             {"num_commands", commands_.size()},
+             {"num_executions", cmd_buffer->num_executions}});
+      });
+
+      if (profile_steps) t_record_start = tsl::Env::Default()->NowMicros();
+
+      Command::RecordParams record_params = {
+          cmd_buffer->state, std::move(updated_allocs),
+          /*is_initialization=*/is_first_record};
+      TF_RETURN_IF_ERROR(commands_.Record(params, record_params,
+                                          cmd_buffer->command_buffer.get()));
+
+      if (profile_steps) t_record_end = tsl::Env::Default()->NowMicros();
+    }
+
     cmd_buffer->num_executions = 0;
   }
 
@@ -337,7 +404,53 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
                           {"num_executions", cmd_buffer->num_executions}});
   });
 
-  return cmd_buffer->command_buffer->Submit(params.stream);
+  if (profile_steps) t_submit_start = tsl::Env::Default()->NowMicros();
+
+  auto submit_status = cmd_buffer->command_buffer->Submit(params.stream);
+
+  if (fast_update && submit_status.ok()) {
+    auto* gpu_cmd_buf = static_cast<se::gpu::GpuCommandBuffer*>(
+        cmd_buffer->command_buffer.get());
+    if (gpu_cmd_buf && gpu_cmd_buf->SupportsNodeAddressUpdate() &&
+        !cmd_buffer->recorded_allocs.empty()) {
+      size_t n = cmd_buffer->recorded_allocs.size();
+      if (!cmd_buffer->prev_allocs) {
+        size_t alloc_bytes =
+            ((n * sizeof(se::DeviceAddressBase)) + 4095) & ~4095uL;
+        void* p = mmap(nullptr, alloc_bytes, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p != MAP_FAILED) {
+          cmd_buffer->prev_allocs = static_cast<se::DeviceAddressBase*>(p);
+          cmd_buffer->prev_allocs_capacity =
+              alloc_bytes / sizeof(se::DeviceAddressBase);
+        }
+      }
+      if (cmd_buffer->prev_allocs) {
+        size_t copy_n = std::min(n, cmd_buffer->prev_allocs_capacity);
+        memcpy(cmd_buffer->prev_allocs, cmd_buffer->recorded_allocs.data(),
+               copy_n * sizeof(se::DeviceAddressBase));
+        cmd_buffer->prev_allocs_size = copy_n;
+      }
+    }
+  }
+
+  if (profile_steps) {
+    t_submit_end = tsl::Env::Default()->NowMicros();
+    int dev = executor->device_ordinal();
+    LOG(WARNING) << "CmdBufProfile dev=" << dev
+                 << " alloc_check=" << (t_alloc_end - t_alloc_start) << "us"
+                 << " record=" << (t_record_end - t_record_start) << "us"
+                 << " submit=" << (t_submit_end - t_submit_start) << "us"
+                 << " total=" << (t_submit_end - t_alloc_start) << "us"
+                 << " updated=" << needs_update
+                 << " fast_update=" << fast_update
+                 << " can_fast=" << can_fast_update
+                 << " prev_sz=" << cmd_buffer->prev_allocs_size
+                 << " num_cmds=" << commands_.size()
+                 << " num_allocs_changed=" << num_allocs_changed;
+  }
+
+  return submit_status;
 }
 
 absl::StatusOr<std::shared_ptr<CommandBufferThunk::ExecutorCommandBuffer>>

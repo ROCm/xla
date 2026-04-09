@@ -3025,6 +3025,14 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       bool_setter_for(&DebugOptions::set_xla_dump_buffer_assignment_analysis),
       debug_options->xla_dump_buffer_assignment_analysis(),
       "Dump BufferAssignment analysis."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_graph_enable_node_flattening",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_graph_enable_node_flattening),
+      debug_options->xla_gpu_graph_enable_node_flattening(),
+      "Flatten traced child graph nodes into the parent HIP graph as "
+      "individual nodes, enabling per-node address updates instead of "
+      "full child graph re-tracing."));
 }  // NOLINT(readability/fn_size)
 
 // Allocates flag_values and flag_objects; this function must not be called more

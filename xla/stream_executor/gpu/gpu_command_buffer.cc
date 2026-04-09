@@ -119,6 +119,10 @@ GpuCommandBuffer::ToGraphNodeDependencies(
       handles.push_back(gpu_command->conditional_node.handle);
     } else if (auto* gpu_command = dynamic_cast<const GpuChildCommand*>(dep)) {
       handles.push_back(gpu_command->handle);
+    } else if (auto* flat = dynamic_cast<const GpuFlattenedCommand*>(dep)) {
+      if (!flat->node_handles.empty()) {
+        handles.push_back(flat->node_handles.back());
+      }
     } else {
       LOG(FATAL) << "Unsupported command type";  // Crash OK
     }
