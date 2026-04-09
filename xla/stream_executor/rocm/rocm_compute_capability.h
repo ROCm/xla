@@ -96,7 +96,7 @@ class RocmComputeCapability {
       "gfx1030",  // RX68xx / RX69xx
       "gfx1100",  // RX7900
       "gfx1101",  // RX7700 / RX7800
-      "gfx1103", "gfx1150", "gfx1151", "gfx1200", "gfx1201"};
+      "gfx1103", "gfx1150", "gfx1151", "gfx1200", "gfx1201", "gfx1250"};
 
   bool is_supported_gfx_version() const {
     return IsThisGfxInAnyList(kSupportedGfxVersions);
@@ -155,6 +155,8 @@ class RocmComputeCapability {
   bool gfx12_discrete() const { return IsThisGfxInAnyList(kGfx12Discrete); }
 
   bool gfx12_rx8900() const { return gfx12_discrete(); }
+
+  bool supports_tdm() const { return gfx_version() == "gfx1250"; }
 
   bool has_nhwc_layout_support() const { return gfx9_mi100_or_later(); }
 

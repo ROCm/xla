@@ -6,6 +6,10 @@
 // RUN: -triton-xla-extract-insert-to-triton="allow_tma=1 num_stages=3" \
 // RUN: | FileCheck %s --check-prefix=CHECK-TMA
 
+// RUN: xla-opt %s -split-input-file \
+// RUN: -triton-xla-extract-insert-to-triton="allow_tdm=1" \
+// RUN: | FileCheck %s --check-prefix=CHECK-TDM
+
 func.func @lower_extract_insert(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
   %extracted_tensor = triton_xla.extract from %arg0
       as memref<512x8x128xbf16, #xtile.layout<[2, 1, 0]>>
@@ -29,6 +33,17 @@ func.func @lower_extract_insert(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
 // CHECK-TMA:         %[[LOAD:.*]] = tt.descriptor_load %arg0
 // CHECK-TMA:         tt.descriptor_store %arg1[{{.*}}],
 // CHECK-TMA:         tt.return
+
+// Middle singleton dim is TDM-incompatible, so fall back to pointer loads.
+// CHECK-TDM-LABEL: tt.func @lower_extract_insert(
+// CHECK-TDM-SAME:      %arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32},
+// CHECK-TDM-SAME:      %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+// CHECK-TDM-NOT:     tt.make_tensor_descriptor
+// CHECK-TDM-NOT:     tt.descriptor_load
+// CHECK-TDM-NOT:     tt.descriptor_store
+// CHECK-TDM:         %[[LOAD:.*]] = tt.load
+// CHECK-TDM:         tt.store {{.*}}, %[[LOAD]]
+// CHECK-TDM:         tt.return
 
 // -----
 
@@ -163,6 +178,15 @@ func.func @lower_extract_insert_1d(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
 // CHECK-TMA:         tt.descriptor_store %arg1[{{.*}}], %[[LOAD]]
 // CHECK-TMA:         tt.return
 
+// CHECK-TDM-LABEL: tt.func @lower_extract_insert_1d(
+// CHECK-TDM-SAME:      %arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32},
+// CHECK-TDM-SAME:      %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+// CHECK-TDM:         %[[DESC0:.*]] = tt.make_tensor_descriptor %arg0
+// CHECK-TDM:         %[[LOAD:.*]] = tt.descriptor_load %[[DESC0]]
+// CHECK-TDM:         %[[DESC1:.*]] = tt.make_tensor_descriptor %arg1
+// CHECK-TDM:         tt.descriptor_store %[[DESC1]][{{.*}}], %[[LOAD]]
+// CHECK-TDM:         tt.return
+
 // -----
 
 func.func @lower_extract_insert_5d(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
@@ -188,6 +212,15 @@ func.func @lower_extract_insert_5d(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
 // CHECK-TMA:         %[[LOAD:.*]] = tt.descriptor_load %arg0
 // CHECK-TMA:         tt.descriptor_store %arg1[{{.*}}], %[[LOAD]]
 // CHECK-TMA:         tt.return
+
+// CHECK-TDM-LABEL: tt.func @lower_extract_insert_5d(
+// CHECK-TDM-SAME:      %arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32},
+// CHECK-TDM-SAME:      %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+// CHECK-TDM:         %[[DESC0:.*]] = tt.make_tensor_descriptor %arg0
+// CHECK-TDM:         %[[LOAD:.*]] = tt.descriptor_load %[[DESC0]]
+// CHECK-TDM:         %[[DESC1:.*]] = tt.make_tensor_descriptor %arg1
+// CHECK-TDM:         tt.descriptor_store %[[DESC1]][{{.*}}], %[[LOAD]]
+// CHECK-TDM:         tt.return
 
 // -----
 

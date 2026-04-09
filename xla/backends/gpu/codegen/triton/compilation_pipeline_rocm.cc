@@ -27,6 +27,7 @@ limitations under the License.
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
@@ -39,10 +40,13 @@ namespace mt = ::mlir::triton;
 
 // Based on make_ttir() in
 // @triton//:third_party/amd/backend/compiler.py
-static void MakeTTIR(mlir::OpPassManager* pm) {
+static void MakeTTIR(
+    mlir::OpPassManager* pm,
+    const stream_executor::RocmComputeCapability& rocm_cc) {
   pm->addPass(mlir::createInlinerPass());
-  // if not amd.supports_tdm(arch)
-  // pm->addPass(mt::createTritonRewriteTensorDescriptorToPointer());
+  if (!rocm_cc.supports_tdm()) {
+    pm->addPass(mt::createTritonRewriteTensorDescriptorToPointer());
+  }
   pm->addPass(mlir::createCanonicalizerPass());
   pm->addPass(mt::createTritonCombineOps());
   pm->addPass(mt::createTritonReorderBroadcast());
@@ -99,6 +103,7 @@ static void MakeTTGIR(mlir::OpPassManager* pm,
   bool use_block_pingpong =
       is_pingpong_schedule_enabled(rocm_cc, use_async_copy);
 
+  pm->addPass(mlir::createTritonAMDGPUOptimizeDescriptorEncoding());
   pm->addPass(mlir::createTritonAMDGPUScheduleLoops({num_stages}));
   pm->addPass(
       mlir::createTritonAMDGPUPipeline({use_async_copy, use_block_pingpong}));
@@ -185,7 +190,7 @@ void CreateTritonRocmPipeline(
     mlir::OpPassManager* pm,
     const stream_executor::RocmComputeCapability& rocm_cc, int num_warps,
     int num_ctas, int num_stages) {
-  MakeTTIR(pm);
+  MakeTTIR(pm, rocm_cc);
   MakeTTGIR(pm, rocm_cc, num_warps, num_ctas, num_stages);
   MakeLLIR(pm, rocm_cc, num_stages);
 }
