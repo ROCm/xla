@@ -445,37 +445,55 @@ absl::Status PatchGraphNodes(
           ToStatus(wrap::hipGraphKernelNodeGetParams(nodes[ni], &kp),
                    "Failed to get kernel node params"));
 
-      if (kp.extra == nullptr) continue;
-
       bool modified = false;
-      void* buf_ptr = nullptr;
-      size_t buf_size = 0;
-      void** ep = static_cast<void**>(kp.extra);
-      int ep_count = 0;
-      while (*ep != HIP_LAUNCH_PARAM_END && ep_count < 100) {
-        if (*ep == HIP_LAUNCH_PARAM_BUFFER_POINTER) {
-          buf_ptr = *(ep + 1);
-          ep += 2;
-        } else if (*ep == HIP_LAUNCH_PARAM_BUFFER_SIZE) {
-          buf_size = *static_cast<size_t*>(*(ep + 1));
-          ep += 2;
-        } else {
-          ep++;
-        }
-        ++ep_count;
-      }
 
-      if (buf_ptr && buf_size > 0) {
-        auto* buf = static_cast<uint8_t*>(buf_ptr);
-        for (size_t off = 0; off + sizeof(void*) <= buf_size;
-             off += sizeof(void*)) {
+      if (kp.extra != nullptr) {
+        void* buf_ptr = nullptr;
+        size_t buf_size = 0;
+        void** ep = static_cast<void**>(kp.extra);
+        int ep_count = 0;
+        while (*ep != HIP_LAUNCH_PARAM_END && ep_count < 100) {
+          if (*ep == HIP_LAUNCH_PARAM_BUFFER_POINTER) {
+            buf_ptr = *(ep + 1);
+            ep += 2;
+          } else if (*ep == HIP_LAUNCH_PARAM_BUFFER_SIZE) {
+            buf_size = *static_cast<size_t*>(*(ep + 1));
+            ep += 2;
+          } else {
+            ep++;
+          }
+          ++ep_count;
+        }
+
+        if (buf_ptr && buf_size > 0) {
+          auto* buf = static_cast<uint8_t*>(buf_ptr);
+          for (size_t off = 0; off + sizeof(void*) <= buf_size;
+               off += sizeof(void*)) {
+            uintptr_t val;
+            memcpy(&val, buf + off, sizeof(uintptr_t));
+            auto it = old_addr_map.find(val);
+            if (it != old_addr_map.end()) {
+              uintptr_t new_val = reinterpret_cast<uintptr_t>(
+                  new_addresses[it->second].opaque());
+              memcpy(buf + off, &new_val, sizeof(uintptr_t));
+              modified = true;
+            }
+          }
+        }
+      } else if (kp.kernelParams != nullptr) {
+        // Stream-captured kernels (e.g. RCCL collectives) use kernelParams.
+        // HIP owns the parameter storage for captured nodes, so the pointers
+        // are valid for the lifetime of the definition graph.
+        // Each kernelParams[i] points to one argument; scan pointer-sized
+        // args for address matches.
+        for (int ai = 0; ai < 64 && kp.kernelParams[ai] != nullptr; ++ai) {
           uintptr_t val;
-          memcpy(&val, buf + off, sizeof(uintptr_t));
+          memcpy(&val, kp.kernelParams[ai], sizeof(uintptr_t));
           auto it = old_addr_map.find(val);
           if (it != old_addr_map.end()) {
             uintptr_t new_val = reinterpret_cast<uintptr_t>(
                 new_addresses[it->second].opaque());
-            memcpy(buf + off, &new_val, sizeof(uintptr_t));
+            memcpy(kp.kernelParams[ai], &new_val, sizeof(uintptr_t));
             modified = true;
           }
         }
@@ -664,6 +682,27 @@ absl::StatusOr<bool> RocmCommandBuffer::UpdateNodeAddresses(
           auto s = wrap::hipGraphExecMemsetNodeSetParams(exec_, nodes[ni], &msp);
           if (s != hipSuccess) return false;
           ++patched_count;
+        }
+      } else if (type == hipGraphNodeTypeGraph) {
+        hipGraph_t child_graph = nullptr;
+        TF_RETURN_IF_ERROR(ToStatus(
+            hipGraphChildGraphNodeGetGraph(nodes[ni], &child_graph),
+            "UpdateNodeAddresses: get child graph"));
+        if (!child_graph) continue;
+
+        int child_patched = 0;
+        TF_RETURN_IF_ERROR(PatchGraphNodes(
+            child_graph, old_addr_map, new_addresses, /*depth=*/1,
+            &child_patched));
+
+        if (child_patched > 0) {
+          auto s = wrap::hipGraphExecChildGraphNodeSetParams(
+              exec_, nodes[ni], child_graph);
+          if (s != hipSuccess) {
+            VLOG(1) << "UpdateNodeAddresses: child graph update failed";
+            return false;
+          }
+          patched_count += child_patched;
         }
       }
     }
