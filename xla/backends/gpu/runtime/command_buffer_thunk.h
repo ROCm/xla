@@ -114,6 +114,23 @@ class CommandBufferThunk : public Thunk {
     // will do the proper NCCL setup, so later iterations running through
     // command buffer does not need to call NCCL setup APIs.
     bool warmup_done ABSL_GUARDED_BY(mutex) = false;
+
+    // Tracks whether collective initialization recording has been done.
+    // Prevents re-recording on every Initialize() call when VA remapping
+    // is disabled but addresses are stable (e.g. via CachedAllocator).
+    bool collective_init_done ABSL_GUARDED_BY(mutex) = false;
+
+    // Stable address cache: maps allocation index to a persistent device
+    // address allocated by the thunk. When an allocation changes address
+    // (e.g. donated parameters), data is memcpy'd to the cached address
+    // and the cached address is used for all command buffer operations.
+    // This eliminates re-tracing in TracedCommandBuffer.
+    absl::flat_hash_map<BufferAllocation::Index, se::DeviceAddressBase>
+        alloc_address_cache ABSL_GUARDED_BY(mutex);
+
+    // Set after the first ExecuteOnStream completes a Record pass.
+    // Stabilization only activates from the second step onwards.
+    bool alloc_cache_ready ABSL_GUARDED_BY(mutex) = false;
   };
 
   // Command buffer thunk owns commands buffers instantiated on all executors.
@@ -159,6 +176,11 @@ class CommandBufferThunk : public Thunk {
   // When true, VA remapping is used for command buffer buffer allocations so
   // that the command buffer can be recorded once and replayed without updates.
   bool enable_command_buffer_va_remapping_;
+
+  // When true, allocation addresses are cached in ExecutorCommandBuffer to
+  // provide address stability. Changed allocations get data memcpy'd to
+  // cached addresses, preventing TracedCommandBuffer re-tracing.
+  bool enable_cached_allocs_;
 
   // Command buffer thunk state allocated in heap to allow global (per-process)
   // management of instantiated command buffers.
