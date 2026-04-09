@@ -1545,19 +1545,14 @@ CollectiveCmd::RecordTracedCommand(
     const RecordParams& record_params, RecordAction record_action,
     se::CommandBuffer* command_buffer,
     absl::FunctionRef<absl::Status(se::Stream*)> trace) {
-  auto traced_cmd = record_params.state.GetOrCreate<TracedCommandBuffer>(
-      this, command_buffer, [&] {
-        const auto& debug_options = xla::GetDebugOptionsFromFlags();
-        return std::make_unique<TracedCommandBuffer>(
-            this, buffer_uses(),
-            debug_options.xla_cmd_buffer_trace_cache_size());
-      });
+  TF_ASSIGN_OR_RETURN(std::unique_ptr<se::CommandBuffer> nested_cmd,
+                      se::TraceCommandBufferFactory::Create(
+                          execute_params.stream->parent(),
+                          execute_params.command_buffer_trace_stream, trace));
 
-  TF_ASSIGN_OR_RETURN(
-      auto nested_cmd,
-      traced_cmd->GetOrTraceCommandBuffer(
-          execute_params.buffer_allocations, execute_params.stream->parent(),
-          execute_params.command_buffer_trace_stream, trace, priority()));
+  if (priority() != se::StreamPriority::Default) {
+    TF_RETURN_IF_ERROR(nested_cmd->SetPriority(priority()));
+  }
 
   return Handle(
       std::move(record_action),
