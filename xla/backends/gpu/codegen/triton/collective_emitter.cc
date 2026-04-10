@@ -595,13 +595,35 @@ class AllReduceEmitter {
 llvm::SmallVector<int64_t> GreedyPowerOfTwoTiles(const Shape& output_shape,
                                                  int32_t num_blocks) {
   CHECK_GT(num_blocks, 0) << "num_blocks must be positive. Was " << num_blocks;
+
+  // Triton has a hard limit of 1048576 elements per tensor
+  constexpr int64_t kMaxTensorNumElements = 1048576;
+
   // Rank fits in int32_t.
   const auto rank = static_cast<int32_t>(output_shape.dimensions().size());
   const llvm::ArrayRef<const int64_t> minor_to_major =
       LayoutUtil::MinorToMajor(output_shape);
   llvm::SmallVector<int64_t, 4> tile_sizes(rank);
+
+  // Calculate minimum blocks needed to respect the element limit
+  int64_t total_elements = ShapeUtil::ElementsIn(output_shape);
+  int64_t min_blocks_for_limit =
+      CeilOfRatio(total_elements, kMaxTensorNumElements);
+
+  // Use at least enough blocks to stay under the element limit
+  uint64_t effective_num_blocks =
+      std::max(static_cast<uint64_t>(num_blocks),
+               static_cast<uint64_t>(min_blocks_for_limit));
+
+  VLOG(3) << "GreedyPowerOfTwoTiles: shape=" << output_shape.ToString()
+          << " requested_blocks=" << num_blocks
+          << " total_elements=" << total_elements
+          << " min_blocks_for_limit=" << min_blocks_for_limit
+          << " effective_blocks=" << effective_num_blocks;
+
   // NB: Unsigned because llvm::bit_<> functions expect unsigned.
-  uint64_t remaining_blocks = num_blocks;
+  uint64_t remaining_blocks = effective_num_blocks;
+
   // Iterate from most major to most minor to keep memory contiguous for each
   // block.
   for (int32_t i = rank - 1; i >= 0; --i) {
@@ -615,8 +637,28 @@ llvm::SmallVector<int64_t> GreedyPowerOfTwoTiles(const Shape& output_shape,
         static_cast<int64_t>(llvm::bit_ceil(xla::CeilOfRatio(dim_size, k)));
     const uint64_t blocks_used =
         xla::CeilOfRatio(dim_size, static_cast<uint64_t>(tile_sizes[dim]));
+
+    VLOG(3) << "  dim=" << dim << " dim_size=" << dim_size << " k=" << k
+            << " tile_size=" << tile_sizes[dim]
+            << " blocks_used=" << blocks_used
+            << " remaining_blocks_before=" << remaining_blocks;
+
     remaining_blocks = xla::FloorOfRatio(remaining_blocks, blocks_used);
+
+    VLOG(3) << "  remaining_blocks_after=" << remaining_blocks;
   }
+
+  // Final check
+  int64_t tile_num_elements = Product(tile_sizes);
+  VLOG(3) << "Final tile_sizes: [" << absl::StrJoin(tile_sizes, ", ") << "]"
+          << " total_tile_elements=" << tile_num_elements;
+
+  if (tile_num_elements > kMaxTensorNumElements) {
+    LOG(ERROR) << "Generated tile with " << tile_num_elements << " elements, "
+               << "which exceeds Triton's limit of " << kMaxTensorNumElements
+               << ". This will cause compilation to fail.";
+  }
+
   return tile_sizes;
 }
 
@@ -1151,6 +1193,8 @@ class AllGatherEmitter {
     // Get the block/program ID
     mlir::Value program_id = ttir::GetProgramIdOp::create(builder_, 0);
 
+    // Calculate source rank: program_id % world_size
+    // The modulo operation guarantees the result is in [0, world_size-1]
     mlir::Value world_size_i32 =
         arith::ConstantOp::create(builder_, builder_.getI32Type(),
                                   builder_.getI32IntegerAttr(ctx_.world_size));
@@ -1207,7 +1251,6 @@ class AllGatherEmitter {
   // pid_m = first_pid_m + ((tile_id % num_pid_in_group) % group_size_m)
   // pid_n = (tile_id % num_pid_in_group) // group_size_m
   mlir::LogicalResult EmitAllGatherSwizzled(int64_t group_size_m) {
-    VLOG(-1) << "EmitAllGatherSwizzled";
     CHECK(initialized_);
 
     llvm::ArrayRef<int64_t> shape = ctx_.input_tile.getType().getShape();
@@ -1375,8 +1418,7 @@ mlir::LogicalResult RewriteAllGather(mlir::stablehlo::AllGatherOp op,
   }
 
   VLOG(3) << "AllGatherEmitter::Emit for all-gather";
-  return AllGatherEmitter::Emit(maybe_context.value(), rewriter,
-                                false /*swizzled kernel*/);
+  return AllGatherEmitter::Emit(maybe_context.value(), rewriter);
 }
 
 }  // namespace xla::gpu
