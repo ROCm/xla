@@ -5,7 +5,6 @@ set -ex
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
 EXCLUDED_TESTS=(
-    "*ParametersUsedByCollectiveMosaicShouldBeCopiedToCollectiveMemory"
     "SortingTest*"
     "*IotaR1Test*"
     "HostMemoryAllocateTest.Numa"
@@ -13,20 +12,16 @@ EXCLUDED_TESTS=(
 )
 
 EXCLUDED_TARGETS_SGPU=(
-    "//xla/service/gpu:dot_algorithm_support_test_amdgpu_any"
     "//xla/service/gpu:float_support_test_amdgpu_any"
-    "//xla/backends/gpu/transforms:scatter_determinism_expander_test_amdgpu_any"
+    "//xla/tests:iota_test_amdgpu_any"   # Taking too many CI nodes
     "//xla/backends/gpu/transforms:triton_fusion_numerics_verifier_test_amdgpu_any"
-    "//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any"
 )
 
 TEST_TARGETS_SGPU=(
     "//xla/..."
-    "-//xla/service/gpu:dot_algorithm_support_test_amdgpu_any"
+    "-//xla/tests:iota_test_amdgpu_any"   # Taking too many CI nodes
     "-//xla/service/gpu:float_support_test_amdgpu_any"
-    "-//xla/backends/gpu/transforms:scatter_determinism_expander_test_amdgpu_any"
     "-//xla/backends/gpu/transforms:triton_fusion_numerics_verifier_test_amdgpu_any"
-    "-//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any"
 )
 
 TEST_TARGETS_MGPU=(
