@@ -218,7 +218,7 @@ def lit_test_suite_for_gpus(
     for gpu in gpus:
         filtered_srcs = [src for src in srcs if src not in disabled_on_gpus.get(gpu, [])]
         gpu_args = args + [
-            "--param=PTX=%s" % ("GCN" if gpu == "mi200" else "PTX"),
+            "--param=PTX=%s" % ("GCN" if gpu in ["mi200", "gfx1250"] else "PTX"),
             "--param=GPU=%s" % (gpu),
         ]
         gpu_data = data + [
@@ -241,7 +241,7 @@ def lit_test_suite_for_gpus(
             # We add the tag xla_h100 to avoid that the test suite is scheduled
             # on different GPU architectures. Technically these tests don't
             # need a GPU, but a build with GPU configured.
-            tags + ["rocm-only"] if gpu == "mi200" else ["cuda-only", "xla_h100"],
+            tags + ["rocm-only"] if gpu in ["mi200", "gfx1250"] else ["cuda-only", "xla_h100"],
             "_%s" % (gpu),
             **kwargs
         )
