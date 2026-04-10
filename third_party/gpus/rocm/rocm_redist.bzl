@@ -19,6 +19,26 @@ rocm_redist = {
         required_softlinks = [struct(target = "llvm/amdgcn", link = "amdgcn")],
         rocm_root = "",
     ),
+    "rocm_7.11.0_gfx94X": struct(
+        packages = [
+            {
+                "url": "https://therock-nightly-tarball.s3.amazonaws.com/therock-dist-linux-gfx94X-dcgpu-7.11.0a20260121.tar.gz",
+                "sha256": "7f80fbaa99f875ed3a5a62f1a3c23fa5bd05ffdb0284419b4678ff7182c69e05",
+            },
+        ],
+        required_softlinks = [struct(target = "llvm/amdgcn", link = "amdgcn")],
+        rocm_root = "",
+    ),
+    "rocm_7.13.0_gfx1250": struct(
+        packages = [
+            {
+                "url": "file:///mnt/anurmukh/therock-dist-linux-gfx1250-7.13.0a20260408.tar.gz",
+                "sha256": "bb776793c6da744b8279c9a0c12f85ffa2bf8d80dbfb055c8288cded92517efd",
+            },
+        ],
+        required_softlinks = [],
+        rocm_root = "",
+    ),
     "rocm_7.10.0_gfx94X_whl": struct(
         packages = [
             {
