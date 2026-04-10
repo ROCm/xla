@@ -108,15 +108,13 @@ def GetHipccOptions(argv):
   """
 
   parser = ArgumentParser()
-  parser.add_argument('--offload-arch', nargs='*', action='append')
   # TODO find a better place for this
   parser.add_argument('-gline-tables-only', action='store_true')
 
   args, _ = parser.parse_known_args(argv)
 
   hipcc_opts = ' -gline-tables-only ' if args.gline_tables_only else ''
-  if args.offload_arch:
-    hipcc_opts = hipcc_opts + ' '.join(['--offload-arch=' + a for a in sum(args.offload_arch, [])])
+  hipcc_opts = hipcc_opts + ' --offload-arch=' + AMDGPU_TARGETS
 
   return hipcc_opts
 
@@ -286,6 +284,8 @@ def main():
     # this).
     cpu_compiler_flags = [flag for flag in sys.argv[1:]
                                if not flag.startswith(('--rocm_log'))]
+    
+    if VERBOSE: print("zzzzzzzzzzzzzzzzzzz " + AMDGPU_TARGETS)
 
     # XXX: SE codes need to be built with gcc, but need this macro defined
     cpu_compiler_flags.append("-D__HIP_PLATFORM_HCC__")
