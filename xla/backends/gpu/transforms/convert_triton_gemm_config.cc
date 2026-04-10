@@ -282,6 +282,7 @@ absl::StatusOr<BlockLevelParameters> FindBlockLevelParameters(
       params.is_tma_allowed = config.is_tma_allowed;
       params.is_warp_specialization_allowed =
           config.is_warp_specialization_allowed;
+      params.waves_per_eu = config.waves_per_eu;
       return params;
     }
     VLOG(4) << "mapped_dot_tile_sizes: "
