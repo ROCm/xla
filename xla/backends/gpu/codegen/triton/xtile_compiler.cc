@@ -422,8 +422,13 @@ absl::StatusOr<TritonWrapperResult> CompileTritonToLLVM(
 
   const HloModuleConfig& hlo_config = hlo_module.config();
 
+  const auto& debug_opts = hlo_config.debug_options();
+  // On ROCm the verifier is enabled by default as an extra safety net:
+  // it turns invalid IR into a graceful compilation error that the autotuner
+  // can skip. Disable via --xla_gpu_rocm_triton_verifier=false.
   bool should_verify =
-      (hlo_config.debug_options().xla_gpu_llvm_verification_level() >= 1);
+      (debug_opts.xla_gpu_llvm_verification_level() >= 1) ||
+      (gpu_cc.IsRocm() && debug_opts.xla_gpu_rocm_triton_verifier());
 #ifndef NDEBUG
   should_verify = true;
 #endif
