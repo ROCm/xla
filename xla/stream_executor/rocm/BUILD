@@ -478,6 +478,85 @@ cc_library(
 )
 
 cc_library(
+    name = "hipsolver_wrapper",
+    hdrs = ["hipsolver_wrapper.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = if_static([
+        "@local_config_rocm//rocm:hipsolver",
+    ]) + [
+        ":rocm_executor",
+        ":rocm_platform_id",
+        "//xla/tsl/platform:env",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform:dso_loader",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "hipsparse_wrapper",
+    srcs = ["hipsparse_wrapper.h"],
+    hdrs = ["hipsparse_wrapper.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = if_static([
+        "@local_config_rocm//rocm:hipsparse",
+    ]) + [
+        ":rocm_executor",
+        ":rocm_platform_id",
+        "//xla/tsl/platform:env",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform",
+        "@tsl//tsl/platform:dso_loader",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "rocblas_wrapper",
+    hdrs = ["rocblas_wrapper.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocblas_if_static",
+        ":rocm_executor",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/util:determinism_for_kernels",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform",
+        "@tsl//tsl/platform:dso_loader",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "rocsolver_wrapper",
+    srcs = ["rocsolver_wrapper.h"],
+    hdrs = ["rocsolver_wrapper.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = if_static([
+        "@local_config_rocm//rocm:rocsolver",
+    ]) + [
+        ":rocm_executor",
+        ":rocm_platform_id",
+        "//xla/tsl/platform:env",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform:dso_loader",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
     name = "hipblaslt_if_static",
     tags = [
         "gpu",

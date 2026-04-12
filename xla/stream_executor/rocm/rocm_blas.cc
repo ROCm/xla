@@ -64,6 +64,8 @@ namespace stream_executor {
 
 namespace wrap {
 
+namespace {
+
 #define ROCBLAS_API_WRAPPER(__name)               \
   struct WrapperShim__##__name {                  \
     constexpr static const char *kName = #__name; \
@@ -94,10 +96,6 @@ namespace wrap {
   __macro(rocblas_hgemm)                        \
   __macro(rocblas_cgemm)                        \
   __macro(rocblas_zgemm)                        \
-  __macro(rocblas_sgemm_batched)                \
-  __macro(rocblas_dgemm_batched)                \
-  __macro(rocblas_cgemm_batched)                \
-  __macro(rocblas_zgemm_batched)                \
   __macro(rocblas_hgemm_strided_batched)        \
   __macro(rocblas_sgemm_strided_batched)        \
   __macro(rocblas_dgemm_strided_batched)        \
@@ -113,7 +111,7 @@ namespace wrap {
 // clang-format on
 
 FOREACH_ROCBLAS_API(ROCBLAS_API_WRAPPER)
-
+}  // namespace
 }  // namespace wrap
 
 namespace gpu {

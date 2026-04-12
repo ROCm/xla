@@ -42,6 +42,8 @@ using rocm::ROCMComplex;
 
 namespace wrap {
 
+namespace {
+
 #define STREAM_EXECUTOR_ROCFFT_WRAP(__name)                             \
   struct WrapperShim__##__name {                                        \
     template <typename... Args>                                         \
@@ -62,13 +64,9 @@ namespace wrap {
   __macro(hipfftCreate)              \
   __macro(hipfftSetAutoAllocation)   \
   __macro(hipfftSetWorkArea)         \
-  __macro(hipfftGetSize1d)           \
   __macro(hipfftMakePlan1d)          \
-  __macro(hipfftGetSize2d)           \
   __macro(hipfftMakePlan2d)          \
-  __macro(hipfftGetSize3d)           \
   __macro(hipfftMakePlan3d)          \
-  __macro(hipfftGetSizeMany)         \
   __macro(hipfftMakePlanMany)        \
   __macro(hipfftExecD2Z)             \
   __macro(hipfftExecZ2D)             \
@@ -81,6 +79,7 @@ namespace wrap {
 
 ROCFFT_ROUTINE_EACH(STREAM_EXECUTOR_ROCFFT_WRAP)
 
+}  // namespace
 }  // namespace wrap
 
 namespace {
