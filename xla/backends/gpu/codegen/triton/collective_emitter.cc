@@ -1245,96 +1245,81 @@ class AllGatherEmitter {
     // Get the tile/block ID
     mlir::Value tile_id = ttir::GetProgramIdOp::create(builder_, 0);
 
-    // Calculate num_pid_m and num_pid_n based on the input shape and tile shape
-    // For simplicity, assume 2D tiling with M and N dimensions
-    // num_pid_m = ceil(M / BLOCK_SIZE_M)
-    // num_pid_n = ceil(N / BLOCK_SIZE_N)
+    // Calculate the number of tiles needed in each dimension
+    // The gather dimension is multiplied by world_size
+    llvm::SmallVector<int64_t> num_tiles_per_dim;
+    int64_t total_tiles = 1;
+    
+    for (size_t i = 0; i < ctx_.non_tiled_input_shape.size(); ++i) {
+      int64_t dim_size = ctx_.non_tiled_input_shape[i];
+      if (i == ctx_.all_gather_dimension) {
+        dim_size *= ctx_.world_size;
+      }
+      
+      int64_t block_size = i < shape.size() ? shape[i] : 1;
+      int64_t num_tiles = (dim_size + block_size - 1) / block_size;
+      num_tiles_per_dim.push_back(num_tiles);
+      total_tiles *= num_tiles;
+    }
 
-    // For AllGather, we need to determine the number of tiles in each dimension
-    // This depends on the tile shape and the total output shape
-    const int64_t block_size_m = shape.size() > 0 ? shape[0] : 1;
-    const int64_t block_size_n = shape.size() > 1 ? shape[1] : 1;
+    // For swizzling, we use the first two dimensions (M and N)
+    const int64_t num_pid_m = num_tiles_per_dim.size() > 0 ? num_tiles_per_dim[0] : 1;
+    const int64_t num_pid_n = num_tiles_per_dim.size() > 1 ? num_tiles_per_dim[1] : 1;
 
-    // Calculate total number of tiles needed
-    // The gather dimension is multiplied by world_size, other dimensions remain
-    // the same
-    const int64_t total_m =
-        ctx_.all_gather_dimension == 0
-            ? ctx_.non_tiled_input_shape[0] * ctx_.world_size
-            : ctx_.non_tiled_input_shape[0];
-    const int64_t total_n =
-        ctx_.non_tiled_input_shape.size() > 1
-            ? (ctx_.all_gather_dimension == 1
-                   ? ctx_.non_tiled_input_shape[1] * ctx_.world_size
-                   : ctx_.non_tiled_input_shape[1])
-            : 1;
-
-    const int64_t num_pid_m = (total_m + block_size_m - 1) / block_size_m;
-    const int64_t num_pid_n = (total_n + block_size_n - 1) / block_size_n;
-
-    // Create constants
+    // Create constants (always needed)
     mlir::Value num_pid_m_val = arith::ConstantOp::create(
         builder_, builder_.getI32Type(), builder_.getI32IntegerAttr(num_pid_m));
     mlir::Value num_pid_n_val = arith::ConstantOp::create(
         builder_, builder_.getI32Type(), builder_.getI32IntegerAttr(num_pid_n));
-    mlir::Value group_size_m_val =
-        arith::ConstantOp::create(builder_, builder_.getI32Type(),
-                                  builder_.getI32IntegerAttr(group_size_m));
 
-    // Swizzled tiling calculation
-    // num_pid_in_group = GROUP_SIZE_M * num_pid_n
-    mlir::Value num_pid_in_group =
-        arith::MulIOp::create(builder_, group_size_m_val, num_pid_n_val);
+    mlir::Value pid_m, pid_n;
+    
+    // If both M and N dimensions have only 1 tile, swizzling is unnecessary
+    // Just use tile_id directly for higher dimensions
+    if (num_pid_m == 1 && num_pid_n == 1) {
+      // No swizzling needed - both pid_m and pid_n are always 0
+      pid_m = arith::ConstantOp::create(builder_, builder_.getI32Type(),
+                                        builder_.getI32IntegerAttr(0));
+      pid_n = arith::ConstantOp::create(builder_, builder_.getI32Type(),
+                                        builder_.getI32IntegerAttr(0));
+    } else {
+      mlir::Value group_size_m_val =
+          arith::ConstantOp::create(builder_, builder_.getI32Type(),
+                                    builder_.getI32IntegerAttr(group_size_m));
 
-    // group_id = tile_id // num_pid_in_group
-    mlir::Value group_id =
-        arith::DivSIOp::create(builder_, tile_id, num_pid_in_group);
+      // Swizzled tiling calculation
+      // num_pid_in_group = GROUP_SIZE_M * num_pid_n
+      mlir::Value num_pid_in_group =
+          arith::MulIOp::create(builder_, group_size_m_val, num_pid_n_val);
 
-    // first_pid_m = group_id * GROUP_SIZE_M
-    mlir::Value first_pid_m =
-        arith::MulIOp::create(builder_, group_id, group_size_m_val);
+      // group_id = tile_id // num_pid_in_group
+      mlir::Value group_id =
+          arith::DivSIOp::create(builder_, tile_id, num_pid_in_group);
 
-    // group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    mlir::Value remaining_m =
-        arith::SubIOp::create(builder_, num_pid_m_val, first_pid_m);
-    mlir::Value cmp = arith::CmpIOp::create(builder_, arith::CmpIPredicate::slt,
-                                            remaining_m, group_size_m_val);
-    mlir::Value group_size_m_actual =
-        arith::SelectOp::create(builder_, cmp, remaining_m, group_size_m_val);
+      // first_pid_m = group_id * GROUP_SIZE_M
+      mlir::Value first_pid_m =
+          arith::MulIOp::create(builder_, group_id, group_size_m_val);
 
-    // tile_id % num_pid_in_group
-    mlir::Value tile_id_mod =
-        arith::RemSIOp::create(builder_, tile_id, num_pid_in_group);
+      // group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+      mlir::Value remaining_m =
+          arith::SubIOp::create(builder_, num_pid_m_val, first_pid_m);
+      mlir::Value cmp = arith::CmpIOp::create(builder_, arith::CmpIPredicate::slt,
+                                              remaining_m, group_size_m_val);
+      mlir::Value group_size_m_actual =
+          arith::SelectOp::create(builder_, cmp, remaining_m, group_size_m_val);
 
-    // pid_m = first_pid_m + ((tile_id % num_pid_in_group) % group_size_m)
-    mlir::Value offset_m =
-        arith::RemSIOp::create(builder_, tile_id_mod, group_size_m_actual);
-    mlir::Value pid_m = arith::AddIOp::create(builder_, first_pid_m, offset_m);
+      // tile_id % num_pid_in_group
+      mlir::Value tile_id_mod =
+          arith::RemSIOp::create(builder_, tile_id, num_pid_in_group);
 
-    // pid_n = (tile_id % num_pid_in_group) // group_size_m
-    mlir::Value pid_n =
-        arith::DivSIOp::create(builder_, tile_id_mod, group_size_m_actual);
+      // pid_m = first_pid_m + ((tile_id % num_pid_in_group) % group_size_m)
+      mlir::Value offset_m =
+          arith::RemSIOp::create(builder_, tile_id_mod, group_size_m_actual);
+      pid_m = arith::AddIOp::create(builder_, first_pid_m, offset_m);
 
-    // Determine which rank's data to load based on the gather dimension
-    // Each rank owns (gather_dim_size) elements along the gather dimension
-    const int64_t gather_dim_size =
-        ctx_.non_tiled_input_shape[ctx_.all_gather_dimension];
-    const int64_t block_size_gather =
-        ctx_.all_gather_dimension == 0 ? block_size_m : block_size_n;
-    // Calculate number of blocks per rank along the gather dimension
-    // Use max(1, ...) to avoid division by zero
-    const int64_t blocks_per_rank =
-        std::max(int64_t{1}, gather_dim_size / block_size_gather);
-    mlir::Value elements_per_rank_val =
-        arith::ConstantOp::create(builder_, builder_.getI32Type(),
-                                  builder_.getI32IntegerAttr(blocks_per_rank));
-
-    // Determine source rank based on which dimension is the gather dimension
-    mlir::Value pid_gather = ctx_.all_gather_dimension == 0 ? pid_m : pid_n;
-    mlir::Value source_rank_i32 =
-        arith::DivSIOp::create(builder_, pid_gather, elements_per_rank_val);
-    mlir::Value source_rank = arith::ExtSIOp::create(
-        builder_, builder_.getI64Type(), source_rank_i32);
+      // pid_n = (tile_id % num_pid_in_group) // group_size_m
+      pid_n = arith::DivSIOp::create(builder_, tile_id_mod, group_size_m_actual);
+    }
 
     // 1. Copy local tile to symmetric buffer (all ranks do this)
     if (mlir::failed(EmitCopyToSymmetric(
@@ -1350,42 +1335,78 @@ class AllGatherEmitter {
                                           "Failed to emit sync for all-gather");
     }
 
-    // 3. Calculate offsets based on swizzled pid_m and pid_n
-    mlir::ValueRange tile_offsets = ctx_.input_extract.getOffsets();
+    // 3. Decompose into per-dimension PIDs
+    llvm::SmallVector<mlir::Value> pids;
+    
+    for (size_t i = 0; i < ctx_.non_tiled_input_shape.size(); ++i) {
+      if (i < 2) {
+        // For first two dimensions, use the swizzled values
+        pids.push_back(i == 0 ? pid_m : pid_n);
+      } else {
+        // For higher dimensions, extract from tile_id
+        // Calculate stride: product of all previous dimension tile counts
+        int64_t stride = 1;
+        for (size_t j = 0; j < i; ++j) {
+          stride *= num_tiles_per_dim[j];
+        }
+        
+        mlir::Value stride_val = arith::ConstantOp::create(
+            builder_, builder_.getI32Type(),
+            builder_.getI32IntegerAttr(stride));
+        mlir::Value num_tiles_val = arith::ConstantOp::create(
+            builder_, builder_.getI32Type(),
+            builder_.getI32IntegerAttr(num_tiles_per_dim[i]));
+        
+        // pid_i = (tile_id / stride) % num_tiles_i
+        mlir::Value pid_i = arith::DivSIOp::create(builder_, tile_id, stride_val);
+        pid_i = arith::RemSIOp::create(builder_, pid_i, num_tiles_val);
+        pids.push_back(pid_i);
+      }
+    }
+    
+    // Now calculate offsets and source rank for each dimension
     llvm::SmallVector<mlir::Value> local_offsets;
-
-    // For M dimension, calculate offset within source rank if it's the gather
-    // dimension
-    mlir::Value local_pid_m =
-        ctx_.all_gather_dimension == 0
-            ? arith::RemSIOp::create(builder_, pid_m, elements_per_rank_val)
-            : pid_m;
-    mlir::Value m_offset = arith::MulIOp::create(
-        builder_, local_pid_m,
-        arith::ConstantOp::create(builder_, builder_.getI32Type(),
-                                  builder_.getI32IntegerAttr(block_size_m)));
-    local_offsets.push_back(arith::IndexCastOp::create(
-        builder_, builder_.getIndexType(), m_offset));
-
-    // For N dimension, calculate offset within source rank if it's the gather
-    // dimension
-    if (ctx_.non_tiled_input_shape.size() > 1) {
-      mlir::Value local_pid_n =
-          ctx_.all_gather_dimension == 1
-              ? arith::RemSIOp::create(builder_, pid_n, elements_per_rank_val)
-              : pid_n;
-      mlir::Value n_offset = arith::MulIOp::create(
-          builder_, local_pid_n,
-          arith::ConstantOp::create(builder_, builder_.getI32Type(),
-                                    builder_.getI32IntegerAttr(block_size_n)));
-      local_offsets.push_back(arith::IndexCastOp::create(
-          builder_, builder_.getIndexType(), n_offset));
+    mlir::Value source_rank_i32 = nullptr;
+    
+    for (size_t i = 0; i < ctx_.non_tiled_input_shape.size(); ++i) {
+      mlir::Value pid = pids[i];
+      int64_t block_size = i < shape.size() ? shape[i] : 1;
+      int64_t dim_size = ctx_.non_tiled_input_shape[i];
+      
+      if (i == ctx_.all_gather_dimension) {
+        // This is the gather dimension
+        int64_t blocks_per_rank = std::max(int64_t{1}, 
+            (dim_size + block_size - 1) / block_size);
+        mlir::Value blocks_per_rank_val = arith::ConstantOp::create(
+            builder_, builder_.getI32Type(),
+            builder_.getI32IntegerAttr(blocks_per_rank));
+        
+        // source_rank = pid / blocks_per_rank
+        source_rank_i32 = arith::DivSIOp::create(builder_, pid, blocks_per_rank_val);
+        
+        // local_pid = pid % blocks_per_rank
+        mlir::Value local_pid = arith::RemSIOp::create(builder_, pid, blocks_per_rank_val);
+        
+        // offset = local_pid * block_size
+        mlir::Value offset = arith::MulIOp::create(
+            builder_, local_pid,
+            arith::ConstantOp::create(builder_, builder_.getI32Type(),
+                                      builder_.getI32IntegerAttr(block_size)));
+        local_offsets.push_back(arith::IndexCastOp::create(
+            builder_, builder_.getIndexType(), offset));
+      } else {
+        // Not the gather dimension - use pid directly
+        mlir::Value offset = arith::MulIOp::create(
+            builder_, pid,
+            arith::ConstantOp::create(builder_, builder_.getI32Type(),
+                                      builder_.getI32IntegerAttr(block_size)));
+        local_offsets.push_back(arith::IndexCastOp::create(
+            builder_, builder_.getIndexType(), offset));
+      }
     }
-
-    // Add remaining dimensions from tile_offsets
-    for (size_t i = 2; i < ctx_.non_tiled_input_shape.size(); ++i) {
-      local_offsets.push_back(tile_offsets[i]);
-    }
+    
+    mlir::Value source_rank = arith::ExtSIOp::create(
+        builder_, builder_.getI64Type(), source_rank_i32);
 
     xtile::TensorValue result =
         LoadTileForRank(source_rank, local_offsets, shape);
@@ -1430,7 +1451,7 @@ mlir::LogicalResult RewriteAllGather(mlir::stablehlo::AllGatherOp op,
   }
 
   VLOG(3) << "AllGatherEmitter::Emit for all-gather";
-  return AllGatherEmitter::Emit(maybe_context.value(), rewriter);
+  return AllGatherEmitter::Emit(maybe_context.value(), rewriter, true);
 }
 
 }  // namespace xla::gpu
