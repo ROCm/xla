@@ -216,8 +216,8 @@ absl::StatusOr<bool> AllGatherStartThunk::RunCollective(
   }
 
   // Fallback to NCCL/RCCL
-  TF_RETURN_IF_ERROR(xla::gpu::RunAllGather(device_buffers, stream, comm,
-                                             config_.config.use_symmetric_buffer));
+  TF_RETURN_IF_ERROR(xla::gpu::RunAllGather(
+      device_buffers, stream, comm, config_.config.use_symmetric_buffer));
   return true;
 }
 

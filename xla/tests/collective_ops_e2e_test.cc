@@ -286,8 +286,8 @@ TEST_P(AsyncCollectiveOps, AsyncAllGatherTritonBackend) {
   config.mutable_debug_options()
       .set_xla_gpu_unsupported_use_all_gather_triton_backend(true);
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      auto module, ParseAndReturnVerifiedModule(kModuleStr, config));
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnVerifiedModule(kModuleStr, config));
 
   TF_ASSERT_OK_AND_ASSIGN(ExecutionResult execution_result,
                           ExecuteReplicated(std::move(module)));
@@ -304,7 +304,8 @@ TEST_P(AsyncCollectiveOps, AsyncAllGatherTritonBackend) {
   const std::vector<Literal>& results = execution_result.results;
   ASSERT_EQ(results.size(), kNumReplicas);
   for (const Literal& result : results) {
-    LiteralTestUtil::ExpectR1Equal<float>({10.0, 15.0, 20.0, 25.0, 11.0, 16.0, 21.0, 26.0}, result);
+    LiteralTestUtil::ExpectR1Equal<float>(
+        {10.0, 15.0, 20.0, 25.0, 11.0, 16.0, 21.0, 26.0}, result);
   }
 }
 
@@ -2428,7 +2429,8 @@ TEST_F(CollectiveOpsTestE2E, OptimizedSubByteAllGatherOnDim0OutputIsCorrect) {
   }
 }
 
-TEST_F(CollectiveOpsTestE2E, OptimizedSubByteAllGatherOnDim0OutputIsCorrectTritonBackend) {
+TEST_F(CollectiveOpsTestE2E,
+       OptimizedSubByteAllGatherOnDim0OutputIsCorrectTritonBackend) {
   constexpr int kNumReplicas = 2;
   ASSERT_GE(device_count(), kNumReplicas)
       << "Test requires at least " << kNumReplicas << " devices ("
@@ -2510,7 +2512,8 @@ TEST_F(CollectiveOpsTestE2E, OptimizedSubByteAllGatherOnDim1OutputIsCorrect) {
   }
 }
 
-TEST_F(CollectiveOpsTestE2E, OptimizedSubByteAllGatherOnDim1OutputIsCorrectTritonBackend) {
+TEST_F(CollectiveOpsTestE2E,
+       OptimizedSubByteAllGatherOnDim1OutputIsCorrectTritonBackend) {
   constexpr int kNumReplicas = 2;
   ASSERT_GE(device_count(), kNumReplicas)
       << "Test requires at least " << kNumReplicas << " devices ("
@@ -2591,7 +2594,8 @@ TEST_F(CollectiveOpsTestE2E, AllGatherOnChangedDimensionIsCorrect) {
   }
 }
 
-TEST_F(CollectiveOpsTestE2E, AllGatherOnChangedDimensionIsCorrectTritonBackend) {
+TEST_F(CollectiveOpsTestE2E,
+       AllGatherOnChangedDimensionIsCorrectTritonBackend) {
   const int64_t kNumReplicas = 2;
   ASSERT_GE(device_count(), kNumReplicas)
       << "The test requires at least " << kNumReplicas << " devices";

@@ -690,8 +690,7 @@ GetBlockLevelFusionConfigForAllGather(
     return std::nullopt;
   }
 
-  const int64_t num_devices =
-      all_gather->device_list().num_devices_per_group();
+  const int64_t num_devices = all_gather->device_list().num_devices_per_group();
   if (!llvm::has_single_bit(static_cast<uint64_t>(num_devices))) {
     VLOG(1) << "Number of devices is not a power of 2 for "
             << all_gather->name() << ". Codegen will not be supported.";
@@ -833,8 +832,7 @@ absl::StatusOr<bool> TrySetGpuBackendConfigForCollective(
 absl::StatusOr<std::vector<Shape>> GetAllGatherUnmanagedKernelArguments(
     const HloComputation* computation,
     const HloAllGatherInstruction* all_gather) {
-  const int32_t num_devices =
-      all_gather->device_list().num_devices_per_group();
+  const int32_t num_devices = all_gather->device_list().num_devices_per_group();
 
   std::vector<Shape> unmanaged_arguments;
   unmanaged_arguments.reserve(computation->num_parameters() +

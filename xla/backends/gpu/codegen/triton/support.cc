@@ -361,12 +361,13 @@ CodegenDecision IsTritonSupportedAllGather(
                           ->config()
                           .debug_options()
                           .xla_gpu_unsupported_use_all_gather_triton_backend();
-  
+
   VLOG(1) << "IsTritonSupportedAllGather called for: " << all_gather.name()
           << ", flag_enabled=" << flag_enabled;
-  
+
   if (!flag_enabled) {
-    VLOG(1) << "AllGather Triton backend is DISABLED for: " << all_gather.name();
+    VLOG(1) << "AllGather Triton backend is DISABLED for: "
+            << all_gather.name();
     return CodegenDecision::Forbid(
         "Triton backend for all-gather is disabled. Enable with "
         "--xla_gpu_unsupported_use_all_gather_triton_backend=true");
@@ -383,7 +384,8 @@ CodegenDecision IsTritonSupportedAllGather(
         "S4, F8E4M3FN and F8E5M2 are not supported for all-gathers.");
   }
 
-  // TODO(allgather-triton): Add additional validation checks similar to AllReduce
+  // TODO(allgather-triton): Add additional validation checks similar to
+  // AllReduce
   // - Check replica groups
   // - Check gather dimension constraints
   // - Check size thresholds
