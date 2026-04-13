@@ -70,12 +70,10 @@ xla/third_party/eigen3/LICENSE:
 xla/third_party/eigen3/eigen_archive.BUILD:
 xla/third_party/gpus/check_cuda_libs.py:
 xla/third_party/gpus/compiler_common_tools.bzl:
-xla/third_party/gpus/crosstool/BUILD.rocm.tpl:
 xla/third_party/gpus/crosstool/BUILD.sycl.tpl:
 xla/third_party/gpus/crosstool/BUILD.tpl:
 xla/third_party/gpus/crosstool/LICENSE:
 xla/third_party/gpus/crosstool/clang/bin/crosstool_wrapper_driver_is_not_gcc.tpl:
-xla/third_party/gpus/crosstool/clang/bin/crosstool_wrapper_driver_rocm.tpl:
 xla/third_party/gpus/crosstool/clang/bin/crosstool_wrapper_driver_sycl.tpl:
 xla/third_party/gpus/crosstool/sycl_cc_toolchain_config.bzl.tpl:
 xla/third_party/gpus/crosstool/windows/msvc_wrapper_for_nvcc.py.tpl:
@@ -106,13 +104,8 @@ xla/third_party/gpus/cuda/hermetic/cuda_nvtx.BUILD.tpl:
 xla/third_party/gpus/cuda/hermetic/cuda_redist_init_repositories.bzl:
 xla/third_party/gpus/cuda_configure.bzl:
 xla/third_party/gpus/find_cuda_config.py:
-xla/third_party/gpus/find_rocm_config.py:
 xla/third_party/gpus/find_sycl_config.py:
 xla/third_party/gpus/nvidia_common_rules.bzl:
-xla/third_party/gpus/rocm/BUILD.tpl:
-xla/third_party/gpus/rocm/build_defs.bzl.tpl:
-xla/third_party/gpus/rocm/rocm_config.h.tpl:
-xla/third_party/gpus/rocm_configure.bzl:
 xla/third_party/gpus/sycl/BUILD.tpl:
 xla/third_party/gpus/sycl/build_defs.bzl.tpl:
 xla/third_party/gpus/sycl_configure.bzl:
