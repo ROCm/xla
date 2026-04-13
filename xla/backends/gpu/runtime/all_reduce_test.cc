@@ -97,7 +97,7 @@ class AllReduceKernelTest : public ::testing::Test,
       const std::vector<se::StreamExecutor*>& executors,
       const std::vector<Array<T>>& input_data, ReductionKind reduction_kind) {
     const int64_t num_ranks = input_data.size();
-    const LaunchDimensions launch_dimensions = AllReduceLaunchDimensions(
+    const LaunchDimensions launch_dimensions = CollectiveLaunchDimensions(
         input_data[0].num_elements(), num_ranks, params_.all_reduce_strategy);
 
     int64_t num_elements = input_data[0].num_elements();

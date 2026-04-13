@@ -223,6 +223,7 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
   const se::DeviceDescription& device_info =
       ir_emitter_context->gpu_device_info();
   const auto make_thunk = [&](absl::string_view kernel_name,
+                              std::optional<LaunchDimensions> launch_dimensions,
                               int32_t shmem_bytes,
                               std::unique_ptr<llvm::Module> local_module) {
     return EmitCollectiveResult{
@@ -235,6 +236,7 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
                 .debug_options()
                 .xla_gpu_unsupported_use_all_reduce_one_shot_kernel(),
             /*kernel_name=*/kernel_name,
+            /*launch_dimensions=*/launch_dimensions,
             /*shmem_bytes=*/shmem_bytes,
             /*is_multimem_enabled=*/false),
         std::move(local_module)};
@@ -244,6 +246,7 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
   if (!did_set_config) {
     LOG(INFO) << "TrySetGpuBackendConfigForCollective returned false - not using Triton";
     return make_thunk(/*kernel_name=*/"",
+                      /*launch_dimensions=*/std::nullopt,
                       /*shmem_bytes=*/0,
                       /*local_module=*/nullptr);
   }
@@ -261,6 +264,7 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
                               /*instr_override=*/instr, unmanaged_arguments));
   }
   return make_thunk(result.kernel_thunk->kernel_name(),
+                    result.kernel_thunk->launch_dimensions(),
                     result.kernel_thunk->shmem_bytes(),
                     std::move(result.llvm_module));
 }
@@ -294,6 +298,7 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
   
   // For AllGather, we don't have a reduction, so we create a dummy config
   const auto make_thunk = [&](absl::string_view kernel_name,
+                              std::optional<LaunchDimensions> launch_dimensions,
                               int32_t shmem_bytes,
                               std::unique_ptr<llvm::Module> local_module) {
     // AllGather doesn't have reduction, use a placeholder
@@ -308,6 +313,7 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
                 .debug_options()
                 .xla_gpu_unsupported_use_all_gather_triton_backend(),
             /*kernel_name=*/kernel_name,
+            /*launch_dimensions=*/launch_dimensions,
             /*shmem_bytes=*/shmem_bytes,
             /*is_multimem_enabled=*/false,
             /*collective_op_kind=*/CollectiveKernelThunk::CollectiveOpKind::kAllGather),
@@ -319,6 +325,7 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
   if (!did_set_config) {
     LOG(INFO) << "TrySetGpuBackendConfigForCollective returned false for AllGather - not using Triton";
     return make_thunk(/*kernel_name=*/"",
+                      /*launch_dimensions=*/std::nullopt,
                       /*shmem_bytes=*/0,
                       /*local_module=*/nullptr);
   }
@@ -341,7 +348,9 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
                               /*instr_override=*/instr, unmanaged_arguments));
   }
   return make_thunk(
-      result.kernel_thunk->kernel_name(), result.kernel_thunk->shmem_bytes(),
+      result.kernel_thunk->kernel_name(),
+      result.kernel_thunk->launch_dimensions(),
+      result.kernel_thunk->shmem_bytes(),
       std::move(result.llvm_module));
 }
 

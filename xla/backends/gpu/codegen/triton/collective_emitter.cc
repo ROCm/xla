@@ -269,7 +269,7 @@ GetBlockLevelFusionConfigForAllReduce(
     return std::nullopt;
   }
   const Shape& output_shape = all_reduce->shape();
-  const LaunchDimensions launch_dims = AllReduceLaunchDimensions(
+  const LaunchDimensions launch_dims = CollectiveLaunchDimensions(
       all_reduce_info->num_elements, all_reduce_info->num_devices,
       all_reduce_info->all_reduce_strategy);
   BlockLevelFusionConfig block_level_config;

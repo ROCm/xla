@@ -247,6 +247,7 @@ AllReduceStartThunk::FromProto(
   auto kernel_thunk = std::make_unique<CollectiveKernelThunk>(
       thunk_info, config, reduction_kind, thunk_proto.is_async(), buffers,
       thunk_proto.collective_kernel_enabled(), thunk_proto.kernel_name(),
+      std::nullopt,  // launch_dimensions
       thunk_proto.shmem_bytes(), thunk_proto.is_multimem_enabled());
 
   return std::make_unique<AllReduceStartThunk>(
