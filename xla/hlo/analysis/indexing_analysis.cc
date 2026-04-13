@@ -1539,14 +1539,15 @@ void AssignValuesToRTVars(IndexingMap* indexing_map) {
 
 HloInstructionIndexing ComputeOutputToInputAllGatherOpIndexing(
     const HloAllGatherInstruction* instr, MLIRContext* mlir_context) {
-  // CHECK_EQ(instr->all_gather_dimension(), 0);
-  // if (instr->all_gather_dimension() != 0) {
-  //   return CreateUnknownIndexing(instr->operand_count());
-  // }
+  // For AllGather-start, the shape is a tuple (input, output)
+  // We need to use the output element (index 1) for indexing
+  const Shape& output_shape =
+      instr->shape().IsTuple()
+          ? ShapeUtil::GetTupleElementShape(instr->shape(), 1)
+          : instr->shape();
 
   int64_t all_gather_dim = instr->all_gather_dimension();
-
-  auto output_rank = instr->shape().dimensions().size();
+  auto output_rank = output_shape.dimensions().size();
 
   std::vector<AffineExpr> exprs;
   exprs.reserve(output_rank);
@@ -1562,7 +1563,7 @@ HloInstructionIndexing ComputeOutputToInputAllGatherOpIndexing(
 
   IndexingMap indexing_map = IndexingMap::FromTensorSizes(
       AffineMap::get(output_rank, /*symbolCount=*/0, exprs, mlir_context),
-      instr->shape().dimensions(), {});
+      output_shape.dimensions(), {});
 
   AffineExpr replica_id_expr =
       mlir::getAffineDimExpr(all_gather_dim, mlir_context)
@@ -1571,7 +1572,7 @@ HloInstructionIndexing ComputeOutputToInputAllGatherOpIndexing(
   IndexingMap replica_id_map = IndexingMap::FromTensorSizes(
       AffineMap::get(output_rank, /*symbolCount=*/0, replica_id_expr,
                      mlir_context),
-      instr->shape().dimensions(), {});
+      output_shape.dimensions(), {});
 
   OperandIndexing operand_indexing(indexing_map, {}, replica_id_map);
 
@@ -1656,6 +1657,17 @@ HloInstructionIndexing ComputeOutputToInputIndexing(const HloInstruction* instr,
   }
   if (auto transpose = DynCast<HloTransposeInstruction>(instr)) {
     return ComputeOutputToInputTransposeOpIndexing(transpose, mlir_context);
+  }
+  // GetTupleElement is an identity operation for indexing - it just extracts
+  // an element from a tuple, so the indexing is the same as the operand
+  if (instr->opcode() == HloOpcode::kGetTupleElement) {
+    // Create identity indexing map for the tuple operand
+    IndexingMap identity_map = CreateIdentityMap(instr->shape(), mlir_context);
+    HloInstructionIndexing indexing;
+    indexing.indexing_maps.resize(instr->operand_count());
+    indexing.indexing_maps[0].insert(
+        OperandIndexing{identity_map, /*runtime_variables=*/{}});
+    return indexing;
   }
   // go/keep-sorted end
   LOG(ERROR) << "ComputeOutputToInputIndexing is not implemented for opcode "

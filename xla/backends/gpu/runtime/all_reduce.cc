@@ -182,8 +182,8 @@ int64_t GetMaxSupportedAllReduceSizeBytes(AllReduceStrategy strategy) {
   }
 }
 
-LaunchDimensions AllReduceLaunchDimensions(int64_t elements, int64_t num_ranks,
-                                           AllReduceStrategy strategy) {
+LaunchDimensions CollectiveLaunchDimensions(int64_t elements, int64_t num_ranks,
+                                            AllReduceStrategy strategy) {
   int64_t threads_per_block;
   int64_t blocks_per_grid;
   const int64_t elements_per_rank =

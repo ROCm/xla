@@ -151,9 +151,18 @@ absl::Status CopyCollectiveMetadataToDevice(
 absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
     const GpuCliqueKey& clique_key, se::StreamExecutor& executor,
     const CollectiveParams& collective_params) const {
+  const bool is_all_gather =
+      (collective_op_kind_ == CollectiveOpKind::kAllGather);
+
+  LOG(INFO) << "CollectiveKernelThunk::IsSupported called, is_all_gather="
+            << is_all_gather
+            << ", collective_kernel_enabled_=" << collective_kernel_enabled_;
+
   if (!collective_kernel_enabled_) {
     XLA_VLOG_DEVICE(3, executor.device_ordinal())
         << "Collective kernel is not enabled.";
+    LOG(INFO) << "CollectiveKernelThunk::IsSupported: "
+                 "collective_kernel_enabled_ is false";
     return false;
   }
 
@@ -161,23 +170,32 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
   if (buffers_.size() != 1) {
     XLA_VLOG_DEVICE(3, executor.device_ordinal())
         << "Variadic arguments are not implemented for collective kernels.";
+    LOG(INFO) << "CollectiveKernelThunk::IsSupported: buffers_.size() != 1";
     return false;
   }
+
   const int64_t num_elements = buffers_[0].element_count;
   const int64_t input_size_bytes = GetInputSizeBytes();
-  const AllReduceStrategy strategy =
-      GetAllReduceStrategy(input_size_bytes, is_multimem_enabled_);
-  // Custom all-reduce strategy is only supported for small inputs.
-  if (input_size_bytes > GetMaxSupportedAllReduceSizeBytes(strategy)) {
-    XLA_VLOG_DEVICE(3, executor.device_ordinal())
-        << "Custom all-reduce strategy is only supported for small inputs.";
-    return false;
+
+  // Skip all-reduce-specific checks for all-gather
+  if (!is_all_gather) {
+    const AllReduceStrategy strategy =
+        GetAllReduceStrategy(input_size_bytes, is_multimem_enabled_);
+    // Custom all-reduce strategy is only supported for small inputs.
+    if (input_size_bytes > GetMaxSupportedAllReduceSizeBytes(strategy)) {
+      XLA_VLOG_DEVICE(3, executor.device_ordinal())
+          << "Custom all-reduce strategy is only supported for small inputs.";
+      LOG(INFO) << "CollectiveKernelThunk::IsSupported: input_size_bytes too "
+                   "large for all-reduce";
+      return false;
+    }
   }
 
   // Only single-host collectives are supported for now.
   if (!clique_key.is_local()) {
     XLA_VLOG_DEVICE(3, executor.device_ordinal())
         << "Cross-host symmetric memory collectives are not supported.";
+    LOG(INFO) << "CollectiveKernelThunk::IsSupported: clique_key is not local";
     return false;
   }
 
@@ -187,13 +205,31 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
     if (!executor.CanEnablePeerAccessTo(peer_device_id)) {
       XLA_VLOG_DEVICE(3, executor.device_ordinal())
           << "Peer access is not supported with device " << peer_device_id;
+      LOG(INFO) << "CollectiveKernelThunk::IsSupported: peer access not "
+                   "supported to device "
+                << peer_device_id;
       return false;
     }
   }
 
-  return IsAllReduceKernelSupported(
+  // For all-gather, we need an emitted Triton kernel
+  // If no kernel was emitted (kernel_name_ is empty), fall back to NCCL
+  if (is_all_gather) {
+    bool has_kernel = !kernel_name_.empty();
+    LOG(INFO) << "CollectiveKernelThunk::IsSupported: returning " << has_kernel
+              << " for all-gather (has_kernel=" << has_kernel << ")";
+    return has_kernel;
+  }
+
+  // All-reduce specific validation
+  const AllReduceStrategy strategy =
+      GetAllReduceStrategy(input_size_bytes, is_multimem_enabled_);
+  bool supported = IsAllReduceKernelSupported(
       clique_key.num_local_participants(), num_elements,
       collective_config_.operand_element_type[0], reduction_kind_, strategy);
+  LOG(INFO) << "CollectiveKernelThunk::IsSupported: returning " << supported
+            << " for all-reduce";
+  return supported;
 }
 
 absl::Status CollectiveKernelThunk::Prepare(const PrepareParams& params) {
@@ -227,15 +263,26 @@ absl::Status CollectiveKernelThunk::Prepare(const PrepareParams& params) {
     // Allocate scratch buffers.
     const AllReduceStrategy strategy =
         GetAllReduceStrategy(GetInputSizeBytes(), is_multimem_enabled_);
-    const LaunchDimensions launch_dimensions = AllReduceLaunchDimensions(
-        buffers_[0].element_count, clique_key.num_local_participants(),
-        strategy);
+    const LaunchDimensions launch_dimensions =
+        launch_dimensions_.value_or(CollectiveLaunchDimensions(
+            buffers_[0].element_count, clique_key.num_local_participants(),
+            strategy));
     const int64_t kNumSignalFlags =
         clique_key.num_local_participants() * launch_dimensions.num_blocks();
     const int64_t kSignalBufferSize = xla::RoundUpTo<uint64_t>(
         kNumSignalFlags * sizeof(int32_t), kXlaAllocatedBufferAlignBytes);
+
+    // For AllGather, we need to allocate buffers based on the destination size
+    // (which is num_replicas * source_size), not the source size.
+    // For AllReduce, source and destination sizes are the same.
+    const bool is_all_gather =
+        (collective_op_kind_ == CollectiveOpKind::kAllGather);
+    const int64_t buffer_size_to_allocate =
+        is_all_gather ? buffers_[0].destination_buffer.slice.size()
+                      : buffers_[0].source_buffer.slice.size();
+
     const int64_t kLocalBufferSize = xla::RoundUpTo<uint64_t>(
-        buffers_[0].source_buffer.slice.size(), kXlaAllocatedBufferAlignBytes);
+        buffer_size_to_allocate, kXlaAllocatedBufferAlignBytes);
     TF_ASSIGN_OR_RETURN(
         se::DeviceAddressHandle local_buffers_handle,
         AllocateMemory(params.executor, kLocalBufferSize * kNumBuffers,
@@ -297,17 +344,20 @@ absl::Status CollectiveKernelThunk::Initialize(const InitializeParams& params) {
     if (!per_stream_state_.contains(params.executor)) {
       StreamMemory* memory_state = per_stream_memory_.at(params.executor).get();
       // Step1: We needs 1 atomic flag per block per device on each device.
-      // One-shot kernel expects that the signal flags buffer is zeroed out.
+      // The kernel expects that the signal flags buffer is zeroed out.
       // Initial state of device memory is undefined, so we need to zero out
       // the buffer. The kernel will take care of leaving the buffer in
       // correct state after use, so we don't need to zero out after
       // initialization.
       TF_RETURN_IF_ERROR(params.executor->SynchronousMemZero(
-          memory_state->signal_buffers_handle.memory_ptr(),
-          memory_state->signal_buffers_handle.memory().size()));
+          memory_state->signal_buffers_handle.address_ptr(),
+          memory_state->signal_buffers_handle.address().size()));
       // Create a kernel for execution.
       std::unique_ptr<se::Kernel> kernel = nullptr;
       if (!kernel_name_.empty()) {
+        TF_RET_CHECK(launch_dimensions_.has_value())
+            << "Launch dimensions are not set for when using emitted "
+               "collective kernel.";
         if (!params.src.binary.empty()) {
           TF_ASSIGN_OR_RETURN(
               kernel,
@@ -404,12 +454,15 @@ absl::Status CollectiveKernelThunk::Initialize(const InitializeParams& params) {
           tsl::safe_reinterpret_cast<char*>(dst_mmem) + dst_mmem_offset;
 
       XLA_VLOG_DEVICE(3, params.executor->device_ordinal())
-          << "Constructed device state {"
-          << " metadata rank: " << metadata.rank << ", param_to_peers: ("
+          << "Constructed device state {" << " metadata rank: " << metadata.rank
+          << ", param_to_peers: ("
           << absl::StrJoin(param_to_peers_ptrs, ", ", PtrFormatter{})
           << "), multimem_addresses: ("
           << absl::StrJoin(multimem_addresses, ", ", PtrFormatter{}) << ")}";
     } else {
+      // For both AllReduce and AllGather, we exchange 2 buffers via P2P:
+      // - Parameter 0: Data symmetric buffer (local_buffers)
+      // - Parameter 1: Signal/synchronization buffer (signal_buffers)
       std::vector<se::DeviceAddressBase> parameters{
           memory_state->local_buffers_handle.address(),
           memory_state->signal_buffers_handle.address()};
@@ -479,12 +532,11 @@ absl::Status CollectiveKernelThunk::ExecuteOnStream(
   const uint32_t buffer_index = state->invocation_count % kNumBuffers;
   const AllReduceStrategy strategy =
       GetAllReduceStrategy(GetInputSizeBytes(), is_multimem_enabled_);
-  const LaunchDimensions launch_dimensions =
-      AllReduceLaunchDimensions(buffer.element_count, num_devices, strategy);
   // In case of two-shot we want to increment in multiples of 2.
   state->invocation_count += 1 + static_cast<uint32_t>(strategy);
   XLA_VLOG_DEVICE(3, device_ordinal)
-      << "Performing one-shot all-reduce for clique " << clique_key.ToString();
+      << "Performing " << strategy << " all-reduce for clique "
+      << clique_key.ToString();
 
   se::DeviceAddressBase input_buffer_ptr =
       state->remote_buffer_ptrs[buffer_index];
@@ -493,12 +545,16 @@ absl::Status CollectiveKernelThunk::ExecuteOnStream(
   XLA_VLOG_DEVICE(3, device_ordinal)
       << "input_buffer_ptr: " << input_buffer_ptr.opaque()
       << " signal_buffer_ptr: " << signal_buffer_ptr.opaque();
-  XLA_VLOG_DEVICE(3, device_ordinal)
-      << "launch dimensions: " << launch_dimensions.num_blocks() << "x"
-      << launch_dimensions.num_threads_per_block()
-      << "(block x threadsPerBlock)";
 
   if (state->kernel != nullptr) {
+    TF_RET_CHECK(launch_dimensions_.has_value())
+        << "Launch dimensions are not set for when using emitted "
+           "collective kernel.";
+    XLA_VLOG_DEVICE(3, device_ordinal)
+        << "Emitted kernel launch dimensions: "
+        << launch_dimensions_->num_blocks() << "x"
+        << launch_dimensions_->num_threads_per_block()
+        << "(block x threadsPerBlock)";
     TF_ASSIGN_OR_RETURN(se::DeviceAddressBase remote_buffers,
                         GetParameterDeviceMemoryBase(
                             state->metadata, /*num_parameters=*/kNumParameters,
@@ -516,9 +572,16 @@ absl::Status CollectiveKernelThunk::ExecuteOnStream(
         /* signal_value= */ state->invocation_count,
         signal_buffers,
         remote_buffers};
-    return ExecuteKernelOnStream(*state->kernel, kernel_args, launch_dimensions,
+    return ExecuteKernelOnStream(*state->kernel, kernel_args,
+                                 launch_dimensions_.value(),
                                  /*cluster_dim=*/std::nullopt, stream);
   }
+  const LaunchDimensions launch_dimensions =
+      CollectiveLaunchDimensions(buffer.element_count, num_devices, strategy);
+  XLA_VLOG_DEVICE(3, device_ordinal)
+      << "CUDA kernel launch dimensions: " << launch_dimensions.num_blocks()
+      << "x" << launch_dimensions.num_threads_per_block()
+      << "(block x threadsPerBlock)";
 
   // TODO(b/407736956): Change this to emitted kernel.
   return RunAllReduceKernel(

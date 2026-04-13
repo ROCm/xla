@@ -35,9 +35,14 @@ void CreateTritonXlaPipeline(
     bool allow_tma, int num_stages, bool warp_specialization_allowed) {
   pm->addPass(mlir::triton::xla::CreateTritonXLASqueezeDimsPass());
   pm->addPass(mlir::triton::xla::CreateTritonXLAFoldTransposePass());
+
   pm->addPass(mlir::triton::xla::CreateTritonXLALowerBlockBarrierPass());
-  pm->addPass(mlir::triton::xla::CreateTritonXLALowerAtomicsPass());
-  pm->addPass(mlir::triton::xla::CreateTritonXLALowerGetTidPass());
+
+  // Use extern atomics approach for all targets
+  // This declares external functions that will be implemented later in the
+  // pipeline
+  pm->addPass(mlir::triton::xla::CreateTritonXLALowerExternAtomicsPass());
+  pm->addPass(mlir::triton::xla::CreateTritonXLALowerExternGetTidPass());
   pm->addPass(mlir::triton::xla::CreateTritonXLALowerXTilePass());
   pm->addPass(mlir::triton::xla::CreateStableHLOLowerToTritonPass(
       warp_specialization_allowed));

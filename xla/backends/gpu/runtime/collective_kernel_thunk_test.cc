@@ -198,6 +198,7 @@ CollectiveKernelThunkMetadata CreateCollectiveKernelThunk(
       /*is_async=*/false, result.buffers,
       /*is_collective_kernel_enabled=*/true,
       /*kernel_name=*/kKernelName,
+      /*launch_dimensions=*/std::nullopt,
       /*shmem_bytes=*/0,
       /*is_multimem_enabled=*/is_multimem_enabled);
   result.total_buffer_size = total_buffer_size;

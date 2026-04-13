@@ -34,13 +34,15 @@ limitations under the License.*/
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/core/collectives/rank_id.h"
 #include "xla/core/collectives/reduction_kind.h"
+#include "xla/service/gpu/launch_dimensions.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_address_handle.h"
 #include "xla/stream_executor/gpu/all_reduce_kernel.h"
 #include "xla/stream_executor/kernel.h"
 #include "xla/stream_executor/stream.h"
 
-namespace xla::gpu {
+namespace xla {
+namespace gpu {
 
 // A thunk that runs single-host collective operations in a single shot.
 // Assumes multiple devices are present, but all on the same host.
@@ -54,25 +56,36 @@ namespace xla::gpu {
 // - Launch the kernel.
 class CollectiveKernelThunk : public Thunk {
  public:
+  enum class CollectiveOpKind {
+    kAllReduce,
+    kAllGather,
+  };
+
   static constexpr auto kMaxNumExecutors =
       ::stream_executor::gpu::kMaxNumAllReduceInputPtrs;
 
-  CollectiveKernelThunk(ThunkInfo info, CollectiveConfig collective_config,
-                        ReductionKind reduction_kind, bool is_async,
-                        std::vector<CollectiveThunk::Buffer> buffers,
-                        bool is_collective_kernel_enabled,
-                        absl::string_view kernel_name = "",
-                        int32_t shmem_bytes = 0,
-                        bool is_multimem_enabled = false)
+  CollectiveKernelThunk(
+      ThunkInfo info, CollectiveConfig collective_config,                //
+      ReductionKind reduction_kind,                                      //
+      bool is_async,                                                     //
+      std::vector<CollectiveThunk::Buffer> buffers,                      //
+      bool is_collective_kernel_enabled,                                 //
+      absl::string_view kernel_name = "",                                //
+      std::optional<LaunchDimensions> launch_dimensions = std::nullopt,  //
+      int32_t shmem_bytes = 0,                                           //
+      bool is_multimem_enabled = false,                                  //
+      CollectiveOpKind collective_op_kind = CollectiveOpKind::kAllReduce)
       : Thunk{Thunk::kCollectiveKernel, info},
         collective_kernel_enabled_(is_collective_kernel_enabled),
         is_async_(is_async),
         collective_config_(std::move(collective_config)),
         reduction_kind_(reduction_kind),
+        launch_dimensions_(launch_dimensions),
         kernel_name_(kernel_name),
         shmem_bytes_(shmem_bytes),
         buffers_(std::move(buffers)),
-        is_multimem_enabled_(is_multimem_enabled) {
+        is_multimem_enabled_(is_multimem_enabled),
+        collective_op_kind_(collective_op_kind) {
     per_stream_state_.reserve(kMaxNumExecutors);
   }
 
@@ -84,6 +97,9 @@ class CollectiveKernelThunk : public Thunk {
 
   bool collective_kernel_enabled() const { return collective_kernel_enabled_; }
   bool is_async() const { return is_async_; }
+  std::optional<LaunchDimensions> launch_dimensions() const {
+    return launch_dimensions_;
+  }
 
   // Returns true if the collective kernel is supported for the given clique.
   absl::StatusOr<bool> IsSupported(
@@ -171,6 +187,9 @@ class CollectiveKernelThunk : public Thunk {
   const CollectiveConfig collective_config_;
   // Reduction kind being to use for AllReduce collective.
   const ReductionKind reduction_kind_;
+  // Launch dimensions for the kernel. Only relevant when the codegen kernel
+  // is used.
+  std::optional<LaunchDimensions> launch_dimensions_;
   // Kernel name to execute. Required when Codegen/PTX kernel is used.
   // Must match the kernel name in the generated PTX kernel.
   const std::string kernel_name_;
@@ -188,7 +207,10 @@ class CollectiveKernelThunk : public Thunk {
   absl::flat_hash_map<se::StreamExecutor*, std::unique_ptr<StreamMemory>>
       per_stream_memory_ ABSL_GUARDED_BY(mutex_);
   const bool is_multimem_enabled_;
+  const CollectiveOpKind collective_op_kind_;
 };
-}  // namespace xla::gpu
+
+}  // namespace gpu
+}  // namespace xla
 
 #endif  // XLA_BACKENDS_GPU_RUNTIME_COLLECTIVE_KERNEL_THUNK_H_
