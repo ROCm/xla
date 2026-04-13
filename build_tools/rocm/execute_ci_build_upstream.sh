@@ -12,7 +12,6 @@ EXCLUDED_TESTS=(
 )
 
 EXCLUDED_TARGETS_SGPU=(
-    "//xla/service/gpu:float_support_test_amdgpu_any"
     "//xla/tests:iota_test_amdgpu_any"   # Taking too many CI nodes
     "//xla/backends/gpu/transforms:triton_fusion_numerics_verifier_test_amdgpu_any"
 )
@@ -20,7 +19,6 @@ EXCLUDED_TARGETS_SGPU=(
 TEST_TARGETS_SGPU=(
     "//xla/..."
     "-//xla/tests:iota_test_amdgpu_any"   # Taking too many CI nodes
-    "-//xla/service/gpu:float_support_test_amdgpu_any"
     "-//xla/backends/gpu/transforms:triton_fusion_numerics_verifier_test_amdgpu_any"
 )
 
