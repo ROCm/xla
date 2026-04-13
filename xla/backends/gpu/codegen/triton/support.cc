@@ -375,9 +375,9 @@ CodegenDecision IsTritonSupportedAllGather(
 
   VLOG(1) << "AllGather Triton backend is ENABLED for: " << all_gather.name();
 
-  if (all_gather.shape().element_type() == PrimitiveType::F8E4M3FN ||
-      all_gather.shape().element_type() == PrimitiveType::F8E5M2 ||
-      all_gather.shape().element_type() == PrimitiveType::S4) {
+  PrimitiveType element_type = all_gather.operand(0)->shape().element_type();
+  if (element_type == F8E4M3FN || element_type == F8E5M2 ||
+      element_type == S4) {
     VLOG(1) << "AllGather rejected due to unsupported data type: "
             << all_gather.shape().element_type();
     return CodegenDecision::Forbid(

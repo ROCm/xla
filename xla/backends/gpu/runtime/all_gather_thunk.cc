@@ -102,8 +102,8 @@ AllGatherStartThunk::AllGatherStartThunk(
       buffers_(std::move(buffers)),
       collective_kernel_thunk_(std::move(collective_kernel_thunk)) {
   CHECK_EQ(config_.config.operand_element_type.size(), buffers_.size());
-  LOG(INFO) << "AllGatherStartThunk created with CollectiveKernelThunk for: "
-            << inst->name();
+  VLOG(3) << "AllGatherStartThunk created with CollectiveKernelThunk for: "
+          << inst->name();
 }
 
 /*static*/ absl::Status AllGatherStartThunk::CheckImplementable(
@@ -211,8 +211,8 @@ absl::StatusOr<bool> AllGatherStartThunk::RunCollective(
       TF_RETURN_IF_ERROR(collective_kernel_thunk_->ExecuteOnStream(params));
       return true;
     }
-    LOG(INFO) << "AllGatherStartThunk: Triton kernel not supported, falling "
-                 "back to NCCL/RCCL";
+    VLOG(3) << "AllGatherStartThunk: Triton kernel not supported, falling "
+               "back to NCCL/RCCL";
   }
 
   // Fallback to NCCL/RCCL

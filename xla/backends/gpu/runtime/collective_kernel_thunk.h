@@ -65,15 +65,15 @@ class CollectiveKernelThunk : public Thunk {
       ::stream_executor::gpu::kMaxNumAllReduceInputPtrs;
 
   CollectiveKernelThunk(
-      ThunkInfo info, CollectiveConfig collective_config,                //
-      ReductionKind reduction_kind,                                      //
-      bool is_async,                                                     //
-      std::vector<CollectiveThunk::Buffer> buffers,                      //
-      bool is_collective_kernel_enabled,                                 //
-      absl::string_view kernel_name = "",                                //
-      std::optional<LaunchDimensions> launch_dimensions = std::nullopt,  //
-      int32_t shmem_bytes = 0,                                           //
-      bool is_multimem_enabled = false,                                  //
+      ThunkInfo info, CollectiveConfig collective_config,                     //
+      std::optional<ReductionKind> reduction_kind,                            //
+      bool is_async,                                                          //
+      std::vector<CollectiveThunk::Buffer> buffers,                           //
+      bool is_collective_kernel_enabled,                                      //
+      absl::string_view kernel_name = "",                                     //
+      std::optional<LaunchDimensions> launch_dimensions = std::nullopt,       //
+      int32_t shmem_bytes = 0,                                                //
+      bool is_multimem_enabled = false,                                       //
       CollectiveOpKind collective_op_kind = CollectiveOpKind::kAllReduce)
       : Thunk{Thunk::kCollectiveKernel, info},
         collective_kernel_enabled_(is_collective_kernel_enabled),
@@ -186,7 +186,8 @@ class CollectiveKernelThunk : public Thunk {
   // Collective config being used. Copied over to avoid lifetime issues.
   const CollectiveConfig collective_config_;
   // Reduction kind being to use for AllReduce collective.
-  const ReductionKind reduction_kind_;
+  // Optional - only set for AllReduce operations.
+  const std::optional<ReductionKind> reduction_kind_;
   // Launch dimensions for the kernel. Only relevant when the codegen kernel
   // is used.
   std::optional<LaunchDimensions> launch_dimensions_;

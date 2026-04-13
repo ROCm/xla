@@ -154,15 +154,15 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
   const bool is_all_gather =
       (collective_op_kind_ == CollectiveOpKind::kAllGather);
 
-  LOG(INFO) << "CollectiveKernelThunk::IsSupported called, is_all_gather="
-            << is_all_gather
-            << ", collective_kernel_enabled_=" << collective_kernel_enabled_;
+  VLOG(3) << "CollectiveKernelThunk::IsSupported called, is_all_gather="
+          << is_all_gather
+          << ", collective_kernel_enabled_=" << collective_kernel_enabled_;
 
   if (!collective_kernel_enabled_) {
     XLA_VLOG_DEVICE(3, executor.device_ordinal())
         << "Collective kernel is not enabled.";
-    LOG(INFO) << "CollectiveKernelThunk::IsSupported: "
-                 "collective_kernel_enabled_ is false";
+    VLOG(3) << "CollectiveKernelThunk::IsSupported: "
+               "collective_kernel_enabled_ is false";
     return false;
   }
 
@@ -170,7 +170,7 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
   if (buffers_.size() != 1) {
     XLA_VLOG_DEVICE(3, executor.device_ordinal())
         << "Variadic arguments are not implemented for collective kernels.";
-    LOG(INFO) << "CollectiveKernelThunk::IsSupported: buffers_.size() != 1";
+    VLOG(3) << "CollectiveKernelThunk::IsSupported: buffers_.size() != 1";
     return false;
   }
 
@@ -185,8 +185,8 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
     if (input_size_bytes > GetMaxSupportedAllReduceSizeBytes(strategy)) {
       XLA_VLOG_DEVICE(3, executor.device_ordinal())
           << "Custom all-reduce strategy is only supported for small inputs.";
-      LOG(INFO) << "CollectiveKernelThunk::IsSupported: input_size_bytes too "
-                   "large for all-reduce";
+      VLOG(3) << "CollectiveKernelThunk::IsSupported: input_size_bytes too "
+                 "large for all-reduce";
       return false;
     }
   }
@@ -195,7 +195,7 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
   if (!clique_key.is_local()) {
     XLA_VLOG_DEVICE(3, executor.device_ordinal())
         << "Cross-host symmetric memory collectives are not supported.";
-    LOG(INFO) << "CollectiveKernelThunk::IsSupported: clique_key is not local";
+    VLOG(3) << "CollectiveKernelThunk::IsSupported: clique_key is not local";
     return false;
   }
 
@@ -205,9 +205,9 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
     if (!executor.CanEnablePeerAccessTo(peer_device_id)) {
       XLA_VLOG_DEVICE(3, executor.device_ordinal())
           << "Peer access is not supported with device " << peer_device_id;
-      LOG(INFO) << "CollectiveKernelThunk::IsSupported: peer access not "
-                   "supported to device "
-                << peer_device_id;
+      VLOG(3) << "CollectiveKernelThunk::IsSupported: peer access not "
+                 "supported to device "
+              << peer_device_id;
       return false;
     }
   }
@@ -216,19 +216,22 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
   // If no kernel was emitted (kernel_name_ is empty), fall back to NCCL
   if (is_all_gather) {
     bool has_kernel = !kernel_name_.empty();
-    LOG(INFO) << "CollectiveKernelThunk::IsSupported: returning " << has_kernel
-              << " for all-gather (has_kernel=" << has_kernel << ")";
+    VLOG(3) << "CollectiveKernelThunk::IsSupported: returning " << has_kernel
+            << " for all-gather (has_kernel=" << has_kernel << ")";
     return has_kernel;
   }
 
   // All-reduce specific validation
+  TF_RET_CHECK(reduction_kind_.has_value())
+      << "Reduction kind must be set for AllReduce operations";
   const AllReduceStrategy strategy =
       GetAllReduceStrategy(input_size_bytes, is_multimem_enabled_);
   bool supported = IsAllReduceKernelSupported(
       clique_key.num_local_participants(), num_elements,
-      collective_config_.operand_element_type[0], reduction_kind_, strategy);
-  LOG(INFO) << "CollectiveKernelThunk::IsSupported: returning " << supported
-            << " for all-reduce";
+      collective_config_.operand_element_type[0], reduction_kind_.value(),
+      strategy);
+  VLOG(3) << "CollectiveKernelThunk::IsSupported: returning " << supported
+          << " for all-reduce";
   return supported;
 }
 
@@ -584,11 +587,18 @@ absl::Status CollectiveKernelThunk::ExecuteOnStream(
       << "(block x threadsPerBlock)";
 
   // TODO(b/407736956): Change this to emitted kernel.
+  // AllGather should not reach this code path as it requires an emitted kernel.
+  // The reduction_kind_ field is only valid for AllReduce operations.
+  CHECK(collective_op_kind_ == CollectiveOpKind::kAllReduce)
+      << "RunAllReduceKernel should only be called for AllReduce operations, "
+      << "not for AllGather. AllGather requires an emitted Triton kernel.";
+  TF_RET_CHECK(reduction_kind_.has_value())
+      << "Reduction kind must be set for AllReduce operations";
   return RunAllReduceKernel(
       /*stream=*/stream,
       /*launch_dimensions=*/launch_dimensions,
       /*element_type=*/element_type,
-      /*reduction_kind=*/reduction_kind_,
+      /*reduction_kind=*/reduction_kind_.value(),
       /*all_reduce_strategy=*/strategy,
       /*symmetric_input_buffer=*/input_buffer_ptr,
       /*local_input_buffer=*/source_buffer,

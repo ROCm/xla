@@ -30,6 +30,11 @@ limitations under the License.
 
 namespace xla::gpu {
 
+// Maximum number of blocks per grid for collective operations.
+// This constant is used for both launch dimension calculations and
+// signal buffer shape sizing to ensure consistency.
+inline constexpr int64_t kMaxCollectiveBlocksPerGrid = 24;
+
 // Returns the all-reduce strategy for the given input size.
 // If `is_multimem_enabled` is true, then multimem strategies are also
 // considered.

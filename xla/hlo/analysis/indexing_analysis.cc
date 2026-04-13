@@ -1658,16 +1658,36 @@ HloInstructionIndexing ComputeOutputToInputIndexing(const HloInstruction* instr,
   if (auto transpose = DynCast<HloTransposeInstruction>(instr)) {
     return ComputeOutputToInputTransposeOpIndexing(transpose, mlir_context);
   }
-  // GetTupleElement is an identity operation for indexing - it just extracts
-  // an element from a tuple, so the indexing is the same as the operand
+  // GetTupleElement extracts an element from a tuple operand.
+  // An identity mapping is only valid when the tuple operand's extracted
+  // element has the same shape as the GTE output. This is the case for
+  // AllGather fusion tiling where GTE acts as a pass-through.
   if (instr->opcode() == HloOpcode::kGetTupleElement) {
-    // Create identity indexing map for the tuple operand
-    IndexingMap identity_map = CreateIdentityMap(instr->shape(), mlir_context);
-    HloInstructionIndexing indexing;
-    indexing.indexing_maps.resize(instr->operand_count());
-    indexing.indexing_maps[0].insert(
-        OperandIndexing{identity_map, /*runtime_variables=*/{}});
-    return indexing;
+    auto* gte = Cast<HloGetTupleElementInstruction>(instr);
+    const HloInstruction* tuple_operand = gte->operand(0);
+    const Shape& tuple_shape = tuple_operand->shape();
+    const Shape& output_shape = gte->shape();
+
+    // Verify the operand is a tuple and the extracted element shape matches
+    if (tuple_shape.IsTuple() &&
+        gte->tuple_index() < tuple_shape.tuple_shapes_size()) {
+      const Shape& element_shape = tuple_shape.tuple_shapes(gte->tuple_index());
+
+      // Only use identity mapping if the extracted element shape matches
+      // the GTE output shape
+      if (ShapeUtil::Equal(output_shape, element_shape)) {
+        IndexingMap identity_map =
+            CreateIdentityMap(output_shape, mlir_context);
+        HloInstructionIndexing indexing;
+        indexing.indexing_maps.resize(instr->operand_count());
+        indexing.indexing_maps[0].insert(
+            OperandIndexing{identity_map, /*runtime_variables=*/{}});
+        return indexing;
+      }
+    }
+
+    // If shapes don't match or context is invalid, return unknown indexing
+    return CreateUnknownIndexing(instr->operand_count());
   }
   // go/keep-sorted end
   LOG(ERROR) << "ComputeOutputToInputIndexing is not implemented for opcode "

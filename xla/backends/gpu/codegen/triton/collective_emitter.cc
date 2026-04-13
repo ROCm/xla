@@ -312,9 +312,8 @@ absl::StatusOr<std::vector<Shape>> GetAllReduceUnmanagedKernelArguments(
   // - num_devices * num_blocks for the signal buffer.
   // - num_devices * shape of the parameter for scratch buffers.
   // Since number of blocks is not known in this context we use a constant.
-  static constexpr int32_t kMaxBlocksPerGrid = 24;
   unmanaged_arguments.push_back(
-      ShapeUtil::MakeShape(S32, {num_devices, kMaxBlocksPerGrid}));
+      ShapeUtil::MakeShape(S32, {num_devices, kMaxCollectiveBlocksPerGrid}));
   // Scratch buffers
   for (const HloInstruction* instr : computation->parameter_instructions()) {
     Shape shape =
@@ -595,8 +594,6 @@ class AllReduceEmitter {
   bool initialized_ = false;
 };
 
-}  // namespace
-
 llvm::SmallVector<int64_t> GreedyPowerOfTwoTiles(const Shape& output_shape,
                                                  int32_t num_blocks) {
   CHECK_GT(num_blocks, 0) << "num_blocks must be positive. Was " << num_blocks;
@@ -667,6 +664,8 @@ llvm::SmallVector<int64_t> GreedyPowerOfTwoTiles(const Shape& output_shape,
   return tile_sizes;
 }
 
+}  // namespace
+
 // Returns the block level fusion config for all-gather if supported.
 absl::StatusOr<std::optional<BlockLevelFusionConfig>>
 GetBlockLevelFusionConfigForAllGather(
@@ -677,16 +676,16 @@ GetBlockLevelFusionConfigForAllGather(
            ->config()
            .debug_options()
            .xla_gpu_unsupported_use_all_gather_triton_backend()) {
-    LOG(INFO) << "AllGather Triton backend is not enabled. "
-              << "Set xla_gpu_unsupported_use_all_gather_triton_backend=true "
-                 "to enable.";
+    VLOG(3) << "AllGather Triton backend is not enabled. "
+            << "Set xla_gpu_unsupported_use_all_gather_triton_backend=true "
+               "to enable.";
     return std::nullopt;
   }
 
   // Check if replica groups are present (required for Triton backend)
   if (all_gather->device_list().replica_groups().empty()) {
-    LOG(INFO) << "Replica groups are empty for " << all_gather->name()
-              << ". Codegen will not be supported.";
+    VLOG(3) << "Replica groups are empty for " << all_gather->name()
+            << ". Codegen will not be supported.";
     return std::nullopt;
   }
 
@@ -711,8 +710,8 @@ GetBlockLevelFusionConfigForAllGather(
   }
 
   if (!is_supported) {
-    LOG(INFO) << "Collective codegen requires CUDA compute capability >= 9.0 "
-              << "or ROCm with Triton support. Codegen will not be supported.";
+    VLOG(3) << "Collective codegen requires CUDA compute capability >= 9.0 "
+            << "or ROCm with Triton support. Codegen will not be supported.";
     return std::nullopt;
   }
 
@@ -725,9 +724,9 @@ GetBlockLevelFusionConfigForAllGather(
   // Triton primarily supports floating-point types and some integer types
   // Unsigned integer types (u32, u16, etc.) are not well supported
   if (element_type == U32 || element_type == U16 || element_type == U64) {
-    LOG(INFO) << "AllGather: Unsigned integer type "
-              << PrimitiveType_Name(element_type)
-              << " is not supported by Triton backend. Falling back to NCCL.";
+    VLOG(3) << "AllGather: Unsigned integer type "
+            << PrimitiveType_Name(element_type)
+            << " is not supported by Triton backend. Falling back to NCCL.";
     return std::nullopt;
   }
 
@@ -736,9 +735,9 @@ GetBlockLevelFusionConfigForAllGather(
   // tiling
   const int64_t alignment_requirement = se::gpu::kNumElementsPerThread;
   if (num_elements % alignment_requirement != 0) {
-    LOG(INFO) << "AllGather: Number of elements (" << num_elements
-              << ") is not aligned to the alignment requirement ("
-              << alignment_requirement << "). Falling back to NCCL.";
+    VLOG(3) << "AllGather: Number of elements (" << num_elements
+            << ") is not aligned to the alignment requirement ("
+            << alignment_requirement << "). Falling back to NCCL.";
     return std::nullopt;
   }
 
@@ -747,7 +746,6 @@ GetBlockLevelFusionConfigForAllGather(
   // elements_per_rank = num_elements
   static constexpr int64_t kWarpSize = 32;
   static constexpr uint64_t kMaxThreadsPerBlock = 512;
-  static constexpr int64_t kMaxBlocksPerGrid = 32;
 
   const int64_t elements_per_rank =
       num_elements;  // AllGather doesn't split work like TwoShot
@@ -758,8 +756,9 @@ GetBlockLevelFusionConfigForAllGather(
   const int64_t threads_per_block =
       std::min(kMaxThreadsPerBlock,
                static_cast<uint64_t>(llvm::PowerOf2Ceil(total_threads)));
-  const int64_t blocks_per_grid = std::min(
-      kMaxBlocksPerGrid, CeilOfRatio(total_threads, threads_per_block));
+  const int64_t blocks_per_grid =
+      std::min(kMaxCollectiveBlocksPerGrid,
+               CeilOfRatio(total_threads, threads_per_block));
   const LaunchDimensions launch_dims(blocks_per_grid, threads_per_block);
 
   // Use input shape for tiling (output shape may not have layout properly set)
@@ -842,9 +841,8 @@ absl::StatusOr<std::vector<Shape>> GetAllGatherUnmanagedKernelArguments(
   unmanaged_arguments.push_back(ShapeUtil::MakeShape(S32, {}));
 
   // Signal and scratch buffers (same as AllReduce)
-  static constexpr int32_t kMaxBlocksPerGrid = 24;
   unmanaged_arguments.push_back(
-      ShapeUtil::MakeShape(S32, {num_devices, kMaxBlocksPerGrid}));
+      ShapeUtil::MakeShape(S32, {num_devices, kMaxCollectiveBlocksPerGrid}));
 
   // Scratch buffers for AllGather
   // Note: For AllGather, we need buffers to hold the gathered data
@@ -1258,10 +1256,18 @@ class AllGatherEmitter {
     const int64_t block_size_n = shape.size() > 1 ? shape[1] : 1;
 
     // Calculate total number of tiles needed
-    const int64_t total_m = ctx_.non_tiled_input_shape[0] * ctx_.world_size;
-    const int64_t total_n = ctx_.non_tiled_input_shape.size() > 1
-                                ? ctx_.non_tiled_input_shape[1]
-                                : 1;
+    // The gather dimension is multiplied by world_size, other dimensions remain
+    // the same
+    const int64_t total_m =
+        ctx_.all_gather_dimension == 0
+            ? ctx_.non_tiled_input_shape[0] * ctx_.world_size
+            : ctx_.non_tiled_input_shape[0];
+    const int64_t total_n =
+        ctx_.non_tiled_input_shape.size() > 1
+            ? (ctx_.all_gather_dimension == 1
+                   ? ctx_.non_tiled_input_shape[1] * ctx_.world_size
+                   : ctx_.non_tiled_input_shape[1])
+            : 1;
 
     const int64_t num_pid_m = (total_m + block_size_m - 1) / block_size_m;
     const int64_t num_pid_n = (total_n + block_size_n - 1) / block_size_n;
@@ -1309,15 +1315,24 @@ class AllGatherEmitter {
     mlir::Value pid_n =
         arith::DivSIOp::create(builder_, tile_id_mod, group_size_m_actual);
 
-    // Determine which rank's data to load based on pid_m
-    // Each rank owns M/world_size rows
-    const int64_t rows_per_rank = ctx_.non_tiled_input_shape[0];
-    mlir::Value rows_per_rank_val = arith::ConstantOp::create(
-        builder_, builder_.getI32Type(),
-        builder_.getI32IntegerAttr(rows_per_rank / block_size_m));
+    // Determine which rank's data to load based on the gather dimension
+    // Each rank owns (gather_dim_size) elements along the gather dimension
+    const int64_t gather_dim_size =
+        ctx_.non_tiled_input_shape[ctx_.all_gather_dimension];
+    const int64_t block_size_gather =
+        ctx_.all_gather_dimension == 0 ? block_size_m : block_size_n;
+    // Calculate number of blocks per rank along the gather dimension
+    // Use max(1, ...) to avoid division by zero
+    const int64_t blocks_per_rank =
+        std::max(int64_t{1}, gather_dim_size / block_size_gather);
+    mlir::Value elements_per_rank_val =
+        arith::ConstantOp::create(builder_, builder_.getI32Type(),
+                                  builder_.getI32IntegerAttr(blocks_per_rank));
 
+    // Determine source rank based on which dimension is the gather dimension
+    mlir::Value pid_gather = ctx_.all_gather_dimension == 0 ? pid_m : pid_n;
     mlir::Value source_rank_i32 =
-        arith::DivSIOp::create(builder_, pid_m, rows_per_rank_val);
+        arith::DivSIOp::create(builder_, pid_gather, elements_per_rank_val);
     mlir::Value source_rank = arith::ExtSIOp::create(
         builder_, builder_.getI64Type(), source_rank_i32);
 
@@ -1339,9 +1354,12 @@ class AllGatherEmitter {
     mlir::ValueRange tile_offsets = ctx_.input_extract.getOffsets();
     llvm::SmallVector<mlir::Value> local_offsets;
 
-    // For M dimension (gather dimension), calculate offset within source rank
+    // For M dimension, calculate offset within source rank if it's the gather
+    // dimension
     mlir::Value local_pid_m =
-        arith::RemSIOp::create(builder_, pid_m, rows_per_rank_val);
+        ctx_.all_gather_dimension == 0
+            ? arith::RemSIOp::create(builder_, pid_m, elements_per_rank_val)
+            : pid_m;
     mlir::Value m_offset = arith::MulIOp::create(
         builder_, local_pid_m,
         arith::ConstantOp::create(builder_, builder_.getI32Type(),
@@ -1349,10 +1367,15 @@ class AllGatherEmitter {
     local_offsets.push_back(arith::IndexCastOp::create(
         builder_, builder_.getIndexType(), m_offset));
 
-    // For N dimension, use pid_n
+    // For N dimension, calculate offset within source rank if it's the gather
+    // dimension
     if (ctx_.non_tiled_input_shape.size() > 1) {
+      mlir::Value local_pid_n =
+          ctx_.all_gather_dimension == 1
+              ? arith::RemSIOp::create(builder_, pid_n, elements_per_rank_val)
+              : pid_n;
       mlir::Value n_offset = arith::MulIOp::create(
-          builder_, pid_n,
+          builder_, local_pid_n,
           arith::ConstantOp::create(builder_, builder_.getI32Type(),
                                     builder_.getI32IntegerAttr(block_size_n)));
       local_offsets.push_back(arith::IndexCastOp::create(
