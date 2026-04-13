@@ -1,4 +1,0 @@
-#!/bin/bash
-# Copyright 2025 The OpenXLA Authors.
-# No-op wrapper for unused tools - reused from rules_ml_toolchain.
-exit 0

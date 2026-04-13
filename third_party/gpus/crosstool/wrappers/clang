@@ -1,5 +1,0 @@
-#!/bin/bash
-# Copyright 2025 The OpenXLA Authors.
-# Wrapper script for clang - reused from rules_ml_toolchain.
-set -o pipefail
-$GCC_PATH "$@"
