@@ -16,11 +16,13 @@ limitations under the License.
 #include "xla/stream_executor/rocm/rocm_stream.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "absl/base/casts.h"
 #include "absl/functional/any_invocable.h"
@@ -56,6 +58,27 @@ absl::StatusOr<hipStream_t> CreateStream(StreamExecutor* executor,
   std::unique_ptr<ActivateContext> activation = executor->Activate();
   hipStream_t stream;
   if (priority == 0) {
+    // XLA_ROCM_COMPUTE_CU_COUNT: limit the number of CUs available to
+    // default-priority (compute) streams, leaving the rest for collectives.
+    const char* cu_count_env = std::getenv("XLA_ROCM_COMPUTE_CU_COUNT");
+    if (cu_count_env != nullptr && cu_count_env[0] != '\0') {
+      int num_cus = std::atoi(cu_count_env);
+      if (num_cus > 0) {
+        uint32_t num_words = (num_cus + 31) / 32;
+        std::vector<uint32_t> cu_mask(num_words, 0xFFFFFFFF);
+        if (num_cus % 32 != 0) {
+          cu_mask.back() = (1u << (num_cus % 32)) - 1;
+        }
+        TF_RETURN_IF_ERROR(
+            ToStatus(wrap::hipExtStreamCreateWithCUMask(&stream, num_words,
+                                                        cu_mask.data()),
+                     "Failed to create stream with CU mask"));
+        VLOG(2) << "successfully created CU-masked stream " << stream
+                << " (CUs: " << num_cus << ") for device "
+                << executor->device_ordinal() << " on thread";
+        return stream;
+      }
+    }
     TF_RETURN_IF_ERROR(ToStatus(
         wrap::hipStreamCreateWithFlags(&stream, hipStreamDefault),
         "Failed to create stream"));  // switch to hipStreamNonBlocking?
