@@ -279,9 +279,8 @@ common:rocm_base --define=tensorflow_mkldnn_contraction_kernel=0
 common:rocm_base --repo_env TF_NEED_ROCM=1
 common:rocm_base --action_env=HIPCC_COMPILE_FLAGS_APPEND="--offload-compress"
 
-# ROCm with hermetic clang toolchain
 common:rocm_clang_hermetic --config=rocm_base
-common:rocm_clang_hermetic --extra_toolchains=@local_config_rocm//crosstool:toolchain-linux-x86_64-hermetic
+common:rocm_clang_hermetic --extra_toolchains=//third_party/gpus/crosstool/rocm_feature:toolchain-linux-x86_64-rocm-feature
 
 # ROCm with local/system clang toolchain
 # CLANG_COMPILER_PATH sets the compiler for the wrapper script
