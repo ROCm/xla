@@ -165,9 +165,14 @@ cc_library(
     ],
 )
 
+filegroup(
+    name = "hsa_rocr_libs_data",
+    srcs = glob(["%{rocm_root}/lib/libhsa-runtime64.so*"]),
+)
+
 cc_library(
     name = "hsa_rocr_libs",
-    data = glob(["%{rocm_root}/lib/libhsa-runtime64.so*"]),
+    data = [":hsa_rocr_libs_data"],
     deps = [
         ":rocprofiler_register_libs",
         ":system_libs",
@@ -202,13 +207,18 @@ cc_library(
     ],
 )
 
-cc_library(
-    name = "rocprofiler_register_libs",
-    data = glob(
+filegroup(
+    name = "rocprofiler_register_libs_data",
+    srcs = glob(
         [
             "%{rocm_root}/lib/librocprofiler-register.so*",
         ],
     ),
+)
+
+cc_library(
+    name = "rocprofiler_register_libs",
+    data = [":rocprofiler_register_libs_data"],
 )
 
 cc_library(
@@ -531,44 +541,42 @@ cc_library(
     ],
 )
 
-cc_library(
-    name = "system_libs",
-    data = glob([
+filegroup(
+    name = "system_libs_data",
+    srcs = glob([
         "%{rocm_root}/lib/rocm_sysdeps/lib/*.so*",
         "%{rocm_root}/lib/rocm_sysdeps/share/**",
     ]),
 )
 
-filegroup(
-    name = "rocm_root",
-    srcs = [
-        "%{rocm_root}/bin/clang-offload-bundler",
-    ],
-    visibility = ["//visibility:public"],
+cc_library(
+    name = "system_libs",
+    data = [":system_libs_data"],
 )
 
 filegroup(
     name = "toolchain_data",
-    srcs = glob([
-        "%{rocm_root}/bin/hipcc",
-        "%{rocm_root}/lib/llvm/**",
-        "%{rocm_root}/share/hip/**",
-        "%{rocm_root}/amdgcn/**",
-        "%{rocm_root}/lib/rocm_sysdeps/lib/*.so*",
-        "%{rocm_root}/lib/libamd_comgr_loader.so*",
-        "%{rocm_root}/lib/libamd_comgr.so*",
-    ]),
+    srcs = glob(
+        include = [
+            "%{rocm_root}/bin/hipcc",
+            "%{rocm_root}/lib/llvm/**",
+            "%{rocm_root}/share/hip/version",
+            "%{rocm_root}/amdgcn/**",
+        ],
+        exclude = ["%{rocm_root}/lib/llvm/lib/*.a"],
+    ) + [":system_libs_data"],
     visibility = ["//visibility:public"],
 )
 
 filegroup(
     name = "rocminfo",
-    srcs = glob([
+    srcs = [
         "%{rocm_root}/bin/rocminfo",
-        "%{rocm_root}/lib/libhsa-runtime64.so*",
-        "%{rocm_root}/lib/rocm_sysdeps/lib/*",
-        "%{rocm_root}/lib/librocprofiler-register.so.*",
-    ]),
+    ] + [
+        ":hsa_rocr_libs_data",
+        ":rocprofiler_register_libs_data",
+        ":system_libs_data",
+    ],
     visibility = ["//visibility:public"],
 )
 
