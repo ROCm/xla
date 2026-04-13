@@ -34,13 +34,15 @@ limitations under the License.*/
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/core/collectives/rank_id.h"
 #include "xla/core/collectives/reduction_kind.h"
+#include "xla/service/gpu/launch_dimensions.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_address_handle.h"
 #include "xla/stream_executor/gpu/all_reduce_kernel.h"
 #include "xla/stream_executor/kernel.h"
 #include "xla/stream_executor/stream.h"
 
-namespace xla::gpu {
+namespace xla {
+namespace gpu {
 
 // A thunk that runs single-host collective operations in a single shot.
 // Assumes multiple devices are present, but all on the same host.
@@ -69,10 +71,10 @@ class CollectiveKernelThunk : public Thunk {
       std::vector<CollectiveThunk::Buffer> buffers,                      //
       bool is_collective_kernel_enabled,                                 //
       absl::string_view kernel_name = "",                                //
-      std::optional<LaunchDimensions> launch_dimensions = std::nullopt,  //
       int32_t shmem_bytes = 0,                                           //
       bool is_multimem_enabled = false,                                  //
-      CollectiveOpKind collective_op_kind = CollectiveOpKind::kAllReduce)
+      CollectiveOpKind collective_op_kind = CollectiveOpKind::kAllReduce, //
+      std::optional<LaunchDimensions> launch_dimensions = std::nullopt)
       : Thunk{Thunk::kCollectiveKernel, info},
         collective_kernel_enabled_(is_collective_kernel_enabled),
         is_async_(is_async),
@@ -200,6 +202,8 @@ class CollectiveKernelThunk : public Thunk {
   const bool is_multimem_enabled_;
   const CollectiveOpKind collective_op_kind_;
 };
-}  // namespace xla::gpu
+
+}  // namespace gpu
+}  // namespace xla
 
 #endif  // XLA_BACKENDS_GPU_RUNTIME_COLLECTIVE_KERNEL_THUNK_H_

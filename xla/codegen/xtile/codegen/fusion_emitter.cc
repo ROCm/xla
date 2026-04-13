@@ -1577,7 +1577,7 @@ absl::StatusOr<TensorValue> EmitAllGather(
     operands.push_back(values[operand]);
   }
 
-  if (all_gather.device_list()->replica_groups().empty()) {
+  if (all_gather.device_list().replica_groups().empty()) {
     return Internal(
         "Triton emitting AllGather without replica groups is not supported.");
   }

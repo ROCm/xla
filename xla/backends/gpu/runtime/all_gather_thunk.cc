@@ -193,10 +193,9 @@ absl::Status AllGatherStartThunk::Initialize(const InitializeParams& params) {
   return absl::OkStatus();
 }
 
-absl::Status AllGatherStartThunk::RunCollective(const ExecuteParams& params,
-                                                const GpuCliqueKey& clique_key,
-                                                se::Stream& stream,
-                                                Communicator& comm) {
+absl::StatusOr<bool> AllGatherStartThunk::RunCollective(
+    const ExecuteParams& params, const GpuCliqueKey& clique_key,
+    se::Stream& stream, Communicator& comm) {
   ASSIGN_OR_RETURN(std::vector<DeviceBufferPair> device_buffers,
                    ConvertToDeviceBuffers(params.buffer_allocations, buffers_,
                                           config_.config.operand_element_type));
@@ -209,15 +208,17 @@ absl::Status AllGatherStartThunk::RunCollective(const ExecuteParams& params,
             clique_key, *params.stream->parent(), *params.collective_params));
 
     if (use_collective_kernel) {
-      return collective_kernel_thunk_->ExecuteOnStream(params);
+      TF_RETURN_IF_ERROR(collective_kernel_thunk_->ExecuteOnStream(params));
+      return true;
     }
     LOG(INFO) << "AllGatherStartThunk: Triton kernel not supported, falling "
                  "back to NCCL/RCCL";
   }
 
   // Fallback to NCCL/RCCL
-  return xla::gpu::RunAllGather(device_buffers, stream, comm,
-                                config_.config.use_symmetric_buffer);
+  TF_RETURN_IF_ERROR(xla::gpu::RunAllGather(device_buffers, stream, comm,
+                                             config_.config.use_symmetric_buffer));
+  return true;
 }
 
 absl::Status RunAllGather(std::vector<DeviceBufferPair>& buffers,

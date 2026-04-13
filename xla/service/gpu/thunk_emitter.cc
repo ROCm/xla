@@ -245,7 +245,6 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
     LOG(INFO) << "TrySetGpuBackendConfigForCollective returned false - not using Triton";
     return make_thunk(/*kernel_name=*/"",
                       /*shmem_bytes=*/0,
-                      /*launch_dimensions=*/std::nullopt,
                       /*local_module=*/nullptr);
   }
   LOG(INFO) << "TrySetGpuBackendConfigForCollective succeeded - using Triton!";
@@ -296,7 +295,6 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
   // For AllGather, we don't have a reduction, so we create a dummy config
   const auto make_thunk = [&](absl::string_view kernel_name,
                               int32_t shmem_bytes,
-                              std::optional<LaunchDimensions> launch_dimensions,
                               std::unique_ptr<llvm::Module> local_module) {
     // AllGather doesn't have reduction, use a placeholder
     return EmitCollectiveResult{
@@ -310,7 +308,6 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
                 .debug_options()
                 .xla_gpu_unsupported_use_all_gather_triton_backend(),
             /*kernel_name=*/kernel_name,
-            /*launch_dimensions=*/launch_dimensions,
             /*shmem_bytes=*/shmem_bytes,
             /*is_multimem_enabled=*/false,
             /*collective_op_kind=*/CollectiveKernelThunk::CollectiveOpKind::kAllGather),
@@ -323,7 +320,6 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
     LOG(INFO) << "TrySetGpuBackendConfigForCollective returned false for AllGather - not using Triton";
     return make_thunk(/*kernel_name=*/"",
                       /*shmem_bytes=*/0,
-                      /*launch_dimensions=*/std::nullopt,
                       /*local_module=*/nullptr);
   }
   LOG(INFO) << "TrySetGpuBackendConfigForCollective succeeded for AllGather - using Triton!";
@@ -346,7 +342,7 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
   }
   return make_thunk(
       result.kernel_thunk->kernel_name(), result.kernel_thunk->shmem_bytes(),
-      result.kernel_thunk->launch_dimensions(), std::move(result.llvm_module));
+      std::move(result.llvm_module));
 }
 
 }  // namespace

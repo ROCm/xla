@@ -28,8 +28,10 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -46,6 +48,7 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"
 #include "stablehlo/dialect/StablehloOps.h"
 #include "xla/backends/gpu/codegen/triton/ir/triton_xla_ops.h"
+#include "xla/backends/gpu/codegen/triton/lowering_util.h"
 #include "xla/backends/gpu/runtime/all_reduce.h"
 #include "xla/codegen/xtile/codegen/emitter_helpers.h"
 #include "xla/codegen/xtile/ir/xtile_ops.h"
@@ -54,8 +57,10 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/mlir/utils/type_util.h"
 #include "xla/service/collective_ops_utils.h"
 #include "xla/service/gpu/backend_configs.pb.h"
+#include "xla/service/gpu/gpu_constants.h"
 #include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/service/gpu/launch_dimensions.h"
 #include "xla/shape.h"
@@ -679,21 +684,14 @@ GetBlockLevelFusionConfigForAllGather(
   }
 
   // Check if replica groups are present (required for Triton backend)
-  if (!all_gather->device_list()) {
-    LOG(INFO) << "AllGather device_list is null for " << all_gather->name()
-              << ". This likely means replica_groups were not properly set. "
-              << "Codegen will not be supported.";
-    return std::nullopt;
-  }
-
-  if (all_gather->device_list()->replica_groups().empty()) {
+  if (all_gather->device_list().replica_groups().empty()) {
     LOG(INFO) << "Replica groups are empty for " << all_gather->name()
               << ". Codegen will not be supported.";
     return std::nullopt;
   }
 
   const int64_t num_devices =
-      all_gather->device_list()->num_devices_per_group();
+      all_gather->device_list().num_devices_per_group();
   if (!llvm::has_single_bit(static_cast<uint64_t>(num_devices))) {
     VLOG(1) << "Number of devices is not a power of 2 for "
             << all_gather->name() << ". Codegen will not be supported.";
@@ -835,15 +833,8 @@ absl::StatusOr<bool> TrySetGpuBackendConfigForCollective(
 absl::StatusOr<std::vector<Shape>> GetAllGatherUnmanagedKernelArguments(
     const HloComputation* computation,
     const HloAllGatherInstruction* all_gather) {
-  // Check if device_list is valid to prevent segfault
-  if (!all_gather->device_list()) {
-    return absl::InternalError(absl::StrCat(
-        "AllGather instruction ", all_gather->name(),
-        " has null device_list. Cannot generate Triton kernel arguments."));
-  }
-
   const int32_t num_devices =
-      all_gather->device_list()->num_devices_per_group();
+      all_gather->device_list().num_devices_per_group();
 
   std::vector<Shape> unmanaged_arguments;
   unmanaged_arguments.reserve(computation->num_parameters() +
