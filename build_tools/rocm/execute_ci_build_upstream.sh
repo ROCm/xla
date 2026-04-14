@@ -51,7 +51,7 @@ TEST_TARGETS_MGPU=(
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
 TEST_TARGETS=("${TEST_TARGETS_SGPU[@]}")
-SGPU_AMDGPU_TARGETS="${TF_ROCM_SGPU_AMDGPU_TARGETS:-gfx90a,gfx942}"
+SGPU_AMDGPU_TARGETS="${TF_ROCM_SGPU_AMDGPU_TARGETS:-gfx90a,gfx942,gfx950}"
 MGPU_AMDGPU_TARGETS="${TF_ROCM_MGPU_AMDGPU_TARGETS:-gfx950}"
 AMDGPU_TARGETS="${SGPU_AMDGPU_TARGETS}"
 
@@ -80,6 +80,7 @@ done
     --grpc_keepalive_time=30s \
     --test_sharding_strategy=disabled \
     --test_verbose_timeout_warnings \
+    --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_mi300_upstream_xla \
     --curses=no \
     --color=yes \
     --test_filter=-$(
