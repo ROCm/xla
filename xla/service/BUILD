@@ -1597,7 +1597,7 @@ cc_library(
         "//xla/service/gpu:nvptx_compiler",
         "//xla/stream_executor/cuda:stream_executor_cuda",
     ]) + if_rocm_is_configured([
-        ":mori_ffi_custom_calls",
+        #":mori_ffi_custom_calls",
         "//xla/service/gpu:amdgpu_compiler",
         "//xla/stream_executor/rocm:stream_executor_rocm",
     ]) + if_sycl_is_configured([

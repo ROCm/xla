@@ -2256,6 +2256,11 @@ GpuCompiler::CompileSingleModule(
     const stream_executor::DeviceDescription& device_description,
     const HloModule* debug_module, llvm::Module* llvm_module, bool relocatable,
     const CompileOptions& options, std::optional<int> shard_number) {
+
+  XLA_SCOPED_LOGGING_TIMER_IF(
+    "CompileSingleModule",
+    VLOG_IS_ON(4) && module_config.debug_options().xla_enable_scoped_logging_timers()
+  );
   tsl::profiler::TraceMe traceme("CompileSingleModule");
   const DebugOptions& debug_options = module_config.debug_options();
   {
