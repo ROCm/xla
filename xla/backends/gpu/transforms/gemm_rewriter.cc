@@ -476,6 +476,12 @@ auto CublasLtMatmulMaybeF8(HloInstruction** instr) {
       instr, {kCublasLtMatmulCallTarget, kCublasLtMatmulF8CallTarget});
 }
 
+auto CublasLtMatmulMaybeF8OrGrouped(HloInstruction** instr) {
+  return m::CustomCall(instr,
+                       {kCublasLtMatmulCallTarget, kCublasLtMatmulF8CallTarget,
+                        kCublasLtGroupedMatmulCallTarget});
+}
+
 auto GemmOrCublasLtMatmul(HloInstruction** instr) {
   return m::CustomCall(instr, {kGemmCallTarget, kCublasLtMatmulCallTarget});
 }
@@ -483,6 +489,22 @@ auto GemmOrCublasLtMatmul(HloInstruction** instr) {
 auto GemmOrCublasLtMatmulMaybeF8(HloInstruction** instr) {
   return m::CustomCall(instr, {kGemmCallTarget, kCublasLtMatmulCallTarget,
                                kCublasLtMatmulF8CallTarget});
+}
+
+auto GemmOrCublasLtMatmulMaybeF8OrGrouped(HloInstruction** instr) {
+  return m::CustomCall(
+      instr, {kGemmCallTarget, kCublasLtMatmulCallTarget,
+              kCublasLtMatmulF8CallTarget, kCublasLtGroupedMatmulCallTarget});
+}
+
+auto GroupedMatmul(HloInstruction** instr) {
+  return m::CustomCall(instr, {kCublasLtGroupedMatmulCallTarget});
+}
+
+auto AnyMatmul(HloInstruction** instr) {
+  return m::CustomCall(
+      instr, {kGemmCallTarget, kCublasLtMatmulCallTarget,
+              kCublasLtMatmulF8CallTarget, kCublasLtGroupedMatmulCallTarget});
 }
 
 auto BcastConstScalar(HloInstruction** instr, double value) {
@@ -558,6 +580,30 @@ uint32_t CountFinalUsers(const HloInstruction* instr) {
     }
   }
   return final_user_count;
+}
+
+// Helper function to get a mutable GemmBackendConfig from either a regular
+// GEMM or a grouped GEMM.
+GemmBackendConfig* GetMutableGemmBackendConfig(GpuBackendConfig& gpu_config) {
+  if (gpu_config.has_gemm_backend_config()) {
+    return gpu_config.mutable_gemm_backend_config();
+  } else if (gpu_config.has_grouped_gemm_backend_config()) {
+    return gpu_config.mutable_grouped_gemm_backend_config()
+        ->mutable_gemm_backend_config();
+  }
+  return nullptr;
+}
+
+// Helper function to get a const GemmBackendConfig from either a regular
+// GEMM or a grouped GEMM.
+const GemmBackendConfig* GetGemmBackendConfig(
+    const GpuBackendConfig& gpu_config) {
+  if (gpu_config.has_gemm_backend_config()) {
+    return &gpu_config.gemm_backend_config();
+  } else if (gpu_config.has_grouped_gemm_backend_config()) {
+    return &gpu_config.grouped_gemm_backend_config().gemm_backend_config();
+  }
+  return nullptr;
 }
 
 // The rewriting proceeds in a bottom-up way:
@@ -845,20 +891,22 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     }
 
     {
-      // Attempt to match approximate GELU activation
+      // Attempt to match approximate GELU activation (including grouped matmul)
       // (https://arxiv.org/abs/1606.08415), where:
       // approx_gelu(x) = x * cdf(x)
       // cdf(x) = 0.5 * (1 + tanh(sqrt(2 / pi) * (x + 0.044715 * x**3))
       HloInstruction *cdf, *slice_or_bitcast = nullptr;
-      if (Match(instr,
-                m::MultiplyAnyOrder(
-                    m::AnyOf<HloInstruction>(
-                        m::Slice(&slice_or_bitcast,
-                                 CublasLtMatmulMaybeF8(&existing_gemm)),
-                        m::Bitcast(&slice_or_bitcast,
-                                   CublasLtMatmulMaybeF8(&existing_gemm)),
-                        CublasLtMatmulMaybeF8(&existing_gemm)),
-                    m::Op(&cdf).WithOneUser())) &&
+      if (Match(
+              instr,
+              m::MultiplyAnyOrder(
+                  m::AnyOf<HloInstruction>(
+                      m::Slice(&slice_or_bitcast,
+                               CublasLtMatmulMaybeF8OrGrouped(&existing_gemm)),
+                      m::Bitcast(
+                          &slice_or_bitcast,
+                          CublasLtMatmulMaybeF8OrGrouped(&existing_gemm)),
+                      CublasLtMatmulMaybeF8OrGrouped(&existing_gemm)),
+                  m::Op(&cdf).WithOneUser())) &&
           Match(
               cdf,
               m::MultiplyAnyOrder(
@@ -897,20 +945,23 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     const auto is_rocm = gpu_version_.IsRocm();
     if (is_rocm &&
         toolkit_version_ >= stream_executor::SemanticVersion{7, 0, 0}) {
-      // Attempt to match approximate Swish activation
+      // Attempt to match approximate Swish activation (including grouped
+      // matmul)
       // (https://flax.readthedocs.io/en/v0.5.3/_autosummary/flax.linen.swish.html),
       // where: swish(x) = x * sigmoid(x)
       // where: sigmoid(x) = 1/(1 + exp(-x))
       HloInstruction *sigmoid, *slice_or_bitcast = nullptr;
-      if (Match(instr,
-                m::MultiplyAnyOrder(
-                    m::AnyOf<HloInstruction>(
-                        m::Slice(&slice_or_bitcast,
-                                 CublasLtMatmulMaybeF8(&existing_gemm)),
-                        m::Bitcast(&slice_or_bitcast,
-                                   CublasLtMatmulMaybeF8(&existing_gemm)),
-                        CublasLtMatmulMaybeF8(&existing_gemm)),
-                    m::Op(&sigmoid).WithOneUser())) &&
+      if (Match(
+              instr,
+              m::MultiplyAnyOrder(
+                  m::AnyOf<HloInstruction>(
+                      m::Slice(&slice_or_bitcast,
+                               CublasLtMatmulMaybeF8OrGrouped(&existing_gemm)),
+                      m::Bitcast(
+                          &slice_or_bitcast,
+                          CublasLtMatmulMaybeF8OrGrouped(&existing_gemm)),
+                      CublasLtMatmulMaybeF8OrGrouped(&existing_gemm)),
+                  m::Op(&sigmoid).WithOneUser())) &&
           Match(sigmoid,
                 m::Divide(BcastConstScalar(1.0),
                           m::AddAnyOrder(
@@ -946,15 +997,16 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     HloInstruction* optional_convert = nullptr;
     HloInstruction* optional_bitcast = nullptr;
     // Attempt to elide broadcast and fuse addition of a vector bias into
-    // GEMM, including when slicing is applied to the result.
+    // GEMM (including grouped matmul), including when slicing is applied to the
+    // result.
     if (Match(instr,
               m::AddAnyOrder(
-                  OptionalBitcast(
-                      &optional_bitcast,
-                      OptionalSlice(
-                          &optional_slice,
-                          CublasLtMatmulMaybeF8(&existing_gemm).WithOneUser())
-                          .WithOneUser())
+                  OptionalBitcast(&optional_bitcast,
+                                  OptionalSlice(&optional_slice,
+                                                CublasLtMatmulMaybeF8OrGrouped(
+                                                    &existing_gemm)
+                                                    .WithOneUser())
+                                      .WithOneUser())
                       .WithOneUser(),
                   m::Broadcast(&bias,
                                OptionalConvert(&optional_convert, m::Op()))))) {
@@ -973,12 +1025,12 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     //   bitcast(add(gemm(a, b), bitcast(broadcast(bias)))) ->
     //   bitcast(gemm(a, b, bitcast(broadcast(bias)))) (FuseMatrixBiasAdd)
     //
-    if (Match(
-            instr,
-            m::AddAnyOrder(
-                m::Bitcast(CublasLtMatmulMaybeF8(&existing_gemm).WithOneUser())
-                    .WithOneUser(),
-                m::Broadcast(&bias, m::Op()).WithOneUser()))) {
+    if (Match(instr,
+              m::AddAnyOrder(
+                  m::Bitcast(CublasLtMatmulMaybeF8OrGrouped(&existing_gemm)
+                                 .WithOneUser())
+                      .WithOneUser(),
+                  m::Broadcast(&bias, m::Op()).WithOneUser()))) {
       TF_ASSIGN_OR_RETURN(
           HloInstruction * new_add,
           MakeBinaryHlo(HloOpcode::kAdd, existing_gemm,
@@ -1065,15 +1117,15 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
     HloInstruction* optional_bitcast_matrix = nullptr;
     HloInstruction* optional_slice_matrix = nullptr;
-    if (Match(instr,
-              m::AddAnyOrder(
-                  OptionalBitcast(
-                      &optional_bitcast_matrix,
-                      OptionalSlice(&optional_slice_matrix,
-                                    GemmOrCublasLtMatmulMaybeF8(&existing_gemm)
-                                        .WithOneUser()))
-                      .WithOneUser(),
-                  m::Op(&bias).WithPredicate(is_not_broadcast)))) {
+    if (Match(instr, m::AddAnyOrder(
+                         OptionalBitcast(
+                             &optional_bitcast_matrix,
+                             OptionalSlice(&optional_slice_matrix,
+                                           GemmOrCublasLtMatmulMaybeF8OrGrouped(
+                                               &existing_gemm)
+                                               .WithOneUser()))
+                             .WithOneUser(),
+                         m::Op(&bias).WithPredicate(is_not_broadcast)))) {
       // The matrix bias must not be FP8, see
       // https://docs.nvidia.com/cuda/cublas/index.html.
       if (!IsF8Type(bias)) {
@@ -1089,18 +1141,19 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
   absl::Status HandleMaximum(HloInstruction* instr) override {
     HloInstruction *existing_gemm, *zeros;
     HloInstruction* optional_slice_or_bitcast = nullptr;
-    // Attempt to elide maximum and fuse ReLU activation into GEMM, including
-    // when slicing or bitcasting is applied to the result.
+    // Attempt to elide maximum and fuse ReLU activation into GEMM (including
+    // grouped matmul), including when slicing or bitcasting is applied to the
+    // result.
     if (Match(instr,
               m::MaximumAnyOrder(
                   m::AnyOf<HloInstruction>(
-                      m::Slice(
-                          &optional_slice_or_bitcast,
-                          CublasLtMatmulMaybeF8(&existing_gemm).WithOneUser()),
-                      m::Bitcast(
-                          &optional_slice_or_bitcast,
-                          CublasLtMatmulMaybeF8(&existing_gemm).WithOneUser()),
-                      CublasLtMatmulMaybeF8(&existing_gemm))
+                      m::Slice(&optional_slice_or_bitcast,
+                               CublasLtMatmulMaybeF8OrGrouped(&existing_gemm)
+                                   .WithOneUser()),
+                      m::Bitcast(&optional_slice_or_bitcast,
+                                 CublasLtMatmulMaybeF8OrGrouped(&existing_gemm)
+                                     .WithOneUser()),
+                      CublasLtMatmulMaybeF8OrGrouped(&existing_gemm))
                       .WithOneUser(),
                   m::Broadcast(&zeros, m::ConstantScalar(0))))) {
       TF_RETURN_IF_ERROR(FuseReluActivation(instr, zeros, existing_gemm,
@@ -1775,11 +1828,16 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       return in_out_alias_config.ParameterHasAlias(bias->parameter_number(),
                                                    /*param_index=*/{});
     }();
-    bool want_to_fuse_bias = IsCublasLtMatmulF8(*gemm) ||
-                             IsCublasLtMatmul(*gemm) || can_overwrite_bias;
+    bool want_to_fuse_bias =
+        IsCublasLtMatmulF8(*gemm) || IsCublasLtMatmul(*gemm) ||
+        IsCublasLtGroupedMatmul(*gemm) || can_overwrite_bias;
 
     auto gpu_config = gemm->backend_config<GpuBackendConfig>().value();
-    GemmBackendConfig& config = *gpu_config.mutable_gemm_backend_config();
+    GemmBackendConfig* config_ptr = GetMutableGemmBackendConfig(gpu_config);
+    if (!config_ptr) {
+      return absl::OkStatus();
+    }
+    GemmBackendConfig& config = *config_ptr;
     // It is possible to fuse into a cublasLt matmul that already has a vector
     // bias, but no other epilogue will commute with the matrix bias add.
     bool supported_epilogue =
@@ -1875,7 +1933,11 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
     TF_ASSIGN_OR_RETURN(auto gpu_config,
                         gemm->backend_config<GpuBackendConfig>());
-    GemmBackendConfig& config = *gpu_config.mutable_gemm_backend_config();
+    GemmBackendConfig* config_ptr = GetMutableGemmBackendConfig(gpu_config);
+    if (!config_ptr) {
+      return false;
+    }
+    GemmBackendConfig& config = *config_ptr;
     // # output column dims == # non-contracting rhs operand dims.
     const DotDimensionNumbers& dot_dims = config.dot_dimension_numbers();
     size_t num_col_dims = gemm->operand(1)->shape().dimensions().size() -
@@ -1996,7 +2058,11 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
     TF_ASSIGN_OR_RETURN(auto gpu_config,
                         gemm->backend_config<GpuBackendConfig>());
-    GemmBackendConfig& config = *gpu_config.mutable_gemm_backend_config();
+    GemmBackendConfig* config_ptr = GetMutableGemmBackendConfig(gpu_config);
+    if (!config_ptr) {
+      return absl::OkStatus();
+    }
+    GemmBackendConfig& config = *config_ptr;
     if (config.epilogue() == GemmBackendConfig::DEFAULT) {
       config.set_epilogue(GemmBackendConfig::RELU);
     } else if (config.epilogue() == GemmBackendConfig::BIAS) {
@@ -2040,7 +2106,11 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
     TF_ASSIGN_OR_RETURN(auto gpu_config,
                         gemm->backend_config<GpuBackendConfig>());
-    GemmBackendConfig& config = *gpu_config.mutable_gemm_backend_config();
+    GemmBackendConfig* config_ptr = GetMutableGemmBackendConfig(gpu_config);
+    if (!config_ptr) {
+      return absl::OkStatus();
+    }
+    GemmBackendConfig& config = *config_ptr;
 
     if (config.epilogue() == GemmBackendConfig::DEFAULT) {
       config.set_epilogue(has_aux ? GemmBackendConfig::GELU_AUX
@@ -2101,7 +2171,11 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
     TF_ASSIGN_OR_RETURN(auto gpu_config,
                         gemm->backend_config<GpuBackendConfig>());
-    GemmBackendConfig& config = *gpu_config.mutable_gemm_backend_config();
+    GemmBackendConfig* config_ptr = GetMutableGemmBackendConfig(gpu_config);
+    if (!config_ptr) {
+      return absl::OkStatus();
+    }
+    GemmBackendConfig& config = *config_ptr;
 
     if (config.epilogue() == GemmBackendConfig::DEFAULT) {
       config.set_epilogue(GemmBackendConfig::SILU);
