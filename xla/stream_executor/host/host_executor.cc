@@ -139,7 +139,7 @@ HostExecutor::CreateDeviceDescription(int device_ordinal) {
 }
 
 absl::StatusOr<std::unique_ptr<Stream>> HostExecutor::CreateStream(
-    std::optional<std::variant<StreamPriority, int>> priority) {
+    std::optional<std::variant<StreamPriority, int>> priority, bool /*masked_cu*/) {
   const HostStreamFactory* factory = HostStreamFactory::GetFactory();
   if (factory != nullptr) {
     return factory->CreateStream(this);

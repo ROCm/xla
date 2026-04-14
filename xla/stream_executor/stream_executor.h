@@ -97,9 +97,10 @@ class StreamExecutor {
 
   // Creates and initializes a Stream.
   virtual absl::StatusOr<std::unique_ptr<Stream>> CreateStream(
-      std::optional<std::variant<StreamPriority, int>> priority) = 0;
+      std::optional<std::variant<StreamPriority, int>> priority,
+       bool masked_cu) = 0;
   absl::StatusOr<std::unique_ptr<Stream>> CreateStream() {
-    return CreateStream(std::nullopt);
+    return CreateStream(std::nullopt, false);
   }
   // Creates an EventBasedTimer for the given stream.
   virtual absl::StatusOr<std::unique_ptr<EventBasedTimer>>

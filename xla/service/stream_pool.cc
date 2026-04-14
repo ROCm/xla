@@ -55,7 +55,7 @@ StreamPool::Ptr StreamPool::BorrowStream(se::StreamPriority priority) {
 
   if (!stream) {
     // Create a new stream.
-    stream = executor_->CreateStream(priority).value();
+    stream = executor_->CreateStream(priority, false).value();
     stream->SetName(absl::StrFormat("%s pool stream",
                                     se::StreamPriorityToString(priority)));
     VLOG(1) << absl::StrFormat("Created new stream (%p) with priority = %s",

@@ -69,7 +69,8 @@ class RocmStream : public StreamCommon {
 
   static absl::StatusOr<std::unique_ptr<RocmStream>> Create(
       StreamExecutor* executor,
-      std::optional<std::variant<StreamPriority, int>> priority);
+      std::optional<std::variant<StreamPriority, int>> priority,
+      bool masked_cu);
 
   ~RocmStream() override;
 

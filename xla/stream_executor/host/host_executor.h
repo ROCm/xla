@@ -99,7 +99,8 @@ class HostExecutor : public StreamExecutorCommon {
   absl::StatusOr<std::unique_ptr<Event>> CreateEvent() override;
 
   absl::StatusOr<std::unique_ptr<Stream>> CreateStream(
-      std::optional<std::variant<StreamPriority, int>> priority) override;
+      std::optional<std::variant<StreamPriority, int>> priority,
+      bool masked_cu) override;
   absl::StatusOr<std::unique_ptr<MemoryAllocator>> CreateMemoryAllocator(
       MemorySpace type) override;
 

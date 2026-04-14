@@ -72,7 +72,8 @@ class RocmExecutor : public GpuExecutor {
   dnn::DnnSupport* AsDnn() override;
   absl::StatusOr<std::unique_ptr<Event>> CreateEvent() override;
   absl::StatusOr<std::unique_ptr<Stream>> CreateStream(
-      std::optional<std::variant<StreamPriority, int>> priority) override;
+      std::optional<std::variant<StreamPriority, int>> priority,
+      bool masked_cu) override;
   absl::StatusOr<std::unique_ptr<CommandBuffer>> CreateCommandBuffer(
       CommandBuffer::Mode mode) override;
   absl::StatusOr<std::unique_ptr<Kernel>> LoadKernel(

@@ -54,10 +54,10 @@ namespace stream_executor::gpu {
 namespace {
 
 absl::StatusOr<hipStream_t> CreateStream(StreamExecutor* executor,
-                                         int priority) {
+                                         int priority, bool masked_cu) {
   std::unique_ptr<ActivateContext> activation = executor->Activate();
   hipStream_t stream;
-  if (priority == 0) {
+  if (masked_cu) { // masked_cu overrides priority !!
     // XLA_ROCM_COMPUTE_CU_COUNT: limit the number of CUs available to
     // default-priority (compute) streams, leaving the rest for collectives.
     const char* cu_count_env = std::getenv("XLA_ROCM_COMPUTE_CU_COUNT");
@@ -190,7 +190,8 @@ absl::Status SynchronizeStream(StreamExecutor* executor, hipStream_t stream) {
 
 absl::StatusOr<std::unique_ptr<RocmStream>> RocmStream::Create(
     StreamExecutor* executor,
-    std::optional<std::variant<StreamPriority, int>> priority) {
+    std::optional<std::variant<StreamPriority, int>> priority,
+    bool masked_cu) {
   int stream_priority = [&]() {
     if (priority.has_value() && std::holds_alternative<int>(priority.value())) {
       return std::get<int>(priority.value());
@@ -199,7 +200,7 @@ absl::StatusOr<std::unique_ptr<RocmStream>> RocmStream::Create(
         std::get<StreamPriority>(priority.value_or(StreamPriority::Default)));
   }();
   TF_ASSIGN_OR_RETURN(auto stream_handle,
-                      CreateStream(executor, stream_priority));
+                      CreateStream(executor, stream_priority, masked_cu));
 
   TF_ASSIGN_OR_RETURN(auto completed_event,
                       RocmEvent::Create(executor,

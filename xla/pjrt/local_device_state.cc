@@ -88,10 +88,11 @@ LocalDeviceState::LocalDeviceState(
                                  : kNumDeviceToDeviceStreams;
   auto create_stream = [executor, &stream_options](const std::string& name) {
     std::unique_ptr<stream_executor::Stream> stream;
+    bool masked_cu = name == "Compute";
     if (stream_options.has_value()) {
-      stream = executor->CreateStream(stream_options->priority).value();
+      stream = executor->CreateStream(stream_options->priority, masked_cu).value();
     } else {
-      stream = executor->CreateStream().value();
+      stream = executor->CreateStream(std::nullopt, masked_cu).value();
     }
     if (stream) {
       stream->SetName(name);

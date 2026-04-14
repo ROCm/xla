@@ -1091,10 +1091,12 @@ absl::StatusOr<std::unique_ptr<Event>> RocmExecutor::CreateEvent() {
 }
 
 absl::StatusOr<std::unique_ptr<Stream>> RocmExecutor::CreateStream(
-    std::optional<std::variant<StreamPriority, int>> priority) {
-  TF_ASSIGN_OR_RETURN(auto stream, RocmStream::Create(this, priority));
+    std::optional<std::variant<StreamPriority, int>> priority,
+    bool masked_cu) {
+  TF_ASSIGN_OR_RETURN(auto stream, RocmStream::Create(this, priority, masked_cu));
   absl::MutexLock l(alive_gpu_streams_mu_);
   alive_gpu_streams_[stream->stream_handle()] = stream.get();
+  VLOG(2) << "Created stream " << stream.get() << " for device " << device_ordinal();
   return std::move(stream);
 }
 
