@@ -677,7 +677,7 @@ GetBlockLevelFusionConfigForAllGather(
            ->config()
            .debug_options()
            .xla_gpu_unsupported_use_all_gather_triton_backend()) {
-    LOG(INFO) << "AllGather Triton backend is not enabled. "
+    VLOG(1) << "AllGather Triton backend is not enabled. "
               << "Set xla_gpu_unsupported_use_all_gather_triton_backend=true "
                  "to enable.";
     return std::nullopt;
@@ -685,7 +685,7 @@ GetBlockLevelFusionConfigForAllGather(
 
   // Check if replica groups are present (required for Triton backend)
   if (all_gather->device_list().replica_groups().empty()) {
-    LOG(INFO) << "Replica groups are empty for " << all_gather->name()
+    VLOG(1) << "Replica groups are empty for " << all_gather->name()
               << ". Codegen will not be supported.";
     return std::nullopt;
   }
@@ -725,7 +725,7 @@ GetBlockLevelFusionConfigForAllGather(
   // Triton primarily supports floating-point types and some integer types
   // Unsigned integer types (u32, u16, etc.) are not well supported
   if (element_type == U32 || element_type == U16 || element_type == U64) {
-    LOG(INFO) << "AllGather: Unsigned integer type "
+    VLOG(1) << "AllGather: Unsigned integer type "
               << PrimitiveType_Name(element_type)
               << " is not supported by Triton backend. Falling back to NCCL.";
     return std::nullopt;
