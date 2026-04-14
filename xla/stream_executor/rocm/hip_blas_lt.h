@@ -117,9 +117,10 @@ class BlasLt : public gpu::BlasLt {
     // Constructor for grouped matmul
     MatmulPlan(gpu::GroupedGemmConfig&& cfg, bool must_swap_operands,
                hipblasLtHandle_t blas_lt_handle,
-               blas::ComputationType compute_type)
+               blas::ComputationType compute_type, Epilogue epilogue)
         : must_swap_operands_(must_swap_operands),
           cfg_(std::move(cfg)),
+          grouped_gemm_epilogue_(epilogue),
           grouped_gemm_(nullptr) {
       InitializeGroupedGemm(blas_lt_handle, compute_type);
     }
@@ -177,6 +178,7 @@ class BlasLt : public gpu::BlasLt {
     std::optional<MatmulAlgorithm> algorithm_;  // selected algorithm
     // Grouped matmul members
     std::optional<gpu::GroupedGemmConfig> cfg_;
+    Epilogue grouped_gemm_epilogue_ = Epilogue::kDefault;
     std::unique_ptr<hipblaslt_ext::GroupedGemm> grouped_gemm_;
     mutable bool algorithm_must_be_initialized_ = false;
     mutable DeviceMemoryBase saved_address_workspace_{};
@@ -191,8 +193,7 @@ class BlasLt : public gpu::BlasLt {
                                               Epilogue epilogue) const override;
 
   absl::StatusOr<MatmulPlanPtr> GetGroupedMatmulPlan(
-      gpu::GroupedGemmConfig& config,
-      const std::vector<Epilogue>& epilogues) const override;
+      gpu::GroupedGemmConfig& config, Epilogue epilogue) const override;
 
   ~BlasLt() override = default;
 

@@ -4252,10 +4252,10 @@ ENTRY test {
   p0 = f16[64,9]{1,0} parameter(0)
   p1 = f16[2,9,8]{2,1,0} parameter(1)
   p2 = s32[2] constant({16, 48})
+  bias = f16[8]{0} parameter(2)
   ragged-dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
                 lhs_contracting_dims={1}, rhs_contracting_dims={1},
                 lhs_ragged_dims={0}, rhs_group_dims={0}
-  bias = f16[8]{0} parameter(3)
   bias_bcast = f16[64,8]{1,0} broadcast(bias), dimensions={1}
   ROOT out = f16[64,8]{1,0} add(ragged-dot, bias_bcast)
 }
@@ -4277,10 +4277,10 @@ ENTRY test {
   p0 = f16[64,9]{1,0} parameter(0)
   p1 = f16[2,9,8]{2,1,0} parameter(1)
   p2 = s32[2] constant({16, 48})
+  bias = f16[64,8]{1,0} parameter(2)
   ragged-dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
                 lhs_contracting_dims={1}, rhs_contracting_dims={1},
                 lhs_ragged_dims={0}, rhs_group_dims={0}
-  bias = f16[64,8]{1,0} parameter(3)
   ROOT out = f16[64,8]{1,0} add(ragged-dot, bias)
 }
 )";
@@ -4327,10 +4327,10 @@ ENTRY test {
   p0 = f16[64,9]{1,0} parameter(0)
   p1 = f16[2,9,8]{2,1,0} parameter(1)
   p2 = s32[2] constant({16, 48})
+  bias = f16[8]{0} parameter(2)
   ragged-dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
                 lhs_contracting_dims={1}, rhs_contracting_dims={1},
                 lhs_ragged_dims={0}, rhs_group_dims={0}
-  bias = f16[8]{0} parameter(3)
   bias_bcast = f16[64,8]{1,0} broadcast(bias), dimensions={1}
   add = f16[64,8]{1,0} add(ragged-dot, bias_bcast)
   zero = f16[] constant(0)
@@ -4352,29 +4352,29 @@ TEST_F(GroupedGemmRewriteTest, GroupedGemmGeluActivation) {
 HloModule GroupedGemmGelu
 
 ENTRY test {
-  p0 = f32[64,9]{1,0} parameter(0)
-  p1 = f32[2,9,8]{2,1,0} parameter(1)
+  p0 = f16[64,9]{1,0} parameter(0)
+  p1 = f16[2,9,8]{2,1,0} parameter(1)
   p2 = s32[2] constant({16, 48})
-  dot = f32[64,8]{1,0} ragged-dot(p0, p1, p2),
+  dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
         lhs_contracting_dims={1}, rhs_contracting_dims={1},
         lhs_ragged_dims={0}, rhs_group_dims={0}
-  mul.0 = f32[64,8] multiply(dot, dot)
-  mul.1 = f32[64,8] multiply(dot, mul.0)
-  const.0 = f32[] constant(0.044715)
-  bcast.0 = f32[64,8] broadcast(const.0), dimensions={}
-  mul.2 = f32[64,8] multiply(mul.1, bcast.0)
-  add.0 = f32[64,8] add(dot, mul.2)
-  const.1 = f32[] constant(0.797884583)
-  bcast.1 = f32[64,8] broadcast(const.1), dimensions={}
-  mul.3 = f32[64,8] multiply(add.0, bcast.1)
-  tanh = f32[64,8] tanh(mul.3)
-  const.2 = f32[] constant(1)
-  bcast.2 = f32[64,8] broadcast(const.2), dimensions={}
-  add.2 = f32[64,8] add(tanh, bcast.2)
-  const.3 = f32[] constant(0.5)
-  bcast.3 = f32[64,8] broadcast(const.3), dimensions={}
-  mul.4 = f32[64,8] multiply(add.2, bcast.3)
-  ROOT out = f32[64,8] multiply(dot, mul.4)
+  mul.0 = f16[64,8] multiply(dot, dot)
+  mul.1 = f16[64,8] multiply(dot, mul.0)
+  const.0 = f16[] constant(0.044715)
+  bcast.0 = f16[64,8] broadcast(const.0), dimensions={}
+  mul.2 = f16[64,8] multiply(mul.1, bcast.0)
+  add.0 = f16[64,8] add(dot, mul.2)
+  const.1 = f16[] constant(0.797884583)
+  bcast.1 = f16[64,8] broadcast(const.1), dimensions={}
+  mul.3 = f16[64,8] multiply(add.0, bcast.1)
+  tanh = f16[64,8] tanh(mul.3)
+  const.2 = f16[] constant(1)
+  bcast.2 = f16[64,8] broadcast(const.2), dimensions={}
+  add.2 = f16[64,8] add(tanh, bcast.2)
+  const.3 = f16[] constant(0.5)
+  bcast.3 = f16[64,8] broadcast(const.3), dimensions={}
+  mul.4 = f16[64,8] multiply(add.2, bcast.3)
+  ROOT out = f16[64,8] multiply(dot, mul.4)
 }
 )";
   MatchOptimizedHlo(hlo_text,
@@ -4391,32 +4391,32 @@ TEST_F(GroupedGemmRewriteTest, GroupedGemmVectorBiasGelu) {
 HloModule GroupedGemmVectorBiasGelu
 
 ENTRY test {
-  p0 = f32[64,9]{1,0} parameter(0)
-  p1 = f32[2,9,8]{2,1,0} parameter(1)
+  p0 = f16[64,9]{1,0} parameter(0)
+  p1 = f16[2,9,8]{2,1,0} parameter(1)
   p2 = s32[2] constant({16, 48})
-  dot = f32[64,8]{1,0} ragged-dot(p0, p1, p2),
+  bias = f16[8]{0} parameter(2)
+  dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
         lhs_contracting_dims={1}, rhs_contracting_dims={1},
         lhs_ragged_dims={0}, rhs_group_dims={0}
-  bias = f32[8]{0} parameter(3)
-  bias_bcast = f32[64,8] broadcast(bias), dimensions={1}
-  add = f32[64,8] add(dot, bias_bcast)
-  mul.0 = f32[64,8] multiply(add, add)
-  mul.1 = f32[64,8] multiply(add, mul.0)
-  const.0 = f32[] constant(0.044715)
-  bcast.0 = f32[64,8] broadcast(const.0), dimensions={}
-  mul.2 = f32[64,8] multiply(mul.1, bcast.0)
-  add.0 = f32[64,8] add(add, mul.2)
-  const.1 = f32[] constant(0.797884583)
-  bcast.1 = f32[64,8] broadcast(const.1), dimensions={}
-  mul.3 = f32[64,8] multiply(add.0, bcast.1)
-  tanh = f32[64,8] tanh(mul.3)
-  const.2 = f32[] constant(1)
-  bcast.2 = f32[64,8] broadcast(const.2), dimensions={}
-  add.2 = f32[64,8] add(tanh, bcast.2)
-  const.3 = f32[] constant(0.5)
-  bcast.3 = f32[64,8] broadcast(const.3), dimensions={}
-  mul.4 = f32[64,8] multiply(add.2, bcast.3)
-  ROOT out = f32[64,8] multiply(add, mul.4)
+  bias_bcast = f16[64,8] broadcast(bias), dimensions={1}
+  add = f16[64,8] add(dot, bias_bcast)
+  mul.0 = f16[64,8] multiply(add, add)
+  mul.1 = f16[64,8] multiply(add, mul.0)
+  const.0 = f16[] constant(0.044715)
+  bcast.0 = f16[64,8] broadcast(const.0), dimensions={}
+  mul.2 = f16[64,8] multiply(mul.1, bcast.0)
+  add.0 = f16[64,8] add(add, mul.2)
+  const.1 = f16[] constant(0.797884583)
+  bcast.1 = f16[64,8] broadcast(const.1), dimensions={}
+  mul.3 = f16[64,8] multiply(add.0, bcast.1)
+  tanh = f16[64,8] tanh(mul.3)
+  const.2 = f16[] constant(1)
+  bcast.2 = f16[64,8] broadcast(const.2), dimensions={}
+  add.2 = f16[64,8] add(tanh, bcast.2)
+  const.3 = f16[] constant(0.5)
+  bcast.3 = f16[64,8] broadcast(const.3), dimensions={}
+  mul.4 = f16[64,8] multiply(add.2, bcast.3)
+  ROOT out = f16[64,8] multiply(add, mul.4)
 }
 )";
   MatchOptimizedHlo(hlo_text,
@@ -4436,10 +4436,10 @@ ENTRY test {
   p0 = f16[64,9]{1,0} parameter(0)
   p1 = f16[2,9,8]{2,1,0} parameter(1)
   p2 = s32[2] constant({16, 48})
+  bias = f16[64,8]{1,0} parameter(2)
   ragged-dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
                 lhs_contracting_dims={1}, rhs_contracting_dims={1},
                 lhs_ragged_dims={0}, rhs_group_dims={0}
-  bias = f16[64,8]{1,0} parameter(3)
   add = f16[64,8]{1,0} add(ragged-dot, bias)
   zero = f16[] constant(0)
   zero_bcast = f16[64,8]{1,0} broadcast(zero), dimensions={}

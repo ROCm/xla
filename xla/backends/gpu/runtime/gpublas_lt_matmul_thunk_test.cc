@@ -330,8 +330,7 @@ struct MockBlasLt : public se::gpu::BlasLt {
   }
 
   absl::StatusOr<MatmulPlanPtr> GetGroupedMatmulPlan(
-      se::gpu::GroupedGemmConfig&,
-      const std::vector<Epilogue>&) const override {
+      se::gpu::GroupedGemmConfig&, Epilogue) const override {
     return MatmulPlanPtr{};
   }
 
@@ -454,8 +453,8 @@ TEST_F(GpuBlasLtMatmulThunkTest, ThunkProtoSerialization) {
   thunk_info.execution_stream_id = 0;
 
   CublasLtMatmulThunkProto proto;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kCublasLtMatmulThunkProtoText,
-                                                  &proto));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kCublasLtMatmulThunkProtoText, &proto));
 
   std::vector<BufferAllocation> allocations = {
       BufferAllocation(/*index=*/0, /*size=*/4, /*color=*/0),  // UNUSED

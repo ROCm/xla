@@ -372,8 +372,7 @@ struct BlasLt {
       const GemmConfig& cfg, Epilogue epilogue) const = 0;
 
   virtual absl::StatusOr<MatmulPlanPtr> GetGroupedMatmulPlan(
-      gpu::GroupedGemmConfig& config,
-      const std::vector<Epilogue>& epilogues) const = 0;
+      gpu::GroupedGemmConfig& config, Epilogue epilogue) const = 0;
 
   static BlasLt* Get(const Stream* stream);
 
@@ -383,8 +382,7 @@ struct BlasLt {
                                                      Epilogue epilogue);
 
   static absl::StatusOr<MatmulPlanPtr> GetGroupedMatmulPlan(
-      const Stream* stream, gpu::GroupedGemmConfig& config,
-      const std::vector<Epilogue>& epilogues);
+      const Stream* stream, gpu::GroupedGemmConfig& config, Epilogue epilogue);
 
   absl::StatusOr<MatmulPlan*> GetOrCreateMatmulPlan(const std::string& key,
                                                     PlanCreateFunc create);

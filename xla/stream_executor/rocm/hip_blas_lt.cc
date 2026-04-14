@@ -78,14 +78,15 @@ using ::xla::complex64;
 
 void GroupGemmUpdateArgs(
     hipStream_t stream, DeviceMemoryBase args, DeviceMemoryBase a,
-    DeviceMemoryBase b, DeviceMemoryBase d, DeviceMemoryBase group_sizes,
-    uint8_t group_size_bytewidth, uint8_t log2_byte_width_elem_a,
-    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
-    uint32_t stride_ragged_dim, uint32_t stride_group_dim,
-    uint32_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
-    uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
-    uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideD1,
-    uint32_t strideD2, gpu::RaggedDotMode ragged_mode, uint32_t num_gemms);
+    DeviceMemoryBase b, DeviceMemoryBase c, DeviceMemoryBase d,
+    DeviceMemoryBase group_sizes, uint8_t group_size_bytewidth,
+    uint8_t log2_byte_width_elem_a, uint8_t log2_byte_width_elem_b,
+    uint8_t log2_byte_width_elem_d, uint32_t stride_ragged_dim,
+    uint32_t stride_group_dim, uint32_t output_stride_ragged_dim,
+    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
+    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
+    uint32_t strideD1, uint32_t strideD2, gpu::RaggedDotMode ragged_mode,
+    uint32_t num_gemms);
 namespace {
 
 template <typename T>
@@ -225,9 +226,8 @@ absl::Status BlasLt::Init() {
 }
 
 auto BlasLt::MatmulPlan::GetAlgorithmsForGroupedMatmul(
-    const Stream* stream, size_t max_algorithm_count,
-    size_t max_workspace_size) const
-    -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
+    const Stream* stream, size_t max_algorithm_count, size_t max_workspace_size)
+    const -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
   std::vector<hipblasLtMatmulHeuristicResult_t> heuristicResult;
 
   auto blas_lt = static_cast<BlasLt*>(gpu::BlasLt::Get(stream));
@@ -794,14 +794,19 @@ void BlasLt::MatmulPlan::InitializeGroupedGemm(
     }
   }
 
-  // TODO: recover GemmEpilogues from args
   std::vector<hipblaslt_ext::GemmEpilogue> epilogue(cfg_->group_count);
   std::vector<hipblaslt_ext::GemmInputs> inputs(cfg_->group_count);
+
+  // Convert the epilogue from the stored member variable
+  auto hip_epilogue = AsHipblasLtEpilogue(grouped_gemm_epilogue_);
+  if (!hip_epilogue.ok()) {
+    LOG(FATAL) << "Failed to convert epilogue: " << hip_epilogue.status();
+  }
 
   float salpha = cfg_->alpha.real();
   float sbeta = cfg_->beta;
   for (int64_t i = 0; i < cfg_->group_count; i++) {
-    epilogue[i].setMode(HIPBLASLT_EPILOGUE_DEFAULT);
+    epilogue[i].setMode(*hip_epilogue);
     inputs[i].setA(reinterpret_cast<void*>(~0ULL));
     inputs[i].setB(reinterpret_cast<void*>(~0ULL));
     inputs[i].setC(reinterpret_cast<void*>(~0ULL));
@@ -829,8 +834,7 @@ void BlasLt::MatmulPlan::InitializeGroupedGemm(
 }
 
 absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetGroupedMatmulPlan(
-    gpu::GroupedGemmConfig& cfg,
-    const std::vector<gpu::BlasLt::Epilogue>& epilogues) const {
+    gpu::GroupedGemmConfig& cfg, Epilogue epilogue) const {
   auto compute_type = cfg.compute_type;
   if (!compute_type) {  // obtain compute_type unless provided by the user
     TF_ASSIGN_OR_RETURN(xla::PrimitiveType primitive_type_a,
@@ -855,8 +859,9 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetGroupedMatmulPlan(
     blas_lt_handle = blas_lt_.get();
   }
 
-  auto plan = std::make_unique<MatmulPlan>(
-      std::move(cfg), cfg.must_swap_operands, blas_lt_handle, *compute_type);
+  auto plan =
+      std::make_unique<MatmulPlan>(std::move(cfg), cfg.must_swap_operands,
+                                   blas_lt_handle, *compute_type, epilogue);
 
   return absl::StatusOr<MatmulPlanPtr>(std::move(plan));
 }
@@ -958,7 +963,7 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
       absl::bit_cast<hipStream_t>(stream->platform_specific_handle().stream);
 
   GroupGemmUpdateArgs(
-      hip_stream, d_userArgs, a, b, args.d, args.group_sizes,
+      hip_stream, d_userArgs, a, b, args.c, args.d, args.group_sizes,
       group_size_bytewidth, log2_byte_width_elem_a, log2_byte_width_elem_b,
       log2_byte_width_elem_d, cfg_->stride_ragged_dim, cfg_->stride_group_dim,
       cfg_->output_stride_ragged_dim, cfg_->must_swap_operands, cfg_->m,

@@ -165,6 +165,7 @@ limitations under the License.
 #include "xla/stream_executor/memory_space.h"
 #include "xla/tools/hlo_decomposer.h"
 #include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/protobuf/dnn.pb.h"
 #include "xla/util.h"
@@ -173,7 +174,6 @@ limitations under the License.
 #include "tsl/platform/casts.h"
 #include "tsl/platform/human_readable_json.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "xla/tsl/platform/status_macros.h"
 
 namespace xla::gpu {
 namespace {
@@ -274,10 +274,9 @@ std::optional<const HloInstruction*> GetCollectiveHeroForDynamicSliceFusion(
 
 }  // namespace
 
-ThunkEmitter::ThunkEmitter(
-    IrEmitterContext* absl_nonnull ir_emitter_context,
-    llvm_ir::LLVMCommandLineOptionsReleasableLock* absl_nonnull
-        llvm_options_lock)
+ThunkEmitter::ThunkEmitter(IrEmitterContext* absl_nonnull ir_emitter_context,
+                           llvm_ir::LLVMCommandLineOptionsReleasableLock*
+                               absl_nonnull llvm_options_lock)
     : ir_emitter_context_(ir_emitter_context),
       send_recv_events_(std::make_shared<HostSendRecvAsyncEvents>()),
       copy_events_(std::make_shared<CopyThunk::AsyncEvents>()),
@@ -665,8 +664,11 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtGroupedMatmulThunk(
                    instr->backend_config<xla::gpu::GpuBackendConfig>());
   const xla::gpu::GemmBackendConfig& config =
       gpu_config.grouped_gemm_backend_config().gemm_backend_config();
+  xla::gpu::GemmBackendConfig_Epilogue epilogue = config.epilogue();
 
-  TF_RET_CHECK(instr->operand_count() == 3);
+  // Matrix bias adds an extra operand
+  bool has_matrix_bias = config.beta() != 0;
+  TF_RET_CHECK(instr->operand_count() == 3 + int{has_matrix_bias});
 
   xla::ShapeIndex output_index =
       instr->shape().IsTuple() ? xla::ShapeIndex{0} : xla::ShapeIndex{};
@@ -675,9 +677,15 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtGroupedMatmulThunk(
   TF_ASSIGN_OR_RETURN(ShapedSlice b, GetShapedSliceForHlo(instr->operand(1)));
   TF_ASSIGN_OR_RETURN(ShapedSlice group_sizes,
                       GetShapedSliceForHlo(instr->operand(2)));
-  // No bias
-  TF_ASSIGN_OR_RETURN(ShapedSlice c, GetShapedSliceForHlo(instr, output_index));
-  TF_ASSIGN_OR_RETURN(ShapedSlice d, GetShapedSliceForHlo(instr, output_index));
+
+  // Handle matrix bias if present
+  ShapedSlice c;
+  if (has_matrix_bias) {
+    TF_ASSIGN_OR_RETURN(c, GetShapedSliceForHlo(instr->operand(3)));
+  } else {
+    TF_ASSIGN_OR_RETURN(c, GetShapedSliceForHlo(instr, output_index));
+  }
+  ASSIGN_OR_RETURN(ShapedSlice d, GetShapedSliceForHlo(instr, output_index));
 
   std::optional<ShapedSlice> workspace_buffer;
   if (instr->shape().IsTuple() && (instr->shape().tuple_shapes().size() - 1)) {
@@ -697,6 +705,10 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtGroupedMatmulThunk(
           ? config.selected_algorithm()
           : 0;
 
+  // Extract epilogue from backend config instead of hardcoding to kDefault
+  TF_ASSIGN_OR_RETURN(se::gpu::BlasLt::Epilogue blas_lt_epilogue,
+                      gpublas_lt::AsBlasLtEpilogue(epilogue));
+
   Thunk::ThunkInfo thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(
       instr, ir_emitter_context_->GetNextThunkId());
   std::string canonical_hlo = instr->ToString(
@@ -704,10 +716,9 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtGroupedMatmulThunk(
 
   auto thunk = std::make_unique<CublasLtMatmulThunk>(
       std::move(thunk_info), std::move(canonical_hlo), std::move(gemm_config),
-      se::gpu::BlasLt::Epilogue::kDefault, algorithm,
-      config.autotune_workspace_size(), a, b, c, d, group_sizes, std::nullopt,
-      std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
-      std::nullopt, workspace_buffer);
+      blas_lt_epilogue, algorithm, config.autotune_workspace_size(), a, b, c, d,
+      group_sizes, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+      std::nullopt, std::nullopt, std::nullopt, workspace_buffer);
   return GetThunkSequence(std::move(thunk));
 }
 
