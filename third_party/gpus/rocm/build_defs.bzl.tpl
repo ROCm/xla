@@ -2,6 +2,9 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_import.bzl", "cc_import")
 
 # Macros for building ROCm code.
+# rocm_library is loaded and wrapped below
+load("@rules_ml_toolchain//cc/rocm:rocm_library.bzl", _rocm_library_impl = "rocm_library")
+
 def if_rocm(if_true, if_false = []):
     """Shorthand for select()'ing on whether we're building with ROCm.
 
@@ -76,11 +79,21 @@ def if_rocm_hipblaslt(x):
       return select({"//conditions:default": x})
     return select({"//conditions:default": []})
 
-def rocm_library(copts = [], deps = [], **kwargs):
-    """Wrapper over cc_library which adds default ROCm options."""
+# rocm_library is now defined in @rules_ml_toolchain//cc/rocm:rocm_library.bzl
+# It's loaded at the top with alias _rocm_library_impl and wrapped below
+def rocm_library(name, srcs = [], hdrs = [], copts = [], deps = [], **kwargs):
+    """Wrapper for rocm_library that adds local_config_rocm headers."""
     if "@local_config_rocm//rocm:rocm_headers" not in deps:
-      deps.append("@local_config_rocm//rocm:rocm_headers")
-    cc_library(copts = rocm_default_copts() + copts, deps = deps, **kwargs)
+        deps = deps + ["@local_config_rocm//rocm:rocm_headers"]
+
+    _rocm_library_impl(
+        name = name,
+        srcs = srcs,
+        hdrs = hdrs,
+        copts = copts,
+        deps = deps,
+        **kwargs
+    )
 
 def get_rbe_amdgpu_pool(is_single_gpu = False):
     return "%{single_gpu_rbe_pool}" if is_single_gpu else "%{multi_gpu_rbe_pool}"
