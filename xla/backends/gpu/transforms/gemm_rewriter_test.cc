@@ -1110,10 +1110,6 @@ ENTRY int8gemm {
 }
 
 TEST_F(GemmRewriteTest, Int8GemmRankGreaterThanTwo) {
-  if (IsRocm()) {
-    GTEST_SKIP() << "DoBlasGemmWithAlgorithm is not yet implemented on ROCm";
-  }
-
   const char* hlo_text = R"(
 HloModule int8gemm
 
@@ -1127,21 +1123,30 @@ ENTRY main.4 {
 
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-5, 1e-5}));
 
-  if (IsRocm() ||
-      // Has at least Volta to support int8 GEMM.
-      HasCudaComputeCapability(se::CudaComputeCapability::Volta())) {
-    DebugOptions debug_options = GetDebugOptionsForTest();
-    std::string custom_call_target = debug_options.xla_gpu_enable_cublaslt()
-                                         ? "__cublas$lt$matmul"
-                                         : "__cublas$gemm";
+  DebugOptions debug_options = GetDebugOptionsForTest();
+  std::string custom_call_target = debug_options.xla_gpu_enable_cublaslt()
+                                       ? "__cublas$lt$matmul"
+                                       : "__cublas$gemm";
 
+  if (IsRocm()) {
+    // ROCm does not pad Int8 GEMM operands to multiples of 4.
     MatchOptimizedHlo(hlo_text,
                       absl::StrReplaceAll(
                           R"(
-; CHECK: [[GEMM:%[^ ]+]] = (s32[8,4]{1,0}, s8[{{[0-9]+}}]{0}) custom-call(s8[8,4]{1,0} %{{.*}}, s8[4,4]{0,1} %{{.*}}), custom_call_target="$0",
+; CHECK: {{.*}} custom-call(s8[8,2]{1,0} %{{.*}}, s8[2,4]{0,1} %{{.*}}), custom_call_target="$0"
   )",
                           {{"$0", custom_call_target}}),
                       /*print_operand_shape=*/true);
+  } else if (IsCuda()) {
+    if (HasCudaComputeCapability(se::CudaComputeCapability::Volta())) {
+      MatchOptimizedHlo(hlo_text,
+                        absl::StrReplaceAll(
+                            R"(
+; CHECK: {{.*}} custom-call(s8[8,4]{1,0} %{{.*}}, s8[4,4]{0,1} %{{.*}}), custom_call_target="$0"
+  )",
+                            {{"$0", custom_call_target}}),
+                        /*print_operand_shape=*/true);
+    }
   }
 }
 
@@ -1218,10 +1223,6 @@ ENTRY int8gemm {
 }
 
 TEST_P(ParameterizedGemmRewriteTest, Int8GemmNotMultipleOfFour) {
-  if (IsRocm()) {
-    GTEST_SKIP() << "DoBlasGemmWithAlgorithm is not yet implemented on ROCm";
-  }
-
   const char* hlo_text = R"(
 HloModule int8gemm
 
@@ -1233,20 +1234,37 @@ ENTRY int8gemm {
   )";
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-5, 1e-5}));
 
-  if (IsRocm() ||
-      HasCudaComputeCapability(se::CudaComputeCapability::Volta())) {
+  DebugOptions debug_options = GetDebugOptionsForTest();
+  std::string custom_call_target = debug_options.xla_gpu_enable_cublaslt()
+                                       ? "__cublas$lt$matmul"
+                                       : "__cublas$gemm";
+
+  if (IsRocm()) {
+    // ROCm does not pad Int8 GEMM operands to multiples of 4.
     MatchOptimizedHlo(hlo_text,
-                      R"(
-; CHECK: {{.*}} custom-call(s8[16,4]{1,0} [[A:%[^ ]+]], s8[4,12]{0,1} [[B:%[^ ]+]]), custom_call_target="<<CUBLAS_CUSTOM_CALL_TARGET_PLACEHOLDER>>"
+                      absl::StrReplaceAll(
+                          R"(
+; CHECK: {{.*}} custom-call(s8[13,4]{1,0} [[A:%[^ ]+]], s8[4,9]{0,1} [[B:%[^ ]+]]), custom_call_target="$0"
   )",
+                          {{"$0", custom_call_target}}),
                       /*print_operand_shape=*/true);
-  } else {
-    MatchOptimizedHlo(hlo_text,
-                      R"(
+  } else if (IsCuda()) {
+    if (HasCudaComputeCapability(se::CudaComputeCapability::Volta())) {
+      MatchOptimizedHlo(hlo_text,
+                        absl::StrReplaceAll(
+                            R"(
+; CHECK: {{.*}} custom-call(s8[16,4]{1,0} [[A:%[^ ]+]], s8[4,12]{0,1} [[B:%[^ ]+]]), custom_call_target="$0"
+  )",
+                            {{"$0", custom_call_target}}),
+                        /*print_operand_shape=*/true);
+    } else {
+      MatchOptimizedHlo(hlo_text,
+                        R"(
 ; CHECK: {{.*}} dot(s32[13,4]{1,0} [[A:%[^ ]+]], s32[4,9]{1,0} [[B:%[^ ]+]]), lhs_contracting_dims={1}, rhs_contracting_dims={0}
 
   )",
-                      /*print_operand_shape=*/true);
+                        /*print_operand_shape=*/true);
+    }
   }
 }
 
