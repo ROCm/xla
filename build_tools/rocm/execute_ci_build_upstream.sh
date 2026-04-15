@@ -13,13 +13,11 @@ EXCLUDED_TESTS=(
 
 EXCLUDED_TARGETS_SGPU=(
     "//xla/tests:iota_test_amdgpu_any"   # Taking too many CI nodes
-    "//xla/backends/gpu/transforms:triton_fusion_numerics_verifier_test_amdgpu_any"
 )
 
 TEST_TARGETS_SGPU=(
     "//xla/..."
     "-//xla/tests:iota_test_amdgpu_any"   # Taking too many CI nodes
-    "-//xla/backends/gpu/transforms:triton_fusion_numerics_verifier_test_amdgpu_any"
 )
 
 TEST_TARGETS_MGPU=(
