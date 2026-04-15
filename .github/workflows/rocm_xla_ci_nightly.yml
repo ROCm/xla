@@ -19,9 +19,6 @@ permissions:
   contents: read
 
 on:
-  push:
-    branches:
-      - leo/*
   schedule:
     # Run every 24 hours at 3:47 AM UTC
     - cron: '47 3 * * *'
@@ -35,7 +32,7 @@ concurrency:
 jobs:
   execute-xla-ut-nightly:
     # Run on schedule or if the "nightly-pipeline" label was added
-    # if: github.event_name == 'schedule' || github.event.label.name == 'nightly-pipeline'
+    if: github.event_name == 'schedule' || github.event.label.name == 'nightly-pipeline'
     runs-on: linux-mi250-4
     strategy:
       fail-fast: false
@@ -71,6 +68,14 @@ jobs:
           git clone --depth 1 --filter=blob:none --sparse https://github.com/openxla/xla.git "$tmpdir"
           git -C "$tmpdir" sparse-checkout set build_tools/rocm
           cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
+
+      - name: Patch stale upstream ROCm MGPU target labels
+        run: |
+          sed -i \
+            -e 's#//xla/tests:collective_ops_e2e_test#//xla/backends/gpu/tests:collective_ops_e2e_test#' \
+            -e 's#//xla/tests:collective_pipeline_parallelism_test#//xla/backends/gpu/tests:collective_pipeline_parallelism_test#' \
+            -e 's#//xla/tests:replicated_io_feed_test#//xla/backends/gpu/tests:replicated_io_feed_test#' \
+            build_tools/rocm/rocm_xla.bazelrc
 
       - name: Fetch execute_ci_build.sh from rocm-dev-infra
         run: |
