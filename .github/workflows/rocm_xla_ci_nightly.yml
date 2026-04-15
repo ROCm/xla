@@ -59,10 +59,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          # Scheduled runs: checkout upstream openxla/xla main branch
-          # Label-triggered runs: checkout the PR branch
-          repository: ${{ github.event_name == 'schedule' && 'openxla/xla' || github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ github.event_name == 'schedule' && 'main' || github.event.pull_request.head.sha || github.sha }}
+          # This workflow runs against the upstream XLA source tree.
+          repository: openxla/xla
+          ref: main
           persist-credentials: false
 
       - name: Populate missing upstream ROCm build tools
@@ -91,7 +90,14 @@ jobs:
         run: lscpu
 
       - name: ROCm info
-        run: /opt/rocm/bin/rocminfo
+        run: |
+          if command -v rocminfo >/dev/null 2>&1; then
+            "$(command -v rocminfo)"
+          elif [ -x /opt/rocm/bin/rocminfo ]; then
+            /opt/rocm/bin/rocminfo
+          else
+            echo "rocminfo not found in this container image; skipping diagnostic step."
+          fi
 
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         run: |
