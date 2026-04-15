@@ -72,6 +72,14 @@ jobs:
           git -C "$tmpdir" sparse-checkout set build_tools/rocm
           cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
 
+      - name: Patch stale upstream ROCm MGPU target labels
+        run: |
+          sed -i \
+            -e 's#//xla/tests:collective_ops_e2e_test#//xla/backends/gpu/tests:collective_ops_e2e_test#' \
+            -e 's#//xla/tests:collective_pipeline_parallelism_test#//xla/backends/gpu/tests:collective_pipeline_parallelism_test#' \
+            -e 's#//xla/tests:replicated_io_feed_test#//xla/backends/gpu/tests:replicated_io_feed_test#' \
+            build_tools/rocm/rocm_xla.bazelrc
+
       - name: Fetch execute_ci_build.sh from rocm-dev-infra
         run: |
           wget -O build_tools/rocm/execute_ci_build.sh https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/execute_ci_build.sh
