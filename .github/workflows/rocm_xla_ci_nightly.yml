@@ -19,9 +19,6 @@ permissions:
   contents: read
 
 on:
-  push:
-    branches:
-      - leo/*
   schedule:
     # Run every 24 hours at 3:47 AM UTC
     - cron: '47 3 * * *'
@@ -35,7 +32,7 @@ concurrency:
 jobs:
   execute-xla-ut-nightly:
     # Run on schedule or if the "nightly-pipeline" label was added
-    # if: github.event_name == 'schedule' || github.event.label.name == 'nightly-pipeline'
+    if: github.event_name == 'schedule' || github.event.label.name == 'nightly-pipeline'
     runs-on: linux-mi250-4
     strategy:
       fail-fast: false
