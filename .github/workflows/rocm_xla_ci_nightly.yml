@@ -19,6 +19,9 @@ permissions:
   contents: read
 
 on:
+  push:
+    branches:
+      - leo/*
   schedule:
     # Run every 24 hours at 3:47 AM UTC
     - cron: '47 3 * * *'
@@ -32,7 +35,7 @@ concurrency:
 jobs:
   execute-xla-ut-nightly:
     # Run on schedule or if the "nightly-pipeline" label was added
-    if: github.event_name == 'schedule' || github.event.label.name == 'nightly-pipeline'
+    # if: github.event_name == 'schedule' || github.event.label.name == 'nightly-pipeline'
     runs-on: linux-mi250-4
     strategy:
       fail-fast: false
@@ -56,11 +59,18 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          # Scheduled runs: checkout upstream openxla/xla main branch
-          # Label-triggered runs: checkout the PR branch
-          repository: ${{ github.event_name == 'schedule' && 'openxla/xla' || github.repository }}
-          ref: ${{ github.event_name == 'schedule' && 'main' || github.event.pull_request.head.sha }}
+          # This workflow runs against the upstream XLA source tree.
+          repository: openxla/xla
+          ref: main
           persist-credentials: false
+
+      - name: Populate missing upstream ROCm build tools
+        if: ${{ hashFiles('build_tools/rocm/run_xla_ci_build.sh') == '' }}
+        run: |
+          tmpdir="$(mktemp -d)"
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/openxla/xla.git "$tmpdir"
+          git -C "$tmpdir" sparse-checkout set build_tools/rocm
+          cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
 
       - name: Fetch execute_ci_build.sh from rocm-dev-infra
         run: |
@@ -72,15 +82,22 @@ jobs:
           RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
           RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}
         run: |
-          mkdir -p /tf/certificates
-          echo "$RBE_CI_CERT" > /tf/certificates/ci-cert.crt
-          echo "$RBE_CI_KEY" > /tf/certificates/ci-cert.key
+          mkdir -p /data
+          echo "$RBE_CI_CERT" > /data/ci-cert.crt
+          echo "$RBE_CI_KEY" > /data/ci-cert.key
 
       - name: CPU Info
         run: lscpu
 
       - name: ROCm info
-        run: /opt/rocm/bin/rocminfo
+        run: |
+          if command -v rocminfo >/dev/null 2>&1; then
+            "$(command -v rocminfo)"
+          elif [ -x /opt/rocm/bin/rocminfo ]; then
+            /opt/rocm/bin/rocminfo
+          else
+            echo "rocminfo not found in this container image; skipping diagnostic step."
+          fi
 
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         run: |
