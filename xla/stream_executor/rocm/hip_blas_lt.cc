@@ -83,10 +83,11 @@ void GroupGemmUpdateArgs(
     uint8_t log2_byte_width_elem_a, uint8_t log2_byte_width_elem_b,
     uint8_t log2_byte_width_elem_d, uint32_t stride_ragged_dim,
     uint32_t stride_group_dim, uint32_t output_stride_ragged_dim,
-    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
-    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-    uint32_t strideD1, uint32_t strideD2, gpu::RaggedDotMode ragged_mode,
-    uint32_t num_gemms);
+    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k,
+    uint32_t batch, uint32_t strideA1, uint32_t strideA2, uint32_t strideB1,
+    uint32_t strideB2, uint32_t strideD1, uint32_t strideD2,
+    gpu::RaggedDotMode ragged_mode, uint32_t num_gemms,
+    hipblasLtEpilogue_t epilogue);
 namespace {
 
 template <typename T>
@@ -962,13 +963,17 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
   auto hip_stream =
       absl::bit_cast<hipStream_t>(stream->platform_specific_handle().stream);
 
+  TF_ASSIGN_OR_RETURN(hipblasLtEpilogue_t hip_epilogue,
+                      AsHipblasLtEpilogue(grouped_gemm_epilogue_));
+  
   GroupGemmUpdateArgs(
       hip_stream, d_userArgs, a, b, args.c, args.d, args.group_sizes,
       group_size_bytewidth, log2_byte_width_elem_a, log2_byte_width_elem_b,
       log2_byte_width_elem_d, cfg_->stride_ragged_dim, cfg_->stride_group_dim,
       cfg_->output_stride_ragged_dim, cfg_->must_swap_operands, cfg_->m,
       cfg_->n, cfg_->k, cfg_->batch_count, strideA1, strideA2, strideB1,
-      strideB2, strideD1, strideD2, cfg_->ragged_mode, cfg_->group_count);
+      strideB2, strideD1, strideD2, cfg_->ragged_mode, cfg_->group_count,
+      hip_epilogue);
 
   SE_HIPBLAS_RETURN_IF_ERROR(
       grouped_gemm_->run(d_userArgs.opaque(), hip_stream));

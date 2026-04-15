@@ -203,7 +203,8 @@ __launch_bounds__(BLOCK_SIZE) __global__
         uint32_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
         uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
         uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-        uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
+        uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms,
+        hipblasLtEpilogue_t epilogue) {
   __builtin_assume(num_gemms != 0);
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
 
@@ -313,7 +314,7 @@ __launch_bounds__(BLOCK_SIZE) __global__
       arg.e = nullptr;
       arg.act0 = 0.0;
       arg.act1 = 0.0;
-      arg.activationType = 0;
+      arg.activationType = static_cast<int32_t>(epilogue);
     }
 
     __barrier(__CLK_LOCAL_MEM_FENCE);
@@ -341,7 +342,8 @@ __launch_bounds__(BLOCK_SIZE) __global__
         uint32_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
         uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
         uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-        uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms) {
+        uint32_t strideD1, uint32_t strideD2, uint32_t num_gemms,
+        hipblasLtEpilogue_t epilogue) {
   __builtin_assume(num_gemms != 0);
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
 
@@ -439,7 +441,7 @@ __launch_bounds__(BLOCK_SIZE) __global__
       arg.e = nullptr;
       arg.act0 = 0.0;
       arg.act1 = 0.0;
-      arg.activationType = 0;
+      arg.activationType = static_cast<int32_t>(epilogue);
     }
 
     __barrier(__CLK_LOCAL_MEM_FENCE);
@@ -466,7 +468,7 @@ __launch_bounds__(BLOCK_SIZE) __global__ void SetUserArgsKernelRaggedInBatchDim(
     uint32_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
     uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
     uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideD1,
-    uint32_t strideD2, uint32_t num_gemms) {
+    uint32_t strideD2, uint32_t num_gemms, hipblasLtEpilogue_t epilogue) {
   __builtin_assume(num_gemms != 0);
   const T* typed_group_sizes = static_cast<const T*>(group_sizes);
 
@@ -564,7 +566,7 @@ __launch_bounds__(BLOCK_SIZE) __global__ void SetUserArgsKernelRaggedInBatchDim(
       arg.e = nullptr;
       arg.act0 = 0.0;
       arg.act1 = 0.0;
-      arg.activationType = 0;
+      arg.activationType = static_cast<int32_t>(epilogue);
     }
 
     __barrier(__CLK_LOCAL_MEM_FENCE);
@@ -585,14 +587,15 @@ __launch_bounds__(BLOCK_SIZE) __global__ void SetUserArgsKernelRaggedInBatchDim(
 void GroupGemmUpdateArgs(
     hipStream_t stream, DeviceMemoryBase args, DeviceMemoryBase a,
     DeviceMemoryBase b, DeviceMemoryBase c, DeviceMemoryBase d,
-    DeviceMemoryBase group_sizes, uint8_t group_size_bytewidth,
-    uint8_t log2_byte_width_elem_a, uint8_t log2_byte_width_elem_b,
-    uint8_t log2_byte_width_elem_d, uint32_t stride_ragged_dim,
-    uint32_t stride_group_dim, uint32_t output_stride_ragged_dim,
-    bool must_swap_operands, uint32_t m, uint32_t n, uint32_t k, uint32_t batch,
-    uint32_t strideA1, uint32_t strideA2, uint32_t strideB1, uint32_t strideB2,
-    uint32_t strideD1, uint32_t strideD2, gpu::RaggedDotMode ragged_mode,
-    uint32_t num_gemms) {
+    DeviceMemoryBase group_sizes,
+    uint8_t group_size_bytewidth, uint8_t log2_byte_width_elem_a,
+    uint8_t log2_byte_width_elem_b, uint8_t log2_byte_width_elem_d,
+    uint32_t stride_ragged_dim, uint32_t stride_group_dim,
+    uint32_t output_stride_ragged_dim, bool must_swap_operands, uint32_t m,
+    uint32_t n, uint32_t k, uint32_t batch, uint32_t strideA1,
+    uint32_t strideA2, uint32_t strideB1, uint32_t strideB2, uint32_t strideD1,
+    uint32_t strideD2, gpu::RaggedDotMode ragged_mode, uint32_t num_gemms,
+    hipblasLtEpilogue_t epilogue) {
   const uint32_t block_sz = BLOCK_SIZE;
   auto kernel = SetUserArgsKernelRaggedInNonContractingDim<uint64_t>;
   switch (ragged_mode) {
@@ -627,14 +630,14 @@ void GroupGemmUpdateArgs(
   size_t shared_mem_size =
       min(block_sz, num_gemms) * sizeof(hipblaslt_ext::UserArguments);
 
-  hipLaunchKernelGGL(kernel, dim3(1), dim3(block_sz), shared_mem_size, stream,
-                     static_cast<hipblaslt_ext::UserArguments*>(args.opaque()),
-                     a.opaque(), b.opaque(), c.opaque(), d.opaque(),
-                     group_sizes.opaque(), log2_byte_width_elem_a,
-                     log2_byte_width_elem_b, log2_byte_width_elem_d, stride_a,
-                     stride_b, output_stride_ragged_dim, must_swap_operands, m,
-                     n, k, batch, strideA1, strideA2, strideB1, strideB2,
-                     strideD1, strideD2, num_gemms);
+  hipLaunchKernelGGL(
+      kernel, dim3(1), dim3(block_sz), shared_mem_size, stream,
+      static_cast<hipblaslt_ext::UserArguments*>(args.opaque()), a.opaque(),
+      b.opaque(), c.opaque(), d.opaque(), group_sizes.opaque(),
+      log2_byte_width_elem_a, log2_byte_width_elem_b, log2_byte_width_elem_d,
+      stride_a, stride_b, output_stride_ragged_dim, must_swap_operands, m, n, k,
+      batch, strideA1, strideA2, strideB1, strideB2, strideD1, strideD2,
+      num_gemms, epilogue);
 }
 };  // namespace rocm
 
