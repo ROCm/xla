@@ -19,9 +19,6 @@ permissions:
   contents: read
 
 on:
-  push:
-    branches:
-      - leo/*
   schedule:
     # Run every 24 hours at 3:47 AM UTC
     - cron: '47 3 * * *'
