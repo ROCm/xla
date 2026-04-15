@@ -73,8 +73,8 @@ jobs:
           RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}
         run: |
           mkdir -p /tf/certificates
-          echo "$RBE_CI_CERT" > /tf/certificates/ci-cert.crt
-          echo "$RBE_CI_KEY" > /tf/certificates/ci-cert.key
+          echo "$RBE_CI_CERT" > /data/ci-cert.crt
+          echo "$RBE_CI_KEY" > /data/ci-cert.key
 
       - name: CPU Info
         run: lscpu
