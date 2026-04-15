@@ -61,9 +61,17 @@ jobs:
         with:
           # Scheduled runs: checkout upstream openxla/xla main branch
           # Label-triggered runs: checkout the PR branch
-          repository: ${{ github.event_name == 'schedule' && 'openxla/xla' || github.repository }}
-          ref: ${{ github.event_name == 'schedule' && 'main' || github.event.pull_request.head.sha }}
+          repository: ${{ github.event_name == 'schedule' && 'openxla/xla' || github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'schedule' && 'main' || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+
+      - name: Populate missing upstream ROCm build tools
+        if: ${{ hashFiles('build_tools/rocm/run_xla_ci_build.sh') == '' }}
+        run: |
+          tmpdir="$(mktemp -d)"
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/openxla/xla.git "$tmpdir"
+          git -C "$tmpdir" sparse-checkout set build_tools/rocm
+          cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
 
       - name: Fetch execute_ci_build.sh from rocm-dev-infra
         run: |
