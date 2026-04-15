@@ -2535,8 +2535,6 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
          PrimitiveType::BF16, DataType::kBF16},
         {ComputationType::kF32, DataType::kFloat, PrimitiveType::F16,
          PrimitiveType::F16, DataType::kHalf},
-        {ComputationType::kF32, DataType::kFloat, PrimitiveType::S8,
-         PrimitiveType::S8, DataType::kFloat},
         {ComputationType::kF32, DataType::kFloat, PrimitiveType::F32,
          PrimitiveType::F32, DataType::kFloat},
     };
@@ -2563,6 +2561,14 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
         absl::c_linear_search(extended_type_combinations,
                               std::make_tuple(compute_type, scale_type, a_dtype,
                                               b_dtype, output_dtype))) {
+      return true;
+    }
+
+    // S8 x S8 -> F32 is supported by cuBLAS/cuBLASLt but not by
+    // rocBLAS/hipblasLt.
+    if (is_cuda && a_dtype == PrimitiveType::S8 &&
+        b_dtype == PrimitiveType::S8 && output_dtype == DataType::kFloat &&
+        compute_type == ComputationType::kF32) {
       return true;
     }
 

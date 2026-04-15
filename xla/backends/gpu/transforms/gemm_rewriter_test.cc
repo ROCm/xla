@@ -1269,10 +1269,6 @@ ENTRY int8gemm {
 }
 
 TEST_P(ParameterizedGemmRewriteTest, GemmTypeCombinationCheck) {
-  if (IsRocm()) {
-    GTEST_SKIP() << "DoBlasGemmWithAlgorithm is not yet implemented on ROCm";
-  }
-
   std::vector<std::tuple<absl::string_view, absl::string_view, bool>>
       type_combinations = {{"s8", "s8", true},
                            {"s32", "s32", true},
@@ -1282,11 +1278,18 @@ TEST_P(ParameterizedGemmRewriteTest, GemmTypeCombinationCheck) {
                            {"f64", "f64", true},
                            {"c64", "c64", true},
                            {"c128", "c128", true},
-                           // add mix type gemm
+                           // mix type gemm
                            {"s8", "s32", true},
-                           {"s8", "f32", true},
                            {"f16", "f32", true},
                            {"bf16", "f32", true}};
+
+  if (IsCuda()) {
+    // cuBLAS and cuBLASLt both support s8 x s8 -> f32 GEMM.
+    type_combinations.push_back({"s8", "f32", true});
+  } else if (IsRocm()) {
+    // Neither rocBLAS nor hipblasLt supports s8 x s8 -> f32 GEMM.
+    type_combinations.push_back({"s8", "f32", false});
+  }
 
   if (IsRocm() ||
       HasCudaComputeCapability(se::CudaComputeCapability::Ampere())) {
