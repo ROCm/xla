@@ -754,7 +754,6 @@ cc_library(
 
 xla_test(
     name = "hipblaslt_mx_execution_test",
-    timeout = "long",
     srcs = ["hipblaslt_mx_execution_test.cc"],
     backends = [
         "amdgpu_any",
@@ -778,7 +777,6 @@ xla_test(
 
 xla_test(
     name = "hipblaslt_test",
-    timeout = "long",
     srcs = ["hipblaslt_test.cc"],
     backends = [
         "amdgpu_any",
