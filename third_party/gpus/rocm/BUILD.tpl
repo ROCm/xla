@@ -107,15 +107,12 @@ cc_library(
     linkopts = select({
         ":build_hermetic": [
             "-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib",
-            "-Lexternal/local_config_rocm/rocm/%{rocm_root}/lib",
         ],
         ":multiple_rocm_paths": [
             "-Wl,-rpath=%{rocm_lib_paths}",
-            "-Lexternal/local_config_rocm/rocm/%{rocm_root}/lib",
         ],
         "//conditions:default": [
             "-Wl,-rpath,/opt/rocm/lib",
-            "-Lexternal/local_config_rocm/rocm/%{rocm_root}/lib",
         ],
     }),
     visibility = ["//visibility:public"],
@@ -129,7 +126,7 @@ alias(
 
 cc_library(
     name = "hip_runtime",
-    linkopts = ["-lamdhip64"],
+    srcs = ["%{rocm_root}/lib/libamdhip64.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":hip_runtime_libs",
@@ -212,7 +209,7 @@ cc_library(
 
 cc_library(
     name = "rocblas",
-    linkopts = ["-lrocblas"],
+    srcs = ["%{rocm_root}/lib/librocblas.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":rocblas_libs",
@@ -236,7 +233,7 @@ cc_library(
 
 cc_library(
     name = "hipfft",
-    linkopts = ["-lhipfft"],
+    srcs = ["%{rocm_root}/lib/libhipfft.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":hipfft_libs",
@@ -265,7 +262,7 @@ cc_library(
 
 cc_library(
     name = "hiprand",
-    linkopts = ["-lhiprand"],
+    srcs = ["%{rocm_root}/lib/libhiprand.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":hiprand_libs",
@@ -293,7 +290,7 @@ cc_library(
 
 cc_library(
     name = "miopen",
-    linkopts = ["-lMIOpen"],
+    srcs = ["%{rocm_root}/lib/libMIOpen.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":miopen_libs",
@@ -321,7 +318,7 @@ cc_library(
 
 cc_library(
     name = "rccl",
-    linkopts = ["-lrccl"],
+    srcs = ["%{rocm_root}/lib/librccl.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":rccl_libs",
@@ -365,7 +362,7 @@ cc_library(
 
 cc_library(
     name = "hipsparse",
-    linkopts = ["-lhipsparse"],
+    srcs = ["%{rocm_root}/lib/libhipsparse.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":hipsparse_libs",
@@ -376,7 +373,7 @@ cc_library(
 
 cc_library(
     name = "hipsparse_libs",
-    data = glob(["%{rocm_root}/lib/libhipsparse*.so*"]),
+    data = glob(["%{rocm_root}/lib/libhipsparse.so*"]),
     deps = [
         ":hip_runtime_libs",
         ":rocsparse_libs",
@@ -402,7 +399,7 @@ cc_library(
 
 cc_library(
     name = "roctracer",
-    linkopts = ["-lroctracer64"],
+    srcs = ["%{rocm_root}/lib/libroctracer64.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":rocm_headers_includes",
@@ -423,7 +420,7 @@ cc_library(
 
 cc_library(
     name = "rocprofiler_sdk",
-    linkopts = ["-lrocprofiler-sdk"],
+    srcs = ["%{rocm_root}/lib/librocprofiler-sdk.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":rocm_headers_includes",
@@ -443,7 +440,7 @@ cc_library(
 
 cc_library(
     name = "rocsolver",
-    linkopts = ["-lrocsolver"],
+    srcs = ["%{rocm_root}/lib/librocsolver.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":rocm_headers_includes",
@@ -466,7 +463,7 @@ cc_library(
 
 cc_library(
     name = "hipsolver",
-    linkopts = ["-lhipsolver"],
+    srcs = ["%{rocm_root}/lib/libhipsolver.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":hipsolver_libs",
@@ -488,7 +485,7 @@ cc_library(
 
 cc_library(
     name = "hipblas",
-    linkopts = ["-lhipblas"],
+    srcs = ["%{rocm_root}/lib/libhipblas.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":hipblas_libs",
@@ -508,7 +505,7 @@ cc_library(
 
 cc_library(
     name = "hipblaslt",
-    linkopts = ["-lhipblaslt"],
+    srcs = ["%{rocm_root}/lib/libhipblaslt.so"],
     visibility = ["//visibility:public"],
     deps = [
         ":hipblaslt_libs",
