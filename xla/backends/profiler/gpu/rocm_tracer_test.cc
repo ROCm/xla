@@ -15,6 +15,13 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/rocm_tracer.h"
 
+// These tests exercise the rocprofiler-sdk (v3) tracer API (GpuAgents(),
+// RocmTracerOptions{max_annotation_strings=...}, RocmTracer::collector()).
+// The roctracer-based v1 backend exposes a different RocmTracerOptions layout
+// and does not provide GpuAgents(), so the tests are compiled out when the
+// v1 backend is selected.
+#if XLA_GPU_ROCM_TRACER_BACKEND == XLA_GPU_ROCM_TRACER_BACKEND_V3
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -235,3 +242,5 @@ TEST(RocmTracerTest, CapturesHipEvents) {
 }  // namespace
 }  // namespace profiler
 }  // namespace xla
+
+#endif  // XLA_GPU_ROCM_TRACER_BACKEND == XLA_GPU_ROCM_TRACER_BACKEND_V3
