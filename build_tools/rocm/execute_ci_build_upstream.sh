@@ -80,6 +80,7 @@ done
     --grpc_keepalive_time=30s \
     --test_sharding_strategy=disabled \
     --test_verbose_timeout_warnings \
+    --test_timeout=920,2400,7200,9600 \
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_mi300_upstream_xla \
     --curses=no \
     --color=yes \
