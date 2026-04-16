@@ -65,13 +65,18 @@ using ExternFunctionInstruction =
 // Returns an error status if the function name is invalid or doesn't match
 // any known pattern.
 //
+// Function name format: xla_<functionname>_<arg1>_<arg2>_...
+// - Token[0]: "xla" (prefix)
+// - Token[1]: function name
+// - Token[2+]: arguments (if any)
+//
 // Supported patterns:
-// - "xla_atomic_write_<semantic>_<scope>"
-// - "xla_atomic_spin_wait_<semantic>_<scope>_<comparator>"
-// - "xla_get_thread_id"
+// - "xla_getthreadid" (2 tokens: no arguments)
+// - "xla_atomicwrite_<semantic>_<scope>" (4 tokens)
+// - "xla_atomicspinwait_<semantic>_<scope>_<comparator>" (5 tokens)
 //
 // Where:
-// - <semantic>: relaxed, acquire, release, acq_rel
+// - <semantic>: relaxed, acquire, release, acqrel
 // - <scope>: system, gpu, cta
 // - <comparator>: eq, lt
 absl::StatusOr<ExternFunctionInstruction> ParseExternFunctionName(

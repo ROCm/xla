@@ -18,48 +18,53 @@ limitations under the License.
 #include <string>
 #include <variant>
 
+#include "absl/functional/overload.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
+#include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Support/LLVM.h"
 #include "xla/backends/gpu/codegen/triton/ir/triton_xla_ops.h"
+#include "xla/tsl/platform/statusor.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace mlir::triton::xla {
 
 namespace {
 
+using ::mlir::triton::MemSemantic;
+using ::mlir::triton::MemSyncScope;
+
 // Helper to parse MemSemantic from string
-absl::StatusOr<triton::MemSemantic> ParseMemSemantic(
-    absl::string_view semantic_str) {
+absl::StatusOr<MemSemantic> ParseMemSemantic(absl::string_view semantic_str) {
   if (semantic_str == "relaxed") {
-    return triton::MemSemantic::RELAXED;
+    return MemSemantic::RELAXED;
   } else if (semantic_str == "acquire") {
-    return triton::MemSemantic::ACQUIRE;
+    return MemSemantic::ACQUIRE;
   } else if (semantic_str == "release") {
-    return triton::MemSemantic::RELEASE;
-  } else if (semantic_str == "acq_rel") {
-    return triton::MemSemantic::ACQUIRE_RELEASE;
+    return MemSemantic::RELEASE;
+  } else if (semantic_str == "acqrel") {
+    return MemSemantic::ACQUIRE_RELEASE;
   }
   return absl::InvalidArgumentError(
       absl::StrFormat("Unknown memory semantic: %s", semantic_str));
 }
 
 // Helper to parse MemSyncScope from string
-absl::StatusOr<triton::MemSyncScope> ParseMemSyncScope(
-    absl::string_view scope_str) {
+absl::StatusOr<MemSyncScope> ParseMemSyncScope(absl::string_view scope_str) {
   if (scope_str == "system") {
-    return triton::MemSyncScope::SYSTEM;
+    return MemSyncScope::SYSTEM;
   } else if (scope_str == "gpu") {
-    return triton::MemSyncScope::GPU;
+    return MemSyncScope::GPU;
   } else if (scope_str == "cta") {
-    return triton::MemSyncScope::CTA;
+    return MemSyncScope::CTA;
   }
   return absl::InvalidArgumentError(
       absl::StrFormat("Unknown memory sync scope: %s", scope_str));
@@ -77,31 +82,31 @@ absl::StatusOr<Comparator> ParseComparator(absl::string_view comparator_str) {
 }
 
 // Helper to convert MemSemantic to string
-absl::string_view MemSemanticToString(triton::MemSemantic semantic) {
+absl::string_view MemSemanticToString(MemSemantic semantic) {
   switch (semantic) {
-    case triton::MemSemantic::RELAXED:
+    case MemSemantic::RELAXED:
       return "relaxed";
-    case triton::MemSemantic::ACQUIRE:
+    case MemSemantic::ACQUIRE:
       return "acquire";
-    case triton::MemSemantic::RELEASE:
+    case MemSemantic::RELEASE:
       return "release";
-    case triton::MemSemantic::ACQUIRE_RELEASE:
-      return "acq_rel";
+    case MemSemantic::ACQUIRE_RELEASE:
+      return "acqrel";
   }
-  return "unknown";
+  LOG(FATAL) << "Unknown MemSemantic value";
 }
 
 // Helper to convert MemSyncScope to string
-absl::string_view MemSyncScopeToString(triton::MemSyncScope scope) {
+absl::string_view MemSyncScopeToString(MemSyncScope scope) {
   switch (scope) {
-    case triton::MemSyncScope::SYSTEM:
+    case MemSyncScope::SYSTEM:
       return "system";
-    case triton::MemSyncScope::GPU:
+    case MemSyncScope::GPU:
       return "gpu";
-    case triton::MemSyncScope::CTA:
+    case MemSyncScope::CTA:
       return "cta";
   }
-  return "unknown";
+  LOG(FATAL) << "Unknown MemSyncScope value";
 }
 
 // Helper to convert Comparator to string
@@ -112,130 +117,75 @@ absl::string_view ComparatorToString(Comparator comparator) {
     case Comparator::LT:
       return "lt";
   }
-  return "unknown";
+  LOG(FATAL) << "Unknown Comparator value";
+}
+
+// Helper to convert MemSyncScope to PTX scope string
+absl::string_view MemSyncScopeToPTXScope(MemSyncScope scope) {
+  switch (scope) {
+    case MemSyncScope::SYSTEM:
+      return "sys";
+    case MemSyncScope::GPU:
+      return "gpu";
+    case MemSyncScope::CTA:
+      return "cta";
+  }
+  LOG(FATAL) << "Unknown MemSyncScope value";
 }
 
 }  // namespace
 
 absl::StatusOr<ExternFunctionInstruction> ParseExternFunctionName(
     absl::string_view func_name) {
-  // Check for xla_get_thread_id
-  if (func_name == "xla_get_thread_id") {
+  // Function name format: xla_<functionname>_<arg1>_<arg2>_...
+  // Split by underscore to get tokens
+  std::vector<absl::string_view> tokens = absl::StrSplit(func_name, '_');
+
+  // Must have at least 2 tokens: "xla" and function name
+  if (tokens.size() < 2 || tokens[0] != "xla") {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("Invalid extern function name: %s", func_name));
+  }
+
+  absl::string_view fn_name = tokens[1];
+
+  // xla_getthreadid (2 tokens total)
+  if (fn_name == "getthreadid") {
+    if (tokens.size() != 2) {
+      return absl::InvalidArgumentError(absl::StrFormat(
+          "getthreadid expects no arguments, got %d", tokens.size() - 2));
+    }
     return GetThreadIdInstruction{};
   }
 
-  // Check for xla_atomic_write_<semantic>_<scope>
-  if (absl::StartsWith(func_name, "xla_atomic_write_")) {
-    absl::string_view remainder =
-        func_name.substr(17);  // Skip "xla_atomic_write_"
-
-    // Find the positions of underscores to split semantic and scope
-    size_t first_underscore = remainder.find('_');
-    if (first_underscore == absl::string_view::npos) {
-      return absl::InvalidArgumentError(
-          absl::StrFormat("Invalid atomic write function name: %s", func_name));
+  // xla_atomicwrite_<semantic>_<scope> (4 tokens total)
+  if (fn_name == "atomicwrite") {
+    if (tokens.size() != 4) {
+      return absl::InvalidArgumentError(absl::StrFormat(
+          "atomicwrite expects 2 arguments (semantic, scope), got %d",
+          tokens.size() - 2));
     }
 
-    size_t second_underscore = remainder.find('_', first_underscore + 1);
-    absl::string_view semantic_str;
-    absl::string_view scope_str;
+    TF_ASSIGN_OR_RETURN(auto semantic, ParseMemSemantic(tokens[2]));
+    TF_ASSIGN_OR_RETURN(auto scope, ParseMemSyncScope(tokens[3]));
 
-    if (second_underscore == absl::string_view::npos) {
-      // Pattern: <semantic>_<scope>
-      semantic_str = remainder.substr(0, first_underscore);
-      scope_str = remainder.substr(first_underscore + 1);
-    } else {
-      // Pattern: <semantic_part1>_<semantic_part2>_<scope> (e.g., acq_rel_gpu)
-      absl::string_view potential_semantic =
-          remainder.substr(0, second_underscore);
-      scope_str = remainder.substr(second_underscore + 1);
-
-      // Check if there's another underscore in scope (invalid)
-      if (scope_str.find('_') != absl::string_view::npos) {
-        return absl::InvalidArgumentError(absl::StrFormat(
-            "Invalid atomic write function name: %s", func_name));
-      }
-
-      semantic_str = potential_semantic;
-    }
-
-    auto semantic = ParseMemSemantic(semantic_str);
-    if (!semantic.ok()) {
-      return semantic.status();
-    }
-
-    auto scope = ParseMemSyncScope(scope_str);
-    if (!scope.ok()) {
-      return scope.status();
-    }
-
-    return AtomicWriteInstruction{*semantic, *scope};
+    return AtomicWriteInstruction{semantic, scope};
   }
 
-  // Check for xla_atomic_spin_wait_<semantic>_<scope>_<comparator>
-  if (absl::StartsWith(func_name, "xla_atomic_spin_wait_")) {
-    absl::string_view remainder =
-        func_name.substr(21);  // Skip "xla_atomic_spin_wait_"
-
-    // Find underscores to split semantic, scope, and comparator
-    size_t first_underscore = remainder.find('_');
-    if (first_underscore == absl::string_view::npos) {
+  // xla_atomicspinwait_<semantic>_<scope>_<comparator> (5 tokens total)
+  if (fn_name == "atomicspinwait") {
+    if (tokens.size() != 5) {
       return absl::InvalidArgumentError(absl::StrFormat(
-          "Invalid atomic spin wait function name: %s", func_name));
+          "atomicspinwait expects 3 arguments (semantic, scope, comparator), "
+          "got %d",
+          tokens.size() - 2));
     }
 
-    size_t second_underscore = remainder.find('_', first_underscore + 1);
-    if (second_underscore == absl::string_view::npos) {
-      return absl::InvalidArgumentError(absl::StrFormat(
-          "Invalid atomic spin wait function name: %s", func_name));
-    }
+    TF_ASSIGN_OR_RETURN(auto semantic, ParseMemSemantic(tokens[2]));
+    TF_ASSIGN_OR_RETURN(auto scope, ParseMemSyncScope(tokens[3]));
+    TF_ASSIGN_OR_RETURN(auto comparator, ParseComparator(tokens[4]));
 
-    size_t third_underscore = remainder.find('_', second_underscore + 1);
-
-    absl::string_view semantic_str;
-    absl::string_view scope_str;
-    absl::string_view comparator_str;
-
-    if (third_underscore == absl::string_view::npos) {
-      // Pattern: <semantic>_<scope>_<comparator>
-      semantic_str = remainder.substr(0, first_underscore);
-      scope_str = remainder.substr(first_underscore + 1,
-                                   second_underscore - first_underscore - 1);
-      comparator_str = remainder.substr(second_underscore + 1);
-    } else {
-      // Pattern: <semantic_part1>_<semantic_part2>_<scope>_<comparator>
-      // (e.g., acq_rel_gpu_eq)
-      absl::string_view potential_semantic =
-          remainder.substr(0, second_underscore);
-      scope_str = remainder.substr(second_underscore + 1,
-                                   third_underscore - second_underscore - 1);
-      comparator_str = remainder.substr(third_underscore + 1);
-
-      // Check if there are more underscores (invalid)
-      if (comparator_str.find('_') != absl::string_view::npos) {
-        return absl::InvalidArgumentError(absl::StrFormat(
-            "Invalid atomic spin wait function name: %s", func_name));
-      }
-
-      semantic_str = potential_semantic;
-    }
-
-    auto semantic = ParseMemSemantic(semantic_str);
-    if (!semantic.ok()) {
-      return semantic.status();
-    }
-
-    auto scope = ParseMemSyncScope(scope_str);
-    if (!scope.ok()) {
-      return scope.status();
-    }
-
-    auto comparator = ParseComparator(comparator_str);
-    if (!comparator.ok()) {
-      return comparator.status();
-    }
-
-    return AtomicSpinWaitInstruction{*semantic, *scope, *comparator};
+    return AtomicSpinWaitInstruction{semantic, scope, comparator};
   }
 
   return absl::InvalidArgumentError(
@@ -245,20 +195,23 @@ absl::StatusOr<ExternFunctionInstruction> ParseExternFunctionName(
 std::string SerializeExternFunctionName(
     const ExternFunctionInstruction& instruction) {
   return std::visit(
-      [](auto&& arg) -> std::string {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<T, GetThreadIdInstruction>) {
-          return "xla_get_thread_id";
-        } else if constexpr (std::is_same_v<T, AtomicWriteInstruction>) {
-          return absl::StrFormat("xla_atomic_write_%s_%s",
-                                 MemSemanticToString(arg.semantic),
-                                 MemSyncScopeToString(arg.scope));
-        } else if constexpr (std::is_same_v<T, AtomicSpinWaitInstruction>) {
-          return absl::StrFormat("xla_atomic_spin_wait_%s_%s_%s",
-                                 MemSemanticToString(arg.semantic),
-                                 MemSyncScopeToString(arg.scope),
-                                 ComparatorToString(arg.comparator));
-        }
+      absl::Overload{
+          [](const GetThreadIdInstruction&) -> std::string {
+            return "xla_getthreadid";
+          },
+          [](const AtomicWriteInstruction& arg) -> std::string {
+            return absl::StrJoin(
+                {"xla", "atomicwrite", MemSemanticToString(arg.semantic),
+                 MemSyncScopeToString(arg.scope)},
+                "_");
+          },
+          [](const AtomicSpinWaitInstruction& arg) -> std::string {
+            return absl::StrJoin(
+                {"xla", "atomicspinwait", MemSemanticToString(arg.semantic),
+                 MemSyncScopeToString(arg.scope),
+                 ComparatorToString(arg.comparator)},
+                "_");
+          },
       },
       instruction);
 }
@@ -266,49 +219,37 @@ std::string SerializeExternFunctionName(
 absl::Status ValidateMemorySemantic(
     const ExternFunctionInstruction& instruction) {
   return std::visit(
-      [](auto&& arg) -> absl::Status {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<T, GetThreadIdInstruction>) {
-          // No memory semantic validation needed for GetThreadId
-          return absl::OkStatus();
-        } else if constexpr (std::is_same_v<T, AtomicWriteInstruction>) {
-          // AtomicWrite only supports RELAXED or RELEASE semantics
-          if (arg.semantic != triton::MemSemantic::RELAXED &&
-              arg.semantic != triton::MemSemantic::RELEASE) {
-            return absl::InvalidArgumentError(
-                "AtomicWriteOp only supports RELAXED or RELEASE semantics");
-          }
-          return absl::OkStatus();
-        } else if constexpr (std::is_same_v<T, AtomicSpinWaitInstruction>) {
-          // AtomicSpinWait supports RELAXED, ACQUIRE, or ACQUIRE_RELEASE
-          // semantics
-          if (arg.semantic != triton::MemSemantic::RELAXED &&
-              arg.semantic != triton::MemSemantic::ACQUIRE &&
-              arg.semantic != triton::MemSemantic::ACQUIRE_RELEASE) {
-            return absl::InvalidArgumentError(
-                "AtomicSpinWaitOp only supports RELAXED, ACQUIRE, or "
-                "ACQUIRE_RELEASE semantics");
-          }
-          return absl::OkStatus();
-        }
+      absl::Overload{
+          [](const GetThreadIdInstruction&) -> absl::Status {
+            // No memory semantic validation needed for GetThreadId
+            return absl::OkStatus();
+          },
+          [](const AtomicWriteInstruction& arg) -> absl::Status {
+            // AtomicWrite only supports RELAXED or RELEASE semantics
+            if (arg.semantic != MemSemantic::RELAXED &&
+                arg.semantic != MemSemantic::RELEASE) {
+              return absl::InvalidArgumentError(
+                  "AtomicWriteOp only supports RELAXED or RELEASE semantics");
+            }
+            return absl::OkStatus();
+          },
+          [](const AtomicSpinWaitInstruction& arg) -> absl::Status {
+            // AtomicSpinWait supports RELAXED, ACQUIRE, or ACQUIRE_RELEASE
+            // semantics
+            if (arg.semantic != MemSemantic::RELAXED &&
+                arg.semantic != MemSemantic::ACQUIRE &&
+                arg.semantic != MemSemantic::ACQUIRE_RELEASE) {
+              return absl::InvalidArgumentError(
+                  "AtomicSpinWaitOp only supports RELAXED, ACQUIRE, or "
+                  "ACQUIRE_RELEASE semantics");
+            }
+            return absl::OkStatus();
+          },
       },
       instruction);
 }
 
 namespace {
-
-// Helper to convert MemSyncScope to PTX scope string
-absl::string_view MemSyncScopeToPTXScope(triton::MemSyncScope scope) {
-  switch (scope) {
-    case triton::MemSyncScope::SYSTEM:
-      return "sys";
-    case triton::MemSyncScope::GPU:
-      return "gpu";
-    case triton::MemSyncScope::CTA:
-      return "cta";
-  }
-  LOG(FATAL) << "Unknown MemSyncScope value";
-}
 
 // Create LLVM ops for GetThreadIdInstruction
 mlir::Value CreateGetThreadIdOps(const LLVMOpCreationParams& params) {
@@ -352,7 +293,7 @@ mlir::Value CreateAtomicWriteOps(const AtomicWriteInstruction& instruction,
     {
     .reg .pred %%p<>;
     setp.ne.u32 %%p<>, $2, 0;
-    @%%p st.global.%s.%s.u32 [$0], $1;
+    @%%p<> st.global.%s.%s.u32 [$0], $1;
     }
   )";
     std::string atomic_write_asm = absl::StrFormat(
@@ -462,15 +403,16 @@ mlir::Value CreateLLVMOpsForInstruction(
     const ExternFunctionInstruction& instruction,
     const LLVMOpCreationParams& params) {
   return std::visit(
-      [&params](auto&& arg) -> mlir::Value {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<T, GetThreadIdInstruction>) {
-          return CreateGetThreadIdOps(params);
-        } else if constexpr (std::is_same_v<T, AtomicWriteInstruction>) {
-          return CreateAtomicWriteOps(arg, params);
-        } else if constexpr (std::is_same_v<T, AtomicSpinWaitInstruction>) {
-          return CreateAtomicSpinWaitOps(arg, params);
-        }
+      absl::Overload{
+          [&params](const GetThreadIdInstruction&) -> mlir::Value {
+            return CreateGetThreadIdOps(params);
+          },
+          [&params](const AtomicWriteInstruction& arg) -> mlir::Value {
+            return CreateAtomicWriteOps(arg, params);
+          },
+          [&params](const AtomicSpinWaitInstruction& arg) -> mlir::Value {
+            return CreateAtomicSpinWaitOps(arg, params);
+          },
       },
       instruction);
 }

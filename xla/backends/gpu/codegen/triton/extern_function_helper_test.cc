@@ -49,14 +49,14 @@ class ExternFunctionNameTest : public ::testing::Test {
 
 // Test parsing GetThreadId instruction
 TEST_F(ExternFunctionNameTest, ParseGetThreadId) {
-  auto result = ParseExternFunctionName("xla_get_thread_id");
+  auto result = ParseExternFunctionName("xla_getthreadid");
   ASSERT_THAT(result, IsOk());
   EXPECT_TRUE(std::holds_alternative<GetThreadIdInstruction>(*result));
 }
 
 // Test parsing AtomicWrite instructions
 TEST_F(ExternFunctionNameTest, ParseAtomicWriteRelaxedGpu) {
-  auto result = ParseExternFunctionName("xla_atomic_write_relaxed_gpu");
+  auto result = ParseExternFunctionName("xla_atomicwrite_relaxed_gpu");
   ASSERT_THAT(result, IsOk());
 
   ASSERT_TRUE(std::holds_alternative<AtomicWriteInstruction>(*result));
@@ -66,7 +66,7 @@ TEST_F(ExternFunctionNameTest, ParseAtomicWriteRelaxedGpu) {
 }
 
 TEST_F(ExternFunctionNameTest, ParseAtomicWriteReleaseSystem) {
-  auto result = ParseExternFunctionName("xla_atomic_write_release_system");
+  auto result = ParseExternFunctionName("xla_atomicwrite_release_system");
   ASSERT_THAT(result, IsOk());
 
   ASSERT_TRUE(std::holds_alternative<AtomicWriteInstruction>(*result));
@@ -76,7 +76,7 @@ TEST_F(ExternFunctionNameTest, ParseAtomicWriteReleaseSystem) {
 }
 
 TEST_F(ExternFunctionNameTest, ParseAtomicWriteAcqRelCta) {
-  auto result = ParseExternFunctionName("xla_atomic_write_acq_rel_cta");
+  auto result = ParseExternFunctionName("xla_atomicwrite_acqrel_cta");
   ASSERT_THAT(result, IsOk());
 
   ASSERT_TRUE(std::holds_alternative<AtomicWriteInstruction>(*result));
@@ -87,7 +87,7 @@ TEST_F(ExternFunctionNameTest, ParseAtomicWriteAcqRelCta) {
 
 // Test parsing AtomicSpinWait instructions
 TEST_F(ExternFunctionNameTest, ParseAtomicSpinWaitRelaxedGpuEq) {
-  auto result = ParseExternFunctionName("xla_atomic_spin_wait_relaxed_gpu_eq");
+  auto result = ParseExternFunctionName("xla_atomicspinwait_relaxed_gpu_eq");
   ASSERT_THAT(result, IsOk());
 
   ASSERT_TRUE(std::holds_alternative<AtomicSpinWaitInstruction>(*result));
@@ -98,8 +98,7 @@ TEST_F(ExternFunctionNameTest, ParseAtomicSpinWaitRelaxedGpuEq) {
 }
 
 TEST_F(ExternFunctionNameTest, ParseAtomicSpinWaitAcquireSystemLt) {
-  auto result =
-      ParseExternFunctionName("xla_atomic_spin_wait_acquire_system_lt");
+  auto result = ParseExternFunctionName("xla_atomicspinwait_acquire_system_lt");
   ASSERT_THAT(result, IsOk());
 
   ASSERT_TRUE(std::holds_alternative<AtomicSpinWaitInstruction>(*result));
@@ -110,7 +109,7 @@ TEST_F(ExternFunctionNameTest, ParseAtomicSpinWaitAcquireSystemLt) {
 }
 
 TEST_F(ExternFunctionNameTest, ParseAtomicSpinWaitAcqRelCtaEq) {
-  auto result = ParseExternFunctionName("xla_atomic_spin_wait_acq_rel_cta_eq");
+  auto result = ParseExternFunctionName("xla_atomicspinwait_acqrel_cta_eq");
   ASSERT_THAT(result, IsOk());
 
   ASSERT_TRUE(std::holds_alternative<AtomicSpinWaitInstruction>(*result));
@@ -124,24 +123,24 @@ TEST_F(ExternFunctionNameTest, ParseAtomicSpinWaitAcqRelCtaEq) {
 TEST_F(ExternFunctionNameTest, ParseInvalidFunctionName) {
   auto result = ParseExternFunctionName("invalid_function_name");
   EXPECT_THAT(result, StatusIs(absl::StatusCode::kInvalidArgument,
-                               HasSubstr("Unknown extern function name")));
+                               HasSubstr("Invalid extern function name")));
 }
 
 TEST_F(ExternFunctionNameTest, ParseInvalidAtomicWrite) {
-  auto result = ParseExternFunctionName("xla_atomic_write_invalid_gpu");
+  auto result = ParseExternFunctionName("xla_atomicwrite_invalid_gpu");
   EXPECT_THAT(result, StatusIs(absl::StatusCode::kInvalidArgument,
                                HasSubstr("Unknown memory semantic")));
 }
 
 TEST_F(ExternFunctionNameTest, ParseInvalidScope) {
-  auto result = ParseExternFunctionName("xla_atomic_write_relaxed_invalid");
+  auto result = ParseExternFunctionName("xla_atomicwrite_relaxed_invalid");
   EXPECT_THAT(result, StatusIs(absl::StatusCode::kInvalidArgument,
                                HasSubstr("Unknown memory sync scope")));
 }
 
 TEST_F(ExternFunctionNameTest, ParseInvalidComparator) {
   auto result =
-      ParseExternFunctionName("xla_atomic_spin_wait_relaxed_gpu_invalid");
+      ParseExternFunctionName("xla_atomicspinwait_relaxed_gpu_invalid");
   EXPECT_THAT(result, StatusIs(absl::StatusCode::kInvalidArgument,
                                HasSubstr("Unknown comparator")));
 }
@@ -150,14 +149,14 @@ TEST_F(ExternFunctionNameTest, ParseInvalidComparator) {
 TEST_F(ExternFunctionNameTest, SerializeGetThreadId) {
   GetThreadIdInstruction instruction;
   std::string result = SerializeExternFunctionName(instruction);
-  EXPECT_EQ(result, "xla_get_thread_id");
+  EXPECT_EQ(result, "xla_getthreadid");
 }
 
 TEST_F(ExternFunctionNameTest, SerializeAtomicWrite) {
   AtomicWriteInstruction instruction{.semantic = triton::MemSemantic::RELEASE,
                                      .scope = triton::MemSyncScope::GPU};
   std::string result = SerializeExternFunctionName(instruction);
-  EXPECT_EQ(result, "xla_atomic_write_release_gpu");
+  EXPECT_EQ(result, "xla_atomicwrite_release_gpu");
 }
 
 TEST_F(ExternFunctionNameTest, SerializeAtomicWriteAcqRel) {
@@ -165,7 +164,7 @@ TEST_F(ExternFunctionNameTest, SerializeAtomicWriteAcqRel) {
       .semantic = triton::MemSemantic::ACQUIRE_RELEASE,
       .scope = triton::MemSyncScope::SYSTEM};
   std::string result = SerializeExternFunctionName(instruction);
-  EXPECT_EQ(result, "xla_atomic_write_acq_rel_system");
+  EXPECT_EQ(result, "xla_atomicwrite_acqrel_system");
 }
 
 TEST_F(ExternFunctionNameTest, SerializeAtomicSpinWait) {
@@ -174,12 +173,12 @@ TEST_F(ExternFunctionNameTest, SerializeAtomicSpinWait) {
       .scope = triton::MemSyncScope::CTA,
       .comparator = Comparator::LT};
   std::string result = SerializeExternFunctionName(instruction);
-  EXPECT_EQ(result, "xla_atomic_spin_wait_acquire_cta_lt");
+  EXPECT_EQ(result, "xla_atomicspinwait_acquire_cta_lt");
 }
 
 // Test round-trip (parse then serialize)
 TEST_F(ExternFunctionNameTest, RoundTripGetThreadId) {
-  std::string original = "xla_get_thread_id";
+  std::string original = "xla_getthreadid";
   auto parsed = ParseExternFunctionName(original);
   ASSERT_THAT(parsed, IsOk());
   std::string serialized = SerializeExternFunctionName(*parsed);
@@ -187,7 +186,7 @@ TEST_F(ExternFunctionNameTest, RoundTripGetThreadId) {
 }
 
 TEST_F(ExternFunctionNameTest, RoundTripAtomicWrite) {
-  std::string original = "xla_atomic_write_relaxed_gpu";
+  std::string original = "xla_atomicwrite_relaxed_gpu";
   auto parsed = ParseExternFunctionName(original);
   ASSERT_THAT(parsed, IsOk());
   std::string serialized = SerializeExternFunctionName(*parsed);
@@ -195,7 +194,7 @@ TEST_F(ExternFunctionNameTest, RoundTripAtomicWrite) {
 }
 
 TEST_F(ExternFunctionNameTest, RoundTripAtomicSpinWait) {
-  std::string original = "xla_atomic_spin_wait_acquire_system_lt";
+  std::string original = "xla_atomicspinwait_acquire_system_lt";
   auto parsed = ParseExternFunctionName(original);
   ASSERT_THAT(parsed, IsOk());
   std::string serialized = SerializeExternFunctionName(*parsed);

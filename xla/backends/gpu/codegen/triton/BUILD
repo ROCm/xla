@@ -629,6 +629,8 @@ cc_library(
     hdrs = ["extern_function_helper.h"],
     deps = [
         "//xla/backends/gpu/codegen/triton/ir:triton_xla",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/functional:overload",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
