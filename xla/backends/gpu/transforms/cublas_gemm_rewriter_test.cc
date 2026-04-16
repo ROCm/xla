@@ -4455,6 +4455,43 @@ ENTRY test {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
 }
 
+// Test epilogue fusion for grouped GEMM: Swish/SILU Activation
+TEST_F(GroupedGemmRewriteTest, GroupedGemmSwishActivation) {
+  auto runtime_version = GetToolkitVersion();
+  bool rocm_swish_available =
+      IsRocm() &&
+      (runtime_version >= stream_executor::SemanticVersion(7, 0, 0));
+  if (!rocm_swish_available) {
+    GTEST_SKIP() << "Swish/SILU activation fusion only available on ROCm 7.0+";
+  }
+  
+  const char* hlo_text = R"(
+HloModule GroupedGemmSwish
+
+ENTRY test {
+  p0 = f16[64,9]{1,0} parameter(0)
+  p1 = f16[2,9,8]{2,1,0} parameter(1)
+  p2 = s32[2] constant({16, 48})
+  dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
+        lhs_contracting_dims={1}, rhs_contracting_dims={1},
+        lhs_ragged_dims={0}, rhs_group_dims={0}
+  neg = f16[64,8] negate(dot)
+  exp = f16[64,8] exponential(neg)
+  one = f16[] constant(1)
+  one_bcast = f16[64,8] broadcast(one), dimensions={}
+  denom = f16[64,8] add(one_bcast, exp)
+  sigmoid = f16[64,8] divide(one_bcast, denom)
+  ROOT out = f16[64,8] multiply(dot, sigmoid)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "epilogue":"SILU"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
 }  // namespace
 }  // namespace gpu
 }  // namespace xla

@@ -182,6 +182,10 @@ class BlasLt : public gpu::BlasLt {
     std::unique_ptr<hipblaslt_ext::GroupedGemm> grouped_gemm_;
     mutable bool algorithm_must_be_initialized_ = false;
     mutable DeviceMemoryBase saved_address_workspace_{};
+    // Saved default activation parameters from hipBLASLt
+    int32_t activation_type_ = 0;
+    float act0_ = 0.0f;
+    float act1_ = 0.0f;
   };  // class MatmulPlan
 
   explicit BlasLt(StreamExecutor* parent)
