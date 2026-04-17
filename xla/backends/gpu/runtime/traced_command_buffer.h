@@ -55,6 +55,12 @@ class TracedCommandBuffer : public CommandState {
       se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace,
       se::StreamPriority priority = se::StreamPriority::Default);
 
+  // Returns true if a cache entry already exists for the buffer addresses
+  // implied by `buffer_allocation`. Read-only; does not trace or mutate the
+  // cache. Used by collective operations to vote on cache state across ranks
+  // before deciding whether to use a cached graph or re-trace together.
+  bool HasEntry(const BufferAllocations* buffer_allocation) const;
+
  private:
   std::vector<BufferAllocation::Index> allocs_indices_;
 

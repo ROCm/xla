@@ -119,4 +119,21 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
   return shift_right(capacity_ - 1).command_buffer.get();
 }
 
+bool TracedCommandBuffer::HasEntry(
+    const BufferAllocations* buffer_allocation) const {
+  absl::InlinedVector<se::DeviceAddressBase, 4> allocs;
+  allocs.reserve(allocs_indices_.size());
+  for (auto& index : allocs_indices_) {
+    allocs.emplace_back(buffer_allocation->GetDeviceAddress(index));
+  }
+
+  for (size_t i = 0; i < capacity_; ++i) {
+    if (absl::c_equal(entries_[i].recorded_allocs, allocs) &&
+        entries_[i].command_buffer) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace xla::gpu

@@ -278,6 +278,7 @@ cc_library(
         "//xla/service:computation_placer",
         "//xla/service:custom_call_status_internal",
         "//xla/service:custom_call_status_public_headers",
+        "//xla/service:rendezvous",
         "//xla/service:shaped_slice",
         "//xla/service/gpu:buffer_allocations",
         "//xla/service/gpu:launch_dimensions",
