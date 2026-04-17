@@ -826,7 +826,7 @@ ENTRY main {
         (cuda_cc.IsAtLeastHopper() ||
          (cuda_cc.IsAtLeastAmpere() && lhs_type == F8E5M2 &&
           rhs_type == F8E5M2) ||
-         rocm_cc.has_ocp_fp8_support())
+         gpu_cc.IsRocm())
             ? triton_keep_types
             : cublas_convert_to_f16;
     ASSERT_OK_AND_ASSIGN(
