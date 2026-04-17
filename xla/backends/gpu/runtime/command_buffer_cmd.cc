@@ -483,22 +483,31 @@ CollectiveCmd::RecordTracedCommand(
               debug_options.xla_cmd_buffer_trace_cache_size());
         });
 
-    bool local_hit = traced_cmd->HasEntry(execute_params.buffer_allocations);
+    // On RecordCreate the (this, command_buffer) TracedCommandBuffer cache was
+    // just constructed and is necessarily empty on every rank, so local_hit is
+    // uniformly false across the clique. SPMD execution guarantees every rank
+    // reaches RecordCreate for this command together, so skipping the
+    // Rendezvous vote stays symmetric and falls through to the
+    // ForceTraceCommandBuffer path (which populates the cache for subsequent
+    // RecordUpdate iterations).
+    if (!std::holds_alternative<RecordCreate>(record_action)) {
+      bool local_hit = traced_cmd->HasEntry(execute_params.buffer_allocations);
 
-    CollectiveTraceCacheKey rendezvous_key{clique_key, this};
-    TF_ASSIGN_OR_RETURN(
-        std::shared_ptr<bool> all_hit,
-        xla::Rendezvous<bool>(
-            "collective_trace_cache", rendezvous_key, local_hit,
-            clique_key.num_local_participants(),
-            [](absl::Span<bool*> votes) {
-              return std::all_of(votes.begin(), votes.end(),
-                                 [](const bool* v) { return *v; });
-            },
-            /*warn_stuck_timeout=*/absl::Seconds(10),
-            /*terminate_timeout=*/absl::Seconds(30)));
+      CollectiveTraceCacheKey rendezvous_key{clique_key, this};
+      TF_ASSIGN_OR_RETURN(
+          std::shared_ptr<bool> all_hit,
+          xla::Rendezvous<bool>(
+              "collective_trace_cache", rendezvous_key, local_hit,
+              clique_key.num_local_participants(),
+              [](absl::Span<bool*> votes) {
+                return std::all_of(votes.begin(), votes.end(),
+                                   [](const bool* v) { return *v; });
+              },
+              /*warn_stuck_timeout=*/absl::Seconds(10),
+              /*terminate_timeout=*/absl::Seconds(30)));
 
-    use_cache = *all_hit;
+      use_cache = *all_hit;
+    }
   }
 
   if (use_cache) {
@@ -509,12 +518,21 @@ CollectiveCmd::RecordTracedCommand(
             execute_params.buffer_allocations,
             execute_params.stream->parent(),
             execute_params.command_buffer_trace_stream, trace, priority()));
+  } else if (traced_cmd != nullptr) {
+    // Local clique with at least one miss: every rank re-traces together (to
+    // keep NCCL calls symmetric) AND we populate the cache so the next
+    // iteration can take the fast path.
+    VLOG(5) << "Collective trace cache miss: all local ranks retracing";
+    TF_ASSIGN_OR_RETURN(
+        nested_cmd_ptr,
+        traced_cmd->ForceTraceCommandBuffer(
+            execute_params.buffer_allocations,
+            execute_params.stream->parent(),
+            execute_params.command_buffer_trace_stream, trace, priority()));
   } else {
-    // Either non-local clique (Rendezvous can't coordinate across hosts) or
-    // at least one local participant missed (all must re-trace together).
-    // Trace without populating the cache; commit 3 will switch the local
-    // miss path to ForceTrace so the cache is repopulated.
-    VLOG(5) << "Collective trace cache miss or non-local clique: tracing";
+    // Non-local clique: in-process Rendezvous cannot coordinate across hosts,
+    // so we always trace without caching to remain symmetric.
+    VLOG(5) << "Non-local clique: tracing without cache";
     TF_ASSIGN_OR_RETURN(
         nested_cmd_owned,
         se::TraceCommandBufferFactory::Create(
