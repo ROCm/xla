@@ -4,25 +4,35 @@ set -ex
 
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
-EXCLUDED_TESTS=(
-    "SortingTest*"
-    "*IotaR1Test*"
-    "HostMemoryAllocateTest.Numa"
-    "CubSort*"
-)
+
+EXCLUDED_TESTS=()
 
 EXCLUDED_TARGETS_SGPU=(
     "//xla/tests:iota_test_amdgpu_any"   # Taking too many CI nodes
+    "//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any"
 )
 
 TEST_TARGETS_SGPU=(
     "//xla/..."
     "-//xla/tests:iota_test_amdgpu_any"   # Taking too many CI nodes
+    "-//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any"
 )
 
 TEST_TARGETS_MGPU=(
-    "//xla/backends/gpu/tests:collective_pipeline_parallelism_test"
+    "//xla/tests:collective_ops_test"
     "//xla/backends/gpu/collectives:gpu_clique_key_test"
+    "//xla/backends/gpu/runtime:all_reduce_test"
+    "//xla/backends/gpu/runtime:collective_kernel_thunk_test"
+    "//xla/backends/gpu/runtime:buffers_checksum_thunk_test"
+    "//xla/backends/gpu/tests:collective_ops_command_buffer_test"
+    "//xla/backends/gpu/tests:collective_pipeline_parallelism_test"
+    "//xla/backends/gpu/tests:nccl_group_execution_test"
+    "//xla/backends/gpu/tests:collective_ops_e2e_test"
+    "//xla/backends/gpu/tests:collective_ops_ffi_test"
+    "//xla/backends/gpu/tests:collective_ops_sharded_unsharded_e2e_test"
+    "//xla/backends/gpu/tests:ragged_all_to_all_e2e_test"
+    "//xla/backends/gpu/tests:replicated_io_feed_test"
+    "//xla/backends/gpu/tests:all_reduce_e2e_test"
     "//xla/service:collective_ops_utils_test"
     "//xla/service:collective_pipeliner_test"
     "//xla/service:collective_permute_cycle_test"
@@ -36,9 +46,12 @@ TEST_TARGETS_MGPU=(
     "//xla/service:sharding_propagation_test"
     "//xla/service:sharding_remover_test"
     "//xla/service:p2p_schedule_preparation_test"
+    "//xla/tools/multihost_hlo_runner:functional_hlo_runner_test"
     "//xla/pjrt/distributed:topology_util_test"
     "//xla/pjrt/distributed:client_server_test"
-)
+    "//xla/pjrt/extensions/cross_host_transfers:pjrt_c_api_cross_host_transfers_extension_gpu_test"
+    "//xla/pjrt/gpu/tfrt:tfrt_gpu_client_test"
+    "//xla/pjrt/gpu:se_gpu_pjrt_client_test")
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
 TEST_TARGETS=("${TEST_TARGETS_SGPU[@]}")
