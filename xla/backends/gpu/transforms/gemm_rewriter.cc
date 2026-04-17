@@ -2439,6 +2439,11 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
          PrimitiveType::F64, DataType::kDouble},
         {ComputationType::kF64, DataType::kComplexDouble, PrimitiveType::C128,
          PrimitiveType::C128, DataType::kComplexDouble},
+
+        // S8 x S8 -> F32 is supported by cuBLAS/cuBLASLt but not by
+        // rocBLAS/hipblasLt.
+        {ComputationType::kF32, DataType::kFloat, PrimitiveType::S8,
+         PrimitiveType::S8, DataType::kFloat},
     };
     if (gpu_version_.IsCuda() &&
         absl::c_linear_search(supported_cublas_type_combinations,
@@ -2561,14 +2566,6 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
         absl::c_linear_search(extended_type_combinations,
                               std::make_tuple(compute_type, scale_type, a_dtype,
                                               b_dtype, output_dtype))) {
-      return true;
-    }
-
-    // S8 x S8 -> F32 is supported by cuBLAS/cuBLASLt but not by
-    // rocBLAS/hipblasLt.
-    if (is_cuda && a_dtype == PrimitiveType::S8 &&
-        b_dtype == PrimitiveType::S8 && output_dtype == DataType::kFloat &&
-        compute_type == ComputationType::kF32) {
       return true;
     }
 
