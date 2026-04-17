@@ -184,8 +184,7 @@ class BlasLt : public gpu::BlasLt {
     mutable DeviceMemoryBase saved_address_workspace_{};
     // Saved default activation parameters from hipBLASLt
     int32_t activation_type_ = 0;
-    float act0_ = 0.0f;
-    float act1_ = 0.0f;
+    int8_t bias_type_ = 0;
   };  // class MatmulPlan
 
   explicit BlasLt(StreamExecutor* parent)

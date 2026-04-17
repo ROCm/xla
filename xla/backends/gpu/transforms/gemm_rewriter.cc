@@ -1863,7 +1863,15 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     maybe_constant_folded_bias =
         PadOperandToTargetShape(gemm->shape(), maybe_constant_folded_bias);
 
-    operands.insert(operands.begin() + 2, maybe_constant_folded_bias);
+    // For grouped GEMM, append bias as the last operand (after group_sizes)
+    // For regular GEMM, insert at position 2 (before any other operands)
+    bool is_grouped_gemm =
+        gemm->custom_call_target() == kCublasLtGroupedMatmulCallTarget;
+    if (is_grouped_gemm) {
+      operands.push_back(maybe_constant_folded_bias);
+    } else {
+      operands.insert(operands.begin() + 2, maybe_constant_folded_bias);
+    }
 
     std::unique_ptr<HloInstruction> fused_op =
         gemm->CloneWithNewOperands(gemm->shape(), operands);
@@ -1943,6 +1951,16 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     size_t num_col_dims = gemm->operand(1)->shape().dimensions().size() -
                           dot_dims.rhs_batch_dimensions_size() -
                           dot_dims.rhs_contracting_dimensions_size();
+
+    // For grouped GEMM, subtract the group dimension from num_col_dims
+    bool is_grouped_gemm =
+        gemm->custom_call_target() == kCublasLtGroupedMatmulCallTarget;
+    if (is_grouped_gemm && gpu_config.has_grouped_gemm_backend_config()) {
+      const auto& ragged_dims = gpu_config.grouped_gemm_backend_config()
+                                    .ragged_dot_dimension_numbers();
+      // Subtract group dimensions from num_col_dims
+      num_col_dims -= ragged_dims.rhs_group_dimensions_size();
+    }
 
     if ((gemm->user_count() != 1) ||
         (config.epilogue() != GemmBackendConfig::DEFAULT)) {
