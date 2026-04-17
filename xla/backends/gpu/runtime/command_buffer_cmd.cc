@@ -68,10 +68,12 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/recv_thunk.h"
 #include "xla/backends/gpu/runtime/send_thunk.h"
 #include "xla/backends/gpu/runtime/thunk.h"
+#include "xla/backends/gpu/runtime/traced_command_buffer.h"
 #include "xla/backends/gpu/runtime/while_loop.h"
 #include "xla/core/collectives/communicator.h"
 #include "xla/core/collectives/rank_id.h"
 #include "xla/core/collectives/reduction_kind.h"
+#include "xla/debug_options_flags.h"
 #include "xla/executable_run_options.h"
 #include "xla/ffi/call_frame.h"
 #include "xla/ffi/execution_state.h"
@@ -904,14 +906,19 @@ CollectiveCmd::RecordTracedCommand(
     const RecordParams& record_params, RecordAction record_action,
     se::CommandBuffer* command_buffer,
     absl::FunctionRef<absl::Status(se::Stream*)> trace) {
-  TF_ASSIGN_OR_RETURN(std::unique_ptr<se::CommandBuffer> nested_cmd,
-                      se::TraceCommandBufferFactory::Create(
-                          execute_params.stream->parent(),
-                          execute_params.command_buffer_trace_stream, trace));
+  auto* traced_cmd = record_params.state.GetOrCreate<TracedCommandBuffer>(
+      this, command_buffer, [&] {
+        const auto& debug_options = xla::GetDebugOptionsFromFlags();
+        return std::make_unique<TracedCommandBuffer>(
+            this, buffer_uses(),
+            debug_options.xla_cmd_buffer_trace_cache_size());
+      });
 
-  if (priority() != se::StreamPriority::Default) {
-    TF_RETURN_IF_ERROR(nested_cmd->SetPriority(priority()));
-  }
+  TF_ASSIGN_OR_RETURN(
+      se::CommandBuffer * nested_cmd,
+      traced_cmd->GetOrTraceCommandBuffer(
+          execute_params.buffer_allocations, execute_params.stream->parent(),
+          execute_params.command_buffer_trace_stream, trace, priority()));
 
   return Handle(
       std::move(record_action),
