@@ -4,7 +4,6 @@ set -ex
 
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
-
 EXCLUDED_TESTS=()
 
 EXCLUDED_TARGETS_SGPU=(
@@ -51,7 +50,8 @@ TEST_TARGETS_MGPU=(
     "//xla/pjrt/distributed:client_server_test"
     "//xla/pjrt/extensions/cross_host_transfers:pjrt_c_api_cross_host_transfers_extension_gpu_test"
     "//xla/pjrt/gpu/tfrt:tfrt_gpu_client_test"
-    "//xla/pjrt/gpu:se_gpu_pjrt_client_test")
+    "//xla/pjrt/gpu:se_gpu_pjrt_client_test"
+)
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
 TEST_TARGETS=("${TEST_TARGETS_SGPU[@]}")
