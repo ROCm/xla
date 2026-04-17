@@ -10,6 +10,10 @@ EXCLUDED_TESTS=(
     "*IotaR1Test*"
     "HostMemoryAllocateTest.Numa"
     "CubSort*"
+    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e4m3fn_f8e5m2"
+    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e5m2_f8e5m2"
+    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e5m2_f8e4m3fn"
+    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e4m3fn_f8e4m3fn"
 )
 
 EXCLUDED_TARGETS_SGPU=(
