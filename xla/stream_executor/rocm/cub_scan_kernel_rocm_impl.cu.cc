@@ -25,6 +25,7 @@ limitations under the License.
 #include "rocm/include/rocprim/device/detail/device_config_helper.hpp"
 #include "rocm/include/rocprim/device/device_scan.hpp"
 #include "rocm/include/rocprim/functional.hpp"
+#include "rocm/rocm_config.h"
 #include "xla/stream_executor/rocm/cub_scan_kernel_rocm.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
 #include "xla/tsl/platform/errors.h"
@@ -34,17 +35,30 @@ namespace stream_executor::rocm {
 
 namespace {
 
-// Architecture-aware tuning from rocPRIM's autotuned scan config.
+// Architecture-aware tuning from rocPRIM's scan config.
 template <typename T>
 struct ScanConfig {
+#if TF_ROCM_VERSION >= 71200
+  static constexpr rocprim::detail::scan_config_params kConfig =
+      rocprim::detail::scan_config_params_base<T>();
+  static constexpr int kBlockSize = kConfig.kernel_config.block_size;
+  static constexpr int kItemsPerThread = kConfig.kernel_config.items_per_thread;
+#else
   using RocprimConfig =
       typename rocprim::detail::default_scan_config_base<T>::type;
   static constexpr int kBlockSize = RocprimConfig::block_size;
   static constexpr int kItemsPerThread = RocprimConfig::items_per_thread;
+#endif
   static constexpr int kTileSize = kBlockSize * kItemsPerThread;
+#if TF_ROCM_VERSION >= 71200
+  static constexpr auto kLoadMethod = kConfig.block_load_method;
+  static constexpr auto kStoreMethod = kConfig.block_store_method;
+  static constexpr auto kScanAlgorithm = kConfig.block_scan_method;
+#else
   static constexpr auto kLoadMethod = RocprimConfig::block_load_method;
   static constexpr auto kStoreMethod = RocprimConfig::block_store_method;
   static constexpr auto kScanAlgorithm = RocprimConfig::block_scan_method;
+#endif
 };
 
 template <typename T>
