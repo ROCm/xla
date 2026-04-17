@@ -259,6 +259,7 @@ cc_library(
         "//xla/service:buffer_assignment",
         "//xla/service:collective_ops_utils",
         "//xla/service:computation_placer",
+        "//xla/service:rendezvous",
         "//xla/service:shaped_slice",
         "//xla/service/gpu:buffer_allocations",
         "//xla/service/gpu:launch_dimensions",
