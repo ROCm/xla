@@ -2440,8 +2440,6 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
         {ComputationType::kF64, DataType::kComplexDouble, PrimitiveType::C128,
          PrimitiveType::C128, DataType::kComplexDouble},
 
-        // S8 x S8 -> F32 is supported by cuBLAS/cuBLASLt but not by
-        // rocBLAS/hipblasLt.
         {ComputationType::kF32, DataType::kFloat, PrimitiveType::S8,
          PrimitiveType::S8, DataType::kFloat},
     };
