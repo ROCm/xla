@@ -190,6 +190,10 @@ absl::Status GpuTracer::DoStart() {
   rocm_trace_collector_ = CreateRocmCollector(
       trace_collector_options, start_walltime_ns, start_gputime_ns);
 #if XLA_GPU_ROCM_TRACER_BACKEND == XLA_GPU_ROCM_TRACER_BACKEND_V3
+  // GpuAgents() is only available on the rocprofiler-sdk (v3) backend.
+  // The v1 (roctracer) tracer does not expose agent data; SetGpuAgents() on
+  // the base RocmTraceCollector is a no-op by default, so skipping the call
+  // in the v1 path preserves prior behavior.
   rocm_trace_collector_->SetGpuAgents(rocm_tracer_->GpuAgents());
 #endif
 
