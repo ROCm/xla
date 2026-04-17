@@ -81,3 +81,27 @@ def rocm_library(copts = [], deps = [], **kwargs):
 
 def get_rbe_amdgpu_pool(is_single_gpu = False):
     return "%{single_gpu_rbe_pool}" if is_single_gpu else "%{multi_gpu_rbe_pool}"
+
+def rocm_lib_import(name, interface_library, data, deps=[]):
+    native.cc_import(
+        name = name + "_interface",
+        interface_library = interface_library,
+        system_provided = True,
+        visibility = ["//visibility:private"],
+    )
+    native.cc_library(
+        name = name + "_libs",
+        data = data,
+        deps = deps,
+        visibility = ["//visibility:private"],
+    )
+    native.cc_library(
+        name = name,
+        deps = [
+            ":{}_interface".format(name),
+            ":{}_libs".format(name),
+            ":rocm_headers_includes",
+            ":rocm_rpath",
+        ],
+        visibility = ["//visibility:public"],
+    )
