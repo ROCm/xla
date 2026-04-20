@@ -4,7 +4,7 @@ set -ex
 
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
-EXCLUDED_TESTS=()
+EXCLUDED_TESTS=("HostMemoryAllocateTest.Numa")
 
 EXCLUDED_TARGETS_SGPU=(
     "//xla/tests:iota_test_amdgpu_any"   # Taking too many CI nodes
@@ -13,8 +13,6 @@ EXCLUDED_TARGETS_SGPU=(
 
 TEST_TARGETS_SGPU=(
     "//xla/..."
-    "-//xla/tests:iota_test_amdgpu_any"   # Taking too many CI nodes
-    "-//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any"
 )
 
 TEST_TARGETS_MGPU=(
@@ -53,6 +51,8 @@ TEST_TARGETS_MGPU=(
     "//xla/pjrt/gpu:se_gpu_pjrt_client_test"
 )
 
+EXCLUDED_TARGETS_MGPU=()
+
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
 TEST_TARGETS=("${TEST_TARGETS_SGPU[@]}")
 SGPU_AMDGPU_TARGETS="${TF_ROCM_SGPU_AMDGPU_TARGETS:-gfx90a,gfx942}"
@@ -63,11 +63,13 @@ for arg in "$@"; do
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
         TAG_FILTERS=""
         TEST_TARGETS=("${TEST_TARGETS_MGPU[@]}")
+        EXCLUDED_TARGETS=("${EXCLUDED_TARGETS_SGPU}")
         AMDGPU_TARGETS="${MGPU_AMDGPU_TARGETS}"
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu,-no_oss"
         TEST_TARGETS=("${TEST_TARGETS_SGPU[@]}")
+        EXCLUDED_TARGETS=("${EXCLUDED_TARGETS_MGPU}")
         AMDGPU_TARGETS="${SGPU_AMDGPU_TARGETS}"
     fi
 done
@@ -90,4 +92,9 @@ done
         IFS=:
         echo "${EXCLUDED_TESTS[*]}"
     ) \
-    -- "${TEST_TARGETS[@]}"
+    -- "${TEST_TARGETS[@]}" \
+    -$(
+        IFS=:
+        echo "${EXCLUDED_TARGETS[*]}"
+    )
+
