@@ -2122,6 +2122,12 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     // There are four users of the gemm output within the GELU calculation.
     bool has_aux = gemm->user_count() > 4;
 
+    // For grouped GEMM (Hipblaslt), aux output is not supported yet.
+    // Do not fuse activation if aux output is required.
+    if (has_aux && IsCublasLtGroupedMatmul(*gemm)) {
+      return absl::OkStatus();
+    }
+
     TF_ASSIGN_OR_RETURN(auto gpu_config,
                         gemm->backend_config<GpuBackendConfig>());
     GemmBackendConfig* config_ptr = GetMutableGemmBackendConfig(gpu_config);
@@ -2184,6 +2190,12 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     if (has_aux) {
       // SILU_AUX epilogue is not supported yet.
       // https://rocm.docs.amd.com/projects/hipBLASLt/en/latest/reference/datatypes.html
+      return absl::OkStatus();
+    }
+
+    // For grouped GEMM (Hipblaslt), aux output is not supported yet.
+    // Do not fuse activation if aux output is required.
+    if (has_aux && IsCublasLtGroupedMatmul(*gemm)) {
       return absl::OkStatus();
     }
 
