@@ -682,6 +682,7 @@ Build(
         "run_under": "//build_tools/ci:parallel_gpu_execute",
         "//xla/tsl:ci_build": True,
         "remote_download_toplevel": True,  # Override remote_download_minimal from rocm_rbe
+        "spawn_strategy": "local",
         **_DEFAULT_BAZEL_OPTIONS,
     },
     repo_env={
