@@ -25,6 +25,7 @@ limitations under the License.
 
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
@@ -559,6 +560,580 @@ TEST(TracedCommandBuffer, GetOrUpdateCommandBuffer) {
   };
   run_traced_test(2);
   run_traced_test(3);
+}
+
+TEST(TracedCommandBuffer, HasEntry) {
+  LOG(INFO) << "=== HasEntry: walk the cache lifecycle from empty to LRU "
+               "eviction, observing HasEntry at every step ===";
+  se::StreamExecutor* executor = GpuExecutor();
+
+  auto stream = executor->CreateStream().value();
+  auto traced_cmd = FakeCmd();
+  BufferAllocation alloc0(/*index=*/0, /*size=*/1024, /*color=*/0);
+  BufferAllocation alloc1(/*index=*/1, /*size=*/1024, /*color=*/0);
+
+  Shape shape = ShapeUtil::MakeShape(U8, {1024});
+  Command::BufferUses buffers = {
+      BufferUse::Read(BufferAllocation::Slice(&alloc0, 0, 1024), shape),
+      BufferUse::Write(BufferAllocation::Slice(&alloc1, 0, 1024), shape)};
+
+  LOG(INFO) << "[setup] capacity=2 LRU cache. Each entry is keyed by the "
+               "(read,write) device-address pair derived from "
+               "BufferAllocations.";
+  TracedCommandBuffer traced_cmd_buffer(&traced_cmd, buffers, /*capacity=*/2);
+
+  se::DeviceAddressBase mem0(reinterpret_cast<void*>(0x01234567));
+  se::DeviceAddressBase mem1(reinterpret_cast<void*>(0x12345670));
+  se::DeviceAddressBase mem2(reinterpret_cast<void*>(0x23456701));
+
+  se::StreamExecutorAddressAllocator allocator(executor);
+  BufferAllocations allocations_a({mem0, mem1}, 0, &allocator);
+  BufferAllocations allocations_b({mem0, mem2}, 0, &allocator);
+
+  se::DeviceAddress<int32_t> mem = executor->AllocateArray<int32_t>(16, 0);
+  int64_t num_calls = 0;
+  auto trace = [&](se::Stream* stream) -> absl::Status {
+    TF_RETURN_IF_ERROR(stream->Memset32(&mem, 42, 16));
+    num_calls++;
+    LOG(INFO) << "  [trace fn invoked] num_calls=" << num_calls
+              << " (this is the expensive path the cache exists to avoid)";
+    return absl::OkStatus();
+  };
+
+  LOG(INFO) << "[step 1] Cache is empty. HasEntry(A) and HasEntry(B) must "
+               "both be false, and must NOT invoke trace.";
+  EXPECT_FALSE(traced_cmd_buffer.HasEntry(&allocations_a));
+  EXPECT_FALSE(traced_cmd_buffer.HasEntry(&allocations_b));
+  EXPECT_EQ(num_calls, 0);
+  LOG(INFO) << "  -> cache state: []   trace calls so far: " << num_calls;
+
+  LOG(INFO) << "[step 2] GetOrTrace(A): cache miss => trace fn runs and "
+               "result is stored in slot 0.";
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocations_a, executor,
+                                            stream.get(), trace)
+                   .status());
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_a));
+  EXPECT_FALSE(traced_cmd_buffer.HasEntry(&allocations_b));
+  EXPECT_EQ(num_calls, 1);
+  LOG(INFO) << "  -> cache state: [A]   trace calls so far: " << num_calls;
+
+  LOG(INFO) << "[step 3] GetOrTrace(B): cache miss => trace fn runs again, "
+               "B becomes most-recently-used.";
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocations_b, executor,
+                                            stream.get(), trace)
+                   .status());
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_a));
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_b));
+  EXPECT_EQ(num_calls, 2);
+  LOG(INFO) << "  -> cache state: [B, A]   (B at front - MRU, A at back - "
+               "LRU)   trace calls: " << num_calls;
+
+  LOG(INFO) << "[step 4] GetOrTrace(A): cache HIT - no trace fn call, A "
+               "promoted to front.";
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocations_a, executor,
+                                            stream.get(), trace)
+                   .status());  // hit A, moves to front
+  LOG(INFO) << "  -> cache state: [A, B]   (A promoted, B is now LRU)   "
+               "trace calls: " << num_calls;
+
+  LOG(INFO) << "[step 5] GetOrTrace(C): cache full => evict the LRU (B), "
+               "insert C. A survives because it was just promoted.";
+  se::DeviceAddressBase mem3(reinterpret_cast<void*>(0x34567012));
+  BufferAllocations allocations_c({mem0, mem3}, 0, &allocator);
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocations_c, executor,
+                                            stream.get(), trace)
+                   .status());
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_a));
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_c));
+  EXPECT_FALSE(traced_cmd_buffer.HasEntry(&allocations_b));  // evicted
+  EXPECT_EQ(num_calls, 3);
+  LOG(INFO) << "  -> cache state: [C, A]   (B was evicted)   trace calls: "
+            << num_calls;
+  LOG(INFO) << "=== Takeaway: HasEntry is a pure read; GetOrTrace mutates "
+               "LRU order; only misses invoke the trace fn. ===";
+}
+
+TEST(TracedCommandBuffer, ForceTraceCommandBuffer) {
+  LOG(INFO) << "=== ForceTraceCommandBuffer: always invokes trace, replaces "
+               "the cache entry in place. Used by RecordTracedCommand on a "
+               "coordinated cache miss. ===";
+  se::StreamExecutor* executor = GpuExecutor();
+
+  auto stream = executor->CreateStream().value();
+  auto traced_cmd = FakeCmd();
+  BufferAllocation alloc0(/*index=*/0, /*size=*/1024, /*color=*/0);
+  BufferAllocation alloc1(/*index=*/1, /*size=*/1024, /*color=*/0);
+
+  Shape shape = ShapeUtil::MakeShape(U8, {1024});
+  Command::BufferUses buffers = {
+      BufferUse::Read(BufferAllocation::Slice(&alloc0, 0, 1024), shape),
+      BufferUse::Write(BufferAllocation::Slice(&alloc1, 0, 1024), shape)};
+
+  TracedCommandBuffer traced_cmd_buffer(&traced_cmd, buffers);
+
+  se::DeviceAddressBase mem0(reinterpret_cast<void*>(0x01234567));
+  se::DeviceAddressBase mem1(reinterpret_cast<void*>(0x12345670));
+
+  se::StreamExecutorAddressAllocator allocator(executor);
+  BufferAllocations allocations({mem0, mem1}, 0, &allocator);
+
+  se::DeviceAddress<int32_t> mem = executor->AllocateArray<int32_t>(16, 0);
+  int64_t num_calls = 0;
+  auto trace = [&](se::Stream* stream) -> absl::Status {
+    TF_RETURN_IF_ERROR(stream->Memset32(&mem, 42, 16));
+    num_calls++;
+    LOG(INFO) << "  [trace fn invoked] num_calls=" << num_calls;
+    return absl::OkStatus();
+  };
+
+  LOG(INFO) << "[step 1] ForceTrace on empty cache: behaves like a miss - "
+               "trace fn runs and the result is stored.";
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto* cb1, traced_cmd_buffer.ForceTraceCommandBuffer(
+                     &allocations, executor, stream.get(), trace));
+  EXPECT_NE(cb1, nullptr);
+  EXPECT_EQ(num_calls, 1);
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations));
+  LOG(INFO) << "  -> cache holds command buffer cb1=" << cb1;
+
+  LOG(INFO) << "[step 2] GetOrTrace with the same pattern: cache HIT - "
+               "trace fn does NOT run; same pointer returned.";
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto* cb1_hit, traced_cmd_buffer.GetOrTraceCommandBuffer(
+                         &allocations, executor, stream.get(), trace));
+  EXPECT_EQ(cb1_hit, cb1);
+  EXPECT_EQ(num_calls, 1);
+  LOG(INFO) << "  -> GetOrTrace returned cb1_hit=" << cb1_hit
+            << " (== cb1)   trace calls: " << num_calls;
+
+  LOG(INFO) << "[step 3] ForceTrace again on the SAME pattern: trace fn "
+               "runs anyway; the old command buffer is replaced.";
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto* cb2, traced_cmd_buffer.ForceTraceCommandBuffer(
+                     &allocations, executor, stream.get(), trace));
+  EXPECT_NE(cb2, nullptr);
+  EXPECT_NE(cb2, cb1);
+  EXPECT_EQ(num_calls, 2);
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations));
+  LOG(INFO) << "  -> cache holds new cb2=" << cb2 << " (!= cb1=" << cb1
+            << ")   trace calls: " << num_calls;
+  LOG(INFO) << "=== Takeaway: ForceTrace is the 'invalidate-then-retrace' "
+               "primitive used when the rendezvous reports a global miss. ===";
+}
+
+TEST(TracedCommandBuffer, ForceTraceCommandBufferDoesNotEvictOtherEntries) {
+  LOG(INFO) << "=== ForceTraceCommandBufferDoesNotEvictOtherEntries: "
+               "force-tracing an EXISTING entry overwrites it in place "
+               "without disturbing other cached patterns. ===";
+  se::StreamExecutor* executor = GpuExecutor();
+
+  auto stream = executor->CreateStream().value();
+  auto traced_cmd = FakeCmd();
+  BufferAllocation alloc0(/*index=*/0, /*size=*/1024, /*color=*/0);
+  BufferAllocation alloc1(/*index=*/1, /*size=*/1024, /*color=*/0);
+
+  Shape shape = ShapeUtil::MakeShape(U8, {1024});
+  Command::BufferUses buffers = {
+      BufferUse::Read(BufferAllocation::Slice(&alloc0, 0, 1024), shape),
+      BufferUse::Write(BufferAllocation::Slice(&alloc1, 0, 1024), shape)};
+
+  TracedCommandBuffer traced_cmd_buffer(&traced_cmd, buffers, /*capacity=*/2);
+
+  se::DeviceAddressBase mem0(reinterpret_cast<void*>(0x01234567));
+  se::DeviceAddressBase mem1(reinterpret_cast<void*>(0x12345670));
+  se::DeviceAddressBase mem2(reinterpret_cast<void*>(0x23456701));
+
+  se::StreamExecutorAddressAllocator allocator(executor);
+  BufferAllocations allocations_a({mem0, mem1}, 0, &allocator);
+  BufferAllocations allocations_b({mem0, mem2}, 0, &allocator);
+
+  se::DeviceAddress<int32_t> mem = executor->AllocateArray<int32_t>(16, 0);
+  auto trace = [&](se::Stream* stream) -> absl::Status {
+    return stream->Memset32(&mem, 42, 16);
+  };
+
+  LOG(INFO) << "[step 1] Fill capacity=2 cache with patterns A then B.";
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto* cb_a, traced_cmd_buffer.GetOrTraceCommandBuffer(
+                      &allocations_a, executor, stream.get(), trace));
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto* cb_b, traced_cmd_buffer.GetOrTraceCommandBuffer(
+                      &allocations_b, executor, stream.get(), trace));
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_a));
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_b));
+  LOG(INFO) << "  -> cache: [B, A]   cb_a=" << cb_a << "  cb_b=" << cb_b;
+
+  LOG(INFO) << "[step 2] ForceTrace on EXISTING pattern A: must overwrite "
+               "the A slot in place. B's slot must NOT be touched.";
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto* cb_a2, traced_cmd_buffer.ForceTraceCommandBuffer(
+                       &allocations_a, executor, stream.get(), trace));
+  EXPECT_NE(cb_a2, cb_a);
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_a));
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_b));
+  LOG(INFO) << "  -> cache: [A, B]   new cb_a2=" << cb_a2 << " (replaced cb_a="
+            << cb_a << "); B still present.";
+
+  LOG(INFO) << "[step 3] GetOrTrace(B): must return the SAME pointer as "
+               "before, proving B was not silently evicted nor re-traced.";
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto* cb_b_hit, traced_cmd_buffer.GetOrTraceCommandBuffer(
+                          &allocations_b, executor, stream.get(), trace));
+  EXPECT_EQ(cb_b_hit, cb_b);
+  LOG(INFO) << "  -> cb_b_hit=" << cb_b_hit << " (== cb_b)";
+  LOG(INFO) << "=== Takeaway: in-place replace preserves neighbors - safe "
+               "for the multi-rank ForceTrace called on every rank. ===";
+}
+
+TEST(TracedCommandBuffer, HasEntryDoesNotPromoteLRU) {
+  LOG(INFO) << "=== HasEntryDoesNotPromoteLRU: HasEntry must be a PURE READ. "
+               "If it ever promoted entries to MRU, the rendezvous local_hit "
+               "vote could disagree with what GetOrTrace does milliseconds "
+               "later (NCCL deadlock risk). ===";
+  // HasEntry must be a pure read: it must NOT promote the queried entry to
+  // the most-recently-used slot. If it did, rendezvous voters could observe
+  // a "hit" and then have the corresponding entry silently evicted by the
+  // time GetOrTraceCommandBuffer runs.
+  se::StreamExecutor* executor = GpuExecutor();
+
+  auto stream = executor->CreateStream().value();
+  auto traced_cmd = FakeCmd();
+  BufferAllocation alloc0(/*index=*/0, /*size=*/1024, /*color=*/0);
+  BufferAllocation alloc1(/*index=*/1, /*size=*/1024, /*color=*/0);
+
+  Shape shape = ShapeUtil::MakeShape(U8, {1024});
+  Command::BufferUses buffers = {
+      BufferUse::Read(BufferAllocation::Slice(&alloc0, 0, 1024), shape),
+      BufferUse::Write(BufferAllocation::Slice(&alloc1, 0, 1024), shape)};
+
+  TracedCommandBuffer traced_cmd_buffer(&traced_cmd, buffers, /*capacity=*/2);
+
+  se::DeviceAddressBase mem_a0(reinterpret_cast<void*>(0x01234567));
+  se::DeviceAddressBase mem_a1(reinterpret_cast<void*>(0x12345670));
+  se::DeviceAddressBase mem_b1(reinterpret_cast<void*>(0x23456701));
+  se::DeviceAddressBase mem_c1(reinterpret_cast<void*>(0x34567012));
+
+  se::StreamExecutorAddressAllocator allocator(executor);
+  BufferAllocations allocations_a({mem_a0, mem_a1}, 0, &allocator);
+  BufferAllocations allocations_b({mem_a0, mem_b1}, 0, &allocator);
+  BufferAllocations allocations_c({mem_a0, mem_c1}, 0, &allocator);
+
+  se::DeviceAddress<int32_t> mem = executor->AllocateArray<int32_t>(16, 0);
+  auto trace = [&](se::Stream* stream) -> absl::Status {
+    return stream->Memset32(&mem, 42, 16);
+  };
+
+  LOG(INFO) << "[step 1] Trace A then B. After this, B is MRU and A is LRU.";
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocations_a, executor,
+                                            stream.get(), trace)
+                   .status());
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocations_b, executor,
+                                            stream.get(), trace)
+                   .status());
+  LOG(INFO) << "  -> cache: [B, A] (A is LRU candidate)";
+
+  LOG(INFO) << "[step 2] Hammer HasEntry(A) 5 times. If HasEntry secretly "
+               "promoted A, A would become MRU and B would become LRU.";
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_a));
+  }
+  LOG(INFO) << "  -> 5x HasEntry(A) done; cache order MUST still be [B, A].";
+
+  LOG(INFO) << "[step 3] Trace a NEW pattern C. Eviction policy fires.";
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocations_c, executor,
+                                            stream.get(), trace)
+                   .status());
+  LOG(INFO) << "  -> If HasEntry promoted: cache=[C, A], B evicted.";
+  LOG(INFO) << "  -> If HasEntry is pure:  cache=[C, B], A evicted (correct).";
+  EXPECT_FALSE(traced_cmd_buffer.HasEntry(&allocations_a));  // evicted
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_b));   // still alive
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_c));
+  LOG(INFO) << "  -> A evicted, B alive, C inserted => HasEntry IS a pure "
+               "read.";
+  LOG(INFO) << "=== Takeaway: this is the contract that makes the rendezvous "
+               "local_hit vote trustworthy. ===";
+}
+
+TEST(TracedCommandBuffer, MultiRankAllRanksHit) {
+  LOG(INFO) << "=== MultiRankAllRanksHit: simulate 2 ranks where BOTH "
+               "already have pattern X cached. The AND-vote in "
+               "RecordTracedCommand returns true => fast path, no re-trace. "
+               "===";
+  se::StreamExecutor* executor = GpuExecutor();
+
+  auto stream = executor->CreateStream().value();
+  auto traced_cmd = FakeCmd();
+  BufferAllocation alloc0(/*index=*/0, /*size=*/1024, /*color=*/0);
+  BufferAllocation alloc1(/*index=*/1, /*size=*/1024, /*color=*/0);
+
+  Shape shape = ShapeUtil::MakeShape(U8, {1024});
+  Command::BufferUses buffers = {
+      BufferUse::Read(BufferAllocation::Slice(&alloc0, 0, 1024), shape),
+      BufferUse::Write(BufferAllocation::Slice(&alloc1, 0, 1024), shape)};
+
+  LOG(INFO) << "[setup] One TracedCommandBuffer per simulated rank; cache "
+               "state is per-instance (per-rank) - NOT shared.";
+  TracedCommandBuffer rank0(&traced_cmd, buffers);
+  TracedCommandBuffer rank1(&traced_cmd, buffers);
+
+  se::DeviceAddressBase mem0(reinterpret_cast<void*>(0x01234567));
+  se::DeviceAddressBase mem1(reinterpret_cast<void*>(0x12345670));
+
+  se::StreamExecutorAddressAllocator allocator(executor);
+  BufferAllocations allocations_x({mem0, mem1}, 0, &allocator);
+
+  se::DeviceAddress<int32_t> mem = executor->AllocateArray<int32_t>(16, 0);
+  auto trace = [&](se::Stream* stream) -> absl::Status {
+    return stream->Memset32(&mem, 42, 16);
+  };
+
+  LOG(INFO) << "[step 1] Both ranks trace pattern X (e.g. previous "
+               "iteration). Both caches now hold X.";
+  TF_ASSERT_OK(rank0.GetOrTraceCommandBuffer(&allocations_x, executor,
+                                             stream.get(), trace)
+                   .status());
+  TF_ASSERT_OK(rank1.GetOrTraceCommandBuffer(&allocations_x, executor,
+                                             stream.get(), trace)
+                   .status());
+  LOG(INFO) << "  -> rank0.cache=[X]   rank1.cache=[X]";
+
+  LOG(INFO) << "[step 2] Each rank runs HasEntry(X) before voting.";
+  bool rank0_hit = rank0.HasEntry(&allocations_x);
+  bool rank1_hit = rank1.HasEntry(&allocations_x);
+  LOG(INFO) << "  -> local_hit votes: rank0=" << rank0_hit
+            << "  rank1=" << rank1_hit;
+  EXPECT_TRUE(rank0_hit);
+  EXPECT_TRUE(rank1_hit);
+
+  LOG(INFO) << "[step 3] Rendezvous AND-vote across ranks: "
+            << rank0_hit << " && " << rank1_hit << " = "
+            << (rank0_hit && rank1_hit) << "  =>  use_cache=true (fast path).";
+  EXPECT_TRUE(rank0_hit && rank1_hit);
+  LOG(INFO) << "=== Takeaway: steady-state happy path - all ranks reuse "
+               "cached command buffers, no NCCL re-init. ===";
+}
+
+TEST(TracedCommandBuffer, MultiRankNoneHit) {
+  LOG(INFO) << "=== MultiRankNoneHit: simulate 2 ranks, NEITHER has the "
+               "pattern cached (e.g. first iteration, or both evicted). "
+               "AND-vote = false => all ranks trace together (symmetric "
+               "NCCL). ===";
+  se::StreamExecutor* executor = GpuExecutor();
+
+  auto traced_cmd = FakeCmd();
+  BufferAllocation alloc0(/*index=*/0, /*size=*/1024, /*color=*/0);
+  BufferAllocation alloc1(/*index=*/1, /*size=*/1024, /*color=*/0);
+
+  Shape shape = ShapeUtil::MakeShape(U8, {1024});
+  Command::BufferUses buffers = {
+      BufferUse::Read(BufferAllocation::Slice(&alloc0, 0, 1024), shape),
+      BufferUse::Write(BufferAllocation::Slice(&alloc1, 0, 1024), shape)};
+
+  LOG(INFO) << "[setup] Two empty rank caches.";
+  TracedCommandBuffer rank0(&traced_cmd, buffers);
+  TracedCommandBuffer rank1(&traced_cmd, buffers);
+
+  se::DeviceAddressBase mem0(reinterpret_cast<void*>(0x01234567));
+  se::DeviceAddressBase mem1(reinterpret_cast<void*>(0x12345670));
+
+  se::StreamExecutorAddressAllocator allocator(executor);
+  BufferAllocations allocations_x({mem0, mem1}, 0, &allocator);
+
+  LOG(INFO) << "[step 1] Each rank runs HasEntry(X) before voting.";
+  bool rank0_hit = rank0.HasEntry(&allocations_x);
+  bool rank1_hit = rank1.HasEntry(&allocations_x);
+  LOG(INFO) << "  -> local_hit votes: rank0=" << rank0_hit
+            << "  rank1=" << rank1_hit;
+  EXPECT_FALSE(rank0_hit);
+  EXPECT_FALSE(rank1_hit);
+
+  LOG(INFO) << "[step 2] Rendezvous AND-vote: " << rank0_hit << " && "
+            << rank1_hit << " = " << (rank0_hit && rank1_hit)
+            << "  =>  use_cache=false (everyone calls ForceTrace).";
+  EXPECT_FALSE(rank0_hit && rank1_hit);
+  LOG(INFO) << "=== Takeaway: cold-start path - every rank traces the same "
+               "command buffer; NCCL ops are issued in lockstep. ===";
+}
+
+TEST(TracedCommandBuffer, MultiRankAsymmetricHit) {
+  LOG(INFO) << "=== MultiRankAsymmetricHit: THE deadlock case. rank0 has "
+               "pattern X cached but rank1 does not. Without the rendezvous, "
+               "rank0 would skip NCCL ops (use cached buffer) while rank1 "
+               "would issue NCCL ops (re-trace) - and the collective hangs. "
+               "===";
+  se::StreamExecutor* executor = GpuExecutor();
+
+  auto stream = executor->CreateStream().value();
+  auto traced_cmd = FakeCmd();
+  BufferAllocation alloc0(/*index=*/0, /*size=*/1024, /*color=*/0);
+  BufferAllocation alloc1(/*index=*/1, /*size=*/1024, /*color=*/0);
+
+  Shape shape = ShapeUtil::MakeShape(U8, {1024});
+  Command::BufferUses buffers = {
+      BufferUse::Read(BufferAllocation::Slice(&alloc0, 0, 1024), shape),
+      BufferUse::Write(BufferAllocation::Slice(&alloc1, 0, 1024), shape)};
+
+  TracedCommandBuffer rank0(&traced_cmd, buffers);
+  TracedCommandBuffer rank1(&traced_cmd, buffers);
+
+  se::DeviceAddressBase mem0(reinterpret_cast<void*>(0x01234567));
+  se::DeviceAddressBase mem1(reinterpret_cast<void*>(0x12345670));
+
+  se::StreamExecutorAddressAllocator allocator(executor);
+  BufferAllocations allocations_x({mem0, mem1}, 0, &allocator);
+
+  se::DeviceAddress<int32_t> mem = executor->AllocateArray<int32_t>(16, 0);
+  auto trace = [&](se::Stream* stream) -> absl::Status {
+    return stream->Memset32(&mem, 42, 16);
+  };
+
+  LOG(INFO) << "[step 1] Only rank0 traces pattern X (rank1 evicted it "
+               "earlier under memory pressure, or hit a different pattern "
+               "while rank0 didn't). Caches diverge.";
+  TF_ASSERT_OK(rank0.GetOrTraceCommandBuffer(&allocations_x, executor,
+                                             stream.get(), trace)
+                   .status());
+  LOG(INFO) << "  -> rank0.cache=[X]   rank1.cache=[]";
+
+  LOG(INFO) << "[step 2] Each rank runs HasEntry(X) before voting - and "
+               "they DISAGREE.";
+  bool rank0_hit = rank0.HasEntry(&allocations_x);
+  bool rank1_hit = rank1.HasEntry(&allocations_x);
+  LOG(INFO) << "  -> local_hit votes: rank0=" << rank0_hit
+            << "  rank1=" << rank1_hit << "  <-- disagreement!";
+  EXPECT_TRUE(rank0_hit);
+  EXPECT_FALSE(rank1_hit);
+
+  LOG(INFO) << "[step 3] Rendezvous AND-vote: " << rank0_hit << " && "
+            << rank1_hit << " = " << (rank0_hit && rank1_hit)
+            << "  =>  use_cache=false. rank0 is forced to ForceTrace "
+               "alongside rank1 - NCCL stays symmetric, no deadlock.";
+  EXPECT_FALSE(rank0_hit && rank1_hit);
+  LOG(INFO) << "=== Takeaway: this is exactly why the AND-vote exists. "
+               "Without it, this scenario hangs collectives forever. ===";
+}
+
+TEST(TracedCommandBuffer, ForceTraceEvictsLRUForNewPattern) {
+  LOG(INFO) << "=== ForceTraceEvictsLRUForNewPattern: when ForceTrace is "
+               "called with a NEW pattern (not in cache), it must evict the "
+               "LRU entry - not an arbitrary slot. ===";
+  se::StreamExecutor* executor = GpuExecutor();
+
+  auto stream = executor->CreateStream().value();
+  auto traced_cmd = FakeCmd();
+  BufferAllocation alloc0(/*index=*/0, /*size=*/1024, /*color=*/0);
+  BufferAllocation alloc1(/*index=*/1, /*size=*/1024, /*color=*/0);
+
+  Shape shape = ShapeUtil::MakeShape(U8, {1024});
+  Command::BufferUses buffers = {
+      BufferUse::Read(BufferAllocation::Slice(&alloc0, 0, 1024), shape),
+      BufferUse::Write(BufferAllocation::Slice(&alloc1, 0, 1024), shape)};
+
+  TracedCommandBuffer traced_cmd_buffer(&traced_cmd, buffers, /*capacity=*/2);
+
+  se::DeviceAddressBase mem0(reinterpret_cast<void*>(0x01234567));
+  se::DeviceAddressBase mem_a(reinterpret_cast<void*>(0x12345670));
+  se::DeviceAddressBase mem_b(reinterpret_cast<void*>(0x23456701));
+  se::DeviceAddressBase mem_c(reinterpret_cast<void*>(0x34567012));
+
+  se::StreamExecutorAddressAllocator allocator(executor);
+  BufferAllocations allocations_a({mem0, mem_a}, 0, &allocator);
+  BufferAllocations allocations_b({mem0, mem_b}, 0, &allocator);
+  BufferAllocations allocations_c({mem0, mem_c}, 0, &allocator);
+
+  se::DeviceAddress<int32_t> mem = executor->AllocateArray<int32_t>(16, 0);
+  auto trace = [&](se::Stream* stream) -> absl::Status {
+    return stream->Memset32(&mem, 42, 16);
+  };
+
+  LOG(INFO) << "[step 1] Fill capacity=2 cache with A then B => LRU is A.";
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocations_a, executor,
+                                            stream.get(), trace)
+                   .status());
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .GetOrTraceCommandBuffer(&allocations_b, executor,
+                                            stream.get(), trace)
+                   .status());
+  LOG(INFO) << "  -> cache: [B, A]";
+
+  LOG(INFO) << "[step 2] ForceTrace a NEW pattern C. The LRU slot (A) must "
+               "be evicted, the MRU slot (B) preserved.";
+  TF_ASSERT_OK(traced_cmd_buffer
+                   .ForceTraceCommandBuffer(&allocations_c, executor,
+                                            stream.get(), trace)
+                   .status());
+  EXPECT_FALSE(traced_cmd_buffer.HasEntry(&allocations_a));  // evicted
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_b));   // preserved
+  EXPECT_TRUE(traced_cmd_buffer.HasEntry(&allocations_c));   // newly inserted
+  LOG(INFO) << "  -> cache: [C, B]   A evicted (LRU), B kept (MRU), C "
+               "inserted at front.";
+  LOG(INFO) << "=== Takeaway: ForceTrace shares the same LRU policy as "
+               "GetOrTrace - it doesn't bypass eviction logic. ===";
+}
+
+TEST(TracedCommandBuffer, GetOrTraceRepeatedSamePatternIsIdempotent) {
+  LOG(INFO) << "=== GetOrTraceRepeatedSamePatternIsIdempotent: 11 back-to-"
+               "back GetOrTrace calls with the SAME pattern result in "
+               "exactly ONE trace invocation. This is the perf win the "
+               "cache delivers. ===";
+  se::StreamExecutor* executor = GpuExecutor();
+
+  auto stream = executor->CreateStream().value();
+  auto traced_cmd = FakeCmd();
+  BufferAllocation alloc0(/*index=*/0, /*size=*/1024, /*color=*/0);
+  BufferAllocation alloc1(/*index=*/1, /*size=*/1024, /*color=*/0);
+
+  Shape shape = ShapeUtil::MakeShape(U8, {1024});
+  Command::BufferUses buffers = {
+      BufferUse::Read(BufferAllocation::Slice(&alloc0, 0, 1024), shape),
+      BufferUse::Write(BufferAllocation::Slice(&alloc1, 0, 1024), shape)};
+
+  TracedCommandBuffer traced_cmd_buffer(&traced_cmd, buffers);
+
+  se::DeviceAddressBase mem0(reinterpret_cast<void*>(0x01234567));
+  se::DeviceAddressBase mem1(reinterpret_cast<void*>(0x12345670));
+
+  se::StreamExecutorAddressAllocator allocator(executor);
+  BufferAllocations allocations({mem0, mem1}, 0, &allocator);
+
+  se::DeviceAddress<int32_t> mem = executor->AllocateArray<int32_t>(16, 0);
+  int64_t num_calls = 0;
+  auto trace = [&](se::Stream* stream) -> absl::Status {
+    TF_RETURN_IF_ERROR(stream->Memset32(&mem, 42, 16));
+    num_calls++;
+    LOG(INFO) << "  [trace fn invoked] num_calls=" << num_calls;
+    return absl::OkStatus();
+  };
+
+  LOG(INFO) << "[step 1] First GetOrTrace: cache miss => trace fn runs.";
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto* cb_first, traced_cmd_buffer.GetOrTraceCommandBuffer(
+                          &allocations, executor, stream.get(), trace));
+  EXPECT_EQ(num_calls, 1);
+  LOG(INFO) << "  -> cb_first=" << cb_first << "  trace calls: " << num_calls;
+
+  LOG(INFO) << "[step 2] Next 10 GetOrTrace calls with the SAME pattern: "
+               "every one is a hit; trace fn must NEVER run again; same "
+               "pointer returned.";
+  for (int i = 0; i < 10; ++i) {
+    TF_ASSERT_OK_AND_ASSIGN(
+        auto* cb, traced_cmd_buffer.GetOrTraceCommandBuffer(
+                      &allocations, executor, stream.get(), trace));
+    EXPECT_EQ(cb, cb_first);
+  }
+  EXPECT_EQ(num_calls, 1);  // trace called exactly once across all 11 calls
+  LOG(INFO) << "  -> trace calls after 11 GetOrTrace calls: " << num_calls;
+  LOG(INFO) << "=== Takeaway: cache amortises trace cost across iterations "
+               "of the same SPMD step - precisely the workload shape the "
+               "PR optimises. ===";
 }
 
 TEST(CommandBufferCmdTest, RecordExecutorsWithDependencies) {
