@@ -18,8 +18,10 @@ limitations under the License.
 // that will be implemented in platform-specific passes in the Triton pipeline.
 
 #include <memory>
+#include <string>
 #include <utility>
 
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Location.h"
@@ -58,8 +60,8 @@ LogicalResult LowerGetTidOp(GetTidOp get_flat_tid, PatternRewriter& rewriter) {
 
   // Use tt.extern_elementwise to call a custom function that returns thread ID
   // This function will be implemented in platform-specific passes
-  auto tid_op = rewriter.create<triton::ExternElementwiseOp>(
-      loc,
+  auto tid_op = triton::ExternElementwiseOp::create(
+      rewriter, loc,
       /*resultType=*/i32_type,
       /*srcs=*/mlir::ValueRange{},  // No inputs needed
       /*libname=*/"",
