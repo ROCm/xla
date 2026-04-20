@@ -22,6 +22,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "llvm/ADT/StringRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
@@ -85,12 +86,17 @@ using ExternFunctionInstruction =
 // - <scope>: system, gpu, cta
 // - <comparator>: eq, lt
 absl::StatusOr<ExternFunctionInstruction> ParseExternFunctionName(
-    absl::string_view func_name);
+    llvm::StringRef func_name);
 
 // Serializes an ExternFunctionInstruction back to its string representation.
 // This is the inverse of ParseExternFunctionName.
 std::string SerializeExternFunctionName(
     const ExternFunctionInstruction& instruction);
+
+// Creates an extern function name from a Triton XLA operation.
+// Supports AtomicWriteOp, AtomicSpinWaitOp, and GetTidOp.
+// Returns an error status if the operation type is not supported.
+absl::StatusOr<std::string> ToExternFunctionName(mlir::Operation* op);
 
 // Validates that the memory semantic is appropriate for the instruction type.
 // Returns an error status if validation fails.

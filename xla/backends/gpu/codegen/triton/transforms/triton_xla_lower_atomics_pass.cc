@@ -34,6 +34,7 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "xla/backends/gpu/codegen/triton/extern_function_helper.h"
 #include "xla/backends/gpu/codegen/triton/ir/triton_xla_ops.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -43,45 +44,6 @@ namespace mlir::triton::xla {
 #include "xla/backends/gpu/codegen/triton/transforms/passes.h.inc"
 
 namespace {
-
-// Helper function to convert MemSemantic enum to string
-absl::string_view MemSemanticToString(triton::MemSemantic semantic) {
-  switch (semantic) {
-    case triton::MemSemantic::RELAXED:
-      return "relaxed";
-    case triton::MemSemantic::ACQUIRE:
-      return "acquire";
-    case triton::MemSemantic::RELEASE:
-      return "release";
-    case triton::MemSemantic::ACQUIRE_RELEASE:
-      return "acq_rel";
-  }
-  LOG(FATAL) << "Unknown MemSemantic value";
-}
-
-// Helper function to convert MemSyncScope enum to string
-absl::string_view MemSyncScopeToString(triton::MemSyncScope scope) {
-  switch (scope) {
-    case triton::MemSyncScope::SYSTEM:
-      return "system";
-    case triton::MemSyncScope::GPU:
-      return "gpu";
-    case triton::MemSyncScope::CTA:
-      return "cta";
-  }
-  LOG(FATAL) << "Unknown MemSyncScope value";
-}
-
-// Helper function to convert Comparator enum to string
-absl::string_view ComparatorToString(Comparator comparator) {
-  switch (comparator) {
-    case Comparator::EQ:
-      return "eq";
-    case Comparator::LT:
-      return "lt";
-  }
-  LOG(FATAL) << "Unknown Comparator value";
-}
 
 mlir::Type GetResultType(mlir::Type ptr_type, PatternRewriter& rewriter) {
   mlir::Type result_type = rewriter.getI32Type();
@@ -98,17 +60,15 @@ mlir::Type GetResultType(mlir::Type ptr_type, PatternRewriter& rewriter) {
 // This creates extern calls that will be implemented in a separate ROCm pass.
 LogicalResult LowerAtomicWriteOp(AtomicWriteOp atomic_write,
                                  PatternRewriter& rewriter) {
-  VLOG(2) << "LowerAtomicWriteOp: Starting tt.extern_elementwise lowering";
+  VLOG(3) << "LowerAtomicWriteOp: Starting tt.extern_elementwise lowering";
   mlir::ImplicitLocOpBuilder builder(atomic_write.getLoc(), rewriter);
 
   mlir::Value ptr = atomic_write.getPtr();
   mlir::Value value = atomic_write.getValue();
   mlir::Value mask = atomic_write.getMask();
 
-  triton::MemSemantic semantic = atomic_write.getMemSyncSemantic();
-  triton::MemSyncScope scope = atomic_write.getMemSyncScope();
-
   // Validate memory semantics
+  triton::MemSemantic semantic = atomic_write.getMemSyncSemantic();
   if (semantic != triton::MemSemantic::RELAXED &&
       semantic != triton::MemSemantic::RELEASE) {
     return rewriter.notifyMatchFailure(
@@ -116,10 +76,13 @@ LogicalResult LowerAtomicWriteOp(AtomicWriteOp atomic_write,
         "AtomicWriteOp only supports RELAXED or RELEASE semantics");
   }
 
-  // Build function name: xla_atomicwrite_<semantic>_<scope>
-  std::string func_name =
-      absl::StrFormat("xla_atomicwrite_%s_%s", MemSemanticToString(semantic),
-                      MemSyncScopeToString(scope));
+  // Build function name using helper
+  absl::StatusOr<std::string> func_name_or = ToExternFunctionName(atomic_write);
+  if (!func_name_or.ok()) {
+    return rewriter.notifyMatchFailure(atomic_write,
+                                       func_name_or.status().ToString());
+  }
+  std::string func_name = *func_name_or;
 
   VLOG(3) << "LowerAtomicWriteOp: Creating extern_elementwise call to "
           << func_name;
@@ -155,18 +118,15 @@ LogicalResult LowerAtomicWriteOp(AtomicWriteOp atomic_write,
 // This creates extern calls that will be implemented in a separate ROCm pass.
 LogicalResult LowerAtomicSpinWaitOp(AtomicSpinWaitOp atomic_wait,
                                     PatternRewriter& rewriter) {
-  VLOG(2) << "LowerAtomicSpinWaitOp: Starting tt.extern_elementwise lowering";
+  VLOG(3) << "LowerAtomicSpinWaitOp: Starting tt.extern_elementwise lowering";
   mlir::ImplicitLocOpBuilder builder(atomic_wait.getLoc(), rewriter);
 
   mlir::Value ptr = atomic_wait.getPtr();
   mlir::Value expected = atomic_wait.getExpected();
   mlir::Value mask = atomic_wait.getMask();
 
-  triton::MemSemantic semantic = atomic_wait.getMemSyncSemantic();
-  triton::MemSyncScope scope = atomic_wait.getMemSyncScope();
-  Comparator comparator = atomic_wait.getComparator();
-
   // Validate memory semantics
+  triton::MemSemantic semantic = atomic_wait.getMemSyncSemantic();
   if (semantic != triton::MemSemantic::RELAXED &&
       semantic != triton::MemSemantic::ACQUIRE) {
     return rewriter.notifyMatchFailure(
@@ -174,10 +134,13 @@ LogicalResult LowerAtomicSpinWaitOp(AtomicSpinWaitOp atomic_wait,
         "AtomicSpinWaitOp only supports RELAXED or ACQUIRE semantics");
   }
 
-  // Build function name: xla_atomicspinwait_<semantic>_<scope>_<comparator>
-  std::string func_name = absl::StrFormat(
-      "xla_atomicspinwait_%s_%s_%s", MemSemanticToString(semantic),
-      MemSyncScopeToString(scope), ComparatorToString(comparator));
+  // Build function name using helper
+  absl::StatusOr<std::string> func_name_or = ToExternFunctionName(atomic_wait);
+  if (!func_name_or.ok()) {
+    return rewriter.notifyMatchFailure(atomic_wait,
+                                       func_name_or.status().ToString());
+  }
+  std::string func_name = *func_name_or;
 
   VLOG(3) << "LowerAtomicSpinWaitOp: Creating extern_elementwise call to "
           << func_name;

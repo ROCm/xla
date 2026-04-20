@@ -30,6 +30,7 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "xla/backends/gpu/codegen/triton/extern_function_helper.h"
 #include "xla/backends/gpu/codegen/triton/ir/triton_xla_ops.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -48,6 +49,13 @@ LogicalResult LowerGetTidOp(GetTidOp get_flat_tid, PatternRewriter& rewriter) {
   // Get i32 type for the result
   mlir::Type i32_type = rewriter.getI32Type();
 
+  // Get function name using helper
+  absl::StatusOr<std::string> func_name_or = ToExternFunctionName(get_flat_tid);
+  if (!func_name_or.ok()) {
+    return rewriter.notifyMatchFailure(get_flat_tid,
+                                       func_name_or.status().ToString());
+  }
+
   // Use tt.extern_elementwise to call a custom function that returns thread ID
   // This function will be implemented in platform-specific passes
   auto tid_op = rewriter.create<triton::ExternElementwiseOp>(
@@ -56,7 +64,7 @@ LogicalResult LowerGetTidOp(GetTidOp get_flat_tid, PatternRewriter& rewriter) {
       /*srcs=*/mlir::ValueRange{},  // No inputs needed
       /*libname=*/"",
       /*libpath=*/"",
-      /*symbol=*/"xla_getthreadid",
+      /*symbol=*/*func_name_or,
       /*pure=*/true);  // Thread ID is pure (deterministic for a given thread)
 
   rewriter.replaceOp(get_flat_tid, tid_op.getResult());

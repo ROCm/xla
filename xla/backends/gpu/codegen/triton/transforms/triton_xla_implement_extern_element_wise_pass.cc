@@ -23,6 +23,7 @@ limitations under the License.
 #include <utility>
 
 #include "absl/log/log.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
@@ -49,43 +50,38 @@ class RewriteExternCallPattern : public OpRewritePattern<LLVM::CallOp> {
   LogicalResult matchAndRewrite(LLVM::CallOp call_op,
                                 PatternRewriter& rewriter) const override {
     // Check if this is a call to one of our extern functions
-    auto callee = call_op.getCallee();
+    std::optional<llvm::StringRef> callee = call_op.getCallee();
     if (!callee) {
       return failure();
     }
 
     llvm::StringRef callee_name = *callee;
-    if (!callee_name.starts_with("xla_atomicwrite_") &&
-        !callee_name.starts_with("xla_atomicspinwait_") &&
-        !callee_name.starts_with("xla_getthreadid")) {
-      return failure();
-    }
 
     // Parse the function name to get the instruction
-    auto parsed = ParseExternFunctionName(callee_name.str());
+    absl::StatusOr<ExternFunctionInstruction> parsed =
+        ParseExternFunctionName(callee_name);
     if (!parsed.ok()) {
       return rewriter.notifyMatchFailure(
-          call_op, "Failed to parse extern function name: " +
-                       callee_name.str() + " - " + parsed.status().ToString());
+          call_op,
+          absl::StrFormat("Failed to parse extern function name: %s - %s",
+                          callee_name, parsed.status().ToString()));
     }
 
-    // Validate memory semantic
-    auto validation = ValidateMemorySemantic(*parsed);
+    absl::Status validation = ValidateMemorySemantic(*parsed);
     if (!validation.ok()) {
       return rewriter.notifyMatchFailure(
-          call_op, "Invalid memory semantic for function: " +
-                       callee_name.str() + " - " + validation.ToString());
+          call_op,
+          absl::StrFormat("Invalid memory semantic for function: %s - %s",
+                          callee_name, validation.ToString()));
     }
 
-    // Create LLVM operations for the instruction
-    LLVMOpCreationParams params{.builder = rewriter,
-                                .loc = call_op.getLoc(),
-                                .target = TargetBackend::CUDA,
-                                .operands = call_op.getOperands()};
+    LLVMOpCreationParams params{/*.builder=*/rewriter,
+                                /*.loc=*/call_op.getLoc(),
+                                /*.target=*/TargetBackend::CUDA,
+                                /*.operands=*/call_op.getOperands()};
 
     mlir::Value result = CreateLLVMOpsForInstruction(*parsed, params);
 
-    // Replace the call with the generated operations
     rewriter.replaceOp(call_op, result);
     return success();
   }
@@ -104,14 +100,17 @@ class EraseUnusedExternFuncPattern : public OpRewritePattern<LLVM::LLVMFuncOp> {
     }
 
     llvm::StringRef name = func_op.getName();
-    if (!name.starts_with("xla_atomicwrite_") &&
-        !name.starts_with("xla_atomicspinwait_") &&
-        !name.starts_with("xla_getthreadid")) {
+    // Check if a valid XLA extern function remains
+    absl::StatusOr<ExternFunctionInstruction> parsed =
+        ParseExternFunctionName(name);
+    if (!parsed.ok()) {
       return failure();
     }
 
     // Check if the function has any uses
     if (!func_op.use_empty()) {
+      func_op.emitError() << "Extern function '" << name
+                          << "' still has uses after call replacement";
       return failure();
     }
 
@@ -133,7 +132,6 @@ class TritonXLAImplementExternElementWisePass
     mlir::ModuleOp module = getOperation();
     mlir::MLIRContext* context = &getContext();
 
-    // Apply rewrite patterns
     RewritePatternSet patterns(context);
     patterns.add<RewriteExternCallPattern>(context);
     patterns.add<EraseUnusedExternFuncPattern>(context);

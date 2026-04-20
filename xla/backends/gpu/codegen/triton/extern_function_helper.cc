@@ -144,18 +144,19 @@ absl::string_view MemSyncScopeToPTXScope(MemSyncScope scope) {
 }  // namespace
 
 absl::StatusOr<ExternFunctionInstruction> ParseExternFunctionName(
-    absl::string_view func_name) {
+    llvm::StringRef func_name) {
   // Function name format: xla_<functionname>_<arg1>_<arg2>_...
   // Split by underscore to get tokens
-  std::vector<absl::string_view> tokens = absl::StrSplit(func_name, '_');
+  llvm::SmallVector<llvm::StringRef, 5> tokens;
+  func_name.split(tokens, '_');
 
   // Must have at least 2 tokens: "xla" and function name
   if (tokens.size() < 2 || tokens[0] != "xla") {
     return absl::InvalidArgumentError(
-        absl::StrFormat("Invalid extern function name: %s", func_name));
+        absl::StrFormat("Invalid extern function name: %s", func_name.str()));
   }
 
-  absl::string_view fn_name = tokens[1];
+  llvm::StringRef fn_name = tokens[1];
 
   // xla_getthreadid (2 tokens total)
   if (fn_name == "getthreadid") {
@@ -222,6 +223,27 @@ std::string SerializeExternFunctionName(
           },
       },
       instruction);
+}
+
+absl::StatusOr<std::string> ToExternFunctionName(mlir::Operation* op) {
+  ExternFunctionInstruction instruction;
+
+  if (auto atomic_write = mlir::dyn_cast<AtomicWriteOp>(op)) {
+    instruction = AtomicWriteInstruction{atomic_write.getMemSyncSemantic(),
+                                         atomic_write.getMemSyncScope()};
+  } else if (auto atomic_wait = mlir::dyn_cast<AtomicSpinWaitOp>(op)) {
+    instruction = AtomicSpinWaitInstruction{atomic_wait.getMemSyncSemantic(),
+                                            atomic_wait.getMemSyncScope(),
+                                            atomic_wait.getComparator()};
+  } else if (mlir::dyn_cast<GetTidOp>(op)) {
+    instruction = GetThreadIdInstruction{};
+  } else {
+    return absl::InvalidArgumentError(absl::StrFormat(
+        "Unsupported operation type for extern function name: %s",
+        op->getName().getStringRef().str()));
+  }
+
+  return SerializeExternFunctionName(instruction);
 }
 
 absl::Status ValidateMemorySemantic(
