@@ -456,6 +456,29 @@ struct CollectiveTraceCacheKey {
   }
 };
 
+// Coordinates a clique-wide vote on whether every local participant has a
+// matching trace cache entry. Returns true iff every rank's `local_hit` is
+// true; that is the only state in which it is safe to use the cached graph,
+// because mixed hit/miss decisions across ranks would break NCCL call
+// symmetry.
+absl::StatusOr<bool> AllRanksHitTraceCache(const GpuCliqueKey& clique_key,
+                                           const CollectiveCmd* cmd,
+                                           bool local_hit) {
+  CollectiveTraceCacheKey key{clique_key, cmd};
+  TF_ASSIGN_OR_RETURN(
+      std::shared_ptr<bool> all_hit,
+      xla::Rendezvous<bool>(
+          "collective_trace_cache", key, local_hit,
+          clique_key.num_local_participants(),
+          [](absl::Span<bool*> votes) {
+            return std::all_of(votes.begin(), votes.end(),
+                               [](const bool* v) { return *v; });
+          },
+          /*warn_stuck_timeout=*/absl::Seconds(10),
+          /*terminate_timeout=*/absl::Seconds(30)));
+  return *all_hit;
+}
+
 }  // namespace
 
 absl::StatusOr<const se::CommandBuffer::Command*>
@@ -465,6 +488,8 @@ CollectiveCmd::RecordTracedCommand(
     se::CommandBuffer* command_buffer,
     absl::FunctionRef<absl::Status(se::Stream*)> trace,
     const GpuCliqueKey& clique_key) {
+  const int device_ordinal =
+      execute_params.stream->parent()->device_ordinal();
   se::CommandBuffer* nested_cmd_ptr = nullptr;
   std::unique_ptr<se::CommandBuffer> nested_cmd_owned;
 
@@ -492,26 +517,14 @@ CollectiveCmd::RecordTracedCommand(
     // RecordUpdate iterations).
     if (!std::holds_alternative<RecordCreate>(record_action)) {
       bool local_hit = traced_cmd->HasEntry(execute_params.buffer_allocations);
-
-      CollectiveTraceCacheKey rendezvous_key{clique_key, this};
-      TF_ASSIGN_OR_RETURN(
-          std::shared_ptr<bool> all_hit,
-          xla::Rendezvous<bool>(
-              "collective_trace_cache", rendezvous_key, local_hit,
-              clique_key.num_local_participants(),
-              [](absl::Span<bool*> votes) {
-                return std::all_of(votes.begin(), votes.end(),
-                                   [](const bool* v) { return *v; });
-              },
-              /*warn_stuck_timeout=*/absl::Seconds(10),
-              /*terminate_timeout=*/absl::Seconds(30)));
-
-      use_cache = *all_hit;
+      TF_ASSIGN_OR_RETURN(use_cache,
+                          AllRanksHitTraceCache(clique_key, this, local_hit));
     }
   }
 
   if (use_cache) {
-    VLOG(5) << "Collective trace cache hit: all ranks using cached graph";
+    XLA_VLOG_DEVICE(5, device_ordinal)
+        << "Collective trace cache hit: all ranks using cached graph";
     TF_ASSIGN_OR_RETURN(
         nested_cmd_ptr,
         traced_cmd->GetOrTraceCommandBuffer(
@@ -522,7 +535,8 @@ CollectiveCmd::RecordTracedCommand(
     // Local clique with at least one miss: every rank re-traces together (to
     // keep NCCL calls symmetric) AND we populate the cache so the next
     // iteration can take the fast path.
-    VLOG(5) << "Collective trace cache miss: all local ranks retracing";
+    XLA_VLOG_DEVICE(5, device_ordinal)
+        << "Collective trace cache miss: all local ranks retracing";
     TF_ASSIGN_OR_RETURN(
         nested_cmd_ptr,
         traced_cmd->ForceTraceCommandBuffer(
@@ -532,7 +546,8 @@ CollectiveCmd::RecordTracedCommand(
   } else {
     // Non-local clique: in-process Rendezvous cannot coordinate across hosts,
     // so we always trace without caching to remain symmetric.
-    VLOG(5) << "Non-local clique: tracing without cache";
+    XLA_VLOG_DEVICE(5, device_ordinal)
+        << "Non-local clique: tracing without cache";
     TF_ASSIGN_OR_RETURN(
         nested_cmd_owned,
         se::TraceCommandBufferFactory::Create(

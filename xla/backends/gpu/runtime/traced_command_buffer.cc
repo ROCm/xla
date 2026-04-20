@@ -92,7 +92,7 @@ TracedCommandBuffer::Entry& TracedCommandBuffer::ShiftToFront(size_t i) {
   return entries_[0] = std::move(entry);
 }
 
-absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::TraceImpl(
+absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::Trace(
     const BufferAllocations* buffer_allocation, se::StreamExecutor* executor,
     se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace,
     se::StreamPriority priority, bool force_retrace) {
@@ -153,8 +153,8 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
     const BufferAllocations* buffer_allocation, se::StreamExecutor* executor,
     se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace,
     se::StreamPriority priority) {
-  return TraceImpl(buffer_allocation, executor, stream, trace, priority,
-                   /*force_retrace=*/false);
+  return Trace(buffer_allocation, executor, stream, trace, priority,
+               /*force_retrace=*/false);
 }
 
 absl::StatusOr<se::CommandBuffer*>
@@ -162,8 +162,8 @@ TracedCommandBuffer::ForceTraceCommandBuffer(
     const BufferAllocations* buffer_allocation, se::StreamExecutor* executor,
     se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace,
     se::StreamPriority priority) {
-  return TraceImpl(buffer_allocation, executor, stream, trace, priority,
-                   /*force_retrace=*/true);
+  return Trace(buffer_allocation, executor, stream, trace, priority,
+               /*force_retrace=*/true);
 }
 
 bool TracedCommandBuffer::HasEntry(

@@ -52,18 +52,18 @@ class TracedCommandBuffer : public CommandState {
                                Command::BufferUses buffers,
                                int64_t capacity = 16);
 
+  // Returns true if a cache entry already exists for the buffer addresses
+  // implied by `buffer_allocation`. Read-only; does not trace or mutate the
+  // cache. Used by collective operations to vote on cache state across ranks
+  // before deciding whether to use a cached graph or re-trace together.
+  bool HasEntry(const BufferAllocations* buffer_allocation) const;
+
   // Returns cached command buffer traced using the same buffer addresses or
   // traces and caches a new command buffer using user provided callback.
   absl::StatusOr<se::CommandBuffer*> GetOrTraceCommandBuffer(
       const BufferAllocations* buffer_allocation, se::StreamExecutor* executor,
       se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace,
       se::StreamPriority priority = se::StreamPriority::Default);
-
-  // Returns true if a cache entry already exists for the buffer addresses
-  // implied by `buffer_allocation`. Read-only; does not trace or mutate the
-  // cache. Used by collective operations to vote on cache state across ranks
-  // before deciding whether to use a cached graph or re-trace together.
-  bool HasEntry(const BufferAllocations* buffer_allocation) const;
 
   // Always traces and updates the cache, even if a matching entry already
   // exists. Used by collective operations on a coordinated cache miss: every
@@ -95,15 +95,14 @@ class TracedCommandBuffer : public CommandState {
   // [0, i) one slot to the right. Returns a reference to the now-front entry.
   Entry& ShiftToFront(size_t i);
 
-  // Shared implementation for `GetOrTraceCommandBuffer` and
-  // `ForceTraceCommandBuffer`.
+  // Shared body for `GetOrTraceCommandBuffer` and `ForceTraceCommandBuffer`.
   // - When `force_retrace` is false: if a matching entry exists, returns the
   //   cached command buffer; otherwise traces into an empty/evicted slot.
   // - When `force_retrace` is true: always invokes `trace`. If a matching
   //   entry exists it is overwritten in place; otherwise traces into an
   //   empty/evicted slot. Used to keep ranks symmetric on a coordinated
   //   cache miss.
-  absl::StatusOr<se::CommandBuffer*> TraceImpl(
+  absl::StatusOr<se::CommandBuffer*> Trace(
       const BufferAllocations* buffer_allocation, se::StreamExecutor* executor,
       se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace,
       se::StreamPriority priority, bool force_retrace);
