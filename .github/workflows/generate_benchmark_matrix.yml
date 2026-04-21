@@ -44,7 +44,7 @@ jobs:
   generate:
     name: Generate Matrix (${{ inputs.workflow_type }})
     runs-on: linux-mi250-4
-    container: us-docker.pkg.dev/ml-oss-artifacts-published/ml-public-container/ml-build:latest
+    container: ${{ vars.DOCKER_IMAGE }}
     outputs:
       matrix_json_output: ${{ steps.run_generator.outputs.matrix_json }}
     defaults:
@@ -65,7 +65,7 @@ jobs:
         run: |
           echo "Configuring OpenXLA for CPU to build the generator tool..."
           if [ -f "./configure.py" ]; then
-            ./configure.py --backend=CPU 
+            ./configure.py --backend=CPU --clang_path=/lib/llvm-18/bin/clang-18 
           else
             echo "::warning::configure.py not found. Assuming C++ tool build doesn't require it or is pre-configured."
           fi
@@ -78,7 +78,6 @@ jobs:
                 --test_tag_filters=-no_oss,-gpu,-requires-gpu-nvidia,-requires-gpu-amd \
                 --config=warnings \
                 --config=nonccl \
-                --config=rbe_linux_cpu \
                 --color=yes \
                 --test_output=errors \
                 --verbose_failures \
@@ -86,8 +85,7 @@ jobs:
                 --nobuild_tests_only \
                 --profile=profile.json.gz \
                 --flaky_test_attempts=3 \
-                --jobs=150 \
-                --bes_upload_mode=fully_async \
+                --bes_backend="" \
                 //xla/tools/benchmarks/utils:generate_benchmark_matrices_main
           if [ $? -ne 0 ]; then
              echo "::error::Failed to build generate_benchmark_matrices_main"
