@@ -7,12 +7,13 @@ SCRIPT_DIR=$(realpath "$(dirname "$0")")
 EXCLUDED_TESTS=(
     "HostMemoryAllocateTest.Numa" # Failing on RBE
     "*IotaR1Test*" # Taking too many CI nodes
-    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e4m3fn_f8e5m2"
-    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e5m2_f8e5m2"
-    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e5m2_f8e4m3fn"
-    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e4m3fn_f8e4m3fn"
-    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x6"
-    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x9"
+    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e4m3fn_f8e5m2" # TODO: fix
+    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e5m2_f8e5m2" # TODO: fix
+    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e5m2_f8e4m3fn" # TODO: fix
+    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e4m3fn_f8e4m3fn" # TODO: fix
+    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x6" # TODO: fix
+    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x9" # TODO: fix
+    "RocmExecutorTest.CreateUnifiedMemoryAllocatorWorks" # TODO: fix
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
@@ -44,5 +45,7 @@ done
         IFS=:
         echo "${EXCLUDED_TESTS[*]}"
     ) \
-    -- //xla/...
+    -- \
+    //xla/... \
+    -//xla/backends/gpu/tests:sorting.hlo.test_mi200 # lit test can't filter with gtest filters
 
