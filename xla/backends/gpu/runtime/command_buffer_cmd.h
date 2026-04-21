@@ -135,13 +135,18 @@ class CollectiveCmd : public Command {
 
   bool IsTracedCommand() const override { return true; }
 
+  // Recording on every Initialize() ensures all local participants reach the
+  // Rendezvous in RecordTracedCommand together, preserving NCCL call symmetry.
   bool requires_initialization() const final { return true; }
 
-  // Force the update path to run on every execution so that all local
-  // participants always reach the Rendezvous in RecordTracedCommand below.
-  // Without this, skip_command_update could cause some ranks to skip the
-  // collective update while others enter it, breaking NCCL call symmetry.
-  bool force_update() const final { return true; }
+  // We intentionally do NOT force the update path on every ExecuteOnStream().
+  // requires_initialization() above already records the command on every
+  // execution, so the Rendezvous gate fires once per execution. Forcing an
+  // additional record from the Execute path is redundant (it doubles the
+  // number of Rendezvous round-trips) and was observed to corrupt parent
+  // command buffer state on long-running models like MaxText LLaMA 3 8B,
+  // causing segfaults after a few iterations.
+  bool force_update() const final { return false; }
 
   // `clique_key` is used to coordinate the per-rank cache decision across all
   // local participants via a process-local Rendezvous: either every rank uses
