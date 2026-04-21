@@ -670,7 +670,8 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtGroupedMatmulThunk(
   bool has_matrix_bias = config.beta() != 0;
   TF_ASSIGN_OR_RETURN(bool has_vector_bias,
                       xla::gpu::gpublas_lt::EpilogueAddsVectorBias(epilogue));
-  TF_RET_CHECK(instr->operand_count() == 3 + int{has_matrix_bias} + int{has_vector_bias});
+  TF_RET_CHECK(instr->operand_count() ==
+               3 + int{has_matrix_bias} + int{has_vector_bias});
 
   xla::ShapeIndex output_index =
       instr->shape().IsTuple() ? xla::ShapeIndex{0} : xla::ShapeIndex{};
@@ -693,7 +694,8 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtGroupedMatmulThunk(
   std::optional<ShapedSlice> bias;
   if (has_vector_bias) {
     int bias_operand_index = has_matrix_bias ? 4 : 3;
-    TF_ASSIGN_OR_RETURN(bias, GetShapedSliceForHlo(instr->operand(bias_operand_index)));
+    TF_ASSIGN_OR_RETURN(
+        bias, GetShapedSliceForHlo(instr->operand(bias_operand_index)));
   }
 
   std::optional<ShapedSlice> workspace_buffer;
