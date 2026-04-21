@@ -31,10 +31,10 @@ on:
         - 'no'
   push:
     branches:
-      - main
+      - rocm-jaxlib-v0.9.0
 
 concurrency:
-  # Run every push to main and do not cancel in-progress jobs; the timeout is 60 minutes.
+  # Run every push to rocm-jaxlib-v0.9.0 and do not cancel in-progress jobs; the timeout is 60 minutes.
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: false
 
@@ -44,15 +44,15 @@ jobs:
   # =================================================================
   generate_matrix:
     name: Generate Postsubmit Matrix
-    # Condition: Run if manually dispatched OR if it's a push event to the main branch.
+    # Condition: Run if manually dispatched OR if it's a push event to the rocm-jaxlib-v0.9.0 branch.
     if: |
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      (github.event_name == 'push' && github.ref == 'refs/heads/rocm-jaxlib-v0.9.0')
     uses: ./.github/workflows/generate_benchmark_matrix.yml
     with:
       workflow_type: 'POSTSUBMIT'
       registry_file: 'xla/tools/benchmarks/registries/default_registry.yml'
-      checkout_ref: ${{ github.sha }} # On push/dispatch to main, github.sha is the commit SHA
+      checkout_ref: ${{ github.sha }} # On push/dispatch to rocm-jaxlib-v0.9.0, github.sha is the commit SHA
 
   run_benchmarks:
     name: Run Benchmark (${{ matrix.benchmark_entry.config_id }}) # config_id will indicate the workflow type, e.g., '_postsubmit'
@@ -66,7 +66,9 @@ jobs:
          benchmark_entry: ${{ fromJson(needs.generate_matrix.outputs.matrix_include_json || '[]') }}
 
     runs-on: ${{ matrix.benchmark_entry.runner_label }}
-    container: ${{ matrix.benchmark_entry.container_image }}
+    container:
+      image: ${{ matrix.benchmark_entry.container_image }}
+      options: --device=/dev/dri --device=/dev/kfd
 
     defaults:
       run:
@@ -101,11 +103,6 @@ jobs:
       COMPARISON_SCRIPT_RELATIVE: .github/workflows/benchmarks/compare_with_baseline.py
 
     steps:
-      - name: "Wait For Connection"
-        uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
-        with:
-          halt-dispatch-input: ${{ inputs.halt-for-connection }}
-
       - name: Print Job Info & Set Full Paths in ENV
         run: |
           # Resolve full paths based on GITHUB_WORKSPACE and relative paths defined in env
@@ -148,6 +145,15 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           ref: ${{ env.CHECKOUT_REF }}
+
+      - name: Get RBE cluster keys
+        env:
+          RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
+          RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}
+        run: |
+          mkdir -p /tf/certificates
+          echo "$RBE_CI_CERT" > /tf/certificates/ci-cert.crt
+          echo "$RBE_CI_KEY" > /tf/certificates/ci-cert.key
 
       - name: Build Binaries
         id: build_binaries
@@ -201,26 +207,6 @@ jobs:
           bash "$RESOLVED_RUN_COMPARISON_SCRIPT" # This script calls the Python comparison script
           echo "Baseline comparison finished."
           echo "---------------------------------------------"
-
-      - name: Upload results.json directly to GCS
-        run: |
-          GCS_BUCKET="gs://openxla-postsubmit-transient"
-          RESULTS_JSON_FILE_PATH="${{ env.RESOLVED_OUTPUT_DIR }}/results.json"
-
-          # Check if the results file exists
-          if [ ! -f "$RESULTS_JSON_FILE_PATH" ]; then
-            echo "::error::results.json not found at $RESULTS_JSON_FILE_PATH"
-            exit 1
-          fi
-
-          # Construct a GCS object name
-          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          DATE_FOLDER=$(date +%Y%m%d)
-          COMMIT_SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-8)
-          GCS_OBJECT_NAME="${BENCHMARK_NAME}/${DATE_FOLDER}/${TIMESTAMP}_run_${WORKFLOW_RUN_ID}_commit_${COMMIT_SHA_SHORT}.json"
-
-          echo "Uploading $RESULTS_JSON_FILE_PATH to $GCS_BUCKET/$GCS_OBJECT_NAME"
-          gsutil cp "$RESULTS_JSON_FILE_PATH" "$GCS_BUCKET/$GCS_OBJECT_NAME"
 
       - name: Upload Benchmark Artifacts
         if: always()
