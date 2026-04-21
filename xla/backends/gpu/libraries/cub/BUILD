@@ -79,6 +79,7 @@ cuda_library(
     testonly = True,
     srcs = ["generate_cub_scratch_size_lib.cu.cc"],
     hdrs = ["generate_cub_scratch_size_lib.cu.h"],
+    tags = ["cuda-only"],
     deps = [
         ":scratch_space_lookup_table_proto_cc",
         "//xla/tsl/platform:env",
@@ -105,6 +106,7 @@ xla_test(
     tags = [
         "no_oss",  # Stop this test from being run in OSS presubmits
         "notap",
+        "cuda-only",
     ],
     deps = [
         ":generate_cub_scratch_size_lib",
