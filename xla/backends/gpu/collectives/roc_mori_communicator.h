@@ -22,6 +22,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "xla/backends/gpu/collectives/gpu_communicator.h"
 #include "xla/core/collectives/communicator.h"
 #include "xla/core/collectives/rank_id.h"
 #include "xla/future.h"
@@ -39,12 +40,15 @@ namespace xla::gpu {
 class MoriCollectives;
 
 // XLA collectives communicator wrapping an ROC_MORI communicator.
-class MoriCommunicator : public Communicator {
+class MoriCommunicator : public GpuCommunicator {
  public:
   constexpr static uint32_t kMaxTeams = 24;
 
   friend class MoriCollectives;
   ~MoriCommunicator() override;
+
+  static absl::StatusOr<std::unique_ptr<MoriCommunicator>> Create(
+    MoriCollectives* coll);
 
   // MoriCommunicator is not copyable or movable.
   MoriCommunicator(const MoriCommunicator&) = delete;
@@ -58,6 +62,20 @@ class MoriCommunicator : public Communicator {
 
   absl::Status Barrier(const Executor& executor) final;
 
+  absl::Status RegisterBufferOnce(se::DeviceAddressBase buffer_range,
+             int device_ordinal, bool use_symmetric_buffer) final {
+    VLOG(3) << "Register buffer once for MORI communicator: " << ToString()
+            << " buffer_range: " << buffer_range.opaque()
+            << " size: " << buffer_range.size()
+            << " device_ordinal: " << device_ordinal
+            << " use_symmetric_buffer: " << use_symmetric_buffer;
+    return absl::OkStatus();
+  }
+
+
+  Future<> GroupExecute(
+    absl::AnyInvocable<absl::Status(GpuCommunicator*)> f) final;
+
   Future<> AllReduce(se::DeviceMemoryBase send_buffer,
                      se::DeviceMemoryBase recv_buffer, PrimitiveType dtype,
                      size_t count, ReductionKind reduction_kind,
@@ -66,48 +84,38 @@ class MoriCommunicator : public Communicator {
   Future<> Broadcast(se::DeviceMemoryBase send_buffer,
                      se::DeviceMemoryBase recv_buffer, PrimitiveType dtype,
                      size_t count, RankId root,
-                     const Executor& executor) final {
-    return absl::UnimplementedError("Not implemented.");
-  };
+                     const Executor& executor) final;
 
   Future<> ReduceScatter(se::DeviceMemoryBase send_buffer,
                          se::DeviceMemoryBase recv_buffer, PrimitiveType dtype,
                          size_t count, ReductionKind reduction_kind,
-                         const Executor& executor) final {
-    return absl::UnimplementedError("Not implemented.");
-  };
+                         const Executor& executor) final;
 
   Future<> AllGather(se::DeviceMemoryBase send_buffer,
                      se::DeviceMemoryBase recv_buffer, PrimitiveType dtype,
-                     size_t count, const Executor& executor) final {
-    return absl::UnimplementedError("Not implemented.");
-  };
+                     size_t count, const Executor& executor) final;
 
   Future<> AllToAll(absl::InlinedVector<se::DeviceMemoryBase, 4> send_buffers,
                     absl::InlinedVector<se::DeviceMemoryBase, 4> recv_buffers,
                     PrimitiveType dtype, size_t count,
-                    const Executor& executor) final {
-    return absl::UnimplementedError("Not implemented.");
-  };
+                    const Executor& executor) final;
 
   Future<> CollectivePermute(se::DeviceMemoryBase send_buffer,
                              se::DeviceMemoryBase recv_buffer,
                              PrimitiveType dtype, size_t count,
                              std::optional<RankId> source_rank,
                              absl::Span<const RankId> target_ranks,
-                             const Executor& executor) final {
-    return absl::UnimplementedError("Not implemented.");
-  };
+                            const Executor& executor) final;
 
-  Future<> Send(se::DeviceMemoryBase send_buffer, PrimitiveType dtype,
+  Future<> Send(se::DeviceAddressBase send_buffer, PrimitiveType dtype,
                 size_t count, RankId peer, const Executor& executor) final {
-    return absl::UnimplementedError("Not implemented.");
-  };
+    return absl::UnimplementedError("Not implemented11");
+  }
 
-  Future<> Recv(se::DeviceMemoryBase recv_buffer, PrimitiveType dtype,
+  Future<> Recv(se::DeviceAddressBase recv_buffer, PrimitiveType dtype,
                 size_t count, RankId peer, const Executor& executor) final {
-    return absl::UnimplementedError("Not implemented.");
-  };
+    return absl::UnimplementedError("Not implemented12");
+  }
 
   Future<> Send(se::DeviceMemoryBase recv_buffer,
                 se::DeviceMemoryBase send_buffer, PrimitiveType dtype,
@@ -117,6 +125,58 @@ class MoriCommunicator : public Communicator {
                 se::DeviceMemoryBase send_buffer, PrimitiveType dtype,
                 size_t count, RankId peer, const Executor& executor) final;
 
+  absl::Status LaunchAllReduce(se::DeviceAddressBase send_buffer,
+                               se::DeviceAddressBase recv_buffer,
+                               PrimitiveType dtype, size_t count,
+                               ReductionKind reduction_kind,
+                               const Executor& executor) final;
+
+  absl::Status LaunchBroadcast(se::DeviceAddressBase send_buffer,
+                               se::DeviceAddressBase recv_buffer,
+                               PrimitiveType dtype, size_t count, RankId root,
+                               const Executor& executor) final {
+    return absl::UnimplementedError("Not implemented3");
+  }
+
+  absl::Status LaunchReduceScatter(se::DeviceAddressBase send_buffer,
+                                   se::DeviceAddressBase recv_buffer,
+                                   PrimitiveType dtype, size_t count,
+                                   ReductionKind reduction_kind,
+                                   const Executor& executor) final {
+    return absl::UnimplementedError("Not implemented4");
+  }
+
+  absl::Status LaunchAllGather(se::DeviceAddressBase send_buffer,
+                               se::DeviceAddressBase recv_buffer,
+                               PrimitiveType dtype, size_t count,
+                               const Executor& executor) final;
+
+  absl::Status LaunchAllToAll(
+      absl::InlinedVector<se::DeviceAddressBase, 4> send_buffers,
+      absl::InlinedVector<se::DeviceAddressBase, 4> recv_buffers,
+      PrimitiveType dtype, size_t count, const Executor& executor) final {
+    return absl::UnimplementedError("Not implemented6");
+  }
+
+  absl::Status LaunchCollectivePermute(se::DeviceAddressBase send_buffer,
+                                       se::DeviceAddressBase recv_buffer,
+                                       PrimitiveType dtype, size_t count,
+                                       std::optional<RankId> source_rank,
+                                       absl::Span<const RankId> target_ranks,
+                                       const Executor& executor) final;
+
+  absl::Status LaunchSend(se::DeviceAddressBase send_buffer,
+                          PrimitiveType dtype, size_t count, RankId peer,
+                          const Executor& executor) final {
+    return absl::UnimplementedError("Not implemented8");
+  } 
+
+  absl::Status LaunchRecv(se::DeviceAddressBase recv_buffer,
+                          PrimitiveType dtype, size_t count, RankId peer,
+                          const Executor& executor) final {
+    return absl::UnimplementedError("Not implemented9");
+  }
+
   absl::Status Quiet(const Executor& executor) final;
 
   absl::Status Fence() final;
@@ -124,6 +184,9 @@ class MoriCommunicator : public Communicator {
   std::string ToString() const final;
 
  private:
+  // Executes f on executor_, or calls f directly if executor_ is null.
+  Future<> Execute(absl::AnyInvocable<absl::Status() &&> f) const;
+
   MoriCommunicator(MoriCollectives* coll)
     //, rocshmem::rocm_mori_team_t *teams) 
     : collectives_(coll)//, teams_(teams)

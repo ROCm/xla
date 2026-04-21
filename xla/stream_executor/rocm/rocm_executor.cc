@@ -48,6 +48,8 @@ limitations under the License.
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/include/hip/hip_version.h"
 #include "rocm/rocm_config.h"
+#include "xla/backends/gpu/collectives/gpu_collectives.h"
+#include "xla/core/collectives/collectives.h"
 #include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/command_buffer.h"
@@ -92,6 +94,7 @@ limitations under the License.
 #include "xla/tsl/platform/logging.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/platform/threadpool.h"
+#include "xla/util.h"
 #include "tsl/platform/fingerprint.h"
 #include "tsl/platform/numa.h"
 #include "tsl/platform/numbers.h"
@@ -500,6 +503,29 @@ absl::StatusOr<std::unique_ptr<MemoryAllocation>> AllocateHostMemory(
       });
 }
 
+absl::StatusOr<void*> CollectiveMemoryAllocate(StreamExecutor* executor,
+                                               uint64_t bytes) {
+  if (bytes == 0) {
+    return nullptr;
+  }
+
+  std::unique_ptr<ActivateContext> activation = executor->Activate();
+  if (auto *collectives = xla::gpu::GpuCollectives::Default("ROCM")) {
+    return collectives->Allocate(bytes);
+  }
+  return absl::InternalError("Failed to get GPU collectives");
+}
+
+absl::Status CollectiveMemoryDeallocate(StreamExecutor* executor,
+                                        void* location) {
+  std::unique_ptr<ActivateContext> activation = executor->Activate();
+
+  if (auto *collectives = xla::gpu::GpuCollectives::Default("ROCM")) {
+    return collectives->Deallocate(location);
+  }
+  return absl::InternalError("Failed to get GPU collectives");
+}
+
 }  // namespace
 
 RocmExecutor::~RocmExecutor() {
@@ -766,7 +792,17 @@ absl::StatusOr<ModuleHandle> RocmExecutor::LoadModuleFromHsaco(
 
 DeviceAddressBase RocmExecutor::Allocate(uint64_t size, int64_t memory_space) {
   switch (static_cast<MemorySpace>(memory_space)) {
-    case MemorySpace::kCollective:
+    case MemorySpace::kUnified:
+    case MemorySpace::kCollective: {
+      auto result = CollectiveMemoryAllocate(this, size);
+      if (!result.ok()) {
+        XLA_LOG_DEVICE(ERROR, device_ordinal())
+          << "RocmExecutor::Allocate returns " << result.value();
+      }
+      XLA_VLOG_DEVICE(1, device_ordinal())
+          << "RocmExecutor::Allocate returns " << result.value();
+      return DeviceAddressBase(result.value(), size);
+    }
     case MemorySpace::kDevice:
       return DeviceAddressBase(
           DeviceAllocate(&rocm_context_, size, /*is_fine_grained*/ false), size);
@@ -831,31 +867,25 @@ RocmExecutor::CreateMemoryAllocator(MemorySpace type) {
           });
     case MemorySpace::kCollective:
       return std::make_unique<GenericMemoryAllocator>(
-          [](uint64_t size)
-              -> absl::StatusOr<std::unique_ptr<MemoryAllocation>> {
-            void* ptr = nullptr;
-            auto hipResult = wrap::hipMalloc(&ptr, size);
-            if (hipResult != hipSuccess) {
-              return absl::InternalError(absl::StrFormat(
-                  "failed to allocate %s (%llu bytes) from device collective "
-                  "memory: %s, "
-                  "Last NCCL warning(error)",
-                  tsl::strings::HumanReadableNumBytes(size), size,
-                  hipGetErrorString(hipResult)));
-            }
-            VLOG(2) << "allocated " << ptr << " of " << size
-                    << " bytes of collective memory";
-            return std::make_unique<GenericMemoryAllocation>(
-                ptr, size, [](void* location, uint64_t size) {
-                  auto status = wrap::hipFree(location);
-                  if (status != hipSuccess) {
-                    LOG(ERROR) << "failed to free collective memory at "
-                               << location << "; result: " << status;
-                  } else {
-                    VLOG(2) << "deallocated collective memory at " << location;
-                  }
-                });
-          });
+        [this](uint64_t size)
+            -> absl::StatusOr<std::unique_ptr<MemoryAllocation>> {
+          TF_ASSIGN_OR_RETURN(void* ptr, CollectiveMemoryAllocate(this, size));
+          XLA_VLOG_DEVICE(2, device_ordinal())
+              << "allocated " << ptr << " of " << size 
+              << " bytes of collective memory";
+          return std::make_unique<GenericMemoryAllocation>(
+              ptr, size, [this](void* location, uint64_t size) {
+                auto status = CollectiveMemoryDeallocate(this, location);
+                if (!status.ok()) {
+                  XLA_LOG_DEVICE(ERROR, device_ordinal())
+                      << "failed to free collective memory at " << location
+                      << "; result: " << status;
+                } else {
+                  XLA_VLOG_DEVICE(2, device_ordinal())
+                      << "deallocated collective memory at " << location;
+                }
+              });
+        });
     case MemorySpace::kHost:
       return std::make_unique<GenericMemoryAllocator>([this](uint64_t size) {
         return AllocateHostMemory(&rocm_context_, size);
@@ -1096,7 +1126,8 @@ absl::StatusOr<std::unique_ptr<Stream>> RocmExecutor::CreateStream(
   TF_ASSIGN_OR_RETURN(auto stream, RocmStream::Create(this, priority, masked_cu));
   absl::MutexLock l(alive_gpu_streams_mu_);
   alive_gpu_streams_[stream->stream_handle()] = stream.get();
-  VLOG(2) << "Created stream " << stream.get() << " for device " << device_ordinal();
+  VLOG(2) << "Created stream " << stream.get() << " for device " << device_ordinal()
+          << " with masked_cu: " << masked_cu;
   return std::move(stream);
 }
 

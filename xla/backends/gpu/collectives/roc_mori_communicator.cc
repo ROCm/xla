@@ -47,6 +47,19 @@ static auto AsRocmStream(se::Stream* stream) {
                                   stream->platform_specific_handle().stream);
 }
 
+static size_t ToMoriByteCount(PrimitiveType dtype, size_t count) {
+  if (primitive_util::IsComplexType(dtype)) count *= 2;
+  return count * primitive_util::BitWidth(dtype) / 8;
+}
+
+absl::StatusOr<std::unique_ptr<MoriCommunicator>> MoriCommunicator::Create(
+    MoriCollectives* coll) {
+  auto comm = absl::WrapUnique(new MoriCommunicator(coll));
+  //TF_RETURN_IF_ERROR(comm->InitSignals());
+  VLOG(1) << "Created " << *comm << " with npes: " << shmem::ShmemNPes();
+  return comm;
+}
+
 MoriCommunicator::~MoriCommunicator() {
   if (signal_flags_ != nullptr) {
     collectives_->Deallocate(signal_flags_).IgnoreError();
@@ -74,16 +87,12 @@ absl::Status MoriCommunicator::Abort() {
 
 absl::Status MoriCommunicator::Barrier(
     const Communicator::Executor& executor) {
-  VLOG(1) << "Barrier MORI communicator: " << ToString();
+  VLOG(1) << "Barrier: " << ToString();
   CHECK_ABORTED()
-
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
-
-  auto gpu_stream = AsRocmStream(stream);
-  (void)gpu_stream;
-  // rocm_mori_barrier_all_on_stream(/*host_team_,*/ gpu_stream);
-  return absl::OkStatus();
+  return roc_mori::BarrierOnStream(AsRocmStream(stream));
 }
+
 absl::StatusOr<size_t> MoriCommunicator::NumRanks() const {
   VLOG(5) << "Get the number of ranks in MORI communicator: " << ToString();
   CHECK_ABORTED()
@@ -107,8 +116,7 @@ absl::StatusOr<size_t> MoriCommunicator::CurrentRank() {
 }
 
 std::string MoriCommunicator::ToString() const {
-  return absl::StrFormat("MoriCommunicator(rocm_mori_team_t=%p)", nullptr);
-                         //host_team_);
+  return absl::StrFormat("MoriCommunicator(npes=%d)", shmem::ShmemNPes());
 }
 
 absl::StatusOr<se::Stream*> MoriCommunicator::ToStream(
@@ -120,11 +128,106 @@ absl::StatusOr<se::Stream*> MoriCommunicator::ToStream(
   return InvalidArgument("Communicator executor is not a GPU executor");
 }
 
-Future<> MoriCommunicator::AllReduce(
-    se::DeviceMemoryBase send_buffer, se::DeviceMemoryBase recv_buffer,
-    PrimitiveType dtype, size_t count, ReductionKind reduction_kind,
-    const Communicator::Executor& executor) {
+Future<> MoriCommunicator::AllReduce(se::DeviceAddressBase send_buffer,
+                                     se::DeviceAddressBase recv_buffer,
+                                     PrimitiveType dtype, size_t count,
+                                     ReductionKind reduction_kind,
+                                     const Executor& executor) {
+  return Execute([send_buffer, recv_buffer, dtype, count, reduction_kind,
+                  &executor, this]() -> absl::Status {
+    return LaunchAllReduce(send_buffer, recv_buffer, dtype, count,
+                           reduction_kind, executor);
+  });
+}
 
+Future<> MoriCommunicator::Broadcast(se::DeviceAddressBase send_buffer,
+                                     se::DeviceAddressBase recv_buffer,
+                                     PrimitiveType dtype, size_t count,
+                                     RankId root, const Executor& executor) {
+  return Execute(
+      [send_buffer, recv_buffer, dtype, count, root, &executor, this]() {
+        return LaunchBroadcast(send_buffer, recv_buffer, dtype, count, root,
+                               executor);
+      });
+}
+
+Future<> MoriCommunicator::ReduceScatter(se::DeviceAddressBase send_buffer,
+                                         se::DeviceAddressBase recv_buffer,
+                                         PrimitiveType dtype, size_t count,
+                                         ReductionKind reduction_kind,
+                                         const Executor& executor) {
+  return Execute([send_buffer, recv_buffer, dtype, count, reduction_kind,
+                  &executor, this]() {
+    return LaunchReduceScatter(send_buffer, recv_buffer, dtype, count,
+                               reduction_kind, executor);
+  });
+}
+
+Future<> MoriCommunicator::AllGather(se::DeviceAddressBase send_buffer,
+                                     se::DeviceAddressBase recv_buffer,
+                                     PrimitiveType dtype, size_t count,
+                                     const Executor& executor) {
+  return Execute([send_buffer, recv_buffer, dtype, count, &executor, this]() {
+    return LaunchAllGather(send_buffer, recv_buffer, dtype, count, executor);
+  });
+}
+
+Future<> MoriCommunicator::AllToAll(
+    absl::InlinedVector<se::DeviceAddressBase, 4> send_buffers,
+    absl::InlinedVector<se::DeviceAddressBase, 4> recv_buffers,
+    PrimitiveType dtype, size_t count, const Executor& executor) {
+  return Execute([send_buffers, recv_buffers, dtype, count, &executor, this]() {
+    return LaunchAllToAll(send_buffers, recv_buffers, dtype, count, executor);
+  });
+}
+
+Future<> MoriCommunicator::CollectivePermute(
+    se::DeviceAddressBase send_buffer, se::DeviceAddressBase recv_buffer,
+    PrimitiveType dtype, size_t count, std::optional<RankId> source_rank,
+    absl::Span<const RankId> target_ranks, const Executor& executor) {
+  std::vector<RankId> owned_target_ranks(target_ranks.begin(),
+                                         target_ranks.end());
+  return Execute([send_buffer, recv_buffer, dtype, count, source_rank,
+                  owned_target_ranks = std::move(owned_target_ranks), &executor,
+                  this]() {
+    return LaunchCollectivePermute(send_buffer, recv_buffer, dtype, count,
+                                   source_rank, owned_target_ranks, executor);
+  });
+}
+
+Future<> MoriCommunicator::Send(se::DeviceMemoryBase recv_buffer,
+                                se::DeviceAddressBase send_buffer,
+                                PrimitiveType dtype, size_t count, RankId peer,
+                                const Executor& executor) {
+  return P2P(P2PType::Send, dtype, recv_buffer, send_buffer, count, peer, executor);
+}
+
+Future<> MoriCommunicator::Recv(se::DeviceAddressBase recv_buffer,
+                                se::DeviceAddressBase send_buffer,
+                                PrimitiveType dtype, size_t count, RankId peer,
+                                const Executor& executor) {
+  return P2P(P2PType::Recv, dtype, recv_buffer, send_buffer, count, peer, executor);
+}
+
+absl::Status MoriCommunicator::LaunchAllGather(se::DeviceAddressBase send_buffer,
+  se::DeviceAddressBase recv_buffer, PrimitiveType dtype, size_t count,
+  const Executor& executor) {
+  CHECK_ABORTED()
+  TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
+  VLOG(3) << "LaunchAllGather: send_buffer=" << send_buffer.opaque() 
+          << " recv_buffer=" << recv_buffer.opaque() 
+          << " count=" << count 
+          << " dtype=" << primitive_util::LowercasePrimitiveTypeName(dtype) 
+          << " stream=" << AsRocmStream(stream);
+  return roc_mori::AllGather(send_buffer.opaque(), recv_buffer.opaque(), 
+                      ToMoriByteCount(dtype, count), 
+                      AsRocmStream(stream), stream->parent()->device_ordinal());
+}
+
+absl::Status MoriCommunicator::LaunchAllReduce(
+        se::DeviceAddressBase send_buffer, se::DeviceAddressBase recv_buffer,
+        PrimitiveType dtype, size_t count, ReductionKind reduction_kind,
+        const Executor& executor) {
   CHECK_ABORTED()
 
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
@@ -164,6 +267,35 @@ Future<> MoriCommunicator::AllReduce(
   return absl::InternalError("Invalid MORI reduction type.");
 }
 
+absl::Status MoriCommunicator::LaunchCollectivePermute(
+     se::DeviceAddressBase send_buffer, se::DeviceAddressBase recv_buffer, 
+     PrimitiveType dtype, size_t count, std::optional<RankId> source_rank, 
+     absl::Span<const RankId> target_ranks, const Executor& executor) {
+  CHECK_ABORTED()
+  TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
+  size_t bytes = ToMoriByteCount(dtype, count);
+
+  auto rank_formatter = [](std::string* out, RankId rank) {
+    absl::StrAppendFormat(out, "%d", rank.value());
+  };
+  VLOG(3) << absl::StreamFormat(
+    "[%d] Launch MORI CollectivePermute operation; send_buffer=%p; "
+    "recv_buffer=%p; dtype=%s; source_rank=%s; target_[ranks=%s]; count=%d; "
+    "stream=%p",
+    stream->parent()->device_ordinal(), send_buffer.opaque(),
+    recv_buffer.opaque(), primitive_util::LowercasePrimitiveTypeName(dtype),
+    source_rank ? absl::StrCat(source_rank->value()) : "<empty>",
+    absl::StrJoin(target_ranks, ", ", rank_formatter), count, stream);
+
+  // NOTE normally we could merge these to a single kernel
+  for (auto target_rank : target_ranks) {
+    TF_RETURN_IF_ERROR(roc_mori::SendSDMA(recv_buffer.opaque(), send_buffer.opaque(), 
+                bytes, target_rank.value(), AsRocmStream(stream), 
+                stream->parent()->device_ordinal()));
+  }
+  return absl::OkStatus();
+}
+
 // Lazily allocate per-peer signal flags and block retirement counter.
 absl::Status MoriCommunicator::InitSignals() {
   TF_ASSIGN_OR_RETURN(auto npes, NumRanks());
@@ -192,13 +324,12 @@ absl::Status MoriCommunicator::P2P(P2PType p2p_type,
           << " MORI communicator: " << ToString() ;
   CHECK_ABORTED()
 
-  if (primitive_util::IsComplexType(dtype)) count *= 2;
   void* source_ptr = send_buffer.opaque();
   void* dest_ptr = recv_buffer.opaque();
 
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
   auto gpu_stream = AsRocmStream(stream); 
-  size_t bytes = count * primitive_util::BitWidth(dtype) / 8;
+  size_t bytes = ToMoriByteCount(dtype, count);
   int res = 0;
   if (p2p_type == P2PType::Send) {
     res = roc_mori::Send(dest_ptr, source_ptr, bytes, peer.value(),
@@ -211,20 +342,11 @@ absl::Status MoriCommunicator::P2P(P2PType p2p_type,
   return absl::InternalError(absl::StrFormat("MORI %s failed", stype));
 }
 
-Future<> MoriCommunicator::Send(se::DeviceMemoryBase recv_buffer,
-                                   se::DeviceMemoryBase send_buffer,
-                                   PrimitiveType dtype, size_t count,
-                                   RankId peer, const Executor& executor) {
-  return P2P(P2PType::Send, dtype, recv_buffer, send_buffer, count, 
-                                                              peer, executor);
-}
-
-Future<> MoriCommunicator::Recv(se::DeviceMemoryBase recv_buffer,
-                                   se::DeviceMemoryBase send_buffer,
-                                   PrimitiveType dtype, size_t count,
-                                   RankId peer, const Executor& executor) {
-  return P2P(P2PType::Recv, dtype, recv_buffer, send_buffer, count, 
-                                                              peer, executor);
+Future<> MoriCommunicator::GroupExecute(
+  absl::AnyInvocable<absl::Status(GpuCommunicator*)> f) {
+  return Execute([f = std::move(f), this]() mutable -> absl::Status {
+    return f(this);
+  });
 }
 
 absl::Status MoriCommunicator::Quiet(const Executor& executor) {
@@ -233,15 +355,21 @@ absl::Status MoriCommunicator::Quiet(const Executor& executor) {
   TF_ASSIGN_OR_RETURN(se::Stream * stream, ToStream(executor));
   auto gpu_stream = AsRocmStream(stream);
   (void)gpu_stream;
+  return absl::UnimplementedError("Not implementedA");
   // rocm_mori_quiet_on_stream(AsRocmStream(stream));
-  return absl::OkStatus();
+  // return absl::OkStatus();
 }
 
 absl::Status MoriCommunicator::Fence() {
   VLOG(1) << "Fence MORI communicator: " << ToString();
   CHECK_ABORTED()
   // rocm_mori_fence();
-  return absl::OkStatus();
+  return absl::UnimplementedError("Not implementedB");
+}
+
+Future<> MoriCommunicator::Execute(
+     absl::AnyInvocable<absl::Status() &&> f) const {
+  return Future<>(std::move(f)());
 }
 
 }  // namespace xla::gpu

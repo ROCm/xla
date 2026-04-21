@@ -55,6 +55,7 @@ limitations under the License.
 #include "xla/backends/gpu/collectives/gpu_collectives.h"
 #include "xla/backends/gpu/collectives/gpu_communicator.h"
 #include "xla/backends/gpu/target_config/target_config.h"
+#include "xla/backends/gpu/collectives/gpu_collectives.h"
 #include "xla/client/local_client.h"
 #include "xla/core/collectives/clique_id.h"
 #include "xla/core/collectives/collectives.h"
@@ -104,6 +105,7 @@ limitations under the License.
 #include "xla/service/gpu/gpu_memory_space_assignment.h"
 #include "xla/service/gpu_topology.h"
 #include "xla/service/gpu_topology.pb.h"
+#include "xla/service/platform_util.h"
 #include "xla/service/service_executable_run_options.h"
 #include "xla/service/shaped_buffer.h"
 #include "xla/service/transfer_manager.h"
@@ -1765,14 +1767,10 @@ absl::StatusOr<DeviceTopologyPair> BuildDistributedDevices(
   gpu_executable_run_options->set_gpu_global_device_ids(
       std::move(gpu_device_ids));
 
-  TF_ASSIGN_OR_RETURN(xla::Collectives * collectives,
-                      xla::CollectivesRegistry::Default("gpu"));
-  xla::gpu::GpuCollectives* gpu_collectives =
-      tsl::down_cast<xla::gpu::GpuCollectives*>(collectives);
+  TF_ASSIGN_OR_RETURN(auto canonical_name,
+        PlatformUtil::CanonicalPlatformName("gpu"));
 
-  if (gpu_collectives == nullptr) {
-    return absl::InternalError("Failed to get GPU collectives");
-  }
+  auto *gpu_collectives = gpu::GpuCollectives::Default(canonical_name);
 
   size_t num_processes = global_topology.processes().size();
   TF_ASSIGN_OR_RETURN(
@@ -2010,7 +2008,7 @@ StreamExecutorGpuClient::RunAsync(
                       exec.RunHelper(argument_shapes, run_options_inp));
   auto* gpu_exec =
       tensorflow::down_cast<xla::gpu::GpuExecutable*>(exec.executable());
-  const ServiceExecutableRunOptions* run_options = &options_and_stream.first;
+  ServiceExecutableRunOptions* run_options = &options_and_stream.first;
   se::DeviceAddressAllocator* const memory_allocator = run_options->allocator();
 
   se::StreamExecutor* executor = run_options->stream()->parent();
@@ -2057,6 +2055,32 @@ StreamExecutorGpuClient::RunAsync(
       gpu_exec->GetAllocations();
 
   std::vector<se::DeviceAddressBase> buffers(allocations.size());
+
+  {
+    static absl::Mutex mu(absl::kConstInit);
+    static absl::flat_hash_set<se::StreamExecutor*> init_execs;
+    
+    auto* gpu_opts = run_options->run_options().gpu_executable_run_options();
+    auto* device_assn = run_options->run_options().device_assignment();
+    bool needs_init = gpu_opts && device_assn;
+
+    if(needs_init) {
+      int64_t num_locals = device_assn->replica_count() * device_assn->computation_count();
+      needs_init = num_locals > 1;
+    }
+    if(needs_init) {
+      absl::MutexLock lock(mu);
+      needs_init = init_execs.insert(executor).second;
+    }
+    if (needs_init) {
+      run_options->mutable_run_options()->set_dry_run(true);
+      TF_RETURN_IF_ERROR(gpu_exec->ExecuteThunks(
+             gpu::BufferAllocations(buffers, device_ordinal, memory_allocator), 
+                 run_options));
+      run_options->mutable_run_options()->set_dry_run(false);
+    }
+  }
+
   {
     tsl::profiler::TraceMe hlo_module_activity(
         [&] { return std::string("Build buffer allocations"); },

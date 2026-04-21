@@ -431,6 +431,7 @@ absl::Status RunCollectivePermute(
     bool use_memcpy,
     const CollectivePermuteStartThunk::RecvPtrMap* recv_ptr_map,
     bool use_symmetric_buffer) {
+
   // Determine the source and target IDs for this instance. The source ID is the
   // ID which will copy its data to this instance. The destination ID is the ID
   // to which this instance will copy its data. Either are optional.
@@ -457,7 +458,8 @@ absl::Status RunCollectivePermute(
 
   int device_ordinal = stream.parent()->device_ordinal();
   XLA_VLOG_DEVICE(3, device_ordinal)
-      << "Performing collective permute, current_id " << current_id;
+      << "Performing collective permute, current_id " << current_id 
+      << " on stream " << &stream;
 
   std::optional<int64_t> source_id = source_target.source;
   std::optional<int64_t> target_id = source_target.target;
@@ -498,6 +500,9 @@ absl::Status RunCollectivePermute(
             source_rank, target_ranks, GpuCollectives::On(stream));
         TF_RETURN_IF_ERROR(future.Await());
       }
+      // Barrier is no-op for NCCL-based collectives, 
+      // but required for SDMA-based collectives
+      TF_RETURN_IF_ERROR(comm.Barrier(GpuCollectives::On(stream)));
     } else {
       TF_RETURN_IF_ERROR(MaybeRegisterBuffers(stream.parent(), buffers, &comm,
                                               use_symmetric_buffer));
@@ -514,6 +519,9 @@ absl::Status RunCollectivePermute(
                   buffer.element_count, source_rank, target_ranks,
                   GpuCollectives::On(stream)));
             }
+            // Barrier is no-op for NCCL-based collectives, 
+            // but required for SDMA-based collectives
+            TF_RETURN_IF_ERROR(comm->Barrier(GpuCollectives::On(stream)));
             return absl::OkStatus();
           });
       TF_RETURN_IF_ERROR(future.Await());

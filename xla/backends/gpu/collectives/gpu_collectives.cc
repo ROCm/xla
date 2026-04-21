@@ -24,24 +24,28 @@ limitations under the License.
 #include "xla/core/collectives/collectives.h"
 #include "xla/core/collectives/collectives_registry.h"
 #include "xla/shape_util.h"
+#include "xla/debug_options_flags.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/service/platform_util.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/casts.h"
 
 namespace xla::gpu {
 
 GpuCollectives* GpuCollectives::Default(absl::string_view platform_name) {
+  bool use_nvshmem = 
+    xla::GetDebugOptionsFromFlags().xla_gpu_experimental_enable_nvshmem();
+
   absl::StatusOr<Collectives*> collectives =
-      CollectivesRegistry::Default(platform_name);
-  CHECK_OK(collectives) << "Failed to get GPU collectives";  // Crash OK
+                  xla::CollectivesRegistry::Get(platform_name, 
+                    use_nvshmem ? "nvshmem" : "nccl");
 
-  if (auto* gpu_collectives = tsl::down_cast<GpuCollectives*>(*collectives)) {
-    return gpu_collectives;
+  if (collectives.ok()) {
+    return tsl::down_cast<GpuCollectives*>(*collectives);
   }
-
-  LOG(FATAL) << "Unsupported collectives implementation for GPU";
+  LOG(FATAL) << "Failed to get GPU collectives";  // Crash OK
 }
 
 GpuCollectives::Device::Device(se::StreamExecutor* stream_executor)

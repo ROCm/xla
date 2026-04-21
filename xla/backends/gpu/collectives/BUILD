@@ -232,6 +232,7 @@ cc_library(
         ":cancellation_token",
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
+        "//xla:debug_options_flags",
         "//xla/core/collectives",
         "//xla/core/collectives:clique_id",
         "//xla/core/collectives:clique_key",
@@ -629,18 +630,17 @@ rocm_library(
     ],
     deps = [
         "//xla/service:collective_opt_utils",
-        # "//xla/stream_executor/gpu:gpu_types_header",
         "@com_google_absl//absl/status",
         "@roc_mori//:mori_headers",
         "@roc_mori//:mori_libs",
     ],
-    additional_linker_inputs = ["@roc_mori//:libmori_shmem_dev"],
-    linkopts = [
-        "-Wl,--whole-archive",
-        "$(location @roc_mori//:libmori_shmem_dev)",
-        "-Wl,--no-whole-archive",
-    ],
-    linkstatic = True,
+    # additional_linker_inputs = ["@roc_mori//:libmori_shmem_dev"],
+    # linkopts = [
+    #     "-Wl,--whole-archive",
+    #     "$(location @roc_mori//:libmori_shmem_dev)",
+    #     "-Wl,--no-whole-archive",
+    # ],
+    # linkstatic = True,
 )
 
 cc_library(
@@ -664,7 +664,9 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":gpu_clique_key",
         ":gpu_collectives",
+        ":gpu_communicator",
         "//xla:future",
         "//xla:shape_util",
         "//xla:util",
@@ -676,6 +678,7 @@ cc_library(
         "//xla/core/collectives:communicator",
         "//xla/core/collectives:rank_id",
         "//xla/core/collectives:reduction_kind",
+        "//xla/core/collectives:symmetric_memory",
         "//xla/service:collective_ops_utils",
         "//xla/stream_executor:device_address",
         "//xla/stream_executor:stream",

@@ -4,7 +4,7 @@ def _mori_impl(repository_ctx):
     """Implementation of the local_mori_configure repository rule."""
     
     # Get the MORI installation path from environment variable
-    mori_path = repository_ctx.os.environ.get("ROC_MORI_PATH", "/tf/mori")
+    mori_path = repository_ctx.os.environ.get("ROC_MORI_PATH", "/data/mori")
     mori_lib_path = repository_ctx.os.environ.get(
         "ROC_MORI_LIB_PATH", mori_path + "/python/mori"
     )
@@ -21,15 +21,15 @@ cc_library(
     includes = ["include"],
 )
 
-filegroup(
-   name = "libmori_shmem_dev",
-   srcs = ["lib/libmori_shmem.so"],
-   visibility = ["//visibility:public"],
-)
+# filegroup(
+#    name = "libmori_shmem_dev",
+#    srcs = ["lib/libmori_shmem.so"],
+#    visibility = ["//visibility:public"],
+# )
 
 cc_import(
     name = "libmori_shmem",
-    static_library = "lib/libmori_shmem.so",
+    shared_library = "lib/libmori_shmem.so",
 )
 
 cc_import(
@@ -40,7 +40,7 @@ cc_import(
 cc_library(
     name = "mori_libs",
     deps = [
-        # ":libmori_shmem",
+        ":libmori_shmem",
         ":libmori_application",
     ],
     linkstatic = True,

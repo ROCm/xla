@@ -43,55 +43,56 @@ class MoriCollectives : public GpuCollectives {
   static MoriCollectives* Default();
   bool IsInitialized() { return initialized_; }
 
+  bool IsImplemented() const final { return true; }
+
+  absl::StatusOr<CliqueId> CreateUniqueCliqueId() const final;
+
   absl::StatusOr<void*> Allocate(uint64_t bytes) final;
 
   absl::Status Deallocate(void* buffer) final;
-
-  absl::StatusOr<CliqueId> CreateUniqueCliqueId() const final {
-    return absl::UnimplementedError("Not implemented.");
-  }
-
-  bool IsImplemented() const final { return true; }
-
-  // bool IsGlobalConfig() const final { return false; }
-
-  // absl::StatusOr<const CliqueIdCallback*> GetCliqueIdCallback(
-  //     const CliqueIdCallback* clique_id_callback, bool is_local) final {
-  //   return absl::UnimplementedError("Not implemented.");
-  // }
 
   absl::StatusOr<std::vector<std::unique_ptr<Communicator>>>
   CreateCommunicators(const CliqueKey& clique_key,
                       const std::optional<CliqueIds>& clique_ids,
                       absl::Span<const DeviceRank> ranks,
-                      const Collectives::Config& config) override {
-    return absl::UnimplementedError("Not implemented.");
+                      const Collectives::Config& config) final {
+    return CreateCommunicatorsWithCancel(clique_key, clique_ids, ranks, config,
+                                         nullptr);
   }
 
-  absl::StatusOr<std::unique_ptr<Communicator>> CreateCommunicator() final;
+  absl::StatusOr<std::vector<std::unique_ptr<Communicator>>>
+  CreateCommunicatorsWithCancel(
+      const CliqueKey& clique_key, const std::optional<CliqueIds>& clique_ids,
+      absl::Span<const DeviceRank> ranks, const Collectives::Config& config,
+      std::shared_ptr<CancellationToken> cancel) final;
 
   absl::StatusOr<std::vector<std::unique_ptr<Communicator>>> SplitCommunicators(
       absl::Span<const Communicator* const> comms, int32_t color,
       absl::Span<const RankId> keys, const Collectives::Config& config,
       absl::Span<const DeviceRank> ranks) final {
-    return absl::UnimplementedError("Not implemented.");
+    return SplitCommunicatorsWithCancel(comms, color, keys, config, ranks,
+                                        nullptr);
+  }
+
+  absl::StatusOr<std::vector<std::unique_ptr<Communicator>>>
+  SplitCommunicatorsWithCancel(absl::Span<const Communicator* const> comms,
+                               int32_t color, absl::Span<const RankId> keys,
+                               const Collectives::Config& config,
+                               absl::Span<const DeviceRank> ranks,
+                               std::shared_ptr<CancellationToken> cancel) final {
+    return absl::UnimplementedError("Not implementedZ.");
+  }
+
+  absl::StatusOr<std::unique_ptr<Communicator>> CreateCommunicator() final {
+    return absl::UnimplementedError("Not implementedW");
   }
 
   absl::StatusOr<CliqueIdCallback> InitializeTopology(
       const Topology& topology) final;
 
  private:
-  absl::Status InitializeOnce();
-
   void Finalize();
-
-  ProcessId process_id_{};
-  size_t num_processes_ = 0;
-  size_t device_count_per_process_ = 0;
-  std::weak_ptr<KeyValueStoreInterface> kv_store_;
   bool initialized_ = false;
-
-  static constexpr char kKvStoreKey[] = "mori_global_init";
 };
 
 }  // namespace xla::gpu

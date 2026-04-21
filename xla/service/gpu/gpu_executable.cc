@@ -408,7 +408,7 @@ absl::Status ExecuteThunksImpl(
       debug_options
           ? debug_options->xla_gpu_enable_highest_priority_async_stream()
           : false;
-
+  bool is_dry_run = run_options->run_options().dry_run();
   se::Stream* main_stream = run_options->stream();
   se::StreamExecutor* executor = main_stream->parent();
   stream_executor::StreamPriority stream_priority =
@@ -446,7 +446,7 @@ absl::Status ExecuteThunksImpl(
   se::Stream* command_buffer_trace_stream = nullptr;
   std::vector<StreamPool::Ptr> async_comms_streams_ownr;
   StreamPool::Ptr borrowed_command_buffer_trace_stream;
-  if (run_options->HasStreamBorrower()) {
+  if (run_options->HasStreamBorrower() && !is_dry_run) {
     ASSIGN_OR_RETURN(
         async_comms_streams_ownr,
         run_options->BorrowStreams(executor->device_ordinal(),
@@ -464,7 +464,7 @@ absl::Status ExecuteThunksImpl(
   // Borrow stream for additional compute streams
   Thunk::ExecutionStreamIdMap additional_execution_streams;
   std::vector<StreamPool::Ptr> additional_streams;
-  if (!execution_stream_ids.empty()) {
+  if (!execution_stream_ids.empty() && !is_dry_run) {
     if (run_options->HasStreamBorrower()) {
       ASSIGN_OR_RETURN(additional_streams,
                        run_options->BorrowStreams(executor->device_ordinal(),
@@ -558,6 +558,13 @@ absl::Status ExecuteThunksImpl(
 
   RETURN_IF_ERROR(multimem_registry.Build());
 
+  if (is_dry_run) 
+  {
+    VLOG(0) << "Dry run mode: skipping thunk initialization "
+        << " device_ordinal=" << run_options->device_ordinal()
+        << " module_name=" << module_name;
+    return absl::OkStatus();
+  }
   {  // Initialize thunks using prepared resources before execution.
     Thunk::InitializeParams initialize_params{
         executor,
@@ -740,14 +747,15 @@ absl::Status BarrierAfterExecutable(
     const ServiceExecutableRunOptions& run_options,
     const DebugOptions* absl_nullable debug_options, se::Stream& stream,
     const size_t num_participants) {
-  if (debug_options != nullptr &&
-      debug_options->xla_gpu_experimental_enable_nvshmem()) {
-    ASSIGN_OR_RETURN(auto* collectives, GetNvshmemCollectivesFromRegistry());
-    ASSIGN_OR_RETURN(std::unique_ptr<Communicator> nvshmem_comm,
-                     collectives->CreateCommunicator());
+  // if (debug_options != nullptr &&
+  //     debug_options->xla_gpu_experimental_enable_nvshmem()) {
+  //   ASSIGN_OR_RETURN(auto* collectives, GetNvshmemCollectivesFromRegistry());
+  //   ASSIGN_OR_RETURN(std::unique_ptr<Communicator> nvshmem_comm,
+  //                    collectives->CreateCommunicator());
 
-    RETURN_IF_ERROR(nvshmem_comm->Barrier(GpuCollectives::On(stream)));
-  } else {
+  //   RETURN_IF_ERROR(nvshmem_comm->Barrier(GpuCollectives::On(stream)));
+  // } else 
+  {
     RETURN_IF_ERROR(stream.BlockHostUntilDone());
 
     VLOG(1)
@@ -1192,7 +1200,7 @@ absl::Status GpuExecutable::ExecuteThunks(
         {{"module_name", module_name_}});
   });
 
-  if (VLOG_IS_ON(5)) {
+  if (VLOG_IS_ON(5) && !run_options->run_options().dry_run()) {
     // Debug code to compare current allocation's address with previous run's
     // address, and report the allocation info if memory addressed changed.
     // Useful for identify in user's model if it is command buffer perf friendly

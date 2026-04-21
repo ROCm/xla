@@ -129,6 +129,10 @@ class RcclCommunicator : public GpuCommunicator {
 
   std::string ToString() const final;
 
+  absl::Status Barrier(const Executor& executor) final {
+    return absl::OkStatus();
+  }
+
   ncclComm_t comm() const { return comm_; }
 
  private:

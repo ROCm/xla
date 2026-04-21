@@ -266,6 +266,9 @@ class ExecutableRunOptions {
       std::vector<std::unique_ptr<CliqueKey>>* clique_keys);
   std::vector<std::unique_ptr<CliqueKey>>* clique_keys() const;
 
+  ExecutableRunOptions& set_dry_run(bool dry_run);
+  bool dry_run() const;
+
  private:
   stream_executor::DeviceAddressAllocator* allocator_ = nullptr;
   int device_ordinal_ = -1;
@@ -287,6 +290,7 @@ class ExecutableRunOptions {
   const gpu::GpuExecutableRunOptions* gpu_executable_run_options_ = nullptr;
   const ffi::ExecutionContext* ffi_execution_context_ = nullptr;
   std::vector<std::unique_ptr<CliqueKey>>* clique_keys_ = nullptr;
+  bool dry_run_ = false;
 };
 
 }  // namespace xla

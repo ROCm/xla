@@ -199,7 +199,7 @@ def InvokeHipcc(argv, log=False):
   # This flag would trigger GPU kernels be generated at compile time, instead
   # of link time. This allows the default host compiler (gcc) be used as the
   # linker for TensorFlow on ROCm platform.
-  hipccopts += ' -fgpu-rdc '
+  hipccopts += ' -fno-gpu-rdc '
   hipccopts += ' -fcuda-flush-denormals-to-zero '
   hipccopts += undefines
   hipccopts += defines
@@ -284,15 +284,9 @@ def main():
     # this).
     cpu_compiler_flags = [flag for flag in sys.argv[1:]
                                if not flag.startswith(('--rocm_log'))]
-    
-    if VERBOSE: print("zzzzzzzzzzzzzzzzzzz " + AMDGPU_TARGETS)
 
     # XXX: SE codes need to be built with gcc, but need this macro defined
     cpu_compiler_flags.append("-D__HIP_PLATFORM_HCC__")
-    cpu_compiler_flags.append("-fgpu-rdc")
-    cpu_compiler_flags.append("--hip-link")
-    cpu_compiler_flags.append("--offload-arch=" + AMDGPU_TARGETS)
-    
     if VERBOSE: print(' '.join([CPU_COMPILER] + cpu_compiler_flags))
     return subprocess.call([CPU_COMPILER] + cpu_compiler_flags)
 

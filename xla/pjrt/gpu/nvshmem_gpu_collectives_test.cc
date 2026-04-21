@@ -243,11 +243,11 @@ ENTRY Xtest {
   ROOT final = u32[] reduce(sub, zero), dimensions={0,1}, to_apply=addu
 })";
   std::ostringstream sprogram;
-  {
-  std::ifstream ifs("input.hlo");
-  if (!ifs) return absl::InternalError("Ops wrong HLO file!");
-    sprogram << ifs.rdbuf();
-  }
+  // {
+  // std::ifstream ifs("input.hlo");
+  // if (!ifs) return absl::InternalError("Ops wrong HLO file!");
+  //   sprogram << ifs.rdbuf();
+  // }
   std::stringstream channels;
   for (uint32_t i = 0; i < num_ranks; i++) {
     channels << '{' << (i == num_ranks-1 ? 0 : i + 1) << ',' << i << '}';

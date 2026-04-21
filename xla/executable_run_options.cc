@@ -193,4 +193,13 @@ std::vector<std::unique_ptr<CliqueKey>>* ExecutableRunOptions::clique_keys()
   return clique_keys_;
 }
 
+ExecutableRunOptions& ExecutableRunOptions::set_dry_run(bool dry_run) {
+  dry_run_ = dry_run;
+  return *this;
+}
+
+bool ExecutableRunOptions::dry_run() const {
+  return dry_run_;
+}
+
 }  // namespace xla
