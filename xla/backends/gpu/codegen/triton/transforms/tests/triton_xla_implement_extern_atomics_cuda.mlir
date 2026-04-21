@@ -17,10 +17,11 @@ module {
   // CHECK-LABEL: llvm.func @test_atomic_write_unmasked
   llvm.func @test_atomic_write_unmasked(%ptr: !llvm.ptr<1>, %value: i32) -> i32 {
     // CHECK-NOT: llvm.call @xla_atomicwrite_release_system
-    // CHECK: [[RESULT:%.*]] = llvm.inline_asm has_side_effects "
+    // CHECK: [[POISON:%.*]] = llvm.mlir.poison : i32
+    // CHECK: llvm.inline_asm has_side_effects "
     // CHECK-SAME: st.global.sys.release.u32 [$0], $1;
-    // CHECK-SAME: ", "l,r" %arg0, %arg1 : (!llvm.ptr<1>, i32) -> i32
-    // CHECK: llvm.return [[RESULT]]
+    // CHECK-SAME: ", "l,r" %arg0, %arg1 : (!llvm.ptr<1>, i32) -> ()
+    // CHECK: llvm.return [[POISON]]
     %result = llvm.call @xla_atomicwrite_release_system(%ptr, %value) : (!llvm.ptr<1>, i32) -> i32
     llvm.return %result : i32
   }
@@ -28,24 +29,27 @@ module {
   // CHECK-LABEL: llvm.func @test_atomic_spin_wait_unmasked
   llvm.func @test_atomic_spin_wait_unmasked(%ptr: !llvm.ptr<1>, %expected: i32) -> i32 {
     // CHECK-NOT: llvm.call @xla_atomicspinwait_acquire_system_lt
-    // CHECK: [[RESULT:%.*]] = llvm.inline_asm has_side_effects "
+    // CHECK: [[POISON:%.*]] = llvm.mlir.poison : i32
+    // CHECK: llvm.inline_asm has_side_effects "
     // CHECK-SAME: .reg .pred %p<1>;
     // CHECK-SAME: .reg .b32 %r<1>;
     // CHECK-SAME: wait:
     // CHECK-SAME: ld.global.sys.acquire.u32 %r0, [$0];
     // CHECK-SAME: setp.lt.u32 %p0, %r0, $1;
     // CHECK-SAME: @%p0 bra wait;
-    // CHECK-SAME: ", "l,r" %arg0, %arg1 : (!llvm.ptr<1>, i32) -> i32
-    // CHECK: llvm.return [[RESULT]]
+    // CHECK-SAME: ", "l,r" %arg0, %arg1 : (!llvm.ptr<1>, i32) -> ()
+    // CHECK: llvm.return [[POISON]]
     %result = llvm.call @xla_atomicspinwait_acquire_system_lt(%ptr, %expected) : (!llvm.ptr<1>, i32) -> i32
     llvm.return %result : i32
   }
   
   // CHECK-LABEL: llvm.func @test_atomic_spin_wait_eq
   llvm.func @test_atomic_spin_wait_eq(%ptr: !llvm.ptr<1>, %expected: i32) -> i32 {
-    // CHECK: [[RESULT:%.*]] = llvm.inline_asm has_side_effects "
+    // CHECK: [[POISON:%.*]] = llvm.mlir.poison : i32
+    // CHECK: llvm.inline_asm has_side_effects "
     // CHECK-SAME: setp.eq.u32 %p0, %r0, $1;
-    // CHECK-SAME: ", "l,r" %arg0, %arg1 : (!llvm.ptr<1>, i32) -> i32
+    // CHECK-SAME: ", "l,r" %arg0, %arg1 : (!llvm.ptr<1>, i32) -> ()
+    // CHECK: llvm.return [[POISON]]
     %result = llvm.call @xla_atomicspinwait_acquire_system_eq(%ptr, %expected) : (!llvm.ptr<1>, i32) -> i32
     llvm.return %result : i32
   }
@@ -101,12 +105,13 @@ module {
   // CHECK-LABEL: llvm.func @test_atomic_write_masked
   llvm.func @test_atomic_write_masked(%ptr: !llvm.ptr<1>, %value: i32, %mask: i32) -> i32 {
     // CHECK-NOT: llvm.call @xla_atomicwrite_release_system
-    // CHECK: [[RESULT:%.*]] = llvm.inline_asm has_side_effects "
+    // CHECK: [[POISON:%.*]] = llvm.mlir.poison : i32
+    // CHECK: llvm.inline_asm has_side_effects "
     // CHECK-SAME: .reg .pred %p<>;
     // CHECK-SAME: setp.ne.u32 %p<>, $2, 0;
     // CHECK-SAME: @%p<> st.global.sys.release.u32 [$0], $1;
-    // CHECK-SAME: ", "l,r,r" %arg0, %arg1, %arg2 : (!llvm.ptr<1>, i32, i32) -> i32
-    // CHECK: llvm.return [[RESULT]]
+    // CHECK-SAME: ", "l,r,r" %arg0, %arg1, %arg2 : (!llvm.ptr<1>, i32, i32) -> ()
+    // CHECK: llvm.return [[POISON]]
     %result = llvm.call @xla_atomicwrite_release_system(%ptr, %value, %mask) : (!llvm.ptr<1>, i32, i32) -> i32
     llvm.return %result : i32
   }
@@ -114,7 +119,8 @@ module {
   // CHECK-LABEL: llvm.func @test_atomic_spin_wait_masked
   llvm.func @test_atomic_spin_wait_masked(%ptr: !llvm.ptr<1>, %expected: i32, %mask: i32) -> i32 {
     // CHECK-NOT: llvm.call @xla_atomicspinwait_acquire_system_lt
-    // CHECK: [[RESULT:%.*]] = llvm.inline_asm has_side_effects "
+    // CHECK: [[POISON:%.*]] = llvm.mlir.poison : i32
+    // CHECK: llvm.inline_asm has_side_effects "
     // CHECK-SAME: .reg .pred %p<2>;
     // CHECK-SAME: .reg .b32 %r<1>;
     // CHECK-SAME: setp.ne.u32 %p0, $2, 0;
@@ -124,17 +130,19 @@ module {
     // CHECK-SAME: setp.lt.u32 %p1, %r0, $1;
     // CHECK-SAME: @%p1 bra wait;
     // CHECK-SAME: done:
-    // CHECK-SAME: ", "l,r,r" %arg0, %arg1, %arg2 : (!llvm.ptr<1>, i32, i32) -> i32
-    // CHECK: llvm.return [[RESULT]]
+    // CHECK-SAME: ", "l,r,r" %arg0, %arg1, %arg2 : (!llvm.ptr<1>, i32, i32) -> ()
+    // CHECK: llvm.return [[POISON]]
     %result = llvm.call @xla_atomicspinwait_acquire_system_lt(%ptr, %expected, %mask) : (!llvm.ptr<1>, i32, i32) -> i32
     llvm.return %result : i32
   }
   
   // CHECK-LABEL: llvm.func @test_atomic_spin_wait_masked_eq
   llvm.func @test_atomic_spin_wait_masked_eq(%ptr: !llvm.ptr<1>, %expected: i32, %mask: i32) -> i32 {
-    // CHECK: [[RESULT:%.*]] = llvm.inline_asm has_side_effects "
+    // CHECK: [[POISON:%.*]] = llvm.mlir.poison : i32
+    // CHECK: llvm.inline_asm has_side_effects "
     // CHECK-SAME: setp.eq.u32 %p1, %r0, $1;
-    // CHECK-SAME: ", "l,r,r"
+    // CHECK-SAME: ", "l,r,r" %arg0, %arg1, %arg2 : (!llvm.ptr<1>, i32, i32) -> ()
+    // CHECK: llvm.return [[POISON]]
     %result = llvm.call @xla_atomicspinwait_acquire_system_eq(%ptr, %expected, %mask) : (!llvm.ptr<1>, i32, i32) -> i32
     llvm.return %result : i32
   }

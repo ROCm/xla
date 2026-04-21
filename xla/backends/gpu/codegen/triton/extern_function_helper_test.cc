@@ -325,10 +325,12 @@ TEST_F(ExternFunctionNameTest, CreateAtomicWriteOpsVerifyPTXAssembly) {
   ASSERT_TRUE(result != nullptr);
   EXPECT_TRUE(result.getType().isInteger(32));
 
-  // Verify inline assembly was created with correct PTX instruction
-  auto* defining_op = result.getDefiningOp();
-  ASSERT_TRUE(defining_op != nullptr);
-  auto asm_op = mlir::dyn_cast<LLVM::InlineAsmOp>(defining_op);
+  // Result is a poison value, find the inline assembly in the block
+  LLVM::InlineAsmOp asm_op;
+  entry_block->walk([&](LLVM::InlineAsmOp op) {
+    asm_op = op;
+    return mlir::WalkResult::interrupt();
+  });
   ASSERT_TRUE(asm_op != nullptr);
   EXPECT_THAT(asm_op.getAsmString().str(), HasSubstr("st.global"));
   EXPECT_THAT(asm_op.getAsmString().str(), HasSubstr("gpu"));
@@ -365,10 +367,12 @@ TEST_F(ExternFunctionNameTest, CreateAtomicSpinWaitOpsVerifyPTXAssembly) {
   ASSERT_TRUE(result != nullptr);
   EXPECT_TRUE(result.getType().isInteger(32));
 
-  // Verify inline assembly was created with correct PTX instructions
-  auto* defining_op = result.getDefiningOp();
-  ASSERT_TRUE(defining_op != nullptr);
-  auto asm_op = mlir::dyn_cast<LLVM::InlineAsmOp>(defining_op);
+  // Result is a poison value, find the inline assembly in the block
+  LLVM::InlineAsmOp asm_op;
+  entry_block->walk([&](LLVM::InlineAsmOp op) {
+    asm_op = op;
+    return mlir::WalkResult::interrupt();
+  });
   ASSERT_TRUE(asm_op != nullptr);
   EXPECT_THAT(asm_op.getAsmString().str(), HasSubstr("ld.global"));
   EXPECT_THAT(asm_op.getAsmString().str(), HasSubstr("gpu"));
@@ -405,10 +409,12 @@ TEST_F(ExternFunctionNameTest, CreateAtomicSpinWaitOpsVerifyComparator) {
   mlir::Value result = CreateLLVMOpsForInstruction(instruction, params);
   ASSERT_TRUE(result != nullptr);
 
-  // Verify inline assembly was created with correct comparator
-  auto* defining_op = result.getDefiningOp();
-  ASSERT_TRUE(defining_op != nullptr);
-  auto asm_op = mlir::dyn_cast<LLVM::InlineAsmOp>(defining_op);
+  // Result is a poison value, find the inline assembly in the block
+  LLVM::InlineAsmOp asm_op;
+  entry_block->walk([&](LLVM::InlineAsmOp op) {
+    asm_op = op;
+    return mlir::WalkResult::interrupt();
+  });
   ASSERT_TRUE(asm_op != nullptr);
   EXPECT_THAT(asm_op.getAsmString().str(), HasSubstr("ld.global"));
   EXPECT_THAT(asm_op.getAsmString().str(), HasSubstr("sys"));
