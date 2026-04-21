@@ -285,20 +285,8 @@ rocm_lib_import(
 
 rocm_lib_import(
     name = "rccl",
-<<<<<<< HEAD
     data = glob(["%{rocm_root}/lib/librccl.so*"]),
     interface_library = "%{rocm_root}/lib/librccl.so",
-=======
-    srcs = glob(["%{rocm_root}/lib/librccl*.so*"]),
-    hdrs = glob(["%{rocm_root}/include/rccl/**"]),
-    include_prefix = "rocm",
-    includes = [
-        "%{rocm_root}/include",
-    ],
-    linkstatic = 1,
-    strip_include_prefix = "%{rocm_root}",
-    visibility = ["//visibility:public"],
->>>>>>> Switch to hermetic llvm
     deps = [
         ":hip_runtime_libs",
         ":rocm_smi_libs",
