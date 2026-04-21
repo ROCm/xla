@@ -13,15 +13,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cmath>
+#include <cstdint>
+
+#include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
 #include <hip/hip_bfloat16.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
-
-#include <cmath>
-#include <cstdint>
 #include <hipcub/hipcub.hpp>  // NOLINT
-
-#include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 
 namespace stream_executor {
