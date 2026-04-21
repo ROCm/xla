@@ -819,24 +819,18 @@ void BlasLt::MatmulPlan::InitializeGroupedGemm(
 
   for (int64_t i = 0; i < cfg_->group_count; i++) {
     epilogue[i].setMode(*hip_epilogue);
-    // Set bias data type if using bias epilogue
+    // Set bias data type and dummy bias pointer for bias epilogues
     if (grouped_gemm_epilogue_ == Epilogue::kBias ||
         grouped_gemm_epilogue_ == Epilogue::kBiasThenReLU ||
         grouped_gemm_epilogue_ == Epilogue::kBiasThenGELU ||
         grouped_gemm_epilogue_ == Epilogue::kBiasThenSILU) {
       epilogue[i].setBiasDataType(AsHipblasDataType(cfg_->type_d));
+      inputs[i].setBias(dummy_bias);
     }
     inputs[i].setA(reinterpret_cast<void*>(~0ULL));
     inputs[i].setB(reinterpret_cast<void*>(~0ULL));
     inputs[i].setC(reinterpret_cast<void*>(~0ULL));
     inputs[i].setD(reinterpret_cast<void*>(~0ULL));
-    // Set dummy bias pointer for bias epilogues
-    if (grouped_gemm_epilogue_ == Epilogue::kBias ||
-        grouped_gemm_epilogue_ == Epilogue::kBiasThenReLU ||
-        grouped_gemm_epilogue_ == Epilogue::kBiasThenGELU ||
-        grouped_gemm_epilogue_ == Epilogue::kBiasThenSILU) {
-      inputs[i].setBias(dummy_bias);
-    }
     inputs[i].setAlpha(static_cast<void*>(&salpha));
     inputs[i].setBeta(static_cast<void*>(&sbeta));
   }
@@ -859,13 +853,12 @@ void BlasLt::MatmulPlan::InitializeGroupedGemm(
   }
 
   // Get default UserArguments from hipBLASLt and save required parameters
-  hipblaslt_ext::UserArguments* default_ua =
-      new hipblaslt_ext::UserArguments[cfg_->group_count];
-  grouped_gemm_->getDefaultValueForDeviceUserArguments((void*)default_ua);
+  auto default_ua =
+      std::make_unique<hipblaslt_ext::UserArguments[]>(cfg_->group_count);
+  grouped_gemm_->getDefaultValueForDeviceUserArguments(
+      static_cast<void*>(default_ua.get()));
   activation_type_ = default_ua[0].activationType;
   bias_type_ = default_ua[0].biasType;
-
-  delete[] default_ua;
 }
 
 absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetGroupedMatmulPlan(
@@ -1006,7 +999,7 @@ absl::Status BlasLt::MatmulPlan::ExecuteGroupedMatmul(
       hip_stream, d_userArgs, a, b, args.c, args.d, args.bias, args.group_sizes,
       group_size_bytewidth, log2_byte_width_elem_a, log2_byte_width_elem_b,
       log2_byte_width_elem_c, log2_byte_width_elem_d, cfg_->stride_ragged_dim,
-      cfg_->stride_group_dim, cfg_->output_stride_ragged_dim,
+      cfg_->stride_group_dim, cfg_->c_stride_ragged_dim,
       cfg_->output_stride_ragged_dim, cfg_->must_swap_operands, cfg_->m,
       cfg_->n, cfg_->k, cfg_->batch_count, strideA1, strideA2, strideB1,
       strideB2, strideC1, strideC2, strideD1, strideD2, cfg_->ragged_mode,

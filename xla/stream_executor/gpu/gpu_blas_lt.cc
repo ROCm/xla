@@ -449,6 +449,7 @@ absl::StatusOr<GroupedGemmConfig> GroupedGemmConfig::FromProto(
                            typeD,
                            proto.stride_ragged_dim(),
                            proto.stride_group_dim(),
+                           proto.c_stride_ragged_dim(),
                            proto.output_stride_ragged_dim(),
                            proto.precision_algorithm(),
                            proto.compute_precision(),
@@ -494,6 +495,7 @@ xla::GroupedGemmConfigProto GroupedGemmConfig::ToProto() const {
 
   proto.set_stride_ragged_dim(stride_ragged_dim);
   proto.set_stride_group_dim(stride_group_dim);
+  proto.set_c_stride_ragged_dim(c_stride_ragged_dim);
   proto.set_output_stride_ragged_dim(output_stride_ragged_dim);
   proto.set_precision_algorithm(precision_algorithm);
   proto.set_compute_precision(compute_precision);

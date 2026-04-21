@@ -177,9 +177,9 @@ struct GroupedGemmConfig : public se::gpu::GroupedGemmConfig {
       int64_t lhs_ragged_dimension, const Shape& rhs_shape,
       absl::Span<const int64_t> rhs_batch_dims,
       absl::Span<const int64_t> rhs_contracting_dims,
-      absl::Span<const int64_t> rhs_group_dimensions, const Shape& output_shape,
-      double alpha_real, double alpha_imag, double beta,
-      PrecisionConfig::Algorithm precision_algorithm,
+      absl::Span<const int64_t> rhs_group_dimensions, const Shape& c_shape,
+      const Shape& output_shape, double alpha_real, double alpha_imag,
+      double beta, PrecisionConfig::Algorithm precision_algorithm,
       std::optional<int64_t> algorithm, int64_t compute_precision,
       uint64_t group_count, const se::GpuComputeCapability& gpu_version);
 

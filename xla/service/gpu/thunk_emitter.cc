@@ -688,7 +688,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtGroupedMatmulThunk(
   } else {
     TF_ASSIGN_OR_RETURN(c, GetShapedSliceForHlo(instr, output_index));
   }
-  ASSIGN_OR_RETURN(ShapedSlice d, GetShapedSliceForHlo(instr, output_index));
+  TF_ASSIGN_OR_RETURN(ShapedSlice d, GetShapedSliceForHlo(instr, output_index));
 
   // Handle vector bias if present
   std::optional<ShapedSlice> bias;

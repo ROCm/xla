@@ -172,6 +172,7 @@ struct GroupedGemmConfig {
   blas::DataType type_a, type_b, type_c, type_d;
   int64_t stride_ragged_dim;
   int64_t stride_group_dim;
+  int64_t c_stride_ragged_dim;
   int64_t output_stride_ragged_dim;
   // PrecisionConfig-level algorithm
   xla::PrecisionConfig::Algorithm precision_algorithm;

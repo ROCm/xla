@@ -501,12 +501,6 @@ auto GroupedMatmul(HloInstruction** instr) {
   return m::CustomCall(instr, {kCublasLtGroupedMatmulCallTarget});
 }
 
-auto AnyMatmul(HloInstruction** instr) {
-  return m::CustomCall(
-      instr, {kGemmCallTarget, kCublasLtMatmulCallTarget,
-              kCublasLtMatmulF8CallTarget, kCublasLtGroupedMatmulCallTarget});
-}
-
 auto BcastConstScalar(HloInstruction** instr, double value) {
   return m::Broadcast(instr, m::ConstantScalar(value));
 }
