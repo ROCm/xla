@@ -714,7 +714,7 @@ Build(
     },
     repo_env={
         "TF_ROCM_AMDGPU_TARGETS": "gfx90a",
-        "TF_ROCM_RBE_DOCKER_IMAGE": "rocm/"
+        "TF_ROCM_RBE_DOCKER_IMAGE": "rocm/" # rocm/tensorflow-build:latest-jammy-pythonall-rocm7.2.1-ci_official
            "tensorflow-build@sha256:"
            "66eb4c1e39db76fae2eb0a1029490acbe7bfce0e00d6ab435e170f743921f4c4"
     },
