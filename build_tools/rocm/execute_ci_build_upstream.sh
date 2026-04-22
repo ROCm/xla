@@ -69,6 +69,6 @@ done
     ) \
     -- \
     //xla/... \
-    -//xla/backends/gpu/tests:sorting.hlo.test_mi200 \ # lit test can't filter with gtest filters
+    -//xla/backends/gpu/tests:sorting.hlo.test_mi200 \
     -//xla/pjrt/gpu:se_gpu_pjrt_client_test # TODO: times out so temporarily skip the whole target
 
