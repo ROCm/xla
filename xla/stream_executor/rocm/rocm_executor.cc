@@ -15,11 +15,13 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/rocm_executor.h"
 
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -31,6 +33,7 @@ limitations under the License.
 
 #include "absl/base/casts.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/hash/hash.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/numeric/int128.h"
@@ -669,6 +672,25 @@ absl::StatusOr<std::unique_ptr<Kernel>> RocmExecutor::LoadKernel(
         hipFunction_t function,
         GetModuleFunction(&rocm_context_, module, kernel_name.c_str()));
     rocm_kernel->set_gpu_function(function);
+    // ---- DEBUG INSTRUMENTATION (env-gated XLA_HSACO_TRACE=1) ----
+    // Logs every cubin-in-memory kernel load with: pid, tid, kernel name,
+    // HSACO byte size, content hash (absl::HashOf), HSACO ptr, hipModule_t
+    // and hipFunction_t. Used to forensically chase wrong-bytes-loaded
+    // failures in CI by correlating loaded content hashes across a worker.
+    {
+      static const char* trace_env = std::getenv("XLA_HSACO_TRACE");
+      static const bool trace_on = trace_env && trace_env[0] == '1';
+      if (trace_on) {
+        long tid = syscall(SYS_gettid);
+        size_t hash = absl::HashOf(absl::string_view(hsaco, cubin.size()));
+        LOG(WARNING) << "[XLA_HSACO_TRACE] pid=" << getpid() << " tid=" << tid
+                     << " name=" << kernel_name << " size=" << cubin.size()
+                     << " hash=0x" << std::hex << hash << std::dec
+                     << " hsaco_ptr=" << static_cast<const void*>(hsaco)
+                     << " module=" << module << " function=" << function;
+      }
+    }
+    // ---- END DEBUG INSTRUMENTATION ----
   } else if (spec.has_in_process_symbol()) {
     void* symbol = spec.in_process_symbol()->symbol;
 
