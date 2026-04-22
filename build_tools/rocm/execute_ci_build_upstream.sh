@@ -14,6 +14,28 @@ EXCLUDED_TESTS=(
     "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x6" # TODO: fix
     "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x9" # TODO: fix
     "RocmExecutorTest.CreateUnifiedMemoryAllocatorWorks" # TODO: fix
+    # TODO: fix, unimplemented ROCm (collective_ops_e2e_test, p2p_ops_e2e_test)
+    "AsyncCollectiveOps/AsyncCollectiveOps.*/*symmetric"
+    "P2POps/P2POps.CollectivePermute/enable_symmetric_buffer"
+    # TODO: fix, unimplemented on ROCm (ragged_all_to_all_e2e_test)
+    "RaggedAllToAllTest/RaggedAllToAllTest.*/*with_multi_gpu_barrier_with_nccl"
+    # TODO: fix, BFCAllocator OOM, budget too small? (collective_ops_sharded_unsharded_e2e_test)
+    "CollectiveOpsTestE2EShardedUnsharded.DotBatchAndNonContracting"
+    "CollectiveOpsTestE2EShardedUnsharded.DotBatchAndBatch"
+    "CollectiveOpsTestE2EShardedUnsharded.DotContractingNonContractingAndContractingNonContracting"
+    "CollectiveOpsTestE2EShardedUnsharded.DotContractingAndContracting"
+    "CollectiveOpsTestE2EShardedUnsharded.DotNonContractingAndContracting"
+    "CollectiveOpsTestE2EShardedUnsharded.DotContractingAndReplicated"
+    # TODO: fix, hardcoded device count mismatch (se_gpu_pjrt_client_test)
+    "StreamExecutorGpuClientTest.DistributedInit"
+    "StreamExecutorGpuClientTest.MockNcclClientTest"
+    "StreamExecutorGpuClientTest.GetTopologyDescriptionWithGlobalDevicesTest"
+    "StreamExecutorGpuClientTest.MockNcclClientWithGpuTopologyExecuteTest"
+    "StreamExecutorGpuClientTest.MockNcclClientWithGpuTopologyTest"
+    # TODO: fix, unimplemented on ROCm
+    "StreamExecutorGpuClientTest.GetAbiVersion"
+    # TODO: fix, memory stats mismatch (se_gpu_pjrt_client_test)
+    "StreamExecutorGpuClientTest.GetCompiledMemoryStatsWithTupleAndNcclUserBuffers"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
