@@ -15,6 +15,7 @@ limitations under the License.
 #ifndef XLA_BACKENDS_GPU_CODEGEN_EMITTERS_REDUCTION_H_
 #define XLA_BACKENDS_GPU_CODEGEN_EMITTERS_REDUCTION_H_
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -142,7 +143,10 @@ class ReductionFusion : public EmitterBase {
   absl::InlinedVector<int64_t, 4> tile_sizes_per_thread_;
 
   absl::InlinedVector<int64_t, 4> num_threads_;
+  // virtual grid dimension: used by LLVM internally
   absl::InlinedVector<int64_t, 4> num_blocks_;
+  // real block dimensions used to launch a fusion kernel
+  std::array<uint64_t, 2> gpu_blocks_ = {0, 0};
   int64_t vector_size_ = 1;
 
   ReductionDimensions reduction_dimensions_;
