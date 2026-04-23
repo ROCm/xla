@@ -51,6 +51,7 @@ done
 
 "${SCRIPT_DIR}/run_xla_ci_build.sh" \
     "$@" \
+    --config=rocm_rbe_dynamic \
     --build_tag_filters="$TAG_FILTERS" \
     --test_tag_filters="$TAG_FILTERS" \
     --execution_log_compact_file=execution_log.binpb.zst \
