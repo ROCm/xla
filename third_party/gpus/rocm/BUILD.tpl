@@ -1,8 +1,7 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
-load("@local_config_rocm//rocm:build_defs.bzl", "rocm_lib_import")
 load("@config_rocm_hipcc//rocm:build_defs.bzl", "hipcc_config")
-load("@local_config_rocm//rocm:build_defs.bzl", "rocm_version_number", "select_threshold")
+load("@local_config_rocm//rocm:build_defs.bzl", "rocm_lib_import", "rocm_version_number")
 
 licenses(["restricted"])  # MPL2, portions GPL v3, LGPL v3, BSD-like
 
