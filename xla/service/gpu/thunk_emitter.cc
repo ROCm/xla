@@ -589,8 +589,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitGemmThunk(
 
   TF_ASSIGN_OR_RETURN(
       GemmConfig config,
-      GemmConfig::For(static_cast<const HloInstruction*>(instr),
-                      ir_emitter_context_->gpu_compute_capability()));
+      GemmConfig::For(instr, ir_emitter_context_->gpu_compute_capability()));
   auto thunk = std::make_unique<GemmThunk>(
       Thunk::ThunkInfo::WithProfileAnnotation(
           instr, ir_emitter_context_->GetNextThunkId()),
@@ -656,8 +655,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtMatmulThunk(
 
   TF_ASSIGN_OR_RETURN(
       auto gemm_config,
-      GemmConfig::For(static_cast<const HloInstruction*>(instr),
-                      ir_emitter_context_->gpu_compute_capability()));
+      GemmConfig::For(instr, ir_emitter_context_->gpu_compute_capability()));
 
   // Use the first algorithm by default (i.e. fastest according to
   // heuristics).
@@ -743,8 +741,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtMatmulThunkF8(
 
   TF_ASSIGN_OR_RETURN(
       auto gemm_config,
-      GemmConfig::For(static_cast<const HloInstruction*>(instr),
-                      ir_emitter_context_->gpu_compute_capability()));
+      GemmConfig::For(instr, ir_emitter_context_->gpu_compute_capability()));
 
   // Use the first algorithm by default (i.e. fastest according to
   // heuristics).
@@ -775,7 +772,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtMatmulThunkF8(
   return GetThunkSequence(std::move(thunk));
 }
 
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtMatmulThunkMX(
+absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtMatmulThunkMx(
     const HloCustomCallInstruction* instr) {
   TF_RET_CHECK(instr->operand_count() == 4);
   TF_ASSIGN_OR_RETURN(const auto gpu_config,
@@ -794,27 +791,24 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtMatmulThunkMX(
                       GetAllocationSliceForHlo(instr->operand(2)));
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice b_scale,
                       GetAllocationSliceForHlo(instr->operand(3)));
-  BufferAllocation::Slice c;
-  TF_ASSIGN_OR_RETURN(c, GetAllocationSliceForHlo(instr, output_index));
-  BufferAllocation::Slice c_scale, d_scale, bias;  // not used
 
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice c,
+                      GetAllocationSliceForHlo(instr, output_index));
   TF_ASSIGN_OR_RETURN(BufferAllocation::Slice d,
                       GetAllocationSliceForHlo(instr, output_index));
-  BufferAllocation::Slice d_amax, aux;  // not used
 
   TF_ASSIGN_OR_RETURN(
       auto gemm_config,
-      GemmConfig::For(static_cast<const HloInstruction*>(instr),
-                      ir_emitter_context_->gpu_compute_capability()));
+      GemmConfig::For(instr, ir_emitter_context_->gpu_compute_capability()));
 
-  // Use the first algorithm by default (i.e. fastest according to heuristics).
   int64_t algorithm =
       config.algorithm_case() == GemmBackendConfig::kSelectedAlgorithm
           ? config.selected_algorithm()
           : 0;
 
+  BufferAllocation::Slice bias, aux, c_scale, d_scale, d_amax;
   std::optional<BufferAllocation::Slice> workspace_buffer;
-  if (instr->shape().tuple_shapes().size() - config.damax_output() == 2) {
+  if (instr->shape().tuple_shapes().size() == 2) {
     TF_ASSIGN_OR_RETURN(workspace_buffer,
                         GetAllocationSliceForHlo(
                             instr, {instr->shape().tuple_shapes_size() - 1}));
@@ -1530,15 +1524,6 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitAsyncCustomCallStart(
     cublas_lt_matmul_thunks.back()->set_execution_stream_id(
         execution_stream_id);
     AppendThunkSequence(thunks, cublas_lt_matmul_thunks);
-    return thunks;
-  }
-  if (IsCublasLtMatmulMX(*wrapped)) {
-    TF_ASSIGN_OR_RETURN(auto cublas_lt_matmulMX_thunks,
-                        EmitCublasLtMatmulThunkMX(custom_call));
-    CHECK_EQ(cublas_lt_matmulMX_thunks.size(), 1);
-    cublas_lt_matmulMX_thunks.back()->set_execution_stream_id(
-        execution_stream_id);
-    AppendThunkSequence(thunks, cublas_lt_matmulMX_thunks);
     return thunks;
   }
   return Internal("Unsupported async custom call instruction: %s",
@@ -2778,8 +2763,8 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitHloInstruction(
       if (IsCublasLtMatmulF8(*hlo)) {
         return EmitCublasLtMatmulThunkF8(custom_call);
       }
-      if (IsCublasLtMatmulMX(*hlo)) {
-        return EmitCublasLtMatmulThunkMX(custom_call);
+      if (IsCublasLtMatmulMx(*hlo)) {
+        return EmitCublasLtMatmulThunkMx(custom_call);
       }
       if (IsCudnnConvolutionReorder(*hlo)) {
         return EmitConvolutionReorderThunk(custom_call);

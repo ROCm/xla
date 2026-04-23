@@ -194,7 +194,7 @@ class RocmComputeCapability {
 
   bool has_nanoo_fp8_support() const { return gfx9_mi300(); }
 
-  bool has_hipblaslt_mx_support() const { return gfx9_mi350(); }
+  bool has_mx_type_support() const { return gfx9_mi350(); }
 
   int threads_per_warp() const { return gfx9_mi100_or_later() ? 64 : 32; }
 

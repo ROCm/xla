@@ -27,50 +27,13 @@ limitations under the License.
 #include "xla/hlo/testlib/filecheck.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/hlo/testlib/test_helpers.h"
-#include "xla/stream_executor/platform.h"
-#include "xla/stream_executor/platform_manager.h"
-#include "xla/stream_executor/stream_executor.h"
+#include "xla/stream_executor/dnn.h"
 #include "xla/tsl/platform/statusor.h"
 
 namespace xla::gpu {
 namespace {
 
-class BlockScalingRewriterTest : public HloHardwareIndependentTestBase {
- protected:
-  // Get a stream executor to access device description.
-  // This is needed because BlockScalingRewriter requires DeviceDescription
-  // for platform-specific (CUDA/ROCm) behavior.
-  static se::StreamExecutor* GetStreamExecutor() {
-    // Try CUDA first, then ROCm
-    auto cuda_platform = se::PlatformManager::PlatformWithName("CUDA");
-    if (cuda_platform.ok()) {
-      auto executor = (*cuda_platform)->ExecutorForDevice(0);
-      if (executor.ok()) {
-        return *executor;
-      }
-    }
-    auto rocm_platform = se::PlatformManager::PlatformWithName("ROCM");
-    if (rocm_platform.ok()) {
-      auto executor = (*rocm_platform)->ExecutorForDevice(0);
-      if (executor.ok()) {
-        return *executor;
-      }
-    }
-    return nullptr;
-  }
-
-  const se::DeviceDescription& device_desc() const {
-    return GetStreamExecutor()->GetDeviceDescription();
-  }
-
-  const se::GpuComputeCapability& GpuCapability() const {
-    return device_desc().gpu_compute_capability();
-  }
-
-  bool IsCuda() const { return GpuCapability().IsCuda(); }
-
-  bool IsRocm() const { return GpuCapability().IsRocm(); }
-};
+using BlockScalingRewriterTest = HloHardwareIndependentTestBase;
 
 TEST_F(BlockScalingRewriterTest, ExpandQuantizeCustomCall) {
   constexpr absl::string_view hlo_string = R"(
@@ -82,7 +45,7 @@ ENTRY main {
       custom_call_target="__op$quantize"
 })";
 
-  BlockScalingRewriter pass(device_desc(), se::dnn::VersionInfo{}, /*allow_hipblaslt*/ false);
+  BlockScalingRewriter pass(se::dnn::VersionInfo{});
   RunAndFilecheckHloRewrite(hlo_string, std::move(pass), R"(
   CHECK: [[input:%.+]] = f32[10,256]{1,0} parameter(0)
   CHECK: [[blocks:%.+]] = f32[10,8,32]{2,1,0} reshape([[input]])
@@ -112,7 +75,7 @@ ENTRY main {
       custom_call_target="__op$dequantize"
 })";
 
-  BlockScalingRewriter pass(device_desc(), se::dnn::VersionInfo{}, /*allow_hipblaslt*/ false);
+  BlockScalingRewriter pass(se::dnn::VersionInfo{});
   RunAndFilecheckHloRewrite(hlo_string, std::move(pass), R"(
   CHECK: [[input:%.+]] = f8e4m3fn[10,256]{1,0} parameter(0)
   CHECK: [[input_cvt:%.+]] = f32[10,256]{1,0} convert([[input]])
@@ -137,7 +100,7 @@ ENTRY main {
       custom_call_target="__op$block_scaled_dot"
 })";
 
-  BlockScalingRewriter pass(device_desc(), se::dnn::VersionInfo{}, /*allow_hipblaslt*/ false);
+  BlockScalingRewriter pass(se::dnn::VersionInfo{});
   RunAndFilecheckHloRewrite(hlo_string, std::move(pass), R"(
   CHECK: [[lhs_quant:%.+]] = f8e4m3fn[4,16,256]{2,1,0} parameter(0)
   CHECK: [[lhs_quant_cvt:%.+]] = f32[4,16,256]{2,1,0} convert([[lhs_quant]])
@@ -160,9 +123,6 @@ ENTRY main {
 }
 
 TEST_F(BlockScalingRewriterTest, ExpandBlockScaledDotGlobalScale) {
-  // ROCm currently doesn't support global scale
-  if (IsRocm()) { GTEST_SKIP(); }
-
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
@@ -176,7 +136,7 @@ ENTRY main {
       custom_call_target="__op$block_scaled_dot"
 })";
 
-  BlockScalingRewriter pass(device_desc(), se::dnn::VersionInfo{}, /*allow_hipblaslt*/ false);
+  BlockScalingRewriter pass(se::dnn::VersionInfo{});
   RunAndFilecheckHloRewrite(hlo_string, std::move(pass), R"(
   CHECK: [[lhs_quant:%.+]] = f8e4m3fn[4,16,256]{2,1,0} parameter(0)
   CHECK: [[lhs_quant_cvt:%.+]] = f32[4,16,256]{2,1,0} convert([[lhs_quant]])
@@ -214,7 +174,7 @@ ENTRY main {
       custom_call_target="__op$block_scaled_dot"
 })";
 
-  BlockScalingRewriter pass(device_desc(), se::dnn::VersionInfo{}, /*allow_hipblaslt*/ false);
+  BlockScalingRewriter pass(se::dnn::VersionInfo{});
   RunAndFilecheckHloRewrite(hlo_string, std::move(pass), R"(
   CHECK: [[lhs_quant:%.+]] = f8e4m3fn[4,16,256]{2,0,1} parameter(0)
   CHECK: [[lhs_quant_cvt:%.+]] = f32[4,16,256]{2,0,1} convert([[lhs_quant]])
@@ -248,7 +208,7 @@ ENTRY main {
       custom_call_target="__op$block_scaled_dot"
 })";
 
-  BlockScalingRewriter pass(device_desc(), se::dnn::VersionInfo{}, /*allow_hipblaslt*/ false);
+  BlockScalingRewriter pass(se::dnn::VersionInfo{});
   RunAndFilecheckHloRewrite(hlo_string, std::move(pass), R"(
   CHECK: [[lhs_quant:%.+]] = f8e4m3fn[16,256]{1,0} parameter(0)
   CHECK: [[lhs_quant_cvt:%.+]] = f16[16,256]{1,0} convert([[lhs_quant]])
@@ -264,9 +224,6 @@ ENTRY main {
 }
 
 TEST_F(BlockScalingRewriterTest, ExpandBlockScaledDotExplicitBlockSize) {
-  // ROCm currently doesn't support padding
-  if (IsRocm()) { GTEST_SKIP(); }
-
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
@@ -280,7 +237,7 @@ ENTRY main {
       backend_config={"block_scaled_dot_backend_config":{block_size:32}}
 })";
 
-  BlockScalingRewriter pass(device_desc(), se::dnn::VersionInfo{}, /*allow_hipblaslt*/ false);
+  BlockScalingRewriter pass(se::dnn::VersionInfo{});
   RunAndFilecheckHloRewrite(hlo_string, std::move(pass), R"(
   CHECK: [[lhs_quant:%.+]] = f8e4m3fn[4,16,224]{2,1,0} parameter(0)
   CHECK: [[lhs_quant_cvt:%.+]] = f32[4,16,224]{2,1,0} convert([[lhs_quant]])
@@ -304,13 +261,7 @@ ENTRY main {
 })");
 }
 
-class BlockScalingRewriterCudnnTest : public BlockScalingRewriterTest {
- protected:
-  void SetUp() override { if (!IsCuda()) { GTEST_SKIP(); } };
-};
-
-
-TEST_F(BlockScalingRewriterCudnnTest, CudnnScaledDotSimple) {
+TEST_F(BlockScalingRewriterTest, CudnnScaledDotSimple) {
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
@@ -323,7 +274,7 @@ ENTRY main {
       custom_call_target="__op$block_scaled_dot"
 })";
 
-  BlockScalingRewriter pass(device_desc(), kCudnnSupportsBlockScaledDot, /*allow_hipblaslt*/ false);
+  BlockScalingRewriter pass(kCudnnSupportsBlockScaledDot);
   RunAndFilecheckHloRewrite(hlo_string, std::move(pass), R"(
   CHECK: [[lhs:%.+]] = f8e4m3fn[4,128,128]{2,1,0} parameter(0)
   CHECK: [[rhs:%.+]] = f8e4m3fn[4,128,128]{2,1,0} parameter(1)
@@ -341,7 +292,7 @@ ENTRY main {
 })");
 }
 
-TEST_F(BlockScalingRewriterCudnnTest, CudnnScaledDotTransforms) {
+TEST_F(BlockScalingRewriterTest, CudnnScaledDotTransforms) {
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
@@ -354,7 +305,7 @@ ENTRY main {
       custom_call_target="__op$block_scaled_dot"
 })";
 
-  BlockScalingRewriter pass(device_desc(), kCudnnSupportsBlockScaledDot, /*allow_hipblaslt*/ false);
+  BlockScalingRewriter pass(kCudnnSupportsBlockScaledDot);
   RunAndFilecheckHloRewrite(hlo_string, std::move(pass), R"(
   CHECK: [[lhs:%.+]] = f8e4m3fn[128,96]{1,0} parameter(0)
   CHECK: [[rhs:%.+]] = f8e4m3fn[120,96]{1,0} parameter(1)
@@ -375,7 +326,7 @@ ENTRY main {
 })");
 }
 
-TEST_F(BlockScalingRewriterCudnnTest, CudnnScaledDotPaddedScales) {
+TEST_F(BlockScalingRewriterTest, CudnnScaledDotPaddedScales) {
   constexpr absl::string_view hlo_string = R"(
 HloModule test
 
@@ -389,7 +340,7 @@ ENTRY main {
       backend_config={"block_scaled_dot_backend_config":{block_size:32}}
 })";
 
-  BlockScalingRewriter pass(device_desc(), kCudnnSupportsBlockScaledDot, /*allow_hipblaslt*/ false);
+  BlockScalingRewriter pass(kCudnnSupportsBlockScaledDot);
   RunAndFilecheckHloRewrite(hlo_string, std::move(pass), R"(
   CHECK: [[lhs:%.+]] = f8e4m3fn[4,120,96]{2,1,0} parameter(0)
   CHECK: [[lhs_pad:%.+]] = f8e4m3fn[4,128,96]{2,1,0} pad([[lhs]], {{.+}}), padding=0_0x0_8x0_0
