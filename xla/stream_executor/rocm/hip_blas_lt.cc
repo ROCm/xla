@@ -852,6 +852,18 @@ void BlasLt::MatmulPlan::InitializeGroupedGemm(
     LOG(FATAL) << "Failed to set problem for grouped GEMM: " << status;
   }
 
+  // UserArgument is expecting specific code for activation and bias types.
+  // These are defined by the hipBLASLt library during the problem
+  // initialization. However, as the current implementation explicity sets all
+  // UserArgument parameters in the "GroupGemmUpdateArgs" kernels to avoid an
+  // extra copy from host to device memory, we need a to retrieve these codes
+  // and pass them to the "GroupGemmUpdateArgs" kernel to be set in the final
+  // UserArgument that will be used to perform the group-gemm operation. Note
+  // that we opt for this method because these codes does not appear to
+  // correspond to any public enum exposed by hipBLASLt. Thus, retrieving these
+  // code from the library defined UserArgument makes it more robust to
+  // different versions of hipBLASLt.
+
   // Get default UserArguments from hipBLASLt and save required parameters
   auto default_ua =
       std::make_unique<hipblaslt_ext::UserArguments[]>(cfg_->group_count);
