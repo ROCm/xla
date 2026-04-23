@@ -438,10 +438,16 @@ absl::StatusOr<GpuTopology> InferGpuTopology(
     num_partitions = hlo_config.num_partitions();
     // If the caller didn't pass this in the GPU Topology assume single host.
     num_hosts_per_partition = 1;
-    // This looks wrong, but it's the current behavior, so keep it for now.
-    // TODO: b/491510579 - Check if we can do something better in this case.
-    ASSIGN_OR_RETURN(num_devices_per_host,
-                     GetNumDevicesFromPlatform(platform_id));
+    if (!debug_opts.xla_gpu_target_config_filename().empty()) {
+      // AOT compilation against a target spec file: don't touch the platform
+      // (which would call hipInit/cuInit and require real hardware). Assume
+      // single device, matching the single-host default above.
+      num_devices_per_host = 1;
+    } else {
+      // TODO: b/491510579 - Check if we can do something better in this case.
+      ASSIGN_OR_RETURN(num_devices_per_host,
+                       GetNumDevicesFromPlatform(platform_id));
+    }
   }
 
   if (!gpu_target_config.has_value() &&

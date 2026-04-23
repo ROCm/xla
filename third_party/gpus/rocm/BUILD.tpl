@@ -186,6 +186,7 @@ cc_library(
             "%{rocm_root}/lib/libamd_comgr_loader.so*",
             "%{rocm_root}/lib/libamd_comgr.so*",
             "%{rocm_root}/lib/llvm/lib/libLLVM.so*",
+            "%{rocm_root}/lib/llvm/lib/libclang-cpp.so*",
         ],
     ),
     deps = [
@@ -398,6 +399,7 @@ rocm_lib_import(
         "%{rocm_root}/lib/hipblaslt/**",
         "%{rocm_root}/lib/libhipblaslt.so*",
         "%{rocm_root}/lib/librocroller.so*",
+        "%{rocm_root}/lib/librocm_kpack.so*",
     ]),
     interface_library = "%{rocm_root}/lib/libhipblaslt.so",
     deps = [
