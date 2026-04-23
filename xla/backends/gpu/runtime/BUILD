@@ -387,6 +387,7 @@ cc_library(
         ":command_executor",
         ":command_state",
         ":conditional_thunk",
+        ":convolution_thunk",
         ":cudnn_thunk",
         ":custom_call_thunk",
         ":custom_kernel_thunk",
