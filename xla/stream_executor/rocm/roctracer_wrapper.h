@@ -39,42 +39,10 @@ limitations under the License.
 #include "rocm/include/roctracer/roctracer.h"
 #include "rocm/include/roctracer/roctracer_hip.h"
 
-#include "tsl/platform/dso_loader.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/platform.h"
-
 namespace stream_executor {
 namespace wrap {
 
-#ifdef PLATFORM_GOOGLE
-
-#define ROCTRACER_API_WRAPPER(API_NAME)                            \
-  template <typename... Args>                                      \
-  auto API_NAME(Args... args) -> decltype((::API_NAME)(args...)) { \
-    return (::API_NAME)(args...);                                  \
-  }
-
-#else
-
-#define ROCTRACER_API_WRAPPER(API_NAME)                                    \
-  template <typename... Args>                                              \
-  auto API_NAME(Args... args) -> decltype(::API_NAME(args...)) {           \
-    using FuncPtrT = std::add_pointer<decltype(::API_NAME)>::type;         \
-    static FuncPtrT loaded = []() -> FuncPtrT {                            \
-      static const char* kName = #API_NAME;                                \
-      void* f;                                                             \
-      auto s = tsl::Env::Default()->GetSymbolFromLibrary(                  \
-          tsl::internal::CachedDsoLoader::GetRoctracerDsoHandle().value(), \
-          kName, &f);                                                      \
-      CHECK(s.ok()) << "could not find " << kName                          \
-                    << " in roctracer DSO; dlerror: " << s.message();      \
-      return reinterpret_cast<FuncPtrT>(f);                                \
-    }();                                                                   \
-    return loaded(args...);                                                \
-  }
-
-#endif  // PLATFORM_GOOGLE
-
+#define ROCTRACER_API_WRAPPER(API_NAME) using ::API_NAME;
 
 #if TF_ROCM_VERSION >= 50300
 #define FOREACH_ROCTRACER_API(DO_FUNC)           \

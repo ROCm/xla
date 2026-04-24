@@ -330,7 +330,7 @@ def lit_test(
         deps = if_cuda_is_configured([
             "//xla/stream_executor/cuda:all_runtime",
         ]) + if_rocm_is_configured([
-            "@local_config_rocm//rocm:rocm_smi_import",
+            "//xla/stream_executor/rocm:all_runtime",
         ]),
         visibility = ["//visibility:private"],
         **kwargs

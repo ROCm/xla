@@ -17,11 +17,16 @@ limitations under the License.
 #define XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_FACADE_H_
 
 // Backend: 3=v3 (rocprofiler-sdk), 1=v1 (roctracer). Default to v3.
+#if !defined(XLA_GPU_ROCM_TRACER_BACKEND_V3)
 #define XLA_GPU_ROCM_TRACER_BACKEND_V3 3
+#endif
+
+#if !defined(XLA_GPU_ROCM_TRACER_BACKEND_V1)
 #define XLA_GPU_ROCM_TRACER_BACKEND_V1 1
+#endif
 
 #ifndef XLA_GPU_ROCM_TRACER_BACKEND
-#define XLA_GPU_ROCM_TRACER_BACKEND XLA_GPU_ROCM_TRACER_BACKEND_V3
+#error "XLA_GPU_ROCM_TRACER_BACKEND not defined"
 #endif
 
 #if XLA_GPU_ROCM_TRACER_BACKEND == 3
