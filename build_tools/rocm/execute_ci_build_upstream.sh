@@ -68,6 +68,7 @@ done
         echo "${EXCLUDED_TESTS[*]}"
     ) \
     --cache_test_results=yes \
+    --keep_going \
     -- \
     //xla/... \
     -//xla/backends/gpu/tests:sorting.hlo.test_mi200 \
