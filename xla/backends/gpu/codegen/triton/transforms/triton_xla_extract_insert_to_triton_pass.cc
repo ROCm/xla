@@ -505,6 +505,7 @@ class RewriteExtract : public mlir::OpRewritePattern<ExtractOp> {
       // Block shape in major-to-minor order as i32.
       SmallVector<int32_t> block_shape;
       for (int64_t s : ordered_sizes) {
+        CHECK_LE(s, INT32_MAX) << "tile dim " << s << " exceeds i32 range";
         block_shape.push_back(static_cast<int32_t>(s));
       }
 
@@ -667,6 +668,7 @@ class RewriteInsert : public mlir::OpRewritePattern<InsertOp> {
       auto ordered_sizes_vec = GetMajorToMinorOrder(sizes, dst_layout);
       SmallVector<int32_t> block_shape;
       for (int64_t s : ordered_sizes_vec) {
+        CHECK_LE(s, INT32_MAX) << "tile dim " << s << " exceeds i32 range";
         block_shape.push_back(static_cast<int32_t>(s));
       }
 
