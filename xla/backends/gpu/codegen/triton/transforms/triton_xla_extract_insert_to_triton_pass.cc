@@ -259,17 +259,39 @@ SmallVector<Value> GetMajorToMinorOrder(ValueRange values,
   return GetMajorToMinorOrder(ArrayRef<Value>(llvm::to_vector(values)), layout);
 }
 
-// Whether the tile shape is compatible with AMD TDM lowering.
-// Upstream Triton's TDM legalizer (validateStridesAndSharedOrder in
-// third_party/amd/lib/TritonAMDGPUToLLVM/TensorPtrOpsToLLVM.cpp) requires the
-// shared order to be [rank-1, ..., 0] and stride-1 dimensions to be
-// consecutive trailing dims. A singleton dim placed before a non-singleton dim
-// (in major-to-minor order) violates both constraints, so reject those tiles
-// here and let the caller fall back to pointer-based loads.
+// Whether the tile shape is compatible with AMD TDM lowering. Rejects:
+//   - dynamic tile sizes or strides
+//   - non-unit tile strides
+//   - non-trailing singleton dims (violates upstream Triton's TDM legalizer
+//     contract: shared order must be [rank-1, ..., 0] with stride-1 dims
+//     consecutive trailing). A smarter pass could canonicalize the singleton
+//     out and lower to TDM. We reject conservatively for now.
+//
+// Not checked here, deferred to upstream Triton / hardware legalization:
+//   - Hardware rank cap (TDM supports ranks 1 to 5).
+//   - Innermost dim byte alignment requirements.
+//   - Per-dim box size limits.
+//   - Padding mode compatibility (this pass hardcodes PAD_ZERO).
 bool CanUseTdm(bool allow_tdm, const ArrayRef<int64_t>& tile_sizes,
+               const ArrayRef<int64_t>& tile_strides,
                const ArrayRef<int64_t>& minor_to_major_layout) {
   if (!allow_tdm) {
     return false;
+  }
+  // Dynamic sizes or strides would feed sentinel values into the i32/i64
+  // descriptor constants and silently produce a malformed descriptor.
+  if (mlir::ShapedType::isDynamicShape(tile_sizes) ||
+      mlir::ShapedType::isDynamicShape(tile_strides)) {
+    VLOG(1) << "TDM is not compatible: dynamic tile sizes or strides.";
+    return false;
+  }
+  // TDM descriptors describe contiguous boxes; non-unit (or zero) tile strides
+  // cannot be expressed and would silently produce a contiguous load.
+  for (int64_t s : tile_strides) {
+    if (s != 1) {
+      VLOG(1) << "TDM is not compatible: non-unit tile stride.";
+      return false;
+    }
   }
   auto ordered_sizes = GetMajorToMinorOrder(tile_sizes, minor_to_major_layout);
   bool seen_singleton = false;
@@ -278,6 +300,7 @@ bool CanUseTdm(bool allow_tdm, const ArrayRef<int64_t>& tile_sizes,
       seen_singleton = true;
     } else if (seen_singleton) {
       // Non-singleton dim follows a singleton dim, TDM-incompatible.
+      VLOG(1) << "TDM is not compatible: non-trailing singleton dim in tile.";
       return false;
     }
   }
@@ -455,7 +478,7 @@ class RewriteExtract : public mlir::OpRewritePattern<ExtractOp> {
       return mlir::success();
     }
 
-    if (CanUseTdm(allow_tdm_, sizes, src_layout)) {
+    if (CanUseTdm(allow_tdm_, sizes, strides, src_layout)) {
       auto ordered_offsets = GetMajorToMinorOrder(offsets, src_layout);
       auto ordered_sizes = GetMajorToMinorOrder(sizes, src_layout);
       auto ordered_type =
@@ -619,7 +642,7 @@ class RewriteInsert : public mlir::OpRewritePattern<InsertOp> {
       DescriptorStoreOp::create(
           builder, cast_to_tensor_desc.getResult(0), src,
           xtriton::IndexCast(builder, builder.getI32Type(), ordered_offsets));
-    } else if (CanUseTdm(allow_tdm_, sizes, dst_layout)) {
+    } else if (CanUseTdm(allow_tdm_, sizes, strides, dst_layout)) {
       auto ordered_offsets = GetMajorToMinorOrder(offsets, dst_layout);
 
       // Build global shape as i32 values (major-to-minor order).
