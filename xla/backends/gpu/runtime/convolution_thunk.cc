@@ -83,21 +83,10 @@ RunConvOptions ConvolutionThunk::GetOrCreate(const GpuConvConfig& config,
   return RunConvOptions{nullptr, it->second.get()};
 }
 
-// absl::Status ExecuteOnStream(const ExecuteParams& params) override {
-//   VLOG(5) << "ConvolutionThunk";
-//   return RunConvolutionOnStream(params, operand_buffers_, result_buffers_,
-//                                 scratch_buffer_, config_, cache_,
-//                                 params.stream);
-// }
-
 absl::Status ConvolutionThunk::ExecuteOnStream(
     const ExecuteParams& params) {
 
   VLOG(5) << "ConvolutionThunk";
-    // const std::vector<ShapedSlice>& operand_buffers,
-    // const std::vector<ShapedSlice>& result_buffers,
-    // const BufferAllocation::Slice& scratch_buffer, const GpuConvConfig& config,
-    // ConvRunnerCache& cache, se::Stream* stream) {
   const auto& buffer_allocations = *params.buffer_allocations;
 
   std::vector<se::DeviceAddressBase> operand_se_buffers, result_se_buffers;
