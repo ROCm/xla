@@ -64,7 +64,7 @@ ConvolutionThunk::ConvolutionThunk(ThunkInfo thunk_info,
                                    std::vector<ShapedSlice> operand_slices,
                                    std::vector<ShapedSlice> result_slices,
                                    BufferAllocation::Slice scratch_slice)
-    : TracedCommand(CommandType::kConvolutionCmd, Kind::kConvolution, 
+    : TracedCommand(CommandType::kConvolutionCmd, Kind::kConvolution,
                     std::move(thunk_info)),
       operand_buffers_(std::move(operand_slices)),
       result_buffers_(std::move(result_slices)),
@@ -73,7 +73,7 @@ ConvolutionThunk::ConvolutionThunk(ThunkInfo thunk_info,
       config_(std::move(config)) {}
 
 RunConvOptions ConvolutionThunk::GetOrCreate(const GpuConvConfig& config,
-                                            const se::Stream* stream) {
+                                             const se::Stream* stream) {
   absl::MutexLock lock(mu_);
   auto [it, inserted] =
       cache_.emplace(stream->parent(), std::unique_ptr<GenericConvRunner>{});
@@ -83,9 +83,7 @@ RunConvOptions ConvolutionThunk::GetOrCreate(const GpuConvConfig& config,
   return RunConvOptions{nullptr, it->second.get()};
 }
 
-absl::Status ConvolutionThunk::ExecuteOnStream(
-    const ExecuteParams& params) {
-
+absl::Status ConvolutionThunk::ExecuteOnStream(const ExecuteParams& params) {
   VLOG(5) << "ConvolutionThunk";
   const auto& buffer_allocations = *params.buffer_allocations;
 
