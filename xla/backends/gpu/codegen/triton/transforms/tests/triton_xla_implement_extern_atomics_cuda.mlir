@@ -1,10 +1,10 @@
 // RUN: xla-opt %s -triton-xla-implement-extern-element-wise | FileCheck %s
 
 // Test CUDA implementation of extern_elementwise atomic functions
-// This pass operates on LLVM dialect and generates LLVM intrinsics instead of inline PTX assembly
+// This pass operates on LLVM dialect and generates LLVM intrinsics
 
 // Test unmasked operations
-module attributes {llvm.target_triple = "nvptx64-unknown-unknown"} {
+module {
   // CHECK-LABEL: llvm.func @test_get_thread_id
   llvm.func @test_get_thread_id() -> i32 {
     // CHECK-NOT: llvm.call @xla_getthreadid
@@ -102,7 +102,7 @@ module attributes {llvm.target_triple = "nvptx64-unknown-unknown"} {
 }
 
 // Test masked operations in separate module to avoid function redefinition
-module attributes {llvm.target_triple = "nvptx64-unknown-unknown"} {
+module {
   // CHECK-LABEL: llvm.func @test_atomic_write_masked
   llvm.func @test_atomic_write_masked(%ptr: !llvm.ptr<1>, %value: i32, %mask: i32) -> i32 {
     // CHECK-NOT: llvm.call @xla_atomicwrite_release_system_mask

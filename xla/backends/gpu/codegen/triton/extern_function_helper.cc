@@ -195,16 +195,16 @@ llvm::StringRef MemSyncScopeToSyncScope(triton::MemSyncScope scope,
 
 // Create LLVM ops for GetThreadIdInstruction
 mlir::Value CreateGetThreadIdOps(const LLVMOpCreationParams& params) {
-  auto& builder = params.builder;
-  auto i32_type = builder.getI32Type();
+  mlir::OpBuilder& builder = params.builder;
+  mlir::Type i32_type = builder.getI32Type();
 
   // Create intrinsic call (backend-specific)
-  auto intrinsic_name = builder.getStringAttr(
+  mlir::StringAttr intrinsic_name = builder.getStringAttr(
       params.target == TargetBackend::CUDA ? "llvm.nvvm.read.ptx.sreg.tid.x"
                                            : "llvm.amdgcn.workitem.id.x");
 
-  auto intrinsic_call = builder.create<LLVM::CallIntrinsicOp>(
-      params.loc, i32_type, intrinsic_name, mlir::ValueRange{});
+  LLVM::CallIntrinsicOp intrinsic_call = LLVM::CallIntrinsicOp::create(
+      builder, params.loc, i32_type, intrinsic_name, mlir::ValueRange{});
 
   return intrinsic_call->getResult(0);
 }
@@ -212,14 +212,14 @@ mlir::Value CreateGetThreadIdOps(const LLVMOpCreationParams& params) {
 // Create LLVM ops for AtomicWriteInstruction
 mlir::Value CreateAtomicWriteOps(const AtomicWriteInstruction& instruction,
                                  const LLVMOpCreationParams& params) {
-  auto& builder = params.builder;
-  auto operands = params.operands;
-  auto i32_type = builder.getI32Type();
+  mlir::OpBuilder& builder = params.builder;
+  mlir::ValueRange operands = params.operands;
+  mlir::Type i32_type = builder.getI32Type();
 
   // Expected operand layout: [ptr, value, mask?]
-  auto addr = operands[0];
-  auto value = operands[1];
-  mlir::Value mask = operands.size() > 2 ? operands[2] : mlir::Value{};
+  mlir::Value addr = operands[0];
+  mlir::Value value = operands[1];
+  mlir::Value mask = instruction.has_mask ? operands[2] : mlir::Value{};
 
   llvm::StringRef syncscope =
       MemSyncScopeToSyncScope(instruction.scope, params.target);
@@ -230,51 +230,52 @@ mlir::Value CreateAtomicWriteOps(const AtomicWriteInstruction& instruction,
   mlir::Block* exit_block = nullptr;
   if (mask) {
     // Masked atomic: if (mask != 0) { atomic_store } else { nop }
-    auto current_block = builder.getBlock();
-    auto atomic_block = current_block->splitBlock(builder.getInsertionPoint());
+    mlir::Block* current_block = builder.getBlock();
+    mlir::Block* atomic_block =
+        current_block->splitBlock(builder.getInsertionPoint());
     exit_block = atomic_block->splitBlock(builder.getInsertionPoint());
 
     // Check mask and branch
     builder.setInsertionPointToEnd(current_block);
-    auto zero = builder.create<LLVM::ConstantOp>(params.loc, i32_type,
-                                                 builder.getI32IntegerAttr(0));
-    auto mask_nonzero = builder.create<LLVM::ICmpOp>(
-        params.loc, LLVM::ICmpPredicate::ne, mask, zero);
-    builder.create<LLVM::CondBrOp>(params.loc, mask_nonzero, atomic_block,
-                                   exit_block);
+    LLVM::ConstantOp zero = LLVM::ConstantOp::create(
+        builder, params.loc, i32_type, builder.getI32IntegerAttr(0));
+    LLVM::ICmpOp mask_nonzero = LLVM::ICmpOp::create(
+        builder, params.loc, LLVM::ICmpPredicate::ne, mask, zero);
+    LLVM::CondBrOp::create(builder, params.loc, mask_nonzero, atomic_block,
+                           exit_block);
 
     // Set insertion point for atomic store
     builder.setInsertionPointToStart(atomic_block);
   }
 
   // Perform atomic store
-  builder.create<LLVM::StoreOp>(
-      params.loc, value, addr, /*alignment=*/4, /*isVolatile=*/false,
-      /*isNonTemporal=*/false, /*isInvariantGroup=*/false, ordering,
-      builder.getStringAttr(syncscope));
+  LLVM::StoreOp::create(builder, params.loc, value, addr, /*alignment=*/4,
+                        /*isVolatile=*/false,
+                        /*isNonTemporal=*/false, /*isInvariantGroup=*/false,
+                        ordering, builder.getStringAttr(syncscope));
 
   if (mask) {
     // Complete masked path: branch to exit
-    builder.create<LLVM::BrOp>(params.loc, exit_block);
+    LLVM::BrOp::create(builder, params.loc, exit_block);
     builder.setInsertionPointToStart(exit_block);
   }
 
   // Return poison value (result not expected to be used)
-  return builder.create<LLVM::PoisonOp>(params.loc, i32_type);
+  return LLVM::PoisonOp::create(builder, params.loc, i32_type);
 }
 
 // Create LLVM ops for AtomicSpinWaitInstruction
 mlir::Value CreateAtomicSpinWaitOps(
     const AtomicSpinWaitInstruction& instruction,
     const LLVMOpCreationParams& params) {
-  auto& builder = params.builder;
-  auto operands = params.operands;
-  auto i32_type = builder.getI32Type();
+  mlir::OpBuilder& builder = params.builder;
+  mlir::ValueRange operands = params.operands;
+  mlir::Type i32_type = builder.getI32Type();
 
   // Expected operand layout: [ptr, expected, mask?]
-  auto addr = operands[0];
-  auto expected = operands[1];
-  mlir::Value mask = operands.size() > 2 ? operands[2] : mlir::Value{};
+  mlir::Value addr = operands[0];
+  mlir::Value expected = operands[1];
+  mlir::Value mask = instruction.has_mask ? operands[2] : mlir::Value{};
 
   llvm::StringRef syncscope =
       MemSyncScopeToSyncScope(instruction.scope, params.target);
@@ -282,29 +283,27 @@ mlir::Value CreateAtomicSpinWaitOps(
       MemSemanticToAtomicOrdering(instruction.semantic);
 
   // acq_rel is not valid for loads (only for RMW operations)
-  if (ordering == LLVM::AtomicOrdering::acq_rel) {
-    LOG(FATAL) << "acq_rel ordering is not supported for atomic loads. "
-               << "Use acquire ordering instead.";
-  }
-
-  bool is_lt = (instruction.comparator == Comparator::LT);
+  // This is guaranteed through parsing and validation
+  CHECK_NE(ordering, LLVM::AtomicOrdering::acq_rel)
+      << "acq_rel ordering is not supported for atomic loads";
 
   // Create block structure (common for both masked and unmasked)
-  auto current_block = builder.getBlock();
-  auto loop_block = current_block->splitBlock(builder.getInsertionPoint());
+  mlir::Block* current_block = builder.getBlock();
+  mlir::Block* loop_block =
+      current_block->splitBlock(builder.getInsertionPoint());
   // Need to set insertion point to loop_block before splitting it
   builder.setInsertionPointToStart(loop_block);
-  auto exit_block = loop_block->splitBlock(builder.getInsertionPoint());
+  mlir::Block* exit_block = loop_block->splitBlock(builder.getInsertionPoint());
   exit_block->addArgument(i32_type, params.loc);
 
   builder.setInsertionPointToEnd(current_block);
 
   if (mask) {
     // Masked: conditional branch based on mask (if mask==0, skip loop)
-    auto zero = builder.create<LLVM::ConstantOp>(params.loc, i32_type,
-                                                 builder.getI32IntegerAttr(0));
-    auto mask_nonzero = builder.create<LLVM::ICmpOp>(
-        params.loc, LLVM::ICmpPredicate::ne, mask, zero);
+    LLVM::ConstantOp zero = LLVM::ConstantOp::create(
+        builder, params.loc, i32_type, builder.getI32IntegerAttr(0));
+    LLVM::ICmpOp mask_nonzero = LLVM::ICmpOp::create(
+        builder, params.loc, LLVM::ICmpPredicate::ne, mask, zero);
     LLVM::CondBrOp::create(builder, params.loc, mask_nonzero, loop_block,
                            mlir::ValueRange{}, exit_block,
                            mlir::ValueRange{zero}, std::nullopt);
@@ -315,16 +314,18 @@ mlir::Value CreateAtomicSpinWaitOps(
 
   // Loop: atomic load + compare + conditional branch
   builder.setInsertionPointToStart(loop_block);
-  auto loaded = builder.create<LLVM::LoadOp>(
-      params.loc, i32_type, addr, /*alignment=*/4, /*isVolatile=*/false,
+  LLVM::LoadOp loaded = LLVM::LoadOp::create(
+      builder, params.loc, i32_type, addr, /*alignment=*/4,
+      /*isVolatile=*/false,
       /*isNonTemporal=*/false, /*isInvariant=*/false,
       /*isInvariantGroup=*/false, ordering, builder.getStringAttr(syncscope));
 
-  auto condition =
-      is_lt ? builder.create<LLVM::ICmpOp>(params.loc, LLVM::ICmpPredicate::ult,
-                                           loaded, expected)
-            : builder.create<LLVM::ICmpOp>(params.loc, LLVM::ICmpPredicate::ne,
-                                           loaded, expected);
+  bool is_lt = (instruction.comparator == Comparator::LT);
+  LLVM::ICmpOp condition =
+      is_lt ? LLVM::ICmpOp::create(builder, params.loc,
+                                   LLVM::ICmpPredicate::ult, loaded, expected)
+            : LLVM::ICmpOp::create(builder, params.loc, LLVM::ICmpPredicate::ne,
+                                   loaded, expected);
 
   LLVM::CondBrOp::create(builder, params.loc, condition, loop_block,
                          mlir::ValueRange{}, exit_block,

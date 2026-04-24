@@ -327,7 +327,7 @@ TEST_F(ExternFunctionNameTest, CreateGetThreadIdOpsCUDA) {
                               /* .operands= */ {}};
 
   mlir::Value result = CreateLLVMOpsForInstruction(instruction, params);
-  ASSERT_TRUE(result != nullptr);
+  CHECK_NOTNULL(result);
   EXPECT_TRUE(result.getType().isInteger(32));
 
   // Verify the intrinsic call was created with correct name
@@ -340,7 +340,7 @@ TEST_F(ExternFunctionNameTest, CreateGetThreadIdOpsCUDA) {
 
 TEST_F(ExternFunctionNameTest, CreateGetThreadIdOpsROCM) {
   mlir::OwningOpRef<mlir::ModuleOp> module =
-      mlir::ModuleOp::create(mlir::UnknownLoc::get(&context_));
+      CreateMlirModuleOp(mlir::UnknownLoc::get(&context_));
   mlir::OpBuilder builder(&context_);
   builder.setInsertionPointToEnd(module->getBody());
 
@@ -352,13 +352,13 @@ TEST_F(ExternFunctionNameTest, CreateGetThreadIdOpsROCM) {
   builder.setInsertionPointToStart(entry_block);
 
   GetThreadIdInstruction instruction;
-  LLVMOpCreationParams params{.builder = builder,
-                              .loc = builder.getUnknownLoc(),
-                              .target = TargetBackend::ROCM,
-                              .operands = {}};
+  LLVMOpCreationParams params{/*.builder=*/builder,
+                              /*.loc=*/builder.getUnknownLoc(),
+                              /*.target=*/TargetBackend::ROCM,
+                              /*.operands=*/{}};
 
   mlir::Value result = CreateLLVMOpsForInstruction(instruction, params);
-  ASSERT_TRUE(result != nullptr);
+  CHECK_NOTNULL(result);
   EXPECT_TRUE(result.getType().isInteger(32));
 
   // Verify the intrinsic call was created with correct name for ROCm
@@ -397,11 +397,11 @@ TEST_F(ExternFunctionNameTest, CreateAtomicWriteOpsVerifyOrdering) {
                               /* .operands= */ operands};
 
   mlir::Value result = CreateLLVMOpsForInstruction(instruction, params);
-  ASSERT_TRUE(result != nullptr);
+  CHECK_NOTNULL(result);
   EXPECT_TRUE(result.getType().isInteger(32));
 
   // Add return to complete the function
-  builder.create<LLVM::ReturnOp>(builder.getUnknownLoc(), result);
+  LLVM::ReturnOp::create(builder, builder.getUnknownLoc(), result);
 
   // Verify a store operation was created with correct ordering and syncscope
   bool found_store = false;
@@ -416,7 +416,7 @@ TEST_F(ExternFunctionNameTest, CreateAtomicWriteOpsVerifyOrdering) {
 
 TEST_F(ExternFunctionNameTest, CreateAtomicWriteOpsVerifySyncscopeROCM) {
   mlir::OwningOpRef<mlir::ModuleOp> module =
-      mlir::ModuleOp::create(mlir::UnknownLoc::get(&context_));
+      CreateMlirModuleOp(mlir::UnknownLoc::get(&context_));
   mlir::OpBuilder builder(&context_);
   builder.setInsertionPointToEnd(module->getBody());
 
@@ -428,21 +428,21 @@ TEST_F(ExternFunctionNameTest, CreateAtomicWriteOpsVerifySyncscopeROCM) {
   auto* entry_block = func.addEntryBlock(builder);
   builder.setInsertionPointToStart(entry_block);
 
-  AtomicWriteInstruction instruction{.semantic = triton::MemSemantic::RELAXED,
-                                     .scope = triton::MemSyncScope::CTA};
+  AtomicWriteInstruction instruction{/*.semantic=*/triton::MemSemantic::RELAXED,
+                                     /*.scope=*/triton::MemSyncScope::CTA};
 
   llvm::SmallVector<mlir::Value> operands = {entry_block->getArgument(0),
                                              entry_block->getArgument(1)};
-  LLVMOpCreationParams params{.builder = builder,
-                              .loc = builder.getUnknownLoc(),
-                              .target = TargetBackend::ROCM,
-                              .operands = operands};
+  LLVMOpCreationParams params{/*.builder=*/builder,
+                              /*.loc=*/builder.getUnknownLoc(),
+                              /*.target=*/TargetBackend::ROCM,
+                              /*.operands=*/operands};
 
   mlir::Value result = CreateLLVMOpsForInstruction(instruction, params);
-  ASSERT_TRUE(result != nullptr);
+  CHECK_NOTNULL(result);
 
   // Add return to complete the function
-  builder.create<LLVM::ReturnOp>(builder.getUnknownLoc(), result);
+  LLVM::ReturnOp::create(builder, builder.getUnknownLoc(), result);
 
   // Verify a store operation was created with correct ordering and syncscope
   bool found_store = false;
@@ -484,11 +484,11 @@ TEST_F(ExternFunctionNameTest, CreateAtomicSpinWaitOpsVerifyLoop) {
                               /* .operands= */ operands};
 
   mlir::Value result = CreateLLVMOpsForInstruction(instruction, params);
-  ASSERT_TRUE(result != nullptr);
+  CHECK_NOTNULL(result);
   EXPECT_TRUE(result.getType().isInteger(32));
 
   // Add return to complete the function
-  builder.create<LLVM::ReturnOp>(builder.getUnknownLoc(), result);
+  LLVM::ReturnOp::create(builder, builder.getUnknownLoc(), result);
 
   // Verify loop structure: should have load, icmp, and cond_br operations
   bool found_load = false;
@@ -540,10 +540,10 @@ TEST_F(ExternFunctionNameTest, CreateAtomicSpinWaitOpsVerifyComparator) {
                               /* .operands= */ operands};
 
   mlir::Value result = CreateLLVMOpsForInstruction(instruction, params);
-  ASSERT_TRUE(result != nullptr);
+  CHECK_NOTNULL(result);
 
   // Add return to complete the function
-  builder.create<LLVM::ReturnOp>(builder.getUnknownLoc(), result);
+  LLVM::ReturnOp::create(builder, builder.getUnknownLoc(), result);
 
   // Verify the comparison uses unsigned less-than predicate
   bool found_icmp = false;
