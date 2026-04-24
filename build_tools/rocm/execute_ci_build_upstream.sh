@@ -67,6 +67,7 @@ done
         IFS=:
         echo "${EXCLUDED_TESTS[*]}"
     ) \
+    --cache_test_results=yes \
     -- \
     //xla/... \
     -//xla/backends/gpu/tests:sorting.hlo.test_mi200 \
