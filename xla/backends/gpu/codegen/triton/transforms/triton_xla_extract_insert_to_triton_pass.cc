@@ -307,6 +307,51 @@ bool CanUseTdm(bool allow_tdm, const ArrayRef<int64_t>& tile_sizes,
   return true;
 }
 
+// Builds a tt.make_tensor_descriptor for a contiguous box load/store from
+// `pointer`. Global shape and strides come from `shape` + `layout` (the source
+// memref geometry); the descriptor's block dims come from `tile_sizes`. All
+// arrays are reordered to major-to-minor as required by Triton's TDM
+// legalizer. Padding mode is hardcoded to PAD_ZERO.
+MakeTensorDescOp BuildTensorDescriptor(ImplicitLocOpBuilder& builder,
+                                       Value pointer,
+                                       ArrayRef<int64_t> shape,
+                                       ArrayRef<int64_t> layout,
+                                       ArrayRef<int64_t> tile_sizes) {
+  // Global shape as i32 SSA values, in major-to-minor order.
+  auto ordered_shape = GetMajorToMinorOrder(shape, layout);
+  SmallVector<Value> shape_values;
+  for (int64_t dim : ordered_shape) {
+    shape_values.push_back(
+        arith::ConstantOp::create(builder, builder.getI32IntegerAttr(dim)));
+  }
+
+  // Global strides as i64 SSA values, in major-to-minor order.
+  auto global_strides = xtriton::ComputeStrides(shape, layout);
+  auto ordered_strides =
+      GetMajorToMinorOrder(ArrayRef<int64_t>(global_strides), layout);
+  SmallVector<Value> stride_values;
+  for (int64_t s : ordered_strides) {
+    stride_values.push_back(
+        arith::ConstantOp::create(builder, builder.getI64IntegerAttr(s)));
+  }
+
+  // Block shape in major-to-minor order as i32.
+  auto ordered_sizes = GetMajorToMinorOrder(tile_sizes, layout);
+  SmallVector<int32_t> block_shape;
+  for (int64_t s : ordered_sizes) {
+    CHECK_LE(s, INT32_MAX) << "tile dim " << s << " exceeds i32 range";
+    block_shape.push_back(static_cast<int32_t>(s));
+  }
+
+  auto element_type = cast<PointerType>(pointer.getType()).getPointeeType();
+  bool is_signed_integer = mlir::isa<IntegerType>(element_type) &&
+                           !element_type.isUnsignedInteger();
+
+  return MakeTensorDescOp::create(builder, pointer, shape_values, stride_values,
+                                  block_shape, is_signed_integer,
+                                  PaddingOption::PAD_ZERO);
+}
+
 // Given the layout of a tensor, return the inverse permutation required to
 // transpose an already major-to-minor tensor to the original tensor.
 SmallVector<int32_t> GetInverseLayoutPermutation(ArrayRef<int64_t> layout) {
@@ -480,44 +525,11 @@ class RewriteExtract : public mlir::OpRewritePattern<ExtractOp> {
 
     if (CanUseTdm(allow_tdm_, sizes, strides, src_layout)) {
       auto ordered_offsets = GetMajorToMinorOrder(offsets, src_layout);
-      auto ordered_sizes = GetMajorToMinorOrder(sizes, src_layout);
       auto ordered_type =
           tile_type.clone(GetMajorToMinorOrder(sizes, src_layout));
 
-      // Build global shape as i32 values (major-to-minor order).
-      auto ordered_src_shape = GetMajorToMinorOrder(src_shape, src_layout);
-      SmallVector<Value> shape_values;
-      for (int64_t dim : ordered_src_shape) {
-        shape_values.push_back(
-            arith::ConstantOp::create(builder, builder.getI32IntegerAttr(dim)));
-      }
-
-      // Build global strides as i64 values (major-to-minor order).
-      auto global_strides = xtriton::ComputeStrides(src_shape, src_layout);
-      auto ordered_strides = GetMajorToMinorOrder(
-          ArrayRef<int64_t>(global_strides), src_layout);
-      SmallVector<Value> stride_values;
-      for (int64_t s : ordered_strides) {
-        stride_values.push_back(
-            arith::ConstantOp::create(builder, builder.getI64IntegerAttr(s)));
-      }
-
-      // Block shape in major-to-minor order as i32.
-      SmallVector<int32_t> block_shape;
-      for (int64_t s : ordered_sizes) {
-        CHECK_LE(s, INT32_MAX) << "tile dim " << s << " exceeds i32 range";
-        block_shape.push_back(static_cast<int32_t>(s));
-      }
-
-      auto element_type =
-          op.getSrc().getType().getPointeeType();
-      bool is_signed_integer =
-          mlir::isa<IntegerType>(element_type) &&
-          !element_type.isUnsignedInteger();
-
-      auto desc = MakeTensorDescOp::create(
-          builder, op.getSrc(), shape_values, stride_values, block_shape,
-          is_signed_integer, PaddingOption::PAD_ZERO);
+      auto desc = BuildTensorDescriptor(builder, op.getSrc(), src_shape,
+                                        src_layout, sizes);
 
       Value result = DescriptorLoadOp::create(
           builder, ordered_type, desc.getResult(),
@@ -646,41 +658,8 @@ class RewriteInsert : public mlir::OpRewritePattern<InsertOp> {
     } else if (CanUseTdm(allow_tdm_, sizes, strides, dst_layout)) {
       auto ordered_offsets = GetMajorToMinorOrder(offsets, dst_layout);
 
-      // Build global shape as i32 values (major-to-minor order).
-      auto ordered_dst_shape = GetMajorToMinorOrder(dst_shape, dst_layout);
-      SmallVector<Value> shape_values;
-      for (int64_t dim : ordered_dst_shape) {
-        shape_values.push_back(
-            arith::ConstantOp::create(builder, builder.getI32IntegerAttr(dim)));
-      }
-
-      // Build global strides as i64 values (major-to-minor order).
-      auto global_strides = xtriton::ComputeStrides(dst_shape, dst_layout);
-      auto ordered_strides = GetMajorToMinorOrder(
-          ArrayRef<int64_t>(global_strides), dst_layout);
-      SmallVector<Value> stride_values;
-      for (int64_t s : ordered_strides) {
-        stride_values.push_back(
-            arith::ConstantOp::create(builder, builder.getI64IntegerAttr(s)));
-      }
-
-      // Block shape in major-to-minor order as i32.
-      auto ordered_sizes_vec = GetMajorToMinorOrder(sizes, dst_layout);
-      SmallVector<int32_t> block_shape;
-      for (int64_t s : ordered_sizes_vec) {
-        CHECK_LE(s, INT32_MAX) << "tile dim " << s << " exceeds i32 range";
-        block_shape.push_back(static_cast<int32_t>(s));
-      }
-
-      auto element_type =
-          op.getDst().getType().getPointeeType();
-      bool is_signed_integer =
-          mlir::isa<IntegerType>(element_type) &&
-          !element_type.isUnsignedInteger();
-
-      auto desc = MakeTensorDescOp::create(
-          builder, op.getDst(), shape_values, stride_values, block_shape,
-          is_signed_integer, PaddingOption::PAD_ZERO);
+      auto desc = BuildTensorDescriptor(builder, op.getDst(), dst_shape,
+                                        dst_layout, sizes);
 
       Value src = op.getSrc();
       for (auto dim : reduced_dims) {
