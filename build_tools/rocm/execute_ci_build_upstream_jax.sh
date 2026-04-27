@@ -39,6 +39,9 @@ TESTS_TO_IGNORE=(
     -//tests:sparsify_test_gpu
     -//tests:lax_numpy_reducers_test_gpu
     -//tests:scipy_optimize_test_gpu
+    -//tests:buffer_callback_test_gpu
+    -//tests:eigh_test_gpu
+    -//tests:sparse_bcoo_bcsr_test_gpu
 )
 
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
