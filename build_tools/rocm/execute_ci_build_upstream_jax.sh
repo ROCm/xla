@@ -41,7 +41,9 @@ TESTS_TO_IGNORE=(
     -//tests:scipy_optimize_test_gpu
 )
 
-bazel --bazelrc=build/rocm/rocm.bazelrc test \
+SCRIPT_DIR=$(realpath "$(dirname "$0")")
+
+"${SCRIPT_DIR}/run_bazel_test_rocm_rbe.sh" \
     "$@" \
     --config=rocm \
     --config=rocm_rbe_dynamic \
