@@ -46,6 +46,7 @@ jobs:
     runs-on: linux-x86-64-1gpu-amd
     env:
       DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
+      EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/execute_ci_build_upstream_jax.sh
     container: &rocm_container
       image: ${{ needs.rocm-config.outputs.docker-image }}
       volumes:
@@ -83,11 +84,16 @@ jobs:
       - name: ROCm info
         run: /opt/rocm/bin/rocminfo
 
+      - name: Fetch ROCm JAX Upstream Script from ROCm/xla
+        run: |
+          wget -O ci/rocm/execute_ci_build_upstream.sh ${EXECUTE_CI_BUILD_URL}
+          chmod +x ci/rocm/execute_ci_build_upstream.sh
+
       - name: Run JAX Unit Tests
         timeout-minutes: 120
         working-directory: jax
         run: |
-          ./ci/run_bazel_test_rocm_rbe.sh \
+          ./ci/execute_ci_build_upstream.sh  \
             --override_repository=xla=${GITHUB_WORKSPACE} \
             --config=single_gpu \
             --//jax:build_jaxlib=wheel \
