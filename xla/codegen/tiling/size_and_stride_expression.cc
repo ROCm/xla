@@ -554,6 +554,37 @@ std::optional<SizeAndStrideExpression> CombineSizesAndStrides(
   std::optional<AffineExpr> stride =
       CombineStrides(sizes_and_strides, dimension_intervals);
   if (!stride.has_value()) {
+    bool all_same_constant_stride = true;
+    int64_t common_stride_value = 0;
+    for (const auto& sas : sizes_and_strides) {
+      if (sas.stride.getKind() != AffineExprKind::Constant) {
+        all_same_constant_stride = false;
+        break;
+      }
+      int64_t s = llvm::cast<AffineConstantExpr>(sas.stride).getValue();
+      if (&sas == &sizes_and_strides.front()) {
+        common_stride_value = s;
+      } else if (s != common_stride_value) {
+        all_same_constant_stride = false;
+        break;
+      }
+    }
+
+    if (all_same_constant_stride && common_stride_value != 0 &&
+        sizes_and_strides.size() > 1) {
+      MLIRContext* ctx = sizes_and_strides[0].stride.getContext();
+      AffineExpr sum_size = sizes_and_strides[0].size;
+      for (size_t i = 1; i < sizes_and_strides.size(); ++i) {
+        sum_size = sum_size + sizes_and_strides[i].size;
+      }
+      AffineExpr adjusted_size =
+          sum_size -
+          getAffineConstantExpr(sizes_and_strides.size() - 1, ctx);
+      return SizeAndStrideExpression(
+          adjusted_size,
+          getAffineConstantExpr(common_stride_value, ctx),
+          std::move(constraints));
+    }
     return std::nullopt;
   }
 
