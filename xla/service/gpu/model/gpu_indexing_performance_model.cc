@@ -34,6 +34,7 @@ limitations under the License.
 #include "xla/backends/gpu/codegen/triton/fusion.h"
 #include "xla/codegen/tiling/symbolic_tile_analysis.h"
 #include "xla/codegen/tiling/tiled_hlo_computation.h"
+#include "xla/codegen/tiling/tiling_specification.h"
 #include "xla/hlo/analysis/indexing_analysis.h"
 #include "xla/hlo/analysis/indexing_map.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -585,8 +586,28 @@ GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTiledFusion(
   absl::Span<int64_t const> real_root_tile_sizes = tile_sizes[real_root_index];
   const HloInstruction* real_root =
       &fusion_adaptor.GetRoots()[real_root_index].instruction();
-  Tiling tiling = Tiling({{real_root, FlatTiling(real_root_tile_sizes.begin(),
-                                                 real_root_tile_sizes.end())}});
+
+  // The caller only provides output tile sizes. For instructions that introduce hidden
+  // tiling parameters fill those with 1s.
+  Tiling::TileMapping tile_mapping;
+  for (const auto& mapping :
+       analysis.GetTilingSpecification().parameter_mapping()) {
+    FlatTiling entry;
+    entry.reserve(mapping.num_tiling_parameters);
+    int64_t hidden_params = mapping.num_tiling_parameters;
+    if (mapping.instruction == real_root) {
+      hidden_params -= real_root_tile_sizes.size();
+    }
+    for (int64_t i = 0; i < hidden_params; ++i) {
+      entry.push_back(1);
+    }
+    if (mapping.instruction == real_root) {
+      entry.insert(entry.end(), real_root_tile_sizes.begin(),
+                   real_root_tile_sizes.end());
+    }
+    tile_mapping[mapping.instruction] = std::move(entry);
+  }
+  Tiling tiling(std::move(tile_mapping));
 
   TF_ASSIGN_OR_RETURN(TiledHloComputation tiled_hlo_computation,
                       analysis.ComputeTiledComputation(tiling));
