@@ -765,6 +765,145 @@ absl::StatusOr<TensorValue> EmitUnnestedDot(
   return tensor_result;
 }
 
+// TODO: tile size for hidden dimensions currently hardcoded to 1
+absl::StatusOr<int64_t> GetConvLoopIterationCount(
+    const TiledHloInstruction& tiled_conv) {
+  const auto* conv =
+      ::xla::Cast<HloConvolutionInstruction>(tiled_conv.hlo());
+  int64_t total_iterations = 1;
+  for (int i = 0; i < conv->window().dimensions().size(); ++i) {
+    int64_t window_size = conv->window().dimensions(i).size();
+    total_iterations *= window_size;
+  }
+  int64_t c_in = conv->operand(0)->shape().dimensions(
+      conv->convolution_dimension_numbers().input_feature_dimension());
+  total_iterations *= c_in;
+  return total_iterations;
+}
+
+absl::StatusOr<TensorValue> EmitConv(
+    mlir::ImplicitLocOpBuilder& b, const HloFusionInstruction* fusion,
+    const TiledHloInstruction& tiled_hlo_conv, mlir::FunctionOpInterface fn,
+    Value pid,
+    absl::flat_hash_map<const TiledHloInstruction*, TensorValue>& values) {
+  TF_RET_CHECK(tiled_hlo_conv.regions().size() == 1);
+
+  SmallVector<int64_t> padded_tile_sizes =
+      GetPaddedTileSizes(tiled_hlo_conv.tile_sizes());
+
+  TF_ASSIGN_OR_RETURN(
+      Type element_type,
+      PrimitiveTypeToMlirType(b, tiled_hlo_conv.hlo()->shape().element_type()));
+  Type accumulator_type = b.getF32Type();
+  TensorValue accumulator =
+      CreateConst(b, accumulator_type, 0.0f, padded_tile_sizes);
+
+  TF_ASSIGN_OR_RETURN(int64_t loop_iteration_count,
+                      GetConvLoopIterationCount(tiled_hlo_conv));
+  auto pid_dim = b.getAffineDimExpr(0);
+  auto ki_symbol = b.getAffineSymbolExpr(0);
+  IndexingMap computation_index_map{
+      AffineMap::get(1, 1, pid_dim * loop_iteration_count + ki_symbol),
+      {IndexingMap::Variable{
+          tiled_hlo_conv.tile_offsets_indexing()->GetDimensionBound(0), "pid"}},
+      {IndexingMap::Variable{{0, loop_iteration_count - 1}, "k"}},
+      /*rt_vars=*/{}};
+
+  auto for_op = mlir::scf::ForOp::create(
+      b,
+      /*lowerBound=*/MakeIndex(b, 0),
+      /*upperBound=*/MakeIndex(b, loop_iteration_count),
+      /*step=*/MakeIndex(b, 1), accumulator);
+
+  {  // Loop body.
+    mlir::OpBuilder::InsertionGuard g(b);
+    b.setInsertionPointToStart(for_op.getBody());
+    Value ki = for_op.getInductionVar();
+    Value computation_index =
+        xla::ApplyIndexingOp::create(b, ValueRange{pid, ki},
+                                     computation_index_map)
+            .getResult(0);
+    TF_RETURN_IF_ERROR(EmitTiledInstructionList(
+        b, fusion, tiled_hlo_conv.regions().front(), fn, computation_index,
+        values));
+
+    SmallVector<TensorValue> conv_args;
+    for (const TiledHloInstruction* operand : tiled_hlo_conv.operands()) {
+      CHECK(values.contains(operand))
+          << "Conv operand " << operand->ToString()
+          << " not found in the emitter values map ";
+      conv_args.push_back(values[operand]);
+    }
+
+    Value acc = for_op.getRegionIterArgs().front();
+    TensorValue input_tile = conv_args[0];
+    TensorValue kernel_tile = conv_args[1];
+
+    auto acc_type = mlir::cast<mlir::RankedTensorType>(acc.getType());
+
+    // Broadcasts `tile` (assumed to have the same rank as acc) up to acc's
+    // shape. The Triton lowering of stablehlo.broadcast_in_dim requires that
+    // dims listed in `broadcast_dims` have matching sizes in source and
+    // target; size-1 dims that need to be expanded must be dropped from the
+    // source first (via reshape), so they are not in `broadcast_dims` and
+    // are added back as new dims by the broadcast.
+    auto broadcast_to_acc = [&](TensorValue tile) -> TensorValue {
+      auto tile_type = mlir::cast<mlir::RankedTensorType>(tile.getType());
+      if (tile_type.getShape() == acc_type.getShape()) {
+        return tile;
+      }
+      ArrayRef<int64_t> tile_shape = tile_type.getShape();
+      ArrayRef<int64_t> acc_shape = acc_type.getShape();
+      CHECK_EQ(tile_shape.size(), acc_shape.size());
+      SmallVector<int64_t> kept_shape;
+      SmallVector<int64_t> broadcast_dims;
+      for (int64_t i = 0; i < tile_shape.size(); ++i) {
+        if (tile_shape[i] == acc_shape[i]) {
+          kept_shape.push_back(tile_shape[i]);
+          broadcast_dims.push_back(i);
+        } else {
+          CHECK_EQ(tile_shape[i], 1)
+              << "Cannot broadcast non-unit dim of size " << tile_shape[i]
+              << " to size " << acc_shape[i];
+        }
+      }
+      TensorValue reshaped = tile;
+      if (kept_shape.size() != tile_shape.size()) {
+        auto reshape_type = mlir::RankedTensorType::get(
+            kept_shape, tile_type.getElementType());
+        reshaped = mlir::cast<TensorValue>(
+            stablehlo::ReshapeOp::create(b, reshape_type, tile).getResult());
+      }
+      return xtile::BroadcastInDims(b, reshaped, acc_shape, broadcast_dims);
+    };
+
+    TensorValue input_broadcast = broadcast_to_acc(input_tile);
+    TensorValue kernel_broadcast = broadcast_to_acc(kernel_tile);
+
+    TensorValue input_cast = input_broadcast;
+    if (getElementTypeOrSelf(input_broadcast.getType()) != accumulator_type) {
+      input_cast = mlir::cast<TensorValue>(
+          Cast(b, input_broadcast, accumulator_type));
+    }
+    TensorValue kernel_cast = kernel_broadcast;
+    if (getElementTypeOrSelf(kernel_broadcast.getType()) != accumulator_type) {
+      kernel_cast = mlir::cast<TensorValue>(
+          Cast(b, kernel_broadcast, accumulator_type));
+    }
+
+    Value product = arith::MulFOp::create(b, input_cast, kernel_cast);
+    Value acc_next = arith::AddFOp::create(b, acc, product);
+
+    mlir::scf::YieldOp::create(b, acc_next);
+  }
+
+  Value result = for_op.getResult(0);
+  if (element_type != accumulator_type) {
+    result = Cast(b, result, element_type);
+  }
+  return mlir::cast<TensorValue>(result);
+}
+
 absl::StatusOr<TensorValue> EmitDot(
     mlir::ImplicitLocOpBuilder& b, const HloFusionInstruction* fusion,
     const TiledHloInstruction& tiled_hlo_dot, mlir::FunctionOpInterface fn,
@@ -1630,6 +1769,10 @@ absl::StatusOr<TensorValue> EmitTiledHloInstruction(
       return EmitUnnestedDot(b, fusion, tiled_hlo, fn, pid, values);
     }
     return EmitDot(b, fusion, tiled_hlo, fn, pid, values);
+  }
+
+  if (hlo->opcode() == HloOpcode::kConvolution) {
+    return EmitConv(b, fusion, tiled_hlo, fn, pid, values);
   }
 
   if (hlo->opcode() == HloOpcode::kScaledDot) {
