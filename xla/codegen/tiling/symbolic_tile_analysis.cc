@@ -66,7 +66,9 @@ limitations under the License.
 #include "xla/hlo/analysis/indexing_map.h"
 #include "xla/hlo/analysis/indexing_map_serialization.h"
 #include "xla/hlo/analysis/interval.h"
+#include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/utils/hlo_traversal.h"
@@ -140,6 +142,20 @@ struct OutputTilingInfo {
 bool IsSomeDot(const HloInstruction& hlo) {
   return hlo.opcode() == HloOpcode::kDot ||
          hlo.opcode() == HloOpcode::kScaledDot;
+}
+
+bool IsSimpleConvolution(const HloInstruction& hlo) {
+  if (hlo.opcode() != HloOpcode::kConvolution) return false;
+  const auto* conv = Cast<HloConvolutionInstruction>(&hlo);
+  for (const auto& dim : conv->window().dimensions()) {
+    if (dim.padding_low() != 0 || dim.padding_high() != 0) return false;
+    if (dim.stride() != 1) return false;
+    if (dim.window_dilation() != 1) return false;
+    if (dim.base_dilation() != 1) return false;
+  }
+  if (conv->feature_group_count() != 1) return false;
+  if (conv->batch_group_count() != 1) return false;
+  return true;
 }
 
 llvm::SmallVector<int64_t> GetNumberOfTilesPerDimension(
