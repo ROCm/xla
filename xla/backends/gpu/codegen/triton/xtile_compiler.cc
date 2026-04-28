@@ -98,6 +98,7 @@ limitations under the License.
 #include "xla/hlo/builder/xla_builder.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_print_options.h"
@@ -553,6 +554,14 @@ absl::StatusOr<Tiling> TilingFromAnnotatedFusion(
       ASSIGN_OR_RETURN(tile_mapping[hlo],
                        DotTilingParameters(hlo, symbolic_tile_analysis,
                                            block_level_parameters));
+    }
+
+    // TODO: currently all contracting dims are tiled with 1
+    if (hlo->opcode() == HloOpcode::kConvolution) {
+      const auto* conv = Cast<HloConvolutionInstruction>(hlo);
+      int64_t spatial_rank = conv->window().dimensions().size();
+      absl::InlinedVector<int64_t, 4> conv_tiling(spatial_rank + 1, 1);
+      tile_mapping[hlo] = conv_tiling;
     }
 
     // TODO(b/390559452): this should change for generalized multi-output
