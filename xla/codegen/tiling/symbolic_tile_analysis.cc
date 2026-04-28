@@ -450,7 +450,8 @@ bool IsControlFlowCondition(const HloInstruction& hlo) {
 
 // Returns whether the instruction is a loop block for tiling.
 bool IsControlFlowLoop(const HloInstruction& hlo) {
-  return IsSomeDot(hlo) && !AnyOperandIsFusion(hlo);
+  return (IsSomeDot(hlo) || IsSimpleConvolution(hlo)) &&
+         !AnyOperandIsFusion(hlo);
 }
 
 // Detects pathological cases on which symbolic tile derivation should bail out.
