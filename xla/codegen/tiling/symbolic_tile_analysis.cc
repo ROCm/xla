@@ -725,6 +725,15 @@ absl::Status PopulateNestedParameters(
       TF_RETURN_IF_ERROR(set_mapping_for_instruction(
           instruction_adaptor.instruction(), num_parameters));
     }
+
+    if (IsSimpleConvolution(instruction_adaptor.instruction())) {
+      const auto* conv = Cast<HloConvolutionInstruction>(
+          &instruction_adaptor.instruction());
+      int64_t spatial_rank = conv->window().dimensions().size();
+      int64_t num_parameters = spatial_rank + 1;
+      TF_RETURN_IF_ERROR(set_mapping_for_instruction(
+          instruction_adaptor.instruction(), num_parameters));
+    }
   }
   return absl::OkStatus();
 }
