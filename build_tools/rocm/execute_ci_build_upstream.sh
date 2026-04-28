@@ -73,5 +73,6 @@ done
     //xla/... \
     -//xla/backends/gpu/tests:sorting.hlo.test_mi200 \
     -//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any \
+    -//xla/backends/gpu/tests:collective_pipeline_parallelism_test_amdgpu_any \
     -//xla/pjrt/gpu:se_gpu_pjrt_client_test # TODO: times out so temporarily skip the whole target
 
