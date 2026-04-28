@@ -872,6 +872,26 @@ std::vector<int64_t> InputSpaceForParameterMapping(
       continue;
     }
 
+    if (IsSimpleConvolution(*hlo)) {
+      const auto* conv = Cast<HloConvolutionInstruction>(hlo);
+      int64_t spatial_rank = conv->window().dimensions().size();
+      for (int i = 0; i < spatial_rank; ++i) {
+        input_space.push_back(conv->window().dimensions(i).size());
+      }
+      int64_t c_in = conv->operand(0)->shape().dimensions(
+          conv->convolution_dimension_numbers().input_feature_dimension());
+      input_space.push_back(c_in);
+      int64_t num_contracting = spatial_rank + 1;
+      if (num_parameters != num_contracting) {
+        CHECK_EQ(num_parameters,
+                 num_contracting + hlo->shape().dimensions().size());
+        for (int64_t output_dimension : hlo->shape().dimensions()) {
+          input_space.push_back(output_dimension);
+        }
+      }
+      continue;
+    }
+
     CHECK_EQ(hlo->shape().dimensions().size(), num_parameters);
     for (int64_t dimension : hlo->shape().dimensions()) {
       input_space.push_back(dimension);
