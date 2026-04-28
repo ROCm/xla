@@ -110,13 +110,6 @@ load(
 
 cuda_configure(name = "local_config_cuda")
 
-load("//third_party/gpus:rocm_configure.bzl", "rocm_configure")
-
-rocm_configure(
-    name = "local_config_rocm",
-    rocm_dist = "@config_rocm_hipcc//rocm:rocm_dist",
-)
-
 load(
     "@rules_ml_toolchain//gpu/nccl:nccl_redist_init_repository.bzl",
     "nccl_redist_init_repository",
