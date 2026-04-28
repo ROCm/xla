@@ -1119,6 +1119,54 @@ IndexingMap InsertTilingParameterForContractingDimensions(
     return ComposeIndexingMaps(first_indexing_map, map_without_range_variables);
   }
 
+  if (IsSimpleConvolution(consumer)) {
+    int64_t num_range_vars =
+        outermost_fusion_root_to_operand.GetRangeVarsCount();
+    absl::flat_hash_map<int64_t, int64_t> parameter_index_by_symbol_position;
+    std::vector<int64_t> symbols_to_remove;
+    parameter_index_by_symbol_position.reserve(num_range_vars);
+    symbols_to_remove.reserve(num_range_vars);
+    for (int64_t i = 0; i < num_range_vars; ++i) {
+      absl::StatusOr<int64_t> dim_index = TilingSpecification::ParameterIndex(
+          parameter_mapping, &consumer, i);
+      CHECK_OK(dim_index);  // Crash OK
+      parameter_index_by_symbol_position.insert({i, *dim_index});
+      symbols_to_remove.push_back(i);
+    }
+
+    IndexingMap map_without_range_variables = ConvertRangeVariablesToDimensions(
+        outermost_fusion_root_to_operand, symbols_to_remove);
+
+    MLIRContext* ctx = outermost_fusion_root_to_operand.GetMLIRContext();
+    int64_t num_inputs = outermost_fusion_root_to_operand.GetDimVarsCount();
+    int64_t num_outputs = map_without_range_variables.GetDimVarsCount();
+    std::vector<int64_t> tileable_sizes;
+    std::vector<mlir::AffineExpr> results;
+    tileable_sizes.reserve(num_inputs);
+    results.reserve(num_outputs);
+
+    for (const auto& [i, dim_var] :
+         llvm::enumerate(outermost_fusion_root_to_operand.GetDimVars())) {
+      const Interval& bounds = dim_var.bounds;
+      tileable_sizes.push_back(bounds.upper + 1);
+      results.push_back(mlir::getAffineDimExpr(i, ctx));
+    }
+
+    for (const int64_t symbol_id : symbols_to_remove) {
+      mlir::AffineExpr new_result = mlir::getAffineDimExpr(
+          parameter_index_by_symbol_position.at(symbol_id), ctx);
+      results.push_back(new_result);
+    }
+
+    mlir::AffineMap first_affine_map =
+        mlir::AffineMap::get(num_inputs, /*symbolCount=*/0, results, ctx);
+
+    IndexingMap first_indexing_map =
+        IndexingMap::FromTensorSizes(first_affine_map, tileable_sizes, {});
+
+    return ComposeIndexingMaps(first_indexing_map, map_without_range_variables);
+  }
+
   return outermost_fusion_root_to_operand;
 }
 
