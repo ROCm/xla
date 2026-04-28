@@ -612,6 +612,30 @@ CodegenDecision IsTritonSupportedDot(
   return CodegenDecision::Allow();
 }
 
+CodegenDecision IsTritonSupportedConv(const HloConvolutionInstruction& conv) {
+  for (const auto& dim : conv.window().dimensions()) {
+    if (dim.padding_low() != 0 || dim.padding_high() != 0) {
+      return CodegenDecision::Forbid("Convolution with padding.");
+    }
+    if (dim.stride() != 1) {
+      return CodegenDecision::Forbid("Convolution with stride != 1.");
+    }
+    if (dim.window_dilation() != 1) {
+      return CodegenDecision::Forbid("Convolution with window dilation.");
+    }
+    if (dim.base_dilation() != 1) {
+      return CodegenDecision::Forbid("Convolution with base dilation.");
+    }
+  }
+  if (conv.feature_group_count() != 1) {
+    return CodegenDecision::Forbid("Grouped convolution.");
+  }
+  if (conv.batch_group_count() != 1) {
+    return CodegenDecision::Forbid("Batch-grouped convolution.");
+  }
+  return CodegenDecision::Allow();
+}
+
 // Verifies that the nested fusion instruction conforms to the assumptions of
 // the emitter. Currently, we expect nested fusions:
 // - of kind `__triton_nested_gemm_fusion`;
@@ -807,6 +831,9 @@ CodegenDecision IsTritonSupportedInstructionImpl(
     case HloOpcode::kDot:
       return IsTritonSupportedDot(*Cast<HloDotInstruction>(&instr),
                                   gpu_version);
+    case HloOpcode::kConvolution: 
+      return IsTritonSupportedConv(*Cast<HloConvolutionInstruction>(&instr));
+      
     case HloOpcode::kFusion:
       return IsTritonSupportedFusion(*Cast<HloFusionInstruction>(&instr),
                                      gpu_version);
