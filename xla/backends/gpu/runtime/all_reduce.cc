@@ -69,7 +69,6 @@ static constexpr auto kAddBF16Tags =
     TagRegistry<bfloat16, ReductionKind::SUM>{};
 static constexpr auto kOrPredTags = TagRegistry<bool, ReductionKind::MAX>{};
 // Heuristic maxima after some benchmarking.
-static constexpr int64_t kMaxBlocksPerGrid = 24;
 static constexpr int64_t kMaxThreadsPerBlock = 512;
 static constexpr int64_t kWarpSize = 32;
 
@@ -182,8 +181,8 @@ int64_t GetMaxSupportedAllReduceSizeBytes(AllReduceStrategy strategy) {
   }
 }
 
-LaunchDimensions AllReduceLaunchDimensions(int64_t elements, int64_t num_ranks,
-                                           AllReduceStrategy strategy) {
+LaunchDimensions CollectiveLaunchDimensions(int64_t elements, int64_t num_ranks,
+                                            AllReduceStrategy strategy) {
   int64_t threads_per_block;
   int64_t blocks_per_grid;
   const int64_t elements_per_rank =
@@ -192,7 +191,7 @@ LaunchDimensions AllReduceLaunchDimensions(int64_t elements, int64_t num_ranks,
   const int64_t total_threads =
       RoundUpTo(elements_per_rank / se::gpu::kNumElementsPerThread, kWarpSize);
   threads_per_block = std::min(kMaxThreadsPerBlock, total_threads);
-  blocks_per_grid = std::min(kMaxBlocksPerGrid,
+  blocks_per_grid = std::min(kMaxCollectiveBlocksPerGrid,
                              CeilOfRatio(total_threads, threads_per_block));
   return LaunchDimensions(blocks_per_grid, threads_per_block);
 }

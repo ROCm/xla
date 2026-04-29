@@ -914,6 +914,7 @@ cc_library(
     srcs = ["collective_emitter.cc"],
     hdrs = ["collective_emitter.h"],
     deps = [
+        ":lowering_util",
         "//xla:shape_util",
         "//xla:status_macros",
         "//xla:types",
@@ -926,8 +927,10 @@ cc_library(
         "//xla/codegen/xtile/ir:xtile",
         "//xla/core/collectives:reduction_kind",
         "//xla/hlo/ir:hlo",
+        "//xla/mlir/utils:type_util",
         "//xla/service:collective_ops_utils",
         "//xla/service/gpu:backend_configs_cc",
+        "//xla/service/gpu:gpu_constants",
         "//xla/service/gpu:ir_emission_utils",
         "//xla/service/gpu:launch_dimensions",
         "//xla/stream_executor:device_description",

@@ -125,25 +125,36 @@ absl::StatusOr<TritonFusion::EmitResult> TritonFusion::Emit(
     absl::Span<const Shape> unmanaged_arguments) const {
   std::string suggested_kernel_name = std::string(fusion.name());
   llvm::IRBuilder builder(*ir_emitter_context.llvm_context());
-  VLOG(3) << fusion.ToString();
-  TF_ASSIGN_OR_RETURN(
-      auto kernel_arguments,
-      emitters::KernelArguments::Create(
-          ir_emitter_context.buffer_assignment(), GetDefaultBufferAlignment(),
-          instr_override != nullptr ? instr_override : &fusion,
-          unmanaged_arguments));
+
+  // Special handling for AllGather with tuple unpacking
+  absl::StatusOr<emitters::KernelArguments> kernel_arguments_or;
+  if (instr_override != nullptr &&
+      instr_override->opcode() == HloOpcode::kAllGatherStart &&
+      instr_override->shape().IsTuple() && !fusion.shape().IsTuple()) {
+    // Use the new overload: fusion for shapes, AllGather for buffers at index
+    // {1}
+    kernel_arguments_or = emitters::KernelArguments::Create(
+        ir_emitter_context.buffer_assignment(), GetDefaultBufferAlignment(),
+        &fusion,         // shape_instruction
+        instr_override,  // buffer_instruction
+        ShapeIndex{1},   // output_index (element 1 of AllGather tuple)
+        unmanaged_arguments);
+  } else {
+    // Regular path for AllReduce and other operations
+    kernel_arguments_or = emitters::KernelArguments::Create(
+        ir_emitter_context.buffer_assignment(), GetDefaultBufferAlignment(),
+        instr_override != nullptr ? instr_override : &fusion,
+        unmanaged_arguments);
+  }
+  TF_ASSIGN_OR_RETURN(auto kernel_arguments, std::move(kernel_arguments_or));
 
   const HloComputation* hlo_computation =
       fusion.fused_instructions_computation();
-  VLOG(3) << "hlo_computation: " << hlo_computation->ToString();
 
   std::unique_ptr<llvm::Module> local_module;
   auto generate = [&]() -> absl::StatusOr<KernelReuseCache::Entry> {
-    VLOG(3) << "Generating: " << suggested_kernel_name;
-
     const std::string sanitized_kernel_name =
         ir_emitter_context.GetSanitizedUniqueName(suggested_kernel_name);
-
     TF_ASSIGN_OR_RETURN(
         TritonWrapperResult triton_wrapper_result,
         GenerateTritonKernelAndWrapper(
@@ -152,11 +163,9 @@ absl::StatusOr<TritonFusion::EmitResult> TritonFusion::Emit(
             ir_emitter_context.data_layout(), ir_emitter_context.llvm_context(),
             ir_emitter_context.mlir_context()));
     local_module = std::move(triton_wrapper_result.llvm_module);
-
     auto backend_config =
         fusion.backend_config<GpuBackendConfig>()->fusion_backend_config();
     absl::string_view fusion_kind = backend_config.kind();
-
     LaunchDimensions launch_dimensions;
 
     // TODO(bchetioui,pifon): this list should be consolidated; why do we need
@@ -166,11 +175,9 @@ absl::StatusOr<TritonFusion::EmitResult> TritonFusion::Emit(
         kTritonNestedGemmFusionKind,
         kTritonCollectiveFusionKind,
     };
-
     if (!absl::c_linear_search(kSupportedFusionKinds, fusion_kind)) {
       return Internal("Unsupported fusion kind: %s", fusion_kind);
     }
-
     std::optional<LaunchConfig> launch_config;
     // Currently GetLaunchConfig will compute the same value as the extracted
     // one. They are different only when warp specialization is enabled.
@@ -197,11 +204,9 @@ absl::StatusOr<TritonFusion::EmitResult> TritonFusion::Emit(
 
     AnnotateAttrsIfUnset(kernel_arguments, *kernel);
     PopulateNvvmAnnotations(local_module.get(), kernel, triton_wrapper_result);
-
     TF_RETURN_IF_ERROR(AnnotateKernelLaunchDimensions(
         ir_emitter_context.gpu_device_info(), launch_dimensions, kernel,
         local_module.get()));
-
     return {{kernel->getName().str(), launch_dimensions,
              /*cluster_dim=*/std::nullopt, triton_wrapper_result.shmem_bytes,
              /*binary=*/"", triton_wrapper_result.tma_metadata}};
@@ -242,25 +247,45 @@ std::optional<TritonFusion::LaunchConfig> TritonFusion::GetLaunchConfig(
 
     // We expect all roots to have the same number of blocks. Otherwise we
     // cannot codegen it.
+    LOG(INFO) << "GetLaunchConfig: fusion_root_count="
+              << analysis_.fusion_root_count();
+
+    if (analysis_.fusion_root_count() == 0) {
+      LOG(ERROR) << "GetLaunchConfig: No fusion roots found!";
+      return std::nullopt;
+    }
+
     int64_t num_blocks =
         GetNumberOfBlocks(analysis_.fusion_root(0).shape().dimensions(),
                           block_level_parameters.output_tile_sizes[0]);
     for (int64_t i = 1; i < analysis_.fusion_root_count(); ++i) {
-      CHECK_EQ(GetNumberOfBlocks(analysis_.fusion_root(i).shape().dimensions(),
-                                 block_level_parameters.output_tile_sizes[i]),
-               num_blocks);
-    }
+      if (i >= block_level_parameters.output_tile_sizes.size()) {
+        LOG(ERROR)
+            << "GetLaunchConfig: output_tile_sizes index out of bounds! i=" << i
+            << ", size=" << block_level_parameters.output_tile_sizes.size();
+        return std::nullopt;
+      }
 
+      int64_t blocks_for_root =
+          GetNumberOfBlocks(analysis_.fusion_root(i).shape().dimensions(),
+                            block_level_parameters.output_tile_sizes[i]);
+
+      CHECK_EQ(blocks_for_root, num_blocks);
+    }
     LaunchConfig launch_config;
     // TODO(b/451901200): We eventually also want to be able to predict this
     // value without compiling so the cost model can rely on it. Currently, we
     // need the override for auto warp specialization.
+    LOG(INFO) << "GetLaunchConfig: thread_dims_override.has_value()="
+              << thread_dims_override.has_value();
+
     if (thread_dims_override) {
       launch_config.launch_dimensions = LaunchDimensions{
           se::BlockDim(num_blocks), thread_dims_override.value()};
     } else {
+      int64_t warp_size = WarpSize(analysis_.device_info());
       int64_t estimated_threads_per_block =
-          block_level_parameters.num_warps * WarpSize(analysis_.device_info());
+          block_level_parameters.num_warps * warp_size;
       launch_config.launch_dimensions =
           LaunchDimensions{static_cast<uint64_t>(num_blocks),
                            static_cast<uint64_t>(estimated_threads_per_block)};
