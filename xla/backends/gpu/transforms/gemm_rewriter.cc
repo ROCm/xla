@@ -578,14 +578,15 @@ uint32_t CountFinalUsers(const HloInstruction* instr) {
 
 // Helper function to get a mutable GemmBackendConfig from either a regular
 // GEMM or a grouped GEMM.
-GemmBackendConfig* GetMutableGemmBackendConfig(GpuBackendConfig& gpu_config) {
+GemmBackendConfig& GetMutableGemmBackendConfig(GpuBackendConfig& gpu_config) {
   if (gpu_config.has_gemm_backend_config()) {
-    return gpu_config.mutable_gemm_backend_config();
+    return *gpu_config.mutable_gemm_backend_config();
   } else if (gpu_config.has_grouped_gemm_backend_config()) {
-    return gpu_config.mutable_grouped_gemm_backend_config()
-        ->mutable_gemm_backend_config();
+    return *gpu_config.mutable_grouped_gemm_backend_config()
+                ->mutable_gemm_backend_config();
   }
-  return nullptr;
+  CHECK(false) << "GpuBackendConfig has neither gemm_backend_config nor "
+                  "grouped_gemm_backend_config";
 }
 
 // Helper function to get a const GemmBackendConfig from either a regular
@@ -1827,11 +1828,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
         IsCublasLtGroupedMatmul(*gemm) || can_overwrite_bias;
 
     auto gpu_config = gemm->backend_config<GpuBackendConfig>().value();
-    GemmBackendConfig* config_ptr = GetMutableGemmBackendConfig(gpu_config);
-    if (!config_ptr) {
-      return absl::OkStatus();
-    }
-    GemmBackendConfig& config = *config_ptr;
+    GemmBackendConfig& config = GetMutableGemmBackendConfig(gpu_config);
     // It is possible to fuse into a cublasLt matmul that already has a vector
     // bias, but no other epilogue will commute with the matrix bias add.
     bool supported_epilogue =
@@ -1935,11 +1932,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
     TF_ASSIGN_OR_RETURN(auto gpu_config,
                         gemm->backend_config<GpuBackendConfig>());
-    GemmBackendConfig* config_ptr = GetMutableGemmBackendConfig(gpu_config);
-    if (!config_ptr) {
-      return false;
-    }
-    GemmBackendConfig& config = *config_ptr;
+    GemmBackendConfig& config = GetMutableGemmBackendConfig(gpu_config);
     // # output column dims == # non-contracting rhs operand dims.
     const DotDimensionNumbers& dot_dims = config.dot_dimension_numbers();
     size_t num_col_dims = gemm->operand(1)->shape().dimensions().size() -
@@ -2070,11 +2063,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
     TF_ASSIGN_OR_RETURN(auto gpu_config,
                         gemm->backend_config<GpuBackendConfig>());
-    GemmBackendConfig* config_ptr = GetMutableGemmBackendConfig(gpu_config);
-    if (!config_ptr) {
-      return absl::OkStatus();
-    }
-    GemmBackendConfig& config = *config_ptr;
+    GemmBackendConfig& config = GetMutableGemmBackendConfig(gpu_config);
     if (config.epilogue() == GemmBackendConfig::DEFAULT) {
       config.set_epilogue(GemmBackendConfig::RELU);
     } else if (config.epilogue() == GemmBackendConfig::BIAS) {
@@ -2124,11 +2113,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
     TF_ASSIGN_OR_RETURN(auto gpu_config,
                         gemm->backend_config<GpuBackendConfig>());
-    GemmBackendConfig* config_ptr = GetMutableGemmBackendConfig(gpu_config);
-    if (!config_ptr) {
-      return absl::OkStatus();
-    }
-    GemmBackendConfig& config = *config_ptr;
+    GemmBackendConfig& config = GetMutableGemmBackendConfig(gpu_config);
 
     if (config.epilogue() == GemmBackendConfig::DEFAULT) {
       config.set_epilogue(has_aux ? GemmBackendConfig::GELU_AUX
@@ -2195,11 +2180,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
     TF_ASSIGN_OR_RETURN(auto gpu_config,
                         gemm->backend_config<GpuBackendConfig>());
-    GemmBackendConfig* config_ptr = GetMutableGemmBackendConfig(gpu_config);
-    if (!config_ptr) {
-      return absl::OkStatus();
-    }
-    GemmBackendConfig& config = *config_ptr;
+    GemmBackendConfig& config = GetMutableGemmBackendConfig(gpu_config);
 
     if (config.epilogue() == GemmBackendConfig::DEFAULT) {
       config.set_epilogue(GemmBackendConfig::SILU);
