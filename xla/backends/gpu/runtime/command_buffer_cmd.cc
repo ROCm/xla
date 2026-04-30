@@ -517,17 +517,8 @@ CollectiveCmd::RecordTracedCommand(
     // RecordUpdate iterations).
     if (!std::holds_alternative<RecordCreate>(record_action)) {
       bool local_hit = traced_cmd->HasEntry(execute_params.buffer_allocations);
-      if (clique_key.num_local_participants() <= 1) {
-        // Single local participant means there's nothing to coordinate: there
-        // is exactly one rank in this process for this clique, so its local
-        // decision is by definition the clique-wide decision. Skipping the
-        // process-local Rendezvous avoids one synchronization per iteration
-        // in the common production layout (one process per GPU).
-        use_cache = local_hit;
-      } else {
-        TF_ASSIGN_OR_RETURN(
-            use_cache, AllRanksHitTraceCache(clique_key, this, local_hit));
-      }
+      TF_ASSIGN_OR_RETURN(use_cache,
+                          AllRanksHitTraceCache(clique_key, this, local_hit));
     }
   }
 
