@@ -105,7 +105,8 @@ absl::StatusOr<std::vector<RepeatedFlagModifier>> ParseRepeatedEnumModifiers(
 namespace {
 
 template <typename T>
-static auto FindRepeatedFieldValue(google::protobuf::RepeatedField<int>* list, T value) {
+static auto FindRepeatedFieldValue(google::protobuf::RepeatedField<int>* list,
+                                   T value) {
   for (auto it = list->begin(); it != list->end(); ++it) {
     if (*it == value) {
       return it;
@@ -329,7 +330,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
       DebugOptions::PARTITIONING_ALGORITHM_NOOP);
 
   opts.set_xla_gpu_enable_triton_gemm(true);
-  opts.set_xla_gpu_unsupported_enable_triton_multi_output_fusion(true);
+  opts.set_xla_gpu_unsupported_enable_triton_multi_output_fusion(false);
   opts.set_xla_gpu_enable_cudnn_int8x32_convolution_reordering(true);
   opts.set_xla_gpu_triton_gemm_any(true);
   opts.set_xla_gpu_verify_triton_fusion_numerics(false);
@@ -2856,6 +2857,12 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
                 debug_options->xla_enable_hlo_sharding_v3(),
                 "If true, use HloShardingV3 which is a mesh and axis based "
                 "sharding representation."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_rocm_max_trace_events",
+      int64_setter_for(&DebugOptions::set_xla_gpu_rocm_max_trace_events),
+      debug_options->xla_gpu_rocm_max_trace_events(),
+      "Maximum number of ROCm trace events (applies to callback/activity/"
+      "annotation). Set as high as memory allows; up to 1e9."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_experimental_enable_checksum_tracing_on_thunks",
       bool_setter_for(
