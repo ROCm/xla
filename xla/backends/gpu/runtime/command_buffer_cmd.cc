@@ -45,7 +45,6 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
-#include "xla/tsl/platform/status_macros.h"
 #include "xla/backends/gpu/collectives/gpu_clique_key.h"
 #include "xla/backends/gpu/runtime/all_gather_thunk.h"
 #include "xla/backends/gpu/runtime/all_reduce_thunk.h"
@@ -100,6 +99,7 @@ limitations under the License.
 #include "xla/stream_executor/trace_command_buffer_factory.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/types.h"  // IWYU pragma: keep
 #include "xla/util.h"
@@ -330,14 +330,14 @@ absl::StatusOr<const se::CommandBuffer::Command*> WhileCmd::Record(
       ScopedWhileLoop loop("record_fn", trip_count_);
       for (int64_t i = 0; i < *trip_count_; loop.IncLoopIteration(), ++i) {
         CommandExecutor::RecordId record_id(i);
-        TF_ASSIGN_OR_RETURN(dependencies,
-                            cond_commands_.RecordCreate(
-                                execute_params, new_record_params,
-                                child_command_buffer, dependencies, record_id));
-        TF_ASSIGN_OR_RETURN(dependencies,
-                            body_commands_.RecordCreate(
-                                execute_params, new_record_params,
-                                child_command_buffer, dependencies, record_id));
+        ASSIGN_OR_RETURN(dependencies,
+                         cond_commands_.RecordCreate(
+                             execute_params, new_record_params,
+                             child_command_buffer, dependencies, record_id));
+        ASSIGN_OR_RETURN(dependencies,
+                         body_commands_.RecordCreate(
+                             execute_params, new_record_params,
+                             child_command_buffer, dependencies, record_id));
       }
 
       return absl::OkStatus();
@@ -417,15 +417,15 @@ absl::Status CollectiveCmd::Prepare(const Thunk::PrepareParams& params) {
   TF_RET_CHECK(params.collective_params &&
                params.collective_params->device_assn);
 
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       GpuCliqueKey clique_key,
       GetGpuCliqueKey(*params.collective_params, config().replica_groups,
                       config().group_mode, communication_id_));
 
-  TF_ASSIGN_OR_RETURN(std::vector<std::vector<GlobalDeviceId>> device_groups,
-                      GetParticipatingDevicesGroups(
-                          *params.collective_params->device_assn,
-                          config().replica_groups, config().group_mode));
+  ASSIGN_OR_RETURN(std::vector<std::vector<GlobalDeviceId>> device_groups,
+                   GetParticipatingDevicesGroups(
+                       *params.collective_params->device_assn,
+                       config().replica_groups, config().group_mode));
 
   // Sort device groups: RequestClique expects pre-sorted groups.
   absl::c_for_each(device_groups, [](auto& group) { absl::c_sort(group); });
@@ -465,17 +465,16 @@ absl::StatusOr<bool> AllRanksHitTraceCache(const GpuCliqueKey& clique_key,
                                            const CollectiveCmd* cmd,
                                            bool local_hit) {
   CollectiveTraceCacheKey key{clique_key, cmd};
-  TF_ASSIGN_OR_RETURN(
-      std::shared_ptr<bool> all_hit,
-      xla::Rendezvous<bool>(
-          "collective_trace_cache", key, local_hit,
-          clique_key.num_local_participants(),
-          [](absl::Span<bool*> votes) {
-            return std::all_of(votes.begin(), votes.end(),
-                               [](const bool* v) { return *v; });
-          },
-          /*warn_stuck_timeout=*/absl::Seconds(10),
-          /*terminate_timeout=*/absl::Seconds(30)));
+  ASSIGN_OR_RETURN(std::shared_ptr<bool> all_hit,
+                   xla::Rendezvous<bool>(
+                       "collective_trace_cache", key, local_hit,
+                       clique_key.num_local_participants(),
+                       [](absl::Span<bool*> votes) {
+                         return std::all_of(votes.begin(), votes.end(),
+                                            [](const bool* v) { return *v; });
+                       },
+                       /*warn_stuck_timeout=*/absl::Seconds(10),
+                       /*terminate_timeout=*/absl::Seconds(30)));
   return *all_hit;
 }
 
@@ -488,8 +487,7 @@ CollectiveCmd::RecordTracedCommand(
     se::CommandBuffer* command_buffer,
     absl::FunctionRef<absl::Status(se::Stream*)> trace,
     const GpuCliqueKey& clique_key) {
-  const int device_ordinal =
-      execute_params.stream->parent()->device_ordinal();
+  const int device_ordinal = execute_params.stream->parent()->device_ordinal();
   se::CommandBuffer* nested_cmd_ptr = nullptr;
   std::unique_ptr<se::CommandBuffer> nested_cmd_owned;
 
@@ -517,19 +515,18 @@ CollectiveCmd::RecordTracedCommand(
     // RecordUpdate iterations).
     if (!std::holds_alternative<RecordCreate>(record_action)) {
       bool local_hit = traced_cmd->HasEntry(execute_params.buffer_allocations);
-      TF_ASSIGN_OR_RETURN(use_cache,
-                          AllRanksHitTraceCache(clique_key, this, local_hit));
+      ASSIGN_OR_RETURN(use_cache,
+                       AllRanksHitTraceCache(clique_key, this, local_hit));
     }
   }
 
   if (use_cache) {
     XLA_VLOG_DEVICE(5, device_ordinal)
         << "Collective trace cache hit: all ranks using cached graph";
-    TF_ASSIGN_OR_RETURN(
+    ASSIGN_OR_RETURN(
         nested_cmd_ptr,
         traced_cmd->GetOrTraceCommandBuffer(
-            execute_params.buffer_allocations,
-            execute_params.stream->parent(),
+            execute_params.buffer_allocations, execute_params.stream->parent(),
             execute_params.command_buffer_trace_stream, trace, priority()));
   } else if (traced_cmd != nullptr) {
     // Local clique with at least one miss: every rank re-traces together (to
@@ -537,22 +534,20 @@ CollectiveCmd::RecordTracedCommand(
     // iteration can take the fast path.
     XLA_VLOG_DEVICE(5, device_ordinal)
         << "Collective trace cache miss: all local ranks retracing";
-    TF_ASSIGN_OR_RETURN(
+    ASSIGN_OR_RETURN(
         nested_cmd_ptr,
         traced_cmd->ForceTraceCommandBuffer(
-            execute_params.buffer_allocations,
-            execute_params.stream->parent(),
+            execute_params.buffer_allocations, execute_params.stream->parent(),
             execute_params.command_buffer_trace_stream, trace, priority()));
   } else {
     // Non-local clique: in-process Rendezvous cannot coordinate across hosts,
     // so we always trace without caching to remain symmetric.
     XLA_VLOG_DEVICE(5, device_ordinal)
         << "Non-local clique: tracing without cache";
-    TF_ASSIGN_OR_RETURN(
-        nested_cmd_owned,
-        se::TraceCommandBufferFactory::Create(
-            execute_params.stream->parent(),
-            execute_params.command_buffer_trace_stream, trace));
+    ASSIGN_OR_RETURN(nested_cmd_owned,
+                     se::TraceCommandBufferFactory::Create(
+                         execute_params.stream->parent(),
+                         execute_params.command_buffer_trace_stream, trace));
     if (priority() != se::StreamPriority::Default) {
       TF_RETURN_IF_ERROR(nested_cmd_owned->SetPriority(priority()));
     }
@@ -585,7 +580,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> ReduceScatterCmd::Record(
     const Thunk::ExecuteParams& execute_params,
     const RecordParams& record_params, RecordAction record_action,
     se::CommandBuffer* command_buffer) {
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       std::vector<DeviceBufferPair> device_buffers,
       ConvertToDeviceBuffers(execute_params.buffer_allocations, buffers_,
                              config().operand_element_type));
@@ -608,24 +603,23 @@ absl::StatusOr<const se::CommandBuffer::Command*> ReduceScatterCmd::Record(
         "ReduceScatterCmd requires collective parameters and cliques");
   }
 
-  TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
-                      GetGpuCliqueKey(*execute_params.collective_params,
-                                      config().replica_groups,
-                                      config().group_mode, communication_id()));
+  ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
+                   GetGpuCliqueKey(*execute_params.collective_params,
+                                   config().replica_groups, config().group_mode,
+                                   communication_id()));
 
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       Communicator * comm,
       execute_params.collective_cliques->GetComm(
           clique_key, execute_params.collective_params->global_device_id));
 
-  return RecordTracedCommand(execute_params, record_params, record_action,
-                             command_buffer,
-                             [&](se::Stream* stream) {
-                               return RunReduceScatter(
-                                   reduction_kind_, device_buffers, *stream,
-                                   *comm, config().use_symmetric_buffer);
-                             },
-                             clique_key);
+  return RecordTracedCommand(
+      execute_params, record_params, record_action, command_buffer,
+      [&](se::Stream* stream) {
+        return RunReduceScatter(reduction_kind_, device_buffers, *stream, *comm,
+                                config().use_symmetric_buffer);
+      },
+      clique_key);
 }
 
 Command::BufferUses ReduceScatterCmd::buffer_uses() const {
@@ -653,7 +647,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> AllToAllCmd::Record(
     const Thunk::ExecuteParams& execute_params,
     const RecordParams& record_params, RecordAction record_action,
     se::CommandBuffer* command_buffer) {
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       std::vector<DeviceBufferPair> device_buffers,
       ConvertToDeviceBuffers(execute_params.buffer_allocations, buffers_,
                              config().operand_element_type));
@@ -676,12 +670,12 @@ absl::StatusOr<const se::CommandBuffer::Command*> AllToAllCmd::Record(
         "AllToAllCmd requires collective parameters and cliques");
   }
 
-  TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
-                      GetGpuCliqueKey(*execute_params.collective_params,
-                                      config().replica_groups,
-                                      config().group_mode, communication_id()));
+  ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
+                   GetGpuCliqueKey(*execute_params.collective_params,
+                                   config().replica_groups, config().group_mode,
+                                   communication_id()));
 
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       Communicator * comm,
       execute_params.collective_cliques->GetComm(
           clique_key, execute_params.collective_params->global_device_id));
@@ -720,7 +714,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> AllGatherCmd::Record(
     const Thunk::ExecuteParams& execute_params,
     const RecordParams& record_params, RecordAction record_action,
     se::CommandBuffer* command_buffer) {
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       std::vector<DeviceBufferPair> device_buffers,
       ConvertToDeviceBuffers(execute_params.buffer_allocations, buffers_,
                              config().operand_element_type));
@@ -742,12 +736,12 @@ absl::StatusOr<const se::CommandBuffer::Command*> AllGatherCmd::Record(
         "AllGatherCmd requires collective parameters and cliques");
   }
 
-  TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
-                      GetGpuCliqueKey(*execute_params.collective_params,
-                                      config().replica_groups,
-                                      config().group_mode, communication_id()));
+  ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
+                   GetGpuCliqueKey(*execute_params.collective_params,
+                                   config().replica_groups, config().group_mode,
+                                   communication_id()));
 
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       Communicator * comm,
       execute_params.collective_cliques->GetComm(
           clique_key, execute_params.collective_params->global_device_id));
@@ -786,7 +780,7 @@ CollectiveBroadcastCmd::Record(const Thunk::ExecuteParams& execute_params,
                                const RecordParams& record_params,
                                RecordAction record_action,
                                se::CommandBuffer* command_buffer) {
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       std::vector<DeviceBufferPair> device_buffers,
       ConvertToDeviceBuffers(execute_params.buffer_allocations, buffers_,
                              config().operand_element_type));
@@ -808,12 +802,12 @@ CollectiveBroadcastCmd::Record(const Thunk::ExecuteParams& execute_params,
         "CollectiveBroadcastCmd requires collective parameters and cliques");
   }
 
-  TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
-                      GetGpuCliqueKey(*execute_params.collective_params,
-                                      config().replica_groups,
-                                      config().group_mode, communication_id()));
+  ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
+                   GetGpuCliqueKey(*execute_params.collective_params,
+                                   config().replica_groups, config().group_mode,
+                                   communication_id()));
 
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       Communicator * comm,
       execute_params.collective_cliques->GetComm(
           clique_key, execute_params.collective_params->global_device_id));
@@ -877,12 +871,12 @@ absl::StatusOr<const se::CommandBuffer::Command*> RecvCmd::Record(
         "RecvCmd requires collective parameters and cliques");
   }
 
-  TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
-                      GetGpuCliqueKey(*execute_params.collective_params,
-                                      config().replica_groups,
-                                      config().group_mode, communication_id()));
+  ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
+                   GetGpuCliqueKey(*execute_params.collective_params,
+                                   config().replica_groups, config().group_mode,
+                                   communication_id()));
 
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       Communicator * comm,
       execute_params.collective_cliques->GetComm(
           clique_key, execute_params.collective_params->global_device_id));
@@ -890,7 +884,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> RecvCmd::Record(
   GlobalDeviceId global_device_id =
       execute_params.collective_params->global_device_id;
 
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       const DeviceAssignment::LogicalID current_logical_id,
       execute_params.collective_params->device_assn->LogicalIdForDevice(
           global_device_id));
@@ -966,12 +960,12 @@ absl::StatusOr<const se::CommandBuffer::Command*> SendCmd::Record(
         "SendCmd requires collective parameters and cliques");
   }
 
-  TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
-                      GetGpuCliqueKey(*execute_params.collective_params,
-                                      config().replica_groups,
-                                      config().group_mode, communication_id()));
+  ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
+                   GetGpuCliqueKey(*execute_params.collective_params,
+                                   config().replica_groups, config().group_mode,
+                                   communication_id()));
 
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       Communicator * comm,
       execute_params.collective_cliques->GetComm(
           clique_key, execute_params.collective_params->global_device_id));
@@ -979,7 +973,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> SendCmd::Record(
   GlobalDeviceId global_device_id =
       execute_params.collective_params->global_device_id;
 
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       const DeviceAssignment::LogicalID current_logical_id,
       execute_params.collective_params->device_assn->LogicalIdForDevice(
           global_device_id));
@@ -1036,7 +1030,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> CollectivePermuteCmd::Record(
     const Thunk::ExecuteParams& execute_params,
     const RecordParams& record_params, RecordAction record_action,
     se::CommandBuffer* command_buffer) {
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       std::vector<DeviceBufferPair> device_buffers,
       ConvertToDeviceBuffers(execute_params.buffer_allocations, buffers_,
                              config().operand_element_type));
@@ -1058,12 +1052,12 @@ absl::StatusOr<const se::CommandBuffer::Command*> CollectivePermuteCmd::Record(
         "CollectivePermuteCmd requires collective parameters and cliques");
   }
 
-  TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
-                      GetGpuCliqueKey(*execute_params.collective_params,
-                                      config().replica_groups,
-                                      config().group_mode, communication_id()));
+  ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
+                   GetGpuCliqueKey(*execute_params.collective_params,
+                                   config().replica_groups, config().group_mode,
+                                   communication_id()));
 
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       Communicator * comm,
       execute_params.collective_cliques->GetComm(
           clique_key, execute_params.collective_params->global_device_id));
@@ -1072,7 +1066,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> CollectivePermuteCmd::Record(
       CollectiveThunk::GetDeviceString(*execute_params.collective_params);
   bool use_symmetric_buffer = config().use_symmetric_buffer;
 
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       const int64_t current_id,
       GetCollectiveCurrentId(execute_params.collective_params, p2p_config_));
 
@@ -1157,10 +1151,10 @@ absl::StatusOr<const se::CommandBuffer::Command*> RaggedAllToAllCmd::Record(
   }
 
   // 1. Resolve Clique Key
-  TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
-                      GetGpuCliqueKey(*execute_params.collective_params,
-                                      config().replica_groups,
-                                      config().group_mode, communication_id()));
+  ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
+                   GetGpuCliqueKey(*execute_params.collective_params,
+                                   config().replica_groups, config().group_mode,
+                                   communication_id()));
 
   // 2. Prepare Local Data
   auto device_ordinal = execute_params.stream->parent()->device_ordinal();
@@ -1172,7 +1166,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> RaggedAllToAllCmd::Record(
 
   // 3. Safety Checks
   // Check if peer access is enabled.
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       bool peer_access_enabled,
       execute_params.collective_cliques->peer_access_enabled(clique_key));
 
@@ -1233,7 +1227,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> RaggedAllToAllCmd::Record(
       << "Failed to get or create RaggedAllToAllCmdState";
 
   // 5. Resolve Buffer Addresses (For the current run/capture)
-  TF_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       std::vector<DeviceBufferPair> device_buffers,
       ConvertToDeviceBuffers(execute_params.buffer_allocations, buffers_,
                              config().operand_element_type));
@@ -1245,7 +1239,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> RaggedAllToAllCmd::Record(
 
     // A. Rendezvous
     // Exchanges *current* buffer addresses to bake into the graph.
-    TF_ASSIGN_OR_RETURN(
+    ASSIGN_OR_RETURN(
         std::shared_ptr<std::vector<RaggedAllToAllRendezvousValue>>
             participants,
         RendezvousResources(device_ordinal, rank, clique_key, output_buffer,

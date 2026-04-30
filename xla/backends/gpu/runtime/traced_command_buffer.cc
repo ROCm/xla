@@ -41,6 +41,7 @@ limitations under the License.
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/stream_executor/trace_command_buffer_factory.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "xla/tsl/platform/statusor.h"
 
 namespace xla::gpu {
@@ -103,7 +104,7 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::Trace(
   // through `ShiftToFront`.
   auto retrace_into = [&](size_t i,
                           bool assign_allocs) -> absl::StatusOr<size_t> {
-    TF_ASSIGN_OR_RETURN(
+    ASSIGN_OR_RETURN(
         entries_[i].command_buffer,
         se::TraceCommandBufferFactory::Create(executor, stream, trace));
     if (assign_allocs) {
@@ -123,8 +124,7 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::Trace(
               << trace_cmd_->ToString(0);
       return ShiftToFront(*i).command_buffer.get();
     }
-    TF_ASSIGN_OR_RETURN(size_t idx,
-                        retrace_into(*i, /*assign_allocs=*/false));
+    ASSIGN_OR_RETURN(size_t idx, retrace_into(*i, /*assign_allocs=*/false));
     VLOG(6) << "Command buffer trace cache force-retrace for command "
             << trace_cmd_->ToString(0);
     return ShiftToFront(idx).command_buffer.get();
@@ -133,8 +133,7 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::Trace(
   // No match: trace into the first empty slot if one exists.
   for (size_t i = 0; i < capacity_; ++i) {
     if (entries_[i].command_buffer == nullptr) {
-      TF_ASSIGN_OR_RETURN(size_t idx,
-                          retrace_into(i, /*assign_allocs=*/true));
+      ASSIGN_OR_RETURN(size_t idx, retrace_into(i, /*assign_allocs=*/true));
       VLOG(6) << "Command buffer trace cache create new item for command "
               << trace_cmd_->ToString(0);
       return ShiftToFront(idx).command_buffer.get();
@@ -142,8 +141,8 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::Trace(
   }
 
   // Cache full: evict the oldest (last) entry and trace into it.
-  TF_ASSIGN_OR_RETURN(
-      size_t idx, retrace_into(capacity_ - 1, /*assign_allocs=*/true));
+  ASSIGN_OR_RETURN(size_t idx,
+                   retrace_into(capacity_ - 1, /*assign_allocs=*/true));
   VLOG(6) << "Command buffer trace cache does replacement for command "
           << trace_cmd_->ToString(0);
   return ShiftToFront(idx).command_buffer.get();
@@ -157,8 +156,7 @@ absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::GetOrTraceCommandBuffer(
                /*force_retrace=*/false);
 }
 
-absl::StatusOr<se::CommandBuffer*>
-TracedCommandBuffer::ForceTraceCommandBuffer(
+absl::StatusOr<se::CommandBuffer*> TracedCommandBuffer::ForceTraceCommandBuffer(
     const BufferAllocations* buffer_allocation, se::StreamExecutor* executor,
     se::Stream* stream, absl::FunctionRef<absl::Status(se::Stream*)> trace,
     se::StreamPriority priority) {
