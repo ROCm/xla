@@ -532,6 +532,12 @@ absl::Status GpuHloCostAnalysis::HandleAllGather(const HloInstruction* hlo) {
 
   current_properties_[kBytesAccessedKey] = write_bytes + read_bytes;
   current_properties_[kCollBytesTransferred] = bytes_transferred;
+  current_properties_[kCollNumDevicesKey] = num_ranks;
+
+  int num_intra_steps = num_ranks - 1;
+  float scaling_ratio =
+      num_intra_steps > 0 ? (1.0 * num_ranks) / num_intra_steps : 0;
+  current_properties_[kCollAlgoScaleRatioKey] = scaling_ratio;
 
   return absl::OkStatus();
 }
@@ -549,6 +555,12 @@ absl::Status GpuHloCostAnalysis::HandleAllGatherStart(
 
   current_properties_[kBytesAccessedKey] = write_bytes + read_bytes;
   current_properties_[kCollBytesTransferred] = bytes_transferred;
+  current_properties_[kCollNumDevicesKey] = num_ranks;
+
+  int num_intra_steps = num_ranks - 1;
+  float scaling_ratio =
+      num_intra_steps > 0 ? (1.0 * num_ranks) / num_intra_steps : 0;
+  current_properties_[kCollAlgoScaleRatioKey] = scaling_ratio;
 
   return absl::OkStatus();
 }
@@ -582,13 +594,45 @@ absl::Status GpuHloCostAnalysis::HandleReduceScatter(
   current_properties_[kCollBytesTransferred] = bytes_transferred;
   current_properties_[kFlopsKey] = GetFlopsForElementwiseOp(
       hlo->to_apply()->root_instruction()->opcode(), hlo->shape());
+  current_properties_[kCollNumDevicesKey] = num_ranks;
+
+  int num_intra_steps = num_ranks - 1;
+  float scaling_ratio =
+      num_intra_steps > 0 ? (1.0 * num_ranks) / num_intra_steps : 0;
+  current_properties_[kCollAlgoScaleRatioKey] = scaling_ratio;
 
   return absl::OkStatus();
 }
 
 absl::Status GpuHloCostAnalysis::HandleAllToAll(const HloInstruction* hlo) {
+  auto* all_to_all = Cast<HloAllToAllInstruction>(hlo);
+
+  const HloModuleConfig& config = hlo->GetModule()->config();
+  TF_ASSIGN_OR_RETURN(
+      CollectiveOpGroupMode group_mode,
+      GetCollectiveOpGroupMode(all_to_all->channel_id().has_value(),
+                               /*use_global_device_ids=*/std::nullopt));
+  int64_t num_devices = config.num_partitions();
+  int64_t num_replicas = config.replica_count();
+  TF_ASSIGN_OR_RETURN(
+      std::vector<int64_t> participant_counts,
+      GetPariticipantCountsForReplicaGroups(
+          num_replicas, num_devices, all_to_all->replica_groups(), group_mode));
+  int64_t num_ranks = 1;
+  for (auto count : participant_counts) {
+    num_ranks = std::max(num_ranks, count);
+  }
+
   int64_t bytes_transferred = ShapeSize(hlo->shape(), options_.shape_size);
   current_properties_[kCollBytesTransferred] = bytes_transferred;
+  current_properties_[kBytesAccessedKey] = bytes_transferred * 2;
+  current_properties_[kCollNumDevicesKey] = num_ranks;
+
+  int num_intra_steps = num_ranks - 1;
+  float scaling_ratio =
+      num_intra_steps > 0 ? (1.0 * num_ranks) / num_intra_steps : 0;
+  current_properties_[kCollAlgoScaleRatioKey] = scaling_ratio;
+
   return absl::OkStatus();
 }
 
