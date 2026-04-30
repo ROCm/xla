@@ -745,6 +745,248 @@ ENTRY test {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
 }
 
+// Test that vector bias is NOT fused for grouped GEMM with batch dimensions
+// due to hipBLASLt limitation
+TEST_F(GroupedGemmRewriteTest, GroupedGemmVectorBiasNonContractingWithBatch) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmVectorBiasNonContractingWithBatch
+
+ENTRY test {
+  p0 = f16[3,16,9]{2,1,0} parameter(0)
+  p1 = f16[3,2,9,8]{3,2,1,0} parameter(1)
+  p2 = s64[3,2] constant({{4, 12}, {4, 12}, {4, 12}})
+  bias = f16[8]{0} parameter(2)
+  ragged-dot = f16[3,16,8]{2,1,0} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={2}, rhs_contracting_dims={2},
+                lhs_batch_dims={0}, rhs_batch_dims={0},
+                lhs_ragged_dims={1}, rhs_group_dims={1}
+  bias_bcast = f16[3,16,8]{2,1,0} broadcast(bias), dimensions={2}
+  ROOT out = f16[3,16,8]{2,1,0} add(ragged-dot, bias_bcast)
+}
+)";
+  // Verify that bias is NOT fused (epilogue should be DEFAULT, not BIAS)
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "epilogue":"DEFAULT"
+; CHECK-NOT: "epilogue":"BIAS"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+TEST_F(GroupedGemmRewriteTest, GroupedGemmMatrixBiasNonContractingWithBatch) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmMatrixBiasNonContractingWithBatch
+
+ENTRY test {
+  p0 = f16[3,16,9]{2,1,0} parameter(0)
+  p1 = f16[3,2,9,8]{3,2,1,0} parameter(1)
+  p2 = s64[3,2] constant({{4, 12}, {4, 12}, {4, 12}})
+  bias = f16[3,16,8]{2,1,0} parameter(2)
+  ragged-dot = f16[3,16,8]{2,1,0} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={2}, rhs_contracting_dims={2},
+                lhs_batch_dims={0}, rhs_batch_dims={0},
+                lhs_ragged_dims={1}, rhs_group_dims={1}
+  ROOT out = f16[3,16,8]{2,1,0} add(ragged-dot, bias)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "beta":1
+; CHECK-SAME: "epilogue":"DEFAULT"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// Bias tests for ragged dimension in contracting dim
+TEST_F(GroupedGemmRewriteTest, GroupedGemmVectorBiasRaggedInContracting) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmVectorBiasRaggedInContracting
+
+ENTRY test {
+  p0 = f16[64,16]{1,0} parameter(0)
+  p1 = f16[16,8]{1,0} parameter(1)
+  p2 = s64[4] constant({4, 5, 3, 4})
+  bias = f16[8]{0} parameter(2)
+  ragged-dot = f16[4,64,8]{2,1,0} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={1}, rhs_contracting_dims={0},
+                lhs_ragged_dims={1}
+  bias_bcast = f16[4,64,8]{2,1,0} broadcast(bias), dimensions={2}
+  ROOT out = f16[4,64,8]{2,1,0} add(ragged-dot, bias_bcast)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "epilogue":"BIAS"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+TEST_F(GroupedGemmRewriteTest, GroupedGemmMatrixBiasRaggedInContracting) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmMatrixBiasRaggedInContracting
+
+ENTRY test {
+  p0 = f16[64,16]{1,0} parameter(0)
+  p1 = f16[16,8]{1,0} parameter(1)
+  p2 = s64[4] constant({4, 5, 3, 4})
+  bias = f16[4,64,8]{2,1,0} parameter(2)
+  ragged-dot = f16[4,64,8]{2,1,0} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={1}, rhs_contracting_dims={0},
+                lhs_ragged_dims={1}
+  ROOT out = f16[4,64,8]{2,1,0} add(ragged-dot, bias)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "beta":1
+; CHECK-SAME: "epilogue":"DEFAULT"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// Bias tests for ragged dimension in contracting dim with batch
+TEST_F(GroupedGemmRewriteTest,
+       GroupedGemmMatrixBiasRaggedInContractingWithBatch) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmMatrixBiasRaggedInContractingWithBatch
+
+ENTRY test {
+  p0 = f16[3,64,9]{2,1,0} parameter(0)
+  p1 = f16[3,9,8]{2,1,0} parameter(1)
+  p2 = s64[3,2] constant({{4, 5}, {4, 5}, {4, 5}})
+  bias = f16[2,3,64,8]{3,2,1,0} parameter(2)
+  ragged-dot = f16[2,3,64,8]{3,2,1,0} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={2}, rhs_contracting_dims={1},
+                lhs_ragged_dims={2}, lhs_batch_dims={0}, rhs_batch_dims={0}
+  ROOT out = f16[2,3,64,8]{3,2,1,0} add(ragged-dot, bias)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "beta":1
+; CHECK-SAME: "epilogue":"DEFAULT"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// Test that vector bias is NOT fused for grouped GEMM with batch dimensions
+// (ragged in batch dim case)
+TEST_F(GroupedGemmRewriteTest, GroupedGemmVectorBiasRaggedInBatch) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmVectorBiasRaggedInBatch
+
+ENTRY test {
+  p0 = f16[16,64,9]{2,1,0} parameter(0)
+  p1 = f16[16,9,8]{2,1,0} parameter(1)
+  p2 = s64[4] constant({4, 2, 6, 4})
+  bias = f16[8]{0} parameter(2)
+  ragged-dot = f16[16,64,8]{2,1,0} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={2}, rhs_contracting_dims={1},
+                lhs_ragged_dims={0}, lhs_batch_dims={0}, rhs_batch_dims={0}
+  bias_bcast = f16[16,64,8]{2,1,0} broadcast(bias), dimensions={2}
+  ROOT out = f16[16,64,8]{2,1,0} add(ragged-dot, bias_bcast)
+}
+)";
+  // Verify that bias is NOT fused (epilogue should be DEFAULT, not BIAS)
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "epilogue":"DEFAULT"
+; CHECK-NOT: "epilogue":"BIAS"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+TEST_F(GroupedGemmRewriteTest, GroupedGemmMatrixBiasRaggedInBatch) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmMatrixBiasRaggedInBatch
+
+ENTRY test {
+  p0 = f16[16,64,9]{2,1,0} parameter(0)
+  p1 = f16[16,9,8]{2,1,0} parameter(1)
+  p2 = s64[4] constant({4, 2, 6, 4})
+  bias = f16[16,64,8]{2,1,0} parameter(2)
+  ragged-dot = f16[16,64,8]{2,1,0} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={2}, rhs_contracting_dims={1},
+                lhs_ragged_dims={0}, lhs_batch_dims={0}, rhs_batch_dims={0}
+  ROOT out = f16[16,64,8]{2,1,0} add(ragged-dot, bias)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "beta":1
+; CHECK-SAME: "epilogue":"DEFAULT"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// Bias tests for ragged dimension in contracting transpose
+
+TEST_F(GroupedGemmRewriteTest,
+       GroupedGemmMatrixBiasRaggedInContractingTranspose) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmMatrixBiasRaggedInContractingTranspose
+
+ENTRY test {
+  p0 = f16[1024,64]{1,0} parameter(0)
+  p1 = f16[1024,256]{1,0} parameter(1)
+  p2 = s32[8] constant({128, 128, 128, 128, 128, 128, 128, 128})
+  bias = f16[8,64,256]{2,0,1} parameter(2)
+  ragged-dot = f16[8,64,256]{2,0,1} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={0}, rhs_contracting_dims={0},
+                lhs_ragged_dims={0}
+  ROOT out = f16[8,64,256]{2,0,1} add(ragged-dot, bias)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "beta":1
+; CHECK-SAME: "epilogue":"DEFAULT"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// Bias tests for ragged dimension in non-contracting transpose
+
+TEST_F(GroupedGemmRewriteTest,
+       GroupedGemmMatrixBiasRaggedNonContractingTranspose) {
+  if (IsRocm()) {
+    const auto* rocm_cc = Capability().rocm_compute_capability();
+    if (rocm_cc && rocm_cc->gfx_version() == "gfx950") {
+      GTEST_SKIP()
+          << "Ragged non-contracting transpose not supported on gfx950";
+    }
+  }
+  const char* hlo_text = R"(
+HloModule GroupedGemmMatrixBiasRaggedNonContractingTranspose
+
+ENTRY test {
+  p0 = f16[9,64]{1,0} parameter(0)
+  p1 = f16[4,9,8]{2,1,0} parameter(1)
+  p2 = s64[4] constant({16, 8, 24, 16})
+  bias = f16[64,8]{1,0} parameter(2)
+  ragged-dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={0}, rhs_contracting_dims={1},
+                lhs_ragged_dims={1}, rhs_group_dims={0}
+  ROOT out = f16[64,8]{1,0} add(ragged-dot, bias)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "beta":1
+; CHECK-SAME: "epilogue":"DEFAULT"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
 // Test epilogue fusion for grouped GEMM: ReLU Activation
 TEST_F(GroupedGemmRewriteTest, GroupedGemmReluActivation) {
   const char* hlo_text = R"(

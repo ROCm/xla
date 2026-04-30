@@ -642,13 +642,20 @@ bool IsTf32Allowed(PrecisionConfig::Algorithm algorithm,
     }
   }
 
-  // Calculate c_stride_ragged_dim for the C matrix (may differ from D if
-  // there's a matrix bias)
+  // Calculate c_stride_ragged_dim for the C matrix
   int64_t c_stride_ragged_dim = 1;
+
+  // Calculate leading_dim_c based on C's layout
+  int64_t leading_dim_c = output_row_dims[0];
+  if (c_layout.order == se::gpu::MatrixLayout::Order::kColumnMajor) {
+    leading_dim_c = output_col_dims[0];
+  }
+
   switch (ragged_mode) {
     case se::gpu::RaggedDotMode::kRaggedNonContracting: {
-      if ((lhs_ragged_dimension == leading_dim_d) ||
-          (c_layout.order == se::gpu::MatrixLayout::Order::kColumnMajor)) {
+      // Use the same condition as output_stride_ragged_dim but with c_layout
+      if ((lhs_ragged_dimension == leading_dim_c) ||
+          (lhs_layout.order == se::gpu::MatrixLayout::Order::kColumnMajor)) {
         c_stride_ragged_dim = c_layout.leading_dim_stride;
       }
       break;
@@ -687,7 +694,7 @@ bool IsTf32Allowed(PrecisionConfig::Algorithm algorithm,
           output_shape.element_type(), compute_precision, gpu_version));
 
   bool must_swap_operands =
-      MakeOutputColumnMajor(lhs_layout, rhs_layout, output_layout, nullptr);
+      MakeOutputColumnMajor(lhs_layout, rhs_layout, output_layout, &c_layout);
 
   auto trans_a = lhs_layout.transpose, trans_b = rhs_layout.transpose;
   if (lhs_layout.order == gpu::MatrixLayout::Order::kRowMajor) {

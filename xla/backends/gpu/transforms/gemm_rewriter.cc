@@ -455,7 +455,6 @@ HloInstruction* MaybeConstantFoldBias(HloInstruction* bias) {
           HloInstruction::CreateConstant(std::move(result)));
     }
   }
-
   return bias;
 }
 
@@ -1846,9 +1845,10 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                                           gemm->operands().end());
     HloInstruction* maybe_constant_folded_bias = MaybeConstantFoldBias(bias);
     if (bitcast) {
+      const Shape& target_shape = slice ? slice->shape() : gemm->shape();
       maybe_constant_folded_bias =
           instr->AddInstruction(HloInstruction::CreateBitcast(
-              slice->shape(), maybe_constant_folded_bias));
+              target_shape, maybe_constant_folded_bias));
     }
 
     maybe_constant_folded_bias =
@@ -1858,9 +1858,14 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     // For regular GEMM, insert at position 2 (before any other operands)
     bool is_grouped_gemm =
         gemm->custom_call_target() == kCublasLtGroupedMatmulCallTarget;
+
+    // Save the bias index (for aliasing)
+    int bias_operand_index;
     if (is_grouped_gemm) {
+      bias_operand_index = operands.size();
       operands.push_back(maybe_constant_folded_bias);
     } else {
+      bias_operand_index = 2;
       operands.insert(operands.begin() + 2, maybe_constant_folded_bias);
     }
 
@@ -1888,7 +1893,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     // copies.)
     if (IsLegacyCublasMatmul(*fused_op) || can_overwrite_bias) {
       xla::Cast<HloCustomCallInstruction>(fused_op.get())
-          ->set_output_to_operand_aliasing({{{}, {2, {}}}});
+          ->set_output_to_operand_aliasing({{{}, {bias_operand_index, {}}}});
     }
     TF_RETURN_IF_ERROR(SetName(instr->GetModule(), fused_op.get()));
     if (slice) {
@@ -1947,6 +1952,13 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                                     .ragged_dot_dimension_numbers();
       // Subtract group dimensions from num_col_dims
       num_col_dims -= ragged_dims.rhs_group_dimensions_size();
+
+      // hipBLASLt grouped GEMM does not correctly handle vector bias with batch
+      // dimensions Prevent fusion if the output has batch dimensions
+      if (dot_dims.lhs_batch_dimensions_size() > 0 ||
+          dot_dims.rhs_batch_dimensions_size() > 0) {
+        return false;
+      }
     }
 
     if ((gemm->user_count() != 1) ||
@@ -2740,8 +2752,16 @@ class GemmWorkspaceRewriteVisitor : public DfsHloRewriteVisitor {
 
     // Update operand aliasing if it was a fused gemm with aliased output.
     auto* custom_call = xla::Cast<HloCustomCallInstruction>(new_call);
-    if (!custom_call->output_to_operand_aliasing().empty()) {
-      custom_call->set_output_to_operand_aliasing({{{0}, {2, {}}}});
+    if (!custom_call->output_operand_aliasing().empty()) {
+      // Get the original aliasing and update the tuple index to 0
+      // (since we're wrapping in a tuple with workspace)
+      auto original_aliasing = instr->output_operand_aliasing();
+      std::vector<std::pair<ShapeIndex, std::pair<int64_t, ShapeIndex>>>
+          new_aliasing;
+      for (const auto& alias : original_aliasing) {
+        new_aliasing.push_back({ShapeIndex{0}, alias.second});
+      }
+      custom_call->set_output_to_operand_aliasing(new_aliasing);
     }
 
     if (instr->shape().IsTuple()) {
