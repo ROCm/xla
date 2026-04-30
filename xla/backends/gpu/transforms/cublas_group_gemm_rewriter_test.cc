@@ -1270,6 +1270,112 @@ ENTRY test {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
 }
 
+// Test transpose bias with non-transposed ragged-dot output
+TEST_F(GroupedGemmRewriteTest, GroupedGemmTransposedBiasNonTransposedOutput) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmTransposeBias
+
+ENTRY test {
+  p0 = f16[64,9]{1,0} parameter(0)
+  p1 = f16[2,9,8]{2,1,0} parameter(1)
+  p2 = s32[2] constant({16, 48})
+  bias = f16[8,64]{1,0} parameter(2)
+  ragged-dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={1}, rhs_contracting_dims={1},
+                lhs_ragged_dims={0}, rhs_group_dims={0}
+  bias_transposed = f16[64,8]{1,0} transpose(bias), dimensions={1,0}
+  ROOT out = f16[64,8]{1,0} add(ragged-dot, bias_transposed)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "beta":1
+; CHECK-SAME: "epilogue":"DEFAULT"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// Test non-transposed bias with transposed ragged-dot output
+TEST_F(GroupedGemmRewriteTest, GroupedGemmNonTransposedBiasTransposedOutput) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmNonTransposedBiasTransposedOutput
+
+ENTRY test {
+  p0 = f16[64,9]{1,0} parameter(0)
+  p1 = f16[2,9,8]{2,1,0} parameter(1)
+  p2 = s32[2] constant({16, 48})
+  bias = f16[64,8]{1,0} parameter(2)
+  ragged-dot = f16[64,8]{0,1} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={1}, rhs_contracting_dims={1},
+                lhs_ragged_dims={0}, rhs_group_dims={0}
+  ROOT out = f16[64,8]{0,1} add(ragged-dot, bias)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "beta":1
+; CHECK-SAME: "epilogue":"DEFAULT"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// Test transpose bias with non-transposed ragged-dot output (ragged in
+// contracting)
+TEST_F(GroupedGemmRewriteTest,
+       GroupedGemmTransposeBiasNonTransposedOutputRaggedInContracting) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmTransposeBiasRaggedInContracting
+
+ENTRY test {
+  p0 = f16[64,16]{1,0} parameter(0)
+  p1 = f16[16,8]{1,0} parameter(1)
+  p2 = s64[4] constant({4, 5, 3, 4})
+  bias = f16[4,8,64]{2,1,0} parameter(2)
+  ragged-dot = f16[4,64,8]{2,1,0} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={1}, rhs_contracting_dims={0},
+                lhs_ragged_dims={1}
+  bias_transposed = f16[4,64,8]{2,1,0} transpose(bias), dimensions={0,2,1}
+  ROOT out = f16[4,64,8]{2,1,0} add(ragged-dot, bias_transposed)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "beta":1
+; CHECK-SAME: "epilogue":"DEFAULT"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// Test non-transposed bias with transposed ragged-dot output (ragged in
+// contracting)
+TEST_F(GroupedGemmRewriteTest,
+       GroupedGemmNonTransposedBiasTransposedOutputRaggedInContracting) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmNonTransposedBiasTransposedOutputRaggedInContracting
+
+ENTRY test {
+  p0 = f16[64,16]{1,0} parameter(0)
+  p1 = f16[16,8]{1,0} parameter(1)
+  p2 = s64[4] constant({4, 5, 3, 4})
+  bias = f16[4,64,8]{2,1,0} parameter(2)
+  ragged-dot = f16[4,64,8]{2,0,1} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={1}, rhs_contracting_dims={0},
+                lhs_ragged_dims={1}
+  ROOT out = f16[4,64,8]{2,0,1} add(ragged-dot, bias)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom_call_target="__cublas$lt$groupedMatmul",
+; CHECK-SAME: "beta":1
+; CHECK-SAME: "epilogue":"DEFAULT"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
 }  // namespace
 }  // namespace gpu
 }  // namespace xla
