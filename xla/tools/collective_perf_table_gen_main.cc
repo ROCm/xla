@@ -42,6 +42,7 @@ limitations under the License.
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/util/command_line_flags.h"
+#include "xla/xla_data.pb.h"
 #include "tsl/platform/init_main.h"
 #include "tsl/platform/path.h"
 
@@ -142,6 +143,34 @@ std::vector<CollectivePerfTableGen::CollectiveType> ParseCollectives(
       types.push_back(
           CollectivePerfTableGen::CollectiveType::COLLECTIVE_PERMUTE);
       continue;
+    }
+  }
+  CHECK_GT(types.size(), 0);
+  return types;
+}
+
+std::vector<xla::PrimitiveType> ParseDataTypes(absl::string_view unparsed) {
+  std::vector<xla::PrimitiveType> types;
+  if (unparsed.empty()) {
+    return {xla::F32};  // Default to F32
+  }
+  for (absl::string_view token : absl::StrSplit(unparsed, ',')) {
+    if (token == "S4" || token == "s4") {
+      types.push_back(xla::S4);
+    } else if (token == "U4" || token == "u4") {
+      types.push_back(xla::U4);
+    } else if (token == "F32" || token == "f32") {
+      types.push_back(xla::F32);
+    } else if (token == "F16" || token == "f16") {
+      types.push_back(xla::F16);
+    } else if (token == "BF16" || token == "bf16") {
+      types.push_back(xla::BF16);
+    } else if (token == "F8E4M3FN" || token == "f8e4m3fn") {
+      types.push_back(xla::F8E4M3FN);
+    } else if (token == "F8E5M2" || token == "f8e5m2") {
+      types.push_back(xla::F8E5M2);
+    } else {
+      LOG(FATAL) << "Unsupported data type: " << token;
     }
   }
   CHECK_GT(types.size(), 0);
@@ -293,6 +322,8 @@ int main(int argc, char* argv[]) {
   std::string merge_path;
   std::vector<std::string> merge_files;
   std::string update_header_path;
+  std::string data_types_unparsed = "F32";
+  bool test_2d_shapes = false;
 
   // Parse flags.
   std::vector<tsl::Flag> flag_list = {
@@ -337,6 +368,13 @@ int main(int argc, char* argv[]) {
       tsl::Flag(
           "update_header_path", &update_header_path,
           "Path to C++ header file to update in-place with new profiles."),
+      tsl::Flag("data_types", &data_types_unparsed,
+                "Comma separated list of data types to test. "
+                "Allowed values: S4, U4, F32, F16, BF16, F8E4M3FN, F8E5M2. "
+                "Defaults to F32."),
+      tsl::Flag("test_2d_shapes", &test_2d_shapes,
+                "Whether to test 2D shapes for all-gather operations. "
+                "Defaults to false (1D shapes only)."),
   };
 
   std::string kUsageString =
@@ -359,6 +397,71 @@ int main(int argc, char* argv[]) {
   cfg.replica_groups_list =
       CollectiveDeviceLists(collective_devices_spec_unparsed);
   cfg.output = output;
+  cfg.data_types = ParseDataTypes(data_types_unparsed);
+  cfg.test_2d_shapes = test_2d_shapes;
+
+  // Validate that 2D shapes are only used with ALL_GATHER
+  if (test_2d_shapes) {
+    bool has_all_gather = false;
+    bool has_other_collectives = false;
+    for (const auto& collective_type : cfg.collective_types) {
+      if (collective_type ==
+          CollectivePerfTableGen::CollectiveType::ALL_GATHER) {
+        has_all_gather = true;
+      } else {
+        has_other_collectives = true;
+      }
+    }
+
+    if (!has_all_gather) {
+      LOG(FATAL) << "Error: --test_2d_shapes=true requires ALL_GATHER to be "
+                 << "included in --collectives. 2D shapes are only supported "
+                 << "for ALL_GATHER operations.";
+    }
+
+    if (has_other_collectives) {
+      LOG(WARNING)
+          << "Warning: --test_2d_shapes=true is set, but other "
+          << "collective types besides ALL_GATHER are also specified. "
+          << "2D shapes will only be tested for ALL_GATHER operations. "
+          << "Other collectives will use 1D shapes only.";
+    }
+  }
+
+  // Validate that U4/S4 data types are only used with ALL_GATHER
+  bool has_4bit_types = false;
+  for (const auto& data_type : cfg.data_types) {
+    if (data_type == xla::S4 || data_type == xla::U4) {
+      has_4bit_types = true;
+      break;
+    }
+  }
+
+  if (has_4bit_types) {
+    bool has_all_gather = false;
+    bool has_other_collectives = false;
+    for (const auto& collective_type : cfg.collective_types) {
+      if (collective_type ==
+          CollectivePerfTableGen::CollectiveType::ALL_GATHER) {
+        has_all_gather = true;
+      } else {
+        has_other_collectives = true;
+      }
+    }
+
+    if (!has_all_gather) {
+      LOG(FATAL) << "Error: U4/S4 data types require ALL_GATHER to be "
+                 << "included in --collectives. 4-bit data types are only "
+                 << "supported for ALL_GATHER operations.";
+    }
+
+    if (has_other_collectives) {
+      LOG(FATAL)
+          << "Error: U4/S4 data types are only supported for "
+          << "ALL_GATHER operations. Please remove other collective "
+          << "types from --collectives or remove U4/S4 from --data_types.";
+    }
+  }
 
   std::unique_ptr<CollectivePerfTableGen> gen =
       CollectivePerfTableGen::Create(cfg);
