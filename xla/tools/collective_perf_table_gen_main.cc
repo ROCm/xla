@@ -36,6 +36,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
 #include "google/protobuf/text_format.h"
+#include "xla/primitive_util.h"
 #include "xla/service/gpu/model/collective_interpolator_data.h"
 #include "xla/service/gpu/model/hlo_op_profile.pb.h"
 #include "xla/tools/collective_perf_table_gen.h"
@@ -155,20 +156,10 @@ std::vector<xla::PrimitiveType> ParseDataTypes(absl::string_view unparsed) {
     return {xla::F32};  // Default to F32
   }
   for (absl::string_view token : absl::StrSplit(unparsed, ',')) {
-    if (token == "S4" || token == "s4") {
-      types.push_back(xla::S4);
-    } else if (token == "U4" || token == "u4") {
-      types.push_back(xla::U4);
-    } else if (token == "F32" || token == "f32") {
-      types.push_back(xla::F32);
-    } else if (token == "F16" || token == "f16") {
-      types.push_back(xla::F16);
-    } else if (token == "BF16" || token == "bf16") {
-      types.push_back(xla::BF16);
-    } else if (token == "F8E4M3FN" || token == "f8e4m3fn") {
-      types.push_back(xla::F8E4M3FN);
-    } else if (token == "F8E5M2" || token == "f8e5m2") {
-      types.push_back(xla::F8E5M2);
+    std::string lower_token = absl::AsciiStrToLower(token);
+    auto type_or = xla::primitive_util::StringToPrimitiveType(lower_token);
+    if (type_or.ok()) {
+      types.push_back(type_or.value());
     } else {
       LOG(FATAL) << "Unsupported data type: " << token;
     }
@@ -400,8 +391,12 @@ int main(int argc, char* argv[]) {
   cfg.data_types = ParseDataTypes(data_types_unparsed);
   cfg.test_2d_shapes = test_2d_shapes;
 
-  // Validate that 2D shapes are only used with ALL_GATHER
-  if (test_2d_shapes) {
+  // Validate ALL_GATHER-only features (2D shapes and 4-bit types)
+  bool has_4bit_types = absl::c_any_of(
+      cfg.data_types,
+      [](xla::PrimitiveType t) { return t == xla::S4 || t == xla::U4; });
+
+  if (test_2d_shapes || has_4bit_types) {
     bool has_all_gather = false;
     bool has_other_collectives = false;
     for (const auto& collective_type : cfg.collective_types) {
@@ -414,52 +409,33 @@ int main(int argc, char* argv[]) {
     }
 
     if (!has_all_gather) {
-      LOG(FATAL) << "Error: --test_2d_shapes=true requires ALL_GATHER to be "
-                 << "included in --collectives. 2D shapes are only supported "
-                 << "for ALL_GATHER operations.";
-    }
-
-    if (has_other_collectives) {
-      LOG(WARNING)
-          << "Warning: --test_2d_shapes=true is set, but other "
-          << "collective types besides ALL_GATHER are also specified. "
-          << "2D shapes will only be tested for ALL_GATHER operations. "
-          << "Other collectives will use 1D shapes only.";
-    }
-  }
-
-  // Validate that U4/S4 data types are only used with ALL_GATHER
-  bool has_4bit_types = false;
-  for (const auto& data_type : cfg.data_types) {
-    if (data_type == xla::S4 || data_type == xla::U4) {
-      has_4bit_types = true;
-      break;
-    }
-  }
-
-  if (has_4bit_types) {
-    bool has_all_gather = false;
-    bool has_other_collectives = false;
-    for (const auto& collective_type : cfg.collective_types) {
-      if (collective_type ==
-          CollectivePerfTableGen::CollectiveType::ALL_GATHER) {
-        has_all_gather = true;
+      if (test_2d_shapes && has_4bit_types) {
+        LOG(FATAL) << "--test_2d_shapes=true and U4/S4 data types require "
+                   << "ALL_GATHER to be included in --collectives.";
+      } else if (test_2d_shapes) {
+        LOG(FATAL) << "--test_2d_shapes=true requires ALL_GATHER to be "
+                   << "included in --collectives. 2D shapes are only "
+                   << "supported for ALL_GATHER operations.";
       } else {
-        has_other_collectives = true;
+        LOG(FATAL) << "U4/S4 data types require ALL_GATHER to be included in "
+                   << "--collectives. 4-bit data types are only supported for "
+                   << "ALL_GATHER operations.";
       }
     }
 
-    if (!has_all_gather) {
-      LOG(FATAL) << "Error: U4/S4 data types require ALL_GATHER to be "
-                 << "included in --collectives. 4-bit data types are only "
-                 << "supported for ALL_GATHER operations.";
-    }
-
     if (has_other_collectives) {
-      LOG(FATAL)
-          << "Error: U4/S4 data types are only supported for "
-          << "ALL_GATHER operations. Please remove other collective "
-          << "types from --collectives or remove U4/S4 from --data_types.";
+      if (has_4bit_types) {
+        LOG(FATAL) << "U4/S4 data types are only supported for ALL_GATHER "
+                   << "operations. Please remove other collective types from "
+                   << "--collectives or remove U4/S4 from --data_types.";
+      }
+      if (test_2d_shapes) {
+        LOG(WARNING)
+            << "--test_2d_shapes=true is set, but other collective "
+            << "types besides ALL_GATHER are also specified. 2D "
+            << "shapes will only be tested for ALL_GATHER "
+            << "operations. Other collectives will use 1D shapes only.";
+      }
     }
   }
 

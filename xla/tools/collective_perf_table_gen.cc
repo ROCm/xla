@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/tools/collective_perf_table_gen.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -45,6 +46,7 @@ limitations under the License.
 #include "xla/hlo/utils/hlo_query.h"
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/plugin/xla_gpu/xla_gpu_client_options.h"
+#include "xla/primitive_util.h"
 #include "xla/service/backend.h"
 #include "xla/service/gpu/model/hlo_op_profile.pb.h"
 #include "xla/service/gpu/model/hlo_op_profiles.h"
@@ -61,24 +63,26 @@ namespace xla::gpu {
 
 namespace {
 
-// Helper function to get bytes per element for a given primitive type.
-int64_t GetBytesPerElement(PrimitiveType type) {
-  switch (type) {
+// Helper function to get the total number of elements for a given tensor size
+// and data type. This centralizes the handling of sub-byte types (S4/U4).
+int64_t GetElementCount(int64_t tensor_size_bytes, PrimitiveType data_type) {
+  switch (data_type) {
     case S4:
     case U4:
-      // 4-bit types: 2 elements per byte, so 0.5 bytes per element
-      // We return 1 and handle the special case in dimension calculations
-      return 1;
+      // 4-bit types: 2 elements per byte
+      return tensor_size_bytes * 2;
     case F8E4M3FN:
     case F8E5M2:
-      return 1;
+      return tensor_size_bytes;
     case F16:
     case BF16:
-      return 2;
+      CHECK_EQ(tensor_size_bytes % 2, 0);
+      return tensor_size_bytes / 2;
     case F32:
-      return 4;
+      CHECK_EQ(tensor_size_bytes % 4, 0);
+      return tensor_size_bytes / 4;
     default:
-      LOG(FATAL) << "Unsupported data type: " << PrimitiveType_Name(type);
+      LOG(FATAL) << "Unsupported data type: " << PrimitiveType_Name(data_type);
   }
 }
 
@@ -107,8 +111,8 @@ struct StaticSpec {
   // std::nullopt for others.
   std::optional<CollectivePermuteCostModelType> collective_permute_pattern;
   int64_t tensor_size_bytes;
-  PrimitiveType data_type;
-  bool use_2d_shape;  // Only applicable for all-gather
+  PrimitiveType data_type = F32;
+  bool use_2d_shape = false;  // Only applicable for all-gather
 };
 
 struct ExplicitSpec {
@@ -158,17 +162,8 @@ int64_t GetInputDim(CollectivePerfTableGen::CollectiveType type,
                     int64_t tensor_size_bytes,
                     IotaReplicaGroupList replica_groups,
                     PrimitiveType data_type) {
-  int64_t bytes_per_elem = GetBytesPerElement(data_type);
+  int64_t elements_total = GetElementCount(tensor_size_bytes, data_type);
   int64_t dim_size = -1;
-
-  // For 4-bit types (u4/s4), we have 2 elements per byte
-  int64_t elements_total = tensor_size_bytes;
-  if (data_type == S4 || data_type == U4) {
-    elements_total = tensor_size_bytes * 2;  // 2 elements per byte
-  } else {
-    CHECK_EQ(tensor_size_bytes % bytes_per_elem, 0);
-    elements_total = tensor_size_bytes / bytes_per_elem;
-  }
 
   switch (type) {
     case CollectivePerfTableGen::CollectiveType::ALL_REDUCE:
@@ -190,17 +185,8 @@ int64_t GetOutputDim(CollectivePerfTableGen::CollectiveType type,
                      int64_t tensor_size_bytes,
                      IotaReplicaGroupList replica_groups,
                      PrimitiveType data_type) {
-  int64_t bytes_per_elem = GetBytesPerElement(data_type);
+  int64_t elements_total = GetElementCount(tensor_size_bytes, data_type);
   int64_t dim_size = -1;
-
-  // For 4-bit types (u4/s4), we have 2 elements per byte
-  int64_t elements_total = tensor_size_bytes;
-  if (data_type == S4 || data_type == U4) {
-    elements_total = tensor_size_bytes * 2;  // 2 elements per byte
-  } else {
-    CHECK_EQ(tensor_size_bytes % bytes_per_elem, 0);
-    elements_total = tensor_size_bytes / bytes_per_elem;
-  }
 
   switch (type) {
     case CollectivePerfTableGen::CollectiveType::ALL_REDUCE:
@@ -218,6 +204,19 @@ int64_t GetOutputDim(CollectivePerfTableGen::CollectiveType type,
   return dim_size;
 }
 
+// Helper function to find the largest factor of n that is <= sqrt(n)
+// This ensures dim0 * dim1 == n exactly for 2D shape decomposition
+int64_t FindLargestFactorLessThanOrEqualSqrt(int64_t n) {
+  int64_t sqrt_n = static_cast<int64_t>(std::sqrt(n));
+  // Search downward from sqrt(n) to find the largest factor
+  for (int64_t candidate = sqrt_n; candidate >= 1; --candidate) {
+    if (n % candidate == 0) {
+      return candidate;
+    }
+  }
+  return 1;  // Fallback (should never happen for n > 0)
+}
+
 std::string GetHlo(
     CollectivePerfTableGen::CollectiveType type, int64_t input_dim,
     int64_t output_dim, const IotaReplicaGroupList& replica_groups,
@@ -226,33 +225,8 @@ std::string GetHlo(
   CHECK(type != CollectivePerfTableGen::CollectiveType::COLLECTIVE_PERMUTE ||
         collective_permute_pattern.has_value());
 
-  // Get the type string for HLO
-  std::string type_str;
-  switch (data_type) {
-    case S4:
-      type_str = "s4";
-      break;
-    case U4:
-      type_str = "u4";
-      break;
-    case F8E4M3FN:
-      type_str = "f8e4m3fn";
-      break;
-    case F8E5M2:
-      type_str = "f8e5m2";
-      break;
-    case F16:
-      type_str = "f16";
-      break;
-    case BF16:
-      type_str = "bf16";
-      break;
-    case F32:
-      type_str = "f32";
-      break;
-    default:
-      LOG(FATAL) << "Unsupported data type: " << PrimitiveType_Name(data_type);
-  }
+  // Get the type string for HLO using the utility function
+  std::string type_str = primitive_util::LowercasePrimitiveTypeName(data_type);
 
   // Get layout specification - use E(4) for u4/s4 types
   std::string layout_1d = RequiresPackedLayout(data_type) ? "{0:E(4)}" : "{0}";
@@ -282,10 +256,14 @@ std::string GetHlo(
       break;
     case CollectivePerfTableGen::CollectiveType::ALL_GATHER:
       if (use_2d_shape) {
-        // For 2D shapes, we need to compute appropriate dimensions
-        // We'll use a square-ish shape for simplicity
-        int64_t dim0 = static_cast<int64_t>(std::sqrt(input_dim));
+        // For 2D shapes, find the largest factor <= sqrt(input_dim)
+        // This ensures dim0 * dim1 == input_dim exactly (no truncation)
+        int64_t dim0 = FindLargestFactorLessThanOrEqualSqrt(input_dim);
         int64_t dim1 = input_dim / dim0;
+        // Verify the factorization is exact
+        CHECK_EQ(dim0 * dim1, input_dim)
+            << "2D shape decomposition failed: " << dim0 << " * " << dim1
+            << " != " << input_dim;
         int64_t out_dim0 = dim0 * replica_groups.num_devices_per_group();
         int64_t out_dim1 = dim1;
         hlo = absl::Substitute(R"(
