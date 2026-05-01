@@ -66,6 +66,7 @@ cc_library(
 
 cc_library(
     name = "rocm_config",
+    defines = ["TENSORFLOW_USE_ROCM=1"],
     visibility = ["//visibility:public"],
     deps = select({
         ":build_hermetic": [
@@ -131,6 +132,12 @@ cc_library(
             "-Wl,-rpath,/opt/rocm/lib",
         ],
     }),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "amdgcn_bitcode",
+    srcs = glob(["%{rocm_root}/amdgcn/bitcode/*.bc"]),
     visibility = ["//visibility:public"],
 )
 
