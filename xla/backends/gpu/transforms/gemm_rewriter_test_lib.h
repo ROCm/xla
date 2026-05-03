@@ -46,6 +46,8 @@ class GemmRewriteTestBase : public HloPjRtGpuTestBase {
 
   bool SkipGpuBlasLtTest();
 
+  bool SkipGroupedGemmTest();
+
   bool HasFp8Support() const;
 
   bool HasCudaComputeCapability(
@@ -54,9 +56,7 @@ class GemmRewriteTestBase : public HloPjRtGpuTestBase {
 
 // A test fixture class for tests which should have similar results with legacy
 // cublas and cublasLt
-class ParameterizedGemmRewriteTestBase
-    : public GemmRewriteTestBase,
-      public ::testing::WithParamInterface<bool> {
+class ParameterizedGemmRewriteTestBase : public GemmRewriteTestBase {
  public:
   ParameterizedGemmRewriteTestBase();
 

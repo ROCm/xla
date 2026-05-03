@@ -15,7 +15,10 @@ limitations under the License.
 
 #include "xla/backends/gpu/runtime/ragged_all_to_all.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <memory>
+#include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -24,16 +27,27 @@ limitations under the License.
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/types/span.h"
+#include "third_party/nccl/nccl.h"
+#include "xla/backends/gpu/collectives/nccl_symmetric_memory.h"
+#include "xla/core/collectives/symmetric_memory.h"
 #include "xla/primitive_util.h"
+#include "xla/stream_executor/cuda/cuda_platform_id.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_address_handle.h"
 #include "xla/stream_executor/gpu/gpu_init.h"
 #include "xla/stream_executor/gpu/ragged_all_to_all_kernel.h"
+#include "xla/stream_executor/memory_allocation.h"
+#include "xla/stream_executor/memory_allocator.h"
+#include "xla/stream_executor/memory_space.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform_manager.h"
 #include "xla/stream_executor/stream.h"
+#include "xla/tsl/concurrency/executor.h"
+#include "xla/tsl/concurrency/future.h"
 #include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/test.h"
+#include "xla/tsl/platform/threadpool.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla::gpu {
@@ -96,6 +110,46 @@ std::vector<std::vector<T>> CopyDeviceToHost2D(
     host_buffers.push_back(std::move(host_buffer));
   }
   return host_buffers;
+}
+
+template <typename T>
+std::vector<std::vector<T>> CopyDeviceToHost2D(
+    const std::vector<std::unique_ptr<se::Stream>>& streams,
+    const std::vector<std::unique_ptr<se::MemoryAllocation>>& device_buffers,
+    int64_t num_elements) {
+  std::vector<std::vector<T>> host_buffers;
+  host_buffers.reserve(device_buffers.size());
+  CHECK_EQ(streams.size(), device_buffers.size());
+  for (int i = 0; i < device_buffers.size(); ++i) {
+    auto& device_buffer = device_buffers[i];
+    std::vector<T> host_buffer(num_elements);
+    CHECK_OK(streams[i]->Memcpy(host_buffer.data(), device_buffer->address(),
+                                num_elements * sizeof(T)));
+    CHECK_OK(streams[i]->BlockHostUntilDone());
+    host_buffers.push_back(std::move(host_buffer));
+  }
+  return host_buffers;
+}
+
+absl::StatusOr<std::vector<std::unique_ptr<xla::SymmetricMemory>>>
+CreateSymmetricMemory(
+    tsl::Executor& exec, const std::vector<ncclComm_t>& comms,
+    const std::vector<std::unique_ptr<se::MemoryAllocation>>& buffers) {
+  int64_t num_devices = comms.size();
+  std::vector<tsl::Future<std::unique_ptr<NcclSymmetricMemory>>>
+      symmetric_memory_futures(num_devices);
+  for (int i = 0; i < num_devices; ++i) {
+    symmetric_memory_futures[i] = tsl::MakeFutureOn(exec, [&, i]() {
+      return NcclSymmetricMemory::Create(comms[i], buffers[i]->address());
+    });
+  }
+
+  std::vector<std::unique_ptr<xla::SymmetricMemory>> symmetric_memory;
+  for (int i = 0; i < num_devices; ++i) {
+    ASSIGN_OR_RETURN(auto mem, std::move(symmetric_memory_futures[i]).Await());
+    symmetric_memory.push_back(std::move(mem));
+  }
+  return symmetric_memory;
 }
 
 using RaggedAllToAllKernelTest = ::testing::Test;
@@ -219,6 +273,116 @@ TEST_F(RaggedAllToAllKernelTest, KernelWithOutputPtrsInDeviceMemory) {
 
   std::vector<std::vector<T>> output_results =
       CopyDeviceToHost2D<T>(executor, output_buffers, n);
+
+  std::vector<std::vector<T>> expected_output_results =
+      GetExpectedOutputResults<T>(
+          input_data, input_offsets, send_sizes, output_offsets, num_outputs,
+          num_update_per_output, num_input_rows, num_row_elements);
+
+  ASSERT_EQ(output_results.size(), expected_output_results.size());
+  EXPECT_EQ(output_results, expected_output_results);
+}
+
+TEST_F(RaggedAllToAllKernelTest, KernelWithSymmetricMemory) {
+  using T = float;
+
+  constexpr int64_t num_outputs = 2;
+  constexpr int64_t num_update_per_output = 2;
+  constexpr int64_t num_input_rows = 8;
+  constexpr int64_t num_row_elements = 2;
+  constexpr int64_t n = num_input_rows * num_row_elements;
+
+  ASSERT_OK_AND_ASSIGN(
+      se::Platform * platform,
+      se::PlatformManager::PlatformWithId(se::cuda::kCudaPlatformId));
+  int visible_device_count =
+      std::min<int>(platform->VisibleDeviceCount(), num_outputs);
+
+  if (visible_device_count < num_outputs) {
+    GTEST_SKIP() << "Skipping test because there are not enough visible "
+                    "devices.";
+  }
+
+  std::vector<se::StreamExecutor*> executors(visible_device_count);
+  std::vector<std::unique_ptr<se::Stream>> streams(visible_device_count);
+
+  for (int i = 0; i < visible_device_count; ++i) {
+    ASSERT_OK_AND_ASSIGN(se::StreamExecutor * executor,
+                         platform->ExecutorForDevice(i));
+    executors[i] = executor;
+
+    ASSERT_OK_AND_ASSIGN(auto stream, executor->CreateStream());
+    streams[i] = std::move(stream);
+  }
+
+  if (!executors[0]
+           ->GetDeviceDescription()
+           .cuda_compute_capability()
+           .IsAtLeastHopper()) {
+    GTEST_SKIP() << "Test requires at least Hopper architecture";
+  }
+
+  std::vector<std::unique_ptr<se::MemoryAllocator>> collective_allocators;
+  for (int i = 0; i < visible_device_count; ++i) {
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<se::MemoryAllocator> allocator,
+        executors[i]->CreateMemoryAllocator(se::MemorySpace::kCollective));
+    collective_allocators.push_back(std::move(allocator));
+  }
+
+  stream_executor::DeviceAddressHandle input_buffer(
+      executors[0], executors[0]->AllocateArray<T>(n));
+
+  std::vector<std::unique_ptr<se::MemoryAllocation>> output_buffers;
+  for (int64_t i = 0; i < num_outputs; ++i) {
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<se::MemoryAllocation> output_buffer,
+                         collective_allocators[i]->Allocate(n * sizeof(T)));
+    se::DeviceAddressBase output_buffer_address = output_buffer->address();
+    ASSERT_TRUE(!output_buffer_address.is_null());
+
+    TF_ASSERT_OK(streams[i]->MemZero(&output_buffer_address, n * sizeof(T)));
+
+    output_buffers.push_back(std::move(output_buffer));
+  }
+
+  std::vector<T> input_data(n);
+  absl::c_iota(input_data, 0);
+  TF_ASSERT_OK(streams[0]->Memcpy(input_buffer.address_ptr(), input_data.data(),
+                                  n * sizeof(T)));
+
+  std::vector<int64_t> input_offsets = {1, 4, 0, 3};
+  std::vector<int64_t> send_sizes = {2, 3, 1, 2};
+  std::vector<int64_t> output_offsets = {0, 4, 1, 5};
+
+  stream_executor::DeviceAddressHandle input_offsets_buffer =
+      CreateDeviceBuffer(executors[0], input_offsets);
+  stream_executor::DeviceAddressHandle send_sizes_buffer =
+      CreateDeviceBuffer(executors[0], send_sizes);
+  stream_executor::DeviceAddressHandle output_offsets_buffer =
+      CreateDeviceBuffer(executors[0], output_offsets);
+
+  std::vector<ncclComm_t> comms(visible_device_count);
+  ncclResult_t result =
+      ncclCommInitAll(comms.data(), visible_device_count, /*devlist=*/nullptr);
+  ASSERT_EQ(result, ncclSuccess);
+
+  tsl::thread::ThreadPool pool(tsl::Env::Default(), "nccl",
+                               visible_device_count);
+  tsl::Executor& exec = *pool.AsExecutor();
+
+  ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<xla::SymmetricMemory>>
+                           output_buffers_symmetric_memory,
+                       CreateSymmetricMemory(exec, comms, output_buffers));
+
+  TF_ASSERT_OK(RunRaggedAllToAllWithSymmetricMemoryKernel(
+      streams[0].get(), primitive_util::NativeToPrimitiveType<T>(),
+      input_buffer.address(), output_buffers_symmetric_memory[0].get(),
+      input_offsets_buffer.address(), send_sizes_buffer.address(),
+      output_offsets_buffer.address(), num_outputs, num_update_per_output,
+      num_input_rows, num_row_elements));
+
+  std::vector<std::vector<T>> output_results =
+      CopyDeviceToHost2D<T>(streams, output_buffers, n);
 
   std::vector<std::vector<T>> expected_output_results =
       GetExpectedOutputResults<T>(

@@ -24,7 +24,6 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "absl/base/attributes.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
@@ -60,10 +59,14 @@ inline const char* RocmName() {
   static constexpr char kRocmName[] = "rocm";
   return kRocmName;
 }
-inline const char* SyclName() {
-  static constexpr char kSyclName[] = "sycl";
-  return kSyclName;
+inline const char* OneapiName() {
+  static constexpr char kOneapiName[] = "oneapi";
+  return kOneapiName;
 }
+// Temporarily keep SyclName() as there are references to it in Tensorflow.
+// TODO(intel-tf): Remove this function once Tensorflow is updated to use
+// OneapiName() instead of SyclName()
+inline const char* SyclName() { return OneapiName(); }
 inline const char* TpuName() {
   static constexpr char kTpuName[] = "tpu";
   return kTpuName;
@@ -80,10 +83,15 @@ inline PjRtPlatformId RocmId() {
   static const PjRtPlatformId kRocmId = tsl::Fingerprint64(RocmName());
   return kRocmId;
 }
-inline PjRtPlatformId SyclId() {
-  static const PjRtPlatformId kSyclId = tsl::Fingerprint64(SyclName());
-  return kSyclId;
+inline PjRtPlatformId OneapiId() {
+  static const PjRtPlatformId kOneapiId = tsl::Fingerprint64(OneapiName());
+  return kOneapiId;
 }
+
+// Temporarily keep SyclId() as there are references to it in Jaxlib.
+// TODO(intel-tf): Remove this function once Jaxlib is updated to use
+// OneapId() instead of SyclId()
+inline PjRtPlatformId SyclId() { return OneapiId(); }
 inline PjRtPlatformId TpuId() {
   static const PjRtPlatformId kTpuId = tsl::Fingerprint64(TpuName());
   return kTpuId;
@@ -396,6 +404,8 @@ inline bool IsCpuId(PjRtPlatformId platform_id) {
   return platform_id == xla::CpuId();
 }
 
+class PjRtPhaseCompiler;
+
 // Abstract interface that all registered compilers must implement.
 class PjRtCompiler {
  public:
@@ -425,6 +435,10 @@ class PjRtCompiler {
     return absl::UnimplementedError(
         "GetTargetRuntimeAbiVersion is not implemented.");
   }
+
+  // Allow fallible downcasting to PjRtPhaseCompiler.
+  virtual PjRtPhaseCompiler* AsPhaseCompiler() { return nullptr; }
+  virtual const PjRtPhaseCompiler* AsPhaseCompiler() const { return nullptr; }
 };
 
 // Registers a compiler to compile programs for 'platform_name' with
@@ -479,11 +493,13 @@ struct CompilationPhaseFunctions {
       compiler;
 
   // `validator`: A function that performs plugin-specific validation of the
-  // input programs for a given compilation phase. It takes a `std::vector` of
-  // `PjRtPartialProgramProto` as input and returns `absl::OkStatus()` if
-  // validation is successful; otherwise, it returns an `absl::Status`
-  // indicating the reason for failure (e.g., incompatible `program_format`).
-  std::function<absl::Status(const std::vector<PjRtPartialProgramProto>&)>
+  // input programs for a given compilation phase. It takes a `CompileOptions`
+  // instance and a `std::vector` of `PjRtPartialProgramProto` as input and
+  // returns `absl::OkStatus()` if validation is successful; otherwise, it
+  // returns an `absl::Status` indicating the reason for failure (e.g.,
+  // incompatible `program_format`).
+  std::function<absl::Status(CompileOptions options,
+                             const std::vector<PjRtPartialProgramProto>&)>
       validator;
 };
 
@@ -531,6 +547,9 @@ class PjRtPhaseCompiler : public PjRtCompiler {
         "DeserializePjRtTopologyDescription is not implemented.");
   }
 
+  PjRtPhaseCompiler* AsPhaseCompiler() override { return this; }
+  const PjRtPhaseCompiler* AsPhaseCompiler() const override { return this; }
+
  protected:
   // Registers a new compilation phase with its corresponding compiler and
   // validator functions encapsulated in a CompilationPhaseFunctions struct.
@@ -547,6 +566,12 @@ class PjRtPhaseCompiler : public PjRtCompiler {
   // The names of all registered phases in the order they were registered.
   std::vector<std::string> phase_names_;
 };
+
+// Thread-safe. Returns a pointer to the registered phase compiler for the given
+// platform and a default compiler variant.
+// Initializes the compiler using the factory if necessary.
+absl::StatusOr<PjRtPhaseCompiler*> GetDefaultPjRtPhaseCompiler(
+    absl::string_view platform);
 
 }  // namespace xla
 

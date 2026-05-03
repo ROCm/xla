@@ -38,6 +38,7 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Instructions.h"
@@ -62,10 +63,12 @@ limitations under the License.
 #include "xla/backends/gpu/codegen/llvm/llvm_emitter.h"
 #include "xla/backends/gpu/codegen/triton/collective_emitter.h"
 #include "xla/backends/gpu/codegen/triton/fusion.h"
+#include "xla/backends/gpu/codegen/triton/triton_kernel_source.h"
 #include "xla/backends/gpu/codegen/triton/xtile_compiler.h"
 #include "xla/backends/gpu/runtime/all_gather_thunk.h"
 #include "xla/backends/gpu/runtime/all_reduce_thunk.h"
 #include "xla/backends/gpu/runtime/all_to_all_thunk.h"
+#include "xla/backends/gpu/runtime/async_execution.h"
 #include "xla/backends/gpu/runtime/async_thunk.h"
 #include "xla/backends/gpu/runtime/collective_broadcast_thunk.h"
 #include "xla/backends/gpu/runtime/collective_group_thunk.h"
@@ -85,6 +88,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/custom_kernel_thunk.h"
 #include "xla/backends/gpu/runtime/device_to_device_copy_thunk.h"
 #include "xla/backends/gpu/runtime/device_to_host_copy_thunk.h"
+#include "xla/backends/gpu/runtime/execution_stream_id.h"
 #include "xla/backends/gpu/runtime/fft_thunk.h"
 #include "xla/backends/gpu/runtime/gemm_thunk.h"
 #include "xla/backends/gpu/runtime/gpublas_lt_matmul_thunk.h"
@@ -93,6 +97,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/host_to_device_copy_thunk.h"
 #include "xla/backends/gpu/runtime/infeed_thunk.h"
 #include "xla/backends/gpu/runtime/kernel_thunk.h"
+#include "xla/backends/gpu/runtime/legacy_custom_call_thunk.h"
 #include "xla/backends/gpu/runtime/norm_thunk.h"
 #include "xla/backends/gpu/runtime/nvshmem_all_reduce_thunk.h"
 #include "xla/backends/gpu/runtime/nvshmem_collective_permute_thunk.h"
@@ -112,6 +117,9 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/while_thunk.h"
 #include "xla/backends/gpu/transforms/collectives/collective_ops_utils.h"
 #include "xla/codegen/emitters/kernel_arguments.h"
+#include "xla/codegen/kernel_definition.h"
+#include "xla/codegen/kernel_spec.h"
+#include "xla/codegen/llvm_kernel_source.h"
 #include "xla/core/host_offloading/host_offloading_executable.pb.h"
 #include "xla/ffi/attribute_map.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -139,6 +147,7 @@ limitations under the License.
 #include "xla/service/gpu/gpu_constants.h"
 #include "xla/service/gpu/gpu_conv_runner.h"
 #include "xla/service/gpu/gpu_executable.h"
+#include "xla/service/gpu/gpu_hlo_ordering.h"
 #include "xla/service/gpu/gpu_norm_runner.h"
 #include "xla/service/gpu/hlo_fusion_analysis.h"
 #include "xla/service/gpu/ir_emission_utils.h"
@@ -162,6 +171,7 @@ limitations under the License.
 #include "xla/stream_executor/launch_dim.h"
 #include "xla/stream_executor/memory_space.h"
 #include "xla/tools/hlo_decomposer.h"
+#include "xla/tsl/concurrency/future.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/protobuf/dnn.pb.h"
@@ -171,10 +181,35 @@ limitations under the License.
 #include "tsl/platform/casts.h"
 #include "tsl/platform/human_readable_json.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "xla/tsl/platform/status_macros.h"
 
 namespace xla::gpu {
 namespace {
+
+absl::StatusOr<TritonKernelSource> EmitTritonFrom(
+    const TritonCall& call, const std::string& kernel_name,
+    mlir::MLIRContext& mlir_context) {
+  VLOG(3) << "Generating: " << kernel_name;
+
+  mlir::OwningOpRef<mlir::ModuleOp> triton_module;
+  {
+    mlir::BaseScopedDiagnosticHandler diagnostic_handler(&mlir_context);
+    triton_module =
+        mlir::parseSourceString<mlir::ModuleOp>(call.ir, &mlir_context);
+    if (!triton_module) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Failed to parse Triton module: ",
+                       diagnostic_handler.ConsumeStatus().message(),
+                       "\ninput ir: \"", absl::CHexEscape(call.ir), "\""));
+    }
+  }
+
+  auto triton_fn = triton_module->lookupSymbol<mlir::triton::FuncOp>(call.name);
+  TF_RET_CHECK(triton_fn) << "Call name not found in the Triton module: "
+                          << call.name;
+  triton_fn.setName(kernel_name);
+
+  return TritonKernelSource(std::move(triton_module));
+}
 
 struct EmitCollectiveResult {
   std::unique_ptr<CollectiveKernelThunk> thunk;
@@ -257,6 +292,28 @@ absl::StatusOr<EmitCollectiveResult> EmitCollectiveKernelThunk(
       result.kernel_thunk->launch_dimensions(), std::move(result.llvm_module));
 }
 
+void AppendThunkSequence(ThunkSequence& thunks,
+                         ThunkSequence& additional_thunks) {
+  thunks.insert(thunks.end(),
+                std::make_move_iterator(additional_thunks.begin()),
+                std::make_move_iterator(additional_thunks.end()));
+}
+
+ThunkSequence FlattenThunkSequence(std::vector<ThunkSequence>&& sequences) {
+  ThunkSequence result;
+
+  int total = 0;
+  for (const ThunkSequence& seq : sequences) {
+    total += seq.size();
+  }
+  result.reserve(total);
+
+  for (ThunkSequence& seq : sequences) {
+    AppendThunkSequence(result, seq);
+  }
+  return result;
+}
+
 }  // namespace
 
 ThunkEmitter::ThunkEmitter(
@@ -312,106 +369,81 @@ ThunkSequence GetThunkSequence(std::unique_ptr<Thunk> ir_emitter) {
   return thunk_sequence;
 }
 
-void AppendThunkSequence(ThunkSequence& thunks,
-                         ThunkSequence& additional_thunks) {
-  thunks.insert(thunks.end(),
-                std::make_move_iterator(additional_thunks.begin()),
-                std::make_move_iterator(additional_thunks.end()));
-}
-
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitConditional(
-    const HloInstruction* instr) {
-  std::vector<ThunkSequence> branch_thunks;
+AsyncThunkSequence ThunkEmitter::EmitConditional(const HloInstruction* instr) {
+  std::vector<AsyncThunkSequence> branch_thunks;
   branch_thunks.reserve(instr->branch_count());
-  for (auto comp : instr->branch_computations()) {
-    TF_ASSIGN_OR_RETURN(branch_thunks.emplace_back(), EmitHloComputation(comp));
+  for (HloComputation* comp : instr->branch_computations()) {
+    branch_thunks.emplace_back(EmitHloComputation(comp));
   }
-  TF_ASSIGN_OR_RETURN(auto slice,
-                      GetAllocationSliceForHlo(instr->operand(0), {}));
+  ASSIGN_OR_RETURN(BufferAllocation::Slice slice,
+                   GetAllocationSliceForHlo(instr->operand(0), {}));
 
-  auto placeholder = GetThunkSequence(std::make_unique<ConditionalThunk>(
-      Thunk::ThunkInfo::WithProfileAnnotation(
-          instr, ir_emitter_context_->GetNextThunkId()),
-      ShapedSlice{slice, instr->operand(0)->shape()},
-      std::move(branch_thunks)));
-  return placeholder;
+  Thunk::ThunkInfo thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(
+      instr, ir_emitter_context_->GetNextThunkId());
+  ShapedSlice shaped_slice{slice, instr->operand(0)->shape()};
+  return tsl::JoinFutures(absl::MakeSpan(branch_thunks))
+      .Map([thunk_info = std::move(thunk_info),
+            shaped_slice = std::move(shaped_slice)](
+               std::vector<ThunkSequence> branch_thunks) {
+        return GetThunkSequence(std::make_unique<ConditionalThunk>(
+            std::move(thunk_info), std::move(shaped_slice),
+            std::move(branch_thunks)));
+      });
 }
 
 // Input = {dynamic array(with dynamic dimension meta data at the end)}
 // Output = {static array, dynamic_dim0, dynamic_dim1}
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitPadToStatic(
+AsyncThunkSequence ThunkEmitter::EmitPadToStatic(
     const HloCustomCallInstruction* instr) {
-  std::string ir_name = std::string(instr->name());
-  auto local_llvm_module = ir_emitter_context_->CreateLLVMModule(ir_name);
+  ASSIGN_OR_RETURN(emitters::KernelArguments kernel_arguments,
+                   emitters::KernelArguments::Create(
+                       ir_emitter_context_->buffer_assignment(),
+                       GetDefaultBufferAlignment(), instr));
 
-  TF_ASSIGN_OR_RETURN(auto thunk_sequence,
-                      EmitPadToStaticLLVMIR(instr, local_llvm_module.get(),
-                                            ir_emitter_context_));
-  kernel_modules_.push_back(std::move(local_llvm_module));
-  return thunk_sequence;
+  ASSIGN_OR_RETURN(
+      KernelDefinition<LlvmKernelSource> kernel_def,
+      EmitPadToStaticLLVMIR(instr, ir_emitter_context_, kernel_arguments));
+
+  KernelSpec spec = kernel_def.spec();
+  ASSIGN_OR_RETURN(
+      LaunchDimensions launch_dimensions,
+      LaunchDimensions::FromWorkDimensions(spec.work_dimensions()));
+
+  return ir_emitter_context_->kernel_compiler()
+      ->Compile(Thunk::ThunkInfo::WithProfileAnnotation(
+                    instr, ir_emitter_context_->GetNextThunkId()),
+                std::move(kernel_def).TakeSource(), std::string(spec.name()),
+                kernel_arguments, launch_dimensions)
+      .Map([](std::unique_ptr<Thunk> thunk) {
+        return ThunkSequence::Of(std::move(thunk));
+      });
 }
 
 // Input = {dynamic array(with dynamic dimension meta data at the end)}
 // Output = {static array, dynamic_dim0, dynamic_dim1}
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitSliceToDynamic(
+AsyncThunkSequence ThunkEmitter::EmitSliceToDynamic(
     const HloCustomCallInstruction* instr) {
-  std::string ir_name = std::string(instr->name());
-  auto local_llvm_module = ir_emitter_context_->CreateLLVMModule(ir_name);
+  ASSIGN_OR_RETURN(emitters::KernelArguments kernel_arguments,
+                   emitters::KernelArguments::Create(
+                       ir_emitter_context_->buffer_assignment(),
+                       GetDefaultBufferAlignment(), instr));
+  ASSIGN_OR_RETURN(
+      KernelDefinition<LlvmKernelSource> kernel_def,
+      EmitSliceToDynamicLLVMIR(instr, ir_emitter_context_, kernel_arguments));
 
-  TF_ASSIGN_OR_RETURN(auto thunk_sequence,
-                      EmitSliceToDynamicLLVMIR(instr, local_llvm_module.get(),
-                                               ir_emitter_context_));
-  kernel_modules_.push_back(std::move(local_llvm_module));
-  return thunk_sequence;
-}
+  KernelSpec spec = kernel_def.spec();
+  ASSIGN_OR_RETURN(
+      LaunchDimensions launch_dimensions,
+      LaunchDimensions::FromWorkDimensions(spec.work_dimensions()));
 
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCommandBufferThunk(
-    const HloInstruction* instr) {
-  // Spawn a new ThunkEmitter to emit thunks for the command buffer computation.
-  // Then convert emitted thunks to a sequence of Commands. The resulting thunk
-  // added to the thunk sequence is a CommandBufferThunk. Thunks emitted from
-  // the command buffer computation are discarded.
-  DCHECK_EQ(instr->called_computations().size(), 1);
-  const HloComputation* command_buffer = instr->called_computations().front();
-  TF_ASSIGN_OR_RETURN(auto thunk_sequence, EmitHloComputation(command_buffer));
-
-  // Maybe serialize all commands in a sequence by forcing barriers
-  // between all recorded commands. This guarantees that we execute
-  // all device operations in the exact same order as a thunk
-  // sequence.
-  CommandExecutor::SynchronizationMode synchronization_mode;
-  auto mode = ir_emitter_context_->debug_options()
-                  .xla_gpu_command_buffer_scheduling_mode();
-  switch (mode) {
-    case DebugOptions::SERIALIZE:
-      synchronization_mode = CommandExecutor::SynchronizationMode::kSerialize;
-      break;
-    case DebugOptions::CONCURRENT:
-      synchronization_mode = CommandExecutor::SynchronizationMode::kConcurrent;
-      break;
-    case DebugOptions::LHS:
-      synchronization_mode = CommandExecutor::SynchronizationMode::kLHS;
-      break;
-    default:
-      return Internal("Unsupported command buffer scheduling mode: %d", mode);
-  }
-
-  bool enable_loop_unroll = ir_emitter_context_->debug_options()
-                                .xla_gpu_command_buffer_unroll_loops();
-  TF_ASSIGN_OR_RETURN(
-      CommandExecutor cmd_executor,
-      ConvertToCommands(
-          thunk_sequence,
-          ConvertToCommandsOptions{synchronization_mode, enable_loop_unroll}));
-
-  return GetThunkSequence(std::make_unique<CommandBufferThunk>(
-      std::move(cmd_executor),
-      Thunk::ThunkInfo::WithProfileAnnotation(
-          instr, ir_emitter_context_->GetNextThunkId()),
-      std::make_unique<SequentialThunk>(Thunk::ThunkInfo{},
-                                        std::move(thunk_sequence)),
-      ir_emitter_context_->debug_options()
-          .xla_enable_command_buffers_during_profiling()));
+  return ir_emitter_context_->kernel_compiler()
+      ->Compile(Thunk::ThunkInfo::WithProfileAnnotation(
+                    instr, ir_emitter_context_->GetNextThunkId()),
+                std::move(kernel_def).TakeSource(), std::string(spec.name()),
+                kernel_arguments, launch_dimensions)
+      .Map([](std::unique_ptr<Thunk> thunk) {
+        return ThunkSequence::Of(std::move(thunk));
+      });
 }
 
 absl::StatusOr<ThunkSequence> ThunkEmitter::EmitConvolutionThunk(
@@ -658,6 +690,11 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtMatmulThunkF8(
 
 absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtGroupedMatmulThunk(
     const HloCustomCallInstruction* instr) {
+  ASSIGN_OR_RETURN(const auto gpu_config,
+                   instr->backend_config<xla::gpu::GpuBackendConfig>());
+  const xla::gpu::GemmBackendConfig& config =
+      gpu_config.grouped_gemm_backend_config().gemm_backend_config();
+
   TF_RET_CHECK(instr->operand_count() == 3);
 
   xla::ShapeIndex output_index =
@@ -682,11 +719,12 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtGroupedMatmulThunk(
       GroupedGemmConfig::For(static_cast<const HloInstruction*>(instr),
                              ir_emitter_context_->gpu_compute_capability()));
 
-  // Autotuner does not support yet GroupedGemm operations.
-  // This will be enabled by PR https://github.com/openxla/xla/pull/38737
-  // For now, algorithm is set by default to 0 (autotuning disable).
-  int64_t algorithm = 0;
-  int64_t autotune_workspace_size = 0;
+  // Use the first algorithm by default (i.e. fastest according to
+  // heuristics).
+  int64_t algorithm =
+      config.algorithm_case() == GemmBackendConfig::kSelectedAlgorithm
+          ? config.selected_algorithm()
+          : 0;
 
   Thunk::ThunkInfo thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(
       instr, ir_emitter_context_->GetNextThunkId());
@@ -695,9 +733,10 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCublasLtGroupedMatmulThunk(
 
   auto thunk = std::make_unique<CublasLtMatmulThunk>(
       std::move(thunk_info), std::move(canonical_hlo), std::move(gemm_config),
-      se::gpu::BlasLt::Epilogue::kDefault, algorithm, autotune_workspace_size,
-      a, b, c, d, group_sizes, std::nullopt, std::nullopt, std::nullopt,
-      std::nullopt, std::nullopt, std::nullopt, std::nullopt, workspace_buffer);
+      se::gpu::BlasLt::Epilogue::kDefault, algorithm,
+      config.autotune_workspace_size(), a, b, c, d, group_sizes, std::nullopt,
+      std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+      std::nullopt, workspace_buffer);
   return GetThunkSequence(std::move(thunk));
 }
 
@@ -967,7 +1006,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCustomCallThunk(
             << "Fall back to parse the raw backend config str.";
   }
 
-  auto ffi_thunk = [&]() -> absl::StatusOr<std::unique_ptr<CustomCallThunk>> {
+  auto ffi_thunk = [&]() -> absl::StatusOr<std::unique_ptr<Thunk>> {
     auto& called_computations = instr->called_computations();
     auto& backend_config_str =
         backend_config.ok()
@@ -986,12 +1025,6 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCustomCallThunk(
       TF_ASSIGN_OR_RETURN(attributes, xla::ffi::BuildAttributesMap(dict));
     }
     auto released_lock_keeper = llvm_options_lock_->TemporarilyReleaseLock();
-    std::optional<xla::cpu::TargetMachineOptions> cpu_target_machine_options =
-        std::nullopt;
-    if (ir_emitter_context_->cpu_target_machine_options()) {
-      cpu_target_machine_options =
-          *ir_emitter_context_->cpu_target_machine_options();
-    }
     return CustomCallThunk::Create(
         Thunk::ThunkInfo::WithProfileAnnotation(
             instr, ir_emitter_context_->GetNextThunkId()),
@@ -1000,16 +1033,16 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCustomCallThunk(
         called_computations.empty() ? nullptr : called_computations[0],
         ir_emitter_context_->platform_name(),
         ir_emitter_context_->gpu_compute_capability(),
-        /*execution_state=*/nullptr, std::move(cpu_target_machine_options));
+        /*execution_state=*/nullptr,
+        ir_emitter_context_->cpu_target_machine_options());
   };
 
-  auto legacy_thunk =
-      [&]() -> absl::StatusOr<std::unique_ptr<CustomCallThunk>> {
+  auto legacy_thunk = [&]() -> absl::StatusOr<std::unique_ptr<Thunk>> {
     std::string opaque =
         backend_config.ok()
             ? backend_config->custom_call_backend_config().opaque()
             : instr->raw_backend_config_string();
-    return CustomCallThunk::Create(
+    return LegacyCustomCallThunk::Create(
         Thunk::ThunkInfo::WithProfileAnnotation(
             instr, ir_emitter_context_->GetNextThunkId()),
         call_target_name, std::move(operands), std::move(results),
@@ -1017,7 +1050,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCustomCallThunk(
         ir_emitter_context_->platform_name());
   };
 
-  absl::StatusOr<std::unique_ptr<CustomCallThunk>> custom_call_thunk =
+  absl::StatusOr<std::unique_ptr<Thunk>> custom_call_thunk =
       is_ffi_custom_call ? ffi_thunk() : legacy_thunk();
 
   ThunkSequence thunks;
@@ -1200,29 +1233,13 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitTritonCustomCall(
   auto generate = [this, &instr,
                    &mlir_context]() -> absl::StatusOr<KernelReuseCache::Entry> {
     LoadMlirDialectsForTriton(mlir_context);
-    auto call =
+    TritonCall call =
         TritonCall::Parse(instr->raw_backend_config_string(), &mlir_context);
-    auto kernel_name = ir_emitter_context_->GetSanitizedUniqueName(call.name);
-    VLOG(3) << "Generating: " << kernel_name;
+    std::string kernel_name =
+        ir_emitter_context_->GetSanitizedUniqueName(call.name);
 
-    mlir::OwningOpRef<mlir::ModuleOp> triton_module;
-    {
-      mlir::BaseScopedDiagnosticHandler diagnostic_handler(&mlir_context);
-      triton_module =
-          mlir::parseSourceString<mlir::ModuleOp>(call.ir, &mlir_context);
-      if (!triton_module) {
-        return absl::InvalidArgumentError(
-            absl::StrCat("Failed to parse Triton module: ",
-                         diagnostic_handler.ConsumeStatus().message(),
-                         "\ninput ir: \"", absl::CHexEscape(call.ir), "\""));
-      }
-    }
-
-    auto triton_fn =
-        triton_module->lookupSymbol<mlir::triton::FuncOp>(call.name);
-    TF_RET_CHECK(triton_fn)
-        << "Call name not found in the Triton module: " << call.name;
-    triton_fn.setName(kernel_name);
+    ASSIGN_OR_RETURN(TritonKernelSource triton_source,
+                     EmitTritonFrom(call, kernel_name, mlir_context));
 
     HloModule* hlo_module = instr->GetModule();
     // If emit_kernels if false (i.e., when deserializing an already
@@ -1241,20 +1258,19 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitTritonCustomCall(
         call.global_scratch_memory_size;
     block_level_parameters.is_tma_allowed = call.is_tma_allowed;
 
-    TF_ASSIGN_OR_RETURN(
-        auto result,
-        CompileTritonToLLVM(kernel_name, *hlo_module,
-                            ir_emitter_context_->gpu_device_info(),
-                            block_level_parameters, triton_module.get(),
-                            ir_emitter_context_->target_triple(),
-                            ir_emitter_context_->data_layout(),
-                            *ir_emitter_context_->llvm_context(), mlir_context,
-                            /*is_xla_fusion=*/false, emit_kernels));
+    ASSIGN_OR_RETURN(
+        TritonWrapperResult result,
+        CompileTritonToLLVM(
+            kernel_name, *hlo_module, ir_emitter_context_->gpu_device_info(),
+            block_level_parameters, ir_emitter_context_->target_triple(),
+            ir_emitter_context_->data_layout(), std::move(triton_source),
+            *ir_emitter_context_->llvm_context(), mlir_context,
+            /*is_xla_fusion=*/false, emit_kernels));
 
-    TF_ASSIGN_OR_RETURN(auto kernel_arguments,
-                        emitters::KernelArguments::Create(
-                            ir_emitter_context_->buffer_assignment(),
-                            GetDefaultBufferAlignment(), instr));
+    ASSIGN_OR_RETURN(auto kernel_arguments,
+                     emitters::KernelArguments::Create(
+                         ir_emitter_context_->buffer_assignment(),
+                         GetDefaultBufferAlignment(), instr));
     auto launch_dimensions = LaunchDimensions(
         se::BlockDim(call.grid_x, call.grid_y, call.grid_z),
         se::ThreadDim(
@@ -1262,11 +1278,10 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitTritonCustomCall(
             ir_emitter_context_->gpu_device_info().threads_per_warp()));
 
     if (emit_kernels) {
-      TF_ASSIGN_OR_RETURN(
-          llvm::Function * kernel,
-          RemoveUnusedTritonAbiArguments(result.llvm_module.get(),
-                                         *ir_emitter_context_, kernel_name,
-                                         call.global_scratch_memory_size > 0));
+      ASSIGN_OR_RETURN(llvm::Function * kernel,
+                       RemoveUnusedTritonAbiArguments(
+                           result.llvm_module.get(), *ir_emitter_context_,
+                           kernel_name, call.global_scratch_memory_size > 0));
 
       AnnotateAttrsIfUnset(kernel_arguments, *kernel);
       TF_RETURN_IF_ERROR(AnnotateKernelLaunchDimensions(
@@ -1283,18 +1298,19 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitTritonCustomCall(
   auto [status_or_entry, was_cached] =
       ir_emitter_context_->kernel_cache().GetWithStatus(
           instr->raw_backend_config_string(), generate);
-  TF_ASSIGN_OR_RETURN(const KernelReuseCache::Entry* entry, status_or_entry);
+  ASSIGN_OR_RETURN(const KernelReuseCache::Entry* entry,
+                   status_or_entry.Await());
 
-  TF_ASSIGN_OR_RETURN(auto kernel_arguments,
-                      emitters::KernelArguments::Create(
-                          ir_emitter_context_->buffer_assignment(),
-                          GetDefaultBufferAlignment(), instr));
+  ASSIGN_OR_RETURN(auto kernel_arguments,
+                   emitters::KernelArguments::Create(
+                       ir_emitter_context_->buffer_assignment(),
+                       GetDefaultBufferAlignment(), instr));
 
   LoadMlirDialectsForTriton(mlir_context);
   auto call =
       TritonCall::Parse(instr->raw_backend_config_string(), &mlir_context);
 
-  return GetThunkSequence(std::make_unique<KernelThunk>(
+  return ThunkSequence::Of(std::make_unique<KernelThunk>(
       Thunk::ThunkInfo::WithProfileAnnotation(
           instr, ir_emitter_context_->GetNextThunkId()),
       entry->kernel_name, kernel_arguments, entry->launch_dimensions,
@@ -1302,38 +1318,42 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitTritonCustomCall(
       /*zeroed_output_buffer_indices=*/call.zeroed_outputs, entry->use_pdl));
 }
 
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitAsyncComputation(
+AsyncThunkSequence ThunkEmitter::EmitAsyncComputation(
     const HloInstruction* instr) {
   const HloInstruction* wrapped = instr->async_wrapped_instruction();
   TF_RET_CHECK(wrapped->called_computations().size() == 1);
-  auto computation = wrapped->called_computations().front();
-  TF_ASSIGN_OR_RETURN(auto nested_thunks, EmitHloComputation(computation));
+  HloComputation* computation = wrapped->called_computations().front();
 
   auto* async_start = Cast<HloAsyncInstruction>(instr);
   const ExecutionStreamAssignment& stream_assignment =
       ir_emitter_context_->execution_stream_assignment();
-  TF_ASSIGN_OR_RETURN(
-      ExecutionStreamAssignment::AsyncExecutionStreamIds async_streams,
-      stream_assignment.GetAsyncExecutionStreamIds(async_start));
+  ASSIGN_OR_RETURN(ExecutionStreamId execution_stream_id,
+                   stream_assignment.GetExecutionStreamId(async_start));
 
-  auto start_thunk = std::make_unique<AsyncStartThunk>(
-      Thunk::ThunkInfo::WithProfileAnnotation(
-          instr, ir_emitter_context_->GetNextThunkId()),
-      AsyncStartThunk::AsyncKind::kCompute, std::move(nested_thunks));
-  start_thunk->set_execution_stream_id(async_streams.async_stream_id);
+  AsyncThunkSequence nested_thunks = EmitHloComputation(computation);
 
-  auto [it, inserted] =
-      hlo_async_executions_.emplace(wrapped, start_thunk->async_execution());
+  Thunk::ThunkInfo thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(
+      instr, ir_emitter_context_->GetNextThunkId());
+
+  std::shared_ptr<AsyncExecution> async_execution =
+      std::make_shared<AsyncExecution>(thunk_info);
+  auto [it, inserted] = hlo_async_executions_.emplace(wrapped, async_execution);
   if (!inserted) {
     return Internal("Async execution already exists for instruction %s",
                     wrapped->ToString());
   }
 
-  return GetThunkSequence(std::move(start_thunk));
+  return std::move(nested_thunks)
+      .Map([thunk_info = std::move(thunk_info),
+            async_execution = std::move(async_execution),
+            execution_stream_id](ThunkSequence nested_thunks) {
+        return ThunkSequence::Of(std::make_unique<AsyncStartThunk>(
+            std::move(thunk_info), execution_stream_id,
+            std::move(nested_thunks), async_execution));
+      });
 }
 
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitFusion(
-    const HloFusionInstruction* instr) {
+AsyncThunkSequence ThunkEmitter::EmitFusion(const HloFusionInstruction* instr) {
   const se::DeviceDescription& device_info =
       ir_emitter_context_->gpu_device_info();
   const HloFusionAnalysis fusion_analysis =
@@ -1346,20 +1366,13 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitFusion(
           &ir_emitter_context_->buffer_assignment(),
           /*call_graph=*/*call_graph_),
       ir_emitter_context_->mlir_context());
-  TF_ASSIGN_OR_RETURN(auto result, emitter->Emit(*ir_emitter_context_, *instr));
+  ASSIGN_OR_RETURN(auto result, emitter->Emit(*ir_emitter_context_, *instr));
 
   // Use override flag because libdevice functions can be present in both.
   if (result.module) {
     kernel_modules_.push_back(std::move(result.module));
   }
 
-  const ExecutionStreamAssignment& stream_assignment =
-      ir_emitter_context_->execution_stream_assignment();
-  for (std::unique_ptr<Thunk>& thunk : result.thunks) {
-    TF_ASSIGN_OR_RETURN(ExecutionStreamId execution_stream_id,
-                        stream_assignment.GetSyncExecutionStreamId(instr));
-    thunk->set_execution_stream_id(execution_stream_id);
-  }
   VLOG(3) << "ThunkEmitter::EmitFusion:complete";
   return std::move(result.thunks);
 }
@@ -1381,32 +1394,36 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCopy(
       /*mem_size=*/src_buffer.size()));
 }
 
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitAsyncCustomCallStart(
+AsyncThunkSequence ThunkEmitter::EmitAsyncCustomCallStart(
     const HloInstruction* instr) {
   const HloInstruction* wrapped = instr->async_wrapped_instruction();
-  TF_ASSIGN_OR_RETURN(auto custom_call_thunks, EmitCustomCallSwitch(wrapped));
+  AsyncThunkSequence custom_call_thunks = EmitCustomCallSwitch(wrapped);
 
   auto* async_start = Cast<HloAsyncInstruction>(instr);
   const ExecutionStreamAssignment& stream_assignment =
       ir_emitter_context_->execution_stream_assignment();
-  TF_ASSIGN_OR_RETURN(
-      ExecutionStreamAssignment::AsyncExecutionStreamIds streams,
-      stream_assignment.GetAsyncExecutionStreamIds(async_start));
+  ASSIGN_OR_RETURN(ExecutionStreamId execution_stream_id,
+                   stream_assignment.GetExecutionStreamId(async_start));
 
-  auto start_thunk = std::make_unique<AsyncStartThunk>(
-      Thunk::ThunkInfo::WithProfileAnnotation(
-          instr, ir_emitter_context_->GetNextThunkId()),
-      AsyncStartThunk::AsyncKind::kCompute, std::move(custom_call_thunks));
-  start_thunk->set_execution_stream_id(streams.async_stream_id);
+  Thunk::ThunkInfo start_thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(
+      instr, ir_emitter_context_->GetNextThunkId());
 
-  auto [it, inserted] =
-      hlo_async_executions_.emplace(wrapped, start_thunk->async_execution());
+  std::shared_ptr<AsyncExecution> async_execution =
+      std::make_shared<AsyncExecution>(start_thunk_info);
+  auto [it, inserted] = hlo_async_executions_.emplace(wrapped, async_execution);
   if (!inserted) {
     return Internal("Async execution already exists for instruction %s",
                     wrapped->ToString());
   }
 
-  return GetThunkSequence(std::move(start_thunk));
+  return std::move(custom_call_thunks)
+      .Map([start_thunk_info = std::move(start_thunk_info),
+            async_execution = std::move(async_execution),
+            execution_stream_id](ThunkSequence custom_call_thunks) {
+        return ThunkSequence::Of(std::make_unique<AsyncStartThunk>(
+            std::move(start_thunk_info), execution_stream_id,
+            std::move(custom_call_thunks), std::move(async_execution)));
+      });
 }
 
 absl::Status ThunkEmitter::AssertNonDeterminismIsOkay(
@@ -1421,10 +1438,9 @@ absl::Status ThunkEmitter::AssertNonDeterminismIsOkay(
   return absl::OkStatus();
 }
 
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitWhile(
-    const HloInstruction* instr) {
-  TF_ASSIGN_OR_RETURN(auto config,
-                      instr->backend_config<xla::WhileLoopBackendConfig>());
+AsyncThunkSequence ThunkEmitter::EmitWhile(const HloInstruction* instr) {
+  ASSIGN_OR_RETURN(auto config,
+                   instr->backend_config<xla::WhileLoopBackendConfig>());
 
   std::optional<int64_t> trip_count = std::nullopt;
   if (config.has_known_trip_count()) {
@@ -1434,36 +1450,60 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitWhile(
   HloComputation* condition = instr->while_condition();
   HloComputation* body = instr->while_body();
 
-  // Generate thunk sequence for while 'condition'.
-  TF_ASSIGN_OR_RETURN(auto cond_thunks, EmitHloComputation(condition));
-
-  // Generate thunk sequence for while 'body'.
-  TF_ASSIGN_OR_RETURN(auto body_thunks, EmitHloComputation(body));
-
   // Buffer slice holding while loop predicate.
-  TF_ASSIGN_OR_RETURN(
-      auto pred, GetAllocationSliceForHlo(condition->root_instruction(), {}));
-
+  ASSIGN_OR_RETURN(BufferAllocation::Slice pred,
+                   GetAllocationSliceForHlo(condition->root_instruction(), {}));
   Thunk::ThunkInfo info = Thunk::ThunkInfo::WithProfileAnnotation(
       instr, ir_emitter_context_->GetNextThunkId());
-  return GetThunkSequence(std::make_unique<WhileThunk>(
-      info, pred, std::move(cond_thunks), std::move(body_thunks), trip_count));
+
+  return std::move(tsl::JoinFutures(EmitHloComputation(condition),
+                                    EmitHloComputation(body)))
+      .Map([info = std::move(info), pred = pred, trip_count = trip_count](
+               std::tuple<ThunkSequence, ThunkSequence> tuple) {
+        auto [cond_thunks, body_thunks] = std::move(tuple);
+        return GetThunkSequence(std::make_unique<WhileThunk>(
+            std::move(info), std::move(pred), std::move(cond_thunks),
+            std::move(body_thunks), trip_count));
+      });
 }
 
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitRngGetAndUpdateState(
+AsyncThunkSequence ThunkEmitter::EmitCallComputation(
+    const HloInstruction* instr) {
+  DCHECK_EQ(instr->called_computations().size(), 1);
+  const HloComputation* computation = instr->called_computations().front();
+  return EmitHloComputation(computation);
+}
+
+AsyncThunkSequence ThunkEmitter::EmitRngGetAndUpdateState(
     const HloRngGetAndUpdateStateInstruction* instr) {
-  std::string ir_name = std::string(instr->name());
-  auto local_llvm_module = ir_emitter_context_->CreateLLVMModule(ir_name);
+  ASSIGN_OR_RETURN(emitters::KernelArguments kernel_arguments,
+                   emitters::KernelArguments::Create(
+                       ir_emitter_context_->buffer_assignment(),
+                       GetDefaultBufferAlignment(), instr));
 
-  TF_ASSIGN_OR_RETURN(auto thunk_sequence,
-                      EmitRngGetAndUpdateStateLLVMIR(
-                          instr, local_llvm_module.get(), ir_emitter_context_));
-  kernel_modules_.push_back(std::move(local_llvm_module));
-  return thunk_sequence;
+  ASSIGN_OR_RETURN(KernelDefinition<LlvmKernelSource> kernel_def,
+                   EmitRngGetAndUpdateStateLLVMIR(instr, ir_emitter_context_,
+                                                  kernel_arguments));
+
+  KernelSpec spec = kernel_def.spec();
+  ASSIGN_OR_RETURN(
+      LaunchDimensions launch_dimensions,
+      LaunchDimensions::FromWorkDimensions(spec.work_dimensions()));
+
+  return ir_emitter_context_->kernel_compiler()
+      ->Compile(Thunk::ThunkInfo::WithProfileAnnotation(
+                    instr, ir_emitter_context_->GetNextThunkId()),
+                std::move(kernel_def).TakeSource(), std::string(spec.name()),
+                kernel_arguments, launch_dimensions)
+      .Map([](std::unique_ptr<Thunk> thunk) {
+        return ThunkSequence::Of(std::move(thunk));
+      });
 }
 
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitSort(
-    const HloSortInstruction* sort) {
+AsyncThunkSequence ThunkEmitter::EmitSort(const HloSortInstruction* sort) {
+  if (sort->is_stable()) {
+    return Internal("Stable sort not supported. Did stable_sort_expander run?");
+  }
   std::string op_name(sort->name());
   const Shape& keys_shape = sort->operand(0)->shape();
   ThunkSequence thunks;
@@ -1485,10 +1525,10 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitSort(
     // If possible, we share buffers. If that is not possible, we
     // need to copy the values, because the emitter does the sorting
     // in-place.
-    TF_ASSIGN_OR_RETURN(destination_buffer,
-                        GetAllocationSliceForHlo(sort, shape_index));
-    TF_ASSIGN_OR_RETURN(source_address,
-                        GetAllocationSliceForHlo(sort->operand(i), {}));
+    ASSIGN_OR_RETURN(destination_buffer,
+                     GetAllocationSliceForHlo(sort, shape_index));
+    ASSIGN_OR_RETURN(source_address,
+                     GetAllocationSliceForHlo(sort->operand(i), {}));
 
     if (destination_buffer != source_address) {
       // TODO(b/26783907): Figure out why we never seem to share
@@ -1505,14 +1545,11 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitSort(
     }
   }
 
-  auto local_llvm_module = ir_emitter_context_->CreateLLVMModule(op_name);
-
-  TF_ASSIGN_OR_RETURN(ThunkSequence sort_thunks,
-                      EmitBitonicSortLLVMIR(sort, local_llvm_module.get(),
-                                            ir_emitter_context_));
-  AppendThunkSequence(thunks, sort_thunks);
-  kernel_modules_.push_back(std::move(local_llvm_module));
-  return thunks;
+  return EmitBitonicSortLLVMIR(sort, ir_emitter_context_)
+      .Map([thunks = std::move(thunks)](ThunkSequence sort_thunks) mutable {
+        AppendThunkSequence(thunks, sort_thunks);
+        return std::move(thunks);
+      });
 }
 
 template <typename ThunkType>
@@ -1526,6 +1563,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitReplicaOrPartitionId(
       result_slice));
 }
 
+[[deprecated("Use NCCL 2.28+ primitives instead.")]]
 bool IsNvshmemCollective(const HloInstruction* instr) {
   if (instr->has_backend_config()) {
     auto gpu_config = instr->backend_config<GpuBackendConfig>();
@@ -1582,8 +1620,6 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCollectivePermute(
           /*destination_buffer=*/
           ShapedSlice{result_slice, result_buffer_shape},
           /*mem_size=*/ShapeUtil::ByteSizeOf(operand_shape)));
-      // Signal that start thunk not created (degenerate) with nullptr.
-      hlo_async_executions_.try_emplace(instr, nullptr);
     } else {
       const CollectiveThunk::Buffer buffer = {
           /*element_count=*/ShapeUtil::ElementsIn(operand_shape),
@@ -1610,21 +1646,35 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCollectivePermute(
           Thunk::ThunkInfo::WithProfileAnnotation(
               instr, ir_emitter_context_->GetNextThunkId()),
           instr, replica_count, partition_count, buffers,
-          ir_emitter_context_->debug_options().xla_gpu_use_memcpy_local_p2p()));
+          ir_emitter_context_->debug_options()
+              .xla_gpu_collective_permute_mode(),
+          ir_emitter_context_->debug_options()
+              .xla_gpu_collective_permute_connected_components()));
     }
   }
 
   // For synchronous collectives, emit thunks directly without async wrapping.
-  if (IsGPUSyncCollective(*instr)) {
+  // However, if parallel collective overlap limit is > 1, multiple collectives
+  // may be in-flight on different streams. Emitting them synchronously would be
+  // unsafe as they could share communicators across streams. Force async
+  // emission in that case.
+  if (IsGPUSyncCollective(*instr) &&
+      ir_emitter_context_->debug_options()
+              .xla_gpu_experimental_parallel_collective_overlap_limit() <= 1) {
     hlo_async_executions_.try_emplace(instr, nullptr);
     return thunks;
   }
 
   // Wrap in AsyncStartThunk for asynchronous execution.
+  const ExecutionStreamAssignment& stream_assignment =
+      ir_emitter_context_->execution_stream_assignment();
+  TF_ASSIGN_OR_RETURN(ExecutionStreamId execution_stream_id,
+                      stream_assignment.GetExecutionStreamId(instr));
+
   auto start_thunk = std::make_unique<AsyncStartThunk>(
       Thunk::ThunkInfo::WithProfileAnnotation(
           instr, ir_emitter_context_->GetNextThunkId()),
-      AsyncStartThunk::AsyncKind::kCommunication, std::move(thunks));
+      execution_stream_id, std::move(thunks));
 
   auto [it, inserted] =
       hlo_async_executions_.emplace(instr, start_thunk->async_execution());
@@ -1754,17 +1804,27 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCollectiveThunk(
         ir_emitter_context_->debug_options().xla_gpu_use_memcpy_local_p2p());
   }
   // For synchronous collectives, emit thunk directly without async wrapping.
-  if (IsGPUSyncCollective(*async_start)) {
+  // However, if parallel collective overlap limit is > 1, multiple collectives
+  // may be in-flight on different streams. Emitting them synchronously would be
+  // unsafe as they could share communicators across streams. Force async
+  // emission in that case.
+  if (IsGPUSyncCollective(*async_start) &&
+      ir_emitter_context_->debug_options()
+              .xla_gpu_experimental_parallel_collective_overlap_limit() <= 1) {
     hlo_async_executions_.try_emplace(async_start, nullptr);
     return ThunkSequence::Of(std::move(thunk));
   }
 
   // Wrap collective thunk in AsyncStartThunk for asynchronous execution.
+  const ExecutionStreamAssignment& stream_assignment =
+      ir_emitter_context_->execution_stream_assignment();
+  TF_ASSIGN_OR_RETURN(ExecutionStreamId execution_stream_id,
+                      stream_assignment.GetExecutionStreamId(async_start));
+
   auto start_thunk = std::make_unique<AsyncStartThunk>(
       Thunk::ThunkInfo::WithProfileAnnotation(
           async_start, ir_emitter_context_->GetNextThunkId()),
-      AsyncStartThunk::AsyncKind::kCommunication,
-      ThunkSequence::Of(std::move(thunk)));
+      execution_stream_id, ThunkSequence::Of(std::move(thunk)));
 
   auto [it, inserted] = hlo_async_executions_.emplace(
       async_start, start_thunk->async_execution());
@@ -1776,97 +1836,62 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCollectiveThunk(
   return GetThunkSequence(std::move(start_thunk));
 }
 
-std::vector<const HloInstruction*> GetRealDependencyInstructions(
+AsyncThunkSequence ThunkEmitter::EmitCollectiveGroupStartThunk(
     const HloInstruction* instr) {
-  std::vector<const HloInstruction*> real_deps;
-  switch (instr->opcode()) {
-    case HloOpcode::kSend:
-    case HloOpcode::kSendDone:
-    case HloOpcode::kRecv:
-    case HloOpcode::kRecvDone:
-      return {FindCanonicalSendRecvStartOp(instr)};
-    case HloOpcode::kAllGatherDone:
-    case HloOpcode::kAllReduceDone:
-    case HloOpcode::kAsyncDone:
-    case HloOpcode::kCollectivePermuteDone:
-    case HloOpcode::kCopyDone:
-      return {instr->operand(0)};
-    case HloOpcode::kAllGatherStart:
-    case HloOpcode::kAllReduceStart:
-    case HloOpcode::kAsyncStart:
-    case HloOpcode::kCollectivePermuteStart:
-    case HloOpcode::kCall:
-    case HloOpcode::kConditional:
-    case HloOpcode::kConstant:
-    case HloOpcode::kCustomCall:
-    case HloOpcode::kFusion:
-    case HloOpcode::kCopy:
-    case HloOpcode::kInfeed:
-    case HloOpcode::kOutfeed:
-    case HloOpcode::kPartitionId:
-    case HloOpcode::kFft:
-    case HloOpcode::kReplicaId:
-    case HloOpcode::kRngGetAndUpdateState:
-    case HloOpcode::kSort:
-    case HloOpcode::kWhile:
-    case HloOpcode::kCopyStart:
-      return {instr};
-    case HloOpcode::kAddDependency:
-    case HloOpcode::kAfterAll:
-    case HloOpcode::kTuple:
-      for (const HloInstruction* operand : instr->operands()) {
-        auto deps = GetRealDependencyInstructions(operand);
-        real_deps.insert(real_deps.end(), deps.begin(), deps.end());
-      }
-      return real_deps;
-    case HloOpcode::kBitcast:
-    case HloOpcode::kGetTupleElement: {
-      auto deps = GetRealDependencyInstructions(instr->operand(0));
-      real_deps.insert(real_deps.end(), deps.begin(), deps.end());
-    }
-      return real_deps;
-    default:
-      return {};
-  }
-}
-
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCollectiveGroupStartThunk(
-    const HloInstruction* instr) {
-  ThunkSequence thunks;
+  std::vector<AsyncThunkSequence> futures;
   for (const HloInstruction* nested_instruction :
        instr->async_wrapped_computation()->instructions()) {
-    ASSIGN_OR_RETURN(
-        auto comp_thunks,
+    futures.push_back(
         EmitHloInstruction(nested_instruction, /*emit_group_thunks=*/true));
-    AppendThunkSequence(thunks, comp_thunks);
   }
-  auto group_thunk = std::make_unique<CollectiveGroupThunk>(
-      Thunk::ThunkInfo::WithProfileAnnotation(
-          instr, ir_emitter_context_->GetNextThunkId()),
-      Thunk::Kind::kGroupStart, std::move(thunks));
 
-  // For synchronous collectives, emit group thunk directly without async
-  // wrapping.
-  if (IsGPUSyncCollective(*instr)) {
+  Thunk::ThunkInfo group_thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(
+      instr, ir_emitter_context_->GetNextThunkId());
+  Thunk::ThunkInfo start_thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(
+      instr, ir_emitter_context_->GetNextThunkId());
+
+  bool is_sync = IsGPUSyncCollective(*instr);
+
+  std::shared_ptr<AsyncExecution> async_execution;
+  std::optional<ExecutionStreamId> execution_stream_id;
+  if (is_sync) {
     hlo_async_executions_.try_emplace(instr, nullptr);
-    return ThunkSequence::Of(std::move(group_thunk));
+  } else {
+    async_execution = std::make_shared<AsyncExecution>(start_thunk_info);
+
+    auto [it, inserted] = hlo_async_executions_.emplace(instr, async_execution);
+    if (!inserted) {
+      return Internal("Async execution already exists for instruction %s",
+                      instr->ToString());
+    }
+
+    const ExecutionStreamAssignment& stream_assignment =
+        ir_emitter_context_->execution_stream_assignment();
+    ASSIGN_OR_RETURN(execution_stream_id,
+                     stream_assignment.GetExecutionStreamId(instr));
   }
 
-  // Wrap in AsyncStartThunk for asynchronous execution.
-  auto start_thunk = std::make_unique<AsyncStartThunk>(
-      Thunk::ThunkInfo::WithProfileAnnotation(
-          instr, ir_emitter_context_->GetNextThunkId()),
-      AsyncStartThunk::AsyncKind::kCommunication,
-      ThunkSequence::Of(std::move(group_thunk)));
+  return tsl::JoinFutures(absl::MakeSpan(futures))
+      .Map([group_thunk_info = std::move(group_thunk_info),
+            start_thunk_info = std::move(start_thunk_info),
+            async_execution = std::move(async_execution), execution_stream_id,
+            is_sync](std::vector<ThunkSequence> sequences) {
+        ThunkSequence thunks = FlattenThunkSequence(std::move(sequences));
+        auto group_thunk = std::make_unique<CollectiveGroupThunk>(
+            std::move(group_thunk_info), Thunk::Kind::kGroup,
+            std::move(thunks));
 
-  auto [it, inserted] =
-      hlo_async_executions_.emplace(instr, start_thunk->async_execution());
-  if (!inserted) {
-    return Internal("Async execution already exists for instruction %s",
-                    instr->ToString());
-  }
+        // For synchronous collectives, emit group thunk directly without async
+        // wrapping.
+        if (is_sync) {
+          return ThunkSequence::Of(std::move(group_thunk));
+        }
 
-  return GetThunkSequence(std::move(start_thunk));
+        return ThunkSequence::Of(std::make_unique<AsyncStartThunk>(
+            std::move(start_thunk_info), *execution_stream_id,
+            ThunkSequence::Of(std::move(group_thunk)),
+            std::move(async_execution)));
+      });
 }
 
 absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCollectiveAsyncDone(
@@ -1898,6 +1923,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCollectiveAsyncDone(
       it->second));
 }
 
+[[deprecated("Use NCCL 2.28+ primitives instead.")]]
 absl::StatusOr<ThunkSequence> ThunkEmitter::EmitNvshmemAsyncDone(
     const HloInstruction* inst) {
   bool is_send_recv =
@@ -1927,6 +1953,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitNvshmemAsyncDone(
 }
 
 template <typename NvshmemAllReduceThunkType, typename HloAllReduceInstruction>
+[[deprecated("Use NCCL 2.28+ primitives instead.")]]
 absl::StatusOr<ThunkSequence> ThunkEmitter::EmitNvshmemThunk(
     Thunk::Kind kind, const HloInstruction* async_start,
     const HloAllReduceInstruction* inst,
@@ -1999,11 +2026,15 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitNvshmemThunk(
     }
 
     // Wrap in AsyncStartThunk for asynchronous execution.
+    const ExecutionStreamAssignment& stream_assignment =
+        ir_emitter_context_->execution_stream_assignment();
+    TF_ASSIGN_OR_RETURN(ExecutionStreamId execution_stream_id,
+                        stream_assignment.GetExecutionStreamId(async_start));
+
     auto start_thunk = std::make_unique<AsyncStartThunk>(
         Thunk::ThunkInfo::WithProfileAnnotation(
             async_start, ir_emitter_context_->GetNextThunkId()),
-        AsyncStartThunk::AsyncKind::kCommunication,
-        ThunkSequence::Of(std::move(thunk)));
+        execution_stream_id, ThunkSequence::Of(std::move(thunk)));
 
     auto [it, inserted] = hlo_async_executions_.emplace(
         async_start, start_thunk->async_execution());
@@ -2176,12 +2207,11 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCopyStartThunk(
 
   const ExecutionStreamAssignment& stream_assignment =
       ir_emitter_context_->execution_stream_assignment();
-  TF_ASSIGN_OR_RETURN(
-      ExecutionStreamAssignment::AsyncExecutionStreamIds streams,
-      stream_assignment.GetAsyncExecutionStreamIds(copy_start_instr));
+  auto execution_stream_id =
+      stream_assignment.GetExecutionStreamId(copy_start_instr);
 
-  // If async and parent stream IDs are the same, the copy is synchronous.
-  if (streams.async_stream_id == streams.parent_stream_id) {
+  // If copy-start is not a scope-start operation, the copy is synchronous.
+  if (!execution_stream_id.ok()) {
     return GetThunkSequence(std::move(copy_thunk));
   }
 
@@ -2192,8 +2222,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCopyStartThunk(
   auto start_thunk = std::make_unique<AsyncStartThunk>(
       Thunk::ThunkInfo::WithProfileAnnotation(
           copy_start_instr, ir_emitter_context_->GetNextThunkId()),
-      AsyncStartThunk::AsyncKind::kCompute, std::move(nested_thunks));
-  start_thunk->set_execution_stream_id(streams.async_stream_id);
+      *execution_stream_id, std::move(nested_thunks));
 
   auto [it, inserted] = hlo_async_executions_.emplace(
       copy_start_instr, start_thunk->async_execution());
@@ -2260,6 +2289,12 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitSendThunk(
       const HloInstruction* canonical_send_instr =
           FindCanonicalSendRecvStartOp(instr);
 
+      const ExecutionStreamAssignment& stream_assignment =
+          ir_emitter_context_->execution_stream_assignment();
+      TF_ASSIGN_OR_RETURN(
+          ExecutionStreamId execution_stream_id,
+          stream_assignment.GetExecutionStreamId(canonical_send_instr));
+
       // Check if an async execution already exists for this canonical
       // send/recv pair (pipelined send/recv share the same async stream).
       auto existing_it = hlo_async_executions_.find(canonical_send_instr);
@@ -2267,16 +2302,15 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitSendThunk(
         auto start_thunk = std::make_unique<AsyncStartThunk>(
             Thunk::ThunkInfo::WithProfileAnnotation(
                 instr, ir_emitter_context_->GetNextThunkId()),
-            AsyncStartThunk::AsyncKind::kCommunication,
-            ThunkSequence::Of(std::move(thunk)), existing_it->second);
+            execution_stream_id, ThunkSequence::Of(std::move(thunk)),
+            existing_it->second);
         return GetThunkSequence(std::move(start_thunk));
       }
 
       auto start_thunk = std::make_unique<AsyncStartThunk>(
           Thunk::ThunkInfo::WithProfileAnnotation(
               instr, ir_emitter_context_->GetNextThunkId()),
-          AsyncStartThunk::AsyncKind::kCommunication,
-          ThunkSequence::Of(std::move(thunk)));
+          execution_stream_id, ThunkSequence::Of(std::move(thunk)));
 
       hlo_async_executions_.try_emplace(canonical_send_instr,
                                         start_thunk->async_execution());
@@ -2358,6 +2392,12 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitRecvThunk(
       const HloInstruction* canonical_recv_instr =
           FindCanonicalSendRecvStartOp(instr);
 
+      const ExecutionStreamAssignment& stream_assignment =
+          ir_emitter_context_->execution_stream_assignment();
+      TF_ASSIGN_OR_RETURN(
+          ExecutionStreamId execution_stream_id,
+          stream_assignment.GetExecutionStreamId(canonical_recv_instr));
+
       // Check if an async execution already exists for this canonical
       // send/recv pair (pipelined send/recv share the same async stream).
       auto existing_it = hlo_async_executions_.find(canonical_recv_instr);
@@ -2365,16 +2405,15 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitRecvThunk(
         auto start_thunk = std::make_unique<AsyncStartThunk>(
             Thunk::ThunkInfo::WithProfileAnnotation(
                 instr, ir_emitter_context_->GetNextThunkId()),
-            AsyncStartThunk::AsyncKind::kCommunication,
-            ThunkSequence::Of(std::move(thunk)), existing_it->second);
+            execution_stream_id, ThunkSequence::Of(std::move(thunk)),
+            existing_it->second);
         return GetThunkSequence(std::move(start_thunk));
       }
 
       auto start_thunk = std::make_unique<AsyncStartThunk>(
           Thunk::ThunkInfo::WithProfileAnnotation(
               instr, ir_emitter_context_->GetNextThunkId()),
-          AsyncStartThunk::AsyncKind::kCommunication,
-          ThunkSequence::Of(std::move(thunk)));
+          execution_stream_id, ThunkSequence::Of(std::move(thunk)));
 
       hlo_async_executions_.try_emplace(canonical_recv_instr,
                                         start_thunk->async_execution());
@@ -2472,8 +2511,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitAsyncDone(
   }
 }
 
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitAsyncStart(
-    const HloInstruction* instr) {
+AsyncThunkSequence ThunkEmitter::EmitAsyncStart(const HloInstruction* instr) {
   // Multi-op async start will emit a NCCL group thunk.
   if (!instr->async_wrapped_computation()->CanExpandIntoSingleInstruction()) {
     return EmitCollectiveGroupStartThunk(instr);
@@ -2507,30 +2545,35 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitAsyncStart(
           std::nullopt);
     }
     case HloOpcode::kFusion: {
-      TF_ASSIGN_OR_RETURN(ThunkSequence fusion_thunks,
-                          EmitFusion(Cast<HloFusionInstruction>(wrapped)));
+      AsyncThunkSequence fusion_thunks =
+          EmitFusion(Cast<HloFusionInstruction>(wrapped));
 
-      auto* async_start = Cast<HloAsyncInstruction>(instr);
-      const ExecutionStreamAssignment& stream_assignment =
-          ir_emitter_context_->execution_stream_assignment();
-      TF_ASSIGN_OR_RETURN(
-          ExecutionStreamAssignment::AsyncExecutionStreamIds streams,
-          stream_assignment.GetAsyncExecutionStreamIds(async_start));
-
-      auto start_thunk = std::make_unique<AsyncStartThunk>(
+      Thunk::ThunkInfo start_thunk_info =
           Thunk::ThunkInfo::WithProfileAnnotation(
-              instr, ir_emitter_context_->GetNextThunkId()),
-          AsyncStartThunk::AsyncKind::kCompute, std::move(fusion_thunks));
-      start_thunk->set_execution_stream_id(streams.async_stream_id);
-
-      auto [it, inserted] = hlo_async_executions_.emplace(
-          wrapped, start_thunk->async_execution());
+              instr, ir_emitter_context_->GetNextThunkId());
+      std::shared_ptr<AsyncExecution> async_execution =
+          std::make_shared<AsyncExecution>(start_thunk_info);
+      auto [it, inserted] =
+          hlo_async_executions_.emplace(wrapped, async_execution);
       if (!inserted) {
         return Internal("Async execution already exists for instruction %s",
                         wrapped->ToString());
       }
 
-      return GetThunkSequence(std::move(start_thunk));
+      auto* async_start = Cast<HloAsyncInstruction>(instr);
+      const ExecutionStreamAssignment& stream_assignment =
+          ir_emitter_context_->execution_stream_assignment();
+      ASSIGN_OR_RETURN(ExecutionStreamId execution_stream_id,
+                       stream_assignment.GetExecutionStreamId(async_start));
+
+      return std::move(fusion_thunks)
+          .Map([start_thunk_info = std::move(start_thunk_info),
+                async_execution = std::move(async_execution),
+                execution_stream_id](ThunkSequence fusion_thunks) {
+            return ThunkSequence::Of(std::make_unique<AsyncStartThunk>(
+                std::move(start_thunk_info), execution_stream_id,
+                std::move(fusion_thunks), std::move(async_execution)));
+          });
     }
     case HloOpcode::kCall: {
       return EmitAsyncComputation(instr);
@@ -2607,7 +2650,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitAsyncStart(
   }
 }
 
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCustomCallSwitch(
+AsyncThunkSequence ThunkEmitter::EmitCustomCallSwitch(
     const HloInstruction* hlo) {
   auto* custom_call = Cast<HloCustomCallInstruction>(hlo);
   if (IsLegacyCublasMatmul(*hlo)) {
@@ -2670,8 +2713,8 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitCustomCallSwitch(
   return EmitCustomCallThunk(custom_call);
 }
 
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitHloInstruction(
-    const HloInstruction* hlo, bool emit_group_thunks) {
+AsyncThunkSequence ThunkEmitter::EmitHloInstruction(const HloInstruction* hlo,
+                                                    bool emit_group_thunks) {
   switch (hlo->opcode()) {
     case HloOpcode::kAllGatherDone:
       return EmitCollectiveAsyncDone(hlo);
@@ -2700,7 +2743,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitHloInstruction(
     case HloOpcode::kAsyncStart:
       return EmitAsyncStart(hlo);
     case HloOpcode::kCall:
-      return EmitCommandBufferThunk(hlo);
+      return EmitCallComputation(hlo);
     case HloOpcode::kCollectivePermuteDone:
       return IsNvshmemCollective(hlo) ? EmitNvshmemAsyncDone(hlo)
                                       : EmitCollectiveAsyncDone(hlo);
@@ -2770,53 +2813,63 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitHloInstruction(
 
 absl::StatusOr<std::unique_ptr<SequentialThunk>>
 ThunkEmitter::EmitHloEntryComputation(const HloModule* module) {
-  TF_ASSIGN_OR_RETURN(auto thunks,
-                      EmitHloComputation(module->entry_computation()));
+  ASSIGN_OR_RETURN(
+      ThunkSequence thunks,
+      std::move(EmitHloComputation(module->entry_computation())).Await());
   return std::make_unique<SequentialThunk>(Thunk::ThunkInfo{},
                                            std::move(thunks));
 }
 
-absl::StatusOr<ThunkSequence> ThunkEmitter::EmitHloComputation(
+AsyncThunkSequence ThunkEmitter::EmitHloComputation(
     const HloComputation* computation) {
   const HloSchedule& schedule = computation->parent()->schedule();
+  const HloModule* hlo_module = schedule.module();
+  if (hlo_module->config()
+          .debug_options()
+          .xla_gpu_command_buffer_scheduling_mode() ==
+      DebugOptions::CONCURRENT_REGIONS) {
+    if (concurrent_regions_ordering_.count(hlo_module) == 0) {
+      concurrent_regions_ordering_[hlo_module] =
+          std::make_unique<ConcurrentRegionsHloOrdering>(schedule);
+    }
+  }
   if (!schedule.is_computation_scheduled(computation)) {
     return Internal("Sequence not found for computation: %s",
                     computation->name());
   }
+  const std::vector<HloInstruction*>& instructions =
+      schedule.sequence(computation).instructions();
+  std::vector<AsyncThunkSequence> futures(instructions.size());
+  for (int i = 0; i < instructions.size(); i++) {
+    futures[i] = EmitHloInstruction(instructions[i]);
+  }
 
-  ThunkSequence thunk_sequence;
-  const HloInstructionSequence& sequence = schedule.sequence(computation);
-  absl::flat_hash_map<const HloInstruction*, Thunk*> instr_to_thunk;
-  for (const HloInstruction* instr : sequence.instructions()) {
-    TF_ASSIGN_OR_RETURN(auto thunks, EmitHloInstruction(instr));
-    if (!thunks.empty()) {
-      instr_to_thunk[instr] = thunks.back().get();
-    }
-    AppendThunkSequence(thunk_sequence, thunks);
-    for (const HloInstruction* control_predecessor :
-         instr->control_predecessors()) {
-      std::vector<const HloInstruction*> real_successors =
-          GetRealDependencyInstructions(instr);
-      std::vector<const HloInstruction*> real_predecessors =
-          GetRealDependencyInstructions(control_predecessor);
-      for (const HloInstruction* real_predecessor : real_predecessors) {
-        for (const HloInstruction* real_successor : real_successors) {
-          // if the instruction does not have a thunk, it is a degenerated
-          // instruction, and we skip it.
-          if (instr_to_thunk.contains(real_successor) &&
-              instr_to_thunk.contains(real_predecessor)) {
-            instr_to_thunk[real_successor]->add_control_predecessor(
-                instr_to_thunk[real_predecessor]);
-            VLOG(3) << "Add thunk control dependency for predecessor:  "
-                    << instr_to_thunk[real_predecessor]->ToString(0)
-                    << " successor: "
-                    << instr_to_thunk[real_successor]->ToString(0);
+  return tsl::JoinFutures(absl::MakeSpan(futures))
+      .Map([&instructions,
+            &concurrent_regions_ordering = concurrent_regions_ordering_,
+            hlo_module](std::vector<ThunkSequence> sequences) {
+        absl::flat_hash_map<const HloInstruction*, Thunk*> instr_to_thunk;
+        for (int i = 0; i < instructions.size(); i++) {
+          const HloInstruction* instr = instructions[i];
+          ThunkSequence& thunks = sequences[i];
+          if (!thunks.empty()) {
+            instr_to_thunk[instr] = thunks.back().get();
+          }
+          // Set the concurrent region id for the thunks, if it exists.
+          if (concurrent_regions_ordering.count(hlo_module)) {
+            auto concurrent_region_id =
+                concurrent_regions_ordering.at(hlo_module)
+                    ->GetConcurrentRegionId(instr);
+            for (auto& thunk : thunks) {
+              if (concurrent_region_id.has_value()) {
+                thunk->set_concurrent_region_id(concurrent_region_id.value());
+              }
+            }
           }
         }
-      }
-    }
-  }
-  return thunk_sequence;
+
+        return FlattenThunkSequence(std::move(sequences));
+      });
 }
 
 }  // namespace xla::gpu

@@ -416,6 +416,8 @@ xla_test(
     backend_tags = {
         # TODO(b/445172709): Re-enable once fixed.
         "b200": ["broken"],
+        "gb200": ["broken"],  # TODO(b/505574653): re-enable when fixed.
+        "gb300": ["broken"],  # TODO(b/505574653): re-enable when fixed.
     },
     backends = ["gpu"],
     use_legacy_runtime = True,
@@ -509,6 +511,22 @@ xla_test(
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
+    ],
+)
+
+xla_test(
+    name = "cute_dsl_custom_call_test",
+    srcs = ["cute_dsl_custom_call_test.cc"],
+    backends = ["b200"],
+    data = ["cute_dsl_vector_add.hlo"],
+    deps = [
+        ":hlo_pjrt_gpu_test_base",
+        "//xla/tsl/lib/core:status_test_util",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+        "@tsl//tsl/platform:path",
     ],
 )
 
@@ -620,7 +638,10 @@ xla_test(
         ":gpu_pjrt_codegen_test",
         "//xla:debug_options_flags",
         "//xla/service:hlo_module_config",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor:semantic_version",
         "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -767,6 +788,7 @@ lit_test_suite_for_gpus(
         include = [
             "*.hlo",
         ],
+        exclude = ["cute_dsl_vector_add.hlo"],
     ),
     cfg = "//xla:lit.cfg.py",
     default_tags = ["gpu"],  # Needs to run in a build with a gpu configured.
@@ -1181,7 +1203,6 @@ xla_test(
     backend_tags = {
         "gpu": [
             "multi_gpu",
-            "no_oss",
         ],
     },
     backends = ["gpu"],
@@ -1214,7 +1235,6 @@ xla_test(
     backend_tags = {
         "gpu": [
             "multi_gpu",
-            "no_oss",
         ],
     },
     backends = [
@@ -1279,6 +1299,7 @@ xla_test(
         "gpu",
     ],
     deps = [
+        ":collective_ops_e2e_test_base",
         "//xla:array",
         "//xla:error_spec",
         "//xla:literal",
@@ -1286,7 +1307,8 @@ xla_test(
         "//xla:shape_util",
         "//xla:types",
         "//xla:xla_data_proto_cc",
-        "//xla/backends/gpu/tests:collective_ops_e2e_test_base",
+        "//xla:xla_proto_cc",
+        "//xla/backends/gpu/collectives:gpu_collectives",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/parser:hlo_parser",
         "//xla/hlo/testlib:pattern_matcher_gmock",
@@ -1396,6 +1418,8 @@ xla_test(
         "gpu": [
             "multi_gpu",
         ],
+        "gb200": ["broken"],  # TODO(b/505963304): re-enable when fixed.
+        "gb300": ["broken"],  # TODO(b/505963304): re-enable when fixed.
     },
     backends = ["gpu"],
     deps = [
@@ -1435,9 +1459,12 @@ xla_test(
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:statusor",
         "//xla/tsl/platform:test",
+        "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
     ] + if_cuda_is_configured([
@@ -1523,7 +1550,6 @@ xla_test(
     backend_tags = {
         "gpu": [
             "multi_gpu",
-            "no_oss",
         ],
     },
     backends = ["gpu"],
@@ -1554,8 +1580,8 @@ xla_test(
         "gpu",
     ],
     deps = [
+        ":hlo_pjrt_gpu_test_base",
         "//xla:error_spec",
-        "//xla/backends/gpu/tests:hlo_pjrt_gpu_test_base",
         "//xla/hlo/testlib:test",
         "//xla/tests:hlo_pjrt_interpreter_reference_mixin",
         "//xla/tests:xla_internal_test_main",
@@ -1600,6 +1626,7 @@ xla_test(
     backends = [
         "gpu",
     ],
+    shard_count = 3,
     deps = [
         ":collective_ops_e2e_test_base",
         "//xla:array",
@@ -1629,5 +1656,60 @@ xla_test(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",
+    ],
+)
+
+xla_cc_test(
+    name = "host_cross_compilation_test",
+    srcs = ["host_cross_compilation_test.cc"],
+    tags = [
+        "cuda-only",
+        "gpu",
+    ],
+    deps = [
+        "//xla/backends/cpu:target_machine_options",
+        "//xla/backends/gpu:ffi",
+        "//xla/backends/gpu/target_config",
+        "//xla/ffi",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:verified_hlo_module",
+        "//xla/service:compiler",
+        "//xla/service:gpu_plugin",
+        "//xla/service:gpu_topology",
+        "//xla/service:hlo_module_config",
+        "//xla/service:platform_util",
+        "//xla/stream_executor:device_description_proto_cc",
+        "//xla/stream_executor:platform_id",
+        "//xla/tsl/platform:status_macros",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+xla_test(
+    name = "p2p_ops_e2e_test",
+    srcs = ["p2p_ops_e2e_test.cc"],
+    backend_tags = {
+        "gpu": [
+            "multi_gpu",
+        ],
+    },
+    backends = [
+        "gpu",
+    ],
+    deps = [
+        ":collective_ops_e2e_test_base",
+        "//xla:literal",
+        "//xla/service:hlo_module_config",
+        "//xla/tests:literal_test_util",
+        "//xla/tests:xla_internal_test_main",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/strings:string_view",
     ],
 )

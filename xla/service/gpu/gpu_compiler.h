@@ -20,11 +20,16 @@ limitations under the License.
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"
+#include "absl/base/thread_annotations.h"
+#include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "llvm/IR/Module.h"
 #include "mlir/IR/MLIRContext.h"
 #include "xla/autotune_results.pb.h"
@@ -46,6 +51,7 @@ limitations under the License.
 #include "xla/service/hlo_cost_analysis.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/service/llvm_compiler.h"
+#include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/device_description.pb.h"
 #include "xla/stream_executor/dnn.h"
@@ -63,6 +69,8 @@ namespace gpu {
 // The GPU compiler generates efficient GPU executables.
 class GpuCompiler : public LLVMCompiler {
  public:
+  using AsmModuleHook = absl::AnyInvocable<void(absl::string_view)>;
+
   GpuCompiler(se::Platform::Id platform_id, const char* target_triple,
               const char* data_layout);
 
@@ -110,7 +118,6 @@ class GpuCompiler : public LLVMCompiler {
 
   int64_t GetPointerSize() const { return pointer_size_; }
 
-
   mlir::MLIRContext* mlir_context() { return &mlir_context_; }
 
   virtual std::unique_ptr<GpuAliasInfo> GetAliasInfo(
@@ -149,10 +156,22 @@ class GpuCompiler : public LLVMCompiler {
 
   absl::StatusOr<std::vector<std::unique_ptr<CodegenBackend>>>
   GetAutotunerBackends(se::StreamExecutor* stream_exec,
+                       se::DeviceAddressAllocator* device_allocator,
                        const Compiler::GpuTargetConfig* target_config,
                        const AliasInfo* alias_info,
                        const DebugOptions& debug_options,
                        mlir::MLIRContext* mlir_context);
+
+  // Sets a callback that is invoked with all compiled ptx.
+  // Can be used for logging or statistics collection.
+  void SetAsmHook(AsmModuleHook hook) {
+    absl::MutexLock lock(user_asm_hook_m_);
+    user_asm_hook_ = std::move(hook);
+  }
+  void RemoveAsmHook() {
+    absl::MutexLock lock(user_asm_hook_m_);
+    user_asm_hook_ = nullptr;
+  }
 
  protected:
   struct BackendCompileResult {
@@ -168,6 +187,11 @@ class GpuCompiler : public LLVMCompiler {
 
   static std::unique_ptr<HloPassPipeline> GetCustomKernelRewriterPipeline(
       const stream_executor::DeviceDescription& device_description);
+
+  // Run right before GemmRewriter to add pads for gpublas gemms.
+  virtual void AddPaddingForGpublasGemms(
+      HloPassPipeline& pipeline, const DebugOptions& debug_options,
+      const se::GpuComputeCapability& gpu_version) = 0;
 
   // During compilation with device, stream_exec != null and autotune_results
   // == null. During deviceless AOT compilation, stream_exec == null and
@@ -214,11 +238,22 @@ class GpuCompiler : public LLVMCompiler {
     CompileModuleResults compile_module_results;
   };
 
+  absl::Status AutotunerAndPostCleanup(
+      HloPassPipeline& pipeline, HloModule* hlo_module,
+      const se::GpuComputeCapability& gpu_version,
+      const DebugOptions& debug_options, mlir::MLIRContext* mlir_context,
+      const se::DeviceDescription& device_description,
+      const std::string& platform_name, const CompileOptions& options,
+      tsl::thread::ThreadPool* thread_pool, se::StreamExecutor* stream_exec,
+      const Compiler::GpuTargetConfig* target_config,
+      const MultiProcessKeyValueStore& key_value_store,
+      const se::SemanticVersion& toolkit_version, const AliasInfo* alias_info,
+      HloCostAnalysis::ShapeSizeFunction shape_size_fn);
+
   // Schedule and compile the module.
   absl::StatusOr<CompileResultWithMetadata> CompileToBackendResult(
       HloModule* module, llvm::LLVMContext* llvm_context,
-      const CompileOptions& options,
-      const se::DeviceDescription& gpu_device_info,
+      const GpuTopology& gpu_topology, const CompileOptions& options,
       se::StreamExecutor* absl_nullable stream_exec);
 
   absl::StatusOr<BackendCompileResult> CompileAndLink(
@@ -232,8 +267,7 @@ class GpuCompiler : public LLVMCompiler {
       const HloModuleConfig& module_config,
       const stream_executor::DeviceDescription& device_description,
       const HloModule* debug_module, llvm::Module* llvm_module,
-      bool relocatable, const CompileOptions& options,
-      std::optional<int> shard_number);
+      bool relocatable, std::optional<int> shard_number);
 
   absl::Status LoadAutotuneResultsFromFile(const DebugOptions& debug_options);
   absl::Status SerializeAutotuneResultsToFile(
@@ -268,7 +302,7 @@ class GpuCompiler : public LLVMCompiler {
       const HloModuleConfig& module_config, llvm::Module* llvm_module,
       const stream_executor::DeviceDescription& device_description,
       bool relocatable, const HloModule* debug_module,
-      const CompileOptions& options, std::optional<int> shard_number) = 0;
+      std::optional<int> shard_number) = 0;
 
   // Inserts and optimizes mandatory copies. Necessary for correctness.
   absl::Status RunPreSchedulingCopyInsertion(
@@ -317,6 +351,9 @@ class GpuCompiler : public LLVMCompiler {
   // A MLIR context that can be used by pre-codegen passes. For codegen, we will
   // need to have a context with more dialects registered.
   mlir::MLIRContext mlir_context_;
+
+  absl::Mutex user_asm_hook_m_;
+  AsmModuleHook user_asm_hook_ ABSL_GUARDED_BY(user_asm_hook_m_);
 };
 
 }  // namespace gpu

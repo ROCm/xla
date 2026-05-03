@@ -79,7 +79,7 @@ template <typename F>
 std::invoke_result_t<F> RunOnAsyncWorkRunner(AsyncWorkRunner* runner, F&& f) {
   std::invoke_result_t<F> result;
   absl::Notification done;
-  runner->Schedule([&]() {
+  runner->Execute([&]() {
     result = std::forward<F>(f)();
     done.Notify();
   });
@@ -122,12 +122,6 @@ bool IsMemorySpaceKind(const PjRtMemorySpace* memory_space) {
   return memory_space->kind_id() == MemorySpaceKind::kKindId;
 }
 
-std::optional<stream_executor::GpuTargetConfigProto> GetTargetConfigForDevices(
-    absl::Span<PjRtDevice* const> devices);
-
-absl::flat_hash_map<std::string, PjRtDeviceAttribute> GetAttrsForDevices(
-    std::optional<stream_executor::GpuTargetConfigProto> target_config);
-
 template <typename T>
 const T* FindCallback(int channel_id, absl::Span<const T> callbacks) {
   // TODO(ezhulenev): Can we use binary search here assuming that callbacks
@@ -166,7 +160,7 @@ StreamExecutorGpuTopologyDescription GetTopology(
 std::vector<std::unique_ptr<PjRtMemorySpace>> InitializeMemorySpaces(
     int global_device_count, absl::Span<PjRtDevice* const> addressable_devices);
 
-absl::StatusOr<std::unique_ptr<tsl::Allocator>> CreateAllocatorForDevice(
+absl::StatusOr<std::shared_ptr<tsl::Allocator>> CreateAllocatorForDevice(
     se::StreamExecutor* executor, const GpuAllocatorConfig& allocator_config);
 
 absl::StatusOr<MaybeOwning<se::DeviceAddressAllocator>> CreateDeviceAllocator(

@@ -64,8 +64,8 @@ ConvolutionDimensionNumbers GenNewConvDNums(
     const HloInstruction* dot_rhs, int64_t lhs_concat_dim,
     int64_t rhs_concat_dim, bool windowed_at_contracting_dims,
     bool windowed_at_batch_dims,
-    const std::vector<int64_t>& lhs_to_output_indices,
-    const std::vector<int64_t>& rhs_to_output_indices,
+    absl::Span<const int64_t> lhs_to_output_indices,
+    absl::Span<const int64_t> rhs_to_output_indices,
     const Shape& new_dot_shape);
 
 template <typename T>
@@ -510,7 +510,8 @@ std::optional<HloInstruction*> PadFromPartialReplicateShape(
 // target_tile_dims by dynamic slice, return std::nullopt.
 // If target_sharding is already compatible, returns it.
 std::optional<HloSharding> PartialReplicateReshardCompatibleSharding(
-    const HloSharding& partial_sharding, const HloSharding& target_sharding);
+    const HloSharding& raw_partial_sharding,
+    const HloSharding& raw_target_sharding);
 
 // Do left halo exchange if all-reduce directly from tile sharding to partial
 // replicate sharding will remove useful data from the source.

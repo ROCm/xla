@@ -1106,6 +1106,14 @@ FusionDecision InstructionFusion::ShouldFuse(
   HloInstruction* producer = consumer->mutable_operand(operand_index);
   VLOG(2) << "Evaluating fusion: producer '" << producer->name()
           << "' into consumer '" << consumer->name() << "'.";
+
+  // Skip fusion inside the body of any kScan.
+  if (const HloComputation* parent = consumer->parent(); parent != nullptr) {
+    if (!parent->caller_instructions(HloOpcode::kScan).empty()) {
+      return FusionDecision::Forbid("not fusing inside the body of a scan");
+    }
+  }
+
   // Don't fuse across a root instruction.
   if (producer == producer->parent()->root_instruction()) {
     VLOG(2) << "Fusion rejected: producer '" << producer->name()

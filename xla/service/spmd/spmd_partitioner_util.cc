@@ -161,8 +161,8 @@ ConvolutionDimensionNumbers GenNewConvDNums(
     const HloInstruction* dot_rhs, int64_t lhs_concat_dim,
     int64_t rhs_concat_dim, bool windowed_at_contracting_dims,
     bool windowed_at_batch_dims,
-    const std::vector<int64_t>& lhs_to_output_indices,
-    const std::vector<int64_t>& rhs_to_output_indices,
+    absl::Span<const int64_t> lhs_to_output_indices,
+    absl::Span<const int64_t> rhs_to_output_indices,
     const Shape& new_dot_shape) {
   // Generate the new conv dimension numbers.
   const ConvolutionDimensionNumbers& dnums =
@@ -684,22 +684,29 @@ bool AxesOverlap(absl::Span<const AxisRef> axes1,
 }  // namespace
 
 std::optional<HloSharding> PartialReplicateReshardCompatibleSharding(
-    const HloSharding& partial_sharding, const HloSharding& target_sharding) {
-  if (!(partial_sharding.UseNamedShardingLeaf()
-            ? partial_sharding.HasPartialReplication()
-            : partial_sharding.ReplicateOnLastTileDim())) {
+    const HloSharding& raw_partial_sharding,
+    const HloSharding& raw_target_sharding) {
+  if (!raw_partial_sharding.HasPartialReplication()) {
     return std::nullopt;
   }
-  if (partial_sharding.num_devices() != target_sharding.num_devices()) {
+  if (raw_partial_sharding.num_devices() != raw_target_sharding.num_devices()) {
     return std::nullopt;
   }
-  const int64_t rank = partial_sharding.TiledDataRank();
-  if (rank != target_sharding.TiledDataRank()) {
+  const int64_t rank = raw_partial_sharding.TiledDataRank();
+  if (rank != raw_target_sharding.TiledDataRank()) {
     return std::nullopt;
   }
+  bool same_sharding_type = raw_partial_sharding.UseNamedShardingLeaf() ==
+                            raw_target_sharding.UseNamedShardingLeaf();
 
-  CHECK_EQ(partial_sharding.UseNamedShardingLeaf(),
-           target_sharding.UseNamedShardingLeaf());
+  const HloSharding& target_sharding =
+      !same_sharding_type && raw_target_sharding.UseNamedShardingLeaf()
+          ? HloSharding::V3ToV2Sharding(raw_target_sharding.named_sharding())
+          : raw_target_sharding;
+  const HloSharding& partial_sharding =
+      !same_sharding_type && raw_partial_sharding.UseNamedShardingLeaf()
+          ? HloSharding::V3ToV2Sharding(raw_partial_sharding.named_sharding())
+          : raw_partial_sharding;
 
   std::vector<int64_t> expand_dims_shards;
   expand_dims_shards.reserve(rank);
@@ -2663,8 +2670,20 @@ GatherScatterOperandsShardedAcrossParallelDims(
   if (indices_parallel_dims.size() != operand_parallel_dims.size()) {
     return std::nullopt;
   }
-  auto new_index_shard = indices.sharding();
-  auto new_operand_shard = operand.sharding();
+  const HloSharding& idx_sharding = indices.sharding();
+  const HloSharding& op_sharding = operand.sharding();
+
+  // AlignShardingOnDims is called for these shardings later on where conversion
+  // happens anyway.
+  HloSharding new_index_shard =
+      idx_sharding.UseNamedShardingLeaf()
+          ? HloSharding::V3ToV2Sharding(idx_sharding.named_sharding())
+          : idx_sharding;
+  HloSharding new_operand_shard =
+      op_sharding.UseNamedShardingLeaf()
+          ? HloSharding::V3ToV2Sharding(op_sharding.named_sharding())
+          : op_sharding;
+
   int idx_parallel_tiles_num = new_index_shard.NumTiles(indices_parallel_dims);
   int op_parallel_tiles_num = new_operand_shard.NumTiles(operand_parallel_dims);
   if (idx_parallel_tiles_num == 1 && op_parallel_tiles_num == 1) {
@@ -2767,6 +2786,27 @@ const HloInstruction* SkipCopyOperands(const HloInstruction* operand,
 }
 
 }  // namespace
+
+// Tries to translate a V2 sharding with non-trivial transpose to a V3 sharding
+// with iota tiling by using reshape_dims as axes sizes and mapping tensor
+HloSharding CanonicalizeSharding(const HloSharding& sharding) {
+  if (sharding.IsTuple()) {
+    std::vector<HloSharding> v3_elements;
+    v3_elements.reserve(sharding.tuple_elements().size());
+    for (const HloSharding& element : sharding.tuple_elements()) {
+      v3_elements.push_back(CanonicalizeSharding(element));
+    }
+    return HloSharding::FlatTuple(std::move(v3_elements));
+  }
+
+  if (sharding.IsUnknown() || sharding.IsManual() || sharding.IsUnreduced()) {
+    return sharding;
+  }
+
+  // HloSharding::ToNamedSharding now handles translation of V1/V2 shardings
+  // to iota mesh based V3 shardings where possible.
+  return HloSharding(HloSharding::ToNamedSharding(sharding));
+}
 
 std::optional<int64_t> FindRotateRightPattern(const HloInstruction* concat) {
   if (concat->operand_count() != 2) {
@@ -2968,8 +3008,6 @@ std::optional<Mesh> GetMeshFromSharding(const HloSharding& sharding) {
   }
 
   // For V2 shardings, create the mesh from the tile assignment.
-  // TODO(b/477733507): Translate the sharding and tiling to a mesh with iota
-  // device assignment when possible.
   if (sharding.tile_assignment().iota().has_value()) {
     TileAssignment device_assignment = sharding.tile_assignment();
     std::vector<std::string> axis_names(device_assignment.dimensions().size());
@@ -3109,6 +3147,9 @@ GetMeshAxesPartitionGroupsForReplication(
       axis_refs.push_back(AxisRef(dim));
     }
   }
+  if (axis_refs.empty()) {
+    return std::nullopt;
+  }
   SortAndMergeAxes(axis_refs, *mesh);
   return MeshAxesReplicaGroupList(*mesh, axis_refs);
 }
@@ -3116,9 +3157,8 @@ GetMeshAxesPartitionGroupsForReplication(
 std::unique_ptr<CollectiveDeviceListBase> GetPartitionGroupsForReplication(
     const HloSharding& sharding, absl::Span<const int64_t> replication_dims) {
   std::unique_ptr<CollectiveDeviceListBase> partition_groups;
-  auto mesh_axes_groups =
-      GetMeshAxesPartitionGroupsForReplication(sharding, replication_dims);
-  if (mesh_axes_groups.has_value()) {
+  if (auto mesh_axes_groups = GetMeshAxesPartitionGroupsForReplication(
+          sharding, replication_dims)) {
     return std::make_unique<MeshAxesReplicaGroupList>(*mesh_axes_groups);
   }
 

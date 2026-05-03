@@ -21,6 +21,7 @@ limitations under the License.
 #include <array>
 #include <cstdint>
 
+#include "xla/core/collectives/symmetric_memory.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/kernel.h"
 
@@ -35,9 +36,25 @@ using RaggedAllToAllOutputPtrs =
 template <typename PtrStorage, int64_t kVectorSize>
 struct RaggedAllToAllKernel {
   using KernelType = stream_executor::TypedKernel<
-      stream_executor::DeviceAddressBase, PtrStorage,
-      stream_executor::DeviceAddressBase, stream_executor::DeviceAddressBase,
-      stream_executor::DeviceAddressBase, int64_t, int64_t>;
+      /*input_ptr=*/stream_executor::DeviceAddressBase,
+      /*output_ptrs=*/PtrStorage,
+      /*input_offsets_ptr=*/stream_executor::DeviceAddressBase,
+      /*send_sizes_ptr=*/stream_executor::DeviceAddressBase,
+      /*output_offsets_ptr=*/stream_executor::DeviceAddressBase,
+      /*num_updates_per_replica=*/int64_t,
+      /*num_row_elements=*/int64_t>;
+};
+
+template <int64_t kVectorSize>
+struct RaggedAllToAllWithSymmetricMemoryKernel {
+  using KernelType = stream_executor::TypedKernel<
+      /*input_ptr=*/stream_executor::DeviceAddressBase,
+      /*output_ptrs=*/xla::SymmetricMemory*,
+      /*input_offsets_ptr=*/stream_executor::DeviceAddressBase,
+      /*send_sizes_ptr=*/stream_executor::DeviceAddressBase,
+      /*output_offsets_ptr=*/stream_executor::DeviceAddressBase,
+      /*num_updates_per_replica=*/int64_t,
+      /*num_row_elements=*/int64_t>;
 };
 
 }  // namespace stream_executor::gpu

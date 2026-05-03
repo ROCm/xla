@@ -2,6 +2,10 @@ load(
     "@local_config_rocm//rocm:build_defs.bzl",
     "if_rocm_is_configured",
 )
+load(
+    "@local_config_sycl//sycl:build_defs.bzl",
+    "if_sycl_is_configured",
+)
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//xla:lit.bzl", "enforce_glob", "lit_test_suite")
 load(
@@ -34,6 +38,7 @@ cc_library(
     deps = [
         "//xla:debug_options_flags",
         "//xla:xla_proto_cc",
+        "//xla/backends/gpu/transforms:scatter_determinism_expander",
         "//xla/backends/gpu/transforms:scatter_expander",
         "//xla/backends/gpu/transforms:scatter_slice_simplifier",
         "//xla/backends/gpu/transforms/collectives:all_gather_dynamic_slice_simplifier",
@@ -54,7 +59,6 @@ cc_library(
         "//xla/service:map_inliner",
         "//xla/service:platform_util",
         "//xla/service:reduce_scatter_reassociate",
-        "//xla/service:scatter_determinism_expander",
         "//xla/service:scatter_simplifier",
         "//xla/service:select_and_scatter_expander",
         "//xla/service:sharding_remover",
@@ -139,6 +143,7 @@ cc_library(
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:status_macros",
         "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/base",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status:statusor",
@@ -152,6 +157,8 @@ cc_library(
         "//xla/stream_executor:cuda_platform",
     ]) + if_rocm_is_configured([
         "//xla/stream_executor:rocm_platform",
+    ]) + if_sycl_is_configured([
+        "//xla/stream_executor:sycl_platform",
     ]),
     alwayslink = True,  # Initializer needs to run.
 )
@@ -244,6 +251,9 @@ lit_test_suite(
     ]) + if_rocm_is_configured([
         "--param=PTX=GCN",
         "--param=GPU=mi200",
+    ]) + if_sycl_is_configured([
+        "--param=PTX=ONEAPI",
+        "--param=GPU=bmg_g21",
     ]),
     cfg = "//xla:lit.cfg.py",
     data = [":test_utilities"],

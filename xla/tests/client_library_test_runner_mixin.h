@@ -26,6 +26,7 @@ limitations under the License.
 
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "xla/array2d.h"
 #include "xla/array3d.h"
 #include "xla/array4d.h"
@@ -56,7 +57,6 @@ limitations under the License.
 #include "xla/types.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
-#include "xla/tsl/platform/status_macros.h"
 
 namespace xla {
 
@@ -132,6 +132,7 @@ class ClientLibraryTestRunnerMixin : public T {
     options.num_devices = num_devices;
     options.arguments = {arguments.begin(), arguments.end()};
     options.run_hlo_passes = true;
+    options.seed = execution_options.seed();
     ASSIGN_OR_RETURN(std::vector<Literal> results,
                      this->test_runner().ExecuteReplicated(
                          std::move(module), options, device_assignment_ptr));

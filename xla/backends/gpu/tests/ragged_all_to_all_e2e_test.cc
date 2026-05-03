@@ -63,6 +63,7 @@ class RaggedAllToAllTestBase : public CollectiveOpsWithFlagsBase {
  public:
   RaggedAllToAllTestBase(bool enable_async, RaggedAllToAllImplType impl_type)
       : CollectiveOpsWithFlagsBase(enable_async, /*enable_p2p_memcpy=*/false,
+                                   /*enable_symmetric_buffer=*/false,
                                    /*memory_size=*/64 * kMB,
                                    /*collectives_memory_size=*/0),
         impl_type_(impl_type) {}
@@ -370,6 +371,76 @@ TEST_P(RaggedAllToAllTest, RaggedAllToAll_2GPUs) {
   TF_ASSERT_OK(CreateRandomTestData(module.get(),
                                     /*input_sizes=*/{/*replica_0=*/{1, 1},
                                                      /*replica_1=*/{3, 1}}));
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      ExecutionResult execution_result,
+      ExecuteReplicated(std::move(module), GetInputLiteralPtrs()));
+
+  const std::vector<Literal>& results = execution_result.results;
+
+  ASSERT_EQ(results.size(), kNumReplicas);
+  EXPECT_TRUE(LiteralTestUtil::Equal(expected_outputs_[0], results[0]));
+  EXPECT_TRUE(LiteralTestUtil::Equal(expected_outputs_[1], results[1]));
+}
+
+TEST_P(RaggedAllToAllTest, RaggedAllToAll_SeveralOps_2GPUs) {
+  // TODO(patrios): Make this a loop.
+  absl::string_view kModuleReplicatedStr = R"(
+  HloModule module, num_partitions=1
+
+  ENTRY entry {
+    input = f32[4] parameter(0)
+    output = f32[4] parameter(1)
+    input_offsets = s32[2] parameter(2)
+    send_sizes = s32[2] parameter(3)
+    output_offsets = s32[2] parameter(4)
+    recv_sizes = s32[2] parameter(5)
+    ra2a_0 = f32[4] ragged-all-to-all(input, output, input_offsets,
+    send_sizes, output_offsets, recv_sizes), replica_groups={{0,1}}
+    ROOT ra2a = f32[4] ragged-all-to-all(ra2a_0, output, input_offsets,
+    send_sizes, output_offsets, recv_sizes), replica_groups={{0,1}}
+  })";
+
+  const int64_t kNumReplicas = 2;
+  ASSERT_GE(device_count(), kNumReplicas)
+      << "Test requires at least " << kNumReplicas << " devices ("
+      << device_count() << " available)";
+
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(
+                                           kModuleReplicatedStr, kNumReplicas));
+
+  inputs_.clear();
+  inputs_.reserve(kNumReplicas);
+  inputs_.push_back(LiteralUtil::CreateR1<float>({45.0f, 38.0f, 0.0f, 0.0f}));
+  inputs_.push_back(
+      LiteralUtil::CreateR1<float>({41.0f, 16.0f, 110.0f, 107.0f}));
+
+  output_init_ = LiteralUtil::CreateR1<float>({-1.0f, -1.0f, -1.0f, -1.0f});
+
+  input_offsets_.clear();
+  input_offsets_.reserve(kNumReplicas);
+  input_offsets_.push_back(LiteralUtil::CreateR1<int32_t>({0, 1}));
+  input_offsets_.push_back(LiteralUtil::CreateR1<int32_t>({0, 3}));
+  input_sizes_.clear();
+  input_sizes_.reserve(kNumReplicas);
+  input_sizes_.push_back(LiteralUtil::CreateR1<int32_t>({1, 1}));
+  input_sizes_.push_back(LiteralUtil::CreateR1<int32_t>({3, 1}));
+
+  output_offsets_.clear();
+  output_offsets_.reserve(kNumReplicas);
+  output_offsets_.push_back(LiteralUtil::CreateR1<int32_t>({0, 0}));
+  output_offsets_.push_back(LiteralUtil::CreateR1<int32_t>({1, 1}));
+  output_sizes_.clear();
+  output_sizes_.reserve(kNumReplicas);
+  output_sizes_.push_back(LiteralUtil::CreateR1<int32_t>({1, 3}));
+  output_sizes_.push_back(LiteralUtil::CreateR1<int32_t>({1, 1}));
+
+  expected_outputs_.clear();
+  expected_outputs_.reserve(kNumReplicas);
+  expected_outputs_.push_back(
+      LiteralUtil::CreateR1<float>({45.0f, 38.0f, 107.0f, -1.0f}));
+  expected_outputs_.push_back(
+      LiteralUtil::CreateR1<float>({41.0f, -1.0f, -1.0f, -1.0f}));
 
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
@@ -754,6 +825,61 @@ TEST_P(RaggedAllToAllTest,
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
       ExecuteReplicated(std::move(module), GetInputLiteralPtrs()));
+
+  const std::vector<Literal>& results = execution_result.results;
+  ASSERT_EQ(results.size(), kNumReplicas);
+  EXPECT_TRUE(LiteralTestUtil::Equal(expected_outputs_[0], results[0]));
+  EXPECT_TRUE(LiteralTestUtil::Equal(expected_outputs_[1], results[1]));
+}
+
+// This test checks if RaggedAllToAll kernel preserves the initial output data.
+// It updates every second element of the output with the input data, and the
+// other elements are preserved.
+TEST_P(RaggedAllToAllTest, RaggedAllToAll_2GPUs_PreservesInitialData) {
+  absl::string_view kModuleReplicatedStr = R"(
+  HloModule module, num_partitions=1, replica_count=2
+
+  ENTRY entry {
+    io = f32[4] iota(), iota_dimension=0
+    id = u32[] replica-id()
+    ten = u32[] constant(10)
+    id2 = u32[] multiply(id, ten)
+    id3 = f32[] convert(id2)
+    id4 = f32[4] broadcast(id3)
+    input = f32[4] add(io, id4)
+    output = f32[4] constant({-1,-1,-1,-1})
+    send_sizes = s32[2] constant({1,1})
+    recv_sizes = s32[2] constant({1,1})
+    input_offsets = s32[2] constant({0, 2})
+    step = u32[] constant(2)
+    oof = u32[] multiply(id, step)
+    oof2 = s32[] convert(oof)
+    output_offsets = s32[2] broadcast(oof2)
+
+    ROOT ra2a = f32[4] ragged-all-to-all(input, output, input_offsets,
+    send_sizes, output_offsets, recv_sizes), replica_groups={{0,1}}
+  })";
+
+  const int64_t kNumReplicas = 2;
+  ASSERT_GE(device_count(), kNumReplicas)
+      << "Test requires at least " << kNumReplicas << " devices ("
+      << device_count() << " available)";
+
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(
+                                           kModuleReplicatedStr, kNumReplicas));
+
+  // No input arguments are needed
+  std::vector<std::vector<Literal*>> arguments(kNumReplicas);
+
+  expected_outputs_.clear();
+  expected_outputs_.reserve(kNumReplicas);
+  expected_outputs_.push_back(
+      LiteralUtil::CreateR1<float>({0.0f, -1.0f, 10.0f, -1.0f}));
+  expected_outputs_.push_back(
+      LiteralUtil::CreateR1<float>({2.0f, -1.0f, 12.0f, -1.0f}));
+
+  TF_ASSERT_OK_AND_ASSIGN(ExecutionResult execution_result,
+                          ExecuteReplicated(std::move(module), arguments));
 
   const std::vector<Literal>& results = execution_result.results;
   ASSERT_EQ(results.size(), kNumReplicas);

@@ -27,6 +27,7 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "xla/backends/gpu/tests/hlo_pjrt_gpu_test_base.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
@@ -43,7 +44,6 @@ limitations under the License.
 #include "xla/tsl/platform/statusor.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
-#include "xla/tsl/platform/status_macros.h"
 
 namespace xla {
 namespace {
@@ -162,6 +162,11 @@ DebugOptions CollectiveOpsWithFlagsBase::GetDebugOptionsForTest() const {
       debug_options.add_xla_gpu_disable_async_collectives(option);
     }
   }
+
+  if (enable_symmetric_buffer_) {
+    debug_options.set_xla_gpu_experimental_enable_nccl_symmetric_buffers(true);
+  }
+
   debug_options.add_xla_disable_hlo_passes(
       "gpu-convert-async-collectives-to-sync");
   if (enable_p2p_memcpy_) {

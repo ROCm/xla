@@ -23,7 +23,6 @@ limitations under the License.
 #include "rocm/include/hip/hip_runtime.h"
 #include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/device_address.h"
-#include "xla/stream_executor/rocm/rocm_driver_wrapper.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/util.h"
@@ -38,7 +37,7 @@ RocmRawMemoryAllocation::Create(StreamExecutor* executor, uint64_t size) {
 
   hipDevice_t device;
   TF_RETURN_IF_ERROR(
-      ToStatus(wrap::hipDeviceGet(&device, executor->device_ordinal())));
+      ToStatus(hipDeviceGet(&device, executor->device_ordinal())));
 
   hipMemAllocationProp props = {};
   props.type = hipMemAllocationTypePinned;
@@ -47,14 +46,14 @@ RocmRawMemoryAllocation::Create(StreamExecutor* executor, uint64_t size) {
   props.requestedHandleTypes = hipMemHandleTypeNone;
 
   size_t granularity = 0;
-  TF_RETURN_IF_ERROR(ToStatus(wrap::hipMemGetAllocationGranularity(
+  TF_RETURN_IF_ERROR(ToStatus(hipMemGetAllocationGranularity(
       &granularity, &props, hipMemAllocationGranularityRecommended)));
 
   uint64_t padded_size = xla::RoundUpTo<uint64_t>(size, granularity);
 
   hipMemGenericAllocationHandle_t handle;
   TF_RETURN_IF_ERROR(
-      ToStatus(wrap::hipMemCreate(&handle, padded_size, &props, 0ULL)));
+      ToStatus(hipMemCreate(&handle, padded_size, &props, 0ULL)));
 
   return std::unique_ptr<RocmRawMemoryAllocation>(
       new RocmRawMemoryAllocation(executor, handle, padded_size));
@@ -78,7 +77,7 @@ RocmRawMemoryAllocation::~RocmRawMemoryAllocation() {
   }
   std::unique_ptr<ActivateContext> activation = executor_->Activate();
   auto status =
-      ToStatus(wrap::hipMemRelease(handle_), "Error releasing ROCm memory");
+      ToStatus(hipMemRelease(handle_), "Error releasing ROCm memory");
   if (!status.ok()) {
     LOG(ERROR) << status.message();
   }

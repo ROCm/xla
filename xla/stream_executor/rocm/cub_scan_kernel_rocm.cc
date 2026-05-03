@@ -21,12 +21,12 @@ limitations under the License.
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "xla/backends/gpu/ffi.h"
 #include "xla/ffi/ffi.h"
 #include "xla/service/gpu/cublas_cudnn.h"
 #include "xla/xla_data.pb.h"
-#include "xla/tsl/platform/status_macros.h"
 
 XLA_FFI_REGISTER_ENUM_ATTR_DECODING(stream_executor::rocm::CubScanKind);
 XLA_FFI_REGISTER_ENUM_ATTR_DECODING(xla::PrimitiveType);
@@ -54,6 +54,10 @@ absl::StatusOr<std::unique_ptr<int64_t>> CubScanGetScratchSizeFfiHandler(
       CubScanGetScratchSize(element_type, vector_length, row_length,
                             column_length, kind, is_reverse));
   return std::make_unique<int64_t>(temp_bytes);
+}
+
+absl::Status CubScanDummyExecuteFfiHandler() {
+  return absl::InternalError("Dummy execute handler should not be called");
 }
 
 }  // namespace
@@ -86,10 +90,13 @@ XLA_FFI_DEFINE_HANDLER(kCubScanInstantiate, CubScanGetScratchSizeFfiHandler,
                            .Attr<CubScanKind>("kind")
                            .Attr<bool>("is_reverse"));
 
+XLA_FFI_DEFINE_HANDLER(kCubScanDummyExecute, CubScanDummyExecuteFfiHandler,
+                       xla::ffi::Ffi::Bind());
+
 XLA_FFI_REGISTER_HANDLER(
     xla::ffi::GetXlaFfiApi(),
     xla::gpu::kCubDeviceScanUnassignedScratchSizeTarget.data(), "ROCM",
     {/*.instantiate=*/kCubScanInstantiate, /*prepare=*/nullptr,
-     /*initialize=*/nullptr, /*execute=*/nullptr});
+     /*initialize=*/nullptr, /*execute=*/kCubScanDummyExecute});
 
 }  // namespace stream_executor::rocm

@@ -313,6 +313,17 @@ class LatencyHidingSchedulerTest : public HloHardwareIndependentTestBase {
   AliasInfo alias_info_;
 };
 
+class DirectionalLatencyHidingSchedulerTest
+    : public LatencyHidingSchedulerTest,
+      public ::testing::WithParamInterface<bool> {
+ protected:
+  bool IsTopDown() const { return GetParam(); }
+};
+
+INSTANTIATE_TEST_SUITE_P(DirectionalTests,
+                         DirectionalLatencyHidingSchedulerTest,
+                         ::testing::Bool());
+
 TEST_F(LatencyHidingSchedulerTest, AllGatherAsyncSimple) {
   absl::string_view hlo_string = R"(
 HloModule module, is_scheduled=true
@@ -694,6 +705,59 @@ ENTRY %module {
                                         new_instruction_sequence, "ag1"));
 }
 
+TEST_P(DirectionalLatencyHidingSchedulerTest,
+       DelayDoneOfForceDelayedAsyncStart) {
+  absl::string_view hlo_string = R"(
+HloModule module, is_scheduled=true
+
+ENTRY %module {
+  p0 = f32[8,256,256]{2,1,0} parameter(0)
+  p1 = f32[8,256,256]{2,1,0} parameter(1)
+  %after-all.1 = token[] after-all()
+  %after-all.2 = token[] after-all()
+  %send.1 = (f32[8,256,256]{2,1,0}, u32[], token[]) send(p1, %after-all.1), channel_id=1,
+    metadata={op_type="Send" op_name="s1"}
+  %send-done.1 = token[] send-done(%send.1), channel_id=1,
+    metadata={op_type="Send" op_name="s1"}
+  %send.2 = (f32[8,256,256]{2,1,0}, u32[], token[]) send(p0, %after-all.2), channel_id=2,
+    metadata={op_type="Send" op_name="s2"},
+    frontend_attributes={scheduler_hint="force_delay_async"}
+  %send-done.2 = token[] send-done(%send.2), channel_id=2,
+    metadata={op_type="Send" op_name="s2"}
+  ROOT root = (token[], token[]) tuple(%send-done.2, %send-done.1)
+}
+)";
+
+  {
+    TF_ASSERT_OK_AND_ASSIGN(auto hlo_module, ParseHloText(hlo_string));
+    HloSchedule& module_schedule = hlo_module->schedule();
+    HloComputation* entry_computation = hlo_module->entry_computation();
+
+    auto sched_config = GetDefaultSchedConfig();
+    sched_config.schedule_send_recvs = true;
+
+    TF_EXPECT_OK(RunScheduler(hlo_module.get(), sched_config));
+    std::vector<HloInstruction*> new_instruction_sequence =
+        module_schedule.sequence(entry_computation).instructions();
+    if (VLOG_IS_ON(1)) {
+      for (auto* new_i : new_instruction_sequence) {
+        VLOG(1) << new_i->ToString();
+      }
+    }
+
+    // `send-done.1` is after `send-done.2` because
+    // `kDelayDoneOfForceDelaySend`.
+    EXPECT_LT(GetOpcodeIndexUsingMetaData(HloOpcode::kSend,
+                                          new_instruction_sequence, "s2"),
+              GetOpcodeIndexUsingMetaData(HloOpcode::kSend,
+                                          new_instruction_sequence, "s1"));
+    EXPECT_LT(GetOpcodeIndexUsingMetaData(HloOpcode::kSendDone,
+                                          new_instruction_sequence, "s2"),
+              GetOpcodeIndexUsingMetaData(HloOpcode::kSendDone,
+                                          new_instruction_sequence, "s1"));
+  }
+}
+
 TEST_F(LatencyHidingSchedulerTest, AllReduceAsyncBalance) {
   absl::string_view hlo_string = R"(
 HloModule module, is_scheduled=true
@@ -867,7 +931,7 @@ ENTRY %module {
   EXPECT_TRUE(result.value());
 }
 
-TEST_F(LatencyHidingSchedulerTest, ForceDelayAsyncAllGather) {
+TEST_P(DirectionalLatencyHidingSchedulerTest, ForceDelayAsyncAllGather) {
   absl::string_view hlo_string = R"(
 HloModule module, is_scheduled=true
 
@@ -903,7 +967,10 @@ ENTRY %module {
   std::vector<HloInstruction*> original_instruction_sequence =
       module_schedule.sequence(entry_computation).instructions();
 
-  TF_EXPECT_OK(RunScheduler(hlo_module.get()));
+  auto sched_config = GetDefaultSchedConfig();
+  sched_config.top_down_scheduling = IsTopDown();
+
+  TF_EXPECT_OK(RunScheduler(hlo_module.get(), sched_config));
   std::vector<HloInstruction*> new_instruction_sequence =
       module_schedule.sequence(entry_computation).instructions();
 
@@ -927,7 +994,8 @@ ENTRY %module {
                                         new_instruction_sequence, "ag1"));
 }
 
-TEST_F(LatencyHidingSchedulerTest, ForceDelayAsyncAllGatherWithPriority) {
+TEST_P(DirectionalLatencyHidingSchedulerTest,
+       ForceDelayAsyncAllGatherWithPriority) {
   absl::string_view hlo_string = R"(
 HloModule module, is_scheduled=true
 
@@ -962,7 +1030,10 @@ ENTRY %module {
   EXPECT_TRUE(hlo_module->has_entry_computation());
   HloComputation* entry_computation = hlo_module->entry_computation();
 
-  TF_EXPECT_OK(RunScheduler(hlo_module.get()));
+  auto sched_config = GetDefaultSchedConfig();
+  sched_config.top_down_scheduling = IsTopDown();
+
+  TF_EXPECT_OK(RunScheduler(hlo_module.get(), sched_config));
   std::vector<HloInstruction*> new_instruction_sequence =
       module_schedule.sequence(entry_computation).instructions();
 
@@ -980,18 +1051,15 @@ ENTRY %module {
                                         new_instruction_sequence, "ag1"));
 }
 
-TEST_F(LatencyHidingSchedulerTest, ForceDelayAsyncForcesEarlyDone) {
+TEST_P(DirectionalLatencyHidingSchedulerTest, ForceDelayAsyncForcesEarlyDone) {
   absl::string_view hlo_string = R"(
 HloModule module, is_scheduled=true
 
 ENTRY %module {
-  %constant.19 = u32[] constant(1)
   %replica_id = u32[]{:T(128)} replica-id()
-  %add.1 = u32[]{:T(128)} add(replica_id, constant.19)
   %convert = f32[]{:T(128)} convert(u32[]{:T(128)} %replica_id)
-  %convert.1 = f32[]{:T(128)} convert(u32[]{:T(128)} %add.1)
   %color_operand.1 = f32[8,256,256]{2,1,0:T(8,128)} broadcast(f32[]{:T(128)} %convert), dimensions={}
-  %color_operand.2 = f32[8,256,256]{2,1,0:T(8,128)} broadcast(f32[]{:T(128)} %convert.1), dimensions={}
+  %color_operand.2 = f32[8,256,256]{2,1,0:T(8,128)} broadcast(f32[]{:T(128)} %convert), dimensions={}
   %ag-start.2 = (f32[8,256,256], f32[16,256,256]) all-gather-start(f32[8,256,256] %color_operand.2), replica_groups={{0,1}}, dimensions={0},
     metadata={op_type="AllGather" op_name="ag1"}
   %ag-start = (f32[8,256,256], f32[16,256,256]) all-gather-start(f32[8,256,256] %color_operand.1), replica_groups={{0,1}}, dimensions={0},
@@ -1014,7 +1082,10 @@ ENTRY %module {
   EXPECT_TRUE(hlo_module->has_entry_computation());
   HloComputation* entry_computation = hlo_module->entry_computation();
 
-  TF_EXPECT_OK(RunScheduler(hlo_module.get()));
+  auto sched_config = GetDefaultSchedConfig();
+  sched_config.top_down_scheduling = IsTopDown();
+
+  TF_EXPECT_OK(RunScheduler(hlo_module.get(), sched_config));
   std::vector<HloInstruction*> new_instruction_sequence =
       module_schedule.sequence(entry_computation).instructions();
 

@@ -1,3 +1,4 @@
+#include "absl/container/linked_hash_map.h"
 /* Copyright 2024 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +38,7 @@ limitations under the License.
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/hlo/analysis/alias_info.h"
@@ -67,6 +69,15 @@ namespace memory_space_assignment {
 struct UseInterval {
   int64_t first_use_time;
   int64_t last_use_time;
+};
+
+struct TimeInterval {
+  int64_t inclusive_start_time;
+  int64_t inclusive_end_time;
+
+  bool operator<(const TimeInterval& other) const;
+
+  std::string ToString() const;
 };
 
 // A struct representing an asynchronous copy with its logical start and end
@@ -469,6 +480,19 @@ class MsaAlgorithm : public GlobalDecreasingSizeBestFitHeap<HloValue> {
   // time of the parameter instruction, and an output's time would correspond to
   // the time of last use.
   struct RequiredMemoryAssignment {
+    enum class Source {
+      kAliasedUse,
+      kUseNotAllowedInAlternateMemory,
+      kInefficientSite,
+      kLoopOptimizedParameterInWhileLoop,
+      kConditionalPhiOutput,
+      kConditionalComputationOutput,
+      kPositionNotAllowedInAlternateMemory,
+      kProgramOutput,
+      kConstantInstruction,
+      kProgramInput,
+    };
+
     MemorySpace memory_space;
     int64_t time;
     AliasedOffset* offset = nullptr;
@@ -476,7 +500,7 @@ class MsaAlgorithm : public GlobalDecreasingSizeBestFitHeap<HloValue> {
     // are created for various reasons, this field is used to identify the
     // reason for the required memory assignment. It improves logging and helps
     // debugging.
-    std::string required_assignment_source;
+    Source required_assignment_source;
 
     bool memory_space_and_offset_equal(
         const RequiredMemoryAssignment& other) const {
@@ -496,6 +520,7 @@ class MsaAlgorithm : public GlobalDecreasingSizeBestFitHeap<HloValue> {
     }
 
     std::string ToString() const;
+    static std::string SourceToString(Source source);
   };
 
   // A struct that contains a pointer to loop-optimized allocation along with
@@ -702,6 +727,7 @@ class MsaAlgorithm : public GlobalDecreasingSizeBestFitHeap<HloValue> {
     kFailedSatisfyingConstraints = 8,
     kFailedNotProcessed = 16,
     kFailedGaveUp = 32,
+    kAsyncConversionNotAllowedForColoredBuffer = 64,
   };
 
   AsyncConversionResult IsAsyncConversionSliceCandidate(
@@ -731,9 +757,21 @@ class MsaAlgorithm : public GlobalDecreasingSizeBestFitHeap<HloValue> {
   static Allocation* GetLiveAllocationAt(const AllocationSequence& allocations,
                                          int64_t time);
 
-  // Returns true if the use is allowed in the alternate memory.
-  bool IsUseAllowedInAlternateMemory(const AllocationValue& value,
-                                     const HloUse& use) const;
+  // Returns true if the use is allowed in the alternate memory (hard
+  // constraints).
+  bool IsUseAllowedInAlternateMemory(const HloUse& use) const;
+
+  // Returns true if the use is allowed in alternate memory for while loops.
+  bool IsWhileLoopUseRequiredInDefaultMemory(const HloUse& use) const;
+
+  // Returns true if it is beneficial to have the while loop use in alternate
+  // memory.
+  bool IsWhileLoopUseBeneficialInAlternateMemory(const HloUse& use) const;
+
+  // Returns true if it is beneficial to have the conditional use in alternate
+  // memory.
+  bool IsConditionalUseBeneficialInAlternateMemory(const AllocationValue& value,
+                                                   const HloUse& use) const;
 
   // Adjusts the preferred memory offset for a given use, taking aliasing
   // constraints into account. If the use already has a preferred offset in the
@@ -817,18 +855,6 @@ class MsaAlgorithm : public GlobalDecreasingSizeBestFitHeap<HloValue> {
   // alternate memory or a bitwise OR of failure reasons why they couldn't
   absl::StatusOr<AllocationResult> AllocateAllocationValues(
       absl::Span<AllocationValue> allocation_values);
-
-  // Returns true if the conditional outputs should be required in the default
-  // memory. Reasons include:
-  // * There are required assignments in the default memory for the conditional
-  //   output position or any of its aliases.
-  // * At least one of the branched computation root instructions is not a tuple
-  //   instruction. This is due to a limitation of MSA, where in, an
-  //   AllocationValue can only be assigned VMem if it has at least one HloUse.
-  //   In this case, we make sure that the HloValue is not defined at the root
-  //   instruction and has at least one use - the tuple instruction.
-  bool RequireConditionalOutputsInDefaultMemory(
-      HloPosition conditional_phi_position, const HloValue* hlo_value);
 
   // Checks for a situation in which an HloValue has more than one live
   // AllocationValue at the same time, and the already processed AllocationValue
@@ -954,39 +980,36 @@ class MsaAlgorithm : public GlobalDecreasingSizeBestFitHeap<HloValue> {
   std::optional<RequiredMemoryAssignment> AliasedRequiredAssignmentForUse(
       const AllocationValue::Use& use) const;
 
-  // Adds required assignment in the default memory for conditional outputs
-  // that RequireConditionalOutputsInDefaultMemory() returns true for.
-  void AddRequiredAssignmentsForConditionalOutputsIfNecessary(
+  // Goes through the colocated intervals and adds any required assignment.
+  void AddRequiredAssignmentsForColocatedIntervals(
       absl::Span<const MsaBufferInterval* const> colocated_intervals);
 
   // Propagates aliased required assignment for a given position.
-  void AddAliasedRequiredAssignment(const HloInstruction* instruction,
-                                    ShapeIndex index,
-                                    const Allocation* aliased_allocation,
-                                    std::string required_assignment_source);
+  void AddAliasedRequiredAssignment(
+      const HloInstruction* instruction, ShapeIndex index,
+      const Allocation* aliased_allocation,
+      RequiredMemoryAssignment::Source required_assignment_source);
 
   // This sets a required assignment. CHECK fails if there is a conflicting
   // required assignment at the same time.
-  void AddRequiredAssignment(const HloValue* value,
-                             const HloInstruction* instruction,
-                             MemorySpace memory_space, int64_t time,
-                             std::string required_assignment_source,
-                             AliasedOffset* offset = nullptr,
-                             bool add_to_pending = true);
-  void AddRequiredAssignment(const HloInstruction* instruction,
-                             ShapeIndex index, MemorySpace memory_space,
-                             std::string required_assignment_source,
-                             AliasedOffset* offset = nullptr,
-                             bool add_to_pending = true);
-  void AddRequiredAssignment(const HloPosition& position,
-                             MemorySpace memory_space,
-                             std::string required_assignment_source,
-                             AliasedOffset* offset = nullptr,
-                             bool add_to_pending = true);
-  void AddRequiredAssignment(const HloUse& use, MemorySpace memory_space,
-                             std::string required_assignment_source,
-                             AliasedOffset* offset = nullptr,
-                             bool add_to_pending = true);
+  void AddRequiredAssignment(
+      const HloValue* value, const HloInstruction* instruction,
+      MemorySpace memory_space, int64_t time,
+      RequiredMemoryAssignment::Source required_assignment_source,
+      AliasedOffset* offset = nullptr, bool add_to_pending = true);
+  void AddRequiredAssignment(
+      const HloInstruction* instruction, ShapeIndex index,
+      MemorySpace memory_space,
+      RequiredMemoryAssignment::Source required_assignment_source,
+      AliasedOffset* offset = nullptr, bool add_to_pending = true);
+  void AddRequiredAssignment(
+      const HloPosition& position, MemorySpace memory_space,
+      RequiredMemoryAssignment::Source required_assignment_source,
+      AliasedOffset* offset = nullptr, bool add_to_pending = true);
+  void AddRequiredAssignment(
+      const HloUse& use, MemorySpace memory_space,
+      RequiredMemoryAssignment::Source required_assignment_source,
+      AliasedOffset* offset = nullptr, bool add_to_pending = true);
 
   // Adds input and outputs as required assignments.
   void AddInputAndOutputRequiredAssignments();
@@ -1048,6 +1071,23 @@ class MsaAlgorithm : public GlobalDecreasingSizeBestFitHeap<HloValue> {
   // reserved_scoped_memory_fn
   void UpdateReservedScopedAllocationSize();
 
+  // Uncommits the chunk and updates the peak memory. This method keeps other
+  // data structures consistent with the uncommit.
+  //
+  // MSA should not directly update interval_tree_ or directly call other
+  // Uncommit methods. This the definitive uncommit for MSA.
+  bool UncommitChunkAndUpdatePeakMemory(const MsaBufferInterval& interval,
+                                        const Chunk& chunk);
+
+  // Commits the chunk and updates the peak memory. This method keeps other
+  // data structures consistent with the commit.
+  //
+  // MSA should not directly update interval_tree_ or directly call other
+  // Commit methods, e.g., CommitChunkAndInterval(). This the definitive
+  // uncommit for MSA.
+  void CommitChunkAndUpdatePeakMemory(const MsaBufferInterval& buffer_interval,
+                                      const Chunk& chunk);
+
   // Imports repacked allocations and updates the internal data structures
   // consistent with the new packing.
   void ImportRepackedAllocations();
@@ -1108,11 +1148,12 @@ class MsaAlgorithm : public GlobalDecreasingSizeBestFitHeap<HloValue> {
   // this allocation sequence.
   void AddToPendingChunks(const MsaBufferInterval& buffer_interval,
                           const Chunk& chunk);
+
   // If we need to remove the allocations for this allocation sequence, this
   // removes pending chunks and asynchronous copies in the respective pending
   // buffers from the interval trees. If an allocation request returns
   // kFailRequiresUncommit, this method must be called.
-  void UncommitPendingChunks(absl::Span<AllocationValue> allocation_values);
+  void UncommitPendingWork(absl::Span<AllocationValue> allocation_values);
 
   // Finalizes the allocations where they can no longer be uncommitted.
   void FinalizeAllocations(absl::Span<AllocationValue> allocation_values);
@@ -1230,6 +1271,32 @@ class MsaAlgorithm : public GlobalDecreasingSizeBestFitHeap<HloValue> {
   // of a buffer is also considered as a use that can be colored.
   absl::Status ProcessColoredBuffers();
 
+  // Returns a sorted list of time intervals for which a buffer needs to be
+  // contiguously allocated.
+  absl::StatusOr<std::vector<TimeInterval>> GetContiguousLiveRangesForBuffer(
+      const HloBuffer* buffer) const;
+
+  // Process the buffer colorings for the given buffer and return the time
+  // intervals that are colored in the alternate memory space. Additionally,
+  // update the default_memory_coloring_requirements_ with the default memory
+  // colored intervals for the buffer.
+  absl::StatusOr<std::vector<TimeInterval>>
+  GetAltMemoryColoredIntervalsForBuffer(
+      const HloBuffer* buffer,
+      const std::vector<BufferColoring>& buffer_colorings);
+
+  // Checks if there are any overlapping time intervals between default memory
+  // colorings and alternate memory colorings for the given buffer. Returns an
+  // error if conflicts exist.
+  absl::Status CheckForConflictingColoringRequirements(
+      const HloBuffer* buffer,
+      const std::vector<TimeInterval>& default_mem_intervals,
+      const std::vector<TimeInterval>& alternate_mem_intervals) const;
+
+  // Groups the buffer colorings by the HloBuffer that is colored.
+  absl::linked_hash_map<const HloBuffer*, std::vector<BufferColoring>>
+  GetHloBufferToColoringsMap() const;
+
   // Removes the reserved chunk from the interval_tree_ for the given
   // allocation (if it is still reserved) and removes the corresponding
   // RepackAllocationBlock from repack_allocation_blocks_.
@@ -1278,6 +1345,14 @@ class MsaAlgorithm : public GlobalDecreasingSizeBestFitHeap<HloValue> {
   // Frees the alternate memory reserved for scoped memory allocations.
   void FreeAlternateMemoryForScopedMemoryAllocations(
       int64_t max_scoped_memory_size);
+
+  // Returns sorted buffer intervals after some custom re-ordering.
+  std::vector<MsaBufferInterval> GetPostProcessedSortedBufferIntervals();
+
+  // Calculates the memory pressure for the buffers that can be assigned in
+  // alternate memory.
+  void CalculateMemoryPressure(
+      const std::vector<MsaBufferInterval>& sorted_buffer_intervals);
 
   HloModule* module_ = nullptr;
   AllocationSequence* allocations_;
@@ -1375,21 +1450,25 @@ class MsaAlgorithm : public GlobalDecreasingSizeBestFitHeap<HloValue> {
 
   // Maps defining HloPositions to the chunk intervals that are reserved for it
   // in alternate memory, in order to satisfy buffer coloring requirements.
-  absl::flat_hash_map<HloPosition,
+  absl::flat_hash_map<const HloBuffer*,
                       std::vector<std::unique_ptr<ReservedAllocation>>>
       reserved_allocations_for_alt_mem_colorings_;
 
-  // Maps defining HloPositions to the list of times it is required to be in
-  // default memory, to meet buffer coloring requirements.
-  absl::flat_hash_map<HloPosition, std::vector<int64_t>>
+  // Maps defining HloBuffers to the list of time intervals it is required to
+  // be in default memory, to meet buffer coloring requirements.
+  absl::flat_hash_map<const HloBuffer*, std::vector<TimeInterval>>
       default_memory_coloring_requirements_;
 
   // Set of HloUses that are in the default memory.
   absl::flat_hash_set<HloUse> uses_in_default_memory_set_;
-
   // Vector to preserve insertion order for deterministic window prefetching
   // results.
   std::vector<HloUse> uses_in_default_memory_;
+
+  // We have released the chunks corresponding to the allocations in the list.
+  // When we uncommit the current pending state following a
+  // kFailRequiresUncommit, we need to re-reserve those chunks.
+  std::vector<ReservedAllocation*> pending_deallocated_reserved_allocations_;
 };
 
 }  // namespace memory_space_assignment

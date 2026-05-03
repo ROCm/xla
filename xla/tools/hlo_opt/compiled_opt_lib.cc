@@ -24,8 +24,10 @@ limitations under the License.
 
 #include "absl/log/check.h"
 #include "absl/strings/string_view.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "xla/backends/gpu/transforms/collectives/all_gather_dynamic_slice_simplifier.h"
 #include "xla/backends/gpu/transforms/collectives/all_reduce_splitter.h"
+#include "xla/backends/gpu/transforms/scatter_determinism_expander.h"
 #include "xla/backends/gpu/transforms/scatter_expander.h"
 #include "xla/backends/gpu/transforms/scatter_slice_simplifier.h"
 #include "xla/debug_options_flags.h"
@@ -44,7 +46,6 @@ limitations under the License.
 #include "xla/service/map_inliner.h"
 #include "xla/service/platform_util.h"
 #include "xla/service/reduce_scatter_reassociate.h"
-#include "xla/service/scatter_determinism_expander.h"
 #include "xla/service/scatter_simplifier.h"
 #include "xla/service/select_and_scatter_expander.h"
 #include "xla/service/sharding_remover.h"
@@ -60,7 +61,6 @@ limitations under the License.
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/xla.pb.h"
-#include "xla/tsl/platform/status_macros.h"
 
 namespace xla {
 

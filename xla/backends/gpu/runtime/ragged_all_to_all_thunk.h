@@ -19,6 +19,7 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
@@ -113,6 +114,9 @@ struct RaggedAllToAllStreamState {
   // Reference to the symmetric memory handler for the pointer storage.
   tsl::TiedRef<xla::SymmetricMemory> output_buffer_ptr_storage_symmetric_memory;
 
+  // Reference to the symmetric memory for the output buffers.
+  std::shared_ptr<xla::SymmetricMemory> output_temporary_symmetric_memory;
+
   // Contains the output buffer pointers and barrier signal buffers for all
   // peers.
   std::shared_ptr<std::vector<RaggedAllToAllRendezvousValue>> participants;
@@ -160,8 +164,6 @@ class RaggedAllToAllThunk : public CollectiveThunk {
     return config_;
   }
 
-  absl::Span<const Buffer> buffers() const { return buffers_; }
-
   bool is_one_shot_kernel_enabled() const {
     return config_.one_shot_kernel_enabled;
   }
@@ -174,22 +176,10 @@ class RaggedAllToAllThunk : public CollectiveThunk {
   bool IsOneShotKernelSupported() const;
 
   static absl::StatusOr<std::unique_ptr<RaggedAllToAllThunk>> FromProto(
-      ThunkInfo thunk_info, const RaggedAllToAllStartThunkProto& thunk_proto,
+      ThunkInfo thunk_info, const RaggedAllToAllThunkProto& thunk_proto,
       absl::Span<const BufferAllocation> buffer_allocations);
 
   absl::StatusOr<ThunkProto> ToProto() const override;
-
-  BufferUses buffer_uses() const override {
-    BufferUses uses;
-    uses.reserve(buffers_.size() * 2);
-    for (const Buffer& buffer : buffers_) {
-      uses.push_back(BufferUse::Read(buffer.source_buffer.slice,
-                                     buffer.source_buffer.shape));
-      uses.push_back(BufferUse::Write(buffer.destination_buffer.slice,
-                                      buffer.destination_buffer.shape));
-    }
-    return uses;
-  }
 
  protected:
   // No rendezvous needed when using one-shot kernel in local mode instead of
@@ -197,6 +187,9 @@ class RaggedAllToAllThunk : public CollectiveThunk {
   bool RequiresRendezvous() const override {
     return !is_one_shot_kernel_enabled();
   }
+
+  absl::Status PrepareCollective(const PrepareParams& params,
+                                 const GpuCliqueKey& clique_key) override;
 
   absl::Status RunCollective(const ExecuteParams& params,
                              const GpuCliqueKey& clique_key, se::Stream& stream,
@@ -208,7 +201,6 @@ class RaggedAllToAllThunk : public CollectiveThunk {
   }
 
   const RaggedAllToAllConfig config_;
-  const std::vector<Buffer> buffers_;
 
   mutable absl::Mutex mutex_;
   absl::flat_hash_map<se::StreamExecutor*,
@@ -275,8 +267,7 @@ absl::Status RunOneShotRaggedAllToAllWithNccl(
     const GpuCliqueKey& clique_key, se::Stream& stream, RankId rank,
     std::shared_ptr<xla::SymmetricMemory> barrier_signal_symmetric_memory,
     const se::DeviceAddressBase& barrier_signal_value,
-    std::shared_ptr<xla::SymmetricMemory>
-        output_buffer_ptr_storage_symmetric_memory,
+    std::shared_ptr<xla::SymmetricMemory> output_temporary_symmetric_memory,
     int64_t num_total_updates, int64_t num_input_rows, int64_t num_row_elements,
     absl::Span<DeviceBufferPair const> buffers);
 

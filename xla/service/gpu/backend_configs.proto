@@ -4,6 +4,7 @@ package xla.gpu;
 
 import "xla/autotuning.proto";
 import "xla/tsl/protobuf/dnn.proto";
+import "xla/xla.proto";
 import "xla/xla_data.proto";
 
 // Backend configs for XLA:GPU.
@@ -145,10 +146,15 @@ message CollectiveBackendConfig {
   enum CollectiveBackend {
     // Default backend is NCCL.
     DEFAULT = 0;
-    NVSHMEM = 1;
+    NVSHMEM = 1 [deprecated = true];
   }
   CollectiveBackend backend = 5;
   reserved 2, 4;
+
+  // Memory mode for this collective operation. Determines which memory space
+  // the operation's buffers must be allocated in (private, symmetric, or peer
+  // memory).
+  xla.DebugOptions.CollectivesMode collectives_mode = 6;
 }
 
 // Backend config for collective metadata operation.
@@ -220,6 +226,9 @@ message BlockLevelFusionConfig {
 
   // Allow/disallow automatic warp specialization.
   bool is_warp_specialization_allowed = 7;
+
+  // Number of waves per execution unit (0 = no restriction).
+  int32 waves_per_eu = 8;
 }
 
 message DynamicMemcpyConfig {
@@ -406,10 +415,6 @@ message GpuBackendConfig {
   // different IDs.
   int64 operation_queue_id = 1;
 
-  // Specifies which operation queues to await for data when running with
-  // multiple operation queues.
-  repeated int64 wait_on_operation_queues = 2;
-
   oneof backend_config {
     CudnnConvBackendConfig cudnn_conv_backend_config = 3;
 
@@ -454,4 +459,6 @@ message GpuBackendConfig {
 
   // Specifies the device type for the instruction.
   DeviceType device_type = 14;
+
+  reserved 2;  // was wait_on_operation_queues
 }

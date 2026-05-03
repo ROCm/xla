@@ -113,8 +113,11 @@ class InterpreterMemorySpace final : public PjRtMemorySpace {
     return "InterpreterMemorySpace(id=0)";
   }
 
+  PJRT_Memory* ToCApiPtr() override { return capi_delegator_.ToCApiPtr(); }
+
  private:
   PjRtClient* client_ = nullptr;
+  PjRtMemorySpaceCApiDelegator capi_delegator_{this};
 };
 
 class InterpreterDevice final : public PjRtDevice {
@@ -335,6 +338,12 @@ class InterpreterLoadedExecutable final : public PjRtLoadedExecutable {
     std::vector<std::shared_ptr<HloModule>> hlo_modules;
     hlo_modules.push_back(hlo_module_);
     return hlo_modules;
+  }
+
+  absl::StatusOr<std::vector<std::vector<absl::string_view>>>
+  GetParameterMemoryKinds() const override {
+    return absl::UnimplementedError(
+        "GetParameterMemoryKinds is not supported.");
   }
 
   absl::StatusOr<std::vector<std::vector<absl::string_view>>>

@@ -597,12 +597,16 @@ ENTRY main {
 
   const HloInstruction* root = module->entry_computation()->root_instruction();
 
-  EXPECT_EQ(CountCopies(*module), 4);
-  // Make sure that there is no copy of AllGatherDone.
+  EXPECT_EQ(CountCopies(*module), 5);
+  // All-gather-done is scheduled as late as possible to overlap with
+  // computation, which requires an extra copy to resolve the live range
+  // conflict with param_1.
   const HloInstruction* while_op =
       root->operand(0)->operand(0)->operand(0)->operand(0);
-  EXPECT_EQ(while_op->while_body()->root_instruction()->operand(1)->opcode(),
-            HloOpcode::kAllGatherDone);
+  const HloInstruction* operand_1 =
+      while_op->while_body()->root_instruction()->operand(1);
+  EXPECT_EQ(operand_1->opcode(), HloOpcode::kCopy);
+  EXPECT_EQ(operand_1->operand(0)->opcode(), HloOpcode::kAllGatherDone);
 }
 
 // This test ensures that the pathway for using the cuBLAS fallback (forming a
@@ -758,6 +762,13 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_P(FloatNormalizationTest, Fp8Normalization) {
   const PrimitiveType lhs_type = GetParam().first;
   const PrimitiveType rhs_type = GetParam().second;
+
+  se::GpuComputeCapability gpu_cc =
+      device_description().gpu_compute_capability();
+  se::CudaComputeCapability cuda_cc = get_cuda_cc();
+  se::RocmComputeCapability rocm_cc =
+      device_description().rocm_compute_capability();
+
   const std::string lhs_name =
       primitive_util::LowercasePrimitiveTypeName(lhs_type);
   const std::string rhs_name =
@@ -792,12 +803,6 @@ ENTRY main {
     return GetOptimizedModuleForExecutable(module_str, config);
   };
 
-  se::GpuComputeCapability gpu_cc =
-      device_description().gpu_compute_capability();
-  se::CudaComputeCapability cuda_cc = get_cuda_cc();
-  se::RocmComputeCapability rocm_cc =
-      device_description().rocm_compute_capability();
-
   const std::string triton_keep_types = absl::Substitute(
       R"(CHECK: fusion($0{{[^)]*}}, $1{{[^)]*}}){{.*}}"kind":"{{__triton_gemm|__triton_nested_gemm_fusion}}")",
       lhs_name, rhs_name);
@@ -822,7 +827,7 @@ ENTRY main {
         (cuda_cc.IsAtLeastHopper() ||
          (cuda_cc.IsAtLeastAmpere() && lhs_type == F8E5M2 &&
           rhs_type == F8E5M2) ||
-         rocm_cc.has_ocp_fp8_support())
+         gpu_cc.IsRocm())
             ? triton_keep_types
             : cublas_convert_to_f16;
     ASSERT_OK_AND_ASSIGN(
@@ -1155,36 +1160,6 @@ ENTRY main {
   }
 
   EXPECT_EQ(triton_gemm_rewriter_has_run, expect_triton_gemm_rewriter_has_run);
-}
-
-TEST_F(GpuCompilerPassTest,
-       GpuCompilerRunsCustomKernelFusionByDefaultFromVolta) {
-  bool expect_custom_kernel_fusion_rewriter_has_run =
-      get_cuda_cc().major == se::CudaComputeCapability::kVolta;
-
-  constexpr absl::string_view constant_module = R"(
-HloModule noop
-
-ENTRY main {
-  ROOT constant = f32[] constant(0)
-})";
-
-  HloModuleConfig config = GetModuleConfigForTest();
-  ASSERT_OK_AND_ASSIGN(
-      auto optimized_module_and_executable,
-      GetOptimizedModuleForExecutable(constant_module, config));
-  const HloModule* optimized_module = optimized_module_and_executable.first;
-  const HloModuleMetadataProto& module_metadata =
-      optimized_module->metadata().proto();
-
-  bool custom_kernel_fusion_rewriter_has_run = false;
-  for (const HloPassMetadata& pass_metadata : module_metadata.pass_metadata()) {
-    custom_kernel_fusion_rewriter_has_run |=
-        pass_metadata.pass_name() == "custom-kernel-fusion-rewriter";
-  }
-
-  EXPECT_EQ(custom_kernel_fusion_rewriter_has_run,
-            expect_custom_kernel_fusion_rewriter_has_run);
 }
 
 class PassOrderTest : public GpuCompilerTest {
@@ -1951,6 +1926,9 @@ XLA_FFI_DEFINE_HANDLER(
 
 TEST_F(GpuCompilerTest,
        ParametersUsedByCollectiveMosaicShouldBeCopiedToCollectiveMemory) {
+  if (device_description().gpu_compute_capability().IsRocm()) {
+    GTEST_SKIP() << "Mosaic GPU is not supported on ROCm.";
+  }
   XLA_FFI_Handler_Bundle bundle = {
       /*instantiate=*/nullptr,
       /*prepare=*/nullptr,
