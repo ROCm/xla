@@ -4,6 +4,18 @@ set -ex
 
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
+# Define available GPU pools for RBE single GPU testing
+RBE_POOL_OPTIONS=(
+    "linux_x64_gpu_gfx90a"
+    "linux_x64_gpu_do_gfx950"
+)
+
+# Randomly select a GPU pool from the list
+RANDOM_INDEX=$(( RANDOM % ${#RBE_POOL_OPTIONS[@]} ))
+RBE_POOL="${RBE_POOL_OPTIONS[$RANDOM_INDEX]}"
+
+echo "Selected GPU pool: $RBE_POOL"
+
 EXCLUDED_TESTS=(
     "HostMemoryAllocateTest.Numa" # Failing on RBE
     "*IotaR1Test*" # Taking too many CI nodes
@@ -69,6 +81,7 @@ done
     ) \
     --cache_test_results=yes \
     --keep_going \
+    --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=${RBE_POOL} \
     -- \
     //xla/... \
     -//xla/backends/gpu/tests:sorting.hlo.test_mi200 \
