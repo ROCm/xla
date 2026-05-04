@@ -454,6 +454,93 @@ TEST_F(GpuLatencyHidingSchedulerBaseTest,
 }
 
 TEST_F(GpuLatencyHidingSchedulerBaseTest,
+       AllGatherOverlapWithAnalyticalCostModel) {
+  absl::string_view kHloModule = R"(
+    HloModule m, num_partitions=8
+
+    ENTRY main {
+      lhs = f32[8192,8192] parameter(0)
+      rhs = f32[8192,8192] parameter(1)
+      comm = f32[1024] parameter(2)
+      compute = f32[8192,8192] dot(lhs, rhs),
+        lhs_contracting_dims={1}, rhs_contracting_dims={0}
+      ag = (f32[1024], f32[8192]) all-gather-start(comm), dimensions={0},
+        replica_groups={{0,1,2,3,4,5,6,7}}, channel_id=1,
+        use_global_device_ids=true
+      ag_done = f32[8192] all-gather-done(ag)
+      ROOT tuple = (f32[8192], f32[8192,8192]) tuple(ag_done, compute)
+    }
+  )";
+
+  HloModuleConfig config = GetModuleConfig("");
+  DebugOptions& debug_options = config.mutable_debug_options();
+  debug_options.set_xla_gpu_enable_latency_hiding_scheduler(true);
+  debug_options.set_xla_gpu_enable_analytical_latency_estimator(true);
+  config.set_num_partitions(8);
+  config.set_use_spmd_partitioning(true);
+
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                          ParseAndReturnVerifiedModule(kHloModule, config));
+  TF_ASSERT_OK(ScheduleModule(module.get()));
+
+  const auto& sequence =
+      module->schedule().sequence(module->entry_computation()).instructions();
+  int64_t ag_idx = GetIndexByName(sequence, "ag");
+  int64_t compute_idx = GetIndexByName(sequence, "compute");
+  int64_t ag_done_idx = GetIndexByName(sequence, "ag_done");
+
+  EXPECT_LT(ag_idx, compute_idx);
+  EXPECT_LT(compute_idx, ag_done_idx);
+}
+
+TEST_F(GpuLatencyHidingSchedulerBaseTest,
+       ReduceScatterOverlapWithAnalyticalCostModel) {
+  absl::string_view kHloModule = R"(
+    HloModule m, num_partitions=8
+
+    reduce {
+      x = f32[] parameter(0)
+      y = f32[] parameter(1)
+      ROOT _ = f32[] add(x, y)
+    }
+
+    ENTRY main {
+      lhs = f32[8192,8192] parameter(0)
+      rhs = f32[8192,8192] parameter(1)
+      comm = f32[8192] parameter(2)
+      compute = f32[8192,8192] dot(lhs, rhs),
+        lhs_contracting_dims={1}, rhs_contracting_dims={0}
+      rs = ((f32[8192]), f32[1024]) reduce-scatter-start(comm),
+        to_apply=reduce, dimensions={0},
+        replica_groups={{0,1,2,3,4,5,6,7}}, channel_id=1,
+        use_global_device_ids=true
+      rs_done = f32[1024] reduce-scatter-done(rs)
+      ROOT tuple = (f32[1024], f32[8192,8192]) tuple(rs_done, compute)
+    }
+  )";
+
+  HloModuleConfig config = GetModuleConfig("");
+  DebugOptions& debug_options = config.mutable_debug_options();
+  debug_options.set_xla_gpu_enable_latency_hiding_scheduler(true);
+  debug_options.set_xla_gpu_enable_analytical_latency_estimator(true);
+  config.set_num_partitions(8);
+  config.set_use_spmd_partitioning(true);
+
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                          ParseAndReturnVerifiedModule(kHloModule, config));
+  TF_ASSERT_OK(ScheduleModule(module.get()));
+
+  const auto& sequence =
+      module->schedule().sequence(module->entry_computation()).instructions();
+  int64_t rs_idx = GetIndexByName(sequence, "rs");
+  int64_t compute_idx = GetIndexByName(sequence, "compute");
+  int64_t rs_done_idx = GetIndexByName(sequence, "rs_done");
+
+  EXPECT_LT(rs_idx, compute_idx);
+  EXPECT_LT(compute_idx, rs_done_idx);
+}
+
+TEST_F(GpuLatencyHidingSchedulerBaseTest,
        OverlappingRanksPreventOverlappingCollectives) {
   absl::string_view kFdoProfile = R"pb(
     costs { name: "add_0" cost_us: 100000.0 }
