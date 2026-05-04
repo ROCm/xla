@@ -17,24 +17,6 @@ def if_rocm(if_true, if_false = []):
         "//conditions:default": if_false
     })
 
-def rocm_default_copts():
-    """Default options for all ROCm compilations."""
-    return if_rocm(["-x", "rocm"] + %{rocm_extra_copts})
-
-def rocm_copts(opts = []):
-    """Gets the appropriate set of copts for (maybe) ROCm compilation.
-
-      If we're doing ROCm compilation, returns copts for our particular ROCm
-      compiler.  If we're not doing ROCm compilation, returns an empty list.
-
-      """
-    return rocm_default_copts() + select({
-        "//conditions:default": [],
-        "@local_config_rocm//rocm:using_hipcc": ([
-            "",
-        ]),
-    }) + if_rocm_is_configured(opts)
-
 def rocm_gpu_architectures():
     """Returns a list of supported GPU architectures."""
     return %{rocm_gpu_architectures}
@@ -70,14 +52,6 @@ def is_rocm_configured():
     Returns True if ROCm is configured. False otherwise.
     """
     return %{rocm_is_configured}
-
-def rocm_hipblaslt():
-    return %{rocm_is_configured} and %{rocm_hipblaslt}
-
-def if_rocm_hipblaslt(x):
-    if %{rocm_is_configured} and (%{rocm_hipblaslt} == "True"):
-      return select({"//conditions:default": x})
-    return select({"//conditions:default": []})
 
 # rocm_library is now defined in @rules_ml_toolchain//cc/rocm:rocm_library.bzl
 # It's loaded at the top with alias _rocm_library_impl and wrapped below

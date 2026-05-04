@@ -50,10 +50,10 @@ def workspace():
     # Details: https://github.com/google-ml-infra/rules_ml_toolchain
     tf_http_archive(
         name = "rules_ml_toolchain",
-        sha256 = "e1e8840a54ce401f3632ff9534589c9d1da64f519606a196b2b3aabf3110d030",
-        strip_prefix = "rules_ml_toolchain-5972d30d485cfc5198627c2faf51726b9161599d",
+        sha256 = "ad43b4549864b0074354db36d2da96f0d872f989ff58a0e890f5afe7e497747f",
+        strip_prefix = "rules_ml_toolchain-0f0aba9f534b57654c13a3238a8f257539b13024",
         urls = tf_mirror_urls(
-            "https://github.com/google-ml-infra/rules_ml_toolchain/archive/5972d30d485cfc5198627c2faf51726b9161599d.tar.gz",
+            "https://github.com/google-ml-infra/rules_ml_toolchain/archive/0f0aba9f534b57654c13a3238a8f257539b13024.tar.gz",
         ),
     )
 
