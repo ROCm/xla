@@ -379,12 +379,14 @@ absl::StatusOr<Autotuner::Config> Autotuner::TuneBestConfig(
 
   if (autotune_config_.exclude_cublas_config) {
     executable_candidates.erase(
-        std::remove_if(executable_candidates.begin(),
-                       executable_candidates.end(),
-                       [](const ExecutableCandidate& candidate) {
-                         return candidate.config.codegen_backend->name() ==
-                                "Cublas_fission";
-                       }),
+        std::remove_if(
+            executable_candidates.begin(), executable_candidates.end(),
+            [](const ExecutableCandidate& candidate) {
+              const auto& name = candidate.config.codegen_backend->name();
+              return name == "Cublas_fission" ||
+                     name == "Rocblas_fission" ||
+                     name == "HipblasLt_fission";
+            }),
         executable_candidates.end());
   }
 

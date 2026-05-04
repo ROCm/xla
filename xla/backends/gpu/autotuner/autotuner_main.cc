@@ -109,6 +109,19 @@ absl::Status Autotune(HloModule& module, const std::string& cache_dir,
       get_codegen_backends(stream_executor, &debug_options, compiler.get(),
                            &target_config, mlir_context);
 
+  auto fission_backends_or =
+      registry.FindObject<GetFissionBackends>(platform->id());
+  if (fission_backends_or.ok()) {
+    const GetFissionBackends::Type& get_fission_backends =
+        fission_backends_or.value();
+    std::vector<std::unique_ptr<CodegenBackend>> fission_backends =
+        get_fission_backends(stream_executor, &debug_options, compiler.get(),
+                             &target_config, mlir_context);
+    backends.insert(backends.end(),
+                    std::make_move_iterator(fission_backends.begin()),
+                    std::make_move_iterator(fission_backends.end()));
+  }
+
   std::unique_ptr<se::DeviceAddressAllocator> allocator =
       std::make_unique<stream_executor::StreamExecutorAddressAllocator>(
           stream_executor);
