@@ -22,6 +22,7 @@ limitations under the License.
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -53,6 +54,7 @@ limitations under the License.
 #include "xla/primitive_util.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
+#include "xla/tsl/concurrency/async_value.h"
 #include "xla/tsl/concurrency/async_value_ref.h"
 #include "xla/tsl/concurrency/ref_count.h"
 #include "xla/tsl/platform/errors.h"
@@ -465,6 +467,13 @@ void CpuTrackedDeviceEventSet::AppendTo(PjRtDeviceEventSet& events) {
 
 std::unique_ptr<PjRtDeviceEventSet> CpuTrackedDeviceEventSet::Clone() const {
   return std::make_unique<CpuTrackedDeviceEventSet>(*this);
+}
+
+absl::StatusOr<PjRtDeviceEventRef> CpuRawBuffer::CopyRawToRemoteDevice(
+    Future<std::string> serialized_descriptor, RemoteSendCallback on_done,
+    std::vector<tsl::RCReference<tsl::AsyncValue>> transfer_dependency_avs) {
+  return absl::UnimplementedError(
+      "CpuRawBuffer does not support CopyRawToRemoteDevice.");
 }
 
 }  // namespace xla

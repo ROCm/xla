@@ -276,6 +276,7 @@ rocm_lib_import(
     data = glob([
         "%{rocm_root}/lib/libMIOpen.so*",
         "%{rocm_root}/share/miopen/**",
+        "%{rocm_root}/lib/librocm-core.so*",
     ]),
     interface_library = "%{rocm_root}/lib/libMIOpen.so",
     deps = [

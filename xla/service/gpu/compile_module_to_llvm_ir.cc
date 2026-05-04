@@ -71,6 +71,7 @@ limitations under the License.
 #include "xla/service/gpu/gpu_hlo_ordering.h"
 #include "xla/service/gpu/gpu_memory_space_assignment.h"
 #include "xla/service/gpu/ir_emitter_context.h"
+#include "xla/service/gpu/kernel_reuse_cache.pb.h"
 #include "xla/service/gpu/metrics.h"
 #include "xla/service/gpu/thunk_emitter.h"
 #include "xla/service/logical_buffer.h"

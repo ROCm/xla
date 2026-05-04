@@ -13,14 +13,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "xla/pjrt/extensions/host_allocator/host_memory_allocator/host_memory_allocator_interface_impl.h"
+#include "xla/pjrt/extensions/host_memory_allocator/host_memory_allocator_interface_impl.h"
 
 #include <cstddef>
 #include <memory>
 
 #include "xla/pjrt/c/pjrt_c_api.h"
 #include "xla/pjrt/c/pjrt_c_api_status_utils.h"
-#include "xla/pjrt/extensions/host_allocator/host_memory_allocator/host_memory_allocator_extension.h"
+#include "xla/pjrt/extensions/host_memory_allocator/host_memory_allocator_extension.h"
 #include "xla/pjrt/host_memory_allocator.h"
 
 namespace pjrt {

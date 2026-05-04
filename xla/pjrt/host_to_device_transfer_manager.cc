@@ -269,9 +269,9 @@ class CommonAsyncHostToDeviceTransferManager
       // Acquire when logging, for the sake of definition_events_.
       absl::MutexLock l(mu_);
       client_->AppendDescriptionToEvent(
-          memory_space_, h2d_transfer_event.async_value(),
+          memory_space_, h2d_transfer_event.ptr(),
           " TransferToDevice TransferLiteralToBuffer",
-          {definition_events_[buffer_index]->async_value()});
+          {definition_events_[buffer_index]->event()});
     }
 
     auto finish = [this, buffer_index, transfer_event = h2d_transfer_event,
@@ -383,11 +383,11 @@ class CommonAsyncHostToDeviceTransferManager
                                 ? absl::StrCat(" Op:", debug_info_.value())
                                 : "";
       client_->AppendDescriptionToEvent(
-          memory_space_, h2d_transfer_event.async_value(),
+          memory_space_, h2d_transfer_event.ptr(),
           absl::StrCat(" TransferToDevice TransferRawData offset:", offset,
                        " size:", transfer_size,
                        " last_transfer:", is_last_transfer, op_name),
-          {definition_events_[buffer_index]->async_value()});
+          {definition_events_[buffer_index]->event()});
     }
 
     h2d_transfer_event.AndThen([this, buffer_index,
@@ -466,7 +466,7 @@ class CommonAsyncHostToDeviceTransferManager
         if (definition_events_.size() > 1) {
           absl::StrAppend(&annotation, " buf_idx:", i);
         }
-        client_->AppendDescriptionToEvent(memory_space_, event->async_value(),
+        client_->AppendDescriptionToEvent(memory_space_, event->event(),
                                           annotation, {});
       }
     }

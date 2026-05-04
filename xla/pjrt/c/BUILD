@@ -391,6 +391,7 @@ cc_library(
         ":pjrt_c_api_memory_descriptions_extension_hdrs",
         ":pjrt_c_api_multi_slice_internal_types",
         ":pjrt_c_api_shardings_extension_hdrs",
+        ":pjrt_c_api_status_utils",
         "//xla:future",
         "//xla:literal",
         "//xla:shape_util",

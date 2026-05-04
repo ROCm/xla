@@ -710,10 +710,7 @@ tf_proto_library(
     name = "stream_executor_executable_proto",
     srcs = ["stream_executor_executable.proto"],
     visibility = ["//visibility:public"],
-    deps = [
-        "//xla:xla_proto",
-        "//xla/pjrt/proto:compile_options_proto",
-    ],
+    deps = ["//xla/pjrt/proto:compile_options_proto"],
 )
 
 cc_library(
@@ -1734,6 +1731,7 @@ cc_library(
     name = "compiled_memory_stats",
     srcs = ["compiled_memory_stats.cc"],
     hdrs = ["compiled_memory_stats.h"],
+    visibility = internal_visibility([":friends"]),
     deps = [
         "//xla:shape_util",
         "//xla/pjrt/proto:executable_metadata_proto_cc",

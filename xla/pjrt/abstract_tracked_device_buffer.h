@@ -41,7 +41,7 @@ namespace xla {
 
 class AbstractTrackedDeviceBuffer {
  public:
-  virtual ~AbstractTrackedDeviceBuffer() = default;
+  ~AbstractTrackedDeviceBuffer() = default;
   AbstractTrackedDeviceBuffer(
       PjRtRawBufferRef raw_buffer,
       absl::InlinedVector<PjRtDeviceEventRef, 2> definition_events,
@@ -113,12 +113,12 @@ class AbstractTrackedDeviceBuffer {
   }
 
   // Asynchronously frees all memory.
-  virtual void Delete(PjRtMemorySpace* memory_space) = 0;
+  void Delete(PjRtMemorySpace* memory_space);
 
   // Clones an abstract buffer with an additional control dependency.
-  virtual std::unique_ptr<AbstractTrackedDeviceBuffer> Clone(
+  std::unique_ptr<AbstractTrackedDeviceBuffer> Clone(
       absl::InlinedVector<PjRtDeviceEventRef, 2> definition_events,
-      std::unique_ptr<PjRtDeviceEventSet> usage_events) const = 0;
+      std::unique_ptr<PjRtDeviceEventSet> usage_events) const;
 
   absl::StatusOr<std::unique_ptr<AbstractTrackedDeviceBuffer>>
   CloneWithControlDependency(PjRtMemorySpace* memory_space,
@@ -126,7 +126,7 @@ class AbstractTrackedDeviceBuffer {
 
   // Returns a future that becomes available when all definition events are
   // complete.
-  virtual Future<> GetReadyFuture(PjRtMemorySpace* memory_space);
+  Future<> GetReadyFuture(PjRtMemorySpace* memory_space);
 
   // Waits for all usage and definition events to complete synchronously
   // and returns the status.
@@ -142,10 +142,11 @@ class AbstractTrackedDeviceBuffer {
     return definition_events_[0];
   }
 
-  virtual absl::Status WaitUntilBufferReadyOnStream(std::intptr_t stream);
+  absl::Status WaitUntilBufferReadyOnStream(PjRtMemorySpace* memory_space,
+                                            std::intptr_t stream);
 
   // Returns true if there is an error in any of the events.
-  virtual bool AddDefinitionEventsToSet(PjRtDeviceEventSet& events) {
+  bool AddDefinitionEventsToSet(PjRtDeviceEventSet& events) {
     bool is_error = false;
     for (const auto& ev : definition_events()) {
       if (ev) {
@@ -400,6 +401,24 @@ class CommonPjRtBuffer : public PjRtBuffer {
       ABSL_GUARDED_BY(mu_);
   // Count of holds on the buffer.
   std::array<int, ScopedHold::Type::kMaxValue> holds_ ABSL_GUARDED_BY(mu_);
+};
+
+// DefaultUsageEventSet is a PjRtDeviceEventSet that coalesces events and
+// removes stale usage events to prevent the event set from growing unbounded.
+class DefaultUsageEventSet : public PjRtDeviceEventSet {
+ public:
+  DefaultUsageEventSet() = default;
+
+  void AddEvent(PjRtDeviceEventRef event) override;
+
+  void AppendTo(
+      std::vector<tsl::RCReference<tsl::AsyncValue>>& events) override;
+  void AppendTo(PjRtDeviceEventSet& events) override;
+
+  std::unique_ptr<PjRtDeviceEventSet> Clone() const override;
+
+ private:
+  absl::InlinedVector<PjRtDeviceEventRef, 4> usage_events_;
 };
 
 }  // namespace xla

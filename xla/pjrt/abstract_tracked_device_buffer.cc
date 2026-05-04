@@ -70,8 +70,10 @@ Future<> AbstractTrackedDeviceBuffer::GetReadyFuture(
     }
   }
   if (client->event_tracking_enabled()) {
-    client->AddEventDependencies(memory_space, definition_future.async_value(),
-                                 dependencies);
+    client->AddEventDependencies(
+        memory_space,
+        PjRtDeviceEventPtr::FromAsyncValue(definition_future.async_value()),
+        dependencies);
   }
   auto deps = absl::Span<const tsl::RCReference<tsl::AsyncValue>>(dependencies);
   tsl::RunWhenReady(deps, [definition_event = std::move(definition_promise),
@@ -117,9 +119,31 @@ absl::Status AbstractTrackedDeviceBuffer::BlockForOperationsToComplete(
 }
 
 absl::Status AbstractTrackedDeviceBuffer::WaitUntilBufferReadyOnStream(
-    std::intptr_t stream) {
-  return absl::UnimplementedError(
-      "WaitUntilBufferReadyOnStream is only implemented for GPU.");
+    PjRtMemorySpace* memory_space, std::intptr_t stream) {
+  auto* client = absl::down_cast<CommonPjRtClient*>(memory_space->client());
+  for (const auto& event : definition_events()) {
+    TF_RETURN_IF_ERROR(client->WaitOnStream(memory_space, event, stream));
+  }
+  return absl::OkStatus();
+}
+
+void AbstractTrackedDeviceBuffer::Delete(PjRtMemorySpace* memory_space) {
+  std::unique_ptr<AbstractTrackedDeviceBuffer> device_buffer(this);
+  std::vector<tsl::RCReference<tsl::AsyncValue>> avs =
+      device_buffer->GetAsyncValueDefinitionAndUsageEvents();
+  device_buffer->LockUseAndTransferUsageEvents();
+  auto raw_buffer = device_buffer->raw_buffer();
+  device_buffer.reset();
+  if (raw_buffer) {
+    raw_buffer.release()->DecrefAfter(std::move(avs));
+  }
+}
+
+std::unique_ptr<AbstractTrackedDeviceBuffer> AbstractTrackedDeviceBuffer::Clone(
+    absl::InlinedVector<PjRtDeviceEventRef, 2> definition_events,
+    std::unique_ptr<PjRtDeviceEventSet> usage_events) const {
+  return std::make_unique<AbstractTrackedDeviceBuffer>(
+      raw_buffer(), std::move(definition_events), std::move(usage_events));
 }
 
 absl::StatusOr<std::unique_ptr<AbstractTrackedDeviceBuffer>>
@@ -400,6 +424,47 @@ CommonPjRtBuffer::ScopedHold CommonPjRtBuffer::GetBufferWithHold(
   ScopedHold hold(this, type);
   AcquireHoldLocked(&hold);
   return hold;
+}
+
+void DefaultUsageEventSet::AddEvent(PjRtDeviceEventRef event) {
+  if (!event) {
+    return;
+  }
+  // Trim ready events in order to avoid dynamic allocation as much as possible.
+  // The cost will be amortized because a typical vector implementation grows
+  // the capacity superlinearly.
+  if (usage_events_.size() + 1 > usage_events_.capacity()) {
+    int i = 0;
+    while (i < usage_events_.size()) {
+      auto& ev = usage_events_.at(i);
+      if (ev.async_value()->IsAvailable()) {
+        using std::swap;
+        swap(ev, usage_events_.back());
+        usage_events_.pop_back();
+        continue;
+      }
+      ++i;
+    }
+  }
+  usage_events_.push_back(std::move(event));
+}
+
+void DefaultUsageEventSet::AppendTo(
+    std::vector<tsl::RCReference<tsl::AsyncValue>>& events) {
+  events.reserve(events.size() + usage_events_.size());
+  for (const auto& ev : usage_events_) {
+    events.push_back(tsl::FormRef(ev.async_value()));
+  }
+}
+
+void DefaultUsageEventSet::AppendTo(PjRtDeviceEventSet& events) {
+  for (const auto& ev : usage_events_) {
+    events.AddEvent(ev);
+  }
+}
+
+std::unique_ptr<PjRtDeviceEventSet> DefaultUsageEventSet::Clone() const {
+  return std::make_unique<DefaultUsageEventSet>(*this);
 }
 
 }  // namespace xla

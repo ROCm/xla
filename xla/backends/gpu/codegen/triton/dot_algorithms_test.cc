@@ -1897,7 +1897,6 @@ class PrecisionTests
     TF_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> module,
                         ParseAndReturnVerifiedModule(hlo_text));
     auto debug_options = module->config().debug_options();
-    debug_options.set_xla_gpu_enable_split_k_autotuning(false);
     if (algorithm == PC::ALG_UNSET) {
       // Here we test that the default algorithm for f32 dots is
       // ALG_DOT_BF16_BF16_F32 if the flag is set.

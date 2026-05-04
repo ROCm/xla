@@ -90,6 +90,11 @@ void CommonPjRtRawBuffer::ScheduleCopyTo(
                });
 }
 
+void CommonPjRtRawBuffer::DecrefAfter(
+    std::vector<tsl::RCReference<tsl::AsyncValue>> avs) {
+  tsl::RunWhenReady(avs, [this]() { DropRef(); });
+}
+
 absl::StatusOr<tsl::RCReference<PjRtRawBuffer>>
 PjRtRawBuffer::CreateRawAliasOfBuffer(PjRtBuffer* buffer) {
   for (auto* func : GetFactoryFuncs()) {

@@ -951,19 +951,17 @@ absl::StatusOr<std::unique_ptr<PjRtBuffer>> PjRtCpuClient::CreateErrorBuffer(
   if (device->client() != this) {
     return absl::InvalidArgumentError("Device is not attached to this client");
   }
-  // Create a dummy buffer because the rest of the code expects a buffer
-  // regardless of whether the definition event is an error.
   TF_ASSIGN_OR_RETURN(
       auto raw_buffer,
       CpuRawBuffer::Allocate(memory_space, ShapeUtil::ByteSizeOf(shape),
                              *allocator_));
-  return std::make_unique<CommonPjRtBufferImpl>(
-      std::make_shared<const Shape>(shape),
-      std::make_unique<TrackedCpuDeviceBuffer>(
-          std::move(raw_buffer),
-          tsl::AsyncValueRef<CpuEvent>(
-              tsl::MakeErrorAsyncValueRef(std::move(error)))),
-      memory_space);
+  absl::InlinedVector<PjRtDeviceEventRef, 2> definition_device_events;
+  definition_device_events.push_back(
+      PjRtDeviceEventRef(tsl::AsyncValueRef<CpuEvent>(
+          tsl::MakeErrorAsyncValueRef(std::move(error)))));
+  return DefineBuffer(std::make_shared<const Shape>(shape), memory_space,
+                      std::move(raw_buffer),
+                      std::move(definition_device_events));
 }
 
 absl::StatusOr<std::unique_ptr<PjRtClient::AsyncHostToDeviceTransferManager>>
@@ -1045,23 +1043,6 @@ PjRtCpuClient::CreateLinkedEventPromise(PjRtMemorySpace* memory_space,
 std::unique_ptr<PjRtDeviceEventSet> PjRtCpuClient::CreateDeviceEventSet(
     size_t preallocated_size) const {
   return std::make_unique<CpuTrackedDeviceEventSet>(preallocated_size);
-}
-
-absl::StatusOr<std::unique_ptr<PjRtBuffer>> PjRtCpuClient::DefineBuffer(
-    std::shared_ptr<const Shape> on_device_shape, PjRtMemorySpace* memory_space,
-    PjRtRawBufferRef raw_buffer,
-    absl::InlinedVector<PjRtDeviceEventRef, 2> definition_device_events) {
-  if (raw_buffer && raw_buffer->memory_space() != memory_space) {
-    return absl::InvalidArgumentError(
-        absl::StrFormat("DefineBuffer: Mismatch in memory spaces: %s vs %s",
-                        raw_buffer->memory_space()->DebugString(),
-                        memory_space->DebugString()));
-  }
-  return std::unique_ptr<PjRtBuffer>(std::make_unique<CommonPjRtBufferImpl>(
-      std::move(on_device_shape),
-      std::make_unique<TrackedCpuDeviceBuffer>(
-          std::move(raw_buffer), AfterAllCpuEvents(definition_device_events)),
-      memory_space));
 }
 
 absl::StatusOr<PjRtRawBufferRef> PjRtCpuClient::AllocateRawBuffer(

@@ -92,6 +92,16 @@ class PjRtDeviceEventPtr {
   PjRtDeviceEventPtr() = default;
   explicit PjRtDeviceEventPtr(PJRT_DeviceEvent event) : event_(event) {}
 
+  template <typename T>
+  explicit PjRtDeviceEventPtr(tsl::AsyncValuePtr<T> value)
+      : event_({internal::GetBuiltinDeviceEventCApiFunctionTable<T>(),
+                value.value()}) {}
+
+  static PjRtDeviceEventPtr FromAsyncValue(tsl::AsyncValue* value) {
+    return PjRtDeviceEventPtr(
+        {internal::GetBuiltinAsyncValueCApiFunctionTable(), value});
+  }
+
   // Runs a callback when the event becomes ready.
   template <typename Waiter>
   void AndThen(Waiter&& cb) const {
@@ -117,7 +127,18 @@ class PjRtDeviceEventPtr {
   }
 
   template <typename T>
-  tsl::AsyncValueRef<T> down_cast() const {
+  tsl::AsyncValuePtr<T> down_cast() const {
+    if (event_.device_event == nullptr ||
+        event_.vtable !=
+            internal::GetBuiltinDeviceEventCApiFunctionTable<T>()) {
+      return tsl::AsyncValuePtr<T>(nullptr);
+    }
+    return tsl::AsyncValuePtr<T>(
+        reinterpret_cast<tsl::AsyncValue*>(event_.device_event));
+  }
+
+  template <typename T>
+  tsl::AsyncValueRef<T> copy_down_cast() const {
     if (event_.device_event == nullptr ||
         event_.vtable !=
             internal::GetBuiltinDeviceEventCApiFunctionTable<T>()) {
@@ -144,13 +165,12 @@ class PjRtDeviceEventPtr {
 
   PJRT_DeviceEvent ToC() const { return event_; }
 
-  // TODO(parkers): Remove direct async_value usages.
+  PjRtDeviceEventRef CopyRef() const;
+  void DecRef() const;
+
   tsl::AsyncValue* async_value() const;
 
   explicit operator bool() const { return event_.device_event != nullptr; }
-
-  PjRtDeviceEventRef CopyRef() const;
-  void DecRef() const;
 
  private:
   void IncRef() const;
@@ -202,7 +222,7 @@ class PjRtDeviceEventRef {
 
   template <typename T>
   tsl::AsyncValueRef<T> down_cast() const& {
-    return ptr_.down_cast<T>();
+    return ptr_.copy_down_cast<T>();
   }
 
   template <typename T>
@@ -244,7 +264,7 @@ class PjRtDeviceEventPromise
   virtual ~PjRtDeviceEventPromise() = default;
 
   // The underlying AsyncValue.
-  virtual tsl::AsyncValue* async_value() const = 0;
+  virtual PjRtDeviceEventPtr event() const = 0;
 
   // Fulfill the promise.
   virtual void Set(PjRtDeviceEventRef event) = 0;

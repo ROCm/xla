@@ -78,6 +78,41 @@ void CommonPjRtClient::TrackFuture(PjRtMemorySpace* memory_space,
                                    absl::string_view debug_info,
                                    const Future<>& future) {}
 
+absl::Status CommonPjRtClient::WaitOnStream(PjRtMemorySpace* memory_space,
+                                            PjRtDeviceEventRef event,
+                                            std::intptr_t stream) {
+  return absl::UnimplementedError(
+      "WaitUntilBufferReadyOnStream is only implemented for GPU.");
+}
+
+absl::StatusOr<std::unique_ptr<PjRtDeviceEventSet>>
+CommonPjRtClient::CreateUsageEventSet(PjRtMemorySpace* memory_space) const {
+  return std::make_unique<DefaultUsageEventSet>();
+}
+
+absl::StatusOr<std::unique_ptr<PjRtBuffer>> CommonPjRtClient::DefineBuffer(
+    std::shared_ptr<const Shape> on_device_shape, PjRtMemorySpace* memory_space,
+    PjRtRawBufferRef raw_buffer,
+    absl::InlinedVector<PjRtDeviceEventRef, 2> definition_device_events) {
+  if (on_device_shape->IsTuple()) {
+    return absl::InvalidArgumentError(
+        "DefineBuffer: Can't define a tuple buffer.");
+  }
+  if (raw_buffer && raw_buffer->memory_space() != memory_space) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("DefineBuffer: Mismatch in memory spaces: %s vs %s",
+                        raw_buffer->memory_space()->DebugString(),
+                        memory_space->DebugString()));
+  }
+  TF_ASSIGN_OR_RETURN(auto usage_events, CreateUsageEventSet(memory_space));
+  return std::make_unique<CommonPjRtBufferImpl>(
+      std::move(on_device_shape),
+      std::make_unique<AbstractTrackedDeviceBuffer>(
+          std::move(raw_buffer), std::move(definition_device_events),
+          std::move(usage_events)),
+      memory_space);
+}
+
 Future<> CommonPjRtClient::CreateProfiledFuture(PjRtMemorySpace* memory_space,
                                                 const char* callee_type,
                                                 const char* callee_method,
@@ -476,13 +511,12 @@ absl::StatusOr<xla::Shape> CommonPjRtClient::MakeDefaultShapeForMemorySpace(
 }
 
 tsl::Future<> CommonPjRtClient::MakeTrackedReadyFuture(
-    tsl::AsyncValue* async_value, PjRtMemorySpace* memory_space,
+    PjRtDeviceEventPtr device_event, PjRtMemorySpace* memory_space,
     const char* callee_type, const char* callee_method) {
   auto [promise, result] = CreateLinkedUserPromise(
       memory_space, callee_type, callee_method, callee_method);
-  async_value->AndThen([promise = std::move(promise),
-                        event = tsl::FormRef(async_value)]() mutable {
-    if (auto* error = event->GetErrorIfPresent()) {
+  device_event.AndThen([promise = std::move(promise), device_event]() mutable {
+    if (auto error = device_event.GetErrorIfPresent()) {
       promise.Set(*error);
     } else {
       promise.Set();
@@ -505,7 +539,7 @@ Future<> CommonPjRtRawBufferImpl::CopyRawHostToDevice(const void* src,
     return Future<>(event.status());
   }
   return tensorflow::down_cast<CommonPjRtClient*>(memory_space()->client())
-      ->MakeTrackedReadyFuture(event->async_value(), memory_space(),
+      ->MakeTrackedReadyFuture(event->ptr(), memory_space(),
                                "CommonPjRtRawBuffer", "CopyRawHostToDevice");
 }
 
@@ -516,7 +550,7 @@ Future<> CommonPjRtRawBufferImpl::CopyRawDeviceToHost(void* dst, int64_t offset,
     return Future<>(event.status());
   }
   return tensorflow::down_cast<CommonPjRtClient*>(memory_space()->client())
-      ->MakeTrackedReadyFuture(event->async_value(), memory_space(),
+      ->MakeTrackedReadyFuture(event->ptr(), memory_space(),
                                "CommonPjRtRawBuffer", "CopyRawDeviceToHost");
 }
 
@@ -1029,7 +1063,7 @@ absl::Status CommonPjRtLoadedExecutable::ExecutePrepare(
       client()->allow_fallback_for_donation()));
 
   absl::InlinedVector<PjRtRawBufferRef, 4> output_leaf_buffers;
-  if (!is_error) {
+  if (!is_error || !client()->supports_predetermined_error()) {
     // Allocate output with input reuse. Any allocation errors are returned
     // immediately. Derived classes may use custom logic for allocation.
     TF_ASSIGN_OR_RETURN(output_leaf_buffers,
@@ -1718,9 +1752,8 @@ CommonPjRtBufferImpl::CopyFromCpuToMemorySpace(
               });
           if (dst_client->event_tracking_enabled()) {
             dst_client->AppendDescriptionToEvent(
-                dst_memory_space, h2d_transfer_event.async_value(),
-                " TransferToDevice ",
-                {definition_event_promise->async_value()});
+                dst_memory_space, h2d_transfer_event.ptr(),
+                " TransferToDevice ", {definition_event_promise->event()});
           }
           definition_event_promise->Set(std::move(h2d_transfer_event));
         });
@@ -1990,9 +2023,8 @@ Future<> CommonPjRtBufferImpl::ToLiteralImpl(
       memory_space(), "CommonPjRtBuffer", "ToLiteral", "ToLiteralEvent");
   if (device_promise) {
     if (common_client->event_tracking_enabled()) {
-      common_client->AddEventDependencies(memory_space(),
-                                          device_promise->async_value(),
-                                          src_definition_events_avs);
+      common_client->AddEventDependencies(
+          memory_space(), device_promise->event(), src_definition_events_avs);
     }
   }
 
@@ -2135,7 +2167,8 @@ CommonPjRtBufferImpl::AcquireExternalReference() {
     }
 
     absl::Status WaitUntilBufferReadyOnStream(std::intptr_t stream) override {
-      return external_reference_.buffer()->WaitUntilBufferReadyOnStream(stream);
+      return external_reference_.buffer()->WaitUntilBufferReadyOnStream(
+          raw_buffer_->memory_space(), stream);
     }
 
     ~ScopedHoldAsExternalReference() override = default;
@@ -2202,12 +2235,11 @@ Future<> CommonPjRtBufferImpl::CopyRawToHostFuture(Future<void*> dst,
 
   if (buf_client->event_tracking_enabled()) {
     if (!dst.IsReady()) {
-      buf_client->RegisterClientThreadWait(memory_space(),
-                                           usage_event_promise->async_value(),
-                                           "CopyRawToHostFuture");
+      buf_client->RegisterClientThreadWait(
+          memory_space(), usage_event_promise->event(), "CopyRawToHostFuture");
     }
     buf_client->AddEventDependencies(
-        memory_space(), usage_event_promise->async_value(), definition_events);
+        memory_space(), usage_event_promise->event(), definition_events);
   }
 
   dst.OnReady([buf_client, transfer_size, offset,
@@ -2247,7 +2279,7 @@ Future<> CommonPjRtBufferImpl::CopyRawToHostFuture(Future<void*> dst,
         });
   });
   return tensorflow::down_cast<CommonPjRtClient*>(memory_space()->client())
-      ->MakeTrackedReadyFuture(usage_event.async_value(), memory_space(),
+      ->MakeTrackedReadyFuture(usage_event.ptr(), memory_space(),
                                "CommonPjRtBuffer", "CopyRawToHostFuture");
 }
 

@@ -28,6 +28,7 @@ limitations under the License.
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/log/vlog_is_on.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -178,7 +179,6 @@ absl::StatusOr<std::unique_ptr<llvm::Module>> TranslateLLVMToLLVMIR(
   mlir::registerNVVMDialectTranslation(registry);
   mlir::registerROCDLDialectTranslation(registry);
   module->getContext()->appendDialectRegistry(registry);
-
   std::unique_ptr<llvm::Module> llvmModule =
       mlir::translateModuleToLLVMIR(module, *llvmContext);
   if (!llvmModule) {
@@ -420,6 +420,15 @@ absl::StatusOr<TritonWrapperResult> CompileTritonToLLVM(
 #ifndef NDEBUG
   should_verify = true;
 #endif
+
+  mlir_context.printOpOnDiagnostic(should_verify || VLOG_IS_ON(1));
+  std::optional<mlir::ScopedDiagnosticHandler> diag_handler;
+  if (VLOG_IS_ON(1)) {
+    diag_handler.emplace(&mlir_context, [](mlir::Diagnostic& diag) {
+      VLOG(1) << "MLIR Diagnostic: " << diag.str();
+      return mlir::failure();
+    });
+  }
 
   mlir::PassManager pm(&mlir_context);
   EnableIRPrintingIfRequested(pm, &mlir_context, hlo_module, kernel_name,

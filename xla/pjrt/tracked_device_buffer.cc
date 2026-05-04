@@ -180,19 +180,6 @@ tsl::AsyncValueRef<RawSEDeviceMemory> RawSEDeviceMemory::CreateSlice(
                       offset + size, src_size)));
 }
 
-TrackedDeviceBuffer::TrackedDeviceBuffer(
-    PjRtDevice* device, PjRtRawBufferRef raw_buffer,
-    absl::InlinedVector<PjRtDeviceEventRef, 2> definition_events,
-    std::unique_ptr<PjRtDeviceEventSet> usage_events)
-    : AbstractTrackedDeviceBuffer(
-          std::move(raw_buffer), std::move(definition_events),
-          usage_events ? std::move(usage_events)
-                       : std::make_unique<PjRtStreamExecutorUsageEventSet>()),
-      device_(device),
-      in_use_(true) {}
-
-TrackedDeviceBuffer::~TrackedDeviceBuffer() = default;
-
 void PjRtStreamExecutorUsageEventSet::AddEvent(PjRtDeviceEventRef event) {
   if (event) {
     AddEvent(event.down_cast<BufferSequencingEvent>(), true);
@@ -233,15 +220,8 @@ void PjRtStreamExecutorUsageEventSet::AddEvent(BufferSequencingEventRef event,
   usage_events_.push_back({event, reference_held});
 }
 
-void TrackedDeviceBuffer::Delete(PjRtMemorySpace* memory_space) {
-  std::unique_ptr<TrackedDeviceBuffer> device_buffer(this);
-  // All events already hold onto refs to the buffer to ensure liveness so there
-  // is no work to do.
-}
-
 void PjRtStreamExecutorUsageEventSet::AppendTo(
     std::vector<tsl::RCReference<tsl::AsyncValue>>& events) {
-  events.reserve(events.size() + usage_events_.size());
   for (const auto& ev : usage_events_) {
     events.push_back(ev.event.CopyRCRef());
   }
@@ -250,23 +230,6 @@ void PjRtStreamExecutorUsageEventSet::AppendTo(
 void PjRtStreamExecutorUsageEventSet::AppendTo(PjRtDeviceEventSet& events) {
   for (const auto& ev : usage_events_) {
     events.AddEvent(PjRtDeviceEventRef(ev.event));
-  }
-}
-
-void WaitForBufferDefinitionEventsOnStream(
-    absl::Span<const BufferSequencingEventRef> definition_events,
-    se::Stream* stream) {
-  if (definition_events.size() <= 1) {
-    for (const auto& event : definition_events) {
-      event->WaitForEventOnStream(stream);
-    }
-  } else {
-    absl::flat_hash_set<BufferSequencingEvent*> events;
-    for (const auto& event : definition_events) {
-      if (events.emplace(&*event).second) {
-        event->WaitForEventOnStream(stream);
-      }
-    }
   }
 }
 

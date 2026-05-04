@@ -1834,6 +1834,7 @@ absl::StatusOr<DeviceTopologyPair> BuildDistributedDevices(
         int process_id = i * sizes.num_hosts_per_partition + j;
         local_topologies[process_id].set_process_id(process_id);
         local_topologies[process_id].set_boot_id(absl::StrCat(i));
+        local_topologies[process_id].set_partition_index(i);
       }
     }
     TF_ASSIGN_OR_RETURN(global_topology,

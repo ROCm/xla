@@ -15,9 +15,7 @@ limitations under the License.
 
 #include "xla/service/gpu/gpu_memory_space_assignment.h"
 
-#include <cstdint>
 #include <memory>
-#include <utility>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -34,6 +32,7 @@ limitations under the License.
 #include "xla/service/hlo_value.h"
 #include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/tsl/platform/statusor.h"
+#include "xla/xla.pb.h"
 
 namespace xla::gpu {
 namespace {

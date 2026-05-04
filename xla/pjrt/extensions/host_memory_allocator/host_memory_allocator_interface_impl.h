@@ -13,17 +13,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef XLA_PJRT_EXTENSIONS_HOST_ALLOCATOR_HOST_MEMORY_ALLOCATOR_HOST_MEMORY_ALLOCATOR_EXTENSION_INTERNAL_H_
-#define XLA_PJRT_EXTENSIONS_HOST_ALLOCATOR_HOST_MEMORY_ALLOCATOR_HOST_MEMORY_ALLOCATOR_EXTENSION_INTERNAL_H_
+#ifndef XLA_PJRT_EXTENSIONS_HOST_MEMORY_ALLOCATOR_HOST_MEMORY_ALLOCATOR_INTERFACE_IMPL_H_
+#define XLA_PJRT_EXTENSIONS_HOST_MEMORY_ALLOCATOR_HOST_MEMORY_ALLOCATOR_INTERFACE_IMPL_H_
+
+#include <memory>
 
 #include "xla/pjrt/c/pjrt_c_api.h"
-#include "xla/pjrt/extensions/host_allocator/host_memory_allocator/host_memory_allocator_extension.h"
+#include "xla/pjrt/extensions/host_memory_allocator/host_memory_allocator_extension.h"
+#include "xla/pjrt/host_memory_allocator.h"
 
 namespace pjrt {
 
-PJRT_HostMemoryAllocator_Extension CreateHostMemoryAllocatorExtension(
-    PJRT_Extension_Base* next = nullptr);
+std::unique_ptr<xla::HostMemoryAllocator> CreateHostMemoryAllocatorWrapper(
+    PJRT_Client* c_client, const PJRT_HostMemoryAllocator_Extension* extension,
+    const PJRT_Api* c_api);
 
 }  // namespace pjrt
 
-#endif  // XLA_PJRT_EXTENSIONS_HOST_ALLOCATOR_HOST_MEMORY_ALLOCATOR_HOST_MEMORY_ALLOCATOR_EXTENSION_INTERNAL_H_
+#endif  // XLA_PJRT_EXTENSIONS_HOST_MEMORY_ALLOCATOR_HOST_MEMORY_ALLOCATOR_INTERFACE_IMPL_H_

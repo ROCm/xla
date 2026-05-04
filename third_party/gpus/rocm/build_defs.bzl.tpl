@@ -1,5 +1,5 @@
-load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
 # Macros for building ROCm code.
 # rocm_library is loaded and wrapped below
@@ -14,7 +14,7 @@ def if_rocm(if_true, if_false = []):
     """
     return select({
         "@local_config_rocm//rocm:using_hipcc": if_true,
-        "//conditions:default": if_false
+        "//conditions:default": if_false,
     })
 
 def rocm_gpu_architectures():
@@ -69,10 +69,11 @@ def rocm_library(name, srcs = [], hdrs = [], copts = [], deps = [], **kwargs):
         **kwargs
     )
 
+
 def get_rbe_amdgpu_pool(is_single_gpu = False):
     return "%{single_gpu_rbe_pool}" if is_single_gpu else "%{multi_gpu_rbe_pool}"
 
-def rocm_lib_import(name, interface_library, data, deps=[]):
+def rocm_lib_import(name, interface_library, data, deps):
     cc_import(
         name = name + "_interface",
         interface_library = interface_library,
