@@ -61,6 +61,7 @@ done
     --grpc_keepalive_time=30s \
     --test_sharding_strategy=disabled \
     --test_verbose_timeout_warnings \
+    --sandbox_add_mount_pair=/dev/null:/etc/ld.so.cache \
     --curses=no \
     --color=yes \
     --test_filter=-$(
