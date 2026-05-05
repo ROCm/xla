@@ -19,6 +19,7 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/status_matchers.h"
 #include "xla/stream_executor/device_description.h"
@@ -38,6 +39,31 @@ namespace stream_executor::gpu {
 namespace {
 using testing::IsEmpty;
 using testing::Not;
+
+// Base test fixture for ROCm executor tests that ensures clean GPU state.
+// Synchronizes the device after each test to prevent cross-process memory
+class RocmExecutorTestFixture : public ::testing::Test {
+ protected:
+  void TearDown() override {
+    auto platform_or = PlatformManager::PlatformWithName("ROCM");
+    if (!platform_or.ok()) {
+      LOG(WARNING) << "Failed to get ROCM platform: " << platform_or.status();
+      return;
+    }
+
+    auto executor_or = platform_or.value()->ExecutorForDevice(0);
+    if (!executor_or.ok()) {
+      LOG(WARNING) << "Failed to get executor for device 0: "
+                   << executor_or.status();
+      return;
+    }
+
+    // Use StreamExecutor's SynchronizeAllActivity which is platform-agnostic
+    if (!executor_or.value()->SynchronizeAllActivity()) {
+      LOG(WARNING) << "SynchronizeAllActivity failed";
+    }
+  }
+};
 
 TEST(RocmExecutorTest, CreateDeviceDescription) {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<DeviceDescription> result,
@@ -82,7 +108,7 @@ TEST(RocmExecutorTest, GetRocmKernel) {
               absl_testing::StatusIs(absl::StatusCode::kNotFound));
 }
 
-TEST(RocmExecutorTest, CreateUnifiedMemoryAllocatorWorks) {
+TEST_F(RocmExecutorTestFixture, CreateUnifiedMemoryAllocatorWorks) {
   TF_ASSERT_OK_AND_ASSIGN(Platform * platform,
                           PlatformManager::PlatformWithName("ROCM"));
   TF_ASSERT_OK_AND_ASSIGN(StreamExecutor * executor,
@@ -97,7 +123,7 @@ TEST(RocmExecutorTest, CreateUnifiedMemoryAllocatorWorks) {
   allocation.reset();
 }
 
-TEST(RocmExecutorTest, CreateHostMemoryAllocatorWorks) {
+TEST_F(RocmExecutorTestFixture, CreateHostMemoryAllocatorWorks) {
   TF_ASSERT_OK_AND_ASSIGN(Platform * platform,
                           PlatformManager::PlatformWithName("ROCM"));
   TF_ASSERT_OK_AND_ASSIGN(StreamExecutor * executor,
@@ -111,7 +137,7 @@ TEST(RocmExecutorTest, CreateHostMemoryAllocatorWorks) {
   allocation.reset();
 }
 
-TEST(RocmExecutorTest, CreateCollectiveMemoryAllocatorWorks) {
+TEST_F(RocmExecutorTestFixture, CreateCollectiveMemoryAllocatorWorks) {
   TF_ASSERT_OK_AND_ASSIGN(Platform * platform,
                           PlatformManager::PlatformWithName("ROCM"));
   TF_ASSERT_OK_AND_ASSIGN(StreamExecutor * executor,

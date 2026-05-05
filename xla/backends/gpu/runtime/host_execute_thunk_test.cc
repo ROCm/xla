@@ -24,6 +24,7 @@ limitations under the License.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/container/inlined_vector.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
@@ -67,6 +68,24 @@ se::StreamExecutor* GpuExecutor() {
   return platform->ExecutorForDevice(0).value();
 }
 
+// Base test fixture for all GPU tests that ensures clean GPU state.
+// Synchronizes the device after each test to prevent cross-process memory
+class GpuTestFixture : public ::testing::Test {
+ protected:
+  void TearDown() override {
+    se::StreamExecutor* executor = GpuExecutor();
+    if (executor == nullptr) {
+      LOG(WARNING) << "Failed to get GPU executor for synchronization";
+      return;
+    }
+
+    // Use StreamExecutor's SynchronizeAllActivity which is platform-agnostic
+    if (!executor->SynchronizeAllActivity()) {
+      LOG(WARNING) << "SynchronizeAllActivity failed";
+    }
+  }
+};
+
 absl::StatusOr<std::unique_ptr<HostExecuteStartThunk>>
 CreateHostExecuteStartThunk(
     Thunk::ThunkInfo thunk_info, const HloModule& hlo_module,
@@ -98,7 +117,7 @@ CreateHostExecuteStartThunk(
       std::move(args), std::move(results));
 }
 
-TEST(HostExecuteStartThunkTest, SingleArgSingleResult) {
+TEST_F(GpuTestFixture, SingleArgSingleResult) {
   se::StreamExecutor* stream_executor = GpuExecutor();
   TF_ASSERT_OK_AND_ASSIGN(auto stream, stream_executor->CreateStream());
 
@@ -165,7 +184,7 @@ TEST(HostExecuteStartThunkTest, SingleArgSingleResult) {
                                      result_literal));
 }
 
-TEST(HostExecuteStartThunkTest, MultiArgMultipleResult) {
+TEST_F(GpuTestFixture, MultiArgMultipleResult) {
   se::StreamExecutor* stream_executor = GpuExecutor();
   TF_ASSERT_OK_AND_ASSIGN(auto stream, stream_executor->CreateStream());
 
@@ -252,7 +271,7 @@ TEST(HostExecuteStartThunkTest, MultiArgMultipleResult) {
                                      result_literal1));
 }
 
-TEST(HostExecuteStartThunkTest, ArgAndResultPinnedOnHost) {
+TEST_F(GpuTestFixture, ArgAndResultPinnedOnHost) {
   se::StreamExecutor* stream_executor = GpuExecutor();
   TF_ASSERT_OK_AND_ASSIGN(auto stream, stream_executor->CreateStream());
 
@@ -325,7 +344,7 @@ TEST(HostExecuteStartThunkTest, ArgAndResultPinnedOnHost) {
       *static_cast<int32_t*>(result_memory_allocation->address().opaque()), 10);
 }
 
-TEST(HostExecuteStartThunkTest, ArgAndResultInSharedMemory) {
+TEST_F(GpuTestFixture, ArgAndResultInSharedMemory) {
   se::StreamExecutor* stream_executor = GpuExecutor();
   TF_ASSERT_OK_AND_ASSIGN(auto stream, stream_executor->CreateStream());
 
@@ -402,7 +421,7 @@ TEST(HostExecuteStartThunkTest, ArgAndResultInSharedMemory) {
       *static_cast<int32_t*>(result_memory_allocation->address().opaque()), 10);
 }
 
-TEST(HostExecuteStartThunkTest, ArgAndResultNonRegisteredHostMemory) {
+TEST_F(GpuTestFixture, ArgAndResultNonRegisteredHostMemory) {
   se::StreamExecutor* stream_executor = GpuExecutor();
   TF_ASSERT_OK_AND_ASSIGN(auto stream, stream_executor->CreateStream());
 
@@ -463,7 +482,7 @@ TEST(HostExecuteStartThunkTest, ArgAndResultNonRegisteredHostMemory) {
   EXPECT_EQ(result_value, 10);
 }
 
-TEST(HostExecuteStartThunkTest, TestErrorPropagationFromExecuteEvent) {
+TEST_F(GpuTestFixture, TestErrorPropagationFromExecuteEvent) {
 #ifdef NDEBUG
   GTEST_SKIP() << "Skipping test in optimized mode because XLA:CPU won't "
                   "check for the alignment error.";
@@ -528,7 +547,7 @@ TEST(HostExecuteStartThunkTest, TestErrorPropagationFromExecuteEvent) {
   EXPECT_TRUE(execute_event.IsError());
 }
 
-TEST(HostExecuteDoneThunkTest, WaitingOnAvailableEvent) {
+TEST_F(GpuTestFixture, WaitingOnAvailableEvent) {
   se::StreamExecutor* stream_executor = GpuExecutor();
   TF_ASSERT_OK_AND_ASSIGN(auto stream, stream_executor->CreateStream());
 
@@ -559,7 +578,7 @@ TEST(HostExecuteDoneThunkTest, WaitingOnAvailableEvent) {
   TF_ASSERT_OK(thunk.ExecuteOnStream(params));
 }
 
-TEST(HostExecuteDoneThunkTest, WaitingOnErrorEvent) {
+TEST_F(GpuTestFixture, WaitingOnErrorEvent) {
   se::StreamExecutor* stream_executor = GpuExecutor();
   TF_ASSERT_OK_AND_ASSIGN(auto stream, stream_executor->CreateStream());
 
@@ -590,7 +609,7 @@ TEST(HostExecuteDoneThunkTest, WaitingOnErrorEvent) {
               absl_testing::StatusIs(absl::StatusCode::kInternal));
 }
 
-TEST(HostExecuteStartThunkTest, ProtoRoundTrip) {
+TEST_F(GpuTestFixture, ProtoRoundTrip) {
   static constexpr char const* kHloModule = R"(
     HloModule module
     ENTRY add_inplace {
@@ -644,7 +663,7 @@ TEST(HostExecuteStartThunkTest, ProtoRoundTrip) {
   EXPECT_THAT(round_trip_proto, tsl::proto_testing::EqualsProto(proto));
 }
 
-TEST(HostExecuteThunkTest, ProtoRoundTripPairing) {
+TEST_F(GpuTestFixture, ProtoRoundTripPairing) {
   static constexpr char const* kHloModule = R"(
     HloModule module
     ENTRY add_inplace {
