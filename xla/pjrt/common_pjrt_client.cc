@@ -27,6 +27,8 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/base/casts.h"
+#include "absl/base/nullability.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
@@ -53,6 +55,7 @@ limitations under the License.
 #include "xla/pjrt/device_event_utils.h"
 #include "xla/pjrt/host_callback.h"
 #include "xla/pjrt/pjrt_client.h"
+#include "xla/pjrt/pjrt_compiler.h"
 #include "xla/pjrt/pjrt_executable.h"
 #include "xla/pjrt/raw_buffer.h"
 #include "xla/pjrt/transpose.h"
@@ -928,6 +931,85 @@ CommonPjRtClient::AllocateOutputBuffersWithInputReuse(
         << total_size;
   }
   return std::move(buffers);
+}
+
+absl::StatusOr<std::vector<std::unique_ptr<PjRtBuffer>>>
+CommonPjRtClient::MakeCrossHostReceiveBuffers(
+    absl::Span<const Shape> shapes, PjRtDevice* absl_nonnull pjrt_device,
+    PjRtCrossHostRecvNotifier notifier) {
+  VLOG(2) << "Making " << shapes.size() << " cross host receive buffers";
+  if (shapes.empty()) {
+    return InvalidArgument(
+        "shapes parameter empty in MakeCrossHostReceiveBuffers");
+  }
+
+  TF_ASSIGN_OR_RETURN(auto memory_space, pjrt_device->default_memory_space());
+
+  std::vector<tsl::RCReference<PjRtRawBuffer>> raw_buffers;
+  std::vector<tsl::RCReference<tsl::AsyncValue>> transfer_dependency_avs;
+  std::vector<xla::Shape> dst_shapes;
+  raw_buffers.reserve(shapes.size());
+  // Reserve one extra for internal use.
+  transfer_dependency_avs.reserve(shapes.size() + 1);
+  dst_shapes.reserve(shapes.size());
+  for (const Shape& shape : shapes) {
+    if (shape.IsTuple()) {
+      return InvalidArgument(
+          "Tuple shape %s not supported in MakeCrossHostReceiveBuffers",
+          ShapeUtil::HumanString(shape));
+    }
+    xla::Shape dst_shape;
+    if (shape.has_layout()) {
+      dst_shape = shape;
+    } else {
+      // Use the default destination device layout.
+      TF_ASSIGN_OR_RETURN(dst_shape,
+                          ShapeUtil::MakeValidatedShape(shape.element_type(),
+                                                        shape.dimensions()));
+      TF_ASSIGN_OR_RETURN(const PjRtTopologyDescription* topology_description,
+                          GetTopologyDescription());
+      TF_ASSIGN_OR_RETURN(*dst_shape.mutable_layout(),
+                          topology_description->GetDefaultLayout(
+                              shape.element_type(), shape.dimensions()));
+      LOG_IF_EVERY_N_SEC(
+          WARNING, shape.has_layout() && shape.layout() != dst_shape.layout(),
+          0.1)
+          << "MakeCrossHostReceiveBuffers called with custom layout, "
+          << shape.layout()
+          << ", which will be ignored in favor of the default destination "
+             "device layout, "
+          << dst_shape.layout();
+    }
+    dst_shapes.push_back(dst_shape);
+    TF_ASSIGN_OR_RETURN(int64_t on_device_bytes_count,
+                        GetOnDeviceBytesCount(memory_space, dst_shape));
+    TF_ASSIGN_OR_RETURN(PjRtRawBufferRef raw_buffer,
+                        AllocateRawBuffer(memory_space, on_device_bytes_count,
+                                          /*retry_on_oom=*/true,
+                                          /*allocate_after=*/{}));
+
+    tsl::AsyncValue* buffer_av = raw_buffer->GetRawBufferAsyncValue();
+    transfer_dependency_avs.push_back(tsl::FormRef(buffer_av));
+    raw_buffers.push_back(std::move(raw_buffer));
+  }
+
+  TF_ASSIGN_OR_RETURN(
+      std::vector<PjRtDeviceEventRef> definition_events,
+      CrossHostReceiveBuffersInto(raw_buffers, std::move(notifier),
+                                  std::move(transfer_dependency_avs)));
+
+  std::vector<std::unique_ptr<PjRtBuffer>> buffers;
+  buffers.reserve(shapes.size());
+  for (int i = 0; i < raw_buffers.size(); ++i) {
+    CommonPjRtRawBuffer* common_raw_buffer =
+        absl::down_cast<CommonPjRtRawBuffer*>(raw_buffers[i].get());
+    TF_ASSIGN_OR_RETURN(
+        std::unique_ptr<PjRtBuffer> output_buffer,
+        DefineBuffer(std::move(dst_shapes[i]), memory_space,
+                     tsl::FormRef(common_raw_buffer), {definition_events[i]}));
+    buffers.push_back(std::move(output_buffer));
+  }
+  return buffers;
 }
 
 static std::unique_ptr<PjRtBuffer> CreateOutputLeafBuffer(
