@@ -1701,6 +1701,7 @@ xla_test(
         "//xla/hlo/testlib:pattern_matcher_gmock",
         "//xla/hlo/testlib:test",
         "//xla/service:hlo_module_config",
+        "//xla/service:hlo_verifier",
         "//xla/service:pattern_matcher",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:semantic_version",
