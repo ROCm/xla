@@ -1,5 +1,9 @@
 # PJRT C API changelog
 
+## 0.108
+
+*   Added use_major_to_minor_data_layout_for_callbacks to PJRT_ExecuteOptions.
+
 ## 0.107
 
 *   Added PJRT_Error_FunctionTable*.
