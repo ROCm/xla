@@ -81,9 +81,12 @@ TfrtGpuDevice::TfrtGpuDevice(Options&& options)
           tsl::MakeAvailableAsyncValueRef<GpuEvent>()),
       description_(options.id, local_device_id_.value(), options.process_index,
                    options.process_index_in_partition, options.partition_index,
-                   options.platform_version),
-      max_inflight_computations_semaphore_(
-          /*capacity=*/options.max_inflight_computations) {
+                   options.platform_version) {
+  if (options.max_inflight_computations.has_value()) {
+    max_inflight_computations_semaphore_.emplace(
+        *options.max_inflight_computations);
+  }
+
   std::vector<int64_t> v_coords(description_.coords().begin(),
                                 description_.coords().end());
 

@@ -18,6 +18,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string>
 
@@ -70,7 +71,7 @@ class TfrtGpuDevice final : public PjRtDevice {
     LocalDeviceId local_device_id;
     LocalChipId local_hardware_id;
     se::StreamExecutor* executor;
-    int max_inflight_computations;
+    std::optional<int> max_inflight_computations;
     std::string platform_version;
     std::string compute_capability;
     std::string device_vendor;
@@ -103,7 +104,7 @@ class TfrtGpuDevice final : public PjRtDevice {
   absl::Status TransferFromOutfeed(MutableBorrowingLiteral literal) override;
 
   // Returns the semaphore to control the max inflight computations.
-  Semaphore& max_inflight_computations_semaphore() {
+  std::optional<Semaphore>& max_inflight_computations_semaphore() {
     return max_inflight_computations_semaphore_;
   }
 
@@ -184,7 +185,7 @@ class TfrtGpuDevice final : public PjRtDevice {
 
   // Semaphore used to limit how many programs can be enqueued by the host
   // ahead of the device.
-  xla::Semaphore max_inflight_computations_semaphore_;
+  std::optional<xla::Semaphore> max_inflight_computations_semaphore_;
 };
 
 }  // namespace xla

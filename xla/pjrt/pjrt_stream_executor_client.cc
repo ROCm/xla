@@ -1744,15 +1744,16 @@ PjRtStreamExecutorRawLoadedExecutable::Execute(
   // allows the inputs for the next executable to be fetched even if the
   // launch is delayed.
   std::shared_ptr<Semaphore::ScopedReservation> compute_reservation;
-  {
-    Semaphore& compute_semaphore = device_state->compute_semaphore();
+  if (std::optional<Semaphore>& compute_semaphore =
+          device_state->compute_semaphore();
+      compute_semaphore.has_value()) {
     tsl::profiler::TraceMe traceme([&] {
       return absl::StrFormat("ComputeSemaphoreAcquire [capacity=%d, value=%d]",
-                             compute_semaphore.capacity(),
-                             compute_semaphore.value());
+                             compute_semaphore->capacity(),
+                             compute_semaphore->value());
     });
     compute_reservation = std::make_shared<Semaphore::ScopedReservation>(
-        compute_semaphore.ScopedAcquire(1));
+        compute_semaphore->ScopedAcquire(1));
   }
 
   // Compute the VA range index at scheduling time so the scheduling order

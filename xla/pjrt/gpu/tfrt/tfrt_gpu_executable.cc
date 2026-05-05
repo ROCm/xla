@@ -383,14 +383,16 @@ absl::StatusOr<PjRtLoadedExecutable::Result> TfrtGpuExecutable::ExecuteHelper(
   // allows the inputs for the next executable to be fetched even if the
   // launch is delayed.
   std::unique_ptr<Semaphore::ScopedReservation> compute_reservation;
-  {
+  if (std::optional<Semaphore>& semaphore =
+          device->max_inflight_computations_semaphore();
+      semaphore.has_value()) {
     tsl::profiler::TraceMe traceme_compute_reservation(
         "TfrtGpuExecutable::ExecuteHelper::acquire_semaphore");
 
     VLOG(1) << "Trying to acquire semaphore for " << name() << " on device "
             << device->DebugString();
     compute_reservation = std::make_unique<Semaphore::ScopedReservation>(
-        device->max_inflight_computations_semaphore().ScopedAcquire(1));
+        semaphore->ScopedAcquire(1));
     VLOG(1) << "Acquired semaphore for " << name() << " on device "
             << device->DebugString();
   }
