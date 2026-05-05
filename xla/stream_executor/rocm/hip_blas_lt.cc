@@ -871,6 +871,10 @@ void BlasLt::MatmulPlan::InitializeGroupedGemm(
       static_cast<void*>(default_ua.get()));
   activation_type_ = default_ua[0].activationType;
   bias_type_ = default_ua[0].biasType;
+  // Verify that act0 and act1 are 0 as they are forced to 0 in the userarg
+  // update kernels
+  CHECK_EQ(default_ua[0].act0, 0.0f);
+  CHECK_EQ(default_ua[0].act1, 0.0f);
 }
 
 absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetGroupedMatmulPlan(
