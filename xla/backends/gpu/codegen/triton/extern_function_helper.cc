@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/backends/gpu/codegen/triton/extern_function_helper.h"
 
+#include <optional>
 #include <string>
 #include <variant>
 
