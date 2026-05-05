@@ -1930,6 +1930,7 @@ cc_library(
         "//xla/stream_executor/gpu:all_reduce_kernel",
         "//xla/stream_executor/gpu:collective_kernel_metadata",
         "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:status_macros",
         "//xla/tsl/platform:statusor",
         "//xla/tsl/util:safe_reinterpret_cast",
         "@com_google_absl//absl/algorithm:container",
