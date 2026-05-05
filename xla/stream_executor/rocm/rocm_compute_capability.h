@@ -172,9 +172,13 @@ class RocmComputeCapability {
     return gfx9_mi100_or_later() || gfx12() || gfx11();
   }
 
-  bool has_packed_fp16_atomics_support() const { return gfx9_mi100_or_later(); }
+  bool has_packed_fp16_atomics_support() const {
+    return gfx9_mi100_or_later() || gfx12();
+  }
 
-  bool has_packed_bf16_atomics_support() const { return gfx9_mi300_series(); }
+  bool has_packed_bf16_atomics_support() const {
+    return gfx9_mi300_series() || gfx12();
+  }
 
   bool fence_before_barrier() const {
     static constexpr absl::string_view kList[] = {"gfx900", "gfx906"};
