@@ -1739,7 +1739,6 @@ xla_test(
         ":gemm_rewriter_test_lib",
         "//xla:error_spec",
         "//xla:xla_proto_cc",
-        "//xla/hlo/ir:hlo",
         "//xla/service:hlo_module_config",
         "//xla/stream_executor:semantic_version",
         "//xla/tests:hlo_pjrt_interpreter_reference_mixin",

@@ -1458,6 +1458,7 @@ cc_library(
     deps = [
         ":command",
         ":thunk",
+        ":thunk_proto_cc",
         ":traced_command",
         "//xla/runtime:buffer_use",
         "//xla/service:buffer_assignment",

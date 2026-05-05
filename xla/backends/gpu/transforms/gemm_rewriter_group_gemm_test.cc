@@ -14,11 +14,11 @@ limitations under the License.
 ==============================================================================*/
 
 #include <memory>
+#include <utility>
 
 #include <gtest/gtest.h>
 #include "xla/backends/gpu/transforms/gemm_rewriter_test_lib.h"
 #include "xla/error_spec.h"
-#include "xla/hlo/ir/hlo_module.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/stream_executor/semantic_version.h"
 #include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"

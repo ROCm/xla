@@ -570,8 +570,9 @@ bool IsTf32Allowed(PrecisionConfig::Algorithm algorithm,
     return Internal(
         "A single group dimension is expected for rhs when the ragged "
         "dimension is in the non-contracting dimension.");
-  } else if ((ragged_mode != se::gpu::RaggedDotMode::kRaggedNonContracting) &&
-             (rhs_group_dimensions.size() != 0)) {
+  }
+  if ((ragged_mode != se::gpu::RaggedDotMode::kRaggedNonContracting) &&
+      !rhs_group_dimensions.empty()) {
     return Internal(
         "No group dimension is expected for rhs when the ragged dimension is "
         "in the contracting or the batch dimensions.");
@@ -581,14 +582,17 @@ bool IsTf32Allowed(PrecisionConfig::Algorithm algorithm,
   uint64_t k = lhs_shape.dimensions(lhs_col_dims[0]);
   uint64_t n = rhs_shape.dimensions(rhs_col_dims[0]);
   int64_t leading_dim_a = lhs_row_dims[0];
-  if (lhs_layout.order == se::gpu::MatrixLayout::Order::kColumnMajor)
+  if (lhs_layout.order == se::gpu::MatrixLayout::Order::kColumnMajor) {
     leading_dim_a = lhs_col_dims[0];
+  }
   int64_t leading_dim_b = rhs_row_dims[0];
-  if (rhs_layout.order == se::gpu::MatrixLayout::Order::kColumnMajor)
+  if (rhs_layout.order == se::gpu::MatrixLayout::Order::kColumnMajor) {
     leading_dim_b = rhs_col_dims[0];
+  }
   int64_t leading_dim_d = output_row_dims[0];
-  if (output_layout.order == se::gpu::MatrixLayout::Order::kColumnMajor)
+  if (output_layout.order == se::gpu::MatrixLayout::Order::kColumnMajor) {
     leading_dim_d = output_col_dims[0];
+  }
 
   uint64_t batch_count = lhs_layout.batch_size;
   int64_t input_stride_ragged_dim = (lhs_ragged_dimension == leading_dim_a)

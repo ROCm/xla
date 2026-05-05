@@ -21,6 +21,7 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -31,10 +32,13 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
 #include "xla/shape.h"
+#include "xla/status_macros.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.pb.h"
+#include "xla/stream_executor/scratch_allocator.h"
+#include "xla/stream_executor/stream.h"
 #include "xla/types.h"
 #include "xla/xla_data.pb.h"
 
@@ -352,8 +356,8 @@ struct BlasLt {
     // returned in the order of increasing estimated compute time according to
     // an internal heuristic.
     virtual absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
-        const Stream* stream, size_t max_algorithm_count = 128,
-        size_t max_workspace_size = 1ll << 32) const = 0;
+        const Stream* stream, size_t max_algorithm_count,
+        size_t max_workspace_size) const = 0;
 
     // Algorithm must to be set before calling ExecuteOnStream function(s).
     // Usually, we call ExecuteOnStream with the same algorithm ID, hence using
@@ -383,7 +387,7 @@ struct BlasLt {
                                                      Epilogue epilogue);
 
   static absl::StatusOr<MatmulPlanPtr> GetGroupedMatmulPlan(
-      const Stream* stream, gpu::GroupedGemmConfig& config, Epilogue epilogue);
+      const Stream* stream, gpu::GroupedGemmConfig& cfg, Epilogue epilogue);
 
   absl::StatusOr<MatmulPlan*> GetOrCreateMatmulPlan(const std::string& key,
                                                     PlanCreateFunc create);

@@ -230,6 +230,7 @@ std::vector<xla::BlasLtEpilogueProto> EnumerateBlasLtEpilogueProtoValues() {
   const google::protobuf::EnumDescriptor* descriptor =
       xla::BlasLtEpilogueProto_descriptor();
   std::vector<xla::BlasLtEpilogueProto> values;
+  values.reserve(descriptor->value_count());
   for (int i = 0; i < descriptor->value_count(); ++i) {
     values.push_back(
         static_cast<xla::BlasLtEpilogueProto>(descriptor->value(i)->number()));
@@ -283,6 +284,7 @@ std::vector<xla::RaggedDotModeProto> EnumerateRaggedDotModeValues() {
   const google::protobuf::EnumDescriptor* descriptor =
       xla::RaggedDotModeProto_descriptor();
   std::vector<xla::RaggedDotModeProto> values;
+  values.reserve(descriptor->value_count());
   for (int i = 0; i < descriptor->value_count(); ++i) {
     values.push_back(
         static_cast<xla::RaggedDotModeProto>(descriptor->value(i)->number()));

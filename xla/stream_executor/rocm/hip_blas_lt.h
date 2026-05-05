@@ -131,8 +131,8 @@ class BlasLt : public gpu::BlasLt {
         blas::ProfileResult* profile_result) const override;
 
     absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
-        const Stream* stream, size_t max_algorithm_count,
-        size_t max_workspace_size) const override;
+        const Stream* stream, size_t max_algorithm_count = 128,
+        size_t max_workspace_size = 1ll << 32) const override;
 
     absl::Status SetAlgorithm(const MatmulAlgorithm& algorithm) override {
       algorithm_ = algorithm;

@@ -582,7 +582,8 @@ uint32_t CountFinalUsers(const HloInstruction* instr) {
 GemmBackendConfig& GetMutableGemmBackendConfig(GpuBackendConfig& gpu_config) {
   if (gpu_config.has_gemm_backend_config()) {
     return *gpu_config.mutable_gemm_backend_config();
-  } else if (gpu_config.has_grouped_gemm_backend_config()) {
+  }
+  if (gpu_config.has_grouped_gemm_backend_config()) {
     return *gpu_config.mutable_grouped_gemm_backend_config()
                 ->mutable_gemm_backend_config();
   }
@@ -596,7 +597,8 @@ const GemmBackendConfig* GetGemmBackendConfig(
     const GpuBackendConfig& gpu_config) {
   if (gpu_config.has_gemm_backend_config()) {
     return &gpu_config.gemm_backend_config();
-  } else if (gpu_config.has_grouped_gemm_backend_config()) {
+  }
+  if (gpu_config.has_grouped_gemm_backend_config()) {
     return &gpu_config.grouped_gemm_backend_config().gemm_backend_config();
   }
   return nullptr;
@@ -2873,6 +2875,7 @@ class GemmWorkspaceRewriteVisitor : public DfsHloRewriteVisitor {
       auto original_aliasing = instr->output_operand_aliasing();
       std::vector<std::pair<ShapeIndex, std::pair<int64_t, ShapeIndex>>>
           new_aliasing;
+      new_aliasing.reserve(original_aliasing.size());
       for (const auto& alias : original_aliasing) {
         new_aliasing.push_back({ShapeIndex{0}, alias.second});
       }
@@ -2890,11 +2893,10 @@ class GemmWorkspaceRewriteVisitor : public DfsHloRewriteVisitor {
         TF_RETURN_IF_ERROR(ReplaceInstruction(user_get_tuple, get_output));
       }
       return absl::OkStatus();
-    } else {
-      HloInstruction* get_output = instr->AddInstruction(
-          HloInstruction::CreateGetTupleElement(new_call, 0));
-      return ReplaceInstruction(instr, get_output);
     }
+    HloInstruction* get_output = instr->AddInstruction(
+        HloInstruction::CreateGetTupleElement(new_call, 0));
+    return ReplaceInstruction(instr, get_output);
   }
 
  private:

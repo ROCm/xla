@@ -184,7 +184,7 @@ struct GroupedGemmConfig : public se::gpu::GroupedGemmConfig {
       uint64_t group_count, const se::GpuComputeCapability& gpu_version);
 
   static absl::StatusOr<GroupedGemmConfig> For(
-      const HloInstruction* groupe_gemm,
+      const HloInstruction* grouped_gemm,
       const se::GpuComputeCapability& gpu_version);
 };
 
