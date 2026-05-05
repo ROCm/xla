@@ -289,6 +289,8 @@ message CustomKernelThunkProto {
   repeated bool written = 2;
   CustomKernelProto custom_kernel = 3;
   bool use_pdl = 4;
+  repeated int64 zeroed_output_buffer_indices = 5;
+  optional stream_executor.gpu.TmaMetadataProto tma_metadata = 6;
 }
 
 message AllGatherThunkProto {
