@@ -166,6 +166,9 @@ absl::StatusOr<xla::Shape> CommonPjRtClient::GetCopyDestinationShape(
         "GetCopyDestinationShape not supported %s -> %s",
         src_memory_space->ToString(), dst_memory_space->ToString()));
   }
+  if (shape.IsToken()) {
+    return shape;
+  }
   return other_client->MakeDefaultShapeForMemorySpace(
       dst_memory_space,
       xla::ShapeUtil::MakeShapeWithDescendingLayout(shape.element_type(),
@@ -325,8 +328,12 @@ CommonPjRtClient::BufferFromHostBuffer(
     HostBufferSemantics host_buffer_semantics,
     absl::AnyInvocable<void() &&> on_done_with_host_buffer,
     PjRtMemorySpace* memory_space, const Layout* device_layout) {
-  TF_ASSIGN_OR_RETURN(const Shape shape,
-                      ShapeUtil::MakeValidatedShape(type, dims));
+  Shape shape;
+  if (type == TOKEN) {
+    shape = ShapeUtil::MakeTokenShape();
+  } else {
+    TF_ASSIGN_OR_RETURN(shape, ShapeUtil::MakeValidatedShape(type, dims));
+  }
   TF_ASSIGN_OR_RETURN(
       Shape device_shape,
       MakeDefaultShapeForMemorySpace(memory_space, shape, device_layout));
@@ -488,28 +495,30 @@ CommonPjRtClient::CreateViewOfDeviceBuffer(
 absl::StatusOr<xla::Shape> CommonPjRtClient::MakeDefaultShapeForMemorySpace(
     PjRtMemorySpace* memory_space, xla::Shape shape,
     const xla::Layout* layout) const {
-  if (layout) {
-    *shape.mutable_layout() = *layout;
-    if (primitive_util::IsSubByteNonPredType(shape.element_type())) {
+  if (!shape.IsToken()) {
+    if (layout) {
+      *shape.mutable_layout() = *layout;
+      if (primitive_util::IsSubByteNonPredType(shape.element_type())) {
+        TF_ASSIGN_OR_RETURN(
+            xla::Layout default_layout,
+            (*GetTopologyDescription())
+                ->GetDefaultLayout(shape.element_type(), shape.dimensions()));
+        if (default_layout.element_size_in_bits() !=
+            shape.layout().element_size_in_bits()) {
+          return InvalidArgument(
+              "Device buffers require %d bits per element for an element type "
+              "%s, but got layout %s for shape %s",
+              default_layout.element_size_in_bits(),
+              PrimitiveType_Name(shape.element_type()), layout->ToString(),
+              shape.ToString());
+        }
+      }
+    } else {
       TF_ASSIGN_OR_RETURN(
-          xla::Layout default_layout,
+          *shape.mutable_layout(),
           (*GetTopologyDescription())
               ->GetDefaultLayout(shape.element_type(), shape.dimensions()));
-      if (default_layout.element_size_in_bits() !=
-          shape.layout().element_size_in_bits()) {
-        return InvalidArgument(
-            "Device buffers require %d bits per element for an element type "
-            "%s, but got layout %s for shape %s",
-            default_layout.element_size_in_bits(),
-            PrimitiveType_Name(shape.element_type()), layout->ToString(),
-            shape.ToString());
-      }
     }
-  } else {
-    TF_ASSIGN_OR_RETURN(
-        *shape.mutable_layout(),
-        (*GetTopologyDescription())
-            ->GetDefaultLayout(shape.element_type(), shape.dimensions()));
   }
   return shape;
 }
@@ -1936,8 +1945,11 @@ CommonPjRtBufferImpl::CopyToMemorySpaceSyncThroughLiteral(
 absl::StatusOr<std::unique_ptr<PjRtBuffer>>
 CommonPjRtBufferImpl::CopyToMemorySpaceFallbackThroughLiteral(
     PjRtMemorySpace* dst_memory_space) {
-  Shape shape = ShapeUtil::MakeShapeWithDescendingLayout(
-      on_device_shape().element_type(), on_device_shape().dimensions());
+  Shape shape = on_device_shape().IsToken()
+                    ? on_device_shape()
+                    : ShapeUtil::MakeShapeWithDescendingLayout(
+                          on_device_shape().element_type(),
+                          on_device_shape().dimensions());
   TF_ASSIGN_OR_RETURN(
       auto manager,
       dst_memory_space->client()->CreateBuffersForAsyncHostToDevice(

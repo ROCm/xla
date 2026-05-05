@@ -164,9 +164,10 @@ absl::StatusOr<PjRtDeviceEventRef> CpuRawBuffer::CopyFromLiteral(
   async_work_runner->Execute([literal, layout, event, buffer = buffer_]() {
     CHECK(buffer.IsConcrete());
     const xla::Shape& shape = literal.shape();
-    if ((!shape.has_layout() &&
-         !xla::LayoutUtil::IsMonotonicWithDim0Major(layout)) ||
-        shape.layout() != layout) {
+    if (shape.IsToken()) {
+    } else if ((!shape.has_layout() &&
+                !xla::LayoutUtil::IsMonotonicWithDim0Major(layout)) ||
+               shape.layout() != layout) {
       auto shape_copy = xla::ShapeUtil::MakeShape(
           literal.shape().element_type(), literal.shape().dimensions());
       shape_copy.mutable_layout()->mutable_minor_to_major()->assign(

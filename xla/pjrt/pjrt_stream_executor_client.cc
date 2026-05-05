@@ -376,6 +376,10 @@ PjRtStreamExecutorClient::GetDefaultDeviceAssignment(int num_replicas,
 
 absl::StatusOr<Layout> PjRtStreamExecutorClient::GetDefaultLayout(
     PrimitiveType element_type, absl::Span<const int64_t> dims) {
+  if (!primitive_util::IsArrayType(element_type)) {
+    return InvalidArgument("Element type %s does not support layout",
+                           PrimitiveType_Name(element_type));
+  }
   Shape shape = ShapeUtil::MakeShape(element_type, dims);
   TF_ASSIGN_OR_RETURN(
       shape,
@@ -890,45 +894,49 @@ absl::StatusOr<PjRtDeviceEventRef> PjRtStreamExecutorClient::LinearizeInto(
   BufferSequencingEventRef event =
       BufferSequencingEvent::Create(async_work_runner());
   TF_RETURN_IF_ERROR(WaitForAllocation(copy_stream, *raw_buffer));
-  auto on_device_shape = device_shape;
 
-  TransferManager* transfer_manager = client()->backend().transfer_manager();
+  if (literal.shape().IsToken()) {
+    event.SetStateConcrete();
+  } else {
+    TransferManager* transfer_manager = client()->backend().transfer_manager();
 
-  // The host to device transfer is performed on a thread pool, mostly because
-  // it includes linearization that may be slow.
-  // TODO(misard) assess if it would be preferable to introduce a heuristic to
-  // put the transfer into the calling thread for small literals.
-  auto transfer_h2d = [this, local_client = client(), transfer_manager,
-                       local_device, raw_buffer, device, event, literal,
-                       on_device_shape = std::move(on_device_shape)]() mutable {
-    // This function uses CHECK_OK and value() since we have no way
-    // to report failures from a callback. However, the operations here are
-    // unlikely to fail and not recoverable even if we were to fail: DMAs to
-    // memory that has already been allocated, and a possible Event
-    // allocation.
-    auto device_memory =
-        tensorflow::down_cast<PjRtStreamExecutorRawBuffer*>(raw_buffer.get())
-            ->device_buffer();
+    // The host to device transfer is performed on a thread pool, mostly because
+    // it includes linearization that may be slow.
+    // TODO(misard) assess if it would be preferable to introduce a heuristic to
+    // put the transfer into the calling thread for small literals.
+    auto transfer_h2d = [this, local_client = client(), transfer_manager,
+                         local_device, raw_buffer, device, event, literal,
+                         on_device_shape = device_shape]() mutable {
+      // This function uses CHECK_OK and value() since we have no way
+      // to report failures from a callback. However, the operations here are
+      // unlikely to fail and not recoverable even if we were to fail: DMAs to
+      // memory that has already been allocated, and a possible Event
+      // allocation.
+      auto device_memory =
+          tensorflow::down_cast<PjRtStreamExecutorRawBuffer*>(raw_buffer.get())
+              ->device_buffer();
 
-    se::Stream* h2d_stream = local_device->host_to_device_stream();
+      se::Stream* h2d_stream = local_device->host_to_device_stream();
 
-    ShapedBuffer buffer =
-        device_memory->AsShapedBuffer(device, on_device_shape);
-    CHECK_OK(transfer_manager->TransferLiteralToDeviceAsync(h2d_stream, literal,
-                                                            buffer));
+      ShapedBuffer buffer =
+          device_memory->AsShapedBuffer(device, on_device_shape);
+      CHECK_OK(transfer_manager->TransferLiteralToDeviceAsync(h2d_stream,
+                                                              literal, buffer));
 
-    CHECK_OK(AddDestinationBufferSynchronization(this, local_device, event,
-                                                 h2d_stream));
+      CHECK_OK(AddDestinationBufferSynchronization(this, local_device, event,
+                                                   h2d_stream));
 
-    local_device->ThenRelease(h2d_stream, device_memory).IgnoreError();
+      local_device->ThenRelease(h2d_stream, device_memory).IgnoreError();
 
-    // This can sometimes catch the case where the literal memory has been
-    // freed before the H2D transfer was issued.
-    h2d_stream->RefreshStatus()
-        .IgnoreError();  // Can return error::Unimplemented
-    QCHECK(h2d_stream->ok());
-  };
-  async_work_runner()->Schedule(WrapClosureAsCopyable(std::move(transfer_h2d)));
+      // This can sometimes catch the case where the literal memory has been
+      // freed before the H2D transfer was issued.
+      h2d_stream->RefreshStatus()
+          .IgnoreError();  // Can return error::Unimplemented
+      QCHECK(h2d_stream->ok());
+    };
+    async_work_runner()->Schedule(
+        WrapClosureAsCopyable(std::move(transfer_h2d)));
+  }
   return PjRtDeviceEventRef(event);
 }
 
