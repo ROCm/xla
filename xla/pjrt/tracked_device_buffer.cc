@@ -16,7 +16,6 @@ limitations under the License.
 #include "xla/pjrt/tracked_device_buffer.h"
 
 #include <cstddef>
-#include <iterator>
 #include <limits>
 #include <memory>
 #include <utility>
