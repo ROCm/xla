@@ -27,6 +27,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/base/attributes.h"
+#include "absl/base/nullability.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/functional/any_invocable.h"
@@ -207,9 +208,6 @@ class CommonPjRtClient : public PjRtClient {
     LOG(FATAL) << "Implement";
   }
 
-  virtual absl::StatusOr<std::unique_ptr<PjRtDeviceEventSet>>
-  CreateUsageEventSet(PjRtMemorySpace* memory_space) const;
-
   tsl::Future<> MakeTrackedReadyFuture(PjRtDeviceEventPtr device_event,
                                        PjRtMemorySpace* memory_space,
                                        const char* callee_type,
@@ -235,6 +233,7 @@ class CommonPjRtClient : public PjRtClient {
       PjRtMemorySpace* dst_memory_space);
 
   virtual bool IsOnCpu(PjRtMemorySpace* memory_space) { return false; }
+  virtual bool use_stream_based_compaction() const { return false; }
 
   absl::StatusOr<std::unique_ptr<PjRtBuffer>> BufferFromHostBuffer(
       const void* data, PrimitiveType type, absl::Span<int64_t const> dims,
@@ -310,6 +309,25 @@ class CommonPjRtClient : public PjRtClient {
       tsl::RCReference<PjRtDeviceEventPromise> usage_event_promise,
       Future<std::string> serialized_descriptor,
       PjRtBuffer::RemoteSendCallback on_done);
+
+  absl::StatusOr<std::vector<std::unique_ptr<PjRtBuffer>>>
+  MakeCrossHostReceiveBuffers(absl::Span<const Shape> shapes,
+                              PjRtDevice* absl_nonnull device,
+                              PjRtCrossHostRecvNotifier notifier) override;
+
+  // Similar to PjRtClient::MakeCrossHostReceiveBuffers, but uses PjRtRawBuffer
+  // instead of PjRtBuffer.
+  // Takes raw buffers, a notifier, and the transfer dependency AVs that must
+  // be ready before the receive can complete. Returns a vector of definition
+  // events that will be fulfilled once the receive operation completes.
+  virtual absl::StatusOr<std::vector<PjRtDeviceEventRef>>
+  CrossHostReceiveBuffersInto(
+      absl::Span<const tsl::RCReference<PjRtRawBuffer>> buffers,
+      PjRtCrossHostRecvNotifier notifier,
+      std::vector<tsl::RCReference<tsl::AsyncValue>> transfer_dependency_avs) {
+    return absl::UnimplementedError(
+        "CrossHostReceiveBuffersInto is not implemented.");
+  }
 
   static absl::Status PrepareArguments(
       const ExecuteOptions& options,

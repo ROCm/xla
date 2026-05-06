@@ -125,6 +125,7 @@ cc_library(
         ":device_event",
         ":host_callback",
         ":pjrt_client",
+        ":pjrt_compiler",
         ":pjrt_executable",
         ":raw_buffer",
         ":transpose",
@@ -144,6 +145,7 @@ cc_library(
         "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:inlined_vector",
@@ -245,6 +247,7 @@ cc_library(
     ],
     deps = [
         ":async_work_runner",
+        ":device_event",
         ":event_pool",
         ":pjrt_common",
         ":semaphore",
@@ -1408,8 +1411,14 @@ cc_library(
 
 cc_library(
     name = "device_event",
-    srcs = ["device_event.cc"],
-    hdrs = ["device_event.h"],
+    srcs = [
+        "device_event.cc",
+        "device_event_utils.cc",
+    ],
+    hdrs = [
+        "device_event.h",
+        "device_event_utils.h",
+    ],
     visibility = internal_visibility([":friends"]),
     deps = [
         "//xla:future",
@@ -1417,11 +1426,26 @@ cc_library(
         "//xla/pjrt/c:pjrt_c_api_hdrs",
         "//xla/pjrt/c:pjrt_c_api_status_utils",
         "//xla/tsl/concurrency:async_value",
+        "//xla/tsl/concurrency:executor",
         "//xla/tsl/concurrency:ref_count",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "device_event_utils_test",
+    srcs = ["device_event_utils_test.cc"],
+    deps = [
+        ":device_event",
+        "//xla/tsl/concurrency:async_value",
+        "//xla/tsl/concurrency:executor",
+        "//xla/tsl/concurrency:future",
+        "//xla/tsl/concurrency:ref_count",
+        "@com_google_absl//absl/status",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 

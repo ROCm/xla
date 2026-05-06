@@ -2296,6 +2296,12 @@ PJRT_Error* PJRT_LoadedExecutable_Execute(
         args->options->multi_slice_config->config.get();
   }
   options.use_major_to_minor_data_layout_for_callbacks = true;
+  if (args->options->struct_size >=
+      PJRT_STRUCT_SIZE(PJRT_ExecuteOptions,
+                       use_major_to_minor_data_layout_for_callbacks)) {
+    options.use_major_to_minor_data_layout_for_callbacks =
+        args->options->use_major_to_minor_data_layout_for_callbacks;
+  }
   if (args->options->num_non_donatable_input_indices > 0) {
     for (int i = 0; i < args->options->num_non_donatable_input_indices; ++i) {
       options.non_donatable_input_indices.insert(

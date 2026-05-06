@@ -15,7 +15,6 @@ limitations under the License.
 
 #include "xla/codegen/tiling/experimental/tiled_hlo.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -25,7 +24,6 @@ limitations under the License.
 #include <sstream>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "absl/algorithm/container.h"

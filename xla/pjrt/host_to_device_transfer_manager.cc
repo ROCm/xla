@@ -120,8 +120,10 @@ class CommonAsyncHostToDeviceTransferManager
           Shape device_shape,
           client->MakeDefaultShapeForMemorySpace(
               memory_space,
-              xla::ShapeUtil::MakeShape(shape_spec.element_type,
-                                        shape_spec.dims),
+              shape_spec.element_type == xla::TOKEN
+                  ? xla::ShapeUtil::MakeTokenShape()
+                  : xla::ShapeUtil::MakeShape(shape_spec.element_type,
+                                              shape_spec.dims),
               device_layouts.has_value() && (*device_layouts)[i].has_value()
                   ? &(*(*device_layouts)[i])
                   : nullptr));

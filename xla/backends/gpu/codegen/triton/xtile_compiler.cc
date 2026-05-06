@@ -609,6 +609,8 @@ absl::Status LowerXTileToTriton(
     pm.addPass(xtile::createConvertElementwise0DTensorToScalarPass());
     pm.addPass(mlir::triton::xla::CreateArithFP8ConversionToTritonPass());
     pm.addPass(mlir::triton::xla::CreateXTileLowerToTritonPass());
+    pm.addPass(
+        mlir::triton::xla::CreateTritonXLAFoldReshapeAroundForLoopPass());
 
     std::string libdevice_path =
         GetLibdevicePath(fusion.GetModule()->config(), device_info);

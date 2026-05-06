@@ -81,6 +81,7 @@ xla_cc_test(
     deps = [
         ":reshape_analysis",
         "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
         "//xla/tsl/platform:test_main",
         "@com_google_googletest//:gtest",
     ],
@@ -123,6 +124,7 @@ xla_cc_test(
         ":tile",
         ":tile_propagation",
         "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
         "//xla/hlo/analysis:indexing_test_utils",
         "//xla/hlo/analysis:symbolic_map",
         "//xla/hlo/ir:hlo",

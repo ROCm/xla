@@ -159,6 +159,10 @@ bool IsMosaicWithNvshmem(const HloInstruction& hlo);
 // with multimem.
 bool IsMosaicWithMultimem(const HloInstruction& hlo);
 
+// Returns true if `hlo` will be implemented as a call to a Mosaic GPU kernel
+// with collective metadata.
+bool IsMosaicWithCollectiveMetadata(const HloInstruction& hlo);
+
 // Returns true if instruction is a Mosaic GPU collective instruction.
 bool IsCollectiveMosaicGpuInstruction(const HloInstruction& hlo);
 

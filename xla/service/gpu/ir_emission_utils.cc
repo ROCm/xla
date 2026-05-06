@@ -70,6 +70,7 @@ limitations under the License.
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/protobuf.h"
+#include "tsl/platform/regexp.h"
 
 namespace xla {
 namespace gpu {
@@ -177,6 +178,12 @@ bool IsMosaicWithMultimem(const HloInstruction& hlo) {
   return IsCustomCallToMosaicGpu(hlo) &&
          absl::StrContains(hlo.raw_backend_config_string(),
                            "multimem_parameters");
+}
+
+bool IsMosaicWithCollectiveMetadata(const HloInstruction& hlo) {
+  return IsCustomCallToMosaicGpu(hlo) &&
+         RE2::PartialMatch(hlo.raw_backend_config_string(),
+                           "uses_xla_collective_metadata\\s*=\\s*[tT]rue");
 }
 
 bool IsCollectiveMosaicGpuInstruction(const HloInstruction& hlo) {

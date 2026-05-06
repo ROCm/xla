@@ -119,16 +119,16 @@ cc_library(
     name = "rocm_rpath",
     linkopts = select({
         ":build_hermetic": [
-            "-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib",
+            "-Wl,-rpath,external/%{rocm_repo_name}/rocm/%{rocm_root}/lib",
         ],
         ":link_only": [
         ],
         ":multiple_rocm_paths": [
-            "-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib",
+            "-Wl,-rpath,external/%{rocm_repo_name}/rocm/%{rocm_root}/lib",
             "-Wl,-rpath=%{rocm_lib_paths}",
         ],
         "//conditions:default": [
-            "-Wl,-rpath,external/local_config_rocm/rocm/%{rocm_root}/lib",
+            "-Wl,-rpath,external/%{rocm_repo_name}/rocm/%{rocm_root}/lib",
             "-Wl,-rpath,/opt/rocm/lib",
         ],
     }),
