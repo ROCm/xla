@@ -753,7 +753,7 @@ absl::Status BlasLt::MatmulPlan::ExecuteRegularMatmul(
   return xla::Internal("Unexpected dtype");
 }
 
-void BlasLt::MatmulPlan::InitializeGroupedGemm(
+absl::Status BlasLt::MatmulPlan::InitializeGroupedGemm(
     hipblasLtHandle_t blas_lt_handle, blas::ComputationType compute_type) {
   auto batch_stride_a = (cfg_->m * cfg_->k);
   auto batch_stride_b = (cfg_->n * cfg_->k);
@@ -807,10 +807,8 @@ void BlasLt::MatmulPlan::InitializeGroupedGemm(
   std::vector<hipblaslt_ext::GemmInputs> inputs(cfg_->group_count);
 
   // Convert the epilogue from the stored member variable
-  auto hip_epilogue = AsHipblasLtEpilogue(grouped_gemm_epilogue_);
-  if (!hip_epilogue.ok()) {
-    LOG(FATAL) << "Failed to convert epilogue: " << hip_epilogue.status();
-  }
+  TF_ASSIGN_OR_RETURN(auto hip_epilogue,
+                      AsHipblasLtEpilogue(grouped_gemm_epilogue_));
 
   float salpha = cfg_->alpha.real();
   float sbeta = cfg_->beta;
@@ -818,7 +816,7 @@ void BlasLt::MatmulPlan::InitializeGroupedGemm(
   static void* dummy_bias = reinterpret_cast<void*>(~0ULL);
 
   for (int64_t i = 0; i < cfg_->group_count; i++) {
-    epilogue[i].setMode(*hip_epilogue);
+    epilogue[i].setMode(hip_epilogue);
     // Set bias data type and dummy bias pointer for bias epilogues
     if (grouped_gemm_epilogue_ == Epilogue::kBias ||
         grouped_gemm_epilogue_ == Epilogue::kBiasThenReLU ||
@@ -844,13 +842,9 @@ void BlasLt::MatmulPlan::InitializeGroupedGemm(
   // Note that Matrices given to HipBlasLt Group-Gemm
   // are expected to be in COLUMN-MAJOR order.
 
-  auto status = grouped_gemm_->setProblem(
+  SE_HIPBLAS_RETURN_IF_ERROR(grouped_gemm_->setProblem(
       v_m, v_n, v_k, v_batch_count, v_lda, v_ldb, v_ldc, v_ldd, v_strideA,
-      v_strideB, v_strideC, v_strideD, epilogue, inputs, problem);
-
-  if (status != HIPBLAS_STATUS_SUCCESS) {
-    LOG(FATAL) << "Failed to set problem for grouped GEMM: " << status;
-  }
+      v_strideB, v_strideC, v_strideD, epilogue, inputs, problem));
 
   // UserArgument is expecting specific code for activation and bias types.
   // These are defined by the hipBLASLt library during the problem
@@ -869,12 +863,20 @@ void BlasLt::MatmulPlan::InitializeGroupedGemm(
       std::make_unique<hipblaslt_ext::UserArguments[]>(cfg_->group_count);
   grouped_gemm_->getDefaultValueForDeviceUserArguments(
       static_cast<void*>(default_ua.get()));
+  // The ragged-dot API enforce that activation and bias types are the same
+  // for all the gemm operations.
+  // We can therefore only retrieve/verify value of the first gemm op.
   activation_type_ = default_ua[0].activationType;
   bias_type_ = default_ua[0].biasType;
   // Verify that act0 and act1 are 0 as they are forced to 0 in the userarg
   // update kernels
-  CHECK_EQ(default_ua[0].act0, 0.0f);
-  CHECK_EQ(default_ua[0].act1, 0.0f);
+  TF_RET_CHECK(default_ua[0].act0 == 0.0f)
+      << "Expected act0 == 0 in hipBLASLt default UserArguments, got "
+      << default_ua[0].act0;
+  TF_RET_CHECK(default_ua[0].act1 == 0.0f)
+      << "Expected act1 == 0 in hipBLASLt default UserArguments, got "
+      << default_ua[0].act1;
+  return absl::OkStatus();
 }
 
 absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetGroupedMatmulPlan(
@@ -903,9 +905,11 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetGroupedMatmulPlan(
     blas_lt_handle = blas_lt_.get();
   }
 
-  auto plan =
-      std::make_unique<MatmulPlan>(std::move(cfg), cfg.must_swap_operands,
-                                   blas_lt_handle, *compute_type, epilogue);
+  const bool must_swap_operands = cfg.must_swap_operands;
+  auto plan = std::make_unique<MatmulPlan>(std::move(cfg), must_swap_operands,
+                                           epilogue);
+  TF_RETURN_IF_ERROR(
+      plan->InitializeGroupedGemm(blas_lt_handle, *compute_type));
 
   return absl::StatusOr<MatmulPlanPtr>(std::move(plan));
 }

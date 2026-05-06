@@ -1913,6 +1913,11 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
                                           gemm->operands().end());
     HloInstruction* maybe_constant_folded_bias = MaybeConstantFoldBias(bias);
     if (bitcast) {
+      // The layout-normalization pass might add a bitcast operation
+      // when the matrix bias is transposed.
+      // We could therefore have a bitcast op but no slice op.
+      // Consequently, we need to check if we have a slice op
+      // before accessing its shape.
       const Shape& target_shape = slice ? slice->shape() : gemm->shape();
       maybe_constant_folded_bias =
           instr->AddInstruction(HloInstruction::CreateBitcast(
@@ -1922,16 +1927,20 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     maybe_constant_folded_bias =
         PadOperandToTargetShape(gemm->shape(), maybe_constant_folded_bias);
 
-    // For grouped GEMM, append bias as the last operand (after group_sizes)
-    // For regular GEMM, insert at position 2 (before any other operands)
+    // For grouped GEMM the operand layout is fixed as:
+    //   [lhs, rhs, group_sizes, matrix_bias?, vector_bias?]
+    // Matrix bias is always at index 3 so that the ordering is stable
+    // regardless of which epilogue (matrix vs vector bias) gets fused first.
+    // Inserting at position 3 shifts any already-fused vector bias to index 4.
+    // For regular GEMM, insert at position 2 (before any other operands).
     bool is_grouped_gemm =
         gemm->custom_call_target() == kCublasLtGroupedMatmulCallTarget;
 
     // Save the bias index (for aliasing)
     int bias_operand_index;
     if (is_grouped_gemm) {
-      bias_operand_index = operands.size();
-      operands.push_back(maybe_constant_folded_bias);
+      bias_operand_index = 3;
+      operands.insert(operands.begin() + 3, maybe_constant_folded_bias);
     } else {
       bias_operand_index = 2;
       operands.insert(operands.begin() + 2, maybe_constant_folded_bias);
@@ -2018,7 +2027,6 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     if (is_grouped_gemm && gpu_config.has_grouped_gemm_backend_config()) {
       const auto& ragged_dims = gpu_config.grouped_gemm_backend_config()
                                     .ragged_dot_dimension_numbers();
-      // Subtract group dimensions from num_col_dims
       num_col_dims -= ragged_dims.rhs_group_dimensions_size();
 
       // hipBLASLt grouped GEMM does not correctly handle vector bias with batch
@@ -2196,7 +2204,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
     // For grouped GEMM (Hipblaslt), aux output is not supported yet.
     // Do not fuse activation if aux output is required.
-    if (has_aux && IsCublasLtGroupedMatmul(*gemm)) {
+    if (has_aux && IsCublasLtGroupedMatmul(*gemm) && gpu_version_.IsRocm()) {
       return absl::OkStatus();
     }
 
@@ -2278,7 +2286,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
 
     // For grouped GEMM (Hipblaslt), aux output is not supported yet.
     // Do not fuse activation if aux output is required.
-    if (has_aux && IsCublasLtGroupedMatmul(*gemm)) {
+    if (has_aux && IsCublasLtGroupedMatmul(*gemm) && gpu_version_.IsRocm()) {
       return absl::OkStatus();
     }
 

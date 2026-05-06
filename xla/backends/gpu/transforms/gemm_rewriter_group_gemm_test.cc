@@ -1376,6 +1376,84 @@ ENTRY test {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
 }
 
+// Tests that when both a vector bias and a matrix bias are present they are
+// always fused in a deterministic operand order, regardless of which `add`
+// appears first in the HLO tree.
+//
+// The expected custom-call operand layout for grouped GEMM is:
+//   [lhs, rhs, group_sizes, matrix_bias, vector_bias]
+//
+// Case 1: vector bias is the inner add, matrix bias is the outer add.
+// Before the fix this produced the reversed order
+// (custom-call(..., vector_bias, matrix_bias)).
+TEST_F(GroupedGemmRewriteTest, GroupedGemmVectorAndMatrixBiasVectorBiasFirst) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmVectorAndMatrixBiasVectorBiasFirst
+
+ENTRY test {
+  p0 = f16[64,9]{1,0} parameter(0)
+  p1 = f16[2,9,8]{2,1,0} parameter(1)
+  p2 = s32[2] constant({16, 48})
+  vector_bias = f16[8]{0} parameter(2)
+  matrix_bias = f16[64,8]{1,0} parameter(3)
+
+  vector_bias_bcast = f16[64,8]{1,0} broadcast(vector_bias), dimensions={1}
+  ragged-dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={1}, rhs_contracting_dims={1},
+                lhs_ragged_dims={0}, rhs_group_dims={0}
+  inner_add = f16[64,8]{1,0} add(ragged-dot, vector_bias_bcast)
+  ROOT out = f16[64,8]{1,0} add(inner_add, matrix_bias)
+}
+)";
+  // Verify operand order: [lhs, rhs, group_sizes, matrix_bias, vector_bias].
+  // The HLO printer preserves instruction names, so matrix_bias appears before
+  // vector_bias in the custom-call operand list.
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom-call(%p0, %p1, %p2{{[._0-9]*}}, %matrix_bias, %vector_bias),
+; CHECK-SAME: custom_call_target="__cublas$lt$groupedMatmul"
+; CHECK-SAME: "beta":1
+; CHECK-SAME: "epilogue":"BIAS"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// Case 2: matrix bias is the inner add, vector bias is the outer add.
+// Before the fix this produced: custom-call(..., matrix_bias, vector_bias)
+// which happens to be the correct order, but only by coincidence.
+// With the fix, both cases produce identical operand ordering.
+TEST_F(GroupedGemmRewriteTest, GroupedGemmVectorAndMatrixBiasMatrixBiasFirst) {
+  const char* hlo_text = R"(
+HloModule GroupedGemmVectorAndMatrixBiasMatrixBiasFirst
+
+ENTRY test {
+  p0 = f16[64,9]{1,0} parameter(0)
+  p1 = f16[2,9,8]{2,1,0} parameter(1)
+  p2 = s32[2] constant({16, 48})
+  vector_bias = f16[8]{0} parameter(2)
+  matrix_bias = f16[64,8]{1,0} parameter(3)
+
+  ragged-dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
+                lhs_contracting_dims={1}, rhs_contracting_dims={1},
+                lhs_ragged_dims={0}, rhs_group_dims={0}
+  inner_add = f16[64,8]{1,0} add(ragged-dot, matrix_bias)
+  vector_bias_bcast = f16[64,8]{1,0} broadcast(vector_bias), dimensions={1}
+  ROOT out = f16[64,8]{1,0} add(inner_add, vector_bias_bcast)
+}
+)";
+  // Verify operand order: [lhs, rhs, group_sizes, matrix_bias, vector_bias].
+  // Identical CHECK to GroupedGemmVectorAndMatrixBiasVectorBiasFirst above,
+  // confirming both HLO orderings produce the same stable custom-call layout.
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+; CHECK: custom-call(%p0, %p1, %p2{{[._0-9]*}}, %matrix_bias, %vector_bias),
+; CHECK-SAME: custom_call_target="__cublas$lt$groupedMatmul"
+; CHECK-SAME: "beta":1
+; CHECK-SAME: "epilogue":"BIAS"
+)");
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
 }  // namespace
 }  // namespace gpu
 }  // namespace xla

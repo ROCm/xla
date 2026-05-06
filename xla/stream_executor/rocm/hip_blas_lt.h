@@ -113,16 +113,16 @@ class BlasLt : public gpu::BlasLt {
           must_swap_operands_(must_swap_operands),
           grouped_gemm_(nullptr) {}
 
-    // Constructor for grouped matmul
+    // Constructor for grouped matmul.
+    // InitializeGroupedGemm() must be called immediately after construction
+    // to complete initialization; the caller is responsible for propagating
+    // any error it returns.
     MatmulPlan(gpu::GroupedGemmConfig&& cfg, bool must_swap_operands,
-               hipblasLtHandle_t blas_lt_handle,
-               blas::ComputationType compute_type, Epilogue epilogue)
+               Epilogue epilogue)
         : must_swap_operands_(must_swap_operands),
           cfg_(std::move(cfg)),
           grouped_gemm_epilogue_(epilogue),
-          grouped_gemm_(nullptr) {
-      InitializeGroupedGemm(blas_lt_handle, compute_type);
-    }
+          grouped_gemm_(nullptr) {}
 
     ~MatmulPlan() override = default;
 
@@ -142,6 +142,12 @@ class BlasLt : public gpu::BlasLt {
 
     bool is_grouped() const { return grouped_gemm_ != nullptr; }
 
+    // Completes grouped-GEMM initialization. Must be called exactly once after
+    // construction via the grouped-matmul constructor. Returns an error status
+    // rather than crashing so callers can propagate it up the stack.
+    absl::Status InitializeGroupedGemm(hipblasLtHandle_t blas_lt_handle,
+                                       blas::ComputationType compute_type);
+
    protected:
     absl::Status DoMatmul(Stream* stream, const void* alpha, const void* beta,
                           const gpu::BlasLt::MemoryArgs& args,
@@ -160,9 +166,6 @@ class BlasLt : public gpu::BlasLt {
     absl::Status ExecuteGroupedMatmul(
         Stream* stream, const gpu::BlasLt::MemoryArgs& args,
         blas::ProfileResult* profile_result) const;
-
-    void InitializeGroupedGemm(hipblasLtHandle_t blas_lt_handle,
-                               blas::ComputationType compute_type);
 
     // TODO(cjfj): Add consistency checks for types, shapes, etc.?
     // Regular matmul members (optional for grouped matmul)
