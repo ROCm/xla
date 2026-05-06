@@ -42,7 +42,6 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "Eigen/Core"
-#include "hwy//highway.h"
 #include "xla/index_util.h"
 #include "xla/layout.h"
 #include "xla/layout_util.h"
@@ -65,6 +64,10 @@ limitations under the License.
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/mem.h"
 #include "tsl/platform/ml_dtypes.h"
+
+#if defined(PLATFORM_GOOGLE)
+#include "hwy//highway.h"
+#endif  // defined(PLATFORM_GOOGLE)
 
 namespace xla {
 namespace {
@@ -1985,6 +1988,9 @@ bool LiteralBase::Piece::EqualElements(const LiteralBase::Piece& other) const {
     int64_t size_bytes = size_bytes_dense();
     CHECK_EQ(size_bytes, other.size_bytes_dense());
     if (primitive_util::IsSubByteNonPredType(subshape().element_type())) {
+      // TODO(b/507052779): JAX CI is currently unhappy with highway, re-enable
+      // this when it's fixed.
+#if defined(PLATFORM_GOOGLE)
       auto one_array = reinterpret_cast<const uint8_t*>(buffer());
       auto two_array = reinterpret_cast<const uint8_t*>(other.buffer());
       const int bits_per_element =
@@ -2020,6 +2026,17 @@ bool LiteralBase::Piece::EqualElements(const LiteralBase::Piece& other) const {
       auto va_masked = hn::And(va, v_mask);
       auto vb_masked = hn::And(vb, v_mask);
       return hn::AllTrue(d, hn::Eq(va_masked, vb_masked));
+#else
+      auto one_array = buffer();
+      auto two_array = other.buffer();
+      const int bits_per_element =
+          primitive_util::BitWidth(subshape().element_type());
+      const uint8_t mask = LsbMask<uint8_t>(bits_per_element);
+      for (int64_t i = 0; i < size_bytes; ++i) {
+        if ((one_array[i] & mask) != (two_array[i] & mask)) return false;
+      }
+      return true;
+#endif
     }
     return memcmp(buffer(), other.buffer(), size_bytes) == 0;
   }
