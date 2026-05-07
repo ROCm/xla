@@ -3539,10 +3539,15 @@ std::shared_ptr<const PjRtLayout> PjRtCApiBuffer::layout() const {
 
 const Shape& PjRtCApiBuffer::on_device_shape() const {
   if (!on_device_shape_.has_value()) {
-    Shape shape(element_type(), dimensions(), is_dynamic_dimension());
-    *shape.mutable_layout() = layout()->xla_layout();
-    absl::MutexLock lock(mu_);
-    on_device_shape_ = shape;
+    if (element_type() == TOKEN) {
+      absl::MutexLock lock(mu_);
+      on_device_shape_ = ShapeUtil::MakeTokenShape();
+    } else {
+      Shape shape(element_type(), dimensions(), is_dynamic_dimension());
+      *shape.mutable_layout() = layout()->xla_layout();
+      absl::MutexLock lock(mu_);
+      on_device_shape_ = shape;
+    }
   }
   return *on_device_shape_;
 }
