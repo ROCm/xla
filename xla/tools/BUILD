@@ -812,6 +812,7 @@ cc_library(
         "//xla/pjrt/plugin/xla_gpu:xla_gpu_client_options",
         "//xla/service:backend",
         "//xla/service:hlo_module_config",
+        "//xla/service:hlo_proto_cc",
         "//xla/service:pjrt_gpu_utils",
         "//xla/service/gpu/model:hlo_op_profile_proto_cc",
         "//xla/service/gpu/model:hlo_op_profiles",
