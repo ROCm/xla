@@ -400,6 +400,12 @@ GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTiledHloComputation(
   int64_t bytes_read = 0;
   int64_t num_blocks = launch_dimensions.num_blocks();
 
+  if (tiled_hlo_computation.num_output_tiles() != num_blocks) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Number of output tiles does not match number of blocks. ",
+        tiled_hlo_computation.num_output_tiles(), " vs ", num_blocks));
+  }
+
   absl::Duration dot_compute_time = absl::ZeroDuration();
 
   // Check if the computation is too large to fit in registers and would result

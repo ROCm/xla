@@ -483,24 +483,27 @@ ENTRY main {
   auto fusion_adaptor = HloFusionAdaptor::ForInstruction(
       module->entry_computation()->root_instruction());
 
-  LaunchDimensions launch_dimensions{16, 1024};
+  uint64_t num_blocks = 8;
+  int64_t num_warps = 32;
 
   auto result = indexing_cost_model_.EstimateRunTimeForTiledFusion(
-      *fusion_adaptor, launch_dimensions,
-      BlockLevelParameters{/*output_tile_sizes=*/{{64, 32, 32}}});
+      *fusion_adaptor, LaunchDimensions{num_blocks, num_warps * WarpSize()},
+      BlockLevelParameters{/*output_tile_sizes=*/{{64, 32, 32}},
+                           /*num_warps=*/num_warps});
 
   TF_ASSERT_OK(result.status());
   // The flops contribution for a single instruction is calculated as:
   // flops_per_element * padded_tile_size * num_blocks_cur_hlo
   EXPECT_EQ(result->flops,
-            514 * 1024 * 16                                // ==> %dot
-                + 86 * 2048 * (16 * CeilOfRatio(257, 64))  // ==> %exp
+            514 * 1024 * num_blocks                                // ==> %dot
+                + 86 * 2048 * (num_blocks * CeilOfRatio(257, 64))  // ==> %exp
   );
   // The bytes read contribution for a single instruction is calculated as:
   // element_type_size * tile_size * num_blocks_cur_hlo
-  EXPECT_EQ(result->bytes_read,
-            4 * (64 * 32) * (16 * CeilOfRatio(257, 64))        // ==> %p1
-                + 4 * (64 * 32) * (16 * CeilOfRatio(257, 64))  // ==> %p0
+  EXPECT_EQ(
+      result->bytes_read,
+      4 * (64 * 32) * (num_blocks * CeilOfRatio(257, 64))        // ==> %p1
+          + 4 * (64 * 32) * (num_blocks * CeilOfRatio(257, 64))  // ==> %p0
   );
 }
 
@@ -531,16 +534,20 @@ ENTRY main {
   auto fusion_adaptor = HloFusionAdaptor::ForInstruction(
       module->entry_computation()->root_instruction());
 
+  int64_t num_warps = 1;
+
   TF_ASSERT_OK_AND_ASSIGN(
-      auto res1, indexing_cost_model_.EstimateRunTimeForTiledFusion(
-                     *fusion_adaptor, /*launch_dimensions=*/{16, 32},
-                     BlockLevelParameters{/*output_tile_sizes=*/{{1, 16000}}}));
+      auto res1,
+      indexing_cost_model_.EstimateRunTimeForTiledFusion(
+          *fusion_adaptor, /*launch_dimensions=*/{16, num_warps * WarpSize()},
+          BlockLevelParameters{/*output_tile_sizes=*/{{1, 16000}}}));
   EXPECT_NEAR(absl::ToDoubleMicroseconds(res1.exec_time), 3, 1);
 
   TF_ASSERT_OK_AND_ASSIGN(
-      auto res2, indexing_cost_model_.EstimateRunTimeForTiledFusion(
-                     *fusion_adaptor, /*launch_dimensions=*/{8, 32},
-                     BlockLevelParameters{/*output_tile_sizes=*/{{2, 16000}}}));
+      auto res2,
+      indexing_cost_model_.EstimateRunTimeForTiledFusion(
+          *fusion_adaptor, /*launch_dimensions=*/{8, num_warps * WarpSize()},
+          BlockLevelParameters{/*output_tile_sizes=*/{{2, 16000}}}));
   EXPECT_TRUE(res2.IsInfinite());
 }
 
@@ -579,21 +586,24 @@ ENTRY main {
       module->entry_computation()->root_instruction());
 
   TF_ASSERT_OK_AND_ASSIGN(
-      auto res1, indexing_cost_model_.EstimateRunTimeForTiledFusion(
-                     *fusion_adaptor, /*launch_dimensions=*/{1024, 8},
-                     BlockLevelParameters{/*output_tile_sizes=*/{{4, 4}}}));
-  EXPECT_NEAR(absl::ToDoubleMicroseconds(res1.exec_time), 292, 1);
+      auto res1,
+      indexing_cost_model_.EstimateRunTimeForTiledFusion(
+          *fusion_adaptor, /*launch_dimensions=*/{8192, 8 * WarpSize()},
+          BlockLevelParameters{/*output_tile_sizes=*/{{4, 4}}}));
+  EXPECT_NEAR(absl::ToDoubleMicroseconds(res1.exec_time), 147, 1);
 
   TF_ASSERT_OK_AND_ASSIGN(
-      auto res2, indexing_cost_model_.EstimateRunTimeForTiledFusion(
-                     *fusion_adaptor, /*launch_dimensions=*/{512, 8},
-                     BlockLevelParameters{/*output_tile_sizes=*/{{8, 4}}}));
+      auto res2,
+      indexing_cost_model_.EstimateRunTimeForTiledFusion(
+          *fusion_adaptor, /*launch_dimensions=*/{4096, 8 * WarpSize()},
+          BlockLevelParameters{/*output_tile_sizes=*/{{8, 4}}}));
   EXPECT_TRUE(res2.IsInfinite());
 
   TF_ASSERT_OK_AND_ASSIGN(
-      auto res3, indexing_cost_model_.EstimateRunTimeForTiledFusion(
-                     *fusion_adaptor, /*launch_dimensions=*/{1024, 4},
-                     BlockLevelParameters{/*output_tile_sizes=*/{{4, 8}}}));
+      auto res3,
+      indexing_cost_model_.EstimateRunTimeForTiledFusion(
+          *fusion_adaptor, /*launch_dimensions=*/{4096, 4 * WarpSize()},
+          BlockLevelParameters{/*output_tile_sizes=*/{{4, 8}}}));
   EXPECT_TRUE(res3.IsInfinite());
 }
 
