@@ -4,6 +4,18 @@ set -ex
 
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
+# Define available GPU pools for RBE single GPU testing
+RBE_POOL_OPTIONS=(
+    "linux_x64_gpu_gfx90a"
+    "linux_x64_gpu_do_gfx950"
+)
+
+# Randomly select a GPU pool from the list
+RANDOM_INDEX=$(( RANDOM % ${#RBE_POOL_OPTIONS[@]} ))
+RBE_POOL="${RBE_POOL_OPTIONS[$RANDOM_INDEX]}"
+
+echo "Selected GPU pool: $RBE_POOL"
+
 EXCLUDED_TESTS=(
     "HostMemoryAllocateTest.Numa" # Failing on RBE
     "*IotaR1Test*" # Taking too many CI nodes
@@ -38,6 +50,32 @@ EXCLUDED_TESTS=(
     "StreamExecutorGpuClientTest.GetCompiledMemoryStatsWithTupleAndNcclUserBuffers"
 )
 
+# Add MI350X (gfx950) specific test exclusions
+if [[ "$RBE_POOL" == "linux_x64_gpu_do_gfx950" ]]; then
+    echo "Adding MI350X (gfx950) specific test exclusions"
+    EXCLUDED_TESTS+=(
+        # Triton autotuner failures
+        "TritonBackendTest.CostModelOptions_Combination"
+        "TritonBackendTest.CostModelOptions_Filter"
+        "TritonBackendTest.CostModelOptions_TopFromDefault"
+        # Sort rewriter failures (CUB sort issues)
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f16_asc_s16_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/bf16_desc_s16_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f32_desc_s16_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f32_asc_s32_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/bf16_asc_s16_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f16_desc_s32_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f32_desc_s32_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f32_asc_s16_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f16_desc_s16_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/bf16_desc_s32_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f16_asc_s32_cub"
+        # Convolution test failure
+        "SampleFileTest.Convolution"
+    )
+fi
+
+
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
 
 for arg in "$@"; do
@@ -70,6 +108,7 @@ done
     ) \
     --cache_test_results=yes \
     --keep_going \
+    --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=${RBE_POOL} \
     -- \
     //xla/... \
     -//xla/backends/gpu/tests:sorting.hlo.test_mi200 \
