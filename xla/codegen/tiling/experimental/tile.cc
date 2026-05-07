@@ -199,6 +199,10 @@ void Tile::Replace(const llvm::DenseMap<SymbolicExpr, SymbolicExpr>& map) {
   }
 }
 
+Tile Tile::CloneWithNewDims(llvm::SmallVector<DimTile> new_dim_tiles) const {
+  return Tile(*tiling_space_, std::move(new_dim_tiles));
+}
+
 bool Tile::operator==(const Tile& other) const {
   return tiling_space_ == other.tiling_space_ && dim_tiles_ == other.dim_tiles_;
 }

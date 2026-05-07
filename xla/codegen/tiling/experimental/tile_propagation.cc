@@ -90,7 +90,7 @@ Tiles PropagateTileToInputForBroadcastOp(const HloBroadcastInstruction& bcast,
     dim_tiles.push_back(output_tile.dim_tiles()[broadcast_dim]);
   };
 
-  return {Tile{output_tile.tiling_space(), std::move(dim_tiles)}};
+  return {output_tile.CloneWithNewDims(std::move(dim_tiles))};
 }
 
 Tiles PropagateTileToOutputForBroadcastOp(const HloBroadcastInstruction& bcast,
@@ -114,7 +114,7 @@ Tiles PropagateTileToOutputForBroadcastOp(const HloBroadcastInstruction& bcast,
     dim_tiles.push_back(
         input_tile.dim_tiles()[std::distance(bcast_dims.begin(), bcast_dim)]);
   }
-  return {Tile{input_tile.tiling_space(), std::move(dim_tiles)}};
+  return {input_tile.CloneWithNewDims(std::move(dim_tiles))};
 }
 
 absl::StatusOr<Tiles> PropagateTileToInputForConcatenateOp(
@@ -158,8 +158,7 @@ absl::StatusOr<Tiles> PropagateTileToInputForConcatenateOp(
 
     dim_tiles[concat_dim].upper_bound =
         (upper_bound - offset).min(operand_dim_size).max(0);
-    Tile operand_tile{output_tile.tiling_space(), std::move(dim_tiles)};
-    tiles.push_back(operand_tile);
+    tiles.push_back(output_tile.CloneWithNewDims(std::move(dim_tiles)));
     offset += operand_dim_size;
   }
   return tiles;
@@ -187,7 +186,7 @@ Tiles PropagateTileToOutputForConcatenateOp(
   output_dim_tiles[concat_dim].upper_bound =
       input_tile.dim_tiles()[concat_dim].upper_bound + output_offset;
 
-  return {Tile{input_tile.tiling_space(), std::move(output_dim_tiles)}};
+  return {input_tile.CloneWithNewDims(std::move(output_dim_tiles))};
 }
 
 template <typename T>
@@ -225,7 +224,7 @@ Tile PropagateTileToInputForSliceImpl(ArrayRef<SymbolicExpr> slice_offsets,
         result_dim_tile.upper_bound * slice_strides[dim] + slice_offsets[dim];
     dim_tiles.push_back(std::move(dim_tile));
   }
-  return Tile{output_tile.tiling_space(), std::move(dim_tiles)};
+  return output_tile.CloneWithNewDims(std::move(dim_tiles));
 }
 
 Tiles PropagateTileToInputForSliceOp(const HloInstruction& slice,
@@ -314,7 +313,7 @@ absl::StatusOr<Tiles> PropagateTileToInputForPadOp(const HloPadInstruction& pad,
                 result_dim_tile.size, result_dim_tile.stride,
                 CreateSymbolicConstant(operand_dim, ctx)});
   }
-  Tile operand_tile{output_tile.tiling_space(), std::move(dim_tiles)};
+  Tile operand_tile = output_tile.CloneWithNewDims(std::move(dim_tiles));
 
   // Pad also has a padding value, but it is a scalar, therefore we only need
   // to propagate the inputs.
@@ -329,7 +328,7 @@ Tile PropagateTileThroughTransposeOp(const Tile& tile,
   for (const auto [dim, permutated_dim] : llvm::enumerate(permutation)) {
     dim_tiles[permutated_dim] = tile.dim_tiles()[dim];
   }
-  return Tile{tile.tiling_space(), std::move(dim_tiles)};
+  return tile.CloneWithNewDims(std::move(dim_tiles));
 }
 
 Tiles PropagateTileToInputForTransposeOp(const HloInstruction& transpose,
@@ -414,8 +413,8 @@ Tiles PropagateTileToInputForDotOp(const TilingSpace& tiling_space,
         GetDimTile(contracting_dim_info, tiling_space.IsSymbolic(),
                    tiling_space.num_dimensions(), ctx);
   }
-  return Tiles{Tile{output_tile.tiling_space(), std::move(lhs_dim_tiles)},
-               Tile{output_tile.tiling_space(), std::move(rhs_dim_tiles)}};
+  return {output_tile.CloneWithNewDims(std::move(lhs_dim_tiles)),
+          output_tile.CloneWithNewDims(std::move(rhs_dim_tiles))};
 }
 
 // Helper function for PropagateTileToInputForScaledDotOp to compute the
@@ -446,7 +445,7 @@ Tile ComputeTileForScale(const Shape& scale_shape, const Shape& operand_shape,
                 max_index - min_index + 1, CreateSymbolicConstant(1, ctx),
                 operand_dim_tile.upper_bound.floorDiv(block_size)});
   }
-  return Tile{operand_tile.tiling_space(), std::move(scale_dim_tiles)};
+  return operand_tile.CloneWithNewDims(std::move(scale_dim_tiles));
 }
 
 Tiles PropagateTileToInputForScaledDotOp(const TilingSpace& tiling_space,
@@ -498,8 +497,8 @@ Tiles PropagateTileToInputForReduceOp(const TilingSpace& tiling_space,
   }
   Tile init_value_tile{output_tile.tiling_space(), {}, {}, {}, {}};
 
-  Tiles operand_tiles(reduce.input_count(), Tile{output_tile.tiling_space(),
-                                                 std::move(input_dim_tiles)});
+  Tiles operand_tiles(reduce.input_count(),
+                      output_tile.CloneWithNewDims(std::move(input_dim_tiles)));
   operand_tiles.append(Tiles(reduce.input_count(), init_value_tile));
   return Tiles{std::move(operand_tiles)};
 }
@@ -516,9 +515,7 @@ Tiles PropagateTileToOutputForReduceOp(const HloReduceInstruction& reduce,
       output_dim_tiles.push_back(input_dim_tile);
     }
   }
-
-  Tile output_tile{input_tile.tiling_space(), std::move(output_dim_tiles)};
-  return {std::move(output_tile)};
+  return {input_tile.CloneWithNewDims(std::move(output_dim_tiles))};
 }
 
 absl::Status IsSupportedReshape(const std::vector<MinimalReshape>& reshapes) {

@@ -122,6 +122,12 @@ class Tile {
   // Replace tiling expressions with the given map.
   void Replace(const llvm::DenseMap<SymbolicExpr, SymbolicExpr>& map);
 
+  // Clone the tile with new dim tiles.
+  // When we are propagating a tile to an input, we need to adjust the offsets
+  // and upper bounds according to the input. The other fields are copied from
+  // the original tile.
+  Tile CloneWithNewDims(llvm::SmallVector<DimTile> new_dim_tiles) const;
+
   bool operator==(const Tile& other) const;
 
   // This allows GUnit to print the tile.
