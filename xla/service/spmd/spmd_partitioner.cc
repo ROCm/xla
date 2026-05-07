@@ -3982,18 +3982,50 @@ absl::Status SpmdPartitioningVisitor::HandleDUSSinglePartitionUpdate(
   return absl::OkStatus();
 };
 
-absl::Status
-SpmdPartitioningVisitor::HandleDUSAllPartitionedSliceDimsHaveConstantIndices(
+absl::StatusOr<HloInstruction*> SpmdPartitioningVisitor::ProcessUpdatePiece(
     HloInstruction* hlo, const HloInstruction* input_tensor,
-    const HloInstruction* update_tensor) {
+    const HloInstruction* piece_update_tensor,
+    std::vector<int64_t> piece_dus_starts, HloInstruction* current_input) {
   auto add_hlo = [&](std::unique_ptr<HloInstruction> to_add) {
     return b_.AddInstruction(std::move(to_add));
   };
 
-  auto process_update_piece =
-      [&](const HloInstruction* piece_update_tensor,
-          const std::vector<int64_t>& piece_dus_starts,
-          HloInstruction* current_input) -> absl::StatusOr<HloInstruction*> {
+  if (piece_update_tensor->opcode() == HloOpcode::kCopy &&
+      piece_update_tensor->user_count() == 1) {
+    return ProcessUpdatePiece(hlo, input_tensor,
+                              piece_update_tensor->operand(0), piece_dus_starts,
+                              current_input);
+  }
+
+  if (piece_update_tensor->opcode() == HloOpcode::kConcatenate &&
+      piece_update_tensor->user_count() == 1) {
+    int64_t concat_dim = piece_update_tensor->concatenate_dimension();
+
+    for (const HloInstruction* operand : piece_update_tensor->operands()) {
+      if (operand->opcode() == HloOpcode::kSlice &&
+          operand->operand(0) == input_tensor) {
+        bool is_self_update = true;
+        for (int64_t i = 0; i < hlo->shape().dimensions().size(); ++i) {
+          if (operand->slice_starts(i) != piece_dus_starts[i]) {
+            is_self_update = false;
+            break;
+          }
+        }
+        // Self update is handled for free, so we can skip it.
+        if (is_self_update) {
+          piece_dus_starts[concat_dim] +=
+              operand->shape().dimensions(concat_dim);
+          continue;
+        }
+      }
+      TF_ASSIGN_OR_RETURN(current_input,
+                          ProcessUpdatePiece(hlo, input_tensor, operand,
+                                             piece_dus_starts, current_input));
+      piece_dus_starts[concat_dim] += operand->shape().dimensions(concat_dim);
+    }
+    return current_input;
+  }
+
     PaddingConfig padding_config;
     for (int64_t input_tensor_dim = 0;
          input_tensor_dim < hlo->shape().dimensions().size();
@@ -4032,78 +4064,134 @@ SpmdPartitioningVisitor::HandleDUSAllPartitionedSliceDimsHaveConstantIndices(
     auto zeroElemOp = add_hlo(HloInstruction::CreateConstant(
         LiteralUtil::Zero(hlo->shape().element_type())));
 
-    std::vector<int64_t> accumulated_offsets(hlo->shape().dimensions().size(),
-                                             0);
-    const HloInstruction* actual_update = piece_update_tensor;
-    std::optional<ShapeUtil::ShapeEqualityDescriptor> reshape_desc;
-    while (actual_update->user_count() == 1) {
-      if (actual_update->has_sharding() &&
-          actual_update->sharding().IsReplicated()) {
-        break;
-      }
-      if (actual_update->opcode() == HloOpcode::kCopy) {
+    TF_ASSIGN_OR_RETURN(HloInstruction * newOperand,
+                        ProcessUpdatePieceExtractOperand(
+                            hlo, input_tensor, piece_update_tensor,
+                            piece_dus_starts, current_input, zeroElemOp));
+
+    if (!newOperand) {
+      newOperand =
+          PadHelper(*this, GetPartitionedHlo(piece_update_tensor), zeroElemOp,
+                    padding_config, hlo->shape(), hlo->sharding());
+    }
+
+    if (!newOperand) {
+      newOperand = add_hlo(HloInstruction::CreatePad(
+          hlo->shape(), GetPartitionedHlo(piece_update_tensor).hlo(),
+          zeroElemOp, padding_config));
+      newOperand->set_sharding(hlo->sharding());
+    }
+
+    auto shard_result_shape =
+        MakePartitionedShape(hlo->shape(), hlo->sharding());
+    auto result = add_hlo(
+        HloInstruction::CreateTernary(shard_result_shape, HloOpcode::kSelect,
+                                      maskOp, current_input, newOperand));
+    return result;
+}
+
+absl::StatusOr<HloInstruction*>
+SpmdPartitioningVisitor::ProcessUpdatePieceExtractOperand(
+    HloInstruction* hlo, const HloInstruction* input_tensor,
+    const HloInstruction* piece_update_tensor,
+    std::vector<int64_t> piece_dus_starts, HloInstruction* current_input,
+    HloInstruction* zeroElemOp) {
+  auto add_hlo = [&](std::unique_ptr<HloInstruction> to_add) {
+    return b_.AddInstruction(std::move(to_add));
+  };
+
+  std::vector<int64_t> accumulated_offsets(hlo->shape().dimensions().size(), 0);
+  const HloInstruction* actual_update = piece_update_tensor;
+  std::optional<ShapeUtil::ShapeEqualityDescriptor> reshape_desc;
+  while (actual_update->user_count() == 1) {
+    if (actual_update->has_sharding() &&
+        actual_update->sharding().IsReplicated()) {
+      break;
+    }
+    if (actual_update->opcode() == HloOpcode::kCopy) {
+      actual_update = actual_update->operand(0);
+    } else if (actual_update->opcode() == HloOpcode::kReshape &&
+               !reshape_desc.has_value()) {
+      auto desc = ShapeUtil::InsertedOrDeleted1SizedDimensions(
+          actual_update->operand(0)->shape(), actual_update->shape());
+      if (desc.has_value()) {
+        reshape_desc = desc;
         actual_update = actual_update->operand(0);
-      } else if (actual_update->opcode() == HloOpcode::kReshape &&
-                 !reshape_desc.has_value()) {
-        auto desc = ShapeUtil::InsertedOrDeleted1SizedDimensions(
-            actual_update->operand(0)->shape(), actual_update->shape());
-        if (desc.has_value()) {
-          reshape_desc = desc;
-          actual_update = actual_update->operand(0);
-        } else {
-          break;
-        }
-      } else if (actual_update->opcode() == HloOpcode::kDynamicUpdateSlice &&
-                 !reshape_desc.has_value()) {
-        bool all_constant = true;
-        for (int i = 2; i < actual_update->operand_count(); ++i) {
-          if (actual_update->operand(i)->opcode() != HloOpcode::kConstant) {
-            all_constant = false;
-            break;
-          }
-        }
-        if (all_constant) {
-          for (int i = 0; i < actual_update->shape().dimensions().size(); ++i) {
-            auto const_op =
-                DynCast<HloConstantInstruction>(actual_update->operand(2 + i));
-            auto val = const_op->literal().GetIntegralAsS64({});
-            if (val.has_value()) {
-              accumulated_offsets[i] += *val;
-            } else {
-              all_constant = false;
-              break;
-            }
-          }
-          if (all_constant) {
-            actual_update = actual_update->operand(1);
-          } else {
-            break;
-          }
-        } else {
-          break;
-        }
       } else {
         break;
       }
+    } else if (actual_update->opcode() == HloOpcode::kDynamicUpdateSlice &&
+               !reshape_desc.has_value()) {
+      bool all_constant = true;
+      for (int i = 2; i < actual_update->operand_count(); ++i) {
+        if (actual_update->operand(i)->opcode() != HloOpcode::kConstant) {
+          all_constant = false;
+          break;
+        }
+      }
+      if (!all_constant) {
+        break;
+      }
+
+      for (int i = 0; i < actual_update->shape().dimensions().size(); ++i) {
+        auto const_op =
+            DynCast<HloConstantInstruction>(actual_update->operand(2 + i));
+        auto val = const_op->literal().GetIntegralAsS64({});
+
+        if (!val.has_value()) {
+          all_constant = false;
+          break;
+        }
+
+        accumulated_offsets[i] += *val;
+      }
+
+      if (!all_constant) {
+        break;
+      }
+
+      actual_update = actual_update->operand(1);
+    } else {
+      break;
+    }
+  }
+
+  HloInstruction* newOperand = nullptr;
+
+  if (actual_update->opcode() == HloOpcode::kBroadcast) {
+    // Check if we are broadcasting a scalar, in which case we can simply
+    // broadcast the operand to the output shape instead of padding.
+    bool enableBroadcastOptimization =
+        actual_update->operand(0)->shape().dimensions().empty();
+    if (enableBroadcastOptimization) {
+      newOperand = add_hlo(HloInstruction::CreateBroadcast(
+          GetPartitionedHlo(input_tensor).hlo()->shape(),
+          GetPartitionedHlo(actual_update->operand(0)).hlo(), {}));
+      newOperand->set_sharding(hlo->sharding());
+    }
+  } else {
+    const HloInstruction* leaf = piece_update_tensor;
+    std::vector<int64_t> reverse_dims;
+    while (leaf->opcode() == HloOpcode::kCopy ||
+           leaf->opcode() == HloOpcode::kReverse) {
+      if (leaf->opcode() == HloOpcode::kReverse) {
+        for (int64_t d : leaf->dimensions()) {
+          if (absl::c_linear_search(reverse_dims, d)) {
+            reverse_dims.erase(
+                std::remove(reverse_dims.begin(), reverse_dims.end(), d),
+                reverse_dims.end());
+          } else {
+            reverse_dims.push_back(d);
+          }
+        }
+      }
+      leaf = leaf->operand(0);
     }
 
-    HloInstruction* newOperand = nullptr;
-
-    if (actual_update->opcode() == HloOpcode::kBroadcast) {
-      // Check if we are broadcasting a scalar, in which case we can simply
-      // broadcast the operand to the output shape instead of padding.
-      bool enableBroadcastOptimization =
-          actual_update->operand(0)->shape().dimensions().empty();
-      if (enableBroadcastOptimization) {
-        newOperand = add_hlo(HloInstruction::CreateBroadcast(
-            GetPartitionedHlo(input_tensor).hlo()->shape(),
-            GetPartitionedHlo(actual_update->operand(0)).hlo(), {}));
-        newOperand->set_sharding(hlo->sharding());
-      }
-    } else if (actual_update->opcode() == HloOpcode::kSlice) {
+    if (leaf->opcode() == HloOpcode::kSlice) {
       bool slice_expand_eligible = true;
       const xla::HloSliceInstruction* slice =
-          DynCast<HloSliceInstruction>(actual_update);
+          DynCast<HloSliceInstruction>(leaf);
       const xla::HloDynamicUpdateSliceInstruction* dus =
           DynCast<HloDynamicUpdateSliceInstruction>(hlo);
 
@@ -4111,7 +4199,20 @@ SpmdPartitioningVisitor::HandleDUSAllPartitionedSliceDimsHaveConstantIndices(
       bool needs_pad = false;
 
       std::vector<int64_t> post_to_pre;
+
+      for (auto dim : reverse_dims) {
+        if (ShardCountAtDim(hlo->sharding(), dim) > 1) {
+          // TODO(wmoses): Add support slice of reversed shardable dimension.
+          slice_expand_eligible = false;
+          break;
+        }
+      }
+
       if (reshape_desc.has_value()) {
+        // TODO(wmoses): Add support slice of reshape and reverse
+        if (!reverse_dims.empty()) {
+          slice_expand_eligible = false;
+        }
         post_to_pre.resize(hlo->shape().dimensions().size());
         int64_t pre_idx = 0;
         int64_t post_idx = 0;
@@ -4146,16 +4247,24 @@ SpmdPartitioningVisitor::HandleDUSAllPartitionedSliceDimsHaveConstantIndices(
         }
       }
 
-      std::vector<int64_t> new_slice_starts(slice->shape().dimensions().size(),
-                                            0);
-      std::vector<int64_t> new_slice_limits(slice->shape().dimensions().size(),
-                                            0);
-      std::vector<int64_t> new_slice_strides(slice->shape().dimensions().size(),
-                                             1);
+      size_t num_dims = slice->shape().dimensions().size();
+      std::vector<int64_t> new_slice_starts(num_dims, 0);
+      std::vector<int64_t> new_slice_limits(num_dims, 0);
+      std::vector<int64_t> new_slice_strides(num_dims, 1);
 
       PaddingConfig padding_config2;
       for (int64_t i = 0; i < slice->shape().dimensions().size(); ++i) {
-        int64_t slice_start = slice->slice_starts(i);
+        int64_t orig_slice_start = slice->slice_starts(i);
+        int64_t orig_slice_limit = slice->slice_limits(i);
+
+        if (absl::c_linear_search(reverse_dims, i)) {
+          orig_slice_start =
+              slice->operand(0)->shape().dimensions(i) - slice->slice_limits(i);
+          orig_slice_limit =
+              slice->operand(0)->shape().dimensions(i) - slice->slice_starts(i);
+        }
+
+        int64_t slice_start = orig_slice_start;
         int64_t slice_stride = slice->slice_strides(i);
 
         if (slice_stride != 1) {
@@ -4164,6 +4273,7 @@ SpmdPartitioningVisitor::HandleDUSAllPartitionedSliceDimsHaveConstantIndices(
         }
 
         new_slice_limits[i] = slice->operand(0)->shape().dimensions(i);
+
         auto* padding_dim = padding_config2.add_dimensions();
         padding_dim->set_interior_padding(0);
 
@@ -4200,7 +4310,7 @@ SpmdPartitioningVisitor::HandleDUSAllPartitionedSliceDimsHaveConstantIndices(
         } else {
           // Deleted dimension
           new_slice_starts[i] = slice_start;
-          new_slice_limits[i] = slice->slice_limits(i);
+          new_slice_limits[i] = orig_slice_limit;
           padding_dim->set_edge_padding_low(0);
           padding_dim->set_edge_padding_high(0);
           if (new_slice_limits[i] - new_slice_starts[i] <
@@ -4211,6 +4321,13 @@ SpmdPartitioningVisitor::HandleDUSAllPartitionedSliceDimsHaveConstantIndices(
       }
       if (slice_expand_eligible) {
         PartitionedHlo replacement = GetPartitionedHlo(slice->operand(0));
+        // None of the reverse dimensions are sharded so we can reverse them
+        // locally on each partition.
+        if (!reverse_dims.empty()) {
+          replacement = replacement.CloneWithNewHlo(b_.AddInstruction(
+              HloInstruction::CreateReverse(replacement.hlo()->shape(),
+                                            replacement.hlo(), reverse_dims)));
+        }
 
         if (reshape_desc.has_value()) {
           // Fallback path for rank-changing reshapes
@@ -4362,6 +4479,10 @@ SpmdPartitioningVisitor::HandleDUSAllPartitionedSliceDimsHaveConstantIndices(
               int64_t dus_start =
                   dus->operand(i + 2)->literal().GetIntegralAsS64({}).value();
               int64_t slice_start = slice->slice_starts(i);
+              if (absl::c_linear_search(reverse_dims, i)) {
+                slice_start = slice->operand(0)->shape().dimensions(i) -
+                              slice->slice_limits(i);
+              }
               int64_t slice_size = piece_update_tensor->shape().dimensions(i);
 
               bool perfectly_aligned = (slice_start == dus_start) &&
@@ -4508,28 +4629,15 @@ SpmdPartitioningVisitor::HandleDUSAllPartitionedSliceDimsHaveConstantIndices(
         CHECK_EQ(newOperand->shape(), current_input->shape());
       }
     }
+  }
 
-    if (!newOperand) {
-      newOperand =
-          PadHelper(*this, GetPartitionedHlo(piece_update_tensor), zeroElemOp,
-                    padding_config, hlo->shape(), hlo->sharding());
-    }
+  return newOperand;
+}
 
-    if (!newOperand) {
-      newOperand = add_hlo(HloInstruction::CreatePad(
-          hlo->shape(), GetPartitionedHlo(piece_update_tensor).hlo(),
-          zeroElemOp, padding_config));
-      newOperand->set_sharding(hlo->sharding());
-    }
-
-    auto shard_result_shape =
-        MakePartitionedShape(hlo->shape(), hlo->sharding());
-    auto result = add_hlo(
-        HloInstruction::CreateTernary(shard_result_shape, HloOpcode::kSelect,
-                                      maskOp, current_input, newOperand));
-    return result;
-  };
-
+absl::Status
+SpmdPartitioningVisitor::HandleDUSAllPartitionedSliceDimsHaveConstantIndices(
+    HloInstruction* hlo, const HloInstruction* input_tensor,
+    const HloInstruction* update_tensor) {
   std::vector<int64_t> top_dus_starts;
   const auto* dus = Cast<HloDynamicUpdateSliceInstruction>(hlo);
   for (const HloInstruction* dus_index : dus->index_operands()) {
@@ -4537,86 +4645,15 @@ SpmdPartitioningVisitor::HandleDUSAllPartitionedSliceDimsHaveConstantIndices(
     top_dus_starts.push_back(dus_index->literal().GetIntegralAsS64({}).value());
   }
 
-  bool is_concat_of_slices = false;
-  std::vector<std::pair<const HloInstruction*, std::vector<int64_t>>>
-      update_pieces;
-
-  const HloInstruction* source_update = update_tensor;
-  while (source_update->opcode() == HloOpcode::kCopy &&
-         source_update->user_count() == 1) {
-    source_update = source_update->operand(0);
-  }
-
-  if (source_update->opcode() == HloOpcode::kConcatenate &&
-      source_update->user_count() == 1) {
-    bool all_valid = true;
-    int64_t concat_dim = source_update->concatenate_dimension();
-    int64_t offset = 0;
-    bool has_self_update = false;
-
-    for (const HloInstruction* operand : source_update->operands()) {
-      if (operand->opcode() != HloOpcode::kSlice) {
-        all_valid = false;
-        break;
-      }
-      for (int64_t stride : operand->slice_strides()) {
-        if (stride != 1) {
-          all_valid = false;
-          break;
-        }
-      }
-      if (!all_valid) {
-        break;
-      }
-
-      bool is_self_update = operand->operand(0) == input_tensor;
-      std::vector<int64_t> piece_starts = top_dus_starts;
-      piece_starts[concat_dim] += offset;
-
-      if (is_self_update) {
-        for (int64_t i = 0; i < hlo->shape().dimensions().size(); ++i) {
-          if (operand->slice_starts(i) != piece_starts[i]) {
-            is_self_update = false;
-            break;
-          }
-        }
-      }
-
-      if (is_self_update) {
-        has_self_update = true;
-      } else {
-        update_pieces.push_back({operand, piece_starts});
-      }
-
-      offset += operand->shape().dimensions(concat_dim);
-    }
-
-    if (all_valid && has_self_update) {
-      is_concat_of_slices = true;
-    }
-  }
-
-  if (!is_concat_of_slices) {
-    update_pieces.clear();
-    update_pieces.push_back({source_update, top_dus_starts});
-  }
-
   HloInstruction* current_result = GetPartitionedHlo(input_tensor).hlo();
-  if (update_pieces.empty()) {
-    // Everything was a self update, no-op!
-    SetPartitionedHlo(hlo, current_result);
-    return absl::OkStatus();
-  }
 
-  for (const auto& piece : update_pieces) {
-    TF_ASSIGN_OR_RETURN(
-        current_result,
-        process_update_piece(piece.first, piece.second, current_result));
-  }
+  TF_ASSIGN_OR_RETURN(current_result,
+                      ProcessUpdatePiece(hlo, input_tensor, update_tensor,
+                                         top_dus_starts, current_result));
 
   SetPartitionedHlo(hlo, current_result);
   return absl::OkStatus();
-};
+}
 
 absl::Status SpmdPartitioningVisitor::HandleDynamicUpdateSlice(
     HloInstruction* hlo) {
