@@ -26,10 +26,12 @@ limitations under the License.
 #include "mlir/Transforms/Passes.h"
 #include "third_party/amd/include/TritonAMDGPUToLLVM/Passes.h"
 #include "third_party/amd/include/TritonAMDGPUTransforms/Passes.h"
+#include "xla/backends/gpu/codegen/triton/extern_function_helper.h"
 #include "xla/backends/gpu/codegen/triton/transforms/passes.h"
-#include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
