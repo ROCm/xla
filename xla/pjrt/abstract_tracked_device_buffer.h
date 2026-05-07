@@ -20,6 +20,7 @@ limitations under the License.
 #include <memory>
 #include <vector>
 
+#include "absl/base/attributes.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/functional/any_invocable.h"
