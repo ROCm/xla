@@ -146,6 +146,7 @@
  
    // CHECK: [[I0:%.*]] = llvm.extractvalue %arg0[0]
  
+
 --- a/test/Conversion/tritongpu_to_llvm_blackwell.mlir
 +++ b/test/Conversion/tritongpu_to_llvm_blackwell.mlir
 @@ -11,7 +11,7 @@
@@ -409,6 +410,7 @@
    llvm.return
  }
  
+
 --- a/test/TritonGPU/atomic-cas.mlir
 +++ b/test/TritonGPU/atomic-cas.mlir
 @@ -2,7 +2,7 @@
