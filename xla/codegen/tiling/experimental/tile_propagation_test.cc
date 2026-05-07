@@ -75,6 +75,7 @@ struct ReshapeTestCase {
   std::vector<int64_t> input_shape;
   std::vector<int64_t> input_tile_sizes;  // Empty means remain symbolic.
   std::vector<int64_t> input_tile_strides;
+  std::vector<int64_t> input_tile_offsets;
   std::vector<int64_t> output_shape;
   std::string expected_output;
 
@@ -105,7 +106,12 @@ TEST_P(ReshapeTilePropagationTest, PropagateReshape) {
   SmallVector<DimTile> input_dim_tiles =
       llvm::to_vector(tiling_space->tiled_roots()[0].dim_tiles());
   CHECK_EQ(param.input_tile_strides.size(), tiling_space->num_dimensions());
+  bool has_offsets = input_dim_tiles.size() == param.input_tile_offsets.size();
   for (int i = 0; i < input_dim_tiles.size(); ++i) {
+    if (has_offsets) {
+      input_dim_tiles[i].offset =
+          CreateSymbolicConstant(param.input_tile_offsets[i], &mlir_context_);
+    }
     input_dim_tiles[i].stride =
         CreateSymbolicConstant(param.input_tile_strides[i], &mlir_context_);
   }
@@ -116,7 +122,8 @@ TEST_P(ReshapeTilePropagationTest, PropagateReshape) {
   if (param.expected_output.empty()) {
     ASSERT_FALSE(output_tiles.ok());
   } else {
-    ASSERT_TRUE(output_tiles.ok());
+    ASSERT_TRUE(output_tiles.ok())
+        << "Failed for " << param.name << ": " << output_tiles.status();
     EXPECT_THAT(output_tiles.value(), MatchToString(param.expected_output));
   }
 }
@@ -129,6 +136,7 @@ INSTANTIATE_TEST_SUITE_P(
          /*input_shape=*/{10, 20},
          /*input_tile_sizes=*/{},
          /*input_tile_strides=*/{1, 2},
+         /*input_tile_offsets=*/{},
          /*output_shape=*/{10, 20},
          /*expected_output=*/R"(
     0) (tid_0, tid_1)
@@ -141,6 +149,7 @@ INSTANTIATE_TEST_SUITE_P(
          /*input_shape=*/{10},
          /*input_tile_sizes=*/{},
          /*input_tile_strides=*/{1},
+         /*input_tile_offsets=*/{},
          /*output_shape=*/{1, 10, 1},
          /*expected_output=*/R"(
     0) (tid_0)
@@ -153,6 +162,7 @@ INSTANTIATE_TEST_SUITE_P(
          /*input_shape=*/{1, 10, 1},
          /*input_tile_sizes=*/{},
          /*input_tile_strides=*/{1, 2, 3},
+         /*input_tile_offsets=*/{},
          /*output_shape=*/{10},
          /*expected_output=*/R"(
     0) (tid_0, tid_1, tid_2)
@@ -165,12 +175,14 @@ INSTANTIATE_TEST_SUITE_P(
          /*input_shape=*/{2, 5, 7},
          /*input_tile_sizes=*/{},
          /*input_tile_strides=*/{1, 2, 3},
+         /*input_tile_offsets=*/{},
          /*output_shape=*/{7, 5, 2},
          /*expected_output=*/""},
         {"SupportedMultiSegment",
          /*input_shape=*/{12, 1, 8},
          /*input_tile_sizes=*/{},
          /*input_tile_strides=*/{1, 2, 3},
+         /*input_tile_offsets=*/{},
          /*output_shape=*/{1, 12, 8},
          /*expected_output=*/R"(
     0) (tid_0, tid_1, tid_2)
@@ -180,16 +192,11 @@ INSTANTIATE_TEST_SUITE_P(
          upper bounds [1, 12, 8]
   )"},
         {"UnsupportedMultiSegment",
-         /*input_shape=*/{12, 4},
+         /*input_shape=*/{12, 2, 5, 7},
          /*input_tile_sizes=*/{},
-         /*input_tile_strides=*/{1, 2},
-         /*output_shape=*/{1, 12, 2, 2},
-         /*expected_output=*/""},
-        {"ExpandShape",
-         /*input_shape=*/{12},
-         /*input_tile_sizes=*/{1},
-         /*input_tile_strides=*/{1},
-         /*output_shape=*/{3, 4},
+         /*input_tile_strides=*/{1, 2, 3, 4},
+         /*input_tile_offsets=*/{},
+         /*output_shape=*/{1, 12, 7, 5, 2},
          /*expected_output=*/""},
         // Example (tid_0, tid_1) -> (offset, upper bound):
         // (0, 0) -> (0,  3), (0, 1) -> ( 3,  4)
@@ -199,6 +206,7 @@ INSTANTIATE_TEST_SUITE_P(
          /*input_shape=*/{3, 4},
          /*input_tile_sizes=*/{1, 3},
          /*input_tile_strides=*/{1, 1},
+         /*input_tile_offsets=*/{},
          /*output_shape=*/{12},
          /*expected_output=*/R"(
     0) (tid_0, tid_1)
@@ -211,6 +219,7 @@ INSTANTIATE_TEST_SUITE_P(
          /*input_shape=*/{3, 4},
          /*input_tile_sizes=*/{2, 4},
          /*input_tile_strides=*/{1, 1},
+         /*input_tile_offsets=*/{},
          /*output_shape=*/{12},
          /*expected_output=*/R"(
     0) (tid_0, tid_1)
@@ -227,6 +236,7 @@ INSTANTIATE_TEST_SUITE_P(
          /*input_shape=*/{3, 4},
          /*input_tile_sizes=*/{1, 3},
          /*input_tile_strides=*/{1, 2},
+         /*input_tile_offsets=*/{},
          /*output_shape=*/{12},
          /*expected_output=*/R"(
     0) (tid_0, tid_1)
@@ -239,6 +249,7 @@ INSTANTIATE_TEST_SUITE_P(
          /*input_shape=*/{3, 4},
          /*input_tile_sizes=*/{1, 3},
          /*input_tile_strides=*/{1, 1},
+         /*input_tile_offsets=*/{},
          /*output_shape=*/{1, 12},
          /*expected_output=*/R"(
     0) (tid_0, tid_1)
@@ -251,6 +262,7 @@ INSTANTIATE_TEST_SUITE_P(
          /*input_shape=*/{3, 4},
          /*input_tile_sizes=*/{1, 3},
          /*input_tile_strides=*/{1, 1},
+         /*input_tile_offsets=*/{},
          /*output_shape=*/{12, 1},
          /*expected_output=*/R"(
     0) (tid_0, tid_1)
@@ -263,6 +275,7 @@ INSTANTIATE_TEST_SUITE_P(
          /*input_shape=*/{3, 1, 4},
          /*input_tile_sizes=*/{1, 1, 3},
          /*input_tile_strides=*/{1, 1, 1},
+         /*input_tile_offsets=*/{},
          /*output_shape=*/{12},
          /*expected_output=*/R"(
     0) (tid_0, tid_1, tid_2)
@@ -270,6 +283,91 @@ INSTANTIATE_TEST_SUITE_P(
          sizes [3]
          strides [1]
          upper bounds [min(tid_0, 2) * 4 + min(tid_2 * 3 + 2, 3) + 1]
+  )"},
+        {"ExpandShape_FullTargetInnerDim",
+         /*input_shape=*/{12},
+         /*input_tile_sizes=*/{4},
+         /*input_tile_strides=*/{1},
+         /*input_tile_offsets=*/{},
+         /*output_shape=*/{3, 4},
+         /*expected_output=*/R"(
+    0) (tid_0)
+      -> offsets [tid_0, 0]
+         sizes [1, 4]
+         strides [1, 1]
+         upper bounds [tid_0 + 1, 4]
+  )"},
+        {"ExpandShape_PartialTargetInnerDim",
+         /*input_shape=*/{12},
+         /*input_tile_sizes=*/{2},
+         /*input_tile_strides=*/{1},
+         /*input_tile_offsets=*/{1},
+         /*output_shape=*/{3, 4},
+         /*expected_output=*/R"(
+    0) (tid_0)
+      -> offsets [0, 1]
+         sizes [1, 2]
+         strides [1, 1]
+         upper bounds [1, 3]
+  )"},
+        {"ExpandShape_MultipleTargetInnerDims",
+         /*input_shape=*/{12},
+         /*input_tile_sizes=*/{8},
+         /*input_tile_strides=*/{1},
+         /*input_tile_offsets=*/{4},
+         /*output_shape=*/{3, 4},
+         /*expected_output=*/R"(
+    0) (tid_0)
+      -> offsets [1, 0]
+         sizes [2, 4]
+         strides [1, 1]
+         upper bounds [3, 4]
+  )"},
+        {"ExpandShape_Unsupported_NonBox",
+         /*input_shape=*/{12},
+         /*input_tile_sizes=*/{5},
+         /*input_tile_strides=*/{1},
+         /*input_tile_offsets=*/{0},
+         /*output_shape=*/{3, 4},
+         /*expected_output=*/""},
+        {"ExpandShape_WithUnitDim",
+         /*input_shape=*/{12},
+         /*input_tile_sizes=*/{4},
+         /*input_tile_strides=*/{1},
+         /*input_tile_offsets=*/{},
+         /*output_shape=*/{3, 1, 4},
+         /*expected_output=*/R"(
+    0) (tid_0)
+      -> offsets [tid_0, 0, 0]
+         sizes [1, 1, 4]
+         strides [1, 1, 1]
+         upper bounds [tid_0 + 1, 1, 4]
+  )"},
+        {"ExpandShape_To1DIdentity",
+         /*input_shape=*/{12},
+         /*input_tile_sizes=*/{4},
+         /*input_tile_strides=*/{1},
+         /*input_tile_offsets=*/{4},
+         /*output_shape=*/{1, 12},
+         /*expected_output=*/R"(
+    0) (tid_0)
+      -> offsets [0, 4]
+         sizes [1, 4]
+         strides [1, 1]
+         upper bounds [1, 12]
+  )"},
+        {"CollapseShape_PreserveInnermostStride",
+         /*input_shape=*/{3, 4},
+         /*input_tile_sizes=*/{1, 2},
+         /*input_tile_strides=*/{1, 2},
+         /*input_tile_offsets=*/{1, 0},
+         /*output_shape=*/{12},
+         /*expected_output=*/R"(
+    0) (tid_0, tid_1)
+      -> offsets [4]
+         sizes [2]
+         strides [2]
+         upper bounds [7]
   )"},
     }),
     [](const ::testing::TestParamInfo<ReshapeTilePropagationTest::ParamType>&
