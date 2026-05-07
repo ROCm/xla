@@ -23,7 +23,6 @@ limitations under the License.
 #include <limits>
 #include <memory>
 #include <optional>
-#include <stack>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -34,10 +33,12 @@ limitations under the License.
 // IWYU pragma: no_include "llvm/Config/Disassemblers.def.inc"
 // IWYU pragma: no_include "llvm/Config/Targets.def.inc"
 
+#include "absl/base/casts.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/log/vlog_is_on.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -166,6 +167,7 @@ limitations under the License.
 #include "xla/service/call_graph.h"
 #include "xla/service/call_inliner.h"
 #include "xla/service/change_op_data_type.h"
+#include "xla/service/compiled_module.h"
 #include "xla/service/compiler.h"
 #include "xla/service/conditional_simplifier.h"
 #include "xla/service/conditional_to_select.h"
@@ -208,6 +210,7 @@ limitations under the License.
 #include "xla/service/llvm_ir/llvm_util.h"
 #include "xla/service/logical_buffer.h"
 #include "xla/service/map_inliner.h"
+#include "xla/service/multi_module_driver.h"
 #include "xla/service/scatter_expander.h"
 #include "xla/service/scatter_simplifier.h"
 #include "xla/service/select_and_scatter_expander.h"
@@ -232,12 +235,10 @@ limitations under the License.
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/errors.h"
-#include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/platform/threadpool.h"
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/casts.h"
 #include "tsl/platform/cpu_info.h"
 #include "tsl/platform/logging.h"  // IWYU pragma: keep
 #include "tsl/profiler/lib/traceme.h"
@@ -338,6 +339,10 @@ inline bool IsOneDnnCompatible(bool is_aot_compile) {
   return false;
 }
 
+tsl::thread::ThreadPool* GetCpuCompilationThreadPool() {
+  return GetCompilationThreadPool();
+}
+
 CpuCompiler::CpuCompiler() {
   // Initialize LLVM the first time the CpuCompiler is initialized.
   static bool llvm_initialized = []() {
@@ -355,6 +360,7 @@ absl::StatusOr<std::vector<std::unique_ptr<Executable>>> CpuCompiler::Compile(
     return Unimplemented(
         "Model partitioning not implemented for the CPU compiler");
   }
+
   return LLVMCompiler::Compile(std::move(hlo_module), stream_execs, options);
 }
 
@@ -1248,8 +1254,18 @@ absl::Status CreateHloProfilingArtifacts(
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<HloModule>> CpuCompiler::RunHloPasses(
-    std::unique_ptr<HloModule> module, se::StreamExecutor* /*stream_exec*/,
+    std::unique_ptr<HloModule> module, se::StreamExecutor* stream_exec,
     const CompileOptions& options) {
+  if (MultiModuleDriver::ShouldProcess(*module)) {
+    VLOG(1) << "Triggering HLO module splitting for module: " << module->name();
+    MultiModuleDriver driver(
+        [this, stream_exec](std::unique_ptr<HloModule> m,
+                            const CompileOptions& opts) {
+          return this->RunHloPasses(std::move(m), stream_exec, opts);
+        },
+        GetCpuCompilationThreadPool());
+    return driver.Compile(std::move(module), {stream_exec}, options);
+  }
   auto& config = module->config();
 
   std::unique_ptr<llvm::TargetMachine> jit_target_machine;
@@ -1324,67 +1340,6 @@ CreateOrcJITPostCompilationHook(const HloModule* hlo_module,
   };
 }
 
-struct ComputationToEmit {
-  HloComputation* computation;
-
-  // Are we emitting this computation with fast-math reassociation enabled?
-  // We enable reassociation for reductions because it has a significant
-  // performance impact.
-  bool allow_reassociation;
-
-  bool operator==(const ComputationToEmit& other) const {
-    return computation == other.computation &&
-           allow_reassociation == other.allow_reassociation;
-  }
-
-  template <typename H>
-  friend H AbslHashValue(H h, const ComputationToEmit& c) {
-    return H::combine(std::move(h), c.computation, c.allow_reassociation);
-  }
-};
-
-std::vector<ComputationToEmit> SubcomputationEmissionOrder(
-    HloComputation* root) {
-  absl::flat_hash_set<ComputationToEmit> visited;
-  std::vector<ComputationToEmit> postorder;
-
-  // agenda of (node, leave) pairs.
-  std::stack<std::pair<ComputationToEmit, bool>> agenda;
-  agenda.emplace(ComputationToEmit{root, false}, false);
-  while (!agenda.empty()) {
-    ComputationToEmit c;
-    bool leave;
-    std::tie(c, leave) = agenda.top();
-    agenda.pop();
-
-    if (leave) {
-      postorder.push_back(c);
-      continue;
-    }
-
-    if (visited.insert(c).second) {
-      agenda.emplace(c, true);
-      for (auto* instruction : c.computation->instructions()) {
-        bool allow_reassociation =
-            instruction->opcode() == HloOpcode::kAllReduce ||
-            instruction->opcode() == HloOpcode::kReduce ||
-            instruction->opcode() == HloOpcode::kReduceWindow;
-        auto cc = absl::MakeSpan(instruction->called_computations());
-        for (auto it = cc.rbegin(); it != cc.rend(); ++it) {
-          HloComputation* called_computation = *it;
-          ComputationToEmit callee{
-              called_computation, c.allow_reassociation || allow_reassociation};
-          if (!visited.contains(callee)) {
-            agenda.emplace(callee, false);
-          }
-        }
-      }
-    }
-  }
-  DCHECK(!postorder.empty() && postorder.back().computation == root);
-  postorder.pop_back();
-  return postorder;
-}
 
 }  // namespace
 
