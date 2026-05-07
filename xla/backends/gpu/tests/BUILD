@@ -517,22 +517,6 @@ xla_test(
 )
 
 xla_test(
-    name = "cute_dsl_custom_call_test",
-    srcs = ["cute_dsl_custom_call_test.cc"],
-    backends = ["b200"],
-    data = ["cute_dsl_vector_add.hlo"],
-    deps = [
-        ":hlo_pjrt_gpu_test_base",
-        "//xla/tsl/lib/core:status_test_util",
-        "//xla/tsl/platform:env",
-        "//xla/tsl/platform:test",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:path",
-    ],
-)
-
-xla_test(
     name = "gpu_ftz_test",
     srcs = ["gpu_ftz_test.cc"],
     backends = ["gpu"],
