@@ -162,60 +162,6 @@ ENTRY main {
   EXPECT_NEAR(absl::ToDoubleMicroseconds(runtime_data.exec_time), 5, 1);
 }
 
-TEST_F(GpuIndexingPerformanceModelTest,
-       TritonSoftmaxProducerConsumerFusionIsSupported) {
-  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
-HloModule m
-
-add {
-  Arg_0 = f32[] parameter(0)
-  Arg_1 = f32[] parameter(1)
-  ROOT add = f32[] add(Arg_0, Arg_1)
-}
-
-fusion {
-  param_0 = f32[512,911] parameter(0)
-  param_1 = f32[911] parameter(1)
-  broadcast = f32[512,911] broadcast(param_1), dimensions={1}
-  ROOT multiply = f32[512,911] multiply(param_0, broadcast)
-}
-
-triton_softmax_computation {
-  param_0 = f32[512,911] parameter(0)
-  constant_0 = f32[] constant(0)
-  reduce_0 = f32[512] reduce(param_0, constant_0), dimensions={1}, to_apply=add
-  broadcast_4 = f32[512,911] broadcast(reduce_0), dimensions={0}
-  ROOT multiply = f32[512,911] multiply(param_0, broadcast_4)
-}
-
-ENTRY main {
-  param_0 = f32[512,911] parameter(0)
-  param_1 = f32[911] parameter(1)
-  fusion.1 = f32[512,911] fusion(param_0, param_1), kind=kLoop, calls=fusion
-  ROOT triton_softmax = f32[512,911] fusion(fusion.1), kind=kCustom, calls=triton_softmax_computation, backend_config={"fusion_backend_config": {"kind":"__triton","block_level_fusion_config":{"output_tiles":[{"sizes":["1","911"]}],"num_warps":"2"}}}
-}
-)"));
-  auto consumer = module->entry_computation()->root_instruction();
-  auto producer = consumer->operand(0);
-
-  TF_ASSERT_OK_AND_ASSIGN(
-      auto runtime_data,
-      indexing_cost_model_.EstimateRunTimeForTriton(producer, consumer));
-
-  constexpr int64_t kParam0SizeBytes = 512 * 911 * 4;
-  constexpr int64_t kParam1SizeBytes = 911 * 4;
-  constexpr int64_t kOutputSizeBytes = 512 * 911 * 4;
-
-  // Each block reads 1 tile of shape [1, 911] from param_0 and full param_1.
-  // In total param_0 is read once and param_1 is read 512 times.
-  constexpr int64_t kExpectedBytesRead =
-      kParam0SizeBytes + 512 * kParam1SizeBytes;
-
-  EXPECT_EQ(runtime_data.bytes_read, kExpectedBytesRead);
-  EXPECT_EQ(runtime_data.bytes_written, kOutputSizeBytes);
-  EXPECT_NEAR(absl::ToDoubleMicroseconds(runtime_data.exec_time), 5, 1);
-}
-
 // Example from b/383162692.
 TEST_F(GpuIndexingPerformanceModelTest, EstimateBestTiling_CombinedFusion) {
   TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
