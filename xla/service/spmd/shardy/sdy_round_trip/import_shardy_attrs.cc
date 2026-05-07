@@ -19,6 +19,7 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
@@ -276,6 +277,9 @@ void convertShardyAttrsWithoutHloShardingV3(FuncOp funcOp,
     funcOp.removeResultAttr(resNum, kXlaShardingAttr);
   }
 
+  llvm::SmallVector<std::pair<CustomCallOp, DictionaryAttr>>
+      funcResultShardingOps;
+
   // Extract the round-tripped shardy attributes from the operations.
   funcOp.front().walk([&](Operation* op) {
     // Preserve `kXlaShardingAttr` on infeed & outfeed ops, as frontend
@@ -314,7 +318,7 @@ void convertShardyAttrsWithoutHloShardingV3(FuncOp funcOp,
     } else if (auto customCallOp = mlir::dyn_cast<CustomCallOp>(op)) {
       StringRef targetName = customCallOp.getCallTargetName();
       if (targetName == kFuncResultShardingTargetName) {
-        handleFuncResultSharding(customCallOp, funcOp, dictAttr, rewriter);
+        funcResultShardingOps.push_back({customCallOp, dictAttr});
         return;
       }
       if (targetName == kShardingCustomCallTargetName ||
@@ -330,6 +334,10 @@ void convertShardyAttrsWithoutHloShardingV3(FuncOp funcOp,
     removeFrontendAttribute(
         op, xla::ToStringRef(HloSharding::kShardingFrontendAttrName));
   });
+
+  for (auto& [customCallOp, dictAttr] : funcResultShardingOps) {
+    handleFuncResultSharding(customCallOp, funcOp, dictAttr, rewriter);
+  }
 }
 
 // Builds the shardy attributes coming from Shardy previously. This means
