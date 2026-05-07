@@ -64,6 +64,7 @@ EXCLUDED_TESTS=(
     "TritonAndBlasSupportForDifferentTensorSizes*"
 )
 
+
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
 
 for arg in "$@"; do
@@ -102,4 +103,3 @@ done
     -//xla/backends/gpu/tests:sorting.hlo.test_mi200 \
     -//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any \
     -//xla/backends/gpu/tests:collective_pipeline_parallelism_test_amdgpu_any \
-    -//xla/pjrt/gpu:se_gpu_pjrt_client_test # TODO: times out so temporarily skip the whole target
