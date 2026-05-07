@@ -414,10 +414,8 @@ def _create_dummy_repository(repository_ctx):
             "%{rocm_is_configured}": "False",
             "%{gpu_is_configured}": "if_true" if enable_cuda(repository_ctx) or enable_sycl(repository_ctx) else "if_false",
             "%{cuda_or_rocm}": "if_true" if enable_cuda(repository_ctx) else "if_false",
-            "%{rocm_extra_copts}": "[]",
             "%{rocm_gpu_architectures}": "[]",
             "%{rocm_version_number}": "0",
-            "%{rocm_hipblaslt}": "False",
             "%{single_gpu_rbe_pool}": repository_ctx.os.environ.get(_TF_ROCM_RBE_SINGLE_GPU_POOL, _DEFAULT_TF_ROCM_RBE_SINGLE_GPU_POOL),
             "%{multi_gpu_rbe_pool}": repository_ctx.os.environ.get(_TF_ROCM_RBE_MULTI_GPU_POOL, _DEFAULT_TF_ROCM_RBE_MULTI_GPU_POOL),
         },
@@ -452,7 +450,6 @@ def _create_dummy_repository(repository_ctx):
         "rocm:rocm_config.h",
         {
             "%{rocm_toolkit_path}": _DEFAULT_ROCM_TOOLKIT_PATH,
-            "%{hipblaslt_flag}": "0",
         },
         "rocm/rocm_config/rocm_config.h",
     )
@@ -482,11 +479,6 @@ def _use_rocm_clang(repository_ctx):
 
 def _tf_sysroot(repository_ctx):
     return get_host_environ(repository_ctx, _TF_SYSROOT, "")
-
-def _compute_rocm_extra_copts(repository_ctx, amdgpu_targets):
-    amdgpu_target_flags = ["--offload-arch=" +
-                           amdgpu_target for amdgpu_target in amdgpu_targets]
-    return str(amdgpu_target_flags)
 
 def _canonical_path(p):
     parts = [x for x in p.split("/") if x != ""]
@@ -614,15 +606,10 @@ def _create_local_rocm_repository(repository_ctx):
             "%{rocm_is_configured}": "True",
             "%{gpu_is_configured}": "if_true",
             "%{cuda_or_rocm}": "if_true",
-            "%{rocm_extra_copts}": _compute_rocm_extra_copts(
-                repository_ctx,
-                rocm_config.amdgpu_targets,
-            ),
             "%{single_gpu_rbe_pool}": repository_ctx.os.environ.get(_TF_ROCM_RBE_SINGLE_GPU_POOL, _DEFAULT_TF_ROCM_RBE_SINGLE_GPU_POOL),
             "%{multi_gpu_rbe_pool}": repository_ctx.os.environ.get(_TF_ROCM_RBE_MULTI_GPU_POOL, _DEFAULT_TF_ROCM_RBE_MULTI_GPU_POOL),
             "%{rocm_gpu_architectures}": str(rocm_config.amdgpu_targets),
             "%{rocm_version_number}": str(rocm_version_number),
-            "%{rocm_hipblaslt}": "True",
         },
     )
 
@@ -718,7 +705,7 @@ def _create_local_rocm_repository(repository_ctx):
             "%{crosstool_verbose}": _crosstool_verbose(repository_ctx),
             "%{gcc_host_compiler_path}": str(cc),
             "%{rocm_amdgpu_targets}": ",".join(
-                ["\"%s\"" % c for c in rocm_config.amdgpu_targets],
+                ["%s" % c for c in rocm_config.amdgpu_targets],
             ),
             "%{tmpdir}": get_host_environ(
                 repository_ctx,
@@ -734,14 +721,10 @@ def _create_local_rocm_repository(repository_ctx):
         "rocm/rocm_config/rocm_config.h",
         tpl_paths["rocm:rocm_config.h"],
         {
-            "%{rocm_amdgpu_targets}": ",".join(
-                ["\"%s\"" % c for c in rocm_config.amdgpu_targets],
-            ),
             "%{rocm_toolkit_path}": rocm_config.install_path,
             "%{rocm_version_number}": rocm_config.rocm_version_number,
             "%{miopen_version_number}": rocm_config.miopen_version_number,
             "%{hipruntime_version_number}": rocm_config.hipruntime_version_number,
-            "%{hipblaslt_flag}": "1",
         },
     )
 
@@ -751,14 +734,10 @@ def _create_local_rocm_repository(repository_ctx):
         "rocm/rocm_config_hermetic/rocm_config.h",
         tpl_paths["rocm:rocm_config.h"],
         {
-            "%{rocm_amdgpu_targets}": ",".join(
-                ["\"%s\"" % c for c in rocm_config.amdgpu_targets],
-            ),
             "%{rocm_toolkit_path}": str(repository_ctx.path(rocm_config.rocm_toolkit_path)),
             "%{rocm_version_number}": rocm_config.rocm_version_number,
             "%{miopen_version_number}": rocm_config.miopen_version_number,
             "%{hipruntime_version_number}": rocm_config.hipruntime_version_number,
-            "%{hipblaslt_flag}": "1",
         },
     )
 
@@ -771,10 +750,6 @@ def _create_remote_rocm_repository(repository_ctx, remote_config_repo):
             "%{rocm_is_configured}": "True",
             "%{gpu_is_configured}": "if_true",
             "%{cuda_or_rocm}": "if_true",
-            "%{rocm_extra_copts}": _compute_rocm_extra_copts(
-                repository_ctx,
-                [],  #_compute_capabilities(repository_ctx)
-            ),
         },
     )
     repository_ctx.template(

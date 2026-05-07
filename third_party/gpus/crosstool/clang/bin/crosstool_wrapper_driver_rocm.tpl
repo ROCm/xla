@@ -23,6 +23,7 @@ import sys
 import shlex
 
 # Template values set by rocm_configure.bzl.
+AMDGPU_TARGETS = ('%{rocm_amdgpu_targets}')
 CPU_COMPILER = ('%{cpu_compiler}')
 HOST_COMPILER_PATH = ('%{host_compiler_path}')
 
@@ -107,15 +108,14 @@ def GetHipccOptions(argv):
   """
 
   parser = ArgumentParser()
-  parser.add_argument('--offload-arch', nargs='*', action='append')
   # TODO find a better place for this
   parser.add_argument('-gline-tables-only', action='store_true')
 
   args, _ = parser.parse_known_args(argv)
 
   hipcc_opts = ' -gline-tables-only ' if args.gline_tables_only else ''
-  if args.offload_arch:
-    hipcc_opts = hipcc_opts + ' '.join(['--offload-arch=' + a for a in sum(args.offload_arch, [])])
+  for target in AMDGPU_TARGETS.split(','):
+    hipcc_opts += ' --offload-arch=' + target.strip()
 
   return hipcc_opts
 
