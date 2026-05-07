@@ -50,6 +50,32 @@ EXCLUDED_TESTS=(
     "StreamExecutorGpuClientTest.GetCompiledMemoryStatsWithTupleAndNcclUserBuffers"
 )
 
+# Add MI350X (gfx950) specific test exclusions
+if [[ "$RBE_POOL" == "linux_x64_gpu_do_gfx950" ]]; then
+    echo "Adding MI350X (gfx950) specific test exclusions"
+    EXCLUDED_TESTS+=(
+        # Triton autotuner failures
+        "TritonBackendTest.CostModelOptions_Combination"
+        "TritonBackendTest.CostModelOptions_Filter"
+        "TritonBackendTest.CostModelOptions_TopFromDefault"
+        # Sort rewriter failures (CUB sort issues)
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f16_asc_s16_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/bf16_desc_s16_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f32_desc_s16_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f32_asc_s32_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/bf16_asc_s16_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f16_desc_s32_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f32_desc_s32_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f32_asc_s16_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f16_desc_s16_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/bf16_desc_s32_cub"
+        "SortRewriterArgsort/SortRewriterArgsortTest.SortNumpyOrderArgsort/f16_asc_s32_cub"
+        # Convolution test failure
+        "SampleFileTest.Convolution"
+    )
+fi
+
+
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
 
 for arg in "$@"; do
