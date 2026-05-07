@@ -16,9 +16,12 @@ limitations under the License.
 #ifndef XLA_CODEGEN_TILING_EXPERIMENTAL_TILE_H_
 #define XLA_CODEGEN_TILING_EXPERIMENTAL_TILE_H_
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <utility>
 
 #include "absl/status/statusor.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -119,6 +122,11 @@ class Tile {
   const TilingSpace& tiling_space() const { return *tiling_space_; }
   mlir::MLIRContext* mlir_context() const;
 
+  const std::optional<SymbolicExpr>& replica_id() const { return replica_id_; }
+  void set_replica_id(std::optional<SymbolicExpr> replica_id) {
+    replica_id_ = std::move(replica_id);
+  }
+
   // Replace tiling expressions with the given map.
   void Replace(const llvm::DenseMap<SymbolicExpr, SymbolicExpr>& map);
 
@@ -139,6 +147,7 @@ class Tile {
  private:
   const TilingSpace* tiling_space_;
   llvm::SmallVector<DimTile> dim_tiles_;
+  std::optional<SymbolicExpr> replica_id_;
 };
 
 template <typename H>
@@ -146,6 +155,9 @@ H AbslHashValue(H h, const Tile& tile) {
   h = H::combine(std::move(h), &tile.tiling_space());
   for (const DimTile& dim_tile : tile.dim_tiles()) {
     h = H::combine(std::move(h), dim_tile);
+  }
+  if (tile.replica_id().has_value()) {
+    h = H::combine(std::move(h), tile.replica_id().value());
   }
   return h;
 }

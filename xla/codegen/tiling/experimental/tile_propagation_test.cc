@@ -541,6 +541,30 @@ TEST_F(TilePropagationTest, CanPropagateToInputsOfAllReduceOp) {
   )"));
 }
 
+TEST_F(TilePropagationTest, CanPropagateToInputsOfAllGatherOp) {
+  HloInstruction* root = ParseAndGetRoot(R"(
+    HloModule m
+    ENTRY e {
+      p0 = f32[64,256] parameter(0)
+      ROOT all_gather = f32[128,256] all-gather(p0), replica_groups={{0,1}}, dimensions={0}
+    }
+  )");
+  auto tiling_space = TilingSpace::Create(
+      *HloFusionAdaptor::ForInstruction(root), &mlir_context_);
+  ASSERT_OK_AND_ASSIGN(
+      auto tiled_operands,
+      PropagateTileToInput(
+          *tiling_space, *root,
+          GetTestTile(*tiling_space, root->shape().dimensions()), 0));
+  EXPECT_THAT(tiled_operands, MatchToString(R"(
+    0) (tid_0, tid_1)
+      -> offsets [(tid_0 * ts_0) mod 64, tid_1 * ts_1]
+         sizes [ts_0, ts_1]
+         strides [1, 2]
+         upper bounds [64, 256] replica_id [(tid_0 * ts_0) floordiv 64]
+  )"));
+}
+
 TEST_F(TilePropagationTest, CanPropagateToInputOfBroadcastOp) {
   HloInstruction* root = ParseAndGetRoot(R"(
     HloModule m
@@ -1060,6 +1084,47 @@ TEST_F(TilePropagationTest, CanPropagateToInputsForScaledDotOp) {
          sizes [ts_1, ts_2]
          strides [2, 1]
          upper bounds [64, 512]
+  )"));
+}
+
+TEST_F(TilePropagationTest, CanPropagateReplicaIdThroughBroadcast) {
+  // Pick an arbitrary op that is a bit more complicated than elementwise
+  // and test that replica_id is propagated correctly for fused ops.
+  HloInstruction* root = ParseAndGetRoot(R"(
+    HloModule m
+    ENTRY e {
+      p0 = f32[10, 32] parameter(0)
+      broadcast = f32[10, 32, 5] broadcast(p0), dimensions={0, 1}
+      ROOT all_gather = f32[10, 64, 5] all-gather(broadcast), replica_groups={{0,1}}, dimensions={1}
+    }
+  )");
+  auto tiling_space = TilingSpace::Create(
+      *HloFusionAdaptor::ForInstruction(root), &mlir_context_);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto tiled_ag_operands,
+      PropagateTileToInput(
+          *tiling_space, *root,
+          GetTestTile(*tiling_space, root->shape().dimensions()), 0));
+
+  EXPECT_THAT(tiled_ag_operands, MatchToString(R"(
+    0) (tid_0, tid_1, tid_2)
+      -> offsets [tid_0 * ts_0, (tid_1 * ts_1) mod 32, tid_2 * ts_2]
+         sizes [ts_0, ts_1, ts_2]
+         strides [1, 2, 3]
+         upper bounds [10, 32, 5] replica_id [(tid_1 * ts_1) floordiv 32]
+  )"));
+  // operand(0) is the broadcast, tile_ag_operands[0] is its output tile.
+  // This should preserve the replica_id and drop dimension 2.
+  ASSERT_OK_AND_ASSIGN(auto tiled_broadcast_operands,
+                       PropagateTileToInput(*tiling_space, *root->operand(0),
+                                            tiled_ag_operands[0], 0));
+  EXPECT_THAT(tiled_broadcast_operands, MatchToString(R"(
+    0) (tid_0, tid_1, tid_2)
+      -> offsets [tid_0 * ts_0, (tid_1 * ts_1) mod 32]
+         sizes [ts_0, ts_1]
+         strides [1, 2]
+         upper bounds [10, 32] replica_id [(tid_1 * ts_1) floordiv 32]
   )"));
 }
 
