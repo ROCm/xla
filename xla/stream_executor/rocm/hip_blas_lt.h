@@ -113,17 +113,6 @@ class BlasLt : public gpu::BlasLt {
           must_swap_operands_(must_swap_operands),
           grouped_gemm_(nullptr) {}
 
-    // Constructor for grouped matmul.
-    // InitializeGroupedGemm() must be called immediately after construction
-    // to complete initialization; the caller is responsible for propagating
-    // any error it returns.
-    MatmulPlan(gpu::GroupedGemmConfig&& cfg, bool must_swap_operands,
-               Epilogue epilogue)
-        : must_swap_operands_(must_swap_operands),
-          cfg_(std::move(cfg)),
-          grouped_gemm_epilogue_(epilogue),
-          grouped_gemm_(nullptr) {}
-
     ~MatmulPlan() override = default;
 
     absl::Status ExecuteOnStream(
@@ -142,11 +131,12 @@ class BlasLt : public gpu::BlasLt {
 
     bool is_grouped() const { return grouped_gemm_ != nullptr; }
 
-    // Completes grouped-GEMM initialization. Must be called exactly once after
-    // construction via the grouped-matmul constructor. Returns an error status
-    // rather than crashing so callers can propagate it up the stack.
-    absl::Status InitializeGroupedGemm(hipblasLtHandle_t blas_lt_handle,
-                                       blas::ComputationType compute_type);
+    // Static factory for grouped-GEMM plans. Creates a fully-initialized
+    // MatmulPlan or returns an error; it is impossible to construct a grouped
+    // MatmulPlan without going through this function.
+    static absl::StatusOr<std::unique_ptr<MatmulPlan>> InitializeGroupedGemm(
+        gpu::GroupedGemmConfig cfg, Epilogue epilogue,
+        hipblasLtHandle_t blas_lt_handle, blas::ComputationType compute_type);
 
    protected:
     absl::Status DoMatmul(Stream* stream, const void* alpha, const void* beta,
@@ -154,6 +144,20 @@ class BlasLt : public gpu::BlasLt {
                           blas::ProfileResult* profile_result) const;
 
    private:
+    // Private constructor for grouped matmul. Callers must use
+    // InitializeGroupedGemm() instead.
+    MatmulPlan(gpu::GroupedGemmConfig&& cfg, bool must_swap_operands,
+               Epilogue epilogue)
+        : must_swap_operands_(must_swap_operands),
+          cfg_(std::move(cfg)),
+          grouped_gemm_epilogue_(epilogue),
+          grouped_gemm_(nullptr) {}
+
+    // Performs the hipBLASLt grouped-GEMM initialization work. Called by the
+    // static factory InitializeGroupedGemm().
+    absl::Status DoInitializeGroupedGemm(hipblasLtHandle_t blas_lt_handle,
+                                         blas::ComputationType compute_type);
+
     absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithmsForGroupedMatmul(
         const Stream* stream, size_t max_algorithm_count,
         size_t max_workspace_size) const;

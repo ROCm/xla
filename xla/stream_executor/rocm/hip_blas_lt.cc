@@ -753,7 +753,23 @@ absl::Status BlasLt::MatmulPlan::ExecuteRegularMatmul(
   return xla::Internal("Unexpected dtype");
 }
 
-absl::Status BlasLt::MatmulPlan::InitializeGroupedGemm(
+/*static*/ absl::StatusOr<std::unique_ptr<BlasLt::MatmulPlan>>
+BlasLt::MatmulPlan::InitializeGroupedGemm(gpu::GroupedGemmConfig cfg,
+                                          Epilogue epilogue,
+                                          hipblasLtHandle_t blas_lt_handle,
+                                          blas::ComputationType compute_type) {
+  const bool must_swap_operands = cfg.must_swap_operands;
+  // Use `new` directly because the grouped-matmul constructor is private.
+  // This is equivalent to make_unique; the private constructor is accessible
+  // here because this is a static member of MatmulPlan.
+  auto plan = std::unique_ptr<MatmulPlan>(
+      new MatmulPlan(std::move(cfg), must_swap_operands, epilogue));
+  TF_RETURN_IF_ERROR(
+      plan->DoInitializeGroupedGemm(blas_lt_handle, compute_type));
+  return plan;
+}
+
+absl::Status BlasLt::MatmulPlan::DoInitializeGroupedGemm(
     hipblasLtHandle_t blas_lt_handle, blas::ComputationType compute_type) {
   auto batch_stride_a = (cfg_->m * cfg_->k);
   auto batch_stride_b = (cfg_->n * cfg_->k);
@@ -905,12 +921,9 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetGroupedMatmulPlan(
     blas_lt_handle = blas_lt_.get();
   }
 
-  const bool must_swap_operands = cfg.must_swap_operands;
-  auto plan = std::make_unique<MatmulPlan>(std::move(cfg), must_swap_operands,
-                                           epilogue);
-  TF_RETURN_IF_ERROR(
-      plan->InitializeGroupedGemm(blas_lt_handle, *compute_type));
-
+  TF_ASSIGN_OR_RETURN(
+      auto plan, MatmulPlan::InitializeGroupedGemm(
+                     std::move(cfg), epilogue, blas_lt_handle, *compute_type));
   return absl::StatusOr<MatmulPlanPtr>(std::move(plan));
 }
 
