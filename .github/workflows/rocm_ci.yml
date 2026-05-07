@@ -103,7 +103,7 @@ jobs:
     runs-on: linux-x86-64-4gpu-amd
     env:
       DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
-      EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/execute_ci_build_upstream.sh
+      EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/12f2909263955bffe40cc9f26223e39b0ce45e81/build_tools/rocm/execute_ci_build_upstream.sh
     container: *rocm_container
     defaults:
       run:
@@ -133,7 +133,6 @@ jobs:
             --config=rocm_rbe \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${DOCKER_IMAGE}
 
       - name: Test XLA [multi_gpu]
