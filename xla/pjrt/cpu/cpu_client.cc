@@ -992,6 +992,9 @@ absl::StatusOr<PjRtDeviceEventRef> PjRtCpuClient::LinearizeHostBufferInto(
     HostBufferSemantics host_buffer_semantics,
     absl::AnyInvocable<void() &&> on_done_with_host_buffer,
     const xla::Shape& device_shape, PjRtRawBufferRef raw_buffer) {
+  if (device_shape.IsToken()) {
+    return PjRtDeviceEventRef(tsl::MakeAvailableAsyncValueRef<CpuEvent>());
+  }
   return absl::down_cast<CpuRawBuffer*>(raw_buffer.get())
       ->CopyFromHostBuffer(
           data, type, dims, byte_strides, host_buffer_semantics,
