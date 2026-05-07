@@ -77,7 +77,22 @@ class AbstractTrackedDeviceBuffer {
         result.push_back(tsl::FormRef(ev.async_value()));
       }
     }
-    usage_events().AppendTo(result);
+    usage_events_->AppendTo(result);
+    return result;
+  }
+
+  // Construct (or return) a vector of PjRtDeviceEventRef events which
+  // will become ready when this buffer is ok to mutate.
+  std::vector<PjRtDeviceEventRef>
+  GetAsyncValueDefinitionAndUsageDeviceEvents() {
+    std::vector<PjRtDeviceEventRef> result;
+    result.reserve(definition_events_.size());
+    for (const auto& ev : definition_events_) {
+      if (ev) {
+        result.push_back(ev);
+      }
+    }
+    usage_events_->AppendTo(result);
     return result;
   }
 
@@ -85,21 +100,11 @@ class AbstractTrackedDeviceBuffer {
   // underlying memory as this AbstractTrackedDeviceBuffer.
   const PjRtRawBufferRef& raw_buffer() const { return raw_buffer_; }
 
-  // Set of all usage events.
-  PjRtDeviceEventSet& usage_events() {
-    CHECK(usage_events_ != nullptr);
-    return *usage_events_;
-  }
-  const PjRtDeviceEventSet& usage_events() const {
-    CHECK(usage_events_ != nullptr);
-    return *usage_events_;
-  }
-
   // Only to be called via the result of
   // CommonPjRtBuffer::ScopedHold::ConvertUsageHold with an optional device
   // event to add to the usage events.
   void AddUsageEvent(PjRtDeviceEventRef event) {
-    usage_events().AddEvent(std::move(event));
+    usage_events_->AddEvent(std::move(event));
   }
 
   void ConfirmDonation() {
@@ -158,7 +163,7 @@ class AbstractTrackedDeviceBuffer {
   }
 
   void AddUsageEventsToSet(PjRtDeviceEventSet& events) {
-    usage_events().AppendTo(events);
+    usage_events_->AppendTo(events);
   }
 
   // Return the usage events for the buffers. After

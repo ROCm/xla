@@ -1429,9 +1429,12 @@ cc_library(
         "//xla/tsl/concurrency:async_value",
         "//xla/tsl/concurrency:executor",
         "//xla/tsl/concurrency:ref_count",
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
     ],
 )

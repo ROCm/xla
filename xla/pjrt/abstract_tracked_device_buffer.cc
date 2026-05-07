@@ -101,7 +101,7 @@ Future<> AbstractTrackedDeviceBuffer::GetReadyFuture(
 absl::Status AbstractTrackedDeviceBuffer::BlockForOperationsToComplete(
     PjRtMemorySpace* memory_space) {
   std::vector<tsl::RCReference<tsl::AsyncValue>> avs;
-  usage_events().AppendTo(avs);
+  usage_events_->AppendTo(avs);
   for (const auto& av : avs) {
     tsl::BlockUntilReady(av.get());
   }
@@ -143,7 +143,7 @@ void AbstractTrackedDeviceBuffer::Delete(PjRtMemorySpace* memory_space) {
   for (const auto& ev : device_buffer->definition_events()) {
     events.push_back(ev);
   }
-  device_buffer->usage_events().AppendTo(events);
+  device_buffer->usage_events_->AppendTo(events);
 
   device_buffer->LockUseAndTransferUsageEvents();
   auto raw_buffer = device_buffer->raw_buffer();
@@ -372,7 +372,7 @@ void CommonPjRtBuffer::ScopedHold::ConvertUsageHold(PjRtDeviceEventRef event) {
     absl::MutexLock lock(parent()->mu_);
     CHECK(parent()->device_buffer() == buffer() ||
           parent()->device_buffer() == nullptr);
-    buffer()->usage_events().AddEvent(std::move(event));
+    buffer()->AddUsageEvent(std::move(event));
     parent()->DecrementUsage();
   }
   SetState(kConverted);

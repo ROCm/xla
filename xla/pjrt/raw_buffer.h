@@ -177,7 +177,7 @@ class CommonPjRtRawBuffer : public PjRtRawBuffer {
   // and src_usage_event_promise when done using this buffer.
   virtual void ScheduleCopyTo(
       AsyncWorkRunner* async_work_runner,
-      std::vector<tsl::RCReference<tsl::AsyncValue>> transfer_dependency_avs,
+      std::vector<PjRtDeviceEventRef> transfer_dependency_events,
       PjRtRawBufferRef dst_raw_buffer,
       tsl::RCReference<PjRtDeviceEventPromise> definition_event_promise,
       tsl::RCReference<PjRtDeviceEventPromise> src_usage_event_promise,
