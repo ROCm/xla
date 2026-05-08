@@ -41,8 +41,6 @@ limitations under the License.
 #include "xla/codegen/tiling/tiled_hlo_computation.h"
 #include "xla/codegen/tiling/tiled_hlo_instruction.h"
 #include "xla/codegen/tiling/tiling_specification.h"
-#include "xla/hlo/analysis/indexing_analysis.h"
-#include "xla/hlo/analysis/indexing_map.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
@@ -51,7 +49,6 @@ limitations under the License.
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/hlo_fusion_analysis.h"
 #include "xla/service/gpu/ir_emission_utils.h"
-#include "xla/service/gpu/launch_dimensions.h"
 #include "xla/service/gpu/model/block_level_parameters.h"
 #include "xla/service/gpu/model/coalescing_analysis.h"
 #include "xla/service/gpu/model/gpu_dot_fusion_cost_model.h"
@@ -390,21 +387,14 @@ int64_t GpuPerformanceModelWithIndexingAnalysis::GetShapeSizeRecursive(
 absl::StatusOr<EstimateRunTimeData>
 GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTiledHloComputation(
     const HloFusionAdaptor& fusion_adaptor,
-    const TiledHloComputation& tiled_hlo_computation,
-    const LaunchDimensions& launch_dimensions) {
+    const TiledHloComputation& tiled_hlo_computation, int64_t num_warps) {
   absl::flat_hash_map<const HloInstruction*, OperandReadInfo> n_bytes_total_map;
 
   // Compute time for dot flops is counted separately.
   int64_t dot_flops = 0;
   int64_t flops = 0;
   int64_t bytes_read = 0;
-  int64_t num_blocks = launch_dimensions.num_blocks();
-
-  if (tiled_hlo_computation.num_output_tiles() != num_blocks) {
-    return absl::FailedPreconditionError(absl::StrCat(
-        "Number of output tiles does not match number of blocks. ",
-        tiled_hlo_computation.num_output_tiles(), " vs ", num_blocks));
-  }
+  int64_t num_blocks = tiled_hlo_computation.num_output_tiles();
 
   absl::Duration dot_compute_time = absl::ZeroDuration();
 
@@ -529,7 +519,7 @@ GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTiledHloComputation(
 
   absl::Duration compute_time =
       ComputeTime(*device_info_, flops, num_blocks,
-                  launch_dimensions.num_threads_per_block()) +
+                  num_warps * WarpSize(*device_info_)) +
       dot_compute_time;
 
   absl::Duration memory_access_time = read_time + write_time;
@@ -548,7 +538,6 @@ GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTiledHloComputation(
 absl::StatusOr<EstimateRunTimeData>
 GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTiledFusion(
     const HloFusionAdaptor& fusion_adaptor,
-    const LaunchDimensions& launch_dimensions,
     const BlockLevelParameters& block_level_parameters) {
   // TODO(b/332714755): Add caching for SymbolicTileAnalysis.
   SymbolicTileAnalysisOrError analysis_or_error =
@@ -570,7 +559,7 @@ GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTiledFusion(
                       analysis.ComputeTiledComputation(tiling));
 
   return EstimateRunTimeForTiledHloComputation(
-      fusion_adaptor, tiled_hlo_computation, launch_dimensions);
+      fusion_adaptor, tiled_hlo_computation, block_level_parameters.num_warps);
 }
 
 absl::StatusOr<EstimateRunTimeData>
@@ -585,31 +574,23 @@ GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTriton(
   }
 
   return EstimateRunTimeForTiledFusion(fusion_analysis.fusion(),
-                                       launch_config->launch_dimensions,
                                        launch_config->block_level_parameters);
 }
 
 /*static*/
-LaunchDimensions
-GpuPerformanceModelWithIndexingAnalysis::GetLaunchDimensionsForTiledFusion(
-    const TiledHloComputation& tiled_hlo_computation,
-    const se::DeviceDescription& device_info) {
-  int64_t num_blocks = tiled_hlo_computation.num_output_tiles();
-
+int64_t GpuPerformanceModelWithIndexingAnalysis::EstimateNumWarps(
+    const TiledHloComputation& tiled_hlo_computation) {
   // Decide on the number of warps to use based on the largest live tile size
   // at any given point within the computation.
   int64_t largest_live_tile_size = 1;
   ForEachInstructionInTiledHloComputation(
-      tiled_hlo_computation, num_blocks,
+      tiled_hlo_computation, /*num_blocks_at_root=*/1,
       [&](const TiledHloInstruction* tiled_hlo,
           int64_t unused_num_blocks_cur_hlo) {
         largest_live_tile_size = std::max(
             largest_live_tile_size, GetPaddedTileSize(tiled_hlo->tile_sizes()));
       });
-  int64_t num_warps = GetNumWarps(largest_live_tile_size);
-
-  return {static_cast<uint64_t>(num_blocks),
-          static_cast<uint64_t>(num_warps * WarpSize(device_info))};
+  return GetNumWarps(largest_live_tile_size);
 }
 
 absl::StatusOr<TopKTiledRunTimeDataOrError>
@@ -650,13 +631,11 @@ GpuPerformanceModelWithIndexingAnalysis::TryFindTopKBestTilingsForFusion(
     }
 
     auto tiled_hlo_computation = std::move(maybe_tiled_hlo_computation.value());
-    LaunchDimensions launch_dimensions =
-        GetLaunchDimensionsForTiledFusion(tiled_hlo_computation, *device_info_);
+    int64_t num_warps = EstimateNumWarps(tiled_hlo_computation);
 
-    TF_ASSIGN_OR_RETURN(
-        EstimateRunTimeData estimate_run_time_data,
-        EstimateRunTimeForTiledHloComputation(
-            fusion_adaptor, tiled_hlo_computation, launch_dimensions));
+    TF_ASSIGN_OR_RETURN(EstimateRunTimeData estimate_run_time_data,
+                        EstimateRunTimeForTiledHloComputation(
+                            fusion_adaptor, tiled_hlo_computation, num_warps));
 
     // Skip tilings with infinite runtime (e.g., due to register spilling).
     if (estimate_run_time_data.exec_time == absl::InfiniteDuration()) {
@@ -670,8 +649,7 @@ GpuPerformanceModelWithIndexingAnalysis::TryFindTopKBestTilingsForFusion(
       block_level_parameters.output_tile_sizes.emplace_back(
           tiled_root->tile_sizes().begin(), tiled_root->tile_sizes().end());
     }
-    block_level_parameters.num_warps =
-        launch_dimensions.num_threads_per_block() / WarpSize(*device_info_);
+    block_level_parameters.num_warps = num_warps;
 
     candidates.push_back(
         TiledRunTimeData{estimate_run_time_data, block_level_parameters});

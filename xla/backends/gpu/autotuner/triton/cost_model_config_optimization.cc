@@ -86,13 +86,10 @@ absl::StatusOr<absl::Duration> EstimateRunTimeWithConfig(
   TF_ASSIGN_OR_RETURN(TiledHloComputation tiled_hlo_computation,
                       analysis.ComputeTiledComputation(tiling));
 
-  LaunchDimensions launch_dims = GpuPerformanceModelWithIndexingAnalysis::
-      GetLaunchDimensionsForTiledFusion(tiled_hlo_computation,
-                                        context.device_description);
-
-  TF_ASSIGN_OR_RETURN(EstimateRunTimeData estimate,
-                      cost_model.EstimateRunTimeForTiledHloComputation(
-                          fusion_adaptor, tiled_hlo_computation, launch_dims));
+  TF_ASSIGN_OR_RETURN(
+      EstimateRunTimeData estimate,
+      cost_model.EstimateRunTimeForTiledHloComputation(
+          fusion_adaptor, tiled_hlo_computation, block_params.num_warps));
 
   return estimate.exec_time;
 }
