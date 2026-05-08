@@ -425,9 +425,12 @@ bool IsReduceLikeOpSupportedByYnn(const HloInstruction* hlo) {
     const Window& window = reduce_window->window();
     int new_axis_count = 0;
     for (const WindowDimension& dim : window.dimensions()) {
-      if (dim.size() > 1) {
+      if (dim.size() > 1 || dim.stride() > 1) {
         // TODO(ashaposhnikov): consider relaxing the constraints below.
-        if (dim.stride() != dim.size()) {
+        if (dim.size() > 1 && dim.stride() != dim.size()) {
+          // When a reduce-window has a stride greater than 1 on a dimension
+          // with size 1, it effectively skips input elements, resulting in a
+          // smaller output dimension.
           return false;
         }
         if (dim.base_dilation() != 1) {

@@ -133,6 +133,7 @@ cc_library(
     deps = [
         ":ynn_support",
         "//xla:literal",
+        "//xla:literal_util",
         "//xla:shape_util",
         "//xla:util",
         "//xla:xla_data_proto_cc",
