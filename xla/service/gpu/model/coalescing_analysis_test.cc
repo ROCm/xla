@@ -603,7 +603,7 @@ class CoalescingForTiledHloTest : public CoalescingTest {
             /*compute_all_tile_offset_indexing_maps=*/true);
 
     const TiledHloInstruction* tiled_hlo_root =
-        tiled_hlo_computation.GetRoots()[0];
+        tiled_hlo_computation.roots()[0];
     std::vector<double> result;
     for (const TiledHloInstruction* operand : tiled_hlo_root->operands()) {
       result.push_back(BandwidthUtilizationRateHeuristicForTiledMemoryAccess(

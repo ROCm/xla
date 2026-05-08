@@ -1068,8 +1068,8 @@ absl::StatusOr<std::vector<TensorValue>> EmitTiledComputation(
     VLOG(8) << "Emitted " << hlo->ToString(HloPrintOptions::ShortParsable());
   }
   std::vector<TensorValue> results;
-  results.reserve(tiled_computation.GetRoots().size());
-  for (const auto* root : tiled_computation.GetRoots()) {
+  results.reserve(tiled_computation.roots().size());
+  for (const auto* root : tiled_computation.roots()) {
     results.push_back(values[root]);
   }
   return std::move(results);
@@ -1152,7 +1152,7 @@ absl::Status EmitGeneric(mlir::OpBuilder builder,
 
   const HloComputation* computation = fusion.fused_instructions_computation();
   for (auto [root, result, arg] :
-       llvm::zip(tiled_hlo_computation.GetRoots(), results,
+       llvm::zip(tiled_hlo_computation.roots(), results,
                  fn.getArguments().drop_front(computation->num_parameters()))) {
     // Workaround(i1_to_i8_workaround)
     // Some types are stored using different types, e.g. i1 is stored in memory

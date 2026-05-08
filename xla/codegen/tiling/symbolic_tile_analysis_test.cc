@@ -132,9 +132,9 @@ absl::flat_hash_map<int64_t, const TiledHloInstruction*> GetParametersTiling(
 
 const TiledHloInstruction* GetFirstRoot(
     const TiledHloComputation& computation) {
-  CHECK_GE(computation.GetRoots().size(), 1);
-  CHECK_NE(computation.GetRoots()[0], nullptr);
-  return computation.GetRoots()[0];
+  CHECK_GE(computation.roots().size(), 1);
+  CHECK_NE(computation.roots()[0], nullptr);
+  return computation.roots()[0];
 }
 
 const SymbolicTiledHloInstruction* FindFirstInstruction(
@@ -516,7 +516,7 @@ ENTRY entry_computation {
           Tiling({{add_root, FlatTiling({2, 4})}}), default_schedule_builder_,
           /*constraints_are_known_satisfied=*/false,
           /*compute_all_tile_offset_indexing_maps=*/false));
-  const auto& roots = tiled_hlo_computation.GetRoots();
+  const auto& roots = tiled_hlo_computation.roots();
   EXPECT_THAT(roots, SizeIs(2));
   EXPECT_THAT(*roots[0], MatchTiledHloInstruction(
                              /*tile_sizes=*/{2, 4}, /*tile_strides=*/{1, 1},
@@ -599,7 +599,7 @@ ENTRY entry_computation {
                               default_schedule_builder_,
                               /*constraints_are_known_satisfied=*/false,
                               /*compute_all_tile_offset_indexing_maps=*/false));
-  const auto& roots = tiled_hlo_computation.GetRoots();
+  const auto& roots = tiled_hlo_computation.roots();
   EXPECT_THAT(roots, SizeIs(2));
   EXPECT_THAT(*roots[0], MatchTiledHloInstruction(
                              /*tile_sizes=*/{1, 4}, /*tile_strides=*/{1, 1},
@@ -719,7 +719,7 @@ ENTRY entry_computation {
           Tiling({{reshape_root, FlatTiling({4})}}), default_schedule_builder_,
           /*constraints_are_known_satisfied=*/false,
           /*compute_all_tile_offset_indexing_maps=*/false));
-  const auto& roots = tiled_hlo_computation.GetRoots();
+  const auto& roots = tiled_hlo_computation.roots();
   EXPECT_THAT(roots, SizeIs(2));
   EXPECT_THAT(*roots[0], MatchTiledHloInstruction(
                              /*tile_sizes=*/{4}, /*tile_strides=*/{1},
