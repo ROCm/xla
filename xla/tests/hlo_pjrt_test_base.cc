@@ -20,23 +20,40 @@ limitations under the License.
 #include <utility>
 
 #include "absl/log/check.h"
-#include "absl/memory/memory.h"
 #include "absl/status/statusor.h"
 #include "xla/pjrt/pjrt_client.h"
+#include "xla/service/hlo_runner_pjrt.h"
 #include "xla/tests/aot_utils.h"
 #include "xla/tests/hlo_runner_agnostic_test_base.h"
 #include "xla/tests/pjrt_client_registry.h"
 
 namespace xla {
 namespace {
-std::unique_ptr<PjRtClient> GetPjRtClientForTest() {
+
+// Returns a raw pointer to a GPU PjRt client that is created once and reused
+// across all tests in this process. Ownership is held by the static unique_ptr
+// inside this function, which ensures the client is properly destroyed at
+// process exit. This avoids the expensive GPU context teardown and
+// re-initialization that would otherwise happen between every test fixture
+// construction and destruction.
+// Since gtest runs tests sequentially within a process, the shared
+// client is never accessed concurrently and requires no synchronization.
+// With Bazel test sharding each shard is a separate OS process and gets its
+// own independent cached client, so sharding is fully compatible.
+PjRtClient* GetCachedPjRtClientForTest() {
   CHECK(ShouldUsePjRt())
       << "PjRt is required for tests extending HloPjRtTestBase.";
-  absl::StatusOr<std::unique_ptr<PjRtClient>> client =
-      GetGlobalPjRtClientTestFactory().Get()();
-  CHECK_OK(client.status())
-      << "Failed to create PjRt client. " << client.status();
-  return *std::move(client);
+  // The static-local unique_ptr is initialized at most once (C++11 guarantee).
+  // The GPU client it owns is created on the first fixture construction and
+  // destroyed by the static destructor at process exit.
+  static const std::unique_ptr<PjRtClient> kClient = []() {
+    absl::StatusOr<std::unique_ptr<PjRtClient>> client =
+        GetGlobalPjRtClientTestFactory().Get()();
+    CHECK_OK(client.status())
+        << "Failed to create PjRt client. " << client.status();
+    return std::move(*client);
+  }();
+  return kClient.get();
 }
 
 HloRunnerAgnosticTestBaseOptions BuildOptions(HloPjRtTestBaseOptions options) {
@@ -53,15 +70,23 @@ HloRunnerAgnosticTestBaseOptions BuildOptions(HloPjRtTestBaseOptions options) {
 }  // namespace
 
 HloPjRtTestBase::HloPjRtTestBase(HloPjRtTestBaseOptions options)
-    : HloPjRtTestBase(GetPjRtClientForTest().release(), std::move(options)) {}
+    : HloPjRtTestBase(GetCachedPjRtClientForTest(), std::move(options)) {}
 
 HloPjRtTestBase::HloPjRtTestBase(PjRtClient* client,
                                  HloPjRtTestBaseOptions options)
-    : HloPjRtTestBase(
+    // Use HloRunnerPjRt's non-owning constructor (PjRtClient* overload) so
+    // that when the test fixture is torn down the cached PjRtClient is NOT
+    // freed. The static unique_ptr in GetCachedPjRtClientForTest() retains
+    // ownership and the client remains alive for the next test fixture to
+    // reuse. MakeHloRunnerPjRtAotAware() is bypassed here because it requires
+    // a unique_ptr<PjRtClient> (owning); AoT mode is therefore not supported
+    // on the cached-client path.
+    : HloRunnerAgnosticTestBase(
+          std::make_unique<HloRunnerPjRt>(client),
           GetGlobalPjRtClientTestFactory().GetDeviceShapeRepresentationFn(
               client),
           GetGlobalPjRtClientTestFactory().GetDeviceShapeSizeFn(client),
-          absl::WrapUnique(client), std::move(options)) {}
+          BuildOptions(std::move(options))) {}
 
 HloPjRtTestBase::HloPjRtTestBase(
     DeviceShapeRepresentationFn device_shape_representation_fn,

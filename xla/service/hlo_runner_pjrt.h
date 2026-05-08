@@ -48,6 +48,9 @@ namespace xla {
 class HloRunnerPjRt : public HloRunnerInterface {
  public:
   explicit HloRunnerPjRt(std::unique_ptr<PjRtClient> pjrt_client);
+  // Non-owning constructor. The caller must ensure that borrowed_client
+  // outlives this HloRunnerPjRt instance.
+  explicit HloRunnerPjRt(PjRtClient* borrowed_client);
 
   // Transfers data between the host and device, using the given parameter
   // layouts.
@@ -125,15 +128,15 @@ class HloRunnerPjRt : public HloRunnerInterface {
 
   bool HasProperty(HloRunnerPropertyTag::Type tag) const override;
 
-  absl::StatusOr<const HloModule* absl_nonnull> HloModuleFromWrapped(
+  absl::StatusOr<const HloModule * absl_nonnull> HloModuleFromWrapped(
       const OpaqueExecutable* wrapped) const override;
 
   // Returns true if the two given OpaqueExecutables originate from the same
   // runner and are equivalent according to some notion specific to that runner.
   // Executables that were created by different runners can never be equivalent.
-  bool ExecutablesAreEquivalent(
-      const OpaqueExecutable* absl_nonnull lhs,
-      const OpaqueExecutable* absl_nonnull rhs) const override;
+  bool ExecutablesAreEquivalent(const OpaqueExecutable* absl_nonnull lhs,
+                                const OpaqueExecutable* absl_nonnull
+                                    rhs) const override;
 
   absl::StatusOr<DeviceAssignment> GetDefaultDeviceAssignment(
       int num_replicas, int num_partitions) const override;
@@ -167,7 +170,10 @@ class HloRunnerPjRt : public HloRunnerInterface {
       const Layout& on_device_layout);
   absl::StatusOr<Literal> TransferLiteralFromDevice(PjRtBuffer& buffer);
 
-  std::unique_ptr<PjRtClient> pjrt_client_;
+  // shared_ptr allows the deleter to be customized (e.g. a no-op for the
+  // non-owning constructor), unlike unique_ptr whose deleter type is a
+  // template parameter.
+  std::shared_ptr<PjRtClient> pjrt_client_;
 };
 
 // This class works just like a HloRunnerPjRt, but it only runs compilation
