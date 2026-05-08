@@ -118,10 +118,34 @@ TEST_F(SchedulingTest, ReductionsAndContractionsAreNotSupported) {
       ROOT fusion = f32[2,97]{1,0} fusion(p0), kind=kLoop, calls=fusion
     })",
                                     {1, 32, /*reduction_tile_size=*/8}));
-  auto scheduling = GetSchedule(tiled_computation);
-  EXPECT_THAT(scheduling,
+  EXPECT_THAT(GetSchedule(tiled_computation),
               IsOkAndHolds(MatchSchedule(
                   "d0 -> pid floordiv 4, d1 -> pid mod 4, pid_bounds=[0, 7]")));
+}
+
+TEST_F(SchedulingTest, GetDotPermutationMultipleBatchDims) {
+  ASSERT_OK_AND_ASSIGN(const TiledHloComputation tiled_computation,
+                       ParseAndTile(R"(
+    fusion {
+      p0 = f32[2,3,16,128]{3,2,1,0} parameter(0)
+      p1 = f32[2,3,128,4096]{3,2,1,0} parameter(1)
+      ROOT dot = f32[2,3,16,4096]{3,2,1,0} dot(p0, p1),
+        lhs_batch_dims={0,1}, lhs_contracting_dims={3},
+        rhs_batch_dims={0,1}, rhs_contracting_dims={2}
+    }
+    ENTRY main {
+      p0 = f32[2,3,16,128]{3,2,1,0} parameter(0)
+      p1 = f32[2,3,128,4096]{3,2,1,0} parameter(1)
+      ROOT fusion = f32[2,3,16,4096]{3,2,1,0} fusion(p0, p1), kind=kLoop, calls=fusion
+    })",
+                                    {1, 1, 8, 64, 32}));
+  // d0, d1 are batch. d2 is m, d3 is n.
+  EXPECT_THAT(GetSchedule(tiled_computation),
+              IsOkAndHolds(MatchSchedule(
+                  "d0 -> pid floordiv 384, d1 -> (pid mod 384) floordiv 128, "
+                  "d2 -> pid mod 384 mod 128 mod 2, "
+                  "d3 -> (pid mod 384 mod 128) floordiv 2, "
+                  "pid_bounds=[0, 767]")));
 }
 
 }  // namespace xla::gpu::experimental

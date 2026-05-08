@@ -99,7 +99,7 @@ absl::StatusOr<llvm::SmallVector<int64_t>> GetTilingSpaceConcreteSizes(
         block_level_parameters.output_tile_sizes.size());
   }
   const auto& parallel_tile_sizes = block_level_parameters.output_tile_sizes[0];
-  if (int64_t num_parallel_dims = tiling_space.num_parallel_dimsensions();
+  if (int64_t num_parallel_dims = tiling_space.num_parallel_dimensions();
       num_parallel_dims != parallel_tile_sizes.size()) {
     return Internal(
         "Number of parallel dimensions in the tiling space (%d) does not match "

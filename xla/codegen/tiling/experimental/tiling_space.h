@@ -188,7 +188,7 @@ class TilingSpace {
   llvm::ArrayRef<Tile> tiled_roots() const { return tiled_roots_; }
 
   int64_t num_dimensions() const { return dimensions_.size(); }
-  int64_t num_parallel_dimsensions() const;
+  int64_t num_parallel_dimensions() const;
   int64_t num_rt_vars() const { return rt_vars_.size(); }
 
   void AppendDimension(const HloInstruction* hlo, int64_t dim_position,

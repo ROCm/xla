@@ -261,7 +261,7 @@ std::unique_ptr<TilingSpace> TilingSpace::Create(const HloFusionAdaptor& fusion,
   return tiling_space;
 }
 
-int64_t TilingSpace::num_parallel_dimsensions() const {
+int64_t TilingSpace::num_parallel_dimensions() const {
   return absl::c_count_if(dimensions_, [](const DimensionInfo& dim) {
     return dim.type == DimensionSemantics::kParallel;
   });
