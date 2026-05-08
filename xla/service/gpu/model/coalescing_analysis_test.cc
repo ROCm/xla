@@ -611,7 +611,7 @@ class CoalescingForTiledHloTest : public CoalescingTest,
       std::unique_ptr<experimental::TilingSpace> tiling_space =
           experimental::TilingSpace::Create(*fusion_adaptor, &mlir_context_);
 
-      tiling_space->AssignTileSizes(tile_sizes);
+      CHECK_OK(tiling_space->AssignTileSizes(tile_sizes));
 
       absl::StatusOr<experimental::TiledHloComputation> tiled_hlo_computation =
           experimental::TiledHloComputation::Tile(*fusion_adaptor,
