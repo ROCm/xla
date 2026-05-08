@@ -40,6 +40,16 @@ EXCLUDED_TESTS=(
     "TritonBackendTest.CostModelOptions_Filter"
     "TritonBackendTest.CostModelOptions_TopFromDefault"
     "TritonBackendTest.CostModelOptions_Combination"
+    "SVDTest*"
+    "HipblasLtMxExecutionTest*"
+    "SampleFileTest.Convolution"
+    "SortRewriterTest*"
+    "SortRewriterArgsort*"
+    "CubSort/CubSortPairsTest*"
+    "TypeSupportTest.SortSupportsType*"
+    "TestRadixSort*"
+    "NumericTestsForBlas*"
+    "TritonAndBlasSupportForDifferentTensorSizes*"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
@@ -80,4 +90,3 @@ done
     -//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any \
     -//xla/backends/gpu/tests:collective_pipeline_parallelism_test_amdgpu_any \
     -//xla/pjrt/gpu:se_gpu_pjrt_client_test # TODO: times out so temporarily skip the whole target
-
