@@ -189,7 +189,8 @@ void ForEachInstructionInTiledHloComputation(
 
     visitor(instruction, num_blocks_cur_hlo);
 
-    for (const auto& [i, region] : llvm::enumerate(instruction->regions())) {
+    for (const auto& [i, region] :
+         llvm::enumerate(instruction->hlo_regions())) {
       int64_t num_blocks_cur_region =
           GetNumBlocksForRegion(instruction, num_blocks_cur_hlo, i);
       for (const auto& tiled_hlo : region) {

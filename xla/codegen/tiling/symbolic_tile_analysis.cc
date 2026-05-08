@@ -1841,8 +1841,7 @@ absl::StatusOr<std::unique_ptr<TiledHloInstruction>> ComputeTiledHloInstruction(
     }
     // Tile the instructions of the regions first: we need operands to be
     // present in the region_symbolic_to_tiled_hlo.
-    llvm::SmallVector<std::vector<std::unique_ptr<TiledHloInstruction>>>
-        tiled_regions;
+    llvm::SmallVector<TiledHloRegion> tiled_regions;
     for (const std::vector<std::unique_ptr<SymbolicTiledHloInstruction>>&
              region : symbolic_tiled_hlo->regions()) {
       TF_RET_CHECK(!region.empty())
@@ -1862,7 +1861,7 @@ absl::StatusOr<std::unique_ptr<TiledHloInstruction>> ComputeTiledHloInstruction(
               mlir_context, region_output_tiling_info, tile_sizes_map,
               parameters_with_offset_indexing, region_symbolic_to_tiled_hlo_map,
               region_tile_dim_bounds));
-      tiled_regions.push_back(std::move(tiled_region));
+      tiled_regions.push_back(TiledHloRegion{std::move(tiled_region)});
     }
     return TiledHloInstruction::Create(
         hlo,

@@ -958,7 +958,7 @@ ENTRY main {
                               /*compute_all_tile_offset_indexing_maps=*/true));
   const TiledHloInstruction* dot = GetFirstRoot(tiled_hlo_computation);
   ASSERT_EQ(dot->hlo()->opcode(), HloOpcode::kScaledDot);
-  EXPECT_THAT(dot->regions(), SizeIs(1));
+  EXPECT_THAT(dot->hlo_regions(), SizeIs(1));
   EXPECT_THAT(*dot, MatchTiledHloInstruction(
                         /*tile_sizes=*/{16, 16}, /*tile_strides=*/{1, 1},
                         /*tile_offsets_indexing=*/R"(
