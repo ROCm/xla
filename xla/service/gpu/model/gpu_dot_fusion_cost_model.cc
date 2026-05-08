@@ -23,6 +23,7 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -31,6 +32,7 @@ limitations under the License.
 #include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/primitive_util.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/model/block_level_parameters.h"
@@ -348,6 +350,26 @@ absl::Status IsSupported(const HloDotInstruction* dot) {
         absl::StrJoin(dim_numbers.lhs_contracting_dimensions(), ","),
         "], RHS: [",
         absl::StrJoin(dim_numbers.rhs_contracting_dimensions(), ","), "]"));
+  }
+
+  // TODO: b/501002656 - Support downstream transposes by fixing dimension
+  // mapping.
+  std::vector<const HloInstruction*> stack;
+  absl::flat_hash_set<const HloInstruction*> visited;
+  stack.push_back(dot);
+  visited.insert(dot);
+  while (!stack.empty()) {
+    const HloInstruction* current = stack.back();
+    stack.pop_back();
+    if (current != dot && current->opcode() == HloOpcode::kTranspose) {
+      return absl::UnimplementedError(
+          "Dot with a downstream transpose is not supported.");
+    }
+    for (const HloInstruction* user : current->users()) {
+      if (visited.insert(user).second) {
+        stack.push_back(user);
+      }
+    }
   }
 
   return absl::OkStatus();
