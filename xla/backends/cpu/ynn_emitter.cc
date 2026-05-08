@@ -288,13 +288,43 @@ absl::StatusOr<uint32_t> DefineSliceOp(ynn_subgraph_t subgraph,
   const std::vector<int64_t>& limits = instr->slice_limits();
   const std::vector<int64_t>& strides = instr->slice_strides();
 
-  int rank = input->shape().dimensions_size();
+  int rank = input->shape().dimensions().size();
   std::vector<int32_t> axes(rank);
   absl::c_iota(axes, 0);
 
   YNN_RETURN_IF_ERROR(ynn_define_static_slice(
       subgraph, rank, axes.data(), starts.data(), limits.data(), strides.data(),
       in, &out, /*flags=*/0));
+  return out;
+}
+
+absl::StatusOr<uint32_t> DefinePadOp(ynn_subgraph_t subgraph,
+                                     TensorIdMap& tensor_ids,
+                                     const HloInstruction* instr) {
+  VLOG(3) << absl::StreamFormat("Define tensor value for pad op: %s",
+                                instr->ToString());
+  CHECK_EQ(instr->opcode(), HloOpcode::kPad);
+  const HloInstruction* input = instr->operand(0);
+  const HloInstruction* padding_value = instr->operand(1);
+  TF_ASSIGN_OR_RETURN(auto in, FindTensorValue(tensor_ids, input));
+  TF_ASSIGN_OR_RETURN(auto pad_val, FindTensorValue(tensor_ids, padding_value));
+  TF_ASSIGN_OR_RETURN(auto out, DefineTensorValue(subgraph, instr));
+
+  const PaddingConfig& config = instr->padding_config();
+  int rank = input->shape().dimensions().size();
+  std::vector<int32_t> axes(rank);
+  absl::c_iota(axes, 0);
+
+  std::vector<int64_t> pad_low(rank);
+  std::vector<int64_t> pad_high(rank);
+  for (int i = 0; i < rank; ++i) {
+    pad_low[i] = config.dimensions(i).edge_padding_low();
+    pad_high[i] = config.dimensions(i).edge_padding_high();
+  }
+
+  YNN_RETURN_IF_ERROR(ynn_define_static_pad(subgraph, rank, axes.data(),
+                                            pad_low.data(), pad_high.data(), in,
+                                            pad_val, &out, /*flags=*/0));
   return out;
 }
 
@@ -480,7 +510,7 @@ absl::StatusOr<uint32_t> DefineReduceWindowOp(ynn_subgraph_t subgraph,
       YnnReduceOperator(instr->to_apply()->root_instruction()->opcode()));
 
   const Window& window = instr->window();
-  int rank = window.dimensions_size();
+  int rank = window.dimensions().size();
 
   std::vector<int32_t> pad_axes;
   std::vector<int64_t> pad_pre;
@@ -574,7 +604,7 @@ absl::StatusOr<uint32_t> DefineConvolutionOp(
   int64_t kernel_output_channels = conv->operand(1)->shape().dimensions(
       conv_dims.kernel_output_feature_dimension());
 
-  const int size = conv_window.dimensions_size();
+  const int size = conv_window.dimensions().size();
   std::vector<int32_t> stencil_axes(size);
   std::vector<size_t> stencil_dims(size);
   std::vector<size_t> stencil_strides(size);
@@ -859,6 +889,16 @@ absl::StatusOr<YnnSubgraph> EmitYnnSubgraph(
         }
         TF_ASSIGN_OR_RETURN(tensor_ids[instr],
                             DefineSliceOp(subgraph.get(), tensor_ids, instr));
+      } break;
+
+      case HloOpcode::kPad: {
+        if (!IsPadOpSupportedByYnn(instr)) {
+          return InvalidArgument(
+              "Unsupported pad instruction in YNN fusion: %s",
+              instr->ToString());
+        }
+        TF_ASSIGN_OR_RETURN(tensor_ids[instr],
+                            DefinePadOp(subgraph.get(), tensor_ids, instr));
       } break;
 
       case HloOpcode::kIota: {

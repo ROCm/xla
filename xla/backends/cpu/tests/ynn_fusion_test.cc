@@ -79,6 +79,27 @@ TEST_P(YnnFusionTest, AddAndMultiply) {
   RunTest(kModuleStr);
 }
 
+TEST_P(YnnFusionTest, Pad) {
+  constexpr absl::string_view kModuleStr = R"(
+    HloModule pad
+
+    ynn_fusion {
+      %input = $dtype[8, 10] parameter(0)
+      %padding_value = $dtype[] parameter(1)
+      ROOT %pad = $dtype[10, 14] pad(%input, %padding_value),
+        padding=1_1_0x2_2_0
+    }
+
+    ENTRY entry {
+      %p0 = $dtype[8, 10] parameter(0)
+      %p1 = $dtype[] parameter(1)
+      ROOT %fusion = $dtype[10, 14] fusion(%p0, %p1), kind=kCustom, calls=ynn_fusion,
+        backend_config={"fusion_config": {kind: "__ynn_fusion"}}
+    })";
+
+  RunTest(kModuleStr);
+}
+
 TEST_P(YnnFusionTest, Transpose) {
   constexpr absl::string_view kModuleStr = R"(
     HloModule transpose
