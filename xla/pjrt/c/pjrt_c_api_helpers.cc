@@ -953,31 +953,38 @@ GetMemoryLayout(const PJRT_Api* api, PJRT_Buffer* buffer) {
 absl::StatusOr<xla::Shape> BuildXlaShapeFromC(
     PJRT_Buffer_Type element_type, const int64_t* dims, size_t num_dims,
     PJRT_Buffer_MemoryLayout* layout) {
-  xla::Shape shape =
-      xla::ShapeUtil::MakeShape(ConvertFromPjRtBufferType(element_type),
-                                absl::Span<const int64_t>(dims, num_dims));
-  xla::Layout cpp_layout;
-  if (layout != nullptr) {
-    switch (layout->type) {
-      case PJRT_Buffer_MemoryLayout_Type::PJRT_Buffer_MemoryLayout_Type_Tiled: {
-        TF_ASSIGN_OR_RETURN(cpp_layout, ConvertToLayout(layout->tiled));
-        break;
-      }
-      case PJRT_Buffer_MemoryLayout_Type::
-          PJRT_Buffer_MemoryLayout_Type_Strides: {
-        TF_RETURN_IF_ERROR(absl::InvalidArgumentError(
-            "PJRT_Buffer_MemoryLayout_Type_Strides is not supported to be "
-            "converted to a xla::Shape"));
-        break;
-      }
-      default: {
-        TF_RETURN_IF_ERROR(absl::InvalidArgumentError(absl::StrCat(
-            "Unexpected PJRT_Buffer_MemoryLayout_Type type: ", layout->type)));
-      }
-    }
-    *shape.mutable_layout() = cpp_layout;
+  xla::PrimitiveType cpp_element_type = ConvertFromPjRtBufferType(element_type);
+  xla::Shape shape;
+  if (cpp_element_type == xla::TOKEN) {
+    shape = xla::ShapeUtil::MakeTokenShape();
   } else {
-    shape.clear_layout();
+    shape = xla::ShapeUtil::MakeShape(
+        cpp_element_type, absl::Span<const int64_t>(dims, num_dims));
+    if (layout != nullptr) {
+      xla::Layout cpp_layout;
+      switch (layout->type) {
+        case PJRT_Buffer_MemoryLayout_Type::
+            PJRT_Buffer_MemoryLayout_Type_Tiled: {
+          TF_ASSIGN_OR_RETURN(cpp_layout, ConvertToLayout(layout->tiled));
+          break;
+        }
+        case PJRT_Buffer_MemoryLayout_Type::
+            PJRT_Buffer_MemoryLayout_Type_Strides: {
+          TF_RETURN_IF_ERROR(absl::InvalidArgumentError(
+              "PJRT_Buffer_MemoryLayout_Type_Strides is not supported to be "
+              "converted to a xla::Shape"));
+          break;
+        }
+        default: {
+          TF_RETURN_IF_ERROR(absl::InvalidArgumentError(
+              absl::StrCat("Unexpected PJRT_Buffer_MemoryLayout_Type type: ",
+                           layout->type)));
+        }
+      }
+      *shape.mutable_layout() = cpp_layout;
+    } else {
+      shape.clear_layout();
+    }
   }
   return shape;
 }

@@ -11,6 +11,7 @@ load(
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//xla:lit.bzl", "enforce_glob", "lit_test_suite_for_gpus")
 load("//xla:xla.default.bzl", "xla_cc_test")
+load("//xla/backends/gpu/tests:helper.bzl", "get_canonical_repo_name")
 load("//xla/stream_executor:build_defs.bzl", "if_gpu_is_configured")
 load("//xla/tests:build_defs.bzl", "xla_test")
 load("//xla/tsl:tsl.bzl", "if_google", "if_oss")
@@ -60,9 +61,10 @@ cc_library(
         "//xla/service:executable",
         "//xla/service:gpu_plugin",
         "//xla/service:hlo_module_config",
-        "//xla/service/gpu:gpu_executable",
+        "//xla/service/gpu:gpu_compiler",
         "//xla/stream_executor:platform_manager",
         "//xla/tests:llvm_irgen_test_base",
+        "//xla/tsl/platform:logging",
         "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -294,14 +296,13 @@ xla_test(
     name = "float_conversions_test",
     srcs = ["float_conversions_test.cc"],
     backends = ["gpu"],
-    use_legacy_runtime = True,
     deps = [
-        ":gpu_codegen_test",
+        ":gpu_pjrt_codegen_test",
         "//xla:error_spec",
+        "//xla/tests:hlo_pjrt_interpreter_reference_mixin",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:test",
     ],
 )
 
@@ -331,21 +332,13 @@ xla_test(
 
 xla_test(
     name = "gpu_too_many_blocks_test",
-    srcs = [
-        "gpu_too_many_blocks_test.cc",
-    ],
+    srcs = ["gpu_too_many_blocks_test.cc"],
     backends = ["gpu"],
     tags = ["cuda-only"],
-    use_legacy_runtime = True,
     deps = [
-        ":gpu_codegen_test",
+        ":gpu_pjrt_codegen_test",
         "//xla/hlo/ir:hlo",
-        "//xla/service:executable",
-        "//xla/stream_executor:stream_executor_memory_allocator",
-        "@com_google_absl//absl/status:statusor",
         "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/platform:test",
     ],
 )
 
@@ -511,22 +504,6 @@ xla_test(
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
-    ],
-)
-
-xla_test(
-    name = "cute_dsl_custom_call_test",
-    srcs = ["cute_dsl_custom_call_test.cc"],
-    backends = ["b200"],
-    data = ["cute_dsl_vector_add.hlo"],
-    deps = [
-        ":hlo_pjrt_gpu_test_base",
-        "//xla/tsl/lib/core:status_test_util",
-        "//xla/tsl/platform:env",
-        "//xla/tsl/platform:test",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:path",
     ],
 )
 
@@ -826,7 +803,7 @@ lit_test_suite_for_gpus(
         "p100",
         "v100",
     ],
-    hermetic_cuda_data_dir = "%S/../../../../../cuda_nvcc",
+    hermetic_cuda_data_dir = "%S/../../../../../" + get_canonical_repo_name("cuda_nvcc"),
     tags = ["no-oneapi"],
     tools = [
         "//xla/tools:hlo-opt",
@@ -1557,6 +1534,7 @@ xla_test(
         "//xla:literal",
         "//xla:literal_util",
         "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/testlib:test",
         "//xla/hlo/testlib:test_helpers",

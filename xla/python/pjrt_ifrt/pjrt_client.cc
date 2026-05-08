@@ -363,7 +363,10 @@ absl::StatusOr<GlobalTopology> MakeGlobalTopologyFromPjRtClient(
       device.set_device_kind(
           // OSS requires explicit string conversion
           // NOLINTNEXTLINE(*-redundant-string-conversions)
-          std::string(pjrt_client->addressable_devices()[0]->device_kind()));
+          std::string(
+              pjrt_device != nullptr
+                  ? pjrt_device->device_kind()
+                  : pjrt_client->addressable_devices()[0]->device_kind()));
 
       // TODO(hyeontaek): Take optional device->partition_index mapping in
       // GlobalDeviceMapping and generate the `partition_index` attribute for
@@ -1170,8 +1173,12 @@ absl::StatusOr<std::vector<ArrayRef>> PjRtClient::MakeErrorArrays(
         array_spec.sharding->devices()->AddressableDeviceList()->devices();
     TF_ASSIGN_OR_RETURN(Shape shard_shape,
                         array_spec.sharding->GetShardShape(array_spec.shape));
-    xla::Shape xla_shape =
-        xla::ShapeUtil::MakeShape(primitive_type, shard_shape.dims());
+    xla::Shape xla_shape;
+    if (primitive_type == xla::TOKEN) {
+      xla_shape = xla::ShapeUtil::MakeTokenShape();
+    } else {
+      xla_shape = xla::ShapeUtil::MakeShape(primitive_type, shard_shape.dims());
+    }
 
     PjRtArray::PjRtBuffers buffers;
     buffers.reserve(ifrt_addressable_devices.size());

@@ -1420,6 +1420,7 @@ cc_library(
         "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:btree",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -1455,6 +1456,7 @@ xla_cc_test(
         "//xla/hlo/transforms/collectives:async_collective_creator",
         "//xla/tests:xla_internal_test_main",
         "//xla/tsl/lib/core:status_test_util",
+        "//xla/tsl/platform:logging",
         "//xla/tsl/platform:statusor",
         "//xla/tsl/platform:test_benchmark",
         "@com_google_absl//absl/algorithm:container",
@@ -1762,6 +1764,8 @@ cc_library(
     name = "compiled_module",
     hdrs = ["compiled_module.h"],
     deps = [
+        ":executable",
+        "//xla:xla_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/pjrt:compiled_memory_stats",
         "//xla/stream_executor:platform",
@@ -1825,6 +1829,42 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
         "@com_google_protobuf//:protobuf",
+    ],
+)
+
+cc_library(
+    name = "multi_module_driver",
+    srcs = ["multi_module_driver.cc"],
+    hdrs = ["multi_module_driver.h"],
+    deps = [
+        ":compiler",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/transforms:hlo_module_splitter",
+        "//xla/hlo/transforms:hlo_module_stitcher",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:status_macros",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status:statusor",
+        "@tsl//tsl/platform:blocking_counter",
+    ],
+)
+
+xla_test(
+    name = "multi_module_driver_test",
+    srcs = ["multi_module_driver_test.cc"],
+    backends = ["cpu"],
+    deps = [
+        ":compiler",
+        ":multi_module_driver",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:filecheck",
+        "//xla/hlo/testlib:verified_hlo_module",
+        "//xla/service/cpu:cpu_compiler",
+        "//xla/tests:hlo_pjrt_test_base",
+        "//xla/tests:xla_internal_test_main",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/status:statusor",
     ],
 )
 
@@ -2228,7 +2268,9 @@ xla_cc_test(
         "//xla/hlo/testlib:hlo_hardware_independent_test_base",
         "//xla/hlo/utils:hlo_matchers",
         "//xla/tests:xla_internal_test_main",
+        "//xla/tsl/lib/core:status_test_util",
         "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -2238,6 +2280,7 @@ cc_library(
     srcs = ["multi_output_fusion.cc"],
     hdrs = ["multi_output_fusion.h"],
     deps = [
+        ":instruction_fusion",
         "//xla:debug_options_flags",
         "//xla:shape_util",
         "//xla:util",
@@ -5843,6 +5886,7 @@ xla_cc_test(
         ":test_compilation_environment_proto_cc",
         # "@com_google_protobuf//:descriptor_cc_proto" - This target is included in @com_google_protobuf//:protobuf and not available separately in OSS.
         "@com_google_googletest//:gtest",
+        "@com_google_absl//absl/base",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
@@ -6629,30 +6673,6 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/types:span",
-    ],
-)
-
-cc_library(
-    name = "collective_combiner_utils_cc",
-    srcs = ["collective_combiner_utils.cc"],
-    hdrs = ["collective_combiner_utils.h"],
-    deps = [
-        "//xla:shape_util",
-        "//xla:status_macros",
-        "//xla:xla_data_proto_cc",
-        "//xla/hlo/analysis:hlo_reachability",
-        "//xla/hlo/ir:hlo",
-        "//xla/tsl/platform:errors",
-        "@com_google_absl//absl/container:btree",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/functional:function_ref",
-        "@com_google_absl//absl/log",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
     ],
 )

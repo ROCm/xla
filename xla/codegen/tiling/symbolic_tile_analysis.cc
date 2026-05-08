@@ -162,8 +162,6 @@ absl::StatusOr<OutputTilingInfo> ComputeOutputTilingInfo(
         parent_output_tile_dim_bounds = std::nullopt) {
   int64_t num_tiling_parameters = root_indexing.GetDimVarsCount();
   CHECK_EQ(num_tiling_parameters, tile_sizes.size());  // Crash OK
-  CHECK_EQ(0, root_indexing.GetRangeVarsCount())
-      << "Range variables must be converted to dimensions";
 
   const IndexingMap::Variable ignore_variable{0, 0, "ignore"};
   llvm::SmallVector<int64_t> outer_loop_bounds(num_tiling_parameters, 1);
@@ -1731,6 +1729,9 @@ absl::StatusOr<TiledHloComputation> ComputeTiledComputationImpl(
   // TODO(b/390569102): This assumes that there is only one root that matters
   // for computing the tiling, and that it is the last symbolic tiled hlo
   // instruction in the list.
+  CHECK_EQ(0, real_root_indexing.GetRangeVarsCount())
+      << "Range variables for real_root_indexing must be converted to "
+         "dimensions";
   TF_ASSIGN_OR_RETURN(
       OutputTilingInfo output_tiling_info,
       ComputeOutputTilingInfo(real_root_indexing, flat_tiling_parameters,
@@ -1840,8 +1841,7 @@ absl::StatusOr<std::unique_ptr<TiledHloInstruction>> ComputeTiledHloInstruction(
     }
     // Tile the instructions of the regions first: we need operands to be
     // present in the region_symbolic_to_tiled_hlo.
-    llvm::SmallVector<std::vector<std::unique_ptr<TiledHloInstruction>>>
-        tiled_regions;
+    llvm::SmallVector<TiledHloRegion> tiled_regions;
     for (const std::vector<std::unique_ptr<SymbolicTiledHloInstruction>>&
              region : symbolic_tiled_hlo->regions()) {
       TF_RET_CHECK(!region.empty())
@@ -1861,7 +1861,7 @@ absl::StatusOr<std::unique_ptr<TiledHloInstruction>> ComputeTiledHloInstruction(
               mlir_context, region_output_tiling_info, tile_sizes_map,
               parameters_with_offset_indexing, region_symbolic_to_tiled_hlo_map,
               region_tile_dim_bounds));
-      tiled_regions.push_back(std::move(tiled_region));
+      tiled_regions.push_back(TiledHloRegion{std::move(tiled_region)});
     }
     return TiledHloInstruction::Create(
         hlo,

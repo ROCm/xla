@@ -124,6 +124,7 @@ cc_library(
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
+        "@stablehlo//:stablehlo_ops",
     ],
 )
 
@@ -737,7 +738,7 @@ cc_library(
     srcs = ["program_interpreter.cc"],
     hdrs = ["program_interpreter.h"],
     compatible_with = get_compatible_with_portable(),
-    visibility = ["//visibility:private"],
+    visibility = internal_visibility([":friends"]),
     deps = [
         ":atom_program_compiler",
         ":ifrt_ir_program",
