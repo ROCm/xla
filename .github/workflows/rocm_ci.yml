@@ -103,7 +103,7 @@ jobs:
     runs-on: linux-x86-64-4gpu-amd
     env:
       DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
-      EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/e59d528457bc3ef87a42e1e80b3b56a746335050/build_tools/rocm/execute_ci_build_upstream.sh
+      EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/9401a5c24342fb059533e7e361dd55a15ab8cf74/build_tools/rocm/execute_ci_build_upstream.sh
     container: *rocm_container
     defaults:
       run:
