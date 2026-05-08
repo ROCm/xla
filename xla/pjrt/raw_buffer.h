@@ -132,7 +132,8 @@ class CommonPjRtRawBuffer : public PjRtRawBuffer {
   // Note that the underlying driver may have requirements
   // on the alignment of `offset`. Look at implementations of
   // this method for specific alignment requirements.
-  absl::StatusOr<PjRtRawBufferRef> Slice(int64_t offset, int64_t size);
+  virtual absl::StatusOr<PjRtRawBufferRef> Slice(int64_t offset,
+                                                 int64_t size) = 0;
 
   struct SliceInfo {
     int64_t offset;
