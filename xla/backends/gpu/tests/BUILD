@@ -296,14 +296,13 @@ xla_test(
     name = "float_conversions_test",
     srcs = ["float_conversions_test.cc"],
     backends = ["gpu"],
-    use_legacy_runtime = True,
     deps = [
-        ":gpu_codegen_test",
+        ":gpu_pjrt_codegen_test",
         "//xla:error_spec",
+        "//xla/tests:hlo_pjrt_interpreter_reference_mixin",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:test",
     ],
 )
 
