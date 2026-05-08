@@ -612,6 +612,10 @@ CodegenDecision IsTritonSupportedConcatenate(const HloInstruction& hlo) {
   if (hlo.shape().element_type() == S4) {
     return CodegenDecision::Forbid("S4 is not supported.");
   }
+  if (!IsInTritonNestedGemmFusion(hlo)) {
+    return CodegenDecision::Forbid(
+        "Only concatenates in nested GEMM fusions are supported.");
+  }
   return CodegenDecision::Allow();
 }
 
