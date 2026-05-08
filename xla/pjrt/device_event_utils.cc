@@ -89,6 +89,15 @@ void ScopedLauncher::AddDependency(tsl::AsyncValue* dependency) {
   dependency->AndThen([state = state_]() {});
 }
 
+void ScopedLauncher::AddDependency(
+    absl::Span<const PjRtDeviceEventRef> dependencies) {
+  for (const auto& dep : dependencies) {
+    if (dep) {
+      AddDependency(dep.ptr());
+    }
+  }
+}
+
 absl::Status GetErrors(absl::Span<const PjRtDeviceEventRef> events) {
   absl::Status status;
   for (const auto& ev : events) {

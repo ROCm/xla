@@ -311,7 +311,7 @@ class CommonPjRtClient : public PjRtClient {
 
   virtual void ScheduleRemoteSend(
       PjRtMemorySpace* memory_space, PjRtRawBufferRef raw_buffer,
-      std::vector<tsl::RCReference<tsl::AsyncValue>> definition_events,
+      std::vector<PjRtDeviceEventRef> definition_events,
       tsl::RCReference<PjRtDeviceEventPromise> usage_event_promise,
       Future<std::string> serialized_descriptor,
       PjRtBuffer::RemoteSendCallback on_done);
@@ -330,7 +330,7 @@ class CommonPjRtClient : public PjRtClient {
   CrossHostReceiveBuffersInto(
       absl::Span<const tsl::RCReference<PjRtRawBuffer>> buffers,
       PjRtCrossHostRecvNotifier notifier,
-      std::vector<tsl::RCReference<tsl::AsyncValue>> transfer_dependency_avs) {
+      absl::Span<const PjRtDeviceEventRef> transfer_dependency_avs) {
     return absl::UnimplementedError(
         "CrossHostReceiveBuffersInto is not implemented.");
   }

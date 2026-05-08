@@ -124,8 +124,7 @@ class CommonPjRtRawBuffer : public PjRtRawBuffer {
       std::function<void(absl::Status status, bool sends_were_enqueued)>;
   virtual absl::StatusOr<PjRtDeviceEventRef> CopyRawToRemoteDevice(
       Future<std::string> serialized_descriptor, RemoteSendCallback on_done,
-      std::vector<tsl::RCReference<tsl::AsyncValue>>
-          transfer_dependency_avs) = 0;
+      std::vector<PjRtDeviceEventRef> transfer_dependency_avs) = 0;
 
   // A sliced buffer is a view into the offset and range of this buffer.
   //

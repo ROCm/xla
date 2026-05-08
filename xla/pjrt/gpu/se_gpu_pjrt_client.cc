@@ -66,6 +66,7 @@ limitations under the License.
 #include "xla/pjrt/buffer_sequencing_event.h"
 #include "xla/pjrt/common_pjrt_client.h"
 #include "xla/pjrt/device_event.h"
+#include "xla/pjrt/device_event_utils.h"
 #include "xla/pjrt/distributed/in_memory_key_value_store.h"
 #include "xla/pjrt/distributed/key_value_store_interface.h"
 #include "xla/pjrt/distributed/protocol.pb.h"
@@ -1147,7 +1148,7 @@ StreamExecutorGpuClient::CrossHostReceiveBuffers(
 // Send functionality for original cross-host transfers API.
 void StreamExecutorGpuClient::ScheduleRemoteSend(
     PjRtMemorySpace* memory_space, PjRtRawBufferRef raw_buffer,
-    std::vector<tsl::RCReference<tsl::AsyncValue>> definition_events,
+    std::vector<PjRtDeviceEventRef> definition_events,
     tsl::RCReference<PjRtDeviceEventPromise> usage_event_promise,
     Future<std::string> serialized_descriptor,
     PjRtBuffer::RemoteSendCallback on_done) {
@@ -1183,9 +1184,9 @@ void StreamExecutorGpuClient::ScheduleRemoteSend(
                   /*sends_were_enqueued=*/false);
           SetEventAsError(usage_event, serialized_descriptor.status());
         }
-        auto events = absl::MakeSpan(definition_events);
-        async_work_runner()->ScheduleWhenReady(
-            events,
+        auto definition_events_span = absl::MakeSpan(definition_events);
+        ExecuteWhenReady(
+            definition_events_span, async_work_runner(),
             [this, on_done = std::move(on_done),
              gpu_collectives = std::move(gpu_collectives),
              definition_events = std::move(definition_events),
@@ -1193,11 +1194,7 @@ void StreamExecutorGpuClient::ScheduleRemoteSend(
              serialized_descriptor =
                  *std::move(serialized_descriptor)]() mutable {
               auto status = [&]() {
-                for (const auto& event : definition_events) {
-                  if (auto* status = event->GetErrorIfPresent()) {
-                    return *status;
-                  }
-                }
+                TF_RETURN_IF_ERROR(GetErrors(definition_events));
                 auto* local_device =
                     tensorflow::down_cast<PjRtStreamExecutorRawBuffer*>(
                         raw_buffer.get())

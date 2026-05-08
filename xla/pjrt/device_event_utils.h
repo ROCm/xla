@@ -41,6 +41,8 @@ class ScopedLauncher {
 
   void AddDependency(tsl::AsyncValue* dependency);
 
+  void AddDependency(absl::Span<const PjRtDeviceEventRef> dependencies);
+
  private:
   class Callee;
   tsl::RCReference<Callee> state_;

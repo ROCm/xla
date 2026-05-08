@@ -565,12 +565,12 @@ Future<> CommonPjRtRawBufferImpl::CopyRawDeviceToHost(void* dst, int64_t offset,
 void CommonPjRtBufferImpl::CopyToRemoteDevice(
     Future<std::string> serialized_descriptor, RemoteSendCallback on_done) {
   auto* common_client = tensorflow::down_cast<CommonPjRtClient*>(client());
-  std::vector<tsl::RCReference<tsl::AsyncValue>> definition_events;
+  std::vector<PjRtDeviceEventRef> definition_events;
   tsl::RCReference<PjRtDeviceEventPromise> usage_event_promise;
   PjRtRawBufferRef raw_buffer;
   auto hold_status = AcquireScopedRawBuffer(
       [&](PjRtRawBufferRef buf_raw_buffer,
-          std::vector<tsl::RCReference<tsl::AsyncValue>> buf_definition_events)
+          std::vector<PjRtDeviceEventRef> buf_definition_events)
           -> absl::StatusOr<PjRtDeviceEventRef> {
         raw_buffer = std::move(buf_raw_buffer);
         definition_events = std::move(buf_definition_events);
@@ -640,7 +640,7 @@ absl::StatusOr<std::unique_ptr<PjRtBuffer>> CommonPjRtBufferImpl::Bitcast(
 
 void CommonPjRtClient::ScheduleRemoteSend(
     PjRtMemorySpace* memory_space, PjRtRawBufferRef raw_buffer,
-    std::vector<tsl::RCReference<tsl::AsyncValue>> definition_events,
+    std::vector<PjRtDeviceEventRef> definition_events,
     tsl::RCReference<PjRtDeviceEventPromise> usage_event_promise,
     Future<std::string> serialized_descriptor,
     PjRtBuffer::RemoteSendCallback on_done) {
@@ -950,11 +950,11 @@ CommonPjRtClient::MakeCrossHostReceiveBuffers(
   TF_ASSIGN_OR_RETURN(auto memory_space, pjrt_device->default_memory_space());
 
   std::vector<tsl::RCReference<PjRtRawBuffer>> raw_buffers;
-  std::vector<tsl::RCReference<tsl::AsyncValue>> transfer_dependency_avs;
+  std::vector<PjRtDeviceEventRef> transfer_dependency_events;
   std::vector<xla::Shape> dst_shapes;
   raw_buffers.reserve(shapes.size());
   // Reserve one extra for internal use.
-  transfer_dependency_avs.reserve(shapes.size() + 1);
+  transfer_dependency_events.reserve(shapes.size() + 1);
   dst_shapes.reserve(shapes.size());
   for (const Shape& shape : shapes) {
     if (shape.IsTuple()) {
@@ -993,14 +993,15 @@ CommonPjRtClient::MakeCrossHostReceiveBuffers(
                                           /*allocate_after=*/{}));
 
     tsl::AsyncValue* buffer_av = raw_buffer->GetRawBufferAsyncValue();
-    transfer_dependency_avs.push_back(tsl::FormRef(buffer_av));
+    transfer_dependency_events.push_back(
+        PjRtDeviceEventPtr::FromAsyncValue(buffer_av).CopyRef());
     raw_buffers.push_back(std::move(raw_buffer));
   }
 
   TF_ASSIGN_OR_RETURN(
       std::vector<PjRtDeviceEventRef> definition_events,
       CrossHostReceiveBuffersInto(raw_buffers, std::move(notifier),
-                                  std::move(transfer_dependency_avs)));
+                                  std::move(transfer_dependency_events)));
 
   std::vector<std::unique_ptr<PjRtBuffer>> buffers;
   buffers.reserve(shapes.size());

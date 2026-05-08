@@ -645,7 +645,7 @@ void PjRtStreamExecutorDeviceEventSet::AppendTo(PjRtDeviceEventSet& events) {
 absl::StatusOr<PjRtDeviceEventRef>
 PjRtStreamExecutorRawBuffer::CopyRawToRemoteDevice(
     Future<std::string> serialized_descriptor, RemoteSendCallback on_done,
-    std::vector<tsl::RCReference<tsl::AsyncValue>> transfer_dependency_avs) {
+    std::vector<PjRtDeviceEventRef> transfer_dependency_avs) {
   return absl::UnimplementedError(
       "PjRtStreamExecutorRawBuffer does not support CopyRawToRemoteDevice.");
 }
