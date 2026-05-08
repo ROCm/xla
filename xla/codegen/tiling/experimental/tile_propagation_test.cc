@@ -346,6 +346,19 @@ INSTANTIATE_TEST_SUITE_P(
          strides [1]
          upper bounds [min(tid_0, 2) * 4 + min(tid_2 * 3 + 2, 3) + 1]
   )"},
+        {"CollapseShape_3DCollapseWithTrivialInnerDim",
+         /*input_shape=*/{2, 32, 128},
+         /*input_tile_sizes=*/{1, 16, 1},
+         /*input_tile_strides=*/{1, 1, 1},
+         /*input_tile_offsets=*/{},
+         /*output_shape=*/{8192},
+         /*expected_output=*/R"(
+     0) (tid_0, tid_1, tid_2)
+       -> offsets [tid_0 * 4096 + tid_1 * 2048 + tid_2]
+          sizes [16]
+          strides [128]
+          upper bounds [min(tid_1 * 16 + 15, 31) * 128 + min(tid_0, 1) * 4096 + min(tid_2, 127) + 1]
+   )"},
         {"ExpandShape_FullTargetInnerDim",
          /*input_shape=*/{12},
          /*input_tile_sizes=*/{4},

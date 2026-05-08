@@ -569,16 +569,18 @@ bool IsConstantValue(const SymbolicExpr& expr, int64_t value) {
 // Consider a reshape with 1-to-n (kExpandShape) or n-to-1 (kCollapseShape)
 // mapping of the "significant" dimensions, verify if the reshape is supported.
 //
-// We consider a kCollapseShape / kExpandShape to be supported if
-// for the multidim side there is at most one dimension that is partially tiled.
+// We consider a kCollapseShape / kExpandShape to be supported if for the
+// multidim side there is at most one dimension that is partially tiled.
 // Specifically:
-// - Only one dimension is truly "tiled" (ts > 1).
-// - Any dimensions inner to the tiled dimension are fully covered (ts_i = d_i)
-// - Any dimensions outer to the tiled dimension are tile size 1 (ts_i = 1)
+// - At most one dimension is partially tiled (1 < ts_i < d_i).
+// - Any dimensions inner to the tiled dimension are fully covered (ts_i = d_i),
+//   or skipped (ts_i = 1) only for collapse.
+// - Any dimensions outer to the tiled dimension are skipped (ts_i = 1).
 // - All dimensions except the innermost have stride 1.
 // Example: for [3, 4] -> [12] we support:
-// - ts_0 = 1, or
-// - ts_1 = 4 (i.e., we take full rows)
+// - tile_size [1, 4], or
+// - tile_size [3, 1] (allowing collapsed dimension segments with inner
+//   degenerate tile sizes)
 absl::Status VerifyReshapeContiguity(
     const MinimalReshape& minimal_reshape,
     absl::Span<const DimTile> linear_side_tiles,
@@ -611,13 +613,17 @@ absl::Status VerifyReshapeContiguity(
   }
 
   // Verify that the multidim side has at most one partially tiled dimension.
+  // - In Collapse: we allow the inner dimensions to be fully covered or
+  //   skipped (size 1)
+  // - In Expand: we allow inner dimensions to be fully covered.
   int i = 0;
   while (i < n && IsConstantValue(multidim_side_tiles[i].size, 1)) {
     ++i;
   }
   int j = n - 1;
   while (j >= 0 &&
-         IsConstantValue(multidim_side_tiles[j].size, multidim_side_dims[j])) {
+         (IsConstantValue(multidim_side_tiles[j].size, multidim_side_dims[j]) ||
+          (is_collapse && IsConstantValue(multidim_side_tiles[j].size, 1)))) {
     --j;
   }
   // All dimensions before i are size 1 and all dimensions after j are full.
@@ -676,9 +682,19 @@ absl::Status PropagateTileThroughMinimalReshape(
       target_dim_tiles[target_id].offset =
           LinearizeShape(source_info.dims, offsets, mlir_context)
               .Canonicalize();
-      // Due to VerifyReshapeContiguity, the linear stride of the collapsed
-      // dimension is simply the stride of the innermost dimension.
-      target_dim_tiles[target_id].stride = source_info.tiles.back().stride;
+      // The linear stride of the collapsed dimension is the step of the
+      // innermost tiled dimension (with tile size > 1) multiplied by the sizes
+      // of all dimensions inner to it.
+      SymbolicExpr collapsed_stride = source_info.tiles.back().stride;
+      int64_t multiplier = 1;
+      for (int64_t idx = source_info.tiles.size() - 1; idx >= 0; --idx) {
+        if (!IsConstantValue(source_info.tiles[idx].size, 1)) {
+          collapsed_stride = source_info.tiles[idx].stride * multiplier;
+          break;
+        }
+        multiplier *= source_info.dims[idx];
+      }
+      target_dim_tiles[target_id].stride = collapsed_stride.Canonicalize();
       target_dim_tiles[target_id].size = total_tile_elements.Canonicalize();
       target_dim_tiles[target_id].upper_bound =
           (LinearizeShape(source_info.dims, upper_bounds_inclusive,
