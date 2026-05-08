@@ -55,7 +55,10 @@ backend_config={"sizes":["32"]}
 })"));
 
   BlockLevelParameters block_params;
-  block_params.output_tile_sizes = {{128, 256}};
+  // TODO: b/510666436 - Tile sizes are intentionally kept large to reduce
+  // L2 cache replication overhead modeled by threadblock_count, keeping
+  // the operation compute bound.
+  block_params.output_tile_sizes = {{256, 512}};
   block_params.num_warps = 4;
   block_params.num_ctas = 1;
   block_params.num_stages = 1;
@@ -80,6 +83,8 @@ backend_config={"sizes":["32"]}
 }
 
 TEST_F(GpuDotFusionCostModelTest, GpuDotMemoryBoundBf16) {
+  // TODO: b/510666436 - Backend config tuned to minimize L2 loads replication
+  // so the operation remains strictly HBM bounded.
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
                           ParseAndReturnVerifiedModule(R"(
 ENTRY e {
@@ -87,11 +92,13 @@ p0 = bf16[4,4096] parameter(0)
 p1 = bf16[4096,4096] parameter(1)
 ROOT r = bf16[4,4096] dot(p0, p1),
 lhs_contracting_dims={1}, rhs_contracting_dims={0}, algorithm=dot_bf16_bf16_bf16,
-backend_config={"sizes":["128"]}
+backend_config={"sizes":["512"]}
 })"));
 
   BlockLevelParameters block_params;
-  block_params.output_tile_sizes = {{4, 32}};
+  // TODO: b/510666436 - Output tile sizes tuned to minimize L2 loads
+  // replication so the operation remains strictly HBM bounded.
+  block_params.output_tile_sizes = {{4, 128}};
   block_params.num_warps = 4;
   block_params.num_ctas = 1;
   block_params.num_stages = 1;
