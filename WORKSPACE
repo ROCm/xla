@@ -152,3 +152,9 @@ nightly_timestamp_repo(name = "nightly_timestamp")
 load("//build_tools/pjrt_wheels:release_candidate.bzl", "rc_number_repo")
 
 rc_number_repo(name = "rc_number")
+
+# Detects the number of available GPUs (ROCm or CUDA) and exposes GPU_COUNT
+# in @local_gpu_config//:defs.bzl for use as shard_count in test rules.
+load("//build_tools:gpu_count_configure.bzl", "gpu_count_configure")
+
+gpu_count_configure(name = "local_gpu_config")

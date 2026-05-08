@@ -12,6 +12,7 @@ load("//xla/tests:build_defs.bzl", "generate_backend_suites", "xla_test")
 load("//xla/tsl:tsl.bzl", "if_google", "if_oss", "internal_visibility")
 load("//xla/tsl:tsl.default.bzl", "filegroup")
 load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
+load("@local_gpu_config//:defs.bzl", "GPU_COUNT")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -3227,7 +3228,7 @@ xla_test(
 xla_test(
     name = "iota_test",
     srcs = ["iota_test.cc"],
-    shard_count = 50,
+    shard_count = GPU_COUNT,
     deps = [
         ":client_library_test_runner_mixin",
         ":hlo_pjrt_interpreter_reference_mixin",
