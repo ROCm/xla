@@ -41,6 +41,7 @@ limitations under the License.
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Value.h"
@@ -199,19 +200,27 @@ void setFuncManualAxesRecursively(FuncOp funcOp, ManualAxesAttr manualAxes,
     }
     funcOp.setArgAttr(argNum, kManualAxes, manualAxes);
   }
+
+  // TODO(b/510714593): Create a shardy utility to modify func arg/result
+  // attributes as below but in a more general way and re-use it.
+  llvm::SmallVector<mlir::DictionaryAttr> newResultAttrs;
+  newResultAttrs.reserve(funcOp.getNumResults());
   for (int resNum = 0; resNum < funcOp.getNumResults(); resNum++) {
-    if (!funcOp.getResultAttrOfType<TensorShardingAttr>(resNum,
-                                                        kShardingAttr)) {
-      funcOp.setResultAttr(
-          resNum, kShardingAttr,
-          TensorShardingAttr::getFullyReplicated(
-              funcOp->getContext(),
-              mlir::sdy::getTensorRank(funcOp.getResultTypes()[resNum]),
-              meshName,
-              /*isClosed=*/true));
+    mlir::NamedAttrList attrs(funcOp.getResultAttrDict(resNum));
+    if (!attrs.get(kShardingAttr)) {
+      attrs.set(kShardingAttr,
+                TensorShardingAttr::getFullyReplicated(
+                    funcOp->getContext(),
+                    mlir::sdy::getTensorRank(funcOp.getResultTypes()[resNum]),
+                    meshName,
+                    /*isClosed=*/true));
     }
-    funcOp.setResultAttr(resNum, kManualAxes, manualAxes);
+    if (attrs.get(kManualAxes) != manualAxes) {
+      attrs.set(kManualAxes, manualAxes);
+    }
+    newResultAttrs.push_back(attrs.getDictionary(funcOp.getContext()));
   }
+  funcOp.setAllResultAttrs(newResultAttrs);
 
   // Walk in preorder of blocks in order to stop walks on manual computations.
   funcOp->walk([&](Operation* op) {
@@ -259,13 +268,6 @@ void setBlockArgManualAxes(FuncOp funcOp, mlir::BlockArgument blockArg,
                            ManualAxesAttr manualAxesAttr) {
   if (!manualAxesAttr.empty()) {
     funcOp.setArgAttr(blockArg.getArgNumber(), kManualAxes, manualAxesAttr);
-  }
-}
-
-void setFuncResultManualAxes(FuncOp funcOp, int64_t resultIndex,
-                             ManualAxesAttr manualAxesAttr) {
-  if (!manualAxesAttr.empty()) {
-    funcOp.setResultAttr(resultIndex, kManualAxes, manualAxesAttr);
   }
 }
 
@@ -376,14 +378,23 @@ void convertManualComputationOp(
       setBlockArgManualAxes(funcOp, blockArg, regionManualAxesAttr);
     }
   }
+
+  // TODO(b/510714593): Create a shardy utility to modify func arg/result
+  // attributes as below but in a more general way and re-use it.
+  llvm::SmallVector<mlir::DictionaryAttr> newResultAttrs;
+  newResultAttrs.reserve(op.getNumResults());
   for (auto [i, sharding] :
        llvm::enumerate(op.getOutShardings().getShardings())) {
+    mlir::NamedAttrList attrs;
     if (sharding) {
-      sdy::setFuncResultSharding(funcOp, i,
-                                 eraseManualAxes(sharding, manualAxes.region));
-      setFuncResultManualAxes(funcOp, i, regionManualAxesAttr);
+      attrs.set(kShardingAttr, eraseManualAxes(sharding, manualAxes.region));
+      if (!regionManualAxesAttr.empty()) {
+        attrs.set(kManualAxes, regionManualAxesAttr);
+      }
     }
+    newResultAttrs.push_back(attrs.getDictionary(funcOp.getContext()));
   }
+  funcOp.setAllResultAttrs(newResultAttrs);
 
   SmallVector<TensorShardingAttr> erasedManualAxisOutShardings;
   erasedManualAxisOutShardings.reserve(op.getNumResults());
