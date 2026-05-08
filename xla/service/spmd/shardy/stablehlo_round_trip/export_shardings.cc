@@ -125,22 +125,26 @@ void exportFunc(FuncOp funcOp, const SymbolTable& symbolTable,
     }
   }
 
+  SmallVector<mlir::DictionaryAttr> newResultAttrs;
+  newResultAttrs.reserve(funcOp.getNumResults());
   for (int64_t resNum = 0; resNum < funcOp.getNumResults(); ++resNum) {
-    if (auto sdySharding = funcOp.getResultAttrOfType<TensorShardingAttr>(
-            resNum, kShardingAttr)) {
+    mlir::NamedAttrList attrs(funcOp.getResultAttrDict(resNum));
+    if (auto sdySharding = mlir::dyn_cast_or_null<TensorShardingAttr>(
+            attrs.get(kShardingAttr))) {
       ArrayRef<StringAttr> manualAxes;
-      if (ManualAxesAttr manualAxesAttr =
-              funcOp.getResultAttrOfType<ManualAxesAttr>(resNum, kManualAxes)) {
+      if (auto manualAxesAttr =
+              mlir::dyn_cast_or_null<ManualAxesAttr>(attrs.get(kManualAxes))) {
         manualAxes = manualAxesAttr.getValue();
-        funcOp.removeResultAttr(resNum, kManualAxes);
+        attrs.erase(kManualAxes);
       }
-      funcOp.setResultAttr(
-          resNum, kXlaShardingAttr,
-          getStringAttr(convertToHloSharding(sdySharding, getMeshAttr,
-                                             manualAxes, enableHloShardingV3)));
-      funcOp.removeResultAttr(resNum, kShardingAttr);
+      attrs.set(kXlaShardingAttr, getStringAttr(convertToHloSharding(
+                                      sdySharding, getMeshAttr, manualAxes,
+                                      enableHloShardingV3)));
+      attrs.erase(kShardingAttr);
     }
+    newResultAttrs.push_back(attrs.getDictionary(funcOp.getContext()));
   }
+  funcOp.setAllResultAttrs(newResultAttrs);
 
   funcOp.front().walk([&](Operation* op) {
     ArrayRef<StringAttr> manualAxes;

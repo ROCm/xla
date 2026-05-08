@@ -273,9 +273,18 @@ void convertShardyAttrsWithoutHloShardingV3(FuncOp funcOp,
 
   // Due to `SdyRoundTripExportShardingsPass` keeping `kXlaShardingAttr`, remove
   // them purely for cleanliness of the module.
+  llvm::SmallVector<mlir::DictionaryAttr> newResultAttrs;
+  newResultAttrs.reserve(funcOp.getNumResults());
   for (int64_t resNum = 0; resNum < funcOp.getNumResults(); ++resNum) {
-    funcOp.removeResultAttr(resNum, kXlaShardingAttr);
+    mlir::DictionaryAttr dict = funcOp.getResultAttrDict(resNum);
+    mlir::NamedAttrList attrs(dict);
+    if (attrs.erase(kXlaShardingAttr)) {
+      newResultAttrs.push_back(attrs.getDictionary(funcOp.getContext()));
+    } else {
+      newResultAttrs.push_back(dict);
+    }
   }
+  funcOp.setAllResultAttrs(newResultAttrs);
 
   llvm::SmallVector<std::pair<CustomCallOp, DictionaryAttr>>
       funcResultShardingOps;
