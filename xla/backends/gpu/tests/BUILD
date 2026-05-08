@@ -332,21 +332,13 @@ xla_test(
 
 xla_test(
     name = "gpu_too_many_blocks_test",
-    srcs = [
-        "gpu_too_many_blocks_test.cc",
-    ],
+    srcs = ["gpu_too_many_blocks_test.cc"],
     backends = ["gpu"],
     tags = ["cuda-only"],
-    use_legacy_runtime = True,
     deps = [
-        ":gpu_codegen_test",
+        ":gpu_pjrt_codegen_test",
         "//xla/hlo/ir:hlo",
-        "//xla/service:executable",
-        "//xla/stream_executor:stream_executor_memory_allocator",
-        "@com_google_absl//absl/status:statusor",
         "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/platform:test",
     ],
 )
 
