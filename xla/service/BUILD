@@ -5886,6 +5886,7 @@ xla_cc_test(
         ":test_compilation_environment_proto_cc",
         # "@com_google_protobuf//:descriptor_cc_proto" - This target is included in @com_google_protobuf//:protobuf and not available separately in OSS.
         "@com_google_googletest//:gtest",
+        "@com_google_absl//absl/base",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
