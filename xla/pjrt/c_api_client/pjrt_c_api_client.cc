@@ -1566,8 +1566,10 @@ class PjRtCApiAsyncHostToDeviceTransferManager
     args.buffer_index = buffer_index;
 
     const xla::Shape& shape = literal.shape();
-    args.shape_dims = shape.dimensions().data();
-    args.shape_num_dims = shape.dimensions().size();
+    if (shape.IsArray()) {
+      args.shape_dims = shape.dimensions().data();
+      args.shape_num_dims = shape.dimensions().size();
+    }
     args.shape_element_type =
         pjrt::ConvertToPjRtBufferType(shape.element_type());
 
