@@ -115,8 +115,6 @@ class GpuPerformanceModelWithIndexingAnalysis : public GpuPerformanceModelBase {
   int64_t FlopsPerElement(const HloInstruction* instr);
 
  private:
-  int64_t GetShapeSizeRecursive(const Shape& shape) const;
-
   const HloOpProfiles::HloOpProfile* hlo_op_profile_;
   const se::DeviceDescription* device_info_;
   HloFusionAnalysisCache* fusion_analysis_cache_;
