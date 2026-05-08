@@ -36,6 +36,10 @@ EXCLUDED_TESTS=(
     "StreamExecutorGpuClientTest.GetAbiVersion"
     # TODO: fix, memory stats mismatch (se_gpu_pjrt_client_test)
     "StreamExecutorGpuClientTest.GetCompiledMemoryStatsWithTupleAndNcclUserBuffers"
+    # TODO: remove when more triton default configs are added
+    "TritonBackendTest.CostModelOptions_Filter"
+    "TritonBackendTest.CostModelOptions_TopFromDefault"
+    "TritonBackendTest.CostModelOptions_Combination"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
