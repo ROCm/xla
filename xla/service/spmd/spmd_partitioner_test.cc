@@ -17585,8 +17585,8 @@ ENTRY %module {
 
 TEST_P(SpmdPartitioningAllShardingTest,
        V3ShardingGeneratesRGV3NamedAxisConflict) {
-  if (GetParam() == ShardingFormatPicker::ShardingType::kV1) {
-    GTEST_SKIP() << "This test only runs for V2 or V3 shardings.";
+  if (GetParam() != ShardingFormatPicker::ShardingType::kNamed) {
+    GTEST_SKIP() << "This test only runs for V3 shardings.";
   }
   HloModuleConfig config = GetModuleConfigForTest();
   config.set_use_spmd_partitioning(true);
