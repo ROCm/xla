@@ -1582,7 +1582,11 @@ class PjRtCApiAsyncHostToDeviceTransferManager
       args.shape_layout = nullptr;
     }
 
-    args.data = literal.untyped_data();
+    if (shape.IsArray()) {
+      args.data = literal.untyped_data();
+    } else {
+      args.data = nullptr;
+    }
     const PJRT_Api* api = c_client_->pjrt_c_api();
     RETURN_STATUS_IF_PJRT_ERROR(
         api->PJRT_AsyncHostToDeviceTransferManager_TransferLiteral(&args), api);
