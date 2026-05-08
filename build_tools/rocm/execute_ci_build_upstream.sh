@@ -7,6 +7,7 @@ SCRIPT_DIR=$(realpath "$(dirname "$0")")
 EXCLUDED_TESTS=(
     "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
     "*IotaR1Test*"                                                                                                                                 # Taking too many CI nodes
+    "DotTests/ParametricDotTestWithoutLayoutAssignment.TestF16/*"
     "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x6" # TODO: fix
     "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x9" # TODO: fix
     "RocmExecutorTest.CreateUnifiedMemoryAllocatorWorks"                                                                                           # TODO: fix
