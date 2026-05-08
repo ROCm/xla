@@ -65,7 +65,8 @@ static CUmemAllocationProp GetAllocationProp(
 // properties and falls back through progressively simpler handle types:
 //   FABRIC+POSIX_FD -> POSIX_FD -> NONE
 static absl::StatusOr<CUmemGenericAllocationHandle> CreatePhysicalAllocation(
-    CUmemAllocationProp properties, uint64_t padded_size) {
+    CUmemAllocationProp properties, uint64_t padded_size,
+    bool enable_fabric_handle) {
   CUmemGenericAllocationHandle handle;
 
   auto try_create = [&](const char* description)
@@ -86,7 +87,9 @@ static absl::StatusOr<CUmemGenericAllocationHandle> CreatePhysicalAllocation(
     return cuda::ToStatus(result);
   };
 
-  bool has_fabric = properties.requestedHandleTypes & CU_MEM_HANDLE_TYPE_FABRIC;
+  bool has_fabric =
+      properties.requestedHandleTypes & CU_MEM_HANDLE_TYPE_FABRIC &&
+      enable_fabric_handle;
   bool has_posix_fd = properties.requestedHandleTypes &
                       CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
 
@@ -139,8 +142,17 @@ VmmAllocate(StreamExecutor* executor, const CudaVmmAllocator::Options& options,
   size_t effective_alignment = std::max(options.alignment, granularity);
   uint64_t padded_size = xla::RoundUpTo<uint64_t>(size, effective_alignment);
 
-  ASSIGN_OR_RETURN(CUmemGenericAllocationHandle handle,
-                   CreatePhysicalAllocation(properties, padded_size));
+  const bool enable_fabric_handle =
+      executor->GetDeviceDescription().device_interconnect_info().active_links >
+      0;
+
+  XLA_VLOG_DEVICE(3, executor->device_ordinal())
+      << "Creating physical allocation with handle types: "
+      << properties.requestedHandleTypes
+      << ". Enable fabric handle: " << enable_fabric_handle;
+  ASSIGN_OR_RETURN(
+      CUmemGenericAllocationHandle handle,
+      CreatePhysicalAllocation(properties, padded_size, enable_fabric_handle));
 
   absl::Cleanup release_handle = [&] {
     absl::Status status = cuda::ToStatus(cuMemRelease(handle));
