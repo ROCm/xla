@@ -810,7 +810,6 @@ xla_cc_test(
         "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest_main",
         "@llvm-project//llvm:Support",
-        "@llvm-project//mlir:AsmParser",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
     ],
