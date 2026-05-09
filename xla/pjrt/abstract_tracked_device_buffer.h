@@ -18,6 +18,7 @@ limitations under the License.
 
 #include <array>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "absl/base/attributes.h"
@@ -35,6 +36,7 @@ limitations under the License.
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/raw_buffer.h"
 #include "xla/tsl/concurrency/async_value.h"
+#include "xla/tsl/concurrency/future.h"
 #include "xla/tsl/concurrency/ref_count.h"
 #include "xla/util.h"
 
@@ -331,6 +333,23 @@ class CommonPjRtBuffer : public PjRtBuffer {
           std::vector<PjRtDeviceEventRef> definition_events) &&>
           scoped_acquire,
       const char* caller_name = "AcquireScopedRawBuffer");
+
+  struct RawBufferForUsage {
+    PjRtRawBufferRef raw_buffer;
+
+    // The caller must call this after they have finished accessing
+    // `raw_buffer`.
+    absl::AnyInvocable<void() &&> usage_done_cb;
+
+    // A future that is satisfied when the buffer's definition events
+    // become ready.
+    Future<> definition_future;
+  };
+  // A convenience version of `AcquireScopedRawBuffer` that returns a
+  // raw buffer and a usage done promise that the caller should complete
+  // when they are done using the buffer.
+  absl::StatusOr<RawBufferForUsage> GetRawBufferForUsage(
+      const char* caller_name = "GetRawBufferForUsage");
 
   ScopedHold GetBufferWithHold(ScopedHold::Type type);
 
