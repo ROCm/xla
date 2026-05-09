@@ -1154,6 +1154,7 @@ PartitionedHlo::ReshardAsWindowedInput(const Window& window,
   auto handle_all_windowed_dimensions_are_replicated = [&]() {
     PaddingConfig padding_config;
     auto pad_hlo_shape = padded_shape;
+    Window cleared_shard_window = shard_window;
     for (int64_t i = 0; i < base_shape_.dimensions().size(); ++i) {
       auto padding_config_dim = padding_config.add_dimensions();
       padding_config_dim->set_interior_padding(0);
@@ -1174,6 +1175,10 @@ PartitionedHlo::ReshardAsWindowedInput(const Window& window,
         padding_config_dim->set_edge_padding_high(padded_shape.dimensions(i) -
                                                   explicit_left_padding[i] -
                                                   base_shape_.dimensions(i));
+        // Clear padding in shard_window for this dimension as it is handled
+        // here.
+        cleared_shard_window.mutable_dimensions(i)->set_padding_low(0);
+        cleared_shard_window.mutable_dimensions(i)->set_padding_high(0);
       }
     }
     auto padded_hlo =
@@ -1186,7 +1191,7 @@ PartitionedHlo::ReshardAsWindowedInput(const Window& window,
             shard_shape, padded_hlo, offsets_on_padded_shape,
             shard_shape.dimensions()));
     return update_cache(WindowedInputShardReturnValue{
-        sharded_input, shard_window,
+        sharded_input, cleared_shard_window,
         get_dynamic_slice_offset_on_output_if_needed()});
   };
 
@@ -4026,68 +4031,67 @@ absl::StatusOr<HloInstruction*> SpmdPartitioningVisitor::ProcessUpdatePiece(
     return current_input;
   }
 
-    PaddingConfig padding_config;
-    for (int64_t input_tensor_dim = 0;
-         input_tensor_dim < hlo->shape().dimensions().size();
-         ++input_tensor_dim) {
-      auto padding_dim = padding_config.add_dimensions();
-      padding_dim->set_interior_padding(0);
+  PaddingConfig padding_config;
+  for (int64_t input_tensor_dim = 0;
+       input_tensor_dim < hlo->shape().dimensions().size();
+       ++input_tensor_dim) {
+    auto padding_dim = padding_config.add_dimensions();
+    padding_dim->set_interior_padding(0);
 
-      int64_t start_index = piece_dus_starts[input_tensor_dim];
-      int64_t end_index = start_index + piece_update_tensor->shape().dimensions(
-                                            input_tensor_dim);
-      int64_t padding_high =
-          hlo->shape().dimensions(input_tensor_dim) - end_index;
-      padding_dim->set_edge_padding_low(start_index);
-      padding_dim->set_edge_padding_high(padding_high);
-    }
+    int64_t start_index = piece_dus_starts[input_tensor_dim];
+    int64_t end_index =
+        start_index + piece_update_tensor->shape().dimensions(input_tensor_dim);
+    int64_t padding_high =
+        hlo->shape().dimensions(input_tensor_dim) - end_index;
+    padding_dim->set_edge_padding_low(start_index);
+    padding_dim->set_edge_padding_high(padding_high);
+  }
 
-    const Shape operand_pred_shape =
-        ShapeUtil::ChangeElementType(hlo->shape(), PRED);
-    const Shape update_pred_shape =
-        ShapeUtil::ChangeElementType(piece_update_tensor->shape(), PRED);
+  const Shape operand_pred_shape =
+      ShapeUtil::ChangeElementType(hlo->shape(), PRED);
+  const Shape update_pred_shape =
+      ShapeUtil::ChangeElementType(piece_update_tensor->shape(), PRED);
 
-    HloInstruction* zeroOperand = CreateZero(update_pred_shape, &b_);
-    zeroOperand->set_sharding(HloSharding::Replicate());
+  HloInstruction* zeroOperand = CreateZero(update_pred_shape, &b_);
+  zeroOperand->set_sharding(HloSharding::Replicate());
 
-    HloInstruction* paddingValue = CreateOne(Shape(PRED, {}), &b_);
-    HloInstruction* maskOp = PadHelper(
-        *this,
-        PartitionedHlo(zeroOperand, update_pred_shape, MakePartitioningState()),
-        paddingValue, padding_config, operand_pred_shape, hlo->sharding());
-    if (!maskOp) {
-      maskOp = add_hlo(HloInstruction::CreatePad(
-          operand_pred_shape, zeroOperand, paddingValue, padding_config));
-      maskOp->set_sharding(hlo->sharding());
-    }
+  HloInstruction* paddingValue = CreateOne(Shape(PRED, {}), &b_);
+  HloInstruction* maskOp = PadHelper(
+      *this,
+      PartitionedHlo(zeroOperand, update_pred_shape, MakePartitioningState()),
+      paddingValue, padding_config, operand_pred_shape, hlo->sharding());
+  if (!maskOp) {
+    maskOp = add_hlo(HloInstruction::CreatePad(operand_pred_shape, zeroOperand,
+                                               paddingValue, padding_config));
+    maskOp->set_sharding(hlo->sharding());
+  }
 
-    auto zeroElemOp = add_hlo(HloInstruction::CreateConstant(
-        LiteralUtil::Zero(hlo->shape().element_type())));
+  auto zeroElemOp = add_hlo(HloInstruction::CreateConstant(
+      LiteralUtil::Zero(hlo->shape().element_type())));
 
-    TF_ASSIGN_OR_RETURN(HloInstruction * newOperand,
-                        ProcessUpdatePieceExtractOperand(
-                            hlo, input_tensor, piece_update_tensor,
-                            piece_dus_starts, current_input, zeroElemOp));
+  TF_ASSIGN_OR_RETURN(HloInstruction * newOperand,
+                      ProcessUpdatePieceExtractOperand(
+                          hlo, input_tensor, piece_update_tensor,
+                          piece_dus_starts, current_input, zeroElemOp));
 
-    if (!newOperand) {
-      newOperand =
-          PadHelper(*this, GetPartitionedHlo(piece_update_tensor), zeroElemOp,
-                    padding_config, hlo->shape(), hlo->sharding());
-    }
+  if (!newOperand) {
+    newOperand =
+        PadHelper(*this, GetPartitionedHlo(piece_update_tensor), zeroElemOp,
+                  padding_config, hlo->shape(), hlo->sharding());
+  }
 
-    if (!newOperand) {
-      newOperand = add_hlo(HloInstruction::CreatePad(
-          hlo->shape(), GetPartitionedHlo(piece_update_tensor).hlo(),
-          zeroElemOp, padding_config));
-      newOperand->set_sharding(hlo->sharding());
-    }
+  if (!newOperand) {
+    newOperand = add_hlo(HloInstruction::CreatePad(
+        hlo->shape(), GetPartitionedHlo(piece_update_tensor).hlo(), zeroElemOp,
+        padding_config));
+    newOperand->set_sharding(hlo->sharding());
+  }
 
-    auto shard_result_shape =
-        MakePartitionedShape(hlo->shape(), hlo->sharding());
-    auto result = add_hlo(
-        HloInstruction::CreateTernary(shard_result_shape, HloOpcode::kSelect,
-                                      maskOp, current_input, newOperand));
-    return result;
+  auto shard_result_shape = MakePartitionedShape(hlo->shape(), hlo->sharding());
+  auto result = add_hlo(
+      HloInstruction::CreateTernary(shard_result_shape, HloOpcode::kSelect,
+                                    maskOp, current_input, newOperand));
+  return result;
 }
 
 absl::StatusOr<HloInstruction*>
@@ -6575,6 +6579,9 @@ absl::Status SpmdPartitioner::PreprocessHlos(
 
         // Merge pad->slice to avoid multiple halo exchanges.
         if (operand->opcode() == HloOpcode::kPad) {
+          if (operand->operand(0)->sharding() != operand->sharding()) {
+            continue;
+          }
           std::optional<PaddingConfig> merged_padding =
               operand->padding_config();
           bool may_have_multi_halo_exchanges = false;

@@ -2990,6 +2990,27 @@ ENTRY entry {
   EXPECT_THAT(root, AllOf(op::CollectivePermute(param0), op::Shape("f32[1]")));
 }
 
+TEST_P(SpmdPartitioningAllShardingTest, MergedPadThenSliceShiftLeft) {
+  absl::string_view hlo_string = R"(
+HloModule module
+
+ENTRY entry {
+  %param0 = s32[2,12] parameter(0), sharding={replicated}
+  %init = s32[] constant(0)
+  %pad = s32[2,13] pad(%param0, %init), padding=0_0x0_1, sharding={devices=[1,4]<=[4]}
+  ROOT %slice = s32[2,12] slice(%pad), slice={[0:2], [1:13]}, sharding={devices=[1,4]<=[4]}
+})";
+
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          PartitionComputation(hlo_string, /*num_devices=*/4));
+  VLOG(1) << module->ToString();
+
+  const auto root = module->entry_computation()->root_instruction();
+  EXPECT_THAT(root, op::Copy(op::DynamicSlice(_, _, _)));
+  EXPECT_NE(FindInstruction(module.get(), HloOpcode::kCollectivePermute),
+            nullptr);
+}
+
 TEST_P(SpmdPartitioningAllShardingTest, MergedSliceThenConcatRotateRight) {
   absl::string_view hlo_string = R"(
 HloModule module
