@@ -264,13 +264,6 @@ void setNonEmptyManualAxes(Operation* op, ManualAxesAttr manualAxesAttr) {
   }
 }
 
-void setBlockArgManualAxes(FuncOp funcOp, mlir::BlockArgument blockArg,
-                           ManualAxesAttr manualAxesAttr) {
-  if (!manualAxesAttr.empty()) {
-    funcOp.setArgAttr(blockArg.getArgNumber(), kManualAxes, manualAxesAttr);
-  }
-}
-
 // Creates a sharding constraint op. If `createHloShardingConstraints` is true,
 // creates a `stablehlo.custom_call` op with `call_target_name` equal to
 // "Sharding", otherwise creates a `mhlo.copy` op.
@@ -374,8 +367,12 @@ void convertManualComputationOp(
   for (auto [blockArg, sharding] : llvm::zip_equal(
            funcOp.getArguments(), op.getInShardings().getShardings())) {
     if (sharding) {
-      setSharding(blockArg, eraseManualAxes(sharding, manualAxes.region));
-      setBlockArgManualAxes(funcOp, blockArg, regionManualAxesAttr);
+      funcOp.setArgAttr(blockArg.getArgNumber(), kShardingAttr,
+                        eraseManualAxes(sharding, manualAxes.region));
+      if (!regionManualAxesAttr.empty()) {
+        funcOp.setArgAttr(blockArg.getArgNumber(), kManualAxes,
+                          regionManualAxesAttr);
+      }
     }
   }
 
