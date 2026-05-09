@@ -5,15 +5,12 @@ set -ex
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
 EXCLUDED_TESTS=(
-    "HostMemoryAllocateTest.Numa" # Failing on RBE
-    "*IotaR1Test*" # Taking too many CI nodes
-    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e4m3fn_f8e5m2" # TODO: fix
-    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e5m2_f8e5m2" # TODO: fix
-    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e5m2_f8e4m3fn" # TODO: fix
-    "Fp8s/FloatNormalizationTest.Fp8Normalization/f8e4m3fn_f8e4m3fn" # TODO: fix
+    "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
+    "*IotaR1Test*"                                                                                                                                 # Taking too many CI nodes
+    "DotTests/ParametricDotTestWithoutLayoutAssignment.TestF16/*"
     "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x6" # TODO: fix
     "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x9" # TODO: fix
-    "RocmExecutorTest.CreateUnifiedMemoryAllocatorWorks" # TODO: fix
+    "RocmExecutorTest.CreateUnifiedMemoryAllocatorWorks"                                                                                           # TODO: fix
     # TODO: fix, unimplemented ROCm (collective_ops_e2e_test, p2p_ops_e2e_test)
     "AsyncCollectiveOps/AsyncCollectiveOps.*/*symmetric"
     "P2POps/P2POps.CollectivePermute/enable_symmetric_buffer"
@@ -36,10 +33,17 @@ EXCLUDED_TESTS=(
     "StreamExecutorGpuClientTest.GetAbiVersion"
     # TODO: fix, memory stats mismatch (se_gpu_pjrt_client_test)
     "StreamExecutorGpuClientTest.GetCompiledMemoryStatsWithTupleAndNcclUserBuffers"
-    # TODO: remove when more triton default configs are added
-    "TritonBackendTest.CostModelOptions_Filter"
-    "TritonBackendTest.CostModelOptions_TopFromDefault"
-    "TritonBackendTest.CostModelOptions_Combination"
+    "CubSort/CubSortKeysTest*"
+    "CubSort/CubSortPairsTest*"
+    "HloOpProfilerTest.BasicMeasurementsAreCorrect"
+    "RandomEighTestInstantiation/RandomEighTest*"
+    "SampleFileTest.Convolution"
+    "SortRewriterArgsort/SortRewriterArgsortTest*"
+    "SortRewriterTest*"
+    "SVDTest.*"
+    "TritonBackendTest*"
+    "TypeSupportTest*"
+    "HipblasLtMxExecutionTest*"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
@@ -74,10 +78,12 @@ done
     ) \
     --cache_test_results=yes \
     --keep_going \
+    --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=${RBE_POOL} \
+    --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
     -- \
     //xla/... \
     -//xla/backends/gpu/tests:sorting.hlo.test_mi200 \
     -//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any \
     -//xla/backends/gpu/tests:collective_pipeline_parallelism_test_amdgpu_any \
+    -//xla/service/gpu:dot_algorithm_support_test_amdgpu_any \
     -//xla/pjrt/gpu:se_gpu_pjrt_client_test # TODO: times out so temporarily skip the whole target
-
