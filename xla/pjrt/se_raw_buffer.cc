@@ -577,8 +577,10 @@ void PjRtStreamExecutorRawBuffer::IntraClientCopyToWithDependencies(
       auto dst_buffer_mem = dst_buffer->mem();
       TF_RETURN_IF_ERROR(client->WaitForAllocation(stream, *src_raw_buffer));
       TF_RETURN_IF_ERROR(client->WaitForAllocation(stream, *dst_raw_buffer));
-      TF_RETURN_IF_ERROR(stream->MemcpyD2D(&dst_buffer_mem, src_buffer->mem(),
-                                           dst_buffer_mem.size()));
+      if (dst_buffer_mem.size() > 0) {
+        TF_RETURN_IF_ERROR(stream->MemcpyD2D(&dst_buffer_mem, src_buffer->mem(),
+                                             dst_buffer_mem.size()));
+      }
       client->ThenRecordEvent(usage_event, local_device, std::move(event),
                               stream);
       usage_event.AndThen([src_buffer, dst_raw_buffer]() {});

@@ -661,7 +661,9 @@ PjRtStreamExecutorClient::LinearizeHostBufferInto(
   auto definition_event = BufferSequencingEvent::Create(async_work_runner());
 
   if (type == xla::TOKEN) {
-    definition_event.SetStateConcrete();
+    TF_RETURN_IF_ERROR(AllocateAndRecordEvent(definition_event, local_device,
+                                              copy_stream,
+                                              "LinearizeHostBufferIntoToken"));
     return PjRtDeviceEventRef(definition_event);
   }
 
@@ -913,7 +915,8 @@ absl::StatusOr<PjRtDeviceEventRef> PjRtStreamExecutorClient::LinearizeInto(
   TF_RETURN_IF_ERROR(WaitForAllocation(copy_stream, *raw_buffer));
 
   if (literal.shape().IsToken()) {
-    event.SetStateConcrete();
+    TF_RETURN_IF_ERROR(AllocateAndRecordEvent(event, local_device, copy_stream,
+                                              "LinearizeIntoToken"));
     return PjRtDeviceEventRef(event);
   }
 
