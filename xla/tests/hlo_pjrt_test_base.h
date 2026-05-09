@@ -51,7 +51,8 @@ class HloPjRtTestBase : public HloRunnerAgnosticTestBase {
   explicit HloPjRtTestBase(HloPjRtTestBaseOptions options = {});
 
  private:
-  HloPjRtTestBase(PjRtClient* client, HloPjRtTestBaseOptions options);
+  HloPjRtTestBase(std::shared_ptr<PjRtClient> client,
+                  HloPjRtTestBaseOptions options);
   HloPjRtTestBase(DeviceShapeRepresentationFn device_shape_representation_fn,
                   DeviceShapeSizeFn device_shape_size_fn,
                   std::unique_ptr<PjRtClient> client,

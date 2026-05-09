@@ -293,11 +293,8 @@ absl::StatusOr<DeviceAssignment> GetBestDeviceAssignment(
 
 }  // namespace
 
-HloRunnerPjRt::HloRunnerPjRt(std::unique_ptr<PjRtClient> pjrt_client)
+HloRunnerPjRt::HloRunnerPjRt(std::shared_ptr<PjRtClient> pjrt_client)
     : pjrt_client_(std::move(pjrt_client)) {}
-
-HloRunnerPjRt::HloRunnerPjRt(PjRtClient* borrowed_client)
-    : pjrt_client_(borrowed_client, [](PjRtClient*) {}) {}
 
 absl::StatusOr<CompileOptions> HloRunnerPjRt::GenerateDefaultCompileOptions(
     HloModule* module, bool run_hlo_passes) {
