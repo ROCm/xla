@@ -236,6 +236,7 @@ limitations under the License.
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/threadpool.h"
+#include "xla/tsl/util/sorted_range.h"
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
@@ -1355,10 +1356,14 @@ static void RemoveUnusedSymbols(llvm::Module& module) {
   llvm::SmallVector<llvm::Function*> unused_functions;
 
   for (llvm::GlobalVariable& gv : module.globals()) {
-    if (gv.use_empty()) unused_globals.push_back(&gv);
+    if (gv.use_empty()) {
+      unused_globals.push_back(&gv);
+    }
   }
   for (llvm::Function& f : module.functions()) {
-    if (f.isDeclaration() && f.use_empty()) unused_functions.push_back(&f);
+    if (f.isDeclaration() && f.use_empty()) {
+      unused_functions.push_back(&f);
+    }
   }
 
   for (auto* gv : unused_globals) {
@@ -1417,7 +1422,9 @@ static CompiledSymbolsPart CollectCompiledSymbolsPart(
   auto find_kernel =
       [&](llvm::StringRef name) -> std::optional<IrEmitter2::KernelInfo> {
     for (auto& k : ir_emitter.kernels()) {
-      if (k.name == name) return k;
+      if (k.name == name) {
+        return k;
+      }
     }
     return std::nullopt;
   };
@@ -1425,7 +1432,9 @@ static CompiledSymbolsPart CollectCompiledSymbolsPart(
   auto find_comparator =
       [&](llvm::StringRef name) -> std::optional<IrEmitter2::ComparatorInfo> {
     for (auto& c : ir_emitter.comparators()) {
-      if (c.name == name) return c;
+      if (c.name == name) {
+        return c;
+      }
     }
     return std::nullopt;
   };
@@ -1459,7 +1468,9 @@ static bool HasLargeConstants(llvm::Module& module) {
 
     llvm::Constant* initializer = g.getInitializer();
     if (auto* arr = llvm::dyn_cast<llvm::ArrayType>(initializer->getType())) {
-      if (arr->getNumElements() > kMaxConstantSize) return true;
+      if (arr->getNumElements() > kMaxConstantSize) {
+        return true;
+      }
     }
   }
   return false;
@@ -1511,7 +1522,7 @@ static absl::StatusOr<std::unique_ptr<llvm::Module>> ExtractKernelsFromModule(
       llvm::CloneModule(*original_module, vmap, should_clone_definition);
 
   // Erase the cloned symbols from the original module.
-  for (const auto& kernel_name : kernels) {
+  for (const auto& kernel_name : tsl::SortedRange(kernels)) {
     llvm::Function* to_be_removed = original_module->getFunction(kernel_name);
     if (to_be_removed == nullptr) {
       return Internal("Cannot remove kernel %s: cannot be found in module %s",
@@ -1909,7 +1920,7 @@ CpuCompiler::CompileCpuExecutable(
                            {{"num_extra_parts", num_extra_parts}});
     });
     for (const auto& [backend_extra_options, kernels] :
-         backend_extra_options_to_kernels) {
+         tsl::KeySortedRange(backend_extra_options_to_kernels)) {
       TF_ASSIGN_OR_RETURN(std::unique_ptr<llvm::Module> new_module,
                           ExtractKernelsFromModule(llvm_module.get(), kernels));
       AddXlaBackendExtraOptionsAsModuleFlag(new_module.get(),
@@ -2305,8 +2316,9 @@ HloCostAnalysis::ShapeSizeFunction CpuCompiler::ShapeSizeBytesFunction() const {
 absl::StatusOr<std::unique_ptr<CompiledModule>> CpuCompiler::Export(
     Executable* executable) {
   auto* cpu_executable = absl::down_cast<CpuExecutable*>(executable);
-  if (!cpu_executable)
+  if (!cpu_executable) {
     return Internal("Could not downcast Executable to CpuExecutable");
+  }
 
   // Export object files for all dylibs.
   std::vector<ObjFileProto> obj_files;
