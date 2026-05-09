@@ -476,8 +476,7 @@ mlir::sdy::TensorShardingAttr convertToSdyShardingAttr(
         << "Expected HloShardingV3 during Shardy import when "
            "'xla_enable_hlo_sharding_v3' flag is enabled, but got "
            "non-replicated HloShardingV2 <<"
-        << hloSharding
-        << ". Please contact OpenXLA/Shardy team if you encounter this error.";
+        << hloSharding;
     return nullptr;
   }
 
