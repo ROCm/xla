@@ -422,6 +422,10 @@ absl::StatusOr<FuncOp> HloFunctionImporter::ImportAsFunc(
   function.setVisibility(is_main ? FuncOp::Visibility::Public
                                  : FuncOp::Visibility::Private);
 
+  // TODO(b/510714593): Create a shardy utility to modify func result
+  // attributes as below but in a more general way and re-use it.
+  llvm::SmallVector<mlir::DictionaryAttr> funcArgAttrs;
+  function.getAllArgAttrs(funcArgAttrs);
   int arg_index = 0;
   // Create block so that the function has arguments we can attach
   // `mlir::Location`s to.
@@ -447,10 +451,10 @@ absl::StatusOr<FuncOp> HloFunctionImporter::ImportAsFunc(
       }
 
       for (int i = 0; i < leaf_count; ++i) {
+        mlir::NamedAttrList argAttrs(function.getArgAttrDict(arg_index));
         if (!flattened_shardings.empty()) {
-          function.setArgAttr(
-              arg_index, xla::kMhloSharding,
-              ConvertSharding(flattened_shardings[i], builder_));
+          argAttrs.set(xla::kMhloSharding,
+                       ConvertSharding(flattened_shardings[i], builder_));
         }
         if (frontend_attributes) {
           if (leaf_count > 1) {
@@ -458,28 +462,28 @@ absl::StatusOr<FuncOp> HloFunctionImporter::ImportAsFunc(
                 "A tuple parameter that is being flattened shouldn't have "
                 "frontend attributes");
           }
-          function.setArgAttr(arg_index, xla::kMhloFrontendAttributes,
-                              frontend_attributes);
+          argAttrs.set(xla::kMhloFrontendAttributes, frontend_attributes);
         }
         if (parameter->parameter_replicated_at_leaf_buffers() &&
             parameter->parameter_replicated_at_leaf_buffers()->at(i)) {
-          function.setArgAttr(arg_index, xla::kMhloParameterReplication,
-                              builder_->getBoolArrayAttr({true}));
+          argAttrs.set(xla::kMhloParameterReplication,
+                       builder_->getBoolArrayAttr({true}));
         }
         // NOTE: since we are flattening args, all arguments will share the same
         // location as the tuple parameter instruction.
         function.getArgument(arg_index).setLoc(
             mlir::hlo::GenerateInstructionLocation(instruction, context_));
-        ++arg_index;
+        funcArgAttrs[arg_index++] = argAttrs.getDictionary(context_);
       }
     } else {
+      mlir::NamedAttrList argAttrs(function.getArgAttrDict(arg_index));
       if (parameter->has_sharding()) {
-        function.setArgAttr(arg_index, xla::kMhloSharding,
-                            ConvertSharding(parameter->sharding(), builder_));
+        argAttrs.set(xla::kMhloSharding,
+                     ConvertSharding(parameter->sharding(), builder_));
       }
       if (frontend_attributes) {
-        function.setArgAttr(
-            arg_index, xla::kMhloFrontendAttributes,
+        argAttrs.set(
+            xla::kMhloFrontendAttributes,
             GetFrontendAttributes(*builder_, parameter->frontend_attributes()));
       }
       if (parameter->parameter_replicated_at_leaf_buffers().has_value()) {
@@ -491,16 +495,17 @@ absl::StatusOr<FuncOp> HloFunctionImporter::ImportAsFunc(
           nontrival = nontrival || b;
         }
         if (nontrival) {
-          function.setArgAttr(
-              arg_index, xla::kMhloParameterReplication,
-              builder_->getBoolArrayAttr(replicated_at_leaf_buffers));
+          argAttrs.set(xla::kMhloParameterReplication,
+                       builder_->getBoolArrayAttr(replicated_at_leaf_buffers));
         }
       }
       function.getArgument(arg_index).setLoc(
           mlir::hlo::GenerateInstructionLocation(instruction, context_));
-      ++arg_index;
+      funcArgAttrs[arg_index++] = argAttrs.getDictionary(context_);
     }
   }
+  function.setAllArgAttrs(funcArgAttrs);
+
   // TODO(b/260756663): Token sharding is unverified, legacy users provide
   // multiple sharding values for a single token output.
   bool is_token = computation.root_instruction()->shape().IsToken();
