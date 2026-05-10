@@ -32,7 +32,7 @@ limitations under the License.
 #include "xla/hlo/transforms/hlo_module_stitcher.h"
 #include "xla/service/compiler.h"
 #include "xla/stream_executor/stream_executor.h"
-#include "xla/tsl/platform/threadpool.h"
+#include "xla/tsl/concurrency/executor.h"
 #include "tsl/platform/blocking_counter.h"
 
 namespace xla {
@@ -70,8 +70,8 @@ absl::StatusOr<std::unique_ptr<HloModule>> MultiModuleDriver::Compile(
   std::vector<std::unique_ptr<HloModule>> submodules =
       std::move(splitter.submodules());
 
-  tsl::thread::ThreadPool* thread_pool =
-      options.thread_pool ? options.thread_pool : thread_pool_;
+  tsl::Executor* executor =
+      options.thread_pool ? options.thread_pool->AsExecutor() : executor_;
 
   std::vector<std::unique_ptr<HloModule>> all_modules;
   all_modules.reserve(submodules.size() + 1);
@@ -83,7 +83,7 @@ absl::StatusOr<std::unique_ptr<HloModule>> MultiModuleDriver::Compile(
   std::vector<absl::StatusOr<std::unique_ptr<HloModule>>> results(
       all_modules.size());
 
-  if (thread_pool == nullptr) {
+  if (executor == nullptr) {
     // Sequential compilation.
     for (size_t i = 0; i < all_modules.size(); ++i) {
       results[i] = compile_fn_(std::move(all_modules[i]), options);
@@ -92,7 +92,7 @@ absl::StatusOr<std::unique_ptr<HloModule>> MultiModuleDriver::Compile(
     // Parallel compilation.
     tsl::BlockingCounter counter(all_modules.size());
     for (size_t i = 0; i < all_modules.size(); ++i) {
-      thread_pool->Schedule(
+      executor->Execute(
           [this, &all_modules, &options, &results, &counter, i]() {
             results[i] = compile_fn_(std::move(all_modules[i]), options);
             counter.DecrementCount();

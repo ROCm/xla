@@ -233,6 +233,7 @@ limitations under the License.
 #include "xla/stream_executor/host/host_platform_id.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/concurrency/executor.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/threadpool.h"
@@ -286,7 +287,7 @@ static tsl::thread::ThreadPool* GetCompilationThreadPool() {
 // Returns task runner that uses the global compilation thread pool.
 static cpu::JitCompiler::TaskRunner GetCompilationTaskRunner() {
   return [](cpu::JitCompiler::Task task) {
-    GetCompilationThreadPool()->Schedule(std::move(task));
+    cpu::GetCpuCompilationThreadPool()->Execute(std::move(task));
   };
 }
 
@@ -340,8 +341,8 @@ inline bool IsOneDnnCompatible(bool is_aot_compile) {
   return false;
 }
 
-tsl::thread::ThreadPool* GetCpuCompilationThreadPool() {
-  return GetCompilationThreadPool();
+tsl::Executor* GetCpuCompilationThreadPool() {
+  return GetCompilationThreadPool()->AsExecutor();
 }
 
 CpuCompiler::CpuCompiler() {

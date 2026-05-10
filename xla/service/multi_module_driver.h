@@ -26,6 +26,10 @@ limitations under the License.
 #include "xla/service/compiler.h"
 #include "xla/stream_executor/stream_executor.h"
 
+namespace tsl {
+class Executor;
+}  // namespace tsl
+
 namespace xla {
 
 // Orchestrates the splitting of an HLO module into multiple modules and their
@@ -37,8 +41,8 @@ class MultiModuleDriver {
       std::unique_ptr<HloModule>, const Compiler::CompileOptions&)>;
 
   explicit MultiModuleDriver(CompileFn compile_fn,
-                             tsl::thread::ThreadPool* thread_pool = nullptr)
-      : compile_fn_(std::move(compile_fn)), thread_pool_(thread_pool) {}
+                             tsl::Executor* executor = nullptr)
+      : compile_fn_(std::move(compile_fn)), executor_(executor) {}
 
   // Returns true if the module contains any non-inlineable computations and
   // should be processed by the multi-module driver.
@@ -63,7 +67,7 @@ class MultiModuleDriver {
 
  private:
   CompileFn compile_fn_;
-  tsl::thread::ThreadPool* thread_pool_;
+  tsl::Executor* executor_;
   static std::atomic<int> compile_count_;
 };
 

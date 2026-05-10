@@ -48,15 +48,15 @@ namespace mlir {
 class DialectRegistry;
 }  // namespace mlir
 
-namespace tsl::thread {
-class ThreadPool;
-}  // namespace tsl::thread
+namespace tsl {
+class Executor;
+}  // namespace tsl
 
 namespace xla {
 namespace cpu {
 
 // Returns a global (per-process) thread pool for XLA CPU compilation tasks.
-tsl::thread::ThreadPool* GetCpuCompilationThreadPool();
+tsl::Executor* GetCpuCompilationThreadPool();
 
 // CPU-targeting implementation of the XLA Compiler interface.
 //
