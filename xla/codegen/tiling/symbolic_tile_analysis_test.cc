@@ -2771,5 +2771,68 @@ ENTRY main {
   EXPECT_THAT(rhs->operands(), IsEmpty());
 }
 
+TEST_F(SymbolicTileAnalysisTest, ToStringPrintsInstructionsWithRegions) {
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                          ParseAndReturnVerifiedModule(R"(
+fusion {
+  p0 = f32[1,3] parameter(0)
+  p1 = f32[1,3] parameter(1)
+  add = f32[1,3] add(p0, p1)
+  ROOT concatenate = f32[2,3] concatenate(add, p1), dimensions={0}
+}
+
+ENTRY main {
+  p0 = f32[1,3] parameter(0)
+  p1 = f32[1,3] parameter(1)
+  ROOT fusion = f32[2,3] fusion(p0, p1), kind=kLoop, calls=fusion
+})"));
+  std::optional<SymbolicTileAnalysis> analysis = TryAnalyzeModule(module.get());
+  ASSERT_TRUE(analysis.has_value());
+
+  std::string to_string = analysis->ToString();
+  EXPECT_EQ(to_string,
+            R"(concatenate.tile_0 = concatenate(add.tile_0, p1.1.tile_1)
+  hlo: %concatenate = f32[2,3]{1,0} concatenate(%add, %p1), dimensions={0}
+  Symbolic tile with
+  offset_map: (d0, d1) -> (0, 0)
+  size_map: (d0, d1) -> (d0, d1)
+  stride_map: (d0, d1) -> (1, 1)
+  indexing map: (d0, d1) -> (d0, d1), domain: d0 in [0, 1], d1 in [0, 2]
+  regions sizes: [3, 1]
+  region 0 {
+    p0.1.tile_0 = parameter()
+      hlo: %p0.1 = f32[1,3]{1,0} parameter(0)
+      Symbolic tile with
+      offset_map: (d0, d1) -> (0, 0)
+      size_map: (d0, d1) -> (d0, d1)
+      stride_map: (d0, d1) -> (1, 1)
+      indexing map: (d0, d1) -> (d0, d1), domain: d0 in [0, 0], d1 in [0, 2]
+    p1.1.tile_0 = parameter()
+      hlo: %p1.1 = f32[1,3]{1,0} parameter(1)
+      Symbolic tile with
+      offset_map: (d0, d1) -> (0, 0)
+      size_map: (d0, d1) -> (d0, d1)
+      stride_map: (d0, d1) -> (1, 1)
+      indexing map: (d0, d1) -> (d0, d1), domain: d0 in [0, 0], d1 in [0, 2]
+    add.tile_0 = add(p0.1.tile_0, p1.1.tile_0)
+      hlo: %add = f32[1,3]{1,0} add(%p0, %p1)
+      Symbolic tile with
+      offset_map: (d0, d1) -> (0, 0)
+      size_map: (d0, d1) -> (d0, d1)
+      stride_map: (d0, d1) -> (1, 1)
+      indexing map: (d0, d1) -> (d0, d1), domain: d0 in [0, 0], d1 in [0, 2]
+  }
+  region 1 {
+    p1.1.tile_1 = parameter()
+      hlo: %p1.1 = f32[1,3]{1,0} parameter(1)
+      Symbolic tile with
+      offset_map: (d0, d1) -> (-1, 0)
+      size_map: (d0, d1) -> (d0, d1)
+      stride_map: (d0, d1) -> (1, 1)
+      indexing map: (d0, d1) -> (d0 - 1, d1), domain: d0 in [1, 1], d1 in [0, 2]
+  }
+)");
+}
+
 }  // namespace
 }  // namespace xla
