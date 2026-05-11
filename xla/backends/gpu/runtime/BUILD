@@ -229,7 +229,6 @@ cc_library(
         ":collective_execution",
         ":collective_permute_thunk",
         ":collective_thunk",
-        ":convolution_thunk",
         ":command",
         ":command_executor",
         ":command_state",
@@ -844,7 +843,6 @@ cc_library(
     srcs = ["convolution_thunk.cc"],
     hdrs = ["convolution_thunk.h"],
     deps = [
-        ":command",
         ":shaped_slice",
         ":thunk",
         ":traced_command",
