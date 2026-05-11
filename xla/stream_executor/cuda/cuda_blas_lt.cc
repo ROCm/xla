@@ -36,7 +36,6 @@ limitations under the License.
 #include "third_party/gpus/cuda/include/cublas_v2.h"
 #include "third_party/gpus/cuda/include/cuda.h"
 #include "third_party/gpus/cuda/include/library_types.h"
-#include <Eigen/Core>
 #include "xla/primitive_util.h"
 #include "xla/status_macros.h"
 #include "xla/stream_executor/activate_context.h"
