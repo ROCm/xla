@@ -77,11 +77,11 @@ se::gpu::AllReduceStrategy GetAllReduceStrategy(int64_t input_size_bytes,
 // strategy.
 int64_t GetMaxSupportedAllReduceSizeBytes(se::gpu::AllReduceStrategy strategy);
 
-// Returns the launch dimensions for the all-reduce kernel.
+// Returns the launch dimensions for collective kernels (AllReduce, AllGather).
 // The launch dimensions are determined by the number of elements and the
-// the all-reduce strategy.
-LaunchDimensions AllReduceLaunchDimensions(int64_t elements, int64_t num_ranks,
-                                           se::gpu::AllReduceStrategy strategy);
+// collective strategy.
+LaunchDimensions CollectiveLaunchDimensions(
+    int64_t elements, int64_t num_ranks, se::gpu::AllReduceStrategy strategy);
 
 // Returns absl::OkStatus() if supported, or an error status detailing why
 // it is not supported.
