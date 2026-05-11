@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/backends/gpu/autotuner/triton/cost_model_config_optimization.h"
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -52,6 +53,8 @@ TEST(CostModelConfigOptimizationTest,
   options["top_from_default"] = "1";
   options["mixin"] = "2";
   options["filter"] = "0.5";
+  options["mixin_max_same_mnk"] = "1";
+  options["mixin_only_faster"] = "1";
 
   TF_ASSERT_OK_AND_ASSIGN(detail::CostModelGemmTilingOptions parsed,
                           detail::ParseCostModelGemmTilingOptions(options));
@@ -60,6 +63,8 @@ TEST(CostModelConfigOptimizationTest,
   EXPECT_EQ(parsed.top_from_default, true);
   EXPECT_EQ(parsed.mixin, 2);
   EXPECT_EQ(parsed.filter, 0.5f);
+  EXPECT_EQ(parsed.mixin_max_same_mnk, 1);
+  EXPECT_EQ(parsed.mixin_only_faster, true);
 }
 
 TEST(CostModelConfigOptimizationTest,
@@ -148,6 +153,91 @@ TEST(CostModelConfigOptimizationTest,
 
   EXPECT_THAT(top, ElementsAre(std::pair{absl::Milliseconds(10), config_32},
                                std::pair{absl::Milliseconds(25), config_128}));
+}
+
+TEST(CostModelConfigOptimizationTest,
+     GetTopEstimatedConfigsRespectsMaxSameMnk) {
+  const TritonGemmConfig config_32_1 =
+      TritonGemmConfig(32, 32, 32, 1, 1, 1, false);
+  const TritonGemmConfig config_32_2 =
+      TritonGemmConfig(32, 32, 32, 2, 2, 1, false);
+  const TritonGemmConfig config_32_3 =
+      TritonGemmConfig(32, 32, 32, 3, 3, 1, false);
+  const TritonGemmConfig config_64 =
+      TritonGemmConfig(64, 64, 64, 1, 1, 1, false);
+
+  detail::OrderedEstimatesAndConfigs input;
+  input.insert({absl::Milliseconds(10), config_32_1});
+  input.insert({absl::Milliseconds(11), config_32_2});
+  input.insert({absl::Milliseconds(12), config_32_3});
+  input.insert({absl::Milliseconds(15), config_64});
+
+  detail::OrderedEstimatesAndConfigs top =
+      detail::GetTopEstimatedConfigs(input, 4, nullptr, /*max_same_mnk=*/2);
+
+  EXPECT_THAT(top, ElementsAre(std::pair{absl::Milliseconds(10), config_32_1},
+                               std::pair{absl::Milliseconds(11), config_32_2},
+                               std::pair{absl::Milliseconds(15), config_64}));
+}
+
+TEST(CostModelConfigOptimizationTest,
+     GetTopEstimatedConfigsRespectsOnlyFasterThanSkip) {
+  const TritonGemmConfig config_32 =
+      TritonGemmConfig(32, 32, 32, 1, 1, 1, false);
+  const TritonGemmConfig config_64 =
+      TritonGemmConfig(64, 64, 64, 1, 1, 1, false);
+  const TritonGemmConfig config_128 =
+      TritonGemmConfig(128, 128, 128, 1, 1, 1, false);
+
+  // Base set (configs to skip) has config_64 (15ms).
+  // Fastest in base set is 15ms.
+  detail::OrderedEstimatesAndConfigs base_set;
+  base_set.insert({absl::Milliseconds(15), config_64});
+
+  detail::OrderedEstimatesAndConfigs input;
+  input.insert({absl::Milliseconds(10),
+                config_32});  // Faster than 15ms -> should be kept
+  input.insert(
+      {absl::Milliseconds(15), config_64});  // In base set -> skipped anyway
+  input.insert({absl::Milliseconds(25),
+                config_128});  // Slower than 15ms -> should be skipped
+
+  // We want top 2, but only faster than skip list.
+  detail::OrderedEstimatesAndConfigs top =
+      detail::GetTopEstimatedConfigs(input, 2, &base_set, std::nullopt, true);
+
+  EXPECT_THAT(top, ElementsAre(std::pair{absl::Milliseconds(10), config_32}));
+}
+
+TEST(CostModelConfigOptimizationTest,
+     GetTopEstimatedConfigsRespectsOnlyFasterThanSkipHandlesEmptySkipList) {
+  const TritonGemmConfig config_32 =
+      TritonGemmConfig(32, 32, 32, 1, 1, 1, false);
+  const TritonGemmConfig config_64 =
+      TritonGemmConfig(64, 64, 64, 1, 1, 1, false);
+
+  detail::OrderedEstimatesAndConfigs input;
+  input.insert({absl::Milliseconds(10), config_32});
+  input.insert({absl::Milliseconds(15), config_64});
+
+  // Case 1: configs_to_skip is nullptr
+  {
+    detail::OrderedEstimatesAndConfigs top =
+        detail::GetTopEstimatedConfigs(input, 2, nullptr, std::nullopt,
+                                       /*only_faster_than_skip=*/true);
+    EXPECT_THAT(top, ElementsAre(std::pair{absl::Milliseconds(10), config_32},
+                                 std::pair{absl::Milliseconds(15), config_64}));
+  }
+
+  // Case 2: configs_to_skip is empty
+  {
+    detail::OrderedEstimatesAndConfigs configs_to_skip;
+    detail::OrderedEstimatesAndConfigs top =
+        detail::GetTopEstimatedConfigs(input, 2, &configs_to_skip, std::nullopt,
+                                       /*only_faster_than_skip=*/true);
+    EXPECT_THAT(top, ElementsAre(std::pair{absl::Milliseconds(10), config_32},
+                                 std::pair{absl::Milliseconds(15), config_64}));
+  }
 }
 
 TEST_F(HloHardwareIndependentTestBase,
