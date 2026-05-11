@@ -115,7 +115,7 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     "${SANITIZER_ARGS[@]}" \
     "$@" \
     --spawn_strategy=local \
-    --strategy=TestRunner=local # execute multigpu tests locally as there is no gpu exclusive protection on rbe
+    --strategy=TestRunner=local --dynamic_mode=off # execute multigpu tests locally as there is no gpu exclusive protection on rbe
 
 # clean up bazel disk_cache
 bazel shutdown \
