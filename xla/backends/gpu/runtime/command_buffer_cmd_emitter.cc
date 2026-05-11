@@ -46,6 +46,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/command_executor.h"
 #include "xla/backends/gpu/runtime/command_state.h"
 #include "xla/backends/gpu/runtime/conditional_thunk.h"
+#include "xla/backends/gpu/runtime/convolution_thunk.h"
 #include "xla/backends/gpu/runtime/cudnn_thunk.h"
 #include "xla/backends/gpu/runtime/custom_call_thunk.h"
 #include "xla/backends/gpu/runtime/custom_kernel_thunk.h"
@@ -294,6 +295,11 @@ static absl::Status AppendCommands(ConversionContext& ctx,
     // borrowed pointer.
     case Thunk::Kind::kCuDnn:
       cmd_sequence.Append(static_cast<CuDnnThunk*>(&thunk));
+      return absl::OkStatus();
+    // ConvolutionThunk implements TracedCommand directly; append as
+    // borrowed pointer — the thunk outlives the command sequence.
+    case Thunk::Kind::kConvolution:
+      cmd_sequence.Append(static_cast<ConvolutionThunk*>(&thunk));
       return absl::OkStatus();
     // Sequential thunk does not have any special semantics and we simply inline
     // all nested thunks into command buffer.

@@ -386,6 +386,7 @@ cc_library(
         ":command_executor",
         ":command_state",
         ":conditional_thunk",
+        ":convolution_thunk",
         ":cudnn_thunk",
         ":custom_call_thunk",
         ":custom_kernel_thunk",
@@ -844,6 +845,7 @@ cc_library(
     deps = [
         ":shaped_slice",
         ":thunk",
+        ":traced_command",
         "//xla:util",
         "//xla/runtime:buffer_use",
         "//xla/service:buffer_assignment",
@@ -4550,6 +4552,7 @@ xla_test(
         ":command_buffer_conversion_pass",
         ":command_buffer_thunk",
         ":conditional_thunk",
+        ":convolution_thunk",
         ":cudnn_thunk",
         ":device_to_device_copy_thunk",
         ":execution_stream_id",
