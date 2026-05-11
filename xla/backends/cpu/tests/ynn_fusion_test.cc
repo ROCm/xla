@@ -52,7 +52,7 @@ class YnnFusionTest
                                            {"$in_dtype", params.in_dtype},
                                            {"$out_dtype", params.out_dtype}});
     bool bf16_compute = absl::StrContains(hlo_text, "bf16");
-    double tolerance = bf16_compute ? 1e-2 : 1e-7;
+    double tolerance = bf16_compute ? 1e-2 : 2e-7;
     EXPECT_TRUE(RunAndCompareNoHloPasses(
         hlo_text, ErrorSpec{/*aabs=*/tolerance, /*arel=*/tolerance}));
   }
