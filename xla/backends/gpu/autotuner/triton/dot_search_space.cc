@@ -338,13 +338,33 @@ int64_t TritonDotFusionSearchSpace::GetNumResultTiles(
 }
 
 int TritonDotFusionSearchSpace::GetMaxWarpsPerCta(OutputTile tile) const {
+  const int max_warps =
+      device_description_.threads_per_block_limit() /
+      std::max<int>(device_description_.threads_per_warp(), 1);
+
+  if (device_description_.gpu_compute_capability().IsRocm()) {
+    // On AMD, Triton lowers tl.dot to MFMA on CDNA or WMMA on RDNA3+. In
+    // Triton's amd_mfma encoding only 16x16x* and 32x32x* instrShapes are
+    // emitted (see triton-lang/triton third_party/amd's chooseMfmaInstruction
+    // and PRs #5937 / #8213); the smaller V_MFMA_*_4x4x* exists in hardware
+    // (AMD "matrix cores" lab note, https://gpuopen.com/learn/amd-lab-notes/
+    // amd-lab-notes-matrix-cores-readme/) but Triton does not select it.
+    // RDNA3+ WMMA only supports a 16x16x16 tile size at all (AMD GPUOpen
+    // "WMMA on RDNA3", https://gpuopen.com/learn/wmma_on_rdna3 and the RDNA3
+    // ISA reference). So the smallest per-wave output sub-tile on AMD is
+    // 16x16, not 16x8. More importantly, extra warps per CTA on AMD are used
+    // by Triton's stream pipeliner to software-pipeline the K loop (see
+    // triton-lang/triton PR #4148, "Introduce stream pipeliner v2", and ROCm
+    // "Optimizing Triton kernels"), not to tile the M*N output spatially.
+    // So we don't impose a per-output-tile cap here -- only the hardware
+    // bound (threads_per_block_limit / threads_per_warp) applies.
+    return std::max(min_warps_per_cta_, max_warps);
+  }
+
   // A single mma instruction is of output shape at least 16x8 (the same
   // also holds for wgmma: the warp-group level instruction is at least
   // 64x8, and split 4-ways across the 4 warps in the group).
   constexpr OutputTile kMmaSubTile = {16, 8};
-  const int max_warps =
-      device_description_.threads_per_block_limit() /
-      std::max<int>(device_description_.threads_per_warp(), 1);
   const int lhs_warps = CeilOfRatio(tile.lhs_dim, kMmaSubTile.lhs_dim);
   const int rhs_warps = CeilOfRatio(tile.rhs_dim, kMmaSubTile.rhs_dim);
   return std::max(min_warps_per_cta_,
