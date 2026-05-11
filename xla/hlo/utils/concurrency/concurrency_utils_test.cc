@@ -21,9 +21,12 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -35,6 +38,7 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test_benchmark.h"
 #include "xla/tsl/platform/threadpool.h"
 #include "xla/xla_data.pb.h"
 
@@ -255,3 +259,44 @@ TEST_F(HloComputationTest, ForEachNonfusionHloComputationModuleBasicCall) {
 
 }  // namespace
 }  // namespace xla::concurrency
+
+//===----------------------------------------------------------------------===//
+// Performance benchmarks below.
+//===----------------------------------------------------------------------===//
+
+void BM_ForEachIterateCost(::testing::benchmark::State& state) {
+  tsl::thread::ThreadPool pool(tsl::Env::Default(), "test", 5);
+  int num_items = state.range(0);
+  absl::flat_hash_set<int> values;
+  values.reserve(num_items);
+  for (int i = 0; i < num_items; ++i) {
+    values.insert(i);
+  }
+
+  for (auto _ : state) {
+    absl::Status status = xla::concurrency::ForEach(
+        values.begin(), values.end(),
+        [](int element) {
+          benchmark::DoNotOptimize(element);
+          return absl::OkStatus();
+        },
+        *pool.AsExecutor());
+    CHECK_OK(status);
+  }
+}
+
+BENCHMARK(BM_ForEachIterateCost)->Arg(10000)->Arg(100000);
+
+GTEST_API_ int main(int argc, char** argv) {
+  // Only run benchmarks if `--benchmark_filter` is set.
+  for (int i = 1; i < argc; ++i) {
+    if (absl::StartsWith(argv[i], "--benchmark_filter=")) {
+      ::benchmark::Initialize(&argc, argv);
+      ::testing::InitGoogleTest(&argc, argv);
+      ::benchmark::RunSpecifiedBenchmarks();
+      return 0;
+    }
+  }
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}

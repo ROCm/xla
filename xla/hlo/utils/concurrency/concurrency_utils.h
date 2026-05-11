@@ -190,8 +190,8 @@ std::vector<Future<T>> Dispatch(ForwardIt begin, ForwardIt end, Action& action,
   auto first_error = std::make_shared<absl::Status>();
 
   // Launch actions on the underlying executor.
-  for (ForwardIt it = begin; it != end; ++it) {
-    size_t i = std::distance(begin, it);
+  size_t i = 0;
+  for (ForwardIt it = begin; it != end; ++it, ++i) {
     futures[i] = MakeFutureOn<T>(
         executor, [&, lock, first_error, argument = *it]() -> R {
           // Short-circuit if execution of `ForEach` already failed.
