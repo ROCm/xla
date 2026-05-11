@@ -266,14 +266,19 @@ void convertShardyAttrsWithoutHloShardingV3(FuncOp funcOp,
   // copying the result shardings.
   StringRef attributeName =
       xla::ToStringRef(HloSharding::kShardingFrontendAttrName);
-  for (auto [argNum, argType] : llvm::enumerate(funcOp.getArgumentTypes())) {
+  for (int64_t argNum = 0; argNum < funcOp.getNumArguments(); argNum++) {
     // Attempt to extract the TensorShardingAttr from the frontend attributes
     // of the function argument/result.
     if (DictionaryAttr dictAttr = getFuncArgFrontendAttrs(funcOp, argNum)) {
       if (auto sharding =
               parseStringAttr<TensorShardingAttr>(dictAttr, attributeName)) {
         funcOp.setArgAttr(argNum, kShardingAttr, sharding);
-        removeFrontendAttribute(funcOp, attributeName, argNum);
+        removeFrontendAttribute(
+            dictAttr, attributeName,
+            [&](llvm::ArrayRef<NamedAttribute> newDict) {
+              setFuncArgFrontendAttrs(funcOp, argNum, newDict);
+            },
+            [&]() { funcOp.removeArgAttr(argNum, kFrontendAttributesAttr); });
       }
     }
     funcOp.removeArgAttr(argNum, kXlaShardingAttr);
