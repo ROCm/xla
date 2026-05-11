@@ -490,7 +490,6 @@ xla_cc_test(
         ":alias_info",
         ":hlo_alias_analysis",
         ":hlo_ordering",
-        "//xla:literal_util",
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
@@ -501,13 +500,11 @@ xla_cc_test(
         "//xla/service:hlo_buffer",
         "//xla/service:hlo_value",
         "//xla/tsl/lib/core:status_test_util",
+        "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/platform:test",
     ],
 )
 
