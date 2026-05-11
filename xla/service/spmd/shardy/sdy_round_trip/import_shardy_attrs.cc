@@ -275,8 +275,10 @@ void convertShardyAttrsWithoutHloShardingV3(FuncOp funcOp,
         funcOp.setArgAttr(argNum, kShardingAttr, sharding);
         removeFrontendAttribute(
             dictAttr, attributeName,
-            [&](llvm::ArrayRef<NamedAttribute> newDict) {
-              setFuncArgFrontendAttrs(funcOp, argNum, newDict);
+            [&](llvm::ArrayRef<NamedAttribute> frontendAttrs) {
+              funcOp.setArgAttr(
+                  argNum, kFrontendAttributesAttr,
+                  DictionaryAttr::get(funcOp.getContext(), frontendAttrs));
             },
             [&]() { funcOp.removeArgAttr(argNum, kFrontendAttributesAttr); });
       }
