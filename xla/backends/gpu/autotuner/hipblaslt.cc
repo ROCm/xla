@@ -216,11 +216,11 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
     TF_ASSIGN_OR_RETURN(BlasLt::Epilogue epilogue,
                         AsBlasLtEpilogue(backend_config.epilogue()));
 
-    TF_ASSIGN_OR_RETURN(BlasLt* blas_lt, se::gpu::BlasLt::Get(stream_executor()));
+    TF_ASSIGN_OR_RETURN(BlasLt * blas_lt,
+                        se::gpu::BlasLt::Get(stream_executor()));
 
-    TF_ASSIGN_OR_RETURN(
-        std::unique_ptr<BlasLt::MatmulPlan> plan,
-        blas_lt->GetMatmulPlan(gemm_config, epilogue));
+    TF_ASSIGN_OR_RETURN(std::unique_ptr<BlasLt::MatmulPlan> plan,
+                        blas_lt->GetMatmulPlan(gemm_config, epilogue));
 
     const Shape& output_shape = instr.shape();
     if (!output_shape.IsTuple() || output_shape.tuple_shapes().empty()) {
@@ -233,8 +233,7 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
 
     TF_ASSIGN_OR_RETURN(
         std::vector<BlasLt::MatmulAlgorithm> algorithms,
-        plan->GetAlgorithms(GemmConfig::kNumAlgorithms,
-                            workspace_size));
+        plan->GetAlgorithms(GemmConfig::kNumAlgorithms, workspace_size));
     int num_algorithms = algorithms.size();
     std::vector<std::unique_ptr<BackendConfig>> configs;
     configs.reserve(num_algorithms);
@@ -277,9 +276,10 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
       return std::vector<std::unique_ptr<BackendConfig>>();
     }
 
-    TF_ASSIGN_OR_RETURN(BlasLt* blas_lt, se::gpu::BlasLt::Get(stream_executor()));
-    auto plan_or = blas_lt->GetMatmulPlan(*gemm_config_or,
-                                                  BlasLt::Epilogue::kDefault);
+    TF_ASSIGN_OR_RETURN(BlasLt * blas_lt,
+                        se::gpu::BlasLt::Get(stream_executor()));
+    auto plan_or =
+        blas_lt->GetMatmulPlan(*gemm_config_or, BlasLt::Epilogue::kDefault);
     if (!plan_or.ok()) {
       VLOG(2) << "hipBLASLt MX: GetMatmulPlan failed: " << plan_or.status();
       return std::vector<std::unique_ptr<BackendConfig>>();
@@ -288,8 +288,7 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
     int64_t workspace_size = GemmConfig::kGFX950Workspace;
     TF_ASSIGN_OR_RETURN(
         std::vector<BlasLt::MatmulAlgorithm> algorithms,
-        (*plan_or)->GetAlgorithms(GemmConfig::kNumAlgorithms,
-                                  workspace_size));
+        (*plan_or)->GetAlgorithms(GemmConfig::kNumAlgorithms, workspace_size));
     if (algorithms.empty()) {
       VLOG(2) << "hipBLASLt MX: no algorithms found for scaled dot.";
       return std::vector<std::unique_ptr<BackendConfig>>();
@@ -310,7 +309,8 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
     TF_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
                         instr.backend_config<GpuBackendConfig>());
 
-    TF_ASSIGN_OR_RETURN(BlasLt* blas_lt, se::gpu::BlasLt::Get(stream_executor()));
+    TF_ASSIGN_OR_RETURN(BlasLt * blas_lt,
+                        se::gpu::BlasLt::Get(stream_executor()));
 
     std::unique_ptr<BlasLt::MatmulPlan> plan;
     int64_t workspace_size;
@@ -329,9 +329,8 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
                         AsBlasLtEpilogue(backend_config.epilogue()));
 
     std::vector<BlasLt::Epilogue> epilogues = {epilogue};
-    TF_ASSIGN_OR_RETURN(plan,
-                        blas_lt->GetGroupedMatmulPlan(
-                            grouped_gemm_config, epilogues));
+    TF_ASSIGN_OR_RETURN(
+        plan, blas_lt->GetGroupedMatmulPlan(grouped_gemm_config, epilogues));
 
     const Shape& output_shape = instr.shape();
     if (!output_shape.IsTuple() || output_shape.tuple_shapes().empty()) {
@@ -343,8 +342,7 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
 
     TF_ASSIGN_OR_RETURN(
         std::vector<BlasLt::MatmulAlgorithm> algorithms,
-        plan->GetAlgorithms(GemmConfig::kNumAlgorithms,
-                            workspace_size));
+        plan->GetAlgorithms(GemmConfig::kNumAlgorithms, workspace_size));
     int num_algorithms = algorithms.size();
     std::vector<std::unique_ptr<BackendConfig>> configs;
     configs.reserve(num_algorithms);

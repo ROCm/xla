@@ -52,8 +52,7 @@ class BlasLt : public gpu::BlasLt {
         blas::ProfileResult* profile_result) const override;
 
     absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
-        size_t max_algorithm_count,
-        size_t max_workspace_size) const override;
+        size_t max_algorithm_count, size_t max_workspace_size) const override;
 
     absl::Status SetAlgorithm(const MatmulAlgorithm& algorithm) override {
       // TODO(intel-tf): Do we need a lock here?
