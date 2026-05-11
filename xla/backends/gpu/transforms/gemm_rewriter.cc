@@ -16,6 +16,8 @@ limitations under the License.
 
 #include "xla/backends/gpu/transforms/gemm_rewriter.h"
 
+#include <math.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -461,14 +463,6 @@ HloInstruction* MaybeConstantFoldBias(HloInstruction* bias) {
   return bias;
 }
 
-auto Gemm(HloInstruction** instr) {
-  return m::CustomCall(instr, {kGemmCallTarget});
-}
-
-auto CublasLtMatmul(HloInstruction** instr) {
-  return m::CustomCall(instr, {kCublasLtMatmulCallTarget});
-}
-
 auto CublasLtMatmulF8(HloInstruction** instr) {
   return m::CustomCall(instr, {kCublasLtMatmulF8CallTarget});
 }
@@ -522,7 +516,8 @@ auto BcastConstScalarNear(double value) {
           default:
             return false;
         }
-        return abs(*actual - expected) < (abs(*actual + expected) * epsilon);
+        return std::abs(*actual - expected) <
+               (std::abs(*actual + expected) * epsilon);
       }));
 }
 
@@ -2791,11 +2786,11 @@ class GemmWorkspaceRewriteVisitor : public DfsHloRewriteVisitor {
         TF_RETURN_IF_ERROR(ReplaceInstruction(user_get_tuple, get_output));
       }
       return absl::OkStatus();
-    } else {
-      HloInstruction* get_output = instr->AddInstruction(
-          HloInstruction::CreateGetTupleElement(new_call, 0));
-      return ReplaceInstruction(instr, get_output);
     }
+
+    HloInstruction* get_output = instr->AddInstruction(
+        HloInstruction::CreateGetTupleElement(new_call, 0));
+    return ReplaceInstruction(instr, get_output);
   }
 
  private:
