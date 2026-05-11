@@ -382,18 +382,23 @@ absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputationImpl(
           flops += flops_per_element_fn(hlo) * num_elements;
           return;
         }
-
-        // Number of elements in the tile.
-        int64_t tile_size = Product(tiled_hlo->tile_sizes());
-
-        // Total number of elements that are read from memory across all blocks.
+        // Calculate the total number of elements that are read from memory
+        // across all blocks.
         //
         // Triton requires that all tiles have dimensions that are padded to the
         // next power of 2. However, the load masks the padded elements, so they
-        // are not read from memory, but set directly in registers. As a result,
-        // the number of elements read from memory is equal to the size of the
-        // original tile.
-        int64_t num_elements = num_blocks_cur_hlo * tile_size;
+        // are not read from memory, but set directly in registers. Generally
+        // it's hard to know the amount of masked elements from the tile, but in
+        // some cases we can get an estimate. If the tile size is larger than
+        // the dimension size, we know that the padded elements are masked. This
+        // helps us pick better tile size for cases where we need to get a tile
+        // of the full row, for example, when we tile a softmax computation.
+        int64_t num_elements = num_blocks_cur_hlo;
+        for (auto [tile_size, dimension_size] :
+             llvm::zip(tiled_hlo->tile_sizes(),
+                       tiled_hlo->hlo()->shape().dimensions())) {
+          num_elements *= std::min(tile_size, dimension_size);
+        }
 
         // Tiles of the operands of the fusion contribute to the total memory
         // read time.
