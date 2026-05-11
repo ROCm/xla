@@ -273,14 +273,16 @@ void convertShardyAttrsWithoutHloShardingV3(FuncOp funcOp,
       if (auto sharding =
               parseStringAttr<TensorShardingAttr>(dictAttr, attributeName)) {
         funcOp.setArgAttr(argNum, kShardingAttr, sharding);
-        removeFrontendAttribute(
-            dictAttr, attributeName,
-            [&](llvm::ArrayRef<NamedAttribute> frontendAttrs) {
-              funcOp.setArgAttr(
-                  argNum, kFrontendAttributesAttr,
-                  DictionaryAttr::get(funcOp.getContext(), frontendAttrs));
-            },
-            [&]() { funcOp.removeArgAttr(argNum, kFrontendAttributesAttr); });
+        llvm::SmallVector<NamedAttribute> existingAttributes =
+            getExistingFrontendAttributes(dictAttr,
+                                          /*excludedAttribute=*/attributeName);
+        if (!existingAttributes.empty()) {
+          funcOp.setArgAttr(
+              argNum, kFrontendAttributesAttr,
+              DictionaryAttr::get(funcOp.getContext(), existingAttributes));
+        } else {
+          funcOp.removeArgAttr(argNum, kFrontendAttributesAttr);
+        }
       }
     }
     funcOp.removeArgAttr(argNum, kXlaShardingAttr);

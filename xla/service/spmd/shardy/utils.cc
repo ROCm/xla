@@ -113,20 +113,6 @@ mlir::StringAttr getStringAttribute(Attribute attr, mlir::OpBuilder& builder) {
   return builder.getStringAttr(mlir::sdy::attributeToString(attr));
 }
 
-SmallVector<NamedAttribute> getExistingFrontendAttributes(
-    DictionaryAttr frontendAttributes, StringRef excludedAttribute) {
-  SmallVector<NamedAttribute> dictEntries;
-  if (!frontendAttributes) {
-    return dictEntries;
-  }
-  for (NamedAttribute entry : frontendAttributes) {
-    if (entry.getName() != excludedAttribute) {
-      dictEntries.push_back(entry);
-    }
-  }
-  return dictEntries;
-}
-
 void setFrontendAttribute(SmallVector<NamedAttribute>& existingAttributes,
                           StringRef name, Attribute value) {
   mlir::OpBuilder builder(value.getContext());
@@ -175,6 +161,20 @@ std::optional<TensorShardingAttr> adjustShardingInternal(
 }
 
 }  // namespace
+
+SmallVector<NamedAttribute> getExistingFrontendAttributes(
+    DictionaryAttr frontendAttributes, StringRef excludedAttribute) {
+  SmallVector<NamedAttribute> dictEntries;
+  if (!frontendAttributes) {
+    return dictEntries;
+  }
+  for (NamedAttribute entry : frontendAttributes) {
+    if (entry.getName() != excludedAttribute) {
+      dictEntries.push_back(entry);
+    }
+  }
+  return dictEntries;
+}
 
 void setFrontendAttribute(Operation* op, StringRef name, Attribute value) {
   SmallVector<NamedAttribute> existingAttributes =

@@ -55,6 +55,11 @@ mlir::DictionaryAttr getFrontendAttrs(mlir::Operation* op);
 mlir::DictionaryAttr getFuncArgFrontendAttrs(mlir::func::FuncOp funcOp,
                                              unsigned int index);
 
+// Returns a vector of attributes from `frontendAttributes` dict excluding
+// `excludedAttribute` one.
+llvm::SmallVector<mlir::NamedAttribute> getExistingFrontendAttributes(
+    mlir::DictionaryAttr frontendAttributes, mlir::StringRef excludedAttribute);
+
 // Adds `name` into the frontend attributes of `op` with value `value`. If
 // `name` already exists, it will be overwritten. Note that `value` will be
 // turned into a `StringAttr`.
