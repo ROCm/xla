@@ -847,24 +847,31 @@ absl::StatusOr<TensorValue> EmitConv(
     // target; size-1 dims that need to be expanded must be dropped from the
     // source first (via reshape), so they are not in `broadcast_dims` and
     // are added back as new dims by the broadcast.
-    auto broadcast_to_acc = [&](TensorValue tile) -> TensorValue {
+    auto broadcast_to_acc =
+        [&](TensorValue tile) -> absl::StatusOr<TensorValue> {
       auto tile_type = mlir::cast<mlir::RankedTensorType>(tile.getType());
       if (tile_type.getShape() == acc_type.getShape()) {
         return tile;
       }
       ArrayRef<int64_t> tile_shape = tile_type.getShape();
       ArrayRef<int64_t> acc_shape = acc_type.getShape();
-      CHECK_EQ(tile_shape.size(), acc_shape.size());
+      if (tile_shape.size() != acc_shape.size()) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "EmitConv: cannot broadcast operand tile to accumulator: rank "
+            "mismatch (tile rank ",
+            tile_shape.size(), ", accumulator rank ", acc_shape.size(), ")."));
+      }
       SmallVector<int64_t> kept_shape;
       SmallVector<int64_t> broadcast_dims;
       for (int64_t i = 0; i < tile_shape.size(); ++i) {
         if (tile_shape[i] == acc_shape[i]) {
           kept_shape.push_back(tile_shape[i]);
           broadcast_dims.push_back(i);
-        } else {
-          CHECK_EQ(tile_shape[i], 1)
-              << "Cannot broadcast non-unit dim of size " << tile_shape[i]
-              << " to size " << acc_shape[i];
+        } else if (tile_shape[i] != 1) {
+          return absl::InvalidArgumentError(absl::StrCat(
+              "EmitConv: cannot broadcast operand tile dim ", i, " of size ",
+              tile_shape[i], " to accumulator dim of size ", acc_shape[i],
+              " (only size-1 dims may be broadcast)."));
         }
       }
       TensorValue reshaped = tile;
@@ -877,8 +884,10 @@ absl::StatusOr<TensorValue> EmitConv(
       return xtile::BroadcastInDims(b, reshaped, acc_shape, broadcast_dims);
     };
 
-    TensorValue input_broadcast = broadcast_to_acc(input_tile);
-    TensorValue kernel_broadcast = broadcast_to_acc(kernel_tile);
+    TF_ASSIGN_OR_RETURN(TensorValue input_broadcast,
+                        broadcast_to_acc(input_tile));
+    TF_ASSIGN_OR_RETURN(TensorValue kernel_broadcast,
+                        broadcast_to_acc(kernel_tile));
 
     TensorValue input_cast = input_broadcast;
     if (getElementTypeOrSelf(input_broadcast.getType()) != accumulator_type) {
