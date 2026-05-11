@@ -21,6 +21,7 @@ limitations under the License.
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -183,7 +184,8 @@ absl::Status CublasLtMatmulThunk::ExecuteOnStreamInternal(
             {allocs.GetDeviceAddress(group_sizes_->slice)},
             workspace},
         nullptr);
-  } else {
+  }
+  {
     // Regular matmul execution
     TF_ASSIGN_OR_RETURN(auto* plan, GetCachedMatmulPlan(params));
     return plan->ExecuteOnStream(
@@ -459,7 +461,8 @@ absl::StatusOr<std::unique_ptr<Thunk>> CublasLtMatmulThunk::FromProto(
         std::move(aux), std::move(a_scale), std::move(b_scale),
         std::move(c_scale), std::move(d_scale), std::move(d_amax),
         std::move(workspace));
-  } else {
+  }
+  {
     ASSIGN_OR_RETURN(
         stream_executor::gpu::GemmConfig gemm_config,
         stream_executor::gpu::GemmConfig::FromProto(proto.gemm_config()));
