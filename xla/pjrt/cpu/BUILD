@@ -176,6 +176,7 @@ cc_library(
         "//xla/pjrt:async_work_runner",
         "//xla/pjrt:common_pjrt_client",
         "//xla/pjrt:device_event",
+        "//xla/pjrt:dynamic_shapes",
         "//xla/pjrt:host_callback",
         "//xla/pjrt:host_memory_spaces",
         "//xla/pjrt:layout_mode",

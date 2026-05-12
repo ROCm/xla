@@ -78,6 +78,7 @@ limitations under the License.
 #include "xla/pjrt/cpu/tracked_cpu_device_buffer.h"
 #include "xla/pjrt/device_event.h"
 #include "xla/pjrt/dump/dump.h"
+#include "xla/pjrt/dynamic_shapes.h"
 #include "xla/pjrt/host_callback.h"
 #include "xla/pjrt/host_memory_spaces.h"
 #include "xla/pjrt/host_to_device_transfer_manager.h"
@@ -1109,7 +1110,18 @@ PjRtCpuClient::CreateRawBufferChannel(PjRtMemorySpace* memory_space,
 
 absl::StatusOr<int64_t> PjRtCpuClient::GetOnDeviceBytesCount(
     int memory_space_kind, const xla::Shape& shape) const {
-  return xla::ShapeUtil::ByteSizeOf(shape);
+  int64_t original_size = xla::ShapeUtil::ByteSizeOf(shape);
+  auto kind = GetDynamicShapeKind(memory_space_kind);
+  auto requirements =
+      PjRtShapeAndMetadataTransferRequirements::Get(shape, kind);
+  if (static_cast<int64_t>(requirements.size) != original_size) {
+    return absl::InternalError(absl::StrFormat(
+        "%s mismatch between transfer_manager requirements (%ld) and "
+        "PjRtTransferRequirements (%zu)",
+        shape.ToString(true), original_size, requirements.size));
+  }
+
+  return static_cast<int64_t>(requirements.size);
 }
 
 absl::StatusOr<xla::Shape> PjRtCpuClient::MakeDefaultShapeForMemorySpace(
