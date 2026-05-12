@@ -62,9 +62,13 @@ absl::Status VerifyTiledHloInstructionConstructorPreconditions(
     std::optional<IndexingMap> tile_offsets_indexing,
     const llvm::SmallVector<const TiledHloInstruction*>& runtime_variables) {
   // * Number of tile sizes, strides should match the rank of the HLO.
-  const Shape& indexing_shape = GetIndexingShape(*hlo);
+  const Shape& shape_for_tiling =
+      (hlo->opcode() == HloOpcode::kAllGatherStart && hlo->shape().IsTuple())
+          ? ShapeUtil::GetTupleElementShape(hlo->shape(), 1)
+          : hlo->shape();
+
   const int rank =
-      indexing_shape.IsArray() ? indexing_shape.dimensions().size() : 0;
+      shape_for_tiling.IsArray() ? shape_for_tiling.dimensions().size() : 0;
 
   if (tile_sizes.size() != rank) {
     return absl::InvalidArgumentError(
