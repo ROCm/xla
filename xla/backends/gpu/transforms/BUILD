@@ -782,7 +782,8 @@ cc_library(
         "//xla:error_spec",
         "//xla:xla_data_proto_cc",
         "//xla:xla_proto_cc",
-        "//xla/backends/gpu/tests:gpu_codegen_test",
+        "//xla/backends/gpu/tests:gpu_pjrt_codegen_test",
+        "//xla/backends/gpu/tests:hlo_pjrt_gpu_test_base",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/pass:hlo_pass",
         "//xla/hlo/pass:hlo_pass_pipeline",
@@ -801,6 +802,7 @@ cc_library(
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:dnn",
         "//xla/stream_executor:semantic_version",
+        "//xla/tests:hlo_pjrt_interpreter_reference_mixin",
         "//xla/tests:hlo_test_base_legacy",
         "//xla/tsl/lib/core:status_test_util",
         "//xla/tsl/protobuf:dnn_proto_cc",
@@ -813,6 +815,7 @@ cc_library(
         "@com_google_googletest//:gtest_for_library",
         "@tsl//tsl/platform:statusor",
     ],
+    alwayslink = True,
 )
 
 xla_test(
@@ -829,7 +832,6 @@ xla_test(
         "amdgpu_any",
     ] + if_oss(["nvgpu_any"]),
     shard_count = 10,
-    use_legacy_runtime = True,
     deps = [
         ":cudnn_fused_conv_rewriter_test_common",
     ],
@@ -846,7 +848,6 @@ xla_test(
     #fail_if_no_test_linked = False,  # NOLINT=Only tests AMD GPUs.
     #fail_if_no_test_selected = False,  # NOLINT=Only tests AMD GPUs.
     shard_count = 4,
-    use_legacy_runtime = True,
     deps = [
         ":cudnn_fused_conv_rewriter_test_common",
     ],
@@ -1126,13 +1127,12 @@ xla_test(
     name = "dot_dimension_sorter_test",
     srcs = ["dot_dimension_sorter_test.cc"],
     backends = ["gpu"],
-    use_legacy_runtime = True,
     deps = [
         ":dot_dimension_sorter",
         "//xla:error_spec",
         "//xla:xla_proto_cc",
-        "//xla/backends/gpu/tests:gpu_codegen_test",
         "//xla/hlo/ir:hlo",
+        "//xla/tests:hlo_pjrt_test_base",
         "//xla/tsl/platform:statusor",
         "@com_google_googletest//:gtest_main",
     ],
