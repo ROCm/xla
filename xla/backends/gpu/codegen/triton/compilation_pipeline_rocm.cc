@@ -160,7 +160,7 @@ static void MakeLLIR(mlir::OpPassManager* pm,
   pm->addPass(mlir::createSCFToControlFlowPass());
   pm->addPass(mlir::createInlinerPass());
   pm->addPass(mlir::createConvertIndexToLLVMPass());
-  pm->addPass(mt::createAllocateAMDGPUSharedMemory());
+  pm->addPass(mt::createAllocateAMDGPUSharedMemoryPass(rocm_cc.gfx_version()));
   pm->addPass(mt::gpu::createTritonGPUGlobalScratchAllocationPass());
   pm->addPass(mt::gpu::createTritonGPUGlobalScratchAllocationPass());
   pm->addPass(
