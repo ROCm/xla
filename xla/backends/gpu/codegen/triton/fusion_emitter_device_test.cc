@@ -3604,6 +3604,37 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
+TEST_F(TritonEmitterTest, SimpleConv1DMultiChannelIsEmittedCorrectly) {
+  // Trivial 1D convolution: 1 batch, 4 input channel, 2 output channel,
+  // window size 3, stride 1, no padding.
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[1,8,4] parameter(0)
+  kernel = f32[3,4,2] parameter(1)
+  ROOT conv = f32[1,6,2] convolution(input, kernel),
+    window={size=3}, dim_labels=b0f_0io->b0f
+}
+
+ENTRY entry {
+  p0 = f32[1,8,4] parameter(0)
+  p1 = f32[3,4,2] parameter(1)
+  ROOT fusion = f32[1,6,2] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","6","2"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
 // Parameterized as a sanity check to make sure dots work with TMA.
 TEST_P(TmaParameterizedTritonEmitterTest,
        DotWithNestedFusionsIsEmittedCorrectly) {
