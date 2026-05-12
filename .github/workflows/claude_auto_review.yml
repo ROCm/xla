@@ -55,7 +55,9 @@ jobs:
         timeout-minutes: 2
         env:
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
-          ANTHROPIC_CUSTOM_HEADERS: "Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}"
+          ANTHROPIC_CUSTOM_HEADERS: |
+            Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}
+            user: ${{ secrets.USER_NTID }}
           ANTHROPIC_API_KEY: "sk-ant-dummy-gateway-key"
           ANTHROPIC_MODEL: "Claude-Sonnet-4.6"
         run: |
@@ -102,7 +104,9 @@ jobs:
         uses: anthropics/claude-code-action@v1
         env:
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
-          ANTHROPIC_CUSTOM_HEADERS: "Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}"
+          ANTHROPIC_CUSTOM_HEADERS: |
+            Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}
+            user: ${{ secrets.USER_NTID }}
           ANTHROPIC_MODEL: "Claude-Opus-4.6"
           ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-4.6"
           ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
