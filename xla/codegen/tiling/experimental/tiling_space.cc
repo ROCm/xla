@@ -59,8 +59,8 @@ std::string TilingSpace::DimensionInfo::ToString() const {
   ss << id << " type: "
      << (type == DimensionSemantics::kParallel ? "parallel" : "sequential")
      << " size: " << dimension_size;
-  if (IsTileSizeSet()) {
-    ss << " tile size: " << tile_size;
+  if (tile_size.has_value()) {
+    ss << " tile size: " << *tile_size;
   }
   ss << " dim ID:" << dim_position << " hlo: " << HloPtrToString(hlo);
   return ss.str();
