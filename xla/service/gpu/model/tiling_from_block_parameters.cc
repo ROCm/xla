@@ -63,7 +63,17 @@ absl::StatusOr<Tiling> TilingFromAnnotatedFusion(
             FlatTiling(dot_tiling_config_override->sizes().begin(),
                        dot_tiling_config_override->sizes().end());
       } else {
+        if (!hlo->has_backend_config()) {
+          return absl::FailedPreconditionError(absl::StrCat(
+              "Dot instruction ", hlo->name(),
+              " does not have a backend config for tile sizes set."));
+        }
         TF_ASSIGN_OR_RETURN(Tile tile_config, hlo->backend_config<Tile>());
+        if (tile_config.sizes().empty()) {
+          return absl::FailedPreconditionError(
+              absl::StrCat("Dot instruction ", hlo->name(),
+                           " has an empty tile config in the backend config."));
+        }
         tile_mapping[hlo] =
             FlatTiling(tile_config.sizes().begin(), tile_config.sizes().end());
       }
