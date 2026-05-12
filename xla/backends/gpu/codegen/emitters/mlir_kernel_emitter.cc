@@ -627,8 +627,9 @@ void AddLoweringPasses(mlir::OpPassManager& pm,
     se::SemanticVersion ptx_version =
         nvptx::DetermineHighestSupportedPtxVersionFromCudaVersion(
             device.runtime_version());
-    pm.addPass(CreateConvertFloatNvidiaPass(
-        cc->major, cc->minor, ptx_version.major(), ptx_version.minor()));
+    pm.addPass(CreateConvertFloatNvidiaPass(cc->major, cc->minor,
+                                            ptx_version.major_version(),
+                                            ptx_version.minor_version()));
   } else if (auto* cc =
                  device.gpu_compute_capability().rocm_compute_capability()) {
     if (cc->has_fp8_support()) {

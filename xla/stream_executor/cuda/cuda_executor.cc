@@ -1718,7 +1718,7 @@ CudaExecutor::CreateDeviceDescription(int device_ordinal) {
         LOG(ERROR) << p2p_link_count;
       }
       // nvmlDeviceGetGpuFabricInfoV is only available in driver r545+
-      if (desc.kernel_mode_driver_version().major() >= 545) {  // NOLINT
+      if (desc.kernel_mode_driver_version().major_version() >= 545) {  // NOLINT
         absl::StatusOr<FabricInfo> fabric_info = GetDeviceFabricInfo(*device);
         if (fabric_info.ok()) {
           info.cluster_uuid = fabric_info->cluster_uuid;
