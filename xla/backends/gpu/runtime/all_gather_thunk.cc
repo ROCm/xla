@@ -185,8 +185,9 @@ absl::Status AllGatherThunk::RunCollective(const ExecuteParams& params,
     if (use_collective_kernel) {
       return collective_kernel_thunk_->ExecuteOnStream(params);
     }
-    VLOG(3) << "AllGatherStartThunk: Triton kernel not supported, falling "
-               "back to NCCL/RCCL";
+    LOG(WARNING) << "AllGatherThunk: Triton backend was requested but the "
+                    "Triton kernel is not supported for this configuration "
+                    "at runtime. Falling back to NCCL/RCCL.";
   }
 
   // Fallback to NCCL/RCCL

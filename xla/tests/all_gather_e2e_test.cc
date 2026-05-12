@@ -24,6 +24,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/log/scoped_mock_log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -120,6 +121,36 @@ class AllGatherTestNoParams : public CollectiveOpsWithFlagsBase {
     }();
     return !IsSkipped() && !HasFatalFailure();
   }
+
+  // Returns true if the current device supports Triton collective kernels.
+  // Triton collectives require Hopper+ for CUDA or any supported ROCm device.
+  bool IsTritonCapable() {
+    return IsHopperAndHigher() || Capability().IsRocm();
+  }
+
+  // Activates a log monitor that fails the test if a "Falling back to
+  // NCCL/RCCL" WARNING is emitted while the Triton flag is set.
+  // Call this just before ExecuteReplicated() in tests using
+  // Triton-compatible shapes. Has no effect when use_triton_backend is false
+  // or the hardware is not Triton-capable.
+  //
+  // The ScopedMockLog expectation is verified automatically when the fixture
+  // is torn down (i.e., when triton_mock_log_ is destroyed).
+  void CheckNoTritonFallback(bool use_triton_backend) {
+    if (!use_triton_backend || !IsTritonCapable()) return;
+    triton_mock_log_ = std::make_unique<absl::ScopedMockLog>(
+        absl::MockLogDefault::kIgnoreUnexpected);
+    EXPECT_CALL(*triton_mock_log_,
+                Log(absl::LogSeverity::kWarning, ::testing::_,
+                    ::testing::HasSubstr("Falling back to NCCL/RCCL")))
+        .Times(0);
+    triton_mock_log_->StartCapturingLogs();
+  }
+
+ private:
+  // Holds the ScopedMockLog set up by CheckNoTritonFallback().
+  // Null when not in use. Expectations are verified when this is destroyed.
+  std::unique_ptr<absl::ScopedMockLog> triton_mock_log_;
 };
 
 struct AllGatherTestParams {
@@ -312,6 +343,12 @@ class AllGatherTest
         GetParam().use_all_gather_triton_backend);
     return opts;
   }
+
+  // Calls the base CheckNoTritonFallback() with this test's Triton flag.
+  void CheckNoTritonFallback() {
+    AllGatherTestNoParams::CheckNoTritonFallback(
+        GetParam().use_all_gather_triton_backend);
+  }
 };
 
 class AllGatherTypesTest
@@ -327,6 +364,12 @@ class AllGatherTypesTest
     opts.set_xla_gpu_unsupported_use_all_gather_triton_backend(
         GetParam().use_all_gather_triton_backend);
     return opts;
+  }
+
+  // Calls the base CheckNoTritonFallback() with this test's Triton flag.
+  void CheckNoTritonFallback() {
+    AllGatherTestNoParams::CheckNoTritonFallback(
+        GetParam().use_all_gather_triton_backend);
   }
 };
 
@@ -381,6 +424,7 @@ TEST_P(AllGatherTypesTest, SupportedTypes2GPUs) {
       InputsOutputs test_io,
       (BuildTestInputsOutputs(element_type, *module, kNumReplicas,
                               /*all_gather_dimension=*/0)));
+  CheckNoTritonFallback();
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
       ExecuteReplicated(std::move(module),
@@ -425,6 +469,7 @@ TEST_P(AllGatherTest, F32_8GPUs_AllReplicasOneGroup) {
       (BuildTestInputsOutputs<PrimitiveType::F32>(*module, kNumReplicas,
                                                   /*all_gather_dimension=*/0)));
 
+  CheckNoTritonFallback();
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
       ExecuteReplicated(std::move(module),
@@ -469,6 +514,7 @@ TEST_P(AllGatherTest, F32_8GPUs_2ReplicasPerGroup) {
       (BuildTestInputsOutputs<PrimitiveType::F32>(*module, kNumReplicas,
                                                   /*all_gather_dimension=*/0)));
 
+  CheckNoTritonFallback();
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
       ExecuteReplicated(std::move(module),
@@ -513,6 +559,7 @@ TEST_P(AllGatherTest, F32TwoD4GPUs) {
       (BuildTestInputsOutputs<PrimitiveType::F32>(*module, kNumReplicas,
                                                   /*all_gather_dimension=*/0)));
 
+  CheckNoTritonFallback();
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
       ExecuteReplicated(std::move(module),
@@ -604,6 +651,7 @@ TEST_P(AllGatherTest, F32_3D_2GPUs_PowerOf2) {
       (BuildTestInputsOutputs<PrimitiveType::F32>(*module, kNumReplicas,
                                                   /*all_gather_dimension=*/0)));
 
+  CheckNoTritonFallback();
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
       ExecuteReplicated(std::move(module),
@@ -641,6 +689,7 @@ TEST_P(AllGatherTest, F32TwoD4GPUs_Dim1) {
       (BuildTestInputsOutputs<PrimitiveType::F32>(*module, kNumReplicas,
                                                   /*all_gather_dimension=*/1)));
 
+  CheckNoTritonFallback();
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
       ExecuteReplicated(std::move(module),
@@ -677,6 +726,7 @@ TEST_P(AllGatherTest, F32_3D_2GPUs_Dim1) {
       (BuildTestInputsOutputs<PrimitiveType::F32>(*module, kNumReplicas,
                                                   /*all_gather_dimension=*/1)));
 
+  CheckNoTritonFallback();
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
       ExecuteReplicated(std::move(module),
@@ -713,6 +763,7 @@ TEST_P(AllGatherTest, F32_3D_2GPUs_Dim2) {
       (BuildTestInputsOutputs<PrimitiveType::F32>(*module, kNumReplicas,
                                                   /*all_gather_dimension=*/2)));
 
+  CheckNoTritonFallback();
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
       ExecuteReplicated(std::move(module),
@@ -753,6 +804,7 @@ TEST_P(AllGatherTest, BF16_1024Elements_2GPUs) {
                               *module, kNumReplicas,
                               /*all_gather_dimension=*/0)));
 
+  CheckNoTritonFallback();
   // Execute the all-gather operation
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
@@ -800,6 +852,7 @@ TEST_P(AllGatherTest, BF16_1024Elements_4GPUs) {
                               *module, kNumReplicas,
                               /*all_gather_dimension=*/0)));
 
+  CheckNoTritonFallback();
   // Execute the all-gather operation
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
@@ -847,6 +900,7 @@ TEST_P(AllGatherTest, BF16_1024Elements_8GPUs) {
                               *module, kNumReplicas,
                               /*all_gather_dimension=*/0)));
 
+  CheckNoTritonFallback();
   // Execute the all-gather operation
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
@@ -864,6 +918,141 @@ TEST_P(AllGatherTest, BF16_1024Elements_8GPUs) {
         << "\nThis test verifies that AllGather output matches the expected "
         << "concatenation of inputs. Failure indicates incorrect Triton "
            "implementation.";
+  }
+}
+
+// Test fixture for verifying that the Triton backend actually executes when
+// the Triton flag is set. Uses ScopedMockLog to detect silent NCCL fallbacks.
+//
+// The key insight: when xla_gpu_unsupported_use_all_gather_triton_backend=true
+// but the Triton kernel cannot run (either because the shape is not supported
+// at compile time or because runtime checks fail), a LOG(WARNING) containing
+// "Falling back to NCCL/RCCL" is emitted. Tests in this fixture use
+// ScopedMockLog to assert that this warning is absent (Triton ran) or present
+// (expected fallback).
+class AllGatherTritonVerificationTest : public AllGatherTestNoParams {
+ protected:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions opts = CollectiveOpsWithFlagsBase::GetDebugOptionsForTest();
+    opts.set_xla_gpu_unsupported_use_all_gather_triton_backend(true);
+    return opts;
+  }
+};
+
+// Verifies that the Triton backend actually runs (no NCCL/RCCL fallback) when:
+//  - The Triton flag is explicitly set, AND
+//  - The all-gather shape is compatible with Triton
+//    (1024 bf16 elements: aligned to kNumElementsPerThread=4, power-of-2 GPUs)
+//
+// If Triton silently falls back to NCCL/RCCL, this test fails because the
+// "Falling back to NCCL/RCCL" WARNING would be emitted and detected.
+TEST_F(AllGatherTritonVerificationTest, TritonActuallyRuns_BF16_1024Elements_2GPUs) {
+  constexpr int64_t kNumReplicas = 2;
+  if (!CheckDeviceCount(kNumReplicas)) {
+    return;
+  }
+  if (!IsTritonCapable()) {
+    GTEST_SKIP() << "Test requires Hopper+ CUDA or ROCm for Triton backend. "
+                    "Skipping Triton execution verification.";
+  }
+
+  constexpr absl::string_view kModuleStr = R"(
+  HloModule test
+
+  ENTRY test_computation {
+    param_0 = bf16[1024] parameter(0)
+    ROOT all-gather = bf16[2048] all-gather(param_0),
+      replica_groups={{0,1}}, dimensions={0}
+  }
+  )";
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto module, ParseAndReturnVerifiedModule(kModuleStr, kNumReplicas));
+  TF_ASSERT_OK_AND_ASSIGN(InputsOutputs test_io,
+                          (BuildTestInputsOutputs<PrimitiveType::BF16>(
+                              *module, kNumReplicas,
+                              /*all_gather_dimension=*/0)));
+
+  // Monitor logs during execution to verify Triton backend actually ran.
+  // A "Falling back to NCCL/RCCL" WARNING indicates a silent fallback, which
+  // would mean the test was not actually validating Triton behavior.
+  absl::ScopedMockLog mock_log(absl::MockLogDefault::kIgnoreUnexpected);
+  EXPECT_CALL(mock_log,
+              Log(absl::LogSeverity::kWarning, ::testing::_,
+                  ::testing::HasSubstr("Falling back to NCCL/RCCL")))
+      .Times(0);  // No fallback expected — Triton should run.
+  mock_log.StartCapturingLogs();
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      ExecutionResult execution_result,
+      ExecuteReplicated(std::move(module), test_io.InputLiteralPtrs()));
+
+  const std::vector<Literal>& results = execution_result.results;
+  ASSERT_EQ(results.size(), kNumReplicas);
+  for (int i = 0; i < kNumReplicas; ++i) {
+    ASSERT_TRUE(LiteralTestUtil::Near(test_io.expected_outputs[i], results[i],
+                                      ErrorSpec{1e-3}))
+        << "Triton all-gather result mismatch at replica " << i;
+  }
+}
+
+// Verifies that when the Triton flag is set but the shape is not supported by
+// Triton (1017 elements = 3*3*113, not divisible by kNumElementsPerThread=4),
+// a WARNING containing "Falling back to NCCL/RCCL" is emitted.
+//
+// This test serves two purposes:
+//  1. Confirms the warning mechanism works correctly.
+//  2. Documents that NCCL/RCCL still produces a correct result on fallback.
+TEST_F(AllGatherTritonVerificationTest,
+       NcclFallbackWarningEmitted_NonAlignedShape_2GPUs) {
+  constexpr int64_t kNumReplicas = 2;
+  if (!CheckDeviceCount(kNumReplicas)) {
+    return;
+  }
+  if (!IsTritonCapable()) {
+    GTEST_SKIP() << "Test requires Hopper+ CUDA or ROCm for Triton backend. "
+                    "Skipping NCCL fallback warning verification.";
+  }
+
+  // Shape has 1017 elements (3*3*113): not divisible by kNumElementsPerThread
+  // (4), so Triton cannot emit a kernel and falls back to NCCL/RCCL.
+  constexpr absl::string_view kModuleStr = R"(
+  HloModule test
+
+  ENTRY test_computation {
+    param_0 = f32[3,3,113] parameter(0)
+    ROOT all-gather = f32[6,3,113] all-gather(param_0),
+      replica_groups={{0,1}}, dimensions={0}
+  }
+  )";
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto module, ParseAndReturnVerifiedModule(kModuleStr, kNumReplicas));
+  TF_ASSERT_OK_AND_ASSIGN(InputsOutputs test_io,
+                          (BuildTestInputsOutputs<PrimitiveType::F32>(
+                              *module, kNumReplicas,
+                              /*all_gather_dimension=*/0)));
+
+  // Expect the fallback warning to be emitted exactly because Triton cannot
+  // handle this shape.
+  absl::ScopedMockLog mock_log(absl::MockLogDefault::kIgnoreUnexpected);
+  EXPECT_CALL(mock_log,
+              Log(absl::LogSeverity::kWarning, ::testing::_,
+                  ::testing::HasSubstr("Falling back to NCCL/RCCL")))
+      .Times(::testing::AtLeast(1));  // Fallback warning must be emitted.
+  mock_log.StartCapturingLogs();
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      ExecutionResult execution_result,
+      ExecuteReplicated(std::move(module), test_io.InputLiteralPtrs()));
+
+  // NCCL/RCCL fallback must still produce the correct result.
+  const std::vector<Literal>& results = execution_result.results;
+  ASSERT_EQ(results.size(), kNumReplicas);
+  for (int i = 0; i < kNumReplicas; ++i) {
+    ASSERT_TRUE(LiteralTestUtil::Near(test_io.expected_outputs[i], results[i],
+                                      ErrorSpec{1e-5}))
+        << "NCCL/RCCL fallback result mismatch at replica " << i;
   }
 }
 

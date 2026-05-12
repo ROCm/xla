@@ -1000,15 +1000,28 @@ absl::StatusOr<std::optional<BlockLevelFusionConfig>>
 GetBlockLevelFusionConfigForAllGather(
     const se::DeviceDescription& device_info,
     const HloAllGatherInstruction* all_gather) {
+  const bool triton_backend_requested = all_gather->GetModule()
+                                            ->config()
+                                            .debug_options()
+                                            .xla_gpu_unsupported_use_all_gather_triton_backend();
   absl::StatusOr<AllGatherInfo> maybe_all_gather_info = BuildAllGatherInfo(
-      /*is_collective_kernel_enabled=*/all_gather->GetModule()
-          ->config()
-          .debug_options()
-          .xla_gpu_unsupported_use_all_gather_triton_backend(),
-      device_info, all_gather);
+      /*is_collective_kernel_enabled=*/triton_backend_requested, device_info,
+      all_gather);
   if (absl::IsUnimplemented(maybe_all_gather_info.status())) {
-    VLOG(3) << "Codegen for all-gather is not supported: "
-            << maybe_all_gather_info.status();
+    if (triton_backend_requested) {
+      // The Triton backend was explicitly requested via debug flag but cannot
+      // handle this all-gather configuration (e.g., unsupported element type,
+      // misaligned element count, or unsupported device). The operation will
+      // fall back to NCCL/RCCL. This warning helps diagnose silent fallbacks.
+      LOG(WARNING) << "Triton backend was requested for all-gather '"
+                   << all_gather->name()
+                   << "' but the configuration is not supported: "
+                   << maybe_all_gather_info.status().message()
+                   << ". Falling back to NCCL/RCCL.";
+    } else {
+      VLOG(3) << "Codegen for all-gather is not supported: "
+              << maybe_all_gather_info.status();
+    }
     return std::nullopt;
   }
   TF_ASSIGN_OR_RETURN(AllGatherInfo all_gather_info,
