@@ -1842,6 +1842,22 @@ xla_test(
 )
 
 xla_test(
+    name = "gemm_rewriter_group_gemm_test",
+    srcs = ["gemm_rewriter_group_gemm_test.cc"],
+    backends = ["gpu"],
+    deps = [
+        ":gemm_rewriter_test_lib",
+        "//xla:error_spec",
+        "//xla:xla_proto_cc",
+        "//xla/service:hlo_module_config",
+        "//xla/stream_executor:semantic_version",
+        "//xla/tests:hlo_pjrt_interpreter_reference_mixin",
+        "//xla/tsl/platform:statusor",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+xla_test(
     name = "gemm_rewriter_fp8_test",
     srcs = ["gemm_rewriter_fp8_test.cc"],
     backends = ["gpu"],
