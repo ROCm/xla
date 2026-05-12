@@ -492,10 +492,6 @@ auto GemmOrCublasLtMatmulMaybeF8OrGrouped(HloInstruction** instr) {
               kCublasLtMatmulF8CallTarget, kCublasLtGroupedMatmulCallTarget});
 }
 
-auto GroupedMatmul(HloInstruction** instr) {
-  return m::CustomCall(instr, {kCublasLtGroupedMatmulCallTarget});
-}
-
 auto BcastConstScalar(HloInstruction** instr, double value) {
   return m::Broadcast(instr, m::ConstantScalar(value));
 }
