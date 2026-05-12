@@ -81,9 +81,8 @@ class MxScaledDotExecutionTest : public HloPjRtGpuTestBase {
     TF_ASSERT_OK_AND_ASSIGN(auto test_optimized,
                             GetOptimizedModule(hlo_string, test_config));
     EXPECT_THAT(
-        RunFileCheck(
-            test_optimized->ToString(),
-            "CHECK: {{(__cublas\\$lt\\$matmul\\$mx)|(scaled-dot)}}"),
+        RunFileCheck(test_optimized->ToString(),
+                     "CHECK: {{(__cublas\\$lt\\$matmul\\$mx)|(scaled-dot)}}"),
         absl_testing::IsOkAndHolds(true));
   }
 };
