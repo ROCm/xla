@@ -24,6 +24,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "xla/backends/gpu/collectives/gpu_clique_key.h"
+#include "xla/backends/gpu/runtime/collective_kernel_thunk.h"
 #include "xla/backends/gpu/runtime/collective_thunk.h"
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/backends/gpu/runtime/thunk.pb.h"
@@ -49,6 +50,11 @@ class AllGatherThunk : public CollectiveThunk {
                  std::vector<Buffer> buffers,
                  CollectivesMode collectives_mode =
                      DebugOptions::COLLECTIVES_PRIVATE_MEMORY);
+  AllGatherThunk(
+      ThunkInfo thunk_info, const HloAllGatherInstruction* inst,
+      std::vector<Buffer> buffers,
+      std::unique_ptr<CollectiveKernelThunk> collective_kernel_thunk,
+      bool p2p_memcpy_enabled = false);
 
   static const char* GetHloOpName() { return "all-gather-start"; }
 
@@ -75,12 +81,14 @@ class AllGatherThunk : public CollectiveThunk {
   absl::Status PrepareCollective(const PrepareParams& params,
                                  const GpuCliqueKey& clique_key) override;
 
+  absl::Status Initialize(const InitializeParams& params) override;
   absl::Status RunCollective(const ExecuteParams& params,
                              const GpuCliqueKey& clique_key, se::Stream& stream,
                              Communicator& comm) override;
 
  private:
   const AllGatherConfig config_;
+  std::unique_ptr<CollectiveKernelThunk> collective_kernel_thunk_;
 };
 
 absl::Status RunAllGather(std::vector<DeviceBufferPair>& buffers,

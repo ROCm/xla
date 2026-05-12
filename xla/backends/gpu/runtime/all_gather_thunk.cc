@@ -47,6 +47,7 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/tsl/platform/logging.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
@@ -101,6 +102,19 @@ AllGatherThunk::AllGatherThunk(ThunkInfo thunk_info,
   CHECK_EQ(config_.config.operand_element_type.size(), this->buffers().size());
 }
 
+AllGatherThunk::AllGatherThunk(
+    ThunkInfo thunk_info, const HloAllGatherInstruction* inst,
+    std::vector<Buffer> buffers,
+    std::unique_ptr<CollectiveKernelThunk> collective_kernel_thunk,
+    bool p2p_memcpy_enabled)
+    : CollectiveThunk(Thunk::kAllGather, thunk_info, std::move(buffers)),
+      config_(GetAllGatherConfig(inst)),
+      collective_kernel_thunk_(std::move(collective_kernel_thunk)) {
+  CHECK_EQ(config_.config.operand_element_type.size(), this->buffers().size());
+  VLOG(3) << "AllGatherStartThunk created with CollectiveKernelThunk for: "
+          << inst->name();
+}
+
 AllGatherThunk::AllGatherThunk(ThunkInfo thunk_info, CollectiveConfig config,
                                std::vector<Buffer> buffers,
                                CollectivesMode collectives_mode)
@@ -130,6 +144,10 @@ absl::Status AllGatherThunk::PrepareCollective(const PrepareParams& params,
       RETURN_IF_ERROR(mem_requests.RequestSymmetricAllocationSlice(
           clique_key, buffer.destination_buffer.slice));
     }
+  }
+  TF_RETURN_IF_ERROR(CollectiveThunk::Prepare(params));
+  if (collective_kernel_thunk_) {
+    return collective_kernel_thunk_->Prepare(params);
   }
   return absl::OkStatus();
 }
@@ -166,6 +184,23 @@ absl::StatusOr<ThunkProto> AllGatherThunk::ToProto() const {
   return proto;
 }
 
+absl::Status AllGatherThunk::Initialize(const InitializeParams& params) {
+  TF_RETURN_IF_ERROR(CollectiveThunk::Initialize(params));
+  if (collective_kernel_thunk_) {
+    TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
+                        GetCollectiveGpuCliqueKey(*params.collective_params,
+                                                  config()));
+    TF_ASSIGN_OR_RETURN(
+        bool use_collective_kernel,
+        collective_kernel_thunk_->IsSupported(clique_key, *params.executor,
+                                              *params.collective_params));
+    if (use_collective_kernel) {
+      TF_RETURN_IF_ERROR(collective_kernel_thunk_->Initialize(params));
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::Status AllGatherThunk::RunCollective(const ExecuteParams& params,
                                            const GpuCliqueKey& clique_key,
                                            se::Stream& stream,
@@ -184,6 +219,22 @@ absl::Status AllGatherThunk::RunCollective(const ExecuteParams& params,
   }
 
   XLA_VLOG_DEVICE(3, device_ordinal) << "AllGather: using host-initiated mode";
+  // Try to use Triton collective kernel if available
+  if (collective_kernel_thunk_) {
+    TF_ASSIGN_OR_RETURN(
+        bool use_collective_kernel,
+        collective_kernel_thunk_->IsSupported(
+            clique_key, *params.stream->parent(), *params.collective_params));
+
+    if (use_collective_kernel) {
+      return collective_kernel_thunk_->ExecuteOnStream(params);
+    }
+    LOG(WARNING) << "AllGatherThunk: Triton backend was requested but the "
+                    "Triton kernel is not supported for this configuration "
+                    "at runtime. Falling back to NCCL/RCCL.";
+  }
+
+  // Fallback to NCCL/RCCL
   return xla::gpu::RunAllGather(device_buffers, stream, comm,
                                 config_.config.use_symmetric_buffer);
 }
