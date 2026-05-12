@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_BACKENDS_GPU_RUNTIME_COMMAND_H_
 #define XLA_BACKENDS_GPU_RUNTIME_COMMAND_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -24,7 +25,6 @@ limitations under the License.
 #include <variant>
 #include <vector>
 
-#include "absl/container/inlined_vector.h"
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -131,6 +131,10 @@ class Command : public Thunk {
   }
 
   virtual ~Command() = default;
+
+  absl::StatusOr<ThunkProto> ToProto() const override {
+    return absl::InvalidArgumentError("Command can't be serialized.");
+  }
 
  protected:
   // Constructor for Thunk subclasses that are also Commands. Preserves the
