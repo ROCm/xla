@@ -36,6 +36,7 @@ limitations under the License.*/
 #include "absl/types/span.h"
 #include "xla/tsl/platform/status_macros.h"
 #include "xla/backends/gpu/collectives/gpu_clique_key.h"
+#include "xla/backends/gpu/runtime/all_gather.h"
 #include "xla/backends/gpu/runtime/all_reduce.h"
 #include "xla/backends/gpu/runtime/collective_kernel_api.h"
 #include "xla/backends/gpu/runtime/collective_params.h"
@@ -169,51 +170,18 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
     }
     TF_RETURN_IF_ERROR(status);
   } else {
-
-    VLOG(3) << "CollectiveKernelThunk::IsSupported called, is_all_gather="
-            << is_all_gather
-            << ", collective_kernel_enabled_=" << collective_kernel_enabled_;
-
-    if (!collective_kernel_enabled_) {
-        XLA_VLOG_DEVICE(3, executor.device_ordinal())
-            << "Collective kernel is not enabled.";
-        VLOG(3) << "CollectiveKernelThunk::IsSupported: "
-                "collective_kernel_enabled_ is false";
-        return false;
+    absl::Status status = IsAllGatherKernelSupported(
+        collective_kernel_enabled_, executor.GetDeviceDescription(),
+        /*num_operands=*/buffers_.size(),
+        clique_key.num_local_participants(), buffers_[0].element_count,
+        collective_config_.operand_element_type[0], clique_key.is_local(),
+        collective_config_.replica_groups);
+    if (absl::IsUnimplemented(status)) {
+      VLOG(3) << "Collective kernel not supported: " << status.message();
+      return false;
     }
-
-    // TODO(b/407736956): Support variadic all-reduce.
-    if (buffers_.size() != 1) {
-        XLA_VLOG_DEVICE(3, executor.device_ordinal())
-            << "Variadic arguments are not implemented for collective kernels.";
-        VLOG(3) << "CollectiveKernelThunk::IsSupported: buffers_.size() != 1";
-        return false;
-    }
-
-    const int64_t input_size_bytes = GetInputSizeBytes();
-
-    // Skip all-reduce-specific checks for all-gather
-    if (!is_all_gather) {
-        const AllReduceStrategy strategy =
-            GetAllReduceStrategy(input_size_bytes, is_multimem_enabled_);
-        // Custom all-reduce strategy is only supported for small inputs.
-        if (input_size_bytes > GetMaxSupportedAllReduceSizeBytes(strategy)) {
-        XLA_VLOG_DEVICE(3, executor.device_ordinal())
-            << "Custom all-reduce strategy is only supported for small inputs.";
-        VLOG(3) << "CollectiveKernelThunk::IsSupported: input_size_bytes too "
-                    "large for all-reduce";
-        return false;
-        }
-    }
-
-    // Only single-host collectives are supported for now.
-    if (!clique_key.is_local()) {
-        XLA_VLOG_DEVICE(3, executor.device_ordinal())
-            << "Cross-host symmetric memory collectives are not supported.";
-        VLOG(3) << "CollectiveKernelThunk::IsSupported: clique_key is not local";
-        return false;
-    }
-    }
+    TF_RETURN_IF_ERROR(status);
+  }
 
   for (const GlobalDeviceId& device : clique_key.devices()) {
     TF_ASSIGN_OR_RETURN(const int peer_device_id,
@@ -227,13 +195,14 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
       return false;
     }
   }
-    // For all-gather, we need an emitted Triton kernel
-  // If no kernel was emitted (kernel_name_ is empty), fall back to NCCL
+  // All-reduce has a built-in custom kernel (RunAllReduceKernel) that
+  // ExecuteOnStream can fall back to when no Triton kernel was emitted
+  // (i.e., kernel_name_ is empty and state->kernel == nullptr). All-gather
+  // has no such built-in fallback: reaching the kernel_name_-empty path in
+  // ExecuteOnStream would hit CHECK(kAllReduce) and crash. We therefore only
+  // return true for all-gather when a Triton kernel was actually emitted.
   if (is_all_gather) {
-    bool has_kernel = !kernel_name_.empty();
-    VLOG(3) << "CollectiveKernelThunk::IsSupported: returning " << has_kernel
-            << " for all-gather (has_kernel=" << has_kernel << ")";
-    return has_kernel;
+    return !kernel_name_.empty();
   }
   return true;
 }

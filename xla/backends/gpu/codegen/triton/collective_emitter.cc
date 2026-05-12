@@ -54,6 +54,7 @@ limitations under the License.
 #include "stablehlo/dialect/StablehloOps.h"
 #include "xla/backends/gpu/codegen/triton/ir/triton_xla_ops.h"
 #include "xla/backends/gpu/codegen/triton/lowering_util.h"
+#include "xla/backends/gpu/runtime/all_gather.h"
 #include "xla/backends/gpu/runtime/all_reduce.h"
 #include "xla/codegen/emitters/ir/xla_ops.h"  // IWYU pragma: keep
 #include "xla/codegen/xtile/codegen/emitter_helpers.h"
@@ -999,96 +1000,28 @@ absl::StatusOr<std::optional<BlockLevelFusionConfig>>
 GetBlockLevelFusionConfigForAllGather(
     const se::DeviceDescription& device_info,
     const HloAllGatherInstruction* all_gather) {
-  // Check if the Triton AllGather backend is enabled
-  if (!all_gather->GetModule()
-           ->config()
-           .debug_options()
-           .xla_gpu_unsupported_use_all_gather_triton_backend()) {
-    LOG(INFO) << "AllGather Triton backend is not enabled. "
-              << "Set xla_gpu_unsupported_use_all_gather_triton_backend=true "
-                 "to enable.";
+  absl::StatusOr<AllGatherInfo> maybe_all_gather_info = BuildAllGatherInfo(
+      /*is_collective_kernel_enabled=*/all_gather->GetModule()
+          ->config()
+          .debug_options()
+          .xla_gpu_unsupported_use_all_gather_triton_backend(),
+      device_info, all_gather);
+  if (absl::IsUnimplemented(maybe_all_gather_info.status())) {
+    VLOG(3) << "Codegen for all-gather is not supported: "
+            << maybe_all_gather_info.status();
     return std::nullopt;
   }
+  TF_ASSIGN_OR_RETURN(AllGatherInfo all_gather_info,
+                      std::move(maybe_all_gather_info));
 
-  // Check if replica groups are present (required for Triton backend)
-  if (!all_gather->device_list()) {
-    LOG(INFO) << "AllGather device_list is null for " << all_gather->name()
-              << ". This likely means replica_groups were not properly set. "
-              << "Codegen will not be supported.";
-    return std::nullopt;
-  }
-
-  if (all_gather->device_list()->replica_groups().empty()) {
-    LOG(INFO) << "Replica groups are empty for " << all_gather->name()
-              << ". Codegen will not be supported.";
-    return std::nullopt;
-  }
-
-  const int64_t num_devices =
-      all_gather->device_list()->num_devices_per_group();
-  if (!llvm::has_single_bit(static_cast<uint64_t>(num_devices))) {
-    VLOG(1) << "Number of devices is not a power of 2 for "
-            << all_gather->name() << ". Codegen will not be supported.";
-    return std::nullopt;
-  }
-
-  // Check if the device supports Triton collective codegen
-  bool is_supported = false;
-
-  // CUDA: Requires compute capability 9.0+ (Hopper or newer)
-  if (device_info.cuda_compute_capability().major >= 9) {
-    is_supported = true;
-  }
-
-  // ROCm: All versions with Triton support are enabled
-  if (device_info.gpu_compute_capability().IsRocm()) {
-    is_supported = true;
-  }
-
-  if (!is_supported) {
-    LOG(INFO) << "Collective codegen requires CUDA compute capability >= 9.0 "
-              << "or ROCm with Triton support. Codegen will not be supported.";
-    return std::nullopt;
-  }
-
-  // Follow AllReduce pattern: calculate launch dimensions and tile sizes
   const Shape& input_shape = all_gather->operand(0)->shape();
-  const int64_t num_elements = ShapeUtil::ElementsIn(input_shape);
-  const PrimitiveType element_type = input_shape.element_type();
-
-  // Check if the element type is supported by Triton
-  // Triton primarily supports floating-point types and some integer types
-  // Unsigned integer types (u32, u16, etc.) are not well supported
-  if (element_type == U32 || element_type == U16 || element_type == U64) {
-    LOG(INFO) << "AllGather: Unsigned integer type "
-              << PrimitiveType_Name(element_type)
-              << " is not supported by Triton backend. Falling back to NCCL.";
-    return std::nullopt;
-  }
-
-  // Check alignment requirement (same as all-reduce)
-  // This ensures we fall back to NCCL for shapes that won't work with Triton
-  // tiling
-  const int64_t alignment_requirement = se::gpu::kNumElementsPerThread;
-  if (num_elements % alignment_requirement != 0) {
-    LOG(INFO) << "AllGather: Number of elements (" << num_elements
-              << ") is not aligned to the alignment requirement ("
-              << alignment_requirement << "). Falling back to NCCL.";
-    return std::nullopt;
-  }
-
-  // Calculate launch dimensions for AllGather (similar to AllReduce but without
-  // strategy) For AllGather, each rank processes its own input data, so
-  // elements_per_rank = num_elements
   static constexpr int64_t kWarpSize = 32;
   static constexpr uint64_t kMaxThreadsPerBlock = 512;
 
-  const int64_t elements_per_rank =
-      num_elements;  // AllGather doesn't split work like TwoShot
-  // Maximum number of threads such that each thread has elements to process
   const int64_t total_threads =
-      RoundUpTo(elements_per_rank / se::gpu::kNumElementsPerThread, kWarpSize);
-  // Triton expects power of 2 for threads_per_block / threads_per_warp
+      RoundUpTo(all_gather_info.num_elements / se::gpu::kNumElementsPerThread,
+                kWarpSize);
+  // Triton expects power of 2 for threads_per_block / threads_per_warp.
   const int64_t threads_per_block =
       std::min(kMaxThreadsPerBlock,
                static_cast<uint64_t>(llvm::PowerOf2Ceil(total_threads)));
@@ -1096,16 +1029,13 @@ GetBlockLevelFusionConfigForAllGather(
       kMaxBlocksPerGrid, CeilOfRatio(total_threads, threads_per_block));
   const LaunchDimensions launch_dims(blocks_per_grid, threads_per_block);
 
-  // Use input shape for tiling (output shape may not have layout properly set)
-  // The tiling is based on processing input-sized chunks from each rank
   BlockLevelFusionConfig block_level_config;
-  // Ensure at least 1 warp (minimum valid value)
   const int64_t num_warps = std::max(
       int64_t{1}, static_cast<int64_t>(launch_dims.num_threads_per_block() /
                                        WarpSize(device_info)));
   block_level_config.set_num_warps(num_warps);
-  block_level_config.set_num_ctas(1);    // No block-level clustering
-  block_level_config.set_num_stages(1);  // No pipelining of loops
+  block_level_config.set_num_ctas(1);    // No block-level clustering.
+  block_level_config.set_num_stages(1);  // No pipelining of loops.
 
   Tile* output_tile = block_level_config.add_output_tiles();
   const llvm::SmallVector<int64_t> tile_sizes =
