@@ -256,8 +256,7 @@ TEST(StreamExecutorGpuClientTest, NumaNode) {
   }
 }
 
-#if defined(GOOGLE_CUDA) || defined(TENSORFLOW_USE_ROCM) || \
-    defined(TENSORFLOW_USE_SYCL)
+#if defined(GOOGLE_CUDA) || defined(TENSORFLOW_USE_ROCM)
 TEST(StreamExecutorGpuClientTest, DonateExternalMem) {
   TF_ASSERT_OK_AND_ASSIGN(auto client,
                           GetStreamExecutorGpuClient(DefaultOptions()));
@@ -305,8 +304,7 @@ ENTRY main.5 {
   ASSERT_EQ(result[0].size(), 1);
   TF_EXPECT_OK(result[0][0]->GetReadyFuture().Await());
 }
-#endif  // defined(GOOGLE_CUDA) || defined(TENSORFLOW_USE_ROCM) ||
-        // defined(TENSORFLOW_USE_SYCL)
+#endif  // defined(GOOGLE_CUDA) || defined(TENSORFLOW_USE_ROCM)
 
 TEST(StreamExecutorGpuClientTest, CreateErrorBuffer) {
   TF_ASSERT_OK_AND_ASSIGN(auto client,
@@ -1431,8 +1429,7 @@ TEST(StreamExecutorGpuClientTest, DistributedInit) {
       options.kv_store = kv_store;
       TF_ASSERT_OK_AND_ASSIGN(auto client, GetStreamExecutorGpuClient(options));
       EXPECT_TRUE(client->platform_name() == xla::CudaName() ||
-                  client->platform_name() == xla::RocmName() ||
-                  client->platform_name() == xla::OneapiName());
+                  client->platform_name() == xla::RocmName());
       EXPECT_EQ(client->addressable_device_count(), 2);
       EXPECT_EQ(client->device_count(), 4);
     });
@@ -3661,8 +3658,7 @@ absl::Status ShardedAutotuningWorksTestBody(const int node_id,
   TF_ASSIGN_OR_RETURN(std::unique_ptr<PjRtClient> client,
                       GetStreamExecutorGpuClient(options));
   TF_RET_CHECK(client->platform_name() == xla::CudaName() ||
-               client->platform_name() == xla::RocmName() ||
-               client->platform_name() == xla::OneapiName());
+               client->platform_name() == xla::RocmName());
   if (client->platform_name() == xla::CudaName()) {
     TF_ASSIGN_OR_RETURN(
         se::CudaComputeCapability cc,
