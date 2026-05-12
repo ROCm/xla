@@ -36,39 +36,6 @@ jobs:
           git restore --source=origin/${{ github.event.repository.default_branch }} --worktree -- .claude
           find .claude -type f | sort
 
-      # =============================================================================
-      # WORKAROUND: Pre-install and warmup Claude Code
-      # =============================================================================
-      # Without this step, claude-code-action hangs indefinitely after printing
-      # "Running Claude with prompt from file: ..." with no LLM requests being made.
-      #
-      # This warmup step:
-      # - Pre-installs Claude Code before the action runs
-      # - Runs a simple command to complete first-run initialization
-      #
-      # TODO: This workaround may be addressing temporary issues in claude-code-action,
-      # Claude Code CLI, or server-side. The same hang was observed even with standard
-      # console_auth setup (without LLM gateway). Re-test periodically to check if
-      # this workaround is still needed.
-      # =============================================================================
-      - name: Install and Warmup Claude Code
-        timeout-minutes: 2
-        env:
-          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
-          ANTHROPIC_CUSTOM_HEADERS: |
-            Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}
-            user: ${{ secrets.USER_NTID }}
-          ANTHROPIC_API_KEY: "sk-ant-dummy-gateway-key"
-          ANTHROPIC_MODEL: "Claude-Sonnet-4.6"
-        run: |
-          curl -fsSL https://claude.ai/install.sh | bash
-
-          export PATH="$HOME/.local/bin:$PATH"
-
-          claude --version
-
-          timeout 60 claude --print -p "Say OK" || echo "Warmup complete (exit ok)"
-
       # claude-code-action auto-configures the GitHub inline comment MCP server only
       # when triggered by pull_request or pull_request_target events, where it can
       # infer the PR number from the event context. When triggered by repository_dispatch
