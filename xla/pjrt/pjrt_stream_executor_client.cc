@@ -1219,7 +1219,7 @@ PjRtStreamExecutorLoadedExecutable::PjRtStreamExecutorLoadedExecutable(
         IsAllZeros(*device_assignment_)) {
       // This code path should only be triggered when we intentionally compile
       // an HLO without having enough devices to actually run it. See the
-      // "--run=false" option in
+      // "--compile_only=true" option in
       // tensorflow/compiler/xla/tools/multihost_hlo_runner/hlo_runner_main.cc.
       // That will help us debug the XLA compiler locally.
       LOG(INFO)
