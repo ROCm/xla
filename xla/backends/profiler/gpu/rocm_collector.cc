@@ -32,9 +32,6 @@ limitations under the License.
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "rocm/include/hip/hip_runtime.h"
-#include "rocm/include/rocprofiler-sdk/fwd.h"
-#include "rocm/include/rocprofiler-sdk/rocprofiler.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/platform/status.h"
 #include "xla/tsl/profiler/utils/parse_annotation.h"
@@ -44,6 +41,10 @@ limitations under the License.
 #include "xla/tsl/profiler/utils/xplane_utils.h"
 #include "tsl/platform/abi.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
+#include "rocm/include/hip/hip_runtime.h"
+#include "rocm/include/rocprofiler-sdk/fwd.h"
+#include "rocm/include/rocprofiler-sdk/rocprofiler.h"
+#include "rocm/include/roctracer/roctracer.h"
 
 namespace xla {
 namespace profiler {
@@ -135,6 +136,19 @@ void PrintRocmTracerEvent(const RocmTracerEvent& event,
   VLOG(3) << oss.str() << ' ' << message;
 }
 
+#if XLA_GPU_ROCM_TRACER_BACKEND == XLA_GPU_ROCM_TRACER_BACKEND_V1
+static uint64_t get_timestamp() {
+  uint64_t ts;
+  if (roctracer_get_timestamp(&ts) != ROCTRACER_STATUS_SUCCESS) {
+    const char* errstr = roctracer_error_string();
+    LOG(ERROR) << "function roctracer_get_timestamp failed with error "
+               << errstr;
+    // Return 0 on error.
+    return 0;
+  }
+  return ts;
+}
+#else
 uint64_t get_timestamp() {
   uint64_t ts;
   rocprofiler_status_t CHECKSTATUS = rocprofiler_get_timestamp(&ts);
@@ -146,6 +160,7 @@ uint64_t get_timestamp() {
   }
   return ts;
 }
+#endif
 }  // namespace
 
 OccupancyStats PerDeviceCollector::GetOccupancy(

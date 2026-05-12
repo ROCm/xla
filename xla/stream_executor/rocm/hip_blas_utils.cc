@@ -18,6 +18,7 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 #include "xla/stream_executor/blas.h"
+#include "rocm/rocm_config.h"
 
 #if TF_HIPBLASLT
 

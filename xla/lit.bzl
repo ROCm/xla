@@ -333,7 +333,7 @@ def lit_test(
         ]) + if_nccl([
             "//xla/tsl/cuda:nccl",
         ]) + if_rocm_is_configured([
-            "@local_config_rocm//rocm:rocm_smi_import",
+            "//xla/stream_executor/rocm:all_runtime",
         ]),
         visibility = ["//visibility:private"],
         **kwargs
