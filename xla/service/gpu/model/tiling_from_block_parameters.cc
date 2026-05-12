@@ -19,7 +19,6 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -31,6 +30,7 @@ limitations under the License.
 #include "xla/codegen/tiling/tiling_specification.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/model/block_level_parameters.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
@@ -99,7 +99,7 @@ absl::StatusOr<llvm::SmallVector<int64_t>> GetTilingSpaceConcreteSizes(
         block_level_parameters.output_tile_sizes.size());
   }
   const auto& parallel_tile_sizes = block_level_parameters.output_tile_sizes[0];
-  if (int64_t num_parallel_dims = tiling_space.num_parallel_dimsensions();
+  if (int64_t num_parallel_dims = tiling_space.num_parallel_dimensions();
       num_parallel_dims != parallel_tile_sizes.size()) {
     return Internal(
         "Number of parallel dimensions in the tiling space (%d) does not match "

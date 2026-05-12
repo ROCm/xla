@@ -16,6 +16,8 @@ limitations under the License.
 
 #include "xla/backends/gpu/transforms/gemm_rewriter.h"
 
+#include <math.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -460,14 +462,6 @@ HloInstruction* MaybeConstantFoldBias(HloInstruction* bias) {
   return bias;
 }
 
-auto Gemm(HloInstruction** instr) {
-  return m::CustomCall(instr, {kGemmCallTarget});
-}
-
-auto CublasLtMatmul(HloInstruction** instr) {
-  return m::CustomCall(instr, {kCublasLtMatmulCallTarget});
-}
-
 auto CublasLtMatmulF8(HloInstruction** instr) {
   return m::CustomCall(instr, {kCublasLtMatmulF8CallTarget});
 }
@@ -537,7 +531,8 @@ auto BcastConstScalarNear(double value) {
           default:
             return false;
         }
-        return abs(*actual - expected) < (abs(*actual + expected) * epsilon);
+        return std::abs(*actual - expected) <
+               (std::abs(*actual + expected) * epsilon);
       }));
 }
 

@@ -256,7 +256,8 @@ TEST(StreamExecutorGpuClientTest, NumaNode) {
   }
 }
 
-#if defined(GOOGLE_CUDA) || defined(TENSORFLOW_USE_ROCM)
+#if defined(GOOGLE_CUDA) || defined(TENSORFLOW_USE_ROCM) || \
+    defined(TENSORFLOW_USE_SYCL)
 TEST(StreamExecutorGpuClientTest, DonateExternalMem) {
   TF_ASSERT_OK_AND_ASSIGN(auto client,
                           GetStreamExecutorGpuClient(DefaultOptions()));
@@ -304,7 +305,8 @@ ENTRY main.5 {
   ASSERT_EQ(result[0].size(), 1);
   TF_EXPECT_OK(result[0][0]->GetReadyFuture().Await());
 }
-#endif  // defined(GOOGLE_CUDA) || defined(TENSORFLOW_USE_ROCM)
+#endif  // defined(GOOGLE_CUDA) || defined(TENSORFLOW_USE_ROCM) ||
+        // defined(TENSORFLOW_USE_SYCL)
 
 TEST(StreamExecutorGpuClientTest, CreateErrorBuffer) {
   TF_ASSERT_OK_AND_ASSIGN(auto client,
@@ -1259,6 +1261,48 @@ TEST(StreamExecutorGpuClientTest, CopyErrorBufferToDevice) {
       absl_testing::StatusIs(tsl::error::INTERNAL, HasSubstr("some error")));
 }
 
+TEST(StreamExecutorGpuClientTest, CopyTokenToDevice) {
+  TF_ASSERT_OK_AND_ASSIGN(auto client,
+                          GetStreamExecutorGpuClient(DefaultOptions()));
+  ASSERT_GE(client->addressable_devices().size(), 2);
+
+  auto* d0 = client->addressable_devices()[0];
+  auto* d1 = client->addressable_devices()[1];
+
+  xla::Literal literal = xla::LiteralUtil::CreateToken();
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto src_buffer,
+      client->BufferFromHostLiteral(literal, *d0->default_memory_space()));
+
+  TF_ASSERT_OK_AND_ASSIGN(auto dst_buffer, src_buffer->CopyToMemorySpace(
+                                               *d1->default_memory_space()));
+
+  xla::Literal received_literal = xla::LiteralUtil::CreateToken();
+  TF_ASSERT_OK(dst_buffer->ToLiteral(&received_literal).Await());
+  EXPECT_TRUE(received_literal.shape().IsToken());
+}
+
+TEST(StreamExecutorGpuClientTest, CopyErrorTokenToDevice) {
+  TF_ASSERT_OK_AND_ASSIGN(auto client,
+                          GetStreamExecutorGpuClient(DefaultOptions()));
+  ASSERT_GE(client->addressable_devices().size(), 2);
+
+  auto* d0 = client->addressable_devices()[0];
+  auto* d1 = client->addressable_devices()[1];
+
+  xla::Shape shape = ShapeUtil::MakeTokenShape();
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto src_buffer,
+      client->CreateErrorBuffer(absl::InternalError("token error"), shape,
+                                *d0->default_memory_space()));
+
+  TF_ASSERT_OK_AND_ASSIGN(auto dst_buffer, src_buffer->CopyToMemorySpace(
+                                               *d1->default_memory_space()));
+
+  EXPECT_THAT(dst_buffer->ToLiteral().Await(),
+              StatusIs(absl::StatusCode::kInternal, HasSubstr("token error")));
+}
+
 TEST(StreamExecutorGpuClientTest, CopyDelayedErrorBufferToDevice) {
   TF_ASSERT_OK_AND_ASSIGN(auto client,
                           GetStreamExecutorGpuClient(DefaultOptions()));
@@ -1387,7 +1431,8 @@ TEST(StreamExecutorGpuClientTest, DistributedInit) {
       options.kv_store = kv_store;
       TF_ASSERT_OK_AND_ASSIGN(auto client, GetStreamExecutorGpuClient(options));
       EXPECT_TRUE(client->platform_name() == xla::CudaName() ||
-                  client->platform_name() == xla::RocmName());
+                  client->platform_name() == xla::RocmName() ||
+                  client->platform_name() == xla::OneapiName());
       EXPECT_EQ(client->addressable_device_count(), 2);
       EXPECT_EQ(client->device_count(), 4);
     });
@@ -3616,7 +3661,8 @@ absl::Status ShardedAutotuningWorksTestBody(const int node_id,
   TF_ASSIGN_OR_RETURN(std::unique_ptr<PjRtClient> client,
                       GetStreamExecutorGpuClient(options));
   TF_RET_CHECK(client->platform_name() == xla::CudaName() ||
-               client->platform_name() == xla::RocmName());
+               client->platform_name() == xla::RocmName() ||
+               client->platform_name() == xla::OneapiName());
   if (client->platform_name() == xla::CudaName()) {
     TF_ASSIGN_OR_RETURN(
         se::CudaComputeCapability cc,

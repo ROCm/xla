@@ -1312,6 +1312,111 @@ xla_cc_test(
 )
 
 cc_library(
+    name = "dynamic_slice_fusion",
+    srcs = ["dynamic_slice_fusion.cc"],
+    hdrs = ["dynamic_slice_fusion.h"],
+    deps = [
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla/hlo/ir:hlo",
+        "//xla/service/gpu:backend_configs_cc",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+    ],
+)
+
+xla_cc_test(
+    name = "dynamic_slice_fusion_test",
+    srcs = ["dynamic_slice_fusion_test.cc"],
+    deps = [
+        ":dynamic_slice_fusion",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/service/gpu:backend_configs_cc",
+        "@com_google_absl//absl/strings",
+        "@com_google_googletest//:gtest",
+        "@com_google_googletest//:gtest_main",  # fixdeps: keep
+    ],
+)
+
+cc_library(
+    name = "dynamic_slice_analysis",
+    srcs = ["dynamic_slice_analysis.cc"],
+    hdrs = ["dynamic_slice_analysis.h"],
+    tags = ["gpu"],
+    deps = [
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/evaluator:hlo_evaluator",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:pattern_matcher",
+        "//xla/service/gpu:ir_emission_utils",
+        "//xla/tsl/platform:status_macros",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "dynamic_slice_analysis_test",
+    srcs = ["dynamic_slice_analysis_test.cc"],
+    tags = ["gpu"],
+    deps = [
+        ":dynamic_slice_analysis",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "dynamic_slice_annotator",
+    srcs = ["dynamic_slice_annotator.cc"],
+    hdrs = ["dynamic_slice_annotator.h"],
+    tags = ["gpu"],
+    deps = [
+        ":dynamic_slice_analysis",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/pass:hlo_pass",
+        "//xla/service/gpu:backend_configs_cc",
+        "//xla/tsl/platform:status_macros",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "dynamic_slice_annotator_test",
+    srcs = ["dynamic_slice_annotator_test.cc"],
+    tags = ["gpu"],
+    deps = [
+        ":dynamic_slice_annotator",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/service/gpu:backend_configs_cc",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "dynamic_slice_fusion_rewriter",
     srcs = ["dynamic_slice_fusion_rewriter.cc"],
     hdrs = ["dynamic_slice_fusion_rewriter.h"],
@@ -1534,8 +1639,12 @@ cc_library(
         "//xla:util",
         "//xla:xla_data_proto_cc",
         "//xla/backends/gpu/codegen/triton:support",
+        "//xla/codegen/tiling:symbolic_tile_analysis",
+        "//xla/hlo/analysis:symbolic_map",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/pass:hlo_pass",
+        "//xla/hlo/utils:hlo_traversal",
+        "//xla/service:hlo_module_config",
         "//xla/service:instruction_fusion",
         "//xla/service/gpu:backend_configs_cc",
         "//xla/service/gpu:gpu_fusible",
@@ -1555,6 +1664,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@llvm-project//mlir:IR",
         "@tsl//tsl/platform:tensor_float_32_utils",
     ],
 )
@@ -3028,6 +3138,8 @@ xla_test(
     tags = [
         "cuda-only",
         "no_oss",  # We don't generate data for the devices used in the OSS CI.
+        # Scratch space is smaller in debug mode. So we only test in opt mode.
+        "optonly",
     ],
     deps = [
         ":deviceless_estimate_cub_sort_scratch_size",

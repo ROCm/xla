@@ -65,6 +65,7 @@ limitations under the License.
 #include "xla/backends/gpu/autotuner/factory.h"
 #include "xla/backends/gpu/autotuner/native_emitter.h"
 #include "xla/backends/gpu/codegen/cubin_custom_kernel_compiler.h"
+#include "xla/backends/gpu/codegen/emitters/mlir_kernel_emitter.h"
 #include "xla/backends/gpu/codegen/triton/support.h"
 #include "xla/backends/gpu/runtime/execution_stream_id.h"
 #include "xla/backends/gpu/runtime/host_execute_thunk.h"
@@ -530,7 +531,8 @@ GpuCompiler::GpuCompiler(se::Platform::Id platform_id,
       target_triple_(target_triple),
       data_layout_(data_layout),
       pointer_size_(llvm::DataLayout(data_layout)
-                        .getPointerSize(0 /* default address space */)) {
+                        .getPointerSize(0 /* default address space */)),
+      mlir_context_pool_([]() { return CreateMlirContext(); }) {
   RegisterSymbolicExprStorage(&mlir_context_);
 }
 
@@ -2661,7 +2663,8 @@ GpuCompiler::CompileToBackendResult(
             module, llvm_context, target_triple_, data_layout_, PlatformId(),
             gpu_topology, alias_info.get(),
             std::move(buffer_size_bytes_function), llvm_options_lock,
-            &kernel_compiler, std::move(cpu_target_machine_options)));
+            &kernel_compiler, std::move(cpu_target_machine_options),
+            &mlir_context_pool_));
   }
 
   for (const std::unique_ptr<llvm::Module>& llvm_module :
@@ -3318,7 +3321,8 @@ GpuCompiler::LoadExecutableFromAotResult(
       platform_name, device_description, mlir_context(), &llvm_context,
       /*emit_kernels=*/false, llvm::Triple(target_triple()), data_layout(),
       &kernel_compiler,
-      cpu::TargetMachineOptions(hlo_module->config().debug_options()));
+      cpu::TargetMachineOptions(hlo_module->config().debug_options()),
+      &mlir_context_pool_);
 
   absl::string_view cache_file_path =
       hlo_module->config().debug_options().xla_gpu_kernel_cache_file();
