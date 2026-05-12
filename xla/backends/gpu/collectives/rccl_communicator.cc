@@ -14,6 +14,7 @@ limitations under the License.
 ==============================================================================*/
 
 #include "xla/backends/gpu/collectives/rccl_communicator.h"
+#include "xla/backends/gpu/collectives/rccl_symmetric_memory.h"
 
 #include <atomic>
 #include <cstddef>

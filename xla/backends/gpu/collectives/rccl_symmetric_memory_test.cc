@@ -126,10 +126,16 @@ TEST_F(RcclSymmetricMemoryTest, PackKernelArgReturnsValidWindowHandle) {
   se::DeviceAddressBase addr(buf_ptr_, buf_size_);
   ASSERT_OK_AND_ASSIGN(auto symm_mem, RcclSymmetricMemory::Create(comm_, addr));
   if (symm_mem->win() == nullptr) {
+<<<<<<< HEAD
     GTEST_SKIP()
         << "RCCL returned a null ncclWindow_t (expected on single-rank "
            "communicators or RCCL versions without window support); "
            "skipping window-handle assertions.";
+=======
+    GTEST_SKIP() << "RCCL returned a null ncclWindow_t (expected on single-rank "
+                    "communicators or RCCL versions without window support); "
+                    "skipping window-handle assertions.";
+>>>>>>> 6735343024 ([ROCm][Triton] PR1: Extend collective memory support (RcclSymmetricMemory))
   }
   // PackKernelArg() returns a void* (PackedKernelArg) wrapping the window.
   auto packed = symm_mem->PackKernelArg();
