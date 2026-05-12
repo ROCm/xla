@@ -18009,6 +18009,28 @@ ENTRY entry {
   EXPECT_THAT(root, op::Copy(op::CollectivePermute(op::Parameter(0))));
 }
 
+TEST_F(SpmdPartitioningV3Test, ReshardBetweenPermutedMeshesWithReplicatedAxes) {
+  absl::string_view hlo_string = R"(
+HloModule module
+
+ENTRY entry {
+  %param = s32[8,2]{1,0} parameter(0),
+    sharding={mesh['x'=2,'y'=2], [{'x'}, {'y'}]}
+  ROOT %copy = s32[8,2]{1,0} copy(%param),
+    sharding={mesh['x'=2,'y'=2], device_ids=(3,2,1,0), [{'x'}, {}], replicated={'y'}}
+})";
+
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          PartitionComputation(hlo_string, /*num_devices=*/4));
+
+  const auto root = module->entry_computation()->root_instruction();
+
+  // Verify the partitioner resolves this via collective permute then AllGather
+  // (resharding across 'y').
+  EXPECT_THAT(root,
+              op::Copy(op::AllGather(op::CollectivePermute(op::Parameter(0)))));
+}
+
 }  // namespace
 }  // namespace spmd
 }  // namespace xla
