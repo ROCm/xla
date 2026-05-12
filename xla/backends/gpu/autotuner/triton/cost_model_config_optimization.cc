@@ -325,6 +325,11 @@ absl::StatusOr<std::vector<TritonGemmConfig>> OptimizeConfigsWithCostModel(
     return *estimated_all_configs;
   };
 
+  // If true, original optimized configs that could not be estimated are kept in
+  // the results.
+  // Steps that filter or replace the original set would set this flag to false.
+  bool must_keep_original_configs = true;
+
   detail::OrderedEstimatesAndConfigs current_set;
 
   // Create the base set by either picking the top configs or estimating the
@@ -341,6 +346,9 @@ absl::StatusOr<std::vector<TritonGemmConfig>> OptimizeConfigsWithCostModel(
 
     current_set =
         detail::GetTopEstimatedConfigs(base_config_set, *options.top, nullptr);
+
+    // We're overriding the original set, so we can drop original configs.
+    must_keep_original_configs = false;
   } else {
     VLOG(1) << "Cost Model: Using default set";
     TF_ASSIGN_OR_RETURN(
@@ -369,6 +377,9 @@ absl::StatusOr<std::vector<TritonGemmConfig>> OptimizeConfigsWithCostModel(
     VLOG(1) << "Cost Model: Filtering with threshold " << *options.filter;
     current_set =
         detail::FilterConfigsByRatioVsFastest(current_set, *options.filter);
+
+    // We're filtering the set, so we can drop the original configs.
+    must_keep_original_configs = false;
   }
 
   if (!current_set.empty()) {
@@ -385,6 +396,20 @@ absl::StatusOr<std::vector<TritonGemmConfig>> OptimizeConfigsWithCostModel(
   for (const auto& pair : current_set) {
     result.push_back(pair.second);
   }
+
+  if (must_keep_original_configs) {
+    // Add configs from the original optimized set if they are missing.
+    // They might have been omitted from the estimates if they e.g. could not
+    // be estimated by the model or do not satisfy the tiling constraints.
+    absl::flat_hash_set<TritonGemmConfig> result_set(result.begin(),
+                                                     result.end());
+    for (const TritonGemmConfig& config : optimized_configs) {
+      if (result_set.insert(config).second) {
+        result.push_back(config);
+      }
+    }
+  }
+
   VLOG(1) << "Returning " << result.size() << " processed configs";
   return result;
 }
