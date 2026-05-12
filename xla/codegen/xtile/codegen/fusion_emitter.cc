@@ -788,6 +788,30 @@ absl::StatusOr<TensorValue> EmitConv(
     absl::flat_hash_map<const TiledHloInstruction*, TensorValue>& values) {
   TF_RET_CHECK(tiled_hlo_conv.regions().size() == 1);
 
+  const auto* conv =
+      ::xla::Cast<HloConvolutionInstruction>(tiled_hlo_conv.hlo());
+  if (tiled_hlo_conv.operands().size() != 2) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "EmitConv: expected exactly 2 operands (input, kernel), got ",
+        tiled_hlo_conv.operands().size()));
+  }
+  const int64_t output_rank = conv->shape().dimensions().size();
+  const int64_t input_rank = conv->operand(0)->shape().dimensions().size();
+  const int64_t kernel_rank = conv->operand(1)->shape().dimensions().size();
+  if (input_rank != output_rank || kernel_rank != output_rank) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "EmitConv: input/kernel/output rank mismatch (input ", input_rank,
+        ", kernel ", kernel_rank, ", output ", output_rank, ")."));
+  }
+  const int64_t spatial_rank = conv->window().dimensions().size();
+  const int64_t expected_spatial_rank = output_rank - 2;
+  if (spatial_rank != expected_spatial_rank) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "EmitConv: window has ", spatial_rank,
+        " spatial dimensions but output rank ", output_rank,
+        " implies ", expected_spatial_rank, " spatial dimensions."));
+  }
+
   SmallVector<int64_t> padded_tile_sizes =
       GetPaddedTileSizes(tiled_hlo_conv.tile_sizes());
 
