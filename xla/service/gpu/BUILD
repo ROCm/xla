@@ -2142,6 +2142,7 @@ cc_library(
     visibility = [],
     deps = [
         "//xla:util",
+        "//xla:xla_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/pjrt:compiled_memory_stats",
         "//xla/service:compiled_module",
@@ -2164,6 +2165,7 @@ cc_library(
         ":gpu_executable_proto_cc",
         ":ir_emission_utils",
         "//xla:util",
+        "//xla:xla_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/pjrt:compiled_memory_stats",
         "//xla/service:buffer_assignment",
