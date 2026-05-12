@@ -1857,6 +1857,7 @@ cc_library(
     srcs = ["all_gather_thunk.cc"],
     hdrs = ["all_gather_thunk.h"],
     deps = [
+        ":collective_kernel_thunk",
         ":collective_thunk",
         ":thunk",
         ":thunk_proto_cc",
@@ -1905,6 +1906,7 @@ cc_library(
     srcs = ["collective_kernel_thunk.cc"],
     hdrs = ["collective_kernel_thunk.h"],
     deps = [
+        ":all_gather",
         ":all_reduce",
         ":collective_kernel_api",
         ":collective_params",
