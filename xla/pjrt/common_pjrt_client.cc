@@ -753,7 +753,7 @@ absl::Status CommonPjRtClient::PrepareArguments(
                               handle->logical_on_device_shape());
           auto status_or_buffer =
               actual_buffer->RemoveDynamicShapeMetadataIfPresent(
-                  handle_logical_device_shape);
+                  on_device_shape, handle_logical_device_shape);
 
           if (!status_or_buffer.ok()) {
             absl::Status status = status_or_buffer.status();
