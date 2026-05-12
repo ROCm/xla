@@ -957,10 +957,9 @@ absl::StatusOr<std::unique_ptr<PjRtBuffer>> PjRtCpuClient::CreateErrorBuffer(
   if (device->client() != this) {
     return absl::InvalidArgumentError("Device is not attached to this client");
   }
-  TF_ASSIGN_OR_RETURN(
-      auto raw_buffer,
-      CpuRawBuffer::Allocate(memory_space, ShapeUtil::ByteSizeOf(shape),
-                             *allocator_));
+  TF_ASSIGN_OR_RETURN(int64_t size, GetOnDeviceBytesCount(memory_space, shape));
+  TF_ASSIGN_OR_RETURN(auto raw_buffer,
+                      CpuRawBuffer::Allocate(memory_space, size, *allocator_));
   absl::InlinedVector<PjRtDeviceEventRef, 2> definition_device_events;
   definition_device_events.push_back(
       PjRtDeviceEventRef(tsl::AsyncValueRef<CpuEvent>(
@@ -1114,6 +1113,9 @@ absl::StatusOr<int64_t> PjRtCpuClient::GetOnDeviceBytesCount(
   auto kind = GetDynamicShapeKind(memory_space_kind);
   auto requirements =
       PjRtShapeAndMetadataTransferRequirements::Get(shape, kind);
+  if (shape.has_layout()) {
+    return static_cast<int64_t>(requirements.size);
+  }
   if (static_cast<int64_t>(requirements.size) != original_size) {
     return absl::InternalError(absl::StrFormat(
         "%s mismatch between transfer_manager requirements (%ld) and "
@@ -1205,15 +1207,21 @@ PjRtCpuExecutable::PjRtCpuExecutable(
     input_buffer_sizes_in_bytes_.reserve(computation_layout.parameter_count());
     for (int i = 0; i < computation_layout.parameter_count(); ++i) {
       input_buffer_sizes_in_bytes_.push_back(
-          ShapeUtil::ByteSizeOf(computation_layout.parameter_shape(i)));
+          PjRtShapeAndMetadataTransferRequirements::Get(
+              computation_layout.parameter_shape(i),
+              PjRtDynamicShapeKind::kNotSupported)
+              .size);
     }
   } else {
     input_buffer_sizes_in_bytes_.reserve(
         computation_layout.parameter_shape(0).tuple_shapes().size());
     for (int i = 0;
          i < computation_layout.parameter_shape(0).tuple_shapes().size(); ++i) {
-      input_buffer_sizes_in_bytes_.push_back(ShapeUtil::ByteSizeOf(
-          computation_layout.parameter_shape(0).tuple_shapes(i)));
+      input_buffer_sizes_in_bytes_.push_back(
+          PjRtShapeAndMetadataTransferRequirements::Get(
+              computation_layout.parameter_shape(0).tuple_shapes(i),
+              PjRtDynamicShapeKind::kNotSupported)
+              .size);
     }
   }
 
