@@ -314,7 +314,7 @@ absl::StatusOr<std::unique_ptr<HloInstruction>> HloInstruction::CreateFromProto(
     const absl::flat_hash_map<int64_t, HloInstruction*>& instruction_map,
     const absl::flat_hash_map<int64_t, HloComputation*>& computation_map,
     bool prohibit_empty_literal,
-    absl::Span<const tsl::RCReference<BackendConfigWrapper>> backend_configs) {
+    absl::Span<const std::shared_ptr<BackendConfigWrapper>> backend_configs) {
   TF_RET_CHECK(!proto.opcode().empty());
   HloOpcode opcode;
   auto opcode_or = StringToHloOpcode(proto.opcode());
@@ -1436,12 +1436,12 @@ absl::StatusOr<std::unique_ptr<HloInstruction>> HloInstruction::CreateFromProto(
       }
       instruction->backend_config_ = backend_configs[id];
     } else {
-      instruction->backend_config_ = tsl::MakeRef<BackendConfigWrapper>(
+      instruction->backend_config_ = std::make_shared<BackendConfigWrapper>(
           proto.backend_config_payload().value());
     }
   } else {
     instruction->backend_config_ =
-        tsl::MakeRef<BackendConfigWrapper>(proto.backend_config());
+        std::make_shared<BackendConfigWrapper>(proto.backend_config());
   }
 
   TF_RET_CHECK(proto.id() >= 0)

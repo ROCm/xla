@@ -324,7 +324,6 @@ cc_library(
     hdrs = ["backend_config.h"],
     deps = [
         "//xla:util",
-        "//xla/tsl/concurrency:ref_count",
         "//xla/tsl/platform:errors",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/log",
