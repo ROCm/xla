@@ -140,6 +140,85 @@ config { block_m: 16 block_n: 16 block_k: 256 split_k: 1 num_stages: 1 num_warps
 config { block_m: 16 block_n: 128 block_k: 32 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
 )";
 
+constexpr absl::string_view kMI300TritonConfigs = R"(
+config { block_m: 32 block_n: 32 block_k: 256 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 32 block_k: 32 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 64 block_k: 64 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 64 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 256 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 16 block_n: 128 block_k: 32 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 256 block_n: 256 block_k: 32 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 256 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 256 block_k: 32 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 256 block_n: 128 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 64 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 8 block_k: 16 split_k: 1 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 64 block_n: 32 block_k: 16 split_k: 1 num_stages: 1 num_warps: 2 num_ctas: 1 }
+config { block_m: 128 block_n: 32 block_k: 16 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 128 block_n: 64 block_k: 128 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 32 split_k: 1 num_stages: 3 num_warps: 4 num_ctas: 1 }
+config { block_m: 128 block_n: 256 block_k: 64 split_k: 2 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 256 block_n: 128 block_k: 32 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 256 block_n: 256 block_k: 32 split_k: 1 num_stages: 1 num_warps: 8 num_ctas: 1 }
+config { block_m: 256 block_n: 256 block_k: 32 split_k: 4 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 32 block_k: 32 split_k: 8 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 32 block_k: 32 split_k: 8 num_stages: 3 num_warps: 2 num_ctas: 1 }
+config { block_m: 128 block_n: 32 block_k: 32 split_k: 32 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 32 block_k: 32 split_k: 8 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 64 block_n: 32 block_k: 128 split_k: 2 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 256 block_n: 8 block_k: 32 split_k: 4 num_stages: 1 num_warps: 2 num_ctas: 1 }
+config { block_m: 128 block_n: 16 block_k: 128 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 32 block_n: 16 block_k: 128 split_k: 2 num_stages: 5 num_warps: 2 num_ctas: 1 }
+config { block_m: 32 block_n: 16 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 8 block_k: 128 split_k: 1 num_stages: 1 num_warps: 2 num_ctas: 1 }
+config { block_m: 32 block_n: 16 block_k: 256 split_k: 1 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 256 block_n: 8 block_k: 16 split_k: 8 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 128 block_n: 8 block_k: 16 split_k: 32 num_stages: 1 num_warps: 2 num_ctas: 1 }
+)";
+
+constexpr absl::string_view kMI350TritonConfigs = R"(
+config { block_m: 32 block_n: 32 block_k: 256 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 32 block_k: 32 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 64 block_k: 64 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 64 split_k: 4 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 256 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 16 block_n: 128 block_k: 32 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 256 block_n: 256 block_k: 32 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 256 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 256 block_k: 32 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 256 block_n: 128 block_k: 64 split_k: 1 num_stages: 2 num_warps: 8 num_ctas: 1 }
+config { block_m: 128 block_n: 128 block_k: 64 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 8 block_k: 16 split_k: 1 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 128 block_n: 32 block_k: 16 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 32 block_n: 8 block_k: 32 split_k: 1 num_stages: 1 num_warps: 2 num_ctas: 1 }
+config { block_m: 128 block_n: 32 block_k: 16 split_k: 1 num_stages: 1 num_warps: 2 num_ctas: 1 }
+config { block_m: 256 block_n: 256 block_k: 16 split_k: 2 num_stages: 4 num_warps: 8 num_ctas: 1 }
+config { block_m: 256 block_n: 128 block_k: 64 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 256 block_n: 128 block_k: 64 split_k: 4 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 256 block_n: 128 block_k: 16 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 128 split_k: 1 num_stages: 3 num_warps: 2 num_ctas: 1 }
+config { block_m: 32 block_n: 16 block_k: 128 split_k: 1 num_stages: 2 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 8 block_k: 128 split_k: 1 num_stages: 4 num_warps: 2 num_ctas: 1 }
+config { block_m: 64 block_n: 16 block_k: 64 split_k: 16 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 128 block_n: 32 block_k: 16 split_k: 16 num_stages: 3 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 32 block_k: 16 split_k: 16 num_stages: 1 num_warps: 2 num_ctas: 1 }
+config { block_m: 32 block_n: 16 block_k: 32 split_k: 8 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 64 block_n: 8 block_k: 16 split_k: 8 num_stages: 3 num_warps: 2 num_ctas: 1 }
+config { block_m: 16 block_n: 8 block_k: 256 split_k: 1 num_stages: 1 num_warps: 2 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 128 split_k: 4 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 128 split_k: 8 num_stages: 1 num_warps: 2 num_ctas: 1 }
+config { block_m: 16 block_n: 16 block_k: 128 split_k: 8 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 16 block_n: 64 block_k: 128 split_k: 1 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 32 block_n: 16 block_k: 64 split_k: 8 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 64 block_n: 8 block_k: 16 split_k: 4 num_stages: 3 num_warps: 2 num_ctas: 1 }
+config { block_m: 64 block_n: 8 block_k: 64 split_k: 16 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 64 block_n: 8 block_k: 256 split_k: 1 num_stages: 2 num_warps: 2 num_ctas: 1 }
+config { block_m: 64 block_n: 16 block_k: 256 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 128 block_n: 8 block_k: 32 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 128 block_n: 32 block_k: 64 split_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 }
+config { block_m: 128 block_n: 64 block_k: 16 split_k: 1 num_stages: 1 num_warps: 4 num_ctas: 1 }
+)";
+
 constexpr absl::string_view kAmpereTritonConfigs = R"(
 config { block_m: 16 block_n: 16 block_k: 64 split_k: 1 num_stages: 4 num_warps: 2 num_ctas: 1 }
 config { block_m: 16 block_n: 16 block_k: 128 split_k: 1 num_stages: 4 num_warps: 4 num_ctas: 1 }
@@ -274,6 +353,8 @@ LoadTritonConfigs() {
           {TritonConfigsPlatform::kDefaultCuda, kDefaultCudaTritonConfigs},
           {TritonConfigsPlatform::kDefaultRocm, kDefaultRocmTritonConfigs},
           {TritonConfigsPlatform::kHopper, kHopperTritonConfigs},
+          {TritonConfigsPlatform::kMI300, kMI300TritonConfigs},
+          {TritonConfigsPlatform::kMI350, kMI350TritonConfigs},
       };
   for (const auto& [platform, config_str] : kConfigsMap) {
     result[platform] = parse_config(config_str);
