@@ -39,7 +39,7 @@ class MxScaledDotExecutionTest : public HloPjRtGpuTestBase {
     }
   }
 
-  // Runs numerical correctness verifies that the optimized HLO uses the
+  // Runs numerical correctness and verifies that the optimized HLO uses the
   // expected custom call target.
   void RunMxCorrectnessTest(absl::string_view hlo_string,
                             const ErrorSpec& error_spec) {
