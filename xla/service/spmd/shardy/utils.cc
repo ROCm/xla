@@ -534,16 +534,13 @@ mlir::sdy::TensorShardingPerValueAttr convertToSdySharding(
       context, convertToSdyShardingAttr(hloSharding, context));
 }
 
-bool isManualComputation(CallOp callOp, bool isInlineable) {
-  return callOp.getCallee().contains(isInlineable
-                                         ? kInlineableManualComputationFuncName
-                                         : kManualComputationFuncName);
+bool isManualComputation(CallOp callOp) {
+  return isManualComputationOnName(callOp.getCallee());
 }
 
-bool isManualComputation(FuncOp funcOp, bool isInlineable) {
-  return funcOp.getName().contains(isInlineable
-                                       ? kInlineableManualComputationFuncName
-                                       : kManualComputationFuncName);
+bool isManualComputationOnName(mlir::StringRef funcName, bool isInlineable) {
+  return funcName.contains(isInlineable ? kInlineableManualComputationFuncName
+                                        : kManualComputationFuncName);
 }
 
 bool isSizeOfOne(mlir::Type type) {

@@ -1,4 +1,4 @@
-// RUN: sdy_opt %s --split-input-file -xla-sdy-round-trip-shard-map-import 2>&1 | FileCheck %s
+// RUN: sdy_opt %s --split-input-file -xla-sdy-test-flatten-call-graph -xla-sdy-round-trip-shard-map-import 2>&1 | FileCheck %s
 
 sdy.mesh @mesh_0 = <["a"=4, "b"=2]>
 sdy.mesh @mesh_1 = <["a"=2, "b"=2, "c"=2, "d"=2]>
