@@ -66,6 +66,7 @@ cc_library(
     hdrs = ["fusion_emitter.h"],
     compatible_with = get_compatible_with_portable(),
     deps = [
+        ":conv_algorithms",
         ":dot_algorithms",
         ":emitter_helpers",
         "//xla:autotuning_proto_cc",
@@ -153,6 +154,18 @@ cc_library(
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
         "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "conv_algorithms",
+    srcs = ["conv_algorithms.cc"],
+    hdrs = ["conv_algorithms.h"],
+    compatible_with = get_compatible_with_portable(),
+    deps = [
+        "//xla/hlo/ir:hlo",
+        "@com_google_absl//absl/status:statusor",
+        "@llvm-project//mlir:IR",
     ],
 )
 

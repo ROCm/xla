@@ -74,6 +74,7 @@ limitations under the License.
 #include "xla/codegen/tiling/tiled_hlo_instruction.h"
 #include "xla/codegen/tiling/tiled_hlo_schedule.h"
 #include "xla/codegen/tiling/tiling_specification.h"
+#include "xla/codegen/xtile/codegen/conv_algorithms.h"
 #include "xla/codegen/xtile/codegen/dot_algorithms.h"
 #include "xla/codegen/xtile/codegen/emitter_helpers.h"
 #include "xla/codegen/xtile/ir/transforms/passes.h"
@@ -820,7 +821,8 @@ absl::StatusOr<TensorValue> EmitConv(
   TF_ASSIGN_OR_RETURN(
       Type element_type,
       PrimitiveTypeToMlirType(b, tiled_hlo_conv.hlo()->shape().element_type()));
-  Type accumulator_type = b.getF32Type();
+  TF_ASSIGN_OR_RETURN(Type accumulator_type,
+                      xtile::GetConvAccumulatorType(b, *conv));
   TensorValue accumulator =
       CreateConst(b, accumulator_type, 0.0f, padded_tile_sizes);
 
