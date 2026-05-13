@@ -141,6 +141,14 @@ def LowerXlaToScfPass :
 
   let options = [
     Option<"warp_size", "warp_size", "int64_t", /*default=*/"32", "Warp size.">,
+    Option<"use_dpp_subgroup_widths", "use_dpp_subgroup_widths", "bool",
+           /*default=*/"false",
+           "When true (used for AMDGPU targets), gpu.shuffle ops emitted for "
+           "warp reductions use the smallest subgroup width that still "
+           "contains the shuffle distance (16 for distances in [1,15], 32 for "
+           "distance 16, otherwise warp_size). This matches AMDGPU DPP "
+           "row_shr (16-lane row) and ds_swizzle (32-lane group) semantics, "
+           "enabling exact promotion of gpu.shuffle to those intrinsics.">,
   ];
   let constructor = "CreateLowerXlaToScfPass()";
 }

@@ -564,8 +564,9 @@ void AddLoopTransformationPasses(mlir::OpPassManager& pm,
                                  const se::DeviceDescription& device,
                                  int max_unroll_factor) {
   pm.addNestedPass<FuncOp>(CreateLowerXlaSharedPass());
-  pm.addNestedPass<FuncOp>(
-      emitters::CreateLowerXlaToScfPass(device.threads_per_warp()));
+  pm.addNestedPass<FuncOp>(emitters::CreateLowerXlaToScfPass(
+      device.threads_per_warp(),
+      /*use_dpp_subgroup_widths=*/device.gpu_compute_capability().IsRocm()));
   pm.addPass(mlir::createInlinerPass({}, [&](mlir::OpPassManager& pm) {
     // CSE after inlining because inlining can introduce duplicates.
     pm.addPass(mlir::createCSEPass());

@@ -114,10 +114,31 @@ struct RewritePredicatedExtract : mlir::OpRewritePattern<PredicatedExtractOp> {
 
 struct RewriteShuffleReduce : mlir::OpRewritePattern<gpu::ShuffleReduceOp> {
   const int64_t warp_size;
+  const bool use_dpp_subgroup_widths;
 
   RewriteShuffleReduce(mlir::MLIRContext* context,
                        const LowerXlaToScfPassOptions& options)
-      : OpRewritePattern(context), warp_size(options.warp_size) {}
+      : OpRewritePattern(context),
+        warp_size(options.warp_size),
+        use_dpp_subgroup_widths(options.use_dpp_subgroup_widths) {}
+
+  // Returns the smallest power-of-two subgroup width that still contains the
+  // shuffle distance. Used on AMDGPU so the gpu.shuffle width matches the DPP
+  // (16-lane row) and ds_swizzle (32-lane group) granularity exactly, which
+  // lets PromoteShuffleToDPPPass rewrite without relying on the unused-valid
+  // workaround.
+  int64_t GetShuffleWidth(int distance) const {
+    if (!use_dpp_subgroup_widths) {
+      return warp_size;
+    }
+    if (distance < 16) {
+      return std::min<int64_t>(16, warp_size);
+    }
+    if (distance == 16) {
+      return std::min<int64_t>(32, warp_size);
+    }
+    return warp_size;
+  }
 
   mlir::LogicalResult matchAndRewrite(
       gpu::ShuffleReduceOp op, mlir::PatternRewriter& rewriter) const override {
@@ -132,8 +153,9 @@ struct RewriteShuffleReduce : mlir::OpRewritePattern<gpu::ShuffleReduceOp> {
     ValueRange values = op.getOperands();
     for (int distance = max_distance; distance > 0; distance /= 2) {
       namespace ml = mlir::LLVM;
+      const int64_t shuffle_width = GetShuffleWidth(distance);
       auto shuffle_32 = [&](Value v) {
-        return mlir::gpu::ShuffleOp::create(b, v, distance, warp_size,
+        return mlir::gpu::ShuffleOp::create(b, v, distance, shuffle_width,
                                             mlir::gpu::ShuffleMode::DOWN)
             .getShuffleResult();
       };
@@ -322,22 +344,25 @@ struct RewriteInsert : mlir::OpRewritePattern<gpu::InsertOp> {
 class LowerXlaToScfPass
     : public impl::LowerXlaToScfPassBase<LowerXlaToScfPass> {
  public:
-  explicit LowerXlaToScfPass(const LowerXlaToScfPassOptions& options)
-      : options_(options) {}
+  using Base = impl::LowerXlaToScfPassBase<LowerXlaToScfPass>;
+  using Base::Base;
 
   void runOnOperation() override {
     auto* ctx = &getContext();
+    // Rebuild an options struct from the pass's option fields so the values
+    // are consistent regardless of whether the pass was constructed via the
+    // C++ factory or via CLI option parsing.
+    LowerXlaToScfPassOptions options;
+    options.warp_size = warp_size;
+    options.use_dpp_subgroup_widths = use_dpp_subgroup_widths;
     mlir::RewritePatternSet patterns(ctx);
     patterns.add<RewritePredicatedInsert, RewritePredicatedExtract,
-                 RewriteShuffleReduce, RewriteInsert>(ctx, options_);
+                 RewriteShuffleReduce, RewriteInsert>(ctx, options);
     if (mlir::failed(
             mlir::applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
     }
   }
-
- private:
-  const LowerXlaToScfPassOptions options_;
 };
 
 class LowerXlaLoopsToScfPass
@@ -356,9 +381,11 @@ class LowerXlaLoopsToScfPass
 
 }  // namespace
 
-std::unique_ptr<::mlir::Pass> CreateLowerXlaToScfPass(const int64_t warp_size) {
+std::unique_ptr<::mlir::Pass> CreateLowerXlaToScfPass(
+    const int64_t warp_size, const bool use_dpp_subgroup_widths) {
   LowerXlaToScfPassOptions options;
   options.warp_size = warp_size;
+  options.use_dpp_subgroup_widths = use_dpp_subgroup_widths;
   return std::make_unique<LowerXlaToScfPass>(options);
 }
 

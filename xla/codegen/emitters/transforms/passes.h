@@ -44,7 +44,8 @@ std::unique_ptr<mlir::Pass> CreateLowerTensorsPass(
     const std::string& gpu_device_info = "");
 std::unique_ptr<mlir::Pass> CreateLowerTensorsPass(
     const stream_executor::DeviceDescription& device_description);
-std::unique_ptr<mlir::Pass> CreateLowerXlaToScfPass(int64_t warp_size = 32);
+std::unique_ptr<mlir::Pass> CreateLowerXlaToScfPass(
+    int64_t warp_size = 32, bool use_dpp_subgroup_widths = false);
 std::unique_ptr<mlir::Pass> CreateLowerXlaLoopsToScfPass();
 std::unique_ptr<mlir::Pass> CreateMergePointersToSameSlicePass();
 std::unique_ptr<mlir::Pass> CreatePropagateSliceIndicesPass();
