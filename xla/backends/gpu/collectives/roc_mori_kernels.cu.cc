@@ -65,11 +65,13 @@ std::tuple<application::SymmMemObjPtr, uintptr_t>
   
   std::lock_guard<std::mutex> lock(g_memObjMapMutex);
   if (MORI_UNLIKELY(device_id >= g_memObjMap.size())) {
+    fprintf(stderr, "QueryMemObjPtr: Memory wrong device id: %d\n", device_id);
     return std::make_tuple(application::SymmMemObjPtr{}, 0);
   }
   auto& devObjMap = g_memObjMap[device_id];
   auto it = devObjMap.upper_bound(ptr);
   if (MORI_UNLIKELY(it == devObjMap.begin())) {
+    fprintf(stderr, "QueryMemObjPtr: Memory object not found: ptr=%p\n", ptr);
     return std::make_tuple(application::SymmMemObjPtr{}, 0);
   }
   auto& obj = (--it)->second;
@@ -79,8 +81,6 @@ std::tuple<application::SymmMemObjPtr, uintptr_t>
     fprintf(stderr, "QueryMemObjPtr: Memory object out of range: ptr=%p size=%zx ofs=%zx obj->size=%zx\n", ptr, size, ofs, obj->size);
     return std::make_tuple(application::SymmMemObjPtr{}, 0);
   }
-  // fprintf(stderr, "QueryMemObjPtr: ptr=%p size=0x%zx ofs=0x%zx "
-  //   "obj:localPtr=%p obj->size=0x%zx\n", ptr, size, ofs, obj->localPtr, obj->size);
   return std::make_tuple(obj, ofs);
 }
 
