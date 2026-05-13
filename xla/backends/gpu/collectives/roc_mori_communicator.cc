@@ -75,7 +75,7 @@ class MoriSymmetricMemory final : public SymmetricMemory {
   }
 
   absl::StatusOr<se::DeviceAddressBase> peer_addr(
-      int peer_rank) const final { 
+    RankId rank) const final { 
         return absl::UnimplementedError("Peer address not supported"); 
   }
 

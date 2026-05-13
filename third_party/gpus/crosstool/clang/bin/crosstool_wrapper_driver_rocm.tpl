@@ -114,7 +114,8 @@ def GetHipccOptions(argv):
   args, _ = parser.parse_known_args(argv)
 
   hipcc_opts = ' -gline-tables-only ' if args.gline_tables_only else ''
-  hipcc_opts = hipcc_opts + ' --offload-arch=' + AMDGPU_TARGETS
+  for target in AMDGPU_TARGETS.split(','):
+    hipcc_opts += ' --offload-arch=' + target.strip()
 
   return hipcc_opts
 
