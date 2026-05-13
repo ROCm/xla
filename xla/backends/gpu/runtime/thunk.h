@@ -291,8 +291,7 @@ class Thunk {
         CollectiveCliques* collective_cliques,
         CollectiveMemory* collective_memory,
         std::vector<se::Stream*> additional_compute_streams = {},
-        ExecutionScopedState* execution_scoped_state = nullptr,
-        absl::string_view module_name = "");
+        ExecutionScopedState* execution_scoped_state = nullptr);
 
     // Constructs execute parameters from an existing parameters but with
     // different buffer allocations.
@@ -338,9 +337,6 @@ class Thunk {
     // Execution scoped state shared between prepare, initialize and execute.
     ExecutionScopedState* execution_scoped_state = nullptr;
 
-    // Module name for the executable..
-    absl::string_view module_name = "";
-
     bool mock_collectives = false;
 
     int64_t execution_id = 0;
@@ -360,7 +356,6 @@ class Thunk {
                   const ffi::ExecutionContext* ffi_execution_context,
                   std::vector<se::Stream*> additional_compute_streams = {},
                   ExecutionScopedState* execution_scoped_state = nullptr,
-                  absl::string_view module_name = "",
                   bool mock_collectives = false, int64_t execution_id = 0);
   };
 
