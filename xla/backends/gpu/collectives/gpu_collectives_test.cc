@@ -33,12 +33,14 @@ limitations under the License.
 #include "xla/backends/gpu/collectives/gpu_communicator.h"
 #include "xla/core/collectives/clique_id.h"
 #include "xla/core/collectives/collectives.h"
+#include "xla/core/collectives/collectives_registry.h"
 #include "xla/core/collectives/communicator.h"
 #include "xla/core/collectives/rank_id.h"
 #include "xla/core/collectives/reduction_kind.h"
 #include "xla/core/collectives/symmetric_memory.h"
 #include "xla/future.h"
 #include "xla/runtime/device_id.h"
+#include "xla/service/platform_util.h"
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/memory_allocation.h"
@@ -60,7 +62,7 @@ namespace {
 static constexpr GlobalDeviceId kD0(0);
 static constexpr GlobalDeviceId kD1(1);
 static constexpr GlobalDeviceId kD2(2);
-static constexpr GlobalDeviceId kD3(2);
+static constexpr GlobalDeviceId kD3(3);
 
 static absl::StatusOr<std::vector<se::StreamExecutor*>> CreateExecutors(
     se::Platform* platform, size_t n) {
@@ -85,10 +87,17 @@ static std::vector<std::unique_ptr<GpuCommunicator>> DowncastComms(
 static absl::StatusOr<std::vector<std::unique_ptr<GpuCommunicator>>>
 CreateCommunicators(absl::Span<se::StreamExecutor* const> executors,
                     std::vector<GlobalDeviceId> device_ids,
-                    bool blocking = true, size_t num_ids = 1) {
+                    bool blocking = true, size_t num_ids = 1,
+                    absl::string_view collectives_backend = "") {
   CHECK_EQ(executors.size(), device_ids.size());
 
-  GpuCollectives* collectives = GpuCollectives::Default("GPU");
+  TF_ASSIGN_OR_RETURN(auto *raw_coll, collectives_backend.empty() ? 
+        CollectivesRegistry::Default("GPU") : 
+        CollectivesRegistry::Get("GPU", collectives_backend));
+  auto* collectives = tsl::down_cast<GpuCollectives*>(raw_coll);
+  if (collectives == nullptr) {
+    return absl::InternalError("Failed to get GPU collectives");
+  }
 
   std::vector<GpuCollectives::Device> devices;
   devices.reserve(executors.size());
@@ -552,6 +561,33 @@ TEST(GpuCollectivesTest, PutAndWaitSignal) {
   EXPECT_THAT(h_recv0, testing::ElementsAre(5.0f, 6.0f, 7.0f, 8.0f));
   EXPECT_THAT(h_recv1, testing::ElementsAre(1.0f, 2.0f, 3.0f, 4.0f));
 }
+
+// Test that GPU communicators can be safely aborted and after they are aborted
+// they stay in valid state and reject all API calls.
+class GpuCollectivesSpeedTest : public ::testing::Test {
+public:
+  GpuCollectivesSpeedTest() {  }
+  
+  static absl::StatusOr<std::vector<se::StreamExecutor*>> SetupExecutors(size_t n) {
+    TF_ASSIGN_OR_RETURN(std::string platform_name,
+      PlatformUtil::CanonicalPlatformName("gpu"));
+    TF_ASSIGN_OR_RETURN(se::Platform * platform,
+      se::PlatformManager::PlatformWithName(platform_name));
+    if (platform->VisibleDeviceCount() < n) {
+      return absl::InternalError(
+          absl::StrFormat("Test requires at least %d GPUs", n));
+    }
+    return CreateExecutors(platform, n);
+  }
+};
+
+TEST_F(GpuCollectivesSpeedTest, TestAllGather) {
+  ASSERT_OK_AND_ASSIGN(auto executors, SetupExecutors(4));
+  ASSERT_OK_AND_ASSIGN(auto comms, 
+          CreateCommunicators(executors, {kD0, kD1, kD2, kD3}, true, 1, "mori"));
+  VLOG(0) << "comms size: " << comms.size();
+}
+
 
 }  // namespace
 }  // namespace xla::gpu

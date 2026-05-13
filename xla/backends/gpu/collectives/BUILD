@@ -287,16 +287,13 @@ xla_cc_test(
     name = "gpu_collectives_test",
     srcs = ["gpu_collectives_test.cc"],
     tags = [
-        "cuda-only",
         "gpu",
-        "requires-gpu-nvidia:2",
     ],
     deps = [
         ":cancellation_token",
         ":gpu_clique_key",
-        ":gpu_collectives",
+        ":gpu_collectives_plugin",
         ":gpu_communicator",
-        ":nccl_or_rccl_collectives",
         "//xla:future",
         "//xla:xla_data_proto_cc",
         "//xla/core/collectives",
@@ -314,8 +311,6 @@ xla_cc_test(
         "//xla/stream_executor:platform_manager",
         "//xla/stream_executor:stream",
         "//xla/stream_executor:stream_executor_h",
-        "//xla/stream_executor/cuda:cuda_compute_capability",
-        "//xla/stream_executor/cuda:cuda_platform",
         "//xla/tsl/concurrency:executor",
         "//xla/tsl/platform:env",
         "//xla/tsl/platform:statusor",
@@ -326,7 +321,12 @@ xla_cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",
-    ],
+    ] + if_cuda_is_configured([
+        "//xla/stream_executor/cuda:cuda_compute_capability",
+        "//xla/stream_executor:cuda_platform",
+    ]) + if_rocm_is_configured([
+        "//xla/stream_executor:rocm_platform",
+    ]),
 )
 
 cc_library(
