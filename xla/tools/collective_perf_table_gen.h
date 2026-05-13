@@ -74,6 +74,10 @@ class CollectivePerfTableGen {
         CollectivePermuteCostModelType::kIntraPartitionTwoWayHasNonMutual,
     };
     std::vector<std::string> replica_groups_list;
+    // Data types to test. Defaults to F32 only.
+    std::vector<PrimitiveType> data_types = {F32};
+    // Whether to test 2D shapes for all-gather. Defaults to false (1D only).
+    bool test_2d_shapes = false;
 
     // Execution opts.
     bool dry_run = false;
