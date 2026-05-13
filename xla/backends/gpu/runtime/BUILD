@@ -3896,6 +3896,8 @@ cc_library(
         "//xla:util",
         "//xla/ffi:ffi_api",
         "//xla/hlo/ir:hlo",
+        "//xla/runtime:buffer_use",
+        "//xla/service:buffer_assignment",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:semantic_version",
         "//xla/tsl/platform:errors",

@@ -49,6 +49,8 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/while_thunk.h"
 #include "xla/ffi/ffi_api.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/runtime/buffer_use.h"
+#include "xla/service/buffer_assignment.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/semantic_version.h"
 #include "xla/tsl/platform/errors.h"
@@ -477,6 +479,71 @@ std::string CommandBufferConversionPass::CommandBufferConfig::ToString() const {
   return absl::StrCat("enabled_commands: [", cmd_names, "]");
 }
 
+// Configuration for the live-out alias-split logic in
+// CommandBufferConversionPass::Run().
+//
+//   XLA_GPU_CMDBUF_SPLIT_ON_LIVE_OUT_ALIAS = "1" (default) | "0"
+//
+// When enabled, the conversion pass tracks the set of `maybe_live_out`
+// BufferAllocation::Index values that the current command-buffer chunk
+// has already written.  Before adding a new thunk to the chunk, if any
+// of the thunk's write targets would re-write a `maybe_live_out` index
+// already in the set, the current chunk is flushed first and the new
+// thunk starts a fresh chunk.  Each command buffer then writes any
+// given `maybe_live_out` allocation by at most one thunk, preserving
+// HLO last-writer-wins semantics for output allocations across
+// command-buffer boundaries.
+//
+// Background: HLO buffer assignment may alias multiple writers to the
+// same allocation when that allocation is `maybe_live_out`, because
+// under the serial HLO schedule only the last writer's value is
+// observable.  When all such writers are captured into a single
+// command buffer, the buffer holds the aliased virtual address for
+// the entire graph duration, which can let consumers observe
+// intermediate alias content instead of the HLO-defined last-writer
+// value.  Splitting the chunk inserts a graph boundary between
+// writers so each output allocation has at most one writer per graph,
+// restoring the expected publication semantics through the standard
+// inter-graph stream barrier.
+class LiveOutAliasSplit {
+ public:
+  static const LiveOutAliasSplit& Get() {
+    static LiveOutAliasSplit* f = new LiveOutAliasSplit();
+    return *f;
+  }
+  bool enabled() const { return enabled_; }
+
+ private:
+  LiveOutAliasSplit() {
+    const char* e = std::getenv("XLA_GPU_CMDBUF_SPLIT_ON_LIVE_OUT_ALIAS");
+    if (e == nullptr || e[0] == '\0') {
+      // Default: enabled.  Set the env to "0" to disable.
+      enabled_ = true;
+      return;
+    }
+    enabled_ = (e[0] != '0');
+  }
+  bool enabled_ = true;
+};
+
+// Returns the set of `maybe_live_out` BufferAllocation::Index values
+// that `thunk` writes to.  Returns an empty set when none of the
+// thunk's writes target a `maybe_live_out` allocation.  Used by the
+// live-out alias-split logic in Run() to decide whether two thunks in
+// the same command-buffer chunk would rewrite the same allocation.
+absl::flat_hash_set<BufferAllocation::Index> CollectLiveOutWriteIndices(
+    const Thunk& thunk) {
+  absl::flat_hash_set<BufferAllocation::Index> out;
+  for (const BufferUse& use : thunk.buffer_uses()) {
+    if (use.access() == BufferUse::MemoryAccess::kRead) continue;
+    const BufferAllocation* alloc = use.slice().allocation();
+    if (alloc == nullptr) continue;
+    if (!alloc->maybe_live_out()) continue;
+    out.insert(use.slice().index());
+  }
+  return out;
+}
+
 absl::StatusOr<bool> CommandBufferConversionPass::Run(
     SequentialThunk* root_thunk, const DebugOptions& debug_options,
     const HloModule* absl_nullable hlo_module,
@@ -494,15 +561,59 @@ absl::StatusOr<bool> CommandBufferConversionPass::Run(
           debug_options.xla_gpu_command_buffer_scheduling_mode()));
 
   bool changed = false;
+  const bool live_out_split_enabled = LiveOutAliasSplit::Get().enabled();
 
   std::vector<std::unique_ptr<Thunk>> current_command_buffer_thunks;
+  // Tracks the `BufferAllocation::Index` of every `maybe_live_out`
+  // allocation written by some thunk already added to
+  // `current_command_buffer_thunks`.  Reset whenever a chunk is
+  // flushed.  See LiveOutAliasSplit for the rationale.
+  absl::flat_hash_set<BufferAllocation::Index> chunk_live_out_writes;
   std::vector<std::unique_ptr<Thunk>> new_thunks;
 
   auto flush_command_buffer = [&]() -> absl::Status {
+    chunk_live_out_writes.clear();
     return FlushCommandBuffer(synchronization_mode, debug_options,
                               current_command_buffer_thunks, new_thunks,
                               changed);
   };
+
+  // Returns true iff adding `incoming` (one thunk or a whole async
+  // region) to the current chunk would cause a `maybe_live_out`
+  // allocation to be written by both an earlier thunk in the chunk
+  // and one of these incoming thunks.  When that would happen,
+  // callers must flush the current chunk first so the new thunks land
+  // in a fresh chunk; the publication of the last writer's value is
+  // then provided by the inter-graph stream barrier rather than by
+  // intra-graph ordering of aliased writes.
+  auto would_alias_live_out =
+      [&](absl::Span<const std::unique_ptr<Thunk>> incoming) {
+        if (!live_out_split_enabled) return false;
+        for (const auto& th : incoming) {
+          auto idxs = CollectLiveOutWriteIndices(*th);
+          for (BufferAllocation::Index i : idxs) {
+            if (chunk_live_out_writes.contains(i)) {
+              VLOG(2) << "Splitting command buffer at thunk '"
+                      << th->thunk_info().profile_annotation
+                      << "': would re-write maybe_live_out allocation #"
+                      << i << " already written earlier in this chunk";
+              return true;
+            }
+          }
+        }
+        return false;
+      };
+
+  auto record_chunk_writes =
+      [&](absl::Span<const std::unique_ptr<Thunk>> incoming) {
+        if (!live_out_split_enabled) return;
+        for (const auto& th : incoming) {
+          auto idxs = CollectLiveOutWriteIndices(*th);
+          for (BufferAllocation::Index i : idxs) {
+            chunk_live_out_writes.insert(i);
+          }
+        }
+      };
 
   auto& original_thunks = root_thunk->thunks();
 
@@ -517,16 +628,31 @@ absl::StatusOr<bool> CommandBufferConversionPass::Run(
           absl::MakeSpan(original_thunks).subspan(i), config);
 
       if (!region.empty()) {
+        // Live-out alias-split applied to async regions atomically:
+        // either the whole region triggers a split, or none of it does.
+        // Async start/done pairs must remain in the same command buffer.
+        if (would_alias_live_out(region)) {
+          TF_RETURN_IF_ERROR(flush_command_buffer());
+        }
         // If a valid region is found, add the whole region to the current
         // sequence and continue processing.
         i += region.size() - 1;
+        record_chunk_writes(region);
         absl::c_move(region, std::back_inserter(current_command_buffer_thunks));
         continue;
       }
     } else if (IsConvertible(*thunk.get(), config) && !thunk->IsAsyncDone()) {
+      // If this thunk would re-write a `maybe_live_out` allocation
+      // already written earlier in the current chunk, close the chunk
+      // first.  See LiveOutAliasSplit for the rationale.
+      auto incoming_view = absl::MakeConstSpan(&thunk, 1);
+      if (would_alias_live_out(incoming_view)) {
+        TF_RETURN_IF_ERROR(flush_command_buffer());
+      }
       // Check if thunk is convertible and not an async done: async done thunks
       // can be only added to the current_command_buffer_thunks as part of a
       // valid async regions.
+      record_chunk_writes(incoming_view);
       current_command_buffer_thunks.push_back(std::move(thunk));
       continue;
     }
