@@ -14,8 +14,10 @@ limitations under the License.
 ==============================================================================*/
 #include "xla/codegen/xtile/codegen/fusion_emitter.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -865,53 +867,88 @@ absl::StatusOr<TensorValue> EmitConv(
 
     auto acc_type = mlir::cast<mlir::RankedTensorType>(acc.getType());
 
-    // Broadcasts `tile` (assumed to have the same rank as acc) up to acc's
-    // shape. The Triton lowering of stablehlo.broadcast_in_dim requires that
-    // dims listed in `broadcast_dims` have matching sizes in source and
-    // target; size-1 dims that need to be expanded must be dropped from the
-    // source first (via reshape), so they are not in `broadcast_dims` and
-    // are added back as new dims by the broadcast.
-    auto broadcast_to_acc =
-        [&](TensorValue tile) -> absl::StatusOr<TensorValue> {
+    // Broadcast a conv operand tile to the accumulator shape. For convolutions the kernel 
+    // (and potentially the input) can have a different dimension order, so we compute the 
+    // mapping from ConvolutionDimensionNumbers and pass it here.
+    auto broadcast_operand_to_acc =
+        [&](TensorValue tile,
+            ArrayRef<int64_t> operand_dim_to_acc_dim)
+        -> absl::StatusOr<TensorValue> {
       auto tile_type = mlir::cast<mlir::RankedTensorType>(tile.getType());
       if (tile_type.getShape() == acc_type.getShape()) {
         return tile;
       }
       ArrayRef<int64_t> tile_shape = tile_type.getShape();
       ArrayRef<int64_t> acc_shape = acc_type.getShape();
-      if (tile_shape.size() != acc_shape.size()) {
-        return absl::InvalidArgumentError(absl::StrCat(
-            "EmitConv: cannot broadcast operand tile to accumulator: rank "
-            "mismatch (tile rank ",
-            tile_shape.size(), ", accumulator rank ", acc_shape.size(), ")."));
-      }
+
       SmallVector<int64_t> kept_shape;
       SmallVector<int64_t> broadcast_dims;
-      for (int64_t i = 0; i < tile_shape.size(); ++i) {
-        if (tile_shape[i] == acc_shape[i]) {
-          kept_shape.push_back(tile_shape[i]);
-          broadcast_dims.push_back(i);
-        } else if (tile_shape[i] != 1) {
+      for (int64_t od = 0; od < static_cast<int64_t>(tile_shape.size()); ++od) {
+        int64_t acc_dim = operand_dim_to_acc_dim[od];
+        if (acc_dim == -1) {
+          // Contracting dim: must be size 1.
+          if (tile_shape[od] != 1) {
+            return absl::InvalidArgumentError(absl::StrCat(
+                "EmitConv: contracting operand dim ", od, " has size ",
+                tile_shape[od], " (expected 1)."));
+          }
+        } else if (tile_shape[od] == acc_shape[acc_dim]) {
+          kept_shape.push_back(tile_shape[od]);
+          broadcast_dims.push_back(acc_dim);
+        } else if (tile_shape[od] != 1) {
           return absl::InvalidArgumentError(absl::StrCat(
-              "EmitConv: cannot broadcast operand tile dim ", i, " of size ",
-              tile_shape[i], " to accumulator dim of size ", acc_shape[i],
-              " (only size-1 dims may be broadcast)."));
+              "EmitConv: operand dim ", od, " (size ", tile_shape[od],
+              ") does not match acc dim ", acc_dim, " (size ",
+              acc_shape[acc_dim], ") and is not 1."));
         }
+        // size-1 non-contracting dims are broadcast (dropped from kept_shape).
       }
+
+      // BroadcastInDims requires broadcast_dims to be sorted.
+      SmallVector<int64_t> order(broadcast_dims.size());
+      std::iota(order.begin(), order.end(), 0);
+      std::sort(order.begin(), order.end(), [&](int64_t a, int64_t b) {
+        return broadcast_dims[a] < broadcast_dims[b];
+      });
+      SmallVector<int64_t> sorted_kept;
+      SmallVector<int64_t> sorted_dims;
+      for (int64_t idx : order) {
+        sorted_kept.push_back(kept_shape[idx]);
+        sorted_dims.push_back(broadcast_dims[idx]);
+      }
+
       TensorValue reshaped = tile;
-      if (kept_shape.size() != tile_shape.size()) {
+      if (sorted_kept.size() != tile_shape.size()) {
         auto reshape_type = mlir::RankedTensorType::get(
-            kept_shape, tile_type.getElementType());
+            sorted_kept, tile_type.getElementType());
         reshaped = mlir::cast<TensorValue>(
             stablehlo::ReshapeOp::create(b, reshape_type, tile).getResult());
       }
-      return xtile::BroadcastInDims(b, reshaped, acc_shape, broadcast_dims);
+      return xtile::BroadcastInDims(b, reshaped, acc_shape, sorted_dims);
     };
 
+    const auto& dnums = conv->convolution_dimension_numbers();
+
+    SmallVector<int64_t> input_dim_to_acc_dim(output_rank, -1);
+    input_dim_to_acc_dim[dnums.input_batch_dimension()] =
+        dnums.output_batch_dimension();
+    for (int64_t i = 0; i < spatial_rank; ++i) {
+      input_dim_to_acc_dim[dnums.input_spatial_dimensions(i)] =
+          dnums.output_spatial_dimensions(i);
+    }
+    
+    SmallVector<int64_t> kernel_dim_to_acc_dim(output_rank, -1);
+    kernel_dim_to_acc_dim[dnums.kernel_output_feature_dimension()] =
+        dnums.output_feature_dimension();
+    for (int64_t i = 0; i < spatial_rank; ++i) {
+      kernel_dim_to_acc_dim[dnums.kernel_spatial_dimensions(i)] =
+          dnums.output_spatial_dimensions(i);
+    }
+
     TF_ASSIGN_OR_RETURN(TensorValue input_broadcast,
-                        broadcast_to_acc(input_tile));
+                        broadcast_operand_to_acc(input_tile, input_dim_to_acc_dim));
     TF_ASSIGN_OR_RETURN(TensorValue kernel_broadcast,
-                        broadcast_to_acc(kernel_tile));
+                        broadcast_operand_to_acc(kernel_tile, kernel_dim_to_acc_dim));
 
     TensorValue input_cast = input_broadcast;
     if (getElementTypeOrSelf(input_broadcast.getType()) != accumulator_type) {
