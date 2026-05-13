@@ -21,10 +21,13 @@ limitations under the License.
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/Visitors.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -50,6 +53,58 @@ std::optional<int64_t> getConstantIntValue(mlir::Value v) {
   return std::nullopt;
 }
 
+// Returns true if `op` is a transcendental or special-function op that is
+// lowered to the VALU special-function unit on AMDGPU (v_exp_f32, v_log_f32,
+// v_sqrt_f32, v_rcp_f32, etc.).
+bool IsSpecialFunctionOp(mlir::Operation* op) {
+  if (mlir::isa<
+          mlir::math::ExpOp,
+          mlir::math::Exp2Op,
+          mlir::math::ExpM1Op,
+          mlir::math::LogOp,
+          mlir::math::Log2Op,
+          mlir::math::Log10Op,
+          mlir::math::Log1pOp,
+          mlir::math::SinOp,
+          mlir::math::CosOp,
+          mlir::math::TanOp,
+          mlir::math::TanhOp,
+          mlir::math::AtanOp,
+          mlir::math::Atan2Op,
+          mlir::math::SqrtOp,
+          mlir::math::RsqrtOp,
+          mlir::math::ErfOp,
+          mlir::math::PowFOp,
+          mlir::math::CbrtOp>(op)) {
+    return true;
+  }
+  // arith.divf on floats lowers to v_rcp_f32 + v_mul_f32, also consuming the
+  // special-function VALU unit.
+  if (auto div = mlir::dyn_cast<mlir::arith::DivFOp>(op)) {
+    return mlir::isa<mlir::FloatType>(div.getType());
+  }
+  return false;
+}
+
+// Returns true if `func` contains any op handled by IsSpecialFunctionOp.
+//
+// When such ops are present the fusion is VALU-bound: the ~20-cycle LDS
+// permute latency of ds_bpermute is hidden behind useful VALU work, so
+// replacing it with DPP (which uses the same VALU issue port) increases
+// VALU pressure and makes the kernel slower despite fewer total instructions.
+bool FuncHasSpecialFunctionOps(mlir::FunctionOpInterface func) {
+  bool found = false;
+  func.walk([&](mlir::Operation* op) {
+    if (found) return mlir::WalkResult::interrupt();
+    if (IsSpecialFunctionOp(op)) {
+      found = true;
+      return mlir::WalkResult::interrupt();
+    }
+    return mlir::WalkResult::advance();
+  });
+  return found;
+}
+
 // Promotes gpu.shuffle down ops with constant offsets in [1, 15] to
 // amdgpu.dpp row_shr ops. DPP row_shr shifts data right within 16-lane rows,
 // which is correct for the reduction use case where only lane 0's result
@@ -57,6 +112,10 @@ std::optional<int64_t> getConstantIntValue(mlir::Value v) {
 //
 // The pattern only fires when the validity predicate (second result) has no
 // users, which is always the case for XLA's shuffle-reduce lowering.
+//
+// The pattern is skipped when the enclosing function contains special-function
+// ops (math.exp, math.log, etc.) because those fusions are VALU-bound and
+// DPP would increase VALU pressure rather than save LDS bandwidth.
 struct PromoteShuffleDownToDPP
     : public mlir::OpRewritePattern<mlir::gpu::ShuffleOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -91,6 +150,16 @@ struct PromoteShuffleDownToDPP
                                          "width must be a constant integer");
     }
 
+    // Skip DPP promotion when the enclosing function is VALU-bound due to
+    // special-function ops; leave the shuffle as ds_bpermute in that case.
+    auto func = op->getParentOfType<mlir::FunctionOpInterface>();
+    if (func && FuncHasSpecialFunctionOps(func)) {
+      return rewriter.notifyMatchFailure(
+          op,
+          "skipping DPP promotion: enclosing function contains special-function"
+          " ops (exp/log/sqrt/...); VALU is likely the bottleneck");
+    }
+
     mlir::Location loc = op.getLoc();
     mlir::Type result_type = op.getShuffleResult().getType();
 
@@ -121,6 +190,8 @@ struct PromoteShuffleDownToDPP
 //
 // ds_swizzle is ~4x faster than ds_bpermute on GCN and ~2x on RDNA.
 // Offset 32 cannot use swizzle because it crosses the 32-lane group boundary.
+//
+// Same special-function-ops guard as PromoteShuffleDownToDPP.
 struct PromoteShuffleDownToSwizzle
     : public mlir::OpRewritePattern<mlir::gpu::ShuffleOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -142,6 +213,16 @@ struct PromoteShuffleDownToSwizzle
     if (!offset || *offset != 16) {
       return rewriter.notifyMatchFailure(
           op, "only offset 16 is supported for swizzle promotion");
+    }
+
+    // Same guard: skip when the function has special-function ops.
+    auto func = op->getParentOfType<mlir::FunctionOpInterface>();
+    if (func && FuncHasSpecialFunctionOps(func)) {
+      return rewriter.notifyMatchFailure(
+          op,
+          "skipping swizzle promotion: enclosing function contains "
+          "special-function ops (exp/log/sqrt/...); VALU is likely the "
+          "bottleneck");
     }
 
     mlir::Location loc = op.getLoc();
