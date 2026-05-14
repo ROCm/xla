@@ -178,6 +178,41 @@ LocalDeviceState::~LocalDeviceState() {
   compute_events_.clear();
 }
 
+absl::Status LocalDeviceState::Reset() {
+  // Step 1: Drain all pending GPU work on all streams.
+  // After a normal execution this completes quickly (streams already idle).
+  TF_RETURN_IF_ERROR(SynchronizeAllActivity());
+
+  // Step 2: Reset XLA-level sequencing bookkeeping.
+  // All events in compute_events_ have already fired (GPU work completed
+  // above), so clearing the deque is safe. Resetting the counters to 0 is
+  // required so the new client's operations start from a consistent baseline.
+  {
+    absl::MutexLock lock(mu_);
+    compute_events_.clear();
+    next_compute_stream_sync_point_.store(0);
+    base_compute_event_sequence_id_ = 0;
+  }
+
+  // Step 3: Clear the callback stream map.
+  // Callback streams are re-created on demand when ThenExecuteCallback is
+  // called.
+  if (callback_stream_map_.has_value()) {
+    absl::MutexLock lock(callback_stream_map_mu_);
+    callback_stream_map_->clear();
+  }
+
+  // Step 4: Drain the usage stream pool.
+  // Pooled streams have been synchronized above; clear the pool so the new
+  // client starts from a known empty state.
+  {
+    absl::MutexLock lock(stream_pool_mu_);
+    while (!usage_stream_pool_.empty()) usage_stream_pool_.pop();
+  }
+
+  return absl::OkStatus();
+}
+
 absl::Status LocalDeviceState::SynchronizeAllActivity() {
   absl::Status status;
   // TODO(phawkins): in theory the call to SynchronizeAllActivity below should

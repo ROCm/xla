@@ -239,6 +239,19 @@ class LocalDeviceState {
       size_t sync_point, AsyncWorkRunner* async_work_runner,
       bool nullptr_if_past = false);
 
+  // Resets this LocalDeviceState for reuse by a new PjRtClient without paying
+  // the Stream create overhead again. Specifically:
+  //   1. Calls SynchronizeAllActivity() to drain all pending GPU work.
+  //   2. Clears XLA bookkeeping (compute_events_, sync point counters).
+  //   3. Clears the callback stream map (streams are re-created on demand).
+  //   4. Drains the usage stream pool.
+  //
+  // Returns OK if streams are clean and the state can be reused.
+  // Returns a non-OK status if SynchronizeAllActivity() fails (e.g., a GPU
+  // hardware fault left the streams in an error state) — in that case the
+  // caller should destroy this object and create a new LocalDeviceState.
+  absl::Status Reset();
+
  private:
   absl::Status SynchronizeAllActivity();
 
