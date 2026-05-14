@@ -535,8 +535,9 @@ absl::StatusOr<std::unique_ptr<Kernel>> SyclExecutor::LoadKernel(
         std::get<KernelArgsPackingSpec>(spec.kernel_args_packing());
     sycl_kernel->set_args_packing(
         [packing_spec](const Kernel& kernel, const KernelArgs& args) {
-          const auto& mem_args = Cast<KernelArgsDeviceAddressArray>(&args);
-          return packing_spec.BuildArguments(mem_args->device_addr_args(),
+          const PackableKernelArgs& mem_args =
+              dynamic_cast<const PackableKernelArgs&>(args);
+          return packing_spec.BuildArguments(mem_args.packed_args(),
                                              args.number_of_shared_bytes());
         });
   }

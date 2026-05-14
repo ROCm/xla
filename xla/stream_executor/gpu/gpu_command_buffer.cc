@@ -142,9 +142,6 @@ GpuCommandBuffer::CreateLaunchWithPackedArgs(
     absl::Span<const Command* const> dependencies, StreamPriority priority) {
   TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
 
-  CHECK_EQ(kernel.Arity() + (packed_args.number_of_shared_bytes() > 0),
-           packed_args.number_of_arguments());
-
   // Adds a new kernel node to the graph under construction.
   TF_ASSIGN_OR_RETURN(
       GraphNodeHandle handle,

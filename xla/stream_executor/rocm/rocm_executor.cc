@@ -724,14 +724,13 @@ absl::StatusOr<std::unique_ptr<Kernel>> RocmExecutor::LoadKernel(
   } else {
     const auto& packing_spec =
         std::get<KernelArgsPackingSpec>(spec.kernel_args_packing());
-    rocm_kernel->set_args_packing([packing_spec](const Kernel& kernel,
-                                                 const KernelArgs& args) {
-      const auto& mem_args =
-          stream_executor::Cast<stream_executor::KernelArgsDeviceAddressArray>(
-              &args);
-      return packing_spec.BuildArguments(mem_args->device_addr_args(),
-                                         args.number_of_shared_bytes());
-    });
+    rocm_kernel->set_args_packing(
+        [packing_spec](const Kernel& kernel, const KernelArgs& args) {
+          const PackableKernelArgs& mem_args =
+              dynamic_cast<const PackableKernelArgs&>(args);
+          return packing_spec.BuildArguments(mem_args.packed_args(),
+                                             args.number_of_shared_bytes());
+        });
   }
   return std::move(rocm_kernel);
 }

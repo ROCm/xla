@@ -30,6 +30,7 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "rocm/include/hip/driver_types.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "xla/stream_executor/bit_pattern.h"
@@ -268,8 +269,16 @@ absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateKernelNode(
           << " bdz: " << threads.z << "; shmem: " << shared_mem_bytes
           << "; deps: " << dependencies.size();
 
-  hipKernelNodeParams params{};
+  std::unique_ptr<KernelArgsPackedArrayBase> repacked;
+  const KernelArgsPackedArrayBase* packed_args;
+  if (kernel.args_packing()) {
+    ASSIGN_OR_RETURN(repacked, kernel.args_packing()(kernel, args));
+    packed_args = repacked.get();
+  } else {
+    packed_args = &args;
+  }
 
+  hipKernelNodeParams params{};
   hipFunction_t function =
       static_cast<const RocmKernel&>(kernel).gpu_function();
   params.func = function;
@@ -280,7 +289,8 @@ absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateKernelNode(
   params.blockDim.y = threads.y;
   params.blockDim.z = threads.z;
   params.sharedMemBytes = shared_mem_bytes;
-  params.kernelParams = const_cast<void**>(args.argument_addresses().data());
+  params.kernelParams =
+      const_cast<void**>(packed_args->argument_addresses().data());
   params.extra = nullptr;
 
   if (shared_mem_bytes != 0) {
@@ -314,8 +324,16 @@ absl::Status RocmCommandBuffer::UpdateKernelNode(
           << " bdx: " << threads.x << " bdy: " << threads.y
           << " bdz: " << threads.z << "; shmem: " << shared_mem_bytes;
 
-  hipKernelNodeParams params{};
+  std::unique_ptr<KernelArgsPackedArrayBase> repacked;
+  const KernelArgsPackedArrayBase* packed_args;
+  if (kernel.args_packing()) {
+    ASSIGN_OR_RETURN(repacked, kernel.args_packing()(kernel, args));
+    packed_args = repacked.get();
+  } else {
+    packed_args = &args;
+  }
 
+  hipKernelNodeParams params{};
   hipFunction_t function =
       static_cast<const RocmKernel&>(kernel).gpu_function();
   params.func = function;
@@ -326,7 +344,8 @@ absl::Status RocmCommandBuffer::UpdateKernelNode(
   params.blockDim.y = threads.y;
   params.blockDim.z = threads.z;
   params.sharedMemBytes = shared_mem_bytes;
-  params.kernelParams = const_cast<void**>(args.argument_addresses().data());
+  params.kernelParams =
+      const_cast<void**>(packed_args->argument_addresses().data());
   params.extra = nullptr;
 
   if (shared_mem_bytes != 0) {
