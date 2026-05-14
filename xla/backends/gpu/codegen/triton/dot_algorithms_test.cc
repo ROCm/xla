@@ -1588,8 +1588,9 @@ TEST_P(TritonAndBlasSupportForDifferentTensorSizes,
     case PC::ALG_DOT_BF16_BF16_F32_X6:
     case PC::ALG_DOT_BF16_BF16_F32_X9:
       if (GpuComputeComp().IsRocm()) {
-        if (result_or_status.status().ok()) {
-          // X6 and X9 algorithms on ROCm marked as not supported
+        if (result_or_status.status().ok() &&
+            !GpuComputeComp().rocm_compute_capability()->gfx9_mi350()) {
+          // X6 and X9 algorithms on ROCm pre-MI350 marked as not supported
           // because they often require too much shared memory.
           EXPECT_FALSE(result_or_status.value())
               << "algorithms not supported on ROCm";
