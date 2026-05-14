@@ -16,8 +16,10 @@
 import io
 import json
 import pathlib
+import platform
 import tempfile
 import textwrap
+import unittest
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -25,6 +27,11 @@ from absl.testing import parameterized
 from build_tools.ci import clang_tidy_diff
 
 
+ # clang_tidy_diff_test is broken in github for ARM (b/513009394)
+@unittest.skipIf(
+    platform.machine().lower() in ["arm64", "aarch64"],
+    "Temporarily disabled on ARM due to CI failures"
+)
 class TestClangTidyDiff(parameterized.TestCase):
 
   @parameterized.parameters(
