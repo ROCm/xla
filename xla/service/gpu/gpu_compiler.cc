@@ -2262,6 +2262,14 @@ bool RequiresCollectiveInput(const HloUse& use, const DebugOptions& opts) {
   if (is_nccl_buffers_used && IsCollective(user)) {
     return true;
   }
+  // Handle one-shot zero-copy RaggedAllToAll
+  if (IsOneShotZeroCopyRaggedAllToAllEnabled(opts)) {
+    // User is RA2A or AsyncStart(RA2A). Used by operand 1 (output).
+    if ((IsRaggedAllToAllOrAsyncStartRaggedAllToAll(user)) &&
+        use.operand_number == 1) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -2271,8 +2279,16 @@ bool RequiresCollectiveOutput(const HloInstruction* def,
       opts.xla_gpu_enable_nccl_user_buffers() ||
       opts.xla_gpu_experimental_enable_nccl_symmetric_buffers();
 
+  // Handle standard non-fusion/fusion collectives under NCCL user buffers
   if (is_nccl_buffers_used && IsCollective(def)) {
     return true;
+  }
+  // Handle one-shot zero-copy RaggedAllToAll
+  if (IsOneShotZeroCopyRaggedAllToAllEnabled(opts)) {
+    // Defining Instruction is RA2A or AsyncDone(RA2A)
+    if (IsRaggedAllToAllOrAsyncDoneRaggedAllToAll(def)) {
+      return true;
+    }
   }
   return false;
 }

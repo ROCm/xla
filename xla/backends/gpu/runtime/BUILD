@@ -2267,6 +2267,8 @@ cc_library(
     deps = [
         ":collective_clique_requests",
         ":collective_kernel_api",
+        ":collective_memory",
+        ":collective_memory_requests",
         ":collective_thunk",
         ":collective_thunk_proto_cc",
         ":ragged_all_to_all",

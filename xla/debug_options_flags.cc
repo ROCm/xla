@@ -2956,6 +2956,14 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
           ->xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl(),
       "If true, use the MultiGpuBarrierWithNcclKernel in one-shot "
       "RaggedAllToAll thunk."));
+  // TODO: b/482045400 - Remove double-copy approach once testing is complete.
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_ragged_all_to_all_zero_copy",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_experimental_ragged_all_to_all_zero_copy),
+      debug_options->xla_gpu_experimental_ragged_all_to_all_zero_copy(),
+      "If true, use the Symmetric Memory mode for "
+      "MultiGpuBarrierWithNcclKernel"));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_experimental_use_ragged_dot_grouped_gemm",
       bool_setter_for(
