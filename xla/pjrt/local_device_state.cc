@@ -89,6 +89,24 @@ LocalDeviceState::LocalDeviceState(se::StreamExecutor* executor,
   local_device_id_ =
       device_ordinal != -1 ? device_ordinal : executor_->device_ordinal();
 
+  // Store priority options for lazy stream creation path.
+  stream_options_priority_ =
+      stream_options.has_value()
+          ? std::optional<int>(stream_options->priority)
+          : std::nullopt;
+
+  // Compute and store the device-to-device stream priority once. Highest
+  // priority is used on all platforms except SYCL (which does not yet support
+  // non-default priorities for GPU streams).
+  d2d_stream_priority_ =
+      executor->GetPlatform()->id() == stream_executor::sycl::kSyclPlatformId
+          ? se::StreamPriority::Default
+          : se::StreamPriority::Highest;
+
+  const bool do_lazy =
+      stream_options.has_value() && stream_options->lazy_stream_creation;
+  lazy_stream_creation_ = do_lazy;
+
   int num_device_to_host_streams =
       stream_options.has_value() ? stream_options->num_device_to_host_streams
                                  : kNumDeviceToHostStreams;
@@ -96,56 +114,59 @@ LocalDeviceState::LocalDeviceState(se::StreamExecutor* executor,
       stream_options.has_value() ? stream_options->num_device_to_device_streams
                                  : kNumDeviceToDeviceStreams;
 
-  auto create_stream =
-      [executor, &stream_options](
-          const std::string& name,
-          std::optional<se::StreamPriority> stream_priority_override =
-              std::nullopt) {
-        std::unique_ptr<stream_executor::Stream> stream;
-        if (stream_priority_override.has_value()) {
-          stream = executor->CreateStream(*stream_priority_override).value();
-        } else if (stream_options.has_value()) {
-          stream = executor->CreateStream(stream_options->priority).value();
-        } else {
-          stream = executor->CreateStream().value();
-        }
-        if (stream) {
-          stream->SetName(name);
-        }
-        return stream;
-      };
-  compute_stream_ = create_stream("Compute");
-  host_to_device_stream_ = create_stream("Host-to-device");
+  if (!do_lazy) {
+    // -----------------------------------------------------------------------
+    // Eager path (original behaviour): create all streams in the constructor.
+    // -----------------------------------------------------------------------
+    compute_stream_ = MakeStream("Compute");
+    compute_stream_ptr_.store(compute_stream_.get(),
+                              std::memory_order_release);
+
+    host_to_device_stream_ = MakeStream("Host-to-device");
+    host_to_device_stream_ptr_.store(host_to_device_stream_.get(),
+                                     std::memory_order_release);
+
+    device_to_host_streams_.reserve(num_device_to_host_streams);
+    for (int i = 0; i < num_device_to_host_streams; ++i) {
+      device_to_host_streams_.emplace_back(
+          MakeStream(absl::StrFormat("Device-to-host #%d", i)));
+    }
+
+    device_to_device_streams_.reserve(num_device_to_device_streams);
+    for (int i = 0; i < num_device_to_device_streams; ++i) {
+      device_to_device_streams_.emplace_back(MakeStream(
+          absl::StrFormat("Device-to-device #%d", i), d2d_stream_priority_));
+    }
+
+    fixed_size_pool_usage_streams_.reserve(kNumFixedSizePoolUsageStreams);
+    for (int i = 0; i < kNumFixedSizePoolUsageStreams; ++i) {
+      fixed_size_pool_usage_streams_.emplace_back(
+          MakeStream(absl::StrFormat("Fixed size pool #%d", i)));
+    }
+
+    external_ready_event_streams_.reserve(kNumExternalReadyEventStreams);
+    for (int i = 0; i < kNumExternalReadyEventStreams; ++i) {
+      external_ready_event_streams_.emplace_back(
+          MakeStream(absl::StrFormat("External ready event #%d", i)));
+    }
+  } else {
+    // -----------------------------------------------------------------------
+    // Lazy path: pre-size the vectors with nullptr entries. Streams are
+    // created on first access under the appropriate lock.
+    // compute_stream_ and host_to_device_stream_ remain nullptr; their atomic
+    // fast-path pointers are already initialised to nullptr.
+    // -----------------------------------------------------------------------
+    device_to_host_streams_.resize(num_device_to_host_streams);
+    device_to_device_streams_.resize(num_device_to_device_streams);
+    fixed_size_pool_usage_streams_.resize(kNumFixedSizePoolUsageStreams);
+    external_ready_event_streams_.resize(kNumExternalReadyEventStreams);
+  }
+
   if (use_callback_stream) {
     callback_stream_map_ =
         absl::flat_hash_map<se::Stream*, std::unique_ptr<se::Stream>>();
   }
-  device_to_host_streams_.reserve(num_device_to_host_streams);
-  for (int i = 0; i < num_device_to_host_streams; ++i) {
-    device_to_host_streams_.emplace_back(
-        create_stream(absl::StrFormat("Device-to-host #%d", i)));
-  }
-  device_to_device_streams_.reserve(num_device_to_device_streams);
-  // TODO(intel-tf): Allow non-zero (non-default) stream priority for SYCL
-  // streams once the underlying implementation is available.
-  se::StreamPriority d2d_priority =
-      executor->GetPlatform()->id() == stream_executor::sycl::kSyclPlatformId
-          ? se::StreamPriority::Default
-          : se::StreamPriority::Highest;
-  for (int i = 0; i < num_device_to_device_streams; ++i) {
-    device_to_device_streams_.emplace_back(create_stream(
-        absl::StrFormat("Device-to-device #%d", i), d2d_priority));
-  }
-  fixed_size_pool_usage_streams_.reserve(kNumFixedSizePoolUsageStreams);
-  for (int i = 0; i < kNumFixedSizePoolUsageStreams; ++i) {
-    fixed_size_pool_usage_streams_.emplace_back(
-        create_stream(absl::StrFormat("Fixed size pool #%d", i)));
-  }
-  external_ready_event_streams_.reserve(kNumExternalReadyEventStreams);
-  for (int i = 0; i < kNumExternalReadyEventStreams; ++i) {
-    external_ready_event_streams_.emplace_back(
-        create_stream(absl::StrFormat("External ready event #%d", i)));
-  }
+
   tsl::ThreadOptions thread_options;
   thread_options.numa_node = executor->numa_node();
   execute_thread_ = std::make_unique<WorkerThread>(
@@ -178,6 +199,74 @@ LocalDeviceState::~LocalDeviceState() {
   compute_events_.clear();
 }
 
+// ---------------------------------------------------------------------------
+// MakeStream — central helper for GPU stream creation
+// ---------------------------------------------------------------------------
+// Priority resolution order:
+//   1. priority_override (e.g. Highest for device-to-device streams)
+//   2. stream_options_priority_ (caller-supplied StreamOptions::priority)
+//   3. executor default (CreateStream with no args)
+std::unique_ptr<se::Stream> LocalDeviceState::MakeStream(
+    absl::string_view name,
+    std::optional<se::StreamPriority> priority_override) const {
+  std::unique_ptr<se::Stream> stream;
+  if (priority_override.has_value()) {
+    stream = executor_->CreateStream(*priority_override).value();
+  } else if (stream_options_priority_.has_value()) {
+    stream = executor_->CreateStream(*stream_options_priority_).value();
+  } else {
+    stream = executor_->CreateStream().value();
+  }
+  if (stream) {
+    stream->SetName(std::string(name));
+  }
+  return stream;
+}
+
+// ---------------------------------------------------------------------------
+// compute_stream() — lazy-initialised hot-path accessor
+// ---------------------------------------------------------------------------
+// Non-lazy case: compute_stream_ptr_ is set in the constructor; the atomic
+// load is essentially free on the hot path.
+//
+// Lazy case: double-checked locking with an atomic pointer as the fast path.
+// After first call compute_stream_ptr_ is non-null and no lock is taken.
+se::Stream* LocalDeviceState::compute_stream() const {
+  se::Stream* ptr = compute_stream_ptr_.load(std::memory_order_acquire);
+  if (ABSL_PREDICT_TRUE(ptr != nullptr)) {
+    return ptr;
+  }
+  // Slow path — runs at most once per device.
+  absl::MutexLock lock(&lazy_init_mu_);
+  ptr = compute_stream_ptr_.load(std::memory_order_relaxed);
+  if (ptr == nullptr) {
+    tsl::profiler::TraceMe traceme("LazyCreateComputeStream");
+    compute_stream_ = MakeStream("Compute");
+    ptr = compute_stream_.get();
+    compute_stream_ptr_.store(ptr, std::memory_order_release);
+  }
+  return ptr;
+}
+
+// ---------------------------------------------------------------------------
+// host_to_device_stream() — same pattern as compute_stream()
+// ---------------------------------------------------------------------------
+se::Stream* LocalDeviceState::host_to_device_stream() const {
+  se::Stream* ptr = host_to_device_stream_ptr_.load(std::memory_order_acquire);
+  if (ABSL_PREDICT_TRUE(ptr != nullptr)) {
+    return ptr;
+  }
+  absl::MutexLock lock(&lazy_init_mu_);
+  ptr = host_to_device_stream_ptr_.load(std::memory_order_relaxed);
+  if (ptr == nullptr) {
+    tsl::profiler::TraceMe traceme("LazyCreateHostToDeviceStream");
+    host_to_device_stream_ = MakeStream("Host-to-device");
+    ptr = host_to_device_stream_.get();
+    host_to_device_stream_ptr_.store(ptr, std::memory_order_release);
+  }
+  return ptr;
+}
+
 absl::Status LocalDeviceState::SynchronizeAllActivity() {
   absl::Status status;
   // TODO(phawkins): in theory the call to SynchronizeAllActivity below should
@@ -185,17 +274,26 @@ absl::Status LocalDeviceState::SynchronizeAllActivity() {
   // implementation that doesn't actually block. To make sure activity has
   // stopped, also block on the compute stream. If SynchronizeAllActivity is
   // fixed, we could remove the BlockHostUntilDone call.
-  status.Update(compute_stream_->BlockHostUntilDone());
+  //
+  // When lazy stream creation is enabled a stream may never have been created
+  // (if the device was constructed but never used). Guard with a null check.
+  if (compute_stream_) {
+    status.Update(compute_stream_->BlockHostUntilDone());
+  }
   if (callback_stream_map_.has_value()) {
-    absl::MutexLock lock(callback_stream_map_mu_);
+    absl::MutexLock lock(&callback_stream_map_mu_);
     for (auto& callback_stream : callback_stream_map_.value()) {
       status.Update(callback_stream.second->BlockHostUntilDone());
     }
   }
   for (auto& stream : device_to_host_streams_) {
-    status.Update(stream->BlockHostUntilDone());
+    if (stream) {
+      status.Update(stream->BlockHostUntilDone());
+    }
   }
-  bool ok = compute_stream_->parent()->SynchronizeAllActivity();
+  // Use executor_ directly so SynchronizeAllActivity works even when
+  // compute_stream_ is null (lazy path, device never used).
+  bool ok = executor_->SynchronizeAllActivity();
   if (!ok) {
     status.Update(Unknown("SynchronizeAllActivity failed."));
   }
@@ -253,36 +351,64 @@ absl::Status LocalDeviceState::ThenExecuteCallback(
       std::move(error_cb));
 }
 
+// ---------------------------------------------------------------------------
+// Round-robin stream accessors with lazy slot creation
+// ---------------------------------------------------------------------------
+// When lazy_stream_creation_ is false the vectors hold fully-constructed
+// streams and the null check is a no-op (pointers are always non-null).
+// When lazy_stream_creation_ is true the null check triggers the one-time
+// stream creation for that slot, safely serialised by mu_.
+
 se::Stream* LocalDeviceState::GetDeviceToHostStream() {
-  absl::MutexLock lock(mu_);
+  absl::MutexLock lock(&mu_);
   int i = next_device_to_host_stream_;
   next_device_to_host_stream_ =
       (next_device_to_host_stream_ + 1) % device_to_host_streams_.size();
+  if (!device_to_host_streams_[i]) {
+    tsl::profiler::TraceMe traceme("LazyCreateDeviceToHostStream");
+    device_to_host_streams_[i] =
+        MakeStream(absl::StrFormat("Device-to-host #%d", i));
+  }
   return device_to_host_streams_.at(i).get();
 }
 
 se::Stream* LocalDeviceState::GetDeviceToDeviceStream() {
-  absl::MutexLock lock(mu_);
+  absl::MutexLock lock(&mu_);
   int i = next_device_to_device_stream_;
   next_device_to_device_stream_ =
       (next_device_to_device_stream_ + 1) % device_to_device_streams_.size();
+  if (!device_to_device_streams_[i]) {
+    tsl::profiler::TraceMe traceme("LazyCreateDeviceToDeviceStream");
+    device_to_device_streams_[i] = MakeStream(
+        absl::StrFormat("Device-to-device #%d", i), d2d_stream_priority_);
+  }
   return device_to_device_streams_.at(i).get();
 }
 
 se::Stream* LocalDeviceState::GetFixedSizePoolUsageStream() {
-  absl::MutexLock lock(mu_);
+  absl::MutexLock lock(&mu_);
   int i = next_fixed_size_pool_usage_stream_;
   next_fixed_size_pool_usage_stream_ =
       (next_fixed_size_pool_usage_stream_ + 1) %
       fixed_size_pool_usage_streams_.size();
+  if (!fixed_size_pool_usage_streams_[i]) {
+    tsl::profiler::TraceMe traceme("LazyCreateFixedSizePoolUsageStream");
+    fixed_size_pool_usage_streams_[i] =
+        MakeStream(absl::StrFormat("Fixed size pool #%d", i));
+  }
   return fixed_size_pool_usage_streams_.at(i).get();
 }
 
 se::Stream* LocalDeviceState::GetExternalReadyEventStream() {
-  absl::MutexLock lock(mu_);
+  absl::MutexLock lock(&mu_);
   int i = next_external_ready_event_stream_;
   next_external_ready_event_stream_ = (next_external_ready_event_stream_ + 1) %
                                       external_ready_event_streams_.size();
+  if (!external_ready_event_streams_[i]) {
+    tsl::profiler::TraceMe traceme("LazyCreateExternalReadyEventStream");
+    external_ready_event_streams_[i] =
+        MakeStream(absl::StrFormat("External ready event #%d", i));
+  }
   return external_ready_event_streams_.at(i).get();
 }
 
@@ -292,6 +418,8 @@ absl::StatusOr<se::Stream*> LocalDeviceState::GetStreamFromExternalStream(
   // it just iterates over 4 streams).
   for (const std::unique_ptr<se::Stream>& se_stream :
        external_ready_event_streams_) {
+    // With lazy stream creation some slots may still be null. Skip them.
+    if (!se_stream) continue;
     if (absl::bit_cast<std::intptr_t>(
             se_stream->platform_specific_handle().stream) == stream) {
       return se_stream.get();
@@ -303,18 +431,21 @@ absl::StatusOr<se::Stream*> LocalDeviceState::GetStreamFromExternalStream(
 }
 
 std::vector<se::Stream*> LocalDeviceState::GetDeviceToDeviceStreams() {
-  absl::MutexLock lock(mu_);
+  absl::MutexLock lock(&mu_);
   std::vector<se::Stream*> result;
   result.reserve(device_to_device_streams_.size());
   for (const auto& stream : device_to_device_streams_) {
-    result.push_back(stream.get());
+    // Skip slots that have not yet been lazily created.
+    if (stream) {
+      result.push_back(stream.get());
+    }
   }
   return result;
 }
 
 std::unique_ptr<se::Stream> LocalDeviceState::BorrowStreamFromPool() {
   {
-    absl::MutexLock lock(stream_pool_mu_);
+    absl::MutexLock lock(&stream_pool_mu_);
     if (!usage_stream_pool_.empty()) {
       std::unique_ptr<se::Stream> stream = std::move(usage_stream_pool_.top());
       usage_stream_pool_.pop();
@@ -328,8 +459,11 @@ std::unique_ptr<se::Stream> LocalDeviceState::BorrowStreamFromPool() {
   }
 
   // The stream pool is empty, create a new stream.
+  // Use executor_ directly rather than compute_stream_->parent() so that
+  // BorrowStreamFromPool works even when lazy stream creation is enabled and
+  // the compute stream has not yet been created.
   absl::StatusOr<std::unique_ptr<se::Stream>> stream =
-      compute_stream_->parent()->CreateStream();
+      executor_->CreateStream();
   CHECK_OK(stream);
   (*stream)->SetName("Pool stream");
   return std::move(*stream);
@@ -341,12 +475,12 @@ void LocalDeviceState::ReturnStreamToPool(std::unique_ptr<se::Stream> stream) {
   if (status.code() != tsl::error::ABORTED) {
     CHECK(stream->ok()) << status;
   }
-  absl::MutexLock lock(stream_pool_mu_);
+  absl::MutexLock lock(&stream_pool_mu_);
   usage_stream_pool_.push(std::move(stream));
 }
 
 int LocalDeviceState::GetNewPrngSeed() {
-  absl::MutexLock lock(mu_);
+  absl::MutexLock lock(&mu_);
   int x = 0;
   do {
     x = prng_seed_distribution_(prng_seed_generator_);
@@ -411,7 +545,7 @@ LocalDeviceState::GetEventForComputeStreamSyncPoint(
   }
   mu_.unlock();
   event.AndThen([this, cur_sync_point]() {
-    absl::MutexLock l(mu_);
+    absl::MutexLock l(&mu_);
     while (base_compute_event_sequence_id_ < cur_sync_point) {
       compute_events_.pop_front();
       ++base_compute_event_sequence_id_;

@@ -61,6 +61,19 @@ struct GpuClientOptions {
   std::optional<bool> use_async_dispatch;
 
   std::optional<int> max_inflight_computations = 32;
+
+  // When true, GPU streams (hipStream_t / cudaStream_t) are not created during
+  // client construction but are instead created on demand the first time they
+  // are accessed. This eliminates the dominant client-construction cost on
+  // platforms like ROCm where hipStreamCreate is serialized at the KFD driver
+  // level (~3-4 ms per stream × 14–18 streams × N GPUs).
+  //
+  // Enabled by default. Set to false (or export PJRT_GPU_LAZY_STREAM_CREATION=0)
+  // to restore the original eager-creation behaviour if needed for debugging.
+  //
+  // The env var PJRT_GPU_LAZY_STREAM_CREATION always overrides this field
+  // (=0 disables, =1 enables).
+  bool lazy_stream_creation = true;
 };
 
 }  //  namespace xla

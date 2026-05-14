@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_PJRT_LOCAL_DEVICE_STATE_H_
 #define XLA_PJRT_LOCAL_DEVICE_STATE_H_
 
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -104,6 +105,15 @@ class LocalDeviceState {
     int priority = 0;
     int num_device_to_host_streams = 1;
     int num_device_to_device_streams = 1;
+
+    // When true, GPU streams are not created in the constructor but are instead
+    // created on demand the first time they are accessed. This can dramatically
+    // reduce client construction time (e.g. ~385ms for 112 hipStreamCreate
+    // calls on 8 GPUs) at the cost of a one-time latency on first stream use.
+    //
+    // Thread-safe: concurrent first-access from multiple threads is safe;
+    // only one thread will create each stream.
+    bool lazy_stream_creation = false;
   };
 
   // `device_ordinal` is the logical local device ordinal (returned by
@@ -133,10 +143,13 @@ class LocalDeviceState {
 
   EventPool& event_pool() { return event_pool_; }
 
-  se::Stream* compute_stream() const { return compute_stream_.get(); }
-  se::Stream* host_to_device_stream() const {
-    return host_to_device_stream_.get();
-  }
+  // Returns the compute stream, creating it on first call when lazy stream
+  // creation is enabled.
+  se::Stream* compute_stream() const;
+
+  // Returns the host-to-device stream, creating it on first call when lazy
+  // stream creation is enabled.
+  se::Stream* host_to_device_stream() const;
 
   // Returns a device to host stream. Allocates streams in a round-robin fashion
   // amongst the available streams.
@@ -242,6 +255,16 @@ class LocalDeviceState {
  private:
   absl::Status SynchronizeAllActivity();
 
+  // Creates a single GPU stream with the given name and optional priority
+  // override. Uses stored stream_options_priority_ if no override is given.
+  // This is the central stream-creation helper used by both the eager
+  // (constructor) and lazy (first-access) paths. Safe to call from const
+  // methods.
+  std::unique_ptr<se::Stream> MakeStream(
+      absl::string_view name,
+      std::optional<se::StreamPriority> priority_override =
+          std::nullopt) const;
+
   AllocationModel allocation_model_;
 
   EventPool event_pool_;
@@ -254,8 +277,29 @@ class LocalDeviceState {
   LocalChipId local_hardware_id_;
   se::StreamExecutor* const executor_;
   LocalClient* const client_;
-  std::unique_ptr<se::Stream> compute_stream_;
-  std::unique_ptr<se::Stream> host_to_device_stream_;
+
+  // When lazy_stream_creation_ is true, these two streams start as nullptr and
+  // are created on first access under lazy_init_mu_. The double-checked locking
+  // pattern (atomic load + mutex) ensures a single creation with no lock
+  // overhead on the hot path after initialisation.
+  //
+  // Declared mutable so that compute_stream() and host_to_device_stream(),
+  // which are const methods, can lazily initialise them.
+  mutable std::unique_ptr<se::Stream> compute_stream_;
+  mutable std::unique_ptr<se::Stream> host_to_device_stream_;
+
+  // Atomic "fast path" pointers: nullptr until the corresponding stream is
+  // created. Read without locks; written once under lazy_init_mu_ using
+  // memory_order_release / memory_order_acquire ordering.
+  mutable std::atomic<se::Stream*> compute_stream_ptr_{nullptr};
+  mutable std::atomic<se::Stream*> host_to_device_stream_ptr_{nullptr};
+
+  // Protects the one-time lazy creation of compute_stream_ and
+  // host_to_device_stream_. Not used when lazy_stream_creation_ is false.
+  mutable absl::Mutex lazy_init_mu_;
+
+  // When lazy_stream_creation_ is true these vectors are pre-sized with
+  // nullptr entries. Entries are created on first access under mu_.
   std::vector<std::unique_ptr<se::Stream>> device_to_host_streams_;
   std::vector<std::unique_ptr<se::Stream>> device_to_device_streams_;
   std::vector<std::unique_ptr<se::Stream>> fixed_size_pool_usage_streams_;
@@ -266,7 +310,20 @@ class LocalDeviceState {
   static constexpr int kNumFixedSizePoolUsageStreams = 4;
   static constexpr int kNumExternalReadyEventStreams = 4;
 
-  absl::Mutex mu_;
+  // Whether GPU streams are created lazily on first access.
+  bool lazy_stream_creation_ = false;
+
+  // Stored for lazy stream creation: optional priority from StreamOptions
+  // (nullopt means use executor default, i.e. CreateStream with no args).
+  std::optional<int> stream_options_priority_;
+
+  // Stored for lazy creation of device-to-device streams (highest priority on
+  // GPU, default on SYCL).
+  se::StreamPriority d2d_stream_priority_;
+
+  // mu_ guards the round-robin indices and PRNG state. Declared mutable so
+  // that const accessor methods can create lazy stream slots under the lock.
+  mutable absl::Mutex mu_;
   int next_device_to_host_stream_ ABSL_GUARDED_BY(mu_) = 0;
   int next_device_to_device_stream_ ABSL_GUARDED_BY(mu_) = 0;
   int next_fixed_size_pool_usage_stream_ ABSL_GUARDED_BY(mu_) = 0;
