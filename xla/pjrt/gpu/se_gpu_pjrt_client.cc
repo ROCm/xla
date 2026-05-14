@@ -44,7 +44,6 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/synchronization/notification.h"
-#include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "xla/tsl/platform/status_macros.h"
@@ -224,6 +223,29 @@ static absl::flat_hash_map<std::string, PjRtDeviceAttribute> GetAttrsForDevices(
   return attrs;
 }
 
+// Process-level cache of LocalDeviceState objects.
+//
+// Streams (hipStream_t) are expensive to create (~3ms each via KFD ioctl)
+// and the KFD driver serializes hipStreamCreate process-wide, making 18
+// streams × 8 GPUs = ~380ms sequential wall time per client creation.
+//
+// By caching LocalDeviceState objects across client cycles and resetting
+// them (sync + clear bookkeeping) instead of destroy+recreate, we eliminate
+// the stream creation cost on the 2nd and subsequent client creations.
+//
+// Thread safety: protected by a mutex; only accessed during
+// GetStreamExecutorGpuClient() and ~StreamExecutorGpuClient().
+struct DeviceStateCache {
+  absl::Mutex mu;
+  // Map from device ordinal to cached LocalDeviceState (already Reset()).
+  std::map<int, std::unique_ptr<LocalDeviceState>> states ABSL_GUARDED_BY(mu);
+};
+
+static DeviceStateCache& GetDeviceStateCache() {
+  static auto* cache = new DeviceStateCache();
+  return *cache;
+}
+
 StreamExecutorGpuClient::StreamExecutorGpuClient(
     std::string platform_name, LocalClient* client,
     std::vector<std::unique_ptr<PjRtStreamExecutorDevice>> devices,
@@ -283,8 +305,6 @@ StreamExecutorGpuClient::StreamExecutorGpuClient(
 }
 
 StreamExecutorGpuClient::~StreamExecutorGpuClient() {
-  auto t_dtor_start = absl::Now();
-
   // Step 1: Quiesce async dispatch threads on all addressable devices.
   // This must run before we call Reset() or release_local_device_state(),
   // since the async_dispatch_thread may be enqueuing work on the streams.
@@ -328,19 +348,16 @@ StreamExecutorGpuClient::~StreamExecutorGpuClient() {
       // Transfer ownership to cache. Device's local_device_state_ becomes
       // nullptr; ~PjRtStreamExecutorDevice() will safely skip it.
       cache.states.emplace(ordinal, se_device->release_local_device_state());
-      LOG(INFO) << "[PJRT_TIMING] ~StreamExecutorGpuClient device=" << ordinal
-                << " state returned to cache (streams preserved)";
+      VLOG(1) << "StreamExecutorGpuClient: device=" << ordinal
+              << " LocalDeviceState returned to cache (streams preserved)";
     } else {
       // Streams in error state (e.g., GPU hardware fault). Do NOT cache.
       // Let ~PjRtStreamExecutorDevice() destroy it normally via hipStreamDestroy.
-      LOG(WARNING) << "[PJRT_TIMING] ~StreamExecutorGpuClient device="
-                   << ordinal << " Reset() failed: " << reset_status
-                   << " — state will be destroyed and recreated next time";
+      LOG(WARNING) << "StreamExecutorGpuClient: device=" << ordinal
+                   << " Reset() failed: " << reset_status
+                   << " — LocalDeviceState will be destroyed and recreated";
     }
   }
-
-  LOG(INFO) << "[PJRT_TIMING] ~StreamExecutorGpuClient total: "
-            << absl::ToDoubleMilliseconds(absl::Now() - t_dtor_start) << " ms";
 }
 
 absl::string_view StreamExecutorGpuClient::platform_version() const {
@@ -1526,29 +1543,6 @@ absl::StatusOr<std::shared_ptr<tsl::Allocator>> CreateCudaAsyncAllocator(
 
 #endif  // defined(GOOGLE_CUDA) && CUDA_VERSION >= 11020
 
-// Process-level cache of LocalDeviceState objects.
-//
-// Streams (hipStream_t) are expensive to create (~3ms each via KFD ioctl)
-// and the KFD driver serializes hipStreamCreate process-wide, making 18
-// streams × 8 GPUs = ~380ms sequential wall time per client creation.
-//
-// By caching LocalDeviceState objects across client cycles and resetting
-// them (sync + clear bookkeeping) instead of destroy+recreate, we eliminate
-// the stream creation cost on the 2nd and subsequent client creations.
-//
-// Thread safety: protected by a mutex; only accessed during
-// GetStreamExecutorGpuClient() and ~StreamExecutorGpuClient().
-struct DeviceStateCache {
-  absl::Mutex mu;
-  // Map from device ordinal to cached LocalDeviceState (already Reset()).
-  std::map<int, std::unique_ptr<LocalDeviceState>> states ABSL_GUARDED_BY(mu);
-};
-
-static DeviceStateCache& GetDeviceStateCache() {
-  static auto* cache = new DeviceStateCache();
-  return *cache;
-}
-
 // Builds a LocalDeviceState for each GPU present.
 //
 // On the first call (cold start), this creates new LocalDeviceState objects
@@ -1572,14 +1566,11 @@ BuildLocalDeviceStates(LocalClient* xla_client, bool schedule_async,
     auto it = cache.states.find(ordinal);
     if (it != cache.states.end()) {
       // Reuse cached state: streams already exist, just sync + reset metadata.
-      LOG(INFO) << "[PJRT_TIMING] BuildLocalDeviceStates device=" << ordinal
-                << " REUSED (sync+reset, no hipStreamCreate)";
       addressable_devices.emplace(ordinal, std::move(it->second));
       cache.states.erase(it);
     } else {
-      // Cold start: create new LocalDeviceState (~48ms for 18 hipStreamCreates
-      // + 1 hipEventCreate each, serialized at KFD driver level).
-      auto t0 = absl::Now();
+      // Cold start: create new LocalDeviceState (hipStreamCreate per stream,
+      // serialized at KFD driver level on ROCm).
       addressable_devices.emplace(
           ordinal,
           std::make_unique<LocalDeviceState>(
@@ -1587,9 +1578,6 @@ BuildLocalDeviceStates(LocalClient* xla_client, bool schedule_async,
               max_inflight_computations, /*allow_event_reuse=*/true,
               /*use_callback_stream=*/true, /*device_ordinal=*/-1,
               /*stream_options=*/std::nullopt, schedule_async));
-      LOG(INFO) << "[PJRT_TIMING] BuildLocalDeviceStates device=" << ordinal
-                << " NEW (hipStreamCreate x18): "
-                << absl::ToDoubleMilliseconds(absl::Now() - t0) << " ms";
     }
   }
   return std::move(addressable_devices);
@@ -2165,6 +2153,7 @@ absl::StatusOr<std::unique_ptr<PjRtClient>> GetStreamExecutorGpuClient(
     kv_store = std::make_shared<InMemoryKeyValueStore>();
   }
   TF_RET_CHECK(options.num_nodes == 1 || kv_store != nullptr);
+
   TF_ASSIGN_OR_RETURN(
       DeviceTopologyPair device_topology_pair,
       BuildDistributedDevices(

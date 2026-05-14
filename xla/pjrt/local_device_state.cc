@@ -29,8 +29,6 @@ limitations under the License.
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
-#include "absl/time/clock.h"
-#include "absl/time/time.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
@@ -181,14 +179,8 @@ LocalDeviceState::~LocalDeviceState() {
 }
 
 absl::Status LocalDeviceState::Reset() {
-  auto t_reset_start = absl::Now();
-
   // Step 1: Drain all pending GPU work on all streams.
-  // After a normal (non-faulted) execution, this should complete quickly since
-  // streams are idle. After a collective failure where ncclCommAbort was called,
-  // RCCL guarantees pending ops are terminated so sync should also complete.
-  // If sync fails (GPU hardware fault), we return the error so the caller
-  // destroys this object and creates a fresh LocalDeviceState.
+  // After a normal execution this completes quickly (streams already idle).
   TF_RETURN_IF_ERROR(SynchronizeAllActivity());
 
   // Step 2: Reset XLA-level sequencing bookkeeping.
@@ -204,7 +196,7 @@ absl::Status LocalDeviceState::Reset() {
 
   // Step 3: Clear the callback stream map.
   // Callback streams are re-created on demand when ThenExecuteCallback is
-  // called. Clearing prevents unbounded growth across client cycles.
+  // called. Each entry destroys a se::Stream (hipStreamDestroy).
   if (callback_stream_map_.has_value()) {
     absl::MutexLock lock(callback_stream_map_mu_);
     callback_stream_map_->clear();
@@ -218,10 +210,6 @@ absl::Status LocalDeviceState::Reset() {
     while (!usage_stream_pool_.empty()) usage_stream_pool_.pop();
   }
 
-  LOG(INFO) << "[PJRT_TIMING] LocalDeviceState::Reset device="
-            << local_device_id_.value()
-            << " (sync+clear bookkeeping, streams reused): "
-            << absl::ToDoubleMilliseconds(absl::Now() - t_reset_start) << " ms";
   return absl::OkStatus();
 }
 
