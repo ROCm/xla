@@ -1550,11 +1550,18 @@ absl::StatusOr<std::shared_ptr<tsl::Allocator>> CreateCudaAsyncAllocator(
 // On subsequent calls, cached states are reused after Reset() (sync +
 // bookkeeping clear, ~5ms) to avoid the hipStreamCreate overhead.
 //
+// When `lazy_stream_creation` is true, GPU streams are not created during
+// LocalDeviceState construction but are instead created on first access.
+// This moves the ~385ms hipStreamCreate cost from client construction to
+// the first computation, eliminating startup overhead in test/benchmark
+// scenarios where construction time matters more than first-run latency.
+//
 // RCCL clique cache is always cleared before reuse via DestroyAcquiredCliques,
 // ensuring new communicators are created for the next client's collective ops.
 absl::StatusOr<std::map<int, std::unique_ptr<LocalDeviceState>>>
 BuildLocalDeviceStates(LocalClient* xla_client, bool schedule_async,
-                       std::optional<int> max_inflight_computations) {
+                       std::optional<int> max_inflight_computations,
+                       bool lazy_stream_creation) {
   auto& cache = GetDeviceStateCache();
   absl::MutexLock lock(&cache.mu);
 
@@ -1565,19 +1572,31 @@ BuildLocalDeviceStates(LocalClient* xla_client, bool schedule_async,
 
     auto it = cache.states.find(ordinal);
     if (it != cache.states.end()) {
-      // Reuse cached state: streams already exist, just sync + reset metadata.
+      // Reuse cached state: streams already exist (or will be created on
+      // demand if they were originally built with lazy_stream_creation), just
+      // sync + reset metadata.
       addressable_devices.emplace(ordinal, std::move(it->second));
       cache.states.erase(it);
     } else {
-      // Cold start: create new LocalDeviceState (hipStreamCreate per stream,
-      // serialized at KFD driver level on ROCm).
+      // Cold start: create new LocalDeviceState.
+      // With lazy_stream_creation=true, hipStreamCreate calls are deferred
+      // to the first use of each stream, which can save ~385ms on ROCm.
+      // When lazy_stream_creation=false we pass std::nullopt so that the
+      // LocalDeviceState constructor uses CreateStream() with no priority
+      // argument — the original pre-lazy behaviour.
+      std::optional<LocalDeviceState::StreamOptions> stream_opts = std::nullopt;
+      if (lazy_stream_creation) {
+        LocalDeviceState::StreamOptions opts;
+        opts.lazy_stream_creation = true;
+        stream_opts = opts;
+      }
       addressable_devices.emplace(
           ordinal,
           std::make_unique<LocalDeviceState>(
               executor, xla_client, LocalDeviceState::kComputeSynchronized,
               max_inflight_computations, /*allow_event_reuse=*/true,
               /*use_callback_stream=*/true, /*device_ordinal=*/-1,
-              /*stream_options=*/std::nullopt, schedule_async));
+              stream_opts, schedule_async));
     }
   }
   return std::move(addressable_devices);
@@ -2087,6 +2106,21 @@ absl::StatusOr<std::unique_ptr<PjRtClient>> GetStreamExecutorGpuClient(
     use_async_dispatch = absl::string_view(v) == "1";
   }
 
+  // Resolve the lazy_stream_creation flag.  The default (true) can be
+  // overridden in two ways, with the env var taking precedence:
+  //   PJRT_GPU_LAZY_STREAM_CREATION=0  → disable (eager creation, original behaviour)
+  //   PJRT_GPU_LAZY_STREAM_CREATION=1  → enable  (lazy creation, new default)
+  // If the env var is not set, GpuClientOptions::lazy_stream_creation is used
+  // (defaults to true).
+  bool lazy_stream_creation = options.lazy_stream_creation;
+  if (const char* v = std::getenv("PJRT_GPU_LAZY_STREAM_CREATION")) {
+    lazy_stream_creation = absl::string_view(v) == "1";
+  }
+  VLOG(1) << "GetStreamExecutorGpuClient: lazy_stream_creation="
+          << lazy_stream_creation
+          << " — GPU streams will be created "
+          << (lazy_stream_creation ? "on first access" : "eagerly in the constructor");
+
   TF_ASSIGN_OR_RETURN(
       LocalClient * xla_client,
       GetGpuXlaClient(options.platform_name, options.allowed_devices));
@@ -2094,7 +2128,8 @@ absl::StatusOr<std::unique_ptr<PjRtClient>> GetStreamExecutorGpuClient(
   TF_ASSIGN_OR_RETURN(
       local_device_states,
       BuildLocalDeviceStates(xla_client, use_async_dispatch,
-                             options.max_inflight_computations));
+                             options.max_inflight_computations,
+                             lazy_stream_creation));
   EnablePeerAccess(xla_client->backend().stream_executors());
   TF_ASSIGN_OR_RETURN(auto allocator,
                       GetStreamExecutorGpuDeviceAllocator(
