@@ -2904,6 +2904,7 @@ cc_library(
         "//xla:shape_util",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/pass:hlo_pass",
+        "//xla/hlo/utils:hlo_query",
         "//xla/service/gpu:cublas_cudnn",
         "//xla/tsl/platform:status_macros",
         "@com_google_absl//absl/algorithm:container",
