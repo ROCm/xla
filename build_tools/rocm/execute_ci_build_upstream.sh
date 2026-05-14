@@ -7,43 +7,14 @@ SCRIPT_DIR=$(realpath "$(dirname "$0")")
 EXCLUDED_TESTS=(
     "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
     "*IotaR1Test*"                                                                                                                                 # Taking too many CI nodes
-    "DotTests/ParametricDotTestWithoutLayoutAssignment.TestF16/*"
-    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x6" # TODO: fix
-    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x9" # TODO: fix
-    "RocmExecutorTest.CreateUnifiedMemoryAllocatorWorks"                                                                                           # TODO: fix
-    # TODO: fix, unimplemented ROCm (collective_ops_e2e_test, p2p_ops_e2e_test)
-    "AsyncCollectiveOps/AsyncCollectiveOps.*/*symmetric"
-    "P2POps/P2POps.CollectivePermute/enable_symmetric_buffer"
-    # TODO: fix, unimplemented on ROCm (ragged_all_to_all_e2e_test)
-    "RaggedAllToAllTest/RaggedAllToAllTest.*/*with_multi_gpu_barrier_with_nccl"
-    # TODO: fix, BFCAllocator OOM, budget too small? (collective_ops_sharded_unsharded_e2e_test)
-    "CollectiveOpsTestE2EShardedUnsharded.DotBatchAndNonContracting"
-    "CollectiveOpsTestE2EShardedUnsharded.DotBatchAndBatch"
-    "CollectiveOpsTestE2EShardedUnsharded.DotContractingNonContractingAndContractingNonContracting"
-    "CollectiveOpsTestE2EShardedUnsharded.DotContractingAndContracting"
-    "CollectiveOpsTestE2EShardedUnsharded.DotNonContractingAndContracting"
-    "CollectiveOpsTestE2EShardedUnsharded.DotContractingAndReplicated"
-    # TODO: fix, hardcoded device count mismatch (se_gpu_pjrt_client_test)
-    "StreamExecutorGpuClientTest.DistributedInit"
-    "StreamExecutorGpuClientTest.MockNcclClientTest"
-    "StreamExecutorGpuClientTest.GetTopologyDescriptionWithGlobalDevicesTest"
-    "StreamExecutorGpuClientTest.MockNcclClientWithGpuTopologyExecuteTest"
-    "StreamExecutorGpuClientTest.MockNcclClientWithGpuTopologyTest"
-    # TODO: fix, unimplemented on ROCm
-    "StreamExecutorGpuClientTest.GetAbiVersion"
-    # TODO: fix, memory stats mismatch (se_gpu_pjrt_client_test)
-    "StreamExecutorGpuClientTest.GetCompiledMemoryStatsWithTupleAndNcclUserBuffers"
-    "CubSort/CubSortKeysTest*"
-    "CubSort/CubSortPairsTest*"
-    "HloOpProfilerTest.BasicMeasurementsAreCorrect"
-    "RandomEighTestInstantiation/RandomEighTest*"
-    "SampleFileTest.Convolution"
-    "SortRewriterArgsort/SortRewriterArgsortTest*"
-    "SortRewriterTest*"
-    "SVDTest.*"
-    "TritonBackendTest*"
-    "TypeSupportTest*"
     "HipblasLtMxExecutionTest*"
+    "TritonBackendTest.CostModelOptions_Combination"
+    "TritonBackendTest.CostModelOptions_Filter"
+    "TritonBackendTest.CostModelOptions_TopFromDefaul"
+    "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
+    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x*"
+    "DeterminismTest.CublasDot"
+    "F8E5M2Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_*"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
@@ -81,9 +52,4 @@ done
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=${RBE_POOL} \
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
     -- \
-    //xla/... \
-    -//xla/backends/gpu/tests:sorting.hlo.test_mi200 \
-    -//xla/backends/gpu/codegen/triton:dot_algorithms_test_amdgpu_any \
-    -//xla/backends/gpu/tests:collective_pipeline_parallelism_test_amdgpu_any \
-    -//xla/service/gpu:dot_algorithm_support_test_amdgpu_any \
-    -//xla/pjrt/gpu:se_gpu_pjrt_client_test # TODO: times out so temporarily skip the whole target
+    //xla/...
