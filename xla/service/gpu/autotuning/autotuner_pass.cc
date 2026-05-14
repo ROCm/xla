@@ -122,9 +122,16 @@ bool ShouldAutotuneCustomCall(bool do_not_autotune_cublas,
                               const HloInstruction& instruction) {
   auto gpu_config = instruction.backend_config<GpuBackendConfig>();
   if (!do_not_autotune_cublas && IsCublasGemm(instruction)) {
-    if (gpu_config.ok() &&
-        gpu_config->gemm_backend_config().has_selected_algorithm()) {
-      return false;
+    if (gpu_config.ok()) {
+      // Grouped matmul stores the selected algorithm in the nested
+      // grouped_gemm_backend_config, not the top-level gemm_backend_config.
+      const GemmBackendConfig& gemm_config =
+          IsCublasLtGroupedMatmul(instruction)
+              ? gpu_config->grouped_gemm_backend_config().gemm_backend_config()
+              : gpu_config->gemm_backend_config();
+      if (gemm_config.has_selected_algorithm()) {
+        return false;
+      }
     }
     return true;
   }
