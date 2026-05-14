@@ -323,6 +323,7 @@ limitations under the License.
 #include "xla/status_macros.h"
 #include "xla/stream_executor/abi/executable_abi_version.h"
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
+#include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/device_description.pb.h"
 #include "xla/stream_executor/dnn.h"
@@ -349,7 +350,6 @@ limitations under the License.
 #include "tsl/platform/numbers.h"
 #include "tsl/platform/path.h"
 #include "tsl/platform/protobuf.h"  // IWYU pragma: keep
-#include "tsl/platform/stacktrace.h"
 #include "tsl/profiler/lib/scoped_annotation.h"
 #include "tsl/profiler/lib/traceme.h"
 
@@ -1110,7 +1110,7 @@ absl::Status RunCollectiveOptimizationPasses(
           }
 
           std::vector<HloInstruction*> to_check = {instr->mutable_operand(0)};
-          std::set<HloInstruction*> visited;
+          absl::flat_hash_set<HloInstruction*> visited;
 
           while (!to_check.empty()) {
             HloInstruction* current = to_check.back();
