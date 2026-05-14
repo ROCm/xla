@@ -536,9 +536,15 @@ class StringVectorPullTableEntry : public PullTable::Entry {
               const SocketTransferPullRequest& req,
               size_t base_req_id) override {
     for (uint64_t bid : req.buffer_ids()) {
-      auto data_copy = std::make_unique<std::string>(buffers_[bid]);
       auto req_id = base_req_id;
       ++base_req_id;
+      if (bid >= buffers_.size()) {
+        state->SendError(
+            req_id, 0, 0, false,
+            absl::InvalidArgumentError("StringVectorPullTableEntry::Handle"));
+        continue;
+      }
+      auto data_copy = std::make_unique<std::string>(buffers_[bid]);
       auto& data = *data_copy;
       state->Send(req_id, data.data(), 0, data.size(), true,
                   [data = std::move(data_copy)]() {});
