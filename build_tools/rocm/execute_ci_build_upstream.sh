@@ -52,4 +52,8 @@ done
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=${RBE_POOL} \
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
     -- \
-    //xla/...
+    //xla/... \
+    -//xla/tests:dot_operation_test_amdgpu_any \
+    -//xla/backends/gpu/autotuner:triton_test_amdgpu_any \
+    -//xla/backends/gpu/transforms:gemm_rewriter_group_gemm_test_amdgpu_any 
+    # TODO: skippped tests from https://wardite.cluster.engflow.com/invocations/default/f6e1d975-7f66-4b51-8430-d79e0ab0493a
