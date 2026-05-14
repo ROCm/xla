@@ -123,6 +123,10 @@ class StreamExecutorGpuClient : public xla::PjRtStreamExecutorClient {
       std::shared_ptr<const GpuTopology> gpu_topology,
       std::optional<int> num_processes);
 
+  // Destructor that returns LocalDeviceState objects to the process-level
+  // stream cache (if Reset() succeeds) and cleans up RCCL cliques.
+  ~StreamExecutorGpuClient() override;
+
   std::optional<std::shared_ptr<KeyValueStoreInterface>> key_value_store()
       const override {
     return kv_store_;
