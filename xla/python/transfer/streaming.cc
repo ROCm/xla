@@ -36,6 +36,7 @@ limitations under the License.
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 #include "absl/types/span.h"
@@ -265,17 +266,23 @@ class LocalBulkTransportFactory : public BulkTransportFactory {
                                       remote_bulk_transport_info) {};
     return out;
   }
-  BulkTransportRecvResult RecvBulkTransport(
+  absl::StatusOr<BulkTransportRecvResult> RecvBulkTransport(
       const SocketTransferEstablishBulkTransport& remote_bulk_transport_info)
       override {
     BulkTransportRecvResult out;
     absl::MutexLock l(mu_);
-    CHECK_EQ(remote_bulk_transport_info.bulk_transport_impl_kind(),
-             SocketTransferEstablishBulkTransport::LOCAL);
-    CHECK_EQ(remote_bulk_transport_info.bulk_transport_uuid_size(), 1);
+    if (remote_bulk_transport_info.bulk_transport_impl_kind() !=
+            SocketTransferEstablishBulkTransport::LOCAL ||
+        remote_bulk_transport_info.bulk_transport_uuid_size() != 1) {
+      return absl::InternalError("Invalid bulk transport info");
+    }
     auto it = local_bulk_transports_.find(
         remote_bulk_transport_info.bulk_transport_uuid(0));
-    CHECK(it != local_bulk_transports_.end());
+    if (it == local_bulk_transports_.end()) {
+      return absl::InternalError(
+          absl::StrCat("Invalid bulk transport uuid: ",
+                       remote_bulk_transport_info.bulk_transport_uuid(0)));
+    }
     auto bulk_transport_out = std::move(it->second);
     local_bulk_transports_.erase(it);
     out.bulk_transport = std::move(bulk_transport_out);
