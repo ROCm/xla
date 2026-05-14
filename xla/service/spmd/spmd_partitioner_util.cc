@@ -3158,11 +3158,14 @@ GetMeshAxesPartitionGroupsForReplication(
 }
 
 std::unique_ptr<CollectiveDeviceListBase> GetPartitionGroupsForReplication(
-    const HloSharding& sharding, absl::Span<const int64_t> replication_dims) {
+    const HloSharding& sharding, absl::Span<const int64_t> replication_dims,
+    bool enable_rgv3) {
   std::unique_ptr<CollectiveDeviceListBase> partition_groups;
-  if (auto mesh_axes_groups = GetMeshAxesPartitionGroupsForReplication(
-          sharding, replication_dims)) {
-    return std::make_unique<MeshAxesReplicaGroupList>(*mesh_axes_groups);
+  if (enable_rgv3) {
+    if (auto mesh_axes_groups = GetMeshAxesPartitionGroupsForReplication(
+            sharding, replication_dims)) {
+      return std::make_unique<MeshAxesReplicaGroupList>(*mesh_axes_groups);
+    }
   }
 
   auto iota_groups =
@@ -3383,11 +3386,13 @@ GetMeshAxesPartitionGroupsAcrossTargetDims(
 
 std::unique_ptr<CollectiveDeviceListBase> GetPartitionGroupsAcrossTargetDims(
     const HloSharding& sharding, absl::Span<const int64_t> target_dims,
-    absl::Span<const int64_t> group_sizes) {
-  if (std::optional<MeshAxesReplicaGroupList> mesh_axes_groups =
-          GetMeshAxesPartitionGroupsAcrossTargetDims(sharding, target_dims,
-                                                     group_sizes)) {
-    return std::make_unique<MeshAxesReplicaGroupList>(*mesh_axes_groups);
+    absl::Span<const int64_t> group_sizes, bool enable_rgv3) {
+  if (enable_rgv3) {
+    if (std::optional<MeshAxesReplicaGroupList> mesh_axes_groups =
+            GetMeshAxesPartitionGroupsAcrossTargetDims(sharding, target_dims,
+                                                       group_sizes)) {
+      return std::make_unique<MeshAxesReplicaGroupList>(*mesh_axes_groups);
+    }
   }
   if (std::optional<IotaReplicaGroupList> iota_groups =
           GetIotaPartitionGroupsAcrossTargetDims(sharding, target_dims,
