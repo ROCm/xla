@@ -160,7 +160,7 @@ def _cc_skylark_embed_data_impl(ctx):
         cc_toolchain = cc_toolchain,
         compilation_outputs = compilation_outputs,
         alwayslink = ctx.attr.alwayslink,
-        disallow_dynamic_library = True,
+        disallow_dynamic_library = ctx.attr.linkstatic,
     )
 
     return [

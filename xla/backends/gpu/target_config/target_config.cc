@@ -15,7 +15,6 @@ limitations under the License.
 
 #include "xla/backends/gpu/target_config/target_config.h"
 
-#include <cstddef>
 #include <string>
 
 #include "absl/status/status.h"
@@ -43,69 +42,43 @@ namespace {
 
 absl::StatusOr<absl::string_view> GetEmbeddedGpuTargetConfigData(
     GpuModel gpu_model) {
-  absl::string_view filename;
   switch (gpu_model) {
     case GpuModel::A100_PCIE_80:
-      filename = "a100_pcie_80.txtpb";
-      break;
+      return get_a100_pcie_80();
     case GpuModel::A100_SXM_40:
-      filename = "a100_sxm_40.txtpb";
-      break;
+      return get_a100_sxm_40();
     case GpuModel::A100_SXM_80:
-      filename = "a100_sxm_80.txtpb";
-      break;
+      return get_a100_sxm_80();
     case GpuModel::A6000:
-      filename = "a6000.txtpb";
-      break;
+      return get_a6000();
     case GpuModel::B200:
-      filename = "b200.txtpb";
-      break;
+      return get_b200();
     case GpuModel::B300:
-      filename = "b300.txtpb";
-      break;
+      return get_b300();
     case GpuModel::BMG_G21:
-      filename = "bmg_g21.txtpb";
-      break;
+      return get_bmg_g21();
     case GpuModel::H100_PCIE:
-      filename = "h100_pcie.txtpb";
-      break;
+      return get_h100_pcie();
     case GpuModel::H100_SXM:
-      filename = "h100_sxm.txtpb";
-      break;
+      return get_h100_sxm();
     case GpuModel::MI200:
-      filename = "mi200.txtpb";
-      break;
+      return get_mi200();
     case GpuModel::P100:
-      filename = "p100.txtpb";
-      break;
+      return get_p100();
     case GpuModel::PVC:
-      filename = "pvc.txtpb";
-      break;
+      return get_pvc();
     case GpuModel::V100:
-      filename = "v100.txtpb";
-      break;
+      return get_v100();
     case GpuModel::GB200:
-      filename = "gb200.txtpb";
-      break;
+      return get_gb200();
     case GpuModel::GB300:
-      filename = "gb300.txtpb";
-      break;
+      return get_gb300();
     case GpuModel::RTX6000PRO:
-      filename = "rtx6000pro.txtpb";
-      break;
+      return get_rtx6000pro();
     default:
       return absl::NotFoundError(
           absl::StrCat("Embedded file not found: ", gpu_model, ".txtpb"));
   }
-
-  const struct FileToc* toc = embed_gpu_specs_create();
-  for (size_t i = 0; i < embed_gpu_specs_size(); ++i) {
-    if (toc[i].name == filename) {
-      return absl::string_view(toc[i].data, toc[i].size);
-    }
-  }
-  return absl::NotFoundError(
-      absl::StrCat("Embedded file not found: ", filename));
 }
 
 }  // namespace
