@@ -20,13 +20,13 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace {
 
-using StripMemoryPlacementAnnotationsTest = HloTestBase;
+using StripMemoryPlacementAnnotationsTest = HloHardwareIndependentTestBase;
 
 TEST_F(StripMemoryPlacementAnnotationsTest, StripAnnotateDevicePlacement) {
   const std::string hlo_string = R"(

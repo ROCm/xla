@@ -3510,8 +3510,9 @@ GetStatusOrTopologyDescription(const xla::PjRtClient& cpp_client) {
       CreateWrapperDeviceTopology(*status_or_cpp_topo));
 }
 
-PJRT_Client* CreateWrapperClient(std::unique_ptr<xla::PjRtClient> cpp_client) {
-  PJRT_Client* c_client = new PJRT_Client(std::move(cpp_client));
+PJRT_Client* CreateWrapperClient(const PJRT_Api* api,
+                                 std::unique_ptr<xla::PjRtClient> cpp_client) {
+  PJRT_Client* c_client = new PJRT_Client(api, std::move(cpp_client));
   PopulatePjrtClientDevices(c_client);
   PopulatePjrtClientMemories(c_client);
   AttachDevicesAndMemories(c_client);
@@ -3573,8 +3574,10 @@ PJRT_Error* PJRT_Device_GetAttributes(PJRT_Device_GetAttributes_Args* args) {
 
 }  // namespace pjrt
 
-PJRT_Client::PJRT_Client(std::unique_ptr<xla::PjRtClient> cpp_client)
-    : client(std::move(cpp_client)),
+PJRT_Client::PJRT_Client(const PJRT_Api* api,
+                         std::unique_ptr<xla::PjRtClient> cpp_client)
+    : api(api),
+      client(std::move(cpp_client)),
       topology(pjrt::GetStatusOrTopologyDescription(*client)) {}
 
 PJRT_Executable::PJRT_Executable(

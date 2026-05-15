@@ -51,6 +51,8 @@ package(
     licenses = ["notice"],
 )
 
+exports_files(["data/hlo_isolation_cli_test.hlo"])
+
 # Filegroup used to collect source files for dependency checking.
 filegroup(
     name = "c_srcs",
