@@ -15065,8 +15065,8 @@ ENTRY entry {
                   op::Shape("bf16[32,256]"))))));
 }
 
-// TODO(b/510244899): fix unnecessary copy instruction insertion for v3.
-TEST_P(SpmdPartitioningTest, GatherOperandPassthroughIndexPassthrough) {
+TEST_P(SpmdPartitioningAllShardingTest,
+       GatherOperandPassthroughIndexPassthrough) {
   const char* const hlo_string = R"(
 HloModule module
 
@@ -17678,7 +17678,7 @@ ENTRY %module {
   EXPECT_FALSE(has_collective) << "PARTITIONED MODULE:\n" << module->ToString();
 }
 
-TEST_P(SpmdPartitioningTest, DynamicUpdateSliceWithReversedSlice) {
+TEST_P(SpmdPartitioningAllShardingTest, DynamicUpdateSliceWithReversedSlice) {
   absl::string_view hlo_string = R"(
 HloModule module
 
