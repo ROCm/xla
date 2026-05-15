@@ -24,6 +24,7 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "absl/container/btree_map.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -41,7 +42,7 @@ limitations under the License.
 #include "xla/tsl/util/command_line_flags.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/init_main.h"
-
+#include "tsl/platform/path.h"
 namespace {
 const char* const kUsage = R"(
 This tool lets you run an HLO module on one or more GPUs.
@@ -111,6 +112,7 @@ struct HloRunnerConfig {
   int64_t gpu_client_initialization_timeout_sec = 300;
   float gpu_client_mem_fraction = xla::GpuAllocatorConfig{}.memory_fraction;
   bool profile_execution = false;
+  std::string profile_to_csv = "";
   std::string xla_gpu_dump_xspace_to = "";
 };
 
@@ -225,6 +227,69 @@ RawCompileOptionsFromFlags(const HloRunnerConfig& opts) {
   return out;
 }
 
+struct CSVProfileTimeWriter {
+  constexpr static const char kCSVSep = ',';
+
+  explicit CSVProfileTimeWriter(absl::string_view csv_file)
+      : csv_file_path_(csv_file) {
+    new_file_ = !tsl::Env::Default()->FileExists(csv_file_path_).ok();
+    run_time_ = absl::FormatTime("%Y-%m-%d %H:%M:%S", absl::Now(),
+                                 absl::LocalTimeZone());
+  }
+
+  void append_row(absl::string_view hlo_file,
+                  const std::vector<ExecutionProfile>& exec_profiles) {
+    double total_ns = 0.0;
+    size_t num_repeats = exec_profiles.size();
+    for (size_t i = 0; i < num_repeats; ++i) {
+      total_ns += exec_profiles[i].compute_time_ns();
+    }
+    // If there are multiple repeats, we average the execution time over them
+    // skipping the first one which is a warmup run.
+    if (num_repeats > 1) {
+      total_ns -= exec_profiles[0].compute_time_ns();
+      total_ns /= (num_repeats - 1);
+    }
+    exec_time_ms_[hlo_file] = total_ns / 1e6;
+  }
+
+  ~CSVProfileTimeWriter() {
+    std::unique_ptr<tsl::WritableFile> fout;
+    if (!tsl::Env::Default()->NewAppendableFile(csv_file_path_, &fout).ok()) {
+      LOG(ERROR) << "Failed to open CSV file " << csv_file_path_;
+      return;
+    }
+    if (exec_time_ms_.empty()) return;
+    // Column headers are appended only once if a CSV file does not exist.
+    if (new_file_) {
+      std::vector<std::string> paths;
+      paths.reserve(exec_time_ms_.size());
+      for (const auto& [hlo_file, _] : exec_time_ms_) {
+        paths.push_back(hlo_file);
+      }
+      std::string prefix = tsl::io::CommonPathPrefix(paths);
+      fout->Append("Datetime").IgnoreError();
+      for (const auto& [hlo_file, _] : exec_time_ms_) {
+        auto fname = hlo_file.substr(prefix.size());
+        fout->Append(kCSVSep + fname).IgnoreError();
+      }
+      fout->Append("\n").IgnoreError();
+    }
+    fout->Append(run_time_).IgnoreError();
+    for (const auto& [_, time_ms] : exec_time_ms_) {
+      fout->Append(absl::StrFormat("%c %.4gms", kCSVSep, time_ms))
+          .IgnoreError();
+    }
+    fout->Append("\n").IgnoreError();
+  }
+
+ private:
+  std::string csv_file_path_, run_time_;
+  bool new_file_;
+  // Use a btree map to sort the HLO files by name.
+  absl::btree_map<std::string, double> exec_time_ms_;
+};  // struct CSVProfileTimeWriter
+
 static absl::Status RunMultihostHloRunner(int argc, char** argv,
                                           HloRunnerConfig& opts) {
   if (std::string error;
@@ -294,8 +359,15 @@ static absl::Status RunMultihostHloRunner(int argc, char** argv,
   CHECK(env.client != nullptr);
 
   std::vector<ExecutionProfile> execution_profiles;
+  std::unique_ptr<CSVProfileTimeWriter> csv_writer;
+
   if (opts.profile_execution) {
     running_options.execution_profiles = &execution_profiles;
+    // If we run with distributed client, only the master process will write
+    // to the CSV file.
+    if (!opts.profile_to_csv.empty() && opts.task_id == 0) {
+      csv_writer = std::make_unique<CSVProfileTimeWriter>(opts.profile_to_csv);
+    }
   }
 
   for (int c = 1; c < argc; c++) {
@@ -316,10 +388,14 @@ static absl::Status RunMultihostHloRunner(int argc, char** argv,
                              opts.input_format, opts.task_id)
                              .status());
     }
-    for (int i = 0; i < execution_profiles.size(); ++i) {
+
+    for (size_t i = 0; i < execution_profiles.size(); ++i) {
       std::cout << "## Execution time, file=" << hlo_file << " repeat=" << i
                 << " duration=" << execution_profiles[i].compute_time_ns()
                 << "ns" << std::endl;
+    }
+    if (csv_writer != nullptr) {
+      csv_writer->append_row(hlo_file, execution_profiles);
     }
   }
   return absl::OkStatus();
@@ -444,6 +520,12 @@ int main(int argc, char** argv) {
                 "client. Only used with the BFC allocator."),
       tsl::Flag("profile_execution", &opts.profile_execution,
                 "If set, we will profile the execution and print the results."),
+      tsl::Flag("profile_to_csv", &opts.profile_to_csv,
+                "A path to a CSV file to save the averaged profile results to. "
+                "Takes effect only if --profile_execution is set. If the file "
+                "does not exist, it will be created with a header row listing "
+                "all input hlo files. Otherwise, new results will be appended "
+                "to the existing file."),
       tsl::Flag("xla_gpu_dump_xspace_to", &opts.xla_gpu_dump_xspace_to,
                 "A directory to dump xspace data for GPU profiling."),
       // This option is not used during parsing, but it is added here for
