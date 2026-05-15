@@ -748,7 +748,7 @@ xla_cc_test(
     deps = [
         ":strip_memory_placement_annotations",
         "//xla/hlo/ir:hlo",
-        "//xla/tests:hlo_test_base",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
         "//xla/tests:xla_internal_test_main",
         "//xla/tsl/platform:statusor",
         "@com_google_googletest//:gtest",
