@@ -233,6 +233,7 @@ xla_test(
         "b200",
         "amdgpu_any",
     ],
+    shard_count = 4,
     tags = ["no_mac"],
     deps = [
         "//xla:comparison_util",
