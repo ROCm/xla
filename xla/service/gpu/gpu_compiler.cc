@@ -508,6 +508,13 @@ absl::StatusOr<GpuTopology> InferGpuTopology(
                      std::move(cpu_target_options)};
 }
 
+void MergeModuleStatsInPlace(const ModuleStats& from, ModuleStats& to) {
+  for (const auto& [name, kernel_stats] : from) {
+    to[name].load_bytes_spilled += kernel_stats.load_bytes_spilled;
+    to[name].store_bytes_spilled += kernel_stats.store_bytes_spilled;
+  }
+}
+
 }  // namespace
 
 std::unique_ptr<HloPassPipeline> GpuCompiler::GetCublasRewriterPipeline(
@@ -2792,6 +2799,8 @@ GpuCompiler::CompileToBackendResult(
           .debug_options()
           .xla_gpu_enable_llvm_module_compilation_parallelism();
 
+  absl::Mutex module_stats_m_;
+  ModuleStats module_stats;
   CompileModuleResults compile_module_results;
   std::atomic<int> shard_number = 0;
 
@@ -2808,6 +2817,10 @@ GpuCompiler::CompileToBackendResult(
           BackendCompileResult result,
           CompileSingleModule(module->config(), descr, module, &llvm_module,
                               false, shard_number.fetch_add(1)));
+
+      absl::MutexLock lock(module_stats_m_);
+      MergeModuleStatsInPlace(result.module_stats, module_stats);
+
       return std::move(result.binary);
     };
     CubinCustomKernelCompiler kernel_compiler(
@@ -2881,6 +2894,10 @@ GpuCompiler::CompileToBackendResult(
                             /*shard_number=*/shard_number.fetch_add(1)));
   }
 
+  {
+    absl::MutexLock lock(module_stats_m_);
+    MergeModuleStatsInPlace(module_stats, backend_result.module_stats);
+  }
   if (!backend_result.asm_text.empty()) {
     backend_result.asm_text =
         absl::StrCat(kGpuExecutablePtxMarker, backend_result.asm_text);
