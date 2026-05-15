@@ -402,7 +402,7 @@ std::vector<HloInstruction*> MakeTiledPartitionOrdinals(
     const HloSharding& sharding, HloInstruction* partition_id, SpmdBuilder* b) {
   CHECK(!sharding.IsReplicatedOrSingleDevice());
   auto dimensions = sharding.dimensions();
-  if (sharding.ReplicateOnLastTileDim()) {
+  if (!sharding.UseNamedShardingLeaf() && sharding.ReplicateOnLastTileDim()) {
     dimensions.remove_suffix(1);
   }
   auto table_shape = ShapeUtil::MakeShape(S32, dimensions);
