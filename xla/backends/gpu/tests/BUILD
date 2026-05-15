@@ -79,11 +79,10 @@ cc_library(
         "//xla/service:llvm_compiler",
         "//xla/service/gpu:gpu_compiler",
         "//xla/tests:codegen_utils",
-        "@com_google_absl//absl/base:core_headers",
+        "//xla/tsl/platform:status_macros",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/synchronization",
         "@com_google_googletest//:gtest_for_library",
     ],
 )
