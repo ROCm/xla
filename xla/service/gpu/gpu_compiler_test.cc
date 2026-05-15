@@ -2025,6 +2025,209 @@ TEST_F(
       absl_testing::IsOkAndHolds(true));
 }
 
+struct RequiresCollectiveSymmetricMemorySpaceParams {
+  bool is_sym_mem;
+  bool use_input_output_alias;
+};
+
+class RequiresCollectiveSymmetricMemorySpaceTest
+    : public GpuCompilerTest,
+      public ::testing::WithParamInterface<
+          RequiresCollectiveSymmetricMemorySpaceParams> {};
+
+TEST_P(RequiresCollectiveSymmetricMemorySpaceTest, DirectUsage) {
+  constexpr absl::string_view kHloTemplate = R"(
+HloModule test$0
+
+ENTRY test_computation {
+  p = u32[2] parameter(0)
+  ROOT permute = u32[2] collective-permute(p), source_target_pairs={{1,0}, {0,1}}
+}
+  )";
+  bool use_input_output_alias = GetParam().use_input_output_alias;
+  // Inject the alias layout configuration into the HLO
+  std::string hlo_text = absl::StrReplaceAll(
+      kHloTemplate,
+      {{"$0",
+        use_input_output_alias ? ", input_output_alias={ {}: (0, {}) }" : ""}});
+
+  HloModuleConfig config = GetModuleConfigForTest();
+  if (GetParam().is_sym_mem) {
+    config.mutable_debug_options().set_xla_gpu_collective_permute_mode(
+        DebugOptions::COLLECTIVES_SYMMETRIC_MEMORY);
+  }
+  std::pair<const HloModule*, std::unique_ptr<OpaqueExecutable>>
+      optimized_module_and_executable;
+  ASSERT_OK_AND_ASSIGN(optimized_module_and_executable,
+                       GetOptimizedModuleForExecutable(hlo_text, config));
+
+  const HloModule* optimized_module = optimized_module_and_executable.first;
+
+  constexpr absl::string_view kS0NoCopy = R"(
+    // CHECK:  %collective-permute-start = (u32[2]{0}, u32[2]{0}) collective-permute-start(%p)
+    // CHECK:  ROOT %collective-permute-done = u32[2]{0} collective-permute-done(%collective-permute-start)
+  )";
+
+  constexpr absl::string_view kS0OneResultCopy = R"(
+    // CHECK:  %collective-permute-start = (u32[2]{0}, u32[2]{0}) collective-permute-start(%p)
+    // CHECK:  %collective-permute-done = u32[2]{0} collective-permute-done(%collective-permute-start)
+    // CHECK:  ROOT %copy{{.*}} = u32[2]{0} copy(%collective-permute-done)
+  )";
+
+  constexpr absl::string_view kS1TwoCopies = R"(
+    // CHECK:  [[COPY0:%copy[0-9.]*]] = u32[2]{0:S(1)} copy(%p)
+    // CHECK:  %collective-permute-start = (u32[2]{0:S(1)}, u32[2]{0:S(1)}) collective-permute-start([[COPY0]])
+    // CHECK:  %collective-permute-done = u32[2]{0:S(1)} collective-permute-done(%collective-permute-start)
+    // CHECK:  ROOT %copy{{.*}} = u32[2]{0} copy(%collective-permute-done)
+  )";
+
+  const absl::string_view expected_check = [&]() {
+    if (GetParam().is_sym_mem) {
+      // Collective memory space should be empty after the module execution,
+      // otherwise symmetric memory in XLA will not work correctly during the
+      // next execution.
+      // Regardless of the input_output_alias, Entry output should be S0.
+      // Therefore, we need two copies - for Entry param(0) and for Entry result
+      return kS1TwoCopies;
+    }
+    if (use_input_output_alias) {
+      // Collective-permute is out-of-place operation. It uses two independent
+      // buffers for the input and output. Because input and output are aliased,
+      // the output buffer should be copied to the input buffer.
+      // Therefore, one copy for the result is needed.
+      return kS0OneResultCopy;
+    }
+    // Param(0) is in S0. Collective-permute is out-of-place operation.
+    // Therefore, param(0) HloBuffer size is 1. No copy is needed for the
+    // parameter(0). No copy is needed for the result as well.
+    return kS0NoCopy;
+  }();
+
+  EXPECT_THAT(RunFileCheck(
+                  optimized_module->ToString(HloPrintOptions{}
+                                                 .set_print_operand_shape(false)
+                                                 .set_print_metadata(false)),
+                  expected_check),
+              absl_testing::IsOkAndHolds(true));
+}
+
+TEST_P(RequiresCollectiveSymmetricMemorySpaceTest, LoopUsage) {
+  constexpr absl::string_view kHloTemplate = R"(
+    HloModule test$0
+
+    while_condition {
+      params = (s32[], u32[2]) parameter(0)
+      loop_counter = s32[] get-tuple-element(params), index=0
+      limit = s32[] constant(3)
+      ROOT result = pred[] compare(loop_counter, limit), direction=LT
+    }
+
+    while_body {
+      params = (s32[], u32[2]) parameter(0)
+      loop_counter = s32[] get-tuple-element(params), index=0
+      cp_input = u32[2] get-tuple-element(params), index=1
+      cp_output = u32[2] collective-permute(cp_input), source_target_pairs={{1,0}, {0,1}}, channel_id=1
+      new_loop_counter = s32[] add(loop_counter, s32[] constant(1))
+      ROOT result = (s32[], u32[2]) tuple(new_loop_counter, cp_output)
+    }
+
+    ENTRY entry_computation {
+      init_loop_counter = s32[] constant(0)
+      input = u32[2] parameter(0)
+      while_init = tuple(init_loop_counter, input)
+      while = (s32[], u32[2]) while(while_init), condition=while_condition, body=while_body
+      ROOT result = get-tuple-element(while), index=1
+    }
+  )";
+  bool use_input_output_alias = GetParam().use_input_output_alias;
+  // Inject the alias layout configuration into the HLO
+  std::string hlo_text = absl::StrReplaceAll(
+      kHloTemplate,
+      {{"$0",
+        use_input_output_alias ? ", input_output_alias={ {}: (0, {}) }" : ""}});
+
+  HloModuleConfig config = GetModuleConfigForTest();
+  if (GetParam().is_sym_mem) {
+    config.mutable_debug_options().set_xla_gpu_collective_permute_mode(
+        DebugOptions::COLLECTIVES_SYMMETRIC_MEMORY);
+  }
+  std::pair<const HloModule*, std::unique_ptr<OpaqueExecutable>>
+      optimized_module_and_executable;
+  ASSERT_OK_AND_ASSIGN(optimized_module_and_executable,
+                       GetOptimizedModuleForExecutable(hlo_text, config));
+
+  const HloModule* optimized_module = optimized_module_and_executable.first;
+
+  constexpr absl::string_view kS0NoCopy = R"(
+    // CHECK:ENTRY %entry_computation (input: u32[2]) -> u32[2] {
+    // CHECK:  %input = u32[2]{0} parameter(0)
+    // CHECK:  %tuple = (s32[], u32[2]{0}) tuple(%copy{{.*}}, %input)
+    // CHECK:  %while = (s32[], u32[2]{0}) while(%tuple)
+    // CHECK:  ROOT [[RESULT:%result[0-9.]*]] = u32[2]{0} get-tuple-element(%while)
+  )";
+
+  constexpr absl::string_view kS0OneParamCopy = R"(
+    // CHECK:ENTRY %entry_computation (input: u32[2]) -> u32[2] {
+    // CHECK:  %input = u32[2]{0} parameter(0)
+    // CHECK:  [[COPY1:%copy[0-9.]*]] = u32[2]{0} copy(%input)
+    // CHECK:  %tuple = (s32[], u32[2]{0}) tuple(%copy{{.*}}, [[COPY1]])
+    // CHECK:  %while = (s32[], u32[2]{0}) while(%tuple)
+    // CHECK:  ROOT [[RESULT:%result[0-9.]*]] = u32[2]{0} get-tuple-element(%while)
+  )";
+
+  constexpr absl::string_view kS1TwoCopies = R"(
+    // CHECK:ENTRY %entry_computation (input: u32[2]) -> u32[2] {
+    // CHECK:  %input = u32[2]{0} parameter(0)
+    // CHECK:  [[COPY1:%copy[0-9.]*]] = u32[2]{0:S(1)} copy(%input)
+    // CHECK:  %tuple = (s32[], u32[2]{0:S(1)}) tuple(%copy{{.*}}, [[COPY1]])
+    // CHECK:  %while = (s32[], u32[2]{0:S(1)}) while(%tuple)
+    // CHECK:  [[RESULT:%result[0-9.]*]] = u32[2]{0:S(1)} get-tuple-element(%while)
+    // CHECK:  ROOT %copy{{.*}} = u32[2]{0} copy([[RESULT]])
+  )";
+
+  const absl::string_view expected_check = [&]() {
+    if (GetParam().is_sym_mem) {
+      // Collective memory space should be empty after the module execution,
+      // otherwise symmetric memory in XLA will not work correctly during the
+      // next execution.
+      // Regardless of the input_output_alias, Entry output should be S0.
+      // Therefore, we need two copies - for Entry param(0) and for Entry result
+      return kS1TwoCopies;
+    }
+    if (use_input_output_alias) {
+      // Collective-permute is out-of-place operation. It uses two independent
+      // buffers for the input and output. While_body function copies
+      // collective-permute output to the input. While() op returns input
+      // buffer. Therefore, no copy is needed.
+      return kS0NoCopy;
+    }
+    // Param(0) is in S0 and read-only. while() op mutates input buffer.
+    // Therefore, one copy is needed for the param(0) before using it in the
+    // while() loop. Output is in S0 and no copy for the output is needed.
+    return kS0OneParamCopy;
+  }();
+
+  EXPECT_THAT(RunFileCheck(
+                  optimized_module->ToString(HloPrintOptions{}
+                                                 .set_print_operand_shape(false)
+                                                 .set_print_metadata(false)),
+                  expected_check),
+              absl_testing::IsOkAndHolds(true));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    CollectiveBufferAnalysis, RequiresCollectiveSymmetricMemorySpaceTest,
+    Values(RequiresCollectiveSymmetricMemorySpaceParams{false, false},
+           RequiresCollectiveSymmetricMemorySpaceParams{false, true},
+           RequiresCollectiveSymmetricMemorySpaceParams{true, false},
+           RequiresCollectiveSymmetricMemorySpaceParams{true, true}),
+    [](const TestParamInfo<
+        RequiresCollectiveSymmetricMemorySpaceTest::ParamType>& info) {
+      return absl::StrCat(
+          info.param.is_sym_mem ? "s1_mem" : "s0_mem", "_",
+          info.param.use_input_output_alias ? "with_alias" : "no_alias");
+    });
+
 struct GpuCompilerParametersCopyCollectiveMemoryTestParams {
   bool xla_gpu_enable_nccl_buffers;
   bool xla_gpu_experimental_enable_nccl_symmetric_buffers;
@@ -2256,8 +2459,7 @@ INSTANTIATE_TEST_SUITE_P(
           info.param.xla_gpu_experimental_enable_nccl_symmetric_buffers
               ? "enable_nccl_symmetric_buffers"
               : "disable_nccl_symmetric_buffers",
-          "_",
-          info.param.use_input_output_alias ? "with_alias" : "without_alias");
+          "_", info.param.use_input_output_alias ? "with_alias" : "no_alias");
     });
 
 auto SelectKTestParams() {

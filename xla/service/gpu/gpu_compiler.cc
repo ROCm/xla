@@ -2245,8 +2245,7 @@ bool ShouldAddCopyForCollectiveMemorySpace(const HloValue* value,
           module->entry_computation()->parameter_instructions(), inst) ||
       (inst->opcode() == HloOpcode::kConstant)) {
     for (auto& use : value->GetUses()) {
-      if (RequiresCollectiveSymmetricMemorySpace(use.instruction) ||
-          IsCollectiveMosaicGpuInstruction(*use.instruction) ||
+      if (IsCollectiveMosaicGpuInstruction(*use.instruction) ||
           (gpu_topology.num_partitions() >
                gpu_topology.num_devices_per_host() &&
            IsMosaicWithCollectiveMetadata(*use.instruction)) ||
@@ -2277,6 +2276,13 @@ bool RequiresCollectiveInput(const HloUse& use, const DebugOptions& opts) {
       return true;
     }
   }
+
+  // Device-initiated and one-sided collectives require S1 memory for all
+  // buffers.
+  if (RequiresCollectiveSymmetricMemorySpace(user)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -2297,13 +2303,19 @@ bool RequiresCollectiveOutput(const HloInstruction* def,
       return true;
     }
   }
+
+  // If the instruction requires symmetric memory, its output value is S1.
+  // If the output value is live-out of the module, we must convert is to S0.
+  if (RequiresCollectiveSymmetricMemorySpace(def)) {
+    return true;
+  }
+
   return false;
 }
 
 // TODO: b/482045400: Migrate remaining cases from
 // ShouldAddCopyForCollectiveMemorySpace
-// (RequiresCollectiveSymmetricMemorySpace,
-// IsCollectiveMosaicGpuInstruction, UsesCollectiveMemorySpaceFrontendAttr)
+// (IsCollectiveMosaicGpuInstruction, UsesCollectiveMemorySpaceFrontendAttr)
 // to this function from ShouldAddCopyForCollectiveMemorySpace
 void GpuCollectiveBufferAnalysis(
     HloModule* module, const HloAliasAnalysis& alias_analysis,
@@ -2364,44 +2376,54 @@ void GpuCollectiveBufferAnalysis(
       VLOG(5) << buf;
     }
 
+    bool is_hlo_buffer_s1 = used_by_collective || defined_by_collective;
+
     // Special Copy Insertion Case A: Entry input
-    if (used_by_collective && !entry_input_values.empty()) {
+    if (is_hlo_buffer_s1 && !entry_input_values.empty()) {
       for (const HloValue* input_value : entry_input_values) {
         VLOG(2) << "Special Copy Insertion Case A: Entry input "
                 << input_value->ToShortString()
-                << " shares a buffer with an S1 operand. Inserting copy.";
+                << " is associated with S1 HloBuffer. Inserting copy.";
         add_index_to_copy(input_value->defining_instruction(),
                           input_value->defining_index());
       }
     }
 
     // Special Copy Insertion Case B: Entry output
-    if (defined_by_collective && !live_out_values.empty()) {
+    if (is_hlo_buffer_s1 && !live_out_values.empty()) {
       for (const HloValue* live_out_value : live_out_values) {
-        VLOG(2) << "Special Copy Insertion Case B: S1 collective output flows "
-                   "directly to entry output. Searching for entry-level ROOT "
-                   "position for "
+        VLOG(2) << "Special Copy Insertion Case B: Live-out value is "
+                << "associated with S1 HloBuffer. Searching for entry-level "
+                   "ROOT position for "
                 << live_out_value->ToShortString();
 
         bool marked_for_copy = false;
         for (const HloPosition& pos : live_out_value->positions()) {
           if (pos.instruction->parent()->IsEntryComputation() &&
               pos.instruction->IsRoot()) {
-            VLOG(2)
-                << "Marking ENTRY ROOT instruction for collective output copy: "
-                << pos.instruction->name() << " at index "
-                << pos.index.ToString();
+            // If the ROOT is already a copy, it serves as the isolation
+            // barrier. Do not insert a redundant copy(copy) chain.
+            if (pos.instruction->opcode() == HloOpcode::kCopy) {
+              VLOG(2) << "Skipping ENTRY ROOT copy insertion because it is "
+                         "already a copy instruction: "
+                      << pos.instruction->name();
+              marked_for_copy = true;
+              continue;
+            }
+
+            VLOG(2) << "Marking ENTRY ROOT instruction for S1 output copy: "
+                    << pos.instruction->name() << " at index "
+                    << pos.index.ToString();
             add_index_to_copy(pos.instruction, pos.index);
             marked_for_copy = true;
           }
         }
 
         if (!marked_for_copy) {
-          LOG(WARNING)
-              << "Special Copy Insertion Case B: Could not find "
-                 "entry-level ROOT position for collective live-out value "
-              << live_out_value->ToShortString() << " in buffer "
-              << buffer.id();
+          LOG(WARNING) << "Special Copy Insertion Case B: Could not find "
+                          "entry-level ROOT position for S1 live-out value "
+                       << live_out_value->ToShortString() << " in buffer "
+                       << buffer.id();
         }
       }
     }
