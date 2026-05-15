@@ -3180,6 +3180,51 @@ PJRT_Error* PJRT_TopologyDescription_Attributes(
   return nullptr;
 }
 
+PJRT_Error* PJRT_TopologyDescription_MakeCanonicalShapeForMemorySpace(
+    PJRT_TopologyDescription_MakeCanonicalShapeForMemorySpace_Args* args) {
+  PJRT_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+      "PJRT_TopologyDescription_MakeCanonicalShapeForMemorySpace_Args",
+      PJRT_TopologyDescription_MakeCanonicalShapeForMemorySpace_Args_STRUCT_SIZE,  // NOLINT (whitespace/line_length)
+      args->struct_size));
+
+  xla::PrimitiveType element_type =
+      pjrt::ConvertFromPjRtBufferType(args->element_type);
+  xla::Shape input_shape =
+      xla::ShapeUtil::MakeShape(element_type, {args->dims, args->num_dims});
+
+  const xla::Layout* layout_ptr = nullptr;
+  xla::Layout layout;
+  if (args->layout != nullptr) {
+    if (args->layout->type !=
+        PJRT_Buffer_MemoryLayout_Type::PJRT_Buffer_MemoryLayout_Type_Tiled) {
+      return StatusToPjRtError(absl::InvalidArgumentError(
+          "Only tiled layout is supported for conversion to xla::Layout."));
+    }
+    PJRT_ASSIGN_OR_RETURN(layout, ConvertToLayout(args->layout->tiled));
+    layout_ptr = &layout;
+  }
+
+  PJRT_ASSIGN_OR_RETURN(
+      xla::Shape canonical_shape,
+      args->topology->topology->MakeCanonicalShapeForMemorySpace(
+          args->memory_space_kind_id, input_shape, layout_ptr));
+
+  xla::ShapeProto proto = canonical_shape.ToProto();
+  std::string out;
+  if (!proto.SerializeToString(&out)) {
+    return StatusToPjRtError(
+        absl::InternalError("Failed to serialize ShapeProto."));
+  }
+
+  char* buffer = new char[out.size()];
+  memcpy(buffer, out.data(), out.size());
+  args->serialized_shape = buffer;
+  args->serialized_shape_size = out.size();
+  args->serialized_shape_deleter = +[](const char* ptr) { delete[] ptr; };
+
+  return nullptr;
+}
+
 PJRT_Error* PJRT_Compile(PJRT_Compile_Args* args) {
   PJRT_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
       "PJRT_Compile_Args", PJRT_Compile_Args_STRUCT_SIZE, args->struct_size));
@@ -3854,6 +3899,8 @@ PJRT_Api CreatePjrtApi(PJRT_Client_Create* create_fn,
       pjrt::PJRT_Executable_ParameterMemoryKinds,
       /*PJRT_Device_ClearMemoryStats=*/
       pjrt::PJRT_Device_ClearMemoryStats,
+      /*PJRT_TopologyDescription_MakeCanonicalShapeForMemorySpace=*/
+      pjrt::PJRT_TopologyDescription_MakeCanonicalShapeForMemorySpace,
   };
 }
 

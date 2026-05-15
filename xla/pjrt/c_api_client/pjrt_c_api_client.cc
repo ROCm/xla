@@ -4282,6 +4282,56 @@ absl::StatusOr<Layout> PjRtCApiTopologyDescription::GetDefaultLayout(
   return pjrt_layout->xla_layout();
 }
 
+absl::StatusOr<xla::Shape>
+PjRtCApiTopologyDescription::MakeCanonicalShapeForMemorySpace(
+    int memory_space_kind_id, xla::Shape shape,
+    const xla::Layout* layout) const {
+  if (c_api_->pjrt_api_version.minor_version < 109 ||
+      c_api_->PJRT_TopologyDescription_MakeCanonicalShapeForMemorySpace ==
+          nullptr) {
+    return absl::UnimplementedError(
+        "PJRT_TopologyDescription_MakeCanonicalShapeForMemorySpace is not "
+        "supported by this PJRT C API implementation.");
+  }
+
+  PJRT_TopologyDescription_MakeCanonicalShapeForMemorySpace_Args args;
+  args.struct_size =
+      PJRT_TopologyDescription_MakeCanonicalShapeForMemorySpace_Args_STRUCT_SIZE;  // NOLINT (whitespace/line_length)
+  args.extension_start = nullptr;
+  args.topology = c_topology_;
+  args.memory_space_kind_id = memory_space_kind_id;
+  args.dims = shape.dimensions().data();
+  args.num_dims = shape.dimensions().size();
+  args.element_type = pjrt::ConvertToPjRtBufferType(shape.element_type());
+
+  pjrt::BufferMemoryLayoutData layout_data;
+  if (layout != nullptr) {
+    TF_ASSIGN_OR_RETURN(layout_data,
+                        pjrt::ConvertToBufferMemoryLayoutData(*layout));
+    args.layout = &layout_data.c_layout;
+  } else {
+    args.layout = nullptr;
+  }
+
+  RETURN_STATUS_IF_PJRT_ERROR(
+      c_api_->PJRT_TopologyDescription_MakeCanonicalShapeForMemorySpace(&args),
+      c_api_);
+
+  absl::Cleanup cleanup = [&args] {
+    if (args.serialized_shape_deleter) {
+      args.serialized_shape_deleter(args.serialized_shape);
+    }
+  };
+
+  xla::ShapeProto shape_proto;
+  if (!shape_proto.ParseFromString(absl::string_view(
+          args.serialized_shape, args.serialized_shape_size))) {
+    return absl::InternalError("Failed to parse ShapeProto from C API.");
+  }
+
+  return xla::Shape::FromProto(shape_proto);
+}
+
 void PjRtCApiTopologyDescription::InitAttributes() {
   PJRT_TopologyDescription_Attributes_Args args;
   args.struct_size = PJRT_TopologyDescription_Attributes_Args_STRUCT_SIZE;

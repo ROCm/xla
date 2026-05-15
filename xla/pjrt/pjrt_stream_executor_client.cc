@@ -489,6 +489,12 @@ absl::StatusOr<xla::Shape>
 PjRtStreamExecutorClient::MakeDefaultShapeForMemorySpace(
     PjRtMemorySpace* memory_space, xla::Shape shape,
     const xla::Layout* layout) const {
+  auto topo = GetTopologyDescription();
+  if (topo.ok()) {
+    return (*topo)->MakeCanonicalShapeForMemorySpace(memory_space->kind_id(),
+                                                     std::move(shape), layout);
+  }
+  // TODO(parkers): ensure that topologies are always passed.
   if (shape.IsToken()) {
     return shape;
   }
