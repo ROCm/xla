@@ -191,6 +191,7 @@ cc_library(
         "//xla/hlo/transforms:operand_upcaster",
         "//xla/hlo/transforms:propagate_call_metadata",
         "//xla/hlo/transforms:shape_canonicalizer",
+        "//xla/hlo/transforms:strip_memory_placement_annotations",
         "//xla/hlo/transforms:while_loop_trip_count_annotator",
         "//xla/hlo/transforms/collectives:async_collective_replacer",
         "//xla/hlo/transforms/collectives:collective_permute_cse",

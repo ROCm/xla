@@ -221,10 +221,10 @@ static absl::StatusOr<std::vector<LayoutMode>> MlirAttrsToLayoutModes(
 // compilers.
 absl::StatusOr<MemorySpaceColor> GetMemorySpaceColor(
     const std::string& memory_kind) {
-  // TODO(yashkatariya,zce): Unpinned_host is not valid for compiler. Only
-  // pinned_host matters. So should there be a different lowering for
-  // unpinned_host?
-  if (memory_kind == "unpinned_host" || memory_kind == "pinned_host") {
+  if (memory_kind == "unpinned_host") {
+    return xla::Layout::kUnpinnedHostMemorySpace;
+  }
+  if (memory_kind == "pinned_host") {
     return xla::Layout::kHostMemorySpace;
   }
   if (memory_kind == "device") {

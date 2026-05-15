@@ -155,6 +155,7 @@ limitations under the License.
 #include "xla/hlo/transforms/simplifiers/tree_reduction_rewriter.h"
 #include "xla/hlo/transforms/simplifiers/tuple_simplifier.h"
 #include "xla/hlo/transforms/simplifiers/zero_sized_hlo_elimination.h"
+#include "xla/hlo/transforms/strip_memory_placement_annotations.h"
 #include "xla/hlo/transforms/while_loop_trip_count_annotator.h"
 #include "xla/literal_pool.h"
 #include "xla/map_util.h"
@@ -602,6 +603,13 @@ absl::Status CpuCompiler::RunHloPassesThroughLayoutAssn(
   AsyncCollectiveReplacer::Config acr_config(HloPredicateTrue);
   async_collective_pipeline.AddPass<AsyncCollectiveReplacer>(acr_config);
   TF_RETURN_IF_ERROR(async_collective_pipeline.Run(module).status());
+
+  // Strip memory placement annotations early before SPMD partitioner runs.
+  {
+    HloPassPipeline pre_spmd_pipeline("pre-spmd-partitioner");
+    pre_spmd_pipeline.AddPass<StripMemoryPlacementAnnotations>();
+    TF_RETURN_IF_ERROR(pre_spmd_pipeline.Run(module).status());
+  }
 
   if (num_partitions > 1) {
     if (!module->config().use_spmd_partitioning()) {
