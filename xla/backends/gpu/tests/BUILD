@@ -713,6 +713,27 @@ xla_test(
 )
 
 xla_test(
+    name = "kernel_cache_regression_test",
+    srcs = ["kernel_cache_regression_test.cc"],
+    backends = [
+        "a100",
+        "h100",
+        "b200",
+        "amdgpu_any",
+    ] + if_oss([
+        "nvgpu_any",
+    ]),
+    deps = [
+        ":hlo_pjrt_gpu_test_base",
+        "//xla:error_spec",
+        "//xla/stream_executor:device_description",
+        "//xla/tests:hlo_pjrt_interpreter_reference_mixin",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+xla_test(
     name = "sorting_test",
     srcs = ["sorting_test.cc"],
     backends = ["gpu"],
