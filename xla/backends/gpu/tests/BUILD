@@ -48,31 +48,6 @@ filegroup(
 )
 
 cc_library(
-    name = "gpu_codegen_test",
-    testonly = True,
-    srcs = ["gpu_codegen_test.cc"],
-    hdrs = ["gpu_codegen_test.h"],
-    tags = tf_gpu_tests_tags(),
-    deps = [
-        "//xla:debug_options_flags",
-        "//xla:shape_util",
-        "//xla/hlo/testlib:filecheck",
-        "//xla/hlo/testlib:verified_hlo_module",
-        "//xla/service:executable",
-        "//xla/service:gpu_plugin",
-        "//xla/service:hlo_module_config",
-        "//xla/service/gpu:gpu_compiler",
-        "//xla/stream_executor:platform_manager",
-        "//xla/tests:llvm_irgen_test_base",
-        "//xla/tsl/platform:logging",
-        "//xla/tsl/platform:statusor",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_googletest//:gtest_for_library",
-    ],
-)
-
-cc_library(
     name = "hlo_gpu_test_base_interface",
     hdrs = ["hlo_gpu_test_base_interface.h"],
     deps = [
