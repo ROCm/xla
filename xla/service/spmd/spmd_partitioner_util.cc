@@ -1031,10 +1031,7 @@ std::optional<int64_t> UniqueTiledDim(const HloSharding& sharding) {
     return std::nullopt;
   }
   int64_t dim = -1;
-  int64_t rank = sharding.ReplicateOnLastTileDim()
-                     ? sharding.num_dimensions() - 1
-                     : sharding.num_dimensions();
-  for (int64_t i = 0; i < rank; ++i) {
+  for (int64_t i = 0; i < sharding.TiledDataRank(); ++i) {
     if (sharding.dimension(i) > 1) {
       if (dim != -1) {
         return std::nullopt;
