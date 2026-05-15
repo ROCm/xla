@@ -6887,7 +6887,7 @@ CudnnGraph::VariantPack CudnnGraph::PackOperands(
   absl::Span<DeviceAddressBase> operands_without_workspace = operands;
   if (graph_.get_workspace_size() > 0) {
     workspace = operands.back();
-    CHECK_EQ(graph_.get_workspace_size(), workspace.size());
+    CHECK_GE(workspace.size(), graph_.get_workspace_size());
   }
   if (graph_.get_workspace_size() > 0 || operands.back().size() == 0) {
     operands_without_workspace = operands.first(operands.size() - 1);
