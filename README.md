@@ -1,3 +1,4 @@
+<!-- ci-health-check magaonka 2026-04-29: trivial no-op to exercise CI on rocm-jaxlib-v0.9.2; do not merge -->
 # XLA
 
 XLA (Accelerated Linear Algebra) is an open-source machine learning (ML)
