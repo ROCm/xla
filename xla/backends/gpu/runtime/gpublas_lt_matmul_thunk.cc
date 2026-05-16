@@ -35,8 +35,8 @@ limitations under the License.
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/tsl/platform/errors.h"
-#include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/platform/status_macros.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace gpu {
@@ -226,9 +226,8 @@ CublasLtMatmulThunk::GetCachedGroupedMatmulPlan(const ExecuteParams& params) {
       return absl::InternalError(
           "Expected GroupedGemmConfig but gemm_config_ holds a different type");
     }
-    std::vector<se::gpu::BlasLt::Epilogue> epilogues(1, epilogue_);
     TF_ASSIGN_OR_RETURN(auto plan,
-                        blas_lt->GetGroupedMatmulPlan(*gemm_config, epilogues));
+                        blas_lt->GetGroupedMatmulPlan(*gemm_config, epilogue_));
 
     // Set the workspace size to the size that was used for autotuning, so
     // algorithm index will be the same as returned by GetAlgorithms called

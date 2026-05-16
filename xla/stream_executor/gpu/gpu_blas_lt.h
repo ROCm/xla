@@ -172,6 +172,7 @@ struct GroupedGemmConfig {
   blas::DataType type_a, type_b, type_c, type_d;
   int64_t stride_ragged_dim;
   int64_t stride_group_dim;
+  int64_t c_stride_ragged_dim;
   int64_t output_stride_ragged_dim;
   // PrecisionConfig-level algorithm
   xla::PrecisionConfig::Algorithm precision_algorithm;
@@ -372,8 +373,7 @@ struct BlasLt {
       const GemmConfig& cfg, Epilogue epilogue) const = 0;
 
   virtual absl::StatusOr<MatmulPlanPtr> GetGroupedMatmulPlan(
-      gpu::GroupedGemmConfig& config,
-      const std::vector<Epilogue>& epilogues) const = 0;
+      gpu::GroupedGemmConfig& config, Epilogue epilogue) const = 0;
 
   static BlasLt* Get(const Stream* stream);
 
@@ -383,8 +383,7 @@ struct BlasLt {
                                                      Epilogue epilogue);
 
   static absl::StatusOr<MatmulPlanPtr> GetGroupedMatmulPlan(
-      const Stream* stream, gpu::GroupedGemmConfig& config,
-      const std::vector<Epilogue>& epilogues);
+      const Stream* stream, gpu::GroupedGemmConfig& config, Epilogue epilogue);
 
   absl::StatusOr<MatmulPlan*> GetOrCreateMatmulPlan(const std::string& key,
                                                     PlanCreateFunc create);
