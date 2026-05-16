@@ -47,7 +47,11 @@ namespace xla {
 // hlo proto file), or parsed from a hlo textual IR string.
 class HloRunnerPjRt : public HloRunnerInterface {
  public:
-  explicit HloRunnerPjRt(std::unique_ptr<PjRtClient> pjrt_client);
+  // Constructs a runner with the given PjRt client. The runner takes
+  // shared ownership of the client. Callers may pass either:
+  //   - a std::unique_ptr<PjRtClient> (converted to shared_ptr, refcount=1)
+  //   - a copy of a cached std::shared_ptr<PjRtClient> (shared, refcount>1)
+  explicit HloRunnerPjRt(std::shared_ptr<PjRtClient> pjrt_client);
 
   // Transfers data between the host and device, using the given parameter
   // layouts.
@@ -125,15 +129,15 @@ class HloRunnerPjRt : public HloRunnerInterface {
 
   bool HasProperty(HloRunnerPropertyTag::Type tag) const override;
 
-  absl::StatusOr<const HloModule* absl_nonnull> HloModuleFromWrapped(
+  absl::StatusOr<const HloModule * absl_nonnull> HloModuleFromWrapped(
       const OpaqueExecutable* wrapped) const override;
 
   // Returns true if the two given OpaqueExecutables originate from the same
   // runner and are equivalent according to some notion specific to that runner.
   // Executables that were created by different runners can never be equivalent.
-  bool ExecutablesAreEquivalent(
-      const OpaqueExecutable* absl_nonnull lhs,
-      const OpaqueExecutable* absl_nonnull rhs) const override;
+  bool ExecutablesAreEquivalent(const OpaqueExecutable* absl_nonnull lhs,
+                                const OpaqueExecutable* absl_nonnull
+                                    rhs) const override;
 
   absl::StatusOr<DeviceAssignment> GetDefaultDeviceAssignment(
       int num_replicas, int num_partitions) const override;
@@ -167,7 +171,11 @@ class HloRunnerPjRt : public HloRunnerInterface {
       const Layout& on_device_layout);
   absl::StatusOr<Literal> TransferLiteralFromDevice(PjRtBuffer& buffer);
 
-  std::unique_ptr<PjRtClient> pjrt_client_;
+  // Held as a shared_ptr so that multiple HloRunnerPjRt instances can share
+  // the same underlying PjRtClient. The client is freed when the last
+  // shared_ptr referencing it (typically the static cached client in the test
+  // infrastructure) is destroyed at process exit.
+  std::shared_ptr<PjRtClient> pjrt_client_;
 };
 
 // This class works just like a HloRunnerPjRt, but it only runs compilation
