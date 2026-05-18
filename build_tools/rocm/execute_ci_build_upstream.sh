@@ -56,7 +56,6 @@ done
     //xla/... \
     -//xla/tests:dot_operation_test_amdgpu_any \
     -//xla/backends/gpu/autotuner:triton_test_amdgpu_any \
-    -//xla/backends/gpu/transforms:gemm_rewriter_group_gemm_test_amdgpu_any \
     -//xla/tests:iota_test_amdgpu_any \
     -//xla/backends/gpu/tests:sorting_test_amdgpu_any \
     -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any
