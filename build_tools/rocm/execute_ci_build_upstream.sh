@@ -7,7 +7,6 @@ SCRIPT_DIR=$(realpath "$(dirname "$0")")
 EXCLUDED_TESTS=(
     "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
     "*IotaR1Test*"                                                                                                                                 # Taking too many CI nodes
-    "HipblasLtMxExecutionTest*"
     "TritonBackendTest.CostModelOptions_Combination"
     "TritonBackendTest.CostModelOptions_Filter"
     "TritonBackendTest.CostModelOptions_TopFromDefaul"
