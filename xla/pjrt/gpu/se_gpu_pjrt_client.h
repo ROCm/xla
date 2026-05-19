@@ -95,6 +95,13 @@ class StreamExecutorGpuDevice : public PjRtStreamExecutorDevice {
   absl::Status ClearMemoryStats() override;
 
  private:
+  // StreamExecutorGpuClient is the only class permitted to call the protected
+  // release_local_device_state() method (inherited from
+  // PjRtStreamExecutorDevice). This friend declaration is intentionally at the
+  // GPU-specific subclass level to avoid introducing a dependency on
+  // StreamExecutorGpuClient in the platform-neutral base header.
+  friend class StreamExecutorGpuClient;
+
   std::string device_vendor_;
 };
 

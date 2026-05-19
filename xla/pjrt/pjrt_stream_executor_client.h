@@ -159,13 +159,6 @@ class PjRtStreamExecutorDevice : public PjRtDevice {
     return local_device_state_.get();
   }
 
-  // Releases ownership of the local device state for caching/reuse.
-  // After this call, local_device_state() returns nullptr.
-  // The device must not be used after this call.
-  std::unique_ptr<LocalDeviceState> release_local_device_state() {
-    return std::move(local_device_state_);
-  }
-
   // If this is a device local to this host, returns a LocalDeviceState object
   // that can be used to manipulate the device. Returns an error if the device
   // is not local to this host.
@@ -193,6 +186,15 @@ class PjRtStreamExecutorDevice : public PjRtDevice {
   std::unique_ptr<ScopedAsyncTrackingEvent> CreateAsyncTrackingEvent(
       absl::string_view description) const override {
     return nullptr;
+  }
+
+ protected:
+  // Releases ownership of the local device state for caching/reuse.
+  // After this call, local_device_state() returns nullptr and the device
+  // must not be used again. Access is restricted to subclasses and their
+  // designated friends to prevent accidental misuse by unrelated code.
+  std::unique_ptr<LocalDeviceState> release_local_device_state() {
+    return std::move(local_device_state_);
   }
 
  private:

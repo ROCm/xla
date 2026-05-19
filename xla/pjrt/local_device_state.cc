@@ -184,10 +184,33 @@ absl::Status LocalDeviceState::Reset() {
   // After a normal execution this completes quickly (streams already idle).
   TF_RETURN_IF_ERROR(SynchronizeAllActivity());
 
-  // Step 2: Reset XLA-level sequencing bookkeeping.
-  // All events in compute_events_ have already fired (GPU work completed
-  // above), so clearing the deque is safe. Resetting the counters to 0 is
-  // required so the new client's operations start from a consistent baseline.
+  // Step 2: Drain the callback thread.
+  //
+  // SynchronizeAllActivity() guarantees that all GPU-stream host-callbacks
+  // (registered via DoHostCallback / ThenExecuteCallback) have been *invoked*,
+  // which means every call to callback_thread_->Schedule() that they contain
+  // has already been issued.  However, callback_thread_ is a single-threaded
+  // work queue: those scheduled closures may still be sitting in the queue or
+  // actively running when SynchronizeAllActivity() returns.
+  //
+  // In particular, the closures include:
+  //   - event.SetStateConcrete()  (from AllocateAndRecordEvent)
+  //   - the AndThen callback that calls compute_events_.pop_front()
+  //     (from GetEventForComputeStreamSyncPoint)
+  //
+  // If we clear compute_events_ while any of those closures are still queued,
+  // pop_front() would be called on an empty deque — undefined behaviour.
+  //
+  // Scheduling a sentinel task and blocking until it executes guarantees that
+  // every closure enqueued before this point has completed.
+  callback_thread_->Drain();
+
+  // Step 3: Reset XLA-level sequencing bookkeeping.
+  // All events in compute_events_ have already fired (GPU work completed in
+  // Step 1) and all callbacks that touch compute_events_ have completed
+  // (drained in Step 2), so clearing the deque is now safe.  Resetting the
+  // counters to 0 is required so the new client's operations start from a
+  // consistent baseline.
   {
     absl::MutexLock lock(mu_);
     compute_events_.clear();
@@ -195,7 +218,7 @@ absl::Status LocalDeviceState::Reset() {
     base_compute_event_sequence_id_ = 0;
   }
 
-  // Step 3: Clear the callback stream map.
+  // Step 4: Clear the callback stream map.
   // Callback streams are re-created on demand when ThenExecuteCallback is
   // called.
   if (callback_stream_map_.has_value()) {
@@ -203,7 +226,7 @@ absl::Status LocalDeviceState::Reset() {
     callback_stream_map_->clear();
   }
 
-  // Step 4: Drain the usage stream pool.
+  // Step 5: Drain the usage stream pool.
   // Pooled streams have been synchronized above; clear the pool so the new
   // client starts from a known empty state.
   {
@@ -212,6 +235,33 @@ absl::Status LocalDeviceState::Reset() {
   }
 
   return absl::OkStatus();
+}
+
+void LocalDeviceState::Reconfigure(
+    bool schedule_async, std::optional<int> max_inflight_computations) {
+  // Adjust async_dispatch_thread_.
+  // When this is called from BuildLocalDeviceStates(), the cached state's
+  // thread (if any) was already drained by ~StreamExecutorGpuClient() before
+  // Reset() was called, so the thread is idle and safe to destroy.
+  if (schedule_async && !async_dispatch_thread_) {
+    tsl::ThreadOptions thread_options;
+    thread_options.numa_node = executor_->numa_node();
+    async_dispatch_thread_ = std::make_unique<WorkerThread>(
+        tsl::Env::Default(), thread_options, "py_xla_dispatch");
+  } else if (!schedule_async && async_dispatch_thread_) {
+    // ~WorkerThread() blocks until all queued work completes, which is fine
+    // since the thread is already idle at this point.
+    async_dispatch_thread_.reset();
+  }
+
+  // Reconfigure compute_semaphore_.
+  // After Reset(), all in-flight computations have completed so the old
+  // semaphore (if any) is at full capacity. Replace it unconditionally to
+  // match the new client's throttling policy.
+  compute_semaphore_.reset();
+  if (max_inflight_computations.has_value()) {
+    compute_semaphore_.emplace(*max_inflight_computations);
+  }
 }
 
 absl::Status LocalDeviceState::SynchronizeAllActivity() {
