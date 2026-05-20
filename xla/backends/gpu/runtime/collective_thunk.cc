@@ -409,14 +409,19 @@ absl::StatusOr<const se::CommandBuffer::Command*> CollectiveThunk::Record(
   RETURN_IF_ERROR(RunWithCommAndRendezvous(
       execute_params,
       [&](const GpuCliqueKey& clique_key, Communicator& comm) -> absl::Status {
-        ASSIGN_OR_RETURN(nested_cmd,
-                         se::TraceCommandBufferFactory::Create(
-                             execute_params.stream->parent(),
-                             execute_params.command_buffer_trace_stream,
-                             [&](se::Stream* stream) {
-                               return RunCollective(execute_params, clique_key,
-                                                    *stream, comm);
-                             }));
+        ASSIGN_OR_RETURN(
+            nested_cmd,
+            se::TraceCommandBufferFactory::Create(
+                execute_params.stream->parent(),
+                execute_params.command_buffer_trace_stream,
+                [&](se::Stream* stream) {
+                  // Rebind params.stream to the trace stream so sub-thunks
+                  // (e.g. CollectiveKernelThunk::ExecuteOnStream) launch on
+                  // the capturing stream; otherwise the HIP graph is empty.
+                  ExecuteParams trace_params =
+                      execute_params.WithComputeStream(stream);
+                  return RunCollective(trace_params, clique_key, *stream, comm);
+                }));
         return absl::OkStatus();
       }));
 
