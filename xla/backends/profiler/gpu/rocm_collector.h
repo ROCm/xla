@@ -30,11 +30,11 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
+#include "rocm/include/hip/hip_runtime.h"
+#include "rocprofiler-sdk/agent.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/profiler/utils/xplane_builder.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
-#include "rocm/include/hip/hip_runtime.h"
-#include "rocprofiler-sdk/agent.h"
 
 // Backend: 3=v3 (rocprofiler-sdk), 1=v1 (roctracer). Default to v3.
 #if !defined(XLA_GPU_ROCM_TRACER_BACKEND_V3)

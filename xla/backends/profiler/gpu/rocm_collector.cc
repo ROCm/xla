@@ -32,6 +32,10 @@ limitations under the License.
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "rocm/include/hip/hip_runtime.h"
+#include "rocm/include/rocprofiler-sdk/fwd.h"
+#include "rocm/include/rocprofiler-sdk/rocprofiler.h"
+#include "rocm/include/roctracer/roctracer.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/platform/status.h"
 #include "xla/tsl/profiler/utils/parse_annotation.h"
@@ -41,10 +45,6 @@ limitations under the License.
 #include "xla/tsl/profiler/utils/xplane_utils.h"
 #include "tsl/platform/abi.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
-#include "rocm/include/hip/hip_runtime.h"
-#include "rocm/include/rocprofiler-sdk/fwd.h"
-#include "rocm/include/rocprofiler-sdk/rocprofiler.h"
-#include "rocm/include/roctracer/roctracer.h"
 
 namespace xla {
 namespace profiler {
