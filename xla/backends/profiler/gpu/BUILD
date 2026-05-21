@@ -455,7 +455,7 @@ cc_library(
         ":use_v1": ["@local_config_rocm//rocm:roctracer"],
         ":use_rocprofiler_sdk": ["@local_config_rocm//rocm:rocprofiler_sdk"],
         "//conditions:default": ["@local_config_rocm//rocm:rocprofiler_sdk"],
-    })
+    }),
     visibility = ["//visibility:public"],
 )
 
