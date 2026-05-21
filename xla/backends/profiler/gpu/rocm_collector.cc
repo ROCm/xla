@@ -160,7 +160,7 @@ uint64_t get_timestamp() {
   }
   return ts;
 }
-#endif
+#endif  // XLA_GPU_ROCM_TRACER_BACKEND == XLA_GPU_ROCM_TRACER_BACKEND_V1
 }  // namespace
 
 OccupancyStats PerDeviceCollector::GetOccupancy(
