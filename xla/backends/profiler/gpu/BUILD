@@ -579,6 +579,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/synchronization",
         "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform:dso_loader",
         "@tsl//tsl/platform:env",
         "@tsl//tsl/platform:errors",
         "@tsl//tsl/platform:logging",
