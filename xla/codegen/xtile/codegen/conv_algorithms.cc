@@ -18,17 +18,31 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Types.h"
+#include "xla/codegen/xtile/codegen/emitter_helpers.h"
 #include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/service/algorithm_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace xtile {
 
-// TODO: Properly handle acc type based on algorithm
 absl::StatusOr<::mlir::Type> GetConvAccumulatorType(
     mlir::ImplicitLocOpBuilder& b,
     const HloConvolutionInstruction& conv) {
-
-  return b.getF32Type();
+  const PrecisionConfig::Algorithm algorithm =
+      conv.precision_config().algorithm();
+  if (algorithm == PrecisionConfig::ALG_UNSET) {
+    TF_ASSIGN_OR_RETURN(::mlir::Type input_type,
+                      PrimitiveTypeToMlirType(b, conv.operand(0)->shape().element_type()));
+    TF_ASSIGN_OR_RETURN(::mlir::Type accumulator_type,
+                      PrimitiveTypeToMlirType(b, conv.shape().element_type()));
+    return (accumulator_type.isF64() && input_type.isF64()) ? b.getF64Type()
+                                                            : b.getF32Type();
+  }
+  TF_ASSIGN_OR_RETURN(PrimitiveType accumulator_type,
+                      algorithm_util::GetDotAccumulatorType(algorithm));
+  return PrimitiveTypeToMlirType(b, accumulator_type);
 }
 
 }  // namespace xtile

@@ -163,7 +163,11 @@ cc_library(
     hdrs = ["conv_algorithms.h"],
     compatible_with = get_compatible_with_portable(),
     deps = [
+        ":emitter_helpers",
+        "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
+        "//xla/service:algorithm_util",
+        "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/status:statusor",
         "@llvm-project//mlir:IR",
     ],
