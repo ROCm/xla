@@ -16,21 +16,23 @@ contain fork-specific commits. This separation ensures the `merge-upstream` API
 
 ## XLA Branches for JAX
 
-| JAX Release | XLA Branch | JAX Branch | ROCm Version | GFX Target |
-|-------------|------------|------------|--------------|------------|
-| jax-ml/jax:main | [`openxla/xla:main`](https://github.com/openxla/xla) | [`jax-ml/jax:main`](https://github.com/jax-ml/jax) | | |
-| jax-v0.9.2 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.9.2`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.9.2) | [`rocm-jaxlib-v0.9.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.9.2) | | |
-| jax-v0.9.1 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.9.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.9.1) | [`rocm-jaxlib-v0.9.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.9.1) | | |
-| jax-v0.9.0 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.9.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.9.0) | [`rocm-jaxlib-v0.9.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.9.0) | | |
-| jax-v0.8.2 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.8.2`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.8.2) | [`rocm-jaxlib-v0.8.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.8.2) | | |
-| jax-v0.8.0 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.8.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.8.0) | [`rocm-jaxlib-v0.8.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.8.0) | | |
-| jax-v0.7.x (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.7.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.7.1) | [`rocm-jaxlib-v0.7.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.7.1) | | |
-| jax-v0.6.x (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.6.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.6.0) | [`rocm-jaxlib-v0.6.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.6.0) and [`rocm-jaxlib-v0.6.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.6.2) | | |
-| jax-v0.5.0 | [`rocm-jaxlib-v0.5.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.5.0) | [`rocm-jaxlib-v0.5.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.5.0) | | |
-| jax-v0.4.35 | [`rocm-jaxlib-v0.4.35-qa`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.4.35-qa) | [`rocm-jaxlib-v0.4.35-qa`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.4.35-qa) | | |
-| jax-v0.4.31 | [`rocm-jaxlib-v0.4.31-qa`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.4.31-qa) | [`rocm-jaxlib-v0.4.31-qa`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.4.31-qa) | | |
-| jax-v0.4.30 | [`rocm-jaxlib-v0.4.30-qa`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.4.30-qa) | [`rocm-jaxlib-v0.4.30-qa`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.4.30-qa) | | |
-| jax-v0.4.28 | [`rocm-jaxlib-v0.4.28-qa`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.4.28-qa) | [`rocm-jaxlib-v0.4.28-qa`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.4.28-qa) | | |
+For supported ROCm versions and GFX targets per release, see the [AMD ROCm compatibility matrix](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html).
+
+| JAX Release | XLA Branch | JAX Branch |
+|-------------|------------|------------|
+| jax-ml/jax:main | [`openxla/xla:main`](https://github.com/openxla/xla) | [`jax-ml/jax:main`](https://github.com/jax-ml/jax) |
+| jax-v0.9.2 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.9.2`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.9.2) | [`rocm-jaxlib-v0.9.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.9.2) |
+| jax-v0.9.1 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.9.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.9.1) | [`rocm-jaxlib-v0.9.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.9.1) |
+| jax-v0.9.0 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.9.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.9.0) | [`rocm-jaxlib-v0.9.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.9.0) |
+| jax-v0.8.2 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.8.2`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.8.2) | [`rocm-jaxlib-v0.8.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.8.2) |
+| jax-v0.8.0 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.8.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.8.0) | [`rocm-jaxlib-v0.8.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.8.0) |
+| jax-v0.7.x (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.7.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.7.1) | [`rocm-jaxlib-v0.7.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.7.1) |
+| jax-v0.6.x (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.6.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.6.0) | [`rocm-jaxlib-v0.6.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.6.0) and [`rocm-jaxlib-v0.6.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.6.2) |
+| jax-v0.5.0 | [`rocm-jaxlib-v0.5.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.5.0) | [`rocm-jaxlib-v0.5.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.5.0) |
+| jax-v0.4.35 | [`rocm-jaxlib-v0.4.35-qa`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.4.35-qa) | [`rocm-jaxlib-v0.4.35-qa`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.4.35-qa) |
+| jax-v0.4.31 | [`rocm-jaxlib-v0.4.31-qa`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.4.31-qa) | [`rocm-jaxlib-v0.4.31-qa`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.4.31-qa) |
+| jax-v0.4.30 | [`rocm-jaxlib-v0.4.30-qa`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.4.30-qa) | [`rocm-jaxlib-v0.4.30-qa`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.4.30-qa) |
+| jax-v0.4.28 | [`rocm-jaxlib-v0.4.28-qa`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.4.28-qa) | [`rocm-jaxlib-v0.4.28-qa`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.4.28-qa) |
 
 ## Recommended Docker Image && Build Instructions
 
@@ -69,9 +71,23 @@ Notes:
 - Adjust `--rocm_amdgpu_targets` to match your hardware (e.g. `gfx90a`, `gfx942`, `gfx950`, `gfx1100`). Multiple targets can be passed comma-separated.
 - The `--wheels=jax,jaxlib,jax-rocm-plugin,jax-rocm-pjrt` list produces all four required wheels in `dist/`; `pip install dist/*.whl` installs the matching set.
 
+### Building the `rocm-jaxlib-v0.8.x` / `rocm-jaxlib-v0.9.x` release branches
+
+For the **0.8.x** and **0.9.x** JAX releases (rows in the [XLA Branches for JAX](#xla-branches-for-jax) table above), the wheel build is driven by the [`ROCm/rocm-jax`](https://github.com/ROCm/rocm-jax/tree/rocm-jax-infra) repository on its `rocm-jax-infra` branch — **not** by `build/build.py` in `ROCm/jax` directly. This is the legacy `stack.py` / `build/ci_build` path that pairs the matching `rocm-jaxlib-v0.8.x` / `rocm-jaxlib-v0.9.x` branches of `ROCm/xla` and `ROCm/jax`.
+
+| JAX Version | Repo used for building | Builds `jaxlib` wheel? |
+|-------------|------------------------|------------------------|
+| 0.8.x       | [`ROCm/rocm-jax`](https://github.com/ROCm/rocm-jax/tree/rocm-jax-infra) | Yes |
+| 0.9.x       | [`ROCm/rocm-jax`](https://github.com/ROCm/rocm-jax/tree/rocm-jax-infra) | Yes |
+| 0.10.x and newer | [`ROCm/jax`](https://github.com/ROCm/jax) (artifact workflow / `build/build.py`) | No (only when `jaxlib` changes) |
+
+Starting with **JAX 0.10.0**, wheel builds move to the `ROCm/jax` fork's artifact workflow (`ci/build_rocm_artifacts.sh` → `build/build.py`); the `stack.py` entrypoint in `rocm-jax` is deprecated and the `rocm-jax-infra` branch is retained only for Dockerfiles and image-build infrastructure.
+
+To build a 0.8.x / 0.9.x wheel set, follow the build and CI scripts in the `rocm-jax-infra` branch of `ROCm/rocm-jax`, pointing them at the corresponding `rocm-jaxlib-v0.8.x` / `rocm-jaxlib-v0.9.x` branches of this repository ([`ROCm/xla`](https://github.com/ROCm/xla)) and [`ROCm/jax`](https://github.com/ROCm/jax). For 0.10.x+ branches and `main`, use the `build/build.py` invocation shown in the previous section instead.
+
 ## OpenXLA Upstream PR Status
 
-Track pending and in-progress ROCm/AMD upstream contributions to OpenXLA on the [OpenXLA:GPU - AMD/ROCm project board](https://github.com/orgs/openxla/projects/27).
+Track pending and in-progress ROCm upstream contributions to OpenXLA on the [OpenXLA:GPU - AMD/ROCm project board](https://github.com/orgs/openxla/projects/27).
 
 ## OpenXLA Upstream CI Checks
 
