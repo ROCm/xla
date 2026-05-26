@@ -239,6 +239,47 @@ class LocalDeviceState {
       size_t sync_point, AsyncWorkRunner* async_work_runner,
       bool nullptr_if_past = false);
 
+  // Resets this LocalDeviceState for reuse by a new PjRtClient without paying
+  // the Stream create overhead again. Specifically:
+  //   1. Calls SynchronizeAllActivity() to drain all pending GPU work.
+  //   2. Drains callback_thread_ via a sentinel task so that all host-side
+  //      callbacks queued by ThenExecuteCallback (e.g. SetStateConcrete and
+  //      the AndThen that pops from compute_events_) have completed before any
+  //      shared state is mutated. This closes the race between Reset() and
+  //      in-flight callbacks.
+  //   3. Clears XLA bookkeeping (compute_events_, sync point counters).
+  //   4. Clears the callback stream map (streams are re-created on demand).
+  //   5. Drains the usage stream pool.
+  //
+  // Note: Reset() deliberately does NOT reconfigure schedule_async or
+  // max_inflight_computations because Reset() is called at cache-time (when
+  // the old client is torn down) and the next client's parameters are not yet
+  // known. Call Reconfigure() after retrieving the state from the cache.
+  //
+  // Returns OK if streams are clean and the state can be reused.
+  // Returns a non-OK status if SynchronizeAllActivity() fails (e.g., a GPU
+  // hardware fault left the streams in an error state) — in that case the
+  // caller should destroy this object and create a new LocalDeviceState.
+  absl::Status Reset();
+
+  // Reconfigures this LocalDeviceState to match the parameters of a new
+  // PjRtClient. Must be called after retrieving a previously-Reset() state
+  // from the device state cache, before handing it to the new client.
+  //
+  // Adjusts:
+  //   - async_dispatch_thread_: created if schedule_async=true and the thread
+  //     is absent; destroyed (after draining) if schedule_async=false and the
+  //     thread is present.
+  //   - compute_semaphore_: replaced with a new semaphore sized to
+  //     max_inflight_computations (or cleared if nullopt).
+  //
+  // Precondition: async_dispatch_thread_ must be idle (no pending work).
+  // This is guaranteed when Reconfigure() is called from
+  // BuildLocalDeviceStates() because ~StreamExecutorGpuClient() drains the
+  // thread before Reset() is invoked.
+  void Reconfigure(bool schedule_async,
+                   std::optional<int> max_inflight_computations);
+
  private:
   absl::Status SynchronizeAllActivity();
 

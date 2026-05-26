@@ -188,10 +188,19 @@ class PjRtStreamExecutorDevice : public PjRtDevice {
     return nullptr;
   }
 
+ protected:
+  // Releases ownership of the local device state for caching/reuse.
+  // After this call, local_device_state() returns nullptr and the device
+  // must not be used again. Access is restricted to subclasses and their
+  // designated friends to prevent accidental misuse by unrelated code.
+  std::unique_ptr<LocalDeviceState> release_local_device_state() {
+    return std::move(local_device_state_);
+  }
+
  private:
   const LocalDeviceId local_device_id_;
   const LocalChipId local_hardware_id_;
-  const std::unique_ptr<LocalDeviceState> local_device_state_;
+  std::unique_ptr<LocalDeviceState> local_device_state_;
   PjRtStreamExecutorDeviceDescription description_;
   absl::flat_hash_map<std::string, PjRtDeviceAttribute> attributes_;
   PjRtClient* client_ = nullptr;

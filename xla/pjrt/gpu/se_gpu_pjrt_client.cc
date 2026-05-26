@@ -42,6 +42,8 @@ limitations under the License.
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/synchronization/notification.h"
 #include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "xla/tsl/platform/status_macros.h"
@@ -227,6 +229,31 @@ static absl::flat_hash_map<std::string, PjRtDeviceAttribute> GetAttrsForDevices(
   return attrs;
 }
 
+// Process-level cache of LocalDeviceState objects, keyed by device ordinal.
+//
+// Performance optimisation: creating ~18 GPU streams and several worker threads
+// per device on every PjRtClient instantiation is expensive. Instead the
+// outgoing client resets each LocalDeviceState (drain + clear bookkeeping) and
+// stores it here; the incoming client reconfigures and reuses it, paying only a
+// stream synchronisation cost instead of a stream creation cost.
+//
+// Intentional leak: the singleton (`new`, never `delete`) holds at most one
+// entry per physical GPU for the lifetime of the process. There is no eviction
+// policy. The OS reclaims all resources on exit.
+//
+// Thread safety: mu guards all map accesses. The cache is only accessed in
+// GetStreamExecutorGpuClient() and ~StreamExecutorGpuClient().
+struct DeviceStateCache {
+  absl::Mutex mu;
+  // Map from device ordinal to cached LocalDeviceState (already Reset()).
+  std::map<int, std::unique_ptr<LocalDeviceState>> states ABSL_GUARDED_BY(mu);
+};
+
+static DeviceStateCache& GetDeviceStateCache() {
+  static auto* cache = new DeviceStateCache();  // Intentional leak; see above.
+  return *cache;
+}
+
 StreamExecutorGpuClient::StreamExecutorGpuClient(
     std::string platform_name, LocalClient* client,
     std::vector<std::unique_ptr<PjRtStreamExecutorDevice>> devices,
@@ -283,6 +310,73 @@ StreamExecutorGpuClient::StreamExecutorGpuClient(
                [](const PjRtMemorySpace* a, const PjRtMemorySpace* b) {
                  return a->id() < b->id();
                });
+}
+
+StreamExecutorGpuClient::~StreamExecutorGpuClient() {
+  // Step 1: Quiesce async dispatch threads on all addressable devices.
+  // This must run before we call Reset() or release_local_device_state(),
+  // since the async_dispatch_thread may be enqueuing work on the streams.
+  // (~PjRtStreamExecutorClient() also does this, but it runs AFTER our body,
+  // so by doing it here we ensure quiescing before the cache return.)
+  for (auto* device : addressable_devices()) {
+    auto* se_device = tensorflow::down_cast<PjRtStreamExecutorDevice*>(device);
+    if (!se_device->local_device_state()) continue;
+    if (se_device->local_device_state()->async_dispatch_thread()) {
+      absl::Notification done;
+      se_device->local_device_state()->async_dispatch_thread()->Schedule(
+          [&]() { done.Notify(); });
+      done.WaitForNotification();
+    }
+  }
+
+  // Step 2: Destroy the RCCL/NCCL global clique cache.
+  //
+  // This MUST happen before Reset() (Step 3). ncclCommDestroy / rccl's
+  // equivalent may issue host-side synchronization and can enqueue GPU work on
+  // the LocalDeviceState's device-to-device streams. By destroying cliques
+  // first, any such GPU work is in-flight on the streams when Reset() is
+  // called. SynchronizeAllActivity() inside Reset() then drains everything —
+  // both XLA work and communicator-destruction work — before the streams are
+  // cached and handed to the next client.
+  //
+  // ncclComm_t handles are permanently invalidated after this point; the next
+  // AcquireGpuClique() call will create fresh communicators. This also
+  // provides test isolation for collective operations.
+  gpu::internal::DestroyAcquiredCliques();
+
+  // Step 3: For each addressable device, try to reset and cache the
+  // LocalDeviceState (sync + clear bookkeeping). On success, transfer
+  // ownership from the device to the cache. The ~PjRtStreamExecutorClient()
+  // destructor (which runs after this body) will skip quiescing for devices
+  // with nullptr local_device_state() — already done in step 1.
+  auto& cache = GetDeviceStateCache();
+  absl::MutexLock lock(&cache.mu);
+
+  for (auto* device : addressable_devices()) {
+    // Cast to StreamExecutorGpuDevice* (not the base type) so that the
+    // friend-granted access to the protected release_local_device_state()
+    // method is resolved through the GPU-specific type.
+    auto* se_device = tensorflow::down_cast<StreamExecutorGpuDevice*>(device);
+    if (!se_device->local_device_state()) continue;
+
+    int ordinal = device->local_device_id().value();
+    absl::Status reset_status = se_device->local_device_state()->Reset();
+
+    if (reset_status.ok()) {
+      // Transfer ownership to cache. Device's local_device_state_ becomes
+      // nullptr; ~PjRtStreamExecutorDevice() will safely skip it.
+      cache.states.emplace(ordinal, se_device->release_local_device_state());
+      VLOG(1) << "StreamExecutorGpuClient: device=" << ordinal
+              << " LocalDeviceState returned to cache (streams preserved)";
+    } else {
+      // Streams in error state (e.g., GPU hardware fault). Do NOT cache.
+      // Let ~PjRtStreamExecutorDevice() destroy it normally via
+      // hipStreamDestroy.
+      LOG(WARNING) << "StreamExecutorGpuClient: device=" << ordinal
+                   << " Reset() failed: " << reset_status
+                   << " — LocalDeviceState will be destroyed and recreated";
+    }
+  }
 }
 
 absl::string_view StreamExecutorGpuClient::platform_version() const {
@@ -710,7 +804,7 @@ StreamExecutorGpuClient::CrossHostSendBuffers(
                 [&](PjRtRawBufferRef buf_raw_buffer,
                     std::vector<tsl::RCReference<tsl::AsyncValue>>
                         buf_definition_events) mutable
-                    -> absl::StatusOr<PjRtDeviceEventRef> {
+                -> absl::StatusOr<PjRtDeviceEventRef> {
                   // Keep raw_buffer alive until the usage_event completes,
                   // preventing the allocation from being freed while the
                   // send is in-flight.
@@ -1485,19 +1579,57 @@ absl::StatusOr<std::shared_ptr<tsl::Allocator>> CreateCudaAsyncAllocator(
 #endif  // defined(GOOGLE_CUDA) && CUDA_VERSION >= 11020
 
 // Builds a LocalDeviceState for each GPU present.
+//
+// On the first call (cold start), this creates new LocalDeviceState objects.
+// On subsequent calls, cached states are reused after Reset()
+// to avoid the stream creation overhead.
+//
+// RCCL clique cache is always cleared before reuse via DestroyAcquiredCliques,
+// ensuring new communicators are created for the next client's collective ops.
 absl::StatusOr<std::map<int, std::unique_ptr<LocalDeviceState>>>
 BuildLocalDeviceStates(LocalClient* xla_client, bool schedule_async,
                        std::optional<int> max_inflight_computations) {
+  auto& cache = GetDeviceStateCache();
+  absl::MutexLock lock(&cache.mu);
+
   std::map<int, std::unique_ptr<LocalDeviceState>> addressable_devices;
   for (se::StreamExecutor* executor :
        xla_client->backend().stream_executors()) {
-    addressable_devices.emplace(
-        executor->device_ordinal(),
-        std::make_unique<LocalDeviceState>(
-            executor, xla_client, LocalDeviceState::kComputeSynchronized,
-            max_inflight_computations, /*allow_event_reuse=*/true,
-            /*use_callback_stream=*/true, /*device_ordinal=*/-1,
-            /*stream_options=*/std::nullopt, schedule_async));
+    int ordinal = executor->device_ordinal();
+
+    auto it = cache.states.find(ordinal);
+    if (it != cache.states.end()) {
+      // Reuse cached state: streams already exist, just sync + reset metadata.
+      // Reconfigure() adjusts async_dispatch_thread_ and compute_semaphore_ to
+      // match the new client's parameters. This must happen here (at retrieval
+      // time) rather than in Reset() (which runs at cache-time in the old
+      // client's destructor) because the new client's parameters are not known
+      // until BuildLocalDeviceStates() is called.
+      auto state = std::move(it->second);
+      cache.states.erase(it);
+      // Defensive: StreamExecutors are singletons in the current GPU platform
+      // implementation, so the cached state's executor must be the same object
+      // as the one provided by the new XlaClient. If this ever fires it means
+      // we are handing a cached state whose GPU streams belong to a different
+      // physical device than the one the new client expects — a serious
+      // misconfiguration that would cause silent data corruption.
+      DCHECK_EQ(state->executor(), executor)
+          << "Cached LocalDeviceState for ordinal " << ordinal
+          << " has a different StreamExecutor than the new XlaClient. "
+             "The cache key (device ordinal) is not sufficient to guarantee "
+             "executor identity.";
+      state->Reconfigure(schedule_async, max_inflight_computations);
+      addressable_devices.emplace(ordinal, std::move(state));
+    } else {
+      // Cold start: create new LocalDeviceState.
+      addressable_devices.emplace(
+          ordinal,
+          std::make_unique<LocalDeviceState>(
+              executor, xla_client, LocalDeviceState::kComputeSynchronized,
+              max_inflight_computations, /*allow_event_reuse=*/true,
+              /*use_callback_stream=*/true, /*device_ordinal=*/-1,
+              /*stream_options=*/std::nullopt, schedule_async));
+    }
   }
   return std::move(addressable_devices);
 }
