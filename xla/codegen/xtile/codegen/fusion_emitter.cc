@@ -768,20 +768,27 @@ absl::StatusOr<TensorValue> EmitUnnestedDot(
   return tensor_result;
 }
 
-// TODO: tile size for hidden dimensions currently hardcoded to 1
 absl::StatusOr<int64_t> GetConvLoopIterationCount(
     const TiledHloInstruction& tiled_conv) {
   const auto* conv =
       ::xla::Cast<HloConvolutionInstruction>(tiled_conv.hlo());
-  int64_t total_iterations = 1;
-  for (int i = 0; i < conv->window().dimensions().size(); ++i) {
-    int64_t window_size = conv->window().dimensions(i).size();
-    total_iterations *= window_size;
+  const int64_t spatial_rank = conv->window().dimensions().size();
+  absl::Span<const int64_t> tile_sizes = tiled_conv.tile_sizes();
+  // Tile sizes are laid out as [tile_window_0, ..., tile_c_in, output_tiles...]
+  int64_t total = 1;
+  for (int64_t i = 0; i < spatial_rank; ++i) {
+    total *= conv->window().dimensions(i).size();
   }
-  int64_t c_in = conv->operand(0)->shape().dimensions(
+  total *= conv->operand(0)->shape().dimensions(
       conv->convolution_dimension_numbers().input_feature_dimension());
-  total_iterations *= c_in;
-  return total_iterations;
+  int64_t k_tile = 1;
+  for (int64_t i = 0; i < spatial_rank + 1; ++i) {
+    k_tile *= tile_sizes[i];
+  }
+  TF_RET_CHECK(k_tile > 0)
+      << "Product of tile sizes of contracting dimensions must be positive, got " 
+      << k_tile << " for conv " << conv->ToShortString();
+  return CeilOfRatio(total, k_tile);
 }
 
 absl::StatusOr<TensorValue> EmitConv(
