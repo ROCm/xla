@@ -575,12 +575,8 @@ absl::StatusOr<Tiling> TilingFromAnnotatedFusion(
                                            block_level_parameters));
     }
 
-    // TODO: currently all contracting dims are tiled with 1
     if (hlo->opcode() == HloOpcode::kConvolution) {
-      const auto* conv = Cast<HloConvolutionInstruction>(hlo);
-      int64_t spatial_rank = conv->window().dimensions().size();
-      absl::InlinedVector<int64_t, 4> conv_tiling(spatial_rank + 1, 1);
-      tile_mapping[hlo] = conv_tiling;
+      ASSIGN_OR_RETURN(tile_mapping[hlo], ConvTilingParameters(hlo));
     }
 
     // TODO(b/390559452): this should change for generalized multi-output
