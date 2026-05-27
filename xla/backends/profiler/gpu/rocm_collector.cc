@@ -136,6 +136,19 @@ void PrintRocmTracerEvent(const RocmTracerEvent& event,
   VLOG(3) << oss.str() << ' ' << message;
 }
 
+#if XLA_GPU_ROCM_TRACER_BACKEND == XLA_GPU_ROCM_TRACER_BACKEND_V1
+static uint64_t get_timestamp() {
+  uint64_t ts;
+  if (roctracer_get_timestamp(&ts) != ROCTRACER_STATUS_SUCCESS) {
+    const char* errstr = roctracer_error_string();
+    LOG(ERROR) << "function roctracer_get_timestamp failed with error "
+               << errstr;
+    // Return 0 on error.
+    return 0;
+  }
+  return ts;
+}
+#else
 uint64_t get_timestamp() {
   uint64_t ts;
   rocprofiler_status_t CHECKSTATUS = rocprofiler_get_timestamp(&ts);
@@ -147,6 +160,7 @@ uint64_t get_timestamp() {
   }
   return ts;
 }
+#endif  // XLA_GPU_ROCM_TRACER_BACKEND == XLA_GPU_ROCM_TRACER_BACKEND_V1
 }  // namespace
 
 OccupancyStats PerDeviceCollector::GetOccupancy(

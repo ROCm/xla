@@ -36,6 +36,19 @@ limitations under the License.
 #include "xla/tsl/profiler/utils/xplane_builder.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 
+// Backend: 3=v3 (rocprofiler-sdk), 1=v1 (roctracer). Default to v3.
+#if !defined(XLA_GPU_ROCM_TRACER_BACKEND_V3)
+#define XLA_GPU_ROCM_TRACER_BACKEND_V3 3
+#endif
+
+#if !defined(XLA_GPU_ROCM_TRACER_BACKEND_V1)
+#define XLA_GPU_ROCM_TRACER_BACKEND_V1 1
+#endif
+
+#ifndef XLA_GPU_ROCM_TRACER_BACKEND
+#error "XLA_GPU_ROCM_TRACER_BACKEND not defined"
+#endif
+
 namespace xla {
 namespace profiler {
 

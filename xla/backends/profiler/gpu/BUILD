@@ -455,7 +455,7 @@ cc_library(
         ":use_v1": ["@local_config_rocm//rocm:roctracer"],
         ":use_rocprofiler_sdk": ["@local_config_rocm//rocm:rocprofiler_sdk"],
         "//conditions:default": ["@local_config_rocm//rocm:rocprofiler_sdk"],
-    })
+    }),
     visibility = ["//visibility:public"],
 )
 
@@ -579,6 +579,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/synchronization",
         "@local_config_rocm//rocm:rocm_headers",
+        "@tsl//tsl/platform:dso_loader",
         "@tsl//tsl/platform:env",
         "@tsl//tsl/platform:errors",
         "@tsl//tsl/platform:logging",
