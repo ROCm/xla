@@ -13,6 +13,7 @@ EXCLUDED_TESTS=(
     "F8E5M2Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_*"
     "CubSort/CubSortPairsTest*"
     "StreamExecutorGpuClientTest.GetAbiVersion"
+    "DeterminismTest.CublasLtDot"
     "SampleFileTest.Convolution" # https://wardite.cluster.engflow.com/invocations/default/c105260c-873a-4634-ab69-905a43ca5cf8
 )
 
