@@ -41,6 +41,7 @@ namespace {
 class GpuDotFusionCostModelTest : public HloHardwareIndependentTestBase {
  protected:
   se::DeviceDescription ddh100_{TestGpuDeviceInfo::H100SXMDeviceInfo()};
+  se::DeviceDescription ddmi300x_{TestGpuDeviceInfo::AMDMI300XDeviceInfo()};
 };
 
 TEST_F(GpuDotFusionCostModelTest, GpuDotComputeBoundBf16) {
@@ -80,6 +81,49 @@ backend_config={"sizes":["32"]}
               ddh100_));
   ASSERT_EQ(runtime_h100.exec_time,
             expected_compute_and_flops_h100.compute_time);
+}
+
+// Demonstrates the matrix_unit_description behavior change on ROCm: with the
+// MFMA throughput table populated, EstimateRunTimeForDotOpWithBlockParameters
+// now drives BF16 dots off the MFMA peak (1307 TF on MI300X), not the
+// vector FP32 fallback (163 TF). The resulting compute_time should be ~8x
+// smaller than the pre-fix model would have produced.
+TEST_F(GpuDotFusionCostModelTest, GpuDotComputeBoundBf16MI300X) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                       ParseAndReturnVerifiedModule(R"(
+ENTRY e {
+p0 = bf16[8192,8192] parameter(0)
+p1 = bf16[8192,8192] parameter(1)
+ROOT r = bf16[8192,8192] dot(p0, p1),
+lhs_contracting_dims={1}, rhs_contracting_dims={0}, algorithm=dot_bf16_bf16_bf16,
+backend_config={"sizes":["32"]}
+})"));
+
+  BlockLevelParameters block_params;
+  block_params.output_tile_sizes = {{256, 512}};
+  block_params.num_warps = 4;
+  block_params.num_ctas = 1;
+  block_params.num_stages = 1;
+  auto* dot =
+      Cast<HloDotInstruction>(module->entry_computation()->root_instruction());
+  ASSERT_IS_OK(gpu_dot_fusion_cost_model::IsSupported(dot));
+  ASSERT_OK_AND_ASSIGN(
+      EstimateRunTimeData runtime_mi300x,
+      gpu_dot_fusion_cost_model::EstimateRunTimeForDotOpWithBlockParameters(
+          dot, block_params, ddmi300x_));
+
+  // Before matrix_unit_description was populated on ROCm, MI300X would have
+  // costed this BF16 dot off the vector FP32 peak (~163 TF). Asserting the
+  // estimated runtime is much smaller than that fallback's lower bound
+  // verifies the MFMA path (BF16 peak ~1307 TF) is in use.
+  int64_t total_flops = 2LL * 8192 * 8192 * 8192;  // 2*M*N*K.
+  int64_t vector_peak_flops_per_ns =
+      GpuPerformanceModelBase::CalculateEffectiveFlopsPerNs(
+          ddmi300x_, /*num_blocks=*/ddmi300x_.core_count(),
+          /*num_threads_per_block=*/ddmi300x_.fpus_per_core());
+  absl::Duration vector_compute_lower_bound =
+      absl::Nanoseconds(total_flops / vector_peak_flops_per_ns);
+  EXPECT_LT(runtime_mi300x.exec_time, vector_compute_lower_bound / 4);
 }
 
 TEST_F(GpuDotFusionCostModelTest, GpuDotMemoryBoundBf16) {

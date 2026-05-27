@@ -18,6 +18,7 @@ limitations under the License.
 #include "xla/stream_executor/cuda/cuda_core_info_table.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/rocm/rocm_compute_capability.h"
+#include "xla/stream_executor/rocm/rocm_core_info_table.h"
 #include "xla/stream_executor/semantic_version.h"
 #include "xla/xla_data.pb.h"
 
@@ -122,7 +123,6 @@ stream_executor::DeviceDescription TestGpuDeviceInfo::AMDMI210DeviceInfo() {
   b.set_shared_memory_per_core(64 * 1024);
   b.set_threads_per_core_limit(2048);
   b.set_core_count(104);
-  b.set_fpus_per_core(128);
   b.set_block_dim_limit_x(2'147'483'647);
   b.set_block_dim_limit_y(2'147'483'647);
   b.set_block_dim_limit_z(2'147'483'647);
@@ -132,6 +132,64 @@ stream_executor::DeviceDescription TestGpuDeviceInfo::AMDMI210DeviceInfo() {
   b.set_device_memory_size(67'628'957'696);
   b.set_runtime_version(stream_executor::SemanticVersion{6, 0, 0});
   b.set_driver_version(stream_executor::SemanticVersion{6, 0, 0});
+
+  const auto& rocm_cc = *b.gpu_compute_capability().rocm_compute_capability();
+  b.set_fpus_per_core(stream_executor::gpu::GetFpusPerCore(rocm_cc));
+  stream_executor::gpu::FillExecutionUnitDesc(rocm_cc, b.clock_rate_ghz(), b);
+  return b;
+}
+
+stream_executor::DeviceDescription TestGpuDeviceInfo::AMDMI300XDeviceInfo() {
+  stream_executor::DeviceDescription b;
+  b.set_gpu_compute_capability(stream_executor::GpuComputeCapability(
+      stream_executor::RocmComputeCapability("gfx942")));
+  b.set_threads_per_block_limit(1024);
+  b.set_threads_per_warp(64);
+  b.set_shared_memory_per_block(64 * 1024);
+  b.set_shared_memory_per_block_optin(64 * 1024);
+  b.set_shared_memory_per_core(64 * 1024);
+  b.set_threads_per_core_limit(2048);
+  b.set_core_count(304);  // [CDNA3] MI300-15.
+  b.set_block_dim_limit_x(2'147'483'647);
+  b.set_block_dim_limit_y(2'147'483'647);
+  b.set_block_dim_limit_z(2'147'483'647);
+  b.set_memory_bandwidth(5'325'000'000'000);  // 5.3 TB/s HBM3.
+  b.set_l2_cache_size(4 * 1024 * 1024);
+  b.set_clock_rate_ghz(2.1);  // [CDNA3] 2,100 MHz peak boost.
+  b.set_device_memory_size(int64_t{192} * 1024 * 1024 * 1024);
+  b.set_runtime_version(stream_executor::SemanticVersion{6, 0, 0});
+  b.set_driver_version(stream_executor::SemanticVersion{6, 0, 0});
+
+  const auto& rocm_cc = *b.gpu_compute_capability().rocm_compute_capability();
+  b.set_fpus_per_core(stream_executor::gpu::GetFpusPerCore(rocm_cc));
+  stream_executor::gpu::FillExecutionUnitDesc(rocm_cc, b.clock_rate_ghz(), b);
+  return b;
+}
+
+stream_executor::DeviceDescription TestGpuDeviceInfo::AMDMI355XDeviceInfo() {
+  stream_executor::DeviceDescription b;
+  b.set_gpu_compute_capability(stream_executor::GpuComputeCapability(
+      stream_executor::RocmComputeCapability("gfx950")));
+  b.set_threads_per_block_limit(1024);
+  b.set_threads_per_warp(64);
+  b.set_shared_memory_per_block(64 * 1024);
+  b.set_shared_memory_per_block_optin(64 * 1024);
+  b.set_shared_memory_per_core(64 * 1024);
+  b.set_threads_per_core_limit(2048);
+  b.set_core_count(256);  // [CDNA4] MI355X spec table.
+  b.set_block_dim_limit_x(2'147'483'647);
+  b.set_block_dim_limit_y(2'147'483'647);
+  b.set_block_dim_limit_z(2'147'483'647);
+  b.set_memory_bandwidth(8'000'000'000'000);  // 8 TB/s HBM3e.
+  b.set_l2_cache_size(4 * 1024 * 1024);
+  b.set_clock_rate_ghz(2.4);  // [CDNA4] 2,400 MHz peak.
+  b.set_device_memory_size(int64_t{288} * 1024 * 1024 * 1024);
+  b.set_runtime_version(stream_executor::SemanticVersion{6, 0, 0});
+  b.set_driver_version(stream_executor::SemanticVersion{6, 0, 0});
+
+  const auto& rocm_cc = *b.gpu_compute_capability().rocm_compute_capability();
+  b.set_fpus_per_core(stream_executor::gpu::GetFpusPerCore(rocm_cc));
+  stream_executor::gpu::FillExecutionUnitDesc(rocm_cc, b.clock_rate_ghz(), b);
   return b;
 }
 

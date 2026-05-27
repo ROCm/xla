@@ -344,6 +344,44 @@ TEST_F(GpuPerformanceModelBaseTest, CalculatePeakF64OpsPerNsH100) {
   EXPECT_LT(flops_per_ns, 68000);
 }
 
+// MI300X (gfx942) MFMA peaks from CDNA 3 white paper Table 1, p.7:
+//   BF16/FP16 matrix = 1307.4 TF, FP64 matrix = 163.4 TF, FP8 = 2614.9 TF.
+// Pre-fix these would all fall through to the vector FP32 peak
+// (~163 TF), so the assertions below would only pass once
+// matrix_unit_description is populated.
+TEST_F(GpuPerformanceModelBaseTest, CalculatePeakBF16OpsPerNsMI300X) {
+  se::DeviceDescription mi300_device_info =
+      TestGpuDeviceInfo::AMDMI300XDeviceInfo();
+  int64_t flops_per_ns = GpuPerformanceModelBase::CalculatePeakMatrixOpsPerNs(
+      mi300_device_info, xla::PrimitiveType::BF16);
+  EXPECT_GT(flops_per_ns, 1300000);
+  EXPECT_LT(flops_per_ns, 1315000);
+}
+
+TEST_F(GpuPerformanceModelBaseTest, CalculatePeakFP8OpsPerNsMI300X) {
+  se::DeviceDescription mi300_device_info =
+      TestGpuDeviceInfo::AMDMI300XDeviceInfo();
+  int64_t flops_per_ns = GpuPerformanceModelBase::CalculatePeakMatrixOpsPerNs(
+      mi300_device_info, xla::PrimitiveType::F8E4M3);
+  EXPECT_GT(flops_per_ns, 2600000);
+  EXPECT_LT(flops_per_ns, 2620000);
+}
+
+// Sanity check: MFMA peak for BF16 on MI300X is much higher than the vector
+// FP32 fallback peak. This documents the *behavior change* delivered by
+// populating matrix_unit_description on ROCm.
+TEST_F(GpuPerformanceModelBaseTest, MFMAPathExceedsScalarFallbackMI300X) {
+  se::DeviceDescription mi300_device_info =
+      TestGpuDeviceInfo::AMDMI300XDeviceInfo();
+  int64_t mfma_bf16 = GpuPerformanceModelBase::CalculatePeakMatrixOpsPerNs(
+      mi300_device_info, xla::PrimitiveType::BF16);
+  int64_t scalar_fallback = GpuPerformanceModelBase::CalculateEffectiveFlopsPerNs(
+      mi300_device_info, /*num_blocks=*/mi300_device_info.core_count(),
+      /*num_threads_per_block=*/mi300_device_info.fpus_per_core());
+  // BF16 MFMA peak (~1307 TF) is ~8x the vector FP32 peak (~163 TF).
+  EXPECT_GT(mfma_bf16, 5 * scalar_fallback);
+}
+
 TEST_F(GpuPerformanceModelBaseTest, RecordEstimatedRunTimeWithName) {
   EstimateRunTimeData data = {/*flops=*/100,
                               /*bytes_read=*/200,

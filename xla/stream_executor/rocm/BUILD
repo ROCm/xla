@@ -38,6 +38,34 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "rocm_core_info_table",
+    srcs = ["rocm_core_info_table.cc"],
+    hdrs = ["rocm_core_info_table.h"],
+    deps = [
+        ":rocm_compute_capability",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "rocm_core_info_table_test",
+    srcs = ["rocm_core_info_table_test.cc"],
+    deps = [
+        ":rocm_compute_capability",
+        ":rocm_core_info_table",
+        "//xla:xla_data_proto_cc",
+        "//xla/service/gpu:gpu_device_info_for_tests",
+        "//xla/stream_executor:device_description",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 xla_cc_test(
     name = "rocm_compute_capability_test",
     srcs = ["rocm_compute_capability_test.cc"],
@@ -127,6 +155,7 @@ cc_library(
         ":rocm_command_buffer",
         ":rocm_compute_capability",
         ":rocm_context",
+        ":rocm_core_info_table",
         ":rocm_event",
         ":rocm_kernel",
         ":rocm_pcie_bandwidth",
