@@ -537,6 +537,25 @@ absl::StatusOr<absl::InlinedVector<int64_t, 4>> DotTilingParameters(
 }
 }  // namespace
 
+absl::StatusOr<FlatTiling> ConvTilingParameters(
+    const HloInstruction* conv_hlo) {
+  const auto* conv = Cast<HloConvolutionInstruction>(conv_hlo);
+  const int64_t spatial_rank = conv->window().dimensions().size();
+  const int64_t expected_size = spatial_rank + 1;
+
+  if (!conv_hlo->has_backend_config()) {
+    return FlatTiling(expected_size, 1);
+  }
+  ASSIGN_OR_RETURN(Tile tile_config, conv_hlo->backend_config<Tile>());
+  if (tile_config.sizes_size() != expected_size) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "ConvTilingParameters: expected sizes of length ", expected_size,
+        " for conv with spatial_rank ", spatial_rank, ", got ",
+        tile_config.sizes_size()));
+  }
+  return FlatTiling(tile_config.sizes().begin(), tile_config.sizes().end());
+}
+
 absl::StatusOr<Tiling> TilingFromAnnotatedFusion(
     const HloFusionInstruction* fusion,
     const SymbolicTileAnalysis& symbolic_tile_analysis,
