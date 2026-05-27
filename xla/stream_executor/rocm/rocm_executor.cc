@@ -76,6 +76,7 @@ limitations under the License.
 #include "xla/stream_executor/platform/initialize.h"
 #include "xla/stream_executor/plugin_registry.h"
 #include "xla/stream_executor/rocm/rocm_command_buffer.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/stream_executor/rocm/rocm_context.h"
 #include "xla/stream_executor/rocm/rocm_event.h"
 #include "xla/stream_executor/rocm/rocm_kernel.h"
@@ -1229,10 +1230,19 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
       GetMaxSharedMemoryPerBlock(device).value());
   int core_count = GetMultiprocessorCount(device).value();
   desc.set_core_count(core_count);
-  // TODO(ROCm): replace this hardcoded value with a per-arch lookup table and
-  // populate scalar_unit_description / matrix_unit_description so the perf
-  // model picks the right FP32 path (vector vs. matrix).
-  desc.set_fpus_per_core(128);
+  // TODO(ROCm): replace this with a per-arch lookup table mirroring
+  // cuda_core_info_table and populate scalar_unit_description /
+  // matrix_unit_description so the perf model picks the right FP32 path
+  // (vector vs. matrix). CDNA1/CDNA2 have 64 vector FP32 FMA units per CU,
+  // CDNA3/CDNA4 have 128.
+  {
+    RocmComputeCapability cc(gcn_arch_name);
+    int fpus_per_core = 128;
+    if (cc.gfx9_mi100() || cc.gfx9_mi200()) {
+      fpus_per_core = 64;
+    }
+    desc.set_fpus_per_core(fpus_per_core);
+  }
   desc.set_threads_per_core_limit(
       GetMaxThreadsPerMultiprocessor(device).value());
   desc.set_registers_per_block_limit(GetMaxRegistersPerBlock(device).value());

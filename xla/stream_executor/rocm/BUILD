@@ -125,6 +125,7 @@ cc_library(
     ],
     deps = [
         ":rocm_command_buffer",
+        ":rocm_compute_capability",
         ":rocm_context",
         ":rocm_event",
         ":rocm_kernel",
