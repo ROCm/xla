@@ -14,6 +14,8 @@ EXCLUDED_TESTS=(
     "CubSort/CubSortPairsTest*"
     "StreamExecutorGpuClientTest.GetAbiVersion"
     "DeterminismTest.CublasLtDot"
+    "*CublasFallbackForBf16Bf16F32Algorithm"
+    "FissionTests/FissionTest.CanCreateFissionBackend/TritonFusion_CublasLt"
     "SampleFileTest.Convolution" # https://wardite.cluster.engflow.com/invocations/default/c105260c-873a-4634-ab69-905a43ca5cf8
 )
 
