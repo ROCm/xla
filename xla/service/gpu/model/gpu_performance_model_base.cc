@@ -358,7 +358,16 @@ int64_t GpuPerformanceModelBase::CalculateEffectiveFlopsPerNs(
   int64_t fpu_count = n_active_core * n_active_fpus_per_core;
 
   double flop_per_ns_per_fpu = gpu_device_info.clock_rate_ghz() * /*fma:*/ 2;
-  return flop_per_ns_per_fpu * fpu_count;
+  int64_t flops_per_ns = flop_per_ns_per_fpu * fpu_count;
+  // [DEBUG-fpus_per_core-fix] Remove before merge.
+  LOG(INFO) << "[DEBUG-fpus_per_core-fix] CalculateEffectiveFlopsPerNs "
+            << "num_blocks=" << num_blocks
+            << " num_threads_per_block=" << num_threads_per_block
+            << " fpus_per_core=" << gpu_device_info.fpus_per_core()
+            << " core_count=" << gpu_device_info.core_count()
+            << " clock_ghz=" << gpu_device_info.clock_rate_ghz()
+            << " -> peak_TFLOPS=" << flops_per_ns / 1000.0;
+  return flops_per_ns;
 }
 
 /*static*/
@@ -375,9 +384,16 @@ int64_t GpuPerformanceModelBase::CalculatePeakMatrixOpsPerNs(
   if (!dtype_rates.has_value()) {
     // Fallback to default flops if matrix unit description is not available
     // or does not support the given dtype.
-    return CalculateEffectiveFlopsPerNs(
+    int64_t fallback = CalculateEffectiveFlopsPerNs(
         gpu_device_info, /*num_blocks=*/gpu_device_info.core_count(),
         /*num_threads_per_block=*/gpu_device_info.fpus_per_core());
+    // [DEBUG-fpus_per_core-fix] Remove before merge.
+    LOG(INFO) << "[DEBUG-fpus_per_core-fix] CalculatePeakMatrixOpsPerNs "
+              << "dtype=" << xla::PrimitiveType_Name(dtype)
+              << " path=SCALAR_FALLBACK"
+              << " matrix_unit_present=" << (caps != nullptr)
+              << " -> peak_TFLOPS=" << fallback / 1000.0;
+    return fallback;
   }
 
   // FMA is counted as 2 ops.
@@ -385,7 +401,17 @@ int64_t GpuPerformanceModelBase::CalculatePeakMatrixOpsPerNs(
       dtype_rates->clock_rate_ghz * dtype_rates->ops_per_clock * 2;
   int64_t n_compute_units =
       gpu_device_info.core_count() * dtype_rates->units_per_core;
-  return flops_per_ns_per_unit * n_compute_units;
+  int64_t flops_per_ns = flops_per_ns_per_unit * n_compute_units;
+  // [DEBUG-fpus_per_core-fix] Remove before merge.
+  LOG(INFO) << "[DEBUG-fpus_per_core-fix] CalculatePeakMatrixOpsPerNs "
+            << "dtype=" << xla::PrimitiveType_Name(dtype)
+            << " path=MATRIX"
+            << " units_per_core=" << dtype_rates->units_per_core
+            << " ops_per_clock=" << dtype_rates->ops_per_clock
+            << " clock_ghz=" << dtype_rates->clock_rate_ghz
+            << " core_count=" << gpu_device_info.core_count()
+            << " -> peak_TFLOPS=" << flops_per_ns / 1000.0;
+  return flops_per_ns;
 }
 
 /*static*/

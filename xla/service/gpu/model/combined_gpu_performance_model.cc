@@ -114,6 +114,15 @@ CombinedGpuPerformanceModel::EstimateRunTimes(
                                  /*producer_writes_side_output=*/false);
   }
 
+  // [DEBUG-fpus_per_core-fix] Remove before merge. Same fuse-vs-don't
+  // semantic as priority_fusion: caller fuses iff time_fused < time_unfused.
+  LOG(INFO) << "[DEBUG-fpus_per_core-fix] CombinedPerfModel producer="
+            << producer->name() << " num_consumers=" << fused_consumers.size()
+            << " unfused_us=" << absl::ToDoubleMicroseconds(time_unfused)
+            << " fused_us=" << absl::ToDoubleMicroseconds(time_fused)
+            << " decision="
+            << (time_fused < time_unfused ? "WILL_FUSE" : "WILL_NOT_FUSE");
+
   return RunTimes{time_unfused, time_fused};
 }
 

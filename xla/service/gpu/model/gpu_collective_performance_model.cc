@@ -340,6 +340,19 @@ absl::Duration ComputeAllreduceTimeImpl(
   absl::Duration communication_time = absl::Milliseconds(
       cost_analysis->bytes_accessed(instr) / (1e6 * actual_bandwidth));
   total_time += communication_time;
+  // [DEBUG-fpus_per_core-fix] Remove before merge. Used by latency-hiding
+  // scheduler to decide overlap windows.
+  LOG(INFO) << "[DEBUG-fpus_per_core-fix] CollectivePerfModel instr="
+            << instr.name() << " opcode=" << instr.opcode()
+            << " compute_us="
+            << absl::ToDoubleMicroseconds(compute_time_per_channel)
+            << " comm_us="
+            << absl::ToDoubleMicroseconds(communication_time)
+            << " total_us=" << absl::ToDoubleMicroseconds(total_time)
+            << " classification="
+            << (compute_time_per_channel > communication_time
+                    ? "COMPUTE_BOUND"
+                    : "COMM_BOUND");
   return total_time;
 }
 

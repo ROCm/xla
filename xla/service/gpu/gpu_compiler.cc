@@ -3168,6 +3168,13 @@ HloCostAnalysis::Options CreateHloAnalysisOpts(
     float flops_per_sec = gpu_device_info.core_count() *
                           gpu_device_info.fpus_per_core() *
                           gpu_device_info.clock_rate_ghz() * kGiga * kFma;
+    // [DEBUG-fpus_per_core-fix] Remove before merge.
+    LOG(INFO) << "[DEBUG-fpus_per_core-fix] CreateHloAnalysisOpts (remat) "
+              << "core_count=" << gpu_device_info.core_count()
+              << " fpus_per_core=" << gpu_device_info.fpus_per_core()
+              << " clock_ghz=" << gpu_device_info.clock_rate_ghz()
+              << " -> flops_per_sec=" << flops_per_sec
+              << " (=" << flops_per_sec / 1e12 << " TFLOPS)";
     int64_t host_memory_space_color =
         static_cast<int64_t>(stream_executor::MemorySpace::kHost);
     hlo_cost_analysis_options.set_flops_per_second(flops_per_sec);

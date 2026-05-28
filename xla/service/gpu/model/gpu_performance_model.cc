@@ -263,6 +263,14 @@ GpuPerformanceModel::RunTimes GpuPerformanceModel::EstimateRunTimes(
     LOG(INFO) << "Unfused time: " << time_unfused;
     LOG(INFO) << "Fused time: " << time_fused;
   }
+  // [DEBUG-fpus_per_core-fix] Remove before merge.
+  LOG(INFO) << "[DEBUG-fpus_per_core-fix] GpuPerfModel::EstimateRunTimes "
+            << "producer=" << producer->name()
+            << " num_consumers=" << fused_consumers.size()
+            << " unfused_us=" << absl::ToDoubleMicroseconds(time_unfused)
+            << " fused_us=" << absl::ToDoubleMicroseconds(time_fused)
+            << " decision="
+            << (time_fused < time_unfused ? "WILL_FUSE" : "WILL_NOT_FUSE");
 
   return {time_unfused, time_fused};
 }
@@ -290,6 +298,14 @@ GpuPerformanceModel::EstimateRunTimesForMultiOutputFusion(
     LOG(INFO) << "Unfused time: " << time_unfused;
     LOG(INFO) << "Fused time: " << time_fused;
   }
+  // [DEBUG-fpus_per_core-fix] Remove before merge.
+  LOG(INFO) << "[DEBUG-fpus_per_core-fix] GpuPerfModel::MultiOutputFusion "
+            << "producer=" << producer->name()
+            << " consumer=" << consumer->name()
+            << " unfused_us=" << absl::ToDoubleMicroseconds(time_unfused)
+            << " fused_us=" << absl::ToDoubleMicroseconds(time_fused)
+            << " decision="
+            << (time_fused < time_unfused ? "WILL_FUSE" : "WILL_NOT_FUSE");
 
   return {time_unfused, time_fused};
 }

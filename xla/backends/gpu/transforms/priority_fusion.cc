@@ -637,7 +637,22 @@ class PriorityFusionQueue {
       step->set_us_fused(absl::ToDoubleMicroseconds(run_times.time_fused));
       step->set_us_unfused(absl::ToDoubleMicroseconds(run_times.time_unfused));
     }
-    return current_priority + run_times.time_unfused - run_times.time_fused;
+    Priority priority =
+        current_priority + run_times.time_unfused - run_times.time_fused;
+    // [DEBUG-fpus_per_core-fix] Remove before merge. Decision = fuse iff
+    // priority > 0 (unfused time exceeds fused time).
+    LOG(INFO) << "[DEBUG-fpus_per_core-fix] PriorityFusion producer="
+              << producer->name()
+              << " users=" << producer->user_count()
+              << " unfused_us="
+              << absl::ToDoubleMicroseconds(run_times.time_unfused)
+              << " fused_us="
+              << absl::ToDoubleMicroseconds(run_times.time_fused)
+              << " priority_us=" << absl::ToDoubleMicroseconds(priority)
+              << " decision=" << (priority > absl::ZeroDuration()
+                                      ? "WILL_FUSE"
+                                      : "WILL_NOT_FUSE");
+    return priority;
   }
 
   FusionDecision IsTritonSupported(const HloInstruction& instruction) {

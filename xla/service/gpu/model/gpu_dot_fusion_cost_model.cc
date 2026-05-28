@@ -452,6 +452,25 @@ absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForDotOpWithBlockParameters(
   estimates.exec_time = std::max(
       {compute_and_flops.compute_time, hbm_timing.total_time(), l2_time});
 
+  // [DEBUG-fpus_per_core-fix] Remove before merge. Decides whether dot is
+  // compute-, HBM-, or L2-bound for autotuner tile selection.
+  const char* bound = "COMPUTE_BOUND";
+  if (estimates.exec_time == hbm_timing.total_time()) bound = "HBM_BOUND";
+  else if (estimates.exec_time == l2_time) bound = "L2_BOUND";
+  LOG(INFO) << "[DEBUG-fpus_per_core-fix] DotFusionCostModel dot="
+            << dot->name()
+            << " dtype="
+            << xla::PrimitiveType_Name(dot->shape().element_type())
+            << " tile_m=" << dot_tile.m << " tile_n=" << dot_tile.n
+            << " tile_k=" << dot_tile.k
+            << " compute_us="
+            << absl::ToDoubleMicroseconds(compute_and_flops.compute_time)
+            << " hbm_us="
+            << absl::ToDoubleMicroseconds(hbm_timing.total_time())
+            << " l2_us=" << absl::ToDoubleMicroseconds(l2_time)
+            << " exec_us=" << absl::ToDoubleMicroseconds(estimates.exec_time)
+            << " decision=" << bound;
+
   return estimates;
 }
 

@@ -483,6 +483,18 @@ absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputationImpl(
       GpuPerformanceModelBase::CombineComputeAndMemoryAccessTime(
           compute_time, memory_access_time);
 
+  // [DEBUG-fpus_per_core-fix] Remove before merge. Classification feeds
+  // SymbolicTileAnalysis -> Triton tile selection.
+  LOG(INFO) << "[DEBUG-fpus_per_core-fix] IndexingPerfModel "
+            << "num_blocks=" << num_blocks
+            << " num_warps=" << num_warps << " flops=" << flops + dot_flops
+            << " compute_us=" << absl::ToDoubleMicroseconds(compute_time)
+            << " mem_us=" << absl::ToDoubleMicroseconds(memory_access_time)
+            << " exec_us=" << absl::ToDoubleMicroseconds(exec_time)
+            << " classification="
+            << (compute_time > memory_access_time ? "COMPUTE_BOUND"
+                                                  : "MEMORY_BOUND");
+
   return EstimateRunTimeData{/*flops=*/flops + dot_flops,
                              /*bytes_read=*/bytes_read,
                              /*bytes_written=*/bytes_written,
