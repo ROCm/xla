@@ -155,6 +155,19 @@ message CollectiveBackendConfig {
   // the operation's buffers must be allocated in (private, symmetric, or peer
   // memory).
   xla.DebugOptions.CollectivesMode collectives_mode = 6;
+
+  // Identifies which intra-node kernel strategy will be used at runtime.
+  // Set by CollectiveKernelStrategyAnnotator before scheduling so that the
+  // latency estimator can apply the correct cost model.
+  enum CollectiveKernelStrategy {
+    // Default: NCCL / RCCL ring algorithm (or unset).
+    KERNEL_STRATEGY_DEFAULT = 0;
+    // Triton one-shot GPU kernel (P2P read from all peers, size <= 256 KB).
+    KERNEL_STRATEGY_TRITON_ONE_SHOT = 1;
+    // Triton two-shot GPU kernel (two-phase P2P, 256 KB < size <= 4 MB).
+    KERNEL_STRATEGY_TRITON_TWO_SHOT = 2;
+  }
+  CollectiveKernelStrategy kernel_strategy = 7;
 }
 
 // Backend config for collective metadata operation.
