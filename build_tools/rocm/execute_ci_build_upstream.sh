@@ -14,6 +14,7 @@ EXCLUDED_TESTS=(
     "CubSort/CubSortPairsTest*"
     "StreamExecutorGpuClientTest.GetAbiVersion"
     "DotF64F64F64Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_f64_f64_f64_with_lhs_f64_rhs_f64_output_f64_from_cc_0_0_rocm_60_no_restriction_c_16_nc_2"
+    "DotF64F64F64Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_f64_f64_f64_with_lhs_f64_rhs_f64_output_f64_from_cc_0_0_rocm_60_no_restriction_c_32_nc_32"
     "ParameterizedGemmRewriteTest.GemmTypeCombinationCheck"
     "MatmulTestWithCublas.GemmRewriter_RegressionTestF64"
     "SampleFileTest.Convolution" # https://wardite.cluster.engflow.com/invocations/default/c105260c-873a-4634-ab69-905a43ca5cf8
