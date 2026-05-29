@@ -2592,6 +2592,9 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
         // TF32
         {ComputationType::kTF32AsF32, DataType::kFloat, PrimitiveType::F32,
          PrimitiveType::F32, DataType::kFloat},
+
+        {ComputationType::kF64, DataType::kDouble, PrimitiveType::F64,
+         PrimitiveType::F64, DataType::kDouble},
     };
     if (gpu_version_.IsRocm() &&
         absl::c_linear_search(supported_hipblas_type_combinations,
