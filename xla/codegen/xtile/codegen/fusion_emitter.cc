@@ -773,18 +773,18 @@ absl::StatusOr<int64_t> GetConvLoopIterationCount(
   const auto* conv =
       ::xla::Cast<HloConvolutionInstruction>(tiled_conv.hlo());
   const int64_t spatial_rank = conv->window().dimensions().size();
-  absl::Span<const int64_t> tile_sizes = tiled_conv.tile_sizes();
-  // Tile sizes are laid out as [tile_window_0, ..., tile_c_in, output_tiles...]
   int64_t total = 1;
+  int64_t k_tile = 1;
   for (int64_t i = 0; i < spatial_rank; ++i) {
     total *= conv->window().dimensions(i).size();
+    k_tile *= tiled_conv.operand(1)->tile_size(
+      conv->convolution_dimension_numbers().kernel_spatial_dimensions(i));
   }
   total *= conv->operand(0)->shape().dimensions(
-      conv->convolution_dimension_numbers().input_feature_dimension());
-  int64_t k_tile = 1;
-  for (int64_t i = 0; i < spatial_rank + 1; ++i) {
-    k_tile *= tile_sizes[i];
-  }
+    conv->convolution_dimension_numbers().input_feature_dimension());
+  k_tile *= tiled_conv.operand(0)->tile_size(
+    conv->convolution_dimension_numbers().input_feature_dimension());
+ 
   TF_RET_CHECK(k_tile > 0)
       << "Product of tile sizes of contracting dimensions must be positive, got " 
       << k_tile << " for conv " << conv->ToShortString();
