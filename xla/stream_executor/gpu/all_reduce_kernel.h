@@ -92,9 +92,34 @@ struct AllReduceKernelParams {
   // the same location simultaneously. Index 0 is the rank itself.
   std::array<int64_t, kMaxNumAllReduceInputPtrs> rotated_ranks;
 
-  // Value to be written to the signal flags. Should be different for different
-  // invocations of the kernel with the same signal buffer.
+  // Legacy: value to be written to the signal flags. Should be different for
+  // different invocations of the kernel with the same signal buffer. Kept as
+  // a fallback for non-HIP-graph paths and for tests; under HIP graph
+  // capture this scalar would be baked into the captured kernel-launch
+  // node and reused on every replay, breaking the per-launch uniqueness
+  // requirement (see signal_counter below).
   uint32_t signal_value;
+
+  // Device-side per-block monotonic counter, one uint32_t per block.
+  // At the start of every kernel launch, the leader thread of each block
+  // atomically advances its slot and broadcasts the new value to the rest
+  // of the block via shared memory. The result is then used as the
+  // *effective* signal_value passed to SyncRemoteBlocks in place of the
+  // baked-in `signal_value` scalar above. This makes the kernel safe to
+  // capture into a HIP graph: every replay of the captured launch
+  // advances the counter fresh, so the in-kernel rendezvous gets a
+  // strictly increasing per-launch signal as the kernel's contract
+  // requires.
+  //
+  // Allocation rules: must hold at least one uint32_t per block, must be
+  // zero-initialized before the first launch, and must be the same
+  // allocation across launches of this thunk on this stream (so the
+  // counter is preserved across launches). Each rank has its own
+  // allocation in its own device memory; values are NOT shared across
+  // ranks. Cross-rank consistency comes from the fact that all ranks
+  // launch the kernel the same number of times in lockstep (XLA pmap),
+  // so per-rank counter values match across ranks per launch index.
+  RestrictedPtr<uint32_t> signal_counter = nullptr;
 
   // Pointer to the signal flags buffer which is symmetric around peer ranks.
   // TODO(446447767): Remove this once we have a single pointer to symmetric

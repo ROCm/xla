@@ -150,6 +150,7 @@ absl::Status RunAllReduceKernel(
     int64_t num_elements,                            //
     se::DeviceAddressBase symmetric_signal_buffer,   //
     uint32_t signal_value,                           //
+    se::DeviceAddressBase signal_counter,            //
     se::DeviceAddressBase metadata                   //
 );
 

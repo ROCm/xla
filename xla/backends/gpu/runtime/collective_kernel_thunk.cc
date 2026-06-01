@@ -16,6 +16,7 @@ limitations under the License.*/
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -77,7 +78,15 @@ using se::gpu::AllReduceStrategy;
 // - Signal value.
 // - Signal buffers
 // - Remote buffers
-static constexpr int32_t kAllReduceArgsCount = 6;
+// 6 original args + 1 new signal_counter pointer = 7. Kernel arg ordering:
+//   0: source_buffer
+//   1: destination_buffer
+//   2: rank (int32_t)
+//   3: signal_value (uint32_t, legacy fallback)
+//   4: signal_counter (uint32_t* device pointer, HIP-graph-safe counter)
+//   5: signal_buffers (peer-pointer table)
+//   6: remote_buffers (peer-pointer table)
+static constexpr int32_t kAllReduceArgsCount = 7;
 static constexpr int32_t kNumParameters = 2;
 
 // Helper for allocating memory on the device.
@@ -232,11 +241,24 @@ absl::Status CollectiveKernelThunk::Prepare(const PrepareParams& params) {
         AllocateMemory(params.executor, kSignalBufferSize * kNumBuffers,
                        "Signal buffers"));
 
+    // Per-block monotonic signal counter (one uint32_t per block). The
+    // kernel atomically advances each block's slot at the start of every
+    // launch so HIP-graph replays get a strictly increasing per-launch
+    // signal_value (see kernel docs).
+    const int64_t kSignalCounterSize = xla::RoundUpTo<uint64_t>(
+        launch_dimensions.num_blocks() * sizeof(uint32_t),
+        kXlaAllocatedBufferAlignBytes);
+    TF_ASSIGN_OR_RETURN(
+        se::DeviceAddressHandle signal_counter_handle,
+        AllocateMemory(params.executor, kSignalCounterSize,
+                       "Signal counter"));
+
     per_stream_memory_.emplace(
         params.executor,
         std::make_unique<StreamMemory>(StreamMemory{
             std::move(local_buffers_handle), std::move(signal_buffers_handle),
-            strategy, kLocalBufferSize, kSignalBufferSize}));
+            std::move(signal_counter_handle), strategy, kLocalBufferSize,
+            kSignalBufferSize, kSignalCounterSize}));
 
     // If we decided to run kernel using multimem strategy we request multimem
     // addresses for input and output buffers (both of them must be allocated
@@ -290,10 +312,41 @@ absl::Status CollectiveKernelThunk::Initialize(const InitializeParams& params) {
       TF_RETURN_IF_ERROR(params.stream->MemZero(
           memory_state->signal_buffers_handle.address_ptr(),
           memory_state->signal_buffers_handle.address().size()));
+      // Zero the per-block signal counter buffer. The kernel relies on
+      // this starting at 0 so the first atomicAdd produces signal_value=1
+      // (one-shot) or 2 (two-shot) and subsequent launches advance
+      // monotonically.
+      TF_RETURN_IF_ERROR(params.stream->MemZero(
+          memory_state->signal_counter_handle.address_ptr(),
+          memory_state->signal_counter_handle.address().size()));
       TF_RETURN_IF_ERROR(params.stream->BlockHostUntilDone());
       // Create a kernel for execution.
+      //
+      // On ROCm, force the template (RunAllReduceKernel) path by skipping
+      // the emitted-kernel branch. The Triton-emitted AllReduce kernel
+      // bakes `signal_value` into the captured HIP-graph launch node and
+      // therefore reuses the same value on every replay, breaking the
+      // per-launch uniqueness contract documented in all_reduce.h:136.
+      // The template kernel was just taught to read signal_value from a
+      // per-block device-side atomic counter (params.signal_counter), so
+      // every replay advances the counter fresh and the cross-rank
+      // rendezvous works correctly under HIP graph capture+replay. Until
+      // the emitter is taught the same trick, the template path is the
+      // correct ROCm default. (Set
+      // XLA_ROCM_FORCE_EMITTED_ALLREDUCE_KERNEL=1 to bypass and use the
+      // emitted kernel for bisection/repro.)
       std::unique_ptr<se::Kernel> kernel = nullptr;
-      if (!kernel_name_.empty()) {
+      const bool is_rocm =
+          params.executor->GetDeviceDescription()
+              .gpu_compute_capability()
+              .IsRocm();
+      static const bool rocm_force_emitted = [] {
+        const char* v = std::getenv("XLA_ROCM_FORCE_EMITTED_ALLREDUCE_KERNEL");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+      }();
+      const bool use_emitted =
+          !kernel_name_.empty() && (!is_rocm || rocm_force_emitted);
+      if (use_emitted) {
         TF_RET_CHECK(launch_dimensions_.has_value())
             << "Launch dimensions are not set for when using emitted "
                "collective kernel.";
@@ -335,6 +388,11 @@ absl::Status CollectiveKernelThunk::Initialize(const InitializeParams& params) {
                 /*offset_bytes=*/i * memory_state->signal_buffer_size_bytes,
                 /*size_bytes=*/memory_state->signal_buffer_size_bytes);
       }
+      // Per-block signal counter — one allocation shared across both
+      // double-buffer slots (the kernel uses one counter slot per block,
+      // not per buffer).
+      state->signal_counter_ptr =
+          memory_state->signal_counter_handle.address();
     }
   }
 
@@ -465,10 +523,39 @@ absl::Status CollectiveKernelThunk::ExecuteOnStream(
     state = it->second.get();
   }
 
-  const uint32_t buffer_index = state->invocation_count % kNumBuffers;
+  // Always use buffer slot 0 (single-buffering).
+  //
+  // The original code alternated between kNumBuffers slots via
+  // `invocation_count % kNumBuffers` to tolerate up to one iteration of
+  // cross-rank skew. That scheme is fundamentally incompatible with HIP
+  // graph capture/replay for two reasons:
+  //   1. `buffer_index` is computed host-side and baked into the captured
+  //      graph, so a captured graph always reuses ONE slot across all its
+  //      replays — it cannot actually alternate.
+  //   2. `invocation_count` is incremented during graph capture (retrace),
+  //      which happens a rank-dependent number of times (driven by per-rank
+  //      BFC address churn). Different ranks therefore freeze DIFFERENT
+  //      `buffer_index` values into their graphs and end up synchronizing on
+  //      mismatched signal-buffer slots — each writes its signal_value into
+  //      one slot and waits on another, observing only the other iteration's
+  //      stale residual. This is the 8-GPU MI300X wedge (rank 0 idle, ranks
+  //      1-7 spinning); in-kernel diagnostics showed every rank at the same
+  //      `expected` signal_value but reading mismatched slots holding stale
+  //      values.
+  //
+  // Single-buffering is safe because signal_value now comes from a
+  // device-side monotonic counter (see ResolveSignalValue): it strictly
+  // increases per real execution, is never reset, and advances identically
+  // on every rank (the counter only ticks on actual kernel execution /
+  // replay, never during capture). The residual in slot 0 is therefore
+  // always strictly less than the current `expected`, so WaitSignalFlag
+  // never prematurely satisfies and never needs a reset. With all ranks on
+  // the same slot the cross-rank rendezvous always converges.
+  const uint32_t buffer_index = 0;
   const AllReduceStrategy strategy =
       GetAllReduceStrategy(GetInputSizeBytes(), is_multimem_enabled_);
-  // In case of two-shot we want to increment in multiples of 2.
+  // Kept for the legacy baked-in signal_value fallback and for log parity;
+  // the device-side counter is the real source of truth under graph replay.
   state->invocation_count += 1 + static_cast<uint32_t>(strategy);
   XLA_VLOG_DEVICE(3, device_ordinal)
       << "Performing " << strategy << " all-reduce for clique "
@@ -506,6 +593,7 @@ absl::Status CollectiveKernelThunk::ExecuteOnStream(
         destination_buffer,
         static_cast<int32_t>(state->rank.value()),
         /* signal_value= */ state->invocation_count,
+        state->signal_counter_ptr,
         signal_buffers,
         remote_buffers};
     return ExecuteKernelOnStream(*state->kernel, kernel_args,
@@ -534,6 +622,7 @@ absl::Status CollectiveKernelThunk::ExecuteOnStream(
       /*num_elements=*/buffer.element_count,
       /*symmetric_signal_buffer=*/signal_buffer_ptr,
       /*signal_value=*/state->invocation_count,
+      /*signal_counter=*/state->signal_counter_ptr,
       /*metadata=*/state->metadata);
 }
 

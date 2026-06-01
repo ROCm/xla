@@ -148,10 +148,21 @@ class CollectiveKernelThunk : public Thunk {
     // Also double buffered for the same reason as local buffers.
     se::DeviceAddressHandle signal_buffers_handle;
 
+    // Per-block monotonic signal counter (one uint32_t per block).
+    // Zeroed at init time. The kernel atomically advances its slot at the
+    // start of every invocation and uses the new value as the effective
+    // signal_value for the SyncRemoteBlocks rendezvous. This is what makes
+    // the kernel safe to capture into a HIP graph: every replay of the
+    // captured kernel launch advances the counter fresh, so the
+    // rendezvous gets a strictly increasing per-launch signal as the
+    // kernel contract requires.
+    se::DeviceAddressHandle signal_counter_handle;
+
     se::gpu::AllReduceStrategy strategy;
 
     const int64_t local_buffer_size_bytes = 0;
     const int64_t signal_buffer_size_bytes = 0;
+    const int64_t signal_counter_size_bytes = 0;
   };
 
   // Per-executor state that needs to be synchronized for access.
@@ -167,6 +178,8 @@ class CollectiveKernelThunk : public Thunk {
     // changed.
     std::array<se::DeviceAddressBase, kNumBuffers> remote_buffer_ptrs;
     std::array<se::DeviceAddressBase, kNumBuffers> signal_buffer_ptrs;
+    // Pointer to the per-block signal counter buffer (see StreamMemory).
+    se::DeviceAddressBase signal_counter_ptr;
     // Kernel entry for the stream executor.
     std::unique_ptr<se::Kernel> kernel;
     uint32_t invocation_count = 0;

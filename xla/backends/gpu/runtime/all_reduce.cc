@@ -95,7 +95,8 @@ absl::Status LaunchTypedKernel(
     se::DeviceAddressBase local_input_buffer,
     se::DeviceAddressBase output_buffer, int64_t rank, int64_t num_ranks,
     int64_t num_elements, se::DeviceAddressBase symmetric_signal_buffer,
-    uint32_t signal_value, se::DeviceAddressBase metadata) {
+    uint32_t signal_value, se::DeviceAddressBase signal_counter,
+    se::DeviceAddressBase metadata) {
   using ElementType = typename TagType::ElementType;
   static constexpr bool kIsTwoShot =
       TagType::kAllReduceStrategy == AllReduceStrategy::kTwoShot;
@@ -134,6 +135,8 @@ absl::Status LaunchTypedKernel(
     params.rotated_ranks[i] = (i + rank) % params.num_ranks;
   }
   params.signal_value = signal_value;
+  params.signal_counter =
+      tsl::safe_reinterpret_cast<uint32_t*>(signal_counter.opaque());
   params.metadata =
       tsl::safe_reinterpret_cast<CollectiveKernelMetadata*>(metadata.opaque());
 
@@ -343,6 +346,7 @@ absl::Status RunAllReduceKernel(
     int64_t num_elements,                           //
     se::DeviceAddressBase symmetric_signal_buffer,  //
     uint32_t signal_value,                          //
+    se::DeviceAddressBase signal_counter,           //
     se::DeviceAddressBase metadata) {
   TF_RETURN_IF_ERROR(IsAllReduceKernelSupported(num_ranks, num_elements,
                                                 element_type, reduction_kind,
@@ -351,7 +355,8 @@ absl::Status RunAllReduceKernel(
     return LaunchTypedKernel(
         tag, stream, launch_dimensions, symmetric_input_buffer,
         local_input_buffer, output_buffer, rank.value(), num_ranks,
-        num_elements, symmetric_signal_buffer, signal_value, metadata);
+        num_elements, symmetric_signal_buffer, signal_value, signal_counter,
+        metadata);
   };
   const auto launch_kernel = [&](auto tag_registry,
                                  AllReduceStrategy strategy) -> absl::Status {

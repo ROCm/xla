@@ -107,6 +107,39 @@ __device__ __forceinline__ RestrictedPtr<T> GetMultimemPtr(
                             offset);
 }
 
+// Resolves the *effective* signal_value for this kernel launch.
+//
+// If `args.signal_counter` is set (HIP-graph-safe path), each block's
+// leader thread atomically advances its slot by `increment` and the rest
+// of the block reads the result from shared memory. This gives a strictly
+// increasing per-launch signal_value even when the kernel is replayed
+// from a captured HIP graph (where the legacy `args.signal_value` scalar
+// would be baked into the graph and reused identically on every replay).
+//
+// If `args.signal_counter` is nullptr we fall back to the legacy scalar.
+// This keeps unit tests / non-graph callers that don't bother allocating
+// a counter buffer working unchanged.
+//
+// `increment` must equal the number of distinct signal values this kernel
+// invocation will write to the slot. One-shot writes 1 value, two-shot
+// writes 2 (signal_value and signal_value+1), and multimem writes 2.
+// Stepping the counter by the correct amount keeps all writes from this
+// and future launches strictly monotonic.
+template <typename T>
+__device__ __forceinline__ uint32_t ResolveSignalValue(
+    const AllReduceKernelParams<T>& args, uint32_t increment) {
+  __shared__ uint32_t s_signal_value;
+  if (args.signal_counter == nullptr) {
+    return args.signal_value;
+  }
+  if (threadIdx.x == 0) {
+    uint32_t old = atomicAdd(args.signal_counter + blockIdx.x, increment);
+    s_signal_value = old + increment;
+  }
+  __syncthreads();
+  return s_signal_value;
+}
+
 template <typename T, xla::ReductionKind ReductionKindT, PlatformType PlatformT>
 __device__ __forceinline__ void OneShotAllReduceKernelImpl(
     const AllReduceKernelParams<T>& args) {
@@ -124,6 +157,8 @@ __device__ __forceinline__ void OneShotAllReduceKernelImpl(
         args.num_ranks, *args.metadata);
   }
 
+  const uint32_t signal_value = ResolveSignalValue(args, /*increment=*/1);
+
   __syncthreads();
 
   int64_t offset =
@@ -136,7 +171,7 @@ __device__ __forceinline__ void OneShotAllReduceKernelImpl(
   }
 
   SyncRemoteBlocks<PlatformT, kMaxNumAllReduceInputPtrs>(
-      signal_flags_buffers, args.rank, args.num_ranks, args.signal_value);
+      signal_flags_buffers, args.rank, args.num_ranks, signal_value);
   __syncthreads();
 
   for (int i = offset; i < args.num_elements; i += stride) {
@@ -182,9 +217,11 @@ __device__ __forceinline__ void MultimemAllReduceKernelImpl(
       kNumElementsPerThread * (blockIdx.x * blockDim.x + threadIdx.x);
   int64_t stride = kNumElementsPerThread * blockDim.x * gridDim.x;
 
+  const uint32_t signal_value = ResolveSignalValue(args, /*increment=*/2);
+
   __syncthreads();
   SyncRemoteBlocks<PlatformT, kMaxNumAllReduceInputPtrs>(
-      signal_flags_buffers, args.rank, args.num_ranks, args.signal_value);
+      signal_flags_buffers, args.rank, args.num_ranks, signal_value);
   __syncthreads();
 
   RestrictedPtr<T> src_multimem =
@@ -218,7 +255,7 @@ __device__ __forceinline__ void MultimemAllReduceKernelImpl(
   __syncthreads();
   // Wait for all participants to receive the data.
   SyncRemoteBlocks<PlatformT, kMaxNumAllReduceInputPtrs>(
-      signal_flags_buffers, args.rank, args.num_ranks, args.signal_value + 1);
+      signal_flags_buffers, args.rank, args.num_ranks, signal_value + 1);
   __syncthreads();
 }
 #endif  // __CUDA_ARCH__ >= 900
@@ -268,11 +305,15 @@ __device__ __forceinline__ void TwoShotAllReduceKernelImpl(
     }
   }
 
+  // Resolve the per-launch effective signal_value (see ResolveSignalValue
+  // doc for why this is needed under HIP graph capture+replay).
+  const uint32_t signal_value = ResolveSignalValue(args, /*increment=*/2);
+
   // Shot1: Wait for all participating devices to finish copying data to their
   // shared buffer.
   __syncthreads();  // Make sure all writes to shared buffers are complete.
   SyncRemoteBlocks<PlatformT, kMaxNumAllReduceInputPtrs>(
-      signal_flags_buffers, args.rank, args.num_ranks, args.signal_value);
+      signal_flags_buffers, args.rank, args.num_ranks, signal_value);
   __syncthreads();  // Block must wait here until remote signals are updated.
 
   // Step2: Accumulate data for the responsible indices in the shared buffers.
@@ -311,7 +352,7 @@ __device__ __forceinline__ void TwoShotAllReduceKernelImpl(
   // synchronization is different from the one used above.
   __syncthreads();  // Wait for all accumulations to shared buffer.
   SyncRemoteBlocks<PlatformT, kMaxNumAllReduceInputPtrs>(
-      signal_flags_buffers, args.rank, args.num_ranks, args.signal_value + 1);
+      signal_flags_buffers, args.rank, args.num_ranks, signal_value + 1);
   __syncthreads();  // Block must wait here until remote signals are updated.
 
   // Step3: Copy data from the shared buffers to the output buffer.

@@ -19,6 +19,8 @@ limitations under the License.
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -120,6 +122,37 @@ CommandBufferConfig GetCommandBufferConfig(
   }
   if (device_info.gpu_compute_capability().IsRocm()) {
     erase(kRequireConditionals);  // on-device control flow
+
+    // ROCm safety net (opt-in): set
+    // XLA_ROCM_DISABLE_COLLECTIVES_IN_COMMAND_BUFFER=1 to keep COLLECTIVES
+    // out of HIP graphs.
+    //
+    // Background: the previous default-on workaround was needed because
+    // XLA's custom AllReduce kernel reused a host-baked `signal_value`
+    // scalar on every HIP-graph replay, violating the per-launch
+    // uniqueness contract in all_reduce.h:136 and deadlocking 8-GPU
+    // MI300X (rank 0 idle, ranks 1-7 spin in the kernel). The fix now
+    // lives inside the kernel itself (see
+    // all_reduce_kernel_lib.cu.h::ResolveSignalValue and the
+    // signal_counter plumbing in CollectiveKernelThunk): every kernel
+    // launch atomically advances a device-side per-block counter and
+    // uses the post-increment value as the effective signal_value, so
+    // replays of a captured graph naturally produce strictly increasing
+    // signal values just like fresh host-driven launches. Collectives in
+    // command buffers are therefore safe by default on ROCm again. Keep
+    // the opt-in safety net for quick bisection of any future
+    // regressions in the kernel-side fix.
+    static const bool rocm_disable_coll_in_cmd = [] {
+      const char* v =
+          std::getenv("XLA_ROCM_DISABLE_COLLECTIVES_IN_COMMAND_BUFFER");
+      return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    if (rocm_disable_coll_in_cmd &&
+        config.enabled_commands.contains(DebugOptions::COLLECTIVES)) {
+      LOG(WARNING) << "XLA_ROCM_DISABLE_COLLECTIVES_IN_COMMAND_BUFFER=1: "
+                      "dropping COLLECTIVES from command-buffer config.";
+      config.enabled_commands.erase(DebugOptions::COLLECTIVES);
+    }
   }
 
   return config;
