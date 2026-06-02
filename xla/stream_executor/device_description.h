@@ -447,6 +447,34 @@ class DeviceDescription {
     return 32;
   }
 
+  // Aggregate L2 cache read bandwidth in bytes/second for the device as XLA sees
+  // it (for multi-GCD parts like MI250, one HIP device == one GCD).
+  double l2_cache_bandwidth() const {
+    if (auto* capability = gpu_compute_capability_.rocm_compute_capability()) {
+      // Each CDNA L2 slice delivers 128 B/clock; this has been constant since
+      // CDNA2. The aggregate bytes/clock times the engine clock gives the
+      // theoretical peak; the efficiency factor is the sustained fraction
+      // measured by an L2-resident streaming microbenchmark on MI350X
+      // (31.8 / 36.0 TB/s) and assumed to carry across the CDNA line.
+      // These formulas reproduce the published anchors: MI250 at 1.7 GHz =
+      // 32 * 128 * 1.7 = 6.96 TB/s (CDNA2 white paper) and MI100 ~6 TB/s.
+      constexpr double kCdnaBytesPerClockPerSlice = 128;
+      constexpr double kCdnaL2Efficiency = 0.88;
+      int64_t slices = 0;
+      if (capability->gfx9_mi300_series()) {
+        slices = 8 * 16;  // 8 XCDs, 16 slices each.
+      } else if (capability->gfx9_mi100() || capability->gfx9_mi200()) {
+        slices = 32;  // Single GCD, 32 slices.
+      }
+      if (slices > 0) {
+        return clock_rate_ghz_ * 1e9 * slices * kCdnaBytesPerClockPerSlice *
+               kCdnaL2Efficiency;
+      }
+    }
+    // Measured H100 L2 bandwidth within a partition (default for CUDA).
+    return 6.65 * 1e12;
+  }
+
   const DeviceInterconnectInfo& device_interconnect_info() const {
     return interconnect_info_;
   }

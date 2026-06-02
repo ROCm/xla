@@ -213,11 +213,10 @@ absl::StatusOr<ComputeAndFlops> CalculateComputeTimeWithTileAndWaveQuantization(
 absl::StatusOr<absl::Duration> CalculateL2Time(
     int64_t dot_k, int64_t tile_k, const se::DeviceDescription& device_info,
     int64_t l2_bytes_read, bool is_tma_allowed) {
-  // TODO(maniananth): L2 bandwidth has been hardcoded for H100 based on
-  // microbenchmarking L2 bandwidth within a partition, but we should add this
-  // to the device info and extend for more GPUs.
-
-  double device_l2_bandwidth = 6.65 * 1e12;  // Measured H100 L2 bandwidth.
+  // L2 bandwidth comes from the device description: the measured H100 value for
+  // CUDA, and a per-arch aggregate for CDNA. The per-K-iter loop overhead below
+  // is still H100-derived; revisit for CDNA when calibration data is available.
+  double device_l2_bandwidth = device_info.l2_cache_bandwidth();
   int64_t num_k_iters = CeilOfRatio<int64_t>(dot_k, tile_k);
 
   // Empirical overheads per K-dimension iteration.
