@@ -68,6 +68,7 @@ done
     --nokeep_going \
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=${RBE_POOL} \
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+    --remote_cache_compression \
     -- \
     //xla/... \
     -//xla/tests:dot_operation_test_amdgpu_any \
