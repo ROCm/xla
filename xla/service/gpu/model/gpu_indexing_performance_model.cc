@@ -26,6 +26,7 @@ limitations under the License.
 
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
@@ -347,6 +348,14 @@ absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputationImpl(
   int64_t num_blocks = tiled_hlo_computation.num_output_tiles();
 
   absl::Duration dot_compute_time = absl::ZeroDuration();
+  // For dots on ROCm we use the dedicated dot cost model's memory estimates,
+  // which are cache- and occupancy-aware, instead of the generic byte-
+  // replication read term below. We accumulate those here and record the dot's
+  // operands so the generic read loop skips them (avoiding double-counting).
+  absl::Duration dot_memory_time = absl::ZeroDuration();
+  absl::flat_hash_set<const HloInstruction*> dot_operands_to_skip;
+  const bool use_dot_memory_model =
+      device_info.gpu_compute_capability().IsRocm();
 
   // Check if the computation is too large to fit in registers and would result
   // in spilling.
@@ -377,11 +386,26 @@ absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputationImpl(
             absl::StatusOr<EstimateRunTimeData> dot_perf_stats =
                 GetDotEstimates(tiled_hlo, device_info);
             if (dot_perf_stats.ok()) {
-              // We're only using compute time for now - memory and L2 access
-              // data needs to be adjusted more carefully so that the model
-              // doesn't overlap their counting.
-              // TODO: b/495346904 - integrate the dot stats more completely.
               dot_compute_time += dot_perf_stats->compute_time;
+
+              // The generic read term below models operand re-reads as full
+              // DRAM traffic, which badly mis-ranks cache-resident GEMM tiles
+              // (it rewards under-filling tiles that replicate least). The dot
+              // cost model already produces cache- and occupancy-aware memory
+              // estimates, so on ROCm we use those and skip the dot's operands
+              // in the generic accounting to avoid double-counting.
+              // The dot model's exec_time is max(compute, hbm, l2); we subtract
+              // the compute portion (added separately above) so the remainder
+              // is the memory-bound contribution, which crucially includes the
+              // L2 term that discriminates between otherwise-tied tile shapes.
+              // TODO: b/495346904 - integrate the dot stats more completely.
+              if (use_dot_memory_model) {
+                dot_memory_time +=
+                    dot_perf_stats->exec_time - dot_perf_stats->compute_time;
+                for (const auto* operand : tiled_hlo->operands()) {
+                  dot_operands_to_skip.insert(operand->hlo());
+                }
+              }
 
               // The dot cost model operates on the tile- and wave- quantized
               // FLOPS which is more accurate for performance estimates but
@@ -415,6 +439,12 @@ absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputationImpl(
              llvm::zip(tiled_hlo->tile_sizes(),
                        tiled_hlo->hlo()->shape().dimensions())) {
           num_elements *= std::min(tile_size, dimension_size);
+        }
+
+        // Operands consumed by a dot whose memory cost is modeled by the dot
+        // cost model are skipped here to avoid double-counting their reads.
+        if (use_dot_memory_model && dot_operands_to_skip.contains(hlo)) {
+          return;
         }
 
         // Tiles of the operands of the fusion contribute to the total memory
@@ -478,7 +508,7 @@ absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputationImpl(
                                            num_warps * WarpSize(device_info)) +
       dot_compute_time;
 
-  absl::Duration memory_access_time = read_time + write_time;
+  absl::Duration memory_access_time = read_time + write_time + dot_memory_time;
   absl::Duration exec_time =
       GpuPerformanceModelBase::CombineComputeAndMemoryAccessTime(
           compute_time, memory_access_time);
@@ -490,6 +520,11 @@ absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputationImpl(
             << " num_warps=" << num_warps << " flops=" << flops + dot_flops
             << " compute_us=" << absl::ToDoubleMicroseconds(compute_time)
             << " mem_us=" << absl::ToDoubleMicroseconds(memory_access_time)
+            << " read_us=" << absl::ToDoubleMicroseconds(read_time)
+            << " write_us=" << absl::ToDoubleMicroseconds(write_time)
+            << " dot_mem_us=" << absl::ToDoubleMicroseconds(dot_memory_time)
+            << " bytes_read=" << bytes_read
+            << " bytes_written=" << bytes_written
             << " exec_us=" << absl::ToDoubleMicroseconds(exec_time)
             << " classification="
             << (compute_time > memory_access_time ? "COMPUTE_BOUND"
