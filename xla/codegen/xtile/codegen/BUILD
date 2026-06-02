@@ -168,8 +168,12 @@ cc_library(
         "//xla/hlo/ir:hlo",
         "//xla/service:algorithm_util",
         "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Support",
+        "@stablehlo//:stablehlo_ops",
     ],
 )
 

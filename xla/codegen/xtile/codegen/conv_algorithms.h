@@ -19,6 +19,8 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Types.h"
+#include "mlir/IR/Value.h"
+#include "xla/codegen/xtile/codegen/emitter_helpers.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 
 namespace xla {
@@ -27,6 +29,23 @@ namespace xtile {
 // Returns the type to use for accumulation for the given `conv` instruction.
 absl::StatusOr<::mlir::Type> GetConvAccumulatorType(
     mlir::ImplicitLocOpBuilder& b, const HloConvolutionInstruction& conv);
+
+// Canonicalizes a rank-N conv kernel tile to a rank-2 `[K, N]` matrix, where
+// K = product of (kernel spatial axes) * c_in, and N = c_out. 
+absl::StatusOr<TensorValue> CanonicalizeConvKernelToKN(
+    mlir::ImplicitLocOpBuilder& b, TensorValue kernel_tile,
+    const HloConvolutionInstruction& conv);
+
+// Canonicalizes a rank-N conv accumulator tile to a rank-2 `[M, N]` matrix,
+// where M = batch * product(output spatial axes), and N = c_out. 
+absl::StatusOr<TensorValue> CanonicalizeConvAccToMN(
+    mlir::ImplicitLocOpBuilder& b, ::mlir::Value acc,
+    const HloConvolutionInstruction& conv);
+
+// Inverse of CanonicalizeConvAccToMN
+absl::StatusOr<::mlir::Value> RestoreConvAccFromMN(
+    mlir::ImplicitLocOpBuilder& b, ::mlir::Value acc_2d,
+    const HloConvolutionInstruction& conv);
 
 }  // namespace xtile
 }  // namespace xla
