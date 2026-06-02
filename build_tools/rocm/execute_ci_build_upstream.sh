@@ -34,10 +34,13 @@ TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
 
 for arg in "$@"; do
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},multi_gpu"
+        TAG_FILTERS="${TAG_FILTERS},multi_gpu,-lit"
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu"
+        TAG_FILTERS="${TAG_FILTERS},gpu,-lit,-multi_gpu"
+    fi
+    if [[ "$arg" == "--config=ci_lit" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},lit"
     fi
 done
 
