@@ -35,10 +35,10 @@ class GpuPerformanceWithCollectiveModel : public GpuPerformanceModelBase {
       const HloInstruction& instr, const GpuHloCostAnalysis* cost_analysis,
       const se::DeviceDescription& gpu_device_info);
 
-  // Returns the unidirectional NVLink / xGMI bandwidth per lane (GB/s) for
-  // the given device.  Values come from CudaBandwidthSettings /
-  // RocmBandwidthSettings so they are consistent with the NCCL cost model.
-  static absl::StatusOr<double> GetNvlinkBandwidthPerLaneGbps(
+  // Returns the unidirectional DCN bandwidth per lane (GB/s) for the given
+  // device.  Values come from CudaBandwidthSettings / RocmBandwidthSettings
+  // so they are consistent with the NCCL cost model.
+  static absl::StatusOr<double> GetDcnBandwidthPerLaneGbps(
       const se::DeviceDescription& gpu_device_info);
 
  private:
