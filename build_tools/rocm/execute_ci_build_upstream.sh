@@ -75,7 +75,6 @@ done
     -//xla/tests:iota_test_amdgpu_any \
     -//xla/backends/gpu/tests:sorting_test_amdgpu_any \
     -//xla/backends/gpu/tests:dot_bf16.hlo.test_gfx1250 \
-    -//xla/backends/gpu/tests:dot_bf16.hlo.test_mi200 \
     -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any \
     -//xla/tests:dot_operation_autotune_disabled_test_amdgpu_any \
     # TODO: skippped tests from https://wardite.cluster.engflow.com/invocations/default/f6e1d975-7f66-4b51-8430-d79e0ab0493a
