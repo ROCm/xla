@@ -398,7 +398,7 @@ GpuPerformanceWithCollectiveModel::ComputeCollectiveTime(
   }
 }
 
-/*static*/ double
+/*static*/ absl::StatusOr<double>
 GpuPerformanceWithCollectiveModel::GetNvlinkBandwidthPerLaneGbps(
     const se::DeviceDescription& gpu_device_info) {
   if (const auto* cuda_cc =
@@ -408,8 +408,9 @@ GpuPerformanceWithCollectiveModel::GetNvlinkBandwidthPerLaneGbps(
   auto* rocm_cc =
       gpu_device_info.gpu_compute_capability().rocm_compute_capability();
   if (rocm_cc == nullptr) {
-    LOG(FATAL) << "GetNvlinkBandwidthPerLaneGbps: unsupported compute "
-                  "capability (neither CUDA nor ROCm)";
+    return absl::InvalidArgumentError(
+        "GetNvlinkBandwidthPerLaneGbps: unsupported compute capability "
+        "(neither CUDA nor ROCm)");
   }
   return CreateSettings(*rocm_cc).GetNvlinkBw();
 }

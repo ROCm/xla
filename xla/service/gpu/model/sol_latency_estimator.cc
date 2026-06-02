@@ -233,6 +233,11 @@ absl::StatusOr<absl::Duration> DispatchEstimation(
   GPUCommunicationType comm = *communication_type;
   ASSIGN_OR_RETURN(auto num_groups_and_devices,
                    GetReplicaGroupCountAndSize(&instr));
+  if (!num_groups_and_devices.has_value()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Could not determine replica group count and size for collective: ",
+        instr.name()));
+  }
   int64_t partition_size = GetPartitionSize(instr, sol_flags);
 
   switch (comm) {
@@ -258,8 +263,7 @@ absl::StatusOr<absl::Duration> DispatchEstimation(
         if (ks == CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_ONE_SHOT ||
             ks == CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_TWO_SHOT) {
           SolGPUCostModel sol_model(sol_flags);
-          ASSIGN_OR_RETURN(auto groups, GetReplicaGroupCountAndSize(&instr));
-          const int num_gpus = groups->second;
+          const int num_gpus = num_groups_and_devices->second;
           const int active_links =
               gpu_device_info.device_interconnect_info().active_links;
           const int64_t size_bytes =

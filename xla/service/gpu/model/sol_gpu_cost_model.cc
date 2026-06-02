@@ -126,9 +126,17 @@ SolGPUCostModel::Config GetPlatformConfig(
   // Populate NVLink bandwidth from CudaBandwidthSettings /
   // RocmBandwidthSettings so that it stays consistent with the NCCL collective
   // cost model.
-  config.nvlink_bw_per_lane_gbps =
+  absl::StatusOr<double> nvlink_bw =
       GpuPerformanceWithCollectiveModel::GetNvlinkBandwidthPerLaneGbps(
           device_info);
+  if (nvlink_bw.ok()) {
+    config.nvlink_bw_per_lane_gbps = *nvlink_bw;
+  } else {
+    LOG(WARNING) << "[SoL] Could not determine NVLink bandwidth per lane: "
+                 << nvlink_bw.status()
+                 << ". NVLink-based cost estimates will be unavailable.";
+    config.nvlink_bw_per_lane_gbps = 0.0;
+  }
   VLOG(2) << "[SoL] NVLink bw per lane: " << config.nvlink_bw_per_lane_gbps
           << " GB/s, barrier: " << config.nvlink_barrier_latency;
   return config;
