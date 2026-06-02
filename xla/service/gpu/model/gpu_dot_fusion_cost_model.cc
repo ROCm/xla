@@ -97,7 +97,16 @@ double GetEffectiveFlopsPerNsForTileSize(
   // Final flops derate factor.
   double flops_derate = 1.0;
 
-  if (cuda_compute_capability.IsBlackwell()) {
+  if (device_info.gpu_compute_capability().IsRocm()) {
+    if (tile_m < 64) {
+      // CDNA MFMA throughput needs enough output rows per tile to amortize the
+      // matrix pipeline fill/drain and reuse LDS-staged operands across the
+      // wave. Tiles with tile_m < 64 underutilize the MFMA units; measured on
+      // MI350X (gfx950) a tile_m=32 BF16 GEMM runs ~2x slower than tile_m=64.
+      // TODO: refine this derate with per-arch measurements.
+      flops_derate = 0.5;
+    }
+  } else if (cuda_compute_capability.IsBlackwell()) {
     if (tile_m < 128) {
       // TODO(maniananth): Update this derate once we have more data from
       // actual measurements on Blackwell. For now, we are applying a 50%
