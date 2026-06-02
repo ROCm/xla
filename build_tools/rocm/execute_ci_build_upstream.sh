@@ -68,6 +68,7 @@ done
     --local_test_jobs=1 \
     --internal_spawn_scheduler \
     --strategy=TestRunner=dynamic \
+    --remote_cache_compression \
     -- \
     //xla/... \
     -//xla/tests:dot_operation_test_amdgpu_any \
