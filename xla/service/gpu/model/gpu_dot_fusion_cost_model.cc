@@ -283,6 +283,7 @@ float GetEffectiveHbmBandwidth(const int64_t dma_size,
 }
 
 HbmEstimates CalculateHbmTime(const DotProblemInfo& dot,
+                              const DotTileSize& dot_tile,
                               const se::DeviceDescription& device_info) {
   // Calculate the number of bytes for input reads and output writes to HBM.
   int64_t lhs_tile_bytes = CeilOfRatio<int64_t>(
@@ -307,6 +308,25 @@ HbmEstimates CalculateHbmTime(const DotProblemInfo& dot,
   // the derate lookup table.
   float dram_bandwidth =
       GetEffectiveHbmBandwidth(main_loop_bytes + epilogue_bytes, device_info);
+
+  // Derate the achieved HBM bandwidth by occupancy. A tile that produces fewer
+  // threadblocks than the device can run concurrently leaves some CUs idle and
+  // cannot saturate the memory system, so the same bytes take proportionally
+  // longer. We mirror the wave-quantization factor used by the compute roofline
+  // (rounding the launch up to whole waves): the effective bandwidth scales by
+  // threadblock_count / (wave_count * core_count), which is < 1 whenever the
+  // final wave is partial.
+  // TODO: This correction is architecture-independent, but for now it is gated
+  // to ROCm to keep the blast radius off the (separately calibrated) CUDA path.
+  if (device_info.gpu_compute_capability().IsRocm()) {
+    int64_t threadblock_count = CalculateNumThreadblocks(dot, dot_tile);
+    int64_t wave_count = CalculateNumWaves(threadblock_count, device_info);
+    int64_t cta_count_with_wave_quant = wave_count * device_info.core_count();
+    if (cta_count_with_wave_quant > 0) {
+      dram_bandwidth *= static_cast<float>(threadblock_count) /
+                        static_cast<float>(cta_count_with_wave_quant);
+    }
+  }
 
   // Calculate the HBM time using the effective bandwidth for each transfer
   // size. In the current implementation, we are assuming that the main loop and
@@ -429,7 +449,7 @@ absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForDotOpWithBlockParameters(
 
   // Calculate HBM roofline.
   detail::HbmEstimates hbm_timing =
-      detail::CalculateHbmTime(dot_info, device_info);
+      detail::CalculateHbmTime(dot_info, dot_tile, device_info);
 
   estimates.read_time = hbm_timing.read_time;
   estimates.write_time = hbm_timing.write_time;
