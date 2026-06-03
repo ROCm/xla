@@ -41,7 +41,7 @@ for arg in "$@"; do
         TAG_FILTERS="${TAG_FILTERS},requires-gpu-rocm,-multi_gpu"
     fi
     if [[ "$arg" == "--config=ci_rocm_cpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},-requires-gpu-rocm"
+        TAG_FILTERS="${TAG_FILTERS},gpu,-requires-gpu-rocm"
     fi
 done
 
