@@ -296,17 +296,17 @@ absl::StatusOr<int> SolGPUCostModel::NumGpusPerComm(
   return num_nodes * xla_flag_config_.gpus_per_node / num_communicators;
 }
 
-absl::StatusOr<absl::Duration> SolGPUCostModel::TritonAllReduceLatency(
+absl::StatusOr<absl::Duration> SolGPUCostModel::IntraNodeAllReduceLatency(
     const int64_t size_bytes, const int num_gpus,
     const int active_nvlink_links) const {
   if (active_nvlink_links <= 0) {
     return absl::InvalidArgumentError(
-        "TritonAllReduceLatency requires active NVLink / xGMI links (got 0). "
-        "Triton collective kernels use P2P symmetric memory.");
+        "IntraNodeAllReduceLatency requires active NVLink / xGMI links "
+        "(got 0). Intra-node collective kernels use P2P symmetric memory.");
   }
   if (xla_flag_config_.nvlink_bw_per_lane_gbps <= 0.0) {
     return absl::InvalidArgumentError(
-        "nvlink_bw_per_lane_gbps must be > 0 for TritonAllReduceLatency.");
+        "nvlink_bw_per_lane_gbps must be > 0 for IntraNodeAllReduceLatency.");
   }
 
   // Aggregate unidirectional NVLink bandwidth available to this GPU.
@@ -347,11 +347,12 @@ absl::StatusOr<absl::Duration> SolGPUCostModel::TritonAllReduceLatency(
     }
     default:
       // kMultimem is not yet modelled; fall back to launch overhead only.
-      LOG(WARNING) << "[SoL] TritonAllReduceLatency: unmodelled strategy for "
-                      "size_bytes="
-                   << size_bytes
-                   << "; returning launch overhead only. This may cause the "
-                      "scheduler to under-estimate the actual latency.";
+      LOG(WARNING)
+          << "[SoL] IntraNodeAllReduceLatency: unmodelled strategy for "
+             "size_bytes="
+          << size_bytes
+          << "; returning launch overhead only. This may cause the "
+             "scheduler to under-estimate the actual latency.";
       return launch;
   }
 }

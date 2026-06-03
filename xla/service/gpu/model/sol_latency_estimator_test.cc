@@ -978,8 +978,9 @@ ENTRY e {
 };
 
 // Test 1: async Triton ONE_SHOT AllReduce.
-// With the KERNEL_STRATEGY_TRITON_ONE_SHOT annotation and 18 NVLink links at
-// 20 GB/s, ComputeCollectiveTime must return the NVLink formula result:
+// With the KERNEL_STRATEGY_TRITON_CUSTOM_ONE_SHOT annotation and 18 NVLink
+// links at 20 GB/s, ComputeCollectiveTime must return the NVLink formula
+// result:
 //   transfer = 7 × 128 KB / (18 × 20 GB/s) ≈ 2.5 µs
 //   total ≈ launch(1µs) + 2.5µs + barrier(1.5µs) ≈ 5 µs
 // This must be different from the NCCL ring estimate (which uses nic_speed_gbps
@@ -993,8 +994,9 @@ TEST_F(TritonAllReduceSchedulerTest, AsyncTritonOneShotUsesNvlinkFormula) {
   ASSERT_NE(ar_start, nullptr);
 
   // Annotate with Triton one-shot strategy (async: is_sync is false by default)
-  SetKernelStrategy(ar_start,
-                    CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_ONE_SHOT);
+  SetKernelStrategy(
+      ar_start,
+      CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_CUSTOM_ONE_SHOT);
 
   // A real interpolator is passed so the NCCL fallback path doesn't crash.
   // If the Triton dispatch fires correctly, the interpolator is not called.
@@ -1038,8 +1040,9 @@ TEST_F(TritonAllReduceSchedulerTest,
 
   // Mark as synchronous Triton one-shot.
   SetSync(ar_start);
-  SetKernelStrategy(ar_start,
-                    CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_ONE_SHOT);
+  SetKernelStrategy(
+      ar_start,
+      CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_CUSTOM_ONE_SHOT);
 
   ASSERT_OK_AND_ASSIGN(absl::Duration cost, ComputeCollectiveTime(*ar_start));
 
@@ -1069,8 +1072,9 @@ TEST_F(TritonAllReduceSchedulerTest,
   ASSERT_NE(ar_start, nullptr);
 
   SetSync(ar_start);
-  SetKernelStrategy(ar_start,
-                    CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_ONE_SHOT);
+  SetKernelStrategy(
+      ar_start,
+      CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_CUSTOM_ONE_SHOT);
 
   // NodeCost() internally calls SolLatencyEstimator::Create which reads
   // sol_flags from GetConfig(module, device_info).  For SM9.0 + 18 links

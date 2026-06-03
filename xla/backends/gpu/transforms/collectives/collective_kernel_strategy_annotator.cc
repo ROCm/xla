@@ -39,13 +39,15 @@ namespace {
 using stream_executor::gpu::AllReduceStrategy;
 
 // Maps the runtime AllReduceStrategy enum to the proto enum.
+// Both the Triton codegen kernel and the built-in custom C++ kernel use the
+// same NVLink-based cost formula, so a single annotation covers both backends.
 CollectiveBackendConfig::CollectiveKernelStrategy ToProtoStrategy(
     AllReduceStrategy strategy) {
   switch (strategy) {
     case AllReduceStrategy::kOneShot:
-      return CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_ONE_SHOT;
+      return CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_CUSTOM_ONE_SHOT;
     case AllReduceStrategy::kTwoShot:
-      return CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_TWO_SHOT;
+      return CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_CUSTOM_TWO_SHOT;
     default:
       // kMultimem: not yet modelled in the cost model; fall back to default.
       return CollectiveBackendConfig::KERNEL_STRATEGY_DEFAULT;
@@ -70,7 +72,7 @@ absl::StatusOr<bool> TryAnnotateAllReduce(
                          is_multimem_enabled, device_info, all_reduce);
   if (!info.ok()) {
     // Collective kernel not supported for this instruction; leave default.
-    VLOG(3) << "[CollectiveKernelStrategyAnnotator] Triton kernel not "
+    VLOG(3) << "[CollectiveKernelStrategyAnnotator] Collective kernel not "
                "supported for "
             << instr->name() << ": " << info.status();
     return false;
@@ -86,7 +88,7 @@ absl::StatusOr<bool> TryAnnotateAllReduce(
   RETURN_IF_ERROR(instr->set_backend_config(gpu_config));
 
   VLOG(2) << "[CollectiveKernelStrategyAnnotator] Annotated " << instr->name()
-          << " with strategy "
+          << " with kernel strategy "
           << CollectiveBackendConfig::CollectiveKernelStrategy_Name(
                  proto_strategy);
   return true;

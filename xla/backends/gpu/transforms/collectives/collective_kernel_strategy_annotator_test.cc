@@ -79,7 +79,7 @@ class CollectiveKernelStrategyAnnotatorTest
 };
 
 // 32768 F32 elements = 128 KB ≤ 256 KB → kOneShot →
-// KERNEL_STRATEGY_TRITON_ONE_SHOT
+// KERNEL_STRATEGY_TRITON_CUSTOM_ONE_SHOT
 TEST_F(CollectiveKernelStrategyAnnotatorTest,
        SmallAllReduceIsAnnotatedOneShot) {
   constexpr int64_t kNumElements = 32768;  // 128 KB
@@ -92,10 +92,11 @@ TEST_F(CollectiveKernelStrategyAnnotatorTest,
   TF_ASSERT_OK(annotator.Run(module.get()).status());
 
   EXPECT_EQ(GetKernelStrategy(module.get()),
-            CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_ONE_SHOT);
+            CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_CUSTOM_ONE_SHOT);
 }
 
-// 262144 F32 elements = 1 MB (256 KB < 1 MB ≤ 4 MB) → kTwoShot
+// 262144 F32 elements = 1 MB (256 KB < 1 MB ≤ 4 MB) → kTwoShot →
+// KERNEL_STRATEGY_TRITON_CUSTOM_TWO_SHOT
 TEST_F(CollectiveKernelStrategyAnnotatorTest,
        MediumAllReduceIsAnnotatedTwoShot) {
   constexpr int64_t kNumElements = 262144;  // 1 MB
@@ -108,10 +109,10 @@ TEST_F(CollectiveKernelStrategyAnnotatorTest,
   TF_ASSERT_OK(annotator.Run(module.get()).status());
 
   EXPECT_EQ(GetKernelStrategy(module.get()),
-            CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_TWO_SHOT);
+            CollectiveBackendConfig::KERNEL_STRATEGY_TRITON_CUSTOM_TWO_SHOT);
 }
 
-// 2097152 F32 elements = 8 MB > 4 MB → Triton kernel not supported →
+// 2097152 F32 elements = 8 MB > 4 MB → custom kernel not supported →
 // KERNEL_STRATEGY_DEFAULT (falls back to NCCL).
 TEST_F(CollectiveKernelStrategyAnnotatorTest,
        LargeAllReduceKeepsDefaultStrategy) {

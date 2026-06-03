@@ -43,11 +43,11 @@ class SolGPUCostModel {
     // Partition size (devices per fast-interconnect domain). 0 means unset.
     int64_t partition_size;
 
-    // --- Triton intra-node AllReduce cost model parameters ---
+    // --- Intra-node AllReduce cost model parameters (Triton or custom C++) ---
     // Unidirectional NVLink / xGMI bandwidth per lane (GB/s).
     double nvlink_bw_per_lane_gbps;
     // Round-trip latency of the signal-buffer synchronization barrier used
-    // by the Triton one-shot / two-shot kernels.
+    // by the intra-node one-shot / two-shot kernels.
     absl::Duration nvlink_barrier_latency;
   };
 
@@ -91,16 +91,18 @@ class SolGPUCostModel {
                                                  int num_nodes,
                                                  int num_communicators) const;
 
-  // Returns the latency of a Triton one-shot or two-shot intra-node AllReduce.
-  // The strategy (kOneShot / kTwoShot) is derived internally from `size_bytes`
-  // using the same threshold as the runtime (256 KB / 4 MB).
+  // Returns the latency of an intra-node one-shot or two-shot AllReduce that
+  // uses NVLink / xGMI P2P symmetric memory (either a Triton codegen kernel or
+  // the built-in custom C++ kernel).  The strategy (kOneShot / kTwoShot) is
+  // derived internally from `size_bytes` using the same threshold as the
+  // runtime (256 KB / 4 MB).
   //
   // `size_bytes`         : total AllReduce buffer size in bytes.
   // `num_gpus`           : number of GPUs in the communicator.
   // `active_nvlink_links`: number of active NVLink / xGMI links on this GPU
   //                        (from
   //                        device_info.device_interconnect_info().active_links).
-  absl::StatusOr<absl::Duration> TritonAllReduceLatency(
+  absl::StatusOr<absl::Duration> IntraNodeAllReduceLatency(
       int64_t size_bytes, int num_gpus, int active_nvlink_links) const;
 
  private:
