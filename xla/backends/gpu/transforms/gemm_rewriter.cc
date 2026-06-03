@@ -16,8 +16,6 @@ limitations under the License.
 
 #include "xla/backends/gpu/transforms/gemm_rewriter.h"
 
-#include <math.h>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -38,9 +36,11 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/tsl/platform/status_macros.h"
+#include <math.h>
 #include "xla/hlo/evaluator/hlo_evaluator.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -807,6 +807,115 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
             ->config()
             .debug_options()
             .xla_gpu_experimental_use_ragged_dot_fusion();
+    // When the Triton XTile backend is requested, wrap the ragged dot in a
+    // kTritonFusionKind fusion right here (analogous to how HandleDot routes
+    // regular dots to Triton).  Requires both:
+    //   --xla_gpu_experimental_triton_ragged_dot=true
+    //   --xla_gpu_experimental_enable_tiling_propagation=true  (for XTile path)
+    //
+    // Default tile sizes embedded in the fusion's BlockLevelFusionConfig:
+    //   output_tile_sizes = [[BLOCK_M, BLOCK_N]]  (for kRaggedNonContracting)
+    //   num_warps=4, num_stages=1
+    // Sequential-dim tile sizes stored on the ragged_dot's Tile backend_config:
+    //   Tile.sizes = [1, BLOCK_K]  (G=1 per G-loop iter, K tile = BLOCK_K)
+    bool triton_ragged_dot_enabled =
+        instr->GetModule()
+            ->config()
+            .debug_options()
+            .xla_gpu_experimental_triton_ragged_dot();
+    if (triton_ragged_dot_enabled) {
+      HloRaggedDotInstruction* ragged_dot =
+          DynCast<HloRaggedDotInstruction>(instr);
+      if (ragged_dot == nullptr) {
+        return absl::OkStatus();
+      }
+      LOG(INFO) << "HandleRaggedDot Triton: " << ragged_dot->name()
+                << " operand_count=" << ragged_dot->operand_count()
+                << " gs_shape=" << ragged_dot->operand(2)->shape().ToString();
+
+      // Default tile sizes for kRaggedNonContracting (M=32, N=32, G=1, K=32).
+      // These can later be overridden by an autotuner.
+      constexpr int64_t kDefaultBlockM = 32;
+      constexpr int64_t kDefaultBlockN = 32;
+      constexpr int64_t kDefaultBlockK = 32;
+
+      // Build the fused computation: parameters + ragged_dot.
+      // Pattern follows RaggedToCuDNNFusion: one builder creates fused params
+      // and clones the ragged_dot; fusion_params holds the external operands.
+      std::string fusion_name =
+          absl::StrCat("triton_ragged_dot_fusion_", ragged_dot->name());
+      HloComputation::Builder builder(
+          absl::StrCat(fusion_name, "_computation"));
+
+      // Collect external operands for the fusion instruction.
+      std::vector<HloInstruction*> fusion_params;
+      fusion_params.reserve(ragged_dot->operand_count());
+      // Build fused parameters inside the computation.
+      std::vector<HloInstruction*> param_instrs;
+      param_instrs.reserve(ragged_dot->operand_count());
+      for (int i = 0; i < ragged_dot->operand_count(); ++i) {
+        HloInstruction* operand = ragged_dot->mutable_operand(i);
+        fusion_params.push_back(operand);
+        param_instrs.push_back(
+            builder.AddInstruction(HloInstruction::CreateParameter(
+                i, operand->shape(), operand->name())));
+      }
+      // Clone the ragged_dot inside the fused computation.
+      HloInstruction* fused_ragged_dot = builder.AddInstruction(
+          ragged_dot->CloneWithNewOperands(ragged_dot->shape(), param_instrs));
+
+      // Set sequential tile sizes on the inner ragged_dot via Tile proto.
+      // Tile.sizes = [G_tile=1, K_tile=BLOCK_K] for kRaggedNonContracting.
+      Tile tile_config;
+      tile_config.add_sizes(1);               // G sequential dim tile size = 1
+      tile_config.add_sizes(kDefaultBlockK);  // K sequential dim tile size
+      RETURN_IF_ERROR(fused_ragged_dot->set_backend_config(tile_config));
+
+      HloComputation* new_computation =
+          ragged_dot->GetModule()->AddComputationAndUnifyNamesAndIds(
+              builder.Build(fused_ragged_dot), /*is_entry=*/false);
+
+      // Create the kCustom fusion with kTritonFusionKind.
+      std::unique_ptr<HloInstruction> fusion_instr =
+          HloInstruction::CreateFusion(ragged_dot->shape(),
+                                       HloInstruction::FusionKind::kCustom,
+                                       fusion_params, new_computation);
+
+      // Set fusion backend config: kTritonFusionKind + default tile sizes.
+      GpuBackendConfig gpu_backend_config;
+      FusionBackendConfig* fusion_config =
+          gpu_backend_config.mutable_fusion_backend_config();
+      fusion_config->set_kind(std::string(kTritonFusionKind));
+      BlockLevelFusionConfig* blk_cfg =
+          fusion_config->mutable_block_level_fusion_config();
+      // output_tile_sizes[0] covers the kParallel output dims (M, N for
+      // kRaggedNonContracting; G, K, N for kRaggedContracting).
+      // We only support kRaggedNonContracting for now.
+      auto* output_tile = blk_cfg->add_output_tiles();
+      // output_tile_sizes must have one entry per parallel output dim:
+      // [batch..., M, N] for kRaggedNonContracting.
+      // Batch dims use tile size 1 so each tile processes one batch element;
+      // the batch dimension becomes a grid dimension rather than an inner
+      // tile dimension, which Triton can handle correctly.
+      const auto& rd_dot_dims =
+          ragged_dot->ragged_dot_dimension_numbers().dot_dimension_numbers();
+      for (int64_t b_dim : rd_dot_dims.lhs_batch_dimensions()) {
+        (void)b_dim;  // tile size 1, independent of the actual batch size
+        output_tile->add_sizes(1);
+      }
+      output_tile->add_sizes(kDefaultBlockM);
+      output_tile->add_sizes(kDefaultBlockN);
+      blk_cfg->set_num_warps(4);
+      blk_cfg->set_num_ctas(1);
+      blk_cfg->set_num_stages(1);
+      RETURN_IF_ERROR(fusion_instr->set_backend_config(gpu_backend_config));
+      fusion_instr->set_metadata(ragged_dot->metadata());
+
+      RETURN_IF_ERROR(ragged_dot->parent()->ReplaceWithNewInstruction(
+          ragged_dot, std::move(fusion_instr)));
+      return absl::OkStatus();
+    }
+
     if (ragged_dot_fusion_enabled ||
         !IsGpublasLtSupportedGroupedMatMul(*instr)) {
       return absl::OkStatus();

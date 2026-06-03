@@ -316,5 +316,53 @@ absl::StatusOr<Value> EmitSingleTileScaledDot(
   return ScaledDot(b, dot_operands);
 }
 
+// Emits a single-tile dot from explicit precision config and dimension numbers.
+// The inner K-loop tile matmul in EmitRaggedDot uses this overload because
+// HloRaggedDotInstruction does not derive from HloDotInstruction.
+//
+// For simplicity this uses the DEFAULT precision (ALG_UNSET → BF16xBF16+F32)
+// and ignores force-operand-type promotion used for non-standard algorithms.
+// If the ragged dot carries a non-ALG_UNSET algorithm, callers should extend
+// this to forward the algorithm-specific logic.
+absl::StatusOr<Value> EmitSingleTileDotFromSpec(
+    mlir::ImplicitLocOpBuilder& b, const PrecisionConfig& precision_config,
+    const DotDimensionNumbers& dot_dimension_numbers,
+    DotOperands dot_operands) {
+  PrecisionConfig::Algorithm algorithm = precision_config.algorithm();
+  PrecisionSpec precision_spec{
+      algorithm,
+      // operand_precision() may be empty for ragged dot; default to DEFAULT.
+      precision_config.operand_precision_size() >= 2
+          ? XlaPrecisionToStableHloPrecision(
+                precision_config.operand_precision(0))
+          : mlir::stablehlo::Precision::DEFAULT,
+      precision_config.operand_precision_size() >= 2
+          ? XlaPrecisionToStableHloPrecision(
+                precision_config.operand_precision(1))
+          : mlir::stablehlo::Precision::DEFAULT,
+  };
+
+  mlir::stablehlo::DotDimensionNumbersAttr dot_dim_attr =
+      ::xla::stablehlo::ConvertDotDimensionNumbers(dot_dimension_numbers, &b);
+
+  // Use F32 as the accumulator type (standard for mixed-precision kernels).
+  Type force_accumulator_type = b.getF32Type();
+  if (ElementType(dot_operands.accumulator) != force_accumulator_type) {
+    dot_operands.accumulator =
+        Cast(b, dot_operands.accumulator, force_accumulator_type);
+  }
+
+  Value result = EmitStableHloDotAndAdd(b, dot_operands.lhs, dot_operands.rhs,
+                                        dot_operands.accumulator,
+                                        precision_spec, dot_dim_attr);
+
+  // Cast back to the outer accumulator type if needed.
+  Type outer_acc_type = ElementType(dot_operands.accumulator);
+  if (ElementType(result) != outer_acc_type) {
+    result = Cast(b, result, outer_acc_type);
+  }
+  return result;
+}
+
 }  // namespace xtile
 }  // namespace xla

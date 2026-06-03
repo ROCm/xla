@@ -196,7 +196,10 @@ void TilingSpace::ProcessRaggedDot(const HloInstruction& hlo) {
   if (!is_contracting) {
     // kRaggedNonContracting — G is not in the output → persistent schedule.
     // Register G as kSequential outer loop (dim_position = output_rank + 0).
-    const int64_t G = group_sizes_hlo->shape().dimensions(0);
+    // G = RHS size along the group dimension (works for both non-batched [G]
+    // and batched [B, G] group_sizes tensors).
+    const int64_t G =
+        hlo.operand(1)->shape().dimensions(ragged_dims.rhs_group_dimensions(0));
     AppendDimension(&hlo, /*dim_position=*/output_rank, G,
                     DimensionSemantics::kSequential);
     const int64_t g_sequential_dim_id = dimensions_.back().id.value();

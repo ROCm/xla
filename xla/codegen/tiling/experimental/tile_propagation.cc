@@ -736,7 +736,13 @@ absl::StatusOr<Tiles> PropagateTileToInputForRaggedDotOp(
     }
 
     // group_sizes tile: one element per G-loop iteration.
-    SmallVector<DimTile> gs_dim_tiles = {g_tile};
+    // For non-batched gs [G]: tile is [g_tile] (1D).
+    // For batched gs [B, G]: tile is [batch_tiles..., g_tile] (2D+).
+    SmallVector<DimTile> gs_dim_tiles;
+    for (int64_t i = 0; i < static_cast<int64_t>(lhs_batch_dims.size()); ++i) {
+      gs_dim_tiles.push_back(output_tile.dim_tiles()[i]);
+    }
+    gs_dim_tiles.push_back(g_tile);
 
     return Tiles{output_tile.CloneWithNewDims(std::move(lhs_dim_tiles)),
                  output_tile.CloneWithNewDims(std::move(rhs_dim_tiles)),

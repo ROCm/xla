@@ -147,15 +147,17 @@ llvm::SmallVector<int64_t> GetParallelDimensionsPermutation(
     const int64_t M_avg = M_total / std::max<int64_t>(G, 1);
 
     if (!is_contracting) {
-      // kRaggedNonContracting: parallel dims are M (output dim 0) and N
-      // (output dim 1).  The M parallel dim covers M_total tokens, but each
-      // group only uses M_avg rows on average.  Compare M_avg (≈ per-group LHS
-      // non-contracting size) against N (fixed RHS non-contracting size).
-      if (M_avg >= root->shape().dimensions(1)) {
+      // kRaggedNonContracting: parallel dims are M (output dim num_batch) and N
+      // (output dim num_batch+1).  The M parallel dim covers M_total tokens,
+      // but each group only uses M_avg rows on average.  Compare M_avg
+      // (≈ per-group LHS non-contracting size) against N (fixed RHS
+      // non-contracting size).
+      const int64_t num_batch = dot_dims.lhs_batch_dimensions_size();
+      // N is at output position num_batch+1 (after batch dims and M).
+      if (M_avg >= root->shape().dimensions(num_batch + 1)) {
         return {};  // LHS not smaller; no swap beneficial.
       }
-      // M is at output dim 0, N is at output dim 1.
-      const int64_t num_batch = dot_dims.lhs_batch_dimensions_size();
+      // M is at output dim num_batch, N is at output dim num_batch+1.
       const TilingSpace::DimensionInfo& m_dim_info =
           tiling_space.GetDimensionInfo(*root, num_batch);
       const TilingSpace::DimensionInfo& n_dim_info =

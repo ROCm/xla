@@ -67,6 +67,13 @@ absl::StatusOr<::mlir::Value> EmitSingleTileDot(mlir::ImplicitLocOpBuilder& b,
                                                 const HloDotInstruction& dot,
                                                 DotOperands dot_operands);
 
+// Emits a single-tile dot using explicit precision config and dimension
+// numbers. Used by EmitRaggedDot, where the inner K/M loop matmul operand is an
+// HloRaggedDotInstruction (not derived from HloDotInstruction).
+absl::StatusOr<::mlir::Value> EmitSingleTileDotFromSpec(
+    mlir::ImplicitLocOpBuilder& b, const PrecisionConfig& precision_config,
+    const DotDimensionNumbers& dot_dimension_numbers, DotOperands dot_operands);
+
 // Emits a single-tile scaled-dot, considering the given `scaled-dot`
 // instruction's operand precisions. Raises an `InvalidArgumentError` if the
 // operand types are not supported.
