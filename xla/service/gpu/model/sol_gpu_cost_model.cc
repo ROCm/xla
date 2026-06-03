@@ -62,7 +62,7 @@ static auto& device_to_cfg =
                 /*chunk_size_bytes=*/kDefaultNcclCostModelChunkSizeBytes,
                 /*partition_size=*/0,
                 // nvlink_bw_per_lane_gbps is filled dynamically in
-                // GetPlatformConfig via GetDcnBandwidthPerLaneGbps.
+                // GetPlatformConfig via GetIciBandwidthPerLaneGbps.
                 /*nvlink_bw_per_lane_gbps=*/0.0,
                 /*nvlink_barrier_latency=*/absl::Microseconds(1.5),
             },
@@ -127,7 +127,7 @@ SolGPUCostModel::Config GetPlatformConfig(
   // RocmBandwidthSettings so that it stays consistent with the NCCL collective
   // cost model.
   absl::StatusOr<double> nvlink_bw =
-      GpuPerformanceWithCollectiveModel::GetDcnBandwidthPerLaneGbps(
+      GpuPerformanceWithCollectiveModel::GetIciBandwidthPerLaneGbps(
           device_info);
   if (nvlink_bw.ok()) {
     config.nvlink_bw_per_lane_gbps = *nvlink_bw;

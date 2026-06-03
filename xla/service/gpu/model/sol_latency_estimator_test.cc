@@ -1055,7 +1055,7 @@ TEST_F(TritonAllReduceSchedulerTest,
 // Test 3: sync Triton ONE_SHOT AllReduce exercises the actual NodeCost
 // branching logic end-to-end via SolLatencyEstimator::Create.
 // SolLatencyEstimator::Create derives sol_flags from GetConfig(module,
-// device_info), which calls GetDcnBandwidthPerLaneGbps on the device.
+// device_info), which calls GetIciBandwidthPerLaneGbps on the device.
 // For RTXA6000 with SM9.0 (Hopper) and 18 active NVLink links:
 //   nvlink_bw_per_lane_gbps = kSm90NvlinkBandwidth = 20.0 GB/s
 //   nvlink_barrier_latency  = 1.5 µs  (kUnknownKey table entry)
