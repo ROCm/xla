@@ -15,7 +15,6 @@ limitations under the License.
 
 #include "xla/stream_executor/cuda/cuda_blas_lt.h"
 
-#include <Eigen/Core>
 #include <algorithm>
 #include <any>
 #include <climits>
@@ -37,6 +36,7 @@ limitations under the License.
 #include "third_party/gpus/cuda/include/cublas_v2.h"
 #include "third_party/gpus/cuda/include/cuda.h"
 #include "third_party/gpus/cuda/include/library_types.h"
+#include <Eigen/Core>
 #include "xla/primitive_util.h"
 #include "xla/status_macros.h"
 #include "xla/stream_executor/activate_context.h"
@@ -177,7 +177,8 @@ absl::Status BlasLt::Init() {
 
   VLOG(2) << "MatrixLayout::Create: num_rows: " << m.num_rows
           << " num_cols:" << (int)m.num_cols << ", order: " << (int)m.order
-          << "," << " batchsz " << m.batch_size
+          << ","
+          << " batchsz " << m.batch_size
           << " leaddimstride: " << m.leading_dim_stride
           << " batch_stride: " << m.batch_stride;
 
