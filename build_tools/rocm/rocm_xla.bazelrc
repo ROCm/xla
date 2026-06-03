@@ -19,7 +19,7 @@ build:rocm_rbe --remote_cache_compression
 
 test:rocm_rbe --jobs=200
 test:rocm_rbe --remote_executor=grpcs://wardite.cluster.engflow.com
-test:rocm_rbe --remote_timeout=3600
+test:rocm_rbe --remote_timeout=7200
 test:rocm_rbe --strategy=TestRunner=remote,local
 
 # Dynamic execution config for ROCm RBE - builds locally, tests use hybrid mode
