@@ -58,13 +58,11 @@ TARGETS=(
     # TODO: skipped tests from https://wardite.cluster.engflow.com/invocation/8f90cfa8-a7e5-4ef9-8d4f-3a75e90b1cc3
 )
 
-ARGS=(
+BUILD_ARGS=(
     "$@"
     --build_tag_filters="$TAG_FILTERS"
-    --test_tag_filters="$TAG_FILTERS"
     --profile=/tf/pkg/profile.json.gz
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16"
-    --run_under=//build_tools/rocm:parallel_gpu_execute
     --execution_log_compact_file=execution_log.binpb.zst
     --spawn_strategy=local
     --repo_env=REMOTE_GPU_TESTING=1
@@ -76,6 +74,11 @@ ARGS=(
     --color=yes
     --nokeep_going
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950
+)
+
+TEST_ARGS=(
+    --test_tag_filters="$TAG_FILTERS"
+    --run_under=//build_tools/rocm:parallel_gpu_execute
     --test_env=TF_TESTS_PER_GPU=1
     --test_output=errors
     --test_sharding_strategy=disabled
@@ -88,9 +91,11 @@ ARGS=(
     --cache_test_results=yes
 )
 
-# Step 1: Build
+# Step 1: Build (only test targets)
 bazel --bazelrc="${SCRIPT_DIR}/rocm_xla_ci.bazelrc" test \
-    "${ARGS[@]}" \
+    --build_tests_only \
+    "${BUILD_ARGS[@]}" \
+    "${TEST_ARGS[@]}" \
     --build_tests_only \
     --jobs=200 \
     -- \
@@ -98,7 +103,8 @@ bazel --bazelrc="${SCRIPT_DIR}/rocm_xla_ci.bazelrc" test \
 
 # Step 2: Test
 bazel --bazelrc="${SCRIPT_DIR}/rocm_xla_ci.bazelrc" test \
-    "${ARGS[@]}" \
+    "${BUILD_ARGS[@]}" \
+    "${TEST_ARGS[@]}" \
     --jobs=15 \
     -- \
     "${TARGETS[@]}"
