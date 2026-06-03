@@ -88,7 +88,7 @@ ARGS=(
 # Step 1: Build
 "${SCRIPT_DIR}/run_xla_ci_build.sh" \
     "${ARGS[@]}" \
-    --build_only \
+    --build_tests_only \
     --jobs=200 \
     -- \
     "${TARGETS[@]}"
