@@ -36,6 +36,7 @@ limitations under the License.
 #include "xla/stream_executor/gpu/gpu_blas_lt.pb.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/protobuf/dnn.pb.h"
 #include "xla/util.h"
@@ -159,6 +160,18 @@ void MatrixLayout::Transpose() {
   order = (order == Order::kRowMajor) ? Order::kColumnMajor : Order::kRowMajor;
 }
 
+std::string MatrixLayout::ToString() const {
+  return absl::StrFormat(
+      "MatrixLayout{dtype=%s, rows=%d, cols=%d, order=%s, batch=%d, "
+      "ld_stride=%d, batch_stride=%d, transpose=%s}",
+      xla::primitive_util::LowercasePrimitiveTypeName(dtype), num_rows,
+      num_cols, (order == Order::kRowMajor ? "RowMajor" : "ColumnMajor"),
+      batch_size, leading_dim_stride, batch_stride,
+      (transpose == blas::Transpose::kNoTranspose ? "NoTranspose"
+       : transpose == blas::Transpose::kTranspose ? "Transpose"
+                                                  : "ConjugateTranspose"));
+}
+
 absl::StatusOr<MatrixLayout> MatrixLayout::FromProto(
     const xla::GemmConfigProto::MatrixLayout& proto) {
   Order order;
@@ -273,19 +286,13 @@ bool MakeOutputColumnMajor(MatrixLayout& lhs, MatrixLayout& rhs,
   return swap_operands;
 }
 
-/*static*/ auto BlasLt::GetMatmulPlan(const Stream* stream,
-                                      const GemmConfig& cfg, Epilogue epilogue)
-    -> absl::StatusOr<MatmulPlanPtr> {
-  auto blas = Get(stream);
-  if (blas == nullptr) {
+/*static*/ absl::StatusOr<BlasLt*> BlasLt::Get(StreamExecutor* executor) {
+  auto blas = executor->AsBlas();
+  auto blas_lt = blas != nullptr ? blas->GetBlasLt() : nullptr;
+  if (blas_lt == nullptr) {
     return xla::Internal("BlasLt is unavailable");
   }
-  return blas->GetMatmulPlan(cfg, epilogue);
-}
-
-/*static*/ BlasLt* BlasLt::Get(const Stream* stream) {
-  auto blas = stream->parent()->AsBlas();
-  return (blas != nullptr ? blas->GetBlasLt() : nullptr);
+  return blas_lt;
 }
 
 DataType GetScaleType(DataType c_type, ComputationType computation_type) {
@@ -295,9 +302,37 @@ DataType GetScaleType(DataType c_type, ComputationType computation_type) {
               : c_type);
 }
 
-absl::StatusOr<BlasLt::MatmulPlan*> BlasLt::GetOrCreateMatmulPlan(
-    const std::string& key, PlanCreateFunc create) {
-  absl::MutexLock lock(plan_cache_mu_);  // double mutex ???
+absl::Status BlasLt::MatmulPlan::SetCachedAlgorithm(size_t algorithm_idx,
+                                                    size_t max_algorithm_count,
+                                                    size_t max_workspace_size) {
+  bool cache_dirty = false;
+  // We drop the cache even if max_algorithm_count < cached_algorithm_count_
+  // or max_workspace_size < cached_workspace_size_ since the list of the
+  // algorithms may be different in these cases.
+  if (cached_algorithms_.empty() ||
+      cached_algorithm_count_ != max_algorithm_count ||
+      cached_workspace_size_ != max_workspace_size) {
+    TF_ASSIGN_OR_RETURN(cached_algorithms_,
+                        GetAlgorithms(max_algorithm_count, max_workspace_size));
+    cached_algorithm_count_ = max_algorithm_count;
+    cached_workspace_size_ = max_workspace_size;
+    cache_dirty = true;
+  }
+  // SetAlgorithm could be expensive, e.g., for GroupedMatmulPlan.
+  if (cache_dirty || cached_algorithm_idx_ != algorithm_idx) {
+    if (algorithm_idx >= cached_algorithms_.size()) {
+      return xla::Internal("Algorithm index is out of range!");
+    }
+    cached_algorithm_idx_ = algorithm_idx;
+    return SetAlgorithm(cached_algorithms_[algorithm_idx]);
+  }
+  return absl::OkStatus();
+}
+
+absl::StatusOr<BlasLt::MatmulPlan*> BlasLt::GetOrCreateMatmulPlanWithAlgorithm(
+    const std::string& key, PlanCreateFunc create, size_t algorithm_idx,
+    size_t num_algorithms, size_t max_workspace_size) {
+  absl::MutexLock lock(plan_cache_mu_);
   auto res = plan_cache_.emplace(key, MatmulPlanPtr{});
   // New entry inserted: always create a new matmul plan if key is empty,
   // this is used by command_buffer_thunk test.
@@ -306,7 +341,10 @@ absl::StatusOr<BlasLt::MatmulPlan*> BlasLt::GetOrCreateMatmulPlan(
     TF_ASSIGN_OR_RETURN(res.first->second, create());
     VLOG(2) << "Plan created: cache size: " << plan_cache_.size();
   }
-  return res.first->second.get();
+  auto plan = res.first->second.get();
+  TF_RETURN_IF_ERROR(plan->SetCachedAlgorithm(algorithm_idx, num_algorithms,
+                                              max_workspace_size));
+  return plan;
 }
 
 void BlasLt::ClearMatmulPlanCache() {
