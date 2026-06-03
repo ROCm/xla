@@ -61,6 +61,7 @@ done
     --sandbox_add_mount_pair=/dev/null:/etc/ld.so.cache \
     --curses=no \
     --color=yes \
+    --jobs=30 \
     --test_filter=-$(
         IFS=:
         echo "${EXCLUDED_TESTS[*]}"
