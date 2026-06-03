@@ -81,12 +81,15 @@ ARGS=(
     --test_sharding_strategy=disabled
     --test_verbose_timeout_warnings
     --test_timeout=920,2400,7200,9600
-    --test_filter=-$(IFS=:; echo "${EXCLUDED_TESTS[*]}")
+    --test_filter=-$(
+        IFS=:
+        echo "${EXCLUDED_TESTS[*]}"
+    )
     --cache_test_results=yes
 )
 
 # Step 1: Build
-"${SCRIPT_DIR}/run_xla_ci_build.sh" \
+bazel --bazelrc="${SCRIPT_DIR}/rocm_xla_ci.bazelrc" test \
     "${ARGS[@]}" \
     --build_tests_only \
     --jobs=200 \
@@ -94,7 +97,7 @@ ARGS=(
     "${TARGETS[@]}"
 
 # Step 2: Test
-"${SCRIPT_DIR}/run_xla_ci_build.sh" \
+bazel --bazelrc="${SCRIPT_DIR}/rocm_xla_ci.bazelrc" test \
     "${ARGS[@]}" \
     --jobs=15 \
     -- \
