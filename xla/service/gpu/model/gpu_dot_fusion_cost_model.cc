@@ -269,11 +269,29 @@ float GetEffectiveHbmBandwidth(const int64_t dma_size,
        {536870912, 2968.89f},
        {1073741824, 3126.0f}}};
 
+  // The lookup table is a measured H100 bandwidth-vs-transfer-size ramp whose
+  // asymptote (the last entry) equals H100's peak HBM bandwidth. We treat the
+  // table as a fraction-of-peak utilization curve and rescale it to the actual
+  // device's peak so the same ramp shape applies on non-H100 GPUs (e.g. CDNA
+  // with 8 TB/s HBM3e vs H100's ~3.1 TB/s). Gated to ROCm to leave the CUDA
+  // path on its measured values.
+  float peak_scale = 1.0f;
+  if (device_info.gpu_compute_capability().IsRocm()) {
+    const float h100_peak_GBps = hbm_bandwidth_GBps_lookup_h100.back().second;
+    const float device_peak_GBps =
+        device_info.memory_bandwidth() / static_cast<float>(1 << 30);
+    if (h100_peak_GBps > 0.0f && device_peak_GBps > 0.0f) {
+      peak_scale = device_peak_GBps / h100_peak_GBps;
+    }
+  }
+
   if (dma_size <= hbm_bandwidth_GBps_lookup_h100.front().first) {
-    return hbm_bandwidth_GBps_lookup_h100.front().second * (1 << 30);
+    return hbm_bandwidth_GBps_lookup_h100.front().second * peak_scale *
+           (1 << 30);
   }
   if (dma_size >= hbm_bandwidth_GBps_lookup_h100.back().first) {
-    return hbm_bandwidth_GBps_lookup_h100.back().second * (1 << 30);
+    return hbm_bandwidth_GBps_lookup_h100.back().second * peak_scale *
+           (1 << 30);
   }
 
   auto it2 = std::lower_bound(hbm_bandwidth_GBps_lookup_h100.begin(),
@@ -288,7 +306,7 @@ float GetEffectiveHbmBandwidth(const int64_t dma_size,
   auto b = it2->second;
   auto t =
       (dma_size - it1->first) / static_cast<float>(it2->first - it1->first);
-  return (a + t * (b - a)) * (1 << 30);
+  return (a + t * (b - a)) * peak_scale * (1 << 30);
 }
 
 HbmEstimates CalculateHbmTime(const DotProblemInfo& dot,
