@@ -5,8 +5,8 @@ set -ex
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
 EXCLUDED_TESTS=(
-    "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
-    "*IotaR1Test*"                                                                                                                                 # Taking too many CI nodes
+    "HostMemoryAllocateTest.Numa" # Failing on RBE
+    "*IotaR1Test*"                # Taking too many CI nodes
     "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
     "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x*"
     "DeterminismTest.CublasDot"
@@ -45,37 +45,57 @@ for arg in "$@"; do
     fi
 done
 
-"${SCRIPT_DIR}/run_xla_ci_build.sh" \
-    "$@" \
-    --build_tag_filters="$TAG_FILTERS" \
-    --test_tag_filters="$TAG_FILTERS" \
-    --execution_log_compact_file=execution_log.binpb.zst \
-    --spawn_strategy=local \
-    --repo_env=REMOTE_GPU_TESTING=1 \
-    --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-    --remote_download_outputs=minimal \
-    --grpc_keepalive_time=30s \
-    --test_sharding_strategy=disabled \
-    --test_verbose_timeout_warnings \
-    --test_timeout=920,2400,7200,9600 \
-    --sandbox_add_mount_pair=/dev/null:/etc/ld.so.cache \
-    --curses=no \
-    --color=yes \
-    --test_filter=-$(
-        IFS=:
-        echo "${EXCLUDED_TESTS[*]}"
-    ) \
-    --cache_test_results=yes \
-    --nokeep_going \
-    --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=${RBE_POOL} \
-    --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
-    -- \
-    //xla/... \
-    -//xla/tests:dot_operation_test_amdgpu_any \
-    -//xla/backends/gpu/autotuner:triton_test_amdgpu_any \
-    -//xla/tests:iota_test_amdgpu_any \
-    -//xla/backends/gpu/tests:sorting_test_amdgpu_any \
-    -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any \
-    -//xla/tests:dot_operation_autotune_disabled_test_amdgpu_any \
+# Target patterns
+TARGETS=(
+    //xla/...
+    -//xla/tests:dot_operation_test_amdgpu_any
+    -//xla/backends/gpu/autotuner:triton_test_amdgpu_any
+    -//xla/tests:iota_test_amdgpu_any
+    -//xla/backends/gpu/tests:sorting_test_amdgpu_any
+    -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any
+    -//xla/tests:dot_operation_autotune_disabled_test_amdgpu_any
     # TODO: skippped tests from https://wardite.cluster.engflow.com/invocations/default/f6e1d975-7f66-4b51-8430-d79e0ab0493a
-    # TODO: skipped tests from https://wardite.cluster.engflow.com/invocation/8f90cfa8-a7e5-4ef9-8d4f-3a75e90b1cc3 
+    # TODO: skipped tests from https://wardite.cluster.engflow.com/invocation/8f90cfa8-a7e5-4ef9-8d4f-3a75e90b1cc3
+)
+
+ARGS=(
+    "$@"
+    --build_tag_filters="$TAG_FILTERS"
+    --test_tag_filters="$TAG_FILTERS"
+    --profile=/tf/pkg/profile.json.gz
+    --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16"
+    --run_under=//build_tools/rocm:parallel_gpu_execute
+    --execution_log_compact_file=execution_log.binpb.zst
+    --spawn_strategy=local
+    --repo_env=REMOTE_GPU_TESTING=1
+    --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950
+    --remote_download_outputs=minimal
+    --grpc_keepalive_time=30s
+    --sandbox_add_mount_pair=/dev/null:/etc/ld.so.cache
+    --curses=no
+    --color=yes
+    --nokeep_going
+    --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950
+    --test_env=TF_TESTS_PER_GPU=1
+    --test_output=errors
+    --test_sharding_strategy=disabled
+    --test_verbose_timeout_warnings
+    --test_timeout=920,2400,7200,9600
+    --test_filter=-$(IFS=:; echo "${EXCLUDED_TESTS[*]}")
+    --cache_test_results=yes
+)
+
+# Step 1: Build
+"${SCRIPT_DIR}/run_xla_ci_build.sh" \
+    "${ARGS[@]}" \
+    --build_only \
+    --jobs=200 \
+    -- \
+    "${TARGETS[@]}"
+
+# Step 2: Test
+"${SCRIPT_DIR}/run_xla_ci_build.sh" \
+    "${ARGS[@]}" \
+    --jobs=15 \
+    -- \
+    "${TARGETS[@]}"
