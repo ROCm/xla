@@ -839,6 +839,27 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       constexpr int64_t kDefaultBlockN = 32;
       constexpr int64_t kDefaultBlockK = 32;
 
+      // Determine contracting mode first — needed to build both the inner Tile
+      // (set on fused_ragged_dot before the fused computation is finalised) and
+      // the outer BlockLevelFusionConfig (set on the fusion instruction).
+      const auto& rd_dim_nums = ragged_dot->ragged_dot_dimension_numbers();
+      const auto& rd_dot_dims = rd_dim_nums.dot_dimension_numbers();
+      const int64_t lhs_ragged_dim_hrd = rd_dim_nums.lhs_ragged_dimensions(0);
+      const bool is_contracting_hrd =
+          absl::c_count(rd_dot_dims.lhs_contracting_dimensions(),
+                        lhs_ragged_dim_hrd) > 0;
+
+      // Sequential-dim tile sizes stored on the inner ragged_dot.
+      Tile inner_tile_config;
+      if (!is_contracting_hrd) {
+        // kRaggedNonContracting: G=1 per outer loop iter, K=BLOCK_K inner.
+        inner_tile_config.add_sizes(1);               // G sequential dim
+        inner_tile_config.add_sizes(kDefaultBlockK);  // K sequential dim
+      } else {
+        // kRaggedContracting: M=BLOCK_M per inner accumulation loop.
+        inner_tile_config.add_sizes(kDefaultBlockM);  // M sequential dim
+      }
+
       // Build the fused computation: parameters + ragged_dot.
       // Pattern follows RaggedToCuDNNFusion: one builder creates fused params
       // and clones the ragged_dot; fusion_params holds the external operands.
@@ -863,13 +884,8 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       // Clone the ragged_dot inside the fused computation.
       HloInstruction* fused_ragged_dot = builder.AddInstruction(
           ragged_dot->CloneWithNewOperands(ragged_dot->shape(), param_instrs));
-
-      // Set sequential tile sizes on the inner ragged_dot via Tile proto.
-      // Tile.sizes = [G_tile=1, K_tile=BLOCK_K] for kRaggedNonContracting.
-      Tile tile_config;
-      tile_config.add_sizes(1);               // G sequential dim tile size = 1
-      tile_config.add_sizes(kDefaultBlockK);  // K sequential dim tile size
-      RETURN_IF_ERROR(fused_ragged_dot->set_backend_config(tile_config));
+      // Apply the sequential-dim Tile to the inner ragged_dot instruction.
+      RETURN_IF_ERROR(fused_ragged_dot->set_backend_config(inner_tile_config));
 
       HloComputation* new_computation =
           ragged_dot->GetModule()->AddComputationAndUnifyNamesAndIds(
@@ -888,23 +904,29 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       fusion_config->set_kind(std::string(kTritonFusionKind));
       BlockLevelFusionConfig* blk_cfg =
           fusion_config->mutable_block_level_fusion_config();
-      // output_tile_sizes[0] covers the kParallel output dims (M, N for
-      // kRaggedNonContracting; G, K, N for kRaggedContracting).
-      // We only support kRaggedNonContracting for now.
+
       auto* output_tile = blk_cfg->add_output_tiles();
-      // output_tile_sizes must have one entry per parallel output dim:
-      // [batch..., M, N] for kRaggedNonContracting.
-      // Batch dims use tile size 1 so each tile processes one batch element;
-      // the batch dimension becomes a grid dimension rather than an inner
-      // tile dimension, which Triton can handle correctly.
-      const auto& rd_dot_dims =
-          ragged_dot->ragged_dot_dimension_numbers().dot_dimension_numbers();
-      for (int64_t b_dim : rd_dot_dims.lhs_batch_dimensions()) {
-        (void)b_dim;  // tile size 1, independent of the actual batch size
-        output_tile->add_sizes(1);
+      if (!is_contracting_hrd) {
+        // kRaggedNonContracting: parallel output dims = [batch..., M, N].
+        // Batch dims use tile size 1 so each tile processes one batch element.
+        for (int64_t b_dim : rd_dot_dims.lhs_batch_dimensions()) {
+          (void)b_dim;
+          output_tile->add_sizes(1);
+        }
+        output_tile->add_sizes(kDefaultBlockM);
+        output_tile->add_sizes(kDefaultBlockN);
+      } else {
+        // kRaggedContracting: parallel output dims = [G=1, batch..., K, N].
+        // G=1 so each tile processes one group.
+        output_tile->add_sizes(1);  // G dim tile size = 1
+        for (int64_t b_dim : rd_dot_dims.lhs_batch_dimensions()) {
+          (void)b_dim;
+          output_tile->add_sizes(1);
+        }
+        output_tile->add_sizes(kDefaultBlockK);  // K output tile
+        output_tile->add_sizes(kDefaultBlockN);  // N output tile
       }
-      output_tile->add_sizes(kDefaultBlockM);
-      output_tile->add_sizes(kDefaultBlockN);
+
       blk_cfg->set_num_warps(4);
       blk_cfg->set_num_ctas(1);
       blk_cfg->set_num_stages(1);

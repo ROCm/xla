@@ -755,21 +755,21 @@ absl::StatusOr<Tiles> PropagateTileToInputForRaggedDotOp(
     //   dim_position = output_rank + 0  → M (ragged contracting)
     // RTVars: group_size (op_id=2), start_m (op_id=-1).
 
-    auto sm_rtvar_or = tiling_space.GetRTVarInfo(hlo, -1);
-    CHECK(sm_rtvar_or.has_value())
-        << "Missing start_m RTVar for " << hlo.ToString();
-    SymbolicExpr sm_sym =
-        CreateSymbolExpr(num_dims + (*sm_rtvar_or)->id, num_dims, ctx);
-
     const TilingSpace::DimensionInfo& m_dim_info =
         tiling_space.GetDimensionInfo(hlo, output_rank);
     DimTile m_rel_tile = GetDimTile(m_dim_info, num_dims, ctx);
-    // Absolute M tile: add start_m to offset and upper_bound.
+    // Relative M tile: offset is just d[m]*BLOCK_M (relative within the group).
+    // The emitter adds start_m to the buffer address manually when calling
+    // ExtractTileOp, since start_m is a synthetic prefix-sum RTVar (op_id=-1)
+    // that has no backing tiled HLO instruction and cannot be resolved by
+    // EvaluateTilingParameters via rt_symbol_to_tiled_hlo.
+    // The upper_bound uses gs_sym (group_size, op_id=2) which IS a real
+    // operand.
     DimTile m_tile = DimTile{
-        sm_sym + m_rel_tile.offset,  // start_m + d[m]*BLOCK_M
-        m_rel_tile.size,             // BLOCK_M
-        m_rel_tile.stride,           // 1
-        sm_sym + gs_sym              // start_m + group_size (absolute mask)
+        m_rel_tile.offset,  // d[m]*BLOCK_M (relative, no sm_sym)
+        m_rel_tile.size,    // BLOCK_M
+        m_rel_tile.stride,  // 1
+        gs_sym              // group_size (relative mask, no sm_sym)
     };
 
     // Compute non-contracting dims of LHS (K) and RHS (N).

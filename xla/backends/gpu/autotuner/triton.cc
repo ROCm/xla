@@ -316,34 +316,52 @@ absl::Status TritonBackend::ApplyConfig(HloInstruction& instr,
   if (inner_ragged_dot != nullptr) {
     // kRaggedDot XTile path — update:
     //   (1) the fusion-level BlockLevelFusionConfig output tiles, and
-    //   (2) the inner ragged-dot's Tile backend config (sequential G=1, K dims
+    //   (2) the inner ragged-dot's Tile backend config (sequential dims
     //       read by GetTilingSpaceConcreteSizes).
     const auto* ragged_dot = Cast<HloRaggedDotInstruction>(inner_ragged_dot);
-    const DotDimensionNumbers& dot_dims =
-        ragged_dot->ragged_dot_dimension_numbers().dot_dimension_numbers();
+    const auto& ragged_dims = ragged_dot->ragged_dot_dimension_numbers();
+    const DotDimensionNumbers& dot_dims = ragged_dims.dot_dimension_numbers();
+    const int64_t lhs_ragged_dim = ragged_dims.lhs_ragged_dimensions(0);
+    const bool is_contracting_apply =
+        absl::c_count(dot_dims.lhs_contracting_dimensions(), lhs_ragged_dim) >
+        0;
 
     BlockLevelFusionConfig* blk_cfg =
         backend_config.mutable_block_level_fusion_config();
     blk_cfg->clear_output_tiles();
     auto* output_tile = blk_cfg->add_output_tiles();
-    // Batch dims each use tile size 1 (they become grid dimensions, matching
-    // the HandleRaggedDot convention).
-    for (int64_t b_dim : dot_dims.lhs_batch_dimensions()) {
-      (void)b_dim;
-      output_tile->add_sizes(1);
+    Tile inner_tile;
+
+    if (!is_contracting_apply) {
+      // kRaggedNonContracting: parallel dims = [batch..., M, N].
+      // Sequential dims: G=1 (outer loop), K=block_k (inner K-loop).
+      for (int64_t b_dim : dot_dims.lhs_batch_dimensions()) {
+        (void)b_dim;
+        output_tile->add_sizes(1);
+      }
+      output_tile->add_sizes(triton_config_proto.block_m());
+      output_tile->add_sizes(triton_config_proto.block_n());
+      inner_tile.add_sizes(1);                              // G sequential
+      inner_tile.add_sizes(triton_config_proto.block_k());  // K sequential
+    } else {
+      // kRaggedContracting: parallel dims = [G=1, batch..., K, N].
+      // Sequential dim: M=block_m (ragged accumulation).
+      output_tile->add_sizes(1);  // G tile = 1
+      for (int64_t b_dim : dot_dims.lhs_batch_dimensions()) {
+        (void)b_dim;
+        output_tile->add_sizes(1);
+      }
+      output_tile->add_sizes(triton_config_proto.block_k());  // K output
+      output_tile->add_sizes(triton_config_proto.block_n());  // N output
+      inner_tile.add_sizes(triton_config_proto.block_m());    // M sequential
     }
-    output_tile->add_sizes(triton_config_proto.block_m());
-    output_tile->add_sizes(triton_config_proto.block_n());
+
     blk_cfg->set_num_warps(triton_config_proto.num_warps());
-    blk_cfg->set_num_ctas(std::max(1, static_cast<int>(triton_config_proto.num_ctas())));
+    blk_cfg->set_num_ctas(
+        std::max(1, static_cast<int>(triton_config_proto.num_ctas())));
     blk_cfg->set_num_stages(triton_config_proto.num_stages());
     RETURN_IF_ERROR(instr.set_backend_config(gpu_config));
-
-    // Update the inner ragged-dot's Tile: sizes = [G_tile=1, K_tile].
-    Tile tile_config;
-    tile_config.add_sizes(1);                              // G tile always 1
-    tile_config.add_sizes(triton_config_proto.block_k());  // K tile
-    RETURN_IF_ERROR(inner_ragged_dot->set_backend_config(tile_config));
+    RETURN_IF_ERROR(inner_ragged_dot->set_backend_config(inner_tile));
     return absl::OkStatus();
   }
 
@@ -374,9 +392,31 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
   const Shape& rhs_shape = ragged_dot->operand(1)->shape();
 
   const int64_t lhs_ragged_dim = ragged_dims.lhs_ragged_dimensions(0);
+  const bool is_contracting_rd =
+      absl::c_count(dot_dims.lhs_contracting_dimensions(), lhs_ragged_dim) > 0;
   const int64_t M_total = lhs_shape.dimensions(lhs_ragged_dim);
-  const int64_t K_dim =
-      lhs_shape.dimensions(dot_dims.lhs_contracting_dimensions(0));
+
+  // K_dim: for kRaggedNonContracting, the (non-ragged) contracting dim size;
+  //        for kRaggedContracting, the non-contracting LHS dim size (output K).
+  int64_t K_dim = 1;
+  {
+    auto is_non_k = [&](int64_t d) -> bool {
+      // Exclude batch dims and the ragged dim from the search.
+      if (d == lhs_ragged_dim) return true;
+      for (int64_t x : dot_dims.lhs_batch_dimensions())
+        if (x == d) return true;
+      return false;
+    };
+    if (!is_contracting_rd) {
+      // kRaggedNonContracting: K = the contracting (non-ragged) dim.
+      K_dim = lhs_shape.dimensions(dot_dims.lhs_contracting_dimensions(0));
+    } else {
+      // kRaggedContracting: K = the non-contracting, non-ragged, non-batch dim.
+      for (int64_t i = 0; i < lhs_shape.dimensions_size(); ++i) {
+        if (!is_non_k(i)) K_dim = lhs_shape.dimensions(i);
+      }
+    }
+  }
 
   // N is the non-contracting, non-group, non-batch RHS dimension.
   int64_t N_dim = 1;

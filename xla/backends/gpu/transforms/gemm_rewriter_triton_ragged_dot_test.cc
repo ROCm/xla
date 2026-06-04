@@ -396,6 +396,227 @@ ENTRY main {
 }
 
 // ============================================================================
+// kRaggedContracting tests
+//
+// HLO shape: LHS [M_total, K], RHS [M_total, N], gs [G] → output [G, K, N]
+//   lhs_contracting_dims={0}, rhs_contracting_dims={0}, lhs_ragged_dims={0}
+//
+// For each group g: output[g, :, :] = LHS[sum_m:sum_m+gs[g], :]^T
+//                                     @ RHS[sum_m:sum_m+gs[g], :]
+// where sum_m = sum(gs[0..g-1]).
+// ============================================================================
+
+// Basic kRaggedContracting — balanced groups.
+// M_total=128, K=32, N=16, G=4, groups all equal (32 rows each).
+TEST_F(TritonRaggedDotTest, ContractingBalancedGroups) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotContractingBalanced
+
+ENTRY main {
+  lhs = f32[128,32] parameter(0)
+  rhs = f32[128,16] parameter(1)
+  gs  = s32[4] constant({32, 32, 32, 32})
+  ROOT rd = f32[4,32,16] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-3, 1e-3});
+}
+
+// kRaggedContracting — unbalanced groups.
+// M_total=96, K=32, N=8, G=3, groups {10, 30, 56}.
+TEST_F(TritonRaggedDotTest, ContractingUnbalancedGroups) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotContractingUnbalanced
+
+ENTRY main {
+  lhs = f32[96,32] parameter(0)
+  rhs = f32[96,8] parameter(1)
+  gs  = s32[3] constant({10, 30, 56})
+  ROOT rd = f32[3,32,8] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-3, 1e-3});
+}
+
+// kRaggedContracting — groups not multiples of BLOCK_M (exercises M-boundary
+// masking in the accumulation loop).
+// M_total=96, K=32, N=16, G=3, groups {10, 30, 56}.
+TEST_F(TritonRaggedDotTest, ContractingNonMultipleBlock) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotContractingNonMultiple
+
+ENTRY main {
+  lhs = f32[96,32] parameter(0)
+  rhs = f32[96,16] parameter(1)
+  gs  = s32[3] constant({10, 30, 56})
+  ROOT rd = f32[3,32,16] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-3, 1e-3});
+}
+
+// kRaggedContracting — transposed LHS [K, M_total] layout.
+// Analogous to the GroupedGemmRewriteTest kRaggedContracting test where
+// LHS has shape [K, M_total] (lhs_contracting_dims={1}).
+// M_total=96, K=64, N=32, G=3.
+TEST_F(TritonRaggedDotTest, ContractingLhsTransposed) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotContractingTransposed
+
+ENTRY main {
+  lhs = f32[64,96] parameter(0)
+  rhs = f32[96,32] parameter(1)
+  gs  = s32[3] constant({32, 32, 32})
+  ROOT rd = f32[3,64,32] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={1}, rhs_contracting_dims={0},
+      lhs_ragged_dims={1}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-3, 1e-3});
+}
+
+// kRaggedContracting in f16.
+TEST_F(TritonRaggedDotTest, ContractingFp16) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotContractingFp16
+
+ENTRY main {
+  lhs = f16[64,32] parameter(0)
+  rhs = f16[64,16] parameter(1)
+  gs  = s32[4] constant({16, 16, 16, 16})
+  ROOT rd = f16[4,32,16] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
+// kRaggedContracting in bf16 — balanced groups.
+TEST_F(TritonRaggedDotTest, ContractingBf16Balanced) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotContractingBf16Balanced
+
+ENTRY main {
+  lhs = bf16[128,32] parameter(0)
+  rhs = bf16[128,16] parameter(1)
+  gs  = s32[4] constant({32, 32, 32, 32})
+  ROOT rd = bf16[4,32,16] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
+// kRaggedContracting in bf16 — unbalanced groups exercising M-boundary masking.
+TEST_F(TritonRaggedDotTest, ContractingBf16Unbalanced) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotContractingBf16Unbalanced
+
+ENTRY main {
+  lhs = bf16[96,32] parameter(0)
+  rhs = bf16[96,8] parameter(1)
+  gs  = s32[3] constant({10, 30, 56})
+  ROOT rd = bf16[3,32,8] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
+// kRaggedContracting with FP8 (E4M3FNUZ) inputs and F32 output.
+// The Triton emitter always accumulates in f32 and casts the output afterward.
+// fp8 ragged-dot requires hardware fp8 capability; numerical check runs only
+// when Triton is available.
+TEST_F(TritonRaggedDotTest, ContractingFp8F32Output) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotContractingFp8
+
+ENTRY main {
+  lhs = f8e4m3fnuz[64,32] parameter(0)
+  rhs = f8e4m3fnuz[64,16] parameter(1)
+  gs  = s32[4] constant({16, 16, 16, 16})
+  ROOT rd = f32[4,32,16] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-1, 1e-1});
+}
+
+// ============================================================================
+// kRaggedContracting layout tests
+//
+// These mirror the kRaggedNonContracting layout tests but for the contracting
+// mode.  The emitter uses direct ExtractTileOp loads with explicit buffer
+// offsets, so non-standard layouts still produce correct results.
+// ============================================================================
+
+// kRaggedContracting with column-major output [G, K, N]{1,2,0}.
+// The output's physically fastest dim is N (dim 2), then G (dim 0),
+// then K (dim 1) slowest.  The InsertTileOp handles arbitrary output strides.
+TEST_F(TritonRaggedDotTest, ContractingOutputColumnMajor) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotContractingColMajorOut
+
+ENTRY main {
+  lhs = f16[64,32] parameter(0)
+  rhs = f16[64,16] parameter(1)
+  gs  = s32[4] constant({16, 16, 16, 16})
+  ROOT rd = f16[4,32,16]{1,2,0} ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
+// kRaggedContracting with column-major LHS [K, M_total]{0,1}.
+// LHS is [K, M_total] with M at dim 1 (lhs_contracting_dims={1}).
+// The column-major layout makes K the physically innermost dim.
+TEST_F(TritonRaggedDotTest, ContractingLhsColMajorTransposed) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotContractingLhsColMajorTransposed
+
+ENTRY main {
+  lhs = f16[32,64]{0,1} parameter(0)
+  rhs = f16[64,16] parameter(1)
+  gs  = s32[4] constant({16, 16, 16, 16})
+  ROOT rd = f16[4,32,16] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={1}, rhs_contracting_dims={0},
+      lhs_ragged_dims={1}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
+// kRaggedContracting with s64 group_sizes — exercises 64-bit group-size path.
+// Same shapes as ContractingBalancedGroups but gs type is s64.
+TEST_F(TritonRaggedDotTest, ContractingS64GroupSizes) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotContractingS64
+
+ENTRY main {
+  lhs = f32[128,32] parameter(0)
+  rhs = f32[128,16] parameter(1)
+  gs  = s64[4] constant({32, 32, 32, 32})
+  ROOT rd = f32[4,32,16] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-3, 1e-3});
+}
+
+// ============================================================================
 // Autotuning integration tests
 //
 // These tests enable the Triton autotuner (autotune_level is NOT set to 0)
@@ -480,6 +701,80 @@ ENTRY main {
 }
 )";
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-2, 1e-2}));
+}
+
+// kRaggedContracting balanced — autotuner selects best (BLOCK_M, BLOCK_K,
+// BLOCK_N) for the contracting-mode group-GEMM (weight-gradient kernel).
+TEST_F(TritonRaggedDotAutotunedTest, ContractingBalancedGroups) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotAutotunedContractingBalanced
+
+ENTRY main {
+  lhs = f32[128,32] parameter(0)
+  rhs = f32[128,16] parameter(1)
+  gs  = s32[4] constant({32, 32, 32, 32})
+  ROOT rd = f32[4,32,16] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// kRaggedContracting unbalanced — exercises M-boundary masking across
+// autotuner candidate tile sizes.
+TEST_F(TritonRaggedDotAutotunedTest, ContractingUnbalancedGroups) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotAutotunedContractingUnbalanced
+
+ENTRY main {
+  lhs = f32[96,32] parameter(0)
+  rhs = f32[96,8] parameter(1)
+  gs  = s32[3] constant({10, 30, 56})
+  ROOT rd = f32[3,32,8] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// kRaggedContracting f16 — autotuner dtype-aware tile selection for fp16.
+TEST_F(TritonRaggedDotAutotunedTest, ContractingFp16Balanced) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotAutotunedContractingFp16
+
+ENTRY main {
+  lhs = f16[64,32] parameter(0)
+  rhs = f16[64,16] parameter(1)
+  gs  = s32[4] constant({16, 16, 16, 16})
+  ROOT rd = f16[4,32,16] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-2, 1e-2}));
+}
+
+// kRaggedContracting with transposed LHS — autotuner handles [K,M] layout.
+TEST_F(TritonRaggedDotAutotunedTest, ContractingLhsTransposed) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotAutotunedContractingTransposed
+
+ENTRY main {
+  lhs = f32[64,96] parameter(0)
+  rhs = f32[96,32] parameter(1)
+  gs  = s32[3] constant({32, 32, 32})
+  ROOT rd = f32[3,64,32] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={1}, rhs_contracting_dims={0},
+      lhs_ragged_dims={1}
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
 }
 
 }  // namespace

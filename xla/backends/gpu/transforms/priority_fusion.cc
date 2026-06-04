@@ -310,9 +310,20 @@ class PriorityFusionQueue {
 
     EstimateRunTimeData runtime_data;
     if (IsGenericTritonFusion(*producer)) {
-      ASSIGN_OR_RETURN(
-          runtime_data,
-          gpu_indexing_performance_model_.EstimateRunTimeForTriton(producer));
+      auto rt_or =
+          gpu_indexing_performance_model_.EstimateRunTimeForTriton(producer);
+      if (rt_or.ok()) {
+        runtime_data = *rt_or;
+      } else {
+        // SymbolicTileAnalysis can fail for fusions with non-affine indexing
+        // (e.g. kRaggedContracting whose G→M_total mapping requires a prefix
+        // sum). Fall back to the standard cost model rather than crashing.
+        VLOG(3) << "EstimateRunTimeForTriton failed for " << producer->name()
+                << " (" << rt_or.status().message()
+                << "), falling back to standard cost model.";
+        runtime_data = gpu_performance_model_.EstimateRunTimeForInstruction(
+            producer, &cost_analysis_);
+      }
     } else {
       runtime_data = gpu_performance_model_.EstimateRunTimeForInstruction(
           producer, &cost_analysis_);
