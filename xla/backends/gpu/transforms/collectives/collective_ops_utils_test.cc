@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status.h"
 #include "absl/status/status_matchers.h"
 #include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -34,6 +35,7 @@ namespace {
 
 using ::absl_testing::IsOk;
 using ::absl_testing::IsOkAndHolds;
+using ::absl_testing::StatusIs;
 using ::testing::Test;
 
 class CommunicationTypeTest : public Test {
@@ -702,6 +704,54 @@ TEST(IsSpmdGeneratedTest, ReturnsTrueWhenBackendConfigSet) {
   ASSERT_THAT(ar->set_backend_config(config), IsOk());
 
   EXPECT_TRUE(IsSpmdGenerated(*ar));
+}
+
+TEST_F(CommunicationTypeTest, AdmitsCalibratedRocmArch) {
+  device_info().set_rocm_compute_capability("gfx942");  // MI300
+  absl::string_view kHlo = R"(
+    HloModule m, num_partitions=8
+
+    ENTRY e {
+      p = f32[128] parameter(0)
+      ROOT _ = f32[1024] all-gather(p),
+        dimensions={0},
+        use_global_device_ids=true,
+        channel_id=1,
+        replica_groups=[1,8]<=[8]
+    }
+  )";
+
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(kHlo));
+
+  HloCollectiveInstruction* instr = Cast<HloCollectiveInstruction>(
+      module->entry_computation()->root_instruction());
+  EXPECT_THAT(CommunicationType(/*num_devices_per_host=*/8, *instr,
+                                device_info().gpu_compute_capability()),
+              IsOkAndHolds(GPUCommunicationType::SINGLE_PARTITION));
+}
+
+TEST_F(CommunicationTypeTest, RejectsUncalibratedRocmArch) {
+  device_info().set_rocm_compute_capability("gfx90a");  // MI200, not calibrated
+  absl::string_view kHlo = R"(
+    HloModule m, num_partitions=8
+
+    ENTRY e {
+      p = f32[128] parameter(0)
+      ROOT _ = f32[1024] all-gather(p),
+        dimensions={0},
+        use_global_device_ids=true,
+        channel_id=1,
+        replica_groups=[1,8]<=[8]
+    }
+  )";
+
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(kHlo));
+
+  HloCollectiveInstruction* instr = Cast<HloCollectiveInstruction>(
+      module->entry_computation()->root_instruction());
+  EXPECT_THAT(CommunicationType(/*num_devices_per_host=*/8, *instr,
+                                device_info().gpu_compute_capability()),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
 }  // namespace xla::gpu

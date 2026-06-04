@@ -699,6 +699,53 @@ ENTRY main {
                   .ok());
 }
 
+// Verifies SOL still constructs on a device that has no embedded interpolator
+// tables (e.g. gfx942 / MI300): the interpolators degrade to null instead of
+// failing SolLatencyEstimator::Create, and NodeCost falls back cleanly.
+class SolLatencyEstimatorGracefulDegradeTest
+    : public HloHardwareIndependentTestBase {
+ protected:
+  SolLatencyEstimatorGracefulDegradeTest()
+      : shape_size_fn_(HloCostAnalysis::DefaultShapeSize),
+        gpu_device_info_(TestGpuDeviceInfo::RTXA6000DeviceInfo()) {
+    // No embedded matmul/collective table exists for gfx942, so both
+    // interpolators must degrade to null during Create().
+    gpu_device_info_.set_rocm_compute_capability("gfx942");
+  }
+
+  HloCostAnalysis::ShapeSizeFunction shape_size_fn_;
+  se::DeviceDescription gpu_device_info_;
+  SchedulerConfig scheduler_config_;
+  mlir::MLIRContext mlir_context_;
+};
+
+TEST_F(SolLatencyEstimatorGracefulDegradeTest, BuildsAndFallsBackWithoutTables) {
+  const std::string kModule = R"(
+HloModule m
+
+ENTRY main {
+  p0 = bf16[1024,1024] parameter(0)
+  p1 = bf16[1024,1024] parameter(1)
+  ROOT dot = bf16[1024,1024] dot(p0, p1),
+    lhs_contracting_dims={1}, rhs_contracting_dims={0}
+})";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kModule));
+
+  // Create must succeed despite the absent tables (graceful degrade to null).
+  auto estimator = SolLatencyEstimator::Create(
+      scheduler_config_, std::make_unique<DummyLatencyEstimator>(),
+      gpu_device_info_, shape_size_fn_, module->entry_computation(),
+      &mlir_context_);
+  ASSERT_OK(estimator);
+  ASSERT_NE(*estimator, nullptr);
+
+  // NodeCost on a matmul must not dereference the null matmul interpolator.
+  HloInstruction* dot = hlo_query::FindInstruction(module->entry_computation(),
+                                                   HloOpcode::kDot);
+  ASSERT_NE(dot, nullptr);
+  EXPECT_NO_FATAL_FAILURE((void)(*estimator)->NodeCost(dot));
+}
+
 class IsSolLatencyEstimatorEnabledTest : public HloTestBaseLegacy {
  protected:
   IsSolLatencyEstimatorEnabledTest()
@@ -1095,6 +1142,60 @@ TEST_F(TritonAllReduceSchedulerTest, AsyncNcclAllReduceNodeCostIsLow) {
   // kLowCost = 1.0 µs: async collective start is treated as negligible node
   // cost because its latency is hidden by GetLatencyBetween.
   EXPECT_EQ(node_cost, absl::Microseconds(1));
+}
+
+TEST_F(IsSolLatencyEstimatorEnabledTest, EnabledBySolEstimatorFlagOnGfx942) {
+  HloModuleConfig config;
+  config.mutable_debug_options()
+      .set_xla_gpu_enable_analytical_sol_latency_estimator(true);
+  gpu_device_info_.set_rocm_compute_capability("gfx942");  // MI300
+
+  auto module = CreateTestModule(config);
+  AddAllReduce(module.get());  // Supported collective
+
+  EXPECT_TRUE(
+      SolLatencyEstimator::IsSupportedForModule(*module, gpu_device_info_));
+}
+
+TEST_F(IsSolLatencyEstimatorEnabledTest, DisabledIfFlagIsOffOnGfx942) {
+  HloModuleConfig config;
+  config.mutable_debug_options()
+      .set_xla_gpu_enable_analytical_sol_latency_estimator(false);
+  gpu_device_info_.set_rocm_compute_capability("gfx942");  // MI300
+
+  auto module = CreateTestModule(config);
+  AddAllReduce(module.get());
+
+  EXPECT_FALSE(
+      SolLatencyEstimator::IsSupportedForModule(*module, gpu_device_info_));
+}
+
+TEST_F(IsSolLatencyEstimatorEnabledTest, DisabledForUncalibratedRocmArch) {
+  HloModuleConfig config;
+  config.mutable_debug_options()
+      .set_xla_gpu_enable_analytical_sol_latency_estimator(true);
+  // gfx90a (MI200) is not on the calibrated allowlist, so SOL stays off.
+  gpu_device_info_.set_rocm_compute_capability("gfx90a");
+
+  auto module = CreateTestModule(config);
+  AddAllReduce(module.get());
+
+  EXPECT_FALSE(
+      SolLatencyEstimator::IsSupportedForModule(*module, gpu_device_info_));
+}
+
+TEST_F(IsSolLatencyEstimatorEnabledTest,
+       DisabledForGfx942WithUnsupportedCollective) {
+  HloModuleConfig config;
+  config.mutable_debug_options()
+      .set_xla_gpu_enable_analytical_sol_latency_estimator(true);
+  gpu_device_info_.set_rocm_compute_capability("gfx942");
+
+  auto module = CreateTestModule(config);
+  AddCollectiveBcast(module.get());  // Unsupported collective
+
+  EXPECT_FALSE(
+      SolLatencyEstimator::IsSupportedForModule(*module, gpu_device_info_));
 }
 
 }  // namespace
