@@ -21,7 +21,6 @@ limitations under the License.
 #include <variant>
 #include <vector>
 
-#include "google/protobuf/any.pb.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -29,6 +28,7 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "xla/tsl/platform/status_macros.h"
+#include "google/protobuf/any.pb.h"
 #include "google/protobuf/text_format.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
@@ -123,16 +123,26 @@ TritonBackend::GetSupportedConfigs(const HloInstruction& instr) {
     return overridden_configs;
   }
 
-  const HloInstruction* dot_instr = hlo_query::GetFirstInstructionWithOpcode(
-      *instr.fused_instructions_computation(), HloOpcode::kDot);
+  const HloComputation* fused_comp = instr.fused_instructions_computation();
+
+  const HloInstruction* dot_instr =
+      hlo_query::GetFirstInstructionWithOpcode(*fused_comp, HloOpcode::kDot);
   if (dot_instr != nullptr) {
     return GetSupportedConfigsForDot(dot_instr);
   }
   const HloInstruction* scaled_dot_instr =
-      hlo_query::GetFirstInstructionWithOpcode(
-          *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
+      hlo_query::GetFirstInstructionWithOpcode(*fused_comp,
+                                               HloOpcode::kScaledDot);
   if (scaled_dot_instr != nullptr) {
     return GetSupportedConfigsForScaledDot(scaled_dot_instr);
+  }
+  // kRaggedDot fusions routed through the Triton XTile backend
+  // (kTritonFusionKind / "__triton").
+  const HloInstruction* ragged_dot_instr =
+      hlo_query::GetFirstInstructionWithOpcode(*fused_comp,
+                                               HloOpcode::kRaggedDot);
+  if (ragged_dot_instr != nullptr) {
+    return GetSupportedConfigsForRaggedDot(ragged_dot_instr);
   }
   return std::vector<std::unique_ptr<BackendConfig>>();
 }
@@ -292,6 +302,52 @@ absl::Status TritonBackend::ApplyConfig(HloInstruction& instr,
   FusionBackendConfig& backend_config =
       *gpu_config.mutable_fusion_backend_config();
 
+  // Detect ragged-dot XTile fusions by the presence of kRaggedDot inside the
+  // fused computation.
+  HloComputation* fused_comp = instr.fused_instructions_computation();
+  HloInstruction* inner_ragged_dot = nullptr;
+  for (HloInstruction* inner : fused_comp->instructions()) {
+    if (inner->opcode() == HloOpcode::kRaggedDot) {
+      inner_ragged_dot = inner;
+      break;
+    }
+  }
+
+  if (inner_ragged_dot != nullptr) {
+    // kRaggedDot XTile path — update:
+    //   (1) the fusion-level BlockLevelFusionConfig output tiles, and
+    //   (2) the inner ragged-dot's Tile backend config (sequential G=1, K dims
+    //       read by GetTilingSpaceConcreteSizes).
+    const auto* ragged_dot = Cast<HloRaggedDotInstruction>(inner_ragged_dot);
+    const DotDimensionNumbers& dot_dims =
+        ragged_dot->ragged_dot_dimension_numbers().dot_dimension_numbers();
+
+    BlockLevelFusionConfig* blk_cfg =
+        backend_config.mutable_block_level_fusion_config();
+    blk_cfg->clear_output_tiles();
+    auto* output_tile = blk_cfg->add_output_tiles();
+    // Batch dims each use tile size 1 (they become grid dimensions, matching
+    // the HandleRaggedDot convention).
+    for (int64_t b_dim : dot_dims.lhs_batch_dimensions()) {
+      (void)b_dim;
+      output_tile->add_sizes(1);
+    }
+    output_tile->add_sizes(triton_config_proto.block_m());
+    output_tile->add_sizes(triton_config_proto.block_n());
+    blk_cfg->set_num_warps(triton_config_proto.num_warps());
+    blk_cfg->set_num_ctas(std::max(1, static_cast<int>(triton_config_proto.num_ctas())));
+    blk_cfg->set_num_stages(triton_config_proto.num_stages());
+    RETURN_IF_ERROR(instr.set_backend_config(gpu_config));
+
+    // Update the inner ragged-dot's Tile: sizes = [G_tile=1, K_tile].
+    Tile tile_config;
+    tile_config.add_sizes(1);                              // G tile always 1
+    tile_config.add_sizes(triton_config_proto.block_k());  // K tile
+    RETURN_IF_ERROR(inner_ragged_dot->set_backend_config(tile_config));
+    return absl::OkStatus();
+  }
+
+  // Regular dot / scaled-dot path: write a TritonGemmConfig into the fusion.
   backend_config.set_kind(kTritonGemmFusionKind);
   *backend_config.mutable_triton_gemm_config() = triton_config_proto;
   RETURN_IF_ERROR(instr.set_backend_config(gpu_config));
@@ -304,6 +360,89 @@ absl::Status TritonBackend::ApplyConfig(HloInstruction& instr,
   }
 
   return absl::OkStatus();
+}
+
+absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
+TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
+  const auto* ragged_dot = Cast<HloRaggedDotInstruction>(instr);
+  const RaggedDotDimensionNumbers& ragged_dims =
+      ragged_dot->ragged_dot_dimension_numbers();
+  const DotDimensionNumbers& dot_dims = ragged_dims.dot_dimension_numbers();
+
+  // Extract problem dimensions for pruning the search space.
+  const Shape& lhs_shape = ragged_dot->operand(0)->shape();
+  const Shape& rhs_shape = ragged_dot->operand(1)->shape();
+
+  const int64_t lhs_ragged_dim = ragged_dims.lhs_ragged_dimensions(0);
+  const int64_t M_total = lhs_shape.dimensions(lhs_ragged_dim);
+  const int64_t K_dim =
+      lhs_shape.dimensions(dot_dims.lhs_contracting_dimensions(0));
+
+  // N is the non-contracting, non-group, non-batch RHS dimension.
+  int64_t N_dim = 1;
+  {
+    auto is_non_n_dim = [&](int64_t d) -> bool {
+      for (int64_t x : dot_dims.rhs_contracting_dimensions())
+        if (x == d) return true;
+      for (int64_t x : ragged_dims.rhs_group_dimensions())
+        if (x == d) return true;
+      for (int64_t x : dot_dims.rhs_batch_dimensions())
+        if (x == d) return true;
+      return false;
+    };
+    for (int64_t i = 0; i < static_cast<int64_t>(rhs_shape.dimensions_size());
+         ++i) {
+      if (!is_non_n_dim(i)) N_dim = rhs_shape.dimensions(i);
+    }
+  }
+
+  const bool exhaustive_search =
+      debug_options().xla_gpu_exhaustive_tiling_search();
+
+  // Search space: {16,32,64,128}³ block sizes × {4,8} num_warps × {1,2}
+  // num_stages.  Pruned by dimension sizes to avoid obviously invalid configs.
+  std::vector<std::unique_ptr<BackendConfig>> configs;
+  for (int block_m : {16, 32, 64, 128}) {
+    if (!exhaustive_search && block_m > M_total) continue;
+    for (int block_n : {16, 32, 64, 128}) {
+      if (!exhaustive_search && block_n > N_dim) continue;
+      for (int block_k : {16, 32, 64, 128}) {
+        if (!exhaustive_search && block_k > K_dim) continue;
+        for (int num_warps : {4, 8}) {
+          for (int num_stages : {1, 2}) {
+            if (!exhaustive_search) {
+              // Skip configs where M×N tile is too large per warp thread to
+              // avoid register spilling (~64 elements/thread cutoff).
+              int64_t elems_per_thread =
+                  static_cast<int64_t>(block_m) * block_n / (num_warps * 32);
+              if (elems_per_thread > 64) continue;
+            }
+            auto config = std::make_unique<BackendConfig>();
+            *config->mutable_triton() =
+                TritonGemmConfig(block_m, block_n, block_k,
+                                 /*num_stages=*/num_stages,
+                                 /*num_warps=*/num_warps,
+                                 /*num_ctas=*/1,
+                                 /*is_tma_allowed=*/false)
+                    .ToProto();
+            configs.push_back(std::move(config));
+          }
+        }
+      }
+    }
+  }
+
+  if (configs.empty()) {
+    // Fallback: always emit at least the default config used by HandleRaggedDot
+    // (BLOCK_M=32, BLOCK_N=32, BLOCK_K=32, num_warps=4, num_stages=1).
+    auto config = std::make_unique<BackendConfig>();
+    *config->mutable_triton() =
+        TritonGemmConfig(32, 32, 32, /*num_stages=*/1, /*num_warps=*/4,
+                         /*num_ctas=*/1, /*is_tma_allowed=*/false)
+            .ToProto();
+    configs.push_back(std::move(config));
+  }
+  return configs;
 }
 
 absl::StatusOr<std::unique_ptr<HloModule>> TritonBackend::RunHloPasses(
@@ -345,6 +484,21 @@ bool TritonBackend::IsSupported(const HloInstruction& instr) {
   }
   const FusionBackendConfig& backend_config =
       gpu_config->fusion_backend_config();
+
+  // kTritonFusionKind ("__triton") may be used by multiple XTile fusion types.
+  // We support autotuning for kRaggedDot fusions specifically.
+  if (backend_config.kind() == kTritonFusionKind) {
+    const HloInstruction* ragged_dot_instr =
+        hlo_query::GetFirstInstructionWithOpcode(
+            *instr.fused_instructions_computation(), HloOpcode::kRaggedDot);
+    if (ragged_dot_instr != nullptr &&
+        instr.GetModule()
+            ->config()
+            .debug_options()
+            .xla_gpu_experimental_enable_tiling_propagation()) {
+      return true;
+    }
+  }
 
   // TODO: b/487920266 - sometimes we create fusions that can't be tiled.
   // Bail out here if that's the case.

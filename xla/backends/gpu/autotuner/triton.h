@@ -66,6 +66,13 @@ class TritonBackend : public GpuCodegenBackend {
   GetSupportedConfigsForDot(const HloInstruction* instr);
   absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
   GetSupportedConfigsForScaledDot(const HloInstruction* instr);
+  // Returns the set of BlockLevelFusionConfig candidates for a kRaggedDot
+  // instruction routed through the Triton XTile backend
+  // (kTritonFusionKind / "__triton").  The search space covers
+  // {16,32,64,128}³ block sizes, {4,8} num_warps, and {1,2} num_stages,
+  // pruned by the actual M/K/N dimension sizes.
+  absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
+  GetSupportedConfigsForRaggedDot(const HloInstruction* instr);
   absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
   GetOverriddenConfigs(const HloInstruction* instr);
 

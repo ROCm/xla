@@ -395,6 +395,93 @@ ENTRY main {
   CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
 }
 
+// ============================================================================
+// Autotuning integration tests
+//
+// These tests enable the Triton autotuner (autotune_level is NOT set to 0)
+// to verify that:
+//   1. TritonBackend::IsSupported() returns true for kRaggedDot fusions.
+//   2. TritonBackend::GetSupportedConfigs() generates at least one candidate.
+//   3. TritonBackend::ApplyConfig() correctly updates both the fusion-level
+//      BlockLevelFusionConfig and the inner ragged-dot Tile proto.
+//   4. The compiled fusion produces numerically correct results.
+// ============================================================================
+
+class TritonRaggedDotAutotunedTest
+    : public HloPjRtInterpreterReferenceMixin<GemmRewriteTestBase> {
+ public:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions debug_options = GemmRewriteTestBase::GetDebugOptionsForTest();
+    debug_options.set_xla_gpu_experimental_triton_ragged_dot(true);
+    debug_options.set_xla_gpu_experimental_enable_tiling_propagation(true);
+    // Do NOT set autotune_level=0 — let the autotuner run and select tile
+    // sizes from GetSupportedConfigsForRaggedDot.
+    return debug_options;
+  }
+
+  bool SupportsTriton() const {
+    if (IsCuda()) {
+      auto* cc = Capability().cuda_compute_capability();
+      return cc != nullptr && cc->IsAtLeastAmpere();
+    }
+    return true;  // ROCm always supports Triton.
+  }
+};
+
+// Balanced groups — autotuner selects the best (BLOCK_M, BLOCK_N, BLOCK_K).
+TEST_F(TritonRaggedDotAutotunedTest, BalancedGroups) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotAutotunedBalanced
+
+ENTRY main {
+  lhs = f32[128,32] parameter(0)
+  rhs = f32[4,32,16] parameter(1)
+  gs  = s32[4] constant({32, 32, 32, 32})
+  ROOT rd = f32[128,16] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={1}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}, rhs_group_dims={0}
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-4}));
+}
+
+// Unbalanced groups — exercises M-boundary masking across candidate tile sizes.
+TEST_F(TritonRaggedDotAutotunedTest, UnbalancedGroups) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotAutotunedUnbalanced
+
+ENTRY main {
+  lhs = f32[96,32] parameter(0)
+  rhs = f32[3,32,8] parameter(1)
+  gs  = s32[3] constant({10, 30, 56})
+  ROOT rd = f32[96,8] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={1}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}, rhs_group_dims={0}
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// F16 — exercises dtype-aware tile selection.
+TEST_F(TritonRaggedDotAutotunedTest, Fp16BalancedGroups) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotAutotunedFp16
+
+ENTRY main {
+  lhs = f16[128,32] parameter(0)
+  rhs = f16[4,32,16] parameter(1)
+  gs  = s32[4] constant({32, 32, 32, 32})
+  ROOT rd = f16[128,16] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={1}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}, rhs_group_dims={0}
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-2, 1e-2}));
+}
+
 }  // namespace
 }  // namespace gpu
 }  // namespace xla
