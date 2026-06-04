@@ -773,22 +773,23 @@ absl::StatusOr<int64_t> GetConvLoopIterationCount(
   const auto* conv =
       ::xla::Cast<HloConvolutionInstruction>(tiled_conv.hlo());
   const int64_t spatial_rank = conv->window().dimensions().size();
-  int64_t total = 1;
-  int64_t k_tile = 1;
+  const auto& dnums = conv->convolution_dimension_numbers();
+  int64_t iterations = 1;
   for (int64_t i = 0; i < spatial_rank; ++i) {
-    total *= conv->window().dimensions(i).size();
-    k_tile *= tiled_conv.operand(1)->tile_size(
-      conv->convolution_dimension_numbers().kernel_spatial_dimensions(i));
+    const int64_t spatial_axis = conv->window().dimensions(i).size();
+    const int64_t spatial_tile = tiled_conv.operand(1)->tile_size(
+        dnums.kernel_spatial_dimensions(i));
+    iterations *= CeilOfRatio(spatial_axis, spatial_tile);
   }
-  total *= conv->operand(0)->shape().dimensions(
-    conv->convolution_dimension_numbers().input_feature_dimension());
-  k_tile *= tiled_conv.operand(0)->tile_size(
-    conv->convolution_dimension_numbers().input_feature_dimension());
- 
-  TF_RET_CHECK(k_tile > 0)
-      << "Product of tile sizes of contracting dimensions must be positive, got " 
-      << k_tile << " for conv " << conv->ToShortString();
-  return CeilOfRatio(total, k_tile);
+  const int64_t input_feature_axis =
+      conv->operand(0)->shape().dimensions(dnums.input_feature_dimension());
+  const int64_t input_feature_tile =
+      tiled_conv.operand(0)->tile_size(dnums.input_feature_dimension());
+  iterations *= CeilOfRatio(input_feature_axis, input_feature_tile);
+  TF_RET_CHECK(iterations > 0)
+      << "Number of iterations over contracting dimensions must be positive, got " 
+      << iterations << " for conv " << conv->ToShortString();
+  return iterations;
 }
 
 absl::StatusOr<TensorValue> EmitConv(
