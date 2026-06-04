@@ -856,8 +856,20 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
         inner_tile_config.add_sizes(1);               // G sequential dim
         inner_tile_config.add_sizes(kDefaultBlockK);  // K sequential dim
       } else {
-        // kRaggedContracting: M=BLOCK_M per inner accumulation loop.
-        inner_tile_config.add_sizes(kDefaultBlockM);  // M sequential dim
+        // kRaggedContracting: sequential dims depend on persistent flag.
+        const bool persistent_contracting =
+            ragged_dot->GetModule()
+                ->config()
+                .debug_options()
+                .xla_gpu_experimental_triton_ragged_dot_persistent_contracting();
+        if (persistent_contracting) {
+          // Persistent: G=1 sequential (outer scan) + M=BLOCK_M sequential.
+          inner_tile_config.add_sizes(1);               // G sequential dim
+          inner_tile_config.add_sizes(kDefaultBlockM);  // M sequential dim
+        } else {
+          // Non-persistent: M=BLOCK_M inner accumulation only.
+          inner_tile_config.add_sizes(kDefaultBlockM);  // M sequential dim
+        }
       }
 
       // Build the fused computation: parameters + ragged_dot.
@@ -916,15 +928,27 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
         output_tile->add_sizes(kDefaultBlockM);
         output_tile->add_sizes(kDefaultBlockN);
       } else {
-        // kRaggedContracting: parallel output dims = [G=1, batch..., K, N].
-        // G=1 so each tile processes one group.
-        output_tile->add_sizes(1);  // G dim tile size = 1
-        for (int64_t b_dim : rd_dot_dims.lhs_batch_dimensions()) {
-          (void)b_dim;
-          output_tile->add_sizes(1);
+        // kRaggedContracting: persistent → [K, N]; non-persistent → [G=1, K,
+        // N].
+        const bool persistent_contracting =
+            ragged_dot->GetModule()
+                ->config()
+                .debug_options()
+                .xla_gpu_experimental_triton_ragged_dot_persistent_contracting();
+        if (persistent_contracting) {
+          // Grid = K_tiles × N_tiles; G is sequential (outer scan loop).
+          output_tile->add_sizes(kDefaultBlockK);  // K output tile
+          output_tile->add_sizes(kDefaultBlockN);  // N output tile
+        } else {
+          // Grid = G × K_tiles × N_tiles; G=1 per tile.
+          output_tile->add_sizes(1);  // G dim tile size = 1
+          for (int64_t b_dim : rd_dot_dims.lhs_batch_dimensions()) {
+            (void)b_dim;
+            output_tile->add_sizes(1);
+          }
+          output_tile->add_sizes(kDefaultBlockK);  // K output tile
+          output_tile->add_sizes(kDefaultBlockN);  // N output tile
         }
-        output_tile->add_sizes(kDefaultBlockK);  // K output tile
-        output_tile->add_sizes(kDefaultBlockN);  // N output tile
       }
 
       blk_cfg->set_num_warps(4);

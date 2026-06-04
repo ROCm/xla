@@ -966,6 +966,18 @@ message DebugOptions {
   // for a follow-up.
   optional bool xla_gpu_experimental_triton_ragged_dot = 513;
 
+  // When xla_gpu_experimental_triton_ragged_dot is true and the ragged dot is
+  // in kRaggedContracting mode, use the *persistent* schedule:
+  //   Grid = K_tiles × N_tiles programs (no G in the grid).
+  //   Each program runs a G sequential outer loop and writes one [K,N] output
+  //   tile per group g — analogous to the aiter tgmm_persistent_kernel.
+  //
+  // When false (default) the *non-persistent* schedule is used:
+  //   Grid = G × K_tiles × N_tiles programs.
+  //   Each program handles exactly one (g, k, n) output tile.
+  optional bool xla_gpu_experimental_triton_ragged_dot_persistent_contracting =
+      514;
+
   // If true, PTX compilation will fail if a kernel spills registers.
   // This is meant for debugging and only applies to CUDA PTX compilation.
   optional bool xla_gpu_fail_ptx_compilation_on_register_spilling = 353;

@@ -344,16 +344,33 @@ absl::Status TritonBackend::ApplyConfig(HloInstruction& instr,
       inner_tile.add_sizes(1);                              // G sequential
       inner_tile.add_sizes(triton_config_proto.block_k());  // K sequential
     } else {
-      // kRaggedContracting: parallel dims = [G=1, batch..., K, N].
-      // Sequential dim: M=block_m (ragged accumulation).
-      output_tile->add_sizes(1);  // G tile = 1
-      for (int64_t b_dim : dot_dims.lhs_batch_dimensions()) {
-        (void)b_dim;
-        output_tile->add_sizes(1);
+      // kRaggedContracting — persistent vs non-persistent schedule.
+      const bool persistent_apply =
+          instr.GetModule()
+              ->config()
+              .debug_options()
+              .xla_gpu_experimental_triton_ragged_dot_persistent_contracting();
+      if (persistent_apply) {
+        // Persistent: Grid = K_tiles × N_tiles.
+        // output_tile = [K, N] (no G, which is sequential outer loop).
+        // inner_tile  = [G=1, M=block_m] (G sequential + M sequential).
+        output_tile->add_sizes(triton_config_proto.block_k());  // K output
+        output_tile->add_sizes(triton_config_proto.block_n());  // N output
+        inner_tile.add_sizes(1);                                // G sequential
+        inner_tile.add_sizes(triton_config_proto.block_m());    // M sequential
+      } else {
+        // Non-persistent: Grid = G × K_tiles × N_tiles.
+        // output_tile = [G=1, batch..., K, N].
+        // inner_tile  = [M=block_m].
+        output_tile->add_sizes(1);  // G tile = 1
+        for (int64_t b_dim : dot_dims.lhs_batch_dimensions()) {
+          (void)b_dim;
+          output_tile->add_sizes(1);
+        }
+        output_tile->add_sizes(triton_config_proto.block_k());  // K output
+        output_tile->add_sizes(triton_config_proto.block_n());  // N output
+        inner_tile.add_sizes(triton_config_proto.block_m());    // M sequential
       }
-      output_tile->add_sizes(triton_config_proto.block_k());  // K output
-      output_tile->add_sizes(triton_config_proto.block_n());  // N output
-      inner_tile.add_sizes(triton_config_proto.block_m());    // M sequential
     }
 
     blk_cfg->set_num_warps(triton_config_proto.num_warps());

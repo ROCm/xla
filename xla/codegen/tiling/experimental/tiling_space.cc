@@ -45,6 +45,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/utils/hlo_traversal.h"
 #include "xla/shape.h"
@@ -91,6 +92,20 @@ void TilingSpace::AppendRTVar(const HloInstruction* hlo, int64_t operand_id,
       is_prefix_sum,
   });
   hlo_to_rt_var_[std::make_pair(hlo, operand_id)] = &rt_vars_.back();
+}
+
+void TilingSpace::OverrideParallelToSequential(const HloInstruction* hlo,
+                                               int64_t dim_position) {
+  auto it = hlo_to_dimension_.find(std::make_pair(hlo, dim_position));
+  CHECK(it != hlo_to_dimension_.end())
+      << "Dimension not found for " << HloPtrToString(hlo) << " at position "
+      << dim_position;
+  // Safe: dimensions_ is a non-const member; hlo_to_dimension_ stores pointers
+  // into it so const_cast is valid here.
+  DimensionInfo* mutable_dim = const_cast<DimensionInfo*>(it->second);
+  CHECK(mutable_dim->type == DimensionSemantics::kParallel)
+      << "Cannot override non-parallel dimension at position " << dim_position;
+  mutable_dim->type = DimensionSemantics::kSequential;
 }
 
 void TilingSpace::ProcessInstruction(const HloInstruction& hlo) {
@@ -223,27 +238,59 @@ void TilingSpace::ProcessRaggedDot(const HloInstruction& hlo) {
                 /*is_prefix_sum=*/false);
 
   } else {
-    // kRaggedContracting — G is in the output (output dim 0) → kParallel.
-    // Register M (ragged contracting) as kSequential inner accumulation.
-    // Shared by both persistent and non-persistent schedules.
-    AppendDimension(&hlo, /*dim_position=*/output_rank, M_total,
-                    DimensionSemantics::kSequential);
+    // kRaggedContracting — two variants controlled by the debug flag:
+    //
+    // NON-PERSISTENT (default):
+    //   G is kParallel (output dim 0, from grid).  Grid = G × K × N.
+    //   M sequential (inner accumulation); start_m computed as prefix sum.
+    //
+    // PERSISTENT (flag = true):
+    //   G is overridden from kParallel to kSequential (outer scan loop).
+    //   Grid = K × N.  M is still kSequential (inner accumulation).
+    //   Analogous to aiter tgmm_persistent_kernel.
+    const bool persistent =
+        hlo.GetModule()
+            ->config()
+            .debug_options()
+            .xla_gpu_experimental_triton_ragged_dot_persistent_contracting();
 
-    // group_size[g]: RTVar bounding the M sequential loop per group.
-    // sequential_dim_id = nullopt because G is kParallel (pid-derived).
-    AppendRTVar(&hlo, /*operand_id=*/2, group_sizes_hlo,
-                /*upper_bound=*/M_total,
-                /*sequential_dim_id=*/std::nullopt,
-                /*is_prefix_sum=*/false);
+    if (persistent) {
+      // --- Persistent kRaggedContracting ---
+      // Change G (output dim 0) from kParallel → kSequential so that K and N
+      // (output dims 1 and 2) are the only grid dimensions.
+      OverrideParallelToSequential(&hlo, /*dim_position=*/0);
+      const int64_t g_sequential_dim_id = GetDimensionInfo(hlo, 0).id.value();
 
-    // start_m[g]: prefix-sum RTVar for the absolute M offset.
-    // At emit time: sum(group_sizes[0..g-1]) where g is derived from pid.
-    // Needed for both persistent and non-persistent because G is always
-    // kParallel in the contracting mode (no loop-carried last_m exists).
-    AppendRTVar(&hlo, /*operand_id=*/-1, group_sizes_hlo,
-                /*upper_bound=*/M_total,
-                /*sequential_dim_id=*/std::nullopt,
-                /*is_prefix_sum=*/true);
+      // Register M as the second kSequential dim.
+      AppendDimension(&hlo, /*dim_position=*/output_rank, M_total,
+                      DimensionSemantics::kSequential);
+
+      // group_size[g]: array RTVar indexed by the G sequential loop IV.
+      AppendRTVar(&hlo, /*operand_id=*/2, group_sizes_hlo,
+                  /*upper_bound=*/M_total,
+                  /*sequential_dim_id=*/g_sequential_dim_id,
+                  /*is_prefix_sum=*/false);
+      // Note: no start_m RTVar for persistent — the emitter uses a
+      // loop-carried last_m iter_arg (same as kRaggedNonContracting).
+
+    } else {
+      // --- Non-persistent kRaggedContracting ---
+      // G remains kParallel.  Grid = G × K × N.
+      AppendDimension(&hlo, /*dim_position=*/output_rank, M_total,
+                      DimensionSemantics::kSequential);
+
+      // group_size[g]: RTVar bounding the M sequential loop per group.
+      AppendRTVar(&hlo, /*operand_id=*/2, group_sizes_hlo,
+                  /*upper_bound=*/M_total,
+                  /*sequential_dim_id=*/std::nullopt,
+                  /*is_prefix_sum=*/false);
+
+      // start_m[g]: prefix-sum RTVar for the absolute M offset.
+      AppendRTVar(&hlo, /*operand_id=*/-1, group_sizes_hlo,
+                  /*upper_bound=*/M_total,
+                  /*sequential_dim_id=*/std::nullopt,
+                  /*is_prefix_sum=*/true);
+    }
   }
 }
 
