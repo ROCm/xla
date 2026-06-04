@@ -642,16 +642,72 @@ absl::StatusOr<Tiles> PropagateTileToInputForRaggedDotOp(
       absl::c_count(lhs_contracting_dims, lhs_ragged_dim) > 0;
   const bool is_batch = absl::c_count(lhs_batch_dims, lhs_ragged_dim) > 0;
 
-  if (is_batch) {
-    return absl::UnimplementedError(
-        "PropagateTileToInput for kRaggedBatch is not yet implemented.");
-  }
-
   const Shape& lhs_shape = hlo.operand(0)->shape();
   const Shape& rhs_shape = hlo.operand(1)->shape();
   const int64_t lhs_rank = lhs_shape.dimensions().size();
   const int64_t rhs_rank = rhs_shape.dimensions().size();
   const int64_t output_rank = hlo.shape().dimensions().size();
+
+  if (is_batch) {
+    // kRaggedBatch: regular batched GEMM tiling.
+    // LHS [B_total, M, K]: B from output batch dims, M from non-contracting,
+    //                       K from sequential dim.
+    // RHS [B_total, K, N]: same B batch, K sequential, N non-contracting.
+    // gs  [G]: trivial tile (group_sizes not used in computation).
+
+    // K sequential dim tile(s).
+    SmallVector<DimTile, 1> k_tiles;
+    k_tiles.reserve(lhs_contracting_dims.size());
+    for (auto [index, _] : llvm::enumerate(lhs_contracting_dims)) {
+      k_tiles.push_back(
+          GetDimTile(tiling_space.GetDimensionInfo(hlo, output_rank + index),
+                     num_dims, ctx));
+    }
+
+    // Output dim ordering for kRaggedBatch: [B_total, M, N]
+    auto lhs_nc =
+        GetNonContractingDims(lhs_shape, lhs_batch_dims, lhs_contracting_dims);
+    CHECK_OK(lhs_nc);
+    auto rhs_nc =
+        GetNonContractingDims(rhs_shape, rhs_batch_dims, rhs_contracting_dims);
+    CHECK_OK(rhs_nc);
+
+    const int64_t num_batch = lhs_batch_dims.size();
+    const int64_t out_m_start = num_batch;
+    const int64_t out_n_start = out_m_start + lhs_nc.value().size();
+
+    // Build LHS tile.
+    SmallVector<DimTile> lhs_dim_tiles(lhs_rank);
+    for (auto [i, b] : llvm::enumerate(lhs_batch_dims)) {
+      lhs_dim_tiles[b] = output_tile.dim_tiles()[i];
+    }
+    for (auto [i, m] : llvm::enumerate(lhs_nc.value())) {
+      lhs_dim_tiles[m] = output_tile.dim_tiles()[out_m_start + i];
+    }
+    for (auto [lhs_k, k_tile] : llvm::zip(lhs_contracting_dims, k_tiles)) {
+      lhs_dim_tiles[lhs_k] = k_tile;
+    }
+
+    // Build RHS tile.
+    SmallVector<DimTile> rhs_dim_tiles(rhs_rank);
+    for (auto [i, b] : llvm::enumerate(rhs_batch_dims)) {
+      rhs_dim_tiles[b] = output_tile.dim_tiles()[i];
+    }
+    for (auto [rhs_k, k_tile] : llvm::zip(rhs_contracting_dims, k_tiles)) {
+      rhs_dim_tiles[rhs_k] = k_tile;
+    }
+    for (auto [i, n] : llvm::enumerate(rhs_nc.value())) {
+      rhs_dim_tiles[n] = output_tile.dim_tiles()[out_n_start + i];
+    }
+
+    // gs tile.
+    const int64_t G = hlo.operand(2)->shape().dimensions(0);
+    SmallVector<DimTile> gs_dim_tiles = {GetFullDimTile(G, ctx)};
+
+    return Tiles{output_tile.CloneWithNewDims(std::move(lhs_dim_tiles)),
+                 output_tile.CloneWithNewDims(std::move(rhs_dim_tiles)),
+                 output_tile.CloneWithNewDims(std::move(gs_dim_tiles))};
+  }
 
   // group_size[g] RTVar — always registered at operand_id=2.
   auto gs_rtvar_or = tiling_space.GetRTVarInfo(hlo, 2);

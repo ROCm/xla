@@ -1111,6 +1111,326 @@ ENTRY main {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
 }
 
+// ============================================================================
+// kRaggedBatch tests
+//
+// HLO shape: LHS [B_total, M, K], RHS [B_total, K, N], gs [G] → [B_total,M,N]
+//   lhs_batch_dims={0}, rhs_batch_dims={0}, lhs_ragged_dims={0}
+//
+// kRaggedBatch = batched GEMM where B_total = sum(group_sizes) and
+// group_sizes[g] batch elements belong to group g.
+// ============================================================================
+
+class TritonRaggedDotBatchTest
+    : public HloPjRtInterpreterReferenceMixin<GemmRewriteTestBase> {
+ public:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions debug_options = GemmRewriteTestBase::GetDebugOptionsForTest();
+    debug_options.set_xla_gpu_experimental_triton_ragged_dot(true);
+    debug_options.set_xla_gpu_experimental_enable_tiling_propagation(true);
+    debug_options.set_xla_gpu_autotune_level(0);
+    return debug_options;
+  }
+
+  bool SupportsTriton() const {
+    if (IsCuda()) {
+      auto* cc = Capability().cuda_compute_capability();
+      return cc != nullptr && cc->IsAtLeastAmpere();
+    }
+    return true;
+  }
+
+  void CheckHloAndMaybeRun(const char* hlo_text,
+                           const ErrorSpec& error_spec = ErrorSpec{1e-4,
+                                                                   1e-4}) {
+    MatchOptimizedHlo(hlo_text, R"(
+      ; CHECK:     kind=kCustom
+      ; CHECK-SAME: "__triton"
+    )");
+    if (SupportsTriton()) {
+      EXPECT_TRUE(RunAndCompare(hlo_text, error_spec));
+    } else {
+      GTEST_SKIP() << "Triton not available on this device.";
+    }
+  }
+};
+
+// Basic kRaggedBatch — balanced groups (2 groups, 4 batch elems each).
+// B_total=8, M=16, K=32, N=8, G=2.
+TEST_F(TritonRaggedDotBatchTest, BalancedGroups) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatch
+
+ENTRY main {
+  lhs = f32[8,16,32] parameter(0)
+  rhs = f32[8,32,8] parameter(1)
+  gs  = s32[2] constant({4, 4})
+  ROOT rd = f32[8,16,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-3, 1e-3});
+}
+
+// kRaggedBatch — unbalanced groups.
+TEST_F(TritonRaggedDotBatchTest, UnbalancedGroups) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchUnbalanced
+
+ENTRY main {
+  lhs = f32[5,16,9] parameter(0)
+  rhs = f32[5,9,8] parameter(1)
+  gs  = s64[2] constant({3, 2})
+  ROOT rd = f32[5,16,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-3, 1e-3});
+}
+
+// kRaggedBatch f16.
+TEST_F(TritonRaggedDotBatchTest, Fp16) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchFp16
+
+ENTRY main {
+  lhs = f16[16,64,9] parameter(0)
+  rhs = f16[16,9,8] parameter(1)
+  gs  = s64[4] constant({4, 2, 6, 4})
+  ROOT rd = f16[16,64,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
+// kRaggedBatch bf16.
+TEST_F(TritonRaggedDotBatchTest, Bf16) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchBf16
+
+ENTRY main {
+  lhs = bf16[8,16,32] parameter(0)
+  rhs = bf16[8,32,8] parameter(1)
+  gs  = s32[2] constant({4, 4})
+  ROOT rd = bf16[8,16,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
+// kRaggedBatch fp8 with f32 output.
+TEST_F(TritonRaggedDotBatchTest, Fp8F32Output) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchFp8
+
+ENTRY main {
+  lhs = f8e4m3fnuz[8,16,32] parameter(0)
+  rhs = f8e4m3fnuz[8,32,8] parameter(1)
+  gs  = s32[2] constant({4, 4})
+  ROOT rd = f32[8,16,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-1, 1e-1});
+}
+
+// kRaggedBatch column-major output [B, M, N]{1,2,0}.
+TEST_F(TritonRaggedDotBatchTest, OutputColumnMajor) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchColMajorOut
+
+ENTRY main {
+  lhs = f16[8,16,32] parameter(0)
+  rhs = f16[8,32,8] parameter(1)
+  gs  = s32[2] constant({4, 4})
+  ROOT rd = f16[8,16,8]{1,2,0} ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
+// kRaggedBatch column-major LHS [B, K, M]{0,1,2} with lhs_contracting=1.
+// LHS K is the inner dim — tests non-unit LHS K stride.
+TEST_F(TritonRaggedDotBatchTest, LhsColumnMajor) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchLhsColMajor
+
+ENTRY main {
+  lhs = f16[8,32,16]{0,1,2} parameter(0)
+  rhs = f16[8,32,8] parameter(1)
+  gs  = s32[2] constant({4, 4})
+  ROOT rd = f16[8,16,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={1}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
+// kRaggedBatch column-major RHS [B, N, K]{0,1,2} with rhs_contracting=2.
+TEST_F(TritonRaggedDotBatchTest, RhsColumnMajor) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchRhsColMajor
+
+ENTRY main {
+  lhs = f16[8,16,32] parameter(0)
+  rhs = f16[8,8,32]{0,1,2} parameter(1)
+  gs  = s32[2] constant({4, 4})
+  ROOT rd = f16[8,16,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={2},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
+// kRaggedBatch with s64 group_sizes.
+TEST_F(TritonRaggedDotBatchTest, S64GroupSizes) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchS64
+
+ENTRY main {
+  lhs = f32[8,16,32] parameter(0)
+  rhs = f32[8,32,8] parameter(1)
+  gs  = s64[2] constant({4, 4})
+  ROOT rd = f32[8,16,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-3, 1e-3});
+}
+
+// kRaggedBatch with multiple groups (4 groups).
+TEST_F(TritonRaggedDotBatchTest, FourGroups) {
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchFourGroups
+
+ENTRY main {
+  lhs = f32[16,64,9] parameter(0)
+  rhs = f32[16,9,8] parameter(1)
+  gs  = s64[4] constant({4, 2, 6, 4})
+  ROOT rd = f32[16,64,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-3, 1e-3});
+}
+
+// kRaggedBatch autotuner.
+class TritonRaggedDotBatchAutotunedTest
+    : public HloPjRtInterpreterReferenceMixin<GemmRewriteTestBase> {
+ public:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions debug_options = GemmRewriteTestBase::GetDebugOptionsForTest();
+    debug_options.set_xla_gpu_experimental_triton_ragged_dot(true);
+    debug_options.set_xla_gpu_experimental_enable_tiling_propagation(true);
+    return debug_options;
+  }
+  bool SupportsTriton() const {
+    if (IsCuda()) {
+      auto* cc = Capability().cuda_compute_capability();
+      return cc != nullptr && cc->IsAtLeastAmpere();
+    }
+    return true;
+  }
+};
+
+TEST_F(TritonRaggedDotBatchAutotunedTest, BalancedGroups) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchAutotuned
+
+ENTRY main {
+  lhs = f32[8,16,32] parameter(0)
+  rhs = f32[8,32,8] parameter(1)
+  gs  = s32[2] constant({4, 4})
+  ROOT rd = f32[8,16,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// kRaggedBatch autotuner — f16.
+TEST_F(TritonRaggedDotBatchAutotunedTest, Fp16) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchAutotunedFp16
+
+ENTRY main {
+  lhs = f16[16,64,9] parameter(0)
+  rhs = f16[16,9,8] parameter(1)
+  gs  = s64[4] constant({4, 2, 6, 4})
+  ROOT rd = f16[16,64,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-2, 1e-2}));
+}
+
+// kRaggedBatch autotuner — bf16.
+TEST_F(TritonRaggedDotBatchAutotunedTest, Bf16) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchAutotunedBf16
+
+ENTRY main {
+  lhs = bf16[8,16,32] parameter(0)
+  rhs = bf16[8,32,8] parameter(1)
+  gs  = s32[2] constant({4, 4})
+  ROOT rd = bf16[8,16,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-2, 1e-2}));
+}
+
+// kRaggedBatch autotuner — unbalanced groups.
+TEST_F(TritonRaggedDotBatchAutotunedTest, UnbalancedGroups) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotBatchAutotunedUnbalanced
+
+ENTRY main {
+  lhs = f32[5,16,9] parameter(0)
+  rhs = f32[5,9,8] parameter(1)
+  gs  = s64[2] constant({3, 2})
+  ROOT rd = f32[5,16,8] ragged-dot(lhs, rhs, gs),
+      lhs_batch_dims={0}, rhs_batch_dims={0},
+      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
 }  // namespace
 }  // namespace gpu
 }  // namespace xla

@@ -200,13 +200,21 @@ void TilingSpace::ProcessRaggedDot(const HloInstruction& hlo) {
   const bool is_contracting =
       absl::c_count(dot_dims.lhs_contracting_dimensions(), lhs_ragged_dim) > 0;
 
-  if (is_batch) {
-    // TODO(ragged_dot): implement kRaggedBatch.
-    return;
-  }
-
   const int64_t output_rank =
       static_cast<int64_t>(hlo.shape().dimensions().size());
+
+  if (is_batch) {
+    // kRaggedBatch: output [B_total, M, N] — all kParallel (from root).
+    // K contracting → kSequential.  Identical to ProcessDotLike.
+    for (auto [index, lhs_k_dim] :
+         llvm::enumerate(dot_dims.lhs_contracting_dimensions())) {
+      AppendDimension(
+          &hlo,
+          /*dim_position=*/output_rank + static_cast<int64_t>(index),
+          lhs_shape.dimensions(lhs_k_dim), DimensionSemantics::kSequential);
+    }
+    return;  // No RTVar needed — computation = regular batched dot.
+  }
 
   if (!is_contracting) {
     // kRaggedNonContracting — G is not in the output → persistent schedule.

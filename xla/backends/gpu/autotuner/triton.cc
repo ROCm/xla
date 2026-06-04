@@ -325,6 +325,8 @@ absl::Status TritonBackend::ApplyConfig(HloInstruction& instr,
     const bool is_contracting_apply =
         absl::c_count(dot_dims.lhs_contracting_dimensions(), lhs_ragged_dim) >
         0;
+    const bool is_batch_apply =
+        absl::c_count(dot_dims.lhs_batch_dimensions(), lhs_ragged_dim) > 0;
 
     BlockLevelFusionConfig* blk_cfg =
         backend_config.mutable_block_level_fusion_config();
@@ -332,7 +334,19 @@ absl::Status TritonBackend::ApplyConfig(HloInstruction& instr,
     auto* output_tile = blk_cfg->add_output_tiles();
     Tile inner_tile;
 
-    if (!is_contracting_apply) {
+    if (is_batch_apply) {
+      // kRaggedBatch: parallel dims = [B=1, M, N].
+      for (int64_t b_dim : dot_dims.lhs_batch_dimensions()) {
+        (void)b_dim;
+        output_tile->add_sizes(1);  // B tile = 1 per program
+      }
+      output_tile->add_sizes(triton_config_proto.block_m());
+      output_tile->add_sizes(triton_config_proto.block_n());
+      for (auto lhs_k : dot_dims.lhs_contracting_dimensions()) {
+        (void)lhs_k;
+        inner_tile.add_sizes(triton_config_proto.block_k());  // K sequential
+      }
+    } else if (!is_contracting_apply) {
       // kRaggedNonContracting: parallel dims = [batch..., M, N].
       // Sequential dims: G=1 (outer loop), K=block_k (inner K-loop).
       for (int64_t b_dim : dot_dims.lhs_batch_dimensions()) {

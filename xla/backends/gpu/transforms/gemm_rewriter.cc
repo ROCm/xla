@@ -848,10 +848,20 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       const bool is_contracting_hrd =
           absl::c_count(rd_dot_dims.lhs_contracting_dimensions(),
                         lhs_ragged_dim_hrd) > 0;
+      const bool is_batch_hrd =
+          absl::c_count(rd_dot_dims.lhs_batch_dimensions(),
+                        lhs_ragged_dim_hrd) > 0;
 
       // Sequential-dim tile sizes stored on the inner ragged_dot.
       Tile inner_tile_config;
-      if (!is_contracting_hrd) {
+      if (is_batch_hrd) {
+        // kRaggedBatch: batched GEMM [B,M,K]×[B,K,N]→[B,M,N].
+        // Sequential dims: K (inner contraction).
+        for (auto lhs_k : rd_dot_dims.lhs_contracting_dimensions()) {
+          (void)lhs_k;
+          inner_tile_config.add_sizes(kDefaultBlockK);  // K sequential
+        }
+      } else if (!is_contracting_hrd) {
         // kRaggedNonContracting: G=1 per outer loop iter, K=BLOCK_K inner.
         inner_tile_config.add_sizes(1);               // G sequential dim
         inner_tile_config.add_sizes(kDefaultBlockK);  // K sequential dim
@@ -918,7 +928,16 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
           fusion_config->mutable_block_level_fusion_config();
 
       auto* output_tile = blk_cfg->add_output_tiles();
-      if (!is_contracting_hrd) {
+      if (is_batch_hrd) {
+        // kRaggedBatch: parallel output dims = [B=1, M, N].
+        // B=1 so each tile processes one batch element.
+        for (int64_t b_dim : rd_dot_dims.lhs_batch_dimensions()) {
+          (void)b_dim;
+          output_tile->add_sizes(1);  // B tile = 1 per program
+        }
+        output_tile->add_sizes(kDefaultBlockM);  // M
+        output_tile->add_sizes(kDefaultBlockN);  // N
+      } else if (!is_contracting_hrd) {
         // kRaggedNonContracting: parallel output dims = [batch..., M, N].
         // Batch dims use tile size 1 so each tile processes one batch element.
         for (int64_t b_dim : rd_dot_dims.lhs_batch_dimensions()) {
