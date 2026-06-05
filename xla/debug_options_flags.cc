@@ -347,6 +347,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_experimental_gemm_fusion_v2(false);
   opts.set_xla_gpu_verify_triton_fusion_numerics(false);
   opts.set_xla_gpu_experimental_enable_tiling_propagation(false);
+  opts.set_xla_gpu_experimental_triton_ragged_dot(false);
+  opts.set_xla_gpu_experimental_triton_ragged_dot_persistent_contracting(false);
 
   // Moving reduce-scatter out of while loops can increase memory footprint, so
   // turning it off by default.
@@ -3184,6 +3186,23 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
           &DebugOptions::set_xla_gpu_experimental_enable_tiling_propagation),
       debug_options->xla_gpu_experimental_enable_tiling_propagation(),
       "If true, enable experimental tiling propagation."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_triton_ragged_dot",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_experimental_triton_ragged_dot),
+      debug_options->xla_gpu_experimental_triton_ragged_dot(),
+      "If true, route kRaggedDot through the experimental Triton XTile "
+      "backend instead of hipBLASLt GroupedGEMM."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_triton_ragged_dot_persistent_contracting",
+      bool_setter_for(
+          &DebugOptions::
+              set_xla_gpu_experimental_triton_ragged_dot_persistent_contracting),
+      debug_options
+          ->xla_gpu_experimental_triton_ragged_dot_persistent_contracting(),
+      "If true, use the persistent kRaggedContracting schedule for Triton "
+      "ragged-dot (Grid = K×N; G sequential outer loop with inline writes). "
+      "Has no effect on kRaggedNonContracting."));
 
   auto setter_for_xla_gpu_detect_nan =
       [debug_options, detection_mode](const std::string& value) {
