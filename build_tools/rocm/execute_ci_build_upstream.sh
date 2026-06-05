@@ -13,8 +13,6 @@ EXCLUDED_TESTS=(
     "F8E5M2Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_*"
     "CubSort/CubSortPairsTest*"
     "StreamExecutorGpuClientTest.GetAbiVersion"
-    "DotF64F64F64Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_f64_f64_f64_with_lhs_f64_rhs_f64_output_f64_from_cc_0_0_rocm_60_no_restriction_c_16_nc_2"
-    "DotF64F64F64Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_f64_f64_f64_with_lhs_f64_rhs_f64_output_f64_from_cc_0_0_rocm_60_no_restriction_c_32_nc_32"
     "DotOperationTestWithCublasLt_F16F32F64CF64/2*"
     "DotOperationTestWithCublasLt_F16F32F64CF64/1*"
     "DotOperationTestForBatchMatMul/1*"
