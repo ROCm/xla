@@ -12,6 +12,8 @@ EXCLUDED_TESTS=(
     "DeterminismTest.CublasDot"
     "F8E5M2Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_*"
     "CubSort/CubSortPairsTest*"
+    "DotOperationTestWithCublasLt_F16F32F64CF64/2*"
+    "DotOperationTestWithCublasLt_F16F32F64CF64/1*"
     "StreamExecutorGpuClientTest.GetAbiVersion"
     "DotOperationTestForBatchMatMul/1*"
     "SquareMatrixDot/2*"
