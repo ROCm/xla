@@ -198,10 +198,31 @@ llvm::SmallVector<int64_t> GetParallelDimensionsPermutation(
           n_dim_info.type != TilingSpace::DimensionSemantics::kParallel) {
         return {};
       }
+      // Compute the parallel-position index (rank among kParallel dims only)
+      // for K and N.  We must NOT use the global dimension IDs here because
+      // for persistent kRaggedContracting G is kSequential, so the permutation
+      // has size num_parallel_dims (= 2 for K+N), but G's global ID is still 0
+      // which shifts K to global ID 1 and N to global ID 2.  Using global IDs
+      // directly would index the size-2 permutation at position 2 → OOB crash.
+      int64_t k_parallel_pos = -1, n_parallel_pos = -1;
+      {
+        int64_t pos = 0;
+        for (const auto& d : tiling_space.dimensions()) {
+          if (d.type == TilingSpace::DimensionSemantics::kParallel) {
+            if (d.id == k_dim_info.id) k_parallel_pos = pos;
+            if (d.id == n_dim_info.id) n_parallel_pos = pos;
+            ++pos;
+          }
+        }
+      }
+      if (k_parallel_pos < 0 || n_parallel_pos < 0 ||
+          k_parallel_pos >= num_parallel_dims ||
+          n_parallel_pos >= num_parallel_dims) {
+        return {};  // safety check
+      }
       llvm::SmallVector<int64_t> permutation(num_parallel_dims);
       std::iota(permutation.begin(), permutation.end(), 0);
-      std::swap(permutation[k_dim_info.id.value()],
-                permutation[n_dim_info.id.value()]);
+      std::swap(permutation[k_parallel_pos], permutation[n_parallel_pos]);
       return permutation;
     }
   }

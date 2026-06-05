@@ -983,6 +983,51 @@ ENTRY main {
   CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
 }
 
+TEST_F(TritonRaggedDotPersistentContractingTest, ScheduleSwap_LargeN) {
+  const char* hlo_text = R"(
+HloModule PersistentContractingScheduleSwap_LargeN
+
+ENTRY main {
+  lhs = f16[256,192] parameter(0)
+  rhs = f16[256,512] parameter(1)
+  gs  = s32[8] constant({32, 32, 32, 32, 32, 32, 32, 32})
+  ROOT rd = f16[8,192,512] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0}, lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
+TEST_F(TritonRaggedDotPersistentContractingTest, ScheduleSwap_LargeK) {
+  const char* hlo_text = R"(
+HloModule PersistentContractingScheduleSwap_LargeK
+
+ENTRY main {
+  lhs = f16[256,512] parameter(0)
+  rhs = f16[256,192] parameter(1)
+  gs  = s32[8] constant({32, 32, 32, 32, 32, 32, 32, 32})
+  ROOT rd = f16[8,512,192] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0}, lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
+TEST_F(TritonRaggedDotPersistentContractingTest, ScheduleSwap_ModerateNK) {
+  const char* hlo_text = R"(
+HloModule PersistentContractingScheduleSwap_ModerateNK
+
+ENTRY main {
+  lhs = f16[256,64] parameter(0)
+  rhs = f16[256,96] parameter(1)
+  gs  = s32[8] constant({32, 32, 32, 32, 32, 32, 32, 32})
+  ROOT rd = f16[8,64,96] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0}, lhs_ragged_dims={0}
+}
+)";
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
+}
+
 // Persistent with s64 group_sizes.
 TEST_F(TritonRaggedDotPersistentContractingTest, S64GroupSizes) {
   const char* hlo_text = R"(
