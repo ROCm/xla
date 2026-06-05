@@ -18,6 +18,10 @@ limitations under the License.
 
 #include <string>
 
+#if !defined(PLATFORM_WINDOWS)
+#include <dlfcn.h>
+#endif
+
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -158,6 +162,30 @@ absl::StatusOr<void*> GetNvInferPluginDsoHandle() {
 #endif
 }
 
+absl::StatusOr<void*> GetAmdSmiDsoHandle() {
+#if defined(PLATFORM_WINDOWS)
+  return GetDsoHandle("amd_smi", "26");
+#else
+  // amd_smi embeds a copy of rocm_smi, so it exports the same `amd::smi::` C++
+  // symbols as the librocm_smi64 that XLA links (for PCIe/xgmi queries). Opening
+  // it with RTLD_LOCAL keeps its symbols out of the global namespace (preventing
+  // them from interposing the linked rocm_smi). RTLD_DEEPBIND additionally makes
+  // amd_smi resolve its own internal `amd::smi::` calls against its own copy
+  // rather than the already-global rocm_smi copy; without it, amd_smi silently
+  // executes rocm_smi's older gpu_metrics parser and rejects the v1.9 table that
+  // current MI300/MI350 kernels emit.
+  void* handle =
+      dlopen("libamd_smi.so.26", RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
+  if (handle == nullptr) {
+    const char* err = dlerror();
+    return absl::Status(absl::StatusCode::kFailedPrecondition,
+                        absl::StrCat("Could not load libamd_smi.so.26; dlerror: ",
+                                     err ? err : "(null)"));
+  }
+  return handle;
+#endif
+}
+
 }  // namespace DsoLoader
 
 namespace CachedDsoLoader {
@@ -203,6 +231,11 @@ absl::StatusOr<void*> GetCuptiDsoHandle() {
 
 absl::StatusOr<void*> GetCudnnDsoHandle() {
   static auto result = new auto(DsoLoader::GetCudnnDsoHandle());
+  return *result;
+}
+
+absl::StatusOr<void*> GetAmdSmiDsoHandle() {
+  static auto result = new auto(DsoLoader::GetAmdSmiDsoHandle());
   return *result;
 }
 
