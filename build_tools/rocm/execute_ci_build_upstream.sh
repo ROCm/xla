@@ -76,7 +76,6 @@ done
     -//xla/backends/gpu/autotuner:triton_test_amdgpu_any \
     -//xla/tests:iota_test_amdgpu_any \
     -//xla/backends/gpu/tests:sorting_test_amdgpu_any \
-    -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any \
-    -//xla/tests:dot_operation_autotune_disabled_test_amdgpu_any \
+    -//xla/hlo/builder/lib:self_adjoint_eig_test_amdgpu_any
     # TODO: skippped tests from https://wardite.cluster.engflow.com/invocations/default/f6e1d975-7f66-4b51-8430-d79e0ab0493a
     # TODO: skipped tests from https://wardite.cluster.engflow.com/invocation/8f90cfa8-a7e5-4ef9-8d4f-3a75e90b1cc3 
