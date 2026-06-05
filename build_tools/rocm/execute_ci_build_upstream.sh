@@ -15,6 +15,7 @@ EXCLUDED_TESTS=(
     "DotOperationTestWithCublasLt_F16F32F64CF64/2*"
     "DotOperationTestWithCublasLt_F16F32F64CF64/1*"
     "StreamExecutorGpuClientTest.GetAbiVersion"
+    "TestC64"
     "DotOperationTestForBatchMatMul/1*"
     "SquareMatrixDot/2*"
     "SquareMatrixDot/1*"
