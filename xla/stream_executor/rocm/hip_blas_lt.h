@@ -13,7 +13,10 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_ROCM_HIP_BLAS_LT_H_
 #define XLA_STREAM_EXECUTOR_ROCM_HIP_BLAS_LT_H_
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <utility>
 
 #include "absl/base/thread_annotations.h"
@@ -91,18 +94,23 @@ class BlasLt : public gpu::BlasLt {
     gpu::ScaleMode scale_mode_;
   };
 
-  struct MatmulPlan : public gpu::BlasLt::MatmulPlan {
-    MatmulPlan(MatmulDesc&& op_desc, MatrixLayout&& a_desc,
-               MatrixLayout&& b_desc, MatrixLayout&& c_desc,
-               MatrixLayout&& d_desc, xla::complex128 alpha, double beta,
+  class MatmulPlan : public gpu::BlasLt::MatmulPlan {
+   public:
+    friend class BlasLt;
+    // We use a fixed-size array to store the alpha and beta values which can
+    // fit all supported scale types.
+    constexpr static size_t kMaxScaleBytes = 16;
+
+    MatmulPlan(const BlasLt& blas_lt, MatmulDesc&& op_desc,
+               MatrixLayout&& a_desc, MatrixLayout&& b_desc,
+               MatrixLayout&& c_desc, MatrixLayout&& d_desc,
                bool must_swap_operands)
-        : op_desc_(std::move(op_desc)),
+        : blas_lt_(blas_lt),
+          op_desc_(std::move(op_desc)),
           a_desc_(std::move(a_desc)),
           b_desc_(std::move(b_desc)),
           c_desc_(std::move(c_desc)),
           d_desc_(std::move(d_desc)),
-          alpha_(alpha),
-          beta_(beta),
           must_swap_operands_(must_swap_operands) {}
 
     ~MatmulPlan() override = default;
@@ -112,34 +120,33 @@ class BlasLt : public gpu::BlasLt {
         blas::ProfileResult* profile_result) const override;
 
     absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
-        const Stream* stream, size_t max_algorithm_count,
-        size_t max_workspace_size) const override;
+        size_t max_algorithm_count, size_t max_workspace_size) const override;
 
     absl::Status SetAlgorithm(const MatmulAlgorithm& algorithm) override {
-      algorithm_ = algorithm;
+      auto palgo = std::any_cast<hipblasLtMatmulAlgo_t>(&algorithm.opaque_algo);
+      if (palgo == nullptr) {
+        return absl::InternalError("Invalid algorithm type!");
+      }
+      algorithm_ = *palgo;
+      workspace_size_ = algorithm.workspace_size;
       return absl::OkStatus();
     }
 
-   protected:
-    absl::Status DoMatmul(Stream* stream, const void* alpha, const void* beta,
-                          const gpu::BlasLt::MemoryArgs& args,
-                          blas::ProfileResult* profile_result) const;
-
    private:
-    // TODO(cjfj): Add consistency checks for types, shapes, etc.?
+    const BlasLt& blas_lt_;
     MatmulDesc op_desc_;
     MatrixLayout a_desc_;
     MatrixLayout b_desc_;
     MatrixLayout c_desc_;
     MatrixLayout d_desc_;
-    xla::complex128 alpha_;
-    double beta_;
+    alignas(16) std::array<uint8_t, kMaxScaleBytes> alpha_, beta_;
     bool must_swap_operands_;
-    std::optional<MatmulAlgorithm> algorithm_;  // selected algorithm
-  };                                            // class MatmulPlan
+    mutable std::optional<hipblasLtMatmulAlgo_t> algorithm_;
+    size_t workspace_size_ = 0;
+  };  // class MatmulPlan
 
-  explicit BlasLt(StreamExecutor* parent)
-      : parent_(parent), blas_lt_(nullptr, hipblasLtDestroy) {}
+  explicit BlasLt(StreamExecutor* executor)
+      : executor_(executor), handle_(nullptr, hipblasLtDestroy) {}
 
   absl::Status Init() override;
 
@@ -149,9 +156,9 @@ class BlasLt : public gpu::BlasLt {
   ~BlasLt() override = default;
 
  private:
-  StreamExecutor* parent_;
+  StreamExecutor* executor_;
   mutable absl::Mutex mu_;
-  Owned<hipblasLtHandle_t> blas_lt_ ABSL_GUARDED_BY(mu_);
+  Owned<hipblasLtHandle_t> handle_ ABSL_GUARDED_BY(mu_);
 };
 
 }  // namespace rocm

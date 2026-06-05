@@ -68,7 +68,7 @@ class CublasLtMatmulThunk : public Thunk {
   absl::Status ExecuteOnStreamInternal(se::Stream* stream,
                                        const ExecuteParams& params);
   absl::StatusOr<se::gpu::BlasLt::MatmulPlan*> GetCachedMatmulPlan(
-      const ExecuteParams& params);
+      se::Stream* stream);
 
   GemmConfig gemm_config_;
   se::gpu::BlasLt::Epilogue epilogue_;

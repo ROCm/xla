@@ -111,12 +111,12 @@ limitations under the License.
 #include "xla/stream_executor/trace_command_buffer_factory.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/types.h"  // IWYU pragma: keep
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/profiler/lib/scoped_annotation.h"
-#include "xla/tsl/platform/status_macros.h"
 
 namespace xla::gpu {
 
@@ -1067,7 +1067,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> CublasLtCmd::Record(
     se::CommandBuffer* command_buffer) {
   // This call is required to make sure matmul plan is already created and
   // cached before recording the command buffer.
-  TF_RETURN_IF_ERROR(GetCachedMatmulPlan(execute_params).status());
+  TF_RETURN_IF_ERROR(GetCachedMatmulPlan(execute_params.stream).status());
 
   VLOG(5) << "CublasLtCmd:";
   VLOG(5) << "  a_buffer: " << a_.slice.ToString();

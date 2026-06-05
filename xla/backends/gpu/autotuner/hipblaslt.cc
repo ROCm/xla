@@ -214,12 +214,11 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
     TF_ASSIGN_OR_RETURN(BlasLt::Epilogue epilogue,
                         AsBlasLtEpilogue(backend_config.epilogue()));
 
-    TF_ASSIGN_OR_RETURN(std::unique_ptr<se::Stream> stream,
-                        stream_executor()->CreateStream());
+    TF_ASSIGN_OR_RETURN(BlasLt * blas_lt,
+                        se::gpu::BlasLt::Get(stream_executor()));
 
-    TF_ASSIGN_OR_RETURN(
-        std::unique_ptr<BlasLt::MatmulPlan> plan,
-        se::gpu::BlasLt::GetMatmulPlan(stream.get(), gemm_config, epilogue));
+    TF_ASSIGN_OR_RETURN(BlasLt::MatmulPlanPtr plan,
+                        blas_lt->GetMatmulPlan(gemm_config, epilogue));
 
     const Shape& output_shape = instr.shape();
     if (!output_shape.IsTuple() || output_shape.tuple_shapes().empty()) {
@@ -232,8 +231,7 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
 
     TF_ASSIGN_OR_RETURN(
         std::vector<BlasLt::MatmulAlgorithm> algorithms,
-        plan->GetAlgorithms(stream.get(), GemmConfig::kNumAlgorithms,
-                            workspace_size));
+        plan->GetAlgorithms(GemmConfig::kNumAlgorithms, workspace_size));
     int num_algorithms = algorithms.size();
     std::vector<std::unique_ptr<BackendConfig>> configs;
     configs.reserve(num_algorithms);
@@ -277,10 +275,10 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
       return std::vector<std::unique_ptr<BackendConfig>>();
     }
 
-    TF_ASSIGN_OR_RETURN(std::unique_ptr<se::Stream> stream,
-                        stream_executor()->CreateStream());
-    auto plan_or = se::gpu::BlasLt::GetMatmulPlan(stream.get(), *gemm_config_or,
-                                                  BlasLt::Epilogue::kDefault);
+    TF_ASSIGN_OR_RETURN(BlasLt * blas_lt,
+                        se::gpu::BlasLt::Get(stream_executor()));
+    auto plan_or =
+        blas_lt->GetMatmulPlan(*gemm_config_or, BlasLt::Epilogue::kDefault);
     if (!plan_or.ok()) {
       LOG(WARNING) << "hipBLASLt MX: GetMatmulPlan failed: "
                    << plan_or.status();
@@ -290,8 +288,7 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
     int64_t workspace_size = GemmConfig::kGFX950Workspace;
     TF_ASSIGN_OR_RETURN(
         std::vector<BlasLt::MatmulAlgorithm> algorithms,
-        (*plan_or)->GetAlgorithms(stream.get(), GemmConfig::kNumAlgorithms,
-                                  workspace_size));
+        (*plan_or)->GetAlgorithms(GemmConfig::kNumAlgorithms, workspace_size));
     if (algorithms.empty()) {
       LOG(WARNING) << "hipBLASLt MX: no algorithms found for scaled dot.";
       return std::vector<std::unique_ptr<BackendConfig>>();
