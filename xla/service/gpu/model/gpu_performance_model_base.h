@@ -149,7 +149,8 @@ class GpuPerformanceModelBase {
   };
 
   // Estimated values in the absence of easy ways to query them.
-  static constexpr absl::Duration kKernelLaunchOverhead = absl::Microseconds(1);
+  static constexpr absl::Duration kKernelLaunchOverhead =
+      absl::Microseconds(2.5);
   static constexpr absl::Duration kNcclKernelLaunchOverhead =
       absl::Microseconds(5);
   static constexpr float kL2CacheSpeedup = 2.5;
