@@ -100,7 +100,10 @@ cc_library(
         "%{rocm_root}/include/**",
         "%{rocm_root}/lib/llvm/lib/**/*.h",
     ]),
-    defines = ["MIOPEN_BETA_API=1"],
+    defines = [
+        "MIOPEN_BETA_API=1",
+        "__HIP_PLATFORM_AMD__",
+    ],
     include_prefix = "rocm",
     strip_include_prefix = "%{rocm_root}",
     visibility = ["//visibility:public"],
