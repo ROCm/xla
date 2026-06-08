@@ -644,17 +644,14 @@ absl::Status BlasLt::MatmulPlan::ExecuteOnStream(
     return absl::InternalError(
         "Algorithm must be set before calling ExecuteOnStream!");
   }
-  DeviceAddressBase a = args.a, b = args.b;
-  DeviceAddressBase a_scale = args.a_scale, b_scale = args.b_scale;
+  auto a_size = args.a.size(), b_size = args.b.size();
   if (must_swap_operands_) {
-    std::swap(a, b);
-    std::swap(a_scale, b_scale);
+    std::swap(a_size, b_size);
   }
-
-  absl::Status status =
-      blas_lt_.executor_->RecordApiTrace(StreamExecutor::GemmCallTrace{
-          StreamExecutor::GemmCallTrace::GemmType::kBlasLt, 0, a.size(),
-          b.size()});
+  blas_lt_.executor_
+      ->RecordApiTrace(StreamExecutor::GemmCallTrace{
+          StreamExecutor::GemmCallTrace::GemmType::kBlasLt, 0, a_size, b_size})
+      .IgnoreError();
 
   std::unique_ptr<EventBasedTimer> timer;
   if (profile_result != nullptr) {
