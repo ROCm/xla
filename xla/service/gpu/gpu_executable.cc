@@ -37,6 +37,7 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/strings/match.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
@@ -1469,6 +1470,259 @@ absl::Status GpuExecutable::VerboseAllocationError(absl::Status s) {
                                           debug_buffer_assignment_show_max_));
 }
 
+namespace {
+
+// Measures, once per device, the break-even slice size below which refreshing a
+// command-buffer slice with a device-to-device copy is cheaper than a VA remap
+// (hipMemUnmap/hipMemMap/hipMemSetAccess).
+//
+// The remap cost C is ~fixed per call (driver round-trip, page-table update,
+// TLB/IOMMU flush, peer-access propagation) and does not scale with byte size
+// for sub-granule slices, while a bidirectional copy of `size` bytes costs
+// 2*size/bw. Copy therefore wins exactly when 2*size/bw < C, i.e.
+// size < C*bw/2. We MEASURE both terms on this device + ROCm driver -- C as the
+// median of real unmap/map/setaccess round-trips on a probe allocation, and bw
+// as a real D2D copy -- so the cutoff is self-calibrating instead of a guess.
+// Returns the break-even size in bytes, or an error (caller falls back).
+absl::StatusOr<uint64_t> MeasureCopyVsRemapBreakeven(
+    se::StreamExecutor* executor, se::DeviceAddressVmmAllocator* vmm_allocator,
+    se::Stream* stream, uint64_t granularity) {
+  const int ordinal = executor->device_ordinal();
+  const uint64_t probe = granularity > 0 ? granularity : uint64_t{65536};
+
+  // --- C: median cost of one unmap+map+setaccess round-trip. ---
+  ASSIGN_OR_RETURN(auto probe_buf,
+                   vmm_allocator->Allocate(ordinal, probe,
+                                           /*retry_on_failure=*/true,
+                                           /*memory_space=*/0));
+  se::DeviceAddressBase probe_addr = probe_buf.cref();
+  se::MemoryAllocation* raw =
+      vmm_allocator->GetRawAllocation(ordinal, probe_addr);
+  if (raw == nullptr) {
+    return Internal("calibration: probe allocation has no raw handle");
+  }
+  ASSIGN_OR_RETURN(std::unique_ptr<se::MemoryReservation> resv,
+                   vmm_allocator->CreateReservation(executor, probe));
+  ASSIGN_OR_RETURN(
+      se::MemoryReservation::ScopedMapping mapping,
+      resv->MapTo(/*reservation_offset=*/0, /*allocation_offset=*/0, probe,
+                  *raw));
+
+  const se::MemoryReservation::RemappingDescriptor desc{
+      /*reservation_offset=*/0, /*allocation_offset=*/0, probe, raw,
+      /*remap_required=*/true};
+  auto remap_once = [&]() -> absl::Status {
+    absl::StatusOr<se::MemoryReservation::ScopedMapping> r =
+        std::move(mapping).Remap(absl::MakeSpan(&desc, 1));
+    if (!r.ok()) return r.status();
+    mapping = std::move(*r);
+    return absl::OkStatus();
+  };
+  for (int i = 0; i < 3; ++i) RETURN_IF_ERROR(remap_once());  // warmup
+  constexpr int kIters = 50;
+  std::vector<double> remap_us;
+  remap_us.reserve(kIters);
+  for (int i = 0; i < kIters; ++i) {
+    const absl::Time t0 = absl::Now();
+    RETURN_IF_ERROR(remap_once());
+    remap_us.push_back(absl::ToDoubleMicroseconds(absl::Now() - t0));
+  }
+  std::sort(remap_us.begin(), remap_us.end());
+  const double c_us = remap_us[remap_us.size() / 2];  // median
+  // Reject an implausible remap measurement (driver hiccup, contended box, a
+  // platform where this probe is meaningless) and let the caller fall back to
+  // the bandwidth-only estimate. Bounds are deliberately wide -- they only
+  // catch pathological samples, not normal cross-device variation.
+  constexpr double kMinRemapUs = 0.05;
+  constexpr double kMaxRemapUs = 5000.0;
+  if (!(c_us > kMinRemapUs && c_us < kMaxRemapUs)) {
+    return Internal("calibration: implausible remap cost %.3f us", c_us);
+  }
+
+  // --- bw: effective device-to-device copy bandwidth. ---
+  constexpr uint64_t kCopyBytes = 8 * 1024 * 1024;
+  se::DeviceAddressBase src = executor->Allocate(kCopyBytes);
+  se::DeviceAddressBase dst = executor->Allocate(kCopyBytes);
+  double bw = 0.0;
+  if (!src.is_null() && !dst.is_null()) {
+    if (stream->Memcpy(&dst, src, kCopyBytes).ok() &&
+        stream->BlockHostUntilDone().ok()) {  // warmup + sync
+      constexpr int kCopyIters = 20;
+      const absl::Time t0 = absl::Now();
+      absl::Status st;
+      for (int i = 0; i < kCopyIters && st.ok(); ++i) {
+        st = stream->Memcpy(&dst, src, kCopyBytes);
+      }
+      if (st.ok() && stream->BlockHostUntilDone().ok()) {
+        const double secs = absl::ToDoubleSeconds(absl::Now() - t0);
+        if (secs > 0) bw = static_cast<double>(kCopyBytes) * kCopyIters / secs;
+      }
+    }
+  }
+  if (!src.is_null()) executor->Deallocate(&src);
+  if (!dst.is_null()) executor->Deallocate(&dst);
+  if (bw <= 0) {
+    bw = static_cast<double>(
+        executor->GetDeviceDescription().memory_bandwidth());
+  }
+  if (bw <= 0) return Internal("calibration: unknown copy bandwidth");
+
+  // Copy wins when 2*size/bw < C  =>  size < C*bw/2.
+  double breakeven = (c_us * 1e-6) * bw / 2.0;
+  // Safety rail (not a tuning knob): clamp to a generous absolute ceiling so a
+  // wild measurement can never pull large stable tensors into the per-step copy
+  // set. The aggregate free-memory cap in the caller is the real bound; this
+  // just caps a single pathological value. 256 MiB is far above any
+  // scalar/scale/metric slice on any current AMD part.
+  constexpr double kMaxBreakevenBytes = 256.0 * 1024 * 1024;
+  if (breakeven < 0) breakeven = 0;
+  if (breakeven > kMaxBreakevenBytes) breakeven = kMaxBreakevenBytes;
+  const uint64_t breakeven_bytes = static_cast<uint64_t>(breakeven);
+  XLA_LOG_DEVICE(INFO, ordinal) << absl::StreamFormat(
+      "VA remapping calibration: remap=%.2f us/call copy_bw=%.0f GB/s "
+      "breakeven=%d B",
+      c_us, bw / 1e9, breakeven_bytes);
+  return breakeven_bytes;
+}
+
+}  // namespace
+
+GpuExecutable::VaRanges::~VaRanges() {
+  // DeviceAddressBase has no RAII, so free the shadow buffers we allocated for
+  // the copy-vs-remap path here; otherwise executables that are created and
+  // destroyed over an application's lifetime leak device memory. The other
+  // members (va_reservation, scoped_mapping, unmap_event) are RAII and clean
+  // themselves up.
+  if (executor != nullptr) {
+    for (auto& [index, shadow] : small_shadow) {
+      executor->Deallocate(&shadow);
+    }
+  }
+}
+
+uint64_t GpuExecutable::ComputeCopyThreshold(
+    const BufferAllocations& buffer_allocations,
+    se::DeviceAddressVmmAllocator* vmm_allocator, se::StreamExecutor* executor,
+    se::Stream* stream, uint64_t granularity) const {
+  // Control via env XLA_VMM_TMP_COPY_THRESHOLD (default = auto):
+  //   "0"  -> disabled: every slice stays on the remap path (original path).
+  //   "1"  -> auto: derive the byte cutoff from this device's measured remap
+  //           cost / copy bandwidth AND the memory currently free, so the
+  //           shadow pool is always guaranteed to fit (no searching, no OOM).
+  //   ">1" -> force exactly that byte cutoff (explicit override / sweeps).
+  // We reserve "1" for auto because a literal 1-byte cutoff would admit nothing.
+  // Parsed once per VA range (the caller caches the result), so there is no
+  // per-step getenv. A non-numeric value is reported and falls back to auto
+  // rather than silently disabling the optimization.
+  uint64_t mode = 1;  // unset -> auto.
+  if (const char* e = std::getenv("XLA_VMM_TMP_COPY_THRESHOLD"); e != nullptr) {
+    if (!absl::SimpleAtoi(e, &mode)) {
+      LOG(WARNING) << "Ignoring non-numeric XLA_VMM_TMP_COPY_THRESHOLD=\"" << e
+                   << "\"; using auto.";
+      mode = 1;
+    }
+  }
+  if (mode == 0) return 0;    // disabled
+  if (mode > 1) return mode;  // explicit byte cutoff
+
+  // mode == 1: auto-derive from device properties + free memory.
+  //
+  // Greedy admit-smallest-first: pull command-buffer slices into the copy set
+  // in increasing size order while (a) no single slice's copy is more expensive
+  // than its remap (the measured break-even), and (b) the aggregate shadow
+  // footprint stays under a fraction of currently-free HBM. The free-memory cap
+  // guarantees the shadow pool always fits -- "always enough space" -- and
+  // scales down automatically as the device fills. Large tensors blow these
+  // budgets and stay on the remap path; since they keep stable addresses across
+  // steps their remap is already skipped (free).
+  constexpr double kPerBufferCopyUs = 8.0;
+  constexpr double kTotalCopyUs = 15.0;
+  constexpr double kShadowHbmFraction = 0.005;  // of total (fallback)
+  constexpr double kFreeHbmFraction = 0.01;     // of free (primary cap)
+  constexpr uint64_t kFallbackThreshold = 65536;
+  const se::DeviceDescription& dd = executor->GetDeviceDescription();
+  const int64_t bw = dd.memory_bandwidth();     // bytes/sec
+  const int64_t hbm = dd.device_memory_size();  // bytes
+  if (bw <= 0) {
+    // Bandwidth unknown: fall back to a conservative cutoff that still
+    // captures scalar/scale buffers.
+    return kFallbackThreshold;
+  }
+
+  // Per-slice cap = the size at which a copy stops being cheaper than a remap.
+  // Prefer the MEASURED break-even (median real remap round-trip x measured
+  // copy bandwidth, computed once per device and cached); fall back to a
+  // bandwidth-only estimate if calibration is unavailable.
+  static absl::Mutex* const kCalibMu = new absl::Mutex();
+  static auto* const kCalibCache = new absl::flat_hash_map<int, uint64_t>();
+  std::optional<uint64_t> measured;
+  {
+    absl::MutexLock l(kCalibMu);
+    auto it = kCalibCache->find(executor->device_ordinal());
+    if (it != kCalibCache->end()) measured = it->second;
+  }
+  if (!measured.has_value()) {
+    absl::StatusOr<uint64_t> m = MeasureCopyVsRemapBreakeven(
+        executor, vmm_allocator, stream, granularity);
+    if (m.ok()) {
+      measured = *m;
+      absl::MutexLock l(kCalibMu);
+      (*kCalibCache)[executor->device_ordinal()] = *m;
+    }
+  }
+  // acc accumulates 2*size per admitted slice: bidirectional copy moves 2 bytes
+  // per shadow byte, and the shadow is allocated per VA set, so 2*size also
+  // bounds the double-buffered footprint.
+  const double per_buffer_cap =
+      measured.has_value()
+          ? static_cast<double>(*measured)
+          : kPerBufferCopyUs * 1e-6 * static_cast<double>(bw) / 2.0;
+  // Memory cap: prefer the live free-memory reading so the shadow pool is
+  // bounded by what the device can actually spare right now.
+  int64_t free_mem = 0;
+  int64_t total_mem = 0;
+  double mem_cap = 0.0;
+  if (executor->DeviceMemoryUsage(&free_mem, &total_mem) && free_mem > 0) {
+    mem_cap = kFreeHbmFraction * static_cast<double>(free_mem);
+  } else if (hbm > 0) {
+    mem_cap = kShadowHbmFraction * static_cast<double>(hbm);
+  }
+  // With a measured break-even, each admitted slice is individually cheaper to
+  // copy than remap, so memory is the only remaining bound; without it, also
+  // keep the aggregate copy-time guard.
+  double total_budget =
+      measured.has_value() ? (mem_cap > 0.0 ? mem_cap : 1e18)
+                           : kTotalCopyUs * 1e-6 * static_cast<double>(bw);
+  if (!measured.has_value() && mem_cap > 0.0) {
+    total_budget = std::min(total_budget, mem_cap);
+  }
+  std::vector<uint64_t> sizes;
+  sizes.reserve(command_buffer_allocation_indexes_.size());
+  for (BufferAllocation::Index i : command_buffer_allocation_indexes_) {
+    se::DeviceAddressBase b = buffer_allocations.GetDeviceAddress(i);
+    if (vmm_allocator->GetRawAllocation(executor->device_ordinal(), b) ==
+        nullptr) {
+      continue;
+    }
+    sizes.push_back(b.size());
+  }
+  std::sort(sizes.begin(), sizes.end());
+  uint64_t copy_threshold = 0;
+  double acc = 0.0;
+  for (uint64_t s : sizes) {
+    if (static_cast<double>(s) > per_buffer_cap) break;
+    if (acc + 2.0 * static_cast<double>(s) > total_budget) break;
+    acc += 2.0 * static_cast<double>(s);
+    copy_threshold = s;
+  }
+  XLA_VLOG_DEVICE(2, executor->device_ordinal()) << absl::StreamFormat(
+      "VA remapping: auto copy threshold=%d B (bw=%d GB/s hbm=%d GB "
+      "free=%d GB budget=%.0f B)",
+      copy_threshold, bw / 1000000000, hbm / 1000000000, free_mem / 1000000000,
+      total_budget);
+  return copy_threshold;
+}
+
 // VA remapping execution flow for 2 consecutive calls on the same executor:
 //
 // clang-format off
@@ -1527,122 +1781,41 @@ absl::Status GpuExecutable::ExecuteThunksWithVaRemapping(
   // every step; remapping them costs an hipMemUnmap/Map/SetAccess round-trip
   // that serializes across peer devices on ROCm. Instead we keep such a slice
   // in a stable shadow buffer (fixed address baked into the command buffer once)
-  // and refresh it with a cheap device-to-device copy each step.
-  //
-  // The size cutoff is chosen AUTOMATICALLY from the device's HBM bandwidth and
-  // capacity (no manual tuning): admit command-buffer slices smallest-first
-  // into the copy set while (a) no single slice's copy exceeds kPerBufferCopyUs,
-  // (b) the total per-step copy stays under kTotalCopyUs, and (c) the shadow
-  // footprint stays under kShadowHbmFraction of HBM. Large tensors blow these
-  // budgets and stay on the remap path -- and since they keep stable addresses
-  // across steps, remapping them is already free (skipped). The per-step copy
-  // budget bounds the worst-case overhead, so "auto" is safe on any model.
-  //
-  // Control via env XLA_VMM_TMP_COPY_THRESHOLD (default = auto):
-  //   "0"  -> disabled: every slice stays on the remap path (original path).
-  //   "1"  -> auto: derive the byte cutoff from this device's HBM bandwidth and
-  //           capacity AND the memory currently free, so the shadow pool is
-  //           always guaranteed to fit (no searching, never risks OOM).
-  //   ">1" -> force exactly that byte cutoff (explicit override / sweeps).
-  // We reserve "1" for auto because a literal 1-byte cutoff would admit nothing.
-  uint64_t copy_threshold = 0;
-  {
-    const char* e = std::getenv("XLA_VMM_TMP_COPY_THRESHOLD");
-    // Unset defaults to auto (mode 1) so the smart selector is the default.
-    uint64_t mode = 1;
-    if (e != nullptr) {
-      mode = std::strtoull(e, nullptr, 10);
-    }
-    if (mode == 0) {
-      copy_threshold = 0;  // disabled
-    } else if (mode > 1) {
-      copy_threshold = mode;  // explicit byte cutoff
-    } else {
-      // mode == 1: auto-derive from device properties + free memory.
-      //
-      // Greedy admit-smallest-first: pull command-buffer slices into the copy
-      // set in increasing size order while (a) no single slice's bidirectional
-      // copy exceeds kPerBufferCopyUs, and (b) the aggregate per-step copy stays
-      // under a budget that is the MIN of a copy-time cap and a memory cap. The
-      // memory cap is taken from the currently-free HBM (kFreeHbmFraction of
-      // free), which guarantees the shadow pool always fits -- "always enough
-      // space" -- rather than from a blind fraction of total capacity. Large
-      // tensors blow these budgets and stay on the remap path; since they keep
-      // stable addresses across steps their remap is already skipped (free).
-      constexpr double kPerBufferCopyUs = 8.0;
-      constexpr double kTotalCopyUs = 15.0;
-      constexpr double kShadowHbmFraction = 0.005;  // of total (fallback)
-      constexpr double kFreeHbmFraction = 0.01;     // of free (primary cap)
-      constexpr uint64_t kFallbackThreshold = 65536;
-      const se::DeviceDescription& dd = executor->GetDeviceDescription();
-      const int64_t bw = dd.memory_bandwidth();     // bytes/sec
-      const int64_t hbm = dd.device_memory_size();  // bytes
-      if (bw <= 0) {
-        // Bandwidth unknown: fall back to a conservative cutoff that still
-        // captures scalar/scale buffers.
-        copy_threshold = kFallbackThreshold;
-      } else {
-        // acc accumulates 2*size per admitted slice: bidirectional copy moves
-        // 2 bytes per shadow byte, and the shadow is allocated per VA set, so
-        // 2*size also bounds the double-buffered footprint.
-        const double per_buffer_cap =
-            kPerBufferCopyUs * 1e-6 * static_cast<double>(bw) / 2.0;
-        double total_budget = kTotalCopyUs * 1e-6 * static_cast<double>(bw);
-        // Memory cap: prefer the live free-memory reading so the shadow pool is
-        // bounded by what the device can actually spare right now.
-        int64_t free_mem = 0;
-        int64_t total_mem = 0;
-        double mem_cap = 0.0;
-        if (executor->DeviceMemoryUsage(&free_mem, &total_mem) &&
-            free_mem > 0) {
-          mem_cap = kFreeHbmFraction * static_cast<double>(free_mem);
-        } else if (hbm > 0) {
-          mem_cap = kShadowHbmFraction * static_cast<double>(hbm);
-        }
-        if (mem_cap > 0.0) {
-          total_budget = std::min(total_budget, mem_cap);
-        }
-        std::vector<uint64_t> sizes;
-        sizes.reserve(command_buffer_allocation_indexes_.size());
-        for (BufferAllocation::Index i : command_buffer_allocation_indexes_) {
-          se::DeviceAddressBase b = buffer_allocations.GetDeviceAddress(i);
-          if (vmm_allocator->GetRawAllocation(executor->device_ordinal(), b) ==
-              nullptr) {
-            continue;
-          }
-          sizes.push_back(b.size());
-        }
-        std::sort(sizes.begin(), sizes.end());
-        double acc = 0.0;
-        for (uint64_t s : sizes) {
-          if (static_cast<double>(s) > per_buffer_cap) break;
-          if (acc + 2.0 * static_cast<double>(s) > total_budget) break;
-          acc += 2.0 * static_cast<double>(s);
-          copy_threshold = s;
-        }
-        XLA_VLOG_DEVICE(2, executor->device_ordinal()) << absl::StreamFormat(
-            "VA remapping: auto copy threshold=%d B (bw=%d GB/s hbm=%d GB "
-            "free=%d GB budget=%.0f B)",
-            copy_threshold, bw / 1000000000, hbm / 1000000000,
-            free_mem / 1000000000, total_budget);
-      }
-    }
-  }
-  auto is_small_copy_slice = [copy_threshold](uint64_t size) {
-    return copy_threshold > 0 && size <= copy_threshold;
-  };
+  // and refresh it with a cheap device-to-device copy each step. The size
+  // cutoff is computed ONCE (ComputeCopyThreshold) and frozen in VaRanges; see
+  // that helper and the one-time setup block below for details and rationale.
 
   // Acquire per-executor mutex to protect VA range operations.
   // This ensures only one thread uses the VA ranges at a time for this
   // executor.
   absl::MutexLock va_lock(va_ranges->mutex);
 
-  // Initialize VA ranges if this is first use (va_reservation is null).
-  if (va_ranges->va_reservation == nullptr) {
+  // One-time setup for this VA range: freeze the copy-vs-remap threshold, size
+  // and reserve the VA range, and create the unmap event.
+  //
+  // Guarded by an explicit `initialized` flag rather than
+  // `va_reservation == nullptr`: when every slice is small the reservation
+  // legitimately stays null, and using it as the guard would re-run this block
+  // every step -- re-creating `unmap_event` while a previously recorded copy of
+  // it may still be in flight on the GPU (a use-after-free on the HIP runtime).
+  //
+  // Freezing the threshold here is also what makes the VA reservation safe: the
+  // reservation is sized exactly once from this threshold, so it must never
+  // change across steps. The auto threshold depends on currently-free HBM,
+  // which fluctuates; if it shrank on a later step, more slices would fall onto
+  // the remap path than the reservation can hold, overflowing it. Computing it
+  // once and caching it removes that hazard entirely.
+  if (!va_ranges->initialized) {
     ScopedAnnotation annotation_va_reserve([&] {
       return absl::StrFormat("command_buffer_va_range_reserve:#module=%s#",
                              module_name_);
     });
+
+    va_ranges->executor = executor;
+    va_ranges->copy_threshold =
+        ComputeCopyThreshold(buffer_allocations, vmm_allocator, executor,
+                             run_options->stream(), granularity);
+    const uint64_t th = va_ranges->copy_threshold;
 
     // Calculate total size for all command buffer allocations, rounding each
     // allocation up to the allocation granularity.
@@ -1660,17 +1833,17 @@ absl::Status GpuExecutable::ExecuteThunksWithVaRemapping(
       }
       // Small slices are handled by the copy-to-shadow path and never occupy
       // a slot in the contiguous VA reservation.
-      if (is_small_copy_slice(buf.size())) {
+      if (th > 0 && buf.size() <= th) {
         continue;
       }
       total_va_size += round_up_to_granularity(buf.size());
     }
 
+    ASSIGN_OR_RETURN(va_ranges->unmap_event, executor->CreateEvent());
     // Reserve a single large VA range for all command buffer allocations.
     // With the copy-to-shadow experiment a large threshold can make every
     // slice "small", leaving nothing to reserve; skip reservation in that case
     // (all slices then flow through the shadow copy path).
-    ASSIGN_OR_RETURN(va_ranges->unmap_event, executor->CreateEvent());
     if (total_va_size > 0) {
       ASSIGN_OR_RETURN(
           va_ranges->va_reservation,
@@ -1681,7 +1854,15 @@ absl::Status GpuExecutable::ExecuteThunksWithVaRemapping(
           module_name_, va_ranges->va_reservation->address().opaque(),
           total_va_size, granularity);
     }
+    va_ranges->initialized = true;
   }
+
+  // Frozen for the lifetime of this VA range by the one-time setup above, so
+  // the VA reservation (sized from it once) can never be overflowed.
+  const uint64_t copy_threshold = va_ranges->copy_threshold;
+  auto is_small_copy_slice = [copy_threshold](uint64_t size) {
+    return copy_threshold > 0 && size <= copy_threshold;
+  };
   // NOTE: the actual unmap of a previously established mapping is deferred to
   // the decision point below, so it can be skipped entirely when the physical
   // buffers are unchanged across executions (handled by ScopedMapping::Remap,
@@ -1791,6 +1972,11 @@ absl::Status GpuExecutable::ExecuteThunksWithVaRemapping(
       if (is_small_copy_slice(original_buffer.size())) {
         const uint64_t sz = original_buffer.size();
         auto it = va_ranges->small_shadow.find(i);
+        // Reuse the existing shadow when its capacity still covers this slice.
+        // small_shadow stores the buffer as returned by Allocate(), whose
+        // size() is the allocated capacity (>= the bytes we asked for), so any
+        // rounding only makes reuse *more* likely; we reallocate only when the
+        // stored capacity is genuinely too small for the current slice.
         if (it == va_ranges->small_shadow.end() || it->second.size() < sz) {
           if (it != va_ranges->small_shadow.end()) {
             executor->Deallocate(&it->second);
