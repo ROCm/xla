@@ -122,22 +122,21 @@ AsyncThunkSequence TritonFusion::Emit(
   Thunk::ThunkInfo thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(
       &fusion, ir_emitter_context.GetNextThunkId());
   return Emit(ir_emitter_context, fusion, nullptr, {})
-      .Map(
-          [thunk_info = std::move(thunk_info)](
-              EmitResult result) -> absl::StatusOr<ThunkSequence> {
-            ASSIGN_OR_RETURN(
-                CustomKernel custom_kernel,
-                kernel::CreateOwnedCubinCustomKernel(
-                    result.entry.kernel_name, result.entry.binary,
-                    result.kernel_arguments.args().size(),
-                    result.entry.launch_dimensions.block_counts(),
-                    result.entry.launch_dimensions.thread_counts_per_block(),
-                    result.entry.shmem_bytes));
-            return ThunkSequence::Of(std::make_unique<CustomKernelThunk>(
-                thunk_info, std::move(custom_kernel), result.kernel_arguments,
-                result.entry.use_pdl, std::vector<int64_t>{},
-                result.entry.tma_metadata));
-          });
+      .Map([thunk_info = std::move(thunk_info)](
+               EmitResult result) -> absl::StatusOr<ThunkSequence> {
+        ASSIGN_OR_RETURN(
+            CustomKernel custom_kernel,
+            kernel::CreateOwnedCubinCustomKernel(
+                result.entry.kernel_name, result.entry.binary,
+                result.kernel_arguments.args().size(),
+                result.entry.launch_dimensions.block_counts(),
+                result.entry.launch_dimensions.thread_counts_per_block(),
+                result.entry.shmem_bytes));
+        return ThunkSequence::Of(std::make_unique<CustomKernelThunk>(
+            thunk_info, std::move(custom_kernel), result.kernel_arguments,
+            result.entry.use_pdl, std::vector<int64_t>{},
+            result.entry.tma_metadata));
+      });
 }
 
 xla::Future<TritonFusion::EmitResult> TritonFusion::Emit(
@@ -266,10 +265,29 @@ xla::Future<TritonFusion::EmitResult> TritonFusion::Emit(
 }
 
 namespace {
+// Computes the number of GPU blocks (workgroups) for a launch grid from the
+// output shape dimensions and the per-dimension tile sizes.
+//
+// When tile_sizes has fewer elements than dimensions, the computation aligns to
+// the *trailing* dimensions.  The leading dimensions that have no corresponding
+// tile entry are assumed to be handled as sequential loops inside each block
+// (e.g. the G outer-loop in a persistent kRaggedContracting kernel) and do NOT
+// contribute to the block count.
+//
+// Examples:
+//   dims=[8, 192, 512], tiles=[32, 32]  → trailing dims=[192,512]
+//     → ceil(192/32)*ceil(512/32) = 6*16 = 96  (correct for K×N grid)
+//   dims=[256, 512],    tiles=[4,  16]  → (equal size, no offset)
+//     → ceil(256/4)*ceil(512/16) = 64*32 = 2048
 int64_t GetNumberOfBlocks(absl::Span<const int64_t> dimensions,
                           absl::Span<const int64_t> tile_sizes) {
+  // Align to trailing dimensions when tile_sizes is shorter than dimensions.
+  const size_t offset = dimensions.size() >= tile_sizes.size()
+                            ? dimensions.size() - tile_sizes.size()
+                            : 0;
   int64_t num_blocks = 1;
-  for (auto [dim_size, dim_tile_size] : llvm::zip(dimensions, tile_sizes)) {
+  for (auto [dim_size, dim_tile_size] :
+       llvm::zip(dimensions.subspan(offset), tile_sizes)) {
     num_blocks *= (dim_size + dim_tile_size - 1) / dim_tile_size;
   }
   return num_blocks;
