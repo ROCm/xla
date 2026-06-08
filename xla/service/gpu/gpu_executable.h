@@ -344,6 +344,15 @@ class GpuExecutable : public Executable {
       uint64_t allocation_id;
     };
     std::vector<AllocationMappingState> last_mapping_state;
+
+    // EXPERIMENT (env XLA_VMM_TMP_COPY_THRESHOLD): for small command-buffer
+    // slices (scales / tiny scalars) we avoid VA remapping entirely. Each such
+    // slice gets a stable shadow device buffer here (allocated once, fixed
+    // address baked into the command buffer) and is refreshed with a
+    // device-to-device copy every step instead of an hipMemUnmap/Map/SetAccess.
+    // Keyed by allocation index; kept for the lifetime of the run.
+    absl::flat_hash_map<BufferAllocation::Index, se::DeviceAddressBase>
+        small_shadow;
   };
 
   // Additional streams borrowed at run time for the execution.
