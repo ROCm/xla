@@ -101,16 +101,19 @@ class BlasLt : public gpu::BlasLt {
     // fit all supported scale types.
     constexpr static size_t kMaxScaleBytes = 16;
 
-    MatmulPlan(const BlasLt& blas_lt, MatmulDesc&& op_desc,
-               MatrixLayout&& a_desc, MatrixLayout&& b_desc,
-               MatrixLayout&& c_desc, MatrixLayout&& d_desc,
-               bool must_swap_operands)
+    struct Config {
+      int64_t m, n, k, batch_count;
+      int64_t lda, ldb, ldc, ldd;
+      int64_t strideA, strideB, strideC, strideD;
+      gpu::ScaleMode scale_mode;
+      hipblaslt_ext::GemmEpilogue epilogue;
+    };
+
+    MatmulPlan(const BlasLt& blas_lt, hipblaslt_ext::Gemm&& gemm,
+               const Config& cfg, bool must_swap_operands)
         : blas_lt_(blas_lt),
-          op_desc_(std::move(op_desc)),
-          a_desc_(std::move(a_desc)),
-          b_desc_(std::move(b_desc)),
-          c_desc_(std::move(c_desc)),
-          d_desc_(std::move(d_desc)),
+          gemm_(std::move(gemm)),
+          cfg_(cfg),
           must_swap_operands_(must_swap_operands) {}
 
     ~MatmulPlan() override = default;
@@ -129,19 +132,24 @@ class BlasLt : public gpu::BlasLt {
       }
       algorithm_ = *palgo;
       workspace_size_ = algorithm.workspace_size;
+      algorithm_is_dirty_ = true;
       return absl::OkStatus();
     }
 
+   protected:
+    absl::Status MaybeSetMemoryArgs(const gpu::BlasLt::MemoryArgs& args) const;
+
    private:
     const BlasLt& blas_lt_;
-    MatmulDesc op_desc_;
-    MatrixLayout a_desc_;
-    MatrixLayout b_desc_;
-    MatrixLayout c_desc_;
-    MatrixLayout d_desc_;
+    // We must use a mutable gemm_ since some getters from C++ API are not
+    // const.
+    mutable hipblaslt_ext::Gemm gemm_;
+    Config cfg_;
     alignas(16) std::array<uint8_t, kMaxScaleBytes> alpha_, beta_;
     bool must_swap_operands_;
+    mutable bool algorithm_is_dirty_ = true;
     mutable std::optional<hipblasLtMatmulAlgo_t> algorithm_;
+    mutable gpu::BlasLt::MemoryArgs saved_args_;
     size_t workspace_size_ = 0;
   };  // class MatmulPlan
 

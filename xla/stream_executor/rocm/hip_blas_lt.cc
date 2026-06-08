@@ -77,6 +77,41 @@ using ::xla::complex64;
 
 namespace {
 
+bool IsBiasEpilogue(const hipblaslt_ext::GemmEpilogue& epi) {
+  switch (epi.getMode()) {
+    case HIPBLASLT_EPILOGUE_BIAS:
+    case HIPBLASLT_EPILOGUE_RELU_BIAS:
+    case HIPBLASLT_EPILOGUE_GELU_BIAS:
+    case HIPBLASLT_EPILOGUE_GELU_AUX_BIAS:
+    case HIPBLASLT_EPILOGUE_SWISH_BIAS_EXT:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// This is a special operator == which does not compare workspace fields!
+bool operator==(const gpu::BlasLt::MemoryArgs& lhs,
+                const gpu::BlasLt::MemoryArgs& rhs) {
+  return (lhs.a == rhs.a && lhs.b == rhs.b && lhs.c == rhs.c &&
+          lhs.d == rhs.d && lhs.bias == rhs.bias && lhs.aux == rhs.aux &&
+          lhs.a_scale == rhs.a_scale && lhs.b_scale == rhs.b_scale &&
+          lhs.c_scale == rhs.c_scale && lhs.d_scale == rhs.d_scale &&
+          lhs.d_amax == rhs.d_amax);
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const BlasLt::MatmulPlan::Config& cfg) {
+  os << "m: " << cfg.m << " n: " << cfg.n << " k: " << cfg.k
+     << " batch: " << cfg.batch_count << " lda/b/c/d: " << cfg.lda << '/'
+     << cfg.ldb << '/' << cfg.ldc << '/' << cfg.ldd
+     << " stridea/b/c/d: " << cfg.strideA << '/' << cfg.strideB << '/'
+     << cfg.strideC << '/' << cfg.strideD
+     << " epi: " << (int)cfg.epilogue.getMode()
+     << " scale_mode: " << static_cast<int>(cfg.scale_mode);
+  return os;
+}
+
 template <typename T>
 absl::Status SetAttr(hipblasLtMatrixLayout_t handle,
                      hipblasLtMatrixLayoutAttribute_t attr, T value) {
@@ -216,92 +251,60 @@ auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
                                        size_t max_workspace_size) const
     -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
   max_algorithm_count = std::min(max_algorithm_count, size_t{INT_MAX});
-  std::vector<hipblasLtMatmulHeuristicResult_t> results(max_algorithm_count);
+  std::vector<MatmulAlgorithm> algorithms;
+
   {
     absl::MutexLock lock(blas_lt_.mu_);
     TF_RET_CHECK(blas_lt_.handle_ != nullptr);
+    auto activation = blas_lt_.executor_->Activate();
 
-    hipblasLtMatmulPreference_t hip_preference;
-    SE_HIPBLAS_RETURN_IF_ERROR(
-        hipblasLtMatmulPreferenceCreate(&hip_preference));
+    // hipBlasLt requires setting the a/b scale and bias pointers (even a dummy
+    // one), otherwise no algorithms can be found for "a/b scaling" and "bias
+    // epilogues". This is to be removed later when this limitation is gone
+    // (this probably will never happen).
+    static int64_t dummy_pointer = 0xACEBALL;
+    gpu::BlasLt::MemoryArgs args;
+    args.a = DeviceMemoryBase(&dummy_pointer);
+    args.b = args.a;
+    args.c = args.a;
+    args.d = args.a;
+    args.bias = args.a;  // need to set bias pointer explicitly
+    args.a_scale = args.a;
+    args.b_scale = args.a;
 
-    // Wrap hipblas handle immediately, so it is cleaned up if an error occurs.
-    Owned<hipblasLtMatmulPreference_t> preference(
-        hip_preference, hipblasLtMatmulPreferenceDestroy);
+    // if (IsBiasEpilogue(cfg_.epilogue)) {
+    //   args.bias = args.a; // need to set bias pointer explicitly
+    // }
+    auto problem = gemm_.getProblemTypes();
 
-    TF_RETURN_IF_ERROR(SetAttr<uint64_t>(
-        hip_preference, HIPBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
-        max_workspace_size));
+    TF_RETURN_IF_ERROR(MaybeSetMemoryArgs(args));
+    std::vector<hipblasLtMatmulHeuristicResult_t> results;
+    results.reserve(max_algorithm_count);
 
-    std::unique_ptr<ActivateContext> activation =
-        blas_lt_.executor_->Activate();
+    // int found_algorithm_count = 0;
+    // auto error = hipblasLtMatmulAlgoGetHeuristic(
+    //     blas_lt_.handle_.get(), op_desc_.get(), a_desc_.get(), b_desc_.get(),
+    //     c_desc_.get(), d_desc_.get(), preference.get(), max_algorithm_count,
+    //     results.data(), &found_algorithm_count);
+    SE_HIPBLAS_RETURN_IF_ERROR(hipblaslt_ext::getAllAlgos(
+        blas_lt_.handle_.get(), hipblaslt_ext::GemmType::HIPBLASLT_GEMM,
+        problem.getOpA(), problem.getOpB(), problem.getTypeA(),
+        problem.getTypeB(), problem.getTypeC(), problem.getTypeD(),
+        problem.getTypeCompute(), results));
+    VLOG(1) << "Total heuristics found: " << results.size();
+    algorithms.reserve(std::min(results.size(), max_algorithm_count));
 
-    // hipBlasLt requires setting the bias pointer (even a dummy one), otherwise
-    // no algorithms can be found for "bias epilogues". This is to be removed
-    // later when this limitation is gone.
-    if (op_desc_.has_bias_epilogue()) {
-      static int64_t dummy_pointer = 0xACEBALL;
-      TF_RETURN_IF_ERROR(SetAttr(
-          op_desc_.get(), HIPBLASLT_MATMUL_DESC_BIAS_POINTER, &dummy_pointer));
-    }
-
-    // hipBlasLt requires setting the a/b scale pointer (even a dummy one),
-    // otherwise no algorithms can be found for "a/b scaling". This is to be
-    // removed later when this limitation is gone.
-    switch (op_desc_.scale_mode()) {
-      case gpu::ScaleMode::kNone:
-        break;
-      case gpu::ScaleMode::kTensorScaling: {
-        static int64_t dummy_pointer = 0xACEBALL;
-        TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                   HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
-                                   &dummy_pointer));
-        TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                   HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
-                                   &dummy_pointer));
-        break;
-      }
-      case gpu::ScaleMode::kBlockScaling: {
-#if TF_ROCM_VERSION >= 70000
-        static int64_t dummy_pointer = 0xACEBALL;
-        TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                   HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
-                                   &dummy_pointer));
-        TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                   HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
-                                   &dummy_pointer));
-        hipblasLtMatmulMatrixScale_t mx_scale =
-            HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0;
-        TF_RETURN_IF_ERROR(SetAttr(
-            op_desc_.get(), HIPBLASLT_MATMUL_DESC_A_SCALE_MODE, mx_scale));
-        TF_RETURN_IF_ERROR(SetAttr(
-            op_desc_.get(), HIPBLASLT_MATMUL_DESC_B_SCALE_MODE, mx_scale));
-#else
-        return absl::InternalError("Block scaling requires ROCm >= 7.0");
-#endif
-        break;
+    for (auto& res : results) {
+      size_t workspace_size = 0;
+      if (gemm_.isAlgoSupported(res.algo, workspace_size) ==
+              HIPBLAS_STATUS_SUCCESS &&
+          workspace_size <= max_workspace_size) {
+        algorithms.push_back({res.algo, workspace_size});
+        if (algorithms.size() >= max_algorithm_count) break;
       }
     }
-
-    int found_algorithm_count = 0;
-    auto error = hipblasLtMatmulAlgoGetHeuristic(
-        blas_lt_.handle_.get(), op_desc_.get(), a_desc_.get(), b_desc_.get(),
-        c_desc_.get(), d_desc_.get(), preference.get(), max_algorithm_count,
-        results.data(), &found_algorithm_count);
-    if (error != 0) {
-      VLOG(0) << "hipblasLtMatmulAlgoGetHeuristic returned " << (int)error;
-      SE_HIPBLAS_RETURN_IF_ERROR(error);
-    }
-    results.resize(found_algorithm_count);
+    VLOG(1) << "Total algos found: " << algorithms.size();
   }  // end mutex block
-
-  std::vector<MatmulAlgorithm> algorithms;
-  algorithms.reserve(results.size());
-  for (const hipblasLtMatmulHeuristicResult_t& result : results) {
-    if (result.state == HIPBLAS_STATUS_SUCCESS) {  // Skip failed algos.
-      algorithms.push_back({result.algo, result.workspaceSize});
-    }
-  }
   return algorithms;
 }
 
@@ -362,40 +365,83 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetMatmulPlan(
     rhs_layout.Transpose();
   }
 
-  TF_ASSIGN_OR_RETURN(
-      auto op_desc,
-      MatmulDesc::Create(
-          *compute_type, gpu::GetScaleType(output_dtype, *compute_type),
-          trans_a, trans_b, epilogue, PointerMode::kHost, cfg.scale_mode));
+  VLOG(0) << "Creating MatmulPlan LHS: "
+          << (trans_a == blas::Transpose::kTranspose ? "T" : "N")
+          << " RHS: " << (trans_b == blas::Transpose::kTranspose ? "T" : "N")
+          << " Scale Mode: " << (int)cfg.scale_mode;
 
-  TF_ASSIGN_OR_RETURN(auto a_desc, MatrixLayout::Create(lhs_layout));
-  TF_ASSIGN_OR_RETURN(auto b_desc, MatrixLayout::Create(rhs_layout));
-  TF_ASSIGN_OR_RETURN(auto c_desc, MatrixLayout::Create(c_layout));
-  TF_ASSIGN_OR_RETURN(auto d_desc, MatrixLayout::Create(output_layout));
+  auto hip_trans_a = AsHipblasOperation(trans_a),
+       hip_trans_b = AsHipblasOperation(trans_b);
+
+  auto hip_type = [](const auto& m) -> absl::StatusOr<hipDataType> {
+    TF_ASSIGN_OR_RETURN(auto type, gpu::AsBlasDataType(m.dtype));
+    return AsHipblasDataType(type);
+  };
+  TF_ASSIGN_OR_RETURN(auto a_type, hip_type(lhs_layout));
+  TF_ASSIGN_OR_RETURN(auto b_type, hip_type(rhs_layout));
+  TF_ASSIGN_OR_RETURN(auto c_type, hip_type(c_layout));
+  TF_ASSIGN_OR_RETURN(auto d_type, hip_type(output_layout));
+
+  auto scale_type = gpu::GetScaleType(output_dtype, *compute_type);
+  auto hip_scale_type = AsHipblasDataType(scale_type);
+  auto hip_compute_type = AsHipblasComputeType(*compute_type);
+
+  (void)hip_scale_type;  // HIPBLASLT_DATATYPE_INVALID
+
+  hipblaslt_ext::GemmEpilogue gemm_epi;
+  TF_ASSIGN_OR_RETURN(auto mode, AsHipblasLtEpilogue(epilogue));
+  gemm_epi.setMode(mode);
+
+  switch (cfg.scale_mode) {
+    case gpu::ScaleMode::kNone:
+    case gpu::ScaleMode::kTensorScaling:
+      // Not really necessary but for completeness
+      gemm_epi.setScalingAType(HIPBLASLT_MATMUL_MATRIX_SCALE_SCALAR_32F);
+      gemm_epi.setScalingBType(HIPBLASLT_MATMUL_MATRIX_SCALE_SCALAR_32F);
+      break;
+    case gpu::ScaleMode::kBlockScaling:
+      gemm_epi.setScalingAType(HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0);
+      gemm_epi.setScalingBType(HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0);
+      break;
+  }
 
 #if TF_ROCM_VERSION >= 60000
   // Currently, the default bias data type in hipblasLt is the same with output
   // data type for fp8 matmul, which is different from cublasLt. This is a
   // workaround to match cublasLt behavior.
-  if (epilogue == gpu::BlasLt::Epilogue::kBias) {
-    auto a_dtype = a_desc.type(), b_dtype = b_desc.type();
-    if ((a_dtype == HIP_R_8F_E4M3_FNUZ || a_dtype == HIP_R_8F_E5M2_FNUZ) &&
-        (b_dtype == HIP_R_8F_E4M3_FNUZ || b_dtype == HIP_R_8F_E5M2_FNUZ)) {
-      auto bias_dtype = d_desc.type();
-      if (bias_dtype == HIP_R_32F) {
-        TF_RETURN_IF_ERROR(SetAttr(
-            op_desc.get(), HIPBLASLT_MATMUL_DESC_BIAS_DATA_TYPE, HIP_R_16BF));
-      }
+  if (IsBiasEpilogue(gemm_epi)) {
+    auto bias_data_type = d_type;
+    if ((a_type == HIP_R_8F_E4M3_FNUZ || a_type == HIP_R_8F_E5M2_FNUZ) &&
+        (b_type == HIP_R_8F_E4M3_FNUZ || b_type == HIP_R_8F_E5M2_FNUZ)) {
+      bias_data_type = d_type == HIP_R_32F ? HIP_R_16BF : d_type;
     }
+    gemm_epi.setBiasDataType(bias_data_type);
   }
 #endif  // TF_ROCM_VERSION >= 60000
 
-  std::tuple operand_types{a_desc.type(), b_desc.type(), c_desc.type(),
-                           d_desc.type()};
+  MatmulPlan::Config internal_cfg{
+      .m = output_layout.num_rows,
+      .n = output_layout.num_cols,
+      .k = (hip_trans_a == HIPBLAS_OP_N ? lhs_layout.num_cols
+                                        : lhs_layout.num_rows),
+      .batch_count = lhs_layout.batch_size,
+      .lda = lhs_layout.leading_dim_stride,
+      .ldb = rhs_layout.leading_dim_stride,
+      .ldc = c_layout.leading_dim_stride,
+      .ldd = output_layout.leading_dim_stride,
+      .strideA = lhs_layout.batch_stride,
+      .strideB = rhs_layout.batch_stride,
+      .strideC = c_layout.batch_stride,
+      .strideD = output_layout.batch_stride,
+      .scale_mode = cfg.scale_mode,
+      .epilogue = gemm_epi};
 
-  auto plan = std::make_unique<MatmulPlan>(
-      *this, std::move(op_desc), std::move(a_desc), std::move(b_desc),
-      std::move(c_desc), std::move(d_desc), must_swap_operands);
+  absl::MutexLock lock(mu_);
+  hipblaslt_ext::Gemm gemm(handle_.get(), hip_trans_a, hip_trans_b, a_type,
+                           b_type, c_type, d_type, hip_compute_type);
+
+  auto plan = std::make_unique<MatmulPlan>(*this, std::move(gemm), internal_cfg,
+                                           must_swap_operands);
 
   auto assign_alpha_beta = [&](auto scale) {
     using Scale = decltype(scale);
@@ -411,6 +457,8 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetMatmulPlan(
     auto* pbeta = reinterpret_cast<Scale*>(&plan->beta_[0]);
     *pbeta = static_cast<Scale>(cfg.beta);
   };
+
+  std::tuple operand_types{a_type, b_type, c_type, d_type};
 
   // clang-format off
 #define TYPED_MATMUL(Scale, ATYPE, BTYPE, CTYPE, DTYPE)               \
@@ -546,6 +594,49 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetMatmulPlan(
   return plan;
 }
 
+absl::Status BlasLt::MatmulPlan::MaybeSetMemoryArgs(
+    const gpu::BlasLt::MemoryArgs& args) const {
+  if (saved_args_ == args) {
+    return absl::OkStatus();
+  }
+  auto a = args.a, b = args.b, a_scale = args.a_scale, b_scale = args.b_scale;
+  if (must_swap_operands_) {
+    std::swap(a, b);
+    std::swap(a_scale, b_scale);
+  }
+
+  if (!(args.d_amax == nullptr)) {
+    return absl::InternalError("hipblaslt does not support amax");
+  }
+  hipblaslt_ext::GemmInputs inputs;
+  inputs.setA(a.opaque());
+  inputs.setB(b.opaque());
+  inputs.setC(args.c.opaque());
+  inputs.setD(args.d.opaque());
+  inputs.setAlpha(const_cast<void*>((const void*)&alpha_));
+  inputs.setBeta(const_cast<void*>((const void*)&beta_));
+  inputs.setBias(args.bias.opaque());
+  inputs.setScaleA(a_scale.opaque());
+  inputs.setScaleB(b_scale.opaque());
+  inputs.setScaleC(args.c_scale.opaque());
+  inputs.setScaleD(args.d_scale.opaque());
+  inputs.setScaleAux(nullptr);
+  inputs.setScaleAlphaVec(nullptr);
+  inputs.setAux(args.aux.opaque());
+  inputs.setAmaxD(args.d_amax.opaque());
+
+  auto problem = gemm_.getProblemTypes();
+  auto epi = cfg_.epilogue;
+  SE_HIPBLAS_RETURN_IF_ERROR(
+      gemm_.setProblem(cfg_.m, cfg_.n, cfg_.k, cfg_.batch_count, cfg_.lda,
+                       cfg_.ldb, cfg_.ldc, cfg_.ldd, cfg_.strideA, cfg_.strideB,
+                       cfg_.strideC, cfg_.strideD, epi, inputs, problem));
+
+  saved_args_ = args;
+  algorithm_is_dirty_ = true;  // this force a call to Gemm::initialize()
+  return absl::OkStatus();
+}
+
 absl::Status BlasLt::MatmulPlan::ExecuteOnStream(
     Stream* stream, const gpu::BlasLt::MemoryArgs& args,
     blas::ProfileResult* profile_result) const {
@@ -590,66 +681,26 @@ absl::Status BlasLt::MatmulPlan::ExecuteOnStream(
   {
     absl::MutexLock lock(blas_lt_.mu_);
     TF_RET_CHECK(blas_lt_.handle_ != nullptr);
-    // We must set the bias and aux pointers while holding the mutex, to avoid a
-    // potential race condition from multiple threads sharing the same plan.
-    if (op_desc_.has_bias_epilogue() && args.bias != nullptr) {
-      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                 HIPBLASLT_MATMUL_DESC_BIAS_POINTER,
-                                 args.bias.opaque()));
-    }
-
-    if (a_scale != nullptr) {
-      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                 HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
-                                 a_scale.opaque()));
-    }
-    if (b_scale != nullptr) {
-      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                 HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
-                                 b_scale.opaque()));
-    }
-    if (args.c_scale != nullptr) {
-      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                 HIPBLASLT_MATMUL_DESC_C_SCALE_POINTER,
-                                 args.c_scale.opaque()));
-    }
-    if (args.d_scale != nullptr) {
-      TF_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                 HIPBLASLT_MATMUL_DESC_D_SCALE_POINTER,
-                                 args.d_scale.opaque()));
-    }
-    if (args.d_amax != nullptr) {
-      return absl::InternalError("hipblaslt does not support amax");
-    }
-    if (args.aux != nullptr) {
-      return absl::InternalError(
-          "hipblaslt does not support auxiliary inputs / outputs");
-    }
-
     std::unique_ptr<ActivateContext> activation =
         blas_lt_.executor_->Activate();
+    TF_RETURN_IF_ERROR(MaybeSetMemoryArgs(args));
 
-    SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtMatmul(
-        blas_lt_.handle_.get(), op_desc_.get(), &alpha_[0], a.opaque(),
-        a_desc_.get(), b.opaque(), b_desc_.get(), &beta_[0], args.c.opaque(),
-        c_desc_.get(), args.d.opaque(), d_desc_.get(), &algorithm_.value(),
-        workspace_addr, workspace_size,
-        absl::bit_cast<hipStream_t>(
-            stream->platform_specific_handle().stream)));
+    auto hip_stream =
+        absl::bit_cast<hipStream_t>(stream->platform_specific_handle().stream);
+    if (saved_args_.workspace.opaque() != workspace_addr ||
+        algorithm_is_dirty_) {
+      SE_HIPBLAS_RETURN_IF_ERROR(
+          gemm_.initialize(*algorithm_, workspace_addr, true, hip_stream));
+      algorithm_is_dirty_ = false;
+      saved_args_.workspace = DeviceAddressBase(workspace_addr);
+    }
+    SE_HIPBLAS_RETURN_IF_ERROR(gemm_.run(hip_stream));
   }
-
-  typedef struct __attribute__((packed, aligned(8))) _rocblaslt_matmul_algo {
-    uint8_t data[8] = {0};
-    bool fallback = false;
-    size_t max_workspace_bytes = 0;
-  } rocblaslt_matmul_algo;
 
   if (profile_result != nullptr) {
     TF_ASSIGN_OR_RETURN(absl::Duration elapsed, timer->GetElapsedDuration());
-    // set algorithm ID to be unique (otherwise it gets kDefaultAlgorithm ID)
-    auto roc_algo = (const rocblaslt_matmul_algo*)(&algorithm_.value());
-    auto pindex = (int*)roc_algo->data;
-    profile_result->set_algorithm(static_cast<blas::AlgorithmType>(*pindex));
+    profile_result->set_algorithm(static_cast<blas::AlgorithmType>(
+        hipblaslt_ext::getIndexFromAlgo(*algorithm_)));
     profile_result->set_is_valid(true);
     profile_result->set_elapsed_time_in_ms(absl::ToDoubleMilliseconds(elapsed));
   }

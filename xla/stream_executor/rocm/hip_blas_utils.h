@@ -20,6 +20,7 @@ limitations under the License.
 
 #include "absl/status/status.h"
 #include "rocm/include/hipblas/hipblas.h"
+#include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
 #include "rocm/include/hipblaslt/hipblaslt.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/tsl/platform/errors.h"
