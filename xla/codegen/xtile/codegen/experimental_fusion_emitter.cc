@@ -73,6 +73,7 @@ limitations under the License.
 #include "xla/hlo/translate/hlo_to_mhlo/attribute_importer.h"
 #include "xla/permutation_util.h"
 #include "xla/primitive_util.h"
+#include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/llvm_ir/llvm_util.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
@@ -2200,6 +2201,102 @@ void EmitFullyTiledSequentialDimensions(
   }
 }
 
+// Applies L2 tile reordering to the flat tile_id for kRaggedNonContracting
+// ragged-dot fusions that set BlockLevelFusionConfig.group_size > 1.
+//
+// The standard Triton GROUP_SIZE remapping reorders (M, N) tile enumeration so
+// that `group_size` consecutive M-tiles share the same N-tile before the next
+// N-tile group begins, improving L2 cache hit rate:
+//
+//   num_pid_in_group = G * num_pid_n
+//   group_id         = pid // num_pid_in_group
+//   first_pid_m      = group_id * G
+//   group_size_m     = min(num_pid_m - first_pid_m, G)
+//   pid_m            = first_pid_m + (pid % num_pid_in_group) % group_size_m
+//   pid_n            = (pid % num_pid_in_group) // group_size_m
+//   remapped_pid     = pid_m * num_pid_n + pid_n
+//
+// Returns `raw_tile_id` unchanged when the fusion does not qualify (not
+// kRaggedNonContracting, batch dims present, group_size <= 1, or 1-D grid).
+Value ApplyGroupSizeTileIdRemapping(ImplicitLocOpBuilder& b,
+                                    const HloFusionInstruction& fusion,
+                                    Value raw_tile_id) {
+  // Read group_size from the fusion backend config.
+  auto gpu_config_or = fusion.backend_config<xla::gpu::GpuBackendConfig>();
+  if (!gpu_config_or.ok()) return raw_tile_id;
+  const xla::gpu::GpuBackendConfig& gpu_config = *gpu_config_or;
+  if (!gpu_config.fusion_backend_config().has_block_level_fusion_config()) {
+    return raw_tile_id;
+  }
+  const xla::gpu::BlockLevelFusionConfig& blk_cfg =
+      gpu_config.fusion_backend_config().block_level_fusion_config();
+  const int gs = std::max(1, blk_cfg.group_size());
+  if (gs <= 1) return raw_tile_id;
+
+  // Find the kRaggedDot inside the fusion.
+  const HloComputation* comp = fusion.fused_instructions_computation();
+  const HloRaggedDotInstruction* rd = nullptr;
+  for (const HloInstruction* instr : comp->instructions()) {
+    if (instr->opcode() == HloOpcode::kRaggedDot) {
+      rd = ::xla::Cast<HloRaggedDotInstruction>(instr);
+      break;
+    }
+  }
+  if (rd == nullptr) return raw_tile_id;
+
+  // Only apply to kRaggedNonContracting, no-batch case.
+  const auto& rdims = rd->ragged_dot_dimension_numbers();
+  const auto& ddims = rdims.dot_dimension_numbers();
+  const int64_t ragged_lhs = rdims.lhs_ragged_dimensions(0);
+  if (absl::c_count(ddims.lhs_contracting_dimensions(), ragged_lhs) > 0 ||
+      absl::c_count(ddims.lhs_batch_dimensions(), ragged_lhs) > 0) {
+    return raw_tile_id;
+  }
+  // Only handle the no-batch, 2-D grid case ([M, N] output tile).
+  if (blk_cfg.output_tiles_size() < 1 ||
+      blk_cfg.output_tiles(0).sizes_size() != 2) {
+    return raw_tile_id;
+  }
+
+  // Grid dimensions: num_pid_m × num_pid_n programs.
+  const int64_t BLOCK_M = blk_cfg.output_tiles(0).sizes(0);
+  const int64_t BLOCK_N = blk_cfg.output_tiles(0).sizes(1);
+  const int64_t M_total = rd->shape().dimensions(0);
+  const int64_t N_total = rd->shape().dimensions(1);
+  const int64_t num_pid_m = (M_total + BLOCK_M - 1) / BLOCK_M;
+  const int64_t num_pid_n = (N_total + BLOCK_N - 1) / BLOCK_N;
+
+  if (num_pid_m <= 1 || num_pid_n <= 0) return raw_tile_id;  // Nothing to reorder.
+
+  // Cast pid to i32 for arithmetic (Triton program IDs are 32-bit).
+  Value pid = Cast(b, raw_tile_id, b.getI32Type());
+  auto ci = [&](int64_t v) { return CreateConst(b, b.getI32Type(), v); };
+  Value G = ci(gs);
+  Value npm = ci(num_pid_m);
+  Value npn = ci(num_pid_n);
+  // num_pid_in_group = G * num_pid_n
+  Value g_npn = arith::MulIOp::create(b, G, npn);
+  // group_id = pid / (G * num_pid_n)
+  Value group_id = arith::DivSIOp::create(b, pid, g_npn);
+  // first_pid_m = group_id * G
+  Value first_pid_m = arith::MulIOp::create(b, group_id, G);
+  // rem_in_group = pid % (G * num_pid_n)
+  Value rem = arith::RemSIOp::create(b, pid, g_npn);
+  // group_size_m = min(num_pid_m - first_pid_m, G)
+  Value npm_minus_first = arith::SubIOp::create(b, npm, first_pid_m);
+  Value group_size_m = arith::MinSIOp::create(b, npm_minus_first, G);
+  // pid_m = first_pid_m + (rem % group_size_m)
+  Value pid_m = arith::AddIOp::create(
+      b, first_pid_m, arith::RemSIOp::create(b, rem, group_size_m));
+  // pid_n = rem / group_size_m
+  Value pid_n = arith::DivSIOp::create(b, rem, group_size_m);
+  // remapped flat index = pid_m * num_pid_n + pid_n
+  Value remapped = arith::AddIOp::create(
+      b, arith::MulIOp::create(b, pid_m, npn), pid_n);
+  // Cast back to index type for EmitterContext.
+  return arith::IndexCastOp::create(b, b.getIndexType(), remapped);
+}
+
 absl::Status EmitGeneric(ImplicitLocOpBuilder& b,
                          const HloFusionInstruction& fusion,
                          const ge::TiledHloComputation& tiled_computation,
@@ -2210,7 +2307,12 @@ absl::Status EmitGeneric(ImplicitLocOpBuilder& b,
             << ExtractInstructionIntoNewModule(fusion)->ToString();
     VLOG(6) << "Tiled computation: \n" << tiled_computation.ToString();
   }
-  Value tile_id = fn.getTileId();
+  // Apply GROUP_SIZE L2 tile reordering for kRaggedNonContracting ragged-dot
+  // fusions where BlockLevelFusionConfig.group_size > 1.  The remapping
+  // transforms the flat program_id to an L2-friendly (M_tile, N_tile) pair
+  // before EmitterContext is constructed, so that all EvaluateTilingParameters
+  // calls automatically yield the reordered tile coordinates.
+  Value tile_id = ApplyGroupSizeTileIdRemapping(b, fusion, fn.getTileId());
   EmitterContext emitter_ctx{b,        &fusion, tile_id,
                              schedule, fn,      tiled_computation};
 

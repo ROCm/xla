@@ -391,6 +391,9 @@ absl::Status TritonBackend::ApplyConfig(HloInstruction& instr,
     blk_cfg->set_num_ctas(
         std::max(1, static_cast<int>(triton_config_proto.num_ctas())));
     blk_cfg->set_num_stages(triton_config_proto.num_stages());
+    // group_size == 0 in old protos means "no reordering" (same as 1).
+    blk_cfg->set_group_size(
+        std::max(static_cast<int64_t>(1), triton_config_proto.group_size()));
     RETURN_IF_ERROR(instr.set_backend_config(gpu_config));
     RETURN_IF_ERROR(inner_ragged_dot->set_backend_config(inner_tile));
     return absl::OkStatus();
@@ -478,11 +481,16 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
   const int64_t kElemsPerThreadLimit = is_rocm ? 256 : 64;
 
   // Search space: {16,32,64,128,256}³ block sizes × {2,4,8} num_warps × {1,2}
-  // num_stages.  Pruned by dimension sizes and per-thread register budget to
-  // avoid obviously invalid configs.
+  // num_stages × {1,2,4,8} group_size.
+  // Pruned by dimension sizes and per-thread register budget to avoid
+  // obviously invalid configs.
   //
   // The upper bound of 256 matches the MI300X benchmark's best configs, where
   // BLOCK_M=256 and BLOCK_N=256 achieve peak GMM throughput on that platform.
+  //
+  // group_size controls L2 tile reordering (see BlockLevelFusionConfig):
+  //   1 = no reordering (default), 2/4/8 = reorder up to 2/4/8 M-tiles
+  //   before advancing to the next N-tile, improving L2 hit rate.
   std::vector<std::unique_ptr<BackendConfig>> configs;
   for (int block_m : {16, 32, 64, 128, 256}) {
     if (!exhaustive_search && block_m > M_total) continue;
@@ -501,15 +509,28 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
                   static_cast<int64_t>(block_m) * block_n / (num_warps * 32);
               if (elems_per_thread > kElemsPerThreadLimit) continue;
             }
-            auto config = std::make_unique<BackendConfig>();
-            *config->mutable_triton() =
-                TritonGemmConfig(block_m, block_n, block_k,
-                                 /*num_stages=*/num_stages,
-                                 /*num_warps=*/num_warps,
-                                 /*num_ctas=*/1,
-                                 /*is_tma_allowed=*/false)
-                    .ToProto();
-            configs.push_back(std::move(config));
+            for (int group_size : {1, 2, 4, 8}) {
+              // Skip group_size > num_M_tiles: reordering more tiles than
+              // exist is equivalent to group_size=num_M_tiles and produces
+              // duplicate configs that only waste autotuning time.
+              if (!exhaustive_search) {
+                int64_t num_m_tiles =
+                    (M_total + block_m - 1) / block_m;
+                if (group_size > num_m_tiles) continue;
+              }
+              auto config = std::make_unique<BackendConfig>();
+              *config->mutable_triton() =
+                  TritonGemmConfig(block_m, block_n, block_k,
+                                   /*num_stages=*/num_stages,
+                                   /*num_warps=*/num_warps,
+                                   /*num_ctas=*/1,
+                                   /*is_tma_allowed=*/false,
+                                   /*is_warp_specialization_allowed=*/false,
+                                   /*waves_per_eu=*/0,
+                                   /*group_size=*/group_size)
+                      .ToProto();
+              configs.push_back(std::move(config));
+            }
           }
         }
       }
