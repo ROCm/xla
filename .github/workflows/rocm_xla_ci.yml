@@ -66,6 +66,9 @@ jobs:
           mkdir -p /tf/certificates
           echo "$RBE_CI_CERT" > /tf/certificates/ci-cert.crt
           echo "$RBE_CI_KEY" > /tf/certificates/ci-cert.key
+          mkdir -p /data
+          echo "$RBE_CI_CERT" > /data/ci-cert.crt
+          echo "$RBE_CI_KEY" > /data/ci-cert.key
 
       - name: CPU Info
         run: lscpu
