@@ -9,7 +9,6 @@ EXCLUDED_TESTS=(
     "*IotaR1Test*"                                                                                                                                 # Taking too many CI nodes
     "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
     "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x*"
-    "DeterminismTest.CublasDot"
     "F8E5M2Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_*"
     "DotOperationTestWithCublasLt_F16F32F64CF64/2*"
     "DotOperationTestWithCublasLt_F16F32F64CF64/1*"
