@@ -25,7 +25,6 @@ EXCLUDED_TESTS=(
     "DotOperationTest_F16F32F64CF64/2*"
     "ParameterizedGemmRewriteTest.GemmTypeCombinationCheck"
     "MatmulTestWithCublas.GemmRewriter_RegressionTestF64"
-    "MIOpenBackendTest.GetSupportedConfigsFromMIOpenCustomCall"
     "TritonEmitterTest.ScaledDotIsSupportedByReferencePlatform"
     "SampleFileTest.Convolution" # https://wardite.cluster.engflow.com/invocations/default/c105260c-873a-4634-ab69-905a43ca5cf8
 )
