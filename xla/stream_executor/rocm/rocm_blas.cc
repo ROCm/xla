@@ -68,7 +68,7 @@ namespace {
 
 #define ROCBLAS_API_WRAPPER(__name)               \
   struct WrapperShim__##__name {                  \
-    constexpr static const char* kName = #__name; \
+    constexpr static const char *kName = #__name; \
     template <typename... Args>                   \
     rocblas_status operator()(Args... args) {     \
       return (::__name)(args...);                 \
