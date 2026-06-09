@@ -1657,17 +1657,24 @@ uint64_t GpuExecutable::ComputeCopyThreshold(
   static auto* const kCalibCache = new absl::flat_hash_map<int, uint64_t>();
   std::optional<uint64_t> measured;
   {
+    // Hold kCalibMu across the (one-time, per-device) probe so two VA-range
+    // indices on the same executor cannot both run the expensive
+    // MeasureCopyVsRemapBreakeven concurrently. try_emplace reserves the slot;
+    // on probe failure we erase it so a later call can retry.
     absl::MutexLock l(kCalibMu);
-    auto it = kCalibCache->find(executor->device_ordinal());
-    if (it != kCalibCache->end()) measured = it->second;
-  }
-  if (!measured.has_value()) {
-    absl::StatusOr<uint64_t> m = MeasureCopyVsRemapBreakeven(
-        executor, vmm_allocator, stream, granularity);
-    if (m.ok()) {
-      measured = *m;
-      absl::MutexLock l(kCalibMu);
-      (*kCalibCache)[executor->device_ordinal()] = *m;
+    auto [it, inserted] = kCalibCache->try_emplace(executor->device_ordinal(),
+                                                   uint64_t{0});
+    if (!inserted) {
+      measured = it->second;
+    } else {
+      absl::StatusOr<uint64_t> m = MeasureCopyVsRemapBreakeven(
+          executor, vmm_allocator, stream, granularity);
+      if (m.ok()) {
+        it->second = *m;
+        measured = *m;
+      } else {
+        kCalibCache->erase(it);
+      }
     }
   }
   // acc accumulates 2*size per admitted slice: bidirectional copy moves 2 bytes
@@ -1689,10 +1696,15 @@ uint64_t GpuExecutable::ComputeCopyThreshold(
   }
   // With a measured break-even, each admitted slice is individually cheaper to
   // copy than remap, so memory is the only remaining bound; without it, also
-  // keep the aggregate copy-time guard.
-  double total_budget =
-      measured.has_value() ? (mem_cap > 0.0 ? mem_cap : 1e18)
-                           : kTotalCopyUs * 1e-6 * static_cast<double>(bw);
+  // keep the aggregate copy-time guard. If memory reporting is unavailable
+  // (mem_cap == 0) we must NOT leave the budget unbounded -- that would admit
+  // every below-break-even slice regardless of aggregate footprint and could
+  // OOM. Fall back to the copy-time budget (~kTotalCopyUs of bandwidth), the
+  // same principled bound the no-measurement branch uses.
+  const double copy_time_budget = kTotalCopyUs * 1e-6 * static_cast<double>(bw);
+  double total_budget = measured.has_value()
+                            ? (mem_cap > 0.0 ? mem_cap : copy_time_budget)
+                            : copy_time_budget;
   if (!measured.has_value() && mem_cap > 0.0) {
     total_budget = std::min(total_budget, mem_cap);
   }
@@ -1713,6 +1725,11 @@ uint64_t GpuExecutable::ComputeCopyThreshold(
     if (static_cast<double>(s) > per_buffer_cap) break;
     if (acc + 2.0 * static_cast<double>(s) > total_budget) break;
     acc += 2.0 * static_cast<double>(s);
+    // is_small_copy_slice admits every slice with size <= copy_threshold, so if
+    // several slices share the boundary size we may admit more than the budget
+    // strictly afforded. The overrun is bounded by (count_at_size - 1)*2*size;
+    // for the tiny scalar/scale slices this targets that is negligible, so we
+    // accept it rather than bucketing by distinct size.
     copy_threshold = s;
   }
   XLA_VLOG_DEVICE(2, executor->device_ordinal()) << absl::StreamFormat(
