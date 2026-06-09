@@ -67,6 +67,9 @@ jobs:
           mkdir -p /tf/certificates
           echo "$RBE_CI_CERT" > /tf/certificates/ci-cert.crt
           echo "$RBE_CI_KEY" > /tf/certificates/ci-cert.key
+          mkdir -p /data
+          echo "$RBE_CI_CERT" > /data/ci-cert.crt
+          echo "$RBE_CI_KEY" > /data/ci-cert.key
 
       - name: CPU Info
         run: lscpu
@@ -84,7 +87,8 @@ jobs:
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
-            --config=xla_sgpu
+            --config=xla_sgpu \
+            --jobs=30
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always() && !cancelled()

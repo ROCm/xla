@@ -113,7 +113,8 @@ jobs:
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
-            --config=xla_sgpu
+            --config=xla_sgpu \
+            --jobs=30
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always() && !cancelled()
