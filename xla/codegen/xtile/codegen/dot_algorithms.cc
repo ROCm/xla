@@ -75,52 +75,6 @@ mlir::stablehlo::Precision XlaPrecisionToStableHloPrecision(
 
 namespace {
 
-absl::StatusOr<Value> ScaledDot(mlir::ImplicitLocOpBuilder& b,
-                                ScaledDotOperands& operands) {
-  mlir::Type lhs_dot_elem_type = getElementTypeOrSelf(operands.lhs.getType());
-  mlir::Type rhs_dot_elem_type = getElementTypeOrSelf(operands.rhs.getType());
-
-  Value lhs_scale;
-  if (lhs_dot_elem_type != b.getBF16Type()) {
-    lhs_scale = Bitcast(b, operands.lhs_scale, b.getI8Type());
-  }
-  Value rhs_scale;
-  if (rhs_dot_elem_type != b.getBF16Type()) {
-    rhs_scale = Bitcast(b, operands.rhs_scale, b.getI8Type());
-    auto rhs_scale_type = mlir::cast<mlir::ShapedType>(rhs_scale.getType());
-    int64_t rank = rhs_scale_type.getRank();
-    CHECK_GE(rank, 2) << "RHS scale must be at least rank 2 for scaled dot.";
-
-    std::vector<int64_t> permutation(rank);
-    for (int64_t i = 0; i < rank; ++i) {
-      permutation[i] = i;
-    }
-    std::swap(permutation[rank - 2], permutation[rank - 1]);
-    rhs_scale = mlir::stablehlo::TransposeOp::create(
-        b, rhs_scale, b.getDenseI64ArrayAttr(permutation));
-  }
-
-  // When operand type is subbyte size then it is packed along minor dim and for
-  // RHS minor dim is not K.
-  const auto& lhs_shaped_type =
-      mlir::dyn_cast<ShapedType>(operands.lhs.getType());
-  const bool rhs_k_pack = lhs_shaped_type.getElementType() !=
-                          mlir::Float4E2M1FNType::get(b.getContext());
-  auto dot_scaled_op = xtile::DotScaledOp::create(
-      b, operands.accumulator.getType(), operands.lhs, operands.rhs, lhs_scale,
-      rhs_scale, /*fastMath=*/true, /*lhs_k_pack=*/true, rhs_k_pack,
-      operands.dot_dimension_numbers);
-
-  auto add_result =
-      mlir::isa<mlir::IntegerType>(
-          dot_scaled_op.getResult().getType().getElementType())
-          ? mlir::arith::AddIOp::create(b, operands.accumulator, dot_scaled_op)
-          : mlir::arith::AddFOp::create(b, operands.accumulator, dot_scaled_op);
-  return add_result->getResult(0);
-}
-
-namespace {
-
 Value EmitStableHloDotAndAdd(mlir::ImplicitLocOpBuilder& b, Value lhs,
                              Value rhs, Value acc, PrecisionSpec precision_spec,
                              mlir::stablehlo::DotDimensionNumbersAttr dims) {
@@ -141,6 +95,107 @@ Value EmitStableHloDotAndAdd(mlir::ImplicitLocOpBuilder& b, Value lhs,
 }
 
 }  // namespace
+
+namespace {
+
+Value DequantizeOperand(mlir::ImplicitLocOpBuilder& b, Value operand,
+                        Value scale) {
+  auto operand_type = mlir::cast<mlir::RankedTensorType>(operand.getType());
+  auto scale_type = mlir::cast<mlir::RankedTensorType>(scale.getType());
+  mlir::Type elem_type = operand_type.getElementType();
+  mlir::Type scale_elem_type = scale_type.getElementType();
+
+  Value typed_scale = scale;
+  if (scale_elem_type != elem_type) {
+    auto converted_type =
+        mlir::RankedTensorType::get(scale_type.getShape(), elem_type);
+    typed_scale =
+        mlir::stablehlo::ConvertOp::create(b, converted_type, scale);
+  }
+
+  int64_t rank = operand_type.getRank();
+  CHECK_EQ(rank, scale_type.getRank())
+      << "operand and scale must have the same rank";
+  llvm::SmallVector<int64_t> expanded_shape;
+  llvm::SmallVector<int64_t> broadcast_dims;
+  expanded_shape.reserve(2 * rank);
+  broadcast_dims.reserve(rank);
+  for (int64_t result_idx = 0, i = 0; i < rank; ++i, ++result_idx) {
+    int64_t op_dim = operand_type.getShape()[i];
+    int64_t sc_dim = scale_type.getShape()[i];
+    CHECK_EQ(op_dim % sc_dim, 0)
+        << "operand dim " << op_dim << " not divisible by scale dim "
+        << sc_dim << " at index " << i;
+    expanded_shape.push_back(sc_dim);
+    broadcast_dims.push_back(result_idx);
+    if (op_dim != sc_dim) {
+      result_idx++;
+      expanded_shape.push_back(op_dim / sc_dim);
+    }
+  }
+  auto expanded_type = mlir::RankedTensorType::get(expanded_shape, elem_type);
+  Value expanded = mlir::stablehlo::BroadcastInDimOp::create(
+      b, expanded_type, typed_scale,
+      b.getDenseI64ArrayAttr(broadcast_dims));
+
+  auto reshape_type =
+      mlir::RankedTensorType::get(operand_type.getShape(), elem_type);
+  Value reshaped =
+      mlir::stablehlo::ReshapeOp::create(b, reshape_type, expanded);
+
+  return mlir::stablehlo::MulOp::create(b, operand, reshaped);
+}
+
+absl::StatusOr<Value> ScaledDot(mlir::ImplicitLocOpBuilder& b,
+                                const HloScaledDotInstruction& scaled_dot,
+                                ScaledDotOperands& operands) {
+  mlir::Type lhs_dot_elem_type = getElementTypeOrSelf(operands.lhs.getType());
+  mlir::Type rhs_dot_elem_type = getElementTypeOrSelf(operands.rhs.getType());
+
+  if (lhs_dot_elem_type == b.getBF16Type() ||
+      rhs_dot_elem_type == b.getBF16Type()) {
+    Value lhs = DequantizeOperand(b, operands.lhs, operands.lhs_scale);
+    Value rhs = DequantizeOperand(b, operands.rhs, operands.rhs_scale);
+    const PrecisionConfig& pc = scaled_dot.precision_config();
+    PrecisionSpec prec{pc.algorithm(),
+                       XlaPrecisionToStableHloPrecision(pc.operand_precision(0)),
+                       XlaPrecisionToStableHloPrecision(pc.operand_precision(1))};
+    return EmitStableHloDotAndAdd(b, lhs, rhs, operands.accumulator, prec,
+                                  operands.dot_dimension_numbers);
+  }
+
+  Value lhs_scale = Bitcast(b, operands.lhs_scale, b.getI8Type());
+  Value rhs_scale = Bitcast(b, operands.rhs_scale, b.getI8Type());
+  auto rhs_scale_type = mlir::cast<mlir::ShapedType>(rhs_scale.getType());
+  int64_t rank = rhs_scale_type.getRank();
+  CHECK_GE(rank, 2) << "RHS scale must be at least rank 2 for scaled dot.";
+
+  std::vector<int64_t> permutation(rank);
+  for (int64_t i = 0; i < rank; ++i) {
+    permutation[i] = i;
+  }
+  std::swap(permutation[rank - 2], permutation[rank - 1]);
+  rhs_scale = mlir::stablehlo::TransposeOp::create(
+      b, rhs_scale, b.getDenseI64ArrayAttr(permutation));
+
+  // When operand type is subbyte size then it is packed along minor dim and for
+  // RHS minor dim is not K.
+  const auto& lhs_shaped_type =
+      mlir::dyn_cast<ShapedType>(operands.lhs.getType());
+  const bool rhs_k_pack = lhs_shaped_type.getElementType() !=
+                          mlir::Float4E2M1FNType::get(b.getContext());
+  auto dot_scaled_op = xtile::DotScaledOp::create(
+      b, operands.accumulator.getType(), operands.lhs, operands.rhs, lhs_scale,
+      rhs_scale, /*fastMath=*/true, /*lhs_k_pack=*/true, rhs_k_pack,
+      operands.dot_dimension_numbers);
+
+  auto add_result =
+      mlir::isa<mlir::IntegerType>(
+          dot_scaled_op.getResult().getType().getElementType())
+          ? mlir::arith::AddIOp::create(b, operands.accumulator, dot_scaled_op)
+          : mlir::arith::AddFOp::create(b, operands.accumulator, dot_scaled_op);
+  return add_result->getResult(0);
+}
 
 absl::StatusOr<Type> GetAlgUnsetAccumulatorType(mlir::ImplicitLocOpBuilder& b,
                                                 const HloDotInstruction& dot) {
@@ -318,7 +373,7 @@ absl::StatusOr<Value> EmitSingleTileScaledDot(
   dot_operands.dot_dimension_numbers =
       ::xla::stablehlo::ConvertDotDimensionNumbers(
           scaled_dot.dot_dimension_numbers(), &b);
-  return ScaledDot(b, dot_operands);
+  return ScaledDot(b, scaled_dot, dot_operands);
 }
 
 }  // namespace xtile
