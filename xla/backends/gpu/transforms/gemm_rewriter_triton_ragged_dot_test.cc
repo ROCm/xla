@@ -68,7 +68,7 @@ class TritonRaggedDotTest
     MatchOptimizedHlo(hlo_text, R"(
       ; CHECK-NOT: groupedMatmul
       ; CHECK:     kind=kCustom
-      ; CHECK-SAME: "__triton"
+      ; CHECK-SAME: "__triton_gemm"
     )");
 
     // 2. Numerical check when Triton is available on the device.
@@ -820,7 +820,7 @@ class TritonRaggedDotPersistentContractingTest
                                                                    1e-4}) {
     MatchOptimizedHlo(hlo_text, R"(
       ; CHECK:     kind=kCustom
-      ; CHECK-SAME: "__triton"
+      ; CHECK-SAME: "__triton_gemm"
     )");
     if (SupportsTriton()) {
       EXPECT_TRUE(RunAndCompare(hlo_text, error_spec));
@@ -1197,7 +1197,7 @@ class TritonRaggedDotBatchTest
                                                                    1e-4}) {
     MatchOptimizedHlo(hlo_text, R"(
       ; CHECK:     kind=kCustom
-      ; CHECK-SAME: "__triton"
+      ; CHECK-SAME: "__triton_gemm"
     )");
     if (SupportsTriton()) {
       EXPECT_TRUE(RunAndCompare(hlo_text, error_spec));
