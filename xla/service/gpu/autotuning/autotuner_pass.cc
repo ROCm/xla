@@ -151,14 +151,6 @@ AutotuneDecision ShouldAutotuneGemmFusion(const HloInstruction& instruction) {
     }
     return AutotuneDecision::Allow();
   }
-  // kTritonFusionKind ("__triton") is used by XTile fusions, including
-  // kRaggedDot (group-GEMM).  Unlike kTritonGemmFusionKind, these fusions
-  // always carry a BlockLevelFusionConfig set by GemmRewriter.  Allow
-  // the autotuner to search for better tile sizes via
-  // TritonBackend::GetSupportedConfigsForRaggedDot.
-  if (backend_config.kind() == kTritonFusionKind) {
-    return AutotuneDecision::Allow();
-  }
   if (backend_config.kind() == kCuDnnFusionKind) {
     if (backend_config.has_cudnn_fusion_config()) {
       return AutotuneDecision::Forbid("cuDNN fusion already has a config");
@@ -224,7 +216,6 @@ AutotuneDecision ShouldAutotuneInstruction(bool do_not_autotune_cublas,
     const FusionBackendConfig& backend_config =
         gpu_config->fusion_backend_config();
     if (backend_config.kind() == kTritonGemmFusionKind ||
-        backend_config.kind() == kTritonFusionKind ||
         backend_config.kind() == kCuDnnFusionKind ||
         backend_config.kind() == kCustomFusionKind) {
       // TODO(b/511979384): Remove this condition once
