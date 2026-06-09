@@ -590,10 +590,9 @@ bool TritonBackend::IsSupported(const HloInstruction& instr) {
   const FusionBackendConfig& backend_config =
       gpu_config->fusion_backend_config();
 
-  // kTritonGemmFusionKind ("__triton_gemm") is used by ragged-dot (group-GEMM)
-  // XTile fusions created by GemmRewriter::HandleRaggedDot.  We support
-  // autotuning for kRaggedDot fusions specifically.
-  if (backend_config.kind() == kTritonGemmFusionKind) {
+  // kTritonFusionKind ("__triton") may be used by multiple XTile fusion types.
+  // We support autotuning for kRaggedDot fusions specifically.
+  if (backend_config.kind() == kTritonFusionKind) {
     const HloInstruction* ragged_dot_instr =
         hlo_query::GetFirstInstructionWithOpcode(
             *instr.fused_instructions_computation(), HloOpcode::kRaggedDot);

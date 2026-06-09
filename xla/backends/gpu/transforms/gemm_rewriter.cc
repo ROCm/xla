@@ -913,20 +913,17 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
           ragged_dot->GetModule()->AddComputationAndUnifyNamesAndIds(
               builder.Build(fused_ragged_dot), /*is_entry=*/false);
 
-      // Create the kCustom fusion with kTritonGemmFusionKind.
-      // The XTile emitter recognises kTritonGemmFusionKind fusions 
-      // that carry a block_level_fusion_config and compiles them via the
-      // TileAndEmitXTileModule path.
+      // Create the kCustom fusion with kTritonFusionKind.
       std::unique_ptr<HloInstruction> fusion_instr =
           HloInstruction::CreateFusion(ragged_dot->shape(),
                                        HloInstruction::FusionKind::kCustom,
                                        fusion_params, new_computation);
 
-      // Set fusion backend config: kTritonGemmFusionKind + default tile sizes.
+      // Set fusion backend config: kTritonFusionKind + default tile sizes.
       GpuBackendConfig gpu_backend_config;
       FusionBackendConfig* fusion_config =
           gpu_backend_config.mutable_fusion_backend_config();
-      fusion_config->set_kind(std::string(kTritonGemmFusionKind));
+      fusion_config->set_kind(std::string(kTritonFusionKind));
       BlockLevelFusionConfig* blk_cfg =
           fusion_config->mutable_block_level_fusion_config();
 
