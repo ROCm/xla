@@ -109,8 +109,7 @@ Value DequantizeOperand(mlir::ImplicitLocOpBuilder& b, Value operand,
   if (scale_elem_type != elem_type) {
     auto converted_type =
         mlir::RankedTensorType::get(scale_type.getShape(), elem_type);
-    typed_scale =
-        mlir::stablehlo::ConvertOp::create(b, converted_type, scale);
+    typed_scale = mlir::stablehlo::ConvertOp::create(b, converted_type, scale);
   }
 
   int64_t rank = operand_type.getRank();
@@ -124,8 +123,8 @@ Value DequantizeOperand(mlir::ImplicitLocOpBuilder& b, Value operand,
     int64_t op_dim = operand_type.getShape()[i];
     int64_t sc_dim = scale_type.getShape()[i];
     CHECK_EQ(op_dim % sc_dim, 0)
-        << "operand dim " << op_dim << " not divisible by scale dim "
-        << sc_dim << " at index " << i;
+        << "operand dim " << op_dim << " not divisible by scale dim " << sc_dim
+        << " at index " << i;
     expanded_shape.push_back(sc_dim);
     broadcast_dims.push_back(result_idx);
     if (op_dim != sc_dim) {
@@ -135,8 +134,7 @@ Value DequantizeOperand(mlir::ImplicitLocOpBuilder& b, Value operand,
   }
   auto expanded_type = mlir::RankedTensorType::get(expanded_shape, elem_type);
   Value expanded = mlir::stablehlo::BroadcastInDimOp::create(
-      b, expanded_type, typed_scale,
-      b.getDenseI64ArrayAttr(broadcast_dims));
+      b, expanded_type, typed_scale, b.getDenseI64ArrayAttr(broadcast_dims));
 
   auto reshape_type =
       mlir::RankedTensorType::get(operand_type.getShape(), elem_type);
@@ -157,9 +155,10 @@ absl::StatusOr<Value> ScaledDot(mlir::ImplicitLocOpBuilder& b,
     Value lhs = DequantizeOperand(b, operands.lhs, operands.lhs_scale);
     Value rhs = DequantizeOperand(b, operands.rhs, operands.rhs_scale);
     const PrecisionConfig& pc = scaled_dot.precision_config();
-    PrecisionSpec prec{pc.algorithm(),
-                       XlaPrecisionToStableHloPrecision(pc.operand_precision(0)),
-                       XlaPrecisionToStableHloPrecision(pc.operand_precision(1))};
+    PrecisionSpec prec{
+        pc.algorithm(),
+        XlaPrecisionToStableHloPrecision(pc.operand_precision(0)),
+        XlaPrecisionToStableHloPrecision(pc.operand_precision(1))};
     return EmitStableHloDotAndAdd(b, lhs, rhs, operands.accumulator, prec,
                                   operands.dot_dimension_numbers);
   }
