@@ -83,7 +83,8 @@ jobs:
             --config=ci_single_gpu \
             --local_test_jobs=4 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
-            --config=xla_sgpu
+            --config=xla_sgpu \
+            --jobs=30
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always() && !cancelled()
