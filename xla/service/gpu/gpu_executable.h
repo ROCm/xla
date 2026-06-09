@@ -75,6 +75,10 @@ limitations under the License.
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/xla.pb.h"
 
+namespace stream_executor {
+class DeviceAddressVmmAllocator;
+}  // namespace stream_executor
+
 namespace xla {
 namespace gpu {
 
@@ -344,6 +348,35 @@ class GpuExecutable : public Executable {
       uint64_t allocation_id;
     };
     std::vector<AllocationMappingState> last_mapping_state;
+
+    // EXPERIMENT (env XLA_VMM_TMP_COPY_THRESHOLD): for small command-buffer
+    // slices (scales / tiny scalars) we avoid VA remapping entirely. Each such
+    // slice gets a stable shadow device buffer here (allocated once, fixed
+    // address baked into the command buffer) and is refreshed with a
+    // device-to-device copy every step instead of an hipMemUnmap/Map/SetAccess.
+    // Keyed by allocation index; kept for the lifetime of the run. Freed in
+    // ~VaRanges() via `executor` (DeviceAddressBase has no RAII).
+    absl::flat_hash_map<BufferAllocation::Index, se::DeviceAddressBase>
+        small_shadow;
+
+    // True once the one-time setup below has run. Used as the init guard
+    // instead of `va_reservation == nullptr`, because the reservation can
+    // legitimately stay null (when every slice is small and copied), which
+    // would otherwise re-run setup -- and re-create unmap_event while it may
+    // still be in-flight on the GPU -- every step.
+    bool initialized = false;
+
+    // Copy-vs-remap size cutoff, computed ONCE at init and frozen for the
+    // lifetime of this VA range. It must not change across steps: the VA
+    // reservation is sized once from it, so a later shrink would push more
+    // slices onto the remap path than the reservation can hold.
+    uint64_t copy_threshold = 0;
+
+    // Executor that owns the shadow buffers, captured at init so ~VaRanges()
+    // can deallocate them.
+    se::StreamExecutor* executor = nullptr;
+
+    ~VaRanges();
   };
 
   // Additional streams borrowed at run time for the execution.
@@ -401,6 +434,17 @@ class GpuExecutable : public Executable {
       se::StreamExecutor* executor, int64_t unique_id,
       Thunk::ExecutableSource executable_source, bool block_host_until_done,
       bool collective_use_minimal_resource);
+
+  // Computes the copy-vs-remap byte cutoff for the command-buffer slices of
+  // this executable. Reads env XLA_VMM_TMP_COPY_THRESHOLD (0 = disabled,
+  // 1 = auto, >1 = explicit). In auto mode the cutoff is derived from the
+  // device's measured remap cost / copy bandwidth and currently-free HBM.
+  // Called exactly once per VA range (result is cached in VaRanges), so it is
+  // free to do one-time device probing.
+  uint64_t ComputeCopyThreshold(
+      const BufferAllocations& buffer_allocations,
+      se::DeviceAddressVmmAllocator* vmm_allocator, se::StreamExecutor* executor,
+      se::Stream* stream, uint64_t granularity) const;
 
   static absl::Status ExecuteThunksImpl(
       const DebugOptions* debug_options, const std::string& module_name,
