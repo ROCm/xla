@@ -331,6 +331,7 @@ AutotunerPass::GetGpuAutotunerBackends(
     disabled_autotune_backends.push_back(autotuner::Backend::HIPBLASLT);
     disabled_autotune_backends.push_back(autotuner::Backend::MIOPEN);
     disabled_autotune_backends.push_back(autotuner::Backend::HIPBLASLT_FISSION);
+    disabled_autotune_backends.push_back(autotuner::Backend::CUBLASLT_FISSION);
   }
 
   if (!debug_options.xla_gpu_experimental_autotune_post_fusion() ||
