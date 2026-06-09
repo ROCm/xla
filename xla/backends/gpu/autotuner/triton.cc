@@ -470,23 +470,36 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
   const bool exhaustive_search =
       debug_options().xla_gpu_exhaustive_tiling_search();
 
-  // Search space: {16,32,64,128}³ block sizes × {4,8} num_warps × {1,2}
-  // num_stages.  Pruned by dimension sizes to avoid obviously invalid configs.
+  // On ROCm (MI300X), 512 vector registers/thread allow larger output tiles
+  // without spilling; use a higher elements-per-thread cutoff than the 64
+  // that is appropriate for NVIDIA Ampere/Hopper.
+  const bool is_rocm =
+      target_config().device_description.gpu_compute_capability().IsRocm();
+  const int64_t kElemsPerThreadLimit = is_rocm ? 256 : 64;
+
+  // Search space: {16,32,64,128,256}³ block sizes × {2,4,8} num_warps × {1,2}
+  // num_stages.  Pruned by dimension sizes and per-thread register budget to
+  // avoid obviously invalid configs.
+  //
+  // The upper bound of 256 matches the MI300X benchmark's best configs, where
+  // BLOCK_M=256 and BLOCK_N=256 achieve peak GMM throughput on that platform.
   std::vector<std::unique_ptr<BackendConfig>> configs;
-  for (int block_m : {16, 32, 64, 128}) {
+  for (int block_m : {16, 32, 64, 128, 256}) {
     if (!exhaustive_search && block_m > M_total) continue;
-    for (int block_n : {16, 32, 64, 128}) {
+    for (int block_n : {16, 32, 64, 128, 256}) {
       if (!exhaustive_search && block_n > N_dim) continue;
-      for (int block_k : {16, 32, 64, 128}) {
+      for (int block_k : {16, 32, 64, 128, 256}) {
         if (!exhaustive_search && block_k > K_dim) continue;
-        for (int num_warps : {4, 8}) {
+        for (int num_warps : {2, 4, 8}) {
           for (int num_stages : {1, 2}) {
             if (!exhaustive_search) {
               // Skip configs where M×N tile is too large per warp thread to
-              // avoid register spilling (~64 elements/thread cutoff).
+              // avoid register spilling.  The limit is hardware-dependent:
+              // NVIDIA uses ~64 elements/thread; ROCm/MI300X can handle up to
+              // ~256 elements/thread due to its larger register file.
               int64_t elems_per_thread =
                   static_cast<int64_t>(block_m) * block_n / (num_warps * 32);
-              if (elems_per_thread > 64) continue;
+              if (elems_per_thread > kElemsPerThreadLimit) continue;
             }
             auto config = std::make_unique<BackendConfig>();
             *config->mutable_triton() =
