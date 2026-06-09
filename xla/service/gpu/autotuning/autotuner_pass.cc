@@ -149,6 +149,19 @@ AutotuneDecision ShouldAutotuneGemmFusion(const HloInstruction& instruction) {
       return AutotuneDecision::Forbid(
           "Triton GEMM fusion already has a config");
     }
+    // kRaggedDot XTile group-GEMM fusions use kTritonGemmFusionKind with
+    // block_level_fusion_config (no triton_gemm_config).  They are handled
+    // exclusively by the new backend-agnostic AutotunerPass framework
+    // (TritonBackend).  Forbid the old GEMM autotuner here to prevent it from
+    // trying hipBLASLt as a fallback and converting the Triton fusion to a
+    // __cublas$lt$groupedMatmul custom call.
+    if (backend_config.has_block_level_fusion_config()) {
+      return AutotuneDecision::Forbid(
+          "kRaggedDot XTile fusion (kTritonGemmFusionKind + "
+          "block_level_fusion_config) is handled by the new AutotunerPass "
+          "framework; skip the old GEMM autotuner to prevent hipBLASLt "
+          "fallback");
+    }
     return AutotuneDecision::Allow();
   }
   if (backend_config.kind() == kCuDnnFusionKind) {

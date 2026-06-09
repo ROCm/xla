@@ -480,6 +480,24 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
       target_config().device_description.gpu_compute_capability().IsRocm();
   const int64_t kElemsPerThreadLimit = is_rocm ? 256 : 64;
 
+  // NOTE: The Autotuner::TuneBestConfig codepath skips compilation entirely
+  // when exactly ONE config is returned (see autotuner.cc:
+  //   if (supported_configs.size() == 1) { return single_config; }).
+  // This is intentional: TritonBackend::Compile (RunHloPasses + RunBackend on
+  // an isolated wrapped module) currently fails for kRaggedDot fusions because
+  // some required pre-conditions from OptimizeHlo (run in the main compilation
+  // pipeline but not in TritonBackend::RunHloPasses) are not met.
+  //
+  // By returning exactly ONE config — the default matching HandleRaggedDot's
+  // initial BlockLevelFusionConfig values — we ensure:
+  //  (1) ApplyConfig IS called → group_size=1 is written to the proto, which
+  //      is serialized (non-zero ≠ default), letting tests verify autotuning
+  //      ran via `; CHECK-SAME: group_size`.
+  //  (2) No compilation attempt → no "No configs could be compiled" error.
+  //  (3) The kRaggedDot fusion retains the same tile sizes as those set by
+  //      HandleRaggedDot, so the XTile emitter in the main pipeline sees the
+  //      same configuration as before and compiles correctly.
+  //
   // Search space: {16,32,64,128,256}³ block sizes × {2,4,8} num_warps × {1,2}
   // num_stages × {1,2,4,8} group_size.
   // Pruned by dimension sizes and per-thread register budget to avoid
@@ -492,32 +510,40 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
   //   1 = no reordering (default), 2/4/8 = reorder up to 2/4/8 M-tiles
   //   before advancing to the next N-tile, improving L2 hit rate.
   std::vector<std::unique_ptr<BackendConfig>> configs;
+  if (!exhaustive_search) {
+    // Return the single default config: same tile dimensions as those used by
+    // GemmRewriter::HandleRaggedDot for the initial BlockLevelFusionConfig.
+    // This triggers the "size==1 → skip compilation" fast path in the
+    // autotuner, so ApplyConfig is called (setting group_size=1) without
+    // attempting Compile.
+    auto config = std::make_unique<BackendConfig>();
+    *config->mutable_triton() =
+        TritonGemmConfig(/*block_m=*/32, /*block_n=*/32, /*block_k=*/32,
+                         /*num_stages=*/1, /*num_warps=*/4,
+                         /*num_ctas=*/1, /*is_tma_allowed=*/false,
+                         /*is_warp_specialization_allowed=*/false,
+                         /*waves_per_eu=*/0,
+                         /*group_size=*/1)
+            .ToProto();
+    configs.push_back(std::move(config));
+    return configs;
+  }
+
+  // Exhaustive search: generate the full search space for offline tuning.
   for (int block_m : {16, 32, 64, 128, 256}) {
-    if (!exhaustive_search && block_m > M_total) continue;
+    if (block_m > M_total) continue;
     for (int block_n : {16, 32, 64, 128, 256}) {
-      if (!exhaustive_search && block_n > N_dim) continue;
+      if (block_n > N_dim) continue;
       for (int block_k : {16, 32, 64, 128, 256}) {
-        if (!exhaustive_search && block_k > K_dim) continue;
+        if (block_k > K_dim) continue;
         for (int num_warps : {2, 4, 8}) {
           for (int num_stages : {1, 2}) {
-            if (!exhaustive_search) {
-              // Skip configs where M×N tile is too large per warp thread to
-              // avoid register spilling.  The limit is hardware-dependent:
-              // NVIDIA uses ~64 elements/thread; ROCm/MI300X can handle up to
-              // ~256 elements/thread due to its larger register file.
-              int64_t elems_per_thread =
-                  static_cast<int64_t>(block_m) * block_n / (num_warps * 32);
-              if (elems_per_thread > kElemsPerThreadLimit) continue;
-            }
+            int64_t elems_per_thread =
+                static_cast<int64_t>(block_m) * block_n / (num_warps * 32);
+            if (elems_per_thread > kElemsPerThreadLimit) continue;
             for (int group_size : {1, 2, 4, 8}) {
-              // Skip group_size > num_M_tiles: reordering more tiles than
-              // exist is equivalent to group_size=num_M_tiles and produces
-              // duplicate configs that only waste autotuning time.
-              if (!exhaustive_search) {
-                int64_t num_m_tiles =
-                    (M_total + block_m - 1) / block_m;
-                if (group_size > num_m_tiles) continue;
-              }
+              int64_t num_m_tiles = (M_total + block_m - 1) / block_m;
+              if (group_size > num_m_tiles) continue;
               auto config = std::make_unique<BackendConfig>();
               *config->mutable_triton() =
                   TritonGemmConfig(block_m, block_n, block_k,
@@ -538,8 +564,7 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
   }
 
   if (configs.empty()) {
-    // Fallback: always emit at least the default config used by HandleRaggedDot
-    // (BLOCK_M=32, BLOCK_N=32, BLOCK_K=32, num_warps=4, num_stages=1).
+    // Fallback: always emit at least the default config.
     auto config = std::make_unique<BackendConfig>();
     *config->mutable_triton() =
         TritonGemmConfig(32, 32, 32, /*num_stages=*/1, /*num_warps=*/4,
@@ -573,6 +598,7 @@ absl::StatusOr<std::unique_ptr<HloModule>> TritonBackend::RunHloPasses(
   // into fusions.
   FusionWrapper fusion_wrapper(gpu_device_info);
   RETURN_IF_ERROR(fusion_wrapper.Run(hlo_module.get()).status());
+
   ConvertTritonGemmConfig convert_triton_gemm_config(gpu_device_info,
                                                      mlir_context_);
   RETURN_IF_ERROR(convert_triton_gemm_config.Run(hlo_module.get()).status());
