@@ -88,7 +88,7 @@ class TritonRaggedDotTest
 // G=8, M=256, K=128, N=64.  Group sizes sum to 256 and are all positive.
 // (RunAndCompare generates random lhs/rhs; gs is constant so it stays valid.)
 TEST_F(TritonRaggedDotTest, LargeNonContracting) {
-  const char* hlo_text = R"(
+const char* hlo_text = R"(
 HloModule TritonRaggedDotLarge
 
 ENTRY main {
@@ -100,7 +100,11 @@ ENTRY main {
       lhs_ragged_dims={0}, rhs_group_dims={0}
 }
 )";
-  CheckHloAndMaybeRun(hlo_text);
+  // M_avg=32 < N=64 triggers the M/N schedule swap. The swapped memory access
+  // pattern changes the MFMA summation order on AMD gfx942 (MI300X), causing
+  // ~0.1% relative error due to tf32 rounding (xf32 MFMA). Use 1e-2 to
+  // accommodate both gfx942 and gfx950 hardware variations.
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-2, 1e-2});
 }
 
 // Constant group_sizes tensor.
@@ -151,7 +155,10 @@ ENTRY main {
       lhs_ragged_dims={0}, rhs_group_dims={0}
 }
 )";
-  CheckHloAndMaybeRun(hlo_text);
+  // On AMD gfx942 (MI300X), a few elements fall just above the 1e-4 boundary
+  // due to f32 rounding differences in the MFMA accumulation with highly
+  // skewed group sizes ({4, 60}). Use 1e-3 for cross-hardware stability.
+  CheckHloAndMaybeRun(hlo_text, ErrorSpec{1e-3, 1e-3});
 }
 
 // Group sizes not multiples of BLOCK_M=32 — exercises M-boundary masking.
