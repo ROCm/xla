@@ -657,6 +657,12 @@ class TritonRaggedDotAutotunedTest
 };
 
 // Balanced groups — autotuner selects the best (BLOCK_M, BLOCK_N, BLOCK_K).
+//
+// Also verifies that the autotuner actually ran: GemmRewriter leaves
+// group_size=0 (proto3 default, omitted from text); TritonBackend::ApplyConfig
+// always sets group_size ≥ 1.  So "group_size" appears in the compiled HLO
+// only when the autotuner called ApplyConfig — a reliable proxy for
+// "autotuning ran".  Without the kTritonGemmFusionKind fix this CHECK fails.
 TEST_F(TritonRaggedDotAutotunedTest, BalancedGroups) {
   if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
   const char* hlo_text = R"(
@@ -671,6 +677,11 @@ ENTRY main {
       lhs_ragged_dims={0}, rhs_group_dims={0}
 }
 )";
+  MatchOptimizedHlo(hlo_text, R"(
+    ; CHECK:     kind=kCustom
+    ; CHECK-SAME: "__triton_gemm"
+    ; CHECK-SAME: group_size
+  )");
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-4}));
 }
 
@@ -1079,6 +1090,7 @@ class TritonRaggedDotPersistentContractingAutotunedTest
 };
 
 // Persistent autotuner — balanced groups, f32.
+// Also verifies autotuner ran (see BalancedGroups comment above).
 TEST_F(TritonRaggedDotPersistentContractingAutotunedTest, BalancedGroupsF32) {
   if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
   const char* hlo_text = R"(
@@ -1092,6 +1104,11 @@ ENTRY main {
       lhs_contracting_dims={0}, rhs_contracting_dims={0}, lhs_ragged_dims={0}
 }
 )";
+  MatchOptimizedHlo(hlo_text, R"(
+    ; CHECK:     kind=kCustom
+    ; CHECK-SAME: "__triton_gemm"
+    ; CHECK-SAME: group_size
+  )");
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
 }
 
