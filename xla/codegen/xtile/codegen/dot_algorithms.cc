@@ -150,7 +150,7 @@ absl::StatusOr<Value> ScaledDot(mlir::ImplicitLocOpBuilder& b,
   mlir::Type lhs_dot_elem_type = getElementTypeOrSelf(operands.lhs.getType());
   mlir::Type rhs_dot_elem_type = getElementTypeOrSelf(operands.rhs.getType());
 
-  if (lhs_dot_elem_type == b.getBF16Type() ||
+  if (lhs_dot_elem_type == b.getBF16Type() &&
       rhs_dot_elem_type == b.getBF16Type()) {
     Value lhs = DequantizeOperand(b, operands.lhs, operands.lhs_scale);
     Value rhs = DequantizeOperand(b, operands.rhs, operands.rhs_scale);
@@ -162,21 +162,27 @@ absl::StatusOr<Value> ScaledDot(mlir::ImplicitLocOpBuilder& b,
     return EmitStableHloDotAndAdd(b, lhs, rhs, operands.accumulator, prec,
                                   operands.dot_dimension_numbers);
   }
-
-  Value lhs_scale = Bitcast(b, operands.lhs_scale, b.getI8Type());
-  Value rhs_scale = Bitcast(b, operands.rhs_scale, b.getI8Type());
-  auto rhs_scale_type = mlir::cast<mlir::ShapedType>(rhs_scale.getType());
-  int64_t rank = rhs_scale_type.getRank();
-  CHECK_GE(rank, 2) << "RHS scale must be at least rank 2 for scaled dot.";
-
-  std::vector<int64_t> permutation(rank);
-  for (int64_t i = 0; i < rank; ++i) {
-    permutation[i] = i;
+  
+  Value lhs_scale;
+  if (lhs_dot_elem_type != b.getBF16Type()) {
+    lhs_scale = Bitcast(b, operands.lhs_scale, b.getI8Type());
   }
-  std::swap(permutation[rank - 2], permutation[rank - 1]);
-  rhs_scale = mlir::stablehlo::TransposeOp::create(
+  Value rhs_scale;
+  if (rhs_dot_elem_type != b.getBF16Type()) {
+    rhs_scale = Bitcast(b, operands.rhs_scale, b.getI8Type());
+    auto rhs_scale_type = mlir::cast<mlir::ShapedType>(rhs_scale.getType());
+    int64_t rank = rhs_scale_type.getRank();
+    CHECK_GE(rank, 2) << "RHS scale must be at least rank 2 for scaled dot.";
+    
+    std::vector<int64_t> permutation(rank);
+    for (int64_t i = 0; i < rank; ++i) {
+      permutation[i] = i;
+    }
+    std::swap(permutation[rank - 2], permutation[rank - 1]);
+    rhs_scale = mlir::stablehlo::TransposeOp::create(
       b, rhs_scale, b.getDenseI64ArrayAttr(permutation));
-
+      
+  }
   // When operand type is subbyte size then it is packed along minor dim and for
   // RHS minor dim is not K.
   const auto& lhs_shaped_type =
