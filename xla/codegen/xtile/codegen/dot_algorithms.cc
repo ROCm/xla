@@ -176,15 +176,14 @@ absl::StatusOr<Value> ScaledDot(mlir::ImplicitLocOpBuilder& b,
     auto rhs_scale_type = mlir::cast<mlir::ShapedType>(rhs_scale.getType());
     int64_t rank = rhs_scale_type.getRank();
     CHECK_GE(rank, 2) << "RHS scale must be at least rank 2 for scaled dot.";
-    
+
     std::vector<int64_t> permutation(rank);
     for (int64_t i = 0; i < rank; ++i) {
       permutation[i] = i;
     }
     std::swap(permutation[rank - 2], permutation[rank - 1]);
     rhs_scale = mlir::stablehlo::TransposeOp::create(
-      b, rhs_scale, b.getDenseI64ArrayAttr(permutation));
-      
+        b, rhs_scale, b.getDenseI64ArrayAttr(permutation));
   }
   // When operand type is subbyte size then it is packed along minor dim and for
   // RHS minor dim is not K.
