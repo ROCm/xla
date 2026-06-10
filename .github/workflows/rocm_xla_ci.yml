@@ -80,7 +80,11 @@ jobs:
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --config=xla_sgpu \
-            --jobs=30
+            --jobs=30 \
+            --bes_keywords=xla \
+            --bes_keywords=release \
+            --bes_keywords=single_gpu \
+            --bes_keywords=pull_request
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always() && !cancelled()
@@ -91,4 +95,21 @@ jobs:
             --local_test_jobs=1 \
             --strategy=TestRunner=local \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
-            --config=xla_mgpu
+            --config=xla_mgpu \
+            --bes_keywords=xla \
+            --bes_keywords=release \
+            --bes_keywords=multi_gpu \
+            --bes_keywords=pull_request
+      - name: Test XLA [rocm_cpu]
+        timeout-minutes: 80
+        run: |
+          build_tools/rocm/execute_ci_build_upstream.sh \
+            --config=rocm_ci \
+            --config=rocm_rbe \
+            --config=ci_rocm_cpu \
+            --local_test_jobs=200 \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
+            --bes_keywords=xla \
+            --bes_keywords=release \
+            --bes_keywords=cpu \
+            --bes_keywords=pull_request
