@@ -102,6 +102,9 @@ Value DequantizeOperand(mlir::ImplicitLocOpBuilder& b, Value operand,
                         Value scale) {
   auto operand_type = mlir::cast<mlir::RankedTensorType>(operand.getType());
   auto scale_type = mlir::cast<mlir::RankedTensorType>(scale.getType());
+  if (scale_type.getRank() == 0) {
+    return operand;
+  }
   mlir::Type elem_type = operand_type.getElementType();
   mlir::Type scale_elem_type = scale_type.getElementType();
 
@@ -162,7 +165,7 @@ absl::StatusOr<Value> ScaledDot(mlir::ImplicitLocOpBuilder& b,
     return EmitStableHloDotAndAdd(b, lhs, rhs, operands.accumulator, prec,
                                   operands.dot_dimension_numbers);
   }
-  
+
   Value lhs_scale;
   if (lhs_dot_elem_type != b.getBF16Type()) {
     lhs_scale = Bitcast(b, operands.lhs_scale, b.getI8Type());
