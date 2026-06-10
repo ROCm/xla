@@ -73,7 +73,7 @@ jobs:
 
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         run: |
-          build_tools/rocm/execute_ci_build.sh \
+          build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
@@ -85,7 +85,7 @@ jobs:
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always() && !cancelled()
         run: |
-          build_tools/rocm/execute_ci_build.sh \
+          build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_multi_gpu \
             --local_test_jobs=1 \
