@@ -101,7 +101,7 @@ jobs:
             --bes_keywords=multi_gpu \
             --bes_keywords=pull_request
       - name: Test XLA [rocm_cpu]
-        timeout-minutes: 80
+        if: always() && !cancelled()
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             --config=rocm_ci \
