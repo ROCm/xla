@@ -137,6 +137,36 @@ absl::StatusOr<TensorValue> CanonicalizeConvKernelToKN(
   return EmitReshape(b, transposed, {k_size, n_size});
 }
 
+absl::StatusOr<TensorValue> CanonicalizeConvInputToMK(
+    mlir::ImplicitLocOpBuilder& b, TensorValue input_tile,
+    const HloConvolutionInstruction& conv) {
+  const auto& dnums = conv.convolution_dimension_numbers();
+  const int64_t rank = input_tile.getType().getRank();
+  const int64_t spatial_rank = dnums.input_spatial_dimensions_size();
+  if (rank != spatial_rank + 2) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("CanonicalizeConvInputToMK: input rank ", rank,
+                     " does not match spatial_rank + 2 = ", spatial_rank + 2));
+  }
+
+  SmallVector<int64_t> permutation;
+  permutation.reserve(rank);
+  permutation.push_back(dnums.input_batch_dimension());
+  for (int64_t i = 0; i < spatial_rank; ++i) {
+    permutation.push_back(dnums.input_spatial_dimensions(i));
+  }
+  permutation.push_back(dnums.input_feature_dimension());
+
+  TensorValue transposed = MaybeTranspose(b, input_tile, permutation);
+  ArrayRef<int64_t> transposed_shape = transposed.getType().getShape();
+  int64_t m_size = 1;
+  for (int64_t i = 0; i < rank - 1; ++i) {
+    m_size *= transposed_shape[i];
+  }
+  int64_t k_size = transposed_shape[rank - 1];
+  return EmitReshape(b, transposed, {m_size, k_size});
+}
+
 absl::StatusOr<TensorValue> CanonicalizeConvAccToMN(
     mlir::ImplicitLocOpBuilder& b, Value acc,
     const HloConvolutionInstruction& conv) {

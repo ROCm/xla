@@ -553,6 +553,15 @@ absl::StatusOr<FlatTiling> ConvTilingParameters(
         " for conv with spatial_rank ", spatial_rank, ", got ",
         tile_config.sizes_size()));
   }
+  // TODO: Spatial tile sizes restricted to size 1.
+  for (int64_t i = 0; i < spatial_rank; ++i) {
+    if (tile_config.sizes(i) != 1) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "ConvTilingParameters: Kernel spatial tile size at axis ", i,
+          " must be 1 (got ", tile_config.sizes(i),
+          ")."));
+    }
+  }
   return FlatTiling(tile_config.sizes().begin(), tile_config.sizes().end());
 }
 
