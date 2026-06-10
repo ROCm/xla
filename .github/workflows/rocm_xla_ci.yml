@@ -82,6 +82,7 @@ jobs:
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --config=xla_sgpu \
             --jobs=30
