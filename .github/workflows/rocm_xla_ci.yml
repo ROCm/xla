@@ -103,7 +103,7 @@ jobs:
       - name: Test XLA [rocm_cpu]
         timeout-minutes: 80
         run: |
-          build_tools/rocm/execute_ci_build_upstream.sh \
+          build_tools/rocm/run_xla_ci_build.sh \
             --config=rocm_ci \
             --config=rocm_rbe \
             --config=ci_rocm_cpu \
