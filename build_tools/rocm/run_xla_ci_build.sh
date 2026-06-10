@@ -54,4 +54,5 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
         echo "${EXCLUDED_TESTS[*]}"
     ) \
     --color=yes \
-    "$@"
+    "$@" \
+    //xla/...
