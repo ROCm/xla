@@ -118,6 +118,15 @@ bool IsValidMxScaledDot(const HloInstruction* scaled_dot) {
     return false;
   }
 
+  int64_t batch_size = 1;
+  for (int64_t dim : dot_dims.lhs_batch_dimensions()) {
+    batch_size *= lhs_shape.dimensions(dim);
+  }
+  if (batch_size != 1) {
+    VLOG(2) << "hipBLASLt MX: batch_size > 1 not supported, got " << batch_size;
+    return false;
+  }
+
   int64_t m = 1;
   for (int64_t i = 0; i < lhs_shape.dimensions_size(); ++i) {
     if (!absl::c_linear_search(dot_dims.lhs_batch_dimensions(), i) &&
@@ -376,7 +385,6 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
     // [..., K] by a bitcast/reshape inside the fusion.
     auto external_operand_like =
         [&](int64_t k) -> absl::StatusOr<HloInstruction*> {
-      // return instr.mutable_operand(k);
       const HloInstruction* inner = scaled_dot->operand(k);
       const HloInstruction* cur = inner;
       // Walk back to the parameter that feeds this particular scaled-dot
