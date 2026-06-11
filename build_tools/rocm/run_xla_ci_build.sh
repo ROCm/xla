@@ -23,6 +23,16 @@ TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh)
 
 mkdir -p /tf/pkg
 
+EXCLUDED_TESTS=(
+    "HostMemoryAllocateTest.Numa"
+    "RaggedAllToAllMultiHostDecomposerTest/*"
+    "RaggedAllToAllTest/RaggedAllToAllTest*"
+    "CollectiveOpsTestE2EShardedUnsharded*"
+    "StreamExecutorGpuClientTest*"
+    "CollectiveOpsTestFFI.PeerAllReduce"
+    "CollectiveOpsTestFFI.DeviceAllReduce"
+)
+
 for arg in "$@"; do
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},multi_gpu"
@@ -58,4 +68,4 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --color=yes \
     "$@" \
     -- \
-    //xla/... \
+    //xla/...
