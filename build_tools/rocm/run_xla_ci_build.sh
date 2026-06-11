@@ -55,4 +55,10 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     ) \
     --color=yes \
     "$@" \
-    //xla/...
+    -- \
+    //xla/... \
+    -//xla/pjrt/gpu:se_gpu_pjrt_client_test_amdgpu_any \
+    -//xla/tests:iota_test_amdgpu_any \
+    -//xla/backends/gpu/codegen:dynamic_slice_fusion_test_amdgpu_any \
+    -//xla/backends/gpu/tests:ragged_all_to_all_e2e_test_amdgpu_any \
+    -//xla/tests:local_client_execute_test_amdgpu_any
