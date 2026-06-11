@@ -33,7 +33,7 @@ jobs:
   execute-xla-ut-nightly:
     # Run on schedule or if the "nightly-pipeline" label was added
     if: github.event_name == 'schedule' || github.event.label.name == 'nightly-pipeline'
-    runs-on: linux-mi250-4
+    runs-on: linux-xla-do-mi350x-4
     strategy:
       fail-fast: false
       matrix:
