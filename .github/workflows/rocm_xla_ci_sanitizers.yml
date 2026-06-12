@@ -30,7 +30,7 @@ jobs:
   execute-xla-ut-sanitizers:
     # Only run if the "sanitizers" label was added
     if: github.event.label.name == 'sanitizers'
-    runs-on: linux-xla-do-mi350x-4
+    runs-on: linux-mi250-4
     strategy:
       fail-fast: false
       matrix:
