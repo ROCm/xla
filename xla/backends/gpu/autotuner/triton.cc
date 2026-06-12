@@ -430,6 +430,11 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
       absl::c_count(dot_dims.lhs_contracting_dimensions(), lhs_ragged_dim) > 0;
   const int64_t M_total = lhs_shape.dimensions(lhs_ragged_dim);
 
+  // For kRaggedContracting, q_min = floor(M_total/G) is the min group size.
+  const int64_t G =
+      is_contracting_rd ? ragged_dot->operand(2)->shape().dimensions(0) : 0;
+  const int64_t q_min = (is_contracting_rd && G > 0) ? (M_total / G) : 0;
+
   // K_dim: for kRaggedNonContracting, the (non-ragged) contracting dim size;
   //        for kRaggedContracting, the non-contracting LHS dim size (output K).
   int64_t K_dim = 1;
@@ -511,25 +516,60 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
   //   before advancing to the next N-tile, improving L2 hit rate.
   std::vector<std::unique_ptr<BackendConfig>> configs;
   if (!exhaustive_search) {
-    // Return the single default config: same tile dimensions as those used by
-    // GemmRewriter::HandleRaggedDot for the initial BlockLevelFusionConfig.
-    // This triggers the "size==1 → skip compilation" fast path in the
-    // autotuner, so ApplyConfig is called (setting group_size=1) without
-    // attempting Compile.
-    auto config = std::make_unique<BackendConfig>();
-    *config->mutable_triton() =
-        TritonGemmConfig(/*block_m=*/32, /*block_n=*/32, /*block_k=*/32,
-                         /*num_stages=*/1, /*num_warps=*/4,
-                         /*num_ctas=*/1, /*is_tma_allowed=*/false,
-                         /*is_warp_specialization_allowed=*/false,
-                         /*waves_per_eu=*/0,
-                         /*group_size=*/1)
-            .ToProto();
-    configs.push_back(std::move(config));
+    const bool select_first =
+        debug_options().xla_gpu_autotune_level() == 0 ||
+        debug_options().xla_gpu_deterministic_ops() ||
+        debug_options().xla_gpu_exclude_nondeterministic_ops();
+    if (select_first) {
+      auto config = std::make_unique<BackendConfig>();
+      *config->mutable_triton() =
+          TritonGemmConfig(/*block_m=*/32, /*block_n=*/32, /*block_k=*/32,
+                           /*num_stages=*/1, /*num_warps=*/4,
+                           /*num_ctas=*/1, /*is_tma_allowed=*/false,
+                           /*is_warp_specialization_allowed=*/false,
+                           /*waves_per_eu=*/0,
+                           /*group_size=*/1)
+              .ToProto();
+      configs.push_back(std::move(config));
+      return configs;
+    }
+    // autotune_level>0: representative configs for real profiling.
+    struct SimpleConfig {
+      int block_m, block_n, block_k, num_stages, num_warps, group_size;
+    };
+    const SimpleConfig kDefaultConfigs[] = {
+        {32, 32, 32, 1, 4, 1},  {64, 32, 32, 1, 4, 1},  {64, 64, 32, 1, 4, 2},
+        {128, 32, 32, 1, 8, 1}, {128, 64, 32, 1, 8, 2},
+    };
+    for (const auto& c : kDefaultConfigs) {
+      if (c.block_m > M_total || c.block_n > N_dim) continue;
+      // For kRaggedContracting: skip configs where block_m*num_stages >= q_min
+      // (pipeline preloads beyond the group's contracting slice).
+      if (is_contracting_rd &&
+          static_cast<int64_t>(c.block_m) * c.num_stages >= q_min)
+        continue;
+      auto config = std::make_unique<BackendConfig>();
+      *config->mutable_triton() =
+          TritonGemmConfig(c.block_m, c.block_n, c.block_k,
+                           /*num_stages=*/c.num_stages,
+                           /*num_warps=*/c.num_warps,
+                           /*num_ctas=*/1, /*is_tma_allowed=*/false,
+                           /*is_warp_specialization_allowed=*/false,
+                           /*waves_per_eu=*/0,
+                           /*group_size=*/c.group_size)
+              .ToProto();
+      configs.push_back(std::move(config));
+    }
+    if (configs.empty()) {
+      auto config = std::make_unique<BackendConfig>();
+      *config->mutable_triton() =
+          TritonGemmConfig(32, 32, 32, 1, 4, 1, false).ToProto();
+      configs.push_back(std::move(config));
+    }
     return configs;
   }
 
-  // Exhaustive search: generate the full search space for offline tuning.
+  // Exhaustive search.
   for (int block_m : {16, 32, 64, 128, 256}) {
     if (block_m > M_total) continue;
     for (int block_n : {16, 32, 64, 128, 256}) {
@@ -538,6 +578,9 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
         if (block_k > K_dim) continue;
         for (int num_warps : {2, 4, 8}) {
           for (int num_stages : {1, 2}) {
+            if (is_contracting_rd &&
+                static_cast<int64_t>(block_m) * num_stages >= q_min)
+              continue;
             int64_t elems_per_thread =
                 static_cast<int64_t>(block_m) * block_n / (num_warps * 32);
             if (elems_per_thread > kElemsPerThreadLimit) continue;
@@ -602,6 +645,54 @@ absl::StatusOr<std::unique_ptr<HloModule>> TritonBackend::RunHloPasses(
   ConvertTritonGemmConfig convert_triton_gemm_config(gpu_device_info,
                                                      mlir_context_);
   RETURN_IF_ERROR(convert_triton_gemm_config.Run(hlo_module.get()).status());
+
+  // For kRaggedDot fusions: replace GS operand in ENTRY with balanced constant.
+  // The profiler's GpuProfiler::CreateInputBuffers also writes balanced values
+  // to input buffer 2 (= function arg corresponding to GS parameter), ensuring
+  // the kernel reads correct group sizes instead of random profiler data.
+  HloComputation* entry = hlo_module->entry_computation();
+  for (HloInstruction* instr : entry->instructions()) {
+    if (instr->opcode() != HloOpcode::kFusion) continue;
+    const HloComputation* fused_comp = instr->fused_instructions_computation();
+    const HloInstruction* ragged_dot_instr =
+        hlo_query::GetFirstInstructionWithOpcode(*fused_comp,
+                                                 HloOpcode::kRaggedDot);
+    if (ragged_dot_instr == nullptr) continue;
+    const auto* ragged_dot = Cast<HloRaggedDotInstruction>(ragged_dot_instr);
+    const auto& ragged_dims = ragged_dot->ragged_dot_dimension_numbers();
+    const int64_t lhs_ragged_dim = ragged_dims.lhs_ragged_dimensions(0);
+    const int64_t M_total =
+        ragged_dot->operand(0)->shape().dimensions(lhs_ragged_dim);
+    if (instr->operand_count() < 3) continue;
+    const Shape& gs_shape = instr->operand(2)->shape();
+    const int64_t G = gs_shape.dimensions(0);
+    if (G == 0) continue;
+    const int64_t q = M_total / G;
+    const int64_t r = M_total % G;
+    Literal gs_literal(gs_shape);
+    if (gs_shape.element_type() == S32) {
+      for (int64_t i = 0; i < G; ++i)
+        gs_literal.Set<int32_t>({i}, static_cast<int32_t>(i < r ? q + 1 : q));
+    } else {
+      for (int64_t i = 0; i < G; ++i)
+        gs_literal.Set<int64_t>({i}, i < r ? q + 1 : q);
+    }
+    // NOTE: We do NOT replace parameter(2) with a constant here.
+    // If we did, PriorityFusion would inline gs_const into the kernel,
+    // making the compiled binary have 2 params + 1 output = 3 GPU args.
+    // But ComputeProgramShape() still reports 3 params (incl. unused param(2)),
+    // so the profiler passes 3 ExecutionInputs → misaligned output slot.
+    //
+    // SOLUTION: Keep parameter(2) as the GS input. The profiler initializes
+    // input buffer 2 with balanced values via SynchronousMemcpy. The kernel
+    // reads balanced GS from arg[2] = input_buffer[2] = parameter(2).
+    // ComputeProgramShape() reports 3 params → binary has 3 params + 1 output
+    // = 4 GPU args → correct slot mapping for LHS, RHS, GS, output.
+    // The profiler (GpuProfiler::CreateInputBuffers) writes balanced GS values
+    // to input buffer 2 via SynchronousMemcpy before profiling each config.
+    (void)gs_literal;
+  }
+
   return hlo_module;
 }
 

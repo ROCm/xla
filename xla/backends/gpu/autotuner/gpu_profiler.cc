@@ -35,8 +35,10 @@ limitations under the License.
 #include "xla/backends/autotuner/profiler.h"
 #include "xla/backends/gpu/runtime/buffer_comparator.h"
 #include "xla/executable_run_options.h"
+#include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/executable.h"
@@ -104,8 +106,9 @@ int GetScratchBytes(const Executable* executable) {
 // This is useful for initializing constant parameters like group sizes
 // in group-gemm operations after buffers are created.
 static absl::Status InitializeInputBuffer(GpuInputBuffers& gpu_buffers,
-                                          se::Stream* stream, int buffer_index,
-                                          const void* values,
+                                          se::Stream* stream,
+                                          se::StreamExecutor* stream_executor,
+                                          int buffer_index, const void* values,
                                           size_t size_bytes) {
   RedzoneBuffers& rz_buffers = gpu_buffers.redzone_buffers;
 
@@ -115,10 +118,17 @@ static absl::Status InitializeInputBuffer(GpuInputBuffers& gpu_buffers,
                         buffer_index, rz_buffers.input_buffers().size()));
   }
 
-  se::DeviceAddressBase buffer = rz_buffers.input_buffers()[buffer_index];
-  RETURN_IF_ERROR(stream->Memcpy(const_cast<se::DeviceAddressBase*>(&buffer),
-                                 values, size_bytes));
-  RETURN_IF_ERROR(stream->BlockHostUntilDone());
+  const se::DeviceAddressBase& buffer =
+      rz_buffers.input_buffers()[buffer_index];
+  // Use SynchronousMemcpy to ensure correct HOST->GPU transfer.
+  // stream->Memcpy(DeviceAddressBase*, ...) may resolve to a CPU-to-CPU
+  // overload (mismatched function signatures), leaving the GPU buffer
+  // unchanged. SynchronousMemcpy(DeviceAddressBase*, ...) unambiguously copies
+  // from host to the device address stored in *dst.
+  VLOG(2) << "InitializeInputBuffer: writing " << size_bytes
+          << " bytes to GPU buffer[" << buffer_index << "]";
+  RETURN_IF_ERROR(stream_executor->SynchronousMemcpy(
+      const_cast<se::DeviceAddressBase*>(&buffer), values, size_bytes));
 
   return absl::OkStatus();
 }
@@ -128,8 +138,51 @@ static absl::Status InitializeInputBuffer(GpuInputBuffers& gpu_buffers,
 // specific input buffers based on the operation's requirements.
 static absl::Status InitializeBuffersIfRequiredByOpcode(
     const HloInstruction* instr, GpuInputBuffers& gpu_buffers,
-    se::Stream* stream) {
+    se::Stream* stream, se::StreamExecutor* stream_executor) {
   if (instr == nullptr) {
+    return absl::OkStatus();
+  }
+
+  // Handle kFusion with kRaggedDot (kRaggedContracting autotuning).
+  // The kernel reads GS via function argument 2 (= ENTRY parameter(2) =
+  // input buffer 2). RunHloPasses replaces the FUSION's operand(2) with a
+  // balanced constant in the ENTRY computation, but the KERNEL still reads
+  // from arg[2]. Initialize buffer 2 with balanced GS values so the kernel
+  // computes correct start_m and m_loop_count instead of using random data.
+  if (instr->opcode() == HloOpcode::kFusion && instr->operand_count() >= 3) {
+    const HloComputation* fc = instr->fused_instructions_computation();
+    for (const HloInstruction* fi : fc->instructions()) {
+      if (fi->opcode() != HloOpcode::kRaggedDot) continue;
+      const auto* ragged_dot = Cast<HloRaggedDotInstruction>(fi);
+      const auto& ragged_dims = ragged_dot->ragged_dot_dimension_numbers();
+      const int64_t lhs_ragged_dim = ragged_dims.lhs_ragged_dimensions(0);
+      const int64_t M_total =
+          ragged_dot->operand(0)->shape().dimensions(lhs_ragged_dim);
+      const Shape& gs_shape = instr->operand(2)->shape();
+      const int64_t G = gs_shape.dimensions(0);
+      if (G == 0) break;
+      const int64_t q = M_total / G;
+      const int64_t r = M_total % G;
+      if (gs_shape.element_type() == S32) {
+        std::vector<int32_t> gs_vals(G);
+        for (int64_t i = 0; i < G; ++i)
+          gs_vals[i] = static_cast<int32_t>(i < r ? q + 1 : q);
+        RETURN_IF_ERROR(InitializeInputBuffer(
+            gpu_buffers, stream, stream_executor,
+            /*buffer_index=*/2, gs_vals.data(), G * sizeof(int32_t)));
+
+      } else {
+        std::vector<int64_t> gs_vals(G);
+        for (int64_t i = 0; i < G; ++i) gs_vals[i] = i < r ? q + 1 : q;
+        RETURN_IF_ERROR(InitializeInputBuffer(
+            gpu_buffers, stream, stream_executor,
+            /*buffer_index=*/2, gs_vals.data(), G * sizeof(int64_t)));
+      }
+      LOG(INFO) << "GpuProfiler: initialized GS input buffer (arg[2]) with"
+                << " balanced values [q=" << q << ",r=" << r << ",G=" << G
+                << ",M_total=" << M_total << "]";
+      break;
+    }
     return absl::OkStatus();
   }
 
@@ -187,10 +240,15 @@ static absl::Status InitializeBuffersIfRequiredByOpcode(
           group_sizes[i] = static_cast<int32_t>(base_group_size);
         }
       }
-      RETURN_IF_ERROR(InitializeInputBuffer(
-          gpu_buffers, stream,
-          instr->operand_count() - 1,  // Last parameter is group sizes
-          group_sizes.data(), total_elements * sizeof(int32_t)));
+      // Note: grouped matmul caller has no stream_executor here (static fn).
+      // Use stream->Memcpy for backward compat (works for cublas grouped gemm).
+      se::DeviceAddressBase gs_addr =
+          gpu_buffers.redzone_buffers
+              .input_buffers()[instr->operand_count() - 1];
+      RETURN_IF_ERROR(
+          stream->Memcpy(const_cast<se::DeviceAddressBase*>(&gs_addr),
+                         group_sizes.data(), total_elements * sizeof(int32_t)));
+      RETURN_IF_ERROR(stream->BlockHostUntilDone());
     } else if (group_sizes_type == S64) {
       std::vector<int64_t> group_sizes(total_elements);
       // Fill with the pattern: [base_size, base_size, ..., last_size]
@@ -203,10 +261,13 @@ static absl::Status InitializeBuffersIfRequiredByOpcode(
           group_sizes[i] = base_group_size;
         }
       }
-      RETURN_IF_ERROR(InitializeInputBuffer(
-          gpu_buffers, stream,
-          instr->operand_count() - 1,  // Last parameter is group sizes
-          group_sizes.data(), total_elements * sizeof(int64_t)));
+      se::DeviceAddressBase gs_addr_64 =
+          gpu_buffers.redzone_buffers
+              .input_buffers()[instr->operand_count() - 1];
+      RETURN_IF_ERROR(
+          stream->Memcpy(const_cast<se::DeviceAddressBase*>(&gs_addr_64),
+                         group_sizes.data(), total_elements * sizeof(int64_t)));
+      RETURN_IF_ERROR(stream->BlockHostUntilDone());
     }
   }
 
@@ -256,8 +317,8 @@ absl::StatusOr<std::unique_ptr<InputBuffers>> GpuProfiler::CreateInputBuffers(
   gpu_buffers->redzone_buffers = std::move(buffers);
 
   // Initialize buffers based on operation type
-  RETURN_IF_ERROR(
-      InitializeBuffersIfRequiredByOpcode(instr, *gpu_buffers, stream_));
+  RETURN_IF_ERROR(InitializeBuffersIfRequiredByOpcode(
+      instr, *gpu_buffers, stream_, stream_executor_));
 
   return gpu_buffers;
 }
@@ -274,11 +335,18 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
     std::vector<ExecutionInput> execution_inputs =
         CreateExecutionInputsFromBuffers(rz_buffers.input_buffers(),
                                          rz_buffers.input_shapes());
-    RETURN_IF_ERROR(Execute(executable, std::move(execution_inputs),
-                            /*profile=*/nullptr)
-                        .status());
-
+    // CRITICAL: Keep warm_output alive until after BlockHostUntilDone!
+    // Calling .status() on the StatusOr destroys the ExecutionOutput (and its
+    // ScopedShapedBuffer output), freeing GPU memory BEFORE the async kernel
+    // finishes. The kernel then writes to freed memory → GPU memory fault.
+    // Keep warm_output alive until after BlockHostUntilDone to prevent
+    // use-after-free: the GPU kernel writes to warm_output's buffer async,
+    // and freeing it before sync would cause GPU memory fault.
+    auto warm_output = Execute(executable, std::move(execution_inputs),
+                               /*profile=*/nullptr);
+    RETURN_IF_ERROR(warm_output.status());
     RETURN_IF_ERROR(stream_->BlockHostUntilDone());
+    // warm_output destroyed here, AFTER sync - safe to free GPU buffer.
   }
 
   ExecutionProfile profile;
@@ -289,6 +357,10 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
 
   ASSIGN_OR_RETURN(ExecutionOutput execution_output,
                    Execute(executable, std::move(execution_inputs), &profile));
+
+  // Sync after timing run to ensure GPU timing events are fully cleaned up
+  // before the next Profile call. Without this sync, ROCm timing event
+  // residuals can cause the next kernel's BlockHostUntilDone to fail.
 
   result.duration = absl::Nanoseconds(profile.compute_time_ns());
   result.output_buffer = execution_output.Commit().ConsumeResult();
@@ -308,6 +380,7 @@ absl::StatusOr<ExecutionOutput> GpuProfiler::Execute(
   run_options.set_allocator(allocator_);
   run_options.set_gpu_executable_run_options(&gpu_opts);
   run_options.set_execution_profile(profile);
+
   ServiceExecutableRunOptions service_run_options(run_options);
   return executable->ExecuteAsyncOnStreamWrapper(&service_run_options,
                                                  std::move(inputs));

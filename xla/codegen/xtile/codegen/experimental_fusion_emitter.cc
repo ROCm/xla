@@ -1286,8 +1286,18 @@ absl::StatusOr<TensorValue> EmitRaggedDot(
           TensorValue acc_in_p =
               mlir::cast<TensorValue>(m_for_p.getRegionIterArgs()[0]);
 
-          CHECK(emitter_ctx.MapSymbolIdToSequentialDimValue(
-              m_dim_info.id, m_iv_p, Interval{0, M_total / BLOCK_M}));
+          // Same interval fix as the non-persistent path above.
+          {
+            const int64_t G_p_iv =
+                ragged_dot_instr->operand(2)->shape().dimensions(0);
+            const int64_t q_max_p_iv =
+                (G_p_iv > 0) ? (M_total + G_p_iv - 1) / G_p_iv : M_total;
+            const int64_t m_loop_max_p_iv =
+                (q_max_p_iv + BLOCK_M - 1) / BLOCK_M;
+            CHECK(emitter_ctx.MapSymbolIdToSequentialDimValue(
+                m_dim_info.id, m_iv_p,
+                Interval{0, m_loop_max_p_iv > 0 ? m_loop_max_p_iv - 1 : 0}));
+          }
 
           Value m_abs_p = arith::AddIOp::create(
               b, last_m_p,
@@ -1612,12 +1622,45 @@ absl::StatusOr<TensorValue> EmitRaggedDot(
       // (m_iv * BLOCK_M) can be evaluated by EvaluateTilingParameters if
       // needed elsewhere. The actual buffer address uses start_m + m_iv*BLOCK_M
       // computed below.
-      CHECK(emitter_ctx.MapSymbolIdToSequentialDimValue(
-          m_dim_info.id, m_iv, Interval{0, M_total / BLOCK_M}));
+      //
+      // Use the per-group maximum loop count as the interval upper bound.
+      // M_total/BLOCK_M is G times too large: Triton uses this interval for
+      // speculative prefetch analysis and generates loads at m_abs = start_m +
+      // (M_total/BLOCK_M)*BLOCK_M which is far beyond the LHS/RHS buffer →
+      // GPU memory access fault when those speculative addresses hit unmapped
+      // pages. The correct bound is cdiv(cdiv(M_total, G), BLOCK_M) - 1.
+      {
+        const int64_t G_nc_iv =
+            ragged_dot_instr->operand(2)->shape().dimensions(0);
+        const int64_t q_max_nc_iv =
+            (G_nc_iv > 0) ? (M_total + G_nc_iv - 1) / G_nc_iv : M_total;
+        const int64_t m_loop_max_nc_iv = (q_max_nc_iv + BLOCK_M - 1) / BLOCK_M;
+        CHECK(emitter_ctx.MapSymbolIdToSequentialDimValue(
+            m_dim_info.id, m_iv,
+            Interval{0, m_loop_max_nc_iv > 0 ? m_loop_max_nc_iv - 1 : 0}));
+      }
 
       // Absolute M offset = start_m + m_iv * BLOCK_M.
-      Value m_abs = arith::AddIOp::create(
+      // Clamp to prevent Triton speculative loads beyond the group's slice.
+      // The clamp: m_abs_upper = start_m + (m_loop_count - 1) * BLOCK_M
+      // = start of the LAST VALID tile. This is correct for all group sizes:
+      //   - group_size_g=10, BLOCK_M=32: m_loop_count=1, upper=start_m ✓
+      //   - group_size_g=56, BLOCK_M=32: m_loop_count=2, upper=start_m+32 ✓
+      //   - group_size_g=128, BLOCK_M=64: m_loop_count=2, upper=start_m+64 ✓
+      // The clamp only activates for OOB-speculation (m_iv ≥ m_loop_count).
+      // Those iterations are masked to zero by M-boundary masking below.
+      Value m_abs_raw = arith::AddIOp::create(
           b, start_m, arith::MulIOp::create(b, m_iv, MakeIndex(b, BLOCK_M)));
+      {
+        // m_loop_count was computed above: cdiv(group_size_g, BLOCK_M).
+        Value last_valid_idx =
+            arith::SubIOp::create(b, m_loop_count, MakeIndex(b, 1));
+        Value m_abs_upper = arith::AddIOp::create(
+            b, start_m,
+            arith::MulIOp::create(b, last_valid_idx, MakeIndex(b, BLOCK_M)));
+        m_abs_raw = arith::MinSIOp::create(b, m_abs_raw, m_abs_upper);
+      }
+      Value m_abs = m_abs_raw;
 
       // Load LHS tile directly with absolute M offset (no emit_operand).
       // The tile propagation uses relative M offset (no sm_sym) since
@@ -2266,7 +2309,8 @@ Value ApplyGroupSizeTileIdRemapping(ImplicitLocOpBuilder& b,
   const int64_t num_pid_m = (M_total + BLOCK_M - 1) / BLOCK_M;
   const int64_t num_pid_n = (N_total + BLOCK_N - 1) / BLOCK_N;
 
-  if (num_pid_m <= 1 || num_pid_n <= 0) return raw_tile_id;  // Nothing to reorder.
+  if (num_pid_m <= 1 || num_pid_n <= 0)
+    return raw_tile_id;  // Nothing to reorder.
 
   // Cast pid to i32 for arithmetic (Triton program IDs are 32-bit).
   Value pid = Cast(b, raw_tile_id, b.getI32Type());
@@ -2291,8 +2335,8 @@ Value ApplyGroupSizeTileIdRemapping(ImplicitLocOpBuilder& b,
   // pid_n = rem / group_size_m
   Value pid_n = arith::DivSIOp::create(b, rem, group_size_m);
   // remapped flat index = pid_m * num_pid_n + pid_n
-  Value remapped = arith::AddIOp::create(
-      b, arith::MulIOp::create(b, pid_m, npn), pid_n);
+  Value remapped =
+      arith::AddIOp::create(b, arith::MulIOp::create(b, pid_m, npn), pid_n);
   // Cast back to index type for EmitterContext.
   return arith::IndexCastOp::create(b, b.getIndexType(), remapped);
 }
