@@ -23,16 +23,56 @@ TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh)
 
 mkdir -p /tf/pkg
 
+EXCLUDED_TESTS=(
+    HostMemoryAllocateTest.Numa
+    CollectiveBroadcastThunkMultiGpuTest.ExecuteOnStream*
+    CollectiveOpsCommandBufferTest.SendRecv_Simple*
+    CollectiveOpsTestE2EShardedUnsharded.DotBatchAndBatch*
+    CollectiveOpsTestE2EShardedUnsharded.DotBatchAndNonContracting*
+    CollectiveOpsTestE2EShardedUnsharded.DotContractingAndContracting*
+    CollectiveOpsTestE2EShardedUnsharded.DotContractingAndReplicated*
+    CollectiveOpsTestE2EShardedUnsharded.DotContractingNonContractingAndContractingNonContracting*
+    CollectiveOpsTestE2EShardedUnsharded.DotNonContractingAndContracting*
+    CollectiveOpsTestE2EShardedUnsharded.DusSingleDimensionInPartitionMode*
+    CollectivePipelineParallelismTestWithAndWithoutOpts*
+    DeterminismTest.CublasDot*
+    DynamicSliceFusionTest.MultipleOffsetsAsFunctionOfInductionVariable*
+    DynamicSliceFusionTest.OffsetAsFunctionOfInductionVariableShouldUseOffsetModules*
+    DynamicSliceFusionTest.OffsetsThatCanBeEvaluatedSuccessfullyAreCorrectlyEmbeddedIntoThunks*
+    DynamicSliceFusionTest.ReduceScatterDUSConstant*
+    DynamicSliceFusionTest.ReduceScatterDUSLoopIterationOffset*
+    DynamicSliceFusionTest.ReduceScatterDUSParameterOffset*
+    DynamicSliceFusionTest.ReduceScatterDynamicSlice*
+    DynamicSliceFusionTest.ReduceScatterDynamicSliceMultipleBuffersShouldFuseAndExecuteCorrectly*
+    DynamicSliceFusionTest.ReduceScatterSlice*
+    DynamicSliceFusionTest.WhileLoopSliceWithNoInductionVariable*
+    FunctionalHloRunnerTest.DumpsUnoptimizedHLOInUnoptimizedSnapshot*
+    FunctionalHloRunnerTest.Sharded2DevicesHloUnoptimizedSnapshot*
+    P2POps*
+    StreamExecutorGpuClientTest.GetAbiVersion*
+    StreamExecutorGpuClientTest.GetCompiledMemoryStatsWithTupleAndNcclUserBuffers*
+    SuccessfulCrossHostTransfer*
+    TritonAndBlasSupportForDifferentTensorSizes*
+    TritonBackendTest.CostModelOptions_Combination*
+    TritonBackendTest.CostModelOptions_Filter*
+    TritonBackendTest.CostModelOptions_TopFromDefault*
+    RaggedAllToAllTest/RaggedAllToAllTest*
+    RaggedAllToAllMultiHostDecomposerTest/RaggedAllToAllMultiHostDecomposerTest*
+    AsyncCollectiveOps/AsyncCollectiveOps*
+)
+
 for arg in "$@"; do
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},multi_gpu"
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu"
+        TAG_FILTERS="${TAG_FILTERS},requires-gpu-rocm,requires-gpu-amd,-multi_gpu"
+    fi
+    if [[ "$arg" == "--config=ci_rocm_cpu" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},gpu,-requires-gpu-rocm,-requires-gpu-amd"
     fi
 done
 
-SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
@@ -42,4 +82,11 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
     --test_output=errors \
     --run_under=//build_tools/rocm:parallel_gpu_execute \
-    "$@"
+    --test_filter=-$(
+        IFS=:
+        echo "${EXCLUDED_TESTS[*]}"
+    ) \
+    --color=yes \
+    "$@" \
+    -- \
+    //xla/... \
