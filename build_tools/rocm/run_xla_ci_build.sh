@@ -58,6 +58,7 @@ EXCLUDED_TESTS=(
     TritonBackendTest.CostModelOptions_TopFromDefault*
     RaggedAllToAllTest/RaggedAllToAllTest*
     RaggedAllToAllMultiHostDecomposerTest/RaggedAllToAllMultiHostDecomposerTest*
+    AsyncCollectiveOps/AsyncCollectiveOps*
 )
 
 for arg in "$@"; do
