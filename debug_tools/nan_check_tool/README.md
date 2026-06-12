@@ -30,7 +30,7 @@ hipcc -fpic -g3 -fvisibility=hidden -fno-exceptions -shared \
 
 Requirements:
 
-- A ROCm installation that provides `hipcc`, the HSA runtime headers (`hsa/hsa.h`, `hsa/hsa_ext_amd.h`), and `rocprofiler-sdk` (we recommended at least ROCm-7.1.x).
+- A ROCm installation that provides `hipcc`, the HSA runtime headers (`hsa/hsa.h`, `hsa/hsa_ext_amd.h`), and `rocprofiler-sdk` (we recommend at least ROCm-7.1.x).
 - A `gfx9`-class AMD GPU.
 
 ## Usage
