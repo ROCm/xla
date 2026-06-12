@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   execute-xla-ut:
-    runs-on: linux-xla-do-mi350x-4
+    runs-on: linux-mi250-4
     strategy:
       fail-fast: false
       matrix:
