@@ -178,16 +178,17 @@ bool IsValidMxScaledDot(const HloInstruction* scaled_dot) {
   return true;
 }
 
-bool IsScaledDotFusion(const HloInstruction& instr) {
-  if (instr.opcode() != HloOpcode::kFusion) return false;
+// Returns the scaled-dot instruction inside a Triton GEMM fusion, or nullptr
+// if `instr` is not such a fusion.
+const HloInstruction* GetScaledDotFromFusion(const HloInstruction& instr) {
+  if (instr.opcode() != HloOpcode::kFusion) return nullptr;
   auto gpu_config = instr.backend_config<GpuBackendConfig>();
-  if (!gpu_config.ok()) return false;
+  if (!gpu_config.ok()) return nullptr;
   if (gpu_config->fusion_backend_config().kind() != kTritonGemmFusionKind) {
-    return false;
+    return nullptr;
   }
   return hlo_query::GetFirstInstructionWithOpcode(
-             *instr.fused_instructions_computation(), HloOpcode::kScaledDot) !=
-         nullptr;
+      *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
 }
 
 }  // namespace
@@ -196,7 +197,7 @@ bool HipblasLtBackend::IsSupported(const HloInstruction& instr) {
   if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr)) {
     return true;
   }
-  if (IsScaledDotFusion(instr)) {
+  if (GetScaledDotFromFusion(instr) != nullptr) {
     const auto& gpu_cc =
         target_config().device_description.gpu_compute_capability();
     const auto* rocm_cc = gpu_cc.rocm_compute_capability();
@@ -255,11 +256,9 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
       configs.push_back(std::move(any));
     }
     return configs;
-  } else if (IsScaledDotFusion(instr)) {
-    const HloInstruction* scaled_dot = hlo_query::GetFirstInstructionWithOpcode(
-        *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
-    TF_RET_CHECK(scaled_dot != nullptr);
+  }
 
+  if (const auto* scaled_dot = GetScaledDotFromFusion(instr)) {
     if (!IsValidMxScaledDot(scaled_dot)) {
       LOG(WARNING) << "hipBLASLt MX: IsValidMxScaledDot failed";
       return std::vector<std::unique_ptr<BackendConfig>>();
@@ -371,42 +370,53 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
     return absl::OkStatus();
   }
 
-  if (IsScaledDotFusion(instr)) {
-    const HloInstruction* scaled_dot = hlo_query::GetFirstInstructionWithOpcode(
-        *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
-    TF_RET_CHECK(scaled_dot != nullptr);
+  if (const auto* scaled_dot = GetScaledDotFromFusion(instr)) {
+    HloComputation* fused = instr.fused_instructions_computation();
     HloComputation* parent = instr.parent();
 
     TF_RET_CHECK(instr.operand_count() == 4);
+    // The scaled-dot must be the root of the fusion, otherwise we would drop
+    // any instructions that consume the scaled-dot result.
+    TF_RET_CHECK(scaled_dot == fused->root_instruction())
+        << "Scaled-dot is not the root of the fusion; lowering to hipBLASLt "
+           "matmul would drop instructions: "
+        << fused->root_instruction()->ToString();
 
-    // The fusion's external operands may have a different rank than the
+    // Walk forward from each fusion parameter to the scaled-dot operand it
+    // feeds. The fusion's external operands may have a different rank than the
     // scaled-dot operands: when quantization happens in-graph the operand is in
-    // block-scaled [..., K/block, block] form and is only flattened to
-    // [..., K] by a bitcast/reshape inside the fusion.
-    auto external_operand_like =
-        [&](int64_t k) -> absl::StatusOr<HloInstruction*> {
-      const HloInstruction* inner = scaled_dot->operand(k);
-      const HloInstruction* cur = inner;
-      // Walk back to the parameter that feeds this particular scaled-dot
-      // operand.
-      while (cur->opcode() != HloOpcode::kParameter) {
-        TF_RET_CHECK(cur->opcode() == HloOpcode::kBitcast ||
-                     cur->opcode() == HloOpcode::kReshape)
-            << "Unexpected op feeding scaled-dot operand: " << cur->ToString();
-        cur = cur->operand(0);
+    // block-scaled [..., K/block, block] form and is only flattened to [..., K]
+    // by a bitcast/reshape inside the fusion. Only such trivial rank-changing
+    // ops are allowed on the path.
+    absl::InlinedVector<HloInstruction*, 4> operands(4, nullptr);
+    for (HloInstruction* param : fused->parameter_instructions()) {
+      const HloInstruction* cur = param;
+      while (cur->user_count() == 1 && cur->users()[0] != scaled_dot) {
+        HloInstruction* user = cur->users()[0];
+        TF_RET_CHECK(user->opcode() == HloOpcode::kBitcast ||
+                     user->opcode() == HloOpcode::kReshape)
+            << "Unexpected op between fusion parameter and scaled-dot: "
+            << user->ToString();
+        cur = user;
       }
-      HloInstruction* ext = instr.mutable_operand(cur->parameter_number());
-      if (ShapeUtil::Equal(ext->shape(), inner->shape())) {
-        return ext;
-      }
-      return parent->AddInstruction(
-          HloInstruction::CreateBitcast(inner->shape(), ext));
-    };
+      TF_RET_CHECK(cur->user_count() == 1 && cur->users()[0] == scaled_dot)
+          << "Fusion parameter " << param->parameter_number()
+          << " does not feed directly into the scaled-dot.";
 
-    absl::InlinedVector<HloInstruction*, 4> operands;
-    for (int64_t k = 0; k < 4; ++k) {
-      TF_ASSIGN_OR_RETURN(HloInstruction * operand, external_operand_like(k));
-      operands.push_back(operand);
+      int64_t dot_index = scaled_dot->operand_index(cur);
+      const Shape& inner_shape = scaled_dot->operand(dot_index)->shape();
+      HloInstruction* ext = instr.mutable_operand(param->parameter_number());
+      if (!ShapeUtil::Equal(ext->shape(), inner_shape)) {
+        ext = parent->AddInstruction(
+            HloInstruction::CreateBitcast(inner_shape, ext));
+      }
+      TF_RET_CHECK(operands[dot_index] == nullptr)
+          << "Multiple fusion parameters feed scaled-dot operand " << dot_index;
+      operands[dot_index] = ext;
+    }  // for
+    for (HloInstruction* op : operands) {
+      TF_RET_CHECK(op != nullptr)
+          << "Not all scaled-dot operands are fed by a fusion parameter.";
     }
     const Shape& result_shape = scaled_dot->shape();
     int64_t workspace_size = gemm_key.autotune_workspace_size();
