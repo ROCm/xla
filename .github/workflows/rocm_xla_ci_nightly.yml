@@ -33,7 +33,7 @@ jobs:
   execute-xla-ut-nightly:
     # Run on schedule or if the "nightly-pipeline" label was added
     if: github.event_name == 'schedule' || github.event.label.name == 'nightly-pipeline'
-    runs-on: linux-mi250-4
+    runs-on: ${{ matrix.mode.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -41,24 +41,32 @@ jobs:
           - name: "default"
             configs: ["--config=rocm_ci", "--config=rocm_rbe"]
             container: "DOCKER_IMAGE"
+            runner: "linux-mi250-4"
+            container_options: ["--device=/dev/dri", "--device=/dev/kfd", "--shm-size=16G", "--cap-add=SYS_PTRACE", "--security-opt=seccomp=unconfined"]
           - name: "hermetic"
             configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe", "--repo_env=ROCM_DISTRO_VERSION=rocm_7.12.0_gfx90a"]
             container: "DOCKER_IMAGE_HERMETIC"
+            runner: "linux-mi250-4"
+            container_options: ["--device=/dev/dri", "--device=/dev/kfd", "--shm-size=16G", "--cap-add=SYS_PTRACE", "--security-opt=seccomp=unconfined"]
           - name: "asan"
             configs: ["--config=rocm_ci", "--config=asan"]
             container: "DOCKER_IMAGE"
+            runner: "linux-mi250-4"
+            container_options: ["--device=/dev/dri", "--device=/dev/kfd", "--shm-size=16G", "--cap-add=SYS_PTRACE", "--security-opt=seccomp=unconfined"]
           - name: "tsan"
             configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local"]
             container: "DOCKER_IMAGE"
+            runner: "linux-mi250-4"
+            container_options: ["--device=/dev/dri", "--device=/dev/kfd", "--shm-size=16G", "--cap-add=SYS_PTRACE", "--security-opt=seccomp=unconfined"]
+          - name: "gfx1250-ffm"
+            configs: ["--config=rocm_ci"]
+            container: "DOCKER_IMAGE_HERMETIC"
+            runner: "linux-gfx1250-ffm"
+            container_options: ["--shm-size=16G", "--cap-add=SYS_PTRACE", "--security-opt=seccomp=unconfined"]
     container:
       # set in https://github.com/ROCm/xla/settings/variables/actions
       image: ${{ vars[matrix.mode.container] }}
-      options: >-
-        --device=/dev/dri
-        --device=/dev/kfd
-        --shm-size=16G
-        --cap-add=SYS_PTRACE
-        --security-opt=seccomp=unconfined
+      options: ${{ join(matrix.mode.container_options, ' ') }}
       volumes:
         - /tmp/bazel-cache:/root/.cache/bazel
     steps:
