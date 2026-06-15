@@ -38,10 +38,18 @@ jobs:
       fail-fast: false
       matrix:
         mode:
-          - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe"], container: "DOCKER_IMAGE"}
-          - {name: "hermetic", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe"], container: "DOCKER_IMAGE_HERMETIC"}
-          - {name: "asan", configs: ["--config=rocm_ci", "--config=asan"], container: "DOCKER_IMAGE"}
-          - {name: "tsan", configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local"], container: "DOCKER_IMAGE"}
+          - name: "default"
+            configs: ["--config=rocm_ci", "--config=rocm_rbe"]
+            container: "DOCKER_IMAGE"
+          - name: "hermetic"
+            configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe", "--repo_env=ROCM_DISTRO_VERSION=rocm_7.12.0_gfx90a"]
+            container: "DOCKER_IMAGE_HERMETIC"
+          - name: "asan"
+            configs: ["--config=rocm_ci", "--config=asan"]
+            container: "DOCKER_IMAGE"
+          - name: "tsan"
+            configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local"]
+            container: "DOCKER_IMAGE"
     container:
       # set in https://github.com/ROCm/xla/settings/variables/actions
       image: ${{ vars[matrix.mode.container] }}
