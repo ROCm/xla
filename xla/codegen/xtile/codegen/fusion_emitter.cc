@@ -105,11 +105,11 @@ limitations under the License.
 #include "xla/tools/hlo_decomposer.h"
 #include "xla/tsl/framework/mlir/status_scoped_diagnostic_handler.h"
 #include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
-#include "xla/tsl/platform/status_macros.h"
 
 namespace xla::xtile {
 
@@ -553,6 +553,84 @@ std::pair<SmallVector<int64_t>, SmallVector<int64_t>> CollapseUnitDims(
 
 enum class DotOperandSide { kLhs, kRhs };
 
+// Computes and applies a mask to the reduction dimension of the `dot_operand` 
+// (shape [M, K] or [K, N]) whose absolute contracting dim index is out of bounds.
+// Only relevant when tile size doesn't divide dim size evenly AND this 
+// iteration is the last.
+//
+// Since conv has three contracting dims we loop over it is necessary to 
+// decomposes ki per the per-axis ordering: 
+// inner-most axis is c_in_block, with ceil(c_in / tile_c_in) blocks; 
+// outer axes go over spatial dims which are currently tiled with 1
+// and do not need masking.
+// Once that constraint is removed the function will need to be modified.
+absl::StatusOr<TensorValue> MaskConvOperand(
+    mlir::ImplicitLocOpBuilder& b, TensorValue dot_operand, mlir::Value ki,
+    const HloConvolutionInstruction& conv, int64_t tile_c_in,
+    DotOperandSide operand_side) {
+  const auto& dnums = conv.convolution_dimension_numbers();
+  int64_t c_in =
+      conv.operand(0)->shape().dimensions(dnums.input_feature_dimension());
+  int64_t num_c_in_blocks = CeilOfRatio(c_in, tile_c_in);
+
+  if (c_in % tile_c_in == 0) {
+    return dot_operand;
+  }
+
+  int contraction_dimension_index =
+      operand_side == DotOperandSide::kLhs ? 1 : 0;
+  llvm::ArrayRef<int64_t> tile_shape = dot_operand.getType().getShape();
+  int64_t tile_size = tile_shape[contraction_dimension_index];
+
+  // c_in_block = ki mod ceil(c_in / tile_c_in)
+  Value ki_i32 = Cast(b, ki, b.getI32Type());
+  Value num_c_in_blocks_value = CreateConst(b, b.getI32Type(), num_c_in_blocks);
+  Value c_in_block = arith::RemSIOp::create(b, ki_i32, num_c_in_blocks_value);
+
+  Type result_type = dot_operand.getType();
+  Value tile_size_value = CreateConst(b, b.getI32Type(), tile_size);
+  Value num_full_tiles = arith::DivSIOp::create(
+      b, CreateConst(b, b.getI32Type(), c_in), tile_size_value);
+  // if c_in_block >= num_full_tiles...
+  auto cond = arith::CmpIOp::create(b, arith::CmpIPredicate::sge, c_in_block,
+                                    num_full_tiles);
+  auto if_op = mlir::scf::IfOp::create(b, mlir::TypeRange(result_type), cond,
+                                       /*withElseRegion=*/true);
+  // then ...
+  {
+    b.setInsertionPointToStart(if_op.thenBlock());
+    // indices = c_in_block * tile_size + range(0, tile_size)
+    // mask = indices < c_in
+    // operand = select(broadcast(mask, operand.shape), operand, 0)
+    Value tile_offset = arith::MulIOp::create(b, c_in_block, tile_size_value);
+    TensorValue range = Iota(b, tile_size);
+    TensorValue broadcasted_tile_offset =
+        xtile::Splat(b, tile_offset, {tile_size});
+    Value indices = arith::AddIOp::create(b, range, broadcasted_tile_offset);
+
+    Value boundary = CreateConst(b, b.getI32Type(), c_in, {tile_size});
+
+    Value mask =
+        arith::CmpIOp::create(b, arith::CmpIPredicate::slt, indices, boundary);
+
+    mask = xtile::BroadcastInDims(b, mlir::cast<TensorValue>(mask), tile_shape,
+                                  {contraction_dimension_index});
+
+    Type operand_element_type = dot_operand.getType().getElementType();
+    TensorValue zero = CreateConst(b, operand_element_type, 0.0f, tile_shape);
+
+    Value masked_operand = arith::SelectOp::create(b, mask, dot_operand, zero);
+    mlir::scf::YieldOp::create(b, masked_operand);
+  }
+  // else ...
+  {
+    b.setInsertionPointToStart(if_op.elseBlock());
+    mlir::scf::YieldOp::create(b, dot_operand);
+  }
+  b.setInsertionPointAfter(if_op);
+  return mlir::cast<TensorValue>(if_op.getResult(0));
+}
+
 // Canonicalizes the given operand of a dot operation, i.e. make it a 2D tensor,
 // and make sure that the contracting dimension is where we expect it to be for
 // the given side (the second dimension for LHS, the first dimension for the
@@ -770,15 +848,14 @@ absl::StatusOr<TensorValue> EmitUnnestedDot(
 
 absl::StatusOr<int64_t> GetConvLoopIterationCount(
     const TiledHloInstruction& tiled_conv) {
-  const auto* conv =
-      ::xla::Cast<HloConvolutionInstruction>(tiled_conv.hlo());
+  const auto* conv = ::xla::Cast<HloConvolutionInstruction>(tiled_conv.hlo());
   const int64_t spatial_rank = conv->window().dimensions().size();
   const auto& dnums = conv->convolution_dimension_numbers();
   int64_t iterations = 1;
   for (int64_t i = 0; i < spatial_rank; ++i) {
     const int64_t spatial_axis = conv->window().dimensions(i).size();
-    const int64_t spatial_tile = tiled_conv.operand(1)->tile_size(
-        dnums.kernel_spatial_dimensions(i));
+    const int64_t spatial_tile =
+        tiled_conv.operand(1)->tile_size(dnums.kernel_spatial_dimensions(i));
     iterations *= CeilOfRatio(spatial_axis, spatial_tile);
   }
   const int64_t input_feature_axis =
@@ -787,7 +864,8 @@ absl::StatusOr<int64_t> GetConvLoopIterationCount(
       tiled_conv.operand(0)->tile_size(dnums.input_feature_dimension());
   iterations *= CeilOfRatio(input_feature_axis, input_feature_tile);
   TF_RET_CHECK(iterations > 0)
-      << "Number of iterations over contracting dimensions must be positive, got " 
+      << "Number of iterations over contracting dimensions must be positive, "
+         "got "
       << iterations << " for conv " << conv->ToShortString();
   return iterations;
 }
@@ -819,8 +897,8 @@ absl::StatusOr<TensorValue> EmitConv(
   if (spatial_rank != expected_spatial_rank) {
     return absl::InvalidArgumentError(absl::StrCat(
         "EmitConv: window has ", spatial_rank,
-        " spatial dimensions but output rank ", output_rank,
-        " implies ", expected_spatial_rank, " spatial dimensions."));
+        " spatial dimensions but output rank ", output_rank, " implies ",
+        expected_spatial_rank, " spatial dimensions."));
   }
 
   SmallVector<int64_t> padded_tile_sizes =
@@ -855,13 +933,12 @@ absl::StatusOr<TensorValue> EmitConv(
     mlir::OpBuilder::InsertionGuard g(b);
     b.setInsertionPointToStart(for_op.getBody());
     Value ki = for_op.getInductionVar();
-    Value computation_index =
-        xla::ApplyIndexingOp::create(b, ValueRange{pid, ki},
-                                     computation_index_map)
-            .getResult(0);
-    TF_RETURN_IF_ERROR(EmitTiledInstructionList(
-        b, fusion, tiled_hlo_conv.regions().front(), fn, computation_index,
-        values));
+    Value computation_index = xla::ApplyIndexingOp::create(
+                                  b, ValueRange{pid, ki}, computation_index_map)
+                                  .getResult(0);
+    TF_RETURN_IF_ERROR(
+        EmitTiledInstructionList(b, fusion, tiled_hlo_conv.regions().front(),
+                                 fn, computation_index, values));
 
     SmallVector<TensorValue> conv_args;
     for (const TiledHloInstruction* operand : tiled_hlo_conv.operands()) {
@@ -877,12 +954,12 @@ absl::StatusOr<TensorValue> EmitConv(
 
     auto acc_type = mlir::cast<mlir::RankedTensorType>(acc.getType());
 
-    // Broadcast a conv operand tile to the accumulator shape. For convolutions the kernel 
-    // (and potentially the input) can have a different dimension order, so we compute the 
-    // mapping from ConvolutionDimensionNumbers and pass it here.
+    // Broadcast a conv operand tile to the accumulator shape. For convolutions
+    // the kernel (and potentially the input) can have a different dimension
+    // order, so we compute the mapping from ConvolutionDimensionNumbers and
+    // pass it here.
     auto broadcast_operand_to_acc =
-        [&](TensorValue tile,
-            ArrayRef<int64_t> operand_dim_to_acc_dim)
+        [&](TensorValue tile, ArrayRef<int64_t> operand_dim_to_acc_dim)
         -> absl::StatusOr<TensorValue> {
       auto tile_type = mlir::cast<mlir::RankedTensorType>(tile.getType());
       if (tile_type.getShape() == acc_type.getShape()) {
@@ -898,18 +975,18 @@ absl::StatusOr<TensorValue> EmitConv(
         if (acc_dim == -1) {
           // Contracting dim: must be size 1.
           if (tile_shape[od] != 1) {
-            return absl::InvalidArgumentError(absl::StrCat(
-                "EmitConv: contracting operand dim ", od, " has size ",
-                tile_shape[od], " (expected 1)."));
+            return absl::InvalidArgumentError(
+                absl::StrCat("EmitConv: contracting operand dim ", od,
+                             " has size ", tile_shape[od], " (expected 1)."));
           }
         } else if (tile_shape[od] == acc_shape[acc_dim]) {
           kept_shape.push_back(tile_shape[od]);
           broadcast_dims.push_back(acc_dim);
         } else if (tile_shape[od] != 1) {
-          return absl::InvalidArgumentError(absl::StrCat(
-              "EmitConv: operand dim ", od, " (size ", tile_shape[od],
-              ") does not match acc dim ", acc_dim, " (size ",
-              acc_shape[acc_dim], ") and is not 1."));
+          return absl::InvalidArgumentError(
+              absl::StrCat("EmitConv: operand dim ", od, " (size ",
+                           tile_shape[od], ") does not match acc dim ", acc_dim,
+                           " (size ", acc_shape[acc_dim], ") and is not 1."));
         }
         // size-1 non-contracting dims are broadcast (dropped from kept_shape).
       }
@@ -946,7 +1023,7 @@ absl::StatusOr<TensorValue> EmitConv(
       input_dim_to_acc_dim[dnums.input_spatial_dimensions(i)] =
           dnums.output_spatial_dimensions(i);
     }
-    
+
     SmallVector<int64_t> kernel_dim_to_acc_dim(output_rank, -1);
     kernel_dim_to_acc_dim[dnums.kernel_output_feature_dimension()] =
         dnums.output_feature_dimension();
@@ -955,20 +1032,22 @@ absl::StatusOr<TensorValue> EmitConv(
           dnums.output_spatial_dimensions(i);
     }
 
-    TF_ASSIGN_OR_RETURN(TensorValue input_broadcast,
-                        broadcast_operand_to_acc(input_tile, input_dim_to_acc_dim));
-    TF_ASSIGN_OR_RETURN(TensorValue kernel_broadcast,
-                        broadcast_operand_to_acc(kernel_tile, kernel_dim_to_acc_dim));
+    TF_ASSIGN_OR_RETURN(
+        TensorValue input_broadcast,
+        broadcast_operand_to_acc(input_tile, input_dim_to_acc_dim));
+    TF_ASSIGN_OR_RETURN(
+        TensorValue kernel_broadcast,
+        broadcast_operand_to_acc(kernel_tile, kernel_dim_to_acc_dim));
 
     TensorValue input_cast = input_broadcast;
     if (getElementTypeOrSelf(input_broadcast.getType()) != accumulator_type) {
-      input_cast = mlir::cast<TensorValue>(
-          Cast(b, input_broadcast, accumulator_type));
+      input_cast =
+          mlir::cast<TensorValue>(Cast(b, input_broadcast, accumulator_type));
     }
     TensorValue kernel_cast = kernel_broadcast;
     if (getElementTypeOrSelf(kernel_broadcast.getType()) != accumulator_type) {
-      kernel_cast = mlir::cast<TensorValue>(
-          Cast(b, kernel_broadcast, accumulator_type));
+      kernel_cast =
+          mlir::cast<TensorValue>(Cast(b, kernel_broadcast, accumulator_type));
     }
 
     Value product = arith::MulFOp::create(b, input_cast, kernel_cast);
