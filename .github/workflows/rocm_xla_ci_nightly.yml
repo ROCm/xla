@@ -69,11 +69,6 @@ jobs:
           git -C "$tmpdir" sparse-checkout set build_tools/rocm
           cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
 
-      - name: Fetch execute_ci_build.sh from rocm-dev-infra
-        run: |
-          wget -O build_tools/rocm/execute_ci_build.sh https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/execute_ci_build_upstream.sh
-          chmod +x build_tools/rocm/execute_ci_build.sh
-
       - name: Get RBE cluster keys
         env:
           RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
@@ -98,7 +93,7 @@ jobs:
 
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         run: |
-          build_tools/rocm/execute_ci_build.sh \
+          build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
@@ -108,12 +103,14 @@ jobs:
             --jobs=30 \
             --bes_keywords=xla \
             --bes_keywords=single_gpu \
-            --bes_keywords=nightly
+            --bes_keywords=nightly \
+            -- \
+            //xla/...
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always() && !cancelled()
         run: |
-          build_tools/rocm/execute_ci_build.sh \
+          build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_multi_gpu \
             --local_test_jobs=1 \
@@ -122,7 +119,9 @@ jobs:
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
             --bes_keywords=xla \
             --bes_keywords=multi_gpu \
-            --bes_keywords=nightly
+            --bes_keywords=nightly \
+            -- \
+            //xla/...
 
       - name: Test XLA [${{ matrix.mode.name }}] [rocm_cpu]
         if: always() && !cancelled()
@@ -135,4 +134,6 @@ jobs:
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --bes_keywords=xla \
             --bes_keywords=cpu \
-            --bes_keywords=nightly
+            --bes_keywords=nightly \
+            -- \
+            //xla/...
