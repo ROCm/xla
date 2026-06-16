@@ -344,23 +344,37 @@ CodegenDecision CanTritonHandleReduce(
 CodegenDecision IsTritonSupportedAllGather(
     const HloAllGatherInstruction& all_gather,
     const se::GpuComputeCapability& gpu_version) {
-  if (all_gather.replica_groups().empty()) {
-    return CodegenDecision::Forbid("All-gather does not have replica groups.");
-  }
-  if (!all_gather.GetModule()
-           ->config()
-           .debug_options()
-           .xla_gpu_unsupported_use_all_gather_triton_backend()) {
+  bool flag_enabled =
+      all_gather.GetModule()
+          ->config()
+          .debug_options()
+          .xla_gpu_unsupported_use_all_gather_triton_backend();
+
+  VLOG(1) << "IsTritonSupportedAllGather called for: " << all_gather.name()
+          << ", flag_enabled=" << flag_enabled;
+
+  if (!flag_enabled) {
+    VLOG(1) << "AllGather Triton backend is DISABLED for: "
+            << all_gather.name();
     return CodegenDecision::Forbid(
-        "All-gather Triton backend is not enabled "
-        "(xla_gpu_unsupported_use_all_gather_triton_backend=false).");
+        "Triton backend for all-gather is disabled. Enable with "
+        "--xla_gpu_unsupported_use_all_gather_triton_backend=true");
   }
-  // AllGather does not have a reduction computation - it just gathers data.
-  // The operand must be an array type.
-  if (all_gather.operand_count() == 0 ||
-      !all_gather.operand(0)->shape().IsArray()) {
-    return CodegenDecision::Forbid("All-gather operand is not an array.");
+
+  // S4, F8E4M3FN and F8E5M2 are not supported for all-gathers.
+  if (all_gather.operand_count() > 0) {
+    PrimitiveType element_type =
+        all_gather.operand(0)->shape().element_type();
+    if (element_type == F8E4M3FN || element_type == F8E5M2 ||
+        element_type == S4) {
+      VLOG(1) << "AllGather rejected due to unsupported data type: "
+              << PrimitiveType_Name(element_type);
+      return CodegenDecision::Forbid(
+          "S4, F8E4M3FN and F8E5M2 are not supported for all-gathers.");
+    }
   }
+
+  VLOG(1) << "AllGather Triton backend ALLOWED for: " << all_gather.name();
   return CodegenDecision::Allow();
 }
 
