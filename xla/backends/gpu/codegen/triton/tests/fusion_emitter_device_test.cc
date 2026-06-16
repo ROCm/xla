@@ -1571,7 +1571,7 @@ CHECK-COUNT-1: xtile.insert
 TEST_F(WarpSpecializationTritonEmitterTest,
        DotAccumulationLoopUsesWarpSpecialization) {
   if (auto cc = GpuComputeCapability().cuda_compute_capability();
-      cc && cc->IsAtLeastBlackwell()) {
+      cc && !cc->IsAtLeastBlackwell()) {
     GTEST_SKIP() << "Currently only supported on Blackwell and newer.";
   }
 
@@ -2274,7 +2274,7 @@ ENTRY e {
 TEST_P(TritonScaledDotGemmTest, FP8ScaledDotGetsFusedAndExecutesCorrectly) {
   const ScaleDotTestParams& params = GetParam();
   if (auto cc = GpuComputeCapability().cuda_compute_capability();
-      cc && cc->IsAtLeastBlackwell()) {
+      cc && !cc->IsAtLeastBlackwell()) {
     GTEST_SKIP() << "Skipping test for pre-Blackwell GPUs.";
   }
   constexpr absl::string_view kHloTextTemplate = R"hlo(
@@ -2341,7 +2341,7 @@ class TritonScaledDotTest : public TritonEmitterTest {
 TEST_F(TritonScaledDotTest,
        ScaledDotWithOmmittedLhsScaleGetFusedAndExecutedCorrectly) {
   if (auto cc = GpuComputeCapability().cuda_compute_capability();
-      cc && cc->IsAtLeastHopper()) {
+      cc && !cc->IsAtLeastHopper()) {
     GTEST_SKIP() << "Scaled dot isn't supported by Triton for pre-Hopper GPUs.";
   }
   constexpr absl::string_view kHloTextTemplate = R"hlo(
@@ -2396,7 +2396,7 @@ ENTRY e {
 
 TEST_F(TritonScaledDotTest, ScaledDotWithBatchGetFusedAndExecutedCorrectly) {
   if (auto cc = GpuComputeCapability().cuda_compute_capability();
-      cc && cc->IsAtLeastHopper()) {
+      cc && !cc->IsAtLeastHopper()) {
     GTEST_SKIP() << "Scaled dot isn't supported by Triton for pre-Hopper GPUs.";
   }
   constexpr absl::string_view kHloTextTemplate = R"hlo(
@@ -2444,7 +2444,7 @@ ENTRY e {
 
 TEST_F(TritonScaledDotTest, BroadcastAndReshapeGetFused) {
   if (auto cc = GpuComputeCapability().cuda_compute_capability();
-      cc && cc->IsAtLeastHopper()) {
+      cc && !cc->IsAtLeastHopper()) {
     GTEST_SKIP() << "Scaled dot isn't supported by Triton for pre-Hopper GPUs.";
   }
   constexpr absl::string_view kHloTextTemplate = R"hlo(
