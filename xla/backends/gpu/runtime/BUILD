@@ -1840,6 +1840,7 @@ cc_library(
     deps = [
         ":collective_memory",
         ":collective_memory_requests",
+        ":collective_kernel_thunk",
         ":collective_thunk",
         ":collective_thunk_proto_cc",
         ":thunk",
