@@ -15,7 +15,9 @@ limitations under the License.
 
 #include "xla/backends/gpu/autotuner/fission_backend.h"
 
+#include <cstdlib>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -23,6 +25,9 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
+#include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
 #include "xla/backends/autotuner/codegen_backend.h"
 #include "xla/backends/gpu/transforms/priority_fusion.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -43,6 +48,36 @@ namespace xla {
 namespace gpu {
 
 namespace {
+
+// Returns true if `instr` should be forced to the Triton backend only -- i.e.
+// non-Triton autotuner backends (FissionBackend -> rocBLAS/hipBLASLt) should
+// decline it, leaving the autotuner with the Triton (BLOCK_LEVEL_EMITTER)
+// candidate. Controlled at runtime by env XLA_GPU_FORCE_TRITON_OP_SUBSTR: a
+// ';'-separated list of substrings matched against the HLO op metadata
+// op_name (';' is the delimiter because op_names contain commas). Unset/empty
+// => no-op (default upstream behavior).
+//
+// Example (force the gpt-j attention-context "AV" GEMM back to Triton):
+//   XLA_GPU_FORCE_TRITON_OP_SUBSTR='hqk,...khd->...qhd'
+bool ShouldForceTritonOnly(const HloInstruction& instr) {
+  static const std::vector<std::string>* const kSubstrs = [] {
+    auto* v = new std::vector<std::string>();
+    const char* env = std::getenv("XLA_GPU_FORCE_TRITON_OP_SUBSTR");
+    if (env != nullptr && env[0] != '\0') {
+      for (absl::string_view part :
+           absl::StrSplit(env, ';', absl::SkipEmpty())) {
+        v->emplace_back(part);
+      }
+    }
+    return v;
+  }();
+  if (kSubstrs->empty()) return false;
+  const absl::string_view op_name = instr.metadata().op_name();
+  for (const std::string& s : *kSubstrs) {
+    if (absl::StrContains(op_name, s)) return true;
+  }
+  return false;
+}
 
 // Replaces the fusion instruction with the instructions from the fissioned
 // computation.
@@ -145,6 +180,11 @@ absl::Status FissionBackend::ApplyConfig(HloInstruction& instr,
 }
 
 bool FissionBackend::IsSupported(const HloInstruction& instr) {
+  // Allow forcing specific ops to Triton-only by making the Fission (->
+  // rocBLAS/hipBLASLt) backends decline them. See ShouldForceTritonOnly.
+  if (ShouldForceTritonOnly(instr)) {
+    return false;
+  }
   return instr.opcode() == HloOpcode::kFusion;
 }
 
