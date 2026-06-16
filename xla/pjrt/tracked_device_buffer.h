@@ -91,11 +91,14 @@ class RawSEDeviceMemory {
     return BufferSequencingEventRef();
   }
 
+  // Overrides the definition event with one tied to the actual producer stream.
+  // Must be called before the buffer is made visible to consumers.
+  // The default is a no-op; only AllocatedRawSEDeviceMemory overrides this.
+  virtual void SetProducerEvent(BufferSequencingEventRef /*event*/) {}
+
  private:
   se::DeviceAddressBase value_;
 };
-
-
 
 }  // namespace xla
 

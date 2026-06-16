@@ -107,54 +107,60 @@ PjRtStreamExecutorRawBuffer::CopyRawHostToDeviceAndReturnEvent(
   auto device_event =
       BufferSequencingEvent::Create(client_->async_work_runner());
   device_event.AndThen([device_buffer = device_buffer_]() {});
-  client_->async_work_runner()->Schedule([client = client_, device_event,
-                                          local_device = local_device_, stream,
-                                          src, offset, transfer_size,
-                                          buf = tsl::FormRef(this)]() mutable {
-    se::DeviceAddressBase sub_buffer = buf->device_buffer_->mem();
-    if (transfer_size < sub_buffer.size()) {
-      sub_buffer = sub_buffer.GetByteSlice(offset, transfer_size);
-    }
-    std::shared_ptr<void> staging_buffer;
-    auto status = [&]() -> absl::Status {
-      RETURN_IF_ERROR(client->WaitForAllocation(stream, *buf));
-      if (transfer_size > 0) {
-        if (client->ShouldStageHostToDeviceTransfers(src, transfer_size)) {
-          if (client->GetHostMemoryAllocator() == nullptr) {
-            return absl::InvalidArgumentError(
-                "host_memory_allocator should be initialized for "
-                "staging buffer transfer.");
-          }
-          HostMemoryAllocator::AllocateOptions alloc_opts;
-          alloc_opts.numa_node = stream->parent()->numa_node();
-          alloc_opts.local_device_id = local_device->local_device_id();
-          staging_buffer = client->GetHostMemoryAllocator()->Allocate(
-              transfer_size, alloc_opts);
-          auto copy_to_staging_buffer = [src, transfer_size,
-                                         staging_buffer]() mutable {
-            std::memcpy(staging_buffer.get(), src, transfer_size);
-          };
-          RETURN_IF_ERROR(stream->DoHostCallback(copy_to_staging_buffer));
-          RETURN_IF_ERROR(
-              stream->Memcpy(&sub_buffer, staging_buffer.get(), transfer_size));
-        } else {
-          RETURN_IF_ERROR(stream->Memcpy(&sub_buffer, src, transfer_size));
+
+  // Bind the pre-created event to this buffer before scheduling the async
+  // task.  This ensures that any consumer calling GetDefinitionEvent after
+  // this point sees an event on host_to_device_stream rather than the
+  // compute-stream sync_point, closing the cross-stream race in RunAsync.
+  device_buffer_->SetProducerEvent(device_event);
+
+  client_->async_work_runner()->Schedule(
+      [client = client_, device_event, local_device = local_device_, stream,
+       src, offset, transfer_size, buf = tsl::FormRef(this)]() mutable {
+        se::DeviceAddressBase sub_buffer = buf->device_buffer_->mem();
+        if (transfer_size < sub_buffer.size()) {
+          sub_buffer = sub_buffer.GetByteSlice(offset, transfer_size);
         }
-      }
-      return absl::OkStatus();
-    }();
-    if (status.ok()) {
-      status = client->AllocateAndRecordEvent(
-          device_event, local_device, stream,
-          "PjRtStreamExecutorRawBuffer::CopyRawHostToDevice",
-          [staging_buffer = std::move(staging_buffer)]() mutable {
-            staging_buffer.reset();
-          });
-    }
-    if (!status.ok()) {
-      client->SetEventAsError(device_event, status);
-    }
-  });
+        std::shared_ptr<void> staging_buffer;
+        auto status = [&]() -> absl::Status {
+          RETURN_IF_ERROR(client->WaitForAllocation(stream, *buf));
+          if (transfer_size > 0) {
+            if (client->ShouldStageHostToDeviceTransfers(src, transfer_size)) {
+              if (client->GetHostMemoryAllocator() == nullptr) {
+                return absl::InvalidArgumentError(
+                    "host_memory_allocator should be initialized for "
+                    "staging buffer transfer.");
+              }
+              HostMemoryAllocator::AllocateOptions alloc_opts;
+              alloc_opts.numa_node = stream->parent()->numa_node();
+              alloc_opts.local_device_id = local_device->local_device_id();
+              staging_buffer = client->GetHostMemoryAllocator()->Allocate(
+                  transfer_size, alloc_opts);
+              auto copy_to_staging_buffer = [src, transfer_size,
+                                             staging_buffer]() mutable {
+                std::memcpy(staging_buffer.get(), src, transfer_size);
+              };
+              RETURN_IF_ERROR(stream->DoHostCallback(copy_to_staging_buffer));
+              RETURN_IF_ERROR(stream->Memcpy(&sub_buffer, staging_buffer.get(),
+                                             transfer_size));
+            } else {
+              RETURN_IF_ERROR(stream->Memcpy(&sub_buffer, src, transfer_size));
+            }
+          }
+          return absl::OkStatus();
+        }();
+        if (status.ok()) {
+          status = client->AllocateAndRecordEvent(
+              device_event, local_device, stream,
+              "PjRtStreamExecutorRawBuffer::CopyRawHostToDevice",
+              [staging_buffer = std::move(staging_buffer)]() mutable {
+                staging_buffer.reset();
+              });
+        }
+        if (!status.ok()) {
+          client->SetEventAsError(device_event, status);
+        }
+      });
   return PjRtDeviceEventRef(std::move(device_event));
 }
 
@@ -165,55 +171,54 @@ PjRtStreamExecutorRawBuffer::CopyRawDeviceToHostAndReturnEvent(
   auto device_event =
       BufferSequencingEvent::Create(client_->async_work_runner());
   device_event.AndThen([device_buffer = device_buffer_]() {});
-  client_->async_work_runner()->Schedule([client = client_, device_event,
-                                          local_device = local_device_, stream,
-                                          dst, offset, transfer_size,
-                                          buf = tsl::FormRef(this)]() mutable {
-    se::DeviceAddressBase sub_buffer = buf->device_buffer_->mem();
-    if (transfer_size < sub_buffer.size()) {
-      sub_buffer = sub_buffer.GetByteSlice(offset, transfer_size);
-    }
-    std::shared_ptr<void> staging_buffer;
-    auto status = [&]() -> absl::Status {
-      RETURN_IF_ERROR(client->WaitForAllocation(stream, *buf));
-      if (transfer_size > 0) {
-        if (client->ShouldStageHostToDeviceTransfers(dst, transfer_size)) {
-          if (client->GetHostMemoryAllocator() == nullptr) {
-            return absl::InvalidArgumentError(
-                "host_memory_allocator should be initialized for "
-                "staging buffer transfer.");
-          }
-          HostMemoryAllocator::AllocateOptions alloc_opts;
-          alloc_opts.numa_node = stream->parent()->numa_node();
-          alloc_opts.local_device_id = local_device->local_device_id();
-          staging_buffer = client->GetHostMemoryAllocator()->Allocate(
-              transfer_size, alloc_opts);
-          RETURN_IF_ERROR(
-              stream->Memcpy(staging_buffer.get(), sub_buffer, transfer_size));
-          auto copy_from_staging_buffer = [dst, transfer_size,
-                                           staging_buffer]() mutable {
-            std::memcpy(dst, staging_buffer.get(), transfer_size);
-          };
-          // TODO(parkers): This failing maybe consitutes a race.
-          RETURN_IF_ERROR(stream->DoHostCallback(copy_from_staging_buffer));
-        } else {
-          RETURN_IF_ERROR(stream->Memcpy(dst, sub_buffer, transfer_size));
+  client_->async_work_runner()->Schedule(
+      [client = client_, device_event, local_device = local_device_, stream,
+       dst, offset, transfer_size, buf = tsl::FormRef(this)]() mutable {
+        se::DeviceAddressBase sub_buffer = buf->device_buffer_->mem();
+        if (transfer_size < sub_buffer.size()) {
+          sub_buffer = sub_buffer.GetByteSlice(offset, transfer_size);
         }
-      }
-      return absl::OkStatus();
-    }();
-    if (status.ok()) {
-      status = client->AllocateAndRecordEvent(
-          device_event, local_device, stream,
-          "PjRtStreamExecutorRawBuffer::CopyRawDeviceToHost",
-          [staging_buffer = std::move(staging_buffer)]() mutable {
-            staging_buffer.reset();
-          });
-    }
-    if (!status.ok()) {
-      client->SetEventAsError(device_event, status);
-    }
-  });
+        std::shared_ptr<void> staging_buffer;
+        auto status = [&]() -> absl::Status {
+          RETURN_IF_ERROR(client->WaitForAllocation(stream, *buf));
+          if (transfer_size > 0) {
+            if (client->ShouldStageHostToDeviceTransfers(dst, transfer_size)) {
+              if (client->GetHostMemoryAllocator() == nullptr) {
+                return absl::InvalidArgumentError(
+                    "host_memory_allocator should be initialized for "
+                    "staging buffer transfer.");
+              }
+              HostMemoryAllocator::AllocateOptions alloc_opts;
+              alloc_opts.numa_node = stream->parent()->numa_node();
+              alloc_opts.local_device_id = local_device->local_device_id();
+              staging_buffer = client->GetHostMemoryAllocator()->Allocate(
+                  transfer_size, alloc_opts);
+              RETURN_IF_ERROR(stream->Memcpy(staging_buffer.get(), sub_buffer,
+                                             transfer_size));
+              auto copy_from_staging_buffer = [dst, transfer_size,
+                                               staging_buffer]() mutable {
+                std::memcpy(dst, staging_buffer.get(), transfer_size);
+              };
+              // TODO(parkers): This failing maybe consitutes a race.
+              RETURN_IF_ERROR(stream->DoHostCallback(copy_from_staging_buffer));
+            } else {
+              RETURN_IF_ERROR(stream->Memcpy(dst, sub_buffer, transfer_size));
+            }
+          }
+          return absl::OkStatus();
+        }();
+        if (status.ok()) {
+          status = client->AllocateAndRecordEvent(
+              device_event, local_device, stream,
+              "PjRtStreamExecutorRawBuffer::CopyRawDeviceToHost",
+              [staging_buffer = std::move(staging_buffer)]() mutable {
+                staging_buffer.reset();
+              });
+        }
+        if (!status.ok()) {
+          client->SetEventAsError(device_event, status);
+        }
+      });
   return PjRtDeviceEventRef(std::move(device_event));
 }
 

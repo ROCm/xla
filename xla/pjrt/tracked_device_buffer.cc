@@ -24,6 +24,7 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_format.h"
+#include "absl/synchronization/mutex.h"
 #include "xla/future.h"
 #include "xla/pjrt/abstract_tracked_device_buffer.h"
 #include "xla/pjrt/async_work_runner.h"
@@ -88,8 +89,25 @@ class AllocatedRawSEDeviceMemory : public RawSEDeviceMemory {
 
   void UnsafeReleaseMemory() override { allocator_ = nullptr; }
 
+  // Binds a producer-stream event to this buffer, replacing the default
+  // compute-stream sync_point.  Must be called before the buffer is visible to
+  // consumers (i.e. before the async producer task is scheduled).
+  void SetProducerEvent(BufferSequencingEventRef event) override {
+    absl::MutexLock l(&producer_event_mu_);
+    producer_event_ = std::move(event);
+  }
+
   absl::StatusOr<BufferSequencingEventRef> GetDefinitionEvent(
       AsyncWorkRunner* async_work_runner, bool nullptr_if_past) const override {
+    {
+      absl::MutexLock l(&producer_event_mu_);
+      if (producer_event_) {
+        if (nullptr_if_past && producer_event_->IsComplete()) {
+          return BufferSequencingEventRef();
+        }
+        return producer_event_;
+      }
+    }
     if (sync_point_ != std::numeric_limits<size_t>::max()) {
       return local_device_->GetEventForComputeStreamSyncPoint(
           sync_point_, async_work_runner, nullptr_if_past);
@@ -101,6 +119,9 @@ class AllocatedRawSEDeviceMemory : public RawSEDeviceMemory {
   se::DeviceAddressAllocator* allocator_;
   LocalDeviceState* local_device_;
   size_t sync_point_ = std::numeric_limits<size_t>::max();
+
+  mutable absl::Mutex producer_event_mu_;
+  BufferSequencingEventRef producer_event_ ABSL_GUARDED_BY(producer_event_mu_);
 };
 
 tsl::AsyncValueRef<RawSEDeviceMemory> RawSEDeviceMemory::Create(
@@ -173,7 +194,5 @@ tsl::AsyncValueRef<RawSEDeviceMemory> RawSEDeviceMemory::CreateSlice(
       absl::StrFormat("Error when slicing: [%d,%d) in array of size %d", offset,
                       offset + size, src_size)));
 }
-
-
 
 }  // namespace xla
