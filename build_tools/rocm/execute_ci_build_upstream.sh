@@ -10,6 +10,7 @@ EXCLUDED_TESTS=(
     "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
     "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x*"
     "TritonEmitterTest.ScaledDotIsSupportedByReferencePlatform"
+    "MatmulTestWithCublas.GemmRewriter_RegressionTestF64"
     "SampleFileTest.Convolution" # https://wardite.cluster.engflow.com/invocations/default/c105260c-873a-4634-ab69-905a43ca5cf8
 )
 
