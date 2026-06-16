@@ -1938,6 +1938,7 @@ cc_library(
     srcs = ["collective_kernel_thunk.cc"],
     hdrs = ["collective_kernel_thunk.h"],
     deps = [
+        ":all_gather",
         ":all_reduce",
         ":collective_kernel_api",
         ":collective_kernel_thunk_proto_cc",
@@ -4137,6 +4138,26 @@ xla_test(
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
         "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "all_gather",
+    srcs = ["all_gather.cc"],
+    hdrs = ["all_gather.h"],
+    deps = [
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/service/gpu:launch_dimensions",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor/gpu:all_reduce_kernel",
+        "//xla/tsl/platform:errors",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@llvm-project//llvm:Support",
     ],
 )
 

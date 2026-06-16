@@ -341,6 +341,29 @@ CodegenDecision CanTritonHandleReduce(
       "Reduction is not a row-reduction of a single operand.");
 }
 
+CodegenDecision IsTritonSupportedAllGather(
+    const HloAllGatherInstruction& all_gather,
+    const se::GpuComputeCapability& gpu_version) {
+  if (all_gather.replica_groups().empty()) {
+    return CodegenDecision::Forbid("All-gather does not have replica groups.");
+  }
+  if (!all_gather.GetModule()
+           ->config()
+           .debug_options()
+           .xla_gpu_unsupported_use_all_gather_triton_backend()) {
+    return CodegenDecision::Forbid(
+        "All-gather Triton backend is not enabled "
+        "(xla_gpu_unsupported_use_all_gather_triton_backend=false).");
+  }
+  // AllGather does not have a reduction computation - it just gathers data.
+  // The operand must be an array type.
+  if (all_gather.operand_count() == 0 ||
+      !all_gather.operand(0)->shape().IsArray()) {
+    return CodegenDecision::Forbid("All-gather operand is not an array.");
+  }
+  return CodegenDecision::Allow();
+}
+
 CodegenDecision IsTritonSupportedAllReduce(
     const HloAllReduceInstruction& all_reduce,
     const se::GpuComputeCapability& gpu_version) {
@@ -627,6 +650,22 @@ CodegenDecision IsTritonSupportedInstructionImpl(
     return IsTritonSupportedConversion(instr.shape().element_type(),
                                        instr.operand(0)->shape().element_type(),
                                        gpu_version);
+  }
+
+  // Special handling for AllGatherStart and related ops before the data type
+  // check. AllGatherStart has a tuple shape which would fail the type check.
+  if (instr.opcode() == HloOpcode::kAllGatherStart) {
+    return IsTritonSupportedAllGather(*Cast<HloAllGatherInstruction>(&instr),
+                                      gpu_version);
+  }
+  if (instr.opcode() == HloOpcode::kAllGatherDone) {
+    return IsTritonSupportedAllGather(
+        *Cast<HloAllGatherInstruction>(instr.operand(0)), gpu_version);
+  }
+  if (instr.opcode() == HloOpcode::kGetTupleElement &&
+      instr.operand(0)->opcode() == HloOpcode::kAllGatherStart) {
+    return IsTritonSupportedAllGather(
+        *Cast<HloAllGatherInstruction>(instr.operand(0)), gpu_version);
   }
 
   auto type = instr.shape().element_type();

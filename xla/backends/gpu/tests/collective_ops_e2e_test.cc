@@ -442,6 +442,187 @@ TEST_P(CollectivesModeOps, AllGatherMixedTypes) {
   }
 }
 
+// Tests AllGather via the Triton collective kernel backend using the legacy
+// tiling path (xla_gpu_experimental_enable_tiling_propagation=false).
+// This verifies that the emitter works correctly without the experimental
+// TilingSpace-based tiling propagation.
+TEST_P(CollectivesModeOps, AllGatherTritonLegacyTiling) {
+  // The Triton all-gather backend uses its own symmetric buffer protocol
+  // and is only available when the flag is explicitly enabled.
+  // Skip for symmetric memory mode since we test Triton's own protocol here.
+  if (collectives_mode() != DebugOptions::COLLECTIVES_PRIVATE_MEMORY) {
+    GTEST_SKIP() << "AllGather Triton backend test uses private memory mode";
+  }
+
+  const absl::string_view kModuleStr = R"(
+  HloModule test
+  ENTRY test_computation {
+    id = u32[] replica-id()
+    id_f32 = f32[] convert(id)
+    id2 = f32[1, 4] broadcast(id_f32), dimensions={}
+    a0 = f32[1, 4] constant({{10, 15, 20, 25}})
+    a1 = f32[1, 4] add(id2, a0)
+    allgather = f32[2, 4] all-gather(a1), replica_groups={{0,1}}, dimensions={0}
+    ROOT out = f32[8] reshape(allgather)
+  }
+  )";
+  const int64_t kNumReplicas = 2;
+  ASSERT_GE(device_count(), kNumReplicas)
+      << "Test requires at least " << kNumReplicas << " devices ("
+      << device_count() << " available)";
+
+  HloModuleConfig config =
+      GetModuleConfigForTest(/*replica_count=*/kNumReplicas);
+  // Enable the Triton all-gather backend (legacy tiling path).
+  config.mutable_debug_options()
+      .set_xla_gpu_unsupported_use_all_gather_triton_backend(true);
+  // Ensure experimental tiling is OFF (legacy path).
+  config.mutable_debug_options()
+      .set_xla_gpu_experimental_enable_tiling_propagation(false);
+
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnVerifiedModule(kModuleStr, config));
+
+  TF_ASSERT_OK_AND_ASSIGN(ExecutionResult execution_result,
+                          ExecuteReplicated(std::move(module)));
+
+  const HloModule* hlo_module = execution_result.optimized_module;
+  HloInstruction* all_gather_start =
+      FindInstruction(hlo_module, HloOpcode::kAllGatherStart);
+  HloInstruction* all_gather_done =
+      FindInstruction(hlo_module, HloOpcode::kAllGatherDone);
+  EXPECT_THAT(all_gather_start, NotNull());
+  EXPECT_THAT(all_gather_done, NotNull());
+
+  const std::vector<Literal>& results = execution_result.results;
+  ASSERT_EQ(results.size(), kNumReplicas);
+  for (const Literal& result : results) {
+    // Rank 0: id=0, so a1 = [10, 15, 20, 25]; Rank 1: a1 = [11, 16, 21, 26]
+    // After all-gather along dim 0: [[10,15,20,25],[11,16,21,26]] reshaped to
+    // 1D
+    LiteralTestUtil::ExpectR1Equal<float>(
+        {10.0f, 15.0f, 20.0f, 25.0f, 11.0f, 16.0f, 21.0f, 26.0f}, result);
+  }
+}
+
+// Tests AllGather via the Triton collective kernel backend using the
+// experimental tiling path
+// (xla_gpu_experimental_enable_tiling_propagation=true). This verifies that the
+// AllGather emitter works correctly with the new TilingSpace-based tiling
+// propagation (tile offsets from TiledHloComputation).
+TEST_P(CollectivesModeOps, AllGatherTritonExperimentalTiling) {
+  // Same as AllGatherTritonLegacyTiling but with experimental tiling enabled.
+  if (collectives_mode() != DebugOptions::COLLECTIVES_PRIVATE_MEMORY) {
+    GTEST_SKIP() << "AllGather Triton backend test uses private memory mode";
+  }
+
+  const absl::string_view kModuleStr = R"(
+  HloModule test
+  ENTRY test_computation {
+    id = u32[] replica-id()
+    id_f32 = f32[] convert(id)
+    id2 = f32[1, 4] broadcast(id_f32), dimensions={}
+    a0 = f32[1, 4] constant({{10, 15, 20, 25}})
+    a1 = f32[1, 4] add(id2, a0)
+    allgather = f32[2, 4] all-gather(a1), replica_groups={{0,1}}, dimensions={0}
+    ROOT out = f32[8] reshape(allgather)
+  }
+  )";
+  const int64_t kNumReplicas = 2;
+  ASSERT_GE(device_count(), kNumReplicas)
+      << "Test requires at least " << kNumReplicas << " devices ("
+      << device_count() << " available)";
+
+  HloModuleConfig config =
+      GetModuleConfigForTest(/*replica_count=*/kNumReplicas);
+  // Enable the Triton all-gather backend with experimental tiling.
+  config.mutable_debug_options()
+      .set_xla_gpu_unsupported_use_all_gather_triton_backend(true);
+  // Enable experimental tiling propagation (the new TilingSpace-based path).
+  config.mutable_debug_options()
+      .set_xla_gpu_experimental_enable_tiling_propagation(true);
+
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnVerifiedModule(kModuleStr, config));
+
+  TF_ASSERT_OK_AND_ASSIGN(ExecutionResult execution_result,
+                          ExecuteReplicated(std::move(module)));
+
+  const HloModule* hlo_module = execution_result.optimized_module;
+  HloInstruction* all_gather_start =
+      FindInstruction(hlo_module, HloOpcode::kAllGatherStart);
+  HloInstruction* all_gather_done =
+      FindInstruction(hlo_module, HloOpcode::kAllGatherDone);
+  EXPECT_THAT(all_gather_start, NotNull());
+  EXPECT_THAT(all_gather_done, NotNull());
+
+  const std::vector<Literal>& results = execution_result.results;
+  ASSERT_EQ(results.size(), kNumReplicas);
+  for (const Literal& result : results) {
+    // Same expected output as the legacy tiling test - both paths produce
+    // identical results; only the internal tile propagation mechanism differs.
+    LiteralTestUtil::ExpectR1Equal<float>(
+        {10.0f, 15.0f, 20.0f, 25.0f, 11.0f, 16.0f, 21.0f, 26.0f}, result);
+  }
+}
+
+// Tests AllGather via the Triton backend with a 3D shape to exercise
+// multi-dimensional tiling. Both legacy and experimental tiling paths are
+// checked for correctness.
+TEST_P(CollectivesModeOps, AllGatherTriton3D) {
+  if (collectives_mode() != DebugOptions::COLLECTIVES_PRIVATE_MEMORY) {
+    GTEST_SKIP() << "AllGather Triton backend test uses private memory mode";
+  }
+
+  const absl::string_view kModuleStr = R"(
+  HloModule test
+  ENTRY test_computation {
+    id = u32[] replica-id()
+    id_f32 = f32[] convert(id)
+    id2 = f32[1, 2, 4] broadcast(id_f32), dimensions={}
+    a0 = f32[1, 2, 4] constant({{{1, 2, 3, 4}, {5, 6, 7, 8}}})
+    a1 = f32[1, 2, 4] add(id2, a0)
+    allgather = f32[2, 2, 4] all-gather(a1), replica_groups={{0,1}}, dimensions={0}
+    ROOT out = f32[16] reshape(allgather)
+  }
+  )";
+  const int64_t kNumReplicas = 2;
+  ASSERT_GE(device_count(), kNumReplicas)
+      << "Test requires at least " << kNumReplicas << " devices ("
+      << device_count() << " available)";
+
+  for (bool use_experimental_tiling : {false, true}) {
+    SCOPED_TRACE(use_experimental_tiling ? "experimental_tiling"
+                                         : "legacy_tiling");
+    HloModuleConfig config =
+        GetModuleConfigForTest(/*replica_count=*/kNumReplicas);
+    config.mutable_debug_options()
+        .set_xla_gpu_unsupported_use_all_gather_triton_backend(true);
+    config.mutable_debug_options()
+        .set_xla_gpu_experimental_enable_tiling_propagation(
+            use_experimental_tiling);
+
+    TF_ASSERT_OK_AND_ASSIGN(auto module,
+                            ParseAndReturnVerifiedModule(kModuleStr, config));
+
+    TF_ASSERT_OK_AND_ASSIGN(ExecutionResult execution_result,
+                            ExecuteReplicated(std::move(module)));
+
+    const std::vector<Literal>& results = execution_result.results;
+    ASSERT_EQ(results.size(), kNumReplicas);
+    // Rank 0: a1 = {{{1,2,3,4},{5,6,7,8}}}
+    // Rank 1: a1 = {{{2,3,4,5},{6,7,8,9}}}
+    // After all-gather along dim 0 and reshape to [16]:
+    // {1,2,3,4, 5,6,7,8, 2,3,4,5, 6,7,8,9}
+    for (const Literal& result : results) {
+      LiteralTestUtil::ExpectR1Equal<float>(
+          {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 2.0f, 3.0f, 4.0f,
+           5.0f, 6.0f, 7.0f, 8.0f, 9.0f},
+          result);
+    }
+  }
+}
+
 TEST_P(CollectivesModeOps, CollectivePermute) {
   const absl::string_view kModuleStr = R"(
   HloModule test
