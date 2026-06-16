@@ -2208,6 +2208,14 @@ StreamExecutorGpuClient::RunAsync(
     RETURN_IF_ERROR(set_result({}, 0));
   }
 
+  // Wait for all input buffers to be ready on the compute stream before
+  // dispatching the kernel.  H2D-produced buffers carry a producer_event on
+  // host_to_device_stream; WaitForAllocation enqueues hipStreamWaitEvent so
+  // the kernel cannot start before the transfer completes.
+  for (const auto& arg : flat_arguments) {
+    RETURN_IF_ERROR(WaitForAllocation(run_options->stream(), *arg));
+  }
+
   RETURN_IF_ERROR(gpu_exec->ExecuteThunks(buffer_allocations, run_options));
 
   RETURN_IF_ERROR(buffer_allocations.TearDown(buffers_in_result,
