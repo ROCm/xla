@@ -305,9 +305,6 @@ std::optional<TritonFusion::LaunchConfig> TritonFusion::GetLaunchConfig(
 
   // We expect all roots to have the same number of blocks. Otherwise we
   // cannot codegen it.
-  LOG(INFO) << "GetLaunchConfig: fusion_root_count="
-            << analysis->fusion_root_count();
-
   if (analysis->fusion_root_count() == 0) {
     LOG(ERROR) << "GetLaunchConfig: No fusion roots found!";
     return std::nullopt;
@@ -335,9 +332,6 @@ std::optional<TritonFusion::LaunchConfig> TritonFusion::GetLaunchConfig(
   // TODO(b/451901200): We eventually also want to be able to predict this
   // value without compiling so the cost model can rely on it. Currently, we
   // need the override for auto warp specialization.
-  LOG(INFO) << "GetLaunchConfig: thread_dims_override.has_value()="
-            << thread_dims_override.has_value();
-
   if (thread_dims_override) {
     launch_config.launch_dimensions = LaunchDimensions{
         se::BlockDim(num_blocks), thread_dims_override.value()};

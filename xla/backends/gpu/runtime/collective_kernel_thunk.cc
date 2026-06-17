@@ -248,15 +248,18 @@ absl::Status CollectiveKernelThunk::Prepare(const PrepareParams& params) {
         (collective_op_kind_ == CollectiveOpKind::kAllGather);
     const AllReduceStrategy strategy =
         GetAllReduceStrategy(GetInputSizeBytes(), is_multimem_enabled_);
-    const LaunchDimensions launch_dimensions = launch_dimensions_.value_or(
-        is_all_gather
-            ? AllGatherLaunchDimensions(buffers_[0].element_count,
-                                        clique_key.num_local_participants())
-            : AllReduceLaunchDimensions(buffers_[0].element_count,
-                                        clique_key.num_local_participants(),
-                                        strategy));
+    const LaunchDimensions launch_dimensions =
+        launch_dimensions_.num_blocks() > 0
+            ? launch_dimensions_
+            : (is_all_gather
+                   ? AllGatherLaunchDimensions(
+                         buffers_[0].element_count,
+                         clique_key.num_local_participants())
+                   : AllReduceLaunchDimensions(
+                         buffers_[0].element_count,
+                         clique_key.num_local_participants(), strategy));
     const int64_t kNumSignalFlags =
-        clique_key.num_local_participants() * launch_dimensions_.num_blocks();
+        clique_key.num_local_participants() * launch_dimensions.num_blocks();
     const int64_t kSignalBufferSize = xla::RoundUpTo<uint64_t>(
         kNumSignalFlags * sizeof(int32_t), kXlaAllocatedBufferAlignBytes);
 
@@ -539,13 +542,13 @@ absl::Status CollectiveKernelThunk::ExecuteOnStream(
       << "Kernel is not initialized for collective kernel thunk.";
 
   if (state->kernel != nullptr) {
-    TF_RET_CHECK(launch_dimensions_.has_value())
+    TF_RET_CHECK(launch_dimensions_.num_blocks() > 0)
         << "Launch dimensions are not set for when using emitted "
            "collective kernel.";
     XLA_VLOG_DEVICE(3, device_ordinal)
         << "Emitted kernel launch dimensions: "
-        << launch_dimensions_->num_blocks() << "x"
-        << launch_dimensions_->num_threads_per_block()
+        << launch_dimensions_.num_blocks() << "x"
+        << launch_dimensions_.num_threads_per_block()
         << "(block x threadsPerBlock)";
     ASSIGN_OR_RETURN(se::DeviceAddressBase remote_buffers,
                      GetParameterDeviceMemoryBase(
@@ -565,7 +568,7 @@ absl::Status CollectiveKernelThunk::ExecuteOnStream(
         signal_buffers,
         remote_buffers};
     return ExecuteKernelOnStream(*state->kernel, kernel_args,
-                                 launch_dimensions_.value(),
+                                 launch_dimensions_,
                                  /*cluster_dim=*/std::nullopt, stream);
   }
   // TODO(b/407736956): Change this to emitted kernel.
@@ -577,13 +580,13 @@ absl::Status CollectiveKernelThunk::ExecuteOnStream(
   const LaunchDimensions launch_dimensions =
       AllReduceLaunchDimensions(buffer.element_count, num_devices, strategy);
   XLA_VLOG_DEVICE(3, device_ordinal)
-      << "Emitted kernel launch dimensions: " << launch_dimensions_.num_blocks()
-      << "x" << launch_dimensions_.num_threads_per_block()
+      << "Emitted kernel launch dimensions: " << launch_dimensions.num_blocks()
+      << "x" << launch_dimensions.num_threads_per_block()
       << "(block x threadsPerBlock)";
   return RunAllReduceKernel(
       /*stream=*/stream,
       /*launch_dimensions=*/launch_dimensions,
-      /*element_type=*/element_type,
+      /*element_type=*/collective_config_.operand_element_type[0],
       /*reduction_kind=*/*reduction_kind_,
       /*all_reduce_strategy=*/strategy,
       /*symmetric_input_buffer=*/input_buffer_ptr,

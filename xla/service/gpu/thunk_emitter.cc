@@ -354,9 +354,6 @@ xla::Future<std::unique_ptr<CollectiveKernelThunk>> EmitCollectiveKernelThunk(
     Thunk::ThunkInfo thunk_info, std::vector<CollectiveThunk::Buffer> buffers,
     const HloAllGatherInstruction* instr,
     std::vector<std::unique_ptr<HloFusionAnalysis>>& analysis_garbage_collector) {
-  VLOG(3) << "EmitCollectiveKernelThunk called for AllGather: "
-          << instr->name();
-
   bool is_collective_kernel_enabled =
       instr->GetModule()
           ->config()
@@ -370,7 +367,7 @@ xla::Future<std::unique_ptr<CollectiveKernelThunk>> EmitCollectiveKernelThunk(
       [thunk_info = std::move(thunk_info), buffers = std::move(buffers),
        collective_config, is_async, is_collective_kernel_enabled](
           absl::string_view kernel_name, int32_t shmem_bytes,
-          std::optional<LaunchDimensions> launch_dimensions,
+          LaunchDimensions launch_dimensions,
           const std::vector<uint8_t>& cubin, bool use_pdl) {
         return std::make_unique<CollectiveKernelThunk>(
             thunk_info, collective_config,
@@ -386,19 +383,13 @@ xla::Future<std::unique_ptr<CollectiveKernelThunk>> EmitCollectiveKernelThunk(
   // collective kernel. Return an empty-kernel thunk so AllGatherThunk falls
   // back to NCCL/RCCL at runtime (AllGatherThunk checks IsSupported first).
   if (instr->operand_count() != 1) {
-    VLOG(3) << "AllGather with " << instr->operand_count()
-            << " operands not supported by Triton kernel; falling back to NCCL.";
-    return make_thunk(/*kernel_name=*/"", /*shmem_bytes=*/0,
-                      /*launch_dimensions=*/std::nullopt, {}, false);
+    return nullptr;
   }
 
   // If the Triton AllGather backend is not explicitly enabled, return an
   // empty-kernel thunk so AllGatherThunk falls back to NCCL/RCCL at runtime.
   if (!is_collective_kernel_enabled) {
-    VLOG(3) << "AllGather Triton backend not enabled for " << instr->name()
-            << "; falling back to NCCL.";
-    return make_thunk(/*kernel_name=*/"", /*shmem_bytes=*/0,
-                      /*launch_dimensions=*/std::nullopt, {}, false);
+    return nullptr;
   }
 
   std::unique_ptr<HloModule> fused_module =
@@ -411,14 +402,9 @@ xla::Future<std::unique_ptr<CollectiveKernelThunk>> EmitCollectiveKernelThunk(
   ASSIGN_OR_RETURN(bool did_set_config, TrySetGpuBackendConfigForCollective(
                                             device_info, fusion_instr));
   if (!did_set_config) {
-    VLOG(3) << "TrySetGpuBackendConfigForCollective returned false for "
-               "AllGather - not using Triton";
-    return make_thunk(/*kernel_name=*/"", /*shmem_bytes=*/0,
-                      /*launch_dimensions=*/std::nullopt, {}, false);
+    return nullptr;
   }
 
-  VLOG(3) << "TrySetGpuBackendConfigForCollective succeeded for AllGather - "
-             "using Triton!";
   analysis_garbage_collector.push_back(
       std::make_unique<HloFusionAnalysis>(HloFusionAnalysis::Create(
           *fusion_instr, ir_emitter_context->gpu_device_info())));
@@ -2078,7 +2064,7 @@ AsyncThunkSequence ThunkEmitter::EmitCollectiveThunk(
       thunks =
           EmitCollectiveKernelThunk(
               ir_emitter_context_,
-              *call_graph_,
+              call_graph_.get(),
               thunk_info, buffers, inst, analysis_garbage_collector_)
               .Map([thunk_info = std::move(thunk_info),
                     use_memcpy_local_p2p =
