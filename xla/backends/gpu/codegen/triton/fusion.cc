@@ -303,60 +303,41 @@ std::optional<TritonFusion::LaunchConfig> TritonFusion::GetLaunchConfig(
       BlockLevelParameters::FromBlockLevelFusionConfig(
           analysis->fusion_backend_config().block_level_fusion_config());
 
-    // We expect all roots to have the same number of blocks. Otherwise we
-    // cannot codegen it.
-    LOG(INFO) << "GetLaunchConfig: fusion_root_count="
-              << analysis_.fusion_root_count();
+  // We expect all roots to have the same number of blocks. Otherwise we
+  // cannot codegen it.
+  LOG(INFO) << "GetLaunchConfig: fusion_root_count="
+            << analysis->fusion_root_count();
 
-    if (analysis_.fusion_root_count() == 0) {
-      LOG(ERROR) << "GetLaunchConfig: No fusion roots found!";
+  if (analysis->fusion_root_count() == 0) {
+    LOG(ERROR) << "GetLaunchConfig: No fusion roots found!";
+    return std::nullopt;
+  }
+
+  int64_t num_blocks =
+      GetNumberOfBlocks(analysis->fusion_root(0).shape().dimensions(),
+                        block_level_parameters.output_tile_sizes[0]);
+  for (int64_t i = 1; i < analysis->fusion_root_count(); ++i) {
+    if (i >= static_cast<int64_t>(block_level_parameters.output_tile_sizes.size())) {
+      LOG(ERROR)
+          << "GetLaunchConfig: output_tile_sizes index out of bounds! i=" << i
+          << ", size=" << block_level_parameters.output_tile_sizes.size();
       return std::nullopt;
     }
 
-    int64_t num_blocks =
-        GetNumberOfBlocks(analysis_.fusion_root(0).shape().dimensions(),
-                          block_level_parameters.output_tile_sizes[0]);
-    for (int64_t i = 1; i < analysis_.fusion_root_count(); ++i) {
-      if (i >= block_level_parameters.output_tile_sizes.size()) {
-        LOG(ERROR)
-            << "GetLaunchConfig: output_tile_sizes index out of bounds! i=" << i
-            << ", size=" << block_level_parameters.output_tile_sizes.size();
-        return std::nullopt;
-      }
+    int64_t blocks_for_root =
+        GetNumberOfBlocks(analysis->fusion_root(i).shape().dimensions(),
+                          block_level_parameters.output_tile_sizes[i]);
 
-      int64_t blocks_for_root =
-          GetNumberOfBlocks(analysis_.fusion_root(i).shape().dimensions(),
-                            block_level_parameters.output_tile_sizes[i]);
-
-      CHECK_EQ(blocks_for_root, num_blocks);
-    }
-    LaunchConfig launch_config;
-    // TODO(b/451901200): We eventually also want to be able to predict this
-    // value without compiling so the cost model can rely on it. Currently, we
-    // need the override for auto warp specialization.
-    LOG(INFO) << "GetLaunchConfig: thread_dims_override.has_value()="
-              << thread_dims_override.has_value();
-
-    if (thread_dims_override) {
-      launch_config.launch_dimensions = LaunchDimensions{
-          se::BlockDim(num_blocks), thread_dims_override.value()};
-    } else {
-      int64_t warp_size = WarpSize(analysis_.device_info());
-      int64_t estimated_threads_per_block =
-          block_level_parameters.num_warps * warp_size;
-      launch_config.launch_dimensions =
-          LaunchDimensions{static_cast<uint64_t>(num_blocks),
-                           static_cast<uint64_t>(estimated_threads_per_block)};
-    }
-
-    launch_config.block_level_parameters = std::move(block_level_parameters);
-    return launch_config;
+    CHECK_EQ(blocks_for_root, num_blocks);
   }
 
   LaunchConfig launch_config;
   // TODO(b/451901200): We eventually also want to be able to predict this
   // value without compiling so the cost model can rely on it. Currently, we
   // need the override for auto warp specialization.
+  LOG(INFO) << "GetLaunchConfig: thread_dims_override.has_value()="
+            << thread_dims_override.has_value();
+
   if (thread_dims_override) {
     launch_config.launch_dimensions = LaunchDimensions{
         se::BlockDim(num_blocks), thread_dims_override.value()};

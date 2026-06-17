@@ -376,7 +376,7 @@ TEST_P(AsyncCollectiveOps, AsyncAllGatherTritonBackend) {
       << "Test requires at least " << kNumReplicas << " devices ("
       << device_count() << " available)";
 
-  const bool enable_async_all_gather = GetParam();
+  const bool enable_async_all_gather = std::get<0>(GetParam());
 
   HloModuleConfig config =
       GetModuleConfigForTest(/*replica_count=*/kNumReplicas);

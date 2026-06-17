@@ -235,6 +235,7 @@ GetBlockLevelFusionConfigForAllReduce(
   ASSIGN_OR_RETURN(AllReduceInfo all_reduce_info,
                    std::move(maybe_all_reduce_info));
   const Shape& output_shape = all_reduce->shape();
+
   const LaunchDimensions launch_dims = AllReduceLaunchDimensions(
       all_reduce_info.num_elements, all_reduce_info.num_devices,
       all_reduce_info.all_reduce_strategy);
@@ -1069,6 +1070,7 @@ GetBlockLevelFusionConfigForAllGather(
                       std::move(maybe_all_gather_info));
 
   const Shape& input_shape = all_gather->operand(0)->shape();
+
   static constexpr int64_t kWarpSize = 32;
   static constexpr uint64_t kMaxThreadsPerBlock = 512;
 

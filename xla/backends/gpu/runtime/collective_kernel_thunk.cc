@@ -188,7 +188,6 @@ absl::StatusOr<bool> CollectiveKernelThunk::IsSupported(
     }
     TF_RETURN_IF_ERROR(status);
   }
-  RETURN_IF_ERROR(status);
   for (const GlobalDeviceId& device : clique_key.devices()) {
     ASSIGN_OR_RETURN(const int peer_device_id,
                      GetLocalDeviceId(device, collective_params));
@@ -326,6 +325,12 @@ absl::Status CollectiveKernelThunk::Initialize(const InitializeParams& params) {
   {
     absl::MutexLock lock(mutex_);
     if (!per_stream_state_.contains(params.executor)) {
+      // If IsSupported() returned false during Prepare(), per_stream_memory_
+      // will not have an entry for this executor. Skip initialization in that
+      // case; the outer thunk (AllGather/AllReduce) will fall back to NCCL.
+      if (!per_stream_memory_.contains(params.executor)) {
+        return absl::OkStatus();
+      }
       StreamMemory* memory_state = per_stream_memory_.at(params.executor).get();
       // Step1: We needs 1 atomic flag per block per device on each device.
       // The kernel expects that the signal flags buffer is zeroed out.
@@ -659,7 +664,9 @@ absl::StatusOr<ThunkProto> CollectiveKernelThunk::ToProto() const {
       proto.mutable_collective_kernel_thunk();
 
   *thunk_proto->mutable_collective_config() = collective_config_.ToProto();
-  thunk_proto->set_reduction_kind(ToReductionKindProto(reduction_kind_));
+  if (reduction_kind_.has_value()) {
+    thunk_proto->set_reduction_kind(ToReductionKindProto(*reduction_kind_));
+  }
   thunk_proto->set_is_async(is_async_);
 
   for (const CollectiveThunk::Buffer& buffer : buffers_) {
