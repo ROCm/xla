@@ -35,6 +35,7 @@ limitations under the License.
 #include "xla/pjrt/pjrt_stream_executor_client.h"
 #include "xla/pjrt/raw_buffer.h"
 #include "xla/pjrt/se_raw_buffer.h"
+#include "xla/stream_executor/stream.h"
 #include "xla/service/shaped_buffer.h"
 #include "xla/shape.h"
 #include "xla/shape_tree.h"
@@ -77,9 +78,35 @@ class AllocatedRawSEDeviceMemory : public RawSEDeviceMemory {
   }
 
   ~AllocatedRawSEDeviceMemory() override {
-    if (allocator_) {
-      absl::Status status = allocator_->Deallocate(
-          local_device_->local_device_id().value(), mem());
+    if (!allocator_) {
+      return;
+    }
+    const int device_ordinal = local_device_->local_device_id().value();
+    se::DeviceAddressBase memory = mem();
+    se::DeviceAddressAllocator* allocator = allocator_;
+    // [ROCm conv-zero fix v4 / stream-deferred free] Defer the actual free until
+    // the compute stream drains, so the chunk is NOT returned to BFC (and then
+    // reused + zeroed by a sibling op's MIOpen SetTensor(0)) while a kernel that
+    // uses this buffer is still in flight. All uses were enqueued before the
+    // refcount reached 0, so a host callback enqueued now fires after them. The
+    // host does not block here, so BFC stays asynchronous (the whole point;
+    // unlike AllowsAsynchronousDeallocation=false). This is the perf-preserving
+    // realization of that diagnostic's TODO ("defer DeallocateRaw via
+    // stream->DoHostCallback"). NOTE (handoff): first-cut defers on the compute
+    // stream only; buffers whose last use is on a different stream (e.g. a D2H
+    // copy stream) are not covered and may need the using-stream plumbed
+    // through. See strategy/conv-zero-bfc-async-dealloc-investigation.md.
+    se::Stream* stream = local_device_->compute_stream();
+    absl::Status cb_status =
+        stream->DoHostCallback([allocator, device_ordinal, memory]() {
+          absl::Status status = allocator->Deallocate(device_ordinal, memory);
+          if (!status.ok()) {
+            LOG(ERROR) << "Deferred buffer deallocation failed: " << status;
+          }
+        });
+    if (!cb_status.ok()) {
+      // Fallback: free immediately if the callback could not be enqueued.
+      absl::Status status = allocator->Deallocate(device_ordinal, memory);
       if (!status.ok()) {
         LOG(ERROR) << "Buffer deallocation failed: " << status;
       }
