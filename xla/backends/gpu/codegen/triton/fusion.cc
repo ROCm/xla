@@ -304,6 +304,11 @@ std::optional<TritonFusion::LaunchConfig> TritonFusion::GetLaunchConfig(
 
   // We expect all roots to have the same number of blocks. Otherwise we
   // cannot codegen it.
+  if (analysis->fusion_root_count() == 0) {
+    LOG(ERROR) << "GetLaunchConfig: No fusion roots found!";
+    return std::nullopt;
+  }
+
   int64_t num_blocks =
       GetNumberOfBlocks(analysis->fusion_root(0).shape().dimensions(),
                         block_level_parameters.output_tile_sizes[0]);

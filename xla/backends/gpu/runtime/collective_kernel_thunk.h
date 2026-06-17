@@ -79,7 +79,7 @@ class CollectiveKernelThunk : public Thunk {
       std::vector<CollectiveThunk::Buffer> buffers,                      //
       bool is_collective_kernel_enabled,                                 //
       absl::string_view kernel_name = "",                                //
-      std::optional<LaunchDimensions> launch_dimensions = std::nullopt,  //
+      LaunchDimensions launch_dimensions = LaunchDimensions{},           //
       int32_t shmem_bytes = 0,                                           //
       bool is_multimem_enabled = false,
       std::optional<std::vector<uint8_t>> cubin = std::nullopt,
