@@ -1017,6 +1017,14 @@ absl::StatusOr<TensorValue> EmitTiledHloInstruction(
     if (index == 0) {
       return emitter_ctx.TiledHloToTensorValue(*tiled_hlo.operand(0));
     }
+    // For all-gather-start with tuple output (aliased_operand,
+    // gathered_output), index 1 is the gathered result. In the tiled context
+    // all-gather-start is a no-op (tile extraction handles the data movement),
+    // so pass through.
+    if (index == 1 &&
+        tiled_hlo.operand(0)->hlo()->opcode() == HloOpcode::kAllGatherStart) {
+      return emitter_ctx.TiledHloToTensorValue(*tiled_hlo.operand(0));
+    }
     return absl::UnimplementedError(
         absl::StrCat("Unsupported get-tuple-element index ", index));
   }
@@ -1028,10 +1036,60 @@ absl::StatusOr<TensorValue> EmitTiledHloInstruction(
   // Please keep the cases in alphabetical order.
   switch (hlo->opcode()) {
     case HloOpcode::kAllGather:
-    case HloOpcode::kAllGatherStart:
+    case HloOpcode::kAllGatherStart: {
+      // Emit stablehlo::AllGatherOp. In the tiled context, input and output
+      // tile sizes are the same (each kernel instance processes one rank's
+      // contribution). For kAllGatherStart with tuple output
+      // (aliased_operand, gathered_output), use element type from index 1.
+      const auto& all_gather = *::xla::Cast<HloAllGatherInstruction>(hlo);
+      TensorValue input =
+          emitter_ctx.TiledHloToTensorValue(*tiled_hlo.operand(0));
+      ASSIGN_OR_RETURN(SmallVector<int64_t> output_tile_sizes,
+                       tiled_hlo.tile().GetStaticTileSizes());
+      // Debug: print info to understand GPU fault.
+      {
+        std::string sizes_str;
+        for (int64_t s : output_tile_sizes) {
+          sizes_str += std::to_string(s) + " ";
+        }
+        LOG(INFO) << "[AllGather-exp] hlo_shape=" << hlo->shape().ToString()
+                  << " input_type=" << input.getType() << " output_tile_sizes=["
+                  << sizes_str << "]" << " num_fn_args="
+                  << emitter_ctx.entry_func().getNumArguments()
+                  << " gather_dim=" << all_gather.all_gather_dimension()
+                  << " num_replicas="
+                  << all_gather.replica_groups()[0].replica_ids_size();
+      }
+      const Shape& gathered_shape =
+          hlo->shape().IsTuple() ? hlo->shape().tuple_shapes(1) : hlo->shape();
+      ASSIGN_OR_RETURN(
+          Type output_element_type,
+          PrimitiveTypeToMlirType(b, gathered_shape.element_type()));
+      auto output_type =
+          mlir::RankedTensorType::get(output_tile_sizes, output_element_type);
+      SmallVector<int64_t> flattened_ids;
+      for (const auto& group : all_gather.replica_groups()) {
+        for (auto id : group.replica_ids()) flattened_ids.push_back(id);
+      }
+      auto rg_type = mlir::RankedTensorType::get(
+          {static_cast<int64_t>(all_gather.replica_groups().size()),
+           static_cast<int64_t>(
+               all_gather.replica_groups()[0].replica_ids_size())},
+          b.getI64Type());
+      auto rg_attr = mlir::DenseIntElementsAttr::get(rg_type, flattened_ids);
+      auto ch_attr =
+          all_gather.channel_id()
+              ? mlir::stablehlo::ChannelHandleAttr::get(
+                    b.getContext(), *all_gather.channel_id(), /*type=*/0)
+              : nullptr;
+      auto all_gather_op = mlir::stablehlo::AllGatherOp::create(
+          b, b.getLoc(), output_type, mlir::ValueRange{input},
+          all_gather.all_gather_dimension(), rg_attr, ch_attr,
+          all_gather.use_global_device_ids());
+      return mlir::cast<TensorValue>(all_gather_op.getResult(0));
+    }
     case HloOpcode::kAllGatherDone: {
-      // AllGatherStart and AllGatherDone are no-ops.
-      // Tile extraction handles the data movement.
+      // AllGatherDone is a pass-through in the tiled context.
       return emitter_ctx.TiledHloToTensorValue(*tiled_hlo.operand(0));
     }
     case (HloOpcode::kAllReduceStart): {

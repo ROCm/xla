@@ -1702,7 +1702,6 @@ xla_test(
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/testlib:hlo_hardware_independent_test_base",
-        "//xla/primitive_util",
         "//xla/service:collective_ops_utils",
         "//xla/tests:literal_test_util",
         "//xla/tsl/platform:statusor",

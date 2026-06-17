@@ -1201,11 +1201,9 @@ Tiles PropagateTileToInputForAllGatherOp(const TilingSpace& tiling_space,
       << "Multi-operand AllGather is not yet supported.";
   const Shape& input_shape = hlo.operand(0)->shape();
   int64_t local_size = input_shape.dimensions(gather_dim);
-  int64_t num_replicas = hlo.shape().dimensions(gather_dim) / local_size;
 
   const DimTile& output_dim_tile = output_tile.dim_tiles()[gather_dim];
 
-  SymbolicExpr replica_id = output_dim_tile.offset / local_size;
   SymbolicExpr input_offset = output_dim_tile.offset % local_size;
 
   llvm::SmallVector<DimTile> input_dim_tiles;
@@ -1221,16 +1219,16 @@ Tiles PropagateTileToInputForAllGatherOp(const TilingSpace& tiling_space,
     }
   }
 
-  mlir::MLIRContext* ctx = output_tile.mlir_context();
+  // The input tile does NOT carry an additional replica_id dimension.
+  // The AllGather emitter computes source_rank = program_id % world_size at
+  // runtime using the hardware program-id register, so it does not need
+  // replica_id encoded in the input tile.  Adding it here would make
+  // TileRequirementsVisitor return non-empty ReplicaIdBounds for the input
+  // parameter, causing the tiling infrastructure to generate a nested-pointer
+  // kernel argument for the local input buffer - which disagrees with the flat
+  // buffer the runtime actually passes, leading to invalid memory accesses.
   llvm::SmallVector<DimTile> replica_id_dim_tiles =
       llvm::to_vector(output_tile.replica_ids());
-  replica_id_dim_tiles.push_back(DimTile{
-      /*offset=*/replica_id,
-      /*size=*/CreateSymbolicConstant(1, ctx),
-      /*stride=*/CreateSymbolicConstant(1, ctx),
-      /*upper_bound=*/
-      CreateSymbolicConstant(num_replicas, ctx),
-  });
 
   Tile input_tile(output_tile.tiling_space(), std::move(input_dim_tiles),
                   std::move(replica_id_dim_tiles));
@@ -1253,7 +1251,8 @@ absl::StatusOr<Tiles> PropagateTileToInput(TilingSpace& tiling_space,
                        HloOpcode::kMap>(&hlo)) {
     return {PropagateTileToInputForCwiseOp(hlo, output_tile)};
   }
-  if (hlo.opcode() == HloOpcode::kAllGather) {
+  if (hlo.opcode() == HloOpcode::kAllGather ||
+      hlo.opcode() == HloOpcode::kAllGatherStart) {
     return PropagateTileToInputForAllGatherOp(tiling_space, hlo, output_tile);
   }
   if (hlo.opcode() == HloOpcode::kBitcast) {

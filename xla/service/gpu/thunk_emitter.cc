@@ -316,7 +316,8 @@ xla::Future<std::unique_ptr<CollectiveKernelThunk>> EmitCollectiveKernelThunk(
     IrEmitterContext* ir_emitter_context, const CallGraph* call_graph,
     Thunk::ThunkInfo thunk_info, std::vector<CollectiveThunk::Buffer> buffers,
     const HloAllGatherInstruction* instr,
-    std::vector<std::unique_ptr<HloFusionAnalysis>>& analysis_garbage_collector) {
+    std::vector<std::unique_ptr<HloFusionAnalysis>>&
+        analysis_garbage_collector) {
   bool is_collective_kernel_enabled =
       instr->GetModule()
           ->config()
@@ -330,8 +331,8 @@ xla::Future<std::unique_ptr<CollectiveKernelThunk>> EmitCollectiveKernelThunk(
       [thunk_info = std::move(thunk_info), buffers = std::move(buffers),
        collective_config, is_async, is_collective_kernel_enabled](
           absl::string_view kernel_name, int32_t shmem_bytes,
-          LaunchDimensions launch_dimensions,
-          const std::vector<uint8_t>& cubin, bool use_pdl) {
+          LaunchDimensions launch_dimensions, const std::vector<uint8_t>& cubin,
+          bool use_pdl) {
         return std::make_unique<CollectiveKernelThunk>(
             thunk_info, collective_config,
             std::nullopt,  // No reduction kind for AllGather
@@ -339,7 +340,7 @@ xla::Future<std::unique_ptr<CollectiveKernelThunk>> EmitCollectiveKernelThunk(
             kernel_name, launch_dimensions, shmem_bytes,
             /*is_multimem_enabled=*/false,
             !cubin.empty() ? std::make_optional(cubin) : std::nullopt, use_pdl,
-            CollectiveKernelThunk::CollectiveOpKind::kAllGather);
+            CollectiveOpKind::kAllGather);
       };
 
   // Variadic AllGather (multiple operands) is not supported by the Triton
@@ -384,8 +385,8 @@ xla::Future<std::unique_ptr<CollectiveKernelThunk>> EmitCollectiveKernelThunk(
             fused_module =
                 std::move(fused_module)](TritonFusion::EmitResult result) {
         return make_thunk(result.entry.kernel_name, result.entry.shmem_bytes,
-                          result.entry.launch_dimensions,
-                          result.entry.binary, result.entry.use_pdl);
+                          result.entry.launch_dimensions, result.entry.binary,
+                          result.entry.use_pdl);
       });
 }
 
