@@ -37,19 +37,30 @@ namespace xla::gpu {
 
 absl::Status IsAllGatherKernelSupported(int64_t num_ranks, int64_t num_elements,
                                         PrimitiveType element_type) {
-  // Unsigned integer types are not supported by the Triton all-gather kernel.
-  if (element_type == U32 || element_type == U16 || element_type == U64) {
-    return absl::UnimplementedError(
-        absl::StrCat("Element type (",
-                     primitive_util::LowercasePrimitiveTypeName(element_type),
-                     ") is not supported for all-gather kernel."));
+  // Triton does not have unsigned integer types — tt.store/tt.load only accept
+  // signless integers and floating-point types.
+  if (element_type == U8 || element_type == U16 || element_type == U32 ||
+      element_type == U64) {
+    return absl::UnimplementedError(absl::StrCat(
+        "Unsigned integer element type (",
+        primitive_util::LowercasePrimitiveTypeName(element_type),
+        ") is not supported by the Triton all-gather kernel (Triton has no "
+        "unsigned integer types). Use the signed equivalent or a "
+        "floating-point type; NCCL/RCCL handles unsigned types correctly."));
   }
-  // The number of elements must be aligned to kNumElementsPerThread.
-  if (num_elements % se::gpu::kNumElementsPerThread != 0) {
-    return absl::UnimplementedError(
-        absl::StrCat("Number of elements (", num_elements,
-                     ") is not aligned to the alignment requirement (",
-                     se::gpu::kNumElementsPerThread, ")."));
+
+  // The alignment requirement is on the total transfer size in bytes: the
+  // buffer must be a multiple of kNumElementsPerThread × 4 bytes (128 bits)
+  // so each thread processes a whole number of 32-bit words.
+  const int64_t element_bits = primitive_util::BitWidth(element_type);
+  const int64_t required_bits = se::gpu::kNumElementsPerThread * 32;  // 128 b
+  if ((num_elements * element_bits) % required_bits != 0) {
+    return absl::UnimplementedError(absl::StrCat(
+        "Number of elements (", num_elements, ") of type ",
+        primitive_util::LowercasePrimitiveTypeName(element_type), " (",
+        element_bits, " bits each) is not aligned to the ", required_bits,
+        "-bit alignment requirement (", se::gpu::kNumElementsPerThread,
+        " x 32-bit words per thread)."));
   }
   return absl::OkStatus();
 }

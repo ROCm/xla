@@ -210,8 +210,8 @@ struct AllGatherTypesTestParams : public AllGatherTestParams {
   static std::vector<AllGatherTypesTestParams> Generate() {
     std::vector<AllGatherTypesTestParams> params;
     for (auto& all_gather_test_params : AllGatherTestParams::Generate()) {
-      // Test common types used in ML workloads
-      for (const PrimitiveType element_type : {F32, F16, BF16, S32, S8, PRED}) {
+      for (const PrimitiveType element_type :
+           {F32, F16, BF16, S32, S8, PRED, S16, F8E4M3FN, F8E5M2}) {
         params.push_back({all_gather_test_params, element_type});
       }
     }
@@ -952,6 +952,8 @@ class AllGatherTritonVerificationTest : public AllGatherTestNoParams {
   DebugOptions GetDebugOptionsForTest() const override {
     DebugOptions opts = CollectiveOpsWithFlagsBase::GetDebugOptionsForTest();
     opts.set_xla_gpu_unsupported_use_all_gather_triton_backend(true);
+    // Experimental tiling is required — legacy path has been removed.
+    opts.set_xla_gpu_experimental_enable_tiling_propagation(true);
     return opts;
   }
 };
@@ -1168,6 +1170,47 @@ TEST_P(AllGatherTest, F32_MultiRowPerRank_2GPUs) {
   expected.insert(expected.end(), 16, 1.0f);
   for (const Literal& result : results) {
     LiteralTestUtil::ExpectR1Equal<float>(expected, result);
+  }
+}
+
+// 2D types test: same type matrix as SupportedTypes2GPUs but with a 2D
+// [32,32] input (1024 elements) gathered along dim 0 to [64,32].
+// Alignment: 1024 × bit_width % 128 = 0 for all listed types.
+TEST_P(AllGatherTypesTest, SupportedTypes2D_2GPUs) {
+  constexpr absl::string_view kModuleStr = R"(
+  HloModule test
+
+  ENTRY test_computation {
+    param_0 = %1$s[32,32] parameter(0)
+    ROOT all-gather = %1$s[64,32] all-gather(param_0),
+      replica_groups={{0,1}}, dimensions={0}
+  }
+  )";
+  constexpr int64_t kNumReplicas = 2;
+  if (!CheckDeviceCount(kNumReplicas)) {
+    return;
+  }
+
+  const PrimitiveType element_type = GetParam().element_type;
+  const std::string module_str = absl::StrFormat(
+      kModuleStr, primitive_util::LowercasePrimitiveTypeName(element_type));
+  SCOPED_TRACE(::testing::Message() << "module_str: " << module_str);
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto module, ParseAndReturnVerifiedModule(module_str, kNumReplicas));
+  TF_ASSERT_OK_AND_ASSIGN(
+      InputsOutputs test_io,
+      (BuildTestInputsOutputs(element_type, *module, kNumReplicas,
+                              /*all_gather_dimension=*/0)));
+  CheckNoTritonFallback();
+  TF_ASSERT_OK_AND_ASSIGN(
+      ExecutionResult execution_result,
+      ExecuteReplicated(std::move(module),
+                        /*arguments=*/test_io.InputLiteralPtrs()));
+  const std::vector<Literal>& results = execution_result.results;
+  ASSERT_EQ(results.size(), kNumReplicas);
+  for (int i = 0; i < kNumReplicas; ++i) {
+    ASSERT_TRUE(LiteralTestUtil::Equal(test_io.expected_outputs[i], results[i]))
+        << "ExpectedOutput != Result at rank " << i;
   }
 }
 

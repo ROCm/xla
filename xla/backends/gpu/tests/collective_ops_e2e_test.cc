@@ -502,8 +502,11 @@ class AllGatherKernelOps : public CollectiveOpsE2ETestBase,
   bool enable_async_;
 };
 
-INSTANTIATE_TEST_SUITE_P(AllGatherKernelOps, AllGatherKernelOps,
-                         ::testing::Bool(), GetAsyncTestName);
+INSTANTIATE_TEST_SUITE_P(
+    AllGatherKernelOps, AllGatherKernelOps, ::testing::Bool(),
+    [](const ::testing::TestParamInfo<bool>& info) {
+      return GetAsyncTestName(info.param);
+    });
 
 // Tests AllGather via the Triton custom kernel backend with a 2D input shape.
 // Both legacy and experimental tiling paths exercise the same HLO and produce

@@ -1013,11 +1013,6 @@ absl::StatusOr<TensorValue> EmitTiledHloInstruction(
     return EmitConcatenate(emitter_ctx, tiled_hlo);
   }
   if (hlo->opcode() == HloOpcode::kGetTupleElement) {
-    // In the tiled context all tuple-element extraction is a pass-through:
-    // the data movement is handled by tile extraction / insertion and the
-    // collective emitters represent the full result.  Both index 0 (aliased
-    // input) and index 1 (gathered/reduced output) forward the operand's
-    // tensor value.
     int64_t index = hlo->tuple_index();
     const HloOpcode operand_opcode = tiled_hlo.operand(0)->hlo()->opcode();
     const bool supported =

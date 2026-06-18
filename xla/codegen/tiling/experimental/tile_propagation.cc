@@ -1219,14 +1219,13 @@ Tiles PropagateTileToInputForAllGatherOp(const TilingSpace& tiling_space,
     }
   }
 
-  // The input tile does NOT carry an additional replica_id dimension.
-  // The AllGather emitter computes source_rank = program_id % world_size at
-  // runtime using the hardware program-id register, so it does not need
-  // replica_id encoded in the input tile.  Adding it here would make
-  // TileRequirementsVisitor return non-empty ReplicaIdBounds for the input
-  // parameter, causing the tiling infrastructure to generate a nested-pointer
-  // kernel argument for the local input buffer - which disagrees with the flat
-  // buffer the runtime actually passes, leading to invalid memory accesses.
+  // The input tile does NOT add a new replica_id dimension beyond what the
+  // output tile already carries.  The AllGather emitter derives source_rank
+  // from the XTile tile_id function argument (arg6):
+  //   tiles_per_rank = local_size_in_gather_dim / tile_size_in_gather_dim
+  //   source_rank    = tile_id / tiles_per_rank
+  // This is computed directly in AllGatherEmitter::EmitAllGather() without
+  // needing a symbolic replica_id expression in the input tile.
   llvm::SmallVector<DimTile> replica_id_dim_tiles =
       llvm::to_vector(output_tile.replica_ids());
 

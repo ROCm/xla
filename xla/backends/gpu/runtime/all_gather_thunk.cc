@@ -144,10 +144,6 @@ absl::Status AllGatherThunk::PrepareCollective(const PrepareParams& params,
           clique_key, buffer.destination_buffer.slice));
     }
   }
-  // NOTE: Do NOT call CollectiveThunk::Prepare(params) here — this function IS
-  // called FROM CollectiveThunk::Prepare, so calling it back would cause
-  // infinite recursion. The generic prepare (clique request, etc.) is already
-  // handled by CollectiveThunk::Prepare before it calls PrepareCollective.
   if (collective_kernel_thunk_) {
     return collective_kernel_thunk_->Prepare(params);
   }

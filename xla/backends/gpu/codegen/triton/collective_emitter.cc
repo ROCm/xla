@@ -918,15 +918,14 @@ class AllReduceEmitter {
 };
 
 // =========================================================================
-// AllGather emitter (experimental tiling path)
+// AllGather emitter
 // =========================================================================
 // When use_experimental_tiling=true
 // (xla_gpu_experimental_enable_tiling_propagation), TilingSpace +
 // TiledHloComputation compute tile sizes and create ExtractTileOps for the
 // AllGather input. The AllGatherEmitter below reads those tile offsets
 // (ctx.input_extract.getOffsets()) to correctly address the symmetric buffer.
-// When use_experimental_tiling=false, the legacy fusion_emitter path calls this
-// same emitter via the stablehlo lowering pass.
+// Unimplemented in the legacy path, i.e., use_experimental_tiling=false
 // =========================================================================
 
 // Context for AllGather emitter.
@@ -1135,8 +1134,6 @@ class AllGatherEmitter {
   }
 
   // Copies the local input tile into the symmetric buffer at device_rank_.
-  // The tile offsets come from the input_extract (set by TiledHloComputation
-  // in the experimental tiling path, or by the legacy emitter).
   mlir::LogicalResult EmitCopyToSymmetric(mlir::Value tile_to_store,
                                           mlir::ValueRange offsets,
                                           llvm::ArrayRef<int64_t> shape) {
@@ -1175,51 +1172,26 @@ class AllGatherEmitter {
   //   2. All ranks synchronize (barrier).
   //   3. Each block reads the data from the source rank (program_id % W)
   //      and writes it to the output tile.
-  //
-  // The tile offsets come from ctx_.input_extract (computed by the
-  // experimental tiling infrastructure via TiledHloComputation).
   mlir::LogicalResult EmitAllGather() {
     CHECK(initialized_);
 
     llvm::ArrayRef<int64_t> shape = ctx_.input_tile.getType().getShape();
 
-    // source_rank derived entirely from the InsertTileOp's output offset.
-    // No explicit program_id needed — mirrors how AllReduce uses device_rank_.
-    //
-    // The InsertTileOp was created by EmitGeneric/TileInfo::Construct(*root),
-    // evaluating:
-    //   output_offset[gather_dim] = source_rank * local_size
-    // Therefore: source_rank = insert_tile.getOffsets()[gather_dim] /
-    // local_size
-    //
-    // local_offsets for reading the remote buffer come from
-    // ctx_.input_extract.getOffsets() for ALL dimensions — exactly as
-    // AllReduce. The gather-dim offset from input_extract encodes the
-    // within-rank slice position (= output_offset % local_size), computed by
-    // TilingSpace.
-    xtile::InsertTileOp insert_op;
-    for (mlir::OpOperand& use : ctx_.op.getResult().getUses()) {
-      if (auto op = mlir::dyn_cast<xtile::InsertTileOp>(use.getOwner())) {
-        insert_op = op;
-        break;
-      }
-    }
-    if (!insert_op) {
-      return rewriter_.notifyMatchFailure(
-          ctx_.op, "AllGather result must be consumed by an InsertTileOp.");
-    }
-
+    // source_rank: which rank this block gathers data from.
     const int64_t local_size_in_gather_dim =
         ctx_.non_tiled_input_shape[ctx_.all_gather_dimension];
-    mlir::Value output_gather_offset_idx =
-        insert_op.getOffsets()[ctx_.all_gather_dimension];
-    mlir::Value output_gather_offset_i64 = arith::IndexCastOp::create(
-        builder_, builder_.getI64Type(), output_gather_offset_idx);
-    mlir::Value local_size_val = arith::ConstantOp::create(
-        builder_, builder_.getI64Type(),
-        builder_.getI64IntegerAttr(local_size_in_gather_dim));
-    mlir::Value source_rank = arith::DivSIOp::create(
-        builder_, output_gather_offset_i64, local_size_val);
+    const int64_t tile_size_in_gather_dim =
+        ctx_.input_tile.getType().getShape()[ctx_.all_gather_dimension];
+    const int64_t tiles_per_rank =
+        local_size_in_gather_dim / tile_size_in_gather_dim;
+
+    mlir::Value tile_id = ctx_.xtile_entry_fn.getTileId();
+    mlir::Value tiles_per_rank_idx =
+        arith::ConstantIndexOp::create(builder_, tiles_per_rank);
+    mlir::Value source_rank_idx =
+        arith::DivSIOp::create(builder_, tile_id, tiles_per_rank_idx);
+    mlir::Value source_rank = arith::IndexCastOp::create(
+        builder_, builder_.getI64Type(), source_rank_idx);
 
     // Phase 1: Copy local input tile to the symmetric buffer.
     if (mlir::failed(EmitCopyToSymmetric(
@@ -1332,7 +1304,7 @@ llvm::SmallVector<int64_t> GreedyPowerOfTwoTiles(const Shape& output_shape,
 }
 
 // Returns the block level fusion config for all-gather if supported.
-// Tile sizes are computed over the INPUT shape of AllGather (not the output).
+// Tile sizes are computed over the INPUT shape of AllGather.
 // This makes the experimental tiling (TilingSpace) tile the output [N*W] with
 // size T_in, which gives W*num_input_blocks total kernel blocks — exactly one
 // block per rank per input tile.

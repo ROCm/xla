@@ -987,10 +987,6 @@ absl::StatusOr<TensorValue> EmitTiledHloInstruction(
     return values[tiled_hlo.operand(0)];
   }
 
-  // GetTupleElement is a pass-through operation in the tiled context.
-  if (hlo->opcode() == HloOpcode::kGetTupleElement) {
-    return values[tiled_hlo.operand(0)];
-  }
 
   if (hlo->IsElementwise()) {
     std::vector<Value> operands;

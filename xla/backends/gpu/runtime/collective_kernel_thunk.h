@@ -73,14 +73,14 @@ class CollectiveKernelThunk : public Thunk {
       ::stream_executor::gpu::kMaxNumAllReduceInputPtrs;
 
   CollectiveKernelThunk(
-      ThunkInfo info, CollectiveConfig collective_config,                //
-      std::optional<ReductionKind> reduction_kind,                       //
-      bool is_async,                                                     //
-      std::vector<CollectiveThunk::Buffer> buffers,                      //
-      bool is_collective_kernel_enabled,                                 //
-      absl::string_view kernel_name = "",                                //
-      LaunchDimensions launch_dimensions = LaunchDimensions{},           //
-      int32_t shmem_bytes = 0,                                           //
+      ThunkInfo info, CollectiveConfig collective_config,  //
+      std::optional<ReductionKind> reduction_kind,         //
+      bool is_async,                                       //
+      std::vector<CollectiveThunk::Buffer> buffers,        //
+      bool is_collective_kernel_enabled,                   //
+      absl::string_view kernel_name,                       //
+      LaunchDimensions launch_dimensions,                  //
+      int32_t shmem_bytes = 0,                             //
       bool is_multimem_enabled = false,
       std::optional<std::vector<uint8_t>> cubin = std::nullopt,
       bool use_pdl = false,
