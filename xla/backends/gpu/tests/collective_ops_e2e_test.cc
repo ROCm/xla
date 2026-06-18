@@ -468,15 +468,13 @@ TEST_P(CollectivesModeOps, AllGatherMixedTypes) {
 //
 // This mirrors the CollectivesModeOps / all_reduce_e2e structure: the tiling
 // variant is expressed through the test parameter, not the test name.
-class AllGatherKernelOps
-    : public CollectiveOpsE2ETestBase,
-      public ::testing::WithParamInterface<std::tuple<bool, bool>> {
+class AllGatherKernelOps : public CollectiveOpsE2ETestBase,
+                           public ::testing::WithParamInterface<bool> {
  public:
   AllGatherKernelOps()
       : CollectiveOpsE2ETestBase(/*memory_size=*/32 * kMB,
                                  /*collectives_memory_size=*/0),
-        enable_async_(std::get<0>(GetParam())),
-        use_experimental_tiling_(std::get<1>(GetParam())) {}
+        enable_async_(GetParam()) {}
 
  protected:
   DebugOptions GetDebugOptionsForTest() const override {
@@ -493,30 +491,19 @@ class AllGatherKernelOps
         DebugOptions::COLLECTIVES_PRIVATE_MEMORY);
     // Enable the Triton AllGather backend at class level.
     debug_options.set_xla_gpu_unsupported_use_all_gather_triton_backend(true);
-    // Legacy vs experimental tiling is the second parameter dimension.
-    debug_options.set_xla_gpu_experimental_enable_tiling_propagation(
-        use_experimental_tiling_);
+    // Experimental tiling is the only supported path (legacy removed).
+    debug_options.set_xla_gpu_experimental_enable_tiling_propagation(true);
     return debug_options;
   }
 
   bool enable_async() const { return enable_async_; }
-  bool use_experimental_tiling() const { return use_experimental_tiling_; }
 
  private:
   bool enable_async_;
-  bool use_experimental_tiling_;
 };
 
-std::string GetAllGatherKernelTestSuiteName(
-    const ::testing::TestParamInfo<std::tuple<bool, bool>>& info) {
-  return absl::StrCat(GetAsyncTestName(std::get<0>(info.param)), "_",
-                      std::get<1>(info.param) ? "experimental" : "legacy");
-}
-
 INSTANTIATE_TEST_SUITE_P(AllGatherKernelOps, AllGatherKernelOps,
-                         ::testing::Combine(::testing::Bool(),
-                                            ::testing::Bool()),
-                         GetAllGatherKernelTestSuiteName);
+                         ::testing::Bool(), GetAsyncTestName);
 
 // Tests AllGather via the Triton custom kernel backend with a 2D input shape.
 // Both legacy and experimental tiling paths exercise the same HLO and produce

@@ -1013,20 +1013,22 @@ absl::StatusOr<TensorValue> EmitTiledHloInstruction(
     return EmitConcatenate(emitter_ctx, tiled_hlo);
   }
   if (hlo->opcode() == HloOpcode::kGetTupleElement) {
+    // In the tiled context all tuple-element extraction is a pass-through:
+    // the data movement is handled by tile extraction / insertion and the
+    // collective emitters represent the full result.  Both index 0 (aliased
+    // input) and index 1 (gathered/reduced output) forward the operand's
+    // tensor value.
     int64_t index = hlo->tuple_index();
-    if (index == 0) {
-      return emitter_ctx.TiledHloToTensorValue(*tiled_hlo.operand(0));
+    const HloOpcode operand_opcode = tiled_hlo.operand(0)->hlo()->opcode();
+    const bool supported =
+        index == 0 ||
+        (index == 1 && (operand_opcode == HloOpcode::kAllGatherStart ||
+                        operand_opcode == HloOpcode::kAllReduceStart));
+    if (!supported) {
+      return absl::UnimplementedError(
+          absl::StrCat("Unsupported get-tuple-element index ", index));
     }
-    // For all-gather-start with tuple output (aliased_operand,
-    // gathered_output), index 1 is the gathered result. In the tiled context
-    // all-gather-start is a no-op (tile extraction handles the data movement),
-    // so pass through.
-    if (index == 1 &&
-        tiled_hlo.operand(0)->hlo()->opcode() == HloOpcode::kAllGatherStart) {
-      return emitter_ctx.TiledHloToTensorValue(*tiled_hlo.operand(0));
-    }
-    return absl::UnimplementedError(
-        absl::StrCat("Unsupported get-tuple-element index ", index));
+    return emitter_ctx.TiledHloToTensorValue(*tiled_hlo.operand(0));
   }
   std::vector<Value> operands;
   operands.reserve(hlo->operands().size());
@@ -1037,29 +1039,13 @@ absl::StatusOr<TensorValue> EmitTiledHloInstruction(
   switch (hlo->opcode()) {
     case HloOpcode::kAllGather:
     case HloOpcode::kAllGatherStart: {
-      // Emit stablehlo::AllGatherOp. In the tiled context, input and output
-      // tile sizes are the same (each kernel instance processes one rank's
-      // contribution). For kAllGatherStart with tuple output
-      // (aliased_operand, gathered_output), use element type from index 1.
+      // Emit stablehlo::AllGatherOp. In the tiled context each block handles
+      // one rank's contribution, so input and output tile sizes are equal.
+      // For kAllGatherStart with tuple output (aliased_input, gathered),
+      // derive the element type from index 1.
       const auto& all_gather = *::xla::Cast<HloAllGatherInstruction>(hlo);
-      TensorValue input =
-          emitter_ctx.TiledHloToTensorValue(*tiled_hlo.operand(0));
       ASSIGN_OR_RETURN(SmallVector<int64_t> output_tile_sizes,
                        tiled_hlo.tile().GetStaticTileSizes());
-      // Debug: print info to understand GPU fault.
-      {
-        std::string sizes_str;
-        for (int64_t s : output_tile_sizes) {
-          sizes_str += std::to_string(s) + " ";
-        }
-        LOG(INFO) << "[AllGather-exp] hlo_shape=" << hlo->shape().ToString()
-                  << " input_type=" << input.getType() << " output_tile_sizes=["
-                  << sizes_str << "]" << " num_fn_args="
-                  << emitter_ctx.entry_func().getNumArguments()
-                  << " gather_dim=" << all_gather.all_gather_dimension()
-                  << " num_replicas="
-                  << all_gather.replica_groups()[0].replica_ids_size();
-      }
       const Shape& gathered_shape =
           hlo->shape().IsTuple() ? hlo->shape().tuple_shapes(1) : hlo->shape();
       ASSIGN_OR_RETURN(
@@ -1082,8 +1068,9 @@ absl::StatusOr<TensorValue> EmitTiledHloInstruction(
               ? mlir::stablehlo::ChannelHandleAttr::get(
                     b.getContext(), *all_gather.channel_id(), /*type=*/0)
               : nullptr;
+      // operands[0] is the input TensorValue built above the switch.
       auto all_gather_op = mlir::stablehlo::AllGatherOp::create(
-          b, b.getLoc(), output_type, mlir::ValueRange{input},
+          b, b.getLoc(), output_type, mlir::ValueRange(operands),
           all_gather.all_gather_dimension(), rg_attr, ch_attr,
           all_gather.use_global_device_ids());
       return mlir::cast<TensorValue>(all_gather_op.getResult(0));

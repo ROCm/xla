@@ -185,15 +185,8 @@ struct AllGatherTestParams {
     std::vector<AllGatherTestParams> params;
     for (bool is_async : {true, false}) {
       for (bool use_all_gather_triton_backend : {true, false}) {
-        // For NCCL backend, only test one tiling path (irrelevant).
-        // For Triton backend, test both legacy and experimental tiling.
-        const auto tiling_options = use_all_gather_triton_backend
-                                        ? std::vector<bool>{false, true}
-                                        : std::vector<bool>{false};
-        for (bool use_experimental_tiling : tiling_options) {
-          params.push_back({is_async, use_all_gather_triton_backend,
-                            use_experimental_tiling});
-        }
+        params.push_back({is_async, use_all_gather_triton_backend,
+                          /*use_experimental_tiling=*/true});
       }
     }
     return params;
@@ -357,9 +350,10 @@ class AllGatherTest
         GetParam().use_all_gather_triton_backend);
     // When testing with the Triton backend, also set the experimental tiling
     // propagation flag to exercise both legacy and experimental paths.
+    // The Triton backend always uses the experimental tiling path
+    // (legacy fusion_emitter.cc support has been removed).
     if (GetParam().use_all_gather_triton_backend) {
-      opts.set_xla_gpu_experimental_enable_tiling_propagation(
-          GetParam().use_experimental_tiling);
+      opts.set_xla_gpu_experimental_enable_tiling_propagation(true);
     }
     return opts;
   }
@@ -384,8 +378,7 @@ class AllGatherTypesTest
     opts.set_xla_gpu_unsupported_use_all_gather_triton_backend(
         GetParam().use_all_gather_triton_backend);
     if (GetParam().use_all_gather_triton_backend) {
-      opts.set_xla_gpu_experimental_enable_tiling_propagation(
-          GetParam().use_experimental_tiling);
+      opts.set_xla_gpu_experimental_enable_tiling_propagation(true);
     }
     return opts;
   }
@@ -401,31 +394,19 @@ INSTANTIATE_TEST_SUITE_P(
     AllGatherTest, AllGatherTest,
     ::testing::ValuesIn(AllGatherTestParams::Generate()),
     [](const ::testing::TestParamInfo<AllGatherTestParams>& info) {
-      std::string name = absl::StrCat(
+      return absl::StrCat(
           GetAsyncTestName(info.param.is_async), "_",
           info.param.use_all_gather_triton_backend ? "triton" : "nccl");
-      if (info.param.use_all_gather_triton_backend) {
-        absl::StrAppend(&name, "_",
-                        info.param.use_experimental_tiling ? "exp_tiling"
-                                                           : "legacy_tiling");
-      }
-      return name;
     });
 
 INSTANTIATE_TEST_SUITE_P(
     AllGatherTypesTest, AllGatherTypesTest,
     ::testing::ValuesIn(AllGatherTypesTestParams::Generate()),
     [](const ::testing::TestParamInfo<AllGatherTypesTestParams>& info) {
-      std::string name = absl::StrCat(
+      return absl::StrCat(
           GetAsyncTestName(info.param.is_async), "_",
           primitive_util::LowercasePrimitiveTypeName(info.param.element_type),
           "_", info.param.use_all_gather_triton_backend ? "triton" : "nccl");
-      if (info.param.use_all_gather_triton_backend) {
-        absl::StrAppend(&name, "_",
-                        info.param.use_experimental_tiling ? "exp_tiling"
-                                                           : "legacy_tiling");
-      }
-      return name;
     });
 
 TEST_P(AllGatherTypesTest, SupportedTypes2GPUs) {
@@ -1088,6 +1069,55 @@ TEST_F(AllGatherTritonVerificationTest,
     ASSERT_TRUE(LiteralTestUtil::Near(test_io.expected_outputs[i], results[i],
                                       ErrorSpec{1e-5}))
         << "NCCL/RCCL fallback result mismatch at replica " << i;
+  }
+}
+
+// Tests AllGather with 4096 f32 elements per replica — large enough to trigger
+// multi-tile-per-rank execution (tiles_per_rank = 2, total_blocks = 4).
+//
+// AllGatherLaunchDimensions(4096, 2):
+//   total_threads = 1024, threads_per_block = 512, blocks_per_grid = 2
+//
+// Each rank has 2 blocks.  Block 0 handles the first 2048 elements and
+// block 1 handles the second 2048 elements.  The barrier must wait for
+// ALL 4 blocks (2 ranks × 2 tiles per rank) before any block reads from
+// the remote symmetric buffer — this is exercised here.
+//
+// The 2D signal buffer {num_devices, kMaxBlocksForSignal} makes this work
+// transparently: each block signals its own slot via the hardware block ID,
+// matching exactly the way AllReduce handles multiple blocks per rank.
+TEST_P(AllGatherTest, F32_MultiTilePerRank_2GPUs) {
+  constexpr absl::string_view kModuleStr = R"(
+  HloModule test
+  ENTRY test_computation {
+    param_0 = f32[4096] parameter(0)
+    ROOT all-gather = f32[8192] all-gather(param_0),
+      replica_groups={{0,1}}, dimensions={0}
+  }
+  )";
+  constexpr int64_t kNumReplicas = 2;
+  if (!CheckDeviceCount(kNumReplicas)) {
+    return;
+  }
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto module, ParseAndReturnVerifiedModule(kModuleStr, kNumReplicas));
+  TF_ASSERT_OK_AND_ASSIGN(
+      InputsOutputs test_io,
+      (BuildTestInputsOutputs<PrimitiveType::F32>(*module, kNumReplicas,
+                                                  /*all_gather_dimension=*/0)));
+
+  CheckNoTritonFallback();
+  TF_ASSERT_OK_AND_ASSIGN(
+      ExecutionResult execution_result,
+      ExecuteReplicated(std::move(module), test_io.InputLiteralPtrs()));
+
+  const std::vector<Literal>& results = execution_result.results;
+  ASSERT_EQ(results.size(), kNumReplicas);
+  for (int i = 0; i < kNumReplicas; ++i) {
+    ASSERT_TRUE(LiteralTestUtil::Near(test_io.expected_outputs[i], results[i],
+                                      ErrorSpec{1e-5}))
+        << "Multi-tile AllGather result mismatch at replica " << i;
   }
 }
 
