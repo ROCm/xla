@@ -1182,21 +1182,37 @@ class AllGatherEmitter {
     CHECK(initialized_);
 
     llvm::ArrayRef<int64_t> shape = ctx_.input_tile.getType().getShape();
-
-    // source_rank = program_id % world_size
-    // Each block is responsible for gathering data from one specific rank.
     mlir::Value program_id = ttir::GetProgramIdOp::create(builder_, 0);
-    mlir::Value world_size_i32 =
+
+    // source_rank: which rank this block gathers data from.
+    //
+    // The TilingSpace formula:
+    //   tiles_per_rank = local_size_in_gather_dim / tile_size_in_gather_dim
+    //   source_rank    = program_id / tiles_per_rank
+    //
+    // This generalises the previous "program_id % world_size" (which only
+    // worked when tiles_per_rank == 1).  Both local_size and tile_size are
+    // compile-time constants derived from the non-tiled input shape and the
+    // current tile shape respectively.
+    const int64_t local_size_in_gather_dim =
+        ctx_.non_tiled_input_shape[ctx_.all_gather_dimension];
+    const int64_t tile_size_in_gather_dim =
+        ctx_.input_tile.getType().getShape()[ctx_.all_gather_dimension];
+    const int64_t tiles_per_rank =
+        local_size_in_gather_dim / tile_size_in_gather_dim;
+
+    mlir::Value tiles_per_rank_val =
         arith::ConstantOp::create(builder_, builder_.getI32Type(),
-                                  builder_.getI32IntegerAttr(ctx_.world_size));
+                                  builder_.getI32IntegerAttr(tiles_per_rank));
     mlir::Value source_rank_i32 =
-        arith::RemSIOp::create(builder_, program_id, world_size_i32);
+        arith::DivSIOp::create(builder_, program_id, tiles_per_rank_val);
     mlir::Value source_rank = arith::ExtSIOp::create(
         builder_, builder_.getI64Type(), source_rank_i32);
 
     // Phase 1: Copy our local input tile to the symmetric buffer.
-    // The offsets are provided by the experimental tiling infrastructure
-    // via ctx_.input_extract.getOffsets() (from TiledHloComputation).
+    // Use ctx_.input_extract.getOffsets() for all dimensions.  The tiling
+    // infrastructure already encodes the correct within-rank position for the
+    // gather dimension (input_offset = output_offset % local_size).
     if (mlir::failed(EmitCopyToSymmetric(
             ctx_.input_tile, ctx_.input_extract.getOffsets(),
             ctx_.input_tile.getType().getShape()))) {
@@ -1210,26 +1226,20 @@ class AllGatherEmitter {
                                           "Failed to emit sync for all-gather");
     }
 
-    // Phase 3: Load the source rank's tile from its symmetric buffer.
-    // For the gather dimension, always start at offset 0 in the source rank's
-    // buffer (each rank stores a full slice at offset 0). For other dimensions,
-    // use the tile offset from input_extract (maintained by experimental
-    // tiling).
-    mlir::ValueRange tile_offsets = ctx_.input_extract.getOffsets();
-    llvm::SmallVector<mlir::Value> local_offsets;
-    for (size_t i = 0; i < ctx_.non_tiled_input_shape.size(); ++i) {
-      if (static_cast<int64_t>(i) == ctx_.all_gather_dimension) {
-        // Gather dimension: always load from offset 0 in the remote buffer.
-        local_offsets.push_back(arith::ConstantOp::create(
-            builder_, builder_.getIndexType(), builder_.getIndexAttr(0)));
-      } else {
-        // Other dimensions: use the tile offset from TiledHloComputation.
-        local_offsets.push_back(tile_offsets[i]);
-      }
-    }
-
+    // Phase 3: Load the source rank's tile from its symmetric buffer using
+    // ctx_.input_extract.getOffsets() for ALL dimensions — including the
+    // gather dimension — mirroring how AllReduce uses input_extract offsets.
+    //
+    // The gather-dim offset from input_extract is already the correct within-
+    // rank slice position:
+    //   input_extract.getOffsets()[gather_dim]
+    //     = output_offset % local_size
+    //     = (program_id % tiles_per_rank) * tile_size_in_gather_dim
+    //
+    // This replaces the previous hardcoded "offset 0" which was correct only
+    // for tiles_per_rank == 1.
     xtile::TensorValue result =
-        LoadTileForRank(source_rank, local_offsets, shape);
+        LoadTileForRank(source_rank, ctx_.input_extract.getOffsets(), shape);
     rewriter_.replaceOp(ctx_.op, result);
     return mlir::success();
   }

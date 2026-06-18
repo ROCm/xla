@@ -33,6 +33,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/array.h"
+#include "xla/backends/gpu/tests/collective_ops_e2e_test_base.h"
 #include "xla/error_spec.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -44,7 +45,6 @@ limitations under the License.
 #include "xla/literal_util.h"
 #include "xla/primitive_util.h"
 #include "xla/service/collective_ops_utils.h"
-#include "xla/backends/gpu/tests/collective_ops_e2e_test_base.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/tests/literal_test_util.h"
@@ -187,13 +187,12 @@ struct AllGatherTestParams {
       for (bool use_all_gather_triton_backend : {true, false}) {
         // For NCCL backend, only test one tiling path (irrelevant).
         // For Triton backend, test both legacy and experimental tiling.
-        const auto tiling_options =
-            use_all_gather_triton_backend
-                ? std::vector<bool>{false, true}
-                : std::vector<bool>{false};
+        const auto tiling_options = use_all_gather_triton_backend
+                                        ? std::vector<bool>{false, true}
+                                        : std::vector<bool>{false};
         for (bool use_experimental_tiling : tiling_options) {
-          params.push_back(
-              {is_async, use_all_gather_triton_backend, use_experimental_tiling});
+          params.push_back({is_async, use_all_gather_triton_backend,
+                            use_experimental_tiling});
         }
       }
     }
@@ -983,7 +982,8 @@ class AllGatherTritonVerificationTest : public AllGatherTestNoParams {
 //
 // If Triton silently falls back to NCCL/RCCL, this test fails because the
 // "Falling back to NCCL/RCCL" WARNING would be emitted and detected.
-TEST_F(AllGatherTritonVerificationTest, TritonActuallyRuns_BF16_1024Elements_2GPUs) {
+TEST_F(AllGatherTritonVerificationTest,
+       TritonActuallyRuns_BF16_1024Elements_2GPUs) {
   constexpr int64_t kNumReplicas = 2;
   if (!CheckDeviceCount(kNumReplicas)) {
     return;
@@ -1014,9 +1014,8 @@ TEST_F(AllGatherTritonVerificationTest, TritonActuallyRuns_BF16_1024Elements_2GP
   // A "Falling back to NCCL/RCCL" WARNING indicates a silent fallback, which
   // would mean the test was not actually validating Triton behavior.
   absl::ScopedMockLog mock_log(absl::MockLogDefault::kIgnoreUnexpected);
-  EXPECT_CALL(mock_log,
-              Log(absl::LogSeverity::kWarning, ::testing::_,
-                  ::testing::HasSubstr("Falling back to NCCL/RCCL")))
+  EXPECT_CALL(mock_log, Log(absl::LogSeverity::kWarning, ::testing::_,
+                            ::testing::HasSubstr("Falling back to NCCL/RCCL")))
       .Times(0);  // No fallback expected — Triton should run.
   mock_log.StartCapturingLogs();
 
@@ -1065,17 +1064,16 @@ TEST_F(AllGatherTritonVerificationTest,
 
   TF_ASSERT_OK_AND_ASSIGN(
       auto module, ParseAndReturnVerifiedModule(kModuleStr, kNumReplicas));
-  TF_ASSERT_OK_AND_ASSIGN(InputsOutputs test_io,
-                          (BuildTestInputsOutputs<PrimitiveType::F32>(
-                              *module, kNumReplicas,
-                              /*all_gather_dimension=*/0)));
+  TF_ASSERT_OK_AND_ASSIGN(
+      InputsOutputs test_io,
+      (BuildTestInputsOutputs<PrimitiveType::F32>(*module, kNumReplicas,
+                                                  /*all_gather_dimension=*/0)));
 
   // Expect the fallback warning to be emitted exactly because Triton cannot
   // handle this shape.
   absl::ScopedMockLog mock_log(absl::MockLogDefault::kIgnoreUnexpected);
-  EXPECT_CALL(mock_log,
-              Log(absl::LogSeverity::kWarning, ::testing::_,
-                  ::testing::HasSubstr("Falling back to NCCL/RCCL")))
+  EXPECT_CALL(mock_log, Log(absl::LogSeverity::kWarning, ::testing::_,
+                            ::testing::HasSubstr("Falling back to NCCL/RCCL")))
       .Times(::testing::AtLeast(1));  // Fallback warning must be emitted.
   mock_log.StartCapturingLogs();
 
@@ -1090,6 +1088,56 @@ TEST_F(AllGatherTritonVerificationTest,
     ASSERT_TRUE(LiteralTestUtil::Near(test_io.expected_outputs[i], results[i],
                                       ErrorSpec{1e-5}))
         << "NCCL/RCCL fallback result mismatch at replica " << i;
+  }
+}
+
+// Tests AllGather with a multi-row 2D input (4 rows per replica).
+//
+// This is more meaningful than the single-row tests for the experimental
+// tiling path: the TilingSpace symbolic expression
+//   input_offset[gather_dim] = output_offset[gather_dim] % local_size
+// is exercised with local_size=4 (not 1), making the symbolic division and
+// modulo non-trivial. The InsertTileOp for the ROOT must correctly place the
+// 4-row tile at offset [0, 0] (rank 0) or [4, 0] (rank 1) in the gathered
+// output.
+//
+TEST_P(AllGatherTest, F32_MultiRowPerRank_2GPUs) {
+  constexpr absl::string_view kModuleStr = R"(
+  HloModule test
+  ENTRY test_computation {
+    param_0 = f32[4, 4] parameter(0)
+    allgather = f32[8, 4] all-gather(param_0), replica_groups={{0,1}}, dimensions={0}
+    ROOT out = f32[32] reshape(allgather)
+  }
+  )";
+  constexpr int64_t kNumReplicas = 2;
+  if (!CheckDeviceCount(kNumReplicas)) {
+    return;
+  }
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto module, ParseAndReturnVerifiedModule(kModuleStr, kNumReplicas));
+
+  // Rank 0 input: all zeros [4,4]; Rank 1 input: all ones [4,4].
+  // Gathered output [8,4] reshaped to [32]: 16 zeros then 16 ones.
+  Literal input0 =
+      LiteralUtil::CreateFullWithDescendingLayout<float>({4, 4}, 0.0f);
+  Literal input1 =
+      LiteralUtil::CreateFullWithDescendingLayout<float>({4, 4}, 1.0f);
+
+  CheckNoTritonFallback();
+  std::vector<std::vector<Literal*>> per_replica_args = {{&input0}, {&input1}};
+  TF_ASSERT_OK_AND_ASSIGN(
+      ExecutionResult execution_result,
+      ExecuteReplicated(std::move(module), per_replica_args));
+
+  const std::vector<Literal>& results = execution_result.results;
+  ASSERT_EQ(results.size(), kNumReplicas);
+  // Rank 0's 4 rows (all 0.0f) concatenated with rank 1's 4 rows (all 1.0f).
+  std::vector<float> expected(16, 0.0f);
+  expected.insert(expected.end(), 16, 1.0f);
+  for (const Literal& result : results) {
+    LiteralTestUtil::ExpectR1Equal<float>(expected, result);
   }
 }
 
