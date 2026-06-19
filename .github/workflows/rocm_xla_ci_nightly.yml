@@ -109,6 +109,7 @@ jobs:
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
             --jobs=30 \
+            --spawn_strategy=local \
             --bes_keywords=xla \
             --bes_keywords=single_gpu \
             --bes_keywords=nightly \
@@ -122,6 +123,7 @@ jobs:
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_multi_gpu \
             --local_test_jobs=1 \
+            --spawn_strategy=local \
             --strategy=TestRunner=local \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
@@ -139,6 +141,7 @@ jobs:
             --config=rocm_rbe \
             --config=ci_rocm_cpu \
             --local_test_jobs=200 \
+            --spawn_strategy=local \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --bes_keywords=xla \
             --bes_keywords=cpu \
