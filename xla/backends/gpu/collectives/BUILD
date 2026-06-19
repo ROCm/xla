@@ -346,14 +346,18 @@ cc_library(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_collectives_test",
     srcs = ["gpu_collectives_test.cc"],
-    tags = [
-        "cuda-only",
-        "gpu",
+    backend_tags = {
+        "gpu": [
+            "multi_gpu",
+        ],
+    },
+    backends = ["gpu"],
+    tags = if_cuda_is_configured([
         "requires-gpu-nvidia:2",
-    ],
+    ]),
     deps = [
         ":allocator_memory_registration",
         ":cancellation_token",
@@ -376,8 +380,6 @@ xla_cc_test(
         "//xla/stream_executor:platform_manager",
         "//xla/stream_executor:stream",
         "//xla/stream_executor:stream_executor_h",
-        "//xla/stream_executor/cuda:cuda_compute_capability",
-        "//xla/stream_executor/cuda:cuda_platform",
         "//xla/tsl/concurrency:executor",
         "//xla/tsl/platform:env",
         "//xla/tsl/platform:status_macros",
@@ -389,7 +391,13 @@ xla_cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",  # buildcleaner: keep
-    ],
+    ] + if_cuda_is_configured([
+        "//xla/stream_executor/cuda:cuda_platform",
+        "//xla/stream_executor/cuda:cuda_compute_capability",
+    ]) + if_rocm_is_configured([
+        "//xla/stream_executor/rocm:rocm_platform",
+        "//xla/stream_executor/rocm:rocm_compute_capability",
+    ]),
 )
 
 xla_test(
