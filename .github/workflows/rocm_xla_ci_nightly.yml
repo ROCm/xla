@@ -19,6 +19,7 @@ permissions:
   contents: read
 
 on:
+  workflow_dispatch:
   schedule:
     # Run every 24 hours at 3:47 AM UTC
     - cron: '47 3 * * *'
