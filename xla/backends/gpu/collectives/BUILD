@@ -232,14 +232,18 @@ cc_library(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_cliques_test",
     srcs = ["gpu_cliques_test.cc"],
-    tags = [
-        "cuda-only",
-        "gpu",
+    backend_tags = {
+        "gpu": [
+            "multi_gpu",
+        ],
+    },
+    backends = ["gpu"],
+    tags = if_cuda_is_configured([
         "requires-gpu-nvidia:2",
-    ],
+    ]),
     deps = [
         ":gpu_clique",
         ":gpu_clique_key",
@@ -258,7 +262,7 @@ xla_cc_test(
         "//xla/stream_executor:platform",
         "//xla/stream_executor:platform_manager",
         "//xla/stream_executor:stream_executor_h",
-        "//xla/stream_executor/cuda:cuda_platform",
+        "//xla/service:platform_util",
         "//xla/tsl/concurrency:executor",
         "//xla/tsl/platform:env",
         "//xla/tsl/platform:status_macros",
@@ -269,7 +273,11 @@ xla_cc_test(
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",  # fixdeps: keep
         "@tsl//tsl/platform:casts",
-    ],
+    ] + if_cuda_is_configured([
+        "//xla/stream_executor/cuda:cuda_platform",
+    ]) + if_rocm_is_configured([
+        "//xla/stream_executor/rocm:rocm_platform",
+    ]),
 )
 
 cc_library(
