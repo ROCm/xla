@@ -1941,6 +1941,7 @@ cc_library(
         "//xla/stream_executor:platform_id",
         "//xla/stream_executor:platform_manager",
         "//xla/stream_executor:semantic_version",
+        "//xla/stream_executor:stream_executor_address_allocator",
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/abi:executable_abi_version",
         "//xla/stream_executor/cuda:cuda_compute_capability",

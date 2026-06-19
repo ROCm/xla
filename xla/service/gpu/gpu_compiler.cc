@@ -19,6 +19,7 @@ limitations under the License.
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -337,6 +338,7 @@ limitations under the License.
 #include "xla/stream_executor/platform_manager.h"
 #include "xla/stream_executor/semantic_version.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/stream_executor/stream_executor_address_allocator.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/logging.h"
 #include "xla/tsl/platform/threadpool.h"
@@ -3467,6 +3469,40 @@ GpuCompiler::LoadExecutableFromLegacyAotResult(
   }
 }
 
+// [ROCm conv-zero A1] When XLA_ROCM_AUTOTUNE_OWN_POOL is set, the autotuner is
+// given a DEDICATED raw (StreamExecutor hipMalloc/hipFree) allocator instead of
+// the shared compute BFC. The autotuner runs candidate kernels (e.g. MIOpen
+// ConvolutionBackwardWeights, which SetTensor(dW,0)) on its own stream; if its
+// scratch came from the shared BFC it could alias a live compute buffer and
+// zero it (the conv-zero all-zero-gradient race). A separate pool guarantees
+// the autotuner's scratch never aliases live buffers, with no hot-path cost
+// (autotuning is a compile-time event). Returns the shared allocator when the
+// env var is unset. The dedicated allocator is created once per StreamExecutor
+// and intentionally leaked (lives for the process).
+static se::DeviceAddressAllocator* AutotunerScratchAllocator(
+    se::StreamExecutor* stream_exec, se::DeviceAddressAllocator* shared) {
+  static const bool own_pool = [] {
+    const char* v = std::getenv("XLA_ROCM_AUTOTUNE_OWN_POOL");
+    return v != nullptr && v[0] != '0' && v[0] != '\0';
+  }();
+  if (!own_pool || stream_exec == nullptr) {
+    return shared;
+  }
+  static absl::Mutex mu(absl::kConstInit);
+  static auto* cache =
+      new absl::flat_hash_map<se::StreamExecutor*,
+                              se::StreamExecutorAddressAllocator*>();
+  absl::MutexLock lock(&mu);
+  auto& slot = (*cache)[stream_exec];
+  if (slot == nullptr) {
+    slot = new se::StreamExecutorAddressAllocator(stream_exec);
+    LOG(ERROR) << "[AUTOTUNE-OWN-POOL] autotuner using a dedicated raw "
+                  "allocator (separate from the compute BFC) on StreamExecutor "
+               << stream_exec;
+  }
+  return slot;
+}
+
 absl::Status GpuCompiler::AddAutotunerPass(
     HloPassPipeline* pipeline, HloModule* hlo_module,
     const se::GpuComputeCapability& gpu_version, const CompileOptions& options,
@@ -3476,10 +3512,13 @@ absl::Status GpuCompiler::AddAutotunerPass(
     HloCostAnalysis::ShapeSizeFunction shape_size_fn,
     const MultiProcessKeyValueStore& key_value_store) {
   const DebugOptions& debug_options = hlo_module->config().debug_options();
+  // [conv-zero A1] Keep autotuner scratch out of the shared compute BFC.
+  se::DeviceAddressAllocator* autotune_allocator =
+      AutotunerScratchAllocator(stream_exec, options.device_allocator);
   auto get_backends_fn =
       [&]() -> absl::StatusOr<std::vector<std::unique_ptr<CodegenBackend>>> {
     return AutotunerPass::GetGpuAutotunerBackends(
-        stream_exec, options.device_allocator, target_config, alias_info,
+        stream_exec, autotune_allocator, target_config, alias_info,
         debug_options, mlir_context, shape_size_fn, this, PlatformId());
   };
 
@@ -3487,8 +3526,8 @@ absl::Status GpuCompiler::AddAutotunerPass(
       std::unique_ptr<AutotunerPass> autotuner_pass,
       AutotunerPass::Create(get_backends_fn, debug_options, gpu_version,
                             stream_exec, thread_pool, target_config, alias_info,
-                            mlir_context, shape_size_fn,
-                            options.device_allocator, key_value_store));
+                            mlir_context, shape_size_fn, autotune_allocator,
+                            key_value_store));
   pipeline->AddPass(std::move(autotuner_pass));
   // Post autotuning transformations needed after autotuning happens.
   pipeline->AddPass<ConvertTritonGemmConfig>(target_config->device_description,
