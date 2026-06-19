@@ -536,14 +536,13 @@ cc_library(
     alwayslink = True,  # registers collectives implementation
 )
 
-xla_cc_test(
+xla_test(
     name = "loopback_collectives_test",
     srcs = ["loopback_collectives_test.cc"],
-    tags = [
-        "cuda-only",
-        "gpu",
+    backends = ["gpu"],
+    tags = if_cuda_is_configured([
         "requires-gpu-nvidia",
-    ],
+    ]),
     deps = [
         ":gpu_clique_key",
         ":gpu_collectives",
@@ -559,13 +558,16 @@ xla_cc_test(
         "//xla/stream_executor:platform_manager",
         "//xla/stream_executor:stream",
         "//xla/stream_executor:stream_executor_h",
-        "//xla/stream_executor/cuda:cuda_platform",
         "//xla/tsl/platform:status_macros",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",
-    ],
+    ] + if_cuda_is_configured([
+        "//xla/stream_executor/cuda:cuda_platform",
+    ]) + if_rocm_is_configured([
+        "//xla/stream_executor/rocm:rocm_platform",
+    ]),
 )
 
 cc_library(

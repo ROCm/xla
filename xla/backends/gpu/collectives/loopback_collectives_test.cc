@@ -32,6 +32,7 @@ limitations under the License.
 #include "xla/core/collectives/communicator.h"
 #include "xla/core/collectives/rank_id.h"
 #include "xla/runtime/device_id.h"
+#include "xla/service/platform_util.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform_manager.h"
@@ -135,8 +136,10 @@ SplitCommunicators(
 // Verifies that LoopbackCollectives fits into the clique acquisition API by
 // creating communicators through CreateCommunicators.
 TEST(LoopbackCollectivesTest, CreateCommunicators) {
+  auto name = absl::AsciiStrToUpper(
+      xla::PlatformUtil::CanonicalPlatformName("gpu").value());
   ASSERT_OK_AND_ASSIGN(se::Platform * platform,
-                       se::PlatformManager::PlatformWithName("CUDA"));
+                       se::PlatformManager::PlatformWithName(name));
 
   if (platform->VisibleDeviceCount() < 1) {
     GTEST_SKIP() << "Test requires at least 1 GPU";
@@ -155,8 +158,10 @@ TEST(LoopbackCollectivesTest, CreateCommunicators) {
 
 // Verifies that LoopbackCollectives can create multi-rank communicators.
 TEST(LoopbackCollectivesTest, CreateMultiRankCommunicators) {
+  auto name = absl::AsciiStrToUpper(
+      xla::PlatformUtil::CanonicalPlatformName("gpu").value());
   ASSERT_OK_AND_ASSIGN(se::Platform * platform,
-                       se::PlatformManager::PlatformWithName("CUDA"));
+                       se::PlatformManager::PlatformWithName(name));
 
   if (platform->VisibleDeviceCount() < 2) {
     GTEST_SKIP() << "Test requires at least 2 GPUs";
@@ -177,8 +182,10 @@ TEST(LoopbackCollectivesTest, CreateMultiRankCommunicators) {
 
 // Verifies that LoopbackCollectives supports SplitCommunicators.
 TEST(LoopbackCollectivesTest, SplitCommunicators) {
+  auto name = absl::AsciiStrToUpper(
+      xla::PlatformUtil::CanonicalPlatformName("gpu").value());
   ASSERT_OK_AND_ASSIGN(se::Platform * platform,
-                       se::PlatformManager::PlatformWithName("CUDA"));
+                       se::PlatformManager::PlatformWithName(name));
 
   if (platform->VisibleDeviceCount() < 2) {
     GTEST_SKIP() << "Test requires at least 2 GPUs";
@@ -200,8 +207,10 @@ TEST(LoopbackCollectivesTest, SplitCommunicators) {
 
 // Verifies that AllReduce copies send to recv on a single device.
 TEST(LoopbackCollectivesTest, AllReduce) {
+  auto name = absl::AsciiStrToUpper(
+      xla::PlatformUtil::CanonicalPlatformName("gpu").value());
   ASSERT_OK_AND_ASSIGN(se::Platform * platform,
-                       se::PlatformManager::PlatformWithName("CUDA"));
+                       se::PlatformManager::PlatformWithName(name));
 
   if (platform->VisibleDeviceCount() < 1) {
     GTEST_SKIP() << "Test requires at least 1 GPU";
@@ -244,8 +253,10 @@ TEST(LoopbackCollectivesTest, AllReduce) {
 
 // Verifies that AllGather replicates input into every rank's slot.
 TEST(LoopbackCollectivesTest, AllGather) {
+  auto name = absl::AsciiStrToUpper(
+      xla::PlatformUtil::CanonicalPlatformName("gpu").value());
   ASSERT_OK_AND_ASSIGN(se::Platform * platform,
-                       se::PlatformManager::PlatformWithName("CUDA"));
+                       se::PlatformManager::PlatformWithName(name));
 
   if (platform->VisibleDeviceCount() < 1) {
     GTEST_SKIP() << "Test requires at least 1 GPU";
@@ -291,8 +302,10 @@ TEST(LoopbackCollectivesTest, AllGather) {
 
 // Verifies that CollectivePermute copies send to recv (loopback).
 TEST(LoopbackCollectivesTest, CollectivePermute) {
+  auto name = absl::AsciiStrToUpper(
+      xla::PlatformUtil::CanonicalPlatformName("gpu").value());
   ASSERT_OK_AND_ASSIGN(se::Platform * platform,
-                       se::PlatformManager::PlatformWithName("CUDA"));
+                       se::PlatformManager::PlatformWithName(name));
 
   if (platform->VisibleDeviceCount() < 1) {
     GTEST_SKIP() << "Test requires at least 1 GPU";
