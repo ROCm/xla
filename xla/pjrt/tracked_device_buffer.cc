@@ -16,6 +16,8 @@ limitations under the License.
 #include "xla/pjrt/tracked_device_buffer.h"
 
 #include <cstddef>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <utility>
 
@@ -35,12 +37,12 @@ limitations under the License.
 #include "xla/pjrt/pjrt_stream_executor_client.h"
 #include "xla/pjrt/raw_buffer.h"
 #include "xla/pjrt/se_raw_buffer.h"
-#include "xla/stream_executor/stream.h"
 #include "xla/service/shaped_buffer.h"
 #include "xla/shape.h"
 #include "xla/shape_tree.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_address_allocator.h"
+#include "xla/stream_executor/stream.h"
 #include "xla/tsl/concurrency/async_value.h"
 #include "xla/tsl/concurrency/async_value_ref.h"
 #include "xla/tsl/concurrency/ref_count.h"
@@ -84,18 +86,85 @@ class AllocatedRawSEDeviceMemory : public RawSEDeviceMemory {
     const int device_ordinal = local_device_->local_device_id().value();
     se::DeviceAddressBase memory = mem();
     se::DeviceAddressAllocator* allocator = allocator_;
-    // [ROCm conv-zero fix v4 / stream-deferred free] Defer the actual free until
-    // the compute stream drains, so the chunk is NOT returned to BFC (and then
-    // reused + zeroed by a sibling op's MIOpen SetTensor(0)) while a kernel that
-    // uses this buffer is still in flight. All uses were enqueued before the
-    // refcount reached 0, so a host callback enqueued now fires after them. The
-    // host does not block here, so BFC stays asynchronous (the whole point;
-    // unlike AllowsAsynchronousDeallocation=false). This is the perf-preserving
-    // realization of that diagnostic's TODO ("defer DeallocateRaw via
-    // stream->DoHostCallback"). NOTE (handoff): first-cut defers on the compute
-    // stream only; buffers whose last use is on a different stream (e.g. a D2H
-    // copy stream) are not covered and may need the using-stream plumbed
-    // through. See strategy/conv-zero-bfc-async-dealloc-investigation.md.
+    // [A/B/C gate] XLA_ROCM_DEFER_FREE selects the deallocation strategy so a
+    // single build can benchmark all three:
+    //   0 = immediate host-side free (original; races under async dispatch)
+    //   1 = defer via compute_stream DoHostCallback (correct, but
+    //   hipLaunchHostFunc
+    //       is stream-ordered so it STALLS the compute stream per free)
+    //   2 = defer via ThenExecuteCallback (correct; the free runs on a separate
+    //       callback stream that WaitFor()s the compute stream, so the compute
+    //       stream is NOT stalled -- only a cheap event is recorded)
+    // Default = 2 (cheapest correct option).
+    static const int free_mode = [] {
+      const char* v = std::getenv("XLA_ROCM_DEFER_FREE");
+      if (v == nullptr) return 2;
+      if (std::strcmp(v, "0") == 0 || std::strcmp(v, "false") == 0) return 0;
+      if (std::strcmp(v, "1") == 0) return 1;
+      return 2;
+    }();
+    if (free_mode == 0) {
+      // [Poison-on-free clincher] XLA_ROCM_POISON_FREE=<hex32> scribbles a
+      // recognizable pattern into the chunk on the COMPUTE stream just before
+      // returning it to BFC. Compute-stream ordering means this is strictly
+      // after the buffer's last legitimate use (which was enqueued before this
+      // destructor ran), so it never corrupts correct single-stream reuse.
+      // It DOES corrupt the buggy path: if the freed chunk is read back or
+      // reused by another stream while our kernel is still in flight, the
+      // consumer observes the poison instead of silent zeros. Recommended
+      // pattern 7fc00000 = f32 quiet-NaN, so the failing conv test prints NaN
+      // (unmistakable use-after-free) rather than the silent 0.0.
+      static const uint32_t poison = [] {
+        const char* v = std::getenv("XLA_ROCM_POISON_FREE");
+        if (v == nullptr || v[0] == '\0') return 0u;
+        return static_cast<uint32_t>(std::strtoul(v, nullptr, 16));
+      }();
+      if (poison != 0 && memory.size() >= 4) {
+        se::Stream* cs = local_device_->compute_stream();
+        se::DeviceAddressBase scribble(memory.opaque(),
+                                       memory.size() & ~uint64_t{3});
+        absl::Status ps = cs->Memset32(&scribble, poison, scribble.size());
+        if (!ps.ok()) {
+          LOG(ERROR) << "Poison-on-free Memset32 failed: " << ps;
+        }
+      }
+      absl::Status status = allocator->Deallocate(device_ordinal, memory);
+      if (!status.ok()) {
+        LOG(ERROR) << "Buffer deallocation failed: " << status;
+      }
+      return;
+    }
+    if (free_mode == 2) {
+      // [ROCm conv-zero fix v5 / callback-stream deferred free] Defer the
+      // actual free until the compute stream drains, so the chunk is NOT
+      // returned to BFC (and then reused + zeroed by a sibling op's MIOpen
+      // SetTensor(0)) while a kernel that uses this buffer is still in flight.
+      // Unlike mode 1 (DoHostCallback directly on the compute stream, which
+      // stalls it per free), ThenExecuteCallback runs the free on a separate
+      // callback stream that WaitFor()s the compute stream, so the compute
+      // stream only records a cheap event and is not stalled. The host never
+      // blocks, so BFC stays asynchronous.
+      absl::Status s = local_device_->ThenExecuteCallback(
+          local_device_->compute_stream(),
+          [allocator, device_ordinal, memory]() {
+            absl::Status st = allocator->Deallocate(device_ordinal, memory);
+            if (!st.ok()) {
+              LOG(ERROR) << "Deferred (callback-stream) deallocation failed: "
+                         << st;
+            }
+          },
+          nullptr, "DeferredFree");
+      if (s.ok()) {
+        return;
+      }
+      // Fall back to immediate free if the callback could not be enqueued.
+      absl::Status status = allocator->Deallocate(device_ordinal, memory);
+      if (!status.ok()) {
+        LOG(ERROR) << "Buffer deallocation failed: " << status;
+      }
+      return;
+    }
+    // free_mode == 1: defer via DoHostCallback on the compute stream.
     se::Stream* stream = local_device_->compute_stream();
     absl::Status cb_status =
         stream->DoHostCallback([allocator, device_ordinal, memory]() {
@@ -200,7 +269,5 @@ tsl::AsyncValueRef<RawSEDeviceMemory> RawSEDeviceMemory::CreateSlice(
       absl::StrFormat("Error when slicing: [%d,%d) in array of size %d", offset,
                       offset + size, src_size)));
 }
-
-
 
 }  // namespace xla

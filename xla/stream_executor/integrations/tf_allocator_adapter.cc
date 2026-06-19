@@ -15,9 +15,14 @@ limitations under the License.
 
 #include "xla/stream_executor/integrations/tf_allocator_adapter.h"
 
+#include <atomic>
+#include <chrono>  // NOLINT(build/c++11)
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <map>
 #include <memory>
+#include <thread>  // NOLINT(build/c++11)
 #include <utility>
 #include <vector>
 
@@ -42,6 +47,136 @@ limitations under the License.
 #include "tsl/platform/numbers.h"
 
 namespace stream_executor {
+
+// ---------------------------------------------------------------------------
+// [ROCm BFC reuse tracer] Diagnostic-only allocation ledger.
+//
+// Purpose: prove/disprove that the shared BFC pool hands the *same* device
+// byte range to a new consumer right after a previous owner freed it, which is
+// the precondition for the conv-zero (BFC async-dealloc reuse) race documented
+// in MLSE/"Stabilizing JAX CI pytest runs", issue #4.
+//
+// Enabled only when XLA_ROCM_ALLOC_TRACE=1. Zero cost when unset (one relaxed
+// atomic load gate). Every alloc/free that flows through MultiDeviceAdapter --
+// which includes BOTH PjRt execution buffers AND the conv autotuner's
+// RedzoneAllocator buffers, since they share this allocator -- is recorded.
+//
+// We emit a loud one-line [BFC-REUSE] record only when a fresh allocation
+// returns a pointer that exactly matches (or overlaps) a range freed very
+// recently, including the host time delta and the freeing vs allocating thread
+// ids. A small delta + different thread is the smoking gun: the chunk went back
+// to the free list and was re-served while the freeing thread's compute stream
+// had not necessarily drained.
+// ---------------------------------------------------------------------------
+namespace {
+
+bool AllocTraceEnabled() {
+  static const bool enabled = [] {
+    const char* v = std::getenv("XLA_ROCM_ALLOC_TRACE");
+    return v != nullptr && v[0] != '0' && v[0] != '\0';
+  }();
+  return enabled;
+}
+
+uint64_t NowNs() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+uint64_t ThisThreadId() {
+  return std::hash<std::thread::id>{}(std::this_thread::get_id());
+}
+
+class BfcReuseTracer {
+ public:
+  static BfcReuseTracer& Get() {
+    static BfcReuseTracer* tracer = new BfcReuseTracer();
+    return *tracer;
+  }
+
+  void OnAlloc(int dev, const void* ptr, uint64_t size) {
+    if (dev < 0 || dev >= kMaxDevices) return;
+    const uint64_t seq = seq_.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t now = NowNs();
+    const uint64_t tid = ThisThreadId();
+    const uintptr_t a = reinterpret_cast<uintptr_t>(ptr);
+    absl::MutexLock lock(&mu_);
+    auto& freed = freed_[dev];
+    // Find the most recent free whose range overlaps [a, a+size).
+    auto it = freed.upper_bound(a);  // first free-start > a
+    if (it != freed.begin()) {
+      --it;  // candidate free-start <= a
+      const uintptr_t f_beg = it->first;
+      const FreeRec& fr = it->second;
+      const uintptr_t f_end = f_beg + fr.size;
+      const uintptr_t a_end = a + size;
+      const bool overlap = a < f_end && f_beg < a_end;
+      if (overlap) {
+        const double dt_us = (now - fr.t_ns) / 1000.0;
+        LOG(ERROR) << absl::StrFormat(
+            "[BFC-REUSE] dev=%d realloc ptr=0x%x size=%d alloc_seq=%d "
+            "tid=0x%x <- reuses freed [0x%x,+%d) free_seq=%d free_tid=0x%x "
+            "dt_us=%.1f exact=%d cross_thread=%d",
+            dev, a, size, seq, tid, f_beg, fr.size, fr.seq, fr.tid, dt_us,
+            (a == f_beg && size == fr.size) ? 1 : 0, (tid != fr.tid) ? 1 : 0);
+        freed.erase(it);
+      }
+    }
+    if (VlogLedger()) {
+      LOG(ERROR) << absl::StrFormat(
+          "[ALLOC] dev=%d ptr=0x%x size=%d seq=%d tid=0x%x t_ns=%d", dev, a,
+          size, seq, tid, now);
+    }
+  }
+
+  void OnFree(int dev, const void* ptr, uint64_t size) {
+    if (dev < 0 || dev >= kMaxDevices) return;
+    const uint64_t seq = seq_.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t now = NowNs();
+    const uint64_t tid = ThisThreadId();
+    const uintptr_t a = reinterpret_cast<uintptr_t>(ptr);
+    absl::MutexLock lock(&mu_);
+    auto& freed = freed_[dev];
+    freed[a] = FreeRec{size, seq, tid, now};
+    // Bound memory: keep only the most recent kMaxFreed records per device.
+    if (freed.size() > kMaxFreed) {
+      // Drop the oldest by sequence: linear scan is fine, this is debug-only.
+      auto oldest = freed.begin();
+      for (auto i = freed.begin(); i != freed.end(); ++i) {
+        if (i->second.seq < oldest->second.seq) oldest = i;
+      }
+      freed.erase(oldest);
+    }
+    if (VlogLedger()) {
+      LOG(ERROR) << absl::StrFormat(
+          "[FREE]  dev=%d ptr=0x%x size=%d seq=%d tid=0x%x t_ns=%d", dev, a,
+          size, seq, tid, now);
+    }
+  }
+
+ private:
+  struct FreeRec {
+    uint64_t size;
+    uint64_t seq;
+    uint64_t tid;
+    uint64_t t_ns;
+  };
+  static constexpr size_t kMaxFreed = 4096;
+  static constexpr int kMaxDevices = 16;
+  static bool VlogLedger() {
+    static const bool v = [] {
+      const char* e = std::getenv("XLA_ROCM_ALLOC_TRACE");
+      return e != nullptr && e[0] == '2';  // =2 dumps the full ledger.
+    }();
+    return v;
+  }
+  absl::Mutex mu_;
+  std::map<uintptr_t, FreeRec> freed_[kMaxDevices];  // per device ordinal
+  std::atomic<uint64_t> seq_{0};
+};
+
+}  // namespace
 
 TfAllocatorAdapter::TfAllocatorAdapter(tsl::Allocator* wrapped, Stream* stream,
                                        size_t min_alignment,
@@ -162,6 +297,11 @@ absl::StatusOr<ScopedDeviceAddress<uint8_t>> MultiDeviceAdapter::Allocate(
                    it->second[device_ordinal]->Allocate(
                        device_ordinal, size, retry_on_failure, memory_space));
 
+  if (AllocTraceEnabled()) {
+    BfcReuseTracer::Get().OnAlloc(device_ordinal, result->opaque(),
+                                  result->size());
+  }
+
   absl::MutexLock lock(mu_);
   buffer_memory_spaces_[{device_ordinal, result->opaque()}] = memory_space;
   return result;
@@ -183,6 +323,9 @@ absl::Status MultiDeviceAdapter::Deallocate(int device_ordinal,
                                             DeviceAddressBase mem) {
   if (mem.opaque() == nullptr) {
     return absl::OkStatus();
+  }
+  if (AllocTraceEnabled()) {
+    BfcReuseTracer::Get().OnFree(device_ordinal, mem.opaque(), mem.size());
   }
   int64_t memory_space;
   {
