@@ -44,6 +44,7 @@ cc_library(
     hdrs = ["tf_allocator_adapter.h"],
     deps = [
         "//xla:shape_util",
+        "//xla/stream_executor:bfc_reuse_guard",
         "//xla/stream_executor:device_address",
         "//xla/stream_executor:device_address_allocator",
         "//xla/stream_executor:platform",

@@ -623,6 +623,23 @@ cc_library(
     ],
 )
 
+# [ROCm conv-zero] Diagnostic-only GPU use-after-free guard shared between the
+# PjRt buffer destructor (free site) and MultiDeviceAdapter (realloc site).
+cc_library(
+    name = "bfc_reuse_guard",
+    srcs = ["bfc_reuse_guard.cc"],
+    hdrs = ["bfc_reuse_guard.h"],
+    deps = [
+        ":event",
+        ":stream",
+        ":stream_executor_h",
+        "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+    ],
+)
+
 cc_library(
     name = "memory_allocator",
     srcs = ["memory_allocator.cc"],

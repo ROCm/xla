@@ -903,6 +903,7 @@ cc_library(
         "//xla/service:shaped_buffer",
         "//xla/service:transfer_manager",
         "//xla/service/gpu:gpu_executable_run_options",
+        "//xla/stream_executor:bfc_reuse_guard",
         "//xla/stream_executor:device_address",
         "//xla/stream_executor:device_address_allocator",
         "//xla/stream_executor:stream",

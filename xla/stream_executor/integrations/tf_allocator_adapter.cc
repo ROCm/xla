@@ -37,6 +37,7 @@ limitations under the License.
 #include "absl/synchronization/mutex.h"
 #include "xla/tsl/platform/status_macros.h"
 #include "xla/layout.h"
+#include "xla/stream_executor/bfc_reuse_guard.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/platform.h"
@@ -300,6 +301,10 @@ absl::StatusOr<ScopedDeviceAddress<uint8_t>> MultiDeviceAdapter::Allocate(
   if (AllocTraceEnabled()) {
     BfcReuseTracer::Get().OnAlloc(device_ordinal, result->opaque(),
                                   result->size());
+  }
+  if (BfcReuseGuard::Enabled()) {
+    BfcReuseGuard::Get().OnAlloc(device_ordinal, result->opaque(),
+                                 result->size());
   }
 
   absl::MutexLock lock(mu_);

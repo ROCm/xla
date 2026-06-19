@@ -40,6 +40,7 @@ limitations under the License.
 #include "xla/service/shaped_buffer.h"
 #include "xla/shape.h"
 #include "xla/shape_tree.h"
+#include "xla/stream_executor/bfc_reuse_guard.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/stream.h"
@@ -127,6 +128,15 @@ class AllocatedRawSEDeviceMemory : public RawSEDeviceMemory {
         if (!ps.ok()) {
           LOG(ERROR) << "Poison-on-free Memset32 failed: " << ps;
         }
+      }
+      // [conv-zero GPU-proven UAF guard] Record a compute-stream event for this
+      // chunk just before it goes back to BFC. If a later allocation re-serves
+      // an overlapping range while this event is still pending, the previous
+      // owner's kernel is provably still in flight -> immediate free was unsafe.
+      if (se::BfcReuseGuard::Enabled()) {
+        se::BfcReuseGuard::Get().OnGuardedFree(device_ordinal, memory.opaque(),
+                                               memory.size(),
+                                               local_device_->compute_stream());
       }
       absl::Status status = allocator->Deallocate(device_ordinal, memory);
       if (!status.ok()) {
