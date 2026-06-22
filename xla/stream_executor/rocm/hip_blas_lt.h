@@ -136,7 +136,7 @@ class BlasLt : public gpu::BlasLt {
     double beta_;
     bool must_swap_operands_;
     std::optional<MatmulAlgorithm> algorithm_;  // selected algorithm
-  };  // class MatmulPlan
+  };                                            // class MatmulPlan
 
   explicit BlasLt(StreamExecutor* parent)
       : parent_(parent), blas_lt_(nullptr, hipblasLtDestroy) {}
