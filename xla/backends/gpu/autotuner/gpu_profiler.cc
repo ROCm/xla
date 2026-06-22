@@ -17,7 +17,9 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -242,8 +244,27 @@ std::unique_ptr<GpuProfiler> GpuProfiler::Create(
                                           stream.value(), options));
 }
 
+// [ROCm conv-zero A2] Serialize autotuning against live execution when
+// XLA_ROCM_AUTOTUNE_SERIALIZE is set. Keeps the single (shared) allocator while
+// fixing the root cause: the autotuner must not allocate/initialize scratch that
+// aliases a buffer a live compute kernel still owns.
+static bool SerializeAutotuning() {
+  static const bool enabled = [] {
+    const char* v = std::getenv("XLA_ROCM_AUTOTUNE_SERIALIZE");
+    return v != nullptr && v[0] != '0' && v[0] != '\0';
+  }();
+  return enabled;
+}
+
 absl::StatusOr<std::unique_ptr<InputBuffers>> GpuProfiler::CreateInputBuffers(
     const Executable* executable, const HloInstruction* instr) {
+  // Exclude concurrent dispatch and drain in-flight work so the autotuner's
+  // input scratch can't alias (or be aliased by) a live compute buffer.
+  std::optional<absl::WriterMutexLock> serialize_lock;
+  if (SerializeAutotuning()) {
+    serialize_lock.emplace(GetGpuMutex(stream_executor_));
+    stream_executor_->SynchronizeAllActivity();
+  }
   ASSIGN_OR_RETURN(
       RedzoneBuffers buffers,
       RedzoneBuffers::FromProgramShape(
