@@ -34,7 +34,7 @@ jobs:
   execute-xla-ut-nightly:
     # Run on schedule or if the "nightly-pipeline" label was added
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'nightly-pipeline'
-    runs-on: linux-mi250-4
+    runs-on: ${{ matrix.mode.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -42,15 +42,19 @@ jobs:
           - name: "default"
             configs: ["--config=rocm_ci", "--config=rocm_rbe"]
             container: "DOCKER_IMAGE"
+            runner: "linux-mi250-4"
           - name: "hermetic"
             configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe", "--repo_env=ROCM_DISTRO_VERSION=rocm_7.12.0_gfx90a"]
             container: "DOCKER_IMAGE_HERMETIC"
+            runner: "linux-mi250-4"
           - name: "asan"
             configs: ["--config=rocm_ci", "--config=asan"]
             container: "DOCKER_IMAGE"
+            runner: "linux-xla-do-mi350x-4"
           - name: "tsan"
             configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local"]
             container: "DOCKER_IMAGE"
+            runner: "linux-xla-do-mi350x-4"
     container:
       # set in https://github.com/ROCm/xla/settings/variables/actions
       image: ${{ vars[matrix.mode.container] }}
