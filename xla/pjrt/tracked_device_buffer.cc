@@ -77,12 +77,42 @@ class AllocatedRawSEDeviceMemory : public RawSEDeviceMemory {
   }
 
   ~AllocatedRawSEDeviceMemory() override {
-    if (allocator_) {
-      absl::Status status = allocator_->Deallocate(
-          local_device_->local_device_id().value(), mem());
-      if (!status.ok()) {
-        LOG(ERROR) << "Buffer deallocation failed: " << status;
+    if (!allocator_) {
+      return;
+    }
+    const int device_ordinal = local_device_->local_device_id().value();
+    se::DeviceAddressBase memory = mem();
+    se::DeviceAddressAllocator* allocator = allocator_;
+
+    // Under the kComputeSynchronized allocation model the host runs ahead of
+    // the device, so this buffer's last compute-stream use may still be in
+    // flight when its refcount drops to zero here. Returning the chunk to the
+    // allocator immediately would let a subsequent allocation (possibly on a
+    // different stream) reuse and overwrite memory that a live kernel still
+    // owns. Defer the free until the compute stream drains past this point.
+    // ThenExecuteCallback runs the deallocation from a callback stream that
+    // waits on the compute stream, so the compute stream only records a
+    // lightweight event (it is not stalled) and the host never blocks.
+    if (local_device_->allocation_model() ==
+        LocalDeviceState::kComputeSynchronized) {
+      absl::Status s = local_device_->ThenExecuteCallback(
+          local_device_->compute_stream(),
+          [allocator, device_ordinal, memory]() {
+            absl::Status status = allocator->Deallocate(device_ordinal, memory);
+            if (!status.ok()) {
+              LOG(ERROR) << "Deferred buffer deallocation failed: " << status;
+            }
+          });
+      if (s.ok()) {
+        return;
       }
+      // Fall through to an immediate free if the callback could not be
+      // enqueued.
+    }
+
+    absl::Status status = allocator->Deallocate(device_ordinal, memory);
+    if (!status.ok()) {
+      LOG(ERROR) << "Buffer deallocation failed: " << status;
     }
   }
 
@@ -173,7 +203,5 @@ tsl::AsyncValueRef<RawSEDeviceMemory> RawSEDeviceMemory::CreateSlice(
       absl::StrFormat("Error when slicing: [%d,%d) in array of size %d", offset,
                       offset + size, src_size)));
 }
-
-
 
 }  // namespace xla
