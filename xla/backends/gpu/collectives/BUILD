@@ -5,6 +5,7 @@ load("//xla/stream_executor:build_defs.bzl", "if_cuda_or_rocm_is_configured")
 load("//xla/tests:build_defs.bzl", "xla_test")
 load("//xla/tsl:tsl.bzl", "if_google", "if_nccl", "internal_visibility")
 load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
+load("//xla/tsl/platform/default:cuda_build_defs.bzl", "if_cuda_is_configured")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -250,7 +251,6 @@ xla_test(
         ":gpu_cliques",
         ":gpu_collectives",
         ":loopback_collectives",
-        ":nccl_or_rccl_collectives",  # fixdeps: keep
         "//xla:executable_run_options",
         "//xla:future",
         "//xla/core/collectives",
@@ -270,10 +270,13 @@ xla_test(
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",  # fixdeps: keep
         "@tsl//tsl/platform:casts",
-    ] + if_cuda_is_configured([
+    ] + if_cuda_or_rocm_is_configured([
+        ":nccl_or_rccl_collectives",
+    ]) + if_cuda_is_configured([
         "//xla/stream_executor/cuda:cuda_platform",
     ]) + if_rocm_is_configured([
         "//xla/stream_executor/rocm:rocm_platform",
@@ -366,7 +369,6 @@ xla_test(
         ":gpu_clique_key",
         ":gpu_collectives",
         ":gpu_communicator",
-        ":nccl_or_rccl_collectives",  # buildcleaner: keep
         "//xla:future",
         "//xla:xla_data_proto_cc",
         "//xla/core/collectives:communicator",
@@ -374,12 +376,14 @@ xla_test(
         "//xla/core/collectives:reduction_kind",
         "//xla/core/collectives:registered_memory",
         "//xla/runtime:device_id",
+        "//xla/service:platform_util",
         "//xla/stream_executor:device_address",
         "//xla/stream_executor:memory_allocation",
         "//xla/stream_executor:platform",
         "//xla/stream_executor:platform_manager",
         "//xla/stream_executor:stream",
         "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/cuda:cuda_compute_capability",
         "//xla/tsl/concurrency:executor",
         "//xla/tsl/platform:env",
         "//xla/tsl/platform:status_macros",
@@ -391,12 +395,12 @@ xla_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",  # buildcleaner: keep
-    ] + if_cuda_is_configured([
+    ] + if_cuda_or_rocm_is_configured([
+        ":nccl_or_rccl_collectives",
+    ]) + if_cuda_is_configured([
         "//xla/stream_executor/cuda:cuda_platform",
-        "//xla/stream_executor/cuda:cuda_compute_capability",
     ]) + if_rocm_is_configured([
         "//xla/stream_executor/rocm:rocm_platform",
-        "//xla/stream_executor/rocm:rocm_compute_capability",
     ]),
 )
 
@@ -553,6 +557,7 @@ xla_test(
         "//xla/core/collectives:communicator",
         "//xla/core/collectives:rank_id",
         "//xla/runtime:device_id",
+        "//xla/service:platform_util",
         "//xla/stream_executor:device_address",
         "//xla/stream_executor:platform",
         "//xla/stream_executor:platform_manager",
@@ -561,6 +566,7 @@ xla_test(
         "//xla/tsl/platform:status_macros",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",
     ] + if_cuda_is_configured([
@@ -650,7 +656,7 @@ xla_cc_test(
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
-        "@local_config_rocm//rocm:rccl", 
+        "@local_config_rocm//rocm:rccl",
     ],
 )
 

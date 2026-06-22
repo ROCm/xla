@@ -33,7 +33,7 @@ size_t ToNcclCount(PrimitiveType dtype, size_t count) {
 
 absl::StatusOr<ncclDataType_t> ToNcclDataType(
     PrimitiveType dtype, bool is_reduction_op,
-    se::RocmComputeCapability rocm_cc) {
+    stream_executor::RocmComputeCapability rocm_cc) {
   switch (dtype) {
     case F8E5M2:
       return rocm_cc.has_ocp_fp8_support() ? ncclFloat8e5m2 : ncclInt8;
@@ -67,9 +67,9 @@ absl::StatusOr<ncclDataType_t> ToNcclDataType(
     case U16:
       // For reductions we expect 16 bit integer types to be promoted to 32-bit.
       if (is_reduction_op) {
-        return absl::InvalidArgumentError(
-            absl::StrFormat("Unsupported data type for reduction operation: %s",
-                            primitive_util::LowercasePrimitiveTypeName(dtype)));
+        return InvalidArgument(
+            "Unsupported data type for reduction operation: %s",
+            primitive_util::LowercasePrimitiveTypeName(dtype));
       }
       // For collectives that just move data around, we can use ncclFloat16 for
       // 16-bit integer data types.
@@ -77,9 +77,8 @@ absl::StatusOr<ncclDataType_t> ToNcclDataType(
     case BF16:
       return ncclBfloat16;
     default:
-      return absl::InvalidArgumentError(
-          absl::StrFormat("Unsupported data type: %s",
-                          primitive_util::LowercasePrimitiveTypeName(dtype)));
+      return InvalidArgument("Unsupported data type: %s",
+                             primitive_util::LowercasePrimitiveTypeName(dtype));
   }
 }
 

@@ -30,6 +30,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/ascii.h"
 #include "absl/types/span.h"
 #include "xla/tsl/platform/status_macros.h"
 #include "xla/backends/gpu/collectives/allocator_memory_registration.h"
@@ -50,7 +51,6 @@ limitations under the License.
 #include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform_manager.h"
-#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/concurrency/executor.h"
@@ -68,7 +68,7 @@ static constexpr GlobalDeviceId kD3(3);
 
 TEST(GpuCollectivesTest, CreateWithMultipleIds) {
   auto name = absl::AsciiStrToUpper(
-    xla::PlatformUtil::CanonicalPlatformName("gpu").value());
+      xla::PlatformUtil::CanonicalPlatformName("gpu").value());
   ASSERT_OK_AND_ASSIGN(se::Platform * platform,
                        se::PlatformManager::PlatformWithName(name));
 
@@ -448,7 +448,7 @@ TEST(GpuCollectivesTest, PutAndWaitSignal) {
   if (!executors[0]->CanEnablePeerAccessTo(executors[1])) {
     GTEST_SKIP() << "Test requires peer access between devices";
   }
-  if (auto cc = executors[0]->GetDeviceDescription().gpu_compute_capability(); 
+  if (auto cc = executors[0]->GetDeviceDescription().gpu_compute_capability();
       cc.IsCuda() && !cc.cuda_compute_capability()->IsAtLeastHopper()) {
     GTEST_SKIP() << "Test requires at least Hopper architecture";
   }
