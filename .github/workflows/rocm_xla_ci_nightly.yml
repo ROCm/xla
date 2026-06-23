@@ -40,15 +40,15 @@ jobs:
       matrix:
         mode:
           - name: "default"
-            configs: ["--config=rocm_ci", "--config=rocm_rbe"]
+            configs: ["--config=rocm_ci", "--strategy=TestRunner=local"]
             container: "DOCKER_IMAGE"
-            runner: "linux-mi250-4"
+            runner: "linux-xla-do-mi350x-4"
           - name: "hermetic"
-            configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe", "--repo_env=ROCM_DISTRO_VERSION=rocm_7.12.0_gfx90a"]
+            configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_VERSION=rocm_7.12.0_gfx90a", "--strategy=TestRunner=remote,local"]
             container: "DOCKER_IMAGE_HERMETIC"
-            runner: "linux-mi250-4"
+            runner: "linux-xla-do-mi350x-4"
           - name: "asan"
-            configs: ["--config=rocm_ci", "--config=asan"]
+            configs: ["--config=rocm_ci", "--config=asan", "--strategy=TestRunner=local"]
             container: "DOCKER_IMAGE"
             runner: "linux-xla-do-mi350x-4"
           - name: "tsan"
@@ -59,13 +59,14 @@ jobs:
       # set in https://github.com/ROCm/xla/settings/variables/actions
       image: ${{ vars[matrix.mode.container] }}
       options: >-
-        --device=/dev/dri
-        --device=/dev/kfd
+        ${{ env.GHA_RENDER_DEVICES }}
+        --env-file=/etc/podinfo/gha-gpu-isolation-settings
         --shm-size=16G
         --cap-add=SYS_PTRACE
         --security-opt=seccomp=unconfined
       volumes:
         - /tmp/bazel-cache:/root/.cache/bazel
+        
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -73,6 +74,9 @@ jobs:
           repository: openxla/xla
           ref: main
           persist-credentials: false
+          
+      - name: Read GPU isolation settings
+        run: echo "GHA_RENDER_DEVICES=$(cat /etc/podinfo/gha-render-devices)" >> $GITHUB_ENV
 
       - name: Populate missing upstream ROCm build tools
         if: ${{ hashFiles('build_tools/rocm/run_xla_ci_build.sh') == '' }}
@@ -108,10 +112,11 @@ jobs:
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
+            "--config=rocm_rbe" \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942,gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
             --jobs=30 \
             --spawn_strategy=local \
@@ -130,7 +135,7 @@ jobs:
             --local_test_jobs=1 \
             --spawn_strategy=local \
             --strategy=TestRunner=local \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942,gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
             --bes_keywords=xla \
             --bes_keywords=multi_gpu \
@@ -147,6 +152,7 @@ jobs:
             --config=ci_rocm_cpu \
             --local_test_jobs=200 \
             --spawn_strategy=local \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942,gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --bes_keywords=xla \
             --bes_keywords=cpu \
