@@ -56,5 +56,4 @@ done
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=${RBE_POOL} \
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
     -- \
-    //xla/... \
-    -//xla/backends/gpu/tests:sorting_test_amdgpu_any
+    //xla/...
