@@ -18,7 +18,6 @@ limitations under the License.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <deque>
 #include <memory>
 #include <optional>
@@ -1206,21 +1205,6 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
   if (auto* gpu_opts = run_options->run_options().gpu_executable_run_options();
       gpu_opts && gpu_opts->requires_exclusive_lock_on_gpu()) {
     gpu_lock.emplace<1>(GetGpuMutex(executor));
-    // [ROCm conv-zero A2] The writer lock only blocks *new* host-side dispatch;
-    // kernels already enqueued by reader-lock executions that have since
-    // released are still in flight on the device. Drain them so this exclusive
-    // (autotuner) run executes on a quiesced device and cannot allocate +
-    // SetTensor(0) a chunk that a live compute kernel still owns -- the
-    // conv-zero reuse race. Gated by XLA_ROCM_AUTOTUNE_SERIALIZE; only the
-    // autotuner sets requires_exclusive_lock_on_gpu, so normal execution is
-    // unaffected.
-    static const bool serialize_autotuning = [] {
-      const char* v = std::getenv("XLA_ROCM_AUTOTUNE_SERIALIZE");
-      return v != nullptr && v[0] != '0' && v[0] != '\0';
-    }();
-    if (serialize_autotuning) {
-      executor->SynchronizeAllActivity();
-    }
   }
 
   const GpuExecutable::BufferAllocToDeviceMemoryMap* globals;

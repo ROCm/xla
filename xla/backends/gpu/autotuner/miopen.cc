@@ -17,7 +17,9 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -27,6 +29,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
 #include "xla/tsl/platform/status_macros.h"
 #include "xla/autotuning.pb.h"
@@ -90,6 +93,16 @@ struct OwningScratchAllocator : public se::ScratchAllocator {
   se::DeviceAddressAllocator* allocator_;
   absl::InlinedVector<se::ScopedDeviceAddress<uint8_t>, 4> buffers_;
 };
+
+// [ROCm conv-zero A2] Serialize the conv autotuner against live execution when
+// XLA_ROCM_AUTOTUNE_SERIALIZE is set.
+bool SerializeConvAutotuning() {
+  static const bool enabled = [] {
+    const char* v = std::getenv("XLA_ROCM_AUTOTUNE_SERIALIZE");
+    return v != nullptr && v[0] != '0' && v[0] != '\0';
+  }();
+  return enabled;
+}
 
 bool IsCustomCallToDnnFusedConvolution(const HloInstruction& hlo) {
   if (hlo.opcode() != HloOpcode::kCustomCall) {
@@ -313,6 +326,22 @@ GetConvolutionCustomCallConfigs(const HloCustomCallInstruction* instr,
   const se::EngineOptions engine_options{RequireDeterminism(module->config()),
                                          allow_tf32,
                                          /*require_command_buffer=*/false};
+
+  // [ROCm conv-zero A2] The conv autotuner below allocates scratch from the
+  // shared compute allocator and zero-initializes + benchmarks candidate
+  // convolutions (MIOpen find, incl. backward-weights SetTensor(dW, 0)) on a
+  // separate stream. Run concurrently with live execution, those chunks can
+  // alias a buffer that a kernel still in flight on the compute stream owns, so
+  // the zero-init corrupts a live gradient (the conv-zero use-after-free). Take
+  // the exclusive GPU writer lock (blocks new compute dispatch) and drain
+  // outstanding device work first, so every chunk handed to the scratch
+  // allocator is no longer owned by a live kernel. Held until this function
+  // returns, which covers allocation, zero-init and the MIOpen find below.
+  std::optional<absl::WriterMutexLock> serialize_lock;
+  if (SerializeConvAutotuning()) {
+    serialize_lock.emplace(GetGpuMutex(stream_executor));
+    stream_executor->SynchronizeAllActivity();
+  }
 
   OwningScratchAllocator scratch_allocator(stream_executor->device_ordinal(),
                                            allocator);
