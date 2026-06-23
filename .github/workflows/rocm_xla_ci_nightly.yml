@@ -59,7 +59,8 @@ jobs:
       # set in https://github.com/ROCm/xla/settings/variables/actions
       image: ${{ vars[matrix.mode.container] }}
       options: >-
-        ${{ env.GHA_RENDER_DEVICES }}
+        --device=/dev/dri
+        --device=/dev/kfd
         --env-file=/etc/podinfo/gha-gpu-isolation-settings
         --shm-size=16G
         --cap-add=SYS_PTRACE
@@ -74,9 +75,6 @@ jobs:
           repository: openxla/xla
           ref: main
           persist-credentials: false
-          
-      - name: Read GPU isolation settings
-        run: echo "GHA_RENDER_DEVICES=$(cat /etc/podinfo/gha-render-devices)" >> $GITHUB_ENV
 
       - name: Populate missing upstream ROCm build tools
         if: ${{ hashFiles('build_tools/rocm/run_xla_ci_build.sh') == '' }}
