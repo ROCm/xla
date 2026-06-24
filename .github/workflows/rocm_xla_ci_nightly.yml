@@ -40,11 +40,11 @@ jobs:
       matrix:
         mode:
           - name: "default"
-            configs: ["--config=rocm_ci", "--strategy=TestRunner=local"]
+            configs: ["--config=rocm_ci"]
             container: "DOCKER_IMAGE"
             runner: "linux-mi250-4"
           - name: "hermetic"
-            configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_VERSION=rocm_7.12.0_gfx90a", "--strategy=TestRunner=remote,local"]
+            configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_VERSION=rocm_7.12.0_gfx90a"]
             container: "DOCKER_IMAGE_HERMETIC"
             runner: "linux-mi250-4"
           - name: "asan"
