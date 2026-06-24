@@ -15,6 +15,17 @@ package_group(
     ],
 )
 
+# Workaround: the ROCm CI image's bazelrc (/usertools/rocm.bazelrc) excludes
+# //xla/backends/gpu/codegen:dynamic_slice_fusion_test_amdgpu_any, but at this
+# pinned XLA revision the test is an xla_cc_test in //xla/backends/gpu/transforms.
+# Provide the label so the CI's `-//...` exclude resolves instead of aborting
+# bazel pattern evaluation. The real test still runs via //xla/... and passes.
+alias(
+    name = "dynamic_slice_fusion_test_amdgpu_any",
+    actual = "//xla/backends/gpu/transforms:dynamic_slice_fusion_test",
+    testonly = True,
+)
+
 cc_library(
     name = "copy",
     srcs = ["copy.cc"],
