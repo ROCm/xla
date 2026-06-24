@@ -148,6 +148,7 @@ rocm_lib_import(
     data = glob(
         [
             "%{rocm_root}/lib/libamdhip64.so*",
+            "%{rocm_root}/lib/librocm_kpack.so*",
         ],
     ),
     interface_library = "%{rocm_root}/lib/libamdhip64.so",
@@ -195,6 +196,7 @@ cc_library(
             "%{rocm_root}/lib/libamd_comgr_loader.so*",
             "%{rocm_root}/lib/libamd_comgr.so*",
             "%{rocm_root}/lib/llvm/lib/libLLVM.so*",
+            "%{rocm_root}/lib/llvm/lib/libclang-cpp.so*",
         ],
     ),
     deps = [
@@ -417,7 +419,12 @@ rocm_lib_import(
     ]) + glob([
         "%{rocm_root}/lib/hipblaslt/library/*" + arch + "*"
         for arch in rocm_gpu_architectures()
-    ]),
+    ]) + glob(
+        ["%{rocm_root}/lib/hipblaslt/library/*"],
+        exclude = [
+            "%{rocm_root}/lib/hipblaslt/library/*gfx*",
+        ],
+    ),
     interface_library = "%{rocm_root}/lib/libhipblaslt.so",
     deps = [
         ":hip_runtime_libs",
