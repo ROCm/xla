@@ -38,6 +38,7 @@ done
     --spawn_strategy=local \
     --repo_env=REMOTE_GPU_TESTING=1 \
     --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
+    --repo_env=XLA_FLAGS="--xla_gpu_blas_max_algorithms=8" \
     --remote_download_outputs=minimal \
     --grpc_keepalive_time=30s \
     --test_sharding_strategy=disabled \
