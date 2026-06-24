@@ -40,21 +40,21 @@ jobs:
       matrix:
         mode:
           - name: "default"
-            configs: ["--config=rocm_ci", "--strategy=TestRunner=local"]
+            configs: ["--config=rocm_ci"]
             container: "DOCKER_IMAGE"
-            runner: "linux-xla-do-mi350x-4"
+            runner: "linux-mi250-4"
           - name: "hermetic"
-            configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_VERSION=rocm_7.12.0_gfx90a", "--strategy=TestRunner=remote,local"]
+            configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_VERSION=rocm_7.12.0_gfx90a"]
             container: "DOCKER_IMAGE_HERMETIC"
-            runner: "linux-xla-do-mi350x-4"
+            runner: "linux-mi250-4"
           - name: "asan"
             configs: ["--config=rocm_ci", "--config=asan", "--strategy=TestRunner=local"]
             container: "DOCKER_IMAGE"
-            runner: "linux-xla-do-mi350x-4"
+            runner: "linux-mi250-4"
           - name: "tsan"
             configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local"]
             container: "DOCKER_IMAGE"
-            runner: "linux-xla-do-mi350x-4"
+            runner: "linux-mi250-4"
     container:
       # set in https://github.com/ROCm/xla/settings/variables/actions
       image: ${{ vars[matrix.mode.container] }}
@@ -130,6 +130,7 @@ jobs:
           build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_multi_gpu \
+            "--config=rocm_rbe" \
             --local_test_jobs=1 \
             --spawn_strategy=local \
             --strategy=TestRunner=local \
