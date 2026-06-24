@@ -26,6 +26,17 @@ mkdir -p /tf/pkg
 EXCLUDED_TESTS=(
     "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f8e5m2_from_cc_8_9_rocm_63_no_restriction_c_32_nc_32"
     "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f8e5m2_from_cc_8_9_rocm_63_no_restriction_c_16_nc_2"
+    # Aligned with upstream openxla/xla ROCm CI EXCLUDED_TESTS: known
+    # ROCm-unsupported / hipBLASLt-gap cases (e.g. f64 cublasLt + activation).
+    "HostMemoryAllocateTest.Numa"
+    "*IotaR1Test*"
+    "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
+    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x*"
+    "F8E5M2Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_*"
+    "DotOperationTestWithCublasLt_F16F32F64CF64/1.GeneralMatMulActivation"
+    "MatmulTestWithCublas.GemmRewriter_RegressionTestF64"
+    "TritonEmitterTest.ScaledDotIsSupportedByReferencePlatform"
+    "SampleFileTest.Convolution"
 )
 
 for arg in "$@"; do
