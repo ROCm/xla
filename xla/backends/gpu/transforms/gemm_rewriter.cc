@@ -2615,6 +2615,9 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
         {ComputationType::kF32, DataType::kFloat, PrimitiveType::F8E5M2FNUZ,
          PrimitiveType::F8E4M3FNUZ, DataType::kFloat},
 
+        {ComputationType::kF64, DataType::kDouble, PrimitiveType::F64,
+         PrimitiveType::F64, DataType::kDouble},
+
         // Complex types: hipBLASLt has no complex GEMM kernels, so the ROCm
         // BlasLt wrapper redirects C64/C128 matmuls to rocBLAS at runtime.
         {ComputationType::kF32, DataType::kComplexFloat, PrimitiveType::C64,
