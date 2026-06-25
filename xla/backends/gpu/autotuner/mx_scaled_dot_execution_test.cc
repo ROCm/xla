@@ -216,7 +216,7 @@ ENTRY main {
       lhs_contracting_dims={2}, rhs_contracting_dims={2}
 })";
 
-TEST_F(HipblasLtMxExecutionTest, MxFp8ReshapedOperandsCorrectness) {
+TEST_F(MxScaledDotExecutionTest, MxFp8ReshapedOperandsCorrectness) {
   RunMxCorrectnessTest(kMxFp8ReshapedOperandsHlo,
                        ErrorSpec(/*aabs=*/1e-4, /*arel=*/1e-5));
 }
