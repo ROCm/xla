@@ -54,11 +54,6 @@ class MxScaledDotExecutionTest : public HloPjRtGpuTestBase {
     auto& test_opts = test_module->mutable_config().mutable_debug_options();
     test_opts.set_xla_gpu_experimental_scaled_dot_with_triton(true);
     test_opts.set_xla_gpu_enable_triton_gemm(true);
-    test_opts.clear_xla_gpu_experimental_autotune_backends();
-    test_opts.add_xla_gpu_experimental_autotune_backends(
-        autotuner::Backend::HIPBLASLT);
-    test_opts.add_xla_gpu_experimental_autotune_backends(
-        autotuner::Backend::HIPBLASLT_FISSION);
 
     EXPECT_TRUE(RunAndCompareTwoModules(std::move(test_module),
                                         std::move(reference_module), error_spec,
