@@ -108,7 +108,6 @@ jobs:
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
-            ${{ join(matrix.mode.configs, ' ') }} \
             "--config=rocm_rbe" \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
@@ -120,6 +119,7 @@ jobs:
             --bes_keywords=xla \
             --bes_keywords=single_gpu \
             --bes_keywords=nightly \
+            ${{ join(matrix.mode.configs, ' ') }} \
             -- \
             //xla/...
 
@@ -127,7 +127,6 @@ jobs:
         if: always() && !cancelled()
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
-            ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_multi_gpu \
             "--config=rocm_rbe" \
             --local_test_jobs=1 \
@@ -138,6 +137,7 @@ jobs:
             --bes_keywords=xla \
             --bes_keywords=multi_gpu \
             --bes_keywords=nightly \
+            ${{ join(matrix.mode.configs, ' ') }} \
             -- \
             //xla/...
 
@@ -155,5 +155,6 @@ jobs:
             --bes_keywords=xla \
             --bes_keywords=cpu \
             --bes_keywords=nightly \
+            ${{ join(matrix.mode.configs, ' ') }} \
             -- \
             //xla/...
