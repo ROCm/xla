@@ -29,6 +29,7 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/types/span.h"
+#include "xla/backends/autotuner/backends.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/service/executable.h"
@@ -107,21 +108,22 @@ absl::StatusOr<std::unique_ptr<Executable>> CodegenOrchestrator::Compile(
   return executable;
 }
 
-tsl::Future<std::vector<CodegenOrchestrator::CompilationResult>>
+tsl::Future<std::vector<CodegenOrchestrator::MaybeExecutableCandidate>>
 CodegenOrchestrator::CompileAll(const HloInstruction& instr,
                                 std::vector<Config> configs) const {
   tsl::Executor* executor = thread_pool_ != nullptr
                                 ? thread_pool_->AsExecutor()
                                 : &tsl::InlineExecutor::Instance();
 
-  std::vector<tsl::Future<CompilationResult>> futures;
+  std::vector<tsl::Future<MaybeExecutableCandidate>> futures;
   futures.reserve(configs.size());
   for (int i = 0; i < configs.size(); ++i) {
     futures.push_back(tsl::MakeFutureOn(
         *executor, [&, config = std::move(configs[i])]() mutable {
           absl::StatusOr<std::unique_ptr<Executable>> executable =
               Compile(instr, config);
-          return CompilationResult{std::move(config), std::move(executable)};
+          return MaybeExecutableCandidate{std::move(config),
+                                          std::move(executable)};
         }));
   }
   return tsl::JoinFutures(absl::MakeSpan(futures));

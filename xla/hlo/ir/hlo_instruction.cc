@@ -1675,14 +1675,23 @@ HloInstruction::CreateRngBitGenerator(const Shape& shape, HloInstruction* state,
 
 /* static */ std::unique_ptr<HloInstruction> HloInstruction::CreateAsyncUpdate(
     const Shape& shape, HloInstruction* operand) {
-  return std::make_unique<HloAsyncInstruction>(HloOpcode::kAsyncUpdate, shape,
-                                               operand);
+  return absl::WrapUnique(
+      new HloAsyncInstruction(HloOpcode::kAsyncUpdate, shape, operand));
+}
+
+/* static */ std::unique_ptr<HloInstruction> HloInstruction::CreateAsyncUpdate(
+    const Shape& shape, absl::Span<HloInstruction* const> operands) {
+  CHECK_GE(operands.size(), 1);
+  HloInstruction* prev_async = operands[0];
+  return absl::WrapUnique(new HloAsyncInstruction(
+      HloOpcode::kAsyncUpdate, shape, operands,
+      Cast<HloAsyncInstruction>(prev_async)->async_wrapped_opcode()));
 }
 
 /* static */ std::unique_ptr<HloInstruction> HloInstruction::CreateAsyncDone(
     const Shape& shape, HloInstruction* operand) {
-  return std::make_unique<HloAsyncInstruction>(HloOpcode::kAsyncDone, shape,
-                                               operand);
+  return absl::WrapUnique(
+      new HloAsyncInstruction(HloOpcode::kAsyncDone, shape, operand));
 }
 
 /* static */ std::unique_ptr<HloInstruction> HloInstruction::CreateCopyStart(
@@ -4228,22 +4237,38 @@ void HloInstruction::PrintOperandsWithCanonicalNameMap(
       }
       add_space = true;
     }
+
+    bool should_print_name = false;
     if (options.canonicalize_instruction_names()) {
-      if (options.is_in_nested_computation()) {
-        // In a top-level HloInstruction::ToString() call, the operand name is
-        // not part of the canonical string.
-        DCHECK(!options.print_percent());  // no need to call PrintNameInternal
-        if (add_space) {
-          printer->Append(" ");
-        }
-        printer->Append(
-            canonical_name_map->LookupOrInsert(operand->unique_id()));
-      }
-    } else if (options.print_operand_names()) {
+      should_print_name = options.is_in_nested_computation();
+    } else {
+      should_print_name = options.print_operand_names();
+    }
+
+    if (should_print_name) {
       if (add_space) {
         printer->Append(" ");
       }
-      PrintNameInternal(printer, operand->name(), options);
+      if (options.compact_gte() &&
+          operand->opcode() == HloOpcode::kGetTupleElement) {
+        auto [ancestor, index] = operand->LatestNonGteAncestorAndIndex();
+        if (options.canonicalize_instruction_names()) {
+          printer->Append(
+              canonical_name_map->LookupOrInsert(ancestor->unique_id()));
+        } else {
+          PrintNameInternal(printer, ancestor->name(), options);
+        }
+        for (int64_t i : index) {
+          printer->Append(absl::StrCat("#", i));
+        }
+      } else {
+        if (options.canonicalize_instruction_names()) {
+          printer->Append(
+              canonical_name_map->LookupOrInsert(operand->unique_id()));
+        } else {
+          PrintNameInternal(printer, operand->name(), options);
+        }
+      }
     }
   };
   print_one(slice[0]);
