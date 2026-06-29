@@ -24,6 +24,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/log/log.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "rocm/include/hip/hip_runtime.h"
@@ -335,6 +336,149 @@ TEST(RocmTracerTest, DisableIsolatesNextSession) {
       << " events despite no HIP activity between its Enable() and Disable();"
       << " these must have leaked from the preceding no-profiler window of "
       << kLeakedPairs << " hipMemcpy pairs";
+}
+
+// Typed event-capturing collector that records event type and stream_id.
+class DetailedEventCollector : public RocmTraceCollector {
+ public:
+  DetailedEventCollector() : RocmTraceCollector(MakeCollectorOptions()) {}
+
+  void AddEvent(RocmTracerEvent&& event, bool is_auxiliary) override {
+    absl::MutexLock lock(&mu_);
+    events_.push_back(std::move(event));
+  }
+
+  void OnEventsDropped(const std::string& reason,
+                       uint32_t num_events) override {}
+  void Flush() override {}
+  void Export(tsl::profiler::XSpace* space) override {}
+
+  std::vector<RocmTracerEvent> TakeEvents() {
+    absl::MutexLock lock(&mu_);
+    return std::move(events_);
+  }
+
+ private:
+  static RocmTraceCollectorOptions MakeCollectorOptions() {
+    RocmTraceCollectorOptions options;
+    options.max_callback_api_events = 2 * 1024 * 1024;
+    options.max_activity_api_events = 2 * 1024 * 1024;
+    options.max_annotation_strings = 1024 * 1024;
+    options.num_gpus = RocmTracer::GetRocmTracerSingleton().NumGpus();
+    return options;
+  }
+  absl::Mutex mu_;
+  std::vector<RocmTracerEvent> events_ ABSL_GUARDED_BY(mu_);
+};
+
+TEST(RocmTracerTest, CapturesMemoryAllocAndFreeEvents) {
+#define HIP_ASSERT_OK(expr) ASSERT_EQ((expr), hipSuccess) << #expr " failed"
+
+  int device_count = 0;
+  HIP_ASSERT_OK(hipGetDeviceCount(&device_count));
+  ASSERT_GT(device_count, 0) << "No HIP devices available";
+
+  auto collector = std::make_unique<DetailedEventCollector>();
+  DetailedEventCollector* collector_ptr = collector.get();
+
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  RocmTracerOptions tracer_options{/*max_annotation_strings=*/1024 * 1024};
+  TF_ASSERT_OK(tracer.Enable(tracer_options, collector.get()));
+
+  constexpr size_t kSize = 4096;
+  void* device_data = nullptr;
+  HIP_ASSERT_OK(hipMalloc(&device_data, kSize));
+  HIP_ASSERT_OK(hipDeviceSynchronize());
+  HIP_ASSERT_OK(hipFree(device_data));
+  HIP_ASSERT_OK(hipDeviceSynchronize());
+
+  // Allow buffer flush to deliver events.
+  absl::SleepFor(absl::Milliseconds(100));
+  tracer.Disable();
+
+#undef HIP_ASSERT_OK
+
+  auto events = collector_ptr->TakeEvents();
+
+  bool found_alloc = false;
+  bool found_free = false;
+  for (const auto& event : events) {
+    if (event.type == RocmTracerEventType::MemoryAlloc) {
+      found_alloc = true;
+      EXPECT_GT(event.memalloc_info.num_bytes, 0u)
+          << "MemoryAlloc should report non-zero allocation size";
+    }
+    if (event.type == RocmTracerEventType::MemoryFree) {
+      found_free = true;
+    }
+  }
+  EXPECT_TRUE(found_alloc)
+      << "Expected to capture at least one MemoryAlloc event from hipMalloc";
+  EXPECT_TRUE(found_free)
+      << "Expected to capture at least one MemoryFree event from hipFree";
+}
+
+TEST(RocmTracerTest, MemcpyAsyncHasValidStreamId) {
+#define HIP_ASSERT_OK(expr) ASSERT_EQ((expr), hipSuccess) << #expr " failed"
+
+  int device_count = 0;
+  HIP_ASSERT_OK(hipGetDeviceCount(&device_count));
+  ASSERT_GT(device_count, 0) << "No HIP devices available";
+
+  auto collector = std::make_unique<DetailedEventCollector>();
+  DetailedEventCollector* collector_ptr = collector.get();
+
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  RocmTracerOptions tracer_options{/*max_annotation_strings=*/1024 * 1024};
+  TF_ASSERT_OK(tracer.Enable(tracer_options, collector.get()));
+
+  constexpr size_t kNumFloats = 1024;
+  constexpr size_t kSize = kNumFloats * sizeof(float);
+  std::vector<float> host_data(kNumFloats, 1.0f);
+  void* device_data = nullptr;
+
+  hipStream_t stream;
+  HIP_ASSERT_OK(hipStreamCreate(&stream));
+  HIP_ASSERT_OK(hipMalloc(&device_data, kSize));
+
+  // Use async memcpy on a non-default stream.
+  HIP_ASSERT_OK(hipMemcpyAsync(device_data, host_data.data(), kSize,
+                                hipMemcpyHostToDevice, stream));
+  HIP_ASSERT_OK(hipMemcpyAsync(host_data.data(), device_data, kSize,
+                                hipMemcpyDeviceToHost, stream));
+  HIP_ASSERT_OK(hipStreamSynchronize(stream));
+
+  absl::SleepFor(absl::Milliseconds(100));
+  tracer.Disable();
+
+  HIP_ASSERT_OK(hipFree(device_data));
+  HIP_ASSERT_OK(hipStreamDestroy(stream));
+
+#undef HIP_ASSERT_OK
+
+  auto events = collector_ptr->TakeEvents();
+
+  // Check that MEMORY_COPY activity events have a valid (non-kInvalidStreamId)
+  // stream_id, since we used hipMemcpyAsync with an explicit stream.
+  int memcpy_activity_count = 0;
+  int memcpy_with_valid_stream = 0;
+  for (const auto& event : events) {
+    bool is_memcpy = (event.type == RocmTracerEventType::MemcpyH2D ||
+                      event.type == RocmTracerEventType::MemcpyD2H ||
+                      event.type == RocmTracerEventType::MemcpyD2D ||
+                      event.type == RocmTracerEventType::MemcpyOther);
+    if (is_memcpy && event.source == RocmTracerEventSource::Activity) {
+      memcpy_activity_count++;
+      if (event.stream_id != RocmTracerEvent::kInvalidStreamId) {
+        memcpy_with_valid_stream++;
+      }
+    }
+  }
+  EXPECT_GT(memcpy_activity_count, 0)
+      << "Expected at least one memcpy activity event";
+  EXPECT_EQ(memcpy_with_valid_stream, memcpy_activity_count)
+      << "All async memcpy activity events should have a valid stream_id; got "
+      << memcpy_with_valid_stream << " of " << memcpy_activity_count;
 }
 
 }  // namespace

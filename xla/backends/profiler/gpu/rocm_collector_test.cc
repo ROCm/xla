@@ -201,6 +201,175 @@ TEST(RocmCollectorTest, MultipleActivitiesPerCorrelationIdAllExported) {
   EXPECT_TRUE(seen_names.contains("kernel_c"));
 }
 
+TEST(RocmCollectorTest, MemoryAllocAndFreeEventsExported) {
+  RocmTraceCollectorOptions options;
+  options.max_callback_api_events = 100;
+  options.max_activity_api_events = 100;
+  options.max_annotation_strings = 100;
+  options.num_gpus = 1;
+
+  constexpr uint64_t kStartWallTimeNs = 1000;
+  constexpr uint64_t kStartGpuTimeNs = 2000;
+  RocmTraceCollectorImpl collector(options, kStartWallTimeNs, kStartGpuTimeNs);
+
+  constexpr uint32_t kDeviceId = 100;
+  constexpr uint64_t kAllocBytes = 4096;
+
+  // Add a MemoryAlloc API callback event.
+  {
+    RocmTracerEvent api_event;
+    api_event.type = RocmTracerEventType::MemoryAlloc;
+    api_event.source = RocmTracerEventSource::ApiCallback;
+    api_event.domain = RocmTracerEventDomain::HIP_API;
+    api_event.name = "MemoryAlloc";
+    api_event.correlation_id = 50;
+    api_event.thread_id = 111;
+    api_event.start_time_ns = 3000;
+    api_event.end_time_ns = 3100;
+    api_event.memalloc_info = MemAllocDetails{.num_bytes = kAllocBytes};
+    collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
+  }
+
+  // Add a MemoryAlloc activity event (paired by correlation_id).
+  {
+    RocmTracerEvent activity_event;
+    activity_event.type = RocmTracerEventType::MemoryAlloc;
+    activity_event.source = RocmTracerEventSource::Activity;
+    activity_event.domain = RocmTracerEventDomain::HIP_OPS;
+    activity_event.name = "MemoryAlloc";
+    activity_event.correlation_id = 50;
+    activity_event.start_time_ns = 3000;
+    activity_event.end_time_ns = 3100;
+    activity_event.device_id = kDeviceId;
+    activity_event.stream_id = RocmTracerEvent::kInvalidStreamId;
+    activity_event.memalloc_info = MemAllocDetails{.num_bytes = kAllocBytes};
+    collector.AddEvent(std::move(activity_event), /*is_auxiliary=*/false);
+  }
+
+  // Add a MemoryFree API callback event.
+  {
+    RocmTracerEvent api_event;
+    api_event.type = RocmTracerEventType::MemoryFree;
+    api_event.source = RocmTracerEventSource::ApiCallback;
+    api_event.domain = RocmTracerEventDomain::HIP_API;
+    api_event.name = "MemoryFree";
+    api_event.correlation_id = 51;
+    api_event.thread_id = 111;
+    api_event.start_time_ns = 5000;
+    api_event.end_time_ns = 5100;
+    api_event.memalloc_info = MemAllocDetails{.num_bytes = kAllocBytes};
+    collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
+  }
+
+  // Add a MemoryFree activity event.
+  {
+    RocmTracerEvent activity_event;
+    activity_event.type = RocmTracerEventType::MemoryFree;
+    activity_event.source = RocmTracerEventSource::Activity;
+    activity_event.domain = RocmTracerEventDomain::HIP_OPS;
+    activity_event.name = "MemoryFree";
+    activity_event.correlation_id = 51;
+    activity_event.start_time_ns = 5000;
+    activity_event.end_time_ns = 5100;
+    activity_event.device_id = kDeviceId;
+    activity_event.stream_id = RocmTracerEvent::kInvalidStreamId;
+    activity_event.memalloc_info = MemAllocDetails{.num_bytes = kAllocBytes};
+    collector.AddEvent(std::move(activity_event), /*is_auxiliary=*/false);
+  }
+
+  collector.Flush();
+  tensorflow::profiler::XSpace space;
+  collector.Export(&space);
+
+  // Verify both alloc and free events appear in the host plane (they're
+  // ApiCallback source → host events) or device plane (Activity source).
+  bool found_alloc = false;
+  bool found_free = false;
+  for (const auto& plane : space.planes()) {
+    for (const auto& line : plane.lines()) {
+      for (const auto& ev : line.events()) {
+        const auto& name =
+            plane.event_metadata().at(ev.metadata_id()).name();
+        if (name == "MemoryAlloc") found_alloc = true;
+        if (name == "MemoryFree") found_free = true;
+      }
+    }
+  }
+  EXPECT_TRUE(found_alloc) << "MemoryAlloc event should appear in XPlane";
+  EXPECT_TRUE(found_free) << "MemoryFree event should appear in XPlane";
+}
+
+TEST(RocmCollectorTest, MemcpyEventWithStreamIdExported) {
+  RocmTraceCollectorOptions options;
+  options.max_callback_api_events = 100;
+  options.max_activity_api_events = 100;
+  options.max_annotation_strings = 100;
+  options.num_gpus = 1;
+
+  constexpr uint64_t kStartWallTimeNs = 1000;
+  constexpr uint64_t kStartGpuTimeNs = 2000;
+  RocmTraceCollectorImpl collector(options, kStartWallTimeNs, kStartGpuTimeNs);
+
+  constexpr uint32_t kDeviceId = 100;
+  constexpr uint64_t kStreamId = 42;
+
+  // API callback event for memcpy.
+  {
+    RocmTracerEvent api_event;
+    api_event.type = RocmTracerEventType::MemcpyH2D;
+    api_event.source = RocmTracerEventSource::ApiCallback;
+    api_event.domain = RocmTracerEventDomain::HIP_API;
+    api_event.name = "hipMemcpyAsync";
+    api_event.correlation_id = 60;
+    api_event.thread_id = 111;
+    api_event.start_time_ns = 3000;
+    api_event.end_time_ns = 3050;
+    api_event.memcpy_info = MemcpyDetails{.num_bytes = 1024, .async = true};
+    collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
+  }
+
+  // Activity event with a valid stream_id.
+  {
+    RocmTracerEvent activity_event;
+    activity_event.type = RocmTracerEventType::MemcpyH2D;
+    activity_event.source = RocmTracerEventSource::Activity;
+    activity_event.domain = RocmTracerEventDomain::HIP_OPS;
+    activity_event.name = "MemcpyH2D";
+    activity_event.correlation_id = 60;
+    activity_event.start_time_ns = 3100;
+    activity_event.end_time_ns = 3500;
+    activity_event.device_id = kDeviceId;
+    activity_event.stream_id = kStreamId;
+    activity_event.memcpy_info =
+        MemcpyDetails{.num_bytes = 1024, .destination = kDeviceId, .async = true};
+    collector.AddEvent(std::move(activity_event), /*is_auxiliary=*/false);
+  }
+
+  collector.Flush();
+  tensorflow::profiler::XSpace space;
+  collector.Export(&space);
+
+  // The activity event should be on a device line with id == kStreamId.
+  const auto* gpu_plane =
+      FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu_plane, nullptr);
+
+  bool found_on_stream = false;
+  for (const auto& line : gpu_plane->lines()) {
+    if (line.id() == static_cast<int64_t>(kStreamId)) {
+      for (const auto& ev : line.events()) {
+        const auto& name =
+            gpu_plane->event_metadata().at(ev.metadata_id()).name();
+        if (name == "MemcpyH2D") {
+          found_on_stream = true;
+        }
+      }
+    }
+  }
+  EXPECT_TRUE(found_on_stream)
+      << "MemcpyH2D activity event should appear on stream line " << kStreamId;
+}
+
 }  // namespace test
 }  // namespace profiler
 }  // namespace xla

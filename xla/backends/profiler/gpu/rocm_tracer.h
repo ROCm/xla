@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_H_
 #define XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_H_
 
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_set.h"
 #include "absl/status/status.h"
@@ -81,6 +82,14 @@ class RocmTracer {
   void HipApiEvent(const rocprofiler_record_header_t* hdr, RocmTracerEvent* ev);
   void KernelEvent(const rocprofiler_record_header_t* hdr, RocmTracerEvent* ev);
   void MemcpyEvent(const rocprofiler_record_header_t* hdr, RocmTracerEvent* ev);
+  void MemAllocEvent(const rocprofiler_record_header_t* hdr,
+                     RocmTracerEvent* ev);
+
+  // Called from the HIP_RUNTIME_API callback on ENTER phase to extract the
+  // hipStream_t argument from async memcpy calls and store the mapping in
+  // memcpy_stream_map_.
+  void CaptureMemcpyStream(
+      const rocprofiler_callback_tracing_record_t& record);
 
  private:
   absl::Status InitProfiling(void* tool_data);
@@ -94,6 +103,13 @@ class RocmTracer {
   bool activity_tracing_enabled_{false};
 
   AnnotationMap annotation_map_{/* default size, e.g. */ 1024 * 1024};
+
+  // Maps correlation_id -> stream_id for memcpy calls, populated from the
+  // HIP_RUNTIME_API callback on ENTER phase by extracting the hipStream_t
+  // argument from async memcpy API calls.
+  absl::Mutex memcpy_stream_map_mutex_;
+  absl::flat_hash_map<uint32_t, uint64_t> memcpy_stream_map_
+      ABSL_GUARDED_BY(memcpy_stream_map_mutex_);
 
  public:
   using kernel_symbol_data_t =

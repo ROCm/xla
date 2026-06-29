@@ -42,6 +42,7 @@ limitations under the License.
 #include "rocm/include/rocprofiler-sdk/context.h"
 #include "rocm/include/rocprofiler-sdk/cxx/details/name_info.hpp"
 #include "rocm/include/rocprofiler-sdk/fwd.h"
+#include "rocm/include/rocprofiler-sdk/hip/api_args.h"
 #include "rocm/include/rocprofiler-sdk/hip/runtime_api_id.h"
 #include "rocm/include/rocprofiler-sdk/internal_threading.h"
 #include "rocm/include/rocprofiler-sdk/registration.h"
@@ -142,6 +143,15 @@ bool RocmTracer::IsAvailable() const {
 
 absl::Status RocmTracer::Enable(const RocmTracerOptions& options,
                                 RocmTraceCollector* collector) {
+  // Clear per-session state before starting the context to avoid lock
+  // ordering issues with TracingCallback (which acquires
+  // memcpy_stream_map_mutex_ then collector_mutex_).
+  annotation_map_.Clear();
+  {
+    absl::MutexLock stream_lock(&memcpy_stream_map_mutex_);
+    memcpy_stream_map_.clear();
+  }
+
   absl::MutexLock lock(collector_mutex_);
   if (collector_ != nullptr) {
     return absl::AlreadyExistsError("ROCM tracer is already running");
@@ -157,7 +167,6 @@ absl::Status RocmTracer::Enable(const RocmTracerOptions& options,
     return absl::InternalError(
         absl::StrCat("rocprofiler_start_context failed: ", errstr));
   }
-  annotation_map_.Clear();
   api_tracing_enabled_ = true;
   activity_tracing_enabled_ = true;
   VLOG(1) << "GpuTracer started with number of GPUs = " << NumGpus();
@@ -279,9 +288,20 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
   trace_event->scope_range_id =
       annotation_map()->LookUpScopeRangeId(trace_event->correlation_id);
   trace_event->thread_id = rec.thread_id;
-  // we do not know valid stream ID for memcpy
-  // rec.stream_id.handle;
-  trace_event->stream_id = RocmTracerEvent::kInvalidStreamId;
+
+  // Recover stream_id from the callback-phase map. The HIP_RUNTIME_API
+  // callback on ENTER extracted the hipStream_t argument from the memcpy call
+  // and stored it keyed by correlation_id.
+  {
+    absl::MutexLock lock(&memcpy_stream_map_mutex_);
+    auto stream_it = memcpy_stream_map_.find(trace_event->correlation_id);
+    if (stream_it != memcpy_stream_map_.end()) {
+      trace_event->stream_id = stream_it->second;
+      memcpy_stream_map_.erase(stream_it);
+    } else {
+      trace_event->stream_id = RocmTracerEvent::kInvalidStreamId;
+    }
+  }
   trace_event->memcpy_info = MemcpyDetails{
       .num_bytes = rec.bytes,
       .destination = static_cast<uint32_t>(dst_gpu.id.handle),
@@ -331,6 +351,143 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
   if (it != kernel_info_.end()) trace_event->name = it->second.name;
 }
 
+void RocmTracer::MemAllocEvent(const rocprofiler_record_header_t* hdr,
+                               RocmTracerEvent* trace_event) {
+  const auto& rec =
+      *static_cast<const rocprofiler_buffer_tracing_memory_allocation_record_t*>(
+          hdr->payload);
+
+  switch (rec.operation) {
+    case ROCPROFILER_MEMORY_ALLOCATION_ALLOCATE:
+    case ROCPROFILER_MEMORY_ALLOCATION_VMEM_ALLOCATE:
+      trace_event->type = RocmTracerEventType::MemoryAlloc;
+      trace_event->name = "MemoryAlloc";
+      break;
+    case ROCPROFILER_MEMORY_ALLOCATION_FREE:
+    case ROCPROFILER_MEMORY_ALLOCATION_VMEM_FREE:
+      trace_event->type = RocmTracerEventType::MemoryFree;
+      trace_event->name = "MemoryFree";
+      break;
+    default:
+      LOG(WARNING) << "Unexpected memory allocation operation "
+                   << rec.operation;
+      trace_event->type = RocmTracerEventType::MemoryAlloc;
+      trace_event->name = "MemoryAlloc";
+      break;
+  }
+
+  trace_event->source = RocmTracerEventSource::Activity;
+  trace_event->domain = RocmTracerEventDomain::HIP_OPS;
+  trace_event->start_time_ns = rec.start_timestamp;
+  trace_event->end_time_ns = rec.end_timestamp;
+  trace_event->correlation_id = rec.correlation_id.internal;
+  trace_event->annotation =
+      annotation_map()->LookUp(trace_event->correlation_id);
+  trace_event->scope_range_id =
+      annotation_map()->LookUpScopeRangeId(trace_event->correlation_id);
+  trace_event->thread_id = rec.thread_id;
+  trace_event->stream_id = RocmTracerEvent::kInvalidStreamId;
+
+  if (rec.agent_id.handle != 0) {
+    auto agent_it = agents_.find(rec.agent_id.handle);
+    if (agent_it != agents_.end() &&
+        agent_it->second.type == ROCPROFILER_AGENT_TYPE_GPU) {
+      trace_event->device_id = agent_it->second.id.handle;
+    } else {
+      trace_event->device_id = 0;
+    }
+  } else {
+    trace_event->device_id = 0;
+  }
+
+  trace_event->memalloc_info = MemAllocDetails{
+      .num_bytes = rec.allocation_size,
+  };
+
+  VLOG(2) << "MemAlloc event: " << trace_event->name
+          << " bytes=" << rec.allocation_size
+          << " device_id=" << trace_event->device_id;
+}
+
+namespace {
+
+// Returns the hipStream_t from a HIP memcpy API call's arguments, or nullptr
+// for synchronous variants that use the default (null) stream.
+hipStream_t GetMemcpyStream(
+    uint32_t op, const rocprofiler_callback_tracing_hip_api_data_t* data) {
+  switch (op) {
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyAsync:
+      return data->args.hipMemcpyAsync.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyWithStream:
+      return data->args.hipMemcpyWithStream.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpy2DAsync:
+      return data->args.hipMemcpy2DAsync.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpy2DFromArrayAsync:
+      return data->args.hipMemcpy2DFromArrayAsync.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpy2DToArrayAsync:
+      return data->args.hipMemcpy2DToArrayAsync.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpy3DAsync:
+      return data->args.hipMemcpy3DAsync.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyDtoDAsync:
+      return data->args.hipMemcpyDtoDAsync.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyDtoHAsync:
+      return data->args.hipMemcpyDtoHAsync.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyHtoDAsync:
+      return data->args.hipMemcpyHtoDAsync.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyFromSymbolAsync:
+      return data->args.hipMemcpyFromSymbolAsync.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyToSymbolAsync:
+      return data->args.hipMemcpyToSymbolAsync.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyParam2DAsync:
+      return data->args.hipMemcpyParam2DAsync.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyPeerAsync:
+      return data->args.hipMemcpyPeerAsync.stream;
+
+    // Synchronous memcpy variants use the default (null) stream.
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpy:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpy2D:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpy2DFromArray:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpy2DToArray:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpy3D:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyAtoH:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyDtoD:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyDtoH:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyFromArray:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyFromSymbol:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyHtoA:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyHtoD:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyParam2D:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyPeer:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyToArray:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyToSymbol:
+      return nullptr;
+
+    default:
+      return nullptr;
+  }
+}
+
+}  // namespace
+
+void RocmTracer::CaptureMemcpyStream(
+    const rocprofiler_callback_tracing_record_t& record) {
+  if (record.kind != ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API) return;
+  if (!isCopyApi(record.operation)) return;
+
+  const auto* data =
+      static_cast<const rocprofiler_callback_tracing_hip_api_data_t*>(
+          record.payload);
+  hipStream_t stream = GetMemcpyStream(record.operation, data);
+
+  // Store stream handle as uint64_t. Null stream maps to 0 (the default
+  // stream), which is a valid and meaningful stream_id.
+  uint64_t stream_id = reinterpret_cast<uint64_t>(stream);
+  uint32_t corr_id = record.correlation_id.internal;
+
+  absl::MutexLock lock(&memcpy_stream_map_mutex_);
+  memcpy_stream_map_[corr_id] = stream_id;
+}
+
 void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
                                  rocprofiler_buffer_id_t buffer_id,
                                  rocprofiler_record_header_t** headers,
@@ -367,6 +524,10 @@ void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
 
       case ROCPROFILER_BUFFER_TRACING_MEMORY_COPY:
         MemcpyEvent(header, &event);
+        break;
+
+      case ROCPROFILER_BUFFER_TRACING_MEMORY_ALLOCATION:
+        MemAllocEvent(header, &event);
         break;
 
       default:
@@ -482,6 +643,11 @@ absl::Status RocmTracer::InitProfiling(void* tool_data) {
           context_, ROCPROFILER_BUFFER_TRACING_MEMORY_COPY, nullptr, 0,
           buffer_)));
 
+  RETURN_IF_ERROR(RocprofilerStatusToAbslStatus(
+      rocprofiler_configure_buffer_tracing_service(
+          context_, ROCPROFILER_BUFFER_TRACING_MEMORY_ALLOCATION, nullptr, 0,
+          buffer_)));
+
   {
     const rocprofiler_tracing_operation_t* hip_ops = nullptr;
     size_t hip_ops_count = 0;
@@ -492,16 +658,22 @@ absl::Status RocmTracer::InitProfiling(void* tool_data) {
             hip_ops_count,
             [](rocprofiler_callback_tracing_record_t record,
                rocprofiler_user_data_t*, void*) {
-              if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
-                const std::string& annotation =
-                    tsl::profiler::AnnotationStack::Get();
-                if (!annotation.empty()) {
-                  absl::Span<const int64_t> range_ids =
-                      tsl::profiler::AnnotationStack::GetScopeRangeIds();
-                  RocmTracer::GetRocmTracerSingleton().annotation_map()->Add(
-                      record.correlation_id.internal, annotation, range_ids);
-                }
+              if (record.phase != ROCPROFILER_CALLBACK_PHASE_ENTER) return;
+
+              auto& tracer = RocmTracer::GetRocmTracerSingleton();
+
+              const std::string& annotation =
+                  tsl::profiler::AnnotationStack::Get();
+              if (!annotation.empty()) {
+                absl::Span<const int64_t> range_ids =
+                    tsl::profiler::AnnotationStack::GetScopeRangeIds();
+                tracer.annotation_map()->Add(
+                    record.correlation_id.internal, annotation, range_ids);
               }
+
+              // Extract stream handle from async memcpy API calls so
+              // MemcpyEvent() can populate stream_id.
+              tracer.CaptureMemcpyStream(record);
             },
             nullptr)));
   }
