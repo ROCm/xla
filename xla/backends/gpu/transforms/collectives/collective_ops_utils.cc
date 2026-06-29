@@ -264,14 +264,15 @@ absl::StatusOr<GPUCommunicationType> CommunicationType(
     const se::GpuComputeCapability& gpu_version) {
   // The partition math below is vendor-agnostic; the only reason to gate is that
   // downstream cost-model constants are calibrated per arch. CUDA is supported
-  // broadly; on ROCm we admit only the explicitly-calibrated archs (gfx942 /
-  // MI300) to match SolLatencyEstimator::IsSupportedForModule.
+  // broadly; on ROCm we admit only the explicitly-calibrated archs (the gfx942 /
+  // MI300 and gfx950 / MI350 series) to match
+  // SolLatencyEstimator::IsSupportedForModule.
   bool is_supported_rocm =
       gpu_version.IsRocm() &&
-      gpu_version.rocm_compute_capability()->gfx9_mi300();
+      gpu_version.rocm_compute_capability()->gfx9_mi300_series();
   if (!gpu_version.IsCuda() && !is_supported_rocm) {
     return absl::FailedPreconditionError(
-        "Only CUDA and ROCm gfx942 (MI300) are supported.");
+        "Only CUDA and ROCm gfx942 (MI300) / gfx950 (MI350) are supported.");
   }
 
   if (const auto* collective = DynCast<HloCollectiveInstruction>(&instr)) {
