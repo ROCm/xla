@@ -101319,6 +101319,12353 @@ inline constexpr char kDefaultCollectivePTable[] = R"pb(
       }
     }
   }
+  entries {
+    key: "gfx950"
+    value {
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 65536
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "a4ff2d7f7e21480824c17556c4ea5f1e"
+        network_throughput_bytes_per_sec: 15420121910
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "b3bcd90e527f2fd2e8a3b04168b06324"
+        network_throughput_bytes_per_sec: 64934256339
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "c41feadc1950e49d7e9eec9400f6e9d9"
+        network_throughput_bytes_per_sec: 59158651184
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "8a1da081231362bd028addc1b51d9c9b"
+        network_throughput_bytes_per_sec: 55922562065
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "e5fd3e3a544046a6a7da9859d344dc9b"
+        network_throughput_bytes_per_sec: 37716526086
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "12b21848edee6fc36f0071df662c6159"
+        network_throughput_bytes_per_sec: 167905644987
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "073ca13b2261f1cf2dce532ca93d0f78"
+        network_throughput_bytes_per_sec: 182280800299
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "24af6415e6f60b5a9f415abb5457248e"
+        network_throughput_bytes_per_sec: 95357057195
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "af4f3c69b95e67b20c2ec30b01c7411a"
+        network_throughput_bytes_per_sec: 82095977216
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "7d59884731208305c614797aa8a05746"
+        network_throughput_bytes_per_sec: 195537508522
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "4c4aa30c982edd7cb519d3e0f5f1a555"
+        network_throughput_bytes_per_sec: 222753686796
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "75dfdcaad56647e9bf10057076c42406"
+        network_throughput_bytes_per_sec: 15179154603
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "adf9fe649eb56b23ae6e148efc55dbac"
+        network_throughput_bytes_per_sec: 13032264479
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "aa8ffa9987c29072b26beb5ec031d86a"
+        network_throughput_bytes_per_sec: 14423328748
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "826127184d3de849475f325e074deb9a"
+        network_throughput_bytes_per_sec: 55974430320
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "421633cbe081af3cd0ad351606175269"
+        network_throughput_bytes_per_sec: 64772722413
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "44bca846c790cd755692a415c4cf48d1"
+        network_throughput_bytes_per_sec: 139809550793
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "d0a268c1de3c78583d865d7168d5f1e6"
+        network_throughput_bytes_per_sec: 107201973150
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "f2f94c05790a5d153abc20208696a019"
+        network_throughput_bytes_per_sec: 62352259529
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c25a500ce3140b364a6832b1b1362e4b"
+        network_throughput_bytes_per_sec: 19908410860
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "89333e78a68c2b6ed47406bf992408eb"
+        network_throughput_bytes_per_sec: 117585494915
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 65536
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "063d71e21f991fc06c181d3f90af617b"
+        network_throughput_bytes_per_sec: 11238636241
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "5f3fc5e4e7b3cece8395d7709beadc90"
+        network_throughput_bytes_per_sec: 128295112429
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "2955d362c4784f9a6295fd859f6bf6dd"
+        network_throughput_bytes_per_sec: 16226802847
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 131072
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "bdc2c7412dbec535a96e650e8b71faba"
+        network_throughput_bytes_per_sec: 16707578811
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f034145d75586792e353fc01c153e804"
+        network_throughput_bytes_per_sec: 331194902937
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "da276ae9a4b0b2537e6b5310e40e1fdd"
+        network_throughput_bytes_per_sec: 76287466863
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "6f02e702519475f50093c2ef72dac341"
+        network_throughput_bytes_per_sec: 94052707407
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "0b11a13cda5a5f4706404093723fd1b0"
+        network_throughput_bytes_per_sec: 78346584726
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "bbc9ee9d4267db9c368730cb88915520"
+        network_throughput_bytes_per_sec: 114266011171
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9a97c97d215983128682ba3ef92d46a0"
+        network_throughput_bytes_per_sec: 229426523125
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "15094deb985f983ccfd5b2545123a183"
+        network_throughput_bytes_per_sec: 54855827518
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "364cc6f929827da70719a1a88a21eee6"
+        network_throughput_bytes_per_sec: 285471237573
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 536870912
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "c35d4aa49e6d216254d8bd0be14a97ad"
+        network_throughput_bytes_per_sec: 65034794652
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "fb714d82837dac6eba8aab3cc2834bd3"
+        network_throughput_bytes_per_sec: 62353200951
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f5c609ce87a73de10f144d4057f242ed"
+        network_throughput_bytes_per_sec: 14003231794
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "847322655433140629869e9781d50b4f"
+        network_throughput_bytes_per_sec: 24777315689
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "30329f9a71a703dddba37a4140cf5ebd"
+        network_throughput_bytes_per_sec: 63750972762
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "35cb65bf69388cce2c044ac2f00996f1"
+        network_throughput_bytes_per_sec: 77808821960
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "5771f9afffba4af7a205f96eef84981b"
+        network_throughput_bytes_per_sec: 183899200377
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "425885911c59969621fc807b50dc017d"
+        network_throughput_bytes_per_sec: 61105382390
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "20c467af3cb33d4f6820f682bdd18097"
+        network_throughput_bytes_per_sec: 40824052715
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "fbea5560819795d6bb7b78c457962216"
+        network_throughput_bytes_per_sec: 63903526989
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "a25e0b6606b5a56f34374dda554164b2"
+        network_throughput_bytes_per_sec: 61560592481
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "8eaf5a05d48989b38e5eaea491d6f0fb"
+        network_throughput_bytes_per_sec: 52851279918
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "cbd1ef2c36141930a966889cfc48d322"
+        network_throughput_bytes_per_sec: 106481167441
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "7c944feb506c3fd2ab7c35af07f3d758"
+        network_throughput_bytes_per_sec: 135528560234
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9c3c4a224e66a397bfac9accf9cc1a7f"
+        network_throughput_bytes_per_sec: 112830958339
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9dd63fa69d862f689ec52ba870e9eef3"
+        network_throughput_bytes_per_sec: 11681996434
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "d941f2611b4071dac72664214a7d5d29"
+        network_throughput_bytes_per_sec: 458465319262
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "0b17520ef1c4f5cd7dea5e25a264eb0f"
+        network_throughput_bytes_per_sec: 228834989056
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "b8471bbf190d70d126e831e786dc3411"
+        network_throughput_bytes_per_sec: 64314033366
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "137dec2c825fa4faf0f27e07a731dd93"
+        network_throughput_bytes_per_sec: 30905918415
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9cbaa3a98c1f5a9f35926ffd6d8b9c9d"
+        network_throughput_bytes_per_sec: 19096092732
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "603902e23111d21dbbe8a1bbccab944a"
+        network_throughput_bytes_per_sec: 50097392592
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c6c8164390d18c7b8227ed85b0d93966"
+        network_throughput_bytes_per_sec: 84040925405
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "0b08c213f62aea8e662b5d8c8e2e8a4b"
+        network_throughput_bytes_per_sec: 62309650127
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "65676e6f6936e10c0bc043c3e1ee987b"
+        network_throughput_bytes_per_sec: 45207471518
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c367cbc0001b4184f03992ff46f035c8"
+        network_throughput_bytes_per_sec: 214753862498
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "617df37ce5fbbeb886ad387486913bd2"
+        network_throughput_bytes_per_sec: 22995087719
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "58c7e6c2bc901a6a3bcaf6bb1068bcc1"
+        network_throughput_bytes_per_sec: 36117316800
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "ef16ed48f2ab9a546f3605e4c3340419"
+        network_throughput_bytes_per_sec: 216996798830
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "89e6821bfad18005a5bee029eeb23f19"
+        network_throughput_bytes_per_sec: 120507796955
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "fbda4473b6de260c6512121cc16e8f04"
+        network_throughput_bytes_per_sec: 343670406768
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "49ee5c79563a6427d9cb86a3e99e129a"
+        network_throughput_bytes_per_sec: 61461757702
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "a1b2a20ae014e046611855ab2efdfda5"
+        network_throughput_bytes_per_sec: 118501208914
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "b00e61bfb66f71c42590fb44fafcd46c"
+        network_throughput_bytes_per_sec: 11568515178
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "7d24ed151e4cd5c7633745a7ba79ff0b"
+        network_throughput_bytes_per_sec: 103383735619
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "a35c1aa8de7b8a1b684b1b36ab4b04fd"
+        network_throughput_bytes_per_sec: 34390816661
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "ba06c43b0e9a16e6f70a35cf45d16045"
+        network_throughput_bytes_per_sec: 18434880450
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "e00ef2e375e79ce3a18a56da684651bd"
+        network_throughput_bytes_per_sec: 65032179227
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "c02bd898822e366cbc14d0163820b1d3"
+        network_throughput_bytes_per_sec: 28674688252
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "82f362e9d321c948d13b3b80b6127e69"
+        network_throughput_bytes_per_sec: 118342391972
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "d3ad67df0aff5eb378644f9090463629"
+        network_throughput_bytes_per_sec: 15806089840
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "eeee1d3d62b80b1986433dc7503def01"
+        network_throughput_bytes_per_sec: 174443761664
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "df156483e69c8b84c57c075986daa593"
+        network_throughput_bytes_per_sec: 71905846855
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "26a9264b3431e346ef5fef61c3213c53"
+        network_throughput_bytes_per_sec: 168191377007
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "eac6121ff38a66212e2843295c8e1d87"
+        network_throughput_bytes_per_sec: 30624075466
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "d46bc24d789e134da2ba22676a05d2a5"
+        network_throughput_bytes_per_sec: 38226993920
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "026c7aca115d50e9a725ad9cc129a53e"
+        network_throughput_bytes_per_sec: 64146314571
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "318caa16d4196637a0b49daf3312b6ca"
+        network_throughput_bytes_per_sec: 109981356443
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "8e275b21c1aefcc7d9d9fdd8dadee7e3"
+        network_throughput_bytes_per_sec: 158035587456
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "b1c4513e7ed44592d1eb64d50a5cceb1"
+        network_throughput_bytes_per_sec: 226444208150
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 32768
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "1ff7a5b620524694d519cb4f1cc2c428"
+        network_throughput_bytes_per_sec: 11994555084
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "549a754e6dd1d745599a351bc6375098"
+        network_throughput_bytes_per_sec: 242126695632
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "7bf42174397e4f9e9e4164a352814b3d"
+        network_throughput_bytes_per_sec: 21251831659
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f569c9c702eb778090e38c0661443be4"
+        network_throughput_bytes_per_sec: 168082271791
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9444b1b08f3c1a04e212ab41df4039bc"
+        network_throughput_bytes_per_sec: 388527583768
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "a41f12bbaed25af2cec9dd82edd3f358"
+        network_throughput_bytes_per_sec: 235600311751
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9dc805264207f639505e60a61756f2ff"
+        network_throughput_bytes_per_sec: 21649026277
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "aefb2f182dc06d72825918161ea66565"
+        network_throughput_bytes_per_sec: 64313786824
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "4614f5b2f68bb0d717a6c33fea2417c0"
+        network_throughput_bytes_per_sec: 23390051304
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 536870912
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "15a31184e19613f6aefe5aa0d66bf174"
+        network_throughput_bytes_per_sec: 122350118283
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "04daaa08891c88599cf6b5e5432743e1"
+        network_throughput_bytes_per_sec: 62288367257
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "4afef9ec8c89a50d67fc05aad7afab60"
+        network_throughput_bytes_per_sec: 12589382942
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "3cddf5abee69cdf330b92fcb8f8beae1"
+        network_throughput_bytes_per_sec: 64378692412
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "2ced4e9a7c71391c5147590182ea057b"
+        network_throughput_bytes_per_sec: 50391714924
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c66e53fff207188081e98dfa77807537"
+        network_throughput_bytes_per_sec: 430997289764
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "10124b5e2304c14ebc4472ee71837015"
+        network_throughput_bytes_per_sec: 14515171650
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "d2314470d36c1fb289de20e57d81e109"
+        network_throughput_bytes_per_sec: 59241268143
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "92c147798a31c7520d2ee0ded8ad804a"
+        network_throughput_bytes_per_sec: 404670059576
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9f256fa6769acb746028a86f3a24c32b"
+        network_throughput_bytes_per_sec: 30222683383
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "1e0eb1ae4b93ee41fb535a93d351cc95"
+        network_throughput_bytes_per_sec: 109754718338
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "ef6169f1bb54bc4a3a7a051048934504"
+        network_throughput_bytes_per_sec: 168928475414
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "3f30e55b4464b5fd1961a36ec3206917"
+        network_throughput_bytes_per_sec: 104361231890
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "c4501cb3074846d35e9e35d3eb5e12ad"
+        network_throughput_bytes_per_sec: 27912156946
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "2184b39554ab974feabcadff2e7fb123"
+        network_throughput_bytes_per_sec: 56664086300
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "2c6f6210ff747b61044161f5f2d82027"
+        network_throughput_bytes_per_sec: 380147770715
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "77db92cf0ea0c5cd6f87337103ccf045"
+        network_throughput_bytes_per_sec: 35329082470
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "158a817bc197fa5908085609188b9810"
+        network_throughput_bytes_per_sec: 229432503915
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "184920561f3c0de7e3083fe2fc0bd31c"
+        network_throughput_bytes_per_sec: 64762674219
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "8fa41267c4b49d505a43bd2dd4d0bc51"
+        network_throughput_bytes_per_sec: 124384308795
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "62a78b2d792f227e3319cbc6d0f7397a"
+        network_throughput_bytes_per_sec: 193697617631
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "07adfd421c186a489807bf49b8eb6253"
+        network_throughput_bytes_per_sec: 231622029660
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 536870912
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "f01204d0a187d29658c7eedb31d3540d"
+        network_throughput_bytes_per_sec: 62564014559
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "4bd1e1be2e4f6abd94d41b47a4e4a20b"
+        network_throughput_bytes_per_sec: 325587448830
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "d7ab88e48b419ffa83c74a4bb48240cf"
+        network_throughput_bytes_per_sec: 35104359688
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "4526400ba6777f813b834e26ba34cbf0"
+        network_throughput_bytes_per_sec: 60444931222
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "34029e7be9d63c46e84a59f187976494"
+        network_throughput_bytes_per_sec: 196891415963
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "be83c13222556564f80565d69e4c5314"
+        network_throughput_bytes_per_sec: 42801204143
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "61c8e423ccee51351146a02330cbd321"
+        network_throughput_bytes_per_sec: 163074790655
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "806e43ceae91982c04ac8fbb62c27011"
+        network_throughput_bytes_per_sec: 39228432472
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c78e7b3217fa35a2d658c44700e18a84"
+        network_throughput_bytes_per_sec: 247650633621
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "4cde049d4af2588421f1cd37e1a1d96d"
+        network_throughput_bytes_per_sec: 60100701500
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "7c2007ee4cb0b8cac9a4d2670e514822"
+        network_throughput_bytes_per_sec: 224159850624
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f72d81e32fb5cab52e1fbd4536ece85b"
+        network_throughput_bytes_per_sec: 39557523542
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "8b64b5d8f00d6d6ee4305d45a2ba83df"
+        network_throughput_bytes_per_sec: 12432724685
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "8e977f1d0af1a26d296c1aaa638dd4e2"
+        network_throughput_bytes_per_sec: 55553327461
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "43520b1b002bd615e25c415898cef7db"
+        network_throughput_bytes_per_sec: 127873081293
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "12cbc0000b25463d804c3caf5277ad73"
+        network_throughput_bytes_per_sec: 59243150860
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "58357e0bd8b0689ff1fe2c58de3ccb19"
+        network_throughput_bytes_per_sec: 115085065955
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "fbc3523926dbdd757c935102891781d6"
+        network_throughput_bytes_per_sec: 197645251544
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "df795aac25ae021df12f1fc1c95816a9"
+        network_throughput_bytes_per_sec: 50342119160
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9a2fa6100fdf7452201647b34f24d846"
+        network_throughput_bytes_per_sec: 376537485359
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "d3a95157ca49b77afaad7666cf590b37"
+        network_throughput_bytes_per_sec: 63776236748
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "8e73f5457a6d6bc132216a81b854a35f"
+        network_throughput_bytes_per_sec: 24736108326
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f950cb6fec3ae1196c4e2b9969e4649f"
+        network_throughput_bytes_per_sec: 68144109308
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "b2df91aa80c387f126f650e678c520b4"
+        network_throughput_bytes_per_sec: 28807032967
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "e116b749dc6fb00963e1e1c912a89c03"
+        network_throughput_bytes_per_sec: 309741319388
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "aa25b0c2ebe85af31775495126132917"
+        network_throughput_bytes_per_sec: 14685835533
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "07ffe12ee7d0bc4514d508fe7cc19f09"
+        network_throughput_bytes_per_sec: 115916085075
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "ff59d8600ca5d7625580430f6114aecd"
+        network_throughput_bytes_per_sec: 151843063430
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "d650b9830fd51944cce5307dad5a78b6"
+        network_throughput_bytes_per_sec: 64931154250
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "99ed8a570257a0c3cc345f86a8001dfd"
+        network_throughput_bytes_per_sec: 121159518567
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f8236051598e374faf860e419eeb4ff9"
+        network_throughput_bytes_per_sec: 6953375640
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "3a85682307cc04bdf2d54b6e969ddf03"
+        network_throughput_bytes_per_sec: 11586347112
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "55594333fcb9e1747c94f550f2123a24"
+        network_throughput_bytes_per_sec: 76902911152
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "a76344596468a7872eadbfd9a21739c6"
+        network_throughput_bytes_per_sec: 30801515730
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9553913f2f28f76f48cad5808ac047a8"
+        network_throughput_bytes_per_sec: 171835203384
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "7b698cf16edb72d270b3d1fa9def0a33"
+        network_throughput_bytes_per_sec: 189646992330
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "5fb3ea880a0b624efd5aaa39e8e94119"
+        network_throughput_bytes_per_sec: 64444255159
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "1de71abe7c607c98ba5804bf7bfe52fd"
+        network_throughput_bytes_per_sec: 55333460861
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "a47dd4fba3d903f3ba5d4ec52108d790"
+        network_throughput_bytes_per_sec: 59199356391
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "6e10278a79fbb014fc210b8add227d3c"
+        network_throughput_bytes_per_sec: 416382996941
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 536870912
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "b69b35b76d55174a07c08a5e82be13c8"
+        network_throughput_bytes_per_sec: 64382506292
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "39275ea9e1c24d665ed93abef14a0b8c"
+        network_throughput_bytes_per_sec: 200526990624
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "76925d8a3b4a506d081fd885b24126eb"
+        network_throughput_bytes_per_sec: 7799583457
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "1cff4402d5277799435921d310e21a35"
+        network_throughput_bytes_per_sec: 48847371761
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "bb0c837eadcc79bc10233ea7ef4010a9"
+        network_throughput_bytes_per_sec: 35879418306
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "a275e77e76f7666c635ad7320b1e2e59"
+        network_throughput_bytes_per_sec: 63273448979
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "e258bb39ba3efefc2c6bba1c0f94e170"
+        network_throughput_bytes_per_sec: 26972842618
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f650becd3ab75fdbc10bd51f46be4d0b"
+        network_throughput_bytes_per_sec: 55167976219
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "b2fae3c053c9425aa7b2455cd42ed715"
+        network_throughput_bytes_per_sec: 93087293528
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "273eb0c88e187b9a6a76c5d5bbda9095"
+        network_throughput_bytes_per_sec: 22929717909
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "1f8995887b89b71a8635d44959d3c644"
+        network_throughput_bytes_per_sec: 17184136348
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 131072
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "4d2170351e894746020dfac2fcac1a4d"
+        network_throughput_bytes_per_sec: 29318290799
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "0502af852f574c1b71264052a55c7bea"
+        network_throughput_bytes_per_sec: 127793363906
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "e062c8ee9e86b399c11f6e70eeea5ab8"
+        network_throughput_bytes_per_sec: 18545737530
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "09b496906a2ba1de22fb806cf2e1f91f"
+        network_throughput_bytes_per_sec: 116889145898
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "06470add083211b0654aff4cb202e57c"
+        network_throughput_bytes_per_sec: 218352402209
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c91ca004d37f7a5a83bffaaf562dd821"
+        network_throughput_bytes_per_sec: 121485115965
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "4ca4e3406755d17f747a07b8511cb33a"
+        network_throughput_bytes_per_sec: 41514609232
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "7ea858b3ed721e1f90bd0ad4e02171de"
+        network_throughput_bytes_per_sec: 54296603148
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "cfcef6f6eec1f07ea7bf67c6f7a8ae9a"
+        network_throughput_bytes_per_sec: 448901108475
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 536870912
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "05cc1849bf051bf1480f3f40e1d2fa8f"
+        network_throughput_bytes_per_sec: 419100194885
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 536870912
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f3d4cb54ba5922622ac2780ae294e3b0"
+        network_throughput_bytes_per_sec: 126766174572
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "eebcf31aeb46f251deb8c25cfb0f09fc"
+        network_throughput_bytes_per_sec: 21548812692
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "60b6ca4ca57fed5c906e82faf7a25020"
+        network_throughput_bytes_per_sec: 104170845562
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "d2c52c9c7d7442d814395a7590d04e39"
+        network_throughput_bytes_per_sec: 53597904287
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "f32eccafdb34b10d96ba3f091153bdff"
+        network_throughput_bytes_per_sec: 64204938822
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "184135279c70089f7c6ca507b1582d55"
+        network_throughput_bytes_per_sec: 13966116142
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "3dd676703d6ef499f65d3872b7be00c1"
+        network_throughput_bytes_per_sec: 58840172271
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c5f89756ef2b34c348f9e4a976913f19"
+        network_throughput_bytes_per_sec: 213949392189
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "21edd922fde3970e62fbd7ba9f2ddc48"
+        network_throughput_bytes_per_sec: 97734581529
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "6a0522e559bea3aec635b3c9f3a49ec7"
+        network_throughput_bytes_per_sec: 12488994759
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "e05052a696f34e30c1714e84b65c4039"
+        network_throughput_bytes_per_sec: 191311892697
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "76ba73613bb4d3e8a47d5731f98b069d"
+        network_throughput_bytes_per_sec: 248630368864
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "ba4960b6ebc8979d3604456137626b15"
+        network_throughput_bytes_per_sec: 61479156188
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "75e40f7ad44a713cbbbd71adca9ca1c5"
+        network_throughput_bytes_per_sec: 42276815458
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "03648cfa27a48ab9b13308da7d22bfe2"
+        network_throughput_bytes_per_sec: 56764162944
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c0f21bfc63032885a003c0d1c9097eda"
+        network_throughput_bytes_per_sec: 61427552522
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "473de5e2e2797b06e199daa05c708a59"
+        network_throughput_bytes_per_sec: 49985448781
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c34ec0c1f1d1ba3d22754d726aa60897"
+        network_throughput_bytes_per_sec: 77816039814
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f91111ab5af2a4c95a894ac69a514d2d"
+        network_throughput_bytes_per_sec: 32164907975
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "89bf703c6da6a800c76bc44e3eeb91c1"
+        network_throughput_bytes_per_sec: 77859375072
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "e0693614b2f73e7073f66010f736214a"
+        network_throughput_bytes_per_sec: 217577216741
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "176757d3b82e285eeba446539c576de9"
+        network_throughput_bytes_per_sec: 261906647101
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "68c024a2a6de583c93ba7661681b4ca2"
+        network_throughput_bytes_per_sec: 62335347740
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "9ce58729ac6905e5deb36d1567798b01"
+        network_throughput_bytes_per_sec: 62348588254
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 65536
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "e4c3db92efad6de5e5840e659c4c13ad"
+        network_throughput_bytes_per_sec: 9812614635
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "1fb00fbcf8aa2beb84c69915df16e881"
+        network_throughput_bytes_per_sec: 19051162790
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 131072
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "b2859bcf4713290fc071dba2107dd573"
+        network_throughput_bytes_per_sec: 10532101245
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "ef0756b4578fbfdcedef485e6e7ed758"
+        network_throughput_bytes_per_sec: 15825173558
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "8e2053ca4b68a7a30436f17d2fb23d82"
+        network_throughput_bytes_per_sec: 61605604543
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f33c96d99b16c475e9426acbf66dd505"
+        network_throughput_bytes_per_sec: 328802230268
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "29a32f0bb7a1457842de5659e9e37786"
+        network_throughput_bytes_per_sec: 50030464603
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "bea1208f431f430b04d60090013cee93"
+        network_throughput_bytes_per_sec: 90403737451
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "0d982894e00826d19113c9146ed9df12"
+        network_throughput_bytes_per_sec: 55494158584
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "86c1a0335f258c14149387d78daaf560"
+        network_throughput_bytes_per_sec: 58864946037
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "b52cca147cee2cf2afd9b52e23b0e447"
+        network_throughput_bytes_per_sec: 27779791236
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "5ea2cbe7f5e685aaa702c3ac87eb2424"
+        network_throughput_bytes_per_sec: 415419492346
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "289bd78c54fef174d38cd7d0d2af0ed2"
+        network_throughput_bytes_per_sec: 54112720212
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "65316f05eec205fc5387382135f2e6eb"
+        network_throughput_bytes_per_sec: 85068101267
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9885b3b7a489530a5723707a6c245d21"
+        network_throughput_bytes_per_sec: 126878519347
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "58234bff32af3126a5abb79263b6d567"
+        network_throughput_bytes_per_sec: 110738838033
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "8ee9101aaefcb090d2a2098aa6d87667"
+        network_throughput_bytes_per_sec: 109556302930
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "ed9bb4a33c886916d5e152a46eac4310"
+        network_throughput_bytes_per_sec: 122259565723
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "177ed17253d4d9f00871b1ac5d2d5ae7"
+        network_throughput_bytes_per_sec: 42888298089
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c654748a7104d2a0a9f9d067a746c65d"
+        network_throughput_bytes_per_sec: 109514891894
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "709c979785595ebfd212c19fbb0201e6"
+        network_throughput_bytes_per_sec: 63578478259
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "936f0c4ef7edb565c9896c0c4870960b"
+        network_throughput_bytes_per_sec: 32701319964
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "d1a6a800b1ee86a32a33db83fcf204e3"
+        network_throughput_bytes_per_sec: 13209574200
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 536870912
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "7a914c46974e88f61fa24438597bd625"
+        network_throughput_bytes_per_sec: 483529399261
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "a72278a0ffa1250acd42babc5e4a2c7a"
+        network_throughput_bytes_per_sec: 223183310188
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "cb2bdec86e4c8f9a34f3e9f665f1a785"
+        network_throughput_bytes_per_sec: 32564219221
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "b1ee9be4f8941e8c5707b526de55ebcd"
+        network_throughput_bytes_per_sec: 11311499460
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "3f7aa4e7e62066d58779eed79649a7ca"
+        network_throughput_bytes_per_sec: 53554789448
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "d40e130f4f8f68ae3883a68d79ddf6ec"
+        network_throughput_bytes_per_sec: 456085414670
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "ed727b57d6a3ae32b3e8b3c460375593"
+        network_throughput_bytes_per_sec: 101447306143
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 131072
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c06280b5ee6c4fa8a084614ad718f48d"
+        network_throughput_bytes_per_sec: 14966828432
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "6335d98ead54a01eaf5ba646d0d77e2d"
+        network_throughput_bytes_per_sec: 194201812986
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "4ebf30811a22fe550c8a474736c86ebd"
+        network_throughput_bytes_per_sec: 65731139319
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "94b441a1f24803f223f997cfc3551595"
+        network_throughput_bytes_per_sec: 482959582665
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "0828705e9e274be716d9bed985b9d04f"
+        network_throughput_bytes_per_sec: 104050557860
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "ab056536331bdda05cf9fb4e4e83c9ac"
+        network_throughput_bytes_per_sec: 121497322795
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "44ae733809312994206ebe478f6f6d88"
+        network_throughput_bytes_per_sec: 57963999695
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "60532c3a26ca6a8fe1410171835f3cdc"
+        network_throughput_bytes_per_sec: 63950561595
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "e48bb79e8a564f303f5314b7fb7741c6"
+        network_throughput_bytes_per_sec: 41500643144
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "5e44f9a76cddcab87f4116389924ab0c"
+        network_throughput_bytes_per_sec: 94073802434
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "beaf14cc7bbcb59673df046c2e6aba77"
+        network_throughput_bytes_per_sec: 64848222538
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "5b3a40da645053c4c49583b44ff21960"
+        network_throughput_bytes_per_sec: 455041870103
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "0e252d37f4f95b65b0c309bd36d90e08"
+        network_throughput_bytes_per_sec: 39568905660
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "dc86a97093f20bc48f119d9234dc85b5"
+        network_throughput_bytes_per_sec: 59106338603
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "cf9f897c04f74b0a135ecb4c11a26855"
+        network_throughput_bytes_per_sec: 61043130234
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "71252e403a93408fba96de8bd3825ccc"
+        network_throughput_bytes_per_sec: 216877582150
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "417426246287e26b23b3f3fbb2db6735"
+        network_throughput_bytes_per_sec: 394709265326
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "1cfa9b11d4990da43526791f5cb697ae"
+        network_throughput_bytes_per_sec: 121889019358
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 131072
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c847e212ae13666202c7fac95f296bb2"
+        network_throughput_bytes_per_sec: 15829832202
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "0dcf986269bf50a46e4297b6dc978284"
+        network_throughput_bytes_per_sec: 99795474553
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "7d3fc6383c3bfc8d9b3e2269bf971b44"
+        network_throughput_bytes_per_sec: 20231063090
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c8f7c68ab6e65424889a9fbc00867f97"
+        network_throughput_bytes_per_sec: 80304114952
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9b4cd34c3b54a338ab91020d2c23470e"
+        network_throughput_bytes_per_sec: 103218363366
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 536870912
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "0b4253423ad3baa463934639904af66a"
+        network_throughput_bytes_per_sec: 64629175821
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "aa54856c98f8ee17f5ae47bd848f98ac"
+        network_throughput_bytes_per_sec: 96273604719
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "bd7b374fb5b1baf0fcab53db4ed3a18a"
+        network_throughput_bytes_per_sec: 108228931207
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "e6971cea46e3d234015e4ff0d5f05ee8"
+        network_throughput_bytes_per_sec: 97213575074
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "1b6ab3ab54b060fef16d0df721e84115"
+        network_throughput_bytes_per_sec: 63123157377
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "2898f1b237631f585973476ece15eb4c"
+        network_throughput_bytes_per_sec: 226947712117
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "8c69870b341e765e470f58443bad0c5d"
+        network_throughput_bytes_per_sec: 28969989156
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "4b078f6cd0c4e1a6730911dfbea26461"
+        network_throughput_bytes_per_sec: 62352027799
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "ace313bb59b4ef2c1f109158e10e2bc6"
+        network_throughput_bytes_per_sec: 21566762649
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "7442c7f9a88e07c2359930d71b9cb4f7"
+        network_throughput_bytes_per_sec: 64382830570
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "173b0bc7740214cfc9963e19610cf098"
+        network_throughput_bytes_per_sec: 45157339419
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "0c918a99d48a3d4dac85c8270c9c3923"
+        network_throughput_bytes_per_sec: 109493271376
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "e6875d068a859fc9c823bbaa445bd205"
+        network_throughput_bytes_per_sec: 124760652229
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "49b9e194815f26ce0fdea12d8d8145da"
+        network_throughput_bytes_per_sec: 131823289764
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "bcd4bb7790927dea27c0dd4a49626919"
+        network_throughput_bytes_per_sec: 121100486593
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "40be8f7bb0e64535bc2b18090b650f8d"
+        network_throughput_bytes_per_sec: 115738062962
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "4928da39d79385e5f104ae32acf39251"
+        network_throughput_bytes_per_sec: 22579155900
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9eba46fe48d732fc74500cac8fb7c3fe"
+        network_throughput_bytes_per_sec: 41108335252
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "829e34bc78e8ee5bfc706985c75286d6"
+        network_throughput_bytes_per_sec: 340288796545
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "1463d8954f4946d066311dc7f75d49dc"
+        network_throughput_bytes_per_sec: 253268234508
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "56fca87b103de1eb73c7e89c61448474"
+        network_throughput_bytes_per_sec: 36175257020
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "daa2296a0f8546b3da95ed15254e621b"
+        network_throughput_bytes_per_sec: 171168572397
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "af1db0deda185dae2115e4294ff33a01"
+        network_throughput_bytes_per_sec: 10086243879
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "6dd504ab26947845d5c80bfc9586dd68"
+        network_throughput_bytes_per_sec: 61295758181
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "f321cf7c2cdb06cf549edfba79229442"
+        network_throughput_bytes_per_sec: 64450351452
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 536870912
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f29a68dfdd14fba3ff48eaf92749f3c5"
+        network_throughput_bytes_per_sec: 131146714565
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "0f9fab80196b5ca3a20c8b4d82429ffc"
+        network_throughput_bytes_per_sec: 209044298454
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "5f3eaa847e85cc2e010b81fbdc9f2856"
+        network_throughput_bytes_per_sec: 68843443399
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 536870912
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "dc3c22eb0639af4c290486709d7fe4f8"
+        network_throughput_bytes_per_sec: 232982002260
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "90ec10f9d2b0a3214ba95e05b1b0c4f0"
+        network_throughput_bytes_per_sec: 24300577632
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "1e2b9985be63b818f1261076e2da88b4"
+        network_throughput_bytes_per_sec: 113318700097
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "2ba071a9298fb300b55c2419403f7628"
+        network_throughput_bytes_per_sec: 21591075923
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "816a1537b5293aa587f48c9b21fcdd60"
+        network_throughput_bytes_per_sec: 155617643921
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "7ce0f5f18004ff9348daed57054665a7"
+        network_throughput_bytes_per_sec: 426538937988
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f56056f4ce6fb4dd7d935cfeb2b66bce"
+        network_throughput_bytes_per_sec: 242008818992
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "365eae77c09b46d526cdfbbdb37aad9f"
+        network_throughput_bytes_per_sec: 232958851397
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f53f76968e917ef5f386872467c6ef38"
+        network_throughput_bytes_per_sec: 121740871320
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9a00b4aca393f1e9d49eb3b5f09fc1c0"
+        network_throughput_bytes_per_sec: 204611423797
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "fa7774e70aad1ce38ac3bf38250e0a71"
+        network_throughput_bytes_per_sec: 64201453047
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9098ca7bcead5f4b4d5b4ba13949dfbb"
+        network_throughput_bytes_per_sec: 44243479728
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 262144
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "59d80d26dc690f4b5ca94bf13c0a4edb"
+        network_throughput_bytes_per_sec: 32610045094
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "1a89800f57987904dd9e6bde4f53d816"
+        network_throughput_bytes_per_sec: 213517139566
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "3a6a7362223de42b37d4ea61ae462272"
+        network_throughput_bytes_per_sec: 39673704124
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "219e6eafb24f19ca46f775efb9e79f4a"
+        network_throughput_bytes_per_sec: 62554432179
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 67108864
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "dbf878d3c91caaa82bbeb253adcfb0dd"
+        network_throughput_bytes_per_sec: 64842771251
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 4
+          }
+          source_target_pairs {
+            source: 1
+            target: 5
+          }
+          source_target_pairs {
+            source: 2
+            target: 6
+          }
+          source_target_pairs {
+            source: 3
+            target: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "4b21cfe2b991416b2b60e77c7e6b6e37"
+        network_throughput_bytes_per_sec: 62385182733
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "af1dcdb3cca467fabadbfb453250b83e"
+        network_throughput_bytes_per_sec: 63898963469
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "3a8645893cd88d826c0847a7ccfb1379"
+        network_throughput_bytes_per_sec: 37808321915
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "3b8d159ab132a6a4de22cf70abec0b16"
+        network_throughput_bytes_per_sec: 133565394612
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "99b521d2cda4a2682eaea311b6059b4e"
+        network_throughput_bytes_per_sec: 7125366095
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 1048576
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "bcdb32b92ed02a87807bb1839f3142cf"
+        network_throughput_bytes_per_sec: 30397692435
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "971ba4331155d73cf505b7046e927999"
+        network_throughput_bytes_per_sec: 134475382833
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "b497a392f67a4f5b4072540892de137a"
+        network_throughput_bytes_per_sec: 90711680391
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "96db7ac42e083786dd2e2ace91847307"
+        network_throughput_bytes_per_sec: 121273892578
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "a0ebecaa17cdf356f8d96fa96b165009"
+        network_throughput_bytes_per_sec: 8177880378
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "0f61afe6ad7cda8a18c6818f6140079e"
+        network_throughput_bytes_per_sec: 85614858020
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "082a66d9bce9594529e3b56a01f55f6c"
+        network_throughput_bytes_per_sec: 29700285368
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "62deed7a65e09eb425eac9e48ddd5a47"
+        network_throughput_bytes_per_sec: 76734080067
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 2097152
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "6cd9091ae72b1ce5a84de2d5efbe989f"
+        network_throughput_bytes_per_sec: 38423099825
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "7d507fb5fef893d318380fcd6940e951"
+        network_throughput_bytes_per_sec: 97939834064
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "ef4fee03912d152ba48c7a9651d5e2ec"
+        network_throughput_bytes_per_sec: 22107631165
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: BF16
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "0aabccd34a8a301bc3ddf7b1d46e2129"
+        network_throughput_bytes_per_sec: 74897951348
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 268435456
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c33b5cae9b992934b5065b3df33efc63"
+        network_throughput_bytes_per_sec: 131199291500
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "01b33ee3414ee30a6ee3bb18e58d57e9"
+        network_throughput_bytes_per_sec: 61613975619
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9bb2cf7ea4be08f4379c34a8776dd615"
+        network_throughput_bytes_per_sec: 50493935508
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "725a4a0ae76c1f2dc1f7c1877ad92a3d"
+        network_throughput_bytes_per_sec: 107098468103
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: BF16
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 2
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 4
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+            target: 6
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "e52fde4d46fb5649af32404491000402"
+        network_throughput_bytes_per_sec: 64759940025
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "f16ae3d62120114c9d0d08f4c725370f"
+        network_throughput_bytes_per_sec: 257911629855
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 134217728
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "9324434db5366a8bec594bb1549c6777"
+        network_throughput_bytes_per_sec: 226316295951
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "e8636d435d0fae43c0c2a9e79a42691f"
+        network_throughput_bytes_per_sec: 109375491391
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 536870912
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "19badbe16d051a71a5719fc1cbd40c7f"
+        network_throughput_bytes_per_sec: 229084031115
+      }
+      entries {
+        instruction {
+          name: "collective-permute"
+          opcode: "collective-permute"
+          shape {
+            element_type: F32
+            dimensions: 4194304
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967299
+          operand_ids: 4294967298
+          source_target_pairs {
+            target: 1
+          }
+          source_target_pairs {
+            source: 1
+            target: 2
+          }
+          source_target_pairs {
+            source: 2
+            target: 3
+          }
+          source_target_pairs {
+            source: 3
+            target: 4
+          }
+          source_target_pairs {
+            source: 4
+            target: 5
+          }
+          source_target_pairs {
+            source: 5
+            target: 6
+          }
+          source_target_pairs {
+            source: 6
+            target: 7
+          }
+          source_target_pairs {
+            source: 7
+          }
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+        }
+        fingerprint: "956a8ba9e3cb2a85b1f2051634580fa9"
+        network_throughput_bytes_per_sec: 55482596804
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-to-all"
+          shape {
+            element_type: F32
+            dimensions: 8388608
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 1
+            num_devices_per_group: 8
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "d32b95bcb7f76a67d13b3caf116bf903"
+        network_throughput_bytes_per_sec: 110281375919
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "fcfc7148888759b910ebf6b82fb52f3d"
+        network_throughput_bytes_per_sec: 95634272163
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-reduce"
+          shape {
+            element_type: BF16
+            dimensions: 33554432
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 4
+            num_devices_per_group: 2
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "e2f8ceafe05d7294298b62da832dd887"
+        network_throughput_bytes_per_sec: 59092026095
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: BF16
+            dimensions: 536870912
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "141d55b9e5a04e1f00b579cb18906455"
+        network_throughput_bytes_per_sec: 249044305986
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "all-gather"
+          shape {
+            element_type: F32
+            dimensions: 16777216
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 1
+          operand_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "c389be608049d2735a7f0f2da2adad8c"
+        network_throughput_bytes_per_sec: 193362753629
+      }
+      entries {
+        instruction {
+          name: "_"
+          opcode: "reduce-scatter"
+          shape {
+            element_type: F32
+            dimensions: 524288
+            layout {
+              minor_to_major: 0
+              tail_padding_alignment_in_elements: 1
+            }
+            is_dynamic_dimension: false
+          }
+          metadata {
+          }
+          dimensions: 0
+          channel_id: 1
+          id: 4294967297
+          operand_ids: 4294967296
+          called_computation_ids: 0
+          frontend_attributes {
+          }
+          use_global_device_ids: true
+          statistics_viz {
+          }
+          iota_collective_device_list {
+            num_replica_groups: 2
+            num_devices_per_group: 4
+            iota_reshape_dims: 8
+            iota_transpose_perm: 0
+          }
+        }
+        fingerprint: "0d8ff69f1887cddd6d6c7a7cb6e757ad"
+        network_throughput_bytes_per_sec: 66134830220
+      }
+    }
+  }
 )pb";
 // END_DEFAULT_PERF_TABLE
 
