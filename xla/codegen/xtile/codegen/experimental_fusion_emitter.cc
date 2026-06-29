@@ -2244,23 +2244,38 @@ void EmitFullyTiledSequentialDimensions(
   }
 }
 
-// Applies L2 tile reordering to the flat tile_id for kRaggedNonContracting
-// ragged-dot fusions that set BlockLevelFusionConfig.group_size > 1.
+// Applies L2 tile reordering to the flat tile_id for kRaggedNonContracting and
+// non-persistent kRaggedContracting ragged-dot fusions that set
+// BlockLevelFusionConfig.group_size > 1.
 //
-// The standard Triton GROUP_SIZE remapping reorders (M, N) tile enumeration so
-// that `group_size` consecutive M-tiles share the same N-tile before the next
-// N-tile group begins, improving L2 cache hit rate:
+// kRaggedNonContracting: reorders the (M, N) tile enumeration so that
+// `group_size` consecutive M-tiles share the same N-tile before the next
+// N-tile group begins, keeping the RHS column block hot in L2:
 //
-//   num_pid_in_group = G * num_pid_n
+//   num_pid_in_group = group_size * num_pid_n
 //   group_id         = pid // num_pid_in_group
-//   first_pid_m      = group_id * G
-//   group_size_m     = min(num_pid_m - first_pid_m, G)
+//   first_pid_m      = group_id * group_size
+//   group_size_m     = min(num_pid_m - first_pid_m, group_size)
 //   pid_m            = first_pid_m + (pid % num_pid_in_group) % group_size_m
 //   pid_n            = (pid % num_pid_in_group) // group_size_m
 //   remapped_pid     = pid_m * num_pid_n + pid_n
 //
-// Returns `raw_tile_id` unchanged when the fusion does not qualify (not
-// kRaggedNonContracting, batch dims present, group_size <= 1, or 1-D grid).
+// kRaggedContracting (non-persistent only): applies the same algorithm over
+// the 3-D grid (G × K_tiles × N_tiles), grouping G-slices so that
+// `group_size` consecutive G programs share the same (K_tile, N_tile) pair,
+// keeping the RHS block hot in L2 across groups.  G plays the role of M and
+// KN_tiles = K_tiles * N_tiles plays the role of N:
+//
+//   num_pid_in_group = group_size * KN_tiles
+//   group_id         = pid // num_pid_in_group
+//   first_pid_g      = group_id * group_size
+//   group_size_g     = min(num_pid_g - first_pid_g, group_size)
+//   pid_g            = first_pid_g + (pid % num_pid_in_group) % group_size_g
+//   pid_kn           = (pid % num_pid_in_group) // group_size_g
+//   remapped_pid     = pid_g * KN_tiles + pid_kn
+//
+// Returns `raw_tile_id` unchanged when the fusion does not qualify (persistent
+// kRaggedContracting, batch dims present, group_size <= 1, or 1-D grid).
 Value ApplyGroupSizeTileIdRemapping(ImplicitLocOpBuilder& b,
                                     const HloFusionInstruction& fusion,
                                     Value raw_tile_id) {
@@ -2287,56 +2302,115 @@ Value ApplyGroupSizeTileIdRemapping(ImplicitLocOpBuilder& b,
   }
   if (rd == nullptr) return raw_tile_id;
 
-  // Only apply to kRaggedNonContracting, no-batch case.
   const auto& rdims = rd->ragged_dot_dimension_numbers();
   const auto& ddims = rdims.dot_dimension_numbers();
   const int64_t ragged_lhs = rdims.lhs_ragged_dimensions(0);
-  if (absl::c_count(ddims.lhs_contracting_dimensions(), ragged_lhs) > 0 ||
-      absl::c_count(ddims.lhs_batch_dimensions(), ragged_lhs) > 0) {
-    return raw_tile_id;
+  const bool is_contracting =
+      absl::c_count(ddims.lhs_contracting_dimensions(), ragged_lhs) > 0;
+  const bool is_batch =
+      absl::c_count(ddims.lhs_batch_dimensions(), ragged_lhs) > 0;
+
+  // Batch variants are not supported for either remapping.
+  if (is_batch) return raw_tile_id;
+
+  if (!is_contracting) {
+    // ---- kRaggedNonContracting: (M, N) 2-D grid grouping ----
+    // Only handle the no-batch, 2-D grid case ([M, N] output tile).
+    if (blk_cfg.output_tiles_size() < 1 ||
+        blk_cfg.output_tiles(0).sizes_size() != 2) {
+      return raw_tile_id;
+    }
+
+    // Grid dimensions: num_pid_m × num_pid_n programs.
+    const int64_t BLOCK_M = blk_cfg.output_tiles(0).sizes(0);
+    const int64_t BLOCK_N = blk_cfg.output_tiles(0).sizes(1);
+    const int64_t M_total = rd->shape().dimensions(0);
+    const int64_t N_total = rd->shape().dimensions(1);
+    const int64_t num_pid_m = (M_total + BLOCK_M - 1) / BLOCK_M;
+    const int64_t num_pid_n = (N_total + BLOCK_N - 1) / BLOCK_N;
+
+    if (num_pid_m <= 1 || num_pid_n <= 0)
+      return raw_tile_id;  // Nothing to reorder.
+
+    // Cast pid to i32 for arithmetic (Triton program IDs are 32-bit).
+    Value pid = Cast(b, raw_tile_id, b.getI32Type());
+    auto ci = [&](int64_t v) { return CreateConst(b, b.getI32Type(), v); };
+    Value G = ci(gs);
+    Value npm = ci(num_pid_m);
+    Value npn = ci(num_pid_n);
+    // num_pid_in_group = group_size * num_pid_n
+    Value g_npn = arith::MulIOp::create(b, G, npn);
+    // group_id = pid / (group_size * num_pid_n)
+    Value group_id = arith::DivSIOp::create(b, pid, g_npn);
+    // first_pid_m = group_id * group_size
+    Value first_pid_m = arith::MulIOp::create(b, group_id, G);
+    // rem_in_group = pid % (group_size * num_pid_n)
+    Value rem = arith::RemSIOp::create(b, pid, g_npn);
+    // group_size_m = min(num_pid_m - first_pid_m, group_size)
+    Value npm_minus_first = arith::SubIOp::create(b, npm, first_pid_m);
+    Value group_size_m = arith::MinSIOp::create(b, npm_minus_first, G);
+    // pid_m = first_pid_m + (rem % group_size_m)
+    Value pid_m = arith::AddIOp::create(
+        b, first_pid_m, arith::RemSIOp::create(b, rem, group_size_m));
+    // pid_n = rem / group_size_m
+    Value pid_n = arith::DivSIOp::create(b, rem, group_size_m);
+    // remapped flat index = pid_m * num_pid_n + pid_n
+    Value remapped =
+        arith::AddIOp::create(b, arith::MulIOp::create(b, pid_m, npn), pid_n);
+    // Cast back to index type for EmitterContext.
+    return arith::IndexCastOp::create(b, b.getIndexType(), remapped);
   }
-  // Only handle the no-batch, 2-D grid case ([M, N] output tile).
+
+  // ---- kRaggedContracting (non-persistent only): (G, KN) 3-D grid grouping.
+  // Non-persistent output tile = [G=1, BLOCK_K, BLOCK_N] → sizes_size() == 3.
+  // Persistent output tile     = [BLOCK_K, BLOCK_N]       → sizes_size() == 2.
+  // Skip the persistent schedule: G is a sequential loop inside each CTA,
+  // not a grid dimension, so there is nothing to reorder at program-id level.
   if (blk_cfg.output_tiles_size() < 1 ||
-      blk_cfg.output_tiles(0).sizes_size() != 2) {
+      blk_cfg.output_tiles(0).sizes_size() != 3) {
     return raw_tile_id;
   }
 
-  // Grid dimensions: num_pid_m × num_pid_n programs.
-  const int64_t BLOCK_M = blk_cfg.output_tiles(0).sizes(0);
-  const int64_t BLOCK_N = blk_cfg.output_tiles(0).sizes(1);
-  const int64_t M_total = rd->shape().dimensions(0);
-  const int64_t N_total = rd->shape().dimensions(1);
-  const int64_t num_pid_m = (M_total + BLOCK_M - 1) / BLOCK_M;
-  const int64_t num_pid_n = (N_total + BLOCK_N - 1) / BLOCK_N;
+  // Grid: G × K_tiles × N_tiles programs.
+  // G plays the role of M, KN_tiles = K_tiles * N_tiles plays the role of N.
+  // rd->shape() = (G, K_output, N_output).
+  const int64_t BLOCK_K = blk_cfg.output_tiles(0).sizes(1);
+  const int64_t BLOCK_N = blk_cfg.output_tiles(0).sizes(2);
+  const int64_t num_pid_g = rd->shape().dimensions(0);
+  const int64_t K_output = rd->shape().dimensions(1);
+  const int64_t N_output = rd->shape().dimensions(2);
+  const int64_t K_tiles = (K_output + BLOCK_K - 1) / BLOCK_K;
+  const int64_t N_tiles = (N_output + BLOCK_N - 1) / BLOCK_N;
+  const int64_t num_pid_kn = K_tiles * N_tiles;
 
-  if (num_pid_m <= 1 || num_pid_n <= 0)
+  if (num_pid_g <= 1 || num_pid_kn <= 0)
     return raw_tile_id;  // Nothing to reorder.
 
   // Cast pid to i32 for arithmetic (Triton program IDs are 32-bit).
   Value pid = Cast(b, raw_tile_id, b.getI32Type());
   auto ci = [&](int64_t v) { return CreateConst(b, b.getI32Type(), v); };
-  Value G = ci(gs);
-  Value npm = ci(num_pid_m);
-  Value npn = ci(num_pid_n);
-  // num_pid_in_group = G * num_pid_n
-  Value g_npn = arith::MulIOp::create(b, G, npn);
-  // group_id = pid / (G * num_pid_n)
-  Value group_id = arith::DivSIOp::create(b, pid, g_npn);
-  // first_pid_m = group_id * G
-  Value first_pid_m = arith::MulIOp::create(b, group_id, G);
-  // rem_in_group = pid % (G * num_pid_n)
-  Value rem = arith::RemSIOp::create(b, pid, g_npn);
-  // group_size_m = min(num_pid_m - first_pid_m, G)
-  Value npm_minus_first = arith::SubIOp::create(b, npm, first_pid_m);
-  Value group_size_m = arith::MinSIOp::create(b, npm_minus_first, G);
-  // pid_m = first_pid_m + (rem % group_size_m)
-  Value pid_m = arith::AddIOp::create(
-      b, first_pid_m, arith::RemSIOp::create(b, rem, group_size_m));
-  // pid_n = rem / group_size_m
-  Value pid_n = arith::DivSIOp::create(b, rem, group_size_m);
-  // remapped flat index = pid_m * num_pid_n + pid_n
+  Value GS = ci(gs);
+  Value npg = ci(num_pid_g);
+  Value npkn = ci(num_pid_kn);
+  // num_pid_in_group = group_size * num_pid_kn
+  Value gs_npkn = arith::MulIOp::create(b, GS, npkn);
+  // group_id = pid / (group_size * num_pid_kn)
+  Value group_id = arith::DivSIOp::create(b, pid, gs_npkn);
+  // first_pid_g = group_id * group_size
+  Value first_pid_g = arith::MulIOp::create(b, group_id, GS);
+  // rem_in_group = pid % (group_size * num_pid_kn)
+  Value rem = arith::RemSIOp::create(b, pid, gs_npkn);
+  // group_size_g = min(num_pid_g - first_pid_g, group_size)
+  Value npg_minus_first = arith::SubIOp::create(b, npg, first_pid_g);
+  Value group_size_g = arith::MinSIOp::create(b, npg_minus_first, GS);
+  // pid_g = first_pid_g + (rem % group_size_g)
+  Value pid_g = arith::AddIOp::create(
+      b, first_pid_g, arith::RemSIOp::create(b, rem, group_size_g));
+  // pid_kn = rem / group_size_g
+  Value pid_kn = arith::DivSIOp::create(b, rem, group_size_g);
+  // remapped flat index = pid_g * num_pid_kn + pid_kn
   Value remapped =
-      arith::AddIOp::create(b, arith::MulIOp::create(b, pid_m, npn), pid_n);
+      arith::AddIOp::create(b, arith::MulIOp::create(b, pid_g, npkn), pid_kn);
   // Cast back to index type for EmitterContext.
   return arith::IndexCastOp::create(b, b.getIndexType(), remapped);
 }
@@ -2351,11 +2425,12 @@ absl::Status EmitGeneric(ImplicitLocOpBuilder& b,
             << ExtractInstructionIntoNewModule(fusion)->ToString();
     VLOG(6) << "Tiled computation: \n" << tiled_computation.ToString();
   }
-  // Apply GROUP_SIZE L2 tile reordering for kRaggedNonContracting ragged-dot
-  // fusions where BlockLevelFusionConfig.group_size > 1.  The remapping
-  // transforms the flat program_id to an L2-friendly (M_tile, N_tile) pair
-  // before EmitterContext is constructed, so that all EvaluateTilingParameters
-  // calls automatically yield the reordered tile coordinates.
+  // Apply GROUP_SIZE L2 tile reordering for kRaggedNonContracting and
+  // non-persistent kRaggedContracting ragged-dot fusions where
+  // BlockLevelFusionConfig.group_size > 1.  The remapping transforms the flat
+  // program_id to an L2-friendly tile coordinate before EmitterContext is
+  // constructed, so that all EvaluateTilingParameters calls automatically yield
+  // the reordered tile coordinates.
   Value tile_id = ApplyGroupSizeTileIdRemapping(b, fusion, fn.getTileId());
   EmitterContext emitter_ctx{b,        &fusion, tile_id,
                              schedule, fn,      tiled_computation};

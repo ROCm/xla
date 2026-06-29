@@ -548,6 +548,9 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
       if (is_contracting_rd &&
           static_cast<int64_t>(c.block_m) * c.num_stages >= q_min)
         continue;
+      // For kRaggedContracting: group_size controls G-dim grouping (not M).
+      // Skip if group_size > G — impossible to group more slices than exist.
+      if (is_contracting_rd && c.group_size > G) continue;
       auto config = std::make_unique<BackendConfig>();
       *config->mutable_triton() =
           TritonGemmConfig(c.block_m, c.block_n, c.block_k,
@@ -585,8 +588,16 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
                 static_cast<int64_t>(block_m) * block_n / (num_warps * 32);
             if (elems_per_thread > kElemsPerThreadLimit) continue;
             for (int group_size : {1, 2, 4, 8}) {
-              int64_t num_m_tiles = (M_total + block_m - 1) / block_m;
-              if (group_size > num_m_tiles) continue;
+              if (is_contracting_rd) {
+                // group_size controls G-dim grouping for kRaggedContracting.
+                // Skip if group_size > G — impossible to group more than G.
+                if (group_size > G) continue;
+              } else {
+                // group_size controls M-tile grouping for
+                // kRaggedNonContracting.
+                int64_t num_m_tiles = (M_total + block_m - 1) / block_m;
+                if (group_size > num_m_tiles) continue;
+              }
               auto config = std::make_unique<BackendConfig>();
               *config->mutable_triton() =
                   TritonGemmConfig(block_m, block_n, block_k,
@@ -599,7 +610,7 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
                                    /*group_size=*/group_size)
                       .ToProto();
               configs.push_back(std::move(config));
-            }
+            }  // group_size
           }
         }
       }
