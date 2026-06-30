@@ -499,6 +499,15 @@ void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
                                       bool is_auxiliary) {
   absl::MutexLock lock(event_maps_mutex_);
 
+  // Generic events (e.g. ROCTX/NVTX markers) have no GPU-side activity
+  // counterpart. Route them directly to standalone_events_ so they bypass
+  // ApiActivityInfoExchange and are flushed straight to per_device_collector_.
+  // Check this BEFORE the source-based branching below.
+  if (event.type == RocmTracerEventType::Generic) {
+    standalone_events_.push_back(std::move(event));
+    return;
+  }
+
   if (event.source == RocmTracerEventSource::ApiCallback) {
     if (!is_auxiliary) {
       if (num_callback_events_ >= options_.max_callback_api_events) {
@@ -588,6 +597,13 @@ void RocmTraceCollectorImpl::Flush() {
       }
     }
   }
+
+  // Flush standalone events (e.g. ROCTX markers) directly — they have no
+  // GPU-side activity counterpart and bypass ApiActivityInfoExchange.
+  for (auto& event : standalone_events_) {
+    per_device_collector_[0].AddEvent(std::move(event));
+  }
+  standalone_events_.clear();
 
   activity_ops_events_map_.clear();
   api_events_map_.clear();
