@@ -145,6 +145,9 @@ absl::StatusOr<llvm::SmallVector<int64_t>> GetTilingSpaceConcreteSizes(
   llvm::SmallVector<int64_t> tile_sizes;
   tile_sizes.reserve(tiling_space.dimensions().size());
   int parallel_dim_count = 0;
+  // Tracks the sequential dim index per HLO so instructions with multiple
+  // sequential dims (e.g. kRaggedDot: G-loop and K-loop) get different sizes.
+  absl::flat_hash_map<const HloInstruction*, int> seq_dim_index_per_hlo;
   for (const xla::gpu::experimental::TilingSpace::DimensionInfo& dim :
        tiling_space.dimensions()) {
     switch (dim.type) {
@@ -155,13 +158,23 @@ absl::StatusOr<llvm::SmallVector<int64_t>> GetTilingSpaceConcreteSizes(
       case DimensionSemantics::kSequential: {
         if (dim.hlo->has_backend_config()) {
           ASSIGN_OR_RETURN(Tile config, dim.hlo->backend_config<Tile>());
-          if (config.sizes_size() != 1) {
+          // Support multiple tile sizes per instruction (e.g. kRaggedDot has
+          // both a G sequential dim and a K sequential dim on the same HLO).
+          // Use seq_dim_index_per_hlo to pick the right size in order.
+          int& idx = seq_dim_index_per_hlo[dim.hlo];
+          if (idx < config.sizes_size()) {
+            tile_sizes.push_back(config.sizes(idx));
+            idx++;
+          } else if (config.sizes_size() == 1) {
+            // Backward compat: single size applies to all sequential dims on
+            // this HLO.
+            tile_sizes.push_back(config.sizes(0));
+          } else {
             return Internal(
-                "Only single-reduction operations are supported "
-                "dimension. Got %d tile sizes in backend config.",
-                config.sizes_size());
+                "Sequential dim at position %d on HLO '%s' has no matching "
+                "entry in backend_config Tile (sizes_size=%d).",
+                idx, dim.hlo->name(), config.sizes_size());
           }
-          tile_sizes.push_back(config.sizes(0));
         } else {
           VLOG(1) << "No backend_config set for HLO instruction of dimension "
                   << dim.ToString() << ". Using dimension size as tile size.";
