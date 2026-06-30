@@ -359,7 +359,7 @@ void RocmTracer::MarkerCallback(
     absl::MutexLock lock(&roctx_stack_mutex_);
     roctx_stack_[tid].push_back(
         RoctxFrame{msg ? std::string(msg) : std::string(), ts,
-                   record.correlation_id.internal});
+                   static_cast<uint32_t>(record.correlation_id.internal)});
 
   } else if (record.operation == ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop &&
              record.phase == ROCPROFILER_CALLBACK_PHASE_EXIT) {
