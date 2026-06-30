@@ -22,6 +22,8 @@ on:
       - rocm-jaxlib-v*
   pull_request_target:
     types: [opened, synchronize]
+    branches-ignore:
+      - rocm-dev-infra
 
 concurrency:
   group: ${{ github.event.pull_request.number && format('CI ROCm-PR-{0}', github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
