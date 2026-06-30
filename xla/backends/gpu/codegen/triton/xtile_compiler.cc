@@ -302,7 +302,7 @@ absl::StatusOr<TritonKernelSource> CreateTritonModule(
   // many different fusion kinds?
   const std::vector<absl::string_view> kSupportedFusionKinds = {
       kTritonFusionKind,
-      kTritonGemmFusionKind,      // ragged-dot group-GEMM via XTile emitter
+      kTritonGemmFusionKind,
       kTritonNestedGemmFusionKind,
       kTritonCollectiveFusionKind,
   };

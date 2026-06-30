@@ -469,24 +469,6 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
       target_config().device_description.gpu_compute_capability().IsRocm();
   const int64_t kElemsPerThreadLimit = is_rocm ? 256 : 64;
 
-  // NOTE: The Autotuner::TuneBestConfig codepath skips compilation entirely
-  // when exactly ONE config is returned (see autotuner.cc:
-  //   if (supported_configs.size() == 1) { return single_config; }).
-  // This is intentional: TritonBackend::Compile (RunHloPasses + RunBackend on
-  // an isolated wrapped module) currently fails for kRaggedDot fusions because
-  // some required pre-conditions from OptimizeHlo (run in the main compilation
-  // pipeline but not in TritonBackend::RunHloPasses) are not met.
-  //
-  // By returning exactly ONE config — the default matching HandleRaggedDot's
-  // initial BlockLevelFusionConfig values — we ensure:
-  //  (1) ApplyConfig IS called → group_size=1 is written to the proto, which
-  //      is serialized (non-zero ≠ default), letting tests verify autotuning
-  //      ran via `; CHECK-SAME: group_size`.
-  //  (2) No compilation attempt → no "No configs could be compiled" error.
-  //  (3) The kRaggedDot fusion retains the same tile sizes as those set by
-  //      HandleRaggedDot, so the XTile emitter in the main pipeline sees the
-  //      same configuration as before and compiles correctly.
-  //
   // Search space: {16,32,64,128,256}³ block sizes × {2,4,8} num_warps × {1,2}
   // num_stages × {1,2,4,8} group_size.
   // Pruned by dimension sizes and per-thread register budget to avoid
@@ -636,7 +618,6 @@ absl::StatusOr<std::unique_ptr<HloModule>> TritonBackend::RunHloPasses(
   // into fusions.
   FusionWrapper fusion_wrapper(gpu_device_info);
   RETURN_IF_ERROR(fusion_wrapper.Run(hlo_module.get()).status());
-
   ConvertTritonGemmConfig convert_triton_gemm_config(gpu_device_info,
                                                      mlir_context_);
   RETURN_IF_ERROR(convert_triton_gemm_config.Run(hlo_module.get()).status());

@@ -143,7 +143,7 @@ Value EmitStableHloDotAndAdd(mlir::ImplicitLocOpBuilder& b, Value lhs,
 }  // namespace
 
 absl::StatusOr<Type> GetAlgUnsetAccumulatorType(mlir::ImplicitLocOpBuilder& b,
-                                                const HloDotInstruction& dot) {
+                                                const HloInstruction& dot) {
   ASSIGN_OR_RETURN(
       Type lhs_type,
       PrimitiveTypeToMlirType(b, dot.operand(0)->shape().element_type()));
@@ -172,7 +172,7 @@ absl::StatusOr<Type> GetAlgUnsetAccumulatorType(mlir::ImplicitLocOpBuilder& b,
 }
 
 absl::StatusOr<std::optional<Type>> DotDefaultOperandsType(
-    mlir::ImplicitLocOpBuilder& b, const HloDotInstruction& dot) {
+    mlir::ImplicitLocOpBuilder& b, const HloInstruction& dot) {
   ASSIGN_OR_RETURN(
       Type lhs_type,
       PrimitiveTypeToMlirType(b, dot.operand(0)->shape().element_type()));
@@ -198,7 +198,7 @@ absl::StatusOr<std::optional<Type>> DotDefaultOperandsType(
 // the operands do not already conform to any of them. Returns `std::nullopt` if
 // no casting is a priori needed.
 absl::StatusOr<std::optional<Type>> GetForceOperandsType(
-    mlir::ImplicitLocOpBuilder& b, const HloDotInstruction& dot,
+    mlir::ImplicitLocOpBuilder& b, const HloInstruction& dot,
     const DotOperands& dot_operands) {
   PrecisionConfig::Algorithm algorithm = dot.precision_config().algorithm();
   if (algorithm == PrecisionConfig::ALG_UNSET) {
@@ -245,7 +245,7 @@ absl::StatusOr<std::optional<Type>> GetForceOperandsType(
 }  // namespace
 
 absl::StatusOr<Type> GetDotAccumulatorType(mlir::ImplicitLocOpBuilder& b,
-                                           const HloDotInstruction& dot) {
+                                           const HloInstruction& dot) {
   const PrecisionConfig::Algorithm algorithm =
       dot.precision_config().algorithm();
 
@@ -259,26 +259,26 @@ absl::StatusOr<Type> GetDotAccumulatorType(mlir::ImplicitLocOpBuilder& b,
 }
 
 absl::StatusOr<Value> EmitSingleTileDot(mlir::ImplicitLocOpBuilder& b,
-                                        const HloDotInstruction& dot,
+                                        const HloInstruction& instr,
+                                        const DotDimensionNumbers& dim_nums,
                                         DotOperands dot_operands) {
-  PrecisionConfig::Algorithm algorithm = dot.precision_config().algorithm();
+  PrecisionConfig::Algorithm algorithm = instr.precision_config().algorithm();
   PrecisionSpec precision_spec{
       algorithm,
       XlaPrecisionToStableHloPrecision(
-          dot.precision_config().operand_precision(0)),
+          instr.precision_config().operand_precision(0)),
       XlaPrecisionToStableHloPrecision(
-          dot.precision_config().operand_precision(1))};
+          instr.precision_config().operand_precision(1))};
 
   ASSIGN_OR_RETURN(std::optional<Type> force_operands_type,
-                   GetForceOperandsType(b, dot, dot_operands));
-
-  ASSIGN_OR_RETURN(Type force_accumulator_type, GetDotAccumulatorType(b, dot));
+                   GetForceOperandsType(b, instr, dot_operands));
+  ASSIGN_OR_RETURN(Type force_accumulator_type,
+                   GetDotAccumulatorType(b, instr));
 
   if (force_operands_type.has_value()) {
     if (ElementType(dot_operands.lhs) != *force_operands_type) {
       dot_operands.lhs = Cast(b, dot_operands.lhs, *force_operands_type);
     }
-
     if (ElementType(dot_operands.rhs) != *force_operands_type) {
       dot_operands.rhs = Cast(b, dot_operands.rhs, *force_operands_type);
     }
@@ -289,22 +289,26 @@ absl::StatusOr<Value> EmitSingleTileDot(mlir::ImplicitLocOpBuilder& b,
         Cast(b, dot_operands.accumulator, force_accumulator_type);
   }
 
-  mlir::stablehlo::DotDimensionNumbersAttr dot_dimension_numbers =
-      xla::stablehlo::ConvertDotDimensionNumbers(dot.dot_dimension_numbers(),
-                                                 &b);
+  mlir::stablehlo::DotDimensionNumbersAttr dot_dim_attr =
+      xla::stablehlo::ConvertDotDimensionNumbers(dim_nums, &b);
 
   Value result = EmitStableHloDotAndAdd(b, dot_operands.lhs, dot_operands.rhs,
                                         dot_operands.accumulator,
-                                        precision_spec, dot_dimension_numbers);
+                                        precision_spec, dot_dim_attr);
 
-  // TODO(b/393299275): once we've moved on from the legacy emitter, we should
-  // make sure that this accumulator type is equal to the one derived here.
   Type outer_accumulator_type = ElementType(dot_operands.accumulator);
   if (ElementType(result) != outer_accumulator_type) {
     result = Cast(b, result, outer_accumulator_type);
   }
-
   return result;
+}
+
+// Convenience overload for HloDotInstruction: extracts dimension numbers from
+// the instruction itself.
+absl::StatusOr<Value> EmitSingleTileDot(mlir::ImplicitLocOpBuilder& b,
+                                        const HloDotInstruction& dot,
+                                        DotOperands dot_operands) {
+  return EmitSingleTileDot(b, dot, dot.dot_dimension_numbers(), dot_operands);
 }
 
 absl::StatusOr<Value> EmitSingleTileScaledDot(
@@ -316,53 +320,6 @@ absl::StatusOr<Value> EmitSingleTileScaledDot(
   return ScaledDot(b, dot_operands);
 }
 
-// Emits a single-tile dot from explicit precision config and dimension numbers.
-// The inner K-loop tile matmul in EmitRaggedDot uses this overload because
-// HloRaggedDotInstruction does not derive from HloDotInstruction.
-//
-// For simplicity this uses the DEFAULT precision (ALG_UNSET → BF16xBF16+F32)
-// and ignores force-operand-type promotion used for non-standard algorithms.
-// If the ragged dot carries a non-ALG_UNSET algorithm, callers should extend
-// this to forward the algorithm-specific logic.
-absl::StatusOr<Value> EmitSingleTileDotFromSpec(
-    mlir::ImplicitLocOpBuilder& b, const PrecisionConfig& precision_config,
-    const DotDimensionNumbers& dot_dimension_numbers,
-    DotOperands dot_operands) {
-  PrecisionConfig::Algorithm algorithm = precision_config.algorithm();
-  PrecisionSpec precision_spec{
-      algorithm,
-      // operand_precision() may be empty for ragged dot; default to DEFAULT.
-      precision_config.operand_precision_size() >= 2
-          ? XlaPrecisionToStableHloPrecision(
-                precision_config.operand_precision(0))
-          : mlir::stablehlo::Precision::DEFAULT,
-      precision_config.operand_precision_size() >= 2
-          ? XlaPrecisionToStableHloPrecision(
-                precision_config.operand_precision(1))
-          : mlir::stablehlo::Precision::DEFAULT,
-  };
-
-  mlir::stablehlo::DotDimensionNumbersAttr dot_dim_attr =
-      ::xla::stablehlo::ConvertDotDimensionNumbers(dot_dimension_numbers, &b);
-
-  // Use F32 as the accumulator type (standard for mixed-precision kernels).
-  Type force_accumulator_type = b.getF32Type();
-  if (ElementType(dot_operands.accumulator) != force_accumulator_type) {
-    dot_operands.accumulator =
-        Cast(b, dot_operands.accumulator, force_accumulator_type);
-  }
-
-  Value result = EmitStableHloDotAndAdd(b, dot_operands.lhs, dot_operands.rhs,
-                                        dot_operands.accumulator,
-                                        precision_spec, dot_dim_attr);
-
-  // Cast back to the outer accumulator type if needed.
-  Type outer_acc_type = ElementType(dot_operands.accumulator);
-  if (ElementType(result) != outer_acc_type) {
-    result = Cast(b, result, outer_acc_type);
-  }
-  return result;
-}
 
 }  // namespace xtile
 }  // namespace xla

@@ -101,16 +101,13 @@ class EmitterContext {
     return it->second;
   }
 
-  // Maps (or re-maps) a sequential-dim ID to an MLIR Value.
-  // Re-registration is allowed to support emitters that need to update
-  // the loop induction variable binding between different code regions.
-  // Returns true always (unlike the previous insert-only version).
   bool MapSymbolIdToSequentialDimValue(
       gpu::experimental::TiledDimId sequential_dim_id, mlir::Value value,
       Interval interval) {
-    sequential_dim_id_to_value_.insert_or_assign(
-        sequential_dim_id, std::make_pair(value, interval));
-    return true;
+    return sequential_dim_id_to_value_
+        .insert(
+            std::make_pair(sequential_dim_id, std::make_pair(value, interval)))
+        .second;
   }
 
   // Evaluates tiling parameters for the given affine expressions, e.g. offsets.

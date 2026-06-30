@@ -55,24 +55,24 @@ struct ScaledDotOperands {
   mlir::stablehlo::DotDimensionNumbersAttr dot_dimension_numbers;
 };
 
-// Returns the type to use for accumulation for the given `dot` instruction.
+// Returns the type to use for accumulation for the given instruction.
 // This also handles the case where the algorithm is `ALG_UNSET`.
 absl::StatusOr<::mlir::Type> GetDotAccumulatorType(
-    mlir::ImplicitLocOpBuilder& b, const HloDotInstruction& dot);
+    mlir::ImplicitLocOpBuilder& b, const HloInstruction& instr);
 
-// Emits a single-tile dot, considering the given `dot` instruction's algorithm
-// and operand precisions. Raises an `UnimplementedError` if the algorithm is
-// not supported.
+// Core single-tile dot emitter. Takes the instruction (for precision config and
+// operand type handling) and explicit dimension numbers (to support callers
+// like EmitRaggedDot that use custom-constructed inner dimension numbers).
+// Applies algorithm-specific operand/accumulator type casting automatically.
+absl::StatusOr<::mlir::Value> EmitSingleTileDot(
+    mlir::ImplicitLocOpBuilder& b, const HloInstruction& instr,
+    const DotDimensionNumbers& dim_nums, DotOperands dot_operands);
+
+// Convenience overload for HloDotInstruction: extracts dimension numbers from
+// the instruction itself.
 absl::StatusOr<::mlir::Value> EmitSingleTileDot(mlir::ImplicitLocOpBuilder& b,
                                                 const HloDotInstruction& dot,
                                                 DotOperands dot_operands);
-
-// Emits a single-tile dot using explicit precision config and dimension
-// numbers. Used by EmitRaggedDot, where the inner K/M loop matmul operand is an
-// HloRaggedDotInstruction (not derived from HloDotInstruction).
-absl::StatusOr<::mlir::Value> EmitSingleTileDotFromSpec(
-    mlir::ImplicitLocOpBuilder& b, const PrecisionConfig& precision_config,
-    const DotDimensionNumbers& dot_dimension_numbers, DotOperands dot_operands);
 
 // Emits a single-tile scaled-dot, considering the given `scaled-dot`
 // instruction's operand precisions. Raises an `InvalidArgumentError` if the

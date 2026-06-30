@@ -417,8 +417,8 @@ absl::StatusOr<bool> RaggedDotRewriter::RunImpl(
           .xla_gpu_experimental_use_ragged_dot_fusion() &&
       cudnn_version_ >= kMinCudnnVersionForRaggedDotFusion &&
       cuda_cc != nullptr && cuda_cc->IsAtLeastAmpere();
-  // When the Triton XTile backend is requested, GemmRewriter will wrap the
-  // kRaggedDot in a kTritonFusionKind fusion.  Do not expand it here.
+  // When the Triton XTile backend is requested, GemmRewriter will wrap every
+  // kRaggedDot in a kTritonGemmFusionKind fusion.  Do not expand them here.
   const bool triton_ragged_dot_enabled =
       module->config().debug_options().xla_gpu_experimental_triton_ragged_dot();
 
@@ -428,9 +428,9 @@ absl::StatusOr<bool> RaggedDotRewriter::RunImpl(
        module->MakeNonfusionComputations(execution_threads)) {
     for (auto* instruction : computation->instructions()) {
       if (instruction->opcode() == HloOpcode::kRaggedDot) {
-        // Only ragged-dot that cannot be lowered through Gpublaslt
-        // GroupGemm, cuDNN fusion, or the Triton XTile backend are added to
-        // the list of operations to rewrite as regular dots.
+        // Only ragged-dots that cannot be lowered through hipBLASLt GroupGemm,
+        // cuDNN fusion, or the Triton XTile backend are added to the list of
+        // operations to rewrite as regular dots.
         if (triton_ragged_dot_enabled) {
           continue;
         }

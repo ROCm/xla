@@ -122,21 +122,22 @@ AsyncThunkSequence TritonFusion::Emit(
   Thunk::ThunkInfo thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(
       &fusion, ir_emitter_context.GetNextThunkId());
   return Emit(ir_emitter_context, fusion, nullptr, {})
-      .Map([thunk_info = std::move(thunk_info)](
-               EmitResult result) -> absl::StatusOr<ThunkSequence> {
-        ASSIGN_OR_RETURN(
-            CustomKernel custom_kernel,
-            kernel::CreateOwnedCubinCustomKernel(
-                result.entry.kernel_name, result.entry.binary,
-                result.kernel_arguments.args().size(),
-                result.entry.launch_dimensions.block_counts(),
-                result.entry.launch_dimensions.thread_counts_per_block(),
-                result.entry.shmem_bytes));
-        return ThunkSequence::Of(std::make_unique<CustomKernelThunk>(
-            thunk_info, std::move(custom_kernel), result.kernel_arguments,
-            result.entry.use_pdl, std::vector<int64_t>{},
-            result.entry.tma_metadata));
-      });
+      .Map(
+          [thunk_info = std::move(thunk_info)](
+              EmitResult result) -> absl::StatusOr<ThunkSequence> {
+            ASSIGN_OR_RETURN(
+                CustomKernel custom_kernel,
+                kernel::CreateOwnedCubinCustomKernel(
+                    result.entry.kernel_name, result.entry.binary,
+                    result.kernel_arguments.args().size(),
+                    result.entry.launch_dimensions.block_counts(),
+                    result.entry.launch_dimensions.thread_counts_per_block(),
+                    result.entry.shmem_bytes));
+            return ThunkSequence::Of(std::make_unique<CustomKernelThunk>(
+                thunk_info, std::move(custom_kernel), result.kernel_arguments,
+                result.entry.use_pdl, std::vector<int64_t>{},
+                result.entry.tma_metadata));
+          });
 }
 
 xla::Future<TritonFusion::EmitResult> TritonFusion::Emit(
@@ -192,7 +193,7 @@ xla::Future<TritonFusion::EmitResult> TritonFusion::Emit(
           // need so many different fusion kinds?
           const std::vector<absl::string_view> kSupportedFusionKinds = {
               kTritonFusionKind,
-              kTritonGemmFusionKind,  // ragged-dot group-GEMM via XTile
+              kTritonGemmFusionKind,
               kTritonNestedGemmFusionKind,
               kTritonCollectiveFusionKind,
           };

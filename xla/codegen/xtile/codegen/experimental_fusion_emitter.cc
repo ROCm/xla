@@ -725,8 +725,8 @@ absl::StatusOr<TensorValue> EmitRaggedDot(
 
       ASSIGN_OR_RETURN(
           Value acc_next,
-          xtile::EmitSingleTileDotFromSpec(
-              b, ragged_dot_instr->precision_config(), inner_dot_dims,
+          xtile::EmitSingleTileDot(
+              b, *ragged_dot_instr, inner_dot_dims,
               xtile::DotOperands{dot_lhs, dot_rhs,
                                  mlir::cast<TensorValue>(dot_acc)}));
 
@@ -1091,8 +1091,8 @@ absl::StatusOr<TensorValue> EmitRaggedDot(
           // Partial dot: LHS [M, K] × RHS [K, N] → acc [M, N].
           ASSIGN_OR_RETURN(
               Value acc_next_2d,
-              xtile::EmitSingleTileDotFromSpec(
-                  b, ragged_dot_instr->precision_config(), inner_dot_dims,
+              xtile::EmitSingleTileDot(
+                  b, *ragged_dot_instr, inner_dot_dims,
                   xtile::DotOperands{dot_lhs, dot_rhs,
                                      mlir::cast<TensorValue>(dot_acc)}));
 
@@ -1458,8 +1458,8 @@ absl::StatusOr<TensorValue> EmitRaggedDot(
 
       ASSIGN_OR_RETURN(
           Value acc_next,
-          xtile::EmitSingleTileDotFromSpec(
-              b, ragged_dot_instr->precision_config(), inner_dot_dims,
+          xtile::EmitSingleTileDot(
+              b, *ragged_dot_instr, inner_dot_dims,
               xtile::DotOperands{lhs_tensor, rhs_tensor, acc_in}));
       mlir::scf::YieldOp::create(b, acc_next);
     }

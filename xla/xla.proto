@@ -962,8 +962,6 @@ message DebugOptions {
   // instead of hipBLASLt GroupedMatMul or cuDNN fusions.
   // Requires xla_gpu_experimental_enable_tiling_propagation=true for the
   // XTile emitter to use the experimental tiling analysis path.
-  // Only supports kRaggedNonContracting mode; kRaggedContracting is planned
-  // for a follow-up.
   optional bool xla_gpu_experimental_triton_ragged_dot = 513;
 
   // If true, PTX compilation will fail if a kernel spills registers.

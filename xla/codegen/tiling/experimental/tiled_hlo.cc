@@ -199,10 +199,6 @@ void SortTiledHloInstructionsInPostOrder(
 bool IsControlFlowLoop(const TiledHloInstruction& tiled_hlo) {
   const HloOpcode hlo_opcode = tiled_hlo.hlo()->opcode();
   return hlo_opcode == HloOpcode::kDot || hlo_opcode == HloOpcode::kScaledDot ||
-         // kRaggedDot uses a sequential inner loop (K for NonContracting,
-         // M for Contracting), so its operands go into a TiledHloRegion just
-         // like regular dot.  The outer G-loop (NonContracting) is handled
-         // explicitly inside EmitRaggedDot.
          hlo_opcode == HloOpcode::kRaggedDot;
 }
 
