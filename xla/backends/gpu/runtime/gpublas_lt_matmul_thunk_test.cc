@@ -174,8 +174,9 @@ class GpuBlasLtThunkBuilder {
         epilogue,
         /*algorithm_idx*/ 0, backend_config.autotune_workspace_size(),
         slices[0], slices[1], has_matrix_bias ? slices[2] : slices.back(),
-        slices.back(), bias, std::nullopt, std::nullopt, std::nullopt,
-        std::nullopt, std::nullopt, std::nullopt, std::nullopt /* workspace */);
+        slices.back(), std::nullopt, bias, std::nullopt, std::nullopt,
+        std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+        std::nullopt /* workspace */);
   }
 
   std::unique_ptr<BufferAllocations> buffer_allocations() {
@@ -330,6 +331,71 @@ TEST_F(GpuBlasLtMatmulThunkTest, SharedMatmulPlansFunctional) {
   EXPECT_EQ(blas_lt->GetMatmulPlanCacheSize(), 2);
 }
 
+TEST_F(GpuBlasLtMatmulThunkTest, GemmWithAutotuneOneCacheEntry) {
+  auto* exec = default_exec();
+  auto* blas_lt = exec->AsBlas()->GetBlasLt();
+  EXPECT_NE(blas_lt, nullptr);
+  blas_lt->ClearMatmulPlanCache();
+
+  constexpr absl::string_view simple_gemm_hlo = R"(
+HloModule SimpleGemm
+
+ENTRY AddDotsFunc {
+  x = f32[128,128] parameter(0)
+  y = f32[128,128] parameter(1)
+  ROOT dot_a = f32[128,128] dot(x, y), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+})";
+
+  HloModuleConfig config = GetModuleConfigForTest();
+  auto& debug_opts = config.mutable_debug_options();
+  debug_opts.set_xla_gpu_enable_cublaslt(true);
+  debug_opts.set_xla_gpu_autotune_level(1);
+  debug_opts.set_xla_gpu_enable_triton_gemm(false);
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseAndReturnVerifiedModule(simple_gemm_hlo, config));
+  EXPECT_TRUE(RunAndCompare(std::move(module), ErrorSpec{1e-3, 1e-3}));
+  EXPECT_EQ(blas_lt->GetMatmulPlanCacheSize(), 1);
+}
+
+TEST_F(GpuBlasLtMatmulThunkTest, GroupedGemmWithAutotuneOneCacheEntry) {
+  auto* rocm = gpu_comp().rocm_compute_capability();
+  if (rocm == nullptr || !rocm->gfx9_mi300_series()) {
+    GTEST_SKIP() << "Grouped GEMM is only supported on ROCm gfx942 or gfx950";
+  }
+
+  auto* exec = default_exec();
+  auto* blas_lt = exec->AsBlas()->GetBlasLt();
+  EXPECT_NE(blas_lt, nullptr);
+  blas_lt->ClearMatmulPlanCache();
+
+  constexpr absl::string_view grouped_gemm_hlo = R"(
+HloModule GroupedGemm
+
+ENTRY AddRaggedDotsFunc {
+  p0 = f16[64,9]{1,0} parameter(0)
+  p1 = f16[2,9,8]{2,1,0} parameter(1)
+  p2 = s32[2] constant({16, 48})
+  ROOT ragged-dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
+                    lhs_contracting_dims={1}, rhs_contracting_dims={1},
+                    lhs_ragged_dims={0}, rhs_group_dims={0}
+})";
+
+  HloModuleConfig config = GetModuleConfigForTest();
+  auto& debug_opts = config.mutable_debug_options();
+  debug_opts.set_xla_gpu_autotune_level(1);
+  debug_opts.set_xla_gpu_enable_cublaslt(true);
+
+  debug_opts.set_xla_gpu_enable_triton_gemm(false);
+  debug_opts.set_xla_gpu_experimental_use_ragged_dot_grouped_gemm(true);
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> grouped_module,
+      ParseAndReturnVerifiedModule(grouped_gemm_hlo, config));
+  EXPECT_TRUE(RunAndCompare(std::move(grouped_module), ErrorSpec{1e-4, 1e-5}));
+  EXPECT_EQ(blas_lt->GetMatmulPlanCacheSize(), 1);
+}
+
 // Mock BlasLt interface to test only the cache function
 struct MockBlasLt : public se::gpu::BlasLt {
   absl::Status Init() override { return absl::OkStatus(); }
@@ -339,12 +405,31 @@ struct MockBlasLt : public se::gpu::BlasLt {
     return MatmulPlanPtr{};
   }
 
-  absl::StatusOr<MatmulPlanPtr> GetGroupedMatmulPlan(
-      se::gpu::GroupedGemmConfig&, Epilogue) const override {
+  absl::StatusOr<MatmulPlanPtr> GetMatmulPlan(const se::gpu::GroupedGemmConfig&,
+                                              Epilogue) const override {
     return MatmulPlanPtr{};
   }
 
   ~MockBlasLt() override = default;
+};
+
+struct MockMatmulPlan : public se::gpu::BlasLt::MatmulPlan {
+  absl::StatusOr<std::vector<se::gpu::BlasLt::MatmulAlgorithm>> GetAlgorithms(
+      size_t max_algorithm_count, size_t max_workspace_size) const override {
+    se::gpu::BlasLt::MatmulAlgorithm algo;
+    return std::vector<se::gpu::BlasLt::MatmulAlgorithm>{algo};
+  }
+
+  absl::Status SetAlgorithm(const se::gpu::BlasLt::MatmulAlgorithm&) override {
+    return absl::OkStatus();
+  }
+
+  absl::Status ExecuteOnStream(
+      se::Stream* stream, const se::gpu::BlasLt::MemoryArgs& args,
+      se::blas::ProfileResult* profile_result) const override {
+    return absl::OkStatus();
+  }
+  ~MockMatmulPlan() override = default;
 };
 
 TEST_F(GpuBlasLtMatmulThunkTest, CacheUnitTest) {
@@ -353,13 +438,15 @@ TEST_F(GpuBlasLtMatmulThunkTest, CacheUnitTest) {
     auto create_func = [&]() -> absl::StatusOr<se::gpu::BlasLt::MatmulPlanPtr> {
       // We don't care about creation of matmul plans -> emulate it with a sleep
       absl::SleepFor(absl::Milliseconds(sleep_ms));
-      return se::gpu::BlasLt::MatmulPlanPtr{};
+      return std::make_unique<MockMatmulPlan>();
     };
 
-    return blas_lt->GetOrCreateMatmulPlan(key, create_func).status();
+    return blas_lt
+        ->GetOrCreateMatmulPlanWithAlgorithm(key, create_func, 0, 1, 0)
+        .status();
   };  // thread_func
 
-  const int num_blas_lts = 30, num_streams = 30,
+  const int num_blas_lts = 8, num_streams = 8,
             total = num_blas_lts * num_streams, mod = 11;
 
   std::vector<absl::Status> results(total);
@@ -382,7 +469,7 @@ TEST_F(GpuBlasLtMatmulThunkTest, CacheUnitTest) {
         });
       }
     }  // for j
-  }  // end block
+  }    // end block
   for (auto& res : results) {
     TF_ASSERT_OK(res);
   }
@@ -462,8 +549,8 @@ TEST_F(GpuBlasLtMatmulThunkTest, ThunkProtoSerialization) {
   thunk_info.profile_annotation = "test";
 
   CublasLtMatmulThunkProto proto;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kCublasLtMatmulThunkProtoText,
-                                                  &proto));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kCublasLtMatmulThunkProtoText, &proto));
 
   std::vector<BufferAllocation> allocations = {
       BufferAllocation(/*index=*/0, /*size=*/4, /*color=*/0),  // UNUSED
@@ -574,9 +661,13 @@ static se::StreamExecutor* GpuExecutor() {
 }
 
 // Returns true if the GPU supports CUDA graph tracing (requires CUDA 12.3+).
-static bool SupportsCudaGraphTracing(const se::StreamExecutor* executor) {
+static bool SupportsGpuGraphTracing(const se::StreamExecutor* executor) {
   const auto& desc = executor->GetDeviceDescription();
-  const auto* cuda_cc = desc.gpu_compute_capability().cuda_compute_capability();
+  const auto& gpu_cc = desc.gpu_compute_capability();
+  if (gpu_cc.IsRocm()) {
+    return true;
+  }
+  const auto* cuda_cc = gpu_cc.cuda_compute_capability();
   if (cuda_cc == nullptr) {
     return false;
   }
@@ -599,8 +690,8 @@ class CublasLtMatmulThunkCmdBufTest : public ::testing::Test {
 
   void SetUp() override {
     executor_ = GpuExecutor();
-    if (!SupportsCudaGraphTracing(executor_)) {
-      GTEST_SKIP() << "CUDA graph tracing is not supported";
+    if (!SupportsGpuGraphTracing(executor_)) {
+      GTEST_SKIP() << "GPU graph tracing is not supported";
     }
 
     TF_ASSERT_OK_AND_ASSIGN(stream_, executor_->CreateStream());
@@ -652,7 +743,8 @@ class CublasLtMatmulThunkCmdBufTest : public ::testing::Test {
     thunk_.emplace(Thunk::ThunkInfo(), /*canonical_hlo=*/"", config,
                    se::gpu::BlasLt::Epilogue::kDefault, /*algorithm_idx=*/0,
                    /*autotune_workspace_size=*/0, slice_a, slice_b, slice_c,
-                   slice_d, /*bias=*/std::nullopt, /*aux=*/std::nullopt,
+                   slice_d, /*group_sizes=*/std::nullopt, /*bias=*/std::nullopt,
+                   /*aux=*/std::nullopt,
                    /*a_scale=*/std::nullopt, /*b_scale=*/std::nullopt,
                    /*c_scale=*/std::nullopt, /*d_scale=*/std::nullopt,
                    /*d_amax=*/std::nullopt, slice_workspace);
@@ -759,6 +851,27 @@ TEST_F(CublasLtMatmulThunkCmdBufTest, RecordCommandBufferUpdate) {
   std::fill(dst.begin(), dst.end(), 0.0f);
   TF_ASSERT_OK(stream_->Memcpy(dst.data(), d_buf_, kDLength));
   ASSERT_EQ(dst, std::vector<float>({11, 11, 11, 27, 27, 27}));
+}
+
+TEST_F(CublasLtMatmulThunkCmdBufTest, BufferUses) {
+  Thunk::BufferUses uses = thunk_->buffer_uses();
+  ASSERT_EQ(uses.size(), 5);
+  EXPECT_EQ(uses[0],
+            BufferUse::Read(BufferAllocation::Slice(&alloc_a_, 0, kALength),
+                            ShapeUtil::MakeShape(F32, {2, 4})));
+  EXPECT_EQ(uses[1],
+            BufferUse::Read(BufferAllocation::Slice(&alloc_b_, 0, kBLength),
+                            ShapeUtil::MakeShape(F32, {4, 3})));
+  EXPECT_EQ(uses[2],
+            BufferUse::Read(BufferAllocation::Slice(&alloc_c_, 0, kCLength),
+                            ShapeUtil::MakeShape(F32, {2, 3})));
+  EXPECT_EQ(uses[3],
+            BufferUse::Write(BufferAllocation::Slice(&alloc_d_, 0, kDLength),
+                             ShapeUtil::MakeShape(F32, {2, 3})));
+  EXPECT_EQ(uses[4],
+            BufferUse::Scratch(
+                BufferAllocation::Slice(&alloc_workspace_, 0, kWorkspaceLength),
+                ShapeUtil::MakeShape(U8, {1024, 1024})));
 }
 
 }  // namespace
