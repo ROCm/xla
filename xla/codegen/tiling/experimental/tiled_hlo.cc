@@ -198,7 +198,8 @@ void SortTiledHloInstructionsInPostOrder(
 
 bool IsControlFlowLoop(const TiledHloInstruction& tiled_hlo) {
   const HloOpcode hlo_opcode = tiled_hlo.hlo()->opcode();
-  return hlo_opcode == HloOpcode::kDot || hlo_opcode == HloOpcode::kScaledDot;
+  return hlo_opcode == HloOpcode::kDot || hlo_opcode == HloOpcode::kScaledDot ||
+         hlo_opcode == HloOpcode::kRaggedDot;
 }
 
 bool IsControlFlowCondition(const TiledHloInstruction& tiled_hlo) {
