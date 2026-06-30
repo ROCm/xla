@@ -233,13 +233,6 @@ class TilingSpace {
   void AppendDimension(const HloInstruction* hlo, int64_t dim_position,
                        int64_t dim_size, DimensionSemantics dim_type);
 
-  // Override an existing kParallel dimension to kSequential.
-  // Used by ProcessRaggedDot for persistent kRaggedContracting where G
-  // (output dim 0 of [G,K,N]) acts as a sequential outer scan loop rather than
-  // a grid dimension.  The dimension retains its original ID; only `type`
-  // changes.
-  void OverrideParallelToSequential(const HloInstruction* hlo,
-                                    int64_t dim_position);
   // Registers a runtime variable associated with (`hlo`, `operand_id`).
   // `rt_var` is the HLO instruction whose value is the runtime variable.
   // `upper_bound` is a compile-time upper bound on the variable's value.
@@ -266,8 +259,8 @@ class TilingSpace {
   void ProcessReduce(const HloInstruction& hlo);
   void ProcessDynamicSlice(const HloInstruction& hlo);
   // Registers the sequential dimensions and RTVars for a kRaggedDot
-  // instruction.  Currently handles kRaggedNonContracting (persistent
-  // schedule where G is a kSequential outer loop) and kRaggedContracting.
+  // instruction.  Handles kRaggedNonContracting (G is a kSequential outer
+  // loop) and kRaggedContracting (G is kParallel, M is kSequential).
   void ProcessRaggedDot(const HloInstruction& hlo);
   void ProcessInstruction(const HloInstruction& hlo);
 

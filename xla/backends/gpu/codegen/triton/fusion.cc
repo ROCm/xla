@@ -192,7 +192,7 @@ xla::Future<TritonFusion::EmitResult> TritonFusion::Emit(
           // need so many different fusion kinds?
           const std::vector<absl::string_view> kSupportedFusionKinds = {
               kTritonFusionKind,
-              kTritonGemmFusionKind,      // ragged-dot group-GEMM via XTile
+              kTritonGemmFusionKind,  // ragged-dot group-GEMM via XTile
               kTritonNestedGemmFusionKind,
               kTritonCollectiveFusionKind,
           };
@@ -272,7 +272,7 @@ namespace {
 // When tile_sizes has fewer elements than dimensions, the computation aligns to
 // the *trailing* dimensions.  The leading dimensions that have no corresponding
 // tile entry are assumed to be handled as sequential loops inside each block
-// (e.g. the G outer-loop in a persistent kRaggedContracting kernel) and do NOT
+// (e.g. the G outer-loop in a kRaggedNonContracting kernel) and do NOT
 // contribute to the block count.
 //
 // Examples:

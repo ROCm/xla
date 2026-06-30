@@ -105,7 +105,8 @@ absl::StatusOr<std::vector<RepeatedFlagModifier>> ParseRepeatedEnumModifiers(
 namespace {
 
 template <typename T>
-static auto FindRepeatedFieldValue(google::protobuf::RepeatedField<int>* list, T value) {
+static auto FindRepeatedFieldValue(google::protobuf::RepeatedField<int>* list,
+                                   T value) {
   for (auto it = list->begin(); it != list->end(); ++it) {
     if (*it == value) {
       return it;
@@ -348,8 +349,6 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_verify_triton_fusion_numerics(false);
   opts.set_xla_gpu_experimental_enable_tiling_propagation(false);
   opts.set_xla_gpu_experimental_triton_ragged_dot(false);
-  opts.set_xla_gpu_experimental_triton_ragged_dot_persistent_contracting(false);
-
   // Moving reduce-scatter out of while loops can increase memory footprint, so
   // turning it off by default.
   opts.set_xla_gpu_enable_while_loop_reduce_scatter_code_motion(false);
@@ -3193,16 +3192,6 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_experimental_triton_ragged_dot(),
       "If true, route kRaggedDot through the experimental Triton XTile "
       "backend instead of hipBLASLt GroupedGEMM."));
-  flag_list->push_back(tsl::Flag(
-      "xla_gpu_experimental_triton_ragged_dot_persistent_contracting",
-      bool_setter_for(
-          &DebugOptions::
-              set_xla_gpu_experimental_triton_ragged_dot_persistent_contracting),
-      debug_options
-          ->xla_gpu_experimental_triton_ragged_dot_persistent_contracting(),
-      "If true, use the persistent kRaggedContracting schedule for Triton "
-      "ragged-dot (Grid = K×N; G sequential outer loop with inline writes). "
-      "Has no effect on kRaggedNonContracting."));
 
   auto setter_for_xla_gpu_detect_nan =
       [debug_options, detection_mode](const std::string& value) {
@@ -3386,8 +3375,7 @@ FlagStatus GetFlagStatus(absl::string_view flag_name) {
           "xla_gpu_all_reduce_combine_threshold_bytes",
           "xla_gpu_autotune_level",
           "xla_gpu_collective_permute_decomposer_threshold",
-          "xla_gpu_cublas_fallback",
-          "xla_gpu_dot_merger_threshold_mb",
+          "xla_gpu_cublas_fallback", "xla_gpu_dot_merger_threshold_mb",
           "xla_gpu_enable_dynamic_slice_fusion",
           "xla_gpu_enable_latency_hiding_scheduler",
           "xla_gpu_enable_pipelined_all_gather",

@@ -358,33 +358,17 @@ absl::Status TritonBackend::ApplyConfig(HloInstruction& instr,
       inner_tile.add_sizes(1);                              // G sequential
       inner_tile.add_sizes(triton_config_proto.block_k());  // K sequential
     } else {
-      // kRaggedContracting — persistent vs non-persistent schedule.
-      const bool persistent_apply =
-          instr.GetModule()
-              ->config()
-              .debug_options()
-              .xla_gpu_experimental_triton_ragged_dot_persistent_contracting();
-      if (persistent_apply) {
-        // Persistent: Grid = K_tiles × N_tiles.
-        // output_tile = [K, N] (no G, which is sequential outer loop).
-        // inner_tile  = [G=1, M=block_m] (G sequential + M sequential).
-        output_tile->add_sizes(triton_config_proto.block_k());  // K output
-        output_tile->add_sizes(triton_config_proto.block_n());  // N output
-        inner_tile.add_sizes(1);                                // G sequential
-        inner_tile.add_sizes(triton_config_proto.block_m());    // M sequential
-      } else {
-        // Non-persistent: Grid = G × K_tiles × N_tiles.
-        // output_tile = [G=1, batch..., K, N].
-        // inner_tile  = [M=block_m].
-        output_tile->add_sizes(1);  // G tile = 1
-        for (int64_t b_dim : dot_dims.lhs_batch_dimensions()) {
-          (void)b_dim;
-          output_tile->add_sizes(1);
-        }
-        output_tile->add_sizes(triton_config_proto.block_k());  // K output
-        output_tile->add_sizes(triton_config_proto.block_n());  // N output
-        inner_tile.add_sizes(triton_config_proto.block_m());    // M sequential
+      // kRaggedContracting: Grid = G × K_tiles × N_tiles.
+      // output_tile = [G=1, batch..., K, N].
+      // inner_tile  = [M=block_m].
+      output_tile->add_sizes(1);  // G tile = 1
+      for (int64_t b_dim : dot_dims.lhs_batch_dimensions()) {
+        (void)b_dim;
+        output_tile->add_sizes(1);
       }
+      output_tile->add_sizes(triton_config_proto.block_k());  // K output
+      output_tile->add_sizes(triton_config_proto.block_n());  // N output
+      inner_tile.add_sizes(triton_config_proto.block_m());    // M sequential
     }
 
     blk_cfg->set_num_warps(triton_config_proto.num_warps());
@@ -475,15 +459,6 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
     }
   }
 
-  // Persistent kRaggedContracting: G is a sequential inner loop inside each
-  // CTA, not a grid dimension.  The group_size L2 tile-reordering only applies
-  // to the non-persistent (G × K_tiles × N_tiles) grid schedule.
-  // Skip gs > 1 for persistent to avoid profiling redundant no-op variants.
-  const bool is_persistent_rd =
-      is_contracting_rd &&
-      debug_options()
-          .xla_gpu_experimental_triton_ragged_dot_persistent_contracting();
-
   const bool exhaustive_search =
       debug_options().xla_gpu_exhaustive_tiling_search();
 
@@ -559,9 +534,7 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
         continue;
       // For kRaggedContracting: group_size controls G-dim grouping (not M).
       // Skip if group_size > G — impossible to group more slices than exist.
-      // Skip gs > 1 for persistent schedule — emitter ignores group_size there.
       if (is_contracting_rd && c.group_size > G) continue;
-      if (is_persistent_rd && c.group_size > 1) continue;
       auto config = std::make_unique<BackendConfig>();
       *config->mutable_triton() =
           TritonGemmConfig(c.block_m, c.block_n, c.block_k,
@@ -603,8 +576,6 @@ TritonBackend::GetSupportedConfigsForRaggedDot(const HloInstruction* instr) {
                 // group_size controls G-dim grouping for kRaggedContracting.
                 // Skip if group_size > G — impossible to group more than G.
                 if (group_size > G) continue;
-                // Persistent schedule: emitter ignores group_size — skip gs>1.
-                if (is_persistent_rd && group_size > 1) continue;
               } else {
                 // group_size controls M-tile grouping for
                 // kRaggedNonContracting.

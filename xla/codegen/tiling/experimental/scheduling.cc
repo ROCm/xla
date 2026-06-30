@@ -113,8 +113,8 @@ llvm::SmallVector<int64_t> GetParallelDimensionsPermutation(
   }
 
   // ---- Ragged dot ----
-  // kRaggedNonContracting: output is (M_total, N).  G and K are kSequential
-  //   (persistent schedule), so M and N are the only two kParallel dims.
+  // kRaggedNonContracting: output is (M_total, N).  G and K are kSequential,
+  //   so M and N are the only two kParallel dims.
   //   Use M_total/G as a static estimate of per-group M (M_avg).
   //   If M_avg < N → LHS activation tiles are smaller → traverse N slowly.
   //
@@ -200,10 +200,9 @@ llvm::SmallVector<int64_t> GetParallelDimensionsPermutation(
       }
       // Compute the parallel-position index (rank among kParallel dims only)
       // for K and N.  We must NOT use the global dimension IDs here because
-      // for persistent kRaggedContracting G is kSequential, so the permutation
-      // has size num_parallel_dims (= 2 for K+N), but G's global ID is still 0
+      // the permutation has size num_parallel_dims, but G's global ID is 0,
       // which shifts K to global ID 1 and N to global ID 2.  Using global IDs
-      // directly would index the size-2 permutation at position 2 → OOB crash.
+      // directly would index the permutation out of bounds.
       int64_t k_parallel_pos = -1, n_parallel_pos = -1;
       {
         int64_t pos = 0;

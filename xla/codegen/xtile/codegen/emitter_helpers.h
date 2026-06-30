@@ -102,9 +102,8 @@ class EmitterContext {
   }
 
   // Maps (or re-maps) a sequential-dim ID to an MLIR Value.
-  // Re-registration is allowed so that the persistent kRaggedContracting
-  // emitter can replace the loop induction variable (only valid inside the
-  // loop body) with a post-loop constant before the outer InsertTileOp.
+  // Re-registration is allowed to support emitters that need to update
+  // the loop induction variable binding between different code regions.
   // Returns true always (unlike the previous insert-only version).
   bool MapSymbolIdToSequentialDimValue(
       gpu::experimental::TiledDimId sequential_dim_id, mlir::Value value,

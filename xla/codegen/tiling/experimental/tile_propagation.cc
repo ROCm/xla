@@ -603,7 +603,7 @@ Tiles PropagateTileToInputForScaledDotOp(const TilingSpace& tiling_space,
 //
 // Returns three operand tiles: [lhs_tile, rhs_tile, group_sizes_tile].
 //
-// kRaggedNonContracting (persistent schedule — G is kSequential):
+// kRaggedNonContracting (G is kSequential):
 //   LHS (M_total, K), RHS (G, K, N), group_sizes (G,) → output (M_total, N)
 //   LHS M tile: offset = d[m]*BLOCK_M (within-group); upper_bound = gs_sym.
 //   The emitter adds last_m (loop-carried iter_arg) to the M pointer offset.
@@ -613,7 +613,7 @@ Tiles PropagateTileToInputForScaledDotOp(const TilingSpace& tiling_space,
 //   RHS N tile: directly from output N dim.
 //   group_sizes tile: scalar slice at G-loop index.
 //
-// kRaggedContracting (persistent or non-persistent — G is kParallel):
+// kRaggedContracting (G is kParallel):
 //   LHS (M_total, K), RHS (K, N), group_sizes (G,) → output (G, K, N)
 //   LHS/RHS M tile: absolute offset = sm_sym + d[m]*BLOCK_M;
 //                   upper_bound = sm_sym + gs_sym.
