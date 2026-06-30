@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   call-upstream-ci:
-    uses: ROCm/xla/.github/workflows/rocm_ci.yml@make_upstream_pipeline_callable_from_inside_rocm_dev_infra_prs
+    uses: openxla/xla/.github/workflows/rocm_ci.yml@main
     with:
       rocm_xla_branch: ${{ github.head_ref || github.ref_name }}
       runner_label: linux-xla-do-mi350x-1
