@@ -50,7 +50,6 @@ absl::string_view GetCusparseVersion() { return TF_CUSPARSE_VERSION; }
 absl::string_view GetNcclVersion() { return TF_NCCL_VERSION; }
 absl::string_view GetTensorRTVersion() { return TF_TENSORRT_VERSION; }
 absl::string_view GetNvshmemVersion() { return XLA_NVSHMEM_VERSION; }
-
 absl::StatusOr<void*> GetDsoHandle(const std::string& name,
                                    absl::string_view version) {
   auto filename =
