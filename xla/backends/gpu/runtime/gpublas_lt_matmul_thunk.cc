@@ -92,8 +92,6 @@ CublasLtMatmulThunk::CublasLtMatmulThunk(
 
 absl::Status CublasLtMatmulThunk::ExecuteOnStreamInternal(
     se::Stream* stream, const ExecuteParams& params) {
-  TF_ASSIGN_OR_RETURN(auto* plan, GetCachedMatmulPlan(params));
-
   VLOG(3) << "Running cublas_lt matmul thunk";
   const BufferAllocations& allocs = *params.buffer_allocations;
 
@@ -124,40 +122,40 @@ absl::Status CublasLtMatmulThunk::ExecuteOnStreamInternal(
     workspace = allocs.GetDeviceAddress(workspace_->slice);
   }
 
-  return plan->ExecuteOnStream(
-      stream, allocs.GetDeviceAddress(a_.slice),
-      allocs.GetDeviceAddress(b_.slice), allocs.GetDeviceAddress(c_.slice),
-      allocs.GetDeviceAddress(d_.slice), bias, aux, a_scale, b_scale, c_scale,
-      d_scale, d_amax, workspace);
+  ASSIGN_OR_RETURN(auto* plan, GetCachedMatmulPlan(stream));
+  se::gpu::BlasLt::MemoryArgs args{allocs.GetDeviceAddress(a_.slice),
+                                   allocs.GetDeviceAddress(b_.slice),
+                                   allocs.GetDeviceAddress(c_.slice),
+                                   allocs.GetDeviceAddress(d_.slice),
+                                   bias,
+                                   aux,
+                                   a_scale,
+                                   b_scale,
+                                   c_scale,
+                                   d_scale,
+                                   d_amax,
+                                   workspace,
+                                   nullptr};
+
+  return plan->ExecuteOnStream(stream, args);
 }
 
 absl::StatusOr<se::gpu::BlasLt::MatmulPlan*>
-CublasLtMatmulThunk::GetCachedMatmulPlan(const ExecuteParams& params) {
-  auto* blas_lt = se::gpu::BlasLt::Get(params.stream);
+CublasLtMatmulThunk::GetCachedMatmulPlan(se::Stream* stream) {
+  TF_ASSIGN_OR_RETURN(auto* blas_lt, se::gpu::BlasLt::Get(stream->parent()));
   auto create = [&]() -> absl::StatusOr<se::gpu::BlasLt::MatmulPlanPtr> {
-    VLOG(2) << this << ": Adding new MatmulPlan for stream: " << params.stream
+    VLOG(2) << this
+            << ": Adding new MatmulPlan for executor: " << stream->parent()
             << " instr: " << canonical_hlo_;
 
-    TF_ASSIGN_OR_RETURN(auto plan,
-                        blas_lt->GetMatmulPlan(gemm_config_, epilogue_));
-
-    // Set the workspace size to the size that was used for autotuning, so
-    // algorithm index will be the same as returned by GetAlgorithms called
-    // during autotuning.
-    int64_t max_workspace = autotune_workspace_size_;
-
-    // If autotuning is disabled, there is no point on retrieving all
-    // algorithms, it's enough to get the default one only.
-    int64_t num_algorithms =
-        algorithm_idx_ == 0 ? 1 : GemmConfig::kNumAlgorithms;
-    TF_ASSIGN_OR_RETURN(
-        auto algorithms,
-        plan->GetAlgorithms(params.stream, num_algorithms, max_workspace));
-
-    TF_RETURN_IF_ERROR(plan->SetAlgorithm(algorithms[algorithm_idx_]));
-    return std::move(plan);
+    return blas_lt->GetMatmulPlan(gemm_config_, epilogue_);
   };
-  return blas_lt->GetOrCreateMatmulPlan(canonical_hlo_, create);
+  // If autotuning is disabled, there is no point on retrieving all
+  // algorithms, it's enough to get the default one only.
+  size_t num_algorithms = algorithm_idx_ == 0 ? 1 : GemmConfig::kNumAlgorithms;
+  return blas_lt->GetOrCreateMatmulPlanWithAlgorithm(
+      canonical_hlo_, create, algorithm_idx_, num_algorithms,
+      autotune_workspace_size_);
 }
 
 absl::Status CublasLtMatmulThunk::Initialize(const InitializeParams& params) {

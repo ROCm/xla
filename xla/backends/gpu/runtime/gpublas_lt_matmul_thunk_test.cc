@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/backends/gpu/runtime/gpublas_lt_matmul_thunk.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -320,6 +321,34 @@ TEST_F(GpuBlasLtMatmulThunkTest, SharedMatmulPlansFunctional) {
   EXPECT_EQ(blas_lt->GetMatmulPlanCacheSize(), 2);
 }
 
+TEST_F(GpuBlasLtMatmulThunkTest, GemmWithAutotuneOneCacheEntry) {
+  auto* exec = default_exec();
+  auto* blas_lt = exec->AsBlas()->GetBlasLt();
+  EXPECT_NE(blas_lt, nullptr);
+  blas_lt->ClearMatmulPlanCache();
+
+  constexpr absl::string_view simple_gemm_hlo = R"(
+HloModule SimpleGemm
+
+ENTRY AddDotsFunc {
+  x = f32[128,128] parameter(0)
+  y = f32[128,128] parameter(1)
+  ROOT dot_a = f32[128,128] dot(x, y), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+})";
+
+  HloModuleConfig config = GetModuleConfigForTest();
+  auto& debug_opts = config.mutable_debug_options();
+  debug_opts.set_xla_gpu_enable_cublaslt(true);
+  debug_opts.set_xla_gpu_autotune_level(1);
+  debug_opts.set_xla_gpu_enable_triton_gemm(false);
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseAndReturnVerifiedModule(simple_gemm_hlo, config));
+  EXPECT_TRUE(RunAndCompare(std::move(module), ErrorSpec{1e-3, 1e-3}));
+  EXPECT_EQ(blas_lt->GetMatmulPlanCacheSize(), 1);
+}
+
 // Mock BlasLt interface to test only the cache function
 struct MockBlasLt : public se::gpu::BlasLt {
   absl::Status Init() override { return absl::OkStatus(); }
@@ -328,7 +357,27 @@ struct MockBlasLt : public se::gpu::BlasLt {
                                               Epilogue) const override {
     return MatmulPlanPtr{};
   }
+
   ~MockBlasLt() override = default;
+};
+
+struct MockMatmulPlan : public se::gpu::BlasLt::MatmulPlan {
+  absl::StatusOr<std::vector<se::gpu::BlasLt::MatmulAlgorithm>> GetAlgorithms(
+      size_t max_algorithm_count, size_t max_workspace_size) const override {
+    se::gpu::BlasLt::MatmulAlgorithm algo;
+    return std::vector<se::gpu::BlasLt::MatmulAlgorithm>{algo};
+  }
+
+  absl::Status SetAlgorithm(const se::gpu::BlasLt::MatmulAlgorithm&) override {
+    return absl::OkStatus();
+  }
+
+  absl::Status ExecuteOnStream(
+      se::Stream* stream, const se::gpu::BlasLt::MemoryArgs& args,
+      se::blas::ProfileResult* profile_result) const override {
+    return absl::OkStatus();
+  }
+  ~MockMatmulPlan() override = default;
 };
 
 TEST_F(GpuBlasLtMatmulThunkTest, CacheUnitTest) {
@@ -337,10 +386,12 @@ TEST_F(GpuBlasLtMatmulThunkTest, CacheUnitTest) {
     auto create_func = [&]() -> absl::StatusOr<se::gpu::BlasLt::MatmulPlanPtr> {
       // We don't care about creation of matmul plans -> emulate it with a sleep
       absl::SleepFor(absl::Milliseconds(sleep_ms));
-      return se::gpu::BlasLt::MatmulPlanPtr{};
+      return std::make_unique<MockMatmulPlan>();
     };
 
-    return blas_lt->GetOrCreateMatmulPlan(key, create_func).status();
+    return blas_lt
+        ->GetOrCreateMatmulPlanWithAlgorithm(key, create_func, 0, 1, 0)
+        .status();
   };  // thread_func
 
   const int num_blas_lts = 30, num_streams = 30,

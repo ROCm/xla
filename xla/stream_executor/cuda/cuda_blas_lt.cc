@@ -150,10 +150,10 @@ absl::StatusOr<cublasLtEpilogue_t> AsCublasLtEpilogue(
 }  // namespace
 
 absl::Status BlasLt::Init() {
-  cublasLtHandle_t blas_lt;
-  SE_CUBLAS_RETURN_IF_ERROR(cublasLtCreate(&blas_lt));
+  cublasLtHandle_t handle;
+  SE_CUBLAS_RETURN_IF_ERROR(cublasLtCreate(&handle));
   absl::MutexLock lock(mu_);
-  blas_lt_.reset(blas_lt);
+  handle_.reset(handle);
   return absl::OkStatus();
 }
 
@@ -167,13 +167,13 @@ absl::Status BlasLt::Init() {
                                  m.num_cols, m.leading_dim_stride));
   // Wrap cublas handle immediately, so it is cleaned up if an error occurs.
   BlasLt::MatrixLayout layout(cu_layout);
-  TF_RETURN_IF_ERROR(
+  RETURN_IF_ERROR(
       SetAttr(cu_layout, CUBLASLT_MATRIX_LAYOUT_ORDER,
               int32_t{(m.order == gpu::MatrixLayout::Order::kRowMajor)
                           ? CUBLASLT_ORDER_ROW
                           : CUBLASLT_ORDER_COL}));
-  TF_RETURN_IF_ERROR(SetAttr(cu_layout, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT,
-                             static_cast<int32_t>(m.batch_size)));
+  RETURN_IF_ERROR(SetAttr(cu_layout, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT,
+                          static_cast<int32_t>(m.batch_size)));
 
   VLOG(2) << "MatrixLayout::Create: num_rows: " << m.num_rows
           << " num_cols:" << (int)m.num_cols << ", order: " << (int)m.order
@@ -182,7 +182,7 @@ absl::Status BlasLt::Init() {
           << " leaddimstride: " << m.leading_dim_stride
           << " batch_stride: " << m.batch_stride;
 
-  TF_RETURN_IF_ERROR(SetAttr(
+  RETURN_IF_ERROR(SetAttr(
       cu_layout, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, m.batch_stride));
   return std::move(layout);
 }
@@ -207,19 +207,19 @@ cudaDataType_t BlasLt::MatrixLayout::type() const {
       &cu_desc, AsCublasComputeType(compute_type), AsCudaDataType(scale_type)));
   // Wrap cublas handle immediately, so it is cleaned up if an error occurs.
   BlasLt::MatmulDesc desc(cu_desc);
-  TF_RETURN_IF_ERROR(SetAttr(cu_desc, CUBLASLT_MATMUL_DESC_POINTER_MODE,
-                             AsCublasLtPointerMode(pointer_mode)));
-  TF_RETURN_IF_ERROR(SetAttr(cu_desc, CUBLASLT_MATMUL_DESC_TRANSA,
-                             AsCublasOperation(trans_a)));
-  TF_RETURN_IF_ERROR(SetAttr(cu_desc, CUBLASLT_MATMUL_DESC_TRANSB,
-                             AsCublasOperation(trans_b)));
+  RETURN_IF_ERROR(SetAttr(cu_desc, CUBLASLT_MATMUL_DESC_POINTER_MODE,
+                          AsCublasLtPointerMode(pointer_mode)));
+  RETURN_IF_ERROR(SetAttr(cu_desc, CUBLASLT_MATMUL_DESC_TRANSA,
+                          AsCublasOperation(trans_a)));
+  RETURN_IF_ERROR(SetAttr(cu_desc, CUBLASLT_MATMUL_DESC_TRANSB,
+                          AsCublasOperation(trans_b)));
   TF_ASSIGN_OR_RETURN(cublasLtEpilogue_t epi, AsCublasLtEpilogue(epilogue));
-  TF_RETURN_IF_ERROR(SetAttr(cu_desc, CUBLASLT_MATMUL_DESC_EPILOGUE, epi));
+  RETURN_IF_ERROR(SetAttr(cu_desc, CUBLASLT_MATMUL_DESC_EPILOGUE, epi));
   // The CUBLASLT_MATMUL_DESC_FAST_ACCUM flag only impacts FP8 gemms. It speeds
   // up gemms at the expense of accumulation precision. In practice, it is safe
   // to set on the forward pass but not the backward pass.
-  TF_RETURN_IF_ERROR(SetAttr(cu_desc, CUBLASLT_MATMUL_DESC_FAST_ACCUM,
-                             static_cast<int8_t>(enable_fast_accum)));
+  RETURN_IF_ERROR(SetAttr(cu_desc, CUBLASLT_MATMUL_DESC_FAST_ACCUM,
+                          static_cast<int8_t>(enable_fast_accum)));
   return std::move(desc);
 }
 
@@ -240,16 +240,14 @@ cublasLtPointerMode_t BlasLt::MatmulDesc::pointer_mode() const {
           .value());
 }
 
-auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
-                                       size_t max_algorithm_count,
+auto BlasLt::MatmulPlan::GetAlgorithms(size_t max_algorithm_count,
                                        size_t max_workspace_size) const
     -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
   max_algorithm_count = std::min(max_algorithm_count, size_t{INT_MAX});
   std::vector<cublasLtMatmulHeuristicResult_t> results(max_algorithm_count);
   {
-    auto blas_lt = static_cast<BlasLt*>(gpu::BlasLt::Get(stream));
-    absl::MutexLock lock(blas_lt->mu_);
-    TF_RET_CHECK(blas_lt->blas_lt_ != nullptr);
+    absl::MutexLock lock(blas_lt_.mu_);
+    TF_RET_CHECK(blas_lt_.handle_.get() != nullptr);
 
     cublasLtMatmulPreference_t cu_preference;
     SE_CUBLAS_RETURN_IF_ERROR(cublasLtMatmulPreferenceCreate(&cu_preference));
@@ -262,11 +260,12 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
         cu_preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
         max_workspace_size));
 
-    std::unique_ptr<ActivateContext> activation = blas_lt->parent_->Activate();
+    std::unique_ptr<ActivateContext> activation =
+        blas_lt_.executor_->Activate();
 
     int found_algorithm_count = 0;
     SE_CUBLAS_RETURN_IF_ERROR(cublasLtMatmulAlgoGetHeuristic(
-        blas_lt->blas_lt_.get(), op_desc_.get(), a_desc_.get(), b_desc_.get(),
+        blas_lt_.handle_.get(), op_desc_.get(), a_desc_.get(), b_desc_.get(),
         c_desc_.get(), d_desc_.get(), preference.get(), max_algorithm_count,
         results.data(), &found_algorithm_count));
     results.resize(found_algorithm_count);
@@ -300,9 +299,8 @@ bool IsFastAccumEnabled(const xla::PrecisionConfig::Algorithm algorithm,
 
 }  // namespace
 
-auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg,
-                           gpu::BlasLt::Epilogue epilogue) const
-    -> absl::StatusOr<MatmulPlanPtr> {
+absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetMatmulPlan(
+    const gpu::GemmConfig& cfg, gpu::BlasLt::Epilogue epilogue) const {
   auto lhs_layout = cfg.lhs_layout, rhs_layout = cfg.rhs_layout,
        output_layout = cfg.output_layout, c_layout = cfg.c_layout;
   // cublasLt matmul requires batch sizes to be equal. If only one operand has a
@@ -324,7 +322,7 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg,
         gpu::GetBlasComputationType(
             cfg.precision_algorithm, lhs_layout.dtype, output_layout.dtype,
             cfg.compute_precision,
-            parent_->GetDeviceDescription().gpu_compute_capability()));
+            executor_->GetDeviceDescription().gpu_compute_capability()));
   }
 
   // FP8 matmuls have a fast accumulation mode that is less precise than the
@@ -345,19 +343,99 @@ auto BlasLt::GetMatmulPlan(const gpu::GemmConfig& cfg,
   TF_ASSIGN_OR_RETURN(auto c_desc, MatrixLayout::Create(c_layout));
   TF_ASSIGN_OR_RETURN(auto d_desc, MatrixLayout::Create(output_layout));
 
-  return std::make_unique<MatmulPlan>(std::move(op_desc), std::move(a_desc),
-                                      std::move(b_desc), std::move(c_desc),
-                                      std::move(d_desc), cfg.alpha, cfg.beta,
-                                      must_swap_operands);
+  std::tuple operand_types{a_desc.type(), b_desc.type(), c_desc.type(),
+                           d_desc.type()};
+
+  auto plan = std::make_unique<MatmulPlan>(*this, std::move(op_desc),
+                                           std::move(a_desc), std::move(b_desc),
+                                           std::move(c_desc), std::move(d_desc),
+                                           cfg.beta == 0.0, must_swap_operands);
+
+  auto assign_alpha_beta = [&](auto scale) {
+    using Scale = decltype(scale);
+    static_assert(sizeof(Scale) <= MatmulPlan::kMaxScaleBytes,
+                  "Scale type must fit in kMaxScaleBytes");
+    auto* palpha = reinterpret_cast<Scale*>(&plan->alpha_[0]);
+    if constexpr (std::is_same_v<Scale, xla::complex64> ||
+                  std::is_same_v<Scale, xla::complex128>) {
+      *palpha = static_cast<Scale>(cfg.alpha);
+    } else {
+      *palpha = static_cast<Scale>(cfg.alpha.real());
+    }
+    auto* pbeta = reinterpret_cast<Scale*>(&plan->beta_[0]);
+    *pbeta = static_cast<Scale>(cfg.beta);
+  };
+
+  // clang-format off
+#define TYPED_MATMUL(Scale, ATYPE, BTYPE, CTYPE, DTYPE)               \
+  } else if (operand_types == std::tuple{ATYPE, BTYPE, CTYPE, DTYPE}) { \
+    assign_alpha_beta(Scale{});
+  // clang-format on
+
+  if (false) {  // This is needed to avoid compiler error for the else clause.
+#if CUDA_VERSION >= 11080
+    // FP8 compatible type combinations (see cuBLASLt documentation):
+    TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E4M3, CUDA_R_16BF,
+                 CUDA_R_16BF)
+    TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E4M3, CUDA_R_16BF,
+                 CUDA_R_8F_E4M3)
+    TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E4M3, CUDA_R_16F,
+                 CUDA_R_8F_E4M3)
+    TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E4M3, CUDA_R_16F, CUDA_R_16F)
+    TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E4M3, CUDA_R_32F, CUDA_R_32F)
+
+    TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_16BF,
+                 CUDA_R_16BF)
+    TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_16BF,
+                 CUDA_R_8F_E4M3)
+    TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_16BF,
+                 CUDA_R_8F_E5M2)
+    TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_16F,
+                 CUDA_R_8F_E4M3)
+    TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_16F,
+                 CUDA_R_8F_E5M2)
+    TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_16F, CUDA_R_16F)
+    TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_32F, CUDA_R_32F)
+
+    TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_16BF,
+                 CUDA_R_16BF)
+    TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_16BF,
+                 CUDA_R_8F_E4M3)
+    TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_16BF,
+                 CUDA_R_8F_E5M2)
+    TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_16F,
+                 CUDA_R_8F_E4M3)
+    TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_16F,
+                 CUDA_R_8F_E5M2)
+    TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_16F, CUDA_R_16F)
+    TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_32F, CUDA_R_32F)
+#endif
+
+    // Other data types:
+    TYPED_MATMUL(float, CUDA_R_16BF, CUDA_R_16BF, CUDA_R_16BF, CUDA_R_16BF)
+    TYPED_MATMUL(float, CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_16F)
+    TYPED_MATMUL(float, CUDA_R_16BF, CUDA_R_16BF, CUDA_R_32F, CUDA_R_32F)
+    TYPED_MATMUL(float, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F, CUDA_R_32F)
+    TYPED_MATMUL(float, CUDA_R_32F, CUDA_R_32F, CUDA_R_32F, CUDA_R_32F)
+    TYPED_MATMUL(double, CUDA_R_64F, CUDA_R_64F, CUDA_R_64F, CUDA_R_64F)
+    TYPED_MATMUL(int32_t, CUDA_R_8I, CUDA_R_8I, CUDA_R_32I, CUDA_R_32I)
+    TYPED_MATMUL(float, CUDA_R_8I, CUDA_R_8I, CUDA_R_32F, CUDA_R_32F)
+    TYPED_MATMUL(xla::complex64, CUDA_C_32F, CUDA_C_32F, CUDA_C_32F, CUDA_C_32F)
+    TYPED_MATMUL(xla::complex128, CUDA_C_64F, CUDA_C_64F, CUDA_C_64F,
+                 CUDA_C_64F)
+  } else {
+    return xla::Internal("Unexpected operand types for cublaslt matmul");
+  }
+#undef TYPED_MATMUL
+  return plan;
 }
 
-absl::Status BlasLt::MatmulPlan::DoMatmul(
-    Stream* stream, const void* alpha, const void* beta,
-    const gpu::BlasLt::MemoryArgs& args,
+absl::Status BlasLt::MatmulPlan::ExecuteOnStream(
+    Stream* stream, const gpu::BlasLt::MemoryArgs& args,
     blas::ProfileResult* profile_result) const {
   if (!algorithm_.has_value()) {
     return absl::InternalError(
-        "Algorithm must be set before calling DoMatMul!");
+        "Algorithm must be set before calling ExecuteOnStream!");
   }
   DeviceAddressBase a = args.a, b = args.b;
   DeviceAddressBase a_scale = args.a_scale, b_scale = args.b_scale;
@@ -366,9 +444,6 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
     std::swap(a_scale, b_scale);
   }
 
-  auto blas_lt = static_cast<BlasLt*>(gpu::BlasLt::Get(stream));
-  TF_RET_CHECK(blas_lt != nullptr);
-
   std::unique_ptr<EventBasedTimer> timer;
   if (profile_result != nullptr) {
     TF_ASSIGN_OR_RETURN(timer, stream->CreateEventBasedTimer(
@@ -376,25 +451,24 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
   }
 
   void* workspace_addr = nullptr;
-  uint64_t workspace_size = algorithm_->workspace_size;
-  if (workspace_size > 0) {
+  uint64_t workspace_size = workspace_size_;
+  if (workspace_size_ > 0) {
     if (args.scratch_allocator != nullptr) {
       TF_ASSIGN_OR_RETURN(
           DeviceAddress<uint8_t> alloc,
-          args.scratch_allocator->AllocateBytes(workspace_size));
+          args.scratch_allocator->AllocateBytes(workspace_size_));
       workspace_addr = gpu::GpuMemoryMutable(&alloc);
     } else {
       workspace_addr = args.workspace.opaque();
       size_t new_size = args.workspace.size();
-      TF_RET_CHECK(workspace_addr != nullptr && new_size >= workspace_size);
+      TF_RET_CHECK(workspace_addr != nullptr && new_size >= workspace_size_);
       workspace_size = new_size;
     }
   }
 
-  auto palgo = std::any_cast<cublasLtMatmulAlgo_t>(&algorithm_->opaque_algo);
   {
-    absl::MutexLock lock(blas_lt->mu_);
-    TF_RET_CHECK(blas_lt->blas_lt_ != nullptr);
+    absl::MutexLock lock(blas_lt_.mu_);
+    TF_RET_CHECK(blas_lt_.handle_.get() != nullptr);
     // We must set the bias and aux pointers while holding the mutex, to avoid a
     // potential race condition from multiple threads sharing the same plan.
     if (args.bias != nullptr) {
@@ -466,106 +540,27 @@ absl::Status BlasLt::MatmulPlan::DoMatmul(
 #endif
     }
 
-    std::unique_ptr<ActivateContext> activation = blas_lt->parent_->Activate();
+    std::unique_ptr<ActivateContext> activation =
+        blas_lt_.executor_->Activate();
 
-    void* c_ptr = args.c.opaque();
-    if (beta_ == 0.0) {
-      c_ptr = nullptr;
-    }
-
-    if (palgo != nullptr) {
-      SE_CUBLAS_RETURN_IF_ERROR(cublasLtMatmul(
-          blas_lt->blas_lt_.get(), op_desc_.get(), alpha, a.opaque(),
-          a_desc_.get(), b.opaque(), b_desc_.get(), beta, c_ptr, c_desc_.get(),
-          args.d.opaque(), d_desc_.get(), palgo, workspace_addr, workspace_size,
-          absl::bit_cast<CUstream>(stream->platform_specific_handle().stream)));
-    } else {
-      return absl::InternalError("cublaslt: Invalid algorithm type");
-    }
+    void* c_ptr = zero_beta_ ? nullptr : args.c.opaque();
+    SE_CUBLAS_RETURN_IF_ERROR(cublasLtMatmul(
+        blas_lt_.handle_.get(), op_desc_.get(), &alpha_[0], a.opaque(),
+        a_desc_.get(), b.opaque(), b_desc_.get(), &beta_[0], c_ptr,
+        c_desc_.get(), args.d.opaque(), d_desc_.get(), &algorithm_.value(),
+        workspace_addr, workspace_size,
+        absl::bit_cast<CUstream>(stream->platform_specific_handle().stream)));
   }
 
   if (profile_result != nullptr) {
     TF_ASSIGN_OR_RETURN(absl::Duration elapsed, timer->GetElapsedDuration());
     // set algorithm ID to be unique (otherwise it gets kDefaultAlgorithm ID)
-    profile_result->set_algorithm(reinterpret_cast<blas::AlgorithmType>(palgo));
+    profile_result->set_algorithm(
+        reinterpret_cast<blas::AlgorithmType>(&algorithm_.value()));
     profile_result->set_is_valid(true);
     profile_result->set_elapsed_time_in_ms(absl::ToDoubleMilliseconds(elapsed));
   }
   return absl::OkStatus();
-}
-
-absl::Status BlasLt::MatmulPlan::ExecuteOnStream(
-    Stream* stream, const gpu::BlasLt::MemoryArgs& args,
-    blas::ProfileResult* profile_result) const {
-  auto wrapped_matmul = [&](auto scale) {
-    using Scale = decltype(scale);
-    Scale salpha;
-    if constexpr (std::is_same_v<Scale, xla::complex64> ||
-                  std::is_same_v<Scale, xla::complex128>) {
-      salpha = static_cast<Scale>(alpha_);
-    } else {
-      salpha = static_cast<Scale>(alpha_.real());
-    }
-    Scale sbeta = static_cast<Scale>(beta_);
-    return DoMatmul(stream, &salpha, &sbeta, args, profile_result);
-  };
-
-  std::tuple operand_types{a_desc_.type(), b_desc_.type(), c_desc_.type(),
-                           d_desc_.type()};
-
-#define TYPED_MATMUL(Scale, ATYPE, BTYPE, CTYPE, DTYPE)          \
-  if (operand_types == std::tuple{ATYPE, BTYPE, CTYPE, DTYPE}) { \
-    return wrapped_matmul(Scale{});                              \
-  }
-
-#if CUDA_VERSION >= 11080
-  // FP8 compatible type combinations (see cuBLASLt documentation):
-  TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E4M3, CUDA_R_16BF, CUDA_R_16BF)
-  TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E4M3, CUDA_R_16BF,
-               CUDA_R_8F_E4M3)
-  TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E4M3, CUDA_R_16F,
-               CUDA_R_8F_E4M3)
-  TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E4M3, CUDA_R_16F, CUDA_R_16F)
-  TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E4M3, CUDA_R_32F, CUDA_R_32F)
-
-  TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_16BF, CUDA_R_16BF)
-  TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_16BF,
-               CUDA_R_8F_E4M3)
-  TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_16BF,
-               CUDA_R_8F_E5M2)
-  TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_16F,
-               CUDA_R_8F_E4M3)
-  TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_16F,
-               CUDA_R_8F_E5M2)
-  TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_16F, CUDA_R_16F)
-  TYPED_MATMUL(float, CUDA_R_8F_E4M3, CUDA_R_8F_E5M2, CUDA_R_32F, CUDA_R_32F)
-
-  TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_16BF, CUDA_R_16BF)
-  TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_16BF,
-               CUDA_R_8F_E4M3)
-  TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_16BF,
-               CUDA_R_8F_E5M2)
-  TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_16F,
-               CUDA_R_8F_E4M3)
-  TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_16F,
-               CUDA_R_8F_E5M2)
-  TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_16F, CUDA_R_16F)
-  TYPED_MATMUL(float, CUDA_R_8F_E5M2, CUDA_R_8F_E4M3, CUDA_R_32F, CUDA_R_32F)
-#endif
-
-  // Other data types:
-  TYPED_MATMUL(float, CUDA_R_16BF, CUDA_R_16BF, CUDA_R_16BF, CUDA_R_16BF)
-  TYPED_MATMUL(float, CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_16F)
-  TYPED_MATMUL(float, CUDA_R_16BF, CUDA_R_16BF, CUDA_R_32F, CUDA_R_32F)
-  TYPED_MATMUL(float, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F, CUDA_R_32F)
-  TYPED_MATMUL(float, CUDA_R_32F, CUDA_R_32F, CUDA_R_32F, CUDA_R_32F)
-  TYPED_MATMUL(double, CUDA_R_64F, CUDA_R_64F, CUDA_R_64F, CUDA_R_64F)
-  TYPED_MATMUL(xla::complex64, CUDA_C_32F, CUDA_C_32F, CUDA_C_32F, CUDA_C_32F)
-  TYPED_MATMUL(xla::complex128, CUDA_C_64F, CUDA_C_64F, CUDA_C_64F, CUDA_C_64F)
-
-#undef TYPED_MATMUL
-
-  return xla::Internal("Unexpected dtype");
 }
 
 }  // namespace cuda
