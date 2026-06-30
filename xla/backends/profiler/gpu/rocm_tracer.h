@@ -73,6 +73,11 @@ class RocmTracer {
   void CodeObjectCallback(rocprofiler_callback_tracing_record_t record,
                           void* callback_data);
 
+  // Called from the MARKER_CORE_API callback. Handles roctxRangePushA,
+  // roctxRangePop, and roctxMarkA, emitting RocmTracerEvent(Generic) for each
+  // completed range or instantaneous mark.
+  void MarkerCallback(const rocprofiler_callback_tracing_record_t& record);
+
   AnnotationMap* annotation_map() { return &annotation_map_; }
 
  protected:
@@ -110,6 +115,20 @@ class RocmTracer {
   absl::Mutex memcpy_stream_map_mutex_;
   absl::flat_hash_map<uint32_t, uint64_t> memcpy_stream_map_
       ABSL_GUARDED_BY(memcpy_stream_map_mutex_);
+
+  // Per-thread stack of pending ROCTX ranges (roctxRangePushA not yet matched
+  // by roctxRangePop). Key is the OS thread_id from the callback record.
+  absl::Mutex roctx_stack_mutex_;
+  absl::flat_hash_map<uint64_t, std::vector<RoctxFrame>> roctx_stack_
+      ABSL_GUARDED_BY(roctx_stack_mutex_);
+
+  // Stable storage for ROCTX range label strings. RocmTracerEvent::roctx_range
+  // is a string_view; it must outlive the event. Strings are interned here and
+  // never erased during a session, so the string_view remains valid until
+  // Export() completes and events_ is cleared.
+  absl::Mutex roctx_strings_mutex_;
+  absl::node_hash_set<std::string> roctx_strings_
+      ABSL_GUARDED_BY(roctx_strings_mutex_);
 
  public:
   using kernel_symbol_data_t =

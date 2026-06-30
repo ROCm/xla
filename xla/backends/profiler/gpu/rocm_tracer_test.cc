@@ -19,6 +19,7 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -28,8 +29,10 @@ limitations under the License.
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "rocm/include/hip/hip_runtime.h"
+#include "rocm/include/rocprofiler-sdk/callback_tracing.h"
 #include "rocm/include/rocprofiler-sdk/context.h"
 #include "rocm/include/rocprofiler-sdk/fwd.h"
+#include "rocm/include/rocprofiler-sdk/marker.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/lib/core/status_test_util.h"
@@ -479,6 +482,258 @@ TEST(RocmTracerTest, MemcpyAsyncHasValidStreamId) {
   EXPECT_EQ(memcpy_with_valid_stream, memcpy_activity_count)
       << "All async memcpy activity events should have a valid stream_id; got "
       << memcpy_with_valid_stream << " of " << memcpy_activity_count;
+}
+
+// ============================================================================
+// MarkerCallback unit tests — exercise MarkerCallback() directly without
+// requiring real ROCTX API calls, using a capturing collector.
+// ============================================================================
+
+// Collector variant that captures the full RocmTracerEvent for inspection.
+class MarkerCapturingCollector : public RocmTraceCollector {
+ public:
+  MarkerCapturingCollector() : RocmTraceCollector(MakeCollectorOptions()) {}
+
+  void AddEvent(RocmTracerEvent&& event, bool) override {
+    absl::MutexLock lock(&mu_);
+    events_.push_back(std::move(event));
+  }
+  void OnEventsDropped(const std::string&, uint32_t) override {}
+  void Flush() override {}
+  void Export(tsl::profiler::XSpace*) override {}
+
+  std::vector<RocmTracerEvent> TakeEvents() {
+    absl::MutexLock lock(&mu_);
+    return std::exchange(events_, {});
+  }
+
+ private:
+  static RocmTraceCollectorOptions MakeCollectorOptions() {
+    RocmTraceCollectorOptions o;
+    o.max_callback_api_events = 1024;
+    o.max_activity_api_events = 1024;
+    o.max_annotation_strings = 1024;
+    o.num_gpus = 1;
+    return o;
+  }
+  absl::Mutex mu_;
+  std::vector<RocmTracerEvent> events_ ABSL_GUARDED_BY(mu_);
+};
+
+// Build a minimal rocprofiler_callback_tracing_record_t for MARKER_CORE_API.
+// `payload` must point to a live rocprofiler_callback_tracing_marker_api_data_t
+// for the duration of the MarkerCallback call.
+static rocprofiler_callback_tracing_record_t MakeMarkerRecord(
+    rocprofiler_marker_core_api_id_t op,
+    rocprofiler_callback_phase_t phase,
+    uint64_t thread_id,
+    void* payload) {
+  rocprofiler_callback_tracing_record_t rec{};
+  rec.kind = ROCPROFILER_CALLBACK_TRACING_MARKER_CORE_API;
+  rec.operation = static_cast<rocprofiler_tracing_operation_t>(op);
+  rec.phase = phase;
+  rec.thread_id = thread_id;
+  rec.correlation_id.internal = 99;
+  rec.payload = payload;
+  return rec;
+}
+
+TEST(RocmTracerTest, MarkerCallbackPushPopEmitsRoctxRange) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  ASSERT_TRUE(tracer.IsAvailable());
+
+  auto collector = std::make_unique<MarkerCapturingCollector>();
+  MarkerCapturingCollector* cptr = collector.get();
+
+  RocmTracerOptions opts{/*max_annotation_strings=*/1024};
+  TF_ASSERT_OK(tracer.Enable(opts, cptr));
+
+  const uint64_t tid = 12345;
+  const char* label = "my_roctx_range";
+
+  // Simulate roctxRangePushA ENTER
+  rocprofiler_callback_tracing_marker_api_data_t push_data{};
+  push_data.args.roctxRangePushA.message = label;
+  auto push_rec = MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePushA,
+                                   ROCPROFILER_CALLBACK_PHASE_ENTER, tid,
+                                   &push_data);
+  tracer.MarkerCallback(push_rec);
+
+  // No event yet — PUSH doesn't emit
+  EXPECT_TRUE(cptr->TakeEvents().empty())
+      << "roctxRangePushA must not emit an event until the matching Pop";
+
+  // Simulate roctxRangePop EXIT
+  rocprofiler_callback_tracing_marker_api_data_t pop_data{};
+  auto pop_rec = MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop,
+                                  ROCPROFILER_CALLBACK_PHASE_EXIT, tid,
+                                  &pop_data);
+  tracer.MarkerCallback(pop_rec);
+
+  tracer.Disable();
+
+  auto events = cptr->TakeEvents();
+  ASSERT_EQ(events.size(), 1u) << "Expected exactly one range event from Push+Pop";
+
+  const RocmTracerEvent& e = events[0];
+  EXPECT_EQ(e.type, RocmTracerEventType::Generic);
+  EXPECT_EQ(e.source, RocmTracerEventSource::ApiCallback);
+  EXPECT_EQ(e.roctx_range, label);
+  EXPECT_EQ(e.thread_id, tid);
+  EXPECT_GT(e.end_time_ns, e.start_time_ns)
+      << "end_time must be after start_time";
+}
+
+TEST(RocmTracerTest, MarkerCallbackMarkEmitsInstantaneousEvent) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  ASSERT_TRUE(tracer.IsAvailable());
+
+  auto collector = std::make_unique<MarkerCapturingCollector>();
+  MarkerCapturingCollector* cptr = collector.get();
+
+  RocmTracerOptions opts{/*max_annotation_strings=*/1024};
+  TF_ASSERT_OK(tracer.Enable(opts, cptr));
+
+  const uint64_t tid = 77777;
+  const char* label = "checkpoint";
+
+  rocprofiler_callback_tracing_marker_api_data_t mark_data{};
+  mark_data.args.roctxMarkA.message = label;
+  auto mark_rec = MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxMarkA,
+                                   ROCPROFILER_CALLBACK_PHASE_ENTER, tid,
+                                   &mark_data);
+  tracer.MarkerCallback(mark_rec);
+
+  tracer.Disable();
+
+  auto events = cptr->TakeEvents();
+  ASSERT_EQ(events.size(), 1u) << "roctxMarkA must emit exactly one event";
+
+  const RocmTracerEvent& e = events[0];
+  EXPECT_EQ(e.type, RocmTracerEventType::Generic);
+  EXPECT_EQ(e.roctx_range, label);
+  EXPECT_EQ(e.thread_id, tid);
+  EXPECT_EQ(e.start_time_ns, e.end_time_ns)
+      << "roctxMarkA produces an instantaneous event (start == end)";
+}
+
+TEST(RocmTracerTest, MarkerCallbackUnmatchedPopIsIgnored) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  ASSERT_TRUE(tracer.IsAvailable());
+
+  auto collector = std::make_unique<MarkerCapturingCollector>();
+  MarkerCapturingCollector* cptr = collector.get();
+
+  RocmTracerOptions opts{/*max_annotation_strings=*/1024};
+  TF_ASSERT_OK(tracer.Enable(opts, cptr));
+
+  // Pop without any preceding Push — must not crash, must not emit any event.
+  rocprofiler_callback_tracing_marker_api_data_t pop_data{};
+  auto pop_rec = MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop,
+                                  ROCPROFILER_CALLBACK_PHASE_EXIT, 1111,
+                                  &pop_data);
+  tracer.MarkerCallback(pop_rec);
+
+  tracer.Disable();
+
+  EXPECT_TRUE(cptr->TakeEvents().empty())
+      << "An unmatched roctxRangePop must not emit an event";
+}
+
+TEST(RocmTracerTest, MarkerCallbackNullMessageSafelyIgnored) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  ASSERT_TRUE(tracer.IsAvailable());
+
+  auto collector = std::make_unique<MarkerCapturingCollector>();
+  MarkerCapturingCollector* cptr = collector.get();
+
+  RocmTracerOptions opts{/*max_annotation_strings=*/1024};
+  TF_ASSERT_OK(tracer.Enable(opts, cptr));
+
+  const uint64_t tid = 2222;
+
+  // Push with null message — must not crash
+  rocprofiler_callback_tracing_marker_api_data_t push_data{};
+  push_data.args.roctxRangePushA.message = nullptr;
+  auto push_rec = MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePushA,
+                                   ROCPROFILER_CALLBACK_PHASE_ENTER, tid,
+                                   &push_data);
+  tracer.MarkerCallback(push_rec);
+
+  // Pop should still emit (with empty label) without crashing
+  rocprofiler_callback_tracing_marker_api_data_t pop_data{};
+  auto pop_rec = MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop,
+                                  ROCPROFILER_CALLBACK_PHASE_EXIT, tid,
+                                  &pop_data);
+  tracer.MarkerCallback(pop_rec);
+
+  tracer.Disable();
+
+  // Event is emitted but with empty roctx_range (null message → empty string)
+  auto events = cptr->TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_TRUE(events[0].roctx_range.empty())
+      << "Null message should produce an empty roctx_range";
+}
+
+// Integration test: verifies the full pipeline — MarkerCallback → AddEvent →
+// PerDeviceCollector::Export — produces a Generic event in the XSpace host
+// plane. Uses the unit-test collector path (real rocprofiler context is live
+// because Enable() starts it; we inject the event via MarkerCallback directly
+// rather than going through the real ROCTX library).
+TEST(RocmTracerTest, MarkerEventAppearsInExportedXSpace) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  ASSERT_TRUE(tracer.IsAvailable());
+
+  RocmTraceCollectorOptions col_opts;
+  col_opts.max_callback_api_events = 1024;
+  col_opts.max_activity_api_events = 1024;
+  col_opts.max_annotation_strings = 1024;
+  col_opts.num_gpus = tracer.NumGpus() > 0 ? tracer.NumGpus() : 1;
+
+  uint64_t start_wall = RocmTracer::GetTimestamp();
+  uint64_t start_gpu = RocmTracer::GetTimestamp();
+  auto collector = std::make_unique<RocmTraceCollectorImpl>(
+      col_opts, start_wall, start_gpu);
+  collector->SetGpuAgents(tracer.GpuAgents());
+
+  RocmTracerOptions opts{/*max_annotation_strings=*/1024};
+  TF_ASSERT_OK(tracer.Enable(opts, collector.get()));
+
+  const uint64_t tid = 4242;
+  const char* label = "integration_label";
+
+  rocprofiler_callback_tracing_marker_api_data_t push_data{};
+  push_data.args.roctxRangePushA.message = label;
+  auto push_rec =
+      MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePushA,
+                       ROCPROFILER_CALLBACK_PHASE_ENTER, tid, &push_data);
+  tracer.MarkerCallback(push_rec);
+
+  rocprofiler_callback_tracing_marker_api_data_t pop_data{};
+  auto pop_rec =
+      MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop,
+                       ROCPROFILER_CALLBACK_PHASE_EXIT, tid, &pop_data);
+  tracer.MarkerCallback(pop_rec);
+
+  tracer.Disable();
+
+  tsl::profiler::XSpace space;
+  collector->Export(&space);
+
+  // The host plane should have a Generic event with kNVTXRange stat.
+  bool found_nvtx_stat = false;
+  for (const auto& plane : space.planes()) {
+    for (const auto& [id, stat_md] : plane.stat_metadata()) {
+      if (stat_md.name() == "nvtx_range") {
+        found_nvtx_stat = true;
+        break;
+      }
+    }
+    if (found_nvtx_stat) break;
+  }
+  EXPECT_TRUE(found_nvtx_stat)
+      << "XSpace should contain nvtx_range stat metadata after a ROCTX range";
 }
 
 }  // namespace
