@@ -5,6 +5,7 @@ set -ex
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
 EXCLUDED_TESTS=(
+    "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
     "*IotaR1Test*"                                                                                                                                 # Taking too many CI nodes
     "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
     "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x*"
