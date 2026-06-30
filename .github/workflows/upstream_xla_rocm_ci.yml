@@ -1,0 +1,21 @@
+name: Call Upstream ROCm CI
+permissions:
+  contents: read
+on:
+  push:
+    branches:
+      - rocm-dev-infra
+  pull_request_target:
+    types: [opened, synchronize]
+    branches-ignore:
+      - rocm-jaxlib-v* 
+
+concurrency:
+  group: ${{ github.event.pull_request.number && format('Call Upstream ROCm CI-PR-{0}', github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: true
+
+jobs:
+  call-upstream-ci:
+    uses: ROCm/xla/.github/workflows/rocm_ci.yml@make_upstream_pipeline_callable_from_inside_rocm_dev_infra_prs
+    with:
+      rocm_xla_branch: ${{ github.head_ref || github.ref_name }}
