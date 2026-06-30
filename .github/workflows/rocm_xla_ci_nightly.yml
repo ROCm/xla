@@ -19,6 +19,7 @@ permissions:
   contents: read
 
 on:
+  workflow_dispatch:
   schedule:
     # Run every 24 hours at 3:47 AM UTC
     - cron: '47 3 * * *'
@@ -32,24 +33,28 @@ concurrency:
 jobs:
   execute-xla-ut-nightly:
     # Run on schedule or if the "nightly-pipeline" label was added
-    if: github.event_name == 'schedule' || github.event.label.name == 'nightly-pipeline'
-    runs-on: linux-mi250-4
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'nightly-pipeline'
+    runs-on: ${{ matrix.mode.runner }}
     strategy:
       fail-fast: false
       matrix:
         mode:
           - name: "default"
-            configs: ["--config=rocm_ci", "--config=rocm_rbe"]
+            configs: ["--config=rocm_ci"]
             container: "DOCKER_IMAGE"
+            runner: "linux-mi250-4"
           - name: "hermetic"
-            configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe", "--repo_env=ROCM_DISTRO_VERSION=rocm_7.12.0_gfx90a"]
+            configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx90a-7.13.0.tar.gz", "--repo_env=ROCM_DISTRO_HASH=b2d3c49ef936b3b24b10a25bae3e60df7ccc9c5134095a080bbc721d5062b4c7", "--repo_env=SYSROOT_DIST=linux_glibc_2_31"]
             container: "DOCKER_IMAGE_HERMETIC"
+            runner: "linux-mi250-4"
           - name: "asan"
-            configs: ["--config=rocm_ci", "--config=asan"]
+            configs: ["--config=rocm_ci", "--config=asan", "--strategy=TestRunner=local"]
             container: "DOCKER_IMAGE"
+            runner: "linux-mi250-4"
           - name: "tsan"
             configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local"]
             container: "DOCKER_IMAGE"
+            runner: "linux-mi250-4"
     container:
       # set in https://github.com/ROCm/xla/settings/variables/actions
       image: ${{ vars[matrix.mode.container] }}
@@ -61,6 +66,7 @@ jobs:
         --security-opt=seccomp=unconfined
       volumes:
         - /tmp/bazel-cache:/root/.cache/bazel
+        
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -102,16 +108,18 @@ jobs:
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
-            ${{ join(matrix.mode.configs, ' ') }} \
+            "--config=rocm_rbe" \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942,gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
             --jobs=30 \
+            --spawn_strategy=local \
             --bes_keywords=xla \
             --bes_keywords=single_gpu \
             --bes_keywords=nightly \
+            ${{ join(matrix.mode.configs, ' ') }} \
             -- \
             //xla/...
 
@@ -119,15 +127,17 @@ jobs:
         if: always() && !cancelled()
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
-            ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_multi_gpu \
+            "--config=rocm_rbe" \
             --local_test_jobs=1 \
+            --spawn_strategy=local \
             --strategy=TestRunner=local \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942,gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
             --bes_keywords=xla \
             --bes_keywords=multi_gpu \
             --bes_keywords=nightly \
+            ${{ join(matrix.mode.configs, ' ') }} \
             -- \
             //xla/...
 
@@ -139,9 +149,12 @@ jobs:
             --config=rocm_rbe \
             --config=ci_rocm_cpu \
             --local_test_jobs=200 \
+            --spawn_strategy=local \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942,gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --bes_keywords=xla \
             --bes_keywords=cpu \
             --bes_keywords=nightly \
+            ${{ join(matrix.mode.configs, ' ') }} \
             -- \
             //xla/...

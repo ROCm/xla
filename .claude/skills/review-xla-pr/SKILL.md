@@ -143,6 +143,11 @@ Review the PR above thoroughly using the checklist below. Be specific: cite file
 - Are new debug dump points added (HLO dumping, `FusionProcessDumpProto`)?
 - If a new proto field is added: is the proto version/compatibility handled?
 
+### 13. PR Size
+- Count the total delta from the diff already in context: lines beginning with `+` (excluding `+++` headers) as additions, lines beginning with `-` (excluding `---` headers) as deletions. Exclude hunks in files whose path contains `_test.cc`, `_test.py`, `test/`, or `tests/`. Apply the thresholds from the [upstream size check](https://github.com/openxla/xla/blob/main/.github/workflows/pr_size_check.py):
+  - Non-test delta > 500: "This PR has a large delta of over 500. Consider breaking the PR down into smaller PRs for a faster code review."
+  - Non-test delta > 1000: "This PR has a very large delta of over 1000. In order to enable an effective code review, please break the PR down into smaller and more focused PRs."
+
 ---
 
 ## Output Format
