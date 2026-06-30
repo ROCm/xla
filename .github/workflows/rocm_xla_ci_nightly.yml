@@ -48,11 +48,11 @@ jobs:
             container: "DOCKER_IMAGE_HERMETIC"
             runner: "linux-mi250-4"
           - name: "asan"
-            configs: ["--config=rocm_ci", "--config=asan", "--strategy=TestRunner=local"]
+            configs: ["--config=rocm_ci", "--config=asan", "--strategy=TestRunner=local", "--flaky_test_attempts=1"]
             container: "DOCKER_IMAGE"
             runner: "linux-mi250-4"
           - name: "tsan"
-            configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local"]
+            configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local", "--flaky_test_attempts=1"]
             container: "DOCKER_IMAGE"
             runner: "linux-mi250-4"
     container:
