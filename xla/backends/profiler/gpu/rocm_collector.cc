@@ -330,32 +330,33 @@ bool PerDeviceCollector::IsHostEvent(const RocmTracerEvent& event,
   if (event.source == RocmTracerEventSource::ApiCallback) {
     *line_id = event.thread_id;
     return true;
-  } else {  // activities
-    *line_id = event.stream_id;
-    return false;
   }
 
-  // TODO(rocm-profiler): do we have such a report in rocm?
-  // Non-overhead activity events are device events.
-  /* if (event.type != CuptiTracerEventType::Overhead) {
-    *line_id = event.stream_id;
-    return false;
-  } */
-  // Overhead events can be associated with a thread or a stream, etc.
-  // If a valid thread id is specified, we consider it as a host event.
-  //
+  // Memory alloc/free arrive via the buffer tracing path (source=Activity)
+  // but are host-side operations with no stream. Route them to the host
+  // plane using thread_id, matching CUPTI's cuMemAlloc/cuMemFree handling.
+  if (event.type == RocmTracerEventType::MemoryAlloc ||
+      event.type == RocmTracerEventType::MemoryFree) {
+    *line_id = event.thread_id;
+    return true;
+  }
 
+  // Activity events with a valid stream go to the device plane.
   if (event.stream_id != RocmTracerEvent::kInvalidStreamId) {
     *line_id = event.stream_id;
     return false;
-  } else if (event.thread_id != RocmTracerEvent::kInvalidThreadId &&
-             event.thread_id != 0) {
+  }
+
+  // Fallback: activity events without a stream but with a valid thread_id
+  // go to the host plane; otherwise to the overhead line.
+  if (event.thread_id != RocmTracerEvent::kInvalidThreadId &&
+      event.thread_id != 0) {
     *line_id = event.thread_id;
     return true;
-  } else {
-    *line_id = tsl::profiler::kThreadIdOverhead;
-    return false;
   }
+
+  *line_id = tsl::profiler::kThreadIdOverhead;
+  return false;
 }
 
 void PerDeviceCollector::Export(uint64_t start_walltime_ns,
@@ -555,21 +556,36 @@ void RocmTraceCollectorImpl::Flush() {
           << aggregated_events.size() << " events.";
 
   // device ids for GPUs filled in by roctracer are not zero indexed.
-  // They are offset by number of CPUs on the machine
+  // They are offset by number of CPUs on the machine.
+  // Only consider events with valid GPU device IDs (non-zero, non-max)
+  // when computing the offset — host-side events like MemoryAlloc may
+  // have device_id=0 which would poison the calculation.
   uint32_t min_device_id = INT32_MAX;
 
   for (const auto& event : aggregated_events) {
-    if (event.device_id < min_device_id) {
+    if (event.device_id != RocmTracerEvent::kInvalidDeviceId &&
+        event.device_id != 0 &&
+        event.device_id < min_device_id) {
       min_device_id = event.device_id;
     }
   }
+  if (min_device_id == INT32_MAX) {
+    min_device_id = 0;
+  }
 
   for (auto& event : aggregated_events) {
-    auto id = event.device_id - min_device_id;
-    if (id < num_gpus_) {
-      per_device_collector_[id].AddEvent(std::move(event));
+    if (event.device_id == 0 ||
+        event.device_id == RocmTracerEvent::kInvalidDeviceId) {
+      // Host-side events (MemoryAlloc/Free) or events without a valid
+      // device go to device 0 as a fallback.
+      per_device_collector_[0].AddEvent(std::move(event));
     } else {
-      PrintRocmTracerEvent(event, ". Dropped due to invalid device ID!");
+      auto id = event.device_id - min_device_id;
+      if (id < num_gpus_) {
+        per_device_collector_[id].AddEvent(std::move(event));
+      } else {
+        PrintRocmTracerEvent(event, ". Dropped due to invalid device ID!");
+      }
     }
   }
 

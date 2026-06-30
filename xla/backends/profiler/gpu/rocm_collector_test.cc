@@ -23,6 +23,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_set.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
+#include "xla/tsl/profiler/utils/xplane_schema.h"
 #include "xla/tsl/profiler/utils/xplane_utils.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 
@@ -281,22 +282,24 @@ TEST(RocmCollectorTest, MemoryAllocAndFreeEventsExported) {
   tensorflow::profiler::XSpace space;
   collector.Export(&space);
 
-  // Verify both alloc and free events appear in the host plane (they're
-  // ApiCallback source → host events) or device plane (Activity source).
+  // MemoryAlloc/Free are host-side operations — IsHostEvent routes them
+  // to the host plane via thread_id even though source is Activity.
+  const auto* host_plane = FindOrAddMutablePlaneWithName(
+      &space, tsl::profiler::kRoctracerApiPlaneName);
+  ASSERT_NE(host_plane, nullptr);
+
   bool found_alloc = false;
   bool found_free = false;
-  for (const auto& plane : space.planes()) {
-    for (const auto& line : plane.lines()) {
-      for (const auto& ev : line.events()) {
-        const auto& name =
-            plane.event_metadata().at(ev.metadata_id()).name();
-        if (name == "MemoryAlloc") found_alloc = true;
-        if (name == "MemoryFree") found_free = true;
-      }
+  for (const auto& line : host_plane->lines()) {
+    for (const auto& ev : line.events()) {
+      const auto& name =
+          host_plane->event_metadata().at(ev.metadata_id()).name();
+      if (name == "MemoryAlloc") found_alloc = true;
+      if (name == "MemoryFree") found_free = true;
     }
   }
-  EXPECT_TRUE(found_alloc) << "MemoryAlloc event should appear in XPlane";
-  EXPECT_TRUE(found_free) << "MemoryFree event should appear in XPlane";
+  EXPECT_TRUE(found_alloc) << "MemoryAlloc event should appear in host XPlane";
+  EXPECT_TRUE(found_free) << "MemoryFree event should appear in host XPlane";
 }
 
 TEST(RocmCollectorTest, MemcpyEventWithStreamIdExported) {
