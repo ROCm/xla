@@ -228,6 +228,12 @@ class RocmTraceCollectorImpl : public RocmTraceCollector {
   absl::flat_hash_map<uint32_t, RocmTracerEvent> auxiliary_api_events_map_
       ABSL_GUARDED_BY(event_maps_mutex_);
 
+  // Host-side events that need no API↔Activity join (e.g. ROCTX markers).
+  // Flushed directly to per_device_collector_ without going through
+  // ApiActivityInfoExchange.
+  std::vector<RocmTracerEvent> standalone_events_
+      ABSL_GUARDED_BY(event_maps_mutex_);
+
   std::vector<RocmTracerEvent> ApiActivityInfoExchange()
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(event_maps_mutex_);
 
