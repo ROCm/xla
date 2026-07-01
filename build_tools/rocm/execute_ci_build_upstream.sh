@@ -13,7 +13,6 @@ EXCLUDED_TESTS=(
     "DotOperationTestWithCublasLt_F16F32F64CF64/1.GeneralMatMulActivation"
     "MatmulTestWithCublas.GemmRewriter_RegressionTestF64"
     "TritonEmitterTest.ScaledDotIsSupportedByReferencePlatform"
-    "SampleFileTest.Convolution" # https://wardite.cluster.engflow.com/invocations/default/c105260c-873a-4634-ab69-905a43ca5cf8
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
