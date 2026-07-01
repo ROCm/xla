@@ -274,7 +274,7 @@ SmallVector<Value> GetMajorToMinorOrder(ValueRange values,
 //   - Padding mode compatibility (this pass hardcodes PAD_ZERO).
 bool CanUseTdm(bool allow_tdm, const ArrayRef<int64_t>& tile_sizes,
                const ArrayRef<int64_t>& tile_strides,
-               const ArrayRef<int64_t>& minor_to_major_layout) {
+               const ArrayRef<int64_t>&) {
   if (!allow_tdm) {
     return false;
   }
@@ -293,14 +293,10 @@ bool CanUseTdm(bool allow_tdm, const ArrayRef<int64_t>& tile_sizes,
       return false;
     }
   }
-  auto ordered_sizes = GetMajorToMinorOrder(tile_sizes, minor_to_major_layout);
-  bool seen_singleton = false;
-  for (int64_t s : ordered_sizes) {
+
+  for (int64_t s : tile_sizes) {
     if (s == 1) {
-      seen_singleton = true;
-    } else if (seen_singleton) {
-      // Non-singleton dim follows a singleton dim, TDM-incompatible.
-      VLOG(1) << "TDM is not compatible: non-trailing singleton dim in tile.";
+      VLOG(1) << "TDM is not compatible: singleton dim in tile.";
       return false;
     }
   }
