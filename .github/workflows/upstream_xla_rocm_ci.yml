@@ -6,6 +6,9 @@ on:
     types: [labeled]
     branches:
       - rocm-dev-infra
+    paths:
+      - 'build_tools/rocm/execute_ci_build_upstream.sh'
+      - '.github/workflows/upstream_xla_rocm_ci.yml'
   workflow_dispatch:
     inputs:
       rocm_xla_branch:
