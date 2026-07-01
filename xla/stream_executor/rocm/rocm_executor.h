@@ -210,6 +210,10 @@ class RocmExecutor : public GpuExecutor {
 
   // Cache of peer access capabilities. Populated during Init().
   absl::flat_hash_map<int, bool> peer_access_cache_;
+
+  // Whether the delay kernel can be safely used on this device. Populated
+  // during Init().
+  bool delay_kernels_supported_ = false;
 };
 
 }  // namespace stream_executor::gpu
