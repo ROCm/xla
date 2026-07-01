@@ -5,7 +5,19 @@ on:
   pull_request_target:
     types: [labeled]
     branches:
-      - rocm-dev-infra 
+      - rocm-dev-infra
+  workflow_dispatch:
+    inputs:
+      rocm_xla_branch:
+        description: 'Branch name to fetch ROCm XLA scripts from'
+        required: false
+        default: 'rocm-dev-infra'
+        type: string
+      runner_label:
+        description: 'Runner label for GPU jobs'
+        required: false
+        default: 'linux-xla-do-mi350x-1'
+        type: string 
 
 concurrency:
   group: ${{ github.event.pull_request.number && format('Call Upstream ROCm CI-PR-{0}', github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
@@ -13,8 +25,12 @@ concurrency:
 
 jobs:
   call-upstream-ci:
-    if: github.event.label.name == 'upstream-xla-pr'
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'upstream-xla-pr' &&
+       (github.event.pull_request.author_association == 'MEMBER' ||
+        github.event.pull_request.author_association == 'OWNER'))
     uses: openxla/xla/.github/workflows/rocm_ci.yml@main
     with:
-      rocm_xla_branch: ${{ github.head_ref || github.ref_name }}
-      runner_label: linux-xla-do-mi350x-1
+      rocm_xla_branch: ${{ inputs.rocm_xla_branch || github.head_ref || github.ref_name }}
+      runner_label: ${{ inputs.runner_label || 'linux-xla-do-mi350x-1' }}
