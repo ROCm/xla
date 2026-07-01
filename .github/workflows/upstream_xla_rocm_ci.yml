@@ -3,7 +3,6 @@ permissions:
   contents: read
 on:
   pull_request_target:
-    types: [labeled]
     branches:
       - rocm-dev-infra
     paths:
