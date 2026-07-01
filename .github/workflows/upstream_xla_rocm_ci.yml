@@ -2,13 +2,10 @@ name: Upstream ROCm CI
 permissions:
   contents: read
 on:
-  push:
-    branches:
-      - rocm-dev-infra
   pull_request_target:
-    types: [opened, synchronize]
-    branches-ignore:
-      - rocm-jaxlib-v* 
+    types: [labeled]
+    branches:
+      - rocm-dev-infra 
 
 concurrency:
   group: ${{ github.event.pull_request.number && format('Call Upstream ROCm CI-PR-{0}', github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
@@ -16,6 +13,7 @@ concurrency:
 
 jobs:
   call-upstream-ci:
+    if: github.event.label.name == 'upstream-xla-pr'
     uses: openxla/xla/.github/workflows/rocm_ci.yml@main
     with:
       rocm_xla_branch: ${{ github.head_ref || github.ref_name }}
