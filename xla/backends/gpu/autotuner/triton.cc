@@ -66,6 +66,12 @@ namespace {
 std::vector<TritonGemmConfig> GetDefaultTritonConfigs(
     se::GpuComputeCapability compute_capability) {
   if (compute_capability.IsRocm()) {
+    const auto* rocm_cc = compute_capability.rocm_compute_capability();
+    if (rocm_cc->gfx9_mi300()) {
+      return GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI300);
+    } else if (rocm_cc->gfx9_mi350()) {
+      return GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI350);
+    }
     return GetTritonConfigsForPlatform(TritonConfigsPlatform::kDefaultRocm);
   }
 

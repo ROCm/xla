@@ -17,8 +17,8 @@ limitations under the License.
 #include <memory>
 #include <vector>
 
+#include "absl/log/check.h"
 #include "absl/status/statusor.h"
-#include "rocm/include/hipblas/hipblas.h"
 #include "xla/backends/autotuner/codegen_backend.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
@@ -28,6 +28,7 @@ limitations under the License.
 #include "xla/service/gpu/matmul_utils.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/xla.pb.h"
+#include "rocm/include/hipblas/hipblas.h"
 
 namespace xla {
 namespace gpu {
@@ -50,6 +51,13 @@ GemmFusionAutotuner::GetPlatformCodegenBackends(
 
 std::vector<TritonGemmConfig> GemmFusionAutotunerImpl::GetDefaultTritonConfigs()
     const {
+  const auto* rocm_cc = GetComputeCapability().rocm_compute_capability();
+  CHECK(rocm_cc != nullptr);
+  if (rocm_cc->gfx9_mi300()) {
+    return GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI300);
+  } else if (rocm_cc->gfx9_mi350()) {
+    return GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI350);
+  }
   return GetTritonConfigsForPlatform(TritonConfigsPlatform::kDefaultRocm);
 }
 
