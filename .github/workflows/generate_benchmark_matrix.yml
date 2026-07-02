@@ -44,7 +44,7 @@ jobs:
   generate:
     name: Generate Matrix (${{ inputs.workflow_type }})
     runs-on: linux-mi250-4
-    container: rocm/tensorflow-build@sha256:7fcfbd36b7ac8f6b0805b37c4248e929e31cf5ee3af766c8409dd70d5ab65faa
+    container: ${{ vars.DOCKER_IMAGE }}
     outputs:
       matrix_json_output: ${{ steps.run_generator.outputs.matrix_json }}
     defaults:
