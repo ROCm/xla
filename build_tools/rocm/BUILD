@@ -60,6 +60,12 @@ genrule(
     outs = ["san_wrapper.sh"],
     cmd = """
       echo '#!/bin/bash' > $@
+      echo 'wrapper_runfiles="$${RUNFILES_DIR:-$$0.runfiles}"' >> $@
+      echo 'symbolizer=$$(find -L "$${wrapper_runfiles}" -path "*/llvm18_linux_x86_64/bin/llvm-symbolizer" | head -n 1)' >> $@
+      echo 'if [[ -n "$$symbolizer" ]]; then' >> $@
+      echo '  export ASAN_OPTIONS="$${ASAN_OPTIONS:+$${ASAN_OPTIONS}:}external_symbolizer_path=$${symbolizer}"' >> $@
+      echo '  export TSAN_OPTIONS="$${TSAN_OPTIONS:+$${TSAN_OPTIONS}:}external_symbolizer_path=$${symbolizer}"' >> $@
+      echo 'fi' >> $@
       echo 'exec "$$@"' >> $@
       chmod +x $@
     """,
@@ -70,7 +76,11 @@ genrule(
 sh_binary(
     name = "sanitizer_wrapper",
     srcs = [":san_wrapper_script"],
-    data = [":sanitizer_ignore_lists"],
+    data = [
+        ":sanitizer_ignore_lists",
+        "@llvm18_linux_x86_64//:bin/llvm-symbolizer",
+        "@llvm18_linux_x86_64//:distro_libs",
+    ],
     tags = ["manual"],
     visibility = ["//visibility:public"],
 )
@@ -81,6 +91,8 @@ sh_binary(
     data = [
         ":sanitizer_ignore_lists",
         "@local_config_rocm//rocm:rocminfo",
+        "@llvm18_linux_x86_64//:bin/llvm-symbolizer",
+        "@llvm18_linux_x86_64//:distro_libs",
     ],
     tags = ["manual"],
     visibility = ["//visibility:public"],
