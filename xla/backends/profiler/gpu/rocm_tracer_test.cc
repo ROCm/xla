@@ -17,13 +17,16 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
+#include <dlfcn.h>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 #include "absl/log/log.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
@@ -589,6 +592,157 @@ TEST(RocmTracerTest, MarkerEventAppearsInExportedXSpace) {
   }
   EXPECT_TRUE(found_nvtx_stat)
       << "XSpace should contain nvtx_range stat metadata after a ROCTX range";
+}
+
+// ============================================================================
+// Integration test: real librocprofiler-sdk-roctx.so → MarkerCallback →
+// kNVTXRange stat in exported XSpace.
+//
+// NOTE: libroctx64.so (old roctracer-era roctx) is NOT intercepted by
+// rocprofiler-sdk. We must use librocprofiler-sdk-roctx.so, which links
+// against librocprofiler-register.so and goes through rocprofiler's
+// intercept table. We load it via dlopen at runtime to avoid a hard
+// link-time dependency.
+// ============================================================================
+
+// Thin RAII wrapper around dlopen for roctx functions.
+struct RoctxLib {
+  void* handle = nullptr;
+  int (*roctxRangePushA)(const char*) = nullptr;
+  int (*roctxRangePop)() = nullptr;
+  void (*roctxMarkA)(const char*) = nullptr;
+
+  static RoctxLib Load() {
+    RoctxLib lib;
+    // Must use the rocprofiler-sdk-integrated roctx — NOT libroctx64.so.
+    // librocprofiler-sdk-roctx.so registers with librocprofiler-register.so
+    // so rocprofiler-sdk intercepts its calls.
+    const char* candidates[] = {
+        "librocprofiler-sdk-roctx.so",
+        "/opt/rocm/lib/librocprofiler-sdk-roctx.so",
+    };
+    for (const char* path : candidates) {
+      lib.handle = dlopen(path, RTLD_LAZY | RTLD_GLOBAL);
+      if (lib.handle) break;
+    }
+    if (!lib.handle) return lib;
+
+    lib.roctxRangePushA = reinterpret_cast<int (*)(const char*)>(
+        dlsym(lib.handle, "roctxRangePushA"));
+    lib.roctxRangePop =
+        reinterpret_cast<int (*)()>(dlsym(lib.handle, "roctxRangePop"));
+    lib.roctxMarkA = reinterpret_cast<void (*)(const char*)>(
+        dlsym(lib.handle, "roctxMarkA"));
+
+    if (!lib.roctxRangePushA || !lib.roctxRangePop || !lib.roctxMarkA) {
+      dlclose(lib.handle);
+      lib.handle = nullptr;
+    }
+    return lib;
+  }
+
+  bool ok() const { return handle != nullptr; }
+
+  ~RoctxLib() {
+    if (handle) dlclose(handle);
+  }
+};
+
+// Test: real roctxRangePushA/roctxRangePop → kNVTXRange stat in XSpace.
+//
+// The test uses librocprofiler-sdk-roctx.so (intercepted by rocprofiler-sdk).
+// If the library is not found (non-ROCm CI), the test is skipped gracefully.
+TEST(RocmTracerTest, RealRoctxCallsProduceNvtxRangeInXSpace) {
+  RoctxLib roctx = RoctxLib::Load();
+  if (!roctx.ok()) {
+    GTEST_SKIP() << "librocprofiler-sdk-roctx.so not available — skipping";
+  }
+
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  ASSERT_TRUE(tracer.IsAvailable());
+
+  RocmTraceCollectorOptions col_opts;
+  col_opts.max_callback_api_events = 1024;
+  col_opts.max_activity_api_events = 1024;
+  col_opts.max_annotation_strings = 1024;
+  col_opts.num_gpus = tracer.NumGpus() > 0 ? tracer.NumGpus() : 1;
+
+  uint64_t start_wall = RocmTracer::GetTimestamp();
+  uint64_t start_gpu = RocmTracer::GetTimestamp();
+  auto collector = std::make_unique<RocmTraceCollectorImpl>(
+      col_opts, start_wall, start_gpu);
+  collector->SetGpuAgents(tracer.GpuAgents());
+
+  RocmTracerOptions opts{/*max_annotation_strings=*/1024};
+  TF_ASSERT_OK(tracer.Enable(opts, collector.get()));
+
+  // Emit real ROCTX ranges — rocprofiler-sdk intercepts these and fires
+  // MarkerCallback, which emits Generic RocmTracerEvents.
+  EXPECT_GE(roctx.roctxRangePushA("unit_test_outer"), 0);
+  EXPECT_GE(roctx.roctxRangePushA("unit_test_inner"), 0);
+  roctx.roctxMarkA("unit_test_mark");
+  roctx.roctxRangePop();  // end unit_test_inner
+  roctx.roctxRangePop();  // end unit_test_outer
+
+  tracer.Disable();
+
+  // Export and verify kNVTXRange stat appears in XSpace.
+  tsl::profiler::XSpace space;
+  collector->Export(&space);
+
+  bool found_nvtx_stat = false;
+  std::vector<std::string> found_labels;
+
+  for (const auto& plane : space.planes()) {
+    // Find the nvtx_range stat metadata id in this plane.
+    int64_t nvtx_stat_id = -1;
+    for (const auto& [sid, smd] : plane.stat_metadata()) {
+      if (smd.name() == "nvtx_range") {
+        nvtx_stat_id = sid;
+        found_nvtx_stat = true;
+        break;
+      }
+    }
+    if (nvtx_stat_id < 0) continue;
+
+    // Collect the label strings from event stats.
+    for (const auto& line : plane.lines()) {
+      for (const auto& event : line.events()) {
+        for (const auto& stat : event.stats()) {
+          if (stat.metadata_id() != nvtx_stat_id) continue;
+          if (stat.value_case() ==
+              tensorflow::profiler::XStat::kRefValue) {
+            int64_t ref = stat.ref_value();
+            auto it = plane.stat_metadata().find(ref);
+            if (it != plane.stat_metadata().end()) {
+              found_labels.push_back(it->second.name());
+            }
+          } else if (stat.value_case() ==
+                     tensorflow::profiler::XStat::kStrValue) {
+            found_labels.push_back(stat.str_value());
+          }
+        }
+      }
+    }
+  }
+
+  EXPECT_TRUE(found_nvtx_stat)
+      << "XSpace should contain 'nvtx_range' stat metadata after real ROCTX "
+         "calls via librocprofiler-sdk-roctx.so";
+
+  if (found_nvtx_stat) {
+    std::set<std::string> label_set(found_labels.begin(), found_labels.end());
+    EXPECT_TRUE(label_set.count("unit_test_outer"))
+        << "Expected 'unit_test_outer' in nvtx_range labels. Found: "
+        << absl::StrJoin(found_labels, ", ");
+    EXPECT_TRUE(label_set.count("unit_test_inner"))
+        << "Expected 'unit_test_inner' in nvtx_range labels. Found: "
+        << absl::StrJoin(found_labels, ", ");
+    // roctxMarkA emits an instantaneous event — label is present
+    EXPECT_TRUE(label_set.count("unit_test_mark"))
+        << "Expected 'unit_test_mark' in nvtx_range labels. Found: "
+        << absl::StrJoin(found_labels, ", ");
+  }
 }
 
 }  // namespace

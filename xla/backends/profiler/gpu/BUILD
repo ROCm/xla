@@ -557,6 +557,7 @@ xla_cc_test(
     name = "rocm_tracer_test",
     size = "small",
     srcs = ["rocm_tracer_test.cc"],
+    linkopts = ["-ldl"],  # for dlopen/dlsym in RealRoctxCallsProduceNvtxRangeInXSpace
     tags = [
         "gpu",
         "rocm-only",
@@ -570,6 +571,7 @@ xla_cc_test(
         ":rocm_tracer_utils",
         "//xla/tsl/lib/core:status_test_util",
         "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings:str_join",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
         "@com_google_googletest//:gtest_main",

@@ -391,8 +391,17 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
             << plane->Name();
 
     XLineBuilder line = plane->GetOrCreateLine(line_id);
-    line.SetTimestampNs(start_gputime_ns);
-    CreateXEvent(event, plane, start_gputime_ns, end_gputime_ns, &line);
+    if (is_host_event) {
+      // Host-side events use wall-clock timestamps, not GPU timestamps.
+      // Pass 0/UINT64_MAX as bounds so the timestamp check in CreateXEvent
+      // never rejects them regardless of clock skew between domains.
+      line.SetTimestampNs(start_walltime_ns);
+      CreateXEvent(event, plane, 0, std::numeric_limits<uint64_t>::max(),
+                   &line);
+    } else {
+      line.SetTimestampNs(start_gputime_ns);
+      CreateXEvent(event, plane, start_gputime_ns, end_gputime_ns, &line);
+    }
   }
 
   device_plane->ForEachLine([&](XLineBuilder line) {
