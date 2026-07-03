@@ -44,7 +44,7 @@ jobs:
             container: "DOCKER_IMAGE"
             runner: "linux-xla-do-mi350x-4"
           - name: "hermetic"
-            configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx94X-dcgpu-7.13.0.tar.gz", "--repo_env=ROCM_DISTRO_HASH=db5543de096fb175ff2ece19dacc28b2a3201df48b38051cc505e508d84e35ab", "--repo_env=SYSROOT_DIST=linux_glibc_2_31"]
+            configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx950-dcgpu-7.13.0.tar.gz", "--repo_env=ROCM_DISTRO_HASH=794e8292c843621f772df83bbcbb6a8d5926279803dbd273679a1b6e782e16c7", "--repo_env=SYSROOT_DIST=linux_glibc_2_31"]
             container: "DOCKER_IMAGE_HERMETIC"
             runner: "linux-xla-do-mi350x-4"
           - name: "asan"
