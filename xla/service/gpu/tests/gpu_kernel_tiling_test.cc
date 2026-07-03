@@ -25,6 +25,9 @@ limitations under the License.
 #include "xla/service/hlo_module_config.h"
 #include "xla/service/platform_util.h"
 #include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#ifdef TENSORFLOW_USE_ROCM
+#include "rocm/rocm_config.h"
+#endif
 
 namespace xla {
 namespace gpu {
@@ -517,18 +520,18 @@ TEST_F(GpuKernelTilingTest, ReductionInputTooLarge) {
   absl::Status status =
       CompileToExecutable(std::move(hlo_module), true).status();
 
-  if (xla::PlatformUtil::CanonicalPlatformName("gpu").value() == "rocm") {
+#if (TF_ROCM_VERSION < 71300)
     EXPECT_THAT(
         status.message(),
         ::testing::ContainsRegex(
             "Kernel '.*' launch needs more blocks [(]4294967296, 65536[)] "
             "than allowed by hardware [(]2147483647, 65536[)]"));
-  } else {
+#else
     EXPECT_THAT(status.message(),
                 ::testing::ContainsRegex(
                     "Kernel '.*' launch needs more blocks [(].*, 65535[)] "
                     "than allowed by hardware [(]2147483647, 65535[)]"));
-  }
+#endif
 }
 
 }  // namespace
