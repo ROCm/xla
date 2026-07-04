@@ -30,7 +30,7 @@ jobs:
   execute-xla-ut-sanitizers:
     # Only run if the "sanitizers" label was added
     if: github.event.label.name == 'sanitizers'
-    runs-on: linux-mi250-4
+    runs-on: linux-xla-do-mi350x-4
     strategy:
       fail-fast: false
       matrix:
@@ -79,14 +79,16 @@ jobs:
             --config=ci_single_gpu \
             --local_test_jobs=4 \
             --spawn_strategy=local \
+            --strategy=TestRunner=local \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
-            --config=xla_sgpu \
             --jobs=30 \
             --bes_keywords=xla \
             --bes_keywords=single_gpu \
-            --bes_keywords=sanitizers
+            --bes_keywords=sanitizers \
+            -- \
+            //xla/...
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always() && !cancelled()
@@ -97,11 +99,13 @@ jobs:
             --local_test_jobs=1 \
             --spawn_strategy=local \
             --strategy=TestRunner=local \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942 \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --bes_keywords=xla \
             --bes_keywords=multi_gpu \
-            --bes_keywords=sanitizers
+            --bes_keywords=sanitizers \
+            -- \
+            //xla/...
 
       - name: Test XLA [${{ matrix.mode.name }}] [rocm_cpu]
         if: always() && !cancelled()
@@ -111,7 +115,13 @@ jobs:
             --config=rocm_rbe \
             --config=ci_rocm_cpu \
             --local_test_jobs=200 \
+            --spawn_strategy=local \
+            --strategy=TestRunner=local \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --bes_keywords=xla \
             --bes_keywords=cpu \
-            --bes_keywords=sanitizers
+            --bes_keywords=sanitizers \
+            ${{ join(matrix.mode.configs, ' ') }} \
+            -- \
+            //xla/...
