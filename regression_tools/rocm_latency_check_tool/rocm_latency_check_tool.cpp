@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -14,6 +15,7 @@
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -67,8 +69,9 @@ constexpr size_t kExtraH2DBytes = 0;
 constexpr int    kExtraH2DCount = 1;
 
 
-// When true, skips the actual hipMemcpyAsync call — isolates SDMA vs compute impact
+// When true, skips the corresponding hipMemcpyAsync calls to isolate copy stages.
 constexpr bool kSkipH2D = false;
+constexpr bool kSkipD2D = false;
 constexpr bool kSkipD2H = false;
 
 #define HIP_CHECK(cmd)                                                         \
@@ -171,6 +174,7 @@ struct PreparedSlot {
   void* dExtraH2D = nullptr;
   void* dD2D = nullptr;
   size_t bytesA = 0, bytesB = 0, bytesC = 0, bytesD2H = 0, bytesD2D = 0;
+  int device_id = -1;    // device where dA/dB/dC/dExtraH2D live
   int d2d_device = -1;  // device where dD2D lives (self, or peer under --d2d-peer)
 
   hipStream_t h2d_stream = nullptr;
@@ -378,6 +382,7 @@ PreparedSlot* prepare_slot(GpuResources& gpu, int slot_id, const WorkloadConfig&
   HIP_CHECK(hipSetDevice(gpu.device_id));
 
   auto* prep = new PreparedSlot();
+  prep->device_id = gpu.device_id;
   prep->h2d_stream = gpu.h2d_stream(slot_id);
   prep->compute_stream = gpu.compute_stream(slot_id);
   prep->d2h_stream = gpu.d2h_stream(slot_id);
@@ -423,11 +428,15 @@ void preload_weights(PreparedSlot* prep, const PinnedBuffer& hA) {
 
 void cleanup_slot(PreparedSlot* prep) {
   if (!prep) return;
+  HIP_CHECK(hipSetDevice(prep->device_id));
   if (prep->dExtraH2D) HIP_CHECK(hipFree(prep->dExtraH2D));
-  if (prep->dD2D) HIP_CHECK(hipFree(prep->dD2D));
   if (prep->dA) HIP_CHECK(hipFree(prep->dA));
   if (prep->dB) HIP_CHECK(hipFree(prep->dB));
   if (prep->dC) HIP_CHECK(hipFree(prep->dC));
+  if (prep->dD2D) {
+    HIP_CHECK(hipSetDevice(prep->d2d_device));
+    HIP_CHECK(hipFree(prep->dD2D));
+  }
   delete prep;
 }
 
@@ -438,14 +447,20 @@ void warmup_slot(GpuResources& gpu, PreparedSlot* prep,
   HIP_CHECK(hipSetDevice(gpu.device_id));
   hipStream_t s = prep->compute_stream;
   for (int i = 0; i < iters; ++i) {
-    HIP_CHECK(hipMemcpyHtoDAsync(reinterpret_cast<hipDeviceptr_t>(prep->dB),
-                                 const_cast<uint8_t*>(hB.data()), prep->bytesB, s));
+    if (!kSkipH2D) {
+      HIP_CHECK(hipMemcpyHtoDAsync(reinterpret_cast<hipDeviceptr_t>(prep->dB),
+                                   const_cast<uint8_t*>(hB.data()), prep->bytesB, s));
+    }
     launch_compute_op(gpu, prep, s);
-    HIP_CHECK(hipMemcpyDtoDAsync(reinterpret_cast<hipDeviceptr_t>(prep->dD2D),
-                                 reinterpret_cast<hipDeviceptr_t>(prep->dB), prep->bytesD2D, s));
+    if (!kSkipD2D) {
+      HIP_CHECK(hipMemcpyDtoDAsync(reinterpret_cast<hipDeviceptr_t>(prep->dD2D),
+                                   reinterpret_cast<hipDeviceptr_t>(prep->dB), prep->bytesD2D, s));
+    }
     launch_compute_op(gpu, prep, s);
-    HIP_CHECK(hipMemcpyDtoHAsync(hC.data(),
-                                 reinterpret_cast<hipDeviceptr_t>(prep->dC), prep->bytesD2H, s));
+    if (!kSkipD2H) {
+      HIP_CHECK(hipMemcpyDtoHAsync(hC.data(),
+                                   reinterpret_cast<hipDeviceptr_t>(prep->dC), prep->bytesD2H, s));
+    }
   }
   HIP_CHECK(hipStreamSynchronize(s));
 }
@@ -631,7 +646,7 @@ class Consumer {
       launch_compute_op(*gpu, prep, stream);
 
       // Device-to-device copy (intra-device, or cross-GPU under --d2d-peer).
-      if (!kSkipH2D) {
+      if (!kSkipD2D) {
         HIP_CHECK(hipMemcpyDtoDAsync(
             reinterpret_cast<hipDeviceptr_t>(prep->dD2D),
             reinterpret_cast<hipDeviceptr_t>(prep->dB), prep->bytesD2D, stream));
@@ -653,14 +668,14 @@ class Consumer {
           std::chrono::duration_cast<std::chrono::microseconds>(wall_end - wall_start).count();
 
       global_stats_->update(latency_us);
-      ++completed_;
+      completed_.fetch_add(1, std::memory_order_relaxed);
 
       pool_->Return(slot.index);
     }
 
   }
 
-  int completed() const { return completed_; }
+  int completed() const { return completed_.load(std::memory_order_relaxed); }
 
  private:
   SlotPool* pool_;
@@ -670,7 +685,7 @@ class Consumer {
   const PinnedBuffer& hA_;
   const PinnedBuffer& hB_;
   const PinnedBuffer& hExtraH2D_;
-  int completed_ = 0;
+  std::atomic<int> completed_{0};
 };
 
 // ---------------------------------------------------------------------------
@@ -855,17 +870,45 @@ static int parse_args(int argc, char** argv) {
     return a == name;
   };
   auto to_int = [](const std::string& s, int& out) {
+    errno = 0;
     char* end = nullptr;
     long v = std::strtol(s.c_str(), &end, 10);
-    if (end == s.c_str() || *end != '\0') return false;
+    if (end == s.c_str() || *end != '\0' || errno == ERANGE ||
+        v < std::numeric_limits<int>::min() ||
+        v > std::numeric_limits<int>::max()) {
+      return false;
+    }
     out = static_cast<int>(v);
     return true;
   };
   auto to_size = [](const std::string& s, size_t& out) {
+    if (!s.empty() && s[0] == '-') return false;
+    errno = 0;
     char* end = nullptr;
-    long long v = std::strtoll(s.c_str(), &end, 10);
-    if (end == s.c_str() || *end != '\0' || v < 0) return false;
+    unsigned long long v = std::strtoull(s.c_str(), &end, 10);
+    if (end == s.c_str() || *end != '\0' || errno == ERANGE ||
+        v > std::numeric_limits<size_t>::max()) {
+      return false;
+    }
     out = static_cast<size_t>(v);
+    return true;
+  };
+  auto parse_int_arg = [&](int& i, const char* flag, int& out) {
+    std::string val;
+    if (!need_value(i, flag, val)) return false;
+    if (!to_int(val, out)) {
+      std::cerr << "Invalid value for " << flag << ": '" << val << "'\n";
+      return false;
+    }
+    return true;
+  };
+  auto parse_size_arg = [&](int& i, const char* flag, size_t& out) {
+    std::string val;
+    if (!need_value(i, flag, val)) return false;
+    if (!to_size(val, out)) {
+      std::cerr << "Invalid value for " << flag << ": '" << val << "'\n";
+      return false;
+    }
     return true;
   };
 
@@ -874,27 +917,27 @@ static int parse_args(int argc, char** argv) {
     std::string val;
     if (arg == "-h" || arg == "--help") { print_usage(argv[0]); return 1; }
     else if (matches(arg, "--num-gpus")) {
-      if (!need_value(i, "--num-gpus", val) || !to_int(val, g_cfg.num_gpus)) return 2;
+      if (!parse_int_arg(i, "--num-gpus", g_cfg.num_gpus)) return 2;
     } else if (matches(arg, "--streams-per-gpu")) {
-      if (!need_value(i, "--streams-per-gpu", val) || !to_int(val, g_cfg.streams_per_gpu)) return 2;
+      if (!parse_int_arg(i, "--streams-per-gpu", g_cfg.streams_per_gpu)) return 2;
     } else if (matches(arg, "--duration-sec")) {
-      if (!need_value(i, "--duration-sec", val) || !to_int(val, g_cfg.duration_sec)) return 2;
+      if (!parse_int_arg(i, "--duration-sec", g_cfg.duration_sec)) return 2;
     } else if (matches(arg, "--report-interval-sec")) {
-      if (!need_value(i, "--report-interval-sec", val) || !to_int(val, g_cfg.report_interval_sec)) return 2;
+      if (!parse_int_arg(i, "--report-interval-sec", g_cfg.report_interval_sec)) return 2;
     } else if (matches(arg, "--target-qps")) {
-      if (!need_value(i, "--target-qps", val) || !to_int(val, g_cfg.target_qps)) return 2;
+      if (!parse_int_arg(i, "--target-qps", g_cfg.target_qps)) return 2;
     } else if (matches(arg, "--consumer-threads")) {
-      if (!need_value(i, "--consumer-threads", val) || !to_int(val, g_cfg.consumer_threads)) return 2;
+      if (!parse_int_arg(i, "--consumer-threads", g_cfg.consumer_threads)) return 2;
     } else if (matches(arg, "--max-queue-size")) {
-      if (!need_value(i, "--max-queue-size", val) || !to_size(val, g_cfg.max_queue_size)) return 2;
+      if (!parse_size_arg(i, "--max-queue-size", g_cfg.max_queue_size)) return 2;
     } else if (matches(arg, "--reduced-d2h-bytes")) {
-      if (!need_value(i, "--reduced-d2h-bytes", val) || !to_size(val, g_cfg.reduced_d2h_bytes)) return 2;
+      if (!parse_size_arg(i, "--reduced-d2h-bytes", g_cfg.reduced_d2h_bytes)) return 2;
     } else if (arg == "--reduced-d2h") {
       g_cfg.use_reduced_d2h = true;
     } else if (arg == "--no-reduced-d2h") {
       g_cfg.use_reduced_d2h = false;
     } else if (matches(arg, "--d2d-bytes")) {
-      if (!need_value(i, "--d2d-bytes", val) || !to_size(val, g_cfg.d2d_bytes)) return 2;
+      if (!parse_size_arg(i, "--d2d-bytes", g_cfg.d2d_bytes)) return 2;
     } else if (arg == "--d2d-peer") {
       g_cfg.d2d_peer = true;
     } else if (matches(arg, "--csv")) {
@@ -1029,9 +1072,10 @@ int main(int argc, char** argv) {
                 kExtraH2DCount, kExtraH2DBytes / (1024.0 * 1024.0),
                 kExtraH2DCount * kExtraH2DBytes / (1024.0 * 1024.0));
   }
-  if (kSkipH2D || kSkipD2H) {
-    std::printf("TF_SKIP_H2D=%s, TF_SKIP_D2H=%s (diagnostic: isolate SDMA impact)\n",
-                kSkipH2D ? "true" : "false", kSkipD2H ? "true" : "false");
+  if (kSkipH2D || kSkipD2D || kSkipD2H) {
+    std::printf("TF_SKIP_H2D=%s, TF_SKIP_D2D=%s, TF_SKIP_D2H=%s (diagnostic: isolate copy impact)\n",
+                kSkipH2D ? "true" : "false", kSkipD2D ? "true" : "false",
+                kSkipD2H ? "true" : "false");
   }
   std::printf("Streams per slot: %d (all ops on same stream)\n",
               GpuResources::kStreamsPerSlot);

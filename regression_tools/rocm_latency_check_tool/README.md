@@ -113,7 +113,7 @@ Flags accept both `--flag value` and `--flag=value`.
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--num-gpus N` | `4` | Number of GPUs to use. Must be `<=` the number of visible devices. |
-| `--streams-per-gpu N` | `2` | Per-GPU slots/streams. Total slots = `num-gpus * streams-per-gpu`. |
+| `--streams-per-gpu N` | `4` | Per-GPU slots/streams. Total slots = `num-gpus * streams-per-gpu`. |
 | `--duration-sec N` | `10` | Total measured run length, in seconds. |
 | `--report-interval-sec N` | `3` | How often a (cumulative) report is printed / written to CSV. |
 | `--target-qps N` | `0` | Paced target QPS. `0` = max throughput (no pacing). |
