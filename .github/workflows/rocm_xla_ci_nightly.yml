@@ -46,7 +46,7 @@ jobs:
         mode:
           - name: "default"
             configs: ["--config=rocm_ci"]
-            container: "DOCKER_IMAGE"
+            rbe_docker_image: "DOCKER_IMAGE"
             runner: "linux-xla-do-mi350x-1"
           - name: "hermetic"
             configs:
@@ -55,19 +55,19 @@ jobs:
               - "--repo_env=ROCM_DISTRO_HASH=bd5e12f6f05fd240efa6c50662379cba991f6faa9df67e270fbe5bb8cffc0ab9"
               - "--repo_env=SYSROOT_DIST=linux_glibc_2_31"
               - "--repo_env=ROCM_PATH="
-            container: "DOCKER_IMAGE_HERMETIC"
+            rbe_docker_image: "DOCKER_IMAGE_HERMETIC"
             runner: "linux-xla-do-mi350x-1"
           - name: "asan"
             configs: ["--config=rocm_ci", "--config=asan", "--strategy=TestRunner=local", "--flaky_test_attempts=1", "--local_test_jobs=4"]
-            container: "DOCKER_IMAGE"
+            rbe_docker_image: "DOCKER_IMAGE"
             runner: "linux-xla-do-mi350x-4"
           - name: "tsan"
             configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local", "--flaky_test_attempts=1", "--local_test_jobs=4"]
-            container: "DOCKER_IMAGE"
+            rbe_docker_image: "DOCKER_IMAGE"
             runner: "linux-xla-do-mi350x-4"
     container:
       # set in https://github.com/ROCm/xla/settings/variables/actions
-      image: ${{ vars[matrix.mode.container] }}
+      image: ${{ vars.DOCKER_IMAGE }}
       options: >-
         --device=/dev/dri
         --device=/dev/kfd
@@ -123,7 +123,7 @@ jobs:
             --local_test_jobs=1 \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             --jobs=30 \
             --spawn_strategy=local \
             --bes_keywords=xla \
@@ -144,7 +144,7 @@ jobs:
             --strategy=TestRunner=local \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             --bes_keywords=xla \
             --bes_keywords=multi_gpu \
             --bes_keywords=nightly \
@@ -163,7 +163,7 @@ jobs:
             --spawn_strategy=local \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             --bes_keywords=xla \
             --bes_keywords=cpu \
             --bes_keywords=nightly \
