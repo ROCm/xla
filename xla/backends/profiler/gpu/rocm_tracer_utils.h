@@ -84,9 +84,6 @@ struct KernelDetails {
   uint32_t num_regs;
   // group_segment_size from the symbol (static LDS, before runtime additions).
   uint32_t static_smem;
-
-  // kernel address (not a host function pointer; kept for reference only)
-  void* func_ptr;
 };
 
 enum class RocmTracerEventType {

@@ -150,36 +150,52 @@ uint64_t get_timestamp() {
 
 OccupancyStats PerDeviceCollector::GetOccupancy(
     const RocmDeviceOccupancyParams& params) const {
-  if (params.block_size == 0 || params.max_waves_per_cu == 0 ||
-      params.wave_front_size == 0 || params.func_ptr == nullptr) {
+  if (params.block_size == 0 || params.num_regs == 0 ||
+      params.max_waves_per_cu == 0 || params.wave_front_size == 0 ||
+      params.max_waves_per_simd == 0 || params.simd_per_cu == 0) {
     return {};
   }
+
+  // Waves needed to run one block.
+  const uint32_t waves_per_block =
+      (params.block_size + params.wave_front_size - 1) / params.wave_front_size;
+
+  // VGPR limit: vgprs_per_simd = max_waves_per_simd * wave_front_size
+  // because at minimum occupancy each wave uses exactly 1 VGPR/thread (the
+  // wave_front_size slot count). arch_vgpr_count is per-thread, so:
+  //   waves_per_simd_vgpr = floor(vgprs_per_simd / num_regs)
+  const uint32_t vgprs_per_simd = params.max_waves_per_simd * params.wave_front_size;
+  const uint32_t waves_per_simd_vgpr = vgprs_per_simd / params.num_regs;
+  const uint32_t waves_per_cu_vgpr = waves_per_simd_vgpr * params.simd_per_cu;
+
+  // LDS limit: total LDS per CU divided by smem per block.
+  const uint32_t smem_per_block = params.static_smem + params.dynamic_smem;
+  const uint32_t waves_per_cu_lds =
+      (smem_per_block > 0 && params.lds_size_bytes > 0)
+          ? (params.lds_size_bytes / smem_per_block) * waves_per_block
+          : params.max_waves_per_cu;
+
+  // Active waves = min(VGPR limit, LDS limit, hardware limit).
+  const uint32_t active_waves = std::min({waves_per_cu_vgpr,
+                                          waves_per_cu_lds,
+                                          params.max_waves_per_cu});
+  if (active_waves == 0) return {};
+
+  const uint32_t max_threads_per_cu =
+      params.max_waves_per_cu * params.wave_front_size;
 
   OccupancyStats stats;
-  int number_of_active_blocks = 0;
-  hipError_t err = hipOccupancyMaxActiveBlocksPerMultiprocessor(
-      &number_of_active_blocks, params.func_ptr,
-      static_cast<int>(params.block_size),
-      params.dynamic_smem);
-
-  if (err != hipError_t::hipSuccess || number_of_active_blocks <= 0) {
-    return {};
-  }
-
-  const uint32_t max_threads = params.max_waves_per_cu * params.wave_front_size;
   stats.occupancy_pct =
-      static_cast<double>(number_of_active_blocks) * params.block_size * 100.0 /
-      max_threads;
-
-  err = hipOccupancyMaxPotentialBlockSize(
-      &stats.min_grid_size, &stats.suggested_block_size,
-      static_cast<const void*>(params.func_ptr), params.dynamic_smem, 0);
-  if (err != hipError_t::hipSuccess) {
-    stats.min_grid_size = number_of_active_blocks;
-    stats.suggested_block_size =
-        static_cast<int>(params.wave_front_size);
-  }
-
+      static_cast<double>(active_waves) * params.wave_front_size * 100.0 /
+      max_threads_per_cu;
+  // Suggested block size: fill the CU with whole blocks of wave_front_size.
+  stats.suggested_block_size =
+      static_cast<int>((active_waves / waves_per_block) * params.wave_front_size);
+  if (stats.suggested_block_size == 0)
+    stats.suggested_block_size = static_cast<int>(params.wave_front_size);
+  // Min grid size: blocks to saturate one CU.
+  stats.min_grid_size =
+      static_cast<int>((max_threads_per_cu + params.block_size - 1) / params.block_size);
   return stats;
 }
 
@@ -232,20 +248,23 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
       event.source == RocmTracerEventSource::Activity) {
     double occupancy_pct = 0.0;
     if (max_waves_per_cu_ > 0 && wave_front_size_ > 0 &&
-        event.kernel_info.num_regs > 0 &&
-        event.kernel_info.func_ptr != nullptr) {
+        max_waves_per_simd_ > 0 && simd_per_cu_ > 0 &&
+        event.kernel_info.num_regs > 0) {
       // Treat unused z-dimensions as 1, not 0, to avoid zeroing the product.
       const uint32_t wg_x = std::max(event.kernel_info.workgroup_x, 1u);
       const uint32_t wg_y = std::max(event.kernel_info.workgroup_y, 1u);
       const uint32_t wg_z = std::max(event.kernel_info.workgroup_z, 1u);
 
       RocmDeviceOccupancyParams params{};
-      params.func_ptr = event.kernel_info.func_ptr;
-      params.block_size = wg_x * wg_y * wg_z;
-      params.dynamic_smem = event.kernel_info.group_segment_size;
-      params.max_waves_per_cu = max_waves_per_cu_;
-      params.wave_front_size = wave_front_size_;
-      params.num_regs = event.kernel_info.num_regs;
+      params.num_regs       = event.kernel_info.num_regs;
+      params.static_smem    = event.kernel_info.static_smem;
+      params.block_size     = wg_x * wg_y * wg_z;
+      params.dynamic_smem   = event.kernel_info.group_segment_size;
+      params.max_waves_per_cu   = max_waves_per_cu_;
+      params.wave_front_size    = wave_front_size_;
+      params.max_waves_per_simd = max_waves_per_simd_;
+      params.simd_per_cu        = simd_per_cu_;
+      params.lds_size_bytes     = lds_size_bytes_;
 
       OccupancyStats& occ = occupancy_cache_[params];
       if (occ.occupancy_pct == 0.0) {
@@ -524,11 +543,14 @@ void PerDeviceCollector::GetDeviceCapabilities(
     }
   }
 
-  // Store wave geometry for theoretical occupancy calculations.
-  // wave_front_size is in threads/wavefront (64 on CDNA, 32 or 64 on RDNA).
-  // max_waves_per_cu is the hardware maximum of concurrent wavefronts per CU.
-  max_waves_per_cu_ = agent.max_waves_per_cu;
-  wave_front_size_ = agent.wave_front_size;
+  // Store hardware limits for the occupancy formula (no HIP API call needed).
+  max_waves_per_cu_   = agent.max_waves_per_cu;
+  wave_front_size_    = agent.wave_front_size;
+  max_waves_per_simd_ = agent.max_waves_per_simd;
+  simd_per_cu_        = agent.simd_per_cu;
+  // lds_size_in_kb is per SIMD wavefront; total LDS per CU is the CU-level pool.
+  // rocprofiler_agent_v0_t.lds_size_in_kb is actually bytes/1024 per CU.
+  lds_size_bytes_     = agent.lds_size_in_kb * 1024;
 }
 
 void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,

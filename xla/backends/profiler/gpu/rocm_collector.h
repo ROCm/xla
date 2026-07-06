@@ -60,26 +60,30 @@ inline std::string ToXStat(const KernelDetails& kernel_info,
 }
 
 // Parameters that uniquely determine theoretical occupancy for a kernel launch.
+// All fields are available from the rocprofiler agent and kernel symbol data —
+// no HIP function pointer is required.
 struct RocmDeviceOccupancyParams {
-  // Host-side function pointer from HOST_KERNEL_SYMBOL_REGISTER callback.
-  // Required by hipOccupancyMaxActiveBlocksPerMultiprocessor.
-  void* func_ptr = nullptr;
-  // Block size = workgroup_x * workgroup_y * workgroup_z (unused dims → 1).
-  uint32_t block_size = 0;
-  // Runtime group segment size from the dispatch record (dynamic LDS).
-  uint32_t dynamic_smem = 0;
+  // From the kernel symbol data (DEVICE_KERNEL_SYMBOL_REGISTER callback).
+  uint32_t num_regs;       // arch_vgpr_count: VGPRs allocated per thread
+  uint32_t static_smem;    // group_segment_size from the symbol (static LDS)
+  // From the kernel dispatch record.
+  uint32_t block_size;     // workgroup_x * workgroup_y * workgroup_z (0-dims → 1)
+  uint32_t dynamic_smem;   // group_segment_size from dispatch (runtime LDS)
   // From the rocprofiler agent (set once in GetDeviceCapabilities).
-  uint32_t max_waves_per_cu = 0;
-  uint32_t wave_front_size = 0;
-  // From the kernel symbol data; used only to gate occupancy computation.
-  uint32_t num_regs = 0;
+  uint32_t max_waves_per_cu;   // max concurrent wavefronts per CU
+  uint32_t wave_front_size;    // threads per wavefront (64 on CDNA, 32/64 on RDNA)
+  uint32_t max_waves_per_simd; // max concurrent wavefronts per SIMD unit
+  uint32_t simd_per_cu;        // number of SIMD units per CU
+  uint32_t lds_size_bytes;     // LDS capacity in bytes per CU
 
   friend bool operator==(const RocmDeviceOccupancyParams& a,
                          const RocmDeviceOccupancyParams& b) noexcept {
-    return std::tie(a.func_ptr, a.block_size, a.dynamic_smem,
-                    a.max_waves_per_cu, a.wave_front_size) ==
-           std::tie(b.func_ptr, b.block_size, b.dynamic_smem,
-                    b.max_waves_per_cu, b.wave_front_size);
+    return std::tie(a.num_regs, a.static_smem, a.block_size, a.dynamic_smem,
+                    a.max_waves_per_cu, a.wave_front_size,
+                    a.max_waves_per_simd, a.simd_per_cu, a.lds_size_bytes) ==
+           std::tie(b.num_regs, b.static_smem, b.block_size, b.dynamic_smem,
+                    b.max_waves_per_cu, b.wave_front_size,
+                    b.max_waves_per_simd, b.simd_per_cu, b.lds_size_bytes);
   }
 
   friend bool operator!=(const RocmDeviceOccupancyParams& a,
@@ -90,9 +94,11 @@ struct RocmDeviceOccupancyParams {
   template <typename H>
   friend H AbslHashValue(H hash_state,
                          const RocmDeviceOccupancyParams& params) {
-    return H::combine(std::move(hash_state), params.func_ptr, params.block_size,
-                      params.dynamic_smem, params.max_waves_per_cu,
-                      params.wave_front_size);
+    return H::combine(std::move(hash_state), params.num_regs, params.static_smem,
+                      params.block_size, params.dynamic_smem,
+                      params.max_waves_per_cu, params.wave_front_size,
+                      params.max_waves_per_simd, params.simd_per_cu,
+                      params.lds_size_bytes);
   }
 };
 
@@ -154,10 +160,12 @@ class PerDeviceCollector {
   absl::flat_hash_map<RocmDeviceOccupancyParams, OccupancyStats>
       occupancy_cache_;
   // Populated from rocprofiler_agent_v0_t in GetDeviceCapabilities().
-  // Required for the theoretical occupancy formula:
-  //   pct = active_blocks * block_size * 100 / (max_waves_per_cu * wave_front_size)
-  uint32_t max_waves_per_cu_ = 0;
-  uint32_t wave_front_size_ = 0;
+  // Used by the hardware-formula occupancy computation in GetOccupancy().
+  uint32_t max_waves_per_cu_ = 0;   // max concurrent wavefronts per CU
+  uint32_t wave_front_size_ = 0;    // threads per wavefront
+  uint32_t max_waves_per_simd_ = 0; // max concurrent wavefronts per SIMD
+  uint32_t simd_per_cu_ = 0;        // SIMD units per CU
+  uint32_t lds_size_bytes_ = 0;     // LDS capacity in bytes per CU
 };  // PerDeviceCollector
 
 class RocmTraceCollectorImpl : public RocmTraceCollector {
