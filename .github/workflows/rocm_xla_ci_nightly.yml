@@ -25,6 +25,11 @@ on:
     - cron: '47 3 * * *'
   pull_request_target:
     types: [labeled]
+  pull_request:
+    branches:
+      - rocm-dev-infra
+    paths:
+      - '.github/workflows/rocm_xla_ci_nightly.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -32,8 +37,8 @@ concurrency:
 
 jobs:
   execute-xla-ut-nightly:
-    # Run on schedule or if the "nightly-pipeline" label was added
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'nightly-pipeline'
+    # Run on schedule, workflow_dispatch, "nightly-pipeline" label, or PR to rocm-dev-infra with workflow changes
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'nightly-pipeline' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
     runs-on: ${{ matrix.mode.runner }}
     strategy:
       fail-fast: false
@@ -44,7 +49,12 @@ jobs:
             container: "DOCKER_IMAGE"
             runner: "linux-xla-do-mi350x-1"
           - name: "hermetic"
-            configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx950-dcgpu-7.12.0.tar.gz", "--repo_env=ROCM_DISTRO_HASH=bd5e12f6f05fd240efa6c50662379cba991f6faa9df67e270fbe5bb8cffc0ab9", "--repo_env=SYSROOT_DIST=linux_glibc_2_31"]
+            configs:
+              - "--config=rocm_ci_hermetic"
+              - "--repo_env=ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx950-dcgpu-7.12.0.tar.gz"
+              - "--repo_env=ROCM_DISTRO_HASH=bd5e12f6f05fd240efa6c50662379cba991f6faa9df67e270fbe5bb8cffc0ab9"
+              - "--repo_env=SYSROOT_DIST=linux_glibc_2_31"
+              - "--repo_env=ROCM_PATH="
             container: "DOCKER_IMAGE_HERMETIC"
             runner: "linux-xla-do-mi350x-1"
           - name: "asan"
@@ -153,7 +163,7 @@ jobs:
             --spawn_strategy=local \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
             --bes_keywords=xla \
             --bes_keywords=cpu \
             --bes_keywords=nightly \
