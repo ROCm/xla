@@ -76,7 +76,13 @@ struct KernelDetails {
   // Z-dimension of a grid.
   uint32_t grid_z;
 
-  // kernel address. Used for calculating core occupancy
+  // From the kernel symbol data (code-object callback). Used for occupancy.
+  // arch_vgpr_count: architectural VGPRs allocated per thread.
+  uint32_t num_regs = 0;
+  // group_segment_size from the symbol (static LDS, before runtime additions).
+  uint32_t static_smem = 0;
+
+  // kernel address (not a host function pointer; kept for reference only)
   void* func_ptr;
 };
 

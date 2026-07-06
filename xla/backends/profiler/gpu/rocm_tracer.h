@@ -102,6 +102,11 @@ class RocmTracer {
   struct ProfilerKernelInfo {
     std::string name;
     kernel_symbol_data_t data;
+    // Host-side function pointer from HOST_KERNEL_SYMBOL_REGISTER callback.
+    // This is what HIP occupancy APIs (hipOccupancyMaxActiveBlocksPerMultiprocessor)
+    // require. Populated asynchronously; may be null if the host callback
+    // fires after the first dispatch.
+    void* host_func_ptr = nullptr;
   };
 
   using kernel_info_map_t =

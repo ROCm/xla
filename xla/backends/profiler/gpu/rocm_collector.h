@@ -59,45 +59,27 @@ inline std::string ToXStat(const KernelDetails& kernel_info,
                       " occ_pct:", occupancy_pct);
 }
 
+// Parameters that uniquely determine theoretical occupancy for a kernel launch.
 struct RocmDeviceOccupancyParams {
-  hipFuncAttributes attributes = {};
-  int block_size = 0;
-  size_t dynamic_smem_size = 0;
-  void* func_ptr;
+  // Host-side function pointer from HOST_KERNEL_SYMBOL_REGISTER callback.
+  // Required by hipOccupancyMaxActiveBlocksPerMultiprocessor.
+  void* func_ptr = nullptr;
+  // Block size = workgroup_x * workgroup_y * workgroup_z (unused dims → 1).
+  uint32_t block_size = 0;
+  // Runtime group segment size from the dispatch record (dynamic LDS).
+  uint32_t dynamic_smem = 0;
+  // From the rocprofiler agent (set once in GetDeviceCapabilities).
   uint32_t max_waves_per_cu = 0;
   uint32_t wave_front_size = 0;
+  // From the kernel symbol data; used only to gate occupancy computation.
+  uint32_t num_regs = 0;
 
   friend bool operator==(const RocmDeviceOccupancyParams& a,
                          const RocmDeviceOccupancyParams& b) noexcept {
-    // Compare only the fields that affect occupancy decisions.
-    return std::tuple{a.attributes.binaryVersion,
-                      a.attributes.cacheModeCA,
-                      a.attributes.constSizeBytes,
-                      a.attributes.localSizeBytes,
-                      a.attributes.maxDynamicSharedSizeBytes,
-                      a.attributes.maxThreadsPerBlock,
-                      a.attributes.numRegs,
-                      a.attributes.preferredShmemCarveout,
-                      a.attributes.ptxVersion,
-                      a.block_size,
-                      a.dynamic_smem_size,
-                      a.func_ptr,
-                      a.max_waves_per_cu,
-                      a.wave_front_size} ==
-           std::tuple{b.attributes.binaryVersion,
-                      b.attributes.cacheModeCA,
-                      b.attributes.constSizeBytes,
-                      b.attributes.localSizeBytes,
-                      b.attributes.maxDynamicSharedSizeBytes,
-                      b.attributes.maxThreadsPerBlock,
-                      b.attributes.numRegs,
-                      b.attributes.preferredShmemCarveout,
-                      b.attributes.ptxVersion,
-                      b.block_size,
-                      b.dynamic_smem_size,
-                      b.func_ptr,
-                      b.max_waves_per_cu,
-                      b.wave_front_size};
+    return std::tie(a.func_ptr, a.block_size, a.dynamic_smem,
+                    a.max_waves_per_cu, a.wave_front_size) ==
+           std::tie(b.func_ptr, b.block_size, b.dynamic_smem,
+                    b.max_waves_per_cu, b.wave_front_size);
   }
 
   friend bool operator!=(const RocmDeviceOccupancyParams& a,
@@ -108,12 +90,9 @@ struct RocmDeviceOccupancyParams {
   template <typename H>
   friend H AbslHashValue(H hash_state,
                          const RocmDeviceOccupancyParams& params) {
-    return H::combine(
-        std::move(hash_state), params.attributes.maxThreadsPerBlock,
-        params.attributes.numRegs, params.attributes.sharedSizeBytes,
-        params.attributes.maxDynamicSharedSizeBytes, params.block_size,
-        params.dynamic_smem_size, params.func_ptr, params.max_waves_per_cu,
-        params.wave_front_size);
+    return H::combine(std::move(hash_state), params.func_ptr, params.block_size,
+                      params.dynamic_smem, params.max_waves_per_cu,
+                      params.wave_front_size);
   }
 };
 

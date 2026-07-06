@@ -150,28 +150,34 @@ uint64_t get_timestamp() {
 
 OccupancyStats PerDeviceCollector::GetOccupancy(
     const RocmDeviceOccupancyParams& params) const {
-  OccupancyStats stats;
-  int number_of_active_blocks;
-  hipError_t err = hipOccupancyMaxActiveBlocksPerMultiprocessor(
-      &number_of_active_blocks, params.func_ptr, params.block_size,
-      params.dynamic_smem_size);
-
-  if (err != hipError_t::hipSuccess) {
+  if (params.block_size == 0 || params.max_waves_per_cu == 0 ||
+      params.wave_front_size == 0 || params.func_ptr == nullptr) {
     return {};
   }
 
-  stats.occupancy_pct = number_of_active_blocks * params.block_size * 100;
-  auto max_threads = params.max_waves_per_cu * params.wave_front_size;
-  if (max_threads > 0) {
-    stats.occupancy_pct /= max_threads;
+  OccupancyStats stats;
+  int number_of_active_blocks = 0;
+  hipError_t err = hipOccupancyMaxActiveBlocksPerMultiprocessor(
+      &number_of_active_blocks, params.func_ptr,
+      static_cast<int>(params.block_size),
+      params.dynamic_smem);
+
+  if (err != hipError_t::hipSuccess || number_of_active_blocks <= 0) {
+    return {};
   }
+
+  const uint32_t max_threads = params.max_waves_per_cu * params.wave_front_size;
+  stats.occupancy_pct =
+      static_cast<double>(number_of_active_blocks) * params.block_size * 100.0 /
+      max_threads;
 
   err = hipOccupancyMaxPotentialBlockSize(
       &stats.min_grid_size, &stats.suggested_block_size,
-      static_cast<const void*>(params.func_ptr), params.dynamic_smem_size, 0);
-
+      params.func_ptr, params.dynamic_smem, 0);
   if (err != hipError_t::hipSuccess) {
-    return {};
+    stats.min_grid_size = number_of_active_blocks;
+    stats.suggested_block_size =
+        static_cast<int>(params.wave_front_size);
   }
 
   return stats;
@@ -225,25 +231,29 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
   if (event.type == RocmTracerEventType::Kernel &&
       event.source == RocmTracerEventSource::Activity) {
     double occupancy_pct = 0.0;
-    if (event.kernel_info.func_ptr != nullptr && max_waves_per_cu_ > 0 &&
-        wave_front_size_ > 0) {
+    if (max_waves_per_cu_ > 0 && wave_front_size_ > 0 &&
+        event.kernel_info.num_regs > 0 &&
+        event.kernel_info.func_ptr != nullptr) {
+      // Treat unused z-dimensions as 1, not 0, to avoid zeroing the product.
+      const uint32_t wg_x = std::max(event.kernel_info.workgroup_x, 1u);
+      const uint32_t wg_y = std::max(event.kernel_info.workgroup_y, 1u);
+      const uint32_t wg_z = std::max(event.kernel_info.workgroup_z, 1u);
+
       RocmDeviceOccupancyParams params{};
-      if (hipFuncGetAttributes(&params.attributes,
-                               event.kernel_info.func_ptr) == hipSuccess) {
-        params.block_size = static_cast<int>(event.kernel_info.workgroup_x *
-                                             event.kernel_info.workgroup_y *
-                                             event.kernel_info.workgroup_z);
-        params.dynamic_smem_size = event.kernel_info.group_segment_size;
-        params.func_ptr = event.kernel_info.func_ptr;
-        params.max_waves_per_cu = max_waves_per_cu_;
-        params.wave_front_size = wave_front_size_;
+      params.func_ptr = event.kernel_info.func_ptr;
+      params.block_size = wg_x * wg_y * wg_z;
+      params.dynamic_smem = event.kernel_info.group_segment_size;
+      params.max_waves_per_cu = max_waves_per_cu_;
+      params.wave_front_size = wave_front_size_;
+      params.num_regs = event.kernel_info.num_regs;
 
-        OccupancyStats& occ = occupancy_cache_[params];
-        if (occ.occupancy_pct == 0.0) {
-          occ = GetOccupancy(params);
-        }
-        occupancy_pct = occ.occupancy_pct;
+      OccupancyStats& occ = occupancy_cache_[params];
+      if (occ.occupancy_pct == 0.0) {
+        occ = GetOccupancy(params);
+      }
+      occupancy_pct = occ.occupancy_pct;
 
+      if (occupancy_pct > 0.0) {
         xevent.AddStatValue(*plane->GetOrCreateStatMetadata(GetStatTypeStr(
                                 StatType::kTheoreticalOccupancyPct)),
                             occupancy_pct);

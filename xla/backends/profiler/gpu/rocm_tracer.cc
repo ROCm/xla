@@ -331,9 +331,17 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
     absl::MutexLock lock(&kernel_lock_);
     auto it = kernel_info_.find(kinfo.kernel_id);
     if (it != kernel_info_.end()) {
+      const auto& sym = it->second.data;
       trace_event->name = it->second.name;
-      trace_event->kernel_info.func_ptr =
-          reinterpret_cast<void*>(it->second.data.kernel_object);
+      // arch_vgpr_count: VGPRs per thread — the primary occupancy limiter.
+      trace_event->kernel_info.num_regs = sym.arch_vgpr_count;
+      // Static LDS from the kernel symbol (before runtime dynamic additions).
+      trace_event->kernel_info.static_smem = sym.group_segment_size;
+      // host_func_ptr is the host-side registration pointer for this kernel,
+      // needed by hipOccupancyMaxActiveBlocksPerMultiprocessor. It is populated
+      // from the HOST_KERNEL_SYMBOL_REGISTER callback. May be null if that
+      // callback has not yet fired (kernels dispatched before host symbol loads).
+      trace_event->kernel_info.func_ptr = it->second.host_func_ptr;
     }
   }
 }
@@ -401,15 +409,29 @@ void RocmTracer::CodeObjectCallback(
                  ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER) {
     auto* data = static_cast<kernel_symbol_data_t*>(record.payload);
     if (record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD) {
-      absl::MutexLock lock(kernel_lock_);
+      absl::MutexLock lock(&kernel_lock_);
       kernel_info_.emplace(
           data->kernel_id,
           ProfilerKernelInfo{tsl::port::MaybeAbiDemangle(data->kernel_name),
                              *data});
-    } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD) {
-      // FIXME: clear these?  At minimum need kernel names at shutdown, async
-      // completion We don't erase it just in case a buffer callback still needs
-      // this kernel_info_.erase(data->kernel_id);
+    }
+  } else if (record.kind == ROCPROFILER_CALLBACK_TRACING_CODE_OBJECT &&
+             record.operation ==
+                 ROCPROFILER_CODE_OBJECT_HOST_KERNEL_SYMBOL_REGISTER) {
+    // The host symbol gives us the actual host-side function pointer that
+    // HIP occupancy APIs require. Store it keyed by kernel_id so KernelEvent
+    // can look it up alongside the device symbol data.
+    using host_symbol_data_t =
+        rocprofiler_callback_tracing_code_object_host_kernel_symbol_register_data_t;
+    auto* data = static_cast<host_symbol_data_t*>(record.payload);
+    if (record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD &&
+        data->host_function.value != 0) {
+      absl::MutexLock lock(&kernel_lock_);
+      auto it = kernel_info_.find(data->kernel_id);
+      if (it != kernel_info_.end()) {
+        it->second.host_func_ptr =
+            reinterpret_cast<void*>(data->host_function.value);
+      }
     }
   }
 }
@@ -451,7 +473,8 @@ absl::Status RocmTracer::InitProfiling(void* tool_data) {
       rocprofiler_create_context(&utility_context_)));
 
   auto code_object_ops = std::vector<rocprofiler_tracing_operation_t>{
-      ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER};
+      ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER,
+      ROCPROFILER_CODE_OBJECT_HOST_KERNEL_SYMBOL_REGISTER};
 
   RETURN_IF_ERROR(RocprofilerStatusToAbslStatus(
       rocprofiler_configure_callback_tracing_service(
