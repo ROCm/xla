@@ -74,6 +74,7 @@ jobs:
         --shm-size=16G
         --cap-add=SYS_PTRACE
         --security-opt=seccomp=unconfined
+        --env-file /etc/podinfo/gha-gpu-isolation-settings
       volumes:
         - /tmp/bazel-cache:/root/.cache/bazel
         
@@ -121,15 +122,15 @@ jobs:
             "--config=rocm_rbe" \
             --config=ci_single_gpu \
             --local_test_jobs=1 \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             --jobs=30 \
             --spawn_strategy=local \
             --bes_keywords=xla \
             --bes_keywords=single_gpu \
             --bes_keywords=nightly \
             ${{ join(matrix.mode.configs, ' ') }} \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             -- \
             //xla/...
 
@@ -139,16 +140,16 @@ jobs:
           build_tools/rocm/run_xla_ci_build.sh \
             --config=ci_multi_gpu \
             --config=rocm_rbe \
+            ${{ join(matrix.mode.configs, ' ') }} \
             --test_strategy=exclusive \
             --spawn_strategy=local \
             --strategy=TestRunner=local \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             --bes_keywords=xla \
             --bes_keywords=multi_gpu \
             --bes_keywords=nightly \
-            ${{ join(matrix.mode.configs, ' ') }} \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             -- \
             //xla/...
 
@@ -161,12 +162,12 @@ jobs:
             --config=ci_rocm_cpu \
             --local_test_jobs=200 \
             --spawn_strategy=local \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             --bes_keywords=xla \
             --bes_keywords=cpu \
             --bes_keywords=nightly \
             ${{ join(matrix.mode.configs, ' ') }} \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             -- \
             //xla/...
