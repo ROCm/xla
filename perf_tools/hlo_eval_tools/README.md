@@ -64,8 +64,13 @@ hlo_eval_tools/
   qwen3_14b/
   alphafold3/
   colabfold/
-  stable_diffusion/
+  stable_diffusion_1_5/
+  sdxl/
   resnet50/
+  efficientnet/
+  clip/
+  detr/
+  dit/
   gpt_j_6b/
   flan_t5_large/
 ```
@@ -77,7 +82,7 @@ model and makes cross-run comparison straightforward.
 | Category | Models |
 | --- | --- |
 | Large language models | `deepseek2_16b`, `gemma3_4b`, `gp3_oss_20b`, `llama3_8b`, `mixtral_8x7b`, `qwen3_14b`, `gpt_j_6b`, `flan_t5_large` |
-| Vision / diffusion | `stable_diffusion`, `resnet50` |
+| Vision / diffusion | `resnet50`, `efficientnet`, `clip`, `detr`, `stable_diffusion_1_5`, `sdxl`, `dit` |
 | Science | `alphafold3`, `colabfold` |
 
 ## Building `multihost_hlo_runner`
@@ -117,7 +122,8 @@ Run the whole suite, one CSV per model:
 
 ```bash
 for model in deepseek2_16b gemma3_4b gp3_oss_20b llama3_8b mixtral_8x7b \
-             qwen3_14b alphafold3 colabfold stable_diffusion resnet50 gpt_j_6b flan_t5_large; do
+             qwen3_14b alphafold3 colabfold stable_diffusion_1_5 sdxl resnet50 \
+             efficientnet clip detr dit gpt_j_6b flan_t5_large; do
   ./multihost_hlo_runner \
     --device_type=gpu \
     --profile_execution=true \
