@@ -42,11 +42,11 @@ jobs:
           - name: "default"
             configs: ["--config=rocm_ci"]
             container: "DOCKER_IMAGE"
-            runner: "linux-xla-do-mi350x-4"
+            runner: "linux-xla-do-mi350x-1"
           - name: "hermetic"
             configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx950-dcgpu-7.13.0.tar.gz", "--repo_env=ROCM_DISTRO_HASH=794e8292c843621f772df83bbcbb6a8d5926279803dbd273679a1b6e782e16c7", "--repo_env=SYSROOT_DIST=linux_glibc_2_31"]
             container: "DOCKER_IMAGE_HERMETIC"
-            runner: "linux-xla-do-mi350x-4"
+            runner: "linux-xla-do-mi350x-1"
           - name: "asan"
             configs: ["--config=rocm_ci", "--config=asan", "--strategy=TestRunner=local", "--flaky_test_attempts=1"]
             container: "DOCKER_IMAGE"
