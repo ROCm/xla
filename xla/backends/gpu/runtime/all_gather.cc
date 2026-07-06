@@ -47,9 +47,9 @@ absl::Status IsAllGatherKernelSupported(int64_t num_ranks, int64_t num_elements,
     return absl::UnimplementedError(absl::StrCat(
         "Unsigned integer element type (",
         primitive_util::LowercasePrimitiveTypeName(element_type),
-        ") is not supported by the Triton all-gather kernel (Triton has no "
-        "unsigned integer types). Use the signed equivalent or a "
-        "floating-point type; NCCL/RCCL handles unsigned types correctly."));
+        ") is not supported for all-gather kernel (Triton has no unsigned "
+        "integer types). Use the signed equivalent or a floating-point type; "
+        "NCCL/RCCL handles unsigned types correctly."));
   }
 
   // The alignment requirement is on the total transfer size in bytes: the
@@ -61,9 +61,10 @@ absl::Status IsAllGatherKernelSupported(int64_t num_ranks, int64_t num_elements,
     return absl::UnimplementedError(absl::StrCat(
         "Number of elements (", num_elements, ") of type ",
         primitive_util::LowercasePrimitiveTypeName(element_type), " (",
-        element_bits, " bits each) is not aligned to the ", required_bits,
-        "-bit alignment requirement (", se::gpu::kNumElementsPerThread,
-        " x 32-bit words per thread)."));
+        element_bits,
+        " bits each) is not aligned to the alignment requirement"
+        " (",
+        se::gpu::kNumElementsPerThread, " x 32-bit words per thread)."));
   }
   return absl::OkStatus();
 }

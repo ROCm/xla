@@ -34,6 +34,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/log/scoped_mock_log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -128,10 +129,26 @@ class AllGatherTestNoParams : public CollectiveOpsWithFlagsBase {
     return !IsSkipped() && !HasFatalFailure();
   }
 
-  // In xla/, the Triton/NCCL decision is made at compile time.
-  // There is no runtime fallback warning to check for.
-  // This method is intentionally a no-op.
-  void CheckNoTritonFallback() {}
+  // Installs a log interceptor that fails the test if the AllGather Triton
+  // backend silently falls back to NCCL/RCCL due to an ineligible shape.
+  // The interceptor stays active (via the member variable) until the test
+  // destructor runs, covering the `ExecuteReplicated` call that follows.
+  void CheckNoTritonFallback() {
+    triton_fallback_checker_ = std::make_unique<absl::ScopedMockLog>(
+        absl::MockLogDefault::kIgnoreUnexpected);
+    // Expect ZERO occurrences of the fallback warning. If it fires, the test
+    // fails because Triton was requested but the shape was not eligible.
+    EXPECT_CALL(*triton_fallback_checker_,
+                Log(absl::LogSeverity::kWarning, ::testing::_,
+                    ::testing::HasSubstr("falling back to NCCL/RCCL")))
+        .Times(0);
+    triton_fallback_checker_->StartCapturingLogs();
+  }
+
+ private:
+  // Holds the log interceptor set up by CheckNoTritonFallback().
+  // Destroyed at the end of the test, triggering expectation verification.
+  std::unique_ptr<absl::ScopedMockLog> triton_fallback_checker_;
 };
 
 struct AllGatherTestParams {
@@ -537,8 +554,9 @@ TEST_P(AllGatherTest, F32_3D_2GPUs) {
   if (!CheckDeviceCount(kNumReplicas)) {
     return;
   }
-  const std::vector<int64_t> input_shape =
-      GetParam().GetShape(PrimitiveType::F32, /*rank=*/3);
+  // Use a Triton-eligible 3D shape: 4*4*64 = 1024 elements, F32 (32 bits).
+  // 1024 * 32 = 32768 bits ≡ 0 (mod 128) → aligned for Triton.
+  const std::vector<int64_t> input_shape = {4, 4, 64};
   std::vector<int64_t> output_shape = input_shape;
   output_shape[0] *= kNumReplicas;
 
@@ -552,6 +570,7 @@ TEST_P(AllGatherTest, F32_3D_2GPUs) {
       InputsOutputs test_io,
       (BuildTestInputsOutputs<PrimitiveType::F32>(*module, kNumReplicas,
                                                   /*all_gather_dimension=*/0)));
+  CheckNoTritonFallback();
   TF_ASSERT_OK_AND_ASSIGN(
       ExecutionResult execution_result,
       ExecuteReplicated(std::move(module),

@@ -65,6 +65,7 @@ limitations under the License.
 #include "xla/backends/gpu/codegen/triton/fusion.h"
 #include "xla/backends/gpu/codegen/triton/triton_kernel_source.h"
 #include "xla/backends/gpu/codegen/triton/xtile_compiler.h"
+#include "xla/backends/gpu/runtime/all_gather.h"
 #include "xla/backends/gpu/runtime/all_gather_thunk.h"
 #include "xla/backends/gpu/runtime/all_reduce.h"
 #include "xla/backends/gpu/runtime/all_reduce_thunk.h"
@@ -2085,13 +2086,28 @@ AsyncThunkSequence ThunkEmitter::EmitCollectiveThunk(
         gpu_config_status->collective_backend_config().kernel_strategy());
   }
   // For AllGather there is only one protocol (one-shot), so no strategy
-  // selection is needed. The Triton path is gated directly by the feature
-  // flag rather than via CollectiveKernelStrategyAnnotator.
+  // selection is needed. The Triton path is gated by the feature flag AND
+  // shape eligibility — not all shapes satisfy Triton's alignment/type
+  // requirements. When the flag is set but the shape is ineligible, we log
+  // and fall back to NCCL/RCCL.
   if (!use_triton && kind == Thunk::Kind::kAllGather) {
-    use_triton = inst->GetModule()
-                     ->config()
-                     .debug_options()
-                     .xla_gpu_unsupported_use_all_gather_triton_backend();
+    if (inst->GetModule()
+            ->config()
+            .debug_options()
+            .xla_gpu_unsupported_use_all_gather_triton_backend()) {
+      absl::StatusOr<AllGatherInfo> info = BuildAllGatherInfo(
+          /*is_collective_kernel_enabled=*/true,
+          ir_emitter_context_->gpu_device_info(),
+          Cast<HloAllGatherInstruction>(inst));
+      if (info.ok()) {
+        use_triton = true;
+      } else {
+        LOG(WARNING)
+            << "AllGather Triton backend requested but shape is ineligible "
+               "— falling back to NCCL/RCCL: "
+            << info.status().message();
+      }
+    }
   }
   if (use_triton) {
     CollectiveConfig collective_config =

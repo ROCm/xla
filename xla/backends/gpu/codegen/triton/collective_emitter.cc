@@ -1318,13 +1318,13 @@ absl::StatusOr<std::optional<BlockLevelFusionConfig>>
 GetBlockLevelFusionConfigForAllGather(
     const se::DeviceDescription& device_info,
     const HloAllGatherInstruction* all_gather) {
-  // The feature flag check is done via the backend config: if
-  // IsTritonCollectiveKernel is true for this instruction, we proceed.
-  ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
-                   all_gather->backend_config<GpuBackendConfig>());
-  if (!IsTritonCollectiveKernel(
-          gpu_config.collective_backend_config().kernel_strategy())) {
-    VLOG(3) << "All-gather is not annotated with Triton strategy. Skipping.";
+  // AllGather has a single one-shot protocol, so no strategy annotation is
+  // needed. Gate on the feature flag directly.
+  if (!all_gather->GetModule()
+           ->config()
+           .debug_options()
+           .xla_gpu_unsupported_use_all_gather_triton_backend()) {
+    VLOG(3) << "All-gather Triton backend is not enabled. Skipping.";
     return std::nullopt;
   }
 
