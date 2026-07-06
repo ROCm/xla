@@ -327,8 +327,15 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
       .func_ptr = nullptr,
   };
 
-  auto it = kernel_info_.find(kinfo.kernel_id);
-  if (it != kernel_info_.end()) trace_event->name = it->second.name;
+  {
+    absl::MutexLock lock(&kernel_lock_);
+    auto it = kernel_info_.find(kinfo.kernel_id);
+    if (it != kernel_info_.end()) {
+      trace_event->name = it->second.name;
+      trace_event->kernel_info.func_ptr =
+          reinterpret_cast<void*>(it->second.data.kernel_object);
+    }
+  }
 }
 
 void RocmTracer::TracingCallback(rocprofiler_context_id_t context,

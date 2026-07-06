@@ -23,6 +23,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_set.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
+#include "xla/tsl/profiler/utils/xplane_schema.h"
 #include "xla/tsl/profiler/utils/xplane_utils.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 
@@ -31,6 +32,8 @@ namespace profiler {
 namespace test {
 
 using tsl::profiler::FindOrAddMutablePlaneWithName;
+using tsl::profiler::GetStatTypeStr;
+using tsl::profiler::StatType;
 using tsl::profiler::XSpace;
 
 TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
@@ -199,6 +202,204 @@ TEST(RocmCollectorTest, MultipleActivitiesPerCorrelationIdAllExported) {
   EXPECT_TRUE(seen_names.contains("kernel_a"));
   EXPECT_TRUE(seen_names.contains("kernel_b"));
   EXPECT_TRUE(seen_names.contains("kernel_c"));
+}
+
+// ============================================================================
+// Occupancy unit tests
+// ============================================================================
+
+// Helper: build a RocmTraceCollectorImpl and inject a paired API + Activity
+// kernel event, optionally with GPU agent data for occupancy.
+struct OccupancyTestFixture {
+  RocmTraceCollectorImpl collector;
+
+  static RocmTraceCollectorOptions MakeOpts() {
+    RocmTraceCollectorOptions o;
+    o.max_callback_api_events = 100;
+    o.max_activity_api_events = 100;
+    o.max_annotation_strings = 100;
+    o.num_gpus = 1;
+    return o;
+  }
+
+  OccupancyTestFixture()
+      : collector(MakeOpts(), /*start_walltime_ns=*/1000,
+                  /*start_gputime_ns=*/2000) {}
+
+  void AddKernelPair(void* func_ptr, uint32_t wg_x, uint32_t wg_y,
+                     uint32_t wg_z, uint32_t smem, uint64_t start_ns,
+                     uint64_t end_ns, uint32_t corr_id = 1) {
+    RocmTracerEvent api;
+    api.type = RocmTracerEventType::Kernel;
+    api.source = RocmTracerEventSource::ApiCallback;
+    api.domain = RocmTracerEventDomain::HIP_API;
+    api.name = "test_kernel";
+    api.correlation_id = corr_id;
+    api.thread_id = 1;
+    api.kernel_info = KernelDetails{};
+    api.kernel_info.func_ptr = func_ptr;
+    api.kernel_info.workgroup_x = wg_x;
+    api.kernel_info.workgroup_y = wg_y;
+    api.kernel_info.workgroup_z = wg_z;
+    api.kernel_info.group_segment_size = smem;
+    collector.AddEvent(std::move(api), false);
+
+    RocmTracerEvent act;
+    act.type = RocmTracerEventType::Kernel;
+    act.source = RocmTracerEventSource::Activity;
+    act.domain = RocmTracerEventDomain::HIP_OPS;
+    act.name = "test_kernel";
+    act.correlation_id = corr_id;
+    act.start_time_ns = start_ns;
+    act.end_time_ns = end_ns;
+    act.device_id = 0;
+    act.stream_id = 1;
+    collector.AddEvent(std::move(act), false);
+  }
+};
+
+// When func_ptr is null the occupancy stats block must not be written —
+// the three occupancy XEvent stats must be absent.
+TEST(RocmCollectorOccupancyTest, NullFuncPtrSkipsOccupancyStats) {
+  OccupancyTestFixture f;
+  f.AddKernelPair(/*func_ptr=*/nullptr, 256, 1, 1, 0, 3000, 4000);
+
+  f.collector.Flush();
+  tensorflow::profiler::XSpace space;
+  f.collector.Export(&space);
+
+  const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu, nullptr);
+
+  // Occupancy stat metadata must not appear if func_ptr was null.
+  const std::string kOccKey =
+      GetStatTypeStr(StatType::kTheoreticalOccupancyPct);
+  for (const auto& [id, smd] : gpu->stat_metadata()) {
+    EXPECT_NE(smd.name(), kOccKey)
+        << "kTheoreticalOccupancyPct must not appear when func_ptr is null";
+  }
+}
+
+// When a non-null func_ptr is provided but no agent data has been set
+// (max_waves_per_cu_ == 0), occupancy stats must still not be written.
+TEST(RocmCollectorOccupancyTest, ZeroWavesPerCuSkipsOccupancyStats) {
+  OccupancyTestFixture f;
+  // Use a non-null but obviously invalid pointer. hipOccupancyMax* will fail,
+  // and even before that the max_waves_per_cu guard in CreateXEvent fires.
+  f.AddKernelPair(reinterpret_cast<void*>(0xdeadbeef), 256, 1, 1, 0, 3000,
+                  4000);
+
+  f.collector.Flush();
+  tensorflow::profiler::XSpace space;
+  f.collector.Export(&space);
+
+  const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu, nullptr);
+
+  const std::string kOccKey =
+      GetStatTypeStr(StatType::kTheoreticalOccupancyPct);
+  for (const auto& [id, smd] : gpu->stat_metadata()) {
+    EXPECT_NE(smd.name(), kOccKey)
+        << "kTheoreticalOccupancyPct must not appear when max_waves_per_cu=0";
+  }
+}
+
+// kKernelDetails stat must always be present for kernel activity events,
+// regardless of whether occupancy was computed.
+TEST(RocmCollectorOccupancyTest, KernelDetailsAlwaysPresent) {
+  OccupancyTestFixture f;
+  f.AddKernelPair(/*func_ptr=*/nullptr, 64, 1, 1, 512, 3000, 4000);
+
+  f.collector.Flush();
+  tensorflow::profiler::XSpace space;
+  f.collector.Export(&space);
+
+  const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu, nullptr);
+
+  const std::string kDetailsKey = GetStatTypeStr(StatType::kKernelDetails);
+  bool found_details = false;
+  for (const auto& [id, smd] : gpu->stat_metadata()) {
+    if (smd.name() == kDetailsKey) {
+      found_details = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_details) << "kKernelDetails stat must be present for "
+                                "kernel events regardless of occupancy";
+}
+
+// kKernelDetails string must contain "occ_pct:0" when func_ptr is null.
+TEST(RocmCollectorOccupancyTest, KernelDetailsContainsZeroOccupancyWhenNoPtr) {
+  OccupancyTestFixture f;
+  f.AddKernelPair(/*func_ptr=*/nullptr, 128, 1, 1, 0, 3000, 4000);
+
+  f.collector.Flush();
+  tensorflow::profiler::XSpace space;
+  f.collector.Export(&space);
+
+  const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu, nullptr);
+
+  // Find the kKernelDetails stat metadata id, then locate its ref-value string.
+  const std::string kDetailsKey = GetStatTypeStr(StatType::kKernelDetails);
+  int64_t details_stat_id = -1;
+  for (const auto& [id, smd] : gpu->stat_metadata()) {
+    if (smd.name() == kDetailsKey) {
+      details_stat_id = id;
+      break;
+    }
+  }
+  ASSERT_GE(details_stat_id, 0) << "kKernelDetails stat metadata not found";
+
+  bool found_occ_pct_zero = false;
+  for (const auto& line : gpu->lines()) {
+    for (const auto& ev : line.events()) {
+      for (const auto& stat : ev.stats()) {
+        if (stat.metadata_id() != details_stat_id) continue;
+        // kKernelDetails is written as a ref_value pointing to the string.
+        int64_t ref = stat.ref_value();
+        auto it = gpu->stat_metadata().find(ref);
+        if (it == gpu->stat_metadata().end()) continue;
+        const std::string& details = it->second.name();
+        if (details.find("occ_pct:0") != std::string::npos) {
+          found_occ_pct_zero = true;
+        }
+      }
+    }
+  }
+  EXPECT_TRUE(found_occ_pct_zero)
+      << "KernelDetails string must contain 'occ_pct:0' when func_ptr is null";
+}
+
+// RocmDeviceOccupancyParams equality and hashing must work correctly so that
+// the occupancy cache deduplicates across identical kernel launches.
+TEST(RocmCollectorOccupancyTest, OccupancyParamsCacheKey) {
+  RocmDeviceOccupancyParams a{};
+  a.block_size = 256;
+  a.dynamic_smem_size = 0;
+  a.func_ptr = reinterpret_cast<void*>(0x1000);
+  a.max_waves_per_cu = 40;
+  a.wave_front_size = 64;
+
+  RocmDeviceOccupancyParams b = a;
+
+  EXPECT_EQ(a, b) << "Identical params must compare equal";
+
+  b.block_size = 128;
+  EXPECT_NE(a, b) << "Params with different block_size must not be equal";
+
+  b = a;
+  b.func_ptr = reinterpret_cast<void*>(0x2000);
+  EXPECT_NE(a, b) << "Params with different func_ptr must not be equal";
+
+  b = a;
+  b.max_waves_per_cu = 20;
+  EXPECT_NE(a, b) << "Params with different max_waves_per_cu must not be equal";
+
+  b = a;
+  b.wave_front_size = 32;
+  EXPECT_NE(a, b) << "Params with different wave_front_size must not be equal";
 }
 
 }  // namespace test

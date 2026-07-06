@@ -117,7 +117,6 @@ struct RocmDeviceOccupancyParams {
   }
 };
 
-// FIXME: rocprofiler-sdk does not have this one yet
 struct OccupancyStats {
   double occupancy_pct = 0.0;
   int min_grid_size = 0;
@@ -175,6 +174,11 @@ class PerDeviceCollector {
   std::vector<RocmTracerEvent> events_ ABSL_GUARDED_BY(events_mutex_);
   absl::flat_hash_map<RocmDeviceOccupancyParams, OccupancyStats>
       occupancy_cache_;
+  // Populated from rocprofiler_agent_v0_t in GetDeviceCapabilities().
+  // Required for the theoretical occupancy formula:
+  //   pct = active_blocks * block_size * 100 / (max_waves_per_cu * wave_front_size)
+  uint32_t max_waves_per_cu_ = 0;
+  uint32_t wave_front_size_ = 0;
 };  // PerDeviceCollector
 
 class RocmTraceCollectorImpl : public RocmTraceCollector {

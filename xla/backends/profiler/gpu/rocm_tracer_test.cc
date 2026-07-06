@@ -18,20 +18,27 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 #include "absl/log/log.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "rocm/include/hip/hip_runtime.h"
+#include "rocm/include/rocprofiler-sdk/callback_tracing.h"
 #include "rocm/include/rocprofiler-sdk/context.h"
 #include "rocm/include/rocprofiler-sdk/fwd.h"
+#include "rocm/include/rocprofiler-sdk/marker.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/profiler/utils/xplane_schema.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 
 namespace xla {
@@ -335,6 +342,213 @@ TEST(RocmTracerTest, DisableIsolatesNextSession) {
       << " events despite no HIP activity between its Enable() and Disable();"
       << " these must have leaked from the preceding no-profiler window of "
       << kLeakedPairs << " hipMemcpy pairs";
+}
+
+// ============================================================================
+// Occupancy smoke tests — require real AMD GPU hardware.
+//
+// These tests run a real HIP kernel, capture the profiler event through the
+// full rocprofiler-sdk pipeline, and verify that the exported XSpace contains
+// theoretical occupancy statistics (kTheoreticalOccupancyPct,
+// kOccupancyMinGridSize, kOccupancySuggestedBlockSize).
+// ============================================================================
+
+// Minimal GPU kernel for occupancy testing.
+// Using a __global__ void* pointer to the kernel lets us pass func_ptr to
+// hipFuncGetAttributes without needing the HIP runtime's template overload.
+__global__ void OccupancyTestKernel(const float* __restrict__ in,
+                                    float* __restrict__ out, int n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) out[i] = in[i] * 2.0f;
+}
+
+TEST(RocmTracerOccupancyTest, KernelDispatchProducesOccupancyStats) {
+#define HIP_ASSERT_OK(expr) ASSERT_EQ((expr), hipSuccess) << #expr " failed"
+
+  int device_count = 0;
+  HIP_ASSERT_OK(hipGetDeviceCount(&device_count));
+  ASSERT_GT(device_count, 0) << "No HIP devices available";
+
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  ASSERT_TRUE(tracer.IsAvailable());
+  ASSERT_GT(tracer.GpuAgents().size(), 0u) << "No GPU agents registered";
+
+  RocmTraceCollectorOptions col_opts;
+  col_opts.max_callback_api_events = 2 * 1024 * 1024;
+  col_opts.max_activity_api_events = 2 * 1024 * 1024;
+  col_opts.max_annotation_strings = 1024 * 1024;
+  col_opts.num_gpus = tracer.NumGpus() > 0 ? tracer.NumGpus() : 1;
+
+  uint64_t start_wall = RocmTracer::GetTimestamp();
+  uint64_t start_gpu = RocmTracer::GetTimestamp();
+  auto collector = std::make_unique<RocmTraceCollectorImpl>(
+      col_opts, start_wall, start_gpu);
+  collector->SetGpuAgents(tracer.GpuAgents());
+
+  RocmTracerOptions opts{/*max_annotation_strings=*/1024 * 1024};
+  TF_ASSERT_OK(tracer.Enable(opts, collector.get()));
+
+  // Launch a real kernel so the tracer captures a kernel dispatch record.
+  constexpr int kN = 4096;
+  float* d_in = nullptr;
+  float* d_out = nullptr;
+  HIP_ASSERT_OK(hipMalloc(&d_in, kN * sizeof(float)));
+  HIP_ASSERT_OK(hipMalloc(&d_out, kN * sizeof(float)));
+
+  dim3 block(256);
+  dim3 grid((kN + 255) / 256);
+  OccupancyTestKernel<<<grid, block>>>(d_in, d_out, kN);
+  HIP_ASSERT_OK(hipDeviceSynchronize());
+
+  // Allow the rocprofiler-sdk buffer to flush.
+  absl::SleepFor(absl::Milliseconds(200));
+  tracer.Disable();
+
+  HIP_ASSERT_OK(hipFree(d_in));
+  HIP_ASSERT_OK(hipFree(d_out));
+
+#undef HIP_ASSERT_OK
+
+  tsl::profiler::XSpace space;
+  collector->Export(&space);
+
+  // Look for the theoretical occupancy stat in any GPU plane.
+  const std::string kOccKey =
+      tsl::profiler::GetStatTypeStr(tsl::profiler::StatType::kTheoreticalOccupancyPct);
+  const std::string kMinGridKey =
+      tsl::profiler::GetStatTypeStr(tsl::profiler::StatType::kOccupancyMinGridSize);
+  const std::string kSugBlockKey =
+      tsl::profiler::GetStatTypeStr(
+          tsl::profiler::StatType::kOccupancySuggestedBlockSize);
+
+  bool found_occ_pct = false;
+  bool found_min_grid = false;
+  bool found_sug_block = false;
+
+  for (const auto& plane : space.planes()) {
+    for (const auto& [id, smd] : plane.stat_metadata()) {
+      if (smd.name() == kOccKey) found_occ_pct = true;
+      if (smd.name() == kMinGridKey) found_min_grid = true;
+      if (smd.name() == kSugBlockKey) found_sug_block = true;
+    }
+  }
+
+  EXPECT_TRUE(found_occ_pct)
+      << "XSpace must contain kTheoreticalOccupancyPct stat after a real "
+         "kernel dispatch — check that func_ptr is populated in KernelEvent() "
+         "and that agent wave geometry is wired into PerDeviceCollector";
+  EXPECT_TRUE(found_min_grid)
+      << "XSpace must contain kOccupancyMinGridSize stat";
+  EXPECT_TRUE(found_sug_block)
+      << "XSpace must contain kOccupancySuggestedBlockSize stat";
+
+  // Additionally verify that the kTheoreticalOccupancyPct value is in (0, 100].
+  for (const auto& plane : space.planes()) {
+    int64_t occ_stat_id = -1;
+    for (const auto& [sid, smd] : plane.stat_metadata()) {
+      if (smd.name() == kOccKey) {
+        occ_stat_id = sid;
+        break;
+      }
+    }
+    if (occ_stat_id < 0) continue;
+
+    for (const auto& line : plane.lines()) {
+      for (const auto& ev : line.events()) {
+        for (const auto& stat : ev.stats()) {
+          if (stat.metadata_id() != occ_stat_id) continue;
+          double pct = stat.double_value();
+          EXPECT_GT(pct, 0.0)
+              << "Theoretical occupancy must be positive for a running kernel";
+          EXPECT_LE(pct, 100.0)
+              << "Theoretical occupancy cannot exceed 100%";
+        }
+      }
+    }
+  }
+}
+
+// Verify that kKernelDetails in the XSpace contains a non-zero occ_pct
+// string when occupancy is available.
+TEST(RocmTracerOccupancyTest, KernelDetailsStringContainsOccupancyPct) {
+#define HIP_ASSERT_OK(expr) ASSERT_EQ((expr), hipSuccess) << #expr " failed"
+
+  int device_count = 0;
+  HIP_ASSERT_OK(hipGetDeviceCount(&device_count));
+  ASSERT_GT(device_count, 0) << "No HIP devices available";
+
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  ASSERT_TRUE(tracer.IsAvailable());
+
+  RocmTraceCollectorOptions col_opts;
+  col_opts.max_callback_api_events = 2 * 1024 * 1024;
+  col_opts.max_activity_api_events = 2 * 1024 * 1024;
+  col_opts.max_annotation_strings = 1024 * 1024;
+  col_opts.num_gpus = tracer.NumGpus() > 0 ? tracer.NumGpus() : 1;
+
+  uint64_t start_wall = RocmTracer::GetTimestamp();
+  uint64_t start_gpu = RocmTracer::GetTimestamp();
+  auto collector = std::make_unique<RocmTraceCollectorImpl>(
+      col_opts, start_wall, start_gpu);
+  collector->SetGpuAgents(tracer.GpuAgents());
+
+  RocmTracerOptions opts{/*max_annotation_strings=*/1024 * 1024};
+  TF_ASSERT_OK(tracer.Enable(opts, collector.get()));
+
+  constexpr int kN = 1024;
+  float* d_in = nullptr;
+  float* d_out = nullptr;
+  HIP_ASSERT_OK(hipMalloc(&d_in, kN * sizeof(float)));
+  HIP_ASSERT_OK(hipMalloc(&d_out, kN * sizeof(float)));
+  OccupancyTestKernel<<<dim3((kN + 63) / 64), dim3(64)>>>(d_in, d_out, kN);
+  HIP_ASSERT_OK(hipDeviceSynchronize());
+
+  absl::SleepFor(absl::Milliseconds(200));
+  tracer.Disable();
+
+  HIP_ASSERT_OK(hipFree(d_in));
+  HIP_ASSERT_OK(hipFree(d_out));
+#undef HIP_ASSERT_OK
+
+  tsl::profiler::XSpace space;
+  collector->Export(&space);
+
+  const std::string kDetailsKey =
+      tsl::profiler::GetStatTypeStr(tsl::profiler::StatType::kKernelDetails);
+
+  bool found_nonzero_occ = false;
+  for (const auto& plane : space.planes()) {
+    int64_t details_id = -1;
+    for (const auto& [sid, smd] : plane.stat_metadata()) {
+      if (smd.name() == kDetailsKey) {
+        details_id = sid;
+        break;
+      }
+    }
+    if (details_id < 0) continue;
+
+    for (const auto& line : plane.lines()) {
+      for (const auto& ev : line.events()) {
+        for (const auto& stat : ev.stats()) {
+          if (stat.metadata_id() != details_id) continue;
+          int64_t ref = stat.ref_value();
+          auto it = plane.stat_metadata().find(ref);
+          if (it == plane.stat_metadata().end()) continue;
+          const std::string& details = it->second.name();
+          // The details string must contain "occ_pct:" followed by a non-zero
+          // value when occupancy was computed successfully.
+          auto pos = details.find("occ_pct:");
+          if (pos == std::string::npos) continue;
+          double pct = std::stod(details.substr(pos + 8));
+          if (pct > 0.0) found_nonzero_occ = true;
+        }
+      }
+    }
+  }
+
+  EXPECT_TRUE(found_nonzero_occ)
+      << "kKernelDetails string must contain a non-zero occ_pct after a real "
+         "kernel dispatch with occupancy support enabled";
 }
 
 }  // namespace

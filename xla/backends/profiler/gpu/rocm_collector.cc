@@ -150,8 +150,6 @@ uint64_t get_timestamp() {
 
 OccupancyStats PerDeviceCollector::GetOccupancy(
     const RocmDeviceOccupancyParams& params) const {
-  // TODO(rocm-profiler): hipOccupancyMaxActiveBlocksPerMultiprocessor only
-  // return hipSuccess for HIP_API_ID_hipLaunchKernel
   OccupancyStats stats;
   int number_of_active_blocks;
   hipError_t err = hipOccupancyMaxActiveBlocksPerMultiprocessor(
@@ -163,9 +161,6 @@ OccupancyStats PerDeviceCollector::GetOccupancy(
   }
 
   stats.occupancy_pct = number_of_active_blocks * params.block_size * 100;
-  // TODO(ROCm): GetOccupancy is currently dead code -- no callers populate
-  // max_waves_per_cu / wave_front_size, so occupancy_pct stays zero.
-  // Wire up agent data when occupancy reporting is enabled.
   auto max_threads = params.max_waves_per_cu * params.wave_front_size;
   if (max_threads > 0) {
     stats.occupancy_pct /= max_threads;
@@ -229,11 +224,41 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
 
   if (event.type == RocmTracerEventType::Kernel &&
       event.source == RocmTracerEventSource::Activity) {
+    double occupancy_pct = 0.0;
+    if (event.kernel_info.func_ptr != nullptr && max_waves_per_cu_ > 0 &&
+        wave_front_size_ > 0) {
+      RocmDeviceOccupancyParams params{};
+      hipFuncGetAttributes(&params.attributes, event.kernel_info.func_ptr);
+      params.block_size = static_cast<int>(event.kernel_info.workgroup_x *
+                                           event.kernel_info.workgroup_y *
+                                           event.kernel_info.workgroup_z);
+      params.dynamic_smem_size = event.kernel_info.group_segment_size;
+      params.func_ptr = event.kernel_info.func_ptr;
+      params.max_waves_per_cu = max_waves_per_cu_;
+      params.wave_front_size = wave_front_size_;
+
+      OccupancyStats& occ = occupancy_cache_[params];
+      if (occ.occupancy_pct == 0.0) {
+        occ = GetOccupancy(params);
+      }
+      occupancy_pct = occ.occupancy_pct;
+
+      xevent.AddStatValue(*plane->GetOrCreateStatMetadata(GetStatTypeStr(
+                              StatType::kTheoreticalOccupancyPct)),
+                          occupancy_pct);
+      xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+                              GetStatTypeStr(StatType::kOccupancyMinGridSize)),
+                          static_cast<int32_t>(occ.min_grid_size));
+      xevent.AddStatValue(
+          *plane->GetOrCreateStatMetadata(
+              GetStatTypeStr(StatType::kOccupancySuggestedBlockSize)),
+          static_cast<int32_t>(occ.suggested_block_size));
+    }
     xevent.AddStatValue(
         *plane->GetOrCreateStatMetadata(
             GetStatTypeStr(StatType::kKernelDetails)),
         *plane->GetOrCreateStatMetadata(ToXStat(event.kernel_info,
-                                                /*occupancy_pct*/ 0)));
+                                                occupancy_pct)));
   } else if (event.type == RocmTracerEventType::MemcpyH2D ||
              event.type == RocmTracerEventType::MemcpyD2H ||
              event.type == RocmTracerEventType::MemcpyD2D ||
@@ -492,6 +517,12 @@ void PerDeviceCollector::GetDeviceCapabilities(
           compute_capability_minor);
     }
   }
+
+  // Store wave geometry for theoretical occupancy calculations.
+  // wave_front_size is in threads/wavefront (64 on CDNA, 32 or 64 on RDNA).
+  // max_waves_per_cu is the hardware maximum of concurrent wavefronts per CU.
+  max_waves_per_cu_ = agent.max_waves_per_cu;
+  wave_front_size_ = agent.wave_front_size;
 }
 
 void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
