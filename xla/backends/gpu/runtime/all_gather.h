@@ -31,6 +31,12 @@ limitations under the License.
 
 namespace xla::gpu {
 
+// Maximum number of GPU thread-blocks launched per all-gather kernel.
+// This constant is shared between the kernel launcher (all_gather.cc) and the
+// unmanaged-argument shaper (collective_emitter.cc) so that the signal buffer
+// is always sized to match the actual grid.
+inline constexpr int64_t kAllGatherMaxBlocksPerGrid = 32;
+
 // Encapsulates the information needed to perform an all-gather via the Triton
 // collective kernel backend.
 struct AllGatherInfo {
@@ -66,7 +72,9 @@ absl::StatusOr<AllGatherInfo> BuildAllGatherInfo(
 // Returns the launch dimensions for the all-gather kernel.
 // All-gather uses a one-shot strategy: each rank contributes its local slice
 // to the symmetric buffer and then reads each peer's slice.
-LaunchDimensions AllGatherLaunchDimensions(int64_t elements, int64_t num_ranks);
+// warp_size should be device_description.threads_per_warp() (32 on NVIDIA,
+// 64 on AMD) so that the thread count is a multiple of the hardware warp.
+LaunchDimensions AllGatherLaunchDimensions(int64_t elements, int64_t warp_size);
 
 // Creates a CollectiveKernelSpec describing the resource requirements of a
 // Triton all-gather kernel.  The returned spec uses the same 6-argument layout

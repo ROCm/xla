@@ -64,7 +64,8 @@ class BuildAllGatherInfoTest : public HloHardwareIndependentTestBase {
   absl::StatusOr<AllGatherInfo> BuildInfo(
       CollectiveKernelEnabled collective_kernel_enabled,
       PrimitiveType element_type, int64_t num_elements,
-      std::vector<int32_t> replica_groups, int num_hosts = 1) {
+      std::vector<int32_t> replica_groups, int num_hosts = 1,
+      int active_links = 18) {
     const int num_replicas =
         replica_groups.empty() ? 1 : static_cast<int>(replica_groups.size());
     const std::string element_type_str =
@@ -96,6 +97,9 @@ class BuildAllGatherInfoTest : public HloHardwareIndependentTestBase {
     se::DeviceDescription device_info = TestGpuDeviceInfo::H100SXMDeviceInfo();
     stream_executor::GpuTargetConfigProto target_config_proto;
     *target_config_proto.mutable_gpu_device_info() = device_info.ToProto();
+    target_config_proto.mutable_gpu_device_info()
+        ->mutable_device_interconnect_info()
+        ->set_active_links(active_links);
     target_config_proto.set_platform_name("CUDA");
     TF_ASSIGN_OR_RETURN(gpu::GpuTargetConfig target_config,
                         gpu::GpuTargetConfig::FromProto(target_config_proto));
@@ -193,6 +197,16 @@ TEST_F(BuildAllGatherInfoTest, FailsForCrossHostCollective) {
                 /*replica_groups=*/{0, 1}, /*num_hosts=*/2),
       StatusIs(absl::StatusCode::kUnimplemented,
                HasSubstr("Cross-host symmetric memory collectives")));
+}
+
+TEST_F(BuildAllGatherInfoTest, FailsWithoutNvlink) {
+  // Devices with no active NVLink/UALink connections cannot use symmetric
+  // memory collectives.
+  EXPECT_THAT(
+      BuildInfo(CollectiveKernelEnabled(true), F32, /*num_elements=*/512,
+                /*replica_groups=*/{0, 1}, /*num_hosts=*/1,
+                /*active_links=*/0),
+      StatusIs(absl::StatusCode::kUnimplemented, HasSubstr("NVLink/UALink")));
 }
 
 }  // namespace

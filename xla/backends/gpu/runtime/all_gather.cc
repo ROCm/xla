@@ -137,6 +137,11 @@ absl::StatusOr<AllGatherInfo> BuildAllGatherInfo(
   const PrimitiveType element_type =
       all_gather->operand(0)->shape().element_type();
   const int32_t num_operands = all_gather->operand_count();
+  if (device_info.device_interconnect_info().active_links <= 0) {
+    return absl::UnimplementedError(
+        "Collective kernels are only supported on devices with NVLink/UALink "
+        "support.");
+  }
   TF_ASSIGN_OR_RETURN(const CollectiveOpGroupMode group_mode,
                       GetCollectiveOpGroupMode(all_gather));
   const bool is_local = IsAllReplicasLocal(
@@ -156,22 +161,22 @@ namespace {
 // All-gather always uses a one-shot strategy: every rank reads its peers'
 // slices directly, so the work is proportional to the full element count
 // with no rank-based partitioning.
-static constexpr int64_t kMaxBlocksPerGrid = 32;
 static constexpr uint64_t kMaxThreadsPerBlock = 512;
-static constexpr int64_t kWarpSize = 32;
 }  // namespace
 
 LaunchDimensions AllGatherLaunchDimensions(int64_t elements,
-                                           int64_t num_ranks) {
+                                           int64_t warp_size) {
   // Maximum number of threads such that each thread has elements to process.
+  // Round up to a multiple of warp_size so every warp is fully occupied.
   const int64_t total_threads = RoundUpTo(
-      CeilOfRatio(elements, se::gpu::kNumElementsPerThread), kWarpSize);
+      CeilOfRatio(elements, se::gpu::kNumElementsPerThread), warp_size);
   // Triton expects power of 2 for threads_per_block / threads_per_warp.
   const int64_t threads_per_block =
       std::min(kMaxThreadsPerBlock,
                llvm::bit_ceil(static_cast<uint64_t>(total_threads)));
-  const int64_t blocks_per_grid = std::min(
-      kMaxBlocksPerGrid, CeilOfRatio(total_threads, threads_per_block));
+  const int64_t blocks_per_grid =
+      std::min(kAllGatherMaxBlocksPerGrid,
+               CeilOfRatio(total_threads, threads_per_block));
   return LaunchDimensions(blocks_per_grid, threads_per_block);
 }
 

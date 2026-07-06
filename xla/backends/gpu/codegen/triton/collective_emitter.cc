@@ -979,6 +979,9 @@ absl::StatusOr<AllGatherEmitterContext> CreateAllGatherEmitterContext(
         "lowered to triton.");
   }
 
+  // One input buffer + one output buffer per operand. For AllGather the output
+  // is larger than the input (world_size × input), but both are counted here
+  // as a single buffer slot each in the kernel argument list.
   ctx.num_input_output_args = op->getNumOperands() * 2;
   ctx.num_scratch_buffers = op->getNumOperands();
   const int32_t expected_num_args =
@@ -1188,6 +1191,9 @@ class AllGatherEmitter {
         ctx_.non_tiled_input_shape[ctx_.all_gather_dimension];
     const int64_t tile_size_in_gather_dim =
         ctx_.input_tile.getType().getShape()[ctx_.all_gather_dimension];
+    CHECK_EQ(local_size_in_gather_dim % tile_size_in_gather_dim, 0)
+        << "local_size_in_gather_dim must be divisible by "
+           "tile_size_in_gather_dim";
     const int64_t tiles_per_rank =
         local_size_in_gather_dim / tile_size_in_gather_dim;
 
@@ -1195,7 +1201,7 @@ class AllGatherEmitter {
     mlir::Value tiles_per_rank_idx =
         arith::ConstantIndexOp::create(builder_, tiles_per_rank);
     mlir::Value source_rank_idx =
-        arith::DivSIOp::create(builder_, tile_id, tiles_per_rank_idx);
+        arith::DivUIOp::create(builder_, tile_id, tiles_per_rank_idx);
     mlir::Value source_rank = arith::IndexCastOp::create(
         builder_, builder_.getI64Type(), source_rank_idx);
 
@@ -1341,10 +1347,10 @@ GetBlockLevelFusionConfigForAllGather(
 
   // Compute tile sizes based on the INPUT shape.
   const Shape& input_shape = all_gather->operand(0)->shape();
-  const LaunchDimensions launch_dims = AllGatherLaunchDimensions(
-      all_gather_info.num_elements, all_gather_info.num_devices);
   const se::DeviceDescription& device_info =
       gpu_topology.gpu_target_config().device_description;
+  const LaunchDimensions launch_dims = AllGatherLaunchDimensions(
+      all_gather_info.num_elements, WarpSize(device_info));
 
   BlockLevelFusionConfig block_level_config;
   block_level_config.set_num_warps(xla::CeilOfRatio(
@@ -1372,17 +1378,15 @@ absl::StatusOr<std::vector<Shape>> GetAllGatherUnmanagedKernelArguments(
   }
   const int32_t num_devices =
       all_gather->device_list()->num_devices_per_group();
-  static constexpr int32_t kMaxBlocksForSignal = 32;
-
   std::vector<Shape> unmanaged_arguments;
   unmanaged_arguments.reserve(computation->num_parameters() +
                               kNumCollectiveMetadataArgs);
   // rank and signal_value
   unmanaged_arguments.push_back(ShapeUtil::MakeShape(S32, {}));
   unmanaged_arguments.push_back(ShapeUtil::MakeShape(S32, {}));
-  // Signal buffers (num_devices x num_blocks).
+  // Signal buffers: one slot per (device × block)
   unmanaged_arguments.push_back(
-      ShapeUtil::MakeShape(S32, {num_devices, kMaxBlocksForSignal}));
+      ShapeUtil::MakeShape(S32, {num_devices, kAllGatherMaxBlocksPerGrid}));
   // Scratch buffers (one per parameter, each holding num_devices copies).
   for (const HloInstruction* instr : computation->parameter_instructions()) {
     Shape shape =

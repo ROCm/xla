@@ -378,7 +378,7 @@ CodegenDecision IsTritonSupportedAllGather(
         "Triton backend for all-gather is disabled. Enable with "
         "--xla_gpu_unsupported_use_all_gather_triton_backend=true");
   }
-  if (all_gather.operand_count() > 0) {
+  if (all_gather.operand_count() == 1) {
     PrimitiveType element_type = all_gather.operand(0)->shape().element_type();
     if (element_type == PrimitiveType::F8E4M3FN ||
         element_type == PrimitiveType::F8E5M2 ||
