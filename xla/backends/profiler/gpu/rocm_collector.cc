@@ -173,7 +173,7 @@ OccupancyStats PerDeviceCollector::GetOccupancy(
 
   err = hipOccupancyMaxPotentialBlockSize(
       &stats.min_grid_size, &stats.suggested_block_size,
-      params.func_ptr, params.dynamic_smem, 0);
+      static_cast<const void*>(params.func_ptr), params.dynamic_smem, 0);
   if (err != hipError_t::hipSuccess) {
     stats.min_grid_size = number_of_active_blocks;
     stats.suggested_block_size =
@@ -401,7 +401,6 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
                                 uint64_t end_gputime_ns,
                                 XPlaneBuilder* device_plane,
                                 XPlaneBuilder* host_plane) {
-  int host_ev_cnt = 0, dev_ev_cnt = 0;
   absl::MutexLock lock(events_mutex_);
   // Tracking event types per line.
   absl::flat_hash_map<int64_t, absl::flat_hash_set<RocmTracerEventType> >
@@ -410,12 +409,6 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
   for (const RocmTracerEvent& event : events_) {
     int64_t line_id = RocmTracerEvent::kInvalidThreadId;
     bool is_host_event = IsHostEvent(event, &line_id);
-
-    if (is_host_event) {
-      host_ev_cnt++;
-    } else {
-      dev_ev_cnt++;
-    }
 
     if (line_id == RocmTracerEvent::kInvalidThreadId ||
         line_id == RocmTracerEvent::kInvalidStreamId) {
