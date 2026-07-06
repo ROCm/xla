@@ -61,10 +61,10 @@ exercises the same runtime paths XLA does:
 ## Building
 
 Single source file, no build system — compile with `hipcc` (no math libraries to
-link):
+link; `-pthread` is needed for `std::thread`):
 
 ```bash
-hipcc -O3 -std=c++17 rocm_latency_check_tool.cpp -o rocm_latency_check_tool
+hipcc -O3 -std=c++17 rocm_latency_check_tool.cpp -pthread -o rocm_latency_check_tool
 ```
 
 Requirements:
@@ -76,7 +76,7 @@ flow), invoke that version's `hipcc`. The binary embeds the HIP version it was
 built with, which is exactly the version under test:
 
 ```bash
-/opt/rocm-7.2.1/bin/hipcc -O3 -std=c++17 rocm_latency_check_tool.cpp \
+/opt/rocm-7.2.1/bin/hipcc -O3 -std=c++17 rocm_latency_check_tool.cpp -pthread \
   -o rocm_latency_check_tool_7.2.1
 ```
 
@@ -106,6 +106,12 @@ Cross-GPU D2D run (requires at least 2 GPUs):
 ./rocm_latency_check_tool --num-gpus 2 --d2d-peer --duration-sec 30 --csv results.csv --label 7.2.1
 ```
 
+Diagnostic run that skips one copy stage without rebuilding:
+
+```bash
+./rocm_latency_check_tool --num-gpus 1 --skip-d2d --duration-sec 30 --csv results.csv --label skip-d2d
+```
+
 Flags accept both `--flag value` and `--flag=value`.
 
 ## Flags
@@ -124,6 +130,14 @@ Flags accept both `--flag value` and `--flag=value`.
 | `--reduced-d2h-bytes N` | `11800` | Bytes copied back when reduced-D2H is enabled. |
 | `--d2d-bytes N` | `0` | Bytes for the D2D copy. `0` = mirror the input (B) size. |
 | `--d2d-peer` | off | Make D2D a cross-GPU copy to the neighbor device. Requires `--num-gpus >= 2`. |
+| `--preload-weights` | off | Copy weights A to GPU once at startup instead of H2D'ing them every request. |
+| `--no-preload-weights` | | H2D weights A every request. |
+| `--extra-h2d-bytes N` | `0` | Bytes for each extra H2D copy. `0` disables extra H2D traffic. |
+| `--extra-h2d-count N` | `1` | Number of extra H2D copies per request when `--extra-h2d-bytes` is nonzero. |
+| `--skip-h2d` | off | Skip H2D copies for copy-stage isolation. |
+| `--skip-d2d` | off | Skip the D2D copy for copy-stage isolation. |
+| `--skip-d2h` | off | Skip the D2H copy for copy-stage isolation. |
+| `--warmup-iters N` | `20` | Warmup iterations per slot before the measured phase. |
 | `--csv PATH` | disabled | Append one row per report to this CSV file (see below). |
 | `--label STR` | auto | ROCm release tag stamped into the CSV `rocm_version` column (e.g. `7.2.1`). If omitted, the compiled HIP version is used. |
 | `-h`, `--help` | | Print help and exit. |
@@ -204,6 +218,10 @@ Columns:
 | `reduced_d2h`, `reduced_d2h_bytes` | D2H mode (`1`/`0`) and reduced byte count. |
 | `d2d_bytes` | Requested D2D size (`0` = mirror input B size). |
 | `d2d_peer` | `1` if the D2D is a cross-GPU (peer) copy, else `0`. |
+| `preload_weights` | `1` if weights A are copied to GPU once at startup, else `0`. |
+| `extra_h2d_bytes`, `extra_h2d_count` | Extra H2D copy size/count used to simulate additional model tensor traffic. |
+| `skip_h2d`, `skip_d2d`, `skip_d2h` | Copy-stage isolation switches (`1` = skipped). |
+| `warmup_iters` | Warmup iterations per slot before the measured phase. |
 | `compute_op` | Always `timedBusyKernel`. |
 | `busy_kernel_ns`, `busy_kernel_threads`, `busy_kernel_blocks`, `busy_kernel_use_sleep` | Fixed busy-kernel config (documents the compute baseline; `blocks=0` = auto). |
 | `work_m`, `work_n`, `work_k` | Workload shape that determines the copy sizes. |

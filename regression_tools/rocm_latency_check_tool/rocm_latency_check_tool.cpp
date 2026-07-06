@@ -40,6 +40,13 @@ struct Config {
   int consumer_threads = 16;        // --consumer-threads
   size_t d2d_bytes = 0;             // --d2d-bytes (0 = mirror input B size)
   bool d2d_peer = false;            // --d2d-peer (cross-GPU D2D; needs >=2 GPUs)
+  bool preload_weights = false;     // --preload-weights / --no-preload-weights
+  size_t extra_h2d_bytes = 0;        // --extra-h2d-bytes
+  int extra_h2d_count = 1;           // --extra-h2d-count
+  bool skip_h2d = false;             // --skip-h2d
+  bool skip_d2d = false;             // --skip-d2d
+  bool skip_d2h = false;             // --skip-d2h
+  int warmup_iters = 20;             // --warmup-iters
   std::string csv_path;             // --csv (empty = CSV disabled)
   std::string label;                // --label (ROCm release tag, e.g. 7.2.1)
 
@@ -57,22 +64,6 @@ constexpr long long kBusyKernelDurationNs = 80000;  // ~80us synthetic compute
 constexpr int kBusyKernelThreads = 256;
 constexpr int kBusyKernelBlocks = 0;                // 0 = auto (use CU count)
 constexpr bool kBusyKernelUseSleep = true;
-
-// When true, weights A are copied to GPU once at startup (matches TF/JAX).
-// When false, weights A are H2D'd every request (~24MB extra SDMA stress).
-constexpr bool kPreloadWeights = false;  // false = H2D weights A (~24MB) per request for SDMA stress
-
-// Extra H2D copies per request to simulate additional TF/JAX/XLA model tensor traffic.
-// kExtraH2DBytes: size of each extra copy (0 = disabled; e.g., 24*1024*1024)
-// kExtraH2DCount: number of separate copies (each is a distinct hipMemcpyAsync)
-constexpr size_t kExtraH2DBytes = 0;
-constexpr int    kExtraH2DCount = 1;
-
-
-// When true, skips the corresponding hipMemcpyAsync calls to isolate copy stages.
-constexpr bool kSkipH2D = false;
-constexpr bool kSkipD2D = false;
-constexpr bool kSkipD2H = false;
 
 #define HIP_CHECK(cmd)                                                         \
   do {                                                                         \
@@ -402,8 +393,8 @@ PreparedSlot* prepare_slot(GpuResources& gpu, int slot_id, const WorkloadConfig&
   HIP_CHECK(hipMalloc(&prep->dA, prep->bytesA));
   HIP_CHECK(hipMalloc(&prep->dB, prep->bytesB));
   HIP_CHECK(hipMalloc(&prep->dC, prep->bytesC));
-  if (kExtraH2DBytes > 0) {
-    HIP_CHECK(hipMalloc(&prep->dExtraH2D, kExtraH2DBytes));
+  if (g_cfg.extra_h2d_bytes > 0) {
+    HIP_CHECK(hipMalloc(&prep->dExtraH2D, g_cfg.extra_h2d_bytes));
   }
 
   // D2D destination: same device by default, or the neighbor device under
@@ -442,22 +433,36 @@ void cleanup_slot(PreparedSlot* prep) {
 
 // Warmup mirrors the measured pipeline: H2D -> compute -> D2D -> compute -> D2H.
 void warmup_slot(GpuResources& gpu, PreparedSlot* prep,
-                 const PinnedBuffer& hB,
+                 const PinnedBuffer& hA, const PinnedBuffer& hB,
+                 const PinnedBuffer& hExtraH2D,
                  PinnedBuffer& hC, int iters) {
   HIP_CHECK(hipSetDevice(gpu.device_id));
   hipStream_t s = prep->compute_stream;
   for (int i = 0; i < iters; ++i) {
-    if (!kSkipH2D) {
+    if (!g_cfg.skip_h2d) {
+      if (!g_cfg.preload_weights) {
+        HIP_CHECK(hipMemcpyHtoDAsync(
+            reinterpret_cast<hipDeviceptr_t>(prep->dA),
+            const_cast<uint8_t*>(hA.data()), prep->bytesA, s));
+      }
+      if (g_cfg.extra_h2d_bytes > 0 && prep->dExtraH2D) {
+        for (int j = 0; j < g_cfg.extra_h2d_count; ++j) {
+          HIP_CHECK(hipMemcpyHtoDAsync(
+              reinterpret_cast<hipDeviceptr_t>(prep->dExtraH2D),
+              const_cast<uint8_t*>(hExtraH2D.data()),
+              g_cfg.extra_h2d_bytes, s));
+        }
+      }
       HIP_CHECK(hipMemcpyHtoDAsync(reinterpret_cast<hipDeviceptr_t>(prep->dB),
                                    const_cast<uint8_t*>(hB.data()), prep->bytesB, s));
     }
     launch_compute_op(gpu, prep, s);
-    if (!kSkipD2D) {
+    if (!g_cfg.skip_d2d) {
       HIP_CHECK(hipMemcpyDtoDAsync(reinterpret_cast<hipDeviceptr_t>(prep->dD2D),
                                    reinterpret_cast<hipDeviceptr_t>(prep->dB), prep->bytesD2D, s));
     }
     launch_compute_op(gpu, prep, s);
-    if (!kSkipD2H) {
+    if (!g_cfg.skip_d2h) {
       HIP_CHECK(hipMemcpyDtoHAsync(hC.data(),
                                    reinterpret_cast<hipDeviceptr_t>(prep->dC), prep->bytesD2H, s));
     }
@@ -470,6 +475,7 @@ void warmup_slot(GpuResources& gpu, PreparedSlot* prep,
 void prepare_and_warmup_slots(std::vector<std::unique_ptr<GpuResources>>& resources,
                               const WorkloadConfig& cfg,
                               const PinnedBuffer& hA, const PinnedBuffer& hB,
+                              const PinnedBuffer& hExtraH2D,
                               std::vector<PinnedBuffer>& hC,
                               std::vector<PreparedSlot*>& prep_cache,
                               int warmup_iters) {
@@ -477,10 +483,11 @@ void prepare_and_warmup_slots(std::vector<std::unique_ptr<GpuResources>>& resour
     for (int s = 0; s < g_cfg.streams_per_gpu; ++s) {
       const int idx = g * g_cfg.streams_per_gpu + s;
       prep_cache[idx] = prepare_slot(*resources[g], s, cfg);
-      if (kPreloadWeights) {
+      if (g_cfg.preload_weights) {
         preload_weights(prep_cache[idx], hA);
       }
-      warmup_slot(*resources[g], prep_cache[idx], hB, hC[idx], warmup_iters);
+      warmup_slot(*resources[g], prep_cache[idx], hA, hB, hExtraH2D,
+                  hC[idx], warmup_iters);
     }
   }
 }
@@ -624,17 +631,18 @@ class Consumer {
       // Pipeline (mimics a DL/LLM step): H2D input -> compute/transpose ->
       // device-to-device copy -> compute -> D2H output. Uses XLA main's typed
       // async copy APIs (hipMemcpyHtoDAsync / DtoDAsync / DtoHAsync).
-      if (!kSkipH2D) {
-        if (!kPreloadWeights) {
+      if (!g_cfg.skip_h2d) {
+        if (!g_cfg.preload_weights) {
           HIP_CHECK(hipMemcpyHtoDAsync(
               reinterpret_cast<hipDeviceptr_t>(prep->dA),
               const_cast<uint8_t*>(hA_.data()), prep->bytesA, stream));
         }
-        if (kExtraH2DBytes > 0 && prep->dExtraH2D) {
-          for (int i = 0; i < kExtraH2DCount; ++i) {
+        if (g_cfg.extra_h2d_bytes > 0 && prep->dExtraH2D) {
+          for (int i = 0; i < g_cfg.extra_h2d_count; ++i) {
             HIP_CHECK(hipMemcpyHtoDAsync(
                 reinterpret_cast<hipDeviceptr_t>(prep->dExtraH2D),
-                const_cast<uint8_t*>(hExtraH2D_.data()), kExtraH2DBytes, stream));
+                const_cast<uint8_t*>(hExtraH2D_.data()),
+                g_cfg.extra_h2d_bytes, stream));
           }
         }
         HIP_CHECK(hipMemcpyHtoDAsync(
@@ -646,7 +654,7 @@ class Consumer {
       launch_compute_op(*gpu, prep, stream);
 
       // Device-to-device copy (intra-device, or cross-GPU under --d2d-peer).
-      if (!kSkipD2D) {
+      if (!g_cfg.skip_d2d) {
         HIP_CHECK(hipMemcpyDtoDAsync(
             reinterpret_cast<hipDeviceptr_t>(prep->dD2D),
             reinterpret_cast<hipDeviceptr_t>(prep->dB), prep->bytesD2D, stream));
@@ -655,7 +663,7 @@ class Consumer {
       // Compute stage 2 (follow-on compute).
       launch_compute_op(*gpu, prep, stream);
 
-      if (!kSkipD2H) {
+      if (!g_cfg.skip_d2h) {
         HIP_CHECK(hipMemcpyDtoHAsync(
             hC->data(), reinterpret_cast<hipDeviceptr_t>(prep->dC),
             prep->bytesD2H, stream));
@@ -739,7 +747,9 @@ class CsvWriter {
               "hip_driver_version,label,phase,elapsed_sec,duration_sec,"
               "report_interval_sec,num_gpus,streams_per_gpu,total_slots,"
               "consumer_threads,target_qps,max_queue_size,reduced_d2h,"
-              "reduced_d2h_bytes,d2d_bytes,d2d_peer,compute_op,"
+              "reduced_d2h_bytes,d2d_bytes,d2d_peer,preload_weights,"
+              "extra_h2d_bytes,extra_h2d_count,skip_h2d,skip_d2d,skip_d2h,"
+              "warmup_iters,compute_op,"
               "busy_kernel_ns,busy_kernel_threads,busy_kernel_blocks,busy_kernel_use_sleep,"
               "work_m,work_n,work_k,count,qps,"
               "min_us,max_us,mean_us,stddev_us,p50_us,p75_us,p95_us,p98_us,"
@@ -779,6 +789,13 @@ class CsvWriter {
          << g_cfg.reduced_d2h_bytes << ','
          << g_cfg.d2d_bytes << ','
          << (g_cfg.d2d_peer ? 1 : 0) << ','
+         << (g_cfg.preload_weights ? 1 : 0) << ','
+         << g_cfg.extra_h2d_bytes << ','
+         << g_cfg.extra_h2d_count << ','
+         << (g_cfg.skip_h2d ? 1 : 0) << ','
+         << (g_cfg.skip_d2d ? 1 : 0) << ','
+         << (g_cfg.skip_d2h ? 1 : 0) << ','
+         << g_cfg.warmup_iters << ','
          << compute_op_ << ','
          << kBusyKernelDurationNs << ','
          << kBusyKernelThreads << ','
@@ -819,6 +836,12 @@ class CsvWriter {
 // ---------------------------------------------------------------------------
 // Command-line parsing. Every Config field is overridable; --help prints all.
 // ---------------------------------------------------------------------------
+enum class ParseResult {
+  kOk,
+  kExitSuccess,
+  kError,
+};
+
 static void print_usage(const char* prog) {
   std::printf(
       "ROCm Latency Check Tool\n"
@@ -839,6 +862,14 @@ static void print_usage(const char* prog) {
       "  --reduced-d2h-bytes N     bytes for reduced D2H [%zu]\n"
       "  --d2d-bytes N             bytes for the D2D copy; 0 = input B size [%zu]\n"
       "  --d2d-peer                D2D targets the neighbor GPU (needs >=2 GPUs) [%s]\n"
+      "  --preload-weights         copy weights A to GPU once at startup [%s]\n"
+      "  --no-preload-weights      H2D weights A on every request\n"
+      "  --extra-h2d-bytes N       bytes for each extra H2D copy; 0 = disabled [%zu]\n"
+      "  --extra-h2d-count N       number of extra H2D copies per request [%d]\n"
+      "  --skip-h2d                skip H2D copies for copy-stage isolation [%s]\n"
+      "  --skip-d2d                skip D2D copy for copy-stage isolation [%s]\n"
+      "  --skip-d2h                skip D2H copy for copy-stage isolation [%s]\n"
+      "  --warmup-iters N          warmup iterations per slot before measuring [%d]\n"
       "  --csv PATH                append per-report rows to this CSV file [disabled]\n"
       "  --label STR               ROCm release tag stamped into CSV (e.g. 7.2.1) [auto]\n"
       "  -h, --help                show this help and exit\n\n"
@@ -846,11 +877,14 @@ static void print_usage(const char* prog) {
       prog, g_cfg.num_gpus, g_cfg.streams_per_gpu, g_cfg.duration_sec,
       g_cfg.report_interval_sec, g_cfg.target_qps, g_cfg.consumer_threads,
       g_cfg.max_queue_size, g_cfg.use_reduced_d2h ? "on" : "off",
-      g_cfg.reduced_d2h_bytes, g_cfg.d2d_bytes, g_cfg.d2d_peer ? "on" : "off");
+      g_cfg.reduced_d2h_bytes, g_cfg.d2d_bytes, g_cfg.d2d_peer ? "on" : "off",
+      g_cfg.preload_weights ? "on" : "off", g_cfg.extra_h2d_bytes,
+      g_cfg.extra_h2d_count, g_cfg.skip_h2d ? "on" : "off",
+      g_cfg.skip_d2d ? "on" : "off", g_cfg.skip_d2h ? "on" : "off",
+      g_cfg.warmup_iters);
 }
 
-// Returns: 0 = parsed OK (continue), 1 = exit success (e.g. --help), 2 = error.
-static int parse_args(int argc, char** argv) {
+static ParseResult parse_args(int argc, char** argv) {
   auto need_value = [&](int& i, const char* flag, std::string& out) -> bool {
     // Supports --flag=value and --flag value.
     std::string arg = argv[i];
@@ -915,40 +949,59 @@ static int parse_args(int argc, char** argv) {
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     std::string val;
-    if (arg == "-h" || arg == "--help") { print_usage(argv[0]); return 1; }
+    if (arg == "-h" || arg == "--help") {
+      print_usage(argv[0]);
+      return ParseResult::kExitSuccess;
+    }
     else if (matches(arg, "--num-gpus")) {
-      if (!parse_int_arg(i, "--num-gpus", g_cfg.num_gpus)) return 2;
+      if (!parse_int_arg(i, "--num-gpus", g_cfg.num_gpus)) return ParseResult::kError;
     } else if (matches(arg, "--streams-per-gpu")) {
-      if (!parse_int_arg(i, "--streams-per-gpu", g_cfg.streams_per_gpu)) return 2;
+      if (!parse_int_arg(i, "--streams-per-gpu", g_cfg.streams_per_gpu)) return ParseResult::kError;
     } else if (matches(arg, "--duration-sec")) {
-      if (!parse_int_arg(i, "--duration-sec", g_cfg.duration_sec)) return 2;
+      if (!parse_int_arg(i, "--duration-sec", g_cfg.duration_sec)) return ParseResult::kError;
     } else if (matches(arg, "--report-interval-sec")) {
-      if (!parse_int_arg(i, "--report-interval-sec", g_cfg.report_interval_sec)) return 2;
+      if (!parse_int_arg(i, "--report-interval-sec", g_cfg.report_interval_sec)) return ParseResult::kError;
     } else if (matches(arg, "--target-qps")) {
-      if (!parse_int_arg(i, "--target-qps", g_cfg.target_qps)) return 2;
+      if (!parse_int_arg(i, "--target-qps", g_cfg.target_qps)) return ParseResult::kError;
     } else if (matches(arg, "--consumer-threads")) {
-      if (!parse_int_arg(i, "--consumer-threads", g_cfg.consumer_threads)) return 2;
+      if (!parse_int_arg(i, "--consumer-threads", g_cfg.consumer_threads)) return ParseResult::kError;
     } else if (matches(arg, "--max-queue-size")) {
-      if (!parse_size_arg(i, "--max-queue-size", g_cfg.max_queue_size)) return 2;
+      if (!parse_size_arg(i, "--max-queue-size", g_cfg.max_queue_size)) return ParseResult::kError;
     } else if (matches(arg, "--reduced-d2h-bytes")) {
-      if (!parse_size_arg(i, "--reduced-d2h-bytes", g_cfg.reduced_d2h_bytes)) return 2;
+      if (!parse_size_arg(i, "--reduced-d2h-bytes", g_cfg.reduced_d2h_bytes)) return ParseResult::kError;
     } else if (arg == "--reduced-d2h") {
       g_cfg.use_reduced_d2h = true;
     } else if (arg == "--no-reduced-d2h") {
       g_cfg.use_reduced_d2h = false;
     } else if (matches(arg, "--d2d-bytes")) {
-      if (!parse_size_arg(i, "--d2d-bytes", g_cfg.d2d_bytes)) return 2;
+      if (!parse_size_arg(i, "--d2d-bytes", g_cfg.d2d_bytes)) return ParseResult::kError;
     } else if (arg == "--d2d-peer") {
       g_cfg.d2d_peer = true;
+    } else if (arg == "--preload-weights") {
+      g_cfg.preload_weights = true;
+    } else if (arg == "--no-preload-weights") {
+      g_cfg.preload_weights = false;
+    } else if (matches(arg, "--extra-h2d-bytes")) {
+      if (!parse_size_arg(i, "--extra-h2d-bytes", g_cfg.extra_h2d_bytes)) return ParseResult::kError;
+    } else if (matches(arg, "--extra-h2d-count")) {
+      if (!parse_int_arg(i, "--extra-h2d-count", g_cfg.extra_h2d_count)) return ParseResult::kError;
+    } else if (arg == "--skip-h2d") {
+      g_cfg.skip_h2d = true;
+    } else if (arg == "--skip-d2d") {
+      g_cfg.skip_d2d = true;
+    } else if (arg == "--skip-d2h") {
+      g_cfg.skip_d2h = true;
+    } else if (matches(arg, "--warmup-iters")) {
+      if (!parse_int_arg(i, "--warmup-iters", g_cfg.warmup_iters)) return ParseResult::kError;
     } else if (matches(arg, "--csv")) {
-      if (!need_value(i, "--csv", val)) return 2;
+      if (!need_value(i, "--csv", val)) return ParseResult::kError;
       g_cfg.csv_path = val;
     } else if (matches(arg, "--label")) {
-      if (!need_value(i, "--label", val)) return 2;
+      if (!need_value(i, "--label", val)) return ParseResult::kError;
       g_cfg.label = val;
     } else {
       std::cerr << "Unknown flag: " << arg << " (use --help)\n";
-      return 2;
+      return ParseResult::kError;
     }
   }
 
@@ -956,19 +1009,27 @@ static int parse_args(int argc, char** argv) {
       g_cfg.consumer_threads <= 0 || g_cfg.max_queue_size == 0) {
     std::cerr << "Invalid config: num-gpus, streams-per-gpu, duration-sec, "
                  "consumer-threads must be > 0 and max-queue-size > 0\n";
-    return 2;
+    return ParseResult::kError;
   }
   if (g_cfg.d2d_peer && g_cfg.num_gpus < 2) {
     std::cerr << "--d2d-peer requires --num-gpus >= 2 (cross-GPU copy needs a second device)\n";
-    return 2;
+    return ParseResult::kError;
   }
-  return 0;
+  if (g_cfg.extra_h2d_count < 0 || g_cfg.warmup_iters < 0) {
+    std::cerr << "Invalid config: extra-h2d-count and warmup-iters must be >= 0\n";
+    return ParseResult::kError;
+  }
+  if (g_cfg.extra_h2d_bytes > 0 && g_cfg.extra_h2d_count == 0) {
+    std::cerr << "Invalid config: extra-h2d-count must be > 0 when extra-h2d-bytes > 0\n";
+    return ParseResult::kError;
+  }
+  return ParseResult::kOk;
 }
 
 int main(int argc, char** argv) {
-  const int parse_rc = parse_args(argc, argv);
-  if (parse_rc == 1) return EXIT_SUCCESS;
-  if (parse_rc == 2) return EXIT_FAILURE;
+  const ParseResult parse_result = parse_args(argc, argv);
+  if (parse_result == ParseResult::kExitSuccess) return EXIT_SUCCESS;
+  if (parse_result == ParseResult::kError) return EXIT_FAILURE;
 
   int device_count = 0;
   HIP_CHECK(hipGetDeviceCount(&device_count));
@@ -994,8 +1055,6 @@ int main(int argc, char** argv) {
       .elem_bytes_c = 2,
   };
 
-  const int warmup_iters = 20;
-
   const int64_t a_rows = cfg.trans_a ? cfg.k : cfg.m;
   const int64_t a_cols = cfg.trans_a ? cfg.m : cfg.k;
   const int64_t b_rows = cfg.trans_b ? cfg.n : cfg.k;
@@ -1009,7 +1068,7 @@ int main(int argc, char** argv) {
 
   PinnedBuffer hA(bytesA, 0x3C);
   PinnedBuffer hB(bytesB, 0x3C);
-  PinnedBuffer hExtraH2D(kExtraH2DBytes, 0x42);
+  PinnedBuffer hExtraH2D(g_cfg.extra_h2d_bytes, 0x42);
   std::vector<PinnedBuffer> hC;
   hC.reserve(g_cfg.total_slots());
   for (int i = 0; i < g_cfg.total_slots(); ++i) hC.emplace_back(bytesC, 0);
@@ -1039,7 +1098,8 @@ int main(int argc, char** argv) {
   // Prepare device buffers for every slot and warm them up (excludes one-time
   // allocation / first-launch cost from the measured phase).
   std::vector<PreparedSlot*> prep_cache(g_cfg.total_slots(), nullptr);
-  prepare_and_warmup_slots(resources, cfg, hA, hB, hC, prep_cache, warmup_iters);
+  prepare_and_warmup_slots(resources, cfg, hA, hB, hExtraH2D, hC, prep_cache,
+                           g_cfg.warmup_iters);
 
   const int num_slots = g_cfg.total_slots();
   const VersionInfo version_info = detect_versions();
@@ -1052,7 +1112,7 @@ int main(int argc, char** argv) {
               version_info.hip_runtime_version, version_info.hip_driver_version);
   std::printf("Pipeline: H2D -> timedBusyKernel -> D2D -> timedBusyKernel -> D2H (mimics a DL/LLM step)\n");
   std::printf("Warmup=%d, Duration=%ds, ReportInterval=%ds, Slots=%d, Consumers=%d, TargetQPS=%d (%s)\n",
-              warmup_iters, g_cfg.duration_sec, g_cfg.report_interval_sec, num_slots,
+              g_cfg.warmup_iters, g_cfg.duration_sec, g_cfg.report_interval_sec, num_slots,
               g_cfg.consumer_threads,
               g_cfg.target_qps, g_cfg.target_qps > 0 ? "paced" : "max-throughput");
   std::printf("Dispatch: dynamic (%d consumers competing for %d slots, TF/JAX/XLA Borrow/Return)\n",
@@ -1065,17 +1125,18 @@ int main(int argc, char** argv) {
               (g_cfg.d2d_bytes > 0) ? g_cfg.d2d_bytes : bytesB);
   std::printf("Host memory: pinned (hipHostMalloc, matches TF/JAX/XLA allocate memory on the host)\n");
   std::printf("Weights A: %s (%.2f MB), Per-request H2D input B: %.2f KB\n",
-              kPreloadWeights ? "pre-loaded" : "H2D per request",
+              g_cfg.preload_weights ? "pre-loaded" : "H2D per request",
               bytesA / (1024.0 * 1024.0), bytesB / 1024.0);
-  if (kExtraH2DBytes > 0) {
+  if (g_cfg.extra_h2d_bytes > 0) {
     std::printf("Extra H2D per request: %d x %.2f MB = %.2f MB (simulate TF/JAX/XLA multi-tensor traffic)\n",
-                kExtraH2DCount, kExtraH2DBytes / (1024.0 * 1024.0),
-                kExtraH2DCount * kExtraH2DBytes / (1024.0 * 1024.0));
+                g_cfg.extra_h2d_count, g_cfg.extra_h2d_bytes / (1024.0 * 1024.0),
+                g_cfg.extra_h2d_count * g_cfg.extra_h2d_bytes / (1024.0 * 1024.0));
   }
-  if (kSkipH2D || kSkipD2D || kSkipD2H) {
+  if (g_cfg.skip_h2d || g_cfg.skip_d2d || g_cfg.skip_d2h) {
     std::printf("TF_SKIP_H2D=%s, TF_SKIP_D2D=%s, TF_SKIP_D2H=%s (diagnostic: isolate copy impact)\n",
-                kSkipH2D ? "true" : "false", kSkipD2D ? "true" : "false",
-                kSkipD2H ? "true" : "false");
+                g_cfg.skip_h2d ? "true" : "false",
+                g_cfg.skip_d2d ? "true" : "false",
+                g_cfg.skip_d2h ? "true" : "false");
   }
   std::printf("Streams per slot: %d (all ops on same stream)\n",
               GpuResources::kStreamsPerSlot);
