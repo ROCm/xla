@@ -44,7 +44,7 @@ jobs:
             container: "DOCKER_IMAGE"
             runner: "linux-xla-do-mi350x-4"
           - name: "hermetic"
-            configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx950-dcgpu-7.13.0.tar.gz", "--repo_env=ROCM_DISTRO_HASH=794e8292c843621f772df83bbcbb6a8d5926279803dbd273679a1b6e782e16c7", "--repo_env=SYSROOT_DIST=linux_glibc_2_31", "--repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950"]
+            configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx950-dcgpu-7.13.0.tar.gz", "--repo_env=ROCM_DISTRO_HASH=794e8292c843621f772df83bbcbb6a8d5926279803dbd273679a1b6e782e16c7", "--repo_env=SYSROOT_DIST=linux_glibc_2_31"]
             container: "DOCKER_IMAGE_HERMETIC"
             runner: "linux-xla-do-mi350x-4"
           - name: "asan"
@@ -111,8 +111,8 @@ jobs:
             "--config=rocm_rbe" \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942,gfx950 \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
             --jobs=30 \
             --spawn_strategy=local \
@@ -132,7 +132,8 @@ jobs:
             --local_test_jobs=1 \
             --spawn_strategy=local \
             --strategy=TestRunner=local \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942,gfx950 \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
             --bes_keywords=xla \
             --bes_keywords=multi_gpu \
@@ -150,7 +151,8 @@ jobs:
             --config=ci_rocm_cpu \
             --local_test_jobs=200 \
             --spawn_strategy=local \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942,gfx950 \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --bes_keywords=xla \
             --bes_keywords=cpu \
