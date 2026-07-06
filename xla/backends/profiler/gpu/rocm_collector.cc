@@ -228,31 +228,34 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
     if (event.kernel_info.func_ptr != nullptr && max_waves_per_cu_ > 0 &&
         wave_front_size_ > 0) {
       RocmDeviceOccupancyParams params{};
-      hipFuncGetAttributes(&params.attributes, event.kernel_info.func_ptr);
-      params.block_size = static_cast<int>(event.kernel_info.workgroup_x *
-                                           event.kernel_info.workgroup_y *
-                                           event.kernel_info.workgroup_z);
-      params.dynamic_smem_size = event.kernel_info.group_segment_size;
-      params.func_ptr = event.kernel_info.func_ptr;
-      params.max_waves_per_cu = max_waves_per_cu_;
-      params.wave_front_size = wave_front_size_;
+      if (hipFuncGetAttributes(&params.attributes,
+                               event.kernel_info.func_ptr) == hipSuccess) {
+        params.block_size = static_cast<int>(event.kernel_info.workgroup_x *
+                                             event.kernel_info.workgroup_y *
+                                             event.kernel_info.workgroup_z);
+        params.dynamic_smem_size = event.kernel_info.group_segment_size;
+        params.func_ptr = event.kernel_info.func_ptr;
+        params.max_waves_per_cu = max_waves_per_cu_;
+        params.wave_front_size = wave_front_size_;
 
-      OccupancyStats& occ = occupancy_cache_[params];
-      if (occ.occupancy_pct == 0.0) {
-        occ = GetOccupancy(params);
+        OccupancyStats& occ = occupancy_cache_[params];
+        if (occ.occupancy_pct == 0.0) {
+          occ = GetOccupancy(params);
+        }
+        occupancy_pct = occ.occupancy_pct;
+
+        xevent.AddStatValue(*plane->GetOrCreateStatMetadata(GetStatTypeStr(
+                                StatType::kTheoreticalOccupancyPct)),
+                            occupancy_pct);
+        xevent.AddStatValue(
+            *plane->GetOrCreateStatMetadata(
+                GetStatTypeStr(StatType::kOccupancyMinGridSize)),
+            static_cast<int32_t>(occ.min_grid_size));
+        xevent.AddStatValue(
+            *plane->GetOrCreateStatMetadata(
+                GetStatTypeStr(StatType::kOccupancySuggestedBlockSize)),
+            static_cast<int32_t>(occ.suggested_block_size));
       }
-      occupancy_pct = occ.occupancy_pct;
-
-      xevent.AddStatValue(*plane->GetOrCreateStatMetadata(GetStatTypeStr(
-                              StatType::kTheoreticalOccupancyPct)),
-                          occupancy_pct);
-      xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
-                              GetStatTypeStr(StatType::kOccupancyMinGridSize)),
-                          static_cast<int32_t>(occ.min_grid_size));
-      xevent.AddStatValue(
-          *plane->GetOrCreateStatMetadata(
-              GetStatTypeStr(StatType::kOccupancySuggestedBlockSize)),
-          static_cast<int32_t>(occ.suggested_block_size));
     }
     xevent.AddStatValue(
         *plane->GetOrCreateStatMetadata(
