@@ -42,17 +42,17 @@ jobs:
           - name: "default"
             configs: ["--config=rocm_ci"]
             container: "DOCKER_IMAGE"
-            runner: "linux-xla-do-mi350x-4"
+            runner: "linux-xla-do-mi350x-1"
           - name: "hermetic"
             configs: ["--config=rocm_ci_hermetic", "--repo_env=ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx950-dcgpu-7.13.0.tar.gz", "--repo_env=ROCM_DISTRO_HASH=794e8292c843621f772df83bbcbb6a8d5926279803dbd273679a1b6e782e16c7", "--repo_env=SYSROOT_DIST=linux_glibc_2_31"]
             container: "DOCKER_IMAGE_HERMETIC"
-            runner: "linux-xla-do-mi350x-4"
+            runner: "linux-xla-do-mi350x-1"
           - name: "asan"
-            configs: ["--config=rocm_ci", "--config=asan", "--strategy=TestRunner=local", "--flaky_test_attempts=1"]
+            configs: ["--config=rocm_ci", "--config=asan", "--strategy=TestRunner=local", "--flaky_test_attempts=1", "--local_test_jobs=4"]
             container: "DOCKER_IMAGE"
             runner: "linux-xla-do-mi350x-4"
           - name: "tsan"
-            configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local", "--flaky_test_attempts=1"]
+            configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local", "--flaky_test_attempts=1", "--local_test_jobs=4"]
             container: "DOCKER_IMAGE"
             runner: "linux-xla-do-mi350x-4"
     container:
@@ -110,7 +110,7 @@ jobs:
           build_tools/rocm/run_xla_ci_build.sh \
             "--config=rocm_rbe" \
             --config=ci_single_gpu \
-            --local_test_jobs=4 \
+            --local_test_jobs=1 \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.container] }} \
@@ -128,8 +128,8 @@ jobs:
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             --config=ci_multi_gpu \
-            "--config=rocm_rbe" \
-            --local_test_jobs=1 \
+            --config=rocm_rbe \
+            --test_strategy=exclusive \
             --spawn_strategy=local \
             --strategy=TestRunner=local \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
