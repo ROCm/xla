@@ -78,9 +78,12 @@ struct KernelDetails {
 
   // From the kernel symbol data (code-object callback). Used for occupancy.
   // arch_vgpr_count: architectural VGPRs allocated per thread.
-  uint32_t num_regs = 0;
+  // No in-class initializer: KernelDetails lives in a union inside
+  // RocmTracerEvent, so a non-trivial default constructor would delete
+  // RocmTracerEvent's default constructor. Callers zero these explicitly.
+  uint32_t num_regs;
   // group_segment_size from the symbol (static LDS, before runtime additions).
-  uint32_t static_smem = 0;
+  uint32_t static_smem;
 
   // kernel address (not a host function pointer; kept for reference only)
   void* func_ptr;

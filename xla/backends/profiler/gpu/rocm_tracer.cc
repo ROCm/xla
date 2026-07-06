@@ -324,11 +324,13 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
       .grid_x = kinfo.grid_size.x,
       .grid_y = kinfo.grid_size.y,
       .grid_z = kinfo.grid_size.z,
+      .num_regs = 0,
+      .static_smem = 0,
       .func_ptr = nullptr,
   };
 
   {
-    absl::MutexLock lock(&kernel_lock_);
+    absl::MutexLock lock(kernel_lock_);
     auto it = kernel_info_.find(kinfo.kernel_id);
     if (it != kernel_info_.end()) {
       const auto& sym = it->second.data;
@@ -409,7 +411,7 @@ void RocmTracer::CodeObjectCallback(
                  ROCPROFILER_CODE_OBJECT_DEVICE_KERNEL_SYMBOL_REGISTER) {
     auto* data = static_cast<kernel_symbol_data_t*>(record.payload);
     if (record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD) {
-      absl::MutexLock lock(&kernel_lock_);
+      absl::MutexLock lock(kernel_lock_);
       kernel_info_.emplace(
           data->kernel_id,
           ProfilerKernelInfo{tsl::port::MaybeAbiDemangle(data->kernel_name),
@@ -426,7 +428,7 @@ void RocmTracer::CodeObjectCallback(
     auto* data = static_cast<host_symbol_data_t*>(record.payload);
     if (record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD &&
         data->host_function.value != 0) {
-      absl::MutexLock lock(&kernel_lock_);
+      absl::MutexLock lock(kernel_lock_);
       auto it = kernel_info_.find(data->kernel_id);
       if (it != kernel_info_.end()) {
         it->second.host_func_ptr =
