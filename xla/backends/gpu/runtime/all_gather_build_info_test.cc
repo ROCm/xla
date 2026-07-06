@@ -24,13 +24,16 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "xla/tsl/platform/status_macros.h"
 #include "xla/backends/gpu/runtime/all_gather.h"
+#include "xla/backends/gpu/target_config/target_config.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/primitive_util.h"
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
+#include "xla/service/gpu_topology.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/tsl/lib/gtl/int_type.h"
 #include "xla/tsl/platform/statusor.h"
@@ -61,7 +64,7 @@ class BuildAllGatherInfoTest : public HloHardwareIndependentTestBase {
   absl::StatusOr<AllGatherInfo> BuildInfo(
       CollectiveKernelEnabled collective_kernel_enabled,
       PrimitiveType element_type, int64_t num_elements,
-      std::vector<int32_t> replica_groups) {
+      std::vector<int32_t> replica_groups, int num_hosts = 1) {
     const int num_replicas =
         replica_groups.empty() ? 1 : static_cast<int>(replica_groups.size());
     const std::string element_type_str =
@@ -91,6 +94,19 @@ class BuildAllGatherInfoTest : public HloHardwareIndependentTestBase {
     SCOPED_TRACE(testing::Message() << "module_str: " << module_str);
 
     se::DeviceDescription device_info = TestGpuDeviceInfo::H100SXMDeviceInfo();
+    stream_executor::GpuTargetConfigProto target_config_proto;
+    *target_config_proto.mutable_gpu_device_info() = device_info.ToProto();
+    target_config_proto.set_platform_name("CUDA");
+    TF_ASSIGN_OR_RETURN(gpu::GpuTargetConfig target_config,
+                        gpu::GpuTargetConfig::FromProto(target_config_proto));
+
+    // num_devices_per_host = num_replicas / num_hosts (for single group).
+    const int num_devices_per_host =
+        num_replicas > 0 ? num_replicas / num_hosts : 1;
+    GpuTopology gpu_topology("platform_version", /*num_partitions=*/1,
+                             /*num_hosts_per_partition=*/num_hosts,
+                             /*num_devices_per_host=*/num_devices_per_host,
+                             target_config);
 
     TF_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> module,
                         ParseAndReturnVerifiedModule(module_str, num_replicas));
@@ -98,8 +114,9 @@ class BuildAllGatherInfoTest : public HloHardwareIndependentTestBase {
     const HloInstruction* hlo_instr =
         HloHardwareIndependentTestBase::FindInstruction(module.get(),
                                                         HloOpcode::kAllGather);
-    return BuildAllGatherInfo(collective_kernel_enabled.value(), device_info,
-                              Cast<HloAllGatherInstruction>(hlo_instr));
+    return BuildAllGatherInfo(collective_kernel_enabled.value(), gpu_topology,
+                              Cast<HloAllGatherInstruction>(hlo_instr),
+                              /*device_assignment=*/nullptr);
   }
 };
 
@@ -167,6 +184,15 @@ TEST_F(BuildAllGatherInfoTest, FailsIfReplicaGroupsEmpty) {
                 /*replica_groups=*/{}),
       StatusIs(absl::StatusCode::kUnimplemented,
                HasSubstr("Replica groups must be explicitly provided")));
+}
+
+TEST_F(BuildAllGatherInfoTest, FailsForCrossHostCollective) {
+  // 2 replicas split across 2 hosts → not local → should be rejected.
+  EXPECT_THAT(
+      BuildInfo(CollectiveKernelEnabled(true), F32, /*num_elements=*/512,
+                /*replica_groups=*/{0, 1}, /*num_hosts=*/2),
+      StatusIs(absl::StatusCode::kUnimplemented,
+               HasSubstr("Cross-host symmetric memory collectives")));
 }
 
 }  // namespace

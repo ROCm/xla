@@ -2095,10 +2095,18 @@ AsyncThunkSequence ThunkEmitter::EmitCollectiveThunk(
             ->config()
             .debug_options()
             .xla_gpu_unsupported_use_all_gather_triton_backend()) {
+      const DeviceAssignment* device_assignment = nullptr;
+      if (ir_emitter_context_->hlo_module()
+              .config()
+              .has_static_device_assignment()) {
+        device_assignment = &ir_emitter_context_->hlo_module()
+                                 .config()
+                                 .static_device_assignment();
+      }
       absl::StatusOr<AllGatherInfo> info = BuildAllGatherInfo(
           /*is_collective_kernel_enabled=*/true,
-          ir_emitter_context_->gpu_device_info(),
-          Cast<HloAllGatherInstruction>(inst));
+          ir_emitter_context_->gpu_topology(),
+          Cast<HloAllGatherInstruction>(inst), device_assignment);
       if (info.ok()) {
         use_triton = true;
       } else {

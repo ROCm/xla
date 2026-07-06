@@ -23,7 +23,9 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "xla/backends/gpu/runtime/collective_params.h"
 #include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/service/computation_placer.h"
 #include "xla/service/gpu/launch_dimensions.h"
+#include "xla/service/gpu_topology.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/xla_data.pb.h"
 
@@ -57,8 +59,9 @@ absl::Status IsAllGatherKernelSupported(
 // Returns absl::UnimplementedError if the Triton all-gather kernel is not
 // supported for this instruction's configuration.
 absl::StatusOr<AllGatherInfo> BuildAllGatherInfo(
-    bool is_collective_kernel_enabled, const se::DeviceDescription& device_info,
-    const HloAllGatherInstruction* all_gather);
+    bool is_collective_kernel_enabled, const GpuTopology& gpu_topology,
+    const HloAllGatherInstruction* all_gather,
+    const DeviceAssignment* device_assignment);
 
 // Returns the launch dimensions for the all-gather kernel.
 // All-gather uses a one-shot strategy: each rank contributes its local slice

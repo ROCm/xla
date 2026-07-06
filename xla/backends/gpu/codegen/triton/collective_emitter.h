@@ -108,8 +108,8 @@ mlir::LogicalResult RewriteAllReduce(mlir::stablehlo::AllReduceOp op,
 // the Triton backend is enabled for it.
 absl::StatusOr<std::optional<BlockLevelFusionConfig>>
 GetBlockLevelFusionConfigForAllGather(
-    const se::DeviceDescription& device_info,
-    const HloAllGatherInstruction* all_gather);
+    const GpuTopology& gpu_topology, const HloAllGatherInstruction* all_gather,
+    const DeviceAssignment* device_assignment);
 
 // Returns the unmanaged kernel argument shapes for an all-gather fusion.
 absl::StatusOr<std::vector<Shape>> GetAllGatherUnmanagedKernelArguments(

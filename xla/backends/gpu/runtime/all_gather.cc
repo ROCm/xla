@@ -24,11 +24,15 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "llvm/ADT/bit.h"
 #include "xla/backends/gpu/runtime/collective_params.h"
+#include "xla/backends/gpu/transforms/collectives/collective_ops_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/primitive_util.h"
+#include "xla/service/collective_ops_utils.h"
+#include "xla/service/computation_placer.h"
 #include "xla/service/gpu/gpu_constants.h"
 #include "xla/service/gpu/launch_dimensions.h"
+#include "xla/service/gpu_topology.h"
 #include "xla/shape_util.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/gpu/all_reduce_kernel.h"
@@ -113,8 +117,15 @@ absl::Status IsAllGatherKernelSupported(
 }
 
 absl::StatusOr<AllGatherInfo> BuildAllGatherInfo(
-    bool is_collective_kernel_enabled, const se::DeviceDescription& device_info,
-    const HloAllGatherInstruction* all_gather) {
+    bool is_collective_kernel_enabled, const GpuTopology& gpu_topology,
+    const HloAllGatherInstruction* all_gather,
+    const DeviceAssignment* device_assignment) {
+  if (!gpu_topology.has_gpu_target_config()) {
+    return absl::InvalidArgumentError(
+        "GpuTopology must have a target config to build AllGatherInfo.");
+  }
+  const se::DeviceDescription& device_info =
+      gpu_topology.gpu_target_config().device_description;
   if (!all_gather->device_list()) {
     return absl::UnimplementedError(
         "Replica groups must be explicitly provided for collective kernels.");
@@ -126,10 +137,14 @@ absl::StatusOr<AllGatherInfo> BuildAllGatherInfo(
   const PrimitiveType element_type =
       all_gather->operand(0)->shape().element_type();
   const int32_t num_operands = all_gather->operand_count();
+  TF_ASSIGN_OR_RETURN(const CollectiveOpGroupMode group_mode,
+                      GetCollectiveOpGroupMode(all_gather));
+  const bool is_local = IsAllReplicasLocal(
+      gpu_topology.num_devices_per_process(), all_gather->replica_groups(),
+      group_mode, device_assignment);
   TF_RETURN_IF_ERROR(IsAllGatherKernelSupported(
       is_collective_kernel_enabled, device_info, num_operands, num_devices,
-      num_elements, element_type, /*is_local=*/true,
-      all_gather->replica_groups()));
+      num_elements, element_type, is_local, all_gather->replica_groups()));
   return AllGatherInfo{
       /*.num_devices =*/num_devices,
       /*.num_elements =*/num_elements,

@@ -1316,8 +1316,8 @@ llvm::SmallVector<int64_t> GreedyPowerOfTwoTiles(const Shape& output_shape,
 // block per rank per input tile.
 absl::StatusOr<std::optional<BlockLevelFusionConfig>>
 GetBlockLevelFusionConfigForAllGather(
-    const se::DeviceDescription& device_info,
-    const HloAllGatherInstruction* all_gather) {
+    const GpuTopology& gpu_topology, const HloAllGatherInstruction* all_gather,
+    const DeviceAssignment* device_assignment) {
   // AllGather has a single one-shot protocol, so no strategy annotation is
   // needed. Gate on the feature flag directly.
   if (!all_gather->GetModule()
@@ -1329,7 +1329,8 @@ GetBlockLevelFusionConfigForAllGather(
   }
 
   absl::StatusOr<AllGatherInfo> maybe_all_gather_info = BuildAllGatherInfo(
-      /*is_collective_kernel_enabled=*/true, device_info, all_gather);
+      /*is_collective_kernel_enabled=*/true, gpu_topology, all_gather,
+      device_assignment);
   if (absl::IsUnimplemented(maybe_all_gather_info.status())) {
     VLOG(3) << "Codegen for all-gather is not supported: "
             << maybe_all_gather_info.status();
@@ -1342,6 +1343,8 @@ GetBlockLevelFusionConfigForAllGather(
   const Shape& input_shape = all_gather->operand(0)->shape();
   const LaunchDimensions launch_dims = AllGatherLaunchDimensions(
       all_gather_info.num_elements, all_gather_info.num_devices);
+  const se::DeviceDescription& device_info =
+      gpu_topology.gpu_target_config().device_description;
 
   BlockLevelFusionConfig block_level_config;
   block_level_config.set_num_warps(xla::CeilOfRatio(
@@ -1396,15 +1399,13 @@ GetCollectiveBlockLevelFusionConfig(const GpuTopology& gpu_topology,
                                     const HloFusionInstruction* fusion_instr,
                                     const DeviceAssignment* device_assignment) {
   const HloInstruction* root = fusion_instr->fused_expression_root();
-  const se::DeviceDescription& device_info =
-      gpu_topology.gpu_target_config().device_description;
   switch (root->opcode()) {
     case HloOpcode::kAllReduce:
       return GetBlockLevelFusionConfigForAllReduce(
           gpu_topology, Cast<HloAllReduceInstruction>(root), device_assignment);
     case HloOpcode::kAllGather:
       return GetBlockLevelFusionConfigForAllGather(
-          device_info, Cast<HloAllGatherInstruction>(root));
+          gpu_topology, Cast<HloAllGatherInstruction>(root), device_assignment);
     default:
       return std::nullopt;
   }
