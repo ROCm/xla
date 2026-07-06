@@ -104,6 +104,21 @@ class MoriCollectives : public GpuCollectives {
   absl::Status InitPe(int32_t rank, int32_t nranks, const CliqueId& clique_id,
                       stream_executor::StreamExecutor* executor);
 
+  // Describes a single local PE (one GPU) to eagerly initialize: its global rank
+  // within the world-wide MORI PE group and the executor whose device it maps
+  // to.
+  struct PeInit {
+    int32_t global_rank;
+    stream_executor::StreamExecutor* executor;
+  };
+
+  // Concurrently initializes all local PEs as members of a single global MORI
+  // clique of `nranks` ranks sharing `clique_id`. Each PE is initialized on its
+  // own thread (ShmemInitAttr keys off the calling thread's active device).
+  // Shared by the single- and multi-process eager initialization paths.
+  absl::Status EagerInitPes(absl::Span<const PeInit> pes, int32_t nranks,
+                            const CliqueId& clique_id);
+
   bool initialized_ = false;
 };
 
