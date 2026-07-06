@@ -253,22 +253,29 @@ AsyncThunkSequence ThunkEmitter::EmitCollectiveKernelThunk(
       NewModuleWithFusion(instr, HloInstruction::FusionKind::kLoop);
   HloFusionInstruction* fusion_instr = Cast<HloFusionInstruction>(
       fused_module->entry_computation()->root_instruction());
-  static constexpr bool kMultimemDisabled = false;
-  const bool should_flatten = [&](const HloInstruction* instr) {
+  // Determine whether the collective kernel is enabled and whether flattening
+  // is needed, based on the opcode of the wrapped collective.
+  const HloOpcode opcode = instr->opcode();
+  const auto& debug_options = instr->GetModule()->config().debug_options();
+  bool should_flatten = false;
+  bool is_collective_kernel_enabled = false;
+  if (opcode == HloOpcode::kAllReduce) {
+    static constexpr bool kMultimemDisabled = false;
     const int64_t size_bytes =
         ShapeUtil::ElementsIn(instr->shape()) *
         primitive_util::ByteWidth(instr->shape().element_type());
     const bool has_rank_higher_than_1 =
         instr->shape().IsArray() && instr->shape().dimensions().size() > 1;
-    return has_rank_higher_than_1 &&
-           GetAllReduceStrategy(size_bytes, kMultimemDisabled) ==
-               se::gpu::AllReduceStrategy::kTwoShot;
-  }(instr);
-  bool is_collective_kernel_enabled =
-      instr->GetModule()
-          ->config()
-          .debug_options()
-          .xla_gpu_unsupported_use_all_reduce_one_shot_kernel();
+    should_flatten = has_rank_higher_than_1 &&
+                     GetAllReduceStrategy(size_bytes, kMultimemDisabled) ==
+                         se::gpu::AllReduceStrategy::kTwoShot;
+    is_collective_kernel_enabled =
+        debug_options.xla_gpu_unsupported_use_all_reduce_one_shot_kernel();
+  } else if (opcode == HloOpcode::kAllGather) {
+    // AllGather is always one-shot; no flattening needed.
+    is_collective_kernel_enabled =
+        debug_options.xla_gpu_unsupported_use_all_gather_triton_backend();
+  }
   if (is_collective_kernel_enabled && should_flatten) {
     RETURN_IF_ERROR(FlattenCollectiveFusion(fusion_instr));
   }
@@ -365,10 +372,9 @@ absl::StatusOr<std::string> CanonicalGemmHlo(
          BackendConfigWrapper(gpu_config).GetRawString();
 }
 
-ThunkEmitter::ThunkEmitter(
-    IrEmitterContext* absl_nonnull ir_emitter_context,
-    llvm_ir::LLVMCommandLineOptionsReleasableLock* absl_nonnull
-        llvm_options_lock)
+ThunkEmitter::ThunkEmitter(IrEmitterContext* absl_nonnull ir_emitter_context,
+                           llvm_ir::LLVMCommandLineOptionsReleasableLock*
+                               absl_nonnull llvm_options_lock)
     : ir_emitter_context_(ir_emitter_context),
       send_recv_events_(std::make_shared<HostSendRecvAsyncEvents>()),
       call_graph_(CallGraph::Build(&ir_emitter_context->hlo_module())),
@@ -2077,6 +2083,15 @@ AsyncThunkSequence ThunkEmitter::EmitCollectiveThunk(
       gpu_config_status.ok()) {
     use_triton = IsTritonCollectiveKernel(
         gpu_config_status->collective_backend_config().kernel_strategy());
+  }
+  // For AllGather there is only one protocol (one-shot), so no strategy
+  // selection is needed. The Triton path is gated directly by the feature
+  // flag rather than via CollectiveKernelStrategyAnnotator.
+  if (!use_triton && kind == Thunk::Kind::kAllGather) {
+    use_triton = inst->GetModule()
+                     ->config()
+                     .debug_options()
+                     .xla_gpu_unsupported_use_all_gather_triton_backend();
   }
   if (use_triton) {
     CollectiveConfig collective_config =

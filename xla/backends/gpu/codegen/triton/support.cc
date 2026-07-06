@@ -367,6 +367,29 @@ CodegenDecision IsTritonSupportedAllReduce(
   return CodegenDecision::Allow();
 }
 
+CodegenDecision IsTritonSupportedAllGather(
+    const HloAllGatherInstruction& all_gather,
+    const se::GpuComputeCapability& gpu_version) {
+  if (!all_gather.GetModule()
+           ->config()
+           .debug_options()
+           .xla_gpu_unsupported_use_all_gather_triton_backend()) {
+    return CodegenDecision::Forbid(
+        "Triton backend for all-gather is disabled. Enable with "
+        "--xla_gpu_unsupported_use_all_gather_triton_backend=true");
+  }
+  if (all_gather.operand_count() > 0) {
+    PrimitiveType element_type = all_gather.operand(0)->shape().element_type();
+    if (element_type == PrimitiveType::F8E4M3FN ||
+        element_type == PrimitiveType::F8E5M2 ||
+        element_type == PrimitiveType::S4) {
+      return CodegenDecision::Forbid(
+          "S4, F8E4M3FN and F8E5M2 are not supported for all-gathers.");
+    }
+  }
+  return CodegenDecision::Allow();
+}
+
 bool IsInTritonNestedGemmFusion(const HloInstruction& hlo) {
   if (!hlo.parent()->IsFusionComputation()) {
     return false;
@@ -795,6 +818,15 @@ CodegenDecision IsTritonSupportedInstructionImpl(
       return IsTritonSupportedAllReduce(*Cast<HloAllReduceInstruction>(&instr),
                                         gpu_version);
     case HloOpcode::kAllGather:
+      // If the Triton AllGather backend is enabled, use the dedicated checker.
+      if (instr.GetModule()
+              ->config()
+              .debug_options()
+              .xla_gpu_unsupported_use_all_gather_triton_backend()) {
+        return IsTritonSupportedAllGather(
+            *Cast<HloAllGatherInstruction>(&instr), gpu_version);
+      }
+      // Legacy tiling-propagation path.
       if (instr.shape().element_type() == S4) {
         return CodegenDecision::Forbid("S4 is not supported.");
       }

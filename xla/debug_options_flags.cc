@@ -107,7 +107,8 @@ absl::StatusOr<std::vector<RepeatedFlagModifier>> ParseRepeatedEnumModifiers(
 namespace {
 
 template <typename T>
-static auto FindRepeatedFieldValue(google::protobuf::RepeatedField<int>* list, T value) {
+static auto FindRepeatedFieldValue(google::protobuf::RepeatedField<int>* list,
+                                   T value) {
   for (auto it = list->begin(); it != list->end(); ++it) {
     if (*it == value) {
       return it;
@@ -3024,6 +3025,13 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "Internal: Enable the one-shot kernel for single-host all-reduce "
       "operations."));
   flag_list->push_back(tsl::Flag(
+      "xla_gpu_unsupported_use_all_gather_triton_backend",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_unsupported_use_all_gather_triton_backend),
+      debug_options->xla_gpu_unsupported_use_all_gather_triton_backend(),
+      "Internal: Enable Triton collective kernel backend for single-host "
+      "all-gather operations."));
+  flag_list->push_back(tsl::Flag(
       "xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel",
       bool_setter_for(
           &DebugOptions::
@@ -3529,8 +3537,7 @@ FlagStatus GetFlagStatus(absl::string_view flag_name) {
           "xla_gpu_all_reduce_combine_threshold_bytes",
           "xla_gpu_autotune_level",
           "xla_gpu_collective_permute_decomposer_threshold",
-          "xla_gpu_cublas_fallback",
-          "xla_gpu_dot_merger_threshold_mb",
+          "xla_gpu_cublas_fallback", "xla_gpu_dot_merger_threshold_mb",
           "xla_gpu_enable_dynamic_slice_fusion",
           "xla_gpu_enable_latency_hiding_scheduler",
           "xla_gpu_enable_pipelined_all_gather",
