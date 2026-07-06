@@ -553,6 +553,18 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "rocm_occupancy_test_kernel",
+    testonly = 1,
+    srcs = ["rocm_occupancy_test_kernel.hip.cc"],
+    hdrs = ["rocm_occupancy_test_kernel.h"],
+    tags = ["rocm-only"],
+    deps = [
+        "@local_config_rocm//rocm:hip",  # buildcleaner: keep
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
+)
+
 xla_cc_test(
     name = "rocm_tracer_test",
     size = "medium",
@@ -567,6 +579,7 @@ xla_cc_test(
     ]),
     deps = [
         ":rocm_collector",
+        ":rocm_occupancy_test_kernel",
         ":rocm_tracer",
         ":rocm_tracer_utils",
         "//xla/tsl/lib/core:status_test_util",

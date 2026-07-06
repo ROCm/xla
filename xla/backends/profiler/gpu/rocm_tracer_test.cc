@@ -36,6 +36,7 @@ limitations under the License.
 #include "rocm/include/rocprofiler-sdk/fwd.h"
 #include "rocm/include/rocprofiler-sdk/marker.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
+#include "xla/backends/profiler/gpu/rocm_occupancy_test_kernel.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/tsl/profiler/utils/xplane_schema.h"
@@ -347,26 +348,17 @@ TEST(RocmTracerTest, DisableIsolatesNextSession) {
 // ============================================================================
 // Occupancy smoke tests — require real AMD GPU hardware.
 //
-// These tests run a real HIP kernel, capture the profiler event through the
-// full rocprofiler-sdk pipeline, and verify that the exported XSpace contains
+// These tests launch a real HIP kernel via RunOccupancyTestKernel() (defined
+// in rocm_occupancy_test_kernel.hip.cc, compiled by hipcc so __global__ and
+// <<<...>>> are available there), capture the profiler event through the full
+// rocprofiler-sdk pipeline, and verify that the exported XSpace contains
 // theoretical occupancy statistics (kTheoreticalOccupancyPct,
 // kOccupancyMinGridSize, kOccupancySuggestedBlockSize).
 // ============================================================================
 
-// Minimal GPU kernel for occupancy testing.
-// Using a __global__ void* pointer to the kernel lets us pass func_ptr to
-// hipFuncGetAttributes without needing the HIP runtime's template overload.
-__global__ void OccupancyTestKernel(const float* __restrict__ in,
-                                    float* __restrict__ out, int n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) out[i] = in[i] * 2.0f;
-}
-
 TEST(RocmTracerOccupancyTest, KernelDispatchProducesOccupancyStats) {
-#define HIP_ASSERT_OK(expr) ASSERT_EQ((expr), hipSuccess) << #expr " failed"
-
   int device_count = 0;
-  HIP_ASSERT_OK(hipGetDeviceCount(&device_count));
+  ASSERT_EQ(hipGetDeviceCount(&device_count), hipSuccess);
   ASSERT_GT(device_count, 0) << "No HIP devices available";
 
   RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
@@ -388,36 +380,23 @@ TEST(RocmTracerOccupancyTest, KernelDispatchProducesOccupancyStats) {
   RocmTracerOptions opts{/*max_annotation_strings=*/1024 * 1024};
   TF_ASSERT_OK(tracer.Enable(opts, collector.get()));
 
-  // Launch a real kernel so the tracer captures a kernel dispatch record.
-  constexpr int kN = 4096;
-  float* d_in = nullptr;
-  float* d_out = nullptr;
-  HIP_ASSERT_OK(hipMalloc(&d_in, kN * sizeof(float)));
-  HIP_ASSERT_OK(hipMalloc(&d_out, kN * sizeof(float)));
-
-  dim3 block(256);
-  dim3 grid((kN + 255) / 256);
-  OccupancyTestKernel<<<grid, block>>>(d_in, d_out, kN);
-  HIP_ASSERT_OK(hipDeviceSynchronize());
+  // Launch a real kernel via the hipcc-compiled helper so the tracer captures
+  // a kernel dispatch record with a valid kernel_object / func_ptr.
+  ASSERT_EQ(test::RunOccupancyTestKernel(/*n=*/4096, /*block_size=*/256), 0);
 
   // Allow the rocprofiler-sdk buffer to flush.
   absl::SleepFor(absl::Milliseconds(200));
   tracer.Disable();
 
-  HIP_ASSERT_OK(hipFree(d_in));
-  HIP_ASSERT_OK(hipFree(d_out));
-
-#undef HIP_ASSERT_OK
-
   tsl::profiler::XSpace space;
   collector->Export(&space);
 
   // Look for the theoretical occupancy stat in any GPU plane.
-  const std::string kOccKey =
+  absl::string_view kOccKey =
       tsl::profiler::GetStatTypeStr(tsl::profiler::StatType::kTheoreticalOccupancyPct);
-  const std::string kMinGridKey =
+  absl::string_view kMinGridKey =
       tsl::profiler::GetStatTypeStr(tsl::profiler::StatType::kOccupancyMinGridSize);
-  const std::string kSugBlockKey =
+  absl::string_view kSugBlockKey =
       tsl::profiler::GetStatTypeStr(
           tsl::profiler::StatType::kOccupancySuggestedBlockSize);
 
@@ -442,7 +421,7 @@ TEST(RocmTracerOccupancyTest, KernelDispatchProducesOccupancyStats) {
   EXPECT_TRUE(found_sug_block)
       << "XSpace must contain kOccupancySuggestedBlockSize stat";
 
-  // Additionally verify that the kTheoreticalOccupancyPct value is in (0, 100].
+  // Verify that the kTheoreticalOccupancyPct value is in (0, 100].
   for (const auto& plane : space.planes()) {
     int64_t occ_stat_id = -1;
     for (const auto& [sid, smd] : plane.stat_metadata()) {
@@ -471,10 +450,8 @@ TEST(RocmTracerOccupancyTest, KernelDispatchProducesOccupancyStats) {
 // Verify that kKernelDetails in the XSpace contains a non-zero occ_pct
 // string when occupancy is available.
 TEST(RocmTracerOccupancyTest, KernelDetailsStringContainsOccupancyPct) {
-#define HIP_ASSERT_OK(expr) ASSERT_EQ((expr), hipSuccess) << #expr " failed"
-
   int device_count = 0;
-  HIP_ASSERT_OK(hipGetDeviceCount(&device_count));
+  ASSERT_EQ(hipGetDeviceCount(&device_count), hipSuccess);
   ASSERT_GT(device_count, 0) << "No HIP devices available";
 
   RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
@@ -495,25 +472,15 @@ TEST(RocmTracerOccupancyTest, KernelDetailsStringContainsOccupancyPct) {
   RocmTracerOptions opts{/*max_annotation_strings=*/1024 * 1024};
   TF_ASSERT_OK(tracer.Enable(opts, collector.get()));
 
-  constexpr int kN = 1024;
-  float* d_in = nullptr;
-  float* d_out = nullptr;
-  HIP_ASSERT_OK(hipMalloc(&d_in, kN * sizeof(float)));
-  HIP_ASSERT_OK(hipMalloc(&d_out, kN * sizeof(float)));
-  OccupancyTestKernel<<<dim3((kN + 63) / 64), dim3(64)>>>(d_in, d_out, kN);
-  HIP_ASSERT_OK(hipDeviceSynchronize());
+  ASSERT_EQ(test::RunOccupancyTestKernel(/*n=*/1024, /*block_size=*/64), 0);
 
   absl::SleepFor(absl::Milliseconds(200));
   tracer.Disable();
 
-  HIP_ASSERT_OK(hipFree(d_in));
-  HIP_ASSERT_OK(hipFree(d_out));
-#undef HIP_ASSERT_OK
-
   tsl::profiler::XSpace space;
   collector->Export(&space);
 
-  const std::string kDetailsKey =
+  absl::string_view kDetailsKey =
       tsl::profiler::GetStatTypeStr(tsl::profiler::StatType::kKernelDetails);
 
   bool found_nonzero_occ = false;
