@@ -272,7 +272,7 @@ TEST(RocmCollectorOccupancyTest, NullFuncPtrSkipsOccupancyStats) {
   ASSERT_NE(gpu, nullptr);
 
   // Occupancy stat metadata must not appear if func_ptr was null.
-  const std::string kOccKey =
+  absl::string_view kOccKey =
       GetStatTypeStr(StatType::kTheoreticalOccupancyPct);
   for (const auto& [id, smd] : gpu->stat_metadata()) {
     EXPECT_NE(smd.name(), kOccKey)
@@ -296,7 +296,7 @@ TEST(RocmCollectorOccupancyTest, ZeroWavesPerCuSkipsOccupancyStats) {
   const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
   ASSERT_NE(gpu, nullptr);
 
-  const std::string kOccKey =
+  absl::string_view kOccKey =
       GetStatTypeStr(StatType::kTheoreticalOccupancyPct);
   for (const auto& [id, smd] : gpu->stat_metadata()) {
     EXPECT_NE(smd.name(), kOccKey)
@@ -317,7 +317,7 @@ TEST(RocmCollectorOccupancyTest, KernelDetailsAlwaysPresent) {
   const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
   ASSERT_NE(gpu, nullptr);
 
-  const std::string kDetailsKey = GetStatTypeStr(StatType::kKernelDetails);
+  absl::string_view kDetailsKey = GetStatTypeStr(StatType::kKernelDetails);
   bool found_details = false;
   for (const auto& [id, smd] : gpu->stat_metadata()) {
     if (smd.name() == kDetailsKey) {
@@ -342,7 +342,7 @@ TEST(RocmCollectorOccupancyTest, KernelDetailsContainsZeroOccupancyWhenNoPtr) {
   ASSERT_NE(gpu, nullptr);
 
   // Find the kKernelDetails stat metadata id, then locate its ref-value string.
-  const std::string kDetailsKey = GetStatTypeStr(StatType::kKernelDetails);
+  absl::string_view kDetailsKey = GetStatTypeStr(StatType::kKernelDetails);
   int64_t details_stat_id = -1;
   for (const auto& [id, smd] : gpu->stat_metadata()) {
     if (smd.name() == kDetailsKey) {
