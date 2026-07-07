@@ -60,6 +60,7 @@ cd /tf/jax
 # Remove any pre-existing JAX/jaxlib installs first, in case a mixed-up
 # jaxlib is present that would otherwise shadow the freshly built wheels.
 python3 -m pip uninstall jax jaxlib jax-rocm-pjrt jax-rocm-plugin -y
+rm -rf dist/*
 
 python build/build.py build \
   --wheels=jax,jaxlib,jax-rocm-plugin,jax-rocm-pjrt \
