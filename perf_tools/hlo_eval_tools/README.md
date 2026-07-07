@@ -60,6 +60,15 @@ optimizer step) and once in an inference/serving configuration (forward only) â€
 and store the resulting modules under the model's `training/` and `inference/`
 subdirectories respectively.
 
+> **Training HLO is dumped from a single node with 8 GPUs.** This is intentional
+> and does not limit the tool's validity: the number of *nodes* does not change
+> the per-submodule compute kernels, so the performance numbers this tool
+> verifies hold regardless of how many nodes a real training run uses. For a
+> given device count and sharding, the logical HLO is essentially the same across
+> node counts â€” the only real difference is how the collectives are implemented
+> and mapped onto the network fabric, not the compute modules being benchmarked
+> here.
+
 ## Directory layout
 
 Keep one directory of HLO dumps per model, and within each model a `training/`
