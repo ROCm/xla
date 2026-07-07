@@ -12,6 +12,8 @@ contain fork-specific commits. This separation ensures the `merge-upstream` API
 - [Recommended Docker Image && Build Instructions](#recommended-docker-image--build-instructions)
 - [OpenXLA Upstream PR Status](#openxla-upstream-pr-status)
 - [OpenXLA Upstream CI Checks](#openxla-upstream-ci-checks)
+- [Debug Tools](#debug-tools)
+- [Performance Tools](#performance-tools)
 - [Workflows](#workflows)
 
 ## XLA Branches for JAX
@@ -21,6 +23,9 @@ For supported ROCm versions and GFX targets per release, see the [AMD ROCm compa
 | JAX Release | XLA Branch | JAX Branch |
 |-------------|------------|------------|
 | jax-ml/jax:main | [`openxla/xla:main`](https://github.com/openxla/xla) | [`jax-ml/jax:main`](https://github.com/jax-ml/jax) |
+| jax-v0.10.2 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.10.2`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.10.2) | [`rocm-jaxlib-v0.10.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.10.2) |
+| jax-v0.10.1 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.10.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.10.1) | [`rocm-jaxlib-v0.10.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.10.1) |
+| jax-v0.10.0 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.10.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.10.0) | [`rocm-jaxlib-v0.10.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.10.0) |
 | jax-v0.9.2 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.9.2`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.9.2) | [`rocm-jaxlib-v0.9.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.9.2) |
 | jax-v0.9.1 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.9.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.9.1) | [`rocm-jaxlib-v0.9.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.9.1) |
 | jax-v0.9.0 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.9.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.9.0) | [`rocm-jaxlib-v0.9.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.9.0) |
@@ -36,13 +41,13 @@ For supported ROCm versions and GFX targets per release, see the [AMD ROCm compa
 
 ## Recommended Docker Image && Build Instructions
 
-Use the prebuilt ROCm/TensorFlow build container for reproducible local builds and CI parity:
+Use the prebuilt ROCm JAX build container for reproducible local builds and CI parity:
 
 ```bash
-docker pull rocm/tensorflow-build:2.22-jammy-pythonall-rocm7.2.3-ci_official
+docker pull ghcr.io/rocm/jax-ubu22.rocm7.2.4
 ```
 
-This image ships ROCm 7.2.3 at `/opt/rocm`, multiple Python versions, Bazel, Clang-18 at `/usr/lib/llvm-18/bin/clang` (required by `--config=rocm_clang_local`), and all build dependencies needed by JAX and XLA. Mount your local `jax` and `xla` source checkouts into the container (e.g. as `/tf/jax` and `/tf/xla`) before running the build commands below.
+This image ships ROCm 7.2.4 at `/opt/rocm`, multiple Python versions, Bazel, and all build dependencies needed by JAX and XLA. The build uses the hermetic Clang-18 toolchain, so no system Clang is required. Mount your local `jax` and `xla` source checkouts into the container (e.g. as `/tf/jax` and `/tf/xla`) before running the build commands below.
 
 
 ### Building `jax-ml/jax:main` against `openxla/xla:main`
@@ -52,13 +57,17 @@ Inside the [recommended container](#recommended-docker-image--build-instructions
 ```bash
 cd /tf/jax
 
+# Remove any pre-existing JAX/jaxlib installs first, in case a mixed-up
+# jaxlib is present that would otherwise shadow the freshly built wheels.
+python3 -m pip uninstall jax jaxlib jax-rocm-pjrt jax-rocm-plugin -y
+
 python build/build.py build \
   --wheels=jax,jaxlib,jax-rocm-plugin,jax-rocm-pjrt \
   --rocm_path=/opt/rocm \
   --rocm_amdgpu_targets=gfx942 \
   --rocm_version=7 \
   --bazel_options=--override_repository=xla=/tf/xla \
-  --bazel_options=--config=rocm_clang_local \
+  --bazel_options=--config=rocm_clang_hermetic \
   --bazel_startup_options="--bazelrc=build/rocm/rocm.bazelrc"
 
 pip install dist/*.whl
@@ -67,7 +76,6 @@ pip install dist/*.whl
 Notes:
 
 - `--bazel_options=--override_repository=xla=/tf/xla` redirects the `@xla` repository to your local checkout, replacing the upstream-pinned commit in JAX's `WORKSPACE`.
-- `--bazel_options=--config=rocm_clang_local` is **required**. It activates `--crosstool_top=@local_config_rocm//crosstool:toolchain` (defined in `build/rocm/rocm.bazelrc`), which routes the `-x rocm` marker emitted by `rocm_default_copts()` (`third_party/gpus/rocm/build_defs.bzl.tpl`) through `crosstool_wrapper_driver_rocm` → `hipcc`. Without it, the hermetic Clang toolchain receives `-x rocm` directly and fails with `clang: error: language not recognized: 'rocm'`.
 - Adjust `--rocm_amdgpu_targets` to match your hardware (e.g. `gfx90a`, `gfx942`, `gfx950`, `gfx1100`). Multiple targets can be passed comma-separated.
 - The `--wheels=jax,jaxlib,jax-rocm-plugin,jax-rocm-pjrt` list produces all four required wheels in `dist/`; `pip install dist/*.whl` installs the matching set.
 
@@ -95,10 +103,27 @@ PRs that touch upstream-tracking branches (e.g. `main`, which mirrors `openxla/x
 
 | Script | Purpose |
 |--------|---------|
-| [`build_tools/rocm/execute_ci_build_upstream.sh`](build_tools/rocm/execute_ci_build_upstream.sh) | **XLA test sweep.** Runs the `//xla/...` test suite on ROCm RBE for `TF_ROCM_AMDGPU_TARGETS=gfx90a,gfx942,gfx950`. Applies ROCm-specific build/test tag filters (via `rocm_tag_filters.sh`), supports `--config=ci_single_gpu` / `--config=ci_multi_gpu`, and excludes a curated list of known-failing or RBE-expensive tests (e.g. `HostMemoryAllocateTest.Numa`, `*IotaR1Test*`, certain `dot`/`sort`/numeric algorithm tests). Captures `execution_log.binpb.zst` as an artifact and delegates to `run_xla_ci_build.sh`. |
-| [`build_tools/rocm/execute_ci_build_upstream_jax.sh`](build_tools/rocm/execute_ci_build_upstream_jax.sh) | **JAX test sweep against XLA-from-source.** Runs `//tests:gpu_tests`, `//tests:backend_independent_tests`, `//tests/pallas:gpu_tests`, `//tests/pallas:backend_independent_tests`, and `//jaxlib/tools:check_gpu_wheel_sources_test` under `--config=rocm --config=rocm_rbe_dynamic`. A curated `TESTS_TO_IGNORE` list excludes JAX tests with known ROCm-side failures (mostly `pallas`, various `lax_*` / `scipy_*` / numpy reducer suites). Delegates to `run_bazel_test_rocm_rbe.sh`. |
+| [`build_tools/rocm/execute_ci_build_upstream.sh`](build_tools/rocm/execute_ci_build_upstream.sh) | **XLA test sweep.** Shim script that runs the `//xla/...` test suite on ROCm RBE |
+| [`build_tools/rocm/execute_ci_build_upstream_jax.sh`](build_tools/rocm/execute_ci_build_upstream_jax.sh) | **JAX test sweep against XLA-from-source.** Shim script that runs the JAX test suite against XLA built from source on ROCm RBE. |
 
 Both scripts run on the EngFlow `wardite.cluster.engflow.com` RBE cluster and consume the `rocm_rbe` / `rocm_rbe_dynamic` configs from `build/rocm/rocm.bazelrc` (in the JAX repo) and XLA's own RBE bazelrc.
+
+## Debug Tools
+
+Debugging utilities for triaging issues while running MaxText-TE / JAX / TF workloads on AMD GPUs (ROCm). See [`debug_tools/`](debug_tools/) for full details. Individual tools live in their own subdirectories with self-contained usage notes.
+
+| Tool | Purpose |
+|------|---------|
+| [`debug_tools/queue_dump`](debug_tools/queue_dump) | Hang investigation. Drives `gdb` / `rocgdb` / `umr` / the ROCR Debug Agent / RDL to inspect a hung process and its GPU state (queues, kernels, wavefronts, fences). |
+| [`debug_tools/nan_check_tool`](debug_tools/nan_check_tool) | NaN / numerical-correctness investigation. Scans intermediate buffers for NaN / Inf and localises the first offending HLO instruction, buffer index, and rank. |
+
+## Performance Tools
+
+Performance and regression micro-benchmarks for AMD GPUs (ROCm). See [`perf_tools/`](perf_tools/) for full details.
+
+| Tool | Purpose |
+|------|---------|
+| [`perf_tools/rocm_latency_check_tool`](perf_tools/rocm_latency_check_tool) | HIP-runtime-only micro-benchmark measuring end-to-end per-request dispatch latency (H2D → compute → D2D → compute → D2H) and comparing it across ROCm versions. Reports a latency percentile histogram plus QPS and can append version-stamped rows to a CSV for regression tracking. |
 
 ## Workflows
 
