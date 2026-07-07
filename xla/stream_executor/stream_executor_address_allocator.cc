@@ -96,13 +96,15 @@ StreamExecutorAddressAllocator::GetStreamExecutor(int device_ordinal) const {
 }
 
 bool StreamExecutorAddressAllocator::AllowsAsynchronousDeallocation() const {
-  return false;
+  // Deallocate() uses a synchronous free (e.g. hipFree) that already
+  // synchronizes the device, so deallocation is safe to issue asynchronously.
+  // Reporting true also keeps OwningScratchAllocator from deferring the scratch
+  // free into a stream host callback, where hipFree deadlocks on ROCm.
+  return true;
 }
 
 absl::StatusOr<Stream*> StreamExecutorAddressAllocator::GetStream(
     int device_ordinal) {
-  CHECK(!AllowsAsynchronousDeallocation())
-      << "The logic below only works for synchronous allocators";
   ASSIGN_OR_RETURN(StreamExecutor * executor,
                    GetStreamExecutor(device_ordinal));
   absl::MutexLock lock(mutex_);
