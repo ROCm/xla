@@ -125,6 +125,7 @@ Performance and regression micro-benchmarks for AMD GPUs (ROCm). See [`perf_tool
 | Tool | Purpose |
 |------|---------|
 | [`perf_tools/rocm_latency_check_tool`](perf_tools/rocm_latency_check_tool) | HIP-runtime-only micro-benchmark measuring end-to-end per-request dispatch latency (H2D → compute → D2D → compute → D2H) and comparing it across ROCm versions. Reports a latency percentile histogram plus QPS and can append version-stamped rows to a CSV for regression tracking. |
+| [`perf_tools/hlo_eval_tools`](perf_tools/hlo_eval_tools) | Per-module HLO micro-benchmarks built on `multihost_hlo_runner`. Replays the pre-optimization HLO dumps (training and inference) from real JAX models one module at a time to measure each submodule's cost on XLA, and appends the timings to a CSV for regression tracking across ROCm/XLA versions. Covers models across four categories: LLM, vision, multimodal, and science. |
 
 ## Workflows
 
