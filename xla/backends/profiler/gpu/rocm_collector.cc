@@ -168,11 +168,12 @@ OccupancyStats PerDeviceCollector::GetOccupancy(
   const uint32_t waves_per_simd_vgpr = vgprs_per_simd / params.num_regs;
   const uint32_t waves_per_cu_vgpr = waves_per_simd_vgpr * params.simd_per_cu;
 
-  // LDS limit: total LDS per CU divided by smem per block.
-  const uint32_t smem_per_block = params.static_smem + params.dynamic_smem;
+  // LDS limit: total LDS per CU divided by smem per workgroup.
+  // params.smem_bytes is kinfo.group_segment_size from the dispatch record,
+  // which is already the total (static + runtime) — do not add symbol smem.
   const uint32_t waves_per_cu_lds =
-      (smem_per_block > 0 && params.lds_size_bytes > 0)
-          ? (params.lds_size_bytes / smem_per_block) * waves_per_block
+      (params.smem_bytes > 0 && params.lds_size_bytes > 0)
+          ? (params.lds_size_bytes / params.smem_bytes) * waves_per_block
           : params.max_waves_per_cu;
 
   // Active waves = min(VGPR limit, LDS limit, hardware limit).
@@ -256,10 +257,12 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
       const uint32_t wg_z = std::max(event.kernel_info.workgroup_z, 1u);
 
       RocmDeviceOccupancyParams params{};
-      params.num_regs       = event.kernel_info.num_regs;
-      params.static_smem    = event.kernel_info.static_smem;
-      params.block_size     = wg_x * wg_y * wg_z;
-      params.dynamic_smem   = event.kernel_info.group_segment_size;
+      params.num_regs   = event.kernel_info.num_regs;
+      params.block_size = wg_x * wg_y * wg_z;
+      // group_segment_size from the dispatch record is already the total LDS
+      // per workgroup (static + runtime). Use it directly; do not add the
+      // symbol's group_segment_size on top (that would double-count).
+      params.smem_bytes = event.kernel_info.group_segment_size;
       params.max_waves_per_cu   = max_waves_per_cu_;
       params.wave_front_size    = wave_front_size_;
       params.max_waves_per_simd = max_waves_per_simd_;

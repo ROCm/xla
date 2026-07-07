@@ -64,11 +64,13 @@ inline std::string ToXStat(const KernelDetails& kernel_info,
 // no HIP function pointer is required.
 struct RocmDeviceOccupancyParams {
   // From the kernel symbol data (DEVICE_KERNEL_SYMBOL_REGISTER callback).
-  uint32_t num_regs;       // arch_vgpr_count: VGPRs allocated per thread
-  uint32_t static_smem;    // group_segment_size from the symbol (static LDS)
+  uint32_t num_regs;    // arch_vgpr_count: VGPRs allocated per thread
   // From the kernel dispatch record.
-  uint32_t block_size;     // workgroup_x * workgroup_y * workgroup_z (0-dims → 1)
-  uint32_t dynamic_smem;   // group_segment_size from dispatch (runtime LDS)
+  // group_segment_size in rocprofiler_kernel_dispatch_info_t is the *total*
+  // LDS per workgroup (static + runtime additions, AKA the "real" LDS usage).
+  // Do NOT add the symbol's group_segment_size on top — that would double-count.
+  uint32_t block_size;  // workgroup_x * workgroup_y * workgroup_z (0-dims → 1)
+  uint32_t smem_bytes;  // kinfo.group_segment_size: total LDS per workgroup
   // From the rocprofiler agent (set once in GetDeviceCapabilities).
   uint32_t max_waves_per_cu;   // max concurrent wavefronts per CU
   uint32_t wave_front_size;    // threads per wavefront (64 on CDNA, 32/64 on RDNA)
@@ -78,10 +80,10 @@ struct RocmDeviceOccupancyParams {
 
   friend bool operator==(const RocmDeviceOccupancyParams& a,
                          const RocmDeviceOccupancyParams& b) noexcept {
-    return std::tie(a.num_regs, a.static_smem, a.block_size, a.dynamic_smem,
+    return std::tie(a.num_regs, a.block_size, a.smem_bytes,
                     a.max_waves_per_cu, a.wave_front_size,
                     a.max_waves_per_simd, a.simd_per_cu, a.lds_size_bytes) ==
-           std::tie(b.num_regs, b.static_smem, b.block_size, b.dynamic_smem,
+           std::tie(b.num_regs, b.block_size, b.smem_bytes,
                     b.max_waves_per_cu, b.wave_front_size,
                     b.max_waves_per_simd, b.simd_per_cu, b.lds_size_bytes);
   }
@@ -94,8 +96,8 @@ struct RocmDeviceOccupancyParams {
   template <typename H>
   friend H AbslHashValue(H hash_state,
                          const RocmDeviceOccupancyParams& params) {
-    return H::combine(std::move(hash_state), params.num_regs, params.static_smem,
-                      params.block_size, params.dynamic_smem,
+    return H::combine(std::move(hash_state), params.num_regs,
+                      params.block_size, params.smem_bytes,
                       params.max_waves_per_cu, params.wave_front_size,
                       params.max_waves_per_simd, params.simd_per_cu,
                       params.lds_size_bytes);

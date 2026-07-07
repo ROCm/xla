@@ -370,9 +370,8 @@ TEST(RocmCollectorOccupancyTest, KernelDetailsContainsZeroOccupancyWhenNoRegs) {
 TEST(RocmCollectorOccupancyTest, OccupancyParamsCacheKey) {
   RocmDeviceOccupancyParams a{};
   a.num_regs = 32;
-  a.static_smem = 0;
   a.block_size = 256;
-  a.dynamic_smem = 0;
+  a.smem_bytes = 0;
   a.max_waves_per_cu = 32;
   a.wave_front_size = 64;
   a.max_waves_per_simd = 8;
