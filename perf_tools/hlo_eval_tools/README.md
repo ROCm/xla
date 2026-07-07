@@ -7,6 +7,12 @@ time. Accumulating those times into a CSV over many runs gives a clear picture o
 **how much each HLO submodule of a model costs on XLA**, and lets you track that
 cost across ROCm versions / XLA revisions.
 
+It covers **both training and inference workloads**. Training and inference emit
+different HLO (the training step adds the backward pass, gradient/all-reduce, and
+optimizer-update modules that inference never runs), so each model is split into a
+`training/` and an `inference/` subdirectory of HLO dumps that are benchmarked
+independently.
+
 It is built on the upstream `multihost_hlo_runner` tool and its CSV profiling
 output (the `--append_profile_to_csv_file` flag), from [openxla/xla#42696](https://github.com/openxla/xla/pull/42696)
 
@@ -49,41 +55,69 @@ For JAX you can also use `jax.jit(...).lower(...).compiler_ir("hlo")` /
 HLO so that the timing reflects the full XLA compile + execute path (XLA still
 optimizes the module internally before running it), not a pre-optimized artifact.
 
+Dump the model **twice** — once in a training configuration (forward + backward +
+optimizer step) and once in an inference/serving configuration (forward only) —
+and store the resulting modules under the model's `training/` and `inference/`
+subdirectories respectively.
+
 ## Directory layout
 
-Keep one directory of HLO dumps per model. The intended set of model directories
-is:
+Keep one directory of HLO dumps per model, and within each model a `training/`
+and an `inference/` subdirectory:
 
 ```
 hlo_eval_tools/
-  deepseek2_16b/
-  gemma3_4b/
-  gp3_oss_20b/
-  llama3_8b/
-  mixtral_8x7b/
-  qwen3_14b/
-  alphafold3/
-  colabfold/
-  stable_diffusion_1_5/
-  sdxl/
-  resnet50/
-  efficientnet/
-  clip/
-  detr/
-  dit/
-  gpt_j_6b/
-  flan_t5_large/
+  <model>/
+    training/     # HLO dumped from the training step (fwd + bwd + optimizer)
+    inference/    # HLO dumped from the inference/serving step (fwd only)
 ```
 
-Each directory holds the `*.hlo` (or `*.txt` / proto) modules dumped from that
-model. Grouping by model keeps the per-module CSV headers scoped to a single
-model and makes cross-run comparison straightforward.
+The intended set of model directories is:
+
+```
+hlo_eval_tools/
+  deepseek2_16b/{training,inference}/
+  gemma3_4b/{training,inference}/
+  gp3_oss_20b/{training,inference}/
+  llama3_8b/{training,inference}/
+  mixtral_8x7b/{training,inference}/
+  qwen3_14b/{training,inference}/
+  gpt_j_6b/{training,inference}/
+  flan_t5_large/{training,inference}/
+  resnet50/{training,inference}/
+  efficientnet/{training,inference}/
+  vit/{training,inference}/
+  mlp_mixer/{training,inference}/
+  clip/{training,inference}/
+  detr/{training,inference}/
+  stable_diffusion_1_5/{training,inference}/
+  sdxl/{training,inference}/
+  dit/{training,inference}/
+  paligemma/{training,inference}/
+  siglip/{training,inference}/
+  lit/{training,inference}/
+  cappa/{training,inference}/
+  alphafold3/{training,inference}/
+  colabfold/{training,inference}/
+```
+
+Each leaf directory holds the `*.hlo` (or `*.txt` / proto) modules dumped from
+that model in that workload. Grouping by model + workload keeps the per-module
+CSV headers scoped to a single run and makes cross-run comparison straightforward.
 
 | Category | Models |
 | --- | --- |
 | Large language models | `deepseek2_16b`, `gemma3_4b`, `gp3_oss_20b`, `llama3_8b`, `mixtral_8x7b`, `qwen3_14b`, `gpt_j_6b`, `flan_t5_large` |
-| Vision / diffusion | `resnet50`, `efficientnet`, `clip`, `detr`, `stable_diffusion_1_5`, `sdxl`, `dit` |
+| Vision / diffusion | `resnet50`, `efficientnet`, `vit`, `mlp_mixer`, `clip`, `detr`, `stable_diffusion_1_5`, `sdxl`, `dit` |
+| Vision-language / multimodal | `paligemma`, `siglip`, `lit`, `cappa` |
 | Science | `alphafold3`, `colabfold` |
+
+The Vision-language / multimodal models (plus `vit` and `mlp_mixer`) are drawn
+from Google Research's [`big_vision`](https://github.com/google-research/big_vision)
+codebase, which covers a range of complementary op mixes: `vit` (pure attention +
+GEMM), `mlp_mixer` (all-MLP, no attention/conv), `siglip` / `lit` (contrastive
+dual-encoder image-text), `cappa` (image-captioning encoder-decoder), and
+`paligemma` (a full vision-language generative model).
 
 ## Building `multihost_hlo_runner`
 
@@ -107,8 +141,8 @@ added automatically:
 ./multihost_hlo_runner \
   --device_type=gpu \
   --profile_execution=true \
-  --append_profile_to_csv_file=results/llama3_8b \
-  hlo_eval_tools/llama3_8b/*.hlo
+  --append_profile_to_csv_file=results/llama3_8b_inference \
+  hlo_eval_tools/llama3_8b/inference/*.hlo
 ```
 
 - `--profile_execution=true` enables execution profiling and per-module timing.
@@ -118,17 +152,22 @@ added automatically:
 - The trailing positional arguments are the HLO files to run (a glob expands to
   one module per file).
 
-Run the whole suite, one CSV per model:
+Run the whole suite, one CSV per model **and** workload:
 
 ```bash
-for model in deepseek2_16b gemma3_4b gp3_oss_20b llama3_8b mixtral_8x7b \
-             qwen3_14b alphafold3 colabfold stable_diffusion_1_5 sdxl resnet50 \
-             efficientnet clip detr dit gpt_j_6b flan_t5_large; do
-  ./multihost_hlo_runner \
-    --device_type=gpu \
-    --profile_execution=true \
-    --append_profile_to_csv_file=results/${model} \
-    hlo_eval_tools/${model}/*.hlo
+models="deepseek2_16b gemma3_4b gp3_oss_20b llama3_8b mixtral_8x7b qwen3_14b \
+        gpt_j_6b flan_t5_large resnet50 efficientnet vit mlp_mixer clip detr \
+        stable_diffusion_1_5 sdxl dit paligemma siglip lit cappa \
+        alphafold3 colabfold"
+
+for model in $models; do
+  for workload in training inference; do
+    ./multihost_hlo_runner \
+      --device_type=gpu \
+      --profile_execution=true \
+      --append_profile_to_csv_file=results/${model}_${workload} \
+      hlo_eval_tools/${model}/${workload}/*.hlo
+  done
 done
 ```
 
@@ -160,8 +199,9 @@ ROCm/XLA version under test) to spot per-module regressions over time.
 
 ## Regression workflow
 
-1. Dump the pre-optimization HLO for each model once and store it under the
-   matching `hlo_eval_tools/<model>/` directory.
+1. Dump the pre-optimization HLO for each model's training and inference
+   workloads and store it under the matching
+   `hlo_eval_tools/<model>/{training,inference}/` directory.
 2. On each ROCm version / XLA revision you want to compare, build
    `multihost_hlo_runner` against it.
 3. Run the suite with identical flags, appending into the **same** per-model CSVs.
