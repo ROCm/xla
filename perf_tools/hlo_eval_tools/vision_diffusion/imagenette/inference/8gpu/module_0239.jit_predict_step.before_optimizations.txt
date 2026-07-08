@@ -1,0 +1,740 @@
+HloModule jit_predict_step, entry_computation_layout={(f32[64]{0}, f32[64]{0}, f32[64]{0}, f32[64]{0}, f32[64]{0}, /*index=5*/f32[64]{0}, f32[64]{0}, f32[64]{0}, f32[128]{0}, f32[128]{0}, /*index=10*/f32[128]{0}, f32[128]{0}, f32[128]{0}, f32[128]{0}, f32[128]{0}, /*index=15*/f32[128]{0}, f32[128]{0}, f32[128]{0}, f32[256]{0}, f32[256]{0}, /*index=20*/f32[256]{0}, f32[256]{0}, f32[256]{0}, f32[256]{0}, f32[256]{0}, /*index=25*/f32[256]{0}, f32[256]{0}, f32[256]{0}, f32[512]{0}, f32[512]{0}, /*index=30*/f32[512]{0}, f32[512]{0}, f32[512]{0}, f32[512]{0}, f32[512]{0}, /*index=35*/f32[512]{0}, f32[512]{0}, f32[512]{0}, f32[64]{0}, f32[64]{0}, /*index=40*/f32[10]{0}, f32[512,10]{1,0}, f32[64]{0}, f32[64]{0}, f32[64]{0}, /*index=45*/f32[64]{0}, f32[3,3,64,64]{3,2,1,0}, f32[3,3,64,64]{3,2,1,0}, f32[64]{0}, f32[64]{0}, /*index=50*/f32[64]{0}, f32[64]{0}, f32[3,3,64,64]{3,2,1,0}, f32[3,3,64,64]{3,2,1,0}, f32[128]{0}, /*index=55*/f32[128]{0}, f32[128]{0}, f32[128]{0}, f32[3,3,64,128]{3,2,1,0}, f32[3,3,128,128]{3,2,1,0}, /*index=60*/f32[1,1,64,128]{3,2,1,0}, f32[128]{0}, f32[128]{0}, f32[128]{0}, f32[128]{0}, /*index=65*/f32[128]{0}, f32[128]{0}, f32[3,3,128,128]{3,2,1,0}, f32[3,3,128,128]{3,2,1,0}, f32[256]{0}, /*index=70*/f32[256]{0}, f32[256]{0}, f32[256]{0}, f32[3,3,128,256]{3,2,1,0}, f32[3,3,256,256]{3,2,1,0}, /*index=75*/f32[1,1,128,256]{3,2,1,0}, f32[256]{0}, f32[256]{0}, f32[256]{0}, f32[256]{0}, /*index=80*/f32[256]{0}, f32[256]{0}, f32[3,3,256,256]{3,2,1,0}, f32[3,3,256,256]{3,2,1,0}, f32[512]{0}, /*index=85*/f32[512]{0}, f32[512]{0}, f32[512]{0}, f32[3,3,256,512]{3,2,1,0}, f32[3,3,512,512]{3,2,1,0}, /*index=90*/f32[1,1,256,512]{3,2,1,0}, f32[512]{0}, f32[512]{0}, f32[512]{0}, f32[512]{0}, /*index=95*/f32[512]{0}, f32[512]{0}, f32[3,3,512,512]{3,2,1,0}, f32[3,3,512,512]{3,2,1,0}, f32[64]{0}, /*index=100*/f32[64]{0}, f32[7,7,3,64]{3,2,1,0}, f32[32,224,224,3]{3,2,1,0})->f32[32,10]{1,0}}, allow_spmd_sharding_propagation_to_parameters={false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false}, num_partitions=8, frontend_attributes={xla.sdy.meshes={mesh = #sdy.mesh<["fsdp"=8]>}}
+
+FileNames
+1 "/root/hlo_dump/mgpu_infer.py"
+2 "/root/hlo_dump/resnet_model.py"
+3 "/usr/local/lib/python3.12/dist-packages/flax/linen/pooling.py"
+4 "/usr/local/lib/python3.12/dist-packages/flax/linen/linear.py"
+5 "/usr/local/lib/python3.12/dist-packages/flax/linen/normalization.py"
+
+FunctionNames
+1 "<module>"
+2 "main"
+3 "main.<locals>.predict_step"
+4 "build_imagenette.<locals>.fn"
+5 "ResNet.__call__"
+6 "max_pool"
+7 "pool"
+8 "_Conv.__call__"
+9 "BatchNorm.__call__"
+10 "_normalize"
+11 "ResNetBlock.__call__"
+12 "Dense.__call__"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=195 end_line=195 column=4 end_column=10}
+2 {file_name_id=1 function_name_id=2 line=189 end_line=189 column=14 end_column=36}
+3 {file_name_id=1 function_name_id=3 line=185 end_line=185 column=15 end_column=36}
+4 {file_name_id=1 function_name_id=4 line=57 end_line=57 column=26 end_column=126}
+5 {file_name_id=2 function_name_id=5 line=72 end_line=72 column=12 end_column=66}
+6 {file_name_id=3 function_name_id=6 line=124 end_line=124 column=6 end_column=69}
+7 {file_name_id=3 function_name_id=7 line=73 end_line=73 column=6 end_column=72}
+8 {file_name_id=2 function_name_id=5 line=85 end_line=85 column=12 end_column=36}
+9 {file_name_id=2 function_name_id=5 line=63 end_line=69 column=12 end_column=12}
+10 {file_name_id=4 function_name_id=8 line=700 end_line=710 column=10 end_column=7}
+11 {file_name_id=2 function_name_id=5 line=70 end_line=70 column=12 end_column=35}
+12 {file_name_id=5 function_name_id=9 line=406 end_line=421 column=11 end_column=5}
+13 {file_name_id=5 function_name_id=10 line=203 end_line=203 column=9 end_column=46}
+14 {file_name_id=5 function_name_id=10 line=205 end_line=205 column=6 end_column=14}
+15 {file_name_id=5 function_name_id=10 line=204 end_line=204 column=8 end_column=44}
+16 {file_name_id=5 function_name_id=10 line=206 end_line=206 column=18 end_column=31}
+17 {file_name_id=5 function_name_id=10 line=206 end_line=206 column=8 end_column=32}
+18 {file_name_id=5 function_name_id=10 line=211 end_line=211 column=6 end_column=28}
+19 {file_name_id=5 function_name_id=10 line=214 end_line=214 column=4 end_column=16}
+20 {file_name_id=5 function_name_id=10 line=216 end_line=216 column=2 end_column=10}
+21 {file_name_id=5 function_name_id=10 line=220 end_line=220 column=6 end_column=28}
+22 {file_name_id=5 function_name_id=10 line=223 end_line=223 column=4 end_column=13}
+23 {file_name_id=2 function_name_id=5 line=71 end_line=71 column=12 end_column=22}
+24 {file_name_id=2 function_name_id=5 line=77 end_line=83 column=20 end_column=20}
+25 {file_name_id=2 function_name_id=11 line=29 end_line=29 column=12 end_column=60}
+26 {file_name_id=2 function_name_id=11 line=30 end_line=30 column=12 end_column=26}
+27 {file_name_id=2 function_name_id=11 line=31 end_line=31 column=12 end_column=23}
+28 {file_name_id=2 function_name_id=11 line=32 end_line=32 column=12 end_column=46}
+29 {file_name_id=2 function_name_id=11 line=33 end_line=33 column=12 end_column=65}
+30 {file_name_id=2 function_name_id=11 line=41 end_line=41 column=24 end_column=36}
+31 {file_name_id=2 function_name_id=11 line=41 end_line=41 column=15 end_column=37}
+32 {file_name_id=2 function_name_id=11 line=36 end_line=38 column=23 end_column=23}
+33 {file_name_id=2 function_name_id=11 line=39 end_line=39 column=23 end_column=60}
+34 {file_name_id=2 function_name_id=5 line=86 end_line=86 column=12 end_column=59}
+35 {file_name_id=4 function_name_id=12 line=287 end_line=292 column=8 end_column=5}
+36 {file_name_id=4 function_name_id=12 line=294 end_line=294 column=11 end_column=57}
+37 {file_name_id=4 function_name_id=12 line=294 end_line=294 column=6 end_column=57}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+5 {file_location_id=5 parent_frame_id=5}
+6 {file_location_id=6 parent_frame_id=6}
+7 {file_location_id=7 parent_frame_id=7}
+8 {file_location_id=8 parent_frame_id=5}
+9 {file_location_id=9 parent_frame_id=5}
+10 {file_location_id=10 parent_frame_id=10}
+11 {file_location_id=11 parent_frame_id=5}
+12 {file_location_id=12 parent_frame_id=12}
+13 {file_location_id=13 parent_frame_id=13}
+14 {file_location_id=14 parent_frame_id=13}
+15 {file_location_id=15 parent_frame_id=13}
+16 {file_location_id=16 parent_frame_id=13}
+17 {file_location_id=17 parent_frame_id=13}
+18 {file_location_id=18 parent_frame_id=13}
+19 {file_location_id=19 parent_frame_id=13}
+20 {file_location_id=20 parent_frame_id=13}
+21 {file_location_id=21 parent_frame_id=13}
+22 {file_location_id=22 parent_frame_id=13}
+23 {file_location_id=23 parent_frame_id=5}
+24 {file_location_id=24 parent_frame_id=5}
+25 {file_location_id=25 parent_frame_id=25}
+26 {file_location_id=10 parent_frame_id=26}
+27 {file_location_id=26 parent_frame_id=25}
+28 {file_location_id=12 parent_frame_id=28}
+29 {file_location_id=13 parent_frame_id=29}
+30 {file_location_id=14 parent_frame_id=29}
+31 {file_location_id=15 parent_frame_id=29}
+32 {file_location_id=16 parent_frame_id=29}
+33 {file_location_id=17 parent_frame_id=29}
+34 {file_location_id=18 parent_frame_id=29}
+35 {file_location_id=19 parent_frame_id=29}
+36 {file_location_id=20 parent_frame_id=29}
+37 {file_location_id=21 parent_frame_id=29}
+38 {file_location_id=22 parent_frame_id=29}
+39 {file_location_id=27 parent_frame_id=25}
+40 {file_location_id=28 parent_frame_id=25}
+41 {file_location_id=10 parent_frame_id=41}
+42 {file_location_id=29 parent_frame_id=25}
+43 {file_location_id=12 parent_frame_id=43}
+44 {file_location_id=13 parent_frame_id=44}
+45 {file_location_id=14 parent_frame_id=44}
+46 {file_location_id=15 parent_frame_id=44}
+47 {file_location_id=16 parent_frame_id=44}
+48 {file_location_id=17 parent_frame_id=44}
+49 {file_location_id=18 parent_frame_id=44}
+50 {file_location_id=19 parent_frame_id=44}
+51 {file_location_id=20 parent_frame_id=44}
+52 {file_location_id=21 parent_frame_id=44}
+53 {file_location_id=22 parent_frame_id=44}
+54 {file_location_id=30 parent_frame_id=25}
+55 {file_location_id=31 parent_frame_id=25}
+56 {file_location_id=32 parent_frame_id=25}
+57 {file_location_id=10 parent_frame_id=57}
+58 {file_location_id=33 parent_frame_id=25}
+59 {file_location_id=12 parent_frame_id=59}
+60 {file_location_id=13 parent_frame_id=60}
+61 {file_location_id=14 parent_frame_id=60}
+62 {file_location_id=15 parent_frame_id=60}
+63 {file_location_id=16 parent_frame_id=60}
+64 {file_location_id=17 parent_frame_id=60}
+65 {file_location_id=18 parent_frame_id=60}
+66 {file_location_id=19 parent_frame_id=60}
+67 {file_location_id=20 parent_frame_id=60}
+68 {file_location_id=21 parent_frame_id=60}
+69 {file_location_id=22 parent_frame_id=60}
+70 {file_location_id=34 parent_frame_id=5}
+71 {file_location_id=35 parent_frame_id=71}
+72 {file_location_id=36 parent_frame_id=71}
+73 {file_location_id=37 parent_frame_id=71}
+
+
+%relu.1 (Arg_0.1: f32[32,112,112,64]) -> f32[32,112,112,64] {
+  %Arg_0.1 = f32[32,112,112,64]{3,2,1,0} parameter(0)
+  %constant.8 = f32[] constant(0)
+  %max.2 = f32[32,112,112,64]{3,2,1,0} broadcast(%constant.8), dimensions={}, metadata={op_name="max"}
+  ROOT %max.3 = f32[32,112,112,64]{3,2,1,0} maximum(%Arg_0.1, %max.2), metadata={op_name="max"}
+}
+
+%region_0.2 (reduce_window_max.3: f32[], reduce_window_max.4: f32[]) -> f32[] {
+  %reduce_window_max.3 = f32[] parameter(0), metadata={op_name="reduce_window_max"}
+  %reduce_window_max.4 = f32[] parameter(1), metadata={op_name="reduce_window_max"}
+  ROOT %reduce_window_max.5 = f32[] maximum(%reduce_window_max.3, %reduce_window_max.4), metadata={op_name="jit(predict_step)/ResNet/reduce_window_max" stack_frame_id=7}
+}
+
+%relu_0.3 (Arg_0.3: f32[32,56,56,64]) -> f32[32,56,56,64] {
+  %Arg_0.3 = f32[32,56,56,64]{3,2,1,0} parameter(0)
+  %constant.10 = f32[] constant(0)
+  %max.6 = f32[32,56,56,64]{3,2,1,0} broadcast(%constant.10), dimensions={}, metadata={op_name="max"}
+  ROOT %max.7 = f32[32,56,56,64]{3,2,1,0} maximum(%Arg_0.3, %max.6), metadata={op_name="max"}
+}
+
+%relu_1.4 (Arg_0.5: f32[32,28,28,128]) -> f32[32,28,28,128] {
+  %Arg_0.5 = f32[32,28,28,128]{3,2,1,0} parameter(0)
+  %constant.12 = f32[] constant(0)
+  %max.10 = f32[32,28,28,128]{3,2,1,0} broadcast(%constant.12), dimensions={}, metadata={op_name="max"}
+  ROOT %max.11 = f32[32,28,28,128]{3,2,1,0} maximum(%Arg_0.5, %max.10), metadata={op_name="max"}
+}
+
+%relu_2.5 (Arg_0.7: f32[32,14,14,256]) -> f32[32,14,14,256] {
+  %Arg_0.7 = f32[32,14,14,256]{3,2,1,0} parameter(0)
+  %constant.14 = f32[] constant(0)
+  %max.14 = f32[32,14,14,256]{3,2,1,0} broadcast(%constant.14), dimensions={}, metadata={op_name="max"}
+  ROOT %max.15 = f32[32,14,14,256]{3,2,1,0} maximum(%Arg_0.7, %max.14), metadata={op_name="max"}
+}
+
+%relu_3.6 (Arg_0.9: f32[32,7,7,512]) -> f32[32,7,7,512] {
+  %Arg_0.9 = f32[32,7,7,512]{3,2,1,0} parameter(0)
+  %constant.16 = f32[] constant(0)
+  %max.18 = f32[32,7,7,512]{3,2,1,0} broadcast(%constant.16), dimensions={}, metadata={op_name="max"}
+  ROOT %max.19 = f32[32,7,7,512]{3,2,1,0} maximum(%Arg_0.9, %max.18), metadata={op_name="max"}
+}
+
+%region_1.7 (reduce_sum.3: f32[], reduce_sum.4: f32[]) -> f32[] {
+  %reduce_sum.3 = f32[] parameter(0), metadata={op_name="reduce_sum"}
+  %reduce_sum.4 = f32[] parameter(1), metadata={op_name="reduce_sum"}
+  ROOT %reduce_sum.5 = f32[] add(%reduce_sum.3, %reduce_sum.4), metadata={op_name="jit(predict_step)/ResNet/reduce_sum" stack_frame_id=8}
+}
+
+ENTRY %main.8 (variables__batch_stats____ResNetBlock_0____BatchNorm_0____mean__.1: f32[64], variables__batch_stats____ResNetBlock_0____BatchNorm_0____var__.1: f32[64], variables__batch_stats____ResNetBlock_0____BatchNorm_1____mean__.1: f32[64], variables__batch_stats____ResNetBlock_0____BatchNorm_1____var__.1: f32[64], variables__batch_stats____ResNetBlock_1____BatchNorm_0____mean__.1: f32[64], variables__batch_stats____ResNetBlock_1____BatchNorm_0____var__.1: f32[64], variables__batch_stats____ResNetBlock_1____BatchNorm_1____mean__.1: f32[64], variables__batch_stats____ResNetBlock_1____BatchNorm_1____var__.1: f32[64], variables__batch_stats____ResNetBlock_2____BatchNorm_0____mean__.1: f32[128], variables__batch_stats____ResNetBlock_2____BatchNorm_0____var__.1: f32[128], variables__batch_stats____ResNetBlock_2____BatchNorm_1____mean__.1: f32[128], variables__batch_stats____ResNetBlock_2____BatchNorm_1____var__.1: f32[128], variables__batch_stats____ResNetBlock_2____norm_proj____mean__.1: f32[128], variables__batch_stats____ResNetBlock_2____norm_proj____var__.1: f32[128], variables__batch_stats____ResNetBlock_3____BatchNorm_0____mean__.1: f32[128], variables__batch_stats____ResNetBlock_3____BatchNorm_0____var__.1: f32[128], variables__batch_stats____ResNetBlock_3____BatchNorm_1____mean__.1: f32[128], variables__batch_stats____ResNetBlock_3____BatchNorm_1____var__.1: f32[128], variables__batch_stats____ResNetBlock_4____BatchNorm_0____mean__.1: f32[256], variables__batch_stats____ResNetBlock_4____BatchNorm_0____var__.1: f32[256], variables__batch_stats____ResNetBlock_4____BatchNorm_1____mean__.1: f32[256], variables__batch_stats____ResNetBlock_4____BatchNorm_1____var__.1: f32[256], variables__batch_stats____ResNetBlock_4____norm_proj____mean__.1: f32[256], variables__batch_stats____ResNetBlock_4____norm_proj____var__.1: f32[256], variables__batch_stats____ResNetBlock_5____BatchNorm_0____mean__.1: f32[256], variables__batch_stats____ResNetBlock_5____BatchNorm_0____var__.1: f32[256], variables__batch_stats____ResNetBlock_5____BatchNorm_1____mean__.1: f32[256], variables__batch_stats____ResNetBlock_5____BatchNorm_1____var__.1: f32[256], variables__batch_stats____ResNetBlock_6____BatchNorm_0____mean__.1: f32[512], variables__batch_stats____ResNetBlock_6____BatchNorm_0____var__.1: f32[512], variables__batch_stats____ResNetBlock_6____BatchNorm_1____mean__.1: f32[512], variables__batch_stats____ResNetBlock_6____BatchNorm_1____var__.1: f32[512], variables__batch_stats____ResNetBlock_6____norm_proj____mean__.1: f32[512], variables__batch_stats____ResNetBlock_6____norm_proj____var__.1: f32[512], variables__batch_stats____ResNetBlock_7____BatchNorm_0____mean__.1: f32[512], variables__batch_stats____ResNetBlock_7____BatchNorm_0____var__.1: f32[512], variables__batch_stats____ResNetBlock_7____BatchNorm_1____mean__.1: f32[512], variables__batch_stats____ResNetBlock_7____BatchNorm_1____var__.1: f32[512], variables__batch_stats____bn_init____mean__.1: f32[64], variables__batch_stats____bn_init____var__.1: f32[64], variables__params____Dense_0____bias__.1: f32[10], variables__params____Dense_0____kernel__.1: f32[512,10], variables__params____ResNetBlock_0____BatchNorm_0____bias__.1: f32[64], variables__params____ResNetBlock_0____BatchNorm_0____scale__.1: f32[64], variables__params____ResNetBlock_0____BatchNorm_1____bias__.1: f32[64], variables__params____ResNetBlock_0____BatchNorm_1____scale__.1: f32[64], variables__params____ResNetBlock_0____Conv_0____kernel__.1: f32[3,3,64,64], variables__params____ResNetBlock_0____Conv_1____kernel__.1: f32[3,3,64,64], variables__params____ResNetBlock_1____BatchNorm_0____bias__.1: f32[64], variables__params____ResNetBlock_1____BatchNorm_0____scale__.1: f32[64], variables__params____ResNetBlock_1____BatchNorm_1____bias__.1: f32[64], variables__params____ResNetBlock_1____BatchNorm_1____scale__.1: f32[64], variables__params____ResNetBlock_1____Conv_0____kernel__.1: f32[3,3,64,64], variables__params____ResNetBlock_1____Conv_1____kernel__.1: f32[3,3,64,64], variables__params____ResNetBlock_2____BatchNorm_0____bias__.1: f32[128], variables__params____ResNetBlock_2____BatchNorm_0____scale__.1: f32[128], variables__params____ResNetBlock_2____BatchNorm_1____bias__.1: f32[128], variables__params____ResNetBlock_2____BatchNorm_1____scale__.1: f32[128], variables__params____ResNetBlock_2____Conv_0____kernel__.1: f32[3,3,64,128], variables__params____ResNetBlock_2____Conv_1____kernel__.1: f32[3,3,128,128], variables__params____ResNetBlock_2____conv_proj____kernel__.1: f32[1,1,64,128], variables__params____ResNetBlock_2____norm_proj____bias__.1: f32[128], variables__params____ResNetBlock_2____norm_proj____scale__.1: f32[128], variables__params____ResNetBlock_3____BatchNorm_0____bias__.1: f32[128], variables__params____ResNetBlock_3____BatchNorm_0____scale__.1: f32[128], variables__params____ResNetBlock_3____BatchNorm_1____bias__.1: f32[128], variables__params____ResNetBlock_3____BatchNorm_1____scale__.1: f32[128], variables__params____ResNetBlock_3____Conv_0____kernel__.1: f32[3,3,128,128], variables__params____ResNetBlock_3____Conv_1____kernel__.1: f32[3,3,128,128], variables__params____ResNetBlock_4____BatchNorm_0____bias__.1: f32[256], variables__params____ResNetBlock_4____BatchNorm_0____scale__.1: f32[256], variables__params____ResNetBlock_4____BatchNorm_1____bias__.1: f32[256], variables__params____ResNetBlock_4____BatchNorm_1____scale__.1: f32[256], variables__params____ResNetBlock_4____Conv_0____kernel__.1: f32[3,3,128,256], variables__params____ResNetBlock_4____Conv_1____kernel__.1: f32[3,3,256,256], variables__params____ResNetBlock_4____conv_proj____kernel__.1: f32[1,1,128,256], variables__params____ResNetBlock_4____norm_proj____bias__.1: f32[256], variables__params____ResNetBlock_4____norm_proj____scale__.1: f32[256], variables__params____ResNetBlock_5____BatchNorm_0____bias__.1: f32[256], variables__params____ResNetBlock_5____BatchNorm_0____scale__.1: f32[256], variables__params____ResNetBlock_5____BatchNorm_1____bias__.1: f32[256], variables__params____ResNetBlock_5____BatchNorm_1____scale__.1: f32[256], variables__params____ResNetBlock_5____Conv_0____kernel__.1: f32[3,3,256,256], variables__params____ResNetBlock_5____Conv_1____kernel__.1: f32[3,3,256,256], variables__params____ResNetBlock_6____BatchNorm_0____bias__.1: f32[512], variables__params____ResNetBlock_6____BatchNorm_0____scale__.1: f32[512], variables__params____ResNetBlock_6____BatchNorm_1____bias__.1: f32[512], variables__params____ResNetBlock_6____BatchNorm_1____scale__.1: f32[512], variables__params____ResNetBlock_6____Conv_0____kernel__.1: f32[3,3,256,512], variables__params____ResNetBlock_6____Conv_1____kernel__.1: f32[3,3,512,512], variables__params____ResNetBlock_6____conv_proj____kernel__.1: f32[1,1,256,512], variables__params____ResNetBlock_6____norm_proj____bias__.1: f32[512], variables__params____ResNetBlock_6____norm_proj____scale__.1: f32[512], variables__params____ResNetBlock_7____BatchNorm_0____bias__.1: f32[512], variables__params____ResNetBlock_7____BatchNorm_0____scale__.1: f32[512], variables__params____ResNetBlock_7____BatchNorm_1____bias__.1: f32[512], variables__params____ResNetBlock_7____BatchNorm_1____scale__.1: f32[512], variables__params____ResNetBlock_7____Conv_0____kernel__.1: f32[3,3,512,512], variables__params____ResNetBlock_7____Conv_1____kernel__.1: f32[3,3,512,512], variables__params____bn_init____bias__.1: f32[64], variables__params____bn_init____scale__.1: f32[64], variables__params____conv_init____kernel__.1: f32[7,7,3,64], inputs_0_.1: f32[32,224,224,3]) -> f32[32,10] {
+  %inputs_0_.1 = f32[32,224,224,3]{3,2,1,0} parameter(102), sharding={replicated}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {}, {}]>"}, metadata={op_name="inputs[0]"}
+  %variables__params____conv_init____kernel__.1 = f32[7,7,3,64]{3,2,1,0} parameter(101), sharding={devices=[1,1,1,8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {}, {\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'conv_init\'][\'kernel\']"}
+  %conv_general_dilated.20 = f32[32,112,112,64]{3,2,1,0} convolution(%inputs_0_.1, %variables__params____conv_init____kernel__.1), window={size=7x7 stride=2x2 pad=3_3x3_3}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/conv_init/conv_general_dilated" stack_frame_id=10}
+  %variables__batch_stats____bn_init____mean__.1 = f32[64]{0} parameter(38), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'bn_init\'][\'mean\']"}
+  %broadcast_in_dim.40 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__batch_stats____bn_init____mean__.1), metadata={op_name="jit(predict_step)/ResNet/bn_init/broadcast_in_dim" stack_frame_id=13}
+  %sub.80 = f32[1,1,1,64]{3,2,1,0} broadcast(%broadcast_in_dim.40), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/bn_init/sub" stack_frame_id=14}
+  %sub.81 = f32[64]{0} reshape(%sub.80), metadata={op_name="jit(predict_step)/ResNet/bn_init/sub" stack_frame_id=14}
+  %sub.82 = f32[32,112,112,64]{3,2,1,0} broadcast(%sub.81), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/bn_init/sub" stack_frame_id=14}
+  %sub.83 = f32[32,112,112,64]{3,2,1,0} subtract(%conv_general_dilated.20, %sub.82), metadata={op_name="jit(predict_step)/ResNet/bn_init/sub" stack_frame_id=14}
+  %variables__batch_stats____bn_init____var__.1 = f32[64]{0} parameter(39), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'bn_init\'][\'var\']"}
+  %broadcast_in_dim.41 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__batch_stats____bn_init____var__.1), metadata={op_name="jit(predict_step)/ResNet/bn_init/broadcast_in_dim" stack_frame_id=15}
+  %constant.22 = f32[] constant(1e-05)
+  %broadcast.7 = f32[1,1,1,64]{3,2,1,0} broadcast(%constant.22), dimensions={}
+  %add.113 = f32[1,1,1,64]{3,2,1,0} add(%broadcast_in_dim.41, %broadcast.7), metadata={op_name="jit(predict_step)/ResNet/bn_init/add" stack_frame_id=16}
+  %rsqrt.20 = f32[1,1,1,64]{3,2,1,0} rsqrt(%add.113), metadata={op_name="jit(predict_step)/ResNet/bn_init/rsqrt" stack_frame_id=17}
+  %variables__params____bn_init____scale__.1 = f32[64]{0} parameter(100), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'bn_init\'][\'scale\']"}
+  %reshape.41 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__params____bn_init____scale__.1), metadata={op_name="jit(predict_step)/ResNet/bn_init/reshape" stack_frame_id=18}
+  %mul.100 = f32[1,1,1,64]{3,2,1,0} multiply(%rsqrt.20, %reshape.41), metadata={op_name="jit(predict_step)/ResNet/bn_init/mul" stack_frame_id=19}
+  %mul.101 = f32[1,1,1,64]{3,2,1,0} broadcast(%mul.100), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/bn_init/mul" stack_frame_id=20}
+  %mul.102 = f32[64]{0} reshape(%mul.101), metadata={op_name="jit(predict_step)/ResNet/bn_init/mul" stack_frame_id=20}
+  %mul.103 = f32[32,112,112,64]{3,2,1,0} broadcast(%mul.102), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/bn_init/mul" stack_frame_id=20}
+  %mul.104 = f32[32,112,112,64]{3,2,1,0} multiply(%sub.83, %mul.103), metadata={op_name="jit(predict_step)/ResNet/bn_init/mul" stack_frame_id=20}
+  %variables__params____bn_init____bias__.1 = f32[64]{0} parameter(99), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'bn_init\'][\'bias\']"}
+  %reshape.42 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__params____bn_init____bias__.1), metadata={op_name="jit(predict_step)/ResNet/bn_init/reshape" stack_frame_id=21}
+  %add.114 = f32[1,1,1,64]{3,2,1,0} broadcast(%reshape.42), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/bn_init/add" stack_frame_id=22}
+  %add.115 = f32[64]{0} reshape(%add.114), metadata={op_name="jit(predict_step)/ResNet/bn_init/add" stack_frame_id=22}
+  %add.116 = f32[32,112,112,64]{3,2,1,0} broadcast(%add.115), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/bn_init/add" stack_frame_id=22}
+  %add.117 = f32[32,112,112,64]{3,2,1,0} add(%mul.104, %add.116), metadata={op_name="jit(predict_step)/ResNet/bn_init/add" stack_frame_id=22}
+  %jit_relu_.17 = f32[32,112,112,64]{3,2,1,0} call(%add.117), to_apply=%relu.1, metadata={op_name="jit(predict_step)/ResNet/jit(relu)" stack_frame_id=23}
+  %constant.21 = f32[] constant(-inf)
+  %reduce_window_max.7 = f32[32,56,56,64]{3,2,1,0} reduce-window(%jit_relu_.17, %constant.21), window={size=1x3x3x1 stride=1x2x2x1 pad=0_0x0_1x0_1x0_0}, to_apply=%region_0.2, metadata={op_name="jit(predict_step)/ResNet/reduce_window_max" stack_frame_id=7}
+  %variables__params____ResNetBlock_0____Conv_0____kernel__.1 = f32[3,3,64,64]{3,2,1,0} parameter(46), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_0\'][\'Conv_0\'][\'kernel\']"}
+  %conv_general_dilated.21 = f32[32,56,56,64]{3,2,1,0} convolution(%reduce_window_max.7, %variables__params____ResNetBlock_0____Conv_0____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/Conv_0/conv_general_dilated" stack_frame_id=26}
+  %variables__batch_stats____ResNetBlock_0____BatchNorm_0____mean__.1 = f32[64]{0} parameter(0), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_0\'][\'BatchNorm_0\'][\'mean\']"}
+  %broadcast_in_dim.42 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_0____BatchNorm_0____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/broadcast_in_dim" stack_frame_id=29}
+  %sub.84 = f32[1,1,1,64]{3,2,1,0} broadcast(%broadcast_in_dim.42), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.85 = f32[64]{0} reshape(%sub.84), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.86 = f32[32,56,56,64]{3,2,1,0} broadcast(%sub.85), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.87 = f32[32,56,56,64]{3,2,1,0} subtract(%conv_general_dilated.21, %sub.86), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/sub" stack_frame_id=30}
+  %variables__batch_stats____ResNetBlock_0____BatchNorm_0____var__.1 = f32[64]{0} parameter(1), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_0\'][\'BatchNorm_0\'][\'var\']"}
+  %broadcast_in_dim.43 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_0____BatchNorm_0____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/broadcast_in_dim" stack_frame_id=31}
+  %add.118 = f32[1,1,1,64]{3,2,1,0} add(%broadcast_in_dim.43, %broadcast.7), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/add" stack_frame_id=32}
+  %rsqrt.21 = f32[1,1,1,64]{3,2,1,0} rsqrt(%add.118), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/rsqrt" stack_frame_id=33}
+  %variables__params____ResNetBlock_0____BatchNorm_0____scale__.1 = f32[64]{0} parameter(43), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_0\'][\'BatchNorm_0\'][\'scale\']"}
+  %reshape.43 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__params____ResNetBlock_0____BatchNorm_0____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/reshape" stack_frame_id=34}
+  %mul.105 = f32[1,1,1,64]{3,2,1,0} multiply(%rsqrt.21, %reshape.43), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/mul" stack_frame_id=35}
+  %mul.106 = f32[1,1,1,64]{3,2,1,0} broadcast(%mul.105), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.107 = f32[64]{0} reshape(%mul.106), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.108 = f32[32,56,56,64]{3,2,1,0} broadcast(%mul.107), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.109 = f32[32,56,56,64]{3,2,1,0} multiply(%sub.87, %mul.108), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/mul" stack_frame_id=36}
+  %variables__params____ResNetBlock_0____BatchNorm_0____bias__.1 = f32[64]{0} parameter(42), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_0\'][\'BatchNorm_0\'][\'bias\']"}
+  %reshape.44 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__params____ResNetBlock_0____BatchNorm_0____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/reshape" stack_frame_id=37}
+  %add.119 = f32[1,1,1,64]{3,2,1,0} broadcast(%reshape.44), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/add" stack_frame_id=38}
+  %add.120 = f32[64]{0} reshape(%add.119), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/add" stack_frame_id=38}
+  %add.121 = f32[32,56,56,64]{3,2,1,0} broadcast(%add.120), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/add" stack_frame_id=38}
+  %add.122 = f32[32,56,56,64]{3,2,1,0} add(%mul.109, %add.121), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_0/add" stack_frame_id=38}
+  %jit_relu_.18 = f32[32,56,56,64]{3,2,1,0} call(%add.122), to_apply=%relu_0.3, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/jit(relu)" stack_frame_id=39}
+  %variables__params____ResNetBlock_0____Conv_1____kernel__.1 = f32[3,3,64,64]{3,2,1,0} parameter(47), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_0\'][\'Conv_1\'][\'kernel\']"}
+  %conv_general_dilated.22 = f32[32,56,56,64]{3,2,1,0} convolution(%jit_relu_.18, %variables__params____ResNetBlock_0____Conv_1____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/Conv_1/conv_general_dilated" stack_frame_id=41}
+  %variables__batch_stats____ResNetBlock_0____BatchNorm_1____mean__.1 = f32[64]{0} parameter(2), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_0\'][\'BatchNorm_1\'][\'mean\']"}
+  %broadcast_in_dim.44 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_0____BatchNorm_1____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/broadcast_in_dim" stack_frame_id=44}
+  %sub.88 = f32[1,1,1,64]{3,2,1,0} broadcast(%broadcast_in_dim.44), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.89 = f32[64]{0} reshape(%sub.88), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.90 = f32[32,56,56,64]{3,2,1,0} broadcast(%sub.89), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.91 = f32[32,56,56,64]{3,2,1,0} subtract(%conv_general_dilated.22, %sub.90), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/sub" stack_frame_id=45}
+  %variables__batch_stats____ResNetBlock_0____BatchNorm_1____var__.1 = f32[64]{0} parameter(3), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_0\'][\'BatchNorm_1\'][\'var\']"}
+  %broadcast_in_dim.45 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_0____BatchNorm_1____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/broadcast_in_dim" stack_frame_id=46}
+  %add.123 = f32[1,1,1,64]{3,2,1,0} add(%broadcast_in_dim.45, %broadcast.7), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/add" stack_frame_id=47}
+  %rsqrt.22 = f32[1,1,1,64]{3,2,1,0} rsqrt(%add.123), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/rsqrt" stack_frame_id=48}
+  %variables__params____ResNetBlock_0____BatchNorm_1____scale__.1 = f32[64]{0} parameter(45), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_0\'][\'BatchNorm_1\'][\'scale\']"}
+  %reshape.45 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__params____ResNetBlock_0____BatchNorm_1____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/reshape" stack_frame_id=49}
+  %mul.110 = f32[1,1,1,64]{3,2,1,0} multiply(%rsqrt.22, %reshape.45), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/mul" stack_frame_id=50}
+  %mul.111 = f32[1,1,1,64]{3,2,1,0} broadcast(%mul.110), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.112 = f32[64]{0} reshape(%mul.111), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.113 = f32[32,56,56,64]{3,2,1,0} broadcast(%mul.112), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.114 = f32[32,56,56,64]{3,2,1,0} multiply(%sub.91, %mul.113), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/mul" stack_frame_id=51}
+  %variables__params____ResNetBlock_0____BatchNorm_1____bias__.1 = f32[64]{0} parameter(44), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_0\'][\'BatchNorm_1\'][\'bias\']"}
+  %reshape.46 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__params____ResNetBlock_0____BatchNorm_1____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/reshape" stack_frame_id=52}
+  %add.124 = f32[1,1,1,64]{3,2,1,0} broadcast(%reshape.46), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/add" stack_frame_id=53}
+  %add.125 = f32[64]{0} reshape(%add.124), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/add" stack_frame_id=53}
+  %add.126 = f32[32,56,56,64]{3,2,1,0} broadcast(%add.125), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/add" stack_frame_id=53}
+  %add.127 = f32[32,56,56,64]{3,2,1,0} add(%mul.114, %add.126), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/BatchNorm_1/add" stack_frame_id=53}
+  %add.128 = f32[32,56,56,64]{3,2,1,0} add(%reduce_window_max.7, %add.127), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/add" stack_frame_id=54}
+  %jit_relu_.19 = f32[32,56,56,64]{3,2,1,0} call(%add.128), to_apply=%relu_0.3, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_0/jit(relu)" stack_frame_id=55}
+  %variables__params____ResNetBlock_1____Conv_0____kernel__.1 = f32[3,3,64,64]{3,2,1,0} parameter(52), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_1\'][\'Conv_0\'][\'kernel\']"}
+  %conv_general_dilated.23 = f32[32,56,56,64]{3,2,1,0} convolution(%jit_relu_.19, %variables__params____ResNetBlock_1____Conv_0____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/Conv_0/conv_general_dilated" stack_frame_id=26}
+  %variables__batch_stats____ResNetBlock_1____BatchNorm_0____mean__.1 = f32[64]{0} parameter(4), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_1\'][\'BatchNorm_0\'][\'mean\']"}
+  %broadcast_in_dim.46 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_1____BatchNorm_0____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/broadcast_in_dim" stack_frame_id=29}
+  %sub.92 = f32[1,1,1,64]{3,2,1,0} broadcast(%broadcast_in_dim.46), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.93 = f32[64]{0} reshape(%sub.92), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.94 = f32[32,56,56,64]{3,2,1,0} broadcast(%sub.93), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.95 = f32[32,56,56,64]{3,2,1,0} subtract(%conv_general_dilated.23, %sub.94), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/sub" stack_frame_id=30}
+  %variables__batch_stats____ResNetBlock_1____BatchNorm_0____var__.1 = f32[64]{0} parameter(5), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_1\'][\'BatchNorm_0\'][\'var\']"}
+  %broadcast_in_dim.47 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_1____BatchNorm_0____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/broadcast_in_dim" stack_frame_id=31}
+  %add.129 = f32[1,1,1,64]{3,2,1,0} add(%broadcast_in_dim.47, %broadcast.7), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/add" stack_frame_id=32}
+  %rsqrt.23 = f32[1,1,1,64]{3,2,1,0} rsqrt(%add.129), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/rsqrt" stack_frame_id=33}
+  %variables__params____ResNetBlock_1____BatchNorm_0____scale__.1 = f32[64]{0} parameter(49), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_1\'][\'BatchNorm_0\'][\'scale\']"}
+  %reshape.47 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__params____ResNetBlock_1____BatchNorm_0____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/reshape" stack_frame_id=34}
+  %mul.115 = f32[1,1,1,64]{3,2,1,0} multiply(%rsqrt.23, %reshape.47), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/mul" stack_frame_id=35}
+  %mul.116 = f32[1,1,1,64]{3,2,1,0} broadcast(%mul.115), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.117 = f32[64]{0} reshape(%mul.116), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.118 = f32[32,56,56,64]{3,2,1,0} broadcast(%mul.117), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.119 = f32[32,56,56,64]{3,2,1,0} multiply(%sub.95, %mul.118), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/mul" stack_frame_id=36}
+  %variables__params____ResNetBlock_1____BatchNorm_0____bias__.1 = f32[64]{0} parameter(48), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_1\'][\'BatchNorm_0\'][\'bias\']"}
+  %reshape.48 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__params____ResNetBlock_1____BatchNorm_0____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/reshape" stack_frame_id=37}
+  %add.130 = f32[1,1,1,64]{3,2,1,0} broadcast(%reshape.48), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/add" stack_frame_id=38}
+  %add.131 = f32[64]{0} reshape(%add.130), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/add" stack_frame_id=38}
+  %add.132 = f32[32,56,56,64]{3,2,1,0} broadcast(%add.131), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/add" stack_frame_id=38}
+  %add.133 = f32[32,56,56,64]{3,2,1,0} add(%mul.119, %add.132), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_0/add" stack_frame_id=38}
+  %jit_relu_.20 = f32[32,56,56,64]{3,2,1,0} call(%add.133), to_apply=%relu_0.3, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/jit(relu)" stack_frame_id=39}
+  %variables__params____ResNetBlock_1____Conv_1____kernel__.1 = f32[3,3,64,64]{3,2,1,0} parameter(53), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_1\'][\'Conv_1\'][\'kernel\']"}
+  %conv_general_dilated.24 = f32[32,56,56,64]{3,2,1,0} convolution(%jit_relu_.20, %variables__params____ResNetBlock_1____Conv_1____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/Conv_1/conv_general_dilated" stack_frame_id=41}
+  %variables__batch_stats____ResNetBlock_1____BatchNorm_1____mean__.1 = f32[64]{0} parameter(6), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_1\'][\'BatchNorm_1\'][\'mean\']"}
+  %broadcast_in_dim.48 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_1____BatchNorm_1____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/broadcast_in_dim" stack_frame_id=44}
+  %sub.96 = f32[1,1,1,64]{3,2,1,0} broadcast(%broadcast_in_dim.48), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.97 = f32[64]{0} reshape(%sub.96), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.98 = f32[32,56,56,64]{3,2,1,0} broadcast(%sub.97), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.99 = f32[32,56,56,64]{3,2,1,0} subtract(%conv_general_dilated.24, %sub.98), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/sub" stack_frame_id=45}
+  %variables__batch_stats____ResNetBlock_1____BatchNorm_1____var__.1 = f32[64]{0} parameter(7), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_1\'][\'BatchNorm_1\'][\'var\']"}
+  %broadcast_in_dim.49 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_1____BatchNorm_1____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/broadcast_in_dim" stack_frame_id=46}
+  %add.134 = f32[1,1,1,64]{3,2,1,0} add(%broadcast_in_dim.49, %broadcast.7), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/add" stack_frame_id=47}
+  %rsqrt.24 = f32[1,1,1,64]{3,2,1,0} rsqrt(%add.134), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/rsqrt" stack_frame_id=48}
+  %variables__params____ResNetBlock_1____BatchNorm_1____scale__.1 = f32[64]{0} parameter(51), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_1\'][\'BatchNorm_1\'][\'scale\']"}
+  %reshape.49 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__params____ResNetBlock_1____BatchNorm_1____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/reshape" stack_frame_id=49}
+  %mul.120 = f32[1,1,1,64]{3,2,1,0} multiply(%rsqrt.24, %reshape.49), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/mul" stack_frame_id=50}
+  %mul.121 = f32[1,1,1,64]{3,2,1,0} broadcast(%mul.120), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.122 = f32[64]{0} reshape(%mul.121), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.123 = f32[32,56,56,64]{3,2,1,0} broadcast(%mul.122), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.124 = f32[32,56,56,64]{3,2,1,0} multiply(%sub.99, %mul.123), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/mul" stack_frame_id=51}
+  %variables__params____ResNetBlock_1____BatchNorm_1____bias__.1 = f32[64]{0} parameter(50), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_1\'][\'BatchNorm_1\'][\'bias\']"}
+  %reshape.50 = f32[1,1,1,64]{3,2,1,0} reshape(%variables__params____ResNetBlock_1____BatchNorm_1____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/reshape" stack_frame_id=52}
+  %add.135 = f32[1,1,1,64]{3,2,1,0} broadcast(%reshape.50), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/add" stack_frame_id=53}
+  %add.136 = f32[64]{0} reshape(%add.135), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/add" stack_frame_id=53}
+  %add.137 = f32[32,56,56,64]{3,2,1,0} broadcast(%add.136), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/add" stack_frame_id=53}
+  %add.138 = f32[32,56,56,64]{3,2,1,0} add(%mul.124, %add.137), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/BatchNorm_1/add" stack_frame_id=53}
+  %add.139 = f32[32,56,56,64]{3,2,1,0} add(%jit_relu_.19, %add.138), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/add" stack_frame_id=54}
+  %jit_relu_.21 = f32[32,56,56,64]{3,2,1,0} call(%add.139), to_apply=%relu_0.3, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_1/jit(relu)" stack_frame_id=55}
+  %variables__params____ResNetBlock_2____conv_proj____kernel__.1 = f32[1,1,64,128]{3,2,1,0} parameter(60), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_2\'][\'conv_proj\'][\'kernel\']"}
+  %conv_general_dilated.27 = f32[32,28,28,128]{3,2,1,0} convolution(%jit_relu_.21, %variables__params____ResNetBlock_2____conv_proj____kernel__.1), window={size=1x1 stride=2x2}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/conv_proj/conv_general_dilated" stack_frame_id=57}
+  %variables__batch_stats____ResNetBlock_2____norm_proj____mean__.1 = f32[128]{0} parameter(12), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_2\'][\'norm_proj\'][\'mean\']"}
+  %broadcast_in_dim.54 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_2____norm_proj____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/broadcast_in_dim" stack_frame_id=60}
+  %sub.108 = f32[1,1,1,128]{3,2,1,0} broadcast(%broadcast_in_dim.54), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/sub" stack_frame_id=61}
+  %sub.109 = f32[128]{0} reshape(%sub.108), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/sub" stack_frame_id=61}
+  %sub.110 = f32[32,28,28,128]{3,2,1,0} broadcast(%sub.109), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/sub" stack_frame_id=61}
+  %sub.111 = f32[32,28,28,128]{3,2,1,0} subtract(%conv_general_dilated.27, %sub.110), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/sub" stack_frame_id=61}
+  %variables__batch_stats____ResNetBlock_2____norm_proj____var__.1 = f32[128]{0} parameter(13), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_2\'][\'norm_proj\'][\'var\']"}
+  %broadcast_in_dim.55 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_2____norm_proj____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/broadcast_in_dim" stack_frame_id=62}
+  %constant.20 = f32[] constant(1e-05)
+  %broadcast.6 = f32[1,1,1,128]{3,2,1,0} broadcast(%constant.20), dimensions={}
+  %add.150 = f32[1,1,1,128]{3,2,1,0} add(%broadcast_in_dim.55, %broadcast.6), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/add" stack_frame_id=63}
+  %rsqrt.27 = f32[1,1,1,128]{3,2,1,0} rsqrt(%add.150), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/rsqrt" stack_frame_id=64}
+  %variables__params____ResNetBlock_2____norm_proj____scale__.1 = f32[128]{0} parameter(62), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_2\'][\'norm_proj\'][\'scale\']"}
+  %reshape.55 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__params____ResNetBlock_2____norm_proj____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/reshape" stack_frame_id=65}
+  %mul.135 = f32[1,1,1,128]{3,2,1,0} multiply(%rsqrt.27, %reshape.55), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/mul" stack_frame_id=66}
+  %mul.136 = f32[1,1,1,128]{3,2,1,0} broadcast(%mul.135), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/mul" stack_frame_id=67}
+  %mul.137 = f32[128]{0} reshape(%mul.136), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/mul" stack_frame_id=67}
+  %mul.138 = f32[32,28,28,128]{3,2,1,0} broadcast(%mul.137), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/mul" stack_frame_id=67}
+  %mul.139 = f32[32,28,28,128]{3,2,1,0} multiply(%sub.111, %mul.138), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/mul" stack_frame_id=67}
+  %variables__params____ResNetBlock_2____norm_proj____bias__.1 = f32[128]{0} parameter(61), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_2\'][\'norm_proj\'][\'bias\']"}
+  %reshape.56 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__params____ResNetBlock_2____norm_proj____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/reshape" stack_frame_id=68}
+  %add.151 = f32[1,1,1,128]{3,2,1,0} broadcast(%reshape.56), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/add" stack_frame_id=69}
+  %add.152 = f32[128]{0} reshape(%add.151), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/add" stack_frame_id=69}
+  %add.153 = f32[32,28,28,128]{3,2,1,0} broadcast(%add.152), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/add" stack_frame_id=69}
+  %add.154 = f32[32,28,28,128]{3,2,1,0} add(%mul.139, %add.153), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/norm_proj/add" stack_frame_id=69}
+  %variables__params____ResNetBlock_2____Conv_0____kernel__.1 = f32[3,3,64,128]{3,2,1,0} parameter(58), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_2\'][\'Conv_0\'][\'kernel\']"}
+  %conv_general_dilated.25 = f32[32,28,28,128]{3,2,1,0} convolution(%jit_relu_.21, %variables__params____ResNetBlock_2____Conv_0____kernel__.1), window={size=3x3 stride=2x2 pad=0_1x0_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/Conv_0/conv_general_dilated" stack_frame_id=26}
+  %variables__batch_stats____ResNetBlock_2____BatchNorm_0____mean__.1 = f32[128]{0} parameter(8), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_2\'][\'BatchNorm_0\'][\'mean\']"}
+  %broadcast_in_dim.50 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_2____BatchNorm_0____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/broadcast_in_dim" stack_frame_id=29}
+  %sub.100 = f32[1,1,1,128]{3,2,1,0} broadcast(%broadcast_in_dim.50), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.101 = f32[128]{0} reshape(%sub.100), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.102 = f32[32,28,28,128]{3,2,1,0} broadcast(%sub.101), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.103 = f32[32,28,28,128]{3,2,1,0} subtract(%conv_general_dilated.25, %sub.102), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/sub" stack_frame_id=30}
+  %variables__batch_stats____ResNetBlock_2____BatchNorm_0____var__.1 = f32[128]{0} parameter(9), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_2\'][\'BatchNorm_0\'][\'var\']"}
+  %broadcast_in_dim.51 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_2____BatchNorm_0____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/broadcast_in_dim" stack_frame_id=31}
+  %add.140 = f32[1,1,1,128]{3,2,1,0} add(%broadcast_in_dim.51, %broadcast.6), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/add" stack_frame_id=32}
+  %rsqrt.25 = f32[1,1,1,128]{3,2,1,0} rsqrt(%add.140), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/rsqrt" stack_frame_id=33}
+  %variables__params____ResNetBlock_2____BatchNorm_0____scale__.1 = f32[128]{0} parameter(55), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_2\'][\'BatchNorm_0\'][\'scale\']"}
+  %reshape.51 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__params____ResNetBlock_2____BatchNorm_0____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/reshape" stack_frame_id=34}
+  %mul.125 = f32[1,1,1,128]{3,2,1,0} multiply(%rsqrt.25, %reshape.51), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/mul" stack_frame_id=35}
+  %mul.126 = f32[1,1,1,128]{3,2,1,0} broadcast(%mul.125), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.127 = f32[128]{0} reshape(%mul.126), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.128 = f32[32,28,28,128]{3,2,1,0} broadcast(%mul.127), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.129 = f32[32,28,28,128]{3,2,1,0} multiply(%sub.103, %mul.128), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/mul" stack_frame_id=36}
+  %variables__params____ResNetBlock_2____BatchNorm_0____bias__.1 = f32[128]{0} parameter(54), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_2\'][\'BatchNorm_0\'][\'bias\']"}
+  %reshape.52 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__params____ResNetBlock_2____BatchNorm_0____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/reshape" stack_frame_id=37}
+  %add.141 = f32[1,1,1,128]{3,2,1,0} broadcast(%reshape.52), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/add" stack_frame_id=38}
+  %add.142 = f32[128]{0} reshape(%add.141), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/add" stack_frame_id=38}
+  %add.143 = f32[32,28,28,128]{3,2,1,0} broadcast(%add.142), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/add" stack_frame_id=38}
+  %add.144 = f32[32,28,28,128]{3,2,1,0} add(%mul.129, %add.143), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_0/add" stack_frame_id=38}
+  %jit_relu_.22 = f32[32,28,28,128]{3,2,1,0} call(%add.144), to_apply=%relu_1.4, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/jit(relu)" stack_frame_id=39}
+  %variables__params____ResNetBlock_2____Conv_1____kernel__.1 = f32[3,3,128,128]{3,2,1,0} parameter(59), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_2\'][\'Conv_1\'][\'kernel\']"}
+  %conv_general_dilated.26 = f32[32,28,28,128]{3,2,1,0} convolution(%jit_relu_.22, %variables__params____ResNetBlock_2____Conv_1____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/Conv_1/conv_general_dilated" stack_frame_id=41}
+  %variables__batch_stats____ResNetBlock_2____BatchNorm_1____mean__.1 = f32[128]{0} parameter(10), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_2\'][\'BatchNorm_1\'][\'mean\']"}
+  %broadcast_in_dim.52 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_2____BatchNorm_1____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/broadcast_in_dim" stack_frame_id=44}
+  %sub.104 = f32[1,1,1,128]{3,2,1,0} broadcast(%broadcast_in_dim.52), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.105 = f32[128]{0} reshape(%sub.104), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.106 = f32[32,28,28,128]{3,2,1,0} broadcast(%sub.105), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.107 = f32[32,28,28,128]{3,2,1,0} subtract(%conv_general_dilated.26, %sub.106), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/sub" stack_frame_id=45}
+  %variables__batch_stats____ResNetBlock_2____BatchNorm_1____var__.1 = f32[128]{0} parameter(11), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_2\'][\'BatchNorm_1\'][\'var\']"}
+  %broadcast_in_dim.53 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_2____BatchNorm_1____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/broadcast_in_dim" stack_frame_id=46}
+  %add.145 = f32[1,1,1,128]{3,2,1,0} add(%broadcast_in_dim.53, %broadcast.6), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/add" stack_frame_id=47}
+  %rsqrt.26 = f32[1,1,1,128]{3,2,1,0} rsqrt(%add.145), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/rsqrt" stack_frame_id=48}
+  %variables__params____ResNetBlock_2____BatchNorm_1____scale__.1 = f32[128]{0} parameter(57), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_2\'][\'BatchNorm_1\'][\'scale\']"}
+  %reshape.53 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__params____ResNetBlock_2____BatchNorm_1____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/reshape" stack_frame_id=49}
+  %mul.130 = f32[1,1,1,128]{3,2,1,0} multiply(%rsqrt.26, %reshape.53), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/mul" stack_frame_id=50}
+  %mul.131 = f32[1,1,1,128]{3,2,1,0} broadcast(%mul.130), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.132 = f32[128]{0} reshape(%mul.131), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.133 = f32[32,28,28,128]{3,2,1,0} broadcast(%mul.132), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.134 = f32[32,28,28,128]{3,2,1,0} multiply(%sub.107, %mul.133), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/mul" stack_frame_id=51}
+  %variables__params____ResNetBlock_2____BatchNorm_1____bias__.1 = f32[128]{0} parameter(56), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_2\'][\'BatchNorm_1\'][\'bias\']"}
+  %reshape.54 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__params____ResNetBlock_2____BatchNorm_1____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/reshape" stack_frame_id=52}
+  %add.146 = f32[1,1,1,128]{3,2,1,0} broadcast(%reshape.54), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/add" stack_frame_id=53}
+  %add.147 = f32[128]{0} reshape(%add.146), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/add" stack_frame_id=53}
+  %add.148 = f32[32,28,28,128]{3,2,1,0} broadcast(%add.147), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/add" stack_frame_id=53}
+  %add.149 = f32[32,28,28,128]{3,2,1,0} add(%mul.134, %add.148), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/BatchNorm_1/add" stack_frame_id=53}
+  %add.155 = f32[32,28,28,128]{3,2,1,0} add(%add.154, %add.149), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/add" stack_frame_id=54}
+  %jit_relu_.23 = f32[32,28,28,128]{3,2,1,0} call(%add.155), to_apply=%relu_1.4, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_2/jit(relu)" stack_frame_id=55}
+  %variables__params____ResNetBlock_3____Conv_0____kernel__.1 = f32[3,3,128,128]{3,2,1,0} parameter(67), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_3\'][\'Conv_0\'][\'kernel\']"}
+  %conv_general_dilated.28 = f32[32,28,28,128]{3,2,1,0} convolution(%jit_relu_.23, %variables__params____ResNetBlock_3____Conv_0____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/Conv_0/conv_general_dilated" stack_frame_id=26}
+  %variables__batch_stats____ResNetBlock_3____BatchNorm_0____mean__.1 = f32[128]{0} parameter(14), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_3\'][\'BatchNorm_0\'][\'mean\']"}
+  %broadcast_in_dim.56 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_3____BatchNorm_0____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/broadcast_in_dim" stack_frame_id=29}
+  %sub.112 = f32[1,1,1,128]{3,2,1,0} broadcast(%broadcast_in_dim.56), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.113 = f32[128]{0} reshape(%sub.112), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.114 = f32[32,28,28,128]{3,2,1,0} broadcast(%sub.113), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.115 = f32[32,28,28,128]{3,2,1,0} subtract(%conv_general_dilated.28, %sub.114), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/sub" stack_frame_id=30}
+  %variables__batch_stats____ResNetBlock_3____BatchNorm_0____var__.1 = f32[128]{0} parameter(15), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_3\'][\'BatchNorm_0\'][\'var\']"}
+  %broadcast_in_dim.57 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_3____BatchNorm_0____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/broadcast_in_dim" stack_frame_id=31}
+  %add.156 = f32[1,1,1,128]{3,2,1,0} add(%broadcast_in_dim.57, %broadcast.6), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/add" stack_frame_id=32}
+  %rsqrt.28 = f32[1,1,1,128]{3,2,1,0} rsqrt(%add.156), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/rsqrt" stack_frame_id=33}
+  %variables__params____ResNetBlock_3____BatchNorm_0____scale__.1 = f32[128]{0} parameter(64), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_3\'][\'BatchNorm_0\'][\'scale\']"}
+  %reshape.57 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__params____ResNetBlock_3____BatchNorm_0____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/reshape" stack_frame_id=34}
+  %mul.140 = f32[1,1,1,128]{3,2,1,0} multiply(%rsqrt.28, %reshape.57), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/mul" stack_frame_id=35}
+  %mul.141 = f32[1,1,1,128]{3,2,1,0} broadcast(%mul.140), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.142 = f32[128]{0} reshape(%mul.141), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.143 = f32[32,28,28,128]{3,2,1,0} broadcast(%mul.142), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.144 = f32[32,28,28,128]{3,2,1,0} multiply(%sub.115, %mul.143), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/mul" stack_frame_id=36}
+  %variables__params____ResNetBlock_3____BatchNorm_0____bias__.1 = f32[128]{0} parameter(63), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_3\'][\'BatchNorm_0\'][\'bias\']"}
+  %reshape.58 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__params____ResNetBlock_3____BatchNorm_0____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/reshape" stack_frame_id=37}
+  %add.157 = f32[1,1,1,128]{3,2,1,0} broadcast(%reshape.58), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/add" stack_frame_id=38}
+  %add.158 = f32[128]{0} reshape(%add.157), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/add" stack_frame_id=38}
+  %add.159 = f32[32,28,28,128]{3,2,1,0} broadcast(%add.158), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/add" stack_frame_id=38}
+  %add.160 = f32[32,28,28,128]{3,2,1,0} add(%mul.144, %add.159), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_0/add" stack_frame_id=38}
+  %jit_relu_.24 = f32[32,28,28,128]{3,2,1,0} call(%add.160), to_apply=%relu_1.4, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/jit(relu)" stack_frame_id=39}
+  %variables__params____ResNetBlock_3____Conv_1____kernel__.1 = f32[3,3,128,128]{3,2,1,0} parameter(68), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_3\'][\'Conv_1\'][\'kernel\']"}
+  %conv_general_dilated.29 = f32[32,28,28,128]{3,2,1,0} convolution(%jit_relu_.24, %variables__params____ResNetBlock_3____Conv_1____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/Conv_1/conv_general_dilated" stack_frame_id=41}
+  %variables__batch_stats____ResNetBlock_3____BatchNorm_1____mean__.1 = f32[128]{0} parameter(16), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_3\'][\'BatchNorm_1\'][\'mean\']"}
+  %broadcast_in_dim.58 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_3____BatchNorm_1____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/broadcast_in_dim" stack_frame_id=44}
+  %sub.116 = f32[1,1,1,128]{3,2,1,0} broadcast(%broadcast_in_dim.58), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.117 = f32[128]{0} reshape(%sub.116), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.118 = f32[32,28,28,128]{3,2,1,0} broadcast(%sub.117), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.119 = f32[32,28,28,128]{3,2,1,0} subtract(%conv_general_dilated.29, %sub.118), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/sub" stack_frame_id=45}
+  %variables__batch_stats____ResNetBlock_3____BatchNorm_1____var__.1 = f32[128]{0} parameter(17), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_3\'][\'BatchNorm_1\'][\'var\']"}
+  %broadcast_in_dim.59 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_3____BatchNorm_1____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/broadcast_in_dim" stack_frame_id=46}
+  %add.161 = f32[1,1,1,128]{3,2,1,0} add(%broadcast_in_dim.59, %broadcast.6), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/add" stack_frame_id=47}
+  %rsqrt.29 = f32[1,1,1,128]{3,2,1,0} rsqrt(%add.161), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/rsqrt" stack_frame_id=48}
+  %variables__params____ResNetBlock_3____BatchNorm_1____scale__.1 = f32[128]{0} parameter(66), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_3\'][\'BatchNorm_1\'][\'scale\']"}
+  %reshape.59 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__params____ResNetBlock_3____BatchNorm_1____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/reshape" stack_frame_id=49}
+  %mul.145 = f32[1,1,1,128]{3,2,1,0} multiply(%rsqrt.29, %reshape.59), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/mul" stack_frame_id=50}
+  %mul.146 = f32[1,1,1,128]{3,2,1,0} broadcast(%mul.145), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.147 = f32[128]{0} reshape(%mul.146), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.148 = f32[32,28,28,128]{3,2,1,0} broadcast(%mul.147), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.149 = f32[32,28,28,128]{3,2,1,0} multiply(%sub.119, %mul.148), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/mul" stack_frame_id=51}
+  %variables__params____ResNetBlock_3____BatchNorm_1____bias__.1 = f32[128]{0} parameter(65), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_3\'][\'BatchNorm_1\'][\'bias\']"}
+  %reshape.60 = f32[1,1,1,128]{3,2,1,0} reshape(%variables__params____ResNetBlock_3____BatchNorm_1____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/reshape" stack_frame_id=52}
+  %add.162 = f32[1,1,1,128]{3,2,1,0} broadcast(%reshape.60), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/add" stack_frame_id=53}
+  %add.163 = f32[128]{0} reshape(%add.162), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/add" stack_frame_id=53}
+  %add.164 = f32[32,28,28,128]{3,2,1,0} broadcast(%add.163), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/add" stack_frame_id=53}
+  %add.165 = f32[32,28,28,128]{3,2,1,0} add(%mul.149, %add.164), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/BatchNorm_1/add" stack_frame_id=53}
+  %add.166 = f32[32,28,28,128]{3,2,1,0} add(%jit_relu_.23, %add.165), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/add" stack_frame_id=54}
+  %jit_relu_.25 = f32[32,28,28,128]{3,2,1,0} call(%add.166), to_apply=%relu_1.4, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_3/jit(relu)" stack_frame_id=55}
+  %variables__params____ResNetBlock_4____conv_proj____kernel__.1 = f32[1,1,128,256]{3,2,1,0} parameter(75), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_4\'][\'conv_proj\'][\'kernel\']"}
+  %conv_general_dilated.32 = f32[32,14,14,256]{3,2,1,0} convolution(%jit_relu_.25, %variables__params____ResNetBlock_4____conv_proj____kernel__.1), window={size=1x1 stride=2x2}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/conv_proj/conv_general_dilated" stack_frame_id=57}
+  %variables__batch_stats____ResNetBlock_4____norm_proj____mean__.1 = f32[256]{0} parameter(22), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_4\'][\'norm_proj\'][\'mean\']"}
+  %broadcast_in_dim.64 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_4____norm_proj____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/broadcast_in_dim" stack_frame_id=60}
+  %sub.128 = f32[1,1,1,256]{3,2,1,0} broadcast(%broadcast_in_dim.64), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/sub" stack_frame_id=61}
+  %sub.129 = f32[256]{0} reshape(%sub.128), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/sub" stack_frame_id=61}
+  %sub.130 = f32[32,14,14,256]{3,2,1,0} broadcast(%sub.129), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/sub" stack_frame_id=61}
+  %sub.131 = f32[32,14,14,256]{3,2,1,0} subtract(%conv_general_dilated.32, %sub.130), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/sub" stack_frame_id=61}
+  %variables__batch_stats____ResNetBlock_4____norm_proj____var__.1 = f32[256]{0} parameter(23), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_4\'][\'norm_proj\'][\'var\']"}
+  %broadcast_in_dim.65 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_4____norm_proj____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/broadcast_in_dim" stack_frame_id=62}
+  %constant.19 = f32[] constant(1e-05)
+  %broadcast.5 = f32[1,1,1,256]{3,2,1,0} broadcast(%constant.19), dimensions={}
+  %add.177 = f32[1,1,1,256]{3,2,1,0} add(%broadcast_in_dim.65, %broadcast.5), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/add" stack_frame_id=63}
+  %rsqrt.32 = f32[1,1,1,256]{3,2,1,0} rsqrt(%add.177), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/rsqrt" stack_frame_id=64}
+  %variables__params____ResNetBlock_4____norm_proj____scale__.1 = f32[256]{0} parameter(77), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_4\'][\'norm_proj\'][\'scale\']"}
+  %reshape.65 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__params____ResNetBlock_4____norm_proj____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/reshape" stack_frame_id=65}
+  %mul.160 = f32[1,1,1,256]{3,2,1,0} multiply(%rsqrt.32, %reshape.65), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/mul" stack_frame_id=66}
+  %mul.161 = f32[1,1,1,256]{3,2,1,0} broadcast(%mul.160), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/mul" stack_frame_id=67}
+  %mul.162 = f32[256]{0} reshape(%mul.161), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/mul" stack_frame_id=67}
+  %mul.163 = f32[32,14,14,256]{3,2,1,0} broadcast(%mul.162), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/mul" stack_frame_id=67}
+  %mul.164 = f32[32,14,14,256]{3,2,1,0} multiply(%sub.131, %mul.163), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/mul" stack_frame_id=67}
+  %variables__params____ResNetBlock_4____norm_proj____bias__.1 = f32[256]{0} parameter(76), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_4\'][\'norm_proj\'][\'bias\']"}
+  %reshape.66 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__params____ResNetBlock_4____norm_proj____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/reshape" stack_frame_id=68}
+  %add.178 = f32[1,1,1,256]{3,2,1,0} broadcast(%reshape.66), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/add" stack_frame_id=69}
+  %add.179 = f32[256]{0} reshape(%add.178), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/add" stack_frame_id=69}
+  %add.180 = f32[32,14,14,256]{3,2,1,0} broadcast(%add.179), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/add" stack_frame_id=69}
+  %add.181 = f32[32,14,14,256]{3,2,1,0} add(%mul.164, %add.180), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/norm_proj/add" stack_frame_id=69}
+  %variables__params____ResNetBlock_4____Conv_0____kernel__.1 = f32[3,3,128,256]{3,2,1,0} parameter(73), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_4\'][\'Conv_0\'][\'kernel\']"}
+  %conv_general_dilated.30 = f32[32,14,14,256]{3,2,1,0} convolution(%jit_relu_.25, %variables__params____ResNetBlock_4____Conv_0____kernel__.1), window={size=3x3 stride=2x2 pad=0_1x0_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/Conv_0/conv_general_dilated" stack_frame_id=26}
+  %variables__batch_stats____ResNetBlock_4____BatchNorm_0____mean__.1 = f32[256]{0} parameter(18), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_4\'][\'BatchNorm_0\'][\'mean\']"}
+  %broadcast_in_dim.60 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_4____BatchNorm_0____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/broadcast_in_dim" stack_frame_id=29}
+  %sub.120 = f32[1,1,1,256]{3,2,1,0} broadcast(%broadcast_in_dim.60), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.121 = f32[256]{0} reshape(%sub.120), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.122 = f32[32,14,14,256]{3,2,1,0} broadcast(%sub.121), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.123 = f32[32,14,14,256]{3,2,1,0} subtract(%conv_general_dilated.30, %sub.122), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/sub" stack_frame_id=30}
+  %variables__batch_stats____ResNetBlock_4____BatchNorm_0____var__.1 = f32[256]{0} parameter(19), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_4\'][\'BatchNorm_0\'][\'var\']"}
+  %broadcast_in_dim.61 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_4____BatchNorm_0____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/broadcast_in_dim" stack_frame_id=31}
+  %add.167 = f32[1,1,1,256]{3,2,1,0} add(%broadcast_in_dim.61, %broadcast.5), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/add" stack_frame_id=32}
+  %rsqrt.30 = f32[1,1,1,256]{3,2,1,0} rsqrt(%add.167), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/rsqrt" stack_frame_id=33}
+  %variables__params____ResNetBlock_4____BatchNorm_0____scale__.1 = f32[256]{0} parameter(70), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_4\'][\'BatchNorm_0\'][\'scale\']"}
+  %reshape.61 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__params____ResNetBlock_4____BatchNorm_0____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/reshape" stack_frame_id=34}
+  %mul.150 = f32[1,1,1,256]{3,2,1,0} multiply(%rsqrt.30, %reshape.61), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/mul" stack_frame_id=35}
+  %mul.151 = f32[1,1,1,256]{3,2,1,0} broadcast(%mul.150), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.152 = f32[256]{0} reshape(%mul.151), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.153 = f32[32,14,14,256]{3,2,1,0} broadcast(%mul.152), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.154 = f32[32,14,14,256]{3,2,1,0} multiply(%sub.123, %mul.153), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/mul" stack_frame_id=36}
+  %variables__params____ResNetBlock_4____BatchNorm_0____bias__.1 = f32[256]{0} parameter(69), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_4\'][\'BatchNorm_0\'][\'bias\']"}
+  %reshape.62 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__params____ResNetBlock_4____BatchNorm_0____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/reshape" stack_frame_id=37}
+  %add.168 = f32[1,1,1,256]{3,2,1,0} broadcast(%reshape.62), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/add" stack_frame_id=38}
+  %add.169 = f32[256]{0} reshape(%add.168), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/add" stack_frame_id=38}
+  %add.170 = f32[32,14,14,256]{3,2,1,0} broadcast(%add.169), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/add" stack_frame_id=38}
+  %add.171 = f32[32,14,14,256]{3,2,1,0} add(%mul.154, %add.170), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_0/add" stack_frame_id=38}
+  %jit_relu_.26 = f32[32,14,14,256]{3,2,1,0} call(%add.171), to_apply=%relu_2.5, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/jit(relu)" stack_frame_id=39}
+  %variables__params____ResNetBlock_4____Conv_1____kernel__.1 = f32[3,3,256,256]{3,2,1,0} parameter(74), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_4\'][\'Conv_1\'][\'kernel\']"}
+  %conv_general_dilated.31 = f32[32,14,14,256]{3,2,1,0} convolution(%jit_relu_.26, %variables__params____ResNetBlock_4____Conv_1____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/Conv_1/conv_general_dilated" stack_frame_id=41}
+  %variables__batch_stats____ResNetBlock_4____BatchNorm_1____mean__.1 = f32[256]{0} parameter(20), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_4\'][\'BatchNorm_1\'][\'mean\']"}
+  %broadcast_in_dim.62 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_4____BatchNorm_1____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/broadcast_in_dim" stack_frame_id=44}
+  %sub.124 = f32[1,1,1,256]{3,2,1,0} broadcast(%broadcast_in_dim.62), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.125 = f32[256]{0} reshape(%sub.124), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.126 = f32[32,14,14,256]{3,2,1,0} broadcast(%sub.125), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.127 = f32[32,14,14,256]{3,2,1,0} subtract(%conv_general_dilated.31, %sub.126), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/sub" stack_frame_id=45}
+  %variables__batch_stats____ResNetBlock_4____BatchNorm_1____var__.1 = f32[256]{0} parameter(21), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_4\'][\'BatchNorm_1\'][\'var\']"}
+  %broadcast_in_dim.63 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_4____BatchNorm_1____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/broadcast_in_dim" stack_frame_id=46}
+  %add.172 = f32[1,1,1,256]{3,2,1,0} add(%broadcast_in_dim.63, %broadcast.5), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/add" stack_frame_id=47}
+  %rsqrt.31 = f32[1,1,1,256]{3,2,1,0} rsqrt(%add.172), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/rsqrt" stack_frame_id=48}
+  %variables__params____ResNetBlock_4____BatchNorm_1____scale__.1 = f32[256]{0} parameter(72), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_4\'][\'BatchNorm_1\'][\'scale\']"}
+  %reshape.63 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__params____ResNetBlock_4____BatchNorm_1____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/reshape" stack_frame_id=49}
+  %mul.155 = f32[1,1,1,256]{3,2,1,0} multiply(%rsqrt.31, %reshape.63), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/mul" stack_frame_id=50}
+  %mul.156 = f32[1,1,1,256]{3,2,1,0} broadcast(%mul.155), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.157 = f32[256]{0} reshape(%mul.156), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.158 = f32[32,14,14,256]{3,2,1,0} broadcast(%mul.157), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.159 = f32[32,14,14,256]{3,2,1,0} multiply(%sub.127, %mul.158), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/mul" stack_frame_id=51}
+  %variables__params____ResNetBlock_4____BatchNorm_1____bias__.1 = f32[256]{0} parameter(71), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_4\'][\'BatchNorm_1\'][\'bias\']"}
+  %reshape.64 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__params____ResNetBlock_4____BatchNorm_1____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/reshape" stack_frame_id=52}
+  %add.173 = f32[1,1,1,256]{3,2,1,0} broadcast(%reshape.64), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/add" stack_frame_id=53}
+  %add.174 = f32[256]{0} reshape(%add.173), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/add" stack_frame_id=53}
+  %add.175 = f32[32,14,14,256]{3,2,1,0} broadcast(%add.174), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/add" stack_frame_id=53}
+  %add.176 = f32[32,14,14,256]{3,2,1,0} add(%mul.159, %add.175), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/BatchNorm_1/add" stack_frame_id=53}
+  %add.182 = f32[32,14,14,256]{3,2,1,0} add(%add.181, %add.176), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/add" stack_frame_id=54}
+  %jit_relu_.27 = f32[32,14,14,256]{3,2,1,0} call(%add.182), to_apply=%relu_2.5, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_4/jit(relu)" stack_frame_id=55}
+  %variables__params____ResNetBlock_5____Conv_0____kernel__.1 = f32[3,3,256,256]{3,2,1,0} parameter(82), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_5\'][\'Conv_0\'][\'kernel\']"}
+  %conv_general_dilated.33 = f32[32,14,14,256]{3,2,1,0} convolution(%jit_relu_.27, %variables__params____ResNetBlock_5____Conv_0____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/Conv_0/conv_general_dilated" stack_frame_id=26}
+  %variables__batch_stats____ResNetBlock_5____BatchNorm_0____mean__.1 = f32[256]{0} parameter(24), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_5\'][\'BatchNorm_0\'][\'mean\']"}
+  %broadcast_in_dim.66 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_5____BatchNorm_0____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/broadcast_in_dim" stack_frame_id=29}
+  %sub.132 = f32[1,1,1,256]{3,2,1,0} broadcast(%broadcast_in_dim.66), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.133 = f32[256]{0} reshape(%sub.132), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.134 = f32[32,14,14,256]{3,2,1,0} broadcast(%sub.133), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.135 = f32[32,14,14,256]{3,2,1,0} subtract(%conv_general_dilated.33, %sub.134), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/sub" stack_frame_id=30}
+  %variables__batch_stats____ResNetBlock_5____BatchNorm_0____var__.1 = f32[256]{0} parameter(25), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_5\'][\'BatchNorm_0\'][\'var\']"}
+  %broadcast_in_dim.67 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_5____BatchNorm_0____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/broadcast_in_dim" stack_frame_id=31}
+  %add.183 = f32[1,1,1,256]{3,2,1,0} add(%broadcast_in_dim.67, %broadcast.5), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/add" stack_frame_id=32}
+  %rsqrt.33 = f32[1,1,1,256]{3,2,1,0} rsqrt(%add.183), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/rsqrt" stack_frame_id=33}
+  %variables__params____ResNetBlock_5____BatchNorm_0____scale__.1 = f32[256]{0} parameter(79), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_5\'][\'BatchNorm_0\'][\'scale\']"}
+  %reshape.67 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__params____ResNetBlock_5____BatchNorm_0____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/reshape" stack_frame_id=34}
+  %mul.165 = f32[1,1,1,256]{3,2,1,0} multiply(%rsqrt.33, %reshape.67), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/mul" stack_frame_id=35}
+  %mul.166 = f32[1,1,1,256]{3,2,1,0} broadcast(%mul.165), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.167 = f32[256]{0} reshape(%mul.166), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.168 = f32[32,14,14,256]{3,2,1,0} broadcast(%mul.167), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.169 = f32[32,14,14,256]{3,2,1,0} multiply(%sub.135, %mul.168), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/mul" stack_frame_id=36}
+  %variables__params____ResNetBlock_5____BatchNorm_0____bias__.1 = f32[256]{0} parameter(78), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_5\'][\'BatchNorm_0\'][\'bias\']"}
+  %reshape.68 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__params____ResNetBlock_5____BatchNorm_0____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/reshape" stack_frame_id=37}
+  %add.184 = f32[1,1,1,256]{3,2,1,0} broadcast(%reshape.68), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/add" stack_frame_id=38}
+  %add.185 = f32[256]{0} reshape(%add.184), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/add" stack_frame_id=38}
+  %add.186 = f32[32,14,14,256]{3,2,1,0} broadcast(%add.185), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/add" stack_frame_id=38}
+  %add.187 = f32[32,14,14,256]{3,2,1,0} add(%mul.169, %add.186), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_0/add" stack_frame_id=38}
+  %jit_relu_.28 = f32[32,14,14,256]{3,2,1,0} call(%add.187), to_apply=%relu_2.5, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/jit(relu)" stack_frame_id=39}
+  %variables__params____ResNetBlock_5____Conv_1____kernel__.1 = f32[3,3,256,256]{3,2,1,0} parameter(83), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_5\'][\'Conv_1\'][\'kernel\']"}
+  %conv_general_dilated.34 = f32[32,14,14,256]{3,2,1,0} convolution(%jit_relu_.28, %variables__params____ResNetBlock_5____Conv_1____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/Conv_1/conv_general_dilated" stack_frame_id=41}
+  %variables__batch_stats____ResNetBlock_5____BatchNorm_1____mean__.1 = f32[256]{0} parameter(26), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_5\'][\'BatchNorm_1\'][\'mean\']"}
+  %broadcast_in_dim.68 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_5____BatchNorm_1____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/broadcast_in_dim" stack_frame_id=44}
+  %sub.136 = f32[1,1,1,256]{3,2,1,0} broadcast(%broadcast_in_dim.68), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.137 = f32[256]{0} reshape(%sub.136), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.138 = f32[32,14,14,256]{3,2,1,0} broadcast(%sub.137), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.139 = f32[32,14,14,256]{3,2,1,0} subtract(%conv_general_dilated.34, %sub.138), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/sub" stack_frame_id=45}
+  %variables__batch_stats____ResNetBlock_5____BatchNorm_1____var__.1 = f32[256]{0} parameter(27), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_5\'][\'BatchNorm_1\'][\'var\']"}
+  %broadcast_in_dim.69 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_5____BatchNorm_1____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/broadcast_in_dim" stack_frame_id=46}
+  %add.188 = f32[1,1,1,256]{3,2,1,0} add(%broadcast_in_dim.69, %broadcast.5), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/add" stack_frame_id=47}
+  %rsqrt.34 = f32[1,1,1,256]{3,2,1,0} rsqrt(%add.188), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/rsqrt" stack_frame_id=48}
+  %variables__params____ResNetBlock_5____BatchNorm_1____scale__.1 = f32[256]{0} parameter(81), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_5\'][\'BatchNorm_1\'][\'scale\']"}
+  %reshape.69 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__params____ResNetBlock_5____BatchNorm_1____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/reshape" stack_frame_id=49}
+  %mul.170 = f32[1,1,1,256]{3,2,1,0} multiply(%rsqrt.34, %reshape.69), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/mul" stack_frame_id=50}
+  %mul.171 = f32[1,1,1,256]{3,2,1,0} broadcast(%mul.170), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.172 = f32[256]{0} reshape(%mul.171), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.173 = f32[32,14,14,256]{3,2,1,0} broadcast(%mul.172), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.174 = f32[32,14,14,256]{3,2,1,0} multiply(%sub.139, %mul.173), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/mul" stack_frame_id=51}
+  %variables__params____ResNetBlock_5____BatchNorm_1____bias__.1 = f32[256]{0} parameter(80), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_5\'][\'BatchNorm_1\'][\'bias\']"}
+  %reshape.70 = f32[1,1,1,256]{3,2,1,0} reshape(%variables__params____ResNetBlock_5____BatchNorm_1____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/reshape" stack_frame_id=52}
+  %add.189 = f32[1,1,1,256]{3,2,1,0} broadcast(%reshape.70), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/add" stack_frame_id=53}
+  %add.190 = f32[256]{0} reshape(%add.189), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/add" stack_frame_id=53}
+  %add.191 = f32[32,14,14,256]{3,2,1,0} broadcast(%add.190), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/add" stack_frame_id=53}
+  %add.192 = f32[32,14,14,256]{3,2,1,0} add(%mul.174, %add.191), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/BatchNorm_1/add" stack_frame_id=53}
+  %add.193 = f32[32,14,14,256]{3,2,1,0} add(%jit_relu_.27, %add.192), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/add" stack_frame_id=54}
+  %jit_relu_.29 = f32[32,14,14,256]{3,2,1,0} call(%add.193), to_apply=%relu_2.5, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_5/jit(relu)" stack_frame_id=55}
+  %variables__params____ResNetBlock_6____conv_proj____kernel__.1 = f32[1,1,256,512]{3,2,1,0} parameter(90), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_6\'][\'conv_proj\'][\'kernel\']"}
+  %conv_general_dilated.37 = f32[32,7,7,512]{3,2,1,0} convolution(%jit_relu_.29, %variables__params____ResNetBlock_6____conv_proj____kernel__.1), window={size=1x1 stride=2x2}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/conv_proj/conv_general_dilated" stack_frame_id=57}
+  %variables__batch_stats____ResNetBlock_6____norm_proj____mean__.1 = f32[512]{0} parameter(32), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_6\'][\'norm_proj\'][\'mean\']"}
+  %broadcast_in_dim.74 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_6____norm_proj____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/broadcast_in_dim" stack_frame_id=60}
+  %sub.148 = f32[1,1,1,512]{3,2,1,0} broadcast(%broadcast_in_dim.74), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/sub" stack_frame_id=61}
+  %sub.149 = f32[512]{0} reshape(%sub.148), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/sub" stack_frame_id=61}
+  %sub.150 = f32[32,7,7,512]{3,2,1,0} broadcast(%sub.149), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/sub" stack_frame_id=61}
+  %sub.151 = f32[32,7,7,512]{3,2,1,0} subtract(%conv_general_dilated.37, %sub.150), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/sub" stack_frame_id=61}
+  %variables__batch_stats____ResNetBlock_6____norm_proj____var__.1 = f32[512]{0} parameter(33), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_6\'][\'norm_proj\'][\'var\']"}
+  %broadcast_in_dim.75 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_6____norm_proj____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/broadcast_in_dim" stack_frame_id=62}
+  %constant.18 = f32[] constant(1e-05)
+  %broadcast.4 = f32[1,1,1,512]{3,2,1,0} broadcast(%constant.18), dimensions={}
+  %add.204 = f32[1,1,1,512]{3,2,1,0} add(%broadcast_in_dim.75, %broadcast.4), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/add" stack_frame_id=63}
+  %rsqrt.37 = f32[1,1,1,512]{3,2,1,0} rsqrt(%add.204), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/rsqrt" stack_frame_id=64}
+  %variables__params____ResNetBlock_6____norm_proj____scale__.1 = f32[512]{0} parameter(92), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_6\'][\'norm_proj\'][\'scale\']"}
+  %reshape.75 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__params____ResNetBlock_6____norm_proj____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/reshape" stack_frame_id=65}
+  %mul.185 = f32[1,1,1,512]{3,2,1,0} multiply(%rsqrt.37, %reshape.75), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/mul" stack_frame_id=66}
+  %mul.186 = f32[1,1,1,512]{3,2,1,0} broadcast(%mul.185), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/mul" stack_frame_id=67}
+  %mul.187 = f32[512]{0} reshape(%mul.186), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/mul" stack_frame_id=67}
+  %mul.188 = f32[32,7,7,512]{3,2,1,0} broadcast(%mul.187), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/mul" stack_frame_id=67}
+  %mul.189 = f32[32,7,7,512]{3,2,1,0} multiply(%sub.151, %mul.188), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/mul" stack_frame_id=67}
+  %variables__params____ResNetBlock_6____norm_proj____bias__.1 = f32[512]{0} parameter(91), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_6\'][\'norm_proj\'][\'bias\']"}
+  %reshape.76 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__params____ResNetBlock_6____norm_proj____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/reshape" stack_frame_id=68}
+  %add.205 = f32[1,1,1,512]{3,2,1,0} broadcast(%reshape.76), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/add" stack_frame_id=69}
+  %add.206 = f32[512]{0} reshape(%add.205), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/add" stack_frame_id=69}
+  %add.207 = f32[32,7,7,512]{3,2,1,0} broadcast(%add.206), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/add" stack_frame_id=69}
+  %add.208 = f32[32,7,7,512]{3,2,1,0} add(%mul.189, %add.207), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/norm_proj/add" stack_frame_id=69}
+  %variables__params____ResNetBlock_6____Conv_0____kernel__.1 = f32[3,3,256,512]{3,2,1,0} parameter(88), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_6\'][\'Conv_0\'][\'kernel\']"}
+  %conv_general_dilated.35 = f32[32,7,7,512]{3,2,1,0} convolution(%jit_relu_.29, %variables__params____ResNetBlock_6____Conv_0____kernel__.1), window={size=3x3 stride=2x2 pad=0_1x0_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/Conv_0/conv_general_dilated" stack_frame_id=26}
+  %variables__batch_stats____ResNetBlock_6____BatchNorm_0____mean__.1 = f32[512]{0} parameter(28), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_6\'][\'BatchNorm_0\'][\'mean\']"}
+  %broadcast_in_dim.70 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_6____BatchNorm_0____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/broadcast_in_dim" stack_frame_id=29}
+  %sub.140 = f32[1,1,1,512]{3,2,1,0} broadcast(%broadcast_in_dim.70), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.141 = f32[512]{0} reshape(%sub.140), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.142 = f32[32,7,7,512]{3,2,1,0} broadcast(%sub.141), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.143 = f32[32,7,7,512]{3,2,1,0} subtract(%conv_general_dilated.35, %sub.142), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/sub" stack_frame_id=30}
+  %variables__batch_stats____ResNetBlock_6____BatchNorm_0____var__.1 = f32[512]{0} parameter(29), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_6\'][\'BatchNorm_0\'][\'var\']"}
+  %broadcast_in_dim.71 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_6____BatchNorm_0____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/broadcast_in_dim" stack_frame_id=31}
+  %add.194 = f32[1,1,1,512]{3,2,1,0} add(%broadcast_in_dim.71, %broadcast.4), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/add" stack_frame_id=32}
+  %rsqrt.35 = f32[1,1,1,512]{3,2,1,0} rsqrt(%add.194), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/rsqrt" stack_frame_id=33}
+  %variables__params____ResNetBlock_6____BatchNorm_0____scale__.1 = f32[512]{0} parameter(85), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_6\'][\'BatchNorm_0\'][\'scale\']"}
+  %reshape.71 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__params____ResNetBlock_6____BatchNorm_0____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/reshape" stack_frame_id=34}
+  %mul.175 = f32[1,1,1,512]{3,2,1,0} multiply(%rsqrt.35, %reshape.71), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/mul" stack_frame_id=35}
+  %mul.176 = f32[1,1,1,512]{3,2,1,0} broadcast(%mul.175), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.177 = f32[512]{0} reshape(%mul.176), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.178 = f32[32,7,7,512]{3,2,1,0} broadcast(%mul.177), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.179 = f32[32,7,7,512]{3,2,1,0} multiply(%sub.143, %mul.178), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/mul" stack_frame_id=36}
+  %variables__params____ResNetBlock_6____BatchNorm_0____bias__.1 = f32[512]{0} parameter(84), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_6\'][\'BatchNorm_0\'][\'bias\']"}
+  %reshape.72 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__params____ResNetBlock_6____BatchNorm_0____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/reshape" stack_frame_id=37}
+  %add.195 = f32[1,1,1,512]{3,2,1,0} broadcast(%reshape.72), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/add" stack_frame_id=38}
+  %add.196 = f32[512]{0} reshape(%add.195), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/add" stack_frame_id=38}
+  %add.197 = f32[32,7,7,512]{3,2,1,0} broadcast(%add.196), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/add" stack_frame_id=38}
+  %add.198 = f32[32,7,7,512]{3,2,1,0} add(%mul.179, %add.197), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_0/add" stack_frame_id=38}
+  %jit_relu_.30 = f32[32,7,7,512]{3,2,1,0} call(%add.198), to_apply=%relu_3.6, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/jit(relu)" stack_frame_id=39}
+  %variables__params____ResNetBlock_6____Conv_1____kernel__.1 = f32[3,3,512,512]{3,2,1,0} parameter(89), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_6\'][\'Conv_1\'][\'kernel\']"}
+  %conv_general_dilated.36 = f32[32,7,7,512]{3,2,1,0} convolution(%jit_relu_.30, %variables__params____ResNetBlock_6____Conv_1____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/Conv_1/conv_general_dilated" stack_frame_id=41}
+  %variables__batch_stats____ResNetBlock_6____BatchNorm_1____mean__.1 = f32[512]{0} parameter(30), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_6\'][\'BatchNorm_1\'][\'mean\']"}
+  %broadcast_in_dim.72 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_6____BatchNorm_1____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/broadcast_in_dim" stack_frame_id=44}
+  %sub.144 = f32[1,1,1,512]{3,2,1,0} broadcast(%broadcast_in_dim.72), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.145 = f32[512]{0} reshape(%sub.144), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.146 = f32[32,7,7,512]{3,2,1,0} broadcast(%sub.145), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.147 = f32[32,7,7,512]{3,2,1,0} subtract(%conv_general_dilated.36, %sub.146), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/sub" stack_frame_id=45}
+  %variables__batch_stats____ResNetBlock_6____BatchNorm_1____var__.1 = f32[512]{0} parameter(31), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_6\'][\'BatchNorm_1\'][\'var\']"}
+  %broadcast_in_dim.73 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_6____BatchNorm_1____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/broadcast_in_dim" stack_frame_id=46}
+  %add.199 = f32[1,1,1,512]{3,2,1,0} add(%broadcast_in_dim.73, %broadcast.4), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/add" stack_frame_id=47}
+  %rsqrt.36 = f32[1,1,1,512]{3,2,1,0} rsqrt(%add.199), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/rsqrt" stack_frame_id=48}
+  %variables__params____ResNetBlock_6____BatchNorm_1____scale__.1 = f32[512]{0} parameter(87), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_6\'][\'BatchNorm_1\'][\'scale\']"}
+  %reshape.73 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__params____ResNetBlock_6____BatchNorm_1____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/reshape" stack_frame_id=49}
+  %mul.180 = f32[1,1,1,512]{3,2,1,0} multiply(%rsqrt.36, %reshape.73), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/mul" stack_frame_id=50}
+  %mul.181 = f32[1,1,1,512]{3,2,1,0} broadcast(%mul.180), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.182 = f32[512]{0} reshape(%mul.181), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.183 = f32[32,7,7,512]{3,2,1,0} broadcast(%mul.182), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.184 = f32[32,7,7,512]{3,2,1,0} multiply(%sub.147, %mul.183), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/mul" stack_frame_id=51}
+  %variables__params____ResNetBlock_6____BatchNorm_1____bias__.1 = f32[512]{0} parameter(86), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_6\'][\'BatchNorm_1\'][\'bias\']"}
+  %reshape.74 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__params____ResNetBlock_6____BatchNorm_1____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/reshape" stack_frame_id=52}
+  %add.200 = f32[1,1,1,512]{3,2,1,0} broadcast(%reshape.74), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/add" stack_frame_id=53}
+  %add.201 = f32[512]{0} reshape(%add.200), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/add" stack_frame_id=53}
+  %add.202 = f32[32,7,7,512]{3,2,1,0} broadcast(%add.201), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/add" stack_frame_id=53}
+  %add.203 = f32[32,7,7,512]{3,2,1,0} add(%mul.184, %add.202), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/BatchNorm_1/add" stack_frame_id=53}
+  %add.209 = f32[32,7,7,512]{3,2,1,0} add(%add.208, %add.203), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/add" stack_frame_id=54}
+  %jit_relu_.31 = f32[32,7,7,512]{3,2,1,0} call(%add.209), to_apply=%relu_3.6, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_6/jit(relu)" stack_frame_id=55}
+  %variables__params____ResNetBlock_7____Conv_0____kernel__.1 = f32[3,3,512,512]{3,2,1,0} parameter(97), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_7\'][\'Conv_0\'][\'kernel\']"}
+  %conv_general_dilated.38 = f32[32,7,7,512]{3,2,1,0} convolution(%jit_relu_.31, %variables__params____ResNetBlock_7____Conv_0____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/Conv_0/conv_general_dilated" stack_frame_id=26}
+  %variables__batch_stats____ResNetBlock_7____BatchNorm_0____mean__.1 = f32[512]{0} parameter(34), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_7\'][\'BatchNorm_0\'][\'mean\']"}
+  %broadcast_in_dim.76 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_7____BatchNorm_0____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/broadcast_in_dim" stack_frame_id=29}
+  %sub.152 = f32[1,1,1,512]{3,2,1,0} broadcast(%broadcast_in_dim.76), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.153 = f32[512]{0} reshape(%sub.152), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.154 = f32[32,7,7,512]{3,2,1,0} broadcast(%sub.153), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/sub" stack_frame_id=30}
+  %sub.155 = f32[32,7,7,512]{3,2,1,0} subtract(%conv_general_dilated.38, %sub.154), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/sub" stack_frame_id=30}
+  %variables__batch_stats____ResNetBlock_7____BatchNorm_0____var__.1 = f32[512]{0} parameter(35), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_7\'][\'BatchNorm_0\'][\'var\']"}
+  %broadcast_in_dim.77 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_7____BatchNorm_0____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/broadcast_in_dim" stack_frame_id=31}
+  %add.210 = f32[1,1,1,512]{3,2,1,0} add(%broadcast_in_dim.77, %broadcast.4), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/add" stack_frame_id=32}
+  %rsqrt.38 = f32[1,1,1,512]{3,2,1,0} rsqrt(%add.210), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/rsqrt" stack_frame_id=33}
+  %variables__params____ResNetBlock_7____BatchNorm_0____scale__.1 = f32[512]{0} parameter(94), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_7\'][\'BatchNorm_0\'][\'scale\']"}
+  %reshape.77 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__params____ResNetBlock_7____BatchNorm_0____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/reshape" stack_frame_id=34}
+  %mul.190 = f32[1,1,1,512]{3,2,1,0} multiply(%rsqrt.38, %reshape.77), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/mul" stack_frame_id=35}
+  %mul.191 = f32[1,1,1,512]{3,2,1,0} broadcast(%mul.190), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.192 = f32[512]{0} reshape(%mul.191), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.193 = f32[32,7,7,512]{3,2,1,0} broadcast(%mul.192), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/mul" stack_frame_id=36}
+  %mul.194 = f32[32,7,7,512]{3,2,1,0} multiply(%sub.155, %mul.193), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/mul" stack_frame_id=36}
+  %variables__params____ResNetBlock_7____BatchNorm_0____bias__.1 = f32[512]{0} parameter(93), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_7\'][\'BatchNorm_0\'][\'bias\']"}
+  %reshape.78 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__params____ResNetBlock_7____BatchNorm_0____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/reshape" stack_frame_id=37}
+  %add.211 = f32[1,1,1,512]{3,2,1,0} broadcast(%reshape.78), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/add" stack_frame_id=38}
+  %add.212 = f32[512]{0} reshape(%add.211), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/add" stack_frame_id=38}
+  %add.213 = f32[32,7,7,512]{3,2,1,0} broadcast(%add.212), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/add" stack_frame_id=38}
+  %add.214 = f32[32,7,7,512]{3,2,1,0} add(%mul.194, %add.213), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_0/add" stack_frame_id=38}
+  %jit_relu_.32 = f32[32,7,7,512]{3,2,1,0} call(%add.214), to_apply=%relu_3.6, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/jit(relu)" stack_frame_id=39}
+  %variables__params____ResNetBlock_7____Conv_1____kernel__.1 = f32[3,3,512,512]{3,2,1,0} parameter(98), sharding={devices=[1,1,8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}, {}, {\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_7\'][\'Conv_1\'][\'kernel\']"}
+  %conv_general_dilated.39 = f32[32,7,7,512]{3,2,1,0} convolution(%jit_relu_.32, %variables__params____ResNetBlock_7____Conv_1____kernel__.1), window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/Conv_1/conv_general_dilated" stack_frame_id=41}
+  %variables__batch_stats____ResNetBlock_7____BatchNorm_1____mean__.1 = f32[512]{0} parameter(36), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_7\'][\'BatchNorm_1\'][\'mean\']"}
+  %broadcast_in_dim.78 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_7____BatchNorm_1____mean__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/broadcast_in_dim" stack_frame_id=44}
+  %sub.156 = f32[1,1,1,512]{3,2,1,0} broadcast(%broadcast_in_dim.78), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.157 = f32[512]{0} reshape(%sub.156), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.158 = f32[32,7,7,512]{3,2,1,0} broadcast(%sub.157), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/sub" stack_frame_id=45}
+  %sub.159 = f32[32,7,7,512]{3,2,1,0} subtract(%conv_general_dilated.39, %sub.158), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/sub" stack_frame_id=45}
+  %variables__batch_stats____ResNetBlock_7____BatchNorm_1____var__.1 = f32[512]{0} parameter(37), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'batch_stats\'][\'ResNetBlock_7\'][\'BatchNorm_1\'][\'var\']"}
+  %broadcast_in_dim.79 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__batch_stats____ResNetBlock_7____BatchNorm_1____var__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/broadcast_in_dim" stack_frame_id=46}
+  %add.215 = f32[1,1,1,512]{3,2,1,0} add(%broadcast_in_dim.79, %broadcast.4), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/add" stack_frame_id=47}
+  %rsqrt.39 = f32[1,1,1,512]{3,2,1,0} rsqrt(%add.215), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/rsqrt" stack_frame_id=48}
+  %variables__params____ResNetBlock_7____BatchNorm_1____scale__.1 = f32[512]{0} parameter(96), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_7\'][\'BatchNorm_1\'][\'scale\']"}
+  %reshape.79 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__params____ResNetBlock_7____BatchNorm_1____scale__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/reshape" stack_frame_id=49}
+  %mul.195 = f32[1,1,1,512]{3,2,1,0} multiply(%rsqrt.39, %reshape.79), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/mul" stack_frame_id=50}
+  %mul.196 = f32[1,1,1,512]{3,2,1,0} broadcast(%mul.195), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.197 = f32[512]{0} reshape(%mul.196), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.198 = f32[32,7,7,512]{3,2,1,0} broadcast(%mul.197), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/mul" stack_frame_id=51}
+  %mul.199 = f32[32,7,7,512]{3,2,1,0} multiply(%sub.159, %mul.198), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/mul" stack_frame_id=51}
+  %variables__params____ResNetBlock_7____BatchNorm_1____bias__.1 = f32[512]{0} parameter(95), sharding={devices=[8]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}]>"}, metadata={op_name="variables[\'params\'][\'ResNetBlock_7\'][\'BatchNorm_1\'][\'bias\']"}
+  %reshape.80 = f32[1,1,1,512]{3,2,1,0} reshape(%variables__params____ResNetBlock_7____BatchNorm_1____bias__.1), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/reshape" stack_frame_id=52}
+  %add.216 = f32[1,1,1,512]{3,2,1,0} broadcast(%reshape.80), dimensions={0,1,2,3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/add" stack_frame_id=53}
+  %add.217 = f32[512]{0} reshape(%add.216), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/add" stack_frame_id=53}
+  %add.218 = f32[32,7,7,512]{3,2,1,0} broadcast(%add.217), dimensions={3}, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/add" stack_frame_id=53}
+  %add.219 = f32[32,7,7,512]{3,2,1,0} add(%mul.199, %add.218), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/BatchNorm_1/add" stack_frame_id=53}
+  %add.220 = f32[32,7,7,512]{3,2,1,0} add(%jit_relu_.31, %add.219), metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/add" stack_frame_id=54}
+  %jit_relu_.33 = f32[32,7,7,512]{3,2,1,0} call(%add.220), to_apply=%relu_3.6, metadata={op_name="jit(predict_step)/ResNet/ResNetBlock_7/jit(relu)" stack_frame_id=55}
+  %constant.23 = f32[] constant(0)
+  %reduce_sum.7 = f32[32,512]{1,0} reduce(%jit_relu_.33, %constant.23), dimensions={1,2}, to_apply=%region_1.7, metadata={op_name="jit(predict_step)/ResNet/reduce_sum" stack_frame_id=8}
+  %constant.17 = f32[] constant(49)
+  %div.2 = f32[32,512]{1,0} broadcast(%constant.17), dimensions={}, metadata={op_name="jit(predict_step)/ResNet/div" stack_frame_id=8}
+  %div.3 = f32[32,512]{1,0} divide(%reduce_sum.7, %div.2), metadata={op_name="jit(predict_step)/ResNet/div" stack_frame_id=8}
+  %variables__params____Dense_0____kernel__.1 = f32[512,10]{1,0} parameter(41), sharding={devices=[8,1]<=[8]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\"}, {}]>"}, metadata={op_name="variables[\'params\'][\'Dense_0\'][\'kernel\']"}
+  %dot_general.1 = f32[32,10]{1,0} dot(%div.3, %variables__params____Dense_0____kernel__.1), lhs_contracting_dims={1}, rhs_contracting_dims={0}, metadata={op_name="jit(predict_step)/ResNet/Dense_0/dot_general" stack_frame_id=71}
+  %variables__params____Dense_0____bias__.1 = f32[10]{0} parameter(40), sharding={replicated}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{}]>"}, metadata={op_name="variables[\'params\'][\'Dense_0\'][\'bias\']"}
+  %reshape.81 = f32[1,10]{1,0} reshape(%variables__params____Dense_0____bias__.1), metadata={op_name="jit(predict_step)/ResNet/Dense_0/reshape" stack_frame_id=72}
+  %add.221 = f32[1,10]{1,0} broadcast(%reshape.81), dimensions={0,1}, metadata={op_name="jit(predict_step)/ResNet/Dense_0/add" stack_frame_id=73}
+  %add.222 = f32[10]{0} reshape(%add.221), metadata={op_name="jit(predict_step)/ResNet/Dense_0/add" stack_frame_id=73}
+  %add.223 = f32[32,10]{1,0} broadcast(%add.222), dimensions={1}, metadata={op_name="jit(predict_step)/ResNet/Dense_0/add" stack_frame_id=73}
+  %add.224 = f32[32,10]{1,0} add(%dot_general.1, %add.223), metadata={op_name="jit(predict_step)/ResNet/Dense_0/add" stack_frame_id=73}
+  %add.225 = f32[32,10]{1,0} custom-call(%add.224), custom_call_target="xla.sdy.FuncResultSharding", custom_call_has_side_effect=true, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<@mesh, [{}, {}]>]>"}, metadata={op_name="jit(predict_step)/ResNet/Dense_0/add" stack_frame_id=73}
+  %tuple.1 = (f32[32,10]{1,0}) tuple(%add.225)
+  ROOT %get-tuple-element.1 = f32[32,10]{1,0} get-tuple-element(%tuple.1), index=0, sharding={replicated}
+}
+

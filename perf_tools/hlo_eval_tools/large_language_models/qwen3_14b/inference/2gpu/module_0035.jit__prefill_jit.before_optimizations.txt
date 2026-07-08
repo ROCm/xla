@@ -1,0 +1,1160 @@
+HloModule jit__prefill_jit, entry_computation_layout={(s32[64]{0}, f32[5120]{0}, f32[5120,40,17408]{2,1,0}, f32[5120,40,17408]{2,1,0}, f32[17408,40,5120]{2,1,0}, /*index=5*/f32[5120,40]{1,0}, f32[5120,40]{1,0}, f32[5120,40,8,128]{3,2,1,0}, f32[128,40]{1,0}, f32[40,40,128,5120]{3,2,1,0}, /*index=10*/f32[5120,40,40,128]{3,2,1,0}, f32[128,40]{1,0}, f32[5120,40,8,128]{3,2,1,0}, f32[5120,151936]{1,0}, f32[151936,5120]{1,0}, /*index=15*/s32[])->(s32[40,1]{1,0}, s32[40,1,1984]{2,1,0}, s32[40,1,64]{2,1,0}, bf16[40,1984,8,1,128]{4,3,2,1,0}, s32[40,1]{1,0}, /*index=5*/bf16[40,1984,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, s32[1,1]{1,0}, f32[1,1,151936]{2,1,0}, /*index=10*/s32[1,1]{1,0}, f32[1,1]{1,0}, s32[1,1]{1,0}, s32[1,3]{1,0}, f32[1,1]{1,0})}, allow_spmd_sharding_propagation_to_parameters={true,false,false,false,false,false,false,false,false,false,false,false,false,false,false,false}, allow_spmd_sharding_propagation_to_output={true,true,true,true,true,true,true,true,true,true,true,true,true,true,true}, num_partitions=2, frontend_attributes={xla.sdy.meshes={empty_mesh = #sdy.mesh<[]>, mesh = #sdy.mesh<["diloco"=1, "data"=1, "stage"=1, "fsdp"=1, "fsdp_transpose"=1, "context"=1, "context_autoregressive"=1, "tensor"=2, "tensor_transpose"=1, "tensor_sequence"=1, "expert"=1, "autoregressive"=1]>}}
+
+FileNames
+1 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/inference/maxengine/maxengine.py"
+2 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/models/models.py"
+3 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/layers/decoders.py"
+4 "/usr/local/lib/python3.12/dist-packages/flax/core/axes_scan.py"
+5 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/layers/nnx_wrappers.py"
+6 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/models/qwen3.py"
+7 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/layers/normalizations.py"
+8 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/layers/attentions.py"
+9 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/layers/attention_op.py"
+10 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/utils/sharding.py"
+11 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/layers/linears.py"
+12 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/layers/embeddings.py"
+13 "/usr/local/lib/python3.12/dist-packages/flax/nnx/pytreelib.py"
+14 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/inference/kvcache.py"
+15 "<frozen runpy>"
+16 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/inference/decode.py"
+17 "/usr/local/lib/python3.12/dist-packages/absl/app.py"
+18 "/tf/jax-lab/targets/maxtext_release/maxtext/src/maxtext/inference/inference_utils.py"
+
+FunctionNames
+1 "MaxEngine._prefill_jit"
+2 "TransformerLinenPure.apply"
+3 "TransformerLinenPure.__call__"
+4 "Decoder.__call__"
+5 "scan.<locals>.scan_fn"
+6 "scan.<locals>.scan_fn.<locals>.body_fn"
+7 "ToLinen.__call__"
+8 "Qwen3DecoderLayer.__call__"
+9 "AttentionWithNorm.apply_attention_with_norm"
+10 "_fix_for_qwix_quantization.<locals>.wrap.<locals>.wrapped"
+11 "RMSNorm.__call__"
+12 "Attention.__call__"
+13 "AttentionOp.__call__"
+14 "AttentionOp.apply_attention"
+15 "AttentionOp.apply_attention_dot"
+16 "AttentionOp.compute_local_attention"
+17 "maybe_shard_with_logical"
+18 "maybe_shard_with_name"
+19 "Attention.kv_projection"
+20 "DenseGeneral.__call__"
+21 "_compute_dot_general_nnx"
+22 "AttentionOp.generate_attention_mask"
+23 "apply_mask_to_logits"
+24 "Attention.apply_rotary_embedding"
+25 "RotaryEmbedding.__call__"
+26 "RotaryEmbedding.timescale"
+27 "RotaryEmbedding.apply_rotary"
+28 "RotaryEmbedding._rotate_half"
+29 "Attention.query_projection"
+30 "AttentionOp.qk_product"
+31 "AttentionOp.wv_product"
+32 "Attention.out_projection"
+33 "MlpBlock.__call__"
+34 "PytreeMeta.__call__"
+35 "_graph_node_meta_call"
+36 "PytreeMeta._pytree_meta_construct"
+37 "Qwen3DecoderLayer.__init__"
+38 "AttentionWithNorm.__init__"
+39 "Attention.__init__"
+40 "Attention.init_kv_caches"
+41 "KVCache.__init__"
+42 "KVCache._initialize_ar_cache_vars"
+43 "Attention.update_kv_caches"
+44 "KVCache.__call__"
+45 "KVCache.kv_cache_prefill"
+46 "_run_module_as_main"
+47 "_run_code"
+48 "<module>"
+49 "run"
+50 "_run_main"
+51 "main"
+52 "MaxEngine.prefill"
+53 "Decoder.apply_output_head"
+54 "sampling"
+55 "Decoder._apply_embedding"
+56 "Embed.__call__"
+57 "scan.<locals>.transpose_to_front"
+58 "scan.<locals>.transpose_to_front.<locals>.trans"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=798 end_line=815 column=32 end_column=9}
+2 {file_name_id=2 function_name_id=2 line=71 end_line=71 column=11 end_column=51}
+3 {file_name_id=2 function_name_id=3 line=202 end_line=215 column=38 end_column=5}
+4 {file_name_id=3 function_name_id=4 line=1133 end_line=1142 column=19 end_column=41}
+5 {file_name_id=4 function_name_id=5 line=200 end_line=203 column=14 end_column=7}
+6 {file_name_id=4 function_name_id=6 line=157 end_line=157 column=29 end_column=53}
+7 {file_name_id=5 function_name_id=7 line=549 end_line=549 column=10 end_column=44}
+8 {file_name_id=6 function_name_id=8 line=1520 end_line=1528 column=51 end_column=5}
+9 {file_name_id=6 function_name_id=9 line=1454 end_line=1454 column=10 end_column=52}
+10 {file_name_id=5 function_name_id=10 line=383 end_line=383 column=15 end_column=39}
+11 {file_name_id=7 function_name_id=11 line=72 end_line=72 column=12 end_column=59}
+12 {file_name_id=6 function_name_id=9 line=1457 end_line=1466 column=30 end_column=5}
+13 {file_name_id=8 function_name_id=12 line=1160 end_line=1160 column=14 end_column=36}
+14 {file_name_id=8 function_name_id=12 line=1162 end_line=1162 column=14 end_column=32}
+15 {file_name_id=8 function_name_id=12 line=1225 end_line=1236 column=12 end_column=7}
+16 {file_name_id=9 function_name_id=13 line=2106 end_line=2123 column=86 end_column=5}
+17 {file_name_id=9 function_name_id=14 line=972 end_line=986 column=13 end_column=7}
+18 {file_name_id=9 function_name_id=15 line=1919 end_line=1919 column=11 end_column=109}
+19 {file_name_id=9 function_name_id=16 line=1770 end_line=1770 column=16 end_column=55}
+20 {file_name_id=9 function_name_id=16 line=1772 end_line=1772 column=16 end_column=68}
+21 {file_name_id=6 function_name_id=9 line=1471 end_line=1471 column=20 end_column=76}
+22 {file_name_id=7 function_name_id=11 line=90 end_line=90 column=12 end_column=42}
+23 {file_name_id=7 function_name_id=11 line=71 end_line=71 column=8 end_column=35}
+24 {file_name_id=7 function_name_id=11 line=72 end_line=72 column=21 end_column=34}
+25 {file_name_id=7 function_name_id=11 line=73 end_line=73 column=34 end_column=54}
+26 {file_name_id=7 function_name_id=11 line=73 end_line=73 column=24 end_column=55}
+27 {file_name_id=7 function_name_id=11 line=73 end_line=73 column=20 end_column=55}
+28 {file_name_id=7 function_name_id=11 line=73 end_line=73 column=8 end_column=68}
+29 {file_name_id=7 function_name_id=11 line=92 end_line=92 column=11 end_column=84}
+30 {file_name_id=8 function_name_id=12 line=1125 end_line=1125 column=16 end_column=75}
+31 {file_name_id=10 function_name_id=17 line=147 end_line=155 column=9 end_column=3}
+32 {file_name_id=10 function_name_id=18 line=113 end_line=113 column=11 end_column=67}
+33 {file_name_id=8 function_name_id=12 line=1147 end_line=1147 column=16 end_column=91}
+34 {file_name_id=8 function_name_id=19 line=670 end_line=670 column=13 end_column=61}
+35 {file_name_id=11 function_name_id=20 line=231 end_line=231 column=15 end_column=46}
+36 {file_name_id=11 function_name_id=20 line=238 end_line=247 column=13 end_column=5}
+37 {file_name_id=11 function_name_id=21 line=102 end_line=104 column=9 end_column=3}
+38 {file_name_id=8 function_name_id=12 line=1197 end_line=1197 column=14 end_column=82}
+39 {file_name_id=9 function_name_id=15 line=1866 end_line=1874 column=16 end_column=5}
+40 {file_name_id=9 function_name_id=22 line=700 end_line=700 column=13 end_column=44}
+41 {file_name_id=9 function_name_id=22 line=700 end_line=700 column=48 end_column=79}
+42 {file_name_id=9 function_name_id=22 line=701 end_line=701 column=13 end_column=38}
+43 {file_name_id=9 function_name_id=22 line=723 end_line=723 column=16 end_column=66}
+44 {file_name_id=9 function_name_id=22 line=722 end_line=722 column=16 end_column=66}
+45 {file_name_id=9 function_name_id=22 line=726 end_line=726 column=21 end_column=50}
+46 {file_name_id=9 function_name_id=22 line=726 end_line=726 column=20 end_column=75}
+47 {file_name_id=9 function_name_id=22 line=730 end_line=730 column=20 end_column=54}
+48 {file_name_id=9 function_name_id=22 line=787 end_line=787 column=11 end_column=58}
+49 {file_name_id=9 function_name_id=15 line=1906 end_line=1906 column=21 end_column=66}
+50 {file_name_id=9 function_name_id=23 line=121 end_line=121 column=20 end_column=52}
+51 {file_name_id=8 function_name_id=12 line=1143 end_line=1143 column=12 end_column=85}
+52 {file_name_id=8 function_name_id=19 line=668 end_line=668 column=13 end_column=59}
+53 {file_name_id=8 function_name_id=12 line=1174 end_line=1174 column=14 end_column=106}
+54 {file_name_id=8 function_name_id=24 line=935 end_line=935 column=13 end_column=60}
+55 {file_name_id=12 function_name_id=25 line=359 end_line=359 column=15 end_column=55}
+56 {file_name_id=12 function_name_id=25 line=360 end_line=360 column=19 end_column=44}
+57 {file_name_id=12 function_name_id=25 line=360 end_line=360 column=30 end_column=44}
+58 {file_name_id=12 function_name_id=26 line=317 end_line=317 column=19 end_column=52}
+59 {file_name_id=12 function_name_id=26 line=317 end_line=317 column=15 end_column=52}
+60 {file_name_id=12 function_name_id=26 line=318 end_line=318 column=37 end_column=90}
+61 {file_name_id=12 function_name_id=25 line=362 end_line=362 column=15 end_column=36}
+62 {file_name_id=12 function_name_id=25 line=365 end_line=365 column=10 end_column=56}
+63 {file_name_id=12 function_name_id=25 line=367 end_line=367 column=12 end_column=47}
+64 {file_name_id=12 function_name_id=27 line=330 end_line=330 column=12 end_column=24}
+65 {file_name_id=12 function_name_id=27 line=330 end_line=330 column=29 end_column=54}
+66 {file_name_id=12 function_name_id=28 line=325 end_line=325 column=13 end_column=37}
+67 {file_name_id=12 function_name_id=28 line=326 end_line=326 column=28 end_column=31}
+68 {file_name_id=12 function_name_id=28 line=326 end_line=326 column=11 end_column=46}
+69 {file_name_id=12 function_name_id=25 line=361 end_line=361 column=15 end_column=36}
+70 {file_name_id=12 function_name_id=25 line=364 end_line=364 column=10 end_column=56}
+71 {file_name_id=12 function_name_id=27 line=330 end_line=330 column=11 end_column=61}
+72 {file_name_id=8 function_name_id=12 line=1196 end_line=1196 column=12 end_column=76}
+73 {file_name_id=8 function_name_id=12 line=1124 end_line=1124 column=15 end_column=73}
+74 {file_name_id=8 function_name_id=12 line=1142 end_line=1142 column=14 end_column=72}
+75 {file_name_id=8 function_name_id=29 line=614 end_line=614 column=11 end_column=58}
+76 {file_name_id=8 function_name_id=12 line=1172 end_line=1172 column=14 end_column=108}
+77 {file_name_id=8 function_name_id=12 line=1184 end_line=1184 column=14 end_column=48}
+78 {file_name_id=8 function_name_id=12 line=1195 end_line=1195 column=14 end_column=82}
+79 {file_name_id=9 function_name_id=15 line=1850 end_line=1850 column=19 end_column=88}
+80 {file_name_id=9 function_name_id=30 line=1957 end_line=1957 column=14 end_column=60}
+81 {file_name_id=9 function_name_id=30 line=1960 end_line=1960 column=15 end_column=74}
+82 {file_name_id=9 function_name_id=23 line=121 end_line=121 column=9 end_column=82}
+83 {file_name_id=9 function_name_id=16 line=1761 end_line=1761 column=13 end_column=54}
+84 {file_name_id=9 function_name_id=16 line=1771 end_line=1771 column=34 end_column=52}
+85 {file_name_id=9 function_name_id=16 line=1771 end_line=1771 column=26 end_column=53}
+86 {file_name_id=9 function_name_id=16 line=1776 end_line=1776 column=17 end_column=60}
+87 {file_name_id=9 function_name_id=16 line=1780 end_line=1780 column=16 end_column=81}
+88 {file_name_id=9 function_name_id=31 line=2010 end_line=2010 column=12 end_column=80}
+89 {file_name_id=9 function_name_id=31 line=2012 end_line=2012 column=15 end_column=52}
+90 {file_name_id=9 function_name_id=16 line=1778 end_line=1778 column=16 end_column=54}
+91 {file_name_id=9 function_name_id=13 line=2128 end_line=2128 column=15 end_column=69}
+92 {file_name_id=8 function_name_id=12 line=1239 end_line=1239 column=12 end_column=76}
+93 {file_name_id=8 function_name_id=12 line=1247 end_line=1247 column=10 end_column=61}
+94 {file_name_id=8 function_name_id=32 line=733 end_line=733 column=11 end_column=51}
+95 {file_name_id=6 function_name_id=9 line=1469 end_line=1469 column=26 end_column=48}
+96 {file_name_id=6 function_name_id=8 line=1530 end_line=1530 column=14 end_column=66}
+97 {file_name_id=11 function_name_id=33 line=517 end_line=517 column=12 end_column=62}
+98 {file_name_id=11 function_name_id=33 line=521 end_line=521 column=12 end_column=54}
+99 {file_name_id=11 function_name_id=33 line=525 end_line=525 column=8 end_column=51}
+100 {file_name_id=11 function_name_id=33 line=528 end_line=528 column=8 end_column=68}
+101 {file_name_id=11 function_name_id=33 line=529 end_line=529 column=13 end_column=50}
+102 {file_name_id=6 function_name_id=8 line=1533 end_line=1533 column=19 end_column=48}
+103 {file_name_id=5 function_name_id=7 line=488 end_line=488 column=13 end_column=59}
+104 {file_name_id=13 function_name_id=34 line=420 end_line=420 column=13 end_column=56}
+105 {file_name_id=13 function_name_id=35 line=431 end_line=431 column=2 end_column=51}
+106 {file_name_id=13 function_name_id=36 line=423 end_line=423 column=4 end_column=34}
+107 {file_name_id=6 function_name_id=37 line=1490 end_line=1490 column=4 end_column=59}
+108 {file_name_id=6 function_name_id=38 line=1402 end_line=1428 column=26 end_column=5}
+109 {file_name_id=8 function_name_id=39 line=438 end_line=438 column=8 end_column=60}
+110 {file_name_id=8 function_name_id=40 line=956 end_line=973 column=11 end_column=5}
+111 {file_name_id=14 function_name_id=41 line=332 end_line=332 column=6 end_column=48}
+112 {file_name_id=14 function_name_id=42 line=513 end_line=513 column=8 end_column=74}
+113 {file_name_id=8 function_name_id=12 line=1224 end_line=1224 column=24 end_column=106}
+114 {file_name_id=8 function_name_id=43 line=994 end_line=1001 column=36 end_column=5}
+115 {file_name_id=14 function_name_id=44 line=957 end_line=957 column=15 end_column=69}
+116 {file_name_id=14 function_name_id=45 line=699 end_line=699 column=27 end_column=76}
+117 {file_name_id=14 function_name_id=45 line=700 end_line=700 column=29 end_column=80}
+118 {file_name_id=15 function_name_id=46 line=198 end_line=199 column=11 end_column=42}
+119 {file_name_id=15 function_name_id=47 line=88 end_line=88 column=4 end_column=27}
+120 {file_name_id=16 function_name_id=48 line=245 end_line=245 column=2 end_column=15}
+121 {file_name_id=17 function_name_id=49 line=410 end_line=410 column=6 end_column=27}
+122 {file_name_id=17 function_name_id=50 line=355 end_line=355 column=13 end_column=23}
+123 {file_name_id=16 function_name_id=51 line=181 end_line=194 column=36 end_column=7}
+124 {file_name_id=1 function_name_id=52 line=913 end_line=934 column=11 end_column=5}
+125 {file_name_id=3 function_name_id=4 line=1289 end_line=1289 column=15 end_column=96}
+126 {file_name_id=3 function_name_id=53 line=795 end_line=802 column=8 end_column=40}
+127 {file_name_id=1 function_name_id=1 line=831 end_line=838 column=28 end_column=5}
+128 {file_name_id=18 function_name_id=54 line=135 end_line=135 column=11 end_column=38}
+129 {file_name_id=3 function_name_id=4 line=872 end_line=879 column=8 end_column=5}
+130 {file_name_id=3 function_name_id=55 line=706 end_line=706 column=8 end_column=85}
+131 {file_name_id=12 function_name_id=56 line=155 end_line=158 column=16 end_column=5}
+132 {file_name_id=1 function_name_id=1 line=747 end_line=747 column=19 end_column=52}
+133 {file_name_id=12 function_name_id=56 line=182 end_line=182 column=15 end_column=66}
+134 {file_name_id=4 function_name_id=5 line=150 end_line=150 column=9 end_column=66}
+135 {file_name_id=4 function_name_id=57 line=126 end_line=126 column=11 end_column=44}
+136 {file_name_id=4 function_name_id=58 line=124 end_line=124 column=13 end_column=35}
+137 {file_name_id=1 function_name_id=1 line=766 end_line=766 column=17 end_column=83}
+138 {file_name_id=1 function_name_id=1 line=767 end_line=767 column=19 end_column=48}
+139 {file_name_id=1 function_name_id=1 line=768 end_line=768 column=19 end_column=68}
+140 {file_name_id=1 function_name_id=1 line=769 end_line=769 column=25 end_column=57}
+141 {file_name_id=1 function_name_id=1 line=753 end_line=753 column=34 end_column=100}
+142 {file_name_id=1 function_name_id=1 line=753 end_line=753 column=18 end_column=104}
+143 {file_name_id=3 function_name_id=53 line=831 end_line=844 column=15 end_column=7}
+144 {file_name_id=3 function_name_id=53 line=847 end_line=847 column=15 end_column=41}
+145 {file_name_id=1 function_name_id=1 line=824 end_line=824 column=12 end_column=27}
+146 {file_name_id=1 function_name_id=1 line=822 end_line=826 column=22 end_column=5}
+147 {file_name_id=1 function_name_id=1 line=827 end_line=827 column=22 end_column=97}
+148 {file_name_id=1 function_name_id=1 line=865 end_line=865 column=17 end_column=68}
+149 {file_name_id=1 function_name_id=1 line=846 end_line=846 column=13 end_column=90}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+5 {file_location_id=5 parent_frame_id=5}
+6 {file_location_id=6 parent_frame_id=1}
+7 {file_location_id=7 parent_frame_id=7}
+8 {file_location_id=8 parent_frame_id=8}
+9 {file_location_id=9 parent_frame_id=9}
+10 {file_location_id=10 parent_frame_id=10}
+11 {file_location_id=11 parent_frame_id=11}
+12 {file_location_id=12 parent_frame_id=9}
+13 {file_location_id=10 parent_frame_id=13}
+14 {file_location_id=13 parent_frame_id=14}
+15 {file_location_id=10 parent_frame_id=15}
+16 {file_location_id=11 parent_frame_id=16}
+17 {file_location_id=14 parent_frame_id=14}
+18 {file_location_id=10 parent_frame_id=18}
+19 {file_location_id=11 parent_frame_id=19}
+20 {file_location_id=15 parent_frame_id=14}
+21 {file_location_id=10 parent_frame_id=21}
+22 {file_location_id=16 parent_frame_id=22}
+23 {file_location_id=17 parent_frame_id=23}
+24 {file_location_id=18 parent_frame_id=24}
+25 {file_location_id=19 parent_frame_id=25}
+26 {file_location_id=20 parent_frame_id=25}
+27 {file_location_id=21 parent_frame_id=9}
+28 {file_location_id=10 parent_frame_id=28}
+29 {file_location_id=11 parent_frame_id=29}
+30 {file_location_id=22 parent_frame_id=11}
+31 {file_location_id=23 parent_frame_id=11}
+32 {file_location_id=24 parent_frame_id=11}
+33 {file_location_id=25 parent_frame_id=11}
+34 {file_location_id=26 parent_frame_id=11}
+35 {file_location_id=27 parent_frame_id=11}
+36 {file_location_id=28 parent_frame_id=11}
+37 {file_location_id=29 parent_frame_id=11}
+38 {file_location_id=30 parent_frame_id=14}
+39 {file_location_id=31 parent_frame_id=39}
+40 {file_location_id=32 parent_frame_id=40}
+41 {file_location_id=33 parent_frame_id=14}
+42 {file_location_id=34 parent_frame_id=42}
+43 {file_location_id=10 parent_frame_id=43}
+44 {file_location_id=35 parent_frame_id=44}
+45 {file_location_id=36 parent_frame_id=44}
+46 {file_location_id=37 parent_frame_id=46}
+47 {file_location_id=38 parent_frame_id=14}
+48 {file_location_id=31 parent_frame_id=48}
+49 {file_location_id=32 parent_frame_id=49}
+50 {file_location_id=39 parent_frame_id=24}
+51 {file_location_id=40 parent_frame_id=51}
+52 {file_location_id=41 parent_frame_id=51}
+53 {file_location_id=42 parent_frame_id=51}
+54 {file_location_id=43 parent_frame_id=51}
+55 {file_location_id=44 parent_frame_id=51}
+56 {file_location_id=45 parent_frame_id=51}
+57 {file_location_id=46 parent_frame_id=51}
+58 {file_location_id=47 parent_frame_id=51}
+59 {file_location_id=48 parent_frame_id=51}
+60 {file_location_id=49 parent_frame_id=24}
+61 {file_location_id=50 parent_frame_id=61}
+62 {file_location_id=22 parent_frame_id=19}
+63 {file_location_id=51 parent_frame_id=14}
+64 {file_location_id=52 parent_frame_id=64}
+65 {file_location_id=10 parent_frame_id=65}
+66 {file_location_id=35 parent_frame_id=66}
+67 {file_location_id=36 parent_frame_id=66}
+68 {file_location_id=37 parent_frame_id=68}
+69 {file_location_id=23 parent_frame_id=19}
+70 {file_location_id=24 parent_frame_id=19}
+71 {file_location_id=25 parent_frame_id=19}
+72 {file_location_id=26 parent_frame_id=19}
+73 {file_location_id=27 parent_frame_id=19}
+74 {file_location_id=28 parent_frame_id=19}
+75 {file_location_id=29 parent_frame_id=19}
+76 {file_location_id=53 parent_frame_id=14}
+77 {file_location_id=54 parent_frame_id=77}
+78 {file_location_id=10 parent_frame_id=78}
+79 {file_location_id=55 parent_frame_id=79}
+80 {file_location_id=56 parent_frame_id=79}
+81 {file_location_id=57 parent_frame_id=79}
+82 {file_location_id=58 parent_frame_id=82}
+83 {file_location_id=59 parent_frame_id=82}
+84 {file_location_id=60 parent_frame_id=82}
+85 {file_location_id=61 parent_frame_id=79}
+86 {file_location_id=62 parent_frame_id=79}
+87 {file_location_id=63 parent_frame_id=79}
+88 {file_location_id=64 parent_frame_id=88}
+89 {file_location_id=65 parent_frame_id=88}
+90 {file_location_id=66 parent_frame_id=90}
+91 {file_location_id=67 parent_frame_id=90}
+92 {file_location_id=68 parent_frame_id=90}
+93 {file_location_id=69 parent_frame_id=79}
+94 {file_location_id=70 parent_frame_id=79}
+95 {file_location_id=71 parent_frame_id=88}
+96 {file_location_id=72 parent_frame_id=14}
+97 {file_location_id=31 parent_frame_id=97}
+98 {file_location_id=32 parent_frame_id=98}
+99 {file_location_id=22 parent_frame_id=16}
+100 {file_location_id=73 parent_frame_id=14}
+101 {file_location_id=31 parent_frame_id=101}
+102 {file_location_id=32 parent_frame_id=102}
+103 {file_location_id=74 parent_frame_id=14}
+104 {file_location_id=75 parent_frame_id=104}
+105 {file_location_id=10 parent_frame_id=105}
+106 {file_location_id=35 parent_frame_id=106}
+107 {file_location_id=36 parent_frame_id=106}
+108 {file_location_id=37 parent_frame_id=108}
+109 {file_location_id=23 parent_frame_id=16}
+110 {file_location_id=24 parent_frame_id=16}
+111 {file_location_id=25 parent_frame_id=16}
+112 {file_location_id=26 parent_frame_id=16}
+113 {file_location_id=27 parent_frame_id=16}
+114 {file_location_id=28 parent_frame_id=16}
+115 {file_location_id=29 parent_frame_id=16}
+116 {file_location_id=76 parent_frame_id=14}
+117 {file_location_id=54 parent_frame_id=117}
+118 {file_location_id=10 parent_frame_id=118}
+119 {file_location_id=55 parent_frame_id=119}
+120 {file_location_id=56 parent_frame_id=119}
+121 {file_location_id=57 parent_frame_id=119}
+122 {file_location_id=58 parent_frame_id=122}
+123 {file_location_id=59 parent_frame_id=122}
+124 {file_location_id=60 parent_frame_id=122}
+125 {file_location_id=61 parent_frame_id=119}
+126 {file_location_id=62 parent_frame_id=119}
+127 {file_location_id=63 parent_frame_id=119}
+128 {file_location_id=64 parent_frame_id=128}
+129 {file_location_id=65 parent_frame_id=128}
+130 {file_location_id=66 parent_frame_id=130}
+131 {file_location_id=67 parent_frame_id=130}
+132 {file_location_id=68 parent_frame_id=130}
+133 {file_location_id=69 parent_frame_id=119}
+134 {file_location_id=70 parent_frame_id=119}
+135 {file_location_id=71 parent_frame_id=128}
+136 {file_location_id=77 parent_frame_id=14}
+137 {file_location_id=78 parent_frame_id=14}
+138 {file_location_id=31 parent_frame_id=138}
+139 {file_location_id=32 parent_frame_id=139}
+140 {file_location_id=79 parent_frame_id=24}
+141 {file_location_id=80 parent_frame_id=141}
+142 {file_location_id=81 parent_frame_id=141}
+143 {file_location_id=82 parent_frame_id=61}
+144 {file_location_id=83 parent_frame_id=25}
+145 {file_location_id=84 parent_frame_id=25}
+146 {file_location_id=85 parent_frame_id=25}
+147 {file_location_id=86 parent_frame_id=25}
+148 {file_location_id=87 parent_frame_id=25}
+149 {file_location_id=88 parent_frame_id=149}
+150 {file_location_id=89 parent_frame_id=149}
+151 {file_location_id=90 parent_frame_id=25}
+152 {file_location_id=91 parent_frame_id=22}
+153 {file_location_id=92 parent_frame_id=14}
+154 {file_location_id=31 parent_frame_id=154}
+155 {file_location_id=32 parent_frame_id=155}
+156 {file_location_id=93 parent_frame_id=14}
+157 {file_location_id=94 parent_frame_id=157}
+158 {file_location_id=10 parent_frame_id=158}
+159 {file_location_id=35 parent_frame_id=159}
+160 {file_location_id=36 parent_frame_id=159}
+161 {file_location_id=37 parent_frame_id=161}
+162 {file_location_id=95 parent_frame_id=9}
+163 {file_location_id=22 parent_frame_id=29}
+164 {file_location_id=23 parent_frame_id=29}
+165 {file_location_id=24 parent_frame_id=29}
+166 {file_location_id=25 parent_frame_id=29}
+167 {file_location_id=26 parent_frame_id=29}
+168 {file_location_id=27 parent_frame_id=29}
+169 {file_location_id=28 parent_frame_id=29}
+170 {file_location_id=29 parent_frame_id=29}
+171 {file_location_id=96 parent_frame_id=8}
+172 {file_location_id=10 parent_frame_id=172}
+173 {file_location_id=97 parent_frame_id=173}
+174 {file_location_id=10 parent_frame_id=174}
+175 {file_location_id=35 parent_frame_id=175}
+176 {file_location_id=36 parent_frame_id=175}
+177 {file_location_id=37 parent_frame_id=177}
+178 {file_location_id=98 parent_frame_id=173}
+179 {file_location_id=99 parent_frame_id=173}
+180 {file_location_id=100 parent_frame_id=173}
+181 {file_location_id=31 parent_frame_id=181}
+182 {file_location_id=32 parent_frame_id=182}
+183 {file_location_id=101 parent_frame_id=173}
+184 {file_location_id=10 parent_frame_id=184}
+185 {file_location_id=35 parent_frame_id=185}
+186 {file_location_id=36 parent_frame_id=185}
+187 {file_location_id=37 parent_frame_id=187}
+188 {file_location_id=102 parent_frame_id=8}
+189 {file_location_id=103 parent_frame_id=7}
+190 {file_location_id=104 parent_frame_id=190}
+191 {file_location_id=105 parent_frame_id=191}
+192 {file_location_id=106 parent_frame_id=192}
+193 {file_location_id=107 parent_frame_id=193}
+194 {file_location_id=108 parent_frame_id=194}
+195 {file_location_id=104 parent_frame_id=195}
+196 {file_location_id=105 parent_frame_id=196}
+197 {file_location_id=106 parent_frame_id=197}
+198 {file_location_id=109 parent_frame_id=198}
+199 {file_location_id=110 parent_frame_id=199}
+200 {file_location_id=104 parent_frame_id=200}
+201 {file_location_id=105 parent_frame_id=201}
+202 {file_location_id=106 parent_frame_id=202}
+203 {file_location_id=111 parent_frame_id=203}
+204 {file_location_id=112 parent_frame_id=204}
+205 {file_location_id=113 parent_frame_id=14}
+206 {file_location_id=114 parent_frame_id=206}
+207 {file_location_id=10 parent_frame_id=207}
+208 {file_location_id=115 parent_frame_id=208}
+209 {file_location_id=116 parent_frame_id=209}
+210 {file_location_id=117 parent_frame_id=209}
+211 {file_location_id=118 parent_frame_id=1}
+212 {file_location_id=119 parent_frame_id=212}
+213 {file_location_id=120 parent_frame_id=213}
+214 {file_location_id=121 parent_frame_id=214}
+215 {file_location_id=122 parent_frame_id=215}
+216 {file_location_id=123 parent_frame_id=216}
+217 {file_location_id=124 parent_frame_id=217}
+218 {file_location_id=1 parent_frame_id=218}
+219 {file_location_id=2 parent_frame_id=219}
+220 {file_location_id=3 parent_frame_id=220}
+221 {file_location_id=4 parent_frame_id=221}
+222 {file_location_id=5 parent_frame_id=222}
+223 {file_location_id=1 parent_frame_id=223}
+224 {file_location_id=2 parent_frame_id=224}
+225 {file_location_id=3 parent_frame_id=225}
+226 {file_location_id=4 parent_frame_id=226}
+227 {file_location_id=5 parent_frame_id=227}
+228 {file_location_id=1 parent_frame_id=228}
+229 {file_location_id=2 parent_frame_id=229}
+230 {file_location_id=3 parent_frame_id=230}
+231 {file_location_id=4 parent_frame_id=231}
+232 {file_location_id=5 parent_frame_id=232}
+233 {file_location_id=125 parent_frame_id=221}
+234 {file_location_id=126 parent_frame_id=234}
+235 {file_location_id=7 parent_frame_id=235}
+236 {file_location_id=11 parent_frame_id=236}
+237 {file_location_id=127 parent_frame_id=1}
+238 {file_location_id=128 parent_frame_id=238}
+239 {file_location_id=127 parent_frame_id=239}
+240 {file_location_id=128 parent_frame_id=240}
+241 {file_location_id=129 parent_frame_id=221}
+242 {file_location_id=130 parent_frame_id=242}
+243 {file_location_id=7 parent_frame_id=243}
+244 {file_location_id=131 parent_frame_id=244}
+245 {file_location_id=132 parent_frame_id=218}
+246 {file_location_id=133 parent_frame_id=244}
+247 {file_location_id=134 parent_frame_id=222}
+248 {file_location_id=135 parent_frame_id=248}
+249 {file_location_id=136 parent_frame_id=249}
+250 {file_location_id=137 parent_frame_id=218}
+251 {file_location_id=138 parent_frame_id=218}
+252 {file_location_id=139 parent_frame_id=218}
+253 {file_location_id=140 parent_frame_id=218}
+254 {file_location_id=141 parent_frame_id=218}
+255 {file_location_id=142 parent_frame_id=218}
+256 {file_location_id=22 parent_frame_id=236}
+257 {file_location_id=23 parent_frame_id=236}
+258 {file_location_id=24 parent_frame_id=236}
+259 {file_location_id=25 parent_frame_id=236}
+260 {file_location_id=26 parent_frame_id=236}
+261 {file_location_id=27 parent_frame_id=236}
+262 {file_location_id=28 parent_frame_id=236}
+263 {file_location_id=29 parent_frame_id=236}
+264 {file_location_id=143 parent_frame_id=234}
+265 {file_location_id=7 parent_frame_id=265}
+266 {file_location_id=35 parent_frame_id=266}
+267 {file_location_id=36 parent_frame_id=266}
+268 {file_location_id=37 parent_frame_id=268}
+269 {file_location_id=144 parent_frame_id=234}
+270 {file_location_id=145 parent_frame_id=218}
+271 {file_location_id=146 parent_frame_id=218}
+272 {file_location_id=147 parent_frame_id=218}
+273 {file_location_id=148 parent_frame_id=218}
+274 {file_location_id=127 parent_frame_id=218}
+275 {file_location_id=128 parent_frame_id=275}
+276 {file_location_id=149 parent_frame_id=218}
+
+
+%dynamic_index_in_dim.1 (Arg_0.1: f32[40,5120,17408], Arg_1.1: s32[]) -> f32[5120,17408] {
+  %Arg_0.1 = f32[40,5120,17408]{2,1,0} parameter(0)
+  %Arg_1.1 = s32[] parameter(1)
+  %constant.18 = s32[] constant(0)
+  %dynamic_slice.1 = f32[1,5120,17408]{2,1,0} dynamic-slice(%Arg_0.1, %Arg_1.1, %constant.18, %constant.18), dynamic_slice_sizes={1,5120,17408}, metadata={op_name="dynamic_slice" stack_frame_id=5}
+  ROOT %squeeze.1 = f32[5120,17408]{1,0} reshape(%dynamic_slice.1), metadata={op_name="squeeze" stack_frame_id=5}
+}
+
+%dynamic_index_in_dim_0.2 (Arg_0.3: f32[40,17408,5120], Arg_1.3: s32[]) -> f32[17408,5120] {
+  %Arg_0.3 = f32[40,17408,5120]{2,1,0} parameter(0)
+  %Arg_1.3 = s32[] parameter(1)
+  %constant.20 = s32[] constant(0)
+  %dynamic_slice.3 = f32[1,17408,5120]{2,1,0} dynamic-slice(%Arg_0.3, %Arg_1.3, %constant.20, %constant.20), dynamic_slice_sizes={1,17408,5120}, metadata={op_name="dynamic_slice" stack_frame_id=5}
+  ROOT %squeeze.3 = f32[17408,5120]{1,0} reshape(%dynamic_slice.3), metadata={op_name="squeeze" stack_frame_id=5}
+}
+
+%dynamic_index_in_dim_1.3 (Arg_0.5: f32[40,5120], Arg_1.5: s32[]) -> f32[5120] {
+  %Arg_0.5 = f32[40,5120]{1,0} parameter(0)
+  %Arg_1.5 = s32[] parameter(1)
+  %constant.22 = s32[] constant(0)
+  %dynamic_slice.5 = f32[1,5120]{1,0} dynamic-slice(%Arg_0.5, %Arg_1.5, %constant.22), dynamic_slice_sizes={1,5120}, metadata={op_name="dynamic_slice" stack_frame_id=5}
+  ROOT %squeeze.5 = f32[5120]{0} reshape(%dynamic_slice.5), metadata={op_name="squeeze" stack_frame_id=5}
+}
+
+%dynamic_index_in_dim_2.4 (Arg_0.7: f32[40,5120,8,128], Arg_1.7: s32[]) -> f32[5120,8,128] {
+  %Arg_0.7 = f32[40,5120,8,128]{3,2,1,0} parameter(0)
+  %Arg_1.7 = s32[] parameter(1)
+  %constant.24 = s32[] constant(0)
+  %dynamic_slice.7 = f32[1,5120,8,128]{3,2,1,0} dynamic-slice(%Arg_0.7, %Arg_1.7, %constant.24, %constant.24, %constant.24), dynamic_slice_sizes={1,5120,8,128}, metadata={op_name="dynamic_slice" stack_frame_id=5}
+  ROOT %squeeze.7 = f32[5120,8,128]{2,1,0} reshape(%dynamic_slice.7), metadata={op_name="squeeze" stack_frame_id=5}
+}
+
+%dynamic_index_in_dim_3.5 (Arg_0.9: f32[40,128], Arg_1.9: s32[]) -> f32[128] {
+  %Arg_0.9 = f32[40,128]{1,0} parameter(0)
+  %Arg_1.9 = s32[] parameter(1)
+  %constant.26 = s32[] constant(0)
+  %dynamic_slice.9 = f32[1,128]{1,0} dynamic-slice(%Arg_0.9, %Arg_1.9, %constant.26), dynamic_slice_sizes={1,128}, metadata={op_name="dynamic_slice" stack_frame_id=5}
+  ROOT %squeeze.9 = f32[128]{0} reshape(%dynamic_slice.9), metadata={op_name="squeeze" stack_frame_id=5}
+}
+
+%dynamic_index_in_dim_4.6 (Arg_0.11: f32[40,40,128,5120], Arg_1.11: s32[]) -> f32[40,128,5120] {
+  %Arg_0.11 = f32[40,40,128,5120]{3,2,1,0} parameter(0)
+  %Arg_1.11 = s32[] parameter(1)
+  %constant.28 = s32[] constant(0)
+  %dynamic_slice.11 = f32[1,40,128,5120]{3,2,1,0} dynamic-slice(%Arg_0.11, %Arg_1.11, %constant.28, %constant.28, %constant.28), dynamic_slice_sizes={1,40,128,5120}, metadata={op_name="dynamic_slice" stack_frame_id=5}
+  ROOT %squeeze.11 = f32[40,128,5120]{2,1,0} reshape(%dynamic_slice.11), metadata={op_name="squeeze" stack_frame_id=5}
+}
+
+%dynamic_index_in_dim_5.7 (Arg_0.13: f32[40,5120,40,128], Arg_1.13: s32[]) -> f32[5120,40,128] {
+  %Arg_0.13 = f32[40,5120,40,128]{3,2,1,0} parameter(0)
+  %Arg_1.13 = s32[] parameter(1)
+  %constant.30 = s32[] constant(0)
+  %dynamic_slice.13 = f32[1,5120,40,128]{3,2,1,0} dynamic-slice(%Arg_0.13, %Arg_1.13, %constant.30, %constant.30, %constant.30), dynamic_slice_sizes={1,5120,40,128}, metadata={op_name="dynamic_slice" stack_frame_id=5}
+  ROOT %squeeze.13 = f32[5120,40,128]{2,1,0} reshape(%dynamic_slice.13), metadata={op_name="squeeze" stack_frame_id=5}
+}
+
+%region_1.8 (reduce_sum.3: f32[], reduce_sum.4: f32[]) -> f32[] {
+  %reduce_sum.3 = f32[] parameter(0), metadata={op_name="reduce_sum"}
+  %reduce_sum.4 = f32[] parameter(1), metadata={op_name="reduce_sum"}
+  ROOT %reduce_sum.5 = f32[] add(%reduce_sum.3, %reduce_sum.4), metadata={op_name="checkpoint/layers/reduce_sum" stack_frame_id=11}
+}
+
+%_where.11 (Arg_0.16: pred[1,1,1,64,64], Arg_1.16: f32[], Arg_2.2: f32[]) -> f32[1,1,1,64,64] {
+  %Arg_0.16 = pred[1,1,1,64,64]{4,3,2,1,0} parameter(0)
+  %Arg_1.16 = f32[] parameter(1)
+  %broadcast_in_dim.20 = f32[1,1,1,64,64]{4,3,2,1,0} broadcast(%Arg_1.16), dimensions={}, metadata={op_name="broadcast_in_dim"}
+  %Arg_2.2 = f32[] parameter(2)
+  %broadcast_in_dim.21 = f32[1,1,1,64,64]{4,3,2,1,0} broadcast(%Arg_2.2), dimensions={}, metadata={op_name="broadcast_in_dim"}
+  ROOT %select_n.2 = f32[1,1,1,64,64]{4,3,2,1,0} select(%Arg_0.16, %broadcast_in_dim.20, %broadcast_in_dim.21), metadata={op_name="select_n"}
+}
+
+%region_3.10 (reduce_sum.17: f32[], reduce_sum.18: f32[]) -> f32[] {
+  %reduce_sum.17 = f32[] parameter(0), metadata={op_name="reduce_sum"}
+  %reduce_sum.18 = f32[] parameter(1), metadata={op_name="reduce_sum"}
+  ROOT %reduce_sum.19 = f32[] add(%reduce_sum.17, %reduce_sum.18), metadata={op_name="checkpoint/layers/reduce_sum" stack_frame_id=19}
+}
+
+%region_2.9 (reduce_sum.10: f32[], reduce_sum.11: f32[]) -> f32[] {
+  %reduce_sum.10 = f32[] parameter(0), metadata={op_name="reduce_sum"}
+  %reduce_sum.11 = f32[] parameter(1), metadata={op_name="reduce_sum"}
+  ROOT %reduce_sum.12 = f32[] add(%reduce_sum.10, %reduce_sum.11), metadata={op_name="checkpoint/layers/reduce_sum" stack_frame_id=16}
+}
+
+%_where_6.12 (Arg_0.18: pred[1,1,1,64,64], Arg_1.18: bf16[1,8,5,64,64], Arg_2.4: f32[]) -> bf16[1,8,5,64,64] {
+  %Arg_0.18 = pred[1,1,1,64,64]{4,3,2,1,0} parameter(0)
+  %broadcast_in_dim.26 = pred[1,1,1,64,64]{4,3,2,1,0} broadcast(%Arg_0.18), dimensions={0,1,2,3,4}, metadata={op_name="broadcast_in_dim"}
+  %broadcast_in_dim.27 = pred[1,64,64]{2,1,0} reshape(%broadcast_in_dim.26), metadata={op_name="broadcast_in_dim"}
+  %broadcast_in_dim.28 = pred[1,8,5,64,64]{4,3,2,1,0} broadcast(%broadcast_in_dim.27), dimensions={0,3,4}, metadata={op_name="broadcast_in_dim"}
+  %Arg_1.18 = bf16[1,8,5,64,64]{4,3,2,1,0} parameter(1)
+  %Arg_2.4 = f32[] parameter(2)
+  %convert_element_type.23 = bf16[] convert(%Arg_2.4), metadata={op_name="convert_element_type"}
+  %broadcast_in_dim.29 = bf16[1,8,5,64,64]{4,3,2,1,0} broadcast(%convert_element_type.23), dimensions={}, metadata={op_name="broadcast_in_dim"}
+  ROOT %select_n.4 = bf16[1,8,5,64,64]{4,3,2,1,0} select(%broadcast_in_dim.28, %Arg_1.18, %broadcast_in_dim.29), metadata={op_name="select_n"}
+}
+
+%region_4.13 (reduce_max.3: bf16[], reduce_max.4: bf16[]) -> bf16[] {
+  %reduce_max.3 = bf16[] parameter(0), metadata={op_name="reduce_max"}
+  %reduce_max.4 = bf16[] parameter(1), metadata={op_name="reduce_max"}
+  ROOT %reduce_max.5 = bf16[] maximum(%reduce_max.3, %reduce_max.4), metadata={op_name="checkpoint/layers/reduce_max" stack_frame_id=25}
+}
+
+%region_5.14 (reduce_sum.24: f32[], reduce_sum.25: f32[]) -> f32[] {
+  %reduce_sum.24 = f32[] parameter(0), metadata={op_name="reduce_sum"}
+  %reduce_sum.25 = f32[] parameter(1), metadata={op_name="reduce_sum"}
+  ROOT %reduce_sum.26 = f32[] add(%reduce_sum.24, %reduce_sum.25), metadata={op_name="checkpoint/layers/reduce_sum" stack_frame_id=26}
+}
+
+%region_6.15 (reduce_sum.31: f32[], reduce_sum.32: f32[]) -> f32[] {
+  %reduce_sum.31 = f32[] parameter(0), metadata={op_name="reduce_sum"}
+  %reduce_sum.32 = f32[] parameter(1), metadata={op_name="reduce_sum"}
+  ROOT %reduce_sum.33 = f32[] add(%reduce_sum.31, %reduce_sum.32), metadata={op_name="checkpoint/layers/reduce_sum" stack_frame_id=29}
+}
+
+%silu.16 (Arg_0.20: bf16[1,64,17408]) -> bf16[1,64,17408] {
+  %Arg_0.20 = bf16[1,64,17408]{2,1,0} parameter(0)
+  %constant.49 = bf16[] constant(1)
+  %broadcast.10 = bf16[1,64,17408]{2,1,0} broadcast(%constant.49), dimensions={}
+  %neg.3 = bf16[1,64,17408]{2,1,0} negate(%Arg_0.20), metadata={op_name="neg"}
+  %exp.2 = bf16[1,64,17408]{2,1,0} exponential(%neg.3), metadata={op_name="exp"}
+  %add.13 = bf16[1,64,17408]{2,1,0} add(%exp.2, %broadcast.10), metadata={op_name="add"}
+  %div.28 = bf16[1,64,17408]{2,1,0} divide(%broadcast.10, %add.13), metadata={op_name="div"}
+  ROOT %mul.37 = bf16[1,64,17408]{2,1,0} multiply(%Arg_0.20, %div.28), metadata={op_name="mul"}
+}
+
+%closed_call.17 (Arg_0.21: s32[1,64], Arg_1.19: s32[1,64], Arg_2.5: bf16[1,64,5120], Arg_3.1: f32[5120,17408], Arg_4.1: f32[5120,17408], Arg_5.1: f32[17408,5120], Arg_6.1: f32[5120], Arg_7.1: f32[5120], Arg_8.1: f32[5120,8,128], Arg_9.1: f32[128], Arg_10.1: f32[40,128,5120], Arg_11.1: f32[5120,40,128], Arg_12.1: f32[128], Arg_13.1: f32[5120,8,128]) -> (bf16[1,64,5120], s32[1], s32[1,1984], s32[1,64], bf16[1984,8,1,128], /*index=5*/s32[1], bf16[1984,8,1,128], bf16[64,8,1,128], bf16[64,8,1,128]) {
+  %Arg_2.5 = bf16[1,64,5120]{2,1,0} parameter(2)
+  %Arg_7.1 = f32[5120]{0} parameter(7)
+  %convert_element_type.35 = bf16[5120]{0} convert(%Arg_7.1), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=30}
+  %convert_element_type.33 = f32[1,64,5120]{2,1,0} convert(%Arg_2.5), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=31}
+  %square.4 = f32[1,64,5120]{2,1,0} multiply(%convert_element_type.33, %convert_element_type.33), metadata={op_name="checkpoint/layers/square" stack_frame_id=32}
+  %constant.63 = f32[] constant(0)
+  %reduce_sum.35 = f32[1,64]{1,0} reduce(%square.4, %constant.63), dimensions={2}, to_apply=%region_1.8, metadata={op_name="checkpoint/layers/reduce_sum" stack_frame_id=11}
+  %broadcast_in_dim.34 = f32[1,64,1]{2,1,0} reshape(%reduce_sum.35), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=11}
+  %constant.60 = f32[] constant(5120)
+  %broadcast.15 = f32[1,64,1]{2,1,0} broadcast(%constant.60), dimensions={}
+  %div.31 = f32[1,64,1]{2,1,0} divide(%broadcast_in_dim.34, %broadcast.15), metadata={op_name="checkpoint/layers/div" stack_frame_id=11}
+  %constant.59 = f32[] constant(1e-06)
+  %broadcast.14 = f32[1,64,1]{2,1,0} broadcast(%constant.59), dimensions={}
+  %add.17 = f32[1,64,1]{2,1,0} add(%div.31, %broadcast.14), metadata={op_name="checkpoint/layers/add" stack_frame_id=33}
+  %rsqrt.4 = f32[1,64,1]{2,1,0} rsqrt(%add.17), metadata={op_name="checkpoint/layers/rsqrt" stack_frame_id=34}
+  %mul.40 = f32[1,64,1]{2,1,0} broadcast(%rsqrt.4), dimensions={0,1,2}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=35}
+  %mul.41 = f32[1,64]{1,0} reshape(%mul.40), metadata={op_name="checkpoint/layers/mul" stack_frame_id=35}
+  %mul.42 = f32[1,64,5120]{2,1,0} broadcast(%mul.41), dimensions={0,1}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=35}
+  %mul.43 = f32[1,64,5120]{2,1,0} multiply(%convert_element_type.33, %mul.42), metadata={op_name="checkpoint/layers/mul" stack_frame_id=35}
+  %convert_element_type.34 = bf16[1,64,5120]{2,1,0} convert(%mul.43), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=36}
+  %dot_general.13 = bf16[5120,1,64]{2,1,0} dot(%convert_element_type.35, %convert_element_type.34), lhs_batch_dims={0}, lhs_contracting_dims={}, rhs_batch_dims={2}, rhs_contracting_dims={}, metadata={op_name="checkpoint/layers/...k,k->...k/dot_general" stack_frame_id=37}
+  %transpose.20 = bf16[1,64,5120]{1,0,2} transpose(%dot_general.13), dimensions={1,2,0}, metadata={op_name="checkpoint/layers/...k,k->...k/transpose" stack_frame_id=37}
+  %sharding_constraint.8 = bf16[1,64,5120]{2,1,0} custom-call(%transpose.20), custom_call_target="Sharding", sharding={devices=[1,1,2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<@mesh, [{}, {}, {\"tensor\"}]>]>"}, metadata={op_name="checkpoint/layers/sharding_constraint" stack_frame_id=40}
+  %Arg_13.1 = f32[5120,8,128]{2,1,0} parameter(13)
+  %convert_element_type.38 = bf16[5120,8,128]{2,1,0} convert(%Arg_13.1), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=44}
+  %dot_general.16 = bf16[1,64,8,128]{3,2,1,0} dot(%sharding_constraint.8, %convert_element_type.38), lhs_contracting_dims={2}, rhs_contracting_dims={0}, metadata={op_name="checkpoint/layers/dot_general" stack_frame_id=46}
+  %sharding_constraint.11 = bf16[1,64,8,128]{3,2,1,0} custom-call(%dot_general.16), custom_call_target="Sharding", sharding={devices=[1,1,2,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<@mesh, [{}, {}, {\"tensor\"}, {}]>]>"}, metadata={op_name="checkpoint/layers/sharding_constraint" stack_frame_id=49}
+  %Arg_0.21 = s32[1,64]{1,0} parameter(0)
+  %broadcast_in_dim.41 = s32[1,64,1]{2,1,0} reshape(%Arg_0.21), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=51}
+  %eq.7 = s32[1,64,1]{2,1,0} broadcast(%broadcast_in_dim.41), dimensions={0,1,2}, metadata={op_name="checkpoint/layers/eq" stack_frame_id=51}
+  %eq.8 = s32[1,64]{1,0} reshape(%eq.7), metadata={op_name="checkpoint/layers/eq" stack_frame_id=51}
+  %eq.9 = s32[1,64,64]{2,1,0} broadcast(%eq.8), dimensions={0,1}, metadata={op_name="checkpoint/layers/eq" stack_frame_id=51}
+  %broadcast_in_dim.42 = s32[1,1,64]{2,1,0} reshape(%Arg_0.21), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=52}
+  %eq.10 = s32[1,1,64]{2,1,0} broadcast(%broadcast_in_dim.42), dimensions={0,1,2}, metadata={op_name="checkpoint/layers/eq" stack_frame_id=51}
+  %eq.11 = s32[1,64]{1,0} reshape(%eq.10), metadata={op_name="checkpoint/layers/eq" stack_frame_id=51}
+  %eq.12 = s32[1,64,64]{2,1,0} broadcast(%eq.11), dimensions={0,2}, metadata={op_name="checkpoint/layers/eq" stack_frame_id=51}
+  %eq.13 = pred[1,64,64]{2,1,0} compare(%eq.9, %eq.12), direction=EQ, metadata={op_name="checkpoint/layers/eq" stack_frame_id=51}
+  %broadcast_in_dim.43 = pred[1,1,1,64,64]{4,3,2,1,0} reshape(%eq.13), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=53}
+  %iota.12 = s32[64]{0} iota(), iota_dimension=0, metadata={op_name="checkpoint/layers/iota" stack_frame_id=54}
+  %iota.13 = s32[64,64]{1,0} broadcast(%iota.12), dimensions={1}, metadata={op_name="checkpoint/layers/iota" stack_frame_id=54}
+  %iota.10 = s32[64]{0} iota(), iota_dimension=0, metadata={op_name="checkpoint/layers/iota" stack_frame_id=55}
+  %iota.11 = s32[64,64]{1,0} broadcast(%iota.10), dimensions={0}, metadata={op_name="checkpoint/layers/iota" stack_frame_id=55}
+  %le.1 = pred[64,64]{1,0} compare(%iota.13, %iota.11), direction=LE, metadata={op_name="checkpoint/layers/le" stack_frame_id=56}
+  %broadcast_in_dim.44 = pred[1,1,1,64,64]{4,3,2,1,0} reshape(%le.1), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=57}
+  %and.1 = pred[1,1,1,64,64]{4,3,2,1,0} and(%broadcast_in_dim.43, %broadcast_in_dim.44), metadata={op_name="checkpoint/layers/and" stack_frame_id=58}
+  %constant.62 = f32[] constant(-2.38197633e+38)
+  %jit__where_.2 = f32[1,1,1,64,64]{4,3,2,1,0} call(%and.1, %constant.63, %constant.62), to_apply=%_where.11, metadata={op_name="checkpoint/layers/jit(_where)" stack_frame_id=59}
+  %constant.50 = f32[] constant(-1.19098816e+38)
+  %ge.2 = f32[1,1,1,64,64]{4,3,2,1,0} broadcast(%constant.50), dimensions={}, metadata={op_name="checkpoint/layers/ge" stack_frame_id=61}
+  %ge.3 = pred[1,1,1,64,64]{4,3,2,1,0} compare(%jit__where_.2, %ge.2), direction=GE, metadata={op_name="checkpoint/layers/ge" stack_frame_id=61}
+  %Arg_9.1 = f32[128]{0} parameter(9)
+  %convert_element_type.44 = bf16[128]{0} convert(%Arg_9.1), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=62}
+  %Arg_8.1 = f32[5120,8,128]{2,1,0} parameter(8)
+  %convert_element_type.37 = bf16[5120,8,128]{2,1,0} convert(%Arg_8.1), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=66}
+  %dot_general.15 = bf16[1,64,8,128]{3,2,1,0} dot(%sharding_constraint.8, %convert_element_type.37), lhs_contracting_dims={2}, rhs_contracting_dims={0}, metadata={op_name="checkpoint/layers/dot_general" stack_frame_id=68}
+  %convert_element_type.42 = f32[1,64,8,128]{3,2,1,0} convert(%dot_general.15), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=69}
+  %square.6 = f32[1,64,8,128]{3,2,1,0} multiply(%convert_element_type.42, %convert_element_type.42), metadata={op_name="checkpoint/layers/square" stack_frame_id=70}
+  %reduce_sum.37 = f32[1,64,8]{2,1,0} reduce(%square.6, %constant.63), dimensions={3}, to_apply=%region_3.10, metadata={op_name="checkpoint/layers/reduce_sum" stack_frame_id=19}
+  %broadcast_in_dim.36 = f32[1,64,8,1]{3,2,1,0} reshape(%reduce_sum.37), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=19}
+  %constant.56 = f32[] constant(128)
+  %div.29 = f32[1,64,8,1]{3,2,1,0} broadcast(%constant.56), dimensions={}, metadata={op_name="checkpoint/layers/div" stack_frame_id=19}
+  %div.33 = f32[1,64,8,1]{3,2,1,0} divide(%broadcast_in_dim.36, %div.29), metadata={op_name="checkpoint/layers/div" stack_frame_id=19}
+  %constant.55 = f32[] constant(1e-06)
+  %add.15 = f32[1,64,8,1]{3,2,1,0} broadcast(%constant.55), dimensions={}, metadata={op_name="checkpoint/layers/add" stack_frame_id=71}
+  %add.19 = f32[1,64,8,1]{3,2,1,0} add(%div.33, %add.15), metadata={op_name="checkpoint/layers/add" stack_frame_id=71}
+  %rsqrt.6 = f32[1,64,8,1]{3,2,1,0} rsqrt(%add.19), metadata={op_name="checkpoint/layers/rsqrt" stack_frame_id=72}
+  %mul.48 = f32[1,64,8,1]{3,2,1,0} broadcast(%rsqrt.6), dimensions={0,1,2,3}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=73}
+  %mul.49 = f32[1,64,8]{2,1,0} reshape(%mul.48), metadata={op_name="checkpoint/layers/mul" stack_frame_id=73}
+  %mul.50 = f32[1,64,8,128]{3,2,1,0} broadcast(%mul.49), dimensions={0,1,2}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=73}
+  %mul.51 = f32[1,64,8,128]{3,2,1,0} multiply(%convert_element_type.42, %mul.50), metadata={op_name="checkpoint/layers/mul" stack_frame_id=73}
+  %convert_element_type.43 = bf16[1,64,8,128]{3,2,1,0} convert(%mul.51), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=74}
+  %dot_general.18 = bf16[128,1,64,8]{3,2,1,0} dot(%convert_element_type.44, %convert_element_type.43), lhs_batch_dims={0}, lhs_contracting_dims={}, rhs_batch_dims={3}, rhs_contracting_dims={}, metadata={op_name="checkpoint/layers/...k,k->...k/dot_general" stack_frame_id=75}
+  %transpose.22 = bf16[1,64,8,128]{2,1,0,3} transpose(%dot_general.18), dimensions={1,2,3,0}, metadata={op_name="checkpoint/layers/...k,k->...k/transpose" stack_frame_id=75}
+  %Arg_1.19 = s32[1,64]{1,0} parameter(1)
+  %broadcast_in_dim.39 = s32[1,64,1,1]{3,2,1,0} reshape(%Arg_1.19), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=79}
+  %convert_element_type.50 = f32[1,64,1,1]{3,2,1,0} convert(%broadcast_in_dim.39), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=80}
+  %div.43 = f32[1,64,1,1]{3,2,1,0} broadcast(%convert_element_type.50), dimensions={0,1,2,3}, metadata={op_name="checkpoint/layers/div" stack_frame_id=80}
+  %div.44 = f32[1,64,1]{2,1,0} reshape(%div.43), metadata={op_name="checkpoint/layers/div" stack_frame_id=80}
+  %div.45 = f32[1,64,1,64]{3,2,1,0} broadcast(%div.44), dimensions={0,1,2}, metadata={op_name="checkpoint/layers/div" stack_frame_id=80}
+  %constant.52 = f32[] constant(1e+06)
+  %broadcast.11 = f32[64]{0} broadcast(%constant.52), dimensions={}
+  %iota.9 = s32[64]{0} iota(), iota_dimension=0, metadata={op_name="checkpoint/layers/iota" stack_frame_id=82}
+  %constant.54 = s32[] constant(2)
+  %broadcast.13 = s32[64]{0} broadcast(%constant.54), dimensions={}
+  %mul.61 = s32[64]{0} multiply(%iota.9, %broadcast.13), metadata={op_name="checkpoint/layers/mul" stack_frame_id=83}
+  %convert_element_type.49 = f32[64]{0} convert(%mul.61), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=83}
+  %constant.53 = f32[] constant(128)
+  %broadcast.12 = f32[64]{0} broadcast(%constant.53), dimensions={}
+  %div.42 = f32[64]{0} divide(%convert_element_type.49, %broadcast.12), metadata={op_name="checkpoint/layers/div" stack_frame_id=83}
+  %pow.3 = f32[64]{0} power(%broadcast.11, %div.42), metadata={op_name="checkpoint/layers/pow" stack_frame_id=84}
+  %broadcast_in_dim.40 = f32[1,1,1,64]{3,2,1,0} reshape(%pow.3), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=80}
+  %div.46 = f32[1,1,1,64]{3,2,1,0} broadcast(%broadcast_in_dim.40), dimensions={0,1,2,3}, metadata={op_name="checkpoint/layers/div" stack_frame_id=80}
+  %div.47 = f32[1,1,64]{2,1,0} reshape(%div.46), metadata={op_name="checkpoint/layers/div" stack_frame_id=80}
+  %div.48 = f32[1,64,1,64]{3,2,1,0} broadcast(%div.47), dimensions={0,2,3}, metadata={op_name="checkpoint/layers/div" stack_frame_id=80}
+  %div.49 = f32[1,64,1,64]{3,2,1,0} divide(%div.45, %div.48), metadata={op_name="checkpoint/layers/div" stack_frame_id=80}
+  %cos.3 = f32[1,64,1,64]{3,2,1,0} cosine(%div.49), metadata={op_name="checkpoint/layers/cos" stack_frame_id=85}
+  %convert_element_type.52 = bf16[1,64,1,64]{3,2,1,0} convert(%cos.3), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=85}
+  %concatenate.10 = bf16[1,64,1,128]{3,2,1,0} concatenate(%convert_element_type.52, %convert_element_type.52), dimensions={3}, metadata={op_name="checkpoint/layers/concatenate" stack_frame_id=86}
+  %mul.62 = bf16[1,64,1,128]{3,2,1,0} broadcast(%concatenate.10), dimensions={0,1,2,3}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=88}
+  %mul.63 = bf16[1,64,128]{2,1,0} reshape(%mul.62), metadata={op_name="checkpoint/layers/mul" stack_frame_id=88}
+  %mul.64 = bf16[1,64,8,128]{3,2,1,0} broadcast(%mul.63), dimensions={0,1,3}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=88}
+  %mul.65 = bf16[1,64,8,128]{2,1,0,3} multiply(%transpose.22, %mul.64), metadata={op_name="checkpoint/layers/mul" stack_frame_id=88}
+  %split.7 = bf16[1,64,8,64]{3,2,1,0} slice(%transpose.22), slice={[0:1], [0:64], [0:8], [64:128]}, metadata={op_name="checkpoint/layers/split" stack_frame_id=90}
+  %neg.5 = bf16[1,64,8,64]{3,2,1,0} negate(%split.7), metadata={op_name="checkpoint/layers/neg" stack_frame_id=91}
+  %split.6 = bf16[1,64,8,64]{3,2,1,0} slice(%transpose.22), slice={[0:1], [0:64], [0:8], [0:64]}, metadata={op_name="checkpoint/layers/split" stack_frame_id=90}
+  %concatenate.11 = bf16[1,64,8,128]{3,2,1,0} concatenate(%neg.5, %split.6), dimensions={3}, metadata={op_name="checkpoint/layers/concatenate" stack_frame_id=92}
+  %sin.3 = f32[1,64,1,64]{3,2,1,0} sine(%div.49), metadata={op_name="checkpoint/layers/sin" stack_frame_id=93}
+  %convert_element_type.51 = bf16[1,64,1,64]{3,2,1,0} convert(%sin.3), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=93}
+  %concatenate.9 = bf16[1,64,1,128]{3,2,1,0} concatenate(%convert_element_type.51, %convert_element_type.51), dimensions={3}, metadata={op_name="checkpoint/layers/concatenate" stack_frame_id=94}
+  %mul.66 = bf16[1,64,1,128]{3,2,1,0} broadcast(%concatenate.9), dimensions={0,1,2,3}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=89}
+  %mul.67 = bf16[1,64,128]{2,1,0} reshape(%mul.66), metadata={op_name="checkpoint/layers/mul" stack_frame_id=89}
+  %mul.68 = bf16[1,64,8,128]{3,2,1,0} broadcast(%mul.67), dimensions={0,1,3}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=89}
+  %mul.69 = bf16[1,64,8,128]{3,2,1,0} multiply(%concatenate.11, %mul.68), metadata={op_name="checkpoint/layers/mul" stack_frame_id=89}
+  %add.21 = bf16[1,64,8,128]{2,1,0,3} add(%mul.65, %mul.69), metadata={op_name="checkpoint/layers/add" stack_frame_id=95}
+  %sharding_constraint.10 = bf16[1,64,8,128]{3,2,1,0} custom-call(%add.21), custom_call_target="Sharding", sharding={devices=[1,1,2,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<@mesh, [{}, {}, {\"tensor\"}, {}]>]>"}, metadata={op_name="checkpoint/layers/sharding_constraint" stack_frame_id=98}
+  %Arg_12.1 = f32[128]{0} parameter(12)
+  %convert_element_type.41 = bf16[128]{0} convert(%Arg_12.1), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=99}
+  %sharding_constraint.7 = bf16[1,64,5120]{2,1,0} custom-call(%transpose.20), custom_call_target="Sharding", sharding={devices=[1,1,2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<@mesh, [{}, {}, {\"tensor\"}]>]>"}, metadata={op_name="checkpoint/layers/sharding_constraint" stack_frame_id=102}
+  %Arg_11.1 = f32[5120,40,128]{2,1,0} parameter(11)
+  %convert_element_type.36 = bf16[5120,40,128]{2,1,0} convert(%Arg_11.1), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=106}
+  %dot_general.14 = bf16[1,64,40,128]{3,2,1,0} dot(%sharding_constraint.7, %convert_element_type.36), lhs_contracting_dims={2}, rhs_contracting_dims={0}, metadata={op_name="checkpoint/layers/dot_general" stack_frame_id=108}
+  %convert_element_type.39 = f32[1,64,40,128]{3,2,1,0} convert(%dot_general.14), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=109}
+  %square.5 = f32[1,64,40,128]{3,2,1,0} multiply(%convert_element_type.39, %convert_element_type.39), metadata={op_name="checkpoint/layers/square" stack_frame_id=110}
+  %reduce_sum.36 = f32[1,64,40]{2,1,0} reduce(%square.5, %constant.63), dimensions={3}, to_apply=%region_2.9, metadata={op_name="checkpoint/layers/reduce_sum" stack_frame_id=16}
+  %broadcast_in_dim.35 = f32[1,64,40,1]{3,2,1,0} reshape(%reduce_sum.36), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=16}
+  %constant.58 = f32[] constant(128)
+  %div.30 = f32[1,64,40,1]{3,2,1,0} broadcast(%constant.58), dimensions={}, metadata={op_name="checkpoint/layers/div" stack_frame_id=16}
+  %div.32 = f32[1,64,40,1]{3,2,1,0} divide(%broadcast_in_dim.35, %div.30), metadata={op_name="checkpoint/layers/div" stack_frame_id=16}
+  %constant.57 = f32[] constant(1e-06)
+  %add.16 = f32[1,64,40,1]{3,2,1,0} broadcast(%constant.57), dimensions={}, metadata={op_name="checkpoint/layers/add" stack_frame_id=111}
+  %add.18 = f32[1,64,40,1]{3,2,1,0} add(%div.32, %add.16), metadata={op_name="checkpoint/layers/add" stack_frame_id=111}
+  %rsqrt.5 = f32[1,64,40,1]{3,2,1,0} rsqrt(%add.18), metadata={op_name="checkpoint/layers/rsqrt" stack_frame_id=112}
+  %mul.44 = f32[1,64,40,1]{3,2,1,0} broadcast(%rsqrt.5), dimensions={0,1,2,3}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=113}
+  %mul.45 = f32[1,64,40]{2,1,0} reshape(%mul.44), metadata={op_name="checkpoint/layers/mul" stack_frame_id=113}
+  %mul.46 = f32[1,64,40,128]{3,2,1,0} broadcast(%mul.45), dimensions={0,1,2}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=113}
+  %mul.47 = f32[1,64,40,128]{3,2,1,0} multiply(%convert_element_type.39, %mul.46), metadata={op_name="checkpoint/layers/mul" stack_frame_id=113}
+  %convert_element_type.40 = bf16[1,64,40,128]{3,2,1,0} convert(%mul.47), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=114}
+  %dot_general.17 = bf16[128,1,64,40]{3,2,1,0} dot(%convert_element_type.41, %convert_element_type.40), lhs_batch_dims={0}, lhs_contracting_dims={}, rhs_batch_dims={3}, rhs_contracting_dims={}, metadata={op_name="checkpoint/layers/...k,k->...k/dot_general" stack_frame_id=115}
+  %transpose.21 = bf16[1,64,40,128]{2,1,0,3} transpose(%dot_general.17), dimensions={1,2,3,0}, metadata={op_name="checkpoint/layers/...k,k->...k/transpose" stack_frame_id=115}
+  %broadcast_in_dim.37 = s32[1,64,1,1]{3,2,1,0} reshape(%Arg_1.19), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=119}
+  %convert_element_type.46 = f32[1,64,1,1]{3,2,1,0} convert(%broadcast_in_dim.37), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=120}
+  %div.35 = f32[1,64,1,1]{3,2,1,0} broadcast(%convert_element_type.46), dimensions={0,1,2,3}, metadata={op_name="checkpoint/layers/div" stack_frame_id=120}
+  %div.36 = f32[1,64,1]{2,1,0} reshape(%div.35), metadata={op_name="checkpoint/layers/div" stack_frame_id=120}
+  %div.37 = f32[1,64,1,64]{3,2,1,0} broadcast(%div.36), dimensions={0,1,2}, metadata={op_name="checkpoint/layers/div" stack_frame_id=120}
+  %iota.8 = s32[64]{0} iota(), iota_dimension=0, metadata={op_name="checkpoint/layers/iota" stack_frame_id=122}
+  %mul.52 = s32[64]{0} multiply(%iota.8, %broadcast.13), metadata={op_name="checkpoint/layers/mul" stack_frame_id=123}
+  %convert_element_type.45 = f32[64]{0} convert(%mul.52), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=123}
+  %div.34 = f32[64]{0} divide(%convert_element_type.45, %broadcast.12), metadata={op_name="checkpoint/layers/div" stack_frame_id=123}
+  %pow.2 = f32[64]{0} power(%broadcast.11, %div.34), metadata={op_name="checkpoint/layers/pow" stack_frame_id=124}
+  %broadcast_in_dim.38 = f32[1,1,1,64]{3,2,1,0} reshape(%pow.2), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=120}
+  %div.38 = f32[1,1,1,64]{3,2,1,0} broadcast(%broadcast_in_dim.38), dimensions={0,1,2,3}, metadata={op_name="checkpoint/layers/div" stack_frame_id=120}
+  %div.39 = f32[1,1,64]{2,1,0} reshape(%div.38), metadata={op_name="checkpoint/layers/div" stack_frame_id=120}
+  %div.40 = f32[1,64,1,64]{3,2,1,0} broadcast(%div.39), dimensions={0,2,3}, metadata={op_name="checkpoint/layers/div" stack_frame_id=120}
+  %div.41 = f32[1,64,1,64]{3,2,1,0} divide(%div.37, %div.40), metadata={op_name="checkpoint/layers/div" stack_frame_id=120}
+  %cos.2 = f32[1,64,1,64]{3,2,1,0} cosine(%div.41), metadata={op_name="checkpoint/layers/cos" stack_frame_id=125}
+  %convert_element_type.48 = bf16[1,64,1,64]{3,2,1,0} convert(%cos.2), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=125}
+  %concatenate.7 = bf16[1,64,1,128]{3,2,1,0} concatenate(%convert_element_type.48, %convert_element_type.48), dimensions={3}, metadata={op_name="checkpoint/layers/concatenate" stack_frame_id=126}
+  %mul.53 = bf16[1,64,1,128]{3,2,1,0} broadcast(%concatenate.7), dimensions={0,1,2,3}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=128}
+  %mul.54 = bf16[1,64,128]{2,1,0} reshape(%mul.53), metadata={op_name="checkpoint/layers/mul" stack_frame_id=128}
+  %mul.55 = bf16[1,64,40,128]{3,2,1,0} broadcast(%mul.54), dimensions={0,1,3}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=128}
+  %mul.56 = bf16[1,64,40,128]{2,1,0,3} multiply(%transpose.21, %mul.55), metadata={op_name="checkpoint/layers/mul" stack_frame_id=128}
+  %split.5 = bf16[1,64,40,64]{3,2,1,0} slice(%transpose.21), slice={[0:1], [0:64], [0:40], [64:128]}, metadata={op_name="checkpoint/layers/split" stack_frame_id=130}
+  %neg.4 = bf16[1,64,40,64]{3,2,1,0} negate(%split.5), metadata={op_name="checkpoint/layers/neg" stack_frame_id=131}
+  %split.4 = bf16[1,64,40,64]{3,2,1,0} slice(%transpose.21), slice={[0:1], [0:64], [0:40], [0:64]}, metadata={op_name="checkpoint/layers/split" stack_frame_id=130}
+  %concatenate.8 = bf16[1,64,40,128]{3,2,1,0} concatenate(%neg.4, %split.4), dimensions={3}, metadata={op_name="checkpoint/layers/concatenate" stack_frame_id=132}
+  %sin.2 = f32[1,64,1,64]{3,2,1,0} sine(%div.41), metadata={op_name="checkpoint/layers/sin" stack_frame_id=133}
+  %convert_element_type.47 = bf16[1,64,1,64]{3,2,1,0} convert(%sin.2), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=133}
+  %concatenate.6 = bf16[1,64,1,128]{3,2,1,0} concatenate(%convert_element_type.47, %convert_element_type.47), dimensions={3}, metadata={op_name="checkpoint/layers/concatenate" stack_frame_id=134}
+  %mul.57 = bf16[1,64,1,128]{3,2,1,0} broadcast(%concatenate.6), dimensions={0,1,2,3}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=129}
+  %mul.58 = bf16[1,64,128]{2,1,0} reshape(%mul.57), metadata={op_name="checkpoint/layers/mul" stack_frame_id=129}
+  %mul.59 = bf16[1,64,40,128]{3,2,1,0} broadcast(%mul.58), dimensions={0,1,3}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=129}
+  %mul.60 = bf16[1,64,40,128]{3,2,1,0} multiply(%concatenate.8, %mul.59), metadata={op_name="checkpoint/layers/mul" stack_frame_id=129}
+  %add.20 = bf16[1,64,40,128]{2,1,0,3} add(%mul.56, %mul.60), metadata={op_name="checkpoint/layers/add" stack_frame_id=135}
+  %constant.51 = bf16[] constant(0.08838)
+  %mul.39 = bf16[1,64,40,128]{3,2,1,0} broadcast(%constant.51), dimensions={}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=136}
+  %mul.70 = bf16[1,64,40,128]{2,1,0,3} multiply(%add.20, %mul.39), metadata={op_name="checkpoint/layers/mul" stack_frame_id=136}
+  %sharding_constraint.9 = bf16[1,64,40,128]{3,2,1,0} custom-call(%mul.70), custom_call_target="Sharding", sharding={devices=[1,1,2,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<@mesh, [{}, {}, {\"tensor\"}, {}]>]>"}, metadata={op_name="checkpoint/layers/sharding_constraint" stack_frame_id=139}
+  %reshape.4 = bf16[1,64,8,5,128]{4,3,2,1,0} reshape(%sharding_constraint.9), metadata={op_name="checkpoint/layers/reshape" stack_frame_id=141}
+  %dot_general.19 = bf16[1,8,64,64,5]{4,3,2,1,0} dot(%sharding_constraint.10, %reshape.4), lhs_batch_dims={0,2}, lhs_contracting_dims={3}, rhs_batch_dims={0,2}, rhs_contracting_dims={4}, metadata={op_name="checkpoint/layers/btkgd,bskd->bkgts/dot_general" stack_frame_id=142}
+  %transpose.25 = bf16[1,8,5,64,64]{2,3,4,1,0} transpose(%dot_general.19), dimensions={0,1,4,3,2}, metadata={op_name="checkpoint/layers/btkgd,bskd->bkgts/transpose" stack_frame_id=142}
+  %jit__where_.3 = bf16[1,8,5,64,64]{4,3,2,1,0} call(%ge.3, %transpose.25, %constant.62), to_apply=%_where_6.12, metadata={op_name="checkpoint/layers/jit(_where)" stack_frame_id=143}
+  %reshape.5 = bf16[1,40,64,64]{3,2,1,0} reshape(%jit__where_.3), metadata={op_name="checkpoint/layers/reshape" stack_frame_id=144}
+  %constant.61 = bf16[] constant(-inf)
+  %reduce_max.7 = bf16[1,40,64]{2,1,0} reduce(%reshape.5, %constant.61), dimensions={3}, to_apply=%region_4.13, metadata={op_name="checkpoint/layers/reduce_max" stack_frame_id=25}
+  %broadcast_in_dim.45 = bf16[1,40,64,1]{3,2,1,0} reshape(%reduce_max.7), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=25}
+  %sub.4 = bf16[1,40,64,1]{3,2,1,0} broadcast(%broadcast_in_dim.45), dimensions={0,1,2,3}, metadata={op_name="checkpoint/layers/sub" stack_frame_id=145}
+  %sub.5 = bf16[1,40,64]{2,1,0} reshape(%sub.4), metadata={op_name="checkpoint/layers/sub" stack_frame_id=145}
+  %sub.6 = bf16[1,40,64,64]{3,2,1,0} broadcast(%sub.5), dimensions={0,1,2}, metadata={op_name="checkpoint/layers/sub" stack_frame_id=145}
+  %sub.7 = bf16[1,40,64,64]{3,2,1,0} subtract(%reshape.5, %sub.6), metadata={op_name="checkpoint/layers/sub" stack_frame_id=145}
+  %exp.3 = bf16[1,40,64,64]{3,2,1,0} exponential(%sub.7), metadata={op_name="checkpoint/layers/exp" stack_frame_id=146}
+  %reshape.6 = bf16[1,8,5,64,64]{4,3,2,1,0} reshape(%exp.3), metadata={op_name="checkpoint/layers/reshape" stack_frame_id=147}
+  %dot_general.20 = bf16[1,8,128,5,64]{4,3,2,1,0} dot(%sharding_constraint.11, %reshape.6), lhs_batch_dims={0,2}, lhs_contracting_dims={1}, rhs_batch_dims={0,1}, rhs_contracting_dims={4}, metadata={op_name="checkpoint/layers/bkgts,bskd->btkgd/dot_general" stack_frame_id=149}
+  %transpose.27 = bf16[1,64,8,5,128]{1,3,4,2,0} transpose(%dot_general.20), dimensions={0,4,1,3,2}, metadata={op_name="checkpoint/layers/bkgts,bskd->btkgd/transpose" stack_frame_id=149}
+  %reshape.7 = bf16[1,64,40,128]{3,2,1,0} reshape(%transpose.27), metadata={op_name="checkpoint/layers/reshape" stack_frame_id=150}
+  %convert_element_type.53 = f32[1,40,64,64]{3,2,1,0} convert(%exp.3), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=26}
+  %reduce_sum.38 = f32[1,40,64]{2,1,0} reduce(%convert_element_type.53, %constant.63), dimensions={3}, to_apply=%region_5.14, metadata={op_name="checkpoint/layers/reduce_sum" stack_frame_id=26}
+  %broadcast_in_dim.46 = f32[1,40,64,1]{3,2,1,0} reshape(%reduce_sum.38), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=26}
+  %convert_element_type.54 = bf16[1,40,64,1]{3,2,1,0} convert(%broadcast_in_dim.46), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=26}
+  %transpose.26 = bf16[1,64,40,1]{3,1,2,0} transpose(%convert_element_type.54), dimensions={0,2,1,3}, metadata={op_name="checkpoint/layers/transpose" stack_frame_id=151}
+  %div.50 = bf16[1,64,40,1]{3,2,1,0} broadcast(%transpose.26), dimensions={0,1,2,3}, metadata={op_name="checkpoint/layers/div" stack_frame_id=152}
+  %div.51 = bf16[1,64,40]{2,1,0} reshape(%div.50), metadata={op_name="checkpoint/layers/div" stack_frame_id=152}
+  %div.52 = bf16[1,64,40,128]{3,2,1,0} broadcast(%div.51), dimensions={0,1,2}, metadata={op_name="checkpoint/layers/div" stack_frame_id=152}
+  %div.53 = bf16[1,64,40,128]{3,2,1,0} divide(%reshape.7, %div.52), metadata={op_name="checkpoint/layers/div" stack_frame_id=152}
+  %sharding_constraint.12 = bf16[1,64,40,128]{3,2,1,0} custom-call(%div.53), custom_call_target="Sharding", sharding={devices=[1,1,2,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<@mesh, [{}, {}, {\"tensor\"}, {}]>]>"}, metadata={op_name="checkpoint/layers/sharding_constraint" stack_frame_id=155}
+  %Arg_10.1 = f32[40,128,5120]{2,1,0} parameter(10)
+  %convert_element_type.55 = bf16[40,128,5120]{2,1,0} convert(%Arg_10.1), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=159}
+  %dot_general.21 = bf16[1,64,5120]{2,1,0} dot(%sharding_constraint.12, %convert_element_type.55), lhs_contracting_dims={2,3}, rhs_contracting_dims={0,1}, metadata={op_name="checkpoint/layers/dot_general" stack_frame_id=161}
+  %add.22 = bf16[1,64,5120]{2,1,0} add(%Arg_2.5, %dot_general.21), metadata={op_name="checkpoint/layers/add" stack_frame_id=162}
+  %Arg_6.1 = f32[5120]{0} parameter(6)
+  %convert_element_type.58 = bf16[5120]{0} convert(%Arg_6.1), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=163}
+  %convert_element_type.56 = f32[1,64,5120]{2,1,0} convert(%add.22), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=164}
+  %square.7 = f32[1,64,5120]{2,1,0} multiply(%convert_element_type.56, %convert_element_type.56), metadata={op_name="checkpoint/layers/square" stack_frame_id=165}
+  %reduce_sum.39 = f32[1,64]{1,0} reduce(%square.7, %constant.63), dimensions={2}, to_apply=%region_6.15, metadata={op_name="checkpoint/layers/reduce_sum" stack_frame_id=29}
+  %broadcast_in_dim.47 = f32[1,64,1]{2,1,0} reshape(%reduce_sum.39), metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=29}
+  %div.54 = f32[1,64,1]{2,1,0} divide(%broadcast_in_dim.47, %broadcast.15), metadata={op_name="checkpoint/layers/div" stack_frame_id=29}
+  %add.23 = f32[1,64,1]{2,1,0} add(%div.54, %broadcast.14), metadata={op_name="checkpoint/layers/add" stack_frame_id=166}
+  %rsqrt.7 = f32[1,64,1]{2,1,0} rsqrt(%add.23), metadata={op_name="checkpoint/layers/rsqrt" stack_frame_id=167}
+  %mul.71 = f32[1,64,1]{2,1,0} broadcast(%rsqrt.7), dimensions={0,1,2}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=168}
+  %mul.72 = f32[1,64]{1,0} reshape(%mul.71), metadata={op_name="checkpoint/layers/mul" stack_frame_id=168}
+  %mul.73 = f32[1,64,5120]{2,1,0} broadcast(%mul.72), dimensions={0,1}, metadata={op_name="checkpoint/layers/mul" stack_frame_id=168}
+  %mul.74 = f32[1,64,5120]{2,1,0} multiply(%convert_element_type.56, %mul.73), metadata={op_name="checkpoint/layers/mul" stack_frame_id=168}
+  %convert_element_type.57 = bf16[1,64,5120]{2,1,0} convert(%mul.74), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=169}
+  %dot_general.22 = bf16[5120,1,64]{2,1,0} dot(%convert_element_type.58, %convert_element_type.57), lhs_batch_dims={0}, lhs_contracting_dims={}, rhs_batch_dims={2}, rhs_contracting_dims={}, metadata={op_name="checkpoint/layers/...k,k->...k/dot_general" stack_frame_id=170}
+  %transpose.28 = bf16[1,64,5120]{1,0,2} transpose(%dot_general.22), dimensions={1,2,0}, metadata={op_name="checkpoint/layers/...k,k->...k/transpose" stack_frame_id=170}
+  %Arg_3.1 = f32[5120,17408]{1,0} parameter(3)
+  %convert_element_type.59 = bf16[5120,17408]{1,0} convert(%Arg_3.1), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=175}
+  %dot_general.23 = bf16[1,64,17408]{2,1,0} dot(%transpose.28, %convert_element_type.59), lhs_contracting_dims={2}, rhs_contracting_dims={0}, metadata={op_name="checkpoint/layers/dot_general" stack_frame_id=177}
+  %jit_silu_.1 = bf16[1,64,17408]{2,1,0} call(%dot_general.23), to_apply=%silu.16, metadata={op_name="checkpoint/layers/jit(silu)" stack_frame_id=178}
+  %Arg_4.1 = f32[5120,17408]{1,0} parameter(4)
+  %convert_element_type.60 = bf16[5120,17408]{1,0} convert(%Arg_4.1), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=175}
+  %dot_general.24 = bf16[1,64,17408]{2,1,0} dot(%transpose.28, %convert_element_type.60), lhs_contracting_dims={2}, rhs_contracting_dims={0}, metadata={op_name="checkpoint/layers/dot_general" stack_frame_id=177}
+  %mul.75 = bf16[1,64,17408]{2,1,0} multiply(%jit_silu_.1, %dot_general.24), metadata={op_name="checkpoint/layers/mul" stack_frame_id=179}
+  %sharding_constraint.13 = bf16[1,64,17408]{2,1,0} custom-call(%mul.75), custom_call_target="Sharding", sharding={devices=[1,1,2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<@mesh, [{}, {}, {\"tensor\"}]>]>"}, metadata={op_name="checkpoint/layers/sharding_constraint" stack_frame_id=182}
+  %Arg_5.1 = f32[17408,5120]{1,0} parameter(5)
+  %convert_element_type.61 = bf16[17408,5120]{1,0} convert(%Arg_5.1), metadata={op_name="checkpoint/layers/convert_element_type" stack_frame_id=185}
+  %dot_general.25 = bf16[1,64,5120]{2,1,0} dot(%sharding_constraint.13, %convert_element_type.61), lhs_contracting_dims={2}, rhs_contracting_dims={0}, metadata={op_name="checkpoint/layers/dot_general" stack_frame_id=187}
+  %add.24 = bf16[1,64,5120]{2,1,0} add(%add.22, %dot_general.25), metadata={op_name="checkpoint/layers/add" stack_frame_id=188}
+  %constant.66 = s32[1]{0} constant({0})
+  %constant.65 = s32[] constant(0)
+  %broadcast_in_dim.33 = s32[1,1984]{1,0} broadcast(%constant.65), dimensions={}, metadata={op_name="checkpoint/layers/broadcast_in_dim" stack_frame_id=204}
+  %constant.64 = bf16[] constant(0)
+  %broadcast.16 = bf16[1984,8,1,128]{3,2,1,0} broadcast(%constant.64), dimensions={}
+  %transpose.23 = bf16[64,8,1,128]{3,2,1,0} reshape(%sharding_constraint.10), metadata={op_name="checkpoint/layers/transpose" stack_frame_id=209}
+  %transpose.24 = bf16[64,8,1,128]{3,2,1,0} reshape(%sharding_constraint.11), metadata={op_name="checkpoint/layers/transpose" stack_frame_id=210}
+  ROOT %tuple.1 = (bf16[1,64,5120]{2,1,0}, s32[1]{0}, s32[1,1984]{1,0}, s32[1,64]{1,0}, bf16[1984,8,1,128]{3,2,1,0}, /*index=5*/s32[1]{0}, bf16[1984,8,1,128]{3,2,1,0}, bf16[64,8,1,128]{3,2,1,0}, bf16[64,8,1,128]{3,2,1,0}) tuple(%add.24, %constant.66, %broadcast_in_dim.33, %Arg_0.21, %broadcast.16, /*index=5*/%constant.66, %broadcast.16, %transpose.23, %transpose.24)
+}
+
+%dynamic_update_index_in_dim.18 (Arg_0.23: s32[40,1], Arg_1.21: s32[1], Arg_2.7: s32[]) -> s32[40,1] {
+  %Arg_0.23 = s32[40,1]{1,0} parameter(0)
+  %Arg_1.21 = s32[1]{0} parameter(1)
+  %broadcast_in_dim.49 = s32[1,1]{1,0} reshape(%Arg_1.21), metadata={op_name="broadcast_in_dim" stack_frame_id=5}
+  %Arg_2.7 = s32[] parameter(2)
+  %constant.68 = s32[] constant(0)
+  ROOT %dynamic_update_slice.1 = s32[40,1]{1,0} dynamic-update-slice(%Arg_0.23, %broadcast_in_dim.49, %Arg_2.7, %constant.68), metadata={op_name="dynamic_update_slice" stack_frame_id=5}
+}
+
+%dynamic_update_index_in_dim_7.19 (Arg_0.25: s32[40,1,1984], Arg_1.23: s32[1,1984], Arg_2.9: s32[]) -> s32[40,1,1984] {
+  %Arg_0.25 = s32[40,1,1984]{2,1,0} parameter(0)
+  %Arg_1.23 = s32[1,1984]{1,0} parameter(1)
+  %broadcast_in_dim.51 = s32[1,1,1984]{2,1,0} reshape(%Arg_1.23), metadata={op_name="broadcast_in_dim" stack_frame_id=5}
+  %Arg_2.9 = s32[] parameter(2)
+  %constant.70 = s32[] constant(0)
+  ROOT %dynamic_update_slice.3 = s32[40,1,1984]{2,1,0} dynamic-update-slice(%Arg_0.25, %broadcast_in_dim.51, %Arg_2.9, %constant.70, %constant.70), metadata={op_name="dynamic_update_slice" stack_frame_id=5}
+}
+
+%dynamic_update_index_in_dim_8.20 (Arg_0.27: s32[40,1,64], Arg_1.25: s32[1,64], Arg_2.11: s32[]) -> s32[40,1,64] {
+  %Arg_0.27 = s32[40,1,64]{2,1,0} parameter(0)
+  %Arg_1.25 = s32[1,64]{1,0} parameter(1)
+  %broadcast_in_dim.53 = s32[1,1,64]{2,1,0} reshape(%Arg_1.25), metadata={op_name="broadcast_in_dim" stack_frame_id=5}
+  %Arg_2.11 = s32[] parameter(2)
+  %constant.72 = s32[] constant(0)
+  ROOT %dynamic_update_slice.5 = s32[40,1,64]{2,1,0} dynamic-update-slice(%Arg_0.27, %broadcast_in_dim.53, %Arg_2.11, %constant.72, %constant.72), metadata={op_name="dynamic_update_slice" stack_frame_id=5}
+}
+
+%dynamic_update_index_in_dim_9.21 (Arg_0.29: bf16[40,1984,8,1,128], Arg_1.27: bf16[1984,8,1,128], Arg_2.13: s32[]) -> bf16[40,1984,8,1,128] {
+  %Arg_0.29 = bf16[40,1984,8,1,128]{4,3,2,1,0} parameter(0)
+  %Arg_1.27 = bf16[1984,8,1,128]{3,2,1,0} parameter(1)
+  %broadcast_in_dim.55 = bf16[1,1984,8,1,128]{4,3,2,1,0} reshape(%Arg_1.27), metadata={op_name="broadcast_in_dim" stack_frame_id=5}
+  %Arg_2.13 = s32[] parameter(2)
+  %constant.74 = s32[] constant(0)
+  ROOT %dynamic_update_slice.7 = bf16[40,1984,8,1,128]{4,3,2,1,0} dynamic-update-slice(%Arg_0.29, %broadcast_in_dim.55, %Arg_2.13, %constant.74, %constant.74, /*index=5*/%constant.74, %constant.74), metadata={op_name="dynamic_update_slice" stack_frame_id=5}
+}
+
+%dynamic_update_index_in_dim_10.22 (Arg_0.31: bf16[40,64,8,1,128], Arg_1.29: bf16[64,8,1,128], Arg_2.15: s32[]) -> bf16[40,64,8,1,128] {
+  %Arg_0.31 = bf16[40,64,8,1,128]{4,3,2,1,0} parameter(0)
+  %Arg_1.29 = bf16[64,8,1,128]{3,2,1,0} parameter(1)
+  %broadcast_in_dim.57 = bf16[1,64,8,1,128]{4,3,2,1,0} reshape(%Arg_1.29), metadata={op_name="broadcast_in_dim" stack_frame_id=5}
+  %Arg_2.15 = s32[] parameter(2)
+  %constant.76 = s32[] constant(0)
+  ROOT %dynamic_update_slice.9 = bf16[40,64,8,1,128]{4,3,2,1,0} dynamic-update-slice(%Arg_0.31, %broadcast_in_dim.57, %Arg_2.15, %constant.76, %constant.76, /*index=5*/%constant.76, %constant.76), metadata={op_name="dynamic_update_slice" stack_frame_id=5}
+}
+
+%region_0.23 (arg_tuple.1: (s32[], bf16[1,64,5120], s32[40,1], s32[40,1,1984], s32[40,1,64], /*index=5*/bf16[40,1984,8,1,128], s32[40,1], bf16[40,1984,8,1,128], bf16[40,64,8,1,128], bf16[40,64,8,1,128], /*index=10*/f32[40,5120,17408], f32[40,5120,17408], f32[40,17408,5120], f32[40,5120], f32[40,5120], /*index=15*/f32[40,5120,8,128], f32[40,128], f32[40,40,128,5120], f32[40,5120,40,128], f32[40,128], /*index=20*/f32[40,5120,8,128], s32[1,64], s32[1,64])) -> (s32[], bf16[1,64,5120], s32[40,1], s32[40,1,1984], s32[40,1,64], /*index=5*/bf16[40,1984,8,1,128], s32[40,1], bf16[40,1984,8,1,128], bf16[40,64,8,1,128], bf16[40,64,8,1,128], /*index=10*/f32[40,5120,17408], f32[40,5120,17408], f32[40,17408,5120], f32[40,5120], f32[40,5120], /*index=15*/f32[40,5120,8,128], f32[40,128], f32[40,40,128,5120], f32[40,5120,40,128], f32[40,128], /*index=20*/f32[40,5120,8,128], s32[1,64], s32[1,64]) {
+  %arg_tuple.1 = (s32[], bf16[1,64,5120]{2,1,0}, s32[40,1]{1,0}, s32[40,1,1984]{2,1,0}, s32[40,1,64]{2,1,0}, /*index=5*/bf16[40,1984,8,1,128]{4,3,2,1,0}, s32[40,1]{1,0}, bf16[40,1984,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, /*index=10*/f32[40,5120,17408]{2,1,0}, f32[40,5120,17408]{2,1,0}, f32[40,17408,5120]{2,1,0}, f32[40,5120]{1,0}, f32[40,5120]{1,0}, /*index=15*/f32[40,5120,8,128]{3,2,1,0}, f32[40,128]{1,0}, f32[40,40,128,5120]{3,2,1,0}, f32[40,5120,40,128]{3,2,1,0}, f32[40,128]{1,0}, /*index=20*/f32[40,5120,8,128]{3,2,1,0}, s32[1,64]{1,0}, s32[1,64]{1,0}) parameter(0)
+  %get-tuple-element.23 = s32[] get-tuple-element(%arg_tuple.1), index=0
+  %constant.77 = s32[] constant(1)
+  %add.26 = s32[] add(%get-tuple-element.23, %constant.77), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/add" stack_frame_id=232}
+  %get-tuple-element.44 = s32[1,64]{1,0} get-tuple-element(%arg_tuple.1), index=21
+  %get-tuple-element.45 = s32[1,64]{1,0} get-tuple-element(%arg_tuple.1), index=22
+  %get-tuple-element.24 = bf16[1,64,5120]{2,1,0} get-tuple-element(%arg_tuple.1), index=1
+  %get-tuple-element.33 = f32[40,5120,17408]{2,1,0} get-tuple-element(%arg_tuple.1), index=10
+  %jit_dynamic_index_in_dim_.11 = f32[5120,17408]{1,0} call(%get-tuple-element.33, %get-tuple-element.23), to_apply=%dynamic_index_in_dim.1, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.34 = f32[40,5120,17408]{2,1,0} get-tuple-element(%arg_tuple.1), index=11
+  %jit_dynamic_index_in_dim_.12 = f32[5120,17408]{1,0} call(%get-tuple-element.34, %get-tuple-element.23), to_apply=%dynamic_index_in_dim.1, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.35 = f32[40,17408,5120]{2,1,0} get-tuple-element(%arg_tuple.1), index=12
+  %jit_dynamic_index_in_dim_.13 = f32[17408,5120]{1,0} call(%get-tuple-element.35, %get-tuple-element.23), to_apply=%dynamic_index_in_dim_0.2, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.36 = f32[40,5120]{1,0} get-tuple-element(%arg_tuple.1), index=13
+  %jit_dynamic_index_in_dim_.14 = f32[5120]{0} call(%get-tuple-element.36, %get-tuple-element.23), to_apply=%dynamic_index_in_dim_1.3, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.37 = f32[40,5120]{1,0} get-tuple-element(%arg_tuple.1), index=14
+  %jit_dynamic_index_in_dim_.15 = f32[5120]{0} call(%get-tuple-element.37, %get-tuple-element.23), to_apply=%dynamic_index_in_dim_1.3, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.38 = f32[40,5120,8,128]{3,2,1,0} get-tuple-element(%arg_tuple.1), index=15
+  %jit_dynamic_index_in_dim_.16 = f32[5120,8,128]{2,1,0} call(%get-tuple-element.38, %get-tuple-element.23), to_apply=%dynamic_index_in_dim_2.4, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.39 = f32[40,128]{1,0} get-tuple-element(%arg_tuple.1), index=16
+  %jit_dynamic_index_in_dim_.17 = f32[128]{0} call(%get-tuple-element.39, %get-tuple-element.23), to_apply=%dynamic_index_in_dim_3.5, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.40 = f32[40,40,128,5120]{3,2,1,0} get-tuple-element(%arg_tuple.1), index=17
+  %jit_dynamic_index_in_dim_.18 = f32[40,128,5120]{2,1,0} call(%get-tuple-element.40, %get-tuple-element.23), to_apply=%dynamic_index_in_dim_4.6, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.41 = f32[40,5120,40,128]{3,2,1,0} get-tuple-element(%arg_tuple.1), index=18
+  %jit_dynamic_index_in_dim_.19 = f32[5120,40,128]{2,1,0} call(%get-tuple-element.41, %get-tuple-element.23), to_apply=%dynamic_index_in_dim_5.7, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.42 = f32[40,128]{1,0} get-tuple-element(%arg_tuple.1), index=19
+  %jit_dynamic_index_in_dim_.20 = f32[128]{0} call(%get-tuple-element.42, %get-tuple-element.23), to_apply=%dynamic_index_in_dim_3.5, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.43 = f32[40,5120,8,128]{3,2,1,0} get-tuple-element(%arg_tuple.1), index=20
+  %jit_dynamic_index_in_dim_.21 = f32[5120,8,128]{2,1,0} call(%get-tuple-element.43, %get-tuple-element.23), to_apply=%dynamic_index_in_dim_2.4, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_index_in_dim)" stack_frame_id=232}
+  %closed_call.10 = (bf16[1,64,5120]{2,1,0}, s32[1]{0}, s32[1,1984]{1,0}, s32[1,64]{1,0}, bf16[1984,8,1,128]{3,2,1,0}, /*index=5*/s32[1]{0}, bf16[1984,8,1,128]{3,2,1,0}, bf16[64,8,1,128]{3,2,1,0}, bf16[64,8,1,128]{3,2,1,0}) call(%get-tuple-element.44, %get-tuple-element.45, %get-tuple-element.24, %jit_dynamic_index_in_dim_.11, %jit_dynamic_index_in_dim_.12, /*index=5*/%jit_dynamic_index_in_dim_.13, %jit_dynamic_index_in_dim_.14, %jit_dynamic_index_in_dim_.15, %jit_dynamic_index_in_dim_.16, %jit_dynamic_index_in_dim_.17, /*index=10*/%jit_dynamic_index_in_dim_.18, %jit_dynamic_index_in_dim_.19, %jit_dynamic_index_in_dim_.20, %jit_dynamic_index_in_dim_.21), to_apply=%closed_call.17, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/closed_call" stack_frame_id=232}
+  %closed_call.11 = bf16[1,64,5120]{2,1,0} get-tuple-element(%closed_call.10), index=0, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/closed_call" stack_frame_id=232}
+  %get-tuple-element.25 = s32[40,1]{1,0} get-tuple-element(%arg_tuple.1), index=2
+  %closed_call.12 = s32[1]{0} get-tuple-element(%closed_call.10), index=1, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/closed_call" stack_frame_id=232}
+  %jit_dynamic_update_index_in_dim_.8 = s32[40,1]{1,0} call(%get-tuple-element.25, %closed_call.12, %get-tuple-element.23), to_apply=%dynamic_update_index_in_dim.18, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_update_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.26 = s32[40,1,1984]{2,1,0} get-tuple-element(%arg_tuple.1), index=3
+  %closed_call.13 = s32[1,1984]{1,0} get-tuple-element(%closed_call.10), index=2, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/closed_call" stack_frame_id=232}
+  %jit_dynamic_update_index_in_dim_.9 = s32[40,1,1984]{2,1,0} call(%get-tuple-element.26, %closed_call.13, %get-tuple-element.23), to_apply=%dynamic_update_index_in_dim_7.19, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_update_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.27 = s32[40,1,64]{2,1,0} get-tuple-element(%arg_tuple.1), index=4
+  %closed_call.14 = s32[1,64]{1,0} get-tuple-element(%closed_call.10), index=3, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/closed_call" stack_frame_id=232}
+  %jit_dynamic_update_index_in_dim_.10 = s32[40,1,64]{2,1,0} call(%get-tuple-element.27, %closed_call.14, %get-tuple-element.23), to_apply=%dynamic_update_index_in_dim_8.20, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_update_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.28 = bf16[40,1984,8,1,128]{4,3,2,1,0} get-tuple-element(%arg_tuple.1), index=5
+  %closed_call.15 = bf16[1984,8,1,128]{3,2,1,0} get-tuple-element(%closed_call.10), index=4, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/closed_call" stack_frame_id=232}
+  %jit_dynamic_update_index_in_dim_.11 = bf16[40,1984,8,1,128]{4,3,2,1,0} call(%get-tuple-element.28, %closed_call.15, %get-tuple-element.23), to_apply=%dynamic_update_index_in_dim_9.21, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_update_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.29 = s32[40,1]{1,0} get-tuple-element(%arg_tuple.1), index=6
+  %closed_call.16 = s32[1]{0} get-tuple-element(%closed_call.10), index=5, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/closed_call" stack_frame_id=232}
+  %jit_dynamic_update_index_in_dim_.12 = s32[40,1]{1,0} call(%get-tuple-element.29, %closed_call.16, %get-tuple-element.23), to_apply=%dynamic_update_index_in_dim.18, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_update_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.30 = bf16[40,1984,8,1,128]{4,3,2,1,0} get-tuple-element(%arg_tuple.1), index=7
+  %closed_call.17 = bf16[1984,8,1,128]{3,2,1,0} get-tuple-element(%closed_call.10), index=6, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/closed_call" stack_frame_id=232}
+  %jit_dynamic_update_index_in_dim_.13 = bf16[40,1984,8,1,128]{4,3,2,1,0} call(%get-tuple-element.30, %closed_call.17, %get-tuple-element.23), to_apply=%dynamic_update_index_in_dim_9.21, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_update_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.31 = bf16[40,64,8,1,128]{4,3,2,1,0} get-tuple-element(%arg_tuple.1), index=8
+  %closed_call.18 = bf16[64,8,1,128]{3,2,1,0} get-tuple-element(%closed_call.10), index=7, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/closed_call" stack_frame_id=232}
+  %jit_dynamic_update_index_in_dim_.14 = bf16[40,64,8,1,128]{4,3,2,1,0} call(%get-tuple-element.31, %closed_call.18, %get-tuple-element.23), to_apply=%dynamic_update_index_in_dim_10.22, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_update_index_in_dim)" stack_frame_id=232}
+  %get-tuple-element.32 = bf16[40,64,8,1,128]{4,3,2,1,0} get-tuple-element(%arg_tuple.1), index=9
+  %closed_call.19 = bf16[64,8,1,128]{3,2,1,0} get-tuple-element(%closed_call.10), index=8, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/closed_call" stack_frame_id=232}
+  %jit_dynamic_update_index_in_dim_.15 = bf16[40,64,8,1,128]{4,3,2,1,0} call(%get-tuple-element.32, %closed_call.19, %get-tuple-element.23), to_apply=%dynamic_update_index_in_dim_10.22, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/body/jit(dynamic_update_index_in_dim)" stack_frame_id=232}
+  ROOT %tuple.3 = (s32[], bf16[1,64,5120]{2,1,0}, s32[40,1]{1,0}, s32[40,1,1984]{2,1,0}, s32[40,1,64]{2,1,0}, /*index=5*/bf16[40,1984,8,1,128]{4,3,2,1,0}, s32[40,1]{1,0}, bf16[40,1984,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, /*index=10*/f32[40,5120,17408]{2,1,0}, f32[40,5120,17408]{2,1,0}, f32[40,17408,5120]{2,1,0}, f32[40,5120]{1,0}, f32[40,5120]{1,0}, /*index=15*/f32[40,5120,8,128]{3,2,1,0}, f32[40,128]{1,0}, f32[40,40,128,5120]{3,2,1,0}, f32[40,5120,40,128]{3,2,1,0}, f32[40,128]{1,0}, /*index=20*/f32[40,5120,8,128]{3,2,1,0}, s32[1,64]{1,0}, s32[1,64]{1,0}) tuple(%add.26, %closed_call.11, %jit_dynamic_update_index_in_dim_.8, %jit_dynamic_update_index_in_dim_.9, %jit_dynamic_update_index_in_dim_.10, /*index=5*/%jit_dynamic_update_index_in_dim_.11, %jit_dynamic_update_index_in_dim_.12, %jit_dynamic_update_index_in_dim_.13, %jit_dynamic_update_index_in_dim_.14, %jit_dynamic_update_index_in_dim_.15, /*index=10*/%get-tuple-element.33, %get-tuple-element.34, %get-tuple-element.35, %get-tuple-element.36, %get-tuple-element.37, /*index=15*/%get-tuple-element.38, %get-tuple-element.39, %get-tuple-element.40, %get-tuple-element.41, %get-tuple-element.42, /*index=20*/%get-tuple-element.43, %get-tuple-element.44, %get-tuple-element.45)
+}
+
+%region_7.24 (arg_tuple.3: (s32[], bf16[1,64,5120], s32[40,1], s32[40,1,1984], s32[40,1,64], /*index=5*/bf16[40,1984,8,1,128], s32[40,1], bf16[40,1984,8,1,128], bf16[40,64,8,1,128], bf16[40,64,8,1,128], /*index=10*/f32[40,5120,17408], f32[40,5120,17408], f32[40,17408,5120], f32[40,5120], f32[40,5120], /*index=15*/f32[40,5120,8,128], f32[40,128], f32[40,40,128,5120], f32[40,5120,40,128], f32[40,128], /*index=20*/f32[40,5120,8,128], s32[1,64], s32[1,64])) -> pred[] {
+  %arg_tuple.3 = (s32[], bf16[1,64,5120]{2,1,0}, s32[40,1]{1,0}, s32[40,1,1984]{2,1,0}, s32[40,1,64]{2,1,0}, /*index=5*/bf16[40,1984,8,1,128]{4,3,2,1,0}, s32[40,1]{1,0}, bf16[40,1984,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, /*index=10*/f32[40,5120,17408]{2,1,0}, f32[40,5120,17408]{2,1,0}, f32[40,17408,5120]{2,1,0}, f32[40,5120]{1,0}, f32[40,5120]{1,0}, /*index=15*/f32[40,5120,8,128]{3,2,1,0}, f32[40,128]{1,0}, f32[40,40,128,5120]{3,2,1,0}, f32[40,5120,40,128]{3,2,1,0}, f32[40,128]{1,0}, /*index=20*/f32[40,5120,8,128]{3,2,1,0}, s32[1,64]{1,0}, s32[1,64]{1,0}) parameter(0)
+  %get-tuple-element.70 = bf16[1,64,5120]{2,1,0} get-tuple-element(%arg_tuple.3), index=1
+  %get-tuple-element.71 = s32[40,1]{1,0} get-tuple-element(%arg_tuple.3), index=2
+  %get-tuple-element.72 = s32[40,1,1984]{2,1,0} get-tuple-element(%arg_tuple.3), index=3
+  %get-tuple-element.73 = s32[40,1,64]{2,1,0} get-tuple-element(%arg_tuple.3), index=4
+  %get-tuple-element.74 = bf16[40,1984,8,1,128]{4,3,2,1,0} get-tuple-element(%arg_tuple.3), index=5
+  %get-tuple-element.75 = s32[40,1]{1,0} get-tuple-element(%arg_tuple.3), index=6
+  %get-tuple-element.76 = bf16[40,1984,8,1,128]{4,3,2,1,0} get-tuple-element(%arg_tuple.3), index=7
+  %get-tuple-element.77 = bf16[40,64,8,1,128]{4,3,2,1,0} get-tuple-element(%arg_tuple.3), index=8
+  %get-tuple-element.78 = bf16[40,64,8,1,128]{4,3,2,1,0} get-tuple-element(%arg_tuple.3), index=9
+  %get-tuple-element.79 = f32[40,5120,17408]{2,1,0} get-tuple-element(%arg_tuple.3), index=10
+  %get-tuple-element.80 = f32[40,5120,17408]{2,1,0} get-tuple-element(%arg_tuple.3), index=11
+  %get-tuple-element.81 = f32[40,17408,5120]{2,1,0} get-tuple-element(%arg_tuple.3), index=12
+  %get-tuple-element.82 = f32[40,5120]{1,0} get-tuple-element(%arg_tuple.3), index=13
+  %get-tuple-element.83 = f32[40,5120]{1,0} get-tuple-element(%arg_tuple.3), index=14
+  %get-tuple-element.84 = f32[40,5120,8,128]{3,2,1,0} get-tuple-element(%arg_tuple.3), index=15
+  %get-tuple-element.85 = f32[40,128]{1,0} get-tuple-element(%arg_tuple.3), index=16
+  %get-tuple-element.86 = f32[40,40,128,5120]{3,2,1,0} get-tuple-element(%arg_tuple.3), index=17
+  %get-tuple-element.87 = f32[40,5120,40,128]{3,2,1,0} get-tuple-element(%arg_tuple.3), index=18
+  %get-tuple-element.88 = f32[40,128]{1,0} get-tuple-element(%arg_tuple.3), index=19
+  %get-tuple-element.89 = f32[40,5120,8,128]{3,2,1,0} get-tuple-element(%arg_tuple.3), index=20
+  %get-tuple-element.90 = s32[1,64]{1,0} get-tuple-element(%arg_tuple.3), index=21
+  %get-tuple-element.91 = s32[1,64]{1,0} get-tuple-element(%arg_tuple.3), index=22
+  %get-tuple-element.69 = s32[] get-tuple-element(%arg_tuple.3), index=0
+  %constant.79 = s32[] constant(40)
+  ROOT %lt.5 = pred[] compare(%get-tuple-element.69, %constant.79), direction=LT, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while/cond/lt" stack_frame_id=232}
+}
+
+%region_8.25 (reduce_sum.43: f32[], reduce_sum.44: f32[]) -> f32[] {
+  %reduce_sum.43 = f32[] parameter(0), metadata={op_name="reduce_sum"}
+  %reduce_sum.44 = f32[] parameter(1), metadata={op_name="reduce_sum"}
+  ROOT %reduce_sum.45 = f32[] add(%reduce_sum.43, %reduce_sum.44), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/reduce_sum" stack_frame_id=236}
+}
+
+%region_9.26 (reduce.4: f32[], reduce.5: s32[], reduce.6: f32[], reduce.7: s32[]) -> (f32[], s32[]) {
+  %reduce.4 = f32[] parameter(0), metadata={op_name="reduce"}
+  %reduce.6 = f32[] parameter(2), metadata={op_name="reduce"}
+  %gt.1 = pred[] compare(%reduce.4, %reduce.6), direction=GT, metadata={op_name="gt" stack_frame_id=240}
+  %ne.1 = pred[] compare(%reduce.4, %reduce.4), direction=NE, metadata={op_name="ne" stack_frame_id=240}
+  %or.2 = pred[] or(%gt.1, %ne.1), metadata={op_name="or" stack_frame_id=240}
+  %select_n.8 = f32[] select(%or.2, %reduce.4, %reduce.6), metadata={op_name="select_n" stack_frame_id=240}
+  %eq.15 = pred[] compare(%reduce.4, %reduce.6), direction=EQ, metadata={op_name="eq" stack_frame_id=240}
+  %reduce.5 = s32[] parameter(1), metadata={op_name="reduce"}
+  %reduce.7 = s32[] parameter(3), metadata={op_name="reduce"}
+  %lt.8 = pred[] compare(%reduce.5, %reduce.7), direction=LT, metadata={op_name="lt" stack_frame_id=240}
+  %and.3 = pred[] and(%eq.15, %lt.8), metadata={op_name="and" stack_frame_id=240}
+  %or.3 = pred[] or(%or.2, %and.3), metadata={op_name="or" stack_frame_id=240}
+  %select_n.9 = s32[] select(%or.3, %reduce.5, %reduce.7), metadata={op_name="select_n" stack_frame_id=240}
+  ROOT %tuple.5 = (f32[], s32[]) tuple(%select_n.8, %select_n.9)
+}
+
+%argmax.27 (jit__prefill_jit_.1: f32[1,1,151936]) -> s32[1,1] {
+  %jit__prefill_jit_.1 = f32[1,1,151936]{2,1,0} parameter(0), metadata={op_name="jit(_prefill_jit)"}
+  %iota.16 = s32[151936]{0} iota(), iota_dimension=0, metadata={op_name="iota" stack_frame_id=238}
+  %iota.17 = s32[1,1,151936]{2,1,0} reshape(%iota.16), metadata={op_name="iota" stack_frame_id=238}
+  %constant.83 = f32[] constant(-inf)
+  %constant.82 = s32[] constant(0)
+  %reduce.11 = (f32[1,1]{1,0}, s32[1,1]{1,0}) reduce(%jit__prefill_jit_.1, %iota.17, %constant.83, %constant.82), dimensions={2}, to_apply=%region_9.26, metadata={op_name="reduce" stack_frame_id=238}
+  %reduce.12 = f32[1,1]{1,0} get-tuple-element(%reduce.11), index=0, metadata={op_name="reduce" stack_frame_id=238}
+  ROOT %reduce.13 = s32[1,1]{1,0} get-tuple-element(%reduce.11), index=1, metadata={op_name="reduce" stack_frame_id=238}
+}
+
+ENTRY %main.28 (padded_tokens.1: s32[64], params__params____decoder____decoder_norm____scale__.1: f32[5120], params__params____decoder____layers____mlp____wi_0____kernel__.1: f32[5120,40,17408], params__params____decoder____layers____mlp____wi_1____kernel__.1: f32[5120,40,17408], params__params____decoder____layers____mlp____wo____kernel__.1: f32[17408,40,5120], params__params____decoder____layers____post_self_attention_layer_norm____scale__.1: f32[5120,40], params__params____decoder____layers____pre_self_attention_layer_norm____scale__.1: f32[5120,40], params__params____decoder____layers____self_attention____key____kernel__.1: f32[5120,40,8,128], params__params____decoder____layers____self_attention____key_norm____scale__.1: f32[128,40], params__params____decoder____layers____self_attention____out____kernel__.1: f32[40,40,128,5120], params__params____decoder____layers____self_attention____query____kernel__.1: f32[5120,40,40,128], params__params____decoder____layers____self_attention____query_norm____scale__.1: f32[128,40], params__params____decoder____layers____self_attention____value____kernel__.1: f32[5120,40,8,128], params__params____decoder____logits_dense____kernel__.1: f32[5120,151936], params__params____token_embedder____embedding__.1: f32[151936,5120], true_length.1: s32[]) -> (s32[40,1], s32[40,1,1984], s32[40,1,64], bf16[40,1984,8,1,128], s32[40,1], /*index=5*/bf16[40,1984,8,1,128], bf16[40,64,8,1,128], bf16[40,64,8,1,128], s32[1,1], f32[1,1,151936], /*index=10*/s32[1,1], f32[1,1], s32[1,1], s32[1,3], f32[1,1]) {
+  %constant.99 = s32[] constant(0)
+  %params__params____token_embedder____embedding__.1 = f32[151936,5120]{1,0} parameter(14), sharding={devices=[2,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"tensor\", \"tensor_transpose\", \"tensor_sequence\", \"autoregressive\"}, {\"fsdp\", \"fsdp_transpose\", \"context\", \"expert\"}]>"}, metadata={op_name="params[\'params\'][\'token_embedder\'][\'embedding\']"}
+  %convert_element_type.68 = bf16[151936,5120]{1,0} convert(%params__params____token_embedder____embedding__.1), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder._apply_embedding/token_embedder/convert_element_type" stack_frame_id=244}
+  %padded_tokens.1 = s32[64]{0} parameter(0), metadata={op_name="padded_tokens"}
+  %broadcast_in_dim.62 = s32[1,64]{1,0} reshape(%padded_tokens.1), metadata={op_name="jit(_prefill_jit)/broadcast_in_dim" stack_frame_id=245}
+  %constant.95 = s32[] constant(0)
+  %lt.9 = s32[1,64]{1,0} broadcast(%constant.95), dimensions={}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder._apply_embedding/token_embedder/lt" stack_frame_id=246}
+  %lt.12 = pred[1,64]{1,0} compare(%broadcast_in_dim.62, %lt.9), direction=LT, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder._apply_embedding/token_embedder/lt" stack_frame_id=246}
+  %constant.94 = s32[] constant(151936)
+  %add.30 = s32[1,64]{1,0} broadcast(%constant.94), dimensions={}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder._apply_embedding/token_embedder/add" stack_frame_id=246}
+  %add.31 = s32[1,64]{1,0} add(%broadcast_in_dim.62, %add.30), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder._apply_embedding/token_embedder/add" stack_frame_id=246}
+  %select_n.10 = s32[1,64]{1,0} select(%lt.12, %add.31, %broadcast_in_dim.62), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder._apply_embedding/token_embedder/select_n" stack_frame_id=246}
+  %broadcast_in_dim.65 = s32[1,64,1]{2,1,0} reshape(%select_n.10), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder._apply_embedding/token_embedder/broadcast_in_dim" stack_frame_id=246}
+  %gather.1 = bf16[1,64,5120]{2,1,0} gather(%convert_element_type.68, %broadcast_in_dim.65), offset_dims={2}, collapsed_slice_dims={0}, start_index_map={0}, index_vector_dim=2, slice_sizes={1,5120}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder._apply_embedding/token_embedder/gather" stack_frame_id=246}
+  %constant.93 = s32[] constant(0)
+  %broadcast.19 = s32[40,1]{1,0} broadcast(%constant.93), dimensions={}
+  %constant.92 = s32[] constant(0)
+  %broadcast_in_dim.61 = s32[40,1,1984]{2,1,0} broadcast(%constant.92), dimensions={}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/broadcast_in_dim" stack_frame_id=227}
+  %constant.91 = s32[] constant(0)
+  %broadcast_in_dim.60 = s32[40,1,64]{2,1,0} broadcast(%constant.91), dimensions={}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/broadcast_in_dim" stack_frame_id=227}
+  %constant.90 = bf16[] constant(0)
+  %broadcast.18 = bf16[40,1984,8,1,128]{4,3,2,1,0} broadcast(%constant.90), dimensions={}
+  %constant.89 = bf16[] constant(0)
+  %broadcast.17 = bf16[40,64,8,1,128]{4,3,2,1,0} broadcast(%constant.89), dimensions={}
+  %params__params____decoder____layers____mlp____wi_0____kernel__.1 = f32[5120,40,17408]{2,1,0} parameter(2), sharding={devices=[1,1,2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\", \"tensor_transpose\", \"context\", \"expert\"}, {\"stage\"}, {\"fsdp_transpose\", \"tensor\", \"tensor_sequence\", \"autoregressive\"}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'layers\'][\'mlp\'][\'wi_0\'][\'kernel\']"}
+  %transpose.30 = f32[40,5120,17408]{2,0,1} transpose(%params__params____decoder____layers____mlp____wi_0____kernel__.1), dimensions={1,0,2}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/transpose" stack_frame_id=249}
+  %params__params____decoder____layers____mlp____wi_1____kernel__.1 = f32[5120,40,17408]{2,1,0} parameter(3), sharding={devices=[1,1,2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\", \"tensor_transpose\", \"context\", \"expert\"}, {\"stage\"}, {\"fsdp_transpose\", \"tensor\", \"tensor_sequence\", \"autoregressive\"}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'layers\'][\'mlp\'][\'wi_1\'][\'kernel\']"}
+  %transpose.31 = f32[40,5120,17408]{2,0,1} transpose(%params__params____decoder____layers____mlp____wi_1____kernel__.1), dimensions={1,0,2}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/transpose" stack_frame_id=249}
+  %params__params____decoder____layers____mlp____wo____kernel__.1 = f32[17408,40,5120]{2,1,0} parameter(4), sharding={devices=[2,1,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp_transpose\", \"tensor\", \"tensor_sequence\", \"autoregressive\"}, {\"stage\"}, {\"fsdp\", \"tensor_transpose\", \"context\", \"expert\"}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'layers\'][\'mlp\'][\'wo\'][\'kernel\']"}
+  %transpose.32 = f32[40,17408,5120]{2,0,1} transpose(%params__params____decoder____layers____mlp____wo____kernel__.1), dimensions={1,0,2}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/transpose" stack_frame_id=249}
+  %params__params____decoder____layers____post_self_attention_layer_norm____scale__.1 = f32[5120,40]{1,0} parameter(5), sharding={devices=[2,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"tensor\", \"tensor_transpose\"}, {\"stage\"}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'layers\'][\'post_self_attention_layer_norm\'][\'scale\']"}
+  %transpose.33 = f32[40,5120]{0,1} transpose(%params__params____decoder____layers____post_self_attention_layer_norm____scale__.1), dimensions={1,0}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/transpose" stack_frame_id=249}
+  %params__params____decoder____layers____pre_self_attention_layer_norm____scale__.1 = f32[5120,40]{1,0} parameter(6), sharding={devices=[2,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"tensor\", \"tensor_transpose\"}, {\"stage\"}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'layers\'][\'pre_self_attention_layer_norm\'][\'scale\']"}
+  %transpose.34 = f32[40,5120]{0,1} transpose(%params__params____decoder____layers____pre_self_attention_layer_norm____scale__.1), dimensions={1,0}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/transpose" stack_frame_id=249}
+  %params__params____decoder____layers____self_attention____key____kernel__.1 = f32[5120,40,8,128]{3,2,1,0} parameter(7), sharding={devices=[1,1,2,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\", \"fsdp_transpose\", \"context\", \"expert\"}, {\"stage\"}, {\"tensor\", \"tensor_transpose\", \"tensor_sequence\", \"autoregressive\"}, {}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'layers\'][\'self_attention\'][\'key\'][\'kernel\']"}
+  %transpose.35 = f32[40,5120,8,128]{3,2,0,1} transpose(%params__params____decoder____layers____self_attention____key____kernel__.1), dimensions={1,0,2,3}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/transpose" stack_frame_id=249}
+  %params__params____decoder____layers____self_attention____key_norm____scale__.1 = f32[128,40]{1,0} parameter(8), sharding={devices=[2,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"tensor\", \"tensor_transpose\"}, {\"stage\"}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'layers\'][\'self_attention\'][\'key_norm\'][\'scale\']"}
+  %transpose.36 = f32[40,128]{0,1} transpose(%params__params____decoder____layers____self_attention____key_norm____scale__.1), dimensions={1,0}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/transpose" stack_frame_id=249}
+  %params__params____decoder____layers____self_attention____out____kernel__.1 = f32[40,40,128,5120]{3,2,1,0} parameter(9), sharding={devices=[2,1,1,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"tensor\", \"tensor_transpose\", \"tensor_sequence\", \"autoregressive\"}, {\"stage\"}, {}, {\"fsdp\", \"fsdp_transpose\", \"context\", \"expert\"}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'layers\'][\'self_attention\'][\'out\'][\'kernel\']"}
+  %transpose.37 = f32[40,40,128,5120]{3,2,0,1} transpose(%params__params____decoder____layers____self_attention____out____kernel__.1), dimensions={1,0,2,3}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/transpose" stack_frame_id=249}
+  %params__params____decoder____layers____self_attention____query____kernel__.1 = f32[5120,40,40,128]{3,2,1,0} parameter(10), sharding={devices=[1,1,2,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\", \"fsdp_transpose\", \"context\", \"expert\"}, {\"stage\"}, {\"tensor\", \"tensor_transpose\", \"tensor_sequence\", \"autoregressive\"}, {}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'layers\'][\'self_attention\'][\'query\'][\'kernel\']"}
+  %transpose.38 = f32[40,5120,40,128]{3,2,0,1} transpose(%params__params____decoder____layers____self_attention____query____kernel__.1), dimensions={1,0,2,3}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/transpose" stack_frame_id=249}
+  %params__params____decoder____layers____self_attention____query_norm____scale__.1 = f32[128,40]{1,0} parameter(11), sharding={devices=[2,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"tensor\", \"tensor_transpose\"}, {\"stage\"}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'layers\'][\'self_attention\'][\'query_norm\'][\'scale\']"}
+  %transpose.39 = f32[40,128]{0,1} transpose(%params__params____decoder____layers____self_attention____query_norm____scale__.1), dimensions={1,0}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/transpose" stack_frame_id=249}
+  %params__params____decoder____layers____self_attention____value____kernel__.1 = f32[5120,40,8,128]{3,2,1,0} parameter(12), sharding={devices=[1,1,2,1]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\", \"fsdp_transpose\", \"context\", \"expert\"}, {\"stage\"}, {\"tensor\", \"tensor_transpose\", \"tensor_sequence\", \"autoregressive\"}, {}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'layers\'][\'self_attention\'][\'value\'][\'kernel\']"}
+  %transpose.40 = f32[40,5120,8,128]{3,2,0,1} transpose(%params__params____decoder____layers____self_attention____value____kernel__.1), dimensions={1,0,2,3}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/transpose" stack_frame_id=249}
+  %iota.19 = s32[64]{0} iota(), iota_dimension=0, metadata={op_name="jit(_prefill_jit)/iota" stack_frame_id=250}
+  %true_length.1 = s32[] parameter(15), sharding={replicated}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@empty_mesh, []>"}, metadata={op_name="true_length"}
+  %lt.10 = s32[64]{0} broadcast(%true_length.1), dimensions={}, metadata={op_name="jit(_prefill_jit)/lt" stack_frame_id=251}
+  %lt.11 = pred[64]{0} compare(%iota.19, %lt.10), direction=LT, metadata={op_name="jit(_prefill_jit)/lt" stack_frame_id=251}
+  %convert_element_type.67 = s32[64]{0} convert(%lt.11), metadata={op_name="jit(_prefill_jit)/convert_element_type" stack_frame_id=252}
+  %broadcast_in_dim.64 = s32[1,64]{1,0} reshape(%convert_element_type.67), metadata={op_name="jit(_prefill_jit)/broadcast_in_dim" stack_frame_id=253}
+  %iota.18 = s32[64]{0} iota(), iota_dimension=0, metadata={op_name="jit(_prefill_jit)/iota" stack_frame_id=254}
+  %broadcast_in_dim.63 = s32[1,64]{1,0} reshape(%iota.18), metadata={op_name="jit(_prefill_jit)/broadcast_in_dim" stack_frame_id=255}
+  %while.12 = (s32[], bf16[1,64,5120]{2,1,0}, s32[40,1]{1,0}, s32[40,1,1984]{2,1,0}, s32[40,1,64]{2,1,0}, /*index=5*/bf16[40,1984,8,1,128]{4,3,2,1,0}, s32[40,1]{1,0}, bf16[40,1984,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, /*index=10*/f32[40,5120,17408]{2,0,1}, f32[40,5120,17408]{2,0,1}, f32[40,17408,5120]{2,0,1}, f32[40,5120]{0,1}, f32[40,5120]{0,1}, /*index=15*/f32[40,5120,8,128]{3,2,0,1}, f32[40,128]{0,1}, f32[40,40,128,5120]{3,2,0,1}, f32[40,5120,40,128]{3,2,0,1}, f32[40,128]{0,1}, /*index=20*/f32[40,5120,8,128]{3,2,0,1}, s32[1,64]{1,0}, s32[1,64]{1,0}) tuple(%constant.99, %gather.1, %broadcast.19, %broadcast_in_dim.61, %broadcast_in_dim.60, /*index=5*/%broadcast.18, %broadcast.19, %broadcast.18, %broadcast.17, %broadcast.17, /*index=10*/%transpose.30, %transpose.31, %transpose.32, %transpose.33, %transpose.34, /*index=15*/%transpose.35, %transpose.36, %transpose.37, %transpose.38, %transpose.39, /*index=20*/%transpose.40, %broadcast_in_dim.64, %broadcast_in_dim.63), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while" stack_frame_id=227}
+  %while.13 = (s32[], bf16[1,64,5120]{2,1,0}, s32[40,1]{1,0}, s32[40,1,1984]{2,1,0}, s32[40,1,64]{2,1,0}, /*index=5*/bf16[40,1984,8,1,128]{4,3,2,1,0}, s32[40,1]{1,0}, bf16[40,1984,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, /*index=10*/f32[40,5120,17408]{2,0,1}, f32[40,5120,17408]{2,0,1}, f32[40,17408,5120]{2,0,1}, f32[40,5120]{0,1}, f32[40,5120]{0,1}, /*index=15*/f32[40,5120,8,128]{3,2,0,1}, f32[40,128]{0,1}, f32[40,40,128,5120]{3,2,0,1}, f32[40,5120,40,128]{3,2,0,1}, f32[40,128]{0,1}, /*index=20*/f32[40,5120,8,128]{3,2,0,1}, s32[1,64]{1,0}, s32[1,64]{1,0}) while(%while.12), condition=%region_7.24, body=%region_0.23, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while" stack_frame_id=227}
+  %while.14 = s32[] get-tuple-element(%while.13), index=0, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while" stack_frame_id=227}
+  %while.16 = s32[40,1]{1,0} get-tuple-element(%while.13), index=2, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while" stack_frame_id=227}
+  %while.17 = s32[40,1,1984]{2,1,0} get-tuple-element(%while.13), index=3, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while" stack_frame_id=227}
+  %while.18 = s32[40,1,64]{2,1,0} get-tuple-element(%while.13), index=4, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while" stack_frame_id=227}
+  %while.19 = bf16[40,1984,8,1,128]{4,3,2,1,0} get-tuple-element(%while.13), index=5, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while" stack_frame_id=227}
+  %while.20 = s32[40,1]{1,0} get-tuple-element(%while.13), index=6, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while" stack_frame_id=227}
+  %while.21 = bf16[40,1984,8,1,128]{4,3,2,1,0} get-tuple-element(%while.13), index=7, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while" stack_frame_id=227}
+  %while.22 = bf16[40,64,8,1,128]{4,3,2,1,0} get-tuple-element(%while.13), index=8, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while" stack_frame_id=227}
+  %while.23 = bf16[40,64,8,1,128]{4,3,2,1,0} get-tuple-element(%while.13), index=9, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while" stack_frame_id=227}
+  %constant.86 = s32[1,1]{1,0} constant({ {0} })
+  %params__params____decoder____decoder_norm____scale__.1 = f32[5120]{0} parameter(1), sharding={devices=[2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"tensor\", \"tensor_transpose\"}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'decoder_norm\'][\'scale\']"}
+  %convert_element_type.71 = bf16[5120]{0} convert(%params__params____decoder____decoder_norm____scale__.1), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/convert_element_type" stack_frame_id=256}
+  %while.15 = bf16[1,64,5120]{2,1,0} get-tuple-element(%while.13), index=1, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/while" stack_frame_id=227}
+  %convert_element_type.69 = f32[1,64,5120]{2,1,0} convert(%while.15), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/convert_element_type" stack_frame_id=257}
+  %square.9 = f32[1,64,5120]{2,1,0} multiply(%convert_element_type.69, %convert_element_type.69), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/square" stack_frame_id=258}
+  %constant.97 = f32[] constant(0)
+  %reduce_sum.47 = f32[1,64]{1,0} reduce(%square.9, %constant.97), dimensions={2}, to_apply=%region_8.25, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/reduce_sum" stack_frame_id=236}
+  %broadcast_in_dim.66 = f32[1,64,1]{2,1,0} reshape(%reduce_sum.47), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/broadcast_in_dim" stack_frame_id=236}
+  %constant.88 = f32[] constant(5120)
+  %div.56 = f32[1,64,1]{2,1,0} broadcast(%constant.88), dimensions={}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/div" stack_frame_id=236}
+  %div.57 = f32[1,64,1]{2,1,0} divide(%broadcast_in_dim.66, %div.56), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/div" stack_frame_id=236}
+  %constant.87 = f32[] constant(1e-06)
+  %add.29 = f32[1,64,1]{2,1,0} broadcast(%constant.87), dimensions={}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/add" stack_frame_id=259}
+  %add.32 = f32[1,64,1]{2,1,0} add(%div.57, %add.29), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/add" stack_frame_id=259}
+  %rsqrt.9 = f32[1,64,1]{2,1,0} rsqrt(%add.32), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/rsqrt" stack_frame_id=260}
+  %mul.80 = f32[1,64,1]{2,1,0} broadcast(%rsqrt.9), dimensions={0,1,2}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/mul" stack_frame_id=261}
+  %mul.81 = f32[1,64]{1,0} reshape(%mul.80), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/mul" stack_frame_id=261}
+  %mul.82 = f32[1,64,5120]{2,1,0} broadcast(%mul.81), dimensions={0,1}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/mul" stack_frame_id=261}
+  %mul.83 = f32[1,64,5120]{2,1,0} multiply(%convert_element_type.69, %mul.82), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/mul" stack_frame_id=261}
+  %convert_element_type.70 = bf16[1,64,5120]{2,1,0} convert(%mul.83), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/convert_element_type" stack_frame_id=262}
+  %dot_general.28 = bf16[5120,1,64]{2,1,0} dot(%convert_element_type.71, %convert_element_type.70), lhs_batch_dims={0}, lhs_contracting_dims={}, rhs_batch_dims={2}, rhs_contracting_dims={}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/...k,k->...k/dot_general" stack_frame_id=263}
+  %transpose.41 = bf16[1,64,5120]{1,0,2} transpose(%dot_general.28), dimensions={1,2,0}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/decoder_norm/...k,k->...k/transpose" stack_frame_id=263}
+  %params__params____decoder____logits_dense____kernel__.1 = f32[5120,151936]{1,0} parameter(13), sharding={devices=[1,2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<@mesh, [{\"fsdp\", \"fsdp_transpose\", \"context\", \"expert\"}, {\"tensor\", \"tensor_transpose\", \"tensor_sequence\", \"autoregressive\"}]>"}, metadata={op_name="params[\'params\'][\'decoder\'][\'logits_dense\'][\'kernel\']"}
+  %convert_element_type.72 = bf16[5120,151936]{1,0} convert(%params__params____decoder____logits_dense____kernel__.1), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/logits_dense/convert_element_type" stack_frame_id=266}
+  %dot_general.29 = bf16[1,64,151936]{2,1,0} dot(%transpose.41, %convert_element_type.72), lhs_contracting_dims={2}, rhs_contracting_dims={0}, metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/logits_dense/dot_general" stack_frame_id=268}
+  %convert_element_type.73 = f32[1,64,151936]{2,1,0} convert(%dot_general.29), metadata={op_name="jit(_prefill_jit)/TransformerLinenPure.apply/TransformerLinenPure/decoder/decoder.apply_output_head/convert_element_type" stack_frame_id=269}
+  %constant.98 = s32[] constant(1)
+  %sub.9 = s32[] subtract(%true_length.1, %constant.98), metadata={op_name="jit(_prefill_jit)/sub" stack_frame_id=270}
+  %lt.13 = pred[] compare(%sub.9, %constant.99), direction=LT, metadata={op_name="jit(_prefill_jit)/lt" stack_frame_id=271}
+  %constant.96 = s32[] constant(64)
+  %add.33 = s32[] add(%sub.9, %constant.96), metadata={op_name="jit(_prefill_jit)/add" stack_frame_id=271}
+  %select_n.11 = s32[] select(%lt.13, %add.33, %sub.9), metadata={op_name="jit(_prefill_jit)/select_n" stack_frame_id=271}
+  %dynamic_slice.15 = f32[1,1,151936]{2,1,0} dynamic-slice(%convert_element_type.73, %constant.99, %select_n.11, %constant.99), dynamic_slice_sizes={1,1,151936}, metadata={op_name="jit(_prefill_jit)/dynamic_slice" stack_frame_id=271}
+  %sharding_constraint.15 = f32[1,1,151936]{2,1,0} custom-call(%dynamic_slice.15), custom_call_target="Sharding", sharding={replicated}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<@mesh, [{}, {}, {}]>]>"}, metadata={op_name="jit(_prefill_jit)/sharding_constraint" stack_frame_id=272}
+  %broadcast_in_dim.67 = s32[1,1]{1,0} reshape(%true_length.1), metadata={op_name="jit(_prefill_jit)/broadcast_in_dim" stack_frame_id=273}
+  %constant.85 = f32[1,1]{1,0} constant({ {0} })
+  %jit__prefill_jit_.3 = s32[1,1]{1,0} call(%sharding_constraint.15), to_apply=%argmax.27, metadata={op_name="jit(_prefill_jit)" stack_frame_id=275}
+  %constant.84 = s32[1,1]{1,0} constant({ {1} })
+  %concatenate.13 = s32[1,3]{1,0} concatenate(%jit__prefill_jit_.3, %constant.84, %constant.86), dimensions={1}, metadata={op_name="jit(_prefill_jit)/concatenate" stack_frame_id=276}
+  ROOT %tuple.7 = (s32[40,1]{1,0}, s32[40,1,1984]{2,1,0}, s32[40,1,64]{2,1,0}, bf16[40,1984,8,1,128]{4,3,2,1,0}, s32[40,1]{1,0}, /*index=5*/bf16[40,1984,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, bf16[40,64,8,1,128]{4,3,2,1,0}, s32[1,1]{1,0}, f32[1,1,151936]{2,1,0}, /*index=10*/s32[1,1]{1,0}, f32[1,1]{1,0}, s32[1,1]{1,0}, s32[1,3]{1,0}, f32[1,1]{1,0}) tuple(%while.16, %while.17, %while.18, %while.19, %while.20, /*index=5*/%while.21, %while.22, %while.23, %constant.86, %sharding_constraint.15, /*index=10*/%broadcast_in_dim.67, %constant.85, %jit__prefill_jit_.3, %concatenate.13, %constant.85)
+}
+
