@@ -71,55 +71,64 @@ subdirectories respectively.
 
 ## Directory layout
 
-Keep one directory of HLO dumps per model, and within each model a `training/`
-and an `inference/` subdirectory:
+Models are grouped into category folders; each model has a `training/` directory
+and an `inference/` directory that is further split by device count
+(`1gpu/`, `2gpu/`, `4gpu/`, `8gpu/`):
 
 ```
 hlo_eval_tools/
-  <model>/
-    training/     # HLO dumped from the training step (fwd + bwd + optimizer)
-    inference/    # HLO dumped from the inference/serving step (fwd only)
+  <category>/
+    <model>/
+      training/               # training step (fwd + bwd + optimizer)
+      inference/
+        1gpu/                 # single-device inference (no sharding)
+        2gpu/  4gpu/  8gpu/   # multi-GPU inference (see "Multi-GPU inference")
 ```
 
 The intended set of model directories is:
 
 ```
 hlo_eval_tools/
-  deepseek2_16b/{training,inference}/
-  gemma3_4b/{training,inference}/
-  gp3_oss_20b/{training,inference}/
-  llama3_8b/{training,inference}/
-  mixtral_8x7b/{training,inference}/
-  qwen3_14b/{training,inference}/
-  gpt_j_6b/{training,inference}/
-  flan_t5_large/{training,inference}/
-  resnet50/{training,inference}/
-  efficientnet/{training,inference}/
-  vit/{training,inference}/
-  mlp_mixer/{training,inference}/
-  clip/{training,inference}/
-  detr/{training,inference}/
-  stable_diffusion_1_5/{training,inference}/
-  sdxl/{training,inference}/
-  dit/{training,inference}/
-  paligemma/{training,inference}/
-  siglip/{training,inference}/
-  lit/{training,inference}/
-  cappa/{training,inference}/
-  alphafold3/{training,inference}/
-  colabfold/{training,inference}/
+  large_language_models/
+    deepseek2_16b/{training,inference}/
+    gemma3_4b/{training,inference}/
+    gp3_oss_20b/{training,inference}/
+    llama3_8b/{training,inference}/
+    mixtral_8x7b/{training,inference}/
+    qwen3_14b/{training,inference}/
+    gpt_j_6b/{training,inference}/
+    flan_t5_large/{training,inference}/
+  vision_diffusion/
+    resnet50/{training,inference}/
+    imagenette/{training,inference}/
+    efficientnet/{training,inference}/
+    vit/{training,inference}/
+    mlp_mixer/{training,inference}/
+    clip/{training,inference}/
+    detr/{training,inference}/
+    stable_diffusion_1_5/{training,inference}/
+    sdxl/{training,inference}/
+    dit/{training,inference}/
+  multimodal/
+    paligemma/{training,inference}/
+    siglip/{training,inference}/
+    lit/{training,inference}/
+    cappa/{training,inference}/
+  science/
+    alphafold3/{training,inference}/
+    colabfold/{training,inference}/
 ```
 
 Each leaf directory holds the `*.hlo` (or `*.txt` / proto) modules dumped from
 that model in that workload. Grouping by model + workload keeps the per-module
 CSV headers scoped to a single run and makes cross-run comparison straightforward.
 
-| Category | Models |
+| Category folder | Models |
 | --- | --- |
-| Large language models | `deepseek2_16b`, `gemma3_4b`, `gp3_oss_20b`, `llama3_8b`, `mixtral_8x7b`, `qwen3_14b`, `gpt_j_6b`, `flan_t5_large` |
-| Vision / diffusion | `resnet50`, `efficientnet`, `vit`, `mlp_mixer`, `clip`, `detr`, `stable_diffusion_1_5`, `sdxl`, `dit` |
-| Vision-language / multimodal | `paligemma`, `siglip`, `lit`, `cappa` |
-| Science | `alphafold3`, `colabfold` |
+| `large_language_models/` | `deepseek2_16b`, `gemma3_4b`, `gp3_oss_20b`, `llama3_8b`, `mixtral_8x7b`, `qwen3_14b`, `gpt_j_6b`, `flan_t5_large` |
+| `vision_diffusion/` | `resnet50`, `imagenette`, `efficientnet`, `vit`, `mlp_mixer`, `clip`, `detr`, `stable_diffusion_1_5`, `sdxl`, `dit` |
+| `multimodal/` | `paligemma`, `siglip`, `lit`, `cappa` |
+| `science/` | `alphafold3`, `colabfold` |
 
 The Vision-language / multimodal models (plus `vit` and `mlp_mixer`) are drawn
 from Google Research's [`big_vision`](https://github.com/google-research/big_vision)
@@ -127,6 +136,102 @@ codebase, which covers a range of complementary op mixes: `vit` (pure attention 
 GEMM), `mlp_mixer` (all-MLP, no attention/conv), `siglip` / `lit` (contrastive
 dual-encoder image-text), `cappa` (image-captioning encoder-decoder), and
 `paligemma` (a full vision-language generative model).
+
+## Collection status
+
+The table below reflects the HLO currently checked in under each model directory
+(models are grouped on disk under the category folders listed above). All files
+are pre-optimization (`before_optimizations`) HLO text modules. A *training*
+module is the fused training step (forward + backward + optimizer); *inference*
+modules are the forward/serving step.
+
+The **Training** and **Inference** columns give the **GPU counts** each workload
+was dumped at (not module counts). Training is dumped once per model at the count
+shown; inference is dumped separately at each listed count under
+`inference/<N>gpu/`.
+
+Provenance: dumped with a from-source build of ROCm JAX/XLA (`jax 0.10.2` built
+against the `rocm-jaxlib-v0.10.2` XLA branch) on a gfx950 node. Scope is
+compilation-only — synthetic inputs and randomly-initialized weights are enough to
+emit the `before_optimizations` HLO, so no trained checkpoints or datasets are
+needed. The six MaxText LLMs' training is dumped on 8 GPUs (FSDP,
+`num_partitions=8`); all other training is single-GPU. Multi-GPU inference uses
+tensor-parallel for the MaxText LLMs and FSDP for everything else (see
+[Multi-GPU inference](#multi-gpu-inference)).
+
+| Model | Training (GPUs) | Inference (GPUs) | Source / notes |
+| --- | :---: | :---: | --- |
+| `llama3_8b` | 8 | 1 / 2 / 4 / 8 | MaxText; tensor-parallel; prefill + generate |
+| `deepseek2_16b` | 8 | 1 / 2 / 4 / 8 | MaxText MLA; decode needs `mla_naive_kvcache=False` |
+| `gemma3_4b` | 8 | 1 / 2 / 4 | MaxText; no 8-GPU (only 4 KV heads to shard) |
+| `gp3_oss_20b` | 8 | 1 / 2 / 4 / 8 | MaxText (gpt-oss-20b) |
+| `mixtral_8x7b` | 8 | 1 / 2 / 4 / 8 | MaxText; 1-GPU leaf has 2 prefill buckets + generate |
+| `qwen3_14b` | 8 | 1 / 2 / 4 / 8 | MaxText |
+| `gpt_j_6b` | 1 | 1 / 2 / 4 / 8 | HF `FlaxGPTJForCausalLM`; multi-GPU = FSDP |
+| `flan_t5_large` | 1 | 1 / 2 / 4 / 8 | HF `FlaxT5ForConditionalGeneration`; multi-GPU = FSDP |
+| `resnet50` | 1 | 1 / 2 / 4 / 8 | big_vision BiT ResNetV2-50 |
+| `imagenette` | 1 | 1 / 2 / 4 / 8 | flax ResNet-18 (10-class); added beyond the canonical set |
+| `efficientnet` | 1 | 1 / 2 / 4 / 8 | EfficientNet-B0 (flax implementation) |
+| `vit` | 1 | 1 / 2 / 4 / 8 | big_vision ViT-B/16 |
+| `mlp_mixer` | 1 | 1 / 2 / 4 / 8 | big_vision Mixer-B/16 |
+| `clip` | 1 | 1 / 2 / 4 / 8 | big_vision `two_towers` (softmax contrastive) |
+| `detr` | 1 | 1 / 2 / 4 / 8 | DETR (flax impl); Hungarian matching runs host-side |
+| `stable_diffusion_1_5` | 1 | 1 / 2 / 4 / 8 | diffusers Flax SD v1.x UNet + pipeline |
+| `sdxl` | 1 | 1 / 2 / 4 / 8 | diffusers Flax SDXL UNet |
+| `dit` | 1 | 1 / 2 / 4 / 8 | DiT-B/2 (flax implementation) |
+| `paligemma` | 1 | 1 / 2 / 4 / 8 | big_vision PaliGemma (ViT + Gemma-2B) |
+| `siglip` | 1 | 1 / 2 / 4 / 8 | big_vision `two_towers` (sigmoid loss) |
+| `lit` | 1 | 1 / 2 / 4 / 8 | big_vision `two_towers` (image tower locked) |
+| `cappa` | 1 | 1 / 2 / 4 / 8 | big_vision CapPa (ViT encoder + AR decoder) |
+| `alphafold3` | — | 1 / 2 / 4 / 8 | inference-only (no public training path) |
+| `colabfold` | — | 1 / 2 / 4 / 8 | inference-only; AlphaFold2 single-sequence |
+
+`—` in Training means the model has no public training path (dumped
+inference-only). In total the tree holds 141 HLO modules across 24 models: 22
+training + 119 inference (summed over the 1/2/4/8-GPU inference leaves). Each LLM
+inference leaf holds its `prefill` + `generate` modules (mixtral's 1-GPU leaf: 2
+prefill buckets + generate); every other inference leaf holds one forward module.
+
+Known gaps: `alphafold3` / `colabfold` have no public training path (scoped
+inference-only).
+`efficientnet`, `dit`, and `detr` have no canonical JAX/Flax reference in the
+source stack, so they use compact, architecturally-faithful flax implementations
+(representative op mixes for benchmarking, not weight-identical to reference
+checkpoints).
+
+## Multi-GPU inference
+
+Inference is dumped at 1, 2, 4 and 8 GPUs, one subdirectory per device count:
+`<model>/inference/{1gpu,2gpu,4gpu,8gpu}/`. The `1gpu` modules are single-device
+(no sharding). The `2gpu`/`4gpu`/`8gpu` modules are SPMD programs
+(`num_partitions=N`) carrying the mesh + sharding annotations. Because the
+`before_optimizations` HLO is captured *before* XLA's SPMD partitioner runs, the
+cross-device collectives (all-gather / reduce-scatter) are inserted by XLA at
+replay time inside `multihost_hlo_runner`; the checked-in module holds the
+shardings and `num_partitions=N` that drive that partitioning.
+
+Sharding strategy by model family:
+
+- Large language models (MaxText: `llama3_8b`, `gemma3_4b`, `gp3_oss_20b`,
+  `mixtral_8x7b`, `qwen3_14b`): tensor-parallel decode
+  (`ici_tensor_parallelism=N`); each device count keeps the prefill + generate
+  modules.
+- All other models (vision / diffusion / multimodal, plus `gpt_j_6b` and
+  `flan_t5_large`): FSDP - every parameter is sharded along its largest
+  N-divisible axis across an `("fsdp",)` mesh; params/state with no N-divisible
+  axis are replicated.
+- `alphafold3` / `colabfold`: the haiku forward is FSDP-sharded and AOT-compiled
+  under a mesh (no weights or execution needed) to emit the `num_partitions=N`
+  module.
+
+Multi-GPU coverage is complete (1/2/4/8 for every model) except:
+
+- `gemma3_4b`: no `8gpu` (it has only 4 KV heads, which cannot be tensor-sharded
+  across 8 devices; 1/2/4 are present).
+
+`deepseek2_16b` uses MLA and requires `mla_naive_kvcache=False` at decode time
+(the default naive cache mis-sizes the 192-wide MLA key against a 128-wide
+buffer); with that flag it dumps cleanly at 1/2/4/8 GPUs.
 
 ## Building `multihost_hlo_runner`
 
@@ -150,9 +255,12 @@ added automatically:
 ./multihost_hlo_runner \
   --device_type=gpu \
   --profile_execution=true \
-  --append_profile_to_csv_file=results/llama3_8b_inference \
-  hlo_eval_tools/llama3_8b/inference/*.hlo
+  --append_profile_to_csv_file=results/llama3_8b_inference_8gpu \
+  hlo_eval_tools/large_language_models/llama3_8b/inference/8gpu/*.txt
 ```
+
+(The collected modules are `*.before_optimizations.txt`; adjust the glob to
+`*.hlo` if you add modules in that format.)
 
 - `--profile_execution=true` enables execution profiling and per-module timing.
 - `--append_profile_to_csv_file=<path>` redirects the averaged timings to
@@ -164,19 +272,18 @@ added automatically:
 Run the whole suite, one CSV per model **and** workload:
 
 ```bash
-models="deepseek2_16b gemma3_4b gp3_oss_20b llama3_8b mixtral_8x7b qwen3_14b \
-        gpt_j_6b flan_t5_large resnet50 efficientnet vit mlp_mixer clip detr \
-        stable_diffusion_1_5 sdxl dit paligemma siglip lit cappa \
-        alphafold3 colabfold"
-
-for model in $models; do
-  for workload in training inference; do
-    ./multihost_hlo_runner \
-      --device_type=gpu \
-      --profile_execution=true \
-      --append_profile_to_csv_file=results/${model}_${workload} \
-      hlo_eval_tools/${model}/${workload}/*.hlo
-  done
+# Auto-discover every training and inference/<N>gpu leaf and write one CSV each,
+# e.g. results/large_language_models_llama3_8b_inference_8gpu.csv.
+for leaf in hlo_eval_tools/*/*/training hlo_eval_tools/*/*/inference/*gpu; do
+  files=("$leaf"/*.txt)
+  # Skip empty leaf dirs (e.g. deepseek2_16b inference, gemma3_4b/inference/8gpu).
+  [ -e "${files[0]}" ] || continue
+  csv="results/$(echo "${leaf#hlo_eval_tools/}" | tr '/' '_')"
+  ./multihost_hlo_runner \
+    --device_type=gpu \
+    --profile_execution=true \
+    --append_profile_to_csv_file="$csv" \
+    "${files[@]}"
 done
 ```
 
@@ -210,7 +317,7 @@ ROCm/XLA version under test) to spot per-module regressions over time.
 
 1. Dump the pre-optimization HLO for each model's training and inference
    workloads and store it under the matching
-   `hlo_eval_tools/<model>/{training,inference}/` directory.
+   `hlo_eval_tools/<category>/<model>/{training,inference}/` directory.
 2. On each ROCm version / XLA revision you want to compare, build
    `multihost_hlo_runner` against it.
 3. Run the suite with identical flags, appending into the **same** per-model CSVs.
