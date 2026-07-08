@@ -204,11 +204,13 @@ checkpoints).
 Inference is dumped at 1, 2, 4 and 8 GPUs, one subdirectory per device count:
 `<model>/inference/{1gpu,2gpu,4gpu,8gpu}/`. The `1gpu` modules are single-device
 (no sharding). The `2gpu`/`4gpu`/`8gpu` modules are SPMD programs
-(`num_partitions=N`) carrying the mesh + sharding annotations. Because the
-`before_optimizations` HLO is captured *before* XLA's SPMD partitioner runs, the
-cross-device collectives (all-gather / reduce-scatter) are inserted by XLA at
-replay time inside `multihost_hlo_runner`; the checked-in module holds the
-shardings and `num_partitions=N` that drive that partitioning.
+(`num_partitions=N`) carrying the mesh + **Shardy** sharding annotations
+(`xla.sdy.*`). Because the `before_optimizations` HLO is captured *before* the
+partitioner runs, the cross-device collectives (all-gather / reduce-scatter) are
+inserted by XLA at replay time inside `multihost_hlo_runner` — which is why
+replaying them requires `--num_partitions=N --use_shardy_partitioner` (see
+[Usage](#usage)); the checked-in module holds the shardings and `num_partitions=N`
+that drive that partitioning.
 
 Sharding strategy by model family:
 
@@ -254,6 +256,8 @@ added automatically:
 ```bash
 ./multihost_hlo_runner \
   --device_type=gpu \
+  --num_partitions=8 --use_shardy_partitioner \
+  --hlo_argument_mode=uninitialized \
   --profile_execution=true \
   --append_profile_to_csv_file=results/llama3_8b_inference_8gpu \
   hlo_eval_tools/large_language_models/llama3_8b/inference/8gpu/*.txt
@@ -262,6 +266,20 @@ added automatically:
 (The collected modules are `*.before_optimizations.txt`; adjust the glob to
 `*.hlo` if you add modules in that format.)
 
+**Multi-GPU modules need explicit flags.** The runner takes the device/partition
+count from `--num_partitions` (default 1), **not** from the module. So for any
+module with `num_partitions=N > 1` — the `inference/<N>gpu/` leaves and the
+8-GPU MaxText LLM `training/` modules — you must pass `--num_partitions=N
+--use_shardy_partitioner` (and have N GPUs visible). These modules were lowered by
+JAX with **Shardy**, so they contain `xla.sdy.*` custom calls: use
+`--use_shardy_partitioner`, **not** `--use_spmd_partitioning` (the GSPMD path
+`RET_CHECK`s on the `xla.sdy.*` calls). Omit the partition flags for the
+single-device (`1gpu`, and the 1-GPU `training/`) modules.
+
+`--hlo_argument_mode=uninitialized` is recommended for every run: it feeds
+uninitialized argument buffers instead of generating random inputs, which greatly
+reduces startup time for the large LLM / diffusion modules.
+
 - `--profile_execution=true` enables execution profiling and per-module timing.
 - `--append_profile_to_csv_file=<path>` redirects the averaged timings to
   `<path>.csv`. In a multi-node run the file name is prefixed with the task id so
@@ -269,18 +287,65 @@ added automatically:
 - The trailing positional arguments are the HLO files to run (a glob expands to
   one module per file).
 
-Run the whole suite, one CSV per model **and** workload:
+### Automated: `run_hlo_eval.sh`
+
+`run_hlo_eval.sh` (in this directory) packages everything below — leaf discovery,
+per-module partition-count detection, the Shardy / uninitialized flags, device
+selection and per-leaf CSV naming — behind three arguments:
+
+```bash
+./run_hlo_eval.sh <hlo_runner_main> <hlo_path> <out> [num_repeats]
+```
+
+- `<hlo_runner_main>` — the built binary.
+- `<hlo_path>` — the `hlo_eval_tools` root, **or** any subtree (a single category
+  or model dir), **or** a single leaf dir, **or** a single `.txt`/`.hlo` module.
+  Every `training/` and `inference/<N>gpu/` leaf beneath it is profiled; empty
+  leaves (e.g. `alphafold3/training`) are skipped.
+- `<out>` — a **directory** (one CSV per leaf, e.g.
+  `large_language_models_llama3_8b_inference_8gpu.csv`) **or** a path ending in
+  `.csv` (all results append into that single file).
+- `[num_repeats]` — executions per module (default 5; the warmup is skipped).
+
+```bash
+# Whole suite -> one CSV per model+workload under results/
+./run_hlo_eval.sh /tf/xla/bazel-bin/xla/tools/multihost_hlo_runner/hlo_runner_main \
+  hlo_eval_tools results
+
+# Narrow the scope to one category, one model, or one leaf:
+./run_hlo_eval.sh …/hlo_runner_main hlo_eval_tools/vision_diffusion results
+./run_hlo_eval.sh …/hlo_runner_main hlo_eval_tools/large_language_models/llama3_8b results
+./run_hlo_eval.sh …/hlo_runner_main hlo_eval_tools/large_language_models/llama3_8b/inference/8gpu results
+```
+
+For each leaf the script reads `num_partitions=N` from the first module and, when
+`N>1`, adds `--num_partitions=N --use_shardy_partitioner` and sets
+`HIP_VISIBLE_DEVICES`/`CUDA_VISIBLE_DEVICES=0..N-1` (N GPUs must be visible). It
+always passes `--hlo_argument_mode=uninitialized`, pauses `SETTLE_SEC` seconds
+(default 2, `export SETTLE_SEC=0` to disable) between runs so GPU memory is
+reclaimed, prints a summary of profiled / skipped / failed leaves, and exits
+non-zero if any leaf failed (so you can re-run just those by pointing at the leaf).
+
+### Manual equivalent
+
+The script automates exactly this loop — one CSV per model **and** workload:
 
 ```bash
 # Auto-discover every training and inference/<N>gpu leaf and write one CSV each,
 # e.g. results/large_language_models_llama3_8b_inference_8gpu.csv.
+# The partition count is read from each module's header (num_partitions=N), so
+# this correctly handles both the multi-GPU inference leaves and the 8-GPU LLM
+# training modules; N GPUs must be visible for the multi-GPU runs.
 for leaf in hlo_eval_tools/*/*/training hlo_eval_tools/*/*/inference/*gpu; do
   files=("$leaf"/*.txt)
-  # Skip empty leaf dirs (e.g. deepseek2_16b inference, gemma3_4b/inference/8gpu).
+  # Skip empty leaf dirs (e.g. gemma3_4b/inference/8gpu).
   [ -e "${files[0]}" ] || continue
+  n=$(grep -oE 'num_partitions=[0-9]+' "${files[0]}" | head -1 | cut -d= -f2)
+  n=${n:-1}
+  spmd=""; [ "$n" -gt 1 ] && spmd="--num_partitions=$n --use_shardy_partitioner"
   csv="results/$(echo "${leaf#hlo_eval_tools/}" | tr '/' '_')"
   ./multihost_hlo_runner \
-    --device_type=gpu \
+    --device_type=gpu $spmd --hlo_argument_mode=uninitialized \
     --profile_execution=true \
     --append_profile_to_csv_file="$csv" \
     "${files[@]}"
@@ -301,13 +366,21 @@ repeat is skipped) and writes it on process exit:
 - HLO files are kept in a stable sorted order so the header and every data row
   line up column-for-column.
 
-Example (`results/llama3_8b.csv`):
+Example — real output from profiling `llama3_8b` 8-GPU inference on gfx950 with
+the built `hlo_runner_main`
+(`results/large_language_models_llama3_8b_inference_8gpu.csv`):
 
 ```
-Datetime           , all_gather.hlo, all_gather2.hlo, all_gather3.hlo, gemm.hlo, gemm_failed.hlo, transpose_large.hlo
-2026-05-15 16:14:25, 8.284ms       , 8.328ms        , 8.343ms        , 2.508ms , 1.082ms        , 0.07167ms
-2026-05-15 16:16:50, 8.296ms       , 8.325ms        , 8.313ms        , 2.518ms , 1.057ms        , 0.05767ms
+Datetime,module_0035.jit__prefill_jit.before_optimizations.txt,module_0090.jit__generate_jit.before_optimizations.txt
+2026-07-08 19:57:37, 222.6ms, 463.4ms
 ```
+
+Each subsequent run appends another dated row with the same columns, so
+re-profiling on a new ROCm / XLA build lets you diff the per-module timings over
+time. As another real data point, the same `imagenette` (ResNet-18) inference
+module measured **72.89ms on 1 GPU** vs **94.98ms on 2 GPUs** — for a model this
+small the increase at higher device counts is FSDP all-gather / communication
+overhead, which is exactly what this per-module timing is meant to surface.
 
 Because each row is timestamped and appended to the same file, the CSV can be
 loaded directly into pandas/Excel and pivoted by date (or annotated with the
