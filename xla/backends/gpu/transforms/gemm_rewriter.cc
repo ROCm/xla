@@ -16,7 +16,10 @@ limitations under the License.
 
 #include "xla/backends/gpu/transforms/gemm_rewriter.h"
 
+<<<<<<< HEAD
 #include <math.h>
+=======
+>>>>>>> 298b5f3f27 (Improve ragged-dot backend selection)
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -41,6 +44,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/tsl/platform/status_macros.h"
+#include <math.h>
 #include "xla/hlo/evaluator/hlo_evaluator.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -779,24 +783,101 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
   }
 
   absl::Status HandleRaggedDot(HloInstruction* instr) override {
-    // The cuDNN ragged dot fusion is only available on NVIDIA/CUDA devices.
-    // On AMD ROCm, use hipBLASLt GroupedMatMul when
-    // xla_gpu_experimental_use_ragged_dot_grouped_gemm is enabled.
+    // Backend selection priority for ragged-dot:
+    //   1. cuDNN (NVIDIA/CUDA targets) or hipBLASLt (AMD/ROCm targets)
+    //      when enabled and configuration is supported.
+    //   2. Triton XTile when enabled.
+    //   3. Default backend.
     const DebugOptions& debug_options =
         instr->GetModule()->config().debug_options();
-    // Cudnn group-gemm backend for ragged-dot enabled
+
+    // Priority 1a: cuDNN group-gemm backend (NVIDIA/CUDA targets only).
+    // The actual rewrite is performed by the RaggedDotFusionRewriter pass that
+    // runs before GemmRewriter.  Return early here to prevent further
+    // rewriting.
     bool ragged_dot_fusion_enabled =
         gpu_version_.IsCuda() &&
         debug_options.xla_gpu_experimental_use_ragged_dot_fusion();
-    // GPUBlaslt group-gemm backend for ragged-dot enabled
+    if (ragged_dot_fusion_enabled) {
+      return absl::OkStatus();
+    }
+
+    // Priority 1b: hipBLASLt group-gemm backend (AMD/ROCm targets only).
     bool grouped_gemm_enabled =
+        gpu_version_.IsRocm() &&
         debug_options.xla_gpu_experimental_use_ragged_dot_grouped_gemm() &&
         // NOLINTNEXTLINE(clang-diagnostic-deprecated-declarations)
         debug_options.xla_gpu_enable_cublaslt();
+    if (grouped_gemm_enabled && IsGpublasLtSupportedGroupedMatMul(*instr)) {
+      HloRaggedDotInstruction* ragged_dot =
+          DynCast<HloRaggedDotInstruction>(instr);
+      if (ragged_dot == nullptr) {
+        return absl::OkStatus();
+      }
+      const auto& ragged_dims = ragged_dot->ragged_dot_dimension_numbers();
+      const auto& dot_dims = ragged_dims.dot_dimension_numbers();
+      if (ragged_dims.lhs_ragged_dimensions().size() != 1) {
+        return absl::UnimplementedError(
+            "lhs_ragged_dimensions must have size 1");
+      }
+      int lhs_ragged_dim = ragged_dims.lhs_ragged_dimensions(0);
 
-    // Triton XTile is the lowest-priority backend for ragged-dot.  It is used
-    // only when neither cuDNN (priority 1) nor hipBLASLt/cuBLASLt (priority 2)
-    // applies to this instruction.  Requires both:
+      auto isLhsRaggedDimInContractingDim =
+          [](int lhs_ragged_dim, const DotDimensionNumbers& dnums) {
+            return std::any_of(dnums.lhs_contracting_dimensions().begin(),
+                               dnums.lhs_contracting_dimensions().end(),
+                               [&](auto dim) { return dim == lhs_ragged_dim; });
+          };
+
+      auto isLhsRaggedDimInBatchDim = [](int lhs_ragged_dim,
+                                         const DotDimensionNumbers& dnums) {
+        return std::any_of(dnums.lhs_batch_dimensions().begin(),
+                           dnums.lhs_batch_dimensions().end(),
+                           [&](auto dim) { return dim == lhs_ragged_dim; });
+      };
+
+      if (!isLhsRaggedDimInContractingDim(lhs_ragged_dim, dot_dims) &&
+          !isLhsRaggedDimInBatchDim(lhs_ragged_dim, dot_dims) &&
+          ragged_dims.rhs_group_dimensions().size() != 1) {
+        return absl::UnimplementedError(
+            "rhs_group_dimensions must have size equal to 1 when lhs ragged "
+            "dimension is a non-contracting dimension");
+      }
+      HloInstruction* grouped_gemm_call =
+          instr->AddInstruction(HloInstruction::CreateCustomCall(
+              ragged_dot->shape(), ragged_dot->mutable_operands(),
+              gpu::kCublasLtGroupedMatmulCallTarget));
+
+      // Create a GroupedGemmBackendConfig based on the instruction.
+      ASSIGN_OR_RETURN(
+          gpu::GpuBackendConfig gpu_backend_config,
+          grouped_gemm_call->backend_config<gpu::GpuBackendConfig>());
+      GroupedGemmBackendConfig& grouped_gemm_backend_config =
+          *gpu_backend_config.mutable_grouped_gemm_backend_config();
+      RaggedDotDimensionNumbers& ragged_dot_dimension_numbers =
+          *grouped_gemm_backend_config.mutable_ragged_dot_dimension_numbers();
+      ragged_dot_dimension_numbers = ragged_dot->ragged_dot_dimension_numbers();
+
+      // Create a GemmBackendConfig based on the instruction.
+      GemmBackendConfig& gemm_backend_config =
+          *grouped_gemm_backend_config.mutable_gemm_backend_config();
+      gemm_backend_config.set_alpha_real(1.0);
+      gemm_backend_config.set_alpha_imag(0.0);
+      gemm_backend_config.set_beta(0.0);
+      *gemm_backend_config.mutable_dot_dimension_numbers() = dot_dims;
+
+      auto attributes = instr->frontend_attributes().map();
+      gemm_backend_config.set_grad_x(attributes["grad_x"] == "true");
+      gemm_backend_config.set_grad_y(attributes["grad_y"] == "true");
+
+      RETURN_IF_ERROR(
+          grouped_gemm_call->set_backend_config(gpu_backend_config));
+      RETURN_IF_ERROR(ReplaceInstruction(instr, grouped_gemm_call));
+      return absl::OkStatus();
+    }
+
+    // Priority 2: Triton XTile backend.
+    // Requires both:
     //   --xla_gpu_experimental_triton_ragged_dot=true
     //   --xla_gpu_experimental_enable_tiling_propagation=true
     //
@@ -806,13 +887,9 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     // Sequential-dim tile sizes stored on the ragged_dot's Tile backend_config:
     //   Tile.sizes = [1, BLOCK_K]  (G=1 per G-loop iter, K tile = BLOCK_K)
     bool triton_ragged_dot_enabled =
-        instr->GetModule()
-            ->config()
-            .debug_options()
-            .xla_gpu_experimental_triton_ragged_dot();
-    // Only use Triton when cuDNN and hipBLASLt/cuBLASLt are both inapplicable.
-    if (triton_ragged_dot_enabled && !ragged_dot_fusion_enabled &&
-        (!grouped_gemm_enabled || !IsGpublasLtSupportedGroupedMatMul(*instr))) {
+        debug_options.xla_gpu_experimental_triton_ragged_dot();
+    if (triton_ragged_dot_enabled &&
+        IsTritonSupportedRaggedDot(gpu_version_, *instr)) {
       HloRaggedDotInstruction* ragged_dot =
           DynCast<HloRaggedDotInstruction>(instr);
       if (ragged_dot == nullptr) {
@@ -948,73 +1025,7 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
       return absl::OkStatus();
     }
 
-    if (ragged_dot_fusion_enabled || !grouped_gemm_enabled ||
-        !IsGpublasLtSupportedGroupedMatMul(*instr)) {
-      return absl::OkStatus();
-    }
-    HloRaggedDotInstruction* ragged_dot =
-        DynCast<HloRaggedDotInstruction>(instr);
-    if (ragged_dot == nullptr) {
-      return absl::OkStatus();
-    }
-    const auto& ragged_dims = ragged_dot->ragged_dot_dimension_numbers();
-    const auto& dot_dims = ragged_dims.dot_dimension_numbers();
-    if (ragged_dims.lhs_ragged_dimensions().size() != 1) {
-      return absl::UnimplementedError("lhs_ragged_dimensions must have size 1");
-    }
-    int lhs_ragged_dim = ragged_dims.lhs_ragged_dimensions(0);
-
-    auto isLhsRaggedDimInContractingDim = [](int lhs_ragged_dim,
-                                             const DotDimensionNumbers& dnums) {
-      return std::any_of(dnums.lhs_contracting_dimensions().begin(),
-                         dnums.lhs_contracting_dimensions().end(),
-                         [&](auto dim) { return dim == lhs_ragged_dim; });
-    };
-
-    auto isLhsRaggedDimInBatchDim = [](int lhs_ragged_dim,
-                                       const DotDimensionNumbers& dnums) {
-      return std::any_of(dnums.lhs_batch_dimensions().begin(),
-                         dnums.lhs_batch_dimensions().end(),
-                         [&](auto dim) { return dim == lhs_ragged_dim; });
-    };
-
-    if (!isLhsRaggedDimInContractingDim(lhs_ragged_dim, dot_dims) &&
-        !isLhsRaggedDimInBatchDim(lhs_ragged_dim, dot_dims) &&
-        ragged_dims.rhs_group_dimensions().size() != 1) {
-      return absl::UnimplementedError(
-          "rhs_group_dimensions must have size equal to 1 when lhs ragged "
-          "dimension is a non-contracting dimension");
-    }
-    HloInstruction* grouped_gemm_call =
-        instr->AddInstruction(HloInstruction::CreateCustomCall(
-            ragged_dot->shape(), ragged_dot->mutable_operands(),
-            gpu::kCublasLtGroupedMatmulCallTarget));
-
-    // Create a GroupedGemmBackendConfig based on the instruction.
-    ASSIGN_OR_RETURN(
-        gpu::GpuBackendConfig gpu_backend_config,
-        grouped_gemm_call->backend_config<gpu::GpuBackendConfig>());
-    GroupedGemmBackendConfig& grouped_gemm_backend_config =
-        *gpu_backend_config.mutable_grouped_gemm_backend_config();
-    RaggedDotDimensionNumbers& ragged_dot_dimension_numbers =
-        *grouped_gemm_backend_config.mutable_ragged_dot_dimension_numbers();
-    ragged_dot_dimension_numbers = ragged_dot->ragged_dot_dimension_numbers();
-
-    // Create a GemmBackendConfig based on the instruction.
-    GemmBackendConfig& gemm_backend_config =
-        *grouped_gemm_backend_config.mutable_gemm_backend_config();
-    gemm_backend_config.set_alpha_real(1.0);
-    gemm_backend_config.set_alpha_imag(0.0);
-    gemm_backend_config.set_beta(0.0);
-    *gemm_backend_config.mutable_dot_dimension_numbers() = dot_dims;
-
-    auto attributes = instr->frontend_attributes().map();
-    gemm_backend_config.set_grad_x(attributes["grad_x"] == "true");
-    gemm_backend_config.set_grad_y(attributes["grad_y"] == "true");
-
-    RETURN_IF_ERROR(grouped_gemm_call->set_backend_config(gpu_backend_config));
-
-    RETURN_IF_ERROR(ReplaceInstruction(instr, grouped_gemm_call));
+    // Priority 3: Default backend (no transformation needed).
     return absl::OkStatus();
   }
 
