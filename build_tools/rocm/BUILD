@@ -61,7 +61,7 @@ genrule(
     cmd = """
       echo '#!/bin/bash' > $@
       echo 'wrapper_runfiles="$${RUNFILES_DIR:-$$0.runfiles}"' >> $@
-      echo 'symbolizer=$$(find -L "$${wrapper_runfiles}" -path "*/llvm18_linux_x86_64/bin/llvm-symbolizer" | head -n 1)' >> $@
+      echo 'symbolizer=$$(find -L "$${wrapper_runfiles}" -path "*/bin/llvm-symbolizer" | head -n 1)' >> $@
       echo 'if [[ -n "$$symbolizer" ]]; then' >> $@
       echo '  export ASAN_OPTIONS="$${ASAN_OPTIONS:+$${ASAN_OPTIONS}:}external_symbolizer_path=$${symbolizer}"' >> $@
       echo '  export TSAN_OPTIONS="$${TSAN_OPTIONS:+$${TSAN_OPTIONS}:}external_symbolizer_path=$${symbolizer}"' >> $@
@@ -73,14 +73,24 @@ genrule(
 
 # this wrapper ensures the test target
 # take into account any changes in the ignore list files
-sh_binary(
-    name = "sanitizer_wrapper",
-    srcs = [":san_wrapper_script"],
-    data = [
-        ":sanitizer_ignore_lists",
+# TODO: @llvm_linux_x86_64 (the version-agnostic alias repo from
+# rules_ml_toolchain) has no llvm-symbolizer alias, only concrete versioned
+# repos like @llvm18_linux_x86_64 export bin/* as file targets. Switch to the
+# alias once upstream adds one (mirroring its existing llvm-ar alias).
+# llvm-symbolizer/distro_libs come from the hermetic LLVM repos, which only
+# back the toolchain actually used when hermetic CC is enabled.
+HERMETIC_SYMBOLIZER_DATA = select({
+    "@rules_ml_toolchain//common:is_hermetic_cc_enabled": [
         "@llvm18_linux_x86_64//:bin/llvm-symbolizer",
         "@llvm18_linux_x86_64//:distro_libs",
     ],
+    "//conditions:default": [],
+})
+
+sh_binary(
+    name = "sanitizer_wrapper",
+    srcs = [":san_wrapper_script"],
+    data = [":sanitizer_ignore_lists"] + HERMETIC_SYMBOLIZER_DATA,
     tags = ["manual"],
     visibility = ["//visibility:public"],
 )
@@ -91,9 +101,7 @@ sh_binary(
     data = [
         ":sanitizer_ignore_lists",
         "@local_config_rocm//rocm:rocminfo",
-        "@llvm18_linux_x86_64//:bin/llvm-symbolizer",
-        "@llvm18_linux_x86_64//:distro_libs",
-    ],
+    ] + HERMETIC_SYMBOLIZER_DATA,
     tags = ["manual"],
     visibility = ["//visibility:public"],
 )

@@ -30,7 +30,7 @@ TF_TESTS_PER_GPU=${TF_TESTS_PER_GPU:-8}
 # it replaces //build_tools/rocm:sanitizer_wrapper outright, so the
 # symbolizer setup has to be duplicated here too.
 wrapper_runfiles="${RUNFILES_DIR:-$0.runfiles}"
-symbolizer=$(find -L "${wrapper_runfiles}" -path "*/llvm18_linux_x86_64/bin/llvm-symbolizer" | head -n 1)
+symbolizer=$(find -L "${wrapper_runfiles}" -path "*/bin/llvm-symbolizer" | head -n 1)
 if [[ -n "$symbolizer" ]]; then
   export ASAN_OPTIONS="${ASAN_OPTIONS:+${ASAN_OPTIONS}:}external_symbolizer_path=${symbolizer}"
   export TSAN_OPTIONS="${TSAN_OPTIONS:+${TSAN_OPTIONS}:}external_symbolizer_path=${symbolizer}"
