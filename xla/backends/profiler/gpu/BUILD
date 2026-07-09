@@ -572,6 +572,7 @@ xla_cc_test(
     linkopts = ["-ldl"],  # for dlopen/dlsym in RealRoctxCallsProduceNvtxRangeInXSpace
     tags = [
         "gpu",
+        "requires-gpu-amd",
         "rocm-only",
     ] + if_google([
         # Optional: only run internally if ROCm config is enabled
@@ -603,6 +604,7 @@ xla_cc_test(
     srcs = ["rocm_collector_test.cc"],
     tags = [
         "gpu",
+        "requires-gpu-amd",
         "rocm-only",
     ] + if_google([
         "manual",
