@@ -1,5 +1,5 @@
 load("@local_config_cuda//cuda:build_defs.bzl", "cuda_library")
-load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm_is_configured")
+load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm_is_configured", "rocm_library")
 load("//xla:xla.default.bzl", "xla_cc_test")
 load("//xla/tests:build_defs.bzl", "xla_test")
 load(
@@ -553,7 +553,7 @@ cc_library(
     ],
 )
 
-cc_library(
+rocm_library(
     name = "rocm_occupancy_test_kernel",
     testonly = 1,
     srcs = ["rocm_occupancy_test_kernel.hip.cc"],

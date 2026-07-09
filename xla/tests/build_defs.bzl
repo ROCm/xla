@@ -185,7 +185,6 @@ def xla_test(
                 "//xla/service:gpu_plugin",
             )
             if backend in NVIDIA_GPU_BACKENDS:
-                this_backend_tags += tf_gpu_tests_tags()
                 backend_deps += [
                     "//xla/stream_executor/cuda:all_runtime",
                     "//xla/stream_executor/cuda:gpu_test_kernels_cuda",
