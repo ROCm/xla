@@ -71,15 +71,6 @@ Requirements:
 
 - An AMD GPU (or several) and a ROCm installation providing `hipcc`. No hipBLASLt.
 
-To build against a **specific ROCm version** (this is the core of the regression
-flow), invoke that version's `hipcc`. The binary embeds the HIP version it was
-built with, which is exactly the version under test:
-
-```bash
-/opt/rocm-7.2.1/bin/hipcc -O3 -std=c++17 rocm_latency_check_tool.cpp -pthread \
-  -o rocm_latency_check_tool_7.2.1
-```
-
 ## Usage
 
 Run with defaults:
@@ -138,6 +129,7 @@ Flags accept both `--flag value` and `--flag=value`.
 | `--skip-d2d` | off | Skip the D2D copy for copy-stage isolation. |
 | `--skip-d2h` | off | Skip the D2H copy for copy-stage isolation. |
 | `--warmup-iters N` | `20` | Warmup iterations per slot before the measured phase. |
+| `--busy-kernel-ns N` | `80000` | Per-busy-kernel GPU duration (ns). `0` = near-nop launch, which puts the tool in a dispatch-bound regime that exposes HIP-runtime / dispatch overhead (used by the [regression validation](#regression-validation-validatesh) case). |
 | `--csv PATH` | disabled | Append one row per report to this CSV file (see below). |
 | `--label STR` | auto | ROCm release tag stamped into the CSV `rocm_version` column (e.g. `7.2.1`). If omitted, the compiled HIP version is used. |
 | `-h`, `--help` | | Print help and exit. |
@@ -150,16 +142,21 @@ buffer on the **neighbor GPU** `(g+1) % num_gpus`; the tool enables peer access
 at startup and the copy becomes a cross-GPU transfer. `--d2d-peer` therefore
 requires `--num-gpus >= 2`.
 
-## The compute kernel is fixed by design
+## The compute kernel shape is fixed by design
 
-The busy kernel's parameters are **compile-time constants** (no flags, no
-environment variables), so the compute baseline is fixed and fully reproducible
-across ROCm versions:
+The busy kernel's **shape** is a compile-time constant, so the compute baseline
+stays reproducible across ROCm versions:
 
-- duration ≈ 80us (`wall_clock64` spin)
 - 256 threads per block
 - blocks = auto (GPU CU count)
 - yields with `s_sleep` while spinning
+- duration ≈ 80us (`wall_clock64` spin) by default
+
+Only the per-kernel **duration** is tunable, via `--busy-kernel-ns` (default
+`80000`). Leave it at the default for normal cross-version latency comparisons.
+Set it to `0` (a near-nop launch) to push the tool into a *dispatch-bound*
+regime where HIP-runtime and stream→hardware-queue overhead dominate — this is
+what makes the dynamic hardware-queue regression measurable (see below).
 
 ## Reading the output
 
@@ -223,7 +220,7 @@ Columns:
 | `skip_h2d`, `skip_d2d`, `skip_d2h` | Copy-stage isolation switches (`1` = skipped). |
 | `warmup_iters` | Warmup iterations per slot before the measured phase. |
 | `compute_op` | Always `timedBusyKernel`. |
-| `busy_kernel_ns`, `busy_kernel_threads`, `busy_kernel_blocks`, `busy_kernel_use_sleep` | Fixed busy-kernel config (documents the compute baseline; `blocks=0` = auto). |
+| `busy_kernel_ns`, `busy_kernel_threads`, `busy_kernel_blocks`, `busy_kernel_use_sleep` | Busy-kernel config (documents the compute baseline). `busy_kernel_ns` reflects `--busy-kernel-ns` (`0` = near-nop dispatch); `threads`/`use_sleep` are fixed and `blocks=0` = auto. |
 | `work_m`, `work_n`, `work_k` | Workload shape that determines the copy sizes. |
 | `count`, `qps` | Requests measured so far and throughput. |
 | `min_us`, `max_us`, `mean_us`, `stddev_us` | Latency summary (microseconds). |
@@ -231,15 +228,107 @@ Columns:
 
 ## Regression workflow: comparing ROCm versions
 
-1. Build one binary per ROCm version using that version's `hipcc` (see
-   [Building](#building)).
+1. Build one binary per ROCm version (see [Building](#building)).
 2. Run each binary with identical flags, writing into the **same** CSV and
    tagging each with a distinct `--label`:
 
 ```bash
-./rocm_latency_check_tool_7.1.0 --duration-sec 30 --csv latency.csv --label 7.1.0
-./rocm_latency_check_tool_7.2.1 --duration-sec 30 --csv latency.csv --label 7.2.1
+./rocm_latency_check_tool_7.2.2 --duration-sec 30 --csv latency.csv --label 7.2.2
+./rocm_latency_check_tool_7.15  --duration-sec 30 --csv latency.csv --label 7.15
 ```
 
 3. Compare the `final` rows (or the percentile columns) across `label`s to spot
    latency/throughput regressions between ROCm versions.
+
+## Regression validation (`validate.sh`)
+
+`validate.sh` is a small harness that runs the **same** binary under several
+environments/configs and prints a compact QPS + tail-latency table, so a
+regression shows up as a gap between rows. HIP **runtime** flags (like
+`DEBUG_HIP_DYNAMIC_QUEUES`) are set as an env prefix in front of the binary, not
+as tool flags — the tool stays a simple, generic benchmark and you choose the
+runtime behavior on the command line.
+
+Run it against a built binary:
+
+```bash
+bash validate.sh ./rocm_latency_check_tool           # the built binary
+DURATION=20 bash validate.sh ./rocm_latency_check_tool
+```
+
+It ships with one worked usage case — the HIP dynamic hardware-queue regression
+below — and is structured so you can add more comparisons by copying that block.
+
+### Usage case: the HIP dynamic hardware-queue regression
+
+Recent HIP runtimes map HIP streams onto a small per-device pool of **hardware
+queues** (`GPU_MAX_HW_QUEUES`, default **4**). With *dynamic queue management*
+enabled (`DEBUG_HIP_DYNAMIC_QUEUES`, default **1**), a stream **releases** its
+hardware queue as soon as it goes idle and **re-acquires / re-selects** one on
+its next submit:
+
+- When the streams in flight per GPU stay **within** the queue pool, this is
+  cheap — a stream simply gets its previous queue back.
+- When streams **oversubscribe** the pool (streams/GPU > `GPU_MAX_HW_QUEUES`),
+  idle/reused streams keep being re-selected onto *different* physical queues.
+  This is the "moving around" that serializes dispatch and inflates latency.
+
+Setting `DEBUG_HIP_DYNAMIC_QUEUES=0` restores a **static** stream→queue mapping
+and removes the churn, so the `1`-vs-`0` gap is a direct measure of the
+regression.
+
+**Why the default pipeline hides it.** Each default request spends ~160us in the
+two busy kernels plus H2D/D2D/D2H copy time, so the per-dispatch queue
+acquire/release/re-select overhead (µs-scale) is completely buried; the tool
+shows essentially identical numbers with dynamic queues on or off. To expose it,
+push the tool into a **dispatch-bound, queue-oversubscribed** regime: many
+streams on one GPU with a near-nop op and copies skipped, so per-dispatch queue
+management dominates. That is exactly what `validate.sh` does — 1 GPU × 64
+streams, 64 threads (16× oversubscription of the 4 queues), `--busy-kernel-ns 0`,
+copies skipped — for `DEBUG_HIP_DYNAMIC_QUEUES=1` vs `=0`.
+
+To run it by hand and record CSV rows (the `--label` values below use the
+convention `<rocm-version>-dq<0|1>`, where `dq1`/`dq0` just mean
+`DEBUG_HIP_DYNAMIC_QUEUES=1`/`=0`; the label is free-form text stamped into the
+CSV so you can tell the rows apart):
+
+```bash
+# dynamic queues ON (runtime default) — the regressed path
+DEBUG_HIP_DYNAMIC_QUEUES=1 ./rocm_latency_check_tool \
+  --num-gpus 1 --streams-per-gpu 64 --consumer-threads 64 \
+  --skip-h2d --skip-d2d --skip-d2h --busy-kernel-ns 0 \
+  --duration-sec 10 --csv qstress.csv --label 7.15-dq1
+
+# dynamic queues OFF (static mapping) — the reference
+DEBUG_HIP_DYNAMIC_QUEUES=0 ./rocm_latency_check_tool \
+  --num-gpus 1 --streams-per-gpu 64 --consumer-threads 64 \
+  --skip-h2d --skip-d2d --skip-d2h --busy-kernel-ns 0 \
+  --duration-sec 10 --csv qstress.csv --label 7.15-dq0
+```
+
+With dynamic queues on you should see a multi-x drop in QPS and a large blow-up
+in the p99/p99.9 tail. Measured on 4× MI355X (gfx950), 1 GPU, 64 streams, 64
+threads, near-nop dispatch:
+
+| runtime | `DEBUG_HIP_DYNAMIC_QUEUES` | QPS | mean (µs) | p99 (µs) | p99.9 (µs) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| ROCm 7.2.2 | `1` (default) | 35,600 | 1,794 | 6,401 | 10,636 |
+| ROCm 7.2.2 | `0` | 313,800 | 202 | 231 | 241 |
+| the-rock 7.15 | `1` (default) | 97,300 | 656 | 3,748 | 5,837 |
+| the-rock 7.15 | `0` | 312,000 | 203 | 231 | 239 |
+
+For contrast, the **default** pipeline (16 streams, no oversubscription) shows
+essentially no difference between `1` and `0` on either runtime — which is why
+the regression is invisible there.
+
+**Notes**
+
+- `GPU_MAX_HW_QUEUES` (HIP runtime env, default 4) is the per-device queue
+  budget; any `--streams-per-gpu` above it triggers the churn, and higher ratios
+  amplify it.
+- Sweep `--busy-kernel-ns` (0 = near-nop) to see how much per-op compute it takes
+  to mask the churn.
+- On runtime builds that emit queue logs you can confirm the churn directly with
+  `AMD_LOG_LEVEL=3 AMD_LOG_MASK=0x10` and counting the `releaseQueue` /
+  `Selected queue` / `acquireQueue` lines (they scale ~linearly with requests
+  when dynamic queues are on, and stay near-constant when off).
