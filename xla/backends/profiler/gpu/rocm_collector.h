@@ -24,7 +24,6 @@ limitations under the License.
 #include <tuple>
 #include <vector>
 
-#include "rocprofiler-sdk/agent.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
@@ -32,6 +31,7 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
 #include "rocm/include/hip/hip_runtime.h"
+#include "rocprofiler-sdk/agent.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/profiler/utils/xplane_builder.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
@@ -64,28 +64,30 @@ inline std::string ToXStat(const KernelDetails& kernel_info,
 // no HIP function pointer is required.
 struct RocmDeviceOccupancyParams {
   // From the kernel symbol data (DEVICE_KERNEL_SYMBOL_REGISTER callback).
-  uint32_t num_regs;    // arch_vgpr_count: VGPRs allocated per thread
+  uint32_t num_regs;  // arch_vgpr_count: VGPRs allocated per thread
   // From the kernel dispatch record.
   // group_segment_size in rocprofiler_kernel_dispatch_info_t is the *total*
   // LDS per workgroup (static + runtime additions, AKA the "real" LDS usage).
-  // Do NOT add the symbol's group_segment_size on top — that would double-count.
+  // Do NOT add the symbol's group_segment_size on top — that would
+  // double-count.
   uint32_t block_size;  // workgroup_x * workgroup_y * workgroup_z (0-dims → 1)
   uint32_t smem_bytes;  // kinfo.group_segment_size: total LDS per workgroup
   // From the rocprofiler agent (set once in GetDeviceCapabilities).
-  uint32_t max_waves_per_cu;   // max concurrent wavefronts per CU
-  uint32_t wave_front_size;    // threads per wavefront (64 on CDNA, 32/64 on RDNA)
-  uint32_t max_waves_per_simd; // max concurrent wavefronts per SIMD unit
-  uint32_t simd_per_cu;        // number of SIMD units per CU
-  uint32_t lds_size_bytes;     // LDS capacity in bytes per CU
+  uint32_t max_waves_per_cu;  // max concurrent wavefronts per CU
+  uint32_t
+      wave_front_size;  // threads per wavefront (64 on CDNA, 32/64 on RDNA)
+  uint32_t max_waves_per_simd;  // max concurrent wavefronts per SIMD unit
+  uint32_t simd_per_cu;         // number of SIMD units per CU
+  uint32_t lds_size_bytes;      // LDS capacity in bytes per CU
 
   friend bool operator==(const RocmDeviceOccupancyParams& a,
                          const RocmDeviceOccupancyParams& b) noexcept {
-    return std::tie(a.num_regs, a.block_size, a.smem_bytes,
-                    a.max_waves_per_cu, a.wave_front_size,
-                    a.max_waves_per_simd, a.simd_per_cu, a.lds_size_bytes) ==
-           std::tie(b.num_regs, b.block_size, b.smem_bytes,
-                    b.max_waves_per_cu, b.wave_front_size,
-                    b.max_waves_per_simd, b.simd_per_cu, b.lds_size_bytes);
+    return std::tie(a.num_regs, a.block_size, a.smem_bytes, a.max_waves_per_cu,
+                    a.wave_front_size, a.max_waves_per_simd, a.simd_per_cu,
+                    a.lds_size_bytes) ==
+           std::tie(b.num_regs, b.block_size, b.smem_bytes, b.max_waves_per_cu,
+                    b.wave_front_size, b.max_waves_per_simd, b.simd_per_cu,
+                    b.lds_size_bytes);
   }
 
   friend bool operator!=(const RocmDeviceOccupancyParams& a,
@@ -96,11 +98,10 @@ struct RocmDeviceOccupancyParams {
   template <typename H>
   friend H AbslHashValue(H hash_state,
                          const RocmDeviceOccupancyParams& params) {
-    return H::combine(std::move(hash_state), params.num_regs,
-                      params.block_size, params.smem_bytes,
-                      params.max_waves_per_cu, params.wave_front_size,
-                      params.max_waves_per_simd, params.simd_per_cu,
-                      params.lds_size_bytes);
+    return H::combine(std::move(hash_state), params.num_regs, params.block_size,
+                      params.smem_bytes, params.max_waves_per_cu,
+                      params.wave_front_size, params.max_waves_per_simd,
+                      params.simd_per_cu, params.lds_size_bytes);
   }
 };
 
@@ -163,11 +164,11 @@ class PerDeviceCollector {
       occupancy_cache_;
   // Populated from rocprofiler_agent_v0_t in GetDeviceCapabilities().
   // Used by the hardware-formula occupancy computation in GetOccupancy().
-  uint32_t max_waves_per_cu_ = 0;   // max concurrent wavefronts per CU
-  uint32_t wave_front_size_ = 0;    // threads per wavefront
-  uint32_t max_waves_per_simd_ = 0; // max concurrent wavefronts per SIMD
-  uint32_t simd_per_cu_ = 0;        // SIMD units per CU
-  uint32_t lds_size_bytes_ = 0;     // LDS capacity in bytes per CU
+  uint32_t max_waves_per_cu_ = 0;    // max concurrent wavefronts per CU
+  uint32_t wave_front_size_ = 0;     // threads per wavefront
+  uint32_t max_waves_per_simd_ = 0;  // max concurrent wavefronts per SIMD
+  uint32_t simd_per_cu_ = 0;         // SIMD units per CU
+  uint32_t lds_size_bytes_ = 0;      // LDS capacity in bytes per CU
 };  // PerDeviceCollector
 
 class RocmTraceCollectorImpl : public RocmTraceCollector {

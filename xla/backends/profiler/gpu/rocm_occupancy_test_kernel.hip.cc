@@ -17,8 +17,9 @@ limitations under the License.
 // blockIdx, blockDim, threadIdx and <<<...>>> are available.  The BUILD rule
 // uses a .hip.cc extension which routes the file through hipcc_wrapper.
 
-#include "rocm/include/hip/hip_runtime.h"
 #include "xla/backends/profiler/gpu/rocm_occupancy_test_kernel.h"
+
+#include "rocm/include/hip/hip_runtime.h"
 
 namespace xla {
 namespace profiler {

@@ -164,7 +164,8 @@ OccupancyStats PerDeviceCollector::GetOccupancy(
   // because at minimum occupancy each wave uses exactly 1 VGPR/thread (the
   // wave_front_size slot count). arch_vgpr_count is per-thread, so:
   //   waves_per_simd_vgpr = floor(vgprs_per_simd / num_regs)
-  const uint32_t vgprs_per_simd = params.max_waves_per_simd * params.wave_front_size;
+  const uint32_t vgprs_per_simd =
+      params.max_waves_per_simd * params.wave_front_size;
   const uint32_t waves_per_simd_vgpr = vgprs_per_simd / params.num_regs;
   const uint32_t waves_per_cu_vgpr = waves_per_simd_vgpr * params.simd_per_cu;
 
@@ -177,26 +178,24 @@ OccupancyStats PerDeviceCollector::GetOccupancy(
           : params.max_waves_per_cu;
 
   // Active waves = min(VGPR limit, LDS limit, hardware limit).
-  const uint32_t active_waves = std::min({waves_per_cu_vgpr,
-                                          waves_per_cu_lds,
-                                          params.max_waves_per_cu});
+  const uint32_t active_waves =
+      std::min({waves_per_cu_vgpr, waves_per_cu_lds, params.max_waves_per_cu});
   if (active_waves == 0) return {};
 
   const uint32_t max_threads_per_cu =
       params.max_waves_per_cu * params.wave_front_size;
 
   OccupancyStats stats;
-  stats.occupancy_pct =
-      static_cast<double>(active_waves) * params.wave_front_size * 100.0 /
-      max_threads_per_cu;
+  stats.occupancy_pct = static_cast<double>(active_waves) *
+                        params.wave_front_size * 100.0 / max_threads_per_cu;
   // Suggested block size: fill the CU with whole blocks of wave_front_size.
-  stats.suggested_block_size =
-      static_cast<int>((active_waves / waves_per_block) * params.wave_front_size);
+  stats.suggested_block_size = static_cast<int>(
+      (active_waves / waves_per_block) * params.wave_front_size);
   if (stats.suggested_block_size == 0)
     stats.suggested_block_size = static_cast<int>(params.wave_front_size);
   // Min grid size: blocks to saturate one CU.
-  stats.min_grid_size =
-      static_cast<int>((max_threads_per_cu + params.block_size - 1) / params.block_size);
+  stats.min_grid_size = static_cast<int>(
+      (max_threads_per_cu + params.block_size - 1) / params.block_size);
   return stats;
 }
 
@@ -257,17 +256,17 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
       const uint32_t wg_z = std::max(event.kernel_info.workgroup_z, 1u);
 
       RocmDeviceOccupancyParams params{};
-      params.num_regs   = event.kernel_info.num_regs;
+      params.num_regs = event.kernel_info.num_regs;
       params.block_size = wg_x * wg_y * wg_z;
       // group_segment_size from the dispatch record is already the total LDS
       // per workgroup (static + runtime). Use it directly; do not add the
       // symbol's group_segment_size on top (that would double-count).
       params.smem_bytes = event.kernel_info.group_segment_size;
-      params.max_waves_per_cu   = max_waves_per_cu_;
-      params.wave_front_size    = wave_front_size_;
+      params.max_waves_per_cu = max_waves_per_cu_;
+      params.wave_front_size = wave_front_size_;
       params.max_waves_per_simd = max_waves_per_simd_;
-      params.simd_per_cu        = simd_per_cu_;
-      params.lds_size_bytes     = lds_size_bytes_;
+      params.simd_per_cu = simd_per_cu_;
+      params.lds_size_bytes = lds_size_bytes_;
 
       OccupancyStats& occ = occupancy_cache_[params];
       if (occ.occupancy_pct == 0.0) {
@@ -279,21 +278,18 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
         xevent.AddStatValue(*plane->GetOrCreateStatMetadata(GetStatTypeStr(
                                 StatType::kTheoreticalOccupancyPct)),
                             occupancy_pct);
-        xevent.AddStatValue(
-            *plane->GetOrCreateStatMetadata(
-                GetStatTypeStr(StatType::kOccupancyMinGridSize)),
-            static_cast<int32_t>(occ.min_grid_size));
-        xevent.AddStatValue(
-            *plane->GetOrCreateStatMetadata(
-                GetStatTypeStr(StatType::kOccupancySuggestedBlockSize)),
-            static_cast<int32_t>(occ.suggested_block_size));
+        xevent.AddStatValue(*plane->GetOrCreateStatMetadata(GetStatTypeStr(
+                                StatType::kOccupancyMinGridSize)),
+                            static_cast<int32_t>(occ.min_grid_size));
+        xevent.AddStatValue(*plane->GetOrCreateStatMetadata(GetStatTypeStr(
+                                StatType::kOccupancySuggestedBlockSize)),
+                            static_cast<int32_t>(occ.suggested_block_size));
       }
     }
-    xevent.AddStatValue(
-        *plane->GetOrCreateStatMetadata(
-            GetStatTypeStr(StatType::kKernelDetails)),
-        *plane->GetOrCreateStatMetadata(ToXStat(event.kernel_info,
-                                                occupancy_pct)));
+    xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
+                            GetStatTypeStr(StatType::kKernelDetails)),
+                        *plane->GetOrCreateStatMetadata(
+                            ToXStat(event.kernel_info, occupancy_pct)));
   } else if (event.type == RocmTracerEventType::MemcpyH2D ||
              event.type == RocmTracerEventType::MemcpyD2H ||
              event.type == RocmTracerEventType::MemcpyD2D ||
@@ -547,13 +543,13 @@ void PerDeviceCollector::GetDeviceCapabilities(
   }
 
   // Store hardware limits for the occupancy formula (no HIP API call needed).
-  max_waves_per_cu_   = agent.max_waves_per_cu;
-  wave_front_size_    = agent.wave_front_size;
+  max_waves_per_cu_ = agent.max_waves_per_cu;
+  wave_front_size_ = agent.wave_front_size;
   max_waves_per_simd_ = agent.max_waves_per_simd;
-  simd_per_cu_        = agent.simd_per_cu;
-  // lds_size_in_kb is per SIMD wavefront; total LDS per CU is the CU-level pool.
-  // rocprofiler_agent_v0_t.lds_size_in_kb is actually bytes/1024 per CU.
-  lds_size_bytes_     = agent.lds_size_in_kb * 1024;
+  simd_per_cu_ = agent.simd_per_cu;
+  // lds_size_in_kb is per SIMD wavefront; total LDS per CU is the CU-level
+  // pool. rocprofiler_agent_v0_t.lds_size_in_kb is actually bytes/1024 per CU.
+  lds_size_bytes_ = agent.lds_size_in_kb * 1024;
 }
 
 void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,

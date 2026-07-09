@@ -373,8 +373,8 @@ TEST(RocmTracerOccupancyTest, KernelDispatchProducesOccupancyStats) {
 
   uint64_t start_wall = RocmTracer::GetTimestamp();
   uint64_t start_gpu = RocmTracer::GetTimestamp();
-  auto collector = std::make_unique<RocmTraceCollectorImpl>(
-      col_opts, start_wall, start_gpu);
+  auto collector =
+      std::make_unique<RocmTraceCollectorImpl>(col_opts, start_wall, start_gpu);
   collector->SetGpuAgents(tracer.GpuAgents());
 
   RocmTracerOptions opts{/*max_annotation_strings=*/1024 * 1024};
@@ -392,13 +392,12 @@ TEST(RocmTracerOccupancyTest, KernelDispatchProducesOccupancyStats) {
   collector->Export(&space);
 
   // Look for the theoretical occupancy stat in any GPU plane.
-  absl::string_view kOccKey =
-      tsl::profiler::GetStatTypeStr(tsl::profiler::StatType::kTheoreticalOccupancyPct);
-  absl::string_view kMinGridKey =
-      tsl::profiler::GetStatTypeStr(tsl::profiler::StatType::kOccupancyMinGridSize);
-  absl::string_view kSugBlockKey =
-      tsl::profiler::GetStatTypeStr(
-          tsl::profiler::StatType::kOccupancySuggestedBlockSize);
+  absl::string_view kOccKey = tsl::profiler::GetStatTypeStr(
+      tsl::profiler::StatType::kTheoreticalOccupancyPct);
+  absl::string_view kMinGridKey = tsl::profiler::GetStatTypeStr(
+      tsl::profiler::StatType::kOccupancyMinGridSize);
+  absl::string_view kSugBlockKey = tsl::profiler::GetStatTypeStr(
+      tsl::profiler::StatType::kOccupancySuggestedBlockSize);
 
   bool found_occ_pct = false;
   bool found_min_grid = false;
@@ -439,8 +438,7 @@ TEST(RocmTracerOccupancyTest, KernelDispatchProducesOccupancyStats) {
           double pct = stat.double_value();
           EXPECT_GT(pct, 0.0)
               << "Theoretical occupancy must be positive for a running kernel";
-          EXPECT_LE(pct, 100.0)
-              << "Theoretical occupancy cannot exceed 100%";
+          EXPECT_LE(pct, 100.0) << "Theoretical occupancy cannot exceed 100%";
         }
       }
     }
@@ -465,8 +463,8 @@ TEST(RocmTracerOccupancyTest, KernelDetailsStringContainsOccupancyPct) {
 
   uint64_t start_wall = RocmTracer::GetTimestamp();
   uint64_t start_gpu = RocmTracer::GetTimestamp();
-  auto collector = std::make_unique<RocmTraceCollectorImpl>(
-      col_opts, start_wall, start_gpu);
+  auto collector =
+      std::make_unique<RocmTraceCollectorImpl>(col_opts, start_wall, start_gpu);
   collector->SetGpuAgents(tracer.GpuAgents());
 
   RocmTracerOptions opts{/*max_annotation_strings=*/1024 * 1024};
