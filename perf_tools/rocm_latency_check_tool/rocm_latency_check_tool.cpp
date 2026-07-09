@@ -25,6 +25,16 @@
 #include <vector>
 #include <cstring>
 
+// The synthetic compute op is a fixed on-GPU busy kernel. The thread/block/sleep
+// shape is a compile-time constant so the compute baseline stays reproducible
+// across ROCm versions. Only the per-kernel duration is tunable (--busy-kernel-ns)
+// so the tool can also be pushed into a dispatch-bound regime (duration 0 = a
+// near-nop launch) that exposes HIP-runtime + dispatch overhead.
+constexpr long long kBusyKernelDurationNsDefault = 80000;  // ~80us synthetic compute
+constexpr int kBusyKernelThreads = 256;
+constexpr int kBusyKernelBlocks = 0;                // 0 = auto (use CU count)
+constexpr bool kBusyKernelUseSleep = true;
+
 // Runtime configuration. Every field is overridable via a command-line flag
 // (see parse_args / --help); the initializers below are the defaults and match
 // the values this tool historically hard-coded.
@@ -47,6 +57,7 @@ struct Config {
   bool skip_d2d = false;             // --skip-d2d
   bool skip_d2h = false;             // --skip-d2h
   int warmup_iters = 20;             // --warmup-iters
+  long long busy_kernel_ns = kBusyKernelDurationNsDefault;  // --busy-kernel-ns (0 = near-nop dispatch)
   std::string csv_path;             // --csv (empty = CSV disabled)
   std::string label;                // --label (ROCm release tag, e.g. 7.2.1)
 
@@ -56,14 +67,6 @@ struct Config {
 
 // Parsed once at the very start of main() before any GPU resources exist.
 Config g_cfg;
-
-// The synthetic compute op is a fixed on-GPU busy kernel. These are compile-time
-// constants by design (no flags, no env) so the compute baseline is fixed and
-// fully reproducible across ROCm versions; only HIP runtime + copy overhead varies.
-constexpr long long kBusyKernelDurationNs = 80000;  // ~80us synthetic compute
-constexpr int kBusyKernelThreads = 256;
-constexpr int kBusyKernelBlocks = 0;                // 0 = auto (use CU count)
-constexpr bool kBusyKernelUseSleep = true;
 
 #define HIP_CHECK(cmd)                                                         \
   do {                                                                         \
@@ -338,7 +341,7 @@ static inline void launch_compute_op(GpuResources& gpu,
   const int blocks = (kBusyKernelBlocks > 0) ? kBusyKernelBlocks
                                              : std::max(1, gpu.multiprocessor_count);
   timedBusyKernel<<<blocks, kBusyKernelThreads, 0, stream>>>(
-      kBusyKernelDurationNs,
+      g_cfg.busy_kernel_ns,
       static_cast<long long>(gpu.wall_clock_rate_khz),
       kBusyKernelUseSleep,
       nullptr);
@@ -797,7 +800,7 @@ class CsvWriter {
          << (g_cfg.skip_d2h ? 1 : 0) << ','
          << g_cfg.warmup_iters << ','
          << compute_op_ << ','
-         << kBusyKernelDurationNs << ','
+         << g_cfg.busy_kernel_ns << ','
          << kBusyKernelThreads << ','
          << kBusyKernelBlocks << ','
          << (kBusyKernelUseSleep ? 1 : 0) << ','
@@ -870,6 +873,8 @@ static void print_usage(const char* prog) {
       "  --skip-d2d                skip D2D copy for copy-stage isolation [%s]\n"
       "  --skip-d2h                skip D2H copy for copy-stage isolation [%s]\n"
       "  --warmup-iters N          warmup iterations per slot before measuring [%d]\n"
+      "  --busy-kernel-ns N        per-busy-kernel GPU duration in ns; 0 = near-nop\n"
+      "                            dispatch (dispatch-bound regime) [%lld]\n"
       "  --csv PATH                append per-report rows to this CSV file [disabled]\n"
       "  --label STR               ROCm release tag stamped into CSV (e.g. 7.2.1) [auto]\n"
       "  -h, --help                show this help and exit\n\n"
@@ -881,7 +886,7 @@ static void print_usage(const char* prog) {
       g_cfg.preload_weights ? "on" : "off", g_cfg.extra_h2d_bytes,
       g_cfg.extra_h2d_count, g_cfg.skip_h2d ? "on" : "off",
       g_cfg.skip_d2d ? "on" : "off", g_cfg.skip_d2h ? "on" : "off",
-      g_cfg.warmup_iters);
+      g_cfg.warmup_iters, g_cfg.busy_kernel_ns);
 }
 
 static ParseResult parse_args(int argc, char** argv) {
@@ -993,6 +998,10 @@ static ParseResult parse_args(int argc, char** argv) {
       g_cfg.skip_d2h = true;
     } else if (matches(arg, "--warmup-iters")) {
       if (!parse_int_arg(i, "--warmup-iters", g_cfg.warmup_iters)) return ParseResult::kError;
+    } else if (matches(arg, "--busy-kernel-ns")) {
+      size_t tmp = 0;
+      if (!parse_size_arg(i, "--busy-kernel-ns", tmp)) return ParseResult::kError;
+      g_cfg.busy_kernel_ns = static_cast<long long>(tmp);
     } else if (matches(arg, "--csv")) {
       if (!need_value(i, "--csv", val)) return ParseResult::kError;
       g_cfg.csv_path = val;
@@ -1144,8 +1153,9 @@ int main(int argc, char** argv) {
               g_cfg.num_gpus, g_cfg.streams_per_gpu, GpuResources::kStreamsPerSlot,
               g_cfg.num_gpus * g_cfg.streams_per_gpu * GpuResources::kStreamsPerSlot);
   std::printf("Compute op: timedBusyKernel x2 per request (HIP runtime latency probe)\n");
-  std::printf("timedBusyKernel config: duration_ns=%lld blocks=%d threads=%d use_sleep=%s\n",
-              static_cast<long long>(kBusyKernelDurationNs),
+  std::printf("timedBusyKernel config: duration_ns=%lld%s blocks=%d threads=%d use_sleep=%s\n",
+              g_cfg.busy_kernel_ns,
+              (g_cfg.busy_kernel_ns == 0 ? " (near-nop dispatch)" : ""),
               (kBusyKernelBlocks > 0 ? kBusyKernelBlocks : std::max(1, resources[0]->multiprocessor_count)),
               kBusyKernelThreads,
               kBusyKernelUseSleep ? "true" : "false");
