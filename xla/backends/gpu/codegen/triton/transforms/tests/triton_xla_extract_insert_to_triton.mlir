@@ -47,6 +47,77 @@ func.func @lower_extract_insert(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
 
 // -----
 
+// Trivial (tile size 1) batch dim, e.g. a batched matmul operand tiled one
+// batch at a time out of 4: the batch offset is folded into the base
+// pointer via tt.addptr, and the descriptor drops that dim entirely rather
+// than keeping it as a rank-3 dim with only one possible index. Keeping it
+// in the descriptor used to produce a shared-memory `order` that upstream
+// Triton's TDM legalizer rejects -- see triton_issue_padded_shared_order.md.
+func.func @lower_extract_insert_trivial_batch_dim(
+    %arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
+  %extracted_tensor = triton_xla.extract from %arg0
+      as memref<32x256x4xbf16, #xtile.layout<[2, 1, 0]>>
+      [0, 0, 2] [32, 256, 1] [1, 1, 1] : tensor<32x256xbf16>
+  triton_xla.insert %extracted_tensor into %arg1
+      as memref<32x256x4xbf16, #xtile.layout<[2, 1, 0]>>
+      [0, 0, 1] [32, 256, 1] [1, 1, 1] : tensor<32x256xbf16>
+  func.return
+}
+
+// CHECK-TDM-LABEL: tt.func @lower_extract_insert_trivial_batch_dim(
+// CHECK-TDM:         %[[PTR0:.*]] = tt.addptr %arg0, %{{.*}} : !tt.ptr<bf16>, i64
+// CHECK-TDM:         %[[DESC0:.*]] = tt.make_tensor_descriptor %[[PTR0]]
+// CHECK-TDM-SAME:       <bf16>, <32x256xbf16>
+// CHECK-TDM:         %[[LOAD:.*]] = tt.descriptor_load %[[DESC0]]
+// CHECK-TDM:         %[[PTR1:.*]] = tt.addptr %arg1, %{{.*}} : !tt.ptr<bf16>, i64
+// CHECK-TDM:         %[[DESC1:.*]] = tt.make_tensor_descriptor %[[PTR1]]
+// CHECK-TDM-SAME:       <bf16>, <32x256xbf16>
+// CHECK-TDM:         tt.descriptor_store %[[DESC1]]{{.*}}, %[[LOAD]]
+// CHECK-TDM:         tt.return
+
+// -----
+
+// Genuine (non-trivial, tile size > 1) batch dim, e.g. a batched matmul
+// operand tiled all 8 batches at a time: there is no size-1 dim to fold, so
+// this stays an ordinary rank-3 TDM descriptor, untouched by the fold
+// above. No tt.addptr, no dropped dim. (Tile size 8 rather than e.g. 4: the
+// minor-most dim's byte size (8 * 2 bytes for bf16 = 16 bytes) also clears
+// TMA's 16-byte minor-dim-divisibility requirement, so this shape
+// meaningfully exercises the TMA path below too, instead of falling back
+// to the same plain load/store as the default case.)
+func.func @lower_extract_insert_nontrivial_batch_dim(
+    %arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
+  %extracted_tensor = triton_xla.extract from %arg0
+      as memref<32x256x8xbf16, #xtile.layout<[2, 1, 0]>>
+      [0, 0, 0] [32, 256, 8] [1, 1, 1] : tensor<32x256x8xbf16>
+  triton_xla.insert %extracted_tensor into %arg1
+      as memref<32x256x8xbf16, #xtile.layout<[2, 1, 0]>>
+      [0, 0, 0] [32, 256, 8] [1, 1, 1] : tensor<32x256x8xbf16>
+  func.return
+}
+
+// CHECK-LABEL: tt.func @lower_extract_insert_nontrivial_batch_dim
+// CHECK:         %[[LOAD:.*]] = tt.load
+// CHECK:         tt.store {{.*}}, %[[LOAD]]
+
+// Best-effort prediction, not yet verified: minor dim clears the 16-byte
+// bound, so this may actually take the TMA descriptor path here.
+// CHECK-TMA-LABEL: tt.func @lower_extract_insert_nontrivial_batch_dim
+// CHECK-TMA:         %[[LOAD:.*]] = tt.descriptor_load %arg0
+// CHECK-TMA:         tt.descriptor_store %arg1[{{.*}}],
+
+// CHECK-TDM-LABEL: tt.func @lower_extract_insert_nontrivial_batch_dim(
+// CHECK-TDM-NOT:     tt.addptr
+// CHECK-TDM:         %[[DESC0:.*]] = tt.make_tensor_descriptor %arg0
+// CHECK-TDM-SAME:       <bf16>, <32x256x8xbf16>
+// CHECK-TDM:         %[[LOAD:.*]] = tt.descriptor_load %[[DESC0]]
+// CHECK-TDM:         %[[DESC1:.*]] = tt.make_tensor_descriptor %arg1
+// CHECK-TDM-SAME:       <bf16>, <32x256x8xbf16>
+// CHECK-TDM:         tt.descriptor_store %[[DESC1]]{{.*}}, %[[LOAD]]
+// CHECK-TDM:         tt.return
+
+// -----
+
 func.func @non_perfect_tile_shape(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
   %extracted_tensor = triton_xla.extract from %arg0
     as memref<300x300xbf16, #xtile.layout<[1, 0]>>

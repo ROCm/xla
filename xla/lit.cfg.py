@@ -42,6 +42,14 @@ for env in [
     # Passthrough XLA_FLAGS.
     "XLA_FLAGS",
     "CUDA_VISIBLE_DEVICES",
+    # Passthrough FFM (fake/emulated GPU) activation variables so lit tests
+    # pick up the simulated device instead of falling back to real GPUs.
+    "HSA_MODEL_TOPOLOGY",
+    "HSA_MODEL_LIB",
+    "HSA_KMT_MODEL_GPUVM_BASE",
+    "HSA_ENABLE_SDMA",
+    "HSA_ENABLE_INTERRUPT",
+    "LD_LIBRARY_PATH",
     # Propagate environment variables used by 'bazel coverage'.
     # These are exported by tools/coverage/collect_coverage.sh
     "BULK_COVERAGE_RUN",
