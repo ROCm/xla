@@ -567,15 +567,13 @@ xla_test(
     backends = [
         "gpu",
     ],
-    local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]) + if_rocm_is_configured([
-        "TENSORFLOW_USE_ROCM=1",
-    ]),
     deps = [
         ":gpu_pjrt_codegen_test",
         ":hlo_pjrt_gpu_test_base",
         "//xla:error_spec",
         "//xla/service:hlo_module_config",
         "//xla/service:platform_util",
+        "//xla/stream_executor:platform_manager",
         "//xla/tests:hlo_pjrt_interpreter_reference_mixin",
         "@com_google_absl//absl/status",
         "@com_google_googletest//:gtest_main",
