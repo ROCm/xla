@@ -261,20 +261,38 @@ SmallVector<Value> GetMajorToMinorOrder(ValueRange values,
   return GetMajorToMinorOrder(ArrayRef<Value>(llvm::to_vector(values)), layout);
 }
 
+// Returns the original dim indices of all size-1 tile dims.
+SmallVector<int64_t> GetSingletonTileDims(
+    ArrayRef<int64_t> tile_sizes, ArrayRef<int64_t> minor_to_major_layout) {
+  SmallVector<int64_t> singletons;
+  for (int64_t dim : minor_to_major_layout) {
+    if (tile_sizes[dim] == 1) {
+      singletons.push_back(dim);
+    }
+  }
+  return singletons;
+}
+
 // Whether the tile shape is compatible with AMD TDM lowering. Rejects:
 //   - dynamic tile sizes or strides
 //   - non-unit tile strides
-//   - non-trailing singleton dims (violates upstream Triton's TDM legalizer
-//     contract: shared order must be [rank-1, ..., 0] with stride-1 dims
-//     consecutive trailing). A smarter pass could canonicalize the singleton
-//     out and lower to TDM. We reject conservatively for now.
+//   - tiles the singleton fold (below) cannot turn into a valid TDM box
+//
+// Singleton (size-1) tile dims are folded into the base pointer (at any
+// position, not just trailing) and dropped from the descriptor.
+// TDM requires the descriptor's minor-most dim to have global stride 1. After
+// folding, that dim is the minor-most survivor, which keeps stride 1 only if no
+// folded singleton was more-minor than it. A batch-major operand [1, M, K]
+// keeps K's stride 1 (accept); a batch-minor operand [M, K, 1] makes K inherit
+// the batch's non-unit stride (reject).
 //
 // Not checked here, deferred to upstream Triton / hardware legalization:
 //   - Hardware rank cap (TDM supports ranks 1 to 5).
 //   - Innermost dim byte alignment requirements.
 //   - Per-dim box size limits.
 //   - Padding mode compatibility (this pass hardcodes PAD_ZERO).
-bool CanUseTdm(bool allow_tdm, const ArrayRef<int64_t>& tile_sizes,
+bool CanUseTdm(bool allow_tdm, const ArrayRef<int64_t>& shape,
+               const ArrayRef<int64_t>& tile_sizes,
                const ArrayRef<int64_t>& tile_strides,
                const ArrayRef<int64_t>& minor_to_major_layout) {
   if (!allow_tdm) {
@@ -295,31 +313,53 @@ bool CanUseTdm(bool allow_tdm, const ArrayRef<int64_t>& tile_sizes,
       return false;
     }
   }
-  auto ordered_sizes = GetMajorToMinorOrder(tile_sizes, minor_to_major_layout);
-  bool seen_singleton = false;
-  for (int64_t s : ordered_sizes) {
-    if (s == 1) {
-      seen_singleton = true;
-    } else if (seen_singleton) {
-      // Non-singleton dim follows a singleton dim, TDM-incompatible.
-      VLOG(1) << "TDM is not compatible: non-trailing singleton dim in tile.";
-      return false;
+  // The minor-most surviving (non-singleton) tile dim, after folding all
+  // singleton dims into the base pointer, must have global stride 1.
+  std::optional<int64_t> minor_survivor;
+  for (int64_t dim : minor_to_major_layout) {
+    if (tile_sizes[dim] != 1) {
+      minor_survivor = dim;
+      break;
     }
+  }
+  if (!minor_survivor.has_value()) {
+    VLOG(1) << "TDM is not compatible: all tile dims are singletons.";
+    return false;
+  }
+  SmallVector<int64_t> global_strides =
+      xtriton::ComputeStrides(shape, minor_to_major_layout);
+  if (global_strides[*minor_survivor] != 1) {
+    VLOG(1) << "TDM is not compatible: surviving minor-most dim "
+            << *minor_survivor << " has global stride "
+            << global_strides[*minor_survivor] << " != 1.";
+    return false;
   }
   return true;
 }
 
+// TDM descriptor operands with singleton tile dims folded into the base pointer.
+struct TdmDescriptorOperands {
+  Value pointer;
+  SmallVector<int64_t> shape;
+  SmallVector<int64_t> layout;
+  SmallVector<int64_t> strides;
+  SmallVector<int64_t> sizes;
+  SmallVector<Value> offsets;
+};
+
 // Builds a tt.make_tensor_descriptor for a contiguous box load/store from
-// `pointer`. Global shape and strides come from `shape` + `layout` (the source
-// memref geometry); the descriptor's block dims come from `tile_sizes`. All
-// arrays are reordered to major-to-minor as required by Triton's TDM
-// legalizer. Padding mode is hardcoded to PAD_ZERO.
+// tdm.pointer, with global geometry from tdm.shape/strides/layout and block
+// dims from tdm.sizes, reordered major-to-minor for Triton's TDM legalizer.
+// Padding is hardcoded to PAD_ZERO.
+// tdm.strides are used as-is, not recomputed from tdm.shape: after folding
+// singleton dims out (see DropSingletonTileDims), shape has those dims deleted
+// rather than collapsed, so recomputing would drop their extents from the
+// surviving strides.
 MakeTensorDescOp BuildTensorDescriptor(ImplicitLocOpBuilder& builder,
-                                       Value pointer, ArrayRef<int64_t> shape,
-                                       ArrayRef<int64_t> layout,
-                                       ArrayRef<int64_t> tile_sizes) {
+                                       const TdmDescriptorOperands& tdm) {
   // Global shape as i32 SSA values, in major-to-minor order.
-  auto ordered_shape = GetMajorToMinorOrder(shape, layout);
+  auto ordered_shape =
+      GetMajorToMinorOrder(ArrayRef<int64_t>(tdm.shape), tdm.layout);
   SmallVector<Value> shape_values;
   for (int64_t dim : ordered_shape) {
     shape_values.push_back(
@@ -327,9 +367,8 @@ MakeTensorDescOp BuildTensorDescriptor(ImplicitLocOpBuilder& builder,
   }
 
   // Global strides as i64 SSA values, in major-to-minor order.
-  auto global_strides = xtriton::ComputeStrides(shape, layout);
   auto ordered_strides =
-      GetMajorToMinorOrder(ArrayRef<int64_t>(global_strides), layout);
+      GetMajorToMinorOrder(ArrayRef<int64_t>(tdm.strides), tdm.layout);
   SmallVector<Value> stride_values;
   for (int64_t s : ordered_strides) {
     stride_values.push_back(
@@ -337,19 +376,20 @@ MakeTensorDescOp BuildTensorDescriptor(ImplicitLocOpBuilder& builder,
   }
 
   // Block shape in major-to-minor order as i32.
-  auto ordered_sizes = GetMajorToMinorOrder(tile_sizes, layout);
+  auto ordered_sizes =
+      GetMajorToMinorOrder(ArrayRef<int64_t>(tdm.sizes), tdm.layout);
   SmallVector<int32_t> block_shape;
   for (int64_t s : ordered_sizes) {
     CHECK_LE(s, INT32_MAX) << "tile dim " << s << " exceeds i32 range";
     block_shape.push_back(static_cast<int32_t>(s));
   }
 
-  auto element_type = cast<PointerType>(pointer.getType()).getPointeeType();
+  auto element_type = cast<PointerType>(tdm.pointer.getType()).getPointeeType();
   bool is_signed_integer =
       mlir::isa<IntegerType>(element_type) && !element_type.isUnsignedInteger();
 
-  return MakeTensorDescOp::create(builder, pointer, shape_values, stride_values,
-                                  block_shape, is_signed_integer,
+  return MakeTensorDescOp::create(builder, tdm.pointer, shape_values,
+                                  stride_values, block_shape, is_signed_integer,
                                   PaddingOption::PAD_ZERO);
 }
 
@@ -361,6 +401,68 @@ SmallVector<int32_t> GetInverseLayoutPermutation(ArrayRef<int64_t> layout) {
   auto permutation =
       llvm::to_vector_of<int32_t>(::xla::InversePermutation(reversed_layout));
   return SmallVector<int32_t>(permutation.begin(), permutation.end());
+}
+
+// Folds dims_to_drop (the size-1 tile dims, at any position) out of the
+// descriptor: their fixed offset is baked into the base pointer via tt.addptr,
+// and they are removed from shape/layout/strides/sizes/offsets, with layout
+// renumbered to a permutation of the reduced rank.
+// Surviving strides are the pre-drop global strides, carried through unchanged.
+// Since Address = base + sum_d(i_d * stride[d]) is linear, pinning a dropped
+// dim's index only adds a constant to the base and never affects a surviving
+// stride. They must NOT be recomputed from the reduced shape, which has dims
+// deleted (not collapsed to extent 1) and so would lose the dropped extents.
+TdmDescriptorOperands DropSingletonTileDims(ImplicitLocOpBuilder& builder,
+                                            Value pointer,
+                                            ArrayRef<int64_t> shape,
+                                            ArrayRef<int64_t> layout,
+                                            ArrayRef<int64_t> sizes,
+                                            ValueRange offsets,
+                                            ArrayRef<int64_t> dims_to_drop) {
+  SmallVector<int64_t> global_strides = xtriton::ComputeStrides(shape, layout);
+  int64_t rank = shape.size();
+
+  // Fold each dropped dim's fixed offset into the base pointer, and map each
+  // surviving dim to its index in the reduced rank (dropped dims map to -1):
+  //   new_ptr = ptr + sum(offset[d] * global_stride[d]) for d in dims_to_drop.
+  SmallVector<int64_t> old_to_new(rank, -1);
+  Value byte_offset;
+  for (int64_t dim = 0, new_index = 0; dim < rank; ++dim) {
+    if (!llvm::is_contained(dims_to_drop, dim)) {
+      old_to_new[dim] = new_index++;
+      continue;
+    }
+    Value offset_i64 =
+        arith::IndexCastOp::create(builder, builder.getI64Type(), offsets[dim]);
+    Value stride_i64 = arith::ConstantOp::create(
+        builder, builder.getI64IntegerAttr(global_strides[dim]));
+    Value contribution =
+        arith::MulIOp::create(builder, offset_i64, stride_i64);
+    byte_offset = byte_offset ? arith::AddIOp::create(builder, byte_offset,
+                                                      contribution)
+                              : contribution;
+  }
+
+  TdmDescriptorOperands result;
+  result.pointer =
+      byte_offset ? AddPtrOp::create(builder, pointer.getType(), pointer,
+                                     byte_offset)
+                  : pointer;
+  for (int64_t dim = 0; dim < rank; ++dim) {
+    if (old_to_new[dim] < 0) {
+      continue;
+    }
+    result.shape.push_back(shape[dim]);
+    result.strides.push_back(global_strides[dim]);
+    result.sizes.push_back(sizes[dim]);
+    result.offsets.push_back(offsets[dim]);
+  }
+  for (int64_t dim : layout) {
+    if (old_to_new[dim] >= 0) {
+      result.layout.push_back(old_to_new[dim]);
+    }
+  }
+  return result;
 }
 
 // Rewrite func.func to tt.func.
@@ -524,23 +626,29 @@ class RewriteExtract : public mlir::OpRewritePattern<ExtractOp> {
       return mlir::success();
     }
 
-    if (CanUseTdm(allow_tdm_, sizes, strides, src_layout)) {
-      auto ordered_offsets = GetMajorToMinorOrder(offsets, src_layout);
-      auto ordered_type =
-          tile_type.clone(GetMajorToMinorOrder(sizes, src_layout));
+    if (CanUseTdm(allow_tdm_, src_shape, sizes, strides, src_layout)) {
+      SmallVector<int64_t> singleton_dims =
+          GetSingletonTileDims(sizes, src_layout);
+      TdmDescriptorOperands tdm = DropSingletonTileDims(
+          builder, op.getSrc(), src_shape, src_layout, sizes, offsets,
+          singleton_dims);
 
-      auto desc = BuildTensorDescriptor(builder, op.getSrc(), src_shape,
-                                        src_layout, sizes);
+      auto desc = BuildTensorDescriptor(builder, tdm);
+
+      auto ordered_offsets =
+          GetMajorToMinorOrder(ValueRange(tdm.offsets), tdm.layout);
+      auto ordered_type = tile_type.clone(
+          GetMajorToMinorOrder(ArrayRef<int64_t>(tdm.sizes), tdm.layout));
 
       Value result = DescriptorLoadOp::create(
           builder, ordered_type, desc.getResult(),
           xtriton::IndexCast(builder, builder.getI32Type(), ordered_offsets));
 
-      if (!IsMajorToMinorLayout(src_layout)) {
+      if (!IsMajorToMinorLayout(tdm.layout)) {
         result = TransOp::create(builder, result,
-                                 GetInverseLayoutPermutation(src_layout));
+                                 GetInverseLayoutPermutation(tdm.layout));
       }
-      if (sizes.size() != tile_shape.size()) {
+      if (ArrayRef<int64_t>(tdm.sizes) != tile_shape) {
         result = ReshapeOp::create(builder, tile_shape, result,
                                    /*allowReorder=*/false);
       }
@@ -656,18 +764,25 @@ class RewriteInsert : public mlir::OpRewritePattern<InsertOp> {
       DescriptorStoreOp::create(
           builder, cast_to_tensor_desc.getResult(0), src,
           xtriton::IndexCast(builder, builder.getI32Type(), ordered_offsets));
-    } else if (CanUseTdm(allow_tdm_, sizes, strides, dst_layout)) {
-      auto ordered_offsets = GetMajorToMinorOrder(offsets, dst_layout);
+    } else if (CanUseTdm(allow_tdm_, dst_shape, sizes, strides, dst_layout)) {
+      SmallVector<int64_t> singleton_dims =
+          GetSingletonTileDims(sizes, dst_layout);
+      TdmDescriptorOperands tdm = DropSingletonTileDims(
+          builder, op.getDst(), dst_shape, dst_layout, sizes, offsets,
+          singleton_dims);
 
-      auto desc = BuildTensorDescriptor(builder, op.getDst(), dst_shape,
-                                        dst_layout, sizes);
+      auto desc = BuildTensorDescriptor(builder, tdm);
+
+      auto ordered_offsets =
+          GetMajorToMinorOrder(ValueRange(tdm.offsets), tdm.layout);
 
       Value src = op.getSrc();
-      for (auto dim : reduced_dims) {
-        src = ExpandDimsOp::create(builder, src, dim);
+      if (ArrayRef<int64_t>(tdm.sizes) != tile_shape) {
+        src = ReshapeOp::create(builder, tdm.sizes, src,
+                                /*allowReorder=*/false);
       }
-      if (!IsMajorToMinorLayout(dst_layout)) {
-        auto transpose_order = llvm::to_vector_of<int32_t>(dst_layout);
+      if (!IsMajorToMinorLayout(tdm.layout)) {
+        auto transpose_order = llvm::to_vector_of<int32_t>(tdm.layout);
         std::reverse(transpose_order.begin(), transpose_order.end());
         src = TransOp::create(builder, src, transpose_order);
       }
