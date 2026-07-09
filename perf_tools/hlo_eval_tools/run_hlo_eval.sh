@@ -30,6 +30,11 @@
 # `--hlo_argument_mode=uninitialized` is always passed to skip random-input
 # generation (much faster startup for the large LLM / diffusion modules). Empty
 # leaves (e.g. alphafold3/training) are skipped.
+#
+# Environment variables:
+#   RESUME=1       Skip leaves whose target CSV already exists (resume an
+#                  interrupted run without re-profiling finished leaves).
+#   SETTLE_SEC=N   Seconds to pause between runner processes (default 2).
 
 set -uo pipefail
 
@@ -48,6 +53,27 @@ REPEATS=${4:-5}
 # reclaimed before the next launches (back-to-back multi-GPU runs can otherwise
 # hit transient allocation/collective-init failures). Override with SETTLE_SEC=0.
 SETTLE_SEC=${SETTLE_SEC:-2}
+
+# RESUME=1 skips any leaf whose target CSV already exists and is non-empty, so an
+# interrupted suite run can be continued without re-profiling finished leaves.
+# Only meaningful in per-leaf (directory) output mode. Default off (append).
+RESUME=${RESUME:-0}
+
+# ORDER controls the order leaves are profiled when walking a tree:
+#   size (default) - ascending total HLO byte size, so the small/fast models run
+#                    first and the biggest (slow-to-compile) models run last;
+#   path           - alphabetical by directory path.
+ORDER=${ORDER:-size}
+
+# ARG_MODE is the runner's --hlo_argument_mode. Default "uninitialized" (fastest:
+# no input generation).
+ARG_MODE=${ARG_MODE:-uninitialized}
+
+# CMD_BUFFER=off (default) adds XLA_FLAGS=--xla_gpu_enable_command_buffer= to every
+# run, disabling XLA's HIP command buffers (graphs). Required on this ROCm build:
+# ~half the models otherwise SIGSEGV inside libamdhip64's graph launch
+# (RocmCommandBuffer::LaunchGraph) at execution. Set CMD_BUFFER=on to re-enable.
+CMD_BUFFER=${CMD_BUFFER:-off}
 
 # Output mode: a single .csv file vs. a directory of per-leaf CSVs.
 SINGLE_CSV=""
@@ -95,7 +121,7 @@ file_parts() {
 # comma-separated device list 0..N-1 (just "0" for N<=1).
 dev_list() { if [ "$1" -gt 1 ]; then seq -s, 0 $(($1 - 1)); else echo 0; fi; }
 
-RAN=(); SKIPPED=(); FAILED=()
+RAN=(); SKIPPED=(); FAILED=(); RESUMED=()
 
 # Invoke the runner on one or more module files that share the same partition
 # count, writing into $csv (path without the .csv extension).
@@ -107,18 +133,40 @@ invoke() {
     args+=(--num_partitions="$n" --use_shardy_partitioner)
     [ "$n" -le "$NGPU" ] || echo "  WARN: needs $n GPUs but only ~$NGPU visible"
   fi
-  args+=(--hlo_argument_mode=uninitialized
+  args+=(--hlo_argument_mode="$ARG_MODE"
          --num_repeats="$REPEATS"
          --profile_execution=true
          --append_profile_to_csv_file="$csv"
          "$@")
   echo "  run: N=$n, $# module(s), devices=[$devs] -> ${csv}.csv"
-  if HIP_VISIBLE_DEVICES="$devs" CUDA_VISIBLE_DEVICES="$devs" "$RUNNER" "${args[@]}"; then
+  local xf="${XLA_FLAGS:-}"
+  [ "$CMD_BUFFER" = off ] && xf="--xla_gpu_enable_command_buffer= $xf"
+  if HIP_VISIBLE_DEVICES="$devs" CUDA_VISIBLE_DEVICES="$devs" XLA_FLAGS="$xf" "$RUNNER" "${args[@]}"; then
     RAN+=("${csv}.csv")
   else
     FAILED+=("$csv"); echo "  FAIL: runner exited non-zero -> $csv"
   fi
   [ "$SETTLE_SEC" -gt 0 ] 2>/dev/null && sleep "$SETTLE_SEC" || true
+}
+
+# Emit the training/ and inference/<N>gpu/ leaves under $1, ordered per $ORDER:
+# "size" (default) sorts by ascending total HLO byte size (small models first,
+# biggest last); "path" sorts alphabetically.
+discover_leaves() {
+  local base=$1 leaves
+  leaves=$(find "$base" -type d \( -name training -o -name '[0-9]*gpu' \))
+  [ -n "$leaves" ] || return 0
+  if [ "$ORDER" = path ]; then
+    printf '%s\n' "$leaves" | sort
+  else
+    # Zero-pad the size so a plain lexical sort orders numerically.
+    printf '%s\n' "$leaves" | while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      local sz
+      sz=$(stat -c %s "$d"/*.txt "$d"/*.hlo 2>/dev/null | awk '{s+=$1} END{printf "%d", s+0}')
+      printf '%015d\t%s\n' "$sz" "$d"
+    done | sort | cut -f2-
+  fi
 }
 
 # Profile every module in one leaf directory into a single CSV.
@@ -132,6 +180,9 @@ run_leaf() {
   fi
   local n; n=$(file_parts "${files[0]}")
   local csv=${SINGLE_CSV:-"$OUT/$(csv_base "$leaf")"}
+  if [ -z "$SINGLE_CSV" ] && [ "$RESUME" != 0 ] && [ -s "${csv}.csv" ]; then
+    RESUMED+=("$leaf"); echo "leaf: $leaf"; echo "  skip (resume, CSV exists): ${csv}.csv"; return
+  fi
   echo "leaf: $leaf"
   invoke "$n" "$csv" "${files[@]}"
 }
@@ -139,7 +190,7 @@ run_leaf() {
 echo "runner : $RUNNER"
 echo "hlo    : $HLO"
 if [ -n "$SINGLE_CSV" ]; then echo "out    : ${SINGLE_CSV}.csv (single file)"; else echo "out    : $OUT/ (one CSV per leaf)"; fi
-echo "repeats: $REPEATS   visible GPUs (approx): $NGPU"
+echo "repeats: $REPEATS   order: $ORDER   arg_mode: $ARG_MODE   cmd_buffer: $CMD_BUFFER   visible GPUs (approx): $NGPU"
 echo
 
 if [ -f "$HLO" ]; then
@@ -155,16 +206,18 @@ else
   if [ "${#direct[@]}" -gt 0 ]; then
     run_leaf "$HLO"
   else
-    # Discover every training/ and inference/<N>gpu/ leaf beneath $HLO.
+    # Discover every training/ and inference/<N>gpu/ leaf beneath $HLO,
+    # ordered per $ORDER (small models first by default).
     while IFS= read -r leaf; do
       run_leaf "$leaf"
-    done < <(find "$HLO" -type d \( -name training -o -name '[0-9]*gpu' \) | sort)
+    done < <(discover_leaves "$HLO")
   fi
 fi
 
 echo
 echo "==== summary ===="
 echo "profiled : ${#RAN[@]} CSV(s)"
+[ "${#RESUMED[@]}" -gt 0 ] && echo "resumed  : ${#RESUMED[@]} leaf(s) skipped (CSV already present)"
 [ "${#SKIPPED[@]}" -gt 0 ] && echo "skipped  : ${#SKIPPED[@]} empty leaf(s)"
 if [ "${#FAILED[@]}" -gt 0 ]; then echo "failed   : ${#FAILED[@]}"; printf '  - %s\n' "${FAILED[@]}"; fi
 if [ "${#RAN[@]}" -gt 0 ]; then echo "CSV files:"; printf '%s\n' "${RAN[@]}" | sort -u | sed 's/^/  /'; fi

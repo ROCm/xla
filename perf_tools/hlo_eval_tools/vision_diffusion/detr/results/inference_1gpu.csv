@@ -1,0 +1,7 @@
+# HLO evaluation results (pre-optimization modules profiled with multihost_hlo_runner)
+# XLA build : rocm-jaxlib-v0.10.2  (ROCm/xla @ 7b5ecf1c9282fdf1039211e0d45216980058beda)
+# GPU       : MI350
+# Docker    : ghcr.io/rocm/jax-ubu22.rocm7.2.4
+# Runner    : --hlo_argument_mode=uninitialized --num_repeats=2, HIP command buffers disabled (--xla_gpu_enable_command_buffer=)
+Datetime,module_0468.jit_predict_step.before_optimizations.txt
+2026-07-09 01:13:49, 1.638ms

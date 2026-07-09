@@ -321,10 +321,19 @@ selection and per-leaf CSV naming — behind three arguments:
 For each leaf the script reads `num_partitions=N` from the first module and, when
 `N>1`, adds `--num_partitions=N --use_shardy_partitioner` and sets
 `HIP_VISIBLE_DEVICES`/`CUDA_VISIBLE_DEVICES=0..N-1` (N GPUs must be visible). It
-always passes `--hlo_argument_mode=uninitialized`, pauses `SETTLE_SEC` seconds
-(default 2, `export SETTLE_SEC=0` to disable) between runs so GPU memory is
-reclaimed, prints a summary of profiled / skipped / failed leaves, and exits
+always passes `--hlo_argument_mode=uninitialized`, **disables HIP command buffers**
+(see below), prints a summary of profiled / skipped / failed leaves, and exits
 non-zero if any leaf failed (so you can re-run just those by pointing at the leaf).
+
+Behavior is tunable with environment variables:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CMD_BUFFER` | `off` | `off` adds `XLA_FLAGS=--xla_gpu_enable_command_buffer=`, disabling XLA's HIP command buffers (graphs). **Required on ROCm 7.2.4**: with them enabled, ~half the models `SIGSEGV` in `libamdhip64`'s graph launch (`RocmCommandBuffer::LaunchGraph`). Set `CMD_BUFFER=on` to re-enable. |
+| `RESUME` | `0` | `1` skips leaves whose CSV already exists (resume an interrupted run / re-run only the leaves that lack a CSV). |
+| `ORDER` | `size` | `size` profiles smallest-HLO leaves first (fast models first, biggest last); `path` = alphabetical. |
+| `ARG_MODE` | `uninitialized` | The runner's `--hlo_argument_mode`. |
+| `SETTLE_SEC` | `2` | Seconds paused between runner processes so GPU memory is reclaimed (helps back-to-back multi-GPU runs). |
 
 ### Manual equivalent
 
@@ -396,3 +405,68 @@ ROCm/XLA version under test) to spot per-module regressions over time.
 3. Run the suite with identical flags, appending into the **same** per-model CSVs.
 4. Compare rows across timestamps (or versions) to see which HLO modules got
    faster or slower.
+
+## Collected results
+
+Profiling results for a given build are checked in under each model's
+`results/` folder, one CSV per workload
+(`<category>/<model>/results/{inference_1gpu,…,inference_8gpu,training}.csv`).
+Every CSV starts with a provenance header recording the build it came from.
+
+The currently checked-in results were produced on:
+
+- **XLA build:** `rocm-jaxlib-v0.10.2` — [ROCm/xla @ `7b5ecf1c`](https://github.com/ROCm/xla/commit/7b5ecf1c9282fdf1039211e0d45216980058beda)
+- **GPU:** MI350
+- **Docker image:** `ghcr.io/rocm/jax-ubu22.rocm7.2.4`
+- **Runner flags:** `--hlo_argument_mode=uninitialized --num_repeats=2`, HIP command buffers disabled
+
+105 of 117 leaves are present; the 12 missing are the deterministic failures below
+(`mixtral_8x7b` has no `results/` folder for this reason).
+
+## Known build limitations (ROCm 7.2.4 / rocm-jaxlib-v0.10.2)
+
+On the validated build, **105 of 117** non-empty leaves profile successfully. The
+remaining 12 fail for reasons intrinsic to this ROCm/XLA build (not the tool), and
+are **deterministic** — retrying (even in isolation) does not help:
+
+- **`mixtral_8x7b`** (inference 1/2/4/8gpu + training) — `RESOURCE_EXHAUSTED`: the
+  `jit__prefill_jit` op needs a single **173.9 GiB** allocation, which does not fit
+  a device even when sharded.
+- **8-GPU LLM `training`** (`deepseek2_16b`, `gemma3_4b`, `gp3_oss_20b`,
+  `llama3_8b`, `qwen3_14b`) — `SIGSEGV` at execution.
+- **`alphafold3` inference 2gpu / 8gpu** — `SIGSEGV` in
+  `xla::gpu::CustomKernelThunk` (a custom GPU kernel inside the evoformer
+  while-loops).
+
+Two distinct backend bugs were found. The first — HIP command buffers crashing in
+`libamdhip64` (`RocmCommandBuffer::LaunchGraph`) — is worked around by the default
+`CMD_BUFFER=off` and recovered ~40 models. The remaining crashes above are a
+**second, per-kernel** issue that needs an upstream ROCm/XLA fix rather than a
+runner flag.
+
+### Command buffers: which models require them OFF
+
+The first bug is model-specific. With command buffers **enabled** (the XLA
+default), these models `SIGSEGV` at execution and therefore require
+`CMD_BUFFER=off` (i.e. `--xla_gpu_enable_command_buffer=`) — verified per model by
+running `inference/1gpu` with command buffers on:
+
+| Category | Models that **require command buffers OFF** |
+|---|---|
+| multimodal | `cappa`, `lit`, `paligemma`, `siglip` |
+| vision_diffusion | `clip`, `detr`, `dit`, `mlp_mixer`, `sdxl`, `stable_diffusion_1_5`, `vit` |
+| science | `alphafold3`, `colabfold` |
+| large_language_models | `gpt_j_6b`, `flan_t5_large` |
+
+These run fine **with command buffers ON** (the flag is not required, but the
+default `CMD_BUFFER=off` is harmless for them):
+
+| Category | Models that work with command buffers ON |
+|---|---|
+| large_language_models (MaxText) | `deepseek2_16b`, `gemma3_4b`, `gp3_oss_20b`, `llama3_8b`, `qwen3_14b` |
+| vision_diffusion (Flax) | `resnet50`, `efficientnet`, `imagenette` |
+
+`mixtral_8x7b` is unaffected by this flag — it hits the OOM above regardless.
+Because the split is model-dependent and disabling command buffers is harmless for
+the models that don't need it, `run_hlo_eval.sh` disables them **globally** by
+default (`CMD_BUFFER=off`).
