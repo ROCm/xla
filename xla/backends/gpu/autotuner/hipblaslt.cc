@@ -193,7 +193,7 @@ bool IsScaledDotFusion(const HloInstruction& instr) {
 
 }  // namespace
 
-bool HipblasLtBackend::IsSupported(const HloInstruction& instr) {
+bool HipblasLtBackend::IsSupported(const HloInstruction& instr) const {
   if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr) ||
       IsCublasLtGroupedMatmul(instr)) {
     return true;
@@ -208,7 +208,7 @@ bool HipblasLtBackend::IsSupported(const HloInstruction& instr) {
 }
 
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
+HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) const {
   if (!IsSupported(instr)) {
     return std::vector<std::unique_ptr<BackendConfig>>();
   } else if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr)) {
@@ -363,7 +363,7 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
 }
 
 absl::StatusOr<std::unique_ptr<BackendConfig>>
-HipblasLtBackend::GetDefaultConfig(const HloInstruction& instr) {
+HipblasLtBackend::GetDefaultConfig(const HloInstruction& instr) const {
   if (!IsSupported(instr)) {
     return absl::InvalidArgumentError("Not a supported HipblasLt instruction.");
   }
@@ -374,7 +374,7 @@ HipblasLtBackend::GetDefaultConfig(const HloInstruction& instr) {
 }
 
 absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
-                                           const BackendConfig& config) {
+                                           const BackendConfig& config) const {
   if (!config.has_gemm()) {
     return absl::InvalidArgumentError(
         "Expected GemmKey config for HipblasLtBackend.");

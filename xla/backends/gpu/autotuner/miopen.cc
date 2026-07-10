@@ -270,12 +270,12 @@ absl::Status ApplyConfigToFusedMIOpenCustomCall(
 
 }  // namespace
 
-bool MIOpenBackend::IsSupported(const HloInstruction& instr) {
+bool MIOpenBackend::IsSupported(const HloInstruction& instr) const {
   return IsCustomCallToDnnConvolution(instr);
 }
 
 absl::StatusOr<std::unique_ptr<BackendConfig>> MIOpenBackend::GetDefaultConfig(
-    const HloInstruction& instr) {
+    const HloInstruction& instr) const {
   if (IsSupported(instr)) {
     auto config = std::make_unique<BackendConfig>();
     config->mutable_algorithm()->set_algo_id(0);
@@ -435,7 +435,7 @@ GetFusedConvolutionCustomCallConfigs(const HloCustomCallInstruction* instr,
 }
 
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-MIOpenBackend::GetSupportedConfigs(const HloInstruction& instr) {
+MIOpenBackend::GetSupportedConfigs(const HloInstruction& instr) const {
   if (IsSupported(instr)) {
     auto custom_call_instr = Cast<HloCustomCallInstruction>(&instr);
     if (IsCustomCallToDnnFusedConvolution(*custom_call_instr)) {
@@ -459,7 +459,7 @@ MIOpenBackend::GetSupportedConfigs(const HloInstruction& instr) {
 }
 
 absl::Status MIOpenBackend::ApplyConfig(HloInstruction& instr,
-                                        const BackendConfig& config) {
+                                        const BackendConfig& config) const {
   if (!config.has_algorithm()) {
     return absl::InvalidArgumentError(
         "Expected AlgorithmProto config for MIOpenBackend.");

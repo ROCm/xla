@@ -72,7 +72,7 @@ llvm::SmallSet<int64_t, 4> ComputeUnrollFactors(
 // it has a config for another backend, and we currently don't have an easy way
 // to check that. Therefore, we only support fusions that are already set up to
 // go through the native emitter.
-bool NativeEmitterBackend::IsSupported(const HloInstruction& instr) {
+bool NativeEmitterBackend::IsSupported(const HloInstruction& instr) const {
   if (instr.opcode() != HloOpcode::kFusion) {
     return false;
   }
@@ -81,7 +81,7 @@ bool NativeEmitterBackend::IsSupported(const HloInstruction& instr) {
 }
 
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-NativeEmitterBackend::GetSupportedConfigs(const HloInstruction& instr) {
+NativeEmitterBackend::GetSupportedConfigs(const HloInstruction& instr) const {
   std::vector<std::unique_ptr<BackendConfig>> configs;
   if (!IsSupported(instr)) {
     return configs;
@@ -113,7 +113,7 @@ NativeEmitterBackend::GetSupportedConfigs(const HloInstruction& instr) {
 }
 
 absl::StatusOr<std::unique_ptr<BackendConfig>>
-NativeEmitterBackend::GetDefaultConfig(const HloInstruction& instr) {
+NativeEmitterBackend::GetDefaultConfig(const HloInstruction& instr) const {
   auto config = std::make_unique<BackendConfig>();
   NativeEmitterBackendConfig* native_emitter_config =
       config->mutable_native_emitter();
@@ -134,8 +134,8 @@ NativeEmitterBackend::GetDefaultConfig(const HloInstruction& instr) {
   return config;
 }
 
-absl::Status NativeEmitterBackend::ApplyConfig(HloInstruction& instr,
-                                               const BackendConfig& config) {
+absl::Status NativeEmitterBackend::ApplyConfig(
+    HloInstruction& instr, const BackendConfig& config) const {
   if (!config.has_native_emitter()) {
     return absl::InvalidArgumentError("Expected NativeEmitterBackendConfig.");
   }

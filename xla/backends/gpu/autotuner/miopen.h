@@ -47,20 +47,20 @@ class MIOpenBackend : public GpuCodegenBackend {
         allocator_(allocator) {}
 
   absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-  GetSupportedConfigs(const HloInstruction& instr) override;
+  GetSupportedConfigs(const HloInstruction& instr) const override;
 
   absl::StatusOr<std::unique_ptr<BackendConfig>> GetDefaultConfig(
-      const HloInstruction& instr) override;
+      const HloInstruction& instr) const override;
 
   absl::Status ApplyConfig(HloInstruction& instr,
-                           const BackendConfig& config) override;
+                           const BackendConfig& config) const override;
 
   std::string version() const override {
     return target_config().dnn_version_info.ToString();
   }
 
  private:
-  bool IsSupported(const HloInstruction& instr) override;
+  bool IsSupported(const HloInstruction& instr) const override;
 
   bool do_not_autotune_;
   stream_executor::DeviceAddressAllocator* allocator_;

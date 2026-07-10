@@ -78,12 +78,12 @@ absl::StatusOr<BlasLt::Epilogue> AsBlasLtEpilogue(
 
 }  // namespace
 
-bool CublasLtBackend::IsSupported(const HloInstruction& instr) {
+bool CublasLtBackend::IsSupported(const HloInstruction& instr) const {
   return IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr);
 }
 
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-CublasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
+CublasLtBackend::GetSupportedConfigs(const HloInstruction& instr) const {
   if (!IsSupported(instr)) {
     return std::vector<std::unique_ptr<BackendConfig>>();
   }
@@ -132,7 +132,7 @@ CublasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
 }
 
 absl::StatusOr<std::unique_ptr<BackendConfig>>
-CublasLtBackend::GetDefaultConfig(const HloInstruction& instr) {
+CublasLtBackend::GetDefaultConfig(const HloInstruction& instr) const {
   if (!IsSupported(instr)) {
     return absl::InvalidArgumentError(
         "Not a CublasLt custom call instruction.");
@@ -148,7 +148,7 @@ CublasLtBackend::GetDefaultConfig(const HloInstruction& instr) {
 }
 
 absl::Status CublasLtBackend::ApplyConfig(HloInstruction& instr,
-                                          const BackendConfig& config) {
+                                          const BackendConfig& config) const {
   if (!config.has_gemm()) {
     return absl::InvalidArgumentError(
         "Expected GemmKey config for CublasLtBackend.");
