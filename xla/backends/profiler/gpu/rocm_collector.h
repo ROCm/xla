@@ -24,7 +24,6 @@ limitations under the License.
 #include <tuple>
 #include <vector>
 
-#include "rocprofiler-sdk/agent.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
@@ -32,6 +31,7 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
 #include "rocm/include/hip/hip_runtime.h"
+#include "rocprofiler-sdk/agent.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/profiler/utils/xplane_builder.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"

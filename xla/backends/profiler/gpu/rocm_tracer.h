@@ -110,6 +110,7 @@ class RocmTracer {
   absl::Mutex roctx_strings_mutex_;
   absl::node_hash_set<std::string> roctx_strings_
       ABSL_GUARDED_BY(roctx_strings_mutex_);
+
  public:
   using kernel_symbol_data_t =
       rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t;

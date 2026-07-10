@@ -387,7 +387,8 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
       continue;
     }
     auto* plane = is_host_event ? host_plane : device_plane;
-    VLOG(9) << "Event" << " type=" << static_cast<int>(event.type)
+    VLOG(9) << "Event"
+            << " type=" << static_cast<int>(event.type)
             << " line_id=" << line_id
             << (is_host_event ? " host plane=" : " device plane=")
             << plane->Name();
@@ -702,7 +703,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
                         "Type="
                      << GetRocmTracerEventTypeName(api_event.type);
     }  // switch
-  }  // for
+  }    // for
 
   // Make sure for all activity events we have API callback events.
   //
@@ -775,8 +776,8 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
                           "Type="
                        << GetRocmTracerEventTypeName(activity_event.type);
       }  // switch
-    }  // for activity_event
-  }  // for activity_iter
+    }    // for activity_event
+  }      // for activity_iter
 
   return aggregated_events;
 }

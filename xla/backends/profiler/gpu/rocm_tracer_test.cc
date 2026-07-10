@@ -15,8 +15,6 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/rocm_tracer.h"
 
-#include <dlfcn.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -36,6 +34,7 @@ limitations under the License.
 #include "rocm/include/rocprofiler-sdk/context.h"
 #include "rocm/include/rocprofiler-sdk/fwd.h"
 #include "rocm/include/rocprofiler-sdk/marker.h"
+#include <dlfcn.h>
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/lib/core/status_test_util.h"
@@ -383,10 +382,8 @@ class MarkerCapturingCollector : public RocmTraceCollector {
 // `payload` must point to a live rocprofiler_callback_tracing_marker_api_data_t
 // for the duration of the MarkerCallback call.
 static rocprofiler_callback_tracing_record_t MakeMarkerRecord(
-    rocprofiler_marker_core_api_id_t op,
-    rocprofiler_callback_phase_t phase,
-    uint64_t thread_id,
-    void* payload) {
+    rocprofiler_marker_core_api_id_t op, rocprofiler_callback_phase_t phase,
+    uint64_t thread_id, void* payload) {
   rocprofiler_callback_tracing_record_t rec{};
   rec.kind = ROCPROFILER_CALLBACK_TRACING_MARKER_CORE_API;
   rec.operation = static_cast<rocprofiler_tracing_operation_t>(op);
@@ -413,9 +410,9 @@ TEST(RocmTracerTest, MarkerCallbackPushPopEmitsRoctxRange) {
   // Simulate roctxRangePushA ENTER
   rocprofiler_callback_tracing_marker_api_data_t push_data{};
   push_data.args.roctxRangePushA.message = label;
-  auto push_rec = MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePushA,
-                                   ROCPROFILER_CALLBACK_PHASE_ENTER, tid,
-                                   &push_data);
+  auto push_rec =
+      MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePushA,
+                       ROCPROFILER_CALLBACK_PHASE_ENTER, tid, &push_data);
   tracer.MarkerCallback(push_rec);
 
   // No event yet — PUSH doesn't emit
@@ -424,15 +421,16 @@ TEST(RocmTracerTest, MarkerCallbackPushPopEmitsRoctxRange) {
 
   // Simulate roctxRangePop EXIT
   rocprofiler_callback_tracing_marker_api_data_t pop_data{};
-  auto pop_rec = MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop,
-                                  ROCPROFILER_CALLBACK_PHASE_EXIT, tid,
-                                  &pop_data);
+  auto pop_rec =
+      MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop,
+                       ROCPROFILER_CALLBACK_PHASE_EXIT, tid, &pop_data);
   tracer.MarkerCallback(pop_rec);
 
   tracer.Disable();
 
   auto events = cptr->TakeEvents();
-  ASSERT_EQ(events.size(), 1u) << "Expected exactly one range event from Push+Pop";
+  ASSERT_EQ(events.size(), 1u)
+      << "Expected exactly one range event from Push+Pop";
 
   const RocmTracerEvent& e = events[0];
   EXPECT_EQ(e.type, RocmTracerEventType::Generic);
@@ -458,9 +456,9 @@ TEST(RocmTracerTest, MarkerCallbackMarkEmitsInstantaneousEvent) {
 
   rocprofiler_callback_tracing_marker_api_data_t mark_data{};
   mark_data.args.roctxMarkA.message = label;
-  auto mark_rec = MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxMarkA,
-                                   ROCPROFILER_CALLBACK_PHASE_ENTER, tid,
-                                   &mark_data);
+  auto mark_rec =
+      MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxMarkA,
+                       ROCPROFILER_CALLBACK_PHASE_ENTER, tid, &mark_data);
   tracer.MarkerCallback(mark_rec);
 
   tracer.Disable();
@@ -488,9 +486,9 @@ TEST(RocmTracerTest, MarkerCallbackUnmatchedPopIsIgnored) {
 
   // Pop without any preceding Push — must not crash, must not emit any event.
   rocprofiler_callback_tracing_marker_api_data_t pop_data{};
-  auto pop_rec = MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop,
-                                  ROCPROFILER_CALLBACK_PHASE_EXIT, 1111,
-                                  &pop_data);
+  auto pop_rec =
+      MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop,
+                       ROCPROFILER_CALLBACK_PHASE_EXIT, 1111, &pop_data);
   tracer.MarkerCallback(pop_rec);
 
   tracer.Disable();
@@ -514,16 +512,16 @@ TEST(RocmTracerTest, MarkerCallbackNullMessageSafelyIgnored) {
   // Push with null message — must not crash
   rocprofiler_callback_tracing_marker_api_data_t push_data{};
   push_data.args.roctxRangePushA.message = nullptr;
-  auto push_rec = MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePushA,
-                                   ROCPROFILER_CALLBACK_PHASE_ENTER, tid,
-                                   &push_data);
+  auto push_rec =
+      MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePushA,
+                       ROCPROFILER_CALLBACK_PHASE_ENTER, tid, &push_data);
   tracer.MarkerCallback(push_rec);
 
   // Pop should still emit (with empty label) without crashing
   rocprofiler_callback_tracing_marker_api_data_t pop_data{};
-  auto pop_rec = MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop,
-                                  ROCPROFILER_CALLBACK_PHASE_EXIT, tid,
-                                  &pop_data);
+  auto pop_rec =
+      MakeMarkerRecord(ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop,
+                       ROCPROFILER_CALLBACK_PHASE_EXIT, tid, &pop_data);
   tracer.MarkerCallback(pop_rec);
 
   tracer.Disable();
@@ -552,8 +550,8 @@ TEST(RocmTracerTest, MarkerEventAppearsInExportedXSpace) {
 
   uint64_t start_wall = RocmTracer::GetTimestamp();
   uint64_t start_gpu = RocmTracer::GetTimestamp();
-  auto collector = std::make_unique<RocmTraceCollectorImpl>(
-      col_opts, start_wall, start_gpu);
+  auto collector =
+      std::make_unique<RocmTraceCollectorImpl>(col_opts, start_wall, start_gpu);
   collector->SetGpuAgents(tracer.GpuAgents());
 
   RocmTracerOptions opts{/*max_annotation_strings=*/1024};
@@ -670,8 +668,8 @@ TEST(RocmTracerTest, RealRoctxCallsProduceNvtxRangeInXSpace) {
 
   uint64_t start_wall = RocmTracer::GetTimestamp();
   uint64_t start_gpu = RocmTracer::GetTimestamp();
-  auto collector = std::make_unique<RocmTraceCollectorImpl>(
-      col_opts, start_wall, start_gpu);
+  auto collector =
+      std::make_unique<RocmTraceCollectorImpl>(col_opts, start_wall, start_gpu);
   collector->SetGpuAgents(tracer.GpuAgents());
 
   RocmTracerOptions opts{/*max_annotation_strings=*/1024};
@@ -711,8 +709,7 @@ TEST(RocmTracerTest, RealRoctxCallsProduceNvtxRangeInXSpace) {
       for (const auto& event : line.events()) {
         for (const auto& stat : event.stats()) {
           if (stat.metadata_id() != nvtx_stat_id) continue;
-          if (stat.value_case() ==
-              tensorflow::profiler::XStat::kRefValue) {
+          if (stat.value_case() == tensorflow::profiler::XStat::kRefValue) {
             int64_t ref = stat.ref_value();
             auto it = plane.stat_metadata().find(ref);
             if (it != plane.stat_metadata().end()) {
