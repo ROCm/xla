@@ -16,7 +16,6 @@ limitations under the License.
 #ifndef XLA_BACKENDS_GPU_AUTOTUNER_FISSION_BACKEND_H_
 #define XLA_BACKENDS_GPU_AUTOTUNER_FISSION_BACKEND_H_
 
-#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -50,30 +49,24 @@ inline autotuner::Backend GetFissionBackend(autotuner::Backend backend) {
   LOG(FATAL) << "Could not parse fission backend name: " << fission_name;
 }
 
-// A proxy backend that wraps an actual codegen backend. The pipeline built
-// by `rewriter_pipeline_factory` is used to transform unfused instructions
-// to retarget them for the underlying codegen backend.
+// A proxy backend that wraps an actual codegen backend. The `rewriter_pipeline`
+// is used to transform unfused instructions to retarget them for the underlying
+// codegen backend.
 // If multiple supported instructions are found, the first one is profiled, then
 // we use its config for the rest of the supported instructions, provided they
 // are identical. E.g. three 'dots' resulting from "_X3" or "_X6" algorithms are
 // identical.
 class FissionBackend : public GpuCodegenBackend {
  public:
-  using RewriterPipelineFactory =
-      std::function<std::unique_ptr<HloPassPipeline>()>;
-
-  // Builds a fresh HloPassPipeline per call: FissionBackend runs on a
-  // thread pool, and HloPassPipeline::Run() isn't safe to share across
-  // concurrent calls.
   FissionBackend(const DebugOptions* debug_options, Compiler* compiler,
                  const Compiler::GpuTargetConfig* target_config,
                  std::unique_ptr<GpuCodegenBackend> backend,
-                 RewriterPipelineFactory rewriter_pipeline_factory,
+                 std::unique_ptr<HloPassPipeline> rewriter_pipeline,
                  const AliasInfo* alias_info, mlir::MLIRContext* mlir_context,
                  stream_executor::StreamExecutor* stream_executor = nullptr)
       : GpuCodegenBackend(GetFissionBackend(backend->backend()), debug_options,
                           compiler, target_config, stream_executor),
-        rewriter_pipeline_factory_(std::move(rewriter_pipeline_factory)),
+        rewriter_pipeline_(std::move(rewriter_pipeline)),
         codegen_backend_(std::move(backend)),
         alias_info_(alias_info),
         mlir_context_(mlir_context) {}
@@ -104,7 +97,7 @@ class FissionBackend : public GpuCodegenBackend {
   // module has been generated.
   absl::Status RunPriorityFusion(HloModule* module);
 
-  RewriterPipelineFactory rewriter_pipeline_factory_;
+  std::unique_ptr<HloPassPipeline> rewriter_pipeline_;
   std::unique_ptr<GpuCodegenBackend> codegen_backend_;
   const AliasInfo* alias_info_;
   mlir::MLIRContext* mlir_context_;
