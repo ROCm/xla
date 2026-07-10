@@ -35,6 +35,13 @@ using BackendConfig = autotuner::BackendConfig;
 // Interface for a codegen backend which can compile HLO instructions with
 // different configurations. This can be used to get the supported configs, and
 // compile HLO instructions with different configs.
+//
+// Thread-safety: CodegenOrchestrator may invoke these methods concurrently
+// from multiple threads on the same backend instance (e.g. to compile several
+// configs for one instruction in parallel). Implementations must therefore be
+// safe to call concurrently; any internal state that would make a call
+// non-reentrant (e.g. a shared pass pipeline) must be built fresh per call or
+// otherwise synchronized.
 class CodegenBackend {
  public:
   virtual ~CodegenBackend() = default;
@@ -47,25 +54,25 @@ class CodegenBackend {
 
   // Returns all supported configs for the given HLO instruction.
   virtual absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-  GetSupportedConfigs(const HloInstruction& instr) = 0;
+  GetSupportedConfigs(const HloInstruction& instr) const = 0;
 
   // Returns a default config for the given HLO instruction.
   virtual absl::StatusOr<std::unique_ptr<BackendConfig>> GetDefaultConfig(
-      const HloInstruction& instr) {
+      const HloInstruction& instr) const {
     return absl::UnimplementedError("Not implemented.");
   };
 
   // Wraps the HLO instruction in a module, applies the given config, and
   // compiles it.
   virtual absl::StatusOr<std::unique_ptr<Executable>> Compile(
-      const HloInstruction& instr, const BackendConfig& config) = 0;
+      const HloInstruction& instr, const BackendConfig& config) const = 0;
 
   // Apply config to the given HLO instruction.
   // This can rarely lead to the instruction being replaced by new ones in the
   // parent computation. Please check the documentation of the specific backend
   // to understand if this is the case.
   virtual absl::Status ApplyConfig(HloInstruction& instr,
-                                   const BackendConfig& config) = 0;
+                                   const BackendConfig& config) const = 0;
 
   // Returns true if the backend can produce numerically wrong results.
   virtual bool CanProduceWrongResults() const = 0;

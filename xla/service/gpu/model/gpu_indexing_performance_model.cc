@@ -565,7 +565,7 @@ absl::StatusOr<std::optional<TiledRunTimeData>> EstimateTiledRunTimeDataImpl(
 }  // namespace
 
 int64_t GpuPerformanceModelWithIndexingAnalysis::FlopsPerElement(
-    const HloInstruction* instr) {
+    const HloInstruction* instr) const {
   // Instruction that are only used for indexing are not counted for FLOPs.
   switch (instr->opcode()) {
     case HloOpcode::kBitcast:
@@ -625,10 +625,21 @@ int64_t GpuPerformanceModelWithIndexingAnalysis::FlopsPerElement(
     return (reduction_factor - 1) * flops_per_reduce_computation;
   }
 
-  // Encountered unexpected instruction, call into `GpuHloCostAnalysis`.
-  CHECK_OK(cost_analysis_.RevisitInstruction(instr));
+  // Encountered unexpected instruction, call into `GpuHloCostAnalysis`. Use a
+  // scratch instance local to this call rather than `cost_analysis_`, since
+  // `RevisitInstruction` mutates the analysis' internal per-instruction state
+  // and this method must be safe to call concurrently for different
+  // instructions on the same `GpuPerformanceModelWithIndexingAnalysis`
+  // instance.
+  GpuHloCostAnalysis scratch_cost_analysis(
+      GpuHloCostAnalysis::Options{shape_size_,
+                                  /*per_second_rates=*/{},
+                                  /*min_latencies_seconds=*/{},
+                                  /*count_multiple_input_accesses=*/true},
+      *device_info_);
+  CHECK_OK(scratch_cost_analysis.RevisitInstruction(instr));
 
-  return cost_analysis_.flop_count(*instr) /
+  return scratch_cost_analysis.flop_count(*instr) /
          ShapeUtil::ElementsInRecursive(instr->shape());
 }
 
@@ -636,7 +647,7 @@ absl::StatusOr<EstimateRunTimeData>
 GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTiledHloComputation(
     const HloFusionAdaptor& fusion_adaptor,
     const TiledHloComputation& tiled_hlo_computation,
-    const BlockLevelParameters& block_level_parameters) {
+    const BlockLevelParameters& block_level_parameters) const {
   return EstimateRunTimeForTiledHloComputationImpl(
       fusion_adaptor, tiled_hlo_computation, block_level_parameters,
       *device_info_, shape_size_,
@@ -646,7 +657,7 @@ GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTiledHloComputation(
 absl::StatusOr<EstimateRunTimeData>
 GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTiledFusion(
     const HloFusionAdaptor& fusion_adaptor,
-    const BlockLevelParameters& block_level_parameters) {
+    const BlockLevelParameters& block_level_parameters) const {
   if (use_experimental_tiling_) {
     ASSIGN_OR_RETURN(
         std::unique_ptr<experimental::TilingSpace> tiling_space,
@@ -696,7 +707,7 @@ GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTiledFusion(
 absl::StatusOr<EstimateRunTimeData>
 GpuPerformanceModelWithIndexingAnalysis::EstimateRunTimeForTriton(
     const HloInstruction* instr,
-    const BlockLevelParameters* block_level_parameters) {
+    const BlockLevelParameters* block_level_parameters) const {
   const auto& fusion_analysis = fusion_analysis_cache_->Get(*instr);
 
   if (block_level_parameters != nullptr) {
@@ -729,7 +740,7 @@ int64_t GpuPerformanceModelWithIndexingAnalysis::EstimateNumWarps(
 
 absl::StatusOr<TopKTiledRunTimeDataOrError>
 GpuPerformanceModelWithIndexingAnalysis::TryFindTopKBestTilingsForFusion(
-    const HloFusionAdaptor& fusion_adaptor, int top_k) {
+    const HloFusionAdaptor& fusion_adaptor, int top_k) const {
   XLA_SCOPED_LOGGING_TIMER(
       "GpuPerformanceModelWithIndexingAnalysis::"
       "TryFindTopKBestTilingsForFusion");
@@ -851,7 +862,7 @@ GpuPerformanceModelWithIndexingAnalysis::TryFindTopKBestTilingsForFusion(
 
 absl::StatusOr<TiledRunTimeDataOrError>
 GpuPerformanceModelWithIndexingAnalysis::TryFindBestTilingForFusion(
-    const HloFusionAdaptor& fusion_adaptor) {
+    const HloFusionAdaptor& fusion_adaptor) const {
   ASSIGN_OR_RETURN(auto top_k_result, TryFindTopKBestTilingsForFusion(
                                           fusion_adaptor, /*top_k=*/1));
   if (std::holds_alternative<FusionDecision>(top_k_result)) {

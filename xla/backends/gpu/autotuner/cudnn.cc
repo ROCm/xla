@@ -360,7 +360,7 @@ absl::Status ApplyConfigToCudnnCustomCall(HloInstruction& instr,
 
 }  // namespace
 
-bool CudnnBackend::IsSupported(const HloInstruction& instr) {
+bool CudnnBackend::IsSupported(const HloInstruction& instr) const {
   if (instr.opcode() == HloOpcode::kFusion) {
     return IsSupportedCudnnFusion(instr, stream_executor(), debug_options());
   }
@@ -373,7 +373,7 @@ bool CudnnBackend::IsSupported(const HloInstruction& instr) {
 }
 
 absl::StatusOr<std::unique_ptr<BackendConfig>> CudnnBackend::GetDefaultConfig(
-    const HloInstruction& instr) {
+    const HloInstruction& instr) const {
   if (IsCustomCallToDnnConvolution(instr)) {
     // If the instruction is a custom call to a DnnConvolution, we can return
     // the default config.
@@ -397,7 +397,7 @@ absl::StatusOr<std::unique_ptr<BackendConfig>> CudnnBackend::GetDefaultConfig(
 }
 
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-CudnnBackend::GetSupportedConfigs(const HloInstruction& instr) {
+CudnnBackend::GetSupportedConfigs(const HloInstruction& instr) const {
   if (!IsSupported(instr)) {
     return std::vector<std::unique_ptr<BackendConfig>>();
   }
@@ -415,7 +415,7 @@ CudnnBackend::GetSupportedConfigs(const HloInstruction& instr) {
 }
 
 absl::Status CudnnBackend::ApplyConfig(HloInstruction& instr,
-                                       const BackendConfig& config) {
+                                       const BackendConfig& config) const {
   if (!config.has_algorithm()) {
     return absl::InvalidArgumentError(
         "Expected AlgorithmProto config for CudnnBackend.");

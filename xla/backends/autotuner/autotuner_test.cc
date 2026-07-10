@@ -91,15 +91,16 @@ class MockCodegenBackend : public CodegenBackend {
   MOCK_METHOD(autotuner::Backend, backend, (), (const, override));
   MOCK_METHOD(std::string, version, (), (const, override));
   MOCK_METHOD(absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>,
-              GetSupportedConfigs, (const HloInstruction& instr), (override));
+              GetSupportedConfigs, (const HloInstruction& instr),
+              (const, override));
   MOCK_METHOD(absl::StatusOr<std::unique_ptr<BackendConfig>>, GetDefaultConfig,
-              (const HloInstruction& instr), (override));
+              (const HloInstruction& instr), (const, override));
   MOCK_METHOD(absl::StatusOr<std::unique_ptr<Executable>>, Compile,
               (const HloInstruction& instr, const BackendConfig& config),
-              (override));
+              (const, override));
   MOCK_METHOD(absl::Status, ApplyConfig,
               (HloInstruction & instr, const BackendConfig& config),
-              (override));
+              (const, override));
   MOCK_METHOD(bool, CanProduceWrongResults, (), (const, override));
 };
 

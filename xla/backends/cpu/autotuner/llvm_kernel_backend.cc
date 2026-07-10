@@ -44,7 +44,7 @@ absl::StatusOr<std::unique_ptr<CodegenBackend>> LlvmKernelBackend::Create(
 
 // Adding other instructions to supports requires adding the
 // opcode here.
-bool LlvmKernelBackend::IsSupported(const HloInstruction& instr) {
+bool LlvmKernelBackend::IsSupported(const HloInstruction& instr) const {
   auto is_supported_fusion = [](const HloInstruction& instr) {
     if (instr.opcode() != HloOpcode::kFusion) {
       return false;
@@ -57,7 +57,7 @@ bool LlvmKernelBackend::IsSupported(const HloInstruction& instr) {
 }
 
 absl::StatusOr<std::vector<std::unique_ptr<xla::BackendConfig>>>
-LlvmKernelBackend::GetSupportedConfigs(const HloInstruction& instr) {
+LlvmKernelBackend::GetSupportedConfigs(const HloInstruction& instr) const {
   std::vector<std::unique_ptr<xla::BackendConfig>> configs;
   if (!IsSupported(instr)) {
     return configs;
@@ -80,7 +80,7 @@ LlvmKernelBackend::GetSupportedConfigs(const HloInstruction& instr) {
 }
 
 absl::StatusOr<std::unique_ptr<xla::BackendConfig>>
-LlvmKernelBackend::GetDefaultConfig(const HloInstruction& instr) {
+LlvmKernelBackend::GetDefaultConfig(const HloInstruction& instr) const {
   auto config = std::make_unique<xla::BackendConfig>();
   auto* llvm_config = config->mutable_llvm_kernel();
   llvm_config->set_disable_loop_unrolling(false);
@@ -90,7 +90,7 @@ LlvmKernelBackend::GetDefaultConfig(const HloInstruction& instr) {
 }
 
 absl::Status LlvmKernelBackend::ApplyConfig(HloInstruction& instr,
-                                            const xla::BackendConfig& config) {
+                                            const xla::BackendConfig& config) const {
   ASSIGN_OR_RETURN(auto backend_config,
                    instr.backend_config<xla::cpu::BackendConfig>());
 
