@@ -351,18 +351,22 @@ void RocmTracer::MarkerCallback(
       static_cast<const rocprofiler_callback_tracing_marker_api_data_t*>(
           record.payload);
   const uint64_t tid = record.thread_id;
-  const uint64_t ts = GetTimestamp();
 
   if (record.operation == ROCPROFILER_MARKER_CORE_API_ID_roctxRangePushA &&
       record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
+    const uint64_t ts = GetTimestamp();
+    if (ts == 0) return;
     const char* msg = data ? data->args.roctxRangePushA.message : nullptr;
     absl::MutexLock lock(&roctx_stack_mutex_);
     roctx_stack_[tid].push_back(
         RoctxFrame{msg ? std::string(msg) : std::string(), ts,
-                   static_cast<uint32_t>(record.correlation_id.internal)});
+                   record.correlation_id.internal});
 
   } else if (record.operation == ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop &&
              record.phase == ROCPROFILER_CALLBACK_PHASE_EXIT) {
+    const uint64_t ts = GetTimestamp();
+    if (ts == 0) return;
+
     RoctxFrame frame;
     {
       absl::MutexLock lock(&roctx_stack_mutex_);
@@ -372,15 +376,12 @@ void RocmTracer::MarkerCallback(
       it->second.pop_back();
     }
 
-    // Intern the message string so the string_view in the event stays valid
-    // until PerDeviceCollector::Export() consumes events_.
     absl::string_view stable_msg;
     {
       absl::MutexLock lock(&roctx_strings_mutex_);
       stable_msg = *roctx_strings_.insert(std::move(frame.message)).first;
     }
 
-    absl::MutexLock coll_lock(collector_mutex_);
     if (collector() == nullptr) return;
     RocmTracerEvent event;
     event.type = RocmTracerEventType::Generic;
@@ -399,6 +400,9 @@ void RocmTracer::MarkerCallback(
 
   } else if (record.operation == ROCPROFILER_MARKER_CORE_API_ID_roctxMarkA &&
              record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
+    const uint64_t ts = GetTimestamp();
+    if (ts == 0) return;
+
     const char* msg = data ? data->args.roctxMarkA.message : nullptr;
     if (!msg || msg[0] == '\0') return;
 
@@ -408,7 +412,6 @@ void RocmTracer::MarkerCallback(
       stable_msg = *roctx_strings_.insert(std::string(msg)).first;
     }
 
-    absl::MutexLock coll_lock(collector_mutex_);
     if (collector() == nullptr) return;
     RocmTracerEvent event;
     event.type = RocmTracerEventType::Generic;

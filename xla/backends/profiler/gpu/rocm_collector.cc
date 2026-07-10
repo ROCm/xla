@@ -18,6 +18,7 @@ limitations under the License.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -206,7 +207,8 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
   VLOG(7) << "Adding event to line=" << line->Id();
   xevent.SetTimestampNs(event.start_time_ns);
   xevent.SetEndTimestampNs(event.end_time_ns);
-  if (event.source == RocmTracerEventSource::ApiCallback) {
+  if (event.source == RocmTracerEventSource::ApiCallback &&
+      event.device_id != RocmTracerEvent::kInvalidDeviceId) {
     xevent.AddStatValue(
         *plane->GetOrCreateStatMetadata(GetStatTypeStr(StatType::kDeviceId)),
         event.device_id);
@@ -572,17 +574,23 @@ void RocmTraceCollectorImpl::Flush() {
           << " activity events, and aggregated them into "
           << aggregated_events.size() << " events.";
 
-  // device ids for GPUs filled in by roctracer are not zero indexed.
-  // They are offset by number of CPUs on the machine
-  uint32_t min_device_id = INT32_MAX;
+  // Device IDs from rocprofiler are not zero-indexed; find the minimum
+  // valid ID so we can normalise to [0, num_gpus_).
+  uint32_t min_device_id = std::numeric_limits<uint32_t>::max();
 
   for (const auto& event : aggregated_events) {
-    if (event.device_id < min_device_id) {
+    if (event.device_id != RocmTracerEvent::kInvalidDeviceId &&
+        event.device_id < min_device_id) {
       min_device_id = event.device_id;
     }
   }
 
   for (auto& event : aggregated_events) {
+    if (event.device_id == RocmTracerEvent::kInvalidDeviceId ||
+        min_device_id == std::numeric_limits<uint32_t>::max()) {
+      PrintRocmTracerEvent(event, ". Dropped due to invalid device ID!");
+      continue;
+    }
     auto id = event.device_id - min_device_id;
     if (id < num_gpus_) {
       per_device_collector_[id].AddEvent(std::move(event));

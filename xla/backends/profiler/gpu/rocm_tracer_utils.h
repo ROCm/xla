@@ -157,9 +157,9 @@ struct RocmTracerEvent {
 // Represents one pending ROCTX range pushed via roctxRangePushA. Stored on
 // a per-thread stack in RocmTracer and consumed when roctxRangePop fires.
 struct RoctxFrame {
-  std::string message;     // the range label (owned here for lifetime safety)
-  uint64_t start_ns;       // timestamp captured at push time
-  uint32_t correlation_id; // rocprofiler correlation_id at push time
+  std::string message;      // the range label (owned here for lifetime safety)
+  uint64_t start_ns;        // timestamp captured at push time
+  uint64_t correlation_id;  // rocprofiler correlation_id at push time
 };
 
 struct RocmTraceCollectorOptions {

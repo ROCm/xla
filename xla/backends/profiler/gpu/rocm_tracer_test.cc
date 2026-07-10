@@ -15,9 +15,10 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/rocm_tracer.h"
 
+#include <dlfcn.h>
+
 #include <cstddef>
 #include <cstdint>
-#include <dlfcn.h>
 #include <memory>
 #include <set>
 #include <string>
