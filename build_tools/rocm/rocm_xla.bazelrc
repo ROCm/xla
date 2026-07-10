@@ -84,10 +84,10 @@ test:xla_sgpu -- \
 -//xla/pjrt/distributed:client_server_test
 
 test:xla_mgpu -- \
-//xla/tests:collective_ops_e2e_test \
+//xla/backends/gpu/tests:collective_ops_e2e_test \
 //xla/tests:collective_ops_test \
-//xla/tests:collective_pipeline_parallelism_test \
-//xla/tests:replicated_io_feed_test \
+//xla/backends/gpu/tests:collective_pipeline_parallelism_test \
+//xla/backends/gpu/tests:replicated_io_feed_test \
 //xla/backends/gpu/collectives:gpu_clique_key_test \
 //xla/backends/gpu/runtime:all_reduce_test \
 //xla/service:collective_ops_utils_test \

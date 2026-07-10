@@ -35,6 +35,7 @@ for arg in "$@"; do
     fi
     if [[ "$arg" == "--config=ci_rocm_cpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},gpu,-requires-gpu-rocm,-requires-gpu-amd"
+        TARGET_CONFIG="-- //xla/..."
     fi
 done
 
