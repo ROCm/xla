@@ -20,6 +20,7 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -111,6 +112,9 @@ struct OccupancyStats {
   int suggested_block_size = 0;
 };
 
+// Pure computation: returns theoretical occupancy from hardware parameters.
+OccupancyStats GetOccupancy(const RocmDeviceOccupancyParams& params);
+
 class RocmTraceCollector {
  public:
   explicit RocmTraceCollector(const RocmTraceCollectorOptions& options)
@@ -150,7 +154,6 @@ class PerDeviceCollector {
                              tsl::profiler::XPlaneBuilder* device_plane);
 
  private:
-  OccupancyStats GetOccupancy(const RocmDeviceOccupancyParams& params) const;
   void CreateXEvent(const RocmTracerEvent& event,
                     tsl::profiler::XPlaneBuilder* plane, uint64_t start_gpu_ns,
                     uint64_t end_gpu_ns, tsl::profiler::XLineBuilder* line);
@@ -160,15 +163,16 @@ class PerDeviceCollector {
  private:
   absl::Mutex events_mutex_;
   std::vector<RocmTracerEvent> events_ ABSL_GUARDED_BY(events_mutex_);
-  absl::flat_hash_map<RocmDeviceOccupancyParams, OccupancyStats>
+  // The fields below are written once in GetDeviceCapabilities() and read in
+  // CreateXEvent(), both called sequentially from Export() after Flush().
+  // No concurrent access, so no mutex guard is needed.
+  absl::flat_hash_map<RocmDeviceOccupancyParams, std::optional<OccupancyStats>>
       occupancy_cache_;
-  // Populated from rocprofiler_agent_v0_t in GetDeviceCapabilities().
-  // Used by the hardware-formula occupancy computation in GetOccupancy().
-  uint32_t max_waves_per_cu_ = 0;    // max concurrent wavefronts per CU
-  uint32_t wave_front_size_ = 0;     // threads per wavefront
-  uint32_t max_waves_per_simd_ = 0;  // max concurrent wavefronts per SIMD
-  uint32_t simd_per_cu_ = 0;         // SIMD units per CU
-  uint32_t lds_size_bytes_ = 0;      // LDS capacity in bytes per CU
+  uint32_t max_waves_per_cu_ = 0;
+  uint32_t wave_front_size_ = 0;
+  uint32_t max_waves_per_simd_ = 0;
+  uint32_t simd_per_cu_ = 0;
+  uint32_t lds_size_bytes_ = 0;
 };  // PerDeviceCollector
 
 class RocmTraceCollectorImpl : public RocmTraceCollector {

@@ -148,8 +148,7 @@ uint64_t get_timestamp() {
 }
 }  // namespace
 
-OccupancyStats PerDeviceCollector::GetOccupancy(
-    const RocmDeviceOccupancyParams& params) const {
+OccupancyStats GetOccupancy(const RocmDeviceOccupancyParams& params) {
   if (params.block_size == 0 || params.num_regs == 0 ||
       params.max_waves_per_cu == 0 || params.wave_front_size == 0 ||
       params.max_waves_per_simd == 0 || params.simd_per_cu == 0) {
@@ -188,11 +187,9 @@ OccupancyStats PerDeviceCollector::GetOccupancy(
   OccupancyStats stats;
   stats.occupancy_pct = static_cast<double>(active_waves) *
                         params.wave_front_size * 100.0 / max_threads_per_cu;
-  // Suggested block size: fill the CU with whole blocks of wave_front_size.
-  stats.suggested_block_size = static_cast<int>(
-      (active_waves / waves_per_block) * params.wave_front_size);
-  if (stats.suggested_block_size == 0)
-    stats.suggested_block_size = static_cast<int>(params.wave_front_size);
+  // Suggested block size: one wavefront-aligned block that maximises occupancy.
+  stats.suggested_block_size =
+      static_cast<int>(waves_per_block * params.wave_front_size);
   // Min grid size: blocks to saturate one CU.
   stats.min_grid_size = static_cast<int>(
       (max_threads_per_cu + params.block_size - 1) / params.block_size);
@@ -268,10 +265,11 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
       params.simd_per_cu = simd_per_cu_;
       params.lds_size_bytes = lds_size_bytes_;
 
-      OccupancyStats& occ = occupancy_cache_[params];
-      if (occ.occupancy_pct == 0.0) {
-        occ = GetOccupancy(params);
+      auto& cached = occupancy_cache_[params];
+      if (!cached.has_value()) {
+        cached = GetOccupancy(params);
       }
+      const OccupancyStats& occ = *cached;
       occupancy_pct = occ.occupancy_pct;
 
       if (occupancy_pct > 0.0) {
@@ -542,13 +540,11 @@ void PerDeviceCollector::GetDeviceCapabilities(
     }
   }
 
-  // Store hardware limits for the occupancy formula (no HIP API call needed).
   max_waves_per_cu_ = agent.max_waves_per_cu;
   wave_front_size_ = agent.wave_front_size;
   max_waves_per_simd_ = agent.max_waves_per_simd;
   simd_per_cu_ = agent.simd_per_cu;
-  // lds_size_in_kb is per SIMD wavefront; total LDS per CU is the CU-level
-  // pool. rocprofiler_agent_v0_t.lds_size_in_kb is actually bytes/1024 per CU.
+  // lds_size_in_kb is the LDS capacity per CU in KiB.
   lds_size_bytes_ = agent.lds_size_in_kb * 1024;
 }
 

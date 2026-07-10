@@ -333,8 +333,6 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
     if (it != kernel_info_.end()) {
       const auto& sym = it->second.data;
       trace_event->name = it->second.name;
-      // arch_vgpr_count: VGPRs per thread — the primary occupancy limiter.
-      // arch_vgpr_count: VGPRs per thread — the primary VGPR occupancy input.
       trace_event->kernel_info.num_regs = sym.arch_vgpr_count;
     }
   }

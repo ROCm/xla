@@ -397,6 +397,82 @@ TEST(RocmCollectorOccupancyTest, OccupancyParamsCacheKey) {
   EXPECT_NE(a, b) << "Params with different wave_front_size must not be equal";
 }
 
+// ============================================================================
+// Direct formula validation (GetOccupancy is a free function)
+// ============================================================================
+
+// gfx942 (MI300/CDNA3): 512 VGPRs/SIMD, 4 SIMDs/CU, 8 waves/SIMD,
+// 32 waves/CU, 64 threads/wave, 64 KiB LDS.
+// A kernel with 128 VGPRs/thread, block_size=256, no LDS:
+//   waves_per_block     = ceil(256/64) = 4
+//   waves_per_simd_vgpr = 512 / 128 = 4
+//   waves_per_cu_vgpr   = 4 * 4 SIMDs = 16
+//   active_waves  = min(16, 32 max) = 16
+//   occupancy_pct = 16/32 = 50%
+TEST(RocmCollectorOccupancyTest, FormulaGfx942VgprLimited) {
+  RocmDeviceOccupancyParams params{};
+  params.num_regs = 128;
+  params.block_size = 256;
+  params.smem_bytes = 0;
+  params.max_waves_per_cu = 32;
+  params.wave_front_size = 64;
+  params.max_waves_per_simd = 8;
+  params.simd_per_cu = 4;
+  params.lds_size_bytes = 65536;
+
+  OccupancyStats stats = GetOccupancy(params);
+  EXPECT_DOUBLE_EQ(stats.occupancy_pct, 50.0);
+  EXPECT_EQ(stats.suggested_block_size, 256);
+  EXPECT_GT(stats.min_grid_size, 0);
+}
+
+// Same GPU, low register pressure (32 VGPRs/thread):
+//   waves_per_simd_vgpr = 512 / 32 = 16
+//   waves_per_cu_vgpr   = 16 * 4 SIMDs = 64
+//   active_waves  = min(64, 32 max) = 32  (hardware-capped)
+//   occupancy_pct = 32/32 = 100%
+TEST(RocmCollectorOccupancyTest, FormulaGfx942FullOccupancy) {
+  RocmDeviceOccupancyParams params{};
+  params.num_regs = 32;
+  params.block_size = 256;
+  params.smem_bytes = 0;
+  params.max_waves_per_cu = 32;
+  params.wave_front_size = 64;
+  params.max_waves_per_simd = 8;
+  params.simd_per_cu = 4;
+  params.lds_size_bytes = 65536;
+
+  OccupancyStats stats = GetOccupancy(params);
+  EXPECT_DOUBLE_EQ(stats.occupancy_pct, 100.0);
+  EXPECT_EQ(stats.suggested_block_size, 256);
+}
+
+// LDS-limited: 64 KiB LDS, each block uses 32 KiB → only 2 blocks fit.
+// 2 blocks × 4 waves/block = 8 active waves out of 32 max → 25%.
+TEST(RocmCollectorOccupancyTest, FormulaLdsLimited) {
+  RocmDeviceOccupancyParams params{};
+  params.num_regs = 16;
+  params.block_size = 256;
+  params.smem_bytes = 32768;
+  params.max_waves_per_cu = 32;
+  params.wave_front_size = 64;
+  params.max_waves_per_simd = 8;
+  params.simd_per_cu = 4;
+  params.lds_size_bytes = 65536;
+
+  OccupancyStats stats = GetOccupancy(params);
+  EXPECT_DOUBLE_EQ(stats.occupancy_pct, 25.0);
+}
+
+// All-zero params must return empty stats, not crash.
+TEST(RocmCollectorOccupancyTest, FormulaZeroParamsReturnsEmpty) {
+  RocmDeviceOccupancyParams params{};
+  OccupancyStats stats = GetOccupancy(params);
+  EXPECT_DOUBLE_EQ(stats.occupancy_pct, 0.0);
+  EXPECT_EQ(stats.suggested_block_size, 0);
+  EXPECT_EQ(stats.min_grid_size, 0);
+}
+
 }  // namespace test
 }  // namespace profiler
 }  // namespace xla
