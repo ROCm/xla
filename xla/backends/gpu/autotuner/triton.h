@@ -18,6 +18,7 @@ limitations under the License.
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/status/status.h"
@@ -29,6 +30,7 @@ limitations under the License.
 #include "xla/hlo/analysis/alias_info.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/runtime/object_pool.h"
 #include "xla/service/compiler.h"
 #include "xla/xla.pb.h"
 
@@ -38,43 +40,47 @@ namespace gpu {
 
 class TritonBackend : public GpuCodegenBackend {
  public:
-  explicit TritonBackend(const DebugOptions* debug_options, Compiler* compiler,
-                         const Compiler::GpuTargetConfig* target_config,
-                         const AliasInfo* alias_info,
-                         mlir::MLIRContext* mlir_context)
+  // Each call that needs an MLIRContext borrows a fresh one from
+  // `mlir_context_pool` and returns it when done, so concurrent calls never
+  // share a context and no explicit synchronization is needed.
+  explicit TritonBackend(
+      const DebugOptions* debug_options, Compiler* compiler,
+      const Compiler::GpuTargetConfig* target_config,
+      const AliasInfo* alias_info,
+      ObjectPool<std::unique_ptr<mlir::MLIRContext>>* mlir_context_pool)
       : GpuCodegenBackend(autotuner::Backend::TRITON, debug_options, compiler,
                           target_config),
         alias_info_(alias_info),
-        mlir_context_(mlir_context) {}
+        mlir_context_pool_(mlir_context_pool) {}
 
   absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-  GetSupportedConfigs(const HloInstruction& instr) override;
+  GetSupportedConfigs(const HloInstruction& instr) const override;
   absl::StatusOr<std::unique_ptr<BackendConfig>> GetDefaultConfig(
-      const HloInstruction& instr) override;
+      const HloInstruction& instr) const override;
 
   absl::Status ApplyConfig(HloInstruction& instr,
-                           const BackendConfig& config) override;
+                           const BackendConfig& config) const override;
 
   bool CanProduceWrongResults() const override { return true; }
   // TODO(b/514330710): use valid version
   std::string version() const override { return "unknown"; }
 
  private:
-  bool IsSupported(const HloInstruction& instr) override;
+  bool IsSupported(const HloInstruction& instr) const override;
 
   absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-  GetSupportedConfigsForDot(const HloInstruction* instr);
+  GetSupportedConfigsForDot(const HloInstruction* instr) const;
   absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-  GetSupportedConfigsForScaledDot(const HloInstruction* instr);
+  GetSupportedConfigsForScaledDot(const HloInstruction* instr) const;
   absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-  GetOverriddenConfigs(const HloInstruction* instr);
+  GetOverriddenConfigs(const HloInstruction* instr) const;
 
   absl::StatusOr<std::unique_ptr<HloModule>> RunHloPasses(
       std::unique_ptr<HloModule> hlo_module,
-      const Compiler::CompileOptions& options) override;
+      const Compiler::CompileOptions& options) const override;
 
   const AliasInfo* alias_info_;
-  mlir::MLIRContext* mlir_context_;
+  ObjectPool<std::unique_ptr<mlir::MLIRContext>>* mlir_context_pool_;
 };
 
 }  // namespace gpu

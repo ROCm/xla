@@ -101,7 +101,8 @@ absl::StatusOr<std::optional<BlockLevelFusionConfig>> GetPreExistingConfig(
 }  // namespace
 
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-BlockLevelEmitterBackend::GetSupportedConfigs(const HloInstruction& instr) {
+BlockLevelEmitterBackend::GetSupportedConfigs(
+    const HloInstruction& instr) const {
   if (!IsSupported(instr)) {
     return std::vector<std::unique_ptr<BackendConfig>>();
   }
@@ -145,7 +146,8 @@ BlockLevelEmitterBackend::GetSupportedConfigs(const HloInstruction& instr) {
 }
 
 absl::StatusOr<BlockLevelFusionConfig>
-BlockLevelEmitterBackend::GetCostModelConfig(const HloInstruction& instr) {
+BlockLevelEmitterBackend::GetCostModelConfig(
+    const HloInstruction& instr) const {
   auto fusion_adaptor =
       HloFusionAdaptor::ForInstruction(Cast<HloFusionInstruction>(&instr));
 
@@ -166,7 +168,7 @@ BlockLevelEmitterBackend::GetCostModelConfig(const HloInstruction& instr) {
 }
 
 absl::StatusOr<std::unique_ptr<BackendConfig>>
-BlockLevelEmitterBackend::GetDefaultConfig(const HloInstruction& instr) {
+BlockLevelEmitterBackend::GetDefaultConfig(const HloInstruction& instr) const {
   if (!IsSupported(instr)) {
     return absl::InvalidArgumentError(
         absl::StrCat("BlockLevelEmitterBackend: unsupported instruction: ",
@@ -184,7 +186,7 @@ BlockLevelEmitterBackend::GetDefaultConfig(const HloInstruction& instr) {
 }
 
 absl::Status BlockLevelEmitterBackend::ApplyConfig(
-    HloInstruction& instr, const BackendConfig& config) {
+    HloInstruction& instr, const BackendConfig& config) const {
   // Object nesting structure:
   // HloInstruction
   // └── GpuBackendConfig
@@ -211,7 +213,7 @@ absl::Status BlockLevelEmitterBackend::ApplyConfig(
   return absl::OkStatus();
 }
 
-bool BlockLevelEmitterBackend::IsSupported(const HloInstruction& instr) {
+bool BlockLevelEmitterBackend::IsSupported(const HloInstruction& instr) const {
   if (instr.opcode() != HloOpcode::kFusion) {
     return false;
   }
