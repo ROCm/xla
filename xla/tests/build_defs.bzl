@@ -23,10 +23,6 @@ load(
 )
 load("//xla/tests:plugin.bzl", "plugins")
 load("//xla/tsl:package_groups.bzl", "DEFAULT_LOAD_VISIBILITY")
-load(
-    "//xla/tsl/platform:build_config_root.bzl",
-    "tf_gpu_tests_tags",
-)
 load("//xla/tsl/platform/default:build_config.bzl", "strict_cc_test")
 load("//xla/tsl/platform/default:cuda_build_defs.bzl", "is_cuda_configured")
 
