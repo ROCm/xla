@@ -125,6 +125,7 @@ cc_library(
     ],
     deps = [
         ":rocm_command_buffer",
+        ":rocm_compute_capability",
         ":rocm_context",
         ":rocm_event",
         ":rocm_kernel",
@@ -797,6 +798,24 @@ rocm_library(
     alwayslink = True,
 )
 
+rocm_library(
+    name = "delay_kernel_rocm",
+    srcs = ["delay_kernel_rocm.cu.cc"],
+    hdrs = ["delay_kernel.h"],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:typed_kernel_factory",
+        "//xla/stream_executor/gpu:gpu_semaphore",
+        "//xla/tsl/platform:status_macros",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
 cc_library(
     name = "rocm_complex_converters",
     hdrs = ["rocm_complex_converters.h"],
@@ -959,12 +978,14 @@ cc_library(
         "rocm-only",
     ],
     deps = [
+        ":delay_kernel_rocm",
         ":rocm_event",
         ":rocm_status",
         "//xla/stream_executor:activate_context",
         "//xla/stream_executor:event_based_timer",
         "//xla/stream_executor:stream",
         "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/gpu:gpu_semaphore",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:status_macros",
         "//xla/tsl/platform:statusor",
@@ -983,6 +1004,7 @@ xla_test(
     backends = ["gpu"],
     tags = ["rocm-only"],
     deps = [
+        ":rocm_compute_capability",
         ":rocm_executor",
         ":rocm_platform_id",
         ":rocm_timer",
