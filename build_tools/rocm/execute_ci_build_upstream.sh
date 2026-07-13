@@ -45,7 +45,6 @@ done
         IFS=:
         echo "${EXCLUDED_TESTS[*]}"
     ) \
-    --cache_test_results=yes \
     --nokeep_going \
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
     -- \
