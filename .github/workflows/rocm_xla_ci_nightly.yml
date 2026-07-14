@@ -58,7 +58,14 @@ jobs:
             rbe_docker_image: "DOCKER_IMAGE_HERMETIC"
             runner: "linux-xla-do-mi350x-1"
           - name: "asan"
-            configs: ["--config=rocm_ci", "--config=asan", "--strategy=TestRunner=local", "--flaky_test_attempts=1", "--local_test_jobs=4"]
+            configs: 
+              - "--config=rocm_ci_hermetic"
+              - "--config=asan"
+              - "--strategy=TestRunner=local"
+              - "--flaky_test_attempts=1"
+              - "--local_test_jobs=4"
+              - "--repo_env=ROCM_DISTRO_URL=https://rocm.nightlies.amd.com/tarball-asan/therock-dist-linux-gfx950-dcgpu-7.15.0a20260714.tar.gz"
+              - "--repo_env=ROCM_DISTRO_HASH=fe5e5898669d35a1983fc59f160f35ff535711b8a0bc7c77ecfa1ac3e2da72f8"
             rbe_docker_image: "DOCKER_IMAGE"
             runner: "linux-xla-do-mi350x-4"
           - name: "tsan"
