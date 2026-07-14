@@ -26,6 +26,7 @@ limitations under the License.
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/strings/str_cat.h"
 #include "absl/types/span.h"
 #include "xla/tsl/platform/status_macros.h"
@@ -313,6 +314,14 @@ GetConvolutionCustomCallConfigs(const HloCustomCallInstruction* instr,
   const se::EngineOptions engine_options{RequireDeterminism(module->config()),
                                          allow_tf32,
                                          /*require_command_buffer=*/false};
+
+  // The MIOpen conv find draws+zero-inits shared scratch that can clobber a
+  // still-live kernel's buffer; run under the exclusive GPU lock, drain first.
+  absl::WriterMutexLock serialize_lock(GetGpuMutex(stream_executor));
+  if (!stream_executor->SynchronizeAllActivity()) {
+    return absl::InternalError(
+        "Failed to synchronize device before convolution autotuning.");
+  }
 
   OwningScratchAllocator scratch_allocator(stream_executor->device_ordinal(),
                                            allocator);
