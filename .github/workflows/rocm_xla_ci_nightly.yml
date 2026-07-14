@@ -57,14 +57,6 @@ jobs:
               - "--repo_env=ROCM_PATH="
             rbe_docker_image: "DOCKER_IMAGE_HERMETIC"
             runner: "linux-xla-do-mi350x-1"
-          - name: "asan"
-            configs: ["--config=rocm_ci", "--config=asan", "--strategy=TestRunner=local", "--flaky_test_attempts=1", "--local_test_jobs=4"]
-            rbe_docker_image: "DOCKER_IMAGE"
-            runner: "linux-xla-do-mi350x-4"
-          - name: "tsan"
-            configs: ["--config=rocm_ci", "--config=tsan", "--strategy=TestRunner=local", "--flaky_test_attempts=1", "--local_test_jobs=4"]
-            rbe_docker_image: "DOCKER_IMAGE"
-            runner: "linux-xla-do-mi350x-4"
     container:
       # set in https://github.com/ROCm/xla/settings/variables/actions
       image: ${{ vars.DOCKER_IMAGE }}
@@ -171,3 +163,10 @@ jobs:
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             -- \
             //xla/...
+
+  # Call sanitizers workflow as a separate job
+  sanitizers:
+    uses: ./.github/workflows/rocm_xla_ci_sanitizers.yml
+    secrets:
+      RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
+      RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}
