@@ -61,6 +61,7 @@ jobs:
               - "--config=rocm_ci_hermetic"
               - "--config=rocm_rbe"
               - "--config=asan"
+              - "--spawn_strategy=local"
               - "--strategy=TestRunner=local"
               - "--flaky_test_attempts=1"
               - "--local_test_jobs=4"
@@ -71,6 +72,7 @@ jobs:
               - "--config=rocm_ci"
               - "--config=rocm_rbe"
               - "--config=tsan"
+              - "--spawn_strategy=local"
               - "--strategy=TestRunner=local"
               - "--flaky_test_attempts=1"
               - "--local_test_jobs=4"
@@ -113,11 +115,8 @@ jobs:
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
-            ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
-            --spawn_strategy=local \
-            --strategy=TestRunner=local \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
@@ -125,6 +124,7 @@ jobs:
             --bes_keywords=xla \
             --bes_keywords=single_gpu \
             --bes_keywords=sanitizers \
+            ${{ join(matrix.mode.configs, ' ') }} \
             -- \
             //xla/...
 
@@ -132,16 +132,14 @@ jobs:
         if: always() && !cancelled()
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
-            ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_multi_gpu \
             --local_test_jobs=1 \
-            --spawn_strategy=local \
-            --strategy=TestRunner=local \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --bes_keywords=xla \
             --bes_keywords=multi_gpu \
             --bes_keywords=sanitizers \
+            ${{ join(matrix.mode.configs, ' ') }} \
             -- \
             //xla/...
 
@@ -153,8 +151,6 @@ jobs:
             --config=rocm_rbe \
             --config=ci_rocm_cpu \
             --local_test_jobs=200 \
-            --spawn_strategy=local \
-            --strategy=TestRunner=local \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --bes_keywords=xla \
