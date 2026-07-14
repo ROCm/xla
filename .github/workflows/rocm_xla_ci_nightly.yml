@@ -167,6 +167,10 @@ jobs:
   # Call sanitizers workflow as a separate job
   sanitizers:
     uses: ./.github/workflows/rocm_xla_ci_sanitizers.yml
+    with:
+      repository: openxla/xla
+      ref: main
+      run_sanitizers: true
     secrets:
       RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
       RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}

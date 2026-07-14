@@ -31,6 +31,11 @@ on:
         required: false
         type: string
         default: 'main'
+      run_sanitizers:
+        description: 'Set to true to run sanitizers'
+        required: false
+        type: boolean
+        default: true
     secrets:
       RBE_CI_CERT:
         required: true
@@ -40,13 +45,12 @@ on:
     types: [labeled]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_number }}-${{ github.run_id }}
   cancel-in-progress: true
 
 jobs:
   execute-xla-ut-sanitizers:
-    # Only run if the "sanitizers" label was added (for pull_request_target) or when called from another workflow
-    if: github.event_name == 'workflow_call' || github.event.label.name == 'sanitizers'
+    if: inputs.run_sanitizers || github.event.label.name == 'sanitizers'
     runs-on: linux-xla-do-mi350x-4
     strategy:
       fail-fast: false
