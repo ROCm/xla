@@ -100,8 +100,10 @@ class RocmTracer {
 
   AnnotationMap annotation_map_{/* default size, e.g. */ 1024 * 1024};
 
-  // Lock ordering: roctx_stack_mutex_ → roctx_strings_mutex_.
-  // MarkerCallback acquires them in this order; never reverse it.
+  // Lock ordering: roctx_stack_mutex_ and roctx_strings_mutex_ are each
+  // acquired and released independently in MarkerCallback (never nested).
+  // collector_mutex_ may be acquired after both are released.
+  // Enable() holds collector_mutex_ while acquiring the roctx locks.
 
   absl::Mutex roctx_stack_mutex_;
   absl::flat_hash_map<uint64_t, std::vector<RoctxFrame>> roctx_stack_

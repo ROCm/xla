@@ -143,7 +143,13 @@ bool RocmTracer::IsAvailable() const {
 
 absl::Status RocmTracer::Enable(const RocmTracerOptions& options,
                                 RocmTraceCollector* collector) {
-  // Clear per-session ROCTX state before starting a new context.
+  absl::MutexLock lock(collector_mutex_);
+  if (collector_ != nullptr) {
+    return absl::AlreadyExistsError("ROCM tracer is already running");
+  }
+
+  // Clear per-session state while holding collector_mutex_ so no in-flight
+  // callback can race between the clear and the new session start.
   annotation_map_.Clear();
   {
     absl::MutexLock roctx_lock(&roctx_stack_mutex_);
@@ -154,10 +160,6 @@ absl::Status RocmTracer::Enable(const RocmTracerOptions& options,
     roctx_strings_.clear();
   }
 
-  absl::MutexLock lock(collector_mutex_);
-  if (collector_ != nullptr) {
-    return absl::AlreadyExistsError("ROCM tracer is already running");
-  }
   options_ = options;
   collector_ = collector;
 
@@ -169,7 +171,6 @@ absl::Status RocmTracer::Enable(const RocmTracerOptions& options,
     return absl::InternalError(
         absl::StrCat("rocprofiler_start_context failed: ", errstr));
   }
-  annotation_map_.Clear();
   api_tracing_enabled_ = true;
   activity_tracing_enabled_ = true;
   VLOG(1) << "GpuTracer started with number of GPUs = " << NumGpus();
@@ -382,7 +383,6 @@ void RocmTracer::MarkerCallback(
       stable_msg = *roctx_strings_.insert(std::move(frame.message)).first;
     }
 
-    if (collector() == nullptr) return;
     RocmTracerEvent event;
     event.type = RocmTracerEventType::Generic;
     event.source = RocmTracerEventSource::ApiCallback;
@@ -396,7 +396,12 @@ void RocmTracer::MarkerCallback(
     event.correlation_id = frame.correlation_id;
     event.stream_id = RocmTracerEvent::kInvalidStreamId;
     event.scope_range_id = 0;
-    collector()->AddEvent(std::move(event), false);
+    {
+      absl::MutexLock lock(&collector_mutex_);
+      if (collector()) {
+        collector()->AddEvent(std::move(event), false);
+      }
+    }
 
   } else if (record.operation == ROCPROFILER_MARKER_CORE_API_ID_roctxMarkA &&
              record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
@@ -412,7 +417,6 @@ void RocmTracer::MarkerCallback(
       stable_msg = *roctx_strings_.insert(std::string(msg)).first;
     }
 
-    if (collector() == nullptr) return;
     RocmTracerEvent event;
     event.type = RocmTracerEventType::Generic;
     event.source = RocmTracerEventSource::ApiCallback;
@@ -426,7 +430,12 @@ void RocmTracer::MarkerCallback(
     event.correlation_id = record.correlation_id.internal;
     event.stream_id = RocmTracerEvent::kInvalidStreamId;
     event.scope_range_id = 0;
-    collector()->AddEvent(std::move(event), false);
+    {
+      absl::MutexLock lock(&collector_mutex_);
+      if (collector()) {
+        collector()->AddEvent(std::move(event), false);
+      }
+    }
   }
 }
 
