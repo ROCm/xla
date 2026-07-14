@@ -570,6 +570,7 @@ xla_cc_test(
         ":rocm_tracer",
         ":rocm_tracer_utils",
         "//xla/tsl/lib/core:status_test_util",
+        "//xla/tsl/platform:env_time",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",

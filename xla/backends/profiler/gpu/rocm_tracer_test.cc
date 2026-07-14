@@ -38,6 +38,7 @@ limitations under the License.
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/env_time.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 
 namespace xla {
@@ -548,8 +549,8 @@ TEST(RocmTracerTest, MarkerEventAppearsInExportedXSpace) {
   col_opts.max_annotation_strings = 1024;
   col_opts.num_gpus = tracer.NumGpus() > 0 ? tracer.NumGpus() : 1;
 
-  uint64_t start_wall = RocmTracer::GetTimestamp();
   uint64_t start_gpu = RocmTracer::GetTimestamp();
+  uint64_t start_wall = tsl::EnvTime::NowNanos();
   auto collector =
       std::make_unique<RocmTraceCollectorImpl>(col_opts, start_wall, start_gpu);
   collector->SetGpuAgents(tracer.GpuAgents());
@@ -666,8 +667,8 @@ TEST(RocmTracerTest, RealRoctxCallsProduceNvtxRangeInXSpace) {
   col_opts.max_annotation_strings = 1024;
   col_opts.num_gpus = tracer.NumGpus() > 0 ? tracer.NumGpus() : 1;
 
-  uint64_t start_wall = RocmTracer::GetTimestamp();
   uint64_t start_gpu = RocmTracer::GetTimestamp();
+  uint64_t start_wall = tsl::EnvTime::NowNanos();
   auto collector =
       std::make_unique<RocmTraceCollectorImpl>(col_opts, start_wall, start_gpu);
   collector->SetGpuAgents(tracer.GpuAgents());
