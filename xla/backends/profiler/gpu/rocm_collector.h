@@ -51,7 +51,15 @@ inline std::string ToXStat(const KernelDetails& kernel_info,
                         ? kernel_info.grid_z / kernel_info.workgroup_z
                         : 0;
 
-  return absl::StrCat(" grid:", grid_x, ",", grid_y, ",", grid_z,
+  // The "regs:", "static_shared:", "dynamic_shared:" labels must match the CUDA
+  // ToXStat format exactly -- XProf's kernel-stats parser splits on these keys
+  // to populate the Registers-per-thread and Shared-Mem columns. ROCm exposes a
+  // single static LDS size (group_segment_size) and no separate dynamic LDS, so
+  // dynamic_shared is always 0.
+  return absl::StrCat("regs:", kernel_info.registers_per_thread,
+                      " static_shared:", kernel_info.static_shared_memory,
+                      " dynamic_shared:", 0,
+                      " grid:", grid_x, ",", grid_y, ",", grid_z,
                       " block:", kernel_info.workgroup_x, ",",
                       kernel_info.workgroup_y, ",", kernel_info.workgroup_z,
                       " private_mem:", kernel_info.private_segment_size,

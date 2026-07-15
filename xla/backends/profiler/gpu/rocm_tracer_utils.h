@@ -63,6 +63,10 @@ struct KernelDetails {
   uint32_t private_segment_size;
   // The amount of shared memory (SMEM)
   uint32_t group_segment_size;
+  // Architecture VGPRs allocated per work-item
+  uint32_t registers_per_thread;
+  // Static group-segment (LDS) size in bytes
+  uint32_t static_shared_memory;
   // X-dimension of a workgroup (grid.x*block.x)
   uint32_t workgroup_x;
   // Y-dimension of a workgroup (grid.x*block.x)

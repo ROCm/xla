@@ -337,7 +337,19 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
   };
 
   auto it = kernel_info_.find(kinfo.kernel_id);
-  if (it != kernel_info_.end()) trace_event->name = it->second.name;
+  if (it != kernel_info_.end()) {
+    trace_event->name = it->second.name;
+    const auto& sym = it->second.data;
+    // Accum VGPRs (MFMA accumulators) share the per-SIMD VGPR budget with arch
+    // VGPRs, so occupancy is limited by their sum. CUDA's registersPerThread
+    // likewise counts mma/wmma accumulator registers (one regfile), so summing
+    // keeps the "registers per thread" column apples-to-apples across vendors.
+    // SGPRs are excluded: they live in a separate scalar file, matching CUDA's
+    // exclusion of uniform registers.
+    trace_event->kernel_info.registers_per_thread =
+        sym.arch_vgpr_count + sym.accum_vgpr_count;
+    trace_event->kernel_info.static_shared_memory = sym.group_segment_size;
+  }
 }
 
 void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
