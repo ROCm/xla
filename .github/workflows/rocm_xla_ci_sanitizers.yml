@@ -58,6 +58,15 @@ jobs:
         mode:
           - name: "asan"
             configs:
+              - "--config=rocm_ci"
+              - "--config=rocm_rbe"
+              - "--config=asan"
+              - "--spawn_strategy=local"
+              - "--strategy=TestRunner=local"
+              - "--flaky_test_attempts=1"
+              - "--local_test_jobs=4"
+          - name: "asan_hermetic"
+            configs:
               - "--config=rocm_ci_hermetic"
               - "--config=rocm_rbe"
               - "--config=asan"

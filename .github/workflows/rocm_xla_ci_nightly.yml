@@ -30,6 +30,7 @@ on:
       - rocm-dev-infra
     paths:
       - '.github/workflows/rocm_xla_ci_nightly.yml'
+      - '.github/workflows/rocm_xla_ci_sanitizers.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
