@@ -364,6 +364,7 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
                                 uint64_t start_gputime_ns,
                                 uint64_t end_gputime_ns,
                                 XPlaneBuilder* device_plane,
+                                XPlaneBuilder* roctx_plane,
                                 XPlaneBuilder* host_plane) {
   int host_ev_cnt = 0, dev_ev_cnt = 0;
   absl::MutexLock lock(events_mutex_);
@@ -386,12 +387,20 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
       VLOG(3) << "Ignoring event, type=" << static_cast<int>(event.type);
       continue;
     }
-    auto* plane = is_host_event ? host_plane : device_plane;
+
+    // Generic events with an roctx_range label go to the dedicated ROCTX
+    // plane so they are visually separated from HIP API trace events.
+    XPlaneBuilder* plane;
+    if (event.type == RocmTracerEventType::Generic &&
+        !event.roctx_range.empty() && roctx_plane != nullptr) {
+      plane = roctx_plane;
+    } else {
+      plane = is_host_event ? host_plane : device_plane;
+    }
     VLOG(9) << "Event"
             << " type=" << static_cast<int>(event.type)
             << " line_id=" << line_id
-            << (is_host_event ? " host plane=" : " device plane=")
-            << plane->Name();
+            << " plane=" << plane->Name();
 
     XLineBuilder line = plane->GetOrCreateLine(line_id);
     line.SetTimestampNs(start_gputime_ns);
@@ -405,6 +414,11 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
   host_plane->ForEachLine([&](XLineBuilder line) {
     line.SetName(absl::StrCat("Host Threads/", line.Id()));
   });
+  if (roctx_plane != nullptr) {
+    roctx_plane->ForEachLine([&](XLineBuilder line) {
+      line.SetName(absl::StrCat("ROCTX/", line.Id()));
+    });
+  }
   events_.clear();
 }
 
@@ -619,6 +633,8 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
   uint64_t end_gputime_ns = get_timestamp();
   XPlaneBuilder host_plane(FindOrAddMutablePlaneWithName(
       space, tsl::profiler::kRoctracerApiPlaneName));
+  XPlaneBuilder roctx_plane(FindOrAddMutablePlaneWithName(
+      space, tsl::profiler::kRoctxPlaneName));
 
   VLOG(3) << "Calling RocmTraceCollectorImpl::Export num_gpus " << num_gpus_;
 
@@ -632,10 +648,11 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
     }
     per_device_collector_[id].Export(start_walltime_ns_, start_gputime_ns_,
                                      end_gputime_ns, &device_plane,
-                                     &host_plane);
+                                     &roctx_plane, &host_plane);
     NormalizeTimeStamps(&device_plane, start_walltime_ns_);
   }
   NormalizeTimeStamps(&host_plane, start_walltime_ns_);
+  NormalizeTimeStamps(&roctx_plane, start_walltime_ns_);
   ExportScopeRangeIdTree(space);
 }
 

@@ -23,6 +23,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_set.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
+#include "xla/tsl/profiler/utils/xplane_schema.h"
 #include "xla/tsl/profiler/utils/xplane_utils.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 
@@ -199,6 +200,254 @@ TEST(RocmCollectorTest, MultipleActivitiesPerCorrelationIdAllExported) {
   EXPECT_TRUE(seen_names.contains("kernel_a"));
   EXPECT_TRUE(seen_names.contains("kernel_b"));
   EXPECT_TRUE(seen_names.contains("kernel_c"));
+}
+
+TEST(RocmCollectorTest, RoctxEventsLandInDedicatedPlane) {
+  RocmTraceCollectorOptions options;
+  options.max_callback_api_events = 100;
+  options.max_activity_api_events = 100;
+  options.max_annotation_strings = 100;
+  options.num_gpus = 1;
+
+  constexpr uint64_t kStartWallTimeNs = 1000;
+  constexpr uint64_t kStartGpuTimeNs = 1000;
+
+  RocmTraceCollectorImpl collector(options, kStartWallTimeNs, kStartGpuTimeNs);
+
+  // Generic event with roctx_range — must land in /host:ROCTX.
+  RocmTracerEvent roctx_event;
+  roctx_event.type = RocmTracerEventType::Generic;
+  roctx_event.source = RocmTracerEventSource::ApiCallback;
+  roctx_event.domain = RocmTracerEventDomain::HIP_API;
+  roctx_event.name = "train_step";
+  roctx_event.roctx_range = "train_step";
+  roctx_event.start_time_ns = 2000;
+  roctx_event.end_time_ns = 3000;
+  roctx_event.thread_id = 42;
+  roctx_event.device_id = RocmTracerEvent::kInvalidDeviceId;
+  roctx_event.stream_id = RocmTracerEvent::kInvalidStreamId;
+  roctx_event.correlation_id = RocmTracerEvent::kInvalidCorrelationId;
+  collector.AddEvent(std::move(roctx_event), /*is_auxiliary=*/false);
+
+  // Generic event without roctx_range — must land in /host:ROCTRACER.
+  RocmTracerEvent generic_event;
+  generic_event.type = RocmTracerEventType::Generic;
+  generic_event.source = RocmTracerEventSource::ApiCallback;
+  generic_event.domain = RocmTracerEventDomain::HIP_API;
+  generic_event.name = "no_roctx";
+  generic_event.roctx_range = {};
+  generic_event.start_time_ns = 2000;
+  generic_event.end_time_ns = 3000;
+  generic_event.thread_id = 43;
+  generic_event.device_id = RocmTracerEvent::kInvalidDeviceId;
+  generic_event.stream_id = RocmTracerEvent::kInvalidStreamId;
+  generic_event.correlation_id = RocmTracerEvent::kInvalidCorrelationId;
+  collector.AddEvent(std::move(generic_event), /*is_auxiliary=*/false);
+
+  collector.Flush();
+  tensorflow::profiler::XSpace space;
+  collector.Export(&space);
+
+  // Find the ROCTX plane.
+  bool found_roctx_plane = false;
+  bool roctx_event_in_roctx_plane = false;
+  bool roctx_event_in_roctracer_plane = false;
+
+  for (const auto& plane : space.planes()) {
+    if (plane.name() == tsl::profiler::kRoctxPlaneName) {
+      found_roctx_plane = true;
+      for (const auto& line : plane.lines()) {
+        for (const auto& ev : line.events()) {
+          const auto& name =
+              plane.event_metadata().at(ev.metadata_id()).name();
+          if (name == "train_step") roctx_event_in_roctx_plane = true;
+        }
+      }
+    }
+    if (plane.name() == tsl::profiler::kRoctracerApiPlaneName) {
+      for (const auto& line : plane.lines()) {
+        for (const auto& ev : line.events()) {
+          const auto& name =
+              plane.event_metadata().at(ev.metadata_id()).name();
+          if (name == "train_step") roctx_event_in_roctracer_plane = true;
+        }
+      }
+    }
+  }
+
+  EXPECT_TRUE(found_roctx_plane) << "/host:ROCTX plane must exist";
+  EXPECT_TRUE(roctx_event_in_roctx_plane)
+      << "Generic event with roctx_range must land in /host:ROCTX";
+  EXPECT_FALSE(roctx_event_in_roctracer_plane)
+      << "Generic event with roctx_range must NOT be in /host:ROCTRACER";
+}
+
+TEST(RocmCollectorTest, GenericEventWithoutRoctxRangeLandsInRoctracerPlane) {
+  RocmTraceCollectorOptions options;
+  options.max_callback_api_events = 100;
+  options.max_activity_api_events = 100;
+  options.max_annotation_strings = 100;
+  options.num_gpus = 1;
+
+  constexpr uint64_t kStartWallTimeNs = 1000;
+  constexpr uint64_t kStartGpuTimeNs = 1000;
+
+  RocmTraceCollectorImpl collector(options, kStartWallTimeNs, kStartGpuTimeNs);
+
+  RocmTracerEvent generic_event;
+  generic_event.type = RocmTracerEventType::Generic;
+  generic_event.source = RocmTracerEventSource::ApiCallback;
+  generic_event.domain = RocmTracerEventDomain::HIP_API;
+  generic_event.name = "no_roctx";
+  generic_event.roctx_range = {};
+  generic_event.start_time_ns = 2000;
+  generic_event.end_time_ns = 3000;
+  generic_event.thread_id = 44;
+  generic_event.device_id = RocmTracerEvent::kInvalidDeviceId;
+  generic_event.stream_id = RocmTracerEvent::kInvalidStreamId;
+  generic_event.correlation_id = RocmTracerEvent::kInvalidCorrelationId;
+  collector.AddEvent(std::move(generic_event), /*is_auxiliary=*/false);
+
+  collector.Flush();
+  tensorflow::profiler::XSpace space;
+  collector.Export(&space);
+
+  bool event_in_roctracer = false;
+  bool event_in_roctx = false;
+
+  for (const auto& plane : space.planes()) {
+    for (const auto& line : plane.lines()) {
+      for (const auto& ev : line.events()) {
+        const auto& name = plane.event_metadata().at(ev.metadata_id()).name();
+        if (name != "no_roctx") continue;
+        if (plane.name() == tsl::profiler::kRoctracerApiPlaneName)
+          event_in_roctracer = true;
+        if (plane.name() == tsl::profiler::kRoctxPlaneName)
+          event_in_roctx = true;
+      }
+    }
+  }
+
+  EXPECT_TRUE(event_in_roctracer)
+      << "Generic event without roctx_range must land in /host:ROCTRACER";
+  EXPECT_FALSE(event_in_roctx)
+      << "Generic event without roctx_range must NOT be in /host:ROCTX";
+}
+
+
+TEST(RocmCollectorTest, RoctxEventsLandInDedicatedPlane) {
+  RocmTraceCollectorOptions options;
+  options.max_callback_api_events = 100;
+  options.max_activity_api_events = 100;
+  options.max_annotation_strings = 100;
+  options.num_gpus = 1;
+
+  constexpr uint64_t kStartWallTimeNs = 1000;
+  constexpr uint64_t kStartGpuTimeNs = 1000;
+
+  RocmTraceCollectorImpl collector(options, kStartWallTimeNs, kStartGpuTimeNs);
+
+  RocmTracerEvent roctx_event;
+  roctx_event.type = RocmTracerEventType::Generic;
+  roctx_event.source = RocmTracerEventSource::ApiCallback;
+  roctx_event.domain = RocmTracerEventDomain::HIP_API;
+  roctx_event.name = "train_step";
+  roctx_event.roctx_range = "train_step";
+  roctx_event.start_time_ns = 2000;
+  roctx_event.end_time_ns = 3000;
+  roctx_event.thread_id = 42;
+  roctx_event.device_id = RocmTracerEvent::kInvalidDeviceId;
+  roctx_event.stream_id = RocmTracerEvent::kInvalidStreamId;
+  roctx_event.correlation_id = RocmTracerEvent::kInvalidCorrelationId;
+  collector.AddEvent(std::move(roctx_event), /*is_auxiliary=*/false);
+
+  collector.Flush();
+  tensorflow::profiler::XSpace space;
+  collector.Export(&space);
+
+  bool found_roctx_plane = false;
+  bool roctx_event_in_roctx_plane = false;
+  bool roctx_event_in_roctracer_plane = false;
+
+  for (const auto& plane : space.planes()) {
+    if (plane.name() == tsl::profiler::kRoctxPlaneName) {
+      found_roctx_plane = true;
+      for (const auto& line : plane.lines()) {
+        for (const auto& ev : line.events()) {
+          const auto& name =
+              plane.event_metadata().at(ev.metadata_id()).name();
+          if (name == "train_step") roctx_event_in_roctx_plane = true;
+        }
+      }
+    }
+    if (plane.name() == tsl::profiler::kRoctracerApiPlaneName) {
+      for (const auto& line : plane.lines()) {
+        for (const auto& ev : line.events()) {
+          const auto& name =
+              plane.event_metadata().at(ev.metadata_id()).name();
+          if (name == "train_step") roctx_event_in_roctracer_plane = true;
+        }
+      }
+    }
+  }
+
+  EXPECT_TRUE(found_roctx_plane) << "/host:ROCTX plane must exist";
+  EXPECT_TRUE(roctx_event_in_roctx_plane)
+      << "Generic event with roctx_range must land in /host:ROCTX";
+  EXPECT_FALSE(roctx_event_in_roctracer_plane)
+      << "Generic event with roctx_range must NOT be in /host:ROCTRACER";
+}
+
+TEST(RocmCollectorTest, GenericEventWithoutRoctxRangeLandsInRoctracerPlane) {
+  RocmTraceCollectorOptions options;
+  options.max_callback_api_events = 100;
+  options.max_activity_api_events = 100;
+  options.max_annotation_strings = 100;
+  options.num_gpus = 1;
+
+  constexpr uint64_t kStartWallTimeNs = 1000;
+  constexpr uint64_t kStartGpuTimeNs = 1000;
+
+  RocmTraceCollectorImpl collector(options, kStartWallTimeNs, kStartGpuTimeNs);
+
+  RocmTracerEvent generic_event;
+  generic_event.type = RocmTracerEventType::Generic;
+  generic_event.source = RocmTracerEventSource::ApiCallback;
+  generic_event.domain = RocmTracerEventDomain::HIP_API;
+  generic_event.name = "no_roctx";
+  generic_event.roctx_range = {};
+  generic_event.start_time_ns = 2000;
+  generic_event.end_time_ns = 3000;
+  generic_event.thread_id = 44;
+  generic_event.device_id = RocmTracerEvent::kInvalidDeviceId;
+  generic_event.stream_id = RocmTracerEvent::kInvalidStreamId;
+  generic_event.correlation_id = RocmTracerEvent::kInvalidCorrelationId;
+  collector.AddEvent(std::move(generic_event), /*is_auxiliary=*/false);
+
+  collector.Flush();
+  tensorflow::profiler::XSpace space;
+  collector.Export(&space);
+
+  bool event_in_roctracer = false;
+  bool event_in_roctx = false;
+
+  for (const auto& plane : space.planes()) {
+    for (const auto& line : plane.lines()) {
+      for (const auto& ev : line.events()) {
+        const auto& name = plane.event_metadata().at(ev.metadata_id()).name();
+        if (name != "no_roctx") continue;
+        if (plane.name() == tsl::profiler::kRoctracerApiPlaneName)
+          event_in_roctracer = true;
+        if (plane.name() == tsl::profiler::kRoctxPlaneName)
+          event_in_roctx = true;
+      }
+    }
+  }
+
+  EXPECT_TRUE(event_in_roctracer)
+      << "Generic event without roctx_range must land in /host:ROCTRACER";
+  EXPECT_FALSE(event_in_roctx)
+      << "Generic event without roctx_range must NOT be in /host:ROCTX";
 }
 
 }  // namespace test

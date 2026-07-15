@@ -68,7 +68,7 @@ void MergeHostPlanesAndSortLines(tensorflow::profiler::XSpace* space) {
   std::vector<const XPlane*> additional_host_planes = FindPlanesWithNames(
       *space,
       {kTpuRuntimePlaneName, kCuptiDriverApiPlaneName, kPythonTracerPlaneName,
-       kRoctracerApiPlaneName, kHostThreadsPlaneName});
+       kRoctracerApiPlaneName, kRoctxPlaneName, kHostThreadsPlaneName});
   absl::flat_hash_set<int64_t> occupied_line_ids =
       GetOccupiedLineIds(additional_host_planes);
   tensorflow::profiler::XPlane* host_plane = space->add_planes();

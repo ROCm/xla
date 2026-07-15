@@ -40,13 +40,19 @@ void PushAnnotation(const T& generator) {
   if (auto domain = DefaultProfilerDomain();
       TF_PREDICT_FALSE(domain != nullptr)) {
     RangePush(domain, generator());
+    // On CUDA the NVTX path is sufficient — CUPTI propagates NVTX ranges to
+    // kernel events natively, so AnnotationStack is not needed.
     return;
   }
 
 #if !defined(IS_MOBILE_PLATFORM)
   if (TF_PREDICT_FALSE(AnnotationStack::IsEnabled())) {
-    AnnotationStack::PushAnnotation(
-        static_cast<absl::string_view>(generator()));
+    auto annotation = static_cast<absl::string_view>(generator());
+    AnnotationStack::PushAnnotation(annotation);
+    // On ROCm, also emit a ROCTX range so the annotation appears as a named
+    // band in the host timeline. RangePush is a no-op when the stub is linked,
+    // and calls roctxRangePushA when the ROCm implementation is linked.
+    RangePush(nullptr, std::string(annotation).c_str());
   }
 #endif
 }
@@ -72,6 +78,7 @@ inline void PopAnnotation() {
 #if !defined(IS_MOBILE_PLATFORM)
   if (TF_PREDICT_FALSE(AnnotationStack::IsEnabled())) {
     AnnotationStack::PopAnnotation();
+    RangePop(nullptr);
   }
 #endif
 }

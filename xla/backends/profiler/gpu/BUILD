@@ -571,6 +571,7 @@ xla_cc_test(
         ":rocm_tracer_utils",
         "//xla/tsl/lib/core:status_test_util",
         "//xla/tsl/platform:env_time",
+        "//xla/tsl/profiler/backends/cpu:annotation_stack",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
@@ -579,6 +580,7 @@ xla_cc_test(
         "@local_config_rocm//rocm:hip",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocm_headers",
         "@local_config_rocm//rocm:rocprofiler_sdk",  # buildcleaner: keep
+        "@tsl//tsl/profiler/lib:scoped_annotation",
         "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],
 )
@@ -599,6 +601,7 @@ xla_cc_test(
         ":rocm_tracer_utils",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_googletest//:gtest_main",
+        "//xla/tsl/profiler/utils:xplane_schema",
         "//xla/tsl/profiler/utils:xplane_utils",
         "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],

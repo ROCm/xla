@@ -39,6 +39,8 @@ limitations under the License.
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/tsl/platform/env_time.h"
+#include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
+#include "tsl/profiler/lib/scoped_annotation.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 
 namespace xla {
@@ -742,6 +744,167 @@ TEST(RocmTracerTest, RealRoctxCallsProduceNvtxRangeInXSpace) {
         << "Expected 'unit_test_mark' in nvtx_range labels. Found: "
         << absl::StrJoin(found_labels, ", ");
   }
+}
+
+// ============================================================================
+// ScopedAnnotation → ROCTX integration tests.
+// Verify that tsl::profiler::ScopedAnnotation (the C++ primitive backing
+// jax.profiler.TraceAnnotation) emits ROCTX ranges that appear as
+// kNVTXRange stats in the exported XSpace, in addition to populating the
+// AnnotationStack for kernel-level correlation.
+// ============================================================================
+
+TEST(RocmTracerTest, ScopedAnnotationEmitsRoctxRange) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  ASSERT_TRUE(tracer.IsAvailable());
+
+  RocmTraceCollectorOptions col_opts;
+  col_opts.max_callback_api_events = 1024;
+  col_opts.max_activity_api_events = 1024;
+  col_opts.max_annotation_strings = 1024;
+  col_opts.num_gpus = tracer.NumGpus() > 0 ? tracer.NumGpus() : 1;
+
+  uint64_t start_gpu = RocmTracer::GetTimestamp();
+  uint64_t start_wall = tsl::EnvTime::NowNanos();
+  auto collector =
+      std::make_unique<RocmTraceCollectorImpl>(col_opts, start_wall, start_gpu);
+  collector->SetGpuAgents(tracer.GpuAgents());
+
+  RocmTracerOptions opts{/*max_annotation_strings=*/1024};
+  TF_ASSERT_OK(tracer.Enable(opts, collector.get()));
+
+  // ScopedAnnotation is the C++ primitive behind jax.profiler.TraceAnnotation.
+  // On ROCm, PushAnnotation() should both push to AnnotationStack AND call
+  // roctxRangePushA so that rocprofiler-sdk's MarkerCallback captures it.
+  {
+    tsl::profiler::ScopedAnnotation outer("train_step");
+    {
+      tsl::profiler::ScopedAnnotation inner("forward_pass");
+      // Verify AnnotationStack is also populated (kernel correlation path).
+      std::string stack = tsl::profiler::AnnotationStack::Get();
+      EXPECT_NE(stack.find("train_step"), std::string::npos)
+          << "AnnotationStack should contain 'train_step', got: " << stack;
+      EXPECT_NE(stack.find("forward_pass"), std::string::npos)
+          << "AnnotationStack should contain 'forward_pass', got: " << stack;
+    }
+  }
+
+  tracer.Disable();
+
+  tsl::profiler::XSpace space;
+  collector->Export(&space);
+
+  // Verify kNVTXRange stats appear in the exported XSpace.
+  bool found_nvtx_stat = false;
+  std::set<std::string> found_labels;
+
+  for (const auto& plane : space.planes()) {
+    int64_t nvtx_stat_id = -1;
+    for (const auto& [sid, smd] : plane.stat_metadata()) {
+      if (smd.name() == "nvtx_range") {
+        nvtx_stat_id = sid;
+        found_nvtx_stat = true;
+        break;
+      }
+    }
+    if (nvtx_stat_id < 0) continue;
+
+    for (const auto& line : plane.lines()) {
+      for (const auto& event : line.events()) {
+        for (const auto& stat : event.stats()) {
+          if (stat.metadata_id() != nvtx_stat_id) continue;
+          if (stat.value_case() == tensorflow::profiler::XStat::kRefValue) {
+            auto it = plane.stat_metadata().find(stat.ref_value());
+            if (it != plane.stat_metadata().end()) {
+              found_labels.insert(it->second.name());
+            }
+          } else if (stat.value_case() ==
+                     tensorflow::profiler::XStat::kStrValue) {
+            found_labels.insert(stat.str_value());
+          }
+        }
+      }
+    }
+  }
+
+  EXPECT_TRUE(found_nvtx_stat)
+      << "XSpace should contain 'nvtx_range' stat after ScopedAnnotation. "
+         "This means ScopedAnnotation → roctxRangePushA → MarkerCallback → "
+         "kNVTXRange is working end-to-end.";
+  if (found_nvtx_stat) {
+    EXPECT_TRUE(found_labels.count("train_step"))
+        << "Expected 'train_step' in nvtx_range labels. Found: "
+        << absl::StrJoin(found_labels, ", ");
+    EXPECT_TRUE(found_labels.count("forward_pass"))
+        << "Expected 'forward_pass' in nvtx_range labels. Found: "
+        << absl::StrJoin(found_labels, ", ");
+  }
+}
+
+TEST(RocmTracerTest, ScopedAnnotationPreservesAnnotationStack) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  ASSERT_TRUE(tracer.IsAvailable());
+
+  auto collector = std::make_unique<MarkerCapturingCollector>();
+  MarkerCapturingCollector* cptr = collector.get();
+
+  RocmTracerOptions opts{/*max_annotation_strings=*/1024};
+  TF_ASSERT_OK(tracer.Enable(opts, cptr));
+
+  // Verify that after push/pop, the AnnotationStack is back to its original
+  // state — ScopedAnnotation must not leave stale state in either system.
+  std::string before = tsl::profiler::AnnotationStack::Get();
+  {
+    tsl::profiler::ScopedAnnotation ann("ephemeral");
+    EXPECT_NE(tsl::profiler::AnnotationStack::Get().find("ephemeral"),
+              std::string::npos);
+  }
+  std::string after = tsl::profiler::AnnotationStack::Get();
+  EXPECT_EQ(before, after)
+      << "AnnotationStack must be restored after ScopedAnnotation destructs";
+
+  tracer.Disable();
+
+  // Verify ROCTX event was also emitted.
+  auto events = cptr->TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].roctx_range, "ephemeral");
+}
+
+TEST(RocmTracerTest, NestedScopedAnnotationsProduceCorrectRoctxOrder) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  ASSERT_TRUE(tracer.IsAvailable());
+
+  auto collector = std::make_unique<MarkerCapturingCollector>();
+  MarkerCapturingCollector* cptr = collector.get();
+
+  RocmTracerOptions opts{/*max_annotation_strings=*/1024};
+  TF_ASSERT_OK(tracer.Enable(opts, cptr));
+
+  // Nested annotations: inner should complete before outer.
+  {
+    tsl::profiler::ScopedAnnotation outer("level_1");
+    {
+      tsl::profiler::ScopedAnnotation inner("level_2");
+    }  // inner pops here → emits level_2 event
+  }    // outer pops here → emits level_1 event
+
+  tracer.Disable();
+
+  auto events = cptr->TakeEvents();
+  ASSERT_EQ(events.size(), 2u)
+      << "Two nested ScopedAnnotations should produce two ROCTX events";
+
+  // Inner event emitted first (LIFO: pop happens in destructor order).
+  EXPECT_EQ(events[0].roctx_range, "level_2");
+  EXPECT_EQ(events[1].roctx_range, "level_1");
+
+  // Inner must end before outer.
+  EXPECT_LE(events[0].end_time_ns, events[1].end_time_ns)
+      << "Inner annotation must end before outer annotation";
+  // Inner must start after outer.
+  EXPECT_GE(events[0].start_time_ns, events[1].start_time_ns)
+      << "Inner annotation must start after outer annotation";
 }
 
 }  // namespace

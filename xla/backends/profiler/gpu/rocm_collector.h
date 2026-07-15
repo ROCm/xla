@@ -154,6 +154,7 @@ class PerDeviceCollector {
   void Export(uint64_t start_walltime_ns, uint64_t start_gputime_ns,
               uint64_t end_gputime_ns,
               tsl::profiler::XPlaneBuilder* device_plane,
+              tsl::profiler::XPlaneBuilder* roctx_plane,
               tsl::profiler::XPlaneBuilder* host_plane);
 
   PerDeviceCollector() = default;

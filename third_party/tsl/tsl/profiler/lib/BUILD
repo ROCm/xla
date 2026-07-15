@@ -8,6 +8,10 @@ load(
     "if_cuda_is_configured",
 )
 load(
+    "@local_config_rocm//rocm:build_defs.bzl",
+    "if_rocm_is_configured",
+)
+load(
     "@xla//xla/tsl/profiler/builds:build_config.bzl",
     "tf_profiler_copts",
     "tf_profiler_pybind_cc_library_wrapper",
@@ -305,7 +309,10 @@ cc_library(
     name = "nvtx_utils_impl",
     srcs = if_cuda_is_configured(
         ["nvtx_utils.cc"],
-        ["nvtx_utils_stub.cc"],
+        if_rocm_is_configured(
+            ["nvtx_utils_rocm.cc"],
+            ["nvtx_utils_stub.cc"],
+        ),
     ),
     hdrs = ["nvtx_utils.h"],
     visibility = ["//visibility:public"],

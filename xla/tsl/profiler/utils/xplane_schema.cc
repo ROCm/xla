@@ -49,6 +49,7 @@ const absl::string_view kTpuRuntimePlaneName = "/host:TPU-runtime";
 const absl::string_view kCuptiDriverApiPlaneName = "/host:CUPTI";
 const absl::string_view kCuptiActivityNvtxPlaneName = "/host:NVTX-CUPTI";
 const absl::string_view kRoctracerApiPlaneName = "/host:ROCTRACER";
+const absl::string_view kRoctxPlaneName = "/host:ROCTX";
 const absl::string_view kMetadataPlaneName = "/host:metadata";
 const absl::string_view kTFStreamzPlaneName = "/host:tfstreamz";
 const absl::string_view kPythonTracerPlaneName = "/host:python-tracer";
