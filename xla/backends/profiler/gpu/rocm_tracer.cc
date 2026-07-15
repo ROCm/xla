@@ -393,7 +393,8 @@ void RocmTracer::MarkerCallback(
     event.end_time_ns = ts;
     event.thread_id = tid;
     event.device_id = RocmTracerEvent::kInvalidDeviceId;
-    event.correlation_id = frame.correlation_id;
+    event.correlation_id =
+        static_cast<uint32_t>(frame.correlation_id);
     event.stream_id = RocmTracerEvent::kInvalidStreamId;
     event.scope_range_id = 0;
     {
@@ -427,7 +428,8 @@ void RocmTracer::MarkerCallback(
     event.end_time_ns = ts;
     event.thread_id = tid;
     event.device_id = RocmTracerEvent::kInvalidDeviceId;
-    event.correlation_id = record.correlation_id.internal;
+    event.correlation_id =
+        static_cast<uint32_t>(record.correlation_id.internal);
     event.stream_id = RocmTracerEvent::kInvalidStreamId;
     event.scope_range_id = 0;
     {

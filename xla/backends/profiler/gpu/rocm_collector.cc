@@ -607,8 +607,10 @@ void RocmTraceCollectorImpl::Flush() {
 
   // Flush standalone events (e.g. ROCTX markers) directly — they have no
   // GPU-side activity counterpart and bypass ApiActivityInfoExchange.
-  for (auto& event : standalone_events_) {
-    per_device_collector_[0].AddEvent(std::move(event));
+  if (num_gpus_ > 0) {
+    for (auto& event : standalone_events_) {
+      per_device_collector_[0].AddEvent(std::move(event));
+    }
   }
   standalone_events_.clear();
 
