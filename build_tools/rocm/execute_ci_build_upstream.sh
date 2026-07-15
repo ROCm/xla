@@ -5,7 +5,7 @@ set -ex
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
 EXCLUDED_TESTS=(
-    "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
+    "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBEaa
     "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
     "TritonEmitterTest.ScaledDotIsSupportedByReferencePlatform"
 )
