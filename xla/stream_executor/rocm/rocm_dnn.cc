@@ -3016,12 +3016,12 @@ MIOpenSupport::ConvolveRunnerFromDesc(
         &algorithms, /* maxSolutionCount= */ -1));
     auto it = std::find_if(
         algorithms.begin(), algorithms.end(),
-        [](const auto& x) { return *x.algorithm().workspace_size() < 1048576; });
+        [](const auto& x) { return *x.algorithm().workspace_size() == 0; });
     if (it == algorithms.end()) {
       return absl::InternalError("No algorithms found for algo_id(0)");
     }
     algo_id = it->algorithm().algo_id();
-    workspace_size = it->algorithm().workspace_size().value();
+    workspace_size = 0;
   }
 
   TF_ASSIGN_OR_RETURN(auto scoped_input_desc,

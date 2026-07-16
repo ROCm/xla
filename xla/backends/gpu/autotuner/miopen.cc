@@ -252,7 +252,6 @@ absl::StatusOr<std::unique_ptr<BackendConfig>> MIOpenBackend::GetDefaultConfig(
   if (IsSupported(instr)) {
     MIOpenBackendConfig config;
     config.set_algo_id(0);
-    config.mutable_workspace_size()->set_value(1048576);
     auto any = std::make_unique<google::protobuf::Any>();
     any->PackFrom(config);
     return any;
