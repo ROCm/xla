@@ -68,18 +68,18 @@ class BlockLevelEmitterBackend : public GpuCodegenBackend {
   // Returns all supported block-level tiling configurations for the given
   // instruction.
   absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-  GetSupportedConfigs(const HloInstruction& instr) override;
+  GetSupportedConfigs(const HloInstruction& instr) const override;
 
   // Returns a default block-level configuration for the instruction.
   absl::StatusOr<std::unique_ptr<BackendConfig>> GetDefaultConfig(
-      const HloInstruction& instr) override;
+      const HloInstruction& instr) const override;
 
   // Applies a given block-level fusion configuration to the instruction.
   absl::Status ApplyConfig(HloInstruction& instr,
-                           const BackendConfig& config) override;
+                           const BackendConfig& config) const override;
 
   // Determines whether the given HLO instruction is supported by this backend.
-  bool IsSupported(const HloInstruction& instr) override;
+  bool IsSupported(const HloInstruction& instr) const override;
 
   // We don't want to use the Triton emitter as a reference because it can
   // produce wrong results.
@@ -88,7 +88,7 @@ class BlockLevelEmitterBackend : public GpuCodegenBackend {
 
  private:
   absl::StatusOr<BlockLevelFusionConfig> GetCostModelConfig(
-      const HloInstruction& instr);
+      const HloInstruction& instr) const;
   // A function which returns the size in bytes of the top-level buffer of a
   // shape.
   HloCostAnalysis::ShapeSizeFunction shape_size_fn_;

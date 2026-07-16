@@ -47,22 +47,22 @@ class NativeEmitterBackend : public GpuCodegenBackend {
 
   // Returns all supported configurations for the given instruction.
   absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-  GetSupportedConfigs(const HloInstruction& instr) override;
+  GetSupportedConfigs(const HloInstruction& instr) const override;
 
   // Returns a default configuration for the instruction.
   absl::StatusOr<std::unique_ptr<BackendConfig>> GetDefaultConfig(
-      const HloInstruction& instr) override;
+      const HloInstruction& instr) const override;
 
   // Applies a given fusion config to the instruction.
   absl::Status ApplyConfig(HloInstruction& instr,
-                           const BackendConfig& config) override;
+                           const BackendConfig& config) const override;
 
   // Update manually if some change affects native emitters performance
   // significantly.
   std::string version() const override { return "v1"; }
 
  private:
-  bool IsSupported(const HloInstruction& instr) override;
+  bool IsSupported(const HloInstruction& instr) const override;
 };
 
 }  // namespace gpu

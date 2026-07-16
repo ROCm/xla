@@ -64,15 +64,15 @@ class CudnnBackend : public GpuCodegenBackend {
                           target_config, stream_executor) {}
 
   absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
-  GetSupportedConfigs(const HloInstruction& instr) override;
+  GetSupportedConfigs(const HloInstruction& instr) const override;
 
   absl::StatusOr<std::unique_ptr<BackendConfig>> GetDefaultConfig(
-      const HloInstruction& instr) override;
+      const HloInstruction& instr) const override;
 
   // Can replace the instruction with a new one in the parent computation, to
   // apply the configs with non-zero workspace size.
   absl::Status ApplyConfig(HloInstruction& instr,
-                           const BackendConfig& config) override;
+                           const BackendConfig& config) const override;
 
   bool CanProduceWrongResults() const override { return true; }
 
@@ -81,7 +81,7 @@ class CudnnBackend : public GpuCodegenBackend {
   }
 
  private:
-  bool IsSupported(const HloInstruction& instr) override;
+  bool IsSupported(const HloInstruction& instr) const override;
 };
 
 }  // namespace gpu

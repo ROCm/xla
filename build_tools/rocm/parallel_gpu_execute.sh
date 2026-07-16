@@ -25,6 +25,17 @@ ROCMINFO=$(find -L "${TEST_SRCDIR:-.}" -name "rocminfo" -path "*/bin/rocminfo" |
 TF_GPU_COUNT=$($ROCMINFO | grep "Name: *gfx*" | wc -l)
 TF_TESTS_PER_GPU=${TF_TESTS_PER_GPU:-8}
 
+# When this script is picked as --run_under together with --config=asan/tsan
+# (--run_under is single-valued, so whichever config is expanded last wins),
+# it replaces //build_tools/rocm:sanitizer_wrapper outright, so the
+# symbolizer setup has to be duplicated here too.
+wrapper_runfiles="${RUNFILES_DIR:-$0.runfiles}"
+symbolizer=$(find -L "${wrapper_runfiles}" -path "*/bin/llvm-symbolizer" | head -n 1)
+if [[ -n "$symbolizer" ]]; then
+  export ASAN_OPTIONS="${ASAN_OPTIONS:+${ASAN_OPTIONS}:}external_symbolizer_path=${symbolizer}"
+  export TSAN_OPTIONS="${TSAN_OPTIONS:+${TSAN_OPTIONS}:}external_symbolizer_path=${symbolizer}"
+fi
+
 # There are certain tests in xla that do not require any gpu in order to be executed
 # here we allow executing these tests on a machine without gpu support.
 # if there are no GPUs on that system e.g rbe default pool then execute the test without lock

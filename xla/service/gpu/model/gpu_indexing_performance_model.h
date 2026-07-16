@@ -82,7 +82,7 @@ class GpuPerformanceModelWithIndexingAnalysis : public GpuPerformanceModelBase {
   absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputation(
       const HloFusionAdaptor& fusion_adaptor,
       const TiledHloComputation& tiled_hlo_computation,
-      const BlockLevelParameters& block_level_parameters);
+      const BlockLevelParameters& block_level_parameters) const;
 
   // Estimate the run time of the fusion with the given launch dimensions and
   // output tile sizes.
@@ -92,13 +92,13 @@ class GpuPerformanceModelWithIndexingAnalysis : public GpuPerformanceModelBase {
   // access and computation.
   absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledFusion(
       const HloFusionAdaptor& fusion_adaptor,
-      const BlockLevelParameters& block_level_parameters);
+      const BlockLevelParameters& block_level_parameters) const;
 
   // Estimate the run time of an Hlo instruction assuming it is emitted by
   // Triton.
   absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTriton(
       const HloInstruction* instr,
-      const BlockLevelParameters* block_level_parameters = nullptr);
+      const BlockLevelParameters* block_level_parameters = nullptr) const;
 
   // Estimates the best tile sizes for the given fusion. Iterates over all the
   // good tile sizes provided by SymbolicTileAnalysis, estimates the run time
@@ -109,23 +109,30 @@ class GpuPerformanceModelWithIndexingAnalysis : public GpuPerformanceModelBase {
   // block level parameters.
   // Otherwise returns block level parameters that give the best execution time.
   absl::StatusOr<TiledRunTimeDataOrError> TryFindBestTilingForFusion(
-      const HloFusionAdaptor& fusion_adaptor);
+      const HloFusionAdaptor& fusion_adaptor) const;
 
   // Returns top_k (possibly fewer if not enough valid tilings are found) block
   // level parameters for the given fusion.
   absl::StatusOr<TopKTiledRunTimeDataOrError> TryFindTopKBestTilingsForFusion(
-      const HloFusionAdaptor& fusion_adaptor, int top_k);
+      const HloFusionAdaptor& fusion_adaptor, int top_k) const;
 
   // Returns an estimate how many FLOPs will be used to produce one element of
   // the output.
-  int64_t FlopsPerElement(const HloInstruction* instr);
+  int64_t FlopsPerElement(const HloInstruction* instr) const;
 
  private:
   const HloOpProfiles::HloOpProfile* hlo_op_profile_;
   const se::DeviceDescription* device_info_;
   HloFusionAnalysisCache* fusion_analysis_cache_;
   HloCostAnalysis::ShapeSizeFunction shape_size_;
-  GpuHloCostAnalysis cost_analysis_;
+  // Used only for the stateless, const `GetFlopsPerElementwiseOpElement`
+  // lookup in `FlopsPerElement`. Any computation that needs
+  // `GpuHloCostAnalysis`'s stateful instruction visitor (e.g.
+  // `RevisitInstruction`) must use a scratch instance local to that call
+  // instead of this member, so that this class remains safe to call
+  // concurrently from multiple threads on the same instance (see
+  // `CodegenBackend`).
+  const GpuHloCostAnalysis cost_analysis_;
   mlir::MLIRContext* mlir_context_;
   bool use_experimental_tiling_;
 };

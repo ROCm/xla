@@ -42,20 +42,20 @@ class LlvmKernelBackend : public CpuCodegenBackend {
   using Config = LlvmKernelOptions;
 
   absl::StatusOr<std::vector<std::unique_ptr<xla::BackendConfig>>>
-  GetSupportedConfigs(const HloInstruction& instr) final;
+  GetSupportedConfigs(const HloInstruction& instr) const final;
 
   absl::StatusOr<std::unique_ptr<xla::BackendConfig>> GetDefaultConfig(
-      const HloInstruction& instr) final;
+      const HloInstruction& instr) const final;
 
   absl::Status ApplyConfig(HloInstruction& instr,
-                           const xla::BackendConfig& config) final;
+                           const xla::BackendConfig& config) const final;
 
   autotuner::Backend backend() const final {
     return autotuner::Backend::LLVM_KERNEL_EMITTER;
   }
 
  protected:
-  bool IsSupported(const HloInstruction& instr);
+  bool IsSupported(const HloInstruction& instr) const;
 
   explicit LlvmKernelBackend(Compiler* compiler)
       : CpuCodegenBackend(compiler, kLlvmKernelBackendName) {}
