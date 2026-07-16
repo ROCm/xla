@@ -51,6 +51,25 @@ xla_cc_test(
 )
 
 cc_library(
+    name = "rocm_flops_table",
+    srcs = ["rocm_flops_table.cc"],
+    hdrs = ["rocm_flops_table.h"],
+    deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "rocm_flops_table_test",
+    srcs = ["rocm_flops_table_test.cc"],
+    deps = [
+        ":rocm_flops_table",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "rocm_context",
     hdrs = ["rocm_context.h"],
     tags = [

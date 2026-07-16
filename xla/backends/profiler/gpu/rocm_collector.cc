@@ -36,6 +36,8 @@ limitations under the License.
 #include "rocm/include/rocprofiler-sdk/fwd.h"
 #include "rocm/include/rocprofiler-sdk/rocprofiler.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
+#include "xla/stream_executor/rocm/rocm_flops_table.h"
 #include "xla/tsl/platform/status.h"
 #include "xla/tsl/profiler/utils/parse_annotation.h"
 #include "xla/tsl/profiler/utils/trace_utils.h"
@@ -490,6 +492,26 @@ void PerDeviceCollector::GetDeviceCapabilities(
           *device_plane->GetOrCreateStatMetadata(
               GetStatTypeStr(StatType::kDevCapComputeCapMinor)),
           compute_capability_minor);
+    }
+
+    // Emit a precomputed peak FLOP rate. Unlike NVIDIA, whose peak flops is
+    // derived downstream in xprof from an sm_XX table, AMD has no such table, so
+    // the collector -- which holds the exact arch and CU count -- computes it
+    // here and writes the neutral peak_teraflops_per_second stat (the same one
+    // libtpu emits for TPU). A zero result (unknown arch) emits nothing, leaving
+    // downstream fallback behavior unchanged.
+    if (agent.cu_count && clock_rate_in_khz && agent.name != nullptr) {
+      const std::string gfx_version =
+          stream_executor::RocmComputeCapability(agent.name).gfx_version();
+      const double clock_hz = static_cast<double>(clock_rate_in_khz) * 1000.0;
+      const double peak_tflops = stream_executor::gpu::GetRocmPeakTeraflopsPerSecond(
+          gfx_version, agent.cu_count, clock_hz);
+      if (peak_tflops > 0.0) {
+        device_plane->AddStatValue(
+            *device_plane->GetOrCreateStatMetadata(
+                GetStatTypeStr(StatType::kDevCapPeakTeraflopsPerSecond)),
+            peak_tflops);
+      }
     }
   }
 }

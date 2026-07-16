@@ -499,6 +499,8 @@ cc_library(
     ]),
     deps = [
         ":rocm_tracer_utils",
+        "//xla/stream_executor/rocm:rocm_compute_capability",
+        "//xla/stream_executor/rocm:rocm_flops_table",
         "//xla/stream_executor/rocm:roctracer_wrapper",
         "//xla/tsl/platform:status",
         "//xla/tsl/profiler/utils:parse_annotation",
