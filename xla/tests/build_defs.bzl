@@ -23,10 +23,6 @@ load(
 )
 load("//xla/tests:plugin.bzl", "plugins")
 load("//xla/tsl:package_groups.bzl", "DEFAULT_LOAD_VISIBILITY")
-load(
-    "//xla/tsl/platform:build_config_root.bzl",
-    "tf_gpu_tests_tags",
-)
 load("//xla/tsl/platform/default:build_config.bzl", "strict_cc_test")
 load("//xla/tsl/platform/default:cuda_build_defs.bzl", "is_cuda_configured")
 
@@ -185,7 +181,6 @@ def xla_test(
                 "//xla/service:gpu_plugin",
             )
             if backend in NVIDIA_GPU_BACKENDS:
-                this_backend_tags += tf_gpu_tests_tags()
                 backend_deps += [
                     "//xla/stream_executor/cuda:all_runtime",
                     "//xla/stream_executor/cuda:gpu_test_kernels_cuda",

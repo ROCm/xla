@@ -1,5 +1,5 @@
 load("@local_config_cuda//cuda:build_defs.bzl", "cuda_library")
-load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm_is_configured")
+load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm_is_configured", "rocm_library")
 load("//xla:xla.default.bzl", "xla_cc_test")
 load("//xla/tests:build_defs.bzl", "xla_test")
 load(
@@ -553,12 +553,26 @@ cc_library(
     ],
 )
 
+rocm_library(
+    name = "rocm_occupancy_test_kernel",
+    testonly = 1,
+    srcs = ["rocm_occupancy_test_kernel.hip.cc"],
+    hdrs = ["rocm_occupancy_test_kernel.h"],
+    tags = ["rocm-only"],
+    deps = [
+        "@local_config_rocm//rocm:hip",  # buildcleaner: keep
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
+)
+
 xla_cc_test(
     name = "rocm_tracer_test",
-    size = "small",
+    size = "medium",
     srcs = ["rocm_tracer_test.cc"],
+    linkopts = ["-ldl"],  # for dlopen/dlsym in RealRoctxCallsProduceNvtxRangeInXSpace
     tags = [
         "gpu",
+        "requires-gpu-amd",
         "rocm-only",
     ] + if_google([
         # Optional: only run internally if ROCm config is enabled
@@ -566,11 +580,15 @@ xla_cc_test(
     ]),
     deps = [
         ":rocm_collector",
+        ":rocm_occupancy_test_kernel",
         ":rocm_tracer",
         ":rocm_tracer_utils",
         "//xla/tsl/lib/core:status_test_util",
+        "//xla/tsl/profiler/utils:xplane_schema",
         "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
         "@com_google_googletest//:gtest_main",
         "@local_config_rocm//rocm:hip",  # buildcleaner: keep
@@ -586,16 +604,17 @@ xla_cc_test(
     srcs = ["rocm_collector_test.cc"],
     tags = [
         "gpu",
+        "requires-gpu-amd",
         "rocm-only",
     ] + if_google([
         "manual",
     ]),
     deps = [
-        # ":rocm_tracer",
         ":rocm_collector",
         ":rocm_tracer_utils",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_googletest//:gtest_main",
+        "//xla/tsl/profiler/utils:xplane_schema",
         "//xla/tsl/profiler/utils:xplane_utils",
         "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],

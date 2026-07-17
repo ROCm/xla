@@ -324,11 +324,18 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
       .grid_x = kinfo.grid_size.x,
       .grid_y = kinfo.grid_size.y,
       .grid_z = kinfo.grid_size.z,
-      .func_ptr = nullptr,
+      .num_regs = 0,
   };
 
-  auto it = kernel_info_.find(kinfo.kernel_id);
-  if (it != kernel_info_.end()) trace_event->name = it->second.name;
+  {
+    absl::MutexLock lock(kernel_lock_);
+    auto it = kernel_info_.find(kinfo.kernel_id);
+    if (it != kernel_info_.end()) {
+      const auto& sym = it->second.data;
+      trace_event->name = it->second.name;
+      trace_event->kernel_info.num_regs = sym.arch_vgpr_count;
+    }
+  }
 }
 
 void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
@@ -399,10 +406,6 @@ void RocmTracer::CodeObjectCallback(
           data->kernel_id,
           ProfilerKernelInfo{tsl::port::MaybeAbiDemangle(data->kernel_name),
                              *data});
-    } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD) {
-      // FIXME: clear these?  At minimum need kernel names at shutdown, async
-      // completion We don't erase it just in case a buffer callback still needs
-      // this kernel_info_.erase(data->kernel_id);
     }
   }
 }

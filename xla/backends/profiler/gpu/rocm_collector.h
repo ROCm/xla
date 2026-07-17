@@ -20,11 +20,11 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
 
-#include "rocprofiler-sdk/agent.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
@@ -32,6 +32,7 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
 #include "rocm/include/hip/hip_runtime.h"
+#include "rocprofiler-sdk/agent.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/profiler/utils/xplane_builder.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
@@ -59,45 +60,35 @@ inline std::string ToXStat(const KernelDetails& kernel_info,
                       " occ_pct:", occupancy_pct);
 }
 
+// Parameters that uniquely determine theoretical occupancy for a kernel launch.
+// All fields are available from the rocprofiler agent and kernel symbol data —
+// no HIP function pointer is required.
 struct RocmDeviceOccupancyParams {
-  hipFuncAttributes attributes = {};
-  int block_size = 0;
-  size_t dynamic_smem_size = 0;
-  void* func_ptr;
-  uint32_t max_waves_per_cu = 0;
-  uint32_t wave_front_size = 0;
+  // From the kernel symbol data (DEVICE_KERNEL_SYMBOL_REGISTER callback).
+  uint32_t num_regs;  // arch_vgpr_count: VGPRs allocated per thread
+  // From the kernel dispatch record.
+  // group_segment_size in rocprofiler_kernel_dispatch_info_t is the *total*
+  // LDS per workgroup (static + runtime additions, AKA the "real" LDS usage).
+  // Do NOT add the symbol's group_segment_size on top — that would
+  // double-count.
+  uint32_t block_size;  // workgroup_x * workgroup_y * workgroup_z (0-dims → 1)
+  uint32_t smem_bytes;  // kinfo.group_segment_size: total LDS per workgroup
+  // From the rocprofiler agent (set once in GetDeviceCapabilities).
+  uint32_t max_waves_per_cu;  // max concurrent wavefronts per CU
+  uint32_t
+      wave_front_size;  // threads per wavefront (64 on CDNA, 32/64 on RDNA)
+  uint32_t max_waves_per_simd;  // max concurrent wavefronts per SIMD unit
+  uint32_t simd_per_cu;         // number of SIMD units per CU
+  uint32_t lds_size_bytes;      // LDS capacity in bytes per CU
 
   friend bool operator==(const RocmDeviceOccupancyParams& a,
                          const RocmDeviceOccupancyParams& b) noexcept {
-    // Compare only the fields that affect occupancy decisions.
-    return std::tuple{a.attributes.binaryVersion,
-                      a.attributes.cacheModeCA,
-                      a.attributes.constSizeBytes,
-                      a.attributes.localSizeBytes,
-                      a.attributes.maxDynamicSharedSizeBytes,
-                      a.attributes.maxThreadsPerBlock,
-                      a.attributes.numRegs,
-                      a.attributes.preferredShmemCarveout,
-                      a.attributes.ptxVersion,
-                      a.block_size,
-                      a.dynamic_smem_size,
-                      a.func_ptr,
-                      a.max_waves_per_cu,
-                      a.wave_front_size} ==
-           std::tuple{b.attributes.binaryVersion,
-                      b.attributes.cacheModeCA,
-                      b.attributes.constSizeBytes,
-                      b.attributes.localSizeBytes,
-                      b.attributes.maxDynamicSharedSizeBytes,
-                      b.attributes.maxThreadsPerBlock,
-                      b.attributes.numRegs,
-                      b.attributes.preferredShmemCarveout,
-                      b.attributes.ptxVersion,
-                      b.block_size,
-                      b.dynamic_smem_size,
-                      b.func_ptr,
-                      b.max_waves_per_cu,
-                      b.wave_front_size};
+    return std::tie(a.num_regs, a.block_size, a.smem_bytes, a.max_waves_per_cu,
+                    a.wave_front_size, a.max_waves_per_simd, a.simd_per_cu,
+                    a.lds_size_bytes) ==
+           std::tie(b.num_regs, b.block_size, b.smem_bytes, b.max_waves_per_cu,
+                    b.wave_front_size, b.max_waves_per_simd, b.simd_per_cu,
+                    b.lds_size_bytes);
   }
 
   friend bool operator!=(const RocmDeviceOccupancyParams& a,
@@ -108,21 +99,21 @@ struct RocmDeviceOccupancyParams {
   template <typename H>
   friend H AbslHashValue(H hash_state,
                          const RocmDeviceOccupancyParams& params) {
-    return H::combine(
-        std::move(hash_state), params.attributes.maxThreadsPerBlock,
-        params.attributes.numRegs, params.attributes.sharedSizeBytes,
-        params.attributes.maxDynamicSharedSizeBytes, params.block_size,
-        params.dynamic_smem_size, params.func_ptr, params.max_waves_per_cu,
-        params.wave_front_size);
+    return H::combine(std::move(hash_state), params.num_regs, params.block_size,
+                      params.smem_bytes, params.max_waves_per_cu,
+                      params.wave_front_size, params.max_waves_per_simd,
+                      params.simd_per_cu, params.lds_size_bytes);
   }
 };
 
-// FIXME: rocprofiler-sdk does not have this one yet
 struct OccupancyStats {
   double occupancy_pct = 0.0;
   int min_grid_size = 0;
   int suggested_block_size = 0;
 };
+
+// Pure computation: returns theoretical occupancy from hardware parameters.
+OccupancyStats GetOccupancy(const RocmDeviceOccupancyParams& params);
 
 class RocmTraceCollector {
  public:
@@ -163,7 +154,6 @@ class PerDeviceCollector {
                              tsl::profiler::XPlaneBuilder* device_plane);
 
  private:
-  OccupancyStats GetOccupancy(const RocmDeviceOccupancyParams& params) const;
   void CreateXEvent(const RocmTracerEvent& event,
                     tsl::profiler::XPlaneBuilder* plane, uint64_t start_gpu_ns,
                     uint64_t end_gpu_ns, tsl::profiler::XLineBuilder* line);
@@ -173,8 +163,16 @@ class PerDeviceCollector {
  private:
   absl::Mutex events_mutex_;
   std::vector<RocmTracerEvent> events_ ABSL_GUARDED_BY(events_mutex_);
-  absl::flat_hash_map<RocmDeviceOccupancyParams, OccupancyStats>
+  // The fields below are written once in GetDeviceCapabilities() and read in
+  // CreateXEvent(), both called sequentially from Export() after Flush().
+  // No concurrent access, so no mutex guard is needed.
+  absl::flat_hash_map<RocmDeviceOccupancyParams, std::optional<OccupancyStats>>
       occupancy_cache_;
+  uint32_t max_waves_per_cu_ = 0;
+  uint32_t wave_front_size_ = 0;
+  uint32_t max_waves_per_simd_ = 0;
+  uint32_t simd_per_cu_ = 0;
+  uint32_t lds_size_bytes_ = 0;
 };  // PerDeviceCollector
 
 class RocmTraceCollectorImpl : public RocmTraceCollector {

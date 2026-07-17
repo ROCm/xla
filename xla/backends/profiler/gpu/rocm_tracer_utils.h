@@ -76,8 +76,12 @@ struct KernelDetails {
   // Z-dimension of a grid.
   uint32_t grid_z;
 
-  // kernel address. Used for calculating core occupancy
-  void* func_ptr;
+  // From the kernel symbol data (code-object callback). Used for occupancy.
+  // arch_vgpr_count: architectural VGPRs allocated per thread.
+  // No in-class initializer: KernelDetails lives in a union inside
+  // RocmTracerEvent, so a non-trivial default constructor would delete
+  // RocmTracerEvent's default constructor. Callers zero these explicitly.
+  uint32_t num_regs;
 };
 
 enum class RocmTracerEventType {
