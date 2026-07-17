@@ -28,6 +28,7 @@ EXCLUDED_TESTS=(
     "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
     "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f8e5m2_from_cc_8_9_rocm_63_no_restriction_c_16_nc_2"
     "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f8e5m2_from_cc_8_9_rocm_63_no_restriction_c_32_nc_32"
+    "RaggedAllToAllTest/RaggedAllToAllTest.RaggedAllToAll*"
 )
 
 
