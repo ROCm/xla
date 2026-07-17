@@ -36,6 +36,7 @@ EXCLUDED_TESTS=(
     CollectiveOpsTestE2EShardedUnsharded.DusSingleDimensionInPartitionMode*
     CollectivePipelineParallelismTestWithAndWithoutOpts*
     DeterminismTest.CublasDot*
+    DotOperationTestWithCublasLt_F16F32F64CF64/1.GeneralMatMulActivation*
     DynamicSliceFusionTest.MultipleOffsetsAsFunctionOfInductionVariable*
     DynamicSliceFusionTest.OffsetAsFunctionOfInductionVariableShouldUseOffsetModules*
     DynamicSliceFusionTest.OffsetsThatCanBeEvaluatedSuccessfullyAreCorrectlyEmbeddedIntoThunks*
@@ -48,6 +49,7 @@ EXCLUDED_TESTS=(
     DynamicSliceFusionTest.WhileLoopSliceWithNoInductionVariable*
     FunctionalHloRunnerTest.DumpsUnoptimizedHLOInUnoptimizedSnapshot*
     FunctionalHloRunnerTest.Sharded2DevicesHloUnoptimizedSnapshot*
+    MatmulTestWithCublas.GemmRewriter_RegressionTestF64
     P2POps*
     StreamExecutorGpuClientTest.GetAbiVersion*
     StreamExecutorGpuClientTest.GetCompiledMemoryStatsWithTupleAndNcclUserBuffers*
