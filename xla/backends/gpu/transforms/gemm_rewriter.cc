@@ -114,7 +114,6 @@ bool SupportsEpilogueFusion(PrimitiveType type) {
     case F16:
     case BF16:
     case F32:
-    case F64:
       return true;
     default:
       return false;
