@@ -394,6 +394,13 @@ rocm_lib_import(
 )
 
 rocm_lib_import(
+    name = "rocprofiler_sdk_roctx",
+    data = glob(["%{rocm_root}/lib/librocprofiler-sdk-roctx.so*"]),
+    interface_library = "%{rocm_root}/lib/librocprofiler-sdk-roctx.so",
+    deps = [],
+)
+
+rocm_lib_import(
     name = "rocsolver",
     data = glob([
         "%{rocm_root}/lib/librocsolver.so*",
