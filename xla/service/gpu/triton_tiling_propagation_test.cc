@@ -120,5 +120,31 @@ ENTRY entry {
   EXPECT_TRUE(triton_fusion::IsInputWorthFusing(*slice));
 }
 
+TEST_F(TritonTilingPropagationTest,
+       IsInputWorthFusingSliceNotWorthWhenItGrowsFusionInputTooMuch) {
+  // The slice reads a large operand (~4 MiB) but only keeps a tiny output, so
+  // fusing it would make the consumer read the whole operand and slice
+  // internally. That input growth exceeds kMaxSliceFusionInputGrowthBytes, so
+  // the slice should not be considered worth fusing even though it reaches a
+  // multi-user producer through a single-user reshape.
+  const char* hlo_string = R"(
+HloModule module
+
+ENTRY entry {
+  p0 = f32[1000,1000] parameter(0)
+  p1 = f32[1000,1000] parameter(1)
+  add = f32[1000,1000] add(p0, p1)
+  neg = f32[1000,1000] negate(add)
+  reshape = f32[1000000] reshape(add)
+  slice = f32[10] slice(reshape), slice={[0:10]}
+  ROOT root = tuple(slice, neg)
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
+  const HloInstruction* slice =
+      module->entry_computation()->root_instruction()->operand(0);
+  EXPECT_FALSE(triton_fusion::IsInputWorthFusing(*slice));
+}
+
 }  // namespace
 }  // namespace xla::gpu

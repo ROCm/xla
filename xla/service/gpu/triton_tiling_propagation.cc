@@ -1009,6 +1009,15 @@ bool CanNotBeFusedIntoAUser(const HloInstruction& hlo) {
 // Let input and output data volumes of a fusion grow by small amounts.
 constexpr int kIoToleranceBytes = 1024;
 
+// Upper bound on how much a slice may grow a fusion's input volume (operand
+// bytes minus slice-output bytes) when it is fused through single-user
+// bitcasts/transposes/reshapes. Fusing a slice makes the consumer read the
+// slice's (larger) operand and slice internally instead of a pre-sliced buffer;
+// when that operand is much larger than the slice output the added DRAM traffic
+// outweighs the fusion benefit and can also block a downstream GEMM from taking
+// a tuned library (cuBLAS/hipBLASlt) path.
+constexpr int64_t kMaxSliceFusionInputGrowthBytes = 1 << 20;  // 1 MiB
+
 // Returns true if all users of the given operand are kSlice operations
 // with the same shape as `slice_shape`.
 bool AllUsersAreSlicesWithSameShape(const HloInstruction& operand,
@@ -1046,7 +1055,8 @@ bool IsInputWorthFusing(const HloInstruction& hlo) {
   //   the slice can be fused into the producer instead of here.
   // * AllUsersAreSlicesWithSameShape - slices of the same shape can be
   //   fused into the producer by the multi output fusion pass.
-  if (hlo.opcode() == HloOpcode::kSlice) {
+  if (hlo.opcode() == HloOpcode::kSlice &&
+      input_minus_output_bytes.value() <= kMaxSliceFusionInputGrowthBytes) {
     const HloInstruction* operand = hlo.operand(0);
     while (HloPredicateIsOp<HloOpcode::kBitcast, HloOpcode::kTranspose,
                             HloOpcode::kReshape>(operand) &&
