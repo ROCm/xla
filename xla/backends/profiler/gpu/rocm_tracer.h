@@ -72,6 +72,17 @@ class RocmTracer {
   void CodeObjectCallback(rocprofiler_callback_tracing_record_t record,
                           void* callback_data);
 
+  // Called from the MARKER_CORE_API callback. Handles roctxRangePushA,
+  // roctxRangePop, and roctxMarkA, emitting RocmTracerEvent(Generic) for each
+  // completed range or instantaneous mark.
+  void MarkerCallback(const rocprofiler_callback_tracing_record_t& record);
+
+  // Returns a copy of the label of the innermost active ROCTX range on the
+  // given thread, or an empty string if no range is active.
+  // Returns by value (not string_view) so the caller holds a safe copy after
+  // roctx_stack_mutex_ is released.
+  std::string GetCurrentRoctxLabel(uint64_t tid);
+
   AnnotationMap* annotation_map() { return &annotation_map_; }
 
  protected:
@@ -94,6 +105,25 @@ class RocmTracer {
   bool activity_tracing_enabled_{false};
 
   AnnotationMap annotation_map_{/* default size, e.g. */ 1024 * 1024};
+
+  // Lock ordering for normal call paths (MarkerCallback, HIP API callback):
+  //   roctx_stack_mutex_ → (released) → roctx_strings_mutex_ → (released)
+  //   → collector_mutex_
+  // The two roctx mutexes are never held simultaneously; each is acquired and
+  // released independently within MarkerCallback.
+  //
+  // Enable() is an exception: it holds collector_mutex_ and then acquires
+  // roctx_stack_mutex_ and roctx_strings_mutex_ (in that order) to clear
+  // session state. This reverse nesting is safe because no callback can call
+  // collector() while Enable() holds collector_mutex_.
+
+  absl::Mutex roctx_stack_mutex_;
+  absl::flat_hash_map<uint64_t, std::vector<RoctxFrame>> roctx_stack_
+      ABSL_GUARDED_BY(roctx_stack_mutex_);
+
+  absl::Mutex roctx_strings_mutex_;
+  absl::node_hash_set<std::string> roctx_strings_
+      ABSL_GUARDED_BY(roctx_strings_mutex_);
 
  public:
   using kernel_symbol_data_t =
