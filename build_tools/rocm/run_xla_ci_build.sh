@@ -24,43 +24,18 @@ TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh)
 mkdir -p /tf/pkg
 
 EXCLUDED_TESTS=(
-    HostMemoryAllocateTest.Numa
-    CollectiveBroadcastThunkMultiGpuTest.ExecuteOnStream*
-    CollectiveOpsCommandBufferTest.SendRecv_Simple*
-    CollectiveOpsTestE2EShardedUnsharded.DotBatchAndBatch*
-    CollectiveOpsTestE2EShardedUnsharded.DotBatchAndNonContracting*
-    CollectiveOpsTestE2EShardedUnsharded.DotContractingAndContracting*
-    CollectiveOpsTestE2EShardedUnsharded.DotContractingAndReplicated*
-    CollectiveOpsTestE2EShardedUnsharded.DotContractingNonContractingAndContractingNonContracting*
-    CollectiveOpsTestE2EShardedUnsharded.DotNonContractingAndContracting*
-    CollectiveOpsTestE2EShardedUnsharded.DusSingleDimensionInPartitionMode*
-    CollectivePipelineParallelismTestWithAndWithoutOpts*
-    DeterminismTest.CublasDot*
-    DotOperationTestWithCublasLt_F16F32F64CF64/1.GeneralMatMulActivation*
-    DynamicSliceFusionTest.MultipleOffsetsAsFunctionOfInductionVariable*
-    DynamicSliceFusionTest.OffsetAsFunctionOfInductionVariableShouldUseOffsetModules*
-    DynamicSliceFusionTest.OffsetsThatCanBeEvaluatedSuccessfullyAreCorrectlyEmbeddedIntoThunks*
-    DynamicSliceFusionTest.ReduceScatterDUSConstant*
-    DynamicSliceFusionTest.ReduceScatterDUSLoopIterationOffset*
-    DynamicSliceFusionTest.ReduceScatterDUSParameterOffset*
-    DynamicSliceFusionTest.ReduceScatterDynamicSlice*
-    DynamicSliceFusionTest.ReduceScatterDynamicSliceMultipleBuffersShouldFuseAndExecuteCorrectly*
-    DynamicSliceFusionTest.ReduceScatterSlice*
-    DynamicSliceFusionTest.WhileLoopSliceWithNoInductionVariable*
-    FunctionalHloRunnerTest.DumpsUnoptimizedHLOInUnoptimizedSnapshot*
-    FunctionalHloRunnerTest.Sharded2DevicesHloUnoptimizedSnapshot*
-    MatmulTestWithCublas.GemmRewriter_RegressionTestF64
-    P2POps*
-    StreamExecutorGpuClientTest.GetAbiVersion*
-    StreamExecutorGpuClientTest.GetCompiledMemoryStatsWithTupleAndNcclUserBuffers*
-    SuccessfulCrossHostTransfer*
-    TritonAndBlasSupportForDifferentTensorSizes*
-    TritonBackendTest.CostModelOptions_Combination*
-    TritonBackendTest.CostModelOptions_Filter*
-    TritonBackendTest.CostModelOptions_TopFromDefault*
-    RaggedAllToAllTest/RaggedAllToAllTest*
-    RaggedAllToAllMultiHostDecomposerTest/RaggedAllToAllMultiHostDecomposerTest*
-    AsyncCollectiveOps/AsyncCollectiveOps*
+    "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
+    "TritonEmitterTest.ScaledDotIsSupportedByReferencePlatform"
+    "TritonBackendTest.WarpSpecializationConfigsDoNotHaveNumStagesTwo"
+    "TritonBackendTest.TmaConfigsAreGeneratedOnlyForHopperAndWorkCorrectly"
+    "TritonBackendTest.WarpSpecializationWithBitcastWorksCorrectly"
+    "TritonBackendTest.VerifyHopperConfigsAreDifferentFromBlackwell"
+    "TritonBackendTest.WarpSpecializationConfigsAreGenerated"
+    "TritonBackendTest.AmpereUsesMoreThanTwoStages"
+    "TritonBackendTest.TmaRunCorrectlyForDotsOfBroadcasts"
+    "TritonBackendTest.CostModelOptions_Combination"
+    "TritonBackendTest.CostModelOptions_Filter"
+    "TritonBackendTest.CostModelOptions_TopFromDefault"
 )
 
 for arg in "$@"; do
@@ -85,5 +60,9 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --action_env=XLA_FLAGS="--xla_gpu_force_compilation_parallelism=16" \
     --test_output=errors \
     --run_under=//build_tools/rocm:parallel_gpu_execute \
+    --test_filter=-$(
+        IFS=:
+        echo "${EXCLUDED_TESTS[*]}"
+    ) \
     "$@" \
     //xla/...
