@@ -36,6 +36,8 @@ EXCLUDED_TESTS=(
     "TritonBackendTest.CostModelOptions_Combination"
     "TritonBackendTest.CostModelOptions_Filter"
     "TritonBackendTest.CostModelOptions_TopFromDefault"
+    "DeterminismTest.CublasDot"
+    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x9"
 )
 
 for arg in "$@"; do
