@@ -33,6 +33,10 @@ env:
   # and only depends on other python files in this workspace or the standard
   # library.
   PYTHONPATH: "."
+  # Diff against the PR's actual base branch (empty on push, so fall back to
+  # main). Prevents the diff from ballooning to the whole branch divergence
+  # when the PR targets a non-main branch.
+  BASE_REF: ${{ github.base_ref || 'main' }}
 
 jobs:
   check-contents:
@@ -49,8 +53,8 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: "Fetch HEAD of main branch"
-        run: git fetch origin main --depth=1
+      - name: "Fetch base branch"
+        run: git fetch origin "$BASE_REF" --depth=1
 
       # ----------------C++ checks----------------
       - name: "Check for tsl::{Status,StatusOr}"

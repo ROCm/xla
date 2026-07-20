@@ -25,6 +25,9 @@ env:
   GOBIN: "/usr/local/bin"
   PYTHONPATH: "."
   BANT_VERSION: "0.2.7"
+  # Diff against the PR's actual base branch (empty on push, so fall back to
+  # main). Prevents selecting the entire branch divergence as "affected".
+  BASE_REF: ${{ github.base_ref || 'main' }}
 
 jobs:
   dwyu:
@@ -40,8 +43,8 @@ jobs:
         with:
           fetch-depth: '0'
           persist-credentials: false
-      - name: "Fetch HEAD of main branch"
-        run: git fetch origin main --depth=1
+      - name: "Fetch base branch"
+        run: git fetch origin "$BASE_REF" --depth=1
       - name: "Install bant"
         run: |
           curl -fSL "https://github.com/hzeller/bant/releases/download/v${BANT_VERSION}/bant-v${BANT_VERSION}-linux-static-x86_64.tar.gz" -o /tmp/bant.tar.gz
@@ -54,7 +57,7 @@ jobs:
       - name: "Find affected targets and run bant dwyu"
         run: |
           set -euo pipefail
-          TARGETS=$(python3 build_tools/lint/check_dwyu.py)
+          TARGETS=$(python3 build_tools/lint/check_dwyu.py --base_ref "origin/$BASE_REF")
           if [ -z "$TARGETS" ]; then
             echo "No targets to check."
             exit 0

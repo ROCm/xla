@@ -211,8 +211,8 @@ def main(argv: Sequence[str]):
   )
   parser.add_argument(
       "--base_ref",
-      default="origin/main",
-      help="Git ref to diff against (default: origin/main)",
+      default=f"origin/{os.environ.get('BASE_REF', 'main')}",
+      help="Git ref to diff against (default: origin/$BASE_REF or origin/main)",
   )
   args = parser.parse_args(argv[1:])
   allowed_rules = set(args.allowed_rules)
