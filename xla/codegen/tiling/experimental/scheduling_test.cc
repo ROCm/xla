@@ -232,7 +232,7 @@ TEST_F(SchedulingTest, GetRaggedDotNonContractingPermutationSwapsMN) {
   // M_avg = 8 < N = 128 → swap: N outer (slower), M inner (faster).
   EXPECT_THAT(GetSchedule(tiled_computation),
               IsOkAndHolds(MatchSchedule(
-                  "d0 -> pid mod 8, d1 -> pid / 8, pid_bounds=[0, 63]")));
+                  "d0 -> pid mod 8, d1 -> pid / 8, num_pids=64, num_tiles=64")));
 }
 
 // When M_avg >= N, no swap is beneficial (LHS is the larger operand).
@@ -261,7 +261,7 @@ TEST_F(SchedulingTest, GetRaggedDotNonContractingPermutationNoSwapWhenMGeN) {
   // M_avg = 64 >= N = 64 → no swap: d0(M) outer (slower), d1(N) inner (faster).
   EXPECT_THAT(GetSchedule(tiled_computation),
               IsOkAndHolds(MatchSchedule(
-                  "d0 -> pid / 2, d1 -> pid mod 2, pid_bounds=[0, 31]")));
+                  "d0 -> pid / 2, d1 -> pid mod 2, num_pids=32, num_tiles=32")));
 }
 
 }  // namespace xla::gpu::experimental
