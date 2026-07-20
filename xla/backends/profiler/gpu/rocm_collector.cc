@@ -18,6 +18,7 @@ limitations under the License.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -206,7 +207,8 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
   VLOG(7) << "Adding event to line=" << line->Id();
   xevent.SetTimestampNs(event.start_time_ns);
   xevent.SetEndTimestampNs(event.end_time_ns);
-  if (event.source == RocmTracerEventSource::ApiCallback) {
+  if (event.source == RocmTracerEventSource::ApiCallback &&
+      event.device_id != RocmTracerEvent::kInvalidDeviceId) {
     xevent.AddStatValue(
         *plane->GetOrCreateStatMetadata(GetStatTypeStr(StatType::kDeviceId)),
         event.device_id);
@@ -385,7 +387,8 @@ void PerDeviceCollector::Export(uint64_t start_walltime_ns,
       continue;
     }
     auto* plane = is_host_event ? host_plane : device_plane;
-    VLOG(9) << "Event" << " type=" << static_cast<int>(event.type)
+    VLOG(9) << "Event"
+            << " type=" << static_cast<int>(event.type)
             << " line_id=" << line_id
             << (is_host_event ? " host plane=" : " device plane=")
             << plane->Name();
@@ -498,6 +501,15 @@ void RocmTraceCollectorImpl::AddEvent(RocmTracerEvent&& event,
                                       bool is_auxiliary) {
   absl::MutexLock lock(event_maps_mutex_);
 
+  // Generic events (e.g. ROCTX/NVTX markers) have no GPU-side activity
+  // counterpart. Route them directly to standalone_events_ so they bypass
+  // ApiActivityInfoExchange and are flushed straight to per_device_collector_.
+  // Check this BEFORE the source-based branching below.
+  if (event.type == RocmTracerEventType::Generic) {
+    standalone_events_.push_back(std::move(event));
+    return;
+  }
+
   if (event.source == RocmTracerEventSource::ApiCallback) {
     if (!is_auxiliary) {
       if (num_callback_events_ >= options_.max_callback_api_events) {
@@ -554,17 +566,23 @@ void RocmTraceCollectorImpl::Flush() {
           << " activity events, and aggregated them into "
           << aggregated_events.size() << " events.";
 
-  // device ids for GPUs filled in by roctracer are not zero indexed.
-  // They are offset by number of CPUs on the machine
-  uint32_t min_device_id = INT32_MAX;
+  // Device IDs from rocprofiler are not zero-indexed; find the minimum
+  // valid ID so we can normalise to [0, num_gpus_).
+  uint32_t min_device_id = std::numeric_limits<uint32_t>::max();
 
   for (const auto& event : aggregated_events) {
-    if (event.device_id < min_device_id) {
+    if (event.device_id != RocmTracerEvent::kInvalidDeviceId &&
+        event.device_id < min_device_id) {
       min_device_id = event.device_id;
     }
   }
 
   for (auto& event : aggregated_events) {
+    if (event.device_id == RocmTracerEvent::kInvalidDeviceId ||
+        min_device_id == std::numeric_limits<uint32_t>::max()) {
+      PrintRocmTracerEvent(event, ". Dropped due to invalid device ID!");
+      continue;
+    }
     auto id = event.device_id - min_device_id;
     if (id < num_gpus_) {
       per_device_collector_[id].AddEvent(std::move(event));
@@ -572,6 +590,13 @@ void RocmTraceCollectorImpl::Flush() {
       PrintRocmTracerEvent(event, ". Dropped due to invalid device ID!");
     }
   }
+
+  // Flush standalone events (e.g. ROCTX markers) directly — they have no
+  // GPU-side activity counterpart and bypass ApiActivityInfoExchange.
+  for (auto& event : standalone_events_) {
+    per_device_collector_[0].AddEvent(std::move(event));
+  }
+  standalone_events_.clear();
 
   activity_ops_events_map_.clear();
   api_events_map_.clear();
@@ -669,7 +694,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
                         "Type="
                      << GetRocmTracerEventTypeName(api_event.type);
     }  // switch
-  }  // for
+  }    // for
 
   // Make sure for all activity events we have API callback events.
   //
@@ -742,8 +767,8 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
                           "Type="
                        << GetRocmTracerEventTypeName(activity_event.type);
       }  // switch
-    }  // for activity_event
-  }  // for activity_iter
+    }    // for activity_event
+  }      // for activity_iter
 
   return aggregated_events;
 }

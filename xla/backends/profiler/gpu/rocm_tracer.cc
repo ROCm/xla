@@ -44,6 +44,7 @@ limitations under the License.
 #include "rocm/include/rocprofiler-sdk/fwd.h"
 #include "rocm/include/rocprofiler-sdk/hip/runtime_api_id.h"
 #include "rocm/include/rocprofiler-sdk/internal_threading.h"
+#include "rocm/include/rocprofiler-sdk/marker.h"
 #include "rocm/include/rocprofiler-sdk/registration.h"
 #include "rocm/include/rocprofiler-sdk/rocprofiler.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
@@ -146,6 +147,19 @@ absl::Status RocmTracer::Enable(const RocmTracerOptions& options,
   if (collector_ != nullptr) {
     return absl::AlreadyExistsError("ROCM tracer is already running");
   }
+
+  // Clear per-session state while holding collector_mutex_ so no in-flight
+  // callback can race between the clear and the new session start.
+  annotation_map_.Clear();
+  {
+    absl::MutexLock roctx_lock(&roctx_stack_mutex_);
+    roctx_stack_.clear();
+  }
+  {
+    absl::MutexLock roctx_str_lock(&roctx_strings_mutex_);
+    roctx_strings_.clear();
+  }
+
   options_ = options;
   collector_ = collector;
 
@@ -157,7 +171,6 @@ absl::Status RocmTracer::Enable(const RocmTracerOptions& options,
     return absl::InternalError(
         absl::StrCat("rocprofiler_start_context failed: ", errstr));
   }
-  annotation_map_.Clear();
   api_tracing_enabled_ = true;
   activity_tracing_enabled_ = true;
   VLOG(1) << "GpuTracer started with number of GPUs = " << NumGpus();
@@ -329,6 +342,101 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
 
   auto it = kernel_info_.find(kinfo.kernel_id);
   if (it != kernel_info_.end()) trace_event->name = it->second.name;
+}
+
+void RocmTracer::MarkerCallback(
+    const rocprofiler_callback_tracing_record_t& record) {
+  if (record.kind != ROCPROFILER_CALLBACK_TRACING_MARKER_CORE_API) return;
+
+  const auto* data =
+      static_cast<const rocprofiler_callback_tracing_marker_api_data_t*>(
+          record.payload);
+  const uint64_t tid = record.thread_id;
+
+  if (record.operation == ROCPROFILER_MARKER_CORE_API_ID_roctxRangePushA &&
+      record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
+    const uint64_t ts = GetTimestamp();
+    if (ts == 0) return;
+    const char* msg = data ? data->args.roctxRangePushA.message : nullptr;
+    absl::MutexLock lock(&roctx_stack_mutex_);
+    roctx_stack_[tid].push_back(
+        RoctxFrame{msg ? std::string(msg) : std::string(), ts,
+                   record.correlation_id.internal});
+
+  } else if (record.operation == ROCPROFILER_MARKER_CORE_API_ID_roctxRangePop &&
+             record.phase == ROCPROFILER_CALLBACK_PHASE_EXIT) {
+    const uint64_t ts = GetTimestamp();
+    if (ts == 0) return;
+
+    RoctxFrame frame;
+    {
+      absl::MutexLock lock(&roctx_stack_mutex_);
+      auto it = roctx_stack_.find(tid);
+      if (it == roctx_stack_.end() || it->second.empty()) return;
+      frame = std::move(it->second.back());
+      it->second.pop_back();
+    }
+
+    absl::string_view stable_msg;
+    {
+      absl::MutexLock lock(&roctx_strings_mutex_);
+      stable_msg = *roctx_strings_.insert(std::move(frame.message)).first;
+    }
+
+    RocmTracerEvent event;
+    event.type = RocmTracerEventType::Generic;
+    event.source = RocmTracerEventSource::ApiCallback;
+    event.domain = RocmTracerEventDomain::HIP_API;
+    event.name = std::string(stable_msg);
+    event.roctx_range = stable_msg;
+    event.start_time_ns = frame.start_ns;
+    event.end_time_ns = ts;
+    event.thread_id = tid;
+    event.device_id = RocmTracerEvent::kInvalidDeviceId;
+    event.correlation_id = frame.correlation_id;
+    event.stream_id = RocmTracerEvent::kInvalidStreamId;
+    event.scope_range_id = 0;
+    {
+      absl::MutexLock lock(&collector_mutex_);
+      if (collector()) {
+        collector()->AddEvent(std::move(event), false);
+      }
+    }
+
+  } else if (record.operation == ROCPROFILER_MARKER_CORE_API_ID_roctxMarkA &&
+             record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
+    const uint64_t ts = GetTimestamp();
+    if (ts == 0) return;
+
+    const char* msg = data ? data->args.roctxMarkA.message : nullptr;
+    if (!msg || msg[0] == '\0') return;
+
+    absl::string_view stable_msg;
+    {
+      absl::MutexLock lock(&roctx_strings_mutex_);
+      stable_msg = *roctx_strings_.insert(std::string(msg)).first;
+    }
+
+    RocmTracerEvent event;
+    event.type = RocmTracerEventType::Generic;
+    event.source = RocmTracerEventSource::ApiCallback;
+    event.domain = RocmTracerEventDomain::HIP_API;
+    event.name = std::string(stable_msg);
+    event.roctx_range = stable_msg;
+    event.start_time_ns = ts;
+    event.end_time_ns = ts;
+    event.thread_id = tid;
+    event.device_id = RocmTracerEvent::kInvalidDeviceId;
+    event.correlation_id = record.correlation_id.internal;
+    event.stream_id = RocmTracerEvent::kInvalidStreamId;
+    event.scope_range_id = 0;
+    {
+      absl::MutexLock lock(&collector_mutex_);
+      if (collector()) {
+        collector()->AddEvent(std::move(event), false);
+      }
+    }
+  }
 }
 
 void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
@@ -505,6 +613,18 @@ absl::Status RocmTracer::InitProfiling(void* tool_data) {
             },
             nullptr)));
   }
+
+  // ROCTX / NVTX marker tracing: capture roctxRangePushA, roctxRangePop, and
+  // roctxMarkA so that JAX TraceAnnotation ranges appear as named bands in the
+  // XPlane host thread timeline (kNVTXRange stat on Generic events).
+  RETURN_IF_ERROR(RocprofilerStatusToAbslStatus(
+      rocprofiler_configure_callback_tracing_service(
+          context_, ROCPROFILER_CALLBACK_TRACING_MARKER_CORE_API, nullptr, 0,
+          [](rocprofiler_callback_tracing_record_t record,
+             rocprofiler_user_data_t*, void*) {
+            RocmTracer::GetRocmTracerSingleton().MarkerCallback(record);
+          },
+          nullptr)));
 
   auto client_thread = rocprofiler_callback_thread_t{};
   RETURN_IF_ERROR(RocprofilerStatusToAbslStatus(

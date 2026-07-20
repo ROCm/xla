@@ -72,6 +72,11 @@ class RocmTracer {
   void CodeObjectCallback(rocprofiler_callback_tracing_record_t record,
                           void* callback_data);
 
+  // Called from the MARKER_CORE_API callback. Handles roctxRangePushA,
+  // roctxRangePop, and roctxMarkA, emitting RocmTracerEvent(Generic) for each
+  // completed range or instantaneous mark.
+  void MarkerCallback(const rocprofiler_callback_tracing_record_t& record);
+
   AnnotationMap* annotation_map() { return &annotation_map_; }
 
  protected:
@@ -94,6 +99,19 @@ class RocmTracer {
   bool activity_tracing_enabled_{false};
 
   AnnotationMap annotation_map_{/* default size, e.g. */ 1024 * 1024};
+
+  // Lock ordering: roctx_stack_mutex_ and roctx_strings_mutex_ are each
+  // acquired and released independently in MarkerCallback (never nested).
+  // collector_mutex_ may be acquired after both are released.
+  // Enable() holds collector_mutex_ while acquiring the roctx locks.
+
+  absl::Mutex roctx_stack_mutex_;
+  absl::flat_hash_map<uint64_t, std::vector<RoctxFrame>> roctx_stack_
+      ABSL_GUARDED_BY(roctx_stack_mutex_);
+
+  absl::Mutex roctx_strings_mutex_;
+  absl::node_hash_set<std::string> roctx_strings_
+      ABSL_GUARDED_BY(roctx_strings_mutex_);
 
  public:
   using kernel_symbol_data_t =

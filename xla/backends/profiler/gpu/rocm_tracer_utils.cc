@@ -94,7 +94,8 @@ void AnnotationMap::Add(uint32_t correlation_id, const std::string& annotation,
   if (annotation.empty()) {
     return;
   }
-  VLOG(3) << "Add annotation: " << " correlation_id=" << correlation_id
+  VLOG(3) << "Add annotation: "
+          << " correlation_id=" << correlation_id
           << ", annotation: " << annotation;
   absl::MutexLock lock(map_.mutex);
   if (map_.annotations.size() < max_size_) {
