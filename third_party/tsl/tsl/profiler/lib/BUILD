@@ -8,6 +8,10 @@ load(
     "if_cuda_is_configured",
 )
 load(
+    "@local_config_rocm//rocm:build_defs.bzl",
+    "if_rocm_is_configured",
+)
+load(
     "@xla//xla/tsl/profiler/builds:build_config.bzl",
     "tf_profiler_copts",
     "tf_profiler_pybind_cc_library_wrapper",
@@ -323,11 +327,18 @@ cc_library(
     name = "nvtx_utils_impl",
     srcs = if_cuda_is_configured(
         ["nvtx_utils.cc"],
-        ["nvtx_utils_stub.cc"],
+        if_rocm_is_configured(
+            ["roctx_utils.cc"],
+            ["nvtx_utils_stub.cc"],
+        ),
     ),
     hdrs = ["nvtx_utils.h"],
     visibility = ["//visibility:public"],
-    deps = if_cuda_is_configured(nvtx_headers()),
+    deps = if_cuda_is_configured(nvtx_headers()) + if_rocm_is_configured([
+        "@local_config_rocm//rocm:rocm_headers",
+        "@local_config_rocm//rocm:rocprofiler_sdk_roctx",
+        "@xla//xla/tsl/profiler/backends/cpu:annotation_stack",
+    ]),
 )
 
 cc_library(
@@ -376,6 +387,26 @@ tsl_cc_test(
         "@com_google_googletest//:gtest_main",
         "@xla//xla/tsl/platform:test",
         "@xla//xla/tsl/platform:test_benchmark",
+        "@xla//xla/tsl/profiler/backends/cpu:annotation_stack",
+        "@xla//xla/tsl/profiler/backends/cpu:annotation_stack_impl",
+    ],
+)
+
+tsl_cc_test(
+    name = "roctx_utils_test",
+    size = "small",
+    srcs = ["roctx_utils_test.cc"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":nvtx_utils",
+        ":scoped_annotation",
+        "@com_google_googletest//:gtest_main",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@local_config_rocm//rocm:rocprofiler_sdk_roctx",
+        "@xla//xla/tsl/platform:test",
         "@xla//xla/tsl/profiler/backends/cpu:annotation_stack",
         "@xla//xla/tsl/profiler/backends/cpu:annotation_stack_impl",
     ],
