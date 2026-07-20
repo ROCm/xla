@@ -16,8 +16,6 @@ limitations under the License.
 
 #include "xla/backends/gpu/transforms/gemm_rewriter.h"
 
-#include <math.h>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -40,6 +38,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include <math.h>
 #include "xla/hlo/evaluator/hlo_evaluator.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -2615,6 +2614,16 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
          PrimitiveType::F8E4M3FNUZ, DataType::kHalf},
         {ComputationType::kF32, DataType::kFloat, PrimitiveType::F8E5M2FNUZ,
          PrimitiveType::F8E4M3FNUZ, DataType::kFloat},
+
+        {ComputationType::kF64, DataType::kDouble, PrimitiveType::F64,
+         PrimitiveType::F64, DataType::kDouble},
+
+        // Complex types: hipBLASLt has no complex GEMM kernels, so the ROCm
+        // BlasLt wrapper redirects C64/C128 matmuls to rocBLAS at runtime.
+        {ComputationType::kF32, DataType::kComplexFloat, PrimitiveType::C64,
+         PrimitiveType::C64, DataType::kComplexFloat},
+        {ComputationType::kF64, DataType::kComplexDouble, PrimitiveType::C128,
+         PrimitiveType::C128, DataType::kComplexDouble},
 
         // TF32
         {ComputationType::kTF32AsF32, DataType::kFloat, PrimitiveType::F32,
