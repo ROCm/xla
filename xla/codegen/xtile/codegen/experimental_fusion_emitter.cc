@@ -611,7 +611,8 @@ absl::StatusOr<TensorValue> EmitRaggedDot(
     collect = [&](const ge::TiledHloInstruction* t) {
       if (!deps.insert(t).second) return;
       for (const ge::TiledHloInstruction* op : t->operands()) {
-        for (const auto& ri : tiled_ragged_dot.hlo_regions().front()) {
+        for (const auto& ri :
+             tiled_ragged_dot.hlo_regions().front().instructions()) {
           if (ri.get() == op) {
             collect(op);
             break;
@@ -621,7 +622,8 @@ absl::StatusOr<TensorValue> EmitRaggedDot(
     };
     collect(operand_t);
     TensorValue result;
-    for (const auto& region_instr : tiled_ragged_dot.hlo_regions().front()) {
+    for (const auto& region_instr :
+         tiled_ragged_dot.hlo_regions().front().instructions()) {
       if (!deps.count(region_instr.get())) continue;
       ASSIGN_OR_RETURN(TensorValue v,
                        EmitTiledHloInstruction(emitter_ctx, *region_instr));
@@ -763,7 +765,8 @@ absl::StatusOr<TensorValue> EmitRaggedDot(
     collect = [&](const ge::TiledHloInstruction* t) {
       if (!gs_deps.insert(t).second) return;
       for (const ge::TiledHloInstruction* op : t->operands()) {
-        for (const auto& ri : tiled_ragged_dot.hlo_regions().front()) {
+        for (const auto& ri :
+             tiled_ragged_dot.hlo_regions().front().instructions()) {
           if (ri.get() == op) {
             collect(op);
             break;
@@ -775,7 +778,8 @@ absl::StatusOr<TensorValue> EmitRaggedDot(
 
     // Emit each dep in def-before-use (region) order.
     TensorValue gs_tile;
-    for (const auto& region_instr : tiled_ragged_dot.hlo_regions().front()) {
+    for (const auto& region_instr :
+         tiled_ragged_dot.hlo_regions().front().instructions()) {
       if (!gs_deps.count(region_instr.get())) continue;
       ASSIGN_OR_RETURN(TensorValue result,
                        EmitTiledHloInstruction(emitter_ctx, *region_instr));
@@ -2338,8 +2342,8 @@ absl::Status EmitGeneric(ImplicitLocOpBuilder& b,
   // program_id to an L2-friendly tile coordinate before EmitterContext is
   // constructed, so that all EvaluateTilingParameters calls automatically yield
   // the reordered tile coordinates.
-  tile_id = ApplyGroupSizeTileIdRemapping(b, fusion, fn.getTileId());
-  EmitterContext emitter_ctx{b,        &fusion, program_id, tile_id,
+  tile_id = ApplyGroupSizeTileIdRemapping(b, fusion, fn.getProgramId());
+  EmitterContext emitter_ctx{b,        &fusion, program_id,       tile_id,
                              schedule, fn,      tiled_computation};
 
   VLOG(2) << "EmitTiledComputation: " << tiled_computation.ToString();

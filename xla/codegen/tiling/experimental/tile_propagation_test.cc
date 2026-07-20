@@ -1263,8 +1263,10 @@ TEST_F(TilePropagationTest, CanPropagateToInputsOfRaggedDotOpNonContracting) {
           lhs_ragged_dims={0}, rhs_group_dims={0}
     }
   )");
-  auto tiling_space = TilingSpace::Create(
-      *HloFusionAdaptor::ForInstruction(root), &mlir_context_);
+  ASSERT_OK_AND_ASSIGN(
+      auto tiling_space,
+      TilingSpace::Create(*HloFusionAdaptor::ForInstruction(root),
+                          &mlir_context_));
 
   // Verify TilingSpace structure.
   EXPECT_EQ(tiling_space->num_dimensions(), 4);
@@ -1347,8 +1349,10 @@ TEST_F(TilePropagationTest, CanPropagateToInputsOfRaggedDotOpContracting) {
           lhs_ragged_dims={1}
     }
   )");
-  auto tiling_space = TilingSpace::Create(
-      *HloFusionAdaptor::ForInstruction(root), &mlir_context_);
+  ASSERT_OK_AND_ASSIGN(
+      auto tiling_space,
+      TilingSpace::Create(*HloFusionAdaptor::ForInstruction(root),
+                          &mlir_context_));
 
   // Verify TilingSpace structure.
   EXPECT_EQ(tiling_space->num_dimensions(), 4);
@@ -1362,20 +1366,22 @@ TEST_F(TilePropagationTest, CanPropagateToInputsOfRaggedDotOpContracting) {
       PropagateTileToInput(*tiling_space, *root, root_tile, 0));
   ASSERT_EQ(tiled_operands.size(), 3);  // lhs, rhs, group_sizes
 
-  // Symbolic case: gs_sym=rt_0, sm_sym=rt_1, m_offset = rt_1 + tid_3 * ts_3.
-  // upper_bound = sm_sym + gs_sym = rt_1 + rt_0 (MLIR preserves construction
-  // order).
+  // Symbolic case: M offset is relative (d[m]*BLOCK_M, no start_m).
+  // The tile header shows {rt_0, rt_1} because Tile::ToString lists all RTVars
+  // in the tiling space regardless of whether they appear in the expressions.
+  // rt_1 (start_m) is a synthetic prefix-sum RTVar added manually by the
+  // emitter via ExtractTileOp. The upper_bound = rt_0 (group_size only).
   EXPECT_THAT(tiled_operands, MatchToString(R"(
     0) (tid_0, tid_1, tid_2, tid_3){rt_0, rt_1}
-         -> offsets [tid_1 * ts_1, rt_1 + tid_3 * ts_3]
+         -> offsets [tid_1 * ts_1, tid_3 * ts_3]
             sizes [ts_1, ts_3]
             strides [1, 1]
-            upper bounds [128, rt_1 + rt_0]
+            upper bounds [128, rt_0]
     1) (tid_0, tid_1, tid_2, tid_3){rt_0, rt_1}
-         -> offsets [rt_1 + tid_3 * ts_3, tid_2 * ts_2]
+         -> offsets [tid_3 * ts_3, tid_2 * ts_2]
             sizes [ts_3, ts_2]
             strides [1, 1]
-            upper bounds [rt_1 + rt_0, 64]
+            upper bounds [rt_0, 64]
     2) (tid_0, tid_1, tid_2, tid_3){rt_0, rt_1}
          -> offsets [tid_0 * ts_0]
             sizes [ts_0]
@@ -1391,15 +1397,15 @@ TEST_F(TilePropagationTest, CanPropagateToInputsOfRaggedDotOpContracting) {
 
   EXPECT_THAT(concrete_tiled_operands, MatchToString(R"(
     0) (tid_0, tid_1, tid_2, tid_3){rt_0, rt_1}
-         -> offsets [tid_1 * 32, rt_1 + tid_3 * 32]
+         -> offsets [tid_1 * 32, tid_3 * 32]
             sizes [32, 32]
             strides [1, 1]
-            upper bounds [128, rt_1 + rt_0]
+            upper bounds [128, rt_0]
     1) (tid_0, tid_1, tid_2, tid_3){rt_0, rt_1}
-         -> offsets [rt_1 + tid_3 * 32, tid_2 * 32]
+         -> offsets [tid_3 * 32, tid_2 * 32]
             sizes [32, 32]
             strides [1, 1]
-            upper bounds [rt_1 + rt_0, 64]
+            upper bounds [rt_0, 64]
     2) (tid_0, tid_1, tid_2, tid_3){rt_0, rt_1}
          -> offsets [tid_0]
             sizes [1]

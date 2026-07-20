@@ -16,10 +16,7 @@ limitations under the License.
 
 #include "xla/backends/gpu/transforms/gemm_rewriter.h"
 
-<<<<<<< HEAD
 #include <math.h>
-=======
->>>>>>> 298b5f3f27 (Improve ragged-dot backend selection)
 #include <algorithm>
 #include <array>
 #include <cmath>
