@@ -301,6 +301,7 @@ absl::StatusOr<Value> EmitSingleTileDot(mlir::ImplicitLocOpBuilder& b,
     if (ElementType(dot_operands.lhs) != *force_operands_type) {
       dot_operands.lhs = Cast(b, dot_operands.lhs, *force_operands_type);
     }
+
     if (ElementType(dot_operands.rhs) != *force_operands_type) {
       dot_operands.rhs = Cast(b, dot_operands.rhs, *force_operands_type);
     }
@@ -311,17 +312,20 @@ absl::StatusOr<Value> EmitSingleTileDot(mlir::ImplicitLocOpBuilder& b,
         Cast(b, dot_operands.accumulator, force_accumulator_type);
   }
 
-  mlir::stablehlo::DotDimensionNumbersAttr dot_dim_attr =
+  mlir::stablehlo::DotDimensionNumbersAttr dot_dimension_numbers =
       xla::stablehlo::ConvertDotDimensionNumbers(dim_nums, &b);
 
   Value result = EmitStableHloDotAndAdd(b, dot_operands.lhs, dot_operands.rhs,
                                         dot_operands.accumulator,
-                                        precision_spec, dot_dim_attr);
+                                        precision_spec, dot_dimension_numbers);
 
+  // TODO(b/393299275): once we've moved on from the legacy emitter, we should
+  // make sure that this accumulator type is equal to the one derived here.
   Type outer_accumulator_type = ElementType(dot_operands.accumulator);
   if (ElementType(result) != outer_accumulator_type) {
     result = Cast(b, result, outer_accumulator_type);
   }
+
   return result;
 }
 
@@ -341,7 +345,6 @@ absl::StatusOr<Value> EmitSingleTileScaledDot(
           scaled_dot.dot_dimension_numbers(), &b);
   return ScaledDot(b, dot_operands);
 }
-
 
 }  // namespace xtile
 }  // namespace xla

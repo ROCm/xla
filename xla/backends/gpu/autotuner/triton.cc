@@ -21,6 +21,7 @@ limitations under the License.
 #include <variant>
 #include <vector>
 
+#include "google/protobuf/any.pb.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -28,7 +29,6 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "xla/tsl/platform/status_macros.h"
-#include "google/protobuf/any.pb.h"
 #include "google/protobuf/text_format.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
@@ -622,20 +622,6 @@ absl::StatusOr<std::unique_ptr<HloModule>> TritonBackend::RunHloPasses(
   ConvertTritonGemmConfig convert_triton_gemm_config(gpu_device_info,
                                                      mlir_context_);
   RETURN_IF_ERROR(convert_triton_gemm_config.Run(hlo_module.get()).status());
-
-  // NOTE: We intentionally do NOT replace the group-sizes parameter(2) with a
-  // balanced constant here. If we did, PriorityFusion would inline gs_const
-  // into the kernel, making the compiled binary have 2 params + 1 output = 3
-  // GPU args. But ComputeProgramShape() still reports 3 params (incl. the now-
-  // unused param(2)), so the profiler passes 3 ExecutionInputs → misaligned
-  // output slot.
-  //
-  // Instead, keep parameter(2) as the GS input. The profiler initializes input
-  // buffer 2 with balanced values via SynchronousMemcpy before profiling each
-  // config (see GpuProfiler::CreateInputBuffers). The kernel reads balanced GS
-  // from arg[2] = input_buffer[2] = parameter(2). ComputeProgramShape()
-  // reports 3 params → binary has 3 params + 1 output = 4 GPU args → correct
-  // slot mapping for LHS, RHS, GS, output.
 
   return hlo_module;
 }

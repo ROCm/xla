@@ -153,6 +153,7 @@ bool IsCustomCallToTopK(const HloInstruction& hlo);
 // implementation.
 bool IsCustomCallToPtxKernel(const HloInstruction& hlo);
 
+
 // Returns true if `hlo` will be implemented as a call to a Mosaic GPU kernel
 // with multimem.
 bool IsMosaicWithMultimem(const HloInstruction& hlo);

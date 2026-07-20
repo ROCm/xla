@@ -216,6 +216,7 @@ bool IsCustomCallToMosaicGpu(const HloInstruction& hlo) {
           hlo.custom_call_target() == "mosaic_gpu_v2");
 }
 
+
 bool IsMosaicWithMultimem(const HloInstruction& hlo) {
   return IsCustomCallToMosaicGpu(hlo) &&
          absl::StrContains(hlo.raw_backend_config_string(),
