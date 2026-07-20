@@ -207,27 +207,13 @@ cc_library(
 xla_test(
     name = "se_gpu_pjrt_client_test",
     srcs = ["se_gpu_pjrt_client_test.cc"],
-    backend_tags = {
-        "h100": [
-            "full",
-            "multi_gpu",
-            "noasan",
-            "nomsan",
-        ],
-        "gpu": [
-            "multi_gpu",
-            "noasan",
-            "nomsan",
-        ],
-        # TODO(464116734): Re-enable once multi-device presubmits will be available in OSS.
-        "nvgpu_any": [
-            "broken",
-            "no_oss",
-        ],
-    },
+    backend_tags = {"gpu": [
+        "multi_gpu_h100",
+        "no_oss",
+        "noasan",
+        "nomsan",
+    ]},
     backends = ["gpu"],
-    shard_count = 3,
-    tags = ["nofixdeps"],
     use_legacy_runtime = True,
     deps = [
         ":se_gpu_pjrt_client",

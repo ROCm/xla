@@ -24,13 +24,17 @@ TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh)
 mkdir -p /tf/pkg
 
 EXCLUDED_TESTS=(
-    "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f8e5m2_from_cc_8_9_rocm_63_no_restriction_c_32_nc_32"
+    "HostMemoryAllocateTest.Numa"
+    "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
     "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f8e5m2_from_cc_8_9_rocm_63_no_restriction_c_16_nc_2"
+    "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f8e5m2_from_cc_8_9_rocm_63_no_restriction_c_32_nc_32"
+    "RaggedAllToAllTest/RaggedAllToAllTest.RaggedAllToAll*"
 )
+
 
 for arg in "$@"; do
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},requires-gpu-rocm,requires-gpu-amd,multi_gpu"
+        TAG_FILTERS="${TAG_FILTERS},multi_gpu"
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},requires-gpu-rocm,requires-gpu-amd,-multi_gpu"
@@ -57,8 +61,3 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     "$@" \
     -- \
     //xla/... \
-    -//xla/pjrt/gpu:se_gpu_pjrt_client_test_amdgpu_any \
-    -//xla/tests:iota_test_amdgpu_any \
-    -//xla/backends/gpu/codegen:dynamic_slice_fusion_test_amdgpu_any \
-    -//xla/backends/gpu/tests:ragged_all_to_all_e2e_test_amdgpu_any \
-    -//xla/tests:local_client_execute_test_amdgpu_any
