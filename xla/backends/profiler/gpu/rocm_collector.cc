@@ -631,8 +631,8 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
   uint64_t end_gputime_ns = get_timestamp();
   XPlaneBuilder host_plane(FindOrAddMutablePlaneWithName(
       space, tsl::profiler::kRoctracerApiPlaneName));
-  XPlaneBuilder roctx_plane(FindOrAddMutablePlaneWithName(
-      space, tsl::profiler::kRoctxPlaneName));
+  XPlaneBuilder roctx_plane(
+      FindOrAddMutablePlaneWithName(space, tsl::profiler::kRoctxPlaneName));
 
   VLOG(3) << "Calling RocmTraceCollectorImpl::Export num_gpus " << num_gpus_;
 

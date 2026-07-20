@@ -627,9 +627,8 @@ absl::Status RocmTracer::InitProfiling(void* tool_data) {
                 if (!annotation.empty() || !roctx.empty()) {
                   absl::Span<const int64_t> range_ids =
                       tsl::profiler::AnnotationStack::GetScopeRangeIds();
-                  tracer.annotation_map()->Add(
-                      record.correlation_id.internal, annotation, roctx,
-                      range_ids);
+                  tracer.annotation_map()->Add(record.correlation_id.internal,
+                                               annotation, roctx, range_ids);
                 }
               }
             },
