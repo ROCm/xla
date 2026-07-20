@@ -90,17 +90,29 @@ const char* GetRocmTracerEventTypeName(const RocmTracerEventType& type) {
 }
 
 void AnnotationMap::Add(uint32_t correlation_id, const std::string& annotation,
+                        absl::string_view roctx_range,
                         absl::Span<const int64_t> scope_range_ids) {
-  if (annotation.empty()) {
+  // Skip if both fields are empty — nothing to store.
+  if (annotation.empty() && roctx_range.empty()) {
     return;
   }
-  VLOG(3) << "Add annotation: " << " correlation_id=" << correlation_id
-          << ", annotation: " << annotation;
+  VLOG(3) << "Add annotation: "
+          << " correlation_id=" << correlation_id
+          << ", annotation: " << annotation << ", roctx_range: " << roctx_range;
   absl::MutexLock lock(map_.mutex);
   if (map_.annotations.size() < max_size_) {
-    absl::string_view annotation_str =
-        *map_.annotations.insert(annotation).first;
-    map_.correlation_map.emplace(correlation_id, annotation_str);
+    // Only insert into correlation_map when annotation is non-empty; it may
+    // be empty when only a ROCTX range (no XLA AnnotationStack text) is active.
+    if (!annotation.empty()) {
+      absl::string_view annotation_str =
+          *map_.annotations.insert(annotation).first;
+      map_.correlation_map.emplace(correlation_id, annotation_str);
+    }
+    if (!roctx_range.empty()) {
+      absl::string_view roctx_sv =
+          *map_.annotations.insert(std::string(roctx_range)).first;
+      map_.roctx_range_map.emplace(correlation_id, roctx_sv);
+    }
     if (!scope_range_ids.empty()) {
       map_.scope_range_id_map.emplace(correlation_id, scope_range_ids.back());
       if (scope_range_ids.size() > 1) {
@@ -121,6 +133,12 @@ absl::string_view AnnotationMap::LookUp(uint32_t correlation_id) {
   return it != map_.correlation_map.end() ? it->second : absl::string_view();
 }
 
+absl::string_view AnnotationMap::LookUpRoctxRange(uint32_t correlation_id) {
+  absl::MutexLock lock(map_.mutex);
+  auto it = map_.roctx_range_map.find(correlation_id);
+  return it != map_.roctx_range_map.end() ? it->second : absl::string_view();
+}
+
 int64_t AnnotationMap::LookUpScopeRangeId(uint32_t correlation_id) {
   absl::MutexLock lock(map_.mutex);
   auto it = map_.scope_range_id_map.find(correlation_id);
@@ -135,6 +153,7 @@ ScopeRangeIdTree AnnotationMap::TakeScopeRangeIdTree() {
 void AnnotationMap::Clear() {
   absl::MutexLock lock(map_.mutex);
   map_.correlation_map.clear();
+  map_.roctx_range_map.clear();
   map_.scope_range_id_map.clear();
   map_.scope_range_id_tree.clear();
   map_.annotations.clear();

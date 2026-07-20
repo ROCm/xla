@@ -53,6 +53,7 @@ TF_CONST_INIT const absl::string_view kCuptiActivityNvtxPlaneName =
     "/host:NVTX-CUPTI";
 TF_CONST_INIT const absl::string_view kRoctracerApiPlaneName =
     "/host:ROCTRACER";
+TF_CONST_INIT const absl::string_view kRoctxPlaneName = "/host:ROCTX";
 TF_CONST_INIT const absl::string_view kMetadataPlaneName = "/host:metadata";
 TF_CONST_INIT const absl::string_view kTFStreamzPlaneName = "/host:tfstreamz";
 TF_CONST_INIT const absl::string_view kPythonTracerPlaneName =
