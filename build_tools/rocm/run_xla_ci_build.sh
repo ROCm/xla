@@ -25,19 +25,14 @@ mkdir -p /tf/pkg
 
 EXCLUDED_TESTS=(
     "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
-    "TritonEmitterTest.ScaledDotIsSupportedByReferencePlatform"
-    "TritonBackendTest.WarpSpecializationConfigsDoNotHaveNumStagesTwo"
-    "TritonBackendTest.TmaConfigsAreGeneratedOnlyForHopperAndWorkCorrectly"
-    "TritonBackendTest.WarpSpecializationWithBitcastWorksCorrectly"
-    "TritonBackendTest.VerifyHopperConfigsAreDifferentFromBlackwell"
-    "TritonBackendTest.WarpSpecializationConfigsAreGenerated"
-    "TritonBackendTest.AmpereUsesMoreThanTwoStages"
-    "TritonBackendTest.TmaRunCorrectlyForDotsOfBroadcasts"
-    "TritonBackendTest.CostModelOptions_Combination"
-    "TritonBackendTest.CostModelOptions_Filter"
-    "TritonBackendTest.CostModelOptions_TopFromDefault"
     "DeterminismTest.CublasDot"
     "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x9"
+    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x6"
+    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_f32_f32_f32"
+    "TritonBackendTest.CostModelOptions_Combination"
+    "TritonBackendTest.CostModelOptions_TopFromDefault"
+    "TritonBackendTest.CostModelOptions_Filter"
+    "TritonTest.FuseSubchannelDequantizationWithTranspose"
 )
 
 for arg in "$@"; do

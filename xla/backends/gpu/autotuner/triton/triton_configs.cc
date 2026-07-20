@@ -15,12 +15,14 @@ limitations under the License.
 
 #include "xla/backends/gpu/autotuner/triton/triton_configs.h"
 
+#include <cstddef>
 #include <initializer_list>
 #include <vector>
 
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/strings/string_view.h"
 #include "google/protobuf/text_format.h"
 #include "xla/autotuning.pb.h"
@@ -43,6 +45,29 @@ std::vector<TritonGemmConfig> ParseConfig(absl::string_view config_str) {
   }
   return configs;
 };
+
+absl::string_view GetDefaultConfigStr(absl::string_view filename) {
+  // embed_files generates get_<stem>() functions where stem is filename without
+  // extension
+  if (filename == "a100.txtpb") {
+    return configs::get_a100();
+  } else if (filename == "b200.txtpb") {
+    return configs::get_b200();
+  } else if (filename == "sm120.txtpb") {
+    return configs::get_sm120();
+  } else if (filename == "cuda.txtpb") {
+    return configs::get_cuda();
+  } else if (filename == "rocm.txtpb") {
+    return configs::get_rocm();
+  } else if (filename == "h100.txtpb") {
+    return configs::get_h100();
+  } else if (filename == "mi300.txtpb") {
+    return configs::get_mi300();
+  } else if (filename == "mi350.txtpb") {
+    return configs::get_mi350();
+  }
+  LOG(FATAL) << "Embedded file not found: " << filename;
+}
 
 }  // namespace
 
