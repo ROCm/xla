@@ -24,6 +24,7 @@ limitations under the License.
 #include "xla/service/gpu/tests/hlo_pjrt_gpu_test_base.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/service/platform_util.h"
+#include "xla/stream_executor/platform_manager.h"
 #include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
 
 namespace xla {
@@ -517,7 +518,18 @@ TEST_F(GpuKernelTilingTest, ReductionInputTooLarge) {
   absl::Status status =
       CompileToExecutable(std::move(hlo_module), true).status();
 
-  if (xla::PlatformUtil::CanonicalPlatformName("gpu").value() == "rocm") {
+  auto platform_name =
+      absl::AsciiStrToUpper(PlatformUtil::CanonicalPlatformName("gpu").value());
+  auto *platform = se::PlatformManager::PlatformWithName(platform_name).value();
+  auto *se = platform->ExecutorForDevice(0).value();
+  const auto &device_description = se->GetDeviceDescription();
+  const auto *rocm_cc =
+      device_description.gpu_compute_capability().rocm_compute_capability();
+  const bool isRocm713AndBelow =
+      rocm_cc != nullptr && device_description.runtime_version() <
+                                stream_executor::SemanticVersion(7, 13, 0);
+
+  if (isRocm713AndBelow) {
     EXPECT_THAT(
         status.message(),
         ::testing::ContainsRegex(

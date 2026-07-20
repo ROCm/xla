@@ -20,45 +20,48 @@ set -x
 
 SCRIPT_DIR=$(realpath $(dirname $0))
 TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh)
+GFX_TARGET="gfx950"
 
 mkdir -p /tf/pkg
 
 for arg in "$@"; do
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},multi_gpu"
+        GFX_TARGET="gfx90a"
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu"
+        TAG_FILTERS="${TAG_FILTERS},requires-gpu-rocm,requires-gpu-amd,-multi_gpu"
     fi
-    if [[ "$arg" == "--config=asan" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},-noasan"
-    fi
-    if [[ "$arg" == "--config=tsan" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},-notsan"
+    if [[ "$arg" == "--config=ci_rocm_cpu" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},gpu,-requires-gpu-rocm,-requires-gpu-amd"
     fi
 done
-
-TEST_FILTER=(
-    F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f8e5m2_from_cc_8_9_rocm_63_no_restriction_c_32_nc_32
-    F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f8e5m2_from_cc_8_9_rocm_63_no_restriction_c_16_nc_2
-    DotBf16Bf16F32X6Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_bf16_bf16_f32_x6_with_lhs_f32_rhs_f32_output_f32_from_cc_8_0_rocm_60_no_restriction_c_16_nc_2
-    DotBf16Bf16F32X6Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_bf16_bf16_f32_x6_with_lhs_f32_rhs_f32_output_f32_from_cc_8_0_rocm_60_no_restriction_c_32_nc_32
-    DotBf16Bf16F32X9Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_bf16_bf16_f32_x9_with_lhs_f32_rhs_f32_output_f32_from_cc_8_0_rocm_60_no_restriction_c_32_nc_32
-    DotBf16Bf16F32X9Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_bf16_bf16_f32_x9_with_lhs_f32_rhs_f32_output_f32_from_cc_8_0_rocm_60_no_restriction_c_16_nc_2
-    CubScanThunkTest.ToProto
-)
 
 SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     "$@" \
-    --build_tag_filters=$TAG_FILTERS \
-    --test_tag_filters=$TAG_FILTERS \
-    --profile=/tf/pkg/profile.json.gz \
-    --keep_going \
-    --test_env=TF_TESTS_PER_GPU=1 \
-    --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
-    --test_output=errors \
+    --build_tag_filters="$TAG_FILTERS" \
+    --test_tag_filters="$TAG_FILTERS" \
+    --execution_log_compact_file=execution_log.binpb.zst \
+    --spawn_strategy=local \
+    --repo_env=REMOTE_GPU_TESTING=1 \
+    --repo_env=TF_ROCM_AMDGPU_TARGETS=${GFX_TARGET} \
+    --remote_download_outputs=minimal \
+    --grpc_keepalive_time=30s \
+    --test_sharding_strategy=disabled \
+    --test_verbose_timeout_warnings \
+    --test_timeout=920,2400,7200,9600 \
+    --sandbox_add_mount_pair=/dev/null:/etc/ld.so.cache \
+    --curses=no \
+    --color=yes \
+    --jobs=30 \
     --test_filter=-$(
         IFS=:
-        echo "${TEST_FILTER[*]}"
-    )
+        echo "${EXCLUDED_TESTS[*]}"
+    ) \
+    --cache_test_results=yes \
+    --nokeep_going \
+    --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+    -- \
+    //xla/...
+    
