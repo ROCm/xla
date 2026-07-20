@@ -20,12 +20,14 @@ set -x
 
 SCRIPT_DIR=$(realpath $(dirname $0))
 TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh)
+GFX_TARGET="gfx950"
 
 mkdir -p /tf/pkg
 
 for arg in "$@"; do
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},multi_gpu"
+        GFX_TARGET="gfx90a"
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},requires-gpu-rocm,requires-gpu-amd,-multi_gpu"
@@ -43,7 +45,7 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --execution_log_compact_file=execution_log.binpb.zst \
     --spawn_strategy=local \
     --repo_env=REMOTE_GPU_TESTING=1 \
-    --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
+    --repo_env=TF_ROCM_AMDGPU_TARGETS=${GFX_TARGET} \
     --remote_download_outputs=minimal \
     --grpc_keepalive_time=30s \
     --test_sharding_strategy=disabled \
