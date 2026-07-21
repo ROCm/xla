@@ -67,6 +67,7 @@ cc_library(
     deps = [
         ":rocm_collector",
         ":rocm_tracer",
+        ":rocm_tracer_options_utils",
         ":rocm_tracer_utils",
         "//xla:debug_options_flags",
         "//xla/stream_executor/rocm:roctracer_wrapper",
@@ -487,6 +488,90 @@ cc_library(
 )
 
 cc_library(
+    name = "rocm_pm_samples",
+    srcs = ["rocm_pm_samples.cc"],
+    hdrs = ["rocm_pm_samples.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ] + if_google([
+        # TODO(b/360374983): Remove this tag once the target can be built without --config=rocm.
+        "manual",
+    ]),
+    deps = [
+        "//xla/tsl/profiler/utils:math_utils",
+        "//xla/tsl/profiler/utils:timespan",
+        "//xla/tsl/profiler/utils:xplane_builder",
+        "//xla/tsl/profiler/utils:xplane_schema",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+    ],
+)
+
+cc_library(
+    name = "rocm_pm_sampler",
+    srcs = [
+        "rocm_pm_sampler_factory.cc",
+        "rocm_pm_sampler_impl.cc",
+    ],
+    hdrs = [
+        "rocm_pm_sampler.h",
+        "rocm_pm_sampler_factory.h",
+        "rocm_pm_sampler_impl.h",
+    ],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ] + if_google([
+        # TODO(b/360374983): Remove this tag once the target can be built without --config=rocm.
+        "manual",
+    ]),
+    deps = [
+        ":rocm_pm_samples",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:status_macros",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@local_config_rocm//rocm:rocm_headers",  # buildcleaner: keep
+        "@local_config_rocm//rocm:rocprofiler_sdk",  # buildcleaner: keep
+    ],
+)
+
+cc_library(
+    name = "rocm_tracer_options_utils",
+    srcs = ["rocm_tracer_options_utils.cc"],
+    hdrs = ["rocm_tracer_options_utils.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ] + if_google([
+        # TODO(b/360374983): Remove this tag once the target can be built without --config=rocm.
+        "manual",
+    ]),
+    deps = [
+        ":rocm_tracer",
+        "//xla/tsl/platform:status_macros",
+        "//xla/tsl/profiler/utils:profiler_options_util",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc",
+    ],
+)
+
+cc_library(
     name = "rocm_collector",
     srcs = ["rocm_collector.cc"],
     hdrs = ["rocm_collector.h"],
@@ -534,16 +619,21 @@ cc_library(
     ],
     deps = [
         ":rocm_collector",
+        ":rocm_pm_sampler",
+        ":rocm_pm_samples",
         ":rocm_tracer_utils",
         "//xla/stream_executor/rocm:roctracer_wrapper",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:status_macros",
         "//xla/tsl/profiler/backends/cpu:annotation_stack",
+        "//xla/tsl/profiler/utils:xplane_builder",
+        "//xla/tsl/profiler/utils:xplane_schema",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:node_hash_set",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
@@ -552,6 +642,7 @@ cc_library(
         "@local_config_rocm//rocm:rocm_headers",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocprofiler_sdk",  # buildcleaner: keep
         "@tsl//tsl/platform:abi",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],
 )
 
@@ -599,6 +690,26 @@ xla_cc_test(
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_googletest//:gtest_main",
         "//xla/tsl/profiler/utils:xplane_utils",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+    ],
+)
+
+xla_cc_test(
+    name = "rocm_pm_sampler_test",
+    size = "small",
+    srcs = ["rocm_pm_sampler_test.cc"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ] + if_google([
+        "manual",
+    ]),
+    deps = [
+        ":rocm_pm_samples",
+        "//xla/tsl/profiler/utils:xplane_builder",
+        "//xla/tsl/profiler/utils:xplane_schema",
+        "//xla/tsl/profiler/utils:xplane_visitor",
+        "@com_google_googletest//:gtest_main",
         "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],
 )

@@ -16,13 +16,18 @@ limitations under the License.
 #ifndef XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_H_
 #define XLA_BACKENDS_PROFILER_GPU_ROCM_TRACER_H_
 
+#include <memory>
+#include <vector>
+
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/types/optional.h"
+#include "xla/backends/profiler/gpu/rocm_pm_sampler.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/stream_executor/rocm/roctracer_wrapper.h"
+#include "tsl/profiler/protobuf/xplane.pb.h"
 
 namespace xla {
 namespace profiler {
@@ -33,6 +38,8 @@ struct RocmTracerOptions {
   // maximum number of annotation strings that AnnotationMap in RocmTracer can
   // store. e.g. 1M
   uint64_t max_annotation_strings;
+  // PM (hardware-counter) sampling options. Disabled by default.
+  RocmPmSamplerOptions pm_sampler_options{};
 };
 
 // The class use to enable rocprofiler-sdk buffered callback/activity tracing
@@ -50,8 +57,10 @@ class RocmTracer {
   // Only one profile session can be live in the same time.
   bool IsAvailable() const;
 
-  absl::Status Enable(const RocmTracerOptions& options,
-                      RocmTraceCollector* collector);
+  absl::Status Enable(
+      const RocmTracerOptions& options, RocmTraceCollector* collector,
+      const std::vector<std::unique_ptr<tensorflow::profiler::XPlane>>& xplanes,
+      uint64_t start_gputime_ns);
   void Disable();
 
   static uint64_t GetTimestamp();
@@ -92,6 +101,12 @@ class RocmTracer {
 
   bool api_tracing_enabled_{false};
   bool activity_tracing_enabled_{false};
+
+  // PM (hardware-counter) sampling. One rocprofiler context per GPU agent
+  // (a context profiles a single agent), created idle at init time.
+  std::vector<rocprofiler_context_id_t> pm_contexts_;
+  std::unique_ptr<RocmPmSampler> rocm_pm_sampler_;
+  bool pm_sampling_enabled_{false};
 
   AnnotationMap annotation_map_{/* default size, e.g. */ 1024 * 1024};
 

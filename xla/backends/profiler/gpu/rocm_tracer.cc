@@ -23,6 +23,7 @@ limitations under the License.
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -47,7 +48,12 @@ limitations under the License.
 #include "rocm/include/rocprofiler-sdk/registration.h"
 #include "rocm/include/rocprofiler-sdk/rocprofiler.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
+#include "xla/backends/profiler/gpu/rocm_pm_sampler.h"
+#include "xla/backends/profiler/gpu/rocm_pm_sampler_factory.h"
+#include "xla/backends/profiler/gpu/rocm_pm_samples.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
+#include "xla/tsl/profiler/utils/xplane_builder.h"
+#include "xla/tsl/profiler/utils/xplane_schema.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
 #include "tsl/platform/abi.h"
@@ -140,8 +146,10 @@ bool RocmTracer::IsAvailable() const {
   return ts;
 }
 
-absl::Status RocmTracer::Enable(const RocmTracerOptions& options,
-                                RocmTraceCollector* collector) {
+absl::Status RocmTracer::Enable(
+    const RocmTracerOptions& options, RocmTraceCollector* collector,
+    const std::vector<std::unique_ptr<tensorflow::profiler::XPlane>>& xplanes,
+    uint64_t start_gputime_ns) {
   absl::MutexLock lock(collector_mutex_);
   if (collector_ != nullptr) {
     return absl::AlreadyExistsError("ROCM tracer is already running");
@@ -160,6 +168,48 @@ absl::Status RocmTracer::Enable(const RocmTracerOptions& options,
   annotation_map_.Clear();
   api_tracing_enabled_ = true;
   activity_tracing_enabled_ = true;
+
+  // Enable PM sampling once activity tracing is running. Each device writes its
+  // counter line into the pre-allocated XPlane for that device.
+  if (options.pm_sampler_options.enable && NumGpus() > 0) {
+    RocmPmSamplerOptions pm_options = options.pm_sampler_options;
+    pm_options.process_samples = [&xplanes,
+                                  start_gputime_ns](RocmPmSamples* samples) {
+      if (samples == nullptr) return;
+      int device_id = samples->GetDeviceId();
+      if (device_id < 0 || device_id >= static_cast<int>(xplanes.size()) ||
+          !xplanes[device_id]) {
+        LOG(ERROR) << "PM sample device id " << device_id << " out of range";
+        return;
+      }
+      tensorflow::profiler::XPlane* xplane = xplanes[device_id].get();
+      xplane->set_name(tsl::profiler::GpuPlaneName(device_id));
+      tsl::profiler::XPlaneBuilder builder(xplane);
+      samples->PopulateCounterLine(&builder, start_gputime_ns);
+    };
+
+    std::vector<rocprofiler_agent_id_t> agent_ids;
+    agent_ids.reserve(gpu_agents_.size());
+    for (const auto& agent : gpu_agents_) {
+      agent_ids.push_back(agent.id);
+    }
+
+    absl::StatusOr<std::unique_ptr<RocmPmSampler>> sampler_or =
+        CreateRocmPmSampler(pm_contexts_, agent_ids, pm_options);
+    if (!sampler_or.ok()) {
+      LOG(WARNING) << "Failed to create PM sampler, continuing without "
+                   << "hardware counters: " << sampler_or.status();
+    } else {
+      rocm_pm_sampler_ = std::move(sampler_or).value();
+      if (absl::Status s = rocm_pm_sampler_->StartSampler(); !s.ok()) {
+        LOG(WARNING) << "Failed to start PM sampler: " << s;
+        rocm_pm_sampler_.reset();
+      } else {
+        pm_sampling_enabled_ = true;
+      }
+    }
+  }
+
   VLOG(1) << "GpuTracer started with number of GPUs = " << NumGpus();
   return absl::OkStatus();
 }
@@ -440,6 +490,15 @@ absl::Status RocmTracer::InitProfiling(void* tool_data) {
     }
   }
 
+  // Create one idle PM-sampling context per GPU agent. A device-counting
+  // context profiles a single agent, so we need one per GPU. They are
+  // configured and started later (in Enable) once the counter list is known.
+  pm_contexts_.assign(gpu_agents_.size(), rocprofiler_context_id_t{0});
+  for (size_t i = 0; i < gpu_agents_.size(); ++i) {
+    RETURN_IF_ERROR(RocprofilerStatusToAbslStatus(
+        rocprofiler_create_context(&pm_contexts_[i])));
+  }
+
   RETURN_IF_ERROR(RocprofilerStatusToAbslStatus(
       rocprofiler_create_context(&utility_context_)));
 
@@ -541,9 +600,27 @@ void RocmTracer::toolFinalize(void* tool_data) {
   obj.utility_context_.handle = 0;
   rocprofiler_stop_context(obj.context_);
   obj.context_.handle = 0;
+  for (auto& pm_context : obj.pm_contexts_) {
+    if (pm_context.handle != 0) {
+      rocprofiler_stop_context(pm_context);
+      pm_context.handle = 0;
+    }
+  }
 }
 
 void RocmTracer::Disable() {
+  // Stop PM sampling before activity tracing (symmetry with the CUDA path).
+  if (pm_sampling_enabled_ && rocm_pm_sampler_) {
+    if (absl::Status s = rocm_pm_sampler_->StopSampler(); !s.ok()) {
+      LOG(WARNING) << "Failed to stop PM sampler: " << s;
+    }
+    if (absl::Status s = rocm_pm_sampler_->Deinitialize(); !s.ok()) {
+      LOG(WARNING) << "Failed to deinitialize PM sampler: " << s;
+    }
+    rocm_pm_sampler_.reset();
+    pm_sampling_enabled_ = false;
+  }
+
   // Stop first so no new records enter the rocprofiler buffer; this pairs
   // with the rocprofiler_start_context() in Enable().
   rocprofiler_status_t status = rocprofiler_stop_context(context_);
