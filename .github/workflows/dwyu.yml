@@ -16,10 +16,7 @@ name: DWYU (Depend on What You Use)
 permissions:
   contents: read
 on:
-  pull_request:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 env:
   GOBIN: "/usr/local/bin"

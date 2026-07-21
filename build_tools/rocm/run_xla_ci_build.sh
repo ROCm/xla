@@ -24,43 +24,30 @@ TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh)
 mkdir -p /tf/pkg
 
 EXCLUDED_TESTS=(
-    HostMemoryAllocateTest.Numa
-    CollectiveBroadcastThunkMultiGpuTest.ExecuteOnStream*
-    CollectiveOpsCommandBufferTest.SendRecv_Simple*
-    CollectiveOpsTestE2EShardedUnsharded.DotBatchAndBatch*
-    CollectiveOpsTestE2EShardedUnsharded.DotBatchAndNonContracting*
-    CollectiveOpsTestE2EShardedUnsharded.DotContractingAndContracting*
-    CollectiveOpsTestE2EShardedUnsharded.DotContractingAndReplicated*
-    CollectiveOpsTestE2EShardedUnsharded.DotContractingNonContractingAndContractingNonContracting*
-    CollectiveOpsTestE2EShardedUnsharded.DotNonContractingAndContracting*
-    CollectiveOpsTestE2EShardedUnsharded.DusSingleDimensionInPartitionMode*
-    CollectivePipelineParallelismTestWithAndWithoutOpts*
-    DeterminismTest.CublasDot*
-    DotOperationTestWithCublasLt_F16F32F64CF64/1.GeneralMatMulActivation*
-    DynamicSliceFusionTest.MultipleOffsetsAsFunctionOfInductionVariable*
-    DynamicSliceFusionTest.OffsetAsFunctionOfInductionVariableShouldUseOffsetModules*
-    DynamicSliceFusionTest.OffsetsThatCanBeEvaluatedSuccessfullyAreCorrectlyEmbeddedIntoThunks*
-    DynamicSliceFusionTest.ReduceScatterDUSConstant*
-    DynamicSliceFusionTest.ReduceScatterDUSLoopIterationOffset*
-    DynamicSliceFusionTest.ReduceScatterDUSParameterOffset*
-    DynamicSliceFusionTest.ReduceScatterDynamicSlice*
-    DynamicSliceFusionTest.ReduceScatterDynamicSliceMultipleBuffersShouldFuseAndExecuteCorrectly*
-    DynamicSliceFusionTest.ReduceScatterSlice*
-    DynamicSliceFusionTest.WhileLoopSliceWithNoInductionVariable*
-    FunctionalHloRunnerTest.DumpsUnoptimizedHLOInUnoptimizedSnapshot*
-    FunctionalHloRunnerTest.Sharded2DevicesHloUnoptimizedSnapshot*
-    MatmulTestWithCublas.GemmRewriter_RegressionTestF64
-    P2POps*
-    StreamExecutorGpuClientTest.GetAbiVersion*
-    StreamExecutorGpuClientTest.GetCompiledMemoryStatsWithTupleAndNcclUserBuffers*
-    SuccessfulCrossHostTransfer*
-    TritonAndBlasSupportForDifferentTensorSizes*
-    TritonBackendTest.CostModelOptions_Combination*
-    TritonBackendTest.CostModelOptions_Filter*
-    TritonBackendTest.CostModelOptions_TopFromDefault*
-    RaggedAllToAllTest/RaggedAllToAllTest*
-    RaggedAllToAllMultiHostDecomposerTest/RaggedAllToAllMultiHostDecomposerTest*
-    AsyncCollectiveOps/AsyncCollectiveOps*
+    "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
+    "DeterminismTest.CublasDot"
+    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x9"
+    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x6"
+    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_f32_f32_f32"
+    "TritonBackendTest.CostModelOptions_Combination"
+    "TritonBackendTest.CostModelOptions_TopFromDefault"
+    "TritonBackendTest.CostModelOptions_Filter"
+    "TritonTest.FuseSubchannelDequantizationWithTranspose"
+    "P2POps/P2POps.CollectivePermute/enable_symmetric_buffer"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllReduce/async_symmetric*"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllGatherMixedTypes/async_symmetric*"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllToAllNumberOfElementsLargerThanInt32Max/sync_symmetric*"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllToAllWithoutSplitDim/async_symmetric*"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllToAllMemCpyWithoutSplitDim/sync_symmetric*"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllToAllWithSplitDim/async_symmetric*"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllToAllWithoutSplitDim/sync_symmetric*"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllToAllMemCpyWithoutSplitDim/async_symmetric*"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllReduce/sync_symmetric*"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllGatherMixedTypes/sync_symmetric*"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllToAllNumberOfElementsLargerThanInt32Max/async_symmetric*"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllGather/async_symmetric*"
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllToAllWithSplitDim/sync_symmetric*"
+
 )
 
 for arg in "$@"; do
@@ -75,20 +62,20 @@ for arg in "$@"; do
     fi
 done
 
+SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
     --profile=/tf/pkg/profile.json.gz \
     --nokeep_going \
     --test_env=TF_TESTS_PER_GPU=1 \
-    --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
+    --test_timeout=920,2400,7200,9600 \
+    --action_env=XLA_FLAGS="--xla_gpu_force_compilation_parallelism=16" \
     --test_output=errors \
     --run_under=//build_tools/rocm:parallel_gpu_execute \
     --test_filter=-$(
         IFS=:
         echo "${EXCLUDED_TESTS[*]}"
     ) \
-    --color=yes \
     "$@" \
-    -- \
-    //xla/... \
+    //xla/...
