@@ -79,8 +79,11 @@ RocmPmSamplerDevice::RocmPmSamplerDevice(int device_id,
       sample_interval_ns_(options.sample_interval_ns),
       flush_period_(options.flush_period),
       max_samples_(options.max_samples),
-      process_samples_(options.process_samples),
-      config_metrics_(options.metrics) {
+      config_metrics_(options.metrics) {}
+
+void RocmPmSamplerDevice::SetSink(
+    std::function<void(RocmPmSamples*)> process_samples) {
+  process_samples_ = std::move(process_samples);
   if (!process_samples_) {
     process_samples_ = [](RocmPmSamples* s) {
       LOG(WARNING) << "(Profiling::PM Sampling) No decode handler specified, "
@@ -88,6 +91,7 @@ RocmPmSamplerDevice::RocmPmSamplerDevice(int device_id,
                    << " samples";
     };
   }
+  // Spawn the sampling thread only once the sink is known.
   thread_ = std::make_unique<std::thread>(&RocmPmSamplerDevice::MainFunc, this);
 }
 
@@ -369,11 +373,22 @@ absl::Status RocmPmSamplerImpl::Initialize(
 
   absl::Cleanup cleanup([this]() { devices_.clear(); });
 
+  // All of this must run BEFORE HIP creates its device queues (i.e. at
+  // library-load / rocprofiler tool-init time, before `import jax` finishes
+  // bringing up the runtime). rocprofiler creates the per-agent profile queue
+  // by intercepting HSA queue creation, but only if the counter config and
+  // device-counting service are already registered AND the context is started.
+  // Configuring or starting later yields "No profile queue is available for
+  // this agent" and zero counter records.
   for (size_t i = 0; i < gpu_agents.size(); ++i) {
     auto dev = std::make_unique<RocmPmSamplerDevice>(
         static_cast<int>(i), gpu_contexts[i], gpu_agents[i], options);
     RETURN_IF_ERROR(dev->CreateConfig());
     RETURN_IF_ERROR(dev->ConfigureService());
+    if (absl::Status s = dev->StartContext(); !s.ok()) {
+      LOG(WARNING) << "(Profiling::PM Sampling) failed to start context on "
+                   << "device " << dev->device_id() << ": " << s;
+    }
     devices_.push_back(std::move(dev));
   }
 
@@ -382,16 +397,15 @@ absl::Status RocmPmSamplerImpl::Initialize(
   return absl::OkStatus();
 }
 
-absl::Status RocmPmSamplerImpl::StartSampler() {
+absl::Status RocmPmSamplerImpl::StartSampler(
+    std::function<void(RocmPmSamples*)> process_samples) {
   if (enabled_) {
     return absl::AlreadyExistsError("Already started");
   }
-  // Start each context (fires service callback -> binds config).
+  // Contexts were already started in Initialize (pre-HIP). Now that the xplane
+  // sink is known, wire it in and enable the sampling threads.
   for (auto& dev : devices_) {
-    if (absl::Status s = dev->StartContext(); !s.ok()) {
-      LOG(WARNING) << "(Profiling::PM Sampling) failed to start context on "
-                   << "device " << dev->device_id() << ": " << s;
-    }
+    dev->SetSink(process_samples);
   }
   for (auto& dev : devices_) {
     dev->Enable();

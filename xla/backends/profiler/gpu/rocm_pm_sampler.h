@@ -38,6 +38,12 @@ namespace profiler {
 // no hardware ring buffer on the synchronous sampling path -- the sample call
 // returns records directly) and no devs_per_decode_thd (there is no separate
 // decode thread; each device drives its own sampling loop -- see the impl).
+//
+// The sink (process_samples) is NOT here: on ROCm the sampler must be built at
+// library-load time, before HIP creates its device queues, so the counter
+// config + device-counting service are registered in time for rocprofiler to
+// create a profile queue. The xplane sink isn't known until trace start, so it
+// is injected later via StartSampler().
 struct RocmPmSamplerOptions {
   // Whether to enable PM sampling.
   bool enable = false;
@@ -45,15 +51,11 @@ struct RocmPmSamplerOptions {
   std::vector<std::string> metrics{};
   // Host sampling period. 500,000ns = 2kHz, matching the CUDA default.
   size_t sample_interval_ns = 500'000;
-  // How often the per-device thread hands a batch of samples to
-  // process_samples. Larger batches amortize the callback + XPlane locking.
+  // How often the per-device thread hands a batch of samples to the sink.
+  // Larger batches amortize the callback + XPlane locking.
   absl::Duration flush_period = absl::Milliseconds(100);
   // Reserve size for the per-batch sampler-range vector.
   size_t max_samples = 500;
-  // What to do with samples once gathered.
-  // Note: must be thread-safe - may be called by multiple device threads
-  // simultaneously (with different samples data per thread).
-  std::function<void(RocmPmSamples* samples)> process_samples;
 };
 
 class RocmPmSampler {
@@ -68,13 +70,18 @@ class RocmPmSampler {
 
   virtual ~RocmPmSampler() = default;
 
-  // Start sampling (starts the counting context and per-device threads).
-  virtual absl::Status StartSampler() = 0;
+  // Start sampling: sets the sample sink, starts the counting contexts, and
+  // enables the per-device sampling threads. process_samples must be
+  // thread-safe -- it may be called concurrently by multiple device threads
+  // (each with its own samples).
+  virtual absl::Status StartSampler(
+      std::function<void(RocmPmSamples* samples)> process_samples) = 0;
 
-  // Stop sampling (pauses per-device threads, drains a final batch).
+  // Stop sampling (pauses per-device threads, drains a final batch, stops the
+  // counting contexts).
   virtual absl::Status StopSampler() = 0;
 
-  // Deinitialize the PM sampler (stops the context, joins threads, frees).
+  // Deinitialize the PM sampler (joins threads, frees configs).
   virtual absl::Status Deinitialize() = 0;
 };
 

@@ -71,9 +71,15 @@ class RocmPmSamplerDevice {
   absl::Status ConfigureService();
 
   // Start/stop this device's counting context. StartContext triggers the
-  // service callback that binds the config.
+  // service callback that binds the config. StartContext must be called before
+  // HIP creates its device queues, so rocprofiler can create a profile queue
+  // for this agent (empirically required on ROCm 7.2.4).
   absl::Status StartContext();
   absl::Status StopContext();
+
+  // Set the sink and spawn the sampling thread. Called at trace start, once the
+  // xplane sink is known. The counting context must already be started.
+  void SetSink(std::function<void(RocmPmSamples*)> process_samples);
 
   // State transitions (request/await handshake with the sampling thread).
   void Enable() { ChangeState(ThreadState::kEnabled); }
@@ -165,7 +171,8 @@ class RocmPmSamplerImpl : public RocmPmSampler {
       const std::vector<rocprofiler_agent_id_t>& gpu_agents,
       const RocmPmSamplerOptions& options);
 
-  absl::Status StartSampler() override;
+  absl::Status StartSampler(
+      std::function<void(RocmPmSamples*)> process_samples) override;
   absl::Status StopSampler() override;
   absl::Status Deinitialize() override;
 

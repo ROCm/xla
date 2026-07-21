@@ -22,6 +22,7 @@ limitations under the License.
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -31,8 +32,12 @@ limitations under the License.
 #include "absl/base/optimization.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
 #include "xla/tsl/platform/status_macros.h"
@@ -169,12 +174,13 @@ absl::Status RocmTracer::Enable(
   api_tracing_enabled_ = true;
   activity_tracing_enabled_ = true;
 
-  // Enable PM sampling once activity tracing is running. Each device writes its
-  // counter line into the pre-allocated XPlane for that device.
-  if (options.pm_sampler_options.enable && NumGpus() > 0) {
-    RocmPmSamplerOptions pm_options = options.pm_sampler_options;
-    pm_options.process_samples = [&xplanes,
-                                  start_gputime_ns](RocmPmSamples* samples) {
+  // PM sampling: the sampler was built (contexts started, config+service
+  // registered) at InitProfiling time -- it must happen before HIP creates its
+  // device queues. Here we only inject the xplane sink and start the sampling
+  // threads.
+  if (rocm_pm_sampler_) {
+    auto process_samples = [&xplanes,
+                            start_gputime_ns](RocmPmSamples* samples) {
       if (samples == nullptr) return;
       int device_id = samples->GetDeviceId();
       if (device_id < 0 || device_id >= static_cast<int>(xplanes.size()) ||
@@ -187,26 +193,11 @@ absl::Status RocmTracer::Enable(
       tsl::profiler::XPlaneBuilder builder(xplane);
       samples->PopulateCounterLine(&builder, start_gputime_ns);
     };
-
-    std::vector<rocprofiler_agent_id_t> agent_ids;
-    agent_ids.reserve(gpu_agents_.size());
-    for (const auto& agent : gpu_agents_) {
-      agent_ids.push_back(agent.id);
-    }
-
-    absl::StatusOr<std::unique_ptr<RocmPmSampler>> sampler_or =
-        CreateRocmPmSampler(pm_contexts_, agent_ids, pm_options);
-    if (!sampler_or.ok()) {
-      LOG(WARNING) << "Failed to create PM sampler, continuing without "
-                   << "hardware counters: " << sampler_or.status();
+    if (absl::Status s = rocm_pm_sampler_->StartSampler(process_samples);
+        !s.ok()) {
+      LOG(WARNING) << "Failed to start PM sampler: " << s;
     } else {
-      rocm_pm_sampler_ = std::move(sampler_or).value();
-      if (absl::Status s = rocm_pm_sampler_->StartSampler(); !s.ok()) {
-        LOG(WARNING) << "Failed to start PM sampler: " << s;
-        rocm_pm_sampler_.reset();
-      } else {
-        pm_sampling_enabled_ = true;
-      }
+      pm_sampling_enabled_ = true;
     }
   }
 
@@ -473,6 +464,60 @@ static void tool_tracing_callback(rocprofiler_context_id_t context,
       context, buffer_id, headers, num_headers, drop_count);
 }
 
+void RocmTracer::MaybeInitPmSampler() {
+  const char* counters_env = std::getenv("XLA_ROCM_PM_SAMPLE_COUNTERS");
+  if (counters_env == nullptr || counters_env[0] == '\0') {
+    return;  // PM sampling not requested.
+  }
+  if (gpu_agents_.empty()) {
+    LOG(WARNING) << "XLA_ROCM_PM_SAMPLE_COUNTERS set but no GPU agents found";
+    return;
+  }
+
+  RocmPmSamplerOptions pm_options;
+  pm_options.enable = true;
+  for (absl::string_view metric :
+       absl::StrSplit(counters_env, ',', absl::SkipEmpty())) {
+    pm_options.metrics.push_back(
+        std::string(absl::StripAsciiWhitespace(metric)));
+  }
+  if (pm_options.metrics.empty()) {
+    return;
+  }
+  if (const char* iv = std::getenv("XLA_ROCM_PM_SAMPLE_INTERVAL_US");
+      iv != nullptr && iv[0] != '\0') {
+    int us = std::atoi(iv);
+    if (us > 0) pm_options.sample_interval_ns = static_cast<size_t>(us) * 1000;
+  }
+
+  // One counting context per GPU agent (a context profiles a single agent).
+  pm_contexts_.assign(gpu_agents_.size(), rocprofiler_context_id_t{0});
+  std::vector<rocprofiler_agent_id_t> agent_ids;
+  agent_ids.reserve(gpu_agents_.size());
+  for (size_t i = 0; i < gpu_agents_.size(); ++i) {
+    if (rocprofiler_create_context(&pm_contexts_[i]) !=
+        ROCPROFILER_STATUS_SUCCESS) {
+      LOG(WARNING) << "Failed to create PM context for GPU " << i
+                   << "; disabling PM sampling";
+      pm_contexts_.clear();
+      return;
+    }
+    agent_ids.push_back(gpu_agents_[i].id);
+  }
+
+  absl::StatusOr<std::unique_ptr<RocmPmSampler>> sampler_or =
+      CreateRocmPmSampler(pm_contexts_, agent_ids, pm_options);
+  if (!sampler_or.ok()) {
+    LOG(WARNING) << "Failed to create PM sampler, continuing without hardware "
+                 << "counters: " << sampler_or.status();
+    return;
+  }
+  rocm_pm_sampler_ = std::move(sampler_or).value();
+  LOG(INFO) << "ROCm PM sampling configured: " << pm_options.metrics.size()
+            << " counters, interval " << pm_options.sample_interval_ns
+            << "ns, on " << gpu_agents_.size() << " GPUs";
+}
+
 absl::Status RocmTracer::InitProfiling(void* tool_data) {
   name_info_ = GetCallbackTracingNames();
 
@@ -490,14 +535,19 @@ absl::Status RocmTracer::InitProfiling(void* tool_data) {
     }
   }
 
-  // Create one idle PM-sampling context per GPU agent. A device-counting
-  // context profiles a single agent, so we need one per GPU. They are
-  // configured and started later (in Enable) once the counter list is known.
-  pm_contexts_.assign(gpu_agents_.size(), rocprofiler_context_id_t{0});
-  for (size_t i = 0; i < gpu_agents_.size(); ++i) {
-    RETURN_IF_ERROR(RocprofilerStatusToAbslStatus(
-        rocprofiler_create_context(&pm_contexts_[i])));
-  }
+  // PM (hardware-counter) sampling must be set up HERE, before HIP creates its
+  // device queues -- rocprofiler creates the per-agent profile queue by
+  // intercepting HSA queue creation, and only does so if the counter config +
+  // device-counting service are already registered and the context started.
+  // Doing this lazily at trace-start (in Enable) yields "No profile queue is
+  // available for this agent" and zero counter records.
+  //
+  // The counter list therefore cannot come from ProfileOptions
+  // advanced_configuration (not available until start_trace, long after HIP is
+  // up). It comes from the XLA_ROCM_PM_SAMPLE_COUNTERS env var instead, e.g.
+  //   XLA_ROCM_PM_SAMPLE_COUNTERS=SQ_WAVES,GRBM_GUI_ACTIVE,GRBM_COUNT
+  // Optional: XLA_ROCM_PM_SAMPLE_INTERVAL_US (default 1000).
+  MaybeInitPmSampler();
 
   RETURN_IF_ERROR(RocprofilerStatusToAbslStatus(
       rocprofiler_create_context(&utility_context_)));

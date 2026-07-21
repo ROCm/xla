@@ -67,7 +67,6 @@ cc_library(
     deps = [
         ":rocm_collector",
         ":rocm_tracer",
-        ":rocm_tracer_options_utils",
         ":rocm_tracer_utils",
         "//xla:debug_options_flags",
         "//xla/stream_executor/rocm:roctracer_wrapper",
@@ -545,29 +544,6 @@ cc_library(
         "@com_google_absl//absl/time",
         "@local_config_rocm//rocm:rocm_headers",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocprofiler_sdk",  # buildcleaner: keep
-    ],
-)
-
-cc_library(
-    name = "rocm_tracer_options_utils",
-    srcs = ["rocm_tracer_options_utils.cc"],
-    hdrs = ["rocm_tracer_options_utils.h"],
-    tags = [
-        "gpu",
-        "rocm-only",
-    ] + if_google([
-        # TODO(b/360374983): Remove this tag once the target can be built without --config=rocm.
-        "manual",
-    ]),
-    deps = [
-        ":rocm_tracer",
-        "//xla/tsl/platform:status_macros",
-        "//xla/tsl/profiler/utils:profiler_options_util",
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:string_view",
-        "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc",
     ],
 )
 

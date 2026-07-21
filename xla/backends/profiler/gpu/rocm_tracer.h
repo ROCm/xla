@@ -38,8 +38,6 @@ struct RocmTracerOptions {
   // maximum number of annotation strings that AnnotationMap in RocmTracer can
   // store. e.g. 1M
   uint64_t max_annotation_strings;
-  // PM (hardware-counter) sampling options. Disabled by default.
-  RocmPmSamplerOptions pm_sampler_options{};
 };
 
 // The class use to enable rocprofiler-sdk buffered callback/activity tracing
@@ -62,6 +60,11 @@ class RocmTracer {
       const std::vector<std::unique_ptr<tensorflow::profiler::XPlane>>& xplanes,
       uint64_t start_gputime_ns);
   void Disable();
+
+  // True if PM hardware-counter sampling was configured at init time (i.e. the
+  // XLA_ROCM_PM_SAMPLE_COUNTERS env var was set and the sampler built). Callers
+  // use this to decide whether to allocate per-GPU counter XPlanes.
+  bool PmSamplingConfigured() const { return rocm_pm_sampler_ != nullptr; }
 
   static uint64_t GetTimestamp();
   uint32_t NumGpus() const { return num_gpus_; }
@@ -93,6 +96,12 @@ class RocmTracer {
 
  private:
   absl::Status InitProfiling(void* tool_data);
+
+  // Builds the PM sampler (one counting context per GPU agent, config +
+  // device-counting service registered, contexts started) if the
+  // XLA_ROCM_PM_SAMPLE_COUNTERS env var is set. Must run before HIP init. Never
+  // fails the trace: on any error it logs and leaves rocm_pm_sampler_ null.
+  void MaybeInitPmSampler();
 
   uint32_t num_gpus_{0};
   std::optional<RocmTracerOptions> options_;
