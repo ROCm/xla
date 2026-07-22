@@ -1944,8 +1944,12 @@ xla_test(
         "//xla:error_spec",
         "//xla:xla_proto_cc",
         "//xla/service:hlo_module_config",
+        "//xla/service/gpu/autotuning:autotuner_cache",
         "//xla/tests:hlo_pjrt_interpreter_reference_mixin",
         "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/base:log_severity",
+        "@com_google_absl//absl/log:globals",
+        "@com_google_absl//absl/log:scoped_mock_log",
         "@com_google_googletest//:gtest_main",
     ],
 )

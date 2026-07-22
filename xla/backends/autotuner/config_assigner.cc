@@ -42,16 +42,19 @@ limitations under the License.
 #include "google/protobuf/text_format.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/autotuner_cache_interface.h"
+#include "xla/backends/autotuner/backend_config.pb.h"
 #include "xla/backends/autotuner/backends.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
 #include "xla/backends/autotuner/codegen_orchestrator.h"
 #include "xla/backends/autotuner/config_runner.h"
 #include "xla/backends/autotuner/config_selector.h"
+#include "xla/backends/autotuner/dichotomic_search.h"
 #include "xla/backends/autotuner/hlo_extractor.h"
 #include "xla/backends/autotuner/profiler.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_print_options.h"
 #include "xla/pjrt/distributed/key_value_store_interface.h"
 #include "xla/service/dump.h"
@@ -66,6 +69,27 @@ limitations under the License.
 
 namespace xla {
 namespace {
+
+// Returns true if every config was produced by the Triton backend (the
+// `triton` TritonGemmKey or `block_level` BlockLevelFusionConfig oneof case).
+bool AllConfigsAreTriton(
+    absl::Span<const CodegenOrchestrator::Config> configs) {
+  if (configs.empty()) {
+    return false;
+  }
+  for (const CodegenOrchestrator::Config& c : configs) {
+    if (c.backend_config == nullptr) {
+      return false;
+    }
+    const BackendConfig::ConfigCase config_case =
+        c.backend_config->config_case();
+    if (config_case != BackendConfig::kTriton &&
+        config_case != BackendConfig::kBlockLevel) {
+      return false;
+    }
+  }
+  return true;
+}
 
 // It is important to fingerprint the entire module not just the autotuning
 // candidates, to avoid collisions in the key-value store when several
@@ -373,6 +397,23 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfig(
   VLOG(1) << "Found total of " << supported_configs.size()
           << " supported configs.";
 
+  // Experimental Triton-only dichotomic search. Exhaustive search takes
+  // precedence when both flags are set.
+  const DebugOptions& debug_options =
+      instr->GetModule()->config().debug_options();
+  VLOG(3) << "Dichotomic dispatch check for " << instr->name()
+          << ": dichotomic_flag="
+          << debug_options.xla_gpu_dichotomic_tiling_search()
+          << " exhaustive_flag="
+          << debug_options.xla_gpu_exhaustive_tiling_search()
+          << " all_triton=" << AllConfigsAreTriton(supported_configs)
+          << " num_configs=" << supported_configs.size();
+  if (debug_options.xla_gpu_dichotomic_tiling_search() &&
+      !debug_options.xla_gpu_exhaustive_tiling_search() &&
+      AllConfigsAreTriton(supported_configs)) {
+    return GetTunedConfigDichotomic(instr, std::move(supported_configs));
+  }
+
   tsl::Future<std::vector<CodegenOrchestrator::MaybeExecutableCandidate>>
       maybe_candidates =
           orchestrator_->CompileAll(*instr, std::move(supported_configs));
@@ -426,6 +467,188 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfig(
             PickBestConfig(profiles, options_.scratch_bytes_window_size_us));
         return std::move(best_profile.config);
       });
+}
+
+tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
+    const HloInstruction* instr, std::vector<Config> supported_configs) {
+  CHECK(config_runner_ != nullptr);
+
+  // Build the discretized search space from the exhaustive Triton config set.
+  std::vector<const BackendConfig*> backend_configs;
+  backend_configs.reserve(supported_configs.size());
+  for (const Config& c : supported_configs) {
+    backend_configs.push_back(c.backend_config.get());
+  }
+  absl::StatusOr<DichotomicSearchSpace> space_or =
+      DichotomicSearchSpace::Build(backend_configs);
+  if (!space_or.ok()) {
+    return space_or.status();
+  }
+  DichotomicSearchSpace space = std::move(space_or).value();
+  SearchProfile profile = MakeProfile(space, instr->opcode());
+
+  // Renders a config's axis values as "name=value" pairs for logging.
+  auto config_to_string = [&](const Coord& coord) -> std::string {
+    std::string s;
+    for (int a = 0; a < space.axes().size() && a < coord.size(); ++a) {
+      if (!s.empty()) s += ", ";
+      const ParameterAxis& axis = space.axes()[a];
+      int idx = coord[a];
+      int64_t value =
+          (idx >= 0 && idx < axis.values.size()) ? axis.values[idx] : -1;
+      absl::StrAppend(&s, axis.name, "=", value);
+    }
+    return s;
+  };
+
+  // Compiles + profiles the given subset (referenced by index), reusing the
+  // existing CompileAll + ProfileAll pipeline. Sequential per-phase; blocking
+  // is on GPU work, not CPU.
+  auto eval_batch = [&](absl::Span<const int> indices)
+      -> absl::StatusOr<std::vector<ConfigRunner::ConfigProfile>> {
+    if (indices.empty()) {
+      return std::vector<ConfigRunner::ConfigProfile>{};
+    }
+    std::vector<Config> batch;
+    batch.reserve(indices.size());
+    for (int idx : indices) {
+      Config copy;
+      copy.codegen_backend = supported_configs[idx].codegen_backend;
+      copy.backend_config = std::make_unique<BackendConfig>(
+          *supported_configs[idx].backend_config);
+      batch.push_back(std::move(copy));
+    }
+    ASSIGN_OR_RETURN(
+        std::vector<CodegenOrchestrator::MaybeExecutableCandidate>
+            maybe_candidates,
+        orchestrator_->CompileAll(*instr, std::move(batch)).Await());
+    std::vector<ConfigRunner::ExecutableCandidate> candidates;
+    for (auto& mc : maybe_candidates) {
+      if (mc.executable.ok()) {
+        candidates.push_back(
+            {std::move(mc.config), std::move(mc.executable.value())});
+      }
+    }
+    if (candidates.empty()) {
+      return std::vector<ConfigRunner::ConfigProfile>{};
+    }
+    return config_runner_->ProfileAll(std::move(candidates), instr);
+  };
+
+  // Maps a profiled config back to its coordinate in `space`, logs it, and
+  // records the measured time. Failed profiles are skipped.
+  auto collect_samples =
+      [&](absl::Span<const ConfigRunner::ConfigProfile> profiles,
+          std::vector<Sample>* out) {
+        std::vector<const BackendConfig*> singleton(1);
+        for (const ConfigRunner::ConfigProfile& p : profiles) {
+          if (p.failure.has_value() || p.config.backend_config == nullptr) {
+            continue;
+          }
+          singleton[0] = p.config.backend_config.get();
+          absl::StatusOr<DichotomicSearchSpace> single =
+              DichotomicSearchSpace::Build(singleton);
+          if (!single.ok()) {
+            continue;
+          }
+          Coord coord(space.axes().size(), 0);
+          const std::vector<ParameterAxis>& single_axes = single->axes();
+          bool ok = true;
+          for (int a = 0; a < space.axes().size(); ++a) {
+            int64_t value = -1;
+            for (const ParameterAxis& sa : single_axes) {
+              if (sa.name == space.axes()[a].name && !sa.values.empty()) {
+                value = sa.values.front();
+                break;
+              }
+            }
+            const std::vector<int64_t>& vals = space.axes()[a].values;
+            int found = -1;
+            for (int i = 0; i < vals.size(); ++i) {
+              if (vals[i] == value) {
+                found = i;
+                break;
+              }
+            }
+            if (found < 0) {
+              ok = false;
+              break;
+            }
+            coord[a] = found;
+          }
+          if (ok) {
+            const double time_ms = absl::ToDoubleMilliseconds(p.duration);
+            VLOG(2) << "Dichotomic search: tested config {"
+                    << config_to_string(coord) << "} -> " << time_ms << " ms";
+            out->push_back(
+                Sample{std::move(coord), absl::ToDoubleSeconds(p.duration)});
+          }
+        }
+      };
+
+  std::vector<ConfigRunner::ConfigProfile> all_profiles;
+  std::vector<Sample> all_samples;
+  std::vector<int> evaluated;
+
+  auto run_phase = [&](SearchPhase phase) -> absl::Status {
+    std::vector<int> indices =
+        SelectConfigs(space, profile, phase, all_samples, evaluated);
+    if (indices.empty()) {
+      return absl::OkStatus();
+    }
+    ASSIGN_OR_RETURN(std::vector<ConfigRunner::ConfigProfile> profiles,
+                     eval_batch(indices));
+    collect_samples(profiles, &all_samples);
+    for (int idx : indices) {
+      evaluated.push_back(idx);
+    }
+    for (auto& p : profiles) {
+      all_profiles.push_back(std::move(p));
+    }
+    return absl::OkStatus();
+  };
+
+  // Phase 1: coarse grid + role verification.
+  RETURN_IF_ERROR(run_phase(SearchPhase::kCoarseGrid));
+  if (all_profiles.empty()) {
+    return absl::InternalError(absl::StrCat(
+        "Dichotomic search Phase 1: no configs compiled/profiled for HLO: ",
+        instr->ToString()));
+  }
+  profile = RefineRoles(profile, space, all_samples);
+
+  // Phase 2: coordinate-wise ternary refinement.
+  RETURN_IF_ERROR(run_phase(SearchPhase::kTernaryRefine));
+
+  // Phase 3: neighborhood + small-axis sweep.
+  RETURN_IF_ERROR(run_phase(SearchPhase::kNeighborhoodSweep));
+
+  VLOG(1) << "Dichotomic search evaluated " << evaluated.size() << " / "
+          << space.num_configs() << " configs for: " << instr->ToString();
+
+  // Log the finally selected config and its measured runtime BEFORE
+  // PickBestConfig so the line is always emitted when the dichotomic search
+  // completes its phases.
+  {
+    const int best_idx = BestSampleIndex(space, all_samples);
+    std::string best_desc;
+    double best_ms = -1.0;
+    for (const Sample& s : all_samples) {
+      if (space.LookupIndex(s.coord) == best_idx) {
+        best_desc = config_to_string(s.coord);
+        best_ms = s.time_seconds * 1e3;
+        break;
+      }
+    }
+    VLOG(1) << "Dichotomic search selected config {" << best_desc << "} -> "
+            << best_ms << " ms for: " << instr->ToString();
+  }
+
+  ASSIGN_OR_RETURN(
+      ConfigRunner::ConfigProfile best_profile,
+      PickBestConfig(all_profiles, options_.scratch_bytes_window_size_us));
+
+  return tsl::Future<Config>(std::move(best_profile.config));
 }
 
 std::optional<ConfigAssigner::Config> ConfigAssigner::LookUp(

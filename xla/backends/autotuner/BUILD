@@ -112,10 +112,42 @@ cc_library(
 )
 
 cc_library(
+    name = "dichotomic_search",
+    srcs = ["dichotomic_search.cc"],
+    hdrs = ["dichotomic_search.h"],
+    deps = [
+        ":backend_config_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "dichotomic_search_test",
+    srcs = ["dichotomic_search_test.cc"],
+    deps = [
+        ":backend_config_proto_cc",
+        ":dichotomic_search",
+        "//xla/hlo/ir:hlo",
+        "//xla/service/gpu:backend_configs_cc",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "autotuner",
     srcs = ["autotuner.cc"],
     hdrs = ["autotuner.h"],
     deps = [
+        ":backend_config_proto_cc",
         ":codegen_orchestrator",
         ":config_runner",
         ":config_selector",
@@ -134,6 +166,8 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -143,11 +177,13 @@ cc_library(
     hdrs = ["config_assigner.h"],
     deps = [
         ":autotuner_cache_interface",
+        ":backend_config_proto_cc",
         ":backends_proto_cc",
         ":codegen_backend",
         ":codegen_orchestrator",
         ":config_runner",
         ":config_selector",
+        ":dichotomic_search",
         ":hlo_extractor",
         ":profiler",
         "//xla:autotune_results_proto_cc",

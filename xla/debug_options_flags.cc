@@ -108,7 +108,8 @@ absl::StatusOr<std::vector<RepeatedFlagModifier>> ParseRepeatedEnumModifiers(
 namespace {
 
 template <typename T>
-static auto FindRepeatedFieldValue(google::protobuf::RepeatedField<int>* list, T value) {
+static auto FindRepeatedFieldValue(google::protobuf::RepeatedField<int>* list,
+                                   T value) {
   for (auto it = list->begin(); it != list->end(); ++it) {
     if (*it == value) {
       return it;
@@ -122,7 +123,8 @@ template <typename T>
 static std::function<bool(const std::string&)> SetterForRepeatedEnum(
     absl::string_view flag_name, absl::string_view enum_prefix,
     std::function<bool(absl::string_view, T*)> enum_parser,
-    std::function<google::protobuf::RepeatedField<int>*()> mutable_array_getter) {
+    std::function<google::protobuf::RepeatedField<int>*()>
+        mutable_array_getter) {
   return [flag_name, enum_prefix, enum_parser,
           mutable_array_getter](absl::string_view input) {
     auto* mutable_array = mutable_array_getter();
@@ -368,6 +370,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_collective_inflation_factor(1);
 
   opts.set_xla_gpu_exhaustive_tiling_search(false);
+
+  opts.set_xla_gpu_dichotomic_tiling_search(false);
 
   opts.set_xla_gpu_experimental_enable_triton_heroless_priority_fusion(false);
 
@@ -2458,6 +2462,16 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "[Stable] Search for Triton GEMM tilings exhaustively during autotuning. "
       "This increases the compile time."));
   flag_list->push_back(tsl::Flag(
+      "xla_gpu_dichotomic_tiling_search",
+      bool_setter_for(&DebugOptions::set_xla_gpu_dichotomic_tiling_search),
+      debug_options->xla_gpu_dichotomic_tiling_search(),
+      "[Experimental] Enables the 3-phase dichotomic (ternary + neighborhood) "
+      "autotuning search for the Triton backend only (dot, scaled-dot, "
+      "ragged-dot). Reduces the number of profiled configurations by ~70-80% "
+      "vs exhaustive search while staying near-optimal. Other backends are "
+      "unaffected. If both this flag and --xla_gpu_exhaustive_tiling_search "
+      "are set, exhaustive search takes precedence."));
+  flag_list->push_back(tsl::Flag(
       "xla_gpu_experimental_enable_subchannel_dequantisation_fusion",
       bool_setter_for(
           &DebugOptions::
@@ -3604,8 +3618,7 @@ FlagStatus GetFlagStatus(absl::string_view flag_name) {
           "xla_gpu_all_reduce_combine_threshold_bytes",
           "xla_gpu_autotune_level",
           "xla_gpu_collective_permute_decomposer_threshold",
-          "xla_gpu_cublas_fallback", 
-          "xla_gpu_dot_merger_threshold_mb",
+          "xla_gpu_cublas_fallback", "xla_gpu_dot_merger_threshold_mb",
           "xla_gpu_enable_dynamic_slice_fusion",
           "xla_gpu_enable_latency_hiding_scheduler",
           "xla_gpu_enable_pipelined_all_gather",

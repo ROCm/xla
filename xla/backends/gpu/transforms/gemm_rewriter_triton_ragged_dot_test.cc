@@ -27,9 +27,15 @@ limitations under the License.
 
 #include <memory>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/base/log_severity.h"
+#include "absl/log/globals.h"
+#include "absl/log/log.h"
+#include "absl/log/scoped_mock_log.h"
 #include "xla/backends/gpu/transforms/gemm_rewriter_test_lib.h"
 #include "xla/error_spec.h"
+#include "xla/service/gpu/autotuning/autotuner_cache.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
 #include "xla/tsl/platform/statusor.h"
@@ -1396,6 +1402,134 @@ ENTRY main {
 }
 )";
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+}
+
+// ============================================================================
+// Dichotomic tiling search tests
+//
+// Enables the experimental --xla_gpu_dichotomic_tiling_search adaptive search
+// (Triton-only) instead of exhaustive profiling. The autotuner selects a
+// near-optimal config from a strict subset of the exhaustive Triton config
+// set; the result must still be numerically correct.
+// ============================================================================
+
+class TritonRaggedDotDichotomicTest
+    : public HloPjRtInterpreterReferenceMixin<GemmRewriteTestBase> {
+ public:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions opts = GemmRewriteTestBase::GetDebugOptionsForTest();
+    opts.set_xla_gpu_experimental_triton_ragged_dot(true);
+    // Disable higher-priority ragged-dot backends so Triton is selected.
+    opts.set_xla_gpu_experimental_use_ragged_dot_fusion(false);
+    opts.set_xla_gpu_experimental_use_ragged_dot_grouped_gemm(false);
+    opts.set_xla_gpu_experimental_enable_tiling_propagation(true);
+    // Enable the experimental dichotomic search. Note: exhaustive search
+    // takes precedence, so we must NOT also set exhaustive_tiling_search.
+    opts.set_xla_gpu_dichotomic_tiling_search(true);
+    opts.add_xla_gpu_experimental_autotune_backends(
+        static_cast<::xla::autotuner::Backend>(2) /* TRITON */);
+    return opts;
+  }
+  bool SupportsTriton() const {
+    if (IsCuda()) {
+      auto* cc = Capability().cuda_compute_capability();
+      return cc != nullptr && cc->IsAtLeastAmpere();
+    }
+    return true;
+  }
+
+  // Compiles `hlo_text` while capturing logs and asserts that the dichotomic
+  // search actually ran (i.e. the autotuner took the dichotomic path and
+  // emitted its "selected config" debug line). This is the reliable signal
+  // that GetTunedConfigDichotomic was invoked rather than the exhaustive path.
+  void ExpectDichotomicSearchRuns(const char* hlo_text) {
+    // Clear the in-memory autotune cache so autotuning actually re-runs for
+    // this module (otherwise a cached result from a previous test/run
+    // short-circuits config selection before the dichotomic search is invoked).
+    AutotunerCache::ClearAutotuneResults();
+
+    // Raise the VLOG level so the dichotomic VLOG(1) lines are emitted and can
+    // be captured by ScopedMockLog. The dichotomic search runs inside
+    // config_assigner.cc, so that is the module whose level must be raised.
+    absl::SetVLogLevel("config_assigner", 1);
+    absl::SetVLogLevel("autotuner", 1);
+
+    absl::ScopedMockLog log(absl::MockLogDefault::kIgnoreUnexpected);
+    EXPECT_CALL(log,
+                Log(absl::LogSeverity::kInfo, ::testing::_,
+                    ::testing::HasSubstr("Dichotomic search selected config")))
+        .Times(::testing::AtLeast(1));
+    log.StartCapturingLogs();
+
+    // Compile (and run) the module; autotuning happens during compilation.
+    EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-3, 1e-3}));
+
+    log.StopCapturingLogs();
+  }
+};
+
+TEST_F(TritonRaggedDotDichotomicTest, NonContractingSmall) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotDichotomicNC
+
+ENTRY main {
+  lhs = f32[128,32] parameter(0)
+  rhs = f32[4,32,32] parameter(1)
+  gs  = s32[4] constant({32, 32, 32, 32})
+  ROOT rd = f32[128,32] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={1}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}, rhs_group_dims={0}
+}
+)";
+  ExpectDichotomicSearchRuns(hlo_text);
+}
+
+// kRaggedContracting: use a larger contracting case (M=1024, K=128, N=256,
+// G=4) so the pruning filters admit several feasible tile configs (≥2),
+// ensuring config selection reaches the dichotomic search rather than the
+// single-supported-config early return.
+TEST_F(TritonRaggedDotDichotomicTest, ContractingSmall) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotDichotomicC
+
+ENTRY main {
+  lhs = f32[4096,128] parameter(0)
+  rhs = f32[4096,256] parameter(1)
+  gs  = s32[4] constant({1024, 1024, 1024, 1024})
+  ROOT rd = f32[4,128,256] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={0}, rhs_contracting_dims={0},
+      lhs_ragged_dims={0}
+}
+)";
+  ExpectDichotomicSearchRuns(hlo_text);
+}
+
+// Larger non-contracting case so several tile configs are feasible and the
+// 3-phase search meaningfully prunes the space. Verifies the autotuner ran
+// (group_size is set by ApplyConfig), the dichotomic search path was taken
+// (debug log), and the result is numerically correct.
+TEST_F(TritonRaggedDotDichotomicTest, LargeNonContracting) {
+  if (!SupportsTriton()) GTEST_SKIP() << "Triton not available.";
+  const char* hlo_text = R"(
+HloModule TritonRaggedDotDichotomicLargeNC
+
+ENTRY main {
+  lhs = f32[1024,256] parameter(0)
+  rhs = f32[8,256,128] parameter(1)
+  gs  = s32[8] constant({128, 128, 128, 128, 128, 128, 128, 128})
+  ROOT rd = f32[1024,128] ragged-dot(lhs, rhs, gs),
+      lhs_contracting_dims={1}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}, rhs_group_dims={0}
+}
+)";
+  MatchOptimizedHlo(hlo_text, R"(
+    ; CHECK:     kind=kCustom
+    ; CHECK-SAME: "__triton_gemm"
+    ; CHECK-SAME: group_size
+  )");
+  ExpectDichotomicSearchRuns(hlo_text);
 }
 
 }  // namespace

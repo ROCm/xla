@@ -697,6 +697,92 @@ TEST_F(AutotunerPassTest, TritonSelectFirstConfig) {
       EqualsProto(expected_config->triton()));
 }
 
+// Runs the full autotuner over a __triton_gemm dot fusion with the
+// experimental dichotomic tiling search enabled. The dichotomic search
+// profiles only a strict subset of the Triton configs but must still select a
+// valid, compilable Triton config.
+TEST_F(AutotunerPassTest, TritonDichotomicTilingSearch) {
+  const char kTritonGemmFusionHlo[] = R"hlo(
+    HloModule module
+
+    computation {
+      p0 = bf16[1024,1024]{1,0} parameter(0)
+      p1 = bf16[1024,1024]{1,0} parameter(1)
+      ROOT dot = bf16[1024,1024]{1,0} dot(p0, p1),
+          lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    }
+
+    ENTRY main {
+      p0 = bf16[1024,1024]{1,0} parameter(0)
+      p1 = bf16[1024,1024]{1,0} parameter(1)
+      ROOT fusion = bf16[1024,1024]{1,0} fusion(p0, p1),
+        kind=kCustom, calls=computation,
+        backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
+    }
+  )hlo";
+
+  AutotunerCache::ClearAutotuneResults();
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                          ParseAndReturnVerifiedModule(kTritonGemmFusionHlo));
+
+  // Enable the experimental dichotomic search. Exhaustive search takes
+  // precedence, so it must remain unset.
+  module->mutable_config()
+      .mutable_debug_options()
+      .set_xla_gpu_dichotomic_tiling_search(true);
+
+  tsl::thread::ThreadPool thread_pool(tsl::Env::Default(), "autotuning",
+                                      /*num_threads=*/4);
+  std::vector<std::unique_ptr<CodegenBackend>> backends;
+  GpuCompiler::GpuTargetConfig target_config(stream_executor_);
+
+  GpuAliasInfo alias_info(stream_executor_->GetDeviceDescription());
+  mlir::MLIRContext mlir_context;
+  RegisterSymbolicExprStorage(&mlir_context);
+
+  backends.push_back(std::make_unique<TritonBackend>(
+      &module->config().debug_options(), &compiler_, &target_config,
+      &alias_info, &mlir_context));
+
+  auto get_backends_fn =
+      [backends =
+           std::make_shared<std::vector<std::unique_ptr<CodegenBackend>>>(
+               std::move(backends))]() mutable { return std::move(*backends); };
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<AutotunerPass> pass,
+      AutotunerPass::Create(
+          std::move(get_backends_fn), module->config().debug_options(),
+          target_config.device_description.gpu_compute_capability(),
+          stream_executor_, &thread_pool, &target_config, &alias_info,
+          &mlir_context,
+          /*shape_size_fn=*/[](const Shape& shape) { return 0; },
+          allocator_.get()));
+
+  // Assert the dichotomic search path is actually taken: it emits a
+  // "Dichotomic search selected config" VLOG(1) line. Raise the autotuner
+  // VLOG level and capture logs to verify GetTunedConfigDichotomic ran (rather
+  // than the exhaustive path).
+  absl::SetVLogLevel("autotuner", 1);
+  absl::ScopedMockLog log(absl::MockLogDefault::kIgnoreUnexpected);
+  EXPECT_CALL(log, Log(absl::LogSeverity::kInfo, testing::_,
+                       testing::HasSubstr("Dichotomic search selected config")))
+      .Times(testing::AtLeast(1));
+  log.StartCapturingLogs();
+
+  EXPECT_THAT(pass->Run(module.get(), /*execution_threads=*/{}),
+              absl_testing::IsOkAndHolds(true));
+
+  log.StopCapturingLogs();
+
+  // Verify a Triton config was selected and applied to the fusion.
+  auto fusion = module->entry_computation()->GetInstructionWithName("fusion");
+  TF_ASSERT_OK_AND_ASSIGN(auto gpu_backend_config_after,
+                          fusion->backend_config<GpuBackendConfig>());
+  EXPECT_TRUE(gpu_backend_config_after.fusion_backend_config()
+                  .has_triton_gemm_config());
+}
+
 TEST_F(AutotunerPassTest, CudnnSelectFirstConfig) {
   absl::SetVLogLevel("config_assigner*", 10);
   const char kCudnnConvForwardHlo[] = R"hlo(

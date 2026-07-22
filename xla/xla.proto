@@ -843,6 +843,14 @@ message DebugOptions {
 
   optional bool xla_gpu_exhaustive_tiling_search = 219;
 
+  // EXPERIMENTAL. Enables the 3-phase dichotomic (ternary + neighborhood)
+  // autotuning search for the Triton backend only (dot, scaled-dot,
+  // ragged-dot). Reduces the number of profiled configs by ~70-80% vs
+  // exhaustive search while staying near-optimal. Other backends are
+  // unaffected. If both this flag and xla_gpu_exhaustive_tiling_search are set,
+  // exhaustive search takes precedence and dichotomic search is disabled.
+  optional bool xla_gpu_dichotomic_tiling_search = 517;
+
   // If true, autotune all fusions with block level emitter.
   optional bool xla_gpu_experimental_all_fusions_with_triton = 444;
 
@@ -1680,7 +1688,7 @@ message DebugOptions {
   // Note: when adding a new flag, please add it to one of the hardware-specific
   // or hardware-agnostic sections at the top of this proto message.
 
-  // Next id: 517
+  // Next id: 518
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

@@ -71,7 +71,7 @@ class ConfigAssigner {
   static absl::StatusOr<std::unique_ptr<ConfigAssigner>> Create(
       Options options,
       std::unique_ptr<AutotunerCacheInterface> absl_nonnull
-      optimal_config_cache,
+          optimal_config_cache,
       std::unique_ptr<CodegenOrchestrator> absl_nonnull orchestrator,
       std::unique_ptr<Profiler> absl_nullable profiler);
 
@@ -119,6 +119,15 @@ class ConfigAssigner {
   // Tunes and returns the best config. Thread-safe and returns a future that
   // will contain the best config.
   tsl::Future<Config> GetTunedConfig(const HloInstruction* instr);
+
+  // Experimental Triton-only dichotomic (3-phase adaptive) search. Selects the
+  // best config among a strict subset of `supported_configs` using a coarse
+  // grid, coordinate-wise ternary refinement, and a neighborhood sweep.
+  // `supported_configs` must be the full exhaustive set of Triton configs for
+  // `instr`. Enabled by --xla_gpu_dichotomic_tiling_search (and only when
+  // --xla_gpu_exhaustive_tiling_search is NOT set).
+  tsl::Future<Config> GetTunedConfigDichotomic(
+      const HloInstruction* instr, std::vector<Config> supported_configs);
 
   // Returns the cached config for the given HLO instruction, if any.
   // Otherwise, returns std::nullopt.
