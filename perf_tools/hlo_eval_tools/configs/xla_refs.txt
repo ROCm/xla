@@ -1,0 +1,25 @@
+# XLA refs selected for HLO performance evaluation.
+#
+# One remote-qualified Git ref per line. Blank lines and lines beginning with
+# '#' are ignored by the workflow.
+#
+# Source mapping:
+# https://github.com/ROCm/xla#xla-branches-for-jax
+#
+# The XLA checkout must have these remotes:
+#   origin   https://github.com/ROCm/xla.git
+#   upstream https://github.com/openxla/xla.git
+#
+# rocm-jaxlib-v0.7.1 is intentionally excluded: its multihost_hlo_runner has
+# --use_spmd_partitioning but not --use_shardy_partitioner, which is required to
+# replay this repository's multi-GPU HLO modules carrying xla.sdy annotations.
+
+upstream/main
+origin/rocm-jaxlib-v0.10.2
+origin/rocm-jaxlib-v0.10.1
+origin/rocm-jaxlib-v0.10.0
+origin/rocm-jaxlib-v0.9.2
+origin/rocm-jaxlib-v0.9.1
+origin/rocm-jaxlib-v0.9.0
+origin/rocm-jaxlib-v0.8.2
+origin/rocm-jaxlib-v0.8.0

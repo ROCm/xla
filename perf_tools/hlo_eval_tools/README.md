@@ -71,6 +71,22 @@ subdirectories respectively.
 
 ## Directory layout
 
+Workflow entrypoints and configuration are separated from the HLO corpus:
+
+```text
+hlo_eval_tools/
+  README.md
+  run_hlo_eval.sh
+  configs/
+    benchmark_profile.json
+    xla_refs.txt
+  scripts/
+    run_xla_branch_eval.py
+    compare_hlo_branch_results.py
+    legacy_profile_to_csv.py
+  <category>/...
+```
+
 Models are grouped into category folders; each model has a `training/` directory
 and an `inference/` directory that is further split by device count
 (`1gpu/`, `2gpu/`, `4gpu/`, `8gpu/`):
@@ -318,12 +334,24 @@ selection and per-leaf CSV naming — behind three arguments:
 ./run_hlo_eval.sh …/hlo_runner_main hlo_eval_tools/large_language_models/llama3_8b/inference/8gpu results
 ```
 
-For each leaf the script reads `num_partitions=N` from the first module and, when
-`N>1`, adds `--num_partitions=N --use_shardy_partitioner` and sets
+For each leaf the script validates that every module has the same
+`num_partitions=N` and that inference paths match their `<N>gpu` directory. When
+`N>1`, it adds `--num_partitions=N --use_shardy_partitioner` and sets
 `HIP_VISIBLE_DEVICES`/`CUDA_VISIBLE_DEVICES=0..N-1` (N GPUs must be visible). It
 always passes `--hlo_argument_mode=uninitialized`, **disables HIP command buffers**
 (see below), prints a summary of profiled / skipped / failed leaves, and exits
 non-zero if any leaf failed (so you can re-run just those by pointing at the leaf).
+
+The script also supports XLA runners older than the native CSV output flag. It
+detects those runners, captures their `## Execution time` records, excludes the
+first warmup repeat, and converts the remaining average to the same CSV layout.
+Set `PROFILE_OUTPUT_MODE=csv` or `legacy` only to override automatic detection.
+
+Both output modes write to a hidden `.tmp/` directory first. The final workload
+CSV is atomically replaced only after the runner and, for legacy mode, the profile
+converter succeed with every expected HLO and repeat present. Failed or
+interrupted temporary files are ignored by resume and comparison, while the
+runner output remains available in `eval.log` / `*.legacy.log` for diagnosis.
 
 Behavior is tunable with environment variables:
 
@@ -405,6 +433,83 @@ ROCm/XLA version under test) to spot per-module regressions over time.
 3. Run the suite with identical flags, appending into the **same** per-model CSVs.
 4. Compare rows across timestamps (or versions) to see which HLO modules got
    faster or slower.
+
+### Automated multi-branch workflow
+
+`scripts/run_xla_branch_eval.py` builds and profiles every remote-qualified Git
+ref in `configs/xla_refs.txt`. The perf-tools checkout remains on
+`rocm-dev-infra`; a separate ROCm/XLA checkout supplies the source refs and
+temporary detached worktrees:
+
+```bash
+python3 perf_tools/hlo_eval_tools/scripts/run_xla_branch_eval.py \
+  --perf-tools-repo /path/to/rocm-dev-infra-xla \
+  --xla-source-repo /path/to/source-xla \
+  --output-dir /path/to/new-result-directory
+```
+
+`rocm-jaxlib-v0.7.1` is intentionally not in the default ref list. That runner
+predates `--use_shardy_partitioner` and therefore cannot replay the multi-GPU
+modules in this corpus, which carry `xla.sdy.*` annotations. Its single-GPU HLO
+support can be tested separately, but it is not compatible with the complete
+campaign represented by this tool.
+
+The source checkout normally has `origin` pointing to `ROCm/xla`. If
+`upstream/main` is selected, the workflow adds the OpenXLA remote when missing:
+
+```text
+origin   https://github.com/ROCm/xla.git
+upstream https://github.com/openxla/xla.git
+```
+
+Before building, all refs are fetched and resolved to immutable commit SHAs. Each
+commit is built in an isolated worktree and Bazel output base. Use Bazelisk so
+each branch's `.bazelversion` is honored; alternatively pass
+`--bazel-command=/path/to/a/compatible/bazel`.
+
+The repository defaults come from `configs/benchmark_profile.json` and reproduce
+the checked-in result configuration: two repeats, uninitialized arguments,
+command buffers disabled, size ordering, and a two-second settle delay. Optional
+`--num-repeats`, `--arg-mode`, `--cmd-buffer`, `--order`, and `--settle-sec`
+overrides are recorded with `reference_aligned=false`.
+
+The output contains:
+
+```text
+<output>/
+  manifest.json
+  comparison.csv
+  branch_summary.csv
+  comparison_summary.json
+  comparison_report.md
+  <remote_ref>_<commit>/
+    metadata.json
+    build.log
+    eval.log
+    runner/hlo_runner_main
+    csv/*.csv
+```
+
+`comparison.csv` compares every available module against the reference ref in
+`configs/benchmark_profile.json`. `branch_summary.csv` adds one row per candidate
+ref with matched/faster/slower/missing module counts, summed-suite delta, median
+module delta, and geometric-mean module delta. The summed-suite value is the sum
+of isolated module timings, not end-to-end model latency. `faster` / `slower`
+reports only the sign of the measured delta; apply a noise threshold before
+declaring a regression. Missing or failed leaves are reported explicitly instead
+of being assigned a timing. `comparison_report.md` presents the same results as
+one review-friendly table per branch, using `candidate / baseline` ratios where
+less than 1.0x is faster and greater than 1.0x is slower.
+Malformed CSVs, missing workloads, and missing modules fail comparison validation
+and make the campaign exit nonzero; missing entries remain in the generated
+reports when the available CSVs are otherwise readable.
+
+Use `--dry-run` to resolve refs and print the complete plan without building or
+profiling. It still refreshes Git remotes unless `--skip-fetch` is also given.
+Use `--resume` only with the same output directory and unchanged HLO corpus,
+profile, ref list, and evaluation script. The HLO inputs are treated as
+user-provided, read-only campaign data; parse, compile, and execution errors are
+reported by the runner rather than repaired by this workflow.
 
 ## Collected results
 
