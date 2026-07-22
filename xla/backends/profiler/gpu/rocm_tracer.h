@@ -76,6 +76,16 @@ class RocmTracer {
   int toolInit(rocprofiler_client_finalize_t finalize_func, void* tool_data);
   static void toolFinalize(void* tool_data);
 
+  // Invoked by rocprofiler when the HSA runtime registers its API table (via
+  // rocprofiler_at_intercept_table_registration for ROCPROFILER_HSA_TABLE).
+  // This is the point where HSA is loaded but HIP has not yet created its
+  // device queues -- the required moment to start the PM counting contexts.
+  static void HsaTableRegistrationCallback(rocprofiler_intercept_table_t type,
+                                           uint64_t lib_version,
+                                           uint64_t lib_instance, void** tables,
+                                           uint64_t num_tables,
+                                           void* user_data);
+
   void TracingCallback(rocprofiler_context_id_t context,
                        rocprofiler_buffer_id_t buffer_id,
                        rocprofiler_record_header_t** headers,

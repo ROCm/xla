@@ -74,6 +74,7 @@ cc_library(
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:status_macros",
         "//xla/tsl/profiler/backends/cpu:annotation_stack",
+        "//xla/tsl/profiler/utils:xplane_utils",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",

@@ -28,6 +28,7 @@ limitations under the License.
 #include "xla/tsl/platform/env_time.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
+#include "xla/tsl/profiler/utils/xplane_utils.h"
 #include "tsl/profiler/lib/profiler_factory.h"
 #include "tsl/profiler/lib/profiler_interface.h"
 #include "tsl/profiler/protobuf/profiler_options.pb.h"
@@ -173,18 +174,27 @@ absl::Status GpuTracer::CollectData(XSpace* space) {
       VLOG(3) << "No trace data collected";
       return absl::OkStatus();
     case State::kStoppedOk: {
-      // Merge PM sampling XPlanes before the collector export.
-      if (rocm_tracer_->PmSamplingConfigured()) {
-        for (auto& xplane : xplanes_) {
-          if (xplane) {
-            *space->add_planes() = *xplane;
-          }
-        }
-      }
       if (rocm_trace_collector_) {
         rocm_trace_collector_->SetScopeRangeIdTree(
             rocm_tracer_->annotation_map()->TakeScopeRangeIdTree());
         rocm_trace_collector_->Export(space);
+      }
+      // Merge PM sampling XPlanes AFTER the collector export, into the same
+      // per-GPU planes the collector produced. This must come after Export:
+      // PerDeviceCollector::Export renames every line in its device plane via
+      // GetDeviceXLineName (-> "Stream #<id>"), which would clobber our
+      // "_counters_" line if it were already present. MergePlanes preserves the
+      // counter line's identity (its INT64_MAX id is not re-run through the
+      // stream-naming path). Gate on the pre-allocated xplanes_ rather than
+      // rocm_tracer_->PmSamplingConfigured(): Stop()->Disable() has already
+      // destroyed the sampler by now, so that predicate is false here.
+      for (auto& xplane : xplanes_) {
+        if (xplane && !xplane->name().empty()) {
+          tensorflow::profiler::XPlane* dst =
+              tsl::profiler::FindOrAddMutablePlaneWithName(space,
+                                                           xplane->name());
+          tsl::profiler::MergePlanes(*xplane, dst);
+        }
       }
       return absl::OkStatus();
     }

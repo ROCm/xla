@@ -70,10 +70,22 @@ class RocmPmSampler {
 
   virtual ~RocmPmSampler() = default;
 
-  // Start sampling: sets the sample sink, starts the counting contexts, and
-  // enables the per-device sampling threads. process_samples must be
-  // thread-safe -- it may be called concurrently by multiple device threads
-  // (each with its own samples).
+  // Start the per-agent counting contexts. This MUST run after the HSA runtime
+  // is loaded but before HIP creates its device queues -- i.e. from the
+  // rocprofiler ROCPROFILER_HSA_TABLE intercept-registration callback.
+  // rocprofiler creates the per-agent profile queue by intercepting HSA queue
+  // creation, and rocprofiler_start_context itself requires HSA to be loaded
+  // (it fails with "Function call requires that HSA is loaded" if called
+  // earlier, e.g. from tool_init). Context/config/service creation, by
+  // contrast, must happen during the rocprofiler configuration period
+  // (tool_init) -- hence the two-phase split between Create() and
+  // StartContexts().
+  virtual absl::Status StartContexts() = 0;
+
+  // Start sampling: sets the sample sink and enables the per-device sampling
+  // threads. The counting contexts must already be started via StartContexts().
+  // process_samples must be thread-safe -- it may be called concurrently by
+  // multiple device threads (each with its own samples).
   virtual absl::Status StartSampler(
       std::function<void(RocmPmSamples* samples)> process_samples) = 0;
 

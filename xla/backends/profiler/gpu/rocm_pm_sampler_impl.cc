@@ -385,10 +385,10 @@ absl::Status RocmPmSamplerImpl::Initialize(
         static_cast<int>(i), gpu_contexts[i], gpu_agents[i], options);
     RETURN_IF_ERROR(dev->CreateConfig());
     RETURN_IF_ERROR(dev->ConfigureService());
-    if (absl::Status s = dev->StartContext(); !s.ok()) {
-      LOG(WARNING) << "(Profiling::PM Sampling) failed to start context on "
-                   << "device " << dev->device_id() << ": " << s;
-    }
+    // NOTE: StartContext() is deliberately NOT called here. It requires HSA to
+    // be loaded and must run from the ROCPROFILER_HSA_TABLE intercept callback
+    // (see StartContexts()); calling it now (tool_init) fails with "Function
+    // call requires that HSA is loaded".
     devices_.push_back(std::move(dev));
   }
 
@@ -397,13 +397,27 @@ absl::Status RocmPmSamplerImpl::Initialize(
   return absl::OkStatus();
 }
 
+absl::Status RocmPmSamplerImpl::StartContexts() {
+  // Called from the HSA-table registration callback: HSA is now loaded but HIP
+  // has not yet created its device queues, so rocprofiler can still install a
+  // profile queue for each agent when we start its context.
+  for (auto& dev : devices_) {
+    if (absl::Status s = dev->StartContext(); !s.ok()) {
+      LOG(WARNING) << "(Profiling::PM Sampling) failed to start context on "
+                   << "device " << dev->device_id() << ": " << s;
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::Status RocmPmSamplerImpl::StartSampler(
     std::function<void(RocmPmSamples*)> process_samples) {
   if (enabled_) {
     return absl::AlreadyExistsError("Already started");
   }
-  // Contexts were already started in Initialize (pre-HIP). Now that the xplane
-  // sink is known, wire it in and enable the sampling threads.
+  // Contexts were already started via StartContexts() (from the HSA-table
+  // callback, pre-HIP). Now that the xplane sink is known, wire it in and
+  // enable the sampling threads.
   for (auto& dev : devices_) {
     dev->SetSink(process_samples);
   }

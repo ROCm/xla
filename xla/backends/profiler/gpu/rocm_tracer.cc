@@ -49,6 +49,7 @@ limitations under the License.
 #include "rocm/include/rocprofiler-sdk/cxx/details/name_info.hpp"
 #include "rocm/include/rocprofiler-sdk/fwd.h"
 #include "rocm/include/rocprofiler-sdk/hip/runtime_api_id.h"
+#include "rocm/include/rocprofiler-sdk/intercept_table.h"
 #include "rocm/include/rocprofiler-sdk/internal_threading.h"
 #include "rocm/include/rocprofiler-sdk/registration.h"
 #include "rocm/include/rocprofiler-sdk/rocprofiler.h"
@@ -464,9 +465,19 @@ static void tool_tracing_callback(rocprofiler_context_id_t context,
       context, buffer_id, headers, num_headers, drop_count);
 }
 
+// Returns true if PM hardware-counter sampling was explicitly requested via the
+// XLA_ROCM_PM_SAMPLE_COUNTERS env var (non-empty). This is the single gate that
+// decides whether the plugin does any PM-sampling work at load time -- including
+// interposing on the HSA runtime table. It must be checkable at
+// rocprofiler_configure time (before HIP init), which an env var is.
+static bool PmSamplingRequestedFromEnv() {
+  const char* counters_env = std::getenv("XLA_ROCM_PM_SAMPLE_COUNTERS");
+  return counters_env != nullptr && counters_env[0] != '\0';
+}
+
 void RocmTracer::MaybeInitPmSampler() {
   const char* counters_env = std::getenv("XLA_ROCM_PM_SAMPLE_COUNTERS");
-  if (counters_env == nullptr || counters_env[0] == '\0') {
+  if (!PmSamplingRequestedFromEnv()) {
     return;  // PM sampling not requested.
   }
   if (gpu_agents_.empty()) {
@@ -516,6 +527,26 @@ void RocmTracer::MaybeInitPmSampler() {
   LOG(INFO) << "ROCm PM sampling configured: " << pm_options.metrics.size()
             << " counters, interval " << pm_options.sample_interval_ns
             << "ns, on " << gpu_agents_.size() << " GPUs";
+}
+
+void RocmTracer::HsaTableRegistrationCallback(
+    rocprofiler_intercept_table_t type, uint64_t /*lib_version*/,
+    uint64_t /*lib_instance*/, void** /*tables*/, uint64_t /*num_tables*/,
+    void* /*user_data*/) {
+  if (type != ROCPROFILER_HSA_TABLE) {
+    return;
+  }
+  // HSA is now loaded but HIP has not yet created its device queues. This is the
+  // required moment to start the PM counting contexts (rocprofiler_start_context
+  // needs HSA loaded, and rocprofiler installs the per-agent profile queue by
+  // intercepting the upcoming HSA queue creation).
+  auto& obj = RocmTracer::GetRocmTracerSingleton();
+  if (obj.rocm_pm_sampler_ == nullptr) {
+    return;  // PM sampling not configured.
+  }
+  if (absl::Status s = obj.rocm_pm_sampler_->StartContexts(); !s.ok()) {
+    LOG(WARNING) << "(Profiling::PM Sampling) StartContexts failed: " << s;
+  }
 }
 
 absl::Status RocmTracer::InitProfiling(void* tool_data) {
@@ -749,6 +780,27 @@ extern "C" rocprofiler_tool_configure_result_t* rocprofiler_configure(
       id->name, static_cast<unsigned>(priority), static_cast<unsigned>(major),
       static_cast<unsigned>(minor), static_cast<unsigned>(patch),
       runtime_version ? runtime_version : "unknown");
+
+  // Register for the HSA API-table registration callback so we can start the PM
+  // counting contexts at exactly the right moment (HSA loaded, HIP queues not
+  // yet created). The SDK requires this to be registered from within
+  // rocprofiler_configure; doing it later returns CONFIGURATION_LOCKED.
+  //
+  // Only register when PM sampling was explicitly requested. Registering the
+  // HSA-table intercept is NOT free even if the callback no-ops: it inserts
+  // rocprofiler-sdk into the HSA queue/dispatch path for the whole process,
+  // which destabilizes HIP-graph (command-buffer) launch on ROCm 7.2.4 (flaky
+  // SIGSEGV in libamdhip64 during RocmCommandBuffer::LaunchGraph). Gating on the
+  // same env var as MaybeInitPmSampler keeps non-profiling runs off that path.
+  if (PmSamplingRequestedFromEnv()) {
+    if (rocprofiler_status_t rc = rocprofiler_at_intercept_table_registration(
+            &RocmTracer::HsaTableRegistrationCallback, ROCPROFILER_HSA_TABLE,
+            nullptr);
+        rc != ROCPROFILER_STATUS_SUCCESS) {
+      LOG(WARNING) << "(Profiling::PM Sampling) failed to register HSA table "
+                   << "callback: " << rocprofiler_get_status_string(rc);
+    }
+  }
 
   static rocprofiler_tool_configure_result_t cfg{
       sizeof(rocprofiler_tool_configure_result_t), &toolInitStatic,

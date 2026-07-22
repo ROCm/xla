@@ -171,6 +171,7 @@ class RocmPmSamplerImpl : public RocmPmSampler {
       const std::vector<rocprofiler_agent_id_t>& gpu_agents,
       const RocmPmSamplerOptions& options);
 
+  absl::Status StartContexts() override;
   absl::Status StartSampler(
       std::function<void(RocmPmSamples*)> process_samples) override;
   absl::Status StopSampler() override;
