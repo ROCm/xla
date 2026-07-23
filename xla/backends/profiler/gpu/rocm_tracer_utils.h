@@ -143,6 +143,7 @@ struct RocmTracerEvent {
   uint32_t correlation_id = kInvalidCorrelationId;
   uint64_t thread_id = kInvalidThreadId;
   uint64_t stream_id = kInvalidStreamId;
+  uint64_t queue_id = 0;
   int64_t scope_range_id = 0;
 
   union {
