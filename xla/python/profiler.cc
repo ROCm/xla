@@ -44,6 +44,7 @@ limitations under the License.
 #include "xla/tsl/profiler/rpc/profiler_server.h"
 #include "tsl/platform/protobuf.h"
 #include "tsl/profiler/lib/profiler_session.h"
+#include "tsl/profiler/lib/scoped_annotation.h"
 #include "tsl/profiler/lib/traceme.h"
 #include "tsl/profiler/protobuf/profiled_instructions.pb.h"
 #include "tsl/profiler/protobuf/profiler_options.pb.h"
@@ -69,7 +70,10 @@ class TraceMeWrapper {
               }
               return name_and_metadata;
             },
-            /*level=*/1) {}
+            /*level=*/1),
+        annotation_name_(nb::cast<std::string>(name)) {
+    tsl::profiler::PushAnnotation(annotation_name_);
+  }
 
   // nb::kwargs is taken by const reference to avoid python
   // reference-counting overhead.
@@ -83,7 +87,18 @@ class TraceMeWrapper {
     }
   }
 
-  void Stop() { traceme_.Stop(); }
+  // Destructor ensures PopAnnotation is called even when Stop() is never
+  // explicitly invoked (e.g. the object is used outside a context manager).
+  // Stop() is idempotent via stopped_, so calling it here is always safe.
+  ~TraceMeWrapper() { Stop(); }
+
+  void Stop() {
+    if (!stopped_) {
+      stopped_ = true;
+      tsl::profiler::PopAnnotation();
+      traceme_.Stop();
+    }
+  }
 
   static bool IsEnabled() { return tsl::profiler::TraceMe::Active(); }
 
@@ -107,6 +122,8 @@ class TraceMeWrapper {
   }
 
   tsl::profiler::TraceMe traceme_;
+  std::string annotation_name_;
+  bool stopped_ = false;
 };
 
 tensorflow::ProfileOptions DefaultPythonProfileOptions() {

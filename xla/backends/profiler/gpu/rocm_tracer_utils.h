@@ -154,6 +154,14 @@ struct RocmTracerEvent {
   };
 };
 
+// Represents one pending ROCTX range pushed via roctxRangePushA. Stored on
+// a per-thread stack in RocmTracer and consumed when roctxRangePop fires.
+struct RoctxFrame {
+  std::string message;      // the range label (owned here for lifetime safety)
+  uint64_t start_ns;        // timestamp captured at push time
+  uint64_t correlation_id;  // rocprofiler correlation_id at push time
+};
+
 struct RocmTraceCollectorOptions {
   // Maximum number of events to collect from callback API; if -1, no limit.
   // if 0, the callback API is enabled to build a correlation map, but no
@@ -171,8 +179,10 @@ class AnnotationMap {
  public:
   explicit AnnotationMap(uint64_t max_size) : max_size_(max_size) {}
   void Add(uint32_t correlation_id, const std::string& annotation,
+           absl::string_view roctx_range = {},
            absl::Span<const int64_t> scope_range_ids = {});
   absl::string_view LookUp(uint32_t correlation_id);
+  absl::string_view LookUpRoctxRange(uint32_t correlation_id);
   int64_t LookUpScopeRangeId(uint32_t correlation_id);
   ScopeRangeIdTree TakeScopeRangeIdTree();
   void Clear();
@@ -186,6 +196,8 @@ class AnnotationMap {
     // an use the reference to the string in the map.
     absl::node_hash_set<std::string> annotations ABSL_GUARDED_BY(mutex);
     absl::flat_hash_map<uint32_t, absl::string_view> correlation_map
+        ABSL_GUARDED_BY(mutex);
+    absl::flat_hash_map<uint32_t, absl::string_view> roctx_range_map
         ABSL_GUARDED_BY(mutex);
     absl::flat_hash_map<uint32_t, int64_t> scope_range_id_map
         ABSL_GUARDED_BY(mutex);
