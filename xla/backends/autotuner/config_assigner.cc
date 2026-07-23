@@ -446,6 +446,9 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfig(
             << ". No configs could be compiled.";
 
         VLOG(1) << "Successfully compiled " << candidates.size() << " configs.";
+        VLOG(1) << "Autotuner evaluated " << candidates.size() << " / "
+                << (candidates.size() + compilation_failures.size())
+                << " configs for: " << instr->ToString();
 
         if (candidates.size() == 1) {
           VLOG(1) << "Using the only compilable config: "
@@ -624,6 +627,11 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
   RETURN_IF_ERROR(run_phase(SearchPhase::kNeighborhoodSweep));
 
   VLOG(1) << "Dichotomic search evaluated " << evaluated.size() << " / "
+          << space.num_configs() << " configs for: " << instr->ToString();
+  // Uniform, machine-parseable counter shared with the exhaustive path so
+  // tooling (e.g. tests/dichotomic_search_benchmark.py) can report the number
+  // of evaluated configurations regardless of search strategy.
+  VLOG(1) << "Autotuner evaluated " << evaluated.size() << " / "
           << space.num_configs() << " configs for: " << instr->ToString();
 
   // Log the finally selected config and its measured runtime BEFORE
