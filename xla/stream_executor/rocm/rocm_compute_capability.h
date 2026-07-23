@@ -181,6 +181,14 @@ class RocmComputeCapability {
     return gfx9_mi300_series() || gfx12();
   }
 
+  // Whether the AMDGPU backend honors non-temporal (streaming) cache hints on
+  // global loads/stores for this arch. Gated to CDNA (gfx9 MI-series) and
+  // gfx1250, where a streaming cache policy is the relevant optimization for
+  // memory-bound fusions.
+  bool has_global_nontemporal_hint_support() const {
+    return gfx9_mi100_or_later() || gfx1250();
+  }
+
   bool has_hipblaslt() const {
     return IsThisGfxInAnyList(kMI300Series, kMI200Series, kGfx12Discrete,
                               kGfx11Discrete, kGfx11Apu) ||
