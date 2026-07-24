@@ -446,6 +446,34 @@ def write_comparison(
     }
 
 
+def select_comparison_targets(
+    manifest: dict[str, Any], baseline_ref: str
+) -> list[dict[str, str]]:
+    targets = manifest["targets"]
+    by_ref = {target["ref"]: target for target in targets}
+    selected_refs = manifest.get("comparison_refs")
+    if selected_refs is None:
+        selected_refs = manifest.get("active_refs")
+    if selected_refs is None:
+        selected_refs = [target["ref"] for target in targets]
+    if not isinstance(selected_refs, list) or any(
+        not isinstance(ref, str) for ref in selected_refs
+    ):
+        raise ValueError("manifest comparison refs must be a list of strings")
+    selected_refs = list(selected_refs)
+    if baseline_ref not in selected_refs:
+        selected_refs.insert(0, baseline_ref)
+    if len(set(selected_refs)) != len(selected_refs):
+        raise ValueError("manifest comparison refs contain duplicates")
+    missing = [ref for ref in selected_refs if ref not in by_ref]
+    if missing:
+        raise ValueError(
+            "manifest comparison refs are not campaign targets: "
+            + ", ".join(missing)
+        )
+    return [by_ref[ref] for ref in selected_refs]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", required=True, type=Path)
@@ -458,9 +486,10 @@ def main() -> int:
     manifest_path = args.output_dir / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        targets = select_comparison_targets(manifest, args.baseline_ref)
         result = write_comparison(
             output_dir=args.output_dir,
-            targets=manifest["targets"],
+            targets=targets,
             baseline_ref=args.baseline_ref,
         )
         print(json.dumps(result, indent=2, sort_keys=True))

@@ -438,8 +438,16 @@ ROCm/XLA version under test) to spot per-module regressions over time.
 
 `scripts/run_xla_branch_eval.py` builds and profiles every remote-qualified Git
 ref in `configs/xla_refs.txt`. The perf-tools checkout remains on
-`rocm-dev-infra`; a separate ROCm/XLA checkout supplies the source refs and
-temporary detached worktrees:
+`rocm-dev-infra`; a separate, dedicated ROCm/XLA checkout supplies the source
+refs. The source checkout must be clean because the workflow checks out each
+resolved commit sequentially in detached-HEAD mode:
+
+> **Required: use a clean, dedicated XLA source checkout.** Before starting,
+> run `git -C /path/to/source-xla status --short`; it must produce no output.
+> If tracked or untracked changes are present, the workflow exits with an
+> explicit error. It never stashes, resets, cleans, or deletes user changes.
+> Checkout also uses `--no-overwrite-ignore`, so an ignored file that conflicts
+> with another commit causes a safe failure instead of being overwritten.
 
 ```bash
 python3 perf_tools/hlo_eval_tools/scripts/run_xla_branch_eval.py \
@@ -465,10 +473,24 @@ origin   https://github.com/ROCm/xla.git
 upstream https://github.com/openxla/xla.git
 ```
 
-Before building, all refs are fetched and resolved to immutable commit SHAs. Each
-commit is built in an isolated worktree and Bazel output base. Use Bazelisk so
-each branch's `.bazelversion` is honored; alternatively pass
-`--bazel-command=/path/to/a/compatible/bazel`.
+Before building, all refs are fetched and resolved to immutable commit SHAs.
+Each commit is checked out in the dedicated source repository, built with
+`bazel build`, and its runner is copied into the durable result directory before
+the next commit is checked out. In the validated container, `bazel` is a symlink
+to Bazelisk, so each commit's `.bazelversion` is honored. Pass
+`--bazel-command=/path/to/bazel` only when a different launcher is required.
+
+The workflow uses Bazel's normal cache and does not create per-branch worktrees
+or output bases. It performs no automatic recursive deletion and never invokes
+`bazel clean`; cache maintenance is an explicit user operation after the
+campaign. An advisory lock in the source repository prevents two campaigns from
+switching the same checkout concurrently. On normal completion, Ctrl-C, SIGTERM,
+or SIGHUP, the workflow forwards the signal to the active child process,
+checkpoints the interruption, and attempts to restore the source repository's
+original branch or detached commit. Build, evaluation, and restore states are
+checkpointed in `metadata.json` and `manifest.json`, so a force-killed process,
+container restart, or host failure can be continued with `--resume`; the source
+may remain detached until that resume completes.
 
 The repository defaults come from `configs/benchmark_profile.json` and reproduce
 the checked-in result configuration: two repeats, uninitialized arguments,
@@ -507,12 +529,48 @@ Malformed CSVs, missing workloads, and missing modules fail comparison validatio
 and make the campaign exit nonzero; missing entries remain in the generated
 reports when the available CSVs are otherwise readable.
 
+Reports can be regenerated from the campaign manifest with:
+
+```bash
+python3 perf_tools/hlo_eval_tools/scripts/compare_hlo_branch_results.py \
+  --output-dir /path/to/result-directory \
+  --baseline-ref origin/rocm-jaxlib-v0.10.2
+```
+
+Manual and automatic comparison use the same `comparison_refs` recorded in the
+manifest, so refs removed from the active campaign do not reappear in regenerated
+reports.
+
 Use `--dry-run` to resolve refs and print the complete plan without building or
 profiling. It still refreshes Git remotes unless `--skip-fetch` is also given.
 Use `--resume` only with the same output directory and unchanged HLO corpus,
-profile, ref list, and evaluation script. The HLO inputs are treated as
-user-provided, read-only campaign data; parse, compile, and execution errors are
+profile, evaluation script, XLA source checkout path, and MI350/ROCm environment.
+The current refs file is always the active execution list. During resume,
+existing refs retain their immutable manifest SHAs and results, removed refs are
+skipped without deleting their artifacts, and newly added refs are resolved and
+recorded once. Ref ordering follows the current file. A target whose evaluation
+already returned—successfully or with recorded leaf failures—is not run again;
+an interrupted target without an evaluation exit code resumes its missing
+leaves. The configured comparison reference may be omitted from the active list
+only when its results already exist in the output directory.
+
+The HLO fingerprint covers every `.txt` and `.hlo` recursively under the HLO
+root, but not README or orchestration changes. Committed, modified, and untracked
+HLO inputs are allowed when starting a new campaign, then their content must
+remain unchanged. The inventory is checked before every target and again before
+comparison. A legacy manifest that recorded modified or untracked HLO inputs is
+rejected because its previous bytes cannot be verified safely. HLO inputs are
+treated as user-provided campaign data; parse, compile, and execution errors are
 reported by the runner rather than repaired by this workflow.
+
+Because a full campaign can run for hours, start it in a persistent terminal
+such as `tmux` rather than relying on a frontend SSH terminal:
+
+```bash
+tmux new -s xla-hlo
+# Run the campaign, then detach with Ctrl-b followed by d.
+tmux attach -t xla-hlo
+```
 
 ## Collected results
 
