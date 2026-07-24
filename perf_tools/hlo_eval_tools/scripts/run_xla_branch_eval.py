@@ -48,7 +48,11 @@ def nonnegative_int(value: str) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--perf-tools-repo", required=True, type=Path)
+    parser.add_argument(
+        "--perf-tools-repo",
+        type=Path,
+        help="default: Git repository containing this script",
+    )
     parser.add_argument("--xla-source-repo", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument(
@@ -159,6 +163,17 @@ def validate_git_root(path: Path, label: str) -> Path:
     if root != path:
         raise ValueError(f"{label} must be the Git repository root: {path} (root={root})")
     return path
+
+
+def discover_perf_tools_repo() -> Path:
+    script_directory = Path(__file__).resolve().parent
+    try:
+        return Path(git(script_directory, "rev-parse", "--show-toplevel")).resolve()
+    except RuntimeError as error:
+        raise ValueError(
+            "could not discover the perf-tools Git repository from "
+            f"{script_directory}; pass --perf-tools-repo explicitly"
+        ) from error
 
 
 def sha256_file(path: Path) -> str:
@@ -523,7 +538,10 @@ def evaluate_target(
 def main() -> int:
     args = parse_args()
     try:
-        perf_repo = validate_git_root(args.perf_tools_repo, "perf-tools repo")
+        perf_repo = validate_git_root(
+            args.perf_tools_repo or discover_perf_tools_repo(),
+            "perf-tools repo",
+        )
         source_repo = validate_git_root(args.xla_source_repo, "XLA source repo")
         if perf_repo == source_repo:
             raise ValueError("perf-tools repo and XLA source repo must be different checkouts")

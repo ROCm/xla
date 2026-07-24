@@ -443,10 +443,13 @@ temporary detached worktrees:
 
 ```bash
 python3 perf_tools/hlo_eval_tools/scripts/run_xla_branch_eval.py \
-  --perf-tools-repo /path/to/rocm-dev-infra-xla \
   --xla-source-repo /path/to/source-xla \
   --output-dir /path/to/new-result-directory
 ```
+
+The perf-tools repository defaults to the Git repository containing the script,
+so the command works from any current directory. Pass
+`--perf-tools-repo /path/to/rocm-dev-infra-xla` to override auto-discovery.
 
 `rocm-jaxlib-v0.7.1` is intentionally not in the default ref list. That runner
 predates `--use_shardy_partitioner` and therefore cannot replay the multi-GPU
