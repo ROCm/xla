@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "name": "repository-default",
+  "reference": {
+    "xla_ref": "origin/rocm-jaxlib-v0.10.2",
+    "xla_commit": "7b5ecf1c9282fdf1039211e0d45216980058beda",
+    "gpu": "MI350",
+    "container": "ghcr.io/rocm/jax-ubu22.rocm7.2.4"
+  },
+  "runner": {
+    "num_repeats": 2,
+    "arg_mode": "uninitialized",
+    "cmd_buffer": "off",
+    "order": "size",
+    "settle_sec": 2
+  }
+}
