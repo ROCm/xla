@@ -428,8 +428,39 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetConfig(
 tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfig(
     const HloInstruction* instr) {
   CHECK(config_runner_ != nullptr);
-  ASSIGN_OR_RETURN(std::vector<CodegenOrchestrator::Config> supported_configs,
-                   orchestrator_->GetSupportedConfigs(*instr));
+
+  // Decide up-front whether the experimental Triton dichotomic search is
+  // requested. Exhaustive search takes precedence when both flags are set.
+  const DebugOptions& debug_options =
+      instr->GetModule()->config().debug_options();
+  const bool dichotomic_requested =
+      debug_options.xla_gpu_dichotomic_tiling_search() &&
+      !debug_options.xla_gpu_exhaustive_tiling_search();
+
+  // The dichotomic search adaptively samples a *subset* of the FULL Triton
+  // tiling space, so it must be given that full space rather than the pruned
+  // ~5-config representative set that the backend returns by default. The
+  // backend decides pruned-vs-full from the module's
+  // `xla_gpu_exhaustive_tiling_search` flag, so temporarily enable it while we
+  // request the supported configs, then restore the original value.
+  std::vector<CodegenOrchestrator::Config> supported_configs;
+  if (dichotomic_requested) {
+    HloModule* module = instr->GetModule();
+    DebugOptions& mutable_debug_options =
+        module->mutable_config().mutable_debug_options();
+    const bool original_exhaustive =
+        mutable_debug_options.xla_gpu_exhaustive_tiling_search();
+    mutable_debug_options.set_xla_gpu_exhaustive_tiling_search(true);
+    absl::StatusOr<std::vector<CodegenOrchestrator::Config>> configs_or =
+        orchestrator_->GetSupportedConfigs(*instr);
+    mutable_debug_options.set_xla_gpu_exhaustive_tiling_search(
+        original_exhaustive);
+    RETURN_IF_ERROR(configs_or.status());
+    supported_configs = std::move(configs_or).value();
+  } else {
+    ASSIGN_OR_RETURN(supported_configs,
+                     orchestrator_->GetSupportedConfigs(*instr));
+  }
   TF_RET_CHECK(!supported_configs.empty())
       << "Autotuning failed for HLO: " << instr->ToString()
       << ". No supported configs found for this instruction.";
@@ -443,10 +474,6 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfig(
   VLOG(1) << "Found total of " << supported_configs.size()
           << " supported configs.";
 
-  // Experimental Triton-only dichotomic search. Exhaustive search takes
-  // precedence when both flags are set.
-  const DebugOptions& debug_options =
-      instr->GetModule()->config().debug_options();
   VLOG(3) << "Dichotomic dispatch check for " << instr->name()
           << ": dichotomic_flag="
           << debug_options.xla_gpu_dichotomic_tiling_search()
@@ -454,9 +481,7 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfig(
           << debug_options.xla_gpu_exhaustive_tiling_search()
           << " all_triton=" << AllConfigsAreTriton(supported_configs)
           << " num_configs=" << supported_configs.size();
-  if (debug_options.xla_gpu_dichotomic_tiling_search() &&
-      !debug_options.xla_gpu_exhaustive_tiling_search() &&
-      AllConfigsAreTriton(supported_configs)) {
+  if (dichotomic_requested && AllConfigsAreTriton(supported_configs)) {
     return GetTunedConfigDichotomic(instr, std::move(supported_configs));
   }
 
