@@ -245,14 +245,27 @@ absl::StatusOr<ComputationType> GetBlasComputationType(
         // Accumulate in f32 precision.
         return ComputationType::kF32;
       case PrimitiveType::F32:  // fall-through
-      case PrimitiveType::C64:
-        if (cc.IsCuda() && tsl::tensor_float_32_execution_enabled() &&
+      case PrimitiveType::C64: {
+        // Reduced-precision matmul: f32 range, ~10-bit mantissa inputs, f32
+        // accumulate. NVIDIA calls it TF32; AMD CDNA (MI300/MI350) exposes the
+        // same via hipBLASLt HIPBLAS_COMPUTE_32F_FAST_TF32 (xfloat32/XF32).
+        // Only hipBLASLt understands kTF32AsF32 on ROCm; legacy rocBLAS falls
+        // back to full f32 for it (see rocm_blas.cc AsRocBlasComputeType).
+        // ROCm hipBLASLt has no XF32 compute type for complex64 GEMMs, so
+        // restrict the AMD path to real F32; C64 stays full f32 on ROCm.
+        const auto* rocm = cc.rocm_compute_capability();
+        const bool tf32_hw =
+            cc.IsCuda() ||
+            (rocm != nullptr && output_dtype == PrimitiveType::F32 &&
+             rocm->gfx9_mi300_series() && rocm->has_hipblaslt());
+        if (tf32_hw && tsl::tensor_float_32_execution_enabled() &&
             compute_precision <= 1 && lhs_dtype == output_dtype) {
           // CublasLt requires compute type to be F32 for F8 matmul.
           // TF32 should only be chosen for FP32 or C64 gemm
           return ComputationType::kTF32AsF32;
         }
         return ComputationType::kF32;
+      }
       case PrimitiveType::F64:  // fall-through
       case PrimitiveType::C128:
         return ComputationType::kF64;
