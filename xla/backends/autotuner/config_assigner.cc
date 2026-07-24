@@ -36,6 +36,7 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "xla/tsl/platform/status_macros.h"
@@ -89,6 +90,51 @@ bool AllConfigsAreTriton(
     }
   }
   return true;
+}
+
+// Formats a ConfigProfile as a compact one-line string for the Triton
+// performance table, bypassing the raw proto type-URL noise produced by
+// BackendConfig::ShortDebugString() (e.g. "goo.gle/debugonly ...").
+// For Triton configs, the key tiling parameters are extracted directly from
+// the TritonGemmKey proto fields.
+std::string FormatTritonConfigLine(const ConfigRunner::ConfigProfile& p) {
+  std::string config_str;
+  if (p.config.backend_config != nullptr &&
+      p.config.backend_config->has_triton()) {
+    const auto& t = p.config.backend_config->triton();
+    config_str = absl::StrFormat(
+        "m=%-3d n=%-3d k=%-3d stages=%d warps=%d ctas=%d gs=%d", t.block_m(),
+        t.block_n(), t.block_k(), t.num_stages(), t.num_warps(), t.num_ctas(),
+        t.group_size());
+  } else if (p.config.backend_config != nullptr) {
+    // Fallback: use the full debug string for non-Triton-GEMM backends.
+    config_str = p.config.backend_config->ShortDebugString();
+  }
+  if (p.failure.has_value()) {
+    return absl::StrFormat("%-48s  %s", config_str, p.failure->ToString());
+  }
+  return absl::StrFormat("%-48s  %s", config_str,
+                         absl::FormatDuration(p.duration));
+}
+
+// Returns true iff at least one profiled config was produced by the Triton
+// backend (the `triton` TritonGemmKey or `block_level` BlockLevelFusionConfig
+// oneof case). Used to enable richer per-config performance logging for the
+// Triton autotuning path.
+bool AnyProfileIsTriton(
+    absl::Span<const ConfigRunner::ConfigProfile> profiles) {
+  for (const ConfigRunner::ConfigProfile& p : profiles) {
+    if (p.config.backend_config == nullptr) {
+      continue;
+    }
+    const BackendConfig::ConfigCase config_case =
+        p.config.backend_config->config_case();
+    if (config_case == BackendConfig::kTriton ||
+        config_case == BackendConfig::kBlockLevel) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // It is important to fingerprint the entire module not just the autotuning
@@ -763,6 +809,78 @@ void ConfigAssigner::LogConfigProfiles(
   for (const ConfigRunner::ConfigProfile& result : failed_configs) {
     VLOG(2) << result.ToString(/*verbose=*/VLOG_IS_ON(3));
   }
+
+  // For Triton autotuning, write a ranked performance table listing every
+  // solution evaluated by the autotuner to a timestamped file under /tmp so
+  // the results are preserved without flooding stdout. The table is sorted
+  // fastest-first so the winning configuration is immediately obvious.
+  if (AnyProfileIsTriton(profiles) || AnyProfileIsTriton(failed_configs)) {
+    // Collect successful profiles and sort by duration ascending.
+    std::vector<const ConfigRunner::ConfigProfile*> successful;
+    successful.reserve(profiles.size());
+    for (const auto& p : profiles) {
+      if (!p.failure.has_value()) {
+        successful.push_back(&p);
+      }
+    }
+    absl::c_sort(successful,
+                 [](const ConfigRunner::ConfigProfile* a,
+                    const ConfigRunner::ConfigProfile* b) {
+                   return a->duration < b->duration;
+                 });
+
+    const int total =
+        static_cast<int>(profiles.size() + failed_configs.size());
+    const int n_successful = static_cast<int>(successful.size());
+
+    // Build the log content, starting with the HLO text of the instruction
+    // being autotuned so the reader can see the exact problem shape.
+    std::string log_content;
+    absl::StrAppend(&log_content, "Instruction: ", instr.ToString(), "\n");
+    absl::StrAppend(
+        &log_content,
+        absl::StrFormat(
+            "Triton autotuning results for '%s': %d config(s) evaluated, "
+            "%d successful, %d failed.\n",
+            instr.name(), total, n_successful, total - n_successful));
+    for (int i = 0; i < n_successful; ++i) {
+      absl::StrAppend(
+          &log_content,
+          absl::StrFormat("  [%2d/%d]%s %s\n", i + 1, n_successful,
+                          (i == 0 ? " [BEST]" : "       "),
+                          FormatTritonConfigLine(*successful[i])));
+    }
+    for (const auto& p : profiles) {
+      if (p.failure.has_value()) {
+        absl::StrAppend(&log_content, "  [FAILED]         ",
+                        FormatTritonConfigLine(p), "\n");
+      }
+    }
+    if (!failed_configs.empty()) {
+      absl::StrAppend(&log_content,
+                      absl::StrFormat("  Compilation failures (%d):\n",
+                                      failed_configs.size()));
+      for (const auto& f : failed_configs) {
+        absl::StrAppend(&log_content, "    ", FormatTritonConfigLine(f), "\n");
+      }
+    }
+
+    // Write to /tmp/autotuner_<timestamp>.log (append so multiple fusions
+    // running within the same second share one file).
+    const std::string timestamp =
+        absl::FormatTime("%Y%m%d_%H%M%S", absl::Now(), absl::UTCTimeZone());
+    const std::string log_path =
+        absl::StrCat("/tmp/autotuner_", timestamp, ".log");
+    absl::Status write_status =
+        tsl::AppendStringToFile(tsl::Env::Default(), log_path, log_content);
+    if (write_status.ok()) {
+      LOG(INFO) << "Triton autotuning results appended to " << log_path;
+    } else {
+      LOG(WARNING) << "Failed to write Triton autotuning log to " << log_path
+                   << ": " << write_status;
+    }
+  }
+
   if (options_.dump_logs_to.empty()) {
     return;
   }
