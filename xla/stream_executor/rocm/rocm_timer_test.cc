@@ -30,6 +30,7 @@ limitations under the License.
 #include "xla/stream_executor/launch_dim.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform_manager.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/stream_executor/rocm/rocm_executor.h"
 #include "xla/stream_executor/rocm/rocm_platform_id.h"
 #include "xla/stream_executor/stream.h"
@@ -76,10 +77,30 @@ class RocmTimerTest : public ::testing::Test {
 
 TEST_F(RocmTimerTest, Create) {
   TF_ASSERT_OK_AND_ASSIGN(RocmTimer timer,
-                          RocmTimer::Create(executor_, stream_.get()));
+                          RocmTimer::Create(executor_, stream_.get(),
+                                            RocmTimer::TimerType::kEventBased));
 
   // We don't really care what kernel we launch here as long as it takes a
   // non-zero amount of time.
+  LaunchSomeKernel(executor_, stream_.get());
+
+  TF_ASSERT_OK_AND_ASSIGN(absl::Duration timer_result,
+                          timer.GetElapsedDuration());
+  EXPECT_THAT(timer_result, Gt(absl::ZeroDuration()));
+  EXPECT_THAT(timer.GetElapsedDuration(),
+              absl_testing::StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST_F(RocmTimerTest, CreateWithDelayKernel) {
+  if (!executor_->GetDeviceDescription()
+           .rocm_compute_capability()
+           .gfx9_mi300_series()) {
+    GTEST_SKIP() << "Delay kernel is only supported on MI300+ ";
+  }
+  TF_ASSERT_OK_AND_ASSIGN(
+      RocmTimer timer, RocmTimer::Create(executor_, stream_.get(),
+                                         RocmTimer::TimerType::kDelayKernel));
+
   LaunchSomeKernel(executor_, stream_.get());
 
   TF_ASSERT_OK_AND_ASSIGN(absl::Duration timer_result,
