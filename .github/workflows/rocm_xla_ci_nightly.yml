@@ -52,8 +52,8 @@ jobs:
           - name: "hermetic"
             configs:
               - "--config=rocm_ci_hermetic"
-              - "--repo_env=ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx950-dcgpu-7.12.0.tar.gz"
-              - "--repo_env=ROCM_DISTRO_HASH=bd5e12f6f05fd240efa6c50662379cba991f6faa9df67e270fbe5bb8cffc0ab9"
+              - "--repo_env=ROCM_DISTRO_URL=https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-gfx950-dcgpu-7.14.0a20260624.tar.gz"
+              - "--repo_env=ROCM_DISTRO_HASH=11710a0ababaa76594b482a01a9bac54d8523afdfd9bb548b4ff7840c47baacb"
               - "--repo_env=SYSROOT_DIST=linux_glibc_2_31"
               - "--repo_env=ROCM_PATH="
             rbe_docker_image: "DOCKER_IMAGE_HERMETIC"
