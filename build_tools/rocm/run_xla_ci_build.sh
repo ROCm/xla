@@ -26,8 +26,6 @@ mkdir -p /tf/pkg
 EXCLUDED_TESTS=(
     "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
     "DeterminismTest.CublasDot"
-    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x9"
-    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x6"
     "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_f32_f32_f32"
     "TritonBackendTest.CostModelOptions_Combination"
     "TritonBackendTest.CostModelOptions_TopFromDefault"
