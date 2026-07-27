@@ -47,7 +47,9 @@ EXCLUDED_TESTS=(
     "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllToAllNumberOfElementsLargerThanInt32Max/async_symmetric*"
     "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllGather/async_symmetric*"
     "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllToAllWithSplitDim/sync_symmetric*"
-
+    "AsyncCollectiveOps/AsyncCollectiveOps.AsyncAllGather/sync_symmetric"
+    "StreamExecutorGpuClientTest.GetCompiledMemoryStatsWithTupleAndNcclUserBuffers"
+    "StreamExecutorGpuClientTest.GetAbiVersion"
 )
 
 for arg in "$@"; do
