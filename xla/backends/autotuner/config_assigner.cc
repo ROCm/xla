@@ -68,6 +68,15 @@ limitations under the License.
 #include "xla/tsl/platform/errors.h"
 #include "tsl/platform/fingerprint.h"
 
+// Define LOG_EVAL_CONFIGS to enable writing a ranked table of every
+// autotuner-evaluated Triton configuration (with per-config runtimes) to a
+// timestamped file under /tmp. This is a developer/benchmarking aid (used by
+// tests/dichotomic_search_benchmark.py); it is compiled out by default to
+// avoid the extra file I/O and log noise in production builds.
+//
+//   Build with: --copt=-DLOG_EVAL_CONFIGS   (or uncomment the line below).
+// #define LOG_EVAL_CONFIGS
+
 namespace xla {
 namespace {
 
@@ -92,6 +101,7 @@ bool AllConfigsAreTriton(
   return true;
 }
 
+#ifdef LOG_EVAL_CONFIGS
 // Formats a ConfigProfile as a compact one-line string for the Triton
 // performance table, bypassing the raw proto type-URL noise produced by
 // BackendConfig::ShortDebugString() (e.g. "goo.gle/debugonly ...").
@@ -136,6 +146,7 @@ bool AnyProfileIsTriton(
   }
   return false;
 }
+#endif  // LOG_EVAL_CONFIGS
 
 // It is important to fingerprint the entire module not just the autotuning
 // candidates, to avoid collisions in the key-value store when several
@@ -835,6 +846,7 @@ void ConfigAssigner::LogConfigProfiles(
     VLOG(2) << result.ToString(/*verbose=*/VLOG_IS_ON(3));
   }
 
+#ifdef LOG_EVAL_CONFIGS
   // For Triton autotuning, write a ranked performance table listing every
   // solution evaluated by the autotuner to a timestamped file under /tmp so
   // the results are preserved without flooding stdout. The table is sorted
@@ -905,6 +917,7 @@ void ConfigAssigner::LogConfigProfiles(
                    << ": " << write_status;
     }
   }
+#endif  // LOG_EVAL_CONFIGS
 
   if (options_.dump_logs_to.empty()) {
     return;
