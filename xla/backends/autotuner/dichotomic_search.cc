@@ -240,31 +240,29 @@ std::vector<int> SelectTernaryRefine(const DichotomicSearchSpace& space,
     }
   }
 
+  // Coordinate-wise ternary refinement. Each unimodal axis is bracketed
+  // geometrically over its sorted index range [0, n-1]; the other axes are held
+  // at the Phase-1 marginal-best background (`cur`). Because `prior_samples` is
+  // fixed for the duration of this call, a second outer pass would recompute the
+  // identical background and therefore re-emit the exact same (deduplicated)
+  // probes, so a single pass is sufficient.
   Coord cur = seed;
-  for (int iter = 0; iter < 2; ++iter) {
-    for (int a = 0; a < num_axes; ++a) {
-      if (profile.roles[a] != AxisRole::kUnimodal) continue;
-      const int n = axes[a].values.size();
-      if (n <= 2) continue;
-      int lo = 0, hi = n - 1;
-      for (int step = 0; step < 3 && hi - lo > 1; ++step) {
-        int i1 = lo + (hi - lo) / 3;
-        int i2 = hi - (hi - lo) / 3;
-        Coord c1 = cur;
-        c1[a] = i1;
-        AddSnapped(space, c1, &seen, &result);
-        Coord c2 = cur;
-        c2[a] = i2;
-        AddSnapped(space, c2, &seen, &result);
-        lo = i1;
-        hi = i2;
-      }
-    }
-    // Re-seed unimodal axes to their marginal best for the next iteration.
-    for (int a = 0; a < num_axes; ++a) {
-      if (profile.roles[a] == AxisRole::kUnimodal) {
-        cur[a] = MarginalBestIndex(space, a, prior_samples);
-      }
+  for (int a = 0; a < num_axes; ++a) {
+    if (profile.roles[a] != AxisRole::kUnimodal) continue;
+    const int n = axes[a].values.size();
+    if (n <= 2) continue;
+    int lo = 0, hi = n - 1;
+    for (int step = 0; step < 3 && hi - lo > 1; ++step) {
+      int i1 = lo + (hi - lo) / 3;
+      int i2 = hi - (hi - lo) / 3;
+      Coord c1 = cur;
+      c1[a] = i1;
+      AddSnapped(space, c1, &seen, &result);
+      Coord c2 = cur;
+      c2[a] = i2;
+      AddSnapped(space, c2, &seen, &result);
+      lo = i1;
+      hi = i2;
     }
   }
   return result;
