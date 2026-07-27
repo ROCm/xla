@@ -85,7 +85,9 @@ jobs:
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=single_gpu \
-            --bes_keywords=pull_request
+            --bes_keywords=pull_request \
+            -- \
+            //xla/...
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always() && !cancelled()
@@ -99,7 +101,9 @@ jobs:
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=multi_gpu \
-            --bes_keywords=pull_request
+            --bes_keywords=pull_request \
+            -- \
+            //xla/...
       - name: Test XLA [rocm_cpu]
         if: always() && !cancelled()
         run: |
@@ -112,4 +116,6 @@ jobs:
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=cpu \
-            --bes_keywords=pull_request
+            --bes_keywords=pull_request \
+            -- \
+            //xla/...
