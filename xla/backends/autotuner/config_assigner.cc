@@ -496,13 +496,19 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfig(
     return GetTunedConfigDichotomic(instr, std::move(supported_configs));
   }
 
+  // Measure the wall time actually spent in the autotuning phase (compiling
+  // and profiling candidate configs), excluding the fixed compile/runtime
+  // overhead outside this function. Tooling
+  // (tests/dichotomic_search_benchmark.py) parses the emitted line.
+  const absl::Time autotune_phase_start = absl::Now();
+  const int num_candidates_to_eval = static_cast<int>(supported_configs.size());
   tsl::Future<std::vector<CodegenOrchestrator::MaybeExecutableCandidate>>
       maybe_candidates =
           orchestrator_->CompileAll(*instr, std::move(supported_configs));
   return std::move(maybe_candidates)
-      .Map([instr,
-            this](std::vector<CodegenOrchestrator::MaybeExecutableCandidate>
-                      maybe_candidates) mutable -> absl::StatusOr<Config> {
+      .Map([instr, this, autotune_phase_start, num_candidates_to_eval](
+               std::vector<CodegenOrchestrator::MaybeExecutableCandidate>
+                   maybe_candidates) mutable -> absl::StatusOr<Config> {
         CHECK(config_runner_ != nullptr);  // To make clang-tidy happy.
         std::vector<ConfigRunner::ExecutableCandidate> candidates;
         std::vector<ConfigRunner::ConfigProfile> compilation_failures;
@@ -550,6 +556,13 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfig(
         ASSIGN_OR_RETURN(
             ConfigRunner::ConfigProfile best_profile,
             PickBestConfig(profiles, options_.scratch_bytes_window_size_us));
+
+        const absl::Duration autotune_phase_duration =
+            absl::Now() - autotune_phase_start;
+        VLOG(1) << "Autotuning phase took "
+                << absl::ToDoubleMilliseconds(autotune_phase_duration)
+                << " ms for " << num_candidates_to_eval
+                << " candidate configs for: " << instr->ToString();
         return std::move(best_profile.config);
       });
 }
@@ -557,6 +570,11 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfig(
 tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
     const HloInstruction* instr, std::vector<Config> supported_configs) {
   CHECK(config_runner_ != nullptr);
+
+  // Measure the wall time actually spent in the dichotomic autotuning phase
+  // (all compile/profile phases below), excluding fixed compile/runtime
+  // overhead. Tooling parses the emitted line.
+  const absl::Time autotune_phase_start = absl::Now();
 
   // Build the discretized search space from the exhaustive Triton config set.
   std::vector<const BackendConfig*> backend_configs;
@@ -715,6 +733,13 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
   // of evaluated configurations regardless of search strategy.
   VLOG(1) << "Autotuner evaluated " << evaluated.size() << " / "
           << space.num_configs() << " configs for: " << instr->ToString();
+
+  const absl::Duration autotune_phase_duration =
+      absl::Now() - autotune_phase_start;
+  VLOG(1) << "Autotuning phase took "
+          << absl::ToDoubleMilliseconds(autotune_phase_duration) << " ms for "
+          << evaluated.size()
+          << " candidate configs for: " << instr->ToString();
 
   // Log the finally selected config and its measured runtime BEFORE
   // PickBestConfig so the line is always emitted when the dichotomic search
