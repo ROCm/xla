@@ -82,6 +82,7 @@ cc_library(
     deps = [
         ":rocm_collector",
         ":rocm_tracer",
+        ":rocm_tracer_options_utils",
         ":rocm_tracer_utils",
         "//xla:debug_options_flags",
         "//xla/stream_executor/rocm:roctracer_wrapper",
