@@ -14,6 +14,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from reference_results import sha256_file
+
 
 TIME_RE = re.compile(
     r"^\s*(?P<value>[0-9]+(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?)"
@@ -67,6 +69,47 @@ def load_branch_csvs(csv_dir: Path) -> tuple[dict[str, dict[str, float]], dict[s
     return workloads, errors
 
 
+def load_checked_in_reference(
+    reference_dataset: dict[str, Any],
+) -> tuple[dict[str, dict[str, float | None]], dict[str, str]]:
+    workloads: dict[str, dict[str, float | None]] = {}
+    errors: dict[str, str] = {}
+    inventory = reference_dataset["inventory"]
+    tools_root = Path(__file__).resolve().parents[1]
+    for item in inventory["workloads"]:
+        if not item["exists"]:
+            workloads[item["workload"]] = {
+                module: None for module in item["modules"]
+            }
+            continue
+        workload = item["workload"]
+        path = tools_root / item["relative_path"]
+        try:
+            if not path.is_file():
+                raise ValueError(f"recorded reference CSV is missing: {path}")
+            actual_hash = sha256_file(path)
+            if actual_hash != item["sha256"]:
+                raise ValueError(
+                    f"reference CSV checksum changed: {path}; "
+                    f"expected {item['sha256']}, found {actual_hash}"
+                )
+            timings = read_latest_row(path)
+            missing_modules = [
+                module for module in item["modules"] if module not in timings
+            ]
+            if missing_modules:
+                raise ValueError(
+                    f"reference CSV is missing selected module(s): "
+                    f"{', '.join(missing_modules)}"
+                )
+            workloads[workload] = {
+                module: timings[module] for module in item["modules"]
+            }
+        except (OSError, ValueError) as error:
+            errors[workload] = str(error)
+    return workloads, errors
+
+
 def format_csv_errors(ref: str, errors: dict[str, str]) -> str:
     details = "; ".join(
         f"{filename}: {message}" for filename, message in sorted(errors.items())
@@ -78,25 +121,16 @@ def comparison_rows(
     *,
     output_dir: Path,
     targets: list[dict[str, str]],
-    baseline_ref: str,
+    reference_dataset: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    by_ref = {target["ref"]: target for target in targets}
-    if baseline_ref not in by_ref:
-        raise ValueError(f"baseline ref is not in the campaign target list: {baseline_ref}")
-
-    baseline_target = by_ref[baseline_ref]
-    baseline_csvs, baseline_errors = load_branch_csvs(
-        output_dir / baseline_target["slug"] / "csv"
-    )
+    baseline_ref = reference_dataset["id"]
+    baseline_commit = reference_dataset["xla_commit"]
+    baseline_csvs, baseline_errors = load_checked_in_reference(reference_dataset)
     if baseline_errors:
         raise ValueError(format_csv_errors(baseline_ref, baseline_errors))
-    if not baseline_csvs:
-        raise ValueError(f"baseline produced no readable CSV results: {baseline_ref}")
 
     rows: list[dict[str, Any]] = []
     for target in targets:
-        if target["ref"] == baseline_ref:
-            continue
         candidate_csvs, candidate_errors = load_branch_csvs(
             output_dir / target["slug"] / "csv"
         )
@@ -136,7 +170,10 @@ def comparison_rows(
                 rows.append(
                     {
                         "baseline_ref": baseline_ref,
-                        "baseline_commit": baseline_target["commit"],
+                        "baseline_commit": baseline_commit,
+                        "baseline_source": reference_dataset["source"],
+                        "candidate_id": target["id"],
+                        "candidate_role": target["role"],
                         "candidate_ref": target["ref"],
                         "candidate_commit": target["commit"],
                         "workload": workload,
@@ -155,7 +192,8 @@ def comparison_rows(
     missing_candidate = counts.get("missing_candidate", 0)
     summary = {
         "baseline_ref": baseline_ref,
-        "baseline_commit": baseline_target["commit"],
+        "baseline_commit": baseline_commit,
+        "baseline_source": reference_dataset["source"],
         "rows": len(rows),
         "status_counts": dict(sorted(counts.items())),
         "validation": {
@@ -176,17 +214,14 @@ def comparison_rows(
 def summarize_branches(
     rows: list[dict[str, Any]],
     targets: list[dict[str, str]],
-    baseline_ref: str,
 ) -> list[dict[str, Any]]:
-    rows_by_ref: dict[str, list[dict[str, Any]]] = {}
+    rows_by_id: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        rows_by_ref.setdefault(row["candidate_ref"], []).append(row)
+        rows_by_id.setdefault(row["candidate_id"], []).append(row)
 
     summaries: list[dict[str, Any]] = []
     for target in targets:
-        if target["ref"] == baseline_ref:
-            continue
-        branch_rows = rows_by_ref.get(target["ref"], [])
+        branch_rows = rows_by_id.get(target["id"], [])
         matched = [
             row
             for row in branch_rows
@@ -218,6 +253,8 @@ def summarize_branches(
         )
         summaries.append(
             {
+                "candidate_id": target["id"],
+                "candidate_role": target["role"],
                 "candidate_ref": target["ref"],
                 "candidate_commit": target["commit"],
                 "matched_modules": len(matched),
@@ -273,6 +310,65 @@ def format_change(delta_percent: float | None, status: str | None = None) -> str
     return "unchanged"
 
 
+def report_workload_name(workload: str) -> str:
+    name = workload.removesuffix(".csv")
+    for category in (
+        "large_language_models",
+        "vision_diffusion",
+        "multimodal",
+        "science",
+    ):
+        prefix = f"{category}_"
+        if not name.startswith(prefix):
+            continue
+        remainder = name[len(prefix) :]
+        match = re.fullmatch(r"(.+)_(training|inference_(\d+gpu))", remainder)
+        if not match:
+            break
+        model, workload_type, gpu_count = match.groups()
+        workload_path = (
+            "training"
+            if workload_type == "training"
+            else f"inference/{gpu_count}"
+        )
+        return f"{category}/{model}/{workload_path}"
+    return name
+
+
+def report_module_name(module: str) -> str:
+    for suffix in (
+        ".before_optimizations.txt",
+        ".before_optimizations.hlo",
+        ".txt",
+        ".hlo",
+    ):
+        if module.endswith(suffix):
+            return module[: -len(suffix)]
+    return module
+
+
+def revision_header(ref: str, commit: str, role: str | None = None) -> str:
+    header = f"`{markdown_escape(ref)}`<br>`{commit[:12]}`"
+    return f"{header}<br>{role}" if role else header
+
+
+def candidate_matrix_cell(row: dict[str, Any] | None) -> str:
+    if row is None:
+        return "N/A<br>not present"
+    if row["candidate_ms"] is None:
+        return f"N/A<br>{markdown_escape(row['status'].replace('_', ' '))}"
+    if row["delta_percent"] is None:
+        return (
+            f"{format_ms(row['candidate_ms'])}<br>N/A · "
+            f"{markdown_escape(row['status'].replace('_', ' '))}"
+        )
+    return (
+        f"{format_ms(row['candidate_ms'])}<br>"
+        f"{format_ratio(row['ratio'])} · "
+        f"{format_change(row['delta_percent'], row['status'])}"
+    )
+
+
 def write_markdown_report(
     *,
     path: Path,
@@ -280,15 +376,20 @@ def write_markdown_report(
     branch_summaries: list[dict[str, Any]],
     baseline_ref: str,
     baseline_commit: str,
+    live_control_id: str,
 ) -> None:
-    rows_by_ref: dict[str, list[dict[str, Any]]] = {}
+    rows_by_metric: dict[
+        tuple[str, str], dict[str, dict[str, Any]]
+    ] = {}
+    baseline_by_metric: dict[tuple[str, str], float | None] = {}
     for row in rows:
-        rows_by_ref.setdefault(row["candidate_ref"], []).append(row)
+        metric = (row["workload"], row["module"])
+        rows_by_metric.setdefault(metric, {})[row["candidate_ref"]] = row
+        if metric not in baseline_by_metric or row["baseline_ms"] is not None:
+            baseline_by_metric[metric] = row["baseline_ms"]
 
     lines = [
         "# XLA HLO Performance Comparison",
-        "",
-        f"Baseline: `{markdown_escape(baseline_ref)}` (`{baseline_commit}`)",
         "",
         "Lower is better. Ratio is `candidate / baseline`: below 1.0× is "
         "faster; above 1.0× is slower.",
@@ -298,68 +399,167 @@ def write_markdown_report(
         "",
     ]
 
+    lines.extend(
+        [
+            "## Compared revisions",
+            "",
+            "| role | XLA ref or dataset | commit |",
+            "|---|---|---|",
+            (
+                f"| Historical reference | `{markdown_escape(baseline_ref)}` | "
+                f"`{baseline_commit}` |"
+            ),
+        ]
+    )
     for branch in branch_summaries:
-        candidate_ref = branch["candidate_ref"]
+        role = (
+            "Live pinned control"
+            if branch["candidate_role"] == "live_control"
+            else "Live candidate"
+        )
+        lines.append(
+            f"| {role} | `{markdown_escape(branch['candidate_ref'])}` | "
+            f"`{branch['candidate_commit']}` |"
+        )
+
+    live_control = next(
+        (
+            branch
+            for branch in branch_summaries
+            if branch["candidate_id"] == live_control_id
+        ),
+        None,
+    )
+    lines.extend(
+        [
+            "",
+            "## Reference reproducibility",
+            "",
+            "The live control rebuilds the historical reference commit on the "
+            "current server. Its gap includes server, environment, and measurement "
+            "drift while holding the XLA commit constant.",
+            "",
+        ]
+    )
+    if live_control is None:
+        lines.append("Live control results are unavailable.")
+    else:
         lines.extend(
             [
-                f"## `{markdown_escape(candidate_ref)}`",
-                "",
-                f"Commit: `{branch['candidate_commit']}`",
-                "",
-                "| metric | baseline | candidate | ratio | change |",
-                "|---|---:|---:|---:|---:|",
+                "| live control | commit | matched | suite ratio | suite change | "
+                "missing control | missing reference |",
+                "|---|---|---:|---:|---:|---:|---:|",
                 (
-                    "| matched module suite | "
-                    f"{format_ms(branch['baseline_suite_ms'])} | "
-                    f"{format_ms(branch['candidate_suite_ms'])} | "
-                    f"{format_ratio(branch['suite_ratio'])} | "
-                    f"{format_change(branch['suite_delta_percent'])} |"
+                    f"| `{markdown_escape(live_control['candidate_ref'])}` | "
+                    f"`{live_control['candidate_commit'][:12]}` | "
+                    f"{live_control['matched_modules']} | "
+                    f"{format_ratio(live_control['suite_ratio'])} | "
+                    f"{format_change(live_control['suite_delta_percent'])} | "
+                    f"{live_control['missing_candidate']} | "
+                    f"{live_control['missing_baseline']} |"
                 ),
-                (
-                    "| geometric-mean module latency | 1.000× | "
-                    f"{format_ratio(branch['geomean_module_ratio'])} | "
-                    f"{format_ratio(branch['geomean_module_ratio'])} | "
-                    f"{format_change(branch['geomean_module_delta_percent'])} |"
-                ),
-                (
-                    "| median module latency | 1.000× | "
-                    f"{format_ratio(branch['median_module_ratio'])} | "
-                    f"{format_ratio(branch['median_module_ratio'])} | "
-                    f"{format_change(branch['median_module_delta_percent'])} |"
-                ),
-                "",
-                (
-                    f"Coverage: {branch['matched_modules']} matched, "
-                    f"{branch['faster_modules']} faster, "
-                    f"{branch['slower_modules']} slower, "
-                    f"{branch['unchanged_modules']} unchanged, "
-                    f"{branch['missing_candidate']} missing candidate, "
-                    f"{branch['missing_baseline']} missing baseline."
-                ),
-                "",
-                "### Per-HLO comparison",
-                "",
-                "| metric | baseline | candidate | ratio | change |",
-                "|---|---:|---:|---:|---:|",
             ]
         )
-        branch_rows = sorted(
-            rows_by_ref.get(candidate_ref, []),
-            key=lambda row: (
-                row["delta_percent"] is None,
-                -(row["delta_percent"] or 0.0),
-                row["workload"],
-                row["module"],
-            ),
+
+    lines.extend(
+        [
+            "",
+            "## Branch overview",
+            "",
+            "| role | candidate | commit | matched | faster | slower | unchanged | "
+            "missing candidate | missing baseline |",
+            "|---|---|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for branch in branch_summaries:
+        role = (
+            "control"
+            if branch["candidate_role"] == "live_control"
+            else "candidate"
         )
-        for row in branch_rows:
-            metric = markdown_escape(f"{row['workload']} / {row['module']}")
-            lines.append(
-                f"| {metric} | {format_ms(row['baseline_ms'])} | "
-                f"{format_ms(row['candidate_ms'])} | "
-                f"{format_ratio(row['ratio'])} | "
-                f"{format_change(row['delta_percent'], row['status'])} |"
+        lines.append(
+            f"| {role} | `{markdown_escape(branch['candidate_ref'])}` | "
+            f"`{branch['candidate_commit'][:12]}` | "
+            f"{branch['matched_modules']} | {branch['faster_modules']} | "
+            f"{branch['slower_modules']} | {branch['unchanged_modules']} | "
+            f"{branch['missing_candidate']} | {branch['missing_baseline']} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "Detailed aggregate statistics remain available in "
+            "`branch_summary.csv` and `comparison_summary.json`.",
+            "",
+            "## Per-HLO comparison",
+            "",
+            "Candidate cells show `latency / ratio / change` relative to the "
+            "baseline.",
+            "",
+        ]
+    )
+    candidate_refs = [branch["candidate_ref"] for branch in branch_summaries]
+    candidate_commits = {
+        branch["candidate_ref"]: branch["candidate_commit"]
+        for branch in branch_summaries
+    }
+    candidate_roles = {
+        branch["candidate_ref"]: (
+            "Live control"
+            if branch["candidate_role"] == "live_control"
+            else "Candidate"
+        )
+        for branch in branch_summaries
+    }
+
+    def metric_sort_key(metric: tuple[str, str]) -> tuple[Any, ...]:
+        metric_rows = rows_by_metric[metric].values()
+        deltas = [
+            row["delta_percent"]
+            for row in metric_rows
+            if row["delta_percent"] is not None
+        ]
+        worst_delta = max(deltas) if deltas else 0.0
+        return (not deltas, -worst_delta, metric[0], metric[1])
+
+    sorted_metrics = sorted(rows_by_metric, key=metric_sort_key)
+    for group_start in range(0, len(candidate_refs), 3):
+        group_refs = candidate_refs[group_start : group_start + 3]
+        if len(candidate_refs) > 3:
+            lines.extend(
+                [
+                    (
+                        f"### Candidates {group_start + 1}–"
+                        f"{group_start + len(group_refs)} of {len(candidate_refs)}"
+                    ),
+                    "",
+                ]
             )
+        headers = [
+            "workload",
+            "HLO module",
+            revision_header(
+                baseline_ref, baseline_commit, "Historical reference"
+            ),
+            *[
+                revision_header(ref, candidate_commits[ref], candidate_roles[ref])
+                for ref in group_refs
+            ],
+        ]
+        lines.append("| " + " | ".join(headers) + " |")
+        lines.append("|---|---|" + "---:|" * (1 + len(group_refs)))
+        for metric in sorted_metrics:
+            workload, module = metric
+            cells = [
+                f"`{markdown_escape(report_workload_name(workload))}`",
+                f"`{markdown_escape(report_module_name(module))}`",
+                format_ms(baseline_by_metric.get(metric)),
+                *[
+                    candidate_matrix_cell(rows_by_metric[metric].get(ref))
+                    for ref in group_refs
+                ],
+            ]
+            lines.append("| " + " | ".join(cells) + " |")
         lines.append("")
 
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -369,16 +569,22 @@ def write_comparison(
     *,
     output_dir: Path,
     targets: list[dict[str, str]],
-    baseline_ref: str,
+    reference_dataset: dict[str, Any],
+    live_control_id: str,
 ) -> dict[str, Any]:
     rows, summary = comparison_rows(
-        output_dir=output_dir, targets=targets, baseline_ref=baseline_ref
+        output_dir=output_dir,
+        targets=targets,
+        reference_dataset=reference_dataset,
     )
-    branch_summaries = summarize_branches(rows, targets, baseline_ref)
+    branch_summaries = summarize_branches(rows, targets)
     csv_path = output_dir / "comparison.csv"
     fields = [
         "baseline_ref",
         "baseline_commit",
+        "baseline_source",
+        "candidate_id",
+        "candidate_role",
         "candidate_ref",
         "candidate_commit",
         "workload",
@@ -397,6 +603,8 @@ def write_comparison(
 
     branch_summary_path = output_dir / "branch_summary.csv"
     branch_fields = [
+        "candidate_id",
+        "candidate_role",
         "candidate_ref",
         "candidate_commit",
         "matched_modules",
@@ -420,6 +628,14 @@ def write_comparison(
         writer.writerows(branch_summaries)
 
     summary["branches"] = branch_summaries
+    summary["reference_reproducibility"] = next(
+        (
+            branch
+            for branch in branch_summaries
+            if branch["candidate_id"] == live_control_id
+        ),
+        None,
+    )
     summary["aggregation_note"] = (
         "suite_delta_percent compares the sum of matched module timings and is "
         "not end-to-end model latency; geomean_module_delta_percent weights each "
@@ -434,8 +650,9 @@ def write_comparison(
         path=report_path,
         rows=rows,
         branch_summaries=branch_summaries,
-        baseline_ref=baseline_ref,
+        baseline_ref=summary["baseline_ref"],
         baseline_commit=summary["baseline_commit"],
+        live_control_id=live_control_id,
     )
     return {
         **summary,
@@ -447,37 +664,30 @@ def write_comparison(
 
 
 def select_comparison_targets(
-    manifest: dict[str, Any], baseline_ref: str
+    manifest: dict[str, Any],
 ) -> list[dict[str, str]]:
     targets = manifest["targets"]
-    by_ref = {target["ref"]: target for target in targets}
-    selected_refs = manifest.get("comparison_refs")
-    if selected_refs is None:
-        selected_refs = manifest.get("active_refs")
-    if selected_refs is None:
-        selected_refs = [target["ref"] for target in targets]
-    if not isinstance(selected_refs, list) or any(
-        not isinstance(ref, str) for ref in selected_refs
+    by_id = {target["id"]: target for target in targets}
+    selected_ids = manifest.get("comparison_target_ids")
+    if not isinstance(selected_ids, list) or any(
+        not isinstance(target_id, str) for target_id in selected_ids
     ):
-        raise ValueError("manifest comparison refs must be a list of strings")
-    selected_refs = list(selected_refs)
-    if baseline_ref not in selected_refs:
-        selected_refs.insert(0, baseline_ref)
-    if len(set(selected_refs)) != len(selected_refs):
-        raise ValueError("manifest comparison refs contain duplicates")
-    missing = [ref for ref in selected_refs if ref not in by_ref]
+        raise ValueError("manifest comparison target IDs must be a list of strings")
+    selected_ids = list(selected_ids)
+    if len(set(selected_ids)) != len(selected_ids):
+        raise ValueError("manifest comparison target IDs contain duplicates")
+    missing = [target_id for target_id in selected_ids if target_id not in by_id]
     if missing:
         raise ValueError(
-            "manifest comparison refs are not campaign targets: "
+            "manifest comparison target IDs are not campaign targets: "
             + ", ".join(missing)
         )
-    return [by_ref[ref] for ref in selected_refs]
+    return [by_id[target_id] for target_id in selected_ids]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--baseline-ref", required=True)
     return parser.parse_args()
 
 
@@ -486,11 +696,14 @@ def main() -> int:
     manifest_path = args.output_dir / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        targets = select_comparison_targets(manifest, args.baseline_ref)
+        if manifest.get("schema_version") != 2:
+            raise ValueError("standalone comparison requires a schema-v2 campaign")
+        targets = select_comparison_targets(manifest)
         result = write_comparison(
             output_dir=args.output_dir,
             targets=targets,
-            baseline_ref=args.baseline_ref,
+            reference_dataset=manifest["reference_dataset"],
+            live_control_id=manifest["live_control_id"],
         )
         print(json.dumps(result, indent=2, sort_keys=True))
         if result["validation"]["status"] != "passed":

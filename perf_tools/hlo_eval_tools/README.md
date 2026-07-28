@@ -459,6 +459,26 @@ The perf-tools repository defaults to the Git repository containing the script,
 so the command works from any current directory. Pass
 `--perf-tools-repo /path/to/rocm-dev-infra-xla` to override auto-discovery.
 
+For a faster end-to-end smoke test, select one workload leaf without deleting or
+moving any checked-in HLOs:
+
+```bash
+python3 perf_tools/hlo_eval_tools/scripts/run_xla_branch_eval.py \
+  --perf-tools-repo /path/to/perf-tools-xla \
+  --xla-source-repo /path/to/source-xla \
+  --output-dir /path/to/new-smoke-result-directory \
+  --hlo-path perf_tools/hlo_eval_tools/vision_diffusion/efficientnet/inference/1gpu
+```
+
+`--hlo-path` accepts a category, model, workload leaf, or one `.txt`/`.hlo`
+module under `perf_tools/hlo_eval_tools`. Relative paths are resolved from the
+perf-tools repository. The default is the complete corpus. A reduced selection
+still exercises ref resolution, checkout, runner builds, MI350 evaluation, CSV
+publication, comparison/report generation, checkpointing, and source restoration;
+it only reduces the HLO evaluation portion. Use a new output directory for the
+smoke campaign. On resume, omitting `--hlo-path` reuses the selection recorded in
+the manifest; explicitly selecting a different path is rejected.
+
 `rocm-jaxlib-v0.7.1` is intentionally not in the default ref list. That runner
 predates `--use_shardy_partitioner` and therefore cannot replay the multi-GPU
 modules in this corpus, which carry `xla.sdy.*` annotations. Its single-GPU HLO
@@ -473,12 +493,41 @@ origin   https://github.com/ROCm/xla.git
 upstream https://github.com/openxla/xla.git
 ```
 
-Before building, all refs are fetched and resolved to immutable commit SHAs.
-Each commit is checked out in the dedicated source repository, built with
-`bazel build`, and its runner is copied into the durable result directory before
-the next commit is checked out. In the validated container, `bazel` is a symlink
-to Bazelisk, so each commit's `.bazelversion` is honored. Pass
-`--bazel-command=/path/to/bazel` only when a different launcher is required.
+Before building, all candidate refs are fetched and resolved to immutable commit
+SHAs. The checked-in reference commit is also evaluated as a distinct live
+control. Each target is checked out in the dedicated source repository, built
+with `bazel build`, and its runner is copied into the durable result directory
+before the next target is checked out. If the mutable v0.10.2 branch is present
+in `xla_refs.txt`, it remains an independent candidate even when it currently
+resolves to the same SHA as the live control. In the validated container,
+`bazel` is a symlink to Bazelisk, so each commit's `.bazelversion` is honored.
+Pass `--bazel-command=/path/to/bazel` only when a different launcher is required.
+
+Target builds load the checked-out commit's
+`build_tools/rocm/rocm_xla_ci.bazelrc` when available. Older commits such as
+v0.8.0 predate that file and use `/usertools/rocm.bazelrc` directly as the
+container CI fallback. The selected mode, Bazelrc paths, and hashes are recorded
+in target `metadata.json`; the branch's own workspace `.bazelrc` still defines
+`--config=rocm`. A generated `xla_configure.bazelrc` in the source checkout is
+rejected because it can silently switch a hermetic ROCm branch to an
+incompatible local Clang toolchain.
+
+The ROCm build configuration changed at `rocm-jaxlib-v0.10.2`. That branch and
+newer refs select the Bazel-managed hermetic toolchain. The older default refs
+select `rocm_clang_official` and require the historical host LLVM tools at:
+
+```text
+/usr/lib/llvm-18/bin/clang
+/usr/lib/llvm-18/bin/clang++
+/usr/lib/llvm-18/bin/ld.lld
+```
+
+The workflow follows nested branch-local Bazel config dependencies after
+checkout and fails with a focused error before building when a required
+executable is absent, including on v0.8.x. It never downloads or installs system
+packages. Containers evaluating the complete cross-version ref list must include
+LLVM 18 in the image; ROCm's Clang under `/opt/rocm/llvm` is a separate ROCm 7.x
+toolchain and must not be symlinked over the expected LLVM 18 paths.
 
 The workflow uses Bazel's normal cache and does not create per-branch worktrees
 or output bases. It performs no automatic recursive deletion and never invokes
@@ -492,11 +541,21 @@ checkpointed in `metadata.json` and `manifest.json`, so a force-killed process,
 container restart, or host failure can be continued with `--resume`; the source
 may remain detached until that resume completes.
 
-The repository defaults come from `configs/benchmark_profile.json` and reproduce
-the checked-in result configuration: two repeats, uninitialized arguments,
-command buffers disabled, size ordering, and a two-second settle delay. Optional
-`--num-repeats`, `--arg-mode`, `--cmd-buffer`, `--order`, and `--settle-sec`
-overrides are recorded with `reference_aligned=false`.
+The historical baseline is the selected checked-in `results/*.csv` data described
+by `configs/benchmark_profile.json`, not a live branch directory. Its provenance
+and checksums are validated and stored with repository-relative paths in manifest
+schema v2. The exact pinned XLA commit is rebuilt and evaluated on the current
+MI350 as the live control; its ratio against the checked-in data measures server,
+environment, and measurement drift while holding the code constant. Every entry
+in `xla_refs.txt` is resolved independently as a live candidate—including the
+latest v0.10.2 tip when listed. The live control and all candidates use the same
+checkout, build, runner, and evaluation rules.
+
+The repository defaults reproduce the checked-in result configuration: two
+repeats, uninitialized arguments, command buffers disabled, size ordering, and
+a two-second settle delay. Optional `--num-repeats`, `--arg-mode`,
+`--cmd-buffer`, `--order`, and `--settle-sec` overrides are recorded with
+`reference_aligned=false`.
 
 The output contains:
 
@@ -507,6 +566,8 @@ The output contains:
   branch_summary.csv
   comparison_summary.json
   comparison_report.md
+  live_control_<commit>/
+    ...
   <remote_ref>_<commit>/
     metadata.json
     build.log
@@ -515,16 +576,19 @@ The output contains:
     csv/*.csv
 ```
 
-`comparison.csv` compares every available module against the reference ref in
-`configs/benchmark_profile.json`. `branch_summary.csv` adds one row per candidate
-ref with matched/faster/slower/missing module counts, summed-suite delta, median
-module delta, and geometric-mean module delta. The summed-suite value is the sum
-of isolated module timings, not end-to-end model latency. `faster` / `slower`
-reports only the sign of the measured delta; apply a noise threshold before
-declaring a regression. Missing or failed leaves are reported explicitly instead
-of being assigned a timing. `comparison_report.md` presents the same results as
-one review-friendly table per branch, using `candidate / baseline` ratios where
-less than 1.0x is faster and greater than 1.0x is slower.
+`comparison.csv` compares the live control and every active candidate against the
+checked-in historical reference. `branch_summary.csv` adds one row per live
+target with its role and matched/faster/slower/missing module counts,
+summed-suite delta, median module delta, and geometric-mean module delta. The
+summed-suite value is the sum of isolated module timings, not end-to-end model
+latency. `faster` / `slower` reports only the sign of the measured delta; apply a
+noise threshold before declaring a regression. Missing or failed leaves are
+reported explicitly instead of being assigned a timing.
+`comparison_report.md` starts with a reference-reproducibility section for the
+live pinned control, then presents the branch overview and per-HLO matrices.
+Candidate cells use `candidate / historical reference` ratios where less than
+1.0x is faster and greater than 1.0x is slower; groups of at most three live
+targets keep the report readable.
 Malformed CSVs, missing workloads, and missing modules fail comparison validation
 and make the campaign exit nonzero; missing entries remain in the generated
 reports when the available CSVs are otherwise readable.
@@ -533,31 +597,33 @@ Reports can be regenerated from the campaign manifest with:
 
 ```bash
 python3 perf_tools/hlo_eval_tools/scripts/compare_hlo_branch_results.py \
-  --output-dir /path/to/result-directory \
-  --baseline-ref origin/rocm-jaxlib-v0.10.2
+  --output-dir /path/to/result-directory
 ```
 
-Manual and automatic comparison use the same `comparison_refs` recorded in the
-manifest, so refs removed from the active campaign do not reappear in regenerated
-reports.
+Manual and automatic comparison use the same reference inventory and
+`comparison_target_ids` recorded in the schema-v2 manifest, so removed refs do
+not reappear in regenerated reports.
 
 Use `--dry-run` to resolve refs and print the complete plan without building or
 profiling. It still refreshes Git remotes unless `--skip-fetch` is also given.
-Use `--resume` only with the same output directory and unchanged HLO corpus,
-profile, evaluation script, XLA source checkout path, and MI350/ROCm environment.
+Use `--resume` only with the same output directory and unchanged selected HLO
+corpus, profile, evaluation script, XLA source checkout path, and MI350/ROCm
+environment.
 The current refs file is always the active execution list. During resume,
 existing refs retain their immutable manifest SHAs and results, removed refs are
 skipped without deleting their artifacts, and newly added refs are resolved and
 recorded once. Ref ordering follows the current file. A target whose evaluation
 already returned—successfully or with recorded leaf failures—is not run again;
 an interrupted target without an evaluation exit code resumes its missing
-leaves. The configured comparison reference may be omitted from the active list
-only when its results already exist in the output directory.
+leaves. The live pinned control is always present independently of the refs file.
+Schema-v1 campaigns use the old baseline semantics and cannot be resumed by this
+schema-v2 workflow; start with a fresh output directory.
 
-The HLO fingerprint covers every `.txt` and `.hlo` recursively under the HLO
-root, but not README or orchestration changes. Committed, modified, and untracked
-HLO inputs are allowed when starting a new campaign, then their content must
-remain unchanged. The inventory is checked before every target and again before
+The HLO fingerprint covers every `.txt` and `.hlo` recursively under the selected
+HLO path (or the selected file), but not README or orchestration changes.
+Committed, modified, and untracked HLO inputs are allowed when starting a new
+campaign, then their content and selected path must remain unchanged. The
+selection and inventory are checked before every target and again before
 comparison. A legacy manifest that recorded modified or untracked HLO inputs is
 rejected because its previous bytes cannot be verified safely. HLO inputs are
 treated as user-provided campaign data; parse, compile, and execution errors are

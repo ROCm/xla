@@ -20,9 +20,15 @@ from pathlib import Path
 from typing import Any
 
 from compare_hlo_branch_results import select_comparison_targets, write_comparison
+from reference_results import reference_inventory
 
 
 UPSTREAM_URL = "https://github.com/openxla/xla.git"
+HLO_TOOLS_RELATIVE_PATH = Path("perf_tools/hlo_eval_tools")
+ROCM_CI_BAZELRC_RELATIVE_PATH = Path(
+    "build_tools/rocm/rocm_xla_ci.bazelrc"
+)
+CONTAINER_ROCM_BAZELRC = Path("/usertools/rocm.bazelrc")
 RUNNER_TARGET = "//xla/tools/multihost_hlo_runner:hlo_runner_main"
 RUNNER_RELATIVE_PATH = Path(
     "xla/tools/multihost_hlo_runner/hlo_runner_main"
@@ -77,6 +83,15 @@ def parse_args() -> argparse.Namespace:
         help=(
             "default: <perf-tools-repo>/perf_tools/hlo_eval_tools/"
             "configs/benchmark_profile.json"
+        ),
+    )
+    parser.add_argument(
+        "--hlo-path",
+        type=Path,
+        help=(
+            "HLO subtree or single .txt/.hlo file to evaluate; relative paths "
+            "are resolved from <perf-tools-repo> (default: the complete "
+            "perf_tools/hlo_eval_tools corpus, or the recorded path on resume)"
         ),
     )
     parser.add_argument("--num-repeats", type=positive_int)
@@ -289,10 +304,10 @@ def read_refs(path: Path) -> list[str]:
 def validate_resume_manifest(manifest: Any) -> None:
     if not isinstance(manifest, dict):
         raise ValueError("resume manifest must contain a JSON object")
-    if manifest.get("schema_version") != 1:
+    if manifest.get("schema_version") != 2:
         raise ValueError(
             "cannot resume unsupported manifest schema: "
-            f"{manifest.get('schema_version')}"
+            f"{manifest.get('schema_version')}; start a fresh schema-v2 campaign"
         )
     inputs = manifest.get("inputs")
     if not isinstance(inputs, dict):
@@ -301,11 +316,20 @@ def validate_resume_manifest(manifest: Any) -> None:
         "perf_tools_repo",
         "xla_source_repo",
         "profile_file",
+        "orchestrator_script",
         "evaluation_script",
         "comparison_script",
+        "reference_results_script",
     ):
         if not isinstance(inputs.get(name), dict):
             raise ValueError(f"resume manifest has no valid inputs.{name} object")
+    recorded_hlo_path = inputs["perf_tools_repo"].get("hlo_path")
+    if recorded_hlo_path is not None and (
+        not isinstance(recorded_hlo_path, str) or not recorded_hlo_path
+    ):
+        raise ValueError(
+            "resume manifest inputs.perf_tools_repo.hlo_path is invalid"
+        )
     benchmark = manifest.get("benchmark")
     if not isinstance(benchmark, dict) or not isinstance(
         benchmark.get("effective"), dict
@@ -317,9 +341,24 @@ def validate_resume_manifest(manifest: Any) -> None:
     for index, target in enumerate(targets):
         if not isinstance(target, dict) or any(
             not isinstance(target.get(key), str) or not target[key]
-            for key in ("ref", "commit", "slug")
+            for key in (
+                "id",
+                "role",
+                "ref",
+                "source_ref",
+                "revision",
+                "commit",
+                "slug",
+            )
         ):
             raise ValueError(f"resume manifest target {index} is invalid")
+    reference_dataset = manifest.get("reference_dataset")
+    if (
+        not isinstance(reference_dataset, dict)
+        or reference_dataset.get("source") != "checked_in"
+        or not isinstance(reference_dataset.get("inventory"), dict)
+    ):
+        raise ValueError("resume manifest has no valid checked-in reference dataset")
     if "source_original_state" in manifest:
         source_state = manifest["source_original_state"]
         if (
@@ -340,6 +379,16 @@ def load_profile(path: Path, args: argparse.Namespace) -> tuple[dict[str, Any], 
     defaults = profile.get("runner")
     if not isinstance(defaults, dict):
         raise ValueError(f"benchmark profile has no runner object: {path}")
+    reference = profile.get("reference")
+    if not isinstance(reference, dict) or any(
+        not isinstance(reference.get(key), str) or not reference[key]
+        for key in ("id", "source", "xla_ref", "xla_commit", "gpu", "container")
+    ):
+        raise ValueError(f"benchmark profile has no valid reference object: {path}")
+    if reference["source"] != "checked_in":
+        raise ValueError(
+            f"unsupported reference source {reference['source']!r}: {path}"
+        )
 
     required = {
         "num_repeats": int,
@@ -415,26 +464,48 @@ def resolve_refs(repo: Path, refs: list[str]) -> list[dict[str, str]]:
             f"{ref}^{{commit}}",
         )
         slug = re.sub(r"[^A-Za-z0-9._-]+", "_", ref).strip("._-") or "xla"
-        resolved.append({"ref": ref, "commit": sha, "slug": f"{slug}_{sha[:12]}"})
+        resolved.append(
+            {
+                "id": f"candidate:{ref}",
+                "role": "candidate",
+                "ref": ref,
+                "source_ref": ref,
+                "revision": ref,
+                "commit": sha,
+                "slug": f"{slug}_{sha[:12]}",
+            }
+        )
     return resolved
 
 
-def validate_reference_target(
-    profile: dict[str, Any], targets: list[dict[str, str]]
-) -> None:
+def resolve_live_control(
+    repo: Path, profile: dict[str, Any]
+) -> dict[str, str]:
     reference = profile.get("reference", {})
     reference_ref = reference.get("xla_ref")
     reference_commit = reference.get("xla_commit")
     if not reference_ref or not reference_commit:
-        return
-    target = next((item for item in targets if item["ref"] == reference_ref), None)
-    if target is None:
-        raise ValueError(f"reference ref is not present in the target list: {reference_ref}")
-    if target["commit"] != reference_commit:
+        raise ValueError("benchmark profile must define reference.xla_ref/xla_commit")
+    commit = git(
+        repo,
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        f"{reference_commit}^{{commit}}",
+    )
+    if commit != reference_commit:
         raise ValueError(
-            f"reference ref {reference_ref} resolved to {target['commit']}, but the "
-            f"benchmark profile requires {reference_commit}"
+            f"reference commit resolved to {commit}, expected {reference_commit}"
         )
+    return {
+        "id": f"live-control:{commit}",
+        "role": "live_control",
+        "ref": f"live-control/{reference_ref}",
+        "source_ref": reference_ref,
+        "revision": commit,
+        "commit": commit,
+        "slug": f"live_control_{commit[:12]}",
+    }
 
 
 def missing_target_commits(
@@ -469,6 +540,139 @@ def bazel_version(executable: str, cwd: Path) -> str:
     return match.group(1) if match else output
 
 
+def rocm_bazel_configuration(
+    bazel: str, source_repo: Path, target_ref: str
+) -> tuple[list[str], dict[str, Any]]:
+    branch_bazelrc = source_repo / ROCM_CI_BAZELRC_RELATIVE_PATH
+    metadata: dict[str, Any]
+    if branch_bazelrc.is_file():
+        metadata = {
+            "mode": "branch_ci",
+            "branch_bazelrc": {
+                "path": str(branch_bazelrc),
+                "sha256": sha256_file(branch_bazelrc),
+            },
+        }
+        invocation = [bazel, f"--bazelrc={branch_bazelrc}"]
+    elif CONTAINER_ROCM_BAZELRC.is_file():
+        metadata = {
+            "mode": "container_ci_fallback",
+            "branch_bazelrc": None,
+        }
+        invocation = [bazel, f"--bazelrc={CONTAINER_ROCM_BAZELRC}"]
+    else:
+        raise RuntimeError(
+            f"{target_ref} has neither branch ROCm CI Bazel configuration "
+            f"{branch_bazelrc} nor container fallback {CONTAINER_ROCM_BAZELRC}"
+        )
+    if CONTAINER_ROCM_BAZELRC.is_file():
+        metadata["container_bazelrc"] = {
+            "path": str(CONTAINER_ROCM_BAZELRC),
+            "sha256": sha256_file(CONTAINER_ROCM_BAZELRC),
+        }
+    else:
+        metadata["container_bazelrc"] = None
+    return invocation, metadata
+
+
+def bazel_config_closure(text: str, root: str) -> list[str]:
+    dependencies: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        match = re.match(
+            r"^\s*(?:common|build):(\S+)\s+(.*?)\s*$", line
+        )
+        if match is None:
+            continue
+        config, options = match.groups()
+        dependencies.setdefault(config, []).extend(
+            re.findall(r"--config(?:=|\s+)([^\s#]+)", options)
+        )
+    closure: list[str] = []
+    queue = [root]
+    while queue:
+        config = queue.pop(0)
+        if config in closure:
+            continue
+        closure.append(config)
+        queue.extend(dependencies.get(config, []))
+    return closure
+
+
+def rocm_host_toolchain_metadata(
+    source_repo: Path, target_ref: str
+) -> dict[str, Any]:
+    bazelrc = source_repo / "tensorflow.bazelrc"
+    text = bazelrc.read_text(encoding="utf-8")
+    selected_match = re.search(
+        r"(?m)^\s*common:rocm\s+--config=(\S+)\s*$", text
+    )
+    selected_config = selected_match.group(1) if selected_match else None
+    config_chain = bazel_config_closure(text, "rocm")
+    metadata: dict[str, Any] = {
+        "selected_config": selected_config,
+        "config_chain": config_chain,
+        "host_compiler": None,
+    }
+    configured_paths: list[str] = []
+    for config in config_chain:
+        for line in text.splitlines():
+            if re.match(
+                rf"^\s*(?:common|build):{re.escape(config)}\s+", line
+            ) is None:
+                continue
+            compiler_match = re.search(
+                r'--action_env=CLANG_COMPILER_PATH=(?:"([^"]+)"|(\S+))',
+                line,
+            )
+            if compiler_match:
+                configured_paths.append(
+                    compiler_match.group(1) or compiler_match.group(2)
+                )
+    configured_paths = list(dict.fromkeys(configured_paths))
+    if not configured_paths:
+        return metadata
+    if len(configured_paths) != 1:
+        raise RuntimeError(
+            f"{target_ref} selects conflicting CLANG_COMPILER_PATH values: "
+            f"{', '.join(configured_paths)}"
+        )
+
+    configured = configured_paths[0]
+    compiler = (
+        Path(configured)
+        if Path(configured).is_absolute()
+        else Path(shutil.which(configured) or configured)
+    )
+    required_tools = {
+        "clang": compiler,
+        "clang++": compiler.with_name("clang++"),
+        "ld.lld": compiler.with_name("ld.lld"),
+    }
+    missing = [
+        f"{name} ({path})"
+        for name, path in required_tools.items()
+        if not path.is_file() or not os.access(path, os.X_OK)
+    ]
+    if missing:
+        raise RuntimeError(
+            f"{target_ref} selects legacy ROCm config {selected_config}, which "
+            f"requires its configured LLVM toolchain. Missing: {', '.join(missing)}. "
+            "Install the branch-compatible LLVM packages in the container; do not "
+            "generate xla_configure.bazelrc or replace the branch's ROCm config."
+        )
+    metadata["host_compiler"] = {
+        "configured_path": configured,
+        "resolved_path": str(compiler.resolve()),
+        "version": run_capture(
+            [str(compiler), "--version"], timeout=15
+        ).splitlines()[0],
+        "tools": {
+            name: str(path.resolve()) for name, path in required_tools.items()
+        },
+    }
+    return metadata
+
+
 def collect_environment() -> dict[str, Any]:
     environment: dict[str, Any] = {
         "captured_at": utc_now(),
@@ -492,16 +696,31 @@ def collect_environment() -> dict[str, Any]:
     return environment
 
 
-def hlo_inventory(hlo_root: Path) -> dict[str, Any]:
-    digest = hashlib.sha256()
-    files = sorted(
+def hlo_files(hlo_path: Path) -> list[Path]:
+    def is_workload_hlo(path: Path) -> bool:
+        return path.suffix in {".txt", ".hlo"} and (
+            path.parent.name == "training"
+            or (
+                re.fullmatch(r"[0-9]+gpu", path.parent.name) is not None
+                and path.parent.parent.name == "inference"
+            )
+        )
+
+    if hlo_path.is_file():
+        return [hlo_path] if is_workload_hlo(hlo_path) else []
+    return sorted(
         path
-        for path in hlo_root.rglob("*")
-        if path.is_file()
-        and path.suffix in {".txt", ".hlo"}
+        for path in hlo_path.rglob("*")
+        if path.is_file() and is_workload_hlo(path)
     )
+
+
+def hlo_inventory(hlo_path: Path) -> dict[str, Any]:
+    digest = hashlib.sha256()
+    files = hlo_files(hlo_path)
+    relative_root = hlo_path.parent if hlo_path.is_file() else hlo_path
     for path in files:
-        relative = path.relative_to(hlo_root).as_posix()
+        relative = path.relative_to(relative_root).as_posix()
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
         digest.update(sha256_file(path).encode("ascii"))
@@ -509,8 +728,38 @@ def hlo_inventory(hlo_root: Path) -> dict[str, Any]:
     return {"file_count": len(files), "sha256": digest.hexdigest()}
 
 
-def hlo_pathspecs(hlo_root: Path, repo: Path) -> list[str]:
-    relative = hlo_root.relative_to(repo).as_posix()
+def resolve_hlo_path(
+    perf_repo: Path, tools_root: Path, requested: Path | None
+) -> Path:
+    candidate = (
+        tools_root
+        if requested is None
+        else requested
+        if requested.is_absolute()
+        else perf_repo / requested
+    )
+    try:
+        resolved = candidate.expanduser().resolve(strict=True)
+    except OSError as error:
+        raise ValueError(f"HLO path not found: {candidate}") from error
+    if not resolved.is_relative_to(tools_root):
+        raise ValueError(
+            "HLO path must be inside "
+            f"{tools_root}: {resolved}"
+        )
+    if resolved.is_file() and resolved.suffix not in {".txt", ".hlo"}:
+        raise ValueError(f"HLO file must end in .txt or .hlo: {resolved}")
+    inventory = hlo_inventory(resolved)
+    if inventory["file_count"] == 0:
+        raise ValueError(f"HLO path contains no .txt or .hlo files: {resolved}")
+    return resolved
+
+
+def hlo_pathspecs(hlo_path: Path, repo: Path) -> list[str]:
+    relative_path = hlo_path.relative_to(repo)
+    if hlo_path.is_file():
+        return [f":(literal){relative_path.as_posix()}"]
+    relative = relative_path.as_posix()
     return [
         f":(glob){relative}/*.txt",
         f":(glob){relative}/*.hlo",
@@ -520,7 +769,7 @@ def hlo_pathspecs(hlo_root: Path, repo: Path) -> list[str]:
 
 
 def legacy_hlo_changes(
-    repo: Path, hlo_root: Path, old_commit: str, new_commit: str
+    repo: Path, hlo_path: Path, old_commit: str, new_commit: str
 ) -> str:
     return git(
         repo,
@@ -529,14 +778,14 @@ def legacy_hlo_changes(
         old_commit,
         new_commit,
         "--",
-        *hlo_pathspecs(hlo_root, repo),
+        *hlo_pathspecs(hlo_path, repo),
     )
 
 
 def require_unchanged_hlo_inventory(
-    hlo_root: Path, expected: dict[str, Any], context: str
+    hlo_path: Path, expected: dict[str, Any], context: str
 ) -> None:
-    current = hlo_inventory(hlo_root)
+    current = hlo_inventory(hlo_path)
     if current != expected:
         raise ValueError(
             f"HLO corpus changed {context}; expected {expected}, found {current}. "
@@ -544,23 +793,32 @@ def require_unchanged_hlo_inventory(
         )
 
 
-def repository_metadata(repo: Path, hlo_root: Path | None = None) -> dict[str, Any]:
+def repository_metadata(repo: Path, hlo_path: Path | None = None) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "path": str(repo),
         "commit": git(repo, "rev-parse", "HEAD"),
         "status": git(repo, "status", "--short"),
     }
-    if hlo_root is not None:
-        relative = hlo_root.relative_to(repo)
-        metadata["hlo_tree"] = git(repo, "rev-parse", f"HEAD:{relative.as_posix()}")
-        metadata["hlo_inventory"] = hlo_inventory(hlo_root)
+    if hlo_path is not None:
+        relative = hlo_path.relative_to(repo)
+        metadata["hlo_path"] = relative.as_posix()
+        metadata["hlo_tree"] = (
+            git(
+                repo,
+                "rev-parse",
+                f"HEAD:{relative.as_posix()}",
+                check=False,
+            )
+            or None
+        )
+        metadata["hlo_inventory"] = hlo_inventory(hlo_path)
         metadata["hlo_status"] = git(
             repo,
             "status",
             "--short",
             "--untracked-files=all",
             "--",
-            *hlo_pathspecs(hlo_root, repo),
+            *hlo_pathspecs(hlo_path, repo),
         )
     return metadata
 
@@ -648,7 +906,7 @@ def evaluate_target(
     output_dir: Path,
     bazel: str,
     eval_script: Path,
-    hlo_root: Path,
+    hlo_path: Path,
     benchmark: dict[str, Any],
     resume: bool,
 ) -> dict[str, Any]:
@@ -683,6 +941,7 @@ def evaluate_target(
         "status": "running",
         "benchmark": benchmark,
         "paths": {
+            "hlo_input": str(hlo_path),
             "results": str(csv_dir),
             "build_log": str(build_log),
             "eval_log": str(eval_log),
@@ -730,11 +989,19 @@ def evaluate_target(
                 encoding="utf-8"
             ).strip()
             actual_bazel = bazel_version(bazel, source_repo)
+            bazel_invocation, bazelrc_metadata = rocm_bazel_configuration(
+                bazel, source_repo, target["ref"]
+            )
+            toolchain_metadata = rocm_host_toolchain_metadata(
+                source_repo, target["ref"]
+            )
             metadata["bazel"] = {
                 "command": bazel,
                 "expected_version": expected_bazel,
                 "actual_version": actual_bazel,
+                **bazelrc_metadata,
             }
+            metadata["rocm_toolchain"] = toolchain_metadata
             write_json(metadata_file, metadata)
             if expected_bazel != actual_bazel:
                 raise RuntimeError(
@@ -743,12 +1010,11 @@ def evaluate_target(
                     f"--bazel-command with a compatible launcher"
                 )
 
+            build_options = ["-c", "opt", "--config=rocm"]
             build_command = [
-                bazel,
+                *bazel_invocation,
                 "build",
-                "-c",
-                "opt",
-                "--config=rocm",
+                *build_options,
                 RUNNER_TARGET,
             ]
             metadata["build_command"] = build_command
@@ -761,11 +1027,21 @@ def evaluate_target(
                 metadata["status"] = "build_failed"
                 metadata["finished_at"] = utc_now()
                 write_json(metadata_file, metadata)
+                print(
+                    f"[{target['ref']}] build failed with exit code {build_rc}; "
+                    f"see {build_log}",
+                    file=sys.stderr,
+                )
                 return metadata
 
             bazel_bin = Path(
                 run_capture(
-                    [bazel, "info", "bazel-bin"],
+                    [
+                        *bazel_invocation,
+                        "info",
+                        *build_options,
+                        "bazel-bin",
+                    ],
                     cwd=source_repo,
                 ).splitlines()[-1]
             )
@@ -798,7 +1074,7 @@ def evaluate_target(
         eval_command = [
             str(eval_script),
             str(runner_copy),
-            str(hlo_root),
+            str(hlo_path),
             str(csv_dir),
             str(effective["num_repeats"]),
         ]
@@ -809,7 +1085,7 @@ def evaluate_target(
         }
         metadata["status"] = "evaluating"
         write_json(metadata_file, metadata)
-        print(f"[{target['ref']}] evaluating HLO corpus")
+        print(f"[{target['ref']}] evaluating {hlo_path}")
         eval_rc = run_logged(
             eval_command,
             cwd=eval_script.parent,
@@ -820,6 +1096,14 @@ def evaluate_target(
         metadata["status"] = "completed" if eval_rc == 0 else "evaluation_failed"
         metadata["finished_at"] = utc_now()
         write_json(metadata_file, metadata)
+        if eval_rc == 0:
+            print(f"[{target['ref']}] evaluation completed")
+        else:
+            print(
+                f"[{target['ref']}] evaluation failed with exit code {eval_rc}; "
+                f"see {eval_log}",
+                file=sys.stderr,
+            )
         return metadata
     except Exception as error:
         metadata["status"] = "error"
@@ -854,17 +1138,33 @@ def main() -> int:
             raise ValueError("perf-tools repo and XLA source repo must be different checkouts")
         source_lock = acquire_source_lock(source_repo, args.output_dir)
         source_original_state = require_clean_source_repo(source_repo)
+        generated_bazelrc = source_repo / "xla_configure.bazelrc"
+        if generated_bazelrc.exists():
+            raise ValueError(
+                f"generated Bazel configuration must be absent: {generated_bazelrc}. "
+                "The campaign uses each branch's ROCm CI configuration so local "
+                "configure.py output cannot override hermetic toolchain selection."
+            )
 
-        hlo_root = perf_repo / "perf_tools/hlo_eval_tools"
+        tools_root = (perf_repo / HLO_TOOLS_RELATIVE_PATH).resolve()
         refs_file = (
-            args.refs_file or hlo_root / "configs/xla_refs.txt"
+            args.refs_file or tools_root / "configs/xla_refs.txt"
         ).expanduser().resolve()
         profile_file = (
-            args.profile_file or hlo_root / "configs/benchmark_profile.json"
+            args.profile_file or tools_root / "configs/benchmark_profile.json"
         ).expanduser().resolve()
-        eval_script = hlo_root / "run_hlo_eval.sh"
-        comparison_script = hlo_root / "scripts/compare_hlo_branch_results.py"
-        for required in (refs_file, profile_file, eval_script, comparison_script):
+        eval_script = tools_root / "run_hlo_eval.sh"
+        comparison_script = tools_root / "scripts/compare_hlo_branch_results.py"
+        reference_results_script = tools_root / "scripts/reference_results.py"
+        orchestrator_script = Path(__file__).resolve()
+        for required in (
+            refs_file,
+            profile_file,
+            orchestrator_script,
+            eval_script,
+            comparison_script,
+            reference_results_script,
+        ):
             if not required.is_file():
                 raise ValueError(f"required file not found: {required}")
         if not os.access(eval_script, os.X_OK):
@@ -892,36 +1192,67 @@ def main() -> int:
             previous = json.loads(manifest_path.read_text(encoding="utf-8"))
             validate_resume_manifest(previous)
 
+        requested_hlo_path = args.hlo_path
+        if requested_hlo_path is None and previous is not None:
+            recorded_hlo_path = previous["inputs"]["perf_tools_repo"].get(
+                "hlo_path"
+            )
+            if recorded_hlo_path is not None:
+                requested_hlo_path = Path(recorded_hlo_path)
+        hlo_path = resolve_hlo_path(
+            perf_repo, tools_root, requested_hlo_path
+        )
+
         refs = read_refs(refs_file)
         profile, benchmark = load_profile(profile_file, args)
+        checked_in_reference = reference_inventory(hlo_path, tools_root, profile)
+        reference_ref = profile["reference"]["xla_ref"]
         added_refs: list[str] = []
         removed_refs: list[str] = []
         if previous is None:
-            ensure_and_fetch_remotes(source_repo, refs, args.skip_fetch)
-            campaign_targets = resolve_refs(source_repo, refs)
+            fetch_refs = list(dict.fromkeys([reference_ref, *refs]))
+            ensure_and_fetch_remotes(source_repo, fetch_refs, args.skip_fetch)
+            live_control = resolve_live_control(source_repo, profile)
+            candidate_targets = resolve_refs(source_repo, refs)
+            campaign_targets = [live_control, *candidate_targets]
             targets = campaign_targets
         else:
             previous_targets = previous["targets"]
+            previous_controls = [
+                target
+                for target in previous_targets
+                if target["role"] == "live_control"
+            ]
+            if len(previous_controls) != 1:
+                raise ValueError("resume manifest must contain one live control")
+            live_control = previous_controls[0]
             previous_by_ref = {
-                target["ref"]: target for target in previous_targets
+                target["source_ref"]: target
+                for target in previous_targets
+                if target["role"] == "candidate"
             }
             added_refs = [ref for ref in refs if ref not in previous_by_ref]
-            removed_refs = [
-                target["ref"]
-                for target in previous_targets
-                if target["ref"] not in refs
-            ]
+            removed_refs = [ref for ref in previous_by_ref if ref not in refs]
             if added_refs and not args.skip_fetch:
                 ensure_and_fetch_remotes(source_repo, added_refs, skip_fetch=False)
             added_targets = resolve_refs(source_repo, added_refs) if added_refs else []
             campaign_targets = [*previous_targets, *added_targets]
-            campaign_by_ref = {
-                target["ref"]: target for target in campaign_targets
+            campaign_by_source_ref = {
+                target["source_ref"]: target
+                for target in campaign_targets
+                if target["role"] == "candidate"
             }
-            targets = [campaign_by_ref[ref] for ref in refs]
+            targets = [
+                live_control,
+                *(campaign_by_source_ref[ref] for ref in refs),
+            ]
             missing = missing_target_commits(source_repo, targets)
             if missing and not args.skip_fetch:
-                ensure_and_fetch_remotes(source_repo, refs, skip_fetch=False)
+                ensure_and_fetch_remotes(
+                    source_repo,
+                    list(dict.fromkeys([reference_ref, *refs])),
+                    skip_fetch=False,
+                )
                 missing = missing_target_commits(source_repo, targets)
             if missing:
                 missing_text = ", ".join(
@@ -931,15 +1262,14 @@ def main() -> int:
                     "cannot resume because these recorded commits are unavailable: "
                     f"{missing_text}"
                 )
-        validate_reference_target(profile, campaign_targets)
         bazel = choose_bazel(args.bazel_command)
 
         manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "created_at": utc_now(),
             "status": "planned" if args.dry_run else "running",
             "inputs": {
-                "perf_tools_repo": repository_metadata(perf_repo, hlo_root),
+                "perf_tools_repo": repository_metadata(perf_repo, hlo_path),
                 "xla_source_repo": repository_metadata(source_repo),
                 "refs_file": {
                     "path": str(refs_file),
@@ -949,6 +1279,10 @@ def main() -> int:
                     "path": str(profile_file),
                     "sha256": sha256_file(profile_file),
                 },
+                "orchestrator_script": {
+                    "path": str(orchestrator_script),
+                    "sha256": sha256_file(orchestrator_script),
+                },
                 "evaluation_script": {
                     "path": str(eval_script),
                     "sha256": sha256_file(eval_script),
@@ -956,6 +1290,10 @@ def main() -> int:
                 "comparison_script": {
                     "path": str(comparison_script),
                     "sha256": sha256_file(comparison_script),
+                },
+                "reference_results_script": {
+                    "path": str(reference_results_script),
+                    "sha256": sha256_file(reference_results_script),
                 },
             },
             "profile": profile,
@@ -965,6 +1303,19 @@ def main() -> int:
             "source_original_state": source_original_state,
             "targets": campaign_targets,
             "active_refs": refs,
+            "reference_dataset": {
+                "id": profile["reference"]["id"],
+                "role": "historical_reference",
+                "source": profile["reference"]["source"],
+                "xla_ref": reference_ref,
+                "xla_commit": profile["reference"]["xla_commit"],
+                "inventory": checked_in_reference,
+            },
+            "live_control_id": live_control["id"],
+            "comparison_target_ids": [
+                live_control["id"],
+                *(target["id"] for target in targets if target["role"] == "candidate"),
+            ],
             "target_selection": {
                 "added_refs": added_refs,
                 "removed_refs": removed_refs,
@@ -997,13 +1348,31 @@ def main() -> int:
                     previous["inputs"]["evaluation_script"]["sha256"],
                     manifest["inputs"]["evaluation_script"]["sha256"],
                 ),
+                "orchestrator script": (
+                    previous["inputs"]["orchestrator_script"]["sha256"],
+                    manifest["inputs"]["orchestrator_script"]["sha256"],
+                ),
                 "comparison script": (
                     previous["inputs"]["comparison_script"]["sha256"],
                     manifest["inputs"]["comparison_script"]["sha256"],
                 ),
+                "reference results script": (
+                    previous["inputs"]["reference_results_script"]["sha256"],
+                    manifest["inputs"]["reference_results_script"]["sha256"],
+                ),
+                "checked-in reference": (
+                    previous["reference_dataset"]["inventory"],
+                    manifest["reference_dataset"]["inventory"],
+                ),
             }
             previous_perf = previous["inputs"]["perf_tools_repo"]
             current_perf = manifest["inputs"]["perf_tools_repo"]
+            checks["HLO path"] = (
+                previous_perf.get(
+                    "hlo_path", HLO_TOOLS_RELATIVE_PATH.as_posix()
+                ),
+                current_perf["hlo_path"],
+            )
             if "hlo_inventory" in previous_perf:
                 checks["HLO corpus"] = (
                     previous_perf["hlo_inventory"],
@@ -1024,7 +1393,7 @@ def main() -> int:
                     )
                 legacy_changes = legacy_hlo_changes(
                     perf_repo,
-                    hlo_root,
+                    hlo_path,
                     previous_perf["commit"],
                     current_perf["commit"],
                 )
@@ -1043,8 +1412,14 @@ def main() -> int:
             manifest["inputs"]["perf_tools_repo"]["hlo_inventory"] = (
                 current_perf["hlo_inventory"]
             )
+            manifest["inputs"]["perf_tools_repo"]["hlo_path"] = (
+                current_perf["hlo_path"]
+            )
             manifest["targets"] = campaign_targets
             manifest["active_refs"] = refs
+            manifest["comparison_target_ids"] = current_plan[
+                "comparison_target_ids"
+            ]
             manifest["current_refs_file"] = current_plan["inputs"]["refs_file"]
             manifest.setdefault("target_selection_history", []).append(
                 {
@@ -1061,24 +1436,18 @@ def main() -> int:
             manifest.setdefault("resume_history", []).append(
                 {"resumed_at": utc_now(), "environment": collect_environment()}
             )
-        baseline_ref = profile.get("reference", {}).get("xla_ref")
-        if baseline_ref:
-            comparison_refs = list(refs)
-            if baseline_ref not in comparison_refs:
-                comparison_refs.insert(0, baseline_ref)
-            manifest["comparison_refs"] = comparison_refs
         output_dir.mkdir(parents=True, exist_ok=True)
         write_json(manifest_path, manifest)
         campaign_manifest_written = True
 
         expected_hlo_inventory = manifest["inputs"]["perf_tools_repo"]["hlo_inventory"]
-        results_by_ref = {
-            result["ref"]: result for result in manifest.get("results", [])
+        results_by_id = {
+            result["id"]: result for result in manifest.get("results", [])
         }
         restore_source = True
         for target in targets:
             require_unchanged_hlo_inventory(
-                hlo_root,
+                hlo_path,
                 expected_hlo_inventory,
                 f"before evaluating {target['ref']}",
             )
@@ -1088,45 +1457,53 @@ def main() -> int:
                 output_dir=output_dir,
                 bazel=bazel,
                 eval_script=eval_script,
-                hlo_root=hlo_root,
+                hlo_path=hlo_path,
                 benchmark=benchmark,
                 resume=args.resume,
             )
-            results_by_ref[target["ref"]] = result
+            results_by_id[target["id"]] = result
             manifest["results"] = [
-                results_by_ref[item["ref"]]
+                results_by_id[item["id"]]
                 for item in campaign_targets
-                if item["ref"] in results_by_ref
+                if item["id"] in results_by_id
             ]
             write_json(manifest_path, manifest)
 
-        results = [results_by_ref[target["ref"]] for target in targets]
+        results = [results_by_id[target["id"]] for target in targets]
         failed = [result for result in results if result["status"] != "completed"]
         comparison_failed = False
-        if baseline_ref:
-            try:
-                require_unchanged_hlo_inventory(
-                    hlo_root,
-                    expected_hlo_inventory,
-                    "before comparison",
-                )
-                comparison_targets = select_comparison_targets(
-                    manifest, baseline_ref
-                )
-                manifest["comparison"] = write_comparison(
-                    output_dir=output_dir,
-                    targets=comparison_targets,
-                    baseline_ref=baseline_ref,
-                )
-                comparison_failed = (
-                    manifest["comparison"]["validation"]["status"] != "passed"
-                )
-                if comparison_failed:
-                    print("error: comparison validation failed", file=sys.stderr)
-            except (KeyError, OSError, TypeError, ValueError) as error:
-                comparison_failed = True
-                manifest["comparison"] = {"error": str(error)}
-                print(f"error: comparison generation failed: {error}", file=sys.stderr)
+        try:
+            require_unchanged_hlo_inventory(
+                hlo_path,
+                expected_hlo_inventory,
+                "before comparison",
+            )
+            comparison_targets = select_comparison_targets(manifest)
+            manifest["comparison"] = write_comparison(
+                output_dir=output_dir,
+                targets=comparison_targets,
+                reference_dataset=manifest["reference_dataset"],
+                live_control_id=manifest["live_control_id"],
+            )
+            comparison_failed = (
+                manifest["comparison"]["validation"]["status"] != "passed"
+            )
+            if comparison_failed:
+                print("error: comparison validation failed", file=sys.stderr)
+                for branch in manifest["comparison"].get("branches", []):
+                    missing_candidate = branch.get("missing_candidate", 0)
+                    missing_baseline = branch.get("missing_baseline", 0)
+                    if missing_candidate or missing_baseline:
+                        print(
+                            f"  {branch['candidate_ref']}: "
+                            f"missing candidate={missing_candidate}, "
+                            f"missing baseline={missing_baseline}",
+                            file=sys.stderr,
+                        )
+        except (KeyError, OSError, TypeError, ValueError) as error:
+            comparison_failed = True
+            manifest["comparison"] = {"error": str(error)}
+            print(f"error: comparison generation failed: {error}", file=sys.stderr)
         manifest["status"] = (
             "completed"
             if not failed and not comparison_failed
