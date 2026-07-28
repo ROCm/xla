@@ -1,4 +1,4 @@
-/* Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+/* Copyright 2025 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -150,13 +150,29 @@ void UpdateRocmTracerOptionsFromProfilerOptions(
                  });
 
   // Matches the CUPTI backend, including its reset-to-all disposition for
-  // out-of-range values. The reset itself is performed by the caller, which is
-  // the only place that knows how many GPUs are present.
+  // values above the device count. That reset is performed by the caller,
+  // which is the only place that knows how many GPUs are present -- but only
+  // for values that fit in the uint32_t field. A value that does not fit never
+  // reaches the caller's fixup, so it has to be reported here or not at all.
   Apply<int64_t>(
       profile_options, "gpu_num_chips_to_profile_per_task", input_keys,
       diagnostics, [&](int64_t value) {
-        if (value >= 0 && value <= std::numeric_limits<uint32_t>::max()) {
-          collector_options.num_gpus = static_cast<uint32_t>(value);
+        if (value < 0 || value > std::numeric_limits<uint32_t>::max()) {
+          diagnostics.errors.push_back(absl::StrCat(
+              "advanced_configuration key "
+              "'gpu_num_chips_to_profile_per_task': ",
+              value, " is outside the representable range [0, ",
+              std::numeric_limits<uint32_t>::max(),
+              "]. The key was ignored."));
+          return;
+        }
+        collector_options.num_gpus = static_cast<uint32_t>(value);
+        if (value == 0) {
+          diagnostics.warnings.push_back(
+              "advanced_configuration key 'gpu_num_chips_to_profile_per_task' "
+              "is 0, which is treated as 'all GPUs' rather than 'none'. This "
+              "matches the CUDA backend.");
+          return;
         }
         diagnostics.warnings.push_back(
             "advanced_configuration key 'gpu_num_chips_to_profile_per_task' "

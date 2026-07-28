@@ -1,4 +1,4 @@
-/* Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+/* Copyright 2025 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -143,6 +143,27 @@ TEST(RocmTracerOptionsUtilsTest, SetsNumGpusAndWarnsAboutPostHocDrop) {
   EXPECT_THAT(f.diagnostics.errors, IsEmpty());
   ASSERT_THAT(f.diagnostics.warnings, SizeIs(1));
   EXPECT_TRUE(absl::StrContains(f.diagnostics.warnings[0], "post-hoc"));
+}
+
+TEST(RocmTracerOptionsUtilsTest, OutOfRangeNumGpusIsReportedNotSilentlyDropped) {
+  // int64 values that cannot be represented in the uint32_t field. Neither is
+  // reachable through the caller's reset-to-all fixup, which only sees values
+  // that survived the narrowing -- so if this function stays quiet, nothing
+  // else will speak up and the user is told nothing at all.
+  for (int64_t value : {int64_t{-1}, int64_t{1} << 40}) {
+    Fixture f;
+    SetInt(f.options, "gpu_num_chips_to_profile_per_task", value);
+    f.Run();
+
+    EXPECT_EQ(f.collector.num_gpus, kNumGpusSentinel)
+        << "value " << value << " must not be applied";
+    ASSERT_THAT(f.diagnostics.errors, SizeIs(1)) << "value " << value;
+    EXPECT_THAT(f.diagnostics.errors[0],
+                MentionsKey("gpu_num_chips_to_profile_per_task"));
+    // The post-hoc caveat describes a key that took effect. Attaching it to a
+    // value that was thrown away tells the user the opposite of the truth.
+    EXPECT_THAT(f.diagnostics.warnings, IsEmpty()) << "value " << value;
+  }
 }
 
 TEST(RocmTracerOptionsUtilsTest, UnknownKeyIsReportedByName) {

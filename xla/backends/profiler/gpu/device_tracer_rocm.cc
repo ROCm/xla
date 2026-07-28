@@ -84,6 +84,10 @@ class GpuTracer : public profiler::ProfilerInterface {
 void GpuTracer::BuildOptions(uint32_t num_gpus,
                              RocmTracerOptions& tracer_options,
                              RocmTraceCollectorOptions& collector_options) {
+  // Rebuilt from scratch on every start, so that a second Start() on the same
+  // tracer does not report the first session's complaints a second time.
+  option_diagnostics_ = RocmTracerOptionDiagnostics{};
+
   // Layer 1: hardcoded defaults, unchanged from what this file used before
   // advanced_configuration existed.
   collector_options.num_gpus = num_gpus;
