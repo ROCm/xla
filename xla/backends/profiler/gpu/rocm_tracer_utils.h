@@ -154,6 +154,12 @@ struct RocmTracerEvent {
   };
 };
 
+struct RocmTracerOptions {
+  // maximum number of annotation strings that AnnotationMap in RocmTracer can
+  // store. e.g. 1M
+  uint64_t max_annotation_strings;
+};
+
 struct RocmTraceCollectorOptions {
   // Maximum number of events to collect from callback API; if -1, no limit.
   // if 0, the callback API is enabled to build a correlation map, but no
