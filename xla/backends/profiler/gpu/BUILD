@@ -525,6 +525,16 @@ cc_library(
     ],
 )
 
+xla_cc_test(
+    name = "rocm_tracer_utils_test",
+    size = "small",
+    srcs = ["rocm_tracer_utils_test.cc"],
+    deps = [
+        ":rocm_tracer_utils",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 # Deliberately carries no rocm-only/gpu/manual tag: this target has no ROCm
 # dependency, which is what lets its test run on ordinary presubmit machines.
 # Keep it that way.
