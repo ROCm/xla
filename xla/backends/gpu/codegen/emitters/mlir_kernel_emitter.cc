@@ -86,9 +86,6 @@ limitations under the License.
 #include "xla/backends/gpu/codegen/emitters/transforms/passes.h"
 #include "xla/backends/gpu/codegen/fusion_emitter.h"
 #include "xla/backends/gpu/codegen/kernel_compiler.h"
-#include "xla/backends/gpu/codegen/kernels/custom_kernel.h"
-#include "xla/backends/gpu/codegen/kernels/ptx_custom_kernel.h"
-#include "xla/backends/gpu/runtime/custom_kernel_thunk.h"
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/codegen/emitters/computation_partitioner.h"
 #include "xla/codegen/emitters/ir/xla_dialect.h"
@@ -404,22 +401,20 @@ AsyncThunkSequence MlirKernelFusion::Emit(
   Thunk::ThunkInfo thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(
       &fusion, ir_emitter_context.GetNextThunkId());
   bool kernel_cached = cached;
+  KernelCompiler* kernel_compiler = ir_emitter_context.kernel_compiler();
   return future_entry.Map([&fusion, thunk_info = std::move(thunk_info),
-                           args = std::move(args),
+                           args = std::move(args), kernel_compiler,
                            kernel_cached](const KernelReuseCache::Entry* entry)
                               -> absl::StatusOr<ThunkSequence> {
     if (kernel_cached) {
       VLOG(3) << "Reuse: " << fusion.name() << " -> " << entry->kernel_name;
     }
-    ASSIGN_OR_RETURN(CustomKernel custom_kernel,
-                     kernel::CreateOwnedCubinCustomKernel(
-                         entry->kernel_name, entry->binary, args.args().size(),
-                         entry->launch_dimensions.block_counts(),
-                         entry->launch_dimensions.thread_counts_per_block(),
-                         entry->shmem_bytes));
-
-    return ThunkSequence::Of(std::make_unique<CustomKernelThunk>(
-        thunk_info, std::move(custom_kernel), args, entry->use_pdl));
+    ASSIGN_OR_RETURN(std::unique_ptr<Thunk> thunk,
+                     kernel_compiler->CreateThunkForCubin(
+                         thunk_info, entry->kernel_name, entry->binary, args,
+                         entry->launch_dimensions, entry->shmem_bytes,
+                         entry->use_pdl));
+    return ThunkSequence::Of(std::move(thunk));
   });
 }
 

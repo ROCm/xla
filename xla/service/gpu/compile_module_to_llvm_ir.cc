@@ -34,6 +34,7 @@ limitations under the License.
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -264,12 +265,35 @@ absl::StatusOr<CompileModuleResults> CompileModuleToLlvmIr(
   xla::Future<std::unique_ptr<SequentialThunk>> future_sequential_thunk =
       thunk_emitter.EmitHloEntryComputation(hlo_module);
 
-  ASSIGN_OR_RETURN(
-      results.constants_binary,
-      compiler->CompileToTargetBinary(thunk_emitter.ConsumeConstantsModule())
-          .Await());
+  // Emit all thunks first so that any kernels whose compilation was deferred
+  // have been collected by `compiler` before we compile the constants module.
   ASSIGN_OR_RETURN(results.executable,
                    std::move(future_sequential_thunk).Await());
+
+  // If the compiler deferred kernel compilation, the individual kernel modules
+  // were not compiled. Instead they were collected and are now merged into the
+  // constants module so that everything is compiled together into a single
+  // binary. When nothing was deferred this is a no-op.
+  LlvmKernelSource constants_source = thunk_emitter.ConsumeConstantsModule();
+  std::vector<llvm::orc::ThreadSafeModule> deferred_kernel_modules =
+      compiler->ConsumeDeferredModules();
+  if (!deferred_kernel_modules.empty()) {
+    llvm::Module* constants_module = constants_source.module();
+    llvm::Linker linker(*constants_module);
+    for (llvm::orc::ThreadSafeModule& thread_safe_module :
+         deferred_kernel_modules) {
+      std::unique_ptr<llvm::Module> kernel_module =
+          CopyToContext(*thread_safe_module.getModuleUnlocked(),
+                        constants_module->getContext());
+      kernel_module->setDataLayout(constants_module->getDataLayout());
+      CHECK(!linker.linkInModule(std::move(kernel_module),
+                                 llvm::Linker::Flags::OverrideFromSrc));
+    }
+  }
+
+  ASSIGN_OR_RETURN(
+      results.constants_binary,
+      compiler->CompileToTargetBinary(std::move(constants_source)).Await());
 
   // This won't record values for calls that error out (because if they error
   // out we have no way of telling how far through the process we got).

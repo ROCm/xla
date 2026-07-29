@@ -22,9 +22,12 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/IR/Module.h"
 #include "llvm/TargetParser/Triple.h"
 #include "xla/backends/gpu/codegen/kernel_compiler.h"
@@ -58,16 +61,25 @@ using LlvmIrCompiler = absl::AnyInvocable<absl::StatusOr<std::vector<uint8_t>>(
 // If threadpool is not provided, the compilation happens
 // fully within this call, and the result is returned as an immediately ready
 // Future.
+//
+// If `defer_compilation` is set to true, `Compile` does not compile the kernel
+// source at all. Instead it moves the kernel's ThreadSafeModule out of the
+// source and stores it in an internal list, returning a KernelThunk that refers
+// to the kernel by name immediately (without using the thread pool). The stored
+// modules can later be retrieved with `ConsumeDeferredModules` so that the
+// caller can merge them into a single module and compile them together.
 class CubinCustomKernelCompiler final : public KernelCompiler {
  public:
   CubinCustomKernelCompiler(LlvmIrCompiler compiler,
                             const se::DeviceDescription& gpu_device_info,
                             const DebugOptions& debug_options,
-                            tsl::thread::ThreadPool* thread_pool = nullptr)
+                            tsl::thread::ThreadPool* thread_pool = nullptr,
+                            bool defer_compilation = false)
       : compiler_(std::move(compiler)),
         device_info_(gpu_device_info),
         debug_options_(debug_options),
-        thread_pool_(thread_pool) {}
+        thread_pool_(thread_pool),
+        defer_compilation_(defer_compilation) {}
 
   xla::Future<std::unique_ptr<Thunk>> Compile(
       Thunk::ThunkInfo thunk_info, LlvmKernelSource kernel_source,
@@ -83,6 +95,13 @@ class CubinCustomKernelCompiler final : public KernelCompiler {
   xla::Future<std::vector<uint8_t>> CompileToTargetBinary(
       LlvmKernelSource kernel_source) override;
 
+  absl::StatusOr<std::unique_ptr<Thunk>> CreateThunkForCubin(
+      Thunk::ThunkInfo thunk_info, std::string kernel_name,
+      std::vector<uint8_t> cubin,
+      const emitters::KernelArguments& kernel_arguments,
+      const LaunchDimensions& launch_dimensions, int64_t shmem_bytes = 0,
+      bool use_pdl = false) override;
+
   xla::Future<TritonWrapperResult> CompileTritonToLlvm(
       absl::string_view kernel_name, const HloModule& hlo_module,
       const se::DeviceDescription& device_info,
@@ -90,6 +109,16 @@ class CubinCustomKernelCompiler final : public KernelCompiler {
       const llvm::Triple& target_triple, const std::string& data_layout,
       TritonKernelSource triton_source, BorrowedMlirContext borrowed_context,
       bool is_xla_fusion) override;
+
+  // Returns the list of kernel modules that were deferred (when
+  // `defer_compilation` is true) and clears the internal list. The returned
+  // modules are meant to be merged and compiled together by the caller.
+  //
+  // Calling this also ends the deferral phase: subsequent calls to
+  // `CompileToTargetBinary` compile immediately instead of deferring. This lets
+  // the caller consume the deferred kernels, merge them into the constants
+  // module, and then compile that merged module in a single call.
+  std::vector<llvm::orc::ThreadSafeModule> ConsumeDeferredModules() override;
 
  private:
   absl::StatusOr<std::vector<uint8_t>> CompileToCubinImpl(
@@ -105,6 +134,16 @@ class CubinCustomKernelCompiler final : public KernelCompiler {
   const se::DeviceDescription device_info_;
   const DebugOptions debug_options_;
   tsl::thread::ThreadPool* thread_pool_;
+  const bool defer_compilation_;
+
+  // Kernel modules whose compilation was deferred. Guarded by a mutex because
+  // compilation may be requested concurrently.
+  absl::Mutex deferred_modules_mutex_;
+  std::vector<llvm::orc::ThreadSafeModule> deferred_modules_
+      ABSL_GUARDED_BY(deferred_modules_mutex_);
+  // Set once `ConsumeDeferredModules` is called; disables further deferral so
+  // the merged constants module compiles immediately.
+  bool deferral_consumed_ ABSL_GUARDED_BY(deferred_modules_mutex_) = false;
 };
 
 }  // namespace xla::gpu

@@ -23,7 +23,9 @@ limitations under the License.
 #include <vector>
 
 #include "absl/functional/any_invocable.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/IR/Module.h"
 #include "llvm/TargetParser/Triple.h"
 #include "mlir/IR/MLIRContext.h"
@@ -92,6 +94,32 @@ class KernelCompiler {
 
   virtual xla::Future<std::vector<uint8_t>> CompileToTargetBinary(
       LlvmKernelSource kernel_source) = 0;
+
+  // Returns kernel modules whose compilation was deferred, clearing the
+  // internal list. Compilers that support deferral (see the `defer_compilation`
+  // option of `CubinCustomKernelCompiler`) collect kernel modules instead of
+  // compiling them individually so the caller can merge them into a single
+  // module and compile them together. Calling this method also ends the
+  // deferral phase: subsequent calls to `CompileToTargetBinary` compile
+  // immediately. The default implementation defers nothing and returns an
+  // empty list.
+  virtual std::vector<llvm::orc::ThreadSafeModule> ConsumeDeferredModules() {
+    return {};
+  }
+
+  // Creates a thunk that launches the kernel named `kernel_name` with
+  // `launch_dimensions`.
+  //
+  // If `cubin` is non-empty, the CUBIN is wrapped into an owned CustomKernel
+  // and a CustomKernelThunk is returned. If `cubin` is empty (compilation was
+  // deferred), a KernelThunk is returned instead; it loads the kernel by name
+  // from the executable at runtime.
+  virtual absl::StatusOr<std::unique_ptr<Thunk>> CreateThunkForCubin(
+      Thunk::ThunkInfo thunk_info, std::string kernel_name,
+      std::vector<uint8_t> cubin,
+      const emitters::KernelArguments& kernel_arguments,
+      const LaunchDimensions& launch_dimensions, int64_t shmem_bytes = 0,
+      bool use_pdl = false) = 0;
 
   // Sets a callback to be called prior to llvm::Module compilation.
   void SetPreOptimizationHook(ModuleHook hook) {
