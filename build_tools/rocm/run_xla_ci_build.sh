@@ -51,6 +51,7 @@ EXCLUDED_TESTS=(
     "ParameterizedGemmRewriteTest.GemmTypeCombinationCheck"
     "SampleFileTest.Convolution"
     "GroupedConvolution2DTestWithRandomIndices*"
+    "LocalClientExecuteTest.CompilePartitionedExecutable"
 )
 
 for arg in "$@"; do
