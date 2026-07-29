@@ -189,7 +189,9 @@ cc_library(
         "//xla:autotune_results_proto_cc",
         "//xla:autotuning_proto_cc",
         "//xla:status_macros",
+        "//xla/codegen/tiling/experimental:tile",
         "//xla/hlo/ir:hlo",
+        "//xla/hlo/utils:hlo_traversal",
         "//xla/pjrt/distributed:key_value_store_interface",
         "//xla/service:dump",
         "//xla/service/gpu/autotuning:autotuner_status_key",
@@ -212,6 +214,7 @@ cc_library(
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@com_google_protobuf//:protobuf",
+        "@llvm-project//mlir:IR",
         "@tsl//tsl/platform:fingerprint",
     ],
 )

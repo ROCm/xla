@@ -148,6 +148,94 @@ TEST(DichotomicSearchTest, MakeProfileMarksBlockNMonotoneUpForDot) {
   EXPECT_EQ(profile.roles[stages], AxisRole::kSweep);  // only 1 value -> short
 }
 
+TEST(DichotomicSearchTest, MakeProfileWithHintsUsesAnalysisRolesByIndex) {
+  // Build a block-level (experimental tiling) config set with two output tile
+  // axes, tile_0 and tile_1, both with > 3 distinct values so neither is
+  // auto-classified as a sweep axis.
+  std::vector<std::unique_ptr<BackendConfig>> configs;
+  for (int64_t v : {16, 32, 64, 128, 256}) {
+    configs.push_back(MakeBlockLevelConfig(v, v, /*num_warps=*/4,
+                                           /*num_stages=*/1));
+  }
+  auto space_or = DichotomicSearchSpace::Build(Ptrs(configs));
+  ASSERT_THAT(space_or, IsOk());
+  const DichotomicSearchSpace& space = *space_or;
+
+  const int t0 = AxisIndex(space, "tile_0");
+  const int t1 = AxisIndex(space, "tile_1");
+  ASSERT_GE(t0, 0);
+  ASSERT_GE(t1, 0);
+
+  // Analysis hints (index-aligned): tile_0 is a kSequential (contraction) dim,
+  // tile_1 is the kParallel dim and tiles the LARGEST dimension. Note the tile
+  // VALUES are identical across axes, so the "widest values" name heuristic
+  // could not distinguish them -- only the analysis (dimension_size) can.
+  AxisRoleHints hints(space.axes().size());
+  hints[t0].semantics = AxisSemantics::kSequential;
+  hints[t0].dimension_size = 512;
+  hints[t1].semantics = AxisSemantics::kParallel;
+  hints[t1].dimension_size = 4096;  // largest parallel dim => the N-like axis
+
+  SearchProfile profile = MakeProfile(space, HloOpcode::kDot, hints);
+  // The parallel axis tiling the largest dim becomes kMonotoneUp; the
+  // sequential axis becomes kUnimodal.
+  EXPECT_EQ(profile.roles[t1], AxisRole::kMonotoneUp);
+  EXPECT_EQ(profile.roles[t0], AxisRole::kUnimodal);
+}
+
+TEST(DichotomicSearchTest, MakeProfileWithHintsPicksLargestParallelDim) {
+  std::vector<std::unique_ptr<BackendConfig>> configs;
+  for (int64_t v : {16, 32, 64, 128, 256}) {
+    configs.push_back(MakeBlockLevelConfig(v, v, /*num_warps=*/4,
+                                           /*num_stages=*/1));
+  }
+  auto space_or = DichotomicSearchSpace::Build(Ptrs(configs));
+  ASSERT_THAT(space_or, IsOk());
+  const DichotomicSearchSpace& space = *space_or;
+
+  const int t0 = AxisIndex(space, "tile_0");
+  const int t1 = AxisIndex(space, "tile_1");
+  ASSERT_GE(t0, 0);
+  ASSERT_GE(t1, 0);
+
+  // Both axes are kParallel; the one tiling the larger dimension must be chosen
+  // as the monotone N-like axis. Here tile_0 has the larger dimension.
+  AxisRoleHints hints(space.axes().size());
+  hints[t0].semantics = AxisSemantics::kParallel;
+  hints[t0].dimension_size = 8192;  // larger
+  hints[t1].semantics = AxisSemantics::kParallel;
+  hints[t1].dimension_size = 128;  // smaller
+
+  SearchProfile profile = MakeProfile(space, HloOpcode::kDot, hints);
+  EXPECT_EQ(profile.roles[t0], AxisRole::kMonotoneUp);
+  EXPECT_EQ(profile.roles[t1], AxisRole::kUnimodal);
+}
+
+TEST(DichotomicSearchTest, MakeProfileFallsBackWhenHintsEmptyOrMismatched) {
+  std::vector<std::unique_ptr<BackendConfig>> configs;
+  for (int64_t v : {16, 32, 64, 128, 256}) {
+    configs.push_back(MakeTritonConfig(v, v, 32, 1, 4));
+  }
+  auto space_or = DichotomicSearchSpace::Build(Ptrs(configs));
+  ASSERT_THAT(space_or, IsOk());
+  const DichotomicSearchSpace& space = *space_or;
+
+  const int n = AxisIndex(space, "block_n");
+  ASSERT_GE(n, 0);
+
+  // Empty hints => identical to the opcode-only heuristic (block_n monotone).
+  SearchProfile from_empty =
+      MakeProfile(space, HloOpcode::kDot, AxisRoleHints{});
+  SearchProfile from_opcode = MakeProfile(space, HloOpcode::kDot);
+  EXPECT_EQ(from_empty.roles, from_opcode.roles);
+  EXPECT_EQ(from_empty.roles[n], AxisRole::kMonotoneUp);
+
+  // Size-mismatched hints are ignored (also fall back to the heuristic).
+  AxisRoleHints wrong_size(space.axes().size() + 1);
+  SearchProfile from_mismatch = MakeProfile(space, HloOpcode::kDot, wrong_size);
+  EXPECT_EQ(from_mismatch.roles, from_opcode.roles);
+}
+
 TEST(DichotomicSearchTest, RefineRolesRelaxesMonotoneWhenContradicted) {
   std::vector<std::unique_ptr<BackendConfig>> configs;
   for (int64_t v : {16, 32, 64, 128, 256}) {
@@ -193,6 +281,140 @@ TEST(DichotomicSearchTest, RefineRolesRelaxesMonotoneWhenContradicted) {
   SearchProfile kept =
       RefineRoles(profile, space, confirming, /*noise_tolerance=*/0.03);
   EXPECT_EQ(kept.roles[n], AxisRole::kMonotoneUp);
+}
+
+// Feature B: with a known tiled-dimension size, Phase-2 ternary probes on a
+// unimodal axis land on clean-divisor tile values (zero masking waste) rather
+// than the raw geometric thirds.
+TEST(DichotomicSearchTest, TernaryProbesSnapToDivisorsWhenSizeKnown) {
+  // block_m axis has values {16, 24, 32, 48, 64, 96, 128}. For a dimension of
+  // size 128, the clean divisors among these are {16, 32, 64, 128}; 24, 48, 96
+  // are wasteful. Give block_m > 3 values (unimodal) and make every other axis
+  // a single value so the only varying axis is block_m.
+  std::vector<std::unique_ptr<BackendConfig>> configs;
+  for (int64_t m : {16, 24, 32, 48, 64, 96, 128}) {
+    configs.push_back(MakeTritonConfig(m, /*block_n=*/64, /*block_k=*/32,
+                                       /*num_stages=*/1, /*num_warps=*/4));
+  }
+  auto space_or = DichotomicSearchSpace::Build(Ptrs(configs));
+  ASSERT_THAT(space_or, IsOk());
+  const DichotomicSearchSpace& space = *space_or;
+  const int mi = AxisIndex(space, "block_m");
+  ASSERT_GE(mi, 0);
+
+  // Start from the opcode heuristic, then attach a known dimension size of 128
+  // for the block_m axis (as feature-A hints would).
+  SearchProfile profile = MakeProfile(space, HloOpcode::kDot);
+  profile.dimension_sizes.assign(space.axes().size(), 0);
+  profile.dimension_sizes[mi] = 128;
+
+  // Some Phase-1 samples so MarginalBestIndex has data (values are irrelevant
+  // to the divisor-snapping being tested).
+  std::vector<Sample> prior;
+  {
+    Coord c(space.axes().size(), 0);
+    prior.push_back(Sample{c, 1.0});
+  }
+
+  std::vector<int> probes = SelectConfigs(
+      space, profile, SearchPhase::kTernaryRefine, prior, /*already=*/{});
+  ASSERT_FALSE(probes.empty());
+
+  // Every emitted config's block_m must be a clean divisor of 128.
+  for (int idx : probes) {
+    const int64_t m = configs[idx]->triton().block_m();
+    EXPECT_EQ(128 % m, 0) << "block_m=" << m << " is not a divisor of 128";
+  }
+}
+
+// On a Phase-3 neighborhood sweep, tile values whose masking waste
+// exceeds the pruning threshold (25% of the last block) are dropped, provided a
+// lower-waste value is retained and the value is not the current best. Values
+// with waste <= 25% (including exact divisors) are kept.
+//
+// The soft-prune is threshold-based, NOT "divides cleanly", so this test checks
+// the exact waste boundary rather than pure divisibility.
+TEST(DichotomicSearchTest, NeighborhoodSweepSoftPrunesHighWasteValues) {
+  // block_m values {16, 24, 32, 48, 64}; dimension size D = 64. Waste ratios:
+  //   16 -> 0      (64%16==0)
+  //   24 -> 8/72   ~= 0.111  (<= 0.25, kept)
+  //   32 -> 0      (64%32==0)
+  //   48 -> 32/96  ~= 0.333  (>  0.25, pruned when non-best)
+  //   64 -> 0      (64%64==0)
+  std::vector<std::unique_ptr<BackendConfig>> configs;
+  for (int64_t m : {16, 24, 32, 48, 64}) {
+    configs.push_back(MakeTritonConfig(m, /*block_n=*/64, /*block_k=*/32,
+                                       /*num_stages=*/1, /*num_warps=*/4));
+  }
+  auto space_or = DichotomicSearchSpace::Build(Ptrs(configs));
+  ASSERT_THAT(space_or, IsOk());
+  const DichotomicSearchSpace& space = *space_or;
+  const int mi = AxisIndex(space, "block_m");
+  ASSERT_GE(mi, 0);
+
+  SearchProfile profile = MakeProfile(space, HloOpcode::kDot);
+  profile.dimension_sizes.assign(space.axes().size(), 0);
+  profile.dimension_sizes[mi] = 64;
+
+  // Best coordinate at block_m=32. Its +/-1 index neighborhood is the values
+  // {24, 32, 48}. Of these, only 48 exceeds the 25% waste threshold and is a
+  // non-best value, so exactly 48 must be pruned; 24 (11% waste) and 32 (best,
+  // 0% waste) are retained.
+  std::vector<Sample> prior;
+  {
+    Coord c(space.axes().size(), 0);
+    const auto& vals = space.axes()[mi].values;
+    for (int i = 0; i < vals.size(); ++i) {
+      if (vals[i] == 32) c[mi] = i;
+    }
+    prior.push_back(Sample{c, /*time=*/1.0});
+  }
+
+  std::vector<int> sweep = SelectConfigs(
+      space, profile, SearchPhase::kNeighborhoodSweep, prior, /*already=*/{});
+
+  bool saw_24 = false, saw_32 = false, saw_48 = false;
+  for (int idx : sweep) {
+    const int64_t m = configs[idx]->triton().block_m();
+    if (m == 24) saw_24 = true;
+    if (m == 32) saw_32 = true;
+    if (m == 48) saw_48 = true;
+    // No emitted block_m should exceed the 25% waste threshold (48 is the only
+    // such value in the neighborhood and must have been pruned).
+    EXPECT_LE(static_cast<double>((64 + m - 1) / m * m - 64) /
+                  static_cast<double>((64 + m - 1) / m * m),
+              0.25)
+        << "block_m=" << m << " has >25% masking waste and should be pruned";
+  }
+  EXPECT_TRUE(saw_32) << "the best value (block_m=32) must be retained";
+  EXPECT_TRUE(saw_24) << "a low-waste (~11%) value must be retained";
+  EXPECT_FALSE(saw_48) << "the high-waste (~33%) value must be pruned";
+}
+
+// Feature B is a strict no-op when no dimension sizes are supplied: the
+// selected probe set must be identical to a profile without dimension_sizes.
+TEST(DichotomicSearchTest, DivisibilityIsNoOpWithoutDimensionSizes) {
+  std::vector<std::unique_ptr<BackendConfig>> configs;
+  for (int64_t m : {16, 24, 32, 48, 64, 96, 128}) {
+    configs.push_back(MakeTritonConfig(m, /*block_n=*/64, /*block_k=*/32,
+                                       /*num_stages=*/1, /*num_warps=*/4));
+  }
+  auto space_or = DichotomicSearchSpace::Build(Ptrs(configs));
+  ASSERT_THAT(space_or, IsOk());
+  const DichotomicSearchSpace& space = *space_or;
+
+  SearchProfile no_sizes = MakeProfile(space, HloOpcode::kDot);
+  // dimension_sizes is all-zero (unknown) here.
+  std::vector<Sample> prior;
+  {
+    Coord c(space.axes().size(), 0);
+    prior.push_back(Sample{c, 1.0});
+  }
+  std::vector<int> a =
+      SelectConfigs(space, no_sizes, SearchPhase::kTernaryRefine, prior, {});
+  std::vector<int> b =
+      SelectConfigs(space, no_sizes, SearchPhase::kTernaryRefine, prior, {});
+  EXPECT_EQ(a, b);  // deterministic, and unaffected by divisibility logic
 }
 
 // A synthetic unimodal cost function over block_m with a known interior

@@ -32,6 +32,7 @@ limitations under the License.
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/strings/escaping.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
@@ -40,6 +41,7 @@ limitations under the License.
 #include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "xla/tsl/platform/status_macros.h"
+#include "mlir/IR/MLIRContext.h"
 #include "google/protobuf/text_format.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/autotuner_cache_interface.h"
@@ -52,11 +54,13 @@ limitations under the License.
 #include "xla/backends/autotuner/dichotomic_search.h"
 #include "xla/backends/autotuner/hlo_extractor.h"
 #include "xla/backends/autotuner/profiler.h"
+#include "xla/codegen/tiling/experimental/tiling_space.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_print_options.h"
+#include "xla/hlo/utils/hlo_traversal.h"
 #include "xla/pjrt/distributed/key_value_store_interface.h"
 #include "xla/service/dump.h"
 #include "xla/service/gpu/autotuning/autotuner_status_key.h"
@@ -112,10 +116,10 @@ std::string FormatTritonConfigLine(const ConfigRunner::ConfigProfile& p) {
   if (p.config.backend_config != nullptr &&
       p.config.backend_config->has_triton()) {
     const auto& t = p.config.backend_config->triton();
-    config_str = absl::StrFormat(
-        "m=%-3d n=%-3d k=%-3d stages=%d warps=%d ctas=%d gs=%d", t.block_m(),
-        t.block_n(), t.block_k(), t.num_stages(), t.num_warps(), t.num_ctas(),
-        t.group_size());
+    config_str =
+        absl::StrFormat("m=%-3d n=%-3d k=%-3d stages=%d warps=%d ctas=%d gs=%d",
+                        t.block_m(), t.block_n(), t.block_k(), t.num_stages(),
+                        t.num_warps(), t.num_ctas(), t.group_size());
   } else if (p.config.backend_config != nullptr) {
     // Fallback: use the full debug string for non-Triton-GEMM backends.
     config_str = p.config.backend_config->ShortDebugString();
@@ -188,6 +192,96 @@ std::string GetKvStoreKey(
   uint32_t backend_fingerprint = tsl::Fingerprint32(backend_names);
   return absl::StrCat("autotune_results_", module->GetFingerprint128(), "_",
                       backend_fingerprint, "_", shard_index);
+}
+
+// Builds INDEX-ALIGNED per-axis role hints for the dichotomic search purely
+// from the experimental indexing/tiling analysis of `instr` -- no opcode, no
+// dimension-number, and no semantic name reasoning.
+//
+// Positional-alignment invariant rests on two independent, verified contracts:
+//
+//   1. Proto contract (xla/service/gpu/backend_configs.proto): a
+//      BlockLevelFusionConfig's `Tile.sizes` has length == root shape rank, and
+//      `output_tiles(0).sizes[i]` is the tile for OUTPUT LOGICAL DIMENSION i
+//      (row-major). ExtractKnobs (dichotomic_search.cc) emits exactly these as
+//      axes "tile_0..tile_{rank-1}", so search axis "tile_i" <-> output dim i.
+//
+//   2. TilingSpace contract (tiling_space.cc::InitializeDimensions): the
+//      PARALLEL/output dimensions are appended first, in that same row-major
+//      output order (dimensions()[0..num_parallel-1]), followed by the
+//      SEQUENTIAL (contraction/reduction) dimensions.
+//
+// Combining (1)+(2): for i < num_parallel_dimensions(), dichotomic axis
+// "tile_i" corresponds to the PARALLEL dimensions()[i]. The sequential dims sit
+// AFTER the parallel prefix and are never named by a "tile_i" axis today.
+//
+// That said, this function does NOT blindly trust that invariant: for each
+// "tile_i" axis it *verifies* that dimensions()[i] is actually kParallel and
+// that i is within the parallel prefix. If any "tile_i" axis violates that
+// (e.g. the two orderings ever diverge, or more tiles are extracted than there
+// are parallel dims), it abandons hints entirely and returns an empty vector so
+// MakeProfile safely falls back to its opcode/name heuristic -- turning a
+// silent assumption into a checked one. On analysis failure it also returns
+// empty (safe fallback).
+AxisRoleHints BuildAxisRoleHints(const HloInstruction& instr,
+                                 const DichotomicSearchSpace& space) {
+  const std::vector<ParameterAxis>& axes = space.axes();
+  AxisRoleHints empty;
+
+  mlir::MLIRContext mlir_context;
+  std::unique_ptr<HloFusionAdaptor> fusion =
+      HloFusionAdaptor::ForInstruction(&instr);
+  if (fusion == nullptr) {
+    return empty;
+  }
+  absl::StatusOr<std::unique_ptr<xla::gpu::experimental::TilingSpace>>
+      tiling_space_or =
+          xla::gpu::experimental::TilingSpace::Create(*fusion, &mlir_context);
+  if (!tiling_space_or.ok()) {
+    VLOG(2) << "Dichotomic search: TilingSpace analysis unavailable for "
+            << instr.name() << " (" << tiling_space_or.status()
+            << "); falling back to opcode default.";
+    return empty;
+  }
+  const xla::gpu::experimental::TilingSpace& tiling_space = **tiling_space_or;
+  const llvm::SmallVector<xla::gpu::experimental::TilingSpace::DimensionInfo, 4>
+      dims = tiling_space.dimensions();
+  const int64_t num_parallel = tiling_space.num_parallel_dimensions();
+
+  // Recover the positional tile index i from an auto-generated "tile_<i>" axis
+  // name. Non-tiling knobs (num_warps/num_ctas/num_stages/group_size) are not
+  // "tile_*" and are left kUnknown (MakeProfile classifies them as kSweep).
+  auto parse_tile_index = [](const std::string& name, int* index) -> bool {
+    constexpr absl::string_view kPrefix = "tile_";
+    if (name.rfind(std::string(kPrefix), 0) != 0) return false;
+    return absl::SimpleAtoi(name.substr(kPrefix.size()), index);
+  };
+
+  AxisRoleHints hints(axes.size());
+  bool any = false;
+  for (int a = 0; a < static_cast<int>(axes.size()); ++a) {
+    int tile_index = -1;
+    if (!parse_tile_index(axes[a].name, &tile_index)) {
+      continue;  // non-tiling knob => leave kUnknown.
+    }
+    // A "tile_i" axis must map to a PARALLEL dimension in the parallel prefix.
+    // If not, the positional-alignment invariant is broken for this fusion --
+    // do not risk a wrong role/size: abandon all hints and fall back.
+    if (tile_index < 0 || tile_index >= static_cast<int>(dims.size()) ||
+        tile_index >= static_cast<int>(num_parallel) ||
+        dims[tile_index].type != xla::gpu::experimental::TilingSpace::
+                                     DimensionSemantics::kParallel) {
+      VLOG(2) << "Dichotomic search: tile axis '" << axes[a].name
+              << "' does not align with a parallel tiling dimension for "
+              << instr.name() << "; falling back to opcode default.";
+      return empty;
+    }
+    const auto& dim = dims[tile_index];
+    hints[a].semantics = AxisSemantics::kParallel;
+    hints[a].dimension_size = dim.dimension_size;
+    any = true;
+  }
+  return any ? hints : empty;
 }
 
 }  // namespace
@@ -588,7 +682,11 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
     return space_or.status();
   }
   DichotomicSearchSpace space = std::move(space_or).value();
-  SearchProfile profile = MakeProfile(space, instr->opcode());
+  // Derive per-axis dimension roles directly from the experimental tiling
+  // analysis (index-aligned, pure DimensionInfo). Falls back to the opcode
+  // default only if the analysis is unavailable (empty hints).
+  AxisRoleHints axis_hints = BuildAxisRoleHints(*instr, space);
+  SearchProfile profile = MakeProfile(space, instr->opcode(), axis_hints);
 
   // Renders a config's axis values as "name=value" pairs for logging.
   auto config_to_string = [&](const Coord& coord) -> std::string {
@@ -885,14 +983,12 @@ void ConfigAssigner::LogConfigProfiles(
         successful.push_back(&p);
       }
     }
-    absl::c_sort(successful,
-                 [](const ConfigRunner::ConfigProfile* a,
-                    const ConfigRunner::ConfigProfile* b) {
-                   return a->duration < b->duration;
-                 });
+    absl::c_sort(successful, [](const ConfigRunner::ConfigProfile* a,
+                                const ConfigRunner::ConfigProfile* b) {
+      return a->duration < b->duration;
+    });
 
-    const int total =
-        static_cast<int>(profiles.size() + failed_configs.size());
+    const int total = static_cast<int>(profiles.size() + failed_configs.size());
     const int n_successful = static_cast<int>(successful.size());
 
     // Build the log content, starting with the HLO text of the instruction
@@ -906,11 +1002,10 @@ void ConfigAssigner::LogConfigProfiles(
             "%d successful, %d failed.\n",
             instr.name(), total, n_successful, total - n_successful));
     for (int i = 0; i < n_successful; ++i) {
-      absl::StrAppend(
-          &log_content,
-          absl::StrFormat("  [%2d/%d]%s %s\n", i + 1, n_successful,
-                          (i == 0 ? " [BEST]" : "       "),
-                          FormatTritonConfigLine(*successful[i])));
+      absl::StrAppend(&log_content,
+                      absl::StrFormat("  [%2d/%d]%s %s\n", i + 1, n_successful,
+                                      (i == 0 ? " [BEST]" : "       "),
+                                      FormatTritonConfigLine(*successful[i])));
     }
     for (const auto& p : profiles) {
       if (p.failure.has_value()) {

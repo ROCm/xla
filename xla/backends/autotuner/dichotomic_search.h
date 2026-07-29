@@ -99,7 +99,41 @@ using Coord = std::vector<int>;
 struct SearchProfile {
   // One role per axis, index-aligned with DichotomicSearchSpace::axes().
   std::vector<AxisRole> roles;
+
+  // Full size of the HLO dimension each axis tiles, index-aligned with
+  // DichotomicSearchSpace::axes(). Populated from tiling-analysis hints (see
+  // AxisRoleHint::dimension_size); <= 0 means "unknown" (no analysis for that
+  // axis). Used by the ternary/neighborhood phases for divisibility-aware
+  // ("masking waste") probe placement and soft-pruning: a tile value v on an
+  // axis of size D wastes fraction (ceil(D/v)*v - D)/(ceil(D/v)*v) of the last
+  // block. When the size is unknown the divisibility logic is skipped, so this
+  // is a strict, opt-in refinement that never changes behavior without hints.
+  std::vector<int64_t> dimension_sizes;
 };
+
+// Device-independent semantic role of the HLO dimension that a tuning axis
+// tiles, as derived from indexing/tiling analysis. kParallel = an
+// output/parallel dimension (N-like); kSequential = a contraction/reduction/
+// scan dimension (K-like). kUnknown means "no analysis available for this axis"
+// and causes MakeProfile to fall back to the name-based heuristic for it.
+enum class AxisSemantics { kUnknown, kParallel, kSequential };
+
+// Per-axis analysis fact for one tuning axis, taken straight from the
+// indexing/tiling analysis
+// (xla::gpu::experimental::TilingSpace::DimensionInfo:: {type, dimension_size})
+struct AxisRoleHint {
+  AxisSemantics semantics = AxisSemantics::kUnknown;
+  int64_t dimension_size = 0;  // full extent of the tiled dim; <= 0 => unknown.
+};
+
+// Optional per-axis hints, INDEX-ALIGNED with DichotomicSearchSpace::axes()
+// (i.e. hints[a] describes axis a), produced by the caller from tiling
+// analysis. An empty vector, a size mismatch, or a kUnknown entry all cause
+// MakeProfile to fall back to the name/opcode heuristic (globally for empty/
+// mismatch, per-axis for kUnknown). When hints are present, the parallel axis
+// tiling the LARGEST dimension is treated as the "N-like" monotone axis -- an
+// analysis-driven choice (largest parallel dimension), not an axis-name guess.
+using AxisRoleHints = std::vector<AxisRoleHint>;
 
 // A single measured (coordinate, time-in-seconds) sample. Failed measurements
 // should be represented with a large/infinite time and excluded by callers.
@@ -152,6 +186,23 @@ class DichotomicSearchSpace {
 // axes to kSweep. For opcodes without a clear parallel dimension the N-like
 // axis is left kUnimodal (safe fallback).
 SearchProfile MakeProfile(const DichotomicSearchSpace& space, HloOpcode opcode);
+
+// Same as above, but uses per-axis semantic roles derived from tiling/indexing
+// analysis (`hints`, index-aligned with space.axes()) instead of the axis-name
+// heuristic to identify the parallel (N-like) and sequential (contraction)
+// axes:
+//   - the dot-like op's parallel axis tiling the LARGEST dimension (the N-like
+//     axis) -> kMonotoneUp (the verified "larger parallel tile is better"
+//     prior),
+//   - any other kSequential/kParallel ordered axis -> kUnimodal,
+//   - small/categorical axes -> kSweep (unchanged).
+// If `hints` is empty or its size != space.axes().size(), this behaves exactly
+// like the opcode-only overload (name heuristic). Per-axis kUnknown entries
+// also fall back to the name heuristic for that axis. This is a strict superset
+// and never regresses the heuristic path. Roles are still verified/relaxed by
+// RefineRoles from Phase-1 measurements.
+SearchProfile MakeProfile(const DichotomicSearchSpace& space, HloOpcode opcode,
+                          const AxisRoleHints& hints);
 
 // Verifies the monotone priors against Phase-1 samples and RELAXES any that are
 // contradicted (kMonotone* -> kUnimodal). Never promotes a role.

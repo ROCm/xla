@@ -25,6 +25,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -32,8 +33,6 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "xla/backends/autotuner/backend_config.pb.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-
-#include "absl/log/log.h"
 
 namespace xla {
 namespace {
@@ -149,6 +148,51 @@ Coord BestCoordOrCenter(const DichotomicSearchSpace& space,
   return center;
 }
 
+// ---- Divisibility-aware ("masking waste") helpers (feature B). --------------
+//
+// A tile of size `v` applied to a dimension of size `D` launches
+// ceil(D / v) blocks; the last block is masked for (ceil(D/v)*v - D) elements.
+// The "waste ratio" is that masked fraction of the last block's work. Tiles
+// that divide D cleanly (D % v == 0) have zero waste and are empirically at
+// least as good on contraction axes (see ragged_dot_autotuner_analysis.md).
+//
+// `dim_size <= 0` means the size is unknown (no tiling analysis for this axis);
+// callers must treat that as "divisibility logic disabled" for the axis.
+
+// Returns the masked fraction of the last block for tile value `v` on a
+// dimension of size `D`. Returns 0.0 when the size is unknown or v<=0.
+double WasteRatio(int64_t dim_size, int64_t v) {
+  if (dim_size <= 0 || v <= 0) return 0.0;
+  const int64_t blocks = (dim_size + v - 1) / v;  // ceil(D/v)
+  const int64_t covered = blocks * v;
+  return static_cast<double>(covered - dim_size) / static_cast<double>(covered);
+}
+
+// Returns true if value index `i` on `axis` divides `dim_size` cleanly.
+bool DividesCleanly(const ParameterAxis& axis, int64_t dim_size, int i) {
+  if (dim_size <= 0 || i < 0 || i >= axis.values.size()) return false;
+  const int64_t v = axis.values[i];
+  return v > 0 && dim_size % v == 0;
+}
+
+// Given a starting index `i` on `axis`, returns the index of the nearest value
+// (by |index distance|, ties preferring the larger value) that divides
+// `dim_size` cleanly. Returns `i` itself when `i` already divides cleanly, and
+// also returns `i` unchanged when the size is unknown or no clean divisor
+// exists among the axis values.
+int NearestDivisorIndex(const ParameterAxis& axis, int64_t dim_size, int i) {
+  const int n = axis.values.size();
+  if (dim_size <= 0 || n == 0) return i;
+  if (DividesCleanly(axis, dim_size, i)) return i;
+  for (int d = 1; d < n; ++d) {
+    const int hi = i + d;  // prefer the larger value on ties
+    if (hi < n && DividesCleanly(axis, dim_size, hi)) return hi;
+    const int lo = i - d;
+    if (lo >= 0 && DividesCleanly(axis, dim_size, lo)) return lo;
+  }
+  return i;  // no clean divisor available; leave the geometric probe in place.
+}
+
 // Representative indices {min, median, max} for an ordered axis.
 std::vector<int> RepresentativeIndices(const ParameterAxis& axis) {
   const int n = axis.values.size();
@@ -223,6 +267,11 @@ std::vector<int> SelectTernaryRefine(const DichotomicSearchSpace& space,
                                      absl::Span<const int> already_evaluated) {
   const auto& axes = space.axes();
   const int num_axes = axes.size();
+  const bool have_sizes =
+      static_cast<int>(profile.dimension_sizes.size()) == num_axes;
+  auto dim_size = [&](int a) -> int64_t {
+    return have_sizes ? profile.dimension_sizes[a] : 0;
+  };
 
   absl::flat_hash_set<int> seen(already_evaluated.begin(),
                                 already_evaluated.end());
@@ -243,23 +292,32 @@ std::vector<int> SelectTernaryRefine(const DichotomicSearchSpace& space,
   // Coordinate-wise ternary refinement. Each unimodal axis is bracketed
   // geometrically over its sorted index range [0, n-1]; the other axes are held
   // at the Phase-1 marginal-best background (`cur`). Because `prior_samples` is
-  // fixed for the duration of this call, a second outer pass would recompute the
-  // identical background and therefore re-emit the exact same (deduplicated)
-  // probes, so a single pass is sufficient.
+  // fixed for the duration of this call, a second outer pass would recompute
+  // the identical background and therefore re-emit the exact same
+  // (deduplicated) probes, so a single pass is sufficient.
+  //
+  // When the axis's tiled-dimension size is known, each geometric
+  // ternary probe index is snapped to the nearest clean-divisor value (same
+  // probe count, placed where masking waste is zero -- the empirically better
+  // tiles). If no divisor exists the geometric index is kept, so this never
+  // reduces coverage.
   Coord cur = seed;
   for (int a = 0; a < num_axes; ++a) {
     if (profile.roles[a] != AxisRole::kUnimodal) continue;
     const int n = axes[a].values.size();
     if (n <= 2) continue;
+    const int64_t D = dim_size(a);
     int lo = 0, hi = n - 1;
     for (int step = 0; step < 3 && hi - lo > 1; ++step) {
       int i1 = lo + (hi - lo) / 3;
       int i2 = hi - (hi - lo) / 3;
+      int p1 = NearestDivisorIndex(axes[a], D, i1);
+      int p2 = NearestDivisorIndex(axes[a], D, i2);
       Coord c1 = cur;
-      c1[a] = i1;
+      c1[a] = p1;
       AddSnapped(space, c1, &seen, &result);
       Coord c2 = cur;
-      c2[a] = i2;
+      c2[a] = p2;
       AddSnapped(space, c2, &seen, &result);
       lo = i1;
       hi = i2;
@@ -272,8 +330,20 @@ std::vector<int> SelectNeighborhoodSweep(
     const DichotomicSearchSpace& space, const SearchProfile& profile,
     absl::Span<const Sample> prior_samples,
     absl::Span<const int> already_evaluated) {
+  // Tuning: on a full sweep of an ordered axis, drop candidate tile
+  // values whose masking waste exceeds this fraction -- but only if a
+  // lower-waste value is retained on the same axis AND the dropped index is not
+  // the current best neighbor. This never empties an axis and never removes the
+  // best coordinate, preserving the "never lose the optimum" guarantee.
+  constexpr double kMaxWasteRatio = 0.25;
+
   const auto& axes = space.axes();
   const int num_axes = axes.size();
+  const bool have_sizes =
+      static_cast<int>(profile.dimension_sizes.size()) == num_axes;
+  auto dim_size = [&](int a) -> int64_t {
+    return have_sizes ? profile.dimension_sizes[a] : 0;
+  };
 
   absl::flat_hash_set<int> seen(already_evaluated.begin(),
                                 already_evaluated.end());
@@ -284,12 +354,36 @@ std::vector<int> SelectNeighborhoodSweep(
     for (int a = 0; a < num_axes; ++a) best[a] = axes[a].values.size() / 2;
   }
 
+  // Soft-prune high-waste values from a candidate index list for axis `a`,
+  // keeping the current-best index and always retaining at least one value.
+  auto soft_prune_waste = [&](int a, std::vector<int>* cand) {
+    const int64_t D = dim_size(a);
+    if (D <= 0 || cand->size() <= 1) return;
+    std::vector<int> kept;
+    kept.reserve(cand->size());
+    for (int i : *cand) {
+      const bool is_best =
+          (i ==
+           std::clamp(best[a], 0, static_cast<int>(axes[a].values.size()) - 1));
+      if (is_best || WasteRatio(D, axes[a].values[i]) <= kMaxWasteRatio) {
+        kept.push_back(i);
+      }
+    }
+    if (!kept.empty() && kept.size() < cand->size()) {
+      *cand = std::move(kept);
+    }
+  };
+
   std::vector<std::vector<int>> candidates(num_axes);
   for (int a = 0; a < num_axes; ++a) {
     const int n = axes[a].values.size();
     if (profile.roles[a] == AxisRole::kSweep) {
       candidates[a].resize(n);
       for (int i = 0; i < n; ++i) candidates[a][i] = i;
+      // Sweep axes are the small/categorical knobs (num_stages/warps/...); they
+      // do not tile a dimension, so dim_size is unknown and soft_prune is a
+      // no-op. Kept for uniformity.
+      soft_prune_waste(a, &candidates[a]);
     } else if (profile.roles[a] == AxisRole::kMonotoneUp) {
       std::set<int> s;
       s.insert(n - 1);
@@ -307,6 +401,7 @@ std::vector<int> SelectNeighborhoodSweep(
       if (b - 1 >= 0) s.insert(b - 1);
       if (b + 1 < n) s.insert(b + 1);
       candidates[a].assign(s.begin(), s.end());
+      soft_prune_waste(a, &candidates[a]);
     }
   }
 
@@ -412,65 +507,107 @@ int DichotomicSearchSpace::SnapIndex(const Coord& coord) const {
 
 SearchProfile MakeProfile(const DichotomicSearchSpace& space,
                           HloOpcode opcode) {
+  return MakeProfile(space, opcode, AxisRoleHints{});
+}
+
+SearchProfile MakeProfile(const DichotomicSearchSpace& space, HloOpcode opcode,
+                          const AxisRoleHints& hints) {
   SearchProfile profile;
   const auto& axes = space.axes();
-  profile.roles.resize(axes.size(), AxisRole::kUnimodal);
+  const int num_axes = axes.size();
+  profile.roles.resize(num_axes, AxisRole::kUnimodal);
+  // Carry per-axis tiled-dimension sizes from the analysis hints (0 = unknown)
+  // so the ternary/neighborhood phases can do divisibility-aware placement.
+  profile.dimension_sizes.assign(num_axes, 0);
+  if (static_cast<int>(hints.size()) == num_axes) {
+    for (int a = 0; a < num_axes; ++a) {
+      profile.dimension_sizes[a] = hints[a].dimension_size;
+    }
+  }
 
   auto is_short = [](const ParameterAxis& axis) {
     return axis.values.size() <= 3;
   };
 
-  const bool dot_like = IsDotLikeOpcode(opcode);
-  const bool is_block_level =
-      // block-level configs expose tile_* axes; TritonGemmKey exposes block_n.
-      [&] {
-        for (const ParameterAxis& a : axes) {
-          if (a.name.rfind("tile_", 0) == 0) return true;
-        }
-        return false;
-      }();
+  // Analysis hints are used only when index-aligned with the axes. An empty or
+  // mismatched vector => pure name/opcode heuristic (unchanged legacy path).
+  const bool have_hints = static_cast<int>(hints.size()) == num_axes && [&] {
+    for (const AxisRoleHint& h : hints) {
+      if (h.semantics != AxisSemantics::kUnknown) {
+        return true;
+      }
+    }
+    return false;
+  }();
 
-  // Identify the "N-like" parallel axis, if any.
-  //  - TritonGemmKey (dot/scaled-dot): "block_n".
-  //  - block-level (ragged-dot): the widest output tile axis.
+  const bool dot_like = IsDotLikeOpcode(opcode);
+
+  // Identify the single "N-like" parallel axis (the one declared kMonotoneUp
+  // for dot-like ops).
+  //  - With analysis hints: among axes whose tiled dimension is kParallel, the
+  //    one tiling the LARGEST dimension (from DimensionInfo::dimension_size).
+  //    This is a purely analysis-driven choice by axis INDEX -- no axis names.
+  //  - Without hints (fallback): the legacy axis-name heuristic.
   int n_like = -1;
-  if (!is_block_level) {
-    for (int a = 0; a < axes.size(); ++a) {
-      if (axes[a].name == "block_n") {
+  if (have_hints) {
+    int64_t best_dim = -1;
+    for (int a = 0; a < num_axes; ++a) {
+      if (hints[a].semantics == AxisSemantics::kParallel &&
+          hints[a].dimension_size > best_dim) {
+        best_dim = hints[a].dimension_size;
         n_like = a;
-        break;
       }
     }
   } else {
-    int64_t best_max = -1;
-    for (int a = 0; a < axes.size(); ++a) {
-      if (axes[a].name.rfind("tile_", 0) == 0 && !axes[a].values.empty()) {
-        int64_t mx = axes[a].values.back();
-        if (mx > best_max) {
-          best_max = mx;
+    const bool is_block_level = [&] {
+      for (const ParameterAxis& a : axes) {
+        if (a.name.rfind("tile_", 0) == 0) return true;
+      }
+      return false;
+    }();
+    if (!is_block_level) {
+      for (int a = 0; a < num_axes; ++a) {
+        if (axes[a].name == "block_n") {
           n_like = a;
+          break;
+        }
+      }
+    } else {
+      int64_t best_max = -1;
+      for (int a = 0; a < num_axes; ++a) {
+        if (axes[a].name.rfind("tile_", 0) == 0 && !axes[a].values.empty()) {
+          int64_t mx = axes[a].values.back();
+          if (mx > best_max) {
+            best_max = mx;
+            n_like = a;
+          }
         }
       }
     }
   }
 
-  for (int a = 0; a < axes.size(); ++a) {
+  for (int a = 0; a < num_axes; ++a) {
     const ParameterAxis& axis = axes[a];
-    // Small / categorical knobs are swept.
+    // Small / categorical knobs are swept (independent of analysis). Note these
+    // knobs (num_stages/warps/ctas/group_size/split_k) are not tiling axes, so
+    // the analysis carries no dimension for them; keep the name/size test.
     if (axis.name == "num_stages" || axis.name == "num_warps" ||
         axis.name == "num_ctas" || axis.name == "group_size" ||
         axis.name == "split_k" || is_short(axis)) {
       profile.roles[a] = AxisRole::kSweep;
       continue;
     }
-    // The N-like parallel axis is monotone-up for dot-like ops (the strongly
-    // verified "larger tile_n is better" prior). For non-dot ops we keep it
-    // unimodal as a safe default.
+    // The parallel (N-like) axis is monotone-up for dot-like ops (the strongly
+    // verified "larger parallel tile is better" prior). For non-dot ops we keep
+    // it unimodal as a safe default.
     if (a == n_like && dot_like) {
       profile.roles[a] = AxisRole::kMonotoneUp;
       continue;
     }
-    // block_m, block_k, other tile axes: unimodal.
+    // Every other ordered tiling axis (a kSequential contraction axis, or a
+    // non-N parallel axis such as M) has an interior optimum: unimodal. With
+    // hints this is decided by the analysis role; without hints it is the same
+    // safe default the legacy heuristic used.
     profile.roles[a] = AxisRole::kUnimodal;
   }
   return profile;
