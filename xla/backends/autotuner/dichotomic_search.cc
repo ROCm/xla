@@ -31,8 +31,15 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/types/span.h"
+#include "llvm/ADT/SmallVector.h"
+#include "mlir/IR/MLIRContext.h"
 #include "xla/backends/autotuner/backend_config.pb.h"
+#include "xla/codegen/tiling/experimental/tiled_hlo.h"
+#include "xla/codegen/tiling/experimental/tiling_space.h"
+#include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/utils/hlo_traversal.h"
+#include "xla/primitive_util.h"
 
 namespace xla {
 namespace {
@@ -684,6 +691,145 @@ int BestSampleIndex(const DichotomicSearchSpace& space,
   }
   VLOG(-1) << "BestSampleIndex = " << best;
   return best;
+}
+
+namespace {
+
+// ---- Static grid/bytes Pareto soft-prune. ------------------------
+//
+// {grid, bytes} static proxy for one config, computed from the EXPERIMENTAL
+// tiling analysis. `valid` is false on any analysis failure (config not
+// prunable).
+struct StaticCost {
+  int64_t grid = 0;
+  int64_t bytes = 0;
+  bool valid = false;
+};
+
+// Computes the {grid, bytes} proxy for `config` applied to `instr` by building
+// the TilingSpace, assigning the config's output tile sizes, propagating tiles
+// across the fusion, and reading:
+//   grid  = TiledHloComputation::num_output_tiles()
+//   bytes = sum over fusion-operand tiles of
+//           num_blocks * product(tile_sizes) * ByteWidth(operand elt type)
+// Only the experimental block-level path is supported; returns invalid
+// otherwise.
+StaticCost ComputeStaticCost(const HloInstruction& instr,
+                             const BackendConfig& config) {
+  namespace exp = ::xla::gpu::experimental;
+  StaticCost cost;
+  if (config.config_case() != BackendConfig::kBlockLevel ||
+      config.block_level().output_tiles_size() == 0) {
+    return cost;
+  }
+
+  mlir::MLIRContext mlir_context;
+  std::unique_ptr<HloFusionAdaptor> fusion =
+      HloFusionAdaptor::ForInstruction(&instr);
+  if (fusion == nullptr) return cost;
+
+  absl::StatusOr<std::unique_ptr<exp::TilingSpace>> space_or =
+      exp::TilingSpace::Create(*fusion, &mlir_context);
+  if (!space_or.ok()) return cost;
+  std::unique_ptr<exp::TilingSpace> tiling_space = std::move(space_or).value();
+
+  // Build the tile-size vector index-aligned with TilingSpace::dimensions()
+  // (parallel dims first in output order, then sequential dims). The config
+  // sets only the parallel/output tiles (output_tiles(0).sizes[dim_position]);
+  // sequential dims are not varied by the dichotomic block-level configs, so we
+  // tile them fully (tile == dimension_size => a single block), making `bytes`
+  // comparable across candidates without depending on the (config-independent)
+  // inner sequential tile.
+  const auto& output_sizes = config.block_level().output_tiles(0).sizes();
+  const llvm::SmallVector<exp::TilingSpace::DimensionInfo, 4> dims =
+      tiling_space->dimensions();
+  std::vector<int64_t> tile_sizes(dims.size(), 1);
+  for (int i = 0; i < static_cast<int>(dims.size()); ++i) {
+    const auto& dim = dims[i];
+    if (dim.type == exp::TilingSpace::DimensionSemantics::kParallel &&
+        dim.dim_position >= 0 && dim.dim_position < output_sizes.size()) {
+      tile_sizes[i] = output_sizes[dim.dim_position];
+    } else {
+      tile_sizes[i] = dim.dimension_size;  // sequential dim => single block.
+    }
+    if (tile_sizes[i] <= 0) return cost;
+  }
+
+  if (!tiling_space->AssignTileSizes(tile_sizes).ok()) return cost;
+
+  absl::StatusOr<exp::TiledHloComputation> tiled_or =
+      exp::TiledHloComputation::Tile(*fusion, std::move(tiling_space));
+  if (!tiled_or.ok()) return cost;
+  const exp::TiledHloComputation& tiled = *tiled_or;
+
+  const int64_t num_blocks = tiled.num_output_tiles();
+  if (num_blocks <= 0) return cost;
+
+  int64_t bytes = 0;
+  for (const exp::TiledHloInstruction* tiled_instr : tiled.instructions()) {
+    const HloInstruction* hlo = tiled_instr->hlo();
+    if (hlo == nullptr) continue;
+    // Fusion operands are the leaf instructions not owned by the fusion.
+    if (fusion->ContainsInstruction(hlo)) continue;
+    const llvm::SmallVector<int64_t> ts = tiled_instr->tile_sizes();
+    int64_t elems = num_blocks;
+    for (int64_t t : ts) elems *= std::max<int64_t>(t, 1);
+    bytes += elems * primitive_util::ByteWidth(hlo->shape().element_type());
+  }
+
+  cost.grid = num_blocks;
+  cost.bytes = bytes;
+  cost.valid = true;
+  return cost;
+}
+
+}  // namespace
+
+std::vector<int> ParetoPruneByStaticCost(
+    const HloInstruction& instr, absl::Span<const BackendConfig* const> configs,
+    absl::Span<const int> indices, int keep_index) {
+  std::vector<int> result(indices.begin(), indices.end());
+  if (result.size() <= 1) return result;
+
+  // Compute the static cost for each candidate. If ANY candidate's analysis
+  // fails, abandon pruning entirely (we can only compare comparable configs).
+  std::vector<StaticCost> costs(result.size());
+  for (int i = 0; i < static_cast<int>(result.size()); ++i) {
+    const int idx = result[i];
+    if (idx < 0 || idx >= static_cast<int>(configs.size()) ||
+        configs[idx] == nullptr) {
+      return result;
+    }
+    costs[i] = ComputeStaticCost(instr, *configs[idx]);
+    if (!costs[i].valid) return result;
+  }
+
+  std::vector<int> kept;
+  kept.reserve(result.size());
+  for (int i = 0; i < static_cast<int>(result.size()); ++i) {
+    if (result[i] == keep_index) {
+      kept.push_back(result[i]);
+      continue;
+    }
+    bool dominated = false;
+    for (int j = 0; j < static_cast<int>(result.size()); ++j) {
+      if (i == j) continue;
+      const bool le =
+          costs[j].grid <= costs[i].grid && costs[j].bytes <= costs[i].bytes;
+      const bool strict =
+          costs[j].grid < costs[i].grid || costs[j].bytes < costs[i].bytes;
+      if (le && strict) {
+        dominated = true;
+        break;
+      }
+    }
+    if (!dominated) kept.push_back(result[i]);
+  }
+  // Only apply if it actually shrinks the set (and never empties it).
+  if (!kept.empty() && kept.size() < result.size()) {
+    return kept;
+  }
+  return result;
 }
 
 }  // namespace xla

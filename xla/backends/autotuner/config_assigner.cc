@@ -797,6 +797,14 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
     if (indices.empty()) {
       return absl::OkStatus();
     }
+    // Drop statically Pareto-dominated candidates (by grid/bytes from the
+    // experimental tiling analysis) before compiling/profiling them, protecting
+    // the current best config. No-op when the analysis is unavailable.
+    indices = ParetoPruneByStaticCost(*instr, backend_configs, indices,
+                                      BestSampleIndex(space, all_samples));
+    if (indices.empty()) {
+      return absl::OkStatus();
+    }
     ASSIGN_OR_RETURN(std::vector<ConfigRunner::ConfigProfile> profiles,
                      eval_batch(indices));
     collect_samples(profiles, &all_samples);

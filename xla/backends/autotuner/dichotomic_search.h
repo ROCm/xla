@@ -48,6 +48,8 @@ limitations under the License.
 
 namespace xla {
 
+class HloInstruction;
+
 // Alias matching xla/backends/autotuner/codegen_backend.h. The dichotomic
 // search operates on the BackendConfig oneof proto (specifically the `triton`
 // and `block_level` cases produced by the Triton backend).
@@ -95,6 +97,13 @@ struct ParameterAxis {
 // ParameterAxis::values.
 using Coord = std::vector<int>;
 
+// Device-independent semantic role of the HLO dimension that a tuning axis
+// tiles, as derived from indexing/tiling analysis. kParallel = an
+// output/parallel dimension (N-like); kSequential = a contraction/reduction/
+// scan dimension (K-like). kUnknown means "no analysis available for this axis"
+// and causes MakeProfile to fall back to the name-based heuristic for it.
+enum class AxisSemantics { kUnknown, kParallel, kSequential };
+
 // A per-axis role assignment (the "search profile").
 struct SearchProfile {
   // One role per axis, index-aligned with DichotomicSearchSpace::axes().
@@ -109,14 +118,16 @@ struct SearchProfile {
   // block. When the size is unknown the divisibility logic is skipped, so this
   // is a strict, opt-in refinement that never changes behavior without hints.
   std::vector<int64_t> dimension_sizes;
-};
 
-// Device-independent semantic role of the HLO dimension that a tuning axis
-// tiles, as derived from indexing/tiling analysis. kParallel = an
-// output/parallel dimension (N-like); kSequential = a contraction/reduction/
-// scan dimension (K-like). kUnknown means "no analysis available for this axis"
-// and causes MakeProfile to fall back to the name-based heuristic for it.
-enum class AxisSemantics { kUnknown, kParallel, kSequential };
+  // Per-axis semantic role of the tiled HLO dimension (kParallel / kSequential
+  // / kUnknown), index-aligned with DichotomicSearchSpace::axes(). Populated
+  // from tiling-analysis hints (AxisRoleHint::semantics); kUnknown when no
+  // analysis is available. Used by the static grid/work Pareto soft-prune to
+  // know which axes contribute to the launch grid (only kParallel dims) vs the
+  // reduction footprint. When semantics/dimension_sizes are unknown the static
+  // proxy is disabled, so this is a strict, opt-in refinement.
+  std::vector<AxisSemantics> semantics;
+};
 
 // Per-axis analysis fact for one tuning axis, taken straight from the
 // indexing/tiling analysis
@@ -162,6 +173,10 @@ class DichotomicSearchSpace {
   // nearest index, then a nearest-neighbor search among real configs). Always
   // returns a valid index into the original config vector.
   int SnapIndex(const Coord& coord) const;
+
+  // Returns the coordinate of the config at `index` (into the original config
+  // vector). `index` must be in [0, num_configs()). Inverse of LookupIndex.
+  const Coord& CoordOf(int index) const { return coords_[index]; }
 
   int num_configs() const { return num_configs_; }
 
@@ -237,6 +252,28 @@ std::vector<int> SelectConfigs(const DichotomicSearchSpace& space,
 // `samples` is empty.
 int BestSampleIndex(const DichotomicSearchSpace& space,
                     absl::Span<const Sample> samples);
+
+// Drops statically Pareto-dominated candidates from `indices` using
+// a device-model-FREE proxy computed from the EXPERIMENTAL tiling analysis of
+// `instr`:
+//
+//   grid  = TiledHloComputation::num_output_tiles()  (occupancy pressure)
+//   bytes = sum over fusion-operand tiles of
+//           num_blocks * product(tile_sizes) * ByteWidth(elt)  (masking-aware
+//           bytes read, i.e. memory traffic)
+//
+// A candidate is dropped iff some other candidate in `indices` dominates it on
+// BOTH proxies (grid' <= grid AND bytes' <= bytes, at least one strictly less).
+// `configs` must be INDEX-ALIGNED with the original config vector (configs[i]
+// is the BackendConfig of config index i). `keep_index` (if >= 0) is never
+// pruned (the current best). Returns the surviving subset of `indices`, order
+// preserved. On any analysis failure, or if no candidate is dominated, returns
+// `indices` unchanged -- so this is a strict, opt-in prune that can never
+// remove the Pareto frontier (where the runtime optimum lives) nor the current
+// best.
+std::vector<int> ParetoPruneByStaticCost(
+    const HloInstruction& instr, absl::Span<const BackendConfig* const> configs,
+    absl::Span<const int> indices, int keep_index);
 
 }  // namespace xla
 
