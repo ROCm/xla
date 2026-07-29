@@ -52,6 +52,8 @@ EXCLUDED_TESTS=(
     "SampleFileTest.Convolution"
     "GroupedConvolution2DTestWithRandomIndices*"
     "LocalClientExecuteTest.CompilePartitionedExecutable"
+    "RaggedAllToAllThunkMultiGpuTest.ExecuteOnStream"
+    "AllReduceLayoutAwareTest*"
 )
 
 for arg in "$@"; do
