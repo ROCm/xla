@@ -58,16 +58,17 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   api_event.name = "test_rocm_kernel";
   api_event.correlation_id = kCorrelationId;
   api_event.thread_id = 999;
-  api_event.kernel_info = KernelDetails{};
-  api_event.kernel_info.private_segment_size = 32;
-  api_event.kernel_info.group_segment_size = 1024;
-  api_event.kernel_info.workgroup_x = 256;
-  api_event.kernel_info.workgroup_y = 1;
-  api_event.kernel_info.workgroup_z = 1;
-  api_event.kernel_info.grid_x = 100;
-  api_event.kernel_info.grid_y = 1;
-  api_event.kernel_info.grid_z = 1;
-  api_event.kernel_info.func_ptr = reinterpret_cast<void*>(0xdeadbeef);
+  api_event.set_kernel_info(KernelDetails{
+      .private_segment_size = 32,
+      .group_segment_size = 1024,
+      .workgroup_x = 256,
+      .workgroup_y = 1,
+      .workgroup_z = 1,
+      .grid_x = 100,
+      .grid_y = 1,
+      .grid_z = 1,
+      .func_ptr = reinterpret_cast<void*>(0xdeadbeef),
+  });
 
   collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
 
@@ -137,8 +138,8 @@ TEST(RocmCollectorTest, MultipleActivitiesPerCorrelationIdAllExported) {
   api_event.name = "hipGraphLaunch";
   api_event.correlation_id = kCorrelationId;
   api_event.thread_id = 999;
-  api_event.kernel_info = KernelDetails{};
-  api_event.kernel_info.func_ptr = reinterpret_cast<void*>(0xdeadbeef);
+  api_event.set_kernel_info(
+      KernelDetails{.func_ptr = reinterpret_cast<void*>(0xdeadbeef)});
   collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
 
   // Three GPU activity records, same correlation_id, same stream (so
@@ -233,10 +234,11 @@ TEST(RocmCollectorTest, DistinctKernelsUnderOneCorrelationIdKeepOwnDetails) {
   api_event.name = "hipGraphLaunch";
   api_event.correlation_id = kCorrelationId;
   api_event.thread_id = 999;
-  api_event.kernel_info = KernelDetails{};
-  api_event.kernel_info.workgroup_x = 999;
-  api_event.kernel_info.grid_x = 999;
-  api_event.kernel_info.group_segment_size = 999;
+  api_event.set_kernel_info(KernelDetails{
+      .group_segment_size = 999,
+      .workgroup_x = 999,
+      .grid_x = 999,
+  });
   collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
 
   // Two dispatches under that one correlation_id with genuinely different
@@ -264,14 +266,15 @@ TEST(RocmCollectorTest, DistinctKernelsUnderOneCorrelationIdKeepOwnDetails) {
     activity.end_time_ns = shape.end_ns;
     activity.device_id = kDeviceId;
     activity.stream_id = kStreamId;
-    activity.kernel_info = KernelDetails{};
-    activity.kernel_info.workgroup_x = shape.workgroup_x;
-    activity.kernel_info.workgroup_y = 1;
-    activity.kernel_info.workgroup_z = 1;
-    activity.kernel_info.grid_x = shape.grid_x;
-    activity.kernel_info.grid_y = 1;
-    activity.kernel_info.grid_z = 1;
-    activity.kernel_info.group_segment_size = shape.group_segment_size;
+    activity.set_kernel_info(KernelDetails{
+        .group_segment_size = shape.group_segment_size,
+        .workgroup_x = shape.workgroup_x,
+        .workgroup_y = 1,
+        .workgroup_z = 1,
+        .grid_x = shape.grid_x,
+        .grid_y = 1,
+        .grid_z = 1,
+    });
     collector.AddEvent(std::move(activity), /*is_auxiliary=*/false);
   }
 

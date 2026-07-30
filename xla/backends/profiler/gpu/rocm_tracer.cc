@@ -191,7 +191,10 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
       annotation_map()->LookUpScopeRangeId(trace_event->correlation_id);
   trace_event->thread_id = rec.thread_id;
   trace_event->stream_id = RocmTracerEvent::kInvalidStreamId;
-  trace_event->kernel_info = KernelDetails{};
+  // A buffered HIP API record carries no dispatch geometry of its own; the
+  // zeroed placeholder is replaced from the matching activity record in
+  // ApiActivityInfoExchange().
+  trace_event->set_kernel_info(KernelDetails{});
 
   {
     // bounds-check name table: kind and operation
@@ -221,8 +224,15 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
   }
 
   if (isCopyApi(rec.operation)) {
-    // actually one needs to set the real type
+    // The buffered API record has no direction or size field, and this API's
+    // activity is frequently a ROCclr blit *kernel* rather than a MEMORY_COPY
+    // record, so there is nothing to recover the direction from here.
+    // MemcpyOther is the honest answer. Swap the payload to match the new type
+    // so the two can never disagree -- leaving KernelDetails live under a
+    // Memcpy* type is what used to make downstream reads reinterpret a
+    // workgroup dimension as a byte count.
     trace_event->type = RocmTracerEventType::MemcpyOther;
+    trace_event->set_memcpy_info(MemcpyDetails{});
   }
 }
 
@@ -287,16 +297,16 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
       annotation_map()->LookUpScopeRangeId(trace_event->correlation_id);
   trace_event->thread_id = rec.thread_id;
   trace_event->stream_id = rec.correlation_id.external.value;
-  trace_event->memcpy_info = MemcpyDetails{
+  trace_event->set_memcpy_info(MemcpyDetails{
       .num_bytes = rec.bytes,
       .destination = static_cast<uint32_t>(dst_gpu.id.handle),
       .async = false,
-  };
+  });
 
-  VLOG(2) << "copy bytes: " << trace_event->memcpy_info.num_bytes
+  VLOG(2) << "copy bytes: " << trace_event->memcpy_info()->num_bytes
           << " stream: " << trace_event->stream_id << " src_id "
           << trace_event->device_id << " dst_id "
-          << trace_event->memcpy_info.destination;
+          << trace_event->memcpy_info()->destination;
 }
 
 void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
@@ -321,7 +331,7 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
   trace_event->thread_id = rec.thread_id;
   trace_event->stream_id = rec.correlation_id.external.value;
   trace_event->queue_id = kinfo.queue_id.handle;
-  trace_event->kernel_info = KernelDetails{
+  trace_event->set_kernel_info(KernelDetails{
       .private_segment_size = kinfo.private_segment_size,
       .group_segment_size = kinfo.group_segment_size,
       .workgroup_x = kinfo.workgroup_size.x,
@@ -331,7 +341,7 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
       .grid_y = kinfo.grid_size.y,
       .grid_z = kinfo.grid_size.z,
       .func_ptr = nullptr,
-  };
+  });
 
   auto it = kernel_info_.find(kinfo.kernel_id);
   if (it != kernel_info_.end()) trace_event->name = it->second.name;

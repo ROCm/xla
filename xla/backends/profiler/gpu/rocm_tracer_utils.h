@@ -20,6 +20,8 @@ limitations under the License.
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <utility>
+#include <variant>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
@@ -35,49 +37,54 @@ namespace profiler {
 // Both resolve to the same type; ROCm and CUPTI are never compiled together.
 using ScopeRangeIdTree = absl::flat_hash_map<int64_t, int64_t>;
 
+// Every field below carries a default member initializer so that a
+// default-constructed detail record reads as "nothing measured" rather than as
+// indeterminate stack residue. Reporting a truthful zero is recoverable; a
+// plausible-looking garbage byte count is not.
+
 struct MemcpyDetails {
   // The amount of data copied for memcpy events.
-  size_t num_bytes;
+  size_t num_bytes = 0;
   // The destination device for peer-2-peer communication (memcpy). The source
   // device is implicit: it's the current device.
-  uint32_t destination;
+  uint32_t destination = 0;
   // Whether or not the memcpy is asynchronous.
-  bool async;
+  bool async = false;
 };
 
 struct MemAllocDetails {
   // The amount of data requested for cudaMalloc events.
-  uint64_t num_bytes;
+  uint64_t num_bytes = 0;
 };
 
 struct MemsetDetails {
   // The number of memory elements getting set
-  size_t num_bytes;
+  size_t num_bytes = 0;
   // Whether or not the memset is asynchronous.
-  bool async;
+  bool async = false;
 };
 
 struct KernelDetails {
   // The amount of private memory used by kernel,
   // number of register per thread (register spillage if > 0)
-  uint32_t private_segment_size;
+  uint32_t private_segment_size = 0;
   // The amount of shared memory (SMEM)
-  uint32_t group_segment_size;
+  uint32_t group_segment_size = 0;
   // X-dimension of a workgroup (grid.x*block.x)
-  uint32_t workgroup_x;
+  uint32_t workgroup_x = 0;
   // Y-dimension of a workgroup (grid.x*block.x)
-  uint32_t workgroup_y;
+  uint32_t workgroup_y = 0;
   // Z-dimension of a workgroup (grid.x*block.x)
-  uint32_t workgroup_z;
+  uint32_t workgroup_z = 0;
   // X-dimension of a grid.
-  uint32_t grid_x;
+  uint32_t grid_x = 0;
   // Y-dimension of a grid.
-  uint32_t grid_y;
+  uint32_t grid_y = 0;
   // Z-dimension of a grid.
-  uint32_t grid_z;
+  uint32_t grid_z = 0;
 
   // kernel address. Used for calculating core occupancy
-  void* func_ptr;
+  void* func_ptr = nullptr;
 };
 
 enum class RocmTracerEventType {
@@ -117,8 +124,24 @@ const char* GetRocmTracerEventDomainName(const RocmTracerEventDomain& domain);
 enum class RocmTracerSyncTypes;
 
 struct SynchronizationDetails {
-  RocmTracerSyncTypes sync_type;
+  RocmTracerSyncTypes sync_type = {};
 };
+
+// Per-event detail payload: exactly one alternative is active at a time, and
+// which one is a property of the object rather than of the reader's
+// expectations. std::monostate means no detail record was ever attached.
+//
+// This replaces an anonymous union that tracked no active member, so every
+// read was a leap of faith. ApiActivityInfoExchange() would assign
+// `memcpy_info` from an event whose live member was in fact KernelDetails,
+// reinterpreting a workgroup dimension as a byte count and a shared-memory
+// size as a device id -- undefined behaviour that surfaced as a plausible but
+// fabricated "dest:512 async:1" in Trace Viewer. With a variant that same code
+// is a checked access: the typed accessor returns nullptr and the caller is
+// forced to decide what to do about it.
+using RocmTracerEventDetails =
+    std::variant<std::monostate, MemcpyDetails, MemsetDetails, MemAllocDetails,
+                 KernelDetails, SynchronizationDetails>;
 
 struct RocmTracerEvent {
   static constexpr uint32_t kInvalidDeviceId =
@@ -129,9 +152,9 @@ struct RocmTracerEvent {
       std::numeric_limits<uint32_t>::max();
   static constexpr uint64_t kInvalidStreamId =
       std::numeric_limits<uint64_t>::max();
-  RocmTracerEventType type;
+  RocmTracerEventType type = RocmTracerEventType::Unsupported;
   RocmTracerEventSource source = RocmTracerEventSource::Invalid;
-  RocmTracerEventDomain domain;
+  RocmTracerEventDomain domain = RocmTracerEventDomain::InvalidDomain;
   std::string name;
   // This points to strings in AnnotationMap, which should outlive the point
   // where serialization happens.
@@ -146,13 +169,37 @@ struct RocmTracerEvent {
   uint64_t queue_id = 0;
   int64_t scope_range_id = 0;
 
-  union {
-    MemcpyDetails memcpy_info;                    // If type == Memcpy*
-    MemsetDetails memset_info;                    // If type == Memset*
-    MemAllocDetails memalloc_info;                // If type == MemoryAlloc
-    KernelDetails kernel_info;                    // If type == Kernel
-    SynchronizationDetails synchronization_info;  // If type == Synchronization
-  };
+  // The active alternative corresponds to `type`: MemcpyDetails for Memcpy*,
+  // MemsetDetails for Memset, and so on. Prefer the accessors below to
+  // touching this directly.
+  RocmTracerEventDetails details;
+
+  // Defines the checked accessor triplet for one detail alternative:
+  //   const T* name() const  -- nullptr unless T is the active alternative, so
+  //                             a type mismatch is a null check rather than a
+  //                             reinterpretation of unrelated bytes
+  //   T& mutable_name()      -- makes T active (default-constructed if it was
+  //                             not already) and returns it for field-by-field
+  //                             population
+  //   void set_name(T)       -- makes T active with the given value
+#define ROCM_TRACER_EVENT_DETAIL_ACCESSORS(Type, name)                 \
+  const Type* name() const { return std::get_if<Type>(&details); }     \
+  Type& mutable_##name() {                                             \
+    if (!std::holds_alternative<Type>(details)) {                      \
+      details.emplace<Type>();                                         \
+    }                                                                  \
+    return std::get<Type>(details);                                    \
+  }                                                                    \
+  void set_##name(Type value) { details = std::move(value); }
+
+  ROCM_TRACER_EVENT_DETAIL_ACCESSORS(MemcpyDetails, memcpy_info)
+  ROCM_TRACER_EVENT_DETAIL_ACCESSORS(MemsetDetails, memset_info)
+  ROCM_TRACER_EVENT_DETAIL_ACCESSORS(MemAllocDetails, memalloc_info)
+  ROCM_TRACER_EVENT_DETAIL_ACCESSORS(KernelDetails, kernel_info)
+  ROCM_TRACER_EVENT_DETAIL_ACCESSORS(SynchronizationDetails,
+                                     synchronization_info)
+
+#undef ROCM_TRACER_EVENT_DETAIL_ACCESSORS
 };
 
 struct RocmTraceCollectorOptions {

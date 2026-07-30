@@ -139,12 +139,16 @@ void PrintRocmTracerEvent(const RocmTracerEvent& event,
     case RocmTracerEventType::MemcpyD2H:
     case RocmTracerEventType::MemcpyH2D:
     case RocmTracerEventType::MemcpyD2D:
-      oss << ",num_bytes=" << event.memcpy_info.num_bytes;
-      oss << ",destination=" << event.memcpy_info.destination;
-      oss << ",async=" << event.memcpy_info.async;
+      if (const MemcpyDetails* info = event.memcpy_info()) {
+        oss << ",num_bytes=" << info->num_bytes;
+        oss << ",destination=" << info->destination;
+        oss << ",async=" << info->async;
+      }
       break;
     case RocmTracerEventType::MemoryAlloc:
-      oss << ",num_bytes=" << event.memalloc_info.num_bytes;
+      if (const MemAllocDetails* info = event.memalloc_info()) {
+        oss << ",num_bytes=" << info->num_bytes;
+      }
       break;
     case RocmTracerEventType::MemcpyOther:
     case RocmTracerEventType::MemoryFree:
@@ -253,17 +257,27 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
 
   if (event.type == RocmTracerEventType::Kernel &&
       event.source == RocmTracerEventSource::Activity) {
-    xevent.AddStatValue(
-        *plane->GetOrCreateStatMetadata(
-            GetStatTypeStr(StatType::kKernelDetails)),
-        *plane->GetOrCreateStatMetadata(ToXStat(event.kernel_info,
-                                                /*occupancy_pct*/ 0)));
+    // KernelEvent() always attaches KernelDetails to an activity kernel
+    // record, so the payload is expected to be here; the variant just makes
+    // saying so a checked assertion rather than an assumption.
+    if (const KernelDetails* kernel_info = event.kernel_info()) {
+      xevent.AddStatValue(
+          *plane->GetOrCreateStatMetadata(
+              GetStatTypeStr(StatType::kKernelDetails)),
+          *plane->GetOrCreateStatMetadata(ToXStat(*kernel_info,
+                                                  /*occupancy_pct*/ 0)));
+    }
   } else if (event.type == RocmTracerEventType::MemcpyH2D ||
              event.type == RocmTracerEventType::MemcpyD2H ||
              event.type == RocmTracerEventType::MemcpyD2D ||
              event.type == RocmTracerEventType::MemcpyOther) {
     VLOG(7) << "Add Memcpy stat";
-    const auto& memcpy_info = event.memcpy_info;
+    // A copy API reclassified to MemcpyOther has no MEMORY_COPY record behind
+    // it -- on ROCclr its activity is a blit *kernel* -- so the payload can
+    // legitimately be absent. Report truthful zeros; the alternative the union
+    // used to offer was a workgroup dimension printed as a byte count.
+    const MemcpyDetails memcpy_info =
+        event.memcpy_info() ? *event.memcpy_info() : MemcpyDetails{};
     std::string memcpy_details = absl::StrCat(
         "kind:", GetMemcpyKindName(event.type),
         " size:", memcpy_info.num_bytes,
@@ -274,32 +288,35 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
         *plane->GetOrCreateStatMetadata(std::move(memcpy_details)));
   } else if (event.type == RocmTracerEventType::MemoryAlloc) {
     VLOG(7) << "Add MemAlloc stat";
+    const MemAllocDetails alloc_info =
+        event.memalloc_info() ? *event.memalloc_info() : MemAllocDetails{};
     std::string value =
         // TODO(rocm-profiler): we need to discover the memory kind similar
         // to CUDA
-        absl::StrCat("kind:", "Unknown",
-                     " num_bytes:", event.memalloc_info.num_bytes);
+        absl::StrCat("kind:", "Unknown", " num_bytes:", alloc_info.num_bytes);
     xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
                             GetStatTypeStr(StatType::kMemallocDetails)),
                         *plane->GetOrCreateStatMetadata(std::move(value)));
   } else if (event.type == RocmTracerEventType::MemoryFree) {
     VLOG(7) << "Add MemFree stat";
+    const MemAllocDetails alloc_info =
+        event.memalloc_info() ? *event.memalloc_info() : MemAllocDetails{};
     std::string value =
         // TODO(rocm-profiler): we need to discover the memory kind similar
         // to CUDA
-        absl::StrCat("kind:", "Unknown",
-                     " num_bytes:", event.memalloc_info.num_bytes);
+        absl::StrCat("kind:", "Unknown", " num_bytes:", alloc_info.num_bytes);
     xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
                             GetStatTypeStr(StatType::kMemFreeDetails)),
                         *plane->GetOrCreateStatMetadata(std::move(value)));
   } else if (event.type == RocmTracerEventType::Memset) {
     VLOG(7) << "Add Memset stat";
+    const MemsetDetails memset_info =
+        event.memset_info() ? *event.memset_info() : MemsetDetails{};
     auto value =
         // TODO(rocm-profiler): we need to discover the memory kind similar
         // to CUDA
-        absl::StrCat("kind:", "Unknown",
-                     " num_bytes:", event.memset_info.num_bytes,
-                     " async:", event.memset_info.async);
+        absl::StrCat("kind:", "Unknown", " num_bytes:", memset_info.num_bytes,
+                     " async:", memset_info.async);
     xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
                             GetStatTypeStr(StatType::kMemsetDetails)),
                         *plane->GetOrCreateStatMetadata(std::move(value)));
@@ -693,7 +710,9 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
         // for an API-level row; when one correlation_id covers many dispatches
         // (hipGraphLaunch) the remaining ones are not represented here. The
         // per-dispatch rows on the device plane carry their own exact data.
-        api_event.kernel_info = item.kernel_info;
+        if (const KernelDetails* kernel_info = item.kernel_info()) {
+          api_event.set_kernel_info(*kernel_info);
+        }
         aggregated_events.push_back(api_event);
         break;
       case RocmTracerEventType::Memset:
@@ -706,7 +725,17 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
       case RocmTracerEventType::MemcpyH2D:
       case RocmTracerEventType::MemcpyD2D:
       case RocmTracerEventType::MemcpyOther:
-        api_event.memcpy_info = item.memcpy_info;
+        // This is where the union used to bite. For a copy API whose activity
+        // is a ROCclr blit *kernel*, `item` holds KernelDetails, so this
+        // assignment reinterpreted workgroup_x as num_bytes and
+        // group_segment_size as the destination device -- the origin of the
+        // fabricated "size:512 dest:0 async:1" seen in Trace Viewer for copies
+        // that actually moved a megabyte. Adopt the activity's payload only
+        // when it really is a copy record; the byte count for blit copies has
+        // to come from the HIP API arguments instead.
+        if (const MemcpyDetails* memcpy_info = item.memcpy_info()) {
+          api_event.set_memcpy_info(*memcpy_info);
+        }
         aggregated_events.push_back(api_event);
         break;
       default:
