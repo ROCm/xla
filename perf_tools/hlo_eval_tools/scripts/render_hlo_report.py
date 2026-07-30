@@ -73,6 +73,14 @@ def short_ref(ref: str) -> str:
     return ref
 
 
+def candidate_label(item: dict[str, Any]) -> str:
+    for key in ("candidate_label", "label"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return short_ref(str(item.get("candidate_ref", item.get("ref", ""))))
+
+
 def workload_name(workload: str) -> str:
     name = workload.removesuffix(".csv")
     for category in (
@@ -241,7 +249,7 @@ def branch_headline(
 ) -> tuple[str, str]:
     if latest is None:
         return "No live candidate result is available", "Candidate summary is empty."
-    ref = short_ref(latest["candidate_ref"])
+    ref = candidate_label(latest)
     historical_ratio = relative_performance_ratio(
         latest.get("geomean_module_ratio")
     )
@@ -301,7 +309,9 @@ def trend_svg(
             continue
         points.append(
             (
-                short_ref(branch["candidate_ref"]),
+                # Structured targets may supply a readable label; legacy text
+                # refs fall back to the existing shortened ref.
+                candidate_label(branch),
                 geomean,
                 relative_performance_ratio(branch.get("suite_ratio")),
             )
@@ -429,7 +439,7 @@ def branch_scorecard(
         live_delta = live.get("geomean_performance_delta_percent")
         rows.append(
             f"""<tr>
-  <td><strong>{escape(short_ref(branch["candidate_ref"]))}</strong><br>
+  <td><strong>{escape(candidate_label(branch))}</strong><br>
       <code>{escape(branch["candidate_commit"][:12])}</code></td>
   <td>{branch.get("matched_modules", 0)}</td>
   <td>{format_ratio(historical_ratio)}</td>
@@ -474,7 +484,7 @@ def top_movers_table(
             f"""<tr data-candidate="{escape(row["candidate_ref"])}">
   <td>{escape(workload_name(row["workload"]))}</td>
   <td><code>{escape(row["module"])}</code></td>
-  <td>{escape(short_ref(row["candidate_ref"]))}</td>
+  <td>{escape(candidate_label(row))}</td>
   <td>{format_ms(row.get("baseline_ms"))}</td>
   <td>{format_ms(row.get("candidate_ms"))}</td>
   <td class="{material_class(delta, threshold)}">{format_delta(delta)}</td>
@@ -501,6 +511,10 @@ def matrix_table(
     ordered = ([control] if control else []) + branches
     ordered = [branch for branch in ordered if branch is not None]
     refs = [branch["candidate_ref"] for branch in ordered]
+    labels = {
+        branch["candidate_ref"]: candidate_label(branch)
+        for branch in ordered
+    }
     metrics: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
         key = (row["workload"], row["module"])
@@ -513,7 +527,7 @@ def matrix_table(
         entry["candidates"][row["candidate_ref"]] = row
 
     headers = "".join(
-        f"<th>{escape(short_ref(ref))}</th>" for ref in refs
+        f"<th>{escape(labels[ref])}</th>" for ref in refs
     )
     body_rows = []
     for (workload, module), metric in sorted(metrics.items()):
@@ -559,7 +573,8 @@ def health_table(manifest: dict[str, Any]) -> str:
         tone = "good" if status == "completed" else "bad"
         rows.append(
             f"""<tr><td>{escape(result.get("role", ""))}</td>
-<td>{escape(short_ref(result.get("ref", "")))}</td>
+<td>{escape(candidate_label(result))}</td>
+<td><code>{escape(result.get("source_ref", result.get("ref", "")))}</code></td>
 <td><code>{escape(result.get("commit", "")[:12])}</code></td>
 <td class="{tone}">{escape(status)}</td>
 <td>{escape(result.get("build_exit_code", "N/A"))}</td>
@@ -567,7 +582,7 @@ def health_table(manifest: dict[str, Any]) -> str:
         )
     return """
 <div class="table-wrap"><table><thead><tr>
-<th>Role</th><th>Target</th><th>Commit</th><th>Status</th>
+<th>Role</th><th>Name</th><th>Source revision</th><th>Commit</th><th>Status</th>
 <th>Build exit</th><th>Evaluation exit</th></tr></thead>
 <tbody>""" + "".join(rows) + "</tbody></table></div>"
 
@@ -618,8 +633,13 @@ def render_report(
     movers, mover_refs = top_movers_table(
         comparison_rows, top_movers, threshold
     )
+    labels_by_ref = {
+        branch["candidate_ref"]: candidate_label(branch)
+        for branch in branches
+    }
     options = '<option value="">All candidates</option>' + "".join(
-        f'<option value="{escape(ref)}">{escape(short_ref(ref))}</option>'
+        f'<option value="{escape(ref)}">'
+        f'{escape(labels_by_ref.get(ref, short_ref(ref)))}</option>'
         for ref in mover_refs
     )
     environment = manifest.get("environment", {})

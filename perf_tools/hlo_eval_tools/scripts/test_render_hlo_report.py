@@ -202,6 +202,26 @@ class HtmlReportTest(unittest.TestCase):
                 top_movers=10,
             )
 
+    def test_candidate_label_is_used_across_html_report(self) -> None:
+        self.main["candidate_label"] = "current main"
+        for row in self.rows:
+            if row["candidate_id"] == self.main["candidate_id"]:
+                row["candidate_label"] = "current main"
+        for result in self.manifest["results"]:
+            if result["id"] == self.main["candidate_id"]:
+                result["label"] = "current main"
+        rendered = render_report(
+            manifest=self.manifest,
+            summary=self.summary,
+            comparison_rows=self.rows,
+            threshold_percent=None,
+            top_movers=10,
+        )
+        self.assertIn("current main is +0.28% versus live control", rendered)
+        self.assertIn("<strong>current main</strong>", rendered)
+        self.assertIn(">current main</option>", rendered)
+        self.assertIn("<code>upstream/main</code>", rendered)
+
     def test_workload_name_preserves_model_underscores(self) -> None:
         self.assertEqual(
             workload_name(

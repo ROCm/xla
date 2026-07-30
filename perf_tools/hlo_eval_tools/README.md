@@ -436,8 +436,9 @@ ROCm/XLA version under test) to spot per-module regressions over time.
 
 ### Automated multi-branch workflow
 
-`scripts/run_xla_branch_eval.py` builds and profiles every remote-qualified Git
-ref in `configs/xla_refs.txt`. The perf-tools checkout remains on
+`scripts/run_xla_branch_eval.py` builds and profiles every Git revision selected
+by `configs/xla_refs.txt` or an optional structured JSON target file. The
+perf-tools checkout remains on
 `rocm-dev-infra`; a separate, dedicated ROCm/XLA checkout supplies the source
 refs. The source checkout must be clean because the workflow checks out each
 resolved commit sequentially in detached-HEAD mode:
@@ -454,6 +455,79 @@ python3 perf_tools/hlo_eval_tools/scripts/run_xla_branch_eval.py \
   --xla-source-repo /path/to/source-xla \
   --output-dir /path/to/new-result-directory
 ```
+
+### Structured XLA targets
+
+The default `configs/xla_refs.txt` remains a simple one-revision-per-line list.
+Each line may already be a branch, tag, or exact commit. For optional readable
+labels, optional commit pins, and a schema-validated list, copy the ready-to-use
+structured example:
+
+```bash
+cp perf_tools/hlo_eval_tools/configs/xla_targets.json \
+  /path/to/xla_targets.json
+```
+
+Configure the branches, tags, or commits to evaluate:
+
+```json
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "revision": "origin/rocm-jaxlib-v0.10.1",
+      "commit": null,
+      "label": "v0.10.1 HEAD"
+    },
+    {
+      "revision": "origin/rocm-jaxlib-v0.10.2",
+      "commit": "7b5ecf1c9282fdf1039211e0d45216980058beda",
+      "label": "specific v0.10.2 commit"
+    },
+    {
+      "revision": "upstream/main",
+      "commit": null,
+      "label": "current main HEAD"
+    }
+  ]
+}
+```
+
+Pass either text or JSON through the existing option:
+
+```bash
+python3 perf_tools/hlo_eval_tools/scripts/run_xla_branch_eval.py \
+  --xla-source-repo /path/to/source-xla \
+  --output-dir /path/to/new-result \
+  --refs-file /path/to/xla_targets.json
+```
+
+Files ending in `.json` use the structured schema. Other files retain the
+existing line-based parser, including blank-line and `#` comment handling.
+
+`revision` may be a commit or locally available tag, or a branch qualified by
+an existing Git remote such as `origin/topic` or `upstream/main`. Known remotes
+are fetched unless `--skip-fetch` is used. Provider-specific pull-request refs
+are not fetched automatically; make such a revision available in the source
+checkout first or use its commit SHA.
+
+`commit` is optional. When it is omitted or `null`, the tool resolves the
+revision itself, so a branch uses its fetched HEAD at campaign start. When a
+full 40-character SHA is configured, that exact commit is evaluated while the
+revision remains as branch/tag context. The manifest records the configured
+value separately from the actual resolved commit. Changing a configured commit
+for an existing revision during resume is rejected; start a new output
+directory instead.
+
+`label` is optional. When omitted, reports derive a short label from the
+revision. The manifest records the target-file format and checksum, normalized
+target list, requested revisions, labels, and resolved immutable commits.
+During resume, existing revisions retain their manifest-recorded commits even
+if a branch has moved; added revisions are resolved once, removed revisions are
+skipped without deleting artifacts, and label-only changes do not rebuild a
+runner. Start a new campaign to evaluate a newer HEAD for an already-recorded
+branch. `--dry-run` resolves and prints the complete immutable plan without
+building or evaluating.
 
 The perf-tools repository defaults to the Git repository containing the script,
 so the command works from any current directory. Pass

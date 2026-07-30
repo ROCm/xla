@@ -167,25 +167,26 @@ def comparison_rows(
                         status = "faster"
                     else:
                         status = "unchanged"
-                rows.append(
-                    {
-                        "baseline_ref": baseline_ref,
-                        "baseline_commit": baseline_commit,
-                        "baseline_source": reference_dataset["source"],
-                        "candidate_id": target["id"],
-                        "candidate_role": target["role"],
-                        "candidate_ref": target["ref"],
-                        "candidate_commit": target["commit"],
-                        "workload": workload,
-                        "module": module,
-                        "baseline_ms": baseline_ms,
-                        "candidate_ms": candidate_ms,
-                        "ratio": ratio,
-                        "delta_ms": delta_ms,
-                        "delta_percent": delta_percent,
-                        "status": status,
-                    }
-                )
+                row = {
+                    "baseline_ref": baseline_ref,
+                    "baseline_commit": baseline_commit,
+                    "baseline_source": reference_dataset["source"],
+                    "candidate_id": target["id"],
+                    "candidate_role": target["role"],
+                    "candidate_ref": target["ref"],
+                    "candidate_commit": target["commit"],
+                    "workload": workload,
+                    "module": module,
+                    "baseline_ms": baseline_ms,
+                    "candidate_ms": candidate_ms,
+                    "ratio": ratio,
+                    "delta_ms": delta_ms,
+                    "delta_percent": delta_percent,
+                    "status": status,
+                }
+                if "label" in target:
+                    row["candidate_label"] = target["label"]
+                rows.append(row)
 
     counts = Counter(row["status"] for row in rows)
     missing_baseline = counts.get("missing_baseline", 0)
@@ -251,38 +252,39 @@ def summarize_branches(
             if ratios
             else None
         )
-        summaries.append(
-            {
-                "candidate_id": target["id"],
-                "candidate_role": target["role"],
-                "candidate_ref": target["ref"],
-                "candidate_commit": target["commit"],
-                "matched_modules": len(matched),
-                "faster_modules": status_counts.get("faster", 0),
-                "slower_modules": status_counts.get("slower", 0),
-                "unchanged_modules": status_counts.get("unchanged", 0),
-                "missing_baseline": status_counts.get("missing_baseline", 0),
-                "missing_candidate": status_counts.get("missing_candidate", 0),
-                "baseline_suite_ms": baseline_total if matched else None,
-                "candidate_suite_ms": candidate_total if matched else None,
-                "suite_ratio": (
-                    candidate_total / baseline_total if baseline_total > 0 else None
-                ),
-                "suite_delta_percent": suite_delta,
-                "median_module_ratio": (
-                    statistics.median(ratios) if ratios else None
-                ),
-                "median_module_delta_percent": (
-                    statistics.median(deltas) if deltas else None
-                ),
-                "geomean_module_ratio": (
-                    geomean_delta / 100.0 + 1.0
-                    if geomean_delta is not None
-                    else None
-                ),
-                "geomean_module_delta_percent": geomean_delta,
-            }
-        )
+        summary = {
+            "candidate_id": target["id"],
+            "candidate_role": target["role"],
+            "candidate_ref": target["ref"],
+            "candidate_commit": target["commit"],
+            "matched_modules": len(matched),
+            "faster_modules": status_counts.get("faster", 0),
+            "slower_modules": status_counts.get("slower", 0),
+            "unchanged_modules": status_counts.get("unchanged", 0),
+            "missing_baseline": status_counts.get("missing_baseline", 0),
+            "missing_candidate": status_counts.get("missing_candidate", 0),
+            "baseline_suite_ms": baseline_total if matched else None,
+            "candidate_suite_ms": candidate_total if matched else None,
+            "suite_ratio": (
+                candidate_total / baseline_total if baseline_total > 0 else None
+            ),
+            "suite_delta_percent": suite_delta,
+            "median_module_ratio": (
+                statistics.median(ratios) if ratios else None
+            ),
+            "median_module_delta_percent": (
+                statistics.median(deltas) if deltas else None
+            ),
+            "geomean_module_ratio": (
+                geomean_delta / 100.0 + 1.0
+                if geomean_delta is not None
+                else None
+            ),
+            "geomean_module_delta_percent": geomean_delta,
+        }
+        if "label" in target:
+            summary["candidate_label"] = target["label"]
+        summaries.append(summary)
     return summaries
 
 
@@ -352,6 +354,14 @@ def revision_header(ref: str, commit: str, role: str | None = None) -> str:
     return f"{header}<br>{role}" if role else header
 
 
+def candidate_display_label(item: dict[str, Any]) -> str:
+    label = item.get("candidate_label")
+    ref = item["candidate_ref"]
+    if isinstance(label, str) and label and label != ref:
+        return f"{label} ({ref})"
+    return ref
+
+
 def candidate_matrix_cell(row: dict[str, Any] | None) -> str:
     if row is None:
         return "N/A<br>not present"
@@ -418,7 +428,7 @@ def write_markdown_report(
             else "Live candidate"
         )
         lines.append(
-            f"| {role} | `{markdown_escape(branch['candidate_ref'])}` | "
+            f"| {role} | `{markdown_escape(candidate_display_label(branch))}` | "
             f"`{branch['candidate_commit']}` |"
         )
 
@@ -478,7 +488,7 @@ def write_markdown_report(
             else "candidate"
         )
         lines.append(
-            f"| {role} | `{markdown_escape(branch['candidate_ref'])}` | "
+            f"| {role} | `{markdown_escape(candidate_display_label(branch))}` | "
             f"`{branch['candidate_commit'][:12]}` | "
             f"{branch['matched_modules']} | {branch['faster_modules']} | "
             f"{branch['slower_modules']} | {branch['unchanged_modules']} | "
@@ -509,6 +519,10 @@ def write_markdown_report(
             if branch["candidate_role"] == "live_control"
             else "Candidate"
         )
+        for branch in branch_summaries
+    }
+    candidate_labels = {
+        branch["candidate_ref"]: candidate_display_label(branch)
         for branch in branch_summaries
     }
 
@@ -542,7 +556,11 @@ def write_markdown_report(
                 baseline_ref, baseline_commit, "Historical reference"
             ),
             *[
-                revision_header(ref, candidate_commits[ref], candidate_roles[ref])
+                revision_header(
+                    candidate_labels[ref],
+                    candidate_commits[ref],
+                    candidate_roles[ref],
+                )
                 for ref in group_refs
             ],
         ]
@@ -596,6 +614,8 @@ def write_comparison(
         "delta_percent",
         "status",
     ]
+    if any("candidate_label" in row for row in rows):
+        fields.insert(fields.index("candidate_commit"), "candidate_label")
     with csv_path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
@@ -622,6 +642,10 @@ def write_comparison(
         "geomean_module_ratio",
         "geomean_module_delta_percent",
     ]
+    if any("candidate_label" in branch for branch in branch_summaries):
+        branch_fields.insert(
+            branch_fields.index("candidate_commit"), "candidate_label"
+        )
     with branch_summary_path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=branch_fields)
         writer.writeheader()

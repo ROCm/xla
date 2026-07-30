@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and benchmark hlo_runner_main across a list of XLA Git refs."""
+"""Build and benchmark hlo_runner_main across selected XLA revisions."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ RUNNER_TARGET = "//xla/tools/multihost_hlo_runner:hlo_runner_main"
 RUNNER_RELATIVE_PATH = Path(
     "xla/tools/multihost_hlo_runner/hlo_runner_main"
 )
+TARGETS_SCHEMA_VERSION = 1
 ACTIVE_PROCESS: subprocess.Popen[str] | None = None
 
 
@@ -73,8 +74,8 @@ def parse_args() -> argparse.Namespace:
         "--refs-file",
         type=Path,
         help=(
-            "default: <perf-tools-repo>/perf_tools/hlo_eval_tools/"
-            "configs/xla_refs.txt"
+            "text ref list or schema-v1 JSON target list; default: "
+            "<perf-tools-repo>/perf_tools/hlo_eval_tools/configs/xla_refs.txt"
         ),
     )
     parser.add_argument(
@@ -301,6 +302,112 @@ def read_refs(path: Path) -> list[str]:
     return refs
 
 
+def read_structured_targets(path: Path) -> list[dict[str, Any]]:
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError(f"target file contains duplicate key: {key}")
+            result[key] = item
+        return result
+
+    value = json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+    )
+    if not isinstance(value, dict):
+        raise ValueError(f"target file must contain a JSON object: {path}")
+    required = {"schema_version", "targets"}
+    missing = sorted(required - set(value))
+    extra = sorted(set(value) - required)
+    if missing or extra:
+        details = []
+        if missing:
+            details.append(f"missing={','.join(missing)}")
+        if extra:
+            details.append(f"unsupported={','.join(extra)}")
+        raise ValueError(
+            f"target file must contain exactly schema_version and targets "
+            f"({'; '.join(details)}): {path}"
+        )
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != TARGETS_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            f"unsupported target schema: {value['schema_version']!r}; "
+            f"expected {TARGETS_SCHEMA_VERSION}"
+        )
+    raw_targets = value["targets"]
+    if not isinstance(raw_targets, list) or not raw_targets:
+        raise ValueError(f"target file must contain a non-empty targets list: {path}")
+    targets: list[dict[str, Any]] = []
+    seen_revisions: set[str] = set()
+    seen_labels: set[str] = set()
+    for index, raw_target in enumerate(raw_targets):
+        if not isinstance(raw_target, dict):
+            raise ValueError(f"{path}: target {index} must be a JSON object")
+        allowed = {"revision", "commit", "label"}
+        missing_fields = {"revision"} - set(raw_target)
+        extra_fields = set(raw_target) - allowed
+        if missing_fields or extra_fields:
+            raise ValueError(
+                f"{path}: target {index} must contain revision and optional "
+                f"commit/label; missing={sorted(missing_fields)}, "
+                f"unsupported={sorted(extra_fields)}"
+            )
+        revision = raw_target["revision"]
+        if (
+            not isinstance(revision, str)
+            or not revision
+            or revision != revision.strip()
+            or any(character.isspace() for character in revision)
+            or revision.startswith("-")
+        ):
+            raise ValueError(f"{path}: target {index} has an invalid revision")
+        if revision in seen_revisions:
+            raise ValueError(f"{path}: duplicate target revision: {revision}")
+        target = {"revision": revision}
+        if "commit" in raw_target:
+            configured_commit = raw_target["commit"]
+            if configured_commit is not None and (
+                not isinstance(configured_commit, str)
+                or not re.fullmatch(r"[0-9a-fA-F]{40}", configured_commit)
+            ):
+                raise ValueError(
+                    f"{path}: target {index} commit must be null or a full "
+                    "40-character SHA"
+                )
+            target["commit"] = (
+                configured_commit.lower()
+                if isinstance(configured_commit, str)
+                else None
+            )
+        if "label" in raw_target:
+            label = raw_target["label"]
+            if (
+                not isinstance(label, str)
+                or not label
+                or label != label.strip()
+                or len(label) > 128
+                or any(ord(character) < 32 for character in label)
+            ):
+                raise ValueError(f"{path}: target {index} has an invalid label")
+            if label in seen_labels:
+                raise ValueError(f"{path}: duplicate target label: {label}")
+            target["label"] = label
+            seen_labels.add(label)
+        targets.append(target)
+        seen_revisions.add(revision)
+    return targets
+
+
+def read_target_specs(path: Path) -> tuple[str, list[dict[str, Any]]]:
+    if path.suffix.lower() == ".json":
+        return "json", read_structured_targets(path)
+    return "text", [{"revision": ref} for ref in read_refs(path)]
+
+
 def validate_resume_manifest(manifest: Any) -> None:
     if not isinstance(manifest, dict):
         raise ValueError("resume manifest must contain a JSON object")
@@ -323,6 +430,19 @@ def validate_resume_manifest(manifest: Any) -> None:
     ):
         if not isinstance(inputs.get(name), dict):
             raise ValueError(f"resume manifest has no valid inputs.{name} object")
+    selection_metadata = inputs.get("refs_file")
+    if (
+        not isinstance(selection_metadata, dict)
+        or not isinstance(selection_metadata.get("path"), str)
+        or not selection_metadata["path"]
+        or not isinstance(selection_metadata.get("sha256"), str)
+        or not selection_metadata["sha256"]
+    ):
+        raise ValueError(
+            "resume manifest has no valid inputs.refs_file object"
+        )
+    if selection_metadata.get("format", "text") not in {"text", "json"}:
+        raise ValueError("resume manifest inputs.refs_file.format is invalid")
     recorded_hlo_path = inputs["perf_tools_repo"].get("hlo_path")
     if recorded_hlo_path is not None and (
         not isinstance(recorded_hlo_path, str) or not recorded_hlo_path
@@ -352,6 +472,18 @@ def validate_resume_manifest(manifest: Any) -> None:
             )
         ):
             raise ValueError(f"resume manifest target {index} is invalid")
+        if "label" in target and (
+            not isinstance(target["label"], str) or not target["label"]
+        ):
+            raise ValueError(f"resume manifest target {index} has an invalid label")
+        configured_commit = target.get("configured_commit")
+        if configured_commit is not None and (
+            not isinstance(configured_commit, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", configured_commit)
+        ):
+            raise ValueError(
+                f"resume manifest target {index} has an invalid configured commit"
+            )
     reference_dataset = manifest.get("reference_dataset")
     if (
         not isinstance(reference_dataset, dict)
@@ -429,9 +561,21 @@ def load_profile(path: Path, args: argparse.Namespace) -> tuple[dict[str, Any], 
     }
 
 
-def ensure_and_fetch_remotes(repo: Path, refs: list[str], skip_fetch: bool) -> None:
+def ensure_and_fetch_remotes(
+    repo: Path,
+    refs: list[str],
+    skip_fetch: bool,
+    *,
+    allow_local_refs: bool = False,
+) -> None:
     remotes = set(git(repo, "remote").splitlines())
     needed = {ref.split("/", 1)[0] for ref in refs if "/" in ref}
+    if allow_local_refs:
+        needed = {
+            remote
+            for remote in needed
+            if remote in remotes or remote == "upstream"
+        }
 
     if "upstream" in needed and "upstream" not in remotes:
         if skip_fetch:
@@ -453,29 +597,113 @@ def ensure_and_fetch_remotes(repo: Path, refs: list[str], skip_fetch: bool) -> N
             git(repo, "fetch", remote, "--prune")
 
 
-def resolve_refs(repo: Path, refs: list[str]) -> list[dict[str, str]]:
-    resolved: list[dict[str, str]] = []
-    for ref in refs:
-        sha = git(
+def canonical_revision(repo: Path, revision: str) -> str:
+    if revision.startswith("refs/") or "/" not in revision:
+        return revision
+    remote, _ = revision.split("/", 1)
+    remotes = set(git(repo, "remote").splitlines())
+    if remote in remotes:
+        return f"refs/remotes/{revision}"
+    return revision
+
+
+def resolve_revision(repo: Path, revision: str) -> str:
+    canonical = canonical_revision(repo, revision)
+    output = git(
+        repo,
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        f"{canonical}^{{commit}}",
+    )
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    sha = lines[-1] if lines else ""
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+        raise RuntimeError(
+            f"revision {revision!r} did not resolve to one commit SHA: {output!r}"
+        )
+    return sha.lower()
+
+
+def resolve_target_specs(
+    repo: Path, specs: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    resolved: list[dict[str, Any]] = []
+    for spec in specs:
+        ref = spec["revision"]
+        configured_commit = spec.get("commit")
+        sha = resolve_revision(
             repo,
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            f"{ref}^{{commit}}",
+            configured_commit
+            if isinstance(configured_commit, str)
+            else ref,
         )
         slug = re.sub(r"[^A-Za-z0-9._-]+", "_", ref).strip("._-") or "xla"
-        resolved.append(
-            {
-                "id": f"candidate:{ref}",
-                "role": "candidate",
-                "ref": ref,
-                "source_ref": ref,
-                "revision": ref,
-                "commit": sha,
-                "slug": f"{slug}_{sha[:12]}",
-            }
+        target = {
+            "id": f"candidate:{ref}",
+            "role": "candidate",
+            "ref": ref,
+            "source_ref": ref,
+            "revision": ref,
+            "commit": sha,
+            "slug": f"{slug}_{sha[:12]}",
+        }
+        if "label" in spec:
+            target["label"] = spec["label"]
+        if "commit" in spec:
+            target["configured_commit"] = configured_commit
+        resolved.append(target)
+        commit_source = (
+            f"configured commit: {configured_commit}"
+            if isinstance(configured_commit, str)
+            else "configured commit: HEAD"
+        )
+        print(
+            f"[{spec.get('label', ref)}] requested revision: {ref}; "
+            f"{commit_source}; "
+            f"resolved commit: {sha}",
+            file=sys.stderr,
         )
     return resolved
+
+
+def resolve_refs(repo: Path, refs: list[str]) -> list[dict[str, str]]:
+    return resolve_target_specs(repo, [{"revision": ref} for ref in refs])
+
+
+def reconcile_campaign_targets(
+    campaign_targets: list[dict[str, Any]],
+    target_specs: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    specs_by_ref = {target["revision"]: target for target in target_specs}
+    updated_campaign = []
+    for target in campaign_targets:
+        updated = dict(target)
+        spec = specs_by_ref.get(target.get("source_ref", ""))
+        if target.get("role") == "candidate" and spec is not None:
+            if target.get("configured_commit") != spec.get("commit"):
+                raise ValueError(
+                    "cannot change configured commit while resuming target "
+                    f"{target['source_ref']}; start a new output directory"
+                )
+            if "label" in spec:
+                updated["label"] = spec["label"]
+            else:
+                updated.pop("label", None)
+            if "commit" in spec:
+                updated["configured_commit"] = spec["commit"]
+            else:
+                updated.pop("configured_commit", None)
+        updated_campaign.append(updated)
+    campaign_by_source_ref = {
+        target["source_ref"]: target
+        for target in updated_campaign
+        if target["role"] == "candidate"
+    }
+    active_candidates = [
+        campaign_by_source_ref[target["revision"]] for target in target_specs
+    ]
+    return updated_campaign, active_candidates
 
 
 def resolve_live_control(
@@ -486,13 +714,7 @@ def resolve_live_control(
     reference_commit = reference.get("xla_commit")
     if not reference_ref or not reference_commit:
         raise ValueError("benchmark profile must define reference.xla_ref/xla_commit")
-    commit = git(
-        repo,
-        "rev-parse",
-        "--verify",
-        "--end-of-options",
-        f"{reference_commit}^{{commit}}",
-    )
+    commit = resolve_revision(repo, reference_commit)
     if commit != reference_commit:
         raise ValueError(
             f"reference commit resolved to {commit}, expected {reference_commit}"
@@ -922,7 +1144,11 @@ def evaluate_target(
         if (
             previous_metadata.get("status") in {"completed", "evaluation_failed"}
             and isinstance(previous_metadata.get("evaluation_exit_code"), int)
+            and previous_metadata.get("commit") == target["commit"]
         ):
+            previous_metadata.update(target)
+            if "label" not in target:
+                previous_metadata.pop("label", None)
             previous_metadata.setdefault("resume_history", []).append(
                 {
                     "skipped_at": utc_now(),
@@ -948,6 +1174,8 @@ def evaluate_target(
             "runner": str(runner_copy),
         },
     }
+    if "label" not in target:
+        metadata.pop("label", None)
     metadata.pop("error", None)
     metadata.pop("finished_at", None)
     write_json(metadata_file, metadata)
@@ -1147,9 +1375,6 @@ def main() -> int:
             )
 
         tools_root = (perf_repo / HLO_TOOLS_RELATIVE_PATH).resolve()
-        refs_file = (
-            args.refs_file or tools_root / "configs/xla_refs.txt"
-        ).expanduser().resolve()
         profile_file = (
             args.profile_file or tools_root / "configs/benchmark_profile.json"
         ).expanduser().resolve()
@@ -1157,18 +1382,6 @@ def main() -> int:
         comparison_script = tools_root / "scripts/compare_hlo_branch_results.py"
         reference_results_script = tools_root / "scripts/reference_results.py"
         orchestrator_script = Path(__file__).resolve()
-        for required in (
-            refs_file,
-            profile_file,
-            orchestrator_script,
-            eval_script,
-            comparison_script,
-            reference_results_script,
-        ):
-            if not required.is_file():
-                raise ValueError(f"required file not found: {required}")
-        if not os.access(eval_script, os.X_OK):
-            raise ValueError(f"evaluation script is not executable: {eval_script}")
 
         output_dir = args.output_dir.expanduser().resolve()
         if output_dir.is_relative_to(perf_repo) or output_dir.is_relative_to(source_repo):
@@ -1192,6 +1405,23 @@ def main() -> int:
             previous = json.loads(manifest_path.read_text(encoding="utf-8"))
             validate_resume_manifest(previous)
 
+        refs_file = (
+            args.refs_file or tools_root / "configs/xla_refs.txt"
+        ).expanduser().resolve()
+        required_files = [
+            refs_file,
+            profile_file,
+            orchestrator_script,
+            eval_script,
+            comparison_script,
+            reference_results_script,
+        ]
+        for required in required_files:
+            if not required.is_file():
+                raise ValueError(f"required file not found: {required}")
+        if not os.access(eval_script, os.X_OK):
+            raise ValueError(f"evaluation script is not executable: {eval_script}")
+
         requested_hlo_path = args.hlo_path
         if requested_hlo_path is None and previous is not None:
             recorded_hlo_path = previous["inputs"]["perf_tools_repo"].get(
@@ -1203,17 +1433,24 @@ def main() -> int:
             perf_repo, tools_root, requested_hlo_path
         )
 
-        refs = read_refs(refs_file)
         profile, benchmark = load_profile(profile_file, args)
         checked_in_reference = reference_inventory(hlo_path, tools_root, profile)
         reference_ref = profile["reference"]["xla_ref"]
+        target_file_format, target_specs = read_target_specs(refs_file)
+        refs = [target["revision"] for target in target_specs]
+
         added_refs: list[str] = []
         removed_refs: list[str] = []
         if previous is None:
             fetch_refs = list(dict.fromkeys([reference_ref, *refs]))
-            ensure_and_fetch_remotes(source_repo, fetch_refs, args.skip_fetch)
+            ensure_and_fetch_remotes(
+                source_repo,
+                fetch_refs,
+                args.skip_fetch,
+                allow_local_refs=target_file_format == "json",
+            )
             live_control = resolve_live_control(source_repo, profile)
-            candidate_targets = resolve_refs(source_repo, refs)
+            candidate_targets = resolve_target_specs(source_repo, target_specs)
             campaign_targets = [live_control, *candidate_targets]
             targets = campaign_targets
         else:
@@ -1231,27 +1468,37 @@ def main() -> int:
                 for target in previous_targets
                 if target["role"] == "candidate"
             }
-            added_refs = [ref for ref in refs if ref not in previous_by_ref]
+            added_specs = [
+                target
+                for target in target_specs
+                if target["revision"] not in previous_by_ref
+            ]
+            added_refs = [target["revision"] for target in added_specs]
             removed_refs = [ref for ref in previous_by_ref if ref not in refs]
             if added_refs and not args.skip_fetch:
-                ensure_and_fetch_remotes(source_repo, added_refs, skip_fetch=False)
-            added_targets = resolve_refs(source_repo, added_refs) if added_refs else []
+                ensure_and_fetch_remotes(
+                    source_repo,
+                    added_refs,
+                    skip_fetch=False,
+                    allow_local_refs=target_file_format == "json",
+                )
+            added_targets = (
+                resolve_target_specs(source_repo, added_specs)
+                if added_specs
+                else []
+            )
             campaign_targets = [*previous_targets, *added_targets]
-            campaign_by_source_ref = {
-                target["source_ref"]: target
-                for target in campaign_targets
-                if target["role"] == "candidate"
-            }
-            targets = [
-                live_control,
-                *(campaign_by_source_ref[ref] for ref in refs),
-            ]
+            campaign_targets, active_candidates = reconcile_campaign_targets(
+                campaign_targets, target_specs
+            )
+            targets = [live_control, *active_candidates]
             missing = missing_target_commits(source_repo, targets)
             if missing and not args.skip_fetch:
                 ensure_and_fetch_remotes(
                     source_repo,
                     list(dict.fromkeys([reference_ref, *refs])),
                     skip_fetch=False,
+                    allow_local_refs=target_file_format == "json",
                 )
                 missing = missing_target_commits(source_repo, targets)
             if missing:
@@ -1263,6 +1510,13 @@ def main() -> int:
                     f"{missing_text}"
                 )
         bazel = choose_bazel(args.bazel_command)
+        selection_inputs = {
+            "refs_file": {
+                "path": str(refs_file),
+                "format": target_file_format,
+                "sha256": sha256_file(refs_file),
+            }
+        }
 
         manifest = {
             "schema_version": 2,
@@ -1271,10 +1525,7 @@ def main() -> int:
             "inputs": {
                 "perf_tools_repo": repository_metadata(perf_repo, hlo_path),
                 "xla_source_repo": repository_metadata(source_repo),
-                "refs_file": {
-                    "path": str(refs_file),
-                    "sha256": sha256_file(refs_file),
-                },
+                **selection_inputs,
                 "profile_file": {
                     "path": str(profile_file),
                     "sha256": sha256_file(profile_file),
@@ -1303,6 +1554,8 @@ def main() -> int:
             "source_original_state": source_original_state,
             "targets": campaign_targets,
             "active_refs": refs,
+            "target_file_format": target_file_format,
+            "target_specs": target_specs,
             "reference_dataset": {
                 "id": profile["reference"]["id"],
                 "role": "historical_reference",
@@ -1321,10 +1574,6 @@ def main() -> int:
                 "removed_refs": removed_refs,
             },
         }
-
-        if args.dry_run:
-            print(json.dumps(manifest, indent=2, sort_keys=True))
-            return 0
 
         if previous is not None:
             checks = {
@@ -1417,6 +1666,8 @@ def main() -> int:
             )
             manifest["targets"] = campaign_targets
             manifest["active_refs"] = refs
+            manifest["target_file_format"] = target_file_format
+            manifest["target_specs"] = target_specs
             manifest["comparison_target_ids"] = current_plan[
                 "comparison_target_ids"
             ]
@@ -1425,6 +1676,7 @@ def main() -> int:
                 {
                     "selected_at": utc_now(),
                     "active_refs": refs,
+                    "active_targets": target_specs,
                     "added_refs": added_refs,
                     "removed_refs": removed_refs,
                 }
@@ -1432,10 +1684,13 @@ def main() -> int:
             source_original_state = manifest.get(
                 "source_original_state", source_original_state
             )
-            manifest["status"] = "running"
+            manifest["status"] = "planned" if args.dry_run else "running"
             manifest.setdefault("resume_history", []).append(
                 {"resumed_at": utc_now(), "environment": collect_environment()}
             )
+        if args.dry_run:
+            print(json.dumps(manifest, indent=2, sort_keys=True))
+            return 0
         output_dir.mkdir(parents=True, exist_ok=True)
         write_json(manifest_path, manifest)
         campaign_manifest_written = True
