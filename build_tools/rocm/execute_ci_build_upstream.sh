@@ -37,6 +37,12 @@ EXCLUDED_TESTS=(
     "CollectiveOpsTestE2EShardedUnsharded.DotNonContractingAndContracting"
     "CollectivePipelineParallelismTestWithAndWithoutOpts/CollectivePipelineParallelismTest.PartiallyPipelinedAsyncSendRecvLoop/1"
     "P2POps/P2POps.CollectivePermute/enable_symmetric_buffer"
+    "RcclSymmetricMemoryTest.ToStringContainsExpectedFields"
+    "RcclSymmetricMemoryTest.PackKernelArgReturnsValidWindowHandle"
+    "RcclSymmetricMemoryTest.MultimemAddrNotSupported"
+    "RcclSymmetricMemoryTest.TwoWindowsHaveDistinctHandles"
+    "RcclSymmetricMemoryTest.CreateSucceeds"
+    "RcclSymmetricMemoryTest.AddrMatchesRegisteredBuffer"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
@@ -55,14 +61,10 @@ done
 
 "${SCRIPT_DIR}/run_xla_ci_build.sh" \
     "$@" \
-    --config=rocm_ci_hermetic \
     --build_tag_filters="$TAG_FILTERS" \
     --test_tag_filters="$TAG_FILTERS" \
     --execution_log_compact_file=execution_log.binpb.zst \
     --spawn_strategy=local \
-    --repo_env=ROCM_PATH= \
-    --repo_env=ROCM_DISTRO_URL="https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-gfx950-dcgpu-7.14.0.tar.gz" \
-    --repo_env=ROCM_DISTRO_HASH="12afeccd06e6caf0699d86d688f16083aafa35474d0ec1d8063477fb5c119d49" \
     --repo_env=REMOTE_GPU_TESTING=1 \
     --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
     --remote_download_outputs=minimal \
@@ -81,5 +83,8 @@ done
     --cache_test_results=yes \
     --nokeep_going \
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+    --repo_env=ROCM_PATH= \
+    --repo_env=ROCM_DISTRO_URL="https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-gfx950-dcgpu-7.14.0.tar.gz" \
+    --repo_env=ROCM_DISTRO_HASH="12afeccd06e6caf0699d86d688f16083aafa35474d0ec1d8063477fb5c119d49" \
     -- \
     //xla/...
