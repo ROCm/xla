@@ -791,6 +791,12 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
   std::vector<Sample> all_samples;
   std::vector<int> evaluated;
 
+  // One static-cost cache shared across all phases: a config's {grid, bytes}
+  // proxy is phase-independent, so the (expensive) TilingSpace build + tile
+  // propagation is performed at most once per config for the whole search
+  // rather than once per phase.
+  StaticCostCache static_cost_cache;
+
   auto run_phase = [&](SearchPhase phase) -> absl::Status {
     std::vector<int> indices =
         SelectConfigs(space, profile, phase, all_samples, evaluated);
@@ -799,9 +805,11 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
     }
     // Drop statically Pareto-dominated candidates (by grid/bytes from the
     // experimental tiling analysis) before compiling/profiling them, protecting
-    // the current best config. No-op when the analysis is unavailable.
+    // the current best config. No-op when the analysis is unavailable. The
+    // shared cache avoids recomputing a config's static cost across phases.
     indices = ParetoPruneByStaticCost(*instr, backend_configs, indices,
-                                      BestSampleIndex(space, all_samples));
+                                      BestSampleIndex(space, all_samples),
+                                      &static_cost_cache);
     if (indices.empty()) {
       return absl::OkStatus();
     }

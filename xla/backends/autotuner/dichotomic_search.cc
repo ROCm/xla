@@ -697,15 +697,6 @@ namespace {
 
 // ---- Static grid/bytes Pareto soft-prune. ------------------------
 //
-// {grid, bytes} static proxy for one config, computed from the EXPERIMENTAL
-// tiling analysis. `valid` is false on any analysis failure (config not
-// prunable).
-struct StaticCost {
-  int64_t grid = 0;
-  int64_t bytes = 0;
-  bool valid = false;
-};
-
 // Computes the {grid, bytes} proxy for `config` applied to `instr` by building
 // the TilingSpace, assigning the config's output tile sizes, propagating tiles
 // across the fusion, and reading:
@@ -787,12 +778,15 @@ StaticCost ComputeStaticCost(const HloInstruction& instr,
 
 std::vector<int> ParetoPruneByStaticCost(
     const HloInstruction& instr, absl::Span<const BackendConfig* const> configs,
-    absl::Span<const int> indices, int keep_index) {
+    absl::Span<const int> indices, int keep_index, StaticCostCache* cache) {
   std::vector<int> result(indices.begin(), indices.end());
   if (result.size() <= 1) return result;
 
-  // Compute the static cost for each candidate. If ANY candidate's analysis
-  // fails, abandon pruning entirely (we can only compare comparable configs).
+  // Compute (or look up) the static cost for each candidate. A config's static
+  // cost is phase-independent, so `cache` (if provided) lets us build the
+  // TilingSpace + propagate tiles at most once per config across all phases.
+  // If ANY candidate's analysis fails, abandon pruning entirely (we can only
+  // compare comparable configs).
   std::vector<StaticCost> costs(result.size());
   for (int i = 0; i < static_cast<int>(result.size()); ++i) {
     const int idx = result[i];
@@ -800,7 +794,17 @@ std::vector<int> ParetoPruneByStaticCost(
         configs[idx] == nullptr) {
       return result;
     }
-    costs[i] = ComputeStaticCost(instr, *configs[idx]);
+    if (cache != nullptr) {
+      auto it = cache->find(idx);
+      if (it != cache->end()) {
+        costs[i] = it->second;
+      } else {
+        costs[i] = ComputeStaticCost(instr, *configs[idx]);
+        (*cache)[idx] = costs[i];
+      }
+    } else {
+      costs[i] = ComputeStaticCost(instr, *configs[idx]);
+    }
     if (!costs[i].valid) return result;
   }
 

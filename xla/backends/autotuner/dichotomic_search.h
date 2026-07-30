@@ -253,6 +253,22 @@ std::vector<int> SelectConfigs(const DichotomicSearchSpace& space,
 int BestSampleIndex(const DichotomicSearchSpace& space,
                     absl::Span<const Sample> samples);
 
+// The {grid, bytes} static proxy for one config, computed from the EXPERIMENTAL
+// tiling analysis. `valid` is false on any analysis failure (config not
+// prunable). Exposed so callers can memoize it across the search phases.
+struct StaticCost {
+  int64_t grid = 0;
+  int64_t bytes = 0;
+  bool valid = false;
+};
+
+// Memoization cache mapping a config index (into the original config vector) to
+// its computed StaticCost. A config's static cost is phase-independent, so the
+// caller should keep ONE cache for the whole dichotomic search and pass it to
+// every ParetoPruneByStaticCost call -- this avoids rebuilding the (expensive)
+// TilingSpace + tile propagation for the same config in each of the 3 phases.
+using StaticCostCache = absl::flat_hash_map<int, StaticCost>;
+
 // Drops statically Pareto-dominated candidates from `indices` using
 // a device-model-FREE proxy computed from the EXPERIMENTAL tiling analysis of
 // `instr`:
@@ -271,9 +287,14 @@ int BestSampleIndex(const DichotomicSearchSpace& space,
 // `indices` unchanged -- so this is a strict, opt-in prune that can never
 // remove the Pareto frontier (where the runtime optimum lives) nor the current
 // best.
+//
+// `cache` (if non-null) memoizes per-config StaticCost across calls so the
+// tiling analysis for a given config is performed at most once for the whole
+// search rather than once per phase.
 std::vector<int> ParetoPruneByStaticCost(
     const HloInstruction& instr, absl::Span<const BackendConfig* const> configs,
-    absl::Span<const int> indices, int keep_index);
+    absl::Span<const int> indices, int keep_index,
+    StaticCostCache* cache = nullptr);
 
 }  // namespace xla
 
