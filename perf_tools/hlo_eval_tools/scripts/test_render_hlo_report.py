@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import csv
+import tempfile
 import unittest
+from pathlib import Path
 
 from render_hlo_report import (
     branch_sort_key,
@@ -11,6 +14,7 @@ from render_hlo_report import (
     relative_performance_ratio,
     render_report,
     workload_name,
+    write_html_report,
 )
 
 
@@ -200,6 +204,28 @@ class HtmlReportTest(unittest.TestCase):
                 comparison_rows=self.rows,
                 threshold_percent=None,
                 top_movers=10,
+            )
+
+    def test_write_html_report_creates_default_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            with (output_dir / "comparison.csv").open(
+                "w", newline="", encoding="utf-8"
+            ) as stream:
+                writer = csv.DictWriter(
+                    stream, fieldnames=list(self.rows[0])
+                )
+                writer.writeheader()
+                writer.writerows(self.rows)
+            output = write_html_report(
+                output_dir=output_dir,
+                manifest=self.manifest,
+                summary=self.summary,
+            )
+            self.assertEqual(output, output_dir / "comparison_report.html")
+            self.assertIn(
+                "XLA HLO Performance Trend Report",
+                output.read_text(encoding="utf-8"),
             )
 
     def test_candidate_label_is_used_across_html_report(self) -> None:

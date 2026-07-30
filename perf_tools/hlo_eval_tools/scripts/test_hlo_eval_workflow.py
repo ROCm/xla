@@ -136,6 +136,39 @@ common:clang_local --action_env=CLANG_COMPILER_PATH=/usr/lib/llvm-18/bin/clang
             ["rocm", "rocm_base", "clang_local"],
         )
 
+    def test_restore_metadata_keeps_result_and_working_tree_status(self) -> None:
+        with mock.patch.object(
+            orchestrator,
+            "source_checkout_state",
+            return_value={
+                "branch": "release",
+                "commit": "a" * 40,
+                "status": "",
+            },
+        ):
+            metadata = orchestrator.restored_source_checkout_metadata(
+                Path("source")
+            )
+        self.assertEqual(metadata["status"], "restored")
+        self.assertEqual(metadata["branch"], "release")
+        self.assertEqual(metadata["commit"], "a" * 40)
+        self.assertEqual(metadata["working_tree_status"], "")
+
+    def test_campaign_html_output_is_recorded_in_manifest(self) -> None:
+        manifest = {"comparison": {}}
+        expected = Path("output/comparison_report.html")
+        with mock.patch.object(
+            orchestrator, "write_html_report", return_value=expected
+        ) as renderer:
+            output = orchestrator.generate_campaign_html_report(
+                Path("output"), manifest
+            )
+        self.assertEqual(output, expected)
+        self.assertEqual(
+            manifest["comparison"]["html_report"], str(expected)
+        )
+        renderer.assert_called_once()
+
 
 class StructuredTargetsTest(unittest.TestCase):
     def test_loads_structured_targets_and_checked_in_example(self) -> None:

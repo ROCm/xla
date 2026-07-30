@@ -905,6 +905,28 @@ matrixSearch.addEventListener("input", () => {{
 """
 
 
+def write_html_report(
+    *,
+    output_dir: Path,
+    manifest: dict[str, Any],
+    summary: dict[str, Any],
+    threshold_percent: float | None = None,
+    top_movers: int = 12,
+    output: Path | None = None,
+) -> Path:
+    rows = load_comparison_rows(output_dir / "comparison.csv")
+    rendered = render_report(
+        manifest=manifest,
+        summary=summary,
+        comparison_rows=rows,
+        threshold_percent=threshold_percent,
+        top_movers=top_movers,
+    )
+    output_path = output or output_dir / "comparison_report.html"
+    output_path.write_text(rendered, encoding="utf-8")
+    return output_path
+
+
 def main() -> int:
     args = parse_args()
     if args.top_movers < 1:
@@ -914,20 +936,19 @@ def main() -> int:
     output_dir = args.output_dir.expanduser().resolve()
     manifest = load_json(output_dir / "manifest.json")
     summary = load_json(output_dir / "comparison_summary.json")
-    rows = load_comparison_rows(output_dir / "comparison.csv")
-    rendered = render_report(
-        manifest=manifest,
-        summary=summary,
-        comparison_rows=rows,
-        threshold_percent=args.threshold_percent,
-        top_movers=args.top_movers,
-    )
     output = (
         args.output.expanduser().resolve()
         if args.output
         else output_dir / "comparison_report.html"
     )
-    output.write_text(rendered, encoding="utf-8")
+    output = write_html_report(
+        output_dir=output_dir,
+        manifest=manifest,
+        summary=summary,
+        threshold_percent=args.threshold_percent,
+        top_movers=args.top_movers,
+        output=output,
+    )
     print(output)
     return 0
 

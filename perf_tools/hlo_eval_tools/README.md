@@ -640,7 +640,7 @@ The output contains:
   branch_summary.csv
   comparison_summary.json
   comparison_report.md
-  comparison_report.html  # when the HTML renderer is run
+  comparison_report.html
   live_control_<commit>/
     ...
   <remote_ref>_<commit>/
@@ -665,7 +665,8 @@ Candidate cells use `candidate / historical reference` ratios where less than
 1.0x is faster and greater than 1.0x is slower; groups of at most three live
 targets keep the report readable.
 
-The optional HTML report separates two questions that must not be conflated:
+The automatically generated HTML report separates two questions that must not
+be conflated:
 
 - **historical relative performance** uses
   `historical latency / live latency`, where greater than `1.0x` is faster;
@@ -693,6 +694,10 @@ python3 perf_tools/hlo_eval_tools/scripts/compare_hlo_branch_results.py \
 python3 perf_tools/hlo_eval_tools/scripts/render_hlo_report.py \
   --output-dir /path/to/result-directory
 ```
+
+The campaign generates both Markdown and HTML reports automatically. The
+standalone commands above are for regenerating reports after copying or
+reviewing a completed campaign.
 
 Manual and automatic comparison use the same reference inventory and
 `comparison_target_ids` recorded in the schema-v2 manifest, so removed refs do

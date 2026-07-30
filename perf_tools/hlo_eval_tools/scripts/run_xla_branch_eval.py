@@ -21,6 +21,7 @@ from typing import Any
 
 from compare_hlo_branch_results import select_comparison_targets, write_comparison
 from reference_results import reference_inventory
+from render_hlo_report import write_html_report
 
 
 UPSTREAM_URL = "https://github.com/openxla/xla.git"
@@ -278,6 +279,18 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
         json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     temporary.replace(path)
+
+
+def generate_campaign_html_report(
+    output_dir: Path, manifest: dict[str, Any]
+) -> Path:
+    output = write_html_report(
+        output_dir=output_dir,
+        manifest=manifest,
+        summary=manifest["comparison"],
+    )
+    manifest["comparison"]["html_report"] = str(output)
+    return output
 
 
 def read_refs(path: Path) -> list[str]:
@@ -1056,6 +1069,17 @@ def source_checkout_state(repo: Path) -> dict[str, str | None]:
     }
 
 
+def restored_source_checkout_metadata(repo: Path) -> dict[str, str | None]:
+    state = source_checkout_state(repo)
+    return {
+        "status": "restored",
+        "restored_at": utc_now(),
+        "branch": state["branch"],
+        "commit": state["commit"],
+        "working_tree_status": state["status"],
+    }
+
+
 def acquire_source_lock(repo: Path, output_dir: Path) -> int:
     if os.name != "posix":
         raise RuntimeError("campaign locking requires a POSIX execution environment")
@@ -1380,6 +1404,7 @@ def main() -> int:
         ).expanduser().resolve()
         eval_script = tools_root / "run_hlo_eval.sh"
         comparison_script = tools_root / "scripts/compare_hlo_branch_results.py"
+        html_report_script = tools_root / "scripts/render_hlo_report.py"
         reference_results_script = tools_root / "scripts/reference_results.py"
         orchestrator_script = Path(__file__).resolve()
 
@@ -1414,6 +1439,7 @@ def main() -> int:
             orchestrator_script,
             eval_script,
             comparison_script,
+            html_report_script,
             reference_results_script,
         ]
         for required in required_files:
@@ -1542,6 +1568,10 @@ def main() -> int:
                     "path": str(comparison_script),
                     "sha256": sha256_file(comparison_script),
                 },
+                "html_report_script": {
+                    "path": str(html_report_script),
+                    "sha256": sha256_file(html_report_script),
+                },
                 "reference_results_script": {
                     "path": str(reference_results_script),
                     "sha256": sha256_file(reference_results_script),
@@ -1614,6 +1644,12 @@ def main() -> int:
                     manifest["reference_dataset"]["inventory"],
                 ),
             }
+            previous_html_report = previous["inputs"].get("html_report_script")
+            if previous_html_report is not None:
+                checks["HTML report script"] = (
+                    previous_html_report["sha256"],
+                    manifest["inputs"]["html_report_script"]["sha256"],
+                )
             previous_perf = previous["inputs"]["perf_tools_repo"]
             current_perf = manifest["inputs"]["perf_tools_repo"]
             checks["HLO path"] = (
@@ -1664,6 +1700,9 @@ def main() -> int:
             manifest["inputs"]["perf_tools_repo"]["hlo_path"] = (
                 current_perf["hlo_path"]
             )
+            manifest["inputs"]["html_report_script"] = current_plan["inputs"][
+                "html_report_script"
+            ]
             manifest["targets"] = campaign_targets
             manifest["active_refs"] = refs
             manifest["target_file_format"] = target_file_format
@@ -1727,6 +1766,7 @@ def main() -> int:
         results = [results_by_id[target["id"]] for target in targets]
         failed = [result for result in results if result["status"] != "completed"]
         comparison_failed = False
+        comparison_generated = False
         try:
             require_unchanged_hlo_inventory(
                 hlo_path,
@@ -1740,6 +1780,7 @@ def main() -> int:
                 reference_dataset=manifest["reference_dataset"],
                 live_control_id=manifest["live_control_id"],
             )
+            comparison_generated = True
             comparison_failed = (
                 manifest["comparison"]["validation"]["status"] != "passed"
             )
@@ -1771,6 +1812,18 @@ def main() -> int:
             "failed": len(failed),
             "comparison_failed": comparison_failed,
         }
+        if comparison_generated:
+            try:
+                generate_campaign_html_report(output_dir, manifest)
+            except (KeyError, OSError, TypeError, ValueError) as error:
+                comparison_failed = True
+                manifest["comparison"]["html_report_error"] = str(error)
+                manifest["status"] = "completed_with_failures"
+                manifest["summary"]["comparison_failed"] = True
+                print(
+                    f"error: HTML report generation failed: {error}",
+                    file=sys.stderr,
+                )
         write_json(manifest_path, manifest)
         return 0 if not failed and not comparison_failed else 1
     except CampaignInterrupted as error:
@@ -1808,11 +1861,7 @@ def main() -> int:
         if restore_source and source_repo is not None and source_original_state is not None:
             try:
                 restore_source_checkout(source_repo, source_original_state)
-                restore_result = {
-                    "status": "restored",
-                    "restored_at": utc_now(),
-                    **source_checkout_state(source_repo),
-                }
+                restore_result = restored_source_checkout_metadata(source_repo)
             except (OSError, RuntimeError, ValueError) as error:
                 finalization_failed = True
                 restore_result = {
