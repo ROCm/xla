@@ -103,6 +103,22 @@ absl::StatusOr<std::vector<Shape>> GetCollectiveUnmanagedKernelArguments(
 mlir::LogicalResult RewriteAllReduce(mlir::stablehlo::AllReduceOp op,
                                      mlir::PatternRewriter& rewriter);
 
+// Rewrites stablehlo all-gather op to a triton implementation using
+// collective (symmetric) memory.  One-shot algorithm for each rank r:
+//   1. [PRE-BARRIER]       Intra-block barrier – ensures local input is
+//                          visible to peers via NVLink before the copy.
+//   2. [COPY]              Write local input slice → rank r's own symmetric
+//                          scratch buffer (EmitCopyToSymmetric).
+//   3. [POST-COPY BARRIER] Wait for all N ranks to finish their copies via
+//                          mtx::BlockBarrierOp(signal_buffers, rank,
+//                          signal_value, N).
+//   4. [GATHER]            For each peer r' in [0..N):
+//                            dst[r'*local_size .. (r'+1)*local_size]
+//                              ← remote_scratch[r']
+//   5. Done – output is the full gathered tensor.
+mlir::LogicalResult RewriteAllGather(mlir::stablehlo::AllGatherOp op,
+                                     mlir::PatternRewriter& rewriter);
+
 // Creates a CollectiveKernelSpec for a given collective or fusion instruction.
 absl::StatusOr<CollectiveKernelSpec> CreateCollectiveKernelSpec(
     const HloInstruction* instr, const LaunchDimensions& launch_dimensions);
