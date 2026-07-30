@@ -566,6 +566,7 @@ The output contains:
   branch_summary.csv
   comparison_summary.json
   comparison_report.md
+  comparison_report.html  # when the HTML renderer is run
   live_control_<commit>/
     ...
   <remote_ref>_<commit>/
@@ -589,6 +590,22 @@ live pinned control, then presents the branch overview and per-HLO matrices.
 Candidate cells use `candidate / historical reference` ratios where less than
 1.0x is faster and greater than 1.0x is slower; groups of at most three live
 targets keep the report readable.
+
+The optional HTML report separates two questions that must not be conflated:
+
+- **historical relative performance** uses
+  `historical latency / live latency`, where greater than `1.0x` is faster;
+- **candidate versus live control** uses
+  `live-control latency / candidate latency`, where greater than `1.0x` is
+  faster.
+
+These inverse-latency performance ratios assume fixed work. Raw latency tables
+remain explicitly labeled with the original convention, where lower is better.
+The default `2%` reporting band applies to candidate-versus-live-control
+evidence. Historical-to-live drift is displayed independently and never widens
+that band. `Data validation passed` means the expected CSV/module data is
+complete and readable; it is not a performance acceptance result.
+
 Malformed CSVs, missing workloads, and missing modules fail comparison validation
 and make the campaign exit nonzero; missing entries remain in the generated
 reports when the available CSVs are otherwise readable.
@@ -597,6 +614,9 @@ Reports can be regenerated from the campaign manifest with:
 
 ```bash
 python3 perf_tools/hlo_eval_tools/scripts/compare_hlo_branch_results.py \
+  --output-dir /path/to/result-directory
+
+python3 perf_tools/hlo_eval_tools/scripts/render_hlo_report.py \
   --output-dir /path/to/result-directory
 ```
 
