@@ -90,6 +90,30 @@ std::string GetDeviceXLineName(
   return absl::StrCat(line_name, "(", absl::StrJoin(type_names, ","), ")");
 }
 
+// Renders the copy direction for the "kind:" field of the memcpy_details stat.
+// The event type already encodes the direction: MemcpyEvent() derives it from
+// the rocprofiler MEMORY_COPY operation, and HipApiEvent() from the HIP copy
+// API id. The names are spelled the way the driver-API entry points are
+// (hipMemcpyHtoD and friends). This is the transfer direction, not the memory
+// kind: the CUDA backend's memcpy_details reports kind_src:/kind_dst: instead,
+// naming the source and destination memory spaces, which rocprofiler does not
+// expose.
+const char* GetMemcpyKindName(RocmTracerEventType type) {
+  switch (type) {
+    case RocmTracerEventType::MemcpyH2D:
+      return "HtoD";
+    case RocmTracerEventType::MemcpyD2H:
+      return "DtoH";
+    case RocmTracerEventType::MemcpyD2D:
+      return "DtoD";
+    case RocmTracerEventType::MemcpyP2P:
+      return "PtoP";
+    default:
+      // MemcpyOther: a copy API whose direction could not be determined.
+      return "Unknown";
+  }
+}
+
 void PrintRocmTracerEvent(const RocmTracerEvent& event,
                           absl::string_view message = {},
                           uint64_t start_walltime_ns = 0,
@@ -241,9 +265,8 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
     VLOG(7) << "Add Memcpy stat";
     const auto& memcpy_info = event.memcpy_info;
     std::string memcpy_details = absl::StrCat(
-        // TODO(rocm-profiler): we need to discover the memory kind similar
-        // to CUDA
-        "kind:", "Unknown", " size:", memcpy_info.num_bytes,
+        "kind:", GetMemcpyKindName(event.type),
+        " size:", memcpy_info.num_bytes,
         " dest:", memcpy_info.destination, " async:", memcpy_info.async);
     xevent.AddStatValue(
         *plane->GetOrCreateStatMetadata(
@@ -665,6 +688,11 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
     api_event.stream_id = item.stream_id;
     switch (api_event.type) {
       case RocmTracerEventType::Kernel:
+        // front() only. The host-side API row has no dispatch geometry of its
+        // own, so borrowing the first activity's is the best available answer
+        // for an API-level row; when one correlation_id covers many dispatches
+        // (hipGraphLaunch) the remaining ones are not represented here. The
+        // per-dispatch rows on the device plane carry their own exact data.
         api_event.kernel_info = item.kernel_info;
         aggregated_events.push_back(api_event);
         break;
@@ -723,10 +751,17 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
       continue;
     }
 
+    // Activity records are the authoritative source for per-dispatch detail:
+    // KernelEvent() fills KernelDetails straight from the rocprofiler
+    // kernel-dispatch record. Do NOT copy detail payloads down from the API
+    // event here. The API event's copy is at best a duplicate of front()'s
+    // data -- wrong for every dispatch after the first when one correlation_id
+    // covers many, as with hipGraphLaunch -- and at worst a type-punned read of
+    // a different union member, as when a copy API reclassified to MemcpyOther
+    // has a ROCclr blit *kernel* for its activity.
     for (auto& activity_event : activity_iter.second) {
       switch (activity_event.type) {
         case RocmTracerEventType::Kernel:
-          activity_event.kernel_info = api_event->kernel_info;
           PrintRocmTracerEvent(activity_event,
                                ". activity event from api_event.");
           aggregated_events.push_back(activity_event);
@@ -736,11 +771,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
         case RocmTracerEventType::MemcpyH2D:
         case RocmTracerEventType::MemcpyD2D:
         case RocmTracerEventType::MemcpyOther:
-          // activity_event.memcpy_info = api_event->memcpy_info;
-          aggregated_events.push_back(activity_event);
-          break;
         case RocmTracerEventType::Memset:
-          activity_event.memset_info = api_event->memset_info;
           aggregated_events.push_back(activity_event);
           break;
 
