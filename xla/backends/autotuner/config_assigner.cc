@@ -741,49 +741,19 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
   auto collect_samples =
       [&](absl::Span<const ConfigRunner::ConfigProfile> profiles,
           std::vector<Sample>* out) {
-        std::vector<const BackendConfig*> singleton(1);
         for (const ConfigRunner::ConfigProfile& p : profiles) {
           if (p.failure.has_value() || p.config.backend_config == nullptr) {
             continue;
           }
-          singleton[0] = p.config.backend_config.get();
-          absl::StatusOr<DichotomicSearchSpace> single =
-              DichotomicSearchSpace::Build(singleton);
-          if (!single.ok()) {
+          Coord coord;
+          if (!space.CoordForConfig(*p.config.backend_config, &coord)) {
             continue;
           }
-          Coord coord(space.axes().size(), 0);
-          const std::vector<ParameterAxis>& single_axes = single->axes();
-          bool ok = true;
-          for (int a = 0; a < space.axes().size(); ++a) {
-            int64_t value = -1;
-            for (const ParameterAxis& sa : single_axes) {
-              if (sa.name == space.axes()[a].name && !sa.values.empty()) {
-                value = sa.values.front();
-                break;
-              }
-            }
-            const std::vector<int64_t>& vals = space.axes()[a].values;
-            int found = -1;
-            for (int i = 0; i < vals.size(); ++i) {
-              if (vals[i] == value) {
-                found = i;
-                break;
-              }
-            }
-            if (found < 0) {
-              ok = false;
-              break;
-            }
-            coord[a] = found;
-          }
-          if (ok) {
-            const double time_ms = absl::ToDoubleMilliseconds(p.duration);
-            VLOG(2) << "Dichotomic search: tested config {"
-                    << config_to_string(coord) << "} -> " << time_ms << " ms";
-            out->push_back(
-                Sample{std::move(coord), absl::ToDoubleSeconds(p.duration)});
-          }
+          const double time_ms = absl::ToDoubleMilliseconds(p.duration);
+          VLOG(2) << "Dichotomic search: tested config {"
+                  << config_to_string(coord) << "} -> " << time_ms << " ms";
+          out->push_back(
+              Sample{std::move(coord), absl::ToDoubleSeconds(p.duration)});
         }
       };
 

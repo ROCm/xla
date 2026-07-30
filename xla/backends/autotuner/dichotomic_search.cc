@@ -512,6 +512,39 @@ int DichotomicSearchSpace::SnapIndex(const Coord& coord) const {
   return best;
 }
 
+bool DichotomicSearchSpace::CoordForConfig(const BackendConfig& config,
+                                           Coord* coord) const {
+  // Extract this config's knobs in the same deterministic order used to build
+  // the axes. `local_names` must line up with axes_ by name.
+  std::vector<std::string> local_names;
+  std::vector<int64_t> values = ExtractKnobs(config, &local_names);
+  if (static_cast<int>(values.size()) != static_cast<int>(axes_.size())) {
+    return false;
+  }
+  coord->assign(axes_.size(), 0);
+  for (int a = 0; a < static_cast<int>(axes_.size()); ++a) {
+    // Names must match positionally (ExtractKnobs is deterministic), but verify
+    // to be safe against any future divergence.
+    if (a < static_cast<int>(local_names.size()) &&
+        local_names[a] != axes_[a].name) {
+      return false;
+    }
+    const std::vector<int64_t>& vals = axes_[a].values;
+    // vals is small and sorted ascending; a linear scan is fine and avoids
+    // building a per-axis map. (Axes typically have <= ~10 distinct values.)
+    int found = -1;
+    for (int i = 0; i < static_cast<int>(vals.size()); ++i) {
+      if (vals[i] == values[a]) {
+        found = i;
+        break;
+      }
+    }
+    if (found < 0) return false;
+    (*coord)[a] = found;
+  }
+  return true;
+}
+
 SearchProfile MakeProfile(const DichotomicSearchSpace& space,
                           HloOpcode opcode) {
   return MakeProfile(space, opcode, AxisRoleHints{});

@@ -178,6 +178,14 @@ class DichotomicSearchSpace {
   // vector). `index` must be in [0, num_configs()). Inverse of LookupIndex.
   const Coord& CoordOf(int index) const { return coords_[index]; }
 
+  // Maps an arbitrary Triton/block-level `config` to its coordinate in this
+  // space by extracting the same knobs used to build the axes and looking up
+  // each knob value's index on its axis. Returns false (and leaves `*coord`
+  // unspecified) if the config's knob set is inconsistent with this space or a
+  // value is not present on its axis. This avoids rebuilding a whole
+  // DichotomicSearchSpace just to recover one config's coordinate.
+  bool CoordForConfig(const BackendConfig& config, Coord* coord) const;
+
   int num_configs() const { return num_configs_; }
 
  private:
