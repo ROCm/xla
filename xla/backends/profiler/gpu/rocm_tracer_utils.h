@@ -19,6 +19,7 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -104,6 +105,23 @@ enum class RocmTracerEventType {
 
 const char* GetRocmTracerEventTypeName(const RocmTracerEventType& type);
 
+// What a HIP copy API asked for, recovered from its callback-tracing
+// arguments.
+//
+// Neither buffered source can supply this. The buffered HIP API record carries
+// no arguments at all, and ROCclr implements most hipMemcpy* calls as blit
+// *kernel* dispatches rather than SDMA transfers, so no MEMORY_COPY activity
+// record is emitted for them either -- which is why these copies used to
+// report a size of zero (or, before the union was replaced, whatever a
+// workgroup dimension happened to look like). Callback tracing is the only
+// path that sees the typed arguments.
+struct CopyApiDetails {
+  // Direction as derived from the API id, or from the hipMemcpyKind argument
+  // for the kind-taking variants. MemcpyOther when it cannot be determined.
+  RocmTracerEventType type = RocmTracerEventType::MemcpyOther;
+  MemcpyDetails details;
+};
+
 enum class RocmTracerEventSource {
   Invalid = 0,
   ApiCallback,
@@ -173,6 +191,15 @@ struct RocmTracerEvent {
   // MemsetDetails for Memset, and so on. Prefer the accessors below to
   // touching this directly.
   RocmTracerEventDetails details;
+
+  // Set on a Kernel event that is really a ROCclr blit copy (ROCm implements
+  // most hipMemcpy* calls as a kernel dispatch rather than an SDMA transfer).
+  // Deliberately outside the variant: such a dispatch is not a kernel *or* a
+  // copy, it is both, and both sets of facts are worth exporting -- the real
+  // grid geometry the GPU ran, and the direction and byte count the user asked
+  // to move. `type` stays Kernel for these, so the direction has to travel
+  // here rather than being read back off the event.
+  std::optional<CopyApiDetails> blit_copy_info;
 
   // Defines the checked accessor triplet for one detail alternative:
   //   const T* name() const  -- nullptr unless T is the active alternative, so
@@ -246,6 +273,27 @@ class AnnotationMap {
   // Disable copy and move.
   AnnotationMap(const AnnotationMap&) = delete;
   AnnotationMap& operator=(const AnnotationMap&) = delete;
+};
+
+// Copy API arguments stashed on callback entry and rejoined to the buffered
+// records by correlation id -- the buffered path never sees them itself.
+class CopyInfoMap {
+ public:
+  explicit CopyInfoMap(uint64_t max_size) : max_size_(max_size) {}
+  void Add(uint32_t correlation_id, const CopyApiDetails& copy_details);
+  std::optional<CopyApiDetails> LookUp(uint32_t correlation_id);
+  void Clear();
+
+ private:
+  const uint64_t max_size_;
+  absl::Mutex mutex_;
+  absl::flat_hash_map<uint32_t, CopyApiDetails> correlation_map_
+      ABSL_GUARDED_BY(mutex_);
+
+ public:
+  // Disable copy and move.
+  CopyInfoMap(const CopyInfoMap&) = delete;
+  CopyInfoMap& operator=(const CopyInfoMap&) = delete;
 };
 
 }  // namespace profiler

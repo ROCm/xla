@@ -23,6 +23,7 @@ limitations under the License.
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -125,6 +126,105 @@ bool isCopyApi(uint32_t id) {
   return false;
 }
 
+namespace {
+
+// Maps the hipMemcpyKind argument of the direction-taking copy APIs onto our
+// event types. hipMemcpyDefault asks the runtime to infer the direction from
+// the pointer attributes, which we cannot replay here, and HostToHost never
+// touches the GPU -- both stay MemcpyOther rather than guessing.
+RocmTracerEventType MemcpyKindToEventType(hipMemcpyKind kind) {
+  switch (kind) {
+    case hipMemcpyHostToDevice:
+      return RocmTracerEventType::MemcpyH2D;
+    case hipMemcpyDeviceToHost:
+      return RocmTracerEventType::MemcpyD2H;
+    case hipMemcpyDeviceToDevice:
+      return RocmTracerEventType::MemcpyD2D;
+    default:
+      return RocmTracerEventType::MemcpyOther;
+  }
+}
+
+// Recovers direction and byte count from a HIP copy API's callback arguments.
+//
+// Each entry point has a differently shaped args struct, so this handles the
+// variants that carry a plain `sizeBytes` and returns nullopt for the rest --
+// the 2D/3D/array/symbol forms describe their extent through pitches,
+// descriptors or symbol lookups, and inventing a number for them would be
+// worse than reporting none. The covered set is what JAX/XLA actually issues.
+std::optional<CopyApiDetails> ExtractCopyApiDetails(
+    uint32_t operation, const rocprofiler_hip_api_args_t& args) {
+  CopyApiDetails copy;
+  switch (operation) {
+    // Direction carried in a hipMemcpyKind argument.
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpy:
+      copy.type = MemcpyKindToEventType(args.hipMemcpy.kind);
+      copy.details.num_bytes = args.hipMemcpy.sizeBytes;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyAsync:
+      copy.type = MemcpyKindToEventType(args.hipMemcpyAsync.kind);
+      copy.details.num_bytes = args.hipMemcpyAsync.sizeBytes;
+      copy.details.async = true;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyWithStream:
+      copy.type = MemcpyKindToEventType(args.hipMemcpyWithStream.kind);
+      copy.details.num_bytes = args.hipMemcpyWithStream.sizeBytes;
+      copy.details.async = true;
+      break;
+
+    // Direction implied by the entry point itself.
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyDtoD:
+      copy.type = RocmTracerEventType::MemcpyD2D;
+      copy.details.num_bytes = args.hipMemcpyDtoD.sizeBytes;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyDtoDAsync:
+      copy.type = RocmTracerEventType::MemcpyD2D;
+      copy.details.num_bytes = args.hipMemcpyDtoDAsync.sizeBytes;
+      copy.details.async = true;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyDtoH:
+      copy.type = RocmTracerEventType::MemcpyD2H;
+      copy.details.num_bytes = args.hipMemcpyDtoH.sizeBytes;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyDtoHAsync:
+      copy.type = RocmTracerEventType::MemcpyD2H;
+      copy.details.num_bytes = args.hipMemcpyDtoHAsync.sizeBytes;
+      copy.details.async = true;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyHtoD:
+      copy.type = RocmTracerEventType::MemcpyH2D;
+      copy.details.num_bytes = args.hipMemcpyHtoD.sizeBytes;
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyHtoDAsync:
+      copy.type = RocmTracerEventType::MemcpyH2D;
+      copy.details.num_bytes = args.hipMemcpyHtoDAsync.sizeBytes;
+      copy.details.async = true;
+      break;
+
+    // Peer-to-peer: the only forms that name a destination device.
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyPeer:
+      copy.type = RocmTracerEventType::MemcpyP2P;
+      copy.details.num_bytes = args.hipMemcpyPeer.sizeBytes;
+      copy.details.destination =
+          static_cast<uint32_t>(args.hipMemcpyPeer.dstDeviceId);
+      break;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipMemcpyPeerAsync:
+      copy.type = RocmTracerEventType::MemcpyP2P;
+      copy.details.num_bytes = args.hipMemcpyPeerAsync.sizeBytes;
+      copy.details.destination =
+          static_cast<uint32_t>(args.hipMemcpyPeerAsync.dstDeviceId);
+      copy.details.async = true;
+      break;
+
+    default:
+      // 2D/3D/array/symbol copies: extent is not a single sizeBytes field.
+      return std::nullopt;
+  }
+  return copy;
+}
+
+}  // namespace
+
 // ----------------------------------------------------------------------------
 // Stub implementations for RocmTracer static functions expected by
 // rocprofiler-sdk.
@@ -165,6 +265,7 @@ absl::Status RocmTracer::Enable(const RocmTracerOptions& options,
         absl::StrCat("rocprofiler_start_context failed: ", errstr));
   }
   annotation_map_.Clear();
+  copy_info_map_.Clear();
   api_tracing_enabled_ = true;
   activity_tracing_enabled_ = true;
   VLOG(1) << "GpuTracer started with number of GPUs = " << NumGpus();
@@ -224,15 +325,19 @@ void RocmTracer::HipApiEvent(const rocprofiler_record_header_t* hdr,
   }
 
   if (isCopyApi(rec.operation)) {
-    // The buffered API record has no direction or size field, and this API's
-    // activity is frequently a ROCclr blit *kernel* rather than a MEMORY_COPY
-    // record, so there is nothing to recover the direction from here.
-    // MemcpyOther is the honest answer. Swap the payload to match the new type
-    // so the two can never disagree -- leaving KernelDetails live under a
-    // Memcpy* type is what used to make downstream reads reinterpret a
-    // workgroup dimension as a byte count.
+    // The buffered API record has no direction or size field of its own, so
+    // recover both from the arguments the callback service saw on entry. Swap
+    // the payload to match the new type so the two can never disagree --
+    // leaving KernelDetails live under a Memcpy* type is what used to make
+    // downstream reads reinterpret a workgroup dimension as a byte count.
+    // MemcpyOther with a zero size remains the honest answer for the copy
+    // shapes ExtractCopyApiDetails() declines to guess at.
     trace_event->type = RocmTracerEventType::MemcpyOther;
     trace_event->set_memcpy_info(MemcpyDetails{});
+    if (auto copy = copy_info_map()->LookUp(trace_event->correlation_id)) {
+      trace_event->type = copy->type;
+      trace_event->set_memcpy_info(copy->details);
+    }
   }
 }
 
@@ -345,6 +450,18 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
 
   auto it = kernel_info_.find(kinfo.kernel_id);
   if (it != kernel_info_.end()) trace_event->name = it->second.name;
+
+  // A dispatch whose correlation id belongs to a copy API is a ROCclr blit
+  // kernel (__amd_rocclr_copyBuffer and friends) standing in for an SDMA
+  // transfer. It stays a Kernel event -- the grid geometry above is real and
+  // worth keeping -- but it also gets the byte count the user asked to move,
+  // which no activity record for it would otherwise carry.
+  //
+  // Gating on the correlation id rather than on the kernel name is deliberate:
+  // a recorded copy API for this id is definitive, whereas the blit kernel
+  // names are ROCclr internals that have changed between ROCm releases.
+  trace_event->blit_copy_info =
+      copy_info_map()->LookUp(trace_event->correlation_id);
 }
 
 void RocmTracer::TracingCallback(rocprofiler_context_id_t context,
@@ -587,6 +704,20 @@ absl::Status RocmTracer::InitProfiling(void* tool_data) {
                       tsl::profiler::AnnotationStack::GetScopeRangeIds();
                   RocmTracer::GetRocmTracerSingleton().annotation_map()->Add(
                       record.correlation_id.internal, annotation, range_ids);
+                }
+                // Callback tracing is the only path that sees a copy API's
+                // arguments; the buffered record it will later produce has
+                // none. Stash the size and direction now, keyed by correlation
+                // id, for HipApiEvent() and KernelEvent() to rejoin.
+                if (isCopyApi(record.operation) && record.payload != nullptr) {
+                  const auto& data = *static_cast<
+                      const rocprofiler_callback_tracing_hip_api_data_t*>(
+                      record.payload);
+                  if (auto copy =
+                          ExtractCopyApiDetails(record.operation, data.args)) {
+                    RocmTracer::GetRocmTracerSingleton().copy_info_map()->Add(
+                        record.correlation_id.internal, *copy);
+                  }
                 }
               }
             },

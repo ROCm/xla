@@ -19,6 +19,7 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -186,6 +187,52 @@ TEST(RocmTracerTest, AnnotationMapClear) {
   EXPECT_TRUE(map->LookUp(101).empty());
 }
 
+// CopyInfoMap is the bridge that makes real copy sizes reachable: the HIP
+// copy APIs' arguments are visible only on the callback path, while the
+// records that need them arrive later on the buffered path. Correlation id is
+// the only thing the two share.
+TEST(RocmTracerTest, CopyInfoMapRoundTrips) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  CopyInfoMap* map = tracer.copy_info_map();
+  ASSERT_NE(map, nullptr);
+  map->Clear();
+
+  CopyApiDetails h2d;
+  h2d.type = RocmTracerEventType::MemcpyH2D;
+  h2d.details.num_bytes = 1048576;
+  h2d.details.async = false;
+  map->Add(4200, h2d);
+
+  CopyApiDetails p2p;
+  p2p.type = RocmTracerEventType::MemcpyP2P;
+  p2p.details.num_bytes = 64;
+  p2p.details.destination = 3;
+  p2p.details.async = true;
+  map->Add(4201, p2p);
+
+  auto found_h2d = map->LookUp(4200);
+  ASSERT_TRUE(found_h2d.has_value());
+  EXPECT_EQ(found_h2d->type, RocmTracerEventType::MemcpyH2D);
+  EXPECT_EQ(found_h2d->details.num_bytes, 1048576u);
+  EXPECT_FALSE(found_h2d->details.async);
+
+  auto found_p2p = map->LookUp(4201);
+  ASSERT_TRUE(found_p2p.has_value());
+  EXPECT_EQ(found_p2p->type, RocmTracerEventType::MemcpyP2P);
+  EXPECT_EQ(found_p2p->details.destination, 3u);
+  EXPECT_TRUE(found_p2p->details.async);
+
+  // A correlation id that never went through a copy API must report absence
+  // rather than a default-constructed record: the callers distinguish "this
+  // dispatch is a blit copy" from "this dispatch is an ordinary kernel"
+  // purely by whether the lookup finds anything.
+  EXPECT_FALSE(map->LookUp(4202).has_value());
+
+  map->Clear();
+  EXPECT_FALSE(map->LookUp(4200).has_value());
+  EXPECT_FALSE(map->LookUp(4201).has_value());
+}
+
 // Simple collector that tracks received events for verification.
 class EventCapturingCollector : public RocmTraceCollector {
  public:
@@ -193,6 +240,7 @@ class EventCapturingCollector : public RocmTraceCollector {
 
   void AddEvent(RocmTracerEvent&& event, bool is_auxiliary) override {
     event_count_++;
+    events_.push_back(std::move(event));
   }
 
   void OnEventsDropped(const std::string& reason,
@@ -201,6 +249,7 @@ class EventCapturingCollector : public RocmTraceCollector {
   void Export(tsl::profiler::XSpace* space) override {}
 
   int event_count() const { return event_count_; }
+  const std::vector<RocmTracerEvent>& events() const { return events_; }
 
  private:
   static RocmTraceCollectorOptions MakeCollectorOptions() {
@@ -212,6 +261,7 @@ class EventCapturingCollector : public RocmTraceCollector {
     return options;
   }
   int event_count_ = 0;
+  std::vector<RocmTracerEvent> events_;
 };
 
 std::unique_ptr<EventCapturingCollector> CreateEventCapturingCollector() {
@@ -251,6 +301,71 @@ TEST(RocmTracerTest, CapturesHipEvents) {
 
   EXPECT_GT(collector_ptr->event_count(), 0)
       << "Expected to capture at least one trace event";
+}
+
+// End-to-end guard on the copy size, against a real hipMemcpy. The buffered
+// HIP_RUNTIME_API record for a copy carries no arguments, and on ROCclr most
+// hipMemcpy* calls are serviced by a blit kernel rather than an SDMA engine,
+// so no MEMORY_COPY activity record is produced either. Both facts together
+// are why these copies used to reach the collector with a size of zero -- or,
+// through the old union, with a workgroup dimension standing in for one.
+TEST(RocmTracerTest, CopyApiSizeReachesCollector) {
+  int device_count = 0;
+  ASSERT_EQ(hipGetDeviceCount(&device_count), hipSuccess);
+  ASSERT_GT(device_count, 0) << "No HIP devices available";
+
+  constexpr size_t kNumBytes = 1024 * 1024;
+  std::vector<char> host_data(kNumBytes, 1);
+  void* device_data = nullptr;
+  ASSERT_EQ(hipMalloc(&device_data, kNumBytes), hipSuccess);
+
+  auto collector = CreateEventCapturingCollector();
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  RocmTracerOptions tracer_options{/*max_annotation_strings=*/1024 * 1024};
+  TF_ASSERT_OK(tracer.Enable(tracer_options, collector.get()));
+
+  ASSERT_EQ(hipMemcpy(device_data, host_data.data(), kNumBytes,
+                      hipMemcpyHostToDevice),
+            hipSuccess);
+  ASSERT_EQ(hipDeviceSynchronize(), hipSuccess);
+  absl::SleepFor(absl::Milliseconds(100));
+  tracer.Disable();
+  ASSERT_EQ(hipFree(device_data), hipSuccess);
+
+  // Look specifically at the host-side API row. Checking any event would be
+  // too weak: when ROCclr happens to service the copy with SDMA there is also
+  // a MEMORY_COPY activity record carrying the size independently, which would
+  // satisfy the assertion whether or not the API arguments were captured. The
+  // ApiCallback-sourced row has no other source for a byte count.
+  int api_rows = 0;
+  // Whether the GPU-side record is a blit kernel is a ROCclr scheduling
+  // decision (a staging buffer plus SDMA is the alternative), so its presence
+  // is reported rather than required -- but when it is a blit, the size it
+  // carries has to be the same one.
+  int blit_records = 0;
+  for (const auto& ev : collector->events()) {
+    if (ev.source == RocmTracerEventSource::ApiCallback &&
+        ev.name == "hipMemcpy") {
+      api_rows++;
+      EXPECT_EQ(ev.type, RocmTracerEventType::MemcpyH2D)
+          << "A 1 MiB host-to-device copy typed as "
+          << GetRocmTracerEventTypeName(ev.type);
+      ASSERT_NE(ev.memcpy_info(), nullptr)
+          << "hipMemcpy API row carries no MemcpyDetails";
+      EXPECT_EQ(ev.memcpy_info()->num_bytes, kNumBytes);
+      EXPECT_FALSE(ev.memcpy_info()->async);
+    }
+    if (ev.blit_copy_info.has_value()) {
+      blit_records++;
+      EXPECT_EQ(ev.blit_copy_info->details.num_bytes, kNumBytes);
+      EXPECT_EQ(ev.blit_copy_info->type, RocmTracerEventType::MemcpyH2D);
+    }
+  }
+
+  EXPECT_EQ(api_rows, 1) << "Expected exactly one hipMemcpy API row among "
+                         << collector->events().size() << " captured events";
+  LOG(INFO) << "hipMemcpy serviced by " << blit_records
+            << " blit kernel dispatch(es)";
 }
 
 // Regression guards: Disable() must stop the rocprofiler context it started

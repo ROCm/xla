@@ -23,6 +23,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/strings/string_view.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/profiler/utils/xplane_utils.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
@@ -33,6 +34,29 @@ namespace test {
 
 using tsl::profiler::FindOrAddMutablePlaneWithName;
 using tsl::profiler::XSpace;
+
+// Returns the text of the string-valued stat `stat_name` on the first event
+// named `event_name` in `plane`, or "" if there is no such event or stat.
+// String stats are interned: the XStat holds a ref_value indexing the plane's
+// stat_metadata rather than carrying the text inline.
+std::string FindStringStat(const tensorflow::profiler::XPlane& plane,
+                           absl::string_view event_name,
+                           absl::string_view stat_name) {
+  for (const auto& line : plane.lines()) {
+    for (const auto& ev : line.events()) {
+      if (plane.event_metadata().at(ev.metadata_id()).name() != event_name) {
+        continue;
+      }
+      for (const auto& stat : ev.stats()) {
+        if (plane.stat_metadata().at(stat.metadata_id()).name() != stat_name) {
+          continue;
+        }
+        return plane.stat_metadata().at(stat.ref_value()).name();
+      }
+    }
+  }
+  return "";
+}
 
 TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   RocmTraceCollectorOptions options;
@@ -318,6 +342,268 @@ TEST(RocmCollectorTest, DistinctKernelsUnderOneCorrelationIdKeepOwnDetails) {
   // shared kernel_details value, and neither may inherit the API event's.
   EXPECT_NE(details_by_kernel["gemm_kernel"],
             details_by_kernel["elementwise_kernel"]);
+}
+
+// Regression test for the fabricated memcpy sizes. ROCm implements most
+// hipMemcpy* calls as a ROCclr blit *kernel* dispatch rather than an SDMA
+// transfer, so rocprofiler emits a KERNEL_DISPATCH record and no MEMORY_COPY
+// record at all. The copy's byte count exists nowhere in the buffered data;
+// only the HIP API callback arguments carry it, which is what CopyInfoMap now
+// stashes and both event paths rejoin by correlation id.
+//
+// Both halves of the export are checked here:
+//   - the host API row must report the real byte count. It used to adopt the
+//     blit kernel's KernelDetails through the union and print the workgroup
+//     dimension as a size ("size:512 dest:0 async:1") for a copy that in fact
+//     moved a megabyte;
+//   - the GPU dispatch row must report its true grid geometry *and* the copy
+//     size, so a blit copy is not invisible to memcpy-aware tooling -- before
+//     this it appeared only as an oddly-named kernel.
+TEST(RocmCollectorTest, BlitCopyKernelReportsCopySizeAndGeometry) {
+  RocmTraceCollectorOptions options;
+  options.max_callback_api_events = 100;
+  options.max_activity_api_events = 100;
+  options.max_annotation_strings = 100;
+  options.num_gpus = 1;
+
+  constexpr uint64_t kStartWallTimeNs = 1000;
+  constexpr uint64_t kStartGpuTimeNs = 2000;
+  RocmTraceCollectorImpl collector(options, kStartWallTimeNs, kStartGpuTimeNs);
+
+  constexpr uint32_t kCorrelationId = 11;
+  constexpr uint32_t kDeviceId = 100;
+  constexpr uint64_t kStreamId = 123;
+  // 1 MiB: the size the standalone repro copies, and large enough that a
+  // workgroup dimension read in its place is unmistakable.
+  constexpr size_t kNumBytes = 1048576;
+
+  // The hipMemcpy API row. HipApiEvent() recovers the direction and size from
+  // the CopyInfoMap entry the callback stashed, so the event arrives here
+  // already typed MemcpyH2D with a real byte count.
+  RocmTracerEvent api_event;
+  api_event.type = RocmTracerEventType::MemcpyH2D;
+  api_event.source = RocmTracerEventSource::ApiCallback;
+  api_event.domain = RocmTracerEventDomain::HIP_API;
+  api_event.name = "hipMemcpy";
+  api_event.correlation_id = kCorrelationId;
+  api_event.thread_id = 999;
+  // The host row needs its own timestamps: CreateXEvent drops any event that
+  // falls outside the session window, and the default 0 is before it.
+  api_event.start_time_ns = 2500;
+  api_event.end_time_ns = 3600;
+  api_event.set_memcpy_info(MemcpyDetails{
+      .num_bytes = kNumBytes,
+      .destination = 0,
+      .async = false,
+  });
+  collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
+
+  // The GPU-side record for that copy is a kernel dispatch, with the grid
+  // geometry ROCclr actually launched -- the geometry whose workgroup_x used
+  // to be reported as the copy's size.
+  RocmTracerEvent activity_event;
+  activity_event.type = RocmTracerEventType::Kernel;
+  activity_event.source = RocmTracerEventSource::Activity;
+  activity_event.domain = RocmTracerEventDomain::HIP_OPS;
+  activity_event.name = "__amd_rocclr_copyBuffer";
+  activity_event.correlation_id = kCorrelationId;
+  activity_event.start_time_ns = 3000;
+  activity_event.end_time_ns = 3500;
+  activity_event.device_id = kDeviceId;
+  activity_event.stream_id = kStreamId;
+  activity_event.set_kernel_info(KernelDetails{
+      .workgroup_x = 512,
+      .workgroup_y = 1,
+      .workgroup_z = 1,
+      .grid_x = 4096,
+      .grid_y = 1,
+      .grid_z = 1,
+  });
+  activity_event.blit_copy_info = CopyApiDetails{
+      .type = RocmTracerEventType::MemcpyH2D,
+      .details = {.num_bytes = kNumBytes, .destination = 0, .async = false},
+  };
+  collector.AddEvent(std::move(activity_event), /*is_auxiliary=*/false);
+
+  collector.Flush();
+  tensorflow::profiler::XSpace space;
+  collector.Export(&space);
+
+  // Host API row: the size the user asked to move, not a grid dimension.
+  const auto* host_plane =
+      FindOrAddMutablePlaneWithName(&space, "/host:ROCTRACER");
+  ASSERT_NE(host_plane, nullptr);
+  EXPECT_EQ(FindStringStat(*host_plane, "hipMemcpy", "memcpy_details"),
+            "kind:HtoD size:1048576 dest:0 async:0");
+
+  // GPU dispatch row: both facts about a blit copy, neither displacing the
+  // other.
+  const auto* gpu_plane =
+      FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu_plane, nullptr);
+  EXPECT_EQ(
+      FindStringStat(*gpu_plane, "__amd_rocclr_copyBuffer", "kernel_details"),
+      " grid:8,1,1 block:512,1,1 private_mem:0 group_mem:0 occ_pct:0");
+  EXPECT_EQ(
+      FindStringStat(*gpu_plane, "__amd_rocclr_copyBuffer", "memcpy_details"),
+      "kind:HtoD size:1048576 dest:0 async:0");
+}
+
+// A kernel that is not a blit copy must not acquire a memcpy_details stat.
+// blit_copy_info is populated only when the dispatch's correlation id belongs
+// to a recorded copy API, so an ordinary dispatch leaves it empty.
+TEST(RocmCollectorTest, OrdinaryKernelGetsNoMemcpyStat) {
+  RocmTraceCollectorOptions options;
+  options.max_callback_api_events = 100;
+  options.max_activity_api_events = 100;
+  options.max_annotation_strings = 100;
+  options.num_gpus = 1;
+
+  RocmTraceCollectorImpl collector(options, /*start_walltime_ns=*/1000,
+                                   /*start_gputime_ns=*/2000);
+
+  constexpr uint32_t kCorrelationId = 12;
+
+  RocmTracerEvent api_event;
+  api_event.type = RocmTracerEventType::Kernel;
+  api_event.source = RocmTracerEventSource::ApiCallback;
+  api_event.domain = RocmTracerEventDomain::HIP_API;
+  api_event.name = "hipLaunchKernel";
+  api_event.correlation_id = kCorrelationId;
+  api_event.thread_id = 999;
+  api_event.set_kernel_info(KernelDetails{});
+  collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
+
+  RocmTracerEvent activity_event;
+  activity_event.type = RocmTracerEventType::Kernel;
+  activity_event.source = RocmTracerEventSource::Activity;
+  activity_event.domain = RocmTracerEventDomain::HIP_OPS;
+  activity_event.name = "plain_kernel";
+  activity_event.correlation_id = kCorrelationId;
+  activity_event.start_time_ns = 3000;
+  activity_event.end_time_ns = 3500;
+  activity_event.device_id = 100;
+  activity_event.stream_id = 123;
+  activity_event.set_kernel_info(KernelDetails{
+      .workgroup_x = 64,
+      .grid_x = 4096,
+  });
+  collector.AddEvent(std::move(activity_event), /*is_auxiliary=*/false);
+
+  collector.Flush();
+  tensorflow::profiler::XSpace space;
+  collector.Export(&space);
+
+  const auto* gpu_plane =
+      FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu_plane, nullptr);
+  EXPECT_FALSE(
+      FindStringStat(*gpu_plane, "plain_kernel", "kernel_details").empty());
+  EXPECT_EQ(FindStringStat(*gpu_plane, "plain_kernel", "memcpy_details"), "");
+}
+
+// hipMemcpyPeer{,Async} are the first producers of MemcpyP2P on this backend:
+// before ExtractCopyApiDetails() the copy branch of HipApiEvent() hardcoded
+// MemcpyOther, so the enumerator existed but nothing emitted it. Every switch
+// and type test the event then passes through has to know about it. The
+// failure without that is not a mislabelled row: MemcpyP2P falls to the
+// default arm of ApiActivityInfoExchange(), which drops the event outright.
+TEST(RocmCollectorTest, PeerCopyApiRowSurvivesAndReportsDirection) {
+  RocmTraceCollectorOptions options;
+  options.max_callback_api_events = 100;
+  options.max_activity_api_events = 100;
+  options.max_annotation_strings = 100;
+  options.num_gpus = 1;
+
+  RocmTraceCollectorImpl collector(options, /*start_walltime_ns=*/1000,
+                                   /*start_gputime_ns=*/2000);
+
+  constexpr uint32_t kCorrelationId = 13;
+  constexpr size_t kNumBytes = 65536;
+  // The peer device hipMemcpyPeer was asked to copy to, taken from the API
+  // arguments -- the one field only the callback path can supply.
+  constexpr uint32_t kDestinationDevice = 3;
+
+  RocmTracerEvent api_event;
+  api_event.type = RocmTracerEventType::MemcpyP2P;
+  api_event.source = RocmTracerEventSource::ApiCallback;
+  api_event.domain = RocmTracerEventDomain::HIP_API;
+  api_event.name = "hipMemcpyPeer";
+  api_event.correlation_id = kCorrelationId;
+  api_event.thread_id = 999;
+  api_event.start_time_ns = 2500;
+  api_event.end_time_ns = 3600;
+  api_event.set_memcpy_info(MemcpyDetails{
+      .num_bytes = kNumBytes,
+      .destination = kDestinationDevice,
+      .async = false,
+  });
+  collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
+
+  // A peer copy is serviced by a ROCclr blit kernel like any other, so the
+  // activity counterpart is a dispatch rather than a MEMORY_COPY record.
+  RocmTracerEvent activity_event;
+  activity_event.type = RocmTracerEventType::Kernel;
+  activity_event.source = RocmTracerEventSource::Activity;
+  activity_event.domain = RocmTracerEventDomain::HIP_OPS;
+  activity_event.name = "__amd_rocclr_copyBuffer";
+  activity_event.correlation_id = kCorrelationId;
+  activity_event.start_time_ns = 3000;
+  activity_event.end_time_ns = 3500;
+  activity_event.device_id = 100;
+  activity_event.stream_id = 123;
+  activity_event.set_kernel_info(KernelDetails{
+      .workgroup_x = 256,
+      .grid_x = 65536,
+  });
+  activity_event.blit_copy_info = CopyApiDetails{
+      .type = RocmTracerEventType::MemcpyP2P,
+      .details = {.num_bytes = kNumBytes,
+                  .destination = kDestinationDevice,
+                  .async = false},
+  };
+  collector.AddEvent(std::move(activity_event), /*is_auxiliary=*/false);
+
+  collector.Flush();
+  tensorflow::profiler::XSpace space;
+  collector.Export(&space);
+
+  const auto* host_plane =
+      FindOrAddMutablePlaneWithName(&space, "/host:ROCTRACER");
+  ASSERT_NE(host_plane, nullptr);
+  EXPECT_EQ(FindStringStat(*host_plane, "hipMemcpyPeer", "memcpy_details"),
+            "kind:PtoP size:65536 dest:3 async:0");
+
+  const auto* gpu_plane =
+      FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu_plane, nullptr);
+  EXPECT_EQ(
+      FindStringStat(*gpu_plane, "__amd_rocclr_copyBuffer", "memcpy_details"),
+      "kind:PtoP size:65536 dest:3 async:0");
+}
+
+// Every enumerator must have a name: GetRocmTracerEventTypeName() ends in
+// DCHECK(false), so a missing arm aborts a debug build from inside the very
+// logging the drop paths use to report what went wrong. Unsupported is
+// reachable now that RocmTracerEvent::type is default-initialized to it.
+TEST(RocmCollectorTest, EveryEventTypeHasAName) {
+  for (const auto type : {
+           RocmTracerEventType::Unsupported,
+           RocmTracerEventType::Kernel,
+           RocmTracerEventType::MemcpyH2D,
+           RocmTracerEventType::MemcpyD2H,
+           RocmTracerEventType::MemcpyD2D,
+           RocmTracerEventType::MemcpyP2P,
+           RocmTracerEventType::MemcpyOther,
+           RocmTracerEventType::MemoryAlloc,
+           RocmTracerEventType::MemoryFree,
+           RocmTracerEventType::Memset,
+           RocmTracerEventType::Synchronization,
+           RocmTracerEventType::Generic,
+       }) {
+    EXPECT_STRNE(GetRocmTracerEventTypeName(type), "")
+        << "unnamed event type " << static_cast<int>(type);
+  }
 }
 
 }  // namespace test

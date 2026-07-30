@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -71,10 +72,12 @@ const char* GetRocmTracerEventTypeName(const RocmTracerEventType& type) {
   case RocmTracerEventType::x: \
     return #x;
   switch (type) {
+    OO(Unsupported)
     OO(Kernel)
     OO(MemcpyH2D)
     OO(MemcpyD2H)
     OO(MemcpyD2D)
+    OO(MemcpyP2P)
     OO(MemcpyOther)
     OO(MemoryAlloc)
     OO(MemoryFree)
@@ -138,6 +141,30 @@ void AnnotationMap::Clear() {
   map_.scope_range_id_map.clear();
   map_.scope_range_id_tree.clear();
   map_.annotations.clear();
+}
+
+void CopyInfoMap::Add(uint32_t correlation_id,
+                      const CopyApiDetails& copy_details) {
+  absl::MutexLock lock(mutex_);
+  // Bounded like AnnotationMap: a long trace must not grow this without limit.
+  // Dropping entries costs a size stat on some copies, never correctness.
+  if (correlation_map_.size() < max_size_) {
+    correlation_map_.emplace(correlation_id, copy_details);
+  }
+}
+
+std::optional<CopyApiDetails> CopyInfoMap::LookUp(uint32_t correlation_id) {
+  absl::MutexLock lock(mutex_);
+  auto it = correlation_map_.find(correlation_id);
+  if (it == correlation_map_.end()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+void CopyInfoMap::Clear() {
+  absl::MutexLock lock(mutex_);
+  correlation_map_.clear();
 }
 
 }  // namespace profiler

@@ -139,6 +139,7 @@ void PrintRocmTracerEvent(const RocmTracerEvent& event,
     case RocmTracerEventType::MemcpyD2H:
     case RocmTracerEventType::MemcpyH2D:
     case RocmTracerEventType::MemcpyD2D:
+    case RocmTracerEventType::MemcpyP2P:
       if (const MemcpyDetails* info = event.memcpy_info()) {
         oss << ",num_bytes=" << info->num_bytes;
         oss << ",destination=" << info->destination;
@@ -267,9 +268,24 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
           *plane->GetOrCreateStatMetadata(ToXStat(*kernel_info,
                                                   /*occupancy_pct*/ 0)));
     }
+    // A ROCclr blit copy is a real kernel dispatch, so it gets kernel_details
+    // above; it is also a memcpy the user asked for, so it gets the size here.
+    // Without this the copy is invisible to any tool that looks for memcpy
+    // stats -- it shows up only as an oddly-named kernel.
+    if (event.blit_copy_info.has_value()) {
+      const MemcpyDetails& copy = event.blit_copy_info->details;
+      xevent.AddStatValue(
+          *plane->GetOrCreateStatMetadata(
+              GetStatTypeStr(StatType::kMemcpyDetails)),
+          *plane->GetOrCreateStatMetadata(absl::StrCat(
+              "kind:", GetMemcpyKindName(event.blit_copy_info->type),
+              " size:", copy.num_bytes, " dest:", copy.destination,
+              " async:", copy.async)));
+    }
   } else if (event.type == RocmTracerEventType::MemcpyH2D ||
              event.type == RocmTracerEventType::MemcpyD2H ||
              event.type == RocmTracerEventType::MemcpyD2D ||
+             event.type == RocmTracerEventType::MemcpyP2P ||
              event.type == RocmTracerEventType::MemcpyOther) {
     VLOG(7) << "Add Memcpy stat";
     // A copy API reclassified to MemcpyOther has no MEMORY_COPY record behind
@@ -724,6 +740,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
       case RocmTracerEventType::MemcpyD2H:
       case RocmTracerEventType::MemcpyH2D:
       case RocmTracerEventType::MemcpyD2D:
+      case RocmTracerEventType::MemcpyP2P:
       case RocmTracerEventType::MemcpyOther:
         // This is where the union used to bite. For a copy API whose activity
         // is a ROCclr blit *kernel*, `item` holds KernelDetails, so this
@@ -799,6 +816,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
         case RocmTracerEventType::MemcpyD2H:
         case RocmTracerEventType::MemcpyH2D:
         case RocmTracerEventType::MemcpyD2D:
+        case RocmTracerEventType::MemcpyP2P:
         case RocmTracerEventType::MemcpyOther:
         case RocmTracerEventType::Memset:
           aggregated_events.push_back(activity_event);

@@ -73,6 +73,7 @@ class RocmTracer {
                           void* callback_data);
 
   AnnotationMap* annotation_map() { return &annotation_map_; }
+  CopyInfoMap* copy_info_map() { return &copy_info_map_; }
 
  protected:
   // protected constructor for injecting mock cupti interface for testing.
@@ -94,6 +95,7 @@ class RocmTracer {
   bool activity_tracing_enabled_{false};
 
   AnnotationMap annotation_map_{/* default size, e.g. */ 1024 * 1024};
+  CopyInfoMap copy_info_map_{/* default size, e.g. */ 1024 * 1024};
 
  public:
   using kernel_symbol_data_t =
