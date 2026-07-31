@@ -711,13 +711,20 @@ absl::StatusOr<std::unique_ptr<Kernel>> RocmExecutor::LoadKernel(
   } else {
     const auto& packing_spec =
         std::get<KernelArgsPackingSpec>(spec.kernel_args_packing());
-    rocm_kernel->set_args_packing(
-        [packing_spec](const Kernel& kernel, const KernelArgs& args) {
-          const PackableKernelArgs& mem_args =
-              dynamic_cast<const PackableKernelArgs&>(args);
-          return packing_spec.BuildArguments(mem_args.packed_args(),
-                                             args.number_of_shared_bytes());
-        });
+    // An identity spec rebuilds exactly the argument buffer that
+    // `PackKernelArgs` has already produced, so running it on every launch
+    // would heap-allocate a buffer per argument only to reproduce the same
+    // bytes. Leaving `args_packing` unset lets `RocmKernel::Launch` use the
+    // packed arguments directly.
+    if (!packing_spec.IsIdentity(spec.arity())) {
+      rocm_kernel->set_args_packing(
+          [packing_spec](const Kernel& kernel, const KernelArgs& args) {
+            const PackableKernelArgs& mem_args =
+                dynamic_cast<const PackableKernelArgs&>(args);
+            return packing_spec.BuildArguments(mem_args.packed_args(),
+                                               args.number_of_shared_bytes());
+          });
+    }
   }
   return std::move(rocm_kernel);
 }

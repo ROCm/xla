@@ -66,6 +66,15 @@ class KernelArgPackingSpec {
   // Builds KernelArgPackingSpec that refers to the given arg number.
   static KernelArgPackingSpec BuildArgRelocation(int argument_index);
 
+  // Returns true if this spec does nothing but copy the address of the
+  // `argument_index`th argument, i.e. it reproduces the default packing.
+  bool IsAddressOf(int argument_index) const {
+    return constant_.empty() && relocation_.has_value() &&
+           relocation_->kind() ==
+               KernelArgPackingRelocation::Kind::kBits64Absolute &&
+           relocation_->argument_index() == argument_index;
+  }
+
   // Builds KernelArgPackingSpec that refers to a constant. The value must be
   // trivially copyable.
   template <typename T>
@@ -169,6 +178,22 @@ class KernelArgsPackingSpec {
   absl::StatusOr<std::unique_ptr<KernelArgsPackedVector>> BuildArguments(
       absl::Span<const std::unique_ptr<PackedArgBase>> args,
       size_t shared_memory_bytes) const;
+
+  // Returns true if this spec packs exactly `num_args` arguments, each being
+  // the address of the correspondingly indexed argument, in order. Such a spec
+  // reproduces the packing that `PackKernelArgs` already performs, so callers
+  // that hold packed arguments can skip running it altogether.
+  bool IsIdentity(size_t num_args) const {
+    if (kernel_arguments_.size() != num_args) {
+      return false;
+    }
+    for (size_t i = 0; i < num_args; ++i) {
+      if (!kernel_arguments_[i].IsAddressOf(i)) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   absl::StatusOr<KernelArgsPackingSpecProto> ToProto() const;
 
