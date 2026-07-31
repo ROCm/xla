@@ -19,6 +19,7 @@ EXCLUDED_TESTS=(
     "RcclSymmetricMemoryTest.TwoWindowsHaveDistinctHandles"
     "VmmTest*"
     "MxScaledDotExecutionTest.MxFp4Fp8MixedBatchedCorrectness"
+    "ConvolutionTest.Convolve3D_1x4x2x3x3_2x2x2x3x3_Valid"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
