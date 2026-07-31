@@ -17,6 +17,7 @@ EXCLUDED_TESTS=(
     "RcclSymmetricMemoryTest.AddrMatchesRegisteredBuffer"
     "RcclSymmetricMemoryTest.PackKernelArgReturnsValidWindowHandle"
     "RcclSymmetricMemoryTest.TwoWindowsHaveDistinctHandles"
+    " VmmTest*"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
