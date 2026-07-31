@@ -8288,16 +8288,6 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
         k: 256
         flops {
           key: "bf16xbf16->bf16"
-          value: 4577060701132
-        }
-      }
-      entries {
-        b: 1
-        m: 256
-        n: 256
-        k: 256
-        flops {
-          key: "bf16xbf16->bf16"
           value: 7478143971473
         }
         flops {
@@ -8309,8 +8299,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 5528823858955
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 3913966172868
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 7003638488833
         }
       }
       entries {
@@ -8331,8 +8321,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 11552567395420
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 4949031268436
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 12087331412103
         }
       }
       entries {
@@ -8353,8 +8343,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 21274009827230
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 6951405013465
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 25560412873738
         }
       }
       entries {
@@ -8375,8 +8365,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 25191015015015
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 13974462803894
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 43905046777886
         }
       }
       entries {
@@ -8397,8 +8387,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 39533940500736
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 18536440009667
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 82927233858510
         }
       }
       entries {
@@ -8419,8 +8409,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 14503752755565
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 8152194363459
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 16823480571571
         }
       }
       entries {
@@ -8441,8 +8431,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 19480076632801
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 12738964312832
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 22698753255538
         }
       }
       entries {
@@ -8463,8 +8453,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 28214784107630
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 9281037789994
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 39504850036791
         }
       }
       entries {
@@ -8485,8 +8475,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 49913621420602
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 16423595460246
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 48877541150764
         }
       }
       entries {
@@ -8507,8 +8497,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 73133212368887
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 19593471360011
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 77526485487364
         }
       }
       entries {
@@ -8529,8 +8519,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 15298954519548
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 13165054242275
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 32349416244878
         }
       }
       entries {
@@ -8551,8 +8541,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 33588020020020
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 50184231819031
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 43619671108222
         }
       }
       entries {
@@ -8573,8 +8563,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 69434934299017
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 116030022044521
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 70115046624004
         }
       }
       entries {
@@ -8595,8 +8585,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 57394794954030
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17524470369342
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 83055524752475
         }
       }
       entries {
@@ -8617,8 +8607,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 86812614625864
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 19928393170007
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 106930421152218
         }
       }
       entries {
@@ -8639,8 +8629,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 38287755812294
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 55842616184730
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 52935408400709
         }
       }
       entries {
@@ -8661,8 +8651,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 68200065040650
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 82978502627511
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 86133629391946
         }
       }
       entries {
@@ -8683,8 +8673,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 97826332361516
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 184238473575840
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 71812588550026
         }
       }
       entries {
@@ -8705,8 +8695,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 140514535627821
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 247605632191859
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 305257092821606
         }
       }
       entries {
@@ -8727,8 +8717,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 98271760576593
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20859076540523
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 152195864493267
         }
       }
       entries {
@@ -8749,8 +8739,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 56193312957923
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 114544679325794
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 61858614126051
         }
       }
       entries {
@@ -8771,8 +8761,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 90856475207310
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 186802683368128
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 105248169378553
         }
       }
       entries {
@@ -8793,8 +8783,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 139782831998958
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 344755763043827
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 340114610072854
         }
       }
       entries {
@@ -8815,8 +8805,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 203833102178349
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 472285825379371
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 385406254127781
         }
       }
       entries {
@@ -8837,8 +8827,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 247612769652071
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 682878972255346
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 670669471580262
         }
       }
       entries {
@@ -8859,8 +8849,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 8724501300052
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 5092105926094
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 14125208166701
         }
       }
       entries {
@@ -8881,8 +8871,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 14137110596166
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 8272788954635
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 30854650114942
         }
       }
       entries {
@@ -8903,8 +8893,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 30459032792465
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 13401670294558
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 34516581715314
         }
       }
       entries {
@@ -8925,8 +8915,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 53076709045971
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 16815576533968
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 77863801595358
         }
       }
       entries {
@@ -8947,8 +8937,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 81227159694379
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 32352340353731
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 123432788136567
         }
       }
       entries {
@@ -8969,8 +8959,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 19648327916849
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 12910516352443
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 28014553955332
         }
       }
       entries {
@@ -8991,8 +8981,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 25096807778608
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 9141651546110
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 31812687366674
         }
       }
       entries {
@@ -9013,8 +9003,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 51052768352985
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 16323722582018
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 67641541136449
         }
       }
       entries {
@@ -9035,8 +9025,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 73333002595273
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 19796125073746
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 119317904656072
         }
       }
       entries {
@@ -9057,8 +9047,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 104393741091828
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 36245673237915
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 164836018421860
         }
       }
       entries {
@@ -9079,8 +9069,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 36716653809328
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 60093005596597
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 50353677734008
         }
       }
       entries {
@@ -9101,8 +9091,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 66510271555996
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 108965072457885
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 86119812640359
         }
       }
       entries {
@@ -9123,8 +9113,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 61830117701255
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17710036847053
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 81165758863103
         }
       }
       entries {
@@ -9145,8 +9135,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 87810093555773
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20406359496750
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 151969687070978
         }
       }
       entries {
@@ -9167,8 +9157,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 122741406492912
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 38966162198452
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 201207125269371
         }
       }
       entries {
@@ -9189,8 +9179,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 59831819012593
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 93061347200554
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 95664809693513
         }
       }
       entries {
@@ -9211,8 +9201,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 97639522051468
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 155840613062409
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 80556817765773
         }
       }
       entries {
@@ -9233,8 +9223,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 121422800407101
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 248752884049577
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 358331995327882
         }
       }
       entries {
@@ -9255,8 +9245,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 96894989306501
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20887480527564
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 176218245435522
         }
       }
       entries {
@@ -9277,8 +9267,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 135287343560021
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40166909471794
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 556595256398626
         }
       }
       entries {
@@ -9299,8 +9289,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 99457375324194
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 178688937260775
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 135283082272899
         }
       }
       entries {
@@ -9321,8 +9311,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 121148801083154
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 256477206258210
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 325672376099484
         }
       }
       entries {
@@ -9343,8 +9333,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 207576593494756
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 674249183045525
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 574500708400214
         }
       }
       entries {
@@ -9365,8 +9355,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 248328599693561
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 889779841723637
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1104530614890060
         }
       }
       entries {
@@ -9387,8 +9377,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 145476223889444
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40898607779840
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 529099759285494
         }
       }
       entries {
@@ -9409,8 +9399,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 22485797956106
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 8182012192148
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 23010068232470
         }
       }
       entries {
@@ -9431,8 +9421,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 27076402662900
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 12317508190703
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 53145012076816
         }
       }
       entries {
@@ -9453,8 +9443,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 45660053750637
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17576392601080
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 76970740071684
         }
       }
       entries {
@@ -9475,8 +9465,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 81965024732824
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 33568069028042
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 123717228252102
         }
       }
       entries {
@@ -9497,8 +9487,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 75557091267328
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 50053226925228
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 146766241662110
         }
       }
       entries {
@@ -9519,8 +9509,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 30528312976231
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 9345662221912
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 27111953944046
         }
       }
       entries {
@@ -9541,8 +9531,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 33714576237126
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 16313802060226
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 51513232776818
         }
       }
       entries {
@@ -9563,8 +9553,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 65055548258103
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 19818047692875
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 88105507836218
         }
       }
       entries {
@@ -9585,8 +9575,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 103888715978907
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 36283029178704
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 134765211672419
         }
       }
       entries {
@@ -9607,8 +9597,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 103289098552258
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 55986746825872
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 224855625150515
         }
       }
       entries {
@@ -9629,8 +9619,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 60093005596597
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 96075682176091
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 69033163430628
         }
       }
       entries {
@@ -9651,8 +9641,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 58396792516451
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17461772031679
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 81535562609157
         }
       }
       entries {
@@ -9673,8 +9663,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 72835559896893
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20406359496750
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 154384158734723
         }
       }
       entries {
@@ -9695,8 +9685,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 123874229810798
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39022807810072
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 230912220215053
         }
       }
       entries {
@@ -9717,8 +9707,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 122566271788139
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 59721584003670
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 296184214605889
         }
       }
       entries {
@@ -9739,8 +9729,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 101334637976594
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 206171625192012
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 137712174426061
         }
       }
       entries {
@@ -9761,8 +9751,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 141449324726649
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 225718272861046
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 114106463761955
         }
       }
       entries {
@@ -9783,8 +9773,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 96028424093368
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20830648669883
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 182059569157729
         }
       }
       entries {
@@ -9805,8 +9795,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 135500750733507
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40523720436093
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 271592721386113
         }
       }
       entries {
@@ -9827,8 +9817,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 140426097416238
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 61929523751847
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 351290648890706
         }
       }
       entries {
@@ -9849,8 +9839,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 133350946845504
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 315342679588839
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 353611666062901
         }
       }
       entries {
@@ -9871,8 +9861,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 181413613347412
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 593965882450560
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 711912364661031
         }
       }
       entries {
@@ -9893,8 +9883,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 248465075552470
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 708857451064532
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 937765785152838
         }
       }
       entries {
@@ -9915,8 +9905,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 147147132698945
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40739262428770
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 725164373981680
         }
       }
       entries {
@@ -9937,8 +9927,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 153178333606762
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 63112093456570
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 936258164200659
         }
       }
       entries {
@@ -9959,8 +9949,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 29388598204510
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 13759570249628
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 46660082739440
         }
       }
       entries {
@@ -9981,8 +9971,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 48647237404856
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 16889637650611
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 79489326621261
         }
       }
       entries {
@@ -10003,8 +9993,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 75081590378295
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 33213988616679
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 103224555277831
         }
       }
       entries {
@@ -10025,8 +10015,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 83436306162094
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 43832458677770
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 128622643028270
         }
       }
       entries {
@@ -10047,8 +10037,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 127788375364474
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 64181582151556
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 202344638462263
         }
       }
       entries {
@@ -10069,8 +10059,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 42077820518849
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 16741640014968
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 67134039264724
         }
       }
       entries {
@@ -10091,8 +10081,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 60032529576204
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17792205736631
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 90184933982865
         }
       }
       entries {
@@ -10113,8 +10103,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 100863446902447
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 35833797460328
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 165343674776716
         }
       }
       entries {
@@ -10135,8 +10125,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 112622385567442
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 52325324626592
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 209061881619937
         }
       }
       entries {
@@ -10157,8 +10147,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 166287910486478
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 72126138510109
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 268863957932955
         }
       }
       entries {
@@ -10179,8 +10169,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 43371241426667
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 18013384512146
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 92683800086318
         }
       }
       entries {
@@ -10201,8 +10191,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 80430099176029
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20092850240461
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 154829390627253
         }
       }
       entries {
@@ -10223,8 +10213,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 117300759142427
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39258940009689
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 216665857640115
         }
       }
       entries {
@@ -10245,8 +10235,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 138746500492642
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 57689285372733
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 267690940571535
         }
       }
       entries {
@@ -10267,8 +10257,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 193967203531630
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 75804465278819
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 830547217017162
         }
       }
       entries {
@@ -10289,8 +10279,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 138699454110960
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 277739737196068
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 433747454655625
         }
       }
       entries {
@@ -10311,8 +10301,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 92585899588264
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20810462465779
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 377911772635283
         }
       }
       entries {
@@ -10333,8 +10323,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 134480385001956
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40542846856371
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 274018584662498
         }
       }
       entries {
@@ -10355,8 +10345,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 147451500137324
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 60831568864480
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 337323172668368
         }
       }
       entries {
@@ -10377,8 +10367,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 199587220558337
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 77826412184139
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 977906943533697
         }
       }
       entries {
@@ -10399,8 +10389,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 186453974213153
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 500987670127143
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 799658777881213
         }
       }
       entries {
@@ -10421,8 +10411,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 219478118248249
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 782610658892128
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 614884365926986
         }
       }
       entries {
@@ -10443,8 +10433,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 139967323198253
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 41197146354096
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 769431618774632
         }
       }
       entries {
@@ -10465,8 +10455,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 163546931415434
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 62662517768497
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1030215230510913
         }
       }
       entries {
@@ -10487,8 +10477,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 217807194589009
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 78170350251791
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1413864635338655
         }
       }
       entries {
@@ -10509,8 +10499,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 43651590535815
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17845135848429
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 79950992107222
         }
       }
       entries {
@@ -10531,8 +10521,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 53024287604938
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 32410933743849
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 115954840604751
         }
       }
       entries {
@@ -10553,8 +10543,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 86672464301570
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40306380525160
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 138968721154468
         }
       }
       entries {
@@ -10575,8 +10565,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 122391636156388
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 60659096052538
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 155727603190717
         }
       }
       entries {
@@ -10597,8 +10587,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 130193922095243
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 68596003928927
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 571405214661079
         }
       }
       entries {
@@ -10619,8 +10609,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 57028990014871
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 18698159756203
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 120105349440715
         }
       }
       entries {
@@ -10641,8 +10631,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 81905627522026
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 36343820200379
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 159913891428996
         }
       }
       entries {
@@ -10663,8 +10653,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 103738159895657
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 47992751262682
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 186171100823580
         }
       }
       entries {
@@ -10685,8 +10675,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 158252295357406
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 66161921498551
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 677012499369483
         }
       }
       entries {
@@ -10707,8 +10697,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 169711243544403
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 80168500650965
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 778532160420537
         }
       }
       entries {
@@ -10729,8 +10719,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 81905627522026
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20100372975907
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 151327154393629
         }
       }
       entries {
@@ -10751,8 +10741,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 99873669798158
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39606854444854
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 214501687858962
         }
       }
       entries {
@@ -10773,8 +10763,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 123519758882993
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 54548618442526
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 590292371632765
         }
       }
       entries {
@@ -10795,8 +10785,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 174335270018773
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 75054693286966
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 841160849197023
         }
       }
       entries {
@@ -10817,8 +10807,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 198363536670977
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 89724761109921
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1021031093783430
         }
       }
       entries {
@@ -10839,8 +10829,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 90323385333641
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20853000019420
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 391020329206118
         }
       }
       entries {
@@ -10861,8 +10851,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 113968696076740
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40650481714242
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 563903012669861
         }
       }
       entries {
@@ -10883,8 +10873,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 133998932867427
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 59055615771200
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 813980346062731
         }
       }
       entries {
@@ -10905,8 +10895,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 182747068727462
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 77678266576840
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1184736858423557
         }
       }
       entries {
@@ -10927,8 +10917,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 220000181635991
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 98062112284256
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1450328747963361
         }
       }
       entries {
@@ -10949,8 +10939,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 213573709398309
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 658787835876984
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1260445281291269
         }
       }
       entries {
@@ -10971,8 +10961,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 121027609609017
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 41236700424371
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 766650416529073
         }
       }
       entries {
@@ -10993,8 +10983,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 155342485625285
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 59642900805601
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1096109304494848
         }
       }
       entries {
@@ -11015,8 +11005,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 220451867971679
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 77966100299295
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1385836544578216
         }
       }
       entries {
@@ -11037,8 +11027,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 234848055828100
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 100355345234800
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1745722077912840
         }
       }
       entries {
@@ -11059,8 +11049,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 7347149551127
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 5000660506706
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 11586475138121
         }
       }
       entries {
@@ -11081,8 +11071,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 17725531959852
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 7920786544703
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 24618071900220
         }
       }
       entries {
@@ -11103,8 +11093,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 20244001206636
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 13509585103170
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 37941407208480
         }
       }
       entries {
@@ -11125,8 +11115,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 54477007813292
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 18536440009667
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 72005218884120
         }
       }
       entries {
@@ -11147,8 +11137,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 80732467969924
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 33800542197878
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 106925096992630
         }
       }
       entries {
@@ -11169,8 +11159,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 24813778517286
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 11021327640006
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 29760028381374
         }
       }
       entries {
@@ -11191,8 +11181,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 22410707630656
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 9086262600277
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 26731274248157
         }
       }
       entries {
@@ -11213,8 +11203,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 48824200800291
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 16576229220699
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 52316401481192
         }
       }
       entries {
@@ -11235,8 +11225,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 68993241919938
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 18581670398892
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 112069911700240
         }
       }
       entries {
@@ -11257,8 +11247,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 102500293446613
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 36160228463662
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 163331582598113
         }
       }
       entries {
@@ -11279,8 +11269,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 38729686336747
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 21792129891216
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 39388915040352
         }
       }
       entries {
@@ -11301,8 +11291,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 67008351472790
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 107224068703814
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 61858614126051
         }
       }
       entries {
@@ -11323,8 +11313,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 53393427349577
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17444750272132
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 76308849690853
         }
       }
       entries {
@@ -11345,8 +11335,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 86742482853334
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20398606026064
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 120246578643821
         }
       }
       entries {
@@ -11367,8 +11357,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 120601109033218
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39287309928468
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 206836855092704
         }
       }
       entries {
@@ -11389,8 +11379,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 58393616706547
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 101143728711379
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 64081035091907
         }
       }
       entries {
@@ -11411,8 +11401,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 73433307618656
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 182330077092885
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 106712564500099
         }
       }
       entries {
@@ -11433,8 +11423,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 135206424982685
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 310779109696092
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 189288994975760
         }
       }
       entries {
@@ -11455,8 +11445,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 94838856537196
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20802398934444
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 384715809387316
         }
       }
       entries {
@@ -11477,8 +11467,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 132979357731128
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40208272912804
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 242955498133273
         }
       }
       entries {
@@ -11499,8 +11489,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 92111334305567
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 172905285668276
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 105662450698681
         }
       }
       entries {
@@ -11521,8 +11511,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 139058709318137
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 331914010510046
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 152401082109147
         }
       }
       entries {
@@ -11543,8 +11533,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 197997754748294
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 589077944863530
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 533006614048150
         }
       }
       entries {
@@ -11565,8 +11555,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 242427527784833
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 675362417800141
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1298750316298760
         }
       }
       entries {
@@ -11587,8 +11577,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 140012951573731
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40714160208359
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 585085624220958
         }
       }
       entries {
@@ -11609,8 +11599,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 10637004913615
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 8222110267091
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 19579537272064
         }
       }
       entries {
@@ -11631,8 +11621,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 36417779948446
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 12329388939922
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 41209004605465
         }
       }
       entries {
@@ -11653,8 +11643,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 52042546723536
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17450136904374
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 76750666476054
         }
       }
       entries {
@@ -11675,8 +11665,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 82601878913762
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 33399957197959
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 120388140374481
         }
       }
       entries {
@@ -11697,8 +11687,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 93883170761563
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 50288823923377
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 145779896001629
         }
       }
       entries {
@@ -11719,8 +11709,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 28882661502044
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 9141962878452
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 44347506360482
         }
       }
       entries {
@@ -11741,8 +11731,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 48379824457060
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 16720783356172
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 66141543920167
         }
       }
       entries {
@@ -11763,8 +11753,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 69800547617499
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 19579180248354
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 115954840604751
         }
       }
       entries {
@@ -11785,8 +11775,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 104908825012213
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 36148054942095
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 161355747839807
         }
       }
       entries {
@@ -11807,8 +11797,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 115409573988982
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 56517933178055
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 198592837471678
         }
       }
       entries {
@@ -11829,8 +11819,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 56787699598053
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 115530646008177
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 76750666476054
         }
       }
       entries {
@@ -11851,8 +11841,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 58844841562996
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17780126246067
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 81418094024871
         }
       }
       entries {
@@ -11873,8 +11863,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 86393516836303
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20472697916964
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 149224073935098
         }
       }
       entries {
@@ -11895,8 +11885,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 120944111736877
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 38994464432601
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 190303836944481
         }
       }
       entries {
@@ -11917,8 +11907,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 124488197327613
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 60267132006370
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 257553807627728
         }
       }
       entries {
@@ -11939,8 +11929,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 94878662543076
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 177507327492147
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 105454903162443
         }
       }
       entries {
@@ -11961,8 +11951,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 135368359051941
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 329874600307219
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 132438091150169
         }
       }
       entries {
@@ -11983,8 +11973,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 96897175318668
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20889613945321
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 168463122023926
         }
       }
       entries {
@@ -12005,8 +11995,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 133685076523227
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40159397987807
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 611383244982206
         }
       }
       entries {
@@ -12027,8 +12017,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 139807857814814
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 62507028215698
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 354479917136077
         }
       }
       entries {
@@ -12049,8 +12039,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 132364623274161
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 308990452949640
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 150901809289579
         }
       }
       entries {
@@ -12071,8 +12061,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 179285661045249
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 421240417418595
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 606976723572639
         }
       }
       entries {
@@ -12093,8 +12083,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 246468914036497
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 1009037306707388
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1076702756580596
         }
       }
       entries {
@@ -12115,8 +12105,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 143817549424055
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40692847630417
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 665473705608924
         }
       }
       entries {
@@ -12137,8 +12127,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 153769247563213
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 63631855371617
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 905108750013171
         }
       }
       entries {
@@ -12159,8 +12149,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 21272323955939
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 13759570249628
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 45092466991432
         }
       }
       entries {
@@ -12181,8 +12171,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 43797594387338
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17553405656367
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 85042121336923
         }
       }
       entries {
@@ -12203,8 +12193,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 79301464106351
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 33546045488627
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 113491367085931
         }
       }
       entries {
@@ -12225,8 +12215,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 88098278962914
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 49867259149173
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 144592219768381
         }
       }
       entries {
@@ -12247,8 +12237,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 122321921166552
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 64277635043924
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 173793845182697
         }
       }
       entries {
@@ -12269,8 +12259,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 39886397622585
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17138189108089
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 68679917103748
         }
       }
       entries {
@@ -12291,8 +12281,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 63516227388346
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 19737901176470
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 120930490370537
         }
       }
       entries {
@@ -12313,8 +12303,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 101048543572369
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 35384472697314
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 179765917294491
         }
       }
       entries {
@@ -12335,8 +12325,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 110875062498386
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 56163185647221
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 222987762629146
         }
       }
       entries {
@@ -12357,8 +12347,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 158135762002945
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 71704087681661
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 281397320055035
         }
       }
       entries {
@@ -12379,8 +12369,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 58457198606271
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17762478478081
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 95325090909090
         }
       }
       entries {
@@ -12401,8 +12391,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 79184500294985
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20149597455360
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 149016976476302
         }
       }
       entries {
@@ -12423,8 +12413,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 119394192755677
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39636095385751
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 201207125269371
         }
       }
       entries {
@@ -12445,8 +12435,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 122043853603091
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 60005690399016
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 251513325095892
         }
       }
       entries {
@@ -12467,8 +12457,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 186096484764452
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 75517236276681
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 371866689408861
         }
       }
       entries {
@@ -12489,8 +12479,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 135036386090674
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 348108874696060
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 166111049504950
         }
       }
       entries {
@@ -12511,8 +12501,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 93029095823947
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20895711826722
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 180074935893673
         }
       }
       entries {
@@ -12533,8 +12523,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 136710559610395
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40688992534768
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 258483828598940
         }
       }
       entries {
@@ -12555,8 +12545,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 136863033825661
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 61951855987883
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 337462318725569
         }
       }
       entries {
@@ -12577,8 +12567,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 206233499201709
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 77996187255834
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 966872228044010
         }
       }
       entries {
@@ -12599,8 +12589,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 178845192421403
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 636291451259259
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 330687349553433
         }
       }
       entries {
@@ -12621,8 +12611,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 217367644921301
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 704208443351369
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 954543237248583
         }
       }
       entries {
@@ -12643,8 +12633,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 141772660147385
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40857658690880
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 687359733696087
         }
       }
       entries {
@@ -12665,8 +12655,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 156035232478826
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 63063326942524
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 971272568068747
         }
       }
       entries {
@@ -12687,8 +12677,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 223263785103721
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 79029235676129
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1273148746405810
         }
       }
       entries {
@@ -12709,8 +12699,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 43303025649298
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17576392601080
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 76970740071684
         }
       }
       entries {
@@ -12731,8 +12721,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 61688028495920
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 31909118098068
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 111141892557706
         }
       }
       entries {
@@ -12753,8 +12743,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 64123130725589
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39158360496708
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 141533226652606
         }
       }
       entries {
@@ -12775,8 +12765,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 122043853603091
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 61459400655381
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 159913891428996
         }
       }
       entries {
@@ -12797,8 +12787,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 132938197845734
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 81547947444368
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 233809700645091
         }
       }
       entries {
@@ -12819,8 +12809,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 67513947686116
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 18574919973705
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 88989045582628
         }
       }
       entries {
@@ -12841,8 +12831,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 67094187146561
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 36381378826638
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 155052970974729
         }
       }
       entries {
@@ -12863,8 +12853,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 104396278554240
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 48360213664820
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 200268921756971
         }
       }
       entries {
@@ -12885,8 +12875,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 154212318983160
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 66223129641050
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 582289492407809
         }
       }
       entries {
@@ -12907,8 +12897,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 167002383389066
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 91833144555450
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 697999804331044
         }
       }
       entries {
@@ -12929,8 +12919,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 81347158907534
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20421884134048
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 148594218654857
         }
       }
       entries {
@@ -12951,8 +12941,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 102010956368904
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39265759411969
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 208442965105556
         }
       }
       entries {
@@ -12973,8 +12963,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 126919837352245
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 55166235900070
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 477775993770510
         }
       }
       entries {
@@ -12995,8 +12985,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 175582494598599
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 74558608737918
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 747308242376788
         }
       }
       entries {
@@ -13017,8 +13007,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 193704763549852
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 97880395763421
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 969600653779947
         }
       }
       entries {
@@ -13039,8 +13029,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 88570636311144
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20798369511634
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 177683571735892
         }
       }
       entries {
@@ -13061,8 +13051,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 114515665595712
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40523720436093
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 540451402541839
         }
       }
       entries {
@@ -13083,8 +13073,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 142550234686934
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 58990523618708
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 791443736306260
         }
       }
       entries {
@@ -13105,8 +13095,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 193617441300109
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 77593889926944
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1133760257638751
         }
       }
       entries {
@@ -13127,8 +13117,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 215372946344398
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 101179618359116
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1363806397078669
         }
       }
       entries {
@@ -13149,8 +13139,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 214646407756315
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 1392435498784243
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 783467219263042
         }
       }
       entries {
@@ -13171,8 +13161,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 121748925894166
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 41011960362760
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 740160664512515
         }
       }
       entries {
@@ -13193,8 +13183,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 156862266795712
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 59888550616319
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 972922708347491
         }
       }
       entries {
@@ -13215,8 +13205,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 211927739048106
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 78737302466059
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1378027527392315
         }
       }
       entries {
@@ -13237,8 +13227,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 221362610423642
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 102712249913122
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1649155299103661
         }
       }
       entries {
@@ -13259,8 +13249,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 69439424691198
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 33400996173826
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 70766613326303
         }
       }
       entries {
@@ -13281,8 +13271,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 81843197073059
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 48646135417374
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 133259922308408
         }
       }
       entries {
@@ -13303,8 +13293,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 117239921821258
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 58237634354364
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 421819612649774
         }
       }
       entries {
@@ -13325,8 +13315,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 129370381517515
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 70467059819524
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 505379454727304
         }
       }
       entries {
@@ -13347,8 +13337,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 134820205794644
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 80484735349371
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 609193616680259
         }
       }
       entries {
@@ -13369,8 +13359,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 87881963005401
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 36843269476898
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 309658781254506
         }
       }
       entries {
@@ -13391,8 +13381,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 109181130103208
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 54437650303560
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 193223290264531
         }
       }
       entries {
@@ -13413,8 +13403,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 148702257244746
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 65786453493448
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 598560002229809
         }
       }
       entries {
@@ -13435,8 +13425,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 164629094763068
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 86463955549739
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 807097114723292
         }
       }
       entries {
@@ -13457,8 +13447,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 173225201373309
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 90206242991635
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 878226622226766
         }
       }
       entries {
@@ -13479,8 +13469,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 106311071683168
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39606489206112
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 211522644471804
         }
       }
       entries {
@@ -13501,8 +13491,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 129331425095606
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 57720296949334
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 581501123206065
         }
       }
       entries {
@@ -13523,8 +13513,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 175331624064907
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 72540933091246
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 817116251319857
         }
       }
       entries {
@@ -13545,8 +13535,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 187133332795965
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 95249778556439
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 986923405658480
         }
       }
       entries {
@@ -13567,8 +13557,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 202067374150940
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 94749937590310
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1239998497554990
         }
       }
       entries {
@@ -13589,8 +13579,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 110588150524621
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40393947877773
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 592777212890759
         }
       }
       entries {
@@ -13611,8 +13601,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 146945756109243
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 58796708947229
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 753205716340041
         }
       }
       entries {
@@ -13633,8 +13623,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 193420164982577
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 76282929162457
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1138305064369720
         }
       }
       entries {
@@ -13655,8 +13645,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 210393869188636
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 98597608697086
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1523139320788173
         }
       }
       entries {
@@ -13677,8 +13667,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 223788365769107
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 99144635459625
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1687278450599096
         }
       }
       entries {
@@ -13699,8 +13689,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 94922697549008
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 41039391867067
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 525538977791373
         }
       }
       entries {
@@ -13721,8 +13711,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 155216172094304
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 61063244956823
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1026521820267686
         }
       }
       entries {
@@ -13743,8 +13733,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 205111336833465
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 78366824689386
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1353011945973616
         }
       }
       entries {
@@ -13765,8 +13755,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 223474702763699
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 101184087732808
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1706192860253497
         }
       }
       entries {
@@ -13787,8 +13777,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 233756214889316
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 96168924880050
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1725070489095849
         }
       }
       entries {
@@ -13809,8 +13799,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 20680697688751
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 8102488862058
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 23493388412392
         }
       }
       entries {
@@ -13831,8 +13821,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 28882661502044
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 14033639481388
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 47493888181174
         }
       }
       entries {
@@ -13853,8 +13843,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 51941845201238
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17382338664767
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 63776539795675
         }
       }
       entries {
@@ -13875,8 +13865,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 82342164417177
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 33525097539652
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 120658705922013
         }
       }
       entries {
@@ -13897,8 +13887,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 84756823933378
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 50406864493110
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 143423739264008
         }
       }
       entries {
@@ -13919,8 +13909,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 22523532136264
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 9451287092458
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 33651179140027
         }
       }
       entries {
@@ -13941,8 +13931,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 33927635995955
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 16689595622979
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 63625374733349
         }
       }
       entries {
@@ -13963,8 +13953,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 52867642737567
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17989241120493
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 77081250825556
         }
       }
       entries {
@@ -13985,8 +13975,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 102500293446613
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 36038860978720
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 157106126856390
         }
       }
       entries {
@@ -14007,8 +13997,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 111566285580694
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 56548442384664
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 215146385613384
         }
       }
       entries {
@@ -14029,8 +14019,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 54038340412682
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 93061347200554
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 82418009210930
         }
       }
       entries {
@@ -14051,8 +14041,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 59038974212349
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 17524756389750
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 78318149088256
         }
       }
       entries {
@@ -14073,8 +14063,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 82345321829824
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20375380925272
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 128630347289607
         }
       }
       entries {
@@ -14095,8 +14085,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 118403465181672
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39201249484310
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 208442965105556
         }
       }
       entries {
@@ -14117,8 +14107,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 118503105274049
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 60437167325687
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 279747755878329
         }
       }
       entries {
@@ -14139,8 +14129,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 89792759993309
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 173491973501373
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 106080006322861
         }
       }
       entries {
@@ -14161,8 +14151,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 132691772614928
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 312588595050946
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 150690032138095
         }
       }
       entries {
@@ -14183,8 +14173,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 91440649265488
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20891544555996
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 351873447157135
         }
       }
       entries {
@@ -14205,8 +14195,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 129918246044949
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40340641942376
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 461824440430107
         }
       }
       entries {
@@ -14227,8 +14217,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 136601857290523
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 62388990634317
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 332485711211317
         }
       }
       entries {
@@ -14249,8 +14239,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 123945725960983
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 206171625192012
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 321720396704119
         }
       }
       entries {
@@ -14271,8 +14261,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 188930950424493
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 349810009447792
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 313295447953898
         }
       }
       entries {
@@ -14293,8 +14283,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 234993012857690
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 676426064414520
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 887298274145232
         }
       }
       entries {
@@ -14315,8 +14305,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 139376849183041
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40596592941621
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 599813881153550
         }
       }
       entries {
@@ -14337,8 +14327,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 145475607958033
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 63563345292558
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 368267632372643
         }
       }
       entries {
@@ -14359,8 +14349,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 24864343831048
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 13787839950690
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 50926855625118
         }
       }
       entries {
@@ -14381,8 +14371,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 44303590691533
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 18409317011281
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 69569899183620
         }
       }
       entries {
@@ -14403,8 +14393,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 77914652347434
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 32119109303021
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 129710295240396
         }
       }
       entries {
@@ -14425,8 +14415,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 82030774590320
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 49867259149173
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 144972905420914
         }
       }
       entries {
@@ -14447,8 +14437,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 119593665135187
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 64646246063999
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 198776660156430
         }
       }
       entries {
@@ -14469,8 +14459,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 39650732053175
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 16303893589237
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 75234152466367
         }
       }
       entries {
@@ -14491,8 +14481,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 60780132684252
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 19557782626910
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 110912284268154
         }
       }
       entries {
@@ -14513,8 +14503,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 101435154125926
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 36172410187306
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 157094634089246
         }
       }
       entries {
@@ -14535,8 +14525,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 105421253675658
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 56177877859600
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 212590570509330
         }
       }
       entries {
@@ -14557,8 +14547,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 152187775135977
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 71848027233871
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 547338765897795
         }
       }
       entries {
@@ -14579,8 +14569,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 55839712101513
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 16789020780236
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 94146586935554
         }
       }
       entries {
@@ -14601,8 +14591,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 80309784891548
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20515726276570
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 149640000557452
         }
       }
       entries {
@@ -14623,8 +14613,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 120263413770895
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39381330594804
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 159202583438357
         }
       }
       entries {
@@ -14645,8 +14635,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 119028566962739
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 60132127825496
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 287625467671187
         }
       }
       entries {
@@ -14667,8 +14657,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 180726585146223
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 75543801597073
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 363810706535089
         }
       }
       entries {
@@ -14689,8 +14679,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 128399620209267
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 323904019306184
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 158497575319211
         }
       }
       entries {
@@ -14711,8 +14701,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 92787921189077
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20840756464565
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 116331725243770
         }
       }
       entries {
@@ -14733,8 +14723,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 132120317952504
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40121695268966
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 254042368083281
         }
       }
       entries {
@@ -14755,8 +14745,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 140151158695066
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 62407121237108
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 338392900864700
         }
       }
       entries {
@@ -14777,8 +14767,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 200098642906227
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 77241188048656
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 447014094425291
         }
       }
       entries {
@@ -14799,8 +14789,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 175763926010803
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 478654552100746
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 318405166876714
         }
       }
       entries {
@@ -14821,8 +14811,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 213149741736972
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 775474820980409
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 946028038766519
         }
       }
       entries {
@@ -14843,8 +14833,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 137301651820179
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40750858511847
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 717262407481629
         }
       }
       entries {
@@ -14865,8 +14855,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 146145109962697
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 63221367306797
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 922656776799140
         }
       }
       entries {
@@ -14887,8 +14877,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 210277986236356
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 78971020834626
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1023753843366852
         }
       }
       entries {
@@ -14909,8 +14899,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 33255135777998
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 18074027471047
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 79713572680029
         }
       }
       entries {
@@ -14931,8 +14921,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 53770435374830
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 31441006822640
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 104014513610384
         }
       }
       entries {
@@ -14953,8 +14943,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 84823780384721
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40704417301641
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 137359834207496
         }
       }
       entries {
@@ -14975,8 +14965,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 118928041645899
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 64646246063999
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 195519064778986
         }
       }
       entries {
@@ -14997,8 +14987,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 140058609707978
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 83909843529905
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 227361228977528
         }
       }
       entries {
@@ -15019,8 +15009,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 66182311637080
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 19465244624922
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 126040829205305
         }
       }
       entries {
@@ -15041,8 +15031,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 82282219548641
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 36381378826638
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 151540727401030
         }
       }
       entries {
@@ -15063,8 +15053,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 102158967128109
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 48502753170489
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 194624220409642
         }
       }
       entries {
@@ -15085,8 +15075,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 151061033202025
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 71310619402613
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 607878748283914
         }
       }
       entries {
@@ -15107,8 +15097,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 163625593447307
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 92436949148529
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 345206043844314
         }
       }
       entries {
@@ -15129,8 +15119,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 80249762630792
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 19999102692332
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 139329374424187
         }
       }
       entries {
@@ -15151,8 +15141,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 100719163661093
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39309243883911
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 216240423723693
         }
       }
       entries {
@@ -15173,8 +15163,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 125950273339100
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 55287313376542
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 605308617574519
         }
       }
       entries {
@@ -15195,8 +15185,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 182185062238199
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 75637260589517
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 379774723876472
         }
       }
       entries {
@@ -15217,8 +15207,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 183411383592136
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 98255742451322
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 989196440708219
         }
       }
       entries {
@@ -15239,8 +15229,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 88206836769900
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 20810462465779
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 169393306882271
         }
       }
       entries {
@@ -15261,8 +15251,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 115285660877734
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40352012176159
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 238761836506657
         }
       }
       entries {
@@ -15283,8 +15273,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 138879972062116
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 59153421951664
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 843639225299548
         }
       }
       entries {
@@ -15305,8 +15295,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 201273128825155
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 77762826931128
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1086370885544454
         }
       }
       entries {
@@ -15327,8 +15317,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 202055491399638
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 101018686447193
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1237297024414836
         }
       }
       entries {
@@ -15349,8 +15339,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 213149741736972
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 992711729111290
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1177348491228070
         }
       }
       entries {
@@ -15371,8 +15361,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 121939903923684
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 41051257554396
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 807097114723292
         }
       }
       entries {
@@ -15393,8 +15383,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 155272286071933
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 60324586613668
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 998423268669727
         }
       }
       entries {
@@ -15415,8 +15405,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 212966764708981
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 79060239870042
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1317676728332566
         }
       }
       entries {
@@ -15437,8 +15427,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 214948199454180
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 102515890286873
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1464890467822046
         }
       }
       entries {
@@ -15459,8 +15449,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 64123130725589
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 33337736711376
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 107578581705239
         }
       }
       entries {
@@ -15481,8 +15471,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 80914982969103
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39841997179962
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 129397664979513
         }
       }
       entries {
@@ -15503,8 +15493,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 119927604389467
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 58048727459487
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 427700387970523
         }
       }
       entries {
@@ -15525,8 +15515,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 126732584715255
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 73097738905482
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 446880376235563
         }
       }
       entries {
@@ -15547,8 +15537,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 146393554408030
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 85892474522038
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 585464462377317
         }
       }
       entries {
@@ -15569,8 +15559,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 75610296739666
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 36604626928256
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 164331469850015
         }
       }
       entries {
@@ -15591,8 +15581,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 107916462624689
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 53971792404936
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 191321096529912
         }
       }
       entries {
@@ -15613,8 +15603,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 153657846484088
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 65364947623939
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 639655565715987
         }
       }
       entries {
@@ -15635,8 +15625,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 161895541562614
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 86638808147539
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 819415681770485
         }
       }
       entries {
@@ -15657,8 +15647,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 165026023822331
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 93638063693989
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 834196954720920
         }
       }
       entries {
@@ -15679,8 +15669,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 106205917309594
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 39359676835806
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 222053939406472
         }
       }
       entries {
@@ -15701,8 +15691,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 128209892565560
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 58467941708583
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 657325879400061
         }
       }
       entries {
@@ -15723,8 +15713,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 183117163730161
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 72700559366933
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 907978922044289
         }
       }
       entries {
@@ -15745,8 +15735,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 187828953911584
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 93119607485399
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 984660792892964
         }
       }
       entries {
@@ -15767,8 +15757,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 194252866286185
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 99041539156439
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1197140859118861
         }
       }
       entries {
@@ -15789,8 +15779,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 108025033225181
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40367372162748
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 241446288107485
         }
       }
       entries {
@@ -15811,8 +15801,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 144324987264357
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 58784436664248
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 796618250208661
         }
       }
       entries {
@@ -15833,8 +15823,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 199238864445797
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 76032764192632
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1044019882957066
         }
       }
       entries {
@@ -15855,8 +15845,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 207342355055366
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 99058671283289
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1405737480535951
         }
       }
       entries {
@@ -15877,8 +15867,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 214692678886413
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 101559954356788
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1448189259377897
         }
       }
       entries {
@@ -15899,8 +15889,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 93454690362343
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 40933688787228
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 762566877535620
         }
       }
       entries {
@@ -15921,8 +15911,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 153425250916495
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 60435041277658
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 986356778182862
         }
       }
       entries {
@@ -15943,8 +15933,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 212439413919957
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 77943019879477
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1437555733656883
         }
       }
       entries {
@@ -15965,8 +15955,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 221241099697690
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 101644152141983
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1601759261954431
         }
       }
       entries {
@@ -15987,8 +15977,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 226308857747399
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 98896688707277
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1632272223275258
         }
       }
       entries {
@@ -16009,8 +15999,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 82984915681273
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 50029905134656
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 141729385427666
         }
       }
       entries {
@@ -16031,8 +16021,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 128939276373461
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 62226062646692
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 207036263967221
         }
       }
       entries {
@@ -16053,8 +16043,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 133601906711252
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 81953294776511
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 524544125061065
         }
       }
       entries {
@@ -16075,8 +16065,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 133998932867427
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 78173818324118
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 630245760446091
         }
       }
       entries {
@@ -16097,8 +16087,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 145697680811096
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 85669537385962
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 740192554243860
         }
       }
       entries {
@@ -16119,8 +16109,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 103891228949469
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 55768656296257
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 209879168100078
         }
       }
       entries {
@@ -16141,8 +16131,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 161653328917159
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 72283942509004
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 297827286318563
         }
       }
       entries {
@@ -16163,8 +16153,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 154516069469802
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 91676819056970
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 827347420370816
         }
       }
       entries {
@@ -16185,8 +16175,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 168926103450818
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 88107315239912
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 845320401702462
         }
       }
       entries {
@@ -16207,8 +16197,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 185233691483282
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 92144187894049
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1068416435827671
         }
       }
       entries {
@@ -16229,8 +16219,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 114913975625744
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 57782420234091
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 626590895907797
         }
       }
       entries {
@@ -16251,8 +16241,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 184932605481280
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 75643588228042
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 376602858170020
         }
       }
       entries {
@@ -16273,8 +16263,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 177399184081451
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 97175877709052
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1107414135043671
         }
       }
       entries {
@@ -16295,8 +16285,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 192217473506960
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 94551519049414
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1202587836410409
         }
       }
       entries {
@@ -16317,8 +16307,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 213556784677992
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 97239405374810
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1401137244721738
         }
       }
       entries {
@@ -16339,8 +16329,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 130790605417421
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 59842656448983
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 779238408128090
         }
       }
       entries {
@@ -16361,8 +16351,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 188863448751985
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 77583552811860
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1169374753020454
         }
       }
       entries {
@@ -16383,8 +16373,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 193496956837348
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 99877734211581
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1477202853310404
         }
       }
       entries {
@@ -16405,8 +16395,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 214806765389340
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 98911599583451
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1533010088585992
         }
       }
       entries {
@@ -16427,8 +16417,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 233310988009278
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 96698855401605
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1676565277512457
         }
       }
       entries {
@@ -16449,8 +16439,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 137522016770129
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 60601537216611
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1040857240556178
         }
       }
       entries {
@@ -16471,8 +16461,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 204549038374072
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 78476095825615
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1370333348009890
         }
       }
       entries {
@@ -16493,8 +16483,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 205498369445341
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 102180081477042
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1646369830761859
         }
       }
       entries {
@@ -16515,8 +16505,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 225128180995000
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 96339068910576
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1742612207152321
         }
       }
       entries {
@@ -16537,8 +16527,8 @@ constexpr char kDefaultMatmulPTable[] = R"pb(
           value: 250613392933483
         }
         flops {
-          key: "f8e4m3fnxf8e4m3fn->bf16"
-          value: 91050258198742
+          key: "f8e4m3fnuzxf8e4m3fnuz->bf16"
+          value: 1725075902185543
         }
       }
     }
