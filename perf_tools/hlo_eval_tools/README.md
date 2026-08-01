@@ -80,6 +80,7 @@ hlo_eval_tools/
   configs/
     benchmark_profile.json
     xla_refs.txt
+    xla_targets.json
   scripts/
     run_xla_branch_eval.py
     compare_hlo_branch_results.py
@@ -703,56 +704,12 @@ Manual and automatic comparison use the same reference inventory and
 `comparison_target_ids` recorded in the schema-v2 manifest, so removed refs do
 not reappear in regenerated reports.
 
-### Stability evidence core
+### HLO stability companion
 
-The first formal stability patch provides a manifest/runner validation library
-and a post-processing CLI. It does not yet collect repeated measurements.
-Runner selection is manifest-only: exactly one live control and one to three
-completed candidates are accepted, runner files must remain inside the campaign
-directory, and every runner SHA256 must match its recorded campaign result.
-
-The analyzer consumes the repeated one-HLO layout proven by the debug workflow:
-
-```text
-<experiment>/
-  experiment_metadata.json
-  round_orders.csv
-  <role>/round_NN/csv/*.csv
-  <role>/round_NN/system_before.txt   # optional
-  <role>/round_NN/system_after.txt    # optional
-```
-
-Run:
-
-```bash
-python3 perf_tools/hlo_eval_tools/scripts/analyze_hlo_stability.py \
-  --experiment-dir /path/to/repeated-results \
-  --reference-csv /path/to/historical-reference.csv
-```
-
-Versioned outputs:
-
-```text
-stability_analysis.json
-stability_summary.csv
-raw_rounds_long.csv
-paired_deltas.csv
-```
-
-All role round sets must match; the analyzer refuses to silently omit unpaired
-evidence. Raw samples are retained and outliers are flagged rather than
-deleted. Candidate/control evidence uses paired rounds that exclude a pair when
-either target is flagged; at least three eligible pairs are required by
-default. Outlier thresholds, temporal-pattern thresholds, and candidate/control
-reporting bands are independent policies. JSON and CSV outputs carry schema
-version 2, and P05/P95 use the nearest-rank method. The outputs are descriptive
-evidence, not a release pass/fail decision.
-
-The repeated collector, cooldown/warmup policy, system snapshots, partial-run
-resume behavior, and integrated stability HTML are intentionally deferred to a
-second standalone `run_hlo_stability.py` commit after debug validation.
-Legacy role-directory experiments can be analyzed with explicit `--roles`;
-older flat `repeat_results.csv` bundles are not part of this formal contract.
+Repeated one-HLO stability collection is owned by the independent
+[`perf_tools/hlo_stability_tools`](../hlo_stability_tools/README.md) package.
+That tool uses `run_hlo_eval.sh` as its evaluator interface; the multi-branch
+campaign workflow and schemas in this directory remain independent.
 
 Use `--dry-run` to resolve refs and print the complete plan without building or
 profiling. It still refreshes Git remotes unless `--skip-fetch` is also given.

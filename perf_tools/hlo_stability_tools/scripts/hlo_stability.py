@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from reference_results import sha256_file
+from file_util import sha256_file
 
 
 TIME_UNITS_MS = {"ns": 1e-6, "us": 1e-3, "ms": 1.0, "s": 1e3}
@@ -128,25 +128,48 @@ def target_label(target: dict[str, Any], fallback: str) -> str:
     return source_ref or fallback
 
 
-def validate_campaign_manifest(manifest: dict[str, Any]) -> None:
+def validate_runner_bundle_manifest(manifest: dict[str, Any]) -> None:
     if (
         type(manifest.get("schema_version")) is not int
         or manifest["schema_version"] != 2
     ):
-        raise ValueError("stability requires a schema-v2 campaign manifest")
+        raise ValueError("stability requires a schema-v2 runner bundle")
+    if manifest.get("kind") != "hlo_stability_runner_bundle":
+        raise ValueError("runner bundle has an unsupported kind")
     if manifest.get("status") not in {"completed", "completed_with_failures"}:
         raise ValueError(
-            f"campaign is not finalized: {manifest.get('status')!r}"
+            f"runner bundle is not finalized: {manifest.get('status')!r}"
         )
     if (
         not isinstance(manifest.get("finished_at"), str)
         or not manifest["finished_at"]
     ):
-        raise ValueError("campaign has no finished_at timestamp")
+        raise ValueError("runner bundle has no finished_at timestamp")
+    source_original_state = manifest.get("source_original_state")
+    if (
+        not isinstance(source_original_state, dict)
+        or not isinstance(source_original_state.get("commit"), str)
+        or not isinstance(source_original_state.get("status"), str)
+        or (
+            source_original_state.get("branch") is not None
+            and not isinstance(source_original_state.get("branch"), str)
+        )
+    ):
+        raise ValueError(
+            "runner bundle has no valid source_original_state"
+        )
+    source_restore = manifest.get("source_restore")
+    if (
+        not isinstance(source_restore, dict)
+        or source_restore.get("status") != "restored"
+    ):
+        raise ValueError(
+            "runner bundle source checkout was not successfully restored"
+        )
     targets = manifest.get("targets")
     results = manifest.get("results")
     if not isinstance(targets, list) or not isinstance(results, list):
-        raise ValueError("campaign has no valid target/result lists")
+        raise ValueError("runner bundle has no valid target/result lists")
     target_ids = [
         target.get("id") for target in targets if isinstance(target, dict)
     ]
@@ -157,20 +180,22 @@ def validate_campaign_manifest(manifest: dict[str, Any]) -> None:
         not isinstance(target_id, str) or not target_id
         for target_id in target_ids
     ):
-        raise ValueError("campaign contains invalid target IDs")
+        raise ValueError("runner bundle contains invalid target IDs")
     if len(result_ids) != len(results) or any(
         not isinstance(result_id, str) or not result_id
         for result_id in result_ids
     ):
-        raise ValueError("campaign contains invalid result IDs")
+        raise ValueError("runner bundle contains invalid result IDs")
     if len(target_ids) != len(set(target_ids)):
-        raise ValueError("campaign contains duplicate target IDs")
+        raise ValueError("runner bundle contains duplicate target IDs")
     if len(result_ids) != len(set(result_ids)):
-        raise ValueError("campaign contains duplicate result IDs")
+        raise ValueError("runner bundle contains duplicate result IDs")
     for index, target in enumerate(targets):
-        _validate_target(target, f"campaign target {index}")
+        _validate_target(target, f"runner bundle target {index}")
         if not re.fullmatch(r"[0-9a-f]{40}", target["commit"]):
-            raise ValueError(f"campaign target {index} has an invalid commit")
+            raise ValueError(
+                f"runner bundle target {index} has an invalid commit"
+            )
     live_control_id = manifest.get("live_control_id")
     all_controls = [
         target
@@ -182,7 +207,7 @@ def validate_campaign_manifest(manifest: dict[str, Any]) -> None:
         len(all_controls) != 1
         or all_controls[0].get("id") != live_control_id
     ):
-        raise ValueError("campaign live_control_id is invalid")
+        raise ValueError("runner bundle live_control_id is invalid")
 
 
 def _validate_target(target: dict[str, Any], label: str) -> None:
@@ -195,36 +220,38 @@ def _validate_target(target: dict[str, Any], label: str) -> None:
         raise ValueError(f"{label} target has unsafe slug {slug!r}")
 
 
-def active_manifest_targets(manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    validate_campaign_manifest(manifest)
+def active_bundle_targets(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    validate_runner_bundle_manifest(manifest)
     targets = manifest.get("targets")
-    selected_ids = manifest.get("comparison_target_ids")
+    selected_ids = manifest.get("active_target_ids")
     if not isinstance(targets, list) or not isinstance(selected_ids, list):
-        raise ValueError("campaign has no valid targets/comparison_target_ids")
+        raise ValueError(
+            "runner bundle has no valid targets/active_target_ids"
+        )
     by_id = {
         target["id"]: target
         for target in targets
         if isinstance(target, dict) and isinstance(target.get("id"), str)
     }
     if any(not isinstance(target_id, str) for target_id in selected_ids):
-        raise ValueError("campaign comparison target IDs must be strings")
+        raise ValueError("runner bundle target IDs must be strings")
     if len(selected_ids) != len(set(selected_ids)):
-        raise ValueError("campaign comparison target IDs contain duplicates")
+        raise ValueError("runner bundle target IDs contain duplicates")
     missing = [target_id for target_id in selected_ids if target_id not in by_id]
     if missing:
         raise ValueError(
-            "campaign comparison targets are missing: " + ", ".join(missing)
+            "runner bundle targets are missing: " + ", ".join(missing)
         )
     return _validate_selected_targets([by_id[target_id] for target_id in selected_ids])
 
 
-def selected_manifest_targets(
+def selected_bundle_targets(
     manifest: dict[str, Any],
     target_specs: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
     if target_specs is None:
-        return active_manifest_targets(manifest)
-    validate_campaign_manifest(manifest)
+        return active_bundle_targets(manifest)
+    validate_runner_bundle_manifest(manifest)
     targets = [
         target
         for target in manifest.get("targets", [])
@@ -238,7 +265,7 @@ def selected_manifest_targets(
         and target.get("role") == "live_control"
     ]
     if len(controls) != 1:
-        raise ValueError("campaign must identify exactly one live control")
+        raise ValueError("runner bundle must identify exactly one live control")
     candidates_by_ref: dict[str, list[dict[str, Any]]] = {}
     for target in targets:
         if target.get("role") == "candidate":
@@ -250,7 +277,7 @@ def selected_manifest_targets(
         matches = candidates_by_ref.get(spec["revision"], [])
         if len(matches) != 1:
             raise ValueError(
-                f"expected one campaign candidate for {spec['revision']!r}; "
+                f"expected one runner bundle candidate for {spec['revision']!r}; "
                 f"found {len(matches)}"
             )
         target = dict(matches[0])
@@ -259,7 +286,7 @@ def selected_manifest_targets(
             target.get("commit") != configured_commit
         ):
             raise ValueError(
-                f"campaign commit mismatch for {spec['revision']}: "
+                f"runner bundle commit mismatch for {spec['revision']}: "
                 f"requested={configured_commit}, recorded={target.get('commit')}"
             )
         if "label" in spec:
@@ -290,12 +317,12 @@ def _validate_selected_targets(
     return [controls[0], *candidates]
 
 
-def resolve_campaign_targets(
-    campaign_dir: Path,
+def resolve_runner_bundle_targets(
+    bundle_dir: Path,
     manifest: dict[str, Any],
     target_specs: list[dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    campaign_dir = campaign_dir.resolve()
+    bundle_dir = bundle_dir.resolve()
     results_by_id = {
         result["id"]: result
         for result in manifest.get("results", [])
@@ -303,7 +330,7 @@ def resolve_campaign_targets(
     }
     resolved: dict[str, dict[str, Any]] = {}
     for index, target in enumerate(
-        selected_manifest_targets(manifest, target_specs)
+        selected_bundle_targets(manifest, target_specs)
     ):
         role = "control" if target["role"] == "live_control" else f"candidate_{index}"
         label = target_label(target, role)
@@ -322,10 +349,10 @@ def resolve_campaign_targets(
         ):
             raise ValueError(f"target {target['id']} has no valid runner SHA256")
         runner = (
-            campaign_dir / target["slug"] / "runner" / "hlo_runner_main"
+            bundle_dir / target["slug"] / "runner" / "hlo_runner_main"
         ).resolve()
-        if not runner.is_relative_to(campaign_dir):
-            raise ValueError(f"runner resolves outside campaign: {runner}")
+        if not runner.is_relative_to(bundle_dir):
+            raise ValueError(f"runner resolves outside bundle: {runner}")
         if not runner.is_file() or not os.access(runner, os.X_OK):
             raise ValueError(f"runner is missing or not executable: {runner}")
         actual_hash = sha256_file(runner)
@@ -350,7 +377,7 @@ def resolve_campaign_targets(
             "commit": target["commit"],
             "slug": target["slug"],
             "runner": str(runner),
-            "runner_relative_path": str(runner.relative_to(campaign_dir)),
+            "runner_relative_path": str(runner.relative_to(bundle_dir)),
             "recorded_runner_path": recorded_runner,
             "runner_sha256": actual_hash,
         }
@@ -359,6 +386,19 @@ def resolve_campaign_targets(
         if len(values) != len(set(values)):
             raise ValueError(f"selected targets contain duplicate {field}")
     return resolved
+
+
+def validate_runner(target: dict[str, Any]) -> Path:
+    runner = Path(str(target["runner"])).resolve()
+    if not runner.is_file() or not os.access(runner, os.X_OK):
+        raise ValueError(f"runner is missing or not executable: {runner}")
+    actual_hash = sha256_file(runner)
+    if actual_hash != target.get("runner_sha256"):
+        raise ValueError(
+            f"runner changed after preflight for {target.get('target_id')}: "
+            f"expected={target.get('runner_sha256')}, actual={actual_hash}"
+        )
+    return runner
 
 
 def order_cycle_for_roles(roles: tuple[str, ...]) -> OrderCycle:
@@ -390,8 +430,9 @@ def orders_for_rounds(
 
 def build_stability_plan(
     *,
-    campaign_dir: Path,
+    bundle_dir: Path,
     manifest: dict[str, Any],
+    manifest_path: Path | None = None,
     targets: dict[str, dict[str, Any]],
     rounds: int,
     target_cooldown_sec: float,
@@ -399,9 +440,11 @@ def build_stability_plan(
     selection_file: Path | None = None,
     selection_specs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    manifest_path = campaign_dir / "manifest.json"
+    manifest_path = manifest_path or bundle_dir / "manifest.json"
     if load_json_object(manifest_path) != manifest:
-        raise ValueError("campaign manifest object does not match on-disk manifest")
+        raise ValueError(
+            "runner bundle manifest does not match on-disk manifest"
+        )
     if selection_file is not None and load_target_specs(selection_file) != selection_specs:
         raise ValueError("target selector object does not match on-disk selector")
     cycle = order_cycle_for_roles(tuple(targets))
@@ -411,22 +454,42 @@ def build_stability_plan(
             f"{len(cycle)}; found {rounds}"
         )
     complete_cycle = True
+    portable_targets = {
+        role: {
+            key: value
+            for key, value in target.items()
+            if key not in {"runner", "recorded_runner_path"}
+        }
+        for role, target in targets.items()
+    }
+    source_target_file = None
+    recorded_target_file = manifest.get("inputs", {}).get("targets_file")
+    if isinstance(recorded_target_file, dict):
+        source_target_file = {
+            "file_name": Path(
+                str(recorded_target_file.get("path", "targets"))
+            ).name,
+            "format": "json",
+            "sha256": recorded_target_file.get("sha256"),
+        }
     return {
         "schema_version": 2,
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "source_campaign": str(campaign_dir.resolve()),
-        "source_campaign_manifest_sha256": sha256_file(
-            manifest_path
-        ),
-        "source_target_file": manifest.get("inputs", {}).get("refs_file"),
+        "runner_source": {
+            "kind": "runner_bundle",
+            "directory_name": bundle_dir.resolve().name,
+            "manifest_sha256": sha256_file(manifest_path),
+        },
+        "runner_source_manifest_sha256": sha256_file(manifest_path),
+        "source_target_file": source_target_file,
         "source_target_specs": manifest.get("target_specs"),
         "stability_target_selection": {
             "source": (
                 "explicit_xla_targets_json"
                 if selection_file is not None
-                else "campaign_comparison_target_ids"
+                else "runner_bundle_active_targets"
             ),
-            "path": str(selection_file.resolve()) if selection_file else None,
+            "file_name": selection_file.name if selection_file else None,
             "sha256": sha256_file(selection_file) if selection_file else None,
             "targets": selection_specs,
         },
@@ -452,7 +515,7 @@ def build_stability_plan(
             "target_cooldown_sec": target_cooldown_sec,
             "round_cooldown_sec": round_cooldown_sec,
         },
-        "targets": targets,
+        "targets": portable_targets,
     }
 
 
@@ -469,7 +532,12 @@ def parse_time_ms(value: str) -> float:
     raise ValueError(f"unsupported timing value: {value!r}")
 
 
-def read_result(path: Path) -> tuple[str, str, float]:
+def read_result(
+    path: Path,
+    *,
+    expected_module: str | None = None,
+    require_single_row: bool = False,
+) -> tuple[str, str, float]:
     lines = [
         line
         for line in path.read_text(encoding="utf-8").splitlines()
@@ -478,12 +546,22 @@ def read_result(path: Path) -> tuple[str, str, float]:
     rows = list(csv.reader(lines))
     if len(rows) < 2:
         raise ValueError(f"CSV has no timing row: {path}")
+    if require_single_row and len(rows) != 2:
+        raise ValueError(
+            f"CSV must contain exactly one timing row: {path}; "
+            f"found {len(rows) - 1}"
+        )
     header, latest = rows[0], rows[-1]
     if len(header) != len(latest):
         raise ValueError(f"CSV column mismatch: {path}")
     modules = header[1:]
     if len(modules) != 1:
         raise ValueError(f"expected one HLO module in {path}: {modules}")
+    if expected_module is not None and modules[0] != expected_module:
+        raise ValueError(
+            f"CSV module differs from selected HLO: "
+            f"expected={expected_module!r}, found={modules[0]!r}"
+        )
     return modules[0], latest[0].strip(), parse_time_ms(latest[1])
 
 
@@ -596,8 +674,13 @@ def temporal_trend(
         for index, round_id in enumerate(common_rounds)
         if not flags[round_id]
     ]
-    early_median = statistics.median(early) if early else None
-    late_median = statistics.median(late) if late else None
+    enough_half_samples = len(early) >= 2 and len(late) >= 2
+    early_median = (
+        statistics.median(early) if enough_half_samples else None
+    )
+    late_median = (
+        statistics.median(late) if enough_half_samples else None
+    )
     delta = (
         (late_median / early_median - 1.0) * 100.0
         if early_median and late_median is not None
@@ -617,13 +700,13 @@ def temporal_trend(
             median = statistics.median(value for _, value in points)
             slope_percent = slope * 10.0 / median * 100.0 if median else None
     if delta is None:
-        verdict = "insufficient clean samples"
+        verdict = "insufficient clean samples per scheduled half"
     elif delta >= materiality_percent:
-        verdict = "later rounds slower"
+        verdict = "clean-mode median later rounds slower"
     elif delta <= -materiality_percent:
-        verdict = "later rounds faster"
+        verdict = "clean-mode median later rounds faster"
     else:
-        verdict = "no material temporal drift"
+        verdict = "no material clean-mode median drift"
     return {
         "clean_sample_count": len(points),
         "early_clean_count": len(early),
@@ -693,47 +776,6 @@ def load_orders(
             },
             "inferred_experiment_metadata_cycle",
         )
-    if all(round_id.isdigit() for round_id in round_ids):
-        legacy_cycle: tuple[tuple[str, ...], ...] = ()
-        source = ""
-        if set(roles) == {"control", "sentinel", "main"}:
-            legacy_cycle = (
-                ("control", "sentinel", "main"),
-                ("sentinel", "main", "control"),
-                ("main", "control", "sentinel"),
-                ("main", "sentinel", "control"),
-                ("sentinel", "control", "main"),
-                ("control", "main", "sentinel"),
-            )
-            source = "inferred_legacy_three_target_cycle"
-        elif set(roles) == {"control", "sentinel", "v0101", "main"}:
-            legacy_cycle = (
-                ("control", "sentinel", "main", "v0101"),
-                ("sentinel", "v0101", "control", "main"),
-                ("v0101", "main", "sentinel", "control"),
-                ("main", "control", "v0101", "sentinel"),
-            )
-            source = "inferred_legacy_four_target_cycle"
-        elif set(roles) == {"control", "v0101", "v0102", "main"}:
-            legacy_cycle = (
-                ("control", "v0101", "main", "v0102"),
-                ("v0101", "v0102", "control", "main"),
-                ("v0102", "main", "v0101", "control"),
-                ("main", "control", "v0102", "v0101"),
-            )
-            source = "inferred_legacy_transition_cycle"
-        if legacy_cycle:
-            return (
-                {
-                    round_id: list(
-                        legacy_cycle[
-                            (int(round_id) - 1) % len(legacy_cycle)
-                        ]
-                    )
-                    for round_id in round_ids
-                },
-                source,
-            )
     raise FileNotFoundError(
         f"execution-order metadata is missing: {path}"
     )
