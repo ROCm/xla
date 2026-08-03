@@ -92,6 +92,15 @@ cc_library(
     }),
 )
 
+cc_library(
+    name = "libhipcxx_headers",
+    hdrs = glob(
+        ["%{rocm_root}/include/libhipcxx/**"],
+        allow_empty = True,
+    ),
+    strip_include_prefix = "%{rocm_root}/include/libhipcxx",
+)
+
 # This target is required to
 # add includes that are used by rocm headers themself
 # through the virtual includes
@@ -105,6 +114,7 @@ cc_library(
     defines = {"__HIP_DISABLE_CPP_FUNCTIONS__": "1"},
     strip_include_prefix = "%{rocm_root}/include",
     deps = [
+        ":libhipcxx_headers",
         "@xla//third_party/libdrm:drm_headers",
     ],
 )
