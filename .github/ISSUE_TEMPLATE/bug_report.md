@@ -12,10 +12,9 @@ A clear and concise description of what the bug is.
 
 **To Reproduce**
 Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+1. `bazel run --config=rocm_ci_hermetic xxx`
+2. get the hlo
+3. See regression/error
 
 **Expected behavior**
 A clear and concise description of what you expected to happen.
@@ -23,10 +22,9 @@ A clear and concise description of what you expected to happen.
 **Screenshots**
 If applicable, add screenshots to help explain your problem.
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
+**Hardware and Software info (please complete the following information):**
+ - GPU info [e.g., MI300, MI350 or R9700]
+ - JAX/XLA Version [e.g. 0.10.2 or specific commit]
 
 
 **Additional context**
