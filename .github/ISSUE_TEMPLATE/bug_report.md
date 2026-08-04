@@ -26,6 +26,7 @@ If applicable, add screenshots to help explain your problem.
  - GPU info [e.g., MI300, MI350 or R9700]
  - JAX/XLA Version [e.g. 0.10.2 or specific commit]
  - ROCm version [e.g., legacy ROCm 7.2.4 or theRock 7.14]
+ - Docker image [e.g., ghcr.io/rocm/jax-ubu22.rocm7.2.4]
 
 
 **Additional context**
