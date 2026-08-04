@@ -22,6 +22,8 @@ limitations under the License.
 
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_set.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/profiler/utils/xplane_schema.h"
 #include "xla/tsl/profiler/utils/xplane_utils.h"
@@ -60,16 +62,12 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   api_event.name = "test_rocm_kernel";
   api_event.correlation_id = kCorrelationId;
   api_event.thread_id = 999;
+  // KernelDetails is a union member with no default member initializer, so it
+  // has to be value-initialized explicitly. It is left zeroed here on purpose:
+  // ApiActivityInfoExchange copies activity->api, so the ACTIVITY side below
+  // is the authoritative one -- same direction as the real tracer, which
+  // builds KernelDetails in KernelEvent() on the dispatch record.
   api_event.kernel_info = KernelDetails{};
-  api_event.kernel_info.private_segment_size = 32;
-  api_event.kernel_info.group_segment_size = 1024;
-  api_event.kernel_info.workgroup_x = 256;
-  api_event.kernel_info.workgroup_y = 1;
-  api_event.kernel_info.workgroup_z = 1;
-  api_event.kernel_info.grid_x = 100;
-  api_event.kernel_info.grid_y = 1;
-  api_event.kernel_info.grid_z = 1;
-  api_event.kernel_info.num_regs = 32;
 
   collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
 
@@ -84,6 +82,16 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   activity_event.end_time_ns = kEndTimeNs;
   activity_event.device_id = 100;
   activity_event.stream_id = 123;
+  activity_event.kernel_info = KernelDetails{};
+  activity_event.kernel_info.private_segment_size = 32;
+  activity_event.kernel_info.group_segment_size = 1024;
+  activity_event.kernel_info.workgroup_x = 256;
+  activity_event.kernel_info.workgroup_y = 1;
+  activity_event.kernel_info.workgroup_z = 1;
+  activity_event.kernel_info.grid_x = 100;
+  activity_event.kernel_info.grid_y = 1;
+  activity_event.kernel_info.grid_z = 1;
+  activity_event.kernel_info.arch_vgpr_count = 32;
 
   collector.AddEvent(std::move(activity_event), /*is_auxiliary=*/false);
 
@@ -140,20 +148,24 @@ TEST(RocmCollectorTest, MultipleActivitiesPerCorrelationIdAllExported) {
   api_event.correlation_id = kCorrelationId;
   api_event.thread_id = 999;
   api_event.kernel_info = KernelDetails{};
-  api_event.kernel_info.num_regs = 32;
+  api_event.kernel_info.arch_vgpr_count = 32;
   collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
 
   // Three GPU activity records, same correlation_id, same stream (so
   // they land on the same XLine), distinct names and timestamps.
+  // Distinct register counts per dispatch: a graph replay mixes a cheap
+  // elementwise kernel with an expensive MFMA one, and each must keep its own
+  // KernelDetails through the api/activity merge.
   struct ActivityShape {
     const char* name;
     uint64_t start_ns;
     uint64_t end_ns;
+    uint32_t arch_vgpr_count;
   };
   constexpr ActivityShape kActivities[] = {
-      {"kernel_a", 3000, 3500},
-      {"kernel_b", 3500, 4000},
-      {"kernel_c", 4000, 4500},
+      {"kernel_a", 3000, 3500, 8},
+      {"kernel_b", 3500, 4000, 64},
+      {"kernel_c", 4000, 4500, 256},
   };
   for (const auto& shape : kActivities) {
     RocmTracerEvent activity;
@@ -166,6 +178,11 @@ TEST(RocmCollectorTest, MultipleActivitiesPerCorrelationIdAllExported) {
     activity.end_time_ns = shape.end_ns;
     activity.device_id = kDeviceId;
     activity.stream_id = kStreamId;
+    activity.kernel_info = KernelDetails{};
+    activity.kernel_info.workgroup_x = 256;
+    activity.kernel_info.workgroup_y = 1;
+    activity.kernel_info.workgroup_z = 1;
+    activity.kernel_info.arch_vgpr_count = shape.arch_vgpr_count;
     collector.AddEvent(std::move(activity), /*is_auxiliary=*/false);
   }
 
@@ -180,16 +197,34 @@ TEST(RocmCollectorTest, MultipleActivitiesPerCorrelationIdAllExported) {
   // Pre-fix (.front()-only) would emit just one event here. The fix
   // iterates the entire vector, so all three activity records must
   // appear on the stream line.
+  int64_t details_id = -1;
+  for (const auto& [id, smd] : gpu_plane->stat_metadata()) {
+    if (smd.name() ==
+        GetStatTypeStr(tsl::profiler::StatType::kKernelDetails)) {
+      details_id = id;
+      break;
+    }
+  }
+
   size_t total_kernel_events = 0;
   absl::flat_hash_set<std::string> seen_names;
+  absl::flat_hash_map<std::string, std::string> details_by_name;
   for (const auto& line : gpu_plane->lines()) {
     if (line.id() != static_cast<int64_t>(kStreamId)) {
       continue;
     }
     total_kernel_events += line.events_size();
     for (const auto& ev : line.events()) {
-      seen_names.insert(
-          gpu_plane->event_metadata().at(ev.metadata_id()).name());
+      const std::string& name =
+          gpu_plane->event_metadata().at(ev.metadata_id()).name();
+      seen_names.insert(name);
+      for (const auto& stat : ev.stats()) {
+        if (stat.metadata_id() != details_id) continue;
+        auto it = gpu_plane->stat_metadata().find(stat.ref_value());
+        if (it != gpu_plane->stat_metadata().end()) {
+          details_by_name[name] = it->second.name();
+        }
+      }
     }
   }
 
@@ -202,11 +237,74 @@ TEST(RocmCollectorTest, MultipleActivitiesPerCorrelationIdAllExported) {
   EXPECT_TRUE(seen_names.contains("kernel_a"));
   EXPECT_TRUE(seen_names.contains("kernel_b"));
   EXPECT_TRUE(seen_names.contains("kernel_c"));
+
+  // Each dispatch must keep its OWN registers. Before the merge fix, the
+  // api/activity exchange seeded the shared api_event from `.front()` and then
+  // copied it back over every activity, so all three reported regs:8 -- and
+  // therefore all three would report kernel_a's occupancy. No agent is
+  // registered here, so regs is the non-unified max(arch, accum) == arch.
+  for (const auto& shape : kActivities) {
+    auto it = details_by_name.find(shape.name);
+    ASSERT_NE(it, details_by_name.end())
+        << shape.name << " has no kKernelDetails stat";
+    EXPECT_EQ(it->second.rfind(absl::StrCat("regs:", shape.arch_vgpr_count,
+                                            " "),
+                               0),
+              0u)
+        << shape.name << " must report its own register count, got: "
+        << it->second;
+  }
 }
 
 // ============================================================================
 // Occupancy unit tests
+//
+// The formula itself is pinned by a 16-row golden table in
+// rocm_occupancy_test.cc, which needs no ROCm at all. What is tested here is
+// the collector's half of the job: that KernelDetails reaches
+// RocmDeviceOccupancyParams intact, that the agent's gfx_target_version and
+// cu_count reach the model, and that the resulting XStats are the ones XProf
+// expects.
 // ============================================================================
+
+// gfx942 == MI300X. Decoded as major=(v/10000)%100, minor=(v/100)%100,
+// step=v%100, all decimal.
+constexpr uint32_t kGfx942 = 90402;
+constexpr uint32_t kCuCount = 304;  // MI300X
+
+// Returns the first stat of `type` found on any event in `plane`, or nullptr
+// if that stat was never emitted.
+const tensorflow::profiler::XStat* FindEventStat(
+    const tensorflow::profiler::XPlane& plane, StatType type) {
+  absl::string_view key = GetStatTypeStr(type);
+  int64_t stat_id = -1;
+  for (const auto& [id, smd] : plane.stat_metadata()) {
+    if (smd.name() == key) {
+      stat_id = id;
+      break;
+    }
+  }
+  if (stat_id < 0) return nullptr;
+  for (const auto& line : plane.lines()) {
+    for (const auto& ev : line.events()) {
+      for (const auto& stat : ev.stats()) {
+        if (stat.metadata_id() == stat_id) return &stat;
+      }
+    }
+  }
+  return nullptr;
+}
+
+// Returns the kKernelDetails string of the first kernel event in `plane`, or
+// the empty string if there is none. The details value is a reference into the
+// plane's stat metadata, so it takes two lookups to reach.
+std::string FindKernelDetails(const tensorflow::profiler::XPlane& plane) {
+  const auto* stat = FindEventStat(plane, StatType::kKernelDetails);
+  if (stat == nullptr) return "";
+  auto it = plane.stat_metadata().find(stat->ref_value());
+  if (it == plane.stat_metadata().end()) return "";
+  return it->second.name();
+}
 
 // Helper: build a RocmTraceCollectorImpl and inject a paired API + Activity
 // kernel event, optionally with GPU agent data for occupancy.
@@ -226,9 +324,28 @@ struct OccupancyTestFixture {
       : collector(MakeOpts(), /*start_walltime_ns=*/1000,
                   /*start_gputime_ns=*/2000) {}
 
-  void AddKernelPair(uint32_t num_regs, uint32_t wg_x, uint32_t wg_y,
+  // Injects a synthetic rocprofiler agent so the occupancy success path can be
+  // exercised with no GPU and no ROCm runtime. Only the fields
+  // GetDeviceCapabilities reads are set; the rest stay zeroed, and
+  // mem_banks_count == 0 keeps the VRAM branch out of the way.
+  void SetSyntheticAgent(uint32_t gfx_target_version, uint32_t cu_count) {
+    rocprofiler_agent_v0_t agent{};
+    agent.gfx_target_version = gfx_target_version;
+    agent.cu_count = cu_count;
+    // Matching the gfx942 row of the occupancy target table, so the
+    // cross-check in GetDeviceCapabilities stays quiet.
+    agent.lds_size_in_kb = 64;
+    agent.max_waves_per_simd = 8;
+    agent.simd_per_cu = 4;
+    agent.wave_front_size = 64;
+    collector.SetGpuAgents({agent});
+  }
+
+  void AddKernelPair(uint32_t arch_vgpr_count, uint32_t wg_x, uint32_t wg_y,
                      uint32_t wg_z, uint32_t smem, uint64_t start_ns,
-                     uint64_t end_ns, uint32_t corr_id = 1) {
+                     uint64_t end_ns, uint32_t corr_id = 1,
+                     uint32_t accum_vgpr_count = 0, uint32_t sgpr_count = 0,
+                     uint32_t static_smem = 0) {
     RocmTracerEvent api;
     api.type = RocmTracerEventType::Kernel;
     api.source = RocmTracerEventSource::ApiCallback;
@@ -236,12 +353,10 @@ struct OccupancyTestFixture {
     api.name = "test_kernel";
     api.correlation_id = corr_id;
     api.thread_id = 1;
+    // Zeroed, exactly as the real API-callback path leaves it: the launch
+    // parameters arrive on the dispatch record, not on the HIP API callback,
+    // and ApiActivityInfoExchange overwrites this side with that one.
     api.kernel_info = KernelDetails{};
-    api.kernel_info.num_regs = num_regs;
-    api.kernel_info.workgroup_x = wg_x;
-    api.kernel_info.workgroup_y = wg_y;
-    api.kernel_info.workgroup_z = wg_z;
-    api.kernel_info.group_segment_size = smem;
     collector.AddEvent(std::move(api), false);
 
     RocmTracerEvent act;
@@ -254,14 +369,28 @@ struct OccupancyTestFixture {
     act.end_time_ns = end_ns;
     act.device_id = 0;
     act.stream_id = 1;
+    // The dispatch record is where KernelDetails actually comes from: the
+    // workgroup and LDS sizes straight from rocprofiler, the register counts
+    // grafted on from the code-object kernel-symbol callback.
+    act.kernel_info = KernelDetails{};
+    act.kernel_info.arch_vgpr_count = arch_vgpr_count;
+    act.kernel_info.accum_vgpr_count = accum_vgpr_count;
+    act.kernel_info.sgpr_count = sgpr_count;
+    act.kernel_info.workgroup_x = wg_x;
+    act.kernel_info.workgroup_y = wg_y;
+    act.kernel_info.workgroup_z = wg_z;
+    act.kernel_info.group_segment_size = smem;
+    act.kernel_info.static_group_segment_size = static_smem;
     collector.AddEvent(std::move(act), false);
   }
 };
 
-// When num_regs == 0 the occupancy block must not be written.
-TEST(RocmCollectorOccupancyTest, ZeroNumRegsSkipsOccupancyStats) {
+// A kernel symbol with no VGPRs at all means the code-object callback never
+// ran for it (a real kernel always allocates at least one register), so there
+// is nothing to model and the occupancy block must not be written.
+TEST(RocmCollectorOccupancyTest, ZeroVgprCountSkipsOccupancyStats) {
   OccupancyTestFixture f;
-  f.AddKernelPair(/*num_regs=*/0, 256, 1, 1, 0, 3000, 4000);
+  f.AddKernelPair(/*arch_vgpr_count=*/0, 256, 1, 1, 0, 3000, 4000);
 
   f.collector.Flush();
   tensorflow::profiler::XSpace space;
@@ -274,16 +403,18 @@ TEST(RocmCollectorOccupancyTest, ZeroNumRegsSkipsOccupancyStats) {
       GetStatTypeStr(StatType::kTheoreticalOccupancyPct);
   for (const auto& [id, smd] : gpu->stat_metadata()) {
     EXPECT_NE(smd.name(), kOccKey)
-        << "kTheoreticalOccupancyPct must not appear when num_regs == 0";
+        << "kTheoreticalOccupancyPct must not appear with no register counts";
   }
 }
 
-// When agent data has not been set (max_waves_per_cu_ == 0), occupancy must
-// not be written even if num_regs is non-zero.
-TEST(RocmCollectorOccupancyTest, ZeroWavesPerCuSkipsOccupancyStats) {
+// Without agent data there is no gfx_target_version, and without a target the
+// model has no register-file size, no LDS capacity and no granules -- every
+// one of which the formula needs. Occupancy must be skipped rather than
+// guessed, even though the register count here is perfectly valid.
+TEST(RocmCollectorOccupancyTest, NoAgentCapabilitiesSkipsOccupancyStats) {
   OccupancyTestFixture f;
-  // num_regs=32 but no agent data injected → max_waves_per_cu_ stays 0.
-  f.AddKernelPair(/*num_regs=*/32, 256, 1, 1, 0, 3000, 4000);
+  // Valid registers, but no agent injected, so gfx_target_version_ stays 0.
+  f.AddKernelPair(/*arch_vgpr_count=*/32, 256, 1, 1, 0, 3000, 4000);
 
   f.collector.Flush();
   tensorflow::profiler::XSpace space;
@@ -296,15 +427,131 @@ TEST(RocmCollectorOccupancyTest, ZeroWavesPerCuSkipsOccupancyStats) {
       GetStatTypeStr(StatType::kTheoreticalOccupancyPct);
   for (const auto& [id, smd] : gpu->stat_metadata()) {
     EXPECT_NE(smd.name(), kOccKey)
-        << "kTheoreticalOccupancyPct must not appear when max_waves_per_cu=0";
+        << "kTheoreticalOccupancyPct must not appear without a known target";
   }
+}
+
+// The suggested-block-size stat is gone: it was computed as
+// waves_per_block * wave_front_size, which is just block_size rounded up to a
+// wavefront -- an echo of the input, not a suggestion. It must not come back.
+TEST(RocmCollectorOccupancyTest, SuggestedBlockSizeIsNeverEmitted) {
+  OccupancyTestFixture f;
+  // The agent matters here: without it occupancy is skipped entirely and the
+  // assertion below would pass for the wrong reason.
+  f.SetSyntheticAgent(kGfx942, kCuCount);
+  f.AddKernelPair(/*arch_vgpr_count=*/32, 256, 1, 1, 0, 3000, 4000);
+
+  f.collector.Flush();
+  tensorflow::profiler::XSpace space;
+  f.collector.Export(&space);
+
+  const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu, nullptr);
+
+  ASSERT_NE(FindEventStat(*gpu, StatType::kTheoreticalOccupancyPct), nullptr)
+      << "occupancy was not computed, so this test proves nothing";
+
+  absl::string_view kSuggestedKey =
+      GetStatTypeStr(StatType::kOccupancySuggestedBlockSize);
+  for (const auto& [id, smd] : gpu->stat_metadata()) {
+    EXPECT_NE(smd.name(), kSuggestedKey)
+        << "kOccupancySuggestedBlockSize was deliberately removed";
+  }
+}
+
+// The success path, end to end, with no GPU and no ROCm runtime: a synthetic
+// gfx942 agent plus known register counts must land on exactly the number the
+// golden table predicts. 128 arch VGPRs (no AGPRs, so the max() branch of the
+// unified count applies) granulate to 128, giving 512/128 = 4 waves/SIMD out
+// of 8 -> 50%.
+TEST(RocmCollectorOccupancyTest, VgprLimitedKernelReportsExactOccupancy) {
+  OccupancyTestFixture f;
+  f.SetSyntheticAgent(kGfx942, kCuCount);
+  f.AddKernelPair(/*arch_vgpr_count=*/128, 256, 1, 1, /*smem=*/0, 3000, 4000);
+
+  f.collector.Flush();
+  tensorflow::profiler::XSpace space;
+  f.collector.Export(&space);
+
+  const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu, nullptr);
+
+  const auto* occ = FindEventStat(*gpu, StatType::kTheoreticalOccupancyPct);
+  ASSERT_NE(occ, nullptr) << "occupancy stat missing on the success path";
+  EXPECT_DOUBLE_EQ(occ->double_value(), 50.0);
+
+  // Whole device, not per CU: 4 workgroups/CU * 304 CUs. The pre-change code
+  // reported the per-CU figure (4) under the same stat name, which XProf
+  // renders as "min grid size" -- off by the CU count.
+  const auto* grid = FindEventStat(*gpu, StatType::kOccupancyMinGridSize);
+  ASSERT_NE(grid, nullptr);
+  EXPECT_EQ(grid->int64_value(), 4 * kCuCount);
+}
+
+// The AGPR fix, end to end -- the reason this PR exists. On gfx942 the
+// register file is unified, so an MFMA kernel holding 5 arch VGPRs and 128
+// AGPRs really costs alignTo(5,4) + 128 = 132 VGPRs, granulated to 136: three
+// waves per SIMD out of eight, 37.5%.
+//
+// Reading only arch_vgpr_count -- what the collector did before -- sees 5
+// registers, concludes the kernel is unconstrained, and reports 100%. That is
+// a 2.7x over-report on precisely the kernels a profiler user is opening the
+// trace to look at.
+TEST(RocmCollectorOccupancyTest, MfmaAgprsReachTheModel) {
+  OccupancyTestFixture f;
+  f.SetSyntheticAgent(kGfx942, kCuCount);
+  f.AddKernelPair(/*arch_vgpr_count=*/5, 256, 1, 1, /*smem=*/0, 3000, 4000,
+                  /*corr_id=*/1, /*accum_vgpr_count=*/128);
+
+  f.collector.Flush();
+  tensorflow::profiler::XSpace space;
+  f.collector.Export(&space);
+
+  const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu, nullptr);
+
+  const auto* occ = FindEventStat(*gpu, StatType::kTheoreticalOccupancyPct);
+  ASSERT_NE(occ, nullptr);
+  EXPECT_DOUBLE_EQ(occ->double_value(), 37.5)
+      << "AGPRs are not reaching the occupancy model; a kernel with 128 AGPRs "
+         "cannot be at full occupancy on a unified register file";
+
+  const auto* grid = FindEventStat(*gpu, StatType::kOccupancyMinGridSize);
+  ASSERT_NE(grid, nullptr);
+  EXPECT_EQ(grid->int64_value(), 3 * kCuCount);
+}
+
+// LDS is the other input that only reaches the model through KernelDetails.
+// 32 KiB per workgroup out of gfx942's 64 KiB per CU allows two resident
+// workgroups, i.e. 512 of 2048 thread slots -> 25%, well under the 8
+// workgroups the 32 VGPRs would otherwise permit.
+TEST(RocmCollectorOccupancyTest, LdsLimitedKernelReportsExactOccupancy) {
+  OccupancyTestFixture f;
+  f.SetSyntheticAgent(kGfx942, kCuCount);
+  f.AddKernelPair(/*arch_vgpr_count=*/32, 256, 1, 1, /*smem=*/32768, 3000,
+                  4000);
+
+  f.collector.Flush();
+  tensorflow::profiler::XSpace space;
+  f.collector.Export(&space);
+
+  const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu, nullptr);
+
+  const auto* occ = FindEventStat(*gpu, StatType::kTheoreticalOccupancyPct);
+  ASSERT_NE(occ, nullptr);
+  EXPECT_DOUBLE_EQ(occ->double_value(), 25.0);
+
+  const auto* grid = FindEventStat(*gpu, StatType::kOccupancyMinGridSize);
+  ASSERT_NE(grid, nullptr);
+  EXPECT_EQ(grid->int64_value(), 2 * kCuCount);
 }
 
 // kKernelDetails stat must always be present for kernel activity events,
 // regardless of whether occupancy was computed.
 TEST(RocmCollectorOccupancyTest, KernelDetailsAlwaysPresent) {
   OccupancyTestFixture f;
-  f.AddKernelPair(/*num_regs=*/0, 64, 1, 1, 512, 3000, 4000);
+  f.AddKernelPair(/*arch_vgpr_count=*/0, 64, 1, 1, 512, 3000, 4000);
 
   f.collector.Flush();
   tensorflow::profiler::XSpace space;
@@ -325,10 +572,10 @@ TEST(RocmCollectorOccupancyTest, KernelDetailsAlwaysPresent) {
                                 "kernel events regardless of occupancy";
 }
 
-// kKernelDetails string must contain "occ_pct:0" when num_regs == 0.
+// kKernelDetails string must contain "occ_pct:0" when the model was skipped.
 TEST(RocmCollectorOccupancyTest, KernelDetailsContainsZeroOccupancyWhenNoRegs) {
   OccupancyTestFixture f;
-  f.AddKernelPair(/*num_regs=*/0, 128, 1, 1, 0, 3000, 4000);
+  f.AddKernelPair(/*arch_vgpr_count=*/0, 128, 1, 1, 0, 3000, 4000);
 
   f.collector.Flush();
   tensorflow::profiler::XSpace space;
@@ -337,141 +584,119 @@ TEST(RocmCollectorOccupancyTest, KernelDetailsContainsZeroOccupancyWhenNoRegs) {
   const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
   ASSERT_NE(gpu, nullptr);
 
-  absl::string_view kDetailsKey = GetStatTypeStr(StatType::kKernelDetails);
-  int64_t details_stat_id = -1;
-  for (const auto& [id, smd] : gpu->stat_metadata()) {
-    if (smd.name() == kDetailsKey) {
-      details_stat_id = id;
-      break;
-    }
-  }
-  ASSERT_GE(details_stat_id, 0) << "kKernelDetails stat metadata not found";
-
-  bool found_occ_pct_zero = false;
-  for (const auto& line : gpu->lines()) {
-    for (const auto& ev : line.events()) {
-      for (const auto& stat : ev.stats()) {
-        if (stat.metadata_id() != details_stat_id) continue;
-        int64_t ref = stat.ref_value();
-        auto it = gpu->stat_metadata().find(ref);
-        if (it == gpu->stat_metadata().end()) continue;
-        if (it->second.name().find("occ_pct:0") != std::string::npos) {
-          found_occ_pct_zero = true;
-        }
-      }
-    }
-  }
-  EXPECT_TRUE(found_occ_pct_zero)
-      << "KernelDetails string must contain 'occ_pct:0' when num_regs == 0";
+  const std::string details = FindKernelDetails(*gpu);
+  ASSERT_FALSE(details.empty()) << "kKernelDetails stat not found";
+  EXPECT_NE(details.find("occ_pct:0"), std::string::npos)
+      << "KernelDetails string must contain 'occ_pct:0' when the model is "
+         "skipped; got: "
+      << details;
 }
 
-// RocmDeviceOccupancyParams equality and hashing must work correctly so that
-// the occupancy cache deduplicates across identical kernel launches.
-TEST(RocmCollectorOccupancyTest, OccupancyParamsCacheKey) {
-  RocmDeviceOccupancyParams a{};
-  a.num_regs = 32;
-  a.block_size = 256;
-  a.smem_bytes = 0;
-  a.max_waves_per_cu = 32;
-  a.wave_front_size = 64;
-  a.max_waves_per_simd = 8;
-  a.simd_per_cu = 4;
-  a.lds_size_bytes = 65536;
+// The `regs:` token must carry the same unified charge the occupancy model
+// used, not arch_vgpr_count. A tooltip reading "regs:5 ... occ_pct:37.5" reads
+// as a bug in the occupancy number; "regs:136 ... occ_pct:37.5" is the
+// explanation for it. This is also the only place the AGPR count becomes
+// visible to a user, which is the point of the whole change.
+TEST(RocmCollectorOccupancyTest, KernelDetailsRegsIsTheUnifiedVgprCount) {
+  OccupancyTestFixture f;
+  f.SetSyntheticAgent(kGfx942, kCuCount);
+  f.AddKernelPair(/*arch_vgpr_count=*/5, 256, 1, 1, /*smem=*/0, 3000, 4000,
+                  /*corr_id=*/1, /*accum_vgpr_count=*/128);
 
-  RocmDeviceOccupancyParams b = a;
-  EXPECT_EQ(a, b) << "Identical params must compare equal";
+  f.collector.Flush();
+  tensorflow::profiler::XSpace space;
+  f.collector.Export(&space);
 
-  b.num_regs = 64;
-  EXPECT_NE(a, b) << "Params with different num_regs must not be equal";
+  const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu, nullptr);
 
-  b = a;
-  b.block_size = 128;
-  EXPECT_NE(a, b) << "Params with different block_size must not be equal";
-
-  b = a;
-  b.max_waves_per_cu = 16;
-  EXPECT_NE(a, b) << "Params with different max_waves_per_cu must not be equal";
-
-  b = a;
-  b.wave_front_size = 32;
-  EXPECT_NE(a, b) << "Params with different wave_front_size must not be equal";
+  const std::string details = FindKernelDetails(*gpu);
+  ASSERT_FALSE(details.empty()) << "kKernelDetails stat not found";
+  // Leading token, matching the CUDA collector's string layout.
+  EXPECT_EQ(details.rfind("regs:136 ", 0), 0u)
+      << "expected the string to start with the unified count 136 (= "
+         "alignTo(5,4) + 128); got: "
+      << details;
+  EXPECT_NE(details.find("occ_pct:37.5"), std::string::npos) << details;
 }
 
-// ============================================================================
-// Direct formula validation (GetOccupancy is a free function)
-// ============================================================================
+// The dispatch record reports total LDS and the code-object symbol reports the
+// static half; the string carries both, under CUDA's names, so XProf shows the
+// same two fields for both vendors. This is the only reader of
+// KernelDetails::static_group_segment_size -- if this test goes, the field
+// should go with it.
+TEST(RocmCollectorOccupancyTest, KernelDetailsSplitsStaticAndDynamicLds) {
+  OccupancyTestFixture f;
+  f.SetSyntheticAgent(kGfx942, kCuCount);
+  f.AddKernelPair(/*arch_vgpr_count=*/8, 256, 1, 1, /*smem=*/16384, 3000, 4000,
+                  /*corr_id=*/1, /*accum_vgpr_count=*/0, /*sgpr_count=*/0,
+                  /*static_smem=*/4096);
 
-// gfx942 (MI300/CDNA3): 512 VGPRs/SIMD, 4 SIMDs/CU, 8 waves/SIMD,
-// 32 waves/CU, 64 threads/wave, 64 KiB LDS.
-// A kernel with 128 VGPRs/thread, block_size=256, no LDS:
-//   waves_per_block     = ceil(256/64) = 4
-//   waves_per_simd_vgpr = 512 / 128 = 4
-//   waves_per_cu_vgpr   = 4 * 4 SIMDs = 16
-//   active_waves  = min(16, 32 max) = 16
-//   occupancy_pct = 16/32 = 50%
-TEST(RocmCollectorOccupancyTest, FormulaGfx942VgprLimited) {
-  RocmDeviceOccupancyParams params{};
-  params.num_regs = 128;
-  params.block_size = 256;
-  params.smem_bytes = 0;
-  params.max_waves_per_cu = 32;
-  params.wave_front_size = 64;
-  params.max_waves_per_simd = 8;
-  params.simd_per_cu = 4;
-  params.lds_size_bytes = 65536;
+  f.collector.Flush();
+  tensorflow::profiler::XSpace space;
+  f.collector.Export(&space);
 
-  OccupancyStats stats = GetOccupancy(params);
-  EXPECT_DOUBLE_EQ(stats.occupancy_pct, 50.0);
-  EXPECT_EQ(stats.suggested_block_size, 256);
-  EXPECT_GT(stats.min_grid_size, 0);
+  const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu, nullptr);
+
+  const std::string details = FindKernelDetails(*gpu);
+  ASSERT_FALSE(details.empty()) << "kKernelDetails stat not found";
+  EXPECT_NE(details.find(" static_shared:4096 "), std::string::npos) << details;
+  EXPECT_NE(details.find(" dynamic_shared:12288 "), std::string::npos)
+      << details;
+  // The superseded total must not linger alongside the split.
+  EXPECT_EQ(details.find("group_mem:"), std::string::npos) << details;
 }
 
-// Same GPU, low register pressure (32 VGPRs/thread):
-//   waves_per_simd_vgpr = 512 / 32 = 16
-//   waves_per_cu_vgpr   = 16 * 4 SIMDs = 64
-//   active_waves  = min(64, 32 max) = 32  (hardware-capped)
-//   occupancy_pct = 32/32 = 100%
-TEST(RocmCollectorOccupancyTest, FormulaGfx942FullOccupancy) {
-  RocmDeviceOccupancyParams params{};
-  params.num_regs = 32;
-  params.block_size = 256;
-  params.smem_bytes = 0;
-  params.max_waves_per_cu = 32;
-  params.wave_front_size = 64;
-  params.max_waves_per_simd = 8;
-  params.simd_per_cu = 4;
-  params.lds_size_bytes = 65536;
+// When the code-object symbol lookup misses, the static figure is 0 and the
+// whole allocation is reported as dynamic rather than silently vanishing.
+TEST(RocmCollectorOccupancyTest, UnknownStaticLdsIsReportedAsDynamic) {
+  OccupancyTestFixture f;
+  f.SetSyntheticAgent(kGfx942, kCuCount);
+  f.AddKernelPair(/*arch_vgpr_count=*/8, 256, 1, 1, /*smem=*/16384, 3000, 4000);
 
-  OccupancyStats stats = GetOccupancy(params);
-  EXPECT_DOUBLE_EQ(stats.occupancy_pct, 100.0);
-  EXPECT_EQ(stats.suggested_block_size, 256);
+  f.collector.Flush();
+  tensorflow::profiler::XSpace space;
+  f.collector.Export(&space);
+
+  const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu, nullptr);
+
+  const std::string details = FindKernelDetails(*gpu);
+  ASSERT_FALSE(details.empty()) << "kKernelDetails stat not found";
+  EXPECT_NE(details.find(" static_shared:0 "), std::string::npos) << details;
+  EXPECT_NE(details.find(" dynamic_shared:16384 "), std::string::npos)
+      << details;
 }
 
-// LDS-limited: 64 KiB LDS, each block uses 32 KiB → only 2 blocks fit.
-// 2 blocks × 4 waves/block = 8 active waves out of 32 max → 25%.
-TEST(RocmCollectorOccupancyTest, FormulaLdsLimited) {
-  RocmDeviceOccupancyParams params{};
-  params.num_regs = 16;
-  params.block_size = 256;
-  params.smem_bytes = 32768;
-  params.max_waves_per_cu = 32;
-  params.wave_front_size = 64;
-  params.max_waves_per_simd = 8;
-  params.simd_per_cu = 4;
-  params.lds_size_bytes = 65536;
+// Without a modellable target there is no way to know how the arch and accum
+// files combine, so `regs:` falls back to max() rather than guessing a sum.
+// The token still has to be there -- the register count is useful even when
+// the occupancy number is not available.
+TEST(RocmCollectorOccupancyTest, KernelDetailsRegsPresentWithoutAgent) {
+  OccupancyTestFixture f;  // no agent, so no target constants
+  f.AddKernelPair(/*arch_vgpr_count=*/5, 256, 1, 1, /*smem=*/0, 3000, 4000,
+                  /*corr_id=*/1, /*accum_vgpr_count=*/128);
 
-  OccupancyStats stats = GetOccupancy(params);
-  EXPECT_DOUBLE_EQ(stats.occupancy_pct, 25.0);
+  f.collector.Flush();
+  tensorflow::profiler::XSpace space;
+  f.collector.Export(&space);
+
+  const auto* gpu = FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu, nullptr);
+
+  const std::string details = FindKernelDetails(*gpu);
+  ASSERT_FALSE(details.empty());
+  EXPECT_EQ(details.rfind("regs:128 ", 0), 0u) << details;
+  EXPECT_NE(details.find("occ_pct:0"), std::string::npos) << details;
 }
 
-// All-zero params must return empty stats, not crash.
-TEST(RocmCollectorOccupancyTest, FormulaZeroParamsReturnsEmpty) {
-  RocmDeviceOccupancyParams params{};
-  OccupancyStats stats = GetOccupancy(params);
-  EXPECT_DOUBLE_EQ(stats.occupancy_pct, 0.0);
-  EXPECT_EQ(stats.suggested_block_size, 0);
-  EXPECT_EQ(stats.min_grid_size, 0);
-}
+// The direct formula tests that used to live here -- FormulaGfx942VgprLimited,
+// FormulaGfx942FullOccupancy, FormulaLdsLimited, FormulaZeroParamsReturnsEmpty
+// and OccupancyParamsCacheKey -- moved to rocm_occupancy_test.cc, along with
+// the model itself. They needed no GPU and no ROCm toolchain, but sat in a
+// target tagged requires-gpu-amd, so they ran nowhere near often enough. The
+// replacements there cover 16 golden rows instead of 3, and run in CPU CI.
 
 }  // namespace test
 }  // namespace profiler

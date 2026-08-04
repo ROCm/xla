@@ -486,6 +486,38 @@ cc_library(
     ],
 )
 
+# Theoretical-occupancy model for AMDGPU kernels. Deliberately has NO ROCm
+# dependency and NO "rocm-only" tag: it is pure arithmetic, so it builds and
+# tests on a CPU-only host. Keeping it inside :rocm_collector -- which pulls in
+# hip_runtime.h and rocprofiler-sdk -- would mean the formula could never be
+# covered by CPU CI. Do not add ROCm deps here.
+cc_library(
+    name = "rocm_occupancy",
+    srcs = ["rocm_occupancy.cc"],
+    hdrs = ["rocm_occupancy.h"],
+    deps = [
+        "@com_google_absl//absl/log",
+    ],
+)
+
+xla_cc_test(
+    name = "rocm_occupancy_test",
+    size = "small",
+    srcs = ["rocm_occupancy_test.cc"],
+    # "gpu" and nothing else, on purpose. Bazel positive tag filters are
+    # inclusive: ci_rocm_cpu filters on ",gpu,-requires-gpu-rocm,
+    # -requires-gpu-amd", so an untagged target runs there NOT AT ALL, and a
+    # target without requires-gpu-amd is excluded from ci_single_gpu. Adding
+    # either a requires-gpu-* tag or no tag at all silently drops this test
+    # from every config, which is the whole point of splitting it out.
+    tags = ["gpu"],
+    deps = [
+        ":rocm_occupancy",
+        "@com_google_absl//absl/strings",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 cc_library(
     name = "rocm_collector",
     srcs = ["rocm_collector.cc"],
@@ -498,6 +530,7 @@ cc_library(
         "manual",
     ]),
     deps = [
+        ":rocm_occupancy",
         ":rocm_tracer_utils",
         "//xla/stream_executor/rocm:roctracer_wrapper",
         "//xla/tsl/platform:status",
@@ -586,7 +619,6 @@ xla_cc_test(
         "//xla/tsl/lib/core:status_test_util",
         "//xla/tsl/profiler/utils:xplane_schema",
         "@com_google_absl//absl/log",
-        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
@@ -613,6 +645,7 @@ xla_cc_test(
         ":rocm_collector",
         ":rocm_tracer_utils",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest_main",
         "//xla/tsl/profiler/utils:xplane_schema",
         "//xla/tsl/profiler/utils:xplane_utils",

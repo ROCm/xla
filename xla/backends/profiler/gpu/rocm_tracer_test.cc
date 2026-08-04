@@ -18,14 +18,12 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 #include "absl/log/log.h"
-#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/clock.h"
@@ -352,8 +350,15 @@ TEST(RocmTracerTest, DisableIsolatesNextSession) {
 // in rocm_occupancy_test_kernel.hip.cc, compiled by hipcc so __global__ and
 // <<<...>>> are available there), capture the profiler event through the full
 // rocprofiler-sdk pipeline, and verify that the exported XSpace contains
-// theoretical occupancy statistics (kTheoreticalOccupancyPct,
-// kOccupancyMinGridSize, kOccupancySuggestedBlockSize).
+// theoretical occupancy statistics (kTheoreticalOccupancyPct and
+// kOccupancyMinGridSize).
+//
+// The arithmetic itself is NOT tested here -- it lives in rocm_occupancy.cc
+// and is pinned by a 16-row golden table in rocm_occupancy_test.cc, which runs
+// on any CPU host. What these tests cover is the plumbing that the golden
+// table cannot: that the code-object callback actually fires, that the symbol's
+// register counts reach KernelDetails, and that the agent's gfx_target_version
+// reaches PerDeviceCollector.
 // ============================================================================
 
 TEST(RocmTracerOccupancyTest, KernelDispatchProducesOccupancyStats) {
@@ -382,11 +387,18 @@ TEST(RocmTracerOccupancyTest, KernelDispatchProducesOccupancyStats) {
 
   // Launch a real kernel via the hipcc-compiled helper so the tracer captures
   // a kernel dispatch record with a valid kernel_object / func_ptr.
-  ASSERT_EQ(test::RunOccupancyTestKernel(/*n=*/4096, /*block_size=*/256), 0);
+  const int launch_status =
+      test::RunOccupancyTestKernel(/*n=*/4096, /*block_size=*/256);
 
   // Allow the rocprofiler-sdk buffer to flush.
   absl::SleepFor(absl::Milliseconds(200));
+  // Disable BEFORE asserting. The tracer is a process-lifetime singleton
+  // holding a raw pointer to `collector`; a failed ASSERT returns from the
+  // test body immediately, which would destroy the collector and leave the
+  // singleton dangling for the next in-flight buffer callback or the next
+  // test in this binary. See DisableIsolatesNextSession.
   tracer.Disable();
+  ASSERT_EQ(launch_status, 0);
 
   tsl::profiler::XSpace space;
   collector->Export(&space);
@@ -396,6 +408,9 @@ TEST(RocmTracerOccupancyTest, KernelDispatchProducesOccupancyStats) {
       tsl::profiler::StatType::kTheoreticalOccupancyPct);
   absl::string_view kMinGridKey = tsl::profiler::GetStatTypeStr(
       tsl::profiler::StatType::kOccupancyMinGridSize);
+  // Deliberately absent. The old suggested_block_size was block_size rounded
+  // up to a wavefront -- an echo of the input, not a suggestion -- and was
+  // deleted rather than fixed.
   absl::string_view kSugBlockKey = tsl::profiler::GetStatTypeStr(
       tsl::profiler::StatType::kOccupancySuggestedBlockSize);
 
@@ -413,12 +428,15 @@ TEST(RocmTracerOccupancyTest, KernelDispatchProducesOccupancyStats) {
 
   EXPECT_TRUE(found_occ_pct)
       << "XSpace must contain kTheoreticalOccupancyPct stat after a real "
-         "kernel dispatch — check that func_ptr is populated in KernelEvent() "
-         "and that agent wave geometry is wired into PerDeviceCollector";
+         "kernel dispatch — check that the code-object callback populated "
+         "arch_vgpr_count in KernelEvent() and that the agent's "
+         "gfx_target_version reached PerDeviceCollector (and that this device "
+         "is a target LookupTargetConstants knows: the model covers gfx9 only)";
   EXPECT_TRUE(found_min_grid)
       << "XSpace must contain kOccupancyMinGridSize stat";
-  EXPECT_TRUE(found_sug_block)
-      << "XSpace must contain kOccupancySuggestedBlockSize stat";
+  EXPECT_FALSE(found_sug_block)
+      << "kOccupancySuggestedBlockSize was deliberately removed; it must not "
+         "come back";
 
   // Verify that the kTheoreticalOccupancyPct value is in (0, 100].
   for (const auto& plane : space.planes()) {
@@ -470,10 +488,13 @@ TEST(RocmTracerOccupancyTest, KernelDetailsStringContainsOccupancyPct) {
   RocmTracerOptions opts{/*max_annotation_strings=*/1024 * 1024};
   TF_ASSERT_OK(tracer.Enable(opts, collector.get()));
 
-  ASSERT_EQ(test::RunOccupancyTestKernel(/*n=*/1024, /*block_size=*/64), 0);
+  const int launch_status =
+      test::RunOccupancyTestKernel(/*n=*/1024, /*block_size=*/64);
 
   absl::SleepFor(absl::Milliseconds(200));
+  // Disable before asserting -- see the note in the test above.
   tracer.Disable();
+  ASSERT_EQ(launch_status, 0);
 
   tsl::profiler::XSpace space;
   collector->Export(&space);
@@ -505,7 +526,19 @@ TEST(RocmTracerOccupancyTest, KernelDetailsStringContainsOccupancyPct) {
           auto pos = details.find("occ_pct:");
           if (pos == std::string::npos) continue;
           double pct = std::stod(details.substr(pos + 8));
-          if (pct > 0.0) found_nonzero_occ = true;
+          if (pct <= 0.0) continue;
+          found_nonzero_occ = true;
+          // A non-zero occ_pct means GetOccupancy() ran, which it only does
+          // when at least one register count is non-zero -- so the `regs:`
+          // token on this same event must be present and non-zero. This is
+          // the only place the real code-object register decode is exercised;
+          // the golden table feeds the model synthetic counts.
+          ASSERT_EQ(details.rfind("regs:", 0), 0u)
+              << "kernel_details must lead with the regs: token: " << details;
+          EXPECT_GT(std::stoul(details.substr(5)), 0u)
+              << "occ_pct is non-zero, so the unified VGPR charge cannot be "
+                 "zero: "
+              << details;
         }
       }
     }
