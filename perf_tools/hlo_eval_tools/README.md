@@ -71,6 +71,23 @@ subdirectories respectively.
 
 ## Directory layout
 
+Workflow entrypoints and configuration are separated from the HLO corpus:
+
+```text
+hlo_eval_tools/
+  README.md
+  run_hlo_eval.sh
+  configs/
+    benchmark_profile.json
+    xla_refs.txt
+    xla_targets.json
+  scripts/
+    run_xla_branch_eval.py
+    compare_hlo_branch_results.py
+    legacy_profile_to_csv.py
+  <category>/...
+```
+
 Models are grouped into category folders; each model has a `training/` directory
 and an `inference/` directory that is further split by device count
 (`1gpu/`, `2gpu/`, `4gpu/`, `8gpu/`):
@@ -318,12 +335,24 @@ selection and per-leaf CSV naming — behind three arguments:
 ./run_hlo_eval.sh …/hlo_runner_main hlo_eval_tools/large_language_models/llama3_8b/inference/8gpu results
 ```
 
-For each leaf the script reads `num_partitions=N` from the first module and, when
-`N>1`, adds `--num_partitions=N --use_shardy_partitioner` and sets
+For each leaf the script validates that every module has the same
+`num_partitions=N` and that inference paths match their `<N>gpu` directory. When
+`N>1`, it adds `--num_partitions=N --use_shardy_partitioner` and sets
 `HIP_VISIBLE_DEVICES`/`CUDA_VISIBLE_DEVICES=0..N-1` (N GPUs must be visible). It
 always passes `--hlo_argument_mode=uninitialized`, **disables HIP command buffers**
 (see below), prints a summary of profiled / skipped / failed leaves, and exits
 non-zero if any leaf failed (so you can re-run just those by pointing at the leaf).
+
+The script also supports XLA runners older than the native CSV output flag. It
+detects those runners, captures their `## Execution time` records, excludes the
+first warmup repeat, and converts the remaining average to the same CSV layout.
+Set `PROFILE_OUTPUT_MODE=csv` or `legacy` only to override automatic detection.
+
+Both output modes write to a hidden `.tmp/` directory first. The final workload
+CSV is atomically replaced only after the runner and, for legacy mode, the profile
+converter succeed with every expected HLO and repeat present. Failed or
+interrupted temporary files are ignored by resume and comparison, while the
+runner output remains available in `eval.log` / `*.legacy.log` for diagnosis.
 
 Behavior is tunable with environment variables:
 
@@ -405,6 +434,316 @@ ROCm/XLA version under test) to spot per-module regressions over time.
 3. Run the suite with identical flags, appending into the **same** per-model CSVs.
 4. Compare rows across timestamps (or versions) to see which HLO modules got
    faster or slower.
+
+### Automated multi-branch workflow
+
+`scripts/run_xla_branch_eval.py` builds and profiles every Git revision selected
+by `configs/xla_refs.txt` or an optional structured JSON target file. The
+perf-tools checkout remains on
+`rocm-dev-infra`; a separate, dedicated ROCm/XLA checkout supplies the source
+refs. The source checkout must be clean because the workflow checks out each
+resolved commit sequentially in detached-HEAD mode:
+
+> **Required: use a clean, dedicated XLA source checkout.** Before starting,
+> run `git -C /path/to/source-xla status --short`; it must produce no output.
+> If tracked or untracked changes are present, the workflow exits with an
+> explicit error. It never stashes, resets, cleans, or deletes user changes.
+> Checkout also uses `--no-overwrite-ignore`, so an ignored file that conflicts
+> with another commit causes a safe failure instead of being overwritten.
+
+```bash
+python3 perf_tools/hlo_eval_tools/scripts/run_xla_branch_eval.py \
+  --xla-source-repo /path/to/source-xla \
+  --output-dir /path/to/new-result-directory
+```
+
+### Structured XLA targets
+
+The default `configs/xla_refs.txt` remains a simple one-revision-per-line list.
+Each line may already be a branch, tag, or exact commit. For optional readable
+labels, optional commit pins, and a schema-validated list, copy the ready-to-use
+structured example:
+
+```bash
+cp perf_tools/hlo_eval_tools/configs/xla_targets.json \
+  /path/to/xla_targets.json
+```
+
+Configure the branches, tags, or commits to evaluate:
+
+```json
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "revision": "origin/rocm-jaxlib-v0.10.1",
+      "commit": null,
+      "label": "v0.10.1 HEAD"
+    },
+    {
+      "revision": "origin/rocm-jaxlib-v0.10.2",
+      "commit": "7b5ecf1c9282fdf1039211e0d45216980058beda",
+      "label": "specific v0.10.2 commit"
+    },
+    {
+      "revision": "upstream/main",
+      "commit": null,
+      "label": "current main HEAD"
+    }
+  ]
+}
+```
+
+Pass either text or JSON through the existing option:
+
+```bash
+python3 perf_tools/hlo_eval_tools/scripts/run_xla_branch_eval.py \
+  --xla-source-repo /path/to/source-xla \
+  --output-dir /path/to/new-result \
+  --refs-file /path/to/xla_targets.json
+```
+
+Files ending in `.json` use the structured schema. Other files retain the
+existing line-based parser, including blank-line and `#` comment handling.
+
+`revision` may be a commit or locally available tag, or a branch qualified by
+an existing Git remote such as `origin/topic` or `upstream/main`. Known remotes
+are fetched unless `--skip-fetch` is used. Provider-specific pull-request refs
+are not fetched automatically; make such a revision available in the source
+checkout first or use its commit SHA.
+
+`commit` is optional. When it is omitted or `null`, the tool resolves the
+revision itself, so a branch uses its fetched HEAD at campaign start. When a
+full 40-character SHA is configured, that exact commit is evaluated while the
+revision remains as branch/tag context. The manifest records the configured
+value separately from the actual resolved commit. Changing a configured commit
+for an existing revision during resume is rejected; start a new output
+directory instead.
+
+`label` is optional. When omitted, reports derive a short label from the
+revision. The manifest records the target-file format and checksum, normalized
+target list, requested revisions, labels, and resolved immutable commits.
+During resume, existing revisions retain their manifest-recorded commits even
+if a branch has moved; added revisions are resolved once, removed revisions are
+skipped without deleting artifacts, and label-only changes do not rebuild a
+runner. Start a new campaign to evaluate a newer HEAD for an already-recorded
+branch. `--dry-run` resolves and prints the complete immutable plan without
+building or evaluating.
+
+The perf-tools repository defaults to the Git repository containing the script,
+so the command works from any current directory. Pass
+`--perf-tools-repo /path/to/rocm-dev-infra-xla` to override auto-discovery.
+
+For a faster end-to-end smoke test, select one workload leaf without deleting or
+moving any checked-in HLOs:
+
+```bash
+python3 perf_tools/hlo_eval_tools/scripts/run_xla_branch_eval.py \
+  --perf-tools-repo /path/to/perf-tools-xla \
+  --xla-source-repo /path/to/source-xla \
+  --output-dir /path/to/new-smoke-result-directory \
+  --hlo-path perf_tools/hlo_eval_tools/vision_diffusion/efficientnet/inference/1gpu
+```
+
+`--hlo-path` accepts a category, model, workload leaf, or one `.txt`/`.hlo`
+module under `perf_tools/hlo_eval_tools`. Relative paths are resolved from the
+perf-tools repository. The default is the complete corpus. A reduced selection
+still exercises ref resolution, checkout, runner builds, MI350 evaluation, CSV
+publication, comparison/report generation, checkpointing, and source restoration;
+it only reduces the HLO evaluation portion. Use a new output directory for the
+smoke campaign. On resume, omitting `--hlo-path` reuses the selection recorded in
+the manifest; explicitly selecting a different path is rejected.
+
+`rocm-jaxlib-v0.7.1` is intentionally not in the default ref list. That runner
+predates `--use_shardy_partitioner` and therefore cannot replay the multi-GPU
+modules in this corpus, which carry `xla.sdy.*` annotations. Its single-GPU HLO
+support can be tested separately, but it is not compatible with the complete
+campaign represented by this tool.
+
+The source checkout normally has `origin` pointing to `ROCm/xla`. If
+`upstream/main` is selected, the workflow adds the OpenXLA remote when missing:
+
+```text
+origin   https://github.com/ROCm/xla.git
+upstream https://github.com/openxla/xla.git
+```
+
+Before building, all candidate refs are fetched and resolved to immutable commit
+SHAs. The checked-in reference commit is also evaluated as a distinct live
+control. Each target is checked out in the dedicated source repository, built
+with `bazel build`, and its runner is copied into the durable result directory
+before the next target is checked out. If the mutable v0.10.2 branch is present
+in `xla_refs.txt`, it remains an independent candidate even when it currently
+resolves to the same SHA as the live control. In the validated container,
+`bazel` is a symlink to Bazelisk, so each commit's `.bazelversion` is honored.
+Pass `--bazel-command=/path/to/bazel` only when a different launcher is required.
+
+Target builds load the checked-out commit's
+`build_tools/rocm/rocm_xla_ci.bazelrc` when available. Older commits such as
+v0.8.0 predate that file and use `/usertools/rocm.bazelrc` directly as the
+container CI fallback. The selected mode, Bazelrc paths, and hashes are recorded
+in target `metadata.json`; the branch's own workspace `.bazelrc` still defines
+`--config=rocm`. A generated `xla_configure.bazelrc` in the source checkout is
+rejected because it can silently switch a hermetic ROCm branch to an
+incompatible local Clang toolchain.
+
+The ROCm build configuration changed at `rocm-jaxlib-v0.10.2`. That branch and
+newer refs select the Bazel-managed hermetic toolchain. The older default refs
+select `rocm_clang_official` and require the historical host LLVM tools at:
+
+```text
+/usr/lib/llvm-18/bin/clang
+/usr/lib/llvm-18/bin/clang++
+/usr/lib/llvm-18/bin/ld.lld
+```
+
+The workflow follows nested branch-local Bazel config dependencies after
+checkout and fails with a focused error before building when a required
+executable is absent, including on v0.8.x. It never downloads or installs system
+packages. Containers evaluating the complete cross-version ref list must include
+LLVM 18 in the image; ROCm's Clang under `/opt/rocm/llvm` is a separate ROCm 7.x
+toolchain and must not be symlinked over the expected LLVM 18 paths.
+
+The workflow uses Bazel's normal cache and does not create per-branch worktrees
+or output bases. It performs no automatic recursive deletion and never invokes
+`bazel clean`; cache maintenance is an explicit user operation after the
+campaign. An advisory lock in the source repository prevents two campaigns from
+switching the same checkout concurrently. On normal completion, Ctrl-C, SIGTERM,
+or SIGHUP, the workflow forwards the signal to the active child process,
+checkpoints the interruption, and attempts to restore the source repository's
+original branch or detached commit. Build, evaluation, and restore states are
+checkpointed in `metadata.json` and `manifest.json`, so a force-killed process,
+container restart, or host failure can be continued with `--resume`; the source
+may remain detached until that resume completes.
+
+The historical baseline is the selected checked-in `results/*.csv` data described
+by `configs/benchmark_profile.json`, not a live branch directory. Its provenance
+and checksums are validated and stored with repository-relative paths in manifest
+schema v2. The exact pinned XLA commit is rebuilt and evaluated on the current
+MI350 as the live control; its ratio against the checked-in data measures server,
+environment, and measurement drift while holding the code constant. Every entry
+in `xla_refs.txt` is resolved independently as a live candidate—including the
+latest v0.10.2 tip when listed. The live control and all candidates use the same
+checkout, build, runner, and evaluation rules.
+
+The repository defaults reproduce the checked-in result configuration: two
+repeats, uninitialized arguments, command buffers disabled, size ordering, and
+a two-second settle delay. Optional `--num-repeats`, `--arg-mode`,
+`--cmd-buffer`, `--order`, and `--settle-sec` overrides are recorded with
+`reference_aligned=false`.
+
+The output contains:
+
+```text
+<output>/
+  manifest.json
+  comparison.csv
+  branch_summary.csv
+  comparison_summary.json
+  comparison_report.md
+  comparison_report.html
+  live_control_<commit>/
+    ...
+  <remote_ref>_<commit>/
+    metadata.json
+    build.log
+    eval.log
+    runner/hlo_runner_main
+    csv/*.csv
+```
+
+`comparison.csv` compares the live control and every active candidate against the
+checked-in historical reference. `branch_summary.csv` adds one row per live
+target with its role and matched/faster/slower/missing module counts,
+summed-suite delta, median module delta, and geometric-mean module delta. The
+summed-suite value is the sum of isolated module timings, not end-to-end model
+latency. `faster` / `slower` reports only the sign of the measured delta; apply a
+noise threshold before declaring a regression. Missing or failed leaves are
+reported explicitly instead of being assigned a timing.
+`comparison_report.md` starts with a reference-reproducibility section for the
+live pinned control, then presents the branch overview and per-HLO matrices.
+Candidate cells use `candidate / historical reference` ratios where less than
+1.0x is faster and greater than 1.0x is slower; groups of at most three live
+targets keep the report readable.
+
+The automatically generated HTML report separates two questions that must not
+be conflated:
+
+- **historical relative performance** uses
+  `historical latency / live latency`, where greater than `1.0x` is faster;
+- **candidate versus live control** uses
+  `live-control latency / candidate latency`, where greater than `1.0x` is
+  faster.
+
+These inverse-latency performance ratios assume fixed work. Raw latency tables
+remain explicitly labeled with the original convention, where lower is better.
+The default `2%` reporting band applies to candidate-versus-live-control
+evidence. Historical-to-live drift is displayed independently and never widens
+that band. `Data validation passed` means the expected CSV/module data is
+complete and readable; it is not a performance acceptance result.
+
+Malformed CSVs, missing workloads, and missing modules fail comparison validation
+and make the campaign exit nonzero; missing entries remain in the generated
+reports when the available CSVs are otherwise readable.
+
+Reports can be regenerated from the campaign manifest with:
+
+```bash
+python3 perf_tools/hlo_eval_tools/scripts/compare_hlo_branch_results.py \
+  --output-dir /path/to/result-directory
+
+python3 perf_tools/hlo_eval_tools/scripts/render_hlo_report.py \
+  --output-dir /path/to/result-directory
+```
+
+The campaign generates both Markdown and HTML reports automatically. The
+standalone commands above are for regenerating reports after copying or
+reviewing a completed campaign.
+
+Manual and automatic comparison use the same reference inventory and
+`comparison_target_ids` recorded in the schema-v2 manifest, so removed refs do
+not reappear in regenerated reports.
+
+### HLO stability companion
+
+Repeated one-HLO stability collection is owned by the independent
+[`perf_tools/hlo_stability_tools`](../hlo_stability_tools/README.md) package.
+That tool uses `run_hlo_eval.sh` as its evaluator interface; the multi-branch
+campaign workflow and schemas in this directory remain independent.
+
+Use `--dry-run` to resolve refs and print the complete plan without building or
+profiling. It still refreshes Git remotes unless `--skip-fetch` is also given.
+Use `--resume` only with the same output directory and unchanged selected HLO
+corpus, profile, evaluation script, XLA source checkout path, and MI350/ROCm
+environment.
+The current refs file is always the active execution list. During resume,
+existing refs retain their immutable manifest SHAs and results, removed refs are
+skipped without deleting their artifacts, and newly added refs are resolved and
+recorded once. Ref ordering follows the current file. A target whose evaluation
+already returned—successfully or with recorded leaf failures—is not run again;
+an interrupted target without an evaluation exit code resumes its missing
+leaves. The live pinned control is always present independently of the refs file.
+Schema-v1 campaigns use the old baseline semantics and cannot be resumed by this
+schema-v2 workflow; start with a fresh output directory.
+
+The HLO fingerprint covers every `.txt` and `.hlo` recursively under the selected
+HLO path (or the selected file), but not README or orchestration changes.
+Committed, modified, and untracked HLO inputs are allowed when starting a new
+campaign, then their content and selected path must remain unchanged. The
+selection and inventory are checked before every target and again before
+comparison. A legacy manifest that recorded modified or untracked HLO inputs is
+rejected because its previous bytes cannot be verified safely. HLO inputs are
+treated as user-provided campaign data; parse, compile, and execution errors are
+reported by the runner rather than repaired by this workflow.
+
+Because a full campaign can run for hours, start it in a persistent terminal
+such as `tmux` rather than relying on a frontend SSH terminal:
+
+```bash
+tmux new -s xla-hlo
+# Run the campaign, then detach with Ctrl-b followed by d.
+tmux attach -t xla-hlo
+```
 
 ## Collected results
 
