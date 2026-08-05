@@ -40,7 +40,6 @@ limitations under the License.
 #include "xla/stream_executor/gpu/gpu_kernel_registry.h"
 #include "xla/stream_executor/gpu/redzone_allocator_kernel.h"
 #include "xla/stream_executor/launch_dim.h"
-#include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/framework/allocator.h"
@@ -274,9 +273,18 @@ absl::StatusOr<RedzoneCheckStatus> RedzoneAllocator::CheckRedzones() const {
                    gpu::GpuKernelRegistry::GetGlobalRegistry()
                        .LoadKernel<gpu::RedzoneAllocatorKernel>(executor));
 
-  ASSIGN_OR_RETURN(std::unique_ptr<MemoryAllocation> allocation,
-                   executor->HostMemoryAllocate(sizeof(uint64_t)));
-  DeviceAddressBase out_param_addr = allocation->address();
+  // Keep the mismatch counter in device memory. It is only ever written by the
+  // comparison kernels and read back by an explicit D2H copy below, so pinned
+  // host memory buys nothing -- and HostMemoryAllocate() is a driver call
+  // (page pinning, IOMMU mapping) costly enough to disturb any measurement
+  // taken shortly afterwards. That matters because autotuning calls this
+  // between a candidate's warm-up run and its timed run: on a gfx950 training
+  // module the host allocation alone shifted the autotuner's choices enough to
+  // cost ~5% end to end.
+  ASSIGN_OR_RETURN(
+      ScopedDeviceAddress<uint8_t> out_param,
+      memory_allocator_->Allocate(device_ordinal_, sizeof(uint64_t)));
+  DeviceAddressBase out_param_addr = out_param.cref();
   RETURN_IF_ERROR(stream_->MemZero(&out_param_addr, sizeof(uint64_t)));
 
   for (const auto& buf_and_size : allocated_buffers_) {
