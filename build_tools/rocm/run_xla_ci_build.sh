@@ -72,5 +72,7 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
         IFS=:
         echo "${TEST_FILTER[*]}"
     ) \
-    --spawn_strategy=local \
+    --color=yes \
     "$@" \
+    -- \
+    //xla/... \
