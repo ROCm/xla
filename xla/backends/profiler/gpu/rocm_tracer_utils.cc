@@ -121,8 +121,7 @@ void AnnotationMap::Add(uint32_t correlation_id, const std::string& annotation,
     if (scope_range_ids.size() > 1) {
       const int64_t* head = scope_range_ids.data();
       const int64_t* curr = &scope_range_ids.back();
-      for (; curr > head && !map_.scope_range_id_tree.contains(*curr);
-           --curr) {
+      for (; curr > head && !map_.scope_range_id_tree.contains(*curr); --curr) {
         map_.scope_range_id_tree.emplace(*curr, *(curr - 1));
       }
     }
