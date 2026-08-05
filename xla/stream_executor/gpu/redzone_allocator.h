@@ -18,6 +18,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -99,13 +100,19 @@ class RedzoneAllocator : public ScratchAllocator {
   // Reinitializes redzones to the expected value, so that the same buffer
   // can be reused for multiple checks.
   //
+  // If `mismatch_counter` is given, the checker kernels accumulate into it
+  // rather than into a buffer allocated here, so that the caller controls when
+  // that allocation happens. Must be at least sizeof(uint64_t),
+  // device-writable, and not shared by concurrent checks.
+  //
   // Returns:
   //
   //  - RedzoneCheckStatus::OK() if everything went well.
   //  - RedzoneCheckStatus with a non-empty error message iff a write into a
   //    redzone has been detected.
   //  - A stream error, if loading or launching the kernel has failed.
-  absl::StatusOr<RedzoneCheckStatus> CheckRedzones() const;
+  absl::StatusOr<RedzoneCheckStatus> CheckRedzones(
+      std::optional<DeviceAddressBase> mismatch_counter = std::nullopt) const;
 
   Stream* stream() const { return stream_; }
 
@@ -169,8 +176,9 @@ class RedzoneDeviceAddressAllocator : public DeviceAddressAllocator {
 
   bool AllowsAsynchronousDeallocation() const override { return true; }
 
-  absl::StatusOr<RedzoneAllocator::RedzoneCheckStatus> CheckRedzones() {
-    return rz_alloc_.CheckRedzones();
+  absl::StatusOr<RedzoneAllocator::RedzoneCheckStatus> CheckRedzones(
+      std::optional<DeviceAddressBase> mismatch_counter = std::nullopt) {
+    return rz_alloc_.CheckRedzones(mismatch_counter);
   }
 
  private:

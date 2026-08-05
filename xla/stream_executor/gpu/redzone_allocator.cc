@@ -267,16 +267,21 @@ absl::StatusOr<DeviceAddressBase> RedzoneAllocator::CreateBuffer(
   return buffer;
 }
 
-absl::StatusOr<RedzoneCheckStatus> RedzoneAllocator::CheckRedzones() const {
+absl::StatusOr<RedzoneCheckStatus> RedzoneAllocator::CheckRedzones(
+    std::optional<DeviceAddressBase> mismatch_counter) const {
   StreamExecutor* executor = stream_->parent();
 
   ASSIGN_OR_RETURN(auto kernel,
                    gpu::GpuKernelRegistry::GetGlobalRegistry()
                        .LoadKernel<gpu::RedzoneAllocatorKernel>(executor));
 
-  ASSIGN_OR_RETURN(std::unique_ptr<MemoryAllocation> allocation,
-                   executor->HostMemoryAllocate(sizeof(uint64_t)));
-  DeviceAddressBase out_param_addr = allocation->address();
+  std::unique_ptr<MemoryAllocation> owned_counter;
+  if (!mismatch_counter.has_value()) {
+    ASSIGN_OR_RETURN(owned_counter,
+                     executor->HostMemoryAllocate(sizeof(uint64_t)));
+    mismatch_counter = owned_counter->address();
+  }
+  DeviceAddressBase out_param_addr = *mismatch_counter;
   RETURN_IF_ERROR(stream_->MemZero(&out_param_addr, sizeof(uint64_t)));
 
   for (const auto& buf_and_size : allocated_buffers_) {

@@ -417,6 +417,7 @@ cc_library(
         "//xla/service/gpu/autotuning:redzone_buffers",
         "//xla/stream_executor:device_address",
         "//xla/stream_executor:device_address_allocator",
+        "//xla/stream_executor:memory_allocation",
         "//xla/stream_executor:stream_executor_address_allocator",
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/gpu:redzone_allocator",

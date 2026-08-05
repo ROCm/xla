@@ -59,6 +59,7 @@ limitations under the License.
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/gpu/redzone_allocator.h"
+#include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/stream_executor/stream_executor_address_allocator.h"
 #include "xla/util/buffer_slice_merge.h"
@@ -291,6 +292,18 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
       gpu_executable != nullptr) {
     result.scratch_bytes = GetScratchBytes(*gpu_executable);
   }
+  // Scratch for the redzone check below, allocated here rather than left to
+  // CheckRedzones(). HostMemoryAllocate() is a driver call, and one landing
+  // between the warm-up run and the timed run perturbs the timed run unevenly
+  // across candidates, which skews the autotuner's comparison.
+  std::unique_ptr<se::MemoryAllocation> mismatch_counter_allocation;
+  std::optional<se::DeviceAddressBase> mismatch_counter;
+  if (options_.redzone_padding_bytes > 0) {
+    ASSIGN_OR_RETURN(mismatch_counter_allocation,
+                     stream_executor_->HostMemoryAllocate(sizeof(uint64_t)));
+    mismatch_counter = mismatch_counter_allocation->address();
+  }
+
   {
     // Warm-up run: route every buffer the executable allocates on-demand
     // (result/output buffers and workspace/scratch buffers alike) through a
@@ -311,7 +324,7 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
     RETURN_IF_ERROR(stream_->BlockHostUntilDone());
     if (warmup_rz.has_value()) {
       ASSIGN_OR_RETURN(se::RedzoneAllocator::RedzoneCheckStatus rz_check,
-                       warmup_rz->CheckRedzones());
+                       warmup_rz->CheckRedzones(mismatch_counter));
       if (!rz_check.ok()) {
         std::string redzone_failure_msg = rz_check.RedzoneFailureMsg();
         VLOG(1) << "Autotuning candidate discarded: out-of-bounds write "
