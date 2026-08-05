@@ -42,7 +42,10 @@ for arg in "$@"; do
         TAG_FILTERS="${TAG_FILTERS},multi_gpu"
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu"
+        TAG_FILTERS="${TAG_FILTERS},requires-gpu-rocm,requires-gpu-amd,-multi_gpu"
+    fi
+    if [[ "$arg" == "--config=ci_rocm_cpu" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},gpu,-requires-gpu-rocm,-requires-gpu-amd"
     fi
     if [[ "$arg" == "--config=rocm_ci_hermetic" ]]; then
         TEST_FILTER+=(
@@ -56,7 +59,6 @@ for arg in "$@"; do
     fi
 done
 
-SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
@@ -71,4 +73,7 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
         IFS=:
         echo "${TEST_FILTER[*]}"
     ) \
-    "$@"
+    --color=yes \
+    "$@" \
+    -- \
+    //xla/... \
