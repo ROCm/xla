@@ -45,7 +45,10 @@ for arg in "$@"; do
         TAG_FILTERS="" # in mgpu we have a standard set of tests
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu,-no_oss"
+         TAG_FILTERS="${TAG_FILTERS},requires-gpu-rocm,requires-gpu-amd,-multi_gpu"
+    fi
+    if [[ "$arg" == "--config=ci_rocm_cpu" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},gpu,-requires-gpu-rocm,-requires-gpu-amd"
     fi
     if [[ "$arg" == "--config=rocm_ci_hermetic" ]]; then
         TEST_FILTER+=(
