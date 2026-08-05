@@ -100,28 +100,30 @@ void AnnotationMap::Add(uint32_t correlation_id, const std::string& annotation,
           << " correlation_id=" << correlation_id
           << ", annotation: " << annotation << ", roctx_range: " << roctx_range;
   absl::MutexLock lock(map_.mutex);
-  if (map_.annotations.size() < max_size_) {
-    // Only insert into correlation_map when annotation is non-empty; it may
-    // be empty when only a ROCTX range (no XLA AnnotationStack text) is active.
-    if (!annotation.empty()) {
-      absl::string_view annotation_str =
-          *map_.annotations.insert(annotation).first;
-      map_.correlation_map.emplace(correlation_id, annotation_str);
-    }
-    if (!roctx_range.empty()) {
-      absl::string_view roctx_sv =
-          *map_.annotations.insert(std::string(roctx_range)).first;
-      map_.roctx_range_map.emplace(correlation_id, roctx_sv);
-    }
-    if (!scope_range_ids.empty()) {
-      map_.scope_range_id_map.emplace(correlation_id, scope_range_ids.back());
-      if (scope_range_ids.size() > 1) {
-        const int64_t* head = scope_range_ids.data();
-        const int64_t* curr = &scope_range_ids.back();
-        for (; curr > head && !map_.scope_range_id_tree.contains(*curr);
-             --curr) {
-          map_.scope_range_id_tree.emplace(*curr, *(curr - 1));
-        }
+  // Each branch re-checks the size guard before inserting to avoid exceeding
+  // max_size_ by 1 when both annotation and roctx_range are non-empty (two
+  // insertions under a single size check would silently violate the capacity
+  // contract).
+  // Only insert into correlation_map when annotation is non-empty; it may
+  // be empty when only a ROCTX range (no XLA AnnotationStack text) is active.
+  if (!annotation.empty() && map_.annotations.size() < max_size_) {
+    absl::string_view annotation_str =
+        *map_.annotations.insert(annotation).first;
+    map_.correlation_map.emplace(correlation_id, annotation_str);
+  }
+  if (!roctx_range.empty() && map_.annotations.size() < max_size_) {
+    absl::string_view roctx_sv =
+        *map_.annotations.insert(std::string(roctx_range)).first;
+    map_.roctx_range_map.emplace(correlation_id, roctx_sv);
+  }
+  if (!scope_range_ids.empty()) {
+    map_.scope_range_id_map.emplace(correlation_id, scope_range_ids.back());
+    if (scope_range_ids.size() > 1) {
+      const int64_t* head = scope_range_ids.data();
+      const int64_t* curr = &scope_range_ids.back();
+      for (; curr > head && !map_.scope_range_id_tree.contains(*curr);
+           --curr) {
+        map_.scope_range_id_tree.emplace(*curr, *(curr - 1));
       }
     }
   }

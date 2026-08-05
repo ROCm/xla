@@ -626,10 +626,23 @@ void RocmTraceCollectorImpl::Flush() {
 
   // Flush standalone events (e.g. ROCTX markers) directly — they have no
   // GPU-side activity counterpart and bypass ApiActivityInfoExchange.
-  for (auto& event : standalone_events_) {
-    per_device_collector_[0].AddEvent(std::move(event));
+  // All standalone events are bucketed into slot [0] regardless of which
+  // thread produced them; ROCTX markers are host-side and have no per-device
+  // meaning. If num_gpus_ is zero (e.g. a CI node where rocprofiler reports
+  // no GPU agents), per_device_collector_[0] is never exported by Export(),
+  // so we drop rather than silently lose events into an unexported slot.
+  if (!standalone_events_.empty()) {
+    if (num_gpus_ == 0) {
+      LOG(WARNING) << "Dropping " << standalone_events_.size()
+                   << " standalone ROCTX events: no GPUs reported by "
+                      "rocprofiler, so no device plane exists to export them.";
+    } else {
+      for (auto& event : standalone_events_) {
+        per_device_collector_[0].AddEvent(std::move(event));
+      }
+    }
+    standalone_events_.clear();
   }
-  standalone_events_.clear();
 
   activity_ops_events_map_.clear();
   api_events_map_.clear();

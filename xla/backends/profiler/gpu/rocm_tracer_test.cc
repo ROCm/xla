@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
+#include <dlfcn.h>
 #include <memory>
 #include <set>
 #include <string>
@@ -24,6 +25,7 @@ limitations under the License.
 #include <vector>
 
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"
 #include "absl/log/log.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
@@ -34,7 +36,6 @@ limitations under the License.
 #include "rocm/include/rocprofiler-sdk/context.h"
 #include "rocm/include/rocprofiler-sdk/fwd.h"
 #include "rocm/include/rocprofiler-sdk/marker.h"
-#include <dlfcn.h>
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/lib/core/status_test_util.h"
@@ -579,26 +580,52 @@ TEST(RocmTracerTest, MarkerEventAppearsInExportedXSpace) {
   tsl::profiler::XSpace space;
   collector->Export(&space);
 
-  // The /host:ROCTX plane should have a Generic event with kNVTXRange stat.
+  // The /host:ROCTX plane should have a Generic event with kNVTXRange stat
+  // whose value equals the pushed label.
   bool found_nvtx_stat = false;
+  bool found_correct_label = false;
   bool found_in_roctx_plane = false;
   bool found_in_roctracer_plane = false;
   for (const auto& plane : space.planes()) {
-    bool has_nvtx = false;
+    // Build a map from stat metadata ID → stat name for this plane.
+    absl::flat_hash_map<int64_t, std::string> stat_id_to_name;
     for (const auto& [id, stat_md] : plane.stat_metadata()) {
-      if (stat_md.name() == "nvtx_range") {
+      stat_id_to_name[id] = stat_md.name();
+    }
+
+    bool has_nvtx = false;
+    for (const auto& [id, name] : stat_id_to_name) {
+      if (name == "nvtx_range") {
         has_nvtx = true;
         break;
       }
     }
+
     if (has_nvtx) {
       found_nvtx_stat = true;
       if (plane.name() == "/host:ROCTX") found_in_roctx_plane = true;
       if (plane.name() == "/host:ROCTRACER") found_in_roctracer_plane = true;
+
+      // Verify the stat value on the event equals the original label string.
+      for (const auto& line : plane.lines()) {
+        for (const auto& event : line.events()) {
+          for (const auto& stat : event.stats()) {
+            auto name_it = stat_id_to_name.find(stat.metadata_id());
+            if (name_it != stat_id_to_name.end() &&
+                name_it->second == "nvtx_range") {
+              if (stat.str_value() == label) {
+                found_correct_label = true;
+              }
+            }
+          }
+        }
+      }
     }
   }
   EXPECT_TRUE(found_nvtx_stat)
       << "XSpace should contain nvtx_range stat metadata after a ROCTX range";
+  EXPECT_TRUE(found_correct_label)
+      << "nvtx_range stat value must equal the pushed label: " << label;
   EXPECT_TRUE(found_in_roctx_plane)
       << "Generic events must be in /host:ROCTX plane";
   EXPECT_FALSE(found_in_roctracer_plane)

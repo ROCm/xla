@@ -136,6 +136,9 @@ struct RocmTracerEvent {
   // This points to strings in AnnotationMap, which should outlive the point
   // where serialization happens.
   absl::string_view annotation;
+  // Points into RocmTracer::roctx_strings_ (a node_hash_set, so pointers are
+  // stable). roctx_strings_ is cleared at Enable() time. Callers must
+  // Export() before the next Enable() to avoid dangling string_views.
   absl::string_view roctx_range;
   uint64_t start_time_ns = 0;
   uint64_t end_time_ns = 0;
