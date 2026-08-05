@@ -59,7 +59,6 @@ for arg in "$@"; do
     fi
 done
 
-SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
@@ -74,4 +73,7 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
         IFS=:
         echo "${TEST_FILTER[*]}"
     ) \
-    "$@"
+    --color=yes \
+    "$@" \
+    -- \
+    //xla/... \
