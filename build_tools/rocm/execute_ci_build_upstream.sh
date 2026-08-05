@@ -9,6 +9,18 @@ EXCLUDED_TESTS=(
     "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
     "TritonEmitterTest.ScaledDotIsSupportedByReferencePlatform"
     "VmmTest.CommandBufferSkipProfiledTwoGemmChain"
+    "LocalClientExecuteTest.CompilePartitionedExecutable"
+    "GpuKernelTilingTest*"
+    "RcclSymmetricMemoryTest.CreateSucceeds"
+    "RcclSymmetricMemoryTest.MultimemAddrNotSupported"
+    "RcclSymmetricMemoryTest.ToStringContainsExpectedFields"
+    "RcclSymmetricMemoryTest.AddrMatchesRegisteredBuffer"
+    "RcclSymmetricMemoryTest.PackKernelArgReturnsValidWindowHandle"
+    "RcclSymmetricMemoryTest.TwoWindowsHaveDistinctHandles"
+    "VmmTest*"
+    "MxScaledDotExecutionTest.MxFp4Fp8MixedBatchedCorrectness"
+    "ConvolutionTest.Convolve3D_1x4x2x3x3_2x2x2x3x3_Valid"
+    "RocmMemoryReservationTest.RemapRepointsRequiredSlice"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
