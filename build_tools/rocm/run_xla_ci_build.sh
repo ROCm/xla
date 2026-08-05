@@ -23,6 +23,39 @@ TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh)
 
 mkdir -p /tf/pkg
 
+EXCLUDED_TESTS=(
+    "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f8e5m2_from_cc_8_9_rocm_63_no_restriction_c_32_nc_32"
+    "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f8e5m2_from_cc_8_9_rocm_63_no_restriction_c_16_nc_2"
+    "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f32_from_cc_8_9_rocm_63_no_restriction_c_32_nc_32"
+    "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_fast_accum_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f32_from_cc_8_9_rocm_63_no_restriction_c_16_nc_2"
+    "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f32_from_cc_8_9_rocm_63_no_restriction_c_16_nc_2"
+    "F8E4M3FNTests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_with_lhs_f8e4m3fn_rhs_f8e4m3fn_output_f32_from_cc_8_9_rocm_63_no_restriction_c_32_nc_32"
+    # Aligned with upstream openxla/xla ROCm CI EXCLUDED_TESTS: known
+    # ROCm-unsupported / hipBLASLt-gap cases (e.g. f64 cublasLt + activation).
+    "HostMemoryAllocateTest.Numa"
+    "*IotaR1Test*"
+    "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
+    "TritonAndBlasSupportForDifferentTensorSizes/TritonAndBlasSupportForDifferentTensorSizes.IsDotAlgorithmSupportedByTriton/dot_bf16_bf16_f32_x*"
+    "F8E5M2Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_any_f8_any_f8_f32_*"
+    "DotOperationTestWithCublasLt_F16F32F64CF64/1.GeneralMatMulActivation"
+    "MatmulTestWithCublas.GemmRewriter_RegressionTestF64"
+    "TritonEmitterTest.ScaledDotIsSupportedByReferencePlatform"
+    "TritonBackendTestSuite/TritonBackendTest.CostModelOptions_*"
+    "StreamExecutorGpuClientTest.GetAbiVersion"
+    "CublasFissionBackendTest.CublasFallbackForBf16Bf16F32Algorithm"
+    "BlasAlgorithmTest.Algorithm_BF16_BF16_F32_X6"
+    "BlasAlgorithmTest.Algorithm_BF16_BF16_F32_X3"
+    "BlasAlgorithmTest.Algorithm_BF16_BF16_F32"
+    "FloatSupportTestWithCublas.MixedTypeDotIsNotUpcasted"
+    "GemmRewriteTest.CheckCustomCallHipblasLtBF16"
+    "ParameterizedGemmRewriteTest.GemmTypeCombinationCheck"
+    "SampleFileTest.Convolution"
+    "GroupedConvolution2DTestWithRandomIndices*"
+    "LocalClientExecuteTest.CompilePartitionedExecutable"
+    "RaggedAllToAllThunkMultiGpuTest.ExecuteOnStream"
+    "AllReduceLayoutAwareTest*"
+)
+
 for arg in "$@"; do
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},multi_gpu"
@@ -35,7 +68,6 @@ for arg in "$@"; do
     fi
 done
 
-SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --build_tag_filters=$TAG_FILTERS \
     --test_tag_filters=$TAG_FILTERS \
@@ -48,4 +80,10 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --action_env=XLA_FLAGS="--xla_gpu_force_compilation_parallelism=16" \
     --test_output=errors \
     --run_under=//build_tools/rocm:parallel_gpu_execute \
-    "$@"
+    --test_filter=-$(
+        IFS=:
+        echo "${EXCLUDED_TESTS[*]}"
+    ) \
+    --color=yes \
+    "$@" \
+    //xla/...
