@@ -30,6 +30,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/IR/MLIRContext.h"
@@ -251,6 +252,144 @@ std::vector<int> CartesianProduct(
 
 // ---- Per-phase implementations. --------------------------------------------
 
+// Returns the axis index whose name equals `name`, or -1 if absent.
+int AxisIndexByName(const DichotomicSearchSpace& space,
+                    absl::string_view name) {
+  const auto& axes = space.axes();
+  for (int a = 0; a < static_cast<int>(axes.size()); ++a) {
+    if (axes[a].name == name) return a;
+  }
+  return -1;
+}
+
+// A coupled (tile axis, sweep axis) pair with the sign of their correlation.
+// `positive` means "larger tile prefers larger sweep value"
+// (block_m<->num_warps); otherwise "larger tile prefers smaller sweep value"
+// (block_k<->num_stages, a fixed-SMEM-budget constraint ns*bk ~ const).
+struct CoupledPair {
+  int tile_axis;
+  int sweep_axis;
+  bool positive;
+};
+
+// Derives the coupled (tile, sweep) pairs for the correlated coarse-grid
+// probes. The sweep knobs are found by name (num_warps / num_stages). Their
+// coupled tile axis is chosen by SEMANTICS when available (kParallel &
+// kUnimodal for warps; kSequential for stages), falling back to the axis-name
+// heuristic (block_m / block_k) when semantics are unavailable. Returns only
+// well-formed pairs whose axes exist and have >= 2 distinct values.
+std::vector<CoupledPair> DeriveCoupledPairs(const DichotomicSearchSpace& space,
+                                            const SearchProfile& profile) {
+  const auto& axes = space.axes();
+  const int num_axes = axes.size();
+  const bool have_semantics =
+      static_cast<int>(profile.semantics.size()) == num_axes;
+  auto sem = [&](int a) -> AxisSemantics {
+    return have_semantics ? profile.semantics[a] : AxisSemantics::kUnknown;
+  };
+  auto role = [&](int a) -> AxisRole {
+    return a >= 0 && a < static_cast<int>(profile.roles.size())
+               ? profile.roles[a]
+               : AxisRole::kUnimodal;
+  };
+  auto usable = [&](int a) -> bool {
+    return a >= 0 && a < num_axes && axes[a].values.size() >= 2;
+  };
+
+  // Find the coupled tile axis for a sweep knob.
+  //  - warps: the kUnimodal parallel tile (semantics), else block_m (name).
+  //  - stages: the kSequential tile (semantics), else block_k (name).
+  auto find_tile = [&](bool want_parallel,
+                       absl::string_view fallback_name) -> int {
+    if (have_semantics) {
+      const AxisSemantics target =
+          want_parallel ? AxisSemantics::kParallel : AxisSemantics::kSequential;
+      for (int a = 0; a < num_axes; ++a) {
+        if (sem(a) != target) continue;
+        // For the parallel pair we only want the *searched* (kUnimodal) tile,
+        // i.e. block_m, not the kMonotoneUp N-like axis (block_n).
+        if (want_parallel && role(a) != AxisRole::kUnimodal) continue;
+        if (usable(a)) return a;
+      }
+    }
+    const int a = AxisIndexByName(space, fallback_name);
+    return usable(a) ? a : -1;
+  };
+
+  std::vector<CoupledPair> pairs;
+  const int warps = AxisIndexByName(space, "num_warps");
+  if (usable(warps)) {
+    const int tile = find_tile(/*want_parallel=*/true, "block_m");
+    if (tile >= 0) pairs.push_back({tile, warps, /*positive=*/true});
+  }
+  const int stages = AxisIndexByName(space, "num_stages");
+  if (usable(stages)) {
+    const int tile = find_tile(/*want_parallel=*/false, "block_k");
+    if (tile >= 0) pairs.push_back({tile, stages, /*positive=*/false});
+  }
+  return pairs;
+}
+
+// Adds "correlated" probes to the coarse grid for each coupled (tile, sweep)
+// pair, following the sign of the correlation:
+//   positive (block_m<->num_warps): tile=min x sweep=<below central>,
+//                                    tile=max x sweep=<above central>.
+//   negative (block_k<->num_stages): tile=min x sweep=<above central>,
+//                                     tile=max x sweep=<below central>.
+// All other axes are held at their coarse-grid background (sweep->central,
+// ordered->median) so each added probe differs from the base grid only in the
+// pair's two axes. This surfaces the correctly-coupled corners in Phase 1 so
+// the later phases seed/anchor on them. The opposite-direction corners are
+// intentionally omitted (dominated by the sign).
+void AddCorrelatedProbes(const DichotomicSearchSpace& space,
+                         const SearchProfile& profile,
+                         absl::flat_hash_set<int>* seen,
+                         std::vector<int>* out) {
+  const auto& axes = space.axes();
+  const int num_axes = axes.size();
+  const std::vector<CoupledPair> pairs = DeriveCoupledPairs(space, profile);
+  if (pairs.empty()) return;
+
+  // Background coordinate: sweep axes at central, ordered axes at median.
+  Coord base(num_axes);
+  for (int a = 0; a < num_axes; ++a) {
+    base[a] = (profile.roles[a] == AxisRole::kSweep)
+                  ? CentralIndex(axes[a])
+                  : axes[a].values.size() / 2;
+  }
+
+  for (const CoupledPair& p : pairs) {
+    const int tmin = 0;
+    const int tmax = static_cast<int>(axes[p.tile_axis].values.size()) - 1;
+    const int sc = CentralIndex(axes[p.sweep_axis]);
+    const int slast = static_cast<int>(axes[p.sweep_axis].values.size()) - 1;
+
+    // Sweep indices strictly below / above the central index.
+    std::vector<int> below, above;
+    for (int i = 0; i < sc; ++i) below.push_back(i);
+    for (int i = sc + 1; i <= slast; ++i) above.push_back(i);
+
+    // For each (tile-extreme, sweep-set) pairing dictated by the sign, emit a
+    // probe differing from `base` only in these two axes.
+    auto emit = [&](int tile_idx, const std::vector<int>& sweep_idxs) {
+      for (int s : sweep_idxs) {
+        Coord c = base;
+        c[p.tile_axis] = tile_idx;
+        c[p.sweep_axis] = s;
+        AddSnapped(space, c, seen, out);
+      }
+    };
+
+    if (p.positive) {
+      emit(tmin, below);  // small tile <-> few warps
+      emit(tmax, above);  // large tile <-> many warps
+    } else {
+      emit(tmin, above);  // small bk <-> many stages
+      emit(tmax, below);  // large bk <-> few stages
+    }
+  }
+}
+
 std::vector<int> SelectCoarseGrid(const DichotomicSearchSpace& space,
                                   const SearchProfile& profile,
                                   int max_configs) {
@@ -265,7 +404,17 @@ std::vector<int> SelectCoarseGrid(const DichotomicSearchSpace& space,
     }
   }
   absl::flat_hash_set<int> seen;
-  return CartesianProduct(space, candidates, &seen, max_configs);
+  std::vector<int> result =
+      CartesianProduct(space, candidates, &seen, max_configs);
+
+  // Add the correlated (tile <-> sweep) probes on top of the base grid so
+  // Phase 1 also samples the correctly-coupled corners (block_m<->num_warps
+  // positive, block_k<->num_stages negative). These reuse `seen` for dedup and
+  // are appended after the base grid. If the correlation is wrong for some
+  // hardware/dtype these are simply not the fastest samples and are ignored
+  // downstream -- graceful fallback, no verification needed.
+  AddCorrelatedProbes(space, profile, &seen, &result);
+  return result;
 }
 
 std::vector<int> SelectTernaryRefine(const DichotomicSearchSpace& space,
@@ -559,9 +708,14 @@ SearchProfile MakeProfile(const DichotomicSearchSpace& space, HloOpcode opcode,
   // Carry per-axis tiled-dimension sizes from the analysis hints (0 = unknown)
   // so the ternary/neighborhood phases can do divisibility-aware placement.
   profile.dimension_sizes.assign(num_axes, 0);
+  // Carry per-axis semantic roles (kParallel/kSequential/kUnknown) from the
+  // hints so later phases (e.g. the correlated coarse-grid probes) can pair a
+  // tile axis with its coupled sweep knob by semantics rather than axis name.
+  profile.semantics.assign(num_axes, AxisSemantics::kUnknown);
   if (static_cast<int>(hints.size()) == num_axes) {
     for (int a = 0; a < num_axes; ++a) {
       profile.dimension_sizes[a] = hints[a].dimension_size;
+      profile.semantics[a] = hints[a].semantics;
     }
   }
 
