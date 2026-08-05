@@ -1,7 +1,7 @@
 # Test-related settings.
 
 build:rocm_dev --remote_upload_local_results=false
-build:rocm_dev --remote_cache="https://wardite.cluster.engflow.com"
+build:rocm_dev --remote_cache="grpcs://wardite.cluster.engflow.com"
 
 build:rocm_rbe --bes_backend="grpcs://wardite.cluster.engflow.com"
 build:rocm_rbe --bes_results_url="https://wardite.cluster.engflow.com/invocation/"
@@ -18,6 +18,10 @@ build:rocm_rbe --jobs=200
 build:rocm_rbe --remote_timeout=3600
 build:rocm_rbe --remote_download_minimal
 build:rocm_rbe --remote_upload_local_results
+build:rocm_rbe --grpc_keepalive_time=30s
+build:rocm_rbe --remote_cache_compression
+
+test:rocm_rbe --strategy=TestRunner=remote,local
 
 # Dynamic execution config for ROCm RBE - builds locally, tests use hybrid mode
 build:rocm_rbe_dynamic --config=rocm_rbe
