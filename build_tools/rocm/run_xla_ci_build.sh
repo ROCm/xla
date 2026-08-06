@@ -29,6 +29,10 @@ TEST_FILTER=(
     TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
     CommandBufferConversionPassTest.ConvertWhileThunk
     CommandBufferConversionPassTest.ConvertWhileThunkWithAsyncPair
+    AutoShardingTest.MatMulWithAutosharding
+    # mGPU tests
+    DynamicSliceFusionTest.MultipleOffsetsAsFunctionOfInductionVariable
+    DynamicSliceFusionTest.OffsetAsFunctionOfInductionVariableShouldUseOffsetModulesWithCmdBuffer
 )
 
 for arg in "$@"; do
