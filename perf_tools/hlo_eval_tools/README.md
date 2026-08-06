@@ -318,25 +318,12 @@ selection and per-leaf CSV naming — behind three arguments:
 ./run_hlo_eval.sh …/hlo_runner_main hlo_eval_tools/large_language_models/llama3_8b/inference/8gpu results
 ```
 
-For each leaf the script validates that every module has the same
-`num_partitions=N`. For both leaf and single-module input, an
-`inference/<N>gpu` path must match the HLO partition count. When `N>1`, the
-script adds `--num_partitions=N --use_shardy_partitioner` and sets
+For each leaf the script reads `num_partitions=N` from the first module and, when
+`N>1`, adds `--num_partitions=N --use_shardy_partitioner` and sets
 `HIP_VISIBLE_DEVICES`/`CUDA_VISIBLE_DEVICES=0..N-1` (N GPUs must be visible). It
 always passes `--hlo_argument_mode=uninitialized`, **disables HIP command buffers**
 (see below), prints a summary of profiled / skipped / failed leaves, and exits
 non-zero if any leaf failed (so you can re-run just those by pointing at the leaf).
-
-The script also supports XLA runners older than the native CSV output flag. It
-detects those runners, captures their `## Execution time` records, excludes the
-first warmup repeat, and converts the remaining average to the same CSV layout.
-Set `PROFILE_OUTPUT_MODE=csv` or `legacy` only to override automatic detection.
-
-Both output modes write to a hidden `.tmp/` directory first. The final workload
-CSV is atomically replaced only after the runner and, for legacy mode, the profile
-converter succeed with every expected HLO and repeat present. Failed or
-interrupted temporary files are ignored by resume, while runner output remains
-available on stdout or in the legacy log for diagnosis.
 
 Behavior is tunable with environment variables:
 
@@ -347,7 +334,6 @@ Behavior is tunable with environment variables:
 | `ORDER` | `size` | `size` profiles smallest-HLO leaves first (fast models first, biggest last); `path` = alphabetical. |
 | `ARG_MODE` | `uninitialized` | The runner's `--hlo_argument_mode`. |
 | `SETTLE_SEC` | `2` | Seconds paused between runner processes so GPU memory is reclaimed (helps back-to-back multi-GPU runs). |
-| `PROFILE_OUTPUT_MODE` | `auto` | Detect native CSV support; use `csv` or `legacy` only to override detection. |
 
 ### Manual equivalent
 
