@@ -262,26 +262,37 @@ int AxisIndexByName(const DichotomicSearchSpace& space,
   return -1;
 }
 
-// A coupled (tile axis, sweep axis) pair with the sign of their correlation.
-// `positive` means "larger tile prefers larger sweep value"
-// (block_m<->num_warps); otherwise "larger tile prefers smaller sweep value"
-// (block_k<->num_stages, a fixed-SMEM-budget constraint ns*bk ~ const).
-struct CoupledPair {
-  int tile_axis;
-  int sweep_axis;
-  bool positive;
+// Maps a tile axis index to the sweep-knob axis index it is coupled to. Because
+// a tile size and its coupled per-CTA resource knob are STRONGLY correlated --
+// block_m<->num_warps (warps must cover the output tile) and
+// block_k<->num_stages (a fixed-SMEM-budget trade-off, ns*(bm*bk+bk*bn)<=SMEM)
+// -- a tile value cannot be scored fairly with the sweep knob frozen. So every
+// time the search emits a candidate that sets one of these tile axes, we must
+// evaluate that candidate crossed with ALL values of the coupled sweep knob and
+// let PickBestConfig keep the best pairing. `sweep_of[a] == -1` means axis `a`
+// is not a coupled tile axis.
+struct CoupledSweepMap {
+  // sweep_of[tile_axis] = coupled sweep axis index, or -1.
+  std::vector<int> sweep_of;
+  // True if the sweep axis is bound to some tile axis (so it must NOT also be
+  // independently swept/pinned by the generic per-axis logic).
+  std::vector<bool> is_bound_sweep;
+  bool empty = true;
 };
 
-// Derives the coupled (tile, sweep) pairs for the correlated coarse-grid
-// probes. The sweep knobs are found by name (num_warps / num_stages). Their
-// coupled tile axis is chosen by SEMANTICS when available (kParallel &
-// kUnimodal for warps; kSequential for stages), falling back to the axis-name
-// heuristic (block_m / block_k) when semantics are unavailable. Returns only
-// well-formed pairs whose axes exist and have >= 2 distinct values.
-std::vector<CoupledPair> DeriveCoupledPairs(const DichotomicSearchSpace& space,
-                                            const SearchProfile& profile) {
+// Builds the CoupledSweepMap. The sweep knobs are found by name
+// (num_warps / num_stages). Their coupled tile axis is chosen by SEMANTICS when
+// available (kParallel & kUnimodal tile for warps; kSequential tile for
+// stages), falling back to the axis-name heuristic (block_m / block_k). Only
+// pairs whose axes exist with >= 2 distinct values are bound.
+CoupledSweepMap BuildCoupledSweepMap(const DichotomicSearchSpace& space,
+                                     const SearchProfile& profile) {
   const auto& axes = space.axes();
   const int num_axes = axes.size();
+  CoupledSweepMap m;
+  m.sweep_of.assign(num_axes, -1);
+  m.is_bound_sweep.assign(num_axes, false);
+
   const bool have_semantics =
       static_cast<int>(profile.semantics.size()) == num_axes;
   auto sem = [&](int a) -> AxisSemantics {
@@ -295,10 +306,6 @@ std::vector<CoupledPair> DeriveCoupledPairs(const DichotomicSearchSpace& space,
   auto usable = [&](int a) -> bool {
     return a >= 0 && a < num_axes && axes[a].values.size() >= 2;
   };
-
-  // Find the coupled tile axis for a sweep knob.
-  //  - warps: the kUnimodal parallel tile (semantics), else block_m (name).
-  //  - stages: the kSequential tile (semantics), else block_k (name).
   auto find_tile = [&](bool want_parallel,
                        absl::string_view fallback_name) -> int {
     if (have_semantics) {
@@ -306,8 +313,8 @@ std::vector<CoupledPair> DeriveCoupledPairs(const DichotomicSearchSpace& space,
           want_parallel ? AxisSemantics::kParallel : AxisSemantics::kSequential;
       for (int a = 0; a < num_axes; ++a) {
         if (sem(a) != target) continue;
-        // For the parallel pair we only want the *searched* (kUnimodal) tile,
-        // i.e. block_m, not the kMonotoneUp N-like axis (block_n).
+        // For the parallel pair we bind num_warps to the *searched* (kUnimodal)
+        // tile, i.e. block_m, not the kMonotoneUp N-like axis (block_n).
         if (want_parallel && role(a) != AxisRole::kUnimodal) continue;
         if (usable(a)) return a;
       }
@@ -316,77 +323,62 @@ std::vector<CoupledPair> DeriveCoupledPairs(const DichotomicSearchSpace& space,
     return usable(a) ? a : -1;
   };
 
-  std::vector<CoupledPair> pairs;
   const int warps = AxisIndexByName(space, "num_warps");
   if (usable(warps)) {
     const int tile = find_tile(/*want_parallel=*/true, "block_m");
-    if (tile >= 0) pairs.push_back({tile, warps, /*positive=*/true});
+    if (tile >= 0) {
+      m.sweep_of[tile] = warps;
+      m.is_bound_sweep[warps] = true;
+      m.empty = false;
+    }
   }
   const int stages = AxisIndexByName(space, "num_stages");
   if (usable(stages)) {
     const int tile = find_tile(/*want_parallel=*/false, "block_k");
-    if (tile >= 0) pairs.push_back({tile, stages, /*positive=*/false});
+    if (tile >= 0) {
+      m.sweep_of[tile] = stages;
+      m.is_bound_sweep[stages] = true;
+      m.empty = false;
+    }
   }
-  return pairs;
+  return m;
 }
 
-// Adds "correlated" probes to the coarse grid for each coupled (tile, sweep)
-// pair, following the sign of the correlation:
-//   positive (block_m<->num_warps): tile=min x sweep=<below central>,
-//                                    tile=max x sweep=<above central>.
-//   negative (block_k<->num_stages): tile=min x sweep=<above central>,
-//                                     tile=max x sweep=<below central>.
-// All other axes are held at their coarse-grid background (sweep->central,
-// ordered->median) so each added probe differs from the base grid only in the
-// pair's two axes. This surfaces the correctly-coupled corners in Phase 1 so
-// the later phases seed/anchor on them. The opposite-direction corners are
-// intentionally omitted (dominated by the sign).
-void AddCorrelatedProbes(const DichotomicSearchSpace& space,
-                         const SearchProfile& profile,
-                         absl::flat_hash_set<int>* seen,
-                         std::vector<int>* out) {
+// Given a base coordinate and the coupled map, emits `base` crossed with ALL
+// values of every coupled sweep axis whose tile axis is present in the
+// candidate (i.e. every bound sweep axis). This is the "always evaluate every
+// ns with each bk, and every nw with each bm" rule: a tile value is only scored
+// against its best coupled sweep value. Each generated coordinate is snapped to
+// a real config and de-duplicated via `seen`.
+void EmitWithCoupledSweeps(const DichotomicSearchSpace& space,
+                           const CoupledSweepMap& coupled, const Coord& base,
+                           absl::flat_hash_set<int>* seen,
+                           std::vector<int>* out) {
   const auto& axes = space.axes();
-  const int num_axes = axes.size();
-  const std::vector<CoupledPair> pairs = DeriveCoupledPairs(space, profile);
-  if (pairs.empty()) return;
-
-  // Background coordinate: sweep axes at central, ordered axes at median.
-  Coord base(num_axes);
-  for (int a = 0; a < num_axes; ++a) {
-    base[a] = (profile.roles[a] == AxisRole::kSweep)
-                  ? CentralIndex(axes[a])
-                  : axes[a].values.size() / 2;
+  // Collect the bound sweep axes to expand over.
+  std::vector<int> sweep_axes;
+  for (int a = 0; a < static_cast<int>(axes.size()); ++a) {
+    if (coupled.is_bound_sweep[a]) sweep_axes.push_back(a);
   }
-
-  for (const CoupledPair& p : pairs) {
-    const int tmin = 0;
-    const int tmax = static_cast<int>(axes[p.tile_axis].values.size()) - 1;
-    const int sc = CentralIndex(axes[p.sweep_axis]);
-    const int slast = static_cast<int>(axes[p.sweep_axis].values.size()) - 1;
-
-    // Sweep indices strictly below / above the central index.
-    std::vector<int> below, above;
-    for (int i = 0; i < sc; ++i) below.push_back(i);
-    for (int i = sc + 1; i <= slast; ++i) above.push_back(i);
-
-    // For each (tile-extreme, sweep-set) pairing dictated by the sign, emit a
-    // probe differing from `base` only in these two axes.
-    auto emit = [&](int tile_idx, const std::vector<int>& sweep_idxs) {
-      for (int s : sweep_idxs) {
-        Coord c = base;
-        c[p.tile_axis] = tile_idx;
-        c[p.sweep_axis] = s;
-        AddSnapped(space, c, seen, out);
-      }
-    };
-
-    if (p.positive) {
-      emit(tmin, below);  // small tile <-> few warps
-      emit(tmax, above);  // large tile <-> many warps
-    } else {
-      emit(tmin, above);  // small bk <-> many stages
-      emit(tmax, below);  // large bk <-> few stages
+  if (sweep_axes.empty()) {
+    AddSnapped(space, base, seen, out);
+    return;
+  }
+  // Odometer over the Cartesian product of all bound sweep axes' full ranges.
+  std::vector<int> pos(sweep_axes.size(), 0);
+  while (true) {
+    Coord c = base;
+    for (int i = 0; i < static_cast<int>(sweep_axes.size()); ++i) {
+      c[sweep_axes[i]] = pos[i];
     }
+    AddSnapped(space, c, seen, out);
+    int i = static_cast<int>(sweep_axes.size()) - 1;
+    while (i >= 0) {
+      if (++pos[i] < static_cast<int>(axes[sweep_axes[i]].values.size())) break;
+      pos[i] = 0;
+      --i;
+    }
+    if (i < 0) break;
   }
 }
 
@@ -395,25 +387,42 @@ std::vector<int> SelectCoarseGrid(const DichotomicSearchSpace& space,
                                   int max_configs) {
   const auto& axes = space.axes();
   const int num_axes = axes.size();
+  const CoupledSweepMap coupled = BuildCoupledSweepMap(space, profile);
+
+  // Per-axis coarse candidates. Bound sweep axes are handled by the coupled
+  // expansion (they are enumerated fully together with their tile axis), so we
+  // pin them to a single placeholder value here to avoid double enumeration.
   std::vector<std::vector<int>> candidates(num_axes);
   for (int a = 0; a < num_axes; ++a) {
-    if (profile.roles[a] == AxisRole::kSweep) {
+    if (coupled.is_bound_sweep[a]) {
+      candidates[a] = {CentralIndex(axes[a])};  // placeholder; expanded later.
+    } else if (profile.roles[a] == AxisRole::kSweep) {
       candidates[a] = {CentralIndex(axes[a])};
     } else {
       candidates[a] = RepresentativeIndices(axes[a]);
     }
   }
-  absl::flat_hash_set<int> seen;
-  std::vector<int> result =
-      CartesianProduct(space, candidates, &seen, max_configs);
 
-  // Add the correlated (tile <-> sweep) probes on top of the base grid so
-  // Phase 1 also samples the correctly-coupled corners (block_m<->num_warps
-  // positive, block_k<->num_stages negative). These reuse `seen` for dedup and
-  // are appended after the base grid. If the correlation is wrong for some
-  // hardware/dtype these are simply not the fastest samples and are ignored
-  // downstream -- graceful fallback, no verification needed.
-  AddCorrelatedProbes(space, profile, &seen, &result);
+  absl::flat_hash_set<int> seen;
+  std::vector<int> result;
+  // Enumerate the tile/base grid; for each base coordinate, cross with ALL
+  // coupled sweep values so every tile value is scored against its best ns/nw.
+  Coord coord(num_axes, 0);
+  std::vector<int> idx(num_axes, 0);
+  while (true) {
+    for (int a = 0; a < num_axes; ++a) coord[a] = candidates[a][idx[a]];
+    EmitWithCoupledSweeps(space, coupled, coord, &seen, &result);
+    if (max_configs > 0 && static_cast<int>(result.size()) >= max_configs) {
+      break;
+    }
+    int a = num_axes - 1;
+    while (a >= 0) {
+      if (++idx[a] < static_cast<int>(candidates[a].size())) break;
+      idx[a] = 0;
+      --a;
+    }
+    if (a < 0) break;
+  }
   return result;
 }
 
@@ -428,12 +437,15 @@ std::vector<int> SelectTernaryRefine(const DichotomicSearchSpace& space,
   auto dim_size = [&](int a) -> int64_t {
     return have_sizes ? profile.dimension_sizes[a] : 0;
   };
+  const CoupledSweepMap coupled = BuildCoupledSweepMap(space, profile);
 
   absl::flat_hash_set<int> seen(already_evaluated.begin(),
                                 already_evaluated.end());
   std::vector<int> result;
 
-  // Seed each axis from its marginal best (or the monotone extreme).
+  // Seed each axis from its marginal best (or the monotone extreme). Bound
+  // sweep axes are enumerated together with their tile axis (below), so their
+  // seed value is only a placeholder.
   Coord seed(num_axes);
   for (int a = 0; a < num_axes; ++a) {
     if (profile.roles[a] == AxisRole::kMonotoneUp) {
@@ -448,15 +460,14 @@ std::vector<int> SelectTernaryRefine(const DichotomicSearchSpace& space,
   // Coordinate-wise ternary refinement. Each unimodal axis is bracketed
   // geometrically over its sorted index range [0, n-1]; the other axes are held
   // at the Phase-1 marginal-best background (`cur`). Because `prior_samples` is
-  // fixed for the duration of this call, a second outer pass would recompute
-  // the identical background and therefore re-emit the exact same
-  // (deduplicated) probes, so a single pass is sufficient.
+  // fixed for the duration of this call, a single pass is sufficient.
   //
-  // When the axis's tiled-dimension size is known, each geometric
-  // ternary probe index is snapped to the nearest clean-divisor value (same
-  // probe count, placed where masking waste is zero -- the empirically better
-  // tiles). If no divisor exists the geometric index is kept, so this never
-  // reduces coverage.
+  // Crucially, every emitted tile probe is CROSSED WITH ALL VALUES of its
+  // coupled sweep knob (block_k with all num_stages, block_m with all
+  // num_warps) via EmitWithCoupledSweeps, so a tile value is scored against its
+  // best ns/nw rather than a frozen one. When the axis's tiled-dimension size
+  // is known, each geometric ternary probe index is snapped to the nearest
+  // clean-divisor value.
   Coord cur = seed;
   for (int a = 0; a < num_axes; ++a) {
     if (profile.roles[a] != AxisRole::kUnimodal) continue;
@@ -471,10 +482,10 @@ std::vector<int> SelectTernaryRefine(const DichotomicSearchSpace& space,
       int p2 = NearestDivisorIndex(axes[a], D, i2);
       Coord c1 = cur;
       c1[a] = p1;
-      AddSnapped(space, c1, &seen, &result);
+      EmitWithCoupledSweeps(space, coupled, c1, &seen, &result);
       Coord c2 = cur;
       c2[a] = p2;
-      AddSnapped(space, c2, &seen, &result);
+      EmitWithCoupledSweeps(space, coupled, c2, &seen, &result);
       lo = i1;
       hi = i2;
     }
@@ -501,6 +512,7 @@ std::vector<int> SelectNeighborhoodSweep(
     return have_sizes ? profile.dimension_sizes[a] : 0;
   };
 
+  const CoupledSweepMap coupled = BuildCoupledSweepMap(space, profile);
   absl::flat_hash_set<int> seen(already_evaluated.begin(),
                                 already_evaluated.end());
 
@@ -533,12 +545,17 @@ std::vector<int> SelectNeighborhoodSweep(
   std::vector<std::vector<int>> candidates(num_axes);
   for (int a = 0; a < num_axes; ++a) {
     const int n = axes[a].values.size();
-    if (profile.roles[a] == AxisRole::kSweep) {
+    if (coupled.is_bound_sweep[a]) {
+      // Bound sweep axes (num_warps/num_stages coupled to a tile axis) are
+      // enumerated in full together with their tile axis by
+      // EmitWithCoupledSweeps below; pin them to a placeholder here to avoid
+      // double enumeration.
+      candidates[a] = {std::clamp(best[a], 0, n - 1)};
+    } else if (profile.roles[a] == AxisRole::kSweep) {
       candidates[a].resize(n);
       for (int i = 0; i < n; ++i) candidates[a][i] = i;
-      // Sweep axes are the small/categorical knobs (num_stages/warps/...); they
-      // do not tile a dimension, so dim_size is unknown and soft_prune is a
-      // no-op. Kept for uniformity.
+      // Non-coupled sweep axes (num_ctas/group_size/...) do not tile a
+      // dimension, so dim_size is unknown and soft_prune is a no-op.
       soft_prune_waste(a, &candidates[a]);
     } else if (profile.roles[a] == AxisRole::kMonotoneUp) {
       std::set<int> s;
@@ -561,7 +578,24 @@ std::vector<int> SelectNeighborhoodSweep(
     }
   }
 
-  return CartesianProduct(space, candidates, &seen, /*max_configs=*/0);
+  // Enumerate the tile/base neighborhood; for each base coordinate, cross with
+  // ALL coupled sweep values so each tile value in the neighborhood is scored
+  // against its best ns/nw.
+  std::vector<int> result;
+  Coord coord(num_axes, 0);
+  std::vector<int> pos(num_axes, 0);
+  while (true) {
+    for (int a = 0; a < num_axes; ++a) coord[a] = candidates[a][pos[a]];
+    EmitWithCoupledSweeps(space, coupled, coord, &seen, &result);
+    int a = num_axes - 1;
+    while (a >= 0) {
+      if (++pos[a] < static_cast<int>(candidates[a].size())) break;
+      pos[a] = 0;
+      --a;
+    }
+    if (a < 0) break;
+  }
+  return result;
 }
 
 }  // namespace

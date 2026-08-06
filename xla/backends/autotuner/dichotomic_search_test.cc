@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <set>
 #include <vector>
@@ -511,14 +512,14 @@ TEST(DichotomicSearchTest, ThreePhaseSearchFindsUnimodalOptimum) {
   EXPECT_LT(static_cast<int>(evaluated.size()), space.num_configs());
 }
 
-// The correlated coarse-grid probes (fix for the frozen sweep<->tile coupling)
-// must, in Phase 1, sample the sign-appropriate corners:
-//   - block_m <-> num_warps  POSITIVE: (bm=max, nw=high) and (bm=min, nw=low)
-//   - block_k <-> num_stages NEGATIVE: (bk=min, ns=high) and (bk=max, ns=low)
-// so the later phases seed/anchor on the correctly-coupled point.
-TEST(DichotomicSearchTest, CoarseGridEmitsCorrelatedCoupledCorners) {
-  // Give block_m/block_k > 3 values (kUnimodal) and num_warps/num_stages
-  // multiple values (real kSweep axes) so the coupling logic engages.
+// Because block_k<->num_stages and block_m<->num_warps are strongly coupled, a
+// tile value must be scored against ALL its coupled sweep values. So in Phase 1
+// every emitted block_k appears crossed with every num_stages, and every
+// block_m crossed with every num_warps. This test verifies that binding.
+TEST(DichotomicSearchTest, CoarseGridBindsCoupledSweepToTile) {
+  // block_m/block_k > 3 values (kUnimodal); num_warps/num_stages multiple
+  // values (real kSweep axes) so the coupling logic engages. block_n has a
+  // single value so it doesn't blow up the cross product.
   std::vector<std::unique_ptr<BackendConfig>> configs;
   const std::vector<int64_t> ms = {16, 32, 64, 128, 256};
   const std::vector<int64_t> ks = {16, 32, 64, 128};
@@ -546,50 +547,90 @@ TEST(DichotomicSearchTest, CoarseGridEmitsCorrelatedCoupledCorners) {
   ASSERT_GE(ki, 0);
   ASSERT_GE(wi, 0);
   ASSERT_GE(si, 0);
-  ASSERT_EQ(profile.roles[mi], AxisRole::kUnimodal);
-  ASSERT_EQ(profile.roles[ki], AxisRole::kUnimodal);
-  ASSERT_EQ(profile.roles[wi], AxisRole::kSweep);
-  ASSERT_EQ(profile.roles[si], AxisRole::kSweep);
 
   std::vector<int> phase1 =
       SelectConfigs(space, profile, SearchPhase::kCoarseGrid, {}, {});
   ASSERT_FALSE(phase1.empty());
 
-  const int64_t bm_max = space.axes()[mi].values.back();
-  const int64_t bm_min = space.axes()[mi].values.front();
-  const int64_t bk_max = space.axes()[ki].values.back();
-  const int64_t bk_min = space.axes()[ki].values.front();
-  const int64_t nw_max = space.axes()[wi].values.back();
-  const int64_t ns_max = space.axes()[si].values.back();
-
-  // Positive block_m<->num_warps: the large-tile/high-warps corner must appear.
-  bool saw_bm_max_nw_high = false;
-  // Negative block_k<->num_stages: the small-bk/high-stages corner must appear.
-  bool saw_bk_min_ns_high = false;
+  // Collect, for each emitted block_k, the set of num_stages it was paired
+  // with; and for each block_m, the set of num_warps.
+  std::map<int64_t, std::set<int64_t>> ns_by_bk;
+  std::map<int64_t, std::set<int64_t>> nw_by_bm;
   for (int idx : phase1) {
     const auto& t = configs[idx]->triton();
-    if (t.block_m() == bm_max && t.num_warps() == nw_max) {
-      saw_bm_max_nw_high = true;
-    }
-    if (t.block_k() == bk_min && t.num_stages() == ns_max) {
-      saw_bk_min_ns_high = true;
-    }
+    ns_by_bk[t.block_k()].insert(t.num_stages());
+    nw_by_bm[t.block_m()].insert(t.num_warps());
   }
-  EXPECT_TRUE(saw_bm_max_nw_high)
-      << "positive pair must sample (block_m=max, num_warps=high)";
-  EXPECT_TRUE(saw_bk_min_ns_high)
-      << "negative pair must sample (block_k=min, num_stages=high)";
 
-  // Sanity: the base grid (sweeps pinned to central) is still present, so this
-  // is strictly additive, not a replacement. The central-sweep block_m=median
-  // point must also be there.
-  (void)bm_min;
-  (void)bk_max;
+  const std::set<int64_t> all_stages(stages.begin(), stages.end());
+  const std::set<int64_t> all_warps(warps.begin(), warps.end());
+
+  // Every block_k that was probed must have been crossed with ALL num_stages.
+  ASSERT_FALSE(ns_by_bk.empty());
+  for (const auto& [bk, seen_ns] : ns_by_bk) {
+    EXPECT_EQ(seen_ns, all_stages)
+        << "block_k=" << bk << " was not crossed with all num_stages";
+  }
+  // Every block_m that was probed must have been crossed with ALL num_warps.
+  ASSERT_FALSE(nw_by_bm.empty());
+  for (const auto& [bm, seen_nw] : nw_by_bm) {
+    EXPECT_EQ(seen_nw, all_warps)
+        << "block_m=" << bm << " was not crossed with all num_warps";
+  }
 }
 
-// The correlated probes are additive: every base coarse-grid config is still
-// present, and the total (deduplicated) count only grows.
-TEST(DichotomicSearchTest, CorrelatedProbesAreAdditiveToBaseGrid) {
+// Phase 2 (ternary refine) must also bind the coupled sweep: every block_k it
+// probes is crossed with all num_stages, and every block_m with all num_warps.
+TEST(DichotomicSearchTest, TernaryRefineBindsCoupledSweepToTile) {
+  std::vector<std::unique_ptr<BackendConfig>> configs;
+  const std::vector<int64_t> ms = {16, 32, 64, 128, 256};
+  const std::vector<int64_t> ks = {16, 32, 64, 128};
+  const std::vector<int64_t> warps = {2, 4, 8};
+  const std::vector<int64_t> stages = {1, 2, 3, 4};
+  for (int64_t m : ms) {
+    for (int64_t k : ks) {
+      for (int64_t w : warps) {
+        for (int64_t s : stages) {
+          configs.push_back(MakeTritonConfig(m, /*block_n=*/64, k, s, w));
+        }
+      }
+    }
+  }
+  auto space_or = DichotomicSearchSpace::Build(Ptrs(configs));
+  ASSERT_THAT(space_or, IsOk());
+  const DichotomicSearchSpace& space = *space_or;
+  SearchProfile profile = MakeProfile(space, HloOpcode::kDot);
+
+  std::vector<Sample> prior;
+  {
+    Coord c(space.axes().size(), 0);
+    prior.push_back(Sample{c, 1.0});
+  }
+  std::vector<int> probes = SelectConfigs(
+      space, profile, SearchPhase::kTernaryRefine, prior, /*already=*/{});
+  ASSERT_FALSE(probes.empty());
+
+  std::map<int64_t, std::set<int64_t>> ns_by_bk;
+  std::map<int64_t, std::set<int64_t>> nw_by_bm;
+  for (int idx : probes) {
+    const auto& t = configs[idx]->triton();
+    ns_by_bk[t.block_k()].insert(t.num_stages());
+    nw_by_bm[t.block_m()].insert(t.num_warps());
+  }
+  const std::set<int64_t> all_stages(stages.begin(), stages.end());
+  const std::set<int64_t> all_warps(warps.begin(), warps.end());
+  for (const auto& [bk, seen_ns] : ns_by_bk) {
+    EXPECT_EQ(seen_ns, all_stages)
+        << "ternary block_k=" << bk << " not crossed with all num_stages";
+  }
+  for (const auto& [bm, seen_nw] : nw_by_bm) {
+    EXPECT_EQ(seen_nw, all_warps)
+        << "ternary block_m=" << bm << " not crossed with all num_warps";
+  }
+}
+
+// All emitted configs remain unique and feasible under the coupled expansion.
+TEST(DichotomicSearchTest, CoupledExpansionKeepsConfigsUniqueAndFeasible) {
   std::vector<std::unique_ptr<BackendConfig>> configs;
   for (int64_t m : {16, 32, 64, 128, 256}) {
     for (int64_t k : {16, 32, 64, 128}) {
@@ -607,7 +648,6 @@ TEST(DichotomicSearchTest, CorrelatedProbesAreAdditiveToBaseGrid) {
 
   std::vector<int> grid =
       SelectConfigs(space, profile, SearchPhase::kCoarseGrid, {}, {});
-  // All indices are unique and feasible.
   std::set<int> uniq(grid.begin(), grid.end());
   EXPECT_EQ(uniq.size(), grid.size()) << "coarse grid must be deduplicated";
   for (int idx : grid) {
