@@ -33,6 +33,11 @@ trap clean_up EXIT
 TEST_FILTER=(
     TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
     AutoShardingTest.MatMulWithAutosharding
+    RcclCommunicator.AbortSucceeds
+    # mGPU tests
+    DynamicSliceFusionTest.MultipleOffsetsAsFunctionOfInductionVariable
+    DynamicSliceFusionTest.OffsetAsFunctionOfInductionVariableShouldUseOffsetModulesWithCmdBuffer
+    CollectiveOpsCommandBufferTest.SendRecv_Simple
 )
 
 for arg in "$@"; do
