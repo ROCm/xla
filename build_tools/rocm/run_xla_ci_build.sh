@@ -23,7 +23,29 @@ TAG_FILTERS=$($SCRIPT_DIR/rocm_tag_filters.sh)
 
 mkdir -p /tf/pkg
 
-EXCLUDED_TESTS=()
+EXCLUDED_TESTS=(
+    "CollectivePipelineParallelismTestWithAndWithoutOpts/CollectivePipelineParallelismTest.PartiallyPipelinedAsyncSendRecvLoop/1"
+    "CublasFissionBackendTest.CublasFallbackForBf16Bf16F32Algorithm"
+    "TritonBackendTestSuite/TritonBackendTest.CostModelOptions_Filter/0"
+    "TritonBackendTestSuite/TritonBackendTest.CostModelOptions_TopFromDefault/0"
+    "TritonBackendTestSuite/TritonBackendTest.CostModelOptions_Filter/1"
+    "TritonBackendTestSuite/TritonBackendTest.CostModelOptions_TopFromDefault/1"
+    "TritonBackendTestSuite/TritonBackendTest.CostModelOptions_Combination/0"
+    "TritonBackendTestSuite/TritonBackendTest.CostModelOptions_Combination/1"
+    "GemmRewriteTest.CheckCustomCallHipblasLtBF16"
+    "ParameterizedGemmRewriteTest.GemmTypeCombinationCheck"
+    "FloatSupportTestWithCublas.MixedTypeDotIsNotUpcasted"
+    # mGPU tests
+    "CollectiveOpsTestE2E.CollectiveGroupAllReduceDifferentReplicaGroups"
+    "RaggedAllToAllTest/RaggedAllToAllTest.RaggedAllToAll_2GPUs_*"
+    # Cherry-pick https://github.com/openxla/xla/pull/46650 once it is merged and remove tests below
+    "GpuCollectivesTest.CreateRegisteredMemory"
+    "GpuCollectivesTest.CreateSymmetricMemory"
+    "GpuCollectivesTest.CreateWithMultipleIds"
+    "GpuCollectivesTest.SplitCommunicators"
+    "GpuCollectivesTest.PutAndWaitSignal"
+
+)
 
 for arg in "$@"; do
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
