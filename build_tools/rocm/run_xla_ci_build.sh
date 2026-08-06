@@ -32,6 +32,7 @@ trap clean_up EXIT
 
 TEST_FILTER=(
     TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
+    AutoShardingTest.MatMulWithAutosharding
 )
 
 for arg in "$@"; do
