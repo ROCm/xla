@@ -335,6 +335,31 @@ Behavior is tunable with environment variables:
 | `ARG_MODE` | `uninitialized` | The runner's `--hlo_argument_mode`. |
 | `SETTLE_SEC` | `2` | Seconds paused between runner processes so GPU memory is reclaimed (helps back-to-back multi-GPU runs). |
 
+### Multi-branch campaign
+
+`run_xla_branch_eval.py` builds `multihost_hlo_runner` for each target in
+`xla_targets.json`, then invokes the existing `run_hlo_eval.sh` interface:
+
+```bash
+./run_hlo_eval.sh --branches \
+  --xla-source-repo /path/to/clean/xla \
+  --output-dir /path/to/new/output \
+  [--hlo-path /path/to/hlo/or/subtree] \
+  [--num-repeats 2]
+```
+
+The XLA checkout must be clean and contain every Git remote named by the target
+configuration. Target branches are fetched and resolved to immutable commits,
+built with their ROCm CI Bazel configuration, and evaluated sequentially. The
+original source branch is restored when the campaign finishes or is interrupted.
+
+Each target output contains `build.log`, `eval.log`, and the timing CSVs produced
+by `run_hlo_eval.sh`. The final console summary reports each target's status and
+artifact paths; the campaign does not generate comparisons or HTML reports.
+
+Set `ROCR_VISIBLE_DEVICES=<physical-device>` before the command when a specific
+GPU must be selected.
+
 ### Manual equivalent
 
 The script automates exactly this loop — one CSV per model **and** workload:
