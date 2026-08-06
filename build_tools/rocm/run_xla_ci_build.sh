@@ -62,7 +62,7 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --test_filter=-$(
         IFS=:
         echo "${TEST_FILTER[*]}"
-    )
+    ) \
     --color=yes \
     "$@" \
     -- \
