@@ -91,6 +91,19 @@ void MergeHostPlanesAndSortLines(tensorflow::profiler::XSpace* space) {
     RemovePlanes(space, {nvtx_plane});
   }
 
+  // Merge the ROCTX marker plane into the host plane (same pattern as NVTX).
+  // Line ID space is partitioned to prevent collisions when merging:
+  //   [0,         1<<32)  — host CPU threads and HIP API call lines
+  //   [1<<32,     2<<32)  — NVTX-CUPTI plane (kNvtxLineIdStart above)
+  //   [2<<32,     3<<32)  — ROCTX marker plane (kRoctxLineIdStart below)
+  static constexpr int64_t kRoctxLineIdStart = 2LL << 32;
+  XPlane* roctx_plane = FindMutablePlaneWithName(space, kRoctxPlaneName);
+  if (roctx_plane != nullptr) {
+    ChangeOccupiedLineIds(roctx_plane, occupied_line_ids, kRoctxLineIdStart);
+    MergePlanes({roctx_plane}, host_plane);
+    RemovePlanes(space, {roctx_plane});
+  }
+
   // Merge planes with identical names
   MergePlanesWithSameNames(space);
 
