@@ -49,6 +49,15 @@ TEST_FILTER=(
     DotBf16Bf16F32X9Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_bf16_bf16_f32_x9_with_lhs_f32_rhs_f32_output_f32_from_cc_8_0_rocm_60_no_restriction_c_32_nc_32
     DotBf16Bf16F32X9Tests/DotAlgorithmSupportTest.AlgorithmIsSupportedFromCudaCapability/dot_bf16_bf16_f32_x9_with_lhs_f32_rhs_f32_output_f32_from_cc_8_0_rocm_60_no_restriction_c_16_nc_2
     CubScanThunkTest.ToProto
+    TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly 
+    HostMemoryAllocateTest.Numa
+    # mGPU test
+    StreamExecutorGpuClientTest.DistributedInit
+    StreamExecutorGpuClientTest.GetTopologyDescriptionWithGlobalDevicesTest
+    StreamExecutorGpuClientTest.MockNcclClientTest
+    StreamExecutorGpuClientTest.MockNcclClientWithGpuTopologyTest 
+    StreamExecutorGpuClientTest.MockNcclClientWithGpuTopologyExecuteTest
+    StreamExecutorGpuClientTest.GetAbiVersion
 )
 
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
