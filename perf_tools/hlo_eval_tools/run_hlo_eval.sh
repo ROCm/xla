@@ -5,6 +5,7 @@
 #
 # Usage:
 #   run_hlo_eval.sh <hlo_runner_main> <hlo_path> <out> [num_repeats]
+#   run_hlo_eval.sh --branches --xla-source-repo <repo> --output-dir <dir>
 #
 #   <hlo_runner_main>  Path to the built multihost_hlo_runner binary, e.g.
 #                      .../bazel-bin/xla/tools/multihost_hlo_runner/hlo_runner_main
@@ -39,6 +40,14 @@
 set -uo pipefail
 
 die() { echo "error: $*" >&2; exit 2; }
+
+if [ "${1:-}" = "--branches" ]; then
+  shift
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  campaign="$script_dir/run_xla_branch_eval.py"
+  [ -f "$campaign" ] || die "branch evaluator not found: $campaign"
+  exec python3 "$campaign" "$@"
+fi
 
 [ "$#" -ge 3 ] || die "usage: $(basename "$0") <hlo_runner_main> <hlo_path> <out> [num_repeats]"
 RUNNER=$1
