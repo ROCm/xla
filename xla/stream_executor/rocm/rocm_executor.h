@@ -149,6 +149,9 @@ class RocmExecutor : public GpuExecutor {
   // Creates a GpuEvent for the given stream.
   absl::StatusOr<std::unique_ptr<RocmEvent>> CreateGpuEvent(bool allow_timing);
 
+  // Returns true if a delay kernel is supported.
+  absl::StatusOr<bool> DelayKernelIsSupported();
+
   // Guards the in-memory-module mapping.
   absl::Mutex in_memory_modules_mu_;
 
@@ -202,6 +205,9 @@ class RocmExecutor : public GpuExecutor {
 
   // GPU ISA version for device_.
   int version_;
+
+  // True if delay kernels are supported.
+  bool delay_kernels_supported_ = false;
 
   // RocmContext for this device.  Owned as a value — on ROCm a "context"
   // is just a device ordinal, so there is no heavyweight object to manage.

@@ -20,6 +20,7 @@ limitations under the License.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -122,6 +123,22 @@ hipDeviceptr_t AsROCmDevicePtr(DeviceAddressBase* gpu_mem) {
 absl::uint128 Fingerprint128(const absl::string_view s) {
   auto fp = tsl::Fingerprint128(s);
   return absl::MakeUint128(fp.high64, fp.low64);
+}
+
+bool ShouldLaunchDelayKernel() {
+  // The delay kernel blocks the stream until the host releases it, so it
+  // deadlocks if the HIP runtime is configured to serialize launches.
+  static bool value = [] {
+    auto is_enabled = [](const char* name) {
+      const char* value = std::getenv(name);
+      return value != nullptr && !absl::string_view{value}.empty() &&
+             absl::string_view{value} != "0";
+    };
+    return !is_enabled("HIP_LAUNCH_BLOCKING") &&
+           !is_enabled("AMD_SERIALIZE_KERNEL") &&
+           !is_enabled("AMD_SERIALIZE_COPY");
+  }();
+  return value;
 }
 
 // Loads HSACO with the ROCM runtime and stores the resulting handle in
@@ -584,7 +601,12 @@ RocmExecutor::CreateOrShareConstant(Stream* stream,
 
 absl::StatusOr<std::unique_ptr<EventBasedTimer>>
 RocmExecutor::CreateEventBasedTimer(Stream* stream, bool use_delay_kernel) {
-  ASSIGN_OR_RETURN(auto timer, RocmTimer::Create(this, stream));
+  const RocmTimer::TimerType timer_type =
+      (use_delay_kernel && ShouldLaunchDelayKernel() && delay_kernels_supported_)
+          ? RocmTimer::TimerType::kDelayKernel
+          : RocmTimer::TimerType::kEventBased;
+
+  ASSIGN_OR_RETURN(auto timer, RocmTimer::Create(this, stream, timer_type));
   return std::make_unique<RocmTimer>(std::move(timer));
 }
 
@@ -630,6 +652,7 @@ void RocmExecutor::UnloadKernel(const Kernel* kernel) {
 absl::Status RocmExecutor::Init() {
   ASSIGN_OR_RETURN(device_, GetDevice(device_ordinal()));
   ASSIGN_OR_RETURN(version_, GetGpuISAVersion(device_));
+  ASSIGN_OR_RETURN(delay_kernels_supported_, DelayKernelIsSupported());
 
   // Initialize peer access cache for all devices
   int device_count = 0;
@@ -653,6 +676,17 @@ absl::Status RocmExecutor::Init() {
   // ROCM platform because rocBLAS/hipBlasLt already use 'lazy initialization'
   // internally
   return InitBlas();
+}
+
+absl::StatusOr<bool> RocmExecutor::DelayKernelIsSupported() {
+  // The delay kernel dereferences a pinned host allocation through the very
+  // same pointer on the device, so skip it unless host memory can be mapped
+  // into the device address space.
+  ASSIGN_OR_RETURN(int status,
+                   GetSimpleAttribute<int>(
+                       device_, hipDeviceAttributeCanMapHostMemory));
+
+  return static_cast<bool>(status);
 }
 
 absl::StatusOr<std::unique_ptr<Kernel>> RocmExecutor::LoadKernel(
