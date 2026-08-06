@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "revision": "origin/rocm-jaxlib-v0.10.2",
+      "commit": "7b5ecf1c9282fdf1039211e0d45216980058beda",
+      "role": "control",
+      "label": "v0.10.2 pinned baseline"
+    },
+    {
+      "revision": "upstream/main",
+      "commit": null,
+      "label": "upstream main HEAD"
+    }
+  ]
+}
