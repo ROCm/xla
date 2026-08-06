@@ -42,7 +42,7 @@ for arg in "$@"; do
         TAG_FILTERS="${TAG_FILTERS},-notsan"
     fi
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
-        TAG_FILTERS="" # in mgpu we have a standard set of tests
+        TAG_FILTERS="${TAG_FILTERS},multi_gpu"
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
          TAG_FILTERS="${TAG_FILTERS},requires-gpu-rocm,requires-gpu-amd,-multi_gpu"
