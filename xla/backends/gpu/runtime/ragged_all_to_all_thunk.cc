@@ -66,6 +66,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/primitive_util.h"
 #include "xla/service/buffer_assignment.h"
+#include "xla/service/collective_ops_utils.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/rendezvous.h"
 #include "xla/shape.h"
@@ -146,21 +147,19 @@ RaggedAllToAllConfig GetRaggedAllToAllConfig(
           ->config()
           .debug_options()
           .xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel();
+  // Read through the shared predicates rather than the raw debug options, so
+  // that buffer coloring and this thunk config cannot disagree about whether
+  // symmetric memory is available.
   config.use_multi_gpu_barrier_with_nccl_in_one_shot_kernel =
-      instr->GetModule()
-          ->config()
-          .debug_options()
-          .xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl();
+      IsOneShotRaggedAllToAllWithNcclEnabled(
+          instr->GetModule()->config().debug_options());
   config.use_device_kernel =
       instr->GetModule()
           ->config()
           .debug_options()
           .xla_gpu_experimental_ragged_all_to_all_use_device_kernel();
-  config.allow_fallback_to_nccl =
-      instr->GetModule()
-          ->config()
-          .debug_options()
-          .xla_gpu_allow_ragged_all_to_all_nccl_send_recv_fallback();
+  config.allow_fallback_to_nccl = IsRaggedAllToAllNcclFallbackAllowed(
+      instr->GetModule()->config().debug_options());
 
   config.collectives_mode = instr->GetModule()
                                 ->config()

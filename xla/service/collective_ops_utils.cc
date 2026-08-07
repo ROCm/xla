@@ -55,6 +55,7 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/side_effect_util.h"
 #include "xla/status_macros.h"
+#include "xla/stream_executor/platform_manager.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
 
@@ -847,8 +848,50 @@ bool IsRaggedAllToAllOrAsyncDoneRaggedAllToAll(
           instruction->async_wrapped_opcode() == HloOpcode::kRaggedAllToAll);
 }
 
+namespace {
+
+// True when running on the ROCm platform.
+//
+// RCCL declares ncclCommWindowRegister in rccl.h and reports
+// NCCL_VERSION_CODE 23004, which is above NCCL's symmetric-memory threshold, so
+// both link-time and version-based capability detection wrongly report support
+// and the call then fails at runtime with ncclInvalidUsage. Probe the platform
+// instead. A build-time TENSORFLOW_USE_ROCM guard would not work either: these
+// defaults live in backend-agnostic jaxlib, and only the plugin and PJRT are
+// built for ROCm. This is a no-op on CUDA builds.
+bool IsRocmPlatform() {
+  static const bool is_rocm = [] {
+    return stream_executor::PlatformManager::PlatformWithName(
+               "ROCM", /*initialize_platform=*/false)
+        .ok();
+  }();
+  return is_rocm;
+}
+
+}  // namespace
+
 bool IsOneShotRaggedAllToAllWithNcclEnabled(const DebugOptions& opts) {
+  // Disable symmetric memory on ROCm until RCCL support is stable across all
+  // ROCm versions. This predicate drives both buffer coloring and the
+  // RaggedAllToAllThunk config, whose PrepareCollective would otherwise request
+  // a symmetric allocation and fail in ncclCommWindowRegister.
+  if (IsRocmPlatform()) {
+    return false;
+  }
   return opts.xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl();
+}
+
+bool IsRaggedAllToAllNcclFallbackAllowed(const DebugOptions& opts) {
+  // On ROCm neither the symmetric-memory nor the device-kernel route is
+  // available, so the send/recv fallback is the only path left for non-local
+  // cliques and for element types the one-shot kernel does not support. Without
+  // this, disabling the symmetric path above only trades the registration
+  // failure for an InvalidArgument. This restores the unconditional behavior
+  // from before the flag was introduced.
+  if (IsRocmPlatform()) {
+    return true;
+  }
+  return opts.xla_gpu_allow_ragged_all_to_all_nccl_send_recv_fallback();
 }
 
 HloInstruction* IsOrHasCollectiveWithChannelId(HloInstruction* instruction) {
@@ -1097,6 +1140,9 @@ bool NcclSymmetricBuffersSpec::IsEnabled(const HloInstruction& inst) const {
 
 bool IsNcclSymmetricBuffersEnabledForCollective(
     const HloInstruction* instruction, const DebugOptions& opts) {
+  // Checked before the ROCm gate below on purpose: this experimental flag is
+  // the deliberate escape hatch for re-validating RCCL symmetric memory once
+  // ncclCommWindowRegister is implemented, without needing a rebuild.
   if (opts.xla_gpu_experimental_enable_nccl_symmetric_buffers()) {
     return true;
   }
@@ -1108,6 +1154,11 @@ bool IsNcclSymmetricBuffersEnabledForCollective(
   }
 
   if (!IsNonFusionCollective(instruction)) {
+    return false;
+  }
+  // Disable symmetric memory on ROCm until RCCL support is stable across all
+  // ROCm versions.
+  if (IsRocmPlatform()) {
     return false;
   }
   NcclSymmetricBuffersSpec spec(opts);

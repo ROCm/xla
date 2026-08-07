@@ -2307,6 +2307,7 @@ cc_library(
         "//xla/core/collectives:symmetric_memory",
         "//xla/hlo/ir:hlo",
         "//xla/service:buffer_assignment",
+        "//xla/service:collective_ops_utils",
         "//xla/service:rendezvous",
         "//xla/service/gpu:backend_configs_cc",
         "//xla/stream_executor:command_buffer",
