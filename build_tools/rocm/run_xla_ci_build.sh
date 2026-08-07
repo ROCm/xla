@@ -32,6 +32,12 @@ trap clean_up EXIT
 
 TEST_FILTER=(
     TritonGemmTest.SplitAndTransposeLhsExecutesCorrectly
+    AutoShardingTest.MatMulWithAutosharding
+    RcclCommunicator.AbortSucceeds
+    # mGPU tests
+    DynamicSliceFusionTest.MultipleOffsetsAsFunctionOfInductionVariable
+    DynamicSliceFusionTest.OffsetAsFunctionOfInductionVariableShouldUseOffsetModulesWithCmdBuffer
+    CollectiveOpsCommandBufferTest.SendRecv_Simple
 )
 
 for arg in "$@"; do
@@ -42,10 +48,13 @@ for arg in "$@"; do
         TAG_FILTERS="${TAG_FILTERS},-notsan"
     fi
     if [[ "$arg" == "--config=ci_multi_gpu" ]]; then
-        TAG_FILTERS="" # in mgpu we have a standard set of tests
+        TAG_FILTERS="${TAG_FILTERS},multi_gpu"
     fi
     if [[ "$arg" == "--config=ci_single_gpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},gpu,-multi_gpu,-no_oss"
+         TAG_FILTERS="${TAG_FILTERS},requires-gpu-rocm,requires-gpu-amd,-multi_gpu"
+    fi
+    if [[ "$arg" == "--config=ci_rocm_cpu" ]]; then
+        TAG_FILTERS="${TAG_FILTERS},gpu,-requires-gpu-rocm,-requires-gpu-amd"
     fi
     if [[ "$arg" == "--config=rocm_ci_hermetic" ]]; then
         TEST_FILTER+=(
@@ -69,5 +78,7 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla.bazelrc" test \
         IFS=:
         echo "${TEST_FILTER[*]}"
     ) \
-    --spawn_strategy=local \
+    --color=yes \
     "$@" \
+    -- \
+    //xla/... \
