@@ -32,6 +32,10 @@ absl::StatusOr<GpuSemaphore> GpuSemaphore::Create(StreamExecutor* executor) {
   return GpuSemaphore{std::move(alloc)};
 }
 
+GpuSemaphore GpuSemaphore::Create(std::unique_ptr<MemoryAllocation> allocation) {
+  return GpuSemaphore{std::move(allocation)};
+}
+
 DeviceAddress<GpuSemaphoreState> GpuSemaphore::device() {
   // This assumes unified addressing, as we do not explicitly translate the
   // host pointer into a device pointer.

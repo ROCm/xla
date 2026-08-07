@@ -15,14 +15,17 @@ limitations under the License.
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/generic_memory_allocation.h"
 #include "xla/stream_executor/gpu/gpu_semaphore.h"
 #include "xla/stream_executor/launch_dim.h"
 #include "xla/stream_executor/rocm/delay_kernel.h"
+#include "xla/stream_executor/rocm/rocm_status.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/stream_executor/typed_kernel_factory.h"
@@ -31,51 +34,42 @@ limitations under the License.
 namespace stream_executor::gpu {
 namespace {
 
-// The semaphore lives in pinned host memory, which HIP allocates
-// coarse-grained, so the device may hold it in an L2 that host writes do not
-// invalidate. Observing the host's release therefore needs either a
-// system-scope load or an explicit L2 invalidate, and which of those exists is
-// per-architecture:
+// Allocates the semaphore in host memory the device can read and write while a
+// kernel is running.
 //
-//   CDNA3/CDNA4, RDNA4  `volatile` already lowers to a system-scope access
-//                       (`sc0 sc1`, `scope:SCOPE_SYS`). Nothing more needed.
-//   CDNA2 (gfx90a)      No memory scope in the ISA, but BUFFER_INVL2 exists and
-//                       __threadfence_system() emits it.
-//   CDNA1, RDNA1-3      Neither: no per-instruction memory scope, and no L2
-//                       invalidate instruction of any kind. Nothing works,
-//                       which is why RocmExecutor::DelayKernelIsSupported()
-//                       does not run the delay kernel there at all.
+// `hipHostMalloc(hipHostMallocPortable)` - what StreamExecutor's generic host
+// allocation uses - is coarse-grained, so the device may hold the value in an
+// L2 that host writes do not invalidate. A `volatile` load bypasses L1 but is
+// still answered from L2, so the spin below would never observe the host's
+// release. Only CDNA2 through CDNA4 and RDNA4 can dislodge such a line from the
+// kernel side (BUFFER_INVL2 / GLOBAL_INV, or a system-scope load); CDNA1 and
+// RDNA1-3 have no L2 invalidate instruction at all.
 //
-// So gfx90a is the only architecture reaching this kernel that needs the fence.
-#if defined(__gfx90a__)
-#define XLA_DELAY_KERNEL_NEEDS_SYSTEM_FENCE 1
-#endif
-
-// Reads the semaphore so that a host write is observable.
-__device__ __forceinline__ GpuSemaphoreState LoadSemaphore(
-    GpuSemaphoreState* semaphore) {
-#ifdef XLA_DELAY_KERNEL_NEEDS_SYSTEM_FENCE
-  // Same shape as collective_signal_rocm.cu.h. The fence is what carries the
-  // access past L2 where the ISA cannot express it per instruction; on gfx90a
-  // it emits buffer_wbl2 + buffer_invl2 + buffer_wbinvl1_vol.
-  __threadfence_system();
-  return __hip_atomic_load(semaphore, __ATOMIC_ACQUIRE,
-                           __HIP_MEMORY_SCOPE_SYSTEM);
-#else
-  return *static_cast<volatile GpuSemaphoreState*>(semaphore);
-#endif
-}
-
-// Writes the semaphore so that the host can observe it.
-__device__ __forceinline__ void StoreSemaphore(GpuSemaphoreState* semaphore,
-                                               GpuSemaphoreState value) {
-#ifdef XLA_DELAY_KERNEL_NEEDS_SYSTEM_FENCE
-  __hip_atomic_store(semaphore, value, __ATOMIC_RELEASE,
-                     __HIP_MEMORY_SCOPE_SYSTEM);
-  __threadfence_system();
-#else
-  *static_cast<volatile GpuSemaphoreState*>(semaphore) = value;
-#endif
+// Requesting coherent - i.e. fine-grained - memory avoids the problem for all
+// of them, because the value is never cached in L2 to begin with. Measured on
+// gfx908, gfx90a, gfx950, gfx1102, gfx1151 and gfx1201: with this flag a plain
+// `volatile` spin observes the release on every one, and without it the kernel
+// runs its full timeout on the first four.
+//
+// Scoped to the semaphore rather than applied in RocmExecutor::HostAllocate so
+// that bulk pinned allocations keep their existing behaviour. This mirrors
+// rocm_device_address_vmm_allocator.cc, which allocates its timeline counter
+// the same way for the same reason.
+absl::StatusOr<GpuSemaphore> CreateCoherentSemaphore() {
+  void* ptr = nullptr;
+  RETURN_IF_ERROR(ToStatus(
+      hipHostMalloc(&ptr, sizeof(GpuSemaphoreState),
+                    hipHostMallocPortable | hipHostMallocCoherent),
+      "Failed to allocate coherent host memory for the delay kernel "
+      "semaphore"));
+  return GpuSemaphore::Create(std::make_unique<GenericMemoryAllocation>(
+      ptr, sizeof(GpuSemaphoreState), [](void* location, uint64_t size) {
+        hipError_t result = hipHostFree(location);
+        if (result != hipSuccess) {
+          LOG(ERROR) << "Failed to free delay kernel semaphore: "
+                     << ToString(result);
+        }
+      }));
 }
 
 // Wait for the value pointed to by `semaphore` to have value `target`, timing
@@ -98,12 +92,12 @@ __device__ __forceinline__ void StoreSemaphore(GpuSemaphoreState* semaphore,
 // (The shader clock itself is stable during the spin - it sits at boost on
 // every arch measured - so this is about the reference rate being unknowable,
 // not about the clock moving underneath us.)
-__global__ void DelayKernel(GpuSemaphoreState* semaphore,
+__global__ void DelayKernel(volatile GpuSemaphoreState* semaphore,
                             GpuSemaphoreState target, int64_t timeout_ticks,
                             int64_t poll_interval_ticks) {
   const int64_t tstart{wall_clock64()};
   bool target_not_reached;
-  while ((target_not_reached = (LoadSemaphore(semaphore) != target)) &&
+  while ((target_not_reached = (*semaphore != target)) &&
          (wall_clock64() - tstart) < timeout_ticks) {
     int64_t elapsed{};
     const int64_t t0{wall_clock64()};
@@ -114,7 +108,7 @@ __global__ void DelayKernel(GpuSemaphoreState* semaphore,
   if (target_not_reached) {
     // We are exiting due to the timeout. Signal this back to the host so that
     // we can emit a warning, as it probably indicates suboptimal usage.
-    StoreSemaphore(semaphore, GpuSemaphoreState::kTimedOut);
+    *semaphore = GpuSemaphoreState::kTimedOut;
   }
 }
 
@@ -143,8 +137,9 @@ absl::StatusOr<GpuSemaphore> LaunchDelayKernel(Stream* stream) {
   StreamExecutor* executor = stream->parent();
 
   // Allocate a semaphore value that will be used to signal to the delay
-  // kernel that it may exit.
-  ASSIGN_OR_RETURN(auto semaphore, GpuSemaphore::Create(executor));
+  // kernel that it may exit. See CreateCoherentSemaphore for why this does not
+  // go through StreamExecutor::HostMemoryAllocate.
+  ASSIGN_OR_RETURN(auto semaphore, CreateCoherentSemaphore());
   *semaphore = GpuSemaphoreState::kHold;
   // In principle the kernel could be loaded lazily and shared across
   // multiple GpuTimer objects.

@@ -981,7 +981,9 @@ rocm_library(
         "//xla/stream_executor:__subpackages__",
     ]),
     deps = [
+        ":rocm_status",
         "//xla/stream_executor:device_address",
+        "//xla/stream_executor:generic_memory_allocation",
         "//xla/stream_executor:launch_dim",
         "//xla/stream_executor:stream",
         "//xla/stream_executor:stream_executor_h",
@@ -990,6 +992,7 @@ rocm_library(
         "//xla/tsl/platform:status_macros",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status:statusor",
+        "@local_config_rocm//rocm:hip",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocm_headers",
     ],
 )
