@@ -200,6 +200,83 @@ TEST(RocmCollectorTest, MultipleActivitiesPerCorrelationIdAllExported) {
   EXPECT_TRUE(seen_names.contains("kernel_c"));
 }
 
+// The max_callback_api_events limit has existed since the collector was
+// written and no test has ever proved it fires: both cases above set it to 100
+// and never come near it. It matters more now that
+// ProfileOptions.advanced_configuration can set it per-session through
+// gpu_max_callback_api_events, so a silent regression here would turn a
+// user-facing knob into a no-op.
+TEST(RocmCollectorTest, CallbackCapDropsEventsBeyondLimit) {
+  constexpr uint64_t kMaxCallbackEvents = 3;
+  constexpr int kEventsOffered = 5;
+
+  RocmTraceCollectorOptions options;
+  options.max_callback_api_events = kMaxCallbackEvents;
+  options.max_activity_api_events = 100;
+  options.max_annotation_strings = 100;
+  options.num_gpus = 1;
+
+  constexpr uint64_t kStartWallTimeNs = 1000;
+  constexpr uint64_t kStartGpuTimeNs = 2000;
+  RocmTraceCollectorImpl collector(options, kStartWallTimeNs, kStartGpuTimeNs);
+
+  constexpr uint32_t kDeviceId = 100;
+  constexpr uint64_t kStreamId = 123;
+
+  // Five complete API/activity pairs, distinct correlation ids. The field
+  // combination is copied from TestAddKernelEventAndExport above: the cap sits
+  // behind `source == ApiCallback && !is_auxiliary`, and a Generic (ROCTX)
+  // event would bypass it entirely and make this test vacuous.
+  for (int i = 0; i < kEventsOffered; ++i) {
+    const uint32_t correlation_id = 500 + i;
+
+    RocmTracerEvent api_event;
+    api_event.type = RocmTracerEventType::Kernel;
+    api_event.source = RocmTracerEventSource::ApiCallback;
+    api_event.domain = RocmTracerEventDomain::HIP_API;
+    api_event.name = "capped_kernel";
+    api_event.correlation_id = correlation_id;
+    api_event.thread_id = 999;
+    api_event.kernel_info = KernelDetails{};
+    api_event.kernel_info.func_ptr = reinterpret_cast<void*>(0xdeadbeef);
+    collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
+
+    RocmTracerEvent activity;
+    activity.type = RocmTracerEventType::Kernel;
+    activity.source = RocmTracerEventSource::Activity;
+    activity.domain = RocmTracerEventDomain::HIP_OPS;
+    activity.name = "capped_kernel";
+    activity.correlation_id = correlation_id;
+    activity.start_time_ns = 3000 + i * 100;
+    activity.end_time_ns = 3050 + i * 100;
+    activity.device_id = kDeviceId;
+    activity.stream_id = kStreamId;
+    collector.AddEvent(std::move(activity), /*is_auxiliary=*/false);
+  }
+
+  collector.Flush();
+  tensorflow::profiler::XSpace space;
+  collector.Export(&space);
+
+  const auto* gpu_plane =
+      FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu_plane, nullptr);
+
+  size_t exported = 0;
+  for (const auto& line : gpu_plane->lines()) {
+    if (line.id() != static_cast<int64_t>(kStreamId)) {
+      continue;
+    }
+    exported += line.events_size();
+  }
+
+  // The two over-cap API callbacks are refused, and their activity records are
+  // then dropped for having no API counterpart, so neither half leaks through.
+  EXPECT_EQ(exported, kMaxCallbackEvents)
+      << "Offered " << kEventsOffered << " events under a cap of "
+      << kMaxCallbackEvents << "; the cap is not being enforced.";
+}
+
 }  // namespace test
 }  // namespace profiler
 }  // namespace xla

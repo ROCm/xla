@@ -156,6 +156,12 @@ struct RocmTracerEvent {
   };
 };
 
+struct RocmTracerOptions {
+  // maximum number of annotation strings that AnnotationMap in RocmTracer can
+  // store. e.g. 1M
+  uint64_t max_annotation_strings;
+};
+
 struct RocmTraceCollectorOptions {
   // Maximum number of events to collect from callback API; if -1, no limit.
   // if 0, the callback API is enabled to build a correlation map, but no
@@ -179,6 +185,11 @@ class AnnotationMap {
   ScopeRangeIdTree TakeScopeRangeIdTree();
   void Clear();
 
+  // Sets the maximum number of distinct annotation strings retained. Intended
+  // to be called between profiling sessions, while the map is empty; entries
+  // already present are not evicted if the new size is smaller.
+  void SetMaxSize(uint64_t max_size);
+
  private:
   struct AnnotationMapImpl {
     // The population/consumption of annotations might happen from multiple
@@ -193,8 +204,8 @@ class AnnotationMap {
         ABSL_GUARDED_BY(mutex);
     ScopeRangeIdTree scope_range_id_tree ABSL_GUARDED_BY(mutex);
   };
-  const uint64_t max_size_;
   AnnotationMapImpl map_;
+  uint64_t max_size_ ABSL_GUARDED_BY(map_.mutex);
 
  public:
   // Disable copy and move.

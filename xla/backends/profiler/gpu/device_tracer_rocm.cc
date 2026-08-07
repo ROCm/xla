@@ -19,8 +19,10 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/backends/profiler/gpu/rocm_tracer.h"
+#include "xla/backends/profiler/gpu/rocm_tracer_options_utils.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/debug_options_flags.h"
 #include "xla/tsl/platform/env_time.h"
@@ -42,7 +44,8 @@ using tsl::profiler::XSpace;
 // GpuTracer for ROCm GPU.
 class GpuTracer : public profiler::ProfilerInterface {
  public:
-  explicit GpuTracer(RocmTracer* rocm_tracer) : rocm_tracer_(rocm_tracer) {
+  GpuTracer(RocmTracer* rocm_tracer, const ProfileOptions& profile_options)
+      : profile_options_(profile_options), rocm_tracer_(rocm_tracer) {
     LOG(INFO) << "GpuTracer created.";
   }
   ~GpuTracer() override {}
@@ -56,8 +59,12 @@ class GpuTracer : public profiler::ProfilerInterface {
   absl::Status DoStart();
   absl::Status DoStop();
 
-  RocmTracerOptions GetRocmTracerOptions();
-  RocmTraceCollectorOptions GetRocmTraceCollectorOptions(uint32_t num_gpus);
+  // Seeds both option structs from the hardcoded defaults and the
+  // --xla_gpu_rocm_max_trace_events flag, then applies
+  // ProfileOptions.advanced_configuration on top. Records any complaint in
+  // option_diagnostics_ instead of failing.
+  void BuildOptions(uint32_t num_gpus, RocmTracerOptions& tracer_options,
+                    RocmTraceCollectorOptions& collector_options);
 
   enum State {
     kNotStarted,
@@ -68,21 +75,25 @@ class GpuTracer : public profiler::ProfilerInterface {
   };
   State profiling_state_ = State::kNotStarted;
 
+  const ProfileOptions profile_options_;
+  RocmTracerOptionDiagnostics option_diagnostics_;
   RocmTracer* rocm_tracer_;
   std::unique_ptr<RocmTraceCollector> rocm_trace_collector_;
 };
 
-RocmTracerOptions GpuTracer::GetRocmTracerOptions() {
-  RocmTracerOptions options;
-  options.max_annotation_strings = 4 * 1024 * 1024;
-  return options;
-}
+void GpuTracer::BuildOptions(uint32_t num_gpus,
+                             RocmTracerOptions& tracer_options,
+                             RocmTraceCollectorOptions& collector_options) {
+  // Rebuilt from scratch on every start, so that a second Start() on the same
+  // tracer does not report the first session's complaints a second time.
+  option_diagnostics_ = RocmTracerOptionDiagnostics{};
 
-RocmTraceCollectorOptions GpuTracer::GetRocmTraceCollectorOptions(
-    uint32_t num_gpus) {
-  RocmTraceCollectorOptions options;
-  options.num_gpus = num_gpus;
+  // Layer 1: hardcoded defaults, unchanged from what this file used before
+  // advanced_configuration existed.
+  collector_options.num_gpus = num_gpus;
 
+  // Layer 2: the legacy flag. Retained as a fallback for users who already
+  // depend on it; each advanced_configuration key overrides its own field.
   const auto& dbg = xla::GetDebugOptionsFromFlags();
   int64_t max_events = dbg.xla_gpu_rocm_max_trace_events();
   VLOG(2) << "max number of events to be trace from flag = " << max_events;
@@ -94,10 +105,42 @@ RocmTraceCollectorOptions GpuTracer::GetRocmTraceCollectorOptions(
   }
   VLOG(3) << "maximum number of events to be traced = " << max_events;
 
-  options.max_callback_api_events = max_events;
-  options.max_activity_api_events = max_events;
-  options.max_annotation_strings = max_events;
-  return options;
+  collector_options.max_callback_api_events = max_events;
+  collector_options.max_activity_api_events = max_events;
+  collector_options.max_annotation_strings = max_events;
+  // Seeded from the same source as the collector's annotation limit, so that
+  // the two stay consistent whether they are set by the flag or by the
+  // gpu_max_annotation_strings key, which writes both.
+  tracer_options.max_annotation_strings = max_events;
+
+  // Layer 3: ProfileOptions.advanced_configuration.
+  if (profile_options_.version() == 0 &&
+      !profile_options_.advanced_configuration().empty()) {
+    // Unreachable in practice: ProfilerSession::GetOptions drops the map
+    // before we ever see it when version() is zero. Logged in case a caller
+    // reaches the tracer factory directly with a hand-built proto.
+    VLOG(1) << "ProfileOptions.version() is 0; advanced_configuration is "
+               "normally stripped by ProfilerSession for such options.";
+  }
+  UpdateRocmTracerOptionsFromProfilerOptions(
+      profile_options_, tracer_options, collector_options, option_diagnostics_);
+
+  // Post-parse fixup for num_gpus, mirroring device_tracer_cuda.cc.
+  if (collector_options.num_gpus <= 0 ||
+      collector_options.num_gpus > num_gpus) {
+    if (collector_options.num_gpus != 0) {
+      LOG(WARNING) << "The provided number of GPUs ("
+                   << collector_options.num_gpus
+                   << ") is invalid. Profiling will be done on all available "
+                      "GPUs ("
+                   << num_gpus << ").";
+      option_diagnostics_.warnings.push_back(absl::StrCat(
+          "advanced_configuration key 'gpu_num_chips_to_profile_per_task'=",
+          collector_options.num_gpus, " is out of range; profiling all ",
+          num_gpus, " GPUs."));
+    }
+    collector_options.num_gpus = num_gpus;
+  }
 }
 
 absl::Status GpuTracer::DoStart() {
@@ -105,9 +148,23 @@ absl::Status GpuTracer::DoStart() {
   uint64_t start_gputime_ns = RocmTracer::GetTimestamp();
   uint64_t start_walltime_ns = tsl::EnvTime::NowNanos();
 
-  RocmTracerOptions tracer_options = GetRocmTracerOptions();
-  RocmTraceCollectorOptions trace_collector_options =
-      GetRocmTraceCollectorOptions(rocm_tracer_->NumGpus());
+  RocmTracerOptions tracer_options;
+  RocmTraceCollectorOptions trace_collector_options;
+  BuildOptions(rocm_tracer_->NumGpus(), tracer_options,
+               trace_collector_options);
+
+  // Deliberately different from the CUPTI path. A bad key does not abort the
+  // session, because on the default JAX path that costs the user the entire
+  // GPU plane with nothing in the trace to explain it. The diagnostics are
+  // carried to CollectData instead. Callers that explicitly asked for start
+  // failures to be fatal still get that.
+  if (!option_diagnostics_.errors.empty() &&
+      profile_options_.raise_error_on_start_failure()) {
+    AnnotationStack::Enable(false);
+    return absl::InvalidArgumentError(
+        absl::StrJoin(option_diagnostics_.errors, " "));
+  }
+
   rocm_trace_collector_ = CreateRocmCollector(
       trace_collector_options, start_walltime_ns, start_gputime_ns);
   rocm_trace_collector_->SetGpuAgents(rocm_tracer_->GpuAgents());
@@ -147,6 +204,10 @@ absl::Status GpuTracer::Stop() {
 }
 
 absl::Status GpuTracer::CollectData(XSpace* space) {
+  // Delivered from every terminal state, including the failure states. This is
+  // the property the CUPTI path lacks: its add_errors/add_warnings calls sit
+  // under kStoppedOk and are unreachable when the tracer failed to start.
+  AppendOptionDiagnostics(option_diagnostics_, space);
   switch (profiling_state_) {
     case State::kNotStarted:
       VLOG(3) << "No trace data collected, session wasn't started";
@@ -181,7 +242,7 @@ std::unique_ptr<profiler::ProfilerInterface> CreateGpuTracer(
     return nullptr;
   auto& rocm_tracer = profiler::RocmTracer::GetRocmTracerSingleton();
   if (!rocm_tracer.IsAvailable()) return nullptr;
-  return std::make_unique<profiler::GpuTracer>(&rocm_tracer);
+  return std::make_unique<profiler::GpuTracer>(&rocm_tracer, options);
 }
 
 auto register_rocm_gpu_tracer_factory = [] {
