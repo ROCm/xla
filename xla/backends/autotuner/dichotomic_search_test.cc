@@ -512,26 +512,20 @@ TEST(DichotomicSearchTest, ThreePhaseSearchFindsUnimodalOptimum) {
   EXPECT_LT(static_cast<int>(evaluated.size()), space.num_configs());
 }
 
-// Because block_k<->num_stages and block_m<->num_warps are strongly coupled, a
-// tile value must be scored against ALL its coupled sweep values. So in Phase 1
-// every emitted block_k appears crossed with every num_stages, and every
-// block_m crossed with every num_warps. This test verifies that binding.
-TEST(DichotomicSearchTest, CoarseGridBindsCoupledSweepToTile) {
-  // block_m/block_k > 3 values (kUnimodal); num_warps/num_stages multiple
-  // values (real kSweep axes) so the coupling logic engages. block_n has a
-  // single value so it doesn't blow up the cross product.
+// The joint 2-D co-sampling must CREATE a diagonal (block_m, block_k) config
+// that per-axis moves never form: from a best sample at (bm*, bk*), the Phase-3
+// neighborhood must include the diagonal neighbours (bm*±1, bk*∓1). This is the
+// core fix for coupled optima that 1-D coordinate descent strands.
+TEST(DichotomicSearchTest, NeighborhoodEmitsDiagonalCoupledConfig) {
+  // Dense 2-D grid over (block_m, block_k) so every diagonal neighbour exists
+  // as a real config; other knobs single-valued to isolate the (bm,bk) plane.
   std::vector<std::unique_ptr<BackendConfig>> configs;
   const std::vector<int64_t> ms = {16, 32, 64, 128, 256};
   const std::vector<int64_t> ks = {16, 32, 64, 128};
-  const std::vector<int64_t> warps = {2, 4, 8};
-  const std::vector<int64_t> stages = {1, 2, 3, 4};
   for (int64_t m : ms) {
     for (int64_t k : ks) {
-      for (int64_t w : warps) {
-        for (int64_t s : stages) {
-          configs.push_back(MakeTritonConfig(m, /*block_n=*/64, k, s, w));
-        }
-      }
+      configs.push_back(MakeTritonConfig(m, /*block_n=*/64, k,
+                                         /*num_stages=*/1, /*num_warps=*/4));
     }
   }
   auto space_or = DichotomicSearchSpace::Build(Ptrs(configs));
@@ -541,104 +535,48 @@ TEST(DichotomicSearchTest, CoarseGridBindsCoupledSweepToTile) {
 
   const int mi = AxisIndex(space, "block_m");
   const int ki = AxisIndex(space, "block_k");
-  const int wi = AxisIndex(space, "num_warps");
-  const int si = AxisIndex(space, "num_stages");
   ASSERT_GE(mi, 0);
   ASSERT_GE(ki, 0);
-  ASSERT_GE(wi, 0);
-  ASSERT_GE(si, 0);
 
-  std::vector<int> phase1 =
-      SelectConfigs(space, profile, SearchPhase::kCoarseGrid, {}, {});
-  ASSERT_FALSE(phase1.empty());
-
-  // Collect, for each emitted block_k, the set of num_stages it was paired
-  // with; and for each block_m, the set of num_warps.
-  std::map<int64_t, std::set<int64_t>> ns_by_bk;
-  std::map<int64_t, std::set<int64_t>> nw_by_bm;
-  for (int idx : phase1) {
-    const auto& t = configs[idx]->triton();
-    ns_by_bk[t.block_k()].insert(t.num_stages());
-    nw_by_bm[t.block_m()].insert(t.num_warps());
-  }
-
-  const std::set<int64_t> all_stages(stages.begin(), stages.end());
-  const std::set<int64_t> all_warps(warps.begin(), warps.end());
-
-  // Every block_k that was probed must have been crossed with ALL num_stages.
-  ASSERT_FALSE(ns_by_bk.empty());
-  for (const auto& [bk, seen_ns] : ns_by_bk) {
-    EXPECT_EQ(seen_ns, all_stages)
-        << "block_k=" << bk << " was not crossed with all num_stages";
-  }
-  // Every block_m that was probed must have been crossed with ALL num_warps.
-  ASSERT_FALSE(nw_by_bm.empty());
-  for (const auto& [bm, seen_nw] : nw_by_bm) {
-    EXPECT_EQ(seen_nw, all_warps)
-        << "block_m=" << bm << " was not crossed with all num_warps";
-  }
-}
-
-// Phase 2 (ternary refine) must also bind the coupled sweep: every block_k it
-// probes is crossed with all num_stages, and every block_m with all num_warps.
-TEST(DichotomicSearchTest, TernaryRefineBindsCoupledSweepToTile) {
-  std::vector<std::unique_ptr<BackendConfig>> configs;
-  const std::vector<int64_t> ms = {16, 32, 64, 128, 256};
-  const std::vector<int64_t> ks = {16, 32, 64, 128};
-  const std::vector<int64_t> warps = {2, 4, 8};
-  const std::vector<int64_t> stages = {1, 2, 3, 4};
-  for (int64_t m : ms) {
-    for (int64_t k : ks) {
-      for (int64_t w : warps) {
-        for (int64_t s : stages) {
-          configs.push_back(MakeTritonConfig(m, /*block_n=*/64, k, s, w));
-        }
-      }
-    }
-  }
-  auto space_or = DichotomicSearchSpace::Build(Ptrs(configs));
-  ASSERT_THAT(space_or, IsOk());
-  const DichotomicSearchSpace& space = *space_or;
-  SearchProfile profile = MakeProfile(space, HloOpcode::kDot);
-
+  // Best sample at (block_m=64, block_k=64) -> indices (2, 2).
   std::vector<Sample> prior;
   {
     Coord c(space.axes().size(), 0);
-    prior.push_back(Sample{c, 1.0});
+    for (int i = 0; i < space.axes()[mi].values.size(); ++i) {
+      if (space.axes()[mi].values[i] == 64) c[mi] = i;
+    }
+    for (int i = 0; i < space.axes()[ki].values.size(); ++i) {
+      if (space.axes()[ki].values[i] == 64) c[ki] = i;
+    }
+    prior.push_back(Sample{c, /*time=*/1.0});
   }
-  std::vector<int> probes = SelectConfigs(
-      space, profile, SearchPhase::kTernaryRefine, prior, /*already=*/{});
-  ASSERT_FALSE(probes.empty());
 
-  std::map<int64_t, std::set<int64_t>> ns_by_bk;
-  std::map<int64_t, std::set<int64_t>> nw_by_bm;
-  for (int idx : probes) {
+  std::vector<int> sweep = SelectConfigs(
+      space, profile, SearchPhase::kNeighborhoodSweep, prior, /*already=*/{});
+  ASSERT_FALSE(sweep.empty());
+
+  // The diagonal neighbour (block_m=128, block_k=32) -- one step up in bm, one
+  // step down in bk -- must be present. A per-axis-only neighborhood could not
+  // create it (it differs from the best on BOTH axes).
+  bool saw_diagonal = false;
+  for (int idx : sweep) {
     const auto& t = configs[idx]->triton();
-    ns_by_bk[t.block_k()].insert(t.num_stages());
-    nw_by_bm[t.block_m()].insert(t.num_warps());
+    if (t.block_m() == 128 && t.block_k() == 32) saw_diagonal = true;
   }
-  const std::set<int64_t> all_stages(stages.begin(), stages.end());
-  const std::set<int64_t> all_warps(warps.begin(), warps.end());
-  for (const auto& [bk, seen_ns] : ns_by_bk) {
-    EXPECT_EQ(seen_ns, all_stages)
-        << "ternary block_k=" << bk << " not crossed with all num_stages";
-  }
-  for (const auto& [bm, seen_nw] : nw_by_bm) {
-    EXPECT_EQ(seen_nw, all_warps)
-        << "ternary block_m=" << bm << " not crossed with all num_warps";
-  }
+  EXPECT_TRUE(saw_diagonal)
+      << "joint 2-D move must co-sample the diagonal (bm=128, bk=32)";
 }
 
-// All emitted configs remain unique and feasible under the coupled expansion.
-TEST(DichotomicSearchTest, CoupledExpansionKeepsConfigsUniqueAndFeasible) {
+// The joint move is applied in Phase 1 too: around a coarse-grid coordinate the
+// diagonal (bm, bk) neighbours are emitted.
+TEST(DichotomicSearchTest, CoarseGridEmitsDiagonalCoupledConfigs) {
   std::vector<std::unique_ptr<BackendConfig>> configs;
-  for (int64_t m : {16, 32, 64, 128, 256}) {
-    for (int64_t k : {16, 32, 64, 128}) {
-      for (int64_t w : {2, 4, 8}) {
-        for (int64_t s : {1, 2, 3, 4}) {
-          configs.push_back(MakeTritonConfig(m, /*block_n=*/64, k, s, w));
-        }
-      }
+  const std::vector<int64_t> ms = {16, 32, 64, 128, 256};
+  const std::vector<int64_t> ks = {16, 32, 64, 128};
+  for (int64_t m : ms) {
+    for (int64_t k : ks) {
+      configs.push_back(MakeTritonConfig(m, /*block_n=*/64, k,
+                                         /*num_stages=*/1, /*num_warps=*/4));
     }
   }
   auto space_or = DichotomicSearchSpace::Build(Ptrs(configs));
@@ -648,12 +586,82 @@ TEST(DichotomicSearchTest, CoupledExpansionKeepsConfigsUniqueAndFeasible) {
 
   std::vector<int> grid =
       SelectConfigs(space, profile, SearchPhase::kCoarseGrid, {}, {});
+  ASSERT_FALSE(grid.empty());
+
+  // The base coarse grid over block_m/block_k probes {min,median,max} on each
+  // axis (axis-aligned). The joint move adds diagonal neighbours around those
+  // points; e.g. around the median (bm=64, bk=64) the diagonal (bm=128, bk=32)
+  // must appear.
+  bool saw_diagonal = false;
+  for (int idx : grid) {
+    const auto& t = configs[idx]->triton();
+    if (t.block_m() == 128 && t.block_k() == 32) saw_diagonal = true;
+  }
+  EXPECT_TRUE(saw_diagonal)
+      << "Phase-1 joint move must co-sample a diagonal (bm,bk) config";
+
+  // Still deduplicated and feasible.
   std::set<int> uniq(grid.begin(), grid.end());
   EXPECT_EQ(uniq.size(), grid.size()) << "coarse grid must be deduplicated";
   for (int idx : grid) {
     EXPECT_GE(idx, 0);
     EXPECT_LT(idx, space.num_configs());
   }
+}
+
+// Phase 2 is seeded from the best measured SAMPLE (joint), not per-axis
+// marginals. With a best sample at (bm=128, bk=32) the ternary background uses
+// bm=128, so probes vary bk while holding bm at the winning 128 -- verifying
+// the seed comes from the joint best rather than a marginalised bm.
+TEST(DichotomicSearchTest, TernarySeedsFromBestSampleCoordinate) {
+  std::vector<std::unique_ptr<BackendConfig>> configs;
+  const std::vector<int64_t> ms = {16, 32, 64, 128, 256};
+  const std::vector<int64_t> ks = {16, 32, 64, 128};
+  for (int64_t m : ms) {
+    for (int64_t k : ks) {
+      configs.push_back(MakeTritonConfig(m, /*block_n=*/64, k,
+                                         /*num_stages=*/1, /*num_warps=*/4));
+    }
+  }
+  auto space_or = DichotomicSearchSpace::Build(Ptrs(configs));
+  ASSERT_THAT(space_or, IsOk());
+  const DichotomicSearchSpace& space = *space_or;
+  SearchProfile profile = MakeProfile(space, HloOpcode::kDot);
+
+  const int mi = AxisIndex(space, "block_m");
+  const int ki = AxisIndex(space, "block_k");
+  ASSERT_GE(mi, 0);
+  ASSERT_GE(ki, 0);
+
+  // Provide two prior samples; the BEST (lowest time) is (bm=128, bk=32).
+  std::vector<Sample> prior;
+  auto make_coord = [&](int64_t bm, int64_t bk) {
+    Coord c(space.axes().size(), 0);
+    for (int i = 0; i < space.axes()[mi].values.size(); ++i) {
+      if (space.axes()[mi].values[i] == bm) c[mi] = i;
+    }
+    for (int i = 0; i < space.axes()[ki].values.size(); ++i) {
+      if (space.axes()[ki].values[i] == bk) c[ki] = i;
+    }
+    return c;
+  };
+  prior.push_back(Sample{make_coord(64, 64), /*time=*/5.0});   // worse
+  prior.push_back(Sample{make_coord(128, 32), /*time=*/1.0});  // BEST
+
+  std::vector<int> probes = SelectConfigs(
+      space, profile, SearchPhase::kTernaryRefine, prior, /*already=*/{});
+  ASSERT_FALSE(probes.empty());
+
+  // The block_k ternary must run at the best sample's block_m (=128); so at
+  // least one probe should hold block_m=128 while varying block_k (e.g. the
+  // small bk=32 or others), demonstrating the joint seed. (A marginal seed for
+  // block_m could differ.)
+  bool saw_bm128_probe = false;
+  for (int idx : probes) {
+    if (configs[idx]->triton().block_m() == 128) saw_bm128_probe = true;
+  }
+  EXPECT_TRUE(saw_bm128_probe)
+      << "Phase-2 ternary must be seeded from the best sample's block_m=128";
 }
 
 TEST(DichotomicSearchTest, SelectedConfigsAreAlwaysFeasible) {
