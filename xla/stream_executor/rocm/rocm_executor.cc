@@ -450,9 +450,24 @@ absl::StatusOr<void*> HostAllocate(Context* context, uint64_t bytes) {
   ScopedActivateContext activation(context);
   void* host_mem = nullptr;
   // "Portable" memory is visible to all ROCM contexts. Safe for our use model.
-  RETURN_IF_ERROR(
-      ToStatus(hipHostMalloc(&host_mem, bytes, hipHostMallocPortable),
-               "failed to allocate host memory"));
+  //
+  // "Coherent" makes the allocation fine-grained, which the default is *not* on
+  // all devices: on gfx90a, plain portable memory is coarse-grained, so the
+  // device caches it in L2 and host writes over PCIe never invalidate it. Any
+  // host/device signalling word allocated here - the delay kernel's semaphore,
+  // for one - then silently never observes host updates. Measured on MI250,
+  // 71-95 of every 100 delay kernels ran their full 100ms timeout because of
+  // this, and the kernel's write back to the host was not visible either.
+  //
+  // CUDA needs no equivalent: cuMemHostAlloc has no coarse-grained mode. This
+  // brings HIP in line with the guarantee the rest of StreamExecutor assumes.
+  // Bulk transfers are unaffected - they run on the SDMA engines, which do not
+  // go through the device L2 - and H2D/D2H/zero-copy bandwidth and allocation
+  // time were measured identical across grains on gfx90a and gfx950.
+  RETURN_IF_ERROR(ToStatus(
+      hipHostMalloc(&host_mem, bytes,
+                    hipHostMallocPortable | hipHostMallocCoherent),
+      "failed to allocate host memory"));
   VLOG(2) << "allocated " << host_mem << " for context " << context << " of "
           << bytes << " bytes of host memory";
   return host_mem;
