@@ -249,7 +249,14 @@ bool IsRaggedAllToAllOrAsyncDoneRaggedAllToAll(
     const HloInstruction* instruction);
 
 // Returns true if the one-shot RaggedAllToAll with NCCL feature is enabled.
+// Always false on ROCm: the feature requires symmetric memory, which RCCL does
+// not implement.
 bool IsOneShotRaggedAllToAllWithNcclEnabled(const DebugOptions& opts);
+
+// Returns true if RaggedAllToAll may fall back to NCCL send/recv. Always true
+// on ROCm, where it is the only path for cliques the one-shot kernel cannot
+// serve.
+bool IsRaggedAllToAllNcclFallbackAllowed(const DebugOptions& opts);
 
 // Returns the collective instruction if argument is a collective op (or a
 // collective fusion) with channel_id.
