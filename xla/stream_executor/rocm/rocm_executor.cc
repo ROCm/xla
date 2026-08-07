@@ -78,6 +78,7 @@ limitations under the License.
 #include "xla/stream_executor/platform/initialize.h"
 #include "xla/stream_executor/plugin_registry.h"
 #include "xla/stream_executor/rocm/rocm_command_buffer.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/stream_executor/rocm/rocm_context.h"
 #include "xla/stream_executor/rocm/rocm_event.h"
 #include "xla/stream_executor/rocm/rocm_kernel.h"
@@ -450,24 +451,9 @@ absl::StatusOr<void*> HostAllocate(Context* context, uint64_t bytes) {
   ScopedActivateContext activation(context);
   void* host_mem = nullptr;
   // "Portable" memory is visible to all ROCM contexts. Safe for our use model.
-  //
-  // "Coherent" makes the allocation fine-grained, which the default is *not* on
-  // all devices: on gfx90a, plain portable memory is coarse-grained, so the
-  // device caches it in L2 and host writes over PCIe never invalidate it. Any
-  // host/device signalling word allocated here - the delay kernel's semaphore,
-  // for one - then silently never observes host updates. Measured on MI250,
-  // 71-95 of every 100 delay kernels ran their full 100ms timeout because of
-  // this, and the kernel's write back to the host was not visible either.
-  //
-  // CUDA needs no equivalent: cuMemHostAlloc has no coarse-grained mode. This
-  // brings HIP in line with the guarantee the rest of StreamExecutor assumes.
-  // Bulk transfers are unaffected - they run on the SDMA engines, which do not
-  // go through the device L2 - and H2D/D2H/zero-copy bandwidth and allocation
-  // time were measured identical across grains on gfx90a and gfx950.
-  RETURN_IF_ERROR(ToStatus(
-      hipHostMalloc(&host_mem, bytes,
-                    hipHostMallocPortable | hipHostMallocCoherent),
-      "failed to allocate host memory"));
+  RETURN_IF_ERROR(
+      ToStatus(hipHostMalloc(&host_mem, bytes, hipHostMallocPortable),
+               "failed to allocate host memory"));
   VLOG(2) << "allocated " << host_mem << " for context " << context << " of "
           << bytes << " bytes of host memory";
   return host_mem;
@@ -694,6 +680,23 @@ absl::Status RocmExecutor::Init() {
 }
 
 absl::StatusOr<bool> RocmExecutor::DelayKernelIsSupported() {
+  // The delay kernel spins on a semaphore in pinned host memory. HIP allocates
+  // that coarse-grained, so the device can hold it in an L2 that host writes do
+  // not invalidate, and seeing the host's release needs either a system-scope
+  // load or an explicit L2 invalidate.
+  //
+  // CDNA3/CDNA4 and RDNA4 have the former - `volatile` lowers to `sc0 sc1` or
+  // `scope:SCOPE_SYS`. CDNA2 has only the latter, via BUFFER_INVL2, which the
+  // kernel reaches through __threadfence_system(). CDNA1 and RDNA1-3 have
+  // neither: no per-instruction memory scope and no L2 invalidate instruction
+  // at all, so no formulation of the kernel can observe the release. Measured
+  // on gfx908, gfx1102 and gfx1151, every access mode spun to the full timeout.
+  ASSIGN_OR_RETURN(std::string gcn_arch_name, GetGpuGCNArchName(device_));
+  const RocmComputeCapability cc(gcn_arch_name);
+  if (!cc.gfx9_mi200_or_later() && !cc.gfx12()) {
+    return false;
+  }
+
   // The delay kernel dereferences a pinned host allocation through the very
   // same pointer on the device, so skip it unless host memory can be mapped
   // into the device address space.
