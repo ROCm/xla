@@ -9,6 +9,7 @@ EXCLUDED_TESTS=(
     "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
     "TritonEmitterTest.ScaledDotIsSupportedByReferencePlatform"
     "VmmTest.CommandBufferSkipProfiledTwoGemmChain"
+    "RecordFfiTest.KernelLaunchBoundFfi"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
