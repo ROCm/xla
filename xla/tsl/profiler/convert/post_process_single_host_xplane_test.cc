@@ -127,6 +127,65 @@ TEST(ConvertXPlaneToTraceEvents, Convert) {
   EXPECT_EQ(host_plane.lines(0).events_size(), 3);
 }
 
+// Verify that the /host:ROCTX plane is merged into /host:CPU with line IDs
+// remapped into the [2·2^32, 3·2^32) partition to avoid collisions with host
+// CPU thread IDs ([0, 2^32)) and NVTX IDs ([2^32, 2·2^32)).
+TEST(ConvertXPlaneToTraceEvents, RoctxPlaneMergedWithLineIdRemapping) {
+  XSpace xspace;
+
+  // Host CPU plane occupying line ID 10.
+  XPlaneBuilder cpu_plane(xspace.add_planes());
+  cpu_plane.SetName(kCuptiDriverApiPlaneName);
+  XLineBuilder cpu_line = cpu_plane.GetOrCreateLine(10);
+  cpu_line.SetName("thread/10");
+  XEventBuilder cpu_event =
+      cpu_line.AddEvent(*cpu_plane.GetOrCreateEventMetadata("cpu-event"));
+  cpu_event.SetTimestampNs(1000);
+  cpu_event.SetDurationNs(500);
+
+  // ROCTX plane with line ID 10 (same as CPU — must be remapped).
+  XPlaneBuilder roctx_plane(xspace.add_planes());
+  roctx_plane.SetName(kRoctxPlaneName);
+  XLineBuilder roctx_line = roctx_plane.GetOrCreateLine(10);
+  roctx_line.SetName("thread/10/ROCTX");
+  XEventBuilder roctx_event =
+      roctx_line.AddEvent(*roctx_plane.GetOrCreateEventMetadata("roctx-event"));
+  roctx_event.SetTimestampNs(1100);
+  roctx_event.SetDurationNs(300);
+
+  PostProcessSingleHostXSpace(&xspace, 0, 5000);
+
+  // After merge only the host plane should remain.
+  ASSERT_EQ(xspace.planes_size(), 1);
+  const XPlane& host_plane = xspace.planes(0);
+  EXPECT_EQ(host_plane.name(), kHostThreadsPlaneName);
+
+  // Both lines should be present.
+  ASSERT_EQ(host_plane.lines_size(), 2);
+
+  // Collect line IDs and names.
+  absl::flat_hash_set<int64_t> line_ids;
+  bool found_roctx_line = false;
+  for (const XLine& line : host_plane.lines()) {
+    line_ids.insert(line.id());
+    if (line.name() == "thread/10/ROCTX") {
+      found_roctx_line = true;
+      // The ROCTX line must have been remapped out of the CPU range [0, 2^32).
+      // kRoctxLineIdStart = 2LL << 32 = 8589934592.
+      EXPECT_GE(line.id(), 2LL << 32)
+          << "ROCTX line ID must be remapped into [2·2^32, 3·2^32) to avoid "
+             "collision with host CPU line IDs";
+      EXPECT_LT(line.id(), 3LL << 32)
+          << "ROCTX line ID must stay within the [2·2^32, 3·2^32) partition";
+    }
+  }
+  EXPECT_TRUE(found_roctx_line) << "/host:ROCTX line missing from merged plane";
+
+  // The original CPU line ID 10 must be preserved (it owns that slot).
+  EXPECT_TRUE(line_ids.contains(10))
+      << "Host CPU line ID 10 must be unchanged after ROCTX merge";
+}
+
 TEST(MergePlanesTest, Merge) {
   XSpace xspace;
   CreateXSpace(&xspace);

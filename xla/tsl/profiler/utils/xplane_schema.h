@@ -56,6 +56,8 @@ TF_CONST_INIT extern const absl::string_view kCuptiDriverApiPlaneName;
 TF_CONST_INIT extern const absl::string_view kCuptiActivityNvtxPlaneName;
 // Name of XPlane that contains Roctracer API generated events.
 TF_CONST_INIT extern const absl::string_view kRoctracerApiPlaneName;
+// Name of XPlane that contains ROCTX user annotation marker events.
+TF_CONST_INIT extern const absl::string_view kRoctxPlaneName;
 // Name of XPlane that contains profile metadata such as XLA debug info.
 TF_CONST_INIT extern const absl::string_view kMetadataPlaneName;
 // Name of XPlane that contains kpi related metrics.
