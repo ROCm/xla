@@ -53,6 +53,27 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "rocm_core_info_table",
+    srcs = ["rocm_core_info_table.cc"],
+    hdrs = ["rocm_core_info_table.h"],
+    deps = [
+        ":rocm_compute_capability",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "rocm_core_info_table_test",
+    srcs = ["rocm_core_info_table_test.cc"],
+    deps = [
+        ":rocm_compute_capability",
+        ":rocm_core_info_table",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 xla_cc_test(
     name = "rocm_compute_capability_test",
     srcs = ["rocm_compute_capability_test.cc"],
@@ -141,6 +162,7 @@ cc_library(
     deps = [
         ":rocm_command_buffer",
         ":rocm_context",
+        ":rocm_core_info_table",
         ":rocm_event",
         ":rocm_kernel",
         ":rocm_pcie_bandwidth",
