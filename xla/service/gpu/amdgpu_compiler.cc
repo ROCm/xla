@@ -30,6 +30,7 @@ limitations under the License.
 #include "mlir/IR/MLIRContext.h"
 #include "xla/backends/autotuner/codegen_backend.h"
 #include "xla/backends/gpu/autotuner/block_level_emitter.h"
+#include "xla/backends/gpu/autotuner/fission_backend.h"
 #include "xla/backends/gpu/autotuner/hipblaslt.h"
 #include "xla/backends/gpu/autotuner/miopen.h"
 #include "xla/backends/gpu/autotuner/native_emitter.h"
@@ -304,6 +305,26 @@ AMDGPUCompiler::GetCodegenBackends(
   if (is_backend_enabled(DebugOptions::AUTOTUNE_BACKEND_HIPBLASLT)) {
     backends.push_back(std::make_unique<HipblasLtBackend>(
         stream_exec, &debug_options, this, target_config));
+  }
+
+  if (debug_options.xla_gpu_cublas_fallback()) {
+    if (is_backend_enabled(DebugOptions::AUTOTUNE_BACKEND_ROCBLAS)) {
+      backends.push_back(std::make_unique<FissionBackend>(
+          &debug_options, this, target_config,
+          std::make_unique<RocblasBackend>(stream_exec, &debug_options, this,
+                                          target_config),
+          GetCublasRewriterPipeline(target_config->device_description),
+          mlir_context));
+    }
+    if (is_backend_enabled(DebugOptions::AUTOTUNE_BACKEND_HIPBLASLT)) {
+      backends.push_back(std::make_unique<FissionBackend>(
+          &debug_options, this, target_config,
+          std::make_unique<HipblasLtBackend>(stream_exec, &debug_options, this,
+                                             target_config),
+          GetCublasRewriterPipeline(target_config->device_description,
+                                    /*enable_cublaslt=*/true),
+          mlir_context));
+    }
   }
 
   return backends;

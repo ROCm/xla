@@ -2432,6 +2432,7 @@ cc_library(
         "//xla:xla_proto_cc",
         "//xla/backends/autotuner:codegen_backend",
         "//xla/backends/gpu/autotuner:block_level_emitter",
+        "//xla/backends/gpu/autotuner:fission_backend",
         "//xla/backends/gpu/autotuner:hipblaslt",
         "//xla/backends/gpu/autotuner:miopen",
         "//xla/backends/gpu/autotuner:native_emitter",
