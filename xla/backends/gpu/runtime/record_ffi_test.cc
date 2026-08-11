@@ -26,10 +26,13 @@ limitations under the License.
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/string_view.h"
 #include "xla/ffi/api/record_api.h"
 #include "xla/ffi/api/record_c_api.h"
 #include "xla/ffi/call_frame.h"
+#include "xla/ffi/execution_state.h"
 #include "xla/ffi/ffi.h"
 #include "xla/ffi/invoke.h"
 #include "xla/ffi/record_ffi.h"
@@ -44,8 +47,6 @@ limitations under the License.
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/platform/test.h"
-
-XLA_FFI_REGISTER_ENUM_ATTR_DECODING(::xla::ffi::SourceFormat);
 
 namespace xla::gpu {
 namespace {
@@ -71,10 +72,18 @@ absl::string_view GetKernelBytesAsString(ffi::SourceFormat fmt) {
       .ptx;
 }
 
+// Per-instance state that resolves the kernel source format from the platform
+// once at instantiate time, so the record handler doesn't need to receive the
+// format as an FFI attribute.
+struct RecordState {
+  ffi::SourceFormat source_format;
+};
+
 absl::Status RecordFfiHandler(ffi::RecordContext record_ctx,
                               ffi::AnyBuffer input_0, ffi::AnyBuffer input_1,
                               ffi::AnyBuffer buffer_scratch,
-                              ffi::AnyBuffer result, ffi::SourceFormat fmt) {
+                              ffi::AnyBuffer result, RecordState* state) {
+  const ffi::SourceFormat fmt = state->source_format;
   void* in0 = input_0.untyped_data();
   void* in1 = input_1.untyped_data();
   void* scratch = buffer_scratch.untyped_data();
@@ -168,20 +177,26 @@ TEST(RecordFfiTest, KernelLaunchBoundFfi) {
       commands_storage, &num_commands, 2};
   auto record_extension = ffi::BuildRecordCExtension(&record_frame);
 
+  ffi::ExecutionState instantiate_state;
   ffi::InvokeContext invoke_context = {};
   invoke_context.extension_start = &record_extension.extension_base;
-
-  // PTX is CUDA-specific; on ROCm use a device binary (HSACO) via the fatbin.
-  const auto source_format =
-      cuda_cc ? ffi::SourceFormat::kPtx : ffi::SourceFormat::kCubin;
+  invoke_context.state_context.instantiate = &instantiate_state;
 
   ffi::CallFrameBuilder builder(/*num_args=*/4, /*num_rets=*/0);
   initial_memory.AddAsBuffers(builder);
-  ffi::CallFrameBuilder::AttributesBuilder attrs;
-  attrs.Insert("source_format", static_cast<int32_t>(source_format));
-  builder.AddAttributes(attrs.Build());
-
   ffi::CallFrame call_frame = builder.Build();
+
+  // Resolve the kernel source format from the platform once at instantiate
+  // time: PTX is CUDA-specific; on ROCm use a device binary (HSACO).
+  std::unique_ptr<ffi::Ffi> instantiate = ffi::Ffi::BindInstantiate().To(
+      []() -> absl::StatusOr<std::unique_ptr<RecordState>> {
+        const bool is_cuda =
+            absl::AsciiStrToLower(stream_executor::GpuPlatformName()) == "cuda";
+        return std::make_unique<RecordState>(RecordState{
+            is_cuda ? ffi::SourceFormat::kPtx : ffi::SourceFormat::kCubin});
+      });
+  ASSERT_OK(ffi::Invoke(ffi::GetXlaFfiApi(), *instantiate, call_frame,
+                        invoke_context, ffi::ExecutionStage::kInstantiate));
 
   std::unique_ptr<ffi::Ffi> handler =
       ffi::Ffi::BindRecord()
@@ -190,7 +205,7 @@ TEST(RecordFfiTest, KernelLaunchBoundFfi) {
           .Arg<ffi::AnyBuffer>()
           .Arg<ffi::AnyBuffer>()
           .Arg<ffi::AnyBuffer>()
-          .Attr<ffi::SourceFormat>("source_format")
+          .Ctx<ffi::State<RecordState>>()
           .To(RecordFfiHandler);
   ASSERT_OK(ffi::Invoke(ffi::GetXlaFfiApi(), *handler, call_frame,
                         invoke_context, ffi::ExecutionStage::kRecord));
@@ -223,6 +238,7 @@ TEST(RecordFfiTest, KernelLaunchBoundFfi) {
                                    /*rets=*/{}));
   ffi::InvokeContext update_context;
   update_context.extension_start = &record_extension.extension_base;
+  update_context.state_context.instantiate = &instantiate_state;
   ASSERT_OK(cmd_buffer->Update());  // Begin command buffer update.
   ASSERT_OK(ffi::Invoke(ffi::GetXlaFfiApi(), *handler, call_frame,
                         update_context, ffi::ExecutionStage::kRecord));
