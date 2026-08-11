@@ -182,6 +182,31 @@ OccupancyStats PerDeviceCollector::GetOccupancy(
   return stats;
 }
 
+// Memory kinds for the two ends of a copy.
+//
+// rocprofiler-sdk reports a copy *direction* (ROCPROFILER_MEMORY_COPY_*), not
+// CUDA's taxonomy of memory kinds (pageable, pinned, managed, array, ...). The
+// direction does establish which end is host and which is device, so report
+// that much; whether the host side was pageable or pinned is not something the
+// SDK tells us, and naming one would be a guess.
+struct MemcpyEndpointKinds {
+  absl::string_view src;
+  absl::string_view dst;
+};
+
+MemcpyEndpointKinds GetMemcpyEndpointKinds(RocmTracerEventType type) {
+  switch (type) {
+    case RocmTracerEventType::MemcpyH2D:
+      return {"host", "device"};
+    case RocmTracerEventType::MemcpyD2H:
+      return {"device", "host"};
+    case RocmTracerEventType::MemcpyD2D:
+      return {"device", "device"};
+    default:
+      return {"unknown", "unknown"};
+  }
+}
+
 void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
                                       XPlaneBuilder* plane,
                                       uint64_t start_gpu_ns,
@@ -240,43 +265,39 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
              event.type == RocmTracerEventType::MemcpyOther) {
     VLOG(7) << "Add Memcpy stat";
     const auto& memcpy_info = event.memcpy_info;
+    const MemcpyEndpointKinds kinds = GetMemcpyEndpointKinds(event.type);
     std::string memcpy_details = absl::StrCat(
-        // TODO(rocm-profiler): we need to discover the memory kind similar
-        // to CUDA
-        "kind:", "Unknown", " size:", memcpy_info.num_bytes,
-        " dest:", memcpy_info.destination, " async:", memcpy_info.async);
+        "kind_src:", kinds.src, " kind_dst:", kinds.dst,
+        " size:", memcpy_info.num_bytes, " dest:", memcpy_info.destination,
+        " async:", memcpy_info.async);
     xevent.AddStatValue(
         *plane->GetOrCreateStatMetadata(
             GetStatTypeStr(StatType::kMemcpyDetails)),
         *plane->GetOrCreateStatMetadata(std::move(memcpy_details)));
   } else if (event.type == RocmTracerEventType::MemoryAlloc) {
     VLOG(7) << "Add MemAlloc stat";
-    std::string value =
-        // TODO(rocm-profiler): we need to discover the memory kind similar
-        // to CUDA
-        absl::StrCat("kind:", "Unknown",
-                     " num_bytes:", event.memalloc_info.num_bytes);
+    // rocprofiler-sdk reports the allocation operation (allocate, vmem
+    // allocate) but not what kind of memory was allocated, so this stays
+    // unknown rather than being guessed at.
+    std::string value = absl::StrCat(
+        "kind:", "unknown", " num_bytes:", event.memalloc_info.num_bytes);
     xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
                             GetStatTypeStr(StatType::kMemallocDetails)),
                         *plane->GetOrCreateStatMetadata(std::move(value)));
   } else if (event.type == RocmTracerEventType::MemoryFree) {
     VLOG(7) << "Add MemFree stat";
-    std::string value =
-        // TODO(rocm-profiler): we need to discover the memory kind similar
-        // to CUDA
-        absl::StrCat("kind:", "Unknown",
-                     " num_bytes:", event.memalloc_info.num_bytes);
+    // As above: the SDK reports the free operation, not the memory kind.
+    std::string value = absl::StrCat(
+        "kind:", "unknown", " num_bytes:", event.memalloc_info.num_bytes);
     xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
                             GetStatTypeStr(StatType::kMemFreeDetails)),
                         *plane->GetOrCreateStatMetadata(std::move(value)));
   } else if (event.type == RocmTracerEventType::Memset) {
     VLOG(7) << "Add Memset stat";
-    auto value =
-        // TODO(rocm-profiler): we need to discover the memory kind similar
-        // to CUDA
-        absl::StrCat("kind:", "Unknown",
-                     " num_bytes:", event.memset_info.num_bytes,
-                     " async:", event.memset_info.async);
+    // A device-side memset writes device memory by construction.
+    auto value = absl::StrCat("kind:", "device",
+                              " num_bytes:", event.memset_info.num_bytes,
+                              " async:", event.memset_info.async);
     xevent.AddStatValue(*plane->GetOrCreateStatMetadata(
                             GetStatTypeStr(StatType::kMemsetDetails)),
                         *plane->GetOrCreateStatMetadata(std::move(value)));
