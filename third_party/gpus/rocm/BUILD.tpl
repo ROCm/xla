@@ -276,12 +276,19 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "rocm_core_libs",
+    data = glob(["%{rocm_root}/lib/librocm-core.so*"]),
+)
+
 rocm_lib_import(
     name = "miopen",
     data = glob([
         "%{rocm_root}/lib/libMIOpen.so*",
         "%{rocm_root}/share/miopen/**",
-        "%{rocm_root}/lib/librocm-core.so*",
+    ]) + glob([
+        "%{rocm_root}/lib/libMIOpenCKGroupedConv_" + arch + ".so"
+        for arch in rocm_gpu_architectures()
     ]),
     interface_library = "%{rocm_root}/lib/libMIOpen.so",
     deps = [
@@ -290,6 +297,7 @@ rocm_lib_import(
         ":hipblaslt_libs",
         ":hiprtc_libs",
         ":rocblas_libs",
+        ":rocm_core_libs",
         ":roctx_libs",
         ":system_libs",
     ],
@@ -305,6 +313,7 @@ rocm_lib_import(
     deps = [
         ":amdsmi_libs",
         ":hip_runtime_libs",
+        ":rocm_core_libs",
         ":rocm_smi_libs",
         ":rocprofiler_register_libs",
         ":roctx_libs",
@@ -362,6 +371,7 @@ cc_library(
     ]),
     deps = [
         ":hip_runtime_libs",
+        ":rocblas_libs",
         ":roctx_libs",
     ],
 )
@@ -441,6 +451,7 @@ rocm_lib_import(
         [
             "%{rocm_root}/lib/libhipblaslt.so*",
             "%{rocm_root}/lib/librocroller.so*",
+            "%{rocm_root}/lib/liborigami.so*",
         ],
     ) + glob([
         pattern
