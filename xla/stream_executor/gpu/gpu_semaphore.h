@@ -39,9 +39,10 @@ class GpuSemaphore {
   static absl::StatusOr<GpuSemaphore> Create(StreamExecutor* executor);
 
   // Creates a semaphore backed by a caller-provided allocation. `allocation`
-  // must be host memory that the device can both read and write while a kernel
-  // is running; platforms whose default pinned allocation does not guarantee
-  // that use this to supply one that does.
+  // must be host memory that is directly accessible by the device at the same
+  // virtual address, and that the device can both read and write while a
+  // kernel is running; platforms whose default pinned allocation does not
+  // guarantee that use this to supply one that does.
   static GpuSemaphore Create(std::unique_ptr<MemoryAllocation> allocation);
 
   // Returns true if this semaphore is valid, otherwise false.
