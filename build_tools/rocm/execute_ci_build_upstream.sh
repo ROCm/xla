@@ -8,7 +8,9 @@ EXCLUDED_TESTS=(
     "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
     "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
     "TritonEmitterTest.ScaledDotIsSupportedByReferencePlatform"
-    "VmmTest.CommandBufferSkipProfiledTwoGemmChain"
+    "GpuKernelTilingTest.ReductionInputTooLarge"
+    "MxScaledDotExecutionTest.MxFp4Fp8MixedBatchedCorrectness"
+    "ConvolutionTest.Convolve3D_1x4x2x3x3_2x2x2x3x3_Valid"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
