@@ -106,15 +106,6 @@ GPU_KERNEL_REGISTRY_REGISTER_KERNEL_STATICALLY(
     }));
 
 GPU_KERNEL_REGISTRY_REGISTER_KERNEL_STATICALLY(
-    BufferDebugFloatCheckF16Kernel,
-    stream_executor::gpu::BufferDebugFloatCheckF16Kernel,
-    stream_executor::rocm::kROCmPlatformId, ([](int arity) {
-      return stream_executor::KernelLoaderSpec::CreateInProcessSymbolSpec(
-          absl::bit_cast<void*>(&stream_executor::gpu::FloatCheck<_Float16>),
-          "BufferDebugFloatCheckF16Kernel", arity);
-    }));
-
-GPU_KERNEL_REGISTRY_REGISTER_KERNEL_STATICALLY(
     BufferDebugFloatCheckF64Kernel,
     stream_executor::gpu::BufferDebugFloatCheckF64Kernel,
     stream_executor::rocm::kROCmPlatformId, ([](int arity) {
