@@ -841,14 +841,23 @@ bool IsTf32Allowed(const ::xla::xtile::PrecisionSpec& precision_spec) {
 }
 
 ttir::InputPrecision InferFpDotPrecision(
-    const ::xla::xtile::PrecisionSpec& precision_spec) {
+    const ::xla::xtile::PrecisionSpec& precision_spec,
+    bool emulate_tf32_as_bf16x3) {
   if (precision_spec.algorithm ==
       ::xla::PrecisionConfig::ALG_DOT_TF32_TF32_F32_X3) {
     return ttir::InputPrecision::TF32x3;
   }
 
-  return IsTf32Allowed(precision_spec) ? ttir::InputPrecision::TF32
-                                       : ttir::InputPrecision::IEEE;
+  if (!IsTf32Allowed(precision_spec)) {
+    return ttir::InputPrecision::IEEE;
+  }
+
+  // CDNA4 (gfx950) dropped the XF32 matrix instruction that CDNA3 has, so a
+  // TF32 dot there would silently lower to a full-rate IEEE f32 MFMA. Ask for
+  // the 3xBF16 decomposition instead, which Triton's F32DotTC pass expands.
+  // It is both faster and more accurate than the TF32 it stands in for.
+  return emulate_tf32_as_bf16x3 ? ttir::InputPrecision::BF16x3
+                                : ttir::InputPrecision::TF32;
 }
 
 bool IsDotCanonical(stablehlo::DotGeneralOp op) {
@@ -908,7 +917,8 @@ LogicalResult RewriteDotGeneralToTritonDot(mlir::PatternRewriter& rewriter,
                                            stablehlo::DotGeneralOp op,
                                            mlir::Operation* add_op,
                                            Value accumulator,
-                                           bool warp_specialization_allowed) {
+                                           bool warp_specialization_allowed,
+                                           bool emulate_tf32_as_bf16x3) {
   const Location op_loc = op->getLoc();
   if (!IsDotCanonical(op)) {
     return rewriter.notifyMatchFailure(op_loc, "Dot must be canonicalized.");
@@ -955,7 +965,8 @@ LogicalResult RewriteDotGeneralToTritonDot(mlir::PatternRewriter& rewriter,
   if (mlir::isa<mlir::FloatType>(ElementType(op.getLhs())) &&
       mlir::isa<mlir::FloatType>(ElementType(op.getRhs())) &&
       mlir::isa<mlir::FloatType>(mlir::getElementTypeOrSelf(op.getType()))) {
-    ttir_input_precision = InferFpDotPrecision(precision_spec);
+    ttir_input_precision =
+        InferFpDotPrecision(precision_spec, emulate_tf32_as_bf16x3);
   }
 
   TritonPrecisionSpec triton_precision_spec{*hlo_algorithm,
@@ -1006,9 +1017,11 @@ class CanonicalizeDotGeneral
 
 class LowerDotGeneral : public mlir::OpRewritePattern<stablehlo::DotGeneralOp> {
  public:
-  LowerDotGeneral(mlir::MLIRContext* context, bool warp_specialization_allowed)
+  LowerDotGeneral(mlir::MLIRContext* context, bool warp_specialization_allowed,
+                  bool emulate_tf32_as_bf16x3)
       : OpRewritePattern(context),
-        warp_specialization_allowed_(warp_specialization_allowed) {}
+        warp_specialization_allowed_(warp_specialization_allowed),
+        emulate_tf32_as_bf16x3_(emulate_tf32_as_bf16x3) {}
 
  private:
   mlir::LogicalResult matchAndRewrite(
@@ -1021,13 +1034,15 @@ class LowerDotGeneral : public mlir::OpRewritePattern<stablehlo::DotGeneralOp> {
     }
 
     if (mlir::failed(RewriteDotGeneralToTritonDot(
-            rewriter, op, add_op, accumulator, warp_specialization_allowed_))) {
+            rewriter, op, add_op, accumulator, warp_specialization_allowed_,
+            emulate_tf32_as_bf16x3_))) {
       return mlir::failure();
     }
     return mlir::success();
   }
 
   bool warp_specialization_allowed_;
+  bool emulate_tf32_as_bf16x3_;
 };
 
 class LowerAllReduce : public mlir::OpRewritePattern<stablehlo::AllReduceOp> {
@@ -1056,7 +1071,8 @@ class StableHLOLowerToTritonPass
       patterns.add<LowerTranspose, LowerIotaToMakeRange, LowerBroadcastInDim,
                    LowerReduce, LowerReshape, LowerAllReduce>(mlir_context);
       patterns.add<CanonicalizeDotGeneral>(mlir_context);
-      patterns.add<LowerDotGeneral>(mlir_context, warp_specialization_allowed_);
+      patterns.add<LowerDotGeneral>(mlir_context, warp_specialization_allowed_,
+                                    emulate_tf32_as_bf16x3_);
       if (mlir::failed(mlir::applyPatternsGreedily(getOperation(),
                                                    std::move(patterns)))) {
         return signalPassFailure();

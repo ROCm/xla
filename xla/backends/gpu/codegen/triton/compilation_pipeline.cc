@@ -34,7 +34,7 @@ void CreateTritonXlaPipeline(
     mlir::OpPassManager* pm,
     const stream_executor::GpuComputeCapability& gpu_cc, bool rewrite_int4,
     bool allow_tma, int num_stages, bool warp_specialization_allowed,
-    bool enable_pdl) {
+    bool enable_pdl, bool emulate_tf32_as_bf16x3) {
   pm->addPass(mlir::triton::xla::createTritonXLASqueezeDimsPass());
   pm->addPass(mlir::triton::xla::createTritonXLAFoldTransposePass());
   pm->addPass(mlir::triton::xla::createTritonXLALowerBlockBarrierPass());
@@ -44,6 +44,7 @@ void CreateTritonXlaPipeline(
   mlir::triton::xla::StableHLOLowerToTritonPassOptions stablehlo_raw_options;
   stablehlo_raw_options.warp_specialization_allowed_ =
       warp_specialization_allowed;
+  stablehlo_raw_options.emulate_tf32_as_bf16x3_ = emulate_tf32_as_bf16x3;
   pm->addPass(mlir::triton::xla::createStableHLOLowerToTritonPass(
       stablehlo_raw_options));
   pm->addPass(mlir::triton::xla::createTritonXLAFoldReshapeAroundForLoopPass());
@@ -101,21 +102,18 @@ void CreateTritonCudaPipeline(
 void CreateTritonRocmPipeline(
     mlir::OpPassManager* pm,
     const stream_executor::RocmComputeCapability& rocm_cc, int num_warps,
-    int num_ctas, int num_stages, bool emulate_tf32_as_bf16x3);
+    int num_ctas, int num_stages);
 
 void CreateTritonPipeline(mlir::OpPassManager* pm,
                           const stream_executor::GpuComputeCapability& gpu_cc,
-                          int num_warps, int num_ctas, int num_stages,
-                          bool emulate_tf32_as_bf16x3) {
+                          int num_warps, int num_ctas, int num_stages) {
   if (auto* cuda_cc = gpu_cc.cuda_compute_capability()) {
-    // CUDA targets with TF32 tensor cores use them natively; there is nothing
-    // to emulate.
     return CreateTritonCudaPipeline(pm, *cuda_cc, num_warps, num_ctas,
                                     num_stages);
   }
 
   CreateTritonRocmPipeline(pm, *gpu_cc.rocm_compute_capability(), num_warps,
-                           num_ctas, num_stages, emulate_tf32_as_bf16x3);
+                           num_ctas, num_stages);
 }
 
 }  // namespace xla::gpu

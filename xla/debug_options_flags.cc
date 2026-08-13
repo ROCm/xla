@@ -1992,9 +1992,10 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       bool_setter_for(&DebugOptions::set_xla_gpu_emulate_tf32_as_bf16x3),
       debug_options->xla_gpu_emulate_tf32_as_bf16x3(),
       "In the Triton emitter, emulate TF32 input precision with the 3xBF16 "
-      "decomposition on targets that have no native XF32 matrix instruction. "
-      "Only affects AMD gfx950, where a TF32 dot would otherwise silently fall "
-      "back to a full-rate IEEE f32 MFMA. Enabled by default."));
+      "decomposition on AMD targets that support a bf16 dot but have no native "
+      "XF32 matrix instruction (CDNA1/2/4, RDNA3/4), where a TF32 dot would "
+      "otherwise silently fall back to a full-rate IEEE f32 path. Enabled by "
+      "default."));
   flag_list->push_back(
       tsl::Flag("xla_gpu_deterministic_ops",
                 bool_setter_for(&DebugOptions::set_xla_gpu_deterministic_ops),

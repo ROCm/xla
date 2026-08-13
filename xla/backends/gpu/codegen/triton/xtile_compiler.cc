@@ -536,14 +536,13 @@ absl::StatusOr<TritonWrapperResult> CompileTritonToLLVM(
         num_warps, ", ", num_ctas, ", ", num_stages, ")"));
   }
   const bool enable_pdl = IsPdlEnabled(hlo_config.debug_options(), gpu_cc);
-  CreateTritonXlaPipeline(&pm, gpu_cc, /*rewrite_int4=*/is_xla_fusion,
-                          block_level_parameters.is_tma_allowed, num_stages,
-                          block_level_parameters.is_warp_specialization_allowed,
-                          enable_pdl);
+  CreateTritonXlaPipeline(
+      &pm, gpu_cc, /*rewrite_int4=*/is_xla_fusion,
+      block_level_parameters.is_tma_allowed, num_stages,
+      block_level_parameters.is_warp_specialization_allowed, enable_pdl,
+      IsTf32AsBf16x3EmulationEnabled(hlo_config.debug_options(), gpu_cc));
 
-  CreateTritonPipeline(
-      &pm, gpu_cc, num_warps, num_ctas, num_stages,
-      hlo_config.debug_options().xla_gpu_emulate_tf32_as_bf16x3());
+  CreateTritonPipeline(&pm, gpu_cc, num_warps, num_ctas, num_stages);
 
   // Triton generates pointers to the global address space, while XLA needs a
   // kernel signature with pointers to the generic address space.
@@ -701,6 +700,9 @@ absl::Status LowerXTileToTriton(
     mlir::triton::xla::StableHLOLowerToTritonPassOptions stablehlo_options;
     stablehlo_options.warp_specialization_allowed_ =
         block_level_parameters.is_warp_specialization_allowed;
+    stablehlo_options.emulate_tf32_as_bf16x3_ = IsTf32AsBf16x3EmulationEnabled(
+        hlo_module.config().debug_options(),
+        device_info.gpu_compute_capability());
     pm.addPass(
         mlir::triton::xla::createStableHLOLowerToTritonPass(stablehlo_options));
     pm.addPass(xtile::createConvertElementwise0DTensorToScalarPass());

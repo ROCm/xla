@@ -22,22 +22,20 @@ limitations under the License.
 namespace xla::gpu {
 
 // Adds TritonXLA passes to the pipeline.
+//
+// `emulate_tf32_as_bf16x3` requests the 3xBF16 decomposition in place of TF32
+// input precision; see IsTf32AsBf16x3EmulationEnabled in
+// xla/service/gpu/ir_emission_utils.h for when it applies.
 void CreateTritonXlaPipeline(
     mlir::OpPassManager* pm,
     const stream_executor::GpuComputeCapability& gpu_cc, bool rewrite_int4,
     bool allow_tma, int num_stages, bool warp_specialization_allowed,
-    bool enable_pdl);
+    bool enable_pdl, bool emulate_tf32_as_bf16x3);
 
 // Creates a Triton compilation pipeline.
-//
-// `emulate_tf32_as_bf16x3` corresponds to the
-// `xla_gpu_emulate_tf32_as_bf16x3` debug option. It only has an effect on
-// targets that lack a native XF32 matrix instruction (AMD gfx950); the
-// backend-specific pipeline applies that additional gate.
 void CreateTritonPipeline(mlir::OpPassManager* pm,
                           const stream_executor::GpuComputeCapability& gpu_cc,
-                          int num_warps, int num_ctas, int num_stages,
-                          bool emulate_tf32_as_bf16x3 = true);
+                          int num_warps, int num_ctas, int num_stages);
 
 // Returns the default PTX version for a given CUDA compute capability.
 int GetDefaultPtxVersion(const stream_executor::CudaComputeCapability& cuda_cc);

@@ -87,6 +87,33 @@ inline bool IsPdlLaunchInsertionEnabled(
   return IsPdlEnabled(debug_options, gpu_cc) &&
          debug_options.xla_gpu_enable_pdl_launch();
 }
+
+// Whether a dot that would use TF32 input precision should instead request the
+// 3xBF16 decomposition.
+//
+// Applies to AMD targets that can do a bf16 dot but have no native XF32 matrix
+// instruction, where a TF32 request would otherwise silently degrade to a
+// full-rate IEEE f32 path:
+//   - CDNA1/2 (gfx908/gfx90a) and CDNA4 (gfx950): only CDNA3 ever had the XF32
+//     MFMA, so TF32 is a no-op on the rest.
+//   - RDNA3/4 (gfx11/gfx12): no f32 matrix path at all, so f32 dots fall back
+//     to VALU.
+// has_bf16_dtype_support() excludes RDNA1/2, which have no bf16, and is the
+// same predicate XLA uses to gate ALG_DOT_BF16_BF16_F32_X3 on ROCm.
+//
+// TODO: restore the gfx942 exclusion before landing. CDNA3 has a native XF32
+// MFMA and should keep using it; it is temporarily included so the emulation
+// can be benchmarked against native XF32 on MI300. While it is commented out,
+// MI300 silently loses its native XF32 path.
+inline bool IsTf32AsBf16x3EmulationEnabled(
+    const DebugOptions& debug_options,
+    const se::GpuComputeCapability& gpu_cc) {
+  const auto* rocm_cc = gpu_cc.rocm_compute_capability();
+  return debug_options.xla_gpu_emulate_tf32_as_bf16x3() && rocm_cc != nullptr &&
+         rocm_cc->has_bf16_dtype_support()
+         // && !rocm_cc->gfx9_mi300()  // TODO: re-enable, see above
+      ;
+}
 // Fusions that implemented with pre-compiled device kernels have
 // FusionBackendConfig.kind requel to this string.
 inline constexpr absl::string_view kCustomFusionKind = "__custom_fusion";

@@ -868,12 +868,16 @@ message DebugOptions {
   optional WhileLoopUnrolling xla_gpu_enable_while_loop_unrolling = 294;
 
   // Emulates TF32 input precision using the 3xBF16 decomposition
-  // (https://arxiv.org/abs/1904.06376) in the Triton emitter, on targets that
-  // have no native XF32 matrix instruction. Only takes effect on AMD gfx950
-  // (CDNA4), which dropped the XF32 MFMA that CDNA3 has; without it, a dot
-  // requesting TF32 there silently falls back to a full-rate IEEE f32 MFMA.
-  // The emulation is both faster and more accurate than the TF32 it stands in
-  // for, but it is not bit-identical to f32, so this provides an opt-out.
+  // (https://arxiv.org/abs/1904.06376) in the Triton emitter, on AMD targets
+  // that support a bf16 dot but have no native XF32 matrix instruction: CDNA1,
+  // CDNA2, CDNA4 and RDNA3/4. Without it, a dot requesting TF32 on those
+  // targets silently falls back to a full-rate IEEE f32 path. RDNA1/2 are
+  // excluded because they have no bf16. The emulation is both faster and more
+  // accurate than the TF32 it stands in for, but it is not bit-identical to
+  // f32, so this is an opt-out.
+  //
+  // TODO: CDNA3 (gfx942) has a native XF32 MFMA and should be excluded; it is
+  // temporarily included to benchmark the emulation against native XF32.
   optional bool xla_gpu_emulate_tf32_as_bf16x3 = 534;
 
   // Excludes non-deterministic ops from compiled executables.

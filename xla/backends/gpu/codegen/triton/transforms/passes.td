@@ -211,6 +211,13 @@ def StableHLOLowerToTritonPass
     Option<"warp_specialization_allowed_", "warp_specialization_allowed",
            "bool", "",
            "Whether to allow warp specializations.">,
+    Option<"emulate_tf32_as_bf16x3_", "emulate_tf32_as_bf16x3",
+           "bool", "",
+           "Whether to emit BF16x3 instead of TF32 input precision for dots "
+           "that would otherwise use TF32. For targets that have no native "
+           "XF32 matrix instruction (AMD gfx950), where a TF32 dot would "
+           "otherwise silently degrade to a full-rate IEEE f32 matrix "
+           "instruction.">,
   ];
 }
 

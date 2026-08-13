@@ -72,10 +72,19 @@ mlir::PassPipelineRegistration<TritonPipelineOptions>
             gpu_cc = rocm_cc;
           }
           bool warp_specialization_allowed = true;
+          // Mirrors IsTf32AsBf16x3EmulationEnabled without depending on
+          // ir_emission_utils; the debug flag defaults to enabled, so the
+          // target check alone matches default behavior.
+          const auto* rocm_cc_ptr = gpu_cc.rocm_compute_capability();
+          bool emulate_tf32_as_bf16x3 =
+              rocm_cc_ptr != nullptr && rocm_cc_ptr->has_bf16_dtype_support()
+              // && !rocm_cc_ptr->gfx9_mi300()  // TODO: re-enable, see
+              // IsTf32AsBf16x3EmulationEnabled
+              ;
           xla::gpu::CreateTritonXlaPipeline(
               &pm, gpu_cc, options.rewrite_int4, options.allow_tma,
               options.num_stages, warp_specialization_allowed,
-              options.enable_pdl);
+              options.enable_pdl, emulate_tf32_as_bf16x3);
 
           xla::gpu::CreateTritonPipeline(&pm, gpu_cc, options.num_warps,
                                          options.num_ctas, options.num_stages);
