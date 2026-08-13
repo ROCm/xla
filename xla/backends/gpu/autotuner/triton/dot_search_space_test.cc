@@ -494,5 +494,50 @@ TEST_F(RocmDotSearchSpaceTest, GeneratesWavesPerEuConfigs) {
                              Each(WavesPerEuIs(AnyOf(0, 1, 2, 4)))));
 }
 
+TEST_F(RocmDotSearchSpaceTest, UsesSquareMinimumTile) {
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                          GetDefaultDotModule());
+  TritonDotFusionSearchSpace search_space = MakeSearchSpace(module.get());
+
+  EXPECT_THAT(
+      search_space.GenerateConfigs(),
+      AllOf(Not(IsEmpty()), Each(BlockMIs(Ge(16))), Each(BlockNIs(Ge(16)))));
+}
+
+// A tile can only use an MFMA instruction if min(block_m, block_n) >= 16, and
+// on gfx942 that also decides whether the dot runs in xf32. A dot and its
+// transpose must therefore not end up on opposite sides of the threshold.
+TEST_F(RocmDotSearchSpaceTest, TransposedDotsAgreeOnMfmaEligibility) {
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> tall,
+                          GetDefaultDotModule(/*lhs_parallel_dim=*/5,
+                                              /*rhs_parallel_dim=*/30,
+                                              /*contracting_dim=*/64,
+                                              /*type=*/"f32"));
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> wide,
+                          GetDefaultDotModule(/*lhs_parallel_dim=*/30,
+                                              /*rhs_parallel_dim=*/5,
+                                              /*contracting_dim=*/64,
+                                              /*type=*/"f32"));
+
+  // Tile sizes are powers of two, so "not MFMA-eligible" is min(...) <= 8.
+  auto not_mfma_eligible = AnyOf(BlockMIs(Le(8)), BlockNIs(Le(8)));
+  EXPECT_THAT(MakeSearchSpace(tall.get()).GenerateConfigs(),
+              AllOf(Not(IsEmpty()), Each(not_mfma_eligible)));
+  EXPECT_THAT(MakeSearchSpace(wide.get()).GenerateConfigs(),
+              AllOf(Not(IsEmpty()), Each(not_mfma_eligible)));
+}
+
+TEST_F(RocmDotSearchSpaceTest, DoesNotGenerateOneWideTiles) {
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                          GetDefaultDotModule(/*lhs_parallel_dim=*/4096,
+                                              /*rhs_parallel_dim=*/1,
+                                              /*contracting_dim=*/1024,
+                                              /*type=*/"f32"));
+  TritonDotFusionSearchSpace search_space = MakeSearchSpace(module.get());
+
+  EXPECT_THAT(search_space.GenerateConfigs(),
+              AllOf(Not(IsEmpty()), Each(BlockNIs(Ge(2)))));
+}
+
 }  // namespace
 }  // namespace xla::gpu

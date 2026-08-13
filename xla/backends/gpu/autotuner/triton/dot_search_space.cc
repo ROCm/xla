@@ -298,6 +298,30 @@ TritonDotFusionSearchSpace::GetMinOutputTile() const {
   // size is different).
   constexpr OutputTile kMinSupportedTile = {16, 8};
   constexpr OutputTile kMinWgmmaTile = {64, 8};
+  if (device_description_.gpu_compute_capability().IsRocm()) {
+    // The tiles above are more suitable for NVIDIA instruction shapes
+    // (mma.m16n8k*, wgmma.m64n8*). For AMD MFMA is 32x32, 16x16, 4x64 or 64x4,
+    // and Triton only considers a tile MFMA-eligible when
+    // min(block_m, block_n) >= 16 (see chooseMfmaInstruction() in
+    // third_party/amd/lib/TritonAMDGPUTransforms/AccelerateAMDMatmul.cpp).
+    //
+    // A 16x8 floor straddles that threshold. Since the floor also overrides the
+    // max (see the constructor), block_m is always raised to 16 while block_n
+    // can stay at 8, so eligibility depends on N alone -- and a dot and its
+    // transpose swap which dimension is N. Making the floor square removes
+    // that. Capping it at the problem size keeps a small dot from being
+    // inflated onto a matrix core it cannot fill; the lower bound is there
+    // because Triton cannot legalize a dot with a 1-wide tile.
+    constexpr int64_t kMinTileDim = 2;
+    OutputTile tile = {16, 16};
+    tile.lhs_dim = std::clamp<int64_t>(NextPowerOfTwo(lhs_parallel_size_),
+                                       kMinTileDim, tile.lhs_dim);
+    tile.rhs_dim = std::clamp<int64_t>(NextPowerOfTwo(rhs_parallel_size_),
+                                       kMinTileDim, tile.rhs_dim);
+    VLOG(5) << "Computing output_tile: targeting AMD MFMA, so output_tile >= "
+            << tile.lhs_dim << "x" << tile.rhs_dim;
+    return tile;
+  }
   if (device_description_.cuda_compute_capability().IsAtLeastHopper() &&
       !should_optimize_for_occupancy_) {
     VLOG(5) << "Computing output_tile: Want to use wgmma, so output_tile >= "
