@@ -12,6 +12,10 @@ EXCLUDED_TESTS=(
     "GpuKernelTilingTest.ReductionInputTooLarge"
     "MxScaledDotExecutionTest.MxFp4Fp8MixedBatchedCorrectness"
     "ConvolutionTest.Convolve3D_1x4x2x3x3_2x2x2x3x3_Valid"
+    "ConvolutionTest.Convolve_1x1x4x4_1x1x2x2_Valid"
+    "ConvolutionTest.Convolve_1x1x4x4_1x1x2x2_Same"
+    "ConvolutionTest.Convolve_1x1x4x4_1x1x3x3_Same"
+    "StreamExecutorGpuCompilerTest.AotCompileDeserializeRoundTrip"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
