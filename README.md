@@ -1,6 +1,6 @@
 # ROCm/XLA Dev Infrastructure Branch
 This is the `rocm-dev-infra` branch — the default branch of the [`ROCm/xla`](https://github.com/ROCm/xla) fork of [`openxla/xla`](https://github.com/openxla/xla).
-It hosts GitHub Actions workflows, CI/CD infrastructure, and serves as a central index for all ROCm JAX/XLA release branches and their hardware support matrix.
+It hosts GitHub Actions workflows, CI/CD infrastructure, Debug and Performance Tools and serves as a central index for all ROCm JAX/XLA release branches.
 
 The **`main`** branch is an exact mirror of `openxla/xla:main` and should never
 contain fork-specific commits. This separation ensures the `merge-upstream` API
@@ -23,6 +23,7 @@ For supported ROCm versions and GFX targets per release, see the [AMD ROCm compa
 | JAX Release | XLA Branch | JAX Branch |
 |-------------|------------|------------|
 | jax-ml/jax:main | [`openxla/xla:main`](https://github.com/openxla/xla) | [`jax-ml/jax:main`](https://github.com/jax-ml/jax) |
+| jax-v0.11.0 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.11.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.11.0) | [`rocm-jaxlib-v0.11.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.11.0) |
 | jax-v0.10.2 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.10.2`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.10.2) | [`rocm-jaxlib-v0.10.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.10.2) |
 | jax-v0.10.1 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.10.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.10.1) | [`rocm-jaxlib-v0.10.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.10.1) |
 | jax-v0.10.0 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.10.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.10.0) | [`rocm-jaxlib-v0.10.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.10.0) |
