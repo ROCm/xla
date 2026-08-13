@@ -16,7 +16,10 @@ limitations under the License.
 #ifndef XLA_CODEGEN_XTILE_CODEGEN_CONV_ALGORITHMS_H_
 #define XLA_CODEGEN_XTILE_CODEGEN_CONV_ALGORITHMS_H_
 
+#include <cstdint>
+
 #include "absl/status/statusor.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
@@ -31,21 +34,28 @@ absl::StatusOr<::mlir::Type> GetConvAccumulatorType(
     mlir::ImplicitLocOpBuilder& b, const HloConvolutionInstruction& conv);
 
 // Canonicalizes a rank-N conv kernel tile to a rank-2 `[K, N]` matrix, where
-// K = product of (kernel spatial axes) * c_in, and N = c_out. 
+// K = product of (kernel spatial axes) * c_in, and N = c_out.
 absl::StatusOr<TensorValue> CanonicalizeConvKernelToKN(
     mlir::ImplicitLocOpBuilder& b, TensorValue kernel_tile,
     const HloConvolutionInstruction& conv);
 
+// Canonicalizes a rank-N conv input tile to a rank-2 `[M, K]` matrix,
+// where M = batch * product(output spatial axes), and K = c_in.
+absl::StatusOr<TensorValue> CanonicalizeConvInputToMK(
+    mlir::ImplicitLocOpBuilder& b, TensorValue input_tile,
+    const HloConvolutionInstruction& conv);
+
 // Canonicalizes a rank-N conv accumulator tile to a rank-2 `[M, N]` matrix,
-// where M = batch * product(output spatial axes), and N = c_out. 
+// where M = batch * product(output spatial axes), and N = c_out.
 absl::StatusOr<TensorValue> CanonicalizeConvAccToMN(
     mlir::ImplicitLocOpBuilder& b, ::mlir::Value acc,
     const HloConvolutionInstruction& conv);
 
-// Inverse of CanonicalizeConvAccToMN
+// Inverse of CanonicalizeConvAccToMN.
 absl::StatusOr<::mlir::Value> RestoreConvAccFromMN(
     mlir::ImplicitLocOpBuilder& b, ::mlir::Value acc_2d,
-    const HloConvolutionInstruction& conv);
+    const HloConvolutionInstruction& conv,
+    llvm::ArrayRef<int64_t> acc_tile_shape);
 
 }  // namespace xtile
 }  // namespace xla

@@ -204,7 +204,8 @@ absl::StatusOr<TensorValue> CanonicalizeConvAccToMN(
 
 absl::StatusOr<Value> RestoreConvAccFromMN(
     mlir::ImplicitLocOpBuilder& b, Value acc_2d,
-    const HloConvolutionInstruction& conv) {
+    const HloConvolutionInstruction& conv,
+    ArrayRef<int64_t> acc_tile_shape) {
   auto acc_tv = mlir::dyn_cast<TensorValue>(acc_2d);
   if (!acc_tv) {
     return absl::InvalidArgumentError(
@@ -220,17 +221,20 @@ absl::StatusOr<Value> RestoreConvAccFromMN(
   const int64_t spatial_rank = dnums.output_spatial_dimensions_size();
   const int64_t rank = spatial_rank + 2;
 
-  const auto& output_shape = conv.shape();
+  if (static_cast<int64_t>(acc_tile_shape.size()) != rank) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "RestoreConvAccFromMN: accumulator rank ", acc_tile_shape.size(),
+        " does not match conv output rank ", rank));
+  }
+  
   SmallVector<int64_t> canonical_shape;
   canonical_shape.reserve(rank);
-  canonical_shape.push_back(
-      output_shape.dimensions(dnums.output_batch_dimension()));
+  canonical_shape.push_back(acc_tile_shape[dnums.output_batch_dimension()]);
   for (int64_t i = 0; i < spatial_rank; ++i) {
     canonical_shape.push_back(
-        output_shape.dimensions(dnums.output_spatial_dimensions(i)));
+        acc_tile_shape[dnums.output_spatial_dimensions(i)]);
   }
-  canonical_shape.push_back(
-      output_shape.dimensions(dnums.output_feature_dimension()));
+  canonical_shape.push_back(acc_tile_shape[dnums.output_feature_dimension()]);
 
   // Sanity check: the products must match the rank-2 tile dimensions.
   int64_t expected_m = 1;
