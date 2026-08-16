@@ -28,7 +28,8 @@ limitations under the License.
 #include "stablehlo/dialect/StablehloOps.h"
 #include "xla/codegen/xtile/codegen/emitter_helpers.h"
 #include "xla/hlo/ir/hlo_instructions.h"
-#include "xla/service/algorithm_util.h"
+#include "xla/primitive_util.h"
+#include "xla/shape_util.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/xla_data.pb.h"
 
@@ -88,6 +89,25 @@ TensorValue EmitReshape(mlir::ImplicitLocOpBuilder& b, TensorValue input,
 }
 
 }  // namespace
+
+absl::StatusOr<ConvDotShim> MakeConvDotShim(
+    const HloConvolutionInstruction& conv) {
+  PrimitiveType lhs_et = conv.operand(0)->shape().element_type();
+  PrimitiveType rhs_et = conv.operand(1)->shape().element_type();
+  PrimitiveType out_et = conv.shape().element_type();
+  ConvDotShim shim;
+  shim.lhs = HloInstruction::CreateParameter(
+      0, ShapeUtil::MakeShape(lhs_et, {1, 1}), "lhs");
+  shim.rhs = HloInstruction::CreateParameter(
+      1, ShapeUtil::MakeShape(rhs_et, {1, 1}), "rhs");
+  DotDimensionNumbers dnums;
+  dnums.add_lhs_contracting_dimensions(1);
+  dnums.add_rhs_contracting_dimensions(0);
+  shim.dot = HloInstruction::CreateDot(ShapeUtil::MakeShape(out_et, {1, 1}),
+                                       shim.lhs.get(), shim.rhs.get(), dnums,
+                                       conv.precision_config());
+  return shim;
+}
 
 absl::StatusOr<Type> GetConvAccumulatorType(
     mlir::ImplicitLocOpBuilder& b,

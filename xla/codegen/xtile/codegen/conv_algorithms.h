@@ -17,6 +17,7 @@ limitations under the License.
 #define XLA_CODEGEN_XTILE_CODEGEN_CONV_ALGORITHMS_H_
 
 #include <cstdint>
+#include <memory>
 
 #include "absl/status/statusor.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -24,12 +25,25 @@ limitations under the License.
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
 #include "xla/codegen/xtile/codegen/emitter_helpers.h"
+#include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 
 namespace xla {
 namespace xtile {
 
-// Returns the type to use for accumulation for the given `conv` instruction.
+// Owns a throwaway `HloDotInstruction` whose element types and precision config 
+// mirror those of a convolution. 
+struct ConvDotShim {
+  std::unique_ptr<HloInstruction> lhs;
+  std::unique_ptr<HloInstruction> rhs;
+  std::unique_ptr<HloInstruction> dot;
+};
+
+absl::StatusOr<ConvDotShim> MakeConvDotShim(
+    const HloConvolutionInstruction& conv);
+
+// Returns the type to use for accumulation for the given `conv` instruction,
+// matching what the dot emitter would pick for the equivalent dot.
 absl::StatusOr<::mlir::Type> GetConvAccumulatorType(
     mlir::ImplicitLocOpBuilder& b, const HloConvolutionInstruction& conv);
 
