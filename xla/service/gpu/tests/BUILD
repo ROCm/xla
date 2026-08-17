@@ -573,6 +573,7 @@ xla_test(
         "//xla:error_spec",
         "//xla/service:hlo_module_config",
         "//xla/service:platform_util",
+        "//xla/stream_executor:platform_manager",
         "//xla/tests:hlo_pjrt_interpreter_reference_mixin",
         "@com_google_absl//absl/status",
         "@com_google_googletest//:gtest_main",

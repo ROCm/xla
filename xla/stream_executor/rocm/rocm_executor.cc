@@ -668,6 +668,7 @@ absl::StatusOr<std::unique_ptr<Kernel>> RocmExecutor::LoadKernel(
             << " from symbol pointer: " << symbol;
 
 #if TF_ROCM_VERSION >= 60200
+    ScopedActivateContext activation(&rocm_context_);
     hipFunction_t func;
     TF_RETURN_IF_ERROR(
         ToStatus(hipGetFuncBySymbol(&func, spec.in_process_symbol()->symbol),

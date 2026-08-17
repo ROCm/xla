@@ -1183,9 +1183,7 @@ xla_test(
             # b/317293391
             "@com_google_googletest//:gtest_main",
         ],
-    ) + [
-        "//xla/tsl/platform:statusor",
-    ],
+    ) + ["//xla/tsl/platform:statusor"],
 )
 
 cc_library(

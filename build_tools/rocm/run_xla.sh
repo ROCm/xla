@@ -65,4 +65,6 @@ bazel --bazelrc=build_tools/rocm/rocm_xla.bazelrc test \
     --action_env=TF_ROCM_AMDGPU_TARGETS=${AMD_GPU_GFX_ID} \
     --action_env=XLA_FLAGS="--xla_gpu_enable_llvm_module_compilation_parallelism=true --xla_gpu_force_compilation_parallelism=16" \
     --repo_env="ROCM_PATH=$ROCM_PATH" \
+    --test_env=MIOPEN_DEBUG_ENABLE_AI_IMMED_MODE_FALLBACK=0 \
+    --dynamic_mode=off \
     --run_under=//build_tools/ci:parallel_gpu_execute

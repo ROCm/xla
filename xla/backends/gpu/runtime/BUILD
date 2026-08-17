@@ -1112,7 +1112,7 @@ xla_cc_test(
 xla_cc_test(
     name = "cub_scan_thunk_test",
     srcs = ["cub_scan_thunk_test.cc"],
-    tags = ["gpu"],
+    tags = ["gpu", "cuda-only"],
     deps = [
         ":cub_scan_thunk",
         ":thunk",

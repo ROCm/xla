@@ -3964,6 +3964,7 @@ cc_library(
 xla_test(
     name = "all_reduce_e2e_test",
     srcs = ["all_reduce_e2e_test.cc"],
+    tags = ["cuda-only"],
     backend_tags = {
         "gpu": [
             "multi_gpu",

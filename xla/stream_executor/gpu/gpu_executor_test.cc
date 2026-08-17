@@ -86,9 +86,10 @@ using HostMemoryAllocateTest = GpuExecutorTest;
 
 TEST_F(HostMemoryAllocateTest, Numa) {
   Platform* platform = GetPlatform();
-  if (platform->Name() == "SYCL") {
+  if (platform->Name() != "CUDA") {
     // TODO(intel-tf): Support NUMA for host memory.
-    GTEST_SKIP() << "SYCL does not support NUMA for host memory";
+    GTEST_SKIP() << platform->Name()
+                 << " does not support NUMA for host memory";
   }
   constexpr uint64_t kSize = 1024;
   const int num_devices = platform->VisibleDeviceCount();
