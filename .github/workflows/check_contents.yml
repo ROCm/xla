@@ -22,13 +22,7 @@ name: Check Contents
 permissions:
   contents: read
 on:
-  pull_request:
-    branches-ignore:
-      - rocm-dev-infra
-      - rocm-jaxlib-v*
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 env:
   # A bit tricky here: this lets us invoke python files outside of `bazel run`
