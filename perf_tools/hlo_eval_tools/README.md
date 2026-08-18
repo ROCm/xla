@@ -353,9 +353,41 @@ configuration. Target branches are fetched and resolved to immutable commits,
 built with their ROCm CI Bazel configuration, and evaluated sequentially. The
 original source branch is restored when the campaign finishes or is interrupted.
 
-Each target output contains `build.log`, `eval.log`, and the timing CSVs produced
-by `run_hlo_eval.sh`. The final console summary reports each target's status and
-artifact paths; the campaign does not generate comparisons or HTML reports.
+The campaign output layout is:
+
+```text
+<output-dir>/
+  manifest.json
+  <target-slug>/
+    build.log
+    eval.log
+    runner/
+      hlo_runner_main
+    csv/
+      <workload>.csv
+```
+
+`xla_targets.json` describes what the campaign is configured to run.
+`manifest.json` is the durable record of what the campaign actually resolved and
+executed. It contains:
+
+- campaign timestamps and running/completed/interrupted status;
+- effective repeat, argument, command-buffer, ordering, and settle settings;
+- host and visible-device metadata;
+- each target's role, label, revision, resolved commit ID, and output slug;
+- per-target build/evaluation exit codes, errors, and artifact paths;
+- the preserved target runner path and SHA256;
+- and the selected HLO workload/module inventory, including failed workloads that
+  may not produce a CSV.
+
+The manifest is written atomically before evaluation, updated after every
+target, and finalized after source restoration. This preserves useful evidence
+if a long campaign is interrupted and provides structured input for separate
+analysis or report-generation tools. Timing rows remain in the workload CSVs;
+the manifest does not duplicate them.
+
+The final console summary reports each target's status, artifact paths, and the
+manifest path. The campaign does not generate comparisons or HTML reports.
 
 Set `ROCR_VISIBLE_DEVICES=<physical-device>` before the command when a specific
 GPU must be selected.
