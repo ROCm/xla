@@ -4,14 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import platform
 import re
 import shlex
 import signal
-import shutil
 import socket
 import subprocess
 import sys
@@ -64,15 +62,6 @@ def write_campaign_manifest_atomically(
         encoding="utf-8",
     )
     temporary.replace(path)
-
-
-def calculate_file_sha256(path: Path) -> str:
-    """Return the lowercase SHA256 digest for one file."""
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def collect_campaign_environment() -> dict[str, Any]:
@@ -177,8 +166,6 @@ def build_target_result_manifest_entry(
         "hlo_input": str(SCRIPT_DIR),
         "selected_hlo_path": str(hlo_path),
     }
-    if result.get("runner") is not None:
-        paths["runner"] = str(result["runner"])
     return {
         **build_target_manifest_entry(result),
         "status": result["status"],
@@ -194,7 +181,6 @@ def build_target_result_manifest_entry(
             exit_code if stage == "evaluation" else None
         ),
         "error": result.get("error"),
-        "runner_sha256": result.get("runner_sha256"),
         "paths": paths,
     }
 
@@ -474,7 +460,6 @@ def build_and_evaluate_target(
     build_log = target_dir / "build.log"
     eval_log = target_dir / "eval.log"
     csv_dir = target_dir / "csv"
-    runner_copy = target_dir / "runner" / "hlo_runner_main"
     csv_dir.mkdir(parents=True)
     result: dict[str, Any] = {
         **target,
@@ -536,19 +521,11 @@ def build_and_evaluate_target(
         runner = bazel_bin / RUNNER_PATH
         if not runner.is_file() or not os.access(runner, os.X_OK):
             raise RuntimeError(f"built runner is missing: {runner}")
-        runner_copy.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(runner, runner_copy)
-        if not os.access(runner_copy, os.X_OK):
-            raise RuntimeError(
-                f"copied runner is not executable: {runner_copy}"
-            )
-        result["runner"] = runner_copy
-        result["runner_sha256"] = calculate_file_sha256(runner_copy)
 
         command = [
             "bash",
             str(EVAL_SCRIPT),
-            str(runner_copy),
+            str(runner),
             str(hlo_path),
             str(csv_dir),
             str(repeats),
