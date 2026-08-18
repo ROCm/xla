@@ -361,8 +361,6 @@ The campaign output layout is:
   <target-slug>/
     build.log
     eval.log
-    runner/
-      hlo_runner_main
     csv/
       <workload>.csv
 ```
@@ -376,7 +374,6 @@ executed. It contains:
 - host and visible-device metadata;
 - each target's role, label, revision, resolved commit ID, and output slug;
 - per-target build/evaluation exit codes, errors, and artifact paths;
-- the preserved target runner path and SHA256;
 - and the selected HLO workload/module inventory, including failed workloads that
   may not produce a CSV.
 
