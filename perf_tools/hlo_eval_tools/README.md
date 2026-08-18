@@ -389,6 +389,27 @@ manifest path. The campaign does not generate comparisons or HTML reports.
 Set `ROCR_VISIBLE_DEVICES=<physical-device>` before the command when a specific
 GPU must be selected.
 
+### Campaign HTML report
+
+After a campaign completes, generate a self-contained HTML report from its
+manifest, evaluator logs, and timing CSVs:
+
+```bash
+python3 generate_xla_hlo_campaign_report.py \
+  --campaign-dir /path/to/completed/output
+```
+
+The default output is:
+
+```text
+<campaign-dir>/full_campaign_report.html
+```
+
+Use `--output /path/to/report.html` to choose a different location. The report
+shows system/evaluator configuration, branch status, live-control-relative HLO
+performance, failure signatures, a cross-branch failure matrix, and focused log
+evidence. It is a post-processing tool and does not build XLA or rerun HLOs.
+
 ### Manual equivalent
 
 The script automates exactly this loop — one CSV per model **and** workload:
