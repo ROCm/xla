@@ -166,6 +166,10 @@ absl::Status RocmTracer::Enable(const RocmTracerOptions& options,
         absl::StrCat("rocprofiler_start_context failed: ", errstr));
   }
   annotation_map_.Clear();
+  // Applied after Clear() so the new capacity takes effect on an empty map.
+  if (options.max_annotation_strings > 0) {
+    annotation_map_.SetMaxSize(options.max_annotation_strings);
+  }
   api_tracing_enabled_ = true;
   activity_tracing_enabled_ = true;
   VLOG(1) << "GpuTracer started with number of GPUs = " << NumGpus();
