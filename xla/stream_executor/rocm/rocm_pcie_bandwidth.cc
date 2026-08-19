@@ -13,6 +13,7 @@ limitations under the License.
 #include "xla/stream_executor/rocm/rocm_pcie_bandwidth.h"
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 #include "absl/strings/string_view.h"
@@ -32,6 +33,15 @@ constexpr double kPcieGen6Efficiency = 242.0 / 256.0;
 // PCIe transfer rate thresholds in MT/s
 constexpr uint32_t kPcieGen2MaxSpeedMTps = 5000;
 constexpr uint32_t kPcieGen5MaxSpeedMTps = 32000;
+
+// Rate of the newest PCIe generation this file knows about. Bump it when a
+// faster one ships; exceeding it is diagnostic only, never a rejection.
+constexpr uint32_t kNewestKnownPcieSpeedMTps = 128000;  // Gen7
+
+// gpu_metrics marks an unpopulated field all ones, and amd_smi widens that
+// uint16 sentinel to uint32 instead of clearing it, so it arrives verbatim.
+constexpr uint32_t kUnpopulatedPcieSpeedMTps =
+    std::numeric_limits<uint32_t>::max();
 
 constexpr double PcieEncodingEfficiency(uint32_t speed_mt_per_sec) {
   if (speed_mt_per_sec <= kPcieGen2MaxSpeedMTps) return kPcieGen1Gen2Efficiency;
@@ -66,12 +76,41 @@ std::optional<PcieLinkStatus> QueryPcieLinkStatus(
     return std::nullopt;
   }
 
-  // amd_smi reports pcie_speed directly in MT/s, unlike rocm_smi below.
+  // pcie_speed is MT/s per amdsmi.h ("current PCIe speed in MT/s"). amd_smi
+  // reads the same raw field the rocm_smi path below does and applies the
+  // NormalizePcieLinkSpeed conversion internally.
   return PcieLinkStatus{pcie_info.pcie_metric.pcie_speed,
                         pcie_info.pcie_metric.pcie_width};
 }
 
 #else
+
+// Converts raw gpu_metrics pcie_link_speed to MT/s, nullopt if unpopulated.
+// The field is documented as 0.1 GT/s, but some firmware reports the PCIe
+// generation instead. Mirrors amd_smi's disambiguation of the same field
+// (amdsmi_get_pcie_info, smi_amdgpu_get_pcie_speed_from_pcie_type); the two
+// branches would otherwise differ by up to 40x on identical hardware.
+std::optional<uint32_t> NormalizePcieLinkSpeed(uint16_t raw) {
+  if (raw == std::numeric_limits<uint16_t>::max()) return std::nullopt;
+
+  switch (raw) {
+    case 1:
+      return 2500;
+    case 2:
+      return 5000;
+    case 3:
+      return 8000;
+    case 4:
+      return 16000;
+    case 5:
+      return 32000;
+    case 6:
+      return 64000;
+    default:
+      // 0.1 GT/s form. Zero lands here too and the caller rejects it.
+      return static_cast<uint32_t>(raw) * 100;
+  }
+}
 
 std::optional<PcieLinkStatus> QueryPcieLinkStatus(
     SmiDeviceHandle device, absl::string_view pci_bus_id) {
@@ -85,10 +124,15 @@ std::optional<PcieLinkStatus> QueryPcieLinkStatus(
     return std::nullopt;
   }
 
-  // rocm_smi reports pcie_link_speed in units of 0.1 GT/s, so scale to MT/s.
-  return PcieLinkStatus{
-      static_cast<uint32_t>(gpu_metrics.pcie_link_speed) * 100,
-      gpu_metrics.pcie_link_width};
+  std::optional<uint32_t> speed_mt_per_sec =
+      NormalizePcieLinkSpeed(gpu_metrics.pcie_link_speed);
+  if (!speed_mt_per_sec.has_value()) {
+    LOG(WARNING) << "rocm_smi gpu_metrics carries no PCIe link speed for "
+                 << pci_bus_id;
+    return std::nullopt;
+  }
+
+  return PcieLinkStatus{*speed_mt_per_sec, gpu_metrics.pcie_link_width};
 }
 
 #endif  // TF_ROCM_VERSION >= 71300
@@ -125,6 +169,22 @@ std::optional<int64_t> GetRocmPcieBandwidth(absl::string_view pci_bus_id) {
                  << " lanes) for " << pci_bus_id;
     return std::nullopt;
   }
+
+  if (speed_mt_per_sec == kUnpopulatedPcieSpeedMTps) {
+    LOG(WARNING) << kSmiLibraryName << " reported no PCIe speed for "
+                 << pci_bus_id;
+    return std::nullopt;
+  }
+
+  // Warn but keep the reading: magnitude cannot tell a new PCIe generation
+  // from corruption, and discarding a valid rate is worse than trusting an
+  // unfamiliar one. Corruption we can name is rejected above instead.
+  LOG_IF(WARNING, speed_mt_per_sec > kNewestKnownPcieSpeedMTps)
+      << kSmiLibraryName << " reported " << speed_mt_per_sec << " MT/s for "
+      << pci_bus_id << ", above the newest PCIe generation known here ("
+      << kNewestKnownPcieSpeedMTps
+      << " MT/s). Using it anyway; raise kNewestKnownPcieSpeedMTps if this is "
+         "a real link rate.";
 
   int64_t bandwidth =
       ComputePcieBandwidthFromSpeedAndWidth(speed_mt_per_sec, width);
