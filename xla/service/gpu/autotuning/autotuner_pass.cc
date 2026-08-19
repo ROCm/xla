@@ -321,6 +321,8 @@ ProfileOptions GetProfileOptions(const DebugOptions& debug_options,
   }
   profile_options.should_init_buffers = check_buffers;
   profile_options.flush_icache = debug_options.xla_gpu_enable_icache_flush();
+  profile_options.flush_icache_before_timed_run =
+      debug_options.xla_gpu_icache_flush_before_timed_run();
   return profile_options;
 }
 

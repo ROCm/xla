@@ -323,6 +323,8 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
     std::vector<ExecutionInput> execution_inputs =
         CreateExecutionInputsFromBuffers(rz_buffers.input_buffers(),
                                          rz_buffers.input_shapes());
+    // Clears whatever the previously profiled candidate left behind, so that
+    // every candidate starts its warm-up from the same state.
     ABSL_RETURN_IF_ERROR(FlushIcacheIfEnabled());
     ABSL_RETURN_IF_ERROR(Execute(executable, std::move(execution_inputs),
                             /*profile=*/nullptr, warmup_alloc)
@@ -352,8 +354,12 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
 
   // Enqueued ahead of the executable on the same stream, so the flush itself is
   // not part of the measured `compute_time_ns` but is guaranteed to have run by
-  // the time the executable starts.
-  ABSL_RETURN_IF_ERROR(FlushIcacheIfEnabled());
+  // the time the executable starts. This discards what the warm-up run just
+  // brought into the instruction cache, so the timed run pays the cold-start
+  // refill.
+  if (options_.flush_icache_before_timed_run) {
+    ABSL_RETURN_IF_ERROR(FlushIcacheIfEnabled());
+  }
 
   ABSL_ASSIGN_OR_RETURN(
       ExecutionOutput execution_output,

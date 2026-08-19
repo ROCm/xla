@@ -365,6 +365,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
 
   opts.set_xla_gpu_redzone_padding_bytes(8 * 1024 * 1024);
   opts.set_xla_gpu_enable_icache_flush(false);
+  opts.set_xla_gpu_icache_flush_before_timed_run(true);
   opts.set_xla_gpu_shape_checks(DebugOptions::RUNTIME);
   opts.set_xla_dump_latency_hiding_schedule(false);
   opts.set_xla_gpu_enable_latency_hiding_scheduler(false);
@@ -2380,6 +2381,17 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "profiles, so that candidates are not measured with the instruction "
       "cache left warm by the candidates before them. Only implemented for "
       "ROCm; a no-op on other platforms."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_icache_flush_before_timed_run",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_icache_flush_before_timed_run),
+      debug_options->xla_gpu_icache_flush_before_timed_run(),
+      "Only meaningful with --xla_gpu_enable_icache_flush. If true, flush "
+      "before the warm-up run and again before the timed run, so the timed "
+      "run is measured from a cold instruction cache. If false, flush before "
+      "the warm-up run only, which equalizes the starting state across "
+      "candidates but keeps the cold-start refill cost out of the measured "
+      "time."));
   flag_list->push_back(tsl::Flag(
       "xla_while_loop_all_reduce_dus_code_motion_max_size_bytes",
       int64_setter_for(

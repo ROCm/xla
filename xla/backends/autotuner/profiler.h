@@ -40,6 +40,12 @@ struct ProfileOptions {
   // benefiting from the cache left warm by the candidates before it. Only
   // implemented for ROCm; ignored on platforms that have no flush kernel.
   bool flush_icache = false;
+  // Only meaningful when `flush_icache` is set. If true, the flush happens
+  // before the warm-up run and again before the timed run, so the timed run is
+  // measured from a cold instruction cache. If false it happens before the
+  // warm-up run only, so the warm-up is free to repopulate the cache and the
+  // refill cost stays out of the measured time.
+  bool flush_icache_before_timed_run = true;
 };
 
 struct ProfileResult {

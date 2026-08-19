@@ -1287,6 +1287,14 @@ message DebugOptions {
   // Only implemented for ROCm (via s_icache_inv); a no-op on other platforms.
   optional bool xla_gpu_enable_icache_flush = 538;
 
+  // Only meaningful when xla_gpu_enable_icache_flush is set. If true, the
+  // autotuner flushes before the warm-up run and again before the timed run,
+  // so the timed run starts from a cold instruction cache. If false it flushes
+  // before the warm-up run only, which gives every candidate the same starting
+  // state while still letting the warm-up populate the instruction cache, so
+  // the cold-start refill cost stays out of the measured time.
+  optional bool xla_gpu_icache_flush_before_timed_run = 539;
+
   // If true, will require complete AOT autotuning results; in the case of
   // missing AOT result, the model will not be compiled or executed, a
   // `NotFound` error will be returned.
@@ -1821,7 +1829,7 @@ message DebugOptions {
   // Note: when adding a new flag, please add it to one of the hardware-specific
   // or hardware-agnostic sections at the top of this proto message.
 
-  // Next id: 539
+  // Next id: 540
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

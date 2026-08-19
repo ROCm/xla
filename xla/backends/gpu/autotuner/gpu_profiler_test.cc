@@ -239,6 +239,27 @@ TEST_F(GpuProfilerTest, ProfilesWithIcacheFlushEnabled) {
   EXPECT_EQ(profile.duration, absl::Nanoseconds(1000));
 }
 
+TEST_F(GpuProfilerTest, ProfilesWithIcacheFlushBeforeWarmupOnly) {
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      ROOT c = s32[] constant(1)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule));
+  MockExecutable mock_executable(module, 1000);
+  ProfileOptions options;
+  options.flush_icache = true;
+  options.flush_icache_before_timed_run = false;
+  auto profiler = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> buffers,
+                       profiler->CreateInputBuffers(&mock_executable));
+  ASSERT_OK_AND_ASSIGN(ProfileResult profile,
+                       profiler->Profile(&mock_executable, *buffers));
+  EXPECT_EQ(profile.duration, absl::Nanoseconds(1000));
+}
+
 TEST_F(GpuProfilerTest, RejectsCandidateThatWritesPastAllocatedBuffer) {
   constexpr absl::string_view kHloModule = R"(
     HloModule module
