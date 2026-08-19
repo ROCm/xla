@@ -58,6 +58,7 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_address_allocator.h"
+#include "xla/stream_executor/gpu/icache_flush.h"
 #include "xla/stream_executor/gpu/redzone_allocator.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/stream_executor/stream_executor_address_allocator.h"
@@ -255,9 +256,26 @@ std::unique_ptr<GpuProfiler> GpuProfiler::Create(
     LOG(ERROR) << "Failed to create stream: " << stream.status();
     return nullptr;
   }
-  return absl::WrapUnique(new GpuProfiler(stream_executor, active_allocator,
-                                          std::move(owned_allocator),
-                                          stream.value(), options));
+
+  std::optional<se::gpu::IcacheFlusher> icache_flusher;
+  if (options.flush_icache) {
+    absl::StatusOr<se::gpu::IcacheFlusher> flusher =
+        se::gpu::IcacheFlusher::Create(stream_executor);
+    if (flusher.ok()) {
+      icache_flusher = *std::move(flusher);
+    } else {
+      // Instruction cache flushing is a profiling-quality knob, not a
+      // correctness one, so an unsupported platform is not a fatal error.
+      LOG_FIRST_N(WARNING, 1)
+          << "Instruction cache flushing was requested but is not available on "
+             "this platform, profiling without it: "
+          << flusher.status();
+    }
+  }
+
+  return absl::WrapUnique(new GpuProfiler(
+      stream_executor, active_allocator, std::move(owned_allocator),
+      stream.value(), options, std::move(icache_flusher)));
 }
 
 absl::StatusOr<std::unique_ptr<InputBuffers>> GpuProfiler::CreateInputBuffers(
@@ -305,6 +323,7 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
     std::vector<ExecutionInput> execution_inputs =
         CreateExecutionInputsFromBuffers(rz_buffers.input_buffers(),
                                          rz_buffers.input_shapes());
+    ABSL_RETURN_IF_ERROR(FlushIcacheIfEnabled());
     ABSL_RETURN_IF_ERROR(Execute(executable, std::move(execution_inputs),
                             /*profile=*/nullptr, warmup_alloc)
                         .status());
@@ -331,6 +350,11 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
       CreateExecutionInputsFromBuffers(rz_buffers.input_buffers(),
                                        rz_buffers.input_shapes());
 
+  // Enqueued ahead of the executable on the same stream, so the flush itself is
+  // not part of the measured `compute_time_ns` but is guaranteed to have run by
+  // the time the executable starts.
+  ABSL_RETURN_IF_ERROR(FlushIcacheIfEnabled());
+
   ABSL_ASSIGN_OR_RETURN(
       ExecutionOutput execution_output,
       Execute(executable, std::move(execution_inputs), &profile, allocator_));
@@ -338,6 +362,13 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
   result.duration = absl::Nanoseconds(profile.compute_time_ns());
   result.output_buffer = execution_output.Commit().ConsumeResult();
   return result;
+}
+
+absl::Status GpuProfiler::FlushIcacheIfEnabled() {
+  if (!icache_flusher_.has_value()) {
+    return absl::OkStatus();
+  }
+  return icache_flusher_->Flush(stream_);
 }
 
 absl::StatusOr<ExecutionOutput> GpuProfiler::Execute(

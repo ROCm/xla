@@ -35,6 +35,11 @@ struct ProfileOptions {
   // Whether to initialize the buffers with random data or leave them
   // uninitialized.
   bool should_init_buffers = false;
+  // Whether to invalidate the GPU instruction cache before each run, so that
+  // every candidate is measured from the same cold-cache state instead of
+  // benefiting from the cache left warm by the candidates before it. Only
+  // implemented for ROCm; ignored on platforms that have no flush kernel.
+  bool flush_icache = false;
 };
 
 struct ProfileResult {

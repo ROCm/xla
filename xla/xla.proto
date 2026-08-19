@@ -1279,6 +1279,14 @@ message DebugOptions {
   // scratch), so this can be multiplied by quite a lot.
   optional int64 xla_gpu_redzone_padding_bytes = 228;
 
+  // If true, the autotuner invalidates the GPU instruction cache before every
+  // run it profiles. Without this, a candidate profiled after other candidates
+  // benefits from an instruction cache the previous runs left warm, which adds
+  // variance to the measurements and can select the wrong config.
+  //
+  // Only implemented for ROCm (via s_icache_inv); a no-op on other platforms.
+  optional bool xla_gpu_enable_icache_flush = 538;
+
   // If true, will require complete AOT autotuning results; in the case of
   // missing AOT result, the model will not be compiled or executed, a
   // `NotFound` error will be returned.
@@ -1813,7 +1821,7 @@ message DebugOptions {
   // Note: when adding a new flag, please add it to one of the hardware-specific
   // or hardware-agnostic sections at the top of this proto message.
 
-  // Next id: 538
+  // Next id: 539
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

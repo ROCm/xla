@@ -419,6 +419,7 @@ cc_library(
         "//xla/stream_executor:device_address_allocator",
         "//xla/stream_executor:stream_executor_address_allocator",
         "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/gpu:icache_flush",
         "//xla/stream_executor/gpu:redzone_allocator",
         "//xla/util:buffer_slice_merge",
         "@com_google_absl//absl/base",

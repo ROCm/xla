@@ -364,6 +364,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_require_exclusive_lock(false);
 
   opts.set_xla_gpu_redzone_padding_bytes(8 * 1024 * 1024);
+  opts.set_xla_gpu_enable_icache_flush(false);
   opts.set_xla_gpu_shape_checks(DebugOptions::RUNTIME);
   opts.set_xla_dump_latency_hiding_schedule(false);
   opts.set_xla_gpu_enable_latency_hiding_scheduler(false);
@@ -2371,6 +2372,14 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "Amount of padding the redzone allocator will put on one side of each "
       "buffer it allocates. (So the buffer's total size will be increased by "
       "2x this value.)"));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_enable_icache_flush",
+      bool_setter_for(&DebugOptions::set_xla_gpu_enable_icache_flush),
+      debug_options->xla_gpu_enable_icache_flush(),
+      "Invalidate the GPU instruction cache before every run the autotuner "
+      "profiles, so that candidates are not measured with the instruction "
+      "cache left warm by the candidates before them. Only implemented for "
+      "ROCm; a no-op on other platforms."));
   flag_list->push_back(tsl::Flag(
       "xla_while_loop_all_reduce_dus_code_motion_max_size_bytes",
       int64_setter_for(

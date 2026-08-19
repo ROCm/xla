@@ -17,16 +17,19 @@ limitations under the License.
 #define XLA_BACKENDS_GPU_AUTOTUNER_GPU_PROFILER_H_
 
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include "absl/log/log.h"
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "xla/backends/autotuner/profiler.h"
 #include "xla/service/executable.h"
 #include "xla/service/gpu/autotuning/redzone_buffers.h"
 #include "xla/service/shaped_buffer.h"
 #include "xla/stream_executor/device_address_allocator.h"
+#include "xla/stream_executor/gpu/icache_flush.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/xla_data.pb.h"
 
@@ -65,22 +68,31 @@ class GpuProfiler : public Profiler {
       se::StreamExecutor* stream_executor,
       se::DeviceAddressAllocator* allocator,
       std::unique_ptr<se::DeviceAddressAllocator> owned_allocator,
-      se::Stream* stream, ProfileOptions options)
+      se::Stream* stream, ProfileOptions options,
+      std::optional<se::gpu::IcacheFlusher> icache_flusher)
       : stream_executor_(stream_executor),
         allocator_(allocator),
         owned_allocator_(std::move(owned_allocator)),
         stream_(stream),
-        options_(options) {}
+        options_(options),
+        icache_flusher_(std::move(icache_flusher)) {}
 
   absl::StatusOr<ExecutionOutput> Execute(
       Executable* executable, std::vector<ExecutionInput> inputs,
       ExecutionProfile* profile, se::DeviceAddressAllocator* allocator);
+
+  // Enqueues an instruction cache invalidation on `stream_` if icache flushing
+  // was requested and is available on this platform. No-op otherwise.
+  absl::Status FlushIcacheIfEnabled();
 
   se::StreamExecutor* stream_executor_;
   se::DeviceAddressAllocator* allocator_;
   std::unique_ptr<se::DeviceAddressAllocator> owned_allocator_;
   se::Stream* stream_;
   ProfileOptions options_;
+  // Empty unless `options_.flush_icache` is set and the platform provides an
+  // instruction cache flush kernel.
+  std::optional<se::gpu::IcacheFlusher> icache_flusher_;
 };
 
 }  // namespace gpu
