@@ -330,6 +330,33 @@ cc_library(
 )
 
 cc_library(
+    name = "icache_flush_kernel",
+    hdrs = [
+        "icache_flush_kernel.h",
+    ],
+    deps = [
+        "//xla/stream_executor:kernel",
+    ],
+)
+
+cc_library(
+    name = "icache_flush",
+    srcs = ["icache_flush.cc"],
+    hdrs = ["icache_flush.h"],
+    visibility = internal_visibility([":friends"]),
+    deps = [
+        ":gpu_kernel_registry",
+        ":icache_flush_kernel",
+        "//xla/stream_executor:launch_dim",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_h",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
     name = "redzone_allocator",
     srcs = [
         "redzone_allocator.cc",
@@ -361,6 +388,26 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_test(
+    name = "icache_flush_test",
+    srcs = ["icache_flush_test.cc"],
+    backends = ["gpu"],
+    tags = ["no-oneapi"],
+    deps = [
+        ":gpu_init",
+        ":icache_flush",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:platform_manager",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/tsl/lib/core:status_test_util",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_googletest//:gtest_main",
+        "@tsl//tsl/platform:statusor",
+        "@tsl//tsl/platform:test",
     ],
 )
 

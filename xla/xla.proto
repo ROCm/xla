@@ -1320,6 +1320,15 @@ message DebugOptions {
   // for a less noisy ranking.
   optional int32 xla_gpu_autotune_timed_runs = 540;
 
+  // Whether the autotuner also invalidates the instruction cache before every
+  // timed run, on top of any data cache flush. ROCm only.
+  //
+  // Measured alone this was net negative: about 10% less variance, paid for
+  // with a candidate-dependent ~1us bias that cost more discriminability than
+  // the variance gained on small kernels. It exists to test the combination
+  // with xla_gpu_autotune_cache_flush_bytes, which has not been measured.
+  optional bool xla_gpu_autotune_icache_flush = 541;
+
   // If true, will require complete AOT autotuning results; in the case of
   // missing AOT result, the model will not be compiled or executed, a
   // `NotFound` error will be returned.
@@ -1847,7 +1856,7 @@ message DebugOptions {
   // Note: when adding a new flag, please add it to one of the hardware-specific
   // or hardware-agnostic sections at the top of this proto message.
 
-  // Next id: 541
+  // Next id: 542
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

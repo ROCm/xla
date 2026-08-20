@@ -18,6 +18,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -28,6 +29,7 @@ limitations under the License.
 #include "xla/backends/gpu/autotuner/cache_flusher.h"
 #include "xla/service/executable.h"
 #include "xla/service/gpu/autotuning/redzone_buffers.h"
+#include "xla/stream_executor/gpu/icache_flush.h"
 #include "xla/service/shaped_buffer.h"
 #include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/stream_executor.h"
@@ -73,13 +75,15 @@ class GpuProfiler : public Profiler {
       se::DeviceAddressAllocator* allocator,
       std::unique_ptr<se::DeviceAddressAllocator> owned_allocator,
       se::Stream* stream, ProfileOptions options,
-      std::unique_ptr<CacheFlusher> cache_flusher)
+      std::unique_ptr<CacheFlusher> cache_flusher,
+      std::optional<se::gpu::IcacheFlusher> icache_flusher)
       : stream_executor_(stream_executor),
         allocator_(allocator),
         owned_allocator_(std::move(owned_allocator)),
         stream_(stream),
         options_(options),
-        cache_flusher_(std::move(cache_flusher)) {}
+        cache_flusher_(std::move(cache_flusher)),
+        icache_flusher_(std::move(icache_flusher)) {}
 
   absl::StatusOr<ExecutionOutput> Execute(
       Executable* executable, std::vector<ExecutionInput> inputs,
@@ -93,6 +97,12 @@ class GpuProfiler : public Profiler {
   // Null when cache flushing is disabled, or when the scratch buffer could not
   // be allocated. Created once and reused for every candidate.
   std::unique_ptr<CacheFlusher> cache_flusher_;
+  // Null unless instruction cache flushing was asked for and a flush kernel is
+  // registered for this platform. Kept separate from cache_flusher_ because
+  // the two want opposite launch geometries: the data flush wants wide blocks
+  // for memory throughput, the instruction flush wants one wavefront per block
+  // and heavy oversubscription so that every compute unit runs one.
+  std::optional<se::gpu::IcacheFlusher> icache_flusher_;
   // Advances on every execution, warm-up runs included, and selects which of
   // the rotating input sets that execution reads. Advancing per execution
   // rather than per candidate is what keeps a warm-up run from priming the

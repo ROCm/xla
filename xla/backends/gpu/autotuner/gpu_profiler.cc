@@ -314,10 +314,25 @@ std::unique_ptr<GpuProfiler> GpuProfiler::Create(
     }
   }
 
-  return absl::WrapUnique(
-      new GpuProfiler(stream_executor, active_allocator,
-                      std::move(owned_allocator), stream.value(), options,
-                      std::move(cache_flusher)));
+  std::optional<se::gpu::IcacheFlusher> icache_flusher;
+  if (options.icache_flush) {
+    absl::StatusOr<se::gpu::IcacheFlusher> flusher =
+        se::gpu::IcacheFlusher::Create(stream_executor);
+    if (flusher.ok()) {
+      icache_flusher = *std::move(flusher);
+    } else {
+      // Expected on every platform but ROCm, where no flush kernel is
+      // registered.
+      LOG(WARNING) << "Could not create the autotuning instruction cache "
+                      "flusher, continuing without it: "
+                   << flusher.status();
+    }
+  }
+
+  return absl::WrapUnique(new GpuProfiler(
+      stream_executor, active_allocator, std::move(owned_allocator),
+      stream.value(), options, std::move(cache_flusher),
+      std::move(icache_flusher)));
 }
 
 absl::StatusOr<std::unique_ptr<InputBuffers>> GpuProfiler::CreateInputBuffers(
@@ -463,6 +478,11 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
     // event based timer started inside the executable's own execution.
     if (cache_flusher_ != nullptr) {
       ABSL_RETURN_IF_ERROR(cache_flusher_->Flush());
+    }
+    // After the data flush, so the data flush's own instruction fetches do not
+    // repopulate what this just invalidated.
+    if (icache_flusher_.has_value()) {
+      ABSL_RETURN_IF_ERROR(icache_flusher_->Flush(stream_));
     }
 
     ExecutionProfile profile;

@@ -52,6 +52,15 @@ struct ProfileOptions {
   // which is robust to a single clock or preemption outlier in a way the mean
   // is not. One reproduces the historical single-shot measurement.
   int num_timed_runs = 1;
+  // Whether to also invalidate the instruction cache before every timed run,
+  // in addition to any data cache flush. ROCm only; ignored where no flush
+  // kernel is registered.
+  //
+  // Measured on its own this was net negative: it buys ~10% less variance but
+  // imposes a candidate-dependent ~1us bias that costs more discriminability
+  // than the variance gains on small kernels. Combining it with a data cache
+  // flush has not been measured, which is what this exists for.
+  bool icache_flush = false;
 };
 
 struct ProfileResult {

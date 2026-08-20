@@ -860,6 +860,7 @@ cc_library(
         ":cub_scan_kernel_rocm",
         ":cub_sort_kernel_rocm",
         ":hipfft_plugin",
+        ":icache_flush_kernel_rocm",
         ":make_batch_pointers_kernel_rocm",
         ":miopen_plugin",
         ":multi_gpu_barrier_kernel_rocm",
@@ -1407,6 +1408,26 @@ rocm_library(
         "//xla/stream_executor:kernel_spec",
         "//xla/stream_executor/gpu:gpu_kernel_registry",
         "//xla/stream_executor/gpu:repeat_buffer_kernel",
+    ],
+    alwayslink = 1,
+)
+
+rocm_library(
+    name = "icache_flush_kernel_rocm",
+    srcs = [
+        "icache_flush_kernel_rocm.cu.cc",
+    ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_platform_id",
+        "//xla/stream_executor:kernel_spec",
+        "//xla/stream_executor/gpu:gpu_kernel_registry",
+        "//xla/stream_executor/gpu:icache_flush_kernel",
+        "@com_google_absl//absl/base",
     ],
     alwayslink = 1,
 )
