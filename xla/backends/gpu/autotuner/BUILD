@@ -393,10 +393,35 @@ xla_test(
 )
 
 cc_library(
+    name = "cache_flusher",
+    srcs = ["cache_flusher.cc"],
+    hdrs = ["cache_flusher.h"],
+    tags = ["gpu"],
+    deps = [
+        "//xla:types",
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:device_address_allocator",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor:kernel",
+        "//xla/stream_executor:launch_dim",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/gpu:cache_flush_kernel",
+        "//xla/stream_executor/gpu:gpu_kernel_registry",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
     name = "gpu_profiler",
     srcs = ["gpu_profiler.cc"],
     hdrs = ["gpu_profiler.h"],
     deps = [
+        ":cache_flusher",
         "//xla:executable_run_options",
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",

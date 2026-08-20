@@ -1294,6 +1294,22 @@ message DebugOptions {
   // disables rotation and reuses a single input set.
   optional int64 xla_gpu_autotune_rotating_buffer_bytes = 538;
 
+  // Size of a scratch buffer the autotuner streams a read over between each
+  // candidate's warm-up run and its timed run, so that the timed run starts
+  // from a cold cache.
+  //
+  // This addresses the same problem as
+  // xla_gpu_autotune_rotating_buffer_bytes, but by evicting rather than by
+  // displacing, so it also covers the output and scratch buffers, which are
+  // not rotated, and it costs one fixed allocation instead of one per
+  // instruction. The two are independent and can be combined, though there is
+  // little reason to.
+  //
+  // Should exceed the last level cache; 512 MB is a sensible value on
+  // MI300/MI350, whose 256 MB Infinity Cache is memory-side and is not
+  // reached by any coherence operation. Zero, the default, disables flushing.
+  optional int64 xla_gpu_autotune_cache_flush_bytes = 539;
+
   // If true, will require complete AOT autotuning results; in the case of
   // missing AOT result, the model will not be compiled or executed, a
   // `NotFound` error will be returned.
@@ -1821,7 +1837,7 @@ message DebugOptions {
   // Note: when adding a new flag, please add it to one of the hardware-specific
   // or hardware-agnostic sections at the top of this proto message.
 
-  // Next id: 539
+  // Next id: 540
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

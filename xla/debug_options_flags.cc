@@ -365,6 +365,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
 
   opts.set_xla_gpu_redzone_padding_bytes(8 * 1024 * 1024);
   opts.set_xla_gpu_autotune_rotating_buffer_bytes(512 * 1024 * 1024);
+  opts.set_xla_gpu_autotune_cache_flush_bytes(0);
   opts.set_xla_gpu_shape_checks(DebugOptions::RUNTIME);
   opts.set_xla_dump_latency_hiding_schedule(false);
   opts.set_xla_gpu_enable_latency_hiding_scheduler(false);
@@ -2360,6 +2361,18 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "256MB Infinity Cache on MI300/MI350. Zero disables rotation and "
       "profiles every candidate against a single input set, which leaves "
       "memory-bound candidates being measured out of cache."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_autotune_cache_flush_bytes",
+      int64_setter_for(&DebugOptions::set_xla_gpu_autotune_cache_flush_bytes),
+      debug_options->xla_gpu_autotune_cache_flush_bytes(),
+      "Size of a scratch buffer the autotuner streams a read over between each "
+      "candidate's warm-up run and its timed run, so that the timed run starts "
+      "from a cold cache. Addresses the same problem as "
+      "xla_gpu_autotune_rotating_buffer_bytes, but by evicting rather than "
+      "displacing, so it also covers the output and scratch buffers and costs "
+      "one fixed allocation instead of one per instruction. Has to exceed the "
+      "last level cache to have any effect; 512MB clears the 256MB Infinity "
+      "Cache on MI300/MI350. Zero, the default, disables flushing."));
   flag_list->push_back(tsl::Flag(
       "xla_while_loop_all_reduce_dus_code_motion_max_size_bytes",
       int64_setter_for(

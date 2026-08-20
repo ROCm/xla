@@ -42,6 +42,12 @@ struct ProfileOptions {
   // level cache before the next run reads it. Zero disables rotation and
   // reuses a single set, which is the historical behaviour.
   int64_t rotating_buffer_bytes = 0;
+  // Size of a scratch buffer the profiler streams a read over between a
+  // candidate's warm-up run and its timed run, so that the timed run starts
+  // from a cold cache. Should exceed the last level cache. Unlike
+  // rotating_buffer_bytes this also evicts the output and scratch buffers, and
+  // costs no extra allocation per instruction. Zero disables flushing.
+  int64_t cache_flush_bytes = 0;
 };
 
 struct ProfileResult {

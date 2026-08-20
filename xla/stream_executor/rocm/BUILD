@@ -855,6 +855,7 @@ cc_library(
         ":buffer_comparator_kernel_rocm",
         ":buffer_debug_float_check_kernel_rocm",
         ":buffer_debug_xor_checksum_kernel_rocm",
+        ":cache_flush_kernel_rocm",
         ":collective_signal_rocm",
         ":cub_scan_kernel_rocm",
         ":cub_sort_kernel_rocm",
@@ -1406,6 +1407,27 @@ rocm_library(
         "//xla/stream_executor:kernel_spec",
         "//xla/stream_executor/gpu:gpu_kernel_registry",
         "//xla/stream_executor/gpu:repeat_buffer_kernel",
+    ],
+    alwayslink = 1,
+)
+
+rocm_library(
+    name = "cache_flush_kernel_rocm",
+    srcs = [
+        "cache_flush_kernel_rocm.cu.cc",
+        "//xla/stream_executor/gpu:cache_flush_kernel_lib.cu.h",
+    ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_platform_id",
+        "//xla/stream_executor:kernel_spec",
+        "//xla/stream_executor/gpu:cache_flush_kernel",
+        "//xla/stream_executor/gpu:gpu_kernel_registry",
+        "@com_google_absl//absl/base",
     ],
     alwayslink = 1,
 )
