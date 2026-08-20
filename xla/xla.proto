@@ -1290,8 +1290,8 @@ message DebugOptions {
   //
   // The budget should exceed the size of the last level cache; 512 MB is a
   // sensible value on MI300/MI350, whose 256 MB Infinity Cache is not modelled
-  // by DeviceDescription. Zero, the default, disables rotation and reuses a
-  // single input set.
+  // by DeviceDescription. Defaults to 512 MB, which clears that cache. Zero
+  // disables rotation and reuses a single input set.
   optional int64 xla_gpu_autotune_rotating_buffer_bytes = 538;
 
   // If true, will require complete AOT autotuning results; in the case of

@@ -364,7 +364,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_require_exclusive_lock(false);
 
   opts.set_xla_gpu_redzone_padding_bytes(8 * 1024 * 1024);
-  opts.set_xla_gpu_autotune_rotating_buffer_bytes(0);
+  opts.set_xla_gpu_autotune_rotating_buffer_bytes(512 * 1024 * 1024);
   opts.set_xla_gpu_shape_checks(DebugOptions::RUNTIME);
   opts.set_xla_dump_latency_hiding_schedule(false);
   opts.set_xla_gpu_enable_latency_hiding_scheduler(false);
@@ -2355,10 +2355,11 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "The autotuner allocates as many identical copies of an instruction's "
       "input set as fit in this budget and cycles through them on every "
       "execution, so that data read by one run is evicted from the last level "
-      "cache before it is read again. Set this above the size of the last "
-      "level cache (512MB is a sensible value on MI300/MI350) to stop "
-      "memory-bound candidates from being profiled out of cache. Zero, the "
-      "default, disables rotation."));
+      "cache before it is read again. The budget has to exceed the size of the "
+      "last level cache to have any effect; the default of 512MB clears the "
+      "256MB Infinity Cache on MI300/MI350. Zero disables rotation and "
+      "profiles every candidate against a single input set, which leaves "
+      "memory-bound candidates being measured out of cache."));
   flag_list->push_back(tsl::Flag(
       "xla_while_loop_all_reduce_dus_code_motion_max_size_bytes",
       int64_setter_for(
