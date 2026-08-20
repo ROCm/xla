@@ -1290,8 +1290,10 @@ message DebugOptions {
   //
   // The budget should exceed the size of the last level cache; 512 MB is a
   // sensible value on MI300/MI350, whose 256 MB Infinity Cache is not modelled
-  // by DeviceDescription. Defaults to 512 MB, which clears that cache. Zero
-  // disables rotation and reuses a single input set.
+  // by DeviceDescription. Zero, the default, disables rotation and reuses a
+  // single input set. Prefer xla_gpu_autotune_cache_flush_bytes, which
+  // reaches the same measured result for one fixed allocation rather than a
+  // pool per instruction.
   optional int64 xla_gpu_autotune_rotating_buffer_bytes = 538;
 
   // Size of a scratch buffer the autotuner streams a read over between each
@@ -1307,7 +1309,8 @@ message DebugOptions {
   //
   // Should exceed the last level cache; 512 MB is a sensible value on
   // MI300/MI350, whose 256 MB Infinity Cache is memory-side and is not
-  // reached by any coherence operation. Zero, the default, disables flushing.
+  // reached by any coherence operation. Defaults to 512 MB, which clears that
+  // cache. Zero disables flushing.
   optional int64 xla_gpu_autotune_cache_flush_bytes = 539;
 
   // If true, will require complete AOT autotuning results; in the case of

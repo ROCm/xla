@@ -364,8 +364,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_require_exclusive_lock(false);
 
   opts.set_xla_gpu_redzone_padding_bytes(8 * 1024 * 1024);
-  opts.set_xla_gpu_autotune_rotating_buffer_bytes(512 * 1024 * 1024);
-  opts.set_xla_gpu_autotune_cache_flush_bytes(0);
+  opts.set_xla_gpu_autotune_rotating_buffer_bytes(0);
+  opts.set_xla_gpu_autotune_cache_flush_bytes(512 * 1024 * 1024);
   opts.set_xla_gpu_shape_checks(DebugOptions::RUNTIME);
   opts.set_xla_dump_latency_hiding_schedule(false);
   opts.set_xla_gpu_enable_latency_hiding_scheduler(false);
@@ -2357,10 +2357,10 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "input set as fit in this budget and cycles through them on every "
       "execution, so that data read by one run is evicted from the last level "
       "cache before it is read again. The budget has to exceed the size of the "
-      "last level cache to have any effect; the default of 512MB clears the "
-      "256MB Infinity Cache on MI300/MI350. Zero disables rotation and "
-      "profiles every candidate against a single input set, which leaves "
-      "memory-bound candidates being measured out of cache."));
+      "last level cache to have any effect. Zero, the default, disables "
+      "rotation. Prefer xla_gpu_autotune_cache_flush_bytes, which reaches the "
+      "same measured result for one fixed allocation rather than a pool per "
+      "instruction."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_autotune_cache_flush_bytes",
       int64_setter_for(&DebugOptions::set_xla_gpu_autotune_cache_flush_bytes),
@@ -2371,8 +2371,9 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "xla_gpu_autotune_rotating_buffer_bytes, but by evicting rather than "
       "displacing, so it also covers the output and scratch buffers and costs "
       "one fixed allocation instead of one per instruction. Has to exceed the "
-      "last level cache to have any effect; 512MB clears the 256MB Infinity "
-      "Cache on MI300/MI350. Zero, the default, disables flushing."));
+      "last level cache to have any effect; the default of 512MB clears the "
+      "256MB Infinity Cache on MI300/MI350. Zero disables flushing and leaves "
+      "memory-bound candidates being measured out of cache."));
   flag_list->push_back(tsl::Flag(
       "xla_while_loop_all_reduce_dus_code_motion_max_size_bytes",
       int64_setter_for(
