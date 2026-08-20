@@ -214,6 +214,56 @@ TEST_F(GpuProfilerTest, CreateInputBuffersAndProfile) {
   EXPECT_EQ(profile.scratch_bytes, 0);
 }
 
+// The flush kernel runs on the same stream as the executable and must not be
+// charged to the candidate. The reported duration comes from an event based
+// timer started inside the executable, so the mock's fixed duration should come
+// back unchanged.
+TEST_F(GpuProfilerTest, CacheFlushDoesNotChangeReportedDuration) {
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      p0 = f32[1024] parameter(0)
+      ROOT n = f32[1024] negate(p0)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule));
+  MockExecutable mock_executable(module, /*duration_ns=*/1000);
+
+  ProfileOptions options;
+  options.cache_flush_bytes = 64 * 1024 * 1024;
+  auto profiler = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> buffers,
+                       profiler->CreateInputBuffers(&mock_executable));
+  ASSERT_OK_AND_ASSIGN(ProfileResult profile,
+                       profiler->Profile(&mock_executable, *buffers));
+  EXPECT_EQ(profile.duration, absl::Nanoseconds(1000));
+}
+
+// A flush budget that cannot be allocated must degrade to no flushing rather
+// than fail compilation.
+TEST_F(GpuProfilerTest, ImpossibleCacheFlushBudgetDegradesGracefully) {
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      ROOT c = s32[] constant(1)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule));
+  MockExecutable mock_executable(module, /*duration_ns=*/1000);
+
+  ProfileOptions options;
+  options.cache_flush_bytes = int64_t{1} << 46;  // 64 TiB
+  auto profiler = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+  ASSERT_NE(profiler, nullptr);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> buffers,
+                       profiler->CreateInputBuffers(&mock_executable));
+  ASSERT_OK_AND_ASSIGN(ProfileResult profile,
+                       profiler->Profile(&mock_executable, *buffers));
+  EXPECT_EQ(profile.duration, absl::Nanoseconds(1000));
+}
+
 TEST_F(GpuProfilerTest, RejectsCandidateThatWritesPastAllocatedBuffer) {
   constexpr absl::string_view kHloModule = R"(
     HloModule module

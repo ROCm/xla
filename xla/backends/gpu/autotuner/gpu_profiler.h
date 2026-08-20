@@ -23,6 +23,7 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
 #include "xla/backends/autotuner/profiler.h"
+#include "xla/backends/gpu/autotuner/cache_flusher.h"
 #include "xla/service/executable.h"
 #include "xla/service/gpu/autotuning/redzone_buffers.h"
 #include "xla/service/shaped_buffer.h"
@@ -65,12 +66,14 @@ class GpuProfiler : public Profiler {
       se::StreamExecutor* stream_executor,
       se::DeviceAddressAllocator* allocator,
       std::unique_ptr<se::DeviceAddressAllocator> owned_allocator,
-      se::Stream* stream, ProfileOptions options)
+      se::Stream* stream, ProfileOptions options,
+      std::unique_ptr<CacheFlusher> cache_flusher)
       : stream_executor_(stream_executor),
         allocator_(allocator),
         owned_allocator_(std::move(owned_allocator)),
         stream_(stream),
-        options_(options) {}
+        options_(options),
+        cache_flusher_(std::move(cache_flusher)) {}
 
   absl::StatusOr<ExecutionOutput> Execute(
       Executable* executable, std::vector<ExecutionInput> inputs,
@@ -81,6 +84,9 @@ class GpuProfiler : public Profiler {
   std::unique_ptr<se::DeviceAddressAllocator> owned_allocator_;
   se::Stream* stream_;
   ProfileOptions options_;
+  // Null when cache flushing is disabled, or when the scratch buffer could not
+  // be allocated. Created once and reused for every candidate.
+  std::unique_ptr<CacheFlusher> cache_flusher_;
 };
 
 }  // namespace gpu

@@ -37,6 +37,7 @@ limitations under the License.
 #include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "xla/backends/autotuner/profiler.h"
+#include "xla/backends/gpu/autotuner/cache_flusher.h"
 #include "xla/backends/gpu/runtime/buffer_comparator.h"
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/backends/gpu/runtime/thunk_executor.h"
@@ -255,9 +256,27 @@ std::unique_ptr<GpuProfiler> GpuProfiler::Create(
     LOG(ERROR) << "Failed to create stream: " << stream.status();
     return nullptr;
   }
-  return absl::WrapUnique(new GpuProfiler(stream_executor, active_allocator,
-                                          std::move(owned_allocator),
-                                          stream.value(), options));
+  std::unique_ptr<CacheFlusher> cache_flusher;
+  if (options.cache_flush_bytes > 0) {
+    absl::StatusOr<std::unique_ptr<CacheFlusher>> flusher =
+        CacheFlusher::Create(stream_executor, stream.value(), active_allocator,
+                             options.cache_flush_bytes);
+    if (flusher.ok()) {
+      cache_flusher = *std::move(flusher);
+    } else {
+      // Autotuning must still run if the scratch buffer does not fit or the
+      // kernel is unavailable. Candidates are then profiled out of cache, which
+      // is the historical behaviour.
+      LOG(WARNING) << "Could not create the autotuning cache flusher, "
+                      "continuing without it: "
+                   << flusher.status();
+    }
+  }
+
+  return absl::WrapUnique(
+      new GpuProfiler(stream_executor, active_allocator,
+                      std::move(owned_allocator), stream.value(), options,
+                      std::move(cache_flusher)));
 }
 
 absl::StatusOr<std::unique_ptr<InputBuffers>> GpuProfiler::CreateInputBuffers(
@@ -323,6 +342,18 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
             redzone_failure_msg));
       }
     }
+  }
+
+  // Evict everything the warm-up run just pulled in, so the timed run starts
+  // cold. This has to happen after the warm-up, not before it, or the warm-up
+  // repopulates the cache with exactly the data the timed run is about to read
+  // and the flush achieves nothing.
+  //
+  // Enqueued on stream_ ahead of the executable, so it is stream ordered
+  // against it, and excluded from the reported duration, which comes from an
+  // event based timer started inside the executable's own execution.
+  if (cache_flusher_ != nullptr) {
+    ABSL_RETURN_IF_ERROR(cache_flusher_->Flush());
   }
 
   ExecutionProfile profile;

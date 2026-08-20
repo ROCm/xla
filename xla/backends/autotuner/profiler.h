@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_BACKENDS_AUTOTUNER_PROFILER_H_
 #define XLA_BACKENDS_AUTOTUNER_PROFILER_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 
@@ -35,6 +36,11 @@ struct ProfileOptions {
   // Whether to initialize the buffers with random data or leave them
   // uninitialized.
   bool should_init_buffers = false;
+  // Size of a scratch buffer the profiler streams a read over between a
+  // candidate's warm-up run and its timed run, so that the timed run starts
+  // from a cold cache. Should exceed the last level cache. Zero disables
+  // flushing, which is the historical behaviour.
+  int64_t cache_flush_bytes = 0;
 };
 
 struct ProfileResult {

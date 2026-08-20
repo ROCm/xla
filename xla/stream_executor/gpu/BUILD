@@ -319,6 +319,17 @@ cc_library(
 )
 
 cc_library(
+    name = "cache_flush_kernel",
+    hdrs = [
+        "cache_flush_kernel.h",
+    ],
+    deps = [
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:kernel",
+    ],
+)
+
+cc_library(
     name = "redzone_allocator",
     srcs = [
         "redzone_allocator.cc",
@@ -812,6 +823,7 @@ exports_files([
     "ragged_all_to_all_kernel_lib.cu.h",
     "repeat_buffer_kernel.cu.h",
     "redzone_allocator_kernel_lib.cu.h",
+    "cache_flush_kernel_lib.cu.h",
     "gpu_test_kernels_lib.cu.h",
 ])
 
