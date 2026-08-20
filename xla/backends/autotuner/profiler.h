@@ -48,6 +48,10 @@ struct ProfileOptions {
   // rotating_buffer_bytes this also evicts the output and scratch buffers, and
   // costs no extra allocation per instruction. Zero disables flushing.
   int64_t cache_flush_bytes = 0;
+  // Number of timed runs per candidate. The reported duration is their median,
+  // which is robust to a single clock or preemption outlier in a way the mean
+  // is not. One reproduces the historical single-shot measurement.
+  int num_timed_runs = 1;
 };
 
 struct ProfileResult {

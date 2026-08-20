@@ -324,6 +324,7 @@ ProfileOptions GetProfileOptions(const DebugOptions& debug_options,
       debug_options.xla_gpu_autotune_rotating_buffer_bytes();
   profile_options.cache_flush_bytes =
       debug_options.xla_gpu_autotune_cache_flush_bytes();
+  profile_options.num_timed_runs = debug_options.xla_gpu_autotune_timed_runs();
   return profile_options;
 }
 

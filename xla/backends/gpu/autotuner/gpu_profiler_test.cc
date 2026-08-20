@@ -89,7 +89,13 @@ class MockExecutable : public Executable {
     }
     ExecutionProfile* profile = run_options->run_options().execution_profile();
     if (profile != nullptr) {
-      profile->set_compute_time_ns(duration_ns_);
+      // Only timed runs are handed a profile, so the sequence indexes timed
+      // runs and the warm-up does not consume an entry.
+      profile->set_compute_time_ns(duration_sequence_.empty()
+                                       ? duration_ns_
+                                       : duration_sequence_[timed_runs_++ %
+                                                            duration_sequence_
+                                                                .size()]);
     }
     if (write_past_allocated_buffer_) {
       ABSL_RETURN_IF_ERROR(WriteOutOfBounds(*run_options));
@@ -106,6 +112,14 @@ class MockExecutable : public Executable {
   const std::vector<const void*>& first_input_addresses() const {
     return first_input_addresses_;
   }
+
+  // Reports these durations in order, one per timed run, instead of the fixed
+  // duration. Lets a test drive the median across runs.
+  void SetDurationSequence(std::vector<int> durations_ns) {
+    duration_sequence_ = std::move(durations_ns);
+  }
+
+  int timed_runs() const { return timed_runs_; }
 
  private:
   // Simulates a kernel that writes past the end of an allocated buffer:
@@ -135,6 +149,8 @@ class MockExecutable : public Executable {
   bool should_fail_;
   bool write_past_allocated_buffer_;
   std::vector<const void*> first_input_addresses_;
+  std::vector<int> duration_sequence_;
+  int timed_runs_ = 0;
 };
 
 absl::StatusOr<ScopedShapedBuffer> CreateTestBuffer(
@@ -448,6 +464,54 @@ TEST_F(GpuProfilerTest, ImpossibleCacheFlushBudgetDegradesGracefully) {
                        profiler->CreateInputBuffers(&mock_executable));
   ASSERT_OK_AND_ASSIGN(ProfileResult profile,
                        profiler->Profile(&mock_executable, *buffers));
+  EXPECT_EQ(profile.duration, absl::Nanoseconds(1000));
+}
+
+TEST_F(GpuProfilerTest, MultipleTimedRunsReportTheMedian) {
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      ROOT c = s32[] constant(1)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule));
+  MockExecutable mock_executable(module, /*duration_ns=*/0);
+  // Deliberately out of order, and with an outlier at each end, so a mean
+  // (3000) or a min (1000) would both give a different answer than the
+  // median.
+  mock_executable.SetDurationSequence({5000, 1000, 3000, 2000, 4000});
+
+  ProfileOptions options;
+  options.num_timed_runs = 5;
+  auto profiler = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> buffers,
+                       profiler->CreateInputBuffers(&mock_executable));
+  ASSERT_OK_AND_ASSIGN(ProfileResult profile,
+                       profiler->Profile(&mock_executable, *buffers));
+
+  EXPECT_EQ(mock_executable.timed_runs(), 5);
+  EXPECT_EQ(profile.duration, absl::Nanoseconds(3000));
+  EXPECT_TRUE(profile.output_buffer.has_value());
+}
+
+TEST_F(GpuProfilerTest, SingleTimedRunIsTheDefault) {
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      ROOT c = s32[] constant(1)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule));
+  MockExecutable mock_executable(module, /*duration_ns=*/1000);
+  auto profiler =
+      GpuProfiler::Create(stream_exec_, ProfileOptions(), allocator_.get());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> buffers,
+                       profiler->CreateInputBuffers(&mock_executable));
+  ASSERT_OK_AND_ASSIGN(ProfileResult profile,
+                       profiler->Profile(&mock_executable, *buffers));
+  EXPECT_EQ(mock_executable.timed_runs(), 1);
   EXPECT_EQ(profile.duration, absl::Nanoseconds(1000));
 }
 

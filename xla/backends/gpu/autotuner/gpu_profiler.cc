@@ -251,6 +251,17 @@ int64_t WorkingSetBytes(const RedzoneBuffers& buffers) {
   return bytes;
 }
 
+// Median of the timed runs. For an even count this is the upper of the two
+// middle values, which keeps the result a value that was actually measured
+// rather than an interpolation. Reorders `durations`.
+absl::Duration MedianDuration(std::vector<absl::Duration>& durations) {
+  CHECK(!durations.empty());
+  const size_t mid = durations.size() / 2;
+  std::nth_element(durations.begin(), durations.begin() + mid,
+                   durations.end());
+  return durations[mid];
+}
+
 // Number of input sets to allocate so that cycling through all of them touches
 // more than `budget_bytes`, which is how the data of one run gets evicted
 // before that run comes around again.
@@ -434,31 +445,46 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
     }
   }
 
-  // Evict everything the warm-up run just pulled in, so the timed run starts
-  // cold. This has to happen after the warm-up, not before it, or the warm-up
-  // repopulates the cache with exactly the data the timed run is about to read
-  // and the flush achieves nothing.
-  //
-  // Enqueued on stream_ ahead of the executable, so it is stream ordered
-  // against it, and excluded from the reported duration, which comes from an
-  // event based timer started inside the executable's own execution.
-  if (cache_flusher_ != nullptr) {
-    ABSL_RETURN_IF_ERROR(cache_flusher_->Flush());
+  const int num_timed_runs = std::max(1, options_.num_timed_runs);
+  std::vector<absl::Duration> durations;
+  durations.reserve(num_timed_runs);
+  std::optional<ScopedShapedBuffer> output;
+
+  for (int run = 0; run < num_timed_runs; ++run) {
+    // Evict everything the previous run pulled in, so this one starts cold.
+    // This has to happen after the warm-up, not before it, or the warm-up
+    // repopulates the cache with exactly the data the timed run is about to
+    // read and the flush achieves nothing. It also has to happen before every
+    // timed run, not just the first, or runs 2..n are served out of cache and
+    // the median is not comparable to the single-run case.
+    //
+    // Enqueued on stream_ ahead of the executable, so it is stream ordered
+    // against it, and excluded from the reported duration, which comes from an
+    // event based timer started inside the executable's own execution.
+    if (cache_flusher_ != nullptr) {
+      ABSL_RETURN_IF_ERROR(cache_flusher_->Flush());
+    }
+
+    ExecutionProfile profile;
+    profile.set_warmup_run_executed(true);
+    const RedzoneBuffers& timed_buffers = next_set();
+    std::vector<ExecutionInput> execution_inputs =
+        CreateExecutionInputsFromBuffers(timed_buffers.input_buffers(),
+                                         timed_buffers.input_shapes());
+
+    ABSL_ASSIGN_OR_RETURN(
+        ExecutionOutput execution_output,
+        Execute(executable, std::move(execution_inputs), &profile, allocator_));
+
+    durations.push_back(absl::Nanoseconds(profile.compute_time_ns()));
+    // Keeps the last run's output and frees the previous one. All runs read
+    // identical inputs, so which one is kept does not matter to the output
+    // clustering that consumes it.
+    output = execution_output.Commit().ConsumeResult();
   }
 
-  ExecutionProfile profile;
-  profile.set_warmup_run_executed(true);
-  const RedzoneBuffers& timed_buffers = next_set();
-  std::vector<ExecutionInput> execution_inputs =
-      CreateExecutionInputsFromBuffers(timed_buffers.input_buffers(),
-                                       timed_buffers.input_shapes());
-
-  ABSL_ASSIGN_OR_RETURN(
-      ExecutionOutput execution_output,
-      Execute(executable, std::move(execution_inputs), &profile, allocator_));
-
-  result.duration = absl::Nanoseconds(profile.compute_time_ns());
-  result.output_buffer = execution_output.Commit().ConsumeResult();
+  result.duration = MedianDuration(durations);
+  result.output_buffer = std::move(output);
   return result;
 }
 

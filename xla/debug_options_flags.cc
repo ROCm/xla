@@ -366,6 +366,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_redzone_padding_bytes(8 * 1024 * 1024);
   opts.set_xla_gpu_autotune_rotating_buffer_bytes(0);
   opts.set_xla_gpu_autotune_cache_flush_bytes(512 * 1024 * 1024);
+  opts.set_xla_gpu_autotune_timed_runs(1);
   opts.set_xla_gpu_shape_checks(DebugOptions::RUNTIME);
   opts.set_xla_dump_latency_hiding_schedule(false);
   opts.set_xla_gpu_enable_latency_hiding_scheduler(false);
@@ -2374,6 +2375,16 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "last level cache to have any effect; the default of 512MB clears the "
       "256MB Infinity Cache on MI300/MI350. Zero disables flushing and leaves "
       "memory-bound candidates being measured out of cache."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_autotune_timed_runs",
+      int32_setter_for(&DebugOptions::set_xla_gpu_autotune_timed_runs),
+      debug_options->xla_gpu_autotune_timed_runs(),
+      "Number of timed runs the autotuner takes per candidate, reporting their "
+      "median. One, the default, is a single-shot measurement whose run to run "
+      "noise is large enough to change which config is selected on a "
+      "noticeable fraction of instructions. Raising this trades autotuning "
+      "time for a less noisy ranking; every run is preceded by a cache flush "
+      "if one is configured, so the cost per extra run includes that."));
   flag_list->push_back(tsl::Flag(
       "xla_while_loop_all_reduce_dus_code_motion_max_size_bytes",
       int64_setter_for(
