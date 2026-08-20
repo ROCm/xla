@@ -1,0 +1,166 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+
+name: CI theRock Nightly
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      gpu_target:
+        description: 'GPU target for pip index (device-all = multi-arch whl-multi-arch)'
+        type: choice
+        options:
+          - 'device-all'
+          - 'gfx950-dcgpu'
+          - 'gfx94X-dcgpu'
+        default: 'device-all'
+      rocm_pip_source:
+        description: 'ROCm pip source'
+        type: choice
+        options:
+          - 'nightlies'
+          - 'devreleases'
+          - 'prereleases'
+          - 'release'
+        default: 'nightlies'
+      rocm_sdk_version:
+        description: 'ROCm SDK / THEROCK version (empty = latest)'
+        type: string
+        required: false
+        default: '10.0'
+      pip_index_path:
+        description: 'Override pip index path (e.g. whl, whl-staging, v2, v2-staging)'
+        type: string
+        default: ''
+      therock_index_url:
+        description: 'Fully override THEROCK_INDEX_URL (empty = derive from channel + gpu_target)'
+        type: string
+        default: ''
+      runner_label:
+        description: 'On which runner to run'
+        type: string
+        default: 'amd-do-linux-xla-gpu-gfx950-1'
+  schedule:
+    # Run every 24 hours at 5:00 AM UTC
+    - cron: '00 5 * * *'
+  pull_request_target:
+    types: [labeled]
+  pull_request:
+    branches:
+      - rocm-dev-infra
+    paths:
+      - '.github/workflows/rocm_xla_ci_therock_nightly.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  execute-xla-ut-therock-ci:
+    runs-on: ubuntu-latest
+    outputs:
+      docker-image: ${{ steps.out.outputs.docker-image }}
+    steps:
+      - id: out
+        shell: bash
+        run: |
+          # hermetic llvm based rocmless docker image
+          echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
+
+  xla:
+    needs: execute-xla-ut-therock-ci
+    name: XLA Linux theRock nightly CI
+    runs-on: ${{ inputs.runner_label || 'amd-do-linux-xla-gpu-gfx950-1' }}
+    timeout-minutes: 220
+    env:
+      DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
+      EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/execute_ci_build_upstream.sh
+    container:
+      image: ${{ needs.rocm-config.outputs.docker-image }} # zizmor: ignore[unpinned-images] image is pinned in the rocm-config job.
+      volumes: &rocm_container_volumes
+        - /data/ci-cert.crt:/data/ci-cert.crt
+        - /data/ci-cert.key:/data/ci-cert.key
+        - /data:/data
+      options: &rocm_container_options >-
+        --device=/dev/dri
+        --device=/dev/kfd
+        --ipc=host
+        --shm-size=64G
+        --cap-add=SYS_PTRACE
+        --security-opt=seccomp=unconfined
+        --tmpfs /root/.cache/bazel:rw,exec,size=80g
+        --group-add video
+        --env-file /etc/podinfo/gha-gpu-isolation-settings
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checking out openxla/xla
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openxla/xla
+          persist-credentials: false
+
+      - name: Resolve TheRock index URL and version
+        id: therock
+        env:
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
+          GPU_TARGET: ${{ inputs.gpu_target || 'device-all' }}
+          ROCM_SDK_VERSION: ${{ inputs.rocm_sdk_version || '10.0' }}
+          PIP_INDEX_PATH: ${{ inputs.pip_index_path || '' }}
+          THEROCK_INDEX_URL: ${{ inputs.therock_index_url || '' }}
+        run: bash buildtools/rocm/detect-therock-version.sh
+
+
+      - name: CPU Info
+        run: lscpu
+
+      - name: Test XLA [single_gpu]
+        timeout-minutes: 120
+        run: |
+          build_tools/rocm/execute_ci_build_upstream.sh \
+            --config=rocm_ci_hermetic \
+            --config=rocm_rbe \
+            --config=ci_single_gpu \
+            --local_test_jobs=1 \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
+            --repo_env=ROCM_DISTRO_URL="https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-multiarch-${ROCM_SDK_VERSION}.tar.gz" \
+            --repo_env=ROCM_DISTRO_HASH='' \
+            --local_test_jobs=1 \
+            --internal_spawn_scheduler \
+            --strategy=TestRunner=dynamic \
+            --bes_keywords=xla \
+            --bes_keywords=upstream \
+            --bes_keywords=gpu \
+            --bes_keywords=pull_request \
+      - name: Test XLA [rocm_cpu]
+        timeout-minutes: 80
+        run: |
+          build_tools/rocm/execute_ci_build_upstream.sh \
+            --config=rocm_ci_hermetic \
+            --config=rocm_rbe \
+            --config=ci_rocm_cpu \
+            --local_test_jobs=200 \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
+            --repo_env=ROCM_PATH="" \
+            --repo_env=ROCM_DISTRO_URL="https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-multiarch-${ROCM_SDK_VERSION}.tar.gz" \
+            --repo_env=ROCM_DISTRO_HASH='' \
+            --bes_keywords=xla \
+            --bes_keywords=upstream \
+            --bes_keywords=cpu \
+            --bes_keywords=pull_request
