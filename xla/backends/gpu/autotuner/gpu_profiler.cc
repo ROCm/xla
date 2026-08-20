@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/backends/gpu/autotuner/gpu_profiler.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -125,7 +126,9 @@ static absl::Status InitializeInputBuffer(GpuInputBuffers& gpu_buffers,
                                           se::Stream* stream, int buffer_index,
                                           const void* values,
                                           size_t size_bytes) {
-  RedzoneBuffers& rz_buffers = gpu_buffers.redzone_buffers;
+  // Only the canonical set is initialized here. The rotating copies are made
+  // afterwards, so they pick this up.
+  RedzoneBuffers& rz_buffers = gpu_buffers.redzone_buffers.front();
 
   if (buffer_index < 0 || buffer_index >= rz_buffers.input_buffers().size()) {
     return absl::InvalidArgumentError(
@@ -231,6 +234,33 @@ static absl::Status InitializeBuffersIfRequiredByOpcode(
   return absl::OkStatus();
 }
 
+// Upper bound on the number of rotating input sets, so that a large budget
+// combined with a tiny instruction cannot allocate an unbounded number of
+// copies. Each extra set also carries a full complement of redzone padding.
+constexpr int kMaxRotatingSets = 8;
+
+// Sum of the sizes of the input buffers, which is the footprint one execution
+// reads. Redzone padding is deliberately excluded, since the kernel never
+// touches it and it is the cache footprint that matters here.
+int64_t WorkingSetBytes(const RedzoneBuffers& buffers) {
+  int64_t bytes = 0;
+  for (const se::DeviceAddressBase& buffer : buffers.input_buffers()) {
+    bytes += buffer.size();
+  }
+  return bytes;
+}
+
+// Number of input sets to allocate so that cycling through all of them touches
+// more than `budget_bytes`, which is how the data of one run gets evicted
+// before that run comes around again.
+int NumRotatingSets(int64_t budget_bytes, int64_t working_set_bytes) {
+  if (budget_bytes <= 0 || working_set_bytes <= 0) {
+    return 1;
+  }
+  int64_t sets = (budget_bytes + working_set_bytes - 1) / working_set_bytes;
+  return static_cast<int>(std::clamp<int64_t>(sets, 1, kMaxRotatingSets));
+}
+
 }  // namespace
 
 std::unique_ptr<GpuProfiler> GpuProfiler::Create(
@@ -262,20 +292,73 @@ std::unique_ptr<GpuProfiler> GpuProfiler::Create(
 
 absl::StatusOr<std::unique_ptr<InputBuffers>> GpuProfiler::CreateInputBuffers(
     const Executable* executable, const HloInstruction* instr) {
+  const ProgramShape program_shape =
+      executable->compute_computation_layout().ComputeProgramShape();
   ABSL_ASSIGN_OR_RETURN(
       RedzoneBuffers buffers,
       RedzoneBuffers::FromProgramShape(
-          executable->compute_computation_layout().ComputeProgramShape(),
-          RedzoneBuffers::BuffersToCreate::kAllInputs,
+          program_shape, RedzoneBuffers::BuffersToCreate::kAllInputs,
           options_.should_init_buffers,
           /*should_check_correctness=*/true, options_.redzone_padding_bytes,
           allocator_, stream_));
   auto gpu_buffers = std::make_unique<GpuInputBuffers>();
-  gpu_buffers->redzone_buffers = std::move(buffers);
+  gpu_buffers->redzone_buffers.push_back(std::move(buffers));
 
   // Initialize buffers based on operation type
   ABSL_RETURN_IF_ERROR(
       InitializeBuffersIfRequiredByOpcode(instr, *gpu_buffers, stream_));
+
+  // Allocate the remaining rotating sets as byte copies of the canonical one.
+  // They must hold identical values, because the correctness machinery in
+  // ConfigRunner clusters candidates by comparing their outputs against each
+  // other, and candidates reading different inputs would produce legitimately
+  // different outputs. The cache effect comes from the addresses, not the
+  // contents, so copying rather than re-randomizing costs nothing.
+  //
+  // Note that this multiplies the memory cost of autotuning an instruction.
+  // Redzone padding is charged per buffer per side, so a three input
+  // instruction carries about 48 MB of padding per set at the default 8 MB
+  // padding, independent of how small its data is.
+  //
+  // The canonical addresses are held by value, since the push_back below
+  // invalidates references into the vector of sets.
+  const std::vector<se::DeviceAddressBase> canonical_inputs =
+      gpu_buffers->redzone_buffers.front().input_buffers();
+  const int64_t working_set_bytes =
+      WorkingSetBytes(gpu_buffers->redzone_buffers.front());
+  const int num_sets =
+      NumRotatingSets(options_.rotating_buffer_bytes, working_set_bytes);
+  VLOG(2) << "Rotating input buffers: " << num_sets << " set(s) of "
+          << working_set_bytes << " bytes, budget "
+          << options_.rotating_buffer_bytes << " bytes.";
+  gpu_buffers->redzone_buffers.reserve(num_sets);
+
+  for (int set = 1; set < num_sets; ++set) {
+    absl::StatusOr<RedzoneBuffers> copy = RedzoneBuffers::FromProgramShape(
+        program_shape, RedzoneBuffers::BuffersToCreate::kAllInputs,
+        /*should_init_buffers=*/false,
+        /*should_check_correctness=*/true, options_.redzone_padding_bytes,
+        allocator_, stream_);
+    if (!copy.ok()) {
+      // Running out of device memory here must not fail compilation. Keep the
+      // sets that did allocate and rotate through those instead.
+      LOG(WARNING) << "Could not allocate rotating input buffer set " << set
+                   << " of " << num_sets
+                   << " for autotuning, continuing with "
+                   << gpu_buffers->redzone_buffers.size()
+                   << " set(s): " << copy.status();
+      break;
+    }
+    for (int i = 0; i < canonical_inputs.size(); ++i) {
+      const se::DeviceAddressBase& src = canonical_inputs[i];
+      se::DeviceAddressBase dst = copy->input_buffers()[i];
+      ABSL_RETURN_IF_ERROR(stream_->MemcpyD2D(&dst, src, src.size()));
+    }
+    gpu_buffers->redzone_buffers.push_back(*std::move(copy));
+  }
+  if (gpu_buffers->redzone_buffers.size() > 1) {
+    ABSL_RETURN_IF_ERROR(stream_->BlockHostUntilDone());
+  }
 
   return gpu_buffers;
 }
@@ -284,7 +367,13 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
     Executable* executable, const InputBuffers& buffers) {
   const GpuInputBuffers& gpu_buffers =
       absl::down_cast<const GpuInputBuffers&>(buffers);
-  const RedzoneBuffers& rz_buffers = gpu_buffers.redzone_buffers;
+  const std::vector<RedzoneBuffers>& rz_sets = gpu_buffers.redzone_buffers;
+  CHECK(!rz_sets.empty());
+  // Advances once per execution, so the warm-up run and the timed run read
+  // different sets and the warm-up cannot prime the cache for the timed run.
+  const auto next_set = [&]() -> const RedzoneBuffers& {
+    return rz_sets[static_cast<size_t>(run_index_++) % rz_sets.size()];
+  };
 
   ProfileResult result;
   if (auto* gpu_executable = dynamic_cast<const GpuExecutable*>(executable);
@@ -302,9 +391,10 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
       warmup_rz.emplace(stream_, allocator_, options_.redzone_padding_bytes);
       warmup_alloc = &warmup_rz.value();
     }
+    const RedzoneBuffers& warmup_buffers = next_set();
     std::vector<ExecutionInput> execution_inputs =
-        CreateExecutionInputsFromBuffers(rz_buffers.input_buffers(),
-                                         rz_buffers.input_shapes());
+        CreateExecutionInputsFromBuffers(warmup_buffers.input_buffers(),
+                                         warmup_buffers.input_shapes());
     ABSL_RETURN_IF_ERROR(Execute(executable, std::move(execution_inputs),
                             /*profile=*/nullptr, warmup_alloc)
                         .status());
@@ -327,9 +417,10 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
 
   ExecutionProfile profile;
   profile.set_warmup_run_executed(true);
+  const RedzoneBuffers& timed_buffers = next_set();
   std::vector<ExecutionInput> execution_inputs =
-      CreateExecutionInputsFromBuffers(rz_buffers.input_buffers(),
-                                       rz_buffers.input_shapes());
+      CreateExecutionInputsFromBuffers(timed_buffers.input_buffers(),
+                                       timed_buffers.input_shapes());
 
   ABSL_ASSIGN_OR_RETURN(
       ExecutionOutput execution_output,
@@ -365,14 +456,26 @@ absl::Status GpuProfiler::CheckInputBuffers(InputBuffers& buffers) {
   absl::ReaderMutexLock gpu_lock(GetGpuMutex(stream_executor_));
   const GpuInputBuffers& gpu_buffers =
       absl::down_cast<const GpuInputBuffers&>(buffers);
-  const RedzoneBuffers& rz_buffers = gpu_buffers.redzone_buffers;
-  ABSL_ASSIGN_OR_RETURN(se::RedzoneAllocator::RedzoneCheckStatus rz_check_status,
-                   rz_buffers.RedzoneAllocator().CheckRedzones());
-  if (rz_check_status.ok()) {
-    return absl::OkStatus();
+  // Every rotating set has to be checked, not just the canonical one, or an
+  // out-of-bounds write into whichever set the run happened to read goes
+  // undetected. A candidate's warm-up run and its timed run read two different
+  // sets, so a single candidate can dirty two of them.
+  //
+  // All sets are checked even once one has failed, rather than returning at
+  // the first failure. CheckRedzones re-arms a redzone it found modified, so
+  // skipping the remaining sets would leave them dirty and blame the next
+  // candidate for this one's write.
+  std::optional<absl::Status> first_failure;
+  for (const RedzoneBuffers& rz_buffers : gpu_buffers.redzone_buffers) {
+    ABSL_ASSIGN_OR_RETURN(
+        se::RedzoneAllocator::RedzoneCheckStatus rz_check_status,
+        rz_buffers.RedzoneAllocator().CheckRedzones());
+    if (!rz_check_status.ok() && !first_failure.has_value()) {
+      LOG(ERROR) << "Red zone modified";
+      first_failure = absl::InternalError(rz_check_status.RedzoneFailureMsg());
+    }
   }
-  LOG(ERROR) << "Red zone modified";
-  return absl::InternalError(rz_check_status.RedzoneFailureMsg());
+  return first_failure.value_or(absl::OkStatus());
 }
 
 absl::Status GpuProfiler::CheckOutputBuffer(ScopedShapedBuffer& output,

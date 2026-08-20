@@ -16,11 +16,13 @@ limitations under the License.
 #ifndef XLA_BACKENDS_GPU_AUTOTUNER_GPU_PROFILER_H_
 #define XLA_BACKENDS_GPU_AUTOTUNER_GPU_PROFILER_H_
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
 
 #include "absl/log/log.h"
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "xla/backends/autotuner/profiler.h"
 #include "xla/service/executable.h"
@@ -35,7 +37,11 @@ namespace gpu {
 
 struct GpuInputBuffers : public InputBuffers {
   // We only use the input buffers from the redzone buffers.
-  RedzoneBuffers redzone_buffers;
+  //
+  // Identical copies of the input set at distinct device addresses. Always at
+  // least one. Index 0 is the set that was initialized directly, the rest are
+  // byte copies of it. See ProfileOptions::rotating_buffer_bytes.
+  std::vector<RedzoneBuffers> redzone_buffers;
 };
 
 class GpuProfiler : public Profiler {
@@ -81,6 +87,11 @@ class GpuProfiler : public Profiler {
   std::unique_ptr<se::DeviceAddressAllocator> owned_allocator_;
   se::Stream* stream_;
   ProfileOptions options_;
+  // Advances on every execution, warm-up runs included, and selects which of
+  // the rotating input sets that execution reads. Advancing per execution
+  // rather than per candidate is what keeps a warm-up run from priming the
+  // cache with the very data its timed run is about to read.
+  int64_t run_index_ = 0;
 };
 
 }  // namespace gpu

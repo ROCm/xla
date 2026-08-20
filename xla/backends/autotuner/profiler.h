@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_BACKENDS_AUTOTUNER_PROFILER_H_
 #define XLA_BACKENDS_AUTOTUNER_PROFILER_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 
@@ -35,6 +36,12 @@ struct ProfileOptions {
   // Whether to initialize the buffers with random data or leave them
   // uninitialized.
   bool should_init_buffers = false;
+  // Total size of the rotating input buffer pool. The profiler allocates as
+  // many identical copies of the input set as fit in this budget and cycles
+  // through them, so that data touched by one run is evicted from the last
+  // level cache before the next run reads it. Zero disables rotation and
+  // reuses a single set, which is the historical behaviour.
+  int64_t rotating_buffer_bytes = 0;
 };
 
 struct ProfileResult {

@@ -38,9 +38,12 @@ limitations under the License.
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/literal.h"
 #include "xla/literal_util.h"
+#include "xla/service/compiler.h"
 #include "xla/service/executable.h"
+#include "xla/service/gpu/autotuning/redzone_buffers.h"
 #include "xla/service/gpu/gpu_compiler.h"
 #include "xla/service/gpu/nvptx_compiler.h"
+#include "xla/service/maybe_owning_device_address.h"
 #include "xla/service/platform_util.h"
 #include "xla/service/service_executable_run_options.h"
 #include "xla/service/shaped_buffer.h"
@@ -77,6 +80,10 @@ class MockExecutable : public Executable {
   absl::StatusOr<ExecutionOutput> ExecuteAsyncOnStream(
       const ServiceExecutableRunOptions* run_options,
       std::vector<ExecutionInput> arguments) override {
+    if (!arguments.empty()) {
+      first_input_addresses_.push_back(
+          arguments[0].Buffer(/*index=*/{}).AsDeviceAddress().opaque());
+    }
     if (should_fail_) {
       return absl::InternalError("MockExecutable failed as requested.");
     }
@@ -92,6 +99,12 @@ class MockExecutable : public Executable {
     return ExecutionOutput(result_shape, result_shape,
                            run_options->run_options().allocator(),
                            run_options->run_options().device_ordinal());
+  }
+
+  // Address of the first input buffer of every execution, in order. Lets a
+  // test see which rotating input set each run was handed.
+  const std::vector<const void*>& first_input_addresses() const {
+    return first_input_addresses_;
   }
 
  private:
@@ -121,6 +134,7 @@ class MockExecutable : public Executable {
   int duration_ns_;
   bool should_fail_;
   bool write_past_allocated_buffer_;
+  std::vector<const void*> first_input_addresses_;
 };
 
 absl::StatusOr<ScopedShapedBuffer> CreateTestBuffer(
@@ -212,6 +226,195 @@ TEST_F(GpuProfilerTest, CreateInputBuffersAndProfile) {
   EXPECT_EQ(profile.output_buffer->on_device_shape(),
             ShapeUtil::MakeShape(S32, {}));
   EXPECT_EQ(profile.scratch_bytes, 0);
+}
+
+TEST_F(GpuProfilerTest, ProfileWithRotatingBuffers) {
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      ROOT c = s32[] constant(1)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule));
+  MockExecutable mock_executable(module, 1000);
+  ProfileOptions options;
+  options.rotating_buffer_bytes = 1024 * 1024;
+  auto profiler = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> buffers,
+                       profiler->CreateInputBuffers(&mock_executable));
+  ASSERT_OK_AND_ASSIGN(ProfileResult profile,
+                       profiler->Profile(&mock_executable, *buffers));
+  EXPECT_EQ(profile.duration, absl::Nanoseconds(1000));
+  EXPECT_EQ(profile.scratch_bytes, 0);
+}
+
+// The rotating sets must live at distinct addresses, or they would not evict
+// each other from the cache, and they must hold identical bytes, or candidates
+// reading different sets would produce legitimately different outputs and the
+// output clustering in ConfigRunner would put every candidate in its own
+// cluster.
+TEST_F(GpuProfilerTest, RotatingBuffersAreDistinctCopiesOfTheSameData) {
+  constexpr int64_t kElements = 1024;
+  constexpr int64_t kBufferBytes = kElements * sizeof(float);
+  constexpr int kExpectedSets = 3;
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      p0 = f32[1024] parameter(0)
+      p1 = f32[1024] parameter(1)
+      ROOT add = f32[1024] add(p0, p1)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule));
+  MockExecutable mock_executable(module, 1000);
+
+  ProfileOptions options;
+  options.should_init_buffers = true;
+  // Two inputs per set, so this budget asks for exactly kExpectedSets.
+  options.rotating_buffer_bytes = kExpectedSets * 2 * kBufferBytes;
+  auto profiler = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> buffers,
+                       profiler->CreateInputBuffers(&mock_executable));
+
+  const std::vector<RedzoneBuffers>& sets =
+      static_cast<GpuInputBuffers*>(buffers.get())->redzone_buffers;
+  ASSERT_EQ(sets.size(), kExpectedSets);
+
+  ASSERT_OK_AND_ASSIGN(auto stream, stream_exec_->CreateStream());
+  for (int input = 0; input < 2; ++input) {
+    std::vector<float> reference(kElements);
+    std::vector<const void*> seen_addresses;
+    for (const RedzoneBuffers& set : sets) {
+      ASSERT_EQ(set.input_buffers().size(), 2);
+      const se::DeviceAddressBase& buffer = set.input_buffers()[input];
+      ASSERT_EQ(static_cast<int64_t>(buffer.size()), kBufferBytes);
+      EXPECT_THAT(seen_addresses, ::testing::Not(::testing::Contains(
+                                      buffer.opaque())));
+      seen_addresses.push_back(buffer.opaque());
+
+      std::vector<float> host(kElements);
+      TF_ASSERT_OK(stream->Memcpy(host.data(), buffer, kBufferBytes));
+      TF_ASSERT_OK(stream->BlockHostUntilDone());
+      if (&set == &sets.front()) {
+        reference = host;
+      } else {
+        EXPECT_EQ(host, reference);
+      }
+    }
+    // The buffers really were initialized, so the equality above is not
+    // trivially comparing two runs of zeros.
+    EXPECT_THAT(reference, ::testing::Contains(::testing::Ne(0.0f)));
+  }
+}
+
+// The index has to advance on every execution, not once per candidate. If the
+// warm-up and the timed run shared a set, the warm-up would pull exactly the
+// timed run's data into the cache and the rotation would achieve nothing.
+TEST_F(GpuProfilerTest, RotationAdvancesOnEveryExecutionIncludingWarmUp) {
+  constexpr int64_t kBufferBytes = 1024 * sizeof(float);
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      p0 = f32[1024] parameter(0)
+      ROOT n = f32[1024] negate(p0)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule));
+  MockExecutable mock_executable(module, 1000);
+
+  ProfileOptions options;
+  // A single input per set, so this budget asks for exactly three sets.
+  options.rotating_buffer_bytes = 3 * kBufferBytes;
+  auto profiler = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> buffers,
+                       profiler->CreateInputBuffers(&mock_executable));
+  ASSERT_EQ(
+      static_cast<GpuInputBuffers*>(buffers.get())->redzone_buffers.size(), 3);
+
+  TF_ASSERT_OK(profiler->Profile(&mock_executable, *buffers).status());
+  const std::vector<const void*>& addresses =
+      mock_executable.first_input_addresses();
+  // Warm-up run and timed run, on sets 0 and 1.
+  ASSERT_EQ(addresses.size(), 2);
+  EXPECT_NE(addresses[0], addresses[1]);
+
+  // The next candidate continues the cycle rather than restarting it, so with
+  // three sets it lands on 2 and then wraps back to 0.
+  TF_ASSERT_OK(profiler->Profile(&mock_executable, *buffers).status());
+  ASSERT_EQ(addresses.size(), 4);
+  EXPECT_NE(addresses[1], addresses[2]);
+  EXPECT_NE(addresses[2], addresses[3]);
+  EXPECT_EQ(addresses[3], addresses[0]);
+}
+
+// ConfigRunner clusters candidates by comparing their outputs against each
+// other, so two runs that read different rotating sets must still produce
+// bit-identical outputs. If they did not, every candidate would land in its
+// own cluster and the correctness machinery would collapse.
+TEST_F(GpuProfilerTest, RotationKeepsOutputsIdenticalAcrossRuns) {
+  constexpr int64_t kBufferBytes = 1024 * sizeof(float);
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      p0 = f32[1024] parameter(0)
+      p1 = f32[1024] parameter(1)
+      ROOT a = f32[1024] add(p0, p1)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(se::Platform * platform,
+                       PlatformUtil::GetDefaultPlatform());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Compiler> compiler,
+                       Compiler::GetForPlatform(platform->id()));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule));
+  module->mutable_config()
+      .mutable_debug_options()
+      .clear_xla_gpu_enable_command_buffer();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Executable> executable,
+                       compiler->RunBackend(std::move(module), stream_exec_,
+                                            GpuCompiler::CompileOptions()));
+
+  ProfileOptions options;
+  options.should_init_buffers = true;
+  options.rotating_buffer_bytes = 3 * 2 * kBufferBytes;
+  auto profiler = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> buffers,
+                       profiler->CreateInputBuffers(executable.get()));
+  ASSERT_EQ(
+      static_cast<GpuInputBuffers*>(buffers.get())->redzone_buffers.size(), 3);
+
+  // The timed runs of these two calls read sets 1 and 0 respectively.
+  ASSERT_OK_AND_ASSIGN(ProfileResult first,
+                       profiler->Profile(executable.get(), *buffers));
+  ASSERT_OK_AND_ASSIGN(ProfileResult second,
+                       profiler->Profile(executable.get(), *buffers));
+  ASSERT_TRUE(first.output_buffer.has_value());
+  ASSERT_TRUE(second.output_buffer.has_value());
+  TF_EXPECT_OK(profiler->CheckOutputBuffer(*first.output_buffer,
+                                           *second.output_buffer,
+                                           /*rtol=*/0.0));
+}
+
+TEST_F(GpuProfilerTest, RotationIsDisabledByDefault) {
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      p0 = f32[1024] parameter(0)
+      ROOT n = f32[1024] negate(p0)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule));
+  MockExecutable mock_executable(module, 1000);
+  auto profiler =
+      GpuProfiler::Create(stream_exec_, ProfileOptions(), allocator_.get());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> buffers,
+                       profiler->CreateInputBuffers(&mock_executable));
+  EXPECT_EQ(
+      static_cast<GpuInputBuffers*>(buffers.get())->redzone_buffers.size(), 1);
 }
 
 TEST_F(GpuProfilerTest, RejectsCandidateThatWritesPastAllocatedBuffer) {
