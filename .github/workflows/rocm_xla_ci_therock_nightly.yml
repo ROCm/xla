@@ -91,6 +91,7 @@ jobs:
       DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
       EXECUTE_DETECT_THEROCK_VERSION_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/detect-therock-version.sh
       EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/execute_ci_build_upstream.sh
+      RUN_XAL_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/run_xla_ci_build.sh
     container:
       image: ${{ needs.rocm-config.outputs.docker-image }} # zizmor: ignore[unpinned-images] image is pinned in the rocm-config job.
       volumes: &rocm_container_volumes
@@ -137,8 +138,23 @@ jobs:
           wget -O build_tools/rocm/execute_ci_build_upstream.sh "${EXECUTE_CI_BUILD_URL}"
           chmod +x build_tools/rocm/execute_ci_build_upstream.sh
 
+      - name: Fetch Run CI test Upstream Script from ROCm/xla
+        run: |
+          wget -O build_tools/rocm/run_xla_ci_build.sh "${RUN_XAL_CI_BUILD_URL}"
+          chmod +x build_tools/rocm/run_xla_ci_build.sh
+
       - name: CPU Info
         run: lscpu
+
+      - name: ROCm info
+        run: |
+          if command -v rocminfo >/dev/null 2>&1; then
+            "$(command -v rocminfo)"
+          elif [ -x /opt/rocm/bin/rocminfo ]; then
+            /opt/rocm/bin/rocminfo
+          else
+            echo "rocminfo not found in this container image; skipping diagnostic step."
+          fi
 
       - name: Test XLA [single_gpu]
         env:
