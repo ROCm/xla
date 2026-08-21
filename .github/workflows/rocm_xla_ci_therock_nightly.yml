@@ -89,7 +89,7 @@ jobs:
     timeout-minutes: 220
     env:
       DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
-      EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/execute_ci_build_upstream.sh
+      EXECUTE_DETECT_THEROCK_VERSION_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/detect-therock-version.sh
     container:
       image: ${{ needs.rocm-config.outputs.docker-image }} # zizmor: ignore[unpinned-images] image is pinned in the rocm-config job.
       volumes: &rocm_container_volumes
@@ -115,6 +115,11 @@ jobs:
         with:
           repository: openxla/xla
           persist-credentials: false
+
+      - name: Fetch theRock version detection from ROCm/xla
+        run: |
+          wget -O build_tools/rocm/detect-therock-version.sh "${EXECUTE_DETECT_THEROCK_VERSION_URL}"
+          chmod +x build_tools/rocm/detect-therock-version.sh
 
       - name: Resolve TheRock index URL and version
         id: therock
