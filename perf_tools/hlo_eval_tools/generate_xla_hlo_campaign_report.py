@@ -1030,7 +1030,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <div class="table-wrap"><table><thead><tr><th>Branch</th><th>Commit</th><th>Build</th><th>Pass</th><th>Fail</th><th>Skipped (empty)</th><th>Workload success</th><th>Evidence</th></tr></thead><tbody id="branch-body"></tbody></table></div>
 
 <h2>Model performance across branches</h2>
-<p class="muted">Select one model workload and HLO. The graph shows performance relative to the pinned live control (1.0×; higher is faster), while the table preserves absolute latency. The ±2% band is a review threshold—not a confidence interval or proof of regression. Summed latency is the sum of independently executed HLO modules, not end-to-end model latency.</p>
+<p class="muted">Select one model workload and HLO. The graph shows performance relative to the pinned live control (1.0×; higher is faster), while the table preserves absolute latency. The ±2% band is a review threshold—not a confidence interval or proof of regression. Summed latency is the sum of independently executed HLO modules, not end-to-end model latency. Selectors include only HLOs with at least one measured branch; failed-only HLOs remain available in the failure sections.</p>
 <div class="controls performance-controls">
 <label>Domain<select id="perf-domain"></select></label>
 <label>Model<select id="perf-model"></select></label>
@@ -1078,6 +1078,7 @@ const option=(value,label=value)=>`<option value="${esc(value)}">${esc(label)}</
 const branchBySlug=Object.fromEntries(DATA.branches.map(branch=>[branch.slug,branch]));
 const failureById=Object.fromEntries(DATA.failures.map(failure=>[failure.id,failure]));
 const performance=DATA.performance;
+const selectablePerformance=performance.filter(row=>row.status==="pass"&&row.latency_ms!=null);
 const performanceSums=DATA.performance_sums||[];
 const performanceExtremes=DATA.performance_extremes||[];
 const reviewThreshold=DATA.performance_review_threshold_percent||2;
@@ -1099,8 +1100,8 @@ function performanceFilters(){
 }
 function cascadePerformance(){
  const previous=performanceFilters();
- setSelect("perf-domain",uniq(performance.map(r=>r.domain)),previous.domain,"vision_diffusion");
- let subset=performance.filter(r=>r.domain===byId("perf-domain").value);
+ setSelect("perf-domain",uniq(selectablePerformance.map(r=>r.domain)),previous.domain,"vision_diffusion");
+ let subset=selectablePerformance.filter(r=>r.domain===byId("perf-domain").value);
  setSelect("perf-model",uniq(subset.map(r=>r.model)),previous.model,"efficientnet");
  subset=subset.filter(r=>r.model===byId("perf-model").value);
  setSelect("perf-mode",uniq(subset.map(r=>r.mode)),previous.mode,"inference");
