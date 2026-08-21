@@ -88,12 +88,12 @@ jobs:
     runs-on: ${{ inputs.runner_label || 'linux-xla-do-mi350x-1' }}
     timeout-minutes: 220
     env:
-      DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
+      DOCKER_IMAGE: ${{ needs.execute-xla-ut-therock-ci.outputs.docker-image }}
       EXECUTE_DETECT_THEROCK_VERSION_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/detect-therock-version.sh
       EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/execute_ci_build_upstream.sh
       RUN_XAL_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/run_xla_ci_build.sh
     container:
-      image: ${{ needs.rocm-config.outputs.docker-image }} # zizmor: ignore[unpinned-images] image is pinned in the rocm-config job.
+      image: ${{ needs.execute-xla-ut-therock-ci.outputs.docker-image }} # zizmor: ignore[unpinned-images] image is pinned in the rocm-config job.
       volumes: &rocm_container_volumes
         - /data/ci-cert.crt:/data/ci-cert.crt
         - /data/ci-cert.key:/data/ci-cert.key
