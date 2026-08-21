@@ -38,8 +38,8 @@ XgmiTopologyInfo GetRocmXgmiTopology(absl::string_view pci_bus_id) {
 
   std::optional<SmiDeviceHandle> device = FindDevice(*bdf);
   if (!device.has_value()) {
-    LOG(WARNING) << kSmiLibraryName << " could not find device for PCI bus ID "
-                 << pci_bus_id << " (xGMI query)";
+    LOG(WARNING) << "SMI could not find device for PCI bus ID " << pci_bus_id
+                 << " (xGMI query)";
     return info;
   }
 
@@ -64,8 +64,8 @@ XgmiTopologyInfo GetRocmXgmiTopology(absl::string_view pci_bus_id) {
 
   info.active_links = xgmi_links;
 
-  VLOG(1) << "xGMI topology for " << pci_bus_id << " via " << kSmiLibraryName
-          << ": " << xgmi_links << " active xGMI links"
+  VLOG(1) << "xGMI topology for " << pci_bus_id << ": " << xgmi_links
+          << " active xGMI links"
           << " (hive_id=" << info.hive_id << ", num_devices=" << devices.size()
           << ")";
 

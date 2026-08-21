@@ -17,7 +17,6 @@ limitations under the License.
 #include <optional>
 #include <vector>
 
-#include "absl/base/attributes.h"
 #include "absl/strings/string_view.h"
 #include "rocm/include/amd_smi/amdsmi.h"
 #include "xla/stream_executor/rocm/rocm_smi_util.h"
@@ -36,8 +35,6 @@ SmiDeviceHandle ToDeviceHandle(amdsmi_processor_handle processor) {
 
 }  // namespace
 
-ABSL_CONST_INIT const absl::string_view kSmiLibraryName = "amd_smi";
-
 bool InitRocmSmi() {
   static bool initialized = []() {
     amdsmi_status_t status = amdsmi_init(AMDSMI_INIT_AMD_GPUS);
@@ -48,6 +45,7 @@ bool InitRocmSmi() {
                    << (err_str ? err_str : "unknown error");
       return false;
     }
+    VLOG(1) << "SMI device queries go through amd_smi.";
     return true;
   }();
   return initialized;

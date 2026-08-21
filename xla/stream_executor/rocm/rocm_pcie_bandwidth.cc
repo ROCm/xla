@@ -61,8 +61,7 @@ std::optional<int64_t> GetRocmPcieBandwidth(absl::string_view pci_bus_id) {
 
   std::optional<SmiDeviceHandle> device = FindDevice(*bdf);
   if (!device.has_value()) {
-    LOG(WARNING) << kSmiLibraryName << " could not find device for PCI bus ID "
-                 << pci_bus_id;
+    LOG(WARNING) << "SMI could not find device for PCI bus ID " << pci_bus_id;
     return std::nullopt;
   }
 
@@ -73,19 +72,18 @@ std::optional<int64_t> GetRocmPcieBandwidth(absl::string_view pci_bus_id) {
   uint16_t width = link->width;
 
   if (speed_mt_per_sec == 0 || width == 0) {
-    LOG(WARNING) << kSmiLibraryName << " reported zero PCIe speed ("
-                 << speed_mt_per_sec << " MT/s) or width (" << width
-                 << " lanes) for " << pci_bus_id;
+    LOG(WARNING) << "SMI reported zero PCIe speed (" << speed_mt_per_sec
+                 << " MT/s) or width (" << width << " lanes) for "
+                 << pci_bus_id;
     return std::nullopt;
   }
 
   int64_t bandwidth =
       ComputePcieBandwidthFromSpeedAndWidth(speed_mt_per_sec, width);
 
-  VLOG(1) << "PCIe bandwidth for " << pci_bus_id << " via " << kSmiLibraryName
-          << ": " << speed_mt_per_sec << " MT/s x" << width << " = "
-          << bandwidth / (1024 * 1024 * 1024) << " GB/s (" << bandwidth
-          << " bytes/s)";
+  VLOG(1) << "PCIe bandwidth for " << pci_bus_id << ": " << speed_mt_per_sec
+          << " MT/s x" << width << " = " << bandwidth / (1024 * 1024 * 1024)
+          << " GB/s (" << bandwidth << " bytes/s)";
 
   return bandwidth;
 }

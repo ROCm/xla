@@ -19,7 +19,6 @@ limitations under the License.
 #include <optional>
 #include <vector>
 
-#include "absl/base/attributes.h"
 #include "absl/strings/string_view.h"
 #include "xla/stream_executor/rocm/rocm_smi_util.h"
 #include "xla/tsl/platform/logging.h"
@@ -37,8 +36,6 @@ SmiDeviceHandle ToDeviceHandle(uint32_t device_index) {
 
 }  // namespace
 
-ABSL_CONST_INIT const absl::string_view kSmiLibraryName = "rocm_smi";
-
 bool InitRocmSmi() {
   static bool initialized = []() {
     rsmi_status_t status = rsmi_init(0);
@@ -49,6 +46,7 @@ bool InitRocmSmi() {
                    << (err_str ? err_str : "unknown error");
       return false;
     }
+    VLOG(1) << "SMI device queries go through rocm_smi.";
     return true;
   }();
   return initialized;

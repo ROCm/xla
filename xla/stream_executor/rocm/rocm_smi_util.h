@@ -58,10 +58,6 @@ struct PcieLinkStatus {
   uint16_t width;
 };
 
-// Name of the SMI library this build talks to, "amd_smi" or "rocm_smi".
-// Included in SMI log messages so it is obvious which backend produced them.
-ABSL_CONST_INIT extern const absl::string_view kSmiLibraryName;
-
 // Process-global lock serializing all SMI access from XLA. rocm_smi only
 // guards state with a per-device mutex, but some of it is global (e.g. the
 // shared gpu_metrics object), so concurrent queries on different devices race.
