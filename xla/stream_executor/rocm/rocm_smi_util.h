@@ -18,6 +18,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/base/attributes.h"
+#include "absl/base/thread_annotations.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 
@@ -69,33 +70,37 @@ ABSL_CONST_INIT extern const absl::string_view kSmiLibraryName;
 ABSL_CONST_INIT extern absl::Mutex rocm_smi_mutex;
 
 // Returns true if the SMI library was successfully initialized.
-bool InitRocmSmi();
+bool InitRocmSmi() ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
 
 // Parses a PCI bus ID string (e.g., "0000:41:00.0") into its BDF components.
-// Returns std::nullopt on parse failure.
+// Returns std::nullopt on parse failure. Touches no SMI state, so it needs no
+// lock.
 std::optional<BdfComponents> ParseBdf(absl::string_view pci_bus_id);
 
 // Returns handles for every SMI visible GPU, in SMI enumeration order. Empty
-// on failure. Callers must hold rocm_smi_mutex.
-std::vector<SmiDeviceHandle> EnumerateDevices();
+// on failure.
+std::vector<SmiDeviceHandle> EnumerateDevices()
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
 
 // Finds the SMI device that matches the given PCI bus ID.
-// Returns std::nullopt if not found. Callers must hold rocm_smi_mutex.
-std::optional<SmiDeviceHandle> FindDevice(const BdfComponents& target_bdf);
+// Returns std::nullopt if not found.
+std::optional<SmiDeviceHandle> FindDevice(const BdfComponents& target_bdf)
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
 
 // Returns the current PCIe link speed and width of the device, or std::nullopt
-// if the query fails. Callers must hold rocm_smi_mutex.
+// if the query fails.
 std::optional<PcieLinkStatus> QueryPcieLinkStatus(SmiDeviceHandle device,
-                                                  absl::string_view pci_bus_id);
+                                                  absl::string_view pci_bus_id)
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
 
 // Returns the xGMI hive ID of the device, or std::nullopt if the query fails
-// (typically because the device is not part of a hive). Callers must hold
-// rocm_smi_mutex.
-std::optional<uint64_t> QueryHiveId(SmiDeviceHandle device);
+// (typically because the device is not part of a hive).
+std::optional<uint64_t> QueryHiveId(SmiDeviceHandle device)
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
 
-// Returns true if src reaches dst over an xGMI link. Callers must hold
-// rocm_smi_mutex.
-bool IsXgmiPeer(SmiDeviceHandle src, SmiDeviceHandle dst);
+// Returns true if src reaches dst over an xGMI link.
+bool IsXgmiPeer(SmiDeviceHandle src, SmiDeviceHandle dst)
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
 
 }  // namespace stream_executor::gpu
 
