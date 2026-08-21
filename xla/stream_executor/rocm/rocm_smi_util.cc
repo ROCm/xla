@@ -16,10 +16,12 @@ limitations under the License.
 #include "xla/stream_executor/rocm/rocm_smi_util.h"
 
 #include <cstddef>
-#include <optional>
 
 #include "absl/base/attributes.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 
@@ -32,13 +34,18 @@ ABSL_CONST_INIT absl::Mutex rocm_smi_mutex(absl::kConstInit);
 //   DDDD:BB:DD.F - domain:bus:device.function (e.g. "0000:41:00.0")
 //   BB:DD.F      - bus:device.function, domain defaults to 0
 // All fields are hex
-std::optional<BdfComponents> ParseBdf(absl::string_view pci_bus_id) {
+absl::StatusOr<BdfComponents> ParseBdf(absl::string_view pci_bus_id) {
+  const auto invalid = [&] {
+    return absl::InvalidArgumentError(
+        absl::StrCat("cannot parse PCI bus ID: ", pci_bus_id));
+  };
+
   BdfComponents bdf = {};
 
   // Determine which format we have by counting colons.
   // Two colons -> DDDD:BB:DD.F, one colon -> BB:DD.F.
   size_t first_colon = pci_bus_id.find(':');
-  if (first_colon == absl::string_view::npos) return std::nullopt;
+  if (first_colon == absl::string_view::npos) return invalid();
 
   size_t second_colon = pci_bus_id.find(':', first_colon + 1);
   size_t dot;
@@ -46,34 +53,34 @@ std::optional<BdfComponents> ParseBdf(absl::string_view pci_bus_id) {
   if (second_colon != absl::string_view::npos) {
     // DDDD:BB:DD.F format
     dot = pci_bus_id.find('.', second_colon + 1);
-    if (dot == absl::string_view::npos) return std::nullopt;
+    if (dot == absl::string_view::npos) return invalid();
 
     if (!absl::SimpleHexAtoi(pci_bus_id.substr(0, first_colon), &bdf.domain))
-      return std::nullopt;
+      return invalid();
     if (!absl::SimpleHexAtoi(
             pci_bus_id.substr(first_colon + 1, second_colon - first_colon - 1),
             &bdf.bus))
-      return std::nullopt;
+      return invalid();
     if (!absl::SimpleHexAtoi(
             pci_bus_id.substr(second_colon + 1, dot - second_colon - 1),
             &bdf.device))
-      return std::nullopt;
+      return invalid();
     if (!absl::SimpleHexAtoi(pci_bus_id.substr(dot + 1), &bdf.function))
-      return std::nullopt;
+      return invalid();
   } else {
     // BB:DD.F format (domain = 0)
     dot = pci_bus_id.find('.', first_colon + 1);
-    if (dot == absl::string_view::npos) return std::nullopt;
+    if (dot == absl::string_view::npos) return invalid();
 
     bdf.domain = 0;
     if (!absl::SimpleHexAtoi(pci_bus_id.substr(0, first_colon), &bdf.bus))
-      return std::nullopt;
+      return invalid();
     if (!absl::SimpleHexAtoi(
             pci_bus_id.substr(first_colon + 1, dot - first_colon - 1),
             &bdf.device))
-      return std::nullopt;
+      return invalid();
     if (!absl::SimpleHexAtoi(pci_bus_id.substr(dot + 1), &bdf.function))
-      return std::nullopt;
+      return invalid();
   }
 
   return bdf;

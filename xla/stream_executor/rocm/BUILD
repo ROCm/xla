@@ -403,7 +403,10 @@ cc_library(
         ":smi",
         "//xla/tsl/platform:logging",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
         "@local_config_rocm//rocm:rocm_headers",
     ],
@@ -420,6 +423,8 @@ cc_library(
     deps = [
         ":rocm_smi_util",
         "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
     ],
@@ -449,6 +454,8 @@ cc_library(
     deps = [
         ":rocm_smi_util",
         "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
     ],

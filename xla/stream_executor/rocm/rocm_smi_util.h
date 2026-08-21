@@ -14,11 +14,12 @@ limitations under the License.
 #define XLA_STREAM_EXECUTOR_ROCM_ROCM_SMI_UTIL_H_
 
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 #include "absl/base/attributes.h"
 #include "absl/base/thread_annotations.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 
@@ -65,37 +66,32 @@ struct PcieLinkStatus {
 // full SMI call sequence.
 ABSL_CONST_INIT extern absl::Mutex rocm_smi_mutex;
 
-// Returns true if the SMI library was successfully initialized.
-bool InitRocmSmi() ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
+// Initializes the SMI library, at most once per process.
+absl::Status InitRocmSmi() ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
 
 // Parses a PCI bus ID string (e.g., "0000:41:00.0") into its BDF components.
-// Returns std::nullopt on parse failure. Touches no SMI state, so it needs no
-// lock.
-std::optional<BdfComponents> ParseBdf(absl::string_view pci_bus_id);
+// Touches no SMI state, so it needs no lock.
+absl::StatusOr<BdfComponents> ParseBdf(absl::string_view pci_bus_id);
 
-// Returns handles for every SMI visible GPU, in SMI enumeration order. Empty
-// on failure.
-std::vector<SmiDeviceHandle> EnumerateDevices()
+// Returns handles for every SMI visible GPU, in SMI enumeration order.
+absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices()
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
 
 // Finds the SMI device that matches the given PCI bus ID.
-// Returns std::nullopt if not found.
-std::optional<SmiDeviceHandle> FindDevice(const BdfComponents& target_bdf)
+absl::StatusOr<SmiDeviceHandle> FindDevice(const BdfComponents& target_bdf)
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
 
-// Returns the current PCIe link speed and width of the device, or std::nullopt
-// if the query fails.
-std::optional<PcieLinkStatus> QueryPcieLinkStatus(SmiDeviceHandle device,
-                                                  absl::string_view pci_bus_id)
+// Returns the current PCIe link speed and width of the device.
+absl::StatusOr<PcieLinkStatus> QueryPcieLinkStatus(SmiDeviceHandle device)
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
 
-// Returns the xGMI hive ID of the device, or std::nullopt if the query fails
-// (typically because the device is not part of a hive).
-std::optional<uint64_t> QueryHiveId(SmiDeviceHandle device)
+// Returns the xGMI hive ID of the device. Fails if it is not in a hive, which
+// SMI does not distinguish from a failed query.
+absl::StatusOr<uint64_t> QueryHiveId(SmiDeviceHandle device)
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
 
 // Returns true if src reaches dst over an xGMI link.
-bool IsXgmiPeer(SmiDeviceHandle src, SmiDeviceHandle dst)
+absl::StatusOr<bool> IsXgmiPeer(SmiDeviceHandle src, SmiDeviceHandle dst)
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(rocm_smi_mutex);
 
 }  // namespace stream_executor::gpu

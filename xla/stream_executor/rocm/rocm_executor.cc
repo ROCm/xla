@@ -1169,12 +1169,13 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
   }
 
   {
-    std::optional<int64_t> pcie_bw = gpu::GetRocmPcieBandwidth(pci_bus_id);
-    if (pcie_bw.has_value()) {
+    absl::StatusOr<int64_t> pcie_bw = gpu::GetRocmPcieBandwidth(pci_bus_id);
+    if (pcie_bw.ok()) {
       desc.set_pcie_bandwidth(*pcie_bw);
     } else {
-      LOG(WARNING) << "Could not determine PCIe bandwidth for device "
-                   << device_ordinal << " via SMI. Assuming PCIe Gen4 x16.";
+      LOG_FIRST_N(WARNING, 8)
+          << "Could not determine PCIe bandwidth for device " << device_ordinal
+          << " via SMI (" << pcie_bw.status() << "). Assuming PCIe Gen4 x16.";
       desc.set_pcie_bandwidth(32LL * 1024 * 1024 * 1024);
     }
   }

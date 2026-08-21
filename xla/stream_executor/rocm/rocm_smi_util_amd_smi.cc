@@ -14,9 +14,12 @@ limitations under the License.
 // from ROCm 7.13 on; rocm_smi_util_rocm_smi.cc takes its place below that.
 
 #include <cstdint>
-#include <optional>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "rocm/include/amd_smi/amdsmi.h"
 #include "xla/stream_executor/rocm/rocm_smi_util.h"
@@ -33,36 +36,39 @@ SmiDeviceHandle ToDeviceHandle(amdsmi_processor_handle processor) {
   return SmiDeviceHandle{reinterpret_cast<uintptr_t>(processor)};
 }
 
-}  // namespace
-
-bool InitRocmSmi() {
-  static bool initialized = []() {
-    amdsmi_status_t status = amdsmi_init(AMDSMI_INIT_AMD_GPUS);
-    if (status != AMDSMI_STATUS_SUCCESS) {
-      const char* err_str = nullptr;
-      amdsmi_status_code_to_string(status, &err_str);
-      LOG(WARNING) << "amdsmi_init failed: "
-                   << (err_str ? err_str : "unknown error");
-      return false;
-    }
-    VLOG(1) << "SMI device queries go through amd_smi.";
-    return true;
-  }();
-  return initialized;
+absl::Status SmiError(absl::string_view api, amdsmi_status_t status) {
+  const char* err_str = nullptr;
+  amdsmi_status_code_to_string(status, &err_str);
+  return absl::InternalError(
+      absl::StrCat(api, " failed: ", err_str ? err_str : "unknown error"));
 }
 
-std::vector<SmiDeviceHandle> EnumerateDevices() {
+}  // namespace
+
+absl::Status InitRocmSmi() {
+  static const absl::Status& status = *new absl::Status([]() -> absl::Status {
+    amdsmi_status_t status = amdsmi_init(AMDSMI_INIT_AMD_GPUS);
+    if (status != AMDSMI_STATUS_SUCCESS) {
+      return SmiError("amdsmi_init", status);
+    }
+    VLOG(1) << "SMI device queries go through amd_smi.";
+    return absl::OkStatus();
+  }());
+  return status;
+}
+
+absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {
   uint32_t num_sockets = 0;
-  if (amdsmi_get_socket_handles(&num_sockets, nullptr) !=
-          AMDSMI_STATUS_SUCCESS ||
-      num_sockets == 0) {
-    return {};
+  if (amdsmi_status_t status = amdsmi_get_socket_handles(&num_sockets, nullptr);
+      status != AMDSMI_STATUS_SUCCESS) {
+    return SmiError("amdsmi_get_socket_handles", status);
   }
 
   std::vector<amdsmi_socket_handle> sockets(num_sockets);
-  if (amdsmi_get_socket_handles(&num_sockets, sockets.data()) !=
-      AMDSMI_STATUS_SUCCESS) {
-    return {};
+  if (amdsmi_status_t status =
+          amdsmi_get_socket_handles(&num_sockets, sockets.data());
+      status != AMDSMI_STATUS_SUCCESS) {
+    return SmiError("amdsmi_get_socket_handles", status);
   }
 
   std::vector<SmiDeviceHandle> devices;
@@ -97,7 +103,7 @@ std::vector<SmiDeviceHandle> EnumerateDevices() {
   return devices;
 }
 
-std::optional<SmiDeviceHandle> FindDevice(const BdfComponents& target_bdf) {
+absl::StatusOr<SmiDeviceHandle> FindDevice(const BdfComponents& target_bdf) {
   amdsmi_bdf_t bdf = {};
   bdf.bdf.domain_number = target_bdf.domain;
   bdf.bdf.bus_number = target_bdf.bus;
@@ -108,23 +114,21 @@ std::optional<SmiDeviceHandle> FindDevice(const BdfComponents& target_bdf) {
   if (amdsmi_get_processor_handle_from_bdf(bdf, &handle) !=
           AMDSMI_STATUS_SUCCESS ||
       handle == nullptr) {
-    return std::nullopt;
+    return absl::NotFoundError(
+        absl::StrFormat("amd_smi exposes no device with BDF %04x:%02x:%02x.%x",
+                        target_bdf.domain, target_bdf.bus, target_bdf.device,
+                        target_bdf.function));
   }
 
   return ToDeviceHandle(handle);
 }
 
-std::optional<PcieLinkStatus> QueryPcieLinkStatus(
-    SmiDeviceHandle device, absl::string_view pci_bus_id) {
+absl::StatusOr<PcieLinkStatus> QueryPcieLinkStatus(SmiDeviceHandle device) {
   amdsmi_pcie_info_t pcie_info = {};
-  amdsmi_status_t status =
-      amdsmi_get_pcie_info(ToProcessorHandle(device), &pcie_info);
-  if (status != AMDSMI_STATUS_SUCCESS) {
-    const char* err_str = nullptr;
-    amdsmi_status_code_to_string(status, &err_str);
-    LOG(WARNING) << "amdsmi_get_pcie_info failed for " << pci_bus_id << ": "
-                 << (err_str ? err_str : "unknown error");
-    return std::nullopt;
+  if (amdsmi_status_t status =
+          amdsmi_get_pcie_info(ToProcessorHandle(device), &pcie_info);
+      status != AMDSMI_STATUS_SUCCESS) {
+    return SmiError("amdsmi_get_pcie_info", status);
   }
 
   // amdsmi.h documents pcie_metric.pcie_speed as "current PCIe speed in MT/s",
@@ -133,22 +137,24 @@ std::optional<PcieLinkStatus> QueryPcieLinkStatus(
                         pcie_info.pcie_metric.pcie_width};
 }
 
-std::optional<uint64_t> QueryHiveId(SmiDeviceHandle device) {
+absl::StatusOr<uint64_t> QueryHiveId(SmiDeviceHandle device) {
   amdsmi_xgmi_info_t xgmi_info = {};
-  if (amdsmi_get_xgmi_info(ToProcessorHandle(device), &xgmi_info) !=
-      AMDSMI_STATUS_SUCCESS) {
-    return std::nullopt;
+  if (amdsmi_status_t status =
+          amdsmi_get_xgmi_info(ToProcessorHandle(device), &xgmi_info);
+      status != AMDSMI_STATUS_SUCCESS) {
+    return SmiError("amdsmi_get_xgmi_info", status);
   }
   return xgmi_info.xgmi_hive_id;
 }
 
-bool IsXgmiPeer(SmiDeviceHandle src, SmiDeviceHandle dst) {
+absl::StatusOr<bool> IsXgmiPeer(SmiDeviceHandle src, SmiDeviceHandle dst) {
   // The API rejects a null hops pointer; only the link type is used.
   uint64_t hops = 0;
   amdsmi_link_type_t link_type = AMDSMI_LINK_TYPE_UNKNOWN;
-  if (amdsmi_topo_get_link_type(ToProcessorHandle(src), ToProcessorHandle(dst),
-                                &hops, &link_type) != AMDSMI_STATUS_SUCCESS) {
-    return false;
+  if (amdsmi_status_t status = amdsmi_topo_get_link_type(
+          ToProcessorHandle(src), ToProcessorHandle(dst), &hops, &link_type);
+      status != AMDSMI_STATUS_SUCCESS) {
+    return SmiError("amdsmi_topo_get_link_type", status);
   }
   return link_type == AMDSMI_LINK_TYPE_XGMI;
 }

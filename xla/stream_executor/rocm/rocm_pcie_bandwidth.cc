@@ -13,8 +13,10 @@ limitations under the License.
 #include "xla/stream_executor/rocm/rocm_pcie_bandwidth.h"
 
 #include <cstdint>
-#include <optional>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "xla/stream_executor/rocm/rocm_smi_util.h"
@@ -48,34 +50,27 @@ constexpr int64_t ComputePcieBandwidthFromSpeedAndWidth(
 
 }  // namespace
 
-std::optional<int64_t> GetRocmPcieBandwidth(absl::string_view pci_bus_id) {
+absl::StatusOr<int64_t> GetRocmPcieBandwidth(absl::string_view pci_bus_id) {
   absl::MutexLock lock(rocm_smi_mutex);
 
-  if (!InitRocmSmi()) return std::nullopt;
+  if (absl::Status init = InitRocmSmi(); !init.ok()) return init;
 
-  std::optional<BdfComponents> bdf = ParseBdf(pci_bus_id);
-  if (!bdf.has_value()) {
-    LOG(WARNING) << "Failed to parse PCI bus ID: " << pci_bus_id;
-    return std::nullopt;
-  }
+  absl::StatusOr<BdfComponents> bdf = ParseBdf(pci_bus_id);
+  if (!bdf.ok()) return bdf.status();
 
-  std::optional<SmiDeviceHandle> device = FindDevice(*bdf);
-  if (!device.has_value()) {
-    LOG(WARNING) << "SMI could not find device for PCI bus ID " << pci_bus_id;
-    return std::nullopt;
-  }
+  absl::StatusOr<SmiDeviceHandle> device = FindDevice(*bdf);
+  if (!device.ok()) return device.status();
 
-  std::optional<PcieLinkStatus> link = QueryPcieLinkStatus(*device, pci_bus_id);
-  if (!link.has_value()) return std::nullopt;
+  absl::StatusOr<PcieLinkStatus> link = QueryPcieLinkStatus(*device);
+  if (!link.ok()) return link.status();
 
   uint32_t speed_mt_per_sec = link->speed_mt_per_sec;
   uint16_t width = link->width;
 
   if (speed_mt_per_sec == 0 || width == 0) {
-    LOG(WARNING) << "SMI reported zero PCIe speed (" << speed_mt_per_sec
-                 << " MT/s) or width (" << width << " lanes) for "
-                 << pci_bus_id;
-    return std::nullopt;
+    return absl::InternalError(
+        absl::StrCat("SMI reported zero PCIe speed (", speed_mt_per_sec,
+                     " MT/s) or width (", width, " lanes)"));
   }
 
   int64_t bandwidth =
