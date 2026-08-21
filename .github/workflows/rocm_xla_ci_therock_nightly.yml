@@ -91,6 +91,8 @@ jobs:
       DOCKER_IMAGE: ${{ needs.execute-xla-ut-therock-ci.outputs.docker-image }}
       EXECUTE_DETECT_THEROCK_VERSION_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/detect-therock-version.sh
       EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/execute_ci_build_upstream.sh
+      ROCM_CONFIGURE_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/rocm_configure.bzl
+
     container:
       image: ${{ needs.execute-xla-ut-therock-ci.outputs.docker-image }} # zizmor: ignore[unpinned-images] image is pinned in the rocm-config job.
       volumes: &rocm_container_volumes
@@ -136,6 +138,10 @@ jobs:
         run: |
           wget -O build_tools/rocm/execute_ci_build_upstream.sh "${EXECUTE_CI_BUILD_URL}"
           chmod +x build_tools/rocm/execute_ci_build_upstream.sh
+
+      - name: Fetch ROCm configure bzl from ROCm/xla
+        run: |
+          wget -O third_party/gpus/rocm_configure.bzl "${ROCM_CONFIGURE_URL}"
 
       - name: CPU Info
         run: lscpu
