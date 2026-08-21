@@ -371,7 +371,7 @@ executed. It contains:
 
 - campaign timestamps and running/completed/interrupted status;
 - effective repeat, argument, command-buffer, ordering, and settle settings;
-- host and visible-device metadata;
+- host, ROCm version, visible GPU architecture, and device metadata;
 - each target's role, label, revision, resolved commit ID, and output slug;
 - per-target build/evaluation exit codes, errors, and artifact paths;
 - and the selected HLO workload/module inventory, including failed workloads that
