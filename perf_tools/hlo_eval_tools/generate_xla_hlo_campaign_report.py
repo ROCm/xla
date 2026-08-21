@@ -75,6 +75,57 @@ def validate_campaign_manifest(
         )
 
 
+def extract_rocm_version(environment: dict[str, Any]) -> str | None:
+    """Read ROCm version from current or archived environment metadata."""
+    value = environment.get("rocm_version")
+    if isinstance(value, str) and value:
+        return value
+    hipcc = environment.get("hipcc")
+    if not isinstance(hipcc, str):
+        return None
+    for pattern in (
+        r"\broc-(\d+\.\d+\.\d+)\b",
+        r"/opt/rocm-(\d+\.\d+\.\d+)\b",
+    ):
+        match = re.search(pattern, hipcc)
+        if match:
+            return match.group(1)
+    return None
+
+
+def extract_gpu_architectures(
+    environment: dict[str, Any],
+) -> list[str]:
+    """Read exact visible gfx architecture names from campaign metadata."""
+    values = environment.get("gpu_architectures")
+    if isinstance(values, list):
+        return sorted(
+            {
+                value.lower()
+                for value in values
+                if isinstance(value, str)
+                and re.fullmatch(r"gfx[0-9a-z]+", value, re.IGNORECASE)
+            }
+        )
+    if isinstance(values, str) and re.fullmatch(
+        r"gfx[0-9a-z]+", values, re.IGNORECASE
+    ):
+        return [values.lower()]
+    rocm_smi = environment.get("rocm_smi")
+    if not isinstance(rocm_smi, str):
+        return []
+    return sorted(
+        {
+            match.group(1).lower()
+            for match in re.finditer(
+                r"GFX Version:\s*(gfx[0-9a-z]+)",
+                rocm_smi,
+                flags=re.IGNORECASE,
+            )
+        }
+    )
+
+
 def extract_workload_leaf_from_hlo_path(path: str) -> str:
     marker = "/hlo_eval_tools/"
     return path.split(marker, 1)[1] if marker in path else Path(path).name
@@ -908,9 +959,6 @@ def build_campaign_report_data(campaign_dir: Path) -> dict[str, Any]:
     )
 
     environment = manifest.get("environment", {})
-    profile = manifest.get("profile", {})
-    environment_gpu = environment.get("gpu")
-    container = environment.get("container", {})
     return {
         "campaign": {
             "id": campaign_dir.name,
@@ -920,23 +968,8 @@ def build_campaign_report_data(campaign_dir: Path) -> dict[str, Any]:
             "directory": str(campaign_dir),
             "hostname": environment.get("hostname"),
             "platform": environment.get("platform"),
-            "gpu": (
-                environment_gpu.get("identity")
-                if isinstance(environment_gpu, dict)
-                else environment_gpu
-                if isinstance(environment_gpu, str)
-                else profile.get("reference", {}).get("gpu")
-            ),
-            "container_identity": (
-                container.get("identity")
-                if isinstance(container, dict)
-                else None
-            ),
-            "container_capture_method": (
-                container.get("capture_method")
-                if isinstance(container, dict)
-                else None
-            ),
+            "rocm_version": extract_rocm_version(environment),
+            "gpu_architectures": extract_gpu_architectures(environment),
             "benchmark": benchmark,
         },
         "branches": branches,
@@ -1137,7 +1170,7 @@ function inspectFailure(id){
 async function copyRepro(id){const f=failureById[id];try{await navigator.clipboard.writeText(f.repro_command);byId("copy-status").textContent="Copied"}catch(error){byId("copy-status").textContent="Select and copy the command below"}}
 function filterCategory(category){byId("category-filter").value=category;renderFailures();byId("failure-search").scrollIntoView({behavior:"smooth",block:"center"})}
 function renderProvenance(){
- const c=DATA.campaign,b=c.benchmark||{};byId("provenance").innerHTML=`<div><strong>Execution environment</strong><br>Host: ${esc(c.hostname||"N/A")}<br>Platform: ${esc(c.platform||"N/A")}<br>GPU: ${esc(c.gpu||"Not captured")}<br>Container identity: <code>${esc(c.container_identity||"Not captured")}</code></div><div><strong>Perf-tool configuration</strong><br>Repeats: ${esc(b.num_repeats??"N/A")}<br>Argument mode: <code>${esc(b.arg_mode||"N/A")}</code><br>Command buffer: ${esc(b.cmd_buffer||"N/A")}<br>Settle seconds: ${esc(b.settle_sec??"N/A")}</div>`;
+ const c=DATA.campaign,b=c.benchmark||{},gpu=c.gpu_architectures?.length?c.gpu_architectures.join(", "):"Not captured",rocm=c.rocm_version?`ROCm ${c.rocm_version}`:"Not captured";byId("provenance").innerHTML=`<div><strong>Execution environment</strong><br>Host: ${esc(c.hostname||"N/A")}<br>Platform: ${esc(c.platform||"N/A")}<br>GPU: <code>${esc(gpu)}</code><br>ROCm version: <code>${esc(rocm)}</code></div><div><strong>Perf-tool configuration</strong><br>Repeats: ${esc(b.num_repeats??"N/A")}<br>Argument mode: <code>${esc(b.arg_mode||"N/A")}</code><br>Command buffer: ${esc(b.cmd_buffer||"N/A")}<br>Settle seconds: ${esc(b.settle_sec??"N/A")}</div>`;
 }
 renderHeader();renderBranches();cascadePerformance();renderSignatures();renderMatrix();populateFilters();renderFailures();renderProvenance();
 byId("matrix-search").addEventListener("input",renderMatrix);["branch-filter","category-filter","mode-filter","gpu-filter"].forEach(id=>byId(id).addEventListener("change",renderFailures));byId("failure-search").addEventListener("input",renderFailures);
