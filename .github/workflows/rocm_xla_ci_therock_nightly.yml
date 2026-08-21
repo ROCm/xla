@@ -124,7 +124,7 @@ jobs:
           ROCM_SDK_VERSION: ${{ inputs.rocm_sdk_version || '10.0' }}
           PIP_INDEX_PATH: ${{ inputs.pip_index_path || '' }}
           THEROCK_INDEX_URL: ${{ inputs.therock_index_url || '' }}
-        run: bash buildtools/rocm/detect-therock-version.sh
+        run: bash build_tools/rocm/detect-therock-version.sh
 
 
       - name: CPU Info
