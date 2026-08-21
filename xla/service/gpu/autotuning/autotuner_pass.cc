@@ -322,6 +322,10 @@ ProfileOptions GetProfileOptions(const DebugOptions& debug_options,
   profile_options.should_init_buffers = check_buffers;
   profile_options.cache_flush_bytes =
       debug_options.xla_gpu_autotune_cache_flush_bytes();
+  profile_options.cache_flush_memory_bound_only =
+      debug_options.xla_gpu_autotune_cache_flush_memory_bound_only();
+  profile_options.cache_flush_max_working_set_bytes =
+      debug_options.xla_gpu_autotune_cache_flush_max_working_set_bytes();
   return profile_options;
 }
 

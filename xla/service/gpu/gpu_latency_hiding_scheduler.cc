@@ -323,6 +323,9 @@ std::optional<bool> IsMemoryBoundFromCostModel(const HloInstruction& hlo) {
   return std::nullopt;
 }
 
+
+}  // namespace
+
 // Classifies kernels that are dominated by HBM bandwidth rather than compute.
 // Overlapping an async D2D memcpy with such a kernel provides little latency
 // hiding because both contend for memory bandwidth.
@@ -355,8 +358,6 @@ bool IsMemoryBoundKernel(const HloInstruction& hlo) {
       return true;
   }
 }
-
-}  // namespace
 
 HloCostAnalysis::ShapeSizeFunction ShapeSizeBytesFunction(
     int64_t pointer_size, std::optional<int64_t> memory_space) {

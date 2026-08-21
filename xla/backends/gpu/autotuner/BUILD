@@ -438,6 +438,7 @@ cc_library(
         "//xla/service/gpu:backend_configs_cc",
         "//xla/service/gpu:gpu_executable",
         "//xla/service/gpu:gpu_executable_run_options",
+        "//xla/service/gpu:gpu_latency_hiding_scheduler",
         "//xla/service/gpu:stream_executor_util",
         "//xla/service/gpu/autotuning:redzone_buffers",
         "//xla/stream_executor:device_address",

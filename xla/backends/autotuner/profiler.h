@@ -41,6 +41,19 @@ struct ProfileOptions {
   // from a cold cache. Should exceed the last level cache. Zero disables
   // flushing, which is the historical behaviour.
   int64_t cache_flush_bytes = 0;
+  // Whether to restrict the flush to memory-bound instructions. A compute
+  // bound instruction is not measured out of cache in the first place, so
+  // flushing before it only adds a startup cost that varies between candidates
+  // and can perturb the ranking without correcting anything. Has no effect
+  // when cache_flush_bytes is zero.
+  bool cache_flush_memory_bound_only = true;
+  // Upper bound on an instruction's working set, inputs plus outputs, for the
+  // flush to apply. An instruction whose working set exceeds the last level
+  // cache already evicts itself between runs, so flushing before it corrects
+  // nothing. Stands in for the last level cache size, which DeviceDescription
+  // does not model. Zero falls back to cache_flush_bytes, which is chosen to
+  // exceed that cache, so the test errs towards flushing.
+  int64_t cache_flush_max_working_set_bytes = 0;
 };
 
 struct ProfileResult {

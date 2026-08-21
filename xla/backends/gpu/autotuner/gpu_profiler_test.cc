@@ -240,6 +240,86 @@ TEST_F(GpuProfilerTest, CacheFlushDoesNotChangeReportedDuration) {
   EXPECT_EQ(profile.duration, absl::Nanoseconds(1000));
 }
 
+// The flush is gated per instruction, and the gate is decided in
+// CreateInputBuffers because that is the only entry point handed the
+// HloInstruction. A dot is compute bound and must not be flushed; a plain
+// elementwise fusion is memory bound and must be.
+TEST_F(GpuProfilerTest, CacheFlushIsGatedOnMemoryBoundInstructions) {
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      p0 = f32[128,128] parameter(0)
+      p1 = f32[128,128] parameter(1)
+      ROOT d = f32[128,128] dot(p0, p1),
+        lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule));
+  MockExecutable mock_executable(module, /*duration_ns=*/1000);
+  const HloInstruction* dot = module->entry_computation()->root_instruction();
+  const HloInstruction* param = dot->operand(0);
+
+  ProfileOptions options;
+  options.cache_flush_bytes = 64 * 1024 * 1024;
+  options.cache_flush_memory_bound_only = true;
+  auto profiler = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> dot_buffers,
+                       profiler->CreateInputBuffers(&mock_executable, dot));
+  EXPECT_FALSE(static_cast<GpuInputBuffers*>(dot_buffers.get())->flush_cache);
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> param_buffers,
+                       profiler->CreateInputBuffers(&mock_executable, param));
+  EXPECT_TRUE(static_cast<GpuInputBuffers*>(param_buffers.get())->flush_cache);
+
+  // With the gate off, everything is flushed regardless of classification.
+  options.cache_flush_memory_bound_only = false;
+  auto ungated = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> ungated_buffers,
+                       ungated->CreateInputBuffers(&mock_executable, dot));
+  EXPECT_TRUE(
+      static_cast<GpuInputBuffers*>(ungated_buffers.get())->flush_cache);
+}
+
+// An instruction whose working set exceeds the cache already evicts itself
+// between runs, so flushing before it corrects nothing.
+TEST_F(GpuProfilerTest, CacheFlushIsGatedOnWorkingSetFittingInCache) {
+  // Two f32[1024] inputs and one f32[1024] output, so 12KB of working set.
+  constexpr int64_t kWorkingSetBytes = 3 * 1024 * sizeof(float);
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      p0 = f32[1024] parameter(0)
+      p1 = f32[1024] parameter(1)
+      ROOT a = f32[1024] add(p0, p1)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule));
+  MockExecutable mock_executable(module, /*duration_ns=*/1000);
+  const HloInstruction* add = module->entry_computation()->root_instruction();
+
+  ProfileOptions options;
+  options.cache_flush_bytes = 64 * 1024 * 1024;
+
+  // Limit comfortably above the working set: flushed.
+  options.cache_flush_max_working_set_bytes = kWorkingSetBytes;
+  auto fits = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> fits_buffers,
+                       fits->CreateInputBuffers(&mock_executable, add));
+  EXPECT_TRUE(static_cast<GpuInputBuffers*>(fits_buffers.get())->flush_cache);
+
+  // One byte under: the output is what tips it over, which is why the working
+  // set has to count outputs and not just inputs.
+  options.cache_flush_max_working_set_bytes = kWorkingSetBytes - 1;
+  auto spills = GpuProfiler::Create(stream_exec_, options, allocator_.get());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<InputBuffers> spills_buffers,
+                       spills->CreateInputBuffers(&mock_executable, add));
+  EXPECT_FALSE(
+      static_cast<GpuInputBuffers*>(spills_buffers.get())->flush_cache);
+}
+
 // A flush budget that cannot be allocated must degrade to no flushing rather
 // than fail compilation.
 TEST_F(GpuProfilerTest, ImpossibleCacheFlushBudgetDegradesGracefully) {

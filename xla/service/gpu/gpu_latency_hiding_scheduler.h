@@ -39,6 +39,15 @@ CanonicalAsyncOp GpuGetCanonicalAsyncOp(const HloInstruction& hlo);
 HloCostAnalysis::ShapeSizeFunction ShapeSizeBytesFunction(
     int64_t pointer_size, std::optional<int64_t> memory_space = std::nullopt);
 
+// Classifies kernels that are dominated by HBM bandwidth rather than compute.
+//
+// Prefers the analytical cost model recorded in the instruction's
+// `reification_cost`, and falls back to an opcode based classification when
+// that is absent. Note that the cost model is only recorded by
+// GpuCostModelStatsCollection, which is off by default and runs after
+// autotuning, so callers running earlier in the pipeline get the fallback.
+bool IsMemoryBoundKernel(const HloInstruction& hlo);
+
 // GPU overlap limit rule rule for scheduling candidate.
 // On top of the default rule, we do not allow collectives with more than 1
 // overlapping ranks to overlap. This is because the execution order of NCCL

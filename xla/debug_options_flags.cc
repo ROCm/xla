@@ -365,6 +365,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
 
   opts.set_xla_gpu_redzone_padding_bytes(8 * 1024 * 1024);
   opts.set_xla_gpu_autotune_cache_flush_bytes(512 * 1024 * 1024);
+  opts.set_xla_gpu_autotune_cache_flush_memory_bound_only(true);
+  opts.set_xla_gpu_autotune_cache_flush_max_working_set_bytes(0);
   opts.set_xla_gpu_shape_checks(DebugOptions::RUNTIME);
   opts.set_xla_dump_latency_hiding_schedule(false);
   opts.set_xla_gpu_enable_latency_hiding_scheduler(false);
@@ -2356,6 +2358,28 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "last level cache to have any effect; the default of 512MB clears the "
       "256MB Infinity Cache on MI300/MI350. Zero disables flushing and leaves "
       "memory-bound candidates being measured out of cache."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_autotune_cache_flush_memory_bound_only",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_autotune_cache_flush_memory_bound_only),
+      debug_options->xla_gpu_autotune_cache_flush_memory_bound_only(),
+      "Whether the autotuner's cache flush is restricted to memory-bound "
+      "instructions. A compute bound instruction is not measured out of cache "
+      "in the first place, so flushing before it corrects nothing and only "
+      "adds a candidate-dependent startup cost. No effect when "
+      "xla_gpu_autotune_cache_flush_bytes is zero."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_autotune_cache_flush_max_working_set_bytes",
+      int64_setter_for(
+          &DebugOptions::
+              set_xla_gpu_autotune_cache_flush_max_working_set_bytes),
+      debug_options->xla_gpu_autotune_cache_flush_max_working_set_bytes(),
+      "Upper bound on an instruction's working set, inputs plus outputs, for "
+      "the autotuner's cache flush to apply. An instruction larger than the "
+      "last level cache already evicts itself between runs, so flushing "
+      "before it corrects nothing. Stands in for the last level cache size, "
+      "which DeviceDescription does not model; 256MB is the Infinity Cache on "
+      "MI300/MI350. Zero falls back to xla_gpu_autotune_cache_flush_bytes."));
   flag_list->push_back(tsl::Flag(
       "xla_while_loop_all_reduce_dus_code_motion_max_size_bytes",
       int64_setter_for(

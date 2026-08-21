@@ -51,6 +51,7 @@ limitations under the License.
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/gpu_executable.h"
 #include "xla/service/gpu/gpu_executable_run_options.h"
+#include "xla/service/gpu/gpu_latency_hiding_scheduler.h"
 #include "xla/service/gpu/stream_executor_util.h"
 #include "xla/service/maybe_owning_device_address.h"
 #include "xla/service/service_executable_run_options.h"
@@ -117,6 +118,54 @@ int GetScratchBytes(const GpuExecutable& executable) {
   }
 
   return static_cast<int>(scratch_bytes);
+}
+
+// Bytes an execution of this instruction touches: every input buffer plus
+// every leaf of the result. Redzone padding is excluded because the kernel
+// never reads it, and scratch is excluded because its size is not known until
+// a candidate has been compiled.
+int64_t WorkingSetBytes(const RedzoneBuffers& buffers,
+                        const Shape& result_shape) {
+  int64_t bytes = 0;
+  for (const se::DeviceAddressBase& buffer : buffers.input_buffers()) {
+    bytes += buffer.size();
+  }
+  ShapeUtil::ForEachLeafShape(
+      result_shape, [&bytes](const Shape& subshape, const ShapeIndex& index) {
+        bytes += ShapeUtil::ByteSizeOf(subshape);
+      });
+  return bytes;
+}
+
+// Whether flushing before this instruction's timed run corrects anything.
+//
+// It only does when both hold. The instruction has to be memory bound, since a
+// compute bound one was not being served out of cache to begin with and
+// flushing before it just adds a startup cost that differs between candidates.
+// And its working set has to fit in the cache, since one that does not already
+// evicts itself and would have been measured cold either way.
+//
+// The working set limit stands in for the size of the last level cache, which
+// DeviceDescription does not model. When unset it falls back to the flush size
+// itself, which is chosen to exceed that cache, so the test errs towards
+// flushing.
+bool ShouldFlushCache(const ProfileOptions& options,
+                      const HloInstruction* instr,
+                      const RedzoneBuffers& buffers,
+                      const Shape& result_shape) {
+  if (options.cache_flush_bytes <= 0) {
+    return false;
+  }
+  // No instruction is available on the standalone Profile(executable) path.
+  // Classify as flushable rather than silently doing less than was asked.
+  if (instr != nullptr && options.cache_flush_memory_bound_only &&
+      !IsMemoryBoundKernel(*instr)) {
+    return false;
+  }
+  const int64_t limit = options.cache_flush_max_working_set_bytes > 0
+                            ? options.cache_flush_max_working_set_bytes
+                            : options.cache_flush_bytes;
+  return WorkingSetBytes(buffers, result_shape) <= limit;
 }
 
 // Initialize a specific input buffer with custom values.
@@ -281,16 +330,28 @@ std::unique_ptr<GpuProfiler> GpuProfiler::Create(
 
 absl::StatusOr<std::unique_ptr<InputBuffers>> GpuProfiler::CreateInputBuffers(
     const Executable* executable, const HloInstruction* instr) {
+  const ProgramShape program_shape =
+      executable->compute_computation_layout().ComputeProgramShape();
   ABSL_ASSIGN_OR_RETURN(
       RedzoneBuffers buffers,
       RedzoneBuffers::FromProgramShape(
-          executable->compute_computation_layout().ComputeProgramShape(),
-          RedzoneBuffers::BuffersToCreate::kAllInputs,
+          program_shape, RedzoneBuffers::BuffersToCreate::kAllInputs,
           options_.should_init_buffers,
           /*should_check_correctness=*/true, options_.redzone_padding_bytes,
           allocator_, stream_));
   auto gpu_buffers = std::make_unique<GpuInputBuffers>();
   gpu_buffers->redzone_buffers = std::move(buffers);
+  gpu_buffers->flush_cache =
+      ShouldFlushCache(options_, instr, gpu_buffers->redzone_buffers,
+                       program_shape.result());
+  if (options_.cache_flush_bytes > 0) {
+    VLOG(2) << "Cache flush " << (gpu_buffers->flush_cache ? "on" : "off")
+            << " for " << (instr == nullptr ? "<no instruction>" : instr->name())
+            << ", working set "
+            << WorkingSetBytes(gpu_buffers->redzone_buffers,
+                               program_shape.result())
+            << " bytes.";
+  }
 
   // Initialize buffers based on operation type
   ABSL_RETURN_IF_ERROR(
@@ -352,7 +413,7 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
   // Enqueued on stream_ ahead of the executable, so it is stream ordered
   // against it, and excluded from the reported duration, which comes from an
   // event based timer started inside the executable's own execution.
-  if (cache_flusher_ != nullptr) {
+  if (cache_flusher_ != nullptr && gpu_buffers.flush_cache) {
     ABSL_RETURN_IF_ERROR(cache_flusher_->Flush());
   }
 

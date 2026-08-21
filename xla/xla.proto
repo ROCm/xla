@@ -1290,6 +1290,22 @@ message DebugOptions {
   // cache. Zero disables flushing.
   optional int64 xla_gpu_autotune_cache_flush_bytes = 538;
 
+  // Whether the autotuner's cache flush is restricted to memory-bound
+  // instructions. A compute bound instruction is not measured out of cache in
+  // the first place, so flushing before it corrects nothing and only adds a
+  // candidate-dependent startup cost that can perturb the ranking. Classified
+  // with IsMemoryBoundKernel. No effect when
+  // xla_gpu_autotune_cache_flush_bytes is zero.
+  optional bool xla_gpu_autotune_cache_flush_memory_bound_only = 539;
+
+  // Upper bound on an instruction's working set, inputs plus outputs, for the
+  // autotuner's cache flush to apply. An instruction whose working set exceeds
+  // the last level cache already evicts itself between runs, so flushing
+  // before it corrects nothing. This stands in for the last level cache size,
+  // which DeviceDescription does not model; 256MB is the Infinity Cache on
+  // MI300/MI350. Zero falls back to xla_gpu_autotune_cache_flush_bytes.
+  optional int64 xla_gpu_autotune_cache_flush_max_working_set_bytes = 540;
+
   // If true, will require complete AOT autotuning results; in the case of
   // missing AOT result, the model will not be compiled or executed, a
   // `NotFound` error will be returned.
@@ -1817,7 +1833,7 @@ message DebugOptions {
   // Note: when adding a new flag, please add it to one of the hardware-specific
   // or hardware-agnostic sections at the top of this proto message.
 
-  // Next id: 539
+  // Next id: 541
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

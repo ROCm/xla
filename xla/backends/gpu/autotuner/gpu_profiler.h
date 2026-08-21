@@ -37,6 +37,11 @@ namespace gpu {
 struct GpuInputBuffers : public InputBuffers {
   // We only use the input buffers from the redzone buffers.
   RedzoneBuffers redzone_buffers;
+  // Whether the instruction these buffers belong to should have its cache
+  // flushed before each timed run. Decided once in CreateInputBuffers, which
+  // is the only place with access to the HloInstruction; Profile only sees the
+  // executable.
+  bool flush_cache = false;
 };
 
 class GpuProfiler : public Profiler {
