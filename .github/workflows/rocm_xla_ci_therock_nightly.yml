@@ -37,7 +37,7 @@ on:
           - 'devreleases'
           - 'prereleases'
           - 'release'
-        default: 'nightlies'
+        default: 'prereleases'
       rocm_sdk_version:
         description: 'ROCm SDK / THEROCK version (empty = latest)'
         type: string
@@ -127,7 +127,7 @@ jobs:
       - name: Resolve TheRock index URL and version
         id: therock
         env:
-          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'prereleases' }}
           GPU_TARGET: ${{ inputs.gpu_target || 'device-all' }}
           ROCM_SDK_VERSION: ${{ inputs.rocm_sdk_version || '10.0' }}
           PIP_INDEX_PATH: ${{ inputs.pip_index_path || '' }}
@@ -157,7 +157,7 @@ jobs:
             --config=ci_single_gpu \
             --local_test_jobs=1 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
-            --repo_env=ROCM_DISTRO_URL="https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${THEROCK_VERSION}.tar.gz" \
+            --repo_env=ROCM_DISTRO_URL="https://rocm.prereleases.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${THEROCK_VERSION}.tar.gz" \
             --repo_env=ROCM_DISTRO_HASH='' \
             --local_test_jobs=1 \
             --internal_spawn_scheduler \
@@ -178,7 +178,7 @@ jobs:
             --local_test_jobs=200 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
             --repo_env=ROCM_PATH="" \
-            --repo_env=ROCM_DISTRO_URL="https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${THEROCK_VERSION}.tar.gz" \
+            --repo_env=ROCM_DISTRO_URL="https://rocm.prereleases.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${THEROCK_VERSION}.tar.gz" \
             --repo_env=ROCM_DISTRO_HASH='' \
             --bes_keywords=xla \
             --bes_keywords=upstream \
