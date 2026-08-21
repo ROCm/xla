@@ -10,6 +10,7 @@ import platform
 import re
 import shlex
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -64,9 +65,46 @@ def write_campaign_manifest_atomically(
     temporary.replace(path)
 
 
+def detect_rocm_version() -> str | None:
+    """Detect the installed ROCm toolkit version inside the environment."""
+    path = Path("/opt/rocm/.info/version")
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    match = re.search(r"(?<!\d)(\d+\.\d+\.\d+)", value)
+    return match.group(1) if match else None
+
+
+def detect_gpu_architectures() -> list[str]:
+    """Detect visible AMD GPU architecture names such as gfx942 or gfx950."""
+    rocminfo = shutil.which("rocminfo")
+    if rocminfo is None:
+        return []
+    try:
+        result = subprocess.run(
+            [rocminfo],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    architectures = {
+        match.group(1).lower()
+        for match in re.finditer(
+            r"^\s*Name:\s+(gfx[0-9a-z]+)",
+            result.stdout,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+    }
+    return sorted(architectures)
+
+
 def collect_campaign_environment() -> dict[str, Any]:
-    """Capture live host and visible-device metadata."""
-    return {
+    """Capture live host, ROCm, GPU, and visible-device metadata."""
+    environment: dict[str, Any] = {
         "captured_at": utc_now(),
         "hostname": socket.gethostname(),
         "platform": platform.platform(),
@@ -80,6 +118,13 @@ def collect_campaign_environment() -> dict[str, Any]:
             )
         },
     }
+    rocm_version = detect_rocm_version()
+    if rocm_version is not None:
+        environment["rocm_version"] = rocm_version
+    gpu_architectures = detect_gpu_architectures()
+    if gpu_architectures:
+        environment["gpu_architectures"] = gpu_architectures
+    return environment
 
 
 def workload_leaf_relative_path(leaf: Path) -> str:
