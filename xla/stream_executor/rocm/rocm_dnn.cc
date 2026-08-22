@@ -57,6 +57,7 @@ limitations under the License.
 #include "xla/stream_executor/event_based_timer.h"
 #include "xla/stream_executor/platform/initialize.h"
 #include "xla/stream_executor/plugin_registry.h"
+#include "xla/stream_executor/rocm/rocm_hipdnn.h"
 #include "xla/stream_executor/rocm/rocm_platform_id.h"
 #include "xla/stream_executor/scratch_allocator.h"
 #include "xla/stream_executor/stream.h"
@@ -2952,6 +2953,124 @@ class RocmConvRunner : public dnn::ConvRunner {
   ScopedConvolutionDescriptor conv_desc_;
 };
 
+// ---------------------------------------------------------------------------
+// hipDNN convolution path (opt-in).
+//
+// When XLA_ROCM_USE_HIPDNN_CONV is set, convolutions are routed through AMD's
+// hipDNN library (via HipdnnConvGraph in rocm_hipdnn.cc) instead of MIOpen. The
+// runner below implements the same dnn::ConvRunner interface the rest of XLA
+// expects, so the ConvolutionThunk / autotuner path is unchanged. Only basic
+// forward / backward-data / backward-filter convolutions are handled here;
+// anything else falls back to MIOpen.
+// ---------------------------------------------------------------------------
+
+static bool UseHipdnnConv() {
+  static const bool use_hipdnn = [] {
+    bool v = false;
+    CHECK_OK(tsl::ReadBoolFromEnvVar("XLA_ROCM_USE_HIPDNN_CONV",
+                                     /*default_val=*/false, &v));
+    return v;
+  }();
+  return use_hipdnn;
+}
+
+// A dnn::ConvRunner backed by a compiled hipDNN convolution graph.
+class HipdnnConvRunner : public dnn::ConvRunner {
+ public:
+  HipdnnConvRunner(std::shared_ptr<HipdnnConvGraph> graph, size_t workspace_size)
+      : graph_(std::move(graph)), workspace_size_(workspace_size) {}
+
+  std::string ToString() const override { return MakeAlgorithmDesc().ToString(); }
+
+  size_t GetWorkspaceSize() const override { return workspace_size_; }
+
+  absl::StatusOr<dnn::AlgorithmDesc> ToAlgorithmDesc() const override {
+    return MakeAlgorithmDesc();
+  }
+
+  absl::Status operator()(Stream* stream,
+                          dnn::ProfileResult* output_profile_result,
+                          DeviceAddressBase scratch_memory,
+                          DeviceAddressBase input_data,
+                          DeviceAddressBase filter_data,
+                          DeviceAddressBase output_data) const override {
+    // Profiling through this path is not supported yet.
+    CHECK(output_profile_result == nullptr);
+    return graph_->Execute(stream, input_data, filter_data, output_data,
+                           scratch_memory);
+  }
+
+ private:
+  // hipDNN selects the engine internally, so there is no MIOpen-style solution
+  // id. Expose a single stable positive id: the ROCm conv autotuner
+  // (xla/backends/gpu/autotuner/miopen.cc) requires algo_id() > 0, and
+  // ConvolveRunnerFromDesc ignores the id when the hipDNN path is enabled.
+  static constexpr int64_t kHipdnnConvAlgorithmId = 1;
+
+  dnn::AlgorithmDesc MakeAlgorithmDesc() const {
+    return {kHipdnnConvAlgorithmId, /*use_tensor_ops=*/false, workspace_size_};
+  }
+
+  std::shared_ptr<HipdnnConvGraph> graph_;
+  size_t workspace_size_;
+};
+
+// Builds and compiles a hipDNN-backed conv runner for the given descriptors, or
+// returns a null runner (not an error) if hipDNN cannot serve this convolution
+// and the caller should fall back to MIOpen.
+static absl::StatusOr<std::unique_ptr<const dnn::ConvRunner>>
+MaybeCreateHipdnnConvRunner(
+    Stream* stream, dnn::ConvolutionKind kind, dnn::DataType input_type,
+    dnn::DataType output_type, const dnn::BatchDescriptor& input_descriptor,
+    const dnn::FilterDescriptor& filter_descriptor,
+    const dnn::BatchDescriptor& output_descriptor,
+    const dnn::ConvolutionDescriptor& convolution_descriptor) {
+  HipdnnConvGraph::ConvKind hipdnn_kind;
+  switch (kind) {
+    case dnn::ConvolutionKind::FORWARD:
+      hipdnn_kind = HipdnnConvGraph::ConvKind::kForward;
+      break;
+    case dnn::ConvolutionKind::BACKWARD_DATA:
+      hipdnn_kind = HipdnnConvGraph::ConvKind::kBackwardData;
+      break;
+    case dnn::ConvolutionKind::BACKWARD_FILTER:
+      hipdnn_kind = HipdnnConvGraph::ConvKind::kBackwardFilter;
+      break;
+    default:
+      return std::unique_ptr<const dnn::ConvRunner>(nullptr);
+  }
+
+  // Logical [batch, feature, spatial...] dims with matching strides, matching
+  // the layout cuda_dnn.cc feeds to the cuDNN/hipDNN frontend.
+  std::vector<int64_t> input_dims =
+      input_descriptor.full_dims(dnn::DataLayout::kBatchDepthYX);
+  std::vector<int64_t> input_strides =
+      input_descriptor.full_strides(dnn::DataLayout::kBatchDepthYX);
+  std::vector<int64_t> output_dims =
+      output_descriptor.full_dims(dnn::DataLayout::kBatchDepthYX);
+  std::vector<int64_t> output_strides =
+      output_descriptor.full_strides(dnn::DataLayout::kBatchDepthYX);
+  std::vector<int64_t> filter_dims =
+      filter_descriptor.full_dims(dnn::FilterLayout::kOutputInputYX);
+  std::vector<int64_t> filter_strides =
+      filter_descriptor.full_strides(dnn::FilterLayout::kOutputInputYX);
+
+  absl::StatusOr<HipdnnConvGraph> graph = HipdnnConvGraph::Create(
+      hipdnn_kind, input_type, output_type, input_dims, input_strides,
+      filter_dims, filter_strides, output_dims, output_strides,
+      convolution_descriptor.padding(), convolution_descriptor.strides(),
+      convolution_descriptor.dilations());
+  if (!graph.ok()) {
+    return graph.status();
+  }
+
+  auto graph_ptr = std::make_shared<HipdnnConvGraph>(*std::move(graph));
+  ABSL_RETURN_IF_ERROR(graph_ptr->Prepare(stream));
+  ABSL_ASSIGN_OR_RETURN(size_t workspace_size, graph_ptr->GetWorkspaceSize());
+  return std::unique_ptr<const dnn::ConvRunner>(
+      new HipdnnConvRunner(std::move(graph_ptr), workspace_size));
+}
+
 absl::Status MIOpenSupport::GetConvolveRunners(
     dnn::ConvolutionKind kind, dnn::DataType input_type,
     dnn::DataType output_type, Stream* stream,
@@ -2963,6 +3082,18 @@ absl::Status MIOpenSupport::GetConvolveRunners(
     const dnn::ConvolutionDescriptor& convolution_descriptor, bool use_fallback,
     ScratchAllocator* scratch_allocator, const EngineOptions& engine_options,
     std::vector<std::unique_ptr<const dnn::ConvRunner>>* out_runners) {
+  if (UseHipdnnConv()) {
+    ABSL_ASSIGN_OR_RETURN(
+        auto hipdnn_runner,
+        MaybeCreateHipdnnConvRunner(stream, kind, input_type, output_type,
+                                    input_descriptor, filter_descriptor,
+                                    output_descriptor, convolution_descriptor));
+    if (hipdnn_runner != nullptr) {
+      out_runners->push_back(std::move(hipdnn_runner));
+      return absl::OkStatus();
+    }
+  }
+
   if (input_type != output_type) {
     return absl::UnimplementedError(
         absl::StrFormat("MIOpen backend does not support different input and "
@@ -2997,6 +3128,17 @@ MIOpenSupport::ConvolveRunnerFromDesc(
     const dnn::FilterDescriptor& filter_descriptor,
     const dnn::BatchDescriptor& output_descriptor,
     const dnn::ConvolutionDescriptor& convolution_descriptor) {
+  if (UseHipdnnConv()) {
+    ABSL_ASSIGN_OR_RETURN(
+        auto hipdnn_runner,
+        MaybeCreateHipdnnConvRunner(stream, kind, input_type, output_type,
+                                    input_descriptor, filter_descriptor,
+                                    output_descriptor, convolution_descriptor));
+    if (hipdnn_runner != nullptr) {
+      return hipdnn_runner;
+    }
+  }
+
   int64_t algo_id = algorithm_desc.algo_id();
   size_t workspace_size = algorithm_desc.workspace_size().value_or(0);
 
