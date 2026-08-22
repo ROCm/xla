@@ -337,6 +337,53 @@ rocm_lib_import(
     ],
 )
 
+# hipDNN: AMD's cuDNN-equivalent DNN library (backend descriptor API +
+# hipdnn_frontend C++ graph API). Ships an engine-plugin architecture where the
+# actual kernels are provided by loadable plugins under lib/hipdnn_plugins/engines
+# (MIOpen, hipBLASLt, hip kernel provider), so those must be part of the runtime
+# data set. Headers are exposed through the :rocm_headers target
+# (rocm/include/hipdnn/**).
+rocm_lib_import(
+    name = "hipdnn",
+    data = glob([
+        "%{rocm_root}/lib/libhipdnn_backend.so*",
+        "%{rocm_root}/lib/hipdnn_plugins/**",
+    ]),
+    interface_library = "%{rocm_root}/lib/libhipdnn_backend.so",
+    deps = [
+        ":amd_comgr_libs",
+        ":hip_runtime_libs",
+        ":hipblaslt_libs",
+        ":miopen",
+        ":rocblas_libs",
+        ":roctx_libs",
+        ":system_libs",
+    ],
+)
+
+# Header-only target exposing the hipDNN C++ frontend graph API
+# (hipdnn_frontend.hpp) plus the backend descriptor headers it pulls in. The
+# frontend's internal includes are unprefixed (e.g. <hipdnn_frontend/Graph.hpp>,
+# <hipdnn_backend.h>, <hipdnn_data_sdk/...>), so each SDK root is added to the
+# system include path. JSON serialization is compiled out to avoid an extra
+# nlohmann/json dependency; convolution does not require it.
+cc_library(
+    name = "hipdnn_frontend",
+    hdrs = glob(["%{rocm_root}/include/hipdnn/**"]),
+    defines = ["HIPDNN_FRONTEND_SKIP_JSON_LIB=1"],
+    includes = [
+        "%{rocm_root}/include/hipdnn/backend",
+        "%{rocm_root}/include/hipdnn/data_sdk",
+        "%{rocm_root}/include/hipdnn/flatbuffers_sdk",
+        "%{rocm_root}/include/hipdnn/frontend",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":hipdnn",
+        ":rocm_headers",
+    ],
+)
+
 cc_library(
     name = "amdsmi_libs",
     data = glob(["%{rocm_root}/lib/libamd_smi.so*"]),

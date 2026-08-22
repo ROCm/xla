@@ -580,6 +580,7 @@ cc_library(
         ":miopen_if_static",  # build_cleaner: keep
         ":rocm_executor",
         ":rocm_helpers",
+        ":rocm_hipdnn",
         ":rocm_platform_id",
         "//xla/stream_executor:activate_context",
         "//xla/stream_executor:blas",
@@ -614,6 +615,36 @@ cc_library(
         "@eigen_archive//:eigen3",
         "@local_config_rocm//rocm:rocm_headers",
         "@tsl//tsl/platform:hash",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "rocm_hipdnn",
+    srcs = ["rocm_hipdnn.cc"],
+    hdrs = ["rocm_hipdnn.h"],
+    copts = [
+        # hipdnn_frontend uses deep template instantiations; match the depth
+        # bump used by the MIOpen plugin for the cuDNN-style wrappers.
+        "-ftemplate-depth-512",
+    ],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:dnn",
+        "//xla/stream_executor:stream",
+        "//xla/tsl/protobuf:dnn_proto_cc",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@local_config_rocm//rocm:hipdnn_frontend",
+        "@local_config_rocm//rocm:rocm_headers",
     ],
     alwayslink = True,
 )
