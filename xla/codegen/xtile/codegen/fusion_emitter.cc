@@ -37,6 +37,7 @@ limitations under the License.
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/Support/MathExtras.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -553,14 +554,14 @@ std::pair<SmallVector<int64_t>, SmallVector<int64_t>> CollapseUnitDims(
 
 enum class DotOperandSide { kLhs, kRhs };
 
-// Computes and applies a mask to the reduction dimension of the `dot_operand` 
-// (shape [M, K] or [K, N]) whose absolute contracting dim index is out of bounds.
-// Only relevant when tile size doesn't divide dim size evenly AND this 
+// Computes and applies a mask to the reduction dimension of the `dot_operand`
+// (shape [M, K] or [K, N]) whose absolute contracting dim index is out of
+// bounds. Only relevant when tile size doesn't divide dim size evenly AND this
 // iteration is the last.
 //
-// Since conv has three contracting dims we loop over it is necessary to 
-// decomposes ki per the per-axis ordering: 
-// inner-most axis is c_in_block, with ceil(c_in / tile_c_in) blocks; 
+// Since conv has three contracting dims we loop over it is necessary to
+// decomposes ki per the per-axis ordering:
+// inner-most axis is c_in_block, with ceil(c_in / tile_c_in) blocks;
 // outer axes go over spatial dims which are currently tiled with 1
 // and do not need masking.
 // Once that constraint is removed the function will need to be modified.
@@ -914,6 +915,8 @@ absl::StatusOr<TensorValue> EmitConv(
 
   TF_ASSIGN_OR_RETURN(int64_t loop_iteration_count,
                       GetConvLoopIterationCount(tiled_hlo_conv));
+
+  const auto& dnums = conv->convolution_dimension_numbers();
   auto pid_dim = b.getAffineDimExpr(0);
   auto ki_symbol = b.getAffineSymbolExpr(0);
   IndexingMap computation_index_map{
@@ -948,110 +951,40 @@ absl::StatusOr<TensorValue> EmitConv(
       conv_args.push_back(values[operand]);
     }
 
+    // Canonicalize the per-iteration input/kernel tiles to the implicit-GEMM
+    // [M, K] / [K, N] matrices
+    TF_ASSIGN_OR_RETURN(TensorValue input_2d,
+                        CanonicalizeConvInputToMK(b, conv_args[0], *conv));
+    TF_ASSIGN_OR_RETURN(TensorValue kernel_2d,
+                        CanonicalizeConvKernelToKN(b, conv_args[1], *conv));
+
+    // The implicit-GEMM K dimension is (kernel spatial product) * c_in;
+    // under current restriction the spatial tiles are 1, so only c_in needs
+    // boundary masking.
+    const int64_t tile_c_in =
+      tiled_hlo_conv.operand(0)->tile_size(dnums.input_feature_dimension());
+    TF_ASSIGN_OR_RETURN(input_2d,
+                        MaskConvOperand(b, input_2d, ki, *conv, tile_c_in,
+                                        DotOperandSide::kLhs));
+    TF_ASSIGN_OR_RETURN(kernel_2d,
+                        MaskConvOperand(b, kernel_2d, ki, *conv, tile_c_in,
+                                        DotOperandSide::kRhs));
+
     Value acc = for_op.getRegionIterArgs().front();
-    TensorValue input_tile = conv_args[0];
-    TensorValue kernel_tile = conv_args[1];
+    llvm::SmallVector<int64_t> acc_tile_shape(
+        mlir::cast<mlir::RankedTensorType>(acc.getType()).getShape());
+    TF_ASSIGN_OR_RETURN(TensorValue acc_2d,
+                        CanonicalizeConvAccToMN(b, acc, *conv));
 
-    auto acc_type = mlir::cast<mlir::RankedTensorType>(acc.getType());
-
-    // Broadcast a conv operand tile to the accumulator shape. For convolutions
-    // the kernel (and potentially the input) can have a different dimension
-    // order, so we compute the mapping from ConvolutionDimensionNumbers and
-    // pass it here.
-    auto broadcast_operand_to_acc =
-        [&](TensorValue tile, ArrayRef<int64_t> operand_dim_to_acc_dim)
-        -> absl::StatusOr<TensorValue> {
-      auto tile_type = mlir::cast<mlir::RankedTensorType>(tile.getType());
-      if (tile_type.getShape() == acc_type.getShape()) {
-        return tile;
-      }
-      ArrayRef<int64_t> tile_shape = tile_type.getShape();
-      ArrayRef<int64_t> acc_shape = acc_type.getShape();
-
-      SmallVector<int64_t> kept_shape;
-      SmallVector<int64_t> broadcast_dims;
-      for (int64_t od = 0; od < static_cast<int64_t>(tile_shape.size()); ++od) {
-        int64_t acc_dim = operand_dim_to_acc_dim[od];
-        if (acc_dim == -1) {
-          // Contracting dim: must be size 1.
-          if (tile_shape[od] != 1) {
-            return absl::InvalidArgumentError(
-                absl::StrCat("EmitConv: contracting operand dim ", od,
-                             " has size ", tile_shape[od], " (expected 1)."));
-          }
-        } else if (tile_shape[od] == acc_shape[acc_dim]) {
-          kept_shape.push_back(tile_shape[od]);
-          broadcast_dims.push_back(acc_dim);
-        } else if (tile_shape[od] != 1) {
-          return absl::InvalidArgumentError(
-              absl::StrCat("EmitConv: operand dim ", od, " (size ",
-                           tile_shape[od], ") does not match acc dim ", acc_dim,
-                           " (size ", acc_shape[acc_dim], ") and is not 1."));
-        }
-        // size-1 non-contracting dims are broadcast (dropped from kept_shape).
-      }
-
-      // BroadcastInDims requires broadcast_dims to be sorted.
-      SmallVector<int64_t> order(broadcast_dims.size());
-      std::iota(order.begin(), order.end(), 0);
-      std::sort(order.begin(), order.end(), [&](int64_t a, int64_t b) {
-        return broadcast_dims[a] < broadcast_dims[b];
-      });
-      SmallVector<int64_t> sorted_kept;
-      SmallVector<int64_t> sorted_dims;
-      for (int64_t idx : order) {
-        sorted_kept.push_back(kept_shape[idx]);
-        sorted_dims.push_back(broadcast_dims[idx]);
-      }
-
-      TensorValue reshaped = tile;
-      if (sorted_kept.size() != tile_shape.size()) {
-        auto reshape_type = mlir::RankedTensorType::get(
-            sorted_kept, tile_type.getElementType());
-        reshaped = mlir::cast<TensorValue>(
-            stablehlo::ReshapeOp::create(b, reshape_type, tile).getResult());
-      }
-      return xtile::BroadcastInDims(b, reshaped, acc_shape, sorted_dims);
-    };
-
-    const auto& dnums = conv->convolution_dimension_numbers();
-
-    SmallVector<int64_t> input_dim_to_acc_dim(output_rank, -1);
-    input_dim_to_acc_dim[dnums.input_batch_dimension()] =
-        dnums.output_batch_dimension();
-    for (int64_t i = 0; i < spatial_rank; ++i) {
-      input_dim_to_acc_dim[dnums.input_spatial_dimensions(i)] =
-          dnums.output_spatial_dimensions(i);
-    }
-
-    SmallVector<int64_t> kernel_dim_to_acc_dim(output_rank, -1);
-    kernel_dim_to_acc_dim[dnums.kernel_output_feature_dimension()] =
-        dnums.output_feature_dimension();
-    for (int64_t i = 0; i < spatial_rank; ++i) {
-      kernel_dim_to_acc_dim[dnums.kernel_spatial_dimensions(i)] =
-          dnums.output_spatial_dimensions(i);
-    }
+    TF_ASSIGN_OR_RETURN(ConvDotShim shim, MakeConvDotShim(*conv));
+    TF_ASSIGN_OR_RETURN(Value acc_2d_next,
+                        xtile::EmitSingleTileDot(
+                            b, *::xla::Cast<HloDotInstruction>(shim.dot.get()),
+                            xtile::DotOperands{input_2d, kernel_2d, acc_2d}));
 
     TF_ASSIGN_OR_RETURN(
-        TensorValue input_broadcast,
-        broadcast_operand_to_acc(input_tile, input_dim_to_acc_dim));
-    TF_ASSIGN_OR_RETURN(
-        TensorValue kernel_broadcast,
-        broadcast_operand_to_acc(kernel_tile, kernel_dim_to_acc_dim));
-
-    TensorValue input_cast = input_broadcast;
-    if (getElementTypeOrSelf(input_broadcast.getType()) != accumulator_type) {
-      input_cast =
-          mlir::cast<TensorValue>(Cast(b, input_broadcast, accumulator_type));
-    }
-    TensorValue kernel_cast = kernel_broadcast;
-    if (getElementTypeOrSelf(kernel_broadcast.getType()) != accumulator_type) {
-      kernel_cast =
-          mlir::cast<TensorValue>(Cast(b, kernel_broadcast, accumulator_type));
-    }
-
-    Value product = arith::MulFOp::create(b, input_cast, kernel_cast);
-    Value acc_next = arith::AddFOp::create(b, acc, product);
+        Value acc_next,
+        RestoreConvAccFromMN(b, acc_2d_next, *conv, acc_tile_shape));
 
     mlir::scf::YieldOp::create(b, acc_next);
   }
