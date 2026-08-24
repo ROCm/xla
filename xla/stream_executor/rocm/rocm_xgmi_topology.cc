@@ -45,7 +45,8 @@ absl::StatusOr<XgmiTopologyInfo> GetRocmXgmiTopology(
     info.hive_id = *hive_id;
   } else {
     VLOG(2) << "xGMI hive ID query failed for " << pci_bus_id << ": "
-            << hive_id.status() << "; device may not be in an xGMI hive.";
+            << hive_id.status().message()
+            << "; device may not be in an xGMI hive.";
   }
 
   // Count peers reachable over xGMI by querying the link type to every other
@@ -60,7 +61,7 @@ absl::StatusOr<XgmiTopologyInfo> GetRocmXgmiTopology(
     absl::StatusOr<bool> is_peer = IsXgmiPeer(*device, peer);
     if (!is_peer.ok()) {
       VLOG(2) << "xGMI link type query failed for " << pci_bus_id << ": "
-              << is_peer.status();
+              << is_peer.status().message();
       continue;
     }
     if (*is_peer) ++xgmi_links;

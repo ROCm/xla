@@ -46,7 +46,7 @@ absl::Status SmiError(absl::string_view api, amdsmi_status_t status) {
 bool InitLibrary() {
   amdsmi_status_t status = amdsmi_init(AMDSMI_INIT_AMD_GPUS);
   if (status != AMDSMI_STATUS_SUCCESS) {
-    LOG(WARNING) << SmiError("amdsmi_init", status);
+    LOG(WARNING) << SmiError("amdsmi_init", status).message();
     return false;
   }
   VLOG(1) << "SMI device queries go through amd_smi.";
@@ -85,7 +85,7 @@ absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {
             amdsmi_get_processor_handles(socket, &num_processors, nullptr);
         status != AMDSMI_STATUS_SUCCESS) {
       VLOG(2) << "Skipping socket: "
-              << SmiError("amdsmi_get_processor_handles", status);
+              << SmiError("amdsmi_get_processor_handles", status).message();
       continue;
     }
     if (num_processors == 0) continue;
@@ -95,7 +95,7 @@ absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {
             socket, &num_processors, processors.data());
         status != AMDSMI_STATUS_SUCCESS) {
       VLOG(2) << "Skipping socket: "
-              << SmiError("amdsmi_get_processor_handles", status);
+              << SmiError("amdsmi_get_processor_handles", status).message();
       continue;
     }
 

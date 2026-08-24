@@ -46,7 +46,7 @@ absl::Status SmiError(absl::string_view api, rsmi_status_t status) {
 bool InitLibrary() {
   rsmi_status_t status = rsmi_init(0);
   if (status != RSMI_STATUS_SUCCESS) {
-    LOG(WARNING) << SmiError("rsmi_init", status);
+    LOG(WARNING) << SmiError("rsmi_init", status).message();
     return false;
   }
   VLOG(1) << "SMI device queries go through rocm_smi.";
@@ -85,7 +85,7 @@ absl::StatusOr<SmiDeviceHandle> FindDevice(const BdfComponents& target_bdf) {
             rsmi_dev_pci_id_get(ToDeviceIndex(device), &bdfid);
         status != RSMI_STATUS_SUCCESS) {
       VLOG(2) << "Skipping device " << ToDeviceIndex(device) << ": "
-              << SmiError("rsmi_dev_pci_id_get", status);
+              << SmiError("rsmi_dev_pci_id_get", status).message();
       continue;
     }
 

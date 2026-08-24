@@ -1174,7 +1174,8 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
       desc.set_pcie_bandwidth(*pcie_bw);
     } else {
       LOG(WARNING) << "Could not determine PCIe bandwidth for device "
-                   << device_ordinal << " via SMI (" << pcie_bw.status()
+                   << device_ordinal << " via SMI ("
+                   << pcie_bw.status().message()
                    << "). Assuming PCIe Gen4 x16.";
       desc.set_pcie_bandwidth(32LL * 1024 * 1024 * 1024);
     }
@@ -1185,7 +1186,7 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
         gpu::GetRocmXgmiTopology(pci_bus_id);
     if (!xgmi.ok()) {
       LOG(WARNING) << "Could not determine xGMI topology for device "
-                   << device_ordinal << " via SMI: " << xgmi.status();
+                   << device_ordinal << " via SMI: " << xgmi.status().message();
     } else if (xgmi->active_links > 0) {
       DeviceInterconnectInfo info;
       info.active_links = xgmi->active_links;
