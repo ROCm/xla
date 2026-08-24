@@ -1181,14 +1181,19 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
   }
 
   {
-    gpu::XgmiTopologyInfo xgmi = gpu::GetRocmXgmiTopology(pci_bus_id);
-    if (xgmi.active_links > 0) {
+    absl::StatusOr<gpu::XgmiTopologyInfo> xgmi =
+        gpu::GetRocmXgmiTopology(pci_bus_id);
+    if (!xgmi.ok()) {
+      LOG_FIRST_N(WARNING, 8)
+          << "Could not determine xGMI topology for device " << device_ordinal
+          << " via SMI: " << xgmi.status();
+    } else if (xgmi->active_links > 0) {
       DeviceInterconnectInfo info;
-      info.active_links = xgmi.active_links;
+      info.active_links = xgmi->active_links;
       desc.set_device_interconnect_info(info);
       VLOG(1) << "Device " << device_ordinal << ": detected "
-              << xgmi.active_links << " active xGMI links"
-              << " (hive_id=" << xgmi.hive_id << ")";
+              << xgmi->active_links << " active xGMI links"
+              << " (hive_id=" << xgmi->hive_id << ")";
     }
   }
 

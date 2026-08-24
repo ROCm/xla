@@ -10,8 +10,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-// amd_smi backend for the SMI queries declared in rocm_smi_util.h. Compiled in
-// from ROCm 7.13 on; rocm_smi_util_rocm_smi.cc takes its place below that.
+// amd_smi backend for the SMI queries declared in smi_util.h. Compiled in
+// from ROCm 7.13 on; smi_util_rocm_smi.cc takes its place below that.
 
 #include <cstdint>
 #include <vector>
@@ -22,7 +22,7 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "rocm/include/amd_smi/amdsmi.h"
-#include "xla/stream_executor/rocm/rocm_smi_util.h"
+#include "xla/stream_executor/rocm/smi_util.h"
 #include "xla/tsl/platform/logging.h"
 
 namespace stream_executor::gpu {
@@ -45,7 +45,7 @@ absl::Status SmiError(absl::string_view api, amdsmi_status_t status) {
 
 }  // namespace
 
-absl::Status InitRocmSmi() {
+absl::Status InitSmi() {
   static const absl::Status& init_status =
       *new absl::Status([]() -> absl::Status {
         amdsmi_status_t status = amdsmi_init(AMDSMI_INIT_AMD_GPUS);
@@ -74,19 +74,26 @@ absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {
     return SmiError("amdsmi_get_socket_handles", status);
   }
 
+  // A socket that cannot be read is skipped rather than failing the whole
+  // enumeration, so the other GPUs still get described.
   std::vector<SmiDeviceHandle> devices;
   for (amdsmi_socket_handle socket : sockets) {
     uint32_t num_processors = 0;
-    if (amdsmi_get_processor_handles(socket, &num_processors, nullptr) !=
-            AMDSMI_STATUS_SUCCESS ||
-        num_processors == 0) {
+    if (amdsmi_status_t status =
+            amdsmi_get_processor_handles(socket, &num_processors, nullptr);
+        status != AMDSMI_STATUS_SUCCESS) {
+      VLOG(1) << "Skipping socket: "
+              << SmiError("amdsmi_get_processor_handles", status);
       continue;
     }
+    if (num_processors == 0) continue;
 
     std::vector<amdsmi_processor_handle> processors(num_processors);
-    if (amdsmi_get_processor_handles(socket, &num_processors,
-                                     processors.data()) !=
-        AMDSMI_STATUS_SUCCESS) {
+    if (amdsmi_status_t status = amdsmi_get_processor_handles(
+            socket, &num_processors, processors.data());
+        status != AMDSMI_STATUS_SUCCESS) {
+      VLOG(1) << "Skipping socket: "
+              << SmiError("amdsmi_get_processor_handles", status);
       continue;
     }
 

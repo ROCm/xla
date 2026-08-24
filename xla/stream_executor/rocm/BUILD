@@ -387,14 +387,14 @@ alias(
     actual = "@local_config_rocm//rocm:amdsmi" if _USE_AMD_SMI else "@local_config_rocm//rocm:rocm_smi",
 )
 
-# Backend implementing the SMI queries declared in rocm_smi_util.h. Exactly one
+# Backend implementing the SMI queries declared in smi_util.h. Exactly one
 # is compiled in, matching the library :smi resolves to.
-_SMI_BACKEND_SRCS = ["rocm_smi_util_amd_smi.cc"] if _USE_AMD_SMI else ["rocm_smi_util_rocm_smi.cc"]
+_SMI_BACKEND_SRCS = ["smi_util_amd_smi.cc"] if _USE_AMD_SMI else ["smi_util_rocm_smi.cc"]
 
 cc_library(
-    name = "rocm_smi_util",
-    srcs = ["rocm_smi_util.cc"] + _SMI_BACKEND_SRCS,
-    hdrs = ["rocm_smi_util.h"],
+    name = "smi_util",
+    srcs = ["smi_util.cc"] + _SMI_BACKEND_SRCS,
+    hdrs = ["smi_util.h"],
     tags = [
         "gpu",
         "rocm-only",
@@ -421,7 +421,7 @@ cc_library(
         "rocm-only",
     ],
     deps = [
-        ":rocm_smi_util",
+        ":smi_util",
         "//xla/tsl/platform:logging",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -452,7 +452,7 @@ cc_library(
         "rocm-only",
     ],
     deps = [
-        ":rocm_smi_util",
+        ":smi_util",
         "//xla/tsl/platform:logging",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",

@@ -19,7 +19,7 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "xla/stream_executor/rocm/rocm_smi_util.h"
+#include "xla/stream_executor/rocm/smi_util.h"
 #include "xla/tsl/platform/logging.h"
 
 namespace stream_executor::gpu {
@@ -51,9 +51,9 @@ constexpr int64_t ComputePcieBandwidthFromSpeedAndWidth(
 }  // namespace
 
 absl::StatusOr<int64_t> GetRocmPcieBandwidth(absl::string_view pci_bus_id) {
-  absl::MutexLock lock(rocm_smi_mutex);
+  absl::MutexLock lock(smi_mutex);
 
-  if (absl::Status init = InitRocmSmi(); !init.ok()) return init;
+  if (absl::Status init = InitSmi(); !init.ok()) return init;
 
   absl::StatusOr<BdfComponents> bdf = ParseBdf(pci_bus_id);
   if (!bdf.ok()) return bdf.status();

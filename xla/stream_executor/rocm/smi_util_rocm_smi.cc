@@ -10,10 +10,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-// rocm_smi backend for the SMI queries declared in rocm_smi_util.h. Compiled
-// in below ROCm 7.13; rocm_smi_util_amd_smi.cc takes its place from 7.13 on.
-
-#include "rocm/include/rocm_smi/rocm_smi.h"
+// rocm_smi backend for the SMI queries declared in smi_util.h. Compiled
+// in below ROCm 7.13; smi_util_amd_smi.cc takes its place from 7.13 on.
 
 #include <cstdint>
 #include <vector>
@@ -23,7 +21,8 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
-#include "xla/stream_executor/rocm/rocm_smi_util.h"
+#include "rocm/include/rocm_smi/rocm_smi.h"
+#include "xla/stream_executor/rocm/smi_util.h"
 #include "xla/tsl/platform/logging.h"
 
 namespace stream_executor::gpu {
@@ -46,7 +45,7 @@ absl::Status SmiError(absl::string_view api, rsmi_status_t status) {
 
 }  // namespace
 
-absl::Status InitRocmSmi() {
+absl::Status InitSmi() {
   static const absl::Status& init_status =
       *new absl::Status([]() -> absl::Status {
         rsmi_status_t status = rsmi_init(0);
@@ -80,8 +79,11 @@ absl::StatusOr<SmiDeviceHandle> FindDevice(const BdfComponents& target_bdf) {
 
   for (SmiDeviceHandle device : *devices) {
     uint64_t bdfid = 0;
-    if (rsmi_dev_pci_id_get(ToDeviceIndex(device), &bdfid) !=
-        RSMI_STATUS_SUCCESS) {
+    if (rsmi_status_t status =
+            rsmi_dev_pci_id_get(ToDeviceIndex(device), &bdfid);
+        status != RSMI_STATUS_SUCCESS) {
+      VLOG(1) << "Skipping device " << ToDeviceIndex(device) << ": "
+              << SmiError("rsmi_dev_pci_id_get", status);
       continue;
     }
 

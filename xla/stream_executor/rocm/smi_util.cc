@@ -11,9 +11,9 @@ limitations under the License.
 ==============================================================================*/
 
 // Backend independent part of the SMI utilities. The SMI calls themselves live
-// in rocm_smi_util_amd_smi.cc and rocm_smi_util_rocm_smi.cc.
+// in smi_util_amd_smi.cc and smi_util_rocm_smi.cc.
 
-#include "xla/stream_executor/rocm/rocm_smi_util.h"
+#include "xla/stream_executor/rocm/smi_util.h"
 
 #include <cstddef>
 
@@ -27,7 +27,7 @@ limitations under the License.
 
 namespace stream_executor::gpu {
 
-ABSL_CONST_INIT absl::Mutex rocm_smi_mutex(absl::kConstInit);
+ABSL_CONST_INIT absl::Mutex smi_mutex(absl::kConstInit);
 
 // Parses a PCI bus/device/function ID string into its numeric components.
 // Accepts two formats:
