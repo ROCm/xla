@@ -43,7 +43,7 @@ struct BdfComponents {
 // value: rocm_smi identifies a GPU by a dense monitor device index, amd_smi by
 // an opaque processor handle, and both fit in a uintptr_t.
 struct SmiDeviceHandle {
-  uintptr_t value;
+  uintptr_t value = 0;
 
   friend bool operator==(SmiDeviceHandle lhs, SmiDeviceHandle rhs) {
     return lhs.value == rhs.value;

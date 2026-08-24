@@ -47,15 +47,16 @@ absl::Status SmiError(absl::string_view api, rsmi_status_t status) {
 }  // namespace
 
 absl::Status InitRocmSmi() {
-  static const absl::Status& status = *new absl::Status([]() -> absl::Status {
-    rsmi_status_t status = rsmi_init(0);
-    if (status != RSMI_STATUS_SUCCESS) {
-      return SmiError("rsmi_init", status);
-    }
-    VLOG(1) << "SMI device queries go through rocm_smi.";
-    return absl::OkStatus();
-  }());
-  return status;
+  static const absl::Status& init_status =
+      *new absl::Status([]() -> absl::Status {
+        rsmi_status_t status = rsmi_init(0);
+        if (status != RSMI_STATUS_SUCCESS) {
+          return SmiError("rsmi_init", status);
+        }
+        VLOG(1) << "SMI device queries go through rocm_smi.";
+        return absl::OkStatus();
+      }());
+  return init_status;
 }
 
 absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {

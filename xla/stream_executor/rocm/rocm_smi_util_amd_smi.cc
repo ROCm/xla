@@ -46,15 +46,16 @@ absl::Status SmiError(absl::string_view api, amdsmi_status_t status) {
 }  // namespace
 
 absl::Status InitRocmSmi() {
-  static const absl::Status& status = *new absl::Status([]() -> absl::Status {
-    amdsmi_status_t status = amdsmi_init(AMDSMI_INIT_AMD_GPUS);
-    if (status != AMDSMI_STATUS_SUCCESS) {
-      return SmiError("amdsmi_init", status);
-    }
-    VLOG(1) << "SMI device queries go through amd_smi.";
-    return absl::OkStatus();
-  }());
-  return status;
+  static const absl::Status& init_status =
+      *new absl::Status([]() -> absl::Status {
+        amdsmi_status_t status = amdsmi_init(AMDSMI_INIT_AMD_GPUS);
+        if (status != AMDSMI_STATUS_SUCCESS) {
+          return SmiError("amdsmi_init", status);
+        }
+        VLOG(1) << "SMI device queries go through amd_smi.";
+        return absl::OkStatus();
+      }());
+  return init_status;
 }
 
 absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {
@@ -63,6 +64,8 @@ absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {
       status != AMDSMI_STATUS_SUCCESS) {
     return SmiError("amdsmi_get_socket_handles", status);
   }
+
+  if (num_sockets == 0) return std::vector<SmiDeviceHandle>();
 
   std::vector<amdsmi_socket_handle> sockets(num_sockets);
   if (amdsmi_status_t status =
@@ -111,13 +114,15 @@ absl::StatusOr<SmiDeviceHandle> FindDevice(const BdfComponents& target_bdf) {
   bdf.bdf.function_number = target_bdf.function;
 
   amdsmi_processor_handle handle = nullptr;
-  if (amdsmi_get_processor_handle_from_bdf(bdf, &handle) !=
-          AMDSMI_STATUS_SUCCESS ||
-      handle == nullptr) {
+  amdsmi_status_t status = amdsmi_get_processor_handle_from_bdf(bdf, &handle);
+  if (status == AMDSMI_STATUS_NOT_FOUND || handle == nullptr) {
     return absl::NotFoundError(
         absl::StrFormat("amd_smi exposes no device with BDF %04x:%02x:%02x.%x",
                         target_bdf.domain, target_bdf.bus, target_bdf.device,
                         target_bdf.function));
+  }
+  if (status != AMDSMI_STATUS_SUCCESS) {
+    return SmiError("amdsmi_get_processor_handle_from_bdf", status);
   }
 
   return ToDeviceHandle(handle);
