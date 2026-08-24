@@ -22,13 +22,35 @@
 #     TF_GPU_COUNT = Number of GPUs available.
 
 ROCMINFO=$(find -L "${TEST_SRCDIR:-.}" -name "rocminfo" -path "*/bin/rocminfo" | head -n 1)
-TF_GPU_COUNT=$($ROCMINFO | grep "Name: *gfx*" | wc -l)
+
+# A missing rocminfo is a runfiles wiring bug, not a GPU-less host. Fail here
+# rather than falling through to the no-GPU path below, which would run the
+# test without a GPU lock and without HIP_VISIBLE_DEVICES pinning, silently
+# piling every concurrent test onto GPU 0.
+if [[ -z "$ROCMINFO" ]]; then
+    echo "ERROR: rocminfo was not found in the runfiles tree under" >&2
+    echo "       TEST_SRCDIR=${TEST_SRCDIR:-.}" >&2
+    echo "       Check that the --run_under target still depends on" >&2
+    echo "       @local_config_rocm//rocm:rocminfo." >&2
+    exit 1
+fi
+
+ROCMINFO_OUT=$("$ROCMINFO" 2>&1)
+ROCMINFO_STATUS=$?
+TF_GPU_COUNT=$(echo "$ROCMINFO_OUT" | grep "Name: *gfx*" | wc -l)
 TF_TESTS_PER_GPU=${TF_TESTS_PER_GPU:-8}
 
 # There are certain tests in xla that do not require any gpu in order to be executed
 # here we allow executing these tests on a machine without gpu support.
 # if there are no GPUs on that system e.g rbe default pool then execute the test without lock
 if [[ $TF_GPU_COUNT == 0 ]];then
+    # A pool with no GPU and a rocminfo that could not reach the driver look
+    # identical from here, so make the latter visible in the test log.
+    if [[ $ROCMINFO_STATUS -ne 0 ]]; then
+        echo "WARNING: $ROCMINFO exited with status $ROCMINFO_STATUS; treating this host" >&2
+        echo "         as having no GPU. Its output was:" >&2
+        echo "$ROCMINFO_OUT" >&2
+    fi
     echo "Execute with no GPU support"
     exec "$@"
 fi
