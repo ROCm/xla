@@ -48,7 +48,7 @@ message DeviceInterconnectInfoProto {
   string clique_id = 3;
 }
 
-// Next ID: 48
+// Next ID: 50
 message GpuDeviceInfoProto {
   string device_vendor = 30;
   string platform_version = 31;
@@ -103,6 +103,12 @@ message GpuDeviceInfoProto {
   // when that level is L2, in which case consumers use l2_cache_size instead.
   // See DeviceDescription::last_level_cache_size().
   int64 last_level_cache_size = 47;
+
+  // Peak cache read bandwidths in bytes/sec. Left unset where the cache
+  // geometry is not modeled; consumers then scale memory_bandwidth instead.
+  // See DeviceDescription::l2_cache_bandwidth().
+  int64 l2_cache_bandwidth = 48;
+  int64 last_level_cache_bandwidth = 49;
 }
 
 message DnnVersionInfoProto {

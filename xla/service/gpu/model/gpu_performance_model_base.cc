@@ -311,8 +311,8 @@ absl::Duration GpuPerformanceModelBase::ReadTimeWithDRAMHeuristic(
       gpu_device_info.memory_bandwidth() * hbm_bandwidth_utilization_rate;
 
   // Two things can happed on re-reading the buffer:
-  //   - If the buffer fits into the last level cache, the cache speedup is
-  //     applied.
+  //   - If the buffer fits into the last level cache, it is re-read at that
+  //     cache's bandwidth.
   //   - If the buffer doesn't fit, it will be read from DRAM and the same
   //     coalessing waste factor is applied.
   // The bound is the last level cache rather than L2 because that is the
@@ -320,10 +320,30 @@ absl::Duration GpuPerformanceModelBase::ReadTimeWithDRAMHeuristic(
   // coincide on NVIDIA GPUs, but not on CDNA3/CDNA4, which have an L3.
   float rest_bandwidth = gpu_device_info.memory_bandwidth();
   if (n_bytes_net < gpu_device_info.last_level_cache_size()) {
-    rest_bandwidth *= kL2CacheSpeedup;
-    if (n_bytes_net <
-        gpu_device_info.l1_cache_size_per_SM() * gpu_device_info.core_count()) {
-      rest_bandwidth *= kL1CacheSpeedup;
+    // Prefer a real measured bandwidth for the shallowest tier the working set
+    // fits in. Both are 0 unless the device description carries them, which
+    // today only happens on CDNA3/CDNA4.
+    int64_t tier_bandwidth = 0;
+    if (n_bytes_net < gpu_device_info.l2_cache_size()) {
+      tier_bandwidth = gpu_device_info.l2_cache_bandwidth();
+    }
+    if (tier_bandwidth == 0) {
+      tier_bandwidth = gpu_device_info.last_level_cache_bandwidth();
+    }
+
+    if (tier_bandwidth > 0) {
+      // kL2CacheSpeedup and kL1CacheSpeedup are proxies for exactly this
+      // quantity, so they must not stack on top of it. Note the L1 tier is
+      // deliberately not modeled here: no AMD documentation gives an L1
+      // bytes-per-clock, so an L1-resident working set is priced as
+      // L2-resident, which understates rather than overstates the speedup.
+      rest_bandwidth = tier_bandwidth;
+    } else {
+      rest_bandwidth *= kL2CacheSpeedup;
+      if (n_bytes_net < gpu_device_info.l1_cache_size_per_SM() *
+                            gpu_device_info.core_count()) {
+        rest_bandwidth *= kL1CacheSpeedup;
+      }
     }
   } else {
     rest_bandwidth *= hbm_bandwidth_utilization_rate;

@@ -163,9 +163,13 @@ stream_executor::DeviceDescription TestGpuDeviceInfo::AMDMI350DeviceInfo() {
   // Keep in sync with GetRocmMemoryBandwidth in rocm_memory_bandwidth.cc.
   b.set_memory_bandwidth(6'810'000'000'000);
   // The 4 MiB L2 is private to one XCD; the 256 MiB L3 is the first pool
-  // every CU shares.
+  // every CU shares. Bandwidths are width x clock, with widths from the CDNA4
+  // whitepaper (2048 B/clk per XCD for L2, 8192 B/clk for L3). Keep in sync
+  // with specs/mi350.txtpb.
   b.set_l2_cache_size(4 * 1024 * 1024);
   b.set_last_level_cache_size(256LL * 1024 * 1024);
+  b.set_l2_cache_bandwidth(36'044'800'000'000);      // 2048 x 8 XCD x 2.2 GHz
+  b.set_last_level_cache_bandwidth(17'203'200'000'000);  // 8192 x 2.1 GHz
   b.set_clock_rate_ghz(2.2);
   b.set_device_memory_size(270'566'162'432);
   b.set_registers_per_core_limit(131072);

@@ -366,6 +366,62 @@ TEST_F(GpuPerformanceModelBaseTest,
 }
 
 TEST_F(GpuPerformanceModelBaseTest,
+       ReadTimeWithDRAMHeuristicSeparatesL2AndL3OnMI350) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  ASSERT_GT(mi350.l2_cache_bandwidth(), mi350.last_level_cache_bandwidth());
+  ASSERT_GT(mi350.last_level_cache_bandwidth(), mi350.memory_bandwidth());
+
+  // Three working sets, one per tier: inside the 4 MiB per-XCD L2, between it
+  // and the 256 MiB L3, and beyond the L3. Each should be strictly more
+  // expensive per byte than the one before it. A single cache speedup constant
+  // cannot produce this ordering, which is the point of the change.
+  auto per_byte_reread_cost = [&](int64_t n_bytes_net) {
+    // Enough blocks that AdjustBandwidth's per-block ceiling does not clamp
+    // the faster tiers and flatten the comparison.
+    return GpuPerformanceModelBase::ReadTimeWithDRAMHeuristic(
+               mi350, /*num_blocks=*/100000, n_bytes_net,
+               /*n_bytes_total=*/2 * n_bytes_net, PrimitiveType::F32,
+               /*hbm_bandwidth_utilization_rate=*/1.0) /
+           n_bytes_net;
+  };
+
+  absl::Duration l2_resident = per_byte_reread_cost(2L * 1024 * 1024);
+  absl::Duration l3_resident = per_byte_reread_cost(64L * 1024 * 1024);
+  absl::Duration dram_resident = per_byte_reread_cost(512L * 1024 * 1024);
+
+  EXPECT_LT(l2_resident, l3_resident);
+  EXPECT_LT(l3_resident, dram_resident);
+}
+
+TEST_F(GpuPerformanceModelBaseTest,
+       ReadTimeWithDRAMHeuristicIgnoresL1MultiplierWhenTierBandwidthIsKnown) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  // Aggregate L1 on MI350 is 32 KiB x 256 CUs = 8 MiB, which exceeds the 4 MiB
+  // per-XCD L2, so the legacy L1 branch would fire for every L2-resident
+  // working set and stack x8 on top of a real bandwidth. Guard against that
+  // regression: the modeled re-read rate must not exceed the L2's own
+  // bandwidth.
+  ASSERT_GT(mi350.l1_cache_size_per_SM() * mi350.core_count(),
+            mi350.l2_cache_size());
+
+  constexpr int64_t kNBytes = 1L * 1024 * 1024;
+  absl::Duration reread_only =
+      GpuPerformanceModelBase::ReadTimeWithDRAMHeuristic(
+          mi350, /*num_blocks=*/100000, kNBytes,
+          /*n_bytes_total=*/2 * kNBytes, PrimitiveType::F32,
+          /*hbm_bandwidth_utilization_rate=*/1.0) -
+      GpuPerformanceModelBase::ReadTimeWithDRAMHeuristic(
+          mi350, /*num_blocks=*/100000, kNBytes,
+          /*n_bytes_total=*/kNBytes, PrimitiveType::F32,
+          /*hbm_bandwidth_utilization_rate=*/1.0);
+
+  // The re-read of kNBytes must take at least kNBytes / l2_cache_bandwidth.
+  absl::Duration floor = absl::Seconds(static_cast<double>(kNBytes) /
+                                       mi350.l2_cache_bandwidth());
+  EXPECT_GE(reread_only, floor);
+}
+
+TEST_F(GpuPerformanceModelBaseTest,
        ReadTimeWithDRAMHeuristicFallsBackToL2WhenLastLevelCacheUnset) {
   // A6000 leaves last_level_cache_size unset, so the gate is still L2 and the
   // NVIDIA behavior is unchanged.

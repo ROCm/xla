@@ -363,6 +363,24 @@ class DeviceDescription {
     return last_level_cache_size_ > 0 ? last_level_cache_size_ : l2_cache_size_;
   }
 
+  // Peak aggregate read bandwidth of the L2 in bytes/sec, or 0 if unknown.
+  //
+  // On CDNA3/CDNA4 this aggregates every XCD's private L2, since a working set
+  // small enough to fit one XCD's L2 is cached independently by all of them.
+  // Consumers must treat 0 as "no information" and fall back to scaling
+  // memory_bandwidth(), which is what the cost model did before this existed.
+  int64_t l2_cache_bandwidth() const {
+    return l2_cache_bandwidth_ > 0 ? l2_cache_bandwidth_ : 0;
+  }
+
+  // Peak read bandwidth of the last level cache in bytes/sec, or 0 if unknown.
+  // Unlike last_level_cache_size(), this does NOT fall back to the L2 value:
+  // the two tiers have very different rates, so a wrong number is worse than
+  // no number.
+  int64_t last_level_cache_bandwidth() const {
+    return last_level_cache_bandwidth_ > 0 ? last_level_cache_bandwidth_ : 0;
+  }
+
   // Returns the device's memory bandwidth in bytes/sec.  (This is for
   // reads/writes to/from the device's own memory, not for transfers between the
   // host and device.)
@@ -556,6 +574,10 @@ class DeviceDescription {
   void set_last_level_cache_size(int64_t value) {
     last_level_cache_size_ = value;
   }
+  void set_l2_cache_bandwidth(int64_t value) { l2_cache_bandwidth_ = value; }
+  void set_last_level_cache_bandwidth(int64_t value) {
+    last_level_cache_bandwidth_ = value;
+  }
   void set_memory_bandwidth(int64_t value) { memory_bandwidth_ = value; }
   void set_pcie_bandwidth(int64_t value) { pcie_bandwidth_ = value; }
   void set_mem_clock_ghz(float value) { mem_clock_ghz_ = value; }
@@ -660,6 +682,11 @@ class DeviceDescription {
   // Unset on platforms whose last level cache is L2; read through
   // last_level_cache_size(), which falls back to l2_cache_size_.
   int64_t last_level_cache_size_ = kUninitialized<int64_t>;
+  // Cache read bandwidths in bytes/sec. Only populated where the cache
+  // geometry is modeled; unset means the cost model scales memory_bandwidth_
+  // by its legacy speedup constants instead.
+  int64_t l2_cache_bandwidth_ = kUninitialized<int64_t>;
+  int64_t last_level_cache_bandwidth_ = kUninitialized<int64_t>;
 
   int64_t memory_bandwidth_ = kUninitialized<int64_t>;
   int64_t pcie_bandwidth_ = kUninitialized<int64_t>;

@@ -59,6 +59,23 @@ struct PcieLinkStatus {
   uint16_t width;
 };
 
+// One level of the device's data cache hierarchy.
+struct CacheLevelInfo {
+  uint32_t level;             // 1, 2, 3, ...
+  int64_t size_bytes;         // Per instance, not aggregated.
+  uint32_t num_instances;     // e.g. the XCD count for L2 on CDNA3/CDNA4.
+  uint32_t max_num_cu_shared; // Compute units sharing one instance.
+};
+
+// Clock domains XLA needs, named independently of the SMI backend. The L2
+// lives on the XCD and runs at the engine clock; the Infinity Cache lives on
+// the IODs and runs at the fabric clock.
+enum class SmiClockDomain {
+  kEngine,   // gfxclk / sclk
+  kFabric,   // fclk, Data Fabric
+  kMemory,   // uclk
+};
+
 // Process-global lock serializing all SMI access from XLA. rocm_smi only
 // guards state with a per-device mutex, but some of it is global (e.g. the
 // shared gpu_metrics object), so concurrent queries on different devices race.
@@ -91,11 +108,17 @@ absl::StatusOr<PcieLinkStatus> QueryPcieLinkStatus(SmiDeviceHandle device)
 absl::StatusOr<uint64_t> QueryHiveId(SmiDeviceHandle device)
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(smi_mutex);
 
-// Returns the size in bytes of the largest data cache the device reports,
-// which on CDNA3/CDNA4 is L3 rather than L2. Only the amd_smi backend
-// implements this; rocm_smi has no public cache query and returns
-// Unimplemented.
-absl::StatusOr<int64_t> QueryLastLevelCacheSize(SmiDeviceHandle device)
+// Returns the device's data cache levels, ordered from shallowest to deepest.
+// Instruction caches are excluded. On CDNA3/CDNA4 the deepest level is the L3
+// rather than the L2. Only the amd_smi backend implements this; rocm_smi has
+// no public cache query and returns Unimplemented.
+absl::StatusOr<std::vector<CacheLevelInfo>> QueryDataCacheHierarchy(
+    SmiDeviceHandle device) ABSL_EXCLUSIVE_LOCKS_REQUIRED(smi_mutex);
+
+// Returns the peak frequency of a clock domain in MHz. Fails if the domain is
+// not exposed, which happens for the fabric clock on some ASICs.
+absl::StatusOr<int64_t> QueryMaxClockMhz(SmiDeviceHandle device,
+                                         SmiClockDomain domain)
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(smi_mutex);
 
 // Returns true if src reaches dst over an xGMI link.

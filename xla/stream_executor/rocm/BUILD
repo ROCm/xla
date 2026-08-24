@@ -140,11 +140,12 @@ cc_library(
         "rocm-only",
     ],
     deps = [
+        ":rocm_cache_bandwidth",
+        ":rocm_cache_info",
         ":rocm_command_buffer",
         ":rocm_context",
         ":rocm_event",
         ":rocm_kernel",
-        ":rocm_last_level_cache",
         ":rocm_memory_bandwidth",
         ":rocm_pcie_bandwidth",
         ":rocm_platform_id",
@@ -432,9 +433,9 @@ cc_library(
 )
 
 cc_library(
-    name = "rocm_last_level_cache",
-    srcs = ["rocm_last_level_cache.cc"],
-    hdrs = ["rocm_last_level_cache.h"],
+    name = "rocm_cache_info",
+    srcs = ["rocm_cache_info.cc"],
+    hdrs = ["rocm_cache_info.h"],
     tags = [
         "gpu",
         "rocm-only",
@@ -450,14 +451,41 @@ cc_library(
 )
 
 xla_cc_test(
-    name = "rocm_last_level_cache_test",
-    srcs = ["rocm_last_level_cache_test.cc"],
+    name = "rocm_cache_info_test",
+    srcs = ["rocm_cache_info_test.cc"],
     tags = [
         "gpu",
         "rocm-only",
     ],
     deps = [
-        ":rocm_last_level_cache",
+        ":rocm_cache_info",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "rocm_cache_bandwidth",
+    srcs = ["rocm_cache_bandwidth.cc"],
+    hdrs = ["rocm_cache_bandwidth.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_compute_capability",
+    ],
+)
+
+xla_cc_test(
+    name = "rocm_cache_bandwidth_test",
+    srcs = ["rocm_cache_bandwidth_test.cc"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_cache_bandwidth",
+        ":rocm_compute_capability",
         "@com_google_googletest//:gtest_main",
     ],
 )

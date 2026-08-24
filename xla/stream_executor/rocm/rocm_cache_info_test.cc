@@ -10,21 +10,30 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "xla/stream_executor/rocm/rocm_last_level_cache.h"
+#include "xla/stream_executor/rocm/rocm_cache_info.h"
 
 #include <gtest/gtest.h>
 
 namespace stream_executor::gpu {
 namespace {
 
-TEST(GetRocmLastLevelCacheSizeTest, InvalidBdfFails) {
-  // An unparsable PCI bus ID cannot name a device, so the query fails rather
-  // than reporting a size.
-  EXPECT_FALSE(GetRocmLastLevelCacheSize("invalid").ok());
+TEST(RocmCacheInfoTest, DefaultsAreZero) {
+  // Zero means "not available", which callers must treat as "leave the
+  // DeviceDescription field unset" rather than substituting a guess.
+  RocmCacheInfo info;
+  EXPECT_EQ(info.last_level_cache_size_bytes, 0);
+  EXPECT_EQ(info.num_l2_instances, 0);
+  EXPECT_EQ(info.fabric_clock_mhz, 0);
 }
 
-TEST(GetRocmLastLevelCacheSizeTest, EmptyBdfFails) {
-  EXPECT_FALSE(GetRocmLastLevelCacheSize("").ok());
+TEST(GetRocmCacheInfoTest, InvalidBdfFails) {
+  // An unparsable PCI bus ID cannot name a device, so the query fails rather
+  // than reporting an empty hierarchy.
+  EXPECT_FALSE(GetRocmCacheInfo("invalid").ok());
+}
+
+TEST(GetRocmCacheInfoTest, EmptyBdfFails) {
+  EXPECT_FALSE(GetRocmCacheInfo("").ok());
 }
 
 }  // namespace

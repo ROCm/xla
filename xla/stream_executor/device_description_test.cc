@@ -222,21 +222,44 @@ TEST(DeviceDescription, LastLevelCacheSizeOverridesL2WhenSet) {
   EXPECT_EQ(desc.last_level_cache_size(), 256LL * 1024 * 1024);
 }
 
-TEST(DeviceDescription, LastLevelCacheSizeProtoRoundTrip) {
+TEST(DeviceDescription, CacheBandwidthsAreZeroWhenUnset) {
+  // Unlike last_level_cache_size(), the bandwidths do not fall back to each
+  // other or to memory_bandwidth(): the tiers have very different rates, so
+  // consumers must see "unknown" rather than a wrong number.
+  DeviceDescription desc;
+  desc.set_l2_cache_size(50 * 1024 * 1024);
+  desc.set_memory_bandwidth(2'039'000'000'000);
+  EXPECT_EQ(desc.l2_cache_bandwidth(), 0);
+  EXPECT_EQ(desc.last_level_cache_bandwidth(), 0);
+}
+
+TEST(DeviceDescription, CacheFieldsProtoRoundTrip) {
   DeviceDescription desc;
   desc.set_gpu_compute_capability(
       GpuComputeCapability(RocmComputeCapability("gfx950")));
   desc.set_l2_cache_size(4 * 1024 * 1024);
   desc.set_last_level_cache_size(256LL * 1024 * 1024);
+  desc.set_l2_cache_bandwidth(36'044'800'000'000);
+  desc.set_last_level_cache_bandwidth(17'203'200'000'000);
 
   ASSERT_OK_AND_ASSIGN(DeviceDescription from_proto,
                        DeviceDescription::FromProto(desc.ToProto()));
-  EXPECT_EQ(from_proto.last_level_cache_size(), 256LL * 1024 * 1024);
   EXPECT_EQ(from_proto.l2_cache_size(), 4 * 1024 * 1024);
+  EXPECT_EQ(from_proto.last_level_cache_size(), 256LL * 1024 * 1024);
+  EXPECT_EQ(from_proto.l2_cache_bandwidth(), 36'044'800'000'000);
+  EXPECT_EQ(from_proto.last_level_cache_bandwidth(), 17'203'200'000'000);
 
-  // Two descriptions differing only in this field are not equal.
+  // Descriptions differing in only one of the new fields are not equal.
   DeviceDescription other = desc;
   other.set_last_level_cache_size(64LL * 1024 * 1024);
+  EXPECT_NE(desc, other);
+
+  other = desc;
+  other.set_l2_cache_bandwidth(1);
+  EXPECT_NE(desc, other);
+
+  other = desc;
+  other.set_last_level_cache_bandwidth(1);
   EXPECT_NE(desc, other);
 }
 

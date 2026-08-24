@@ -162,7 +162,8 @@ absl::StatusOr<uint64_t> QueryHiveId(SmiDeviceHandle device) {
   return xgmi_info.xgmi_hive_id;
 }
 
-absl::StatusOr<int64_t> QueryLastLevelCacheSize(SmiDeviceHandle device) {
+absl::StatusOr<std::vector<CacheLevelInfo>> QueryDataCacheHierarchy(
+    SmiDeviceHandle device) {
   amdsmi_gpu_cache_info_t cache_info = {};
   if (amdsmi_status_t status =
           amdsmi_get_gpu_cache_info(ToProcessorHandle(device), &cache_info);
@@ -171,42 +172,86 @@ absl::StatusOr<int64_t> QueryLastLevelCacheSize(SmiDeviceHandle device) {
   }
 
   // amd_smi fills the array from the KFD topology, one entry per distinct
-  // cache type. Take the largest cache at the deepest level, ignoring
-  // instruction caches. Entries at the same level are alternatives, not
-  // slices: KFD emits one record per CU group and each already reports the
-  // whole pool, divided by the memory partition mode where that applies, so
-  // summing them or scaling by num_cache_instance would overcount.
-  uint32_t num_types = std::min<uint32_t>(cache_info.num_cache_types,
-                                          AMDSMI_MAX_CACHE_TYPES);
-  uint32_t deepest_level = 0;
-  uint32_t size_kb = 0;
+  // cache type. Keep data caches only, and collapse duplicate levels by taking
+  // the largest: entries at the same level are alternatives, not slices. KFD
+  // emits one record per CU group and each already reports the whole pool,
+  // divided by the memory partition mode where that applies, so summing sizes
+  // would overcount.
+  uint32_t num_types =
+      std::min<uint32_t>(cache_info.num_cache_types, AMDSMI_MAX_CACHE_TYPES);
+  std::vector<CacheLevelInfo> levels;
   for (uint32_t i = 0; i < num_types; ++i) {
     const auto& cache = cache_info.cache[i];
     if ((cache.cache_properties & AMDSMI_CACHE_PROPERTY_DATA_CACHE) == 0) {
       continue;
     }
     if (cache.cache_size == 0) continue;
-    if (cache.cache_level > deepest_level) {
-      deepest_level = cache.cache_level;
-      size_kb = cache.cache_size;
-    } else if (cache.cache_level == deepest_level) {
-      size_kb = std::max(size_kb, cache.cache_size);
-    }
+
     VLOG(2) << "amd_smi cache entry " << i << ": level " << cache.cache_level
             << ", " << cache.cache_size << " KB, shared by up to "
             << cache.max_num_cu_shared << " CUs, " << cache.num_cache_instance
             << " instances";
+
+    int64_t size_bytes = static_cast<int64_t>(cache.cache_size) * 1024;
+    auto existing = std::find_if(
+        levels.begin(), levels.end(),
+        [&](const CacheLevelInfo& l) { return l.level == cache.cache_level; });
+    if (existing == levels.end()) {
+      levels.push_back(CacheLevelInfo{cache.cache_level, size_bytes,
+                                      cache.num_cache_instance,
+                                      cache.max_num_cu_shared});
+    } else if (size_bytes > existing->size_bytes) {
+      existing->size_bytes = size_bytes;
+      existing->num_instances = cache.num_cache_instance;
+      existing->max_num_cu_shared = cache.max_num_cu_shared;
+    }
   }
 
-  if (size_kb == 0) {
+  if (levels.empty()) {
     return absl::InternalError(
         absl::StrCat("amdsmi_get_gpu_cache_info reported no data cache (",
                      cache_info.num_cache_types, " entries)"));
   }
 
-  VLOG(1) << "Last level cache is L" << deepest_level << ", " << size_kb
-          << " KB";
-  return static_cast<int64_t>(size_kb) * 1024;
+  std::sort(levels.begin(), levels.end(),
+            [](const CacheLevelInfo& a, const CacheLevelInfo& b) {
+              return a.level < b.level;
+            });
+  return levels;
+}
+
+absl::StatusOr<int64_t> QueryMaxClockMhz(SmiDeviceHandle device,
+                                         SmiClockDomain domain) {
+  amdsmi_clk_type_t clk_type;
+  switch (domain) {
+    case SmiClockDomain::kEngine:
+      clk_type = AMDSMI_CLK_TYPE_GFX;
+      break;
+    case SmiClockDomain::kFabric:
+      clk_type = AMDSMI_CLK_TYPE_DF;
+      break;
+    case SmiClockDomain::kMemory:
+      clk_type = AMDSMI_CLK_TYPE_MEM;
+      break;
+  }
+
+  amdsmi_clk_info_t clk_info = {};
+  if (amdsmi_status_t status = amdsmi_get_clock_info(ToProcessorHandle(device),
+                                                     clk_type, &clk_info);
+      status != AMDSMI_STATUS_SUCCESS) {
+    return SmiError("amdsmi_get_clock_info", status);
+  }
+
+  // Not every ASIC exposes every domain; the Data Fabric clock in particular
+  // can come back as a successful call reporting zero.
+  if (clk_info.max_clk == 0) {
+    return absl::UnavailableError(
+        "amdsmi_get_clock_info reported a zero peak clock for this domain");
+  }
+
+  VLOG(2) << "Peak clock: " << clk_info.max_clk << " MHz (current "
+          << clk_info.clk << " MHz)";
+  return static_cast<int64_t>(clk_info.max_clk);
 }
 
 absl::StatusOr<bool> IsXgmiPeer(SmiDeviceHandle src, SmiDeviceHandle dst) {

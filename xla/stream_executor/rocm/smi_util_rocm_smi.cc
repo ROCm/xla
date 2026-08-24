@@ -134,12 +134,23 @@ absl::StatusOr<uint64_t> QueryHiveId(SmiDeviceHandle device) {
   return hive_id;
 }
 
-absl::StatusOr<int64_t> QueryLastLevelCacheSize(SmiDeviceHandle /*device*/) {
+absl::StatusOr<std::vector<CacheLevelInfo>> QueryDataCacheHierarchy(
+    SmiDeviceHandle /*device*/) {
   // rocm_smi reads the KFD cache topology internally but does not export a
   // cache query from rocm_smi.h; amd_smi reaches rsmi_dev_cache_info_get as an
   // internal symbol. Callers fall back to the HIP-reported L2 size.
   return absl::UnimplementedError(
-      "rocm_smi exposes no public cache info API; last level cache size "
+      "rocm_smi exposes no public cache info API; cache topology requires the "
+      "amd_smi backend (ROCm 7.13 or later)");
+}
+
+absl::StatusOr<int64_t> QueryMaxClockMhz(SmiDeviceHandle /*device*/,
+                                         SmiClockDomain /*domain*/) {
+  // rsmi_dev_gpu_clk_freq_get exposes the DPM frequency table but not a peak
+  // for the Data Fabric domain, which is the one XLA needs. Not worth a
+  // partial implementation given the amd_smi floor.
+  return absl::UnimplementedError(
+      "rocm_smi exposes no peak clock query for the required domains; this "
       "requires the amd_smi backend (ROCm 7.13 or later)");
 }
 

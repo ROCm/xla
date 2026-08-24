@@ -74,11 +74,12 @@ limitations under the License.
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform/initialize.h"
 #include "xla/stream_executor/plugin_registry.h"
+#include "xla/stream_executor/rocm/rocm_cache_bandwidth.h"
+#include "xla/stream_executor/rocm/rocm_cache_info.h"
 #include "xla/stream_executor/rocm/rocm_command_buffer.h"
 #include "xla/stream_executor/rocm/rocm_context.h"
 #include "xla/stream_executor/rocm/rocm_event.h"
 #include "xla/stream_executor/rocm/rocm_kernel.h"
-#include "xla/stream_executor/rocm/rocm_last_level_cache.h"
 #include "xla/stream_executor/rocm/rocm_memory_bandwidth.h"
 #include "xla/stream_executor/rocm/rocm_pcie_bandwidth.h"
 #include "xla/stream_executor/rocm/rocm_platform_id.h"
@@ -1183,17 +1184,44 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
   }
 
   {
-    // HIP's l2CacheSize is per-XCD on CDNA3/CDNA4 and misses the L3 there, so
-    // ask SMI for the real last level. Leaving the field unset when SMI
-    // reports nothing deeper than L2 keeps last_level_cache_size() falling
-    // back to the L2 value set above.
-    absl::StatusOr<int64_t> llc = gpu::GetRocmLastLevelCacheSize(pci_bus_id);
-    if (!llc.ok()) {
-      LOG(WARNING) << "Could not determine last level cache size for device "
-                   << device_ordinal << " via SMI (" << llc.status().message()
+    // HIP reports neither the L3 nor any cache bandwidth. SMI gives the cache
+    // topology and the fabric clock; combined with the whitepaper channel
+    // widths that yields per-tier bandwidths that are correct per SKU, since
+    // MI350X and MI355X share gfx950 but run different engine clocks.
+    //
+    // Every field is best effort. Leaving one unset keeps the cost model on
+    // its previous behavior for that quantity rather than using a guess.
+    RocmComputeCapability cc(gcn_arch_name);
+    absl::StatusOr<gpu::RocmCacheInfo> cache = gpu::GetRocmCacheInfo(pci_bus_id);
+    if (!cache.ok()) {
+      LOG(WARNING) << "Could not determine cache hierarchy for device "
+                   << device_ordinal << " via SMI ("
+                   << cache.status().message()
                    << "). Falling back to the HIP-reported L2 size.";
-    } else if (*llc > desc.l2_cache_size()) {
-      desc.set_last_level_cache_size(*llc);
+    } else {
+      // Only override when SMI found something deeper than the L2 HIP
+      // reported; CDNA1/CDNA2 and most APUs have no L3 at all.
+      if (cache->last_level_cache_size_bytes > desc.l2_cache_size()) {
+        desc.set_last_level_cache_size(cache->last_level_cache_size_bytes);
+      }
+
+      // The L2 sits on the XCD, so it runs at the engine clock that
+      // clock_rate_ghz already holds. No extra clock query needed. If the
+      // property read above failed this is still kUninitialized, which
+      // GetRocmL2CacheBandwidth rejects as implausible.
+      int64_t l2_bandwidth = gpu::GetRocmL2CacheBandwidth(
+          cc, cache->num_l2_instances, desc.clock_rate_ghz());
+      if (l2_bandwidth > 0) desc.set_l2_cache_bandwidth(l2_bandwidth);
+
+      // The last level cache sits on the IODs and runs at the fabric clock,
+      // which not every ASIC exposes.
+      int64_t llc_bandwidth = gpu::GetRocmLastLevelCacheBandwidth(
+          cc, cache->fabric_clock_mhz / 1000.0);
+      if (llc_bandwidth > 0) desc.set_last_level_cache_bandwidth(llc_bandwidth);
+
+      VLOG(1) << "Device " << device_ordinal << " cache bandwidths: L2 "
+              << l2_bandwidth / int64_t{1000000000} << " GB/s, last level "
+              << llc_bandwidth / int64_t{1000000000} << " GB/s";
     }
   }
 
