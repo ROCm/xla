@@ -1044,6 +1044,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 .performance-controls{grid-template-columns:repeat(6,minmax(130px,1fr))}.performance-chart{border:1px solid var(--border);border-radius:6px;background:var(--surface);overflow:auto;margin-bottom:10px}.chart-head{display:flex;justify-content:space-between;gap:16px;padding:12px 14px 0}.chart-head strong{font-size:15px}.chart-head span{text-align:right}.performance-chart svg{display:block;width:100%;min-width:960px;height:430px}.chart-legend{display:flex;gap:18px;flex-wrap:wrap;padding:0 14px 10px}.legend-mark{display:inline-block;width:11px;height:11px;margin-right:5px;vertical-align:-1px}.legend-line{background:var(--accent);border-radius:50%}.legend-fail{color:var(--danger);font-weight:700}@media(max-width:1150px){.performance-controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.performance-controls{grid-template-columns:1fr}.chart-head{display:block}.chart-head span{display:block;text-align:left}}
 .performance-extremes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:10px 0}.performance-extremes>div{border:1px solid var(--border);border-radius:6px;padding:10px 12px;background:var(--surface)}.performance-extremes strong{display:block}@media(max-width:800px){.performance-extremes{grid-template-columns:1fr}}
 .matrix-controls{grid-template-columns:repeat(3,minmax(130px,1fr))}@media(max-width:650px){.matrix-controls{grid-template-columns:1fr}}
+.failure-controls{grid-template-columns:repeat(6,minmax(110px,1fr)) minmax(180px,1.4fr)}@media(max-width:1150px){.failure-controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.failure-controls{grid-template-columns:1fr}}
 </style>
 </head>
 <body><main>
@@ -1087,15 +1088,17 @@ HTML_TEMPLATE = r"""<!doctype html>
 <div class="table-wrap"><table class="matrix"><thead id="matrix-head"></thead><tbody id="matrix-body"></tbody></table></div>
 
 <h2>Failure signature overview</h2>
-<p class="muted">Grouped branch-workload failures in this campaign. Occurrences reports the total number of failure records matching the normalized signature, normally one workload failure on one branch. Workloads reports the number of unique workload configurations, with GPU variants counted separately. Branches reports the number of unique XLA targets. These labels describe observed signatures, not confirmed root causes.</p>
+<p class="muted">Grouped branch-workload failures in this campaign. Occurrences reports the total number of failure records matching the normalized signature, normally one workload failure on one branch. Workloads reports the number of unique workload configurations, with GPU variants counted separately. Branches reports the number of unique XLA targets. Select a category to reset the explorer filters and show all signatures in that category. These labels describe observed signatures, not confirmed root causes.</p>
 <div class="table-wrap"><table><thead><tr><th>Category</th><th>Normalized signature</th><th title="Total failure records matching this normalized signature">Occurrences</th><th title="Unique workload configurations affected by this signature">Workloads</th><th title="Unique XLA branch targets where this signature appeared">Branches</th><th>Examples</th></tr></thead><tbody id="signature-body"></tbody></table></div>
 
 <h2>Failure explorer and reproduction</h2>
-<div class="controls">
+<div class="controls failure-controls">
 <label>Branch<select id="branch-filter"></select></label>
 <label>Category<select id="category-filter"></select></label>
+<label>Domain<select id="domain-filter"></select></label>
+<label>Model<select id="model-filter"></select></label>
 <label>Mode<select id="mode-filter"></select></label>
-<label>GPU / training<select id="gpu-filter"></select></label>
+<label>Inference GPU count<select id="gpu-filter"></select></label>
 <label>Search<input id="failure-search" type="search" placeholder="model, HLO, signature"></label>
 </div>
 <div class="explorer">
@@ -1209,15 +1212,33 @@ function renderMatrix(){
 function populateFilters(){
  byId("branch-filter").innerHTML=option("","All branches")+DATA.branches.map(branch=>option(branch.slug,branch.label)).join("");
  byId("category-filter").innerHTML=option("","All categories")+uniq(DATA.failures.map(f=>f.category)).map(value=>option(value)).join("");
- byId("mode-filter").innerHTML=option("","All modes")+uniq(DATA.failures.map(f=>f.mode)).map(value=>option(value)).join("");
- byId("gpu-filter").innerHTML=option("","All GPU counts")+uniq(DATA.failures.map(f=>f.gpu)).map(value=>option(value)).join("");
+ cascadeFailureFilters();
+}
+function failureHierarchyFilters(){
+ return {domain:byId("domain-filter").value,model:byId("model-filter").value,mode:byId("mode-filter").value,gpu:byId("gpu-filter").value};
+}
+function cascadeFailureFilters(){
+ const previous=failureHierarchyFilters();
+ setAllSelect("domain-filter",uniq(DATA.failures.map(f=>f.domain)),previous.domain,"All domains");
+ let subset=DATA.failures.filter(f=>!byId("domain-filter").value||f.domain===byId("domain-filter").value);
+ setAllSelect("model-filter",uniq(subset.map(f=>f.model)),previous.model,"All models");
+ subset=subset.filter(f=>!byId("model-filter").value||f.model===byId("model-filter").value);
+ setAllSelect("mode-filter",uniq(subset.map(f=>f.mode)),previous.mode,"All modes");
+ const domain=byId("domain-filter").value,model=byId("model-filter").value,gpuSource=performance.filter(r=>r.mode==="inference"&&(!domain||r.domain===domain)&&(!model||r.model===model));
+ setAllSelect("gpu-filter",uniq(gpuSource.map(r=>r.gpu)),previous.gpu,"All GPU counts");
+ syncFailureGpuFilter();
+ renderFailures();
+}
+function syncFailureGpuFilter(){
+ const gpu=byId("gpu-filter"),training=byId("mode-filter").value==="training";if(training)gpu.value="";gpu.disabled=training;
 }
 function selectedFailures(){
- const branch=byId("branch-filter").value,category=byId("category-filter").value,mode=byId("mode-filter").value,gpu=byId("gpu-filter").value,query=byId("failure-search").value.trim().toLowerCase();
- return DATA.failures.filter(f=>(!branch||f.branch===branch)&&(!category||f.category===category)&&(!mode||f.mode===mode)&&(!gpu||f.gpu===gpu)&&(!query||(f.leaf+" "+f.module+" "+f.signature+" "+f.raw_error).toLowerCase().includes(query)));
+ const branch=byId("branch-filter").value,category=byId("category-filter").value,domain=byId("domain-filter").value,model=byId("model-filter").value,mode=byId("mode-filter").value,gpu=byId("gpu-filter").value,query=byId("failure-search").value.trim().toLowerCase();
+ return DATA.failures.filter(f=>(!branch||f.branch===branch)&&(!category||f.category===category)&&(!domain||f.domain===domain)&&(!model||f.model===model)&&(!mode||f.mode===mode)&&(!gpu||f.gpu===gpu)&&(!query||(f.leaf+" "+f.module+" "+f.signature+" "+f.raw_error).toLowerCase().includes(query)));
 }
 function renderFailures(){
  const failures=selectedFailures();
+ if(!failures.length){byId("failure-body").innerHTML=`<tr><td colspan="5" class="muted">No failures match the selected filters.</td></tr>`;delete byId("detail").dataset.failureId;byId("detail").innerHTML=`<p class="muted">No failure selected.</p>`;return}
  byId("failure-body").innerHTML=failures.map(f=>`<tr><td>${esc(f.branch_label)}</td><td>${esc(f.leaf)}</td><td>${esc(f.category)}</td><td><code>${esc(f.module)}</code></td><td><button onclick="inspectFailure(${f.id})">Inspect</button></td></tr>`).join("");
  if(failures.length&&!failures.some(f=>String(f.id)===byId("detail").dataset.failureId))inspectFailure(failures[0].id);
 }
@@ -1226,12 +1247,12 @@ function inspectFailure(id){
  byId("detail").innerHTML=`<h3>${esc(f.category)}</h3><p>${esc(f.signature)}</p><dl><dt>Branch</dt><dd>${esc(f.branch_label)}<br><code>${esc(f.commit)}</code></dd><dt>Workload</dt><dd><code>${esc(f.leaf)}</code></dd><dt>Failing HLO</dt><dd><code>${esc(f.module_path||f.leaf_path)}</code></dd><dt>Partitions</dt><dd>${f.partitions}</dd><dt>Root evidence</dt><dd>${esc(f.raw_error)}</dd><dt>Source log</dt><dd><a href="${esc(f.log_uri)}">${esc(f.log_path)}</a>:${f.root_error_line}</dd></dl><div class="copy-row"><h3>Focused reproduction</h3><button onclick="copyRepro(${id})">Copy command</button><span class="muted" id="copy-status"></span></div><pre>${esc(f.repro_command)}</pre>`;
 }
 async function copyRepro(id){const f=failureById[id];try{await navigator.clipboard.writeText(f.repro_command);byId("copy-status").textContent="Copied"}catch(error){byId("copy-status").textContent="Select and copy the command below"}}
-function filterCategory(category){byId("category-filter").value=category;renderFailures();byId("failure-search").scrollIntoView({behavior:"smooth",block:"center"})}
+function filterCategory(category){["branch-filter","domain-filter","model-filter","mode-filter","gpu-filter"].forEach(id=>byId(id).value="");byId("failure-search").value="";byId("category-filter").value=category;cascadeFailureFilters();byId("failure-search").scrollIntoView({behavior:"smooth",block:"center"})}
 function renderProvenance(){
  const c=DATA.campaign,b=c.benchmark||{},gpu=c.gpu_architectures?.length?c.gpu_architectures.join(", "):"Not captured",rocm=c.rocm_version?`ROCm ${c.rocm_version}`:"Not captured";byId("provenance").innerHTML=`<div><strong>Execution environment</strong><br>Host: ${esc(c.hostname||"N/A")}<br>Platform: ${esc(c.platform||"N/A")}<br>GPU: <code>${esc(gpu)}</code><br>ROCm version: <code>${esc(rocm)}</code></div><div><strong>Perf-tool configuration</strong><br>Repeats: ${esc(b.num_repeats??"N/A")}<br>Argument mode: <code>${esc(b.arg_mode||"N/A")}</code><br>Command buffer: ${esc(b.cmd_buffer||"N/A")}<br>Settle seconds: ${esc(b.settle_sec??"N/A")}</div>`;
 }
-renderHeader();renderBranches();cascadePerformance();cascadeMatrix();renderSignatures();populateFilters();renderFailures();renderProvenance();
-["matrix-domain","matrix-model","matrix-mode"].forEach(id=>byId(id).addEventListener("change",cascadeMatrix));["branch-filter","category-filter","mode-filter","gpu-filter"].forEach(id=>byId(id).addEventListener("change",renderFailures));byId("failure-search").addEventListener("input",renderFailures);
+renderHeader();renderBranches();cascadePerformance();cascadeMatrix();renderSignatures();populateFilters();renderProvenance();
+["matrix-domain","matrix-model","matrix-mode"].forEach(id=>byId(id).addEventListener("change",cascadeMatrix));["branch-filter","category-filter","gpu-filter"].forEach(id=>byId(id).addEventListener("change",renderFailures));["domain-filter","model-filter","mode-filter"].forEach(id=>byId(id).addEventListener("change",cascadeFailureFilters));byId("failure-search").addEventListener("input",renderFailures);
 ["perf-domain","perf-model","perf-mode","perf-gpu"].forEach(id=>byId(id).addEventListener("change",cascadePerformance));["perf-metric","perf-module"].forEach(id=>byId(id).addEventListener("change",renderPerformance));
 </script>
 </body></html>"""
