@@ -612,7 +612,9 @@ CodegenDecision IsTritonSupportedDot(
   return CodegenDecision::Allow();
 }
 
-CodegenDecision IsTritonSupportedConv(const HloConvolutionInstruction& conv) {
+CodegenDecision IsTritonSupportedConv(
+    const HloConvolutionInstruction& conv,
+    const se::GpuComputeCapability& gpu_version) {
   for (const auto& dim : conv.window().dimensions()) {
     if (dim.padding_low() != 0 || dim.padding_high() != 0) {
       return CodegenDecision::Forbid("Convolution with padding.");
@@ -626,6 +628,12 @@ CodegenDecision IsTritonSupportedConv(const HloConvolutionInstruction& conv) {
     if (dim.base_dilation() != 1) {
       return CodegenDecision::Forbid("Convolution with base dilation.");
     }
+    // The indexing map built by `ComposeIndexingMapsForWindow` does not model
+    // window reversal, so a reversed convolution would silently be emitted as
+    // a plain cross-correlation.
+    if (dim.window_reversal()) {
+      return CodegenDecision::Forbid("Convolution with window reversal.");
+    }
   }
   if (conv.feature_group_count() != 1) {
     return CodegenDecision::Forbid("Grouped convolution.");
@@ -633,6 +641,28 @@ CodegenDecision IsTritonSupportedConv(const HloConvolutionInstruction& conv) {
   if (conv.batch_group_count() != 1) {
     return CodegenDecision::Forbid("Batch-grouped convolution.");
   }
+
+  const PrimitiveType lhs_type = conv.operand(0)->shape().element_type();
+  const PrimitiveType rhs_type = conv.operand(1)->shape().element_type();
+  const PrimitiveType result_type = conv.shape().element_type();
+  if (lhs_type != rhs_type) {
+    return CodegenDecision::Forbid(
+        "Convolution only supports same types for lhs and rhs.");
+  }
+  if (result_type == PrimitiveType::S4) {
+    return CodegenDecision::Forbid("S4 is not supported.");
+  }
+  // TODO: Enable explicit algorithms
+  if (conv.precision_config().algorithm() != PrecisionConfig::ALG_UNSET) {
+    return CodegenDecision::Forbid(
+        "Convolution with an explicit algorithm is not supported.");
+  }
+  if (CodegenDecision decision =
+      AreTypesSupportedByAlgUnsetDot(lhs_type, result_type, gpu_version);
+      !decision) {
+    return decision;
+  }
+
   return CodegenDecision::Allow();
 }
 
@@ -831,9 +861,9 @@ CodegenDecision IsTritonSupportedInstructionImpl(
     case HloOpcode::kDot:
       return IsTritonSupportedDot(*Cast<HloDotInstruction>(&instr),
                                   gpu_version);
-    case HloOpcode::kConvolution: 
-      return IsTritonSupportedConv(*Cast<HloConvolutionInstruction>(&instr));
-      
+    case HloOpcode::kConvolution:
+      return IsTritonSupportedConv(*Cast<HloConvolutionInstruction>(&instr),
+                                   gpu_version);
     case HloOpcode::kFusion:
       return IsTritonSupportedFusion(*Cast<HloFusionInstruction>(&instr),
                                      gpu_version);

@@ -152,6 +152,7 @@ bool IsSimpleConvolution(const HloInstruction& hlo) {
     if (dim.stride() != 1) return false;
     if (dim.window_dilation() != 1) return false;
     if (dim.base_dilation() != 1) return false;
+    if (dim.window_reversal()) return false;
   }
   if (conv->feature_group_count() != 1) return false;
   if (conv->batch_group_count() != 1) return false;
