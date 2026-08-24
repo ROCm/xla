@@ -127,18 +127,33 @@ cc_library(
 
 cc_library(
     name = "rocm_rpath",
+    # These RUNPATH entries are relative, so the loader resolves them against
+    # the process CWD. Two layouts have to be covered:
+    #   * build actions run with CWD = execroot/<main repo>, where external
+    #     repositories live under external/.
+    #   * tests run with CWD = <runfiles>/$TEST_WORKSPACE. Since Bazel 8
+    #     (--legacy_external_runfiles defaulting to false, and a no-op in
+    #     Bazel 9) external repositories are siblings of $TEST_WORKSPACE in
+    #     the runfiles tree rather than nested under external/.
+    # $ORIGIN is not usable here: runfiles entries are symlinks into bazel-out,
+    # and glibc expands $ORIGIN from the object's real path, which lands in the
+    # execroot rather than the runfiles tree. The loader skips RUNPATH entries
+    # whose directories do not exist, so carrying both is harmless.
     linkopts = select({
         ":build_hermetic": [
             "-Wl,-rpath,external/%{rocm_repo_name}/rocm/%{rocm_root}/lib",
+            "-Wl,-rpath,../%{rocm_repo_name}/rocm/%{rocm_root}/lib",
         ],
         ":link_only": [
         ],
         ":multiple_rocm_paths": [
             "-Wl,-rpath,external/%{rocm_repo_name}/rocm/%{rocm_root}/lib",
+            "-Wl,-rpath,../%{rocm_repo_name}/rocm/%{rocm_root}/lib",
             "-Wl,-rpath=%{rocm_lib_paths}",
         ],
         "//conditions:default": [
             "-Wl,-rpath,external/%{rocm_repo_name}/rocm/%{rocm_root}/lib",
+            "-Wl,-rpath,../%{rocm_repo_name}/rocm/%{rocm_root}/lib",
             "-Wl,-rpath,/opt/rocm/lib",
         ],
     }),
