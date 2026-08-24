@@ -194,6 +194,52 @@ TEST(DeviceDescription, ProtoConversion) {
   EXPECT_THAT(from_proto, Eq(device_description));
 }
 
+TEST(DeviceDescription, LastLevelCacheSizeFallsBackToL2WhenUnset) {
+  // NVIDIA GPUs, and AMD GPUs with no L3, leave the field unset because L2
+  // already is the last level.
+  DeviceDescription cuda_desc;
+  cuda_desc.set_gpu_compute_capability(
+      GpuComputeCapability(CudaComputeCapability::Hopper()));
+  cuda_desc.set_l2_cache_size(50 * 1024 * 1024);
+  EXPECT_EQ(cuda_desc.last_level_cache_size(), 50 * 1024 * 1024);
+
+  DeviceDescription rocm_desc;
+  rocm_desc.set_gpu_compute_capability(
+      GpuComputeCapability(RocmComputeCapability("gfx90a")));
+  rocm_desc.set_l2_cache_size(8 * 1024 * 1024);
+  EXPECT_EQ(rocm_desc.last_level_cache_size(), 8 * 1024 * 1024);
+}
+
+TEST(DeviceDescription, LastLevelCacheSizeOverridesL2WhenSet) {
+  // MI350: the 4 MiB L2 is private to one XCD, the 256 MiB L3 is the first
+  // pool every CU shares.
+  DeviceDescription desc;
+  desc.set_gpu_compute_capability(
+      GpuComputeCapability(RocmComputeCapability("gfx950")));
+  desc.set_l2_cache_size(4 * 1024 * 1024);
+  desc.set_last_level_cache_size(256LL * 1024 * 1024);
+  EXPECT_EQ(desc.l2_cache_size(), 4 * 1024 * 1024);
+  EXPECT_EQ(desc.last_level_cache_size(), 256LL * 1024 * 1024);
+}
+
+TEST(DeviceDescription, LastLevelCacheSizeProtoRoundTrip) {
+  DeviceDescription desc;
+  desc.set_gpu_compute_capability(
+      GpuComputeCapability(RocmComputeCapability("gfx950")));
+  desc.set_l2_cache_size(4 * 1024 * 1024);
+  desc.set_last_level_cache_size(256LL * 1024 * 1024);
+
+  ASSERT_OK_AND_ASSIGN(DeviceDescription from_proto,
+                       DeviceDescription::FromProto(desc.ToProto()));
+  EXPECT_EQ(from_proto.last_level_cache_size(), 256LL * 1024 * 1024);
+  EXPECT_EQ(from_proto.l2_cache_size(), 4 * 1024 * 1024);
+
+  // Two descriptions differing only in this field are not equal.
+  DeviceDescription other = desc;
+  other.set_last_level_cache_size(64LL * 1024 * 1024);
+  EXPECT_NE(desc, other);
+}
+
 TEST(DeviceDescription, EqualsToIgnoringVersionNumbers) {
   ASSERT_OK_AND_ASSIGN(
       stream_executor::GpuTargetConfigProto gpu_target_config_proto,

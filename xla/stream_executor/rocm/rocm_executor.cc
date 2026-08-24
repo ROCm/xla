@@ -78,6 +78,7 @@ limitations under the License.
 #include "xla/stream_executor/rocm/rocm_context.h"
 #include "xla/stream_executor/rocm/rocm_event.h"
 #include "xla/stream_executor/rocm/rocm_kernel.h"
+#include "xla/stream_executor/rocm/rocm_last_level_cache.h"
 #include "xla/stream_executor/rocm/rocm_memory_bandwidth.h"
 #include "xla/stream_executor/rocm/rocm_pcie_bandwidth.h"
 #include "xla/stream_executor/rocm/rocm_platform_id.h"
@@ -1178,6 +1179,21 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
                    << pcie_bw.status().message()
                    << "). Assuming PCIe Gen4 x16.";
       desc.set_pcie_bandwidth(32LL * 1024 * 1024 * 1024);
+    }
+  }
+
+  {
+    // HIP's l2CacheSize is per-XCD on CDNA3/CDNA4 and misses the L3 there, so
+    // ask SMI for the real last level. Leaving the field unset when SMI
+    // reports nothing deeper than L2 keeps last_level_cache_size() falling
+    // back to the L2 value set above.
+    absl::StatusOr<int64_t> llc = gpu::GetRocmLastLevelCacheSize(pci_bus_id);
+    if (!llc.ok()) {
+      LOG(WARNING) << "Could not determine last level cache size for device "
+                   << device_ordinal << " via SMI (" << llc.status().message()
+                   << "). Falling back to the HIP-reported L2 size.";
+    } else if (*llc > desc.l2_cache_size()) {
+      desc.set_last_level_cache_size(*llc);
     }
   }
 

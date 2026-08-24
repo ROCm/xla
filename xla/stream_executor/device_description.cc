@@ -93,6 +93,7 @@ absl::StatusOr<DeviceDescription> DeviceDescription::FromProto(
   device_description.device_memory_size_ = proto.device_memory_size();
   device_description.device_address_bits_ = proto.device_address_bits();
   device_description.l2_cache_size_ = proto.l2_cache_size();
+  device_description.last_level_cache_size_ = proto.last_level_cache_size();
   device_description.memory_bandwidth_ = proto.memory_bandwidth();
   device_description.pcie_bandwidth_ = proto.pcie_bandwidth();
   device_description.mem_clock_ghz_ = proto.mem_clock_ghz();
@@ -206,6 +207,7 @@ GpuDeviceInfoProto DeviceDescription::ToProto() const {
   proto.set_pcie_bandwidth(pcie_bandwidth_);
   proto.set_mem_clock_ghz(mem_clock_ghz_);
   proto.set_l2_cache_size(l2_cache_size_);
+  proto.set_last_level_cache_size(last_level_cache_size_);
   proto.set_clock_rate_ghz(clock_rate_ghz_);
   proto.set_device_memory_size(device_memory_size_);
   proto.set_device_address_bits(device_address_bits_);
@@ -323,6 +325,7 @@ bool DeviceDescription::EqualsTo(
          registers_per_block_limit_ == other.registers_per_block_limit_ &&
          device_address_bits_ == other.device_address_bits_ &&
          l2_cache_size_ == other.l2_cache_size_ &&
+         last_level_cache_size_ == other.last_level_cache_size_ &&
          memory_bandwidth_ == other.memory_bandwidth_ &&
          pcie_bandwidth_ == other.pcie_bandwidth_ &&
          mem_clock_ghz_ == other.mem_clock_ghz_ &&

@@ -311,11 +311,15 @@ absl::Duration GpuPerformanceModelBase::ReadTimeWithDRAMHeuristic(
       gpu_device_info.memory_bandwidth() * hbm_bandwidth_utilization_rate;
 
   // Two things can happed on re-reading the buffer:
-  //   - If the buffer fits into cache, the L1/L2 cache speedup is applied.
+  //   - If the buffer fits into the last level cache, the cache speedup is
+  //     applied.
   //   - If the buffer doesn't fit, it will be read from DRAM and the same
   //     coalessing waste factor is applied.
+  // The bound is the last level cache rather than L2 because that is the
+  // deepest pool the re-read can be served from without going to DRAM. The two
+  // coincide on NVIDIA GPUs, but not on CDNA3/CDNA4, which have an L3.
   float rest_bandwidth = gpu_device_info.memory_bandwidth();
-  if (n_bytes_net < gpu_device_info.l2_cache_size()) {
+  if (n_bytes_net < gpu_device_info.last_level_cache_size()) {
     rest_bandwidth *= kL2CacheSpeedup;
     if (n_bytes_net <
         gpu_device_info.l1_cache_size_per_SM() * gpu_device_info.core_count()) {

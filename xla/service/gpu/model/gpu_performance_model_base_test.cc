@@ -340,6 +340,54 @@ TEST_F(GpuPerformanceModelBaseTest, CalculatePeakF64OpsPerNsH100) {
   EXPECT_LT(flops_per_ns, 68000);
 }
 
+TEST_F(GpuPerformanceModelBaseTest,
+       ReadTimeWithDRAMHeuristicUsesLastLevelCacheMI350) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  ASSERT_EQ(mi350.l2_cache_size(), 4L * 1024 * 1024);
+  ASSERT_EQ(mi350.last_level_cache_size(), 256L * 1024 * 1024);
+
+  // 64 MiB does not fit the 4 MiB per-XCD L2, but does fit the 256 MiB L3, so
+  // re-reads are cached. 512 MiB fits neither, so re-reads go back to DRAM.
+  // Before the last-level-cache API both were modeled the same way, because
+  // both exceed the per-XCD L2.
+  constexpr int64_t kFitsInLastLevelCache = 64L * 1024 * 1024;
+  constexpr int64_t kExceedsLastLevelCache = 512L * 1024 * 1024;
+
+  auto per_byte_reread_cost = [&](int64_t n_bytes_net) {
+    return GpuPerformanceModelBase::ReadTimeWithDRAMHeuristic(
+               mi350, /*num_blocks=*/mi350.core_count(), n_bytes_net,
+               /*n_bytes_total=*/2 * n_bytes_net, PrimitiveType::F32,
+               /*hbm_bandwidth_utilization_rate=*/1.0) /
+           n_bytes_net;
+  };
+
+  EXPECT_LT(per_byte_reread_cost(kFitsInLastLevelCache),
+            per_byte_reread_cost(kExceedsLastLevelCache));
+}
+
+TEST_F(GpuPerformanceModelBaseTest,
+       ReadTimeWithDRAMHeuristicFallsBackToL2WhenLastLevelCacheUnset) {
+  // A6000 leaves last_level_cache_size unset, so the gate is still L2 and the
+  // NVIDIA behavior is unchanged.
+  ASSERT_EQ(device_info_.last_level_cache_size(), device_info_.l2_cache_size());
+
+  constexpr int64_t kFitsInL2 = 1L * 1024 * 1024;
+  ASSERT_LT(kFitsInL2, device_info_.l2_cache_size());
+  absl::Duration cached = GpuPerformanceModelBase::ReadTimeWithDRAMHeuristic(
+      device_info_, /*num_blocks=*/device_info_.core_count(), kFitsInL2,
+      /*n_bytes_total=*/2 * kFitsInL2, PrimitiveType::F32,
+      /*hbm_bandwidth_utilization_rate=*/1.0);
+
+  int64_t exceeds_l2 = 4 * device_info_.l2_cache_size();
+  absl::Duration uncached = GpuPerformanceModelBase::ReadTimeWithDRAMHeuristic(
+      device_info_, /*num_blocks=*/device_info_.core_count(), exceeds_l2,
+      /*n_bytes_total=*/2 * exceeds_l2, PrimitiveType::F32,
+      /*hbm_bandwidth_utilization_rate=*/1.0);
+
+  // Same read/re-read ratio, but only the small one gets the cache speedup.
+  EXPECT_LT(cached / kFitsInL2, uncached / exceeds_l2);
+}
+
 TEST_F(GpuPerformanceModelBaseTest, RecordEstimatedRunTimeWithName) {
   EstimateRunTimeData data = {/*flops=*/100,
                               /*bytes_read=*/200,

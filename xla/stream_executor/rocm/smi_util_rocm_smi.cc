@@ -134,6 +134,15 @@ absl::StatusOr<uint64_t> QueryHiveId(SmiDeviceHandle device) {
   return hive_id;
 }
 
+absl::StatusOr<int64_t> QueryLastLevelCacheSize(SmiDeviceHandle /*device*/) {
+  // rocm_smi reads the KFD cache topology internally but does not export a
+  // cache query from rocm_smi.h; amd_smi reaches rsmi_dev_cache_info_get as an
+  // internal symbol. Callers fall back to the HIP-reported L2 size.
+  return absl::UnimplementedError(
+      "rocm_smi exposes no public cache info API; last level cache size "
+      "requires the amd_smi backend (ROCm 7.13 or later)");
+}
+
 absl::StatusOr<bool> IsXgmiPeer(SmiDeviceHandle src, SmiDeviceHandle dst) {
   // The API rejects a null hops pointer; only the link type is used.
   uint64_t hops = 0;

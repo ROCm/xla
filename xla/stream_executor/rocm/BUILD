@@ -144,6 +144,7 @@ cc_library(
         ":rocm_context",
         ":rocm_event",
         ":rocm_kernel",
+        ":rocm_last_level_cache",
         ":rocm_memory_bandwidth",
         ":rocm_pcie_bandwidth",
         ":rocm_platform_id",
@@ -427,6 +428,37 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
+    ],
+)
+
+cc_library(
+    name = "rocm_last_level_cache",
+    srcs = ["rocm_last_level_cache.cc"],
+    hdrs = ["rocm_last_level_cache.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":smi_util",
+        "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+    ],
+)
+
+xla_cc_test(
+    name = "rocm_last_level_cache_test",
+    srcs = ["rocm_last_level_cache_test.cc"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_last_level_cache",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 

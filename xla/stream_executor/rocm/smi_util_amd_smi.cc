@@ -13,6 +13,7 @@ limitations under the License.
 // amd_smi backend for the SMI queries declared in smi_util.h. Compiled in
 // from ROCm 7.13 on; smi_util_rocm_smi.cc takes its place below that.
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -159,6 +160,53 @@ absl::StatusOr<uint64_t> QueryHiveId(SmiDeviceHandle device) {
     return SmiError("amdsmi_get_xgmi_info", status);
   }
   return xgmi_info.xgmi_hive_id;
+}
+
+absl::StatusOr<int64_t> QueryLastLevelCacheSize(SmiDeviceHandle device) {
+  amdsmi_gpu_cache_info_t cache_info = {};
+  if (amdsmi_status_t status =
+          amdsmi_get_gpu_cache_info(ToProcessorHandle(device), &cache_info);
+      status != AMDSMI_STATUS_SUCCESS) {
+    return SmiError("amdsmi_get_gpu_cache_info", status);
+  }
+
+  // amd_smi fills the array from the KFD topology, one entry per distinct
+  // cache type. Take the largest cache at the deepest level, ignoring
+  // instruction caches. Entries at the same level are alternatives, not
+  // slices: KFD emits one record per CU group and each already reports the
+  // whole pool, divided by the memory partition mode where that applies, so
+  // summing them or scaling by num_cache_instance would overcount.
+  uint32_t num_types = std::min<uint32_t>(cache_info.num_cache_types,
+                                          AMDSMI_MAX_CACHE_TYPES);
+  uint32_t deepest_level = 0;
+  uint32_t size_kb = 0;
+  for (uint32_t i = 0; i < num_types; ++i) {
+    const auto& cache = cache_info.cache[i];
+    if ((cache.cache_properties & AMDSMI_CACHE_PROPERTY_DATA_CACHE) == 0) {
+      continue;
+    }
+    if (cache.cache_size == 0) continue;
+    if (cache.cache_level > deepest_level) {
+      deepest_level = cache.cache_level;
+      size_kb = cache.cache_size;
+    } else if (cache.cache_level == deepest_level) {
+      size_kb = std::max(size_kb, cache.cache_size);
+    }
+    VLOG(2) << "amd_smi cache entry " << i << ": level " << cache.cache_level
+            << ", " << cache.cache_size << " KB, shared by up to "
+            << cache.max_num_cu_shared << " CUs, " << cache.num_cache_instance
+            << " instances";
+  }
+
+  if (size_kb == 0) {
+    return absl::InternalError(
+        absl::StrCat("amdsmi_get_gpu_cache_info reported no data cache (",
+                     cache_info.num_cache_types, " entries)"));
+  }
+
+  VLOG(1) << "Last level cache is L" << deepest_level << ", " << size_kb
+          << " KB";
+  return static_cast<int64_t>(size_kb) * 1024;
 }
 
 absl::StatusOr<bool> IsXgmiPeer(SmiDeviceHandle src, SmiDeviceHandle dst) {

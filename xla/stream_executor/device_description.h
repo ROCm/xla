@@ -350,6 +350,19 @@ class DeviceDescription {
   // Returns the L2 cache size in bytes.
   int64_t l2_cache_size() const { return l2_cache_size_; }
 
+  // Returns the size in bytes of the last level of the data cache hierarchy:
+  // the largest pool every core on the device can read from before going to
+  // DRAM.
+  //
+  // On most GPUs that is L2, and this equals l2_cache_size(). CDNA3 and CDNA4
+  // add an L3 behind it, and their L2 is private to a single XCD, so there L2
+  // is neither the last level nor device-wide.
+  //
+  // Falls back to l2_cache_size() when unset.
+  int64_t last_level_cache_size() const {
+    return last_level_cache_size_ > 0 ? last_level_cache_size_ : l2_cache_size_;
+  }
+
   // Returns the device's memory bandwidth in bytes/sec.  (This is for
   // reads/writes to/from the device's own memory, not for transfers between the
   // host and device.)
@@ -540,6 +553,9 @@ class DeviceDescription {
   void set_device_address_bits(int64_t value) { device_address_bits_ = value; }
   void set_device_memory_size(int64_t value) { device_memory_size_ = value; }
   void set_l2_cache_size(int64_t value) { l2_cache_size_ = value; }
+  void set_last_level_cache_size(int64_t value) {
+    last_level_cache_size_ = value;
+  }
   void set_memory_bandwidth(int64_t value) { memory_bandwidth_ = value; }
   void set_pcie_bandwidth(int64_t value) { pcie_bandwidth_ = value; }
   void set_mem_clock_ghz(float value) { mem_clock_ghz_ = value; }
@@ -641,6 +657,9 @@ class DeviceDescription {
   int64_t device_address_bits_ = kUninitialized<int64_t>;
   int64_t device_memory_size_ = kUninitialized<int64_t>;
   int64_t l2_cache_size_ = kUninitialized<int64_t>;
+  // Unset on platforms whose last level cache is L2; read through
+  // last_level_cache_size(), which falls back to l2_cache_size_.
+  int64_t last_level_cache_size_ = kUninitialized<int64_t>;
 
   int64_t memory_bandwidth_ = kUninitialized<int64_t>;
   int64_t pcie_bandwidth_ = kUninitialized<int64_t>;

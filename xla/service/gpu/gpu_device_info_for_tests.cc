@@ -135,6 +135,8 @@ stream_executor::DeviceDescription TestGpuDeviceInfo::AMDMI210DeviceInfo() {
   b.set_block_dim_limit_y(2'147'483'647);
   b.set_block_dim_limit_z(2'147'483'647);
   b.set_memory_bandwidth(1'638'400'000'000);
+  // CDNA2 has no L3, so L2 is the last level and last_level_cache_size is
+  // deliberately left unset.
   b.set_l2_cache_size(8 * 1024 * 1024);
   b.set_clock_rate_ghz(1.7);
   b.set_device_memory_size(67'628'957'696);
@@ -160,7 +162,10 @@ stream_executor::DeviceDescription TestGpuDeviceInfo::AMDMI350DeviceInfo() {
   b.set_block_dim_limit_z(65536);
   // Keep in sync with GetRocmMemoryBandwidth in rocm_memory_bandwidth.cc.
   b.set_memory_bandwidth(6'810'000'000'000);
+  // The 4 MiB L2 is private to one XCD; the 256 MiB L3 is the first pool
+  // every CU shares.
   b.set_l2_cache_size(4 * 1024 * 1024);
+  b.set_last_level_cache_size(256LL * 1024 * 1024);
   b.set_clock_rate_ghz(2.2);
   b.set_device_memory_size(270'566'162'432);
   b.set_registers_per_core_limit(131072);
@@ -186,7 +191,9 @@ stream_executor::DeviceDescription TestGpuDeviceInfo::AMDRX7900DeviceInfo() {
   b.set_block_dim_limit_y(2'147'483'647);
   b.set_block_dim_limit_z(2'147'483'647);
   b.set_memory_bandwidth(960'000'000'000);
+  // RX 7900 XTX has a 96 MiB L3 behind the 6 MiB L2.
   b.set_l2_cache_size(6 * 1024 * 1024);
+  b.set_last_level_cache_size(96LL * 1024 * 1024);
   b.set_clock_rate_ghz(2.5);
   b.set_device_memory_size(24'000'000'000);
   b.set_runtime_version(stream_executor::SemanticVersion{6, 0, 0});

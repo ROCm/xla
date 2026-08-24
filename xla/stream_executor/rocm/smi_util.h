@@ -91,6 +91,13 @@ absl::StatusOr<PcieLinkStatus> QueryPcieLinkStatus(SmiDeviceHandle device)
 absl::StatusOr<uint64_t> QueryHiveId(SmiDeviceHandle device)
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(smi_mutex);
 
+// Returns the size in bytes of the largest data cache the device reports,
+// which on CDNA3/CDNA4 is L3 rather than L2. Only the amd_smi backend
+// implements this; rocm_smi has no public cache query and returns
+// Unimplemented.
+absl::StatusOr<int64_t> QueryLastLevelCacheSize(SmiDeviceHandle device)
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(smi_mutex);
+
 // Returns true if src reaches dst over an xGMI link.
 absl::StatusOr<bool> IsXgmiPeer(SmiDeviceHandle src, SmiDeviceHandle dst)
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(smi_mutex);
