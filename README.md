@@ -23,6 +23,7 @@ For supported ROCm versions and GFX targets per release, see the [AMD ROCm compa
 | JAX Release | XLA Branch | JAX Branch |
 |-------------|------------|------------|
 | jax-ml/jax:main | [`openxla/xla:main`](https://github.com/openxla/xla) | [`jax-ml/jax:main`](https://github.com/jax-ml/jax) |
+| jax-v0.11.1 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.11.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.11.1) | [`rocm-jaxlib-v0.11.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.11.1) |
 | jax-v0.11.0 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.11.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.11.0) | [`rocm-jaxlib-v0.11.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.11.0) |
 | jax-v0.10.2 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.10.2`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.10.2) | [`rocm-jaxlib-v0.10.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.10.2) |
 | jax-v0.10.1 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.10.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.10.1) | [`rocm-jaxlib-v0.10.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.10.1) |
