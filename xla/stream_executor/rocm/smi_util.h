@@ -66,8 +66,9 @@ struct PcieLinkStatus {
 // full SMI call sequence.
 ABSL_CONST_INIT extern absl::Mutex smi_mutex;
 
-// Initializes the SMI library, at most once per process.
-absl::Status InitSmi() ABSL_EXCLUSIVE_LOCKS_REQUIRED(smi_mutex);
+// Initializes the SMI library at most once per process. Returns false and
+// logs the reason if that failed.
+bool InitSmi() ABSL_EXCLUSIVE_LOCKS_REQUIRED(smi_mutex);
 
 // Parses a PCI bus ID string (e.g., "0000:41:00.0") into its BDF components.
 // Touches no SMI state, so it needs no lock.

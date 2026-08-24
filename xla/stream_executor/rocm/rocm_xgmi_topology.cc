@@ -28,7 +28,7 @@ absl::StatusOr<XgmiTopologyInfo> GetRocmXgmiTopology(
     absl::string_view pci_bus_id) {
   absl::MutexLock lock(smi_mutex);
 
-  if (absl::Status init = InitSmi(); !init.ok()) return init;
+  if (!InitSmi()) return absl::UnavailableError("SMI is not available");
 
   absl::StatusOr<BdfComponents> bdf = ParseBdf(pci_bus_id);
   if (!bdf.ok()) return bdf.status();
@@ -44,7 +44,7 @@ absl::StatusOr<XgmiTopologyInfo> GetRocmXgmiTopology(
   if (hive_id.ok()) {
     info.hive_id = *hive_id;
   } else {
-    VLOG(1) << "xGMI hive ID query failed for " << pci_bus_id << ": "
+    VLOG(2) << "xGMI hive ID query failed for " << pci_bus_id << ": "
             << hive_id.status() << "; device may not be in an xGMI hive.";
   }
 
@@ -59,7 +59,7 @@ absl::StatusOr<XgmiTopologyInfo> GetRocmXgmiTopology(
     if (peer == *device) continue;
     absl::StatusOr<bool> is_peer = IsXgmiPeer(*device, peer);
     if (!is_peer.ok()) {
-      VLOG(1) << "xGMI link type query failed for " << pci_bus_id << ": "
+      VLOG(2) << "xGMI link type query failed for " << pci_bus_id << ": "
               << is_peer.status();
       continue;
     }

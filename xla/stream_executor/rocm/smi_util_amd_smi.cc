@@ -43,19 +43,21 @@ absl::Status SmiError(absl::string_view api, amdsmi_status_t status) {
       absl::StrCat(api, " failed: ", err_str ? err_str : "unknown error"));
 }
 
+bool InitLibrary() {
+  amdsmi_status_t status = amdsmi_init(AMDSMI_INIT_AMD_GPUS);
+  if (status != AMDSMI_STATUS_SUCCESS) {
+    LOG(WARNING) << SmiError("amdsmi_init", status);
+    return false;
+  }
+  VLOG(1) << "SMI device queries go through amd_smi.";
+  return true;
+}
+
 }  // namespace
 
-absl::Status InitSmi() {
-  static const absl::Status& init_status =
-      *new absl::Status([]() -> absl::Status {
-        amdsmi_status_t status = amdsmi_init(AMDSMI_INIT_AMD_GPUS);
-        if (status != AMDSMI_STATUS_SUCCESS) {
-          return SmiError("amdsmi_init", status);
-        }
-        VLOG(1) << "SMI device queries go through amd_smi.";
-        return absl::OkStatus();
-      }());
-  return init_status;
+bool InitSmi() {
+  static const bool initialized = InitLibrary();
+  return initialized;
 }
 
 absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {
@@ -82,7 +84,7 @@ absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {
     if (amdsmi_status_t status =
             amdsmi_get_processor_handles(socket, &num_processors, nullptr);
         status != AMDSMI_STATUS_SUCCESS) {
-      VLOG(1) << "Skipping socket: "
+      VLOG(2) << "Skipping socket: "
               << SmiError("amdsmi_get_processor_handles", status);
       continue;
     }
@@ -92,7 +94,7 @@ absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {
     if (amdsmi_status_t status = amdsmi_get_processor_handles(
             socket, &num_processors, processors.data());
         status != AMDSMI_STATUS_SUCCESS) {
-      VLOG(1) << "Skipping socket: "
+      VLOG(2) << "Skipping socket: "
               << SmiError("amdsmi_get_processor_handles", status);
       continue;
     }

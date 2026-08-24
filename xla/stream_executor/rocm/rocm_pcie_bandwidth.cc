@@ -53,7 +53,7 @@ constexpr int64_t ComputePcieBandwidthFromSpeedAndWidth(
 absl::StatusOr<int64_t> GetRocmPcieBandwidth(absl::string_view pci_bus_id) {
   absl::MutexLock lock(smi_mutex);
 
-  if (absl::Status init = InitSmi(); !init.ok()) return init;
+  if (!InitSmi()) return absl::UnavailableError("SMI is not available");
 
   absl::StatusOr<BdfComponents> bdf = ParseBdf(pci_bus_id);
   if (!bdf.ok()) return bdf.status();
