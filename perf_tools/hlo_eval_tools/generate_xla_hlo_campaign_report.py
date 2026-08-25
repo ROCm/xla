@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from xla_hlo_campaign_utils import (
+    normalize_gpu_architectures,
+    normalize_rocm_version,
+)
 from xla_hlo_campaign_report_parsing import (
     load_json_object,
     parse_workload_hierarchy,
@@ -77,8 +81,8 @@ def validate_campaign_manifest(
 
 def extract_rocm_version(environment: dict[str, Any]) -> str | None:
     """Read ROCm version from current or archived environment metadata."""
-    value = environment.get("rocm_version")
-    if isinstance(value, str) and value:
+    value = normalize_rocm_version(environment.get("rocm_version"))
+    if value is not None:
         return value
     hipcc = environment.get("hipcc")
     if not isinstance(hipcc, str):
@@ -99,30 +103,21 @@ def extract_gpu_architectures(
     """Read exact visible gfx architecture names from campaign metadata."""
     values = environment.get("gpu_architectures")
     if isinstance(values, list):
-        return sorted(
-            {
-                value.lower()
-                for value in values
-                if isinstance(value, str)
-                and re.fullmatch(r"gfx[0-9a-z]+", value, re.IGNORECASE)
-            }
-        )
-    if isinstance(values, str) and re.fullmatch(
-        r"gfx[0-9a-z]+", values, re.IGNORECASE
-    ):
-        return [values.lower()]
+        return normalize_gpu_architectures(values)
+    if isinstance(values, str):
+        normalized = normalize_gpu_architectures(values)
+        if normalized:
+            return normalized
     rocm_smi = environment.get("rocm_smi")
     if not isinstance(rocm_smi, str):
         return []
-    return sorted(
-        {
-            match.group(1).lower()
-            for match in re.finditer(
-                r"GFX Version:\s*(gfx[0-9a-z]+)",
-                rocm_smi,
-                flags=re.IGNORECASE,
-            )
-        }
+    return normalize_gpu_architectures(
+        match.group(1)
+        for match in re.finditer(
+            r"GFX Version:\s*(gfx[0-9a-z]+)",
+            rocm_smi,
+            flags=re.IGNORECASE,
+        )
     )
 
 
