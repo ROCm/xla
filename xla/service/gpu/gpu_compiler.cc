@@ -576,6 +576,8 @@ absl::StatusOr<GpuTopology> InferGpuTopology(
             << (stream_exec == nullptr
                     ? "not stream executor. Performing deviceless compilation."
                     : "stream executor. Performing cross compilation.");
+    gpu_target_config->device_description.set_legacy_cache_model(
+        debug_opts.xla_gpu_experimental_disable_cache_hierarchy_model());
     return GpuTopology{gpu_target_config->device_description.platform_version(),
                        num_partitions,
                        num_hosts_per_partition,
@@ -597,6 +599,8 @@ absl::StatusOr<GpuTopology> InferGpuTopology(
         "--xla_gpu_target_config_filename to pass in target information. "
         "The target config from StreamExecutor is inaccurate.");
   }
+  local_target_config.device_description.set_legacy_cache_model(
+      debug_opts.xla_gpu_experimental_disable_cache_hierarchy_model());
   return GpuTopology{stream_exec->GetDeviceDescription().platform_version(),
                      num_partitions,
                      num_hosts_per_partition,

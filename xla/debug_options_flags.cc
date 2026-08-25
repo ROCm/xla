@@ -3310,6 +3310,16 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_experimental_pack_dot_operands_along_k_dimension(),
       "For sub-byte dot operands, layout them along contracting dimensions."));
   flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_disable_cache_hierarchy_model",
+      bool_setter_for(
+          &DebugOptions::
+              set_xla_gpu_experimental_disable_cache_hierarchy_model),
+      debug_options->xla_gpu_experimental_disable_cache_hierarchy_model(),
+      "Reverts the GPU cost model to a single-tier cache: no L3, one L2 "
+      "instance, no measured cache bandwidths, and the legacy L1 residency "
+      "threshold. For A/B testing the multi-tier cache modeling from one "
+      "build."));
+  flag_list->push_back(tsl::Flag(
       "xla_unsupported_crash_on_hlo_pass_fix_max_iterations",
       bool_setter_for(
           &DebugOptions::

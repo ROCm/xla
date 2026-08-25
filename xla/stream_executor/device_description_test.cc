@@ -270,6 +270,41 @@ TEST(DeviceDescription, AggregateL2MultipliesByInstanceCount) {
   EXPECT_EQ(desc.aggregate_l2_cache_size(), 32 * 1024 * 1024);
 }
 
+TEST(DeviceDescription, LegacyCacheModelRevertsEveryCacheAccessor) {
+  // The A/B switch behind
+  // --xla_gpu_experimental_disable_cache_hierarchy_model. Every accessor the
+  // multi-tier work touched must report its pre-change value, so a single
+  // build can produce both sides of the comparison.
+  DeviceDescription mi350;
+  mi350.set_gpu_compute_capability(
+      GpuComputeCapability(RocmComputeCapability("gfx950")));
+  mi350.set_core_count(256);
+  mi350.set_l2_cache_size(4 * 1024 * 1024);
+  mi350.set_l2_cache_instances(8);
+  mi350.set_last_level_cache_size(256LL * 1024 * 1024);
+  mi350.set_l2_cache_bandwidth(36'044'800'000'000);
+  mi350.set_last_level_cache_bandwidth(17'203'200'000'000);
+
+  mi350.set_legacy_cache_model(true);
+  EXPECT_EQ(mi350.last_level_cache_size(), mi350.l2_cache_size());
+  EXPECT_EQ(mi350.l2_cache_instances(), 1);
+  EXPECT_EQ(mi350.aggregate_l2_cache_size(), 4 * 1024 * 1024);
+  EXPECT_EQ(mi350.l2_cache_bandwidth(), 0);
+  EXPECT_EQ(mi350.last_level_cache_bandwidth(), 0);
+  EXPECT_EQ(mi350.l1_resident_size_threshold(), 32 * 1024 * 256);
+
+  // The stored values survive, so a dump taken during a baseline run still
+  // shows what SMI reported.
+  EXPECT_EQ(mi350.ToProto().last_level_cache_size(), 256LL * 1024 * 1024);
+  EXPECT_EQ(mi350.ToProto().l2_cache_bandwidth(), 36'044'800'000'000);
+
+  mi350.set_legacy_cache_model(false);
+  EXPECT_EQ(mi350.last_level_cache_size(), 256LL * 1024 * 1024);
+  EXPECT_EQ(mi350.aggregate_l2_cache_size(), 32 * 1024 * 1024);
+  EXPECT_EQ(mi350.l2_cache_bandwidth(), 36'044'800'000'000);
+  EXPECT_EQ(mi350.l1_resident_size_threshold(), 32 * 1024);
+}
+
 TEST(DeviceDescription, CacheBandwidthsAreZeroWhenUnset) {
   // Unlike last_level_cache_size(), the bandwidths do not fall back to each
   // other or to memory_bandwidth(): the tiers have very different rates, so

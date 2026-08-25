@@ -354,6 +354,7 @@ class DeviceDescription {
   // Number of independent L2 caches. 1 on GPUs with a single device-wide L2,
   // the XCD count on CDNA3/CDNA4. Defaults to 1 when unset.
   int64_t l2_cache_instances() const {
+    if (legacy_cache_model_) return 1;
     return l2_cache_instances_ > 0 ? l2_cache_instances_ : 1;
   }
 
@@ -379,6 +380,7 @@ class DeviceDescription {
   //
   // Falls back to l2_cache_size() when unset.
   int64_t last_level_cache_size() const {
+    if (legacy_cache_model_) return l2_cache_size_;
     return last_level_cache_size_ > 0 ? last_level_cache_size_ : l2_cache_size_;
   }
 
@@ -389,6 +391,7 @@ class DeviceDescription {
   // Consumers must treat 0 as "no information" and fall back to scaling
   // memory_bandwidth(), which is what the cost model did before this existed.
   int64_t l2_cache_bandwidth() const {
+    if (legacy_cache_model_) return 0;
     return l2_cache_bandwidth_ > 0 ? l2_cache_bandwidth_ : 0;
   }
 
@@ -397,6 +400,7 @@ class DeviceDescription {
   // the two tiers have very different rates, so a wrong number is worse than
   // no number.
   int64_t last_level_cache_bandwidth() const {
+    if (legacy_cache_model_) return 0;
     return last_level_cache_bandwidth_ > 0 ? last_level_cache_bandwidth_ : 0;
   }
 
@@ -502,7 +506,8 @@ class DeviceDescription {
   // fastest cache. Comparing against the per-CU value directly restores the
   // same "fits in one core's L1" meaning CUDA already had.
   int64_t l1_resident_size_threshold() const {
-    if (gpu_compute_capability_.rocm_compute_capability() != nullptr) {
+    if (gpu_compute_capability_.rocm_compute_capability() != nullptr &&
+        !legacy_cache_model_) {
       return l1_cache_size_per_SM();
     }
     return l1_cache_size_per_SM() * core_count();
@@ -616,6 +621,16 @@ class DeviceDescription {
   void set_device_memory_size(int64_t value) { device_memory_size_ = value; }
   void set_l2_cache_size(int64_t value) { l2_cache_size_ = value; }
   void set_l2_cache_instances(int64_t value) { l2_cache_instances_ = value; }
+
+  // Debug override for --xla_gpu_experimental_disable_cache_hierarchy_model.
+  // Makes the cache accessors report what they did before multi-tier modeling
+  // existed, so one build can A/B the change. The underlying fields keep their
+  // real values, so ToProto() still records what the hardware reported.
+  //
+  // Deliberately not serialized and not part of EqualsTo: this is a property
+  // of how the cost model should read the description, not of the device.
+  void set_legacy_cache_model(bool value) { legacy_cache_model_ = value; }
+  bool legacy_cache_model() const { return legacy_cache_model_; }
   void set_last_level_cache_size(int64_t value) {
     last_level_cache_size_ = value;
   }
@@ -734,6 +749,8 @@ class DeviceDescription {
   // by its legacy speedup constants instead.
   int64_t l2_cache_bandwidth_ = kUninitialized<int64_t>;
   int64_t last_level_cache_bandwidth_ = kUninitialized<int64_t>;
+  // Debug-only; see set_legacy_cache_model().
+  bool legacy_cache_model_ = false;
 
   int64_t memory_bandwidth_ = kUninitialized<int64_t>;
   int64_t pcie_bandwidth_ = kUninitialized<int64_t>;
