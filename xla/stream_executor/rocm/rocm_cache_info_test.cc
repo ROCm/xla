@@ -22,7 +22,6 @@ TEST(RocmCacheInfoTest, DefaultsAreZero) {
   // DeviceDescription field unset" rather than substituting a guess.
   RocmCacheInfo info;
   EXPECT_EQ(info.last_level_cache_size_bytes, 0);
-  EXPECT_EQ(info.num_l2_instances, 0);
   EXPECT_EQ(info.fabric_clock_mhz, 0);
 }
 

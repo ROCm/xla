@@ -30,9 +30,10 @@ struct RocmCacheInfo {
   // kernel. HIP does not report this at all.
   int64_t last_level_cache_size_bytes = 0;
 
-  // Number of L2 instances, which is the XCD count on CDNA3/CDNA4. Needed to
-  // turn the per-XCD L2 width into an aggregate bandwidth.
-  int64_t num_l2_instances = 0;
+  // Deliberately no L2 instance count here. amd_smi's num_cache_instance was
+  // measured reporting 1 on MI350X, which has 8 XCDs, so it counts distinct
+  // cache descriptions rather than physical instances. Use HIP's
+  // hipDeviceAttributeNumberOfXccs instead.
 
   // Peak Infinity Fabric clock in MHz, which the last level cache runs at.
   // Zero on ASICs that do not expose the domain.

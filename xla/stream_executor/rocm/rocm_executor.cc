@@ -1214,8 +1214,10 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
       // used for this.
       absl::StatusOr<int64_t> num_xcc = GetSimpleAttribute<int64_t>(
           device, hipDeviceAttributeNumberOfXccs);
+      int64_t l2_instances = 1;
       if (num_xcc.ok() && *num_xcc > 0) {
-        desc.set_l2_cache_instances(*num_xcc);
+        l2_instances = *num_xcc;
+        desc.set_l2_cache_instances(l2_instances);
       } else {
         LOG(WARNING) << "Could not determine XCC count for device "
                      << device_ordinal
@@ -1226,8 +1228,12 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
       // clock_rate_ghz already holds. No extra clock query needed. If the
       // property read above failed this is still kUninitialized, which
       // GetRocmL2CacheBandwidth rejects as implausible.
-      int64_t l2_bandwidth = gpu::GetRocmL2CacheBandwidth(
-          cc, cache->num_l2_instances, desc.clock_rate_ghz());
+      //
+      // This must use the same instance count as set_l2_cache_instances above:
+      // capacity and bandwidth both scale with it, and disagreeing would model
+      // a device-wide capacity served at one XCD's bandwidth.
+      int64_t l2_bandwidth =
+          gpu::GetRocmL2CacheBandwidth(cc, l2_instances, desc.clock_rate_ghz());
       if (l2_bandwidth > 0) desc.set_l2_cache_bandwidth(l2_bandwidth);
 
       // The last level cache sits on the IODs and runs at the fabric clock,

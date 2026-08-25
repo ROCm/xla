@@ -63,7 +63,10 @@ struct PcieLinkStatus {
 struct CacheLevelInfo {
   uint32_t level;             // 1, 2, 3, ...
   int64_t size_bytes;         // Per instance, not aggregated.
-  uint32_t num_instances;     // e.g. the XCD count for L2 on CDNA3/CDNA4.
+  // Raw amdsmi num_cache_instance. NOT a physical instance count: it reports 1
+  // for the L2 on MI350X, which has 8 XCDs, so it counts distinct cache
+  // descriptions. Use hipDeviceAttributeNumberOfXccs for the XCD count.
+  uint32_t num_instances;
   uint32_t max_num_cu_shared; // Compute units sharing one instance.
 };
 

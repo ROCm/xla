@@ -42,9 +42,6 @@ absl::StatusOr<RocmCacheInfo> GetRocmCacheInfo(absl::string_view pci_bus_id) {
   RocmCacheInfo info;
   // QueryDataCacheHierarchy returns levels sorted shallowest to deepest.
   info.last_level_cache_size_bytes = levels->back().size_bytes;
-  for (const CacheLevelInfo& level : *levels) {
-    if (level.level == 2) info.num_l2_instances = level.num_instances;
-  }
 
   // The fabric clock is optional: some ASICs do not expose the domain, and
   // that costs us only the last level cache bandwidth, not the sizes.
@@ -59,8 +56,8 @@ absl::StatusOr<RocmCacheInfo> GetRocmCacheInfo(absl::string_view pci_bus_id) {
 
   VLOG(1) << "Cache info for " << pci_bus_id << ": last level "
           << info.last_level_cache_size_bytes / (1024 * 1024) << " MiB (L"
-          << levels->back().level << "), " << info.num_l2_instances
-          << " L2 instances, fabric clock " << info.fabric_clock_mhz << " MHz";
+          << levels->back().level << "), fabric clock "
+          << info.fabric_clock_mhz << " MHz";
 
   return info;
 }
