@@ -222,6 +222,54 @@ TEST(DeviceDescription, LastLevelCacheSizeOverridesL2WhenSet) {
   EXPECT_EQ(desc.last_level_cache_size(), 256LL * 1024 * 1024);
 }
 
+TEST(DeviceDescription, L1ResidentThresholdIsPerCoreOnBothVendors) {
+  // CUDA: the 2 KiB placeholder times the core count. Kept verbatim, and it
+  // lands near one SM's real L1 (H100 has 132 SMs and 256 KiB of L1 per SM).
+  DeviceDescription h100;
+  h100.set_gpu_compute_capability(
+      GpuComputeCapability(CudaComputeCapability::Hopper()));
+  h100.set_core_count(132);
+  EXPECT_EQ(h100.l1_cache_size_per_SM(), 2 * 1024);
+  EXPECT_EQ(h100.l1_resident_size_threshold(), 2 * 1024 * 132);
+  EXPECT_NEAR(h100.l1_resident_size_threshold(), 256 * 1024, 16 * 1024);
+
+  // ROCm: l1_cache_size_per_SM() is already the true per-CU L1, so the
+  // threshold is that value directly. Multiplying by the core count would give
+  // the 8 MiB device-wide aggregate, which is not what the CUDA path means.
+  DeviceDescription mi350;
+  mi350.set_gpu_compute_capability(
+      GpuComputeCapability(RocmComputeCapability("gfx950")));
+  mi350.set_core_count(256);
+  EXPECT_EQ(mi350.l1_cache_size_per_SM(), 32 * 1024);
+  EXPECT_EQ(mi350.l1_resident_size_threshold(), 32 * 1024);
+  EXPECT_NE(mi350.l1_resident_size_threshold(),
+            mi350.l1_cache_size_per_SM() * mi350.core_count());
+
+  // Both vendors now express the same thing: one core's L1, not the device
+  // total. The thresholds should be within an order of magnitude of each
+  // other, unlike the 8 MiB vs 264 KiB they used to differ by.
+  EXPECT_LT(mi350.l1_resident_size_threshold(),
+            h100.l1_resident_size_threshold());
+}
+
+TEST(DeviceDescription, AggregateL2DefaultsToASingleInstance) {
+  // GPUs with one device-wide L2 leave the instance count unset, so the
+  // aggregate equals the per-instance size and nothing about them changes.
+  DeviceDescription desc;
+  desc.set_l2_cache_size(50 * 1024 * 1024);
+  EXPECT_EQ(desc.l2_cache_instances(), 1);
+  EXPECT_EQ(desc.aggregate_l2_cache_size(), desc.l2_cache_size());
+}
+
+TEST(DeviceDescription, AggregateL2MultipliesByInstanceCount) {
+  // MI350: 4 MiB private to each of 8 XCDs is 32 MiB device-wide.
+  DeviceDescription desc;
+  desc.set_l2_cache_size(4 * 1024 * 1024);
+  desc.set_l2_cache_instances(8);
+  EXPECT_EQ(desc.l2_cache_size(), 4 * 1024 * 1024);
+  EXPECT_EQ(desc.aggregate_l2_cache_size(), 32 * 1024 * 1024);
+}
+
 TEST(DeviceDescription, CacheBandwidthsAreZeroWhenUnset) {
   // Unlike last_level_cache_size(), the bandwidths do not fall back to each
   // other or to memory_bandwidth(): the tiers have very different rates, so
@@ -238,6 +286,7 @@ TEST(DeviceDescription, CacheFieldsProtoRoundTrip) {
   desc.set_gpu_compute_capability(
       GpuComputeCapability(RocmComputeCapability("gfx950")));
   desc.set_l2_cache_size(4 * 1024 * 1024);
+  desc.set_l2_cache_instances(8);
   desc.set_last_level_cache_size(256LL * 1024 * 1024);
   desc.set_l2_cache_bandwidth(36'044'800'000'000);
   desc.set_last_level_cache_bandwidth(17'203'200'000'000);
@@ -245,6 +294,8 @@ TEST(DeviceDescription, CacheFieldsProtoRoundTrip) {
   ASSERT_OK_AND_ASSIGN(DeviceDescription from_proto,
                        DeviceDescription::FromProto(desc.ToProto()));
   EXPECT_EQ(from_proto.l2_cache_size(), 4 * 1024 * 1024);
+  EXPECT_EQ(from_proto.l2_cache_instances(), 8);
+  EXPECT_EQ(from_proto.aggregate_l2_cache_size(), 32 * 1024 * 1024);
   EXPECT_EQ(from_proto.last_level_cache_size(), 256LL * 1024 * 1024);
   EXPECT_EQ(from_proto.l2_cache_bandwidth(), 36'044'800'000'000);
   EXPECT_EQ(from_proto.last_level_cache_bandwidth(), 17'203'200'000'000);
@@ -260,6 +311,10 @@ TEST(DeviceDescription, CacheFieldsProtoRoundTrip) {
 
   other = desc;
   other.set_last_level_cache_bandwidth(1);
+  EXPECT_NE(desc, other);
+
+  other = desc;
+  other.set_l2_cache_instances(4);
   EXPECT_NE(desc, other);
 }
 

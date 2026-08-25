@@ -167,6 +167,7 @@ stream_executor::DeviceDescription TestGpuDeviceInfo::AMDMI350DeviceInfo() {
   // whitepaper (2048 B/clk per XCD for L2, 8192 B/clk for L3). Keep in sync
   // with specs/mi350.txtpb.
   b.set_l2_cache_size(4 * 1024 * 1024);
+  b.set_l2_cache_instances(8);  // 8 XCDs, so 32 MiB device-wide.
   b.set_last_level_cache_size(256LL * 1024 * 1024);
   b.set_l2_cache_bandwidth(36'044'800'000'000);      // 2048 x 8 XCD x 2.2 GHz
   b.set_last_level_cache_bandwidth(17'203'200'000'000);  // 8192 x 2.1 GHz

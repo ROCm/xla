@@ -347,8 +347,27 @@ class DeviceDescription {
   // Returns the device memory size in bytes.
   int64_t device_memory_size() const { return device_memory_size_; }
 
-  // Returns the L2 cache size in bytes.
+  // Returns the L2 cache size in bytes. This is per instance: on CDNA3/CDNA4
+  // each XCD has a private L2 and this is one XCD's share.
   int64_t l2_cache_size() const { return l2_cache_size_; }
+
+  // Number of independent L2 caches. 1 on GPUs with a single device-wide L2,
+  // the XCD count on CDNA3/CDNA4. Defaults to 1 when unset.
+  int64_t l2_cache_instances() const {
+    return l2_cache_instances_ > 0 ? l2_cache_instances_ : 1;
+  }
+
+  // Total L2 capacity across every instance.
+  //
+  // This is the right bound for a working set partitioned across the device,
+  // where each instance holds a distinct slice. That is the common case for
+  // XLA fusions, and measurement on gfx950 puts the bandwidth cliff here (at
+  // 32 MiB) rather than at the per-instance 4 MiB. Use l2_cache_size() instead
+  // for data replicated into every instance, such as a broadcast operand every
+  // core reads in full.
+  int64_t aggregate_l2_cache_size() const {
+    return l2_cache_size_ * l2_cache_instances();
+  }
 
   // Returns the size in bytes of the last level of the data cache hierarchy:
   // the largest pool every core on the device can read from before going to
@@ -460,8 +479,33 @@ class DeviceDescription {
         return 32 * 1024;
       }
     }
-    // Default return for other GPUs (e.g., RTX A6000).
+    // Default return for other GPUs (e.g., RTX A6000). Note this is a
+    // conservative placeholder rather than a real capacity; see
+    // l1_resident_size_threshold().
     return 2 * 1024;
+  }
+
+  // Working set size below which data is assumed to stay resident in a single
+  // core's L1. A heuristic threshold, not a capacity.
+  //
+  // The two vendors reach it differently because l1_cache_size_per_SM() means
+  // different things for each. On CUDA it returns a 2 KiB placeholder, and
+  // multiplying by the core count happens to land within 1.0x to 1.3x of one
+  // SM's real L1 on every generation from Volta to Blackwell (H100: 264 KiB
+  // computed vs 256 KiB actual), so the product is the threshold and is kept
+  // verbatim.
+  //
+  // On ROCm the function returns the true per-CU L1, so multiplying again
+  // would compare against the device-wide aggregate: 8 MiB on MI350 instead of
+  // 32 KiB. That made the model claim a 20x speedup on working sets up to
+  // several MiB, asking for 136 TB/s on a part measured at 35 TB/s to its
+  // fastest cache. Comparing against the per-CU value directly restores the
+  // same "fits in one core's L1" meaning CUDA already had.
+  int64_t l1_resident_size_threshold() const {
+    if (gpu_compute_capability_.rocm_compute_capability() != nullptr) {
+      return l1_cache_size_per_SM();
+    }
+    return l1_cache_size_per_SM() * core_count();
   }
 
   int64_t dram_to_l2_transaction_size_bytes() const {
@@ -571,6 +615,7 @@ class DeviceDescription {
   void set_device_address_bits(int64_t value) { device_address_bits_ = value; }
   void set_device_memory_size(int64_t value) { device_memory_size_ = value; }
   void set_l2_cache_size(int64_t value) { l2_cache_size_ = value; }
+  void set_l2_cache_instances(int64_t value) { l2_cache_instances_ = value; }
   void set_last_level_cache_size(int64_t value) {
     last_level_cache_size_ = value;
   }
@@ -679,6 +724,8 @@ class DeviceDescription {
   int64_t device_address_bits_ = kUninitialized<int64_t>;
   int64_t device_memory_size_ = kUninitialized<int64_t>;
   int64_t l2_cache_size_ = kUninitialized<int64_t>;
+  // Read through l2_cache_instances(), which defaults to 1.
+  int64_t l2_cache_instances_ = kUninitialized<int64_t>;
   // Unset on platforms whose last level cache is L2; read through
   // last_level_cache_size(), which falls back to l2_cache_size_.
   int64_t last_level_cache_size_ = kUninitialized<int64_t>;

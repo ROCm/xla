@@ -370,9 +370,13 @@ TEST_F(GpuPerformanceModelBaseTest,
   se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
   ASSERT_GT(mi350.l2_cache_bandwidth(), mi350.last_level_cache_bandwidth());
   ASSERT_GT(mi350.last_level_cache_bandwidth(), mi350.memory_bandwidth());
+  // Tiers must order by capacity, otherwise the shallowest-fit selection below
+  // is ambiguous: 8 MiB aggregate L1 < 32 MiB aggregate L2 < 256 MiB L3.
+  ASSERT_EQ(mi350.aggregate_l2_cache_size(), 32L * 1024 * 1024);
+  ASSERT_LT(mi350.aggregate_l2_cache_size(), mi350.last_level_cache_size());
 
-  // Three working sets, one per tier: inside the 4 MiB per-XCD L2, between it
-  // and the 256 MiB L3, and beyond the L3. Each should be strictly more
+  // Three working sets, one per tier: inside the 32 MiB aggregate L2, between
+  // it and the 256 MiB L3, and beyond the L3. Each should be strictly more
   // expensive per byte than the one before it. A single cache speedup constant
   // cannot produce this ordering, which is the point of the change.
   auto per_byte_reread_cost = [&](int64_t n_bytes_net) {
@@ -396,13 +400,12 @@ TEST_F(GpuPerformanceModelBaseTest,
 TEST_F(GpuPerformanceModelBaseTest,
        ReadTimeWithDRAMHeuristicIgnoresL1MultiplierWhenTierBandwidthIsKnown) {
   se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
-  // Aggregate L1 on MI350 is 32 KiB x 256 CUs = 8 MiB, which exceeds the 4 MiB
-  // per-XCD L2, so the legacy L1 branch would fire for every L2-resident
-  // working set and stack x8 on top of a real bandwidth. Guard against that
-  // regression: the modeled re-read rate must not exceed the L2's own
-  // bandwidth.
-  ASSERT_GT(mi350.l1_cache_size_per_SM() * mi350.core_count(),
-            mi350.l2_cache_size());
+  // An L1-resident working set must be priced at the L2 rate, not the L2 rate
+  // times kL1CacheSpeedup. Measurement on gfx950 shows L1 buys latency rather
+  // than bandwidth, so stacking the multiplier would overstate the re-read
+  // rate by 8x for everything under the aggregate L1.
+  ASSERT_LT(mi350.l1_resident_size_threshold(),
+            mi350.aggregate_l2_cache_size());
 
   constexpr int64_t kNBytes = 1L * 1024 * 1024;
   absl::Duration reread_only =

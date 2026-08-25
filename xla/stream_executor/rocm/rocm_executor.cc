@@ -1205,6 +1205,12 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
         desc.set_last_level_cache_size(cache->last_level_cache_size_bytes);
       }
 
+      // HIP reports one XCD's L2; the instance count is what turns that into
+      // the device-wide capacity the cost model bounds against.
+      if (cache->num_l2_instances > 0) {
+        desc.set_l2_cache_instances(cache->num_l2_instances);
+      }
+
       // The L2 sits on the XCD, so it runs at the engine clock that
       // clock_rate_ghz already holds. No extra clock query needed. If the
       // property read above failed this is still kUninitialized, which

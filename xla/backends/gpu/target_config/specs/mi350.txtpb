@@ -25,7 +25,10 @@ gpu_device_info {
   block_dim_limit_y: 65536
   block_dim_limit_z: 65536
   memory_bandwidth: 6810000000000
+  # 4 MiB private to each of the 8 XCDs, so 32 MiB device-wide. Measurement on
+  # gfx950 puts the read bandwidth cliff at the 32 MiB aggregate.
   l2_cache_size: 4194304
+  l2_cache_instances: 8
   last_level_cache_size: 268435456
   # 2048 B/clk per XCD (CDNA4 whitepaper p.9) x 8 XCDs x 2.2 GHz engine clock.
   l2_cache_bandwidth: 36044800000000
