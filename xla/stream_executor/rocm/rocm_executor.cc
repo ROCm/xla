@@ -1207,8 +1207,19 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
 
       // HIP reports one XCD's L2; the instance count is what turns that into
       // the device-wide capacity the cost model bounds against.
-      if (cache->num_l2_instances > 0) {
-        desc.set_l2_cache_instances(cache->num_l2_instances);
+      //
+      // Prefer HIP's XCC count. amd_smi's num_cache_instance was measured
+      // reporting 1 on MI350X, where there are 8 XCDs, so it counts distinct
+      // cache *descriptions* rather than physical instances and cannot be
+      // used for this.
+      absl::StatusOr<int64_t> num_xcc = GetSimpleAttribute<int64_t>(
+          device, hipDeviceAttributeNumberOfXccs);
+      if (num_xcc.ok() && *num_xcc > 0) {
+        desc.set_l2_cache_instances(*num_xcc);
+      } else {
+        LOG(WARNING) << "Could not determine XCC count for device "
+                     << device_ordinal
+                     << "; assuming a single device-wide L2.";
       }
 
       // The L2 sits on the XCD, so it runs at the engine clock that

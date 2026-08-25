@@ -39,6 +39,11 @@ int64_t GetRocmL2CacheBandwidth(const RocmComputeCapability& cc,
 
 // Last level (Infinity Cache) read bandwidth. It sits on the IODs rather than
 // the XCDs, so it runs at the Infinity Fabric clock, not the engine clock.
+//
+// Pass 0 for `fabric_clock_ghz` when the clock could not be queried:
+// AMDSMI_CLK_TYPE_DF was measured reporting a zero peak on MI350X. The
+// documented per-generation clock is then used instead, which is why this can
+// still return a value with no clock available.
 int64_t GetRocmLastLevelCacheBandwidth(const RocmComputeCapability& cc,
                                        double fabric_clock_ghz);
 

@@ -99,8 +99,20 @@ TEST(RocmCacheBandwidthTest, ImplausibleInputsReturnZero) {
   // A caller passing MHz instead of GHz must not produce a plausible-looking
   // number.
   EXPECT_EQ(GetRocmL2CacheBandwidth(gfx950, 8, 2200.0), 0);
-  EXPECT_EQ(GetRocmLastLevelCacheBandwidth(gfx950, 0.0), 0);
-  EXPECT_EQ(GetRocmLastLevelCacheBandwidth(gfx950, 2100.0), 0);
+}
+
+TEST(RocmCacheBandwidthTest, LastLevelFallsBackToDocumentedFabricClock) {
+  // AMDSMI_CLK_TYPE_DF reports a zero peak clock on MI350X, so an unavailable
+  // clock is the common case rather than an error. It must still produce the
+  // documented bandwidth instead of 0, otherwise the tier silently disappears.
+  RocmComputeCapability gfx950("gfx950");
+  EXPECT_TRUE(IsNear(GetRocmLastLevelCacheBandwidth(gfx950, 0.0), 17.2e12));
+  // A caller passing MHz is a bug, not a missing value, but it lands in the
+  // same guard and gets the documented figure rather than a 1000x overestimate.
+  EXPECT_TRUE(IsNear(GetRocmLastLevelCacheBandwidth(gfx950, 2100.0), 17.2e12));
+  // An unmodeled architecture still gets nothing.
+  EXPECT_EQ(GetRocmLastLevelCacheBandwidth(RocmComputeCapability("gfx90a"), 0.0),
+            0);
 }
 
 }  // namespace

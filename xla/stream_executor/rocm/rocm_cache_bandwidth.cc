@@ -38,6 +38,16 @@ constexpr int64_t kL2ReadBytesPerClockPerXcd = 2048;
 // stack across 8 stacks.
 constexpr int64_t kInfinityCacheReadBytesPerClock = 8192;
 
+// Infinity Fabric clock to assume when it cannot be queried. Implied by the
+// CDNA3 whitepaper's stated 17.2 TB/s over the 8192 B/clk width above, and it
+// matches MI300X's engine clock, which is a good sign the attribution is right.
+//
+// TODO: measurement on gfx950 puts the achievable Infinity Cache bandwidth at
+// 7.85 TB/s, less than half of what this yields. Revisit once a peak DF clock
+// can be read, to establish whether the gap is clock attribution or the cache
+// not delivering its width.
+constexpr double kDocumentedFabricClockGhz = 2.1;
+
 // Sanity bound. A clock outside this range means the query returned garbage
 // (or a units mismatch), and a bogus bandwidth is worse than none.
 constexpr double kMinPlausibleClockGhz = 0.1;
@@ -68,7 +78,14 @@ int64_t GetRocmL2CacheBandwidth(const RocmComputeCapability& cc,
 int64_t GetRocmLastLevelCacheBandwidth(const RocmComputeCapability& cc,
                                        double fabric_clock_ghz) {
   if (!HasModeledCacheGeometry(cc)) return 0;
-  if (!IsPlausibleClock(fabric_clock_ghz)) return 0;
+
+  // AMDSMI_CLK_TYPE_DF reports a zero peak clock on MI350X, so the query
+  // usually fails in practice. Fall back to the clock implied by the CDNA3
+  // whitepaper's stated 17.2 TB/s Infinity Cache bandwidth over the 8192 B/clk
+  // width, which CDNA4 says is unchanged in organization.
+  if (!IsPlausibleClock(fabric_clock_ghz)) {
+    fabric_clock_ghz = kDocumentedFabricClockGhz;
+  }
 
   return static_cast<int64_t>(kInfinityCacheReadBytesPerClock *
                               fabric_clock_ghz * 1e9);
