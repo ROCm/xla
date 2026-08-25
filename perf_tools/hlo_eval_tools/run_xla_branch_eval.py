@@ -18,6 +18,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from generate_xla_hlo_campaign_report import (
+    generate_xla_hlo_campaign_html_report,
+)
+from xla_hlo_campaign_utils import (
+    normalize_gpu_architectures,
+    normalize_rocm_version,
+)
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 TARGET_CONFIG = SCRIPT_DIR / "xla_targets.json"
@@ -65,6 +73,32 @@ def write_campaign_manifest_atomically(
     temporary.replace(path)
 
 
+def finalize_campaign_report(
+    *,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    campaign_dir: Path,
+) -> tuple[Path | None, str | None]:
+    """Generate the final report and persist its outcome in the manifest."""
+    try:
+        report = generate_xla_hlo_campaign_html_report(campaign_dir)
+    except (KeyError, OSError, TypeError, ValueError) as error:
+        manifest["report"] = {
+            "status": "failed",
+            "failed_at": utc_now(),
+            "error": str(error),
+        }
+        write_campaign_manifest_atomically(manifest_path, manifest)
+        return None, str(error)
+    manifest["report"] = {
+        "status": "generated",
+        "generated_at": utc_now(),
+        "path": str(report),
+    }
+    write_campaign_manifest_atomically(manifest_path, manifest)
+    return report, None
+
+
 def detect_rocm_version() -> str | None:
     """Detect the installed ROCm toolkit version inside the environment."""
     path = Path("/opt/rocm/.info/version")
@@ -72,8 +106,7 @@ def detect_rocm_version() -> str | None:
         value = path.read_text(encoding="utf-8").strip()
     except OSError:
         return None
-    match = re.search(r"(?<!\d)(\d+\.\d+\.\d+)", value)
-    return match.group(1) if match else None
+    return normalize_rocm_version(value)
 
 
 def detect_gpu_architectures() -> list[str]:
@@ -91,15 +124,14 @@ def detect_gpu_architectures() -> list[str]:
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
-    architectures = {
-        match.group(1).lower()
+    return normalize_gpu_architectures(
+        match.group(1)
         for match in re.finditer(
             r"^\s*Name:\s+(gfx[0-9a-z]+)",
             result.stdout,
             flags=re.MULTILINE | re.IGNORECASE,
         )
-    }
-    return sorted(architectures)
+    )
 
 
 def collect_campaign_environment() -> dict[str, Any]:
@@ -725,6 +757,19 @@ def main() -> int:
     print_campaign_summary(results)
     if manifest_path.is_file():
         print(f"manifest={manifest_path}")
+    report_error = None
+    if manifest is not None:
+        report, report_error = finalize_campaign_report(
+            manifest=manifest,
+            manifest_path=manifest_path,
+            campaign_dir=output,
+        )
+        if report is not None:
+            print(f"report={report}")
+        elif report_error is not None:
+            print(f"FAIL report generation: {report_error}", file=sys.stderr)
+    if report_error is not None:
+        return 2
     return 0 if (
         restore_error is None
         and results
