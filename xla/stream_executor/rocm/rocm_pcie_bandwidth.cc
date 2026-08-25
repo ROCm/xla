@@ -15,6 +15,7 @@ limitations under the License.
 #include <cstdint>
 
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
@@ -55,17 +56,12 @@ absl::StatusOr<int64_t> GetRocmPcieBandwidth(absl::string_view pci_bus_id) {
 
   if (!InitSmi()) return absl::UnavailableError("SMI is not available");
 
-  absl::StatusOr<BdfComponents> bdf = ParseBdf(pci_bus_id);
-  if (!bdf.ok()) return bdf.status();
+  ABSL_ASSIGN_OR_RETURN(BdfComponents bdf, ParseBdf(pci_bus_id));
+  ABSL_ASSIGN_OR_RETURN(SmiDeviceHandle device, FindDevice(bdf));
+  ABSL_ASSIGN_OR_RETURN(PcieLinkStatus link, QueryPcieLinkStatus(device));
 
-  absl::StatusOr<SmiDeviceHandle> device = FindDevice(*bdf);
-  if (!device.ok()) return device.status();
-
-  absl::StatusOr<PcieLinkStatus> link = QueryPcieLinkStatus(*device);
-  if (!link.ok()) return link.status();
-
-  uint32_t speed_mt_per_sec = link->speed_mt_per_sec;
-  uint16_t width = link->width;
+  uint32_t speed_mt_per_sec = link.speed_mt_per_sec;
+  uint16_t width = link.width;
 
   if (speed_mt_per_sec == 0 || width == 0) {
     return absl::InternalError(

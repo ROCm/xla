@@ -17,6 +17,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
@@ -76,10 +77,10 @@ absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {
 }
 
 absl::StatusOr<SmiDeviceHandle> FindDevice(const BdfComponents& target_bdf) {
-  absl::StatusOr<std::vector<SmiDeviceHandle>> devices = EnumerateDevices();
-  if (!devices.ok()) return devices.status();
+  ABSL_ASSIGN_OR_RETURN(std::vector<SmiDeviceHandle> devices,
+                        EnumerateDevices());
 
-  for (SmiDeviceHandle device : *devices) {
+  for (SmiDeviceHandle device : devices) {
     uint64_t bdfid = 0;
     if (rsmi_status_t status =
             rsmi_dev_pci_id_get(ToDeviceIndex(device), &bdfid);

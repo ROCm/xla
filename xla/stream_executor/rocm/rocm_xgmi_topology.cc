@@ -16,6 +16,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -30,17 +31,14 @@ absl::StatusOr<XgmiTopologyInfo> GetRocmXgmiTopology(
 
   if (!InitSmi()) return absl::UnavailableError("SMI is not available");
 
-  absl::StatusOr<BdfComponents> bdf = ParseBdf(pci_bus_id);
-  if (!bdf.ok()) return bdf.status();
-
-  absl::StatusOr<SmiDeviceHandle> device = FindDevice(*bdf);
-  if (!device.ok()) return device.status();
+  ABSL_ASSIGN_OR_RETURN(BdfComponents bdf, ParseBdf(pci_bus_id));
+  ABSL_ASSIGN_OR_RETURN(SmiDeviceHandle device, FindDevice(bdf));
 
   XgmiTopologyInfo info;
 
   // A device outside an xGMI hive is a normal configuration, and SMI reports
   // it the same way it reports a failed query, so this is not fatal.
-  absl::StatusOr<uint64_t> hive_id = QueryHiveId(*device);
+  absl::StatusOr<uint64_t> hive_id = QueryHiveId(device);
   if (hive_id.ok()) {
     info.hive_id = *hive_id;
   } else {
@@ -51,14 +49,14 @@ absl::StatusOr<XgmiTopologyInfo> GetRocmXgmiTopology(
 
   // Count peers reachable over xGMI by querying the link type to every other
   // device. This counts peer GPUs, not physical links.
-  absl::StatusOr<std::vector<SmiDeviceHandle>> devices = EnumerateDevices();
-  if (!devices.ok()) return devices.status();
-  if (devices->size() <= 1) return info;
+  ABSL_ASSIGN_OR_RETURN(std::vector<SmiDeviceHandle> devices,
+                        EnumerateDevices());
+  if (devices.size() <= 1) return info;
 
   int xgmi_links = 0;
-  for (SmiDeviceHandle peer : *devices) {
-    if (peer == *device) continue;
-    absl::StatusOr<bool> is_peer = IsXgmiPeer(*device, peer);
+  for (SmiDeviceHandle peer : devices) {
+    if (peer == device) continue;
+    absl::StatusOr<bool> is_peer = IsXgmiPeer(device, peer);
     if (!is_peer.ok()) {
       VLOG(2) << "xGMI link type query failed for " << pci_bus_id << ": "
               << is_peer.status().message();
@@ -71,7 +69,7 @@ absl::StatusOr<XgmiTopologyInfo> GetRocmXgmiTopology(
 
   VLOG(1) << "xGMI topology for " << pci_bus_id << ": " << xgmi_links
           << " active xGMI links"
-          << " (hive_id=" << info.hive_id << ", num_devices=" << devices->size()
+          << " (hive_id=" << info.hive_id << ", num_devices=" << devices.size()
           << ")";
 
   return info;
