@@ -100,7 +100,6 @@ jobs:
         - /data/ci-cert.crt:/data/ci-cert.crt
         - /data/ci-cert.key:/data/ci-cert.key
         - /data:/data
-        - /tmp/bazel-cache:/root/.cache/bazel
       options: &rocm_container_options >-
         --device=/dev/dri
         --device=/dev/kfd
