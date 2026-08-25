@@ -134,10 +134,11 @@ GitHub Actions workflows and PR labels that drive automation in this fork.
 
 ### Scheduled / event-driven workflows
 
-| Workflow | Schedule | Description |
-|----------|----------|-------------|
-| `sync_upstream.yml` | Every 3h (weekdays), daily (weekends) | Syncs `main` with `openxla/xla:main` via the GitHub merge-upstream API |
-| `claude_auto_review.yml` | Every PR opened against a branch that has `pr_event_dispatch.yml` | Automatically runs Claude Opus 4.6-powered code review on every pull request |
+    | Workflow                     | Schedule                                                          | Description                                                                                                                                                                                           |
+    | ----------                   | ----------                                                        | -------------                                                                                                                                                                                         |
+    | `sync_upstream.yml`          | Every 3h (weekdays), daily (weekends)                             | Syncs `main` with `openxla/xla:main` via the GitHub merge-upstream API                                                                                                                                |
+    | `claude_auto_review.yml`     | Every PR opened against a branch that has `pr_event_dispatch.yml` | Automatically runs Claude Opus 4.6-powered code review on every pull request                                                                                                                          |
+    | `therock_xla_ci_nightly.yml` | Nightly at 5 AM UTC                                               | Runs the XLA and JAX unit tests suite and sanitizers TSAN, ASAN (using `therock_xla_ci_sanitizers.yml` script) on the latest theRock nightly/prereleases. Currently pinned to version 10.0 prerelease |
 
 ### Opt-in PR labels
 
