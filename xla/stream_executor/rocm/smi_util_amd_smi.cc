@@ -43,21 +43,21 @@ absl::Status SmiError(absl::string_view api, amdsmi_status_t status) {
       absl::StrCat(api, " failed: ", err_str ? err_str : "unknown error"));
 }
 
-bool InitLibrary() {
+amdsmi_status_t InitLibrary() {
   amdsmi_status_t status = amdsmi_init(AMDSMI_INIT_AMD_GPUS);
-  if (status != AMDSMI_STATUS_SUCCESS) {
-    LOG(WARNING) << SmiError("amdsmi_init", status).message();
-    return false;
+  if (status == AMDSMI_STATUS_SUCCESS) {
+    VLOG(1) << "SMI device queries go through amd_smi.";
   }
-  VLOG(1) << "SMI device queries go through amd_smi.";
-  return true;
+  return status;
 }
 
 }  // namespace
 
-bool InitSmi() {
-  static const bool initialized = InitLibrary();
-  return initialized;
+absl::Status InitSmi() {
+  // Caching the raw status, not an absl::Status, keeps this a plain static.
+  static const amdsmi_status_t status = InitLibrary();
+  if (status != AMDSMI_STATUS_SUCCESS) return SmiError("amdsmi_init", status);
+  return absl::OkStatus();
 }
 
 absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {

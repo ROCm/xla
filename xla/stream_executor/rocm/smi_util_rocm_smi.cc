@@ -44,21 +44,21 @@ absl::Status SmiError(absl::string_view api, rsmi_status_t status) {
       absl::StrCat(api, " failed: ", err_str ? err_str : "unknown error"));
 }
 
-bool InitLibrary() {
+rsmi_status_t InitLibrary() {
   rsmi_status_t status = rsmi_init(0);
-  if (status != RSMI_STATUS_SUCCESS) {
-    LOG(WARNING) << SmiError("rsmi_init", status).message();
-    return false;
+  if (status == RSMI_STATUS_SUCCESS) {
+    VLOG(1) << "SMI device queries go through rocm_smi.";
   }
-  VLOG(1) << "SMI device queries go through rocm_smi.";
-  return true;
+  return status;
 }
 
 }  // namespace
 
-bool InitSmi() {
-  static const bool initialized = InitLibrary();
-  return initialized;
+absl::Status InitSmi() {
+  // Caching the raw status, not an absl::Status, keeps this a plain static.
+  static const rsmi_status_t status = InitLibrary();
+  if (status != RSMI_STATUS_SUCCESS) return SmiError("rsmi_init", status);
+  return absl::OkStatus();
 }
 
 absl::StatusOr<std::vector<SmiDeviceHandle>> EnumerateDevices() {
