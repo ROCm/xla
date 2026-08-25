@@ -54,7 +54,7 @@ on:
       runner_label:
         description: 'On which runner to run'
         type: string
-        default: "linux-xla-do-mi350x-1"
+        default: "dpx-test-pool"
   schedule:
     # Run every 24 hours at 5:00 AM UTC
     - cron: '00 5 * * *'
@@ -85,7 +85,7 @@ jobs:
   xla:
     needs: execute-xla-ut-therock-ci
     name: XLA Linux theRock nightly CI
-    runs-on: ${{ inputs.runner_label || 'linux-xla-do-mi350x-1' }}
+    runs-on: ${{ inputs.runner_label || 'dpx-test-pool' }}
     timeout-minutes: 220
     env:
       DOCKER_IMAGE: ${{ needs.execute-xla-ut-therock-ci.outputs.docker-image }}
