@@ -54,7 +54,7 @@ on:
       runner_label:
         description: 'On which runner to run'
         type: string
-        default: "dpx-test-pool"
+        default: "linux-xla-do-mi350x-1"
   schedule:
     # Run every 24 hours at 5:00 AM UTC
     - cron: '00 5 * * *'
@@ -64,7 +64,8 @@ on:
     branches:
       - rocm-dev-infra
     paths:
-      - '.github/workflows/rocm_xla_ci_therock_nightly.yml'
+      - '.github/workflows/therock_xla_ci_nightly.yml'
+      - '.github/workflows/therock_xla_ci_sanitizers.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -85,7 +86,7 @@ jobs:
   xla:
     needs: execute-xla-ut-therock-ci
     name: XLA Linux theRock nightly CI
-    runs-on: ${{ inputs.runner_label || 'dpx-test-pool' }}
+    runs-on: ${{ inputs.runner_label || 'linux-xla-do-mi350x-1' }}
     timeout-minutes: 220
     env:
       DOCKER_IMAGE: ${{ needs.execute-xla-ut-therock-ci.outputs.docker-image }}
@@ -99,6 +100,7 @@ jobs:
         - /data/ci-cert.crt:/data/ci-cert.crt
         - /data/ci-cert.key:/data/ci-cert.key
         - /data:/data
+        - /tmp/bazel-cache:/root/.cache/bazel
       options: &rocm_container_options >-
         --device=/dev/dri
         --device=/dev/kfd
@@ -241,3 +243,14 @@ jobs:
             --bes_keywords=upstream \
             --bes_keywords=gpu \
             --bes_keywords=pull_request
+
+  # Call sanitizers workflow as a separate job
+  sanitizers:
+    uses: ./.github/workflows/therock_xla_ci_sanitizers.yml
+    with:
+      repository: openxla/xla
+      ref: main
+      run_sanitizers: true
+    secrets:
+      RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
+      RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}
