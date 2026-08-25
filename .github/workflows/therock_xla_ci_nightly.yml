@@ -163,7 +163,7 @@ jobs:
             --repo_env=ROCM_DISTRO_HASH='' \
             --local_test_jobs=1 \
             --internal_spawn_scheduler \
-            --strategy=TestRunner=dynamic \
+            --strategy=TestRunner=remote \
             --bes_keywords=xla \
             --bes_keywords=upstream \
             --bes_keywords=gpu \
@@ -231,6 +231,7 @@ jobs:
             --//jax:build_jax=true \
             --local_test_jobs=1 \
             --action_env=JAX_ENABLE_X64=0 \
+            --strategy=TestRunner=remote \
             --repo_env=HERMETIC_PYTHON_VERSION=3.14 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
             --repo_env=ROCM_PATH="" \
