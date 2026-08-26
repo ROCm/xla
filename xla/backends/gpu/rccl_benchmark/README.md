@@ -46,16 +46,27 @@ rccl_benchmark/
 ├── common/                 shared infrastructure; every case uses it
 ├── extract_thresholds.py   generates the matrix inputs from library source
 ├── run.sh                  builds and runs cases, one arm per process
-├── warp_speed/             feature activation and its effect on plan execution
-└── ...                     one directory per mechanism as coverage grows
+│
+├── warp_speed/             feature activation and multi-task plans   IMPLEMENTED
+├── group_plan/             what shares one kernel plan               planned
+├── protocol_selection/     LL / LL128 / Simple boundaries            planned
+├── channel_buckets/        the per-rank size buckets                 planned
+├── dispatch_backends/      MSCCL, MSCCL++, rocSHMEM, pivot AllToAll  planned
+├── memory_paths/           private, registered, symmetric            planned
+├── comm_lifecycle/         init, split, abort, rebuild               planned
+└── dtype_redop/            element types and reduction operators     planned
 ```
 
-Planned siblings, in the order they matter:
-`group_plan/` (operations per group, homogeneous vs mixed, single vs multiple
-communicators), `protocol_selection/` (LL / LL128 / Simple boundaries),
-`channel_buckets/` (the nine per-rank size buckets), `dispatch_backends/`
-(MSCCL, MSCCL++, rocSHMEM, pivot AllToAll), `memory_paths/`,
-`comm_lifecycle/`, `dtype_redop/`.
+The planned directories exist and each carries a README describing the
+mechanism, the RCCL source it corresponds to, whether XLA can reach it by
+default, and the cases intended for it. They are empty of code on purpose: an
+uncovered mechanism should be visible as a gap in the tree rather than as an
+absence nobody notices. Filling one in means adding `thunk_test.cc`, `BUILD`,
+and arms in `run.sh` next to the README that already says what they should do.
+
+Priority order is roughly the order above. `group_plan/` first because it is the
+axis `rccl-tests` structurally cannot reach and the one the known defect lives
+on; `dtype_redop/` last because it is cheap and unlikely to break alone.
 
 **Attribution rule.** A case belongs to the directory of the mechanism most
 likely to be at fault if it fails. Cases that sit at an intersection are
