@@ -194,8 +194,9 @@ class ConvertToLibdevice : public mlir::OpRewritePattern<OpTy> {
 
     llvm::SmallVector<Value, 2> casted_inputs;
     if (output_type_is_16bit_float &&
-        (output_type.isF16() &&
-         !HasF16Implementation(OpInfo<OpTy>::kFunctionID, triple_))) {
+        (output_type.isBF16() ||
+         (output_type.isF16() &&
+         !HasF16Implementation(OpInfo<OpTy>::kFunctionID, triple_)))) {
       // Upcast the inputs to F32.
       for (auto operand : op->getOperands()) {
         casted_inputs.push_back(
@@ -213,8 +214,9 @@ class ConvertToLibdevice : public mlir::OpRewritePattern<OpTy> {
         /*pure=*/true);
 
     if (res.getType() != output_type ||
-        (output_type.isF16() &&
-         !HasF16Implementation(OpInfo<OpTy>::kFunctionID, triple_))) {
+        (output_type.isBF16() ||
+         (output_type.isF16() &&
+         !HasF16Implementation(OpInfo<OpTy>::kFunctionID, triple_)))) {
       // Downcast back to the original output type.
       res = ::xla::xtile::Cast(builder, res, output_type);
     }
