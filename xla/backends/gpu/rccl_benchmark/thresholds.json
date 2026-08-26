@@ -1,0 +1,2464 @@
+{
+  "rccl": {
+    "arch_tuning_index": {
+      "gfx1030": 0,
+      "gfx1100": 0,
+      "gfx1101": 0,
+      "gfx1102": 0,
+      "gfx1151": 9,
+      "gfx1200": 7,
+      "gfx1201": 7,
+      "gfx906": 0,
+      "gfx908": 0,
+      "gfx90a": 0,
+      "gfx942": 8,
+      "gfx950": 6
+    },
+    "dispatch": {
+      "INTRANET_THRESHOLD": {
+        "default": "8388608",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "IntraNetThreshold"
+      },
+      "P2P_LL_THRESHOLD": {
+        "default": "4096",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "P2pLLThreshold"
+      },
+      "P2P_NET_THRESHOLD": {
+        "default": "131072",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "P2pNetThreshold"
+      },
+      "PIVOT_ALLTOALL_ENABLE": {
+        "default": "1",
+        "defined_in": "src/init.cc",
+        "symbol": "PivotAlltoallEnable"
+      },
+      "ROCSHMEM_ENABLE": {
+        "default": "1",
+        "defined_in": "src/init.cc",
+        "symbol": "RocshmemEnabled"
+      },
+      "ROCSHMEM_THRESHOLD": {
+        "default": "(size_t",
+        "defined_in": "src/init.cc",
+        "symbol": "RocshmemThreshold"
+      }
+    },
+    "parameter_count": 286,
+    "parameters": {
+      "AGG_CHANNEL_SIZE": {
+        "default": "-2",
+        "defined_in": "src/init.cc",
+        "symbol": "AggChannelSize"
+      },
+      "AINIC_ROCE": {
+        "default": "-1",
+        "defined_in": "src/transport/net.cc",
+        "symbol": "AinicRoce"
+      },
+      "ALLGATHERV_ENABLE": {
+        "default": "0",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "AllgathervEnable"
+      },
+      "ALLOC_P2P_NET_LL_BUFFERS": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "AllocP2pNetLLBuffers"
+      },
+      "ALL_TO_ALL_PIVOT_ENABLE": {
+        "default": "0",
+        "defined_in": "src/collectives.cc",
+        "symbol": "AlltoAllPivotEnable"
+      },
+      "BOOTSTRAP_BIDIR_ALLGATHER": {
+        "default": "1",
+        "defined_in": "src/bootstrap.cc",
+        "symbol": "BootstrapBidirAllGather"
+      },
+      "BOOTSTRAP_BIDIR_NET": {
+        "default": "0",
+        "defined_in": "src/bootstrap.cc",
+        "symbol": "BootstrapBidirNet"
+      },
+      "BOOTSTRAP_BIDIR_THRESHOLD": {
+        "default": "128",
+        "defined_in": "src/bootstrap.cc",
+        "symbol": "BootstrapBidirThreshold"
+      },
+      "BUFFSIZE": {
+        "default": "-2",
+        "defined_in": "src/init.cc",
+        "symbol": "BuffSize"
+      },
+      "CE_ALLREDUCE": {
+        "default": "0",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "CeAllReduce"
+      },
+      "CE_BATCH_ASYNC_ENABLE": {
+        "default": "-2",
+        "defined_in": "src/ce_coll.cc",
+        "symbol": "CeBatchAsyncEnable"
+      },
+      "CE_COOP_LAUNCH": {
+        "default": "0",
+        "defined_in": "src/ce_coll.cc",
+        "symbol": "CeCoopLaunch"
+      },
+      "CE_MULTI_STREAMS": {
+        "default": "0",
+        "defined_in": "src/ce_coll.cc",
+        "symbol": "CeMultiStreams"
+      },
+      "CGA_CLUSTER_SIZE": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "CGAClusterSize"
+      },
+      "CHANNEL_TUNING_ENABLE": {
+        "default": "1",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "ChannelTuningEnable"
+      },
+      "CHEAP_POST_SEND_FENCE_OFF": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "CheapPostSendFenceOff"
+      },
+      "CHECK_POINTERS": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "CheckPointers"
+      },
+      "CHUNK_SIZE": {
+        "default": "0",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "ChunkSize"
+      },
+      "COLLNET_ENABLE": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "CollnetEnable"
+      },
+      "COLLNET_NODE_THRESHOLD": {
+        "default": "2",
+        "defined_in": "src/init.cc",
+        "symbol": "CollNetNodeThreshold"
+      },
+      "COLLTRACE_CHECK_INTERVAL_MS": {
+        "default": "10",
+        "defined_in": "src/misc/latency_profiler/CollTraceEvent.cc",
+        "symbol": "ColltraceCheckIntervalMs"
+      },
+      "COLLTRACE_DUMP_INTERVAL_SEC": {
+        "default": "300",
+        "defined_in": "src/misc/latency_profiler/CollTrace.cc",
+        "symbol": "ColltraceDumpIntervalSec"
+      },
+      "COLLTRACE_MAX_DUMP_SIZE": {
+        "default": "20",
+        "defined_in": "src/misc/latency_profiler/CollTrace.cc",
+        "symbol": "ColltraceMaxDumpSize"
+      },
+      "COLLTRACE_RECORD_MAX": {
+        "default": "100",
+        "defined_in": "src/misc/latency_profiler/CollTrace.cc",
+        "symbol": "ColltraceRecordMax"
+      },
+      "COMM_BLOCKING": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "CommBlocking"
+      },
+      "COMM_SHRINK_SHARE_RESOURCES": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "CommShrinkShareResources"
+      },
+      "COMM_SPLIT_SHARE_RESOURCES": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "CommSplitShareResources"
+      },
+      "CONNECT_ROUND_MAX_PEERS": {
+        "default": "128",
+        "defined_in": "src/transport.cc",
+        "symbol": "ConnectRoundMaxPeers"
+      },
+      "CROSS_NIC": {
+        "default": "2",
+        "defined_in": "src/graph/search.cc",
+        "symbol": "CrossNic"
+      },
+      "CTA_POLICY": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "CtaPolicy"
+      },
+      "CTS_OFFLOAD_ENABLED": {
+        "default": "-1",
+        "defined_in": "src/transport/net_ib_cast/init.cc",
+        "symbol": "IbCastCtsOffloadEnabled"
+      },
+      "CUMEM_ENABLE": {
+        "default": "-2",
+        "defined_in": "src/misc/cudawrap.cc",
+        "symbol": "CuMemEnable"
+      },
+      "CUMEM_HOST_ENABLE": {
+        "default": "-1",
+        "defined_in": "src/misc/cudawrap.cc",
+        "symbol": "CuMemHostEnable"
+      },
+      "DDA_ENABLE": {
+        "default": "1",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "DdaEnable"
+      },
+      "DDA_LL": {
+        "default": "1",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "DdaLL"
+      },
+      "DDA_LL128": {
+        "default": "0",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "DdaLL128"
+      },
+      "DDA_LL128_THRESHOLD": {
+        "default": "(size_t",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "DdaLL128Threshold"
+      },
+      "DDA_LL_ONESHOT_THRESHOLD": {
+        "default": "(size_t",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "DdaLLOneShotThreshold"
+      },
+      "DDA_LL_THRESHOLD": {
+        "default": "(size_t",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "DdaLLThreshold"
+      },
+      "DDA_LL_TWOSHOT_THRESHOLD": {
+        "default": "(size_t",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "DdaLLTwoShotThreshold"
+      },
+      "DDA_THRESHOLD": {
+        "default": "(size_t",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "DdaThreshold"
+      },
+      "DEV_API_JIT": {
+        "default": "0",
+        "defined_in": "src/gin/gin_host.cc",
+        "symbol": "DevApiJit"
+      },
+      "DIRECT_ALLGATHER_DISABLE": {
+        "default": "0",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "DirectAllGatherDisable"
+      },
+      "DIRECT_ALLGATHER_THRESHOLD": {
+        "default": "75497472",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "DirectAllGatherThreshold"
+      },
+      "DIRECT_REDUCE_SCATTER_DISABLE": {
+        "default": "0",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "DirectReduceScatterDisable"
+      },
+      "DIRECT_REDUCE_SCATTER_THRESHOLD": {
+        "default": "8388608",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "DirectReduceScatterThreshold"
+      },
+      "DISABLE_MEM_MANAGER": {
+        "default": "0",
+        "defined_in": "src/mem_manager.cc",
+        "symbol": "MemManagerDisable"
+      },
+      "DISABLE_NET_OVERRIDE": {
+        "default": "0",
+        "defined_in": "src/graph/rome_models.cc",
+        "symbol": "DisableNetOverride"
+      },
+      "DISABLE_RAIL_TREES": {
+        "default": "0",
+        "defined_in": "src/graph/rome_models.cc",
+        "symbol": "DisableRailTrees"
+      },
+      "DISABLE_REDUCE_COPY_PIPELINING": {
+        "default": "0",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "disableReduceCopyPipelining"
+      },
+      "DMABUF_ENABLE": {
+        "default": "1",
+        "defined_in": "src/misc/rocmwrap.cc",
+        "symbol": "DmaBufEnable"
+      },
+      "ELASTIC_BUFFER_REGISTER": {
+        "default": "1",
+        "defined_in": "src/dev_runtime.cc",
+        "symbol": "ElasticBufferRegister"
+      },
+      "ENABLE_INTRANET": {
+        "default": "-2",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "EnableIntranet"
+      },
+      "ENABLE_PROXY_TRACE": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "EnableProxyTrace"
+      },
+      "ENABLE_SIGNALHANDLER": {
+        "default": "0",
+        "defined_in": "src/misc/signals.cc",
+        "symbol": "EnableSignalHandler"
+      },
+      "ENABLE_VERSION_CHECK": {
+        "default": "1",
+        "defined_in": "src/dev_runtime.cc",
+        "symbol": "EnableVersionCheck"
+      },
+      "FORCE_CE": {
+        "default": "1",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "ForceCe"
+      },
+      "FORCE_CE_ALLREDUCE": {
+        "default": "0",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "ForceCeAllReduce"
+      },
+      "FORCE_ENABLE_DMABUF": {
+        "default": "0",
+        "defined_in": "src/misc/rocmwrap.cc",
+        "symbol": "ForceEnableDMABUF"
+      },
+      "FORCE_ENABLE_GDRDMA": {
+        "default": "-1",
+        "defined_in": "src/transport/net_ib/gdr.cc",
+        "symbol": "ForceEnableGdrdma"
+      },
+      "GDAKI_USE_RELIABLE_DB": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/gdaki/gin_host_gdaki.cc",
+        "symbol": "GinGdakiUseReliableDB"
+      },
+      "GDRCOPY_ENABLE": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "GdrCopyEnable"
+      },
+      "GDRCOPY_FIFO_ENABLE": {
+        "default": "1",
+        "defined_in": "src/init.cc",
+        "symbol": "GdrCopyFifoEnable"
+      },
+      "GDRCOPY_FLUSH_ENABLE": {
+        "default": "0",
+        "defined_in": "src/transport/net.cc",
+        "symbol": "GdrCopyFlushEnable"
+      },
+      "GDRCOPY_SYNC_ENABLE": {
+        "default": "1",
+        "defined_in": "src/transport/net.cc",
+        "symbol": "GdrCopySyncEnable"
+      },
+      "GDR_FLUSH_DISABLE": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbGdrFlushDisable"
+      },
+      "GDR_FLUSH_GPU_MEM_NO_RELAXED_ORDERING": {
+        "default": "1",
+        "defined_in": "src/transport/net_ib/p2p.cc",
+        "symbol": "IbGdrFlushGpuMemNoRelaxedOrdering"
+      },
+      "GIN_ENABLE": {
+        "default": "1",
+        "defined_in": "src/gin/gin_host.cc",
+        "symbol": "GinEnable"
+      },
+      "GIN_ERROR_QUERY_SEC": {
+        "default": "10",
+        "defined_in": "src/transport/net_ib/gdaki/gin_host_gdaki.cc",
+        "symbol": "GinErrorQuerySec"
+      },
+      "GIN_GDAKI_MAX_DEST_RD_ATOMIC": {
+        "default": "-2",
+        "defined_in": "src/transport/net_ib/gdaki/gin_host_gdaki.cc",
+        "symbol": "GinGdakiMaxDestRdAtomic"
+      },
+      "GIN_GDAKI_MAX_QP_RD_ATOMIC": {
+        "default": "-2",
+        "defined_in": "src/transport/net_ib/gdaki/gin_host_gdaki.cc",
+        "symbol": "GinGdakiMaxQpRdAtomic"
+      },
+      "GIN_GDAKI_NIC_HANDLER": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/gdaki/gin_host_gdaki.cc",
+        "symbol": "GinGdakiNicHandler"
+      },
+      "GIN_GDAKI_QP_DEPTH": {
+        "default": "128",
+        "defined_in": "src/transport/net_ib/gdaki/gin_host_gdaki.cc",
+        "symbol": "GinGdakiQpDepth"
+      },
+      "GIN_IB_TC": {
+        "default": "-1",
+        "defined_in": "src/transport/net_ib/gin.cc",
+        "symbol": "GinIbTc"
+      },
+      "GIN_NCONNECTIONS": {
+        "default": "-2",
+        "defined_in": "src/gin/gin_host.cc",
+        "symbol": "GinNconnections"
+      },
+      "GIN_PLUGIN_REF_COUNT": {
+        "default": "0",
+        "defined_in": "src/plugin/gin.cc",
+        "symbol": "GinPluginRefCount"
+      },
+      "GIN_PROXY_QUEUE_SIZE": {
+        "default": "-1",
+        "defined_in": "src/gin/gin_host_proxy.cc",
+        "symbol": "GinProxyQueueSize"
+      },
+      "GIN_TYPE": {
+        "default": "-1",
+        "defined_in": "src/transport/net_ib/gin.cc",
+        "symbol": "GinType"
+      },
+      "GRAPH_DUMP_FILE_RANK": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "GraphDumpFileRank"
+      },
+      "GRAPH_HELPER_DISABLE": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "DisableGraphHelper"
+      },
+      "GRAPH_MIXING_SUPPORT": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "GraphMixingSupport"
+      },
+      "GRAPH_REGISTER": {
+        "default": "1",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "GraphRegister"
+      },
+      "GRAPH_STREAM_ORDERING": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "GraphStreamOrdering"
+      },
+      "GROUP_CUDA_STREAM": {
+        "default": "NCCL_GROUP_CUDA_STREAM",
+        "defined_in": "src/init.cc",
+        "symbol": "GroupCudaStream"
+      },
+      "HIERARCHICAL_ALLGATHER": {
+        "default": "1",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "HierarchicalAllGather"
+      },
+      "HIERARCHICAL_REDUCE_SCATTER": {
+        "default": "0",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "HierarchicalReduceScatter"
+      },
+      "IB_ADAPTIVE_ROUTING": {
+        "default": "-2",
+        "defined_in": "src/transport/net_ib/init.cc",
+        "symbol": "IbAdaptiveRouting"
+      },
+      "IB_AR_THRESHOLD": {
+        "default": "-2",
+        "defined_in": "src/transport/net_ib/p2p.cc",
+        "symbol": "IbArThreshold"
+      },
+      "IB_DATA_DIRECT": {
+        "default": "1",
+        "defined_in": "src/transport/net_ib/init.cc",
+        "symbol": "IbDataDirect"
+      },
+      "IB_DEVICE_PCI_ORDER": {
+        "default": "1",
+        "defined_in": "src/transport/net_ib/init.cc",
+        "symbol": "IbDevicePciOrder"
+      },
+      "IB_DISABLE": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/init.cc",
+        "symbol": "IbDisable"
+      },
+      "IB_ECE_ENABLE": {
+        "default": "1",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbEceEnable"
+      },
+      "IB_FAULT_INJECTION": {
+        "default": "0",
+        "defined_in": "src/misc/ibvwrap.cc",
+        "symbol": "IbFaultInjection"
+      },
+      "IB_FIFO_TC": {
+        "default": "-1",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbFifoTc"
+      },
+      "IB_GID_INDEX": {
+        "default": "-1",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbGidIndex"
+      },
+      "IB_MERGE_NICS": {
+        "default": "1",
+        "defined_in": "src/transport/net_ib/init.cc",
+        "symbol": "IbMergeNics"
+      },
+      "IB_MERGE_VFS": {
+        "default": "1",
+        "defined_in": "src/transport/net_ib/init.cc",
+        "symbol": "IbMergeVfs"
+      },
+      "IB_MQP_RETRY_ALL": {
+        "default": "0",
+        "defined_in": "src/misc/ibvwrap.cc",
+        "symbol": "IbMQpRetryAll"
+      },
+      "IB_MQP_RETRY_CNT": {
+        "default": "34",
+        "defined_in": "src/misc/ibvwrap.cc",
+        "symbol": "IbMQpRetryCnt"
+      },
+      "IB_MQP_RETRY_SLEEP_MSEC": {
+        "default": "100",
+        "defined_in": "src/misc/ibvwrap.cc",
+        "symbol": "IbMQpRetryTimeout"
+      },
+      "IB_OOO_RQ": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/init.cc",
+        "symbol": "IbOooRq"
+      },
+      "IB_P2P_DISABLE_CTS": {
+        "default": "1",
+        "defined_in": "src/transport/net_ib_cast/init.cc",
+        "symbol": "IbCastP2pDisableCts"
+      },
+      "IB_PCI_RELAXED_ORDERING": {
+        "default": "2",
+        "defined_in": "src/transport/net_ib/init.cc",
+        "symbol": "IbPciRelaxedOrdering"
+      },
+      "IB_PKEY": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbPkey"
+      },
+      "IB_PREPOST_RECEIVE_WORK_REQUESTS": {
+        "default": "-2",
+        "defined_in": "src/transport/net_ib/common.cc",
+        "symbol": "IbPrepostReceiveWorkRequests"
+      },
+      "IB_QPS_PER_CONNECTION": {
+        "default": "1",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbQpsPerConn"
+      },
+      "IB_QPS_PER_P2P": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbQpsPerP2p"
+      },
+      "IB_QUERY_PORT_SPEED": {
+        "default": "1",
+        "defined_in": "src/misc/ibvwrap.cc",
+        "symbol": "IbQueryPortSpeed"
+      },
+      "IB_RECEIVER_SIDE_MATCHING_SCHEME": {
+        "default": "-2",
+        "defined_in": "src/transport/net_ib/p2p.cc",
+        "symbol": "IbReceiverSideMatchingScheme"
+      },
+      "IB_RESILIENCY_PORT_FAILOVER": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/p2p_resiliency.cc",
+        "symbol": "IbResiliencyPortFailover"
+      },
+      "IB_RESILIENCY_PORT_FAILOVER_MAX_ATTEMPTS": {
+        "default": "1",
+        "defined_in": "src/transport/net_ib/p2p_resiliency.cc",
+        "symbol": "IbResiliencyPortFailoverMaxAttempts"
+      },
+      "IB_RESILIENCY_PORT_FAILOVER_PROBE_DELAY": {
+        "default": "10",
+        "defined_in": "src/transport/net_ib/p2p_resiliency.cc",
+        "symbol": "IbResiliencyPortFailoverProbeDelay"
+      },
+      "IB_RESILIENCY_PORT_RECOVERY": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/p2p_resiliency_recovery.cc",
+        "symbol": "IbResiliencyPortRecovery"
+      },
+      "IB_RESILIENCY_PORT_RECOVERY_ACK_TIMEOUT": {
+        "default": "5000",
+        "defined_in": "src/transport/net_ib/p2p_resiliency_recovery.cc",
+        "symbol": "IbResiliencyPortRecoveryAckTimeout"
+      },
+      "IB_RESILIENCY_PORT_RECOVERY_ALIVE_MSG_BATCH_INTERVAL": {
+        "default": "500",
+        "defined_in": "src/transport/net_ib/p2p_resiliency_recovery.cc",
+        "symbol": "IbResiliencyPortRecoveryAliveMsgBatchInterval"
+      },
+      "IB_RESILIENCY_PORT_RECOVERY_ALIVE_MSG_BATCH_SIZE": {
+        "default": "5",
+        "defined_in": "src/transport/net_ib/p2p_resiliency_recovery.cc",
+        "symbol": "IbResiliencyPortRecoveryAliveMsgBatchSize"
+      },
+      "IB_RESILIENCY_PORT_RECOVERY_ALIVE_MSG_SEQUENCE_SIZE": {
+        "default": "5",
+        "defined_in": "src/transport/net_ib/p2p_resiliency_recovery.cc",
+        "symbol": "IbResiliencyPortRecoveryAliveMsgSequenceSize"
+      },
+      "IB_RESILIENCY_PORT_RECOVERY_ALIVE_MSG_TIMEOUT": {
+        "default": "4000",
+        "defined_in": "src/transport/net_ib/p2p_resiliency_recovery.cc",
+        "symbol": "IbResiliencyPortRecoveryAliveMsgTimeout"
+      },
+      "IB_RESILIENCY_PORT_RECOVERY_ATTEMPTS_MAX": {
+        "default": "5",
+        "defined_in": "src/transport/net_ib/p2p_resiliency_recovery.cc",
+        "symbol": "IbResiliencyPortRecoveryAttemptsMax"
+      },
+      "IB_RESILIENCY_PORT_RECOVERY_START_DELAY": {
+        "default": "200",
+        "defined_in": "src/transport/net_ib/p2p_resiliency_recovery.cc",
+        "symbol": "IbResiliencyPortRecoveryStartDelay"
+      },
+      "IB_RETRY_CNT": {
+        "default": "7",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbRetryCnt"
+      },
+      "IB_RETURN_ASYNC_EVENTS": {
+        "default": "1",
+        "defined_in": "src/transport/net_ib/common.cc",
+        "symbol": "IbAsyncEvents"
+      },
+      "IB_ROCE_VERSION_NUM": {
+        "default": "2",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbRoceVersionNum"
+      },
+      "IB_ROUTABLE_FLID_GID_INDEX": {
+        "default": "1",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbRoutableFlidIbGidIndex"
+      },
+      "IB_SL": {
+        "default": "-1",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbSl"
+      },
+      "IB_SPLIT_DATA_ON_QPS": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/common.cc",
+        "symbol": "IbSplitDataOnQps"
+      },
+      "IB_SPLIT_DATA_THRESHOLD": {
+        "default": "128",
+        "defined_in": "src/transport/net_ib/p2p.cc",
+        "symbol": "IbSplitDataThreshold"
+      },
+      "IB_SUBNET_AWARE_ROUTING": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbSubnetAwareRouting"
+      },
+      "IB_SUBNET_PREFIX_LEN": {
+        "default": "24",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbSubnetPrefixLen"
+      },
+      "IB_TC": {
+        "default": "-1",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbTc"
+      },
+      "IB_TIMEOUT": {
+        "default": "20",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbTimeout"
+      },
+      "IB_USE_INLINE": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbUseInline"
+      },
+      "IB_WARN_RAIL_LOCAL": {
+        "default": "0",
+        "defined_in": "src/transport/net_ib/connect.cc",
+        "symbol": "IbWarnRailLocal"
+      },
+      "IGNORE_COLLNET_MISMATCH": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "IgnoreCollNetMismatch"
+      },
+      "IGNORE_CPU_AFFINITY": {
+        "default": "0",
+        "defined_in": "src/graph/topo.cc",
+        "symbol": "IgnoreCpuAffinity"
+      },
+      "IGNORE_DISABLED_P2P": {
+        "default": "0",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "IgnoreDisabledP2p"
+      },
+      "IGNORE_NET_MISMATCH": {
+        "default": "1",
+        "defined_in": "src/init.cc",
+        "symbol": "IgnoreNetMismatch"
+      },
+      "INIT_CHANNELS": {
+        "default": "-1",
+        "defined_in": "src/init.cc",
+        "symbol": "InitChannels"
+      },
+      "INJECT_FAULTS": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "InjectFaults"
+      },
+      "INTRANET_THRESHOLD": {
+        "default": "8388608",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "IntraNetThreshold"
+      },
+      "IPC_USE_ABSTRACT_SOCKET": {
+        "default": "1",
+        "defined_in": "src/os/linux_ipcsocket.cc",
+        "symbol": "IpcUseAbstractSocket"
+      },
+      "L1_SHARED_MEMORY_CARVEOUT": {
+        "default": "0",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "L1SharedMemoryCarveout"
+      },
+      "LAUNCH_ORDER_IMPLICIT": {
+        "default": "0",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "LaunchOrderImplicit"
+      },
+      "LAUNCH_RACE_FATAL": {
+        "default": "1",
+        "defined_in": "src/misc/strongstream.cc",
+        "symbol": "LaunchRaceFatal"
+      },
+      "LEGACY_CUDA_REGISTER": {
+        "default": "0",
+        "defined_in": "src/transport/p2p.cc",
+        "symbol": "LegacyCudaRegister"
+      },
+      "LL128_BUFFSIZE": {
+        "default": "-2",
+        "defined_in": "src/init.cc",
+        "symbol": "Ll128BuffSize"
+      },
+      "LL128_C2C": {
+        "default": "1",
+        "defined_in": "src/graph/tuning.cc",
+        "symbol": "Ll128C2c"
+      },
+      "LL128_FORCE_ENABLE": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "LL128ForceEnable"
+      },
+      "LL128_NTHREADS": {
+        "default": "-2",
+        "defined_in": "src/graph/tuning.cc",
+        "symbol": "Ll128Nthreads"
+      },
+      "LL_BUFFSIZE": {
+        "default": "-2",
+        "defined_in": "src/init.cc",
+        "symbol": "LlBuffSize"
+      },
+      "LOCAL_REGISTER": {
+        "default": "1",
+        "defined_in": "src/register/register.cc",
+        "symbol": "LocalRegister"
+      },
+      "LOG_ROCTX": {
+        "default": "0",
+        "defined_in": "src/misc/roctx.cc",
+        "symbol": "LogRoctx"
+      },
+      "LSA_TEAM_SIZE": {
+        "default": "0",
+        "defined_in": "src/dev_runtime.cc",
+        "symbol": "LsaTeamSize"
+      },
+      "MAX_CTAS": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "MaxCTAs"
+      },
+      "MAX_NCHANNELS": {
+        "default": "-2",
+        "defined_in": "src/graph/connect.cc",
+        "symbol": "MaxNchannels"
+      },
+      "MAX_NRINGS": {
+        "default": "-2",
+        "defined_in": "src/graph/connect.cc",
+        "symbol": "MaxNrings"
+      },
+      "MAX_P2P_NCHANNELS": {
+        "default": "-2",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "MaxP2pNChannels"
+      },
+      "MEM_SYNC_DOMAIN": {
+        "default": "cudaLaunchMemSyncDomainRemote",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "MemSyncDomain"
+      },
+      "MIN_CTAS": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "MinCTAs"
+      },
+      "MIN_NCHANNELS": {
+        "default": "-2",
+        "defined_in": "src/graph/connect.cc",
+        "symbol": "MinNchannels"
+      },
+      "MIN_NRINGS": {
+        "default": "-2",
+        "defined_in": "src/graph/connect.cc",
+        "symbol": "MinNrings"
+      },
+      "MIN_P2P_NCHANNELS": {
+        "default": "1",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "MinP2pNChannels"
+      },
+      "MLOPART_RDMA_ENABLE": {
+        "default": "0",
+        "defined_in": "src/register/coll_reg.cc",
+        "symbol": "MloPartRdmaEnable"
+      },
+      "MNNVL_CLIQUE_ID": {
+        "default": "-1",
+        "defined_in": "src/init.cc",
+        "symbol": "MNNVLCliqueId"
+      },
+      "MNNVL_CROSS_CLIQUE": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "MNNVLCrossClique"
+      },
+      "MNNVL_ENABLE": {
+        "default": "2",
+        "defined_in": "src/init.cc",
+        "symbol": "MNNVLEnable"
+      },
+      "MNNVL_RAIL_PER_HOST": {
+        "default": "0",
+        "defined_in": "src/graph/search.cc",
+        "symbol": "MnnvlRailPerHost"
+      },
+      "MNNVL_SCATTER_NETS_ENABLE": {
+        "default": "1",
+        "defined_in": "src/graph/search.cc",
+        "symbol": "ScatterEnable"
+      },
+      "MNNVL_UUID": {
+        "default": "-1",
+        "defined_in": "src/init.cc",
+        "symbol": "MNNVLUUID"
+      },
+      "MODEL_MATCHING_DISABLE": {
+        "default": "0",
+        "defined_in": "src/graph/search.cc",
+        "symbol": "ModelMatchingDisable"
+      },
+      "MODEL_REVERSAL_DISABLE": {
+        "default": "0",
+        "defined_in": "src/graph/rome_models.cc",
+        "symbol": "ModelReversalDisable"
+      },
+      "MULTI_RANK_GPU_ENABLE": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "MultiRankGpuEnable"
+      },
+      "MULTI_SEGMENT_REGISTER": {
+        "default": "1",
+        "defined_in": "src/transport/generic.cc",
+        "symbol": "MultiSegmentRegister"
+      },
+      "NCHANNELS_PER_NET_PEER": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "NChannelsPerNetPeer"
+      },
+      "NET_CONTIGUOUS_MEM": {
+        "default": "0",
+        "defined_in": "src/transport/net.cc",
+        "symbol": "NetContiguousMem"
+      },
+      "NET_DISABLE_INTRA": {
+        "default": "1",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "NetDisableIntra"
+      },
+      "NET_FORCE_FLUSH": {
+        "default": "0",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "NetForceFlush"
+      },
+      "NET_GDR_C2C": {
+        "default": "1",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "NetGdrC2c"
+      },
+      "NET_GDR_MLOPART": {
+        "default": "0",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "NetGdrMloPart"
+      },
+      "NET_GDR_READ": {
+        "default": "-2",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "NetGdrRead"
+      },
+      "NET_HDP_FLUSH": {
+        "default": "0",
+        "defined_in": "src/transport/net.cc",
+        "symbol": "NetHdpFlush"
+      },
+      "NET_OPTIONAL_RECV_COMPLETION": {
+        "default": "1",
+        "defined_in": "src/transport/net.cc",
+        "symbol": "NetOptionalRecvCompletion"
+      },
+      "NET_OVERHEAD": {
+        "default": "-2",
+        "defined_in": "src/graph/tuning.cc",
+        "symbol": "NetOverhead"
+      },
+      "NET_PLUGIN_REF_COUNT": {
+        "default": "0",
+        "defined_in": "src/plugin/net.cc",
+        "symbol": "NetPluginRefCount"
+      },
+      "NET_SHARED_BUFFERS": {
+        "default": "-2",
+        "defined_in": "src/transport/net.cc",
+        "symbol": "NetSharedBuffers"
+      },
+      "NET_SHARED_COMMS": {
+        "default": "1",
+        "defined_in": "src/transport/net.cc",
+        "symbol": "NetSharedComms"
+      },
+      "NSOCKS_PERTHREAD": {
+        "default": "-2",
+        "defined_in": "src/transport/net_socket.cc",
+        "symbol": "SocketNsocksPerThread"
+      },
+      "NTHREADS": {
+        "default": "-2",
+        "defined_in": "src/graph/tuning.cc",
+        "symbol": "Nthreads"
+      },
+      "NUM_RMA_CTX": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "NumRmaCtx"
+      },
+      "NVB_DISABLE": {
+        "default": "0",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "NvbDisable"
+      },
+      "NVB_PRECONNECT": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "NvbPreconnect"
+      },
+      "NVLINK_UTIL_CENTRIC_SCHED_ENABLE": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "NvlinkUtilCentricSchedEnable"
+      },
+      "NVLSTREE_MAX_CHUNKSIZE": {
+        "default": "-2",
+        "defined_in": "src/transport/nvls.cc",
+        "symbol": "NvlsTreeMaxChunkSize"
+      },
+      "NVLS_CHUNKSIZE": {
+        "default": "128 * 1024",
+        "defined_in": "src/transport/nvls.cc",
+        "symbol": "NvlsChunkSize"
+      },
+      "NVLS_ENABLE": {
+        "default": "2",
+        "defined_in": "src/transport/nvls.cc",
+        "symbol": "NvlsEnable"
+      },
+      "NVLS_NCHANNELS": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "NvlsChannels"
+      },
+      "NVTX_DISABLE": {
+        "default": "0",
+        "defined_in": "src/init_nvtx.cc",
+        "symbol": "NvtxDisable"
+      },
+      "OOB_NET_ENABLE": {
+        "default": "0",
+        "defined_in": "src/bootstrap.cc",
+        "symbol": "BootstrapNetEnable"
+      },
+      "OUTPUT_TREES": {
+        "default": "0",
+        "defined_in": "src/graph/connect.cc",
+        "symbol": "OutputTrees"
+      },
+      "P2P_BATCH_ENABLE": {
+        "default": "-1",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "P2pBatchEnable"
+      },
+      "P2P_BATCH_THRESHOLD": {
+        "default": "1 << 16",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "P2pBatchThreshold"
+      },
+      "P2P_CU_REDUCE_SCALE_ENABLE": {
+        "default": "0",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "P2pCuReduceScaleEnable"
+      },
+      "P2P_DIRECT_DISABLE": {
+        "default": "0",
+        "defined_in": "src/transport/p2p.cc",
+        "symbol": "P2pDirectDisable"
+      },
+      "P2P_LL128_THRESHOLD": {
+        "default": "16384",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "P2pLL128Threshold"
+      },
+      "P2P_LL_THRESHOLD": {
+        "default": "4096",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "P2pLLThreshold"
+      },
+      "P2P_MAX_PEERS": {
+        "default": "NCCL_CONFIG_UNDEF_INT",
+        "defined_in": "src/init.cc",
+        "symbol": "MaxP2pPeers"
+      },
+      "P2P_NET_CHUNKSIZE": {
+        "default": "(1 << 17",
+        "defined_in": "src/init.cc",
+        "symbol": "P2pNetChunkSize"
+      },
+      "P2P_NET_DISABLE": {
+        "default": "1",
+        "defined_in": "src/init.cc",
+        "symbol": "P2pNetDisable"
+      },
+      "P2P_NET_THRESHOLD": {
+        "default": "131072",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "P2pNetThreshold"
+      },
+      "P2P_NVL_CHUNKSIZE": {
+        "default": "(1 << 19",
+        "defined_in": "src/init.cc",
+        "symbol": "P2pNvlChunkSize"
+      },
+      "P2P_PCI_CHUNKSIZE": {
+        "default": "(1 << 17",
+        "defined_in": "src/init.cc",
+        "symbol": "P2pPciChunkSize"
+      },
+      "P2P_PER_CHANNEL_NET_BW": {
+        "default": "/*GB/s*/ 14",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "P2pPerChannelNetBw"
+      },
+      "P2P_PXN_LEVEL": {
+        "default": "2",
+        "defined_in": "src/graph/search.cc",
+        "symbol": "P2pPxnLevel"
+      },
+      "P2P_READ_ENABLE": {
+        "default": "-2",
+        "defined_in": "src/transport/p2p.cc",
+        "symbol": "P2pReadEnable"
+      },
+      "P2P_SCHEDULE_GROUP_SIZE": {
+        "default": "NCCL_MAX_DEV_WORK_P2P_PER_BATCH",
+        "defined_in": "src/init.cc",
+        "symbol": "GroupSize"
+      },
+      "P2P_SHIFT_SIZE": {
+        "default": "-1",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "P2pChannelShiftSize"
+      },
+      "P2P_USE_CUDA_MEMCPY": {
+        "default": "0",
+        "defined_in": "src/transport/p2p.cc",
+        "symbol": "P2pUseCudaMemcpy"
+      },
+      "PAT_ENABLE": {
+        "default": "0",
+        "defined_in": "src/graph/tuning.cc",
+        "symbol": "PatEnable"
+      },
+      "PAT_LAZY_INIT": {
+        "default": "1",
+        "defined_in": "src/init.cc",
+        "symbol": "PatLazyInit"
+      },
+      "PIPELINE_ALL_DATA_TYPES": {
+        "default": "0",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "PipelineAllDTypes"
+      },
+      "PIVOT_ALLTOALL_ENABLE": {
+        "default": "1",
+        "defined_in": "src/init.cc",
+        "symbol": "PivotAlltoallEnable"
+      },
+      "PROGRESS_APPENDOP_FREQ": {
+        "default": "8",
+        "defined_in": "src/proxy.cc",
+        "symbol": "ProgressAppendOpFreq"
+      },
+      "PROXY_APPEND_BATCH_SIZE": {
+        "default": "16",
+        "defined_in": "src/proxy.cc",
+        "symbol": "ProxyAppendBatchSize"
+      },
+      "PROXY_DUMP_SIGNAL": {
+        "default": "-1",
+        "defined_in": "src/proxy.cc",
+        "symbol": "ProxyDumpSignal"
+      },
+      "PXN_C2C": {
+        "default": "0",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "PxnC2c"
+      },
+      "PXN_DISABLE": {
+        "default": "1",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "PxnDisable"
+      },
+      "PXN_OPT_QP_USAGE": {
+        "default": "0",
+        "defined_in": "src/channel.cc",
+        "symbol": "PxnOptQpUsage"
+      },
+      "RAS_ENABLE": {
+        "default": "1",
+        "defined_in": "src/bootstrap.cc",
+        "symbol": "RasEnable"
+      },
+      "RAS_TIMEOUT_FACTOR": {
+        "default": "1",
+        "defined_in": "src/ras/ras.cc",
+        "symbol": "RasTimeoutFactor"
+      },
+      "REPORT_CONNECT_PROGRESS": {
+        "default": "0",
+        "defined_in": "src/transport.cc",
+        "symbol": "ReportConnectProgress"
+      },
+      "RMA_DISABLE": {
+        "default": "0",
+        "defined_in": "src/dev_runtime.cc",
+        "symbol": "RMADisable"
+      },
+      "RMA_PLUGIN_REF_COUNT": {
+        "default": "0",
+        "defined_in": "src/plugin/rma.cc",
+        "symbol": "RmaPluginRefCount"
+      },
+      "RMA_PROXY_DUMP_SIGNAL": {
+        "default": "-1",
+        "defined_in": "src/rma/rma_proxy.cc",
+        "symbol": "RmaProxyDumpSignal"
+      },
+      "RMA_PROXY_QUEUE_SIZE": {
+        "default": "-1",
+        "defined_in": "src/rma/rma_proxy.cc",
+        "symbol": "RmaProxyQueueSize"
+      },
+      "RMA_USE_DMABUF": {
+        "default": "0",
+        "defined_in": "src/rma/rma_proxy.cc",
+        "symbol": "RmaProxyUseDMABUF"
+      },
+      "ROCSHMEM_ENABLE": {
+        "default": "1",
+        "defined_in": "src/init.cc",
+        "symbol": "RocshmemEnabled"
+      },
+      "ROCSHMEM_THRESHOLD": {
+        "default": "(size_t",
+        "defined_in": "src/init.cc",
+        "symbol": "RocshmemThreshold"
+      },
+      "RUNTIME_CONNECT": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "RuntimeConnect"
+      },
+      "SATURATE_P2P_NCHANNELS": {
+        "default": "RCCL_VALUE_UNSET",
+        "defined_in": "src/graph/paths.cc",
+        "symbol": "SaturateP2pNChannels"
+      },
+      "SET_CPU_STACK_SIZE": {
+        "default": "1",
+        "defined_in": "src/init.cc",
+        "symbol": "SetCpuStackSize"
+      },
+      "SET_STACK_SIZE": {
+        "default": "1",
+        "defined_in": "src/init.cc",
+        "symbol": "SetStackSize"
+      },
+      "SET_THREAD_NAME": {
+        "default": "0",
+        "defined_in": "src/debug.cc",
+        "symbol": "SetThreadName"
+      },
+      "SHADOW_MEMPOOL_MAX_SIZE": {
+        "default": "1LL << 30",
+        "defined_in": "src/allocator.cc",
+        "symbol": "ShadowMempoolMaxSize"
+      },
+      "SHM_DISABLE": {
+        "default": "0",
+        "defined_in": "src/transport/shm.cc",
+        "symbol": "ShmDisable"
+      },
+      "SHM_LOCALITY": {
+        "default": "SHM_RECV_SIDE",
+        "defined_in": "src/transport/shm.cc",
+        "symbol": "ShmLocality"
+      },
+      "SHM_MEMCPY_MODE": {
+        "default": "SHM_SEND_SIDE",
+        "defined_in": "src/transport/shm.cc",
+        "symbol": "ShmMemcpyMode"
+      },
+      "SHM_USE_CUDA_MEMCPY": {
+        "default": "0",
+        "defined_in": "src/transport/shm.cc",
+        "symbol": "ShmUseCudaMemcpy"
+      },
+      "SINGLE_PROC_MEM_REG_ENABLE": {
+        "default": "0",
+        "defined_in": "src/group.cc",
+        "symbol": "SingleProcMemRegEnable"
+      },
+      "SOCKET_INLINE": {
+        "default": "/*128 B=*/1 << 7",
+        "defined_in": "src/transport/net_socket.cc",
+        "symbol": "SocketInlineSize"
+      },
+      "SOCKET_LINGER": {
+        "default": "-1",
+        "defined_in": "src/misc/socket.cc",
+        "symbol": "SocketLinger"
+      },
+      "SOCKET_MIN_TASKSIZE": {
+        "default": "/*64 kiB=*/1 << 16",
+        "defined_in": "src/transport/net_socket.cc",
+        "symbol": "SocketMinTaskSize"
+      },
+      "SOCKET_NTHREADS": {
+        "default": "-2",
+        "defined_in": "src/transport/net_socket.cc",
+        "symbol": "SocketNthreads"
+      },
+      "SOCKET_POLL_TIMEOUT_MSEC": {
+        "default": "0",
+        "defined_in": "src/misc/socket.cc",
+        "symbol": "PollTimeOut"
+      },
+      "SOCKET_RCVBUF": {
+        "default": "-1",
+        "defined_in": "src/misc/socket.cc",
+        "symbol": "SocketMaxRecvBuff"
+      },
+      "SOCKET_RETRY_CNT": {
+        "default": "34",
+        "defined_in": "src/misc/socket.cc",
+        "symbol": "RetryCnt"
+      },
+      "SOCKET_RETRY_SLEEP_MSEC": {
+        "default": "100",
+        "defined_in": "src/misc/socket.cc",
+        "symbol": "RetryTimeOut"
+      },
+      "SOCKET_REUSEADDR": {
+        "default": "0",
+        "defined_in": "src/misc/socket.cc",
+        "symbol": "SocketReuseAddr"
+      },
+      "SOCKET_SNDBUF": {
+        "default": "-1",
+        "defined_in": "src/misc/socket.cc",
+        "symbol": "SocketMaxSendBuff"
+      },
+      "STACK_SIZE_OVERRIDE": {
+        "default": "0",
+        "defined_in": "src/init.cc",
+        "symbol": "StackSizeOverride"
+      },
+      "SYM_CE_THRESHOLD": {
+        "default": "8 * 1024 * 1024",
+        "defined_in": "src/enqueue.cc",
+        "symbol": "SymCeThreshold"
+      },
+      "SYM_CTAS": {
+        "default": "0",
+        "defined_in": "src/sym_kernels.cc",
+        "symbol": "SymCTAs"
+      },
+      "SYM_GIN_KERNELS_ENABLE": {
+        "default": "1",
+        "defined_in": "src/sym_kernels.cc",
+        "symbol": "SymGinKernelsEnable"
+      },
+      "SYM_MODEL": {
+        "default": "0",
+        "defined_in": "src/sym_kernels.cc",
+        "symbol": "SymModel"
+      },
+      "SYM_NOWIN_ENABLE": {
+        "default": "0",
+        "defined_in": "src/scheduler/symmetric_sched.cc",
+        "symbol": "SymNoWinEnable"
+      },
+      "SYM_REUSE_SYSMEM_HANDLES": {
+        "default": "0",
+        "defined_in": "src/dev_runtime.cc",
+        "symbol": "SymReuseSysmemHandles"
+      },
+      "SYM_RS_GIN_CHUNK_SIZE": {
+        "default": "-1",
+        "defined_in": "src/sym_kernels.cc",
+        "symbol": "SymRsGinChunkSize"
+      },
+      "SYM_TMA_ENABLE": {
+        "default": "0",
+        "defined_in": "src/sym_kernels.cc",
+        "symbol": "SymTmaEnable"
+      },
+      "THREADS_PER_BLOCK": {
+        "default": "-1",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "ThreadsPerBlock"
+      },
+      "TOPO_DUMP_FILE_RANK": {
+        "default": "0",
+        "defined_in": "src/graph/topo.cc",
+        "symbol": "TopoDumpFileRank"
+      },
+      "TOPO_SPLIT_MLOPART": {
+        "default": "1",
+        "defined_in": "src/graph/topo.cc",
+        "symbol": "TopoSplitMlopart"
+      },
+      "UID_STAGGER_RATE": {
+        "default": "7000",
+        "defined_in": "src/bootstrap.cc",
+        "symbol": "StaggerRate"
+      },
+      "UID_STAGGER_THRESHOLD": {
+        "default": "256",
+        "defined_in": "src/bootstrap.cc",
+        "symbol": "StaggerThreshold"
+      },
+      "UNPACK_DOUBLE_NCHANNELS": {
+        "default": "1",
+        "defined_in": "src/graph/connect.cc",
+        "symbol": "UnpackDoubleNChannels"
+      },
+      "UNROLL_FACTOR": {
+        "default": "-1",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "UnrollFactor"
+      },
+      "USE_AMD_SMI_LIB": {
+        "default": "0",
+        "defined_in": "src/misc/amdsmi_wrap.cc",
+        "symbol": "UseAmdSmiLib"
+      },
+      "USE_ROCM_SMI_LIB": {
+        "default": "0",
+        "defined_in": "src/misc/rocm_smi_wrap.cc",
+        "symbol": "UseRocmSmiLib"
+      },
+      "WARP_SPEED_AG_THRESHOLD": {
+        "default": "134217728",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "WarpSpeedAGThreshold"
+      },
+      "WARP_SPEED_AR_THRESHOLD": {
+        "default": "67108864",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "WarpSpeedARThreshold"
+      },
+      "WARP_SPEED_AUTO": {
+        "default": "1",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "WarpSpeedAutoMode"
+      },
+      "WARP_SPEED_CU_COUNT": {
+        "default": "0",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "WarpSpeedCuCount"
+      },
+      "WARP_SPEED_FORCE_ENABLE": {
+        "default": "0",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "WarpSpeedForceEnable"
+      },
+      "WARP_SPEED_RS_THRESHOLD": {
+        "default": "2147483648",
+        "defined_in": "src/rccl_wrap.cc",
+        "symbol": "WarpSpeedRSThreshold"
+      },
+      "WIN_ENABLE": {
+        "default": "1",
+        "defined_in": "src/init.cc",
+        "symbol": "WinEnable"
+      },
+      "WIN_STRIDE": {
+        "default": "-1",
+        "defined_in": "src/dev_runtime.cc",
+        "symbol": "WinStride"
+      },
+      "WORK_ARGS_BYTES": {
+        "default": "INT64_MAX",
+        "defined_in": "src/init.cc",
+        "symbol": "WorkArgsBytes"
+      },
+      "WORK_FIFO_BYTES": {
+        "default": "NCCL_WORK_FIFO_BYTES_DEFAULT",
+        "defined_in": "src/init.cc",
+        "symbol": "WorkFifoBytes"
+      }
+    },
+    "source": "/home/xuefjian/repos/rocm-systems/projects/rccl",
+    "tuning_models": {
+      "tuning_model_0": {
+        "channel_thresholds": {
+          "ReduceScatter": [
+            [
+              null
+            ]
+          ]
+        },
+        "ll_proto_ranges": {}
+      },
+      "tuning_model_1": {
+        "channel_thresholds": {
+          "ReduceScatter": [
+            [
+              null
+            ]
+          ]
+        },
+        "ll_proto_ranges": {}
+      },
+      "tuning_model_2": {
+        "channel_thresholds": {
+          "ReduceScatter": [
+            [
+              null
+            ]
+          ]
+        },
+        "ll_proto_ranges": {}
+      },
+      "tuning_model_3": {
+        "channel_thresholds": {
+          "ReduceScatter": [
+            [
+              null
+            ]
+          ]
+        },
+        "ll_proto_ranges": {}
+      },
+      "tuning_model_4": {
+        "channel_thresholds": {
+          "ReduceScatter": [
+            [
+              null
+            ]
+          ]
+        },
+        "ll_proto_ranges": {}
+      },
+      "tuning_model_5": {
+        "channel_thresholds": {
+          "ReduceScatter": [
+            [
+              null
+            ]
+          ]
+        },
+        "ll_proto_ranges": {
+          "AllGather": {
+            "LL": [
+              0,
+              98304,
+              1,
+              16
+            ],
+            "LL128": [
+              98304,
+              5046272,
+              1,
+              64
+            ]
+          },
+          "AllReduce": {
+            "LL": [
+              0,
+              524288,
+              1,
+              0
+            ],
+            "LL128": [
+              524288,
+              4415057,
+              3145728,
+              0
+            ]
+          },
+          "Broadcast": {
+            "LL": [
+              0,
+              8192,
+              1,
+              0
+            ],
+            "LL128": [
+              8192,
+              33554432,
+              1,
+              0
+            ]
+          },
+          "Reduce": {
+            "LL": [
+              0,
+              4096,
+              1,
+              0
+            ],
+            "LL128": [
+              4096,
+              16777216,
+              1,
+              0
+            ]
+          },
+          "ReduceScatter": {
+            "LL": [
+              0,
+              655360,
+              1,
+              16
+            ],
+            "LL128": [
+              131072,
+              3211264,
+              1,
+              64
+            ]
+          }
+        }
+      },
+      "tuning_model_6": {
+        "channel_thresholds": {
+          "AllGather": [
+            [
+              2048,
+              4096,
+              2
+            ],
+            [
+              4096,
+              8192,
+              4
+            ],
+            [
+              8192,
+              16384,
+              8
+            ],
+            [
+              16384,
+              262144,
+              16
+            ],
+            [
+              262144,
+              524288,
+              32
+            ],
+            [
+              524288,
+              1048576,
+              40
+            ],
+            [
+              1,
+              1,
+              48
+            ],
+            [
+              1048576,
+              4194304,
+              56
+            ],
+            [
+              4194304,
+              268435457,
+              64
+            ]
+          ],
+          "AllReduce": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ]
+          ],
+          "ReduceScatter": [
+            [
+              512,
+              1024,
+              2
+            ],
+            [
+              1024,
+              2048,
+              4
+            ],
+            [
+              2048,
+              4096,
+              8
+            ],
+            [
+              4096,
+              65536,
+              16
+            ],
+            [
+              65536,
+              262144,
+              32
+            ],
+            [
+              262144,
+              524288,
+              40
+            ],
+            [
+              524288,
+              1048576,
+              48
+            ],
+            [
+              1048576,
+              2097152,
+              56
+            ],
+            [
+              2097152,
+              268435457,
+              64
+            ]
+          ]
+        },
+        "ll_proto_ranges": {
+          "AllGather": {
+            "LL": [
+              0,
+              65536,
+              1,
+              16
+            ],
+            "LL128": [
+              65536,
+              8388608,
+              1,
+              64
+            ]
+          },
+          "AllReduce": {
+            "LL": [
+              0,
+              262144,
+              1,
+              0
+            ],
+            "LL128": [
+              262144,
+              70640910,
+              3145728,
+              0
+            ]
+          },
+          "Broadcast": {
+            "LL": [
+              0,
+              2048,
+              1,
+              0
+            ],
+            "LL128": [
+              2048,
+              16777216,
+              1,
+              0
+            ]
+          },
+          "Reduce": {
+            "LL": [
+              0,
+              16383,
+              1,
+              0
+            ],
+            "LL128": [
+              16383,
+              16777216,
+              1,
+              0
+            ]
+          },
+          "ReduceScatter": {
+            "LL": [
+              0,
+              65536,
+              1,
+              16
+            ],
+            "LL128": [
+              65536,
+              8388608,
+              1,
+              64
+            ]
+          }
+        }
+      },
+      "tuning_model_7": {
+        "channel_thresholds": {
+          "AllGather": [
+            [
+              2048,
+              4096,
+              2
+            ],
+            [
+              4096,
+              8192,
+              4
+            ],
+            [
+              8192,
+              16384,
+              8
+            ],
+            [
+              16384,
+              262144,
+              16
+            ],
+            [
+              262144,
+              524288,
+              32
+            ],
+            [
+              524288,
+              1048576,
+              40
+            ],
+            [
+              1,
+              1,
+              48
+            ],
+            [
+              1048576,
+              4194304,
+              56
+            ],
+            [
+              4194304,
+              268435457,
+              64
+            ]
+          ],
+          "AllReduce": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ]
+          ],
+          "ReduceScatter": [
+            [
+              512,
+              1024,
+              2
+            ],
+            [
+              1024,
+              2048,
+              4
+            ],
+            [
+              2048,
+              4096,
+              8
+            ],
+            [
+              4096,
+              65536,
+              16
+            ],
+            [
+              65536,
+              262144,
+              32
+            ],
+            [
+              262144,
+              524288,
+              40
+            ],
+            [
+              1,
+              1,
+              48
+            ],
+            [
+              524288,
+              1048576,
+              56
+            ],
+            [
+              1048576,
+              268435457,
+              64
+            ]
+          ]
+        },
+        "ll_proto_ranges": {
+          "AllGather": {
+            "LL": [
+              0,
+              32768,
+              1,
+              16
+            ],
+            "LL128": [
+              32768,
+              32768,
+              1,
+              64
+            ]
+          },
+          "AllReduce": {
+            "LL": [
+              0,
+              32768,
+              1,
+              0
+            ],
+            "LL128": [
+              32768,
+              32768,
+              3145728,
+              0
+            ]
+          },
+          "Broadcast": {
+            "LL": [
+              0,
+              32768,
+              1,
+              0
+            ],
+            "LL128": [
+              32768,
+              32768,
+              1,
+              0
+            ]
+          },
+          "Reduce": {
+            "LL": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "LL128": [
+              16383,
+              16383,
+              1,
+              0
+            ]
+          },
+          "ReduceScatter": {
+            "LL": [
+              0,
+              32768,
+              1,
+              16
+            ],
+            "LL128": [
+              32768,
+              32768,
+              1,
+              64
+            ]
+          }
+        }
+      },
+      "tuning_model_8": {
+        "channel_thresholds": {
+          "ReduceScatter": [
+            [
+              null
+            ]
+          ]
+        },
+        "ll_proto_ranges": {
+          "AllGather": {
+            "LL": [
+              0,
+              98304,
+              1,
+              16
+            ],
+            "LL128": [
+              98304,
+              5046272,
+              1,
+              64
+            ]
+          },
+          "AllReduce": {
+            "LL": [
+              0,
+              524288,
+              1,
+              0
+            ],
+            "LL128": [
+              524288,
+              9437184,
+              3145728,
+              0
+            ]
+          },
+          "Broadcast": {
+            "LL": [
+              0,
+              8192,
+              1,
+              0
+            ],
+            "LL128": [
+              8192,
+              33554432,
+              1,
+              0
+            ]
+          },
+          "Reduce": {
+            "LL": [
+              0,
+              4096,
+              1,
+              0
+            ],
+            "LL128": [
+              4096,
+              16777216,
+              1,
+              0
+            ]
+          },
+          "ReduceScatter": {
+            "LL": [
+              0,
+              655360,
+              1,
+              16
+            ],
+            "LL128": [
+              131072,
+              3211264,
+              1,
+              64
+            ]
+          }
+        }
+      },
+      "tuning_model_9": {
+        "channel_thresholds": {
+          "AllGather": [
+            [
+              1,
+              8388608,
+              1
+            ],
+            [
+              8388608,
+              17179869184,
+              2
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ]
+          ],
+          "AllReduce": [
+            [
+              1,
+              4194304,
+              2
+            ],
+            [
+              4194304,
+              17179869184,
+              3
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ]
+          ],
+          "ReduceScatter": [
+            [
+              1,
+              67108864,
+              1
+            ],
+            [
+              67108864,
+              17179869184,
+              2
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0
+            ]
+          ]
+        },
+        "ll_proto_ranges": {
+          "AllGather": {
+            "LL": [
+              0,
+              4096,
+              1,
+              16
+            ],
+            "LL128": [
+              4096,
+              4096,
+              1,
+              32
+            ]
+          },
+          "AllReduce": {
+            "LL": [
+              0,
+              32768,
+              1,
+              0
+            ],
+            "LL128": [
+              32768,
+              32768,
+              1,
+              0
+            ]
+          },
+          "Broadcast": {
+            "LL": [
+              0,
+              8192,
+              1,
+              0
+            ],
+            "LL128": [
+              8192,
+              8192,
+              1,
+              0
+            ]
+          },
+          "Reduce": {
+            "LL": [
+              0,
+              4096,
+              1,
+              0
+            ],
+            "LL128": [
+              4096,
+              4096,
+              1,
+              0
+            ]
+          },
+          "ReduceScatter": {
+            "LL": [
+              0,
+              8192,
+              1,
+              16
+            ],
+            "LL128": [
+              8192,
+              8192,
+              1,
+              32
+            ]
+          }
+        }
+      }
+    },
+    "warp_speed": {
+      "auto_mode_only_on": [],
+      "cmake_option_default": "OFF",
+      "requires_ring": true,
+      "requires_single_node": false,
+      "source_present": true,
+      "thresholds": {
+        "WARP_SPEED_AG_THRESHOLD": {
+          "default": "134217728",
+          "defined_in": "src/rccl_wrap.cc",
+          "symbol": "WarpSpeedAGThreshold"
+        },
+        "WARP_SPEED_AR_THRESHOLD": {
+          "default": "67108864",
+          "defined_in": "src/rccl_wrap.cc",
+          "symbol": "WarpSpeedARThreshold"
+        },
+        "WARP_SPEED_AUTO": {
+          "default": "1",
+          "defined_in": "src/rccl_wrap.cc",
+          "symbol": "WarpSpeedAutoMode"
+        },
+        "WARP_SPEED_CU_COUNT": {
+          "default": "0",
+          "defined_in": "src/rccl_wrap.cc",
+          "symbol": "WarpSpeedCuCount"
+        },
+        "WARP_SPEED_ENABLE": "<absent in this build>",
+        "WARP_SPEED_FORCE_ENABLE": {
+          "default": "0",
+          "defined_in": "src/rccl_wrap.cc",
+          "symbol": "WarpSpeedForceEnable"
+        },
+        "WARP_SPEED_RS_THRESHOLD": {
+          "default": "2147483648",
+          "defined_in": "src/rccl_wrap.cc",
+          "symbol": "WarpSpeedRSThreshold"
+        }
+      }
+    }
+  },
+  "xla": {
+    "combiner_defaults": {
+      "kDefaultAllGatherCombineThreshold": {
+        "expression": "30 * 1024 * 1024 + 7",
+        "value": 31457287
+      },
+      "kDefaultAllReduceCombineThreshold": {
+        "expression": "30 * 1024 * 1024 + 7",
+        "value": 31457287
+      },
+      "kDefaultCollectiveCombineThresholdCount": {
+        "expression": "2048",
+        "value": 2048
+      },
+      "kDefaultCollectivePermuteCombineThreshold": {
+        "expression": "30 * 1024 * 1024 + 7",
+        "value": 31457287
+      },
+      "kDefaultReduceScatterCombineThreshold": {
+        "expression": "30 * 1024 * 1024 + 7",
+        "value": 31457287
+      }
+    },
+    "rccl_symbols_used": [
+      "ncclAllGather",
+      "ncclAllReduce",
+      "ncclBfloat16",
+      "ncclBroadcast",
+      "ncclCommAbort",
+      "ncclCommCount",
+      "ncclCommDestroy",
+      "ncclCommGetAsyncError",
+      "ncclCommInitAll",
+      "ncclCommInitRankConfig",
+      "ncclCommSplit",
+      "ncclCommWindowDeregister",
+      "ncclCommWindowRegister",
+      "ncclComm_t",
+      "ncclConfig_t",
+      "ncclDataType_t",
+      "ncclFloat16",
+      "ncclFloat32",
+      "ncclFloat64",
+      "ncclFloat8e4m3",
+      "ncclFloat8e5m2",
+      "ncclGetErrorString",
+      "ncclGetLastError",
+      "ncclGetUniqueId",
+      "ncclGetVersion",
+      "ncclGroupEnd",
+      "ncclGroupStart",
+      "ncclInProgress",
+      "ncclInt32",
+      "ncclInt64",
+      "ncclInt8",
+      "ncclMax",
+      "ncclMemAlloc",
+      "ncclMemFree",
+      "ncclMin",
+      "ncclProd",
+      "ncclRecv",
+      "ncclRedOp_t",
+      "ncclReduceScatter",
+      "ncclResult_t",
+      "ncclSend",
+      "ncclSuccess",
+      "ncclSum",
+      "ncclUint32",
+      "ncclUint64",
+      "ncclUint8",
+      "ncclUniqueId",
+      "ncclWindow_t"
+    ],
+    "source": "/home/xuefjian/repos/xla"
+  }
+}
