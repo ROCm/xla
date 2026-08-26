@@ -151,7 +151,31 @@ gpu_args() {
   done
 }
 
+# xla_configure.bazelrc is generated and git-ignored, so it is not carried with
+# the suite - but the wrong value in it produces a binary that segfaults during
+# executor initialization, with a backtrace that points at hipBLASLt and gives
+# no hint that the build configuration is at fault. Worth one check here.
+check_build_config() {
+  local rc="$WORKSPACE/xla_configure.bazelrc"
+  if [[ ! -f "$rc" ]]; then
+    echo "warning: $rc is missing; run configure.py inside the image first" >&2
+    return
+  fi
+  if grep -qE '^build --config rocm$' "$rc"; then
+    cat >&2 <<'MSG'
+warning: xla_configure.bazelrc selects "--config rocm", which builds against a
+         hermetic ROCm. The resulting binary mixes two C++ standard libraries
+         with the container's ROCm and crashes inside std::filesystem before any
+         collective runs. Change that line to:
+
+             build --config rocm_clang_local
+
+MSG
+  fi
+}
+
 do_build() {
+  check_build_config
   mkdir -p "$CACHE_DIR/home" "$CACHE_DIR/bazel"
   local -a args
   mapfile -t args < <(docker_common_args)
