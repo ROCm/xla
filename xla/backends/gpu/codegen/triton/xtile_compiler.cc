@@ -36,6 +36,7 @@ limitations under the License.
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Linker/Linker.h"
+#include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
@@ -413,7 +414,23 @@ absl::StatusOr<TritonWrapperResult> CompileTritonToLLVM(
   // llvm::Linker::linkModules() segfaults if we don't strip locations.
   pm.addPass(mlir::createStripDebugInfoPass());
 
-  if (failed(pm.run(triton_module))) {
+  // Use CrashRecoveryContext to catch fatal signals (SIGSEGV, etc.) from
+  // Triton. Without this, a single bad kernel configuration can crash the
+  // entire XLA process.
+  llvm::CrashRecoveryContext::Enable();
+  llvm::CrashRecoveryContext CRC;
+  bool pipeline_succeeded = false;
+  bool crashed = !CRC.RunSafely([&]() {
+    pipeline_succeeded = !failed(pm.run(triton_module));
+  });
+
+  if (crashed) {
+    return Internal(
+        "Triton compilation crashed (caught signal) for kernel: %s.",
+        kernel_name);
+  }
+
+  if (!pipeline_succeeded) {
     return Internal("Failed to compile Triton kernel.");
   }
 
