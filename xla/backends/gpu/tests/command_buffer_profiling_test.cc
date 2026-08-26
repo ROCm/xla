@@ -58,7 +58,7 @@ TEST_P(CommandBufferProfilingTest,
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
                        ParseAndReturnVerifiedModule(hlo_text));
 
-  ASSERT_OK_AND_ASSIGN(stream_executor::Platform* platform,
+  ASSERT_OK_AND_ASSIGN(stream_executor::Platform * platform,
                        PlatformUtil::GetPlatform("gpu"));
 
   ASSERT_OK_AND_ASSIGN(std::vector<stream_executor::StreamExecutor*> executors,
