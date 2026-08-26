@@ -197,20 +197,59 @@ insufficient hardware, an unconfirmed code path, and a library that lacks the
 feature under test all produce failures here, because coverage that is reported
 but not delivered is worse than no coverage.
 
-## A note on the two lenses
+## The two lenses: thunk cases and HLO cases
 
-A mechanism can be tested through a thunk, through HLO, or both, in the same
-directory.
+A mechanism can be exercised two ways, and both live in the same mechanism
+directory so that a missing one is visible.
 
-- **Thunk cases** fix the call sequence in C++ constants, so no compiler pass
-  can change what reaches RCCL. They cost tight coupling to unstable internal
-  APIs - which fails loudly at compile time - and they are the right basis for a
-  gate.
-- **HLO cases** go through the real compiler, which is the only way to confirm
-  that XLA still produces the shapes the thunk cases assume. They couple to
-  compiler behaviour instead, and that failure mode is silent: the test stays
-  green while testing something else.
+Current status: thunk cases exist for `warp_speed/`; no HLO case is implemented
+yet anywhere. That is a real gap, not a decision - see "Why both" below.
 
-Pin the XLA commit and move it deliberately. The library is supposed to be the
-only thing changing between runs; a baseline that drifts because the compiler
-moved cannot be attributed to anything.
+|                              | Thunk case                                                     | HLO case                                                        |
+| ---------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------- |
+| **What it is**               | gtest binary via `xla_test`, e.g. `warp_speed/grouped_all_gather_test.cc` | `.hlo` file replayed by `hlo_runner_main`, or a `CollectiveOpsE2ETestBase` test |
+| **How the call is formed**   | Construct `AllGatherThunk` and hand it buffers directly          | Write or record HLO and let the compiler decide                   |
+| **Who decides what RCCL sees** | You. Operation count, sizes and dtypes are C++ constants        | The compiler: combiner, `GroupCollectivesByKey`, pipeliner, LHS   |
+| **Precision on a coordinate** | Exact. "Two AllGathers, one group, 8 MiB each" is written down  | Indirect. The same coordinate is reached by tuning flags until the passes produce it |
+| **Build / API coupling**     | **High** - compiles against `CollectiveThunk::Buffer`, `BufferAllocation::Slice`, `Thunk::ExecuteParams`, none of them stable | **Low** - a prebuilt runner and a text file                       |
+| **Semantic coupling**        | **Low** - no pass can change the call sequence                   | **High** - a pass default moves and the sequence moves with it     |
+| **Failure mode of coupling** | Compile error. Loud, immediate, cannot be mistaken for a result  | **Silent.** Still green, now testing something else               |
+| **Can express**              | Anything you can build by hand, including shapes the compiler does not currently emit | Only what the compiler actually emits - which is the point         |
+| **Cannot express**           | Proof that XLA still produces this shape                         | A coordinate the passes refuse to produce                          |
+| **Cost per case**            | Seconds; one process, no compilation                             | Compilation per case, plus flags to steer the passes               |
+| **Attribution on failure**   | RCCL, or the case. Two candidates                                | RCCL, the case, or a compiler change. Three                        |
+| **Primary role**             | **The gate.** Threshold sweeps, controls, pinned regressions      | **The anchor.** Confirms the shapes the gate assumes are real      |
+
+### Why both, rather than the cheaper one
+
+They fail in opposite directions, and only one of those failures is safe.
+
+A thunk case can drift out of agreement with the compiler: it keeps testing "two
+AllGathers in one group" long after XLA stopped producing that. It still tests
+RCCL correctly, it just stops being representative - and nothing says so.
+
+An HLO case can drift out of agreement with itself: a combiner default changes,
+the recorded HLO now produces a different call sequence, and the case reports
+the same green while covering something else. Any performance baseline attached
+to it moves for a reason that has nothing to do with the library.
+
+For a suite whose entire purpose is to isolate RCCL as the single variable, the
+second is the dangerous one. So the gate is built on thunk cases, and HLO cases
+answer the question thunk cases cannot ask: *does the compiler still generate
+this?*
+
+### Practical rules
+
+- **Record HLO, do not only hand-write it.** Hand-written HLO expresses shapes
+  you already thought of. A post-optimization dump from a real workload
+  (`--xla_dump_to`) contains the ones you did not - the defect behind
+  `warp_speed/` involved a combined AllGather nobody would have written by hand.
+- **Every recorded `.hlo` carries a manifest** with the XLA commit, the flags,
+  and the workload it came from. Without provenance it is an undateable artifact
+  nobody will touch.
+- **Re-record periodically and diff.** The diff is itself a signal: it says XLA
+  changed how it uses RCCL, which is the moment to revisit whether the thunk
+  cases still describe reality.
+- **Pin the XLA commit and move it on purpose.** The library is supposed to be
+  the only thing changing between runs; a baseline that shifts because the
+  compiler moved cannot be attributed to anything.
