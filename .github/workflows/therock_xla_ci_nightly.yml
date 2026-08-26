@@ -73,6 +73,8 @@ concurrency:
 
 jobs:
   execute-xla-ut-therock-ci:
+    # Run on schedule, workflow_dispatch, "nightly-pipeline" label, or PR to rocm-dev-infra with workflow changes
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'nightly-pipeline' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
     runs-on: ubuntu-latest
     outputs:
       docker-image: ${{ steps.out.outputs.docker-image }}

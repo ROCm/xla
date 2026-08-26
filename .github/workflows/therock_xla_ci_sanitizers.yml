@@ -50,11 +50,11 @@ concurrency:
 
 jobs:
   execute-xla-ut-sanitizers_ontheRock:
+    if: inputs.run_sanitizers || github.event.label.name == 'sanitizers'
+    runs-on: linux-xla-do-mi350x-4
     env:
       EXECUTE_DETECT_THEROCK_VERSION_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/detect-therock-version.sh
       ROCM_CONFIGURE_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/rocm_configure.bzl
-    if: inputs.run_sanitizers || github.event.label.name == 'sanitizers'
-    runs-on: linux-xla-do-mi350x-4
     strategy:
       fail-fast: false
       matrix:
