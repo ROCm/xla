@@ -78,6 +78,8 @@ concurrency:
 
 jobs:
   xla:
+    if: github.event_name != 'pull_request_target' || github.event.label.name == 'therock-ci'
+    name: XLA Linux theRock nightly CI
     name: XLA Linux theRock nightly CI
     runs-on: ${{ inputs.runner_label || 'linux-xla-do-mi350x-1' }}
     timeout-minutes: 220
