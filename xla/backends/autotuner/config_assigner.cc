@@ -22,6 +22,7 @@ limitations under the License.
 #include <limits>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -543,15 +544,21 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfig(
   const bool dichotomic_requested =
       debug_options.xla_gpu_dichotomic_tiling_search() &&
       !debug_options.xla_gpu_exhaustive_tiling_search();
+  // The random-sampling baseline is a strict ablation of the dichotomic search:
+  // it is only active when neither exhaustive nor dichotomic search is
+  // requested, so dichotomic always takes precedence when both are set.
+  const bool random_requested =
+      debug_options.xla_gpu_random_tiling_search() &&
+      !debug_options.xla_gpu_exhaustive_tiling_search() && !dichotomic_requested;
 
-  // The dichotomic search adaptively samples a *subset* of the FULL Triton
-  // tiling space, so it must be given that full space rather than the pruned
-  // ~5-config representative set that the backend returns by default. The
-  // backend decides pruned-vs-full from the module's
+  // The dichotomic search (and the random baseline) adaptively samples a
+  // *subset* of the FULL Triton tiling space, so it must be given that full
+  // space rather than the pruned ~5-config representative set that the backend
+  // returns by default. The backend decides pruned-vs-full from the module's
   // `xla_gpu_exhaustive_tiling_search` flag, so temporarily enable it while we
   // request the supported configs, then restore the original value.
   std::vector<CodegenOrchestrator::Config> supported_configs;
-  if (dichotomic_requested) {
+  if (dichotomic_requested || random_requested) {
     HloModule* module = instr->GetModule();
     DebugOptions& mutable_debug_options =
         module->mutable_config().mutable_debug_options();
@@ -590,6 +597,9 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfig(
           << " num_configs=" << supported_configs.size();
   if (dichotomic_requested && AllConfigsAreTriton(supported_configs)) {
     return GetTunedConfigDichotomic(instr, std::move(supported_configs));
+  }
+  if (random_requested && AllConfigsAreTriton(supported_configs)) {
+    return GetTunedConfigRandom(instr, std::move(supported_configs));
   }
 
   // Measure the wall time actually spent in the autotuning phase (compiling
@@ -919,6 +929,155 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
       PickBestConfig(all_profiles, options_.scratch_bytes_window_size_us));
 
   return tsl::Future<Config>(std::move(best_profile.config));
+}
+
+tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigRandom(
+    const HloInstruction* instr, std::vector<Config> supported_configs) {
+  CHECK(config_runner_ != nullptr);
+
+  // Measure the wall time actually spent in the random-sampling autotuning
+  // phase (compile + profile of the sampled subset), excluding fixed
+  // compile/runtime overhead. Tooling parses the emitted line.
+  const absl::Time autotune_phase_start = absl::Now();
+
+  // Build the SAME discretized search space the dichotomic search would use, so
+  // that (a) the total config count reported below matches the dichotomic path
+  // exactly, and (b) the sampling budget (a percentage of that count) is
+  // identical. This is what makes the two strategies directly comparable: same
+  // universe, same N, different selection (random here vs. structured there).
+  std::vector<const BackendConfig*> backend_configs;
+  backend_configs.reserve(supported_configs.size());
+  for (const Config& c : supported_configs) {
+    backend_configs.push_back(c.backend_config.get());
+  }
+  absl::StatusOr<DichotomicSearchSpace> space_or =
+      DichotomicSearchSpace::Build(backend_configs);
+  if (!space_or.ok()) {
+    return space_or.status();
+  }
+  DichotomicSearchSpace space = std::move(space_or).value();
+
+  // Resolve the SAME compilation budget the dichotomic search would use from
+  // the shared preset flag (xla_gpu_dichotomic_tiling_search_budget). The
+  // budget is a PERCENTAGE of the exhaustive config count, so the number of
+  // configs sampled here equals the number the dichotomic search is allowed to
+  // compile.
+  const DebugOptions& budget_debug_options =
+      instr->GetModule()->config().debug_options();
+  SearchBudgetPreset budget_preset = SearchBudgetPreset::kBalanced;
+  switch (budget_debug_options.xla_gpu_dichotomic_tiling_search_budget()) {
+    case DebugOptions::FAST:
+      budget_preset = SearchBudgetPreset::kFast;
+      break;
+    case DebugOptions::THOROUGH:
+      budget_preset = SearchBudgetPreset::kThorough;
+      break;
+    case DebugOptions::BALANCED:
+    default:
+      budget_preset = SearchBudgetPreset::kBalanced;
+      break;
+  }
+  const SearchBudget budget = ResolveBudget(budget_preset, space);
+  const int num_configs = static_cast<int>(supported_configs.size());
+  int sample_count = budget.max_compilations;
+  if (sample_count <= 0 || sample_count > num_configs) {
+    sample_count = num_configs;
+  }
+
+  // Uniformly sample `sample_count` DISTINCT config indices without
+  // replacement. The RNG is seeded deterministically from the instruction's
+  // fingerprint so the ablation is reproducible run-to-run (a given shape
+  // always draws the same subset), matching the deterministic nature of the
+  // dichotomic search.
+  std::vector<int> indices(num_configs);
+  for (int i = 0; i < num_configs; ++i) {
+    indices[i] = i;
+  }
+  const uint64_t seed = tsl::Fingerprint64(instr->ToString());
+  std::mt19937_64 rng(seed);
+  // Partial Fisher-Yates: bring `sample_count` random elements to the front.
+  for (int i = 0; i < sample_count; ++i) {
+    std::uniform_int_distribution<int> dist(i, num_configs - 1);
+    std::swap(indices[i], indices[dist(rng)]);
+  }
+  indices.resize(sample_count);
+
+  // Compile the sampled subset, reusing the standard CompileAll pipeline.
+  std::vector<Config> batch;
+  batch.reserve(indices.size());
+  for (int idx : indices) {
+    Config copy;
+    copy.codegen_backend = supported_configs[idx].codegen_backend;
+    copy.backend_config =
+        std::make_unique<BackendConfig>(*supported_configs[idx].backend_config);
+    batch.push_back(std::move(copy));
+  }
+
+  return orchestrator_->CompileAll(*instr, std::move(batch))
+      .Map([instr, this, autotune_phase_start, num_configs, sample_count](
+               std::vector<CodegenOrchestrator::MaybeExecutableCandidate>
+                   maybe_candidates) mutable -> absl::StatusOr<Config> {
+        CHECK(config_runner_ != nullptr);
+        std::vector<ConfigRunner::ExecutableCandidate> candidates;
+        std::vector<ConfigRunner::ConfigProfile> compilation_failures;
+        for (auto& mc : maybe_candidates) {
+          if (mc.executable.ok()) {
+            candidates.push_back(
+                {std::move(mc.config), std::move(mc.executable.value())});
+          } else {
+            compilation_failures.push_back(
+                {std::move(mc.config),
+                 ConfigRunner::Failure{
+                     ConfigRunner::FailureKind::kCompilationFailed,
+                     mc.executable.status().ToString()}});
+          }
+        }
+
+        TF_RET_CHECK(!candidates.empty())
+            << "Random tiling search failed for HLO: " << instr->ToString()
+            << ". No sampled configs could be compiled.";
+
+        // Uniform, machine-parseable counter shared with the exhaustive and
+        // dichotomic paths so tooling (tests/dichotomic_search_benchmark.py)
+        // reports the number of evaluated configs regardless of strategy. We
+        // report the number of SAMPLED configs against the full space (mirrors
+        // the dichotomic "evaluated / num_configs" semantics), so the "eval"
+        // column is directly comparable across strategies.
+        VLOG(1) << "Random tiling search sampled " << sample_count << " / "
+                << num_configs << " configs for: " << instr->ToString();
+        VLOG(1) << "Autotuner evaluated " << sample_count << " / " << num_configs
+                << " configs for: " << instr->ToString();
+
+        if (candidates.size() == 1) {
+          VLOG(1) << "Using the only compilable sampled config: "
+                  << candidates[0].config.ToString();
+          const absl::Duration d = absl::Now() - autotune_phase_start;
+          VLOG(1) << "Autotuning phase took " << absl::ToDoubleMilliseconds(d)
+                  << " ms for " << sample_count
+                  << " candidate configs for: " << instr->ToString();
+          return std::move(candidates[0].config);
+        }
+
+        ASSIGN_OR_RETURN(
+            std::vector<ConfigRunner::ConfigProfile> profiles,
+            config_runner_->ProfileAll(std::move(candidates), instr));
+        TF_RET_CHECK(!profiles.empty())
+            << "Random tiling search failed for HLO: " << instr->ToString()
+            << ". No sampled configs could be profiled.";
+
+        LogConfigProfiles(*instr, profiles, compilation_failures);
+        ASSIGN_OR_RETURN(
+            ConfigRunner::ConfigProfile best_profile,
+            PickBestConfig(profiles, options_.scratch_bytes_window_size_us));
+
+        const absl::Duration autotune_phase_duration =
+            absl::Now() - autotune_phase_start;
+        VLOG(1) << "Autotuning phase took "
+                << absl::ToDoubleMilliseconds(autotune_phase_duration)
+                << " ms for " << sample_count
+                << " candidate configs for: " << instr->ToString();
+        return std::move(best_profile.config);
+      });
 }
 
 std::optional<ConfigAssigner::Config> ConfigAssigner::LookUp(

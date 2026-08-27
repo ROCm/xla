@@ -373,6 +373,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
 
   opts.set_xla_gpu_dichotomic_tiling_search(false);
   opts.set_xla_gpu_dichotomic_tiling_search_budget(DebugOptions::BALANCED);
+  opts.set_xla_gpu_random_tiling_search(false);
 
   opts.set_xla_gpu_experimental_enable_triton_heroless_priority_fusion(false);
 
@@ -2494,6 +2495,19 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "(--xla_gpu_dichotomic_tiling_search). The budget is a percentage of the "
       "exhaustive config count (so it scales with the number of knobs): "
       "'fast' = 10%, 'balanced' = 20% (default), 'thorough' = 30%."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_random_tiling_search",
+      bool_setter_for(&DebugOptions::set_xla_gpu_random_tiling_search),
+      debug_options->xla_gpu_random_tiling_search(),
+      "[Experimental] Ablation/baseline for the dichotomic tiling search. "
+      "Draws the SAME number of candidate configs as the dichotomic search "
+      "budget (--xla_gpu_dichotomic_tiling_search_budget) would allow, but "
+      "chosen UNIFORMLY AT RANDOM from the full exhaustive Triton config "
+      "space, then compiles/profiles only those and returns the fastest. "
+      "Triton-only (dot, scaled-dot, ragged-dot); deterministic per "
+      "instruction. Used to isolate whether the dichotomic selection strategy "
+      "matters versus merely the number of evaluated configs. Exhaustive "
+      "search, then dichotomic search, take precedence if also set."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_experimental_enable_subchannel_dequantisation_fusion",
       bool_setter_for(

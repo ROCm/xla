@@ -129,6 +129,21 @@ class ConfigAssigner {
   tsl::Future<Config> GetTunedConfigDichotomic(
       const HloInstruction* instr, std::vector<Config> supported_configs);
 
+  // Experimental Triton-only RANDOM-SAMPLING baseline for the dichotomic
+  // search. Draws the SAME number of candidate configs as the dichotomic
+  // search budget would allow (a percentage of the exhaustive config count,
+  // via ResolveBudget/xla_gpu_dichotomic_tiling_search_budget), but chosen
+  // UNIFORMLY AT RANDOM from `supported_configs` (which must be the full
+  // exhaustive Triton config set), then compiles/profiles only those and
+  // returns the fastest. Deterministic: the RNG is seeded from the
+  // instruction's fingerprint. Enabled by --xla_gpu_random_tiling_search (only
+  // when neither --xla_gpu_exhaustive_tiling_search nor
+  // --xla_gpu_dichotomic_tiling_search is set). Used to isolate whether the
+  // dichotomic selection strategy matters versus merely the number of
+  // evaluated configs.
+  tsl::Future<Config> GetTunedConfigRandom(
+      const HloInstruction* instr, std::vector<Config> supported_configs);
+
   // Returns the cached config for the given HLO instruction, if any.
   // Otherwise, returns std::nullopt.
   std::optional<Config> LookUp(const HloInstruction* instr) const;
