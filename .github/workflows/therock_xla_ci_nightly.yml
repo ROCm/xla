@@ -21,6 +21,11 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
+      rocm_xla_branch:
+        description: 'ROCm/xla branch to use'
+        required: false
+        type: string
+        default: 'rocm-dev-infra'
       gpu_target:
         description: 'GPU target for pip index (device-all = multi-arch whl-multi-arch)'
         type: choice
@@ -35,14 +40,14 @@ on:
         options:
           - 'nightlies'
           - 'devreleases'
-          - 'prereleases'
+          - 'nightlies'
           - 'release'
-        default: 'prereleases'
+        default: 'nightlies'
       rocm_sdk_version:
         description: 'ROCm SDK / THEROCK version (empty = latest)'
         type: string
         required: false
-        default: '10.0'
+        default: '10.1'
       pip_index_path:
         description: 'Override pip index path (e.g. whl, whl-staging, v2, v2-staging)'
         type: string
@@ -72,32 +77,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  execute-xla-ut-therock-ci:
-    # Run on schedule, workflow_dispatch, "nightly-pipeline" label, or PR to rocm-dev-infra with workflow changes
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'nightly-pipeline' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
-    runs-on: ubuntu-latest
-    outputs:
-      docker-image: ${{ steps.out.outputs.docker-image }}
-    steps:
-      - id: out
-        shell: bash
-        run: |
-          # hermetic llvm based rocmless docker image
-          echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
-
   xla:
-    needs: execute-xla-ut-therock-ci
     name: XLA Linux theRock nightly CI
     runs-on: ${{ inputs.runner_label || 'linux-xla-do-mi350x-1' }}
     timeout-minutes: 220
     env:
-      DOCKER_IMAGE: ${{ needs.execute-xla-ut-therock-ci.outputs.docker-image }}
+      DOCKER_IMAGE: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
       EXECUTE_DETECT_THEROCK_VERSION_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/detect-therock-version.sh
       EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/execute_ci_build_upstream.sh
       ROCM_CONFIGURE_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/rocm_configure.bzl
 
     container:
-      image: ${{ needs.execute-xla-ut-therock-ci.outputs.docker-image }} # zizmor: ignore[unpinned-images] image is pinned in the rocm-config job.
+      image: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
       volumes: &rocm_container_volumes
         - /data/ci-cert.crt:/data/ci-cert.crt
         - /data/ci-cert.key:/data/ci-cert.key
@@ -130,9 +121,9 @@ jobs:
       - name: Resolve TheRock index URL and version
         id: therock
         env:
-          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'prereleases' }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
           GPU_TARGET: ${{ inputs.gpu_target || 'device-all' }}
-          ROCM_SDK_VERSION: ${{ inputs.rocm_sdk_version || '10.0' }}
+          ROCM_SDK_VERSION: ${{ inputs.rocm_sdk_version || '10.1' }}
           PIP_INDEX_PATH: ${{ inputs.pip_index_path || '' }}
           THEROCK_INDEX_URL: ${{ inputs.therock_index_url || '' }}
         run: bash build_tools/rocm/detect-therock-version.sh
@@ -146,13 +137,17 @@ jobs:
         run: |
           wget -O third_party/gpus/rocm_configure.bzl "${ROCM_CONFIGURE_URL}"
 
+      - name: Temp get tensorflow.bazelrc to make lit tests pass from Dragan's branch
+        run: |
+          wget -O tensorflow.bazelrc https://raw.githubusercontent.com/ROCm/xla/refs/heads/draganm/ci_rocm_714/tensorflow.bazelrc
+
       - name: CPU Info
         run: lscpu
 
       - name: Test XLA [single_gpu]
         env:
           THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
-          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'prereleases' }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
         timeout-minutes: 120
         run: |
           build_tools/rocm/execute_ci_build_upstream.sh \
@@ -163,7 +158,6 @@ jobs:
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
             --repo_env=ROCM_DISTRO_URL="https://rocm.${ROCM_PIP_SOURCE}.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${THEROCK_VERSION}.tar.gz" \
             --repo_env=ROCM_DISTRO_HASH='' \
-            --local_test_jobs=1 \
             --internal_spawn_scheduler \
             --strategy=TestRunner=remote \
             --bes_keywords=xla \
@@ -173,7 +167,7 @@ jobs:
       - name: Test XLA [rocm_cpu]
         env:
           THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
-          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'prereleases' }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
         timeout-minutes: 80
         run: |
           build_tools/rocm/execute_ci_build_upstream.sh \
@@ -192,7 +186,7 @@ jobs:
       - name: Test XLA [multi_gpu]
         env:
           THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
-          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'prereleases' }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
         timeout-minutes: 90
         run: |
           build_tools/rocm/execute_ci_build_upstream.sh \
@@ -221,7 +215,7 @@ jobs:
       - name: Run JAX Unit Tests
         env:
           THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
-          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'prereleases' }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
         timeout-minutes: 90
         working-directory: jax
         run: |

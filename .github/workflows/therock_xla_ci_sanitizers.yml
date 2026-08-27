@@ -31,6 +31,11 @@ on:
         required: false
         type: string
         default: 'main'
+      rocm_xla_branch:
+        description: 'ROCm/xla branch to use'
+        required: false
+        type: string
+        default: 'rocm-dev-infra'
       run_sanitizers:
         description: 'Set to true to run sanitizers'
         required: false
@@ -117,22 +122,26 @@ jobs:
       - name: Resolve TheRock index URL and version
         id: therock
         env:
-          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'prereleases' }}
-          GPU_TARGET: ${{ inputs.gpu_target || 'device-all' }}
-          ROCM_SDK_VERSION: ${{ inputs.rocm_sdk_version || '10.0' }}
-          PIP_INDEX_PATH: ${{ inputs.pip_index_path || '' }}
-          THEROCK_INDEX_URL: ${{ inputs.therock_index_url || '' }}
+          ROCM_PIP_SOURCE: 'nightlies'
+          GPU_TARGET: 'device-all'
+          ROCM_SDK_VERSION: '10.1'
+          PIP_INDEX_PATH: ''
+          THEROCK_INDEX_URL: ''
         run: bash build_tools/rocm/detect-therock-version.sh
 
       - name: Fetch ROCm configure bzl from ROCm/xla
         run: |
           wget -O third_party/gpus/rocm_configure.bzl "${ROCM_CONFIGURE_URL}"
 
+      - name: Temp get tensorflow.bazelrc to make lit tests pass from Dragan's branch
+        run: |
+          wget -O tensorflow.bazelrc https://raw.githubusercontent.com/ROCm/xla/refs/heads/draganm/ci_rocm_714/tensorflow.bazelrc
+
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         env:
           DOCKER_IMAGE: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
           THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
-          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'prereleases' }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             --config=ci_single_gpu \
@@ -153,7 +162,7 @@ jobs:
         env:
           DOCKER_IMAGE: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
           THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
-          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'prereleases' }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
         if: always() && !cancelled()
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
@@ -174,11 +183,10 @@ jobs:
         env:
           DOCKER_IMAGE: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
           THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
-          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'prereleases' }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
         if: always() && !cancelled()
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
-            --config=rocm_ci \
             --config=rocm_rbe \
             --config=ci_rocm_cpu \
             --local_test_jobs=200 \
