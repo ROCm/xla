@@ -16,8 +16,10 @@ limitations under the License.
 #include "xla/backends/autotuner/config_assigner.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -688,6 +690,28 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
   AxisRoleHints axis_hints = BuildAxisRoleHints(*instr, space);
   SearchProfile profile = MakeProfile(space, instr->opcode(), axis_hints);
 
+  // Resolve the compilation budget from the user-facing preset flag. The budget
+  // is a PERCENTAGE of the exhaustive config count (see ResolveBudget), so it
+  // scales automatically with the number of knobs. The whole search shares one
+  // BudgetLedger: every compiled config is charged, and once the budget is
+  // exhausted the fastest measured config so far is returned.
+  const DebugOptions& budget_debug_options =
+      instr->GetModule()->config().debug_options();
+  SearchBudgetPreset budget_preset = SearchBudgetPreset::kBalanced;
+  switch (budget_debug_options.xla_gpu_dichotomic_tiling_search_budget()) {
+    case DebugOptions::FAST:
+      budget_preset = SearchBudgetPreset::kFast;
+      break;
+    case DebugOptions::THOROUGH:
+      budget_preset = SearchBudgetPreset::kThorough;
+      break;
+    case DebugOptions::BALANCED:
+    default:
+      budget_preset = SearchBudgetPreset::kBalanced;
+      break;
+  }
+  BudgetLedger budget_ledger(ResolveBudget(budget_preset, space));
+
   // Renders a config's axis values as "name=value" pairs for logging.
   auto config_to_string = [&](const Coord& coord) -> std::string {
     std::string s;
@@ -761,25 +785,27 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
   std::vector<Sample> all_samples;
   std::vector<int> evaluated;
 
-  // One static-cost cache shared across all phases: a config's {grid, bytes}
-  // proxy is phase-independent, so the (expensive) TilingSpace build + tile
-  // propagation is performed at most once per config for the whole search
-  // rather than once per phase.
-  StaticCostCache static_cost_cache;
-
-  auto run_phase = [&](SearchPhase phase) -> absl::Status {
-    std::vector<int> indices =
-        SelectConfigs(space, profile, phase, all_samples, evaluated);
+  // Runs one phase seeded from `seed_samples` (the whole sample set for Phase 1,
+  // or a single basin's best sample for the per-basin Phases 2/3), truncating
+  // the emitted candidate set to the remaining compilation budget and charging
+  // the ledger for every config actually compiled. `max_configs` caps the
+  // coarse-grid size for Phase 1 (via Phase1Cap); other phases pass 0.
+  auto run_phase = [&](SearchPhase phase,
+                       absl::Span<const Sample> seed_samples,
+                       int max_configs) -> absl::Status {
+    if (budget_ledger.Exhausted()) {
+      return absl::OkStatus();
+    }
+    std::vector<int> indices = SelectConfigs(space, profile, phase, seed_samples,
+                                             evaluated, max_configs);
     if (indices.empty()) {
       return absl::OkStatus();
     }
-    // Drop statically Pareto-dominated candidates (by grid/bytes from the
-    // experimental tiling analysis) before compiling/profiling them, protecting
-    // the current best config. No-op when the analysis is unavailable. The
-    // shared cache avoids recomputing a config's static cost across phases.
-    indices = ParetoPruneByStaticCost(*instr, backend_configs, indices,
-                                      BestSampleIndex(space, all_samples),
-                                      &static_cost_cache);
+    // Never emit more than the remaining compilation budget allows.
+    const int remaining = budget_ledger.RemainingCompilations();
+    if (remaining >= 0 && static_cast<int>(indices.size()) > remaining) {
+      indices.resize(std::max(0, remaining));
+    }
     if (indices.empty()) {
       return absl::OkStatus();
     }
@@ -789,14 +815,18 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
     for (int idx : indices) {
       evaluated.push_back(idx);
     }
+    // Charge only the configs that actually COMPILED (produced a profile).
+    budget_ledger.RecordCompiled(static_cast<int>(profiles.size()));
     for (auto& p : profiles) {
       all_profiles.push_back(std::move(p));
     }
     return absl::OkStatus();
   };
 
-  // Phase 1: coarse grid + role verification.
-  RETURN_IF_ERROR(run_phase(SearchPhase::kCoarseGrid));
+  // Phase 1: coarse grid + role verification. Capped at the Phase-1 budget
+  // fraction so refinement always keeps some budget.
+  RETURN_IF_ERROR(run_phase(SearchPhase::kCoarseGrid, all_samples,
+                            /*max_configs=*/Phase1Cap(budget_ledger, space)));
   if (all_profiles.empty()) {
     return absl::InternalError(absl::StrCat(
         "Dichotomic search Phase 1: no configs compiled/profiled for HLO: ",
@@ -804,11 +834,40 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
   }
   profile = RefineRoles(profile, space, all_samples);
 
-  // Phase 2: coordinate-wise ternary refinement.
-  RETURN_IF_ERROR(run_phase(SearchPhase::kTernaryRefine));
-
-  // Phase 3: neighborhood + small-axis sweep.
-  RETURN_IF_ERROR(run_phase(SearchPhase::kNeighborhoodSweep));
+  // Multi-elite basins: tiling is a strongly interactive joint function, so the
+  // single fastest coarse sample can sit in a different (block_m, block_n) tile
+  // regime than the true optimum. Refine the top-K coordinate-diverse basins
+  // independently, seeding Phases 2/3 from each basin's own best sample. K is
+  // budget-derived (a basin needs a handful of probes), clamped to [1, 3].
+  std::vector<Coord> basin_seeds =
+      SelectTopKDiverse(space, all_samples, /*k=*/3);
+  if (basin_seeds.empty()) {
+    // Degrade gracefully: refine the single best sample.
+    RETURN_IF_ERROR(
+        run_phase(SearchPhase::kTernaryRefine, all_samples, /*max_configs=*/0));
+    RETURN_IF_ERROR(run_phase(SearchPhase::kNeighborhoodSweep, all_samples,
+                              /*max_configs=*/0));
+  } else {
+    for (const Coord& seed : basin_seeds) {
+      if (budget_ledger.Exhausted()) break;
+      // Seed this basin's refinement from its own coordinate: pass a
+      // single-element sample set so BestCoordOrCenter anchors on it.
+      double seed_time = std::numeric_limits<double>::infinity();
+      for (const Sample& s : all_samples) {
+        if (s.coord == seed) {
+          seed_time = std::min(seed_time, s.time_seconds);
+        }
+      }
+      std::vector<Sample> basin_seed_samples = {
+          Sample{seed, std::isfinite(seed_time) ? seed_time : 1.0}};
+      // Phase 2: coordinate-wise ternary refinement within this basin.
+      RETURN_IF_ERROR(run_phase(SearchPhase::kTernaryRefine, basin_seed_samples,
+                                /*max_configs=*/0));
+      // Phase 3: neighborhood + small-axis sweep around this basin.
+      RETURN_IF_ERROR(run_phase(SearchPhase::kNeighborhoodSweep,
+                                basin_seed_samples, /*max_configs=*/0));
+    }
+  }
 
   VLOG(1) << "Dichotomic search evaluated " << evaluated.size() << " / "
           << space.num_configs() << " configs for: " << instr->ToString();
@@ -817,6 +876,18 @@ tsl::Future<ConfigAssigner::Config> ConfigAssigner::GetTunedConfigDichotomic(
   // of evaluated configurations regardless of search strategy.
   VLOG(1) << "Autotuner evaluated " << evaluated.size() << " / "
           << space.num_configs() << " configs for: " << instr->ToString();
+
+  // Machine-parseable completion status: whether the 3-phase search ran to
+  // completion within its compilation budget, or was cut short by the budget.
+  // `Exhausted()` is true iff the compilation cap (or wall-clock cap) was
+  // reached, i.e. later candidates/basins were skipped. Tooling parses the
+  // "Dichotomic search status=..." token to report completed-vs-interrupted.
+  const bool budget_interrupted = budget_ledger.Exhausted();
+  VLOG(1) << "Dichotomic search status="
+          << (budget_interrupted ? "interrupted" : "completed")
+          << " compiled=" << budget_ledger.compiled() << " budget="
+          << budget_ledger.budget().max_compilations
+          << " for: " << instr->ToString();
 
   const absl::Duration autotune_phase_duration =
       absl::Now() - autotune_phase_start;

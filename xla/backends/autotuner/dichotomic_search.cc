@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/backends/autotuner/dichotomic_search.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -31,16 +32,10 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/time.h"
 #include "absl/types/span.h"
-#include "llvm/ADT/SmallVector.h"
-#include "mlir/IR/MLIRContext.h"
 #include "xla/backends/autotuner/backend_config.pb.h"
-#include "xla/codegen/tiling/experimental/tiled_hlo.h"
-#include "xla/codegen/tiling/experimental/tiling_space.h"
-#include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/hlo/utils/hlo_traversal.h"
-#include "xla/primitive_util.h"
 
 namespace xla {
 namespace {
@@ -167,15 +162,6 @@ Coord BestCoordOrCenter(const DichotomicSearchSpace& space,
 // `dim_size <= 0` means the size is unknown (no tiling analysis for this axis);
 // callers must treat that as "divisibility logic disabled" for the axis.
 
-// Returns the masked fraction of the last block for tile value `v` on a
-// dimension of size `D`. Returns 0.0 when the size is unknown or v<=0.
-double WasteRatio(int64_t dim_size, int64_t v) {
-  if (dim_size <= 0 || v <= 0) return 0.0;
-  const int64_t blocks = (dim_size + v - 1) / v;  // ceil(D/v)
-  const int64_t covered = blocks * v;
-  return static_cast<double>(covered - dim_size) / static_cast<double>(covered);
-}
-
 // Returns true if value index `i` on `axis` divides `dim_size` cleanly.
 bool DividesCleanly(const ParameterAxis& axis, int64_t dim_size, int i) {
   if (dim_size <= 0 || i < 0 || i >= axis.values.size()) return false;
@@ -199,6 +185,38 @@ int NearestDivisorIndex(const ParameterAxis& axis, int64_t dim_size, int i) {
     if (lo >= 0 && DividesCleanly(axis, dim_size, lo)) return lo;
   }
   return i;  // no clean divisor available; leave the geometric probe in place.
+}
+
+// ---- Budget constants and helpers. -----------------------------------------
+
+// The compilation budget is a PERCENTAGE OF THE EXHAUSTIVE CONFIG COUNT, so it
+// scales automatically with the size of the search space instead of being a
+// hard-coded constant. The preset only selects the coverage fraction.
+constexpr double kFastBudgetFraction = 0.10;      // 10% of num_configs
+constexpr double kBalancedBudgetFraction = 0.20;  // 20% of num_configs
+constexpr double kThoroughBudgetFraction = 0.30;  // 30% of num_configs
+
+// Absolute floor on the compilation budget so that very small spaces still get
+// enough probes to run the coarse grid + a little refinement.
+constexpr int kMinBudget = 8;
+
+// The fraction of the global compilation budget Phase 1 (coarse grid) may
+// request before handing off to refinement, and the absolute floor on that
+// request so tiny budgets still gather some prior evidence.
+constexpr double kPhase1BudgetFraction = 0.4;
+constexpr int kPhase1Floor = 8;
+
+// A-priori structural minimum number of coarse-grid probes needed so that
+// RefineRoles has >= 2 measured points on the representative slices it checks.
+// Ordered (non-sweep) axes contribute {min, median, max} => up to 3 reps; a
+// couple of probes per such axis is enough to seed the single/two-axis slices.
+int MinPhase1Configs(const DichotomicSearchSpace& space) {
+  int ordered_axes = 0;
+  for (const ParameterAxis& axis : space.axes()) {
+    if (axis.values.size() >= 2) ++ordered_axes;
+  }
+  // At least 2 endpoints per ordered axis, floored at kPhase1Floor.
+  return std::max(kPhase1Floor, 2 * ordered_axes);
 }
 
 // Representative indices {min, median, max} for an ordered axis.
@@ -437,20 +455,8 @@ std::vector<int> SelectNeighborhoodSweep(
     const DichotomicSearchSpace& space, const SearchProfile& profile,
     absl::Span<const Sample> prior_samples,
     absl::Span<const int> already_evaluated) {
-  // Tuning: on a full sweep of an ordered axis, drop candidate tile
-  // values whose masking waste exceeds this fraction -- but only if a
-  // lower-waste value is retained on the same axis AND the dropped index is not
-  // the current best neighbor. This never empties an axis and never removes the
-  // best coordinate, preserving the "never lose the optimum" guarantee.
-  constexpr double kMaxWasteRatio = 0.25;
-
   const auto& axes = space.axes();
   const int num_axes = axes.size();
-  const bool have_sizes =
-      static_cast<int>(profile.dimension_sizes.size()) == num_axes;
-  auto dim_size = [&](int a) -> int64_t {
-    return have_sizes ? profile.dimension_sizes[a] : 0;
-  };
 
   absl::flat_hash_set<int> seen(already_evaluated.begin(),
                                 already_evaluated.end());
@@ -463,25 +469,6 @@ std::vector<int> SelectNeighborhoodSweep(
     for (int a = 0; a < num_axes; ++a) best[a] = axes[a].values.size() / 2;
   }
 
-  // Soft-prune high-waste values from a candidate index list for axis `a`,
-  // keeping the current-best index and always retaining at least one value.
-  auto soft_prune_waste = [&](int a, std::vector<int>* cand) {
-    const int64_t D = dim_size(a);
-    if (D <= 0 || cand->size() <= 1) return;
-    std::vector<int> kept;
-    kept.reserve(cand->size());
-    for (int i : *cand) {
-      const bool is_best =
-          (i ==
-           std::clamp(best[a], 0, static_cast<int>(axes[a].values.size()) - 1));
-      if (is_best || WasteRatio(D, axes[a].values[i]) <= kMaxWasteRatio) {
-        kept.push_back(i);
-      }
-    }
-    if (!kept.empty() && kept.size() < cand->size()) {
-      *cand = std::move(kept);
-    }
-  };
 
   std::vector<std::vector<int>> candidates(num_axes);
   for (int a = 0; a < num_axes; ++a) {
@@ -489,10 +476,6 @@ std::vector<int> SelectNeighborhoodSweep(
     if (profile.roles[a] == AxisRole::kSweep) {
       candidates[a].resize(n);
       for (int i = 0; i < n; ++i) candidates[a][i] = i;
-      // Sweep axes are the small/categorical knobs (num_stages/warps/...); they
-      // do not tile a dimension, so dim_size is unknown and soft_prune is a
-      // no-op. Kept for uniformity.
-      soft_prune_waste(a, &candidates[a]);
     } else if (profile.roles[a] == AxisRole::kMonotoneUp) {
       std::set<int> s;
       s.insert(n - 1);
@@ -510,7 +493,6 @@ std::vector<int> SelectNeighborhoodSweep(
       if (b - 1 >= 0) s.insert(b - 1);
       if (b + 1 < n) s.insert(b + 1);
       candidates[a].assign(s.begin(), s.end());
-      soft_prune_waste(a, &candidates[a]);
     }
   }
 
@@ -654,6 +636,64 @@ bool DichotomicSearchSpace::CoordForConfig(const BackendConfig& config,
   return true;
 }
 
+std::vector<AxisPoint> DichotomicSearchSpace::FeasibleSlice(const Coord& fixed,
+                                                            int axis) const {
+  std::vector<AxisPoint> slice;
+  const int num_axes = static_cast<int>(axes_.size());
+  if (axis < 0 || axis >= num_axes ||
+      static_cast<int>(fixed.size()) != num_axes) {
+    return slice;
+  }
+  // Scan all real configs; keep those that agree with `fixed` on every axis
+  // except `axis`. Each kept config differs from `fixed` in at most that single
+  // axis, so pairwise comparisons within the returned slice are controlled
+  // single-axis experiments.
+  for (int c = 0; c < static_cast<int>(coords_.size()); ++c) {
+    const Coord& coord = coords_[c];
+    bool match = true;
+    for (int j = 0; j < num_axes; ++j) {
+      if (j == axis) continue;
+      if (coord[j] != fixed[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      slice.push_back({/*value_index=*/coord[axis], /*config_index=*/c});
+    }
+  }
+  std::sort(slice.begin(), slice.end(),
+            [](const AxisPoint& a, const AxisPoint& b) {
+              return a.value_index < b.value_index;
+            });
+  return slice;
+}
+
+std::vector<Coord> DichotomicSearchSpace::FeasibleSlice2D(const Coord& fixed,
+                                                          int a, int b) const {
+  std::vector<Coord> slice;
+  const int num_axes = static_cast<int>(axes_.size());
+  if (a == b || a < 0 || b < 0 || a >= num_axes || b >= num_axes ||
+      static_cast<int>(fixed.size()) != num_axes) {
+    return slice;
+  }
+  // Keep all real configs that agree with `fixed` on every axis except `{a,b}`,
+  // i.e. those differing from `fixed` in at most those two axes. This is a
+  // controlled two-axis experiment (no snapping, no third axis moving).
+  for (const Coord& coord : coords_) {
+    bool match = true;
+    for (int j = 0; j < num_axes; ++j) {
+      if (j == a || j == b) continue;
+      if (coord[j] != fixed[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) slice.push_back(coord);
+  }
+  return slice;
+}
+
 SearchProfile MakeProfile(const DichotomicSearchSpace& space,
                           HloOpcode opcode) {
   return MakeProfile(space, opcode, AxisRoleHints{});
@@ -767,42 +807,114 @@ SearchProfile MakeProfile(const DichotomicSearchSpace& space, HloOpcode opcode,
   return profile;
 }
 
+namespace {
+
+// Collects the feasible slices along `axis` that have >= 2 measured points,
+// grouped by the anchor (all-other-axes) coordinate. Each returned inner map is
+// value_index_on_axis -> best measured time on that value within that single-
+// axis slice.
+//
+// RefineRoles only CONFIRMS/RELAXES a prior (it never places the next probe),
+// so it may safely use ALL evaluated samples -- not just evidence-grade ones.
+// Grouping by anchor still guarantees each comparison is a controlled single-
+// axis one: every point in a returned slice shares the same values on all axes
+// except `axis`.
+std::vector<std::map<int, double>> SlicesAlongAxis(
+    const DichotomicSearchSpace& space, int axis,
+    absl::Span<const Sample> samples) {
+  const int num_axes = static_cast<int>(space.axes().size());
+  // Key the slice by the coordinate with `axis` masked out (the anchor).
+  std::map<std::string, std::map<int, double>> by_anchor;
+  for (const Sample& s : samples) {
+    if (static_cast<int>(s.coord.size()) != num_axes) continue;
+    if (axis < 0 || axis >= num_axes) continue;
+    const int v = s.coord[axis];
+    if (v < 0 || v >= static_cast<int>(space.axes()[axis].values.size())) {
+      continue;
+    }
+    std::string key;
+    key.reserve(num_axes * 3);
+    for (int j = 0; j < num_axes; ++j) {
+      if (j == axis) continue;
+      absl::StrAppend(&key, s.coord[j], ",");
+    }
+    auto& slice = by_anchor[key];
+    auto it = slice.find(v);
+    if (it == slice.end() || s.time_seconds < it->second) {
+      slice[v] = s.time_seconds;
+    }
+  }
+  std::vector<std::map<int, double>> slices;
+  for (auto& [key, slice] : by_anchor) {
+    if (slice.size() >= 2) slices.push_back(std::move(slice));
+  }
+  return slices;
+}
+
+}  // namespace
+
 SearchProfile RefineRoles(const SearchProfile& profile,
                           const DichotomicSearchSpace& space,
                           absl::Span<const Sample> phase1_samples,
                           double noise_tolerance) {
   SearchProfile refined = profile;
   const auto& axes = space.axes();
+  const int num_axes = static_cast<int>(axes.size());
 
-  for (int a = 0; a < axes.size(); ++a) {
-    AxisRole role = refined.roles[a];
+  for (int a = 0; a < num_axes; ++a) {
+    const AxisRole role = refined.roles[a];
     if (role != AxisRole::kMonotoneUp && role != AxisRole::kMonotoneDown) {
       continue;
     }
-    const int n = axes[a].values.size();
+    const int n = static_cast<int>(axes[a].values.size());
     if (n < 2) continue;
 
-    std::vector<double> best_at(n, kInf);
-    for (const Sample& s : phase1_samples) {
-      if (a >= s.coord.size()) continue;
-      int idx = s.coord[a];
-      if (idx >= 0 && idx < n) {
-        best_at[idx] = std::min(best_at[idx], s.time_seconds);
+    // Gather the feasible single-axis slices through this axis that carry >= 2
+    // measured points. A prior can only be RELAXED, never verified.
+    const std::vector<std::map<int, double>> slices =
+        SlicesAlongAxis(space, a, phase1_samples);
+    if (slices.empty()) continue;
+
+    bool contradicted = false;
+    for (const std::map<int, double>& slice : slices) {
+      // Relative noise band: two times are "clearly different" only if they
+      // differ by more than `noise_tolerance` (e.g. 3%). A prior is contradicted
+      // when the extreme value in its preferred direction is beaten -- beyond
+      // noise -- by a value on the WRONG side of the axis.
+      auto clearly_faster = [&](double faster, double slower) {
+        // `faster` beats `slower` by more than the noise band.
+        return faster < slower * (1.0 - noise_tolerance);
+      };
+
+      const int top_v = slice.rbegin()->first;     // highest value index
+      const int bottom_v = slice.begin()->first;   // lowest value index
+      const double top_t = slice.rbegin()->second;
+      const double bottom_t = slice.begin()->second;
+
+      if (role == AxisRole::kMonotoneUp) {
+        // "Larger is better" is contradicted iff some LOWER value is clearly
+        // faster than the top (highest) value.
+        for (const auto& [v, t] : slice) {
+          if (v < top_v && clearly_faster(t, top_t)) {
+            contradicted = true;
+            break;
+          }
+        }
+      } else {  // kMonotoneDown
+        // "Smaller is better" is contradicted iff some HIGHER value is clearly
+        // faster than the bottom (lowest) value.
+        for (const auto& [v, t] : slice) {
+          if (v > bottom_v && clearly_faster(t, bottom_t)) {
+            contradicted = true;
+            break;
+          }
+        }
       }
+      if (contradicted) break;  // one clean counter-example is enough.
     }
 
-    double t_lo = best_at.front();
-    double t_hi = best_at.back();
-    if (!std::isfinite(t_lo) || !std::isfinite(t_hi)) continue;
-
-    auto within = [noise_tolerance](double smaller, double larger) {
-      return smaller <= larger * (1.0 + noise_tolerance);
-    };
-
-    bool holds = (role == AxisRole::kMonotoneUp) ? within(t_hi, t_lo)
-                                                 : within(t_lo, t_hi);
-    if (!holds) {
-      refined.roles[a] = AxisRole::kUnimodal;  // relax only
+    if (contradicted) {
+      refined.roles[a] = AxisRole::kUnimodal;  // relaxation only ever widens.
     }
   }
   return refined;
@@ -842,145 +954,202 @@ int BestSampleIndex(const DichotomicSearchSpace& space,
 
 namespace {
 
-// ---- Static grid/bytes Pareto soft-prune. ------------------------
-//
-// Computes the {grid, bytes} proxy for `config` applied to `instr` by building
-// the TilingSpace, assigning the config's output tile sizes, propagating tiles
-// across the fusion, and reading:
-//   grid  = TiledHloComputation::num_output_tiles()
-//   bytes = sum over fusion-operand tiles of
-//           num_blocks * product(tile_sizes) * ByteWidth(operand elt type)
-// Only the experimental block-level path is supported; returns invalid
-// otherwise.
-StaticCost ComputeStaticCost(const HloInstruction& instr,
-                             const BackendConfig& config) {
-  namespace exp = ::xla::gpu::experimental;
-  StaticCost cost;
-  if (config.config_case() != BackendConfig::kBlockLevel ||
-      config.block_level().output_tiles_size() == 0) {
-    return cost;
-  }
+// Returns true if `axis` names a TILE axis (block_m/block_n/block_k or tile_*),
+// i.e. a spatial tiling dimension that defines a "basin". Categorical knobs
+// (num_warps/num_stages/num_ctas/group_size/split_k) are NOT tile axes: two
+// seeds differing only in such a knob belong to the SAME basin.
+bool IsTileAxis(const ParameterAxis& axis) {
+  return axis.name == "block_m" || axis.name == "block_n" ||
+         axis.name == "block_k" || axis.name.rfind("tile_", 0) == 0;
+}
 
-  mlir::MLIRContext mlir_context;
-  std::unique_ptr<HloFusionAdaptor> fusion =
-      HloFusionAdaptor::ForInstruction(&instr);
-  if (fusion == nullptr) return cost;
-
-  absl::StatusOr<std::unique_ptr<exp::TilingSpace>> space_or =
-      exp::TilingSpace::Create(*fusion, &mlir_context);
-  if (!space_or.ok()) return cost;
-  std::unique_ptr<exp::TilingSpace> tiling_space = std::move(space_or).value();
-
-  // Build the tile-size vector index-aligned with TilingSpace::dimensions()
-  // (parallel dims first in output order, then sequential dims). The config
-  // sets only the parallel/output tiles (output_tiles(0).sizes[dim_position]);
-  // sequential dims are not varied by the dichotomic block-level configs, so we
-  // tile them fully (tile == dimension_size => a single block), making `bytes`
-  // comparable across candidates without depending on the (config-independent)
-  // inner sequential tile.
-  const auto& output_sizes = config.block_level().output_tiles(0).sizes();
-  const llvm::SmallVector<exp::TilingSpace::DimensionInfo, 4> dims =
-      tiling_space->dimensions();
-  std::vector<int64_t> tile_sizes(dims.size(), 1);
-  for (int i = 0; i < static_cast<int>(dims.size()); ++i) {
-    const auto& dim = dims[i];
-    if (dim.type == exp::TilingSpace::DimensionSemantics::kParallel &&
-        dim.dim_position >= 0 && dim.dim_position < output_sizes.size()) {
-      tile_sizes[i] = output_sizes[dim.dim_position];
-    } else {
-      tile_sizes[i] = dim.dimension_size;  // sequential dim => single block.
+// Manhattan distance (in value-index space) between `a` and `b` over TILE axes
+// only. Categorical axes are ignored so they cannot create false basin
+// diversity.
+int TileAxisManhattan(const DichotomicSearchSpace& space, const Coord& a,
+                      const Coord& b) {
+  const auto& axes = space.axes();
+  const int num_axes = static_cast<int>(axes.size());
+  int dist = 0;
+  for (int j = 0; j < num_axes; ++j) {
+    if (j >= static_cast<int>(a.size()) || j >= static_cast<int>(b.size())) {
+      continue;
     }
-    if (tile_sizes[i] <= 0) return cost;
+    if (!IsTileAxis(axes[j])) continue;
+    dist += std::abs(a[j] - b[j]);
   }
-
-  if (!tiling_space->AssignTileSizes(tile_sizes).ok()) return cost;
-
-  absl::StatusOr<exp::TiledHloComputation> tiled_or =
-      exp::TiledHloComputation::Tile(*fusion, std::move(tiling_space));
-  if (!tiled_or.ok()) return cost;
-  const exp::TiledHloComputation& tiled = *tiled_or;
-
-  const int64_t num_blocks = tiled.num_output_tiles();
-  if (num_blocks <= 0) return cost;
-
-  int64_t bytes = 0;
-  for (const exp::TiledHloInstruction* tiled_instr : tiled.instructions()) {
-    const HloInstruction* hlo = tiled_instr->hlo();
-    if (hlo == nullptr) continue;
-    // Fusion operands are the leaf instructions not owned by the fusion.
-    if (fusion->ContainsInstruction(hlo)) continue;
-    const llvm::SmallVector<int64_t> ts = tiled_instr->tile_sizes();
-    int64_t elems = num_blocks;
-    for (int64_t t : ts) elems *= std::max<int64_t>(t, 1);
-    bytes += elems * primitive_util::ByteWidth(hlo->shape().element_type());
-  }
-
-  cost.grid = num_blocks;
-  cost.bytes = bytes;
-  cost.valid = true;
-  return cost;
+  return dist;
 }
 
 }  // namespace
 
-std::vector<int> ParetoPruneByStaticCost(
-    const HloInstruction& instr, absl::Span<const BackendConfig* const> configs,
-    absl::Span<const int> indices, int keep_index, StaticCostCache* cache) {
-  std::vector<int> result(indices.begin(), indices.end());
-  if (result.size() <= 1) return result;
+std::vector<Coord> SelectTopKDiverse(const DichotomicSearchSpace& space,
+                                     absl::Span<const Sample> samples, int k,
+                                     int min_manhattan, double noise_tolerance) {
+  std::vector<Coord> seeds;
+  if (k <= 0) return seeds;
 
-  // Compute (or look up) the static cost for each candidate. A config's static
-  // cost is phase-independent, so `cache` (if provided) lets us build the
-  // TilingSpace + propagate tiles at most once per config across all phases.
-  // If ANY candidate's analysis fails, abandon pruning entirely (we can only
-  // compare comparable configs).
-  std::vector<StaticCost> costs(result.size());
-  for (int i = 0; i < static_cast<int>(result.size()); ++i) {
-    const int idx = result[i];
-    if (idx < 0 || idx >= static_cast<int>(configs.size()) ||
-        configs[idx] == nullptr) {
-      return result;
+  // Default diversity threshold: half the tile-axis count (>= 1).
+  if (min_manhattan <= 0) {
+    int tile_axes = 0;
+    for (const ParameterAxis& axis : space.axes()) {
+      if (IsTileAxis(axis)) ++tile_axes;
     }
-    if (cache != nullptr) {
-      auto it = cache->find(idx);
-      if (it != cache->end()) {
-        costs[i] = it->second;
-      } else {
-        costs[i] = ComputeStaticCost(instr, *configs[idx]);
-        (*cache)[idx] = costs[i];
-      }
-    } else {
-      costs[i] = ComputeStaticCost(instr, *configs[idx]);
-    }
-    if (!costs[i].valid) return result;
+    min_manhattan = std::max(1, tile_axes / 2);
   }
 
-  std::vector<int> kept;
-  kept.reserve(result.size());
-  for (int i = 0; i < static_cast<int>(result.size()); ++i) {
-    if (result[i] == keep_index) {
-      kept.push_back(result[i]);
-      continue;
+  // Only evidence-grade samples may seed a basin. Sort a stable copy by measured
+  // time ascending (fastest first). Keep the config index for deterministic tie
+  // breaks.
+  struct Cand {
+    const Sample* sample;
+    int config_index;
+  };
+  std::vector<Cand> evidence;
+  evidence.reserve(samples.size());
+  for (const Sample& s : samples) {
+    if (s.is_evidence && std::isfinite(s.time_seconds)) {
+      evidence.push_back({&s, space.LookupIndex(s.coord)});
     }
-    bool dominated = false;
-    for (int j = 0; j < static_cast<int>(result.size()); ++j) {
-      if (i == j) continue;
-      const bool le =
-          costs[j].grid <= costs[i].grid && costs[j].bytes <= costs[i].bytes;
-      const bool strict =
-          costs[j].grid < costs[i].grid || costs[j].bytes < costs[i].bytes;
-      if (le && strict) {
-        dominated = true;
-        break;
+  }
+  std::stable_sort(evidence.begin(), evidence.end(),
+                   [](const Cand& a, const Cand& b) {
+                     return a.sample->time_seconds < b.sample->time_seconds;
+                   });
+  if (evidence.empty()) return seeds;
+
+  // Tracks which candidates have already been accepted as seeds.
+  std::vector<bool> used(evidence.size(), false);
+
+  // The min tile-axis distance from candidate `i` to every accepted seed;
+  // +inf when no seeds accepted yet (so seed 1 is unconstrained).
+  auto min_dist_to_seeds = [&](const Coord& c) -> int {
+    if (seeds.empty()) return INT_MAX;
+    int best = INT_MAX;
+    for (const Coord& seed : seeds) {
+      best = std::min(best, TileAxisManhattan(space, c, seed));
+    }
+    return best;
+  };
+
+  // Seed 1 = the globally fastest evidence sample.
+  seeds.push_back(evidence.front().sample->coord);
+  used[0] = true;
+
+  // Subsequent seeds: among ELIGIBLE candidates (min tile-axis distance to all
+  // accepted seeds >= min_manhattan), restrict to those WITHIN a noise band of
+  // the best eligible time, and pick the one FARTHEST from the accepted seeds.
+  // This spreads the basins as widely as possible when performances are similar,
+  // while never preferring a clearly-slower candidate.
+  while (static_cast<int>(seeds.size()) < k) {
+    // Best eligible time (fastest candidate that is far enough from all seeds).
+    double best_eligible_time = kInf;
+    for (int i = 0; i < static_cast<int>(evidence.size()); ++i) {
+      if (used[i]) continue;
+      if (min_dist_to_seeds(evidence[i].sample->coord) < min_manhattan) {
+        continue;
+      }
+      best_eligible_time =
+          std::min(best_eligible_time, evidence[i].sample->time_seconds);
+    }
+    if (!std::isfinite(best_eligible_time)) break;  // no eligible candidate.
+
+    const double time_band = best_eligible_time * (1.0 + noise_tolerance);
+
+    // Among eligible candidates within the noise band of best_eligible_time,
+    // pick max min-distance to seeds (ties: faster time, then lower index).
+    int chosen = -1;
+    int chosen_dist = -1;
+    for (int i = 0; i < static_cast<int>(evidence.size()); ++i) {
+      if (used[i]) continue;
+      const Coord& c = evidence[i].sample->coord;
+      const int dist = min_dist_to_seeds(c);
+      if (dist < min_manhattan) continue;
+      if (evidence[i].sample->time_seconds > time_band) continue;
+      const bool better =
+          dist > chosen_dist ||
+          (dist == chosen_dist && chosen >= 0 &&
+           (evidence[i].sample->time_seconds <
+                evidence[chosen].sample->time_seconds ||
+            (evidence[i].sample->time_seconds ==
+                 evidence[chosen].sample->time_seconds &&
+             evidence[i].config_index < evidence[chosen].config_index)));
+      if (chosen < 0 || better) {
+        chosen = i;
+        chosen_dist = dist;
       }
     }
-    if (!dominated) kept.push_back(result[i]);
+    if (chosen < 0) break;
+    seeds.push_back(evidence[chosen].sample->coord);
+    used[chosen] = true;
   }
-  // Only apply if it actually shrinks the set (and never empties it).
-  if (!kept.empty() && kept.size() < result.size()) {
-    return kept;
+  return seeds;
+}
+
+int BudgetLedger::RemainingCompilations() const {
+  if (budget_.max_compilations <= 0) return INT_MAX;  // unlimited
+  return std::max(0, budget_.max_compilations - compiled_);
+}
+
+bool BudgetLedger::Exhausted() const {
+  if (budget_.max_compilations > 0 && compiled_ >= budget_.max_compilations) {
+    return true;
   }
-  return result;
+  if (budget_.max_tuning_time != absl::InfiniteDuration() &&
+      absl::Now() - start_time_ >= budget_.max_tuning_time) {
+    return true;
+  }
+  return false;
+}
+
+SearchBudget ResolveBudget(SearchBudgetPreset preset,
+                           const DichotomicSearchSpace& space,
+                           int64_t time_limit_ms) {
+  double fraction = kBalancedBudgetFraction;
+  switch (preset) {
+    case SearchBudgetPreset::kFast:
+      fraction = kFastBudgetFraction;
+      break;
+    case SearchBudgetPreset::kThorough:
+      fraction = kThoroughBudgetFraction;
+      break;
+    case SearchBudgetPreset::kBalanced:
+      fraction = kBalancedBudgetFraction;
+      break;
+  }
+
+  // Budget = ceil(fraction * num_configs), clamped to [floor, num_configs].
+  // The floor is kMinBudget, but never more than num_configs itself (a budget
+  // can never exceed the exhaustive config count), so tiny spaces just get the
+  // whole space.
+  const int num_configs = space.num_configs();
+  SearchBudget budget;
+  if (num_configs <= 0) {
+    budget.max_compilations = 0;  // empty space => nothing to compile.
+  } else {
+    const int floor = std::min(kMinBudget, num_configs);
+    const int scaled = static_cast<int>(
+        std::ceil(fraction * static_cast<double>(num_configs)));
+    budget.max_compilations = std::clamp(scaled, floor, num_configs);
+  }
+
+  budget.max_tuning_time = time_limit_ms > 0
+                               ? absl::Milliseconds(time_limit_ms)
+                               : absl::InfiniteDuration();
+  return budget;
+}
+
+int Phase1Cap(const BudgetLedger& ledger, const DichotomicSearchSpace& space) {
+  const int max_compilations = ledger.budget().max_compilations;
+  const int structural_min = MinPhase1Configs(space);
+  if (max_compilations <= 0) {
+    // Unlimited budget: request at least the structural minimum; the coarse
+    // grid's own size otherwise bounds it.
+    return structural_min;
+  }
+  const int fractional = static_cast<int>(
+      std::ceil(kPhase1BudgetFraction * static_cast<double>(max_compilations)));
+  return std::max(structural_min, fractional);
 }
 
 }  // namespace xla

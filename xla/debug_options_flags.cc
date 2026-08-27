@@ -372,6 +372,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_exhaustive_tiling_search(false);
 
   opts.set_xla_gpu_dichotomic_tiling_search(false);
+  opts.set_xla_gpu_dichotomic_tiling_search_budget(DebugOptions::BALANCED);
 
   opts.set_xla_gpu_experimental_enable_triton_heroless_priority_fusion(false);
 
@@ -2471,6 +2472,28 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "vs exhaustive search while staying near-optimal. Other backends are "
       "unaffected. If both this flag and --xla_gpu_exhaustive_tiling_search "
       "are set, exhaustive search takes precedence."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_dichotomic_tiling_search_budget",
+      [debug_options](const std::string& value) {
+        DebugOptions::DichotomicSearchBudget budget;
+        if (value == "fast" || value == "FAST") {
+          budget = DebugOptions::FAST;
+        } else if (value == "balanced" || value == "BALANCED") {
+          budget = DebugOptions::BALANCED;
+        } else if (value == "thorough" || value == "THOROUGH") {
+          budget = DebugOptions::THOROUGH;
+        } else {
+          return false;
+        }
+        debug_options->set_xla_gpu_dichotomic_tiling_search_budget(budget);
+        return true;
+      },
+      DebugOptions::DichotomicSearchBudget_Name(
+          debug_options->xla_gpu_dichotomic_tiling_search_budget()),
+      "[Experimental] Budget preset for the dichotomic tiling search "
+      "(--xla_gpu_dichotomic_tiling_search). The budget is a percentage of the "
+      "exhaustive config count (so it scales with the number of knobs): "
+      "'fast' = 10%, 'balanced' = 20% (default), 'thorough' = 30%."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_experimental_enable_subchannel_dequantisation_fusion",
       bool_setter_for(

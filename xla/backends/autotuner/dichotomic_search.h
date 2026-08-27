@@ -22,6 +22,7 @@ limitations under the License.
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/statusor.h"
+#include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "xla/backends/autotuner/backend_config.pb.h"
 #include "xla/hlo/ir/hlo_opcode.h"
@@ -148,10 +149,113 @@ using AxisRoleHints = std::vector<AxisRoleHint>;
 
 // A single measured (coordinate, time-in-seconds) sample. Failed measurements
 // should be represented with a large/infinite time and excluded by callers.
+//
+// Evidence discipline: a sample is `is_evidence` (evidence-grade) only when it
+// was produced by an EXACT single/two-axis move (LookupIndex / FeasibleSlice /
+// FeasibleSlice2D), so that any pairwise comparison changes exactly the
+// intended axis/axes. Samples produced by SnapIndex of an imagined coordinate
+// are candidate-only (`is_evidence == false`): they may still win
+// PickBestConfig, but they must NEVER be used to steer priors (RefineRoles) or
+// to seed basins (SelectTopKDiverse), because a snapped coord can differ from
+// the intended probe in more than one axis.
 struct Sample {
   Coord coord;
   double time_seconds;
+  // True only for controlled single/two-axis moves (see above). Defaults to
+  // true for backward compatibility with callers that construct Samples
+  // directly from real (feasible) coordinates.
+  bool is_evidence = true;
 };
+
+// One point of a one-dimensional feasible slice: the value-index taken by the
+// varying axis, together with the index (into the original config vector) of
+// the real config it corresponds to. Because every AxisPoint is a real config,
+// pairwise comparisons within a FeasibleSlice are controlled single-axis
+// experiments.
+struct AxisPoint {
+  int value_index;   // index into ParameterAxis::values of the varying axis
+  int config_index;  // index into the original config vector (always feasible)
+};
+
+// Forward declaration so the budget helpers below can reference the search
+// space; the full definition follows further down in this header.
+class DichotomicSearchSpace;
+
+// A search budget preset. The autotuner flag maps a user-facing enum onto one
+// of these, and ResolveBudget() turns a preset (plus an optional wall-clock
+// cap) into a concrete SearchBudget.
+enum class SearchBudgetPreset {
+  kBalanced,  // default, ~128 compilations
+  kFast,      // ~32 compilations
+  kThorough,  // ~512 compilations
+};
+
+// The first-class budget governing the whole search. Denominated in
+// COMPILATIONS (which dominate autotuning cost and vary widely per config)
+// plus an optional wall-clock cap. Phase sizes, the basin count K, and
+// neighborhood sizes are all derived from this budget, and the search is
+// interruptible: when the budget is exhausted the fastest measured config so
+// far is returned.
+struct SearchBudget {
+  // Maximum number of configs that may be COMPILED across the whole search.
+  // <= 0 is treated as "unlimited" by the ledger.
+  int max_compilations = 0;
+  // Optional wall-clock cap. absl::InfiniteDuration() means "no time cap".
+  absl::Duration max_tuning_time = absl::InfiniteDuration();
+};
+
+// Progressively spends a SearchBudget as configs are compiled. Charges only
+// configs that actually COMPILED (RecordCompiled), and reports exhaustion once
+// either the compilation count or the wall-clock cap is reached. Construct one
+// ledger for the whole search and thread it through every phase.
+class BudgetLedger {
+ public:
+  explicit BudgetLedger(SearchBudget budget)
+      : budget_(budget), start_time_(absl::Now()) {}
+
+  // Records that `n` configs were compiled (charged against the budget).
+  void RecordCompiled(int n) {
+    if (n > 0) compiled_ += n;
+  }
+
+  // Remaining compilations before the compilation cap is hit. Returns a large
+  // sentinel (INT_MAX-like) when the budget is unlimited (max_compilations<=0).
+  int RemainingCompilations() const;
+
+  // True once the compilation cap OR the wall-clock cap has been reached.
+  bool Exhausted() const;
+
+  int compiled() const { return compiled_; }
+  const SearchBudget& budget() const { return budget_; }
+
+ private:
+  SearchBudget budget_;
+  absl::Time start_time_;
+  int compiled_ = 0;
+};
+
+// Maps a preset onto a concrete SearchBudget whose compilation count is a
+// PERCENTAGE OF THE EXHAUSTIVE CONFIG COUNT (`space.num_configs()`), so the
+// budget scales automatically with the size of the search space (more knobs /
+// more values => more configs => a larger budget), rather than a hard-coded
+// constant:
+//   kFast     = 10% of num_configs,
+//   kBalanced = 20% of num_configs (default),
+//   kThorough = 30% of num_configs.
+// The result is `ceil(percent * num_configs)`, clamped to at least a small floor
+// (so tiny spaces still get enough probes) and never exceeding num_configs. An
+// optional per-run wall-clock cap in milliseconds (<= 0 means "no time cap") is
+// threaded through unchanged.
+SearchBudget ResolveBudget(SearchBudgetPreset preset,
+                           const DichotomicSearchSpace& space,
+                           int64_t time_limit_ms = 0);
+
+// The soft cap on how much of the GLOBAL compilation budget Phase 1 (the coarse
+// grid) may request before handing off to refinement:
+//   max(MinPhase1Configs(space), ceil(0.4 * max_compilations)), floored at 8.
+// The structural minimum wins on tight budgets (so prior evidence is never
+// starved); the 0.4 fraction wins on generous ones.
+int Phase1Cap(const BudgetLedger& ledger, const DichotomicSearchSpace& space);
 
 // The discretized search space built from a set of Triton BackendConfigs, plus
 // an index mapping coordinates back to the original (feasible) configs.
@@ -177,6 +281,24 @@ class DichotomicSearchSpace {
   // Returns the coordinate of the config at `index` (into the original config
   // vector). `index` must be in [0, num_configs()). Inverse of LookupIndex.
   const Coord& CoordOf(int index) const { return coords_[index]; }
+
+  // Returns all real configs reachable from `fixed` by changing ONLY axis
+  // `axis` (a controlled single-axis experiment):
+  //   { c : c[j] == fixed[j] for all j != axis }.
+  // The result is sorted ascending by the varying axis's value index and always
+  // includes `fixed` itself (when `fixed` is feasible). Every returned
+  // AxisPoint is a real, feasible config, so pairwise comparisons within the
+  // slice change exactly one variable. If a desired single-axis neighbor is not
+  // feasible it is simply absent from the slice (no snapping, no substitution).
+  std::vector<AxisPoint> FeasibleSlice(const Coord& fixed, int axis) const;
+
+  // Returns all real configs differing from `fixed` in AT MOST the two axes
+  // `{a, b}` (a controlled two-axis experiment used for the coupled "diagonal"
+  // joint move):
+  //   { c : c[j] == fixed[j] for all j not in {a, b} }.
+  // Requires a != b. Every returned Coord is a real, feasible config (no
+  // snapping, no third axis moving silently).
+  std::vector<Coord> FeasibleSlice2D(const Coord& fixed, int a, int b) const;
 
   // Maps an arbitrary Triton/block-level `config` to its coordinate in this
   // space by extracting the same knobs used to build the axes and looking up
@@ -261,48 +383,39 @@ std::vector<int> SelectConfigs(const DichotomicSearchSpace& space,
 int BestSampleIndex(const DichotomicSearchSpace& space,
                     absl::Span<const Sample> samples);
 
-// The {grid, bytes} static proxy for one config, computed from the EXPERIMENTAL
-// tiling analysis. `valid` is false on any analysis failure (config not
-// prunable). Exposed so callers can memoize it across the search phases.
-struct StaticCost {
-  int64_t grid = 0;
-  int64_t bytes = 0;
-  bool valid = false;
-};
-
-// Memoization cache mapping a config index (into the original config vector) to
-// its computed StaticCost. A config's static cost is phase-independent, so the
-// caller should keep ONE cache for the whole dichotomic search and pass it to
-// every ParetoPruneByStaticCost call -- this avoids rebuilding the (expensive)
-// TilingSpace + tile propagation for the same config in each of the 3 phases.
-using StaticCostCache = absl::flat_hash_map<int, StaticCost>;
-
-// Drops statically Pareto-dominated candidates from `indices` using
-// a device-model-FREE proxy computed from the EXPERIMENTAL tiling analysis of
-// `instr`:
+// Selects up to `k` coordinate-diverse "elite" basin seeds from `samples`.
 //
-//   grid  = TiledHloComputation::num_output_tiles()  (occupancy pressure)
-//   bytes = sum over fusion-operand tiles of
-//           num_blocks * product(tile_sizes) * ByteWidth(elt)  (masking-aware
-//           bytes read, i.e. memory traffic)
+// Because tiling is a strongly INTERACTIVE joint function, the coarse phase can
+// place the single fastest sample in one basin while the true optimum lives in a
+// different (block_m, block_n) tile regime. Refining only the single best sample
+// risks committing to the wrong basin, so the search refines the top-K diverse
+// basins independently.
 //
-// A candidate is dropped iff some other candidate in `indices` dominates it on
-// BOTH proxies (grid' <= grid AND bytes' <= bytes, at least one strictly less).
-// `configs` must be INDEX-ALIGNED with the original config vector (configs[i]
-// is the BackendConfig of config index i). `keep_index` (if >= 0) is never
-// pruned (the current best). Returns the surviving subset of `indices`, order
-// preserved. On any analysis failure, or if no candidate is dominated, returns
-// `indices` unchanged -- so this is a strict, opt-in prune that can never
-// remove the Pareto frontier (where the runtime optimum lives) nor the current
-// best.
+// Algorithm:
+//   1. Only EVIDENCE-grade samples (Sample::is_evidence) may seed a basin --
+//      candidate-only (snapped) points can still WIN PickBestConfig, they just
+//      don't seed refinement.
+//   2. Seed 1 = the globally fastest evidence sample.
+//   3. For each subsequent seed, consider the eligible candidates -- those whose
+//      TILE-AXIS Manhattan distance (in index space, over TILE axes only, so
+//      categorical-only differences like num_warps/num_stages don't create a new
+//      basin) to EVERY accepted seed is >= `min_manhattan`. Among the eligible
+//      candidates that are WITHIN a `noise_tolerance` relative band of the best
+//      eligible time (i.e. "similar performance"), pick the one FARTHEST from the
+//      accepted seeds (maximizing the minimum tile-axis distance). This spreads
+//      the K basins as widely as possible when several candidates perform
+//      similarly, without ever preferring a clearly-slower candidate. Ties are
+//      broken by the faster measured time, then by lower config index for
+//      determinism.
+//   4. Stop at `k` seeds (or when no eligible candidate remains -- degrades
+//      gracefully to a single winner when only one diverse basin exists).
 //
-// `cache` (if non-null) memoizes per-config StaticCost across calls so the
-// tiling analysis for a given config is performed at most once for the whole
-// search rather than once per phase.
-std::vector<int> ParetoPruneByStaticCost(
-    const HloInstruction& instr, absl::Span<const BackendConfig* const> configs,
-    absl::Span<const int> indices, int keep_index,
-    StaticCostCache* cache = nullptr);
+// `min_manhattan <= 0` uses the default `max(1, floor(#tile axes / 2))`.
+// Returns the seed coordinates in acceptance (fastest-first for seed 1) order.
+std::vector<Coord> SelectTopKDiverse(const DichotomicSearchSpace& space,
+                                     absl::Span<const Sample> samples, int k,
+                                     int min_manhattan = 0,
+                                     double noise_tolerance = 0.03);
 
 }  // namespace xla
 

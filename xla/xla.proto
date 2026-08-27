@@ -851,6 +851,39 @@ message DebugOptions {
   // exhaustive search takes precedence and dichotomic search is disabled.
   optional bool xla_gpu_dichotomic_tiling_search = 517;
 
+  // EXPERIMENTAL. Budget preset for the dichotomic tiling search
+  // (xla_gpu_dichotomic_tiling_search). The budget is a PERCENTAGE OF THE
+  // EXHAUSTIVE CONFIG COUNT (so it scales automatically with the number of knobs
+  // and their value counts) and governs the coarse-grid size, the number of
+  // refined basins K, and the per-basin neighborhood sizes:
+  //   FAST     = 10% of the exhaustive configs,
+  //   BALANCED = 20% of the exhaustive configs (default),
+  //   THOROUGH = 30% of the exhaustive configs.
+  // Only meaningful when xla_gpu_dichotomic_tiling_search is enabled.
+  enum DichotomicSearchBudget {
+    BALANCED = 0;
+    FAST = 1;
+    THOROUGH = 2;
+  }
+  optional DichotomicSearchBudget xla_gpu_dichotomic_tiling_search_budget = 518;
+
+  // EXPERIMENTAL. Ablation/baseline for the dichotomic tiling search. Enables a
+  // RANDOM-SAMPLING autotuning search for the Triton backend only (dot,
+  // scaled-dot, ragged-dot): it draws the SAME number of candidate configs as
+  // the dichotomic search budget would allow (a percentage of the exhaustive
+  // config count, controlled by xla_gpu_dichotomic_tiling_search_budget)
+  // UNIFORMLY AT RANDOM from the full exhaustive Triton config space, then
+  // compiles/profiles only those and returns the fastest. Its purpose is to
+  // isolate whether the dichotomic *selection strategy* matters versus merely
+  // the *number of evaluated configs*: if random sampling of the same budget
+  // matches the dichotomic search's runtime, then coverage -- not the
+  // structured pick -- explains the result. Deterministic per instruction (the
+  // RNG is seeded from the instruction fingerprint). If both this flag and
+  // xla_gpu_exhaustive_tiling_search are set, exhaustive search takes
+  // precedence. If both this flag and xla_gpu_dichotomic_tiling_search are set,
+  // the dichotomic search takes precedence.
+  optional bool xla_gpu_random_tiling_search = 519;
+
   // If true, autotune all fusions with block level emitter.
   optional bool xla_gpu_experimental_all_fusions_with_triton = 444;
 
@@ -1688,7 +1721,7 @@ message DebugOptions {
   // Note: when adding a new flag, please add it to one of the hardware-specific
   // or hardware-agnostic sections at the top of this proto message.
 
-  // Next id: 518
+  // Next id: 520
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
