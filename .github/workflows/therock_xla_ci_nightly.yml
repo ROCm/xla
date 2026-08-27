@@ -40,7 +40,7 @@ on:
         options:
           - 'nightlies'
           - 'devreleases'
-          - 'nightlies'
+          - 'prereleases'
           - 'release'
         default: 'nightlies'
       rocm_sdk_version:
