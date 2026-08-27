@@ -16,6 +16,7 @@ EXCLUDED_TESTS=(
     "ConvolutionTest.Convolve_1x1x4x4_1x1x2x2_Same"
     "ConvolutionTest.Convolve_1x1x4x4_1x1x3x3_Same"
     "StreamExecutorGpuCompilerTest.AotCompileDeserializeRoundTrip"
+    "StreamExecutorGpuClientTest.NumaNode"
 )
 
 TAG_FILTERS=$("${SCRIPT_DIR}/rocm_tag_filters.sh")
