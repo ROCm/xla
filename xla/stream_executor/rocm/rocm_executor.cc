@@ -61,6 +61,7 @@ limitations under the License.
 #include "xla/stream_executor/generic_memory_allocation.h"
 #include "xla/stream_executor/generic_memory_allocator.h"
 #include "xla/stream_executor/gpu/context.h"
+#include "xla/stream_executor/gpu/core_info_table.h"
 #include "xla/stream_executor/gpu/read_numa_node.h"
 #include "xla/stream_executor/gpu/scoped_activate_context.h"
 #include "xla/stream_executor/kernel.h"
@@ -77,7 +78,6 @@ limitations under the License.
 #include "xla/stream_executor/plugin_registry.h"
 #include "xla/stream_executor/rocm/rocm_command_buffer.h"
 #include "xla/stream_executor/rocm/rocm_compute_capability.h"
-#include "xla/stream_executor/rocm/rocm_core_info_table.h"
 #include "xla/stream_executor/rocm/rocm_context.h"
 #include "xla/stream_executor/rocm/rocm_event.h"
 #include "xla/stream_executor/rocm/rocm_kernel.h"
@@ -1266,7 +1266,7 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
   int core_count = GetMultiprocessorCount(device).value();
   desc.set_core_count(core_count);
   {
-    RocmComputeCapability cc(gcn_arch_name);
+    const GpuComputeCapability cc{RocmComputeCapability(gcn_arch_name)};
     desc.set_fpus_per_core(GetFpusPerCore(cc));
     FillExecutionUnitDesc(cc, desc.clock_rate_ghz(), desc);
   }

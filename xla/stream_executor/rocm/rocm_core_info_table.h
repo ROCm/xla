@@ -16,21 +16,23 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_ROCM_ROCM_CORE_INFO_TABLE_H_
 #define XLA_STREAM_EXECUTOR_ROCM_ROCM_CORE_INFO_TABLE_H_
 
-#include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/gpu/core_info_table_types.h"
 #include "xla/stream_executor/rocm/rocm_compute_capability.h"
 
 namespace stream_executor {
 namespace gpu {
 
-// Fills the scalar and matrix unit fields in `desc` with vector ALU and MFMA
-// throughput descriptions for the given ROCm compute capability.
-void FillExecutionUnitDesc(const RocmComputeCapability& cc,
-                           float base_clock_rate_ghz, DeviceDescription& desc);
+// Vector ALU and MFMA throughput per CU. Prefer the backend neutral
+// gpu/core_info_table.h; this header exists so that the dispatch layer there
+// can reach the ROCm data.
 
-// Returns the number of FP32 FMA units per CU. Used as the scalar fallback by
-// the GPU performance model. The value matches the count semantics expected by
-// HloCostAnalysis (which separately multiplies by 2 to convert FMA -> FLOPs).
-int GetFpusPerCore(const RocmComputeCapability& cc);
+// Returns the rows recorded for `cc`, or nullptr if the gfx target is not in
+// the table.
+const CoreInfoRows* FindRocmCoreInfo(const RocmComputeCapability& cc);
+
+// Number of FP32 FMA units per CU to assume when `FindRocmCoreInfo` returns no
+// FP32 vector row for `cc`.
+int RocmFpusPerCoreFallback(const RocmComputeCapability& cc);
 
 }  // namespace gpu
 }  // namespace stream_executor

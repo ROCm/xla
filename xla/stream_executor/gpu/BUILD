@@ -70,6 +70,32 @@ cc_library(
     ],
 )
 
+# Row types the per-backend throughput tables are written in. Dependency free
+# so that a backend table can depend on it without a cycle through the dispatch
+# layer in :core_info_table, which depends on every backend table.
+cc_library(
+    name = "core_info_table_types",
+    hdrs = ["core_info_table_types.h"],
+)
+
+# Execution unit throughput tables. Callers depend on this target only; it pulls
+# in the per-backend data, which is plain spec-sheet data with no SDK
+# dependencies, so this is safe in single-backend builds.
+cc_library(
+    name = "core_info_table",
+    srcs = ["core_info_table.cc"],
+    hdrs = ["core_info_table.h"],
+    deps = [
+        ":core_info_table_types",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor/cuda:cuda_core_info_table",
+        "//xla/stream_executor/rocm:rocm_core_info_table",
+        "@com_google_absl//absl/container:flat_hash_map",
+    ],
+)
+
 cc_library(
     name = "context_map",
     hdrs = ["context_map.h"],

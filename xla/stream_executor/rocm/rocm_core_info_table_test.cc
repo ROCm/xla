@@ -13,14 +13,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "xla/stream_executor/rocm/rocm_core_info_table.h"
-
 #include <cstdint>
 #include <optional>
+#include <string>
+#include <utility>
 
 #include <gtest/gtest.h>
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
 #include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/gpu/core_info_table.h"
 #include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/xla_data.pb.h"
 
@@ -66,29 +67,34 @@ TEST(RocmCoreInfoTableTest, CalculatePeakOpsPerNsMI300X) {
   CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::S8, 2614.9);
 }
 
-// MI355X: 256 CUs @ 2.4 GHz. Peaks from CDNA 4 white paper Table 1, p.8 and
-// MI355X spec table.
-TEST(RocmCoreInfoTableTest, CalculatePeakOpsPerNsMI355X) {
-  DeviceDescription d = xla::gpu::TestGpuDeviceInfo::AMDMI355XDeviceInfo();
-  CheckPeakOpsPerNs(d, /*is_matrix=*/false, xla::F32, 157.3);
-  CheckPeakOpsPerNs(d, /*is_matrix=*/false, xla::F64, 78.6);
-  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::F32, 157.3);
-  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::F64, 78.6);
-  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::F16, 2516.6);
-  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::BF16, 2516.6);
-  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::F8E4M3, 5033.2);
-  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::S8, 5033.2);
-  // MXFP6 / MXFP4 -> 10 PF.
-  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::F4E2M1FN, 10066.3);
+// MI350X: 256 CUs @ 2.2 GHz. Peaks from CDNA 4 white paper Table 1, p.8 scaled
+// to this SKU's clock, and cross-checked against the MI350X spec table.
+// MI355X is the same silicon at 2.4 GHz, so it exercises the same rows.
+TEST(RocmCoreInfoTableTest, CalculatePeakOpsPerNsMI350X) {
+  DeviceDescription d = xla::gpu::TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  CheckPeakOpsPerNs(d, /*is_matrix=*/false, xla::F32, 144.2);
+  CheckPeakOpsPerNs(d, /*is_matrix=*/false, xla::F64, 72.1);
+  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::F32, 144.2);
+  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::F64, 72.1);
+  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::F16, 2306.9);
+  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::BF16, 2306.9);
+  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::F8E4M3, 4613.7);
+  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::S8, 4613.7);
+  // MXFP6 / MXFP4 -> 9.2 PF.
+  CheckPeakOpsPerNs(d, /*is_matrix=*/true, xla::F4E2M1FN, 9227.5);
 }
 
 TEST(RocmCoreInfoTableTest, GetFpusPerCore) {
-  EXPECT_EQ(GetFpusPerCore(RocmComputeCapability("gfx908")), 64);   // CDNA1
-  EXPECT_EQ(GetFpusPerCore(RocmComputeCapability("gfx90a")), 64);   // CDNA2
-  EXPECT_EQ(GetFpusPerCore(RocmComputeCapability("gfx942")), 128);  // CDNA3
-  EXPECT_EQ(GetFpusPerCore(RocmComputeCapability("gfx950")), 128);  // CDNA4
+  auto fpus = [](std::string gfx) {
+    return GetFpusPerCore(
+        GpuComputeCapability(RocmComputeCapability(std::move(gfx))));
+  };
+  EXPECT_EQ(fpus("gfx908"), 64);   // CDNA1
+  EXPECT_EQ(fpus("gfx90a"), 64);   // CDNA2
+  EXPECT_EQ(fpus("gfx942"), 128);  // CDNA3
+  EXPECT_EQ(fpus("gfx950"), 128);  // CDNA4
   // Unknown gfx target falls back to historical default.
-  EXPECT_EQ(GetFpusPerCore(RocmComputeCapability("gfx1100")), 128);
+  EXPECT_EQ(fpus("gfx1100"), 128);
 }
 
 }  // namespace
