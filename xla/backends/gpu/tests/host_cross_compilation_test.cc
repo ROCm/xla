@@ -47,15 +47,16 @@ using ::absl_testing::StatusIs;
 
 absl::StatusOr<std::unique_ptr<Compiler>> GetGpuCompiler() {
   ABSL_ASSIGN_OR_RETURN(std::string platform_name,
-                   PlatformUtil::CanonicalPlatformName("gpu"));
-  ABSL_ASSIGN_OR_RETURN(stream_executor::PlatformId platform_id,
-                   PlatformUtil::GetPlatformIdFromCanonicalName(platform_name));
+                        PlatformUtil::CanonicalPlatformName("gpu"));
+  ABSL_ASSIGN_OR_RETURN(
+      stream_executor::PlatformId platform_id,
+      PlatformUtil::GetPlatformIdFromCanonicalName(platform_name));
   return Compiler::GetForPlatform(platform_id);
 }
 
 absl::StatusOr<GpuModel> GetTestTargetGpuModel() {
   ABSL_ASSIGN_OR_RETURN(std::string platform_name,
-                   PlatformUtil::CanonicalPlatformName("gpu"));
+                        PlatformUtil::CanonicalPlatformName("gpu"));
   if (platform_name == "cuda") {
     return GpuModel::A6000;
   }
