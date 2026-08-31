@@ -33,6 +33,16 @@ EVAL_SCRIPT = SCRIPT_DIR / "run_hlo_eval.sh"
 RUNNER_TARGET = "//xla/tools/multihost_hlo_runner:hlo_runner_main"
 RUNNER_PATH = Path("xla/tools/multihost_hlo_runner/hlo_runner_main")
 ROCM_BAZELRC = Path("build_tools/rocm/rocm_xla_ci.bazelrc")
+BAZEL_BUILD_OPTIONS = ("-c", "opt", "--config=rocm")
+BAZEL_ROCM_REPO_ENV_KEYS = (
+    "ROCM_PATH",
+    "ROCM_DISTRO_URL",
+    "ROCM_DISTRO_HASH",
+    "ROCM_DISTRO_LINKS",
+    "SYSROOT_DIST",
+    "TF_ROCM_AMDGPU_TARGETS",
+)
+BAZEL_ROCM_ROOT = Path("external/local_config_rocm/rocm/rocm_dist")
 FULL_SHA = re.compile(r"[0-9a-fA-F]{40}")
 ACTIVE_PROCESS: subprocess.Popen[str] | None = None
 
@@ -49,12 +59,92 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--hlo-path", type=Path)
     parser.add_argument("--num-repeats", type=int, default=2)
+    parser.add_argument(
+        "--bazel-output-user-root",
+        type=Path,
+        help=(
+            "optional Bazel output user root; the same value is used for "
+            "build, path discovery, and evaluation"
+        ),
+    )
     return parser.parse_args()
 
 
 def format_command_for_log(command: list[str]) -> str:
     """Format one argv sequence as shell-readable diagnostic text."""
     return " ".join(shlex.quote(item) for item in command)
+
+
+def build_bazel_command(
+    *,
+    bazelrc: Path,
+    subcommand: str,
+    arguments: list[str],
+    output_user_root: Path | None,
+    repo_env: dict[str, str] | None = None,
+) -> list[str]:
+    """Build one consistent Bazel command for a campaign target."""
+    command = ["bazel"]
+    if output_user_root is not None:
+        command.append(f"--output_user_root={output_user_root}")
+    command.extend(
+        [
+            f"--bazelrc={bazelrc}",
+            subcommand,
+            *BAZEL_BUILD_OPTIONS,
+            *[
+                f"--repo_env={name}={value}"
+                for name, value in sorted((repo_env or {}).items())
+            ],
+            *arguments,
+        ]
+    )
+    return command
+
+
+def rocm_bazel_repo_env() -> dict[str, str]:
+    """Collect ROCm repository-rule environment forwarded to Bazel."""
+    return {
+        name: os.environ[name]
+        for name in BAZEL_ROCM_REPO_ENV_KEYS
+        if name in os.environ
+    }
+
+
+def bazel_info_path(
+    *,
+    bazelrc: Path,
+    source_repo: Path,
+    key: str,
+    output_user_root: Path | None,
+    repo_env: dict[str, str] | None = None,
+) -> Path:
+    """Query one absolute Bazel path with the target's build configuration."""
+    output = run_and_capture_stdout(
+        build_bazel_command(
+            bazelrc=bazelrc,
+            subcommand="info",
+            arguments=[key],
+            output_user_root=output_user_root,
+            repo_env=repo_env,
+        ),
+        source_repo,
+    )
+    path = Path(output.splitlines()[-1])
+    return path if path.is_absolute() else (source_repo / path).resolve()
+
+
+def classify_rocm_runtime_mode(
+    rocm_root: Path, output_base: Path
+) -> str:
+    """Classify the XLA-selected ROCm root by its resolved storage location."""
+    resolved_root = rocm_root.resolve(strict=True)
+    resolved_output_base = output_base.resolve(strict=True)
+    try:
+        resolved_root.relative_to(resolved_output_base)
+    except ValueError:
+        return "system"
+    return "bazel_hermetic"
 
 
 def utc_now() -> str:
@@ -99,9 +189,11 @@ def finalize_campaign_report(
     return report, None
 
 
-def detect_rocm_version() -> str | None:
+def detect_rocm_version(
+    rocm_root: Path = Path("/opt/rocm"),
+) -> str | None:
     """Detect the installed ROCm toolkit version inside the environment."""
-    path = Path("/opt/rocm/.info/version")
+    path = rocm_root / ".info/version"
     try:
         value = path.read_text(encoding="utf-8").strip()
     except OSError:
@@ -109,14 +201,22 @@ def detect_rocm_version() -> str | None:
     return normalize_rocm_version(value)
 
 
-def detect_gpu_architectures() -> list[str]:
+def detect_gpu_architectures(
+    rocminfo_path: Path | None = None,
+    cwd: Path | None = None,
+) -> list[str]:
     """Detect visible AMD GPU architecture names such as gfx942 or gfx950."""
-    rocminfo = shutil.which("rocminfo")
-    if rocminfo is None:
+    rocminfo = (
+        str(rocminfo_path)
+        if rocminfo_path is not None and rocminfo_path.is_file()
+        else shutil.which("rocminfo")
+    )
+    if not rocminfo:
         return []
     try:
         result = subprocess.run(
             [rocminfo],
+            cwd=cwd,
             check=False,
             capture_output=True,
             text=True,
@@ -156,6 +256,9 @@ def collect_campaign_environment() -> dict[str, Any]:
     gpu_architectures = detect_gpu_architectures()
     if gpu_architectures:
         environment["gpu_architectures"] = gpu_architectures
+    for name in ("THEROCK_VERSION", *BAZEL_ROCM_REPO_ENV_KEYS):
+        if name in os.environ:
+            environment[name.lower()] = os.environ[name]
     return environment
 
 
@@ -243,7 +346,7 @@ def build_target_result_manifest_entry(
         "hlo_input": str(SCRIPT_DIR),
         "selected_hlo_path": str(hlo_path),
     }
-    return {
+    entry = {
         **build_target_manifest_entry(result),
         "status": result["status"],
         "stage": stage,
@@ -260,6 +363,9 @@ def build_target_result_manifest_entry(
         "error": result.get("error"),
         "paths": paths,
     }
+    if result.get("runtime") is not None:
+        entry["runtime"] = result["runtime"]
+    return entry
 
 
 def run_and_capture_stdout(
@@ -531,6 +637,7 @@ def build_and_evaluate_target(
     output: Path,
     hlo_path: Path,
     repeats: int,
+    bazel_output_user_root: Path | None,
 ) -> dict[str, Any]:
     """Build one resolved XLA target and evaluate the selected HLO corpus."""
     target_dir = output / target["slug"]
@@ -565,15 +672,14 @@ def build_and_evaluate_target(
         bazelrc = source_repo / ROCM_BAZELRC
         if not bazelrc.is_file():
             raise RuntimeError(f"required ROCm BazelRC is missing: {bazelrc}")
-        build = [
-            "bazel",
-            f"--bazelrc={bazelrc}",
-            "build",
-            "-c",
-            "opt",
-            "--config=rocm",
-            RUNNER_TARGET,
-        ]
+        repo_env = rocm_bazel_repo_env()
+        build = build_bazel_command(
+            bazelrc=bazelrc,
+            subcommand="build",
+            arguments=[RUNNER_TARGET],
+            output_user_root=bazel_output_user_root,
+            repo_env=repo_env,
+        )
         write_stage_log_header(build_log, target, "build", mode="a")
         result["stage"] = "build"
         build_rc = run_command_with_log(build, source_repo, build_log)
@@ -581,23 +687,56 @@ def build_and_evaluate_target(
             result.update(exit_code=build_rc)
             return result
 
-        bazel_bin = Path(
-            run_and_capture_stdout(
-                [
-                    "bazel",
-                    f"--bazelrc={bazelrc}",
-                    "info",
-                    "-c",
-                    "opt",
-                    "--config=rocm",
-                    "bazel-bin",
-                ],
-                source_repo,
-            ).splitlines()[-1]
+        bazel_bin = bazel_info_path(
+            bazelrc=bazelrc,
+            source_repo=source_repo,
+            key="bazel-bin",
+            output_user_root=bazel_output_user_root,
+            repo_env=repo_env,
+        )
+        execution_root = bazel_info_path(
+            bazelrc=bazelrc,
+            source_repo=source_repo,
+            key="execution_root",
+            output_user_root=bazel_output_user_root,
+            repo_env=repo_env,
+        )
+        output_base = bazel_info_path(
+            bazelrc=bazelrc,
+            source_repo=source_repo,
+            key="output_base",
+            output_user_root=bazel_output_user_root,
+            repo_env=repo_env,
         )
         runner = bazel_bin / RUNNER_PATH
         if not runner.is_file() or not os.access(runner, os.X_OK):
             raise RuntimeError(f"built runner is missing: {runner}")
+
+        rocm_root = execution_root / BAZEL_ROCM_ROOT
+        if rocm_root.is_dir():
+            runtime: dict[str, Any] = {
+                "mode": classify_rocm_runtime_mode(rocm_root, output_base)
+            }
+            rocm_version = detect_rocm_version(rocm_root)
+            if rocm_version is not None:
+                runtime["rocm_version"] = rocm_version
+            gpu_architectures = detect_gpu_architectures(
+                rocm_root / "bin/rocminfo", cwd=execution_root
+            )
+            if gpu_architectures:
+                runtime["gpu_architectures"] = gpu_architectures
+        elif Path("/opt/rocm").is_dir():
+            runtime = {"mode": "system"}
+        else:
+            raise RuntimeError(
+                "ROCm runtime was not found in the configured Bazel "
+                f"execution root: {rocm_root}"
+            )
+        for name in ("THEROCK_VERSION", "ROCM_DISTRO_URL"):
+            value = os.environ.get(name)
+            if value:
+                runtime[name.lower()] = value
+        result["runtime"] = runtime
 
         command = [
             "bash",
@@ -612,7 +751,7 @@ def build_and_evaluate_target(
         environment["SETTLE_SEC"] = "0"
         result.update(stage="evaluation", log=eval_log)
         eval_rc = run_command_with_log(
-            command, SCRIPT_DIR, eval_log, env=environment
+            command, execution_root, eval_log, env=environment
         )
         result.update(
             status="completed" if eval_rc == 0 else "failed",
@@ -649,6 +788,11 @@ def main() -> int:
         raise ValueError(f"evaluator not found: {EVAL_SCRIPT}")
 
     source_repo = args.xla_source_repo.expanduser().resolve(strict=True)
+    bazel_output_user_root = (
+        args.bazel_output_user_root.expanduser().resolve()
+        if args.bazel_output_user_root is not None
+        else None
+    )
     root = Path(
         run_git_command(source_repo, "rev-parse", "--show-toplevel")
     ).resolve()
@@ -714,7 +858,12 @@ def main() -> int:
                 flush=True,
             )
             result = build_and_evaluate_target(
-                target, source_repo, output, hlo_path, args.num_repeats
+                target,
+                source_repo,
+                output,
+                hlo_path,
+                args.num_repeats,
+                bazel_output_user_root,
             )
             results.append(result)
             manifest["results"].append(

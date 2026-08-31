@@ -352,7 +352,8 @@ The two command formats are:
   --xla-source-repo /path/to/clean/xla \
   --output-dir /path/to/new/output \
   [--hlo-path /path/to/hlo/or/subtree] \
-  [--num-repeats 2]
+  [--num-repeats 2] \
+  [--bazel-output-user-root /path/to/bazel-cache]
 ```
 
 ```bash
@@ -369,6 +370,9 @@ python3 generate_xla_hlo_campaign_report.py \
   argument; omit it to evaluate the complete `hlo_eval_tools` corpus.
 - `--num-repeats` — forwarded as the existing `run_hlo_eval.sh`
   `[num_repeats]` argument (campaign default 2).
+- `--bazel-output-user-root` — optional Bazel startup path reused by every
+  build and `bazel info` query. This supports ROCm-less containers whose
+  hermetic TheRock installation is held in a dedicated Bazel cache.
 - `--campaign-dir` — the completed or completed-with-failures directory
   previously passed as `--output-dir`; this standalone report option reads the
   campaign's manifest, logs, and CSVs.
@@ -382,14 +386,33 @@ The campaign also reuses the evaluator environment controls documented above:
 invoking `run_hlo_eval.sh`; campaign resume is not provided by the evaluator's
 leaf-level `RESUME` setting.
 
+In a ROCm-less container, `--config=rocm` installs the ROCm distribution under
+Bazel's `local_config_rocm` repository. The generated runner has a relative
+RUNPATH into that repository, so the campaign queries `execution_root` with the
+same Bazel configuration and evaluates the HLOs from that working directory.
+It does not require `/opt/rocm`, a hardcoded workspace hash, or a global
+`LD_LIBRARY_PATH`. Runtime provenance resolves this XLA-selected path: a target
+inside Bazel's `output_base` is hermetic, while a target outside it is system
+ROCm.
+
+When set, `ROCM_PATH`, `ROCM_DISTRO_URL`, `ROCM_DISTRO_HASH`,
+`ROCM_DISTRO_LINKS`, `SYSROOT_DIST`, and `TF_ROCM_AMDGPU_TARGETS` are forwarded
+to each Bazel invocation as repository environment. `THEROCK_VERSION` is recorded
+as provenance when present.
+
 Example — run all configured branches and generate the HTML report. The
 following block is intended to be copied as one command sequence. Update the
-three path variables for the local system. It evaluates the complete HLO corpus:
+four path variables for the local system. It evaluates the complete HLO corpus:
 
 ```bash
 TOOLS=/path/to/perf-tools/perf_tools/hlo_eval_tools
 XLA_SOURCE=/path/to/clean/xla
 CAMPAIGN_DIR=/path/to/output/xla-hlo-campaign-$(date -u +%Y%m%dT%H%M%SZ)
+BAZEL_OUTPUT_ROOT=/path/to/bazel-cache
+export ROCM_PATH=
+export ROCM_DISTRO_URL=https://rocm.example/path/to/therock-dist.tar.gz
+export ROCM_DISTRO_HASH=<sha256>
+export TF_ROCM_AMDGPU_TARGETS=gfx942
 
 cd "$TOOLS"
 
@@ -397,6 +420,7 @@ campaign_rc=0
 bash ./run_hlo_eval.sh --branches \
   --xla-source-repo "$XLA_SOURCE" \
   --output-dir "$CAMPAIGN_DIR" \
+  --bazel-output-user-root "$BAZEL_OUTPUT_ROOT" \
   --num-repeats 2 || campaign_rc=$?
 
 printf 'campaign exit code: %s\nreport: %s\n' \
@@ -412,6 +436,7 @@ bash ./run_hlo_eval.sh --branches \
   --xla-source-repo "$XLA_SOURCE" \
   --output-dir "$CAMPAIGN_DIR" \
   --hlo-path "$TOOLS/vision_diffusion/efficientnet/inference/1gpu" \
+  --bazel-output-user-root "$BAZEL_OUTPUT_ROOT" \
   --num-repeats 2
 ```
 
@@ -450,6 +475,8 @@ executed. It contains:
 - effective repeat, argument, command-buffer, ordering, and settle settings;
 - host, ROCm version, visible GPU architecture, and device metadata;
 - each target's role, label, revision, resolved commit ID, and output slug;
+- each target's system or Bazel-hermetic ROCm runtime mode, plus cached ROCm
+  version and visible GPU architecture when available;
 - per-target build/evaluation exit codes, errors, and artifact paths;
 - final report generation status, path, timestamp, or error;
 - and the selected HLO workload/module inventory, including failed workloads that

@@ -121,6 +121,43 @@ def extract_gpu_architectures(
     )
 
 
+def extract_runtime_rocm_version(results: object) -> str | None:
+    """Read ROCm version from Bazel-hermetic per-target runtime metadata."""
+    if not isinstance(results, list):
+        return None
+    versions = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        runtime = result.get("runtime")
+        if not isinstance(runtime, dict):
+            continue
+        version = normalize_rocm_version(runtime.get("rocm_version"))
+        if version is not None:
+            versions.append(version)
+    unique = sorted(set(versions))
+    return ", ".join(unique) if unique else None
+
+
+def extract_runtime_gpu_architectures(results: object) -> list[str]:
+    """Read visible GPU architectures from per-target runtime metadata."""
+    if not isinstance(results, list):
+        return []
+    values = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        runtime = result.get("runtime")
+        if not isinstance(runtime, dict):
+            continue
+        raw_values = runtime.get("gpu_architectures", [])
+        if isinstance(raw_values, list):
+            values.extend(raw_values)
+        else:
+            values.append(raw_values)
+    return normalize_gpu_architectures(values)
+
+
 def extract_workload_leaf_from_hlo_path(path: str) -> str:
     marker = "/hlo_eval_tools/"
     return path.split(marker, 1)[1] if marker in path else Path(path).name
@@ -836,6 +873,7 @@ def build_campaign_report_data(campaign_dir: Path) -> dict[str, Any]:
                 "build_exit_code": result.get("build_exit_code"),
                 "evaluation_exit_code": result.get("evaluation_exit_code"),
                 "result_status": result.get("status", "missing"),
+                "runtime": result.get("runtime") or {},
                 "pass_count": passed,
                 "profiled_count": summary["profiled"],
                 "resumed_count": summary["resumed"],
@@ -982,6 +1020,7 @@ def build_campaign_report_data(campaign_dir: Path) -> dict[str, Any]:
     )
 
     environment = manifest.get("environment", {})
+    manifest_results = manifest.get("results", [])
     return {
         "campaign": {
             "id": campaign_dir.name,
@@ -991,8 +1030,10 @@ def build_campaign_report_data(campaign_dir: Path) -> dict[str, Any]:
             "directory": str(campaign_dir),
             "hostname": environment.get("hostname"),
             "platform": environment.get("platform"),
-            "rocm_version": extract_rocm_version(environment),
-            "gpu_architectures": extract_gpu_architectures(environment),
+            "rocm_version": extract_rocm_version(environment)
+            or extract_runtime_rocm_version(manifest_results),
+            "gpu_architectures": extract_gpu_architectures(environment)
+            or extract_runtime_gpu_architectures(manifest_results),
             "benchmark": benchmark,
         },
         "branches": branches,
@@ -1052,7 +1093,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <div class="provenance" id="provenance"></div>
 
 <h2>Overall branch status</h2>
-<div class="table-wrap"><table><thead><tr><th>Branch</th><th>Commit</th><th>Build</th><th>Pass</th><th>Fail</th><th>Skipped (empty)</th><th>Workload success</th><th>Evidence</th></tr></thead><tbody id="branch-body"></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>Branch</th><th>Commit</th><th>Build</th><th>ROCm runtime</th><th>Pass</th><th>Fail</th><th>Skipped (empty)</th><th>Workload success</th><th>Evidence</th></tr></thead><tbody id="branch-body"></tbody></table></div>
 
 <h2>Model performance across branches</h2>
 <p class="muted">Select one model workload and HLO. The graph shows performance relative to the pinned live control (1.0×; higher is faster), while the table preserves absolute latency. The ±2% band is a review threshold—not a confidence interval or proof of regression. Summed latency is the sum of independently executed HLO modules, not end-to-end model latency. Selectors include only HLOs with at least one measured branch; failed-only HLOs remain available in the failure sections.</p>
@@ -1122,8 +1163,17 @@ function renderHeader(){
  const stats=[["Campaign",campaign.status],["Branches built",`${summary.build_pass_count}/${summary.branch_count}`],["Pass observations",summary.pass_count],["Failure observations",summary.failure_count],["Unique failed workloads",summary.unique_failed_workloads],["Signature groups",summary.signature_count]];
  byId("stats").innerHTML=stats.map(([label,value])=>`<div class="stat"><strong>${esc(value)}</strong><span class="muted">${esc(label)}</span></div>`).join("");
 }
+function runtimeSummary(branch){
+ const runtime=branch.runtime||{},parts=[];
+ if(runtime.mode)parts.push(runtime.mode==="bazel_hermetic"?"Bazel hermetic":runtime.mode);
+ if(runtime.rocm_version)parts.push(`ROCm ${esc(runtime.rocm_version)}`);
+ if(runtime.therock_version)parts.push(`TheRock ${esc(runtime.therock_version)}`);
+ if(runtime.gpu_architectures?.length)parts.push(`<code>${esc(runtime.gpu_architectures.join(", "))}</code>`);
+ if(runtime.rocm_distro_url)parts.push(`<span class="muted" title="${esc(runtime.rocm_distro_url)}">Configured distro URL</span>`);
+ return parts.length?parts.join("<br>"):"Not captured";
+}
 function renderBranches(){
- byId("branch-body").innerHTML=DATA.branches.map(branch=>{const pct=branch.success_percent,build=branch.build_exit_code===0?"Passed":branch.build_exit_code==null?"N/A":`Exit ${esc(branch.build_exit_code)}`,passDetail=branch.pass_count==null?"":`<br><small>${branch.profiled_count} profiled${branch.resumed_count?` + ${branch.resumed_count} resumed`:""}</small>`,success=pct==null?"N/A":`${pct.toFixed(1)}%<div class="bar"><span class="passed" style="width:${pct}%"></span><span class="failed" style="width:${100-pct}%"></span></div>`;return `<tr><td><strong>${esc(branch.label)}</strong><br><span class="muted">${esc(branch.ref)}</span></td><td><code>${esc(branch.commit.slice(0,12))}</code></td><td class="${branch.build_exit_code===0?"pass":branch.build_exit_code==null?"warn":"fail"}">${build}</td><td class="pass">${esc(branch.pass_count??"N/A")}${passDetail}</td><td class="fail">${esc(branch.failed_count??"N/A")}</td><td>${esc(branch.skipped_count??"N/A")}</td><td>${success}</td><td>${branch.log_available?`<a href="${esc(branch.eval_log_uri)}">eval.log</a>`:"Missing log"}</td></tr>`}).join("");
+ byId("branch-body").innerHTML=DATA.branches.map(branch=>{const pct=branch.success_percent,build=branch.build_exit_code===0?"Passed":branch.build_exit_code==null?"N/A":`Exit ${esc(branch.build_exit_code)}`,passDetail=branch.pass_count==null?"":`<br><small>${branch.profiled_count} profiled${branch.resumed_count?` + ${branch.resumed_count} resumed`:""}</small>`,success=pct==null?"N/A":`${pct.toFixed(1)}%<div class="bar"><span class="passed" style="width:${pct}%"></span><span class="failed" style="width:${100-pct}%"></span></div>`;return `<tr><td><strong>${esc(branch.label)}</strong><br><span class="muted">${esc(branch.ref)}</span></td><td><code>${esc(branch.commit.slice(0,12))}</code></td><td class="${branch.build_exit_code===0?"pass":branch.build_exit_code==null?"warn":"fail"}">${build}</td><td>${runtimeSummary(branch)}</td><td class="pass">${esc(branch.pass_count??"N/A")}${passDetail}</td><td class="fail">${esc(branch.failed_count??"N/A")}</td><td>${esc(branch.skipped_count??"N/A")}</td><td>${success}</td><td>${branch.log_available?`<a href="${esc(branch.eval_log_uri)}">eval.log</a>`:"Missing log"}</td></tr>`}).join("");
 }
 function setSelect(id,values,current,preferred){
  const select=byId(id);select.innerHTML=values.map(value=>option(value)).join("");select.value=values.includes(current)?current:values.includes(preferred)?preferred:values[0]||"";
