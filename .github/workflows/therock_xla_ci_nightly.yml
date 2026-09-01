@@ -243,6 +243,7 @@ jobs:
 
   # Call sanitizers workflow as a separate job
   sanitizers:
+    if: github.event_name != 'pull_request_target' || github.event.label.name == 'therock-ci'
     uses: ./.github/workflows/therock_xla_ci_sanitizers.yml
     with:
       repository: openxla/xla
