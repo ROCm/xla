@@ -1,3 +1,4 @@
+#dummy
 # Disable Bzlmod for now
 common --noenable_bzlmod
 common:bzlmod --enable_bzlmod --noenable_workspace
