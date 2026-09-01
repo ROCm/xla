@@ -78,7 +78,7 @@ pip install dist/*.whl
 
 Notes:
 
-- **Use `--override_module=xla=/tf/xla`, NOT `--override_repository=xla=...`.** Current JAX builds run under **bzlmod** (`.bazelrc` sets `--enable_bzlmod --noenable_workspace`), where XLA is a Bazel *module* whose canonical repo name is **`xla+`** (note the trailing `+`). The legacy `--override_repository=xla=...` targets a repo literally named `xla`, which does not exist under bzlmod, so it is **silently ignored** — Bazel then builds XLA from the bzlmod-pinned commit and your local checkout is never compiled.
+- **Use `--override_module=xla=/tf/xla`, NOT `--override_repository=xla=...`.** [Current JAX builds run under **bzlmod**](https://github.com/jax-ml/jax/pull/40053) (`.bazelrc` sets `--enable_bzlmod --noenable_workspace`), where XLA is a Bazel *module* whose canonical repo name is **`xla+`** (note the trailing `+`). The legacy `--override_repository=xla=...` targets a repo literally named `xla`, which does not exist under bzlmod, so it is **silently ignored** — Bazel then builds XLA from the bzlmod-pinned commit and your local checkout is never compiled.
 - Adjust `--rocm_amdgpu_targets` to match your hardware (e.g. `gfx90a`, `gfx942`, `gfx950`, `gfx1100`). Multiple targets can be passed comma-separated.
 - The `--wheels=jax,jaxlib,jax-rocm-plugin,jax-rocm-pjrt` list produces all four required wheels in `dist/`; `pip install dist/*.whl` installs the matching set.
 
