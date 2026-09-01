@@ -410,24 +410,14 @@ bool GetDeviceProperties(hipDeviceProp_t* device_properties,
 }
 
 // Allocates memory on the GPU device.
-void* DeviceAllocate(Context* context, uint64_t bytes,
-                     bool is_fine_grained = false) {
+void* DeviceAllocate(Context* context, uint64_t bytes) {
   if (bytes == 0) {
     return nullptr;
   }
 
   ScopedActivateContext activated(context);
   hipDeviceptr_t device_mem = nullptr;
-  hipError_t res;
-  if (is_fine_grained) {
-    // Fine-grained memory, which has better coherence during the kernel
-    // execution. This type of memory is only used in P2P communication to solve
-    // the cache coherence issue for some archs (e.g., MI200); most of the time,
-    // you don't have to use it.
-    res = hipExtMallocWithFlags(&device_mem, bytes, hipDeviceMallocFinegrained);
-  } else {
-    res = hipMalloc(&device_mem, bytes);
-  }
+  hipError_t res = hipMalloc(&device_mem, bytes);
   if (res != hipSuccess) {
     // LOG(INFO) because this isn't always important to users (e.g. BFCAllocator
     // implements a retry if the first allocation fails).
@@ -760,9 +750,7 @@ DeviceAddressBase RocmExecutor::Allocate(uint64_t size, int64_t memory_space) {
   switch (static_cast<MemorySpace>(memory_space)) {
     case MemorySpace::kCollective:
     case MemorySpace::kDevice:
-      return DeviceAddressBase(
-          DeviceAllocate(&rocm_context_, size, /*is_fine_grained*/ false),
-          size);
+      return DeviceAddressBase(DeviceAllocate(&rocm_context_, size), size);
     case MemorySpace::kHost:
       if (auto result = HostAllocate(&rocm_context_, size); result.ok()) {
         return DeviceAddressBase(*result, size);
