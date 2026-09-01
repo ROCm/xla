@@ -84,6 +84,15 @@ ARG_MODE=${ARG_MODE:-uninitialized}
 # (RocmCommandBuffer::LaunchGraph) at execution. Set CMD_BUFFER=on to re-enable.
 CMD_BUFFER=${CMD_BUFFER:-off}
 
+# CAPTURE_RESOLVED_XLA_FLAGS=first enables gpu_compiler VLOG(1) for only the
+# first runner process. The default "off" preserves normal direct-run logging.
+CAPTURE_RESOLVED_XLA_FLAGS=${CAPTURE_RESOLVED_XLA_FLAGS:-off}
+case "$CAPTURE_RESOLVED_XLA_FLAGS" in
+  off|first) ;;
+  *) die "CAPTURE_RESOLVED_XLA_FLAGS must be off or first" ;;
+esac
+RESOLVED_XLA_FLAGS_CAPTURED=0
+
 # Output mode: a single .csv file vs. a directory of per-leaf CSVs.
 SINGLE_CSV=""
 if [[ "$OUT" == *.csv ]]; then
@@ -148,9 +157,41 @@ invoke() {
          --append_profile_to_csv_file="$csv"
          "$@")
   echo "  run: N=$n, $# module(s), devices=[$devs] -> ${csv}.csv"
-  local xf="${XLA_FLAGS:-}"
+  local inherited_xf="${XLA_FLAGS:-}"
+  local xf="$inherited_xf"
   [ "$CMD_BUFFER" = off ] && xf="--xla_gpu_enable_command_buffer= $xf"
-  if HIP_VISIBLE_DEVICES="$devs" CUDA_VISIBLE_DEVICES="$devs" XLA_FLAGS="$xf" "$RUNNER" "${args[@]}"; then
+  local capture_resolved_flags=0
+  local vmodule="${TF_CPP_VMODULE:-}"
+  if [ "$CAPTURE_RESOLVED_XLA_FLAGS" = first ] &&
+     [ "$RESOLVED_XLA_FLAGS_CAPTURED" -eq 0 ]; then
+    capture_resolved_flags=1
+    RESOLVED_XLA_FLAGS_CAPTURED=1
+    if ! [[ ",$vmodule," =~ ,gpu_compiler=[1-9][0-9]*, ]]; then
+      vmodule="${vmodule:+$vmodule,}gpu_compiler=1"
+    fi
+  fi
+  printf '  inherited XLA_FLAGS=%q\n' "$inherited_xf"
+  printf '  effective invocation: env '
+  local name
+  for name in ROCR_VISIBLE_DEVICES TF_XLA_FLAGS; do
+    [[ -v $name ]] && printf '%s=%q ' "$name" "${!name}"
+  done
+  [ "$capture_resolved_flags" -eq 0 ] ||
+    printf 'TF_CPP_VMODULE=%q ' "$vmodule"
+  printf 'HIP_VISIBLE_DEVICES=%q CUDA_VISIBLE_DEVICES=%q XLA_FLAGS=%q ' \
+    "$devs" "$devs" "$xf"
+  printf '%q ' "$RUNNER" "${args[@]}"
+  printf '\n'
+  local runner_rc=0
+  if [ "$capture_resolved_flags" -eq 1 ]; then
+    TF_CPP_VMODULE="$vmodule" HIP_VISIBLE_DEVICES="$devs" \
+      CUDA_VISIBLE_DEVICES="$devs" XLA_FLAGS="$xf" \
+      "$RUNNER" "${args[@]}" || runner_rc=$?
+  else
+    HIP_VISIBLE_DEVICES="$devs" CUDA_VISIBLE_DEVICES="$devs" XLA_FLAGS="$xf" \
+      "$RUNNER" "${args[@]}" || runner_rc=$?
+  fi
+  if [ "$runner_rc" -eq 0 ]; then
     RAN+=("${csv}.csv")
   else
     FAILED+=("$csv"); echo "  FAIL: runner exited non-zero -> $csv"
