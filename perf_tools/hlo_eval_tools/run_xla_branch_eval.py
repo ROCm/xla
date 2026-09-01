@@ -748,6 +748,7 @@ def build_and_evaluate_target(
         ]
         write_stage_log_header(eval_log, target, "evaluation")
         environment = os.environ.copy()
+        environment["CAPTURE_RESOLVED_XLA_FLAGS"] = "first"
         environment["SETTLE_SEC"] = "0"
         result.update(stage="evaluation", log=eval_log)
         eval_rc = run_command_with_log(

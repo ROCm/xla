@@ -334,6 +334,7 @@ Behavior is tunable with environment variables:
 | `ORDER` | `size` | `size` profiles smallest-HLO leaves first (fast models first, biggest last); `path` = alphabetical. |
 | `ARG_MODE` | `uninitialized` | The runner's `--hlo_argument_mode`. |
 | `SETTLE_SEC` | `2` | Seconds paused between runner processes so GPU memory is reclaimed (helps back-to-back multi-GPU runs). |
+| `CAPTURE_RESOLVED_XLA_FLAGS` | `off` | `first` enables `gpu_compiler` VLOG(1) for the first runner process and records its resolved `DebugOptions`; later invocations retain normal logging. |
 
 ### Automated: XLA multi-branch campaign and HTML report
 
@@ -385,6 +386,15 @@ The campaign also reuses the evaluator environment controls documented above:
 `ARG_MODE`, `CMD_BUFFER`, and `ORDER`. It currently sets `SETTLE_SEC=0` while
 invoking `run_hlo_eval.sh`; campaign resume is not provided by the evaluator's
 leaf-level `RESUME` setting.
+
+Multi-branch campaigns set `CAPTURE_RESOLVED_XLA_FLAGS=first` for each target.
+Direct positional runs keep the default `off` unless explicitly overridden.
+
+For each runner invocation, `eval.log` records the inherited `XLA_FLAGS` and a
+shell-quoted effective command. The command includes the allowlisted
+`ROCR_VISIBLE_DEVICES`, `TF_XLA_FLAGS`, `HIP_VISIBLE_DEVICES`,
+`CUDA_VISIBLE_DEVICES`, final `XLA_FLAGS`, runner arguments, HLO inputs, and CSV
+output path.
 
 In a ROCm-less container, `--config=rocm` installs the ROCm distribution under
 Bazel's `local_config_rocm` repository. The generated runner has a relative
@@ -492,12 +502,14 @@ The final console summary reports each target's status, artifact paths, and the
 manifest and report paths. Use the standalone report command above to
 regenerate HTML later or write it to a different path.
 
-The report shows system/evaluator configuration, branch status, and
-live-control-relative HLO performance. It also includes a complete cross-branch
-HLO status matrix, normalized failure signature overview, and focused
-log/reproduction evidence. Performance selectors include only measured HLOs,
-while failed and missing HLOs remain in the status and failure sections. It is a
-post-processing tool and does not build XLA or rerun HLOs.
+The report shows system/evaluator configuration and an all-branch matrix of
+resolved XLA GPU flags captured from each target's first compiled HLO. A Branch
+selector narrows that matrix to one target. The report also includes branch
+status, live-control-relative HLO performance, and a complete
+cross-branch HLO status matrix, normalized failure signature overview, and
+focused log/reproduction evidence. Performance selectors include only measured
+HLOs, while failed and missing HLOs remain in the status and failure sections.
+It is a post-processing tool and does not build XLA or rerun HLOs.
 
 Set `ROCR_VISIBLE_DEVICES=<physical-device>` before the campaign command when a
 specific physical GPU must be selected.

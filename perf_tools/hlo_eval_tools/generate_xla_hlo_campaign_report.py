@@ -31,6 +31,23 @@ RUNNING_RE = re.compile(r"^\*\* Running (.+) \*\*$")
 LEAF_RE = re.compile(r"^leaf:\s+(.+)$")
 RUN_RE = re.compile(r"^\s*run:\s*N=(\d+)")
 PERFORMANCE_REVIEW_THRESHOLD_PERCENT = 2.0
+DISPLAYED_RESOLVED_XLA_FLAGS = (
+    "xla_gpu_all_reduce_combine_threshold_bytes",
+    "xla_gpu_autotune_level",
+    "xla_gpu_collective_permute_decomposer_threshold",
+    "xla_gpu_cublas_fallback",
+    "xla_gpu_dot_merger_threshold_mb",
+    "xla_gpu_enable_command_buffer",
+    "xla_gpu_enable_dynamic_slice_fusion",
+    "xla_gpu_enable_latency_hiding_scheduler",
+    "xla_gpu_enable_triton_gemm",
+    "xla_gpu_enable_while_loop_double_buffering",
+    "xla_gpu_exhaustive_tiling_search",
+    "xla_gpu_pipeline_all_gather",
+    "xla_gpu_pipeline_all_reduce",
+    "xla_gpu_pipeline_reduce_scatter",
+    "xla_gpu_reduce_scatter_combine_threshold_bytes",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -168,6 +185,39 @@ def normalize_evaluation_log_line(line: str) -> str:
         r"^[IWEF]\d{4}\s+\S+\s+\d+\s+[^]]+\]\s*", "", line.strip()
     )
     return line.replace("\x00", "")
+
+
+def parse_resolved_xla_configuration(eval_log: Path) -> dict[str, Any]:
+    """Parse the first resolved GPU DebugOptions block from an eval log."""
+    configuration: dict[str, Any] = {"module": None, "flags": {}}
+    try:
+        lines = eval_log.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except OSError:
+        return configuration
+
+    capturing = False
+    for raw_line in lines:
+        line = normalize_evaluation_log_line(raw_line)
+        marker = re.fullmatch(
+            r"GpuCompilationEnvironment of hlo_module (.+):", line
+        )
+        if marker is not None:
+            if capturing:
+                break
+            capturing = True
+            configuration["module"] = marker.group(1)
+            continue
+        if not capturing:
+            continue
+        field = re.fullmatch(r"(xla_[A-Za-z0-9_]+):\s*(.*)", line)
+        if field is None:
+            continue
+        name, value = field.groups()
+        if name in DISPLAYED_RESOLVED_XLA_FLAGS:
+            configuration["flags"].setdefault(name, value)
+    return configuration
 
 
 def failure_evidence_priority(line: str) -> int:
@@ -781,6 +831,9 @@ def build_campaign_report_data(campaign_dir: Path) -> dict[str, Any]:
             "source_role": target.get("role", ""),
         }
         eval_log = campaign_dir / branch["slug"] / "eval.log"
+        resolved_xla_configuration = parse_resolved_xla_configuration(
+            eval_log
+        )
         summary, branch_failures = parse_target_evaluation_log(
             eval_log,
             branch=branch,
@@ -874,6 +927,7 @@ def build_campaign_report_data(campaign_dir: Path) -> dict[str, Any]:
                 "evaluation_exit_code": result.get("evaluation_exit_code"),
                 "result_status": result.get("status", "missing"),
                 "runtime": result.get("runtime") or {},
+                "resolved_xla_configuration": resolved_xla_configuration,
                 "pass_count": passed,
                 "profiled_count": summary["profiled"],
                 "resumed_count": summary["resumed"],
@@ -1037,6 +1091,9 @@ def build_campaign_report_data(campaign_dir: Path) -> dict[str, Any]:
             "benchmark": benchmark,
         },
         "branches": branches,
+        "displayed_resolved_xla_flags": list(
+            DISPLAYED_RESOLVED_XLA_FLAGS
+        ),
         "performance_branch_order": [
             branch["slug"]
             for branch in sorted(
@@ -1079,6 +1136,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}main{width:min(1800px,calc(100% - 36px));margin:auto;padding:26px 0 60px}h1{font-size:25px;margin:0}h2{font-size:19px;margin:30px 0 11px}h3{font-size:15px;margin:18px 0 7px}p{margin:6px 0}.muted{color:var(--muted)}code,pre{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}code{background:var(--code);padding:2px 5px;border-radius:4px}.stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:18px 0}.stat{border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:12px}.stat strong{display:block;font-size:22px}.callout{border:1px solid var(--border);border-left:4px solid var(--warning);border-radius:6px;padding:11px 13px;background:var(--surface)}.table-wrap{border:1px solid var(--border);border-radius:6px;overflow:auto;max-height:650px}table{border-collapse:collapse;width:100%;min-width:900px}th,td{padding:8px 9px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}th{position:sticky;top:0;background:var(--surface2);z-index:2;font-size:12px}tbody tr:nth-child(even){background:var(--surface)}.pass{color:var(--success)}.fail{color:var(--danger)}.unknown,.warn,.missing{color:var(--warning)}.not_run{color:var(--muted)}.bar{display:flex;width:180px;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;margin-top:5px}.bar .passed{background:var(--success)}.bar .failed{background:var(--danger)}button{border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--accent);padding:4px 7px;cursor:pointer}button:hover{background:var(--surface2)}.matrix td:nth-child(n+4),.matrix th:nth-child(n+4){text-align:center;white-space:nowrap}.matrix button.fail-cell{color:var(--danger);border-color:transparent}.controls{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:9px;padding:12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);margin-bottom:10px}label{display:grid;gap:4px;color:var(--muted);font-size:12px}select,input{width:100%;padding:7px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text)}.explorer{display:grid;grid-template-columns:minmax(0,3fr) minmax(330px,2fr);gap:12px}.detail{border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:13px;min-width:0}.detail dl{display:grid;grid-template-columns:110px 1fr;gap:5px 9px;margin:8px 0}.detail dt{color:var(--muted)}.detail dd{margin:0;min-width:0;overflow-wrap:anywhere}.detail pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code);padding:10px;border-radius:5px;max-height:260px;overflow:auto}.detail a{color:var(--accent)}.copy-row{display:flex;align-items:center;gap:8px}.provenance{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.provenance>div{border:1px solid var(--border);border-radius:6px;padding:12px}.signature-example{max-width:420px;overflow-wrap:anywhere}@media(max-width:1150px){.stats{grid-template-columns:repeat(3,1fr)}.explorer{grid-template-columns:1fr}.controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.stats,.controls,.provenance{grid-template-columns:1fr}}
 .performance-controls{grid-template-columns:repeat(6,minmax(130px,1fr))}.performance-chart{border:1px solid var(--border);border-radius:6px;background:var(--surface);overflow:auto;margin-bottom:10px}.chart-head{display:flex;justify-content:space-between;gap:16px;padding:12px 14px 0}.chart-head strong{font-size:15px}.chart-head span{text-align:right}.performance-chart svg{display:block;width:100%;min-width:960px;height:430px}.chart-legend{display:flex;gap:18px;flex-wrap:wrap;padding:0 14px 10px}.legend-mark{display:inline-block;width:11px;height:11px;margin-right:5px;vertical-align:-1px}.legend-line{background:var(--accent);border-radius:50%}.legend-fail{color:var(--danger);font-weight:700}@media(max-width:1150px){.performance-controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.performance-controls{grid-template-columns:1fr}.chart-head{display:block}.chart-head span{display:block;text-align:left}}
 .performance-extremes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:10px 0}.performance-extremes>div{border:1px solid var(--border);border-radius:6px;padding:10px 12px;background:var(--surface)}.performance-extremes strong{display:block}@media(max-width:800px){.performance-extremes{grid-template-columns:1fr}}
+.xla-config-controls{grid-template-columns:minmax(220px,420px)}.xla-config-table td:nth-child(n+2),.xla-config-table th:nth-child(n+2){text-align:center;white-space:nowrap}
 .matrix-controls{grid-template-columns:repeat(3,minmax(130px,1fr))}@media(max-width:650px){.matrix-controls{grid-template-columns:1fr}}
 .failure-controls{grid-template-columns:repeat(6,minmax(110px,1fr)) minmax(180px,1.4fr)}@media(max-width:1150px){.failure-controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.failure-controls{grid-template-columns:1fr}}
 </style>
@@ -1091,6 +1149,14 @@ HTML_TEMPLATE = r"""<!doctype html>
 
 <h2>System configurations</h2>
 <div class="provenance" id="provenance"></div>
+
+<h2>Resolved XLA configuration</h2>
+<p class="muted">Selected effective GPU DebugOptions captured from the first compiled HLO for each branch. Explicit invocation evidence remains in the branch eval.log.</p>
+<div class="controls xla-config-controls">
+<label>Branch<select id="xla-config-branch"></select></label>
+</div>
+<p class="muted" id="xla-config-source"></p>
+<div class="table-wrap" style="max-height:520px"><table class="xla-config-table"><thead id="xla-config-head"></thead><tbody id="xla-config-body"></tbody></table></div>
 
 <h2>Overall branch status</h2>
 <div class="table-wrap"><table><thead><tr><th>Branch</th><th>Commit</th><th>Build</th><th>ROCm runtime</th><th>Pass</th><th>Fail</th><th>Skipped (empty)</th><th>Workload success</th><th>Evidence</th></tr></thead><tbody id="branch-body"></tbody></table></div>
@@ -1171,6 +1237,20 @@ function runtimeSummary(branch){
  if(runtime.gpu_architectures?.length)parts.push(`<code>${esc(runtime.gpu_architectures.join(", "))}</code>`);
  if(runtime.rocm_distro_url)parts.push(`<span class="muted" title="${esc(runtime.rocm_distro_url)}">Configured distro URL</span>`);
  return parts.length?parts.join("<br>"):"Not captured";
+}
+function populateResolvedXlaConfiguration(){
+ const select=byId("xla-config-branch");
+ select.innerHTML=option("","All branches")+DATA.branches.map(branch=>option(branch.slug,branch.label)).join("");
+ select.value="";
+ renderResolvedXlaConfiguration();
+}
+function renderResolvedXlaConfiguration(){
+ const selected=byId("xla-config-branch").value,branches=selected?[branchBySlug[selected]]:DATA.branches,names=DATA.displayed_resolved_xla_flags||[];
+ byId("xla-config-head").innerHTML=`<tr><th>Flag</th>${branches.map(branch=>`<th title="${esc(branch.label)}">${esc(shortBranch(branch))}</th>`).join("")}</tr>`;
+ byId("xla-config-body").innerHTML=names.map(name=>`<tr><td><code>${esc(name)}</code></td>${branches.map(branch=>{const flags=branch.resolved_xla_configuration?.flags||{},captured=Object.prototype.hasOwnProperty.call(flags,name);return `<td class="${captured?"":"not_run"}">${captured?esc(flags[name]):"Not available"}</td>`}).join("")}</tr>`).join("");
+ if(!selected){byId("xla-config-source").textContent="Resolved values captured from the first compiled HLO for each branch. Select one branch for its source log.";return}
+ const branch=branches[0],configuration=branch.resolved_xla_configuration||{},module=configuration.module?`Captured from first compiled HLO: ${esc(configuration.module)}.`:"Resolved configuration was not captured for this branch.",evidence=branch.log_available?` <a href="${esc(branch.eval_log_uri)}">Open eval.log evidence</a>.`:"";
+ byId("xla-config-source").innerHTML=module+evidence;
 }
 function renderBranches(){
  byId("branch-body").innerHTML=DATA.branches.map(branch=>{const pct=branch.success_percent,build=branch.build_exit_code===0?"Passed":branch.build_exit_code==null?"N/A":`Exit ${esc(branch.build_exit_code)}`,passDetail=branch.pass_count==null?"":`<br><small>${branch.profiled_count} profiled${branch.resumed_count?` + ${branch.resumed_count} resumed`:""}</small>`,success=pct==null?"N/A":`${pct.toFixed(1)}%<div class="bar"><span class="passed" style="width:${pct}%"></span><span class="failed" style="width:${100-pct}%"></span></div>`;return `<tr><td><strong>${esc(branch.label)}</strong><br><span class="muted">${esc(branch.ref)}</span></td><td><code>${esc(branch.commit.slice(0,12))}</code></td><td class="${branch.build_exit_code===0?"pass":branch.build_exit_code==null?"warn":"fail"}">${build}</td><td>${runtimeSummary(branch)}</td><td class="pass">${esc(branch.pass_count??"N/A")}${passDetail}</td><td class="fail">${esc(branch.failed_count??"N/A")}</td><td>${esc(branch.skipped_count??"N/A")}</td><td>${success}</td><td>${branch.log_available?`<a href="${esc(branch.eval_log_uri)}">eval.log</a>`:"Missing log"}</td></tr>`}).join("");
@@ -1296,7 +1376,8 @@ function filterCategory(category){["branch-filter","domain-filter","model-filter
 function renderProvenance(){
  const c=DATA.campaign,b=c.benchmark||{},gpu=c.gpu_architectures?.length?c.gpu_architectures.join(", "):"Not captured",rocm=c.rocm_version?`ROCm ${c.rocm_version}`:"Not captured";byId("provenance").innerHTML=`<div><strong>Execution environment</strong><br>Host: ${esc(c.hostname||"N/A")}<br>Platform: ${esc(c.platform||"N/A")}<br>GPU: <code>${esc(gpu)}</code><br>ROCm version: <code>${esc(rocm)}</code></div><div><strong>Perf-tool configuration</strong><br>Repeats: ${esc(b.num_repeats??"N/A")}<br>Argument mode: <code>${esc(b.arg_mode||"N/A")}</code><br>Command buffer: ${esc(b.cmd_buffer||"N/A")}<br>Settle seconds: ${esc(b.settle_sec??"N/A")}</div>`;
 }
-renderHeader();renderBranches();cascadePerformance();cascadeMatrix();renderSignatures();populateFilters();renderProvenance();
+renderHeader();renderBranches();populateResolvedXlaConfiguration();cascadePerformance();cascadeMatrix();renderSignatures();populateFilters();renderProvenance();
+byId("xla-config-branch").addEventListener("change",renderResolvedXlaConfiguration);
 ["matrix-domain","matrix-model","matrix-mode"].forEach(id=>byId(id).addEventListener("change",cascadeMatrix));["branch-filter","category-filter","gpu-filter"].forEach(id=>byId(id).addEventListener("change",renderFailures));["domain-filter","model-filter","mode-filter"].forEach(id=>byId(id).addEventListener("change",cascadeFailureFilters));byId("failure-search").addEventListener("input",renderFailures);
 ["perf-domain","perf-model","perf-mode","perf-gpu"].forEach(id=>byId(id).addEventListener("change",cascadePerformance));["perf-metric","perf-module"].forEach(id=>byId(id).addEventListener("change",renderPerformance));
 </script>
