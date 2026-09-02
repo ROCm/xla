@@ -55,6 +55,15 @@ namespace gpu {
 
 namespace {
 
+// How much slower the merged fusion has to look before the cost model vetoes a
+// sibling fusion. Merging is the default and saves a kernel launch, so the veto
+// only fires when the model is confident. The model routinely charges a
+// broadcast of a scalar operand as if every expanded byte were read, and scales
+// that phantom traffic by the block count the emitter happens to pick, so two
+// estimates within a few percent of each other carry no signal. Measured cases
+// where the veto is right miss by 67% and more, well clear of this margin.
+constexpr double kSiblingFusionRejectMargin = 0.1;
+
 bool IsProfitableOperand(HloInstruction* instr) {
   // Effective scalars are not a profitable shared operand. Skip them.
   return !ShapeUtil::IsEffectiveScalar(instr->shape());
@@ -310,7 +319,9 @@ FusionDecision CanFuseSiblings(const HloInstruction& sibling_consumer_1,
                                const HloInstruction& common_producer,
                                const HloDfsReachability& reachability,
                                FusionInfoCache* fusion_info_cache,
-                               const se::DeviceDescription& device_info) {
+                               const se::DeviceDescription& device_info,
+                               GpuPerformanceModel& gpu_performance_model,
+                               GpuHloCostAnalysis* cost_analysis) {
   if (reachability.IsConnected(&sibling_consumer_1, &sibling_consumer_2)) {
     return FusionDecision::Forbid(
         absl::StrCat(sibling_consumer_1.name(), " and ",
@@ -329,9 +340,17 @@ FusionDecision CanFuseSiblings(const HloInstruction& sibling_consumer_1,
   RETURN_IF_NOT_FUSIBLE(ParameterSlicesAreNonOverlapping(
       sibling_consumer_1, sibling_consumer_2, &common_producer));
 
-  // This check should be last, as it may be expensive.
   RETURN_IF_NOT_FUSIBLE(LegalToFuse(sibling_consumer_1, sibling_consumer_2,
                                     device_info, fusion_info_cache));
+
+  // This check should be last, as it may be expensive.
+  GpuPerformanceModel::RunTimes t =
+      gpu_performance_model.EstimateRunTimesForSiblingFusion(
+          &sibling_consumer_1, &sibling_consumer_2, cost_analysis);
+  if (t.time_fused > t.time_unfused * (1 + kSiblingFusionRejectMargin)) {
+    return FusionDecision::Forbid("will execute slower if fused");
+  }
+
   return FusionDecision::Allow();
 }
 
@@ -345,7 +364,9 @@ bool MultiOutputFusion::FuseSiblings(
     HloInstruction* parent,
     const std::function<void(const HloInstruction*)>&
         invalidate_caches_callback,
-    FusionInfoCache* fusion_info_cache, GpuHloCostAnalysis* cost_analysis) {
+    FusionInfoCache* fusion_info_cache,
+    GpuPerformanceModel& gpu_performance_model,
+    GpuHloCostAnalysis* cost_analysis) {
   const HloComputation* computation = parent->parent();
   const HloModule* module = computation->parent();
   bool dump_fusion =
@@ -377,8 +398,9 @@ bool MultiOutputFusion::FuseSiblings(
     for (auto j = i + 1; j != siblings.end();) {
       VLOG(3) << "Considering " << (*i)->name() << " and " << (*j)->name();
 
-      if (auto fusible = CanFuseSiblings(**i, **j, *parent, *reachability_,
-                                         fusion_info_cache, device_info_);
+      if (auto fusible = CanFuseSiblings(
+              **i, **j, *parent, *reachability_, fusion_info_cache,
+              device_info_, gpu_performance_model, cost_analysis);
           !fusible) {
         // We pick `j` arbitrarily as a consumer.
         if (dump_fusion) {
@@ -474,7 +496,8 @@ absl::StatusOr<bool> MultiOutputFusion::DoMultiOutputFusion() {
                        fusion_analysis_cache.Invalidate(instr->unique_id());
                        fusion_info_cache.Invalidate(instr);
                      },
-                     &fusion_info_cache, &cost_analysis)) {
+                     &fusion_info_cache, gpu_performance_model,
+                     &cost_analysis)) {
       changed = true;
     }
     // Second, perform producer-consumer multi-output fusion. This order will

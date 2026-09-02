@@ -292,6 +292,113 @@ GpuPerformanceModel::EstimateRunTimesForMultiOutputFusion(
   return {time_unfused, time_fused};
 }
 
+absl::Duration GpuPerformanceModel::EstimateRunTimeForSiblingFusionImpl(
+    const HloInstruction* sibling1, const HloInstruction* sibling2,
+    const EstimateRunTimeData& sibling1_runtime,
+    const EstimateRunTimeData& sibling2_runtime,
+    const GpuHloCostAnalysis* cost_analysis) {
+  VLOG(8) << "EstimateRunTimeForSiblingFusion, sibling1: " << sibling1->name()
+          << " sibling2: " << sibling2->name();
+
+  if (sibling1_runtime.IsInfinite() || sibling2_runtime.IsInfinite()) {
+    return absl::InfiniteDuration();
+  }
+
+  // Unlike a producer-consumer fusion, neither sibling consumes the other, so
+  // no operand utilization has to be scaled and both sets of outputs are
+  // written.
+  const auto& fusion_analysis =
+      fusion_analysis_cache_.GetForSiblings(*sibling1, *sibling2);
+
+  // This is the part that a sum of the two separate estimates cannot capture.
+  // The merged fusion can pick a different emitter than either sibling did,
+  // with launch dimensions and a read pattern to match.
+  LaunchDimensions launch_dimensions =
+      EstimateFusionLaunchDimensions(fusion_analysis);
+
+  int64_t flops = sibling1_runtime.flops + sibling2_runtime.flops;
+
+  absl::Duration compute_time =
+      ComputeTime(device_info_, flops, launch_dimensions.num_blocks(),
+                  launch_dimensions.num_threads_per_block());
+
+  auto fusion_operands = fusion_analysis.fusion().GetParameters();
+  CoalescingAnalysis coalescing_analysis =
+      CoalescingAnalysis::CreateForSiblings(sibling1, sibling2, fusion_operands,
+                                            fusion_analysis);
+
+  absl::Duration read_time;
+  int64_t bytes_read = 0;
+  for (const auto* operand : fusion_operands) {
+    int64_t operand_size = cost_analysis->GetShapeSize(operand->shape());
+
+    // MultiOutputFusion concatenates the two fused computations without
+    // deduplicating the instructions inside them, so a shared operand is read
+    // once for each sibling that uses it. A later CSE pass can still merge
+    // common subexpressions, which makes this an upper bound.
+    int64_t n_bytes_total =
+        GetOperandBytesAccessed(cost_analysis, sibling1, operand) +
+        GetOperandBytesAccessed(cost_analysis, sibling2, operand);
+    int64_t n_bytes_net = std::min(operand_size, n_bytes_total);
+    bytes_read += n_bytes_total;
+
+    bool coalesced = coalescing_analysis.IsReadCoalesced(operand);
+    PrimitiveType element_type = operand->shape().element_type();
+
+    VLogOperandRead(operand, n_bytes_total, n_bytes_net, coalesced);
+
+    read_time += ReadTimeWithDRAMHeuristic(
+        device_info_, launch_dimensions.num_blocks(), n_bytes_net,
+        n_bytes_total, element_type,
+        GetCoalescingUtilizationRate(element_type, device_info_, coalesced));
+  }
+
+  int64_t bytes_written =
+      sibling1_runtime.bytes_written + sibling2_runtime.bytes_written;
+  absl::Duration write_time =
+      sibling1_runtime.write_time + sibling2_runtime.write_time;
+
+  auto exec_time =
+      CombineComputeAndMemoryAccessTime(compute_time, read_time + write_time);
+
+  VLOG(3) << "Runtime data for sibling fusion:\n"
+          << " sibling1: " << sibling1->name() << "\n"
+          << " sibling2: " << sibling2->name() << "\n"
+          << launch_dimensions.ToString() << "\n"
+          << EstimateRunTimeData{flops,     bytes_read, bytes_written,
+                                 read_time, write_time, compute_time,
+                                 exec_time}
+                 .ToString();
+
+  return exec_time;
+}
+
+GpuPerformanceModel::RunTimes
+GpuPerformanceModel::EstimateRunTimesForSiblingFusion(
+    const HloInstruction* sibling1, const HloInstruction* sibling2,
+    const GpuHloCostAnalysis* cost_analysis) {
+  EstimateRunTimeData sibling1_runtime =
+      EstimateRunTimeForInstruction(sibling1, cost_analysis);
+  EstimateRunTimeData sibling2_runtime =
+      EstimateRunTimeForInstruction(sibling2, cost_analysis);
+
+  absl::Duration time_unfused = 2 * kKernelLaunchOverhead +
+                                sibling1_runtime.exec_time +
+                                sibling2_runtime.exec_time;
+
+  absl::Duration time_fused =
+      kKernelLaunchOverhead +
+      EstimateRunTimeForSiblingFusionImpl(sibling1, sibling2, sibling1_runtime,
+                                          sibling2_runtime, cost_analysis);
+
+  if (VLOG_IS_ON(8)) {
+    LOG(INFO) << "Unfused time: " << time_unfused;
+    LOG(INFO) << "Fused time: " << time_fused;
+  }
+
+  return {time_unfused, time_fused};
+}
+
 void GpuPerformanceModel::RecordEstimatedRunTime(
     HloInstruction* instruction, const GpuHloCostAnalysis* cost_analysis) {
   DCHECK(Cast<const HloFusionInstruction>(instruction)) << "expected fusion";

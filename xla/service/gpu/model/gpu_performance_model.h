@@ -56,6 +56,13 @@ class GpuPerformanceModel : public GpuPerformanceModelBase {
       const HloInstruction* producer, const HloInstruction* consumer,
       const GpuHloCostAnalysis* cost_analysis);
 
+  // Estimates the run time of two siblings, i.e. two instructions that share
+  // operands but do not consume each other, running as separate kernels versus
+  // running as a single multi-output fusion.
+  RunTimes EstimateRunTimesForSiblingFusion(
+      const HloInstruction* sibling1, const HloInstruction* sibling2,
+      const GpuHloCostAnalysis* cost_analysis);
+
   // Writes estimated execution time to FusionBackendConfig.reification_cost.
   void RecordEstimatedRunTime(HloInstruction* instruction,
                               const GpuHloCostAnalysis* cost_analysis);
@@ -70,6 +77,12 @@ class GpuPerformanceModel : public GpuPerformanceModelBase {
       const EstimateRunTimeData& consumer_runtime,
       const GpuHloCostAnalysis* cost_analysis,
       bool producer_writes_side_output);
+
+  absl::Duration EstimateRunTimeForSiblingFusionImpl(
+      const HloInstruction* sibling1, const HloInstruction* sibling2,
+      const EstimateRunTimeData& sibling1_runtime,
+      const EstimateRunTimeData& sibling2_runtime,
+      const GpuHloCostAnalysis* cost_analysis);
 
   const se::DeviceDescription& device_info_;
   HloFusionAnalysisCache& fusion_analysis_cache_;

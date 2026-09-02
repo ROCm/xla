@@ -46,12 +46,18 @@ class HloFusionAnalysisCache {
   const HloFusionAnalysis& Get(const HloInstruction& producer,
                                const HloInstruction& consumer);
 
+  // Returns the analysis for the multi-output fusion of the two given siblings.
+  const HloFusionAnalysis& GetForSiblings(const HloInstruction& sibling1,
+                                          const HloInstruction& sibling2);
+
   // Removes the cache entry for the given instruction, if it exists. Also
-  // removes all producer-consumer fusions that involve this instruction.
+  // removes all producer-consumer and sibling fusions that involve this
+  // instruction.
   void Invalidate(const HloInstruction& instruction);
 
   // Removes the cache entry for the given instruction, if it exists. Also
-  // removes all producer-consumer fusions that involve this instruction.
+  // removes all producer-consumer and sibling fusions that involve this
+  // instruction.
   void Invalidate(int64_t instruction_id);
 
   // Delete all cache entries.
@@ -73,6 +79,12 @@ class HloFusionAnalysisCache {
   // For each instruction `consumer`, contains the `producer`s for which we have
   // entries {`producer`, `consumer`} in `producer_consumer_analyses_`.
   absl::flat_hash_map<int64_t, std::vector<int64_t>> producers_for_consumers_;
+
+  absl::node_hash_map<std::pair<int64_t, int64_t>, HloFusionAnalysis>
+      sibling_analyses_;
+  // For each instruction, contains the instructions it has been paired with in
+  // `sibling_analyses_`, in either position.
+  absl::flat_hash_map<int64_t, std::vector<int64_t>> siblings_for_instruction_;
 };
 
 }  // namespace xla::gpu

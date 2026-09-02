@@ -94,15 +94,15 @@ TEST_F(MultiOutputFusionTest, MultiOutputFusionSiblingReduceAndReduceFusion) {
   // sharing the same input param.
   auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
     fused_computation {
-      p1.1 = f32[128,512,28,28]{3,2,1,0} parameter(1)
-      mul = f32[128,512,28,28]{3,2,1,0} multiply(p1.1, p1.1)
+      p1.1 = f32[8,512,28,28]{3,2,1,0} parameter(1)
+      mul = f32[8,512,28,28]{3,2,1,0} multiply(p1.1, p1.1)
       const.1 = f32[] parameter(0)
       ROOT reduce.1 = f32[512]{0} reduce(mul, const.1), dimensions={0,2,3}, to_apply=scalar_add_computation
     }
 
     ENTRY entry {
       p0 = f32[] parameter(0)
-      p1 = f32[128,512,28,28]{3,2,1,0} parameter(1)
+      p1 = f32[8,512,28,28]{3,2,1,0} parameter(1)
       const.2 = f32[] constant(1)
       fusion = f32[512] fusion(p0, p1), kind=kInput, calls=fused_computation
       reduce.2 = f32[512]{0} reduce(p1, const.2), dimensions={0,2,3}, to_apply=scalar_add_computation
@@ -116,6 +116,78 @@ TEST_F(MultiOutputFusionTest, MultiOutputFusionSiblingReduceAndReduceFusion) {
   ASSERT_TRUE(fusion->IsMultiOutputFusion());
   EXPECT_THAT(fusion->fused_expression_root(),
               GmockMatch(m::Tuple(m::Reduce(), m::Reduce())));
+}
+
+TEST_F(MultiOutputFusionTest, NoSiblingFusionOfColumnReductionAndElementwise) {
+  // Reduced from a ViT model. Reducing the major dimension and keeping the
+  // minor one is a column reduction. Merging it with the sqrt forces the whole
+  // fusion onto the reduction emitter, whose 2D tiled read of p0 does not suit
+  // the sqrt, and the merged kernel comes out several times slower than the two
+  // separate ones. Nothing rejects this on legality grounds, so the cost model
+  // has to.
+  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
+    fused_reduce {
+      p0.1 = f32[4096,768]{1,0} parameter(0)
+      const.1 = f32[] constant(0)
+      ROOT reduce = f32[768]{0} reduce(p0.1, const.1), dimensions={0}, to_apply=scalar_add_computation
+    }
+
+    fused_elementwise {
+      p0.2 = f32[4096,768]{1,0} parameter(0)
+      ROOT sqrt = f32[4096,768]{1,0} sqrt(p0.2)
+    }
+
+    ENTRY entry {
+      p0 = f32[4096,768]{1,0} parameter(0)
+      reduce_fusion = f32[768]{0} fusion(p0), kind=kInput, calls=fused_reduce
+      elementwise_fusion = f32[4096,768]{1,0} fusion(p0), kind=kLoop, calls=fused_elementwise
+      ROOT root = (f32[768]{0}, f32[4096,768]{1,0}) tuple(reduce_fusion, elementwise_fusion)
+    })"))
+                    .value();
+  ASSERT_FALSE(mof_.Run(module.get()).value());
+}
+
+TEST_F(MultiOutputFusionTest, SiblingFusionOfConcatenateFusions) {
+  // Two concatenate fusions over the same operands. The concatenate emitter
+  // has no multi-output support, but the merged fusion has two roots and is
+  // therefore emitted by the loop emitter, so merging is both legal and
+  // profitable: it halves the reads of p0 and p1 and drops a kernel launch.
+  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
+    fused_concatenate_1 {
+      p0.1 = f32[64,64]{1,0} parameter(0)
+      p1.1 = f32[64,64]{1,0} parameter(1)
+      s.1 = f32[64,64]{1,0} add(p0.1, p1.1)
+      d.1 = f32[64,64]{1,0} subtract(p0.1, p1.1)
+      top.1 = f32[32,64]{1,0} slice(s.1), slice={[0:32],[0:64]}
+      bot.1 = f32[32,64]{1,0} slice(d.1), slice={[32:64],[0:64]}
+      ROOT concat.1 = f32[64,64]{1,0} concatenate(top.1, bot.1), dimensions={0}
+    }
+
+    fused_concatenate_2 {
+      p0.2 = f32[64,64]{1,0} parameter(0)
+      p1.2 = f32[64,64]{1,0} parameter(1)
+      s.2 = f32[64,64]{1,0} add(p0.2, p1.2)
+      d.2 = f32[64,64]{1,0} subtract(p0.2, p1.2)
+      top.2 = f32[32,64]{1,0} slice(d.2), slice={[0:32],[0:64]}
+      bot.2 = f32[32,64]{1,0} slice(s.2), slice={[32:64],[0:64]}
+      ROOT concat.2 = f32[64,64]{1,0} concatenate(top.2, bot.2), dimensions={0}
+    }
+
+    ENTRY entry {
+      p0 = f32[64,64]{1,0} parameter(0)
+      p1 = f32[64,64]{1,0} parameter(1)
+      fusion.1 = f32[64,64]{1,0} fusion(p0, p1), kind=kInput, calls=fused_concatenate_1
+      fusion.2 = f32[64,64]{1,0} fusion(p0, p1), kind=kInput, calls=fused_concatenate_2
+      ROOT root = (f32[64,64]{1,0}, f32[64,64]{1,0}) tuple(fusion.1, fusion.2)
+    })"))
+                    .value();
+  ASSERT_TRUE(mof_.Run(module.get()).value());
+  SCOPED_TRACE(module->ToString());
+  const HloInstruction* fusion =
+      module->entry_computation()->root_instruction()->operand(0)->operand(0);
+  ASSERT_TRUE(fusion->IsMultiOutputFusion());
+  EXPECT_THAT(fusion->fused_expression_root(),
+              GmockMatch(m::Tuple(m::Concatenate(), m::Concatenate())));
 }
 
 TEST_F(MultiOutputFusionTest, MultiOutputFusionDifferentReduceInputShapes) {
@@ -164,15 +236,15 @@ scalar_add_computation_f16 {
 }
 
 fused_computation {
-  param_0.2 = f32[128,512,28,28]{3,2,1,0} parameter(0)
-  c.1 = f16[128,512,28,28]{3,2,1,0} convert(param_0.2)
+  param_0.2 = f32[8,512,28,28]{3,2,1,0} parameter(0)
+  c.1 = f16[8,512,28,28]{3,2,1,0} convert(param_0.2)
   const.0 = f16[] constant(0)
   ROOT reduce.0 = f16[512]{0} reduce(c.1, const.0), dimensions={0,2,3}, to_apply=scalar_add_computation_f16
 }
 
 ENTRY entry {
   p0 = f32[] parameter(0)
-  p1 = f32[128,512,28,28]{3,2,1,0} parameter(1)
+  p1 = f32[8,512,28,28]{3,2,1,0} parameter(1)
   const.2 = f32[] constant(0)
   reduce.1 = f32[512]{0} reduce(p1, const.2), dimensions={0,2,3}, to_apply=scalar_add_computation
   fusion = f16[512]{0} fusion(p1), kind=kInput, calls=fused_computation
@@ -181,8 +253,8 @@ ENTRY entry {
 
   CheckMultiOutputFusion(hlo, R"(
 // CHECK: %fused_computation
-// CHECK-NEXT:   [[param_0_2_0:%[^ ]+]] = f32[128,512,28,28]{3,2,1,0} parameter(0)
-// CHECK-NEXT:   [[c_1_1:%[^ ]+]] = f16[128,512,28,28]{3,2,1,0} convert([[param_0_2_0]])
+// CHECK-NEXT:   [[param_0_2_0:%[^ ]+]] = f32[8,512,28,28]{3,2,1,0} parameter(0)
+// CHECK-NEXT:   [[c_1_1:%[^ ]+]] = f16[8,512,28,28]{3,2,1,0} convert([[param_0_2_0]])
 // CHECK-NEXT:   [[const_0_2:%[^ ]+]] = f16[] constant(0)
 // CHECK-NEXT:   [[reduce_0_3:%[^ ]+]] = f16[512]{0} reduce([[c_1_1]], [[const_0_2]]), dimensions={0,2,3}, to_apply=[[scalar_add_computation_f16_4:%[^ ]+]]
 // CHECK-NEXT:   [[param_1_5:%[^ ]+]] = f32[] parameter(1)
@@ -224,21 +296,21 @@ TEST_F(MultiOutputFusionTest, MultiOutputFusionSiblingReduceFusions) {
   // param.
   auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
     fused_computation_1 {
-      p1.1 = f32[128,512,28,28]{3,2,1,0} parameter(1)
-      mul = f32[128,512,28,28]{3,2,1,0} multiply(p1.1, p1.1)
+      p1.1 = f32[8,512,28,28]{3,2,1,0} parameter(1)
+      mul = f32[8,512,28,28]{3,2,1,0} multiply(p1.1, p1.1)
       const.1 = f32[] parameter(0)
       ROOT reduce.1 = f32[512]{0} reduce(mul, const.1), dimensions={0,2,3}, to_apply=scalar_add_computation
     }
 
     fused_computation_2 {
-      p1.2 = f32[128,512,28,28]{3,2,1,0} parameter(1)
+      p1.2 = f32[8,512,28,28]{3,2,1,0} parameter(1)
       const.2 = f32[] parameter(0)
       ROOT reduce.2 = f32[512]{0} reduce(p1.2, const.2), dimensions={0,2,3}, to_apply=scalar_add_computation
     }
 
     ENTRY entry {
       p0 = f32[] parameter(0)
-      p1 = f32[128,512,28,28]{3,2,1,0} parameter(1)
+      p1 = f32[8,512,28,28]{3,2,1,0} parameter(1)
       fusion.1 = f32[512] fusion(p0, p1), kind=kInput, calls=fused_computation_1
       fusion.2 = f32[512] fusion(p0, p1), kind=kInput, calls=fused_computation_2
       ROOT root = (f32[512]{0}, f32[512]{0}) tuple(fusion.1, fusion.2)
@@ -297,19 +369,19 @@ TEST_F(MultiOutputFusionTest,
   // Multi-output fusion with two reduce instructions root and a sibling reduce
   // instruction sharing the same input param.
   auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
-    fused_computation (p0: f32[128,512,28,28]) -> (f32[512], f32[512]) {
+    fused_computation (p0: f32[8,512,28,28]) -> (f32[512], f32[512]) {
       const.1 = f32[] constant(1)
-      p0.1 = f32[128,512,28,28]{3,2,1,0} parameter(0)
-      mul = f32[128,512,28,28]{3,2,1,0} multiply(f32[128,512,28,28]{3,2,1,0} p0.1, f32[128,512,28,28]{3,2,1,0} p0.1)
-      reduce.1 = f32[512]{0} reduce(f32[128,512,28,28]{3,2,1,0} mul, f32[] const.1), dimensions={0,2,3}, to_apply=scalar_add_computation
-      reduce.2 = f32[512]{0} reduce(f32[128,512,28,28]{3,2,1,0} p0.1, f32[] const.1), dimensions={0,2,3}, to_apply=scalar_add_computation
+      p0.1 = f32[8,512,28,28]{3,2,1,0} parameter(0)
+      mul = f32[8,512,28,28]{3,2,1,0} multiply(f32[8,512,28,28]{3,2,1,0} p0.1, f32[8,512,28,28]{3,2,1,0} p0.1)
+      reduce.1 = f32[512]{0} reduce(f32[8,512,28,28]{3,2,1,0} mul, f32[] const.1), dimensions={0,2,3}, to_apply=scalar_add_computation
+      reduce.2 = f32[512]{0} reduce(f32[8,512,28,28]{3,2,1,0} p0.1, f32[] const.1), dimensions={0,2,3}, to_apply=scalar_add_computation
       ROOT tuple = (f32[512]{0}, f32[512]{0}) tuple(f32[512]{0} reduce.1, f32[512]{0} reduce.2)
     }
 
-    ENTRY entry (p0: f32[128,512,28,28]) -> (f32[512], f32[512], f32[512]) {
-      p0 = f32[128,512,28,28]{3,2,1,0} parameter(0)
+    ENTRY entry (p0: f32[8,512,28,28]) -> (f32[512], f32[512], f32[512]) {
+      p0 = f32[8,512,28,28]{3,2,1,0} parameter(0)
       const = f32[] constant(1)
-      fusion = (f32[512]{0}, f32[512]{0}) fusion(f32[128,512,28,28]{3,2,1,0} p0), kind=kInput, calls=fused_computation
+      fusion = (f32[512]{0}, f32[512]{0}) fusion(f32[8,512,28,28]{3,2,1,0} p0), kind=kInput, calls=fused_computation
       get-tuple-element = f32[512]{0} get-tuple-element((f32[512]{0}, f32[512]{0}) fusion), index=0
       get-tuple-element.1 = f32[512]{0} get-tuple-element((f32[512]{0}, f32[512]{0}) fusion), index=1
       reduce.3 = f32[512]{0} reduce(p0, const), dimensions={0,2,3}, to_apply=scalar_add_computation
@@ -2077,7 +2149,7 @@ ENTRY computation {
 
 TEST_F(ReduceMultiOutputFusionTest, ReduceAndLoopDifferentShapeDifferentType) {
   const char* hlo = R"(
-HloModule module, entry_computation_layout={(f16[100,200]{1,0},f32[],f32[])->(f16[100,200]{1,0}, f32[])}
+HloModule module, entry_computation_layout={(f16[100,160]{1,0},f32[],f32[])->(f16[100,160]{1,0}, f32[])}
 
 max {
   a = f32[] parameter(0)
@@ -2087,69 +2159,50 @@ max {
 
 fused_computation {
   one_5 = f32[] constant(1)
-  one_b.5 = f32[100,200]{1,0} broadcast(one_5), dimensions={}
-  param_1.15 = f16[100,200]{1,0} parameter(1)
-  c.6 = f32[100,200]{1,0} convert(param_1.15)
+  one_b.5 = f32[100,160]{1,0} broadcast(one_5), dimensions={}
+  param_1.15 = f16[100,160]{1,0} parameter(1)
+  c.6 = f32[100,160]{1,0} convert(param_1.15)
   param_0.11 = f32[] parameter(0)
-  b.6 = f32[100,200]{1,0} broadcast(param_0.11), dimensions={}
-  d.5 = f32[100,200]{1,0} divide(c.6, b.6)
-  a.6 = f32[100,200]{1,0} add(one_b.5, d.5)
-  bitcast.1 = f32[20000]{0} bitcast(a.6)
+  b.6 = f32[100,160]{1,0} broadcast(param_0.11), dimensions={}
+  d.5 = f32[100,160]{1,0} divide(c.6, b.6)
+  a.6 = f32[100,160]{1,0} add(one_b.5, d.5)
+  bitcast.1 = f32[16000]{0} bitcast(a.6)
   z_1 = f32[] constant(0)
   ROOT r.1 = f32[] reduce(bitcast.1, z_1), dimensions={0}, to_apply=max
 }
 
 fused_computation.1 {
   one_3 = f32[] constant(1)
-  one_b.3 = f32[100,200]{1,0} broadcast(one_3), dimensions={}
-  param_2.7 = f16[100,200]{1,0} parameter(2)
-  c.4 = f32[100,200]{1,0} convert(param_2.7)
+  one_b.3 = f32[100,160]{1,0} broadcast(one_3), dimensions={}
+  param_2.7 = f16[100,160]{1,0} parameter(2)
+  c.4 = f32[100,160]{1,0} convert(param_2.7)
   param_1.10 = f32[] parameter(1)
-  b.4 = f32[100,200]{1,0} broadcast(param_1.10), dimensions={}
-  d.3 = f32[100,200]{1,0} divide(c.4, b.4)
-  a.4 = f32[100,200]{1,0} add(one_b.3, d.3)
+  b.4 = f32[100,160]{1,0} broadcast(param_1.10), dimensions={}
+  d.3 = f32[100,160]{1,0} divide(c.4, b.4)
+  a.4 = f32[100,160]{1,0} add(one_b.3, d.3)
   param_0.8 = f32[] parameter(0)
-  output_scale_broadcast.1 = f32[100,200]{1,0} broadcast(param_0.8), dimensions={}
-  a_scaled.1 = f32[100,200]{1,0} multiply(a.4, output_scale_broadcast.1)
-  ROOT a_scaled_converted.1 = f16[100,200]{1,0} convert(a_scaled.1)
+  output_scale_broadcast.1 = f32[100,160]{1,0} broadcast(param_0.8), dimensions={}
+  a_scaled.1 = f32[100,160]{1,0} multiply(a.4, output_scale_broadcast.1)
+  ROOT a_scaled_converted.1 = f16[100,160]{1,0} convert(a_scaled.1)
 }
 
 ENTRY computation {
   output_scale = f32[] parameter(2)
   input_scale = f32[] parameter(1)
-  p = f16[100,200]{1,0} parameter(0)
-  fusion.1 = f16[100,200]{1,0} fusion(output_scale, input_scale, p), kind=kLoop, calls=fused_computation.1
+  p = f16[100,160]{1,0} parameter(0)
+  fusion.1 = f16[100,160]{1,0} fusion(output_scale, input_scale, p), kind=kLoop, calls=fused_computation.1
   fusion = f32[] fusion(input_scale, p), kind=kInput, calls=fused_computation
-  ROOT out = (f16[100,200]{1,0}, f32[]) tuple(fusion.1, fusion)
+  ROOT out = (f16[100,160]{1,0}, f32[]) tuple(fusion.1, fusion)
 }
 )";
 
-  CheckMultiOutputFusion(hlo, R"(
-// CHECK: %fused_computation.1 (param_0.8: f32[], param_1.10: f32[], param_2.7: f16[100,200]) -> (f16[100,200], f32[]) {
-// CHECK-NEXT:   [[one_3_0:%[^ ]+]] = f32[] constant(1)
-// CHECK-NEXT:   [[one_b_3_1:%[^ ]+]] = f32[100,200]{1,0} broadcast([[one_3_0]]), dimensions={}
-// CHECK-NEXT:   [[param_2_7_2:%[^ ]+]] = f16[100,200]{1,0} parameter(2)
-// CHECK-NEXT:   [[c_4_3:%[^ ]+]] = f32[100,200]{1,0} convert([[param_2_7_2]])
-// CHECK-NEXT:   [[param_1_10_4:%[^ ]+]] = f32[] parameter(1)
-// CHECK-NEXT:   [[b_4_5:%[^ ]+]] = f32[100,200]{1,0} broadcast([[param_1_10_4]]), dimensions={}
-// CHECK-NEXT:   [[d_3_6:%[^ ]+]] = f32[100,200]{1,0} divide([[c_4_3]], [[b_4_5]])
-// CHECK-NEXT:   [[a_4_7:%[^ ]+]] = f32[100,200]{1,0} add([[one_b_3_1]], [[d_3_6]])
-// CHECK-NEXT:   [[param_0_8_8:%[^ ]+]] = f32[] parameter(0)
-// CHECK-NEXT:   [[output_scale_broadcast_1_9:%[^ ]+]] = f32[100,200]{1,0} broadcast([[param_0_8_8]]), dimensions={}
-// CHECK-NEXT:   [[a_scaled_1_10:%[^ ]+]] = f32[100,200]{1,0} multiply([[a_4_7]], [[output_scale_broadcast_1_9]])
-// CHECK-NEXT:   [[a_scaled_converted_1_11:%[^ ]+]] = f16[100,200]{1,0} convert([[a_scaled_1_10]])
-// CHECK-NEXT:   [[one_5_12:%[^ ]+]].clone.1 = f32[] constant(1)
-// CHECK-NEXT:   [[one_b_5_13:%[^ ]+]].clone.1 = f32[100,200]{1,0} broadcast([[one_5_12]].clone.1), dimensions={}
-// CHECK-NEXT:   [[c_6_14:%[^ ]+]].clone.1 = f32[100,200]{1,0} convert([[param_2_7_2]])
-// CHECK-NEXT:   [[b_6_15:%[^ ]+]].clone.1 = f32[100,200]{1,0} broadcast([[param_1_10_4]]), dimensions={}
-// CHECK-NEXT:   [[d_5_16:%[^ ]+]].clone.1 = f32[100,200]{1,0} divide([[c_6_14]].clone.1, [[b_6_15]].clone.1)
-// CHECK-NEXT:   [[a_6_17:%[^ ]+]].clone.1 = f32[100,200]{1,0} add([[one_b_5_13]].clone.1, [[d_5_16]].clone.1)
-// CHECK-NEXT:   [[bitcast_1_18:%[^ ]+]].clone.1 = f32[20000]{0} bitcast([[a_6_17]].clone.1)
-// CHECK-NEXT:   [[z_1_19:%[^ ]+]].clone.1 = f32[] constant(0)
-// CHECK-NEXT:   [[r_1_20:%[^ ]+]].clone.1 = f32[] reduce([[bitcast_1_18]].clone.1, [[z_1_19]].clone.1), dimensions={0}, to_apply=[[max_21:%[^ ]+]]
-// CHECK-NEXT:   ROOT [[tuple_22:%[^ ]+]] = (f16[100,200]{1,0}, f32[]) tuple([[a_scaled_converted_1_11]], [[r_1_20]].clone.1)
-// CHECK-NEXT: }
-  )");
+  // The reduction is race free, so the reduction emitter fits it into a single
+  // block, while the elementwise fusion alone would get 125. The merged fusion
+  // inherits the single block, and the model puts it well past the margin at
+  // which the veto fires, not near the tie where its estimates carry no signal.
+  // Compare with ReduceAndLoop, where the elementwise side is small enough that
+  // one block is no loss and the fusion still happens.
+  CheckMultiOutputFusion(hlo, std::nullopt);
 }
 
 TEST_F(ReduceMultiOutputFusionTest, SkipsDynamicSliceFusionV2Producer) {

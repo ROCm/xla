@@ -321,6 +321,11 @@ bool IsInputFusibleTranspose(const HloInstruction& instr) {
   return GetDescriptionForTiledTransposeEmitter(instr).has_value();
 }
 
+bool IsConcatenateFusion(const HloInstruction& instr) {
+  return instr.opcode() == HloOpcode::kFusion && !instr.IsCustomFusion() &&
+         instr.fused_expression_root()->opcode() == HloOpcode::kConcatenate;
+}
+
 const HloInstruction* GetRealHeroForMultiOutputFusion(
     const HloInstruction& instr, const se::DeviceDescription& device_info) {
   if (instr.opcode() != HloOpcode::kFusion) {
@@ -880,10 +885,15 @@ bool IsFusibleAsMultiOutputFusionRoot(
   // its emitter doesn't support it.
   //
   // Custom fusions cannot be fused with anything.
+  //
+  // Concatenate fusions are admitted even though the concatenate emitter has
+  // no multi-output support. GetEmitterFusionKind returns kLoop for any fusion
+  // with more than one root before it ever considers the concatenate emitter,
+  // so the merged fusion is emitted by the loop emitter.
 
   return instr.IsFusible() && !instr.IsCustomFusion() &&
          (IsInputFusibleReduction(instr, device_info) ||
-          IsInputFusibleTranspose(instr) ||
+          IsInputFusibleTranspose(instr) || IsConcatenateFusion(instr) ||
           instr.IsLoopFusion() ||  // TODO(b/130013493): Use IsLoopFusible here.
           instr.IsElementwise());
 }

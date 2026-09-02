@@ -592,6 +592,39 @@ CoalescingAnalysis CoalescingAnalysis::Create(
   return CoalescingAnalysis(is_coalesced_computed_by_heuristic);
 }
 
+/*static*/
+CoalescingAnalysis CoalescingAnalysis::CreateForSiblings(
+    const HloInstruction* sibling1, const HloInstruction* sibling2,
+    absl::Span<const HloInstruction* const> operands,
+    const HloFusionAnalysis& fusion_analysis, MLIRContext* mlir_context,
+    bool use_heuristic) {
+  std::optional<CoalescingMap> coalescing_per_operand;
+
+  if (!use_heuristic) {
+    coalescing_per_operand = ComputeCoalescingForAllOperands(
+        fusion_analysis, operands, mlir_context);
+  }
+
+  if (coalescing_per_operand.has_value()) {
+    return CoalescingAnalysis(std::move(*coalescing_per_operand));
+  }
+
+  // Handing both siblings to the heuristic as a producer and a consumer would
+  // trip its rule against fusing a reduction into another reduction. That rule
+  // is about a chained pair. Siblings read their operands independently and the
+  // reduction emitter gives them a common tiling, so each sibling is judged on
+  // its own and the merged fusion is coalesced only if both are.
+  bool is_coalesced_computed_by_heuristic =
+      IsReadCoalescedHeuristic(fusion_analysis.emitter_fusion_kind(),
+                               fusion_analysis.device_info(), sibling1,
+                               /*consumer=*/nullptr) &&
+      IsReadCoalescedHeuristic(fusion_analysis.emitter_fusion_kind(),
+                               fusion_analysis.device_info(), sibling2,
+                               /*consumer=*/nullptr);
+
+  return CoalescingAnalysis(is_coalesced_computed_by_heuristic);
+}
+
 bool CoalescingAnalysis::IsReadCoalesced(const HloInstruction* operand) const {
   auto it = coalescing_per_operand_.find(operand);
   if (it == coalescing_per_operand_.end()) {

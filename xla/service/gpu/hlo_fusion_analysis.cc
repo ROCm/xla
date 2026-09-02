@@ -333,6 +333,19 @@ HloFusionAnalysis HloFusionAnalysis::Create(
       &device_info);
 }
 
+// static
+HloFusionAnalysis HloFusionAnalysis::CreateForSiblings(
+    const HloInstruction& sibling1, const HloInstruction& sibling2,
+    const se::DeviceDescription& device_info) {
+  // Sibling multi-output fusion only ever merges native emitter fusions, whose
+  // backend config kind is empty. Deliberately not inheriting either sibling's
+  // config, because a non empty kind would make GetEmitterFusionKind pick a
+  // Triton or custom emitter for a fusion that no such emitter can handle.
+  return HloFusionAnalysis::Create(
+      FusionBackendConfig::default_instance(),
+      HloFusionAdaptor::ForSiblings(&sibling1, &sibling2), &device_info);
+}
+
 const Shape& HloFusionAnalysis::first_result_shape() const {
   const Shape* shape = &fusion_root(0).shape();
   while (shape->IsTuple()) {

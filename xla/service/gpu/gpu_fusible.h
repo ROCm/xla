@@ -134,6 +134,12 @@ bool IsNestableVariadicReduceWindow(const HloInstruction& instr);
 // is either an unfused scatter op or a scatter input fusion.
 bool IsInputFusibleScatter(const HloInstruction& instr);
 
+// Whether `instr` is a fusion rooted at a concatenate. Such a fusion is
+// emitted by the concatenate emitter and carries the kInput tag rather than
+// the kLoop one, even though the loop emitter takes over as soon as the fusion
+// gains a second root.
+bool IsConcatenateFusion(const HloInstruction& instr);
+
 // Determines whether the combination of `instr1` and `instr2` into a (possibly
 // multi-output) fusion fits within the maximum number of parameters that can be
 // passed to a kernel. If the fusion is a producer/consumer fusion and `instr1`

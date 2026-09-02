@@ -76,6 +76,13 @@ class HloFusionAnalysis {
                                   const HloInstruction& consumer,
                                   const se::DeviceDescription& device_info);
 
+  // Creates a HloFusionAnalysis that analyzes a hypothetical multi-output
+  // fusion of two siblings, i.e. two instructions that share operands but do
+  // not consume each other.
+  static HloFusionAnalysis CreateForSiblings(
+      const HloInstruction& sibling1, const HloInstruction& sibling2,
+      const se::DeviceDescription& device_info);
+
   const HloFusionAdaptor& fusion() const { return fusion_spec_.fusion(); }
   const HloFusionSpec& fusion_spec() const { return fusion_spec_; }
 
