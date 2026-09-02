@@ -510,6 +510,43 @@ ConstraintExpression ConstructConstraintExpressionForDestructuredSummation(
   return result;
 }
 
+// If all summands have constant strides, and if they do and the constant is the
+// same (and nonzero) combine size and stride as: size  = (size_0 + size_1 + ...
+// + size_{n-1}) - (n-1); stride = the common stride
+std::optional<SizeAndStrideExpression> TryCombineSummandsWithCommonStride(
+    absl::Span<SizeAndStrideExpression const> sizes_and_strides,
+    ConstraintExpression constraints) {
+  if (sizes_and_strides.size() < 2) {
+    return std::nullopt;
+  }
+
+  if (sizes_and_strides.front().stride.GetType() !=
+      SymbolicExprType::kConstant) {
+    return std::nullopt;
+  }
+  int64_t common_stride = sizes_and_strides.front().stride.GetValue();
+  if (common_stride == 0) {
+    return std::nullopt;
+  }
+
+  SymbolicExpr sum_of_sizes = sizes_and_strides.front().size;
+  for (const SizeAndStrideExpression& size_and_stride :
+       sizes_and_strides.subspan(1)) {
+    if (size_and_stride.stride.GetType() != SymbolicExprType::kConstant ||
+        size_and_stride.stride.GetValue() != common_stride) {
+      return std::nullopt;
+    }
+    sum_of_sizes = sum_of_sizes + size_and_stride.size;
+  }
+
+  SymbolicExpr combined_size =
+      sum_of_sizes - static_cast<int64_t>(sizes_and_strides.size() - 1);
+  MLIRContext* ctx = sizes_and_strides.front().stride.GetContext();
+  return SizeAndStrideExpression(combined_size,
+                                 CreateSymbolicConstant(common_stride, ctx),
+                                 std::move(constraints));
+}
+
 // See documentation of `CombineSizes` and `CombineStrides` for an explanation
 // of how sizes and strides are combined.
 std::optional<SizeAndStrideExpression> CombineSizesAndStrides(
@@ -534,7 +571,8 @@ std::optional<SizeAndStrideExpression> CombineSizesAndStrides(
   std::optional<SymbolicExpr> stride =
       CombineStrides(sizes_and_strides, dimension_intervals);
   if (!stride.has_value()) {
-    return std::nullopt;
+    return TryCombineSummandsWithCommonStride(sizes_and_strides,
+                                              std::move(constraints));
   }
 
   // Derive necessary constraints for the summation expression. These

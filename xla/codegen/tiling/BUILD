@@ -359,6 +359,7 @@ cc_library(
         "//xla:shape_util",
         "//xla:status_macros",
         "//xla:util",
+        "//xla:window_util",
         "//xla/codegen/tiling/experimental:tiling_space_utils",
         "//xla/hlo/analysis:indexing_analysis",
         "//xla/hlo/analysis:interval",

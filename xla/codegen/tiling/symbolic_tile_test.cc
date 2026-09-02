@@ -905,5 +905,20 @@ TEST_F(SymbolicTileTest, PointDimensionsAreNotSimplified) {
       )")));
 }
 
+TEST_F(SymbolicTileTest, CanDeriveTileWhenSummandsShareASingleStride) {
+  IndexingMap indexing_map = IndexingMap::FromTensorSizes(
+      ParseSymbolicMap("(d0, d1) -> (d0 + d1)", &mlir_context_),
+      /*dim_upper_bounds=*/{6, 3},
+      /*symbol_upper_bounds=*/{});
+
+  EXPECT_THAT(SymbolicTile::FromIndexingMap(indexing_map),
+              Optional(MatchSymbolicTileString(R"(
+      Symbolic tile with
+        offset_map: (d0, d1) -> (0)
+        size_map: (d0, d1) -> (d0 + d1 - 1)
+        stride_map: (d0, d1) -> (1)
+      )")));
+}
+
 }  // namespace
 }  // namespace xla

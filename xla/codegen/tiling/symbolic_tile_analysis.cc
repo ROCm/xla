@@ -81,6 +81,7 @@ limitations under the License.
 #include "xla/tsl/platform/logging.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
+#include "xla/window_util.h"
 
 namespace xla {
 
@@ -138,6 +139,17 @@ struct OutputTilingInfo {
 bool IsSomeDot(const HloInstruction& hlo) {
   return hlo.opcode() == HloOpcode::kDot ||
          hlo.opcode() == HloOpcode::kScaledDot;
+}
+
+bool IsTileableConvolution(const HloInstruction& hlo) {
+  if (hlo.opcode() != HloOpcode::kConvolution) {
+    return false;
+  }
+  const Window& window = hlo.window();
+  return !window_util::HasPadding(window) && !window_util::HasStride(window) &&
+         !window_util::HasDilation(window) &&
+         !window_util::HasWindowReversal(window) &&
+         hlo.feature_group_count() == 1 && hlo.batch_group_count() == 1;
 }
 
 llvm::SmallVector<int64_t> GetNumberOfTilesPerDimension(
@@ -414,7 +426,9 @@ bool IsControlFlowCondition(const HloInstruction& hlo) {
 }
 
 // Returns whether the instruction is a loop block for tiling.
-bool IsControlFlowLoop(const HloInstruction& hlo) { return IsSomeDot(hlo); }
+bool IsControlFlowLoop(const HloInstruction& hlo) {
+  return IsSomeDot(hlo) || IsTileableConvolution(hlo);
+}
 
 // Detects pathological cases on which symbolic tile derivation should bail out.
 // Note that this function bypasses temporary limitations of the infrastructure,
@@ -642,6 +656,31 @@ bool ShouldDerivationSimplifyPointDimensions(const HloFusionAdaptor& fusion) {
   return true;
 }
 
+std::vector<int64_t> HiddenParameterExtents(const HloInstruction& hlo) {
+  std::vector<int64_t> extents;
+  if (IsSomeDot(hlo)) {
+    absl::Span<const int64_t> contracting_dimensions =
+        hlo.dot_dimension_numbers().lhs_contracting_dimensions();
+    extents.reserve(contracting_dimensions.size());
+    for (int64_t contracting_dimension : contracting_dimensions) {
+      extents.push_back(
+          hlo.operand(0)->shape().dimensions(contracting_dimension));
+    }
+    return extents;
+  }
+
+  if (IsTileableConvolution(hlo)) {
+    const Window& window = hlo.window();
+    extents.reserve(window.dimensions().size() + 1);
+    for (const WindowDimension& window_dimension : window.dimensions()) {
+      extents.push_back(window_dimension.size());
+    }
+    extents.push_back(hlo.operand(1)->shape().dimensions(
+        hlo.convolution_dimension_numbers().kernel_input_feature_dimension()));
+  }
+  return extents;
+}
+
 absl::Status PopulateNestedParameters(
     const HloFusionAdaptor& fusion,
     TilingSpecification::ParameterMapping& parameter_mapping) {
@@ -651,11 +690,9 @@ absl::Status PopulateNestedParameters(
     if (!fusion.ContainsInstruction(instruction_adaptor)) {
       continue;
     }
-    if (IsSomeDot(instruction_adaptor.instruction())) {
+    if (IsControlFlowLoop(instruction_adaptor.instruction())) {
       const HloInstruction& instruction = instruction_adaptor.instruction();
-      int64_t num_parameters = instruction.dot_dimension_numbers()
-                                   .lhs_contracting_dimensions()
-                                   .size();
+      int64_t num_parameters = HiddenParameterExtents(instruction).size();
       // This should never happen if our outer logic is correct, but we check
       // it just in case.
       if (!instruction.shape().IsArray()) {
@@ -796,21 +833,19 @@ std::vector<int64_t> InputSpaceForParameterMapping(
 
   for (const auto& [hlo, num_parameters] : parameter_mapping) {
     // TODO(b/419026602): handle reductions.
-    if (IsSomeDot(*hlo)) {
-      auto contracting_dimensions =
-          hlo->dot_dimension_numbers().lhs_contracting_dimensions();
-      // First, we need to add the contracting dimensions of the `dot`
-      // instruction to the input space.
-      for (int64_t contracting_dimension : contracting_dimensions) {
-        input_space.push_back(
-            hlo->operand(0)->shape().dimensions(contracting_dimension));
-      }
-      int64_t num_contracting_dimensions = contracting_dimensions.size();
-      // Optionally, we also add the output dimensions of the `dot` instruction,
-      // if they are actual parameters.
-      if (num_parameters != num_contracting_dimensions) {
+    if (IsControlFlowLoop(*hlo)) {
+      // First, we need to add the instruction's hidden (contracting) parameters
+      // to the input space.
+      std::vector<int64_t> hidden_parameter_extents =
+          HiddenParameterExtents(*hlo);
+      absl::c_copy(hidden_parameter_extents, std::back_inserter(input_space));
+
+      // Optionally, we also add the output dimensions of the instruction, if
+      // they are actual parameters.
+      int64_t num_hidden_parameters = hidden_parameter_extents.size();
+      if (num_parameters != num_hidden_parameters) {
         CHECK_EQ(num_parameters,
-                 num_contracting_dimensions + hlo->shape().dimensions().size());
+                 num_hidden_parameters + hlo->shape().dimensions().size());
         for (int64_t output_dimension : hlo->shape().dimensions()) {
           input_space.push_back(output_dimension);
         }
@@ -1009,6 +1044,60 @@ IndexingMap InsertTilingParameterForContractingDimensions(
       SymbolicExpr new_result =
           CreateDimExpr(parameter_index_by_symbol_position.at(symbol_id), ctx);
       results.push_back(new_result);
+    }
+
+    SymbolicMap first_symbolic_map =
+        SymbolicMap::Get(ctx, num_inputs, /*num_symbols=*/0, results);
+
+    IndexingMap first_indexing_map =
+        IndexingMap::FromTensorSizes(first_symbolic_map, tileable_sizes, {});
+
+    return ComposeIndexingMaps(first_indexing_map, map_without_range_variables);
+  }
+
+  if (IsTileableConvolution(consumer)) {
+    int64_t num_range_vars =
+        outermost_fusion_root_to_operand.GetRangeVarsCount();
+    std::vector<int64_t> hidden_parameter_extents =
+        HiddenParameterExtents(consumer);
+    std::vector<int64_t> parameter_index_by_symbol_position;
+    parameter_index_by_symbol_position.reserve(num_range_vars);
+    for (const auto& [parameter_index, extent] :
+         llvm::enumerate(hidden_parameter_extents)) {
+      if (extent > 1) {
+        parameter_index_by_symbol_position.push_back(parameter_index);
+      }
+    }
+
+    CHECK_EQ(parameter_index_by_symbol_position.size(),
+             num_range_vars);  // Crash OK
+
+    std::vector<int64_t> symbols_to_remove(num_range_vars);
+    absl::c_iota(symbols_to_remove, 0);
+
+    IndexingMap map_without_range_variables = ConvertRangeVariablesToDimensions(
+        outermost_fusion_root_to_operand, symbols_to_remove);
+
+    MLIRContext* ctx = outermost_fusion_root_to_operand.GetMLIRContext();
+    int64_t num_inputs = outermost_fusion_root_to_operand.GetDimVarsCount();
+    int64_t num_outputs = map_without_range_variables.GetDimVarsCount();
+    std::vector<int64_t> tileable_sizes;
+    llvm::SmallVector<SymbolicExpr> results;
+    tileable_sizes.reserve(num_inputs);
+    results.reserve(num_outputs);
+
+    for (const auto& [i, dim_var] :
+         llvm::enumerate(outermost_fusion_root_to_operand.GetDimVars())) {
+      const Interval& bounds = dim_var.bounds;
+      tileable_sizes.push_back(bounds.upper + 1);
+      results.push_back(CreateDimExpr(i, ctx));
+    }
+
+    for (const int64_t parameter_index : parameter_index_by_symbol_position) {
+      absl::StatusOr<int64_t> dim_index = TilingSpecification::ParameterIndex(
+          parameter_mapping, &consumer, parameter_index);
+      CHECK_OK(dim_index);  // Crash OK
+      results.push_back(CreateDimExpr(*dim_index, ctx));
     }
 
     SymbolicMap first_symbolic_map =
