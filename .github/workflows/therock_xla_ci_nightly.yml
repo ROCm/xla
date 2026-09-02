@@ -1,0 +1,250 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+
+name: CI theRock Nightly
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      rocm_xla_branch:
+        description: 'ROCm/xla branch to use'
+        required: false
+        type: string
+        default: 'rocm-dev-infra'
+      gpu_target:
+        description: 'GPU target for pip index (device-all = multi-arch whl-multi-arch)'
+        type: choice
+        options:
+          - 'device-all'
+          - 'gfx950-dcgpu'
+          - 'gfx94X-dcgpu'
+        default: 'device-all'
+      rocm_pip_source:
+        description: 'ROCm pip source'
+        type: choice
+        options:
+          - 'nightlies'
+          - 'devreleases'
+          - 'prereleases'
+          - 'release'
+        default: 'nightlies'
+      rocm_sdk_version:
+        description: 'ROCm SDK / THEROCK version (empty = latest)'
+        type: string
+        required: false
+        default: '10.1'
+      pip_index_path:
+        description: 'Override pip index path (e.g. whl, whl-staging, v2, v2-staging)'
+        type: string
+        default: ''
+      therock_index_url:
+        description: 'Fully override THEROCK_INDEX_URL (empty = derive from channel + gpu_target)'
+        type: string
+        default: ''
+      runner_label:
+        description: 'On which runner to run'
+        type: string
+        default: "linux-xla-do-mi350x-1"
+  schedule:
+    # Run every 24 hours at 5:00 AM UTC
+    - cron: '00 5 * * *'
+  pull_request_target:
+    types: [labeled]
+  pull_request:
+    branches:
+      - rocm-dev-infra
+    paths:
+      - '.github/workflows/therock_xla_ci_nightly.yml'
+      - '.github/workflows/therock_xla_ci_sanitizers.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  xla:
+    if: github.event_name != 'pull_request_target' || github.event.label.name == 'therock-ci'
+    name: XLA Linux theRock nightly CI
+    runs-on: ${{ inputs.runner_label || 'linux-xla-do-mi350x-1' }}
+    timeout-minutes: 220
+    env:
+      DOCKER_IMAGE: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
+      EXECUTE_DETECT_THEROCK_VERSION_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/detect-therock-version.sh
+      EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/execute_ci_build_upstream.sh
+      ROCM_CONFIGURE_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/rocm_configure.bzl
+
+    container:
+      image: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
+      volumes: &rocm_container_volumes
+        - /data/ci-cert.crt:/data/ci-cert.crt
+        - /data/ci-cert.key:/data/ci-cert.key
+        - /data:/data
+      options: &rocm_container_options >-
+        --device=/dev/dri
+        --device=/dev/kfd
+        --ipc=host
+        --shm-size=64G
+        --cap-add=SYS_PTRACE
+        --security-opt=seccomp=unconfined
+        --tmpfs /root/.cache/bazel:rw,exec,size=80g
+        --group-add video
+        --env-file /etc/podinfo/gha-gpu-isolation-settings
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checking out openxla/xla
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openxla/xla
+          persist-credentials: false
+
+      - name: Fetch theRock version detection from ROCm/xla
+        run: |
+          wget -O build_tools/rocm/detect-therock-version.sh "${EXECUTE_DETECT_THEROCK_VERSION_URL}"
+          chmod +x build_tools/rocm/detect-therock-version.sh
+
+      - name: Resolve TheRock index URL and version
+        id: therock
+        env:
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
+          GPU_TARGET: ${{ inputs.gpu_target || 'device-all' }}
+          ROCM_SDK_VERSION: ${{ inputs.rocm_sdk_version || '10.1' }}
+          PIP_INDEX_PATH: ${{ inputs.pip_index_path || '' }}
+          THEROCK_INDEX_URL: ${{ inputs.therock_index_url || '' }}
+        run: bash build_tools/rocm/detect-therock-version.sh
+
+      - name: Fetch ROCm XLA Upstream Script from ROCm/xla
+        run: |
+          wget -O build_tools/rocm/execute_ci_build_upstream.sh "${EXECUTE_CI_BUILD_URL}"
+          chmod +x build_tools/rocm/execute_ci_build_upstream.sh
+
+      - name: Fetch ROCm configure bzl from ROCm/xla
+        run: |
+          wget -O third_party/gpus/rocm_configure.bzl "${ROCM_CONFIGURE_URL}"
+
+      - name: CPU Info
+        run: lscpu
+
+      - name: Test XLA [single_gpu]
+        env:
+          THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
+        timeout-minutes: 120
+        run: |
+          build_tools/rocm/execute_ci_build_upstream.sh \
+            --config=rocm_ci_hermetic \
+            --config=rocm_rbe \
+            --config=ci_single_gpu \
+            --local_test_jobs=1 \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
+            --repo_env=ROCM_DISTRO_URL="https://rocm.${ROCM_PIP_SOURCE}.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${THEROCK_VERSION}.tar.gz" \
+            --repo_env=ROCM_DISTRO_HASH='' \
+            --internal_spawn_scheduler \
+            --strategy=TestRunner=remote \
+            --bes_keywords=xla \
+            --bes_keywords=upstream \
+            --bes_keywords=gpu \
+            --bes_keywords=pull_request
+      - name: Test XLA [rocm_cpu]
+        env:
+          THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
+        timeout-minutes: 80
+        run: |
+          build_tools/rocm/execute_ci_build_upstream.sh \
+            --config=rocm_ci_hermetic \
+            --config=rocm_rbe \
+            --config=ci_rocm_cpu \
+            --local_test_jobs=200 \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
+            --repo_env=ROCM_PATH="" \
+            --repo_env=ROCM_DISTRO_URL="https://rocm.${ROCM_PIP_SOURCE}.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${THEROCK_VERSION}.tar.gz" \
+            --repo_env=ROCM_DISTRO_HASH='' \
+            --bes_keywords=xla \
+            --bes_keywords=upstream \
+            --bes_keywords=cpu \
+            --bes_keywords=pull_request
+      - name: Test XLA [multi_gpu]
+        env:
+          THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
+        timeout-minutes: 90
+        run: |
+          build_tools/rocm/execute_ci_build_upstream.sh \
+            --config=rocm_ci_hermetic \
+            --config=rocm_rbe \
+            --config=ci_multi_gpu \
+            --test_strategy=exclusive \
+            --spawn_strategy=local \
+            --strategy=TestRunner=local \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
+            --repo_env=ROCM_PATH="" \
+            --repo_env=ROCM_DISTRO_URL="https://rocm.${ROCM_PIP_SOURCE}.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${THEROCK_VERSION}.tar.gz" \
+            --repo_env=ROCM_DISTRO_HASH='' \
+            --bes_keywords=xla \
+            --bes_keywords=multi_gpu \
+            --bes_keywords=upstream \
+            --bes_keywords=pull_request
+
+      - name: Checkout JAX
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jax-ml/jax
+          path: jax
+          persist-credentials: false
+
+      - name: Run JAX Unit Tests
+        env:
+          THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
+          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
+        timeout-minutes: 90
+        working-directory: jax
+        run: |
+          ./ci/run_bazel_test_rocm_rbe.sh \
+            --override_repository=xla="${GITHUB_WORKSPACE}" \
+            --override_module=xla="${GITHUB_WORKSPACE}" \
+            --config=single_gpu \
+            --//jax:build_jaxlib=wheel \
+            --//jax:build_jax=true \
+            --local_test_jobs=1 \
+            --action_env=JAX_ENABLE_X64=0 \
+            --strategy=TestRunner=remote \
+            --repo_env=HERMETIC_PYTHON_VERSION=3.14 \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
+            --repo_env=ROCM_PATH="" \
+            --repo_env=ROCM_DISTRO_URL="https://rocm.${ROCM_PIP_SOURCE}.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${THEROCK_VERSION}.tar.gz" \
+            --repo_env=ROCM_DISTRO_HASH='' \
+            --jobs=20 \
+            --bes_keywords=xla \
+            --bes_keywords=jax \
+            --bes_keywords=upstream \
+            --bes_keywords=gpu \
+            --bes_keywords=pull_request
+
+  # Call sanitizers workflow as a separate job
+  sanitizers:
+    if: github.event_name != 'pull_request_target' || github.event.label.name == 'therock-ci'
+    uses: ./.github/workflows/therock_xla_ci_sanitizers.yml
+    with:
+      repository: openxla/xla
+      ref: main
+      run_sanitizers: true
+    secrets:
+      RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
+      RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}
