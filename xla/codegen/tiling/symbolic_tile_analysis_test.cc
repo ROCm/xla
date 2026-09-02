@@ -2899,5 +2899,134 @@ ENTRY main {
 )");
 }
 
+TEST_F(SymbolicTileAnalysisTest, SimpleConvolutionWithRegions) {
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                          ParseAndReturnVerifiedModule(R"(
+conv {
+  conv.p0 = f32[1,8,1]{2,1,0} parameter(0)
+  conv.p1 = f32[1,3,1]{2,1,0} parameter(1)
+  ROOT conv = f32[1,6,1]{2,1,0} convolution(conv.p0, conv.p1),
+    window={size=3}, dim_labels=b0f_i0o->b0f
+}
+
+ENTRY main {
+  main.p0 = f32[1,8,1]{2,1,0} parameter(0)
+  main.p1 = f32[1,3,1]{2,1,0} parameter(1)
+  ROOT fusion = f32[1,6,1]{2,1,0} fusion(main.p0, main.p1),
+    kind=kCustom, calls=conv
+})"));
+  std::optional<SymbolicTileAnalysis> analysis = TryAnalyzeModule(module.get());
+  ASSERT_TRUE(analysis.has_value());
+  const SymbolicTiledHloInstruction* symbolic_conv =
+      FindFirstInstruction(*analysis, HloOpcode::kConvolution);
+  ASSERT_NE(symbolic_conv, nullptr);
+
+  // (window, c_in, batch, out_spatial, c_out) -> (b, out_spatial, c_out)
+  EXPECT_THAT(symbolic_conv->indexing_map(), MatchIndexingMap(R"(
+    (d0, d1, d2, d3, d4) -> (d2, d3, d4),
+    domain:
+    d0 in [0, 2],
+    d1 in [0, 0],
+    d2 in [0, 0],
+    d3 in [0, 5],
+    d4 in [0, 0]
+  )"));
+
+  ASSERT_THAT(symbolic_conv->operands(), SizeIs(2));
+  const SymbolicTiledHloInstruction* input = symbolic_conv->operands()[0];
+  EXPECT_EQ(input->hlo()->opcode(), HloOpcode::kParameter);
+
+  EXPECT_THAT(input->indexing_map(), MatchIndexingMap(R"(
+    (d0, d1, d2, d3, d4) -> (0, d3 + d0, 0),
+    domain:
+    d0 in [0, 2],
+    d1 in [0, 0],
+    d2 in [0, 0],
+    d3 in [0, 5],
+    d4 in [0, 0]
+  )"));
+  EXPECT_THAT(input->operands(), IsEmpty());
+
+  const SymbolicTiledHloInstruction* kernel = symbolic_conv->operands()[1];
+  EXPECT_EQ(kernel->hlo()->opcode(), HloOpcode::kParameter);
+
+  EXPECT_THAT(kernel->indexing_map(), MatchIndexingMap(R"(
+    (d0, d1, d2, d3, d4) -> (0, d0, 0),
+    domain:
+    d0 in [0, 2],
+    d1 in [0, 0],
+    d2 in [0, 0],
+    d3 in [0, 5],
+    d4 in [0, 0]
+  )"));
+  EXPECT_THAT(kernel->operands(), IsEmpty());
+}
+
+TEST_F(SymbolicTileAnalysisTest, ConvolutionWithPointWindowDimension) {
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                          ParseAndReturnVerifiedModule(R"(
+conv {
+  conv.p0 = f32[1,8,8,4]{3,2,1,0} parameter(0)
+  conv.p1 = f32[4,1,1,2]{3,2,1,0} parameter(1)
+  ROOT conv = f32[1,8,8,2]{3,2,1,0} convolution(conv.p0, conv.p1),
+    window={size=1x1}, dim_labels=b01f_i01o->b01f
+}
+
+ENTRY main {
+  main.p0 = f32[1,8,8,4]{3,2,1,0} parameter(0)
+  main.p1 = f32[4,1,1,2]{3,2,1,0} parameter(1)
+  ROOT fusion = f32[1,8,8,2]{3,2,1,0} fusion(main.p0, main.p1),
+    kind=kCustom, calls=conv
+})"));
+  std::optional<SymbolicTileAnalysis> analysis = TryAnalyzeModule(module.get());
+  ASSERT_TRUE(analysis.has_value());
+  const SymbolicTiledHloInstruction* symbolic_conv =
+      FindFirstInstruction(*analysis, HloOpcode::kConvolution);
+  ASSERT_NE(symbolic_conv, nullptr);
+
+  EXPECT_THAT(symbolic_conv->indexing_map(), MatchIndexingMap(R"(
+    (d0, d1, d2, d3, d4, d5, d6) -> (d3, d4, d5, d6),
+    domain:
+    d0 in [0, 0],
+    d1 in [0, 0],
+    d2 in [0, 3],
+    d3 in [0, 0],
+    d4 in [0, 7],
+    d5 in [0, 7],
+    d6 in [0, 1]
+  )"));
+
+  ASSERT_THAT(symbolic_conv->operands(), SizeIs(2));
+  const SymbolicTiledHloInstruction* input = symbolic_conv->operands()[0];
+  EXPECT_EQ(input->hlo()->opcode(), HloOpcode::kParameter);
+  EXPECT_THAT(input->indexing_map(), MatchIndexingMap(R"(
+    (d0, d1, d2, d3, d4, d5, d6) -> (0, d4, d5, d2),
+    domain:
+    d0 in [0, 0],
+    d1 in [0, 0],
+    d2 in [0, 3],
+    d3 in [0, 0],
+    d4 in [0, 7],
+    d5 in [0, 7],
+    d6 in [0, 1]
+  )"));
+  EXPECT_THAT(input->operands(), IsEmpty());
+
+  const SymbolicTiledHloInstruction* kernel = symbolic_conv->operands()[1];
+  EXPECT_EQ(kernel->hlo()->opcode(), HloOpcode::kParameter);
+  EXPECT_THAT(kernel->indexing_map(), MatchIndexingMap(R"(
+    (d0, d1, d2, d3, d4, d5, d6) -> (d2, 0, 0, d6),
+    domain:
+    d0 in [0, 0],
+    d1 in [0, 0],
+    d2 in [0, 3],
+    d3 in [0, 0],
+    d4 in [0, 7],
+    d5 in [0, 7],
+    d6 in [0, 1]
+  )"));
+  EXPECT_THAT(kernel->operands(), IsEmpty());
+}
+
 }  // namespace
 }  // namespace xla
