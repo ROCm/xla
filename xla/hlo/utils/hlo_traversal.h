@@ -103,6 +103,11 @@ class HloFusionAdaptor {
   static std::unique_ptr<HloFusionAdaptor> ForProducerConsumer(
       const HloInstruction* producer, const HloInstruction* consumer,
       bool with_extra_outputs = false);
+  // Treats two instructions that do not consume each other as if they were
+  // merged into a single multi-output fusion. Both operands keep their roots
+  // and their parameters are deduplicated.
+  static std::unique_ptr<HloFusionAdaptor> ForSiblings(
+      const HloInstruction* sibling1, const HloInstruction* sibling2);
   static std::unique_ptr<HloFusionAdaptor> ForComputation(
       const HloComputation* computation);
 
@@ -120,6 +125,9 @@ class HloFusionAdaptor {
   // Whether extra fusion roots should be created for producer consumer fusions
   // where producer roots have extra usages outside the fusion.
   bool with_extra_outputs_ = false;
+  // Whether the two adapted instructions are siblings rather than a producer
+  // and its consumer. Siblings contribute all of their roots and parameters.
+  bool siblings_ = false;
 };
 
 enum class TraversalResult {

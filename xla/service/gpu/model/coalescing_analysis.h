@@ -51,6 +51,14 @@ class CoalescingAnalysis {
       const HloFusionAnalysis& fusion_analysis,
       mlir::MLIRContext* mlir_context = nullptr, bool use_heuristic = true);
 
+  // Computes read coalescing for operands of two siblings merged into a
+  // multi-output fusion.
+  static CoalescingAnalysis CreateForSiblings(
+      const HloInstruction* sibling1, const HloInstruction* sibling2,
+      absl::Span<const HloInstruction* const> operands,
+      const HloFusionAnalysis& fusion_analysis,
+      mlir::MLIRContext* mlir_context = nullptr, bool use_heuristic = true);
+
   // Returns true if the operand is read coalesced.
   bool IsReadCoalesced(const HloInstruction* operand) const;
 

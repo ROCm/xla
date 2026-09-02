@@ -74,6 +74,33 @@ const HloFusionAnalysis& HloFusionAnalysisCache::Get(
       .first->second;
 }
 
+const HloFusionAnalysis& HloFusionAnalysisCache::GetForSiblings(
+    const HloInstruction& sibling1, const HloInstruction& sibling2) {
+  std::pair<int64_t, int64_t> key{sibling1.unique_id(), sibling2.unique_id()};
+  {
+    absl::MutexLock lock(mutex_);
+    auto it = sibling_analyses_.find(key);
+    if (it != sibling_analyses_.end()) {
+      return it->second;
+    }
+  }
+
+  HloFusionAnalysis analysis =
+      HloFusionAnalysis::CreateForSiblings(sibling1, sibling2, device_info_);
+  absl::MutexLock lock(mutex_);
+
+  // If some other thread created an entry for this key concurrently, return
+  // that instead (the other thread is likely using the instance).
+  auto it = sibling_analyses_.find(key);
+  if (it != sibling_analyses_.end()) {
+    return it->second;
+  }
+
+  siblings_for_instruction_[key.first].push_back(key.second);
+  siblings_for_instruction_[key.second].push_back(key.first);
+  return sibling_analyses_.emplace(key, std::move(analysis)).first->second;
+}
+
 void HloFusionAnalysisCache::Invalidate(const HloInstruction& instruction) {
   Invalidate(instruction.unique_id());
 }
@@ -91,6 +118,12 @@ void HloFusionAnalysisCache::Invalidate(const int64_t instruction_id) {
       producer_consumer_analyses_.erase({producer, instruction_id});
     }
   }
+  if (auto siblings = siblings_for_instruction_.extract(instruction_id)) {
+    for (const auto sibling : siblings.mapped()) {
+      sibling_analyses_.erase({instruction_id, sibling});
+      sibling_analyses_.erase({sibling, instruction_id});
+    }
+  }
 }
 
 void HloFusionAnalysisCache::Clear() {
@@ -98,6 +131,8 @@ void HloFusionAnalysisCache::Clear() {
   producer_consumer_analyses_.clear();
   consumers_for_producers_.clear();
   producers_for_consumers_.clear();
+  sibling_analyses_.clear();
+  siblings_for_instruction_.clear();
 }
 
 }  // namespace xla::gpu

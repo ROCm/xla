@@ -311,6 +311,16 @@ std::unique_ptr<HloFusionAdaptor> HloFusionAdaptor::ForProducerConsumer(
 }
 
 /*static*/
+std::unique_ptr<HloFusionAdaptor> HloFusionAdaptor::ForSiblings(
+    const HloInstruction* sibling1, const HloInstruction* sibling2) {
+  auto fusion_adaptor = absl::WrapUnique(new HloFusionAdaptor);
+  fusion_adaptor->siblings_ = true;
+  fusion_adaptor->AddInstruction(sibling1);
+  fusion_adaptor->AddInstruction(sibling2);
+  return fusion_adaptor;
+}
+
+/*static*/
 std::unique_ptr<HloFusionAdaptor> HloFusionAdaptor::ForComputation(
     const HloComputation* computation) {
   auto fusion_adaptor = absl::WrapUnique(new HloFusionAdaptor);
@@ -337,6 +347,13 @@ absl::InlinedVector<HloInstructionAdaptor, 2> HloFusionAdaptor::GetRoots()
     return roots;
   }
   CHECK_EQ(fusion_instructions_.size(), 2);
+  if (siblings_) {
+    // Neither sibling consumes the other, so the merged fusion emits both sets
+    // of roots.
+    auto sibling_roots = fusion_instructions_[0]->GetRoots();
+    sibling_roots.insert(sibling_roots.end(), roots.begin(), roots.end());
+    return sibling_roots;
+  }
   auto producer_roots = fusion_instructions_[0]->GetRoots();
   const HloInstruction& producer_fusion =
       fusion_instructions_[0]->FusionInstruction();
@@ -406,6 +423,20 @@ absl::InlinedVector<const HloInstruction*, 2> HloFusionAdaptor::GetParameters()
     return fusion_instructions_.back()->GetParameters();
   }
   CHECK_EQ(fusion_instructions_.size(), 2);
+  if (siblings_) {
+    // The merged fusion reads the union of both operand lists. Shared operands
+    // are read once.
+    absl::InlinedVector<const HloInstruction*, 2> combined_parameters;
+    absl::flat_hash_set<const HloInstruction*> seen;
+    for (const auto& fusion_instruction : fusion_instructions_) {
+      for (const auto& param : fusion_instruction->GetParameters()) {
+        if (seen.insert(param).second) {
+          combined_parameters.push_back(param);
+        }
+      }
+    }
+    return combined_parameters;
+  }
   absl::InlinedVector<const HloInstruction*, 2> combined_parameters;
   const HloInstruction& producer_fusion =
       fusion_instructions_[0]->FusionInstruction();
