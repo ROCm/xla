@@ -133,10 +133,6 @@ jobs:
         run: |
           wget -O third_party/gpus/rocm_configure.bzl "${ROCM_CONFIGURE_URL}"
 
-      - name: Temp get tensorflow.bazelrc to make lit tests pass from Dragan's branch
-        run: |
-          wget -O tensorflow.bazelrc https://raw.githubusercontent.com/ROCm/xla/refs/heads/draganm/ci_rocm_714/tensorflow.bazelrc
-
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         env:
           DOCKER_IMAGE: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"

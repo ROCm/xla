@@ -138,10 +138,6 @@ jobs:
         run: |
           wget -O third_party/gpus/rocm_configure.bzl "${ROCM_CONFIGURE_URL}"
 
-      - name: Temp get tensorflow.bazelrc to make lit tests pass from Dragan's branch
-        run: |
-          wget -O tensorflow.bazelrc https://raw.githubusercontent.com/ROCm/xla/refs/heads/draganm/ci_rocm_714/tensorflow.bazelrc
-
       - name: CPU Info
         run: lscpu
 
