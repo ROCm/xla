@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and evaluate HLOs for the XLA targets in xla_targets.json."""
+"""Build and evaluate HLOs for automatic or explicitly configured XLA targets."""
 
 from __future__ import annotations
 
@@ -44,6 +44,11 @@ BAZEL_ROCM_REPO_ENV_KEYS = (
 )
 BAZEL_ROCM_ROOT = Path("external/local_config_rocm/rocm/rocm_dist")
 FULL_SHA = re.compile(r"[0-9a-fA-F]{40}")
+STABLE_RELEASE_BRANCH_RE = re.compile(
+    r"rocm-jaxlib-v(\d+)\.(\d+)\.(\d+)"
+)
+MINIMUM_AUTOMATIC_RELEASE = (0, 10, 2)
+AUTOMATIC_RELEASE_COUNT = 3
 ACTIVE_PROCESS: subprocess.Popen[str] | None = None
 
 
@@ -59,6 +64,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--hlo-path", type=Path)
     parser.add_argument("--num-repeats", type=int, default=2)
+    parser.add_argument(
+        "--targets-file",
+        type=Path,
+        help=(
+            "manual complete target list; omit to use the pinned control, "
+            "latest three stable releases, and upstream/main"
+        ),
+    )
     parser.add_argument(
         "--bazel-output-user-root",
         type=Path,
@@ -443,22 +456,24 @@ def handle_campaign_signal(signum: int, _frame: object) -> None:
     raise CampaignInterrupted(signum)
 
 
-def load_campaign_targets() -> list[dict[str, Any]]:
+def load_campaign_targets(
+    path: Path = TARGET_CONFIG,
+) -> list[dict[str, Any]]:
     """Load and validate the configured control and candidate targets."""
-    value = json.loads(TARGET_CONFIG.read_text(encoding="utf-8"))
+    value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or set(value) != {
         "schema_version",
         "targets",
     }:
         raise ValueError(
-            "xla_targets.json must contain exactly schema_version and targets"
+            f"{path.name} must contain exactly schema_version and targets"
         )
     if type(value["schema_version"]) is not int or value["schema_version"] != 1:
         raise ValueError(
             f"unsupported target schema: {value['schema_version']!r}"
         )
     if not isinstance(value["targets"], list) or not value["targets"]:
-        raise ValueError("xla_targets.json requires a non-empty target list")
+        raise ValueError(f"{path.name} requires a non-empty target list")
 
     targets: list[dict[str, Any]] = []
     controls = 0
@@ -500,9 +515,112 @@ def load_campaign_targets() -> list[dict[str, Any]]:
         )
     if controls != 1:
         raise ValueError(
-            f"xla_targets.json requires exactly one control; found {controls}"
+            f"{path.name} requires exactly one control; found {controls}"
         )
     return targets
+
+
+def remote_branch_heads(
+    repo: Path, remote: str, pattern: str
+) -> dict[str, str]:
+    """Return branch names and immutable commits advertised by one remote."""
+    output = run_git_command(
+        repo,
+        "ls-remote",
+        "--heads",
+        remote,
+        f"refs/heads/{pattern}",
+    )
+    heads: dict[str, str] = {}
+    for line in output.splitlines():
+        try:
+            commit, ref = line.split(maxsplit=1)
+        except ValueError as error:
+            raise RuntimeError(
+                f"unexpected git ls-remote output: {line!r}"
+            ) from error
+        prefix = "refs/heads/"
+        if not FULL_SHA.fullmatch(commit) or not ref.startswith(prefix):
+            raise RuntimeError(f"unexpected git ls-remote output: {line!r}")
+        heads[ref.removeprefix(prefix)] = commit.lower()
+    return heads
+
+
+def discover_automatic_targets(
+    repo: Path,
+    control_config: Path = TARGET_CONFIG,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Discover the pinned control and newest stable release candidates."""
+    configured = load_campaign_targets(control_config)
+    control = next(
+        target for target in configured if target["role"] == "control"
+    )
+    if control["configured_commit"] is None:
+        raise ValueError("automatic target selection requires a pinned control")
+
+    releases = []
+    for branch, commit in remote_branch_heads(
+        repo, "origin", "rocm-jaxlib-v*"
+    ).items():
+        match = STABLE_RELEASE_BRANCH_RE.fullmatch(branch)
+        if match is None:
+            continue
+        version = tuple(int(part) for part in match.groups())
+        if version >= MINIMUM_AUTOMATIC_RELEASE:
+            releases.append((version, branch, commit))
+    releases.sort(reverse=True)
+    selected_releases = releases[:AUTOMATIC_RELEASE_COUNT]
+    if len(selected_releases) != AUTOMATIC_RELEASE_COUNT:
+        raise RuntimeError(
+            "automatic target selection requires at least "
+            f"{AUTOMATIC_RELEASE_COUNT} stable releases at or after "
+            + ".".join(str(part) for part in MINIMUM_AUTOMATIC_RELEASE)
+        )
+
+    main_heads = remote_branch_heads(repo, "upstream", "main")
+    if set(main_heads) != {"main"}:
+        raise RuntimeError("failed to resolve upstream/main")
+
+    targets = [control]
+    for version, branch, commit in selected_releases:
+        label = "v" + ".".join(str(part) for part in version) + " HEAD"
+        targets.append(
+            {
+                "revision": f"origin/{branch}",
+                "configured_commit": commit,
+                "role": "candidate",
+                "label": label,
+            }
+        )
+    targets.append(
+        {
+            "revision": "upstream/main",
+            "configured_commit": main_heads["main"],
+            "role": "candidate",
+            "label": "upstream main HEAD",
+        }
+    )
+    metadata = {
+        "mode": "automatic",
+        "control_config": str(control_config),
+        "minimum_release": ".".join(
+            str(part) for part in MINIMUM_AUTOMATIC_RELEASE
+        ),
+        "release_count": AUTOMATIC_RELEASE_COUNT,
+    }
+    return targets, metadata
+
+
+def select_campaign_targets(
+    repo: Path, targets_file: Path | None
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Select automatic targets or load a complete manual override."""
+    if targets_file is None:
+        return discover_automatic_targets(repo)
+    return load_campaign_targets(targets_file), {
+        "mode": "manual",
+        "targets_file": str(targets_file),
+    }
 
 
 def fetch_and_resolve_targets(
@@ -789,6 +907,11 @@ def main() -> int:
         raise ValueError(f"evaluator not found: {EVAL_SCRIPT}")
 
     source_repo = args.xla_source_repo.expanduser().resolve(strict=True)
+    targets_file = (
+        args.targets_file.expanduser().resolve(strict=True)
+        if args.targets_file is not None
+        else None
+    )
     bazel_output_user_root = (
         args.bazel_output_user_root.expanduser().resolve()
         if args.bazel_output_user_root is not None
@@ -814,8 +937,11 @@ def main() -> int:
     interrupted = False
     restore_error: Exception | None = None
     try:
+        configured_targets, target_selection = select_campaign_targets(
+            source_repo, targets_file
+        )
         targets = fetch_and_resolve_targets(
-            source_repo, load_campaign_targets()
+            source_repo, configured_targets
         )
         campaign_targets = [
             build_target_manifest_entry(target) for target in targets
@@ -841,6 +967,7 @@ def main() -> int:
                 }
             },
             "environment": collect_campaign_environment(),
+            "target_selection": target_selection,
             "targets": campaign_targets,
             "results": [],
             "live_control_id": control["id"],
