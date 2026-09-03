@@ -338,13 +338,14 @@ Behavior is tunable with environment variables:
 
 ### Automated: XLA multi-branch campaign and HTML report
 
-`run_hlo_eval.sh --branches` delegates to `run_xla_branch_eval.py`, which builds
-`multihost_hlo_runner` for every target in `xla_targets.json` and evaluates the
-selected HLOs. After finalizing the manifest and restoring the source checkout,
-the campaign automatically calls `generate_xla_hlo_campaign_report.py` to
-convert its manifest, logs, and timing CSVs into one self-contained HTML report.
-The report generator remains independently callable for archived campaigns and
-report regeneration.
+`run_hlo_eval.sh --branches` delegates to `run_xla_branch_eval.py`, which
+automatically selects the pinned control, latest three stable release branches,
+and `upstream/main`, builds `multihost_hlo_runner` for every target, and evaluates
+the selected HLOs. After finalizing the manifest and restoring the source
+checkout, the campaign automatically calls
+`generate_xla_hlo_campaign_report.py` to convert its manifest, logs, and timing
+CSVs into one self-contained HTML report. The report generator remains
+independently callable for archived campaigns and report regeneration.
 
 The two command formats are:
 
@@ -354,6 +355,7 @@ The two command formats are:
   --output-dir /path/to/new/output \
   [--hlo-path /path/to/hlo/or/subtree] \
   [--num-repeats 2] \
+  [--targets-file /path/to/manual-targets.json] \
   [--bazel-output-user-root /path/to/bazel-cache]
 ```
 
@@ -371,6 +373,10 @@ python3 generate_xla_hlo_campaign_report.py \
   argument; omit it to evaluate the complete `hlo_eval_tools` corpus.
 - `--num-repeats` — forwarded as the existing `run_hlo_eval.sh`
   `[num_repeats]` argument (campaign default 2).
+- `--targets-file` — optional complete manual target list. Omit it to select
+  five targets automatically: the pinned control from the checked-in
+  `xla_targets.json`, the latest three exact stable `rocm-jaxlib-v*` release
+  branches at or after v0.10.2, and `upstream/main`.
 - `--bazel-output-user-root` — optional Bazel startup path reused by every
   build and `bazel info` query. This supports ROCm-less containers whose
   hermetic TheRock installation is held in a dedicated Bazel cache.
@@ -379,8 +385,9 @@ python3 generate_xla_hlo_campaign_report.py \
   campaign's manifest, logs, and CSVs.
 - `--output` — optional report path; the default is
   `<campaign-dir>/full_campaign_report.html`. This option is report-specific.
-- `xla_targets.json` — target configuration beside these scripts; it must
-  contain exactly one `control` and one or more `candidate` entries.
+- `xla_targets.json` — provides the immutable pinned control for automatic
+  selection and remains a complete example for `--targets-file`. Every manual
+  file must contain exactly one `control` and one or more `candidate` entries.
 
 The campaign also reuses the evaluator environment controls documented above:
 `ARG_MODE`, `CMD_BUFFER`, and `ORDER`. It currently sets `SETTLE_SEC=0` while
@@ -477,11 +484,12 @@ The campaign output layout is:
       <workload>.csv
 ```
 
-`xla_targets.json` describes what the campaign is configured to run.
-`manifest.json` is the durable record of what the campaign actually resolved and
-executed. It contains:
+`xla_targets.json` defines the automatic pinned control and can be supplied as a
+complete manual target list. `manifest.json` is the durable record of what the
+campaign actually resolved and executed. It contains:
 
 - campaign timestamps and running/completed/interrupted status;
+- automatic or manual target-selection mode and its source configuration;
 - effective repeat, argument, command-buffer, ordering, and settle settings;
 - host, ROCm version, visible GPU architecture, and device metadata;
 - each target's role, label, revision, resolved commit ID, and output slug;
