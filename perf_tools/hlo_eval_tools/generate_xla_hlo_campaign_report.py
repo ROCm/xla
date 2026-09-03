@@ -1136,7 +1136,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}main{width:min(1800px,calc(100% - 36px));margin:auto;padding:26px 0 60px}h1{font-size:25px;margin:0}h2{font-size:19px;margin:30px 0 11px}h3{font-size:15px;margin:18px 0 7px}p{margin:6px 0}.muted{color:var(--muted)}code,pre{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}code{background:var(--code);padding:2px 5px;border-radius:4px}.stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:18px 0}.stat{border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:12px}.stat strong{display:block;font-size:22px}.callout{border:1px solid var(--border);border-left:4px solid var(--warning);border-radius:6px;padding:11px 13px;background:var(--surface)}.table-wrap{border:1px solid var(--border);border-radius:6px;overflow:auto;max-height:650px}table{border-collapse:collapse;width:100%;min-width:900px}th,td{padding:8px 9px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}th{position:sticky;top:0;background:var(--surface2);z-index:2;font-size:12px}tbody tr:nth-child(even){background:var(--surface)}.pass{color:var(--success)}.fail{color:var(--danger)}.unknown,.warn,.missing{color:var(--warning)}.not_run{color:var(--muted)}.bar{display:flex;width:180px;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;margin-top:5px}.bar .passed{background:var(--success)}.bar .failed{background:var(--danger)}button{border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--accent);padding:4px 7px;cursor:pointer}button:hover{background:var(--surface2)}.matrix td:nth-child(n+4),.matrix th:nth-child(n+4){text-align:center;white-space:nowrap}.matrix button.fail-cell{color:var(--danger);border-color:transparent}.controls{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:9px;padding:12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);margin-bottom:10px}label{display:grid;gap:4px;color:var(--muted);font-size:12px}select,input{width:100%;padding:7px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text)}.explorer{display:grid;grid-template-columns:minmax(0,3fr) minmax(330px,2fr);gap:12px}.detail{border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:13px;min-width:0}.detail dl{display:grid;grid-template-columns:110px 1fr;gap:5px 9px;margin:8px 0}.detail dt{color:var(--muted)}.detail dd{margin:0;min-width:0;overflow-wrap:anywhere}.detail pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code);padding:10px;border-radius:5px;max-height:260px;overflow:auto}.detail a{color:var(--accent)}.copy-row{display:flex;align-items:center;gap:8px}.provenance{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.provenance>div{border:1px solid var(--border);border-radius:6px;padding:12px}.signature-example{max-width:420px;overflow-wrap:anywhere}@media(max-width:1150px){.stats{grid-template-columns:repeat(3,1fr)}.explorer{grid-template-columns:1fr}.controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.stats,.controls,.provenance{grid-template-columns:1fr}}
 .performance-controls{grid-template-columns:repeat(6,minmax(130px,1fr))}.performance-chart{border:1px solid var(--border);border-radius:6px;background:var(--surface);overflow:auto;margin-bottom:10px}.chart-head{display:flex;justify-content:space-between;gap:16px;padding:12px 14px 0}.chart-head strong{font-size:15px}.chart-head span{text-align:right}.performance-chart svg{display:block;width:100%;min-width:960px;height:430px}.chart-legend{display:flex;gap:18px;flex-wrap:wrap;padding:0 14px 10px}.legend-mark{display:inline-block;width:11px;height:11px;margin-right:5px;vertical-align:-1px}.legend-line{background:var(--accent);border-radius:50%}.legend-fail{color:var(--danger);font-weight:700}@media(max-width:1150px){.performance-controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.performance-controls{grid-template-columns:1fr}.chart-head{display:block}.chart-head span{display:block;text-align:left}}
 .performance-extremes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:10px 0}.performance-extremes>div{border:1px solid var(--border);border-radius:6px;padding:10px 12px;background:var(--surface)}.performance-extremes strong{display:block}@media(max-width:800px){.performance-extremes{grid-template-columns:1fr}}
-.xla-config-controls{grid-template-columns:minmax(220px,420px)}.xla-config-table td:nth-child(n+2),.xla-config-table th:nth-child(n+2){text-align:center;white-space:nowrap}
+.xla-config-controls{grid-template-columns:minmax(220px,420px)}.xla-config-table{background:var(--surface2)}.xla-config-table th,.xla-config-table td{border:1px solid var(--border)}.xla-config-table th{background:var(--surface2)}.xla-config-table td:nth-child(n+2),.xla-config-table th:nth-child(n+2){text-align:center;white-space:nowrap}.xla-config-table.has-selection th:nth-child(n+2):not(.selected-branch),.xla-config-table.has-selection td:nth-child(n+2):not(.selected-branch){opacity:.42}.xla-config-table th.selected-branch{background:color-mix(in srgb,var(--accent) 16%,var(--bg));color:var(--text);box-shadow:inset 0 3px 0 var(--accent);font-weight:700;z-index:3}.xla-config-table td.selected-branch{background:color-mix(in srgb,var(--accent) 10%,var(--bg));color:var(--text);font-weight:600;box-shadow:inset 3px 0 0 var(--accent),inset -3px 0 0 var(--accent)}.xla-config-table tbody tr:nth-child(even) td.selected-branch{background:color-mix(in srgb,var(--accent) 14%,var(--bg))}.xla-config-table td.differs{color:var(--warning)}
 .matrix-controls{grid-template-columns:repeat(3,minmax(130px,1fr))}@media(max-width:650px){.matrix-controls{grid-template-columns:1fr}}
 .failure-controls{grid-template-columns:repeat(6,minmax(110px,1fr)) minmax(180px,1.4fr)}@media(max-width:1150px){.failure-controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.failure-controls{grid-template-columns:1fr}}
 </style>
@@ -1150,8 +1150,8 @@ HTML_TEMPLATE = r"""<!doctype html>
 <h2>System configurations</h2>
 <div class="provenance" id="provenance"></div>
 
-<h2>Resolved XLA configuration</h2>
-<p class="muted">Selected effective GPU DebugOptions captured from the first compiled HLO for each branch. Explicit invocation evidence remains in the branch eval.log.</p>
+<h2>XLA Running Flags</h2>
+<p class="muted">Effective GPU DebugOptions captured from the first compiled HLO for each branch. All branches are shown for comparison. Select one branch to mark its column and open its eval.log evidence.</p>
 <div class="controls xla-config-controls">
 <label>Branch<select id="xla-config-branch"></select></label>
 </div>
@@ -1238,6 +1238,16 @@ function runtimeSummary(branch){
  if(runtime.rocm_distro_url)parts.push(`<span class="muted" title="${esc(runtime.rocm_distro_url)}">Configured distro URL</span>`);
  return parts.length?parts.join("<br>"):"Not captured";
 }
+function liveControlBranch(){
+ return DATA.branches.find(branch=>branch.role==="live_control")||DATA.branches[0];
+}
+function orderedXlaFlagBranches(){
+ const order=DATA.performance_branch_order||DATA.branches.map(branch=>branch.slug);
+ return order.map(slug=>branchBySlug[slug]).filter(Boolean);
+}
+function resolvedFlagValue(flags,name){
+ return Object.prototype.hasOwnProperty.call(flags||{},name)?flags[name]:null;
+}
 function populateResolvedXlaConfiguration(){
  const select=byId("xla-config-branch");
  select.innerHTML=option("","All branches")+DATA.branches.map(branch=>option(branch.slug,branch.label)).join("");
@@ -1245,11 +1255,12 @@ function populateResolvedXlaConfiguration(){
  renderResolvedXlaConfiguration();
 }
 function renderResolvedXlaConfiguration(){
- const selected=byId("xla-config-branch").value,branches=selected?[branchBySlug[selected]]:DATA.branches,names=DATA.displayed_resolved_xla_flags||[];
- byId("xla-config-head").innerHTML=`<tr><th>Flag</th>${branches.map(branch=>`<th title="${esc(branch.label)}">${esc(shortBranch(branch))}</th>`).join("")}</tr>`;
- byId("xla-config-body").innerHTML=names.map(name=>`<tr><td><code>${esc(name)}</code></td>${branches.map(branch=>{const flags=branch.resolved_xla_configuration?.flags||{},captured=Object.prototype.hasOwnProperty.call(flags,name);return `<td class="${captured?"":"not_run"}">${captured?esc(flags[name]):"Not available"}</td>`}).join("")}</tr>`).join("");
- if(!selected){byId("xla-config-source").textContent="Resolved values captured from the first compiled HLO for each branch. Select one branch for its source log.";return}
- const branch=branches[0],configuration=branch.resolved_xla_configuration||{},module=configuration.module?`Captured from first compiled HLO: ${esc(configuration.module)}.`:"Resolved configuration was not captured for this branch.",evidence=branch.log_available?` <a href="${esc(branch.eval_log_uri)}">Open eval.log evidence</a>.`:"";
+ const selected=byId("xla-config-branch").value,branches=orderedXlaFlagBranches(),names=DATA.displayed_resolved_xla_flags||[],referenceValueFor=name=>resolvedFlagValue(liveControlBranch()?.resolved_xla_configuration?.flags,name),table=byId("xla-config-head").closest("table");
+ table.classList.toggle("has-selection",Boolean(selected));
+ byId("xla-config-head").innerHTML=`<tr><th>XLA running Flags</th>${branches.map(branch=>`<th class="${selected===branch.slug?"selected-branch":""}" title="${esc(branch.ref)}">${esc(branch.label)}</th>`).join("")}</tr>`;
+ byId("xla-config-body").innerHTML=names.map(name=>{const referenceValue=referenceValueFor(name);return `<tr><td><code>${esc(name)}</code></td>${branches.map(branch=>{const flags=branch.resolved_xla_configuration?.flags||{},value=resolvedFlagValue(flags,name),differs=!selected&&referenceValue!=null&&value!=null&&value!==referenceValue;return `<td class="${[value==null?"not_run":"",selected===branch.slug?"selected-branch":"",differs?"differs":""].filter(Boolean).join(" ")}">${value==null?"Not available":esc(value)}</td>`}).join("")}</tr>`}).join("");
+ if(!selected){byId("xla-config-source").textContent="All branches are shown for comparison. Values that differ from the pinned live control are highlighted. Select one branch to mark its column and open its eval.log evidence.";return}
+ const branch=branchBySlug[selected],configuration=branch?.resolved_xla_configuration||{},module=configuration.module?`Captured from first compiled HLO: ${esc(configuration.module)}.`:"Resolved flags were not captured for this branch.",evidence=branch?.log_available?` <a href="${esc(branch.eval_log_uri)}">Open eval.log evidence</a>.`:"";
  byId("xla-config-source").innerHTML=module+evidence;
 }
 function renderBranches(){
