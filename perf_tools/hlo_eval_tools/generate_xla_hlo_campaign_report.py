@@ -75,6 +75,57 @@ def validate_campaign_manifest(
         )
 
 
+def extract_rocm_version(environment: dict[str, Any]) -> str | None:
+    """Read ROCm version from current or archived environment metadata."""
+    value = environment.get("rocm_version")
+    if isinstance(value, str) and value:
+        return value
+    hipcc = environment.get("hipcc")
+    if not isinstance(hipcc, str):
+        return None
+    for pattern in (
+        r"\broc-(\d+\.\d+\.\d+)\b",
+        r"/opt/rocm-(\d+\.\d+\.\d+)\b",
+    ):
+        match = re.search(pattern, hipcc)
+        if match:
+            return match.group(1)
+    return None
+
+
+def extract_gpu_architectures(
+    environment: dict[str, Any],
+) -> list[str]:
+    """Read exact visible gfx architecture names from campaign metadata."""
+    values = environment.get("gpu_architectures")
+    if isinstance(values, list):
+        return sorted(
+            {
+                value.lower()
+                for value in values
+                if isinstance(value, str)
+                and re.fullmatch(r"gfx[0-9a-z]+", value, re.IGNORECASE)
+            }
+        )
+    if isinstance(values, str) and re.fullmatch(
+        r"gfx[0-9a-z]+", values, re.IGNORECASE
+    ):
+        return [values.lower()]
+    rocm_smi = environment.get("rocm_smi")
+    if not isinstance(rocm_smi, str):
+        return []
+    return sorted(
+        {
+            match.group(1).lower()
+            for match in re.finditer(
+                r"GFX Version:\s*(gfx[0-9a-z]+)",
+                rocm_smi,
+                flags=re.IGNORECASE,
+            )
+        }
+    )
+
+
 def extract_workload_leaf_from_hlo_path(path: str) -> str:
     marker = "/hlo_eval_tools/"
     return path.split(marker, 1)[1] if marker in path else Path(path).name
@@ -808,65 +859,93 @@ def build_campaign_report_data(campaign_dir: Path) -> dict[str, Any]:
             }
         )
 
-    performance_by_workload: dict[
-        tuple[str, str], list[dict[str, Any]]
-    ] = defaultdict(list)
-    for record in performance:
-        performance_by_workload[
-            (record["branch"], record["leaf"])
-        ].append(record)
-    workload_states: dict[tuple[str, str], str] = {}
-    for key, records in performance_by_workload.items():
-        statuses = {record["status"] for record in records}
-        workload_states[key] = (
-            "fail"
-            if "fail" in statuses
-            else "pass"
-            if statuses == {"pass"}
-            else "missing"
-        )
-
-    branch_by_slug = {branch["slug"]: branch for branch in branches}
+    performance_by_hlo = {
+        (record["branch"], record["leaf"], record["module"]): record
+        for record in performance
+    }
+    # Keep exact HLO evidence separate from summary-only leaf failures.
+    # A leaf fallback applies to every module because no finer evidence exists.
     failed_by_leaf: dict[str, dict[str, int]] = defaultdict(dict)
+    failed_by_hlo: dict[tuple[str, str], dict[str, int]] = defaultdict(dict)
+    fallback_failed_by_leaf: dict[str, dict[str, int]] = defaultdict(dict)
+    modules_by_leaf = {
+        workload["leaf"]: set(workload.get("modules", []))
+        for workload in inventory
+    }
     for failure in failures:
         failed_by_leaf[failure["leaf"]][failure["branch"]] = failure["id"]
+        if failure["module"] in modules_by_leaf.get(failure["leaf"], set()):
+            failed_by_hlo[
+                (failure["leaf"], failure["module"])
+            ][failure["branch"]] = failure["id"]
+        else:
+            fallback_failed_by_leaf[
+                failure["leaf"]
+            ][failure["branch"]] = failure["id"]
 
     matrix = []
-    for leaf, branch_failures in failed_by_leaf.items():
-        leaf_occurrences = [
-            failures[failure_id]
-            for failure_id in branch_failures.values()
-        ]
-        matrix.append(
-            {
-                "leaf": leaf,
-                "category": " / ".join(
-                    sorted(
-                        {
-                            failure["category"]
-                            for failure in leaf_occurrences
-                        }
-                    )
-                ),
-                "affected_count": len(branch_failures),
-                "states": {
-                    branch["slug"]: (
-                        {
-                            "status": "fail",
-                            "failure_id": branch_failures[branch["slug"]],
-                        }
-                        if branch["slug"] in branch_failures
-                        else {
-                            "status": workload_states.get(
-                                (branch["slug"], leaf), "unknown"
-                            )
-                        }
-                    )
-                    for branch in branches
-                },
+    for workload in inventory:
+        leaf = workload["leaf"]
+        group = parse_workload_hierarchy(leaf)
+        for module in workload.get("modules", []):
+            branch_failures = {
+                **fallback_failed_by_leaf.get(leaf, {}),
+                **failed_by_hlo.get((leaf, module), {}),
             }
+            hlo_occurrences = [
+                failures[failure_id]
+                for failure_id in branch_failures.values()
+            ]
+            states = {}
+            for branch in branches:
+                slug = branch["slug"]
+                if slug in branch_failures:
+                    states[slug] = {
+                        "status": "fail",
+                        "failure_id": branch_failures[slug],
+                    }
+                elif (
+                    branch["build_exit_code"] != 0
+                    or branch["evaluation_exit_code"] is None
+                ):
+                    states[slug] = {"status": "not_run"}
+                else:
+                    record = performance_by_hlo.get((slug, leaf, module))
+                    states[slug] = {
+                        "status": (
+                            "pass"
+                            if record
+                            and record["latency_ms"] is not None
+                            else "missing"
+                        )
+                    }
+            matrix.append(
+                {
+                    "leaf": leaf,
+                    "module": module,
+                    "domain": group["category"],
+                    "model": group["model"],
+                    "mode": group["mode"],
+                    "gpu": group["gpu"],
+                    "category": " / ".join(
+                        sorted(
+                            {
+                                failure["category"]
+                                for failure in hlo_occurrences
+                            }
+                        )
+                    ),
+                    "affected_count": len(branch_failures),
+                    "states": states,
+                }
+            )
+    matrix.sort(
+        key=lambda item: (
+            -item["affected_count"],
+            item["leaf"],
+            item["module"],
         )
-    matrix.sort(key=lambda item: (-item["affected_count"], item["leaf"]))
+    )
 
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for failure in failures:
@@ -908,9 +987,6 @@ def build_campaign_report_data(campaign_dir: Path) -> dict[str, Any]:
     )
 
     environment = manifest.get("environment", {})
-    profile = manifest.get("profile", {})
-    environment_gpu = environment.get("gpu")
-    container = environment.get("container", {})
     return {
         "campaign": {
             "id": campaign_dir.name,
@@ -920,23 +996,8 @@ def build_campaign_report_data(campaign_dir: Path) -> dict[str, Any]:
             "directory": str(campaign_dir),
             "hostname": environment.get("hostname"),
             "platform": environment.get("platform"),
-            "gpu": (
-                environment_gpu.get("identity")
-                if isinstance(environment_gpu, dict)
-                else environment_gpu
-                if isinstance(environment_gpu, str)
-                else profile.get("reference", {}).get("gpu")
-            ),
-            "container_identity": (
-                container.get("identity")
-                if isinstance(container, dict)
-                else None
-            ),
-            "container_capture_method": (
-                container.get("capture_method")
-                if isinstance(container, dict)
-                else None
-            ),
+            "rocm_version": extract_rocm_version(environment),
+            "gpu_architectures": extract_gpu_architectures(environment),
             "benchmark": benchmark,
         },
         "branches": branches,
@@ -979,9 +1040,11 @@ HTML_TEMPLATE = r"""<!doctype html>
 <style>
 :root{color-scheme:light dark;--bg:#fff;--surface:#f6f8fa;--surface2:#eef1f4;--text:#1f2328;--muted:#59636e;--border:#d0d7de;--accent:#0969da;--danger:#cf222e;--success:#1a7f37;--warning:#9a6700;--code:#eff1f3}
 @media(prefers-color-scheme:dark){:root{--bg:#0d1117;--surface:#161b22;--surface2:#21262d;--text:#e6edf3;--muted:#9da7b3;--border:#30363d;--accent:#58a6ff;--danger:#ff7b72;--success:#3fb950;--warning:#d29922;--code:#21262d}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}main{width:min(1800px,calc(100% - 36px));margin:auto;padding:26px 0 60px}h1{font-size:25px;margin:0}h2{font-size:19px;margin:30px 0 11px}h3{font-size:15px;margin:18px 0 7px}p{margin:6px 0}.muted{color:var(--muted)}code,pre{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}code{background:var(--code);padding:2px 5px;border-radius:4px}.stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:18px 0}.stat{border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:12px}.stat strong{display:block;font-size:22px}.callout{border:1px solid var(--border);border-left:4px solid var(--warning);border-radius:6px;padding:11px 13px;background:var(--surface)}.table-wrap{border:1px solid var(--border);border-radius:6px;overflow:auto;max-height:650px}table{border-collapse:collapse;width:100%;min-width:900px}th,td{padding:8px 9px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}th{position:sticky;top:0;background:var(--surface2);z-index:2;font-size:12px}tbody tr:nth-child(even){background:var(--surface)}.pass{color:var(--success)}.fail{color:var(--danger)}.unknown,.warn{color:var(--warning)}.bar{display:flex;width:180px;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;margin-top:5px}.bar .passed{background:var(--success)}.bar .failed{background:var(--danger)}button{border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--accent);padding:4px 7px;cursor:pointer}button:hover{background:var(--surface2)}.matrix td:not(:first-child),.matrix th:not(:first-child){text-align:center;white-space:nowrap}.matrix button.fail-cell{color:var(--danger);border-color:transparent}.controls{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:9px;padding:12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);margin-bottom:10px}label{display:grid;gap:4px;color:var(--muted);font-size:12px}select,input{width:100%;padding:7px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text)}.explorer{display:grid;grid-template-columns:minmax(0,3fr) minmax(330px,2fr);gap:12px}.detail{border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:13px;min-width:0}.detail dl{display:grid;grid-template-columns:110px 1fr;gap:5px 9px;margin:8px 0}.detail dt{color:var(--muted)}.detail dd{margin:0;min-width:0;overflow-wrap:anywhere}.detail pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code);padding:10px;border-radius:5px;max-height:260px;overflow:auto}.detail a{color:var(--accent)}.copy-row{display:flex;align-items:center;gap:8px}.provenance{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.provenance>div{border:1px solid var(--border);border-radius:6px;padding:12px}.signature-example{max-width:420px;overflow-wrap:anywhere}@media(max-width:1150px){.stats{grid-template-columns:repeat(3,1fr)}.explorer{grid-template-columns:1fr}.controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.stats,.controls,.provenance{grid-template-columns:1fr}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}main{width:min(1800px,calc(100% - 36px));margin:auto;padding:26px 0 60px}h1{font-size:25px;margin:0}h2{font-size:19px;margin:30px 0 11px}h3{font-size:15px;margin:18px 0 7px}p{margin:6px 0}.muted{color:var(--muted)}code,pre{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}code{background:var(--code);padding:2px 5px;border-radius:4px}.stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:18px 0}.stat{border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:12px}.stat strong{display:block;font-size:22px}.callout{border:1px solid var(--border);border-left:4px solid var(--warning);border-radius:6px;padding:11px 13px;background:var(--surface)}.table-wrap{border:1px solid var(--border);border-radius:6px;overflow:auto;max-height:650px}table{border-collapse:collapse;width:100%;min-width:900px}th,td{padding:8px 9px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}th{position:sticky;top:0;background:var(--surface2);z-index:2;font-size:12px}tbody tr:nth-child(even){background:var(--surface)}.pass{color:var(--success)}.fail{color:var(--danger)}.unknown,.warn,.missing{color:var(--warning)}.not_run{color:var(--muted)}.bar{display:flex;width:180px;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;margin-top:5px}.bar .passed{background:var(--success)}.bar .failed{background:var(--danger)}button{border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--accent);padding:4px 7px;cursor:pointer}button:hover{background:var(--surface2)}.matrix td:nth-child(n+4),.matrix th:nth-child(n+4){text-align:center;white-space:nowrap}.matrix button.fail-cell{color:var(--danger);border-color:transparent}.controls{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:9px;padding:12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);margin-bottom:10px}label{display:grid;gap:4px;color:var(--muted);font-size:12px}select,input{width:100%;padding:7px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text)}.explorer{display:grid;grid-template-columns:minmax(0,3fr) minmax(330px,2fr);gap:12px}.detail{border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:13px;min-width:0}.detail dl{display:grid;grid-template-columns:110px 1fr;gap:5px 9px;margin:8px 0}.detail dt{color:var(--muted)}.detail dd{margin:0;min-width:0;overflow-wrap:anywhere}.detail pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code);padding:10px;border-radius:5px;max-height:260px;overflow:auto}.detail a{color:var(--accent)}.copy-row{display:flex;align-items:center;gap:8px}.provenance{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.provenance>div{border:1px solid var(--border);border-radius:6px;padding:12px}.signature-example{max-width:420px;overflow-wrap:anywhere}@media(max-width:1150px){.stats{grid-template-columns:repeat(3,1fr)}.explorer{grid-template-columns:1fr}.controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.stats,.controls,.provenance{grid-template-columns:1fr}}
 .performance-controls{grid-template-columns:repeat(6,minmax(130px,1fr))}.performance-chart{border:1px solid var(--border);border-radius:6px;background:var(--surface);overflow:auto;margin-bottom:10px}.chart-head{display:flex;justify-content:space-between;gap:16px;padding:12px 14px 0}.chart-head strong{font-size:15px}.chart-head span{text-align:right}.performance-chart svg{display:block;width:100%;min-width:960px;height:430px}.chart-legend{display:flex;gap:18px;flex-wrap:wrap;padding:0 14px 10px}.legend-mark{display:inline-block;width:11px;height:11px;margin-right:5px;vertical-align:-1px}.legend-line{background:var(--accent);border-radius:50%}.legend-fail{color:var(--danger);font-weight:700}@media(max-width:1150px){.performance-controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.performance-controls{grid-template-columns:1fr}.chart-head{display:block}.chart-head span{display:block;text-align:left}}
 .performance-extremes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:10px 0}.performance-extremes>div{border:1px solid var(--border);border-radius:6px;padding:10px 12px;background:var(--surface)}.performance-extremes strong{display:block}@media(max-width:800px){.performance-extremes{grid-template-columns:1fr}}
+.matrix-controls{grid-template-columns:repeat(3,minmax(130px,1fr))}@media(max-width:650px){.matrix-controls{grid-template-columns:1fr}}
+.failure-controls{grid-template-columns:repeat(6,minmax(110px,1fr)) minmax(180px,1.4fr)}@media(max-width:1150px){.failure-controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.failure-controls{grid-template-columns:1fr}}
 </style>
 </head>
 <body><main>
@@ -997,7 +1060,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <div class="table-wrap"><table><thead><tr><th>Branch</th><th>Commit</th><th>Build</th><th>Pass</th><th>Fail</th><th>Skipped (empty)</th><th>Workload success</th><th>Evidence</th></tr></thead><tbody id="branch-body"></tbody></table></div>
 
 <h2>Model performance across branches</h2>
-<p class="muted">Select one model workload and HLO. The graph shows performance relative to the pinned live control (1.0×; higher is faster), while the table preserves absolute latency. The ±2% band is a review threshold—not a confidence interval or proof of regression. Summed latency is the sum of independently executed HLO modules, not end-to-end model latency.</p>
+<p class="muted">Select one model workload and HLO. The graph shows performance relative to the pinned live control (1.0×; higher is faster), while the table preserves absolute latency. The ±2% band is a review threshold—not a confidence interval or proof of regression. Summed latency is the sum of independently executed HLO modules, not end-to-end model latency. Selectors include only HLOs with at least one measured branch; failed-only HLOs remain available in the failure sections.</p>
 <div class="controls performance-controls">
 <label>Domain<select id="perf-domain"></select></label>
 <label>Model<select id="perf-model"></select></label>
@@ -1014,20 +1077,28 @@ HTML_TEMPLATE = r"""<!doctype html>
 </div>
 <div class="table-wrap" style="max-height:360px"><table><thead><tr><th>Branch</th><th>Commit</th><th>Absolute metric</th><th>vs live control</th><th>Live-control change</th><th>Coverage</th><th>Workload status</th></tr></thead><tbody id="performance-body"></tbody></table></div>
 
-<h2>Failure signatures</h2>
-<p class="muted">Grouped branch-workload failures in this campaign. These labels describe observed error signatures, not confirmed root causes.</p>
-<div class="table-wrap"><table><thead><tr><th>Category</th><th>Normalized signature</th><th>Occurrences</th><th>Workloads</th><th>Branches</th><th>Examples</th></tr></thead><tbody id="signature-body"></tbody></table></div>
-
-<h2>Where failures occur</h2>
-<label style="max-width:520px;margin-bottom:9px">Filter workload matrix<input id="matrix-search" type="search" placeholder="model, workload path, or category"></label>
+<h2>HLO status across branches</h2>
+<p class="muted">This matrix includes every HLO in the campaign inventory. Filters default to All, and rows prioritize failed, missing, not-run, then passed HLOs. “Missing” means the branch evaluation ran but published no timing and recorded no failure for that HLO; “Not run” means the branch was unavailable. Select a failed cell to open its evidence below.</p>
+<div class="controls matrix-controls">
+<label>Domain<select id="matrix-domain"></select></label>
+<label>Model<select id="matrix-model"></select></label>
+<label>Mode<select id="matrix-mode"></select></label>
+</div>
+<p class="muted" id="matrix-summary"></p>
 <div class="table-wrap"><table class="matrix"><thead id="matrix-head"></thead><tbody id="matrix-body"></tbody></table></div>
 
+<h2>Failure signature overview</h2>
+<p class="muted">Grouped branch-workload failures in this campaign. Occurrences reports the total number of failure records matching the normalized signature, normally one workload failure on one branch. Workloads reports the number of unique workload configurations, with GPU variants counted separately. Branches reports the number of unique XLA targets. Select a category to reset the explorer filters and show all signatures in that category. These labels describe observed signatures, not confirmed root causes.</p>
+<div class="table-wrap"><table><thead><tr><th>Category</th><th>Normalized signature</th><th title="Total failure records matching this normalized signature">Occurrences</th><th title="Unique workload configurations affected by this signature">Workloads</th><th title="Unique XLA branch targets where this signature appeared">Branches</th><th>Examples</th></tr></thead><tbody id="signature-body"></tbody></table></div>
+
 <h2>Failure explorer and reproduction</h2>
-<div class="controls">
+<div class="controls failure-controls">
 <label>Branch<select id="branch-filter"></select></label>
 <label>Category<select id="category-filter"></select></label>
+<label>Domain<select id="domain-filter"></select></label>
+<label>Model<select id="model-filter"></select></label>
 <label>Mode<select id="mode-filter"></select></label>
-<label>GPU / training<select id="gpu-filter"></select></label>
+<label>Inference GPU count<select id="gpu-filter"></select></label>
 <label>Search<input id="failure-search" type="search" placeholder="model, HLO, signature"></label>
 </div>
 <div class="explorer">
@@ -1045,6 +1116,7 @@ const option=(value,label=value)=>`<option value="${esc(value)}">${esc(label)}</
 const branchBySlug=Object.fromEntries(DATA.branches.map(branch=>[branch.slug,branch]));
 const failureById=Object.fromEntries(DATA.failures.map(failure=>[failure.id,failure]));
 const performance=DATA.performance;
+const selectablePerformance=performance.filter(row=>row.status==="pass"&&row.latency_ms!=null);
 const performanceSums=DATA.performance_sums||[];
 const performanceExtremes=DATA.performance_extremes||[];
 const reviewThreshold=DATA.performance_review_threshold_percent||2;
@@ -1061,13 +1133,16 @@ function renderBranches(){
 function setSelect(id,values,current,preferred){
  const select=byId(id);select.innerHTML=values.map(value=>option(value)).join("");select.value=values.includes(current)?current:values.includes(preferred)?preferred:values[0]||"";
 }
+function setAllSelect(id,values,current,allLabel){
+ const select=byId(id);select.innerHTML=option("",allLabel)+values.map(value=>option(value)).join("");select.value=values.includes(current)?current:"";
+}
 function performanceFilters(){
  return {domain:byId("perf-domain").value,model:byId("perf-model").value,mode:byId("perf-mode").value,gpu:byId("perf-gpu").value,metric:byId("perf-metric").value,module:byId("perf-module").value};
 }
 function cascadePerformance(){
  const previous=performanceFilters();
- setSelect("perf-domain",uniq(performance.map(r=>r.domain)),previous.domain,"vision_diffusion");
- let subset=performance.filter(r=>r.domain===byId("perf-domain").value);
+ setSelect("perf-domain",uniq(selectablePerformance.map(r=>r.domain)),previous.domain,"vision_diffusion");
+ let subset=selectablePerformance.filter(r=>r.domain===byId("perf-domain").value);
  setSelect("perf-model",uniq(subset.map(r=>r.model)),previous.model,"efficientnet");
  subset=subset.filter(r=>r.model===byId("perf-model").value);
  setSelect("perf-mode",uniq(subset.map(r=>r.mode)),previous.mode,"inference");
@@ -1109,24 +1184,61 @@ function renderPerformance(){
 function renderSignatures(){
  byId("signature-body").innerHTML=DATA.signature_groups.map(group=>`<tr><td><button onclick="filterCategory('${esc(group.category)}')">${esc(group.category)}</button></td><td>${esc(group.signature)}</td><td>${group.occurrence_count}</td><td>${group.workload_count}</td><td>${group.branches.length}</td><td class="signature-example">${group.examples.map(esc).join("<br>")}</td></tr>`).join("");
 }
+function matrixFilters(){
+ return {domain:byId("matrix-domain").value,model:byId("matrix-model").value,mode:byId("matrix-mode").value};
+}
+function cascadeMatrix(){
+ const previous=matrixFilters();
+ setAllSelect("matrix-domain",uniq(DATA.matrix.map(r=>r.domain)),previous.domain,"All domains");
+ let subset=DATA.matrix.filter(r=>!byId("matrix-domain").value||r.domain===byId("matrix-domain").value);
+ setAllSelect("matrix-model",uniq(subset.map(r=>r.model)),previous.model,"All models");
+ subset=subset.filter(r=>!byId("matrix-model").value||r.model===byId("matrix-model").value);
+ setAllSelect("matrix-mode",uniq(subset.map(r=>r.mode)),previous.mode,"All modes");
+ renderMatrix();
+}
+function selectedMatrixRows(){
+ const f=matrixFilters();
+ const severity=row=>{const statuses=Object.values(row.states).map(state=>state.status);return statuses.includes("fail")?0:statuses.includes("missing")?1:statuses.includes("not_run")?2:3};
+ return DATA.matrix.filter(row=>(!f.domain||row.domain===f.domain)&&(!f.model||row.model===f.model)&&(!f.mode||row.mode===f.mode)).sort((a,b)=>severity(a)-severity(b)||a.leaf.localeCompare(b.leaf)||a.module.localeCompare(b.module));
+}
 function renderMatrix(){
- const query=byId("matrix-search").value.trim().toLowerCase();
- byId("matrix-head").innerHTML=`<tr><th>Workload / signature</th><th>Affected</th>${DATA.branches.map(branch=>`<th title="${esc(branch.label)}">${esc(branch.label.replace(" pinned live control"," pinned").replace(" HEAD",""))}</th>`).join("")}</tr>`;
- const rows=DATA.matrix.filter(row=>(row.leaf+" "+row.category).toLowerCase().includes(query));
- byId("matrix-body").innerHTML=rows.map(row=>`<tr><td><strong>${esc(row.leaf)}</strong><br><span class="muted">${esc(row.category)}</span></td><td>${row.affected_count}/${DATA.branches.length}</td>${DATA.branches.map(branch=>{const state=row.states[branch.slug];if(state.status==="fail")return `<td><button class="fail-cell" onclick="inspectFailure(${state.failure_id})">Fail</button></td>`;return `<td class="${state.status}">${state.status==="pass"?"Pass":"N/A"}</td>`}).join("")}</tr>`).join("");
+ byId("matrix-head").innerHTML=`<tr><th>Workload</th><th>HLO module</th><th>Observed failure</th>${DATA.branches.map(branch=>`<th title="${esc(branch.label)}">${esc(branch.label.replace(" pinned live control"," pinned").replace(" HEAD",""))}</th>`).join("")}</tr>`;
+ const rows=selectedMatrixRows(),counts={pass:0,fail:0,missing:0,not_run:0};
+ rows.forEach(row=>Object.values(row.states).forEach(state=>{counts[state.status]=(counts[state.status]||0)+1}));
+ byId("matrix-summary").textContent=`Showing ${rows.length} of ${DATA.matrix.length} HLOs · ${counts.pass} passed cells · ${counts.fail} failed cells · ${counts.missing} missing cells · ${counts.not_run} not-run cells`;
+ const labels={pass:"Pass",fail:"Fail",missing:"Missing",not_run:"Not run",unknown:"Unknown"};
+ byId("matrix-body").innerHTML=rows.map(row=>`<tr><td><strong>${esc(row.leaf)}</strong></td><td><code>${esc(row.module)}</code></td><td class="${row.category?"fail":"muted"}">${esc(row.category||"None")}</td>${DATA.branches.map(branch=>{const state=row.states[branch.slug],label=labels[state.status]||state.status;if(state.status==="fail")return `<td><button class="fail-cell" onclick="inspectFailure(${state.failure_id})">Fail</button></td>`;return `<td class="${esc(state.status)}">${esc(label)}</td>`}).join("")}</tr>`).join("");
 }
 function populateFilters(){
  byId("branch-filter").innerHTML=option("","All branches")+DATA.branches.map(branch=>option(branch.slug,branch.label)).join("");
  byId("category-filter").innerHTML=option("","All categories")+uniq(DATA.failures.map(f=>f.category)).map(value=>option(value)).join("");
- byId("mode-filter").innerHTML=option("","All modes")+uniq(DATA.failures.map(f=>f.mode)).map(value=>option(value)).join("");
- byId("gpu-filter").innerHTML=option("","All GPU counts")+uniq(DATA.failures.map(f=>f.gpu)).map(value=>option(value)).join("");
+ cascadeFailureFilters();
+}
+function failureHierarchyFilters(){
+ return {domain:byId("domain-filter").value,model:byId("model-filter").value,mode:byId("mode-filter").value,gpu:byId("gpu-filter").value};
+}
+function cascadeFailureFilters(){
+ const previous=failureHierarchyFilters();
+ setAllSelect("domain-filter",uniq(DATA.failures.map(f=>f.domain)),previous.domain,"All domains");
+ let subset=DATA.failures.filter(f=>!byId("domain-filter").value||f.domain===byId("domain-filter").value);
+ setAllSelect("model-filter",uniq(subset.map(f=>f.model)),previous.model,"All models");
+ subset=subset.filter(f=>!byId("model-filter").value||f.model===byId("model-filter").value);
+ setAllSelect("mode-filter",uniq(subset.map(f=>f.mode)),previous.mode,"All modes");
+ const domain=byId("domain-filter").value,model=byId("model-filter").value,gpuSource=performance.filter(r=>r.mode==="inference"&&(!domain||r.domain===domain)&&(!model||r.model===model));
+ setAllSelect("gpu-filter",uniq(gpuSource.map(r=>r.gpu)),previous.gpu,"All GPU counts");
+ syncFailureGpuFilter();
+ renderFailures();
+}
+function syncFailureGpuFilter(){
+ const gpu=byId("gpu-filter"),training=byId("mode-filter").value==="training";if(training)gpu.value="";gpu.disabled=training;
 }
 function selectedFailures(){
- const branch=byId("branch-filter").value,category=byId("category-filter").value,mode=byId("mode-filter").value,gpu=byId("gpu-filter").value,query=byId("failure-search").value.trim().toLowerCase();
- return DATA.failures.filter(f=>(!branch||f.branch===branch)&&(!category||f.category===category)&&(!mode||f.mode===mode)&&(!gpu||f.gpu===gpu)&&(!query||(f.leaf+" "+f.module+" "+f.signature+" "+f.raw_error).toLowerCase().includes(query)));
+ const branch=byId("branch-filter").value,category=byId("category-filter").value,domain=byId("domain-filter").value,model=byId("model-filter").value,mode=byId("mode-filter").value,gpu=byId("gpu-filter").value,query=byId("failure-search").value.trim().toLowerCase();
+ return DATA.failures.filter(f=>(!branch||f.branch===branch)&&(!category||f.category===category)&&(!domain||f.domain===domain)&&(!model||f.model===model)&&(!mode||f.mode===mode)&&(!gpu||f.gpu===gpu)&&(!query||(f.leaf+" "+f.module+" "+f.signature+" "+f.raw_error).toLowerCase().includes(query)));
 }
 function renderFailures(){
  const failures=selectedFailures();
+ if(!failures.length){byId("failure-body").innerHTML=`<tr><td colspan="5" class="muted">No failures match the selected filters.</td></tr>`;delete byId("detail").dataset.failureId;byId("detail").innerHTML=`<p class="muted">No failure selected.</p>`;return}
  byId("failure-body").innerHTML=failures.map(f=>`<tr><td>${esc(f.branch_label)}</td><td>${esc(f.leaf)}</td><td>${esc(f.category)}</td><td><code>${esc(f.module)}</code></td><td><button onclick="inspectFailure(${f.id})">Inspect</button></td></tr>`).join("");
  if(failures.length&&!failures.some(f=>String(f.id)===byId("detail").dataset.failureId))inspectFailure(failures[0].id);
 }
@@ -1135,12 +1247,12 @@ function inspectFailure(id){
  byId("detail").innerHTML=`<h3>${esc(f.category)}</h3><p>${esc(f.signature)}</p><dl><dt>Branch</dt><dd>${esc(f.branch_label)}<br><code>${esc(f.commit)}</code></dd><dt>Workload</dt><dd><code>${esc(f.leaf)}</code></dd><dt>Failing HLO</dt><dd><code>${esc(f.module_path||f.leaf_path)}</code></dd><dt>Partitions</dt><dd>${f.partitions}</dd><dt>Root evidence</dt><dd>${esc(f.raw_error)}</dd><dt>Source log</dt><dd><a href="${esc(f.log_uri)}">${esc(f.log_path)}</a>:${f.root_error_line}</dd></dl><div class="copy-row"><h3>Focused reproduction</h3><button onclick="copyRepro(${id})">Copy command</button><span class="muted" id="copy-status"></span></div><pre>${esc(f.repro_command)}</pre>`;
 }
 async function copyRepro(id){const f=failureById[id];try{await navigator.clipboard.writeText(f.repro_command);byId("copy-status").textContent="Copied"}catch(error){byId("copy-status").textContent="Select and copy the command below"}}
-function filterCategory(category){byId("category-filter").value=category;renderFailures();byId("failure-search").scrollIntoView({behavior:"smooth",block:"center"})}
+function filterCategory(category){["branch-filter","domain-filter","model-filter","mode-filter","gpu-filter"].forEach(id=>byId(id).value="");byId("failure-search").value="";byId("category-filter").value=category;cascadeFailureFilters();byId("failure-search").scrollIntoView({behavior:"smooth",block:"center"})}
 function renderProvenance(){
- const c=DATA.campaign,b=c.benchmark||{};byId("provenance").innerHTML=`<div><strong>Execution environment</strong><br>Host: ${esc(c.hostname||"N/A")}<br>Platform: ${esc(c.platform||"N/A")}<br>GPU: ${esc(c.gpu||"Not captured")}<br>Container identity: <code>${esc(c.container_identity||"Not captured")}</code></div><div><strong>Perf-tool configuration</strong><br>Repeats: ${esc(b.num_repeats??"N/A")}<br>Argument mode: <code>${esc(b.arg_mode||"N/A")}</code><br>Command buffer: ${esc(b.cmd_buffer||"N/A")}<br>Settle seconds: ${esc(b.settle_sec??"N/A")}</div>`;
+ const c=DATA.campaign,b=c.benchmark||{},gpu=c.gpu_architectures?.length?c.gpu_architectures.join(", "):"Not captured",rocm=c.rocm_version?`ROCm ${c.rocm_version}`:"Not captured";byId("provenance").innerHTML=`<div><strong>Execution environment</strong><br>Host: ${esc(c.hostname||"N/A")}<br>Platform: ${esc(c.platform||"N/A")}<br>GPU: <code>${esc(gpu)}</code><br>ROCm version: <code>${esc(rocm)}</code></div><div><strong>Perf-tool configuration</strong><br>Repeats: ${esc(b.num_repeats??"N/A")}<br>Argument mode: <code>${esc(b.arg_mode||"N/A")}</code><br>Command buffer: ${esc(b.cmd_buffer||"N/A")}<br>Settle seconds: ${esc(b.settle_sec??"N/A")}</div>`;
 }
-renderHeader();renderBranches();cascadePerformance();renderSignatures();renderMatrix();populateFilters();renderFailures();renderProvenance();
-byId("matrix-search").addEventListener("input",renderMatrix);["branch-filter","category-filter","mode-filter","gpu-filter"].forEach(id=>byId(id).addEventListener("change",renderFailures));byId("failure-search").addEventListener("input",renderFailures);
+renderHeader();renderBranches();cascadePerformance();cascadeMatrix();renderSignatures();populateFilters();renderProvenance();
+["matrix-domain","matrix-model","matrix-mode"].forEach(id=>byId(id).addEventListener("change",cascadeMatrix));["branch-filter","category-filter","gpu-filter"].forEach(id=>byId(id).addEventListener("change",renderFailures));["domain-filter","model-filter","mode-filter"].forEach(id=>byId(id).addEventListener("change",cascadeFailureFilters));byId("failure-search").addEventListener("input",renderFailures);
 ["perf-domain","perf-model","perf-mode","perf-gpu"].forEach(id=>byId(id).addEventListener("change",cascadePerformance));["perf-metric","perf-module"].forEach(id=>byId(id).addEventListener("change",renderPerformance));
 </script>
 </body></html>"""

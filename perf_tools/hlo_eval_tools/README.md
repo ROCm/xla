@@ -335,10 +335,16 @@ Behavior is tunable with environment variables:
 | `ARG_MODE` | `uninitialized` | The runner's `--hlo_argument_mode`. |
 | `SETTLE_SEC` | `2` | Seconds paused between runner processes so GPU memory is reclaimed (helps back-to-back multi-GPU runs). |
 
-### Multi-branch campaign
+### Automated: XLA multi-branch campaign and HTML report
 
-`run_xla_branch_eval.py` builds `multihost_hlo_runner` for each target in
-`xla_targets.json`, then invokes the existing `run_hlo_eval.sh` interface:
+`run_hlo_eval.sh --branches` delegates to `run_xla_branch_eval.py`, which builds
+`multihost_hlo_runner` for every target in `xla_targets.json` and evaluates the
+selected HLOs. `generate_xla_hlo_campaign_report.py` then converts the campaign
+manifest, logs, and timing CSVs into one self-contained HTML report. Its
+`--campaign-dir` must be the same directory previously passed to the campaign's
+`--output-dir`; it cannot generate a report without those campaign artifacts.
+
+The two command formats are:
 
 ```bash
 ./run_hlo_eval.sh --branches \
@@ -347,6 +353,78 @@ Behavior is tunable with environment variables:
   [--hlo-path /path/to/hlo/or/subtree] \
   [--num-repeats 2]
 ```
+
+```bash
+python3 generate_xla_hlo_campaign_report.py \
+  --campaign-dir <completed-output-dir> \
+  [--output <report.html>]
+```
+
+- `--xla-source-repo` — a dedicated, clean XLA Git checkout used to build every
+  configured revision; this option is campaign-specific.
+- `--output-dir` — a new directory for the manifest, logs, and timing CSVs.
+  This option is campaign-specific; reuse this exact path as `--campaign-dir`
+  when generating the report.
+- `--hlo-path` — forwarded as the existing `run_hlo_eval.sh` `<hlo_path>`
+  argument; omit it to evaluate the complete `hlo_eval_tools` corpus.
+- `--num-repeats` — forwarded as the existing `run_hlo_eval.sh`
+  `[num_repeats]` argument (campaign default 2).
+- `--campaign-dir` — the completed or completed-with-failures directory
+  previously passed as `--output-dir`; this report-specific option reads the
+  campaign's manifest, logs, and CSVs.
+- `--output` — optional report path; the default is
+  `<campaign-dir>/full_campaign_report.html`. This option is report-specific.
+- `xla_targets.json` — target configuration beside these scripts; it must
+  contain exactly one `control` and one or more `candidate` entries.
+
+The campaign also reuses the evaluator environment controls documented above:
+`ARG_MODE`, `CMD_BUFFER`, and `ORDER`. It currently sets `SETTLE_SEC=0` while
+invoking `run_hlo_eval.sh`; campaign resume is not provided by the evaluator's
+leaf-level `RESUME` setting.
+
+Example — run all configured branches and generate the HTML report. The
+following block is intended to be copied as one command sequence. Update the
+three path variables for the local system. It evaluates the complete HLO corpus:
+
+```bash
+TOOLS=/path/to/perf-tools/perf_tools/hlo_eval_tools
+XLA_SOURCE=/path/to/clean/xla
+CAMPAIGN_DIR=/path/to/output/xla-hlo-campaign-$(date -u +%Y%m%dT%H%M%SZ)
+
+cd "$TOOLS"
+
+campaign_rc=0
+bash ./run_hlo_eval.sh --branches \
+  --xla-source-repo "$XLA_SOURCE" \
+  --output-dir "$CAMPAIGN_DIR" \
+  --num-repeats 2 || campaign_rc=$?
+
+python3 ./generate_xla_hlo_campaign_report.py \
+  --campaign-dir "$CAMPAIGN_DIR" \
+  --output "$CAMPAIGN_DIR/full_campaign_report.html"
+
+printf 'campaign exit code: %s\nreport: %s\n' \
+  "$campaign_rc" "$CAMPAIGN_DIR/full_campaign_report.html"
+```
+
+With the variables from the example above, run a focused verification with:
+
+```bash
+bash ./run_hlo_eval.sh --branches \
+  --xla-source-repo "$XLA_SOURCE" \
+  --output-dir "$CAMPAIGN_DIR" \
+  --hlo-path "$TOOLS/vision_diffusion/efficientnet/inference/1gpu" \
+  --num-repeats 2
+```
+
+The campaign exits non-zero when any selected workload fails. The post-processing
+step should still be run because the report is also the failure-triage artifact.
+An exit code of `1` therefore does not by itself mean that builds, source
+restoration, or report generation failed.
+
+In `xla_targets.json`, a `null` commit resolves the configured revision at
+campaign start; a full 40-character SHA pins an immutable target. Every target
+must resolve to a distinct commit.
 
 The XLA checkout must be clean and contain every Git remote named by the target
 configuration. Target branches are fetched and resolved to immutable commits,
@@ -358,6 +436,7 @@ The campaign output layout is:
 ```text
 <output-dir>/
   manifest.json
+  full_campaign_report.html  # after report generation
   <target-slug>/
     build.log
     eval.log
@@ -371,7 +450,7 @@ executed. It contains:
 
 - campaign timestamps and running/completed/interrupted status;
 - effective repeat, argument, command-buffer, ordering, and settle settings;
-- host and visible-device metadata;
+- host, ROCm version, visible GPU architecture, and device metadata;
 - each target's role, label, revision, resolved commit ID, and output slug;
 - per-target build/evaluation exit codes, errors, and artifact paths;
 - and the selected HLO workload/module inventory, including failed workloads that
@@ -384,31 +463,18 @@ analysis or report-generation tools. Timing rows remain in the workload CSVs;
 the manifest does not duplicate them.
 
 The final console summary reports each target's status, artifact paths, and the
-manifest path. The campaign does not generate comparisons or HTML reports.
+manifest path. HTML generation is an explicit post-processing step, as shown in
+the end-to-end example above.
 
-Set `ROCR_VISIBLE_DEVICES=<physical-device>` before the command when a specific
-GPU must be selected.
+The report shows system/evaluator configuration, branch status, and
+live-control-relative HLO performance. It also includes a complete cross-branch
+HLO status matrix, normalized failure signature overview, and focused
+log/reproduction evidence. Performance selectors include only measured HLOs,
+while failed and missing HLOs remain in the status and failure sections. It is a
+post-processing tool and does not build XLA or rerun HLOs.
 
-### Campaign HTML report
-
-After a campaign completes, generate a self-contained HTML report from its
-manifest, evaluator logs, and timing CSVs:
-
-```bash
-python3 generate_xla_hlo_campaign_report.py \
-  --campaign-dir /path/to/completed/output
-```
-
-The default output is:
-
-```text
-<campaign-dir>/full_campaign_report.html
-```
-
-Use `--output /path/to/report.html` to choose a different location. The report
-shows system/evaluator configuration, branch status, live-control-relative HLO
-performance, failure signatures, a cross-branch failure matrix, and focused log
-evidence. It is a post-processing tool and does not build XLA or rerun HLOs.
+Set `ROCR_VISIBLE_DEVICES=<physical-device>` before the campaign command when a
+specific physical GPU must be selected.
 
 ### Manual equivalent
 
