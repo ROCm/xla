@@ -40,6 +40,8 @@ struct BlockLevelParameters {
   bool is_warp_specialization_allowed = false;
   int num_tiles_per_pid = 1;
   int waves_per_eu = 0;
+  // Forces the MN size of the AMD MFMA instruction (0 = automatic selection).
+  int matrix_instr_nonkdim = 0;
 
   // Returns a BlockLevelParameters struct from a BlockLevelFusionConfig proto.
   static BlockLevelParameters FromBlockLevelFusionConfig(
@@ -53,6 +55,7 @@ struct BlockLevelParameters {
         config.is_warp_specialization_allowed();
     result.num_tiles_per_pid = std::max(1, config.num_tiles_per_pid());
     result.waves_per_eu = config.waves_per_eu();
+    result.matrix_instr_nonkdim = config.matrix_instr_nonkdim();
     result.output_tile_sizes.reserve(config.output_tiles_size());
     for (const auto& tile : config.output_tiles()) {
       result.output_tile_sizes.push_back(
@@ -75,6 +78,7 @@ struct BlockLevelParameters {
     config.set_is_tma_allowed(is_tma_allowed);
     config.set_is_warp_specialization_allowed(is_warp_specialization_allowed);
     config.set_waves_per_eu(waves_per_eu);
+    config.set_matrix_instr_nonkdim(matrix_instr_nonkdim);
     if (num_tiles_per_pid > 1) {
       config.set_num_tiles_per_pid(num_tiles_per_pid);
     }

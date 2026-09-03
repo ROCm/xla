@@ -49,6 +49,7 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/device_description.pb.h"
 #include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/testing/temporary_directory.h"
@@ -64,6 +65,7 @@ using ::absl_testing::IsOk;
 using ::absl_testing::IsOkAndHolds;
 using ::absl_testing::StatusIs;
 using TritonBackendConfig = AutotuneResult::TritonGemmKey;
+using ::testing::ElementsAre;
 using ::testing::Gt;
 using ::testing::IsEmpty;
 using ::testing::Not;
@@ -212,6 +214,40 @@ TEST_P(TritonBackendTest, GetSupportedConfigsForScaledDot) {
       backend_.GetSupportedConfigs(*fusion_instr);
   EXPECT_THAT(configs, absl_testing::IsOk());
   EXPECT_GT(configs.value().size(), 0);
+}
+
+TEST_P(TritonBackendTest, ScaledDotMatrixInstrNonKDimIsOnlyGeneratedOnCdna4) {
+  if (!target_config_.device_description.gpu_compute_capability().IsRocm()) {
+    GTEST_SKIP() << "AMD only.";
+  }
+
+  auto get_nonkdim_values =
+      [&](std::string gfx_version) -> absl::StatusOr<std::set<int>> {
+    target_config_.device_description.set_gpu_compute_capability(
+        se::GpuComputeCapability{
+            se::RocmComputeCapability{std::move(gfx_version)}});
+    ABSL_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> module,
+                          ParseAndReturnVerifiedModule(kScaledDotHlo));
+    ABSL_ASSIGN_OR_RETURN(
+        std::vector<std::unique_ptr<BackendConfig>> configs,
+        backend_.GetSupportedConfigs(
+            *module->entry_computation()->root_instruction()));
+    std::set<int> values;
+    for (const std::unique_ptr<BackendConfig>& config : configs) {
+      if (config->has_triton()) {
+        values.insert(config->triton().matrix_instr_nonkdim());
+      }
+    }
+    return values;
+  };
+
+  // CDNA4 has both mfma_scale_f32_16x16x128_f8f6f4 and
+  // mfma_scale_f32_32x32x64_f8f6f4, so forcing the MN size is a real choice.
+  EXPECT_THAT(get_nonkdim_values("gfx950"),
+              absl_testing::IsOkAndHolds(ElementsAre(0, 16)));
+  // CDNA3 has no scaled MFMA intrinsic at all.
+  EXPECT_THAT(get_nonkdim_values("gfx942"),
+              absl_testing::IsOkAndHolds(ElementsAre(0)));
 }
 
 TEST_P(TritonBackendTest, GetSupportedConfigsWithEstimatesForScaledDot) {
