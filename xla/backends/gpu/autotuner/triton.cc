@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/backends/gpu/autotuner/triton.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -246,6 +247,19 @@ TritonBackend::GetSupportedConfigsForScaledDot(const HloInstruction* instr) {
 
   std::vector<TritonGemmConfig> configs;
 
+  // CDNA4 is the only target with scaled MFMA intrinsics, and it has one in
+  // each MN size, mfma_scale_f32_16x16x128_f8f6f4 and
+  // mfma_scale_f32_32x32x64_f8f6f4. Both cover the whole F8F6F4 family, so for
+  // any scaled dot we can reach on this target there is a real choice between
+  // them and it is worth autotuning. Everywhere else, including CDNA3, only
+  // matrix_instr_nonkdim 0 makes sense.
+  const bool autotune_matrix_instr_nonkdim =
+      gpu_cc.IsRocm() && gpu_cc.rocm_compute_capability()->gfx9_mi350();
+  // The MN sizes of the two scaled MFMA intrinsics, 16 for
+  // mfma_scale_f32_16x16x128_f8f6f4 and 32 for mfma_scale_f32_32x32x64_f8f6f4.
+  constexpr int kSmallNonKDim = 16;
+  constexpr int kLargeNonKDim = 32;
+
   const bool exhaustive_search =
       debug_options().xla_gpu_exhaustive_tiling_search();
   for (int block_m = 128; block_m <= 256; block_m *= 2) {
@@ -261,12 +275,24 @@ TritonBackend::GetSupportedConfigsForScaledDot(const HloInstruction* instr) {
           continue;
         }
 
-        configs.push_back(TritonGemmConfig(block_m, block_n,
-                                           /*block_k=*/block_k,
-                                           /*num_stages=*/1,
-                                           /*num_warps=*/4,
-                                           /*num_ctas=*/1,
-                                           /*is_tma_allowed=*/false));
+        TritonGemmConfig config(block_m, block_n,
+                                /*block_k=*/block_k,
+                                /*num_stages=*/1,
+                                /*num_warps=*/4,
+                                /*num_ctas=*/1,
+                                /*is_tma_allowed=*/false);
+        configs.push_back(config);
+
+        // The AMD backend picks the MN size from min(block_m, block_n), taking
+        // the large one as soon as that is at least as big. So forcing the
+        // small one only gives a different kernel for the tiles where the
+        // automatic choice is the large one, and duplicating the rest would
+        // just cost benchmark time.
+        if (autotune_matrix_instr_nonkdim &&
+            std::min(block_m, block_n) >= kLargeNonKDim) {
+          config.matrix_instr_nonkdim = kSmallNonKDim;
+          configs.push_back(config);
+        }
       }
     }
   }

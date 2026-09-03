@@ -142,6 +142,8 @@ std::vector<TritonGemmConfig> TritonDotFusionSearchSpace::GenerateConfigs(
   }
   if (device_description_.gpu_compute_capability().IsRocm()) {
     ExtendConfigs(configs, &TritonDotFusionSearchSpace::AddWavesPerEuParameter);
+    ExtendConfigs(
+        configs, &TritonDotFusionSearchSpace::AddMatrixInstrNonKDimParameter);
   }
 
   std::vector<TritonGemmConfig> result;
@@ -640,6 +642,29 @@ void TritonDotFusionSearchSpace::AddWavesPerEuParameter(
     ConfigWithNotes new_config = config;
     new_config.config.waves_per_eu = waves;
     VLOG(10) << "Adding waves_per_eu parameter: config = "
+             << new_config.ToString();
+    updated_configs.push_back(new_config);
+  }
+}
+
+void TritonDotFusionSearchSpace::AddMatrixInstrNonKDimParameter(
+    const ConfigWithNotes& config,
+    std::vector<ConfigWithNotes>& updated_configs) const {
+  // Forces the MN size of the MFMA instruction that the AMD backend selects for
+  // the dot. 0 leaves the size-based auto heuristic in charge, which for
+  // realistic tile sizes always picks the largest available MFMA shape. That is
+  // not always the fastest choice, e.g. for XF32 on gfx942 the smaller
+  // v_mfma_f32_16x16x8_xf32 beats v_mfma_f32_32x32x4_xf32 by ~24% on the same
+  // tile, which is also what hipBLASLt picks.
+  //
+  // Combinations of (MN size, dtype) that have no matching MFMA intrinsic fail
+  // to compile and get discarded by the autotuner like any other invalid
+  // candidate, so we do not need to be dtype aware here.
+  static constexpr int kMatrixInstrNonKDimValues[] = {0, 16};
+  for (int nonkdim : kMatrixInstrNonKDimValues) {
+    ConfigWithNotes new_config = config;
+    new_config.config.matrix_instr_nonkdim = nonkdim;
+    VLOG(10) << "Adding matrix_instr_nonkdim parameter: config = "
              << new_config.ToString();
     updated_configs.push_back(new_config);
   }

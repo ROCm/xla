@@ -34,10 +34,12 @@ TEST(TritonConfigsTest, PlatformsReturnNonEmptyConfig) {
               SizeIs(2));
   EXPECT_THAT(GetTritonConfigsForPlatform(TritonConfigsPlatform::kHopper),
               SizeIs(25));
+  // 33 tuned configs, each duplicated for both matrix_instr_nonkdim values.
   EXPECT_THAT(GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI300),
-              SizeIs(33));
+              SizeIs(66));
+  // 58 tuned configs, each duplicated for both matrix_instr_nonkdim values.
   EXPECT_THAT(GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI350),
-              SizeIs(58));
+              SizeIs(116));
 }
 
 }  // namespace

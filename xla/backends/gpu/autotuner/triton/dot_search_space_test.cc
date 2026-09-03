@@ -95,6 +95,11 @@ template <typename MatcherType>
 auto WavesPerEuIs(MatcherType matcher) {
   return Field("waves_per_eu", &TritonGemmConfig::waves_per_eu, matcher);
 }
+template <typename MatcherType>
+auto MatrixInstrNonKDimIs(MatcherType matcher) {
+  return Field("matrix_instr_nonkdim", &TritonGemmConfig::matrix_instr_nonkdim,
+               matcher);
+}
 
 auto IsValidConfig() {
   return AllOf(BlockMIs(Ge(1)), BlockNIs(Ge(1)), BlockKIs(Ge(1)),
@@ -470,6 +475,15 @@ TEST_F(DotSearchSpaceTest, CudaDoesNotGenerateWavesPerEuConfigs) {
               AllOf(Not(IsEmpty()), Each(WavesPerEuIs(Eq(0)))));
 }
 
+TEST_F(DotSearchSpaceTest, CudaDoesNotGenerateMatrixInstrNonKDimConfigs) {
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                          GetDefaultDotModule());
+  TritonDotFusionSearchSpace search_space = MakeSearchSpace(module.get());
+
+  EXPECT_THAT(search_space.GenerateConfigs(),
+              AllOf(Not(IsEmpty()), Each(MatrixInstrNonKDimIs(Eq(0)))));
+}
+
 class RocmDotSearchSpaceTest : public DefaultDeviceDotSearchSpaceTest {
  protected:
   RocmDotSearchSpaceTest() {
@@ -492,6 +506,18 @@ TEST_F(RocmDotSearchSpaceTest, GeneratesWavesPerEuConfigs) {
 
   EXPECT_THAT(configs, AllOf(Not(IsEmpty()), Contains(WavesPerEuIs(Ge(1))),
                              Each(WavesPerEuIs(AnyOf(0, 1, 2, 4)))));
+}
+
+TEST_F(RocmDotSearchSpaceTest, GeneratesMatrixInstrNonKDimConfigs) {
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                          GetDefaultDotModule());
+  TritonDotFusionSearchSpace search_space = MakeSearchSpace(module.get());
+  std::vector<TritonGemmConfig> configs = search_space.GenerateConfigs();
+
+  EXPECT_THAT(configs,
+              AllOf(Not(IsEmpty()), Contains(MatrixInstrNonKDimIs(Eq(16))),
+                    Contains(MatrixInstrNonKDimIs(Eq(0))),
+                    Each(MatrixInstrNonKDimIs(AnyOf(0, 16)))));
 }
 
 }  // namespace

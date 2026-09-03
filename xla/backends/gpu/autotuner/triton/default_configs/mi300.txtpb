@@ -12,36 +12,75 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-config { block_m: 32 block_n: 32 block_k: 256 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 64 block_n: 32 block_k: 32 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 32 block_n: 64 block_k: 64 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 128 block_n: 128 block_k: 64 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 16 block_n: 16 block_k: 256 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 16 block_n: 128 block_k: 32 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 256 block_n: 256 block_k: 32 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 128 block_n: 256 block_k: 64 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 128 block_n: 256 block_k: 32 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 256 block_n: 128 block_k: 64 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 128 block_n: 128 block_k: 64 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 32 block_n: 8 block_k: 16 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 64 block_n: 32 block_k: 16 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 128 block_n: 32 block_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 128 block_n: 64 block_k: 128 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 128 block_n: 128 block_k: 32 num_stages: 3 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 256 block_n: 128 block_k: 32 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 256 block_n: 256 block_k: 32 num_stages: 1 num_warps: 8 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 128 block_n: 32 block_k: 32 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 64 block_n: 32 block_k: 32 num_stages: 3 num_warps: 2 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 128 block_n: 32 block_k: 32 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 32 block_n: 32 block_k: 32 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 64 block_n: 32 block_k: 128 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 256 block_n: 8 block_k: 32 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 128 block_n: 16 block_k: 128 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 32 block_n: 16 block_k: 128 num_stages: 5 num_warps: 2 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 32 block_n: 16 block_k: 128 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 4 }
-config { block_m: 64 block_n: 8 block_k: 128 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 64 block_n: 8 block_k: 128 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 4 }
-config { block_m: 32 block_n: 16 block_k: 256 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 32 block_n: 16 block_k: 256 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 2 }
-config { block_m: 256 block_n: 8 block_k: 16 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 }
-config { block_m: 128 block_n: 8 block_k: 16 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 0 }
+# Every tuned config appears twice, once per matrix_instr_nonkdim value. 0 lets
+# the AMD backend pick the MFMA shape by its own size heuristic, 16 forces the
+# smaller MFMA variant, which is faster for some dtypes (notably XF32) on the
+# same tile. These configs are used as hints for OptimizeConfigSet, which
+# filters the generated search space by exact config match, so a value that
+# does not appear here can never survive outside exhaustive tiling search.
+config { block_m: 32 block_n: 32 block_k: 256 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 32 block_n: 32 block_k: 256 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 64 block_n: 32 block_k: 32 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 64 block_n: 32 block_k: 32 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 32 block_n: 64 block_k: 64 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 32 block_n: 64 block_k: 64 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 128 block_n: 128 block_k: 64 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 128 block_n: 128 block_k: 64 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 16 block_n: 16 block_k: 256 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 16 block_n: 16 block_k: 256 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 16 block_n: 128 block_k: 32 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 16 block_n: 128 block_k: 32 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 256 block_n: 256 block_k: 32 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 256 block_n: 256 block_k: 32 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 128 block_n: 256 block_k: 64 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 128 block_n: 256 block_k: 64 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 128 block_n: 256 block_k: 32 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 128 block_n: 256 block_k: 32 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 256 block_n: 128 block_k: 64 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 256 block_n: 128 block_k: 64 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 128 block_n: 128 block_k: 64 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 128 block_n: 128 block_k: 64 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 32 block_n: 8 block_k: 16 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 32 block_n: 8 block_k: 16 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 64 block_n: 32 block_k: 16 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 64 block_n: 32 block_k: 16 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 128 block_n: 32 block_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 128 block_n: 32 block_k: 16 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 128 block_n: 64 block_k: 128 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 128 block_n: 64 block_k: 128 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 128 block_n: 128 block_k: 32 num_stages: 3 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 128 block_n: 128 block_k: 32 num_stages: 3 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 256 block_n: 128 block_k: 32 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 256 block_n: 128 block_k: 32 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 256 block_n: 256 block_k: 32 num_stages: 1 num_warps: 8 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 256 block_n: 256 block_k: 32 num_stages: 1 num_warps: 8 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 128 block_n: 32 block_k: 32 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 128 block_n: 32 block_k: 32 num_stages: 1 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 64 block_n: 32 block_k: 32 num_stages: 3 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 64 block_n: 32 block_k: 32 num_stages: 3 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 128 block_n: 32 block_k: 32 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 128 block_n: 32 block_k: 32 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 32 block_n: 32 block_k: 32 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 32 block_n: 32 block_k: 32 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 64 block_n: 32 block_k: 128 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 64 block_n: 32 block_k: 128 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 256 block_n: 8 block_k: 32 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 256 block_n: 8 block_k: 32 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 128 block_n: 16 block_k: 128 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 128 block_n: 16 block_k: 128 num_stages: 2 num_warps: 8 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 32 block_n: 16 block_k: 128 num_stages: 5 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 32 block_n: 16 block_k: 128 num_stages: 5 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 32 block_n: 16 block_k: 128 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 4 matrix_instr_nonkdim: 0 }
+config { block_m: 32 block_n: 16 block_k: 128 num_stages: 2 num_warps: 4 num_ctas: 1 waves_per_eu: 4 matrix_instr_nonkdim: 16 }
+config { block_m: 64 block_n: 8 block_k: 128 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 64 block_n: 8 block_k: 128 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 64 block_n: 8 block_k: 128 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 4 matrix_instr_nonkdim: 0 }
+config { block_m: 64 block_n: 8 block_k: 128 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 4 matrix_instr_nonkdim: 16 }
+config { block_m: 32 block_n: 16 block_k: 256 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 32 block_n: 16 block_k: 256 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 32 block_n: 16 block_k: 256 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 2 matrix_instr_nonkdim: 0 }
+config { block_m: 32 block_n: 16 block_k: 256 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 2 matrix_instr_nonkdim: 16 }
+config { block_m: 256 block_n: 8 block_k: 16 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 256 block_n: 8 block_k: 16 num_stages: 2 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
+config { block_m: 128 block_n: 8 block_k: 16 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 0 }
+config { block_m: 128 block_n: 8 block_k: 16 num_stages: 1 num_warps: 2 num_ctas: 1 waves_per_eu: 0 matrix_instr_nonkdim: 16 }
