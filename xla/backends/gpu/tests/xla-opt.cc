@@ -13,9 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <optional>
 #include <string>
 
-#include "bin/RegisterTritonDialects.h"
 #include "llvm/Support/CommandLine.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -29,6 +29,7 @@ limitations under the License.
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
+#include "bin/RegisterTritonDialects.h"
 #include "stablehlo/dialect/StablehloOps.h"
 #include "xla/backends/gpu/codegen/emitters/transforms/passes.h"
 #include "xla/backends/gpu/codegen/triton/compilation_pipeline.h"
@@ -43,6 +44,19 @@ limitations under the License.
 
 namespace {
 
+enum class RocmUseAsyncCopyMode {
+  kAuto,
+  kEnabled,
+  kDisabled,
+};
+
+std::optional<bool> GetRocmUseAsyncCopyOverride(RocmUseAsyncCopyMode mode) {
+  if (mode == RocmUseAsyncCopyMode::kAuto) {
+    return std::nullopt;
+  }
+  return mode == RocmUseAsyncCopyMode::kEnabled;
+}
+
 struct TritonPipelineOptions
     : public mlir::PassPipelineOptions<TritonPipelineOptions> {
   Option<std::string> target{*this, "target", llvm::cl::init("8.0")};
@@ -52,6 +66,16 @@ struct TritonPipelineOptions
   Option<int> num_ctas{*this, "num-ctas", llvm::cl::init(1)};
   Option<int> num_stages{*this, "num-stages", llvm::cl::init(3)};
   Option<bool> enable_pdl{*this, "enable-pdl", llvm::cl::init(false)};
+  Option<RocmUseAsyncCopyMode> rocm_use_async_copy{
+      *this, "rocm-use-async-copy",
+      llvm::cl::desc("ROCm async copy mode: auto, true, or false"),
+      llvm::cl::init(RocmUseAsyncCopyMode::kAuto),
+      llvm::cl::values(clEnumValN(RocmUseAsyncCopyMode::kAuto, "auto",
+                                  "Use Triton's architecture-specific default"),
+                       clEnumValN(RocmUseAsyncCopyMode::kEnabled, "true",
+                                  "Force async copy on"),
+                       clEnumValN(RocmUseAsyncCopyMode::kDisabled, "false",
+                                  "Force async copy off"))};
 };
 
 mlir::PassPipelineRegistration<TritonPipelineOptions>
@@ -77,8 +101,10 @@ mlir::PassPipelineRegistration<TritonPipelineOptions>
               options.num_stages, warp_specialization_allowed,
               options.enable_pdl);
 
-          xla::gpu::CreateTritonPipeline(&pm, gpu_cc, options.num_warps,
-                                         options.num_ctas, options.num_stages);
+          xla::gpu::CreateTritonPipeline(
+              &pm, gpu_cc, options.num_warps, options.num_ctas,
+              options.num_stages,
+              GetRocmUseAsyncCopyOverride(options.rocm_use_async_copy));
         });
 
 }  // namespace

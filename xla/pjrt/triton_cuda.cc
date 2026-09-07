@@ -15,10 +15,9 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "nvidia/include/NVGPUToLLVM/NVGPUToLLVMPass.h"
-#include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h"
 #include "absl/base/call_once.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
@@ -52,6 +51,8 @@ limitations under the License.
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "nvidia/include/NVGPUToLLVM/NVGPUToLLVMPass.h"
+#include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h"
 #include "xla/backends/gpu/codegen/triton/compilation_pipeline.h"
 #include "xla/pjrt/triton.h"
 #include "xla/service/gpu/llvm_gpu_backend/gpu_backend_lib.h"
@@ -146,7 +147,8 @@ absl::StatusOr<CompilationResult> Compile(absl::string_view module,
                    se::CudaComputeCapability::FromString(arch_name));
 
   gpu::CreateTritonPipeline(&pm, se::GpuComputeCapability(cuda_cc), num_warps,
-                            num_ctas, num_stages);
+                            num_ctas, num_stages,
+                            /*rocm_use_async_copy=*/std::nullopt);
   if (failed(pm.run(*module_op))) {
     return absl::InternalError("Failed to compile Triton IR to LLVM IR");
   }

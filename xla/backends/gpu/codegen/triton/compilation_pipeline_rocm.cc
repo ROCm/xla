@@ -15,17 +15,18 @@ limitations under the License.
 // TODO(ROCm): Enable and include ROCm Triton passes when ROCm Triton is
 // included in build.
 
+#include <optional>
 #include <string>
 
 #include "absl/strings/str_cat.h"
-#include "third_party/amd/include/TritonAMDGPUToLLVM/Passes.h"
-#include "third_party/amd/include/TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
+#include "third_party/amd/include/TritonAMDGPUToLLVM/Passes.h"
+#include "third_party/amd/include/TritonAMDGPUTransforms/Passes.h"
 #include "xla/backends/gpu/codegen/triton/extern_function_helper.h"
 #include "xla/backends/gpu/codegen/triton/transforms/passes.h"
 #include "xla/stream_executor/rocm/rocm_compute_capability.h"
@@ -63,6 +64,14 @@ static bool is_pingpong_schedule_enabled(
   return rocm_cc.gfx9_mi300() || (rocm_cc.gfx9_mi350() && use_async_copy);
 }
 
+static bool is_async_copy_enabled(
+    const stream_executor::RocmComputeCapability& rocm_cc,
+    std::optional<bool> use_async_copy_override) {
+  // Keep this default in sync with Triton's AMD backend.
+  return use_async_copy_override.value_or(rocm_cc.gfx9_mi350() ||
+                                          rocm_cc.gfx1250());
+}
+
 static bool is_in_thread_transpose_enabled(
     const stream_executor::RocmComputeCapability& rocm_cc) {
   return rocm_cc.gfx9_mi300();
@@ -72,7 +81,8 @@ static bool is_in_thread_transpose_enabled(
 // @triton//:third_party/amd/backend/compiler.py
 static void MakeTTGIR(mlir::OpPassManager* pm,
                       const stream_executor::RocmComputeCapability& rocm_cc,
-                      int num_warps, int num_ctas, int num_stages) {
+                      int num_warps, int num_ctas, int num_stages,
+                      std::optional<bool> use_async_copy_override) {
   pm->addPass(mt::createConvertTritonToTritonGPU(
       {absl::StrCat("hip:", rocm_cc.gfx_version()), num_warps,
        rocm_cc.threads_per_warp(), num_ctas}));
@@ -100,7 +110,7 @@ static void MakeTTGIR(mlir::OpPassManager* pm,
   // TODO(ROCm) Modify when corresponding run time flags are introduced.
   std::string schedule_hint = "none";
 
-  bool use_async_copy = false;  // Not enabled by default.
+  bool use_async_copy = is_async_copy_enabled(rocm_cc, use_async_copy_override);
   bool use_block_pingpong =
       is_pingpong_schedule_enabled(rocm_cc, use_async_copy);
 
@@ -190,9 +200,10 @@ static void MakeLLIR(mlir::OpPassManager* pm,
 void CreateTritonRocmPipeline(
     mlir::OpPassManager* pm,
     const stream_executor::RocmComputeCapability& rocm_cc, int num_warps,
-    int num_ctas, int num_stages) {
+    int num_ctas, int num_stages, std::optional<bool> use_async_copy_override) {
   MakeTTIR(pm, rocm_cc);
-  MakeTTGIR(pm, rocm_cc, num_warps, num_ctas, num_stages);
+  MakeTTGIR(pm, rocm_cc, num_warps, num_ctas, num_stages,
+            use_async_copy_override);
   MakeLLIR(pm, rocm_cc, num_stages);
 }
 

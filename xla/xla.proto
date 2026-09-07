@@ -1393,6 +1393,11 @@ message DebugOptions {
   // the results of regular emitters.
   optional bool xla_gpu_verify_triton_fusion_numerics = 291;
 
+  // Controls async copies from global memory to LDS in the ROCm Triton
+  // pipeline. If unset, follows Triton's architecture-specific default;
+  // otherwise, forces async copy on or off.
+  optional bool xla_gpu_rocm_triton_use_async_copy = 545;
+
   //--------------------------------------------------------------------------//
   // XLA:TPU options.
   //--------------------------------------------------------------------------//
@@ -1845,7 +1850,7 @@ message DebugOptions {
   // for all instructions. Accepts textproto of autotuner.CandidateConfigs.
   optional string xla_candidate_configs_file = 544;
 
-  // Next id: 545
+  // Next id: 546
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
