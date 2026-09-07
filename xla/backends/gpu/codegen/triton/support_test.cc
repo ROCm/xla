@@ -3713,6 +3713,54 @@ ENTRY triton_computation {
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 2, 2, 1}, cc);
 }
 
+TEST_P(ConvolutionTestCcOnly, IsTritonSupportedConvWindowReversal) {
+  auto [cc, tiling] = GetParam();
+  const std::string kHloTestTemplate = R"(
+ENTRY triton_computation {
+  input = f16[1,5,6,2] parameter(0)  // N=1, H=5, W=6, C_in=2
+  kernel = f16[3,3,2,3] parameter(1) // H=3, W=3, C_in=2, C_out=3
+  ROOT conv = f16[1,3,4,3] convolution(input, kernel),
+    window={size=3x3 rhs_reversal=1x1}, dim_labels=b01f_01io->b01f
+})";
+  TF_ASSERT_OK_AND_ASSIGN(
+      TestedInstruction ti,
+      ParseTemplateAndGetInstruction(kHloTestTemplate, PRIMITIVE_TYPE_INVALID,
+                                     HloOpcode::kConvolution));
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 1, 1, 1}, cc);
+}
+
+TEST_P(ConvolutionTestCcOnly, IsTritonSupportedConvMixedOperandTypes) {
+  auto [cc, tiling] = GetParam();
+  const std::string kHloTestTemplate = R"(
+ENTRY triton_computation {
+  input = f32[1,5,6,2] parameter(0)   // N=1, H=5, W=6, C_in=2
+  kernel = bf16[3,3,2,3] parameter(1) // H=3, W=3, C_in=2, C_out=3
+  ROOT conv = f32[1,3,4,3] convolution(input, kernel),
+    window={size=3x3}, dim_labels=b01f_01io->b01f
+})";
+  TF_ASSERT_OK_AND_ASSIGN(
+      TestedInstruction ti,
+      ParseTemplateAndGetInstruction(kHloTestTemplate, PRIMITIVE_TYPE_INVALID,
+                                     HloOpcode::kConvolution));
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 2, 2, 1}, cc);
+}
+
+TEST_P(ConvolutionTestCcOnly, IsTritonSupportedConvS4Result) {
+  auto [cc, tiling] = GetParam();
+  const std::string kHloTestTemplate = R"(
+ENTRY triton_computation {
+  input = f32[1,5,6,2] parameter(0)  // N=1, H=5, W=6, C_in=2
+  kernel = f32[3,3,2,3] parameter(1) // H=3, W=3, C_in=2, C_out=3
+  ROOT conv = s4[1,3,4,3] convolution(input, kernel),
+    window={size=3x3}, dim_labels=b01f_01io->b01f
+})";
+  TF_ASSERT_OK_AND_ASSIGN(
+      TestedInstruction ti,
+      ParseTemplateAndGetInstruction(kHloTestTemplate, PRIMITIVE_TYPE_INVALID,
+                                     HloOpcode::kConvolution));
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 2, 2, 1}, cc);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     ConvolutionTestSuiteCcOnly, ConvolutionTestCcOnly,
     ::testing::Combine(::testing::ValuesIn(AllDevicesToTest()),
