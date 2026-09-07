@@ -15,6 +15,9 @@ concurrency:
 
 jobs:
   call-upstream-ci:
+    permissions:
+      contents: read
+      packages: read
     uses: openxla/xla/.github/workflows/rocm_ci.yml@main
     with:
       rocm_xla_branch: ${{ github.head_ref || github.ref_name }}
