@@ -15,6 +15,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -76,8 +77,13 @@ absl::Status TritonToLLVM(mlir::ModuleOp module, absl::string_view arch_name,
   stream_executor::RocmComputeCapability rocm_cc =
       stream_executor::RocmComputeCapability(std::string(arch_name));
   stream_executor::GpuComputeCapability gpu_version(rocm_cc);
+  const DebugOptions debug_options = GetDebugOptionsFromFlags();
+  std::optional<bool> use_async_copy;
+  if (debug_options.has_xla_gpu_rocm_triton_use_async_copy()) {
+    use_async_copy = debug_options.xla_gpu_rocm_triton_use_async_copy();
+  }
   xla::gpu::CreateTritonPipeline(&pm, gpu_version, num_warps, num_ctas,
-                                 num_stages);
+                                 num_stages, use_async_copy);
   pm.addPass(mlir::createStripDebugInfoPass());
   return pm.run(module).succeeded()
              ? absl::OkStatus()

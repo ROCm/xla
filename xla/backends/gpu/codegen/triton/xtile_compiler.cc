@@ -530,9 +530,9 @@ absl::StatusOr<TritonWrapperResult> CompileTritonToLLVM(
   std::string arch_name = gpu_cc.ToString();
 
   const HloModuleConfig& hlo_config = hlo_module.config();
+  const DebugOptions& debug_options = hlo_config.debug_options();
 
-  bool should_verify =
-      (hlo_config.debug_options().xla_gpu_llvm_verification_level() >= 1);
+  bool should_verify = (debug_options.xla_gpu_llvm_verification_level() >= 1);
 #ifndef NDEBUG
   should_verify = true;
 #endif
@@ -558,13 +558,18 @@ absl::StatusOr<TritonWrapperResult> CompileTritonToLLVM(
         "(num_warps, num_ctas, num_stages) must be positive, but got: (",
         num_warps, ", ", num_ctas, ", ", num_stages, ")"));
   }
-  const bool enable_pdl = IsPdlEnabled(hlo_config.debug_options(), gpu_cc);
+  const bool enable_pdl = IsPdlEnabled(debug_options, gpu_cc);
   CreateTritonXlaPipeline(&pm, gpu_cc, /*rewrite_int4=*/is_xla_fusion,
                           block_level_parameters.is_tma_allowed, num_stages,
                           block_level_parameters.is_warp_specialization_allowed,
                           enable_pdl);
 
-  CreateTritonPipeline(&pm, gpu_cc, num_warps, num_ctas, num_stages);
+  std::optional<bool> rocm_use_async_copy;
+  if (debug_options.has_xla_gpu_rocm_triton_use_async_copy()) {
+    rocm_use_async_copy = debug_options.xla_gpu_rocm_triton_use_async_copy();
+  }
+  CreateTritonPipeline(&pm, gpu_cc, num_warps, num_ctas, num_stages,
+                       rocm_use_async_copy);
 
   // Triton generates pointers to the global address space, while XLA needs a
   // kernel signature with pointers to the generic address space.
