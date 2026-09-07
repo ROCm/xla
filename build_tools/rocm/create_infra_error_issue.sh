@@ -52,6 +52,7 @@ TEAM_MEMBERS=(
     alekstheod
     i-chaochen
     hsharsha
+    charleshofer
 )
 
 # Build assignee flags
