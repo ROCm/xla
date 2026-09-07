@@ -1,0 +1,63 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+
+name: Runner smoke test
+
+permissions: {}
+
+on:
+  pull_request:
+    branches:
+      - rocm-dev-infra
+    paths:
+      - '.github/workflows/build_only_xla_smoke.yml'
+
+jobs:
+  smoke-test:
+    runs-on: build-only-xla
+    timeout-minutes: 10
+    env:
+      SMTP_HOST: ${{ secrets.SMTP_SMOKE_HOST }}
+      SMTP_FROM: ${{ secrets.SMTP_SMOKE_FROM }}
+      SMTP_TO: ${{ secrets.SMTP_SMOKE_TO }}
+    steps:
+      - name: Send notification
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import smtplib
+          from email.message import EmailMessage
+
+          required = ("SMTP_HOST", "SMTP_FROM", "SMTP_TO")
+          missing = [name for name in required if not os.environ.get(name)]
+          if missing:
+              raise RuntimeError(f"Missing configuration: {', '.join(missing)}")
+
+          message = EmailMessage()
+          message["From"] = os.environ["SMTP_FROM"]
+          message["To"] = os.environ["SMTP_TO"]
+          message["Subject"] = "ROCm/xla notification test"
+          message.set_content(
+              "The build-only-xla runner successfully sent this notification.\n\n"
+              f"Workflow run: {os.environ['RUN_URL']}\n"
+          )
+
+          with smtplib.SMTP(os.environ["SMTP_HOST"], 25, timeout=30) as smtp:
+              smtp.send_message(message)
+
+          print("Notification sent successfully")
+          PY
