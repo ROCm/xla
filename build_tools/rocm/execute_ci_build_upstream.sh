@@ -43,7 +43,6 @@ done
     --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
     --remote_download_outputs=minimal \
     --grpc_keepalive_time=30s \
-    --test_sharding_strategy=disabled \
     --test_verbose_timeout_warnings \
     --test_timeout=920,2400,7200,9600 \
     --sandbox_add_mount_pair=/dev/null:/etc/ld.so.cache \
