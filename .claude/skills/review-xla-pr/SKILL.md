@@ -24,6 +24,10 @@ Before reviewing, fetch the PR context by running these commands:
 - `gh pr diff $ARGUMENTS` — full diff
 - `gh pr view $ARGUMENTS --comments 2>/dev/null || echo "(no comments yet)"` — existing review comments
 
+Then read `xla/AGENTS.md` from the checkout. It is the authoritative upstream coding-convention document (error handling and status macros, `TF_RET_CHECK` vs `DCHECK`, `Decision` instead of `bool`, `auto` in headers, namespaces, MLIR op creation, BUILD rule choices, test bases and test hygiene, phase ordering, performance sensitivity). Treat it as part of this checklist and flag violations of it. The checklist below deliberately does not repeat it; it covers only what `xla/AGENTS.md` leaves out.
+
+If `xla/AGENTS.md` is missing, the PR targets a branch that predates it. Those conventions still apply, so review against the [upstream copy](https://github.com/openxla/xla/blob/main/xla/AGENTS.md) and say in the summary that you could not read it from the checkout.
+
 ## Your Task
 
 Review the PR above thoroughly using the checklist below. Be specific: cite file paths and line numbers from the diff. Describe each finding clearly and explain why it matters. Do NOT assign severity labels (no BLOCKER/WARNING/NIT) — let the human reviewer judge importance.
@@ -37,7 +41,7 @@ Review the PR above thoroughly using the checklist below. Be specific: cite file
 ### 1. HLO IR Correctness
 - Does the change preserve the `HloModule` / `HloComputation` / `HloInstruction` invariants?
 - If new opcodes or shape semantics are introduced, are all `DfsHloVisitor` `Handle*` methods updated?
-- Are `HloPassPipeline` / `HloPassFix` used correctly? Fixed-point passes must not loop infinitely (check `kMaxIterations` = 25 and cycle detection).
+- Are `HloPassPipeline` / `HloPassFix` used correctly? Fixed-point passes must not loop infinitely (`HloPassFix::kDefaultIterationLimit` = 25 in `xla/hlo/pass/hlo_pass_fix.h`; a custom limit goes through `HloPassFix::Create(iteration_limit, ...)`).
 - Does the pass correctly handle multi-threaded computation graphs (execution thread filtering)?
 - If the pass modifies the graph mid-traversal, does it call `Cleanup()` before dependent passes run?
 
@@ -49,42 +53,42 @@ Review the PR above thoroughly using the checklist below. Be specific: cite file
 - For algebraic rewrites: are all edge cases (zero-sized tensors, scalar shapes, dynamic shapes) handled?
 
 ### 3. Fusion & Fission
-- If the change touches `PriorityFusion`, `MultiOutputFusion`, or `gpu_fusible.cc`:
+- If the change touches `PriorityFusion` / `MultiOutputFusion` (`xla/backends/gpu/transforms/`) or `xla/service/gpu/gpu_fusible.cc`:
   - Is the cost model estimate (`time_unfused - time_fused`) accurate?
-  - Does the change respect `FusionFitsInParameterLimit()` and `FusionFitsInBudget()` (max 96 operands)?
-  - Are IR size guards (`kMaxIRSize = 10000`, `kMaxBasicBlockSplitsPerFusion = 10`) respected?
+  - Does the change respect `FusionFitsInParameterLimit()` and `FusionFitsInBudget()`? The cap is `MaxOperandsAndOutputsPerFusion()` = 96 in `xla/service/gpu/gpu_fusible.h`.
+  - Are IR size guards respected (`GpuHloCostAnalysis::kMaxIRSize` = 10000, `kMaxBasicBlockSplitsPerFusion` = 10, both in `xla/service/gpu/model/gpu_hlo_cost_analysis.h`)?
   - Is `HloFusionAnalysisCache` properly invalidated after graph mutations?
-- If a new `EmitterFusionKind` is added, does it have a corresponding emitter in `xla/backends/gpu/codegen/emitters/`?
-- For fission passes (`ReductionSplitter`, `SplitKGemmRewriter`, `VariadicOpSplitter`): are correctness constraints documented and tested?
+- If a new `EmitterFusionKind` is added (enum in `xla/service/gpu/hlo_fusion_analysis.h`), is it dispatched in `xla/backends/gpu/codegen/fusions.cc` with a corresponding emitter under `xla/backends/gpu/codegen/emitters/`?
+- For fission passes in `xla/backends/gpu/transforms/` (`ReductionSplitter`, `SplitkRewriter`, `VariadicOpSplitter`): are correctness constraints documented and tested?
 - Is `FusionProcessDumpProto` updated to log new fusion decisions?
 
 ### 4. Triton Integration
 - If the change touches `xla/backends/gpu/codegen/triton/`:
   - Does the HLO→XTile→Triton IR lowering handle all relevant dtypes (`xla/backends/gpu/codegen/triton/support.cc`)?
-  - Are new `ttxla.*` dialect ops defined in `triton_xla_ops.td` with correct semantics?
-  - Do new passes in `/transforms/` handle rank-1 edge cases and TMA constraints (Hopper+)?
-  - Is the ROCDL path in `compilation_pipeline_rocm.cc` updated alongside the CUDA path?
+  - Are new `triton_xla.*` dialect ops defined in `xla/backends/gpu/codegen/triton/ir/triton_xla_ops.td` with correct semantics? (The dialect mnemonic is `triton_xla`; `TTXLA_` is only the TableGen class prefix.)
+  - Do new passes in `xla/backends/gpu/codegen/triton/transforms/` handle rank-1 edge cases and TMA constraints (Hopper+)?
+  - Is the ROCDL path in `compilation_pipeline_rocm.cc` updated alongside `compilation_pipeline_cuda.cc`?
   - Are shared memory limits validated against `device_info.shared_memory_per_block_optin()`?
-  - For collective fusions: are `ttxla.block_barrier` / `ttxla.atomic_write` semantics correct?
+  - For collective fusions: are `triton_xla.block_barrier` / `triton_xla.atomic_write` / `triton_xla.atomic_spin_wait` semantics correct?
 - For `BlockLevelFusionConfig` changes: are all parameters (`num_warps`, `num_ctas`, `num_stages`) validated as > 0?
 
 ### 5. Autotuner
-- If the change touches `xla/backends/autotuner/` or `xla/service/gpu/autotuning/`:
-  - **Cache key**: if the config format changes, is the cache version bumped (currently v24 in `autotune_cache_key.h`)?
-  - **Search space**: for Triton config changes, does `TritonDotFusionSearchSpace::GenerateConfigs()` produce valid configs for the affected shapes and hardware?
-  - **Correctness checking**: if `CanProduceWrongResults()` changes for any backend, is the relative tolerance adjusted?
-  - **ROCm factory**: is `factory_rocm.cc` updated if new backends are added? (Backend order: Triton → MIOpen → rocBLAS → hipBLASLt)
-  - **Default configs**: are `default_configs/rocm.txtpb` and CUDA equivalents updated for affected architectures?
-  - Does the change work in `READ_WRITE` and `READ` (inference-time) cache modes?
+- The autotuner lives in three places: backend-agnostic core in `xla/backends/autotuner/`, GPU codegen backends in `xla/backends/gpu/autotuner/`, and the legacy cache/key code in `xla/service/gpu/autotuning/`. If the change touches any of them:
+  - **Cache key**: if the config format changes, is `AutotuneCacheKey::kCurrentVersion` bumped in `xla/service/gpu/autotuning/autotune_cache_key.h` (currently 51), with the accompanying comment updated to say why?
+  - **Cache store**: changes to `AutotunerCacheInterface` implementations (`directory_store`, `in_memory_store`, `tiered_cache`) must honour every `CacheMode` (`kReadOnly`, `kReadAppend`, `kReadWrite`, `kWriteOnly`) and the `kLoose` / exact match modes in `xla/backends/autotuner/autotuner_cache_interface.h`.
+  - **Search space**: for Triton config changes, does `TritonDotFusionSearchSpace::GenerateConfigs()` (`xla/backends/gpu/autotuner/triton/dot_search_space.cc`) produce valid configs for the affected shapes and hardware?
+  - **Correctness checking**: `CodegenBackend::CanProduceWrongResults()` (`xla/backends/autotuner/codegen_backend.h`) decides whether a config is buffer-compared. If it changes for any backend, is the relative tolerance adjusted?
+  - **ROCm factory**: is `xla/backends/gpu/autotuner/factory_rocm.cc` updated if new backends are added? Current registration order in `GetCodegenBackendsForROCm`: Triton → MIOpen → hipBLASLt → Fission → NativeEmitter → BlockLevelEmitter. Compare against `factory_cuda.cc`.
+  - **Default configs**: are `xla/backends/gpu/autotuner/triton/default_configs/{rocm,mi300,mi350}.txtpb` and the CUDA equivalents updated for affected architectures?
 
 ### 6. AMD/ROCm Parity
 - Does every CUDA-path change have a corresponding ROCm path update?
-  - `compilation_pipeline_cuda.cc` ↔ `compilation_pipeline_rocm.cc`
-  - `factory_cuda.cc` ↔ `factory_rocm.cc`
-  - `stream_executor/cuda/` ↔ `stream_executor/rocm/`
-- If new float types are used: does `convert_float_amd.cc` handle them? (BF16 and F8 semantics differ between vendors.)
+  - `xla/backends/gpu/codegen/triton/compilation_pipeline_{cuda,rocm}.cc`
+  - `xla/backends/gpu/autotuner/factory_{cuda,rocm}.cc`
+  - `xla/stream_executor/cuda/` ↔ `xla/stream_executor/rocm/`
+- If new float types are used: does `xla/backends/gpu/codegen/emitters/transforms/convert_float_amd.cc` handle them? (BF16 and F8 semantics differ between vendors.)
 - Are ROCm compute capability checks (`gfx90a`, `gfx942`, etc.) consistent with CUDA compute capability checks?
-- If RCCL / MIOpen / hipBLASLt APIs are called, are error codes wrapped with `rocm_status.h`?
+- If RCCL / MIOpen / hipBLASLt APIs are called, are error codes wrapped with `xla/stream_executor/rocm/rocm_status.h`?
 - Are ROCm-specific kernel files (e.g., `*_rocm.cu.cc`) added where CUDA-specific kernels are added?
 - Do Bazel `BUILD` files include ROCm targets where CUDA targets are added?
 
@@ -102,7 +106,9 @@ Review the PR above thoroughly using the checklist below. Be specific: cite file
   - Does `ProducerConsumerMergedTooLarge()` guard against oversized IR?
 
 ### 9. Testing
-- Are HLO-level unit tests added (filecheck or C++ tests with `HloTestBase`)?
+(Test base classes, anonymous namespaces, `xla_cc_test`, and flake-freedom are covered by `xla/AGENTS.md`.)
+
+- Are HLO-level unit tests added (FileCheck, or C++ tests)?
 - Are GPU backend tests added covering both CUDA and ROCm?
 - For autotuner changes: are cache hit/miss tests included?
 - For new fusion kinds: is an end-to-end correctness test included?
@@ -117,26 +123,34 @@ Review the PR above thoroughly using the checklist below. Be specific: cite file
 - **Integer overflow / narrowing**: Are 64→32-bit casts guarded? Are `int64_t` used for sizes and indices consistently (XLA convention)? Are signed/unsigned comparisons avoided?
 - **Const correctness**: Are function parameters, local variables, and member functions marked `const` where appropriate?
 - **Initialization**: Are class members initialized in declaration order? Are there uninitialized variables on any code path? Are braced initializers (`{}`) used to avoid narrowing?
-- **Error path leaks**: If a function acquires resources and then returns early via `TF_RETURN_IF_ERROR` or `TF_ASSIGN_OR_RETURN`, are those resources cleaned up?
-- **UB risks**: Are there null dereferences, out-of-bounds accesses, or use-after-free patterns? Is `CHECK` / `DCHECK` used appropriately (`CHECK` for invariants that indicate bugs, `DCHECK` for expensive debug-only assertions)?
+- **Error path leaks**: If a function acquires resources and then returns early via `ABSL_RETURN_IF_ERROR`, `ABSL_ASSIGN_OR_RETURN`, or `TF_RET_CHECK`, are those resources cleaned up?
+- **UB risks**: Are there null dereferences, out-of-bounds accesses, or use-after-free patterns? (For which assertion macro to use, follow `xla/AGENTS.md`.)
 
-### 11. XLA Project-Specific C++ Conventions
-- **Error handling**: Are `absl::Status` / `absl::StatusOr<T>` used for fallible operations? Are `TF_RETURN_IF_ERROR()`, `TF_ASSIGN_OR_RETURN()`, and `TF_RET_CHECK()` used correctly (not `tsl::Status` / `tsl::StatusOr`, not `tsl::Status::OK()` — use `OkStatus()` instead)?
+### 11. XLA Conventions Not Covered by `xla/AGENTS.md`
+
+Error handling and status macros, `TF_RET_CHECK` vs `DCHECK`, `Decision`, `auto` in headers, flat namespaces, MLIR `OpTy::create`, `xla_cc_test` / `tf_proto_library`, and hot-path allocation cost all come from `xla/AGENTS.md`. Do not re-derive them here. The items below are the ones it does not state.
+
+- **Deprecation status of the `TF_*` macros**, which `xla/AGENTS.md` does not spell out:
+  - `TF_RETURN_IF_ERROR` and `TF_ASSIGN_OR_RETURN` are CI-blocked by the "Check for TF Status Macros" step in `check_contents.yml`. `xla/tsl/`, `xla/python/`, and `xla/pjrt/` are excluded from that check, so new uses under those paths slip past CI and need to be caught in review.
+  - `TF_ASSERT_OK_AND_ASSIGN` / `TF_ASSERT_OK` / `TF_EXPECT_OK` are marked `ABSL_DEPRECATED` but are *not* CI-blocked, so new uses still compile and need to be caught in review.
+  - `tsl::errors::InvalidArgument()` and the rest of the `tsl::errors::*` factory family are deprecated → `absl::InvalidArgumentError(absl::StrCat(...))` and equivalents.
 - **Prohibited APIs** (enforced by CI `check_contents.yml`):
   - No `tsl::Status` or `tsl::StatusOr` — use unqualified `Status` / `StatusOr`
   - No `tsl::Status::OK()` — use `OkStatus()`
   - No `std::call_once` — use `absl::call_once`
-  - No Abseil compatibility shims (`absl::optional`, `absl::any`, `absl::variant`, `absl::make_unique`, `absl::nullopt`) — use `std::` equivalents
-  - No TF/TSL legacy types (`gtl::FlatMap`, `gtl::FlatSet`, `gtl::InlinedVector`, `strings::StrCat`, `strings::Printf`, `str_util::*`, `tensorflow::StringPiece`) — use Abseil equivalents
+  - No Abseil compatibility shims: `absl::any`, `absl::get`, `absl::get_if`, `absl::make_any`, `absl::make_unique`, `absl::make_optional`, `absl::nullopt`, `absl::nullopt_t`, `absl::optional`, `absl::underlying_type_t`, `absl::variant`, `absl::visit` — use the `std::` equivalents
+  - No TF/TSL legacy types: `gtl::FlatMap`, `gtl::FlatSet`, `gtl::InlinedVector`, `gtl::optional`, `strings::StrCat`, `strings::StrAppend`, `strings::Printf`, `strings::Appendf`, `strings::safe_strto64`, `strings::safe_strtof`, `str_util::*`, `tensorflow::StringPiece` — use Abseil equivalents
+  - Header guards are checked by `build_tools/lint/check_header_guards.py`
+  - Python files: no bare `print()` (suppress with `DISABLE_DEBUG_PRINT_CHECK`), and use `mock.patch.object` rather than `mock.patch(`
 - **Containers**: Prefer `absl::flat_hash_map` / `absl::flat_hash_set` over `std::unordered_*`. Use `absl::btree_map` when ordered iteration is needed. Use `absl::InlinedVector<T, N>` for small vectors.
-- **Strings**: Use `absl::string_view` for parameters, `absl::StrCat()` / `absl::StrFormat()` / `absl::StrJoin()` / `absl::StrAppend()` / `absl::Substitute()` for string construction.
+- **Strings**: Use `absl::string_view` for parameters, and `absl::StrCat()` / `absl::StrFormat()` / `absl::StrJoin()` / `absl::StrAppend()` / `absl::Substitute()` for string construction.
 - **Logging**: Use `LOG(INFO/WARNING/ERROR)` and `VLOG(level)`. Use `XLA_SCOPED_LOGGING_TIMER()` for performance instrumentation.
-- **Assertions**: Use `CHECK()` / `CHECK_EQ()` / `CHECK_NE()` etc. for fatal invariants. Use `DCHECK()` for debug-only assertions. Use `TF_RET_CHECK()` when the caller can handle the error.
+- **Assertions**: Use `CHECK()` / `CHECK_EQ()` / `CHECK_NE()` etc. for fatal invariants that indicate a bug with no recoverable caller.
 - **Map utilities**: Prefer `FindOrDie()`, `FindOrDefault()`, `ContainsKey()`, `InsertOrDie()` from `xla/map_util.h` where appropriate.
-- **Namespace**: Code lives in `namespace xla { ... }`. Use anonymous namespaces for file-local helpers. Use namespace aliases for verbose paths (e.g., `namespace se = ::stream_executor;`).
+- **Namespace**: Use anonymous namespaces for file-local helpers. Use namespace aliases for verbose paths (e.g., `namespace se = ::stream_executor;`).
 - **Include order** (enforced by `.clang-format`): (1) corresponding header, (2) C/C++ system headers separated by blank line, (3) third-party headers grouped by library: gtest/gmock, absl, llvm, mlir, protobuf, xla, tsl, triton.
-- **Formatting**: Google C++ style (`.clang-format` BasedOnStyle: Google). Pointer binds to type (`int* p`, not `int *p`). CI enforces `clang-format` v17 on all `.cc`/`.h` files.
-- **Bazel BUILD**: Targets must be minimal and correctly scoped. `buildifier` linting is enforced. ROCm targets must be included alongside CUDA targets.
+- **Formatting**: Pointer binds to type (`int* p`, not `int *p`). CI runs `build_tools/ci/run_clang_format.sh`, pinned to clang-format 17.0.6, over the diff against `main`.
+- **Bazel BUILD**: Targets must be minimal and correctly scoped. `buildifier` and the DWYU (depend-on-what-you-use) check are enforced. ROCm targets must be included alongside CUDA targets.
 
 ### 12. Code Organization & Debug Support
 - Are large new passes kept under ~500 lines per file? (Reference material in separate files.)
@@ -144,9 +158,9 @@ Review the PR above thoroughly using the checklist below. Be specific: cite file
 - If a new proto field is added: is the proto version/compatibility handled?
 
 ### 13. PR Size
-- Count the total delta from the diff already in context: lines beginning with `+` (excluding `+++` headers) as additions, lines beginning with `-` (excluding `---` headers) as deletions. Exclude hunks in files whose path contains `_test.cc`, `_test.py`, `test/`, or `tests/`. Apply the thresholds from the [upstream size check](https://github.com/openxla/xla/blob/main/.github/workflows/pr_size_check.py):
-  - Non-test delta > 500: "This PR has a large delta of over 500. Consider breaking the PR down into smaller PRs for a faster code review."
-  - Non-test delta > 1000: "This PR has a very large delta of over 1000. In order to enable an effective code review, please break the PR down into smaller and more focused PRs."
+- Count the total delta from the diff already in context: lines beginning with `+` (excluding `+++` headers) as additions, lines beginning with `-` (excluding `---` headers) as deletions. Total delta is additions + deletions across **all** changed files. The [upstream size check](https://github.com/openxla/xla/blob/main/.github/workflows/pr_size_check.py) uses GitHub's own `pull_request.additions` / `.deletions` and does **not** exclude test files, so do not exclude them either. Only the highest matching threshold is reported:
+  - Total delta >= 1000: "🔴 This PR has a very large delta of over 1000. In order to enable an effective code review, please break the PR down into smaller and more focused PRs."
+  - Total delta >= 500: "⚠️ This PR has a large delta of over 500. Consider breaking the PR down into smaller PRs for a faster code review."
 
 ---
 
