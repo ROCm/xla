@@ -43,6 +43,21 @@ fi
 
 TITLE="ROCm CI Infrastructure Errors Detected"
 
+# Get team members to assign
+TEAM_SLUG="ai-fw-openxla"
+ORG="ROCm"
+ASSIGNEES=""
+
+echo "Fetching team members from @${ORG}/${TEAM_SLUG}..."
+if MEMBERS=$(gh api "/orgs/${ORG}/teams/${TEAM_SLUG}/members" --jq '.[].login' 2>/dev/null); then
+    for member in $MEMBERS; do
+        ASSIGNEES="$ASSIGNEES --assignee $member"
+    done
+    echo "Will assign to: $MEMBERS"
+else
+    echo "Warning: Could not fetch team members, will create issue without assignees"
+fi
+
 # Check if an open issue already exists (search by title, not label)
 ISSUE_NUMBER=$(gh issue list --state open --search "in:title $TITLE" --json number --jq '.[0].number')
 
@@ -67,17 +82,33 @@ if [ -n "$ISSUE_NUMBER" ]; then
     echo "Issue updated: #$ISSUE_NUMBER"
 else
     echo "Creating new issue"
-    # Try with label first, fallback to no label if it fails
+    # Try with label and assignees first, fallback if it fails
     if NEW_ISSUE=$(gh issue create \
         --title "$TITLE" \
         --body "$BODY" \
-        --label "rocm-infra-error" 2>&1); then
+        --label "rocm-infra-error" \
+        $ASSIGNEES 2>&1); then
         echo "Issue created: $NEW_ISSUE"
     else
-        echo "Warning: Could not create with label, creating without label"
-        NEW_ISSUE=$(gh issue create \
-            --title "$TITLE" \
-            --body "$BODY")
-        echo "Issue created: $NEW_ISSUE"
+        echo "Warning: Could not create with label/assignees, trying without label"
+        if [ -n "$ASSIGNEES" ]; then
+            if NEW_ISSUE=$(gh issue create \
+                --title "$TITLE" \
+                --body "$BODY" \
+                $ASSIGNEES 2>&1); then
+                echo "Issue created: $NEW_ISSUE"
+            else
+                echo "Warning: Could not assign members, creating issue without assignees"
+                NEW_ISSUE=$(gh issue create \
+                    --title "$TITLE" \
+                    --body "$BODY")
+                echo "Issue created: $NEW_ISSUE"
+            fi
+        else
+            NEW_ISSUE=$(gh issue create \
+                --title "$TITLE" \
+                --body "$BODY")
+            echo "Issue created: $NEW_ISSUE"
+        fi
     fi
 fi
