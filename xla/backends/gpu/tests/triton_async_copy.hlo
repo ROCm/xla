@@ -1,0 +1,58 @@
+// REQUIRES: IS_ROCM
+// RUN: hlo-opt %s --platform=gpu --stage=llvm-before-optimizations --xla_gpu_target_config_filename=%S/../target_config/specs/%{GPU}.txtpb | FileCheck %s --check-prefixes=CHECK-COMMON,CHECK-ENABLED
+// RUN: hlo-opt %s --platform=gpu --stage=llvm-before-optimizations --xla_gpu_target_config_filename=%S/../target_config/specs/%{GPU}.txtpb --xla_gpu_rocm_triton_use_async_copy=false | FileCheck %s --check-prefixes=CHECK-COMMON,CHECK-DISABLED
+
+// This configuration deliberately satisfies BlockPingpong's async-copy path:
+// eight warps, three stages, and an unmasked dot tile larger than 64x64.
+//
+// Async copy lowers eligible global-to-LDS transfers directly, either through
+// a buffer resource or a global pointer. BlockPingpong additionally emits the
+// MFMA/SALU scheduler groups used by its two-cluster schedule.
+// CHECK-COMMON-LABEL: define amdgpu_kernel void @triton_gemm(
+// CHECK-ENABLED-DAG: call void @llvm.amdgcn.{{(raw\.ptr\.buffer|global)\.load\.async\.lds}}
+// CHECK-ENABLED-DAG: call void @llvm.amdgcn.asyncmark()
+// CHECK-ENABLED-DAG: call void @llvm.amdgcn.wait.asyncmark
+// CHECK-ENABLED-DAG: call void @llvm.amdgcn.sched.group.barrier(i32 8, i32 1, i32 0)
+// CHECK-ENABLED-DAG: call void @llvm.amdgcn.sched.group.barrier(i32 4, i32 3, i32 0)
+// CHECK-ENABLED: ret void
+
+// Disabling async copy on gfx950 also disables BlockPingpong in the XLA Triton
+// pipeline. Neither direct-to-LDS async loads nor ping-pong scheduler groups
+// should remain in the kernel.
+// CHECK-DISABLED-NOT: call void @llvm.amdgcn.{{(raw\.ptr\.buffer|global)\.load\.async\.lds}}
+// CHECK-DISABLED-NOT: call void @llvm.amdgcn.asyncmark
+// CHECK-DISABLED-NOT: call void @llvm.amdgcn.wait.asyncmark
+// CHECK-DISABLED-NOT: call void @llvm.amdgcn.sched.group.barrier
+// CHECK-DISABLED: call {{.*}}@llvm.amdgcn.raw.ptr.buffer.load
+// CHECK-DISABLED-NOT: call void @llvm.amdgcn.{{(raw\.ptr\.buffer|global)\.load\.async\.lds}}
+// CHECK-DISABLED-NOT: call void @llvm.amdgcn.asyncmark
+// CHECK-DISABLED-NOT: call void @llvm.amdgcn.wait.asyncmark
+// CHECK-DISABLED-NOT: call void @llvm.amdgcn.sched.group.barrier
+// CHECK-DISABLED: ret void
+
+HloModule triton_async_copy, is_scheduled=true, entry_computation_layout={(f16[256,256]{1,0},f16[256,256]{1,0})->f16[256,256]{1,0}}
+
+dot_computation {
+  lhs = f16[256,256]{1,0} parameter(0)
+  rhs = f16[256,256]{1,0} parameter(1)
+  ROOT dot = f16[256,256]{1,0} dot(lhs, rhs),
+    lhs_contracting_dims={1}, rhs_contracting_dims={0},
+    algorithm=dot_f16_f16_f32, backend_config={sizes:[64]}
+}
+
+ENTRY main (lhs: f16[256,256], rhs: f16[256,256]) -> f16[256,256] {
+  lhs = f16[256,256]{1,0} parameter(0)
+  rhs = f16[256,256]{1,0} parameter(1)
+  ROOT triton_gemm = f16[256,256]{1,0} fusion(lhs, rhs),
+    kind=kCustom, calls=dot_computation, backend_config={
+      fusion_backend_config:{
+        kind:"__triton_nested_gemm_fusion",
+        block_level_fusion_config:{
+          output_tiles:[{sizes:[128,128]}],
+          num_stages:3,
+          num_warps:8,
+          num_ctas:1
+        }
+      }
+    }
+}
