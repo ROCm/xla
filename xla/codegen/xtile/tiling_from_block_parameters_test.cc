@@ -196,6 +196,45 @@ ENTRY entry_computation {
               IsOkAndHolds(ElementsAre(64, 16, 16)));
 }
 
+TEST_F(TilingFromBlockParametersTest, GeneratesTilingForConvolution) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                       ParseAndReturnVerifiedModule(R"hlo(
+HloModule m
+
+conv_computation {
+  input = f32[2,4,5,5] parameter(0)
+  kernel = f32[3,3,4,8] parameter(1)
+  ROOT conv = f32[2,3,3,8] convolution(input, kernel),
+    window={size=3x3}, dim_labels=bf01_01io->b01f,
+    backend_config={"sizes":["1","1","2"]}
+}
+
+ENTRY entry_computation {
+  p0 = f32[2,4,5,5] parameter(0)
+  p1 = f32[3,3,4,8] parameter(1)
+  ROOT fusion = f32[2,3,3,8] fusion(p0, p1), kind=kCustom,
+   calls=conv_computation
+}
+)hlo"));
+
+  std::optional<SymbolicTileAnalysis> analysis = TryAnalyzeModule(module.get());
+  ASSERT_TRUE(analysis.has_value());
+
+  BlockLevelParameters block_level_parameters;
+  block_level_parameters.output_tile_sizes = {{2, 3, 3, 8}};
+
+  ASSERT_OK_AND_ASSIGN(Tiling tiling, TilingFromAnnotatedFusion(
+                                          *analysis, block_level_parameters));
+
+  const HloInstruction* conv = module->entry_computation()
+                                   ->root_instruction()
+                                   ->fused_instructions_computation()
+                                   ->root_instruction();
+
+  EXPECT_THAT(tiling.TileSizesForInstruction(conv),
+              IsOkAndHolds(ElementsAre(1, 1, 2, 2, 3, 3, 8)));
+}
+
 class GetTileTilingSpaceConcreteSizesTest
     : public HloHardwareIndependentTestBase {
  public:

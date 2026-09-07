@@ -53,7 +53,7 @@ using DimensionSemantics =
 absl::StatusOr<Tiling> TilingFromAnnotatedFusion(
     const SymbolicTileAnalysis& symbolic_tile_analysis,
     const BlockLevelParameters& block_level_parameters,
-    const Tile* dot_tiling_config_override) {
+    const Tile* tiling_config_override) {
   Tiling::TileMapping tile_mapping;
   int64_t real_root_index = symbolic_tile_analysis.real_root_index();
   const HloInstruction* real_root =
@@ -63,22 +63,22 @@ absl::StatusOr<Tiling> TilingFromAnnotatedFusion(
        symbolic_tile_analysis.GetTilingSpecification().parameter_mapping()) {
     // TODO(b/419026602): handle reductions.
     if (hlo->opcode() == HloOpcode::kDot ||
-        hlo->opcode() == HloOpcode::kScaledDot) {
-      if (dot_tiling_config_override) {
-        tile_mapping[hlo] =
-            FlatTiling(dot_tiling_config_override->sizes().begin(),
-                       dot_tiling_config_override->sizes().end());
+        hlo->opcode() == HloOpcode::kScaledDot ||
+        hlo->opcode() == HloOpcode::kConvolution) {
+      if (tiling_config_override) {
+        tile_mapping[hlo] = FlatTiling(tiling_config_override->sizes().begin(),
+                                       tiling_config_override->sizes().end());
       } else {
         if (!hlo->has_backend_config()) {
           return absl::FailedPreconditionError(absl::StrCat(
-              "Dot instruction ", hlo->name(),
+              "Instruction ", hlo->name(),
               " does not have a backend config for tile sizes set."));
         }
         ABSL_ASSIGN_OR_RETURN(xla::xtile::Tile tile_config,
                          hlo->backend_config<xla::xtile::Tile>());
         if (tile_config.sizes().empty()) {
           return absl::FailedPreconditionError(
-              absl::StrCat("Dot instruction ", hlo->name(),
+              absl::StrCat("Instruction ", hlo->name(),
                            " has an empty tile config in the backend config."));
         }
         tile_mapping[hlo] =
