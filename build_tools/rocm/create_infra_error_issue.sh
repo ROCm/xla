@@ -43,23 +43,26 @@ fi
 
 TITLE="ROCm CI Infrastructure Errors Detected"
 
-# Get team members to assign
-TEAM_SLUG="ai-fw-openxla"
-ORG="ROCm"
-ASSIGNEES=""
+# Repository where issues should be created (ROCm fork, where the team has access)
+ISSUE_REPO="ROCm/xla"
 
-echo "Fetching team members from @${ORG}/${TEAM_SLUG}..."
-if MEMBERS=$(gh api "/orgs/${ORG}/teams/${TEAM_SLUG}/members" --jq '.[].login' 2>/dev/null); then
-    for member in $MEMBERS; do
-        ASSIGNEES="$ASSIGNEES --assignee $member"
-    done
-    echo "Will assign to: $MEMBERS"
-else
-    echo "Warning: Could not fetch team members, will create issue without assignees"
-fi
+# Team members to assign to infrastructure error issues
+# Adjust this list as needed
+TEAM_MEMBERS=(
+    alekstheod
+    i-chaochen
+    hsharsha
+)
+
+# Build assignee flags
+ASSIGNEES=""
+for member in "${TEAM_MEMBERS[@]}"; do
+    ASSIGNEES="$ASSIGNEES --assignee $member"
+done
+echo "Will assign to: ${TEAM_MEMBERS[*]}"
 
 # Check if an open issue already exists (search by title, not label)
-ISSUE_NUMBER=$(gh issue list --state open --search "in:title $TITLE" --json number --jq '.[0].number')
+ISSUE_NUMBER=$(gh issue list --repo "$ISSUE_REPO" --state open --search "in:title $TITLE" --json number --jq '.[0].number')
 
 BODY="## Failed ROCm CI Runs Detected
 
@@ -77,13 +80,14 @@ cc @ROCm/ai-fw-openxla
 *Last updated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")*"
 
 if [ -n "$ISSUE_NUMBER" ]; then
-    echo "Updating existing issue #$ISSUE_NUMBER"
-    gh issue comment "$ISSUE_NUMBER" --body "$BODY"
+    echo "Updating existing issue #$ISSUE_NUMBER in $ISSUE_REPO"
+    gh issue comment "$ISSUE_NUMBER" --repo "$ISSUE_REPO" --body "$BODY"
     echo "Issue updated: #$ISSUE_NUMBER"
 else
-    echo "Creating new issue"
+    echo "Creating new issue in $ISSUE_REPO"
     # Try with label and assignees first, fallback if it fails
     if NEW_ISSUE=$(gh issue create \
+        --repo "$ISSUE_REPO" \
         --title "$TITLE" \
         --body "$BODY" \
         --label "rocm-infra-error" \
@@ -93,6 +97,7 @@ else
         echo "Warning: Could not create with label/assignees, trying without label"
         if [ -n "$ASSIGNEES" ]; then
             if NEW_ISSUE=$(gh issue create \
+                --repo "$ISSUE_REPO" \
                 --title "$TITLE" \
                 --body "$BODY" \
                 $ASSIGNEES 2>&1); then
@@ -100,12 +105,14 @@ else
             else
                 echo "Warning: Could not assign members, creating issue without assignees"
                 NEW_ISSUE=$(gh issue create \
+                    --repo "$ISSUE_REPO" \
                     --title "$TITLE" \
                     --body "$BODY")
                 echo "Issue created: $NEW_ISSUE"
             fi
         else
             NEW_ISSUE=$(gh issue create \
+                --repo "$ISSUE_REPO" \
                 --title "$TITLE" \
                 --body "$BODY")
             echo "Issue created: $NEW_ISSUE"
