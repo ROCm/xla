@@ -1,6 +1,7 @@
 name: Upstream ROCm CI
 permissions:
   contents: read
+  packages: read
 on:
   pull_request_target:
     branches:
