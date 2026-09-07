@@ -42,10 +42,13 @@ TEST(SharedMemoryUseTest, ArrayReversalWorks) {
   // Create an array with a 2D pattern of numbers, fill the requested shared
   // memory with it, read it back inverting both axes,
   // copy the result back to the host and verify it.
-  auto name =
-      absl::AsciiStrToUpper(PlatformUtil::CanonicalPlatformName("gpu").value());
-  se::Platform* platform = se::PlatformManager::PlatformWithName(name).value();
-  se::StreamExecutor* executor = platform->ExecutorForDevice(0).value();
+  TF_ASSERT_OK_AND_ASSIGN(auto platform_name,
+                          PlatformUtil::CanonicalPlatformName("gpu"));
+  TF_ASSERT_OK_AND_ASSIGN(se::Platform * platform,
+                          se::PlatformManager::PlatformWithName(
+                              absl::AsciiStrToUpper(platform_name)));
+  TF_ASSERT_OK_AND_ASSIGN(se::StreamExecutor * executor,
+                          platform->ExecutorForDevice(0));
   TF_ASSERT_OK_AND_ASSIGN(auto stream, executor->CreateStream());
 
   // Use 90% of the available shared memory to verify that a fractional
@@ -61,7 +64,8 @@ TEST(SharedMemoryUseTest, ArrayReversalWorks) {
   const int buffer_size_bytes = n_elements * sizeof(data_type);
   VLOG(1) << "Using " << buffer_size_bytes << " bytes of shared memory";
 
-  auto kernel = se::gpu::LoadDynShmemTestKernel(executor).value();
+  TF_ASSERT_OK_AND_ASSIGN(auto kernel,
+                          se::gpu::LoadDynShmemTestKernel(executor));
 
   se::DeviceAddress<data_type> device_buffer =
       executor->AllocateArray<data_type>(n_elements);
