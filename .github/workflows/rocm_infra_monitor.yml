@@ -1,0 +1,167 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+
+name: ROCm Infrastructure Error Monitor
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+on:
+  schedule:
+    # Run every hour to check failed runs from last 2 hours
+    - cron: '0 * * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/rocm_infra_monitor.yml'
+      - 'build_tools/rocm/analyze_bep_infra_errors.py'
+      - 'build_tools/rocm/monitor_bep_artifacts.sh'
+      - 'build_tools/rocm/create_infra_error_issue.sh'
+
+jobs:
+  monitor:
+    name: Monitor ROCm CI Infrastructure Errors
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'rocm-dev-infra' }}
+          persist-credentials: false
+
+      - name: Fetch recent ROCm CI workflow runs
+        id: fetch_runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Monitor openxla/xla repository for failed ROCm CI runs
+          # Always monitor openxla/xla (the upstream repository)
+          MONITORED_REPO="openxla/xla"
+          echo "Monitoring repository: $MONITORED_REPO"
+
+          # Get current time from GitHub API (no dependency on runner's clock)
+          GITHUB_TIME=$(gh api /rate_limit | jq -r '.resources.core.reset' | xargs -I {} date -u -d '@{}' '+%Y-%m-%dT%H:%M:%SZ')
+          echo "GitHub API time: $GITHUB_TIME"
+
+          # Calculate cutoff: 6 hours before GitHub's current time (temporary for testing)
+          CUTOFF_TIME=$(date -u -d "$GITHUB_TIME - 6 hours" '+%Y-%m-%dT%H:%M:%SZ')
+          echo "Checking for failed runs after: $CUTOFF_TIME"
+
+          # First, let's see what runs are actually available (debug)
+          echo "All recent runs (any status):"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?per_page=10" \
+            | jq -r '.workflow_runs[] | "\(.id) - status: \(.status) - conclusion: \(.conclusion) - updated: \(.updated_at)"'
+
+          echo ""
+          echo "Checking specific run 34116809661:"
+          gh api "/repos/${MONITORED_REPO}/actions/runs/34116809661" 2>&1 | jq -r '{id: .id, status: .status, conclusion: .conclusion, workflow_path: .path, updated_at: .updated_at}' || echo "Run not found or error"
+
+          echo ""
+          echo "Recent failed runs:"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?status=completed&conclusion=failure&per_page=10" \
+            | jq -r '.workflow_runs[] | "\(.id) - updated: \(.updated_at) - created: \(.created_at)"'
+
+          # Get failed ROCm CI workflow runs from the last 2 hours
+          # Using updated_at (when run completed) instead of created_at
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?status=completed&conclusion=failure&per_page=100" \
+            | jq -r --arg cutoff "$CUTOFF_TIME" '.workflow_runs[] | select(.updated_at > $cutoff) | .id' \
+            > run_ids.txt
+
+          echo "Found $(wc -l < run_ids.txt) failed runs from last 2 hours in ${MONITORED_REPO}"
+          cat run_ids.txt
+
+      - name: Download BEP artifacts
+        if: hashFiles('run_ids.txt') != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Always monitor openxla/xla (the upstream repository)
+          MONITORED_REPO="openxla/xla"
+
+          if [ ! -s run_ids.txt ]; then
+            echo "No failed runs to check, exiting early"
+            exit 0
+          fi
+
+          build_tools/rocm/monitor_bep_artifacts.sh run_ids.txt "${MONITORED_REPO}" || echo "no bep files found"
+
+      - name: Analyze BEP files for infrastructure errors
+        id: analyze
+        run: |
+          if [ ! -d "bep-files" ]; then
+            echo "No BEP files downloaded"
+            echo "has_infra_errors=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          HAS_INFRA_ERRORS=false
+          rm -f failed_runs.txt
+          touch failed_runs.txt
+
+          for run_dir in bep-files/run-*; do
+            [ ! -d "$run_dir" ] && continue
+
+            RUN_ID=$(basename "$run_dir" | sed 's/run-//')
+            FOUND_ERROR=false
+
+            for bep_file in "$run_dir"/*.json; do
+              [ ! -f "$bep_file" ] && continue
+
+              echo "Analyzing $bep_file"
+              set +e
+              OUTPUT=$(python3 build_tools/rocm/analyze_bep_infra_errors.py "$bep_file" 2>&1)
+              EXIT_CODE=$?
+              set -e
+
+              if [ $EXIT_CODE -ne 0 ]; then
+                echo "  -> Infrastructure error detected: $OUTPUT"
+                FOUND_ERROR=true
+                break
+              else
+                echo "  -> No infrastructure errors"
+              fi
+            done
+
+            if [ "$FOUND_ERROR" = true ]; then
+              echo "https://github.com/openxla/xla/actions/runs/${RUN_ID}" >> failed_runs.txt
+              HAS_INFRA_ERRORS=true
+            fi
+          done
+
+          if [ "$HAS_INFRA_ERRORS" = true ]; then
+            echo "has_infra_errors=true" >> "$GITHUB_OUTPUT"
+            echo "Runs with infrastructure errors:"
+            cat failed_runs.txt
+          else
+            echo "has_infra_errors=false" >> "$GITHUB_OUTPUT"
+            echo "No infrastructure errors found in BEP files"
+          fi
+
+      - name: Create or update issue for failed runs
+        if: steps.analyze.outputs.has_infra_errors == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          build_tools/rocm/create_infra_error_issue.sh \
+            failed_runs.txt \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
