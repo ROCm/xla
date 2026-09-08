@@ -65,15 +65,43 @@ INFRA_ERROR_PATTERNS = [
     r"DNS.*failed",
 
     # Bazel internal errors
-    r"internal error",
+    r"bazel.*internal error",
+    r"INTERNAL_ERROR",
     r"IllegalStateException",
     r"NullPointerException",
     r"bazel.*crashed",
 ]
 
+# Patterns that indicate legitimate build/code/test errors (NOT infrastructure)
+BUILD_ERROR_PATTERNS = [
+    # Build file errors
+    r"no such attribute",
+    r"package contains errors",
+    r"error loading package",
+    r"syntax error",
+    r"undefined.*variable",
+    r"name.*is not defined",
+    r"unexpected.*token",
+    r"missing.*argument",
+
+    # Test failures (not infrastructure failures)
+    r"FAILED.*test",
+    r"test.*failed",
+    r"\d+ test.*FAILED",
+    r"FAIL:",
+    r"Assertion.*failed",
+    r"Expected.*but got",
+    r"Test.*timed out",
+    r"Test case.*failed",
+]
+
 found = False
 
 for e in events:
+    # Skip test summary and test result events (test failures are not infrastructure errors)
+    if "testSummary" in e or "testResult" in e:
+        continue
+
     # Check for aborted events with infrastructure failure reasons
     if "aborted" in e:
         reason = e["aborted"].get("reason", "")
@@ -85,11 +113,14 @@ for e in events:
     if "progress" in e and "stderr" in e["progress"]:
         stderr = e["progress"]["stderr"]
         if isinstance(stderr, str):
-            for pattern in INFRA_ERROR_PATTERNS:
-                if re.search(pattern, stderr, re.IGNORECASE):
-                    print(f"INFRA_ERROR: {pattern}")  # DISABLE_DEBUG_PRINT_CHECK
-                    found = True
-                    break
+            # Skip if this is a legitimate build error
+            is_build_error = any(re.search(p, stderr, re.IGNORECASE) for p in BUILD_ERROR_PATTERNS)
+            if not is_build_error:
+                for pattern in INFRA_ERROR_PATTERNS:
+                    if re.search(pattern, stderr, re.IGNORECASE):
+                        print(f"INFRA_ERROR: {pattern}")  # DISABLE_DEBUG_PRINT_CHECK
+                        found = True
+                        break
 
     # Check action events for failures (but skip test actions - those are test failures, not infra)
     if "action" in e:
@@ -103,16 +134,22 @@ for e in events:
         if "exitCode" in action and action["exitCode"] != 0:
             # Check if failure message indicates infrastructure issue
             if "stderr" in action and isinstance(action["stderr"], str):
-                for pattern in INFRA_ERROR_PATTERNS:
-                    if re.search(pattern, action["stderr"], re.IGNORECASE):
-                        print(f"INFRA_ERROR: Action failure - {pattern}")  # DISABLE_DEBUG_PRINT_CHECK
-                        found = True
-                        break
+                # Skip if this is a legitimate build error
+                is_build_error = any(re.search(p, action["stderr"], re.IGNORECASE) for p in BUILD_ERROR_PATTERNS)
+                if not is_build_error:
+                    for pattern in INFRA_ERROR_PATTERNS:
+                        if re.search(pattern, action["stderr"], re.IGNORECASE):
+                            print(f"INFRA_ERROR: Action failure - {pattern}")  # DISABLE_DEBUG_PRINT_CHECK
+                            found = True
+                            break
             if "stdout" in action and isinstance(action["stdout"], str):
-                for pattern in INFRA_ERROR_PATTERNS:
-                    if re.search(pattern, action["stdout"], re.IGNORECASE):
-                        print(f"INFRA_ERROR: Action failure - {pattern}")  # DISABLE_DEBUG_PRINT_CHECK
-                        found = True
-                        break
+                # Skip if this is a legitimate build error
+                is_build_error = any(re.search(p, action["stdout"], re.IGNORECASE) for p in BUILD_ERROR_PATTERNS)
+                if not is_build_error:
+                    for pattern in INFRA_ERROR_PATTERNS:
+                        if re.search(pattern, action["stdout"], re.IGNORECASE):
+                            print(f"INFRA_ERROR: Action failure - {pattern}")  # DISABLE_DEBUG_PRINT_CHECK
+                            found = True
+                            break
 
 sys.exit(1 if found else 0)
