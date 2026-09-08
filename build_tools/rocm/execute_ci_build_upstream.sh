@@ -47,8 +47,6 @@ done
     --test_verbose_timeout_warnings \
     --test_timeout=920,2400,7200,9600 \
     --sandbox_add_mount_pair=/dev/null:/etc/ld.so.cache \
-    --cache_test_results=no \
-    --test_env=TEST="$(date)" \
     --curses=no \
     --color=yes \
     --jobs=50 \
@@ -57,7 +55,7 @@ done
         echo "${EXCLUDED_TESTS[*]}"
     ) \
     --cache_test_results=yes \
-    --keep_going \
+    --nokeep_going \
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
     -- \
     //xla/...
