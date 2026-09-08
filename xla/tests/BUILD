@@ -1521,10 +1521,7 @@ xla_test(
     # Turn on logging so that VLOG statements don't appear uncovered to zapfhahn.
     args = if_google(["--vmodule=convolution_emitter=7"]),
     shard_count = 40,
-    tags = [
-        "cuda-only",
-        "optonly",
-    ],
+    tags = ["optonly"],
     deps = [
         ":client_library_test_runner_mixin",
         ":hlo_pjrt_interpreter_reference_mixin",
