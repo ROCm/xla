@@ -64,16 +64,53 @@ INFRA_ERROR_PATTERNS = [
     r"connection.*timed out",
     r"DNS.*failed",
 
+    # BEP upload failures
+    r"Build Event Protocol upload failed",
+    r"BEP upload.*failed",
+    r"All \d+ retry attempts failed",
+
     # Bazel internal errors
-    r"internal error",
+    r"bazel.*internal error",
+    r"INTERNAL_ERROR",
     r"IllegalStateException",
     r"NullPointerException",
     r"bazel.*crashed",
 ]
 
+# Patterns that indicate legitimate build/code/test errors (NOT infrastructure)
+BUILD_ERROR_PATTERNS = [
+    # Build file errors
+    r"no such attribute",
+    r"package contains errors",
+    r"error loading package",
+    r"syntax error",
+    r"undefined.*variable",
+    r"name.*is not defined",
+    r"unexpected.*token",
+    r"missing.*argument",
+
+    # Test failures (not infrastructure failures)
+    r"FAILED.*test",
+    r"test.*failed",
+    r"\d+ test.*FAILED",
+    r"FAIL:",
+    r"Assertion.*failed",
+    r"Expected.*but got",
+    r"Test.*timed out",
+    r"Test case.*failed",
+
+    # Build failures (not infrastructure failures)
+    r"FAILED TO BUILD",
+    r"fails to build",
+]
+
 found = False
 
 for e in events:
+    # Skip test summary and test result events (test failures are not infrastructure errors)
+    if "testSummary" in e or "testResult" in e:
+        continue
+
     # Check for aborted events with infrastructure failure reasons
     if "aborted" in e:
         reason = e["aborted"].get("reason", "")
@@ -81,13 +118,38 @@ for e in events:
             print(f"INFRA_ERROR: aborted.reason={reason}")  # DISABLE_DEBUG_PRINT_CHECK
             found = True
 
+    # Check finished event for BEP upload errors
+    if "finished" in e:
+        finished = e["finished"]
+        # Check exit code details
+        if "exitCode" in finished and "name" in finished.get("exitCode", {}):
+            exit_code_name = finished["exitCode"]["name"]
+            if exit_code_name and isinstance(exit_code_name, str):
+                for pattern in INFRA_ERROR_PATTERNS:
+                    if re.search(pattern, exit_code_name, re.IGNORECASE):
+                        print(f"INFRA_ERROR: {pattern} in finished.exitCode.name")  # DISABLE_DEBUG_PRINT_CHECK
+                        found = True
+                        break
+
     # Check stderr in progress events
     if "progress" in e and "stderr" in e["progress"]:
         stderr = e["progress"]["stderr"]
         if isinstance(stderr, str):
+            # Always check for infrastructure errors
             for pattern in INFRA_ERROR_PATTERNS:
                 if re.search(pattern, stderr, re.IGNORECASE):
-                    print(f"INFRA_ERROR: {pattern}")  # DISABLE_DEBUG_PRINT_CHECK
+                    print(f"INFRA_ERROR: {pattern} in progress.stderr")  # DISABLE_DEBUG_PRINT_CHECK
+                    found = True
+                    break
+
+    # Check stdout in progress events
+    if "progress" in e and "stdout" in e["progress"]:
+        stdout = e["progress"]["stdout"]
+        if isinstance(stdout, str):
+            # Always check for infrastructure errors
+            for pattern in INFRA_ERROR_PATTERNS:
+                if re.search(pattern, stdout, re.IGNORECASE):
+                    print(f"INFRA_ERROR: {pattern} in progress.stdout")  # DISABLE_DEBUG_PRINT_CHECK
                     found = True
                     break
 
@@ -103,15 +165,17 @@ for e in events:
         if "exitCode" in action and action["exitCode"] != 0:
             # Check if failure message indicates infrastructure issue
             if "stderr" in action and isinstance(action["stderr"], str):
+                # Always check for infrastructure errors
                 for pattern in INFRA_ERROR_PATTERNS:
                     if re.search(pattern, action["stderr"], re.IGNORECASE):
-                        print(f"INFRA_ERROR: Action failure - {pattern}")  # DISABLE_DEBUG_PRINT_CHECK
+                        print(f"INFRA_ERROR: Action failure - {pattern} in stderr")  # DISABLE_DEBUG_PRINT_CHECK
                         found = True
                         break
             if "stdout" in action and isinstance(action["stdout"], str):
+                # Always check for infrastructure errors
                 for pattern in INFRA_ERROR_PATTERNS:
                     if re.search(pattern, action["stdout"], re.IGNORECASE):
-                        print(f"INFRA_ERROR: Action failure - {pattern}")  # DISABLE_DEBUG_PRINT_CHECK
+                        print(f"INFRA_ERROR: Action failure - {pattern} in stdout")  # DISABLE_DEBUG_PRINT_CHECK
                         found = True
                         break
 
