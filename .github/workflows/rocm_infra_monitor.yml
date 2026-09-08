@@ -60,16 +60,10 @@ jobs:
           CUTOFF_TIME=$(date -u -d "$GITHUB_TIME - 6 hours" '+%Y-%m-%dT%H:%M:%SZ')
           echo "Checking for failed runs after: $CUTOFF_TIME"
 
-          echo ""
-          echo "Recent failed runs (first 30, created after cutoff):"
-          gh api \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?status=completed&conclusion=failure&created=>${CUTOFF_TIME}&per_page=30" \
-            | jq -r '.workflow_runs[] | "\(.id) - updated: \(.updated_at) - created: \(.created_at)"'
-
           # Get failed ROCm CI workflow runs from the last 6 hours
           # Using created filter to ensure we get recent runs
-          gh api \
+          # Using --paginate to get ALL runs, not just first page
+          gh api --paginate \
             -H "Accept: application/vnd.github+json" \
             "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?status=completed&conclusion=failure&created=>${CUTOFF_TIME}&per_page=100" \
             | jq -r '.workflow_runs[] | .id' \
