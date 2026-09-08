@@ -3,7 +3,7 @@ permissions:
   contents: read
   packages: read
 on:
-  pull_request_target:
+  pull_request:
     branches:
       - rocm-dev-infra
     paths:
@@ -19,6 +19,7 @@ jobs:
       contents: read
       packages: read
     uses: openxla/xla/.github/workflows/rocm_ci.yml@main
+    secrets: inherit
     with:
       rocm_xla_branch: ${{ github.head_ref || github.ref_name }}
       runner_label: ${{ 'linux-xla-do-mi350x-1' }}
