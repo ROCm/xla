@@ -51,7 +51,7 @@ done
     --test_env=TEST="$(date)" \
     --curses=no \
     --color=yes \
-    --jobs=30 \
+    --jobs=60 \
     --test_filter=-$(
         IFS=:
         echo "${EXCLUDED_TESTS[*]}"
