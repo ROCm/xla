@@ -56,11 +56,11 @@ jobs:
           GITHUB_TIME=$(gh api /rate_limit | jq -r '.resources.core.reset' | xargs -I {} date -u -d '@{}' '+%Y-%m-%dT%H:%M:%SZ')
           echo "GitHub API time: $GITHUB_TIME"
 
-          # Calculate cutoff: 6 hours before GitHub's current time (temporary for testing)
-          CUTOFF_TIME=$(date -u -d "$GITHUB_TIME - 6 hours" '+%Y-%m-%dT%H:%M:%SZ')
+          # Calculate cutoff: 2 hours before GitHub's current time (temporary for testing)
+          CUTOFF_TIME=$(date -u -d "$GITHUB_TIME - 2 hours" '+%Y-%m-%dT%H:%M:%SZ')
           echo "Checking for failed runs after: $CUTOFF_TIME"
 
-          # Get failed ROCm CI workflow runs from the last 6 hours
+          # Get failed ROCm CI workflow runs from the last 2 hours
           # Using created filter to ensure we get recent runs
           # Using --paginate to get ALL runs, not just first page
           gh api --paginate \
