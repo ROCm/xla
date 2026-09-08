@@ -64,6 +64,11 @@ INFRA_ERROR_PATTERNS = [
     r"connection.*timed out",
     r"DNS.*failed",
 
+    # BEP upload failures
+    r"Build Event Protocol upload failed",
+    r"BEP upload.*failed",
+    r"All \d+ retry attempts failed",
+
     # Bazel internal errors
     r"bazel.*internal error",
     r"INTERNAL_ERROR",
@@ -93,6 +98,10 @@ BUILD_ERROR_PATTERNS = [
     r"Expected.*but got",
     r"Test.*timed out",
     r"Test case.*failed",
+
+    # Build failures (not infrastructure failures)
+    r"FAILED TO BUILD",
+    r"fails to build",
 ]
 
 found = False
@@ -109,18 +118,40 @@ for e in events:
             print(f"INFRA_ERROR: aborted.reason={reason}")  # DISABLE_DEBUG_PRINT_CHECK
             found = True
 
+    # Check finished event for BEP upload errors
+    if "finished" in e:
+        finished = e["finished"]
+        # Check exit code details
+        if "exitCode" in finished and "name" in finished.get("exitCode", {}):
+            exit_code_name = finished["exitCode"]["name"]
+            if exit_code_name and isinstance(exit_code_name, str):
+                for pattern in INFRA_ERROR_PATTERNS:
+                    if re.search(pattern, exit_code_name, re.IGNORECASE):
+                        print(f"INFRA_ERROR: {pattern} in finished.exitCode.name")  # DISABLE_DEBUG_PRINT_CHECK
+                        found = True
+                        break
+
     # Check stderr in progress events
     if "progress" in e and "stderr" in e["progress"]:
         stderr = e["progress"]["stderr"]
         if isinstance(stderr, str):
-            # Skip if this is a legitimate build error
-            is_build_error = any(re.search(p, stderr, re.IGNORECASE) for p in BUILD_ERROR_PATTERNS)
-            if not is_build_error:
-                for pattern in INFRA_ERROR_PATTERNS:
-                    if re.search(pattern, stderr, re.IGNORECASE):
-                        print(f"INFRA_ERROR: {pattern}")  # DISABLE_DEBUG_PRINT_CHECK
-                        found = True
-                        break
+            # Always check for infrastructure errors
+            for pattern in INFRA_ERROR_PATTERNS:
+                if re.search(pattern, stderr, re.IGNORECASE):
+                    print(f"INFRA_ERROR: {pattern} in progress.stderr")  # DISABLE_DEBUG_PRINT_CHECK
+                    found = True
+                    break
+
+    # Check stdout in progress events
+    if "progress" in e and "stdout" in e["progress"]:
+        stdout = e["progress"]["stdout"]
+        if isinstance(stdout, str):
+            # Always check for infrastructure errors
+            for pattern in INFRA_ERROR_PATTERNS:
+                if re.search(pattern, stdout, re.IGNORECASE):
+                    print(f"INFRA_ERROR: {pattern} in progress.stdout")  # DISABLE_DEBUG_PRINT_CHECK
+                    found = True
+                    break
 
     # Check action events for failures (but skip test actions - those are test failures, not infra)
     if "action" in e:
@@ -134,22 +165,18 @@ for e in events:
         if "exitCode" in action and action["exitCode"] != 0:
             # Check if failure message indicates infrastructure issue
             if "stderr" in action and isinstance(action["stderr"], str):
-                # Skip if this is a legitimate build error
-                is_build_error = any(re.search(p, action["stderr"], re.IGNORECASE) for p in BUILD_ERROR_PATTERNS)
-                if not is_build_error:
-                    for pattern in INFRA_ERROR_PATTERNS:
-                        if re.search(pattern, action["stderr"], re.IGNORECASE):
-                            print(f"INFRA_ERROR: Action failure - {pattern}")  # DISABLE_DEBUG_PRINT_CHECK
-                            found = True
-                            break
+                # Always check for infrastructure errors
+                for pattern in INFRA_ERROR_PATTERNS:
+                    if re.search(pattern, action["stderr"], re.IGNORECASE):
+                        print(f"INFRA_ERROR: Action failure - {pattern} in stderr")  # DISABLE_DEBUG_PRINT_CHECK
+                        found = True
+                        break
             if "stdout" in action and isinstance(action["stdout"], str):
-                # Skip if this is a legitimate build error
-                is_build_error = any(re.search(p, action["stdout"], re.IGNORECASE) for p in BUILD_ERROR_PATTERNS)
-                if not is_build_error:
-                    for pattern in INFRA_ERROR_PATTERNS:
-                        if re.search(pattern, action["stdout"], re.IGNORECASE):
-                            print(f"INFRA_ERROR: Action failure - {pattern}")  # DISABLE_DEBUG_PRINT_CHECK
-                            found = True
-                            break
+                # Always check for infrastructure errors
+                for pattern in INFRA_ERROR_PATTERNS:
+                    if re.search(pattern, action["stdout"], re.IGNORECASE):
+                        print(f"INFRA_ERROR: Action failure - {pattern} in stdout")  # DISABLE_DEBUG_PRINT_CHECK
+                        found = True
+                        break
 
 sys.exit(1 if found else 0)

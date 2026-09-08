@@ -60,30 +60,19 @@ jobs:
           CUTOFF_TIME=$(date -u -d "$GITHUB_TIME - 6 hours" '+%Y-%m-%dT%H:%M:%SZ')
           echo "Checking for failed runs after: $CUTOFF_TIME"
 
-          # First, let's see what runs are actually available (debug)
-          echo "All recent runs (any status):"
+          echo ""
+          echo "Recent failed runs (first 30, created after cutoff):"
           gh api \
             -H "Accept: application/vnd.github+json" \
-            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?per_page=10" \
-            | jq -r '.workflow_runs[] | "\(.id) - status: \(.status) - conclusion: \(.conclusion) - updated: \(.updated_at)"'
-
-          echo ""
-          echo "Checking specific run 34116809661:"
-          gh api "/repos/${MONITORED_REPO}/actions/runs/34116809661" 2>&1 | jq -r '{id: .id, status: .status, conclusion: .conclusion, workflow_path: .path, updated_at: .updated_at}' || echo "Run not found or error"
-
-          echo ""
-          echo "Recent failed runs:"
-          gh api \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?status=completed&conclusion=failure&per_page=10" \
+            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?status=completed&conclusion=failure&created=>${CUTOFF_TIME}&per_page=30" \
             | jq -r '.workflow_runs[] | "\(.id) - updated: \(.updated_at) - created: \(.created_at)"'
 
-          # Get failed ROCm CI workflow runs from the last 2 hours
-          # Using updated_at (when run completed) instead of created_at
+          # Get failed ROCm CI workflow runs from the last 6 hours
+          # Using created filter to ensure we get recent runs
           gh api \
             -H "Accept: application/vnd.github+json" \
-            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?status=completed&conclusion=failure&per_page=100" \
-            | jq -r --arg cutoff "$CUTOFF_TIME" '.workflow_runs[] | select(.updated_at > $cutoff) | .id' \
+            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?status=completed&conclusion=failure&created=>${CUTOFF_TIME}&per_page=100" \
+            | jq -r '.workflow_runs[] | .id' \
             > run_ids.txt
 
           echo "Found $(wc -l < run_ids.txt) failed runs from last 2 hours in ${MONITORED_REPO}"
@@ -103,7 +92,7 @@ jobs:
             exit 0
           fi
 
-          build_tools/rocm/monitor_bep_artifacts.sh run_ids.txt "${MONITORED_REPO}" || echo "no bep files found"
+          build_tools/rocm/monitor_bep_artifacts.sh run_ids.txt "${MONITORED_REPO}" || true
 
       - name: Analyze BEP files for infrastructure errors
         id: analyze
