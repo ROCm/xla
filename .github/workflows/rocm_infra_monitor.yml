@@ -98,14 +98,18 @@ jobs:
           fi
 
           HAS_INFRA_ERRORS=false
-          rm -f failed_runs.txt
-          touch failed_runs.txt
+          rm -f failed_runs.txt runs_with_bep.txt
+          touch failed_runs.txt runs_with_bep.txt
 
           for run_dir in bep-files/run-*; do
             [ ! -d "$run_dir" ] && continue
 
             RUN_ID=$(basename "$run_dir" | sed 's/run-//')
-            FOUND_ERROR=false
+
+            # Track that this run has BEP files (Bazel ran)
+            echo "$RUN_ID" >> runs_with_bep.txt
+
+            FOUND_INFRA_ERROR=false
 
             for bep_file in "$run_dir"/*.json; do
               [ ! -f "$bep_file" ] && continue
@@ -116,16 +120,20 @@ jobs:
               EXIT_CODE=$?
               set -e
 
-              if [ $EXIT_CODE -ne 0 ]; then
+              # Exit codes: 0=no error, 1=infra error, 2=build/test error
+              if [ $EXIT_CODE -eq 1 ]; then
                 echo "  -> Infrastructure error detected: $OUTPUT"
-                FOUND_ERROR=true
-                break
+                FOUND_INFRA_ERROR=true
+                break  # Found infra error, no need to check other BEP files
+              elif [ $EXIT_CODE -eq 2 ]; then
+                echo "  -> Build/test error (not infrastructure)"
+                # Don't break - continue checking other BEP files in case they have infra errors
               else
-                echo "  -> No infrastructure errors"
+                echo "  -> No errors detected"
               fi
             done
 
-            if [ "$FOUND_ERROR" = true ]; then
+            if [ "$FOUND_INFRA_ERROR" = true ]; then
               echo "https://github.com/openxla/xla/actions/runs/${RUN_ID}" >> failed_runs.txt
               HAS_INFRA_ERRORS=true
             fi
@@ -133,15 +141,31 @@ jobs:
 
           if [ "$HAS_INFRA_ERRORS" = true ]; then
             echo "has_infra_errors=true" >> "$GITHUB_OUTPUT"
-            echo "Runs with infrastructure errors:"
+            echo "Runs with Bazel infrastructure errors:"
             cat failed_runs.txt
           else
             echo "has_infra_errors=false" >> "$GITHUB_OUTPUT"
-            echo "No infrastructure errors found in BEP files"
+            echo "No Bazel infrastructure errors found in BEP files"
+          fi
+
+      - name: Report non-Bazel infrastructure errors
+        run: |
+          # Only report runs that DON'T have BEP files (failed before Bazel ran)
+          echo "Checking for non-Bazel infrastructure errors..."
+
+          if [ -s run_ids.txt ]; then
+            while read -r RUN_ID; do
+              # Check if this run has BEP files
+              if ! grep -q "^${RUN_ID}$" runs_with_bep.txt 2>/dev/null; then
+                # No BEP files = failed before Bazel = non-Bazel infra error
+                echo "Non-Bazel infrastructure error: run $RUN_ID (no BEP files)"
+                echo "https://github.com/openxla/xla/actions/runs/${RUN_ID}" >> failed_runs.txt
+              fi
+            done < run_ids.txt
           fi
 
       - name: Create or update issue for failed runs
-        if: steps.analyze.outputs.has_infra_errors == 'true'
+        if: hashFiles('failed_runs.txt') != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

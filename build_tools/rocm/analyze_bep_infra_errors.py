@@ -104,11 +104,17 @@ BUILD_ERROR_PATTERNS = [
     r"fails to build",
 ]
 
-found = False
+found_infra_error = False
+found_build_test_error = False
 
 for e in events:
-    # Skip test summary and test result events (test failures are not infrastructure errors)
+    # Check for test failures (not infrastructure errors)
     if "testSummary" in e or "testResult" in e:
+        # If there's a test failure, mark it
+        if "testSummary" in e:
+            summary = e.get("testSummary", {})
+            if summary.get("overallStatus") in ["FAILED", "FLAKY", "TIMEOUT"]:
+                found_build_test_error = True
         continue
 
     # Check for aborted events with infrastructure failure reasons
@@ -116,7 +122,10 @@ for e in events:
         reason = e["aborted"].get("reason", "")
         if reason in INFRA_REASONS:
             print(f"INFRA_ERROR: aborted.reason={reason}")  # DISABLE_DEBUG_PRINT_CHECK
-            found = True
+            found_infra_error = True
+        else:
+            # Other abort reasons might be build/test errors
+            found_build_test_error = True
 
     # Check finished event for BEP upload errors
     if "finished" in e:
@@ -128,7 +137,7 @@ for e in events:
                 for pattern in INFRA_ERROR_PATTERNS:
                     if re.search(pattern, exit_code_name, re.IGNORECASE):
                         print(f"INFRA_ERROR: {pattern} in finished.exitCode.name")  # DISABLE_DEBUG_PRINT_CHECK
-                        found = True
+                        found_infra_error = True
                         break
 
     # Check stderr in progress events
@@ -139,7 +148,7 @@ for e in events:
             for pattern in INFRA_ERROR_PATTERNS:
                 if re.search(pattern, stderr, re.IGNORECASE):
                     print(f"INFRA_ERROR: {pattern} in progress.stderr")  # DISABLE_DEBUG_PRINT_CHECK
-                    found = True
+                    found_infra_error = True
                     break
 
     # Check stdout in progress events
@@ -150,7 +159,7 @@ for e in events:
             for pattern in INFRA_ERROR_PATTERNS:
                 if re.search(pattern, stdout, re.IGNORECASE):
                     print(f"INFRA_ERROR: {pattern} in progress.stdout")  # DISABLE_DEBUG_PRINT_CHECK
-                    found = True
+                    found_infra_error = True
                     break
 
     # Check action events for failures (but skip test actions - those are test failures, not infra)
@@ -164,19 +173,34 @@ for e in events:
         # Non-zero exit codes from non-test actions
         if "exitCode" in action and action["exitCode"] != 0:
             # Check if failure message indicates infrastructure issue
+            action_has_infra_error = False
             if "stderr" in action and isinstance(action["stderr"], str):
-                # Always check for infrastructure errors
+                # Check for infrastructure errors
                 for pattern in INFRA_ERROR_PATTERNS:
                     if re.search(pattern, action["stderr"], re.IGNORECASE):
                         print(f"INFRA_ERROR: Action failure - {pattern} in stderr")  # DISABLE_DEBUG_PRINT_CHECK
-                        found = True
+                        found_infra_error = True
+                        action_has_infra_error = True
                         break
-            if "stdout" in action and isinstance(action["stdout"], str):
-                # Always check for infrastructure errors
+            if "stdout" in action and isinstance(action["stdout"], str) and not action_has_infra_error:
+                # Check for infrastructure errors
                 for pattern in INFRA_ERROR_PATTERNS:
                     if re.search(pattern, action["stdout"], re.IGNORECASE):
                         print(f"INFRA_ERROR: Action failure - {pattern} in stdout")  # DISABLE_DEBUG_PRINT_CHECK
-                        found = True
+                        found_infra_error = True
+                        action_has_infra_error = True
                         break
+            # If action failed but no infra error found in stderr/stdout, it's a build/test error
+            if not action_has_infra_error:
+                found_build_test_error = True
 
-sys.exit(1 if found else 0)
+# Exit codes:
+# 0 = No errors found (or file couldn't be read)
+# 1 = Infrastructure error detected
+# 2 = Build/test error detected (not infrastructure)
+if found_infra_error:
+    sys.exit(1)
+elif found_build_test_error:
+    sys.exit(2)
+else:
+    sys.exit(0)
