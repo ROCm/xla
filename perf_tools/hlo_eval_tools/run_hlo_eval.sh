@@ -35,6 +35,10 @@
 #   RESUME=1       Skip leaves whose target CSV already exists (resume an
 #                  interrupted run without re-profiling finished leaves).
 #   SETTLE_SEC=N   Seconds to pause between runner processes (default 2).
+#   STAT=mean|median
+#                  Which statistic over the timed repeats the runner writes to
+#                  the CSV (default: the runner's own default, i.e. mean).
+#                  median needs a runner built with --profile_csv_statistic.
 
 set -uo pipefail
 
@@ -68,6 +72,13 @@ ORDER=${ORDER:-size}
 # ARG_MODE is the runner's --hlo_argument_mode. Default "uninitialized" (fastest:
 # no input generation).
 ARG_MODE=${ARG_MODE:-uninitialized}
+
+# STAT is the runner's --profile_csv_statistic ("mean" or "median"). Left empty
+# by default so the flag is not passed at all: the runner then falls back to
+# HLO_RUNNER_PROFILE_CSV_STATISTIC if it is exported, and to the mean otherwise.
+# With the default 5 repeats the median is taken over 4 timed samples, so it is
+# the mean of the middle two - raise the repeat count to make it meaningful.
+STAT=${STAT:-}
 
 # CMD_BUFFER=off (default) adds XLA_FLAGS=--xla_gpu_enable_command_buffer= to every
 # run, disabling XLA's HIP command buffers (graphs). Required on this ROCm build:
@@ -136,8 +147,9 @@ invoke() {
   args+=(--hlo_argument_mode="$ARG_MODE"
          --num_repeats="$REPEATS"
          --profile_execution=true
-         --append_profile_to_csv_file="$csv"
-         "$@")
+         --append_profile_to_csv_file="$csv")
+  [ -n "$STAT" ] && args+=(--profile_csv_statistic="$STAT")
+  args+=("$@")
   echo "  run: N=$n, $# module(s), devices=[$devs] -> ${csv}.csv"
   local xf="${XLA_FLAGS:-}"
   [ "$CMD_BUFFER" = off ] && xf="--xla_gpu_enable_command_buffer= $xf"
@@ -190,7 +202,7 @@ run_leaf() {
 echo "runner : $RUNNER"
 echo "hlo    : $HLO"
 if [ -n "$SINGLE_CSV" ]; then echo "out    : ${SINGLE_CSV}.csv (single file)"; else echo "out    : $OUT/ (one CSV per leaf)"; fi
-echo "repeats: $REPEATS   order: $ORDER   arg_mode: $ARG_MODE   cmd_buffer: $CMD_BUFFER   visible GPUs (approx): $NGPU"
+echo "repeats: $REPEATS   order: $ORDER   arg_mode: $ARG_MODE   cmd_buffer: $CMD_BUFFER   stat: ${STAT:-runner default}   visible GPUs (approx): $NGPU"
 echo
 
 if [ -f "$HLO" ]; then
