@@ -182,6 +182,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          build_tools/rocm/create_infra_error_issue.sh \
-            failed_runs.txt \
-            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          # Only create/update issue if there are actual failures
+          if [ -s failed_runs.txt ]; then
+            build_tools/rocm/create_infra_error_issue.sh \
+              failed_runs.txt \
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          else
+            echo "No infrastructure errors found, skipping issue creation"
+          fi

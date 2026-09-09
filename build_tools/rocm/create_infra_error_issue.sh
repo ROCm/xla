@@ -65,15 +65,18 @@ echo "Will assign to: ${TEAM_MEMBERS[*]}"
 # Check if an open issue already exists (search by title, not label)
 ISSUE_NUMBER=$(gh issue list --repo "$ISSUE_REPO" --state open --search "in:title $TITLE" --json number --jq '.[0].number')
 
-BODY="## Failed ROCm CI Runs Detected
+BODY="## Infrastructure Errors Detected in ROCm CI
 
 Monitoring run: ${WORKFLOW_URL}
 
-The following runs failed and have BEP files for analysis:
+The following workflow runs failed with infrastructure errors:
 
 $(cat "$ERRORS_FILE")
 
-Review the BEP files in the workflow artifacts to determine if failures are infrastructure-related.
+### Next Steps
+- Click the run links above to view logs and error details
+- For runs with BEP artifacts, download and analyze the Build Event Protocol files
+- For runs without BEP files, the failure occurred during setup/initialization
 
 cc @ROCm/ai-fw-openxla
 
