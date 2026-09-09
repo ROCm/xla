@@ -149,14 +149,27 @@ jobs:
           fi
 
       - name: Report non-Bazel infrastructure errors
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Only report runs that DON'T have BEP files (failed before Bazel ran)
           echo "Checking for non-Bazel infrastructure errors..."
+
+          MONITORED_REPO="openxla/xla"
 
           if [ -s run_ids.txt ]; then
             while read -r RUN_ID; do
               # Check if this run has BEP files
               if ! grep -q "^${RUN_ID}$" runs_with_bep.txt 2>/dev/null; then
+                # Check if the run was cancelled (not a real failure)
+                RUN_INFO=$(gh api "/repos/${MONITORED_REPO}/actions/runs/${RUN_ID}")
+                CONCLUSION=$(echo "$RUN_INFO" | jq -r '.conclusion')
+
+                if [ "$CONCLUSION" = "cancelled" ]; then
+                  echo "Run $RUN_ID was cancelled (skipping)"
+                  continue
+                fi
+
                 # No BEP files = failed before Bazel = non-Bazel infra error
                 echo "Non-Bazel infrastructure error: run $RUN_ID (no BEP files)"
                 echo "https://github.com/openxla/xla/actions/runs/${RUN_ID}" >> failed_runs.txt
