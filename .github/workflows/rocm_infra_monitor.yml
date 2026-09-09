@@ -124,11 +124,10 @@ jobs:
               if [ $EXIT_CODE -eq 1 ]; then
                 echo "  -> Infrastructure error detected: $OUTPUT"
                 FOUND_INFRA_ERROR=true
-                break
+                break  # Found infra error, no need to check other BEP files
               elif [ $EXIT_CODE -eq 2 ]; then
                 echo "  -> Build/test error (not infrastructure)"
-                # Don't report this - it's a code issue, not infra
-                break
+                # Don't break - continue checking other BEP files in case they have infra errors
               else
                 echo "  -> No errors detected"
               fi

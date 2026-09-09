@@ -173,26 +173,26 @@ for e in events:
         # Non-zero exit codes from non-test actions
         if "exitCode" in action and action["exitCode"] != 0:
             # Check if failure message indicates infrastructure issue
+            action_has_infra_error = False
             if "stderr" in action and isinstance(action["stderr"], str):
-                # Always check for infrastructure errors
+                # Check for infrastructure errors
                 for pattern in INFRA_ERROR_PATTERNS:
                     if re.search(pattern, action["stderr"], re.IGNORECASE):
                         print(f"INFRA_ERROR: Action failure - {pattern} in stderr")  # DISABLE_DEBUG_PRINT_CHECK
                         found_infra_error = True
+                        action_has_infra_error = True
                         break
-                # If no infra error but action failed, it's likely a build/test error
-                if not found_infra_error:
-                    found_build_test_error = True
-            if "stdout" in action and isinstance(action["stdout"], str):
-                # Always check for infrastructure errors
+            if "stdout" in action and isinstance(action["stdout"], str) and not action_has_infra_error:
+                # Check for infrastructure errors
                 for pattern in INFRA_ERROR_PATTERNS:
                     if re.search(pattern, action["stdout"], re.IGNORECASE):
                         print(f"INFRA_ERROR: Action failure - {pattern} in stdout")  # DISABLE_DEBUG_PRINT_CHECK
                         found_infra_error = True
+                        action_has_infra_error = True
                         break
-                # If no infra error but action failed, it's likely a build/test error
-                if not found_infra_error:
-                    found_build_test_error = True
+            # If action failed but no infra error found in stderr/stdout, it's a build/test error
+            if not action_has_infra_error:
+                found_build_test_error = True
 
 # Exit codes:
 # 0 = No errors found (or file couldn't be read)
