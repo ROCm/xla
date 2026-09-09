@@ -120,9 +120,36 @@ for e in events:
     # Check for aborted events with infrastructure failure reasons
     if "aborted" in e:
         reason = e["aborted"].get("reason", "")
+        description = e["aborted"].get("description", "")
+
+        # Check if this is an infrastructure failure by reason
         if reason in INFRA_REASONS:
-            print(f"INFRA_ERROR: aborted.reason={reason}")  # DISABLE_DEBUG_PRINT_CHECK
-            found_infra_error = True
+            # Check the description for infrastructure error patterns to confirm
+            # (or for build error patterns to override)
+            is_infra_error_confirmed = False
+            is_build_error = False
+
+            if description and isinstance(description, str):
+                # First check for infrastructure error patterns in the description
+                for pattern in INFRA_ERROR_PATTERNS:
+                    if re.search(pattern, description, re.IGNORECASE):
+                        is_infra_error_confirmed = True
+                        break
+
+                # Only check for build errors if no infrastructure error pattern found
+                if not is_infra_error_confirmed:
+                    for pattern in BUILD_ERROR_PATTERNS:
+                        if re.search(pattern, description, re.IGNORECASE):
+                            is_build_error = True
+                            break
+
+            # If we found build error patterns but no infra patterns, it's a build error
+            if is_build_error and not is_infra_error_confirmed:
+                found_build_test_error = True
+            else:
+                # Either confirmed infra error or no description to check
+                print(f"INFRA_ERROR: aborted.reason={reason}")  # DISABLE_DEBUG_PRINT_CHECK
+                found_infra_error = True
         else:
             # Other abort reasons might be build/test errors
             found_build_test_error = True
@@ -144,23 +171,41 @@ for e in events:
     if "progress" in e and "stderr" in e["progress"]:
         stderr = e["progress"]["stderr"]
         if isinstance(stderr, str):
-            # Always check for infrastructure errors
+            # Check for infrastructure errors first (they have priority)
+            is_infra_error = False
             for pattern in INFRA_ERROR_PATTERNS:
                 if re.search(pattern, stderr, re.IGNORECASE):
                     print(f"INFRA_ERROR: {pattern} in progress.stderr")  # DISABLE_DEBUG_PRINT_CHECK
                     found_infra_error = True
+                    is_infra_error = True
                     break
+
+            # Only check for build/test errors if not an infrastructure error
+            if not is_infra_error:
+                for pattern in BUILD_ERROR_PATTERNS:
+                    if re.search(pattern, stderr, re.IGNORECASE):
+                        found_build_test_error = True
+                        break
 
     # Check stdout in progress events
     if "progress" in e and "stdout" in e["progress"]:
         stdout = e["progress"]["stdout"]
         if isinstance(stdout, str):
-            # Always check for infrastructure errors
+            # Check for infrastructure errors first (they have priority)
+            is_infra_error = False
             for pattern in INFRA_ERROR_PATTERNS:
                 if re.search(pattern, stdout, re.IGNORECASE):
                     print(f"INFRA_ERROR: {pattern} in progress.stdout")  # DISABLE_DEBUG_PRINT_CHECK
                     found_infra_error = True
+                    is_infra_error = True
                     break
+
+            # Only check for build/test errors if not an infrastructure error
+            if not is_infra_error:
+                for pattern in BUILD_ERROR_PATTERNS:
+                    if re.search(pattern, stdout, re.IGNORECASE):
+                        found_build_test_error = True
+                        break
 
     # Check action events for failures (but skip test actions - those are test failures, not infra)
     if "action" in e:
