@@ -70,6 +70,7 @@ limitations under the License.
 #include "xla/codegen/tiling/tiled_hlo_instruction.h"
 #include "xla/codegen/tiling/tiled_hlo_schedule.h"
 #include "xla/codegen/tiling/tiling_specification.h"
+#include "xla/codegen/xtile/codegen/conv_algorithms.h"
 #include "xla/codegen/xtile/codegen/dot_algorithms.h"
 #include "xla/codegen/xtile/codegen/emitter_helpers.h"
 #include "xla/codegen/xtile/ir/transforms/passes.h"
@@ -470,6 +471,247 @@ absl::Status EmitTiledInstructionList(
     VLOG(8) << "Emitted " << hlo->ToString(HloPrintOptions::ShortParsable());
   }
   return absl::OkStatus();
+}
+
+enum class ConvOperandSide { kInput, kKernel };
+
+// Computes and applies a mask to the reduction dimension of the `dot_operand`
+// (shape [M, K] or [K, N]) whose absolute contracting dim index is out of
+// bounds. Only relevant when tile size doesn't divide dim size evenly AND this
+// iteration is the last.
+//
+// Outer axes go over spatial dims which are currently tiled with 1
+// and do not need masking.
+// Once that constraint is removed the function will need to be modified.
+absl::StatusOr<TensorValue> MaskConvOperand(
+    mlir::ImplicitLocOpBuilder& b, TensorValue operand, Value c_in_offset,
+    const HloConvolutionInstruction& conv, ConvOperandSide operand_side) {
+  const auto& dnums = conv.convolution_dimension_numbers();
+  int64_t c_in =
+      conv.operand(0)->shape().dimensions(dnums.input_feature_dimension());
+  int contraction_dimension_index =
+      operand_side == ConvOperandSide::kInput ? 1 : 0;
+  llvm::ArrayRef<int64_t> tile_shape = operand.getType().getShape();
+  int64_t tile_size = tile_shape[contraction_dimension_index];
+  if (c_in % tile_size == 0) {
+    return operand;
+  }
+
+  if (c_in_offset.getType() != b.getI32Type()) {
+    c_in_offset = Cast(b, c_in_offset, b.getI32Type());
+  }
+
+  Type result_type = operand.getType();
+  Value tile_size_value = CreateConst(b, b.getI32Type(), tile_size);
+  Value c_in_value = CreateConst(b, b.getI32Type(), c_in);
+  // if c_in_offset + tile_size > c_in, this block has out-of-bounds lanes.
+  Value block_end = arith::AddIOp::create(b, c_in_offset, tile_size_value);
+  auto cond = arith::CmpIOp::create(b, arith::CmpIPredicate::sgt, block_end,
+                                    c_in_value);
+  auto if_op = mlir::scf::IfOp::create(b, mlir::TypeRange(result_type), cond,
+                                       /*withElseRegion=*/true);
+  {  // then: mask the trailing partial block.
+    b.setInsertionPointToStart(if_op.thenBlock());
+    TensorValue range = Iota(b, tile_size);
+    TensorValue broadcasted_tile_offset =
+        xtile::Splat(b, c_in_offset, {tile_size});
+    Value indices = arith::AddIOp::create(b, range, broadcasted_tile_offset);
+    Value boundary = CreateConst(b, b.getI32Type(), c_in, {tile_size});
+    Value mask =
+        arith::CmpIOp::create(b, arith::CmpIPredicate::slt, indices, boundary);
+    mask = xtile::BroadcastInDims(b, mlir::cast<TensorValue>(mask), tile_shape,
+                                  {contraction_dimension_index});
+    Type operand_element_type = operand.getType().getElementType();
+    TensorValue zero = CreateConst(b, operand_element_type, 0.0f, tile_shape);
+    Value masked_operand = arith::SelectOp::create(b, mask, operand, zero);
+    mlir::scf::YieldOp::create(b, masked_operand);
+  }
+  {  // else
+    b.setInsertionPointToStart(if_op.elseBlock());
+    mlir::scf::YieldOp::create(b, operand);
+  }
+  b.setInsertionPointAfter(if_op);
+  return mlir::cast<TensorValue>(if_op.getResult(0));
+}
+
+absl::StatusOr<int64_t> GetConvLoopIterationCount(
+    const TiledHloInstruction& tiled_conv) {
+  const auto* conv = ::xla::Cast<HloConvolutionInstruction>(tiled_conv.hlo());
+  const int64_t spatial_rank = conv->window().dimensions().size();
+  const auto& dnums = conv->convolution_dimension_numbers();
+  int64_t iterations = 1;
+  for (int64_t i = 0; i < spatial_rank; ++i) {
+    const int64_t spatial_axis = conv->window().dimensions(i).size();
+    const int64_t spatial_tile =
+        tiled_conv.operand(1)->tile_size(dnums.kernel_spatial_dimensions(i));
+    iterations *= CeilOfRatio(spatial_axis, spatial_tile);
+  }
+  const int64_t input_feature_axis =
+      conv->operand(0)->shape().dimensions(dnums.input_feature_dimension());
+  const int64_t input_feature_tile =
+      tiled_conv.operand(0)->tile_size(dnums.input_feature_dimension());
+  iterations *= CeilOfRatio(input_feature_axis, input_feature_tile);
+  TF_RET_CHECK(iterations > 0)
+      << "Number of iterations over contracting dimensions must be positive, "
+         "got "
+      << iterations << " for conv " << conv->ToShortString();
+  return iterations;
+}
+
+// Emits a convolution as an implicit GEMM
+absl::StatusOr<TensorValue> EmitConv(
+    mlir::ImplicitLocOpBuilder& b, const HloFusionInstruction& fusion,
+    const TiledHloInstruction& tiled_hlo_conv, mlir::FunctionOpInterface fn,
+    Value pid,
+    absl::flat_hash_map<const TiledHloInstruction*, TensorValue>& values) {
+  TF_RET_CHECK(tiled_hlo_conv.hlo_regions().size() == 1);
+
+  const auto* conv =
+      ::xla::Cast<HloConvolutionInstruction>(tiled_hlo_conv.hlo());
+  if (tiled_hlo_conv.operands().size() != 2) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "EmitConv: expected exactly 2 operands (input, kernel), got ",
+        tiled_hlo_conv.operands().size()));
+  }
+  const int64_t output_rank = conv->shape().dimensions().size();
+  const int64_t input_rank = conv->operand(0)->shape().dimensions().size();
+  const int64_t kernel_rank = conv->operand(1)->shape().dimensions().size();
+  if (input_rank != output_rank || kernel_rank != output_rank) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "EmitConv: input/kernel/output rank mismatch (input ", input_rank,
+        ", kernel ", kernel_rank, ", output ", output_rank, ")."));
+  }
+  const int64_t spatial_rank = conv->window().dimensions().size();
+  const int64_t expected_spatial_rank = output_rank - 2;
+  if (spatial_rank != expected_spatial_rank) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "EmitConv: window has ", spatial_rank,
+        " spatial dimensions but output rank ", output_rank, " implies ",
+        expected_spatial_rank, " spatial dimensions."));
+  }
+
+  const auto& dnums = conv->convolution_dimension_numbers();
+  for (int64_t i = 0; i < spatial_rank; ++i) {
+    const int64_t tile_size = tiled_hlo_conv.operand(1)->tile_size(
+        dnums.kernel_spatial_dimensions(i));
+    if (tile_size != 1) {
+      return absl::UnimplementedError(absl::StrCat(
+          "EmitConv: kernel spatial tile sizes must be 1, got ", tile_size,
+          " for spatial axis ", i, " of conv ", conv->ToShortString()));
+    }
+  }
+
+  SmallVector<int64_t> padded_tile_sizes =
+      GetPaddedTileSizes(tiled_hlo_conv.tile_sizes());
+
+  ABSL_ASSIGN_OR_RETURN(
+      Type element_type,
+      PrimitiveTypeToMlirType(b, conv->shape().element_type()));
+  ABSL_ASSIGN_OR_RETURN(Type accumulator_type,
+                        xtile::GetConvAccumulatorType(b, *conv));
+  TensorValue accumulator =
+      CreateConst(b, accumulator_type, 0.0f, padded_tile_sizes);
+
+  ABSL_ASSIGN_OR_RETURN(int64_t loop_iteration_count,
+                        GetConvLoopIterationCount(tiled_hlo_conv));
+
+  auto ctx = b.getContext();
+  auto pid_dim = CreateDimExpr(0, ctx);
+  auto ki_symbol = CreateSymbolExpr(0, /*num_dims=*/1, ctx);
+  SmallVector<SymbolicExpr> result_exprs;
+  result_exprs.push_back(pid_dim * loop_iteration_count + ki_symbol);
+  // Instructions in the region are tiled with indexing map
+  // 'pid * loop_iter_count + ki'.
+  IndexingMap computation_index_map{
+      SymbolicMap::Get(ctx, /*num_dimensions=*/1, /*num_symbols=*/1,
+                       result_exprs),
+      {IndexingMap::Variable{
+          tiled_hlo_conv.tile_offsets_indexing()->GetDimensionBound(0), "pid"}},
+      {IndexingMap::Variable{{0, loop_iteration_count - 1}, "k"}},
+      /*rt_vars=*/{}};
+
+  auto for_op = mlir::scf::ForOp::create(
+      b,
+      /*lowerBound=*/MakeIndex(b, 0),
+      /*upperBound=*/MakeIndex(b, loop_iteration_count),
+      /*step=*/MakeIndex(b, 1), accumulator);
+
+  {  // Loop body.
+    mlir::OpBuilder::InsertionGuard g(b);
+    b.setInsertionPointToStart(for_op.getBody());
+    Value ki = for_op.getInductionVar();
+    Value computation_index = xla::ApplyIndexingOp::create(
+                                  b, ValueRange{pid, ki}, computation_index_map)
+                                  .getResult(0);
+    ABSL_RETURN_IF_ERROR(EmitTiledInstructionList(
+        b, fusion, tiled_hlo_conv.hlo_regions().front().instructions(), fn,
+        computation_index, values));
+
+    SmallVector<TensorValue> conv_args;
+    for (const TiledHloInstruction* operand : tiled_hlo_conv.operands()) {
+      CHECK(values.contains(operand))
+          << "Conv operand " << operand->ToString()
+          << " not found in the emitter values map ";
+      conv_args.push_back(values[operand]);
+    }
+
+    // Canonicalize the per-iteration input/kernel tiles to the implicit-GEMM
+    // [M, K] / [K, N] matrices
+    ABSL_ASSIGN_OR_RETURN(TensorValue input_2d,
+                          CanonicalizeConvInputToMK(b, conv_args[0], *conv));
+    ABSL_ASSIGN_OR_RETURN(TensorValue kernel_2d,
+                          CanonicalizeConvKernelToKN(b, conv_args[1], *conv));
+
+    // The implicit-GEMM K dimension is (kernel spatial product) * c_in; under
+    // the current spatial-tile-size-1 restriction only c_in can be partial, so
+    // only c_in needs boundary masking.
+    ABSL_ASSIGN_OR_RETURN(IndexingMap input_offsets_map,
+                          tiled_hlo_conv.operand(0)->tile_offsets_indexing());
+    ABSL_ASSIGN_OR_RETURN(IndexingMap kernel_offsets_map,
+                          tiled_hlo_conv.operand(1)->tile_offsets_indexing());
+    Value input_c_in_offset =
+        xla::ApplyIndexingOp::create(b, ValueRange{computation_index},
+                                     input_offsets_map)
+            .getResult(dnums.input_feature_dimension());
+    Value kernel_c_in_offset =
+        xla::ApplyIndexingOp::create(b, ValueRange{computation_index},
+                                     kernel_offsets_map)
+            .getResult(dnums.kernel_input_feature_dimension());
+    ABSL_ASSIGN_OR_RETURN(input_2d,
+                          MaskConvOperand(b, input_2d, input_c_in_offset, *conv,
+                                          ConvOperandSide::kInput));
+    ABSL_ASSIGN_OR_RETURN(
+        kernel_2d, MaskConvOperand(b, kernel_2d, kernel_c_in_offset, *conv,
+                                   ConvOperandSide::kKernel));
+
+    Value acc = for_op.getRegionIterArgs().front();
+    llvm::SmallVector<int64_t> acc_tile_shape(
+        mlir::cast<mlir::RankedTensorType>(acc.getType()).getShape());
+    ABSL_ASSIGN_OR_RETURN(TensorValue acc_2d,
+                          CanonicalizeConvAccToMN(b, acc, *conv));
+
+    // The canonical form is [M, K] x [K, N], so the inner dot contracts lhs
+    // dimension 1 against rhs dimension 0 regardless of the conv's dnums.
+    DotDimensionNumbers inner_dim_nums;
+    inner_dim_nums.add_lhs_contracting_dimensions(1);
+    inner_dim_nums.add_rhs_contracting_dimensions(0);
+    ABSL_ASSIGN_OR_RETURN(Value acc_2d_next,
+                          xtile::EmitSingleTileDot(
+                              b, *conv, inner_dim_nums,
+                              xtile::DotOperands{input_2d, kernel_2d, acc_2d}));
+
+    ABSL_ASSIGN_OR_RETURN(
+        Value acc_next,
+        RestoreConvAccFromMN(b, acc_2d_next, *conv, acc_tile_shape));
+
+    mlir::scf::YieldOp::create(b, acc_next);
+  }
+
+  Value result = for_op.getResult(0);
+  if (element_type != accumulator_type) {
+    result = Cast(b, result, element_type);
+  }
+  return mlir::cast<TensorValue>(result);
 }
 
 // Emits dot instruction that has LHS and RHS as part of its region.
@@ -1013,6 +1255,10 @@ absl::StatusOr<TensorValue> EmitTiledHloInstruction(
 
   if (hlo->opcode() == HloOpcode::kDot) {
     return EmitDot(b, fusion, tiled_hlo, fn, pid, values);
+  }
+
+  if (hlo->opcode() == HloOpcode::kConvolution) {
+    return EmitConv(b, fusion, tiled_hlo, fn, pid, values);
   }
 
   if (hlo->opcode() == HloOpcode::kScaledDot) {
