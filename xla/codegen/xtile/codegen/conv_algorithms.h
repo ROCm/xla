@@ -41,7 +41,9 @@ absl::StatusOr<TensorValue> CanonicalizeConvKernelToKN(
     const HloConvolutionInstruction& conv);
 
 // Canonicalizes a rank-N conv input tile to a rank-2 `[M, K]` matrix,
-// where M = batch * product(output spatial axes), and K = product of (kernel spatial axes) * c_in.
+// where M = batch * product(output spatial axes), and K = c_in. The kernel's
+// spatial axes are loop axes, so the contraction extent they contribute is
+// accumulated across iterations rather than folded into K here.
 absl::StatusOr<TensorValue> CanonicalizeConvInputToMK(
     mlir::ImplicitLocOpBuilder& b, TensorValue input_tile,
     const HloConvolutionInstruction& conv);
