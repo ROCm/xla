@@ -53,6 +53,8 @@ TEAM_MEMBERS=(
     i-chaochen
     hsharsha
     charleshofer
+    leo-automation
+    pelumi1163
 )
 
 # Build assignee flags
