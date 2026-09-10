@@ -161,12 +161,12 @@ jobs:
             while read -r RUN_ID; do
               # Check if this run has BEP files
               if ! grep -q "^${RUN_ID}$" runs_with_bep.txt 2>/dev/null; then
-                # Check if the run was cancelled (not a real failure)
+                # Verify this is actually a failure (API query might have race conditions)
                 RUN_INFO=$(gh api "/repos/${MONITORED_REPO}/actions/runs/${RUN_ID}")
                 CONCLUSION=$(echo "$RUN_INFO" | jq -r '.conclusion')
 
-                if [ "$CONCLUSION" = "cancelled" ]; then
-                  echo "Run $RUN_ID was cancelled (skipping)"
+                if [ "$CONCLUSION" != "failure" ]; then
+                  echo "Run $RUN_ID has conclusion '$CONCLUSION' (not a failure, skipping)"
                   continue
                 fi
 
