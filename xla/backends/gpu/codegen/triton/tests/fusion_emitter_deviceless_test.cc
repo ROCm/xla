@@ -526,5 +526,65 @@ ENTRY entry {
                                mlir_context));
 }
 
+TEST_F(TritonEmitterDevicelessTest, ConvUsesImplicitGemmDotStructure) {
+  constexpr absl::string_view kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[2,3,3,4] parameter(0)
+  kernel = f32[3,3,4,8] parameter(1)
+  ROOT conv = f32[2,1,1,8] convolution(input, kernel),
+    window={size=3x3}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","4"]}
+}
+
+ENTRY entry {
+  p0 = f32[2,3,3,4] parameter(0)
+  p1 = f32[3,3,4,8] parameter(1)
+  ROOT fusion = f32[2,1,1,8] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["2","1","1","8"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> hlo_module,
+                       ParseAndReturnVerifiedModule(kHloText));
+  const HloFusionInstruction* triton_fusion = Cast<HloFusionInstruction>(
+      hlo_module->entry_computation()->root_instruction());
+  const se::DeviceDescription dev_info =
+      TestGpuDeviceInfo::RTXA6000DeviceInfo();
+  mlir::MLIRContext mlir_context;
+  RegisterSymbolicExprStorage(&mlir_context);
+  ASSERT_OK_AND_ASSIGN(auto backend_config,
+                       triton_fusion->backend_config<GpuBackendConfig>());
+
+  ASSERT_OK_AND_ASSIGN(
+      TritonKernelSource triton_source,
+      CreateTritonModule("test_fn", *triton_fusion, dev_info,
+                         BlockLevelParameters::FromBlockLevelFusionConfig(
+                             backend_config.fusion_backend_config()
+                                 .block_level_fusion_config()),
+                         mlir_context));
+
+  std::string triton_mlir = triton_source.ToString();
+
+  constexpr absl::string_view kPattern = R"(
+// CHECK-LABEL: @test_fn
+// CHECK:       scf.for
+// CHECK-NOT:   stablehlo.multiply
+// CHECK-NOT:   arith.mulf
+// CHECK:       tt.reshape
+// CHECK:       tt.dot
+)";
+
+  EXPECT_THAT(RunFileCheck(triton_mlir, kPattern),
+              absl_testing::IsOkAndHolds(true))
+      << triton_mlir;
+}
+
 }  // namespace
 }  // namespace xla::gpu
