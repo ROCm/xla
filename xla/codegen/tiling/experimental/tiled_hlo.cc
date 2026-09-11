@@ -286,7 +286,8 @@ RegionSchema GetRegionSchema(const TiledHloInstruction& tiled_hlo,
   switch (opcode) {
     case HloOpcode::kDot:
     case HloOpcode::kScaledDot:
-    case HloOpcode::kRaggedDot: {
+    case HloOpcode::kRaggedDot:
+    case HloOpcode::kConvolution: {
       return RegionSchema{/*region_roots=*/{iota(0, num_operands)},
                           /*operand_ids=*/{}};
     }
