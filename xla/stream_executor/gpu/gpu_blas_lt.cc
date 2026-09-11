@@ -309,14 +309,30 @@ absl::Status BlasLt::MatmulPlan::SetCachedAlgorithm(size_t algorithm_idx,
                                                     size_t max_algorithm_count,
                                                     size_t max_workspace_size) {
   bool cache_dirty = false;
-  // We drop the cache even if max_algorithm_count < cached_algorithm_count_
-  // or max_workspace_size < cached_workspace_size_ since the list of the
-  // algorithms may be different in these cases.
+  // The algorithm count is a *request budget*, not a property of the GEMM, and
+  // callers derive it from the selected algorithm index: the thunk asks for a
+  // single algorithm when the index is 0 and for GemmConfig::kNumAlgorithms
+  // otherwise (gpublas_lt_matmul_thunk.cc). Two structurally identical GEMMs
+  // share one plan by design, so if autotuning left one of them on index 0 and
+  // the other on a nonzero index, an exact-match test here would refetch on
+  // *every* invocation, turning a once-per-plan solution heuristic into a
+  // per-call one (see ISSUE-hipblaslt-plan-cache-algorithm-thrash.md). Only
+  // grow the list: a shorter request is served from the longer cached list,
+  // since GetAlgorithms returns algorithms ranked by the same heuristic and a
+  // top-N list is a prefix of a top-M list for N < M. The workspace size is
+  // still matched exactly -- it filters which algorithms are admissible at all,
+  // so changing it can genuinely reorder the list. That cannot thrash, because
+  // the workspace appears in the plan cache key: it is part of the custom
+  // call's output tuple shape, which CanonicalGemmHlo prints.
   if (cached_algorithms_.empty() ||
-      cached_algorithm_count_ != max_algorithm_count ||
+      max_algorithm_count > cached_algorithm_count_ ||
       cached_workspace_size_ != max_workspace_size) {
     ABSL_ASSIGN_OR_RETURN(cached_algorithms_,
                      GetAlgorithms(max_algorithm_count, max_workspace_size));
+    // Store the *requested* count, not cached_algorithms_.size(): the backend
+    // commonly returns fewer algorithms than asked for, and storing the short
+    // size would make every subsequent request for the original count look like
+    // a growth and refetch forever.
     cached_algorithm_count_ = max_algorithm_count;
     cached_workspace_size_ = max_workspace_size;
     cache_dirty = true;
@@ -326,7 +342,7 @@ absl::Status BlasLt::MatmulPlan::SetCachedAlgorithm(size_t algorithm_idx,
     if (algorithm_idx >= cached_algorithms_.size()) {
       return absl::InternalError(
           absl::StrFormat("Algorithm index is out of range: %zu >= %zu",
-                          algorithm_idx, cached_algorithm_count_));
+                          algorithm_idx, cached_algorithms_.size()));
     }
     cached_algorithm_idx_ = algorithm_idx;
     return SetAlgorithm(cached_algorithms_[algorithm_idx]);
@@ -338,6 +354,14 @@ absl::StatusOr<BlasLt::MatmulPlan*> BlasLt::GetOrCreateMatmulPlanWithAlgorithm(
     const std::string& key, PlanCreateFunc create, size_t algorithm_idx,
     size_t num_algorithms, size_t max_workspace_size) {
   absl::MutexLock lock(plan_cache_mu_);
+  // `key` identifies the GEMM itself (a canonicalized HLO string) and
+  // deliberately omits the selected algorithm, so structurally identical GEMMs
+  // share one entry however they were autotuned. That is intentional: the
+  // autotuner compiles one executable per candidate algorithm, so keying on the
+  // algorithm index would create one plan -- and one full solution heuristic
+  // run -- per candidate, of which exactly one is ever used at runtime.
+  // Keeping the entry shared means SetCachedAlgorithm must tolerate the
+  // algorithm index and count changing underneath it; see the comment there.
   auto res = plan_cache_.emplace(key, MatmulPlanPtr{});
   // New entry inserted: always create a new matmul plan if key is empty,
   // this is used by command_buffer_thunk test.
