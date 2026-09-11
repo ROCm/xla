@@ -497,5 +497,80 @@ TEST_F(TilingSpaceSimplifyExpressionTest, NestedModRemovedIfLessThanDivisor) {
       tiling_space_->SimplifyExpression(expr),
       ParseSymbolicExpr("d0 * 16 + d1 * 2", &mlir_context_, /*num_dims=*/2));
 }
+TEST_F(TilingSpaceTest, ConvolutionSequentialDimsNHWC) {
+  auto root = ParseAndGetRoot(R"(
+    HloModule m
+    ENTRY e {
+      input  = f32[1,5,7,4] parameter(0)
+      kernel = f32[3,5,4,8] parameter(1)
+      ROOT conv = f32[1,3,3,8] convolution(input, kernel),
+        window={size=3x5}, dim_labels=b01f_01io->b01f
+    }
+  )");
+  auto fusion_adaptor = HloFusionAdaptor::ForInstruction(root);
+  ASSERT_OK_AND_ASSIGN(auto tiling_space,
+                       TilingSpace::Create(*fusion_adaptor, &mlir_context_));
+  EXPECT_THAT(*tiling_space, MatchString(R"(
+    Dimensions:
+      0 type: parallel size: 1 dim ID:0
+        hlo: %conv = f32[1,3,3,8]{3,2,1,0} convolution(%input, %kernel), window={size=3x5}, dim_labels=b01f_01io->b01f
+      1 type: parallel size: 3 dim ID:1
+        hlo: %conv = f32[1,3,3,8]{3,2,1,0} convolution(%input, %kernel), window={size=3x5}, dim_labels=b01f_01io->b01f
+      2 type: parallel size: 3 dim ID:2
+        hlo: %conv = f32[1,3,3,8]{3,2,1,0} convolution(%input, %kernel), window={size=3x5}, dim_labels=b01f_01io->b01f
+      3 type: parallel size: 8 dim ID:3
+        hlo: %conv = f32[1,3,3,8]{3,2,1,0} convolution(%input, %kernel), window={size=3x5}, dim_labels=b01f_01io->b01f
+      4 type: sequential size: 3 dim ID:4
+        hlo: %conv = f32[1,3,3,8]{3,2,1,0} convolution(%input, %kernel), window={size=3x5}, dim_labels=b01f_01io->b01f
+      5 type: sequential size: 5 dim ID:5
+        hlo: %conv = f32[1,3,3,8]{3,2,1,0} convolution(%input, %kernel), window={size=3x5}, dim_labels=b01f_01io->b01f
+      6 type: sequential size: 4 dim ID:6
+        hlo: %conv = f32[1,3,3,8]{3,2,1,0} convolution(%input, %kernel), window={size=3x5}, dim_labels=b01f_01io->b01f
+    Root tiles:
+      0 root tile:
+           offsets [tid_0 * ts_0, tid_1 * ts_1, tid_2 * ts_2, tid_3 * ts_3]
+           sizes [ts_0, ts_1, ts_2, ts_3]
+           strides [1, 1, 1, 1]
+           upper bounds [1, 3, 3, 8]
+  )"));
+}
+
+TEST_F(TilingSpaceTest, ConvolutionSequentialDimsNCHW) {
+  auto root = ParseAndGetRoot(R"(
+    HloModule m
+    ENTRY e {
+      input  = f32[1,4,5,5] parameter(0)
+      kernel = f32[8,4,3,3] parameter(1)
+      ROOT conv = f32[1,8,3,3] convolution(input, kernel),
+        window={size=3x3}, dim_labels=bf01_oi01->bf01
+    }
+  )");
+  auto fusion_adaptor = HloFusionAdaptor::ForInstruction(root);
+  ASSERT_OK_AND_ASSIGN(auto tiling_space,
+                       TilingSpace::Create(*fusion_adaptor, &mlir_context_));
+  EXPECT_THAT(*tiling_space, MatchString(R"(
+    Dimensions:
+      0 type: parallel size: 1 dim ID:0
+        hlo: %conv = f32[1,8,3,3]{3,2,1,0} convolution(%input, %kernel), window={size=3x3}, dim_labels=bf01_oi01->bf01
+      1 type: parallel size: 8 dim ID:1
+        hlo: %conv = f32[1,8,3,3]{3,2,1,0} convolution(%input, %kernel), window={size=3x3}, dim_labels=bf01_oi01->bf01
+      2 type: parallel size: 3 dim ID:2
+        hlo: %conv = f32[1,8,3,3]{3,2,1,0} convolution(%input, %kernel), window={size=3x3}, dim_labels=bf01_oi01->bf01
+      3 type: parallel size: 3 dim ID:3
+        hlo: %conv = f32[1,8,3,3]{3,2,1,0} convolution(%input, %kernel), window={size=3x3}, dim_labels=bf01_oi01->bf01
+      4 type: sequential size: 3 dim ID:4
+        hlo: %conv = f32[1,8,3,3]{3,2,1,0} convolution(%input, %kernel), window={size=3x3}, dim_labels=bf01_oi01->bf01
+      5 type: sequential size: 3 dim ID:5
+        hlo: %conv = f32[1,8,3,3]{3,2,1,0} convolution(%input, %kernel), window={size=3x3}, dim_labels=bf01_oi01->bf01
+      6 type: sequential size: 4 dim ID:6
+        hlo: %conv = f32[1,8,3,3]{3,2,1,0} convolution(%input, %kernel), window={size=3x3}, dim_labels=bf01_oi01->bf01
+    Root tiles:
+      0 root tile:
+           offsets [tid_0 * ts_0, tid_1 * ts_1, tid_2 * ts_2, tid_3 * ts_3]
+           sizes [ts_0, ts_1, ts_2, ts_3]
+           strides [1, 1, 1, 1]
+           upper bounds [1, 8, 3, 3]
+  )"));
+}
 }  // namespace
 }  // namespace xla::gpu::experimental
