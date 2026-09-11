@@ -175,7 +175,7 @@ class TileAnalysisTestBase : public HloHardwareIndependentTestBase {
     HloInstruction* root = ParseAndGetRoot(hlo_string);
     auto fusion_adaptor = HloFusionAdaptor::ForInstruction(root);
     ABSL_ASSIGN_OR_RETURN(auto tiling_space,
-                     TilingSpace::Create(*fusion_adaptor, &mlir_context_));
+                          TilingSpace::Create(*fusion_adaptor, &mlir_context_));
     ABSL_RETURN_IF_ERROR(tiling_space->AssignTileSizes(tile_sizes));
     ABSL_ASSIGN_OR_RETURN(
         TiledHloComputation tiled_computation,
@@ -954,6 +954,34 @@ TEST_P(TileAnalysisTest, ScanWithLoop) {
 }
 
 // TODO(b/422676780): Port the remaining tests.
+
+TEST_F(SingleOutputFusionTileAnalysisTest, ConvolutionProducesOneNestedRegion) {
+  ASSERT_OK_AND_ASSIGN(const TiledHloComputation tiled_computation,
+                       ParseAndTile(R"hlo(
+    conv_computation {
+      input  = f32[1,5,5,4] parameter(0)
+      kernel = f32[3,3,4,8] parameter(1)
+      ROOT conv = f32[1,3,3,8] convolution(input, kernel),
+        window={size=3x3}, dim_labels=b01f_01io->b01f
+    }
+    ENTRY main {
+      p0 = f32[1,5,5,4] parameter(0)
+      p1 = f32[3,3,4,8] parameter(1)
+      ROOT fusion = f32[1,3,3,8] fusion(p0, p1), kind=kCustom,
+        calls=conv_computation
+    })hlo",
+                                    /*tile_sizes=*/{1, 1, 3, 8, 1, 1, 2}));
+  const TiledHloInstruction* conv = tiled_computation.roots()[0];
+  ASSERT_EQ(conv->hlo()->opcode(), HloOpcode::kConvolution);
+  ASSERT_EQ(conv->hlo_regions().size(), 1);
+  const TiledHloRegion& region = conv->hlo_regions().front();
+  ASSERT_EQ(region.roots().size(), 2);
+  // region roots are input (parameter 0) and kernel (parameter 1) in order.
+  EXPECT_EQ(region.roots()[0]->hlo()->opcode(), HloOpcode::kParameter);
+  EXPECT_EQ(region.roots()[0]->hlo()->parameter_number(), 0);
+  EXPECT_EQ(region.roots()[1]->hlo()->opcode(), HloOpcode::kParameter);
+  EXPECT_EQ(region.roots()[1]->hlo()->parameter_number(), 1);
+}
 
 }  // namespace
 }  // namespace xla::gpu::experimental

@@ -286,7 +286,8 @@ RegionSchema GetRegionSchema(const TiledHloInstruction& tiled_hlo,
   switch (opcode) {
     case HloOpcode::kDot:
     case HloOpcode::kScaledDot:
-    case HloOpcode::kRaggedDot: {
+    case HloOpcode::kRaggedDot:
+    case HloOpcode::kConvolution: {
       return RegionSchema{/*region_roots=*/{iota(0, num_operands)},
                           /*operand_ids=*/{}};
     }
@@ -471,9 +472,10 @@ absl::StatusOr<TiledHloRegion> TiledHloComputation::CreateHloRegion(
         region_roots.push_back(std::move(tiled_operands[id]));
       }
 
-      ABSL_ASSIGN_OR_RETURN(TiledHloRegion res,
-                       CreateHloRegion(std::move(region_roots), fusion,
-                                       tiling_space, rt_symbol_to_tiled_hlo));
+      ABSL_ASSIGN_OR_RETURN(
+          TiledHloRegion res,
+          CreateHloRegion(std::move(region_roots), fusion, tiling_space,
+                          rt_symbol_to_tiled_hlo));
       for (const auto& [i, id] : llvm::enumerate(region_root_ids)) {
         resolved_operands[id] = res.roots()[i];
       }
@@ -524,8 +526,8 @@ absl::StatusOr<TiledHloRegion> TiledHloComputation::CreateHloRegion(
   absl::flat_hash_map<int64_t, std::pair<const TiledHloInstruction*, Interval>>
       rt_symbol_to_tiled_hlo;
   ABSL_ASSIGN_OR_RETURN(TiledHloRegion region,
-                   CreateHloRegion(std::move(tiled_roots), fusion,
-                                   *tiling_space, rt_symbol_to_tiled_hlo));
+                        CreateHloRegion(std::move(tiled_roots), fusion,
+                                        *tiling_space, rt_symbol_to_tiled_hlo));
 
   return TiledHloComputation(std::move(tiling_space), std::move(region),
                              std::move(rt_symbol_to_tiled_hlo));
