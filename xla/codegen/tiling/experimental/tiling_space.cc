@@ -136,6 +136,9 @@ void TilingSpace::ProcessInstruction(const HloInstruction& hlo) {
     case HloOpcode::kRaggedDot:
       ProcessRaggedDot(hlo);
       break;
+    case HloOpcode::kConvolution:
+      ProcessConvolution(hlo);
+      break;
     default:
       // TODO(goncharov): should have a explicit list of supported instructions?
       break;
@@ -153,6 +156,25 @@ void TilingSpace::ProcessDotLike(const HloInstruction& hlo) {
                     lhs_shape.dimensions(contracting_dim_id),
                     DimensionSemantics::kSequential);
   }
+}
+
+// Add convolution contraction dimensions
+void TilingSpace::ProcessConvolution(const HloInstruction& hlo) {
+  const ConvolutionDimensionNumbers& dnums =
+      hlo.convolution_dimension_numbers();
+  const Shape& kernel_shape = hlo.operand(1)->shape();
+  int64_t output_rank = hlo.shape().dimensions().size();
+  int64_t index = 0;
+  for (int64_t kernel_spatial_dim : dnums.kernel_spatial_dimensions()) {
+    AppendDimension(&hlo, output_rank + index,
+                    kernel_shape.dimensions(kernel_spatial_dim),
+                    DimensionSemantics::kSequential);
+    ++index;
+  }
+  AppendDimension(
+      &hlo, output_rank + index,
+      kernel_shape.dimensions(dnums.kernel_input_feature_dimension()),
+      DimensionSemantics::kSequential);
 }
 
 // Add reduction dimensions.

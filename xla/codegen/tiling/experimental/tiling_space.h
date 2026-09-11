@@ -208,6 +208,7 @@ class TilingSpace {
       absl::Span<const HloInstructionAdaptor> roots);
 
   void ProcessDotLike(const HloInstruction& hlo);
+  void ProcessConvolution(const HloInstruction& hlo);
   void ProcessReduce(const HloInstruction& hlo);
   void ProcessScan(const HloInstruction& hlo);
   void ProcessDynamicSlice(const HloInstruction& hlo);
