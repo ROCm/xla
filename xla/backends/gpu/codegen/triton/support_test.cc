@@ -3761,6 +3761,25 @@ ENTRY triton_computation {
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 2, 2, 1}, cc);
 }
 
+TEST_P(ConvolutionTestCcOnly, IsTritonSupportedConvSparse) {
+  auto [cc, tiling] = GetParam();
+  const std::string kHloTestTemplate = R"(
+ENTRY triton_computation {
+  input = f32[1,4] parameter(0)
+  kernel = f32[1,1] parameter(1)
+  metadata = s32[1,1] parameter(2)
+  ROOT conv = f32[1,1] convolution(input, kernel, metadata),
+    dim_labels=bf_io->bf,
+    sparsity_config={rhs={sparsity=1x4 dimension=0 stride=1 idx=2}}
+})";
+  TF_ASSERT_OK_AND_ASSIGN(
+      TestedInstruction ti,
+      ParseTemplateAndGetInstruction(kHloTestTemplate, PRIMITIVE_TYPE_INVALID,
+                                     HloOpcode::kConvolution));
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 1}, cc,
+                 ExpectedFailMode::kFailOrCrash);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     ConvolutionTestSuiteCcOnly, ConvolutionTestCcOnly,
     ::testing::Combine(::testing::ValuesIn(AllDevicesToTest()),
