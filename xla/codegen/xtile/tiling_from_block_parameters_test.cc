@@ -245,15 +245,16 @@ class GetTileTilingSpaceConcreteSizesTest
   absl::StatusOr<llvm::SmallVector<int64_t>> ComputeConcreteTileSizesOfFusion(
       const HloInstruction* fusion) {
     TF_RET_CHECK(fusion->opcode() == HloOpcode::kFusion) << fusion->ToString();
-    ABSL_ASSIGN_OR_RETURN(auto backend_config,
-                     fusion->backend_config<::xla::gpu::GpuBackendConfig>());
+    ABSL_ASSIGN_OR_RETURN(
+        auto backend_config,
+        fusion->backend_config<::xla::gpu::GpuBackendConfig>());
     BlockLevelParameters block_level_parameters =
         BlockLevelParameters::FromBlockLevelFusionConfig(
             backend_config.fusion_backend_config().block_level_fusion_config());
     auto fusion_adaptor = HloFusionAdaptor::ForInstruction(fusion);
     ABSL_ASSIGN_OR_RETURN(auto tiling_space,
-                     ::xla::gpu::experimental::TilingSpace::Create(
-                         *fusion_adaptor, &mlir_context_));
+                          ::xla::gpu::experimental::TilingSpace::Create(
+                              *fusion_adaptor, &mlir_context_));
     return GetTilingSpaceConcreteSizes(
         *tiling_space, block_level_parameters,
         GetDebugOptionsForTest()
@@ -491,6 +492,59 @@ ENTRY entry {
       StatusIs(absl::StatusCode::kUnimplemented,
                ::testing::HasSubstr("Same-shape multi-output fusions must have "
                                     "identical tile sizes for all outputs.")));
+}
+
+TEST_F(GetTileTilingSpaceConcreteSizesTest, ConvolutionWithBackendConfig) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                       ParseAndReturnVerifiedModule(R"hlo(
+f {
+  input = f32[1,5,5,4] parameter(0)
+  kernel = f32[3,3,4,8] parameter(1)
+  ROOT conv = f32[1,3,3,8] convolution(input, kernel),
+    window={size=3x3}, dim_labels=b01f_01io->b01f,
+    backend_config={sizes:[1, 1, 2]}
+}
+
+ENTRY entry {
+  param_0 = f32[1,5,5,4] parameter(0)
+  param_1 = f32[3,3,4,8] parameter(1)
+  ROOT fusion = f32[1,3,3,8] fusion(param_0, param_1),
+    kind=kCustom, calls=f,
+    backend_config={fusion_backend_config:{block_level_fusion_config:{output_tiles:[{
+      sizes:[1, 1, 3, 8]
+    }]}}}
+}
+)hlo"));
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  ASSERT_OK_AND_ASSIGN(llvm::SmallVector<int64_t> tile_sizes,
+                       ComputeConcreteTileSizesOfFusion(root));
+  EXPECT_THAT(tile_sizes, ElementsAre(1, 1, 3, 8, 1, 1, 2));
+}
+
+TEST_F(GetTileTilingSpaceConcreteSizesTest, ConvolutionWithoutBackendConfig) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                       ParseAndReturnVerifiedModule(R"hlo(
+f {
+  input = f32[1,5,5,4] parameter(0)
+  kernel = f32[3,3,4,8] parameter(1)
+  ROOT conv = f32[1,3,3,8] convolution(input, kernel),
+    window={size=3x3}, dim_labels=b01f_01io->b01f
+}
+
+ENTRY entry {
+  param_0 = f32[1,5,5,4] parameter(0)
+  param_1 = f32[3,3,4,8] parameter(1)
+  ROOT fusion = f32[1,3,3,8] fusion(param_0, param_1),
+    kind=kCustom, calls=f,
+    backend_config={fusion_backend_config:{block_level_fusion_config:{output_tiles:[{
+      sizes:[1, 1, 3, 8]
+    }]}}}
+}
+)hlo"));
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  ASSERT_OK_AND_ASSIGN(llvm::SmallVector<int64_t> tile_sizes,
+                       ComputeConcreteTileSizesOfFusion(root));
+  EXPECT_THAT(tile_sizes, ElementsAre(1, 1, 3, 8, 3, 3, 4));
 }
 
 }  // namespace
