@@ -338,11 +338,26 @@ absl::StatusOr<BlasLt::MatmulPlan*> BlasLt::GetOrCreateMatmulPlanWithAlgorithm(
     const std::string& key, PlanCreateFunc create, size_t algorithm_idx,
     size_t num_algorithms, size_t max_workspace_size) {
   absl::MutexLock lock(plan_cache_mu_);
-  auto res = plan_cache_.emplace(key, MatmulPlanPtr{});
+  // `key` identifies the GEMM itself (a canonicalized HLO string) and
+  // deliberately omits the backend config, so two structurally identical GEMMs
+  // that were autotuned differently would land on one entry. But a plan also
+  // caches state derived from the arguments below, and SetCachedAlgorithm redoes
+  // that work whenever they change: a different `num_algorithms` or
+  // `max_workspace_size` re-runs the algorithm heuristic, and a different
+  // `algorithm_idx` re-runs SetAlgorithm (which for grouped matmuls forces a
+  // re-initialize on the next execute). Two such GEMMs sharing an entry would
+  // therefore invalidate each other's cache on *every* invocation, turning a
+  // once-per-plan cost into a per-call one. Keep them apart by including
+  // everything SetCachedAlgorithm keys off in the cache key.
+  const std::string cache_key =
+      key.empty() ? key
+                  : absl::StrFormat("%s|%zu|%zu|%zu", key, algorithm_idx,
+                                    num_algorithms, max_workspace_size);
+  auto res = plan_cache_.emplace(cache_key, MatmulPlanPtr{});
   // New entry inserted: always create a new matmul plan if key is empty,
   // this is used by command_buffer_thunk test.
-  if (res.second || key.empty()) {
-    VLOG(2) << "Creating a plan for: " << key;
+  if (res.second || cache_key.empty()) {
+    VLOG(2) << "Creating a plan for: " << cache_key;
     ABSL_ASSIGN_OR_RETURN(res.first->second, create());
     VLOG(2) << "Plan created: cache size: " << plan_cache_.size();
   }

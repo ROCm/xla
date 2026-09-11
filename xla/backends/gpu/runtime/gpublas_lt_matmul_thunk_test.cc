@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/gpublas_lt_matmul_thunk.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -413,10 +414,18 @@ struct MockBlasLt : public se::gpu::BlasLt {
 };
 
 struct MockMatmulPlan : public se::gpu::BlasLt::MatmulPlan {
+  // Counts GetAlgorithms calls across all plans. On a real backend this is the
+  // solution heuristic, so tests use it to assert it does not re-run per call.
+  static std::atomic<int>& get_algorithms_calls() {
+    static std::atomic<int> counter{0};
+    return counter;
+  }
+
   absl::StatusOr<std::vector<se::gpu::BlasLt::MatmulAlgorithm>> GetAlgorithms(
       size_t max_algorithm_count, size_t max_workspace_size) const override {
-    se::gpu::BlasLt::MatmulAlgorithm algo;
-    return std::vector<se::gpu::BlasLt::MatmulAlgorithm>{algo};
+    get_algorithms_calls()++;
+    return std::vector<se::gpu::BlasLt::MatmulAlgorithm>(
+        std::max<size_t>(max_algorithm_count, 1));
   }
 
   absl::Status SetAlgorithm(const se::gpu::BlasLt::MatmulAlgorithm&) override {
@@ -484,6 +493,71 @@ TEST_F(GpuBlasLtMatmulThunkTest, CacheUnitTest) {
     }
   }
   EXPECT_TRUE(size.has_value() && static_cast<int>(*size <= mod));
+}
+
+// Two structurally identical GEMMs canonicalize to the same plan cache key but
+// may be autotuned to different algorithms. A plan caches state derived from
+// the algorithm index, the algorithm count and the workspace size, so such
+// GEMMs must not share a cache entry: otherwise every lookup invalidates the
+// state the other one just cached, and the algorithm heuristic re-runs on each
+// invocation instead of once. See
+// ISSUE-hipblaslt-plan-cache-algorithm-thrash.md.
+TEST_F(GpuBlasLtMatmulThunkTest, PlansWithDifferentAlgorithmsDoNotShareEntry) {
+  MockBlasLt blas_lt;
+  auto create_func = [&]() -> absl::StatusOr<se::gpu::BlasLt::MatmulPlanPtr> {
+    return std::make_unique<MockMatmulPlan>();
+  };
+
+  // The ordinals straddle zero the way autotuning can leave two identical
+  // GEMMs: index 0 requests a single algorithm, a nonzero index requests
+  // GemmConfig::kNumAlgorithms of them.
+  constexpr size_t kNumAlgorithms = 128;
+  const std::string key = "identical_gemm";
+  const int calls_before = MockMatmulPlan::get_algorithms_calls().load();
+
+  for (int i = 0; i < 10; ++i) {
+    ASSERT_OK(blas_lt
+                  .GetOrCreateMatmulPlanWithAlgorithm(
+                      key, create_func, /*algorithm_idx=*/0,
+                      /*num_algorithms=*/1, /*max_workspace_size=*/0)
+                  .status());
+    ASSERT_OK(blas_lt
+                  .GetOrCreateMatmulPlanWithAlgorithm(
+                      key, create_func, /*algorithm_idx=*/20,
+                      /*num_algorithms=*/kNumAlgorithms,
+                      /*max_workspace_size=*/0)
+                  .status());
+  }
+
+  // One entry per distinct (key, algorithm_idx, num_algorithms, workspace).
+  EXPECT_EQ(blas_lt.GetMatmulPlanCacheSize(), 2);
+  // The heuristic ran once per entry, not once per invocation.
+  EXPECT_EQ(MockMatmulPlan::get_algorithms_calls().load() - calls_before, 2);
+}
+
+// A differing workspace size alone also changes what the plan caches, and must
+// likewise not collide on one entry.
+TEST_F(GpuBlasLtMatmulThunkTest, PlansWithDifferentWorkspacesDoNotShareEntry) {
+  MockBlasLt blas_lt;
+  auto create_func = [&]() -> absl::StatusOr<se::gpu::BlasLt::MatmulPlanPtr> {
+    return std::make_unique<MockMatmulPlan>();
+  };
+
+  const std::string key = "identical_gemm";
+  const int calls_before = MockMatmulPlan::get_algorithms_calls().load();
+
+  for (int i = 0; i < 10; ++i) {
+    for (size_t workspace : {size_t{0}, size_t{79691776}}) {
+      ASSERT_OK(blas_lt
+                    .GetOrCreateMatmulPlanWithAlgorithm(
+                        key, create_func, /*algorithm_idx=*/0,
+                        /*num_algorithms=*/1, workspace)
+                    .status());
+    }
+  }
+
+  EXPECT_EQ(blas_lt.GetMatmulPlanCacheSize(), 2);
+  EXPECT_EQ(MockMatmulPlan::get_algorithms_calls().load() - calls_before, 2);
 }
 
 TEST_F(GpuBlasLtMatmulThunkTest, ThunkProtoSerialization) {
