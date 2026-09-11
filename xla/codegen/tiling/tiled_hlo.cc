@@ -399,7 +399,8 @@ RegionSchema GetRegionSchema(const TiledHloInstruction& tiled_hlo) {
   };
   switch (opcode) {
     case HloOpcode::kDot:
-    case HloOpcode::kScaledDot: {
+    case HloOpcode::kScaledDot:
+    case HloOpcode::kConvolution: {
       return RegionSchema{/*region_roots=*/{iota(0, num_operands)},
                           /*operand_ids=*/{},
                           /*loop_dim_ids=*/GetLoopDimIds(tiled_hlo)};
