@@ -36,7 +36,10 @@ cc_library(
 xla_test(
     name = "gpu_bandwidth_benchmark_test",
     srcs = ["gpu_bandwidth_benchmark_test.cc"],
-    backends = ["gpu"],
+    backends = [
+        "h100",
+        "amdgpu_any",
+    ],
     deps = [
         ":gpu_bandwidth_benchmark",
         "//xla/tests:xla_internal_test_main",
