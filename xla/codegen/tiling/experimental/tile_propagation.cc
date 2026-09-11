@@ -575,6 +575,84 @@ Tiles PropagateTileToInputForDotOp(const TilingSpace& tiling_space,
           output_tile.CloneWithNewDims(std::move(rhs_dim_tiles))};
 }
 
+Tiles PropagateTileToInputForConvOp(const TilingSpace& tiling_space,
+                                    const HloConvolutionInstruction& conv,
+                                    const Tile& output_tile) {
+  MLIRContext* ctx = output_tile.mlir_context();
+  const ConvolutionDimensionNumbers& dnums =
+      conv.convolution_dimension_numbers();
+  const Window& window = conv.window();
+
+  const Shape& input_shape = conv.operand(0)->shape();
+  const Shape& kernel_shape = conv.operand(1)->shape();
+  const int64_t input_rank = input_shape.dimensions().size();
+  const int64_t kernel_rank = kernel_shape.dimensions().size();
+  const int64_t spatial_rank = window.dimensions().size();
+
+  SmallVector<DimTile> input_dim_tiles(input_rank);
+  SmallVector<DimTile> kernel_dim_tiles(kernel_rank);
+
+  const DimTile& out_batch_tile =
+      output_tile.dim_tiles()[dnums.output_batch_dimension()];
+  const DimTile& out_feature_tile =
+      output_tile.dim_tiles()[dnums.output_feature_dimension()];
+
+  const int64_t output_rank = conv.shape().dimensions().size();
+
+  // Fetch sequential DimTiles for kernel spatial axes (output_rank + i)
+  // and for c_in (output_rank + spatial_rank).
+  SmallVector<DimTile> spatial_seq_tiles;
+  spatial_seq_tiles.reserve(spatial_rank);
+  for (int64_t i = 0; i < spatial_rank; ++i) {
+    const TilingSpace::DimensionInfo& info =
+        tiling_space.GetDimensionInfo(conv, output_rank + i);
+    CHECK(info.type == TilingSpace::DimensionSemantics::kSequential)
+        << "Expected a sequential dimension info for kernel spatial dimension "
+        << i << " in conv op " << conv.ToString();
+    spatial_seq_tiles.push_back(
+        GetDimTile(info, tiling_space.num_dimensions(), ctx));
+  }
+  const TilingSpace::DimensionInfo& c_in_info =
+      tiling_space.GetDimensionInfo(conv, output_rank + spatial_rank);
+  CHECK(c_in_info.type == TilingSpace::DimensionSemantics::kSequential)
+      << "Expected a sequential dimension info for c_in dimension in conv op "
+      << conv.ToString();
+  DimTile c_in_tile = GetDimTile(c_in_info, tiling_space.num_dimensions(), ctx);
+
+  // Input batch and feature dims.
+  input_dim_tiles[dnums.input_batch_dimension()] = out_batch_tile;
+  input_dim_tiles[dnums.input_feature_dimension()] = c_in_tile;
+
+  // Input spatial dims: offset = out * stride + k * dilation - pad_low.
+  for (int64_t i = 0; i < spatial_rank; ++i) {
+    const WindowDimension& w = window.dimensions(i);
+    const int64_t out_spatial_dim = dnums.output_spatial_dimensions(i);
+    const int64_t in_spatial_dim = dnums.input_spatial_dimensions(i);
+    const DimTile& out_tile = output_tile.dim_tiles()[out_spatial_dim];
+    const DimTile& k_tile = spatial_seq_tiles[i];
+
+    SymbolicExpr offset =
+        out_tile.offset * CreateSymbolicConstant(w.stride(), ctx) +
+        k_tile.offset * CreateSymbolicConstant(w.window_dilation(), ctx) +
+        CreateSymbolicConstant(-w.padding_low(), ctx);
+    // Note that `size` and `stride` below are
+    // only correct when stride==1 and base_dilation==1
+    input_dim_tiles[in_spatial_dim] = DimTile{
+        offset, out_tile.size, /*stride=*/CreateSymbolicConstant(1, ctx),
+        CreateSymbolicConstant(input_shape.dimensions(in_spatial_dim), ctx)};
+  }
+
+  // Kernel dims.
+  for (int64_t i = 0; i < spatial_rank; ++i) {
+    kernel_dim_tiles[dnums.kernel_spatial_dimensions(i)] = spatial_seq_tiles[i];
+  }
+  kernel_dim_tiles[dnums.kernel_input_feature_dimension()] = c_in_tile;
+  kernel_dim_tiles[dnums.kernel_output_feature_dimension()] = out_feature_tile;
+
+  return {output_tile.CloneWithNewDims(std::move(input_dim_tiles)),
+          output_tile.CloneWithNewDims(std::move(kernel_dim_tiles))};
+}
+
 // Helper function for PropagateTileToInputForScaledDotOp to compute the
 // scale tile from the operand tile.
 Tile ComputeTileForScale(const Shape& scale_shape, const Shape& operand_shape,
@@ -1483,9 +1561,10 @@ absl::StatusOr<Tile> PropagateTileForBitcastOp(const Tile& tile,
   const ShapeUtil::BitcastDecompositionTrt& trt = maybe_trt.value();
   Tile transpose1_tile = PropagateTileThroughTransposeOp(
       tile, InversePermutation(trt.transpose1_dims));
-  ABSL_ASSIGN_OR_RETURN(auto reshape_tile, PropagateTileThroughReshape(
-                                          transpose1_tile, trt.transpose1_shape,
-                                          trt.reshape_shape));
+  ABSL_ASSIGN_OR_RETURN(
+      auto reshape_tile,
+      PropagateTileThroughReshape(transpose1_tile, trt.transpose1_shape,
+                                  trt.reshape_shape));
   return PropagateTileThroughTransposeOp(
       reshape_tile, InversePermutation(trt.transpose2_dims));
 }
@@ -1607,6 +1686,10 @@ absl::StatusOr<Tiles> PropagateTileToInput(TilingSpace& tiling_space,
   }
   if (hlo.opcode() == HloOpcode::kRaggedDot) {
     return PropagateTileToInputForRaggedDotOp(tiling_space, hlo, output_tile);
+  }
+  if (hlo.opcode() == HloOpcode::kConvolution) {
+    return PropagateTileToInputForConvOp(
+        tiling_space, *Cast<HloConvolutionInstruction>(&hlo), output_tile);
   }
   if (hlo.opcode() == HloOpcode::kPad) {
     const HloPadInstruction& pad = *Cast<HloPadInstruction>(&hlo);
