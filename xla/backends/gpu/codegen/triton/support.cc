@@ -711,6 +711,9 @@ CodegenDecision IsTritonSupportedScaledDot(
 CodegenDecision IsTritonSupportedConv(
     const HloConvolutionInstruction& conv,
     const se::GpuComputeCapability& gpu_version) {
+  if (conv.sparsity_config().has_lhs() || conv.sparsity_config().has_rhs()) {
+    return CodegenDecision::Forbid("Sparse convolution is not supported.");
+  }
   if (conv.feature_group_count() != 1) {
     return CodegenDecision::Forbid("Grouped convolution is not supported.");
   }
