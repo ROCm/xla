@@ -1,0 +1,75 @@
+Fix TDM warp distribution over-subscribing dimensions smaller than num_warps.
+
+tdmGetWarpDistribution() first hands out warps per dimension with the bound
+warpsOut[i] * 2 <= blockShape[i], then unconditionally folds any leftover
+warps into the last dimension. When the block is smaller than num_warps the
+fallback pushes warpsOut[numDims - 1] past blockShape[numDims - 1], so
+getTDMLinearLayout() computes messageShape[i] = blockShape[i] / warpsPerCTA[i]
+== 0. identityStandardND() then calls strided1D(0, ...), which returns
+LinearLayout::empty() and drops the "message" input dimension. The subsequent
+applyLinearLayout(..., {{kMessage, 0}, ...}) in fillTDMDescriptor() fails with
+
+  Dimensions must match, ignoring order, but they don't.
+  Got dims: ["message", "warp", "block"] and ["warp", "block"]
+
+Reproduced on gfx1250 (the only target where has_tdm_support() is true) with a
+1D reduce tile of 4 elements and num_warps = 8: the bounded loop stops at
+warpsOut[0] = 4 with remainingWarps = 2, and the fallback raises it to 8.
+
+Surplus warps do not need a dimension to live on. getTDMLinearLayout() already
+asserts only totalWarps >= prod(warpsPerCTA), assigns zero basis rows to the
+unused warpId bits, and relies on getFreeVariableMasks() so the lowering
+predicates those warps off. Dropping the fallback lets that path handle the
+case it was written for. distributeTDMWarpsAlignToPartition() in
+TDMUtility.cpp already ends with a bounded loop and no fallback, so this also
+makes the two distribution helpers consistent.
+
+tdmGetAdjustedBlockShape() is the other caller and is unaffected: for numDims
+== 1 it divides by numWarps and never reads warps[], and for numDims >= 2 the
+fallback can only fire once every warpsOut[i] has reached blockShape[i], where
+divideCeil(blockShape[i], warpsOut[i]) is 1 both before and after this change
+(TDM block shapes are powers of two). The host-side driver.c copy of the
+header sees the same values. Verified by sweeping both versions over all
+power-of-two extents in 1D/2D/3D for num_warps 1..64: tdmGetAdjustedBlockShape
+is identical in every case, and the cases where warpsPerCTA changes are exactly
+the cases where the old code produced warpsOut[i] > blockShape[i].
+
+A companion assert guarding this invariant at its use site lives in
+tdm_message_shape_assert.patch.
+
+Lifecycle: Upstream this fix to triton-lang/triton and remove the patch in the next integration.
+
+--- a/third_party/amd/backend/include/TDMCommon.h
++++ b/third_party/amd/backend/include/TDMCommon.h
+@@ -18,22 +18,28 @@
+ // Compute warp distribution across dimensions.
+ // Distributes warps starting from the first dimension, assigning as many
+ // warps as possible without exceeding the block shape.
++//
++// The product of the returned counts can be smaller than numWarps when the
++// block is too small to keep every warp busy.  The surplus warps are left
++// undistributed on purpose: getTDMLinearLayout() gives their warpId bits
++// zero basis rows, getFreeVariableMasks() reports them as free variables,
++// and the lowering predicates those warps off.  Folding the leftovers into
++// the last dimension instead makes warpsOut[i] exceed blockShape[i], the
++// message shape blockShape[i] / warpsOut[i] truncates to zero, and the
++// "message" input dimension vanishes from the TDM layout entirely.
+ static inline void tdmGetWarpDistribution(const int64_t *blockShape,
+                                           int numDims, int numWarps,
+                                           int *warpsOut) {
+   for (int i = 0; i < numDims; ++i)
+     warpsOut[i] = 1;
+ 
+   int remainingWarps = numWarps;
+   for (int i = 0; i < numDims && remainingWarps > 1; ++i) {
+     while (remainingWarps > 1 && warpsOut[i] * 2 <= blockShape[i]) {
+       warpsOut[i] *= 2;
+       remainingWarps /= 2;
+     }
+   }
+-
+-  if (remainingWarps > 1)
+-    warpsOut[numDims - 1] *= remainingWarps;
+ }
+ 
+ // Compute per-warp block sizes after distributing warps.
