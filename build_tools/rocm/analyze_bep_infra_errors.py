@@ -42,6 +42,7 @@ INFRA_REASONS = [
 # Infrastructure error patterns in stderr/error messages
 INFRA_ERROR_PATTERNS = [
     # Remote execution / RBE errors
+    r"REMOTE_ERROR",
     r"Failed to query remote execution",
     r"UNAVAILABLE.*Unable to resolve host",
     r"remote cache.*failed",
