@@ -940,6 +940,28 @@ xla_cc_test(
     ],
 )
 
+xla_test(
+    name = "rocm_diagnostics_test",
+    srcs = ["rocm_diagnostics_test.cc"],
+    backends = ["gpu"],
+    tags = ["rocm-only"],
+    deps = [
+        ":rocm_platform",  # buildcleaner: keep
+        ":rocm_version_parser",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:platform_manager",
+        "//xla/stream_executor:semantic_version",
+        "//xla/stream_executor/gpu:gpu_init",
+        "@com_google_absl//absl/debugging:leak_check",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_googletest//:gtest_main",
+        "@local_config_rocm//rocm:hip",  # buildcleaner: keep
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
+)
+
 cc_library(
     name = "rocm_stream",
     srcs = ["rocm_stream.cc"],
