@@ -13,73 +13,32 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <cstdlib>
+#include "xla/stream_executor/rocm/rocm_diagnostics.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/debugging/leak_check.h"
-#include "absl/log/check.h"
-#include "absl/log/log.h"
-#include "absl/status/status_matchers.h"  // IWYU pragma: keep
-#include "rocm/include/hip/hip_runtime.h"
-#include "xla/stream_executor/gpu/gpu_init.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform_manager.h"
-#include "xla/stream_executor/rocm/rocm_version_parser.h"
-#include "xla/stream_executor/semantic_version.h"
 
 namespace stream_executor::gpu {
 namespace {
-
-void LogEnv(const char* name) {
-  const char* value = std::getenv(name);
-  if (value != nullptr) {
-    LOG(INFO) << "env: " << name << "=\"" << value << "\"";
-  }
-}
 
 void EnsureRocmIsInitialized() {
   // Platform is intentionally leaked.
   // See the comment in platform_manager.h.
   absl::LeakCheckDisabler disabler;
 
-  ASSERT_OK_AND_ASSIGN(
-      stream_executor::Platform * platform,
-      PlatformManager::PlatformWithName(stream_executor::GpuPlatformName()));
-  CHECK_GT(platform->VisibleDeviceCount(), 0);
+  ASSERT_OK_AND_ASSIGN(Platform * platform,
+                       PlatformManager::PlatformWithName("ROCM"));
+  ASSERT_GT(platform->VisibleDeviceCount(), 0);
 }
 
 TEST(RocmDiagnosticsTest, DiagnosticRuns) {
   // Platform init is not under test; it only provides a working ROCm context.
-  EnsureRocmIsInitialized();
+  ASSERT_NO_FATAL_FAILURE(EnsureRocmIsInitialized());
 
-  // Check basic ROCm system info: visibility env, runtime/driver version, and
-  // device 0 identity.
-  LogEnv("HIP_VISIBLE_DEVICES");
-  LogEnv("ROCR_VISIBLE_DEVICES");
-
-  int runtime_version = 0;
-  ASSERT_EQ(hipRuntimeGetVersion(&runtime_version), hipSuccess);
-  ASSERT_OK_AND_ASSIGN(stream_executor::SemanticVersion runtime,
-                       stream_executor::ParseRocmVersion(runtime_version));
-  LOG(INFO) << "hipRuntimeGetVersion packed=" << runtime_version
-            << " parsed=" << runtime;
-
-  int driver_version = 0;
-  ASSERT_EQ(hipDriverGetVersion(&driver_version), hipSuccess);
-  ASSERT_OK_AND_ASSIGN(stream_executor::SemanticVersion driver,
-                       stream_executor::ParseRocmVersion(driver_version));
-  LOG(INFO) << "hipDriverGetVersion packed=" << driver_version
-            << " parsed=" << driver;
-
-  int device_count = 0;
-  ASSERT_EQ(hipGetDeviceCount(&device_count), hipSuccess);
-  ASSERT_GT(device_count, 0);
-
-  hipDeviceProp_t props{};
-  ASSERT_EQ(hipGetDeviceProperties(&props, 0), hipSuccess);
-  LOG(INFO) << "device 0 name=\"" << props.name
-            << "\" gcnArchName=" << props.gcnArchName;
+  rocm::Diagnostician::LogDiagnosticInformation();
 }
 
 }  // namespace
