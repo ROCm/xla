@@ -781,22 +781,21 @@ xla_test(
     backends = ["gpu"],
     tags = ["rocm-only"],
     deps = [
-        ":amdhipblaslt_plugin",
-        ":hipblas_lt_header",
+        ":amdhipblaslt_plugin",  # buildcleaner: keep
         ":rocblas_plugin",  # buildcleaner: keep
         ":rocm_platform",  # buildcleaner: keep
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla/stream_executor:blas",
         "//xla/stream_executor:device_address",
+        "//xla/stream_executor:device_address_handle",
         "//xla/stream_executor:platform",
         "//xla/stream_executor:platform_manager",
         "//xla/stream_executor:stream",
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/gpu:gpu_blas_lt",
-        "//xla/stream_executor/gpu:gpu_init",
         "@com_google_absl//absl/log",
-        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
     ],
 )

@@ -17,21 +17,18 @@ limitations under the License.
 #include <memory>
 #include <optional>
 #include <type_traits>
-#include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/log/log.h"
-#include "absl/status/status_matchers.h"  // IWYU pragma: keep
 #include "xla/primitive_util.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_address_handle.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
-#include "xla/stream_executor/gpu/gpu_init.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform_manager.h"
-#include "xla/stream_executor/rocm/hip_blas_lt.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/xla_data.pb.h"
@@ -42,8 +39,7 @@ namespace {
 class RocmBlasLtTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    ASSERT_OK_AND_ASSIGN(platform_,
-                         PlatformManager::PlatformWithName(GpuPlatformName()));
+    ASSERT_OK_AND_ASSIGN(platform_, PlatformManager::PlatformWithName("ROCM"));
     ASSERT_OK_AND_ASSIGN(executor_, platform_->ExecutorForDevice(0));
     LOG(INFO) << "Device name: " << executor_->GetDeviceDescription().name();
     ASSERT_OK_AND_ASSIGN(stream_, executor_->CreateStream());
@@ -52,6 +48,8 @@ class RocmBlasLtTest : public ::testing::Test {
 
   // Column-major A (m x k) and B (k x n) are ones, C is zero, alpha=1, beta=0.
   // Each output element must equal k.
+  // skip_if_unsupported skips only an empty algorithm list (SKU/library gap).
+  // GetMatmulPlan failures are always test failures.
   template <typename InputT, typename OutputT>
   void RunGemm(blas::ComputationType compute_type, bool skip_if_unsupported) {
     xla::PrimitiveType input_primitive_type =
@@ -59,18 +57,7 @@ class RocmBlasLtTest : public ::testing::Test {
     xla::PrimitiveType output_primitive_type =
         xla::primitive_util::NativeToPrimitiveType<OutputT>();
 
-    int64_t m = 32, n = 32, k = 32;
-
-    std::vector<InputT> h_a(m * k, static_cast<InputT>(1));
-    std::vector<InputT> h_b(k * n, static_cast<InputT>(1));
-
-    DeviceAddress<InputT> d_a = executor_->AllocateArray<InputT>(h_a.size());
-    DeviceAddress<InputT> d_b = executor_->AllocateArray<InputT>(h_b.size());
-    DeviceAddress<OutputT> d_c = executor_->AllocateArray<OutputT>(m * n);
-
-    ASSERT_OK(stream_->Memcpy(&d_a, h_a.data(), h_a.size() * sizeof(InputT)));
-    ASSERT_OK(stream_->Memcpy(&d_b, h_b.data(), h_b.size() * sizeof(InputT)));
-    ASSERT_OK(stream_->MemZero(&d_c, m * n * sizeof(OutputT)));
+    const int64_t m = 32, n = 32, k = 32;
 
     gpu::MatrixLayout a_layout(input_primitive_type, m, k,
                                gpu::MatrixLayout::Order::kColumnMajor);
@@ -95,14 +82,10 @@ class RocmBlasLtTest : public ::testing::Test {
         compute_type                      // compute_type
     };
 
-    auto plan_or =
-        blas_lt_->GetMatmulPlan(cfg, gpu::BlasLt::Epilogue::kDefault);
-    if (skip_if_unsupported && !plan_or.ok()) {
-      GTEST_SKIP() << plan_or.status();
-    }
-    ASSERT_OK_AND_ASSIGN(auto plan, std::move(plan_or));
+    ASSERT_OK_AND_ASSIGN(
+        auto plan, blas_lt_->GetMatmulPlan(cfg, gpu::BlasLt::Epilogue::kDefault));
 
-    uint32_t workspace_size = 32 * 1024 * 1024;
+    const size_t workspace_size = 32 * 1024 * 1024;  // 32 MB
     ASSERT_OK_AND_ASSIGN(auto algorithms,
                          plan->GetAlgorithms(128, workspace_size));
     if (skip_if_unsupported && algorithms.empty()) {
@@ -111,7 +94,21 @@ class RocmBlasLtTest : public ::testing::Test {
     ASSERT_FALSE(algorithms.empty());
     ASSERT_OK(plan->SetAlgorithm(algorithms[0]));
 
+    std::vector<InputT> h_a(m * k, static_cast<InputT>(1));
+    std::vector<InputT> h_b(k * n, static_cast<InputT>(1));
+
+    DeviceAddress<InputT> d_a = executor_->AllocateArray<InputT>(h_a.size());
+    DeviceAddress<InputT> d_b = executor_->AllocateArray<InputT>(h_b.size());
+    DeviceAddress<OutputT> d_c = executor_->AllocateArray<OutputT>(m * n);
     DeviceAddressBase workspace = executor_->Allocate(workspace_size);
+    DeviceAddressHandle a_keep(executor_, d_a);
+    DeviceAddressHandle b_keep(executor_, d_b);
+    DeviceAddressHandle c_keep(executor_, d_c);
+    DeviceAddressHandle workspace_keep(executor_, workspace);
+
+    ASSERT_OK(stream_->Memcpy(&d_a, h_a.data(), h_a.size() * sizeof(InputT)));
+    ASSERT_OK(stream_->Memcpy(&d_b, h_b.data(), h_b.size() * sizeof(InputT)));
+    ASSERT_OK(stream_->MemZero(&d_c, m * n * sizeof(OutputT)));
 
     gpu::BlasLt::MemoryArgs args{
         /*a=*/d_a,
@@ -136,25 +133,20 @@ class RocmBlasLtTest : public ::testing::Test {
                               h_result.size() * sizeof(OutputT)));
     ASSERT_OK(stream_->BlockHostUntilDone());
 
-    for (int i = 0; i < m * n; ++i) {
+    for (int64_t i = 0; i < m * n; ++i) {
       if constexpr (std::is_floating_point_v<OutputT>) {
-        EXPECT_FLOAT_EQ(h_result[i], static_cast<OutputT>(k))
+        ASSERT_FLOAT_EQ(h_result[i], static_cast<OutputT>(k))
             << "at index " << i;
       } else {
         ASSERT_EQ(h_result[i], static_cast<OutputT>(k)) << "at index " << i;
       }
     }
-
-    executor_->Deallocate(&d_a);
-    executor_->Deallocate(&d_b);
-    executor_->Deallocate(&d_c);
-    executor_->Deallocate(&workspace);
   }
 
-  Platform* platform_;
-  StreamExecutor* executor_;
+  Platform* platform_ = nullptr;
+  StreamExecutor* executor_ = nullptr;
   std::unique_ptr<Stream> stream_;
-  gpu::BlasLt* blas_lt_;
+  gpu::BlasLt* blas_lt_ = nullptr;
 };
 
 TEST_F(RocmBlasLtTest, F32F32F32Gemm) {
@@ -162,9 +154,10 @@ TEST_F(RocmBlasLtTest, F32F32F32Gemm) {
                         /*skip_if_unsupported=*/false);
 }
 
+// hipBLASLt int8 coverage is SKU/library dependent (CUDA skips S8 below sm61).
 TEST_F(RocmBlasLtTest, S8S8S32Gemm) {
   RunGemm<int8_t, int32_t>(blas::ComputationType::kI32,
-                           /*skip_if_unsupported=*/false);
+                           /*skip_if_unsupported=*/true);
 }
 
 TEST_F(RocmBlasLtTest, S8S8F32Gemm) {
