@@ -22,4 +22,4 @@ jobs:
     secrets: inherit
     with:
       rocm_xla_branch: ${{ github.head_ref || github.ref_name }}
-      runner_label: ${{ 'linux-xla-do-mi350x-1' }}
+      runner_label: ${{ 'linux-xla-do-mi350x-dpx-1' }}
