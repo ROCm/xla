@@ -17,6 +17,11 @@
 // RUN:   -xla-lower-to-llvm-gpu="gpu_device_info='rocm_compute_capability {gcn_arch_name: \"gfx1250\"}'" \
 // RUN:   | FileCheck %s
 
+// RUN: emitters_opt %s -split-input-file \
+// RUN:   -xla-lower-to-llvm-gpu="gpu_device_info='rocm_compute_capability {gcn_arch_name: \"gfx1250-strict\"}'" \
+// RUN:   | FileCheck %s
+
+
 // gfx1250 has a native bf16 exp2 instruction (v_exp_bf16), reached via the
 // llvm.amdgcn.exp2 intrinsic, instead of upcasting to f32 and calling
 // __ocml_exp2_f32.
