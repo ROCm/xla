@@ -20,6 +20,7 @@ limitations under the License.
 
 #include "absl/log/log.h"
 #include "absl/memory/memory.h"
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "xla/backends/gpu/collectives/rccl_errors.h"
@@ -40,17 +41,57 @@ RcclSymmetricMemory::Create(ncclComm_t comm,
       addr.opaque(), addr.size());
 
   ncclWindow_t win = nullptr;
-  // NOTE: ncclCommWindowRegister is not supported in RCCL yet: it fails loudly
-  // or just returns NULL window.
+#if (TF_ROCM_VERSION >= 71400)
+  // ncclCommWindowRegister is available in ROCm/RCCL 7.14+.
+  XLA_RCCL_RETURN_IF_ERROR(ncclCommWindowRegister(
+      comm, addr.opaque(), addr.size(), &win, NCCL_WIN_COLL_SYMMETRIC));
+#end
   return absl::WrapUnique(new RcclSymmetricMemory(comm, win, addr));
 }
 
 RcclSymmetricMemory::~RcclSymmetricMemory() {
   VLOG(3) << absl::StrFormat("Destroy %v", *this);
+#if (TF_ROCM_VERSION >= 71400)
+  // ncclCommWindowDeregister is available in ROCm/RCCL 7.14+.
+  XLA_RCCL_LOG_IF_ERROR(ncclCommWindowDeregister(comm_, win_));
+#endif
 }
 
 stream_executor::DeviceAddressBase RcclSymmetricMemory::addr() const {
   return addr_;
+}
+
+absl::StatusOr<stream_executor::DeviceAddressBase>
+RcclSymmetricMemory::multimem_addr() const {
+#if (TF_ROCM_VERSION >= 71400)
+  // ncclGetLsaMultimemDevicePointer is available in ROCm/RCCL 7.14+.
+  void* multimem = nullptr;
+  XLA_RCCL_RETURN_IF_ERROR(ncclGetLsaMultimemDevicePointer(win_, 0, &multimem));
+  if (multimem) {
+    return stream_executor::DeviceAddressBase(multimem, addr_.size());
+  }
+#endif  // TF_ROCM_VERSION >= 71400
+  return absl::UnimplementedError(
+      "Multimem not supported on this RCCL version or device");
+}
+
+absl::StatusOr<stream_executor::DeviceAddressBase>
+RcclSymmetricMemory::peer_addr(RankId peer) const {
+#if (TF_ROCM_VERSION >= 71400)
+  // ncclGetPeerDevicePointer is available in ROCm/RCCL 7.14+.
+  void* peer_addr = nullptr;
+  XLA_RCCL_RETURN_IF_ERROR(
+      ncclGetPeerDevicePointer(win_, 0, peer.value(), &peer_addr));
+  if (peer_addr) {
+    return stream_executor::DeviceAddressBase(peer_addr, addr_.size());
+  }
+  return absl::FailedPreconditionError(absl::StrFormat(
+      "Peer rank %d is not load/store accessible from this rank",
+      peer.value()));
+#else
+  return absl::UnimplementedError(
+      "Peer address requires ncclGetPeerDevicePointer (ROCm/RCCL >= 7.14)");
+#endif  // TF_ROCM_VERSION >= 71400
 }
 
 std::string RcclSymmetricMemory::ToString() const {

@@ -21,6 +21,7 @@ limitations under the License.
 
 #include "absl/status/statusor.h"
 #include "rocm/rocm_config.h"  // IWYU pragma: keep  (defines TF_ROCM_VERSION)
+#include "xla/core/collectives/rank_id.h"
 #include "xla/core/collectives/symmetric_memory.h"
 #include "xla/stream_executor/device_address.h"
 
@@ -44,8 +45,16 @@ class RcclSymmetricMemory final : public SymmetricMemory {
 
   stream_executor::DeviceAddressBase addr() const final;
 
-  // multimem_addr() and peer_addr() are not supported by RCCL; the base-class
-  // defaults (returning Unimplemented) are used.
+  // For RCCL versions that expose ncclGetLsaMultimemDevicePointer (ROCm 7.14+)
+  // returns the multimem address for the LSA (load/store accessible) team
+  // associated with this symmetric memory.
+  absl::StatusOr<stream_executor::DeviceAddressBase> multimem_addr()
+      const final;
+
+  // For RCCL versions that expose ncclGetPeerDevicePointer (ROCm 7.14+)
+  // returns the address of the symmetric memory on a peer device.
+  absl::StatusOr<stream_executor::DeviceAddressBase> peer_addr(
+      RankId peer) const final;
 
   ncclWindow_t win() const { return win_; }
 
