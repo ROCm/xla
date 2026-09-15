@@ -126,7 +126,7 @@ absl::StatusOr<PcieLinkStatus> QueryPcieLinkStatus(SmiDeviceHandle device) {
 
 absl::StatusOr<uint64_t> QueryPeakMemoryBandwidthGbps(SmiDeviceHandle) {
   return absl::UnimplementedError(
-      "rocm_smi cannot report peak VRAM bandwidth; amd_smi (ROCm 7.13+) can");
+      "rocm-smi cannot report peak VRAM bandwidth; amd-smi (ROCm 7.13+) can");
 }
 
 absl::StatusOr<uint64_t> QueryHiveId(SmiDeviceHandle device) {

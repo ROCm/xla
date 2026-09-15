@@ -444,6 +444,7 @@ cc_library(
         ":rocm_compute_capability",
         ":smi_util",
         "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",

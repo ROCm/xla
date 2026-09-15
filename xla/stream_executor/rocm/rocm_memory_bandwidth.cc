@@ -13,9 +13,12 @@ limitations under the License.
 #include "xla/stream_executor/rocm/rocm_memory_bandwidth.h"
 
 #include <cstdint>
+#include <string>
 
+#include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "xla/stream_executor/rocm/rocm_compute_capability.h"
@@ -70,10 +73,19 @@ int64_t GetRocmMemoryBandwidth(absl::string_view pci_bus_id,
     return *firmware;
   }
 
-  // A miss is the normal case below ROCm 7.13, so not a warning.
-  VLOG(1) << "No SMI firmware peak for " << pci_bus_id << " ("
-          << firmware.status().message()
-          << "); falling back to the per-gfx peak table.";
+  // rocm_smi cannot report the peak below ROCm 7.13 (Unimplemented) and some
+  // firmware leaves the field unset (Unavailable), so only an unexpected SMI
+  // failure is worth a warning.
+  const absl::Status& status = firmware.status();
+  std::string reason =
+      absl::StrCat("No SMI firmware peak for ", pci_bus_id, " (",
+                   status.message(), "); falling back to the per-gfx peak.");
+  if (absl::IsUnimplemented(status) || absl::IsUnavailable(status)) {
+    VLOG(1) << reason;
+  } else {
+    LOG(WARNING) << reason;
+  }
+
   return ArchOrFormulaBandwidth(cc, mem_bus_width_bits, mem_clock_khz);
 }
 
