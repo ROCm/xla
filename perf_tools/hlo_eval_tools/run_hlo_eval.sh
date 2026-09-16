@@ -95,12 +95,13 @@ STAT=${STAT:-}
 # (RocmCommandBuffer::LaunchGraph) at execution. Set CMD_BUFFER=on to re-enable.
 CMD_BUFFER=${CMD_BUFFER:-off}
 
-# CAPTURE_RESOLVED_XLA_FLAGS=first enables gpu_compiler VLOG(1) for only the
-# first runner process. The default "off" preserves normal direct-run logging.
-CAPTURE_RESOLVED_XLA_FLAGS=${CAPTURE_RESOLVED_XLA_FLAGS:-off}
+# CAPTURE_RESOLVED_XLA_FLAGS=true enables gpu_compiler VLOG(1) for only the
+# first runner process, then restores normal logging. The default "false"
+# preserves normal direct-run logging for every invocation.
+CAPTURE_RESOLVED_XLA_FLAGS=${CAPTURE_RESOLVED_XLA_FLAGS:-false}
 case "$CAPTURE_RESOLVED_XLA_FLAGS" in
-  off|first) ;;
-  *) die "CAPTURE_RESOLVED_XLA_FLAGS must be off or first" ;;
+  true|false) ;;
+  *) die "CAPTURE_RESOLVED_XLA_FLAGS must be true or false" ;;
 esac
 RESOLVED_XLA_FLAGS_CAPTURED=0
 
@@ -174,7 +175,7 @@ invoke() {
   [ "$CMD_BUFFER" = off ] && xf="--xla_gpu_enable_command_buffer= $xf"
   local capture_resolved_flags=0
   local vmodule="${TF_CPP_VMODULE:-}"
-  if [ "$CAPTURE_RESOLVED_XLA_FLAGS" = first ] &&
+  if [ "$CAPTURE_RESOLVED_XLA_FLAGS" = true ] &&
      [ "$RESOLVED_XLA_FLAGS_CAPTURED" -eq 0 ]; then
     capture_resolved_flags=1
     RESOLVED_XLA_FLAGS_CAPTURED=1
