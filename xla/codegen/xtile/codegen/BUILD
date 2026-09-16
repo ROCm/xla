@@ -91,6 +91,7 @@ cc_library(
     ],
     compatible_with = get_compatible_with_portable(),
     deps = [
+        ":conv_algorithms",
         ":dot_algorithms",
         ":emitter_helpers",
         "//xla:autotuning_proto_cc",
