@@ -20,7 +20,6 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/debugging/leak_check.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -47,7 +46,6 @@ TEST(GpuHsacoBundleTest, CompileToHsacoThenBundleGpuAsmWorks) {
     GTEST_SKIP() << "clang-offload-bundler not found at " << bundler;
   }
 
-  absl::LeakCheckDisabler disabler;
   ASSERT_OK_AND_ASSIGN(Platform * platform,
                        PlatformManager::PlatformWithName("ROCM"));
   ASSERT_GT(platform->VisibleDeviceCount(), 0);

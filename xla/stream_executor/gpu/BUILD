@@ -370,7 +370,6 @@ xla_test(
         "//xla/tsl/platform:env",
         "//xla/tsl/platform:rocm_rocdl_path",
         "//xla/tsl/platform:statusor",
-        "@com_google_absl//absl/debugging:leak_check",
         "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
         "@llvm-project//llvm:AsmParser",
