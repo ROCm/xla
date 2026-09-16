@@ -156,7 +156,7 @@ class RocmComputeCapability {
   bool gfx12_discrete() const { return IsThisGfxInAnyList(kGfx12Discrete); }
 
   bool gfx12_rx8900() const { return gfx12_discrete(); }
-  
+
   static constexpr absl::string_view kGfx1250[] = {"gfx1250", "gfx1250-strict"};
   bool gfx1250() const { return IsThisGfxInAnyList(kGfx1250); }
 
