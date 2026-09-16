@@ -3607,12 +3607,19 @@ INSTANTIATE_TEST_SUITE_P(
                        ::testing::Bool(), ::testing::Bool(), ::testing::Bool()),
     ScaledDotCoverageTestParamToString);
 
-class ConvTritonEmitterTest : public TritonEmitterTest {
+class ConvTritonEmitterTest : public TritonEmitterTest,
+                              public ::testing::WithParamInterface<bool> {
  public:
-  bool EnableTilingPropagation() const override { return false; }
+  bool EnableTilingPropagation() const override { return GetParam(); }
 };
 
-TEST_F(ConvTritonEmitterTest, Conv1DMultiChannelIsEmittedCorrectly) {
+INSTANTIATE_TEST_SUITE_P(ConvTritonEmitterTestSuite, ConvTritonEmitterTest,
+                         ::testing::Bool(),
+                         [](const ::testing::TestParamInfo<bool>& info) {
+                           return TilingParametersToString(info.param);
+                         });
+
+TEST_P(ConvTritonEmitterTest, Conv1DMultiChannelIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -3642,7 +3649,7 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_F(ConvTritonEmitterTest, Conv2DFullTilingIsEmittedCorrectly) {
+TEST_P(ConvTritonEmitterTest, Conv2DFullTilingIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -3694,21 +3701,28 @@ std::vector<ConvLayoutTestCase> GetConvLayoutTestCases() {
 }
 
 class ConvLayoutAndTileCInTest
-    : public ConvTritonEmitterTest,
+    : public TritonEmitterTest,
       public ::testing::WithParamInterface<
-          std::tuple<ConvLayoutTestCase, /*tile_c_in=*/int64_t>> {};
+          std::tuple<ConvLayoutTestCase, /*tile_c_in=*/int64_t,
+                     /*tiling_propagation=*/bool>> {
+ public:
+  bool EnableTilingPropagation() const override {
+    return std::get<2>(GetParam());
+  }
+};
 
 std::string ConvLayoutAndTileCInTestParamToString(
-    const ::testing::TestParamInfo<std::tuple<ConvLayoutTestCase, int64_t>>&
-        info) {
-  const auto& [layout, tile_c_in] = info.param;
-  return absl::StrCat(layout.name, "_tile_c_in_", tile_c_in);
+    const ::testing::TestParamInfo<
+        std::tuple<ConvLayoutTestCase, int64_t, bool>>& info) {
+  const auto& [layout, tile_c_in, tiling] = info.param;
+  return absl::StrCat(layout.name, "_tile_c_in_", tile_c_in, "_",
+                      TilingParametersToString(tiling));
 }
 
 INSTANTIATE_TEST_SUITE_P(
     ConvLayoutAndTileCInTestSuite, ConvLayoutAndTileCInTest,
     ::testing::Combine(::testing::ValuesIn(GetConvLayoutTestCases()),
-                       ::testing::Values(32, 16, 1)),
+                       ::testing::Values(32, 16, 1), ::testing::Bool()),
     ConvLayoutAndTileCInTestParamToString);
 
 TEST_P(ConvLayoutAndTileCInTest, Conv2DIsEmittedCorrectly) {
@@ -3738,7 +3752,7 @@ ENTRY entry {
           "num_stages":"1"}}}
 })";
 
-  const auto& [layout, tile_c_in] = GetParam();
+  const auto& [layout, tile_c_in, tiling] = GetParam();
   const std::string hlo_text = absl::Substitute(
       kHloTextTemplate, layout.input_shape, layout.kernel_shape,
       layout.output_shape, layout.dim_labels, tile_c_in, layout.output_tile);
@@ -3746,7 +3760,7 @@ ENTRY entry {
       hlo_text, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_F(ConvTritonEmitterTest, Conv3DNoPaddingIsEmittedCorrectly) {
+TEST_P(ConvTritonEmitterTest, Conv3DNoPaddingIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -3776,7 +3790,7 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_F(ConvTritonEmitterTest, IntegerConv2DIsEmittedCorrectly) {
+TEST_P(ConvTritonEmitterTest, IntegerConv2DIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 

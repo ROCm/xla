@@ -3761,6 +3761,23 @@ ENTRY triton_computation {
   RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 2, 2, 1}, cc);
 }
 
+TEST_P(ConvolutionTestCcOnly, IsTritonSupportedConvNoPaddingAllowed) {
+  auto [cc, tiling] = GetParam();
+  const std::string kHloTestTemplate = R"(
+ENTRY triton_computation {
+  input = f32[1,8,8,4] parameter(0)  // N=1, H=8, W=8, C_in=4
+  kernel = f32[3,3,4,8] parameter(1) // H=3, W=3, C_in=4, C_out=8
+  ROOT conv = f32[1,6,6,8] convolution(input, kernel),
+    window={size=3x3}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","2"]}
+})";
+  TF_ASSERT_OK_AND_ASSIGN(
+      TestedInstruction ti,
+      ParseTemplateAndGetInstruction(kHloTestTemplate, PRIMITIVE_TYPE_INVALID,
+                                     HloOpcode::kConvolution));
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 2, 2, 8}, cc);
+}
+
 TEST_P(ConvolutionTestCcOnly, IsTritonSupportedConvSparse) {
   auto [cc, tiling] = GetParam();
   const std::string kHloTestTemplate = R"(
