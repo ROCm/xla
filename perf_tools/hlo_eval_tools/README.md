@@ -334,7 +334,7 @@ Behavior is tunable with environment variables:
 | `ORDER` | `size` | `size` profiles smallest-HLO leaves first (fast models first, biggest last); `path` = alphabetical. |
 | `ARG_MODE` | `uninitialized` | The runner's `--hlo_argument_mode`. |
 | `SETTLE_SEC` | `2` | Seconds paused between runner processes so GPU memory is reclaimed (helps back-to-back multi-GPU runs). |
-| `CAPTURE_RESOLVED_XLA_FLAGS` | `off` | `first` enables `gpu_compiler` VLOG(1) for the first runner process and records its resolved `DebugOptions`; later invocations retain normal logging. |
+| `CAPTURE_RESOLVED_XLA_FLAGS` | `false` | `true` enables `gpu_compiler` VLOG(1) for the first runner process and records its resolved `DebugOptions`; later invocations retain normal logging. |
 
 ### Automated: XLA multi-branch campaign and HTML report
 
@@ -394,8 +394,8 @@ The campaign also reuses the evaluator environment controls documented above:
 invoking `run_hlo_eval.sh`; campaign resume is not provided by the evaluator's
 leaf-level `RESUME` setting.
 
-Multi-branch campaigns set `CAPTURE_RESOLVED_XLA_FLAGS=first` for each target.
-Direct positional runs keep the default `off` unless explicitly overridden.
+Multi-branch campaigns set `CAPTURE_RESOLVED_XLA_FLAGS=true` for each target.
+Direct positional runs keep the default `false` unless explicitly overridden.
 
 For each runner invocation, `eval.log` records the inherited `XLA_FLAGS` and a
 shell-quoted effective command. The command includes the allowlisted
