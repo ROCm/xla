@@ -23,3 +23,4 @@ jobs:
     with:
       rocm_xla_branch: ${{ github.head_ref || github.ref_name }}
       runner_label: ${{ 'amd-do-linux-xla-gpu-gfx950-dpx-1' }}
+# Just a test
