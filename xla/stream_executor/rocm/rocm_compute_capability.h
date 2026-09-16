@@ -94,10 +94,8 @@ class RocmComputeCapability {
       "gfx1030",  // RX68xx / RX69xx
       "gfx1100",  // RX7900
       "gfx1101",  // RX7700 / RX7800
-      "gfx1103", "gfx1150", "gfx1151", "gfx1200", "gfx1201",
-      "gfx1250",
-      "gfx1250-strict"
-    };
+      "gfx1103", "gfx1150", "gfx1151",       "gfx1200",
+      "gfx1201", "gfx1250", "gfx1250-strict"};
 
   bool is_supported_gfx_version() const {
     return IsThisGfxInAnyList(kSupportedGfxVersions);
@@ -156,7 +154,7 @@ class RocmComputeCapability {
   bool gfx12_discrete() const { return IsThisGfxInAnyList(kGfx12Discrete); }
 
   bool gfx12_rx8900() const { return gfx12_discrete(); }
-  
+
   static constexpr absl::string_view kGfx1250[] = {"gfx1250", "gfx1250-strict"};
   bool gfx1250() const { return IsThisGfxInAnyList(kGfx1250); }
 

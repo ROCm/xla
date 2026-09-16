@@ -655,9 +655,10 @@ TEST_F(FloatSupportTest, BF16TranscendentalsOnGfx1250AreNotNormalized) {
   // gfx1250 has native bf16 transcendental instructions, so these bf16 ops
   // should be kept as bf16 instead of being upcast to f32.
 
-  constexpr std::array<std::string_view, 2> gfx1250_variants{"gfx1250", "gfx1250-strict"};
+  constexpr std::array<std::string_view, 2> gfx1250_variants{"gfx1250",
+                                                             "gfx1250-strict"};
 
-  for(auto target : gfx1250_variants) {
+  for (auto target : gfx1250_variants) {
     auto cc = se::RocmComputeCapability(target);
     static constexpr absl::string_view kHloModule = R"(
     HloModule module
@@ -667,21 +668,22 @@ TEST_F(FloatSupportTest, BF16TranscendentalsOnGfx1250AreNotNormalized) {
           ROOT r = bf16[4] $0(p0)
     })";
 
-      for (absl::string_view op : {"exponential", "log", "sqrt", "rsqrt", "tanh"}) {
-        ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(
-                                              absl::Substitute(kHloModule, op)));
-        EXPECT_FALSE(
-            Normalize(module.get(), se::GpuComputeCapability{cc}, BF16, F32))
-            << "bf16 " << op << " should not be normalized on gfx1250";
-      }
+    for (absl::string_view op :
+         {"exponential", "log", "sqrt", "rsqrt", "tanh"}) {
+      ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(
+                                            absl::Substitute(kHloModule, op)));
+      EXPECT_FALSE(
+          Normalize(module.get(), se::GpuComputeCapability{cc}, BF16, F32))
+          << "bf16 " << op << " should not be normalized on gfx1250";
+    }
 
-      // sine has a native bf16 hardware instruction (v_sin_bf16) but is not yet
-      // wired up in XLA (no lowering / gate), so it is still normalized to f32.
-      ASSERT_OK_AND_ASSIGN(
-          auto module_sin,
-          ParseAndReturnVerifiedModule(absl::Substitute(kHloModule, "sine")));
-      EXPECT_TRUE(
-          Normalize(module_sin.get(), se::GpuComputeCapability{cc}, BF16, F32));
+    // sine has a native bf16 hardware instruction (v_sin_bf16) but is not yet
+    // wired up in XLA (no lowering / gate), so it is still normalized to f32.
+    ASSERT_OK_AND_ASSIGN(
+        auto module_sin,
+        ParseAndReturnVerifiedModule(absl::Substitute(kHloModule, "sine")));
+    EXPECT_TRUE(
+        Normalize(module_sin.get(), se::GpuComputeCapability{cc}, BF16, F32));
   }
 }
 
