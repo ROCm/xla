@@ -64,6 +64,7 @@ limitations under the License.
 #include "xla/codegen/tiling/experimental/tile.h"
 #include "xla/codegen/tiling/experimental/tiled_hlo.h"
 #include "xla/codegen/tiling/experimental/tiling_space.h"
+#include "xla/codegen/xtile/codegen/conv_algorithms.h"
 #include "xla/codegen/xtile/codegen/dot_algorithms.h"
 #include "xla/codegen/xtile/codegen/emitter_helpers.h"
 #include "xla/codegen/xtile/ir/transforms/passes.h"
@@ -351,6 +352,11 @@ int64_t GetNumSequentialDimIds(const HloInstruction& hlo) {
         *::xla::Cast<HloReduceInstruction>(&hlo);
     return reduce.dimensions().size();
   }
+  if (HloPredicateIsOp<HloOpcode::kConvolution>(&hlo)) {
+    const HloConvolutionInstruction& conv =
+        *::xla::Cast<HloConvolutionInstruction>(&hlo);
+    return conv.window().dimensions().size() + 1;
+  }
   return 0;
 }
 
@@ -498,6 +504,140 @@ absl::StatusOr<TensorValue> EmitDot(EmitterContext& emitter_ctx,
   Value result = for_op.getResult(0);
   if (dot_output_type != accumulator_type) {
     result = Cast(b, result, dot_output_type);
+  }
+  return mlir::cast<TensorValue>(result);
+}
+
+// Emits a convolution as an implicit GEMM. The kernel spatial axes and the
+// input-feature axis (c_in) are contraction loop dimensions, so
+// EmitConv is `spatial_rank + 1` deep scf.for nest.
+// Each input/kernel tile is canonicalized to the implicit-GEMM
+// [M, K] / [K, N]
+//
+// acc = [output_tile] 0.0f
+// for (ks_0 ...) for (ks_1 ...) for (c_in ...) {
+//   <contents of the region, including input and kernel>
+//   acc += dot(canonicalize(input), canonicalize(kernel))
+// }
+// c = acc
+absl::StatusOr<TensorValue> EmitConv(
+    EmitterContext& emitter_ctx, const ge::TiledHloInstruction& tiled_conv) {
+  TF_RET_CHECK(tiled_conv.hlo_regions().size() == 1);
+  auto& b = emitter_ctx.b();
+  const auto& conv = *::xla::Cast<HloConvolutionInstruction>(tiled_conv.hlo());
+
+  const ConvolutionDimensionNumbers& dnums =
+      conv.convolution_dimension_numbers();
+  ABSL_ASSIGN_OR_RETURN(SmallVector<int64_t> kernel_tile_sizes,
+                        tiled_conv.operand(1)->tile().GetStaticTileSizes());
+  for (int64_t i = 0; i < conv.window().dimensions().size(); ++i) {
+    const int64_t k_tile =
+        kernel_tile_sizes[dnums.kernel_spatial_dimensions(i)];
+    TF_RET_CHECK(k_tile == 1)
+        << "EmitConv requires kernel spatial tile size 1, got " << k_tile
+        << " for spatial axis " << i;
+  }
+
+  ABSL_ASSIGN_OR_RETURN(SmallVector<int64_t> padded_tile_sizes,
+                        tiled_conv.tile().GetStaticTileSizes());
+  ABSL_ASSIGN_OR_RETURN(Type accumulator_type,
+                        xtile::GetConvAccumulatorType(b, conv));
+  TensorValue accumulator =
+      CreateConst(b, accumulator_type, 0.0f, padded_tile_sizes);
+
+  SmallVector<int64_t> sequential_dim_ids =
+      GetSequentialDimIds(*tiled_conv.hlo());
+  ABSL_ASSIGN_OR_RETURN(
+      SmallVector<int64_t> loop_iteration_count,
+      GetSequentialLoopIterationCounts(tiled_conv, sequential_dim_ids));
+  TF_RET_CHECK(loop_iteration_count.size() == sequential_dim_ids.size());
+
+  // Build a spatial_rank + 1 deep nest
+  std::function<absl::StatusOr<Value>(int64_t, Value, SmallVector<Value>&)>
+      emit_level = [&](int64_t level, Value acc,
+                       SmallVector<Value>& ivs_i32) -> absl::StatusOr<Value> {
+    if (level == static_cast<int64_t>(sequential_dim_ids.size())) {
+      ABSL_ASSIGN_OR_RETURN(
+          auto results,
+          EmitTiledComputation(emitter_ctx, tiled_conv.hlo_regions().front(),
+                               {tiled_conv.operand(0), tiled_conv.operand(1)}));
+      TensorValue input_tile = results[0];
+      TensorValue kernel_tile = results[1];
+
+      // Mask only c_in, since spatial dim tiles are currently restricted to 1
+      const int64_t input_c_in_idx = dnums.input_feature_dimension();
+      const int64_t kernel_c_in_idx = dnums.kernel_input_feature_dimension();
+      ABSL_ASSIGN_OR_RETURN(
+          Type input_element_type,
+          PrimitiveTypeToMlirType(
+              b, tiled_conv.operand(0)->hlo()->shape().element_type()));
+      ABSL_ASSIGN_OR_RETURN(
+          Type kernel_element_type,
+          PrimitiveTypeToMlirType(
+              b, tiled_conv.operand(1)->hlo()->shape().element_type()));
+      Value input_zero = CreateConst(b, input_element_type, 0.0f);
+      Value kernel_zero = CreateConst(b, kernel_element_type, 0.0f);
+      // c_in is the last sequential dim => last iv.
+      Value c_in_iv = ivs_i32.back();
+      ABSL_ASSIGN_OR_RETURN(input_tile,
+                            MaskOperand(b, *tiled_conv.operand(0), input_tile,
+                                        c_in_iv, input_c_in_idx, input_zero));
+      ABSL_ASSIGN_OR_RETURN(kernel_tile,
+                            MaskOperand(b, *tiled_conv.operand(1), kernel_tile,
+                                        c_in_iv, kernel_c_in_idx, kernel_zero));
+
+      // Canonicalize the per-iteration input/kernel tiles to the implicit-GEMM
+      // [M, K] / [K, N] matrices
+      ABSL_ASSIGN_OR_RETURN(
+          TensorValue input_2d,
+          xtile::CanonicalizeConvInputToMK(b, input_tile, conv));
+      ABSL_ASSIGN_OR_RETURN(
+          TensorValue kernel_2d,
+          xtile::CanonicalizeConvKernelToKN(b, kernel_tile, conv));
+      ABSL_ASSIGN_OR_RETURN(TensorValue acc_2d,
+                            xtile::CanonicalizeConvAccToMN(b, acc, conv));
+      DotDimensionNumbers inner_dim_nums;
+      inner_dim_nums.add_lhs_contracting_dimensions(1);
+      inner_dim_nums.add_rhs_contracting_dimensions(0);
+      ABSL_ASSIGN_OR_RETURN(
+          Value acc_2d_next,
+          xtile::EmitSingleTileDot(
+              b, conv, inner_dim_nums,
+              xtile::DotOperands{input_2d, kernel_2d, acc_2d}));
+      return RestoreConvAccFromMN(b, acc_2d_next, conv, padded_tile_sizes);
+    }
+
+    auto for_op = mlir::scf::ForOp::create(
+        b, /*lowerBound=*/MakeIndex(b, 0),
+        /*upperBound=*/MakeIndex(b, loop_iteration_count[level]),
+        /*step=*/MakeIndex(b, 1), acc);
+    {
+      mlir::OpBuilder::InsertionGuard g(b);
+      b.setInsertionPointToStart(for_op.getBody());
+      Value iv = for_op.getInductionVar();
+      ivs_i32.push_back(Cast(b, iv, b.getI32Type()));
+      const ge::TilingSpace::DimensionInfo& dim_info =
+          tiled_conv.tile().tiling_space().GetDimensionInfo(
+              *tiled_conv.hlo(), sequential_dim_ids[level]);
+      TF_RET_CHECK(emitter_ctx.MapSymbolIdToSequentialDimValue(
+          dim_info.id, iv, Interval{0, loop_iteration_count[level] - 1}));
+      ABSL_ASSIGN_OR_RETURN(
+          Value inner,
+          emit_level(level + 1, for_op.getRegionIterArgs().front(), ivs_i32));
+      mlir::scf::YieldOp::create(b, inner);
+      ivs_i32.pop_back();
+    }
+    return for_op.getResult(0);
+  };
+
+  SmallVector<Value> ivs_i32;
+  ABSL_ASSIGN_OR_RETURN(Value result, emit_level(0, accumulator, ivs_i32));
+
+  ABSL_ASSIGN_OR_RETURN(
+      Type conv_output_type,
+      PrimitiveTypeToMlirType(b, conv.shape().element_type()));
+  if (conv_output_type != accumulator_type) {
+    result = Cast(b, result, conv_output_type);
   }
   return mlir::cast<TensorValue>(result);
 }
@@ -1845,6 +1985,9 @@ absl::StatusOr<TensorValue> EmitTiledHloInstruction(
     }
     return absl::UnimplementedError(
         absl::StrCat("Unsupported get-tuple-element index ", index));
+  }
+  if (hlo->opcode() == HloOpcode::kConvolution) {
+    return EmitConv(emitter_ctx, tiled_hlo);
   }
   std::vector<Value> operands;
   operands.reserve(hlo->operands().size());
