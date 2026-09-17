@@ -79,9 +79,11 @@ int64_t GetRocmMemoryBandwidth(absl::string_view pci_bus_id,
   const absl::Status& status = firmware.status();
   std::string reason =
       absl::StrCat("No SMI firmware peak for ", pci_bus_id, " (",
-                   status.message(), "); falling back to the per-gfx peak.");
-  if (absl::IsUnimplemented(status) || absl::IsUnavailable(status)) {
-    VLOG(1) << reason;
+                   status.message(), "); ");
+  if (absl::IsUnimplemented(status)) {
+    VLOG(1) << reason << "is implemented for ROCm < 7.13.";
+  } else if (absl::IsUnavailable(status)) {
+    LOG(WARNING) << reason << " is available from amd-smi/firmware.";
   } else {
     LOG(WARNING) << reason;
   }
