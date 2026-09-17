@@ -70,6 +70,53 @@ namespace gpu {
 
 namespace {
 
+// A thin DeviceAddressAllocator wrapper that forwards every call to an inner
+// allocator but forces retry_on_failure=false.
+//
+// It is used to run candidate executables during autotuning. A candidate
+// allocates its own output and scratch/workspace buffers on demand while it
+// runs; if such a transient allocation does not fit (e.g. a large fusion output
+// at high batch size), we want to reject the candidate immediately rather than
+// have the underlying BFC allocator enter its multi-second blocking
+// retry-on-out-of-memory loop. That retry can never succeed here: the profiler
+// holds an exclusive GPU lock and is single-threaded per device, so nothing can
+// free memory while it waits -- the retry is pure dead time. Failing fast
+// simply discards the candidate, which the autotuner already tolerates (it
+// falls back to another config).
+class FailFastDeviceAddressAllocator : public se::DeviceAddressAllocator {
+ public:
+  explicit FailFastDeviceAddressAllocator(se::DeviceAddressAllocator* inner)
+      : se::DeviceAddressAllocator(inner->platform()), inner_(inner) {}
+
+  absl::StatusOr<se::ScopedDeviceAddress<uint8_t>> Allocate(
+      int device_ordinal, uint64_t size, bool /*retry_on_failure*/,
+      int64_t memory_space) override {
+    // Force fail-fast regardless of what the caller requested.
+    return inner_->Allocate(device_ordinal, size, /*retry_on_failure=*/false,
+                            memory_space);
+  }
+
+  absl::StatusOr<se::Stream*> GetStream(int device_ordinal) override {
+    return inner_->GetStream(device_ordinal);
+  }
+
+  absl::Status Deallocate(int device_ordinal,
+                          se::DeviceAddressBase mem) override {
+    return inner_->Deallocate(device_ordinal, mem);
+  }
+
+  bool AllowsAsynchronousDeallocation() const override {
+    return inner_->AllowsAsynchronousDeallocation();
+  }
+
+  bool ClearAllocatorStats(int device_ordinal) override {
+    return inner_->ClearAllocatorStats(device_ordinal);
+  }
+
+ private:
+  se::DeviceAddressAllocator* inner_;
+};
+
 std::vector<ExecutionInput> CreateExecutionInputsFromBuffers(
     absl::Span<se::DeviceAddressBase const> buffers,
     absl::Span<Shape const> shapes) {
@@ -347,10 +394,20 @@ absl::StatusOr<ExecutionOutput> GpuProfiler::Execute(
   GpuExecutableRunOptions gpu_opts;
   gpu_opts.set_requires_exclusive_lock_on_gpu();
 
+  // Route the candidate executable's on-demand output/scratch allocations
+  // through a fail-fast wrapper so that an out-of-memory transient is rejected
+  // immediately instead of triggering the BFC allocator's multi-second blocking
+  // retry loop (which cannot succeed while the profiler holds the exclusive GPU
+  // lock). `fail_fast_allocator` only needs to outlive the Execute call below:
+  // the addresses it hands back are bound to `allocator` (the inner allocator),
+  // not to this wrapper, so buffers owned by the returned ExecutionOutput
+  // remain valid and are deallocated via the inner allocator.
+  FailFastDeviceAddressAllocator fail_fast_allocator(allocator);
+
   ExecutableRunOptions run_options;
   run_options.set_device_ordinal(stream_executor_->device_ordinal());
   run_options.set_stream(stream_);
-  run_options.set_allocator(allocator);
+  run_options.set_allocator(&fail_fast_allocator);
   run_options.set_gpu_executable_run_options(&gpu_opts);
   run_options.set_execution_profile(profile);
   ServiceExecutableRunOptions service_run_options(run_options);
