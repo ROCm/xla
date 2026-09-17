@@ -7,8 +7,8 @@ You may obtain a copy of the License at
     http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
-    distributed under the License is distributed on an "AS IS" BASIS,
-    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
@@ -40,9 +40,12 @@ namespace {
 
 TEST(GpuHsacoBundleTest, CompileToHsacoThenBundleGpuAsmWorks) {
   const std::string rocm_root = tsl::RocmRoot();
+  if (rocm_root.empty()) {
+    GTEST_SKIP() << "ROCm root is empty; clang-offload-bundler is unavailable";
+  }
   const std::string bundler =
       tsl::io::JoinPath(rocm_root, "llvm/bin/clang-offload-bundler");
-  if (rocm_root.empty() || !tsl::Env::Default()->FileExists(bundler).ok()) {
+  if (!tsl::Env::Default()->FileExists(bundler).ok()) {
     GTEST_SKIP() << "clang-offload-bundler not found at " << bundler;
   }
 
