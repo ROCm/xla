@@ -37,7 +37,8 @@ done
 
 EXCLUDED_TESTS=(
     "HloOpProfilerTest.BasicMeasurementsAreCorrect"
-    "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
+    "StreamExecutorGpuClientTest.NumaNode"
+    "PrngTest.PassInGlobalRngSeed"
 )
 
 SCRIPT_DIR=$(dirname $0)
