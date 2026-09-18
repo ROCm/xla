@@ -7,10 +7,8 @@ SCRIPT_DIR=$(realpath "$(dirname "$0")")
 EXCLUDED_TESTS=(
     "HostMemoryAllocateTest.Numa"                                                                                                                  # Failing on RBE
     "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
-    "TritonEmitterTest.ScaledDotIsSupportedByReferencePlatform"
     "VmmTest.CommandBufferSkipProfiledTwoGemmChain"
     "GpuKernelTilingTest.ReductionInputTooLarge"
-    "MxScaledDotExecutionTest.MxFp4Fp8MixedBatchedCorrectness"
     "ConvolutionTest.Convolve3D_1x4x2x3x3_2x2x2x3x3_Valid"
     "ConvolutionTest.Convolve_1x1x4x4_1x1x2x2_Valid"
     "ConvolutionTest.Convolve_1x1x4x4_1x1x2x2_Same"
