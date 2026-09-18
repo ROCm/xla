@@ -89,11 +89,25 @@ class FailFastDeviceAddressAllocator : public se::DeviceAddressAllocator {
       : se::DeviceAddressAllocator(inner->platform()), inner_(inner) {}
 
   absl::StatusOr<se::ScopedDeviceAddress<uint8_t>> Allocate(
-      int device_ordinal, uint64_t size, bool /*retry_on_failure*/,
+      int device_ordinal, uint64_t size, bool retry_on_failure,
       int64_t memory_space) override {
+    // DEBUG: confirm the fail-fast wrapper is actually on the allocation path.
+    LOG(ERROR) << "[FailFastAllocator] Allocate called: device_ordinal="
+               << device_ordinal << " size=" << size << " ("
+               << (static_cast<double>(size) / (1024.0 * 1024.0 * 1024.0))
+               << " GiB) caller_retry_on_failure=" << retry_on_failure
+               << " -> forcing retry_on_failure=false";
     // Force fail-fast regardless of what the caller requested.
-    return inner_->Allocate(device_ordinal, size, /*retry_on_failure=*/false,
-                            memory_space);
+    absl::StatusOr<se::ScopedDeviceAddress<uint8_t>> result =
+        inner_->Allocate(device_ordinal, size, /*retry_on_failure=*/false,
+                         memory_space);
+    if (!result.ok()) {
+      LOG(ERROR) << "[FailFastAllocator] Allocate FAILED FAST for size=" << size
+                 << " ("
+                 << (static_cast<double>(size) / (1024.0 * 1024.0 * 1024.0))
+                 << " GiB): " << result.status();
+    }
+    return result;
   }
 
   absl::StatusOr<se::Stream*> GetStream(int device_ordinal) override {
@@ -402,6 +416,9 @@ absl::StatusOr<ExecutionOutput> GpuProfiler::Execute(
   // the addresses it hands back are bound to `allocator` (the inner allocator),
   // not to this wrapper, so buffers owned by the returned ExecutionOutput
   // remain valid and are deallocated via the inner allocator.
+  LOG(ERROR) << "[GpuProfiler::Execute] Installing FailFastDeviceAddressAllocator "
+                "(wrapping inner allocator "
+             << allocator << ") for candidate profiling run.";
   FailFastDeviceAddressAllocator fail_fast_allocator(allocator);
 
   ExecutableRunOptions run_options;
