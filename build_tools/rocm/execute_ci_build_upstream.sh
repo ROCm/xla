@@ -5,7 +5,6 @@ set -ex
 SCRIPT_DIR=$(realpath "$(dirname "$0")")
 
 EXCLUDED_TESTS=(
-    "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
     "ConvolutionTest.Convolve3D_1x4x2x3x3_2x2x2x3x3_Valid*"
     "ConvolutionTest.Convolve_1x1x4x4_1x1x2x2_Valid*"
     "ConvolutionTest.Convolve_1x1x4x4_1x1x2x2_Same*"
