@@ -18,6 +18,7 @@ permissions:
   actions: read
   contents: read
   issues: write
+  packages: read
 
 on:
   schedule:
@@ -32,6 +33,79 @@ on:
       - 'build_tools/rocm/create_infra_error_issue.sh'
 
 jobs:
+  test-upstream:
+    name: Test Upstream ROCm CI
+    permissions:
+      contents: read
+      packages: read
+    uses: openxla/xla/.github/workflows/rocm_ci.yml@main
+    secrets: inherit
+    with:
+      rocm_xla_branch: rocm-dev-infra
+      runner_label: linux-xla-do-mi350x-1
+
+  report-upstream-failure:
+    name: Report Upstream ROCm CI Failure
+    needs: test-upstream
+    if: failure()
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'rocm-dev-infra' }}
+          persist-credentials: false
+
+      - name: Create issue for upstream CI failure
+        run: |
+          ISSUE_TITLE="Upstream ROCm CI Failure Detected"
+
+          # Get the upstream workflow run URL (need to fetch it from the API)
+          UPSTREAM_RUN_URL=$(gh api /repos/openxla/xla/actions/workflows/rocm_ci.yml/runs \
+            --jq '.workflow_runs[0].html_url' || echo "URL not available")
+
+          ISSUE_BODY="## Upstream ROCm CI Failure
+
+          The upstream \`openxla/xla\` ROCm CI workflow failed when triggered by the monitoring workflow.
+
+          **Monitor Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          **Upstream Workflow Run:** ${UPSTREAM_RUN_URL}
+          **Repository:** https://github.com/openxla/xla
+
+          This indicates a potential issue with the upstream codebase that may affect ROCm builds.
+
+          ### Action Required
+          - Review the upstream workflow logs
+          - Determine if this is an infrastructure issue or code issue
+          - If code issue, coordinate with upstream XLA team
+
+          cc @ROCm/ai-fw-openxla
+
+          ---
+          *Last updated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")*"
+
+          # Check if an open issue already exists
+          ISSUE_NUMBER=$(gh issue list --repo ROCm/xla --state open --search "in:title $ISSUE_TITLE" --json number --jq '.[0].number')
+
+          if [ -n "$ISSUE_NUMBER" ]; then
+            echo "Updating existing issue #$ISSUE_NUMBER"
+            gh issue comment "$ISSUE_NUMBER" --repo ROCm/xla --body "$ISSUE_BODY"
+          else
+            echo "Creating new issue"
+            gh issue create \
+              --repo ROCm/xla \
+              --title "$ISSUE_TITLE" \
+              --body "$ISSUE_BODY" \
+              --label "rocm-infra-error" \
+              --assignee alekstheod,i-chaochen,hsharsha,charleshofer || \
+            gh issue create \
+              --repo ROCm/xla \
+              --title "$ISSUE_TITLE" \
+              --body "$ISSUE_BODY"
+          fi
+
   monitor:
     name: Monitor ROCm CI Infrastructure Errors
     runs-on: ubuntu-latest
