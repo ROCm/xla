@@ -40,19 +40,3 @@ lit_test_suite(
         "@llvm-project//llvm:FileCheck",
     ],
 )
-<<<<<<< HEAD
-=======
-
-lit_test_suite(
-    name = "filecheck_only_tests",
-    srcs = _FILECHECK_ONLY_TESTS,
-    cfg = "//xla:lit.cfg.py",
-    default_tags = ["gpu"],
-    tools = [
-        "//xla/backends/cpu/codegen/tools:cpu_fusion_to_mlir",
-        "//xla/backends/gpu/codegen/tools:gpu_fusion_to_mlir",
-        "//xla/codegen/tools:emitters_opt",
-        "@llvm-project//llvm:FileCheck",
-    ],
-)
->>>>>>> d39327af8e... Address review comments
