@@ -833,10 +833,6 @@ CodegenDecision IsTritonSupportedConv(
         "Batch-grouped convolution is not supported.");
   }
   for (const auto& dim : conv.window().dimensions()) {
-    if (dim.padding_low() != 0 || dim.padding_high() != 0) {
-      return CodegenDecision::Forbid(
-          "Convolution with padding is not supported.");
-    }
     if (dim.base_dilation() != 1) {
       return CodegenDecision::Forbid(
           "Convolution with base dilation is not supported.");
