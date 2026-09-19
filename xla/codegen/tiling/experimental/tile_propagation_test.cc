@@ -15,15 +15,14 @@ limitations under the License.
 
 #include "xla/codegen/tiling/experimental/tile_propagation.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -1520,6 +1519,75 @@ TEST_F(TilePropagationTest, CanPropagateToInputOfConvOpNHWC) {
     0) (tid_0, tid_1, tid_2, tid_3, tid_4, tid_5, tid_6)
          -> offsets [tid_0 * ts_0, tid_1 * ts_1 + tid_4 * ts_4,
                      tid_2 * ts_2 + tid_5 * ts_5, tid_6 * ts_6]
+            sizes [ts_0, ts_1, ts_2, ts_6]
+            strides [1, 1, 1, 1]
+            upper bounds [1, 5, 5, 4]
+    1) (tid_0, tid_1, tid_2, tid_3, tid_4, tid_5, tid_6)
+         -> offsets [tid_4 * ts_4, tid_5 * ts_5, tid_6 * ts_6, tid_3 * ts_3]
+            sizes [ts_4, ts_5, ts_6, ts_3]
+            strides [1, 1, 1, 1]
+            upper bounds [3, 3, 4, 8]
+  )"));
+}
+
+TEST_F(TilePropagationTest, CanPropagateToInputOfStridedConvOpNHWC) {
+  HloInstruction* root = ParseAndGetRoot(R"(
+    HloModule m
+    ENTRY e {
+      input  = f32[1,5,5,4] parameter(0)
+      kernel = f32[3,3,4,8] parameter(1)
+      ROOT conv = f32[1,2,2,8] convolution(input, kernel),
+        window={size=3x3 stride=2x2}, dim_labels=b01f_01io->b01f
+    }
+  )");
+  ASSERT_OK_AND_ASSIGN(
+      auto tiling_space,
+      TilingSpace::Create(*HloFusionAdaptor::ForInstruction(root),
+                          &mlir_context_));
+  const Tile& root_tile = tiling_space->tiled_roots()[0];
+  ASSERT_OK_AND_ASSIGN(Tiles tiled_operands,
+                       PropagateTileToInput(*tiling_space, *root, root_tile,
+                                            /*output_index=*/0));
+  ASSERT_EQ(tiled_operands.size(), 2);
+
+  EXPECT_THAT(tiled_operands, MatchToString(R"(
+    0) (tid_0, tid_1, tid_2, tid_3, tid_4, tid_5, tid_6)
+         -> offsets [tid_0 * ts_0, tid_1 * ts_1 * 2 + tid_4 * ts_4,
+                     tid_2 * ts_2 * 2 + tid_5 * ts_5, tid_6 * ts_6]
+            sizes [ts_0, ts_1, ts_2, ts_6]
+            strides [1, 2, 2, 1]
+            upper bounds [1, 5, 5, 4]
+    1) (tid_0, tid_1, tid_2, tid_3, tid_4, tid_5, tid_6)
+         -> offsets [tid_4 * ts_4, tid_5 * ts_5, tid_6 * ts_6, tid_3 * ts_3]
+            sizes [ts_4, ts_5, ts_6, ts_3]
+            strides [1, 1, 1, 1]
+            upper bounds [3, 3, 4, 8]
+  )"));
+}
+
+TEST_F(TilePropagationTest, CanPropagateToInputOfDilatedConvOpNHWC) {
+  HloInstruction* root = ParseAndGetRoot(R"(
+    HloModule m
+    ENTRY e {
+      input  = f32[1,5,5,4] parameter(0)
+      kernel = f32[3,3,4,8] parameter(1)
+      ROOT conv = f32[1,1,1,8] convolution(input, kernel),
+        window={size=3x3 rhs_dilate=2x2}, dim_labels=b01f_01io->b01f
+    }
+  )");
+  ASSERT_OK_AND_ASSIGN(
+      auto tiling_space,
+      TilingSpace::Create(*HloFusionAdaptor::ForInstruction(root),
+                          &mlir_context_));
+  const Tile& root_tile = tiling_space->tiled_roots()[0];
+  ASSERT_OK_AND_ASSIGN(Tiles tiled_operands,
+                       PropagateTileToInput(*tiling_space, *root, root_tile,
+                                            /*output_index=*/0));
+
+  EXPECT_THAT(tiled_operands, MatchToString(R"(
+    0) (tid_0, tid_1, tid_2, tid_3, tid_4, tid_5, tid_6)
+         -> offsets [tid_0 * ts_0, tid_1 * ts_1 + tid_4 * ts_4 * 2,
+                     tid_2 * ts_2 + tid_5 * ts_5 * 2, tid_6 * ts_6]
             sizes [ts_0, ts_1, ts_2, ts_6]
             strides [1, 1, 1, 1]
             upper bounds [1, 5, 5, 4]

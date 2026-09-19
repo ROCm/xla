@@ -635,10 +635,10 @@ Tiles PropagateTileToInputForConvOp(const TilingSpace& tiling_space,
         out_tile.offset * CreateSymbolicConstant(w.stride(), ctx) +
         k_tile.offset * CreateSymbolicConstant(w.window_dilation(), ctx) +
         CreateSymbolicConstant(-w.padding_low(), ctx);
-    // Note that `size` and `stride` below are
-    // only correct when stride==1 and base_dilation==1
+
     input_dim_tiles[in_spatial_dim] = DimTile{
-        offset, out_tile.size, /*stride=*/CreateSymbolicConstant(1, ctx),
+        offset, out_tile.size,
+        /*stride=*/CreateSymbolicConstant(w.stride(), ctx),
         CreateSymbolicConstant(input_shape.dimensions(in_spatial_dim), ctx)};
   }
 

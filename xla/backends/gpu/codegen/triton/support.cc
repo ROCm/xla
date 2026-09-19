@@ -746,14 +746,6 @@ CodegenDecision IsTritonSupportedConv(
       return CodegenDecision::Forbid(
           "Convolution with padding is not supported.");
     }
-    if (dim.stride() != 1) {
-      return CodegenDecision::Forbid(
-          "Convolution with stride != 1 is not supported.");
-    }
-    if (dim.window_dilation() != 1) {
-      return CodegenDecision::Forbid(
-          "Convolution with window dilation is not supported.");
-    }
     if (dim.base_dilation() != 1) {
       return CodegenDecision::Forbid(
           "Convolution with base dilation is not supported.");

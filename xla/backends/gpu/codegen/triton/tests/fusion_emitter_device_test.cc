@@ -13,9 +13,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -30,7 +27,8 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "Eigen/Core"
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include "absl/algorithm/container.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
@@ -53,7 +51,7 @@ limitations under the License.
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/Pass/PassManager.h"
-#include "tsl/platform/path.h"
+#include "Eigen/Core"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/gpu/codegen/triton/support.h"
 #include "xla/backends/gpu/codegen/triton/test_utils.h"
@@ -95,6 +93,7 @@ limitations under the License.
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
+#include "tsl/platform/path.h"
 
 namespace xla {
 namespace gpu {
@@ -3817,6 +3816,109 @@ ENTRY entry {
 })";
 
   EXPECT_TRUE(RunAndCompareNoHloPasses(kHloText, kExactMatch));
+}
+
+TEST_P(ConvTritonEmitterTest, Conv2DWindowDilationIsEmittedCorrectly) {
+  if (!EnableTilingPropagation()) {
+    GTEST_SKIP()
+        << "Non-unit dilation supported only with experimental tiling.";
+  }
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[20,32,32,120] parameter(0)
+  kernel = f32[5,5,120,64] parameter(1)
+  ROOT conv = f32[20,24,24,64] convolution(input, kernel),
+    window={size=5x5 rhs_dilate=2x2}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","32"]}
+}
+
+ENTRY entry {
+  p0 = f32[20,32,32,120] parameter(0)
+  p1 = f32[5,5,120,64] parameter(1)
+  ROOT fusion = f32[20,24,24,64] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","16","16","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_P(ConvTritonEmitterTest, Conv2DStride2IsEmittedCorrectly) {
+  if (!EnableTilingPropagation()) {
+    GTEST_SKIP() << "Non-unit stride supported only with experimental tiling.";
+  }
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[20,32,32,128] parameter(0)
+  kernel = f32[5,5,128,64] parameter(1)
+  ROOT conv = f32[20,14,14,64] convolution(input, kernel),
+    window={size=5x5 stride=2x2}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","32"]}
+}
+
+ENTRY entry {
+  p0 = f32[20,32,32,128] parameter(0)
+  p1 = f32[5,5,128,64] parameter(1)
+  ROOT fusion = f32[20,14,14,64] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_P(ConvTritonEmitterTest, Conv2DStride2NonDivisibleCInIsEmittedCorrectly) {
+  if (!EnableTilingPropagation()) {
+    GTEST_SKIP() << "Non-unit stride supported only with experimental tiling.";
+  }
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[20,32,32,120] parameter(0)
+  kernel = f32[5,5,120,64] parameter(1)
+  ROOT conv = f32[20,14,14,64] convolution(input, kernel),
+    window={size=5x5 stride=2x2}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","32"]}
+}
+
+ENTRY entry {
+  p0 = f32[20,32,32,120] parameter(0)
+  p1 = f32[5,5,120,64] parameter(1)
+  ROOT fusion = f32[20,14,14,64] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
 }  // namespace

@@ -15,9 +15,6 @@ limitations under the License.
 
 #include "xla/backends/gpu/codegen/triton/support.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <array>
 #include <cstdint>
 #include <iterator>
@@ -27,6 +24,8 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
@@ -38,7 +37,6 @@ limitations under the License.
 #include "absl/strings/substitute.h"
 #include "absl/types/span.h"
 #include "llvm/TargetParser/Triple.h"
-#include "tsl/platform/protobuf.h"
 #include "xla/backends/gpu/codegen/triton/support_test_base.h"
 #include "xla/backends/gpu/codegen/triton/test_utils.h"
 #include "xla/backends/gpu/codegen/triton/triton_wrapper_result.h"
@@ -59,6 +57,7 @@ limitations under the License.
 #include "xla/tsl/platform/statusor.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
+#include "tsl/platform/protobuf.h"
 
 namespace xla {
 namespace gpu {
@@ -3542,12 +3541,16 @@ using ConvolutionTestCcOnly = SupportTestWithDeviceAndTilingParam;
 // Test a convolution with stride > 1
 TEST_P(ConvolutionTestCcOnly, IsTritonSupportedConvStrided) {
   auto [cc, tiling] = GetParam();
+  if (!tiling) {
+    GTEST_SKIP() << "Non-unit stride supported only with experimental tiling.";
+  }
   const std::string kHloTestTemplate = R"(
 ENTRY triton_computation {
   input = f16[1,5,6,2] parameter(0)  // N=1, H=5, W=6, C_in=2
   kernel = f16[3,3,2,3] parameter(1) // H=3, W=3, C_in=2, C_out=3
   ROOT conv = f16[1,2,2,3] convolution(input, kernel),
-    window={size=3x3 stride=2x2}, dim_labels=b01f_01io->b01f
+    window={size=3x3 stride=2x2}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","2"]}
 })";
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
@@ -3559,13 +3562,18 @@ ENTRY triton_computation {
 // Test a convolution with kernel dilation > 1
 TEST_P(ConvolutionTestCcOnly, IsTritonSupportedConvDilated) {
   auto [cc, tiling] = GetParam();
+  if (!tiling) {
+    GTEST_SKIP()
+        << "Non-unit dilation supported only with experimental tiling.";
+  }
   const std::string kHloTestTemplate = R"(
 ENTRY triton_computation {
   input = f16[1,5,6,2] parameter(0)  // N=1, H=5, W=6, C_in=2
   kernel = f16[3,3,2,3] parameter(1) // H=3, W=3, C_in=2, C_out=3
   ROOT conv = f16[1,1,2,3] convolution(input, kernel),
-    window={size=3x3 rhs_dilate=2x2}, dim_labels=b01f_01io->b01f
-  })";
+    window={size=3x3 rhs_dilate=2x2}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","2"]}
+})";
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
       ParseTemplateAndGetInstruction(kHloTestTemplate, PRIMITIVE_TYPE_INVALID,
