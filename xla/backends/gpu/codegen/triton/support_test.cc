@@ -3497,7 +3497,8 @@ ENTRY triton_computation {
   kernel = $0[3,3,2,3] parameter(1) // H=3, W=3, C_in=2, C_out=3
   ROOT conv = $0[1,5,6,3] convolution(input, kernel),
     window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
-    operand_precision={$1, $2}
+    operand_precision={$1, $2},
+    backend_config={"sizes":["1","1","2"]}
 })",
       primitive_util::LowercasePrimitiveTypeName(data_type),
       PrecisionToString(input_precision), PrecisionToString(kernel_precision));
@@ -3517,7 +3518,8 @@ ENTRY triton_computation {
   kernel = $0[3,2,3,3] parameter(1) // C_out=3, C_in=2, H=3, W=3
   ROOT conv = $0[1,3,5,6] convolution(input, kernel),
     window={size=3x3 pad=1_1x1_1}, dim_labels=bf01_oi01->bf01,
-    operand_precision={$1, $2}
+    operand_precision={$1, $2},
+    backend_config={"sizes":["1","1","2"]}
   })",
       primitive_util::LowercasePrimitiveTypeName(data_type),
       PrecisionToString(input_precision), PrecisionToString(kernel_precision));
@@ -3638,12 +3640,16 @@ ENTRY triton_computation {
 // Test a convolution with asymmetric padding
 TEST_P(ConvolutionTestCcOnly, IsTritonSupportedConvAsymmetricPadding) {
   auto [cc, tiling] = GetParam();
+  if (!tiling) {
+    GTEST_SKIP() << "Padding supported only with experimental tiling.";
+  }
   const std::string kHloTestTemplate = R"(
 ENTRY triton_computation {
   input = f16[1,5,6,2] parameter(0)  // N=1, H=5, W=6, C_in=2
   kernel = f16[3,3,2,3] parameter(1) // H=3, W=3, C_in=2, C_out=3
   ROOT conv = f16[1,5,7,3] convolution(input, kernel),
-    window={size=3x3 pad=1_1x1_2}, dim_labels=b01f_01io->b01f
+    window={size=3x3 pad=1_1x1_2}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","2"]}
 })";
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
@@ -3675,12 +3681,16 @@ ENTRY triton_computation {
 TEST_P(ConvolutionTestCcOnly,
        IsTritonSupportedConvKernelLargerThanInputPadded) {
   auto [cc, tiling] = GetParam();
+  if (!tiling) {
+    GTEST_SKIP() << "Padding supported only with experimental tiling.";
+  }
   const std::string kHloTestTemplate = R"(
 ENTRY triton_computation {
   input = f16[1,2,2,2] parameter(0)  // N=1, H=2, W=2, C_in=2
   kernel = f16[3,3,2,3] parameter(1) // H=3, W=3, C_in=2, C_out=3
   ROOT conv = f16[1,2,2,3] convolution(input, kernel),
-    window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f
+    window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","2"]}
 })";
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
@@ -3691,12 +3701,16 @@ ENTRY triton_computation {
 
 TEST_P(ConvolutionTestCcOnly, IsTritonSupportedConvDifferentWindowPadding) {
   auto [cc, tiling] = GetParam();
+  if (!tiling) {
+    GTEST_SKIP() << "Padding supported only with experimental tiling.";
+  }
   const std::string kHloTestTemplate = R"(
 ENTRY triton_computation {
   input = f16[1,5,6,2] parameter(0)  // N=1, H=5, W=6, C_in=2
   kernel = f16[3,3,2,3] parameter(1) // H=3, W=3, C_in=2, C_out=3
   ROOT conv = f16[1,5,6,3] convolution(input, kernel),
-    window={size=3x3 pad=2_0x0_2}, dim_labels=b01f_01io->b01f
+    window={size=3x3 pad=2_0x0_2}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","2"]}
 })";
   TF_ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,

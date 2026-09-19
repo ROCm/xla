@@ -3921,6 +3921,177 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
+TEST_P(ConvTritonEmitterTest, Conv2DSamePaddingIsEmittedCorrectly) {
+  if (!EnableTilingPropagation()) {
+    GTEST_SKIP() << "Padding supported only with experimental tiling.";
+  }
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[32,56,56,64] parameter(0)
+  kernel = f32[3,3,64,128] parameter(1)
+  ROOT conv = f32[32,56,56,128] convolution(input, kernel),
+    window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = f32[32,56,56,64] parameter(0)
+  p1 = f32[3,3,64,128] parameter(1)
+  ROOT fusion = f32[32,56,56,128] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_P(ConvTritonEmitterTest, Conv2DAsymmetricPaddingIsEmittedCorrectly) {
+  if (!EnableTilingPropagation()) {
+    GTEST_SKIP() << "Padding supported only with experimental tiling.";
+  }
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[32,56,56,64] parameter(0)
+  kernel = f32[3,3,64,128] parameter(1)
+  ROOT conv = f32[32,56,56,128] convolution(input, kernel),
+    window={size=3x3 pad=2_0x0_2}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = f32[32,56,56,64] parameter(0)
+  p1 = f32[3,3,64,128] parameter(1)
+  ROOT fusion = f32[32,56,56,128] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_P(ConvTritonEmitterTest, Conv2DValidPaddingIsEmittedCorrectly) {
+  if (!EnableTilingPropagation()) {
+    GTEST_SKIP() << "Padding supported only with experimental tiling.";
+  }
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[32,56,56,64] parameter(0)
+  kernel = f32[3,3,64,128] parameter(1)
+  ROOT conv = f32[32,54,54,128] convolution(input, kernel),
+    window={size=3x3 pad=0_0x0_0}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = f32[32,56,56,64] parameter(0)
+  p1 = f32[3,3,64,128] parameter(1)
+  ROOT fusion = f32[32,54,54,128] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_P(ConvTritonEmitterTest, Conv2DSamePaddingStride2IsEmittedCorrectly) {
+  if (!EnableTilingPropagation()) {
+    GTEST_SKIP() << "Padding supported only with experimental tiling.";
+  }
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[32,56,56,64] parameter(0)
+  kernel = f32[3,3,64,128] parameter(1)
+  ROOT conv = f32[32,28,28,128] convolution(input, kernel),
+    window={size=3x3 stride=2x2 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = f32[32,56,56,64] parameter(0)
+  p1 = f32[3,3,64,128] parameter(1)
+  ROOT fusion = f32[32,28,28,128] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_P(ConvTritonEmitterTest,
+       Conv2DSamePaddingNonDivisibleCInIsEmittedCorrectly) {
+  if (!EnableTilingPropagation()) {
+    GTEST_SKIP() << "Padding supported only with experimental tiling.";
+  }
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[32,56,56,60] parameter(0)
+  kernel = f32[3,3,60,128] parameter(1)
+  ROOT conv = f32[32,56,56,128] convolution(input, kernel),
+    window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = f32[32,56,56,60] parameter(0)
+  p1 = f32[3,3,60,128] parameter(1)
+  ROOT fusion = f32[32,56,56,128] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
 }  // namespace
 }  // namespace gpu
 }  // namespace xla

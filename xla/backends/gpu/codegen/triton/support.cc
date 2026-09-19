@@ -741,10 +741,30 @@ CodegenDecision IsTritonSupportedConv(
     return CodegenDecision::Forbid(
         "Batch-grouped convolution is not supported.");
   }
+  bool tiling_propagation_enabled =
+      conv.GetModule()
+          ->config()
+          .debug_options()
+          .xla_gpu_experimental_enable_tiling_propagation();
+
   for (const auto& dim : conv.window().dimensions()) {
-    if (dim.padding_low() != 0 || dim.padding_high() != 0) {
-      return CodegenDecision::Forbid(
-          "Convolution with padding is not supported.");
+    if (!tiling_propagation_enabled) {
+      if (dim.padding_low() != 0 || dim.padding_high() != 0) {
+        return CodegenDecision::Forbid(
+            "Convolution with padding is only supported when experimental "
+            "tiling "
+            "propagation is enabled.");
+      }
+      if (dim.stride() != 1) {
+        return CodegenDecision::Forbid(
+            "Convolution with stride != 1 is only supported when experimental "
+            "tiling propagation is enabled.");
+      }
+      if (dim.window_dilation() != 1) {
+        return CodegenDecision::Forbid(
+            "Convolution with window dilation is only supported when "
+            "experimental tiling propagation is enabled.");
+      }
     }
     if (dim.base_dilation() != 1) {
       return CodegenDecision::Forbid(
