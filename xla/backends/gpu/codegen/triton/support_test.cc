@@ -142,6 +142,10 @@ bool DoesOpSupportType(HloOpcode opcode, PrimitiveType type) {
       return type == F32 || type == F64;
     case HloOpcode::kDot:
       return type != PRED;
+    case HloOpcode::kConvolution:
+      return type == BF16 || type == F16 || type == F32 ||
+             type == F8E4M3FN || type == F8E5M2 || type == F8E4M3FNUZ ||
+             type == F8E5M2FNUZ;
     case HloOpcode::kScaledDot:
       return type == F8E4M3FN || type == F4E2M1FN || type == F8E5M2 ||
              type == BF16 || type == F8E8M0FNU || type == S8;
@@ -3579,7 +3583,8 @@ ENTRY triton_computation {
   input = f16[1,5,6,2] parameter(0)  // N=1, H=5, W=6, C_in=2
   kernel = f16[2,2,2,3] parameter(1) // H=2, W=2, C_in=2, C_out=3
   ROOT conv = f16[1,5,6,3] convolution(input, kernel),
-    window={size=2x2 pad=1_0x0_1}, dim_labels=b01f_01io->b01f
+    window={size=2x2 pad=1_0x0_1}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","2"]}
 })";
   ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
@@ -3611,7 +3616,8 @@ ENTRY triton_computation {
   input = f32[1,5,6,2] parameter(0)   // N=1, H=5, W=6, C_in=2
   kernel = bf16[3,3,2,3] parameter(1) // H=3, W=3, C_in=2, C_out=3
   ROOT conv = f32[1,3,4,3] convolution(input, kernel),
-    window={size=3x3}, dim_labels=b01f_01io->b01f
+    window={size=3x3}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","2"]}
 })";
   ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
@@ -3627,7 +3633,8 @@ ENTRY triton_computation {
   input = f32[1,5,6,2] parameter(0)  // N=1, H=5, W=6, C_in=2
   kernel = f32[3,3,2,3] parameter(1) // H=3, W=3, C_in=2, C_out=3
   ROOT conv = s4[1,3,4,3] convolution(input, kernel),
-    window={size=3x3}, dim_labels=b01f_01io->b01f
+    window={size=3x3}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","2"]}
 })";
   ASSERT_OK_AND_ASSIGN(
       TestedInstruction ti,
