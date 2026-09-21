@@ -316,9 +316,16 @@ std::unique_ptr<GpuProfiler> GpuProfiler::Create(
     LOG(ERROR) << "Failed to create stream: " << stream.status();
     return nullptr;
   }
-  return absl::WrapUnique(new GpuProfiler(stream_executor, active_allocator,
-                                          std::move(owned_allocator),
-                                          stream.value(), options));
+  // Create the fail-fast wrapper once, wrapping the active allocator. It has
+  // profiler lifetime because result buffers returned from Profile() capture it
+  // and deallocate through it long after Profile() returns (see the member
+  // comment in the header). Creating it once (never reassigned) also keeps
+  // concurrent Deallocate() from multiple autotuning threads race-free.
+  auto fail_fast_allocator =
+      std::make_unique<FailFastDeviceAddressAllocator>(active_allocator);
+  return absl::WrapUnique(new GpuProfiler(
+      stream_executor, active_allocator, std::move(owned_allocator),
+      std::move(fail_fast_allocator), stream.value(), options));
 }
 
 absl::StatusOr<std::unique_ptr<InputBuffers>> GpuProfiler::CreateInputBuffers(
@@ -363,11 +370,16 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
       warmup_rz.emplace(stream_, allocator_, options_.redzone_padding_bytes);
       warmup_alloc = &warmup_rz.value();
     }
+    // Wrap in a fail-fast allocator so an out-of-memory transient (e.g. a large
+    // fusion output) is rejected immediately instead of triggering the BFC
+    // allocator's multi-second blocking retry loop. The warm-up run's output is
+    // discarded within this scope, so a local wrapper is sufficient here.
+    FailFastDeviceAddressAllocator warmup_fail_fast(warmup_alloc);
     std::vector<ExecutionInput> execution_inputs =
         CreateExecutionInputsFromBuffers(rz_buffers.input_buffers(),
                                          rz_buffers.input_shapes());
     ABSL_RETURN_IF_ERROR(Execute(executable, std::move(execution_inputs),
-                                 /*profile=*/nullptr, warmup_alloc)
+                                 /*profile=*/nullptr, &warmup_fail_fast)
                              .status());
     ABSL_RETURN_IF_ERROR(stream_->BlockHostUntilDone());
     if (warmup_rz.has_value()) {
@@ -392,9 +404,15 @@ absl::StatusOr<ProfileResult> GpuProfiler::Profile(
       CreateExecutionInputsFromBuffers(rz_buffers.input_buffers(),
                                        rz_buffers.input_shapes());
 
+  // Use the profiler-lifetime fail-fast wrapper for the profiled run. The
+  // returned ExecutionOutput's result buffer (result.output_buffer below) is
+  // handed back to the autotuner and freed much later, on another thread; it
+  // captures this allocator and deallocates through it, so the allocator must
+  // outlive Profile() -- hence a member rather than a local.
   ABSL_ASSIGN_OR_RETURN(
       ExecutionOutput execution_output,
-      Execute(executable, std::move(execution_inputs), &profile, allocator_));
+      Execute(executable, std::move(execution_inputs), &profile,
+              fail_fast_allocator_.get()));
 
   result.duration = absl::Nanoseconds(profile.compute_time_ns());
   result.output_buffer = execution_output.Commit().ConsumeResult();
@@ -408,25 +426,11 @@ absl::StatusOr<ExecutionOutput> GpuProfiler::Execute(
   GpuExecutableRunOptions gpu_opts;
   gpu_opts.set_requires_exclusive_lock_on_gpu();
 
-  // Route the candidate executable's on-demand output/scratch allocations
-  // through a fail-fast wrapper so that an out-of-memory transient is rejected
-  // immediately instead of triggering the BFC allocator's multi-second blocking
-  // retry loop (which cannot succeed while the profiler holds the exclusive GPU
-  // lock). The returned ExecutionOutput's result buffers retain a pointer to
-  // the allocator set on the run options and use it for deallocation AFTER this
-  // method returns, so the wrapper must outlive the ExecutionOutput. We keep it
-  // as a member (profiler lifetime) instead of a stack local; a stack-local
-  // wrapper would dangle and cause a use-after-free/segfault.
-  LOG(ERROR) << "[GpuProfiler::Execute] Installing FailFastDeviceAddressAllocator "
-                "(wrapping inner allocator "
-             << allocator << ") for candidate profiling run.";
-  fail_fast_allocator_ =
-      std::make_unique<FailFastDeviceAddressAllocator>(allocator);
 
   ExecutableRunOptions run_options;
   run_options.set_device_ordinal(stream_executor_->device_ordinal());
   run_options.set_stream(stream_);
-  run_options.set_allocator(fail_fast_allocator_.get());
+  run_options.set_allocator(allocator);
   run_options.set_gpu_executable_run_options(&gpu_opts);
   run_options.set_execution_profile(profile);
   ServiceExecutableRunOptions service_run_options(run_options);

@@ -65,10 +65,12 @@ class GpuProfiler : public Profiler {
       se::StreamExecutor* stream_executor,
       se::DeviceAddressAllocator* allocator,
       std::unique_ptr<se::DeviceAddressAllocator> owned_allocator,
+      std::unique_ptr<se::DeviceAddressAllocator> fail_fast_allocator,
       se::Stream* stream, ProfileOptions options)
       : stream_executor_(stream_executor),
         allocator_(allocator),
         owned_allocator_(std::move(owned_allocator)),
+        fail_fast_allocator_(std::move(fail_fast_allocator)),
         stream_(stream),
         options_(options) {}
 
@@ -79,11 +81,14 @@ class GpuProfiler : public Profiler {
   se::StreamExecutor* stream_executor_;
   se::DeviceAddressAllocator* allocator_;
   std::unique_ptr<se::DeviceAddressAllocator> owned_allocator_;
-  // Fail-fast wrapper around the allocator used for candidate profiling runs.
-  // Held here (profiler lifetime) rather than as a stack local in Execute()
-  // because the returned ExecutionOutput's result buffers retain a pointer to
-  // whatever allocator was set on the run options and use it for deallocation
-  // after Execute() returns; a stack-local wrapper would dangle -> segfault.
+  // Fail-fast wrapper around `allocator_`, created ONCE at construction and
+  // never reassigned. Result buffers returned from Profile() (ScopedShapedBuffer
+  // in ExecutionOutput) capture the run-options allocator and call it from their
+  // destructor to deallocate -- and those buffers outlive the Profile() call
+  // (they live in the autotuner's ConfigRunner clusters). So the allocator they
+  // capture must have profiler lifetime. Because it is created once and only
+  // read (never reassigned), concurrent Deallocate() from multiple autotuning
+  // threads is safe -- it simply forwards to the already-thread-safe allocator_.
   std::unique_ptr<se::DeviceAddressAllocator> fail_fast_allocator_;
   se::Stream* stream_;
   ProfileOptions options_;
