@@ -79,6 +79,12 @@ class GpuProfiler : public Profiler {
   se::StreamExecutor* stream_executor_;
   se::DeviceAddressAllocator* allocator_;
   std::unique_ptr<se::DeviceAddressAllocator> owned_allocator_;
+  // Fail-fast wrapper around the allocator used for candidate profiling runs.
+  // Held here (profiler lifetime) rather than as a stack local in Execute()
+  // because the returned ExecutionOutput's result buffers retain a pointer to
+  // whatever allocator was set on the run options and use it for deallocation
+  // after Execute() returns; a stack-local wrapper would dangle -> segfault.
+  std::unique_ptr<se::DeviceAddressAllocator> fail_fast_allocator_;
   se::Stream* stream_;
   ProfileOptions options_;
 };

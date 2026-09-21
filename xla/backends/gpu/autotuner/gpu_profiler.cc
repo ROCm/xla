@@ -412,19 +412,21 @@ absl::StatusOr<ExecutionOutput> GpuProfiler::Execute(
   // through a fail-fast wrapper so that an out-of-memory transient is rejected
   // immediately instead of triggering the BFC allocator's multi-second blocking
   // retry loop (which cannot succeed while the profiler holds the exclusive GPU
-  // lock). `fail_fast_allocator` only needs to outlive the Execute call below:
-  // the addresses it hands back are bound to `allocator` (the inner allocator),
-  // not to this wrapper, so buffers owned by the returned ExecutionOutput
-  // remain valid and are deallocated via the inner allocator.
+  // lock). The returned ExecutionOutput's result buffers retain a pointer to
+  // the allocator set on the run options and use it for deallocation AFTER this
+  // method returns, so the wrapper must outlive the ExecutionOutput. We keep it
+  // as a member (profiler lifetime) instead of a stack local; a stack-local
+  // wrapper would dangle and cause a use-after-free/segfault.
   LOG(ERROR) << "[GpuProfiler::Execute] Installing FailFastDeviceAddressAllocator "
                 "(wrapping inner allocator "
              << allocator << ") for candidate profiling run.";
-  FailFastDeviceAddressAllocator fail_fast_allocator(allocator);
+  fail_fast_allocator_ =
+      std::make_unique<FailFastDeviceAddressAllocator>(allocator);
 
   ExecutableRunOptions run_options;
   run_options.set_device_ordinal(stream_executor_->device_ordinal());
   run_options.set_stream(stream_);
-  run_options.set_allocator(&fail_fast_allocator);
+  run_options.set_allocator(fail_fast_allocator_.get());
   run_options.set_gpu_executable_run_options(&gpu_opts);
   run_options.set_execution_profile(profile);
   ServiceExecutableRunOptions service_run_options(run_options);
