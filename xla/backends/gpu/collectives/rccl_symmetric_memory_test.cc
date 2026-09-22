@@ -46,6 +46,12 @@ using ::testing::Not;
 class RcclSymmetricMemoryTest : public ::testing::Test {
  protected:
   void SetUp() override {
+#if (TF_ROCM_VERSION < 100000)
+    // RcclSymmetricMemory::Create requires ncclCommWindowRegister (ROCm/RCCL
+    // >= 10.0) and now returns UnimplementedError on older toolkits, so there
+    // is nothing meaningful to exercise here.
+    GTEST_SKIP() << "RCCL symmetric memory requires ROCm/RCCL >= 10.0";
+#endif  // TF_ROCM_VERSION < 100000
     // Skip if no ROCm/HIP GPU is present.
     int device_count = 0;
     if (hipGetDeviceCount(&device_count) != hipSuccess || device_count < 1) {
@@ -94,7 +100,8 @@ class RcclSymmetricMemoryTest : public ::testing::Test {
 // Verifies that RcclSymmetricMemory::Create succeeds for a valid buffer.
 TEST_F(RcclSymmetricMemoryTest, CreateSucceeds) {
   se::DeviceAddressBase addr(buf_ptr_, buf_size_);
-  ASSERT_OK_AND_ASSIGN(auto symm_mem, RcclSymmetricMemory::Create(comm_, addr));
+  ASSERT_OK_AND_ASSIGN(auto symm_mem, RcclSymmetricMemory::Create(
+                                          comm_, addr, /*executor=*/nullptr));
   ASSERT_NE(symm_mem, nullptr);
 }
 
@@ -102,7 +109,8 @@ TEST_F(RcclSymmetricMemoryTest, CreateSucceeds) {
 // registered.
 TEST_F(RcclSymmetricMemoryTest, AddrMatchesRegisteredBuffer) {
   se::DeviceAddressBase addr(buf_ptr_, buf_size_);
-  ASSERT_OK_AND_ASSIGN(auto symm_mem, RcclSymmetricMemory::Create(comm_, addr));
+  ASSERT_OK_AND_ASSIGN(auto symm_mem, RcclSymmetricMemory::Create(
+                                          comm_, addr, /*executor=*/nullptr));
   EXPECT_EQ(symm_mem->addr().opaque(), buf_ptr_);
   EXPECT_EQ(symm_mem->addr().size(), buf_size_);
 }
@@ -110,7 +118,8 @@ TEST_F(RcclSymmetricMemoryTest, AddrMatchesRegisteredBuffer) {
 // Verifies that ToString() contains key diagnostic fields.
 TEST_F(RcclSymmetricMemoryTest, ToStringContainsExpectedFields) {
   se::DeviceAddressBase addr(buf_ptr_, buf_size_);
-  ASSERT_OK_AND_ASSIGN(auto symm_mem, RcclSymmetricMemory::Create(comm_, addr));
+  ASSERT_OK_AND_ASSIGN(auto symm_mem, RcclSymmetricMemory::Create(
+                                          comm_, addr, /*executor=*/nullptr));
   const std::string str = symm_mem->ToString();
   EXPECT_THAT(str, HasSubstr("RcclSymmetricMemory"));
   EXPECT_THAT(str, HasSubstr("comm="));
@@ -124,7 +133,8 @@ TEST_F(RcclSymmetricMemoryTest, ToStringContainsExpectedFields) {
 // remote peers to establish a window with). This test is skipped in that case.
 TEST_F(RcclSymmetricMemoryTest, PackKernelArgReturnsValidWindowHandle) {
   se::DeviceAddressBase addr(buf_ptr_, buf_size_);
-  ASSERT_OK_AND_ASSIGN(auto symm_mem, RcclSymmetricMemory::Create(comm_, addr));
+  ASSERT_OK_AND_ASSIGN(auto symm_mem, RcclSymmetricMemory::Create(
+                                          comm_, addr, /*executor=*/nullptr));
   if (symm_mem->win() == nullptr) {
     GTEST_SKIP()
         << "RCCL returned a null ncclWindow_t (expected on single-rank "
@@ -138,14 +148,30 @@ TEST_F(RcclSymmetricMemoryTest, PackKernelArgReturnsValidWindowHandle) {
   EXPECT_NE(symm_mem->win(), nullptr);
 }
 
-// Verifies that multimem_addr() returns Unimplemented — RCCL does not support
-// multimem, so the base-class default is expected.
-TEST_F(RcclSymmetricMemoryTest, MultimemAddrNotSupported) {
+// Verifies that multimem_addr() fails for a single-rank communicator.
+//
+// Behavior depends on the RCCL version:
+//   * ROCm/RCCL < 10.0: multimem_addr() is a no-op that returns
+//     kUnimplemented ("Multimem not supported on this RCCL version or
+//     device").
+//   * ROCm/RCCL >= 10.0: multimem_addr() calls
+//     ncclGetLsaMultimemDevicePointer(win_, ...). For a single-rank
+//     communicator RCCL produces a null window, so the call fails and the
+//     RCCL error is propagated verbatim (typically kInternal /
+//     kInvalidArgument), not kUnimplemented.
+// In both cases the operation must fail. We additionally pin the exact status
+// code where it is deterministic (kUnimplemented on pre-10.0).
+TEST_F(RcclSymmetricMemoryTest, MultimemAddrFailsForSingleRankComm) {
   se::DeviceAddressBase addr(buf_ptr_, buf_size_);
-  ASSERT_OK_AND_ASSIGN(auto symm_mem, RcclSymmetricMemory::Create(comm_, addr));
+  ASSERT_OK_AND_ASSIGN(auto symm_mem, RcclSymmetricMemory::Create(
+                                          comm_, addr, /*executor=*/nullptr));
   auto result = symm_mem->multimem_addr();
   EXPECT_THAT(result, Not(IsOk()));
+#if (TF_ROCM_VERSION < 100000)
+  // Pre-10.0 has no ncclGetLsaMultimemDevicePointer; multimem_addr() is a
+  // no-op returning a fixed kUnimplemented status.
   EXPECT_EQ(result.status().code(), absl::StatusCode::kUnimplemented);
+#endif  // TF_ROCM_VERSION < 100000
 }
 
 // Verifies that two independent windows created from the same communicator
@@ -158,8 +184,10 @@ TEST_F(RcclSymmetricMemoryTest, TwoWindowsHaveDistinctHandles) {
   se::DeviceAddressBase addr1(buf_ptr_, buf_size_);
   se::DeviceAddressBase addr2(buf2_ptr, buf_size_);
 
-  ASSERT_OK_AND_ASSIGN(auto symm1, RcclSymmetricMemory::Create(comm_, addr1));
-  ASSERT_OK_AND_ASSIGN(auto symm2, RcclSymmetricMemory::Create(comm_, addr2));
+  ASSERT_OK_AND_ASSIGN(auto symm1, RcclSymmetricMemory::Create(
+                                       comm_, addr1, /*executor=*/nullptr));
+  ASSERT_OK_AND_ASSIGN(auto symm2, RcclSymmetricMemory::Create(
+                                       comm_, addr2, /*executor=*/nullptr));
 
   if (symm1->win() == nullptr || symm2->win() == nullptr) {
     (void)ncclMemFree(buf2_ptr);

@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_BACKENDS_GPU_COLLECTIVES_RCCL_SYMMETRIC_MEMORY_H_
 #define XLA_BACKENDS_GPU_COLLECTIVES_RCCL_SYMMETRIC_MEMORY_H_
 
+#include <cstddef>  // for size_t in the RCCL 10.0+ forward declarations below
 #include <memory>
 #include <string>
 
@@ -35,9 +36,16 @@ limitations under the License.
 #if (TF_ROCM_VERSION >= 100000)
 // ROCm/RCCL 10.0+ declares the host-side symmetric-memory pointer helpers
 // (ncclGetLsaMultimemDevicePointer, ncclGetPeerDevicePointer) in the
-// nccl_device core header. We deliberately do NOT #include that header (nor the
-// nccl_device.h umbrella): those headers transitively pull in device-only
-// intrinsics that fail to compile in a host translation unit.
+// nccl_device core header (rocm/include/rccl/nccl_device/core.h), where they
+// are `NCCL_EXTERN_C __host__` -- exported C symbols in librccl.so, not static
+// inline -- which is what makes these forward declarations link.
+//
+// We deliberately do NOT #include that header (nor the nccl_device.h umbrella):
+// it transitively pulls in device-only intrinsics that fail to compile in
+// this plain host translation unit.
+//
+// PROVENANCE: copied verbatim from RCCL hip-version_10.2.62640,
+// nccl_device/core.h.
 extern "C" {
 ncclResult_t ncclGetLsaMultimemDevicePointer(ncclWindow_t window, size_t offset,
                                              void** outPtr);
@@ -56,10 +64,15 @@ class RcclSymmetricMemory final : public SymmetricMemory {
   ~RcclSymmetricMemory() final;
 
   // `executor` is the communicator's single-threaded executor (may be null for
-  // blocking/synchronous communicators). RCCL requires that *all* operations on
-  // a given ncclComm_t - including symmetric window registration,
-  // deregistration and the ncclGet{Peer,LsaMultimem}DevicePointer window-map
-  // lookups - run on the one thread that owns the communicator.
+  // blocking/synchronous communicators). It is used to serialize the
+  // window-lifecycle operations that mutate communicator state - symmetric
+  // window registration (in Create) and deregistration (in the destructor) -
+  // onto the communicator's owning thread.
+  //
+  // The read-only device-pointer lookups (multimem_addr()/peer_addr(), i.e.
+  // ncclGet{LsaMultimem,Peer}DevicePointer) are NOT dispatched onto `executor`:
+  // they only read already-populated window/comm metadata and do not touch
+  // RCCL's per-thread enqueue/group state.
   static absl::StatusOr<std::unique_ptr<RcclSymmetricMemory>> Create(
       ncclComm_t comm, stream_executor::DeviceAddressBase addr,
       std::shared_ptr<tsl::Executor> executor);

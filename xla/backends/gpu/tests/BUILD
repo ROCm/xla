@@ -9,14 +9,14 @@ load("//xla:lit.bzl", "enforce_glob", "lit_test_suite_for_gpus")
 load("//xla:xla.default.bzl", "xla_cc_test")
 load("//xla/tests:build_defs.bzl", "xla_test")
 load("//xla/tsl:tsl.bzl", "if_google", "if_oss")
+load(
+    "@local_config_rocm//rocm:build_defs.bzl",
+    "if_rocm_is_configured",
+)
 load("//xla/tsl:tsl.default.bzl", "filegroup")
 load(
     "//xla/tsl/platform/default:cuda_build_defs.bzl",
     "if_cuda_is_configured",
-)
-load(
-    "@local_config_rocm//rocm:build_defs.bzl",
-    "if_rocm_is_configured",
 )
 
 package(
@@ -1726,9 +1726,6 @@ xla_test(
     ],
     deps = [
         "//xla:debug_options_flags",
-    ] + if_rocm_is_configured([
-        "@local_config_rocm//rocm:rocm_headers",
-    ]) + [
         "//xla:literal",
         "//xla:literal_util",
         "//xla:shape_util",
@@ -1770,7 +1767,9 @@ xla_test(
         "@com_google_absl//absl/time",
         "@com_google_googletest//:gtest",
         "@tsl//tsl/platform:path",
-    ],
+    ] + if_rocm_is_configured([
+        "@local_config_rocm//rocm:rocm_headers",
+    ]),
 )
 
 xla_test(
@@ -1786,9 +1785,6 @@ xla_test(
     ],
     deps = [
         "//xla:debug_options_flags",
-    ] + if_rocm_is_configured([
-        "@local_config_rocm//rocm:rocm_headers",
-    ]) + [
         "//xla:literal",
         "//xla:literal_util",
         "//xla:shape_util",
@@ -1829,7 +1825,9 @@ xla_test(
         "@com_google_absl//absl/time",
         "@com_google_googletest//:gtest",
         "@tsl//tsl/platform:path",
-    ],
+    ] + if_rocm_is_configured([
+        "@local_config_rocm//rocm:rocm_headers",
+    ]),
 )
 
 xla_cc_test(

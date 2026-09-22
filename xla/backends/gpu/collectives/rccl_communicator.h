@@ -128,8 +128,6 @@ class RcclCommunicator : public GpuCommunicator {
 
   bool IsBlocking() const { return executor_ == nullptr; }
 
-  std::shared_ptr<tsl::Executor> executor() const { return executor_; }
-
   // Polls the communicator until any pending non-blocking operations are done
   // or aborted.
   absl::Status PollUntilDone() const;

@@ -1193,6 +1193,7 @@ cc_library(
         "//xla/tsl/concurrency:executor",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
