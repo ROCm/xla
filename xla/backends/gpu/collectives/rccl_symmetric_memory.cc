@@ -20,6 +20,7 @@ limitations under the License.
 #include <utility>
 
 #include "absl/functional/any_invocable.h"
+#include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
@@ -36,45 +37,80 @@ namespace xla::gpu {
 
 namespace {
 
+#if (TF_ROCM_VERSION >= 100000)
+// Only used by the destructor's ROCm/RCCL 10.0+ path (window deregistration).
+// Guard the definition so it is not compiled as an unused static function on
+// ROCm < 10.0 builds (which would trip -Wunused-function under -Werror).
 Future<> Execute(absl::AnyInvocable<absl::Status() &&> f,
                  std::shared_ptr<tsl::Executor> executor) {
   return executor ? MakeFutureOn<void>(*executor, std::move(f))
                   : Future<>(std::move(f)());
 }
+#endif  // TF_ROCM_VERSION >= 100000
 
 }  // namespace
 
 RcclSymmetricMemory::RcclSymmetricMemory(
     ncclComm_t comm, ncclWindow_t win, stream_executor::DeviceAddressBase addr,
     std::shared_ptr<tsl::Executor> executor)
-    : comm_(comm), win_(win), addr_(addr), executor_(executor) {}
+    : comm_(comm), win_(win), addr_(addr), executor_(std::move(executor)) {}
 
 absl::StatusOr<std::unique_ptr<RcclSymmetricMemory>>
 RcclSymmetricMemory::Create(ncclComm_t comm,
                             stream_executor::DeviceAddressBase addr,
                             std::shared_ptr<tsl::Executor> executor) {
-  ncclWindow_t win = nullptr;
-#if (TF_ROCM_VERSION >= 100000)
-  // ncclCommWindowRegister is available in ROCm/RCCL 10.0+.
   VLOG(3) << absl::StrFormat(
       "Create RCCL symmetric memory on comm=%p from: ptr=%p; size=%ld", comm,
       addr.opaque(), addr.size());
+#if (TF_ROCM_VERSION >= 100000)
+  // ncclCommWindowRegister is available in ROCm/RCCL 10.0+.
+  ncclWindow_t win = nullptr;
   ncclResult_t register_status = ncclCommWindowRegister(
       comm, addr.opaque(), addr.size(), &win, NCCL_WIN_COLL_SYMMETRIC);
-  XLA_RCCL_RETURN_IF_ERROR(register_status);
+  if (register_status != ncclSuccess) {
+    LOG(ERROR) << absl::StrFormat(
+        "ncclCommWindowRegister failed on comm=%p (ptr=%p, size=%ld): %s", comm,
+        addr.opaque(), addr.size(), ncclGetErrorString(register_status));
+    XLA_RCCL_RETURN_IF_ERROR(register_status);
+  }
+  return absl::WrapUnique(
+      new RcclSymmetricMemory(comm, win, addr, std::move(executor)));
+#else
+  // Symmetric-memory windows require ncclCommWindowRegister (ROCm/RCCL
+  // >= 10.0).
+  return absl::UnimplementedError(
+      "RCCL symmetric memory requires ncclCommWindowRegister (ROCm/RCCL "
+      ">= 10.0)");
 #endif  // TF_ROCM_VERSION >= 100000
-  return absl::WrapUnique(new RcclSymmetricMemory(comm, win, addr, executor));
 }
 
 RcclSymmetricMemory::~RcclSymmetricMemory() {
 #if (TF_ROCM_VERSION >= 100000)
   // ncclCommWindowDeregister is available in ROCm/RCCL 10.0+.
+  //
+  // comm_ is a non-owning ncclComm_t. If this window outlived its
+  // RcclCommunicator (whose destructor calls ncclCommDestroy), the
+  // ncclCommWindowDeregister() below would be a use-after-free. Callers (the
+  // collective clique) must destroy all windows before destroying the
+  // communicator.
+  if (win_ != nullptr) {
+    CHECK(comm_ != nullptr)
+        << "RcclSymmetricMemory destroyed with a live window but null comm_; "
+           "the owning ncclComm_t was destroyed first (window="
+        << win_ << ").";
+  }
+
+  // The deregistration below is posted to executor_ and awaited. If this
+  // destructor ran on executor_'s thread (e.g. released inside another Execute
+  // callback), that would self-deadlock.
+  VLOG(3) << absl::StrFormat(
+      "Destroy %v with addr=%p, size=%ld executor=%p (awaiting window "
+      "deregistration on executor)",
+      *this, addr_.opaque(), addr_.size(), executor_.get());
+
   absl::Status status =
       Execute(
           [&] {
-            VLOG(3) << absl::StrFormat(
-                "Destroy %v with addr=%p, size=%ld executor=%p", *this,
-                addr_.opaque(), addr_.size(), executor_.get());
             if (win_ != nullptr) {
               XLA_RCCL_LOG_IF_ERROR(ncclCommWindowDeregister(comm_, win_));
             }
