@@ -14,6 +14,10 @@ load(
     "//xla/tsl/platform/default:cuda_build_defs.bzl",
     "if_cuda_is_configured",
 )
+load(
+    "@local_config_rocm//rocm:build_defs.bzl",
+    "if_rocm_is_configured",
+)
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -1722,6 +1726,9 @@ xla_test(
     ],
     deps = [
         "//xla:debug_options_flags",
+    ] + if_rocm_is_configured([
+        "@local_config_rocm//rocm:rocm_headers",
+    ]) + [
         "//xla:literal",
         "//xla:literal_util",
         "//xla:shape_util",
@@ -1779,6 +1786,9 @@ xla_test(
     ],
     deps = [
         "//xla:debug_options_flags",
+    ] + if_rocm_is_configured([
+        "@local_config_rocm//rocm:rocm_headers",
+    ]) + [
         "//xla:literal",
         "//xla:literal_util",
         "//xla:shape_util",

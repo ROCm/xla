@@ -1185,10 +1185,13 @@ cc_library(
     visibility = ["//visibility:private"],
     deps = [
         ":rccl_errors",
+        "//xla:future",
         "//xla:util",
         "//xla/core/collectives:rank_id",
         "//xla/core/collectives:symmetric_memory",
         "//xla/stream_executor:device_address",
+        "//xla/tsl/concurrency:executor",
+        "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",

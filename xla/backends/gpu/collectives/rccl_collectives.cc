@@ -128,6 +128,23 @@ class RcclIdStore {
   absl::Mutex mu_;
   absl::flat_hash_map<gpu::GpuCliqueKey, CliqueId> cache_ ABSL_GUARDED_BY(mu_);
 };
+
+// RCCL symmetric memory is only enabled when comm->symmetricSupport is true,
+// which requires ncclCuMemEnable(). Without it, ncclCommWindowRegister silently
+// takes the non-symmetric path and never inserts the window into RCCL's global
+// window map, causing later ncclGetPeerDevicePointer calls to fail with "Could
+// not find communicator matching window ... ".
+//
+// RCCL reads NCCL_CUMEM_ENABLE exactly once on the first RCCL API call
+// (ncclInit -> initEnv, guarded by std::call_once), and caches it. We must
+// therefore set the default before any RCCL symbol is touched.
+#if defined(TF_ROCM_VERSION) && (TF_ROCM_VERSION >= 100000)
+const bool kRcclCuMemEnableDefault = [] {
+  tsl::setenv("NCCL_CUMEM_ENABLE", "1", /*overwrite=*/0);
+  return true;
+}();
+#endif  // TF_ROCM_VERSION >= 100000
+
 }  // namespace
 
 //===----------------------------------------------------------------------===//
