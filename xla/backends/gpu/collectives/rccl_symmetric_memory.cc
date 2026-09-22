@@ -15,42 +15,210 @@ limitations under the License.
 
 #include "xla/backends/gpu/collectives/rccl_symmetric_memory.h"
 
+#include <cstdlib>
 #include <memory>
 #include <string>
+#include <utility>
 
+#include "absl/functional/any_invocable.h"
 #include "absl/log/log.h"
 #include "absl/memory/memory.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
 #include "xla/backends/gpu/collectives/rccl_errors.h"
+#include "xla/core/collectives/rank_id.h"
+#include "xla/future.h"
 #include "xla/stream_executor/device_address.h"
+#include "xla/tsl/concurrency/executor.h"
 #include "xla/util.h"
 
 namespace xla::gpu {
 
+namespace {
+
+#if (TF_ROCM_VERSION >= 100000)
+// Only used by the destructor's ROCm/RCCL 10.0+ path (window deregistration).
+// Guard the definition so it is not compiled as an unused static function on
+// ROCm < 10.0 builds (which would trip -Wunused-function under -Werror).
+Future<> Execute(absl::AnyInvocable<absl::Status() &&> f,
+                 std::shared_ptr<tsl::Executor> executor) {
+  return executor ? MakeFutureOn<void>(*executor, std::move(f))
+                  : Future<>(std::move(f)());
+}
+
+// Checks that the environment is configured so that RCCL can actually create
+// symmetric (LSA) windows, i.e. that NCCL_CUMEM_ENABLE is set to 1.
+absl::Status CheckNcclCuMemEnabledForSymmetricMemory() {
+  const char* raw = std::getenv("NCCL_CUMEM_ENABLE");
+  // Mirror RCCL's ncclCuMemEnable() semantics on ROCm: the cuMem allocator is
+  // only enabled when the parsed value is >= 1. An unset variable (RCCL default
+  // 0) or an explicit 0/negative value leaves symmetricSupport disabled.
+  int value = 0;
+  if (raw != nullptr && absl::SimpleAtoi(absl::string_view(raw), &value) &&
+      value >= 1) {
+    return absl::OkStatus();
+  }
+  return absl::FailedPreconditionError(absl::StrFormat(
+      "RCCL symmetric memory (NCCL windows) requires NCCL_CUMEM_ENABLE=1, but "
+      "it is currently %s. On ROCm this variable defaults to 0, which leaves "
+      "the communicator's symmetricSupport disabled and makes "
+      "ncclCommWindowRegister(NCCL_WIN_COLL_SYMMETRIC) silently fall back to a "
+      "non-symmetric window. Export NCCL_CUMEM_ENABLE=1 before launching to "
+      "enable symmetric memory, or disable the symmetric-memory collective "
+      "path.",
+      raw == nullptr ? "unset" : absl::StrFormat("\"%s\"", raw)));
+}
+#endif  // TF_ROCM_VERSION >= 100000
+
+}  // namespace
+
 RcclSymmetricMemory::RcclSymmetricMemory(
-    ncclComm_t comm, ncclWindow_t win, stream_executor::DeviceAddressBase addr)
-    : comm_(comm), win_(win), addr_(addr) {}
+    ncclComm_t comm, ncclWindow_t win, stream_executor::DeviceAddressBase addr,
+    std::shared_ptr<tsl::Executor> executor)
+    : comm_(comm), win_(win), addr_(addr), executor_(std::move(executor)) {}
 
 absl::StatusOr<std::unique_ptr<RcclSymmetricMemory>>
 RcclSymmetricMemory::Create(ncclComm_t comm,
-                            stream_executor::DeviceAddressBase addr) {
+                            stream_executor::DeviceAddressBase addr,
+                            std::shared_ptr<tsl::Executor> executor,
+                            bool symmetric_window) {
   VLOG(3) << absl::StrFormat(
-      "Create RCCL symmetric memory on comm=%p from: ptr=%p; size=%ld", comm,
-      addr.opaque(), addr.size());
+      "Create RCCL symmetric memory on comm=%p from: ptr=%p; size=%ld; "
+      "symmetric_window=%v",
+      comm, addr.opaque(), addr.size(), symmetric_window);
+#if (TF_ROCM_VERSION >= 100000)
+  // Require NCCL_CUMEM_ENABLE=1 before touching the window-registration path.
+  // Without it RCCL's comm->symmetricSupport is false and the registration
+  // below silently downgrades to a non-symmetric window.
+  ABSL_RETURN_IF_ERROR(CheckNcclCuMemEnabledForSymmetricMemory());
 
+  // ncclCommWindowRegister is available in ROCm/RCCL 10.0+.
   ncclWindow_t win = nullptr;
-  // NOTE: ncclCommWindowRegister is not supported in RCCL yet: it fails loudly
-  // or just returns NULL window.
-  return absl::WrapUnique(new RcclSymmetricMemory(comm, win, addr));
+  int win_flags = symmetric_window ? NCCL_WIN_COLL_SYMMETRIC : NCCL_WIN_DEFAULT;
+  ncclResult_t register_status =
+      ncclCommWindowRegister(comm, addr.opaque(), addr.size(), &win, win_flags);
+  if (register_status != ncclSuccess) {
+    LOG(ERROR) << absl::StrFormat(
+        "ncclCommWindowRegister failed on comm=%p (ptr=%p, size=%ld): %s", comm,
+        addr.opaque(), addr.size(), ncclGetErrorString(register_status));
+    XLA_RCCL_RETURN_IF_ERROR(register_status);
+  }
+
+  // Validate that the window is genuinely symmetric / load-store accessible.
+  //
+  // ncclCommWindowRegister(NCCL_WIN_COLL_SYMMETRIC) can return ncclSuccess even
+  // when the runtime silently downgrades the registration to a non-symmetric
+  // window (e.g. when the device/communicator does not actually support LSA
+  // symmetric memory: the RCCL log shows "windowRegisterNonSym" and
+  // "Symmetric memory is not supported"). In that case the window is NOT usable
+  // with ncclGetPeerDevicePointer, and the collective kernel would later crash
+  // deep inside RCCL ("Could not find communicator matching window").
+  void* self_peer_addr = nullptr;
+  ncclResult_t probe_status =
+      ncclGetPeerDevicePointer(win, 0, /*peer=*/0, &self_peer_addr);
+  if (probe_status != ncclSuccess || self_peer_addr == nullptr) {
+    // The window is not a usable symmetric/LSA window. Deregister it and fail
+    // cleanly rather than leaking the window or crashing later.
+    XLA_RCCL_LOG_IF_ERROR(ncclCommWindowDeregister(comm, win));
+    const char* rccl_err = probe_status != ncclSuccess
+                               ? ncclGetErrorString(probe_status)
+                               : "null peer pointer";
+    return absl::FailedPreconditionError(absl::StrFormat(
+        "ncclCommWindowRegister(NCCL_WIN_COLL_SYMMETRIC) succeeded on comm=%p "
+        "(ptr=%p, size=%ld) but the window is not load/store accessible "
+        "(ncclGetPeerDevicePointer probe failed: %s). The device/communicator "
+        "does not support symmetric (LSA) memory for this clique, so the "
+        "Triton "
+        "one-shot collective kernel cannot be used. Fall back to a "
+        "non-symmetric collective strategy (e.g. the library collective or the "
+        "rendezvous path).",
+        comm, addr.opaque(), addr.size(), rccl_err));
+  }
+
+  return absl::WrapUnique(
+      new RcclSymmetricMemory(comm, win, addr, std::move(executor)));
+#else
+  // Symmetric-memory windows require ncclCommWindowRegister (ROCm/RCCL
+  // >= 10.0).
+  return absl::UnimplementedError(
+      "RCCL symmetric memory requires ncclCommWindowRegister (ROCm/RCCL "
+      ">= 10.0)");
+#endif  // TF_ROCM_VERSION >= 100000
 }
 
 RcclSymmetricMemory::~RcclSymmetricMemory() {
-  VLOG(3) << absl::StrFormat("Destroy %v", *this);
+#if (TF_ROCM_VERSION >= 100000)
+  // ncclCommWindowDeregister is available in ROCm/RCCL 10.0+.
+  //
+  // comm_ is a non-owning ncclComm_t. If this window outlived its
+  // RcclCommunicator (whose destructor calls ncclCommDestroy), the
+  // ncclCommWindowDeregister() below would be a use-after-free. Callers (the
+  // collective clique) must destroy all windows before destroying the
+  // communicator.
+
+  // The deregistration below is posted to executor_ and awaited. If this
+  // destructor ran on executor_'s thread (e.g. released inside another Execute
+  // callback), that would self-deadlock.
+  VLOG(3) << absl::StrFormat(
+      "Destroy %v with addr=%p, size=%ld executor=%p (awaiting window "
+      "deregistration on executor)",
+      *this, addr_.opaque(), addr_.size(), executor_.get());
+
+  absl::Status status =
+      Execute(
+          [&] {
+            if (win_ != nullptr) {
+              XLA_RCCL_LOG_IF_ERROR(ncclCommWindowDeregister(comm_, win_));
+            }
+            return absl::OkStatus();
+          },
+          executor_)
+          .Await();
+  if (!status.ok()) {
+    LOG(ERROR) << "Failed to destroy RCCL symmetric memory: " << status;
+  }
+#endif  // TF_ROCM_VERSION >= 100000
 }
 
 stream_executor::DeviceAddressBase RcclSymmetricMemory::addr() const {
   return addr_;
+}
+
+absl::StatusOr<stream_executor::DeviceAddressBase>
+RcclSymmetricMemory::multimem_addr() const {
+#if (TF_ROCM_VERSION >= 100000)
+  // ncclGetLsaMultimemDevicePointer is available in ROCm/RCCL 10.0+.
+  void* multimem = nullptr;
+  XLA_RCCL_RETURN_IF_ERROR(ncclGetLsaMultimemDevicePointer(win_, 0, &multimem));
+  if (multimem) {
+    return stream_executor::DeviceAddressBase(multimem, addr_.size());
+  }
+#endif  // TF_ROCM_VERSION >= 100000
+  return absl::UnimplementedError(
+      "Multimem not supported on this RCCL version or device");
+}
+
+absl::StatusOr<stream_executor::DeviceAddressBase>
+RcclSymmetricMemory::peer_addr(RankId peer) const {
+#if (TF_ROCM_VERSION >= 100000)
+  // ncclGetPeerDevicePointer is available in ROCm/RCCL 10.0+.
+  void* peer_addr = nullptr;
+  XLA_RCCL_RETURN_IF_ERROR(
+      ncclGetPeerDevicePointer(win_, 0, peer.value(), &peer_addr));
+  if (peer_addr) {
+    return stream_executor::DeviceAddressBase(peer_addr, addr_.size());
+  }
+  return absl::FailedPreconditionError(absl::StrFormat(
+      "Peer rank %d is not load/store accessible from this rank",
+      peer.value()));
+#else
+  return absl::UnimplementedError(
+      "Peer address requires ncclGetPeerDevicePointer (ROCm/RCCL >= 10.0)");
+#endif  // TF_ROCM_VERSION >= 100000
 }
 
 std::string RcclSymmetricMemory::ToString() const {
