@@ -1728,6 +1728,7 @@ xla_test(
     backends = [
         "gpu",
     ],
+    tags = ["cuda-only"],
     deps = [
         "//xla:debug_options_flags",
         "//xla:literal",
@@ -1785,6 +1786,7 @@ xla_test(
     backends = [
         "gpu",
     ],
+    tags = ["cuda-only"],
     deps = [
         "//xla:debug_options_flags",
         "//xla:literal",
