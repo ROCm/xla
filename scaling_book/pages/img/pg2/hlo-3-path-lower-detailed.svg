@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1280 1020"
+     width="100%"
+     height="100%"
+     role="img"
+     aria-labelledby="title description">
+  <title id="title">JAX and FFI lowering routes to ROCm backends</title>
+  <desc id="description">Orange arrows and outlines show the standard JAX and XLA-integrated route. Red arrows and outlines show the FFI route, which can target any registered ROCm backend.</desc>
+
+  <style>
+    .canvas {
+      fill: #ffffff;
+    }
+    .node {
+      fill: #dceaf7;
+      stroke: #475569;
+      stroke-width: 1.6;
+    }
+    .xla-node {
+      fill: #dceaf7;
+      stroke: #f59e0b;
+      stroke-width: 2.7;
+    }
+    .ffi-node {
+      fill: #dceaf7;
+      stroke: #dc2626;
+      stroke-width: 2.7;
+    }
+    .backend-area {
+      fill: #f8fafc;
+      stroke: #dc2626;
+      stroke-width: 2.4;
+    }
+    .xla-path {
+      fill: none;
+      stroke: #f59e0b;
+      stroke-width: 2.6;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      marker-end: url(#arrow-orange);
+    }
+    .ffi-path {
+      fill: none;
+      stroke: #dc2626;
+      stroke-width: 2.6;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      marker-end: url(#arrow-red);
+    }
+    .neutral-path {
+      fill: none;
+      stroke: #111827;
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      marker-end: url(#arrow-neutral);
+    }
+    .label {
+      fill: #0f172a;
+      font-family: Inter, Arial, Helvetica, sans-serif;
+      font-size: 21px;
+      text-anchor: middle;
+      dominant-baseline: middle;
+    }
+    .small {
+      font-size: 16px;
+    }
+  </style>
+
+  <defs>
+    <marker id="arrow-orange"
+            orient="auto"
+            markerWidth="7"
+            markerHeight="7"
+            refX="6"
+            refY="3.5"
+            viewBox="0 0 7 7">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrow-red"
+            orient="auto"
+            markerWidth="7"
+            markerHeight="7"
+            refX="6"
+            refY="3.5"
+            viewBox="0 0 7 7">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-neutral"
+            orient="auto"
+            markerWidth="7"
+            markerHeight="7"
+            refX="6"
+            refY="3.5"
+            viewBox="0 0 7 7">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#111827"/>
+    </marker>
+  </defs>
+
+  <rect class="canvas" x="0" y="0" width="1280" height="1020"/>
+
+  <!-- FFI entry. -->
+  <rect class="node" x="80" y="55" width="270" height="80" rx="8"/>
+  <text class="label" x="215" y="95">FFI call</text>
+
+  <!-- Standard JAX/XLA entry. -->
+  <rect class="node" x="490" y="50" width="300" height="80" rx="8"/>
+  <text class="label" x="640" y="90">JAX primitive</text>
+
+  <path class="xla-path" d="M640 130 V175"/>
+  <rect class="node" x="490" y="175" width="300" height="80" rx="8"/>
+  <text class="label" x="640" y="215">HLO op</text>
+
+  <!-- HLO branches to an integrated library call or internal code generation. -->
+  <path class="xla-path" d="M555 255 L455 320"/>
+  <path class="neutral-path" d="M735 255 L850 285"/>
+
+  <!-- FFI also lowers to a custom call. -->
+  <path class="ffi-path" d="M215 135 L345 320"/>
+
+  <rect class="node" x="265" y="320" width="320" height="90" rx="8"/>
+  <text class="label" x="425" y="365">Custom call</text>
+
+  <rect class="node" x="790" y="285" width="330" height="90" rx="8"/>
+  <text class="label" x="955" y="330">Internal XLA lowering</text>
+
+  <path class="neutral-path" d="M875 375 L835 435"/>
+  <path class="neutral-path" d="M1035 375 L1085 435"/>
+
+  <rect class="node" x="705" y="435" width="260" height="80" rx="8"/>
+  <text class="label" x="835" y="463">
+    <tspan x="835">XLA GPU</tspan>
+    <tspan x="835" dy="25">emitters</tspan>
+  </text>
+
+  <rect class="node" x="1000" y="435" width="170" height="80" rx="8"/>
+  <text class="label" x="1085" y="475">Triton</text>
+
+  <!-- Both routes descend directly into the backend map. -->
+  <path class="ffi-path" d="M400 410 V600"/>
+  <path class="xla-path" d="M450 410 V600"/>
+
+  <rect class="backend-area" x="65" y="600" width="1150" height="400" rx="10"/>
+
+  <!-- XLA-integrated libraries. -->
+  <rect class="xla-node" x="100" y="635" width="300" height="62" rx="7"/>
+  <text class="label" x="250" y="666">hipBLAS / hipBLASLt</text>
+
+  <rect class="xla-node" x="450" y="635" width="300" height="62" rx="7"/>
+  <text class="label" x="600" y="666">MIOpen</text>
+
+  <rect class="xla-node" x="800" y="635" width="300" height="62" rx="7"/>
+  <text class="label" x="950" y="666">hipFFT / rocFFT</text>
+
+  <rect class="xla-node" x="100" y="725" width="300" height="62" rx="7"/>
+  <text class="label" x="250" y="756">hipSOLVER / rocSOLVER</text>
+
+  <rect class="xla-node" x="450" y="725" width="300" height="62" rx="7"/>
+  <text class="label" x="600" y="756">hipSPARSE / rocSPARSE</text>
+
+  <rect class="xla-node" x="800" y="725" width="300" height="62" rx="7"/>
+  <text class="label" x="950" y="756">RCCL</text>
+
+  <!-- Framework- and package-selected FFI integrations. -->
+  <rect class="node" x="100" y="815" width="300" height="62" rx="7"/>
+  <text class="label" x="250" y="846">Transformer Engine</text>
+
+  <rect class="node" x="450" y="815" width="300" height="62" rx="7"/>
+  <text class="label" x="600" y="846">JAX-AITER</text>
+
+  <rect class="node" x="800" y="815" width="300" height="62" rx="7"/>
+  <text class="label" x="950" y="846">MORI</text>
+
+  <rect class="node" x="350" y="915" width="500" height="58" rx="7"/>
+  <text class="label" x="600" y="944">Many more ROCm backends</text>
+</svg>

@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1280 1115"
+     width="100%"
+     height="100%"
+     role="img"
+     aria-labelledby="title description">
+  <title id="title">MaxText configuration to JAX and ROCm backend routes</title>
+  <desc id="description">MaxText configuration selects a model and backend-specific code path. On ROCm, standard JAX operations enter the backend map as JAX primitives, while Transformer Engine, JAX-AITER, MORI, and other extensions enter it as FFI calls.</desc>
+
+  <style>
+    .canvas {
+      fill: #ffffff;
+    }
+    .node {
+      fill: #dceaf7;
+      stroke: #111827;
+      stroke-width: 1.6;
+    }
+    .inactive-node {
+      fill: #f8fafc;
+      stroke: #111827;
+      stroke-width: 1.6;
+    }
+    .xla-node {
+      fill: #dceaf7;
+      stroke: #111827;
+      stroke-width: 1.6;
+    }
+    .ffi-node {
+      fill: #dceaf7;
+      stroke: #111827;
+      stroke-width: 1.6;
+    }
+    .xla-path {
+      fill: none;
+      stroke: #f59e0b;
+      stroke-width: 2.6;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      marker-end: url(#arrow-orange);
+    }
+    .ffi-path {
+      fill: none;
+      stroke: #dc2626;
+      stroke-width: 2.6;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      marker-end: url(#arrow-red);
+    }
+    .neutral-path {
+      fill: none;
+      stroke: #111827;
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      marker-end: url(#arrow-neutral);
+    }
+    .neutral-line {
+      fill: none;
+      stroke: #111827;
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .label {
+      fill: #0f172a;
+      font-family: Inter, Arial, Helvetica, sans-serif;
+      font-size: 21px;
+      text-anchor: middle;
+      dominant-baseline: middle;
+    }
+    .small {
+      font-size: 16px;
+    }
+  </style>
+
+  <defs>
+    <marker id="arrow-orange"
+            orient="auto"
+            markerWidth="7"
+            markerHeight="7"
+            refX="6"
+            refY="3.5"
+            viewBox="0 0 7 7">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrow-red"
+            orient="auto"
+            markerWidth="7"
+            markerHeight="7"
+            refX="6"
+            refY="3.5"
+            viewBox="0 0 7 7">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-neutral"
+            orient="auto"
+            markerWidth="7"
+            markerHeight="7"
+            refX="6"
+            refY="3.5"
+            viewBox="0 0 7 7">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#111827"/>
+    </marker>
+  </defs>
+
+  <rect class="canvas" x="0" y="0" width="1280" height="1115"/>
+
+  <rect class="node" x="490" y="35" width="300" height="72" rx="8"/>
+  <text class="label" x="640" y="71">MaxText</text>
+
+  <path class="neutral-path" d="M640 107 V150"/>
+  <rect class="node" x="455" y="150" width="370" height="88" rx="8"/>
+  <text class="label" x="640" y="183">
+    <tspan x="640">Configuration</tspan>
+    <tspan class="small" x="640" dy="25">YAML and CLI flags</tspan>
+  </text>
+
+  <path class="neutral-path" d="M640 238 V285"/>
+  <rect class="node" x="430" y="285" width="420" height="92" rx="8"/>
+  <text class="label" x="640" y="318">
+    <tspan x="640">Model construction</tspan>
+    <tspan class="small" x="640" dy="25">Llama, Mixtral, and other architectures</tspan>
+  </text>
+
+  <path class="neutral-path" d="M640 377 V425"/>
+  <rect class="node" x="430" y="425" width="420" height="92" rx="8"/>
+  <text class="label" x="640" y="458">
+    <tspan x="640">Backend selection</tspan>
+    <tspan class="small" x="640" dy="25">platform- and feature-specific logic</tspan>
+  </text>
+
+  <path class="neutral-line" d="M640 517 V550 H155"/>
+  <path class="neutral-line" d="M640 550 H1125"/>
+  <path class="neutral-path" d="M155 550 V595"/>
+  <path class="neutral-path" d="M480 550 V595"/>
+  <path class="neutral-path" d="M800 550 V595"/>
+  <path class="neutral-path" d="M1125 550 V595"/>
+
+  <rect class="inactive-node" x="55" y="595" width="200" height="72" rx="8"/>
+  <text class="label" x="155" y="631">TPU</text>
+
+  <rect class="inactive-node" x="355" y="595" width="250" height="72" rx="8"/>
+  <text class="label" x="480" y="631">NVIDIA GPU</text>
+
+  <rect class="node" x="675" y="595" width="250" height="72" rx="8"/>
+  <text class="label" x="800" y="631">ROCm GPU</text>
+
+  <rect class="inactive-node" x="1025" y="595" width="200" height="72" rx="8"/>
+  <text class="label" x="1125" y="631">Custom</text>
+
+  <path class="neutral-path" d="M800 667 V720"/>
+  <rect class="node" x="565" y="720" width="470" height="90" rx="8"/>
+  <text class="label" x="800" y="753">
+    <tspan x="800">ROCm-specific feature path</tspan>
+    <tspan class="small" x="800" dy="25">selected while constructing the JAX program</tspan>
+  </text>
+
+  <path class="ffi-path" d="M710 810 L385 875"/>
+  <path class="xla-path" d="M890 810 L930 875"/>
+
+  <rect class="ffi-node" x="175" y="875" width="420" height="100" rx="8"/>
+  <text class="label" x="385" y="909">
+    <tspan x="385">Custom extension</tspan>
+    <tspan class="small" x="385" dy="25">Transformer Engine, JAX-AITER, MORI</tspan>
+    <tspan class="small" x="385" dy="22">and other FFI-backed packages</tspan>
+  </text>
+
+  <rect class="xla-node" x="680" y="875" width="500" height="100" rx="8"/>
+  <text class="label" x="930" y="901">
+    <tspan x="930">Standard JAX operations</tspan>
+    <tspan class="small" x="930" dy="25">matmul, attention, reductions, collectives</tspan>
+  </text>
+
+  <path class="ffi-path" d="M385 975 V1025"/>
+  <path class="xla-path" d="M930 975 V1025"/>
+
+  <rect class="ffi-node" x="235" y="1025" width="300" height="70" rx="8"/>
+  <text class="label" x="385" y="1060">FFI call</text>
+
+  <rect class="xla-node" x="780" y="1025" width="300" height="70" rx="8"/>
+  <text class="label" x="930" y="1060">JAX primitive</text>
+</svg>

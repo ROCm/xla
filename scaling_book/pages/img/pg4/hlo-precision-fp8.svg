@@ -1,0 +1,600 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml-stylesheet href="
+  data:text/css,
+  @import url(https://fonts.googleapis.com/css?family=Roboto:400,700);
+  svg text {
+    font-family: 'Roboto';
+    font-size: 12px;
+  }
+
+    %23node16:hover ~ %23edge20 text { fill: %231976d2; }
+  %23node16:hover ~ %23edge20 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node16:hover ~ %23edge20 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node17:hover ~ %23edge20 text { fill: %23d32f2f; }
+  %23node17:hover ~ %23edge20 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node17:hover ~ %23edge20 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node6:hover ~ %23edge19 text { fill: %231976d2; }
+  %23node6:hover ~ %23edge19 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node6:hover ~ %23edge19 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node16:hover ~ %23edge19 text { fill: %23d32f2f; }
+  %23node16:hover ~ %23edge19 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node16:hover ~ %23edge19 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node5:hover ~ %23edge18 text { fill: %231976d2; }
+  %23node5:hover ~ %23edge18 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node5:hover ~ %23edge18 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node16:hover ~ %23edge18 text { fill: %23d32f2f; }
+  %23node16:hover ~ %23edge18 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node16:hover ~ %23edge18 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node4:hover ~ %23edge17 text { fill: %231976d2; }
+  %23node4:hover ~ %23edge17 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node4:hover ~ %23edge17 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node16:hover ~ %23edge17 text { fill: %23d32f2f; }
+  %23node16:hover ~ %23edge17 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node16:hover ~ %23edge17 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node3:hover ~ %23edge16 text { fill: %231976d2; }
+  %23node3:hover ~ %23edge16 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node3:hover ~ %23edge16 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node16:hover ~ %23edge16 text { fill: %23d32f2f; }
+  %23node16:hover ~ %23edge16 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node16:hover ~ %23edge16 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node1:hover ~ %23edge14 text { fill: %231976d2; }
+  %23node1:hover ~ %23edge14 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node1:hover ~ %23edge14 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node16:hover ~ %23edge14 text { fill: %23d32f2f; }
+  %23node16:hover ~ %23edge14 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node16:hover ~ %23edge14 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node7:hover ~ %23edge1 text { fill: %231976d2; }
+  %23node7:hover ~ %23edge1 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node7:hover ~ %23edge1 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node9:hover ~ %23edge1 text { fill: %23d32f2f; }
+  %23node9:hover ~ %23edge1 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node9:hover ~ %23edge1 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node8:hover ~ %23edge2 text { fill: %231976d2; }
+  %23node8:hover ~ %23edge2 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node8:hover ~ %23edge2 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node11:hover ~ %23edge2 text { fill: %23d32f2f; }
+  %23node11:hover ~ %23edge2 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node11:hover ~ %23edge2 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node6:hover ~ %23edge3 text { fill: %231976d2; }
+  %23node6:hover ~ %23edge3 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node6:hover ~ %23edge3 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node11:hover ~ %23edge3 text { fill: %23d32f2f; }
+  %23node11:hover ~ %23edge3 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node11:hover ~ %23edge3 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node12:hover ~ %23edge7 text { fill: %231976d2; }
+  %23node12:hover ~ %23edge7 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node12:hover ~ %23edge7 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node13:hover ~ %23edge7 text { fill: %23d32f2f; }
+  %23node13:hover ~ %23edge7 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node13:hover ~ %23edge7 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node10:hover ~ %23edge4 text { fill: %231976d2; }
+  %23node10:hover ~ %23edge4 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node10:hover ~ %23edge4 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node11:hover ~ %23edge4 text { fill: %23d32f2f; }
+  %23node11:hover ~ %23edge4 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node11:hover ~ %23edge4 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node11:hover ~ %23edge10 text { fill: %231976d2; }
+  %23node11:hover ~ %23edge10 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node11:hover ~ %23edge10 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node15:hover ~ %23edge10 text { fill: %23d32f2f; }
+  %23node15:hover ~ %23edge10 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node15:hover ~ %23edge10 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node11:hover ~ %23edge9 text { fill: %231976d2; }
+  %23node11:hover ~ %23edge9 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node11:hover ~ %23edge9 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node15:hover ~ %23edge9 text { fill: %23d32f2f; }
+  %23node15:hover ~ %23edge9 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node15:hover ~ %23edge9 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node2:hover ~ %23edge15 text { fill: %231976d2; }
+  %23node2:hover ~ %23edge15 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node2:hover ~ %23edge15 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node16:hover ~ %23edge15 text { fill: %23d32f2f; }
+  %23node16:hover ~ %23edge15 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node16:hover ~ %23edge15 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node15:hover ~ %23edge13 text { fill: %231976d2; }
+  %23node15:hover ~ %23edge13 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node15:hover ~ %23edge13 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node16:hover ~ %23edge13 text { fill: %23d32f2f; }
+  %23node16:hover ~ %23edge13 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node16:hover ~ %23edge13 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node13:hover ~ %23edge8 text { fill: %231976d2; }
+  %23node13:hover ~ %23edge8 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node13:hover ~ %23edge8 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node14:hover ~ %23edge8 text { fill: %23d32f2f; }
+  %23node14:hover ~ %23edge8 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node14:hover ~ %23edge8 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node4:hover ~ %23edge6 text { fill: %231976d2; }
+  %23node4:hover ~ %23edge6 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node4:hover ~ %23edge6 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node13:hover ~ %23edge6 text { fill: %23d32f2f; }
+  %23node13:hover ~ %23edge6 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node13:hover ~ %23edge6 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node14:hover ~ %23edge11 text { fill: %231976d2; }
+  %23node14:hover ~ %23edge11 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node14:hover ~ %23edge11 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node15:hover ~ %23edge11 text { fill: %23d32f2f; }
+  %23node15:hover ~ %23edge11 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node15:hover ~ %23edge11 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node9:hover ~ %23edge5 text { fill: %231976d2; }
+  %23node9:hover ~ %23edge5 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node9:hover ~ %23edge5 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node13:hover ~ %23edge5 text { fill: %23d32f2f; }
+  %23node13:hover ~ %23edge5 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node13:hover ~ %23edge5 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+  %23node13:hover ~ %23edge12 text { fill: %231976d2; }
+  %23node13:hover ~ %23edge12 path { stroke: %231976d2; stroke-width: .2em; }
+  %23node13:hover ~ %23edge12 polygon { fill: %231976d2; stroke: %231976d2; stroke-width: .2em; }
+
+  %23node15:hover ~ %23edge12 text { fill: %23d32f2f; }
+  %23node15:hover ~ %23edge12 path { stroke: %23d32f2f; stroke-width: .2em; }
+  %23node15:hover ~ %23edge12 polygon { fill: %23d32f2f; stroke: %23d32f2f; stroke-width: .2em; }
+
+" type="text/css"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+ "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Generated by graphviz version 2.43.0 (0)
+ -->
+<!-- Title: G Pages: 1 -->
+<svg width="2077pt" height="973pt"
+ viewBox="0.00 0.00 2076.50 972.69" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 968.69)">
+<title>G</title>
+<g id="a_graph0"><a xlink:title=" ">
+<polygon fill="white" stroke="transparent" points="-4,4 -4,-968.69 2072.5,-968.69 2072.5,4 -4,4"/>
+<text text-anchor="start" x="953.25" y="-936.49" font-family="Times,serif" font-weight="bold" font-size="14.00">Computation main.1</text>
+<text text-anchor="start" x="954.25" y="-922.49" font-family="Times,serif" font-weight="bold" font-size="14.00">ENTRY computation</text>
+</a>
+</g>
+<!-- 1259871632 -->
+<g id="node1" class="node">
+<title>1259871632</title>
+<g id="a_node1"><a xlink:title=" ">
+<polygon fill="#ffe0b2" stroke="#cbae82" points="114,-304.69 0,-304.69 0,-268.69 114,-268.69 114,-304.69"/>
+<text text-anchor="start" x="8" y="-290.49" font-family="Times,serif" font-weight="bold" font-size="14.00">Parameter 0</text>
+<text text-anchor="start" x="22" y="-276.49" font-family="Times,serif" font-size="14.00">f32[1024]</text>
+</a>
+</g>
+</g>
+<!-- 1264872320 -->
+<g id="node16" class="node">
+<title>1264872320</title>
+<g id="a_node16"><a xlink:title=" ">
+<polygon fill="white" stroke="#9e9e9e" points="667,-162.69 145,-162.69 145,-112.69 667,-112.69 667,-162.69"/>
+<text text-anchor="start" x="378" y="-148.49" font-family="Times,serif" font-weight="bold" font-size="14.00">tuple.1</text>
+<text text-anchor="start" x="185.5" y="-134.49" font-family="Times,serif" font-size="14.00">(bf16[128,256], f32[1024], f32[1], f32[1024], f32[1], /*index...</text>
+<text text-anchor="start" x="153" y="-120.49" font-family="Times,serif" font-weight="bold" font-size="14.00">operand 0</text>
+<text text-anchor="start" x="232" y="-120.49" font-family="Times,serif" font-size="14.00"> = tuple&#45;element 0 of te_gemm_v2_ffi.3 bf16[128,256]{1,0}</text>
+</a>
+</g>
+</g>
+<!-- 1259871632&#45;&gt;1264872320 -->
+<g id="edge14" class="edge">
+<title>1259871632&#45;&gt;1264872320</title>
+<g id="a_edge14"><a xlink:title="state___overwrite_with_gradient____TEWrapper_dot_general_0____grad_amax_history__.1 &#45;&gt; tuple.1">
+<path fill="none" stroke="black" d="M65.13,-268.68C75.61,-248.66 95.79,-215.96 123,-198.69 144.9,-184.8 169.49,-174.06 194.78,-165.79"/>
+<polygon fill="none" stroke="black" points="196.02,-169.07 204.51,-162.73 193.92,-162.39 196.02,-169.07"/>
+</a>
+</g>
+<text text-anchor="middle" x="189.75" y="-172.53" font-family="Times,serif" font-size="14.00">1</text>
+</g>
+<!-- 1262887184 -->
+<g id="node2" class="node">
+<title>1262887184</title>
+<g id="a_node2"><a xlink:title=" ">
+<polygon fill="#ffe0b2" stroke="#cbae82" points="246,-304.69 132,-304.69 132,-268.69 246,-268.69 246,-304.69"/>
+<text text-anchor="start" x="140" y="-290.49" font-family="Times,serif" font-weight="bold" font-size="14.00">Parameter 1</text>
+<text text-anchor="start" x="167.5" y="-276.49" font-family="Times,serif" font-size="14.00">f32[1]</text>
+</a>
+</g>
+</g>
+<!-- 1262887184&#45;&gt;1264872320 -->
+<g id="edge15" class="edge">
+<title>1262887184&#45;&gt;1264872320</title>
+<g id="a_edge15"><a xlink:title="state___overwrite_with_gradient____TEWrapper_dot_general_0____grad_scale__.1 &#45;&gt; tuple.1">
+<path fill="none" stroke="black" d="M198.25,-268.41C209.39,-249.04 229.8,-217.85 255,-198.69 272.16,-185.65 292.52,-175.05 312.65,-166.59"/>
+<polygon fill="none" stroke="black" points="314.23,-169.73 322.19,-162.73 311.6,-163.24 314.23,-169.73"/>
+</a>
+</g>
+<text text-anchor="middle" x="308.55" y="-173.67" font-family="Times,serif" font-size="14.00">2</text>
+</g>
+<!-- 1264573168 -->
+<g id="node3" class="node">
+<title>1264573168</title>
+<g id="a_node3"><a xlink:title=" ">
+<polygon fill="#ffe0b2" stroke="#cbae82" points="378,-304.69 264,-304.69 264,-268.69 378,-268.69 378,-304.69"/>
+<text text-anchor="start" x="272" y="-290.49" font-family="Times,serif" font-weight="bold" font-size="14.00">Parameter 2</text>
+<text text-anchor="start" x="286" y="-276.49" font-family="Times,serif" font-size="14.00">f32[1024]</text>
+</a>
+</g>
+</g>
+<!-- 1264573168&#45;&gt;1264872320 -->
+<g id="edge16" class="edge">
+<title>1264573168&#45;&gt;1264872320</title>
+<g id="a_edge16"><a xlink:title="state___overwrite_with_gradient____TEWrapper_dot_general_0____kernel_amax_history__.1 &#45;&gt; tuple.1">
+<path fill="none" stroke="black" d="M330.92,-268.54C344.61,-244.86 369.58,-201.68 386.94,-171.65"/>
+<polygon fill="none" stroke="black" points="390.09,-173.19 392.07,-162.79 384.03,-169.69 390.09,-173.19"/>
+</a>
+</g>
+<text text-anchor="middle" x="390.31" y="-179.01" font-family="Times,serif" font-size="14.00">3</text>
+</g>
+<!-- 1262358000 -->
+<g id="node4" class="node">
+<title>1262358000</title>
+<g id="a_node4"><a xlink:title=" ">
+<polygon fill="#ffe0b2" stroke="#cbae82" points="897,-828.69 783,-828.69 783,-792.69 897,-792.69 897,-828.69"/>
+<text text-anchor="start" x="791" y="-814.49" font-family="Times,serif" font-weight="bold" font-size="14.00">Parameter 3</text>
+<text text-anchor="start" x="818.5" y="-800.49" font-family="Times,serif" font-size="14.00">f32[1]</text>
+</a>
+</g>
+</g>
+<!-- 1263271232 -->
+<g id="node13" class="node">
+<title>1263271232</title>
+<g id="a_node13"><a xlink:title=" ">
+<polygon fill="#2e7d32" stroke="#005005" points="1988,-742.69 1170,-742.69 1170,-594.69 1988,-594.69 1988,-742.69"/>
+<text text-anchor="start" x="1485" y="-728.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">te_dbias_quantize_ffi.24</text>
+<text text-anchor="start" x="1538" y="-714.49" font-family="Times,serif" font-size="14.00" fill="white">custom&#45;call</text>
+<text text-anchor="start" x="1424.5" y="-700.49" font-family="Times,serif" font-size="14.00" fill="white">custom_call_target=&quot;te_dbias_quantize_ffi&quot;</text>
+<text text-anchor="start" x="1178" y="-686.49" font-family="Times,serif" font-size="14.00" fill="white">operand_layout_constraints={bf16[256,256]{1,0}, f32[1]{0}, f32[1]{0}, u32[0]{0}, f32[1]{0}, bf16[1,1]{1,0}}</text>
+<text text-anchor="start" x="1424.5" y="-672.49" font-family="Times,serif" font-size="14.00" fill="white">output_to_operand_aliasing={{4}: (2, {})}</text>
+<text text-anchor="start" x="1438" y="-658.49" font-family="Times,serif" font-size="14.00" fill="white">api_version=API_VERSION_TYPED_FFI</text>
+<text text-anchor="start" x="1340" y="-644.49" font-family="Times,serif" font-size="14.00" fill="white">(f8e4m3fn[256,256]{1,0}, f8e4m3fn[1]{0}, f32[1]{0}, f32[1]{0}...</text>
+<text text-anchor="start" x="1491.5" y="-630.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">operand 2</text>
+<text text-anchor="start" x="1570.5" y="-630.49" font-family="Times,serif" font-size="14.00" fill="white"> = f32[1] {0}</text>
+<text text-anchor="start" x="1489" y="-616.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">operand 3</text>
+<text text-anchor="start" x="1568" y="-616.49" font-family="Times,serif" font-size="14.00" fill="white"> = {} (u32[0])</text>
+<text text-anchor="start" x="1491.5" y="-602.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">operand 4</text>
+<text text-anchor="start" x="1570.5" y="-602.49" font-family="Times,serif" font-size="14.00" fill="white"> = f32[1] {0}</text>
+</a>
+</g>
+</g>
+<!-- 1262358000&#45;&gt;1263271232 -->
+<g id="edge6" class="edge">
+<title>1262358000&#45;&gt;1263271232</title>
+<g id="a_edge6"><a xlink:title="state___overwrite_with_gradient____TEWrapper_dot_general_0____kernel_scale__.1 &#45;&gt; te_dbias_quantize_ffi.24">
+<path fill="none" stroke="black" d="M897.07,-798.88C961.05,-786.76 1070.71,-765.99 1183.62,-744.6"/>
+<polygon fill="none" stroke="black" points="1184.32,-748.03 1193.49,-742.73 1183.02,-741.15 1184.32,-748.03"/>
+</a>
+</g>
+<text text-anchor="middle" x="1177.26" y="-750.7" font-family="Times,serif" font-size="14.00">1</text>
+</g>
+<!-- 1262358000&#45;&gt;1264872320 -->
+<g id="edge17" class="edge">
+<title>1262358000&#45;&gt;1264872320</title>
+<g id="a_edge17"><a xlink:title="state___overwrite_with_gradient____TEWrapper_dot_general_0____kernel_scale__.1 &#45;&gt; tuple.1">
+<path fill="none" stroke="black" d="M782.95,-804.12C704.67,-795.34 569.59,-775.8 534,-742.69 367.99,-588.28 388.92,-276.71 401.21,-173.08"/>
+<polygon fill="none" stroke="black" points="404.72,-173.23 402.48,-162.88 397.77,-172.37 404.72,-173.23"/>
+</a>
+</g>
+<text text-anchor="middle" x="408.64" y="-178.21" font-family="Times,serif" font-size="14.00">4</text>
+</g>
+<!-- 1263281552 -->
+<g id="node5" class="node">
+<title>1263281552</title>
+<g id="a_node5"><a xlink:title=" ">
+<polygon fill="#ffe0b2" stroke="#cbae82" points="548,-304.69 434,-304.69 434,-268.69 548,-268.69 548,-304.69"/>
+<text text-anchor="start" x="442" y="-290.49" font-family="Times,serif" font-weight="bold" font-size="14.00">Parameter 4</text>
+<text text-anchor="start" x="456" y="-276.49" font-family="Times,serif" font-size="14.00">f32[1024]</text>
+</a>
+</g>
+</g>
+<!-- 1263281552&#45;&gt;1264872320 -->
+<g id="edge18" class="edge">
+<title>1263281552&#45;&gt;1264872320</title>
+<g id="a_edge18"><a xlink:title="state___overwrite_with_gradient____TEWrapper_dot_general_0____x_amax_history__.1 &#45;&gt; tuple.1">
+<path fill="none" stroke="black" d="M481.08,-268.54C467.39,-244.86 442.42,-201.68 425.06,-171.65"/>
+<polygon fill="none" stroke="black" points="427.97,-169.69 419.93,-162.79 421.91,-173.19 427.97,-169.69"/>
+</a>
+</g>
+<text text-anchor="middle" x="436.32" y="-170.55" font-family="Times,serif" font-size="14.00">5</text>
+</g>
+<!-- 1262961392 -->
+<g id="node6" class="node">
+<title>1262961392</title>
+<g id="a_node6"><a xlink:title=" ">
+<polygon fill="#ffe0b2" stroke="#cbae82" points="657,-686.69 543,-686.69 543,-650.69 657,-650.69 657,-686.69"/>
+<text text-anchor="start" x="551" y="-672.49" font-family="Times,serif" font-weight="bold" font-size="14.00">Parameter 5</text>
+<text text-anchor="start" x="578.5" y="-658.49" font-family="Times,serif" font-size="14.00">f32[1]</text>
+</a>
+</g>
+</g>
+<!-- 1284249152 -->
+<g id="node11" class="node">
+<title>1284249152</title>
+<g id="a_node11"><a xlink:title=" ">
+<polygon fill="#2e7d32" stroke="#005005" points="1422,-558.69 604,-558.69 604,-410.69 1422,-410.69 1422,-558.69"/>
+<text text-anchor="start" x="919" y="-544.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">te_dbias_quantize_ffi.16</text>
+<text text-anchor="start" x="972" y="-530.49" font-family="Times,serif" font-size="14.00" fill="white">custom&#45;call</text>
+<text text-anchor="start" x="858.5" y="-516.49" font-family="Times,serif" font-size="14.00" fill="white">custom_call_target=&quot;te_dbias_quantize_ffi&quot;</text>
+<text text-anchor="start" x="612" y="-502.49" font-family="Times,serif" font-size="14.00" fill="white">operand_layout_constraints={bf16[128,256]{1,0}, f32[1]{0}, f32[1]{0}, u32[0]{0}, f32[1]{0}, bf16[1,1]{1,0}}</text>
+<text text-anchor="start" x="858.5" y="-488.49" font-family="Times,serif" font-size="14.00" fill="white">output_to_operand_aliasing={{4}: (2, {})}</text>
+<text text-anchor="start" x="872" y="-474.49" font-family="Times,serif" font-size="14.00" fill="white">api_version=API_VERSION_TYPED_FFI</text>
+<text text-anchor="start" x="774" y="-460.49" font-family="Times,serif" font-size="14.00" fill="white">(f8e4m3fn[128,256]{1,0}, f8e4m3fn[1]{0}, f32[1]{0}, f32[1]{0}...</text>
+<text text-anchor="start" x="925.5" y="-446.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">operand 2</text>
+<text text-anchor="start" x="1004.5" y="-446.49" font-family="Times,serif" font-size="14.00" fill="white"> = f32[1] {0}</text>
+<text text-anchor="start" x="923" y="-432.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">operand 3</text>
+<text text-anchor="start" x="1002" y="-432.49" font-family="Times,serif" font-size="14.00" fill="white"> = {} (u32[0])</text>
+<text text-anchor="start" x="925.5" y="-418.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">operand 4</text>
+<text text-anchor="start" x="1004.5" y="-418.49" font-family="Times,serif" font-size="14.00" fill="white"> = f32[1] {0}</text>
+</a>
+</g>
+</g>
+<!-- 1262961392&#45;&gt;1284249152 -->
+<g id="edge3" class="edge">
+<title>1262961392&#45;&gt;1284249152</title>
+<g id="a_edge3"><a xlink:title="state___overwrite_with_gradient____TEWrapper_dot_general_0____x_scale__.1 &#45;&gt; te_dbias_quantize_ffi.16">
+<path fill="none" stroke="black" d="M617,-650.52C633.95,-634.21 661.38,-609.99 689,-594.69 709.99,-583.07 732.43,-572.4 755.34,-562.67"/>
+<polygon fill="none" stroke="black" points="756.96,-565.79 764.84,-558.7 754.26,-559.33 756.96,-565.79"/>
+</a>
+</g>
+<text text-anchor="middle" x="751.37" y="-569.79" font-family="Times,serif" font-size="14.00">1</text>
+</g>
+<!-- 1262961392&#45;&gt;1264872320 -->
+<g id="edge19" class="edge">
+<title>1262961392&#45;&gt;1264872320</title>
+<g id="a_edge19"><a xlink:title="state___overwrite_with_gradient____TEWrapper_dot_general_0____x_scale__.1 &#45;&gt; tuple.1">
+<path fill="none" stroke="black" d="M598.94,-650.64C593.75,-568.55 570.83,-217.19 557,-198.69 547.28,-185.69 534.3,-175.5 520.01,-167.52"/>
+<polygon fill="none" stroke="black" points="521.45,-164.32 510.96,-162.83 518.23,-170.54 521.45,-164.32"/>
+</a>
+</g>
+<text text-anchor="middle" x="530.95" y="-159.97" font-family="Times,serif" font-size="14.00">6</text>
+</g>
+<!-- 1265156176 -->
+<g id="node7" class="node">
+<title>1265156176</title>
+<g id="a_node7"><a xlink:title=" ">
+<polygon fill="#ffb74d" stroke="#c88719" points="1524.5,-914.69 1375.5,-914.69 1375.5,-878.69 1524.5,-878.69 1524.5,-914.69"/>
+<text text-anchor="start" x="1401" y="-900.49" font-family="Times,serif" font-weight="bold" font-size="14.00">Parameter 6</text>
+<text text-anchor="start" x="1383.5" y="-886.49" font-family="Times,serif" font-size="14.00">f32[256,256]{1,0}</text>
+</a>
+</g>
+</g>
+<!-- 1262773488 -->
+<g id="node9" class="node">
+<title>1262773488</title>
+<g id="a_node9"><a xlink:title=" ">
+<polygon fill="white" stroke="#9e9e9e" points="1551,-828.69 1349,-828.69 1349,-792.69 1551,-792.69 1551,-828.69"/>
+<text text-anchor="start" x="1357" y="-814.49" font-family="Times,serif" font-weight="bold" font-size="14.00">convert_element_type.1</text>
+<text text-anchor="start" x="1379" y="-800.49" font-family="Times,serif" font-size="14.00">bf16[256,256]{1,0}</text>
+</a>
+</g>
+</g>
+<!-- 1265156176&#45;&gt;1262773488 -->
+<g id="edge1" class="edge">
+<title>1265156176&#45;&gt;1262773488</title>
+<g id="a_edge1"><a xlink:title="state__params____kernel__.1 &#45;&gt; convert_element_type.1">
+<path fill="none" stroke="black" d="M1450,-878.29C1450,-866.95 1450,-851.92 1450,-839.01"/>
+<polygon fill="black" stroke="black" points="1453.5,-838.79 1450,-828.79 1446.5,-838.79 1453.5,-838.79"/>
+</a>
+</g>
+</g>
+<!-- 1260371232 -->
+<g id="node8" class="node">
+<title>1260371232</title>
+<g id="a_node8"><a xlink:title=" ">
+<polygon fill="#ffb74d" stroke="#c88719" points="856,-686.69 698,-686.69 698,-650.69 856,-650.69 856,-686.69"/>
+<text text-anchor="start" x="728" y="-672.49" font-family="Times,serif" font-weight="bold" font-size="14.00">Parameter 7</text>
+<text text-anchor="start" x="706" y="-658.49" font-family="Times,serif" font-size="14.00">bf16[128,256]{1,0}</text>
+</a>
+</g>
+</g>
+<!-- 1260371232&#45;&gt;1284249152 -->
+<g id="edge2" class="edge">
+<title>1260371232&#45;&gt;1284249152</title>
+<g id="a_edge2"><a xlink:title="x.1 &#45;&gt; te_dbias_quantize_ffi.16">
+<path fill="none" stroke="black" d="M797,-650.54C814.66,-635.53 841.23,-613.28 865,-594.69 877.49,-584.93 890.71,-574.84 903.9,-564.94"/>
+<polygon fill="black" stroke="black" points="906.19,-567.59 912.1,-558.8 902,-561.99 906.19,-567.59"/>
+</a>
+</g>
+<text text-anchor="middle" x="902.66" y="-572.73" font-family="Times,serif" font-size="14.00">0</text>
+</g>
+<!-- 1262773488&#45;&gt;1263271232 -->
+<g id="edge5" class="edge">
+<title>1262773488&#45;&gt;1263271232</title>
+<g id="a_edge5"><a xlink:title="convert_element_type.1 &#45;&gt; te_dbias_quantize_ffi.24">
+<path fill="none" stroke="black" d="M1465.82,-792.53C1475.97,-781.51 1489.97,-766.32 1504.66,-750.37"/>
+<polygon fill="black" stroke="black" points="1507.25,-752.72 1511.45,-743 1502.1,-747.98 1507.25,-752.72"/>
+</a>
+</g>
+<text text-anchor="middle" x="1505.39" y="-758.36" font-family="Times,serif" font-size="14.00">0</text>
+</g>
+<!-- 1284016768 -->
+<g id="node10" class="node">
+<title>1284016768</title>
+<g id="a_node10"><a xlink:title=" ">
+<polygon fill="#2e7d32" stroke="#005005" points="1152,-700.69 874,-700.69 874,-636.69 1152,-636.69 1152,-700.69"/>
+<text text-anchor="start" x="982" y="-686.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">empty.2</text>
+<text text-anchor="start" x="972" y="-672.49" font-family="Times,serif" font-size="14.00" fill="white">custom&#45;call</text>
+<text text-anchor="start" x="882" y="-658.49" font-family="Times,serif" font-size="14.00" fill="white">custom_call_target=&quot;AllocateBuffer&quot;</text>
+<text text-anchor="start" x="960" y="-644.49" font-family="Times,serif" font-size="14.00" fill="white">bf16[1,1]{1,0}</text>
+</a>
+</g>
+</g>
+<!-- 1284016768&#45;&gt;1284249152 -->
+<g id="edge4" class="edge">
+<title>1284016768&#45;&gt;1284249152</title>
+<g id="a_edge4"><a xlink:title="empty.2 &#45;&gt; te_dbias_quantize_ffi.16">
+<path fill="none" stroke="black" d="M1013,-636.41C1013,-617.73 1013,-593.05 1013,-569.08"/>
+<polygon fill="none" stroke="black" points="1016.5,-568.87 1013,-558.87 1009.5,-568.87 1016.5,-568.87"/>
+</a>
+</g>
+<text text-anchor="middle" x="1021.45" y="-573.29" font-family="Times,serif" font-size="14.00">5</text>
+</g>
+<!-- 1266213312 -->
+<g id="node15" class="node">
+<title>1266213312</title>
+<g id="a_node15"><a xlink:title=" ">
+<polygon fill="#2e7d32" stroke="#005005" points="1614,-374.69 604,-374.69 604,-198.69 1614,-198.69 1614,-374.69"/>
+<text text-anchor="start" x="1042" y="-360.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">te_gemm_v2_ffi.3</text>
+<text text-anchor="start" x="1068" y="-346.49" font-family="Times,serif" font-size="14.00" fill="white">custom&#45;call</text>
+<text text-anchor="start" x="973.5" y="-332.49" font-family="Times,serif" font-size="14.00" fill="white">custom_call_target=&quot;te_gemm_v2_ffi&quot;</text>
+<text text-anchor="start" x="612" y="-318.49" font-family="Times,serif" font-size="14.00" fill="white">operand_layout_constraints={f8e4m3fn[128,256]{1,0}, f32[1]{0}, f8e4m3fn[256,256]{1,0}, f32[1]{0}, bf16[0]{0}, f32[1]{0}, f32[1]{0}}</text>
+<text text-anchor="start" x="968" y="-304.49" font-family="Times,serif" font-size="14.00" fill="white">api_version=API_VERSION_TYPED_FFI</text>
+<text text-anchor="start" x="964.5" y="-290.49" font-family="Times,serif" font-size="14.00" fill="white">(bf16[128,256]{1,0}, u8[67109120]{0})</text>
+<text text-anchor="start" x="814.5" y="-276.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">operand 0</text>
+<text text-anchor="start" x="893.5" y="-276.49" font-family="Times,serif" font-size="14.00" fill="white"> = tuple&#45;element 0 of te_dbias_quantize_ffi.16 f8e4m3fn[128,256]{1,0}</text>
+<text text-anchor="start" x="868.5" y="-262.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">operand 1</text>
+<text text-anchor="start" x="947.5" y="-262.49" font-family="Times,serif" font-size="14.00" fill="white"> = tuple&#45;element 2 of te_dbias_quantize_ffi.16 f32[1]{0}</text>
+<text text-anchor="start" x="868.5" y="-248.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">operand 3</text>
+<text text-anchor="start" x="947.5" y="-248.49" font-family="Times,serif" font-size="14.00" fill="white"> = tuple&#45;element 2 of te_dbias_quantize_ffi.24 f32[1]{0}</text>
+<text text-anchor="start" x="1016.5" y="-234.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">operand 4</text>
+<text text-anchor="start" x="1095.5" y="-234.49" font-family="Times,serif" font-size="14.00" fill="white"> = {} (bf16[0])</text>
+<text text-anchor="start" x="1021.5" y="-220.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">operand 5</text>
+<text text-anchor="start" x="1100.5" y="-220.49" font-family="Times,serif" font-size="14.00" fill="white"> = f32[1] {1}</text>
+<text text-anchor="start" x="1021.5" y="-206.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">operand 6</text>
+<text text-anchor="start" x="1100.5" y="-206.49" font-family="Times,serif" font-size="14.00" fill="white"> = f32[1] {0}</text>
+</a>
+</g>
+</g>
+<!-- 1284249152&#45;&gt;1266213312 -->
+<g id="edge9" class="edge">
+<title>1284249152&#45;&gt;1266213312</title>
+<g id="a_edge9"><a xlink:title="te_dbias_quantize_ffi.16 &#45;&gt; te_gemm_v2_ffi.3">
+<path fill="none" stroke="black" d="M1042.33,-410.43C1046.42,-401.8 1050.72,-392.89 1055.08,-384"/>
+<polygon fill="black" stroke="black" points="1058.36,-385.27 1059.65,-374.75 1052.08,-382.17 1058.36,-385.27"/>
+</a>
+</g>
+<text text-anchor="middle" x="1059.2" y="-391.05" font-family="Times,serif" font-size="14.00">0</text>
+</g>
+<!-- 1284249152&#45;&gt;1266213312 -->
+<g id="edge10" class="edge">
+<title>1284249152&#45;&gt;1266213312</title>
+<g id="a_edge10"><a xlink:title="te_dbias_quantize_ffi.16 &#45;&gt; te_gemm_v2_ffi.3">
+<path fill="none" stroke="black" d="M1055.44,-410.43C1059.81,-401.8 1064.23,-392.89 1068.58,-384"/>
+<polygon fill="black" stroke="black" points="1071.85,-385.28 1073.07,-374.75 1065.55,-382.22 1071.85,-385.28"/>
+</a>
+</g>
+<text text-anchor="middle" x="1072.75" y="-391.05" font-family="Times,serif" font-size="14.00">1</text>
+</g>
+<!-- 1263121280 -->
+<g id="node12" class="node">
+<title>1263121280</title>
+<g id="a_node12"><a xlink:title=" ">
+<polygon fill="#2e7d32" stroke="#005005" points="1847,-842.69 1569,-842.69 1569,-778.69 1847,-778.69 1847,-842.69"/>
+<text text-anchor="start" x="1677" y="-828.49" font-family="Times,serif" font-weight="bold" font-size="14.00" fill="white">empty.3</text>
+<text text-anchor="start" x="1667" y="-814.49" font-family="Times,serif" font-size="14.00" fill="white">custom&#45;call</text>
+<text text-anchor="start" x="1577" y="-800.49" font-family="Times,serif" font-size="14.00" fill="white">custom_call_target=&quot;AllocateBuffer&quot;</text>
+<text text-anchor="start" x="1655" y="-786.49" font-family="Times,serif" font-size="14.00" fill="white">bf16[1,1]{1,0}</text>
+</a>
+</g>
+</g>
+<!-- 1263121280&#45;&gt;1263271232 -->
+<g id="edge7" class="edge">
+<title>1263121280&#45;&gt;1263271232</title>
+<g id="a_edge7"><a xlink:title="empty.3 &#45;&gt; te_dbias_quantize_ffi.24">
+<path fill="none" stroke="black" d="M1679.37,-778.62C1671.43,-770 1662.42,-760.22 1653.14,-750.15"/>
+<polygon fill="none" stroke="black" points="1655.69,-747.76 1646.34,-742.78 1650.54,-752.5 1655.69,-747.76"/>
+</a>
+</g>
+<text text-anchor="middle" x="1664.84" y="-746.68" font-family="Times,serif" font-size="14.00">5</text>
+</g>
+<!-- 1265100800 -->
+<g id="node14" class="node">
+<title>1265100800</title>
+<g id="a_node14"><a xlink:title=" ">
+<polygon fill="#c8e6c9" stroke="#97b498" points="2068.5,-516.69 1477.5,-516.69 1477.5,-452.69 2068.5,-452.69 2068.5,-516.69"/>
+<text text-anchor="start" x="1726.5" y="-502.49" font-family="Times,serif" font-weight="bold" font-size="14.00">transpose.1</text>
+<text text-anchor="start" x="1706" y="-488.49" font-family="Times,serif" font-size="14.00">dimensions={1,0}</text>
+<text text-anchor="start" x="1684" y="-474.49" font-family="Times,serif" font-size="14.00">f8e4m3fn[256,256]{0,1}</text>
+<text text-anchor="start" x="1485.5" y="-460.49" font-family="Times,serif" font-weight="bold" font-size="14.00">operand</text>
+<text text-anchor="start" x="1550.5" y="-460.49" font-family="Times,serif" font-size="14.00"> = tuple&#45;element 0 of te_dbias_quantize_ffi.24 f8e4m3fn[256,256]{1,0}</text>
+</a>
+</g>
+</g>
+<!-- 1263271232&#45;&gt;1265100800 -->
+<g id="edge8" class="edge">
+<title>1263271232&#45;&gt;1265100800</title>
+<g id="a_edge8"><a xlink:title="te_dbias_quantize_ffi.24 &#45;&gt; transpose.1">
+<path fill="none" stroke="black" d="M1657.07,-594.45C1682.87,-570.24 1710.54,-544.29 1732.37,-523.81"/>
+<polygon fill="black" stroke="black" points="1734.94,-526.2 1739.84,-516.8 1730.15,-521.09 1734.94,-526.2"/>
+</a>
+</g>
+</g>
+<!-- 1263271232&#45;&gt;1266213312 -->
+<g id="edge12" class="edge">
+<title>1263271232&#45;&gt;1266213312</title>
+<g id="a_edge12"><a xlink:title="te_dbias_quantize_ffi.24 &#45;&gt; te_gemm_v2_ffi.3">
+<path fill="none" stroke="black" d="M1494.84,-594.41C1485.12,-583.19 1476.15,-571.17 1469,-558.69 1435.22,-499.78 1476.22,-461.36 1431,-410.69 1421.29,-399.81 1410.51,-389.88 1398.95,-380.83"/>
+<polygon fill="black" stroke="black" points="1400.91,-377.93 1390.82,-374.7 1396.7,-383.52 1400.91,-377.93"/>
+</a>
+</g>
+<text text-anchor="middle" x="1410.38" y="-375.17" font-family="Times,serif" font-size="14.00">3</text>
+</g>
+<!-- 1265100800&#45;&gt;1266213312 -->
+<g id="edge11" class="edge">
+<title>1265100800&#45;&gt;1266213312</title>
+<g id="a_edge11"><a xlink:title="transpose.1 &#45;&gt; te_gemm_v2_ffi.3">
+<path fill="none" stroke="black" d="M1667.79,-452.64C1598.83,-432.28 1504.86,-404.54 1413.67,-377.63"/>
+<polygon fill="black" stroke="black" points="1414.58,-374.25 1404,-374.77 1412.6,-380.96 1414.58,-374.25"/>
+</a>
+</g>
+<text text-anchor="middle" x="1423.78" y="-368.1" font-family="Times,serif" font-size="14.00">2</text>
+</g>
+<!-- 1266213312&#45;&gt;1264872320 -->
+<g id="edge13" class="edge">
+<title>1266213312&#45;&gt;1264872320</title>
+<g id="a_edge13"><a xlink:title="te_gemm_v2_ffi.3 &#45;&gt; tuple.1">
+<path fill="none" stroke="black" d="M692.7,-198.64C633.92,-186.35 577.65,-174.59 530.77,-164.78"/>
+<polygon fill="black" stroke="black" points="531.41,-161.34 520.91,-162.72 529.98,-168.19 531.41,-161.34"/>
+</a>
+</g>
+<text text-anchor="middle" x="540.38" y="-154.46" font-family="Times,serif" font-size="14.00">0</text>
+</g>
+<!-- cluster_1283629856 -->
+<g id="node17" class="node">
+<title>cluster_1283629856</title>
+<g id="a_node17"><a xlink:title=" ">
+<ellipse fill="#bcaaa4" stroke="#8c7b75" cx="406" cy="-38.35" rx="38.19" ry="38.19"/>
+<text text-anchor="start" x="384.5" y="-34.65" font-family="Times,serif" font-size="14.00">ROOT</text>
+</a>
+</g>
+</g>
+<!-- 1264872320&#45;&gt;cluster_1283629856 -->
+<g id="edge20" class="edge">
+<title>1264872320&#45;&gt;cluster_1283629856</title>
+<g id="a_edge20"><a xlink:title=" ">
+<path fill="none" stroke="black" d="M406,-112.63C406,-104.78 406,-95.76 406,-86.8"/>
+<polygon fill="black" stroke="black" points="409.5,-86.77 406,-76.77 402.5,-86.77 409.5,-86.77"/>
+</a>
+</g>
+</g>
+</g>
+</svg>
