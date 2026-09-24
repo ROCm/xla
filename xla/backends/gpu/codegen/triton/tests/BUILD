@@ -93,6 +93,7 @@ lit_device_test(
     backends = [
         "h100",
         "b200",
+        "amdgpu_any",
     ],
     data = [
         "//xla/backends/gpu/target_config:all_gpu_specs",

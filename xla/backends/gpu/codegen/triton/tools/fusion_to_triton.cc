@@ -72,8 +72,13 @@ absl::Status RealMain(absl::string_view input_file) {
       BlockLevelParameters::FromBlockLevelFusionConfig(
           backend_config.block_level_fusion_config());
 
+  // Derive the device description from an explicit target config when one is
+  // provided. Otherwise fall back to a device that matches the platform this
+  // tool was built for (NVIDIA on CUDA builds, AMD on ROCm builds) instead of
+  // unconditionally defaulting to an NVIDIA device.
+  // For a specific architecture, pass --xla_gpu_target_config_filename
   stream_executor::DeviceDescription device_info =
-      TestGpuDeviceInfo::RTXA6000DeviceInfo();
+      TestGpuDeviceInfo::CudaOrRocmDeviceInfo();
   const std::string& target_config_filename =
       hlo_module->config().debug_options().xla_gpu_target_config_filename();
   if (!target_config_filename.empty()) {
