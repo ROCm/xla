@@ -354,6 +354,29 @@ cc_library(
     ],
 )
 
+xla_test(
+    name = "gpu_hsaco_bundle_test",
+    srcs = ["gpu_hsaco_bundle_test.cc"],
+    backends = ["gpu"],
+    tags = ["rocm-only"],
+    deps = [
+        ":asm_compiler",
+        "//xla:debug_options_flags",
+        "//xla/service/gpu/llvm_gpu_backend:amdgpu_backend",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:platform_manager",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/rocm:rocm_platform",  # buildcleaner: keep
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:rocm_rocdl_path",
+        "//xla/tsl/platform:statusor",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//llvm:AsmParser",
+        "@llvm-project//llvm:ir_headers",
+        "@tsl//tsl/platform:path",
+    ],
+)
+
 cc_library(
     name = "redzone_allocator_kernel",
     hdrs = [
