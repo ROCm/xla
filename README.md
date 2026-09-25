@@ -1,6 +1,6 @@
 # ROCm/XLA Dev Infrastructure Branch
 This is the `rocm-dev-infra` branch — the default branch of the [`ROCm/xla`](https://github.com/ROCm/xla) fork of [`openxla/xla`](https://github.com/openxla/xla).
-It hosts GitHub Actions workflows, CI/CD infrastructure, Debug and Performance Tools and serves as a central index for all ROCm JAX/XLA release branches.
+It hosts GitHub Actions workflows, CI/CD infrastructure, Debug and Performance Tools, the JAX Scaling Book for AMD GPUs, and serves as a central index for all ROCm JAX/XLA release branches.
 
 The **`main`** branch is an exact mirror of `openxla/xla:main` and should never
 contain fork-specific commits. This separation ensures the `merge-upstream` API
@@ -14,6 +14,7 @@ contain fork-specific commits. This separation ensures the `merge-upstream` API
 - [OpenXLA Upstream CI Checks](#openxla-upstream-ci-checks)
 - [Debug Tools](#debug-tools)
 - [Performance Tools](#performance-tools)
+- [Scaling Book](#scaling-book)
 - [Workflows](#workflows)
 
 ## XLA Branches for JAX
@@ -130,6 +131,20 @@ Performance and regression micro-benchmarks for AMD GPUs (ROCm). See [`perf_tool
 | [`perf_tools/rocm_latency_check_tool`](perf_tools/rocm_latency_check_tool) | HIP-runtime-only micro-benchmark measuring end-to-end per-request dispatch latency (H2D → compute → D2D → compute → D2H) and comparing it across ROCm versions. Reports a latency percentile histogram plus QPS and can append version-stamped rows to a CSV for regression tracking. |
 | [`perf_tools/hlo_eval_tools`](perf_tools/hlo_eval_tools) | Per-module HLO micro-benchmarks built on `multihost_hlo_runner`. Replays the pre-optimization HLO dumps (training and inference) from real JAX models one module at a time to measure each submodule's cost on XLA, and appends the timings to a CSV for regression tracking across ROCm/XLA versions. Covers models across four categories: LLM, vision, multimodal, and science. |
 
+## Scaling Book
+
+The scaling book is a companion to [Google's JAX Scaling Book](https://jax-ml.github.io/scaling-book/) for AMD GPU users, covering performance features for JAX training at the implementation layer (ROCm libraries, MaxText, XLA internals, and JAX APIs).
+
+The `scaling_book/` directory contains the Jekyll site served on GitHub Pages. Page content can be found at `scaling_book/pages/` with images at `scaling_book/pages/img/`.
+
+Reference reproductions for the case studies can be found at the following locations:
+
+| Folder | Description |
+|--------|-------------|
+| [`scaling_book/llama7b-jax-fundamentals`](scaling_book/llama7b-jax-fundamentals) | Rematerialisation, attention backends, and profiling examples |
+| [`scaling_book/llama70b-mixed-precision-training`](scaling_book/llama70b-mixed-precision-training) | Mixed quantization experiments in BF16, FP16, FP8, MXFP8, and MXFP4 |
+| [`scaling_book/mixtral8-22b-distributed-strategies`](scaling_book/mixtral8-22b-distributed-strategies) | Sharding and grouped GEMM experiments |
+
 ## Workflows
 
 GitHub Actions workflows and PR labels that drive automation in this fork.
@@ -142,6 +157,7 @@ GitHub Actions workflows and PR labels that drive automation in this fork.
 | `claude_auto_review.yml`     | Every PR opened against a branch that has `pr_event_dispatch.yml` | Automatically runs Claude-Opus-5 powered code review on every pull request                                                                                                                          |
 | `therock_xla_ci_nightly.yml` | Nightly at 5 AM UTC                                               | Runs the latest XLA (openxla/xla) and latest JAX (jax-ml/jax) unit tests suite and sanitizers TSAN, ASAN (using `therock_xla_ci_sanitizers.yml` script) on the latest [theRock nightlies](https://rocm.nightlies.amd.com/whl-multi-arch/rocm-sdk-devel/). Currently pinned to version 10.1 nightly |
 | `rocm_infra_monitor.yml`     | Every 1h                                                          | Analyzes xla upstream PRs to detect infrastructure problems. If infra problem is detected then new issue is created.                                                                                                                                |
+| `scaling_book_pages.yml`     | Push to `rocm-dev-infra` when `scaling_book/` changes             | Builds the scaling book from `scaling_book/` and deploys to GitHub Pages at [rocm.github.io/xla/scaling-book](https://rocm.github.io/xla/scaling-book/)                                                                                          |
 
 ### Opt-in PR labels
 
