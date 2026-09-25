@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.rocprofv3/
+
+# Live MaxText output defaults to /tmp/mixtral8-22b (OUTPUT_ROOT).
+maxtext_output/
+runs/
+runs-v26.6/

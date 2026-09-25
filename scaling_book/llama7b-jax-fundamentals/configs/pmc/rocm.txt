@@ -1,0 +1,10 @@
+# Each line requires a separate rocprof pass due to the nature of the hardware counters.
+# Note that PMC collection serializes kernel dispatches, ie. no parallel work across GPU stream.
+# Hence, the timeline trace of these runs should not be used for purposes other than PMC analysis.
+
+SQ_WAVES GRBM_GUI_ACTIVE SQ_BUSY_CYCLES SQ_INSTS_VALU_MFMA_MOPS_BF16
+
+FETCH_SIZE
+WRITE_SIZE
+
+TCC_HIT_sum TCC_MISS_sum

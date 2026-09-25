@@ -92,3 +92,7 @@ exclude:
   - runs
   - bench
   - .rocprofv3
+  # Reproduction repos live next to the book source. They are not site pages.
+  - llama7b-jax-fundamentals
+  - llama70b-mixed-precision-training
+  - mixtral8-22b-distributed-strategies
