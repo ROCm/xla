@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.rocprofv3/
+
+# Live MaxText output defaults to /tmp/llama70b (OUTPUT_ROOT).
+# Ignore leftover local artifacts if they reappear.
+maxtext_output/
+data/
+runs/
+runs-v26.6/
+sweep-logs/
+sweep-logs-v26.6/

@@ -1,0 +1,38 @@
+emb_dim: 4096
+n_layers: 32
+n_heads: 32
+n_kv_heads: 32
+head_dim: 128
+mlp_dim: 11008
+vocab_size: 32000
+norm_eps: 1.0e-5
+rope_max_timescale: 10000
+
+dtype: "bfloat16"
+weight_dtype: "float32"
+attention: "xla"
+remat_policy: "minimal_with_context"
+scan_layers: true
+
+max_target_length: 4096
+per_device_batch_size: 4
+
+learning_rate: 3.e-4
+learning_rate_schedule_steps: 100000
+learning_rate_final_fraction: 0.1
+warmup_steps_fraction: 0.01
+adam_b1: 0.9
+adam_b2: 0.95
+adam_eps: 1.e-8
+adam_weight_decay: 0.1
+gradient_clipping_threshold: 1.0
+
+seed: 0
+steps: 30
+
+profiler: ""
+skip_first_n_steps_for_profiler: 10
+profiler_steps: 5
+
+jax_cache_dir: ""
+base_output_directory: "/tmp/llama7b"
