@@ -355,7 +355,7 @@ cc_library(
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:semantic_version",
         "//xla/stream_executor/cuda:cuda_compute_capability",
-        "//xla/stream_executor/cuda:cuda_core_info_table",
+        "//xla/stream_executor/gpu:core_info",
         "//xla/stream_executor/rocm:rocm_compute_capability",
     ],
 )
@@ -2309,7 +2309,6 @@ cc_library(
     deps = [
         ":gpu_executable",
         ":gpu_executable_proto_cc",
-        "//xla:debug_options_flags",
         "//xla:printer",
         "//xla:xla_proto_cc",
         "//xla/hlo/ir:hlo",
