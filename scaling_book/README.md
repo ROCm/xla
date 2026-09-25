@@ -1,6 +1,6 @@
 # JAX Scaling Book for AMD GPU's
 
-This book is available publicly at [rocm.github.io/xla/scaling-book](https://rocm.github.io/xla/scaling-book/) and live edits will first be visible at this URL.
+This book is available publicly at [rocm.github.io/xla/scaling-book](https://rocm.github.io/xla/scaling-book/).
 
 The book is based off [Google's JAX Scaling Book](https://jax-ml.github.io/scaling-book/) and is intended for clients/consumers of AMD GPUs, or otherwise interested readers, to understand the performance features available for training in JAX. It covers content mostly at the implementation layer, such as ROCm libraries, MaxText, XLA internals, and JAX APIs.
 
@@ -14,5 +14,5 @@ If reproducing from these repos, it would be recommended to adjust the training 
 
 ### Maintenance
 
-- Edits will be made to the GitHub page over time, and the intention is to open PRs from time to time in order to sync this internal copy with the live book.
+- Further edits will be made to the GitHub page over time, and the intention is to open PRs periodically in order to improve and update content.
 - This is still essentially a first version of the book. Feel free to modify this internal copy to be more accurate or precise in any appropriate ways.
