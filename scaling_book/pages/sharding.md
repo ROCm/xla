@@ -1,15 +1,16 @@
 ---
 layout: distill
+permalink: /sharding.html
 title: "Sharding and Parallelism"
 description: "How JAX and Shardy turn global arrays into local MI355X work, how FSDP and expert parallelism use collectives, and how to choose a MaxText mesh."
 date: 2026-09-16
 
 section_number: 5
 
-previous_section_url: "/pages/4-mixed-precision"
+previous_section_url: "/mixed-precision"
 previous_section_name: "Chapter 4: Training in Mixed Precision"
 
-next_section_url: "/pages/6-mem-and-kernel-optimizations"
+next_section_url: "/optimizations"
 next_section_name: "Chapter 6: Memory and Kernel Optimizations"
 
 authors:
@@ -948,4 +949,4 @@ MI355X.
 The next chapter focuses on optimizing those local computations through
 rematerialization, attention kernels, and MoE execution strategies.
 
-<h3 markdown=1 class="next-section">Next: [memory and kernel optimizations]({{ '/pages/6-mem-and-kernel-optimizations' | relative_url }}).</h3>
+<h3 markdown=1 class="next-section">Next: [memory and kernel optimizations]({{ '/optimizations' | relative_url }}).</h3>

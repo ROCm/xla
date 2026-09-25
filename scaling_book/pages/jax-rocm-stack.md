@@ -1,15 +1,16 @@
 ---
 layout: distill
+permalink: /jax-rocm-stack.html
 title: "The JAX/ROCm Stack"
 description: "How JAX traces a program into JAXPR and StableHLO, how XLA lowers that onto ROCm backends, and how MaxText flags change the graph before the compiler runs."
 date: 2026-09-16
 
 section_number: 2
 
-previous_section_url: "/pages/1-mi355x"
+previous_section_url: "/mi355-architecture"
 previous_section_name: "Chapter 1: MI355X architecture and system topology"
 
-next_section_url: "/pages/3-profiling"
+next_section_url: "/rocm-profiling"
 next_section_name: "Chapter 3: Profiling a Training Step"
 
 authors:
@@ -372,5 +373,5 @@ This is the central pattern behind many MaxText configuration options. The flag
 does not modify XLA directly, rather it changes the JAX program being traced, producing
 a different JAXPR, different StableHLO, and a different XLA lowering path.
 
-<h3 markdown=1 class="next-section">Next: [profiling a training step]({{ '/pages/3-profiling' | relative_url }}).</h3>
+<h3 markdown=1 class="next-section">Next: [profiling a training step]({{ '/rocm-profiling' | relative_url }}).</h3>
 

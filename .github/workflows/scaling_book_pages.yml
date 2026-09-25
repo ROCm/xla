@@ -39,11 +39,18 @@ jobs:
       - name: Build
         env:
           JEKYLL_ENV: production
-        run: bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+        run: bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}/scaling-book"
+
+      - name: Place the site at /scaling-book
+        working-directory: ${{ github.workspace }}
+        run: |
+          rm -rf _pages
+          mkdir -p _pages
+          mv scaling_book/_site _pages/scaling-book
 
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: scaling_book/_site
+          path: _pages
 
   deploy:
     needs: build

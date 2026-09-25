@@ -1,15 +1,16 @@
 ---
 layout: distill
+permalink: /rocm-profiling.html
 title: "Profiling a Training Step"
 description: "How to measure a JAX training step on MI355X, attribute GPU work through XSpace and HLO, and validate kernels with ROCprofiler-SDK counters."
 date: 2026-09-16
 
 section_number: 3
 
-previous_section_url: "/pages/2-jax-rocm-stack"
+previous_section_url: "/jax-rocm-stack"
 previous_section_name: "Chapter 2: The JAX/ROCm Stack"
 
-next_section_url: "/pages/4-mixed-precision"
+next_section_url: "/mixed-precision"
 next_section_name: "Chapter 4: Training in Mixed Precision"
 
 authors:
@@ -975,5 +976,5 @@ analysis, XSpace, runtime trace, counter methodology, and component ledger.
 With those artifacts, the reported roofline and attribution results remain
 reproducible long after the original run has been discarded.
 
-<h3 markdown=1 class="next-section">Next: [training in mixed precision]({{ '/pages/4-mixed-precision' | relative_url }}).</h3>
+<h3 markdown=1 class="next-section">Next: [training in mixed precision]({{ '/mixed-precision' | relative_url }}).</h3>
 
