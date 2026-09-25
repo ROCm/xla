@@ -200,6 +200,37 @@ TEST(DeviceDescription, OversizedSharedMemoryPerBlockProtoConversion) {
             desc.oversized_shared_memory_per_block());
 }
 
+TEST(DeviceDescription, MemorySideCacheSizeProtoConversion) {
+  DeviceDescription desc;
+  desc.set_memory_side_cache_size(256 * 1024 * 1024);
+
+  ASSERT_OK_AND_ASSIGN(DeviceDescription from_proto,
+                       DeviceDescription::FromProto(desc.ToProto()));
+
+  EXPECT_EQ(from_proto.memory_side_cache_size(), 256 * 1024 * 1024);
+}
+
+TEST(DeviceDescription, MemorySideCacheSizeUnsetMatchesAbsentField) {
+  // A description that never sets the field, as on CUDA, must equal one read
+  // from a spec written before the field existed.
+  ASSERT_OK_AND_ASSIGN(
+      stream_executor::GpuTargetConfigProto gpu_target_config_proto,
+      xla::gpu::GetGpuTargetConfig(xla::gpu::GpuModel::H100_SXM));
+  GpuDeviceInfoProto proto = gpu_target_config_proto.gpu_device_info();
+  proto.clear_memory_side_cache_size();
+  ASSERT_OK_AND_ASSIGN(DeviceDescription from_spec,
+                       DeviceDescription::FromProto(proto));
+
+  DeviceDescription never_set = from_spec;
+  EXPECT_EQ(never_set.memory_side_cache_size(), 0);
+  EXPECT_EQ(never_set.ToProto().memory_side_cache_size(), 0);
+  EXPECT_EQ(never_set, from_spec);
+
+  DeviceDescription with_cache = from_spec;
+  with_cache.set_memory_side_cache_size(64 * 1024 * 1024);
+  EXPECT_NE(with_cache, from_spec);
+}
+
 TEST(DeviceDescription, ProtoConversion) {
   ASSERT_OK_AND_ASSIGN(
       stream_executor::GpuTargetConfigProto gpu_target_config_proto,

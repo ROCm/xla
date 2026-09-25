@@ -59,6 +59,12 @@ struct PcieLinkStatus {
   uint16_t width;
 };
 
+// One data cache in a device's cache topology.
+struct SmiDataCache {
+  uint32_t level;
+  int64_t size_bytes;
+};
+
 // Process-global lock serializing all SMI access from XLA. rocm_smi only
 // guards state with a per-device mutex, but some of it is global (e.g. the
 // shared gpu_metrics object), so concurrent queries on different devices race.
@@ -89,6 +95,12 @@ absl::StatusOr<PcieLinkStatus> QueryPcieLinkStatus(SmiDeviceHandle device)
 // Returns the firmware reported peak device memory bandwidth in GB/s.
 absl::StatusOr<uint64_t> QueryPeakMemoryBandwidthGbps(SmiDeviceHandle device)
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(smi_mutex);
+
+// Returns the data caches the device reports, one entry per distinct cache
+// type, taken from the driver's cache topology. Instruction caches are left
+// out. Only amd_smi can report this; rocm_smi returns Unimplemented.
+absl::StatusOr<std::vector<SmiDataCache>> QueryDataCaches(
+    SmiDeviceHandle device) ABSL_EXCLUSIVE_LOCKS_REQUIRED(smi_mutex);
 
 // Returns the xGMI hive ID of the device. Fails if it is not in a hive, which
 // SMI does not distinguish from a failed query.

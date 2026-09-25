@@ -84,6 +84,7 @@ limitations under the License.
 #include "xla/stream_executor/rocm/rocm_event.h"
 #include "xla/stream_executor/rocm/rocm_kernel.h"
 #include "xla/stream_executor/rocm/rocm_memory_bandwidth.h"
+#include "xla/stream_executor/rocm/rocm_memory_side_cache.h"
 #include "xla/stream_executor/rocm/rocm_pcie_bandwidth.h"
 #include "xla/stream_executor/rocm/rocm_platform_id.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
@@ -1182,6 +1183,8 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
         prop.memoryClockRate));
 
     desc.set_l2_cache_size(prop.l2CacheSize);
+    desc.set_memory_side_cache_size(gpu::GetRocmMemorySideCacheSize(
+        pci_bus_id, RocmComputeCapability(gcn_arch_name)));
   }
 
   {

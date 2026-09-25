@@ -196,6 +196,7 @@ stream_executor::DeviceDescription TestGpuDeviceInfo::AMDMI300DeviceInfo() {
   b.set_block_dim_limit_z(65536);
   b.set_memory_bandwidth(5'300'000'000'000);
   b.set_l2_cache_size(4 * 1024 * 1024);
+  b.set_memory_side_cache_size(256 * 1024 * 1024);
   b.set_clock_rate_ghz(2.1);
   b.set_device_memory_size(int64_t{192} * 1024 * 1024 * 1024);
   b.set_registers_per_core_limit(131072);
@@ -223,6 +224,7 @@ stream_executor::DeviceDescription TestGpuDeviceInfo::AMDMI350DeviceInfo() {
   // Keep in sync with GetRocmMemoryBandwidth in rocm_memory_bandwidth.cc.
   b.set_memory_bandwidth(7'782'000'000'000);
   b.set_l2_cache_size(4 * 1024 * 1024);
+  b.set_memory_side_cache_size(256 * 1024 * 1024);
   b.set_clock_rate_ghz(2.2);
   b.set_device_memory_size(270'566'162'432);
   b.set_registers_per_core_limit(131072);
@@ -249,6 +251,8 @@ stream_executor::DeviceDescription TestGpuDeviceInfo::AMDRX7900DeviceInfo() {
   b.set_block_dim_limit_z(2'147'483'647);
   b.set_memory_bandwidth(960'000'000'000);
   b.set_l2_cache_size(6 * 1024 * 1024);
+  // RX 7900 XTX. The 7900 XT and GRE share gfx1100 with 80 and 64 MiB.
+  b.set_memory_side_cache_size(96 * 1024 * 1024);
   b.set_clock_rate_ghz(2.5);
   b.set_device_memory_size(24'000'000'000);
   b.set_runtime_version(stream_executor::SemanticVersion{6, 0, 0});

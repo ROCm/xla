@@ -145,6 +145,7 @@ cc_library(
         ":rocm_event",
         ":rocm_kernel",
         ":rocm_memory_bandwidth",
+        ":rocm_memory_side_cache",
         ":rocm_pcie_bandwidth",
         ":rocm_platform_id",
         ":rocm_status",
@@ -450,6 +451,42 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
+    ],
+)
+
+cc_library(
+    name = "rocm_memory_side_cache",
+    srcs = ["rocm_memory_side_cache.cc"],
+    hdrs = ["rocm_memory_side_cache.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_compute_capability",
+        ":smi_util",
+        "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "rocm_memory_side_cache_test",
+    srcs = ["rocm_memory_side_cache_test.cc"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_compute_capability",
+        ":rocm_memory_side_cache",
+        ":smi_util",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 

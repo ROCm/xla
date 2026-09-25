@@ -48,7 +48,7 @@ message DeviceInterconnectInfoProto {
   string clique_id = 3;
 }
 
-// Next ID: 48
+// Next ID: 49
 message GpuDeviceInfoProto {
   string device_vendor = 30;
   string platform_version = 31;
@@ -99,6 +99,11 @@ message GpuDeviceInfoProto {
   int64 max_blocks_per_multiprocessor = 45;
   int64 collective_memory_granularity = 46;
   int64 oversized_shared_memory_per_block = 47;
+
+  // Size in bytes of the memory-side cache in front of device memory (AMD
+  // Infinity Cache), or 0 if there is none or it is unknown. See
+  // DeviceDescription::memory_side_cache_size().
+  int64 memory_side_cache_size = 48;
 }
 
 message RuntimeVersionProto {
