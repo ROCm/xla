@@ -26,6 +26,7 @@ gpu_device_info {
   block_dim_limit_z: 65536
   memory_bandwidth: 5300000000000
   l2_cache_size: 4194304
+  memory_side_cache_size: 268435456
   clock_rate_ghz: 2.1
   device_memory_size: 206158430208
   registers_per_core_limit: 131072

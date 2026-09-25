@@ -350,6 +350,10 @@ class DeviceDescription {
   // Returns the L2 cache size in bytes.
   int64_t l2_cache_size() const { return l2_cache_size_; }
 
+  // Returns the memory-side cache (AMD Infinity Cache) size in bytes, or 0 if
+  // none or unknown.
+  int64_t memory_side_cache_size() const { return memory_side_cache_size_; }
+
   // Returns the device's memory bandwidth in bytes/sec.  (This is for
   // reads/writes to/from the device's own memory, not for transfers between the
   // host and device.)
@@ -545,6 +549,9 @@ class DeviceDescription {
   void set_device_address_bits(int64_t value) { device_address_bits_ = value; }
   void set_device_memory_size(int64_t value) { device_memory_size_ = value; }
   void set_l2_cache_size(int64_t value) { l2_cache_size_ = value; }
+  void set_memory_side_cache_size(int64_t value) {
+    memory_side_cache_size_ = value;
+  }
   void set_memory_bandwidth(int64_t value) { memory_bandwidth_ = value; }
   void set_pcie_bandwidth(int64_t value) { pcie_bandwidth_ = value; }
   void set_mem_clock_ghz(float value) { mem_clock_ghz_ = value; }
@@ -649,6 +656,7 @@ class DeviceDescription {
   int64_t device_address_bits_ = kUninitialized<int64_t>;
   int64_t device_memory_size_ = kUninitialized<int64_t>;
   int64_t l2_cache_size_ = kUninitialized<int64_t>;
+  int64_t memory_side_cache_size_ = 0;
 
   int64_t memory_bandwidth_ = kUninitialized<int64_t>;
   int64_t pcie_bandwidth_ = kUninitialized<int64_t>;
