@@ -115,9 +115,7 @@ though each of eight devices stores only `(128, 512)`. The
 defines this global view and the relationship among `Mesh`,
 `PartitionSpec`, and `NamedSharding`.
 
-![A global activation and weight matrix split into eight row shards, followed by a device-local FSDP matmul that all-gathers the weight shard](img/pg5/ch5-global-to-local-arrays.png)
-
-*Global and local views of the real FSDP fixture used below. JAX sees x[1024,512] and w[512,512]. One rank receives x[128,512] and w[64,512]; the partitioned program all-gathers w before its local dot.*
+{% include figure.liquid path="pages/img/pg5/ch5-global-to-local-arrays.png" class="img-fluid" alt="A global activation and weight matrix split into eight row shards, followed by a device-local FSDP matmul that all-gathers the weight shard" caption="Global and local views of the real FSDP fixture used below. JAX sees x[1024,512] and w[512,512]. One rank receives x[128,512] and w[64,512]; the partitioned program all-gathers w before its local dot." %}
 
 The figure also highlights a common misconception about accelerator memory.
 Eight MI355X OAMs provide eight separate 288 GB HBM allocations. A sharded
@@ -188,9 +186,7 @@ T_{\mathrm{AG,ring}}
 \frac{B(X-1)}{XW}.
 $$
 
-![Animation of an AllGather around a ring of devices](img/pg5/all-gather.gif)
-
-*A ring AllGather sends B/X bytes per hop for X-1 rounds. Animation from the MIT-licensed <a href='https://github.com/jax-ml/scaling-book/blob/main/assets/gpu/all-gather.gif'>JAX Scaling Book</a>.*
+{% include figure.liquid path="pages/img/pg5/all-gather.gif" class="img-fluid" alt="Animation of an AllGather around a ring of devices" caption="A ring AllGather sends B/X bytes per hop for X-1 rounds. Animation from the MIT-licensed <a href='https://github.com/jax-ml/scaling-book/blob/main/assets/gpu/all-gather.gif'>JAX Scaling Book</a>." %}
 
 A ring ReduceScatter has the same transport term. It starts with a reducible
 $B$-byte buffer on each rank and leaves $B/X$ bytes on each:
@@ -267,7 +263,7 @@ FSDP-style fixture, `x` and `w` both have global shapes, and their
 `xla.sdy.FuncResultSharding` records the requested result layout. It is a
 compiler marker, not an external runtime kernel.
 
-[![FSDP-style global HLO before partitioning](img/pg5/ch5-hlo-fsdp-before.svg)](img/pg5/ch5-hlo-fsdp-before.svg)
+[![FSDP-style global HLO before partitioning]({{ '/pages/img/pg5/ch5-hlo-fsdp-before.svg' | relative_url }})]({{ '/pages/img/pg5/ch5-hlo-fsdp-before.svg' | relative_url }})
 
 *Representative subgraph from the literal pre-optimization graph; open the
 SVG to read the full annotations.*
@@ -277,7 +273,7 @@ The entry parameters now have local shapes: `x` is `f16[128,512]`, `w` is
 `f16[64,512]`, and the generated `all-gather` reconstructs `w` as
 `f16[512,512]` before the dot. The local output remains `f16[128,512]`.
 
-[![FSDP-style device-local HLO after partitioning](img/pg5/ch5-hlo-fsdp-after.svg)](img/pg5/ch5-hlo-fsdp-after.svg)
+[![FSDP-style device-local HLO after partitioning]({{ '/pages/img/pg5/ch5-hlo-fsdp-after.svg' | relative_url }})]({{ '/pages/img/pg5/ch5-hlo-fsdp-after.svg' | relative_url }})
 
 *Representative subgraph from the literal post-partitioner graph.*
 
@@ -287,14 +283,14 @@ dimension of both operands, computes a partial dot on each device, and calls
 `all-reduce` before downstream SPMD partitioning. The representative view
 keeps the manual body's dot and collective:
 
-[![TP-style manual HLO body before downstream partitioning](img/pg5/ch5-hlo-tp-before.svg)](img/pg5/ch5-hlo-tp-before.svg)
+[![TP-style manual HLO body before downstream partitioning]({{ '/pages/img/pg5/ch5-hlo-tp-before.svg' | relative_url }})]({{ '/pages/img/pg5/ch5-hlo-tp-before.svg' | relative_url }})
 
 After partitioning, copies around the manual-computation boundary can be
 removed from the instructional view. The local `f16[1024,64]` and
 `f16[64,512]` operands produce a `f16[1024,512]` partial result, then the
 eight-way `all-reduce` sums those partials:
 
-[![TP-style local dot and AllReduce after partitioning](img/pg5/ch5-hlo-tp-after.svg)](img/pg5/ch5-hlo-tp-after.svg)
+[![TP-style local dot and AllReduce after partitioning]({{ '/pages/img/pg5/ch5-hlo-tp-after.svg' | relative_url }})]({{ '/pages/img/pg5/ch5-hlo-tp-after.svg' | relative_url }})
 
 The three matched fixtures make the role of layout precise:
 
@@ -553,9 +549,7 @@ Conceptually, MaxText performs the following transformation:
 `YAML` → `Mesh` → logical axes → `NamedSharding` → `jax.jit` → Shardy →
 local HLO.
 
-![Flow diagram from MaxText YAML parallelism fields through device mesh construction and logical axis rules to JAX NamedSharding, jax.jit, Shardy, local HLO, and RCCL](img/pg5/ch5-maxtext-sharding-flow.png)
-
-*MaxText v26.6 turns axis sizes and logical tensor names into concrete JAX shardings. The mesh path and array-layout path meet at the train-step jax.jit boundary, after which Shardy and XLA produce local code and collectives.*
+{% include figure.liquid path="pages/img/pg5/ch5-maxtext-sharding-flow.png" class="img-fluid" alt="Flow diagram from MaxText YAML parallelism fields through device mesh construction and logical axis rules to JAX NamedSharding, jax.jit, Shardy, local HLO, and RCCL" caption="MaxText v26.6 turns axis sizes and logical tensor names into concrete JAX shardings. The mesh path and array-layout path meet at the train-step jax.jit boundary, after which Shardy and XLA produce local code and collectives." %}
 
 The source references below trace that transformation through the MaxText
 `release/v26.6` tree at commit
@@ -679,9 +673,7 @@ Only the FSDP and EP degrees change in the mesh study.
 
 ### Four one-node mesh cells
 
-![Four logical eight-device grids with FSDP and expert-parallel shapes one by eight, two by four, four by two, and eight by one](img/pg5/ch5-fsdp-ep-mesh-cells.png)
-
-*The four candidate logical meshes all use the same eight physical GPUs. Moving from left to right decreases expert-parallel degree and increases FSDP degree. The drawn adjacency is logical; the MI355X UBB remains a physical one-hop full mesh.*
+{% include figure.liquid path="pages/img/pg5/ch5-fsdp-ep-mesh-cells.png" class="img-fluid" alt="Four logical eight-device grids with FSDP and expert-parallel shapes one by eight, two by four, four by two, and eight by one" caption="The four candidate logical meshes all use the same eight physical GPUs. Moving from left to right decreases expert-parallel degree and increases FSDP degree. The drawn adjacency is logical; the MI355X UBB remains a physical one-hop full mesh." %}
 
 | FSDP | EP | Batch placement | Expert-weight placement | Dominant communication family to inspect |
 |---:|---:|---|---|---|

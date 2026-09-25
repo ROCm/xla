@@ -158,9 +158,7 @@ $$
 P_{\mathrm{roof}}=\min(C,I\beta).
 $$
 
-![Generic roofline plot with two bandwidth ceilings, two algorithms, and bandwidth-bound and compute-bound regions](img/pg3/scaling-book-roofline.png)
-
-*The generic roofline from the MIT-licensed <a href='https://jax-ml.github.io/scaling-book/roofline/'>JAX Scaling Book</a>. Its BW1 and BW2 lines illustrate two memory systems or two achieved bandwidths. The MI355X values are substituted in the text rather than drawn into the source figure.*
+{% include figure.liquid path="pages/img/pg3/scaling-book-roofline.png" class="img-fluid" alt="Generic roofline plot with two bandwidth ceilings, two algorithms, and bandwidth-bound and compute-bound regions" caption="The generic roofline from the MIT-licensed <a href='https://jax-ml.github.io/scaling-book/roofline/'>JAX Scaling Book</a>. Its BW1 and BW2 lines illustrate two memory systems or two achieved bandwidths. The MI355X values are substituted in the text rather than drawn into the source figure." %}
 
 The source chapter applies this diagram to TPU v5e. For one full MI355X in
 SPX mode, the dense BF16 matrix ceiling is 2.5166 PFLOP/s and HBM bandwidth is
@@ -202,9 +200,7 @@ The result is a single profiling artifact that combines framework information,
 compiler metadata, and GPU execution records. This artifact is an XSpace,
 which XProf reads.
 
-![Vertical white-on-black pipeline from jax.profiler through the XLA profiler backend to an XSpace protobuf, then XProf parser, timeline, roofline, kernel statistics, and framework ops](img/pg3/ch3-jax-profiler-pipeline.png)
-
-*The JAX profiler path. Python starts a session, the XLA profiler backend populates an XSpace protobuf, and XProf parses that schema into timeline, roofline, kernel-statistics, and framework-op views.*
+{% include figure.liquid path="pages/img/pg3/ch3-jax-profiler-pipeline.png" class="img-fluid" alt="Vertical white-on-black pipeline from jax.profiler through the XLA profiler backend to an XSpace protobuf, then XProf parser, timeline, roofline, kernel statistics, and framework ops" caption="The JAX profiler path. Python starts a session, the XLA profiler backend populates an XSpace protobuf, and XProf parses that schema into timeline, roofline, kernel-statistics, and framework-op views." %}
 
 ### XSpace
 
@@ -218,9 +214,7 @@ sideband data. Each plane contains parallel XLines, each timed interval is an
 XEvent, and XStats hold fields such as correlation ID, HLO name, kernel
 geometry, and source metadata.
 
-![Annotated XProf Trace Viewer identifying an XPlane, a timeline lane, XEvents, and the XStats details pane](img/pg3/what-is-an-xspace.png)
-
-*An XSpace as displayed by XProf. The screenshot labels a displayed timeline as an XLane; the protobuf message is named `XLine`. XEvents occupy intervals on a line, and the selected event's XStats appear in the details pane.*
+{% include figure.liquid path="pages/img/pg3/what-is-an-xspace.png" class="img-fluid" alt="Annotated XProf Trace Viewer identifying an XPlane, a timeline lane, XEvents, and the XStats details pane" caption="An XSpace as displayed by XProf. The screenshot labels a displayed timeline as an XLane; the protobuf message is named `XLine`. XEvents occupy intervals on a line, and the selected event's XStats appear in the details pane." %}
 
 XProf's GPU lines must be read with this distinction in mind. The
 [Trace Viewer documentation](https://openxla.org/xprof/trace_viewer) states
@@ -625,9 +619,7 @@ input projections (`wi_0`, `wi_1`), combine through SiLU gating, pass through
 names come from the same release's
 [`RoutedMoE`](https://github.com/ROCm/maxtext/blob/b47d74bf4ef860c6cbd0fe5e4705c362ba360dbe/src/maxtext/layers/moe.py).
 
-![Vertical Mixtral 8x22B forward flow through attention, routing, dispatch, expert MLP, combine, and residual operations](img/pg3/ch3-mixtral-forward.png)
-
-*One decoder layer expanded into a single top-to-bottom flow. The highlighted blocks include the MaxText scope names used to correlate model regions with HLO and XProf; the forward attribution table below uses these boxes as its accounting categories.*
+{% include figure.liquid path="pages/img/pg3/ch3-mixtral-forward.png" class="img-fluid" alt="Vertical Mixtral 8x22B forward flow through attention, routing, dispatch, expert MLP, combine, and residual operations" caption="One decoder layer expanded into a single top-to-bottom flow. The highlighted blocks include the MaxText scope names used to correlate model regions with HLO and XProf; the forward attribution table below uses these boxes as its accounting categories." %}
 
 ### Backward pass
 
@@ -642,9 +634,7 @@ Rematerialized forward work executes inside the backward interval. Attribute
 that device time to backward/rematerialization while keeping the useful model
 FLOP ledger unchanged.
 
-![Mixtral 8x22B backward flow with a main activation-gradient path and a separate parameter-gradient rail](img/pg3/ch3-mixtral-backward.png)
-
-*Activation gradients follow the vertical decoder-layer VJP. Parameter gradients from the MoE and attention branches feed the side rail for collectives, microstep accumulation, and the optimizer update. The backward attribution table below treats parameter-gradient work as part of its originating VJP rather than counting the side rail twice.*
+{% include figure.liquid path="pages/img/pg3/ch3-mixtral-backward.png" class="img-fluid" alt="Mixtral 8x22B backward flow with a main activation-gradient path and a separate parameter-gradient rail" caption="Activation gradients follow the vertical decoder-layer VJP. Parameter gradients from the MoE and attention branches feed the side rail for collectives, microstep accumulation, and the optimizer update. The backward attribution table below treats parameter-gradient work as part of its originating VJP rather than counting the side rail twice." %}
 
 ### Time attribution in JAX
 
@@ -818,9 +808,7 @@ to show the signature of a sparse ragged path. Its
 `ragged_dot_general` lowers to the compatibility target
 `__cublas$lt$groupedMatmul`, which reaches the BLASLt implementation on ROCm.
 
-![Graphviz rendering of a real optimized gfx950 HLO fixture in which tokens, expert matrices, and group sizes enter a grouped matrix multiplication custom call](img/pg3/ch3-hlo-ragged-grouped.svg)
-
-*Literal gfx950 optimized HLO rendered with Graphviz. The custom-call target is the bridge between the JAX ragged-dot name and the grouped GEMM kernel sought in rocprofv3. This is compiler evidence, not a performance measurement.*
+{% include figure.liquid path="pages/img/pg3/ch3-hlo-ragged-grouped.svg" class="img-fluid" zoomable=true alt="Graphviz rendering of a real optimized gfx950 HLO fixture in which tokens, expert matrices, and group sizes enter a grouped matrix multiplication custom call" caption="Literal gfx950 optimized HLO rendered with Graphviz. The custom-call target is the bridge between the JAX ragged-dot name and the grouped GEMM kernel sought in rocprofv3. This is compiler evidence, not a performance measurement." %}
 
 The attention path has the same pattern. In the retained Transformer Engine
 fixture, Q, K, V, and metadata enter
@@ -828,9 +816,7 @@ fixture, Q, K, V, and metadata enter
 framework-to-runtime handoff; the `rocprofv3` trace identifies the kernels
 that implemented it.
 
-![Graphviz-rendered real HLO fixture for Transformer Engine fused-attention forward with Q, K, V, and metadata entering an FFI custom call](img/pg3/hlo-attention-te.svg)
-
-*Real pre-optimization HLO fixture for the Transformer Engine attention route. Use its custom-call and source names for attribution, then use the ROCm trace for the actual backend kernels and durations.*
+{% include figure.liquid path="pages/img/pg3/hlo-attention-te.svg" class="img-fluid" zoomable=true alt="Graphviz-rendered real HLO fixture for Transformer Engine fused-attention forward with Q, K, V, and metadata entering an FFI custom call" caption="Real pre-optimization HLO fixture for the Transformer Engine attention route. Use its custom-call and source names for attribution, then use the ROCm trace for the actual backend kernels and durations." %}
 
 ### Verifying time attribution
 

@@ -1,0 +1,30 @@
+<div class="base-grid appendix-entry">
+  <h3 style="grid-column: 0;">Citation</h3>
+  <p class="author-footnote">For attribution in academic contexts, please cite this work as:</p>
+
+  <div class="author-footnote">
+  {% capture citation_code -%}
+  ```bibtex
+    {{ site.citation.short }}
+  ```
+  {%- endcapture %}
+  {{ citation_code | markdownify }}
+  </div>
+
+  <p class="author-footnote">or as a BibTeX entry:</p>
+
+  <div class="author-footnote">
+  {% capture citation_code -%}
+  ```bibtex
+    @article{{ '{' }}{{ site.citation.key }},
+      title = {{ '{' }}{{ site.title }}},
+      author = {{ '{' }}{{ site.citation.author }}},
+      howpublished = {Online},
+      note = {Retrieved from {{ site.url }}{{ site.baseurl }}/},
+      year = {{ '{' }}{{ site.citation.year }}}
+    }
+  ```
+  {%- endcapture %}
+  {{ citation_code | markdownify }}
+  </div>
+</div>

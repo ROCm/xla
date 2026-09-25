@@ -168,9 +168,7 @@ production training recipe. Its
 mixed-precision framework and Figure 6 shows one linear layer across forward
 and backward propagation.
 
-![DeepSeek-V3 Figure 6 showing FP8 operands and FP32 accumulation for Fprop, Dgrad, and Wgrad around BF16 inputs and outputs and high-precision optimizer state](img/pg4/deepseek-precision.png)
-
-*DeepSeek-V3 Technical Report, Figure 6. Reproduced from the paper. “Only the Linear operator is illustrated” means that the figure expands one linear layer into its Fprop, Dgrad, and Wgrad GEMMs and labels their operand, accumulator, output, and optimizer roles. It does not say that every operation in DeepSeek-V3 uses FP8.*
+{% include figure.liquid path="pages/img/pg4/deepseek-precision.png" class="img-fluid" alt="DeepSeek-V3 Figure 6 showing FP8 operands and FP32 accumulation for Fprop, Dgrad, and Wgrad around BF16 inputs and outputs and high-precision optimizer state" caption="DeepSeek-V3 Technical Report, Figure 6. Reproduced from the paper. “Only the Linear operator is illustrated” means that the figure expands one linear layer into its Fprop, Dgrad, and Wgrad GEMMs and labels their operand, accumulator, output, and optimizer roles. It does not say that every operation in DeepSeek-V3 uses FP8." %}
 
 For the illustrated linear operator:
 
@@ -296,9 +294,7 @@ defines blocks of $k=32$ elements sharing one E8M0 scale. E8M0 is an
 eight-bit exponent-only value, so each scale is a power of two. If each
 element uses $b$ bits and the shared scale uses $s$ bits, a full block costs
 
-![One shared scale X associated with k scalar elements P1 through Pk](img/pg4/mx-scaling-diagram.png)
-
-*Figure 1 from <a href='https://arxiv.org/abs/2310.10537'>Microscaling Data Formats for Deep Learning</a>. An MX block pairs one scale X with k independently encoded elements. The OCP MXFP formats used here set k=32.*
+{% include figure.liquid path="pages/img/pg4/mx-scaling-diagram.png" class="img-fluid" alt="One shared scale X associated with k scalar elements P1 through Pk" caption="Figure 1 from <a href='https://arxiv.org/abs/2310.10537'>Microscaling Data Formats for Deep Learning</a>. An MX block pairs one scale X with k independently encoded elements. The OCP MXFP formats used here set k=32." %}
 
 $$
 B_{\mathrm{block}}=kb+s,\qquad
@@ -319,18 +315,14 @@ Block scaling assigns a scale to a small group of values rather than an entire
 tensor. This makes it easier to accommodate local outliers and typically
 produces better numerical behavior than a single tensor-wide scale.
 
-![Scale matrix S1 through S8, with S1 linked to one highlighted block of elements in a larger matrix](img/pg4/mxfp.png)
-
-*Each MX scale covers one block of elements. S1 is the shared scale for the highlighted block; the other scales cover the remaining blocks of the same matrix.*
+{% include figure.liquid path="pages/img/pg4/mxfp.png" class="img-fluid" alt="Scale matrix S1 through S8, with S1 linked to one highlighted block of elements in a larger matrix" caption="Each MX scale covers one block of elements. S1 is the shared scale for the highlighted block; the other scales cover the remaining blocks of the same matrix." %}
 
 Rowwise and columnwise quantization are distinct because changing the block
 direction changes group membership. Training libraries often produce both
 representations from the wider source so Fprop, Dgrad, and Wgrad can consume
 the orientation they need.
 
-![MX training dataflow showing BF16 tensors quantized before forward, activation-gradient, and weight-gradient matrix multiplications](img/pg4/mx-scaling-quantization.png)
-
-*Figure 2 from <a href='https://arxiv.org/abs/2310.10537'>Microscaling Data Formats for Deep Learning</a>. BF16 activations, weights, and error gradients are quantized at the matrix boundary; matrix outputs return to BF16, while the optimizer updates FP32 master weights.*
+{% include figure.liquid path="pages/img/pg4/mx-scaling-quantization.png" class="img-fluid" alt="MX training dataflow showing BF16 tensors quantized before forward, activation-gradient, and weight-gradient matrix multiplications" caption="Figure 2 from <a href='https://arxiv.org/abs/2310.10537'>Microscaling Data Formats for Deep Learning</a>. BF16 activations, weights, and error gradients are quantized at the matrix boundary; matrix outputs return to BF16, while the optimizer updates FP32 master weights." %}
 
 The OCP paper
 [Microscaling Data Formats for Deep Learning](https://arxiv.org/abs/2310.10537)
@@ -368,9 +360,7 @@ Eventually, a configuration choice must become a different JAX program. A
 YAML flag by itself cannot select a CDNA 4 matrix instruction; it must change
 the operations that JAX traces and lowers through XLA.
 
-![MaxText BF16, Transformer Engine FP8 and MXFP8, and JAX-AITER MXFP4 configuration paths through JAX and HLO to ROCm implementations](img/pg4/ch4-precision-implementation-paths.png)
-
-*Where the program changes. MaxText replaces the callable used by DenseGeneral before tracing. Ordinary JAX emits an HLO dot; Transformer Engine and JAX-AITER paths emit typed custom calls with explicit operand and scale buffers.*
+{% include figure.liquid path="pages/img/pg4/ch4-precision-implementation-paths.png" class="img-fluid" alt="MaxText BF16, Transformer Engine FP8 and MXFP8, and JAX-AITER MXFP4 configuration paths through JAX and HLO to ROCm implementations" caption="Where the program changes. MaxText replaces the callable used by DenseGeneral before tracing. Ordinary JAX emits an HLO dot; Transformer Engine and JAX-AITER paths emit typed custom calls with explicit operand and scale buffers." %}
 
 ### Dtypes and explicit quantize-dequantize
 
@@ -538,21 +528,21 @@ and visible labels are unchanged.
 With no quantization object, MaxText's branch casts the FP32 weight to BF16 and
 emits an ordinary HLO `dot`:
 
-[![Literal XLA HLO graph for a BF16 MaxText-style linear operation](img/pg4/hlo-precision-bf16.svg)](img/pg4/hlo-precision-bf16.svg)
+[![Literal XLA HLO graph for a BF16 MaxText-style linear operation]({{ '/pages/img/pg4/hlo-precision-bf16.svg' | relative_url }})]({{ '/pages/img/pg4/hlo-precision-bf16.svg' | relative_url }})
 
 With `quantization=te_fp8_delayedscaling`, the recipe carries FP32 scale and
 amax-history state. Each `te_dbias_quantize_ffi` receives the delayed scale;
 its E4M3 arrays and per-tensor scales then enter `te_gemm_v2_ffi`, which
 returns BF16:
 
-[![Literal XLA HLO graph for Transformer Engine delayed-scaling FP8](img/pg4/hlo-precision-fp8.svg)](img/pg4/hlo-precision-fp8.svg)
+[![Literal XLA HLO graph for Transformer Engine delayed-scaling FP8]({{ '/pages/img/pg4/hlo-precision-fp8.svg' | relative_url }})]({{ '/pages/img/pg4/hlo-precision-fp8.svg' | relative_url }})
 
 With `quantization=te_mxfp8`, the quantization calls return E4M3 arrays and
 E8M0 scale arrays. The preserved HLO records
 `scaling_mode=MXFP8_1D_SCALING`; the GEMM receives both data and scale
 operands:
 
-[![Literal XLA HLO graph for Transformer Engine MXFP8 block scaling](img/pg4/hlo-precision-mxfp8.svg)](img/pg4/hlo-precision-mxfp8.svg)
+[![Literal XLA HLO graph for Transformer Engine MXFP8 block scaling]({{ '/pages/img/pg4/hlo-precision-mxfp8.svg' | relative_url }})]({{ '/pages/img/pg4/hlo-precision-mxfp8.svg' | relative_url }})
 
 These graphs show the boundary visible to the compiler. Beyond the
 `custom_call`, execution belongs to Transformer Engine, hipBLASLt, AITER, or

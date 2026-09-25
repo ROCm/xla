@@ -1,0 +1,53 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+<title>
+  {%- if page.url == '/' -%}
+    {{ site.title }}
+  {%- else -%}
+    {{ page.title }} | {{ site.title }}
+  {%- endif -%}
+</title>
+
+<meta name="author" content="{{ site.title }}">
+<meta name="description" content="{{ page.description | default: site.description | strip_newlines | truncate: 300 }}">
+<meta name="keywords" content="{{ site.keywords }}">
+
+{% if site.serve_og_meta %}
+  <meta property="og:site_name" content="{{ site.title }}">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="{{ page.title | default: site.title }}">
+  <meta property="og:description" content="{{ page.description | default: site.description | strip_newlines | truncate: 300 }}">
+  <meta property="og:url" content="{{ page.url | absolute_url }}">
+  <meta name="twitter:card" content="summary_large_image">
+{% endif %}
+
+<link rel="canonical" href="{{ page.url | replace: 'index.html', '' | absolute_url }}">
+
+<!-- Bootstrap supplies the grid and navbar primitives that _base.scss builds on. -->
+<link rel="stylesheet" href="{{ '/assets/css/bootstrap.min.css' | relative_url | bust_file_cache }}">
+
+<!-- Roboto is self-hosted (see _sass/_fonts.scss). Preload it so it's ready at
+     first paint; with font-display: optional a late font is skipped rather than
+     swapped in, so the page never reflows because of fonts. -->
+<link rel="preload" as="font" type="font/woff2" crossorigin href="{{ '/assets/fonts/roboto/roboto-latin.woff2' | relative_url }}">
+
+<link rel="stylesheet" href="{{ '/assets/css/jekyll-pygments-themes-vs.css' | relative_url | bust_file_cache }}" media="" id="highlight_theme_light">
+<link rel="stylesheet" href="{{ '/assets/css/main.css' | relative_url | bust_css_cache }}">
+
+<script src="{{ '/assets/js/theme.js' | relative_url | bust_file_cache }}"></script>
+{% if site.enable_darkmode %}
+  <link rel="stylesheet" href="{{ '/assets/css/jekyll-pygments-themes-native.css' | relative_url | bust_file_cache }}" media="none" id="highlight_theme_dark">
+  <script>
+    initTheme();
+  </script>
+{% endif %}
+
+<!-- Set Tufte-mode class before first paint to avoid layout flicker -->
+<script>
+  try {
+    if (localStorage.getItem("tufte-sidenotes-enabled") === "1") {
+      document.documentElement.classList.add("tufte-mode");
+    }
+  } catch (e) {}
+</script>
