@@ -21,10 +21,10 @@ limitations under the License.
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>  // NOLINT(build/c++11)
 #include <type_traits>
 #include <vector>
 
-#include "Eigen/Core"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -33,6 +33,8 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
+#include "absl/synchronization/mutex.h"
+#include "Eigen/Core"
 #include "xla/index_util.h"
 #include "xla/primitive_util.h"
 #include "xla/service/gpu/launch_dimensions.h"
@@ -45,6 +47,8 @@ limitations under the License.
 #include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/threadpool.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
 
@@ -69,9 +73,14 @@ template <typename ElementT>
 static absl::StatusOr<bool> DeviceCompare(const ComparisonParams& params) {
   se::StreamExecutor* executor = params.stream->parent();
 
-  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<se::MemoryAllocation> allocation,
-                        executor->HostMemoryAllocate(sizeof(uint64_t)));
-  se::DeviceAddressBase out_addr = allocation->address();
+  // The comparison kernel does one `atomicAdd(mismatch_count, 1)` per
+  // mismatching element. The counter must live in device memory so that
+  // these atomics are serviced by the local L2 cache.
+  se::DeviceAddress<uint64_t> out_device = executor->AllocateArray<uint64_t>(1);
+  if (out_device.is_null()) {
+    return Internal("Failed to allocate device mismatch counter");
+  }
+  se::DeviceAddressBase out_addr(out_device);
 
   ABSL_RETURN_IF_ERROR(params.stream->MemZero(&out_addr, sizeof(uint64_t)));
   if (params.current.size() != params.expected.size()) {
@@ -114,6 +123,7 @@ static absl::StatusOr<bool> DeviceCompare(const ComparisonParams& params) {
   ABSL_RETURN_IF_ERROR(
       params.stream->Memcpy(&result, out_addr, sizeof(result)));
   ABSL_RETURN_IF_ERROR(params.stream->BlockHostUntilDone());
+  executor->Deallocate(&out_device);
   return result == 0;
 }
 
@@ -230,38 +240,36 @@ static absl::StatusOr<bool> HostCompare(const ComparisonParams& params) {
   stats.relative_tol = params.relative_tol;
   constexpr int kMaxSamples = 5;
 
-  for (int64_t i = 0; i < n; ++i) {
+  // Per-element comparison that accumulates into a (thread-local) stats object.
+  const auto process_element = [&](int64_t i, BufferMismatchStats& out) {
     auto current_value = static_cast<ComparisonType>(host_current[i]);
     auto expected_value = static_cast<ComparisonType>(host_expected[i]);
     ComparisonType current_value_canonical = canonicalize(current_value);
     ComparisonType expected_value_canonical = canonicalize(expected_value);
     if (std::isnan(current_value_canonical) &&
         std::isnan(expected_value_canonical)) {
-      continue;
+      return;
     }
     if (std::isinf(current_value_canonical) &&
         std::isinf(expected_value_canonical) &&
         current_value_canonical == expected_value_canonical) {
-      continue;
+      return;
     }
-
     const bool is_current_nan = std::isnan(current_value_canonical);
     const bool is_expected_nan = std::isnan(expected_value_canonical);
     const bool is_current_inf = std::isinf(current_value_canonical);
     const bool is_expected_inf = std::isinf(expected_value_canonical);
-
     bool is_mismatch = false;
     double abs_diff = 0.0;
     double rel_diff = 0.0;
-
     if (is_current_nan || is_expected_nan) {
       is_mismatch = true;
-      ++stats.nan_count;
+      ++out.nan_count;
       abs_diff = std::numeric_limits<double>::quiet_NaN();
       rel_diff = std::numeric_limits<double>::quiet_NaN();
     } else if (is_current_inf || is_expected_inf) {
       is_mismatch = true;
-      ++stats.inf_count;
+      ++out.inf_count;
       abs_diff = std::numeric_limits<double>::infinity();
       rel_diff = std::numeric_limits<double>::infinity();
     } else {
@@ -276,36 +284,151 @@ static absl::StatusOr<bool> HostCompare(const ComparisonParams& params) {
         is_mismatch = true;
       }
     }
+    if (!is_mismatch) {
+      return;
+    }
+    ++out.mismatch_count;
+    if (std::isfinite(rel_diff) && rel_diff > out.max_rel_diff) {
+      out.max_rel_diff = rel_diff;
+      out.max_rel_diff_sample = {i, static_cast<double>(current_value),
+                                 static_cast<double>(expected_value), abs_diff,
+                                 rel_diff};
+    }
+    if (std::isfinite(abs_diff) && abs_diff > out.max_abs_diff) {
+      out.max_abs_diff = abs_diff;
+      out.max_abs_diff_sample = {i, static_cast<double>(current_value),
+                                 static_cast<double>(expected_value), abs_diff,
+                                 rel_diff};
+    }
+    if (out.sample_mismatches.size() < static_cast<size_t>(kMaxSamples)) {
+      out.sample_mismatches.push_back({i, static_cast<double>(current_value),
+                                       static_cast<double>(expected_value),
+                                       abs_diff, rel_diff});
+    }
+  };
 
-    if (is_mismatch) {
-      if (!params.verbose && params.error_report == nullptr) {
-        return false;  // Fast path: return immediately if verbose is off and no
-                       // report needed.
+  // Reduce a shard's local stats into the shared accumulator.
+  const auto merge_stats = [](BufferMismatchStats& dst,
+                              const BufferMismatchStats& src) {
+    dst.mismatch_count += src.mismatch_count;
+    dst.nan_count += src.nan_count;
+    dst.inf_count += src.inf_count;
+    if (src.max_rel_diff_sample.linear_index != -1 &&
+        src.max_rel_diff > dst.max_rel_diff) {
+      dst.max_rel_diff = src.max_rel_diff;
+      dst.max_rel_diff_sample = src.max_rel_diff_sample;
+    }
+    if (src.max_abs_diff_sample.linear_index != -1 &&
+        src.max_abs_diff > dst.max_abs_diff) {
+      dst.max_abs_diff = src.max_abs_diff;
+      dst.max_abs_diff_sample = src.max_abs_diff_sample;
+    }
+    for (const auto& s : src.sample_mismatches) {
+      dst.sample_mismatches.push_back(s);
+    }
+  };
+
+  // Only take the parallel full-scan path when a full scan is actually needed,
+  // (verbose logging or a non-null error_report). When neither is set the
+  // serial path below can early-exit on the first mismatch.
+  constexpr int64_t kParallelThreshold = 1 << 20;
+  const bool needs_full_scan = params.verbose || params.error_report != nullptr;
+  if (n >= kParallelThreshold && needs_full_scan) {
+    const int num_threads =
+        std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
+    absl::Mutex mu;
+    tsl::thread::ThreadPool pool(tsl::Env::Default(), "buffer_comparator_host",
+                                 num_threads);
+    pool.ParallelFor(n, /*cost_per_unit=*/8, [&](int64_t start, int64_t limit) {
+      BufferMismatchStats local;
+      for (int64_t i = start; i < limit; ++i) {
+        process_element(i, local);
       }
-      ++stats.mismatch_count;
-      if (std::isfinite(rel_diff) && rel_diff > stats.max_rel_diff) {
-        stats.max_rel_diff = rel_diff;
-        stats.max_rel_diff_sample = {i, static_cast<double>(current_value),
-                                     static_cast<double>(expected_value),
-                                     abs_diff, rel_diff};
+      absl::MutexLock lock(&mu);
+      merge_stats(stats, local);
+    });
+    // Keep the lowest-index samples for a deterministic report.
+    std::sort(stats.sample_mismatches.begin(), stats.sample_mismatches.end(),
+              [](const MismatchSample& a, const MismatchSample& b) {
+                return a.linear_index < b.linear_index;
+              });
+    if (stats.sample_mismatches.size() > static_cast<size_t>(kMaxSamples)) {
+      stats.sample_mismatches.resize(kMaxSamples);
+    }
+  } else {
+    // Serial path (preserves the original fast early-exit and verbose logging).
+    for (int64_t i = 0; i < n; ++i) {
+      auto current_value = static_cast<ComparisonType>(host_current[i]);
+      auto expected_value = static_cast<ComparisonType>(host_expected[i]);
+      ComparisonType current_value_canonical = canonicalize(current_value);
+      ComparisonType expected_value_canonical = canonicalize(expected_value);
+      if (std::isnan(current_value_canonical) &&
+          std::isnan(expected_value_canonical)) {
+        continue;
       }
-      if (std::isfinite(abs_diff) && abs_diff > stats.max_abs_diff) {
-        stats.max_abs_diff = abs_diff;
-        stats.max_abs_diff_sample = {i, static_cast<double>(current_value),
-                                     static_cast<double>(expected_value),
-                                     abs_diff, rel_diff};
+      if (std::isinf(current_value_canonical) &&
+          std::isinf(expected_value_canonical) &&
+          current_value_canonical == expected_value_canonical) {
+        continue;
       }
-      if (stats.sample_mismatches.size() < kMaxSamples) {
-        stats.sample_mismatches.push_back(
-            {i, static_cast<double>(current_value),
-             static_cast<double>(expected_value), abs_diff, rel_diff});
+      const bool is_current_nan = std::isnan(current_value_canonical);
+      const bool is_expected_nan = std::isnan(expected_value_canonical);
+      const bool is_current_inf = std::isinf(current_value_canonical);
+      const bool is_expected_inf = std::isinf(expected_value_canonical);
+      bool is_mismatch = false;
+      double abs_diff = 0.0;
+      double rel_diff = 0.0;
+      if (is_current_nan || is_expected_nan) {
+        is_mismatch = true;
+        ++stats.nan_count;
+        abs_diff = std::numeric_limits<double>::quiet_NaN();
+        rel_diff = std::numeric_limits<double>::quiet_NaN();
+      } else if (is_current_inf || is_expected_inf) {
+        is_mismatch = true;
+        ++stats.inf_count;
+        abs_diff = std::numeric_limits<double>::infinity();
+        rel_diff = std::numeric_limits<double>::infinity();
+      } else {
+        abs_diff = std::abs(static_cast<double>(current_value_canonical) -
+                            static_cast<double>(expected_value_canonical));
+        rel_diff =
+            abs_diff /
+            (std::max(std::abs(static_cast<double>(current_value_canonical)),
+                      std::abs(static_cast<double>(expected_value_canonical))) +
+             1.0);
+        if (rel_diff >= params.relative_tol) {
+          is_mismatch = true;
+        }
       }
-      if (params.verbose && stats.mismatch_count <= 10) {
-        LOG(ERROR) << "Difference at " << i << ": " << current_value
-                   << ", expected " << expected_value;
-      }
-      if (params.error_report == nullptr && stats.mismatch_count >= 10) {
-        break;
+      if (is_mismatch) {
+        if (!params.verbose && params.error_report == nullptr) {
+          return false;
+        }
+        ++stats.mismatch_count;
+        if (std::isfinite(rel_diff) && rel_diff > stats.max_rel_diff) {
+          stats.max_rel_diff = rel_diff;
+          stats.max_rel_diff_sample = {i, static_cast<double>(current_value),
+                                       static_cast<double>(expected_value),
+                                       abs_diff, rel_diff};
+        }
+        if (std::isfinite(abs_diff) && abs_diff > stats.max_abs_diff) {
+          stats.max_abs_diff = abs_diff;
+          stats.max_abs_diff_sample = {i, static_cast<double>(current_value),
+                                       static_cast<double>(expected_value),
+                                       abs_diff, rel_diff};
+        }
+        if (stats.sample_mismatches.size() < static_cast<size_t>(kMaxSamples)) {
+          stats.sample_mismatches.push_back(
+              {i, static_cast<double>(current_value),
+               static_cast<double>(expected_value), abs_diff, rel_diff});
+        }
+        if (params.verbose && stats.mismatch_count <= 10) {
+          LOG(ERROR) << "Difference at " << i << ": " << current_value
+                     << ", expected " << expected_value;
+        }
+        if (params.error_report == nullptr && stats.mismatch_count >= 10) {
+          break;
+        }
       }
     }
   }
