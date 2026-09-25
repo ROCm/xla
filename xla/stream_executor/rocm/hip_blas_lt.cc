@@ -430,33 +430,56 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetHipBlasLtMatmulPlan(
   if (false) {  // This is needed to avoid compiler error for the else clause.
     // FP8 compatible types combinations (Full table in
     // https://github.com/ROCm/hipBLASLt/blob/develop/docs/api-reference.rst?plain=1)
+    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_16BF,
+                 HIP_R_16BF)
+    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_16BF,
+                 HIP_R_8F_E4M3_FNUZ)
+    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_16F,
+                 HIP_R_8F_E4M3_FNUZ)
     TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_16F,
                  HIP_R_16F)
     TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_32F,
                  HIP_R_32F)
+    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E4M3_FNUZ,
+                 HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E4M3_FNUZ)
 
+    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E5M2_FNUZ, HIP_R_16BF,
+                 HIP_R_16BF)
+    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E5M2_FNUZ, HIP_R_16BF,
+                 HIP_R_8F_E4M3_FNUZ)
+    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E5M2_FNUZ, HIP_R_16BF,
+                 HIP_R_8F_E5M2_FNUZ)
+    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E5M2_FNUZ, HIP_R_16F,
+                 HIP_R_8F_E4M3_FNUZ)
+    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E5M2_FNUZ, HIP_R_16F,
+                 HIP_R_8F_E5M2_FNUZ)
     TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E5M2_FNUZ, HIP_R_16F,
                  HIP_R_16F)
     TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E5M2_FNUZ, HIP_R_32F,
                  HIP_R_32F)
+    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E5M2_FNUZ,
+                 HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E5M2_FNUZ)
+    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E5M2_FNUZ,
+                 HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E4M3_FNUZ)
 
+    TYPED_MATMUL(float, HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_16BF,
+                 HIP_R_16BF)
+    TYPED_MATMUL(float, HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_16BF,
+                 HIP_R_8F_E4M3_FNUZ)
+    TYPED_MATMUL(float, HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_16BF,
+                 HIP_R_8F_E5M2_FNUZ)
+    TYPED_MATMUL(float, HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_16F,
+                 HIP_R_8F_E4M3_FNUZ)
+    TYPED_MATMUL(float, HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_16F,
+                 HIP_R_8F_E5M2_FNUZ)
     TYPED_MATMUL(float, HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_16F,
                  HIP_R_16F)
     TYPED_MATMUL(float, HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_32F,
                  HIP_R_32F)
-
-    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_16BF,
-                 HIP_R_16BF)
-    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E5M2_FNUZ, HIP_R_16BF,
-                 HIP_R_16BF)
-    TYPED_MATMUL(float, HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E4M3_FNUZ, HIP_R_16BF,
-                 HIP_R_16BF)
-    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E4M3_FNUZ,
-                 HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E4M3_FNUZ)
-    TYPED_MATMUL(float, HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E5M2_FNUZ,
-                 HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E5M2_FNUZ)
     TYPED_MATMUL(float, HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E4M3_FNUZ,
                  HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E5M2_FNUZ)
+    TYPED_MATMUL(float, HIP_R_8F_E5M2_FNUZ, HIP_R_8F_E4M3_FNUZ,
+                 HIP_R_8F_E4M3_FNUZ, HIP_R_8F_E4M3_FNUZ)
 
     TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_16BF, HIP_R_16BF)
     TYPED_MATMUL(float, HIP_R_8F_E4M3, HIP_R_8F_E4M3, HIP_R_16BF, HIP_R_8F_E4M3)
@@ -729,7 +752,9 @@ absl::Status BlasLt::RegularMatmulPlan::ExecuteOnStream(
                                    args.d_scale.opaque()));
     }
     if (args.d_amax != nullptr) {
-      return absl::InternalError("hipblaslt does not support amax");
+      ABSL_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                   HIPBLASLT_MATMUL_DESC_AMAX_D_POINTER,
+                                   args.d_amax.opaque()));
     }
     if (args.aux != nullptr) {
       return absl::InternalError(
