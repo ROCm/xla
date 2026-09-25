@@ -325,6 +325,27 @@ def lit_device_test(
         for backend in backends
         if backend not in disabled_backends
     ]
+
+    # Maps a lit device-test backend name to the basename of the GPU target
+    # config spec that should be used when a test needs to prepare 
+    # device-shaped IR for that backend. Tests can reference the
+    # selected spec basename through the `%{TARGET_CONFIG}` lit substitution and
+    # combine it with the specs directory, e.g.:
+    #   %S/<rel path>/target_config/specs/%{TARGET_CONFIG}
+    #
+    # NOTE: `amdgpu_any` is architecture-agnostic and can execute on any ROCm
+    # GPU (MI200/MI300/MI350/...). We map it to `mi350.txtpb` as a pragmatic
+    # default because MI350 is the current AMD CI target. If a test is run on a
+    # different AMD architecture, pass an explicit
+    # `--xla_gpu_target_config_filename` in the RUN line instead of relying on
+    # this default.
+    backend_to_target_config = {
+        "a100": "a100_sxm_80.txtpb",
+        "h100": "h100_sxm.txtpb",
+        "b200": "b200.txtpb",
+        "amdgpu_any": "mi350.txtpb",
+    }
+
     for backend in backends:
         modifiers = backend.split("_")
         device = modifiers.pop(0)
@@ -335,13 +356,27 @@ def lit_device_test(
         })
         this_backend_tags = ["xla_%s" % backend, "xla_device_%s" % backend] + tags + backend_tags.get(backend, [])
         test_name = "%s_%s" % (name, backend)
+
+        # Expose a per-backend GPU target config spec as the `%{TARGET_CONFIG}`
+        # lit substitution, so RUN lines can select a device-matched spec
+        # instead of hard-coding a single spec for every backend.
+        target_config_args = []
+        this_backend_data = data
+        if backend in backend_to_target_config:
+            target_config_args = [
+                "--param=TARGET_CONFIG=%s" % backend_to_target_config[backend],
+            ]
+            specs_label = "//xla/backends/gpu/target_config:all_gpu_specs"
+            if specs_label not in data:
+                this_backend_data = data + [specs_label]
+
         lit_test_suite(
             name = test_name,
             srcs = srcs,
             cfg = cfg,
             tools = tools,
-            args = args + backend_args.get(backend, []),
-            data = data,
+            args = args + target_config_args + backend_args.get(backend, []),
+            data = this_backend_data,
             visibility = visibility,
             env = this_backend_env,
             timeout = timeout,
