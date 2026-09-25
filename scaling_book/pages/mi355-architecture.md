@@ -16,6 +16,9 @@ next_section_name: "Chapter 2: The JAX/ROCm Stack"
 authors:
   - name: Clarke Chong
     url: "https://github.com/clarkechong"
+  - name: ROCm JAX/XLA Team
+    url: "https://github.com/ROCm/xla"
+  - name: GPT-5.6-SoL
 
 toc:
   - name: "Inside an MI355X"
