@@ -16,19 +16,43 @@ limitations under the License.
 #ifndef XLA_BACKENDS_GPU_COLLECTIVES_RCCL_SYMMETRIC_MEMORY_H_
 #define XLA_BACKENDS_GPU_COLLECTIVES_RCCL_SYMMETRIC_MEMORY_H_
 
+#include <cstddef>  // for size_t in the RCCL 10.0+ forward declarations below
 #include <memory>
 #include <string>
 
 #include "absl/status/statusor.h"
 #include "rocm/rocm_config.h"  // IWYU pragma: keep  (defines TF_ROCM_VERSION)
+#include "xla/core/collectives/rank_id.h"
 #include "xla/core/collectives/symmetric_memory.h"
 #include "xla/stream_executor/device_address.h"
+#include "xla/tsl/concurrency/executor.h"
 
 #if (TF_ROCM_VERSION >= 50200)
 #include "rocm/include/rccl/rccl.h"
 #else
 #include "rocm/include/rccl.h"
 #endif  // TF_ROCM_VERSION >= 50200
+
+#if (TF_ROCM_VERSION >= 100000)
+// ROCm/RCCL 10.0+ declares the host-side symmetric-memory pointer helpers
+// (ncclGetLsaMultimemDevicePointer, ncclGetPeerDevicePointer) in the
+// nccl_device core header (rocm/include/rccl/nccl_device/core.h), where they
+// are `NCCL_EXTERN_C __host__` -- exported C symbols in librccl.so, not static
+// inline -- which is what makes these forward declarations link.
+//
+// We deliberately do NOT #include that header (nor the nccl_device.h umbrella):
+// it transitively pulls in device-only intrinsics that fail to compile in
+// this plain host translation unit.
+//
+// PROVENANCE: copied verbatim from RCCL hip-version_10.2.62640,
+// nccl_device/core.h.
+extern "C" {
+ncclResult_t ncclGetLsaMultimemDevicePointer(ncclWindow_t window, size_t offset,
+                                             void** outPtr);
+ncclResult_t ncclGetPeerDevicePointer(ncclWindow_t window, size_t offset,
+                                      int peer, void** outPtr);
+}  // extern "C"
+#endif  // TF_ROCM_VERSION >= 100000
 
 namespace xla::gpu {
 
@@ -39,13 +63,32 @@ class RcclSymmetricMemory final : public SymmetricMemory {
  public:
   ~RcclSymmetricMemory() final;
 
+  // `executor` is the communicator's single-threaded executor (may be null for
+  // blocking/synchronous communicators). It is used to serialize the
+  // window-lifecycle operations that mutate communicator state - symmetric
+  // window registration (in Create) and deregistration (in the destructor) -
+  // onto the communicator's owning thread.
+  //
+  // The read-only device-pointer lookups (multimem_addr()/peer_addr(), i.e.
+  // ncclGet{LsaMultimem,Peer}DevicePointer) are NOT dispatched onto `executor`:
+  // they only read already-populated window/comm metadata and do not touch
+  // RCCL's per-thread enqueue/group state.
   static absl::StatusOr<std::unique_ptr<RcclSymmetricMemory>> Create(
-      ncclComm_t comm, stream_executor::DeviceAddressBase addr);
+      ncclComm_t comm, stream_executor::DeviceAddressBase addr,
+      std::shared_ptr<tsl::Executor> executor);
 
   stream_executor::DeviceAddressBase addr() const final;
 
-  // multimem_addr() and peer_addr() are not supported by RCCL; the base-class
-  // defaults (returning Unimplemented) are used.
+  // For RCCL versions that expose ncclGetLsaMultimemDevicePointer (ROCm 10.0+)
+  // returns the multimem address for the LSA (load/store accessible) team
+  // associated with this symmetric memory.
+  absl::StatusOr<stream_executor::DeviceAddressBase> multimem_addr()
+      const final;
+
+  // For RCCL versions that expose ncclGetPeerDevicePointer (ROCm 10.0+)
+  // returns the address of the symmetric memory on a peer device.
+  absl::StatusOr<stream_executor::DeviceAddressBase> peer_addr(
+      RankId peer) const final;
 
   ncclWindow_t win() const { return win_; }
 
@@ -55,11 +98,13 @@ class RcclSymmetricMemory final : public SymmetricMemory {
 
  private:
   RcclSymmetricMemory(ncclComm_t comm, ncclWindow_t win,
-                      stream_executor::DeviceAddressBase addr);
+                      stream_executor::DeviceAddressBase addr,
+                      std::shared_ptr<tsl::Executor> executor);
 
   ncclComm_t comm_;
   ncclWindow_t win_;
   stream_executor::DeviceAddressBase addr_;
+  std::shared_ptr<tsl::Executor> executor_;
 };
 
 }  // namespace xla::gpu
