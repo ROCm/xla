@@ -2,7 +2,7 @@
 # Site settings
 # -----------------------------------------------------------------------------
 
-title: How to Scale Your Model on ROCm
+title: How to Scale Your Model on AMD
 description: >
   An AMD-specific guide to JAX and MaxText training on MI355X.
 keywords: mi355x, amd, rocm, jax, maxtext, llms, training, parallelism, profiling
@@ -40,7 +40,7 @@ serve_og_meta: true
 
 citation:
   key: scale-your-amd
-  short: 'Chong et al., "How to Scale Your Model on ROCm", online, 2026.'
+  short: 'Chong et al., "How to Scale Your Model on AMD", online, 2026.'
   author: "Chong, Clarke and ROCm JAX/XLA Team and GPT-5.6-SoL"
   year: 2026
 
