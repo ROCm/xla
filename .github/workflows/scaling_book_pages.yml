@@ -1,0 +1,56 @@
+name: Deploy scaling book
+
+on:
+  push:
+    branches: [rocm-dev-infra]
+    paths:
+      - scaling_book/**
+      - .github/workflows/scaling_book_pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a queued run supersede an in-progress one, but never cancel a deploy midway.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scaling_book
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: scaling_book
+
+      - uses: actions/configure-pages@v6
+        id: pages
+
+      - name: Build
+        env:
+          JEKYLL_ENV: production
+        run: bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: scaling_book/_site
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

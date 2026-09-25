@@ -1,0 +1,19 @@
+<script defer src="{{ '/assets/js/bootstrap.bundle.min.js' | relative_url | bust_file_cache }}"></script>
+<script defer src="{{ '/assets/js/copy_code.js' | relative_url | bust_file_cache }}"></script>
+
+<!-- Tufte-style margin sidenotes for d-footnote -->
+<script defer src="{{ '/assets/js/sidenotes.js' | relative_url | bust_file_cache }}"></script>
+
+{% if site.enable_math %}
+  <!-- mathjax-setup.js is deliberately not deferred: it must set window.MathJax
+       before the deferred MathJax bundle runs. -->
+  <script src="{{ '/assets/js/mathjax-setup.js' | relative_url | bust_file_cache }}"></script>
+  <script
+    defer
+    type="text/javascript"
+    id="MathJax-script"
+    src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"
+    integrity="sha256-MASABpB4tYktI2Oitl4t+78w/lyA+D7b/s9GEP0JOGI="
+    crossorigin="anonymous"
+  ></script>
+{% endif %}

@@ -1,0 +1,27 @@
+{% comment %}
+The book's fixed notation. Included rather than pasted so it cannot drift between
+chapters. Introduced in Chapter 5; the rationale for each choice, including the
+four collisions with the source book's notation, is in docs/structure.md.
+{% endcomment %}
+| Symbol | Meaning |
+|---|---|
+| `B` | batch size, in sequences |
+| `T` | query sequence length |
+| `S` | key/value sequence length |
+| `D` | model dimension (`d_model`) |
+| `F` | feed-forward dimension (`d_ff`) |
+| `N` | query heads |
+| `K` | key/value heads |
+| `H` | head dimension |
+| `L` | layers |
+| `V` | vocabulary size |
+| `E` | experts per layer |
+| `E_a` | experts activated per token |
+| `C` | accelerator FLOPs/s |
+| `β` | bandwidth, subscripted: `β_hbm`, `β_xgmi`, `β_net` |
+| `t_math`, `t_comms` | durations, always lowercase |
+
+Mesh axes are `X` for data and FSDP, `Y` for tensor, `Z` for pipeline, and `Ex` for
+expert. Their sizes are written `|X|`, `|Y|`, `|Z|`, `|Ex|`, and the total device
+count is the product. A sharded array is written `A[I_X, J_Y]`, meaning `A` is
+sharded on its first axis over mesh axis `X` and its second over `Y`.

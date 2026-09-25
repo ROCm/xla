@@ -105,12 +105,12 @@ The main points from the ROCm perspective are:
 produce different shardings, fusions, layouts, and library calls from the same
 StableHLO program.
 
-![](img/pg2/hlo_to_thunks.svg)
+![]({{ '/pages/img/pg2/hlo_to_thunks.svg' | relative_url }})
 
 2. XLA lowers an HLO operation through an XLA GPU emitter, Triton, or an integrated
 runtime library.
 
-![](img/pg2/hlo-3-path-lower.png)
+![]({{ '/pages/img/pg2/hlo-3-path-lower.png' | relative_url }})
 
 3. [XLA FFI](https://docs.jax.dev/en/latest/ffi.html) lets a JAX package or user
 register an external ROCm implementation. An FFI call appears in HLO as a
@@ -122,7 +122,7 @@ The three lowering paths, XLA code generation, [Triton code generation](https://
 
 A transformer architecture generally consists of a set of operation classes: matrix multiplication, attention, communication, quantization, normalization, activation functions, routing, and numerical primitives. Multiple backend implementations may exist for each of these operations, with the final lowering path determined by shape, datatype, layout, sharding, compiler configuration, and available backend integrations.
 
-![](img/pg2/hlo-3-path-lower-detailed.svg)
+![]({{ '/pages/img/pg2/hlo-3-path-lower-detailed.svg' | relative_url }})
 
 The sections below summarize the primary operation classes encountered in modern transformer workloads, together with the ROCm libraries that may implement them.
 
@@ -239,7 +239,7 @@ MaxText operates one layer above JAX. Rather than directly modifying the XLA com
 
 At a high level, MaxText code follows one of two paths:
 
-![](img/pg2/maxtext-to-rocm-backends.svg)
+![]({{ '/pages/img/pg2/maxtext-to-rocm-backends.svg' | relative_url }})
 
 Standard MaxText layers lower through ordinary JAX primitives. Specialized integrations such as Transformer Engine and JAX-AITER instead lower through FFI-backed custom JAX primitives, which appear in XLA as `custom_call` operations.
 
@@ -352,7 +352,7 @@ With standard JAX attention, the HLO exposes the attention algorithm directly.
 The first `dot` computes QK scores, the reductions and exponential implement the
 softmax, and the final `dot` multiplies the resulting probabilities by V:
 
-[![XLA-rendered HLO subgraph for standard JAX attention](img/pg2/hlo-attention-xla.svg)](img/pg2/hlo-attention-xla.svg)
+[![XLA-rendered HLO subgraph for standard JAX attention]({{ '/pages/img/pg2/hlo-attention-xla.svg' | relative_url }})]({{ '/pages/img/pg2/hlo-attention-xla.svg' | relative_url }})
 
 *Representative subgraph pruned from XLA's literal `before_optimizations` DOT
 graph.*
@@ -362,7 +362,7 @@ call. Q, K, V and attention metadata enter
 `custom_call_target="te_fused_attn_forward_ffi"`, and a
 `get-tuple-element` extracts the forward result.
 
-[![XLA-rendered HLO subgraph for Transformer Engine fused attention](img/pg2/hlo-attention-te.svg)](img/pg2/hlo-attention-te.svg)
+[![XLA-rendered HLO subgraph for Transformer Engine fused attention]({{ '/pages/img/pg2/hlo-attention-te.svg' | relative_url }})]({{ '/pages/img/pg2/hlo-attention-te.svg' | relative_url }})
 
 *Representative subgraph pruned from XLA's literal `before_optimizations` DOT
 graph. Q, K, V, and metadata converge on the

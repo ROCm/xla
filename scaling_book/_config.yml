@@ -1,0 +1,94 @@
+# -----------------------------------------------------------------------------
+# Site settings
+# -----------------------------------------------------------------------------
+
+title: How to Scale Your Model on ROCm
+description: >
+  An AMD-specific guide to JAX and MaxText training on MI355X.
+keywords: mi355x, amd, rocm, jax, maxtext, llms, training, parallelism, profiling
+lang: en
+footer_text: >
+  Powered by <a href="https://jekyllrb.com/" target="_blank">Jekyll</a> with a
+  Distill-style theme adapted from <a href="https://github.com/alshedivat/al-folio">al-folio</a>.
+  Hosted by <a href="https://pages.github.com/" target="_blank">GitHub Pages</a>.
+
+# These two must match where the site is published, or every asset 404s.
+url: https://rocm.github.io
+baseurl: "/xla"
+
+# -----------------------------------------------------------------------------
+# Layout
+# -----------------------------------------------------------------------------
+
+navbar_fixed: true
+footer_fixed: false
+max_width: 930px
+
+enable_darkmode: true
+enable_math: true
+lazy_loading_images: true
+
+# -----------------------------------------------------------------------------
+# Open Graph
+# -----------------------------------------------------------------------------
+
+serve_og_meta: true
+
+# -----------------------------------------------------------------------------
+# Citation (rendered in the appendix of every chapter)
+# -----------------------------------------------------------------------------
+
+citation:
+  key: scale-your-amd
+  short: 'Chong, "How to Scale Your Model on ROCm", online, 2026.'
+  author: "Chong, Clarke"
+  year: 2026
+
+# -----------------------------------------------------------------------------
+# Jekyll
+# -----------------------------------------------------------------------------
+
+# Files without YAML front matter are copied verbatim, so every chapter still
+# needs the `---` delimiter. This only fills in the layout if a processed page
+# under `pages/` forgets to set one. Do not apply a default layout to `assets/`.
+defaults:
+  - scope:
+      path: "pages"
+    values:
+      layout: distill
+
+plugins:
+  - jekyll-sitemap
+
+markdown: kramdown
+highlighter: rouge
+
+kramdown:
+  input: GFM
+  syntax_highlighter_opts:
+    block:
+      line_numbers: false
+
+sass:
+  style: compressed
+
+# `docs` and `tools` are excluded because Jekyll copies extensionless-front-matter
+# files through verbatim, which was publishing the internal roadmap at
+# /docs/structure.md on the live site.
+#
+# `runs` is tens of gigabytes of traces and HLO dumps that nothing on the site
+# links to. Left in, Jekyll copies all of it into `_site` on every build, which
+# takes a minute per rebuild locally and would be uploaded as the Pages artifact.
+exclude:
+  - CLAUDE.md
+  - Gemfile
+  - Gemfile.lock
+  - README.md
+  - artifacts
+  - docs
+  - pages/archive
+  - tools
+  - vendor
+  - runs
+  - bench
+  - .rocprofv3
