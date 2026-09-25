@@ -14,7 +14,7 @@ footer_text: >
 
 # These two must match where the site is published, or every asset 404s.
 url: https://rocm.github.io
-baseurl: "/xla"
+baseurl: "/xla/scaling-book"
 
 # -----------------------------------------------------------------------------
 # Layout

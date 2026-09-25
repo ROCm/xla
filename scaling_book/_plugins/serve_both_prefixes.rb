@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Incremental rebuilds always emit `_config.yml` `baseurl` in `relative_url`.
-# Mount the same `_site` files at "/" and "/xla" so local preview
+# Mount the same `_site` files at "/" and "/xla/scaling-book" so local preview
 # works with either URL. `jekyll build` never calls this method.
 
 require "webrick"
@@ -15,7 +15,7 @@ module ScaleYourAmd
 
       @server = WEBrick::HTTPServer.new(webrick_opts(opts)).tap { |o| o.unmount("") }
       servlet = Jekyll::Commands::Serve::Servlet
-      ["/xla", "/"].each do |prefix|
+      ["/xla/scaling-book", "/"].each do |prefix|
         @server.mount(prefix, servlet, destination, file_handler_opts)
       end
 

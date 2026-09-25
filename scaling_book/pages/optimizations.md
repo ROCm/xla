@@ -1,12 +1,13 @@
 ---
 layout: distill
+permalink: /optimizations.html
 title: "Memory and Kernel Optimizations"
 description: "How rematerialization, attention implementations, and grouped GEMM change memory, executed work, and ROCm lowering after local training shapes are fixed."
 date: 2026-09-16
 
 section_number: 6
 
-previous_section_url: "/pages/5-sharding"
+previous_section_url: "/sharding"
 previous_section_name: "Chapter 5: Sharding and Parallelism"
 
 next_section_url: ""

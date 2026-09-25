@@ -1,15 +1,16 @@
 ---
 layout: distill
+permalink: /mixed-precision.html
 title: "Training in Mixed Precision"
 description: "How BF16, FP16, FP8, and OCP microscaling recipes change JAX programs, MI355X matrix execution, memory use, and Llama 2 70B throughput."
 date: 2026-09-16
 
 section_number: 4
 
-previous_section_url: "/pages/3-profiling"
+previous_section_url: "/rocm-profiling"
 previous_section_name: "Chapter 3: Profiling a Training Step"
 
-next_section_url: "/pages/5-sharding"
+next_section_url: "/sharding"
 next_section_name: "Chapter 5: Sharding and Parallelism"
 
 authors:
@@ -722,10 +723,10 @@ Adam moments before gradients, activations, all-gathers, and workspaces.
 Choosing FP8 or MXFP4 for projection operands does not decide where those
 remaining bytes live or when they are materialized.
 
-[Chapter 5]({{ '/pages/5-sharding' | relative_url }}) starts from this memory
+[Chapter 5]({{ '/sharding' | relative_url }}) starts from this memory
 equation. It maps global tensors onto a device mesh, derives the resulting
 local shapes and collectives, and compares FSDP with expert parallelism.
 Chapter 6 then applies rematerialization and kernel choices to those local
 operations.
 
-<h3 markdown=1 class="next-section">Next: [sharding and parallelism]({{ '/pages/5-sharding' | relative_url }}).</h3>
+<h3 markdown=1 class="next-section">Next: [sharding and parallelism]({{ '/sharding' | relative_url }}).</h3>

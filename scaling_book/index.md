@@ -10,7 +10,7 @@ section_number: 0
 previous_section_url: ""
 previous_section_name: "Chapter 0: Intro"
 
-next_section_url: "/pages/1-mi355x"
+next_section_url: "/mi355-architecture"
 next_section_name: "Chapter 1: MI355X architecture and system topology"
 
 authors:
@@ -23,17 +23,17 @@ toc:
   - name: "Chapters"
     subsections:
       - name: "1. MI355X architecture and system topology"
-        url: "/pages/1-mi355x"
+        url: "/mi355-architecture"
       - name: "2. The JAX/ROCm Stack"
-        url: "/pages/2-jax-rocm-stack"
+        url: "/jax-rocm-stack"
       - name: "3. Profiling a Training Step"
-        url: "/pages/3-profiling"
+        url: "/rocm-profiling"
       - name: "4. Training in Mixed Precision"
-        url: "/pages/4-mixed-precision"
+        url: "/mixed-precision"
       - name: "5. Sharding and Parallelism"
-        url: "/pages/5-sharding"
+        url: "/sharding"
       - name: "6. Memory and Kernel Optimizations"
-        url: "/pages/6-mem-and-kernel-optimizations"
+        url: "/optimizations"
   - name: "Attribution"
 ---
 
@@ -56,19 +56,19 @@ explanations and derivations should read the JAX Scaling Book chapters linked th
 
 ## Chapters
 
-1. [**MI355X architecture and system topology**]({{ '/pages/1-mi355x' | relative_url }})
+1. [**MI355X architecture and system topology**]({{ '/mi355-architecture' | relative_url }})
    explains CDNA 4 matrix execution, memory, native precision formats, and AMD's Infinity Fabric topology.
-2. [**The JAX/ROCm Stack**]({{ '/pages/2-jax-rocm-stack' | relative_url }})
+2. [**The JAX/ROCm Stack**]({{ '/jax-rocm-stack' | relative_url }})
    follows a JAX program through tracing, StableHLO, XLA, ROCm libraries, FFI,
    and device execution.
-3. [**Profiling a Training Step**]({{ '/pages/3-profiling' | relative_url }})
+3. [**Profiling a Training Step**]({{ '/rocm-profiling' | relative_url }})
    connects roofline estimates to XProf, `rocprofv3`, hardware counters, and
    `rocprof-compute`.
-4. [**Training in Mixed Precision**]({{ '/pages/4-mixed-precision' | relative_url }})
+4. [**Training in Mixed Precision**]({{ '/mixed-precision' | relative_url }})
    explains training in BF16, FP16, FP8, MXFP8, MXFP6, and MXFP4, accompanied with case studies on Llama 70B.
-5. [**Sharding and Parallelism**]({{ '/pages/5-sharding' | relative_url }})
+5. [**Sharding and Parallelism**]({{ '/sharding' | relative_url }})
    explains different parallelism strategies through sharding, accompanied with case studies on Mixtral 8x22B
-6. [**Memory and Kernel Optimizations**]({{ '/pages/6-mem-and-kernel-optimizations' | relative_url }})
+6. [**Memory and Kernel Optimizations**]({{ '/optimizations' | relative_url }})
    covers rematerialization, ROCm attention backends, and grouped GEMM lowering
    for MoE models.
 
@@ -78,4 +78,4 @@ The book reuses concepts and, where noted, adapted material from the MIT-license
 JAX Scaling Book. Citations accompany reused derivations and figures. AMD, JAX,
 OpenXLA, and OCP specifications are cited where their facts are used.
 
-<h3 markdown=1 class="next-section">Next: [Chapter 1, MI355X architecture and system topology]({{ '/pages/1-mi355x' | relative_url }}).</h3>
+<h3 markdown=1 class="next-section">Next: [Chapter 1, MI355X architecture and system topology]({{ '/mi355-architecture' | relative_url }}).</h3>

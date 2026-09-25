@@ -1,5 +1,6 @@
 ---
 layout: distill
+permalink: /mi355-architecture.html
 title: "MI355X architecture and system topology"
 description: "The gfx950 execution, memory, precision, and interconnect limits that govern JAX training on one MI355X or one eight-GPU node."
 date: 2026-09-13
@@ -9,7 +10,7 @@ section_number: 1
 previous_section_url: "/"
 previous_section_name: "Chapter 0: Intro"
 
-next_section_url: "/pages/2-jax-rocm-stack"
+next_section_url: "/jax-rocm-stack"
 next_section_name: "Chapter 2: The JAX/ROCm Stack"
 
 authors:
@@ -793,18 +794,18 @@ rail placement can help.
 
 ## Where these constants reappear
 
-- [Chapter 2]({{ '/pages/2-jax-rocm-stack' | relative_url }}) follows a `jax.jit`
+- [Chapter 2]({{ '/jax-rocm-stack' | relative_url }}) follows a `jax.jit`
   computation from StableHLO to `gfx950` code and identifies whether GEMMs reach
   MFMA library kernels.
-- [Chapter 3]({{ '/pages/3-profiling' | relative_url }}) uses 288 GB, 8 TB/s,
+- [Chapter 3]({{ '/rocm-profiling' | relative_url }}) uses 288 GB, 8 TB/s,
   2.5166 PFLOP/s, and directional link bandwidth to interpret XProf and
   ROCprofiler evidence.
-- [Chapter 4]({{ '/pages/4-mixed-precision' | relative_url }}) compares BF16,
+- [Chapter 4]({{ '/mixed-precision' | relative_url }}) compares BF16,
   FP16, FP8, MXFP8, MXFP6, and MXFP4 against the native matrix ceilings.
-- [Chapter 5]({{ '/pages/5-sharding' | relative_url }}) maps FSDP and expert
+- [Chapter 5]({{ '/sharding' | relative_url }}) maps FSDP and expert
   parallelism onto the eight-GPU xGMI domain and derives their collective
   payloads.
-- [Chapter 6]({{ '/pages/6-mem-and-kernel-optimizations' | relative_url }})
+- [Chapter 6]({{ '/optimizations' | relative_url }})
   measures Llama 7B rematerialization and attention routes, then follows
   Mixtral expert work into dense, ragged, and grouped GEMM lowerings.
 
@@ -855,4 +856,4 @@ Primary software-facing and format sources:
 - [AMD Instinct MI3XX cluster reference design](https://instinct.docs.amd.com/projects/MI3XX-reference/latest/).
   Non-normative NIC, RoCEv2, tree, rail, and hybrid scale-out designs.
 
-<h3 markdown=1 class="next-section">Next: [how JAX reaches this hardware]({{ '/pages/2-jax-rocm-stack' | relative_url }}).</h3>
+<h3 markdown=1 class="next-section">Next: [how JAX reaches this hardware]({{ '/jax-rocm-stack' | relative_url }}).</h3>
