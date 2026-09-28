@@ -781,7 +781,6 @@ lit_test_suite_for_gpus(
         "mi450": [
             # TODO: re-enable once mi450 memory_bandwidth is finalized.
             "memory_bandwidth_fusion.hlo",
-            "single_instruction.hlo",
             "vectorization.hlo",
             "pdl.hlo",
         ],
