@@ -1379,6 +1379,24 @@ absl::Status EmitScanComputation(mlir::ImplicitLocOpBuilder& b,
   return absl::OkStatus();
 }
 
+// Returns `init` with the scan dimension re-inserted as a unit dimension, e.g.
+// `tensor<16xf32>` -> `tensor<16x1xf32>` for a scan along dimension 1.
+//
+// The inits and carries of `xtile.scan` keep the scan dimension so that they
+// have the same rank as the scan inputs and outputs. Rank-reduced carries would
+// be rank-zero tensors for 1D scans, which Triton does not support, and the
+// unit dimension lets the lowering broadcast a carry across a tile and extract
+// the next carry from it without any rank changes.
+TensorValue ExpandScanDim(mlir::ImplicitLocOpBuilder& b, TensorValue init,
+                          int64_t scan_dim) {
+  SmallVector<int64_t> shape(init.getType().getShape());
+  shape.insert(shape.begin() + scan_dim, 1);
+  auto type =
+      mlir::RankedTensorType::get(shape, init.getType().getElementType());
+  return mlir::cast<TensorValue>(
+      mlir::stablehlo::ReshapeOp::create(b, type, init).getResult());
+}
+
 absl::StatusOr<std::vector<TensorValue>> EmitScan(
     EmitterContext& emitter_ctx,
     const ge::TiledHloInstruction& tiled_hlo_scan) {
@@ -1457,8 +1475,11 @@ absl::StatusOr<std::vector<TensorValue>> EmitScan(
 
     SmallVector<Value> inits;
     for (int i = 0; i < num_operands; ++i) {
-      inits.push_back(emitter_ctx.TiledHloToTensorValue(
-          *tiled_hlo_scan.operand(num_operands + i)));
+      inits.push_back(
+          ExpandScanDim(b,
+                        emitter_ctx.TiledHloToTensorValue(
+                            *tiled_hlo_scan.operand(num_operands + i)),
+                        scan_dim));
     }
 
     Value zero = MakeIndex(b, 0);
@@ -1468,7 +1489,12 @@ absl::StatusOr<std::vector<TensorValue>> EmitScan(
     b.setInsertionPointToStart(for_op.getBody());
 
     Value iv = for_op.getInductionVar();
-    emitter_ctx.MapSymbolIdToSequentialDimValue(dim_info.id, iv,
+    Value tile_idx = iv;
+    if (hlo_scan.is_reverse()) {
+      Value max_tile = MakeIndex(b, loop_count - 1);
+      tile_idx = arith::SubIOp::create(b, max_tile, iv);
+    }
+    emitter_ctx.MapSymbolIdToSequentialDimValue(dim_info.id, tile_idx,
                                                 Interval{0, loop_count - 1});
 
     const auto& input_region = tiled_hlo_scan.hlo_regions().front();
@@ -1481,7 +1507,7 @@ absl::StatusOr<std::vector<TensorValue>> EmitScan(
     SmallVector<Type> carry_types;
     SmallVector<Type> output_types;
 
-    Value iv_i32 = Cast(b, iv, b.getI32Type());
+    Value tile_idx_i32 = Cast(b, tile_idx, b.getI32Type());
 
     for (int i = 0; i < num_operands; ++i) {
       TensorValue input_tile = input_results[i];
@@ -1495,7 +1521,7 @@ absl::StatusOr<std::vector<TensorValue>> EmitScan(
           CreateConst(b, init_type.getElementType(), 0.0f);
       ABSL_ASSIGN_OR_RETURN(input_tile,
                             MaskOperand(b, *input_region.roots()[i], input_tile,
-                                        iv_i32, scan_dim, neutral_value));
+                                        tile_idx_i32, scan_dim, neutral_value));
       masked_inputs.push_back(input_tile);
     }
 
@@ -1561,8 +1587,11 @@ absl::StatusOr<std::vector<TensorValue>> EmitScan(
         mask_dim_bounds.push_back(input.getType().getDimSize(idx));
       }
     }
-    TensorValue init_tensor = emitter_ctx.TiledHloToTensorValue(
-        *tiled_hlo_scan.operand(num_operands + i));
+    TensorValue init_tensor =
+        ExpandScanDim(b,
+                      emitter_ctx.TiledHloToTensorValue(
+                          *tiled_hlo_scan.operand(num_operands + i)),
+                      scan_dim);
     mlir::Value neutral_value =
         CreateConst(b, init_tensor.getType().getElementType(), 0.0f);
 
@@ -1699,6 +1728,12 @@ absl::StatusOr<TensorValue> EmitReduceWithRegion(
           mlir::ImplicitLocOpBuilder nested_b(loc, loop_builder);
 
           for (int i = 0; i < sequential_dim_ids.size(); ++i) {
+            // Fully tiled dimensions were already bound to 0 by
+            // EmitFullyTiledSequentialDimensions. Their single-trip loop is
+            // kept so that masking below is handled uniformly.
+            if (loop_iteration_counts[i] == 1) {
+              continue;
+            }
             const ge::TilingSpace::DimensionInfo& dim_info =
                 tiled_hlo.tile().tiling_space().GetDimensionInfo(
                     *tiled_hlo.hlo(), sequential_dim_ids[i]);
@@ -2178,6 +2213,11 @@ absl::Status EmitGeneric(ImplicitLocOpBuilder& b,
   b.setInsertionPointToStart(&fn.front());
   Value program_id = fn.getProgramId();
   Value tile_id = program_id;
+  // Record the bounds of the program id on the function argument. Otherwise
+  // they only live in the domains of the apply_indexing ops using it, and get
+  // lost when identity apply_indexing ops are folded.
+  fn.setArgAttr(mlir::cast<mlir::BlockArgument>(program_id).getArgNumber(),
+                "xla.range", b.getIndexArrayAttr({0, schedule.num_pids - 1}));
 
   // If there are more than one tile per pid, we need to add a scf.for loop to
   // iterate through the tiles.

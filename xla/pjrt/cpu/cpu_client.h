@@ -121,6 +121,14 @@ class PjRtCpuRawClient : public PjRtRawClient {
     return async_work_runner_.get();
   }
 
+  ThreadPoolAsyncWorkRunner* execute_work_runner() const {
+    return execute_work_runner_.get();
+  }
+
+  tsl::thread::ThreadPool* compile_thread_pool() const {
+    return compile_thread_pool_.get();
+  }
+
   tsl::thread::ThreadPool* eigen_intraop_pool() const {
     return eigen_intraop_pool_.get();
   }
@@ -289,6 +297,8 @@ class PjRtCpuRawClient : public PjRtRawClient {
   // the member variables of this class that are already destroyed.
   std::unique_ptr<tsl::thread::ThreadPool> eigen_intraop_pool_;
   std::unique_ptr<Eigen::ThreadPoolDevice> eigen_intraop_device_;
+  std::unique_ptr<tsl::thread::ThreadPool> compile_thread_pool_;
+  std::unique_ptr<ThreadPoolAsyncWorkRunner> execute_work_runner_;
   std::unique_ptr<ThreadPoolAsyncWorkRunner> async_work_runner_;
 };
 
