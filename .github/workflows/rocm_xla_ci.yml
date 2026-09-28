@@ -19,7 +19,10 @@ permissions:
 on:
   push:
     branches:
-      - rocm-jaxlib-v*
+      - 'rocm-jaxlib-v0.8.*'
+      - 'rocm-jaxlib-v0.9.*'
+      - 'rocm-jaxlib-v0.10.*'
+      - 'rocm-jaxlib-v0.11.*'
   pull_request_target:
     types: [opened, synchronize]
     branches-ignore:
