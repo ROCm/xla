@@ -2,11 +2,7 @@
 # Update rocm_configure.bzl#verify_build_defines when adding new variables.
 
 load("@config_rocm_hipcc//rocm:build_defs.bzl", "hipcc_config")
-load("@local_config_clang//:clang.bzl", "local_clang")
 load(":cc_toolchain_config.bzl", "cc_toolchain_config", "hipcc_workspace_prefix")
-
-# Local clang configuration for non-hermetic toolchain
-_LOCAL_CLANG = local_clang()
 
 # ROCm configuration from hermetic hipcc
 _HIPCC_CONFIG = hipcc_config()
@@ -64,8 +60,8 @@ cc_toolchain_config(
     name = "cc-compiler-local-config",
     abi_libc_version = "local",
     abi_version = "local",
-    # Compiler path from local_clang_info(), sets CLANG_COMPILER_PATH env var
-    clang_compiler_path = _LOCAL_CLANG.compiler_path,
+    # Same hermetic clang as --config=rocm_clang_hermetic; see rocm_configure.bzl.
+    clang_compiler_path = "%{hermetic_clang_path}",
     compile_flags = [
         "-U_FORTIFY_SOURCE",
         "-fstack-protector",
@@ -79,8 +75,7 @@ cc_toolchain_config(
     coverage_compile_flags = ["--coverage"],
     coverage_link_flags = ["--coverage"],
     cpu = "local",
-    # Include directories detected from local clang + ROCm includes
-    cxx_builtin_include_directories = _LOCAL_CLANG.include_directories,
+    cxx_builtin_include_directories = %{hermetic_clang_include_directories},
     cxx_flags = ["-std=c++17"],
     dbg_compile_flags = ["-g"],
     host_compiler_path = "clang/bin/crosstool_wrapper_driver_is_not_gcc",
