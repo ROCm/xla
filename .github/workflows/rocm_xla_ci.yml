@@ -33,17 +33,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rocm-config:
+    runs-on: ubuntu-latest
+    outputs:
+      docker-image: ${{ steps.out.outputs.docker-image }}
+    steps:
+      - id: out
+        shell: bash
+        run: |
+          echo "docker-image=${{ vars.DOCKER_IMAGE }}" >> "$GITHUB_OUTPUT"
+
   execute-xla-ut:
+    needs: rocm-config
     runs-on: amd-do-linux-xla-gpu-gfx950-dpx-1
     strategy:
       fail-fast: false
       matrix:
         mode:
           - {name: "default", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe_dynamic"]}
-          #- {name: "hermetic", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe"]}
-    container:
-      # set in https://github.com/ROCm/xla/settings/variables/actions
-      image: ${{ vars.DOCKER_IMAGE }}
+    container: &rocm_container
+      image: ${{ needs.rocm-config.outputs.docker-image }}
       options: >-
         --device=/dev/dri
         --device=/dev/kfd
@@ -52,6 +61,8 @@ jobs:
         --security-opt=seccomp=unconfined
       volumes:
         - /tmp/bazel-cache:/root/.cache/bazel
+    env:
+      DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -83,7 +94,7 @@ jobs:
             --config=ci_single_gpu \
             --local_test_jobs=4 \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=single_gpu \
@@ -108,7 +119,7 @@ jobs:
           build_tools/rocm/run_xla_ci_build.sh \
             --config=ci_rocm_cpu \
             --local_test_jobs=50 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=cpu \
