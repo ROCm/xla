@@ -65,6 +65,7 @@ limitations under the License.
 #include "xla/service/instruction_fusion.h"
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
