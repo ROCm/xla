@@ -2153,6 +2153,54 @@ ENTRY computation {
   )");
 }
 
+TEST_F(ReduceMultiOutputFusionTest, SiblingFusionOfCustomFusionConsumers) {
+  // The consumers of a Triton GEMM fusion should still be sibling-fused, so
+  // that the GEMM output is read once. The custom fusion itself is untouched.
+  const char* hlo = R"(
+HloModule module
+
+add {
+  a = f32[] parameter(0)
+  b = f32[] parameter(1)
+  ROOT c = f32[] add(a, b)
+}
+
+triton_gemm {
+  p0 = f32[64,32] parameter(0)
+  p1 = f32[32,128] parameter(1)
+  ROOT d = f32[64,128] dot(p0, p1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+}
+
+fused_elementwise {
+  p = f32[64,128] parameter(0)
+  ROOT r = f32[64,128] sqrt(p)
+}
+
+fused_reduction {
+  p = f32[64,128] parameter(0)
+  z = f32[] constant(0)
+  ROOT r = f32[64] reduce(p, z), dimensions={1}, to_apply=add
+}
+
+ENTRY computation {
+  p0 = f32[64,32] parameter(0)
+  p1 = f32[32,128] parameter(1)
+  gemm = f32[64,128] fusion(p0, p1), kind=kCustom, calls=triton_gemm,
+    backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
+  o1 = f32[64,128] fusion(gemm), kind=kLoop, calls=fused_elementwise
+  o2 = f32[64] fusion(gemm), kind=kInput, calls=fused_reduction
+  ROOT out = (f32[64,128], f32[64]) tuple(o1, o2)
+}
+)";
+
+  CheckMultiOutputFusion(hlo, R"(
+// CHECK: ENTRY
+// CHECK: [[gemm:%[^ ]+]] = f32[64,128]{1,0} fusion({{.*}}), kind=kCustom, calls=%triton_gemm
+// CHECK: [[mof:%[^ ]+]] = (f32[64,128]{1,0}, f32[64]{0}) fusion([[gemm]]), kind=kInput
+// CHECK-NOT: fusion([[gemm]])
+  )");
+}
+
 TEST_F(ReduceMultiOutputFusionTest, SkipsDynamicSliceFusionV2Producer) {
   auto module = ParseAndReturnVerifiedModule(R"(
     HloModule test_module
