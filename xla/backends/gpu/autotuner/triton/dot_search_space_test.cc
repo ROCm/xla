@@ -55,6 +55,7 @@ using ::testing::Field;
 using ::testing::Ge;
 using ::testing::IsEmpty;
 using ::testing::Le;
+using ::testing::Lt;
 using ::testing::SizeIs;
 
 // Returns a matcher that verifies that each container element that matches
@@ -574,6 +575,19 @@ TEST_F(RocmDotSearchSpaceTest, GeneratesMfmaSizeConfigs) {
   EXPECT_THAT(configs, AllOf(Not(IsEmpty()), Contains(MfmaSizeIs(Eq(16))),
                              Contains(MfmaSizeIs(Eq(0))),
                              Each(MfmaSizeIs(AnyOf(0, 16)))));
+  EXPECT_THAT(configs, Not(Contains(AllOf(
+                           MfmaSizeIs(Eq(16)),
+                           AnyOf(BlockMIs(Lt(32)), BlockNIs(Lt(32)))))));
+}
+
+TEST_F(RocmDotSearchSpaceTest, NarrowDotDoesNotGetMfmaSizeConfigs) {
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<VerifiedHloModule> module,
+      GetDefaultDotModule(/*lhs_parallel_dim=*/1024, /*rhs_parallel_dim=*/16));
+  TritonDotFusionSearchSpace search_space = MakeSearchSpace(module.get());
+
+  EXPECT_THAT(search_space.GenerateConfigs(),
+              AllOf(Not(IsEmpty()), Each(MfmaSizeIs(Eq(0)))));
 }
 
 }  // namespace

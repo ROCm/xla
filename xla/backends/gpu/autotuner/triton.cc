@@ -224,8 +224,6 @@ TritonBackend::GetSupportedConfigsForScaledDot(const HloInstruction* instr) {
       gpu_cc.IsRocm() &&
       gpu_cc.rocm_compute_capability()->has_mfma_instr_support() &&
       (exhaustive_search || !gpu_cc.rocm_compute_capability()->gfx9_mi350());
-  constexpr int kSmallMfmaSize = 16;
-  constexpr int kLargeMfmaSize = 32;
   for (int block_m = 128; block_m <= 256; block_m *= 2) {
     for (int block_n = 16; block_n <= 256; block_n *= 2) {
       for (int block_k = 128; block_k <= 256; block_k *= 2) {
@@ -247,9 +245,7 @@ TritonBackend::GetSupportedConfigsForScaledDot(const HloInstruction* instr) {
                                 /*is_tma_allowed=*/false);
         configs.push_back(config);
 
-        // Below kLargeMfmaSize the backend already defaults to kSmallMfmaSize.
-        if (autotune_mfma_size && block_m >= kLargeMfmaSize &&
-            block_n >= kLargeMfmaSize) {
+        if (autotune_mfma_size && ShouldTrySmallMfma(block_m, block_n)) {
           config.mfma_size = kSmallMfmaSize;
           configs.push_back(config);
         }

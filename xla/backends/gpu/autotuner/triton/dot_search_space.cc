@@ -669,20 +669,15 @@ void TritonDotFusionSearchSpace::AddMfmaSizeParameter(
     const ConfigWithNotes& config,
     std::vector<ConfigWithNotes>& updated_configs) const {
   // Auto picks the largest MFMA that fits the tile, which is not always the
-  // fastest. Unsupported shapes fall back to FMA and just lose on timing.
-  static constexpr int kMfmaSizeValues[] = {0, 16};
-  const int min_mn = std::min(config.config.block_m, config.config.block_n);
-  const bool auto_picks_16 = min_mn >= 16 && min_mn < 32;
-  for (int mfma_size : kMfmaSizeValues) {
-    if (mfma_size == 16 && auto_picks_16) {
-      continue;
-    }
-    ConfigWithNotes new_config = config;
-    new_config.config.mfma_size = mfma_size;
-    VLOG(10) << "Adding mfma_size parameter: config = "
-             << new_config.ToString();
-    updated_configs.push_back(new_config);
+  // fastest.
+  updated_configs.push_back(config);
+  if (!ShouldTrySmallMfma(config.config.block_m, config.config.block_n)) {
+    return;
   }
+  ConfigWithNotes new_config = config;
+  new_config.config.mfma_size = kSmallMfmaSize;
+  VLOG(10) << "Adding mfma_size parameter: config = " << new_config.ToString();
+  updated_configs.push_back(new_config);
 }
 
 }  // namespace xla::gpu

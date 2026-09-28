@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_BACKENDS_GPU_AUTOTUNER_TRITON_DOT_SEARCH_SPACE_H_
 #define XLA_BACKENDS_GPU_AUTOTUNER_TRITON_DOT_SEARCH_SPACE_H_
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -28,6 +29,17 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 
 namespace xla::gpu {
+
+// The MFMA MN size the autotuner tries on top of auto.
+inline constexpr int kSmallMfmaSize = 16;
+
+// Whether forcing a kSmallMfmaSize MFMA on this tile is worth a candidate.
+// Auto already picks it when the smaller of M and N is in [16, 32). Below 16
+// Triton skips its divisibility check for a forced size, and the resulting
+// kernels were measured to produce wrong results.
+inline bool ShouldTrySmallMfma(int block_m, int block_n) {
+  return std::min(block_m, block_n) >= 2 * kSmallMfmaSize;
+}
 
 // Generates the space of promising Triton configs for a given dot fusion
 // and hardware.
