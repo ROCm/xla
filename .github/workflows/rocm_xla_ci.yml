@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   execute-xla-ut:
-    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-4
+    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-1
     strategy:
       fail-fast: false
       matrix:
@@ -85,20 +85,20 @@ jobs:
             --bes_keywords=release \
             --bes_keywords=single_gpu \
             --bes_keywords=pull_request
-
-      - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
-        if: always() && !cancelled()
-        run: |
-          build_tools/rocm/run_xla_ci_build.sh \
-            ${{ join(matrix.mode.configs, ' ') }} \
-            --config=ci_multi_gpu \
-            --local_test_jobs=1 \
-            --strategy=TestRunner=local \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
-            --bes_keywords=xla \
-            --bes_keywords=release \
-            --bes_keywords=multi_gpu \
-            --bes_keywords=pull_request
+      # Enable when 4gpu runner is available
+      #- name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
+      #  if: always() && !cancelled()
+      #  run: |
+      #    build_tools/rocm/run_xla_ci_build.sh \
+      #      ${{ join(matrix.mode.configs, ' ') }} \
+      #      --config=ci_multi_gpu \
+      #      --local_test_jobs=1 \
+      #      --strategy=TestRunner=local \
+      #      --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
+      #      --bes_keywords=xla \
+      #      --bes_keywords=release \
+      #      --bes_keywords=multi_gpu \
+      #      --bes_keywords=pull_request
       - name: Test XLA [rocm_cpu]
         if: always() && !cancelled()
         run: |
