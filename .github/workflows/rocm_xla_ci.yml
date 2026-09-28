@@ -81,7 +81,6 @@ jobs:
             --local_test_jobs=4 \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
-            --jobs=30 \
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=single_gpu \
