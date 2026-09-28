@@ -403,9 +403,29 @@ TEST(TritonGemmConfigTest, ProtoRoundTripPreservesMfmaSize) {
   AutotuneResult::TritonGemmKey key = config.ToProto();
   EXPECT_EQ(key.mfma_size(), 16);
 
-  TF_ASSERT_OK_AND_ASSIGN(TritonGemmConfig restored,
-                          TritonGemmConfig::FromProto(key));
+  ASSERT_OK_AND_ASSIGN(TritonGemmConfig restored,
+                       TritonGemmConfig::FromProto(key));
   EXPECT_EQ(restored.mfma_size, 16);
+}
+
+TEST(TritonGemmConfigTest, FromProtoRejectsInvalidMfmaSize) {
+  TritonGemmConfig config(/*block_m=*/32, /*block_n=*/32, /*block_k=*/32,
+                          /*num_stages=*/1, /*num_warps=*/4);
+  AutotuneResult::TritonGemmKey key = config.ToProto();
+
+  key.set_mfma_size(16);
+  EXPECT_OK(TritonGemmConfig::FromProto(key));
+  key.set_mfma_size(32);
+  EXPECT_FALSE(TritonGemmConfig::FromProto(key).ok());
+  key.set_mfma_size(7);
+  EXPECT_FALSE(TritonGemmConfig::FromProto(key).ok());
+  key.set_mfma_size((int64_t{1} << 32) | 16);
+  EXPECT_FALSE(TritonGemmConfig::FromProto(key).ok());
+
+  // A forced size wider than the tile.
+  key.set_block_n(8);
+  key.set_mfma_size(16);
+  EXPECT_FALSE(TritonGemmConfig::FromProto(key).ok());
 }
 
 TEST(TritonGemmConfigTest, ToStringIncludesMfmaSize) {

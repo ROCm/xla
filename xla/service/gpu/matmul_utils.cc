@@ -1136,7 +1136,13 @@ absl::StatusOr<se::gpu::BlasLt::Epilogue> AsBlasLtEpilogue(
   TF_RET_CHECK(proto.waves_per_eu() >= 0);
   // group_size == 0 in old protos (field absent) is treated as 1 (no reorder)
   TF_RET_CHECK(proto.group_size() >= 0);
-  TF_RET_CHECK(proto.mfma_size() >= 0);
+  // Triton falls back to FMA without an error on sizes with no MFMA, and a
+  // forced size larger than the tile skips its divisibility check.
+  TF_RET_CHECK(proto.mfma_size() == 0 || proto.mfma_size() == 16)
+      << "mfma_size must be 0 or 16, got " << proto.mfma_size();
+  TF_RET_CHECK(proto.mfma_size() <= std::min(proto.block_m(), proto.block_n()))
+      << "mfma_size " << proto.mfma_size() << " exceeds the "
+      << proto.block_m() << "x" << proto.block_n() << " tile";
 
   return TritonGemmConfig(
       proto.block_m(), proto.block_n(), proto.block_k(), proto.num_stages(),
