@@ -31,12 +31,12 @@ concurrency:
 
 jobs:
   execute-xla-ut:
-    runs-on: linux-mi250-4
+    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-4
     strategy:
       fail-fast: false
       matrix:
         mode:
-          - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe"]}
+          - {name: "default", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe_dynamic"]}
           #- {name: "hermetic", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe"]}
     container:
       # set in https://github.com/ROCm/xla/settings/variables/actions
@@ -79,9 +79,8 @@ jobs:
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
-            --jobs=30 \
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=single_gpu \
@@ -104,10 +103,8 @@ jobs:
         if: always() && !cancelled()
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
-            --config=rocm_ci \
-            --config=rocm_rbe \
             --config=ci_rocm_cpu \
-            --local_test_jobs=200 \
+            --local_test_jobs=50 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --bes_keywords=xla \
             --bes_keywords=release \
