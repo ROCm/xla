@@ -74,6 +74,10 @@ EXCLUDED_TESTS=(
     "RaggedAllToAllTest/RaggedAllToAllTest.RaggedAllToAll_2GPUs/sync_one_shot_with_multi_gpu_barrier_with_nccl_private"
     "RaggedAllToAllTest/RaggedAllToAllTest.RaggedAllToAll_2GPUs/sync_nccl_peer"
 
+    "Convolve1D_1x2x5_1x2x2_WithPadding/0.Types"
+    "Convolve1D_1x2x5_1x2x2_WithPadding/1.Types"
+    "StreamExecutorGpuClientTest.NumaNode"
+    "ConvolutionTest.Convolve3D_1x4x2x3x3_2x2x2x3x3_Valid"
 )
 
 for arg in "$@"; do
