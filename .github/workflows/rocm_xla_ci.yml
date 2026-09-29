@@ -72,6 +72,7 @@ jobs:
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
+            --jobs=50 \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
@@ -85,6 +86,7 @@ jobs:
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
+            --jobs=50 \
             --config=ci_multi_gpu \
             --local_test_jobs=1 \
             --strategy=TestRunner=local \
@@ -98,7 +100,7 @@ jobs:
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             --config=ci_rocm_cpu \
-            --local_test_jobs=50 \
+            --jobs=50 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
             --bes_keywords=xla \
             --bes_keywords=release \
