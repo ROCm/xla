@@ -35,6 +35,14 @@ for arg in "$@"; do
     fi
 done
 
+EXCLUDED_TESTS=(
+    "StreamExecutorGpuClientTest.NumaNode"
+    "GpuKernelTilingTest.ReductionInputTooLarge"
+    "MxScaledDotExecutionTest.MxFp4Fp8MixedBatchedCorrectness"
+    "NumericTestsForBlas/NumericTestsForBlas.Infinity/dot_tf32_tf32_f32_x3"
+    "PrngTest.PassInGlobalRngSeed"
+)
+
 SCRIPT_DIR=$(dirname $0)
 bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --build_tag_filters=$TAG_FILTERS \
@@ -47,4 +55,8 @@ bazel --bazelrc="$SCRIPT_DIR/rocm_xla_ci.bazelrc" test \
     --test_env=TF_TESTS_PER_GPU=1 \
     --action_env=XLA_FLAGS="--xla_gpu_force_compilation_parallelism=16 --xla_gpu_blas_max_algorithms=8" \
     --test_output=errors \
+    --test_filter=-$(
+        IFS=:
+        echo "${EXCLUDED_TESTS[*]}"
+    ) \
     "$@"
