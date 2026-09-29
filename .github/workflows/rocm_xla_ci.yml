@@ -51,7 +51,7 @@ jobs:
       fail-fast: false
       matrix:
         mode:
-          - {name: "default", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe_dynamic"]}
+          - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe_dynamic"]}
     container: &rocm_container
       image: ${{ needs.rocm-config.outputs.docker-image }}
     env:
