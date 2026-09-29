@@ -27,7 +27,7 @@ on:
     branches:
       - 'rocm-jaxlib-v0.8.*'
       - 'rocm-jaxlib-v0.9.*'
-      - 'rocm-jaxlib-v0.10.*
+      - 'rocm-jaxlib-v0.10.*'
 
 concurrency:
   group: ${{ github.event.pull_request.number && format('CI ROCm-PR-{0}', github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
