@@ -396,18 +396,23 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetHipBlasLtMatmulPlan(
   ABSL_ASSIGN_OR_RETURN(auto c_desc, MatrixLayout::Create(c_layout));
   ABSL_ASSIGN_OR_RETURN(auto d_desc, MatrixLayout::Create(output_layout));
 
-  // hipBLASLt defaults the bias data type to the output (D) type for FP8
-  // matmuls, unlike cuBLASLt which infers it from the bias tensor. When the
-  // caller supplied an explicit bias type, forward it to hipBLASLt so that
-  // e.g. a BF16 bias can fuse with an FP8-output GEMM.
-  bool has_bias = static_cast<int32_t>(epilogue) &
-                  static_cast<int32_t>(gpu::BlasLt::Epilogue::kBias);
-  if (has_bias && cfg.bias_type.has_value()) {
-    ABSL_ASSIGN_OR_RETURN(auto blas_bias_type,
-                          gpu::AsBlasDataType(*cfg.bias_type));
-    hipDataType hip_bias_type = AsHipblasDataType(blas_bias_type);
-    ABSL_RETURN_IF_ERROR(SetAttr(
-        op_desc.get(), HIPBLASLT_MATMUL_DESC_BIAS_DATA_TYPE, hip_bias_type));
+  // For FP8 matmuls hipBLASLt defaults the bias data type to the output (D)
+  // type, unlike cuBLASLt which infers it from the bias tensor. Forward the
+  // actual bias type so that e.g. a BF16 bias works with an F32 or FP8 output.
+  if (op_desc.has_bias_epilogue() && cfg.bias_type.has_value() &&
+      xla::primitive_util::IsF8Type(lhs_layout.dtype)) {
+    xla::PrimitiveType bias_type = *cfg.bias_type;
+    if (bias_type != xla::F16 && bias_type != xla::BF16 &&
+        bias_type != xla::F32) {
+      return xla::InvalidArgument(
+          "Unsupported bias type for an FP8 hipBLASLt matmul: %s",
+          xla::primitive_util::LowercasePrimitiveTypeName(bias_type));
+    }
+    ABSL_ASSIGN_OR_RETURN(blas::DataType blas_bias_type,
+                          gpu::AsBlasDataType(bias_type));
+    ABSL_RETURN_IF_ERROR(SetAttr(op_desc.get(),
+                                 HIPBLASLT_MATMUL_DESC_BIAS_DATA_TYPE,
+                                 AsHipblasDataType(blas_bias_type)));
   }
 
   std::tuple operand_types{a_desc.type(), b_desc.type(), c_desc.type(),

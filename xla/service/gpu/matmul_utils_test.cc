@@ -19,10 +19,12 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "absl/status/status_matchers.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "xla/autotuning.pb.h"
 #include "xla/hlo/ir/hlo_module.h"
@@ -30,7 +32,12 @@ limitations under the License.
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/hlo/testlib/test.h"
 #include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/tsl/platform/statusor.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace gpu {
@@ -390,6 +397,32 @@ TEST(TritonGemmConfigTest, ToStringIncludesWavesPerEu) {
                           /*waves_per_eu=*/4);
   std::string str = config.ToString();
   EXPECT_NE(str.find("waves_per_eu:4"), std::string::npos);
+}
+
+absl::StatusOr<GemmConfig> GemmConfigForBias(const Shape* bias_shape) {
+  Shape lhs_shape = ShapeUtil::MakeShape(BF16, {16, 32});
+  Shape rhs_shape = ShapeUtil::MakeShape(BF16, {32, 16});
+  Shape output_shape = ShapeUtil::MakeShape(F32, {16, 16});
+  return GemmConfig::For(
+      lhs_shape, /*lhs_batch_dims=*/{}, /*lhs_contracting_dims=*/{1}, rhs_shape,
+      /*rhs_batch_dims=*/{}, /*rhs_contracting_dims=*/{0},
+      /*c_shape=*/output_shape, bias_shape, output_shape, /*alpha_real=*/1.0,
+      /*alpha_imag=*/0.0, /*beta=*/0.0, PrecisionConfig::ALG_UNSET,
+      /*algorithm=*/std::nullopt, /*compute_precision=*/0, /*grad_x=*/false,
+      /*grad_y=*/false, se::gpu::ScaleMode::kNone,
+      se::GpuComputeCapability{se::CudaComputeCapability::Hopper()});
+}
+
+TEST(GemmConfigTest, ForSetsBiasTypeFromVectorBias) {
+  Shape bias_shape = ShapeUtil::MakeShape(BF16, {16});
+  ASSERT_OK_AND_ASSIGN(GemmConfig config, GemmConfigForBias(&bias_shape));
+  EXPECT_EQ(config.bias_type, BF16);
+}
+
+TEST(GemmConfigTest, ForLeavesBiasTypeUnsetWithoutVectorBias) {
+  ASSERT_OK_AND_ASSIGN(GemmConfig config,
+                       GemmConfigForBias(/*bias_shape=*/nullptr));
+  EXPECT_EQ(config.bias_type, std::nullopt);
 }
 
 }  // namespace

@@ -2623,7 +2623,8 @@ TEST_F(ParameterizedFp8GemmRewriteTest, ScaledABScaledDMatrixBiasF8) {
       GemmRewriter(CudaHopperOrRocmCapability(), GetToolkitVersion(),
                    GemmRewriterOptions{GemmRewriterOptions::DType::kFp8Only}),
       R"(
-; CHECK:     = (<<F8E4M3>>[16,16]{1,0}, s8[{{[0-9]+}}]{0}) custom-call(
+; CHECK-PTX:     = (<<F8E4M3>>[16,16]{1,0}, s8[{{[0-9]+}}]{0}) custom-call(
+; CHECK-GCN:     = (f16[16,16]{1,0}, s8[{{[0-9]+}}]{0}) custom-call(
 ; CHECK-SAME:      custom_call_target="__cublas$lt$matmul$f8"
       )");
 }
@@ -2671,8 +2672,8 @@ TEST_F(ParameterizedFp8GemmRewriteTest, ScaledABScaledDBF16VectorBiasF8) {
       )");
 }
 
-// On ROCm, a GEMM with FP8 output ends with its D scale operand, and hipBLASLt
-// reads its vector bias as F16, so no vector bias is fused into it.
+// On ROCm, a GEMM with FP8 output ends with its D scale operand, so no vector
+// bias is fused into it afterwards.
 TEST_F(ParameterizedFp8GemmRewriteTest,
        UnscaledABUnscaledDVectorBiasF8OutputNotFused) {
   if (!IsRocm()) {
@@ -2702,6 +2703,8 @@ TEST_F(ParameterizedFp8GemmRewriteTest,
       )");
 }
 
+// hipBLASLt has no E4M3 x E4M3 -> E5M2 kernels, so the conversion to E5M2
+// stays unfused on ROCm.
 TEST_F(ParameterizedFp8GemmRewriteTest, ScaledABScaledDToE5M2F8) {
   const char* hlo_text = R"(
     HloModule test
