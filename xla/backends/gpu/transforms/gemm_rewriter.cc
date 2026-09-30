@@ -1800,17 +1800,18 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
           ->set_output_to_operand_aliasing({});
     }
 
-    // hipBLASLt reads the vector bias of a GEMM with FP8 output as F16.
     if (gpu_version_.IsRocm()) {
       ABSL_ASSIGN_OR_RETURN(
           bool has_vector_bias,
           gpublas_lt::EpilogueAddsVectorBias(gemm_backend_config.epilogue()));
-      if (has_vector_bias &&
-          existing_gemm->operands().back()->shape().element_type() != F16) {
+      PrimitiveType bias_type =
+          existing_gemm->operands().back()->shape().element_type();
+      if (has_vector_bias && bias_type != F16 && bias_type != BF16) {
         VLOG(1) << "The scaling and conversion of the result of "
                 << existing_gemm->ToShortString()
-                << " is not fused into the FP8 Custom Call because hipBLASLt "
-                   "only supports an F16 vector bias with FP8 output.";
+                << " is not fused into the FP8 Custom Call because only F16 "
+                   "and BF16 vector biases are supported with FP8 output on "
+                   "ROCm.";
         return absl::OkStatus();
       }
     }
@@ -2079,8 +2080,9 @@ class GemmRewriterVisitor : public DfsHloRewriteVisitor {
     if (!SupportsEpilogueFusion(gemm->shape().element_type())) {
       return false;
     }
-    // On ROCm, the last operand of a GEMM with FP8 output is the D scale, and
-    // hipBLASLt reads its vector bias as F16.
+    // On ROCm, the last operand of a GEMM with FP8 output is the D scale.
+    // Appending a bias after it would break the operand layout that the thunk
+    // emitter expects (d_scale at operands().back()).
     if (gpu_version_.IsRocm() &&
         primitive_util::IsF8Type(gemm->shape().element_type())) {
       return false;
