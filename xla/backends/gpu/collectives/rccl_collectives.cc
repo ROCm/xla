@@ -129,6 +129,31 @@ class RcclIdStore {
   absl::Mutex mu_;
   absl::flat_hash_map<gpu::GpuCliqueKey, CliqueId> cache_ ABSL_GUARDED_BY(mu_);
 };
+
+// Ensures RCCL's cuMem-based allocator is enabled by default so that symmetric
+// memory works.
+//
+// RCCL symmetric memory is only enabled when comm->symmetricSupport is true,
+// which requires ncclCuMemEnable(). Without it, ncclCommWindowRegister silently
+// takes the non-symmetric path and never inserts the window into RCCL's global
+// window map, causing later ncclGetPeerDevicePointer calls to fail with "Could
+// not find communicator matching window ... ".
+//
+// RCCL reads NCCL_CUMEM_ENABLE exactly once on the first RCCL API call
+// (ncclInit -> initEnv, guarded by std::call_once) and caches it, so the
+// default must be installed before any RCCL symbol is touched.
+void EnsureRcclCuMemEnableDefault() {
+#if defined(TF_ROCM_VERSION) && (TF_ROCM_VERSION >= 100000)
+  static absl::once_flag once;
+  absl::call_once(once, [] {
+    // overwrite=0: do not clobber an explicit user setting.
+    tsl::setenv("NCCL_CUMEM_ENABLE", "1", /*overwrite=*/0);
+    VLOG(1) << "RCCL: defaulting NCCL_CUMEM_ENABLE=1 (required for symmetric "
+               "memory); set NCCL_CUMEM_ENABLE explicitly to override.";
+  });
+#endif  // TF_ROCM_VERSION >= 100000
+}
+
 }  // namespace
 
 //===----------------------------------------------------------------------===//
@@ -215,6 +240,9 @@ RcclCollectives::CreateCommunicatorsWithCancel(
   if (!clique_ids.has_value() || clique_ids->data().empty()) {
     return InvalidArgument("CliqueId is required to create NCCL communicators");
   }
+  // Install the NCCL_CUMEM_ENABLE default before any RCCL symbol is touched
+  // (the ncclGetVersion() call below is the first RCCL API call on this path).
+  EnsureRcclCuMemEnableDefault();
   int rccl_version;
   XLA_RCCL_RETURN_IF_ERROR(ncclGetVersion(&rccl_version));
   if (clique_ids->data().size() != 1 && rccl_version < NCCL_VERSION(2, 23, 0)) {
@@ -316,6 +344,9 @@ RcclCollectives::SplitCommunicatorsWithCancel(
   const auto& gpu_config =
       absl::down_cast<const GpuCollectives::Config&>(config);
 
+  // Install the NCCL_CUMEM_ENABLE default before any RCCL symbol is touched.
+  EnsureRcclCuMemEnableDefault();
+
   auto make_comm = [&](int i) -> absl::StatusOr<ncclComm_t> {
     auto* device = absl::down_cast<GpuCollectives::Device*>(ranks[i].device);
     TF_RET_CHECK(device != nullptr);
@@ -355,6 +386,11 @@ RcclCollectives::SplitCommunicatorsWithCancel(
 }
 
 absl::StatusOr<void*> RcclCollectives::Allocate(uint64_t bytes) {
+  // ncclMemAlloc() below is often the first RCCL API call in the process
+  // (collective memory is allocated before communicators are created). RCCL
+  // caches NCCL_CUMEM_ENABLE on that first call, so install the default here
+  // too.
+  EnsureRcclCuMemEnableDefault();
   void* ptr = nullptr;
   ncclResult_t res = ncclMemAlloc(&ptr, bytes);
   if (res != ncclSuccess) {

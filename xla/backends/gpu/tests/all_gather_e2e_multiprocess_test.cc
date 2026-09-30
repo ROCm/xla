@@ -66,6 +66,10 @@ limitations under the License.
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
 
+#if TENSORFLOW_USE_ROCM
+#include "rocm/rocm_config.h"
+#endif  // TENSORFLOW_USE_ROCM
+
 namespace xla {
 namespace {
 
@@ -277,6 +281,10 @@ absl::Status AllGatherMultiProcessTestBody(int node_id, int port) {
 }
 
 TEST(AllGatherMultiProcessE2ETest, OneShotAllGather2Processes) {
+#if TENSORFLOW_USE_ROCM && (TF_ROCM_VERSION < 100000)
+  GTEST_SKIP() << "RCCL symmetric memory requires ROCm 10.0 or newer.";
+#endif  // TENSORFLOW_USE_ROCM && TF_ROCM_VERSION < 100000
+
   absl::StatusOr<se::Platform*> platform = PlatformUtil::GetPlatform("gpu");
   if (!platform.ok() || (*platform)->VisibleDeviceCount() < kNumNodes) {
     GTEST_SKIP() << "Test requires at least " << kNumNodes
