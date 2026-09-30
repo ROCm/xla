@@ -406,9 +406,8 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetHipBlasLtMatmulPlan(
     ABSL_ASSIGN_OR_RETURN(auto blas_bias_type,
                           gpu::AsBlasDataType(*cfg.bias_type));
     hipDataType hip_bias_type = AsHipblasDataType(blas_bias_type);
-    ABSL_RETURN_IF_ERROR(SetAttr(op_desc.get(),
-                                 HIPBLASLT_MATMUL_DESC_BIAS_DATA_TYPE,
-                                 hip_bias_type));
+    ABSL_RETURN_IF_ERROR(SetAttr(
+        op_desc.get(), HIPBLASLT_MATMUL_DESC_BIAS_DATA_TYPE, hip_bias_type));
   }
 
   std::tuple operand_types{a_desc.type(), b_desc.type(), c_desc.type(),
