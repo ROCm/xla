@@ -165,6 +165,12 @@ message DebugOptions {
     WHILE_LOOP_UNROLLING_MANUAL_UNROLL = 4;
   }
 
+  enum HipblasLtMxScaleLayout {
+    HIPBLASLT_MX_SCALE_LAYOUT_LINEAR = 0;
+    HIPBLASLT_MX_SCALE_LAYOUT_PRESWIZZLED_32X8 = 1;
+    HIPBLASLT_MX_SCALE_LAYOUT_AUTO = 2;
+  }
+
   //--------------------------------------------------------------------------//
   // XLA backend-agnostic options.
   //--------------------------------------------------------------------------//
@@ -1874,6 +1880,13 @@ message DebugOptions {
   // We need this to enable triton scaled dot emitter for testing.
   optional bool xla_gpu_experimental_scaled_dot_with_triton = 410;
 
+  // Controls which physical scale layouts hipBLASLt considers for MX GEMMs.
+  // AUTO includes both linear and 32x8 candidates, with the conversion cost.
+  // This controls candidate enumeration only; the selected layout is serialized
+  // with the candidate and matmul backend config.
+  optional HipblasLtMxScaleLayout
+      xla_gpu_experimental_hipblaslt_mx_scale_layout = 564;
+
   // If true, use MultiGpuBarrierWithNcclKernel in one-shot RaggedAllToAll
   // thunk.
   optional bool xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl =
@@ -1988,7 +2001,7 @@ message DebugOptions {
   // (ScanRewriterTriton).
   optional bool xla_gpu_experimental_enable_triton_scan = 562;
 
-  // Next id: 564
+  // Next id: 565
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
