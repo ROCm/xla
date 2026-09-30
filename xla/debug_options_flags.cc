@@ -565,6 +565,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_detect_unstable_reductions_post_optimizations(
       DebugOptions::DETECTION_MODE_NONE);
   opts.set_xla_gpu_experimental_scaled_dot_with_triton(true);
+  opts.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+      DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_LINEAR);
   opts.set_xla_early_exit_with_layouts(false);
   opts.set_xla_gpu_experimental_early_exit(
       DebugOptions::EARLY_EXIT_POINT_UNSET);
@@ -3734,6 +3736,28 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
           &DebugOptions::set_xla_gpu_experimental_scaled_dot_with_triton),
       debug_options->xla_gpu_experimental_scaled_dot_with_triton(),
       "If true, use the Triton emitter for scaled dot."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_hipblaslt_mx_scale_layout",
+      [debug_options](const std::string& value) {
+        std::string name = absl::AsciiStrToUpper(value);
+        constexpr absl::string_view prefix = "HIPBLASLT_MX_SCALE_LAYOUT_";
+        if (!absl::StartsWith(name, prefix)) {
+          name = absl::StrCat(prefix, name);
+        }
+        DebugOptions::HipblasLtMxScaleLayout layout;
+        if (!DebugOptions::HipblasLtMxScaleLayout_Parse(name, &layout)) {
+          return false;
+        }
+        debug_options->set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+            layout);
+        return true;
+      },
+      DebugOptions::HipblasLtMxScaleLayout_Name(
+          debug_options->xla_gpu_experimental_hipblaslt_mx_scale_layout()),
+      "Experimental: hipBLASLt MX scale layout candidates: LINEAR (default), "
+      "PRESWIZZLED_32X8 (gfx950 aligned E4M3FN GEMMs), or AUTO (both). "
+      "Pre-swizzled candidates include device scale conversion in their "
+      "timing."));
 
   flag_list->push_back(tsl::Flag(
       "xla_cpu_collective_call_warn_stuck_timeout_seconds",

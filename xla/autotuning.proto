@@ -84,6 +84,15 @@ message AutotuneResult {
   message GemmKey {
     int64 algorithm = 1;
     int64 autotune_workspace_size = 2;
+
+    // The physical scale layout used by an MX GEMM candidate. Algorithm indices
+    // are local to this layout's heuristic result, so retain it in cached
+    // autotuning results. Unset/legacy results use the linear layout.
+    enum MxScaleLayout {
+      MX_SCALE_LAYOUT_LINEAR = 0;
+      MX_SCALE_LAYOUT_HIPBLASLT_32X8 = 1;
+    }
+    MxScaleLayout mx_scale_layout = 3;
   }
 
   // Legacy and unused in new data; superseded by AlgorithmProto.

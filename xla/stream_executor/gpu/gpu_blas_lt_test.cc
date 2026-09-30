@@ -16,6 +16,7 @@ limitations under the License.
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/status/status.h"
@@ -114,10 +115,16 @@ TEST(GemmConfigTest, ProtoConversion) {
       std::nullopt                      // compute_type
   };
 
-  xla::GemmConfigProto proto = original_config.ToProto();
-  ASSERT_OK_AND_ASSIGN(auto round_tripped_config, GemmConfig::FromProto(proto));
-
-  ExpectGemmConfigEq(original_config, round_tripped_config);
+  for (ScaleMode mode :
+       {ScaleMode::kNone, ScaleMode::kTensorScaling, ScaleMode::kBlockScaling,
+        ScaleMode::kBlockScaling32x8}) {
+    original_config.scale_mode = mode;
+    xla::GemmConfigProto proto = original_config.ToProto();
+    auto round_tripped_config_or = GemmConfig::FromProto(proto);
+    ASSERT_THAT(round_tripped_config_or, absl_testing::IsOk());
+    auto round_tripped_config = std::move(round_tripped_config_or).value();
+    ExpectGemmConfigEq(original_config, round_tripped_config);
+  }
 }
 
 TEST(GemmConfigTest, ProtoConversionWithOptionals) {
@@ -148,7 +155,9 @@ TEST(GemmConfigTest, ProtoConversionWithOptionals) {
   };
 
   xla::GemmConfigProto proto = original_config.ToProto();
-  ASSERT_OK_AND_ASSIGN(auto round_tripped_config, GemmConfig::FromProto(proto));
+  auto round_tripped_config_or = GemmConfig::FromProto(proto);
+  ASSERT_THAT(round_tripped_config_or, absl_testing::IsOk());
+  auto round_tripped_config = std::move(round_tripped_config_or).value();
 
   ExpectGemmConfigEq(original_config, round_tripped_config);
 }
@@ -184,8 +193,9 @@ TEST(GroupedGemmConfigTest, ProtoConversionWithOptionals) {
   };
 
   xla::GroupedGemmConfigProto proto = original_config.ToProto();
-  ASSERT_OK_AND_ASSIGN(auto round_tripped_config,
-                       GroupedGemmConfig::FromProto(proto));
+  auto round_tripped_config_or = GroupedGemmConfig::FromProto(proto);
+  ASSERT_THAT(round_tripped_config_or, absl_testing::IsOk());
+  auto round_tripped_config = std::move(round_tripped_config_or).value();
 
   ExpectGroupedGemmConfigEq(original_config, round_tripped_config);
 }
@@ -221,7 +231,7 @@ using EpilogueFromProtoTest =
     ::testing::TestWithParam<xla::BlasLtEpilogueProto>;
 
 TEST_P(EpilogueFromProtoTest, SucceedsForValidValue) {
-  EXPECT_OK(BlasLt::EpilogueFromProto(GetParam()));
+  EXPECT_THAT(BlasLt::EpilogueFromProto(GetParam()), absl_testing::IsOk());
 }
 
 std::vector<xla::BlasLtEpilogueProto> EnumerateBlasLtEpilogueProtoValues() {
@@ -275,7 +285,7 @@ using RaggedDotModeFromProtoTest =
     ::testing::TestWithParam<xla::RaggedDotModeProto>;
 
 TEST_P(RaggedDotModeFromProtoTest, SucceedsForValidValue) {
-  EXPECT_OK(RaggedDotModeFromProto(GetParam()));
+  EXPECT_THAT(RaggedDotModeFromProto(GetParam()), absl_testing::IsOk());
 }
 
 std::vector<xla::RaggedDotModeProto> EnumerateRaggedDotModeValues() {

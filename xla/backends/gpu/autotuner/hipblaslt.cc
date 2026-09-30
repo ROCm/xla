@@ -29,6 +29,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
+#include "xla/backends/gpu/autotuner/hipblaslt_scale_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/utils/hlo_query.h"
@@ -55,8 +56,44 @@ namespace se = ::stream_executor;
 using se::gpu::BlasLt;
 
 using HipblasLtBackendConfig = AutotuneResult::GemmKey;
+using MxScaleLayout = HipblasLtBackendConfig::MxScaleLayout;
 
 namespace {
+
+absl::StatusOr<se::gpu::ScaleMode> MxScaleMode(MxScaleLayout layout) {
+  switch (layout) {
+    case HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR:
+      return se::gpu::ScaleMode::kBlockScaling;
+    case HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8:
+      return se::gpu::ScaleMode::kBlockScaling32x8;
+    default:
+      return absl::InvalidArgumentError("Unknown hipBLASLt MX scale layout");
+  }
+}
+
+absl::StatusOr<absl::InlinedVector<MxScaleLayout, 2>> MxScaleLayoutsToTune(
+    const HloInstruction& scaled_dot, const DebugOptions& options,
+    const se::GpuComputeCapability& gpu_version) {
+  absl::InlinedVector<MxScaleLayout, 2> layouts;
+  switch (options.xla_gpu_experimental_hipblaslt_mx_scale_layout()) {
+    case DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_LINEAR:
+      layouts.push_back(HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR);
+      break;
+    case DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_AUTO:
+      layouts.push_back(HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR);
+      [[fallthrough]];
+    case DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_PRESWIZZLED_32X8:
+      if (CanUseHipblasLtScale32x8(scaled_dot, gpu_version).IsAllowed()) {
+        layouts.push_back(
+            HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8);
+      }
+      break;
+    default:
+      return absl::InvalidArgumentError(
+          "Unknown hipBLASLt MX scale layout mode");
+  }
+  return layouts;
+}
 
 absl::StatusOr<BlasLt::Epilogue> AsBlasLtEpilogue(
     GemmBackendConfig_Epilogue epilogue) {
@@ -275,6 +312,15 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
       return std::vector<std::unique_ptr<BackendConfig>>();
     }
 
+    ABSL_ASSIGN_OR_RETURN(
+        auto layouts,
+        MxScaleLayoutsToTune(
+            *scaled_dot, debug_options(),
+            target_config().device_description.gpu_compute_capability()));
+    if (layouts.empty()) {
+      return std::vector<std::unique_ptr<BackendConfig>>();
+    }
+
     const Shape& lhs_shape = scaled_dot->operand(0)->shape();
     const Shape& rhs_shape = scaled_dot->operand(1)->shape();
     const DotDimensionNumbers& dot_dims = scaled_dot->dot_dimension_numbers();
@@ -298,35 +344,37 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
 
     ABSL_ASSIGN_OR_RETURN(BlasLt * blas_lt,
                           se::gpu::BlasLt::Get(stream_executor()));
-    auto plan_or =
-        blas_lt->GetMatmulPlan(*gemm_config_or, BlasLt::Epilogue::kDefault);
-    if (!plan_or.ok()) {
-      LOG(WARNING) << "hipBLASLt MX: GetMatmulPlan failed: "
-                   << plan_or.status();
-      return std::vector<std::unique_ptr<BackendConfig>>();
-    }
-
     int64_t workspace_size = GemmConfig::kGFX950Workspace;
     int max_algorithms = debug_options().xla_gpu_blas_max_algorithms();
     if (max_algorithms <= 0) {
       max_algorithms = GemmConfig::kNumAlgorithms;
     }
-    ABSL_ASSIGN_OR_RETURN(
-        std::vector<BlasLt::MatmulAlgorithm> algorithms,
-        (*plan_or)->GetAlgorithms(max_algorithms, workspace_size));
-    if (algorithms.empty()) {
-      LOG(WARNING) << "hipBLASLt MX: no algorithms found for scaled dot.";
-      return std::vector<std::unique_ptr<BackendConfig>>();
-    }
-
     std::vector<std::unique_ptr<BackendConfig>> configs;
-    configs.reserve(algorithms.size());
-    for (int64_t i = 0; i < static_cast<int64_t>(algorithms.size()); ++i) {
-      auto config = std::make_unique<BackendConfig>();
-      auto* gemm_key = config->mutable_gemm();
-      gemm_key->set_algorithm(i);
-      gemm_key->set_autotune_workspace_size(workspace_size);
-      configs.push_back(std::move(config));
+    for (MxScaleLayout layout : layouts) {
+      ABSL_ASSIGN_OR_RETURN(gemm_config_or->scale_mode, MxScaleMode(layout));
+      auto plan_or =
+          blas_lt->GetMatmulPlan(*gemm_config_or, BlasLt::Epilogue::kDefault);
+      if (!plan_or.ok()) {
+        VLOG(2) << "hipBLASLt MX: GetMatmulPlan failed for scale layout "
+                << layout << ": " << plan_or.status();
+        continue;
+      }
+      auto algorithms_or =
+          (*plan_or)->GetAlgorithms(max_algorithms, workspace_size);
+      if (!algorithms_or.ok()) {
+        VLOG(2) << "hipBLASLt MX: GetAlgorithms failed for scale layout "
+                << layout << ": " << algorithms_or.status();
+        continue;
+      }
+      for (int64_t i = 0; i < static_cast<int64_t>(algorithms_or->size());
+           ++i) {
+        auto config = std::make_unique<BackendConfig>();
+        auto* gemm_key = config->mutable_gemm();
+        gemm_key->set_algorithm(i);
+        gemm_key->set_autotune_workspace_size(workspace_size);
+        gemm_key->set_mx_scale_layout(layout);
+        configs.push_back(std::move(config));
+      }
     }
     return configs;
   } else if (IsCublasLtGroupedMatmul(instr)) {
@@ -403,7 +451,17 @@ HipblasLtBackend::GetDefaultConfig(const HloInstruction& instr) {
   // workspace buffer in their shape. MX scaled dots on ROCm are currently
   // supported on gfx950, so we use kGFX950Workspace (matching
   // GetSupportedConfigs).
-  if (GetScaledDotFromFusion(instr) != nullptr) {
+  if (const auto* scaled_dot = GetScaledDotFromFusion(instr)) {
+    ABSL_ASSIGN_OR_RETURN(
+        auto layouts,
+        MxScaleLayoutsToTune(
+            *scaled_dot, debug_options(),
+            target_config().device_description.gpu_compute_capability()));
+    if (layouts.empty()) {
+      return absl::InvalidArgumentError(
+          "The requested hipBLASLt MX scale layout is not supported");
+    }
+    gemm_key->set_mx_scale_layout(layouts.front());
     gemm_key->set_autotune_workspace_size(GemmConfig::kGFX950Workspace);
   } else if (instr.shape().IsTuple() && !instr.shape().tuple_shapes().empty()) {
     gemm_key->set_autotune_workspace_size(
@@ -419,6 +477,12 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
         "Expected GemmKey config for HipblasLtBackend.");
   }
   const AutotuneResult::GemmKey& gemm_key = config.gemm();
+  if (gemm_key.mx_scale_layout() !=
+          HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR &&
+      GetScaledDotFromFusion(instr) == nullptr) {
+    return absl::InvalidArgumentError(
+        "A pre-swizzled MX scale layout requires a scaled-dot fusion");
+  }
 
   if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr)) {
     ABSL_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
@@ -449,6 +513,17 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
   }
 
   if (const auto* scaled_dot = GetScaledDotFromFusion(instr)) {
+    ABSL_ASSIGN_OR_RETURN(se::gpu::ScaleMode scale_mode,
+                          MxScaleMode(gemm_key.mx_scale_layout()));
+    if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8 &&
+        (!IsValidMxScaledDot(scaled_dot) ||
+         !CanUseHipblasLtScale32x8(
+              *scaled_dot,
+              target_config().device_description.gpu_compute_capability())
+              .IsAllowed())) {
+      return absl::InvalidArgumentError(
+          "The cached hipBLASLt 32x8 scale configuration is not supported");
+    }
     HloComputation* fused = instr.fused_instructions_computation();
     HloComputation* parent = instr.parent();
 
@@ -475,6 +550,14 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
                      user->opcode() == HloOpcode::kReshape)
             << "Unexpected op between fusion parameter and scaled-dot: "
             << user->ToString();
+        // The whole path is elided below. Equal endpoint shapes do not make
+        // that safe: an intermediate bitcast followed by a materializing
+        // reshape can change the byte order and still restore the same shape.
+        if (user->opcode() == HloOpcode::kReshape &&
+            !ShapeUtil::ReshapeIsBitcast(cur->shape(), user->shape())) {
+          return absl::InvalidArgumentError(
+              "hipBLASLt MX lowering cannot discard a materializing reshape");
+        }
         cur = user;
       }
       TF_RET_CHECK(cur->user_count() == 1 && cur->users()[0] == scaled_dot)
@@ -485,6 +568,11 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
       const Shape& inner_shape = scaled_dot->operand(dot_index)->shape();
       HloInstruction* ext = instr.mutable_operand(param->parameter_number());
       if (!ShapeUtil::Equal(ext->shape(), inner_shape)) {
+        if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8 &&
+            !ShapeUtil::ReshapeIsBitcast(ext->shape(), inner_shape)) {
+          return absl::InvalidArgumentError(
+              "Pre-swizzled MX operands require layout-preserving reshapes");
+        }
         ext = parent->AddInstruction(
             HloInstruction::CreateBitcast(inner_shape, ext));
       }
@@ -495,6 +583,12 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
     for (HloInstruction* op : operands) {
       TF_RET_CHECK(op != nullptr)
           << "Not all scaled-dot operands are fed by a fusion parameter.";
+    }
+    if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8) {
+      ABSL_ASSIGN_OR_RETURN(operands[2],
+                            SwizzleHipblasLtScale32x8(operands[2]));
+      ABSL_ASSIGN_OR_RETURN(operands[3],
+                            SwizzleHipblasLtScale32x8(operands[3]));
     }
     const Shape& result_shape = scaled_dot->shape();
     int64_t workspace_size = gemm_key.autotune_workspace_size();
@@ -510,8 +604,7 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
     gemm_config.set_alpha_real(1.0);
     gemm_config.set_alpha_imag(0.0);
     gemm_config.set_beta(0.0);
-    gemm_config.set_scale_mode(
-        static_cast<int32_t>(se::gpu::ScaleMode::kBlockScaling));
+    gemm_config.set_scale_mode(static_cast<int32_t>(scale_mode));
     gemm_config.set_selected_algorithm(gemm_key.algorithm());
     gemm_config.set_autotune_workspace_size(workspace_size);
 

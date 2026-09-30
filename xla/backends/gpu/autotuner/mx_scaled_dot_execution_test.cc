@@ -13,19 +13,29 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-
-#include <memory>
-#include <utility>
-
 #include "absl/status/status_matchers.h"
 #include "absl/strings/string_view.h"
+#include "absl/strings/substitute.h"
+#include "xla/backends/autotuner/backends.pb.h"
 #include "xla/backends/gpu/tests/hlo_pjrt_gpu_test_base.h"
 #include "xla/error_spec.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/parser/hlo_parser.h"
 #include "xla/hlo/testlib/filecheck.h"
+#include "xla/literal.h"
+#include "xla/service/gpu/backend_configs.pb.h"
+#include "xla/shape.h"
 #include "xla/tsl/platform/statusor.h"
+#include "xla/xla.pb.h"
 
 namespace xla::gpu {
 namespace {
@@ -199,6 +209,99 @@ ENTRY main {
 TEST_F(MxScaledDotExecutionTest, MxFp8ReshapedOperandsCorrectness) {
   RunMxCorrectnessTest(kMxFp8ReshapedOperandsHlo,
                        ErrorSpec(/*aabs=*/1e-4, /*arel=*/1e-5));
+}
+
+TEST_F(MxScaledDotExecutionTest, PreswizzledMxFp8MatchesDequantizedReference) {
+  const auto* rocm =
+      device_description().gpu_compute_capability().rocm_compute_capability();
+  if (rocm == nullptr || !rocm->gfx9_mi350()) {
+    GTEST_SKIP() << "Pre-swizzled scale tests require gfx950";
+  }
+  for (bool batched : {false, true}) {
+    std::string hlo = absl::Substitute(
+        R"(
+HloModule preswizzled_scales
+ENTRY main {
+  a = f8e4m3fn[$064,512]{$1} parameter(0)
+  b = f8e4m3fn[$096,512]{$1} parameter(1)
+  sa = f8e8m0fnu[$064,16]{$1} parameter(2)
+  sb = f8e8m0fnu[$096,16]{$1} parameter(3)
+  ROOT dot = f32[$064,96]{$1} scaled-dot(a,b,sa,sb),
+      lhs_contracting_dims={$2}, rhs_contracting_dims={$2}$3
+})",
+        batched ? "1," : "", batched ? "2,1,0" : "1,0", batched ? 2 : 1,
+        batched ? ", lhs_batch_dims={0}, rhs_batch_dims={0}" : "");
+    HloModuleConfig ref_config = GetModuleConfigForTest();
+    ref_config.mutable_debug_options()
+        .set_xla_gpu_experimental_scaled_dot_with_triton(false);
+    ref_config.mutable_debug_options().set_xla_gpu_enable_triton_gemm(false);
+    auto reference_or = GetOptimizedModule(hlo, ref_config);
+    ASSERT_THAT(reference_or, absl_testing::IsOk());
+    auto reference = std::move(reference_or).value();
+
+    HloModuleConfig packed_config = GetModuleConfigForTest();
+    DebugOptions& options = packed_config.mutable_debug_options();
+    options.set_xla_gpu_experimental_scaled_dot_with_triton(true);
+    options.set_xla_gpu_enable_triton_gemm(true);
+    options.set_xla_gpu_blas_max_algorithms(4);
+    options.set_xla_autotuner_preferred_backend(autotuner::HIPBLASLT);
+    options.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+        DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_PRESWIZZLED_32X8);
+    auto packed_or = GetOptimizedModule(hlo, packed_config);
+    ASSERT_THAT(packed_or, absl_testing::IsOk());
+    auto packed = std::move(packed_or).value();
+    // Follow live operands from the result: a marker in an unused computation
+    // is not evidence that the executable actually selected packed hipBLASLt.
+    const HloInstruction* mx_call = nullptr;
+    std::vector<const HloInstruction*> pending{
+        packed->entry_computation()->root_instruction()};
+    while (!pending.empty()) {
+      const HloInstruction* instruction = pending.back();
+      pending.pop_back();
+      if (instruction->opcode() == HloOpcode::kCustomCall &&
+          instruction->custom_call_target() == "__cublas$lt$matmul$mx") {
+        mx_call = instruction;
+        break;
+      }
+      for (const HloInstruction* operand : instruction->operands()) {
+        pending.push_back(operand);
+      }
+    }
+    ASSERT_NE(mx_call, nullptr) << packed->ToString();
+    auto config_or = mx_call->backend_config<GpuBackendConfig>();
+    ASSERT_THAT(config_or, absl_testing::IsOk());
+    auto config = std::move(config_or).value();
+    ASSERT_EQ(config.gemm_backend_config().scale_mode(), 3);
+
+    // Nonconstant, exactly representable data and power-of-two scales. Change
+    // scales along both MN and K/32 so an incorrect swizzle cannot pass as it
+    // would with all-one scales. The inputs are parameters, not HLO constants.
+    std::vector<Literal> inputs;
+    inputs.reserve(4);
+    for (int operand = 0; operand < 4; ++operand) {
+      const Shape& shape =
+          packed->entry_computation()->parameter_instruction(operand)->shape();
+      inputs.emplace_back(shape);
+      auto* bytes = static_cast<uint8_t*>(inputs.back().untyped_data());
+      int64_t rank = shape.dimensions().size();
+      int64_t rows = shape.dimensions(rank - 2);
+      int64_t cols = shape.dimensions(rank - 1);
+      for (int64_t r = 0; r < rows; ++r) {
+        for (int64_t c = 0; c < cols; ++c) {
+          if (operand < 2) {
+            bytes[r * cols + c] = (0x28 + (r * 17 + c * 11 + operand) % 17) |
+                                  (((r + c) & 1) << 7);
+          } else {
+            bytes[r * cols + c] = 125 + (r * 7 + c * 11 + operand) % 5;
+          }
+        }
+      }
+    }
+    EXPECT_TRUE(RunAndCompareTwoModules(
+        std::move(packed), std::move(reference),
+        {&inputs[0], &inputs[1], &inputs[2], &inputs[3]},
+        ErrorSpec(/*aabs=*/1e-3, /*arel=*/1e-5), /*run_hlo_passes=*/false));
+  }
 }
 
 }  // namespace
