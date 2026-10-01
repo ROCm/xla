@@ -144,9 +144,8 @@ bool DoesOpSupportType(HloOpcode opcode, PrimitiveType type) {
     case HloOpcode::kDot:
       return type != PRED;
     case HloOpcode::kConvolution:
-      return type == BF16 || type == F16 || type == F32 ||
-             type == F8E4M3FN || type == F8E5M2 || type == F8E4M3FNUZ ||
-             type == F8E5M2FNUZ;
+      return type == BF16 || type == F16 || type == F32 || type == F8E4M3FN ||
+             type == F8E5M2 || type == F8E4M3FNUZ || type == F8E5M2FNUZ;
     case HloOpcode::kScaledDot:
       return type == F8E4M3FN || type == F4E2M1FN || type == F8E5M2 ||
              type == BF16 || type == F8E8M0FNU || type == S8;
