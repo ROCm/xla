@@ -115,6 +115,10 @@ inline constexpr absl::string_view kTritonCollectiveFusionKind =
 // Fusions that use Triton have FusionBackendConfig.kind equal to this string.
 inline constexpr absl::string_view kTritonGemmFusionKind = "__triton_gemm";
 
+// Conv fusions that use Triton have FusionBackendConfig.kind equal to this
+// string.
+inline constexpr absl::string_view kTritonConvFusionKind = "__triton_conv";
+
 // Generic fusions that use Triton have FusionBackendConfig.kind equal to this
 // string. Used for fusions that implement a dot expressed as nested fusions.
 inline constexpr absl::string_view kTritonNestedGemmFusionKind =

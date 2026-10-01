@@ -21,10 +21,13 @@ limitations under the License.
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/hlo.pb.h"
+#include "xla/status_macros.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -263,6 +266,78 @@ ConvolutionDimensionNumbers RestoreDimNumber(
     return RestoreDimNumberFromBackwardInput(conv);
   }
   return conv->convolution_dimension_numbers();
+}
+
+/*static*/ absl::StatusOr<TritonConvConfig> TritonConvConfig::FromProto(
+    const AutotuneResult::TritonConvKey& proto) {
+  // Sanity check to avoid loading incomplete data.
+  TF_RET_CHECK(proto.batch_tile() > 0);
+  TF_RET_CHECK(proto.output_feature_tile() > 0);
+  TF_RET_CHECK(proto.input_feature_tile() > 0);
+  TF_RET_CHECK(proto.num_stages() > 0);
+  TF_RET_CHECK(proto.num_warps() > 0);
+  TF_RET_CHECK(proto.num_ctas() > 0);
+  TF_RET_CHECK(proto.output_spatial_tiles_size() > 0)
+      << "A convolution must have at least one spatial dimension.";
+  TF_RET_CHECK(proto.output_spatial_tiles_size() ==
+               proto.kernel_spatial_tiles_size())
+      << "Output and kernel spatial tile arity must match, got "
+      << proto.output_spatial_tiles_size() << " and "
+      << proto.kernel_spatial_tiles_size();
+  TF_RET_CHECK(proto.waves_per_eu() >= 0);
+
+  std::vector<int64_t> output_spatial_tiles;
+  output_spatial_tiles.reserve(proto.output_spatial_tiles_size());
+  for (int64_t tile : proto.output_spatial_tiles()) {
+    TF_RET_CHECK(tile > 0);
+    output_spatial_tiles.push_back(tile);
+  }
+
+  std::vector<int64_t> kernel_spatial_tiles;
+  kernel_spatial_tiles.reserve(proto.kernel_spatial_tiles_size());
+  for (int64_t tile : proto.kernel_spatial_tiles()) {
+    // TODO Currently we require a kernel spatial tile size of 1.
+    TF_RET_CHECK(tile == 1)
+        << "Kernel spatial tile must be 1 until the restriction is "
+           "lifted, got "
+        << tile;
+    kernel_spatial_tiles.push_back(tile);
+  }
+
+  return TritonConvConfig(
+      proto.batch_tile(), std::move(output_spatial_tiles),
+      proto.output_feature_tile(), std::move(kernel_spatial_tiles),
+      proto.input_feature_tile(), proto.num_stages(), proto.num_warps(),
+      proto.num_ctas(), proto.waves_per_eu());
+}
+
+AutotuneResult::TritonConvKey TritonConvConfig::ToProto() const {
+  AutotuneResult::TritonConvKey key;
+  key.set_batch_tile(batch_tile);
+  for (int64_t tile : output_spatial_tiles) {
+    key.add_output_spatial_tiles(tile);
+  }
+  key.set_output_feature_tile(output_feature_tile);
+  for (int64_t tile : kernel_spatial_tiles) {
+    key.add_kernel_spatial_tiles(tile);
+  }
+  key.set_input_feature_tile(input_feature_tile);
+  key.set_num_stages(num_stages);
+  key.set_num_warps(num_warps);
+  key.set_num_ctas(num_ctas);
+  key.set_waves_per_eu(waves_per_eu);
+  return key;
+}
+
+std::string TritonConvConfig::ToString() const {
+  return absl::StrCat(
+      "{batch_tile:", batch_tile, ",output_spatial_tiles:[",
+      absl::StrJoin(output_spatial_tiles, ","),
+      "],output_feature_tile:", output_feature_tile, ",kernel_spatial_tiles:[",
+      absl::StrJoin(kernel_spatial_tiles, ","),
+      "],input_feature_tile:", input_feature_tile, ",num_stages:", num_stages,
+      ",num_warps:", num_warps, ",num_ctas:", num_ctas,
+      ",waves_per_eu:", waves_per_eu, "}");
 }
 
 }  // end namespace gpu
