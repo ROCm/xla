@@ -111,6 +111,22 @@ message AutotuneResult {
     // LINT.ThenChange(//tensorflow/compiler/xla/service/gpu/matmul_utils.h)
   }
 
+  // If you don't need a proto in your code, please use TritonConvConfig instead
+  // of using this proto directly.
+  message TritonConvKey {
+    // LINT.IfChange
+    int64 batch_tile = 1;
+    repeated int64 output_spatial_tiles = 2;
+    int64 output_feature_tile = 3;
+    repeated int64 kernel_spatial_tiles = 4;
+    int64 input_feature_tile = 5;
+    int64 num_stages = 6;
+    int64 num_warps = 7;
+    int64 num_ctas = 8;
+    int64 waves_per_eu = 9;
+    // LINT.ThenChange(//tensorflow/compiler/xla/service/gpu/conv_utils.h)
+  }
+
   message CustomKernelFusionKey {
     int64 kernel_index = 1;
   }
