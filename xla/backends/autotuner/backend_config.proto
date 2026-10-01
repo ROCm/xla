@@ -37,5 +37,6 @@ message BackendConfig {
     xla.gpu.NativeEmitterBackendConfig native_emitter = 6;
     xla.cpu.YnnFusionOptions ynn_fusion = 7;
     xla.gpu.TensorIrFusionConfig tensor_ir = 8;
+    xla.AutotuneResult.TritonConvKey triton_conv = 9;
   }
 }
