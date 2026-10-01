@@ -306,6 +306,8 @@ cc_library(
         "//xla/codegen/xtile:xtile_config_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/service/gpu:backend_configs_cc",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor/cuda:cuda_compute_capability",
         "@com_google_absl//absl/status:statusor",
     ],
 )
