@@ -30,6 +30,7 @@ limitations under the License.
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/layout.h"
 #include "xla/literal.h"
+#include "xla/shape.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/rocm/rocm_compute_capability.h"
 
@@ -66,6 +67,87 @@ TEST_F(HipblasLtScaleUtilsTest, SupportsAlignedGfx950) {
                   .IsAllowed());
 }
 
+TEST_F(HipblasLtScaleUtilsTest, SupportsPackedFp4Gfx950) {
+  auto module_or = ParseAndReturnVerifiedModule(
+      ScaledDotHlo(64, 96, 512, "f4e2m1fn", "1,0:E(4)"));
+  ASSERT_THAT(module_or, absl_testing::IsOk());
+  auto module = std::move(module_or).value();
+  EXPECT_TRUE(CanUseHipblasLtScale32x8(
+                  *module->entry_computation()->root_instruction(),
+                  stream_executor::GpuComputeCapability(
+                      stream_executor::RocmComputeCapability("gfx950")))
+                  .IsAllowed());
+}
+
+TEST_F(HipblasLtScaleUtilsTest, RejectsUnpackedFp4Storage) {
+  for (int operand : {0, 1}) {
+    for (int element_size : {0, 8}) {
+      auto module_or = ParseAndReturnVerifiedModule(
+          ScaledDotHlo(64, 96, 512, "f4e2m1fn", "1,0:E(4)"));
+      ASSERT_THAT(module_or, absl_testing::IsOk());
+      auto module = std::move(module_or).value();
+      HloInstruction* dot = module->entry_computation()->root_instruction();
+      dot->mutable_operand(operand)
+          ->mutable_shape()
+          ->mutable_layout()
+          ->set_element_size_in_bits(element_size);
+      EXPECT_FALSE(CanUseHipblasLtScale32x8(
+                       *dot, stream_executor::GpuComputeCapability(
+                                 stream_executor::RocmComputeCapability("gfx950")))
+                       .IsAllowed())
+          << "operand=" << operand << " element_size=" << element_size;
+    }
+  }
+}
+
+TEST_F(HipblasLtScaleUtilsTest, RejectsMixedFp4Fp8Inputs) {
+  for (bool lhs_is_fp4 : {false, true}) {
+    std::string hlo = absl::Substitute(R"(
+HloModule mixed_types
+ENTRY main {
+  a = $0[64,512]{1,0$2} parameter(0)
+  b = $1[96,512]{1,0$3} parameter(1)
+  sa = f8e8m0fnu[64,16]{1,0} parameter(2)
+  sb = f8e8m0fnu[96,16]{1,0} parameter(3)
+  ROOT dot = f32[64,96] scaled-dot(a, b, sa, sb),
+    lhs_contracting_dims={1}, rhs_contracting_dims={1}
+})",
+                                       lhs_is_fp4 ? "f4e2m1fn" : "f8e4m3fn",
+                                       lhs_is_fp4 ? "f8e4m3fn" : "f4e2m1fn",
+                                       lhs_is_fp4 ? ":E(4)" : "",
+                                       lhs_is_fp4 ? "" : ":E(4)");
+    auto module_or = ParseAndReturnVerifiedModule(hlo);
+    ASSERT_THAT(module_or, absl_testing::IsOk());
+    auto module = std::move(module_or).value();
+    HloInstruction* dot = module->entry_computation()->root_instruction();
+    EXPECT_FALSE(CanUseHipblasLtScale32x8(
+                     *dot, stream_executor::GpuComputeCapability(
+                               stream_executor::RocmComputeCapability("gfx950")))
+                     .IsAllowed());
+  }
+}
+
+TEST_F(HipblasLtScaleUtilsTest, Fp4RequiresByteScales) {
+  for (int element_size : {0, 4, 8}) {
+    auto module_or = ParseAndReturnVerifiedModule(
+        ScaledDotHlo(64, 96, 512, "f4e2m1fn", "1,0:E(4)"));
+    ASSERT_THAT(module_or, absl_testing::IsOk());
+    auto module = std::move(module_or).value();
+    HloInstruction* dot = module->entry_computation()->root_instruction();
+    for (int operand : {2, 3}) {
+      dot->mutable_operand(operand)
+          ->mutable_shape()
+          ->mutable_layout()
+          ->set_element_size_in_bits(element_size);
+    }
+    EXPECT_EQ(CanUseHipblasLtScale32x8(
+                  *dot, stream_executor::GpuComputeCapability(
+                            stream_executor::RocmComputeCapability("gfx950")))
+                  .IsAllowed(),
+              element_size != 4);
+  }
+}
+
 TEST_F(HipblasLtScaleUtilsTest, ScaleLayoutSurvivesAutotuneSerialization) {
   AutotuneResult::GemmKey legacy;
   EXPECT_EQ(legacy.mx_scale_layout(),
@@ -100,7 +182,12 @@ TEST_F(HipblasLtScaleUtilsTest, RejectsPaddingTypesAndNoncanonicalLayouts) {
        {ScaledDotHlo(16, 96, 512), ScaledDotHlo(64, 16, 512),
         ScaledDotHlo(64, 96, 288), ScaledDotHlo(64, 96, 512, "f8e5m2"),
         ScaledDotHlo(64, 96, 512, "f8e4m3fn", "0,1"),
-        ScaledDotHlo(64, 96, 512, "f8e4m3fn", "1,0", "0,1")}) {
+        ScaledDotHlo(64, 96, 512, "f8e4m3fn", "1,0", "0,1"),
+        ScaledDotHlo(16, 96, 512, "f4e2m1fn", "1,0:E(4)"),
+        ScaledDotHlo(64, 16, 512, "f4e2m1fn", "1,0:E(4)"),
+        ScaledDotHlo(64, 96, 288, "f4e2m1fn", "1,0:E(4)"),
+        ScaledDotHlo(64, 96, 512, "f4e2m1fn", "0,1:E(4)"),
+        ScaledDotHlo(64, 96, 512, "f4e2m1fn", "1,0:E(4)", "0,1")}) {
     auto module_or = ParseAndReturnVerifiedModule(hlo);
     ASSERT_THAT(module_or, absl_testing::IsOk());
     auto module = std::move(module_or).value();
@@ -139,6 +226,32 @@ ENTRY main {
   }
 }
 
+TEST_F(HipblasLtScaleUtilsTest, Fp4OnlySupportsUnitBatch) {
+  for (int batch : {1, 2}) {
+    std::string hlo = absl::Substitute(R"(
+HloModule batch
+ENTRY main {
+  a = f4e2m1fn[$0,64,512]{2,1,0:E(4)} parameter(0)
+  b = f4e2m1fn[$0,96,512]{2,1,0:E(4)} parameter(1)
+  sa = f8e8m0fnu[$0,64,16]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[$0,96,16]{2,1,0} parameter(3)
+  ROOT dot = f32[$0,64,96] scaled-dot(a, b, sa, sb),
+    lhs_batch_dims={0}, rhs_batch_dims={0},
+    lhs_contracting_dims={2}, rhs_contracting_dims={2}
+})",
+                                       batch);
+    auto module_or = ParseAndReturnVerifiedModule(hlo);
+    ASSERT_THAT(module_or, absl_testing::IsOk());
+    auto module = std::move(module_or).value();
+    EXPECT_EQ(CanUseHipblasLtScale32x8(
+                  *module->entry_computation()->root_instruction(),
+                  stream_executor::GpuComputeCapability(
+                      stream_executor::RocmComputeCapability("gfx950")))
+                  .IsAllowed(),
+              batch == 1);
+  }
+}
+
 TEST_F(HipblasLtScaleUtilsTest, RejectsTiledByteStorage) {
   auto module_or = ParseAndReturnVerifiedModule(ScaledDotHlo());
   ASSERT_THAT(module_or, absl_testing::IsOk());
@@ -149,6 +262,21 @@ TEST_F(HipblasLtScaleUtilsTest, RejectsTiledByteStorage) {
   Tile* tile =
       dot->mutable_operand(2)->mutable_shape()->mutable_layout()->add_tiles();
   tile->add_dimensions(32).add_dimensions(8);
+  EXPECT_FALSE(CanUseHipblasLtScale32x8(
+                   *dot, stream_executor::GpuComputeCapability(
+                             stream_executor::RocmComputeCapability("gfx950")))
+                   .IsAllowed());
+}
+
+TEST_F(HipblasLtScaleUtilsTest, RejectsTiledFp4Storage) {
+  auto module_or = ParseAndReturnVerifiedModule(
+      ScaledDotHlo(64, 96, 512, "f4e2m1fn", "1,0:E(4)"));
+  ASSERT_THAT(module_or, absl_testing::IsOk());
+  auto module = std::move(module_or).value();
+  HloInstruction* dot = module->entry_computation()->root_instruction();
+  Tile* tile =
+      dot->mutable_operand(0)->mutable_shape()->mutable_layout()->add_tiles();
+  tile->add_dimensions(32).add_dimensions(32);
   EXPECT_FALSE(CanUseHipblasLtScale32x8(
                    *dot, stream_executor::GpuComputeCapability(
                              stream_executor::RocmComputeCapability("gfx950")))

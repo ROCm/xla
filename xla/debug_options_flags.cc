@@ -3755,7 +3755,8 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       DebugOptions::HipblasLtMxScaleLayout_Name(
           debug_options->xla_gpu_experimental_hipblaslt_mx_scale_layout()),
       "Experimental: hipBLASLt MX scale layout candidates: LINEAR (default), "
-      "PRESWIZZLED_32X8 (gfx950 aligned E4M3FN GEMMs), or AUTO (both). "
+      "PRESWIZZLED_32X8 (gfx950 aligned E4M3FN or packed E2M1FN GEMMs), or "
+      "AUTO (both). "
       "Pre-swizzled candidates include device scale conversion in their "
       "timing."));
 

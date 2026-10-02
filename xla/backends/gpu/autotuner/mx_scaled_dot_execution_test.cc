@@ -31,11 +31,13 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/parser/hlo_parser.h"
 #include "xla/hlo/testlib/filecheck.h"
+#include "xla/layout.h"
 #include "xla/literal.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/shape.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/xla.pb.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla::gpu {
 namespace {
@@ -85,6 +87,8 @@ class MxScaledDotExecutionTest : public HloPjRtGpuTestBase {
                                         std::move(ref_optimized), error_spec,
                                         /*run_hlo_passes=*/false));
   }
+
+  void RunPreswizzledCorrectnessTest(bool fp4);
 };
 
 constexpr absl::string_view kMxFp8Hlo = R"(
@@ -211,26 +215,28 @@ TEST_F(MxScaledDotExecutionTest, MxFp8ReshapedOperandsCorrectness) {
                        ErrorSpec(/*aabs=*/1e-4, /*arel=*/1e-5));
 }
 
-TEST_F(MxScaledDotExecutionTest, PreswizzledMxFp8MatchesDequantizedReference) {
+void MxScaledDotExecutionTest::RunPreswizzledCorrectnessTest(bool fp4) {
   const auto* rocm =
       device_description().gpu_compute_capability().rocm_compute_capability();
   if (rocm == nullptr || !rocm->gfx9_mi350()) {
     GTEST_SKIP() << "Pre-swizzled scale tests require gfx950";
   }
   for (bool batched : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "batched=" << batched);
     std::string hlo = absl::Substitute(
         R"(
 HloModule preswizzled_scales
 ENTRY main {
-  a = f8e4m3fn[$064,512]{$1} parameter(0)
-  b = f8e4m3fn[$096,512]{$1} parameter(1)
+  a = $4[$064,512]{$1$5} parameter(0)
+  b = $4[$096,512]{$1$5} parameter(1)
   sa = f8e8m0fnu[$064,16]{$1} parameter(2)
   sb = f8e8m0fnu[$096,16]{$1} parameter(3)
   ROOT dot = f32[$064,96]{$1} scaled-dot(a,b,sa,sb),
       lhs_contracting_dims={$2}, rhs_contracting_dims={$2}$3
 })",
         batched ? "1," : "", batched ? "2,1,0" : "1,0", batched ? 2 : 1,
-        batched ? ", lhs_batch_dims={0}, rhs_batch_dims={0}" : "");
+        batched ? ", lhs_batch_dims={0}, rhs_batch_dims={0}" : "",
+        fp4 ? "f4e2m1fn" : "f8e4m3fn", fp4 ? ":E(4)" : "");
     HloModuleConfig ref_config = GetModuleConfigForTest();
     ref_config.mutable_debug_options()
         .set_xla_gpu_experimental_scaled_dot_with_triton(false);
@@ -272,6 +278,13 @@ ENTRY main {
     ASSERT_THAT(config_or, absl_testing::IsOk());
     auto config = std::move(config_or).value();
     ASSERT_EQ(config.gemm_backend_config().scale_mode(), 3);
+    if (fp4) {
+      for (int operand : {0, 1}) {
+        const Shape& data_shape = mx_call->operand(operand)->shape();
+        ASSERT_EQ(data_shape.element_type(), F4E2M1FN);
+        ASSERT_EQ(data_shape.layout().element_size_in_bits(), 4);
+      }
+    }
 
     // Nonconstant, exactly representable data and power-of-two scales. Change
     // scales along both MN and K/32 so an incorrect swizzle cannot pass as it
@@ -288,11 +301,18 @@ ENTRY main {
       int64_t cols = shape.dimensions(rank - 1);
       for (int64_t r = 0; r < rows; ++r) {
         for (int64_t c = 0; c < cols; ++c) {
-          if (operand < 2) {
+          if (operand < 2 && fp4) {
+            // Host literals store one FP4 value per byte; the transfer manager
+            // packs adjacent values into low/high nibbles on the GPU. Cover all
+            // 16 encodings with distinct adjacent values and varying K blocks.
+            bytes[r * cols + c] =
+                (r * 3 + c * 5 + (c / 32) * 7 + operand * 11) % 16;
+          } else if (operand < 2) {
             bytes[r * cols + c] = (0x28 + (r * 17 + c * 11 + operand) % 17) |
                                   (((r + c) & 1) << 7);
           } else {
-            bytes[r * cols + c] = 125 + (r * 7 + c * 11 + operand) % 5;
+            bytes[r * cols + c] =
+                125 + (r * 7 + c * 11 + operand) % (fp4 ? 3 : 5);
           }
         }
       }
@@ -302,6 +322,14 @@ ENTRY main {
         {&inputs[0], &inputs[1], &inputs[2], &inputs[3]},
         ErrorSpec(/*aabs=*/1e-3, /*arel=*/1e-5), /*run_hlo_passes=*/false));
   }
+}
+
+TEST_F(MxScaledDotExecutionTest, PreswizzledMxFp8MatchesDequantizedReference) {
+  RunPreswizzledCorrectnessTest(/*fp4=*/false);
+}
+
+TEST_F(MxScaledDotExecutionTest, PreswizzledMxFp4MatchesDequantizedReference) {
+  RunPreswizzledCorrectnessTest(/*fp4=*/true);
 }
 
 }  // namespace

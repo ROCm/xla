@@ -34,7 +34,7 @@ limitations under the License.
 namespace xla::gpu {
 namespace {
 
-Decision IsContiguousByteLayout(const Shape& shape) {
+Decision IsContiguousLayout(const Shape& shape, int64_t element_size_in_bits) {
   if (!shape.has_layout()) {
     return Decision::Forbid("32x8 scales require assigned layouts");
   }
@@ -42,16 +42,18 @@ Decision IsContiguousByteLayout(const Shape& shape) {
   return Decision(LayoutUtil::IsMonotonicWithDim0Major(layout) &&
                       layout.tiles().empty() && !layout.has_physical_shape() &&
                       layout.dynamic_shape_metadata_prefix_bytes() == 0 &&
-                      (layout.element_size_in_bits() == 0 ||
-                       layout.element_size_in_bits() == 8),
-                  "32x8 scales require contiguous, untiled byte layouts");
+                      (layout.element_size_in_bits() == element_size_in_bits ||
+                       (element_size_in_bits == 8 &&
+                        layout.element_size_in_bits() == 0)),
+                  "32x8 scales require contiguous, untiled layouts with "
+                  "native element storage");
 }
 
 Decision IsSupportedScaleShape(const Shape& shape) {
   int64_t rank = shape.dimensions().size();
   if (shape.element_type() != F8E8M0FNU || (rank != 2 && rank != 3) ||
       (rank == 3 && shape.dimensions(0) != 1) ||
-      !IsContiguousByteLayout(shape).IsAllowed() || shape.is_dynamic()) {
+      !IsContiguousLayout(shape, 8).IsAllowed() || shape.is_dynamic()) {
     return Decision::Forbid(
         "32x8 scales require static row-major E8M0 "
         "[MN, K/32] or [1, MN, K/32]");
@@ -76,6 +78,15 @@ Decision CanUseHipblasLtScale32x8(
       scaled_dot.operand_count() != 4) {
     return Decision::Forbid("Expected a scaled-dot with four operands");
   }
+  PrimitiveType input_type = scaled_dot.operand(0)->shape().element_type();
+  if ((input_type != F8E4M3FN && input_type != F4E2M1FN) ||
+      scaled_dot.operand(1)->shape().element_type() != input_type) {
+    return Decision::Forbid(
+        "32x8 scales require matching E4M3FN or E2M1FN inputs");
+  }
+  // GPU FP4 buffers pack two elements per byte and must have E(4) layouts.
+  // An unspecified element size instead denotes byte storage for FP4.
+  int64_t input_element_size_in_bits = input_type == F4E2M1FN ? 4 : 8;
   const DotDimensionNumbers& dims = scaled_dot.dot_dimension_numbers();
   for (int side = 0; side != 2; ++side) {
     const Shape& input = scaled_dot.operand(side)->shape();
@@ -87,14 +98,14 @@ Decision CanUseHipblasLtScale32x8(
                                         : dims.rhs_contracting_dimensions();
     const auto& batch =
         side == 0 ? dims.lhs_batch_dimensions() : dims.rhs_batch_dimensions();
-    if (input.element_type() != F8E4M3FN || rank != scale.dimensions().size() ||
-        input.is_dynamic() || !IsContiguousByteLayout(input).IsAllowed() ||
+    if (rank != scale.dimensions().size() || input.is_dynamic() ||
+        !IsContiguousLayout(input, input_element_size_in_bits).IsAllowed() ||
         contracting.size() != 1 || contracting[0] != rank - 1 ||
         (rank == 2 && !batch.empty()) ||
         (rank == 3 && (batch.size() != 1 || batch[0] != 0)) ||
         input.dimensions(rank - 1) != scale.dimensions(rank - 1) * 32) {
       return Decision::Forbid(
-          "32x8 scales require row-major E4M3FN inputs "
+          "32x8 scales require row-major E4M3FN or packed E2M1FN inputs "
           "with the final dimension contracting");
     }
     for (int64_t dim = 0; dim < rank - 1; ++dim) {

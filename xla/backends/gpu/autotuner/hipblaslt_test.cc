@@ -25,12 +25,14 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/substitute.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/testlib/filecheck.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/layout.h"
 #include "xla/layout_util.h"
 #include "xla/service/compiler.h"
 #include "xla/service/executable.h"
@@ -330,24 +332,27 @@ TEST_F(HipblasLtScaledDotTest, Compile) {
 
 namespace {
 
-constexpr const char* kPreswizzledScaledDotFusionHlo = R"(
+std::string PreswizzledScaledDotFusionHlo(bool fp4, int n = 96) {
+  return absl::Substitute(R"(
 HloModule PreswizzledScaledDotFusion
 fusion_dot {
-  a = f8e4m3fn[64,512]{1,0} parameter(0)
-  b = f8e4m3fn[96,512]{1,0} parameter(1)
+  a = $0[64,512]{1,0$1} parameter(0)
+  b = $0[$2,512]{1,0$1} parameter(1)
   sa = f8e8m0fnu[64,16]{1,0} parameter(2)
-  sb = f8e8m0fnu[96,16]{1,0} parameter(3)
-  ROOT dot = f32[64,96]{1,0} scaled-dot(a, b, sa, sb),
+  sb = f8e8m0fnu[$2,16]{1,0} parameter(3)
+  ROOT dot = f32[64,$2]{1,0} scaled-dot(a, b, sa, sb),
       lhs_contracting_dims={1}, rhs_contracting_dims={1}
 }
 ENTRY main {
-  a = f8e4m3fn[64,512]{1,0} parameter(0)
-  b = f8e4m3fn[96,512]{1,0} parameter(1)
+  a = $0[64,512]{1,0$1} parameter(0)
+  b = $0[$2,512]{1,0$1} parameter(1)
   sa = f8e8m0fnu[64,16]{1,0} parameter(2)
-  sb = f8e8m0fnu[96,16]{1,0} parameter(3)
-  ROOT fusion = f32[64,96]{1,0} fusion(a,b,sa,sb), kind=kCustom,
+  sb = f8e8m0fnu[$2,16]{1,0} parameter(3)
+  ROOT fusion = f32[64,$2]{1,0} fusion(a,b,sa,sb), kind=kCustom,
       calls=fusion_dot, backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
-})";
+})",
+                          fp4 ? "f4e2m1fn" : "f8e4m3fn", fp4 ? ":E(4)" : "", n);
+}
 
 class HipblasLtPreswizzledScaleTest : public HipblasLtBackendTest {
  protected:
@@ -361,11 +366,16 @@ class HipblasLtPreswizzledScaleTest : public HipblasLtBackendTest {
   }
 };
 
-TEST_F(HipblasLtPreswizzledScaleTest, EnumeratesBothScaleLayouts) {
+class HipblasLtPreswizzledScaleTypeTest
+    : public HipblasLtPreswizzledScaleTest,
+      public ::testing::WithParamInterface<bool> {};
+
+TEST_P(HipblasLtPreswizzledScaleTypeTest, EnumeratesBothScaleLayouts) {
   debug_options_.set_xla_gpu_blas_max_algorithms(4);
   debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
       DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_AUTO);
-  auto module_or = ParseAndReturnVerifiedModule(kPreswizzledScaledDotFusionHlo);
+  auto module_or =
+      ParseAndReturnVerifiedModule(PreswizzledScaledDotFusionHlo(GetParam()));
   ASSERT_THAT(module_or, absl_testing::IsOk());
   auto module = std::move(module_or).value();
   auto configs_or = backend_.GetSupportedConfigs(
@@ -382,12 +392,18 @@ TEST_F(HipblasLtPreswizzledScaleTest, EnumeratesBothScaleLayouts) {
   }
   EXPECT_TRUE(has_linear);
   EXPECT_TRUE(has_32x8);
+  auto default_or =
+      backend_.GetDefaultConfig(*module->entry_computation()->root_instruction());
+  ASSERT_THAT(default_or, absl_testing::IsOk());
+  EXPECT_EQ((*default_or)->gemm().mx_scale_layout(),
+            HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR);
 }
 
-TEST_F(HipblasLtPreswizzledScaleTest, AppliesSerializedLayoutNotCurrentFlag) {
+TEST_P(HipblasLtPreswizzledScaleTypeTest, AppliesSerializedLayoutNotCurrentFlag) {
   debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
       DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_LINEAR);
-  auto module_or = ParseAndReturnVerifiedModule(kPreswizzledScaledDotFusionHlo);
+  auto module_or =
+      ParseAndReturnVerifiedModule(PreswizzledScaledDotFusionHlo(GetParam()));
   ASSERT_THAT(module_or, absl_testing::IsOk());
   auto module = std::move(module_or).value();
   BackendConfig original;
@@ -406,6 +422,12 @@ TEST_F(HipblasLtPreswizzledScaleTest, AppliesSerializedLayoutNotCurrentFlag) {
   ASSERT_THAT(config_or, absl_testing::IsOk());
   auto config = std::move(config_or).value();
   EXPECT_EQ(config.gemm_backend_config().scale_mode(), 3);
+  for (int operand : {0, 1}) {
+    EXPECT_EQ(call->operand(operand),
+              module->entry_computation()->parameter_instruction(operand));
+    EXPECT_EQ(call->operand(operand)->shape().layout().element_size_in_bits(),
+              GetParam() ? 4 : 0);
+  }
   EXPECT_EQ(call->operand(2)->opcode(), HloOpcode::kFusion);
   EXPECT_EQ(call->operand(3)->opcode(), HloOpcode::kFusion);
   EXPECT_EQ(call->operand(2)->operand(0),
@@ -414,11 +436,12 @@ TEST_F(HipblasLtPreswizzledScaleTest, AppliesSerializedLayoutNotCurrentFlag) {
             module->entry_computation()->parameter_instruction(3));
 }
 
-TEST_F(HipblasLtPreswizzledScaleTest, UnsupportedShapeRetainsLinearCandidate) {
+TEST_P(HipblasLtPreswizzledScaleTypeTest, UnsupportedShapeRetainsLinearCandidate) {
   debug_options_.set_xla_gpu_blas_max_algorithms(4);
   debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
       DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_AUTO);
-  auto module_or = ParseAndReturnVerifiedModule(kScaledDotFp8FusionHlo);
+  auto module_or =
+      ParseAndReturnVerifiedModule(PreswizzledScaledDotFusionHlo(GetParam(), 16));
   ASSERT_THAT(module_or, absl_testing::IsOk());
   auto module = std::move(module_or).value();
   HloInstruction* fusion = module->entry_computation()->root_instruction();
@@ -438,10 +461,11 @@ TEST_F(HipblasLtPreswizzledScaleTest, UnsupportedShapeRetainsLinearCandidate) {
   EXPECT_EQ(module->entry_computation()->root_instruction(), fusion);
 }
 
-TEST_F(HipblasLtPreswizzledScaleTest, CompileIncludesScaleFusions) {
+TEST_P(HipblasLtPreswizzledScaleTypeTest, CompileIncludesScaleFusions) {
   debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
       DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_PRESWIZZLED_32X8);
-  auto module_or = ParseAndReturnVerifiedModule(kPreswizzledScaledDotFusionHlo);
+  auto module_or =
+      ParseAndReturnVerifiedModule(PreswizzledScaledDotFusionHlo(GetParam()));
   ASSERT_THAT(module_or, absl_testing::IsOk());
   auto module = std::move(module_or).value();
   HloInstruction* fusion = module->entry_computation()->root_instruction();
@@ -453,7 +477,7 @@ TEST_F(HipblasLtPreswizzledScaleTest, CompileIncludesScaleFusions) {
   EXPECT_THAT(backend_.Compile(*fusion, *config), absl_testing::IsOk());
 }
 
-TEST_F(HipblasLtPreswizzledScaleTest,
+TEST_P(HipblasLtPreswizzledScaleTypeTest,
        RejectsMaterializingReshapeWithIdenticalEndpointShapes) {
   for (auto layout : {HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR,
                       HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8}) {
@@ -463,7 +487,7 @@ TEST_F(HipblasLtPreswizzledScaleTest,
     // but bypassing the chain would silently change the GEMM's inputs.
     for (int operand_index : {0, 2}) {
       auto module_or =
-          ParseAndReturnVerifiedModule(kPreswizzledScaledDotFusionHlo);
+          ParseAndReturnVerifiedModule(PreswizzledScaledDotFusionHlo(GetParam()));
       ASSERT_THAT(module_or, absl_testing::IsOk());
       auto module = std::move(module_or).value();
       HloInstruction* fusion = module->entry_computation()->root_instruction();
@@ -471,6 +495,8 @@ TEST_F(HipblasLtPreswizzledScaleTest,
       HloInstruction* parameter = fused->parameter_instruction(operand_index);
       Shape column_major = parameter->shape();
       *column_major.mutable_layout() = LayoutUtil::MakeLayout({0, 1});
+      column_major.mutable_layout()->set_element_size_in_bits(
+          parameter->shape().layout().element_size_in_bits());
       HloInstruction* bitcast = fused->AddInstruction(
           HloInstruction::CreateBitcast(column_major, parameter));
       HloInstruction* reshape = fused->AddInstruction(
@@ -486,6 +512,108 @@ TEST_F(HipblasLtPreswizzledScaleTest,
       config.mutable_gemm()->set_mx_scale_layout(layout);
       EXPECT_THAT(backend_.ApplyConfig(*fusion, config),
                   absl_testing::StatusIs(absl::StatusCode::kInvalidArgument));
+      EXPECT_EQ(module->entry_computation()->root_instruction(), fusion);
+    }
+  }
+}
+
+TEST_P(HipblasLtPreswizzledScaleTypeTest, PreservesContiguousFlattenedOperands) {
+  std::string hlo = absl::Substitute(R"(
+HloModule FlattenedScaledDotFusion
+fusion_dot {
+  a = $0[64,16,32]{2,1,0$1} parameter(0)
+  b = $0[96,16,32]{2,1,0$1} parameter(1)
+  sa = f8e8m0fnu[64,16]{1,0} parameter(2)
+  sb = f8e8m0fnu[96,16]{1,0} parameter(3)
+  a_flat = $0[64,512]{1,0$1} reshape(a)
+  b_flat = $0[96,512]{1,0$1} reshape(b)
+  ROOT dot = f32[64,96]{1,0} scaled-dot(a_flat, b_flat, sa, sb),
+      lhs_contracting_dims={1}, rhs_contracting_dims={1}
+}
+ENTRY main {
+  a = $0[64,16,32]{2,1,0$1} parameter(0)
+  b = $0[96,16,32]{2,1,0$1} parameter(1)
+  sa = f8e8m0fnu[64,16]{1,0} parameter(2)
+  sb = f8e8m0fnu[96,16]{1,0} parameter(3)
+  ROOT fusion = f32[64,96]{1,0} fusion(a,b,sa,sb), kind=kCustom,
+      calls=fusion_dot, backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
+})",
+                                   GetParam() ? "f4e2m1fn" : "f8e4m3fn",
+                                   GetParam() ? ":E(4)" : "");
+  auto module_or = ParseAndReturnVerifiedModule(hlo);
+  ASSERT_THAT(module_or, absl_testing::IsOk());
+  auto module = std::move(module_or).value();
+  BackendConfig config;
+  config.mutable_gemm()->set_autotune_workspace_size(64 * 1024 * 1024);
+  config.mutable_gemm()->set_mx_scale_layout(
+      HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8);
+  ASSERT_THAT(backend_.ApplyConfig(
+                  *module->entry_computation()->root_instruction(), config),
+              absl_testing::IsOk());
+  const HloInstruction* call =
+      module->entry_computation()->root_instruction()->operand(0);
+  for (int operand : {0, 1}) {
+    const HloInstruction* data = call->operand(operand);
+    ASSERT_EQ(data->opcode(), HloOpcode::kBitcast);
+    EXPECT_EQ(data->operand(0),
+              module->entry_computation()->parameter_instruction(operand));
+    EXPECT_EQ(data->shape().layout().element_size_in_bits(), GetParam() ? 4 : 0);
+    EXPECT_EQ(ShapeUtil::ByteSizeOf(data->shape()),
+              ShapeUtil::ByteSizeOf(data->operand(0)->shape()));
+  }
+  EXPECT_THAT(module->Verify(), absl_testing::IsOk());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MxTypes, HipblasLtPreswizzledScaleTypeTest, ::testing::Bool(),
+    [](const ::testing::TestParamInfo<bool>& info) {
+      return info.param ? "Fp4" : "Fp8";
+    });
+
+TEST_F(HipblasLtPreswizzledScaleTest, RejectsUnpackedFp4OperandPath) {
+  // Check external buffers, fusion parameters and intermediate shapes. The
+  // dot's immediate operands stay packed, so its eligibility check alone cannot
+  // detect these storage mismatches.
+  for (int location : {0, 1, 2}) {
+    for (int element_size : {0, 8}) {
+      SCOPED_TRACE(::testing::Message()
+                   << "location=" << location
+                   << " element_size=" << element_size);
+      auto module_or =
+          ParseAndReturnVerifiedModule(PreswizzledScaledDotFusionHlo(true));
+      ASSERT_THAT(module_or, absl_testing::IsOk());
+      auto module = std::move(module_or).value();
+      HloInstruction* fusion = module->entry_computation()->root_instruction();
+      HloComputation* fused = fusion->fused_instructions_computation();
+      HloInstruction* parameter = fused->parameter_instruction(0);
+      Shape packed_shape = parameter->shape();
+      Shape unpacked_shape = packed_shape;
+      unpacked_shape.mutable_layout()->set_element_size_in_bits(element_size);
+      HloInstruction* source = parameter;
+      if (location == 0) {
+        *fusion->mutable_operand(0)->mutable_shape() = unpacked_shape;
+      } else if (location == 1) {
+        *parameter->mutable_shape() = unpacked_shape;
+      } else {
+        source = fused->AddInstruction(
+            HloInstruction::CreateReshape(unpacked_shape, parameter));
+      }
+      HloInstruction* reshape = fused->AddInstruction(
+          HloInstruction::CreateReshape(packed_shape, source));
+      ASSERT_TRUE(ShapeUtil::ReshapeIsBitcast(source->shape(), reshape->shape()));
+      ASSERT_THAT(fused->root_instruction()->ReplaceOperandWith(0, reshape),
+                  absl_testing::IsOk());
+
+      // These deliberately invalid storage layouts must be rejected even when
+      // ApplyConfig is called without running the normal layout verifier.
+      BackendConfig config;
+      config.mutable_gemm()->set_mx_scale_layout(
+          HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8);
+      EXPECT_THAT(
+          backend_.ApplyConfig(*fusion, config),
+          absl_testing::StatusIs(
+              absl::StatusCode::kInvalidArgument,
+              ::testing::HasSubstr("packed E(4) storage throughout")));
       EXPECT_EQ(module->entry_computation()->root_instruction(), fusion);
     }
   }

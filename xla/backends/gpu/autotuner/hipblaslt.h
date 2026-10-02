@@ -65,7 +65,7 @@ class HipblasLtBackend : public GpuCodegenBackend {
     // Loose cache matching may still reuse another backend's cached winner.
     // ApplyConfig always consumes the serialized layout, not the policy.
     return target_config().device_description.runtime_version().ToString() +
-           ":mx-scale-layout-v1:" +
+           ":mx-scale-layout-v2:" +
            std::to_string(
                debug_options()
                    .xla_gpu_experimental_hipblaslt_mx_scale_layout());

@@ -33,6 +33,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/utils/hlo_query.h"
+#include "xla/layout.h"
 #include "xla/service/compiler.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/cublas_cudnn.h"
@@ -535,6 +536,20 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
            "matmul would drop instructions: "
         << fused->root_instruction()->ToString();
 
+    // ReshapeIsBitcast compares element order, not element storage width.
+    // Eliding the operand path must not reinterpret byte-stored FP4 as packed
+    // nibbles, including when an intermediate shape changes storage width.
+    auto validate_fp4_storage = [scale_mode](const Shape& shape) -> absl::Status {
+      if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8 &&
+          shape.element_type() == F4E2M1FN &&
+          (!shape.has_layout() || shape.layout().element_size_in_bits() != 4)) {
+        return absl::InvalidArgumentError(
+            "Pre-swizzled FP4 operands require packed E(4) storage throughout "
+            "the operand path");
+      }
+      return absl::OkStatus();
+    };
+
     // Walk forward from each fusion parameter to the scaled-dot operand it
     // feeds. The fusion's external operands may have a different rank than the
     // scaled-dot operands: when quantization happens in-graph the operand is in
@@ -543,6 +558,7 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
     // ops are allowed on the path.
     absl::InlinedVector<HloInstruction*, 4> operands(4, nullptr);
     for (HloInstruction* param : fused->parameter_instructions()) {
+      ABSL_RETURN_IF_ERROR(validate_fp4_storage(param->shape()));
       const HloInstruction* cur = param;
       while (cur->user_count() == 1 && cur->users()[0] != scaled_dot) {
         HloInstruction* user = cur->users()[0];
@@ -550,6 +566,7 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
                      user->opcode() == HloOpcode::kReshape)
             << "Unexpected op between fusion parameter and scaled-dot: "
             << user->ToString();
+        ABSL_RETURN_IF_ERROR(validate_fp4_storage(user->shape()));
         // The whole path is elided below. Equal endpoint shapes do not make
         // that safe: an intermediate bitcast followed by a materializing
         // reshape can change the byte order and still restore the same shape.
@@ -567,6 +584,7 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
       int64_t dot_index = scaled_dot->operand_index(cur);
       const Shape& inner_shape = scaled_dot->operand(dot_index)->shape();
       HloInstruction* ext = instr.mutable_operand(param->parameter_number());
+      ABSL_RETURN_IF_ERROR(validate_fp4_storage(ext->shape()));
       if (!ShapeUtil::Equal(ext->shape(), inner_shape)) {
         if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8 &&
             !ShapeUtil::ReshapeIsBitcast(ext->shape(), inner_shape)) {
