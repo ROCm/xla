@@ -15,15 +15,15 @@ limitations under the License.
 
 #include "xla/backends/gpu/autotuner/block_level_emitter.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <memory>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
 #include "xla/codegen/xtile/xtile_config.pb.h"
@@ -34,7 +34,6 @@ limitations under the License.
 #include "xla/service/executable.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/ir_emission_utils.h"
-#include "xla/service/gpu/nvptx_compiler.h"
 #include "xla/service/platform_util.h"
 #include "xla/stream_executor/device_description.pb.h"
 #include "xla/stream_executor/gpu/tma_metadata.h"
@@ -69,16 +68,19 @@ class TritonBlockLevelFusionEmitterBackendTest
  protected:
   TritonBlockLevelFusionEmitterBackendTest()
       : debug_options_(GetDebugOptionsFromFlags()),
+        compiler_(Compiler::GetForPlatform(
+                      PlatformUtil::GetDefaultPlatform().value()->id())
+                      .value()),
         stream_executor_(PlatformUtil::GetDefaultPlatform()
                              .value()
                              ->ExecutorForDevice(0)
                              .value()),
         target_config_(stream_executor_),
-        backend_(&debug_options_, &compiler_,
-                 compiler_.ShapeSizeBytesFunction(), &target_config_) {}
+        backend_(&debug_options_, compiler_.get(),
+                 compiler_.get()->ShapeSizeBytesFunction(), &target_config_) {}
 
   DebugOptions debug_options_;
-  NVPTXCompiler compiler_;
+  std::unique_ptr<Compiler> compiler_;
   se::StreamExecutor* stream_executor_;
   Compiler::GpuTargetConfig target_config_;
   BlockLevelEmitterBackend backend_;
@@ -290,6 +292,30 @@ ENTRY %main {
 
 TEST_F(TritonBlockLevelFusionEmitterBackendTest, Version) {
   EXPECT_NE(backend_.version(), "");
+}
+
+TEST_F(TritonBlockLevelFusionEmitterBackendTest,
+       IsNotSupportedForConvolutionFusion) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(R"(
+HloModule m
+fused_computation {
+  input = f32[1,8,8,32] parameter(0)
+  kernel = f32[3,3,32,16] parameter(1)
+  conv = f32[1,6,6,16] convolution(input, kernel),
+    window={size=3x3}, dim_labels=b01f_01io->b01f
+  ROOT t = f32[1,16,6,6] transpose(conv), dimensions={0,3,1,2}
+}
+
+ENTRY entry {
+  p0 = f32[1,8,8,32] parameter(0)
+  p1 = f32[3,3,32,16] parameter(1)
+  ROOT fusion = f32[1,16,6,6] fusion(p0, p1), kind=kLoop,
+    calls=fused_computation
+})"));
+  const HloInstruction* fusion =
+      module->entry_computation()->root_instruction();
+  EXPECT_FALSE(backend_.IsSupported(*fusion));
 }
 
 }  // namespace gpu
