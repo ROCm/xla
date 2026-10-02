@@ -113,10 +113,11 @@ xla_test(
         "a100",
         "h100",
         "b200",
+        "amdgpu_any"
     ],
     tags = [
-        "cuda-only",
         "no_mac",
+        "gpu"
     ],
     use_legacy_runtime = True,
     deps = [
@@ -133,7 +134,6 @@ xla_test(
         "//xla/service/gpu:backend_configs_cc",
         "//xla/service/gpu:ir_emission_utils",
         "//xla/service/gpu:mlir_context_pool",
-        "//xla/service/gpu:nvptx_compiler_impl",
         "//xla/stream_executor:platform",
         "//xla/stream_executor:stream_executor_h",
         "//xla/tsl/platform:env",
