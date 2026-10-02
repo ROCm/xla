@@ -39,6 +39,7 @@ limitations under the License.
 #include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/memory_reservation.h"
+#include "xla/stream_executor/memory_space.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
@@ -211,9 +212,11 @@ static bool AddressRangesOverlap(DeviceAddressBase lhs, DeviceAddressBase rhs) {
 
 DeviceAddressVmmAllocator::DeviceAddressVmmAllocator(
     const Platform* platform,
-    std::optional<int64_t> reclaim_exempt_memory_space)
+    std::optional<int64_t> reclaim_exempt_memory_space,
+    std::unique_ptr<DeviceAddressAllocator> host_allocator)
     : DeviceAddressAllocator(platform),
-      reclaim_exempt_memory_space_(reclaim_exempt_memory_space) {}
+      reclaim_exempt_memory_space_(reclaim_exempt_memory_space),
+      host_allocator_(std::move(host_allocator)) {}
 
 absl::Status DeviceAddressVmmAllocator::PopulateDevices(
     DeviceAddressVmmAllocator* allocator,
@@ -653,7 +656,7 @@ DeviceAddressVmmAllocator::TryWithPendingReclaim(PerDeviceState& state,
 // tries a fresh allocator-address mapping.
 absl::StatusOr<ScopedDeviceAddress<uint8_t>>
 DeviceAddressVmmAllocator::Allocate(int device_ordinal, uint64_t size,
-                                    bool /*retry_on_failure*/,
+                                    bool retry_on_failure,
                                     int64_t memory_space) {
   if (size == 0) {
     return ScopedDeviceAddress<uint8_t>(DeviceAddressBase(), device_ordinal,
@@ -661,6 +664,30 @@ DeviceAddressVmmAllocator::Allocate(int device_ordinal, uint64_t size,
   }
 
   ABSL_ASSIGN_OR_RETURN(auto state, GetPerDeviceState(device_ordinal));
+
+  if (memory_space == static_cast<int64_t>(MemorySpace::kHost)) {
+    if (host_allocator_ == nullptr) {
+      return absl::FailedPreconditionError(
+          "DeviceAddressVmmAllocator has no host memory allocator for "
+          "MemorySpace::kHost");
+    }
+    ABSL_ASSIGN_OR_RETURN(
+        ScopedDeviceAddress<uint8_t> host_mem,
+        host_allocator_->Allocate(device_ordinal, size, retry_on_failure,
+                                  memory_space));
+    {
+      absl::MutexLock lock(state->mu);
+      if (!state->host_allocations.insert(AddressStart(host_mem.cref()))
+               .second) {
+        return absl::InternalError(absl::StrFormat(
+            "host allocator returned already tracked address %p",
+            host_mem->opaque()));
+      }
+    }
+    return ScopedDeviceAddress<uint8_t>(host_mem.Release(), device_ordinal,
+                                        this);
+  }
+
   const bool multi_device = CurrentMultiDevice();
 
   absl::MutexLock lock(state->mu);
@@ -806,6 +833,17 @@ absl::Status DeviceAddressVmmAllocator::Deallocate(int device_ordinal,
   }
 
   ABSL_ASSIGN_OR_RETURN(auto state, GetPerDeviceState(device_ordinal));
+
+  if (host_allocator_ != nullptr) {
+    bool is_host_allocation;
+    {
+      absl::MutexLock lock(state->mu);
+      is_host_allocation = state->host_allocations.erase(AddressStart(mem)) > 0;
+    }
+    if (is_host_allocation) {
+      return host_allocator_->Deallocate(device_ordinal, mem);
+    }
+  }
 
   absl::MutexLock lock(state->mu);
 

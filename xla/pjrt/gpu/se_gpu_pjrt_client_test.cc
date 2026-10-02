@@ -3054,6 +3054,40 @@ ENTRY main (a: f32[], b: f32[]) -> f32[] {
   EXPECT_EQ(literal->Get<float>({}), 3.0f);
 }
 
+TEST_F(VmmTest, PinnedHostBufferIsHostAccessible) {
+  GpuClientOptions options;
+  options.allocator_config.kind = GpuAllocatorConfig::Kind::kVmm;
+  options.allowed_devices = {0};
+
+  ASSERT_OK_AND_ASSIGN(auto client, GetStreamExecutorGpuClient(options));
+  PjRtDevice* device = client->addressable_devices()[0];
+  ASSERT_OK_AND_ASSIGN(
+      PjRtMemorySpace * pinned_memory_space,
+      device->memory_space_by_kind(PinnedHostMemorySpace::kKind));
+
+  std::vector<float> data{12.0, 34.0, 56.0, 78.0};
+  Shape shape = ShapeUtil::MakeShapeWithType<float>({4});
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<PjRtBuffer> buffer,
+      client->BufferFromHostBuffer(
+          data.data(), shape.element_type(), shape.dimensions(),
+          /*byte_strides=*/std::nullopt,
+          PjRtClient::HostBufferSemantics::kImmutableOnlyDuringCall,
+          /*on_done_with_host_buffer=*/nullptr, pinned_memory_space,
+          /*device_layout=*/nullptr));
+  ASSERT_OK(buffer->GetReadyFuture().Await());
+  ASSERT_TRUE(buffer->IsOnCpu());
+
+  // A pinned_host buffer served from device VMM memory has no CPU mapping, so
+  // a regression faults here instead of failing the expectations.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<PjRtBuffer::ExternalReference> ref,
+                       buffer->AcquireExternalReference());
+  const float* host_ptr =
+      reinterpret_cast<const float*>(ref->OpaqueDeviceMemoryDataPointer());
+  EXPECT_THAT(host_ptr[0], FloatEq(12.0));
+  EXPECT_THAT(host_ptr[3], FloatEq(78.0));
+}
+
 GpuClientOptions VmmClientOptions() {
   GpuClientOptions options;
   options.allowed_devices = {0};
