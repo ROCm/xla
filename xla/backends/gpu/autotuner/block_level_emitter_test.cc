@@ -36,7 +36,6 @@ limitations under the License.
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/service/gpu/mlir_context_pool.h"
-#include "xla/service/gpu/nvptx_compiler.h"
 #include "xla/service/platform_util.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream_executor.h"
@@ -82,13 +81,16 @@ class TritonBlockLevelFusionEmitterBackendTest
   TritonBlockLevelFusionEmitterBackendTest()
       : debug_options_(
             HloHardwareIndependentTestBase::GetDebugOptionsForTest()),
+        compiler_(Compiler::GetForPlatform(
+                      PlatformUtil::GetDefaultPlatform().value()->id())
+                      .value()),
         stream_executor_(GetDefaultStreamExecutor()),
         target_config_(stream_executor_),
-        backend_(&debug_options_, &compiler_,
-                 compiler_.ShapeSizeBytesFunction(), &target_config_) {}
+        backend_(&debug_options_, compiler_.get(),
+                 compiler_.get()->ShapeSizeBytesFunction(), &target_config_) {}
 
   DebugOptions debug_options_;
-  NVPTXCompiler compiler_;
+  std::unique_ptr<Compiler> compiler_;
   se::StreamExecutor* stream_executor_;
   Compiler::GpuTargetConfig target_config_;
   BlockLevelEmitterBackend backend_;
@@ -317,7 +319,7 @@ ENTRY %main {
   // model must give each candidate its own context.
   MlirContextPool mlir_context_pool(CreateMlirContext, /*preallocate=*/4);
   BlockLevelEmitterBackend parallel_backend(
-      &debug_options_, &compiler_, compiler_.ShapeSizeBytesFunction(),
+      &debug_options_, compiler_.get(), compiler_.get()->ShapeSizeBytesFunction(),
       &target_config_, &thread_pool, &mlir_context_pool);
 
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackendConfig> parallel_config,
@@ -406,6 +408,30 @@ ENTRY %main {
 )"));
   const HloInstruction* instr = module->entry_computation()->root_instruction();
   EXPECT_FALSE(backend_.IsSupported(*instr));
+}
+
+TEST_F(TritonBlockLevelFusionEmitterBackendTest,
+       IsNotSupportedForConvolutionFusion) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(R"(
+HloModule m
+fused_computation {
+  input = f32[1,8,8,32] parameter(0)
+  kernel = f32[3,3,32,16] parameter(1)
+  conv = f32[1,6,6,16] convolution(input, kernel),
+    window={size=3x3}, dim_labels=b01f_01io->b01f
+  ROOT t = f32[1,16,6,6] transpose(conv), dimensions={0,3,1,2}
+}
+
+ENTRY entry {
+  p0 = f32[1,8,8,32] parameter(0)
+  p1 = f32[3,3,32,16] parameter(1)
+  ROOT fusion = f32[1,16,6,6] fusion(p0, p1), kind=kLoop,
+    calls=fused_computation
+})"));
+  const HloInstruction* fusion =
+      module->entry_computation()->root_instruction();
+  EXPECT_FALSE(backend_.IsSupported(*fusion));
 }
 
 }  // namespace gpu
