@@ -41,6 +41,7 @@ limitations under the License.
 #include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/device_address_vmm_allocator.h"
 #include "xla/stream_executor/memory_allocation.h"
+#include "xla/stream_executor/memory_space.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/util.h"
 #include "xla/xla.pb.h"
@@ -466,6 +467,11 @@ GpuExecutableVaRemapAllocator::GpuExecutableVaRemapAllocator(
       [&](BufferAllocation::Index index, const BufferAllocation& allocation) {
         if (allocation.is_constant()) {
           // Collected by the base class.
+          return;
+        }
+        // Not VMM physical memory: Map() and mapped Allocate() reject it.
+        if (allocation.color() ==
+            static_cast<int64_t>(se::MemorySpace::kHost)) {
           return;
         }
         if ((update_mode_ == DebugOptions::SKIP_TEMP ||

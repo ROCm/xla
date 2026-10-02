@@ -31,6 +31,10 @@ limitations under the License.
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
+#include "xla/backends/gpu/runtime/command.h"
+#include "xla/backends/gpu/runtime/command_buffer_thunk.h"
+#include "xla/backends/gpu/runtime/command_executor.h"
+#include "xla/backends/gpu/runtime/memset_thunk.h"
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/backends/gpu/runtime/thunk_executor.h"
 #include "xla/executable_run_options.h"
@@ -44,6 +48,7 @@ limitations under the License.
 #include "xla/stream_executor/device_address_vmm_allocator.h"
 #include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/memory_reservation.h"
+#include "xla/stream_executor/memory_space.h"
 #include "xla/stream_executor/mock_platform.h"
 #include "xla/stream_executor/mock_stream.h"
 #include "xla/stream_executor/mock_stream_executor.h"
@@ -164,9 +169,10 @@ class TestMemoryReservation final : public se::MemoryReservation {
 class TestVmmAllocator final : public se::DeviceAddressVmmAllocator {
  public:
   static absl::StatusOr<std::unique_ptr<TestVmmAllocator>> Create(
-      const se::Platform* platform, absl::Span<const DeviceConfig> devices) {
-    auto allocator =
-        std::unique_ptr<TestVmmAllocator>(new TestVmmAllocator(platform));
+      const se::Platform* platform, absl::Span<const DeviceConfig> devices,
+      std::unique_ptr<se::DeviceAddressAllocator> host_allocator = nullptr) {
+    auto allocator = std::unique_ptr<TestVmmAllocator>(
+        new TestVmmAllocator(platform, std::move(host_allocator)));
     absl::Status status = PopulateDevices(allocator.get(), devices);
     if (!status.ok()) {
       return status;
@@ -228,14 +234,52 @@ class TestVmmAllocator final : public se::DeviceAddressVmmAllocator {
   }
 
  private:
-  explicit TestVmmAllocator(const se::Platform* platform)
-      : DeviceAddressVmmAllocator(platform) {}
+  TestVmmAllocator(const se::Platform* platform,
+                   std::unique_ptr<se::DeviceAddressAllocator> host_allocator)
+      : DeviceAddressVmmAllocator(platform,
+                                  /*reclaim_exempt_memory_space=*/std::nullopt,
+                                  std::move(host_allocator)) {}
 
   TestMemoryReservation* last_reservation_ = nullptr;
   const void* last_created_allocation_address_ = nullptr;
   bool fail_next_deferred_deallocation_ = false;
   std::shared_ptr<std::vector<TestMemoryReservation*>> live_reservations_ =
       std::make_shared<std::vector<TestMemoryReservation*>>();
+};
+
+// MemorySpace::kHost allocator that always hands out the same aligned slot, so
+// a host buffer keeps a stable address across executions.
+class SingleSlotHostAllocator final : public se::DeviceAddressAllocator {
+ public:
+  SingleSlotHostAllocator(const se::Platform* platform, uint64_t size)
+      : se::DeviceAddressAllocator(platform), storage_(size), size_(size) {}
+
+  absl::StatusOr<se::ScopedDeviceAddress<uint8_t>> Allocate(
+      int device_ordinal, uint64_t size, bool /*retry_on_failure*/,
+      int64_t memory_space) override {
+    EXPECT_EQ(memory_space, static_cast<int64_t>(se::MemorySpace::kHost));
+    EXPECT_LE(size, size_);
+    ++allocation_count_;
+    return se::ScopedDeviceAddress<uint8_t>(
+        se::DeviceAddressBase(storage_.data(), size), device_ordinal, this);
+  }
+
+  absl::Status Deallocate(int /*device_ordinal*/,
+                          se::DeviceAddressBase /*mem*/) override {
+    return absl::OkStatus();
+  }
+
+  absl::StatusOr<se::Stream*> GetStream(int /*device_ordinal*/) override {
+    return absl::UnimplementedError("unused");
+  }
+
+  const void* slot() const { return storage_.data(); }
+  int allocation_count() const { return allocation_count_; }
+
+ private:
+  AlignedStorage storage_;
+  uint64_t size_;
+  int allocation_count_ = 0;
 };
 
 class GpuExecutableVaRemapAllocatorTest : public ::testing::Test {
@@ -1378,6 +1422,120 @@ TEST_F(GpuExecutableVaRemapAllocatorTest,
   ASSERT_OK(vmm_allocator->SynchronizePendingOperations(/*device_ordinal=*/0));
   ASSERT_NE(va_reservation, nullptr);
   EXPECT_EQ(va_reservation->active_mapping_count(), 0);
+}
+
+// Returns a thunk executor with one command buffer thunk that writes
+// `allocation`, so the allocator constructor collects it as a command buffer
+// allocation.
+absl::StatusOr<ThunkExecutor> MakeCommandBufferThunkExecutor(
+    const BufferAllocation& allocation) {
+  CommandSequence commands;
+  commands.Append(std::make_unique<Memset32BitValueThunk>(
+      Thunk::ThunkInfo(), /*value=*/0,
+      BufferAllocation::Slice(&allocation, 0, allocation.size())));
+  ABSL_ASSIGN_OR_RETURN(CommandExecutor executor,
+                        CommandExecutor::Create(
+                            std::move(commands),
+                            CommandExecutor::SynchronizationMode::kSerialize));
+  ThunkSequence thunks;
+  thunks.push_back(std::make_unique<CommandBufferThunk>(
+      std::move(executor), Thunk::ThunkInfo(), /*devices_in_process=*/1));
+  return ThunkExecutor(std::move(thunks));
+}
+
+constexpr int64_t kHostColor = static_cast<int64_t>(se::MemorySpace::kHost);
+
+absl::StatusOr<GpuExecutableBufferAllocator::ParameterBuffer> NoParameters(
+    const BufferAllocation& /*allocation*/) {
+  return absl::InternalError("unexpected parameter");
+}
+
+TEST_F(GpuExecutableVaRemapAllocatorTest,
+       SkipTempDoesNotRemapHostMemorySpaceTemp) {
+  constexpr int64_t kBufferSize = 1024;
+  auto host_allocator = std::make_unique<SingleSlotHostAllocator>(
+      &platform_, RoundUpTestSize(kBufferSize));
+  SingleSlotHostAllocator* host = host_allocator.get();
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<TestVmmAllocator> vmm_allocator,
+      TestVmmAllocator::Create(&platform_, {{&executor_, &stream_}},
+                               std::move(host_allocator)));
+
+  BufferAllocation host_temp(/*index=*/0, kBufferSize, kHostColor);
+  ASSERT_TRUE(host_temp.IsPreallocatedTempBuffer());
+  std::vector<const BufferAllocation*> allocations = {&host_temp};
+
+  ASSERT_OK_AND_ASSIGN(ThunkExecutor thunk_executor,
+                       MakeCommandBufferThunkExecutor(host_temp));
+  DebugOptions debug_options;
+  debug_options.set_xla_gpu_command_buffer_update_mode(DebugOptions::SKIP_TEMP);
+  GpuExecutableVaRemapAllocator allocator("test", allocations,
+                                          ShapeUtil::MakeShape(F32, {256}),
+                                          &debug_options, &thunk_executor);
+  EXPECT_EQ(allocator.command_buffer_allocation_count(), 0);
+
+  for (int run = 0; run < 2; ++run) {
+    ASSERT_OK_AND_ASSIGN(ExecutionResult result,
+                         RunExecution(allocator, vmm_allocator.get(),
+                                      NoParameters, allocations));
+    EXPECT_EQ(result.address_during_execute.opaque(), host->slot())
+        << "run " << run;
+    if (result.persistent.has_value()) {
+      EXPECT_THAT(*result.persistent, IsEmpty()) << "run " << run;
+    }
+  }
+  EXPECT_EQ(host->allocation_count(), 2);
+  EXPECT_EQ(vmm_allocator->last_created_allocation_address(), nullptr);
+  EXPECT_EQ(vmm_allocator->FindReservationContaining(host->slot()), nullptr);
+  if (vmm_allocator->last_reservation() != nullptr) {
+    EXPECT_EQ(vmm_allocator->last_reservation()->active_mapping_count(), 0);
+  }
+}
+
+TEST_F(GpuExecutableVaRemapAllocatorTest,
+       SkipProfiledDoesNotMapStableHostMemorySpaceOutput) {
+  constexpr int64_t kBufferSize = 1024;
+  auto host_allocator = std::make_unique<SingleSlotHostAllocator>(
+      &platform_, RoundUpTestSize(kBufferSize));
+  SingleSlotHostAllocator* host = host_allocator.get();
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<TestVmmAllocator> vmm_allocator,
+      TestVmmAllocator::Create(&platform_, {{&executor_, &stream_}},
+                               std::move(host_allocator)));
+
+  BufferAllocation host_output(/*index=*/0, kBufferSize, kHostColor);
+  host_output.set_maybe_live_out(true);
+  std::vector<const BufferAllocation*> allocations = {&host_output};
+
+  ASSERT_OK_AND_ASSIGN(ThunkExecutor thunk_executor,
+                       MakeCommandBufferThunkExecutor(host_output));
+  DebugOptions debug_options;
+  debug_options.set_xla_gpu_command_buffer_update_mode(
+      DebugOptions::SKIP_PROFILED);
+  GpuExecutableVaRemapAllocator allocator("test", allocations,
+                                          ShapeUtil::MakeShape(F32, {256}),
+                                          &debug_options, &thunk_executor);
+
+  // The host output keeps the same address on every execution. Profiling must
+  // not select it: Map() of a host-allocator address fails.
+  for (int run = 0; run < 5; ++run) {
+    ASSERT_OK_AND_ASSIGN(ExecutionResult result,
+                         RunExecution(allocator, vmm_allocator.get(),
+                                      NoParameters, allocations));
+    EXPECT_EQ(result.address_during_execute.opaque(), host->slot())
+        << "run " << run;
+    if (result.persistent.has_value()) {
+      EXPECT_THAT(*result.persistent, IsEmpty()) << "run " << run;
+    }
+  }
+  EXPECT_EQ(host->allocation_count(), 5);
+  EXPECT_EQ(vmm_allocator->last_created_allocation_address(), nullptr);
+  if (vmm_allocator->last_reservation() != nullptr) {
+    EXPECT_EQ(vmm_allocator->last_reservation()->active_mapping_count(), 0);
+    EXPECT_NE(
+        vmm_allocator->last_reservation()->last_mapped_allocation_address(),
+        host->slot());
+  }
 }
 
 }  // namespace
