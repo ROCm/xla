@@ -200,6 +200,25 @@ TEST(DeviceDescription, OversizedSharedMemoryPerBlockProtoConversion) {
             desc.oversized_shared_memory_per_block());
 }
 
+TEST(DeviceDescription, MemorySideCacheSizeProtoConversion) {
+  DeviceDescription desc;
+  desc.set_memory_side_cache_size(256 * 1024 * 1024);
+
+  ASSERT_OK_AND_ASSIGN(DeviceDescription from_proto,
+                       DeviceDescription::FromProto(desc.ToProto()));
+
+  EXPECT_EQ(from_proto.memory_side_cache_size(), 256 * 1024 * 1024);
+}
+
+TEST(DeviceDescription, MemorySideCacheSizeDefaultsToZero) {
+  DeviceDescription desc;
+  EXPECT_EQ(desc.memory_side_cache_size(), 0);
+
+  ASSERT_OK_AND_ASSIGN(DeviceDescription from_proto,
+                       DeviceDescription::FromProto(desc.ToProto()));
+  EXPECT_EQ(from_proto.memory_side_cache_size(), 0);
+}
+
 TEST(DeviceDescription, ProtoConversion) {
   ASSERT_OK_AND_ASSIGN(
       stream_executor::GpuTargetConfigProto gpu_target_config_proto,
