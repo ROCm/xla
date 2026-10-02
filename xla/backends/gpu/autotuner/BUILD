@@ -756,6 +756,7 @@ xla_test(
         "//xla:literal",
         "//xla:shape_util",
         "//xla:xla_proto_cc",
+        "//xla:xla_data_proto_cc",
         "//xla/backends/autotuner:backends_proto_cc",
         "//xla/backends/gpu/tests:hlo_pjrt_gpu_test_base",
         "//xla/hlo/ir:hlo",

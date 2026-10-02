@@ -25,6 +25,7 @@ namespace xla::gpu {
 
 // Whether a native scaled-dot can use the initial, unpadded gfx950 32x8 scale
 // path. Other shapes and devices retain their existing linear-scale candidates.
+// Data operands must both be E4M3FN or both be E2M1FN with packed E(4) layouts.
 Decision CanUseHipblasLtScale32x8(
     const HloInstruction& scaled_dot,
     const stream_executor::GpuComputeCapability& gpu_version);
