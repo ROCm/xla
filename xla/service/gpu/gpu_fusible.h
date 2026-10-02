@@ -134,6 +134,11 @@ bool IsNestableVariadicReduceWindow(const HloInstruction& instr);
 // is either an unfused scatter op or a scatter input fusion.
 bool IsInputFusibleScatter(const HloInstruction& instr);
 
+// Whether `instr` is an input fusion whose heroes are all concatenates, i.e. a
+// fusion emitted by the concatenate emitter. Loop fusions rooted at a
+// concatenate are emitted by the loop emitter and do not count.
+bool IsConcatenateFusion(const HloInstruction& instr);
+
 // Determines whether the combination of `instr1` and `instr2` into a (possibly
 // multi-output) fusion fits within the maximum number of parameters that can be
 // passed to a kernel. If the fusion is a producer/consumer fusion and `instr1`

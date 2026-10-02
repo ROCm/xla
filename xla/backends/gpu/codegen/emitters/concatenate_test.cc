@@ -18,8 +18,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <optional>
+#include <vector>
+
 #include "xla/backends/gpu/codegen/emitters/mlir_kernel_emitter.h"
 #include "xla/debug_options_flags.h"
+#include "xla/hlo/analysis/indexing_map.h"
+#include "xla/hlo/analysis/indexing_test_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
@@ -31,7 +36,7 @@
 namespace xla::gpu {
 namespace {
 
-class ConcatenateFusionTest : public HloHardwareIndependentTestBase {
+class ConcatenateFusionTest : public IndexingTestBase {
  protected:
   DebugOptions GetDebugOptionsForTest() const override {
     auto debug_options = GetDebugOptionsFromFlags();
@@ -57,6 +62,43 @@ TEST_F(ConcatenateFusionTest, PropagatesUnrollFactorToCompilationPipeline) {
 
   // Blackwell with CUDA 12.9 vectorizes up to 256 bits, or 16 BF16 elements.
   EXPECT_EQ(compilation_pipeline_emitter.unroll_factor(), 16);
+}
+
+TEST_F(ConcatenateFusionTest, ThreadIdIndexingIsSharedByAllRoots) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+    fusion {
+      p0 = f32[32,64] parameter(0)
+      p1 = f32[32,64] parameter(1)
+      c1 = f32[64,64] concatenate(p0, p1), dimensions={0}
+      c2 = f32[64,64] concatenate(p1, p0), dimensions={0}
+      ROOT t = (f32[64,64], f32[64,64]) tuple(c1, c2)
+    }
+
+    ENTRY main {
+      p0 = f32[32,64] parameter(0)
+      p1 = f32[32,64] parameter(1)
+      ROOT fusion = (f32[64,64], f32[64,64]) fusion(p0, p1), kind=kInput,
+          calls=fusion
+    })"));
+
+  se::DeviceDescription device_info = TestGpuDeviceInfo::RTXA6000DeviceInfo();
+  HloFusionAnalysis analysis = HloFusionAnalysis::Create(
+      *module->entry_computation()->root_instruction(), device_info);
+  ASSERT_EQ(analysis.emitter_fusion_kind(),
+            HloFusionAnalysis::EmitterFusionKind::kConcatenate);
+  ConcatenateFusion concatenate_fusion(analysis);
+
+  std::optional<std::vector<IndexingMap>> root_0 =
+      concatenate_fusion.ComputeThreadIdToInputIndexing(0, &mlir_context_);
+  std::optional<std::vector<IndexingMap>> root_1 =
+      concatenate_fusion.ComputeThreadIdToInputIndexing(1, &mlir_context_);
+  ASSERT_TRUE(root_0.has_value());
+  ASSERT_TRUE(root_1.has_value());
+  EXPECT_EQ(root_0->size(), 2);
+  EXPECT_EQ(*root_0, *root_1);
+  EXPECT_FALSE(
+      concatenate_fusion.ComputeThreadIdToOutputIndexing(1, &mlir_context_)
+          .has_value());
 }
 
 }  // namespace

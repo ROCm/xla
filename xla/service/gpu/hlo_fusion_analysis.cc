@@ -88,27 +88,58 @@ std::optional<TransposeDescription> FindConsistentTransposeHero(
   return tiled_transpose_hero;
 }
 
+}  // namespace
+
 bool UseConcatenateFusion(absl::Span<const HloInstructionAdaptor> roots,
                           absl::Span<const HloInstructionAdaptor> heroes) {
-  if (heroes.size() != 1) {
+  if (heroes.empty() || roots.size() != heroes.size()) {
     return false;
   }
-  if (heroes.front().opcode() != HloOpcode::kConcatenate) {
+  const HloInstruction& first_hero = heroes.front().instruction();
+  if (first_hero.opcode() != HloOpcode::kConcatenate) {
     return false;
   }
-  // The concat emitter does not support multiple outputs yet. TODO(csigg): fix.
-  if (roots.front().shape().IsTuple()) {
+  // Limit the number of roots times operands because the concat emitter
+  // produces code for each operand of each root, hurting occupancy.
+  constexpr int64_t kMaxRootsTimesOperands = 4;
+  if (static_cast<int64_t>(roots.size()) * first_hero.operand_count() >
+      kMaxRootsTimesOperands) {
     return false;
   }
-  // Limit the number of operands because the concat emitter produces code for
-  // each operand, hurting occupancy.
-  if (heroes.front().instruction().operand_count() > 4) {
-    return false;
+  // Every root is computed in the same loop over the operands of the first
+  // hero and written at the same output index. That is only valid if all
+  // heroes are concatenates of the same operand shapes along the same
+  // dimension and all roots have the same shape. Shapes are compared exactly,
+  // because equal element counts do not imply equal indexing.
+  for (auto [root, hero] : llvm::zip(roots, heroes)) {
+    if (!ShapeUtil::EqualIgnoringElementType(root.shape(),
+                                             roots.front().shape())) {
+      return false;
+    }
+    const HloInstruction& concat = hero.instruction();
+    if (&concat == &first_hero) {
+      continue;
+    }
+    if (concat.opcode() != HloOpcode::kConcatenate ||
+        concat.concatenate_dimension() != first_hero.concatenate_dimension() ||
+        concat.operand_count() != first_hero.operand_count() ||
+        !ShapeUtil::EqualIgnoringElementType(concat.shape(),
+                                             first_hero.shape())) {
+      return false;
+    }
+    for (int64_t i = 0; i < concat.operand_count(); ++i) {
+      if (!ShapeUtil::EqualIgnoringElementType(
+              concat.operand(i)->shape(), first_hero.operand(i)->shape())) {
+        return false;
+      }
+    }
   }
   // The loop emitter is faster when warp divergence and occupancy are both low.
   // TODO(csigg): exclude this case.
   return true;
 }
+
+namespace {
 
 HloFusionAnalysis::EmitterFusionKind GetEmitterFusionKind(
     const FusionBackendConfig& fusion_backend_config,
@@ -171,6 +202,12 @@ HloFusionAnalysis::EmitterFusionKind GetEmitterFusionKind(
     return HloFusionAnalysis::EmitterFusionKind::kTranspose;
   }
 
+  // The concatenate emitter also supports some multi output fusions, so this
+  // check has to come before the early return for those.
+  if (UseConcatenateFusion(fusion_roots, fusion_heroes)) {
+    return HloFusionAnalysis::EmitterFusionKind::kConcatenate;
+  }
+
   if (fusion_roots.size() > 1) {
     return HloFusionAnalysis::EmitterFusionKind::kLoop;
   }
@@ -181,10 +218,6 @@ HloFusionAnalysis::EmitterFusionKind GetEmitterFusionKind(
 
   if (fusion_roots[0].opcode() == HloOpcode::kSort) {
     return HloFusionAnalysis::EmitterFusionKind::kSort;
-  }
-
-  if (UseConcatenateFusion(fusion_roots, fusion_heroes)) {
-    return HloFusionAnalysis::EmitterFusionKind::kConcatenate;
   }
 
   return HloFusionAnalysis::EmitterFusionKind::kLoop;

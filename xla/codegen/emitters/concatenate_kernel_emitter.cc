@@ -188,10 +188,20 @@ absl::Status ConcatenateFusionKernelEmitter::EmitEntryFunction(
 
   auto work_item_id_to_input_map =
       ComputeWorkItemIdToOutputIndexing(&mlir_context_);
+  // All roots share one shape and all heroes are concatenates of the same
+  // operand shapes along the same dimension, so the indexing of the first root
+  // is valid for every root and one loop per operand computes all of them.
   auto epilogue_indexing = ComputeEpilogueInputToOutputIndexing(
       fusion_spec_.fusion_hero(0), fusion_spec_.fusion_root(0), &mlir_context_);
 
   const auto* concat = &fusion_spec_.fusion_hero(0).instruction();
+  // Several roots may share a hero, so compute each hero only once.
+  llvm::SmallVector<const HloInstruction*> concats;
+  for (const HloInstructionAdaptor& hero : fusion_spec_.fusion_heroes()) {
+    if (!absl::c_linear_search(concats, &hero.instruction())) {
+      concats.push_back(&hero.instruction());
+    }
+  }
 
   const auto forall_body_builder = [&](mlir::OpBuilder& builder,
                                        mlir::Location loc,
@@ -228,20 +238,24 @@ absl::Status ConcatenateFusionKernelEmitter::EmitEntryFunction(
         auto input_indices = emitters::ApplyIndexing(
             work_item_id_to_input_map, work_dims, symbol_values, nested_b);
 
-        auto result_scalar = emitters::ProvideParameter(
-            root_computation, concat, operand_index, input_indices,
-            call_targets, entry_function, nested_b);
         absl::flat_hash_map<const HloInstruction*,
                             llvm::SmallVector<mlir::Value>>
-            hero_value{{concat, result_scalar}};
-        auto result_scalars = EmitEpilogue(
-            /*epilogue_index=*/0, computations, entry_function, hero_value,
-            output_indices,
-            nested_b)[&fusion_spec_.fusion_root(0).instruction()];
+            hero_values;
+        for (const HloInstruction* hero : concats) {
+          hero_values.try_emplace(
+              hero, emitters::ProvideParameter(
+                        root_computation, hero, operand_index, input_indices,
+                        call_targets, entry_function, nested_b));
+        }
+        auto results_per_root =
+            EmitEpilogue(/*epilogue_index=*/0, computations, entry_function,
+                         hero_values, output_indices, nested_b);
 
         llvm::SmallVector<mlir::Value> result_tensors;
         result_tensors.reserve(output_tensor_args.size());
-        for (auto [tensor, value] : llvm::zip(output_tensors, result_scalars)) {
+        for (auto [root, tensor] :
+             llvm::zip(fusion_spec_.fusion_roots(), output_tensors)) {
+          mlir::Value value = results_per_root.at(&root.instruction()).front();
           result_tensors.push_back(
               nested_b
                   .create<mlir::tensor::InsertOp>(value, tensor, output_indices)
@@ -289,9 +303,20 @@ absl::Status ConcatenateFusionKernelEmitter::EmitEntryFunction(
 std::vector<emitters::EpilogueSpecification>
 ConcatenateFusionKernelEmitter::GetEpilogues(const HloFusionInstruction& fusion,
                                              MLIRContext* mlir_context) const {
-  return {emitters::EpilogueSpecification::FromIdentityIndexing(
-      &fusion_spec_.fusion_hero(0).instruction(),
-      &fusion_spec_.fusion_root(0).instruction(), mlir_context)};
+  // One epilogue for all roots. They share one shape, so the epilogue is
+  // called with the same output indices for each of them.
+  emitters::EpilogueSpecification epilogue =
+      emitters::EpilogueSpecification::FromIdentityIndexing(
+          &fusion_spec_.fusion_hero(0).instruction(),
+          &fusion_spec_.fusion_root(0).instruction(), mlir_context);
+  for (int64_t i = 1; i < fusion_spec_.fusion_root_count(); ++i) {
+    const HloInstruction* root = &fusion_spec_.fusion_root(i).instruction();
+    epilogue.heroes.push_back(&fusion_spec_.fusion_hero(i).instruction());
+    epilogue.roots.push_back(root);
+    epilogue.root_indexing.push_back(
+        CreateIdentityMap(root->shape(), mlir_context));
+  }
+  return {std::move(epilogue)};
 }
 
 }  // namespace xla::emitters

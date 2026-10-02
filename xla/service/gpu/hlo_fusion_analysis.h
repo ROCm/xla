@@ -39,6 +39,14 @@ namespace gpu {
 // given one.
 bool IsGpuFusionKind(const HloInstruction& hlo, absl::string_view kind);
 
+// Returns true if the concatenate emitter can emit a fusion with the given
+// roots and heroes. With several roots, every hero has to be a concatenate of
+// the same operand shapes along the same dimension, and all roots have to
+// share one shape. Multi output fusion uses this to decide whether merging
+// keeps a concatenate fusion on this emitter.
+bool UseConcatenateFusion(absl::Span<const HloInstructionAdaptor> roots,
+                          absl::Span<const HloInstructionAdaptor> heroes);
+
 class HloFusionAnalysis {
  public:
   // The type of emitted fusion.

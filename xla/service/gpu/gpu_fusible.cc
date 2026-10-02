@@ -18,6 +18,7 @@ limitations under the License.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <utility>
@@ -321,6 +322,57 @@ bool IsInputFusibleTranspose(const HloInstruction& instr) {
   return GetDescriptionForTiledTransposeEmitter(instr).has_value();
 }
 
+bool IsConcatenateFusion(const HloInstruction& instr) {
+  if (instr.opcode() != HloOpcode::kFusion || instr.IsCustomFusion() ||
+      instr.fusion_kind() != HloInstruction::FusionKind::kInput) {
+    return false;
+  }
+  std::unique_ptr<HloFusionAdaptor> fusion =
+      HloFusionAdaptor::ForInstruction(&instr);
+  return absl::c_all_of(
+      fusion->GetRoots(), [](const HloInstructionAdaptor& root) {
+        return FindNonTrivialHero(root).opcode() == HloOpcode::kConcatenate;
+      });
+}
+
+namespace {
+
+// Whether the multi output fusion of `instr1` and `instr2` would still be
+// emitted by the concatenate emitter. Uses the same predicate as
+// HloFusionAnalysis, so that a merge never silently moves a concatenate fusion
+// to the loop emitter, which loses the vectorized loads.
+bool MultiOutputFusionKeepsConcatenateEmitter(const HloInstruction& instr1,
+                                              const HloInstruction& instr2) {
+  const HloInstruction* producer = nullptr;
+  const HloInstruction* consumer = nullptr;
+  if (instr1.IsUserOf(&instr2)) {
+    producer = &instr2;
+    consumer = &instr1;
+  } else if (instr2.IsUserOf(&instr1)) {
+    producer = &instr1;
+    consumer = &instr2;
+  }
+  // For a producer consumer fusion, the heroes of the consumer roots may lie in
+  // the producer, and the producer roots stay outputs of the merged fusion.
+  std::unique_ptr<HloFusionAdaptor> first =
+      consumer != nullptr
+          ? HloFusionAdaptor::ForProducerConsumer(producer, consumer)
+          : HloFusionAdaptor::ForInstruction(&instr1);
+  std::unique_ptr<HloFusionAdaptor> second = HloFusionAdaptor::ForInstruction(
+      producer != nullptr ? producer : &instr2);
+  absl::InlinedVector<HloInstructionAdaptor, 2> roots;
+  absl::InlinedVector<HloInstructionAdaptor, 2> heroes;
+  for (const HloFusionAdaptor* fusion : {first.get(), second.get()}) {
+    for (const HloInstructionAdaptor& root : fusion->GetRoots()) {
+      roots.push_back(root);
+      heroes.push_back(FindNonTrivialHero(root));
+    }
+  }
+  return UseConcatenateFusion(roots, heroes);
+}
+
+}  // namespace
+
 const HloInstruction* GetRealHeroForMultiOutputFusion(
     const HloInstruction& instr, const se::DeviceDescription& device_info) {
   if (instr.opcode() != HloOpcode::kFusion) {
@@ -449,6 +501,14 @@ FusionDecision ShapesCompatibleForMultiOutputFusion(
     }
     return element_instr->shape();
   };
+
+  // A concatenate fusion only profits from multi output fusion while it stays
+  // on the concatenate emitter.
+  if ((IsConcatenateFusion(instr1) || IsConcatenateFusion(instr2)) &&
+      !MultiOutputFusionKeepsConcatenateEmitter(instr1, instr2)) {
+    return FusionDecision::Forbid(
+        "concatenate fusion would move to the loop emitter");
+  }
 
   // All shapes of the root tuple of multi-output fusions should agree, i.e. all
   // root ops should have equal output shapes. An exception are
@@ -880,12 +940,15 @@ bool IsFusibleAsMultiOutputFusionRoot(
   // its emitter doesn't support it.
   //
   // Custom fusions cannot be fused with anything.
+  //
+  // Concatenate fusions are admitted, but ShapesCompatibleForMultiOutputFusion
+  // only lets them merge if the result stays on the concatenate emitter.
 
   return instr.IsFusible() && !instr.IsCustomFusion() &&
          (IsInputFusibleReduction(instr, device_info) ||
           IsInputFusibleTranspose(instr) ||
           instr.IsLoopFusion() ||  // TODO(b/130013493): Use IsLoopFusible here.
-          instr.IsElementwise());
+          instr.IsElementwise() || IsConcatenateFusion(instr));
 }
 
 HloInstruction::FusionKind ChooseFusionKind(
