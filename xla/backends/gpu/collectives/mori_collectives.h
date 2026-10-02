@@ -97,9 +97,9 @@ class MoriCollectives : public GpuCollectives {
  private:
   void Finalize();
 
-  // Initializes the MORI shmem state for a single PE (one GPU). Must be called
-  // on a thread that has `executor`'s device active. ShmemInitAttr is a
-  // collective/idempotent operation, so all participating PEs must call this
+  // Initializes the MORI CCO comm and the per-device CollectivesFacade for a
+  // single PE (one GPU), activating `executor`'s device first. ccoCommCreate is
+  // a collective operation, so all participating PEs must call this
   // concurrently with consistent (rank, nranks, uid). Shared by the eager
   // InitializeTopology path and the lazy CreateCommunicatorsWithCancel path.
   absl::Status InitPe(size_t rank, size_t nranks, const CliqueId& clique_id,
@@ -114,6 +114,8 @@ class MoriCollectives : public GpuCollectives {
                                  const CliqueId& clique_id);
 
   bool initialized_ = false;
+  // Number of PEs in the global MORI clique; valid once `initialized_`.
+  size_t num_pes_ = 0;
 };
 
 }  // namespace xla::gpu

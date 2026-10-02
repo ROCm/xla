@@ -44,8 +44,8 @@ licenses(["notice"])  # MIT
 # ----------------------------------------------------------------------------
 
 # libibverbs (rdma-core). Used by transport/rdma/ providers and shmem fabric.
-# This shim carries the vendored headers only; libibverbs is resolved at runtime 
-# via dlopen 
+# This shim carries the vendored headers only; libibverbs is resolved at runtime
+# via dlopen.
 alias(
     name = "ibverbs",
     actual = "@rdma_core//:verbs_headers",
