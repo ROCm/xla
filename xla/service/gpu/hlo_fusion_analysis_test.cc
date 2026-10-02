@@ -17,6 +17,7 @@ limitations under the License.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "xla/debug_options_flags.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/hlo/utils/hlo_traversal.h"
 #include "xla/service/gpu/backend_configs.pb.h"
@@ -25,13 +26,22 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/device_description.pb.h"
 #include "xla/tsl/util/proto/proto_matchers.h"
+#include "xla/xla.pb.h"
 
 namespace xla::gpu {
 namespace {
 
 using ::tsl::proto_testing::EqualsProto;
 
-class HloFusionAnalysisTest : public HloHardwareIndependentTestBase {};
+class HloFusionAnalysisTest : public HloHardwareIndependentTestBase {
+ protected:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions debug_options = GetDebugOptionsFromFlags();
+    debug_options.set_xla_gpu_experimental_enable_concatenate_fusion_multi_output(
+        true);
+    return debug_options;
+  }
+};
 
 TEST_F(HloFusionAnalysisTest, DoesNotPeekOutsideBoundary) {
   ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(

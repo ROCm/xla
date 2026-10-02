@@ -25,6 +25,7 @@ limitations under the License.
 
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "xla/debug_options_flags.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
@@ -50,6 +51,13 @@ namespace m = ::xla::match;
 
 class MultiOutputFusionTest : public HloHardwareIndependentTestBase {
  public:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions debug_options = GetDebugOptionsFromFlags();
+    debug_options.set_xla_gpu_experimental_enable_concatenate_fusion_multi_output(
+        true);
+    return debug_options;
+  }
+
   se::DeviceDescription device_info_{TestGpuDeviceInfo::RTXA6000DeviceInfo()};
   GpuAliasInfo alias_info_{device_info_};
   MultiOutputFusion mof_{device_info_, &alias_info_,

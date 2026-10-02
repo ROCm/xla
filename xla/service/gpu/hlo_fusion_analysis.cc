@@ -99,6 +99,13 @@ bool UseConcatenateFusion(absl::Span<const HloInstructionAdaptor> roots,
   if (first_hero.opcode() != HloOpcode::kConcatenate) {
     return false;
   }
+  if (roots.size() > 1 &&
+      !first_hero.GetModule()
+           ->config()
+           .debug_options()
+           .xla_gpu_experimental_enable_concatenate_fusion_multi_output()) {
+    return false;
+  }
   // Limit the number of roots times operands because the concat emitter
   // produces code for each operand of each root, hurting occupancy.
   constexpr int64_t kMaxRootsTimesOperands = 4;

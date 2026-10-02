@@ -41,6 +41,8 @@ class ConcatenateFusionTest : public IndexingTestBase {
   DebugOptions GetDebugOptionsForTest() const override {
     auto debug_options = GetDebugOptionsFromFlags();
     debug_options.set_xla_gpu_experimental_max_unroll_factor(32);
+    debug_options.set_xla_gpu_experimental_enable_concatenate_fusion_multi_output(
+        true);
     return debug_options;
   }
 };

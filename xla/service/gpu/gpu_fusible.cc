@@ -941,14 +941,21 @@ bool IsFusibleAsMultiOutputFusionRoot(
   //
   // Custom fusions cannot be fused with anything.
   //
-  // Concatenate fusions are admitted, but ShapesCompatibleForMultiOutputFusion
-  // only lets them merge if the result stays on the concatenate emitter.
+  // Concatenate fusions are admitted when the multi-output concatenate flag is
+  // on, but ShapesCompatibleForMultiOutputFusion only lets them merge if the
+  // result stays on the concatenate emitter.
+  bool admit_concatenate_fusion =
+      IsConcatenateFusion(instr) &&
+      instr.GetModule()
+          ->config()
+          .debug_options()
+          .xla_gpu_experimental_enable_concatenate_fusion_multi_output();
 
   return instr.IsFusible() && !instr.IsCustomFusion() &&
          (IsInputFusibleReduction(instr, device_info) ||
           IsInputFusibleTranspose(instr) ||
           instr.IsLoopFusion() ||  // TODO(b/130013493): Use IsLoopFusible here.
-          instr.IsElementwise() || IsConcatenateFusion(instr));
+          instr.IsElementwise() || admit_concatenate_fusion);
 }
 
 HloInstruction::FusionKind ChooseFusionKind(
