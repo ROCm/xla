@@ -262,11 +262,12 @@ bool BlockLevelEmitterBackend::IsSupported(const HloInstruction& instr) {
     return false;
   }
   const HloFusionInstruction* fusion = Cast<HloFusionInstruction>(&instr);
-  if (absl::c_any_of(
-          fusion->fused_instructions_computation()->instructions(),
-          HloPredicateIsOp<HloOpcode::kDot, HloOpcode::kScaledDot>)) {
+  if (absl::c_any_of(fusion->fused_instructions_computation()->instructions(),
+                     HloPredicateIsOp<HloOpcode::kDot, HloOpcode::kScaledDot,
+                                      HloOpcode::kConvolution>)) {
     // If a dot fusion can be handled by Triton, GemmRewriter would have already
-    // taken care of it.
+    // taken care of it. For conv fusions, this would produce output tile sizes
+    // only, and will fail due to lack contracting-dims tiling.
     return false;
   }
   // The same-shape multi-output fusion flag sends these fusions to the
