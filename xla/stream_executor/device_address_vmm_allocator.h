@@ -25,6 +25,7 @@ limitations under the License.
 #include "absl/base/thread_annotations.h"
 #include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
@@ -497,11 +498,21 @@ class DeviceAddressVmmAllocator : public DeviceAddressAllocator {
     // Active/stale state is stored in the record.
     absl::btree_map<uintptr_t, AllocationRecord*> reservation_records
         ABSL_GUARDED_BY(mu);
+
+    // Addresses returned by Allocate() from host_allocator_, so Deallocate()
+    // can return them there.
+    absl::flat_hash_set<uintptr_t> host_allocations ABSL_GUARDED_BY(mu);
   };
 
+  // `host_allocator`, if set, serves Allocate() requests for
+  // MemorySpace::kHost instead of device VMM memory, which the CPU cannot
+  // access. Host allocations bypass VMM state entirely: no PA budget, no
+  // stream-ordered deferral, and they cannot be used with Map(). Without it,
+  // MemorySpace::kHost requests fail.
   explicit DeviceAddressVmmAllocator(
       const Platform* platform,
-      std::optional<int64_t> reclaim_exempt_memory_space = std::nullopt);
+      std::optional<int64_t> reclaim_exempt_memory_space = std::nullopt,
+      std::unique_ptr<DeviceAddressAllocator> host_allocator = nullptr);
 
   // Validates no duplicate ordinals in `devices`, then iterates over each
   // device config, constructs a PerDeviceState (setting executor, stream,
@@ -745,6 +756,9 @@ class DeviceAddressVmmAllocator : public DeviceAddressAllocator {
 
   // This space is never reclaimed and is freed only at executable destruction.
   const std::optional<int64_t> reclaim_exempt_memory_space_;
+
+  // Serves MemorySpace::kHost requests when set. See the constructor.
+  const std::unique_ptr<DeviceAddressAllocator> host_allocator_;
 };
 
 }  // namespace stream_executor

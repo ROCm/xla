@@ -1442,34 +1442,43 @@ GetStreamExecutorGpuDeviceAllocator(
     }
 
     case GpuAllocatorConfig::Kind::kVmm: {
-#if GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
       std::vector<std::pair<se::StreamExecutor*, se::Stream*>> executor_streams;
       executor_streams.reserve(addressable_devices.size());
+      std::vector<se::MultiDeviceAdapter::AllocatorInfo> host_allocators;
       for (const auto& [ordinal, device] : addressable_devices) {
         executor_streams.push_back(
             {device->executor(), device->compute_stream()});
+        // The VMM allocator only creates device memory. Pinned host buffers
+        // come from the same host allocator as with BFC.
+        ABSL_ASSIGN_OR_RETURN(
+            auto host_allocator,
+            GetGpuHostAllocator(device->executor(), preallocate_host_memory));
+        host_allocators.push_back(
+            {std::move(host_allocator), device->compute_stream(),
+             /*memory_space=*/static_cast<int>(se::MemorySpace::kHost)});
       }
+      auto host_memory_allocator = std::make_unique<se::MultiDeviceAdapter>(
+          platform, std::move(host_allocators));
+#if GOOGLE_CUDA
       return se::gpu::CudaDeviceAddressVmmAllocator::Create(
           platform, allocator_config.memory_fraction,
           allocator_config.gpu_system_memory_size, executor_streams,
           /*reclaim_exempt_memory_space=*/
-          static_cast<int64_t>(gpu::MemorySpaceColor::kCollective));
-#elif TENSORFLOW_USE_ROCM
-      std::vector<std::pair<se::StreamExecutor*, se::Stream*>> executor_streams;
-      executor_streams.reserve(addressable_devices.size());
-      for (const auto& [ordinal, device] : addressable_devices) {
-        executor_streams.push_back(
-            {device->executor(), device->compute_stream()});
-      }
+          static_cast<int64_t>(gpu::MemorySpaceColor::kCollective),
+          std::move(host_memory_allocator));
+#else
       return se::gpu::RocmDeviceAddressVmmAllocator::Create(
           platform, allocator_config.memory_fraction,
           allocator_config.gpu_system_memory_size, executor_streams,
           /*reclaim_exempt_memory_space=*/
-          static_cast<int64_t>(gpu::MemorySpaceColor::kCollective));
+          static_cast<int64_t>(gpu::MemorySpaceColor::kCollective),
+          std::move(host_memory_allocator));
+#endif  // GOOGLE_CUDA
 #else
       return absl::UnimplementedError(
           "VMM allocator is only supported with CUDA or ROCm.");
-#endif  // GOOGLE_CUDA
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
     }
   }
 
