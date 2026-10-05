@@ -96,6 +96,25 @@ class LegacyCacheTest : public ::testing::Test {
     return config;
   }
 
+  Config CreateDummyTritonConvConfig() {
+    Config config;
+    config.codegen_backend = Backend::TRITON;
+    AutotuneResult::TritonConvKey* conv =
+        config.backend_config.mutable_triton_conv();
+    conv->set_batch_tile(1);
+    conv->add_output_spatial_tiles(4);
+    conv->add_output_spatial_tiles(4);
+    conv->set_output_feature_tile(16);
+    conv->add_kernel_spatial_tiles(1);
+    conv->add_kernel_spatial_tiles(1);
+    conv->set_input_feature_tile(8);
+    conv->set_num_stages(1);
+    conv->set_num_warps(4);
+    conv->set_num_ctas(1);
+    conv->set_waves_per_eu(0);
+    return config;
+  }
+
   Config CreateDummyCublasLtConfig() {
     Config config;
     config.codegen_backend = Backend::CUBLASLT;
@@ -152,6 +171,15 @@ TEST_F(LegacyCacheTest, InsertAndLookupTriton) {
   auto cache = LegacyCache(test_dir_, mode_, device_desc_);
   auto instr = CreateDummyInstr("hlo1");
   Config config = CreateDummyTritonConfig();
+
+  ASSERT_OK(cache.Insert(instr.get(), config));
+  EXPECT_THAT(cache.Lookup(instr.get()), Optional(ConfigEq(config)));
+}
+
+TEST_F(LegacyCacheTest, InsertAndLookupTritonConv) {
+  auto cache = LegacyCache(test_dir_, mode_, device_desc_);
+  auto instr = CreateDummyInstr("hlo_triton_conv");
+  Config config = CreateDummyTritonConvConfig();
 
   ASSERT_OK(cache.Insert(instr.get(), config));
   EXPECT_THAT(cache.Lookup(instr.get()), Optional(ConfigEq(config)));
