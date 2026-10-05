@@ -93,6 +93,25 @@ absl::StatusOr<DeviceDescription> DeviceDescription::FromProto(
   device_description.device_memory_size_ = proto.device_memory_size();
   device_description.device_address_bits_ = proto.device_address_bits();
   device_description.l2_cache_size_ = proto.l2_cache_size();
+  for (const DataCacheInfoProto& cache : proto.data_caches()) {
+    if (cache.level() < 1) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "data_caches levels start from 1, got level ", cache.level()));
+    }
+    if (!device_description.data_caches_.empty()) {
+      const DataCacheInfo& prev = device_description.data_caches_.back();
+      if (cache.level() < prev.level ||
+          (cache.level() == prev.level &&
+           cache.num_instances() > prev.num_instances)) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "data_caches must be ordered by level, then by decreasing "
+            "num_instances, got (",
+            cache.level(), ", ", cache.num_instances(), ") after (", prev.level,
+            ", ", prev.num_instances, ")"));
+      }
+    }
+    device_description.data_caches_.push_back(DataCacheInfo::FromProto(cache));
+  }
   device_description.memory_bandwidth_ = proto.memory_bandwidth();
   device_description.pcie_bandwidth_ = proto.pcie_bandwidth();
   device_description.mem_clock_ghz_ = proto.mem_clock_ghz();
@@ -215,7 +234,11 @@ GpuDeviceInfoProto DeviceDescription::ToProto() const {
   proto.set_memory_bandwidth(memory_bandwidth_);
   proto.set_pcie_bandwidth(pcie_bandwidth_);
   proto.set_mem_clock_ghz(mem_clock_ghz_);
-  proto.set_l2_cache_size(l2_cache_size_);
+  // For readers predating data_caches.
+  proto.set_l2_cache_size(l2_cache_size());
+  for (const DataCacheInfo& cache : data_caches_) {
+    *proto.add_data_caches() = cache.ToProto();
+  }
   proto.set_clock_rate_ghz(clock_rate_ghz_);
   proto.set_device_memory_size(device_memory_size_);
   proto.set_device_address_bits(device_address_bits_);
@@ -333,7 +356,13 @@ bool DeviceDescription::EqualsTo(
          registers_per_core_limit_ == other.registers_per_core_limit_ &&
          registers_per_block_limit_ == other.registers_per_block_limit_ &&
          device_address_bits_ == other.device_address_bits_ &&
-         l2_cache_size_ == other.l2_cache_size_ &&
+         // Descriptions from protos predating data_caches have no list, so
+         // compare the cache sizes the compiler reads, and the lists only if
+         // both sides have one.
+         l2_cache_size() == other.l2_cache_size() &&
+         l1_cache_size_per_SM() == other.l1_cache_size_per_SM() &&
+         (data_caches_.empty() || other.data_caches_.empty() ||
+          data_caches_ == other.data_caches_) &&
          memory_bandwidth_ == other.memory_bandwidth_ &&
          pcie_bandwidth_ == other.pcie_bandwidth_ &&
          mem_clock_ghz_ == other.mem_clock_ghz_ &&
@@ -352,6 +381,53 @@ bool DeviceDescription::EqualsTo(
              other.confidential_computing_enabled_ &&
          interconnect_info_.active_links ==
              other.interconnect_info_.active_links;
+}
+
+const DataCacheInfo* DeviceDescription::data_cache(int level) const {
+  for (const DataCacheInfo& cache : data_caches_) {
+    if (cache.level == level) return &cache;
+  }
+  return nullptr;
+}
+
+int64_t DeviceDescription::l1_cache_size_per_SM() const {
+  for (const DataCacheInfo& cache : data_caches_) {
+    if (cache.level == 1 && cache.num_instances == core_count_) {
+      return cache.size_bytes;
+    }
+  }
+  return DefaultL1CacheSizePerCore(gpu_compute_capability_);
+}
+
+int64_t DeviceDescription::DefaultL1CacheSizePerCore(
+    const GpuComputeCapability& cc) {
+  if (auto* capability = cc.rocm_compute_capability()) {
+    // MI100 and MI200 has 16KB L1 cache per CU.
+    if (capability->gfx9_mi100() || capability->gfx9_mi200()) {
+      return 16 * 1024;
+    }
+    // MI300 has 32KB L1 cache per CU.
+    if (capability->gfx9_mi300_series()) {
+      return 32 * 1024;
+    }
+  }
+  // Default return for other GPUs (e.g., RTX A6000).
+  return 2 * 1024;
+}
+
+int64_t DeviceDescription::l2_cache_size() const {
+  const DataCacheInfo* l2 = data_cache(2);
+  return l2 != nullptr ? l2->size_bytes : l2_cache_size_;
+}
+
+void DeviceDescription::set_l2_cache_size(int64_t value) {
+  for (DataCacheInfo& cache : data_caches_) {
+    if (cache.level == 2) {
+      cache.size_bytes = value;
+      return;
+    }
+  }
+  l2_cache_size_ = value;
 }
 
 const GpuComputeCapability& DeviceDescription::gpu_compute_capability() const {
