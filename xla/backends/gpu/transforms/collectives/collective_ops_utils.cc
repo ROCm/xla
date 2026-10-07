@@ -350,10 +350,22 @@ bool IsSpmdGenerated(const HloInstruction& instr) {
 }
 
 bool IsLsaPossible(const GpuTopology& gpu_topology) {
-  return gpu_topology.has_gpu_target_config() &&
-         gpu_topology.gpu_target_config()
-             .device_description.gpu_compute_capability()
-             .IsCuda();
+  if (!gpu_topology.has_gpu_target_config()) {
+    return false;
+  }
+  const se::GpuComputeCapability& cc =
+      gpu_topology.gpu_target_config()
+          .device_description.gpu_compute_capability();
+  // CUDA devices support load-store accessible (LSA) symmetric memory.
+  if (cc.IsCuda()) {
+    return true;
+  }
+  // ROCm: LSA / GIN symmetric memory is only available on the MI300 series
+  // (gfx942 / gfx950).
+  if (const auto* rocm_cc = cc.rocm_compute_capability(); rocm_cc != nullptr) {
+    return rocm_cc->gfx9_mi300_series();
+  }
+  return false;
 }
 
 int64_t GetCollectiveKernelDomainSize(
