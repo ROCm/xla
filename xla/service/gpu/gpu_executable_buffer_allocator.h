@@ -20,6 +20,7 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -126,9 +127,18 @@ class GpuExecutableBufferAllocator {
                 persistent_alloc_indices)>
             execute);
 
+    // Releases the transient buffers in `buffer_allocations` whose addresses
+    // are not in `live_addresses`. A VA-remapping scope destroyed without this
+    // call releases the buffers it allocated at reservation addresses itself.
+    absl::Status TearDown(
+        BufferAllocations& buffer_allocations,
+        const std::set<se::DeviceAddressBase>& live_addresses);
+
    protected:
     explicit ExecutionScope(const GpuExecutableBufferAllocator* owner)
         : owner_(owner) {}
+
+    bool torn_down() const { return torn_down_; }
 
     // Hook called once per GenerateBufferAllocations before any allocation is
     // resolved. The base implementation does nothing.
@@ -155,6 +165,7 @@ class GpuExecutableBufferAllocator {
         int64_t arg_idx);
 
     const GpuExecutableBufferAllocator* owner_ = nullptr;
+    bool torn_down_ = false;
   };
 
   // Creates the buffer allocator implementing

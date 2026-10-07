@@ -15,20 +15,21 @@ limitations under the License.
 
 #include "xla/service/gpu/gpu_executable_va_remap_allocator.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
-#include <set>
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
+#include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "xla/backends/gpu/runtime/thunk.h"
@@ -55,6 +56,8 @@ namespace xla {
 namespace gpu {
 namespace {
 
+using ::absl_testing::IsOk;
+using ::absl_testing::StatusIs;
 using ::testing::ElementsAre;
 using ::testing::IsEmpty;
 using ::testing::NiceMock;
@@ -192,6 +195,31 @@ class TestVmmAllocator final : public se::DeviceAddressVmmAllocator {
     return nullptr;
   }
 
+  // Active mappings summed over every live reservation.
+  int TotalActiveMappingCount() const {
+    int count = 0;
+    for (const TestMemoryReservation* reservation : *live_reservations_) {
+      count += reservation->active_mapping_count();
+    }
+    return count;
+  }
+
+  // Deallocate() calls rejected because the address was not active, such as
+  // a second release of the same buffer.
+  int not_found_deallocation_count() const {
+    return not_found_deallocation_count_;
+  }
+
+  absl::Status Deallocate(int device_ordinal,
+                          se::DeviceAddressBase mem) override {
+    absl::Status status =
+        DeviceAddressVmmAllocator::Deallocate(device_ordinal, mem);
+    if (absl::IsNotFound(status)) {
+      ++not_found_deallocation_count_;
+    }
+    return status;
+  }
+
  protected:
   absl::Status InitializeDeviceState(PerDeviceState& state) override {
     state.allocation_granularity = kGranularity;
@@ -234,6 +262,7 @@ class TestVmmAllocator final : public se::DeviceAddressVmmAllocator {
   TestMemoryReservation* last_reservation_ = nullptr;
   const void* last_created_allocation_address_ = nullptr;
   bool fail_next_deferred_deallocation_ = false;
+  int not_found_deallocation_count_ = 0;
   std::shared_ptr<std::vector<TestMemoryReservation*>> live_reservations_ =
       std::make_shared<std::vector<TestMemoryReservation*>>();
 };
@@ -248,8 +277,10 @@ class GpuExecutableVaRemapAllocatorTest : public ::testing::Test {
     service_run_options_ = ServiceExecutableRunOptions(run_options_);
   }
 
-  absl::StatusOr<std::unique_ptr<TestVmmAllocator>> CreateAllocator() {
-    return TestVmmAllocator::Create(&platform_, {{&executor_, &stream_}});
+  absl::StatusOr<std::unique_ptr<TestVmmAllocator>> CreateAllocator(
+      uint64_t pa_budget = std::numeric_limits<uint64_t>::max()) {
+    return TestVmmAllocator::Create(&platform_,
+                                    {{&executor_, &stream_, pa_budget}});
   }
 
   // Observations from one GenerateBufferAllocations + Execute round trip for
@@ -263,11 +294,18 @@ class GpuExecutableVaRemapAllocatorTest : public ::testing::Test {
     se::DeviceAddressBase owning_address_after_execute;
   };
 
+  // `before_execute` runs between GenerateBufferAllocations and
+  // ExecuteWithBufferAllocations, where GpuExecutable handles output donation
+  // and copy protection. Like GpuExecutable, an error there returns without
+  // TearDown.
   absl::StatusOr<ExecutionResult> RunExecution(
       GpuExecutableVaRemapAllocator& allocator, TestVmmAllocator* vmm_allocator,
       GpuExecutableBufferAllocator::ParameterBufferResolver
           get_parameter_buffer,
-      absl::Span<const BufferAllocation* const> allocations_to_tear_down = {}) {
+      bool tear_down = false,
+      std::function<absl::Status(GpuExecutableBufferAllocator::ExecutionScope&,
+                                 BufferAllocations&)>
+          before_execute = nullptr) {
     GpuExecutableBufferAllocator::BufferAllocToDeviceMemoryMap globals;
     ExecutionResult result;
     ABSL_ASSIGN_OR_RETURN(
@@ -279,6 +317,9 @@ class GpuExecutableVaRemapAllocatorTest : public ::testing::Test {
                           scope->GenerateBufferAllocations(
                               &service_run_options_, get_parameter_buffer,
                               &globals, vmm_allocator, /*device_ordinal=*/0));
+    if (before_execute) {
+      ABSL_RETURN_IF_ERROR(before_execute(*scope, buffer_allocations));
+    }
     ABSL_RETURN_IF_ERROR(scope->ExecuteWithBufferAllocations(
         buffer_allocations, /*device_ordinal=*/0,
         [&](const BufferAllocations& execution_buffers,
@@ -293,10 +334,9 @@ class GpuExecutableVaRemapAllocatorTest : public ::testing::Test {
         }));
     result.owning_address_after_execute =
         buffer_allocations.GetDeviceAddress(0);
-    if (!allocations_to_tear_down.empty()) {
-      std::set<se::DeviceAddressBase> no_live_addresses;
-      ABSL_RETURN_IF_ERROR(buffer_allocations.TearDown(
-          no_live_addresses, allocations_to_tear_down));
+    if (tear_down) {
+      ABSL_RETURN_IF_ERROR(
+          scope->TearDown(buffer_allocations, /*live_addresses=*/{}));
     }
     return result;
   }
@@ -829,9 +869,10 @@ TEST_F(GpuExecutableVaRemapAllocatorTest,
   TestMemoryReservation* va_reservation = nullptr;
 
   for (int run = 0; run < 5; ++run) {
-    ASSERT_OK_AND_ASSIGN(ExecutionResult result,
-                         RunExecution(allocator, vmm_allocator.get(),
-                                      get_parameter_buffer, allocations));
+    ASSERT_OK_AND_ASSIGN(
+        ExecutionResult result,
+        RunExecution(allocator, vmm_allocator.get(), get_parameter_buffer,
+                     /*tear_down=*/true));
     EXPECT_TRUE(result.va_remap_enabled) << "run " << run;
     EXPECT_EQ(result.address_during_execute.opaque(),
               result.owning_address_after_execute.opaque());
@@ -900,9 +941,10 @@ TEST_F(GpuExecutableVaRemapAllocatorTest,
   const void* remapped_temp_address = nullptr;
   TestMemoryReservation* va_reservation = nullptr;
   for (run = 0; run < 5; ++run) {
-    ASSERT_OK_AND_ASSIGN(ExecutionResult result,
-                         RunExecution(allocator, vmm_allocator.get(),
-                                      get_parameter_buffer, allocations));
+    ASSERT_OK_AND_ASSIGN(
+        ExecutionResult result,
+        RunExecution(allocator, vmm_allocator.get(), get_parameter_buffer,
+                     /*tear_down=*/true));
     EXPECT_TRUE(result.va_remap_enabled) << "run " << run;
     EXPECT_EQ(result.address_during_execute.opaque(),
               result.owning_address_after_execute.opaque());
@@ -1378,6 +1420,254 @@ TEST_F(GpuExecutableVaRemapAllocatorTest,
   ASSERT_OK(vmm_allocator->SynchronizePendingOperations(/*device_ordinal=*/0));
   ASSERT_NE(va_reservation, nullptr);
   EXPECT_EQ(va_reservation->active_mapping_count(), 0);
+}
+
+// An allocation fails after the temp was allocated at its reservation address.
+// GpuExecutable returns without TearDown; later executions must still work once
+// memory is available again.
+TEST_F(GpuExecutableVaRemapAllocatorTest,
+       SkipTempFailedAllocationDoesNotBlockLaterExecutions) {
+  constexpr int64_t kTempSize = 1024;
+  constexpr int64_t kOutputSize = 4096;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<TestVmmAllocator> vmm_allocator,
+                       CreateAllocator(/*pa_budget=*/6144));
+  BufferAllocation temp_alloc(/*index=*/0, kTempSize, /*color=*/0);
+  BufferAllocation output_alloc(/*index=*/1, kOutputSize, /*color=*/0);
+  output_alloc.set_maybe_live_out(true);
+  std::vector<const BufferAllocation*> allocations = {&temp_alloc,
+                                                      &output_alloc};
+  ThunkExecutor thunk_executor{ThunkSequence{}};
+  DebugOptions debug_options;
+  debug_options.set_xla_gpu_command_buffer_update_mode(DebugOptions::SKIP_TEMP);
+  GpuExecutableVaRemapAllocator allocator("test", allocations,
+                                          ShapeUtil::MakeShape(F32, {1024}),
+                                          &debug_options, &thunk_executor);
+  allocator.AddVaRemappedAllocationForTesting(0);
+  auto get_parameter_buffer = [&](const BufferAllocation& allocation)
+      -> absl::StatusOr<GpuExecutableBufferAllocator::ParameterBuffer> {
+    return absl::InternalError("no parameters in this test");
+  };
+
+  ASSERT_OK_AND_ASSIGN(se::ScopedDeviceAddress<uint8_t> pressure,
+                       vmm_allocator->Allocate(0, 2048, true, 0));
+  // The temp is allocated, then the output does not fit.
+  EXPECT_THAT(RunExecution(allocator, vmm_allocator.get(), get_parameter_buffer,
+                           /*tear_down=*/true)
+                  .status(),
+              StatusIs(absl::StatusCode::kResourceExhausted));
+  ASSERT_OK(pressure.Free());
+  ASSERT_OK(vmm_allocator->SynchronizePendingOperations(/*device_ordinal=*/0));
+  EXPECT_EQ(vmm_allocator->TotalActiveMappingCount(), 0);
+
+  for (int run = 0; run < 4; ++run) {
+    EXPECT_THAT(RunExecution(allocator, vmm_allocator.get(),
+                             get_parameter_buffer, /*tear_down=*/true)
+                    .status(),
+                IsOk())
+        << "run " << run;
+  }
+}
+
+// Copy protection fails after GenerateBufferAllocations succeeded, and
+// GpuExecutable returns without TearDown. Later executions must still work.
+TEST_F(GpuExecutableVaRemapAllocatorTest,
+       SkipTempFailedCopyProtectionDoesNotBlockLaterExecutions) {
+  constexpr int64_t kSize = 1024;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<TestVmmAllocator> vmm_allocator,
+                       CreateAllocator(/*pa_budget=*/4 * kSize));
+  BufferAllocation temp_alloc(/*index=*/0, kSize, /*color=*/0);
+  BufferAllocation param_alloc(/*index=*/1, kSize, /*color=*/0);
+  param_alloc.set_entry_computation_parameter(
+      /*parameter_number=*/0, /*param_shape_index=*/{},
+      /*parameter_aliased_with_output=*/true);
+  std::vector<const BufferAllocation*> allocations = {&temp_alloc,
+                                                      &param_alloc};
+  ThunkExecutor thunk_executor{ThunkSequence{}};
+  DebugOptions debug_options;
+  debug_options.set_xla_gpu_command_buffer_update_mode(DebugOptions::SKIP_TEMP);
+  GpuExecutableVaRemapAllocator allocator("test", allocations,
+                                          ShapeUtil::MakeShape(F32, {256}),
+                                          &debug_options, &thunk_executor);
+  allocator.AddVaRemappedAllocationForTesting(0);
+  ASSERT_OK_AND_ASSIGN(se::ScopedDeviceAddress<uint8_t> param_buffer,
+                       vmm_allocator->Allocate(0, kSize, true, 0));
+  auto get_parameter_buffer = [&](const BufferAllocation& allocation)
+      -> absl::StatusOr<GpuExecutableBufferAllocator::ParameterBuffer> {
+    return GpuExecutableBufferAllocator::ParameterBuffer{
+        param_buffer.cref(), allocation.parameter_number()};
+  };
+  se::ScopedDeviceAddress<uint8_t> copy;
+  auto copy_protect = [&](GpuExecutableBufferAllocator::ExecutionScope& scope,
+                          BufferAllocations& buffers) -> absl::Status {
+    ABSL_ASSIGN_OR_RETURN(
+        se::DeviceAddressBase address,
+        scope.AllocateCopyProtectedOutputBuffer(
+            &service_run_options_, buffers, /*index=*/{}, param_alloc,
+            /*device_ordinal=*/0, vmm_allocator.get(),
+            [](absl::Status status) { return status; }));
+    copy = se::ScopedDeviceAddress<uint8_t>(address, /*device_ordinal=*/0,
+                                            vmm_allocator.get());
+    return absl::OkStatus();
+  };
+
+  ASSERT_OK_AND_ASSIGN(se::ScopedDeviceAddress<uint8_t> pressure,
+                       vmm_allocator->Allocate(0, 2 * kSize, true, 0));
+  EXPECT_THAT(RunExecution(allocator, vmm_allocator.get(), get_parameter_buffer,
+                           /*tear_down=*/true, copy_protect)
+                  .status(),
+              StatusIs(absl::StatusCode::kResourceExhausted));
+  ASSERT_OK(pressure.Free());
+  ASSERT_OK(vmm_allocator->SynchronizePendingOperations(/*device_ordinal=*/0));
+  // Only `param_buffer` is still mapped.
+  EXPECT_EQ(vmm_allocator->TotalActiveMappingCount(), 1);
+
+  for (int run = 0; run < 4; ++run) {
+    EXPECT_THAT(
+        RunExecution(allocator, vmm_allocator.get(), get_parameter_buffer,
+                     /*tear_down=*/true, copy_protect)
+            .status(),
+        IsOk())
+        << "run " << run;
+    ASSERT_OK(copy.Free());
+  }
+}
+
+// SKIP_PROFILED after its transition: an allocation fails after the temp was
+// allocated at its reservation address. Later executions must still work once
+// memory is available again.
+TEST_F(GpuExecutableVaRemapAllocatorTest,
+       SkipProfiledFailedAllocationAfterTransitionDoesNotBlockLaterExecutions) {
+  constexpr int64_t kTempSize = 1024;
+  constexpr int64_t kOutputSize = 4096;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<TestVmmAllocator> vmm_allocator,
+                       CreateAllocator(/*pa_budget=*/6144));
+  BufferAllocation temp_alloc(/*index=*/0, kTempSize, /*color=*/0);
+  BufferAllocation output_alloc(/*index=*/1, kOutputSize, /*color=*/0);
+  output_alloc.set_maybe_live_out(true);
+  std::vector<const BufferAllocation*> allocations = {&temp_alloc,
+                                                      &output_alloc};
+  ThunkExecutor thunk_executor{ThunkSequence{}};
+  DebugOptions debug_options;
+  debug_options.set_xla_gpu_command_buffer_update_mode(
+      DebugOptions::SKIP_PROFILED);
+  GpuExecutableVaRemapAllocator allocator("test", allocations,
+                                          ShapeUtil::MakeShape(F32, {1024}),
+                                          &debug_options, &thunk_executor);
+  allocator.AddVaRemappedAllocationForTesting(0);
+  auto get_parameter_buffer = [&](const BufferAllocation& allocation)
+      -> absl::StatusOr<GpuExecutableBufferAllocator::ParameterBuffer> {
+    return absl::InternalError("no parameters in this test");
+  };
+
+  for (int run = 0; run < 3; ++run) {
+    ASSERT_OK(RunExecution(allocator, vmm_allocator.get(), get_parameter_buffer,
+                           /*tear_down=*/true)
+                  .status());
+  }
+  // Drops the profiling executions' pending buffers, which the output
+  // allocation below could otherwise reuse.
+  ASSERT_OK(vmm_allocator->SynchronizePendingOperations(/*device_ordinal=*/0));
+
+  ASSERT_OK_AND_ASSIGN(se::ScopedDeviceAddress<uint8_t> pressure,
+                       vmm_allocator->Allocate(0, 2048, true, 0));
+  // This execution transitions and allocates the temp at its reservation
+  // address, then the output does not fit.
+  EXPECT_THAT(RunExecution(allocator, vmm_allocator.get(), get_parameter_buffer,
+                           /*tear_down=*/true)
+                  .status(),
+              StatusIs(absl::StatusCode::kResourceExhausted));
+  ASSERT_OK(pressure.Free());
+  ASSERT_OK(vmm_allocator->SynchronizePendingOperations(/*device_ordinal=*/0));
+  EXPECT_EQ(vmm_allocator->TotalActiveMappingCount(), 0);
+
+  for (int run = 0; run < 4; ++run) {
+    absl::StatusOr<ExecutionResult> result =
+        RunExecution(allocator, vmm_allocator.get(), get_parameter_buffer,
+                     /*tear_down=*/true);
+    ASSERT_THAT(result.status(), IsOk()) << "run " << run;
+    EXPECT_THAT(result->persistent, Optional(ElementsAre(0)));
+  }
+}
+
+// The caller returns after ExecuteWithBufferAllocations without TearDown.
+// Later executions must still work.
+TEST_F(GpuExecutableVaRemapAllocatorTest,
+       SkipTempExecutionWithoutTearDownDoesNotBlockLaterExecutions) {
+  constexpr int64_t kTempSize = 1024;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<TestVmmAllocator> vmm_allocator,
+                       CreateAllocator());
+  BufferAllocation temp_alloc(/*index=*/0, kTempSize, /*color=*/0);
+  std::vector<const BufferAllocation*> allocations = {&temp_alloc};
+  ThunkExecutor thunk_executor{ThunkSequence{}};
+  DebugOptions debug_options;
+  debug_options.set_xla_gpu_command_buffer_update_mode(DebugOptions::SKIP_TEMP);
+  GpuExecutableVaRemapAllocator allocator("test", allocations,
+                                          ShapeUtil::MakeShape(F32, {256}),
+                                          &debug_options, &thunk_executor);
+  allocator.AddVaRemappedAllocationForTesting(0);
+  auto get_parameter_buffer = [&](const BufferAllocation& allocation)
+      -> absl::StatusOr<GpuExecutableBufferAllocator::ParameterBuffer> {
+    return absl::InternalError("no parameters in this test");
+  };
+
+  ASSERT_OK(RunExecution(allocator, vmm_allocator.get(), get_parameter_buffer,
+                         /*tear_down=*/false)
+                .status());
+  ASSERT_OK(vmm_allocator->SynchronizePendingOperations(/*device_ordinal=*/0));
+  EXPECT_EQ(vmm_allocator->TotalActiveMappingCount(), 0);
+
+  for (int run = 0; run < 4; ++run) {
+    EXPECT_THAT(RunExecution(allocator, vmm_allocator.get(),
+                             get_parameter_buffer, /*tear_down=*/true)
+                    .status(),
+                IsOk())
+        << "run " << run;
+  }
+}
+
+// The caller tears the execution down before an early return, as a general
+// cleanup of the early-return paths would. The scope must not release the
+// temp a second time.
+TEST_F(GpuExecutableVaRemapAllocatorTest,
+       SkipTempTearDownBeforeEarlyReturnReleasesTempOnce) {
+  constexpr int64_t kTempSize = 1024;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<TestVmmAllocator> vmm_allocator,
+                       CreateAllocator());
+  BufferAllocation temp_alloc(/*index=*/0, kTempSize, /*color=*/0);
+  std::vector<const BufferAllocation*> allocations = {&temp_alloc};
+  ThunkExecutor thunk_executor{ThunkSequence{}};
+  DebugOptions debug_options;
+  debug_options.set_xla_gpu_command_buffer_update_mode(DebugOptions::SKIP_TEMP);
+  GpuExecutableVaRemapAllocator allocator("test", allocations,
+                                          ShapeUtil::MakeShape(F32, {256}),
+                                          &debug_options, &thunk_executor);
+  allocator.AddVaRemappedAllocationForTesting(0);
+  auto get_parameter_buffer = [&](const BufferAllocation& allocation)
+      -> absl::StatusOr<GpuExecutableBufferAllocator::ParameterBuffer> {
+    return absl::InternalError("no parameters in this test");
+  };
+  auto tear_down_and_fail =
+      [](GpuExecutableBufferAllocator::ExecutionScope& scope,
+         BufferAllocations& buffers) -> absl::Status {
+    ABSL_RETURN_IF_ERROR(scope.TearDown(buffers, /*live_addresses=*/{}));
+    return absl::InternalError("early return");
+  };
+
+  EXPECT_THAT(RunExecution(allocator, vmm_allocator.get(), get_parameter_buffer,
+                           /*tear_down=*/false, tear_down_and_fail)
+                  .status(),
+              StatusIs(absl::StatusCode::kInternal));
+  EXPECT_EQ(vmm_allocator->not_found_deallocation_count(), 0);
+  ASSERT_OK(vmm_allocator->SynchronizePendingOperations(/*device_ordinal=*/0));
+  EXPECT_EQ(vmm_allocator->TotalActiveMappingCount(), 0);
+
+  for (int run = 0; run < 4; ++run) {
+    EXPECT_THAT(RunExecution(allocator, vmm_allocator.get(),
+                             get_parameter_buffer, /*tear_down=*/true)
+                    .status(),
+                IsOk())
+        << "run " << run;
+  }
 }
 
 }  // namespace
