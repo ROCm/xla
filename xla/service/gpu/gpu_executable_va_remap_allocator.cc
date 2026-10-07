@@ -81,10 +81,12 @@ GpuExecutableVaRemapAllocator::Remapping::GetMappingSize(
   return it->second;
 }
 
-// Per-run execution scope with command buffer VA remapping active. Selected
+// Per-run execution scope for command buffer VA remapping. Selected
 // command-buffer allocations are backed by physical VMM allocations while
-// execution sees stable reserved VA addresses. Holds the lock for the
-// executable/executor remapping state for the whole execution.
+// execution sees stable reserved VA addresses. In the SKIP_PROFILED profiling
+// phase only the automatically selected temp buffers use the reservation.
+// Holds the lock for the executable/executor remapping state for the whole
+// execution.
 class GpuExecutableVaRemapAllocator::VaRemapExecutionScope
     : public GpuExecutableBufferAllocator::ExecutionScope {
  public:
@@ -96,7 +98,12 @@ class GpuExecutableVaRemapAllocator::VaRemapExecutionScope
         owner_(owner),
         remapping_(remapping),
         vmm_allocator_(vmm_allocator),
-        remap_lock_(std::move(remap_lock)) {}
+        remap_lock_(std::move(remap_lock)) {
+    // The phase checks in this class rely on the phase leaving kInactive only
+    // in SKIP_PROFILED.
+    DCHECK(owner_->update_mode_ == DebugOptions::SKIP_PROFILED ||
+           remapping_->phase == Remapping::ProfilePhase::kInactive);
+  }
 
   // Releases any reservation-address aliases still active for this
   // execution. This is a safety net for error paths; the normal release
@@ -139,6 +146,13 @@ class GpuExecutableVaRemapAllocator::VaRemapExecutionScope
   // SKIP_TEMP this is always the case; for SKIP_PROFILED it requires the
   // profile transition to have happened.
   bool remap_active() const;
+  // True when this execution allocates buffers in the VA reservation. Unlike
+  // remap_active(), this includes SKIP_PROFILED profiling executions that
+  // have automatically selected temp buffers.
+  bool uses_reservation() const;
+  // True when `allocation` is allocated at its reservation offset instead of
+  // from the regular allocator.
+  bool AllocatesInReservation(const BufferAllocation& allocation) const;
   // The set of allocation indices remapped for this execution.
   const AllocationIndexSet& active_remap_set() const;
   bool ShouldRemapAllocation(BufferAllocation::Index index) const;
@@ -211,6 +225,29 @@ bool GpuExecutableVaRemapAllocator::VaRemapExecutionScope::remap_active()
   return true;
 }
 
+bool GpuExecutableVaRemapAllocator::VaRemapExecutionScope::uses_reservation()
+    const {
+  return remap_active() ||
+         (remapping_->phase == Remapping::ProfilePhase::kProfiling &&
+          !owner_->va_remapped_alloc_indices_.empty());
+}
+
+bool GpuExecutableVaRemapAllocator::VaRemapExecutionScope::
+    AllocatesInReservation(const BufferAllocation& allocation) const {
+  if (allocation.maybe_live_out()) {
+    return false;
+  }
+  if (ShouldRemapAllocation(allocation.index())) {
+    return true;
+  }
+  // Automatically selected temp buffers do not depend on the profile. Placing
+  // them in the reservation while profiling keeps one physical allocation per
+  // temp across the transition; a profiling-phase regular allocation would
+  // only be reused by a regular allocation of the same size.
+  return remapping_->phase == Remapping::ProfilePhase::kProfiling &&
+         owner_->va_remapped_alloc_indices_.contains(allocation.index());
+}
+
 const GpuExecutableVaRemapAllocator::AllocationIndexSet&
 GpuExecutableVaRemapAllocator::VaRemapExecutionScope::active_remap_set() const {
   if (owner_->update_mode_ == DebugOptions::SKIP_PROFILED) {
@@ -221,7 +258,7 @@ GpuExecutableVaRemapAllocator::VaRemapExecutionScope::active_remap_set() const {
 
 absl::Status GpuExecutableVaRemapAllocator::VaRemapExecutionScope::Prepare(
     const ServiceExecutableRunOptions* run_options, int device_ordinal) {
-  if (!remap_active()) {
+  if (!uses_reservation()) {
     return absl::OkStatus();
   }
 
@@ -239,12 +276,23 @@ absl::Status GpuExecutableVaRemapAllocator::VaRemapExecutionScope::Prepare(
   }
 
   // First execution on this executor creates the persistent reservation. Later
-  // executions reuse the same reservation and deterministic layout.
+  // executions reuse the same reservation and deterministic layout. A
+  // SKIP_PROFILED reservation created while profiling precedes the selection
+  // of profile candidates, so it lays out every candidate.
+  const AllocationIndexSet* layout = &active_remap_set();
+  AllocationIndexSet profiling_layout;
+  if (!remap_active()) {
+    profiling_layout.insert(owner_->va_remapped_alloc_indices_.begin(),
+                            owner_->va_remapped_alloc_indices_.end());
+    profiling_layout.insert(owner_->profile_candidate_alloc_indices_.begin(),
+                            owner_->profile_candidate_alloc_indices_.end());
+    layout = &profiling_layout;
+  }
   remapping_->granularity = granularity;
   remapping_->total_size = 0;
   remapping_->allocation_to_reservation_offset.clear();
   remapping_->allocation_to_mapping_size.clear();
-  for (BufferAllocation::Index idx : active_remap_set()) {
+  for (BufferAllocation::Index idx : *layout) {
     const BufferAllocation& allocation = *owner_->allocations()[idx];
     uint64_t buffer_size = allocation.size();
     uint64_t mapping_size =
@@ -385,8 +433,7 @@ absl::StatusOr<se::DeviceAddressBase>
 GpuExecutableVaRemapAllocator::VaRemapExecutionScope::AllocateTransientBuffer(
     int device_ordinal, const BufferAllocation& allocation, int64_t buffer_size,
     se::DeviceAddressAllocator* memory_allocator) {
-  if (!ShouldRemapAllocation(allocation.index()) ||
-      allocation.maybe_live_out()) {
+  if (!AllocatesInReservation(allocation)) {
     return ExecutionScope::AllocateTransientBuffer(
         device_ordinal, allocation, buffer_size, memory_allocator);
   }
