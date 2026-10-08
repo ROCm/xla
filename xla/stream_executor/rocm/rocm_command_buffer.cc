@@ -91,6 +91,19 @@ std::vector<hipGraphNode_t> ToHipGraphHandles(
 GraphNodeHandle FromHipGraphHandle(hipGraphNode_t handle) {
   return absl::bit_cast<GpuCommandBuffer::GraphNodeHandle>(handle);
 }
+
+// A NativeKernel has no cached limit, so it is queried for each node that uses
+// dynamic shared memory.
+absl::Status QueryAndCheckDynamicSharedMemoryBytes(const NativeKernel& kernel,
+                                                   uint64_t bytes) {
+  if (bytes == 0) {
+    return absl::OkStatus();
+  }
+  return CheckDynamicSharedMemoryBytes(
+      kernel.name(), bytes,
+      GetDynamicSharedMemoryLimit(
+          static_cast<hipFunction_t>(kernel.device_fn)));
+}
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<RocmCommandBuffer>> RocmCommandBuffer::Create(
@@ -335,10 +348,14 @@ absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateKernelNode(
     packed_args = repacked.get();
   }
 
-  return CreateKernelNode(
-      dependencies, priority, threads, blocks, cluster_dims,
-      NativeKernel{static_cast<const RocmKernel&>(kernel).gpu_function(),
-                   std::string(kernel.name()), kernel.use_pdl()},
+  const auto& rocm_kernel = static_cast<const RocmKernel&>(kernel);
+  ABSL_RETURN_IF_ERROR(rocm_kernel.CheckDynamicSharedMemoryBytes(
+      packed_args->number_of_shared_bytes()));
+
+  return CreateKernelNodeUnchecked(
+      dependencies, threads, blocks,
+      NativeKernel{rocm_kernel.gpu_function(), std::string(kernel.name()),
+                   kernel.use_pdl()},
       *packed_args);
 }
 
@@ -346,6 +363,15 @@ absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateKernelNode(
     absl::Span<const GraphNodeHandle> dependencies, StreamPriority priority,
     const ThreadDim& threads, const BlockDim& blocks,
     const std::optional<ClusterDim>& cluster_dims, const NativeKernel& kernel,
+    const KernelArgsPackedArrayBase& args) {
+  ABSL_RETURN_IF_ERROR(QueryAndCheckDynamicSharedMemoryBytes(
+      kernel, args.number_of_shared_bytes()));
+  return CreateKernelNodeUnchecked(dependencies, threads, blocks, kernel, args);
+}
+
+absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateKernelNodeUnchecked(
+    absl::Span<const GraphNodeHandle> dependencies, const ThreadDim& threads,
+    const BlockDim& blocks, const NativeKernel& kernel,
     const KernelArgsPackedArrayBase& args) {
   const uint64_t shared_mem_bytes = args.number_of_shared_bytes();
 
@@ -372,14 +398,6 @@ absl::StatusOr<GraphNodeHandle> RocmCommandBuffer::CreateKernelNode(
   params.kernelParams = const_cast<void**>(args.argument_addresses().data());
   params.extra = nullptr;
 
-  if (shared_mem_bytes != 0) {
-    ABSL_RETURN_IF_ERROR(
-        ToStatus(hipFuncSetAttribute(function,
-                                     hipFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem_bytes),
-                 "Failed to set shared memory size"));
-  }
-
   std::vector<hipGraphNode_t> deps = ToHipGraphHandles(dependencies);
 
   hipGraphNode_t node_handle = nullptr;
@@ -402,10 +420,14 @@ absl::Status RocmCommandBuffer::UpdateKernelNode(
     packed_args = repacked.get();
   }
 
-  return UpdateKernelNode(
-      node_handle, threads, blocks, cluster_dims,
-      NativeKernel{static_cast<const RocmKernel&>(kernel).gpu_function(),
-                   std::string(kernel.name()), kernel.use_pdl()},
+  const auto& rocm_kernel = static_cast<const RocmKernel&>(kernel);
+  ABSL_RETURN_IF_ERROR(rocm_kernel.CheckDynamicSharedMemoryBytes(
+      packed_args->number_of_shared_bytes()));
+
+  return UpdateKernelNodeUnchecked(
+      node_handle, threads, blocks,
+      NativeKernel{rocm_kernel.gpu_function(), std::string(kernel.name()),
+                   kernel.use_pdl()},
       *packed_args);
 }
 
@@ -413,6 +435,15 @@ absl::Status RocmCommandBuffer::UpdateKernelNode(
     GraphNodeHandle node_handle, const ThreadDim& threads,
     const BlockDim& blocks, const std::optional<ClusterDim>& cluster_dims,
     const NativeKernel& kernel, const KernelArgsPackedArrayBase& args) {
+  ABSL_RETURN_IF_ERROR(QueryAndCheckDynamicSharedMemoryBytes(
+      kernel, args.number_of_shared_bytes()));
+  return UpdateKernelNodeUnchecked(node_handle, threads, blocks, kernel, args);
+}
+
+absl::Status RocmCommandBuffer::UpdateKernelNodeUnchecked(
+    GraphNodeHandle node_handle, const ThreadDim& threads,
+    const BlockDim& blocks, const NativeKernel& kernel,
+    const KernelArgsPackedArrayBase& args) {
   const uint64_t shared_mem_bytes = args.number_of_shared_bytes();
 
   VLOG(2) << "Set kernel node params " << node_handle << " in graph executable "
@@ -436,14 +467,6 @@ absl::Status RocmCommandBuffer::UpdateKernelNode(
   // NOLINTNEXTLINE
   params.kernelParams = const_cast<void**>(args.argument_addresses().data());
   params.extra = nullptr;
-
-  if (shared_mem_bytes != 0) {
-    ABSL_RETURN_IF_ERROR(
-        ToStatus(hipFuncSetAttribute(function,
-                                     hipFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem_bytes),
-                 "Failed to set shared memory size"));
-  }
 
   return ToStatus(hipGraphExecKernelNodeSetParams(
                       exec_, ToHipGraphHandle(node_handle), &params),

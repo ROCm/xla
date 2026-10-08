@@ -77,6 +77,23 @@ __global__ void DynShmemKernel(uint8_t* buf, uint32_t* n_cols,
     buf[dst_col + *n_cols * (*n_rows - i - 1)] = shmem[src_col + *n_cols * i];
   }
 }
+
+// Uses 16 KiB of static shared memory (indexed by data, so it cannot be
+// optimized away) and blockDim.x bytes of dynamic shared memory, one byte per
+// thread: buf[i] becomes buf[i] + buf[blockDim.x - 1 - i]. The caller must
+// launch with at least blockDim.x bytes of dynamic shared memory.
+__global__ void StaticAndDynShmemKernel(uint8_t* buf) {
+  __shared__ uint8_t static_shmem[16 * 1024];
+  extern __shared__ uint8_t dyn_shmem[];
+  uint32_t i = threadIdx.x;
+  uint8_t value = buf[i];
+  // In bounds only because `value` is a uint8_t: slot <= 255 * 64 + 63.
+  uint32_t slot = value * 64 + i % 64;
+  static_shmem[slot] = value;
+  dyn_shmem[i] = value;
+  __syncthreads();
+  buf[i] = static_shmem[slot] + dyn_shmem[blockDim.x - 1 - i];
+}
 }
 }  // namespace stream_executor::gpu
 
