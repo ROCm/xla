@@ -324,6 +324,13 @@ GpuExecutableBufferAllocator::ExecutionScope::ExecuteWithBufferAllocations(
                  absl::MakeConstSpan(owner_->constant_alloc_indices_));
 }
 
+absl::Status GpuExecutableBufferAllocator::ExecutionScope::TearDown(
+    BufferAllocations& buffer_allocations,
+    const std::set<se::DeviceAddressBase>& live_addresses) {
+  torn_down_ = true;
+  return buffer_allocations.TearDown(live_addresses, owner_->allocations());
+}
+
 absl::StatusOr<std::unique_ptr<GpuExecutableBufferAllocator::ExecutionScope>>
 GpuExecutableBufferAllocator::CreateExecutionScope(
     const ServiceExecutableRunOptions* run_options,

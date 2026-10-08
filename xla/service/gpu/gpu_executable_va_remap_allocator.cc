@@ -100,7 +100,8 @@ class GpuExecutableVaRemapAllocator::VaRemapExecutionScope
 
   // Releases any reservation-address aliases still active for this
   // execution. This is a safety net for error paths; the normal release
-  // happens inside ExecuteWithBufferAllocations.
+  // happens inside ExecuteWithBufferAllocations. Also releases the
+  // reservation-backed transient buffers if TearDown() was not called.
   ~VaRemapExecutionScope() override;
 
   bool va_remap_enabled() const override { return true; }
@@ -168,6 +169,13 @@ class GpuExecutableVaRemapAllocator::VaRemapExecutionScope
   // Per-execution alias bookkeeping filled by RecordStepAlias.
   int step_device_ordinal_ = -1;
   std::vector<StepAlias> step_aliases_;
+
+  // Transient buffers allocated at reservation addresses by this execution.
+  // A buffer left active at its reservation address makes every later
+  // allocation there fail, so the destructor releases them unless TearDown()
+  // already did.
+  int transient_device_ordinal_ = -1;
+  std::vector<se::DeviceAddressBase> reservation_transient_buffers_;
 };
 
 GpuExecutableVaRemapAllocator::VaRemapExecutionScope::~VaRemapExecutionScope() {
@@ -180,6 +188,17 @@ GpuExecutableVaRemapAllocator::VaRemapExecutionScope::~VaRemapExecutionScope() {
       LOG(ERROR) << "Failed to release command buffer VA remapping aliases "
                     "for module "
                  << owner_->module_name() << ": " << status;
+    }
+  }
+  if (!torn_down()) {
+    for (const se::DeviceAddressBase& buffer : reservation_transient_buffers_) {
+      absl::Status status =
+          vmm_allocator_->Deallocate(transient_device_ordinal_, buffer);
+      if (!status.ok()) {
+        LOG(ERROR) << "Failed to release command buffer VA reservation "
+                      "transient buffer for module "
+                   << owner_->module_name() << ": " << status;
+      }
     }
   }
 }
@@ -374,6 +393,10 @@ GpuExecutableVaRemapAllocator::VaRemapExecutionScope::AllocateTransientBuffer(
   ABSL_ASSIGN_OR_RETURN(
       se::ScopedDeviceAddress<uint8_t> buffer,
       AllocateBuffer(device_ordinal, allocation, buffer_size));
+  DCHECK(reservation_transient_buffers_.empty() ||
+         transient_device_ordinal_ == device_ordinal);
+  transient_device_ordinal_ = device_ordinal;
+  reservation_transient_buffers_.push_back(buffer.cref());
   return buffer.Release();
 }
 

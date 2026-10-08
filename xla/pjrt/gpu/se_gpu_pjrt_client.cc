@@ -2472,8 +2472,8 @@ static absl::StatusOr<PjRtStreamExecutorExecutionOutput> RunGpuAsync(
         return gpu_exec->ExecuteThunks(execution_buffers, run_options,
                                        persistent_alloc_indices);
       });
-  absl::Status teardown_status = buffer_allocations.TearDown(
-      buffers_in_result, gpu_exec->GetAllocations());
+  absl::Status teardown_status =
+      allocation_scope->TearDown(buffer_allocations, buffers_in_result);
 
   ABSL_RETURN_IF_ERROR(execute_status);
   ABSL_RETURN_IF_ERROR(teardown_status);
