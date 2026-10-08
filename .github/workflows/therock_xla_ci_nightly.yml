@@ -56,6 +56,10 @@ on:
         description: 'Fully override THEROCK_INDEX_URL (empty = derive from channel + gpu_target)'
         type: string
         default: ''
+      jax_rocm_devices:
+        description: 'ROCm device extras pip-installed for the JAX tests'
+        type: string
+        default: 'device-gfx942,device-gfx950'
       runner_label:
         description: 'On which runner to run'
         type: string
@@ -209,10 +213,21 @@ jobs:
           path: jax
           persist-credentials: false
 
-      - name: Run JAX Unit Tests
+      # JAX tests use pip-installed TheRock, as jax-ml/jax CI does;
+      # ci/run_bazel_test_rocm_rbe.sh points ROCM_PATH at it via rocm-sdk.
+      - name: Install TheRock for JAX
         env:
+          THEROCK_INDEX_URL: ${{ steps.therock.outputs.therock_index_url }}
           THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
-          ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
+          JAX_ROCM_DEVICES: ${{ inputs.jax_rocm_devices || 'device-gfx942,device-gfx950' }}
+        run: |
+          python3 -m pip install --break-system-packages --pre \
+            --index-url "${THEROCK_INDEX_URL}" \
+            "rocm[libraries,devel,${JAX_ROCM_DEVICES}]==${THEROCK_VERSION}"
+          rocm-sdk init
+          rocm-sdk path --root
+
+      - name: Run JAX Unit Tests
         timeout-minutes: 90
         working-directory: jax
         run: |
@@ -227,9 +242,6 @@ jobs:
             --strategy=TestRunner=remote \
             --repo_env=HERMETIC_PYTHON_VERSION=3.14 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
-            --repo_env=ROCM_PATH="" \
-            --repo_env=ROCM_DISTRO_URL="https://rocm.${ROCM_PIP_SOURCE}.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${THEROCK_VERSION}.tar.gz" \
-            --repo_env=ROCM_DISTRO_HASH='' \
             --jobs=20 \
             --bes_keywords=xla \
             --bes_keywords=jax \
