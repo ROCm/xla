@@ -22,5 +22,5 @@ jobs:
     secrets: inherit
     with:
       rocm_xla_branch: ${{ github.head_ref || github.ref_name }}
-      runner_label: ${{ 'amd-do-linux-xla-gpu-gfx950-dpxv2-1' }}
+      runner_label: ${{ 'amd-do-linux-xla-gpu-gfx950-dpx-1-testv2' }}
 # Just a test
