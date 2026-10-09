@@ -37,7 +37,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rocm-config:
+    runs-on: ubuntu-latest
+    outputs:
+      docker-image: ${{ steps.out.outputs.docker-image }}
+    steps:
+      - id: out
+        shell: bash
+        run: |
+          echo "docker-image=${{ vars.DOCKER_IMAGE }}" >> "$GITHUB_OUTPUT"
+
   execute-xla-ut-nightly:
+    needs: rocm-config
     # Run on schedule, workflow_dispatch, "nightly-pipeline" label, or PR to rocm-dev-infra with workflow changes
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'nightly-pipeline' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
     runs-on: ${{ matrix.mode.runner }}
@@ -57,20 +68,10 @@ jobs:
               - "--repo_env=SYSROOT_DIST=linux_glibc_2_31"
               - "--repo_env=ROCM_PATH="
             rbe_docker_image: "DOCKER_IMAGE_HERMETIC"
-            runner: "linux-xla-do-mi350x-1"
+            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
     container:
-      # set in https://github.com/ROCm/xla/settings/variables/actions
-      image: ${{ vars.DOCKER_IMAGE }}
-      options: >-
-        --device=/dev/dri
-        --device=/dev/kfd
-        --shm-size=16G
-        --cap-add=SYS_PTRACE
-        --security-opt=seccomp=unconfined
-        --env-file /etc/podinfo/gha-gpu-isolation-settings
-      volumes:
-        - /tmp/bazel-cache:/root/.cache/bazel
-        
+      image: ${{ needs.rocm-config.outputs.docker-image }}
+
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -86,15 +87,6 @@ jobs:
           git clone --depth 1 --filter=blob:none --sparse https://github.com/openxla/xla.git "$tmpdir"
           git -C "$tmpdir" sparse-checkout set build_tools/rocm
           cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
-
-      - name: Get RBE cluster keys
-        env:
-          RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
-          RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}
-        run: |
-          mkdir -p /data
-          echo "$RBE_CI_CERT" > /data/ci-cert.crt
-          echo "$RBE_CI_KEY" > /data/ci-cert.key
 
       - name: CPU Info
         run: lscpu
@@ -121,7 +113,7 @@ jobs:
             --bes_keywords=single_gpu \
             --bes_keywords=nightly \
             ${{ join(matrix.mode.configs, ' ') }} \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             -- \
@@ -141,7 +133,7 @@ jobs:
             --bes_keywords=multi_gpu \
             --bes_keywords=nightly \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             -- \
             //xla/...
@@ -159,7 +151,7 @@ jobs:
             --bes_keywords=cpu \
             --bes_keywords=nightly \
             ${{ join(matrix.mode.configs, ' ') }} \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
             -- \
@@ -172,6 +164,3 @@ jobs:
       repository: openxla/xla
       ref: main
       run_sanitizers: true
-    secrets:
-      RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
-      RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}

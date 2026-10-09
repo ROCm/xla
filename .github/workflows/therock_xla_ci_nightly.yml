@@ -59,7 +59,7 @@ on:
       runner_label:
         description: 'On which runner to run'
         type: string
-        default: "linux-xla-do-mi350x-1"
+        default: "amd-do-linux-xla-gpu-gfx950-dpx-4"
   schedule:
     # Run every 24 hours at 5:00 AM UTC
     - cron: '00 5 * * *'
@@ -77,33 +77,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rocm-config:
+    runs-on: ubuntu-latest
+    outputs:
+      docker-image: ${{ steps.out.outputs.docker-image }}
+    steps:
+      - id: out
+        shell: bash
+        run: |
+          echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
+
   xla:
+    needs: rocm-config
     if: github.event_name != 'pull_request_target' || github.event.label.name == 'therock-ci'
     name: XLA Linux theRock nightly CI
-    runs-on: ${{ inputs.runner_label || 'linux-xla-do-mi350x-1' }}
+    runs-on: ${{ inputs.runner_label || 'amd-do-linux-xla-gpu-gfx950-dpx-4' }}
     timeout-minutes: 220
     env:
-      DOCKER_IMAGE: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
+      DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
       EXECUTE_DETECT_THEROCK_VERSION_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/detect-therock-version.sh
       EXECUTE_CI_BUILD_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/execute_ci_build_upstream.sh
       ROCM_CONFIGURE_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/rocm_configure.bzl
 
     container:
-      image: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
-      volumes: &rocm_container_volumes
-        - /data/ci-cert.crt:/data/ci-cert.crt
-        - /data/ci-cert.key:/data/ci-cert.key
-        - /data:/data
-      options: &rocm_container_options >-
-        --device=/dev/dri
-        --device=/dev/kfd
-        --ipc=host
-        --shm-size=64G
-        --cap-add=SYS_PTRACE
-        --security-opt=seccomp=unconfined
-        --tmpfs /root/.cache/bazel:rw,exec,size=80g
-        --group-add video
-        --env-file /etc/podinfo/gha-gpu-isolation-settings
+      image: ${{ needs.rocm-config.outputs.docker-image }}
+
     defaults:
       run:
         shell: bash
@@ -245,6 +243,3 @@ jobs:
       repository: openxla/xla
       ref: main
       run_sanitizers: true
-    secrets:
-      RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
-      RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}

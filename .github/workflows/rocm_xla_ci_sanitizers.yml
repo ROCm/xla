@@ -36,11 +36,6 @@ on:
         required: false
         type: boolean
         default: true
-    secrets:
-      RBE_CI_CERT:
-        required: true
-      RBE_CI_KEY:
-        required: true
   pull_request_target:
     types: [labeled]
 
@@ -49,7 +44,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rocm-config:
+    runs-on: ubuntu-latest
+    outputs:
+      docker-image: ${{ steps.out.outputs.docker-image }}
+    steps:
+      - id: out
+        shell: bash
+        run: |
+          echo "docker-image=${{ vars.DOCKER_IMAGE }}" >> "$GITHUB_OUTPUT"
+
   execute-xla-ut-sanitizers:
+    needs: rocm-config
     if: inputs.run_sanitizers || github.event.label.name == 'sanitizers'
     runs-on: linux-xla-do-mi350x-4
     strategy:
@@ -86,34 +92,14 @@ jobs:
               - "--flaky_test_attempts=1"
               - "--local_test_jobs=4"
     container:
-      # set in https://github.com/ROCm/xla/settings/variables/actions
-      image: ${{ vars.DOCKER_IMAGE }}
-      options: >-
-        --device=/dev/dri
-        --device=/dev/kfd
-        --shm-size=16G
-        --cap-add=SYS_PTRACE
-        --security-opt=seccomp=unconfined
-      volumes:
-        - /tmp/bazel-cache:/root/.cache/bazel
+      image: ${{ needs.rocm-config.outputs.docker-image }}
+
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ inputs.repository || github.event.pull_request.head.repo.full_name }}
           ref: ${{ inputs.ref || github.event.pull_request.head.sha }}
           persist-credentials: false
-
-      - name: Get RBE cluster keys
-        env:
-          RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
-          RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}
-        run: |
-          mkdir -p /tf/certificates
-          echo "$RBE_CI_CERT" > /tf/certificates/ci-cert.crt
-          echo "$RBE_CI_KEY" > /tf/certificates/ci-cert.key
-          mkdir -p /data
-          echo "$RBE_CI_CERT" > /data/ci-cert.crt
-          echo "$RBE_CI_KEY" > /data/ci-cert.key
 
       - name: CPU Info
         run: lscpu
@@ -126,7 +112,7 @@ jobs:
           build_tools/rocm/run_xla_ci_build.sh \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_gfx90a \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --jobs=30 \

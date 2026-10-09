@@ -41,11 +41,6 @@ on:
         required: false
         type: boolean
         default: true
-    secrets:
-      RBE_CI_CERT:
-        required: true
-      RBE_CI_KEY:
-        required: true
   pull_request_target:
     types: [labeled]
 
@@ -54,9 +49,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rocm-config:
+    runs-on: ubuntu-latest
+    outputs:
+      docker-image: ${{ steps.out.outputs.docker-image }}
+    steps:
+      - id: out
+        shell: bash
+        run: |
+          echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
+
   execute-xla-ut-sanitizers_ontheRock:
+    needs: rocm-config
     if: inputs.run_sanitizers || github.event.label.name == 'sanitizers'
-    runs-on: linux-xla-do-mi350x-4
+    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-4
     env:
       EXECUTE_DETECT_THEROCK_VERSION_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/detect-therock-version.sh
       ROCM_CONFIGURE_URL: https://raw.githubusercontent.com/ROCm/xla/refs/heads/${{ inputs.rocm_xla_branch || 'rocm-dev-infra' }}/build_tools/rocm/rocm_configure.bzl
@@ -83,33 +89,14 @@ jobs:
               - "--flaky_test_attempts=1"
               - "--local_test_jobs=4"
     container:
-      image: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
-      options: >-
-        --device=/dev/dri
-        --device=/dev/kfd
-        --shm-size=16G
-        --cap-add=SYS_PTRACE
-        --security-opt=seccomp=unconfined
-      volumes:
-        - /tmp/bazel-cache:/root/.cache/bazel
+      image: ${{ needs.rocm-config.outputs.docker-image }}
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ inputs.repository || github.event.pull_request.head.repo.full_name }}
           ref: ${{ inputs.ref || github.event.pull_request.head.sha }}
           persist-credentials: false
-
-      - name: Get RBE cluster keys
-        env:
-          RBE_CI_CERT: ${{ secrets.RBE_CI_CERT }}
-          RBE_CI_KEY: ${{ secrets.RBE_CI_KEY }}
-        run: |
-          mkdir -p /tf/certificates
-          echo "$RBE_CI_CERT" > /tf/certificates/ci-cert.crt
-          echo "$RBE_CI_KEY" > /tf/certificates/ci-cert.key
-          mkdir -p /data
-          echo "$RBE_CI_CERT" > /data/ci-cert.crt
-          echo "$RBE_CI_KEY" > /data/ci-cert.key
 
       - name: CPU Info
         run: lscpu
@@ -135,7 +122,7 @@ jobs:
 
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         env:
-          DOCKER_IMAGE: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
+          DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
           THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
           ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
         run: |
@@ -156,7 +143,7 @@ jobs:
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         env:
-          DOCKER_IMAGE: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
+          DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
           THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
           ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
         if: always() && !cancelled()
@@ -177,7 +164,7 @@ jobs:
 
       - name: Test XLA [${{ matrix.mode.name }}] [rocm_cpu]
         env:
-          DOCKER_IMAGE: "ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f"
+          DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
           THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
           ROCM_PIP_SOURCE: ${{ inputs.rocm_pip_source || 'nightlies' }}
         if: always() && !cancelled()
