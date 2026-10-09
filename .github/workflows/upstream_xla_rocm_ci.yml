@@ -18,7 +18,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    uses: openxla/xla/.github/workflows/rocm_ci.yml@main
+    uses: openxla/xla/.github/workflows/rocm_ci.yml@13654fc5d56f97659d4b5a4d0e8d8125d01e4878
     secrets: inherit
     with:
       rocm_xla_branch: ${{ github.head_ref || github.ref_name }}
