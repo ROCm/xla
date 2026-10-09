@@ -48,7 +48,7 @@ jobs:
           - name: "default"
             configs: ["--config=rocm_ci"]
             rbe_docker_image: "DOCKER_IMAGE"
-            runner: "linux-xla-do-mi350x-1"
+            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
           - name: "hermetic"
             configs:
               - "--config=rocm_ci_hermetic"
