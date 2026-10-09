@@ -41,33 +41,67 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docker-image: ${{ steps.out.outputs.docker-image }}
+      therock-version: ${{ steps.therock.outputs.therock_version }}
     steps:
       - id: out
         shell: bash
         run: |
-          echo "docker-image=${{ vars.DOCKER_IMAGE }}" >> "$GITHUB_OUTPUT"
+          echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: openxla/xla
+          ref: main
+          sparse-checkout: |
+            build_tools/rocm
+          persist-credentials: false
+
+      - name: Fetch theRock version detection from ROCm/xla
+        run: |
+          wget -O build_tools/rocm/detect-therock-version.sh "https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/detect-therock-version.sh"
+          chmod +x build_tools/rocm/detect-therock-version.sh
+
+      - name: Detect latest TheRock version
+        id: therock
+        env:
+          ROCM_PIP_SOURCE: nightlies
+          GPU_TARGET: device-all
+          ROCM_SDK_VERSION: ''
+          PIP_INDEX_PATH: ''
+          THEROCK_INDEX_URL: ''
+        run: bash build_tools/rocm/detect-therock-version.sh
 
   execute-xla-ut-nightly:
     needs: rocm-config
     # Run on schedule, workflow_dispatch, "nightly-pipeline" label, or PR to rocm-dev-infra with workflow changes
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'nightly-pipeline' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
     runs-on: ${{ matrix.mode.runner }}
+    env:
+      COMMON_ARGS: >-
+        --config=rocm_ci_hermetic
+        --config=rocm_rbe
+        --local_test_jobs=1
+        --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu
+        --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950
+        --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ needs.rocm-config.outputs.docker-image }}
+        --bes_keywords=xla
+        --bes_keywords=nightly
+        --keep_going
+      ROCM_DISTRO_ARGS: >-
+        --repo_env=ROCM_PATH=
+        --repo_env=ROCM_DISTRO_URL=${{ matrix.mode.distro_url }}
+        --repo_env=ROCM_DISTRO_HASH=${{ matrix.mode.distro_hash }}
     strategy:
       fail-fast: false
       matrix:
         mode:
-          - name: "default"
-            configs: ["--config=rocm_ci"]
-            rbe_docker_image: "DOCKER_IMAGE"
+          - name: "therock_release"
+            distro_url: "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.0.0.tar.gz"
+            distro_hash: "1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6"
             runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
-          - name: "hermetic"
-            configs:
-              - "--config=rocm_ci_hermetic"
-              - "--repo_env=ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-gfx950-dcgpu-7.14.0.tar.gz"
-              - "--repo_env=ROCM_DISTRO_HASH=12afeccd06e6caf0699d86d688f16083aafa35474d0ec1d8063477fb5c119d49"
-              - "--repo_env=SYSROOT_DIST=linux_glibc_2_31"
-              - "--repo_env=ROCM_PATH="
-            rbe_docker_image: "DOCKER_IMAGE_HERMETIC"
+          - name: "therock_nightly"
+            distro_url: "https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${{ needs.rocm-config.outputs.therock-version }}.tar.gz"
+            distro_hash: "no_hash"
             runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
     container:
       image: ${{ needs.rocm-config.outputs.docker-image }}
@@ -104,18 +138,14 @@ jobs:
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
-            "--config=rocm_rbe" \
+            --config=rocm_rbe_dynamic \
             --config=ci_single_gpu \
             --local_test_jobs=1 \
             --jobs=30 \
             --spawn_strategy=local \
-            --bes_keywords=xla \
             --bes_keywords=single_gpu \
-            --bes_keywords=nightly \
-            ${{ join(matrix.mode.configs, ' ') }} \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
+            ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
             -- \
             //xla/...
 
@@ -124,17 +154,13 @@ jobs:
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             --config=ci_multi_gpu \
-            --config=rocm_rbe \
-            ${{ join(matrix.mode.configs, ' ') }} \
+            --local_test_jobs=1 \
             --test_strategy=exclusive \
             --spawn_strategy=local \
             --strategy=TestRunner=local \
-            --bes_keywords=xla \
             --bes_keywords=multi_gpu \
-            --bes_keywords=nightly \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
+            ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
             -- \
             //xla/...
 
@@ -142,18 +168,13 @@ jobs:
         if: always() && !cancelled()
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
-            --config=rocm_ci \
-            --config=rocm_rbe \
+            --config=rocm_rbe_dynamic \
             --config=ci_rocm_cpu \
-            --local_test_jobs=200 \
+            --local_test_jobs=70 \
             --spawn_strategy=local \
-            --bes_keywords=xla \
             --bes_keywords=cpu \
-            --bes_keywords=nightly \
-            ${{ join(matrix.mode.configs, ' ') }} \
-            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars[matrix.mode.rbe_docker_image] }} \
+            ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
             -- \
             //xla/...
 

@@ -48,49 +48,92 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docker-image: ${{ steps.out.outputs.docker-image }}
+      therock-version: ${{ steps.therock.outputs.therock_version }}
     steps:
       - id: out
         shell: bash
         run: |
-          echo "docker-image=${{ vars.DOCKER_IMAGE }}" >> "$GITHUB_OUTPUT"
+          echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: openxla/xla
+          ref: main
+          sparse-checkout: |
+            build_tools/rocm
+          persist-credentials: false
+
+      - name: Fetch theRock version detection from ROCm/xla
+        run: |
+          wget -O build_tools/rocm/detect-therock-version.sh "https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/detect-therock-version.sh"
+          chmod +x build_tools/rocm/detect-therock-version.sh
+
+      - name: Detect latest TheRock version
+        id: therock
+        env:
+          ROCM_PIP_SOURCE: nightlies
+          GPU_TARGET: device-all
+          ROCM_SDK_VERSION: ''
+          PIP_INDEX_PATH: ''
+          THEROCK_INDEX_URL: ''
+        run: bash build_tools/rocm/detect-therock-version.sh
 
   execute-xla-ut-sanitizers:
     needs: rocm-config
     if: inputs.run_sanitizers || github.event.label.name == 'sanitizers'
-    runs-on: linux-xla-do-mi350x-4
+    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-4
+    env:
+      COMMON_ARGS: >-
+        --config=rocm_ci_hermetic
+        --config=rocm_rbe
+        --local_test_jobs=1
+        --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950
+        --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ needs.rocm-config.outputs.docker-image }}
+        --bes_keywords=xla
+        --bes_keywords=sanitizers
+      ROCM_DISTRO_ARGS: >-
+        --repo_env=ROCM_DISTRO_URL=${{ matrix.mode.distro_url }}
+        --repo_env=ROCM_DISTRO_HASH=${{ matrix.mode.distro_hash }}
     strategy:
       fail-fast: false
       matrix:
         mode:
           - name: "asan"
             configs:
-              - "--config=rocm_ci"
-              - "--config=rocm_rbe"
               - "--config=asan"
               - "--spawn_strategy=local"
               - "--strategy=TestRunner=local"
               - "--flaky_test_attempts=1"
               - "--local_test_jobs=4"
-          - name: "asan_hermetic"
-            configs:
-              - "--config=rocm_ci_hermetic"
-              - "--config=rocm_rbe"
-              - "--config=asan"
-              - "--spawn_strategy=local"
-              - "--strategy=TestRunner=local"
-              - "--flaky_test_attempts=1"
-              - "--local_test_jobs=4"
-              - "--repo_env=ROCM_DISTRO_URL=https://rocm.nightlies.amd.com/tarball-asan/therock-dist-linux-gfx950-dcgpu-7.15.0a20260714.tar.gz"
-              - "--repo_env=ROCM_DISTRO_HASH=fe5e5898669d35a1983fc59f160f35ff535711b8a0bc7c77ecfa1ac3e2da72f8"
+            distro_url: "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.0.0.tar.gz"
+            distro_hash: "1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6"
           - name: "tsan"
             configs:
-              - "--config=rocm_ci"
-              - "--config=rocm_rbe"
               - "--config=tsan"
               - "--spawn_strategy=local"
               - "--strategy=TestRunner=local"
               - "--flaky_test_attempts=1"
               - "--local_test_jobs=4"
+            distro_url: "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.0.0.tar.gz"
+            distro_hash: "1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6"
+          - name: "asan_therock_nightly"
+            configs:
+              - "--config=asan"
+              - "--spawn_strategy=local"
+              - "--strategy=TestRunner=local"
+              - "--flaky_test_attempts=1"
+              - "--local_test_jobs=4"
+            distro_url: "https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${{ needs.rocm-config.outputs.therock-version }}.tar.gz"
+            distro_hash: "no_hash"
+          - name: "tsan_therock_nightly"
+            configs:
+              - "--config=tsan"
+              - "--spawn_strategy=local"
+              - "--strategy=TestRunner=local"
+              - "--flaky_test_attempts=1"
+              - "--local_test_jobs=4"
+            distro_url: "https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${{ needs.rocm-config.outputs.therock-version }}.tar.gz"
+            distro_hash: "no_hash"
     container:
       image: ${{ needs.rocm-config.outputs.docker-image }}
 
@@ -104,22 +147,17 @@ jobs:
       - name: CPU Info
         run: lscpu
 
-      - name: ROCm info
-        run: /opt/rocm/bin/rocminfo
-
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             --config=ci_single_gpu \
             --local_test_jobs=4 \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
             --jobs=30 \
-            --bes_keywords=xla \
             --bes_keywords=single_gpu \
-            --bes_keywords=sanitizers \
             ${{ join(matrix.mode.configs, ' ') }} \
+            ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
             -- \
             //xla/...
 
@@ -129,12 +167,10 @@ jobs:
           build_tools/rocm/run_xla_ci_build.sh \
             --config=ci_multi_gpu \
             --local_test_jobs=1 \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
-            --bes_keywords=xla \
             --bes_keywords=multi_gpu \
-            --bes_keywords=sanitizers \
             ${{ join(matrix.mode.configs, ' ') }} \
+            ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
             -- \
             //xla/...
 
@@ -143,14 +179,11 @@ jobs:
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             --config=rocm_ci \
-            --config=rocm_rbe \
             --config=ci_rocm_cpu \
             --local_test_jobs=200 \
-            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ vars.DOCKER_IMAGE }} \
-            --bes_keywords=xla \
             --bes_keywords=cpu \
-            --bes_keywords=sanitizers \
             ${{ join(matrix.mode.configs, ' ') }} \
+            ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
             -- \
             //xla/...

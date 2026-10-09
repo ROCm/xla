@@ -42,7 +42,7 @@ jobs:
       - id: out
         shell: bash
         run: |
-          echo "docker-image=${{ vars.DOCKER_IMAGE }}" >> "$GITHUB_OUTPUT"
+          echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
 
   execute-xla-ut:
     needs: rocm-config
