@@ -24,8 +24,11 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "xla/stream_executor/kernel.h"
 #include "xla/stream_executor/kernel_metadata.h"
@@ -34,6 +37,19 @@ limitations under the License.
 #include "xla/tsl/platform/logging.h"
 
 namespace stream_executor::gpu {
+
+// Returns the largest dynamic shared memory request a launch of `function` can
+// satisfy: device LDS minus the kernel's static LDS. The device the function
+// was loaded on must be current.
+absl::StatusOr<uint64_t> GetDynamicSharedMemoryLimit(hipFunction_t function);
+
+// Returns OK if `bytes` is zero or at most `limit`, InvalidArgument if it is
+// larger, and the error in `limit` otherwise. HIP checks a kernel node's
+// request only against the device limit, so a larger request is accepted when
+// the node is created and aborts the queue at dispatch.
+absl::Status CheckDynamicSharedMemoryBytes(
+    absl::string_view kernel_name, uint64_t bytes,
+    const absl::StatusOr<uint64_t>& limit);
 
 class RocmKernel : public Kernel {
  public:
@@ -60,6 +76,13 @@ class RocmKernel : public Kernel {
   // Collects metadata for the specified kernel.
   absl::StatusOr<KernelMetadata> GetKernelMetadata();
 
+  // Queries and caches GetDynamicSharedMemoryLimit for this kernel. A failed
+  // query is cached too, so later requests for dynamic shared memory fail.
+  void LoadDynamicSharedMemoryLimit();
+
+  // Checks `bytes` against the cached limit; see CheckDynamicSharedMemoryBytes.
+  absl::Status CheckDynamicSharedMemoryBytes(uint64_t bytes) const;
+
  private:
   absl::Status Launch(const ThreadDim& thread_dims, const BlockDim& block_dims,
                       const std::optional<ClusterDim>& cluster_dims,
@@ -69,6 +92,9 @@ class RocmKernel : public Kernel {
 
   hipFunction_t rocm_function_ = nullptr;  // wrapped HIP kernel handle
   unsigned arity_ = 0;  // number of formal parameters the kernel takes
+  absl::StatusOr<uint64_t> dynamic_shared_memory_limit_bytes_ =
+      absl::FailedPreconditionError(
+          "Dynamic shared memory limit was not loaded");
 };
 
 }  // namespace stream_executor::gpu

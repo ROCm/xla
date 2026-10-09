@@ -26,6 +26,7 @@ limitations under the License.
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/kernel.h"
@@ -49,6 +50,40 @@ absl::Status FuncGetAttribute(hipFunction_attribute attribute,
 }
 
 }  // namespace
+
+absl::StatusOr<uint64_t> GetDynamicSharedMemoryLimit(hipFunction_t function) {
+  int limit = 0;
+  ABSL_RETURN_IF_ERROR(FuncGetAttribute(
+      HIP_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, function, &limit));
+  if (limit < 0) {
+    return absl::InternalError(absl::StrCat(
+        "Negative dynamic shared memory limit reported by HIP: ", limit));
+  }
+  return static_cast<uint64_t>(limit);
+}
+
+absl::Status CheckDynamicSharedMemoryBytes(
+    absl::string_view kernel_name, uint64_t bytes,
+    const absl::StatusOr<uint64_t>& limit) {
+  if (bytes == 0) {
+    return absl::OkStatus();
+  }
+  if (!limit.ok()) {
+    return absl::Status(
+        limit.status().code(),
+        absl::StrCat(
+            "Cannot check the dynamic shared memory request of kernel ",
+            kernel_name, ": ", limit.status().message()));
+  }
+  if (bytes <= *limit) {
+    return absl::OkStatus();
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Kernel ", kernel_name, " requests ", bytes,
+                   " bytes of dynamic shared memory, but at most ", *limit,
+                   " are available"));
+}
+
 absl::StatusOr<int32_t> RocmKernel::GetMaxOccupiedBlocksPerCore(
     ThreadDim threads, size_t dynamic_shared_memory_bytes) const {
   int32_t threads_per_block = threads.x * threads.y * threads.z;
@@ -78,6 +113,17 @@ absl::StatusOr<KernelMetadata> RocmKernel::GetKernelMetadata() {
                                         rocm_function_, &value));
   kernel_metadata.set_shared_memory_bytes(value);
   return kernel_metadata;
+}
+
+void RocmKernel::LoadDynamicSharedMemoryLimit() {
+  std::unique_ptr<ActivateContext> activation = executor_->Activate();
+  dynamic_shared_memory_limit_bytes_ =
+      GetDynamicSharedMemoryLimit(rocm_function_);
+}
+
+absl::Status RocmKernel::CheckDynamicSharedMemoryBytes(uint64_t bytes) const {
+  return gpu::CheckDynamicSharedMemoryBytes(name(), bytes,
+                                            dynamic_shared_memory_limit_bytes_);
 }
 
 absl::Status RocmKernel::Launch(const ThreadDim& thread_dims,

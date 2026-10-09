@@ -179,6 +179,19 @@ class RocmCommandBuffer : public GpuCommandBuffer {
                                 const NativeKernel& kernel,
                                 const KernelArgsPackedArrayBase& args) override;
 
+  // Kernel node create/update without the dynamic shared memory check; the
+  // CreateKernelNode/UpdateKernelNode overloads check before calling these.
+  absl::StatusOr<GraphNodeHandle> CreateKernelNodeUnchecked(
+      absl::Span<const GraphNodeHandle> dependencies, const ThreadDim& threads,
+      const BlockDim& blocks, const NativeKernel& kernel,
+      const KernelArgsPackedArrayBase& args);
+
+  absl::Status UpdateKernelNodeUnchecked(GraphNodeHandle node_handle,
+                                         const ThreadDim& threads,
+                                         const BlockDim& blocks,
+                                         const NativeKernel& kernel,
+                                         const KernelArgsPackedArrayBase& args);
+
   absl::StatusOr<GraphNodeHandle> CreateEmptyNode(
       absl::Span<const GraphNodeHandle> dependencies) override;
 

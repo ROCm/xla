@@ -718,6 +718,9 @@ absl::StatusOr<std::unique_ptr<Kernel>> RocmExecutor::LoadKernel(
                           rocm_kernel->GetKernelMetadata());
     rocm_kernel->set_metadata(kernel_metadata);
   }
+  // Runs for in-process kernels too: hipFuncGetAttribute accepts
+  // hipGetFuncBySymbol handles.
+  rocm_kernel->LoadDynamicSharedMemoryLimit();
   rocm_kernel->set_name(kernel_name);
   if (std::holds_alternative<KernelLoaderSpec::KernelArgsPackingFunc>(
           spec.kernel_args_packing())) {
