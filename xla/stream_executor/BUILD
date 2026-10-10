@@ -365,6 +365,7 @@ cc_library(
         ":device_address_allocator",
         ":memory_allocation",
         ":memory_reservation",
+        ":memory_space",
         ":platform",
         ":stream",
         ":stream_executor_h",
@@ -415,6 +416,7 @@ cc_library(
     srcs = ["device_address_vmm_allocator_factory_stub.cc"],
     tags = ["manual"],
     deps = [
+        ":device_address_allocator",
         ":device_address_vmm_allocator",
         ":platform",
         ":stream",
@@ -434,6 +436,7 @@ cc_library(
         "manual",
     ],
     deps = [
+        ":device_address_allocator",
         ":device_address_vmm_allocator",
         ":platform",
         ":stream",
@@ -454,6 +457,7 @@ cc_library(
         "rocm-only",
     ],
     deps = [
+        ":device_address_allocator",
         ":device_address_vmm_allocator",
         ":platform",
         ":stream",
