@@ -24,6 +24,7 @@ def repo(name):
             "//third_party/llvm:zstd.patch",
             "//third_party/llvm:lit_test.patch",
             "//third_party/llvm:run_lit.patch",
+            "//third_party/llvm:0001-AMDGPU-Restrict-DPP-combine-from-performing-bad-tran.patch"
         ],
         link_files = {"//third_party/llvm:run_lit.sh": "mlir/run_lit.sh"},
     )
