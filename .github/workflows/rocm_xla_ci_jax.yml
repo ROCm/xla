@@ -1,0 +1,164 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+
+name: CI ROCm JAX Upstream
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: 'XLA repository to checkout'
+        required: false
+        type: string
+        default: 'openxla/xla'
+      ref:
+        description: 'XLA git ref to checkout'
+        required: false
+        type: string
+        default: 'main'
+      run_jax:
+        description: 'Set to true to run JAX tests'
+        required: false
+        type: boolean
+        default: true
+  pull_request_target:
+    types: [labeled]
+
+jobs:
+  rocm-config:
+    runs-on: ubuntu-latest
+    outputs:
+      docker-image: ${{ steps.out.outputs.docker-image }}
+      therock-version: ${{ steps.therock.outputs.therock_version }}
+    steps:
+      - id: out
+        shell: bash
+        run: |
+          echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: openxla/xla
+          ref: main
+          sparse-checkout: |
+            build_tools/rocm
+          persist-credentials: false
+
+      - name: Fetch theRock version detection from ROCm/xla
+        run: |
+          wget -O build_tools/rocm/detect-therock-version.sh "https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/detect-therock-version.sh"
+          chmod +x build_tools/rocm/detect-therock-version.sh
+
+      - name: Detect latest TheRock version
+        id: therock
+        env:
+          ROCM_PIP_SOURCE: nightlies
+          GPU_TARGET: device-all
+          ROCM_SDK_VERSION: ''
+          PIP_INDEX_PATH: ''
+          THEROCK_INDEX_URL: ''
+        run: bash build_tools/rocm/detect-therock-version.sh
+
+  jax-upstream:
+    needs: rocm-config
+    name: JAX Upstream Linux x86 AMD Instinct GPU
+    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-4
+    timeout-minutes: 220
+    # Remove this once the JAX CI is stable.
+    continue-on-error: true
+    env:
+      COMMON_ARGS: >-
+        --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ needs.rocm-config.outputs.docker-image }}
+        --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu
+        --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950
+        --repo_env=HERMETIC_PYTHON_VERSION=3.14
+        --repo_env=SYSROOT_DIST=linux_glibc_2_31
+        --bes_keywords=jax
+        --bes_keywords=upstream
+        --bes_keywords=nightly
+      ROCM_DISTRO_ARGS: >-
+        --repo_env=ROCM_PATH=
+        --repo_env=ROCM_DISTRO_URL=${{ matrix.mode.distro_url }}
+        --repo_env=ROCM_DISTRO_HASH=${{ matrix.mode.distro_hash }}
+    strategy:
+      fail-fast: false
+      matrix:
+        mode:
+          - name: "therock_release"
+            distro_url: "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.0.0.tar.gz"
+            distro_hash: "1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6"
+          - name: "therock_nightly"
+            distro_url: "https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${{ needs.rocm-config.outputs.therock-version }}.tar.gz"
+            distro_hash: "no_hash"
+    container:
+      image: ${{ needs.rocm-config.outputs.docker-image }}
+
+    steps:
+      - name: Checking out openxla/xla
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ inputs.repository || github.event.pull_request.head.repo.full_name }}
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Checkout JAX upstream
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: jax-ml/jax
+          ref: main
+          path: jax
+          persist-credentials: false
+
+      - name: CPU Info
+        run: lscpu
+
+      - name: ROCm info
+        run: |
+          if command -v rocminfo >/dev/null 2>&1; then
+            "$(command -v rocminfo)"
+          elif [ -x /opt/rocm/bin/rocminfo ]; then
+            /opt/rocm/bin/rocminfo
+          else
+            echo "rocminfo not found in this container image; skipping diagnostic step."
+          fi
+
+      - name: Run JAX Unit Tests [${{ matrix.mode.name }}] [single_gpu]
+        timeout-minutes: 120
+        working-directory: jax
+        run: |
+          ./ci/run_bazel_test_rocm_rbe.sh \
+            --override_repository=xla="${GITHUB_WORKSPACE}" \
+            --override_module=xla="${GITHUB_WORKSPACE}" \
+            --config=single_gpu \
+            --//jax:build_jaxlib=wheel \
+            --//jax:build_jax=true \
+            --local_test_jobs=1 \
+            --action_env=JAX_ENABLE_X64=0 \
+            --jobs=20 \
+            --bes_keywords=single_gpu \
+            --build_event_json_file=jax_${{ matrix.mode.name }}_build_events.json \
+            ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS}
+
+      - name: Upload JAX BEP File
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: jax-bep-${{ matrix.mode.name }}
+          path: jax/jax_${{ matrix.mode.name }}_build_events.json
+          if-no-files-found: warn

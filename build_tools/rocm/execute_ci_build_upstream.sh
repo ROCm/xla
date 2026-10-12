@@ -47,6 +47,6 @@ done
     ) \
     --cache_test_results=yes \
     --nokeep_going \
-    --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu_do_gfx950 \
+    --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
     -- \
     //xla/...
