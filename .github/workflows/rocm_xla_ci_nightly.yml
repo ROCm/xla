@@ -31,6 +31,7 @@ on:
     paths:
       - '.github/workflows/rocm_xla_ci_nightly.yml'
       - '.github/workflows/rocm_xla_ci_sanitizers.yml'
+      - '.github/workflows/rocm_xla_ci_jax.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -185,3 +186,11 @@ jobs:
       repository: openxla/xla
       ref: main
       run_sanitizers: true
+
+  # Call JAX upstream workflow as a separate job
+  jax-upstream:
+    uses: ./.github/workflows/rocm_xla_ci_jax.yml
+    with:
+      repository: openxla/xla
+      ref: main
+      run_jax: true
