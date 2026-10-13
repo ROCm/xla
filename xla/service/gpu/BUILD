@@ -1939,6 +1939,7 @@ cc_library(
         "//xla/backends/gpu/transforms:async_wrapper",
         "//xla/backends/gpu/transforms:block_scaling_rewriter",
         "//xla/backends/gpu/transforms:composite_rewriter",
+        "//xla/backends/gpu/transforms:convert_triton_conv_config",
         "//xla/backends/gpu/transforms:convert_triton_gemm_config",
         "//xla/backends/gpu/transforms:cublas_pad_for_gemms",
         "//xla/backends/gpu/transforms:deviceless_estimate_cub_sort_scratch_size",
