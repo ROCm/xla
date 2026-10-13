@@ -299,7 +299,9 @@ selection and per-leaf CSV naming — behind three arguments:
 
 - `<hlo_runner_main>` — the built binary.
 - `<hlo_path>` — the `hlo_eval_tools` root, **or** any subtree (a single category
-  or model dir), **or** a single leaf dir, **or** a single `.txt`/`.hlo` module.
+  or model dir), **or** a single leaf dir, **or** a single `.txt`/`.hlo` module
+  (or `.mlirbc` artifact, see
+  [StableHLO portable artifacts](#stablehlo-portable-artifacts-input_formatstablehlo)).
   Every `training/` and `inference/<N>gpu/` leaf beneath it is profiled; empty
   leaves (e.g. `alphafold3/training`) are skipped.
 - `<out>` — a **directory** (one CSV per leaf, e.g.
@@ -335,6 +337,77 @@ Behavior is tunable with environment variables:
 | `ARG_MODE` | `uninitialized` | The runner's `--hlo_argument_mode`. |
 | `SETTLE_SEC` | `2` | Seconds paused between runner processes so GPU memory is reclaimed (helps back-to-back multi-GPU runs). |
 | `CAPTURE_RESOLVED_XLA_FLAGS` | `false` | `true` enables `gpu_compiler` VLOG(1) for the first runner process and records its resolved `DebugOptions`; later invocations retain normal logging. |
+| `INPUT_FORMAT` | `hlo` | `hlo` profiles the `*.txt`/`*.hlo` modules; `stablehlo` profiles the `*.mlirbc` artifacts written by `convert_hlo_to_stablehlo.py` (see below). |
+| `XLA_TRANSLATE`, `STABLEHLO_TRANSLATE` | next to the runner in the same `bazel-bin` | Tools used to lower `*.mlirbc` to HLO when the runner lacks `--input_format=stablehlo`. Build them at the runner's revision. |
+
+### StableHLO portable artifacts (`INPUT_FORMAT=stablehlo`)
+
+HLO text has no cross-version compatibility guarantee, so a module dumped by one
+XLA release may not parse on an older or newer `multihost_hlo_runner`. StableHLO
+portable artifacts (versioned VHLO bytecode) load for 5 years backward and 2
+years forward, as long as they are serialized for a StableHLO version no newer
+than that of the oldest XLA that has to read them.
+
+`convert_hlo_to_stablehlo.py` converts the collected modules. Build its tools at
+the XLA revision that produced the HLO (`rocm-jaxlib-v0.10.2` for the current
+corpus, see [Collected results](#collected-results)):
+
+```bash
+bazel build -c opt //xla/hlo/translate:xla-translate //xla/mlir_hlo:mlir-hlo-opt \
+  @stablehlo//:stablehlo-translate
+
+python3 convert_hlo_to_stablehlo.py hlo_eval_tools \
+  --xla-translate "$XLA/bazel-bin/xla/hlo/translate/xla-translate" \
+  --mlir-hlo-opt "$XLA/bazel-bin/xla/mlir_hlo/mlir-hlo-opt" \
+  --stablehlo-translate "$XLA/bazel-bin/external/stablehlo/stablehlo-translate"
+```
+
+(Under bzlmod the last tool lives in
+`bazel-bin/external/+third_party_ext+stablehlo/`.)
+
+For every `<stem>.txt` / `<stem>.hlo` module it writes, next to it:
+
+- `<stem>.mlirbc`, the portable artifact;
+- `<stem>.mlirbc.meta`, a `key=value` sidecar with `num_partitions`, the
+  target version, `strip_debuginfo` and the source module's sha256.
+
+The default `--target` is `1.13.1`, the StableHLO version of
+`rocm-jaxlib-v0.8.0`; lower it if an older runner has to read the artifacts.
+Each artifact is read back, lowered to HLO again, and its per-computation
+opcode counts are compared with the original (shardings and other attributes
+are not compared). Modules are reported as `OK`, `DIFF` (converted, but
+inspect before trusting its numbers), `SKIP` (already converted from the same
+module with the same `--target` and `--strip-debuginfo`; `--force` redoes it)
+or `FAIL`. Only pre-optimization HLO converts.
+
+Profile the artifacts by setting `INPUT_FORMAT=stablehlo`:
+
+```bash
+INPUT_FORMAT=stablehlo ./run_hlo_eval.sh …/hlo_runner_main hlo_eval_tools results_stablehlo
+```
+
+- A runner with `--input_format=stablehlo` (openxla/xla@49468c7ea9; not in
+  `rocm-jaxlib-v0.10.2` or earlier) reads the artifacts directly.
+- With an older runner, the script first lowers each artifact to HLO with
+  `stablehlo-translate --deserialize` and `xla-translate --stablehlo-to-hlo`.
+  Both tools must come from the runner's own revision. By default they are
+  looked up in the runner's `bazel-bin`; build them there with
+  `bazel build -c opt //xla/hlo/translate:xla-translate @stablehlo//:stablehlo-translate`,
+  or point `XLA_TRANSLATE` / `STABLEHLO_TRANSLATE` at them. A module that cannot
+  be lowered fails its leaf.
+- The CSV columns are named after the `.mlirbc` files, so write StableHLO runs
+  to a separate output directory; appending them to a `.txt` CSV (or the other
+  way round) fails the leaf.
+- The multi-branch campaign builds both tools with every target and passes
+  their paths to the script.
+
+The two paths do not convert the artifacts the same way. A native runner uses
+XLA's `ConvertStablehloToHlo`, which also recomposes CHLO ops and runs
+StableHLO's target-independent simplifications before exporting HLO; the
+fallback uses `xla-translate --stablehlo-to-hlo`. The converter's round-trip
+check only covers the fallback, so its `OK` says nothing about the native path,
+and timings of a native target against a fallback target (e.g. `upstream/main`
+against the pinned control) also include that difference.
 
 ### Automated: XLA multi-branch campaign and HTML report
 
@@ -390,9 +463,9 @@ python3 generate_xla_hlo_campaign_report.py \
   file must contain exactly one `control` and one or more `candidate` entries.
 
 The campaign also reuses the evaluator environment controls documented above:
-`ARG_MODE`, `CMD_BUFFER`, and `ORDER`. It currently sets `SETTLE_SEC=0` while
-invoking `run_hlo_eval.sh`; campaign resume is not provided by the evaluator's
-leaf-level `RESUME` setting.
+`ARG_MODE`, `CMD_BUFFER`, `ORDER` and `INPUT_FORMAT`. It currently sets
+`SETTLE_SEC=0` while invoking `run_hlo_eval.sh`; campaign resume is not
+provided by the evaluator's leaf-level `RESUME` setting.
 
 Multi-branch campaigns set `CAPTURE_RESOLVED_XLA_FLAGS=true` for each target.
 Direct positional runs keep the default `false` unless explicitly overridden.
@@ -561,6 +634,14 @@ repeat is skipped) and writes it on process exit:
   `3.142ms`).
 - HLO files are kept in a stable sorted order so the header and every data row
   line up column-for-column.
+
+For runners without `--append_profile_to_csv_file` (or without
+`--profile_csv_statistic` while `STAT` is set), `run_hlo_eval.sh` writes the
+row itself from the runner's `## Execution time` output, matching cells to the
+header by name (modules without a timing get an empty cell). The runner
+matches them by position, so after a run that fails partway its row no longer
+fits the header; the script then fails the leaf. Move such a CSV aside before
+appending further runs to it.
 
 Example — real output from profiling `llama3_8b` 8-GPU inference on gfx950 with
 the built `hlo_runner_main`

@@ -32,6 +32,12 @@ TARGET_CONFIG = SCRIPT_DIR / "xla_targets.json"
 EVAL_SCRIPT = SCRIPT_DIR / "run_hlo_eval.sh"
 RUNNER_TARGET = "//xla/tools/multihost_hlo_runner:hlo_runner_main"
 RUNNER_PATH = Path("xla/tools/multihost_hlo_runner/hlo_runner_main")
+# run_hlo_eval.sh's lowering tools for runners without --input_format=stablehlo,
+# built with every target when INPUT_FORMAT=stablehlo (env var -> label).
+STABLEHLO_TOOL_TARGETS = {
+    "XLA_TRANSLATE": "//xla/hlo/translate:xla-translate",
+    "STABLEHLO_TRANSLATE": "@stablehlo//:stablehlo-translate",
+}
 ROCM_BAZELRC = Path("build_tools/rocm/rocm_xla_ci.bazelrc")
 BAZEL_BUILD_OPTIONS = ("-c", "opt", "--config=rocm")
 BAZEL_ROCM_REPO_ENV_KEYS = (
@@ -145,6 +151,30 @@ def bazel_info_path(
     )
     path = Path(output.splitlines()[-1])
     return path if path.is_absolute() else (source_repo / path).resolve()
+
+
+def bazel_output_file(
+    *,
+    bazelrc: Path,
+    source_repo: Path,
+    execution_root: Path,
+    label: str,
+    output_user_root: Path | None,
+    repo_env: dict[str, str] | None = None,
+) -> Path:
+    """Query the absolute path of one built target's output file."""
+    output = run_and_capture_stdout(
+        build_bazel_command(
+            bazelrc=bazelrc,
+            subcommand="cquery",
+            arguments=["--output=files", label],
+            output_user_root=output_user_root,
+            repo_env=repo_env,
+        ),
+        source_repo,
+    )
+    path = Path(output.splitlines()[-1])
+    return path if path.is_absolute() else execution_root / path
 
 
 def classify_rocm_runtime_mode(
@@ -286,13 +316,19 @@ def workload_leaf_relative_path(leaf: Path) -> str:
 
 def build_hlo_workload_inventory(hlo_path: Path) -> dict[str, Any]:
     """Describe every selected non-empty workload leaf and HLO module."""
+    # Mirrors run_hlo_eval.sh's INPUT_FORMAT module selection.
+    suffixes = (
+        {".mlirbc"}
+        if os.environ.get("INPUT_FORMAT") == "stablehlo"
+        else {".txt", ".hlo"}
+    )
     files = (
         [hlo_path]
         if hlo_path.is_file()
         else [
             path
             for path in hlo_path.rglob("*")
-            if path.is_file() and path.suffix in {".txt", ".hlo"}
+            if path.is_file() and path.suffix in suffixes
         ]
     )
     modules_by_leaf: dict[Path, list[str]] = {}
@@ -791,10 +827,14 @@ def build_and_evaluate_target(
         if not bazelrc.is_file():
             raise RuntimeError(f"required ROCm BazelRC is missing: {bazelrc}")
         repo_env = rocm_bazel_repo_env()
+        stablehlo_input = os.environ.get("INPUT_FORMAT") == "stablehlo"
+        build_targets = [RUNNER_TARGET]
+        if stablehlo_input:
+            build_targets.extend(STABLEHLO_TOOL_TARGETS.values())
         build = build_bazel_command(
             bazelrc=bazelrc,
             subcommand="build",
-            arguments=[RUNNER_TARGET],
+            arguments=build_targets,
             output_user_root=bazel_output_user_root,
             repo_env=repo_env,
         )
@@ -829,6 +869,21 @@ def build_and_evaluate_target(
         runner = bazel_bin / RUNNER_PATH
         if not runner.is_file() or not os.access(runner, os.X_OK):
             raise RuntimeError(f"built runner is missing: {runner}")
+        # Pass this build's outputs; bazel-bin may hold another target's.
+        stablehlo_tools: dict[str, str] = {}
+        if stablehlo_input:
+            for name, label in STABLEHLO_TOOL_TARGETS.items():
+                tool = bazel_output_file(
+                    bazelrc=bazelrc,
+                    source_repo=source_repo,
+                    execution_root=execution_root,
+                    label=label,
+                    output_user_root=bazel_output_user_root,
+                    repo_env=repo_env,
+                )
+                if not tool.is_file() or not os.access(tool, os.X_OK):
+                    raise RuntimeError(f"built {label} is missing: {tool}")
+                stablehlo_tools[name] = str(tool)
 
         rocm_root = execution_root / BAZEL_ROCM_ROOT
         if rocm_root.is_dir():
@@ -868,6 +923,7 @@ def build_and_evaluate_target(
         environment = os.environ.copy()
         environment["CAPTURE_RESOLVED_XLA_FLAGS"] = "true"
         environment["SETTLE_SEC"] = "0"
+        environment.update(stablehlo_tools)
         result.update(stage="evaluation", log=eval_log)
         eval_rc = run_command_with_log(
             command, execution_root, eval_log, env=environment
@@ -903,6 +959,12 @@ def main() -> int:
     args = parse_args()
     if args.num_repeats < 1:
         raise ValueError("--num-repeats must be at least 1")
+    # Unset or empty means hlo, as in run_hlo_eval.sh.
+    input_format = os.environ.get("INPUT_FORMAT") or "hlo"
+    if input_format not in ("hlo", "stablehlo"):
+        raise ValueError(
+            f"INPUT_FORMAT must be hlo or stablehlo, not {input_format!r}"
+        )
     if not EVAL_SCRIPT.is_file():
         raise ValueError(f"evaluator not found: {EVAL_SCRIPT}")
 
@@ -963,6 +1025,7 @@ def main() -> int:
                     ),
                     "cmd_buffer": os.environ.get("CMD_BUFFER", "off"),
                     "order": os.environ.get("ORDER", "size"),
+                    "input_format": input_format,
                     "settle_sec": 0,
                 }
             },
