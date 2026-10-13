@@ -173,6 +173,38 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "conv_search_space",
+    srcs = ["conv_search_space.cc"],
+    hdrs = ["conv_search_space.h"],
+    deps = [
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/service/gpu:conv_utils",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/strings",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+xla_cc_test(
+    name = "conv_search_space_test",
+    srcs = ["conv_search_space_test.cc"],
+    deps = [
+        ":conv_search_space",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/hlo/testlib:verified_hlo_module",
+        "//xla/hlo/utils:hlo_query",
+        "//xla/service/gpu:conv_utils",
+        "//xla/service/gpu:gpu_device_info_for_tests",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 xla_cc_test(
     name = "cost_model_config_optimization_test",
     srcs = ["cost_model_config_optimization_test.cc"],
