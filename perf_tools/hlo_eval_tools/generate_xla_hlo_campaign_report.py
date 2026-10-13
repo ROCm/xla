@@ -30,6 +30,9 @@ SUMMARY_RE = re.compile(
 RUNNING_RE = re.compile(r"^\*\* Running (.+) \*\*$")
 LEAF_RE = re.compile(r"^leaf:\s+(.+)$")
 RUN_RE = re.compile(r"^\s*run:\s*N=(\d+)")
+# run_hlo_eval.sh's per-leaf failure line: "  FAIL: <reason> -> <csv>".
+FAIL_RE = re.compile(r"(?:^|\s)FAIL: (.+?) -> (.+)$")
+RUNNER_FAILURE = "runner exited non-zero"
 PERFORMANCE_REVIEW_THRESHOLD_PERCENT = 2.0
 DISPLAYED_RESOLVED_XLA_FLAGS = (
     "xla_gpu_all_reduce_combine_threshold_bytes",
@@ -328,6 +331,7 @@ def build_focused_reproduction_command(
     leaf_path: str,
     repeats: int,
     settle_sec: int,
+    input_format: str = "hlo",
 ) -> str:
     paths = result.get("paths", {})
     runner = paths.get("runner")
@@ -357,7 +361,12 @@ def build_focused_reproduction_command(
     return prefix + (
         f"mkdir -p {shlex.quote(output_dir)}\n"
         f"SETTLE_SEC={settle_sec} CMD_BUFFER=off "
-        "\\\n  "
+        + (
+            "INPUT_FORMAT=stablehlo "
+            if input_format == "stablehlo"
+            else ""
+        )
+        + "\\\n  "
         + " \\\n  ".join(shlex.quote(part) for part in command)
     )
 
@@ -457,25 +466,44 @@ def parse_target_evaluation_log(
                 candidate_priority = priority
                 candidate_line = line_number
 
-            if "FAIL: runner exited non-zero" not in line:
+            fail_match = FAIL_RE.search(line)
+            if fail_match is None:
                 continue
+            reason = fail_match.group(1)
+            runner_failure = reason == RUNNER_FAILURE
 
-            inline = line.split("FAIL: runner exited non-zero", 1)[0].strip()
-            inline_priority = failure_evidence_priority(inline)
-            if inline_priority >= candidate_priority and inline_priority:
-                candidate_error = inline
-                candidate_priority = inline_priority
-                candidate_line = line_number
+            if runner_failure:
+                inline = line.split("FAIL:", 1)[0].strip()
+                inline_priority = failure_evidence_priority(inline)
+                if inline_priority >= candidate_priority and inline_priority:
+                    candidate_error = inline
+                    candidate_priority = inline_priority
+                    candidate_line = line_number
             if not leaf:
-                output_match = re.search(r"->\s+(.+)$", line)
-                if output_match:
-                    workload = Path(output_match.group(1)).name
-                    leaf = workload
-                    leaf_path = leaf
+                workload = Path(fail_match.group(2)).name
+                leaf = workload
+                leaf_path = leaf
 
-            category, signature = classify_failure_signature(
-                candidate_error, leaf
-            )
+            if runner_failure:
+                category, signature = classify_failure_signature(
+                    candidate_error, leaf
+                )
+                raw_error = (
+                    normalize_evaluation_log_line(candidate_error)
+                    or "Runner exited non-zero"
+                )
+                root_error_line = candidate_line or line_number
+            else:
+                # The evaluator's own checks (lowering, timings, CSV layout)
+                # fail the whole leaf; the reason is the evidence. Drop its
+                # per-leaf CSV path and counts so the signatures group.
+                category = "Evaluator check"
+                signature = re.sub(
+                    r"\b\d+\b", "N", re.sub(r"\S+\.csv\b", "<csv>", reason)
+                )
+                raw_error = reason
+                root_error_line = line_number
+                module_path = None
             group = parse_workload_hierarchy(leaf)
             module = (
                 PurePosixPath(module_path).name
@@ -497,12 +525,11 @@ def parse_target_evaluation_log(
                     "module_path": module_path,
                     "category": category,
                     "signature": signature,
-                    "raw_error": normalize_evaluation_log_line(candidate_error)
-                    or "Runner exited non-zero",
+                    "raw_error": raw_error,
                     "log_path": str(path),
                     "log_uri": path.resolve().as_uri(),
                     "log_line": line_number,
-                    "root_error_line": candidate_line or line_number,
+                    "root_error_line": root_error_line,
                     "repro_command": build_focused_reproduction_command(
                         result=result,
                         slug=branch["slug"],
@@ -511,6 +538,9 @@ def parse_target_evaluation_log(
                         leaf_path=leaf_path,
                         repeats=int(benchmark.get("num_repeats", 1)),
                         settle_sec=int(benchmark.get("settle_sec", 0)),
+                        input_format=str(
+                            benchmark.get("input_format", "hlo")
+                        ),
                     ),
                     "domain": group["category"],
                     "model": group["model"],
@@ -891,6 +921,9 @@ def build_campaign_report_data(campaign_dir: Path) -> dict[str, Any]:
                         leaf_path=leaf_path,
                         repeats=int(benchmark.get("num_repeats", 1)),
                         settle_sec=int(benchmark.get("settle_sec", 0)),
+                        input_format=str(
+                            benchmark.get("input_format", "hlo")
+                        ),
                     ),
                     "domain": group["category"],
                     "model": group["model"],
