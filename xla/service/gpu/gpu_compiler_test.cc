@@ -1476,6 +1476,11 @@ TEST_F(PassOrderTest, ConvertTritonGemmConfigRunsAfterConfigAssigner) {
                                   "convert_triton_gemm_config");
 }
 
+TEST_F(PassOrderTest, ConvertTritonConvConfigRunsAfterConfigAssigner) {
+  VerifyPassRunsAtLeastOnceBefore("config-assigner",
+                                  "convert_triton_conv_config");
+}
+
 TEST_F(PassOrderTest,
        ReducePrecisionIsRemovedAfterAllCallsToSimplifyFPConversions) {
   // Because of an issue with JAX remat and `SimplifyFPConversions` (see PR:
