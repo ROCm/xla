@@ -1,0 +1,5 @@
+num_partitions=1
+stablehlo_target=1.13.1
+strip_debuginfo=false
+source=alphafold3.inference.before_optimizations.txt
+source_sha256=60fa4513cc9bd1643fd72744c258b4fe4865695b666eeb859a93318d65d1fedf

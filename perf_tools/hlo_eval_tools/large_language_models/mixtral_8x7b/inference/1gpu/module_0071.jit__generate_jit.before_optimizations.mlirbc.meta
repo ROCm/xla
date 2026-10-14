@@ -1,0 +1,5 @@
+num_partitions=1
+stablehlo_target=1.13.1
+strip_debuginfo=false
+source=module_0071.jit__generate_jit.before_optimizations.txt
+source_sha256=45be8378230e878a777918d3aba0d2cafc7ff9532c2c4fd75eefb1bc28b594cc
