@@ -370,7 +370,8 @@ FusionDecision CanFuseSiblings(const HloInstruction& sibling_consumer_1,
                                const HloDfsReachability& reachability,
                                FusionInfoCache* fusion_info_cache,
                                HloFusionAnalysisCache* fusion_analysis_cache,
-                               const se::DeviceDescription& device_info) {
+                               const se::DeviceDescription& device_info,
+                               bool guard_column_reduction_siblings) {
   if (reachability.IsConnected(&sibling_consumer_1, &sibling_consumer_2)) {
     return FusionDecision::Forbid(
         absl::StrCat(sibling_consumer_1.name(), " and ",
@@ -389,9 +390,11 @@ FusionDecision CanFuseSiblings(const HloInstruction& sibling_consumer_1,
   RETURN_IF_NOT_FUSIBLE(ParameterSlicesAreNonOverlapping(
       sibling_consumer_1, sibling_consumer_2, &common_producer));
 
-  RETURN_IF_NOT_FUSIBLE(ColumnReductionDoesNotStarveSibling(
-      sibling_consumer_1, sibling_consumer_2, device_info,
-      fusion_analysis_cache));
+  if (guard_column_reduction_siblings) {
+    RETURN_IF_NOT_FUSIBLE(ColumnReductionDoesNotStarveSibling(
+        sibling_consumer_1, sibling_consumer_2, device_info,
+        fusion_analysis_cache));
+  }
 
   // This check should be last, as it may be expensive.
   RETURN_IF_NOT_FUSIBLE(LegalToFuse(sibling_consumer_1, sibling_consumer_2,
@@ -416,6 +419,10 @@ bool MultiOutputFusion::FuseSiblings(
   const HloModule* module = computation->parent();
   bool dump_fusion =
       module->config().debug_options().xla_dump_fusion_visualization();
+  bool guard_column_reduction_siblings =
+      module->config()
+          .debug_options()
+          .xla_gpu_experimental_guard_column_reduction_sibling_fusion();
 
   if (!IsProfitableOperand(parent)) {
     VLOG(3) << "Operand " << parent->ToShortString() << " is not profitable";
@@ -443,9 +450,10 @@ bool MultiOutputFusion::FuseSiblings(
     for (auto j = i + 1; j != siblings.end();) {
       VLOG(3) << "Considering " << (*i)->name() << " and " << (*j)->name();
 
-      if (auto fusible = CanFuseSiblings(**i, **j, *parent, *reachability_,
-                                         fusion_info_cache,
-                                         fusion_analysis_cache, device_info_);
+      if (auto fusible = CanFuseSiblings(
+              **i, **j, *parent, *reachability_, fusion_info_cache,
+              fusion_analysis_cache, device_info_,
+              guard_column_reduction_siblings);
           !fusible) {
         // We pick `j` arbitrarily as a consumer.
         if (dump_fusion) {

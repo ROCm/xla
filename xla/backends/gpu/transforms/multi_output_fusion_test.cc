@@ -147,6 +147,34 @@ TEST_F(MultiOutputFusionTest, NoSiblingFusionOfColumnReductionAndElementwise) {
   ASSERT_FALSE(mof_.Run(module.get()).value());
 }
 
+TEST_F(MultiOutputFusionTest,
+       SiblingFusionOfColumnReductionAndElementwiseWithGuardDisabled) {
+  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
+    fused_reduce {
+      p0.1 = f32[4096,768]{1,0} parameter(0)
+      const.1 = f32[] constant(0)
+      ROOT reduce = f32[768]{0} reduce(p0.1, const.1), dimensions={0}, to_apply=scalar_add_computation
+    }
+
+    fused_elementwise {
+      p0.2 = f32[4096,768]{1,0} parameter(0)
+      ROOT sqrt = f32[4096,768]{1,0} sqrt(p0.2)
+    }
+
+    ENTRY entry {
+      p0 = f32[4096,768]{1,0} parameter(0)
+      reduce_fusion = f32[768]{0} fusion(p0), kind=kInput, calls=fused_reduce
+      elementwise_fusion = f32[4096,768]{1,0} fusion(p0), kind=kLoop, calls=fused_elementwise
+      ROOT root = (f32[768]{0}, f32[4096,768]{1,0}) tuple(reduce_fusion, elementwise_fusion)
+    })"))
+                    .value();
+  module->mutable_config()
+      .mutable_debug_options()
+      .set_xla_gpu_experimental_guard_column_reduction_sibling_fusion(false);
+  ASSERT_TRUE(mof_.Run(module.get()).value());
+  EXPECT_EQ(CountMultiOutputFusions(module.get()), 1);
+}
+
 TEST_F(MultiOutputFusionTest, MultiOutputFusionDifferentReduceInputShapes) {
   auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
     fused_computation_1 {
