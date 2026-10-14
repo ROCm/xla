@@ -276,12 +276,24 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "rocm_core_libs",
+    data = glob(["%{rocm_root}/lib/librocm-core.so*"]),
+)
+
 rocm_lib_import(
     name = "miopen",
     data = glob([
         "%{rocm_root}/lib/libMIOpen.so*",
-        "%{rocm_root}/share/miopen/**",
-        "%{rocm_root}/lib/librocm-core.so*",
+    ]) + glob([
+        "%{rocm_root}/share/miopen/db/" + arch + "*"
+        for arch in rocm_gpu_architectures()
+    ]) + glob([
+        "%{rocm_root}/lib/libMIOpenCKGroupedConv_" + arch + ".so"
+        for arch in rocm_gpu_architectures()
+    ]) + glob([
+        "%{rocm_root}/.kpack/miopen_lib_" + arch + ".kpack"
+        for arch in rocm_gpu_architectures()
     ]),
     interface_library = "%{rocm_root}/lib/libMIOpen.so",
     deps = [
@@ -290,6 +302,7 @@ rocm_lib_import(
         ":hipblaslt_libs",
         ":hiprtc_libs",
         ":rocblas_libs",
+        ":rocm_core_libs",
         ":roctx_libs",
         ":system_libs",
     ],
@@ -305,6 +318,7 @@ rocm_lib_import(
     deps = [
         ":amdsmi_libs",
         ":hip_runtime_libs",
+        ":rocm_core_libs",
         ":rocm_smi_libs",
         ":rocprofiler_register_libs",
         ":roctx_libs",
@@ -357,11 +371,16 @@ rocm_lib_import(
 cc_library(
     name = "rocsparse_libs",
     data = glob(["%{rocm_root}/lib/librocsparse.so*"]) + glob([
-        "%{rocm_root}/.kpack/blas_lib_" + arch + ".kpack"
+        pattern
         for arch in rocm_gpu_architectures()
+        for pattern in (
+            "%{rocm_root}/.kpack/blas_lib_" + arch + ".kpack",
+            "%{rocm_root}/.kpack/sparse_lib_" + arch + ".kpack",
+        )
     ]),
     deps = [
         ":hip_runtime_libs",
+        ":rocblas_libs",
         ":roctx_libs",
     ],
 )
@@ -386,7 +405,10 @@ rocm_lib_import(
 
 rocm_lib_import(
     name = "rocprofiler_sdk",
-    data = glob(["%{rocm_root}/lib/librocprofiler-sdk*.so*"]),
+    data = glob([
+        "%{rocm_root}/lib/librocprofiler-sdk*.so*",
+        "%{rocm_root}/lib/libhsa-amd-aqlprofile64.so*",
+    ]),
     interface_library = "%{rocm_root}/lib/librocprofiler-sdk.so",
     deps = [
         ":amd_comgr_libs",
@@ -400,8 +422,12 @@ rocm_lib_import(
         "%{rocm_root}/lib/librocsolver.so*",
         "%{rocm_root}/lib/host-math/lib/*.so*",
     ]) + glob([
-        "%{rocm_root}/.kpack/blas_lib_" + arch + ".kpack"
+        pattern
         for arch in rocm_gpu_architectures()
+        for pattern in (
+            "%{rocm_root}/.kpack/blas_lib_" + arch + ".kpack",
+            "%{rocm_root}/.kpack/solver_lib_" + arch + ".kpack",
+        )
     ]),
     interface_library = "%{rocm_root}/lib/librocsolver.so",
     deps = [
@@ -438,6 +464,8 @@ rocm_lib_import(
         [
             "%{rocm_root}/lib/libhipblaslt.so*",
             "%{rocm_root}/lib/librocroller.so*",
+            "%{rocm_root}/lib/liborigami.so*",
+            "%{rocm_root}/lib/libtensilelite-host.so*",
         ],
     ) + glob([
         pattern
