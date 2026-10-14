@@ -677,6 +677,7 @@ cc_library(
         "//xla/service/gpu:cublas_cudnn",
         "//xla/service/gpu:ir_emission_utils",
         "//xla/service/gpu:matmul_utils",
+        "//xla/service/gpu:stream_executor_util",
         "//xla/stream_executor:blas",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:semantic_version",
@@ -691,6 +692,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
     ],
 )
 

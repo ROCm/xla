@@ -27,6 +27,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/synchronization/mutex.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -37,6 +38,7 @@ limitations under the License.
 #include "xla/service/gpu/cublas_cudnn.h"
 #include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/service/gpu/matmul_utils.h"
+#include "xla/service/gpu/stream_executor_util.h"
 #include "xla/shape.h"
 #include "xla/shape_layout.h"
 #include "xla/shape_util.h"
@@ -219,6 +221,11 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
     return absl::InvalidArgumentError(
         "HipblasLtBackend cannot enumerate configs in deviceless mode.");
   }
+
+  // hipBLASLt's first heuristic query for a problem type can hold the BlasLt
+  // mutex for hundreds of ms; sharing the GPU lock keeps concurrent profiling
+  // from blocking on it inside its delay-kernel timed region.
+  absl::ReaderMutexLock gpu_lock(GetGpuMutex(stream_executor()));
 
   if (IsCublasLtMatmul(instr) || IsCublasLtMatmulF8(instr)) {
     ABSL_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
