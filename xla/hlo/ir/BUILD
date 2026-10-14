@@ -209,6 +209,17 @@ xla_cc_test(
     ],
 )
 
+xla_cc_test(
+    name = "hlo_composite_clone_test",
+    srcs = ["hlo_composite_clone_test.cc"],
+    deps = [
+        ":hlo",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 cc_library(
     name = "mesh_and_axis",
     srcs = ["mesh_and_axis.cc"],

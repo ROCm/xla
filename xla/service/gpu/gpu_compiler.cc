@@ -736,6 +736,12 @@ absl::Status RunSPMDPasses(
     AddSPMDPasses(hlo_module, layout_insensitive_algsimp_opts,
                   gpu_target_config.device_description.gpu_compute_capability(),
                   spmd_pipeline, std::nullopt, max_windowed_einsum_iteration);
+    // Custom partitioning callbacks can introduce xla.scaled_dot composites
+    // after the pre-SPMD rewrite, with local shard shapes. Rewrite them to
+    // kScaledDot here; ScaledDotRewriter later expands those the backend
+    // cannot run, and the CallInliner of the optimization pipeline inlines any
+    // composite this pass declines.
+    spmd_pipeline.AddPass<CompositeRewriter>();
     return spmd_pipeline.Run(hlo_module, {HloInstruction::kMainExecutionThread})
         .status();
   } else {
