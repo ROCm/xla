@@ -62,6 +62,7 @@ build:ci_multi_gpu --experimental_guard_against_concurrent_changes
 build:ci_multi_gpu --test_env=HIP_VISIBLE_DEVICES=0,1,2,3
 
 build:ci_rocm_cpu --jobs=50
+build:ci_rocm_cpu --strategy=TestRunner=local
 
 test:xla_sgpu -- \
 //xla/... \
