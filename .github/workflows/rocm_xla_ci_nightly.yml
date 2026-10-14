@@ -67,9 +67,9 @@ jobs:
         env:
           ROCM_PIP_SOURCE: nightlies
           GPU_TARGET: device-all
-          ROCM_SDK_VERSION: ''
+          ROCM_SDK_VERSION: '10.2'
           PIP_INDEX_PATH: ''
-          THEROCK_INDEX_URL: ''
+          THEROCK_INDEX_URL: 'https://nightly.repo.amd.com/rocm/whl-next/'
         run: bash build_tools/rocm/detect-therock-version.sh
 
   execute-xla-ut-nightly:
@@ -101,7 +101,7 @@ jobs:
             distro_hash: "1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6"
             runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
           - name: "therock_nightly"
-            distro_url: "https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${{ needs.rocm-config.outputs.therock-version }}.tar.gz"
+            distro_url: "https://nightly.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-${{ needs.rocm-config.outputs.therock-version }}.tar.gz"
             distro_hash: "no_hash"
             runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
     container:
