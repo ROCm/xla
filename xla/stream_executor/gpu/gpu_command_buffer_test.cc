@@ -883,7 +883,7 @@ TEST_F(GpuCommandBufferTest, UpdateEmptyCommandBuffer) {
   StreamExecutor* executor = platform->ExecutorForDevice(0).value();
 
   if (executor->GetPlatform()->id() == cuda::kCudaPlatformId) {
-    GTEST_SKIP() << "Covers ROCm's empty graph handling";
+    GTEST_SKIP() << "Tests a ROCm-only code path";
   }
 
   ASSERT_OK_AND_ASSIGN(auto stream, executor->CreateStream());

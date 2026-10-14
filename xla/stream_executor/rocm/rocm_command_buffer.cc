@@ -537,9 +537,8 @@ absl::StatusOr<size_t> RocmCommandBuffer::GetNodeCount() const {
 }
 
 absl::Status RocmCommandBuffer::PrepareFinalization() {
-  // Updates never add or remove nodes, and the create-time finalization
-  // already made the graph non-empty. hipGraphGetNodes sorts the whole graph
-  // to count it, so skip it on every update.
+  // Only Create* methods add nodes, and they all require State::kCreate, so
+  // the create-time finalization already made this graph non-empty.
   if (state() == State::kUpdate) {
     return absl::OkStatus();
   }
