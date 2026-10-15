@@ -45,6 +45,7 @@ jobs:
     outputs:
       docker-image: ${{ steps.out.outputs.docker-image }}
       therock-version: ${{ steps.therock.outputs.therock_version }}
+      therock-index-url: ${{ steps.therock.outputs.therock_index_url }}
     steps:
       - id: out
         shell: bash
@@ -91,20 +92,16 @@ jobs:
         --bes_keywords=jax
         --bes_keywords=upstream
         --bes_keywords=nightly
-      ROCM_DISTRO_ARGS: >-
-        --repo_env=ROCM_PATH=
-        --repo_env=ROCM_DISTRO_URL=${{ matrix.mode.distro_url }}
-        --repo_env=ROCM_DISTRO_HASH=${{ matrix.mode.distro_hash }}
     strategy:
       fail-fast: false
       matrix:
         mode:
           - name: "therock_release"
-            distro_url: "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.0.0.tar.gz"
-            distro_hash: "1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6"
+            index_url: "https://stable.repo.amd.com/rocm/whl-next/"
+            version: "10.0.0"
           - name: "therock_nightly"
-            distro_url: "https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-${{ needs.rocm-config.outputs.therock-version }}.tar.gz"
-            distro_hash: "no_hash"
+            index_url: ${{ needs.rocm-config.outputs.therock-index-url }}
+            version: ${{ needs.rocm-config.outputs.therock-version }}
     container:
       image: ${{ needs.rocm-config.outputs.docker-image }}
 
@@ -126,6 +123,19 @@ jobs:
 
       - name: CPU Info
         run: lscpu
+
+      # JAX tests use pip-installed TheRock, as jax-ml/jax CI does;
+      # ci/run_bazel_test_rocm_rbe.sh points ROCM_PATH at it via rocm-sdk.
+      - name: Install TheRock [${{ matrix.mode.name }}]
+        env:
+          THEROCK_INDEX_URL: ${{ matrix.mode.index_url }}
+          THEROCK_VERSION: ${{ matrix.mode.version }}
+        run: |
+          python3 -m pip install --break-system-packages --pre \
+            --index-url "${THEROCK_INDEX_URL}" \
+            "rocm[libraries,devel,device-gfx950]==${THEROCK_VERSION}"
+          rocm-sdk init
+          rocm-sdk path --root
 
       - name: ROCm info
         run: |
@@ -152,8 +162,7 @@ jobs:
             --jobs=20 \
             --bes_keywords=single_gpu \
             --build_event_json_file=jax_${{ matrix.mode.name }}_build_events.json \
-            ${COMMON_ARGS} \
-            ${ROCM_DISTRO_ARGS}
+            ${COMMON_ARGS}
 
       - name: Upload JAX BEP File
         if: always()
