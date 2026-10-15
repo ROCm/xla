@@ -34,6 +34,25 @@ Review the PR above thoroughly using the checklist below. Be specific: cite file
 
 **CRITICAL SCOPE RULE**: Only flag issues that exist in the PR diff itself — lines added or modified by this PR. Do NOT flag pre-existing code that the PR did not touch, even if that code is in the same files. If a pre-existing problem is worth noting, mention it briefly in a separate "Pre-existing issues (out of scope)" section at the end, never as a BLOCKER or WARNING against this PR.
 
+**PRACTICALITY RULE**: Every finding is one of three kinds, and each kind has its own bar. Every fix adds code that someone has to read and maintain, so a finding has to be worth more than the code it asks for.
+
+**1. Behavioral findings** — bugs, crashes, wrong results, missing handling, performance regressions. This covers sections 1–8, section 10 apart from the style items listed under convention findings, and proto compatibility in section 12. Report such a problem only if it can happen with the code as it stands after this PR — through an existing caller, a supported configuration, or inputs that real workloads produce — and only if the problem outweighs the size and complexity of its fix.
+
+- **Check reachability before reporting.** Use Grep / Read to find the callers of the changed code and the shapes, dtypes, opcodes, and hardware that actually reach it. If you cannot name a concrete path that triggers the problem today, drop the finding.
+- **No future-proofing requests.** Do not ask for handling of cases no caller produces, defensive checks for invariants that upstream code already guarantees, generalization to dtypes / ops / architectures the change does not target, or extension points nothing uses yet. "This would break if someone later..." is not a finding. Exception: ROCm is a supported configuration, so a change to a CUDA path that lacks its ROCm counterpart is reachable today. This rule does not suppress section 6 findings.
+- **Weigh the fix against the risk.** A silent wrong result on a reachable path is worth reporting even if the fix is large. A rare failure that is loud and easy to diagnose is not worth a multi-line guard. If the fix would add more code or conceptual weight than the realistic risk justifies, drop the finding.
+
+**2. Convention findings** — violations of `xla/AGENTS.md`, the items in section 11, the const-correctness, braced-initializer, and `int64_t`-for-sizes-and-indices items in section 10, the file-size and debug-dump items in section 12, and the section 13 PR-size note. These have no triggering path by nature, so the reachability test does not apply. Report them whenever they appear in lines the PR adds or modifies. The exception is the performance guidance in `xla/AGENTS.md` (performance sensitivity, hot-path allocation cost): those items are behavioral findings and must pass the behavioral bar — name the hot path (e.g. a per-instruction loop in a pass, the per-launch runtime path) that makes the cost real. Review is the only check for some of them (e.g. the deprecated `TF_ASSERT_OK*` / `TF_EXPECT_OK` macros, or `TF_RETURN_IF_ERROR` under paths excluded from the CI macro check).
+
+**3. Test-coverage findings** (section 9). Tests are code too, so the same economy applies.
+
+- **Report a missing test when the main behavior the PR adds or changes is not tested at all.** Examples: a new pass with no unit tests, a bug fix with no regression test, or a change that affects ROCm but is tested only on CUDA. One test that pins down the change is enough.
+- **Ask for a corner-case test only when the PR adds code specifically to handle that corner case.** Do not ask for tests of inputs the code cannot receive, for every combination of shapes / dtypes / configs, or for more tests of behavior that is already covered.
+
+**Fewer, real findings beat many plausible ones.** An empty Findings list is a valid outcome for a sound PR. Do not move dropped findings into another section. Items in "Pre-existing issues (out of scope)" must pass the behavioral bar too, and pre-existing convention violations are not listed at all.
+
+The checklist below lists what to look at, not what to demand. An item becomes a finding only when it applies to this PR and clears the bar for its kind.
+
 ---
 
 ## XLA Review Checklist
@@ -50,7 +69,7 @@ Review the PR above thoroughly using the checklist below. Be specific: cite file
 - Does the pass interact safely with adjacent passes (layout assignment, float normalization, SPMD partitioning)?
 - If a pass is wrapped in `HloPassFix<>`, has convergence been verified?
 - Are `HloCSE` and `HloDCE` run after the new pass where needed?
-- For algebraic rewrites: are all edge cases (zero-sized tensors, scalar shapes, dynamic shapes) handled?
+- For algebraic rewrites: are the edge cases that can actually reach the rewrite (zero-sized tensors, scalar shapes, dynamic shapes) handled?
 
 ### 3. Fusion & Fission
 - If the change touches `PriorityFusion` / `MultiOutputFusion` (`xla/backends/gpu/transforms/`) or `xla/service/gpu/gpu_fusible.cc`:
@@ -60,7 +79,6 @@ Review the PR above thoroughly using the checklist below. Be specific: cite file
   - Is `HloFusionAnalysisCache` properly invalidated after graph mutations?
 - If a new `EmitterFusionKind` is added (enum in `xla/service/gpu/hlo_fusion_analysis.h`), is it dispatched in `xla/backends/gpu/codegen/fusions.cc` with a corresponding emitter under `xla/backends/gpu/codegen/emitters/`?
 - For fission passes in `xla/backends/gpu/transforms/` (`ReductionSplitter`, `SplitkRewriter`, `VariadicOpSplitter`): are correctness constraints documented and tested?
-- Is `FusionProcessDumpProto` updated to log new fusion decisions?
 
 ### 4. Triton Integration
 - If the change touches `xla/backends/gpu/codegen/triton/`:
@@ -113,7 +131,7 @@ Review the PR above thoroughly using the checklist below. Be specific: cite file
 - For autotuner changes: are cache hit/miss tests included?
 - For new fusion kinds: is an end-to-end correctness test included?
 - For Triton changes: is a `TritonFusionNumericsVerifier`-compatible test added?
-- Do tests cover edge cases: zero-sized tensors, scalar inputs, dynamic shapes, multi-device?
+- Do tests cover the corner cases the PR adds code specifically to handle (zero-sized tensors, scalar inputs, dynamic shapes, multi-device)?
 
 ### 10. General C++ Correctness
 - **Ownership & lifetime**: Does ownership transfer use `std::unique_ptr`? Are raw pointers used only for non-owning observation? Are there dangling references from `absl::string_view`, `absl::Span`, or `llvm::StringRef` outliving the data they point to?
@@ -154,7 +172,7 @@ Error handling and status macros, `TF_RET_CHECK` vs `DCHECK`, `Decision`, `auto`
 
 ### 12. Code Organization & Debug Support
 - Are large new passes kept under ~500 lines per file? (Reference material in separate files.)
-- Are new debug dump points added (HLO dumping, `FusionProcessDumpProto`)?
+- If the PR adds a new pass or fusion decision, is it visible in the existing dump mechanisms (HLO dumping, `FusionProcessDumpProto`) the way comparable passes and decisions are?
 - If a new proto field is added: is the proto version/compatibility handled?
 
 ### 13. PR Size
@@ -173,5 +191,5 @@ Begin directly with the structured review below. Do not include reasoning, analy
 <2–3 sentence overview of what the PR does>
 
 ## Findings
-- [file:line] <description and why it matters>
+- [file:line] <the problem and why it matters; for behavioral findings, also the concrete path that triggers it today>
 ```
