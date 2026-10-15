@@ -233,8 +233,11 @@ auto BlasLt::RegularMatmulPlan::GetAlgorithms(size_t max_algorithm_count,
   max_algorithm_count = std::min(max_algorithm_count, size_t{INT_MAX});
   std::vector<hipblasLtMatmulHeuristicResult_t> results(max_algorithm_count);
   {
-    absl::MutexLock lock(blas_lt_.mu_);
-    TF_RET_CHECK(blas_lt_.handle_ != nullptr);
+    hipblasLtHandle_t handle = blas_lt_.handle();
+    TF_RET_CHECK(handle != nullptr);
+    // Not blas_lt_.mu_: the first query per problem type can take ~1 s. The
+    // query only reads the handle, and hipBLASLt locks its shared state itself.
+    absl::MutexLock lock(desc_mu_);
 
     hipblasLtMatmulPreference_t hip_preference;
     SE_HIPBLAS_RETURN_IF_ERROR(
@@ -306,9 +309,9 @@ auto BlasLt::RegularMatmulPlan::GetAlgorithms(size_t max_algorithm_count,
 
     int found_algorithm_count = 0;
     auto error = hipblasLtMatmulAlgoGetHeuristic(
-        blas_lt_.handle_.get(), op_desc_.get(), a_desc_.get(), b_desc_.get(),
-        c_desc_.get(), d_desc_.get(), preference.get(), max_algorithm_count,
-        results.data(), &found_algorithm_count);
+        handle, op_desc_.get(), a_desc_.get(), b_desc_.get(), c_desc_.get(),
+        d_desc_.get(), preference.get(), max_algorithm_count, results.data(),
+        &found_algorithm_count);
     if (error != 0) {
       VLOG(0) << "hipblasLtMatmulAlgoGetHeuristic returned " << (int)error;
       SE_HIPBLAS_RETURN_IF_ERROR(error);
@@ -743,6 +746,7 @@ absl::Status BlasLt::RegularMatmulPlan::ExecuteOnStream(
   }
 
   {
+    absl::MutexLock desc_lock(desc_mu_);
     absl::MutexLock lock(blas_lt_.mu_);
     TF_RET_CHECK(blas_lt_.handle_ != nullptr);
     // We must set the bias and aux pointers while holding the mutex, to avoid a
