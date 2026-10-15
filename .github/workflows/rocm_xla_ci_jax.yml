@@ -132,7 +132,7 @@ jobs:
           THEROCK_VERSION: ${{ matrix.mode.version }}
         run: |
           python3 -m pip install --break-system-packages --pre \
-            --index-url "${ROCM_PIP_INDEX_URL:-THEROCK_INDEX_URL}"
+            --index-url "${ROCM_PIP_INDEX_URL:-$THEROCK_INDEX_URL}"
             "rocm[libraries,devel,device-gfx950]==${THEROCK_VERSION}"
           rocm-sdk init
           rocm-sdk path --root
