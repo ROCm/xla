@@ -805,6 +805,75 @@ absl::StatusOr<bool> ShouldRewriteSort(
   return false;
 }
 
+// Same signed-integer map as ComparisonExpander: negative values are xored
+// with the signed max, so integer order matches float total order. The map is
+// its own inverse for types that have a negative zero.
+HloInstruction* ApplySignedTotalOrderBits(HloInstruction* bits) {
+  const Shape& signed_shape = bits->shape();
+  PrimitiveType signed_type = signed_shape.element_type();
+  Shape pred_shape = ShapeUtil::ChangeElementType(signed_shape, PRED);
+  HloComputation* computation = bits->parent();
+  HloInstruction* zero = computation->AddInstruction(
+      HloInstruction::CreateBroadcast(
+          signed_shape, computation->AddInstruction(
+                            HloInstruction::CreateConstant(
+                                LiteralUtil::Zero(signed_type))),
+          {}));
+  HloInstruction* max_value = computation->AddInstruction(
+      HloInstruction::CreateBroadcast(
+          signed_shape,
+          computation->AddInstruction(HloInstruction::CreateConstant(
+              LiteralUtil::MaxValue(signed_type))),
+          {}));
+  HloInstruction* is_negative =
+      computation->AddInstruction(HloInstruction::CreateCompare(
+          pred_shape, bits, zero, ComparisonDirection::kLt));
+  HloInstruction* flipped =
+      computation->AddInstruction(HloInstruction::CreateBinary(
+          signed_shape, HloOpcode::kXor, max_value, bits));
+  return computation->AddInstruction(HloInstruction::CreateTernary(
+      signed_shape, HloOpcode::kSelect, is_negative, flipped, bits));
+}
+
+HloInstruction* OrderedIntegralFromFloat(HloInstruction* value) {
+  int64_t bit_width = primitive_util::BitWidth(value->shape().element_type());
+  PrimitiveType signed_type =
+      primitive_util::SignedIntegralTypeForBitWidth(bit_width);
+  Shape signed_shape = ShapeUtil::ChangeElementType(value->shape(), signed_type);
+  HloInstruction* bits =
+      value->parent()->AddInstruction(HloInstruction::CreateBitcastConvert(
+          signed_shape, value));
+  return ApplySignedTotalOrderBits(bits);
+}
+
+HloInstruction* FloatFromOrderedIntegral(HloInstruction* ordered,
+                                        PrimitiveType float_type) {
+  HloInstruction* restored = ApplySignedTotalOrderBits(ordered);
+  Shape float_shape = ShapeUtil::ChangeElementType(ordered->shape(), float_type);
+  return ordered->parent()->AddInstruction(
+      HloInstruction::CreateBitcastConvert(float_shape, restored));
+}
+
+// True when the sort comparator is a plain float compare with order=TOTAL.
+// NumPy order rewrites the operands before the compare, so it does not match.
+bool IsPlainFloatTotalOrderSort(const HloSortInstruction& sort_op) {
+  if (sort_op.called_computations().empty()) {
+    return false;
+  }
+  const auto* compare = DynCast<HloCompareInstruction>(
+      sort_op.called_computations().front()->root_instruction());
+  if (compare == nullptr || compare->order() != ComparisonOrder::kTotal) {
+    return false;
+  }
+  if (!primitive_util::IsFloatingPointType(
+          compare->operand(0)->shape().element_type())) {
+    return false;
+  }
+  const auto [lhs_parameter, rhs_parameter] =
+      MatchSimpleSortComparator(compare);
+  return lhs_parameter != -1 && rhs_parameter != -1;
+}
+
 }  // namespace
 
 // Rewrites a single sort instruction with a custom call.
@@ -846,6 +915,18 @@ absl::StatusOr<bool> SortRewriter::RunOnInstruction(
     values = packed.second;
   }
 
+  // rocprim's float radix sort equates +0 and -0. On ROCm, convert a plain
+  // total-order float key to signed-integer order, sort that key, then
+  // convert the sorted keys back.
+  bool encode_total_order = false;
+  PrimitiveType original_key_type = keys->shape().element_type();
+  if (device_description_.gpu_compute_capability().IsRocm() &&
+      primitive_util::HasNegativeZero(original_key_type) &&
+      IsPlainFloatTotalOrderSort(*sort_op)) {
+    encode_total_order = true;
+    keys = OrderedIntegralFromFloat(keys);
+  }
+
   // Build the resulting shape for the custom call.
   std::vector<Shape> shapes{keys->shape()};
   std::vector<HloInstruction*> operands{keys};
@@ -874,7 +955,27 @@ absl::StatusOr<bool> SortRewriter::RunOnInstruction(
 
   // Build the replacement instruction.
   HloInstruction* replacement;
-  if (!sorting_pairs) {
+  if (encode_total_order) {
+    HloInstruction* sorted_ordered =
+        sort_op->AddInstruction(HloInstruction::CreateGetTupleElement(
+            keys->shape(), custom_call, 0));
+    HloInstruction* sorted_keys =
+        FloatFromOrderedIntegral(sorted_ordered, original_key_type);
+    if (!sorting_pairs) {
+      replacement = sorted_keys;
+    } else {
+      HloInstruction* sorted_values =
+          sort_op->AddInstruction(HloInstruction::CreateGetTupleElement(
+              values->shape(), custom_call, 1));
+      if (sort_analysis.key_operand == 0) {
+        replacement = sort_op->AddInstruction(
+            HloInstruction::CreateTuple({sorted_keys, sorted_values}));
+      } else {
+        replacement = sort_op->AddInstruction(
+            HloInstruction::CreateTuple({sorted_values, sorted_keys}));
+      }
+    }
+  } else if (!sorting_pairs) {
     replacement =
         sort_op->parent()->AddInstruction(HloInstruction::CreateGetTupleElement(
             sort_op->shape(), custom_call, 0));
