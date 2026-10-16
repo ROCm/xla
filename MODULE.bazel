@@ -201,6 +201,11 @@ pip.parse(
 )
 use_repo(pip, "pypi_mods", pypi = "xla_pypi")
 
+override_repo(
+    pip,
+    rules_ml_toolchain_pypi = "pypi",
+)
+
 python_version_ext = use_extension("@rules_ml_toolchain//extensions:python_version.bzl", "python_version_ext")
 use_repo(python_version_ext, "python_version_repo")
 
@@ -242,6 +247,9 @@ use_repo(nccl_redist, "cuda_nccl")
 sycl_configure = use_extension("@rules_ml_toolchain//extensions:sycl_configure.bzl", "sycl_configure_ext")
 use_repo(sycl_configure, "level_zero", "local_config_sycl", "oneapi", "zero_loader")
 
+local_sysroot = use_extension("@rules_ml_toolchain//extensions:local_sysroot_configure.bzl", "local_sysroot_ext")
+use_repo(local_sysroot, "local_sysroot_config")
+
 cuda_redist_init_ext = use_extension("@rules_ml_toolchain//extensions:cuda_redist_init.bzl", "cuda_redist_init_ext")
 use_repo(
     cuda_redist_init_ext,
@@ -276,13 +284,15 @@ nvshmem_redist = use_extension("@rules_ml_toolchain//extensions:nvshmem_redist.b
 use_repo(nvshmem_redist, "nvidia_nvshmem")
 
 toolchain_ext = use_extension("@rules_ml_toolchain//extensions:toolchain.bzl", "toolchain_ext")
-use_repo(toolchain_ext, "llvm18_linux_x86_64", "llvm_linux_x86_64")
+use_repo(toolchain_ext, "llvm18_linux_x86_64", "llvm_linux_aarch64", "llvm_linux_x86_64")
 
 register_toolchains("@rules_ml_toolchain//cc:linux_x86_64_linux_x86_64")
 
 register_toolchains("@rules_ml_toolchain//cc:linux_x86_64_linux_x86_64_cuda")
 
 register_toolchains("@rules_ml_toolchain//cc:linux_x86_64_linux_x86_64_sycl")
+
+register_toolchains("@rules_ml_toolchain//cc:linux_x86_64_linux_x86_64_rocm")
 
 register_toolchains("@rules_ml_toolchain//cc:linux_aarch64_linux_aarch64")
 
@@ -310,3 +320,7 @@ use_repo(pjrt_nightly_timestamp, "nightly_timestamp")
 
 pjrt_rc_number = use_extension("//build_tools/pjrt_wheels:release_candidate.bzl", "rc_number_repo_bzlmod")
 use_repo(pjrt_rc_number, "rc_number")
+
+### libdrm (dedicated extension to avoid Bzlmod merging issues)
+libdrm_ext = use_extension("//third_party/libdrm:extension.bzl", "libdrm_ext")
+use_repo(libdrm_ext, "libdrm")
