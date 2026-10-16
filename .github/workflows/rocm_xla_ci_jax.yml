@@ -72,7 +72,9 @@ jobs:
           GPU_TARGET: device-all
           ROCM_SDK_VERSION: ''
           PIP_INDEX_PATH: ''
-          THEROCK_INDEX_URL: ''
+          # whl-multi-arch is frozen; the live nightly index is whl-next, which
+          # is also the one infra mirrors.
+          THEROCK_INDEX_URL: 'https://nightly.repo.amd.com/rocm/whl-next/'
         run: bash build_tools/rocm/detect-therock-version.sh
 
   jax-upstream:
