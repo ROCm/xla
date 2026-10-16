@@ -813,14 +813,14 @@ HloInstruction* ApplySignedTotalOrderBits(HloInstruction* bits) {
   PrimitiveType signed_type = signed_shape.element_type();
   Shape pred_shape = ShapeUtil::ChangeElementType(signed_shape, PRED);
   HloComputation* computation = bits->parent();
-  HloInstruction* zero = computation->AddInstruction(
-      HloInstruction::CreateBroadcast(
-          signed_shape, computation->AddInstruction(
-                            HloInstruction::CreateConstant(
-                                LiteralUtil::Zero(signed_type))),
+  HloInstruction* zero =
+      computation->AddInstruction(HloInstruction::CreateBroadcast(
+          signed_shape,
+          computation->AddInstruction(
+              HloInstruction::CreateConstant(LiteralUtil::Zero(signed_type))),
           {}));
-  HloInstruction* max_value = computation->AddInstruction(
-      HloInstruction::CreateBroadcast(
+  HloInstruction* max_value =
+      computation->AddInstruction(HloInstruction::CreateBroadcast(
           signed_shape,
           computation->AddInstruction(HloInstruction::CreateConstant(
               LiteralUtil::MaxValue(signed_type))),
@@ -839,17 +839,18 @@ HloInstruction* OrderedIntegralFromFloat(HloInstruction* value) {
   int64_t bit_width = primitive_util::BitWidth(value->shape().element_type());
   PrimitiveType signed_type =
       primitive_util::SignedIntegralTypeForBitWidth(bit_width);
-  Shape signed_shape = ShapeUtil::ChangeElementType(value->shape(), signed_type);
-  HloInstruction* bits =
-      value->parent()->AddInstruction(HloInstruction::CreateBitcastConvert(
-          signed_shape, value));
+  Shape signed_shape =
+      ShapeUtil::ChangeElementType(value->shape(), signed_type);
+  HloInstruction* bits = value->parent()->AddInstruction(
+      HloInstruction::CreateBitcastConvert(signed_shape, value));
   return ApplySignedTotalOrderBits(bits);
 }
 
 HloInstruction* FloatFromOrderedIntegral(HloInstruction* ordered,
-                                        PrimitiveType float_type) {
+                                         PrimitiveType float_type) {
   HloInstruction* restored = ApplySignedTotalOrderBits(ordered);
-  Shape float_shape = ShapeUtil::ChangeElementType(ordered->shape(), float_type);
+  Shape float_shape =
+      ShapeUtil::ChangeElementType(ordered->shape(), float_type);
   return ordered->parent()->AddInstruction(
       HloInstruction::CreateBitcastConvert(float_shape, restored));
 }
@@ -956,9 +957,8 @@ absl::StatusOr<bool> SortRewriter::RunOnInstruction(
   // Build the replacement instruction.
   HloInstruction* replacement;
   if (encode_total_order) {
-    HloInstruction* sorted_ordered =
-        sort_op->AddInstruction(HloInstruction::CreateGetTupleElement(
-            keys->shape(), custom_call, 0));
+    HloInstruction* sorted_ordered = sort_op->AddInstruction(
+        HloInstruction::CreateGetTupleElement(keys->shape(), custom_call, 0));
     HloInstruction* sorted_keys =
         FloatFromOrderedIntegral(sorted_ordered, original_key_type);
     if (!sorting_pairs) {
