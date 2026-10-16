@@ -73,6 +73,38 @@ RcclSymmetricMemory::Create(ncclComm_t comm,
         addr.opaque(), addr.size(), ncclGetErrorString(register_status));
     XLA_RCCL_RETURN_IF_ERROR(register_status);
   }
+
+  // Validate that the window is genuinely symmetric / load-store accessible.
+  //
+  // ncclCommWindowRegister(NCCL_WIN_COLL_SYMMETRIC) can return ncclSuccess even
+  // when the runtime silently downgrades the registration to a non-symmetric
+  // window (e.g. when the device/communicator does not actually support LSA
+  // symmetric memory: the RCCL log shows "windowRegisterNonSym" and
+  // "Symmetric memory is not supported"). In that case the window is NOT usable
+  // with ncclGetPeerDevicePointer, and the collective kernel would later crash
+  // deep inside RCCL ("Could not find communicator matching window").
+  void* self_peer_addr = nullptr;
+  ncclResult_t probe_status =
+      ncclGetPeerDevicePointer(win, 0, /*peer=*/0, &self_peer_addr);
+  if (probe_status != ncclSuccess || self_peer_addr == nullptr) {
+    // The window is not a usable symmetric/LSA window. Deregister it and fail
+    // cleanly rather than leaking the window or crashing later.
+    XLA_RCCL_LOG_IF_ERROR(ncclCommWindowDeregister(comm, win));
+    const char* rccl_err = probe_status != ncclSuccess
+                               ? ncclGetErrorString(probe_status)
+                               : "null peer pointer";
+    return absl::FailedPreconditionError(absl::StrFormat(
+        "ncclCommWindowRegister(NCCL_WIN_COLL_SYMMETRIC) succeeded on comm=%p "
+        "(ptr=%p, size=%ld) but the window is not load/store accessible "
+        "(ncclGetPeerDevicePointer probe failed: %s). The device/communicator "
+        "does not support symmetric (LSA) memory for this clique, so the "
+        "Triton "
+        "one-shot collective kernel cannot be used. Fall back to a "
+        "non-symmetric collective strategy (e.g. the library collective or the "
+        "rendezvous path).",
+        comm, addr.opaque(), addr.size(), rccl_err));
+  }
+
   return absl::WrapUnique(
       new RcclSymmetricMemory(comm, win, addr, std::move(executor)));
 #else
