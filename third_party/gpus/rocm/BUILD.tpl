@@ -286,8 +286,8 @@ rocm_lib_import(
     data = glob(["%{rocm_root}/lib/librccl.so*"]),
     interface_library = "%{rocm_root}/lib/librccl.so",
     deps = [
-        ":hip_runtime_libs",
         ":amdsmi_libs",
+        ":hip_runtime_libs",
         ":rocm_smi_libs",
         ":rocprofiler_register_libs",
         ":roctx_libs",
@@ -415,6 +415,8 @@ rocm_lib_import(
         "%{rocm_root}/lib/hipblaslt/**",
         "%{rocm_root}/lib/libhipblaslt.so*",
         "%{rocm_root}/lib/librocroller.so*",
+        "%{rocm_root}/lib/liborigami.so*",
+        "%{rocm_root}/lib/libtensilelite-host.so*",
     ]),
     interface_library = "%{rocm_root}/lib/libhipblaslt.so",
     deps = [
