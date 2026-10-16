@@ -462,9 +462,42 @@ absl::StatusOr<bool> IsCrossHostCollectiveKernelPossible(
   }
   ABSL_ASSIGN_OR_RETURN(const CollectiveOpGroupMode group_mode,
                         GetCollectiveOpGroupMode(collective));
-  return IsAllReplicasLocal(gpu_topology.slice_size(),
-                            collective->replica_groups(), group_mode,
-                            device_assignment);
+  const bool all_replicas_on_single_slice = IsAllReplicasLocal(
+      gpu_topology.slice_size(), collective->replica_groups(), group_mode,
+      device_assignment);
+  // On ROCm/RCCL, load/store-accessible (LSA) symmetric memory is intra-node
+  // only, and only on the MI300 series (gfx942 / gfx950).
+  //
+  // Note the CUDA vs ROCm distinction: a "slice" is an interconnect (NVLink /
+  // XGMI) domain, and on CUDA an NVLink/LSA slice CAN span multiple hosts (e.g.
+  // GB200 NVL), so CUDA legitimately allows cross-host symmetric memory when
+  // all replicas are within one NVLink slice. ROCm has no such cross-host
+  // domain, so symmetric memory is supported only when all participating
+  // replicas are on a single physical node. In the topologies this gate
+  // handles, the ROCm slice does not cross nodes, so
+  // `all_replicas_on_single_slice` identifies exactly the supported single-node
+  // case (e.g. one process per GPU on the same node). Forbid the ROCm path when
+  // either the collective leaves that single-node LSA domain or the device is
+  // not an LSA-capable MI300-series part.
+  if (gpu_topology.has_gpu_target_config() &&
+      gpu_topology.gpu_target_config()
+          .device_description.gpu_compute_capability()
+          .IsRocm()) {
+    const se::GpuComputeCapability& cc =
+        gpu_topology.gpu_target_config()
+            .device_description.gpu_compute_capability();
+    const bool is_lsa_capable_rocm =
+        cc.rocm_compute_capability() != nullptr &&
+        cc.rocm_compute_capability()->gfx9_mi300_series();
+    if (!all_replicas_on_single_slice || !is_lsa_capable_rocm) {
+      VLOG(1) << "IsCrossHostCollectiveKernelPossible: false on ROCm "
+                 "(symmetric memory requires an MI300-series device and all "
+                 "replicas within a single node/slice; cross-node is "
+                 "unsupported).";
+      return false;
+    }
+  }
+  return all_replicas_on_single_slice;
 }
 
 bool AreAllReplicasOnSameSlice(
