@@ -46,9 +46,9 @@ bazel_dep(name = "rules_ml_toolchain")
 # echo "sha256-${HASH}"
 archive_override(
     module_name = "rules_ml_toolchain",
-    integrity = "sha256-C0L2k6YMYFDYfbHgoOrrhKs/VBkfzglNhjNPrtyAfaA=",
-    strip_prefix = "rules_ml_toolchain-398d613aea7a4c294da49b79a6d6f3f8732bd84c",
-    urls = ["https://github.com/google-ml-infra/rules_ml_toolchain/archive/398d613aea7a4c294da49b79a6d6f3f8732bd84c.tar.gz"],
+    integrity = "sha256-4ivqt/JPkkc109WQNgbqPDRhKMxwdncvcyhwbdjOXaU=",
+    strip_prefix = "rules_ml_toolchain-09925f69ffb6e1e765a246073ace69bfb33fbb57",
+    urls = ["https://github.com/google-ml-infra/rules_ml_toolchain/archive/09925f69ffb6e1e765a246073ace69bfb33fbb57.tar.gz"],
 )
 
 # TODO: Upstream the patch?
@@ -201,6 +201,11 @@ pip.parse(
 )
 use_repo(pip, "pypi_mods", pypi = "xla_pypi")
 
+override_repo(
+    pip,
+    rules_ml_toolchain_pypi = "pypi",
+)
+
 python_version_ext = use_extension("@rules_ml_toolchain//extensions:python_version.bzl", "python_version_ext")
 use_repo(python_version_ext, "python_version_repo")
 
@@ -242,6 +247,9 @@ use_repo(nccl_redist, "cuda_nccl")
 sycl_configure = use_extension("@rules_ml_toolchain//extensions:sycl_configure.bzl", "sycl_configure_ext")
 use_repo(sycl_configure, "level_zero", "local_config_sycl", "oneapi", "zero_loader")
 
+local_sysroot = use_extension("@rules_ml_toolchain//extensions:local_sysroot_configure.bzl", "local_sysroot_ext")
+use_repo(local_sysroot, "local_sysroot_config")
+
 cuda_redist_init_ext = use_extension("@rules_ml_toolchain//extensions:cuda_redist_init.bzl", "cuda_redist_init_ext")
 use_repo(
     cuda_redist_init_ext,
@@ -276,7 +284,7 @@ nvshmem_redist = use_extension("@rules_ml_toolchain//extensions:nvshmem_redist.b
 use_repo(nvshmem_redist, "nvidia_nvshmem")
 
 toolchain_ext = use_extension("@rules_ml_toolchain//extensions:toolchain.bzl", "toolchain_ext")
-use_repo(toolchain_ext, "llvm18_linux_x86_64", "llvm_linux_x86_64")
+use_repo(toolchain_ext, "llvm18_linux_x86_64", "llvm_linux_aarch64", "llvm_linux_x86_64")
 
 register_toolchains("@rules_ml_toolchain//cc:linux_x86_64_linux_x86_64")
 
@@ -284,16 +292,25 @@ register_toolchains("@rules_ml_toolchain//cc:linux_x86_64_linux_x86_64_cuda")
 
 register_toolchains("@rules_ml_toolchain//cc:linux_x86_64_linux_x86_64_sycl")
 
+register_toolchains("@rules_ml_toolchain//cc:linux_x86_64_linux_x86_64_rocm")
+
 register_toolchains("@rules_ml_toolchain//cc:linux_aarch64_linux_aarch64")
 
 register_toolchains("@rules_ml_toolchain//cc:linux_aarch64_linux_aarch64_cuda")
 
 ### Other local config repos
-hipcc_configure = use_extension("@rules_ml_toolchain//extensions:hipcc_configure.bzl", "hipcc_configure_ext")
-use_repo(hipcc_configure, "config_rocm_hipcc")
+local_clang_configure = use_extension("@rules_ml_toolchain//extensions:local_clang_configure.bzl", "local_clang_configure_ext")
+use_repo(local_clang_configure, "local_config_clang")
 
 rocm_configure = use_extension("//third_party/extensions:rocm_configure.bzl", "rocm_configure_ext")
-use_repo(rocm_configure, "local_config_rocm")
+use_repo(rocm_configure, "config_rocm_hipcc", "local_config_rocm")
+
+rocm_hermetic = use_extension("@rules_ml_toolchain//extensions:rocm_hermetic_download.bzl", "rocm_hermetic_download_ext")
+
+override_repo(
+    rocm_hermetic,
+    config_rocm_hipcc = "config_rocm_hipcc",
+)
 
 tensorrt_configure = use_extension("//third_party/extensions:tensorrt_configure.bzl", "tensorrt_configure_ext")
 use_repo(tensorrt_configure, "local_config_tensorrt")
@@ -303,3 +320,7 @@ use_repo(pjrt_nightly_timestamp, "nightly_timestamp")
 
 pjrt_rc_number = use_extension("//build_tools/pjrt_wheels:release_candidate.bzl", "rc_number_repo_bzlmod")
 use_repo(pjrt_rc_number, "rc_number")
+
+### libdrm (dedicated extension to avoid Bzlmod merging issues)
+libdrm_ext = use_extension("//third_party/libdrm:extension.bzl", "libdrm_ext")
+use_repo(libdrm_ext, "libdrm")
