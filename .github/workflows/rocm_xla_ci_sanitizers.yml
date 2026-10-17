@@ -157,7 +157,6 @@ jobs:
             --jobs=30 \
             --bes_keywords=single_gpu \
             ${{ join(matrix.mode.configs, ' ') }} \
-            ${COMMON_ARGS} \
             ${ROCM_DISTRO_ARGS} \
             -- \
             //xla/...
