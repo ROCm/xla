@@ -141,7 +141,9 @@ class BlasLt : public gpu::BlasLt {
 
    private:
     const BlasLt& blas_lt_;
-    MatmulDesc op_desc_;
+    // Guards op_desc_; plans are shared across threads.
+    mutable absl::Mutex desc_mu_;
+    MatmulDesc op_desc_ ABSL_GUARDED_BY(desc_mu_);
     MatrixLayout a_desc_;
     MatrixLayout b_desc_;
     MatrixLayout c_desc_;
@@ -244,6 +246,11 @@ class BlasLt : public gpu::BlasLt {
   // Fails if hipBLASLt does not handle the requested types.
   absl::StatusOr<MatmulPlanPtr> GetHipBlasLtMatmulPlan(
       const gpu::GemmConfig& cfg, Epilogue epilogue) const;
+
+  hipblasLtHandle_t handle() const {
+    absl::MutexLock lock(mu_);
+    return handle_.get();
+  }
 
   StreamExecutor* executor_;
   mutable absl::Mutex mu_;
