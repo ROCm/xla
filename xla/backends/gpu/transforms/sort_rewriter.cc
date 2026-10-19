@@ -982,9 +982,8 @@ absl::StatusOr<bool> SortRewriter::RunOnInstruction(
       HloInstruction* sorted_values =
           sort_op->AddInstruction(HloInstruction::CreateGetTupleElement(
               values->shape(), custom_call, 1));
-      replacement = PairInOperandOrder(
-          sort_op, sorted_keys, sorted_values,
-          /*swap=*/sort_analysis.key_operand == 1);
+      replacement = PairInOperandOrder(sort_op, sorted_keys, sorted_values,
+                                       /*swap=*/sort_analysis.key_operand == 1);
     }
   } else if (!sorting_pairs) {
     replacement =
