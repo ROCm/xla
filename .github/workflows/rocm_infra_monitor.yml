@@ -47,29 +47,33 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -o pipefail
           # Monitor openxla/xla repository for failed ROCm CI runs
           # Always monitor openxla/xla (the upstream repository)
           MONITORED_REPO="openxla/xla"
           echo "Monitoring repository: $MONITORED_REPO"
 
-          # Get current time from GitHub API (no dependency on runner's clock)
-          GITHUB_TIME=$(gh api /rate_limit | jq -r '.resources.core.reset' | xargs -I {} date -u -d '@{}' '+%Y-%m-%dT%H:%M:%SZ')
-          echo "GitHub API time: $GITHUB_TIME"
+          # Check runs that completed since the last successful scheduled monitor run
+          # started, so a failed monitor run doesn't skip its range.
+          NOW=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .run_started_at)
+          PREV=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/rocm_infra_monitor.yml/runs?event=schedule&status=success&per_page=1" \
+            --jq '.workflow_runs[0].run_started_at // empty')
+          FLOOR=$(date -u -d "$NOW - 24 hours" '+%Y-%m-%dT%H:%M:%SZ')
+          if [[ -z "$PREV" || "$PREV" < "$FLOOR" ]]; then
+            PREV="$FLOOR"
+          fi
+          # The API only filters by creation time.
+          CREATED_AFTER=$(date -u -d "$PREV - 12 hours" '+%Y-%m-%dT%H:%M:%SZ')
+          echo "Checking runs completed in (${PREV}, ${NOW}]"
 
-          # Calculate cutoff: 2 hours before GitHub's current time (temporary for testing)
-          CUTOFF_TIME=$(date -u -d "$GITHUB_TIME - 2 hours" '+%Y-%m-%dT%H:%M:%SZ')
-          echo "Checking for failed runs after: $CUTOFF_TIME"
-
-          # Get failed ROCm CI workflow runs from the last 2 hours
-          # Using created filter to ensure we get recent runs
-          # Using --paginate to get ALL runs, not just first page
           gh api --paginate \
             -H "Accept: application/vnd.github+json" \
-            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?status=completed&conclusion=failure&created=>${CUTOFF_TIME}&per_page=100" \
-            | jq -r '.workflow_runs[] | .id' \
+            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?status=failure&created=>${CREATED_AFTER}&per_page=100" \
+            | jq -r --arg after "$PREV" --arg until "$NOW" \
+                '.workflow_runs[] | select(.updated_at > $after and .updated_at <= $until) | .id' \
             > run_ids.txt
 
-          echo "Found $(wc -l < run_ids.txt) failed runs from last 2 hours in ${MONITORED_REPO}"
+          echo "Found $(wc -l < run_ids.txt) failed runs in ${MONITORED_REPO}"
           cat run_ids.txt
 
       - name: Download BEP artifacts
