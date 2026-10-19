@@ -76,8 +76,6 @@ jobs:
             --local_test_jobs=4 \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
-            --repo_env=ROCM_DISTRO_URL="${ROCM_DISTRO_URL}" \
-            --repo_env=ROCM_DISTRO_HASH="${ROCM_DISTRO_HASH}" \
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=single_gpu \
@@ -92,8 +90,6 @@ jobs:
             --local_test_jobs=1 \
             --strategy=TestRunner=local \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
-            --repo_env=ROCM_DISTRO_URL="${ROCM_DISTRO_URL}" \
-            --repo_env=ROCM_DISTRO_HASH="${ROCM_DISTRO_HASH}" \
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=multi_gpu \
@@ -102,11 +98,10 @@ jobs:
         if: always() && !cancelled()
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
+            ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_rocm_cpu \
             --jobs=50 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
-            --repo_env=ROCM_DISTRO_URL="${ROCM_DISTRO_URL}" \
-            --repo_env=ROCM_DISTRO_HASH="${ROCM_DISTRO_HASH}" \
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=cpu \
