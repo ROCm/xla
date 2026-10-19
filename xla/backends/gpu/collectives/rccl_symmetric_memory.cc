@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/backends/gpu/collectives/rccl_symmetric_memory.h"
 
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <utility>
@@ -24,8 +25,11 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
 #include "xla/backends/gpu/collectives/rccl_errors.h"
 #include "xla/core/collectives/rank_id.h"
 #include "xla/future.h"
@@ -46,6 +50,29 @@ Future<> Execute(absl::AnyInvocable<absl::Status() &&> f,
   return executor ? MakeFutureOn<void>(*executor, std::move(f))
                   : Future<>(std::move(f)());
 }
+
+// Checks that the environment is configured so that RCCL can actually create
+// symmetric (LSA) windows, i.e. that NCCL_CUMEM_ENABLE is set to 1.
+absl::Status CheckNcclCuMemEnabledForSymmetricMemory() {
+  const char* raw = std::getenv("NCCL_CUMEM_ENABLE");
+  // Mirror RCCL's ncclCuMemEnable() semantics on ROCm: the cuMem allocator is
+  // only enabled when the parsed value is >= 1. An unset variable (RCCL default
+  // 0) or an explicit 0/negative value leaves symmetricSupport disabled.
+  int value = 0;
+  if (raw != nullptr && absl::SimpleAtoi(absl::string_view(raw), &value) &&
+      value >= 1) {
+    return absl::OkStatus();
+  }
+  return absl::FailedPreconditionError(absl::StrFormat(
+      "RCCL symmetric memory (NCCL windows) requires NCCL_CUMEM_ENABLE=1, but "
+      "it is currently %s. On ROCm this variable defaults to 0, which leaves "
+      "the communicator's symmetricSupport disabled and makes "
+      "ncclCommWindowRegister(NCCL_WIN_COLL_SYMMETRIC) silently fall back to a "
+      "non-symmetric window. Export NCCL_CUMEM_ENABLE=1 before launching to "
+      "enable symmetric memory, or disable the symmetric-memory collective "
+      "path.",
+      raw == nullptr ? "unset" : absl::StrFormat("\"%s\"", raw)));
+}
 #endif  // TF_ROCM_VERSION >= 100000
 
 }  // namespace
@@ -63,6 +90,11 @@ RcclSymmetricMemory::Create(ncclComm_t comm,
       "Create RCCL symmetric memory on comm=%p from: ptr=%p; size=%ld", comm,
       addr.opaque(), addr.size());
 #if (TF_ROCM_VERSION >= 100000)
+  // Require NCCL_CUMEM_ENABLE=1 before touching the window-registration path.
+  // Without it RCCL's comm->symmetricSupport is false and the registration
+  // below silently downgrades to a non-symmetric window.
+  ABSL_RETURN_IF_ERROR(CheckNcclCuMemEnabledForSymmetricMemory());
+
   // ncclCommWindowRegister is available in ROCm/RCCL 10.0+.
   ncclWindow_t win = nullptr;
   ncclResult_t register_status = ncclCommWindowRegister(
