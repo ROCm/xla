@@ -140,6 +140,10 @@ class GpuComputeCapability {
     return std::get_if<CudaComputeCapability>(&compute_capability_);
   }
 
+  const CudaComputeCapability& cuda_compute_capability_value() const {
+    return std::get<CudaComputeCapability>(compute_capability_);
+  }
+
   const RocmComputeCapability* rocm_compute_capability() const {
     return std::get_if<RocmComputeCapability>(&compute_capability_);
   }

@@ -679,7 +679,7 @@ absl::StatusOr<bool> SoftmaxRewriterTriton::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   ABSL_RETURN_IF_ERROR(EnsureTritonSupportsComputeCapability(
-      device_info_.gpu_compute_capability()));
+      device_info_.gpu_compute_capability().cuda_compute_capability_value()));
 
   ABSL_ASSIGN_OR_RETURN(
       std::vector<DiamondDescriptor> diamonds,
