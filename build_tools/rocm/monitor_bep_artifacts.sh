@@ -16,11 +16,13 @@
 #
 # Download ROCm CI BEP artifacts from failed runs.
 #
-# Usage: monitor_bep_artifacts.sh <run_ids_file> <repository>
+# Usage: monitor_bep_artifacts.sh <run_ids_file> <repository> [artifact_name]
 #
 # Args:
 #   run_ids_file: File containing workflow run IDs (one per line)
 #   repository: GitHub repository in format "owner/repo"
+#   artifact_name: (Optional) Specific artifact name to download (jax-bep or xla-bep)
+#                  If not specified, downloads both
 #
 # Exit codes:
 #   0: No runs with BEP files found
@@ -29,13 +31,14 @@
 
 set -euo pipefail
 
-if [ $# -ne 2 ]; then
-    echo "Usage: $0 <run_ids_file> <repository>" >&2
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+    echo "Usage: $0 <run_ids_file> <repository> [artifact_name]" >&2
     exit 2
 fi
 
 RUN_IDS_FILE="$1"
 REPOSITORY="$2"
+ARTIFACT_NAME="${3:-}"
 
 if [ ! -f "$RUN_IDS_FILE" ]; then
     echo "Error: Run IDs file not found: $RUN_IDS_FILE" >&2
@@ -52,16 +55,23 @@ while read -r RUN_ID; do
     echo "Downloading BEP artifacts for run: $RUN_ID"
     echo "========================================="
 
-    # Download JAX BEP artifact
-    if gh run download "$RUN_ID" -n jax-bep -D "bep-files/run-${RUN_ID}" -R "$REPOSITORY" 2>/dev/null; then
-        echo "Downloaded JAX BEP for run $RUN_ID from $REPOSITORY"
-        HAS_BEPS=true
-    fi
+    # If specific artifact name is provided, only download that one
+    if [ -n "$ARTIFACT_NAME" ]; then
+        if gh run download "$RUN_ID" -n "$ARTIFACT_NAME" -D "bep-files/run-${RUN_ID}" -R "$REPOSITORY" 2>/dev/null; then
+            echo "Downloaded $ARTIFACT_NAME for run $RUN_ID from $REPOSITORY"
+            HAS_BEPS=true
+        fi
+    else
+        # Download both JAX and XLA BEP artifacts
+        if gh run download "$RUN_ID" -n jax-bep -D "bep-files/run-${RUN_ID}" -R "$REPOSITORY" 2>/dev/null; then
+            echo "Downloaded JAX BEP for run $RUN_ID from $REPOSITORY"
+            HAS_BEPS=true
+        fi
 
-    # Download XLA BEP artifacts
-    if gh run download "$RUN_ID" -n xla-bep -D "bep-files/run-${RUN_ID}" -R "$REPOSITORY" 2>/dev/null; then
-        echo "Downloaded XLA BEP for run $RUN_ID from $REPOSITORY"
-        HAS_BEPS=true
+        if gh run download "$RUN_ID" -n xla-bep -D "bep-files/run-${RUN_ID}" -R "$REPOSITORY" 2>/dev/null; then
+            echo "Downloaded XLA BEP for run $RUN_ID from $REPOSITORY"
+            HAS_BEPS=true
+        fi
     fi
 done < "$RUN_IDS_FILE"
 

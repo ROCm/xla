@@ -33,8 +33,18 @@ on:
 
 jobs:
   monitor:
-    name: Monitor ROCm CI Infrastructure Errors
+    name: Monitor ${{ matrix.job_name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - workflow_file: rocm_ci.yml
+            job_name: XLA ROCm CI
+            artifact_name: xla-bep
+          - workflow_file: rocm_ci.yml
+            job_name: JAX ROCm CI
+            artifact_name: jax-bep
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,9 +58,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Monitor openxla/xla repository for failed ROCm CI runs
-          # Always monitor openxla/xla (the upstream repository)
           MONITORED_REPO="openxla/xla"
+          WORKFLOW_FILE="${{ matrix.workflow_file }}"
+          ARTIFACT_NAME="${{ matrix.artifact_name }}"
           echo "Monitoring repository: $MONITORED_REPO"
+          echo "Workflow file: $WORKFLOW_FILE"
+          echo "Artifact name: $ARTIFACT_NAME"
 
           # Get current time from GitHub API (no dependency on runner's clock)
           GITHUB_TIME=$(gh api /rate_limit | jq -r '.resources.core.reset' | xargs -I {} date -u -d '@{}' '+%Y-%m-%dT%H:%M:%SZ')
@@ -65,7 +78,7 @@ jobs:
           # Using --paginate to get ALL runs, not just first page
           gh api --paginate \
             -H "Accept: application/vnd.github+json" \
-            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?status=completed&conclusion=failure&created=>${CUTOFF_TIME}&per_page=100" \
+            "/repos/${MONITORED_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?status=completed&conclusion=failure&created=>${CUTOFF_TIME}&per_page=100" \
             | jq -r '.workflow_runs[] | .id' \
             > run_ids.txt
 
@@ -78,15 +91,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Always monitor openxla/xla (the upstream repository)
           MONITORED_REPO="openxla/xla"
+          ARTIFACT_NAME="${{ matrix.artifact_name }}"
 
           if [ ! -s run_ids.txt ]; then
             echo "No failed runs to check, exiting early"
             exit 0
           fi
 
-          build_tools/rocm/monitor_bep_artifacts.sh run_ids.txt "${MONITORED_REPO}" || true
+          build_tools/rocm/monitor_bep_artifacts.sh run_ids.txt "${MONITORED_REPO}" "${ARTIFACT_NAME}" || true
 
       - name: Analyze BEP files for infrastructure errors
         id: analyze
