@@ -56,8 +56,7 @@ jobs:
       image: ${{ needs.rocm-config.outputs.docker-image }}
     env:
       DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
-      ROCM_DISTRO_URL: https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.0.0.tar.gz
-      ROCM_DISTRO_HASH: 1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6
+
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
