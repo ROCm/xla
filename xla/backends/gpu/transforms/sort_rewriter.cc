@@ -256,6 +256,19 @@ bool AreOperandTypesSupportedByCub(
   }
 }
 
+// Build the sort result in operand order. The radix sort stores the key first,
+// so `swap` is set when that key was operand 1.
+HloInstruction* PairInOperandOrder(HloSortInstruction* sort_op,
+                                   HloInstruction* sorted_key,
+                                   HloInstruction* sorted_value, bool swap) {
+  if (!swap) {
+    return sort_op->AddInstruction(
+        HloInstruction::CreateTuple({sorted_key, sorted_value}));
+  }
+  return sort_op->AddInstruction(
+      HloInstruction::CreateTuple({sorted_value, sorted_key}));
+}
+
 // Restore the result shape after sorting a pair of tensors.
 // The trailing argument is the scratch buffer which should be discarded.
 HloInstruction* UnpackResultPair(HloSortInstruction* sort_op,
@@ -964,16 +977,14 @@ absl::StatusOr<bool> SortRewriter::RunOnInstruction(
     if (!sorting_pairs) {
       replacement = sorted_keys;
     } else {
+      // Element 0 is the converted integer key. Read the values from element 1
+      // and put both results back in operand order.
       HloInstruction* sorted_values =
           sort_op->AddInstruction(HloInstruction::CreateGetTupleElement(
               values->shape(), custom_call, 1));
-      if (sort_analysis.key_operand == 0) {
-        replacement = sort_op->AddInstruction(
-            HloInstruction::CreateTuple({sorted_keys, sorted_values}));
-      } else {
-        replacement = sort_op->AddInstruction(
-            HloInstruction::CreateTuple({sorted_values, sorted_keys}));
-      }
+      replacement = PairInOperandOrder(
+          sort_op, sorted_keys, sorted_values,
+          /*swap=*/sort_analysis.key_operand == 1);
     }
   } else if (!sorting_pairs) {
     replacement =
