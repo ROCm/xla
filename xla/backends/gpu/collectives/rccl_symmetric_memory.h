@@ -34,15 +34,14 @@ limitations under the License.
 #endif  // TF_ROCM_VERSION >= 50200
 
 #if (TF_ROCM_VERSION >= 100000)
-// ROCm/RCCL 10.0+ declares the host-side symmetric-memory pointer helpers
-// (ncclGetLsaMultimemDevicePointer, ncclGetPeerDevicePointer) in the
-// nccl_device core header (rocm/include/rccl/nccl_device/core.h), where they
-// are `NCCL_EXTERN_C __host__` -- exported C symbols in librccl.so, not static
-// inline -- which is what makes these forward declarations link.
+// ROCm/RCCL 10.0+ exposes the host-side symmetric-memory pointer helpers
+// (ncclGetLsaMultimemDevicePointer, ncclGetPeerDevicePointer) as
+// `NCCL_EXTERN_C __host__` symbols exported from librccl.so.
 //
-// We deliberately do NOT #include that header (nor the nccl_device.h umbrella):
-// it transitively pulls in device-only intrinsics that fail to compile in
-// this plain host translation unit.
+// These are declared in RCCL's nccl_device/core.h, but that header is NOT
+// shipped by the ROCm install -- the installed RCCL dev package only provides
+// rocm/include/rccl/rccl.h (nccl_device/ lives solely in the RCCL source
+// tree).
 //
 // PROVENANCE: copied verbatim from RCCL hip-version_10.2.62640,
 // nccl_device/core.h.

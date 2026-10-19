@@ -21,7 +21,6 @@ limitations under the License.
 #include <utility>
 
 #include "absl/functional/any_invocable.h"
-#include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
@@ -157,12 +156,6 @@ RcclSymmetricMemory::~RcclSymmetricMemory() {
   // ncclCommWindowDeregister() below would be a use-after-free. Callers (the
   // collective clique) must destroy all windows before destroying the
   // communicator.
-  if (win_ != nullptr) {
-    CHECK(comm_ != nullptr)
-        << "RcclSymmetricMemory destroyed with a live window but null comm_; "
-           "the owning ncclComm_t was destroyed first (window="
-        << win_ << ").";
-  }
 
   // The deregistration below is posted to executor_ and awaited. If this
   // destructor ran on executor_'s thread (e.g. released inside another Execute

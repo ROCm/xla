@@ -129,7 +129,6 @@ class RcclIdStore {
   absl::Mutex mu_;
   absl::flat_hash_map<gpu::GpuCliqueKey, CliqueId> cache_ ABSL_GUARDED_BY(mu_);
 };
-
 }  // namespace
 
 //===----------------------------------------------------------------------===//

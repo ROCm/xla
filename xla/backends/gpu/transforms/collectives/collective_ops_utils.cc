@@ -33,6 +33,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "rocm/rocm_config.h"  // IWYU pragma: keep  (defines TF_ROCM_VERSION)
 #include "xla/backends/gpu/target_config/target_config.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -48,6 +49,7 @@ limitations under the License.
 #include "xla/service/hlo_module_config.h"
 #include "xla/side_effect_util.h"
 #include "xla/stream_executor/device_description.h"
+#include "xla/tsl/util/env_var.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -227,6 +229,28 @@ bool IsLocalReplicaGroup(int64_t num_devices_per_host,
   });
 }
 
+// Returns true if the ROCm/RCCL runtime can actually back LSA (load/store
+// accessible) symmetric memory for the collective kernels.
+//
+// Symmetric-memory windows on ROCm require two things that are not implied by
+// the device architecture alone:
+//   1. ROCm/RCCL >= 10.0, which provides ncclCommWindowRegister and friends
+//      (a compile-time property, TF_ROCM_VERSION).
+//   2. NCCL_CUMEM_ENABLE=1 in the environment, which enables RCCL's cuMem
+//      allocator; without it RCCL's comm->symmetricSupport is false and window
+//      registration silently downgrades to a non-symmetric window.
+bool IsRocmSymmetricMemoryRuntimeAvailable() {
+#if (TF_ROCM_VERSION >= 100000)
+  bool cumem_enabled = false;
+  return tsl::ReadBoolFromEnvVar("NCCL_CUMEM_ENABLE", /*default_val=*/false,
+                                 &cumem_enabled)
+             .ok() &&
+         cumem_enabled;
+#else
+  return false;
+#endif  // TF_ROCM_VERSION >= 100000
+}
+
 // Returns true if xla_gpu_unsupported_use_cross_host_one_shot_kernel is enabled
 // for the given collective op type.
 bool IsCrossHostOneShotKernelEnabled(
@@ -361,9 +385,11 @@ bool IsLsaPossible(const GpuTopology& gpu_topology) {
     return true;
   }
   // ROCm: LSA / GIN symmetric memory is only available on the MI300 series
-  // (gfx942 / gfx950).
+  // (gfx942 / gfx950), and only when the ROCm/RCCL runtime actually supports it
+  // (ROCm/RCCL >= 10.0 and NCCL_CUMEM_ENABLE=1).
   if (const auto* rocm_cc = cc.rocm_compute_capability(); rocm_cc != nullptr) {
-    return rocm_cc->gfx9_mi300_series();
+    return rocm_cc->gfx9_mi300_series() &&
+           IsRocmSymmetricMemoryRuntimeAvailable();
   }
   return false;
 }
@@ -462,42 +488,15 @@ absl::StatusOr<bool> IsCrossHostCollectiveKernelPossible(
   }
   ABSL_ASSIGN_OR_RETURN(const CollectiveOpGroupMode group_mode,
                         GetCollectiveOpGroupMode(collective));
-  const bool all_replicas_on_single_slice = IsAllReplicasLocal(
-      gpu_topology.slice_size(), collective->replica_groups(), group_mode,
-      device_assignment);
-  // On ROCm/RCCL, load/store-accessible (LSA) symmetric memory is intra-node
-  // only, and only on the MI300 series (gfx942 / gfx950).
-  //
-  // Note the CUDA vs ROCm distinction: a "slice" is an interconnect (NVLink /
-  // XGMI) domain, and on CUDA an NVLink/LSA slice CAN span multiple hosts (e.g.
-  // GB200 NVL), so CUDA legitimately allows cross-host symmetric memory when
-  // all replicas are within one NVLink slice. ROCm has no such cross-host
-  // domain, so symmetric memory is supported only when all participating
-  // replicas are on a single physical node. In the topologies this gate
-  // handles, the ROCm slice does not cross nodes, so
-  // `all_replicas_on_single_slice` identifies exactly the supported single-node
-  // case (e.g. one process per GPU on the same node). Forbid the ROCm path when
-  // either the collective leaves that single-node LSA domain or the device is
-  // not an LSA-capable MI300-series part.
-  if (gpu_topology.has_gpu_target_config() &&
-      gpu_topology.gpu_target_config()
-          .device_description.gpu_compute_capability()
-          .IsRocm()) {
-    const se::GpuComputeCapability& cc =
-        gpu_topology.gpu_target_config()
-            .device_description.gpu_compute_capability();
-    const bool is_lsa_capable_rocm =
-        cc.rocm_compute_capability() != nullptr &&
-        cc.rocm_compute_capability()->gfx9_mi300_series();
-    if (!all_replicas_on_single_slice || !is_lsa_capable_rocm) {
-      VLOG(1) << "IsCrossHostCollectiveKernelPossible: false on ROCm "
-                 "(symmetric memory requires an MI300-series device and all "
-                 "replicas within a single node/slice; cross-node is "
-                 "unsupported).";
-      return false;
-    }
-  }
-  return all_replicas_on_single_slice;
+  // A "slice" is an interconnect (NVLink / XGMI) domain. On CUDA an NVLink/LSA
+  // slice can span multiple hosts (e.g. GB200 NVL), so CUDA legitimately allows
+  // cross-host symmetric memory when all replicas are within one NVLink slice.
+  // On ROCm the slice does not cross nodes in the topologies this gate handles,
+  // so `all_replicas_on_single_slice` already identifies the supported
+  // single-node case.
+  return IsAllReplicasLocal(gpu_topology.slice_size(),
+                            collective->replica_groups(), group_mode,
+                            device_assignment);
 }
 
 bool AreAllReplicasOnSameSlice(
