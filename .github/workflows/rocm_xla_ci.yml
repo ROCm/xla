@@ -42,7 +42,7 @@ jobs:
       - id: out
         shell: bash
         run: |
-          echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
+          echo "docker-image=rocm/tensorflow-build@sha256:5261e6df4fe13264a0e4443d36a620e3b1304b89bd45853ad342fb391c3c935f" >> "$GITHUB_OUTPUT"
 
   execute-xla-ut:
     needs: rocm-config
@@ -51,7 +51,7 @@ jobs:
       fail-fast: false
       matrix:
         mode:
-          - {name: "default", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe"]}
+          - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe"]}
     container: &rocm_container
       image: ${{ needs.rocm-config.outputs.docker-image }}
     env:
