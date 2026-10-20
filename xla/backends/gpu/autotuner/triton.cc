@@ -33,12 +33,13 @@ limitations under the License.
 #include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "google/protobuf/text_format.h"
-#include "triton/Version.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
+#include "xla/backends/gpu/autotuner/triton/conv_search_space.h"
 #include "xla/backends/gpu/autotuner/triton/cost_model_config_optimization.h"
 #include "xla/backends/gpu/autotuner/triton/dot_search_space.h"
 #include "xla/backends/gpu/autotuner/triton/triton_configs.h"
+#include "xla/backends/gpu/transforms/convert_triton_conv_config.h"
 #include "xla/backends/gpu/transforms/convert_triton_gemm_config.h"
 #include "xla/backends/gpu/transforms/fusion_wrapper.h"
 #include "xla/backends/gpu/transforms/priority_fusion.h"
@@ -56,6 +57,7 @@ limitations under the License.
 #include "xla/hlo/utils/hlo_traversal.h"
 #include "xla/service/compiler.h"
 #include "xla/service/gpu/backend_configs.pb.h"
+#include "xla/service/gpu/conv_utils.h"
 #include "xla/service/gpu/gpu_float_support.h"
 #include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/service/gpu/matmul_utils.h"
@@ -68,6 +70,7 @@ limitations under the License.
 #include "xla/tsl/platform/env.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
+#include "triton/Version.h"
 
 namespace xla {
 namespace gpu {
@@ -80,10 +83,45 @@ bool IsWarpSpecializationAvailable(
          compute_capability.cuda_compute_capability()->IsAtLeastBlackwell();
 }
 
+bool IsConvFusionKind(const HloInstruction& instr) {
+  if (instr.opcode() != HloOpcode::kFusion) {
+    return false;
+  }
+  auto gpu_config = instr.backend_config<GpuBackendConfig>();
+  if (!gpu_config.ok()) {
+    return false;
+  }
+  return gpu_config->fusion_backend_config().kind() == kTritonConvFusionKind;
+}
+
 }  // namespace
 
 absl::StatusOr<std::vector<CodegenBackend::EstimatedConfig>>
 TritonBackend::GetSupportedConfigsWithEstimates(const HloInstruction& instr) {
+  if (!IsSupported(instr)) {
+    return std::vector<CodegenBackend::EstimatedConfig>();
+  }
+
+  if (IsConvFusionKind(instr)) {
+    const HloInstruction* conv = hlo_query::GetFirstInstructionWithOpcode(
+        *instr.fused_instructions_computation(), HloOpcode::kConvolution);
+    if (conv == nullptr) {
+      return absl::InternalError(
+          "Fusion tagged __triton_conv contains no convolution "
+          "instruction.");
+    }
+    ABSL_ASSIGN_OR_RETURN(std::vector<TritonConvConfig> conv_configs,
+                          GetSupportedConfigsForConv(conv));
+    std::vector<CodegenBackend::EstimatedConfig> result;
+    result.reserve(conv_configs.size());
+    for (const TritonConvConfig& conv_config : conv_configs) {
+      auto backend_config = std::make_unique<BackendConfig>();
+      *backend_config->mutable_triton_conv() = conv_config.ToProto();
+      result.push_back({std::move(backend_config), std::nullopt});
+    }
+    return result;
+  }
+
   ABSL_ASSIGN_OR_RETURN(std::vector<TritonGemmConfig> gemm_configs,
                         GetSupportedGemmConfigs(instr));
   if (gemm_configs.empty()) {
@@ -123,9 +161,32 @@ TritonBackend::GetSupportedConfigsWithEstimates(const HloInstruction& instr) {
 
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>>
 TritonBackend::GetSupportedConfigs(const HloInstruction& instr) {
+  std::vector<std::unique_ptr<BackendConfig>> configs;
+  if (!IsSupported(instr)) {
+    return configs;
+  }
+
+  if (IsConvFusionKind(instr)) {
+    const HloInstruction* conv = hlo_query::GetFirstInstructionWithOpcode(
+        *instr.fused_instructions_computation(), HloOpcode::kConvolution);
+    if (conv == nullptr) {
+      return absl::InternalError(
+          "Fusion tagged __triton_conv contains no convolution "
+          "instruction.");
+    }
+    ABSL_ASSIGN_OR_RETURN(std::vector<TritonConvConfig> conv_configs,
+                          GetSupportedConfigsForConv(conv));
+    configs.reserve(conv_configs.size());
+    for (const auto& conv_config : conv_configs) {
+      auto config = std::make_unique<BackendConfig>();
+      *config->mutable_triton_conv() = conv_config.ToProto();
+      configs.push_back(std::move(config));
+    }
+    return configs;
+  }
+
   ABSL_ASSIGN_OR_RETURN(std::vector<TritonGemmConfig> gemm_configs,
                         GetSupportedGemmConfigs(instr));
-  std::vector<std::unique_ptr<BackendConfig>> configs;
   configs.reserve(gemm_configs.size());
   for (const auto& gemm_config : gemm_configs) {
     auto config = std::make_unique<BackendConfig>();
@@ -135,11 +196,17 @@ TritonBackend::GetSupportedConfigs(const HloInstruction& instr) {
   return configs;
 }
 
+absl::StatusOr<std::vector<TritonConvConfig>>
+TritonBackend::GetSupportedConfigsForConv(const HloInstruction* conv) {
+  TritonConvFusionSearchSpace search_space(
+      target_config().device_description,
+      Cast<HloConvolutionInstruction>(conv));
+  VLOG(1) << "Convolution search space: " << search_space.ToString();
+  return search_space.GenerateConfigs();
+}
+
 absl::StatusOr<std::vector<TritonGemmConfig>>
 TritonBackend::GetSupportedGemmConfigs(const HloInstruction& instr) {
-  if (!IsSupported(instr)) {
-    return std::vector<TritonGemmConfig>();
-  }
   ABSL_ASSIGN_OR_RETURN(std::vector<TritonGemmConfig> overridden_configs,
                         GetOverriddenConfigs(&instr));
   if (!overridden_configs.empty()) {
@@ -292,9 +359,22 @@ absl::Status TritonBackend::ApplyConfig(HloInstruction& instr,
     return absl::InvalidArgumentError(
         "TritonBackend does not support this instruction.");
   }
+  if (config.has_triton_conv()) {
+    ABSL_RETURN_IF_ERROR(
+        TritonConvConfig::FromProto(config.triton_conv()).status());
+
+    ABSL_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
+                          instr.backend_config<GpuBackendConfig>());
+    FusionBackendConfig& backend_config =
+        *gpu_config.mutable_fusion_backend_config();
+    backend_config.set_kind(kTritonConvFusionKind);
+    *backend_config.mutable_triton_conv_config() = config.triton_conv();
+    return instr.set_backend_config(gpu_config);
+  }
+
   if (!config.has_triton()) {
     return absl::InvalidArgumentError(
-        "Expected TritonGemmKey config for TritonBackend.");
+        "Expected a TritonGemmKey or TritonConvKey config for TritonBackend.");
   }
   const AutotuneResult::TritonGemmKey& triton_config_proto = config.triton();
 
@@ -348,6 +428,9 @@ absl::StatusOr<std::unique_ptr<HloModule>> TritonBackend::RunHloPasses(
                                                      mlir_context->get());
   ABSL_RETURN_IF_ERROR(
       convert_triton_gemm_config.Run(hlo_module.get()).status());
+  ConvertTritonConvConfig convert_triton_conv_config;
+  ABSL_RETURN_IF_ERROR(
+      convert_triton_conv_config.Run(hlo_module.get()).status());
   return hlo_module;
 }
 
@@ -364,7 +447,8 @@ bool TritonBackend::IsSupported(const HloInstruction& instr) {
 
   // TODO: b/487920266 - sometimes we create fusions that can't be tiled.
   // Bail out here if that's the case.
-  if (backend_config.kind() == kTritonGemmFusionKind) {
+  if (backend_config.kind() == kTritonGemmFusionKind ||
+      backend_config.kind() == kTritonConvFusionKind) {
     auto fusion = Cast<HloFusionInstruction>(&instr);
     std::unique_ptr<HloFusionAdaptor> fusion_adaptor =
         HloFusionAdaptor::ForInstruction(fusion);
