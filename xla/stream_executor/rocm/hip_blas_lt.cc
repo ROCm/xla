@@ -418,8 +418,7 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetHipBlasLtMatmulPlan(
 
   auto plan = std::make_unique<RegularMatmulPlan>(
       *this, std::move(op_desc), std::move(a_desc), std::move(b_desc),
-      std::move(c_desc), std::move(d_desc), must_swap_operands,
-      cfg.has_d_scale);
+      std::move(c_desc), std::move(d_desc), must_swap_operands);
 
   auto assign_alpha_beta = [&](auto scale) {
     using Scale = decltype(scale);
@@ -706,12 +705,6 @@ absl::Status BlasLt::RegularMatmulPlan::ExecuteOnStream(
   if (!algorithm_.has_value()) {
     return absl::InternalError(
         "Algorithm must be set before calling ExecuteOnStream!");
-  }
-  // The algorithms depend on whether a D scale was set at query time.
-  if (has_d_scale_ != (args.d_scale != nullptr)) {
-    return xla::InvalidArgument(
-        "hipBLASLt plan created %s a D scale but called %s one.",
-        has_d_scale_ ? "with" : "without", has_d_scale_ ? "without" : "with");
   }
   DeviceAddressBase a = args.a, b = args.b;
   DeviceAddressBase a_scale = args.a_scale, b_scale = args.b_scale;
