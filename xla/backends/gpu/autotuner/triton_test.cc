@@ -157,6 +157,23 @@ ENTRY %entry (lhs: bf16[4,4], rhs: bf16[4,4], lhs_scale: bf16[1,1], rhs_scale: b
   ROOT %fusion = bf16[4,4]{1,0} fusion(%lhs, %rhs, %lhs_scale, %rhs_scale), kind=kCustom, calls=%fusion_dot, metadata={op_name="foo"}, backend_config={"operation_queue_id":"0","fusion_backend_config":{"kind":"__triton_gemm"},"force_earliest_schedule":false,"reification_cost":[],"device_type":"DEVICE_TYPE_INVALID"}
 })hlo";
 
+constexpr absl::string_view kTritonConvFusion = R"(
+conv_computation {
+  input = f32[20,32,32,120] parameter(0)
+  kernel = f32[5,5,120,64] parameter(1)
+  ROOT conv = f32[20,28,28,64] convolution(input, kernel),
+    window={size=5x5}, dim_labels=b01f_01io->b01f
+}
+
+ENTRY entry {
+  p0 = f32[20,32,32,120] parameter(0)
+  p1 = f32[5,5,120,64] parameter(1)
+  ROOT fusion = f32[20,28,28,64] fusion(p0, p1), kind=kCustom,
+    calls=conv_computation, backend_config={
+      "fusion_backend_config": {"kind":"__triton_conv"}
+    }
+})";
+
 class TritonBackendTest : public HloHardwareIndependentTestBase {
  protected:
   TritonBackendTest()
@@ -921,6 +938,48 @@ TEST_F(TritonBackendTest, CostModelOptions_Combination) {
 }
 
 TEST_F(TritonBackendTest, Version) { EXPECT_NE(backend_.version(), ""); }
+
+TEST_F(TritonBackendTest, GetSupportedConfigsForConv) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kTritonConvFusion));
+  const HloInstruction* fusion_instr =
+      module->entry_computation()->root_instruction();
+
+  ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> configs,
+                       backend_.GetSupportedConfigs(*fusion_instr));
+  ASSERT_THAT(configs, Not(IsEmpty()));
+  for (const std::unique_ptr<BackendConfig>& config : configs) {
+    EXPECT_TRUE(config->has_triton_conv()) << config->DebugString();
+  }
+}
+
+TEST_F(TritonBackendTest, GetSupportedConfigsWithEstimatesForConv) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kTritonConvFusion));
+  const HloInstruction* fusion_instr =
+      module->entry_computation()->root_instruction();
+
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<CodegenBackend::EstimatedConfig> configs,
+      backend_.GetSupportedConfigsWithEstimates(*fusion_instr));
+  ASSERT_THAT(configs, Not(IsEmpty()));
+  for (const CodegenBackend::EstimatedConfig& config : configs) {
+    EXPECT_TRUE(config.config->has_triton_conv());
+    EXPECT_FALSE(config.estimated_runtime.has_value());
+  }
+}
+
+TEST_F(TritonBackendTest, GetAndApplyConfigForConv) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kTritonConvFusion));
+  HloInstruction* fusion_instr =
+      module->entry_computation()->root_instruction();
+
+  ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> configs,
+                       backend_.GetSupportedConfigs(*fusion_instr));
+  ASSERT_THAT(configs, Not(IsEmpty()));
+  EXPECT_THAT(backend_.ApplyConfig(*fusion_instr, *configs[0]), IsOk());
+}
 
 }  // namespace
 }  // namespace gpu
