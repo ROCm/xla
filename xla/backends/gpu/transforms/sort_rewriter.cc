@@ -79,6 +79,7 @@ enum class SortOrderType {
 struct SortComputationAnalysis {
   int key_operand;  // 0 or 1
   bool descending;
+  bool is_total_order;
   SortOrderType sort_order;
   PrimitiveType key_type;
   std::optional<PrimitiveType> value_type;
@@ -125,11 +126,12 @@ std::optional<SortComputationAnalysis> AnalyzeCompareOp(
     return std::nullopt;
   }
 
-  // Return the tensor index and the sort direction.
+  // Return the tensor index, direction, and total-order bit from this compare.
   bool descending = compare->direction() == ComparisonDirection::kGt ||
                     compare->direction() == ComparisonDirection::kGe;
   bool reverse = first_index != index0;
   return SortComputationAnalysis{first_index / 2, descending != reverse,
+                                 compare->order() == ComparisonOrder::kTotal,
                                  sort_order};
 }
 
@@ -212,9 +214,12 @@ std::optional<SortComputationAnalysis> AnalyzeSortOp(
       return std::nullopt;
     }
   }
-  return SortComputationAnalysis{
-      sort_analysis->key_operand, sort_analysis->descending,
-      sort_analysis->sort_order, sort_key_type, sort_value_type};
+  return SortComputationAnalysis{sort_analysis->key_operand,
+                                 sort_analysis->descending,
+                                 sort_analysis->is_total_order,
+                                 sort_analysis->sort_order,
+                                 sort_key_type,
+                                 sort_value_type};
 }
 
 // Returns whether the sort operation is supported by CUB.
@@ -868,26 +873,6 @@ HloInstruction* FloatFromOrderedIntegral(HloInstruction* ordered,
       HloInstruction::CreateBitcastConvert(float_shape, restored));
 }
 
-// True when the sort comparator is a plain float compare with order=TOTAL.
-// NumPy order rewrites the operands before the compare, so it does not match.
-bool IsPlainFloatTotalOrderSort(const HloSortInstruction& sort_op) {
-  if (sort_op.called_computations().empty()) {
-    return false;
-  }
-  const auto* compare = DynCast<HloCompareInstruction>(
-      sort_op.called_computations().front()->root_instruction());
-  if (compare == nullptr || compare->order() != ComparisonOrder::kTotal) {
-    return false;
-  }
-  if (!primitive_util::IsFloatingPointType(
-          compare->operand(0)->shape().element_type())) {
-    return false;
-  }
-  const auto [lhs_parameter, rhs_parameter] =
-      MatchSimpleSortComparator(compare);
-  return lhs_parameter != -1 && rhs_parameter != -1;
-}
-
 }  // namespace
 
 // Rewrites a single sort instruction with a custom call.
@@ -934,9 +919,11 @@ absl::StatusOr<bool> SortRewriter::RunOnInstruction(
   // convert the sorted keys back.
   bool encode_total_order = false;
   PrimitiveType original_key_type = keys->shape().element_type();
+  // kDefaultOrder is any plain compare. is_total_order selects order=TOTAL.
   if (device_description_.gpu_compute_capability().IsRocm() &&
       primitive_util::HasNegativeZero(original_key_type) &&
-      IsPlainFloatTotalOrderSort(*sort_op)) {
+      sort_analysis.sort_order == SortOrderType::kDefaultOrder &&
+      sort_analysis.is_total_order) {
     encode_total_order = true;
     keys = OrderedIntegralFromFloat(keys);
   }
